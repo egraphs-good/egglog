@@ -1,4 +1,5 @@
 use crate::*;
+use std::{fmt::Debug, sync::Arc};
 
 #[derive(Debug, Clone, Default)]
 struct Trie(HashMap<Id, Self>);
@@ -63,7 +64,9 @@ impl<T: Operator> EGraph<T> {
     pub(crate) fn eval<F>(&self, query: &CompiledQuery<T>, mut f: F)
     where
         F: FnMut(&[Id]),
+        T: Debug,
     {
+        println!("Eval {:?}", query.atoms);
         let tries = query
             .atoms
             .iter()
@@ -87,7 +90,7 @@ impl<T: Operator> EGraph<T> {
                 assert!(eq_constraints.iter().all(|(i, j)| i < j));
 
                 let mut trie = Trie::default();
-                self.relations[&atom.op].for_each(|tuple| {
+                self.for_each_canonicalized(&atom.op, |tuple| {
                     if eq_constraints.iter().all(|(i, j)| tuple[*i] == tuple[*j]) {
                         trie.insert(&shuffle, tuple);
                     }
@@ -99,19 +102,26 @@ impl<T: Operator> EGraph<T> {
 
         let tries: Vec<&Trie> = tries.iter().collect();
 
-        self.gj(query, &mut f, &[], &tries);
+        let tuple = vec![Id::fake(); query.var_order.len()];
+        self.gj(0, query, &mut f, &tuple, &tries);
     }
 
-    fn gj<F>(&self, query: &CompiledQuery<T>, f: &mut F, tuple: &[Id], relations: &[&Trie])
-    where
+    fn gj<F>(
+        &self,
+        depth: usize,
+        query: &CompiledQuery<T>,
+        f: &mut F,
+        tuple: &[Id],
+        relations: &[&Trie],
+    ) where
         F: FnMut(&[Id]),
     {
         // println!("{:?}", tuple);
-        if tuple.len() == query.var_order.len() {
+        if depth == query.var_order.len() {
             return f(tuple);
         }
 
-        let x = query.var_order[tuple.len()];
+        let x = query.var_order[depth];
         let js = &query.occurences[x];
 
         debug_assert!(js.iter().all(|&j| query.atoms[j].vars.contains(&x)));
@@ -152,9 +162,8 @@ impl<T: Operator> EGraph<T> {
                     }
                 })
                 .collect();
-            tuple.push(val);
-            self.gj(query, f, &tuple, &relations);
-            tuple.pop();
+            tuple[x] = val;
+            self.gj(depth + 1, query, f, &tuple, &relations);
         }
     }
 }

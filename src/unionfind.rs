@@ -5,6 +5,7 @@ use std::fmt::Debug;
 #[cfg_attr(feature = "serde-1", derive(serde::Serialize, serde::Deserialize))]
 pub struct UnionFind {
     parents: Vec<Id>,
+    n_unions: usize,
 }
 
 impl UnionFind {
@@ -16,6 +17,10 @@ impl UnionFind {
 
     pub fn size(&self) -> usize {
         self.parents.len()
+    }
+
+    pub fn n_unions(&self) -> usize {
+        self.n_unions
     }
 
     fn parent(&self, query: Id) -> Id {
@@ -43,8 +48,13 @@ impl UnionFind {
     }
 
     /// Given two leader ids, unions the two eclasses making root1 the leader.
-    pub fn union(&mut self, root1: Id, root2: Id) -> Id {
-        *self.parent_mut(root2) = root1;
+    pub fn union(&mut self, mut root1: Id, mut root2: Id) -> Id {
+        root1 = self.find_mut(root1);
+        root2 = self.find_mut(root2);
+        if root1 != root2 {
+            *self.parent_mut(root2) = root1;
+            self.n_unions += 1;
+        }
         root1
     }
 }
@@ -60,7 +70,7 @@ mod tests {
     #[test]
     fn union_find() {
         let n = 10;
-        let id = |u: usize| Id::from(u);
+        let id = Id::from;
 
         let mut uf = UnionFind::default();
         for _ in 0..n {
