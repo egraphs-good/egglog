@@ -1,5 +1,5 @@
 use crate::*;
-use std::{fmt::Debug, sync::Arc};
+use std::fmt::Debug;
 
 #[derive(Debug, Clone, Default)]
 struct Trie(HashMap<Id, Self>);

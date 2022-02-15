@@ -93,7 +93,6 @@ impl<Op: Operator> EGraph<Op> {
 
     pub fn rebuild(&mut self) {
         while self.rebuild_one() != 0 {}
-        println!("Rebuilt");
         for (op, r) in &self.relations {
             for (children, value) in &r.nodes {
                 println!("{op:?}{children:?} = {value:?}");
@@ -229,7 +228,6 @@ impl<Op: Operator> EGraph<Op> {
 
         for (rule, substs) in rules.iter().zip(searched) {
             for subst in substs {
-                println!("{:?}", subst);
                 self.apply(&rule.applier, &subst);
             }
         }
@@ -264,6 +262,7 @@ pub struct Applier<Op> {
 }
 
 pub struct Query<Op> {
+    #[allow(dead_code)]
     patterns: Vec<(Symbol, Pattern<Op>)>,
     bindings: IndexSet<Symbol>,
     atoms: Vec<Atom<Op>>,
