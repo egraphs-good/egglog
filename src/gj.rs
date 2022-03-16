@@ -1,8 +1,33 @@
 use crate::*;
 use std::fmt::Debug;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Atom(pub Symbol, pub Vec<AtomTerm>);
+
+impl Atom {
+    fn vars(&self) -> impl Iterator<Item = IndexVar> + '_ {
+        self.1.iter().filter_map(|t| match t {
+            AtomTerm::Var(v) => Some(*v),
+            AtomTerm::Value(_) => None,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AtomTerm {
+    Var(IndexVar),
+    Value(Value),
+}
+
+enum Constraint {
+    Eq(usize, usize),
+    Const(usize, Value),
+}
+
+pub type IndexVar = usize;
+
 #[derive(Debug, Clone, Default)]
-struct Trie(HashMap<Id, Self>);
+struct Trie(HashMap<Value, Self>);
 
 impl Trie {
     fn len(&self) -> usize {
@@ -11,11 +36,11 @@ impl Trie {
 }
 
 impl Trie {
-    fn insert(&mut self, shuffle: &[usize], tuple: &[Id]) {
+    fn insert(&mut self, shuffle: &[usize], tuple: &[Value]) {
         debug_assert_eq!(shuffle.len(), tuple.len());
         let mut trie = self;
         for i in shuffle {
-            trie = trie.0.entry(tuple[*i]).or_default();
+            trie = trie.0.entry(tuple[*i].clone()).or_default();
         }
     }
 }
@@ -23,22 +48,22 @@ impl Trie {
 // for each var, says which atoms contain it
 type VarOccurences = Vec<Vec<usize>>;
 
-pub struct CompiledQuery<T> {
-    atoms: Vec<Atom<T>>,
+pub struct CompiledQuery {
+    atoms: Vec<Atom>,
     var_order: Vec<IndexVar>,
     occurences: VarOccurences,
 }
 
-impl<T: Operator> EGraph<T> {
-    pub(crate) fn compile_query(&self, atoms: &[Atom<T>]) -> CompiledQuery<T> {
+impl EGraph {
+    pub(crate) fn compile_query(&self, atoms: &[Atom]) -> CompiledQuery {
         let n_vars = atoms
             .iter()
-            .flat_map(|a| &a.vars)
+            .flat_map(|a| a.vars())
             .max()
             .map_or(0, |v| v + 1);
         let mut occurences = vec![vec![]; n_vars];
         for (i, atom) in atoms.iter().enumerate() {
-            for &v in &atom.vars {
+            for v in atom.vars() {
                 if occurences[v].last().copied() != Some(i) {
                     occurences[v].push(i);
                 }
@@ -61,60 +86,84 @@ impl<T: Operator> EGraph<T> {
         }
     }
 
-    pub(crate) fn eval<F>(&self, query: &CompiledQuery<T>, mut f: F)
+    fn build_trie(
+        &self,
+        relation: Symbol,
+        projection: &[usize],
+        constraints: &[Constraint],
+    ) -> Trie {
+        let mut trie = Trie::default();
+        if constraints.is_empty() {
+            self.for_each_canonicalized(relation, |tuple| {
+                trie.insert(projection, tuple);
+            });
+        } else {
+            self.for_each_canonicalized(relation, |tuple| {
+                for constraint in constraints {
+                    let ok = match constraint {
+                        Constraint::Eq(i, j) => tuple[*i] == tuple[*j],
+                        Constraint::Const(i, t) => &tuple[*i] == t,
+                    };
+                    if ok {
+                        trie.insert(projection, tuple);
+                    }
+                }
+            });
+        }
+        trie
+    }
+
+    pub(crate) fn run_query<F>(&self, query: &CompiledQuery, mut f: F)
     where
-        F: FnMut(&[Id]),
-        T: Debug,
+        F: FnMut(&[Value]),
     {
         println!("Eval {:?}", query.atoms);
         let tries = query
             .atoms
             .iter()
             .map(|atom| {
-                let mut eq_constraints = vec![];
-                for (i, v) in atom.vars.iter().enumerate() {
-                    if let Some(j) = atom.vars[..i].iter().position(|v2| v == v2) {
-                        eq_constraints.push((j, i));
-                    }
-                }
-
-                let mut shuffle = vec![];
-                for v in &query.var_order {
-                    if let Some(i) = atom.vars.iter().position(|v2| v == v2) {
-                        if !shuffle.contains(&i) {
-                            shuffle.push(i);
+                let mut to_project = vec![];
+                let mut constraints = vec![];
+                for (i, t) in atom.1.iter().enumerate() {
+                    match t {
+                        AtomTerm::Value(val) => constraints.push(Constraint::Const(i, val.clone())),
+                        AtomTerm::Var(v) => {
+                            if let Some(j) = atom.1[..i].iter().position(|t2| t == t2) {
+                                constraints.push(Constraint::Eq(j, i));
+                            } else {
+                                to_project.push(v)
+                            }
                         }
                     }
                 }
 
-                assert!(eq_constraints.iter().all(|(i, j)| i < j));
-
-                let mut trie = Trie::default();
-                self.for_each_canonicalized(&atom.op, |tuple| {
-                    if eq_constraints.iter().all(|(i, j)| tuple[*i] == tuple[*j]) {
-                        trie.insert(&shuffle, tuple);
+                let mut projection = vec![];
+                for v in &query.var_order {
+                    if let Some(i) = atom.1.iter().position(|t| t == &AtomTerm::Var(*v)) {
+                        assert!(!projection.contains(&i));
+                        projection.push(i);
                     }
-                });
+                }
 
-                trie
+                self.build_trie(atom.0, &projection, &constraints)
             })
             .collect::<Vec<_>>();
 
         let tries: Vec<&Trie> = tries.iter().collect();
 
-        let tuple = vec![Id::fake(); query.var_order.len()];
+        let tuple = vec![Value::fake(); query.var_order.len()];
         self.gj(0, query, &mut f, &tuple, &tries);
     }
 
     fn gj<F>(
         &self,
         depth: usize,
-        query: &CompiledQuery<T>,
+        query: &CompiledQuery,
         f: &mut F,
-        tuple: &[Id],
+        tuple: &[Value],
         relations: &[&Trie],
     ) where
-        F: FnMut(&[Id]),
+        F: FnMut(&[Value]),
     {
         // println!("{:?}", tuple);
         if depth == query.var_order.len() {
@@ -124,7 +173,9 @@ impl<T: Operator> EGraph<T> {
         let x = query.var_order[depth];
         let js = &query.occurences[x];
 
-        debug_assert!(js.iter().all(|&j| query.atoms[j].vars.contains(&x)));
+        debug_assert!(js
+            .iter()
+            .all(|&j| query.atoms[j].1.contains(&AtomTerm::Var(x))));
 
         let j_min = js
             .iter()
@@ -136,7 +187,7 @@ impl<T: Operator> EGraph<T> {
         //     println!("{:?}", relations[j].0.keys());
         // }
 
-        let mut intersection: Vec<Id> = relations[j_min].0.keys().cloned().collect();
+        let mut intersection: Vec<Value> = relations[j_min].0.keys().cloned().collect();
 
         for &j in js {
             if j != j_min {
@@ -155,7 +206,7 @@ impl<T: Operator> EGraph<T> {
                 .iter()
                 .zip(&query.atoms)
                 .map(|(r, a)| {
-                    if a.vars.contains(&x) {
+                    if a.1.contains(&AtomTerm::Var(x)) {
                         r.0.get(&val).unwrap_or(&empty)
                     } else {
                         r

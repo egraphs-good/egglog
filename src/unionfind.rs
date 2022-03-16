@@ -1,4 +1,4 @@
-use crate::Id;
+use crate::{Id, Value};
 use std::fmt::Debug;
 
 #[derive(Debug, Clone, Default)]
@@ -47,6 +47,10 @@ impl UnionFind {
         current
     }
 
+    pub fn find_mut_value(&mut self, value: Value) -> Value {
+        self.find_mut(value.into()).into()
+    }
+
     /// Given two leader ids, unions the two eclasses making root1 the leader.
     pub fn union(&mut self, mut root1: Id, mut root2: Id) -> Id {
         root1 = self.find_mut(root1);
@@ -56,6 +60,10 @@ impl UnionFind {
             self.n_unions += 1;
         }
         root1
+    }
+
+    pub fn union_values(&mut self, value1: Value, value2: Value) -> Value {
+        self.union(value1.into(), value2.into()).into()
     }
 }
 
