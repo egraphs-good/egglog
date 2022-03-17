@@ -3,6 +3,13 @@ mod unionfind;
 mod util;
 mod value;
 
+mod ast;
+use lalrpop_util::lalrpop_mod;
+lalrpop_mod!(
+    #[allow(clippy::all)]
+    grammar
+);
+
 use std::collections::hash_map::Entry;
 use std::fmt::Debug;
 use std::{collections::HashMap, hash::Hash};
@@ -10,6 +17,7 @@ use std::{collections::HashMap, hash::Hash};
 pub use util::Symbol;
 pub use value::Value;
 
+pub use ast::*;
 use gj::*;
 use unionfind::*;
 use util::*;
@@ -33,23 +41,6 @@ impl From<Id> for usize {
     fn from(id: Id) -> Self {
         id.0
     }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum Type {
-    Sort(Symbol),
-    Int,
-}
-
-impl Type {
-    pub fn is_sort(&self) -> bool {
-        matches!(self, Self::Sort(..))
-    }
-}
-
-pub struct Schema {
-    pub input: Vec<Type>,
-    pub output: Type,
 }
 
 pub struct Relation {
@@ -105,43 +96,6 @@ impl Relation {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
-pub enum Expr<T = Value> {
-    Leaf(T),
-    Var(Symbol),
-    Node(Symbol, Vec<Self>),
-}
-
-impl<T> Expr<T> {
-    pub fn new(op: impl Into<Symbol>, children: impl IntoIterator<Item = Self>) -> Self {
-        Self::Node(op.into(), children.into_iter().collect())
-    }
-
-    pub fn leaf(op: impl Into<T>) -> Self {
-        Self::Leaf(op.into())
-    }
-
-    fn children(&self) -> &[Self] {
-        match self {
-            Expr::Var(_) | Expr::Leaf(_) => &[],
-            Expr::Node(_, children) => children,
-        }
-    }
-
-    pub fn walk(&self, pre: &mut impl FnMut(&Self), post: &mut impl FnMut(&Self)) {
-        pre(self);
-        self.children()
-            .iter()
-            .for_each(|child| child.walk(pre, post));
-        post(self);
-    }
-
-    pub fn fold<Out>(&self, f: &mut impl FnMut(&Self, Vec<Out>) -> Out) -> Out {
-        let ts = self.children().iter().map(|child| child.fold(f)).collect();
-        f(self, ts)
-    }
-}
-
 pub type Subst = IndexMap<Symbol, Value>;
 
 #[derive(Default)]
@@ -149,11 +103,27 @@ pub struct EGraph {
     unionfind: UnionFind,
     sorts: HashSet<Symbol>,
     relations: HashMap<Symbol, Relation>,
+    rules: HashMap<Symbol, Rule>,
+    globals: HashMap<Symbol, Value>,
 }
 
 impl EGraph {
     pub fn union(&mut self, id1: Id, id2: Id) -> Id {
         self.unionfind.union(id1, id2)
+    }
+
+    pub fn union_exprs(&mut self, ctx: &Subst, exprs: &[Expr]) -> Option<Value> {
+        let mut exprs = exprs.iter();
+        if let Some(e) = exprs.next() {
+            let mut val = self.eval_expr(ctx, e);
+            for e2 in exprs {
+                let val2 = self.eval_expr(ctx, e2);
+                val = self.unionfind.union_values(val, val2);
+            }
+            Some(val)
+        } else {
+            None
+        }
     }
 
     pub fn find(&self, id: Id) -> Id {
@@ -177,28 +147,45 @@ impl EGraph {
         new_unions
     }
 
-    pub fn declare_sort(&mut self, symbol: impl Into<Symbol>) {
-        let symbol = symbol.into();
-        assert!(
-            self.sorts.insert(symbol),
-            "Relation '{}' already exists",
-            symbol
-        );
+    pub fn declare_sort(&mut self, name: impl Into<Symbol>) -> Type {
+        let name = name.into();
+        assert!(self.sorts.insert(name), "Sort '{}' already exists", name);
+        Type::Sort(name)
     }
 
-    pub fn declare_function(&mut self, op: impl Into<Symbol>, schema: Schema) -> &mut Relation {
-        let op = op.into();
-        match self.relations.entry(op) {
+    pub fn declare_function(&mut self, name: impl Into<Symbol>, schema: Schema) -> &mut Relation {
+        let name = name.into();
+        match self.relations.entry(name) {
             Entry::Vacant(e) => e.insert(Relation::new(schema)),
-            Entry::Occupied(_) => panic!("Relation '{}' already exists", op),
+            Entry::Occupied(_) => panic!("Relation '{}' already exists", name),
         }
+    }
+
+    pub fn declare_constructor(
+        &mut self,
+        name: impl Into<Symbol>,
+        types: Vec<Type>,
+    ) -> &mut Relation {
+        let name = name.into();
+        self.declare_function(
+            name,
+            Schema {
+                input: types,
+                output: Type::Sort(name),
+            },
+        )
     }
 
     // this must be &mut because it'll call "make_set",
     // but it'd be nice if that didn't have to happen
     pub fn eval_expr(&mut self, ctx: &Subst, expr: &Expr) -> Value {
         match expr {
-            Expr::Var(var) => ctx[var].clone(),
+            // TODO should we canonicalize here?
+            Expr::Var(var) => ctx
+                .get(var)
+                .or_else(|| self.globals.get(var))
+                .cloned()
+                .unwrap_or_else(|| panic!("Couldn't find variable '{var}'")),
             Expr::Leaf(value) => value.clone(),
             Expr::Node(op, args) => {
                 let values: Vec<Value> = args.iter().map(|a| self.eval_expr(ctx, a)).collect();
@@ -230,22 +217,30 @@ impl EGraph {
         self.run_query(&compiled_query, callback)
     }
 
-    fn apply(&mut self, applier: &Applier, subst: &Subst) {
-        let mut subst = subst.clone();
-        for (var, pattern) in &applier.assignments {
-            let value = self.eval_expr(&subst, pattern);
-            // FIXME this is bad
-            subst
-                .entry(*var)
-                .and_modify(|old| *old = self.unionfind.union_values(value.clone(), old.clone()))
-                .or_insert(value);
+    fn apply(&mut self, actions: &[Action], subst: &Subst) {
+        let mut subst = subst.clone(); // This is slow
+        for action in actions {
+            match action {
+                Action::Define(v, e) => {
+                    let value = self.eval_expr(&subst, e);
+                    subst
+                        .entry(*v)
+                        .and_modify(|old| {
+                            *old = self.unionfind.union_values(value.clone(), old.clone())
+                        })
+                        .or_insert(value);
+                }
+                Action::Union(exprs) => {
+                    self.union_exprs(&subst, exprs);
+                }
+            }
         }
     }
 
-    pub fn run_rules(&mut self, limit: usize, rules: &[Rule]) -> usize {
+    pub fn run_rules(&mut self, limit: usize) -> usize {
         let mut fingerprint = (self.unionfind.size(), self.unionfind.n_unions());
         for i in 0..limit {
-            self.step_rules(rules);
+            self.step_rules();
             self.rebuild();
             let new_fingerprint = (self.unionfind.size(), self.unionfind.n_unions());
             println!(
@@ -261,9 +256,10 @@ impl EGraph {
         limit
     }
 
-    fn step_rules(&mut self, rules: &[Rule]) {
-        let searched: Vec<_> = rules
-            .iter()
+    fn step_rules(&mut self) {
+        let searched: Vec<_> = self
+            .rules
+            .values()
             .map(|rule| {
                 let mut substs = Vec::<Subst>::new();
                 self.query(&rule.query, |ids| {
@@ -280,33 +276,100 @@ impl EGraph {
             })
             .collect();
 
-        for (rule, substs) in rules.iter().zip(searched) {
+        let rules = std::mem::take(&mut self.rules);
+        for (rule, substs) in rules.values().zip(searched) {
             for subst in substs {
-                self.apply(&rule.applier, &subst);
+                self.apply(&rule.actions, &subst);
             }
         }
+        self.rules = rules;
+    }
+
+    pub fn add_named_rule(&mut self, name: impl Into<Symbol>, rule: Rule) {
+        let name = name.into();
+        match self.rules.entry(name) {
+            Entry::Occupied(_) => panic!("Rule '{name}' was already present"),
+            Entry::Vacant(e) => e.insert(rule),
+        };
+    }
+
+    pub fn add_rule(&mut self, rule: Rule) -> Symbol {
+        let name = Symbol::from(format!("{:?}", rule));
+        self.add_named_rule(name, rule);
+        name
     }
 
     fn for_each_canonicalized(&self, relation: Symbol, mut f: impl FnMut(&[Value])) {
         let mut ids = vec![];
         for (children, value) in &self.relations[&relation].nodes {
             ids.clear();
-            // FIXME canonicalize
+            // FIXME canonicalize, do we need to with rebuilding?
             // ids.extend(children.iter().map(|id| self.find(value)));
             ids.extend(children.iter().cloned());
             ids.push(value.clone());
             f(&ids);
         }
     }
+
+    pub fn run_command(&mut self, command: Command) {
+        match command {
+            Command::Datatype { name, variants } => {
+                self.declare_sort(name);
+                for variant in variants {
+                    self.declare_constructor(variant.name, variant.types);
+                }
+            }
+            Command::Function(name, schema) => {
+                self.declare_function(name, schema);
+            }
+            Command::Rule(name, rule) => {
+                if let Some(name) = name {
+                    self.add_named_rule(name, rule);
+                } else {
+                    self.add_rule(rule);
+                }
+            }
+            Command::Action(a) => match a {
+                Action::Define(v, e) => {
+                    let val = self.eval_closed_expr(&e);
+                    self.globals.insert(v, val);
+                }
+                Action::Union(exprs) => {
+                    let ctx = Default::default();
+                    self.union_exprs(&ctx, &exprs);
+                }
+            },
+            Command::Run(limit) => {
+                self.run_rules(limit);
+            }
+            Command::Extract(_) => todo!(),
+            Command::CheckEq(exprs) => {
+                let mut exprs = exprs.iter();
+                if let Some(first) = exprs.next() {
+                    let val = self.eval_closed_expr(first);
+                    let val = self.unionfind.find_mut_value(val);
+                    for e2 in exprs {
+                        let v2 = self.eval_closed_expr(e2);
+                        let v2 = self.unionfind.find_mut_value(v2);
+                        assert_eq!(val, v2);
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn run_program(&mut self, input: &str) {
+        let parser = grammar::ProgramParser::new();
+        let program = parser.parse(input).unwrap();
+        for command in program {
+            self.run_command(command)
+        }
+    }
 }
 
 pub type Pattern = Expr;
 
-// TODO allow applier to bind new variables for its own use
-pub struct Applier {
-    assignments: Vec<(Symbol, Pattern)>,
-}
-
+#[derive(Clone, Debug)]
 pub struct Query {
     #[allow(dead_code)]
     patterns: Vec<(Symbol, Pattern)>,
@@ -315,6 +378,22 @@ pub struct Query {
 }
 
 impl Query {
+    pub fn from_groups(groups: Vec<Vec<Pattern>>) -> Self {
+        let mut bindings = vec![];
+        for (i, group) in groups.into_iter().enumerate() {
+            let var = group
+                .iter()
+                .find_map(|e| e.get_var())
+                .unwrap_or_else(|| format!("__group_{}", i).into());
+            for e in group {
+                if e != Expr::Var(var) {
+                    bindings.push((var, e))
+                }
+            }
+        }
+        Self::from_patterns(bindings)
+    }
+
     pub fn from_patterns(patterns: Vec<(Symbol, Pattern)>) -> Self {
         let mut bindings = IndexSet::default();
         let mut atoms = vec![];
@@ -357,25 +436,5 @@ impl Query {
             atoms,
             patterns,
         }
-    }
-}
-
-pub struct Rule {
-    query: Query,
-    applier: Applier,
-}
-
-impl Rule {
-    pub fn new(query: Query, applier: Applier) -> Self {
-        Self { query, applier }
-    }
-
-    pub fn rewrite(lhs: Pattern, rhs: Pattern) -> Self {
-        let root = Symbol::from("__root");
-        let query = Query::from_patterns(vec![(root, lhs)]);
-        let applier = Applier {
-            assignments: vec![(root, rhs)],
-        };
-        Self::new(query, applier)
     }
 }

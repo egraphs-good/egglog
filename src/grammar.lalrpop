@@ -1,0 +1,49 @@
+use crate::ast::*;
+use crate::*;
+
+grammar;
+
+pub Program: Vec<Command> = { (Command)* => <> }
+
+List<T>: Vec<T> = { 
+    "(" <T*> ")" => <>,
+}
+
+pub Command: Command = {
+    "(" "datatype" <name:Ident> <variants:(Variant)*> ")" => Command::Datatype { <> },
+    "(" "rule" <query:Query> <actions:List<Action>> ")" => Command::Rule(None, Rule {query, actions}),
+    "(" "rewrite" <lhs:Expr> <rhs:Expr> ")" => Command::Rule(None, Rule::rewrite(lhs, rhs)),
+    <Action> => Command::Action(<>),
+    "(" "run" <Num> ")" => Command::Run(<>.try_into().unwrap()),
+    "(" "extract" <Expr> ")" => Command::Extract(<>),
+    "(" "check-eq" <(Expr)+> ")" => Command::CheckEq(<>),
+}
+
+Action: Action = {
+    "(" "define" <Ident> <Expr> ")" => Action::Define(<>),
+    "(" "union" <Expr*> ")" => Action::Union(<>),
+}
+
+Query: Query = {
+    <groups:List<List<Expr>>> => Query::from_groups(groups)
+}
+
+Expr: Expr = {
+    <Num> => Expr::leaf(<>),
+    <Ident> => Expr::Var(<>),
+    "(" <head:Ident> <tail:(Expr)*> ")" => Expr::Node(head, tail),
+};
+
+ExprList: Vec<Expr> = { "(" <sexps:(Expr)*> ")" => sexps }
+
+Variant: Variant = {
+    "(" <name:Ident> <types:(Type)*> ")" => Variant { <> },
+}
+
+Type: Type = { 
+    "Int" => Type::Int,
+    <Ident> => Type::Sort(<>),
+}
+
+Num: i64 = <s:r"[0-9]+"> => s.parse().unwrap();
+Ident: Symbol = <s:r"[[:alpha:]][\w-]*"> => s.parse().unwrap();
