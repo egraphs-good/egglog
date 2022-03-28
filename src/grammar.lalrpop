@@ -9,19 +9,28 @@ List<T>: Vec<T> = {
     "(" <T*> ")" => <>,
 }
 
-pub Command: Command = {
+Command: Command = {
     "(" "datatype" <name:Ident> <variants:(Variant)*> ")" => Command::Datatype { <> },
-    "(" "rule" <query:Query> <actions:List<Action>> ")" => Command::Rule(None, Rule {query, actions}),
-    "(" "rewrite" <lhs:Expr> <rhs:Expr> ")" => Command::Rule(None, Rule::rewrite(lhs, rhs)),
+    "(" "function" <name:Ident> <schema:Schema> ")" => Command::Function(name, schema),
+    "(" "relation" <name:Ident> <types:List<Type>> ")" => Command::Function(name, Schema::relation(types)),
+    "(" "rule" <name:Name?> <query:Query> <actions:List<Action>> ")" => Command::Rule(name, Rule {query, actions}),
+    "(" "rewrite" <name:Name?> <lhs:Expr> <rhs:Expr> ")" => Command::Rule(name, Rule::rewrite(lhs, rhs)),
     <Action> => Command::Action(<>),
     "(" "run" <Num> ")" => Command::Run(<>.try_into().unwrap()),
     "(" "extract" <Expr> ")" => Command::Extract(<>),
     "(" "check-eq" <(Expr)+> ")" => Command::CheckEq(<>),
 }
 
+Name: Symbol = { "[" <Ident> "]" => <> }
+
 Action: Action = {
     "(" "define" <Ident> <Expr> ")" => Action::Define(<>),
     "(" "union" <Expr*> ")" => Action::Union(<>),
+    "(" "assert" <Expr*> ")" => Action::Assert(<>),
+}
+
+Schema: Schema = {
+    <types:List<Type>> <output:Type> => Schema { input: types, output }
 }
 
 Query: Query = {
@@ -30,6 +39,7 @@ Query: Query = {
 
 Expr: Expr = {
     <Num> => Expr::leaf(<>),
+    <Bool> => Expr::leaf(<>),
     <Ident> => Expr::Var(<>),
     "(" <head:Ident> <tail:(Expr)*> ")" => Expr::Node(head, tail),
 };
@@ -46,4 +56,8 @@ Type: Type = {
 }
 
 Num: i64 = <s:r"[0-9]+"> => s.parse().unwrap();
+Bool: bool = {
+    "true" => true,
+    "false" => false,
+}
 Ident: Symbol = <s:r"[[:alpha:]][\w-]*"> => s.parse().unwrap();

@@ -13,7 +13,7 @@ impl Atom {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AtomTerm {
     Var(IndexVar),
     Value(Value),
@@ -37,7 +37,8 @@ impl Trie {
 
 impl Trie {
     fn insert(&mut self, shuffle: &[usize], tuple: &[Value]) {
-        debug_assert_eq!(shuffle.len(), tuple.len());
+        // debug_assert_eq!(shuffle.len(), tuple.len());
+        debug_assert!(shuffle.len() <= tuple.len());
         let mut trie = self;
         for i in shuffle {
             trie = trie.0.entry(tuple[*i].clone()).or_default();

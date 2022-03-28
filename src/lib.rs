@@ -46,6 +46,7 @@ impl From<Id> for usize {
 pub struct Relation {
     schema: Schema,
     nodes: HashMap<Vec<Value>, Value>,
+    updates: usize,
 }
 
 impl Relation {
@@ -53,6 +54,7 @@ impl Relation {
         Self {
             schema,
             nodes: Default::default(),
+            updates: 0,
         }
     }
 
@@ -60,7 +62,14 @@ impl Relation {
         // TODO typecheck?
         self.nodes
             .entry(args.into())
-            .or_insert_with(|| uf.make_set().into())
+            .or_insert_with(|| {
+                self.updates += 1;
+                match self.schema.output {
+                    Type::Sort(_) => uf.make_set().into(),
+                    Type::Bool => false.into(),
+                    Type::Int => todo!(),
+                }
+            })
             .clone()
     }
 
@@ -69,30 +78,47 @@ impl Relation {
         match self.nodes.entry(args.into()) {
             Entry::Occupied(mut e) => {
                 let old = e.get().clone();
-                e.insert(uf.union_values(old, value))
+                if old == value {
+                    value
+                } else {
+                    self.updates += 1;
+                    if self.schema.output.is_sort() {
+                        e.insert(uf.union_values(old, value))
+                    } else {
+                        e.insert(value)
+                    }
+                }
             }
-            Entry::Vacant(e) => e.insert(value).clone(),
+            Entry::Vacant(e) => {
+                self.updates += 1;
+                e.insert(value).clone()
+            }
         }
     }
 
     pub fn rebuild(&mut self, uf: &mut UnionFind) -> usize {
+        // FIXME this doesn't compute updates properly
         let n_unions = uf.n_unions();
         let old_nodes = std::mem::take(&mut self.nodes);
-        for (mut args, mut value) in old_nodes {
+        for (mut args, value) in old_nodes {
             for (a, ty) in args.iter_mut().zip(&self.schema.input) {
                 if ty.is_sort() {
                     *a = uf.find_mut_value(a.clone())
                 }
             }
             if self.schema.output.is_sort() {
-                value = uf.find_mut(value.into()).into();
+                self.nodes
+                    .entry(args)
+                    .and_modify(|value2| *value2 = uf.union_values(value.clone(), value2.clone()))
+                    .or_insert_with(|| uf.find_mut_value(value));
+            } else {
+                self.nodes
+                    .entry(args)
+                    // .and_modify(|value2| *value2 = uf.union_values(value.clone(), value2.clone()))
+                    .or_insert(value);
             }
-            self.nodes
-                .entry(args)
-                .and_modify(|value2| *value2 = uf.union_values(value.clone(), value2.clone()))
-                .or_insert(value);
         }
-        uf.n_unions() - n_unions
+        uf.n_unions() - n_unions + std::mem::take(&mut self.updates)
     }
 }
 
@@ -126,17 +152,30 @@ impl EGraph {
         }
     }
 
+    pub fn assert_exprs(&mut self, ctx: &Subst, exprs: &[Expr]) {
+        for e in exprs {
+            self.set_expr(ctx, e, true.into());
+        }
+    }
+
     pub fn find(&self, id: Id) -> Id {
         self.unionfind.find(id)
     }
 
-    pub fn rebuild(&mut self) {
-        while self.rebuild_one() != 0 {}
-        for (op, r) in &self.relations {
-            for (children, value) in &r.nodes {
-                println!("{op:?}{children:?} = {value:?}");
+    pub fn rebuild(&mut self) -> usize {
+        let mut updates = 0;
+        loop {
+            let new = self.rebuild_one();
+            updates += new;
+            if new == 0 {
+                return updates;
             }
         }
+        // for (op, r) in &self.relations {
+        //     for (children, value) in &r.nodes {
+        //         println!("{op:?}{children:?} = {value:?}");
+        //     }
+        // }
     }
 
     fn rebuild_one(&mut self) -> usize {
@@ -201,16 +240,19 @@ impl EGraph {
         self.eval_expr(&Default::default(), expr)
     }
 
-    // pub fn set_expr(&mut self, ctx: &Subst, expr: &Expr, value: Value) -> Value {
-    //     match expr {
-    //         Expr::Var(var) => ctx[var].clone(),
-    //         Expr::Leaf(value) => value.clone(),
-    //         Expr::Node(op, args) => {
-    //             let values: Vec<Value> = args.iter().map(|a| self.eval_expr(ctx, a)).collect();
-    //             self.relations[op].get(&mut self.unionfind, &values)
-    //         }
-    //     }
-    // }
+    pub fn set_expr(&mut self, ctx: &Subst, expr: &Expr, value: Value) -> Value {
+        match expr {
+            Expr::Var(var) => ctx[var].clone(),
+            Expr::Leaf(value) => value.clone(),
+            Expr::Node(op, args) => {
+                let values: Vec<Value> = args.iter().map(|a| self.eval_expr(ctx, a)).collect();
+                self.relations
+                    .get_mut(op)
+                    .unwrap()
+                    .set(&mut self.unionfind, &values, value)
+            }
+        }
+    }
 
     fn query(&self, query: &Query, callback: impl FnMut(&[Value])) {
         let compiled_query = self.compile_query(&query.atoms);
@@ -233,27 +275,30 @@ impl EGraph {
                 Action::Union(exprs) => {
                     self.union_exprs(&subst, exprs);
                 }
+                Action::Assert(exprs) => {
+                    self.assert_exprs(&subst, exprs);
+                }
             }
         }
     }
 
-    pub fn run_rules(&mut self, limit: usize) -> usize {
-        let mut fingerprint = (self.unionfind.size(), self.unionfind.n_unions());
-        for i in 0..limit {
+    pub fn run_rules(&mut self, limit: usize) {
+        for _ in 0..limit {
             self.step_rules();
-            self.rebuild();
-            let new_fingerprint = (self.unionfind.size(), self.unionfind.n_unions());
-            println!(
-                "Made {} new nodes, {} new unions",
-                new_fingerprint.0 - fingerprint.0,
-                new_fingerprint.1 - fingerprint.1
-            );
-            if new_fingerprint == fingerprint {
-                return i + 1;
+            let updates = self.rebuild();
+            println!("Made {updates} updates",);
+            if updates == 0 {
+                break;
             }
-            fingerprint = new_fingerprint;
         }
-        limit
+
+        // TODO detect functions
+        for (name, r) in &self.relations {
+            println!("{name}:");
+            for (args, val) in &r.nodes {
+                println!("  {args:?} = {val:?}");
+            }
+        }
     }
 
     fn step_rules(&mut self) {
@@ -262,13 +307,18 @@ impl EGraph {
             .values()
             .map(|rule| {
                 let mut substs = Vec::<Subst>::new();
-                self.query(&rule.query, |ids| {
+                self.query(&rule.query, |values| {
+                    let get = |a: &AtomTerm| -> Value {
+                        match a {
+                            AtomTerm::Var(i) => values[*i].clone(),
+                            AtomTerm::Value(val) => val.clone(),
+                        }
+                    };
                     substs.push(
                         rule.query
                             .bindings
                             .iter()
-                            .zip(ids)
-                            .map(|(s, i)| (*s, i.clone()))
+                            .map(|(sym, a)| (*sym, get(a)))
                             .collect(),
                     )
                 });
@@ -338,6 +388,10 @@ impl EGraph {
                     let ctx = Default::default();
                     self.union_exprs(&ctx, &exprs);
                 }
+                Action::Assert(exprs) => {
+                    let ctx = Default::default();
+                    self.assert_exprs(&ctx, &exprs);
+                }
             },
             Command::Run(limit) => {
                 self.run_rules(limit);
@@ -347,14 +401,23 @@ impl EGraph {
                 let mut exprs = exprs.iter();
                 if let Some(first) = exprs.next() {
                     let val = self.eval_closed_expr(first);
-                    let val = self.unionfind.find_mut_value(val);
+                    let val = self.bad_find_value(val);
                     for e2 in exprs {
                         let v2 = self.eval_closed_expr(e2);
-                        let v2 = self.unionfind.find_mut_value(v2);
+                        let v2 = self.bad_find_value(v2);
                         assert_eq!(val, v2);
                     }
                 }
             }
+        }
+    }
+
+    // this is bad because we shouldn't inspect values like this, we should use type information
+    fn bad_find_value(&self, value: Value) -> Value {
+        match value.0 {
+            value::ValueInner::Bool(b) => b.into(),
+            value::ValueInner::Id(id) => self.unionfind.find(id).into(),
+            value::ValueInner::Int(i) => i.into(),
         }
     }
 
@@ -372,69 +435,94 @@ pub type Pattern = Expr;
 #[derive(Clone, Debug)]
 pub struct Query {
     #[allow(dead_code)]
-    patterns: Vec<(Symbol, Pattern)>,
-    bindings: IndexSet<Symbol>,
+    groups: Vec<Vec<Pattern>>,
+    bindings: IndexMap<Symbol, AtomTerm>,
     atoms: Vec<Atom>,
 }
 
 impl Query {
     pub fn from_groups(groups: Vec<Vec<Pattern>>) -> Self {
-        let mut bindings = vec![];
-        for (i, group) in groups.into_iter().enumerate() {
-            let var = group
+        #[derive(PartialEq, Eq, Hash, Clone)]
+        enum VarOrValue {
+            Var(Symbol),
+            Value(Value),
+        }
+
+        let mut aux_counter = 0;
+        let mut uf = SparseUnionFind::<VarOrValue>::default();
+        let mut pre_atoms: Vec<(Symbol, Vec<VarOrValue>)> = vec![];
+
+        for (i, group) in groups.iter().enumerate() {
+            let group_var = VarOrValue::Var(Symbol::from(format!("__group_{i}")));
+            uf.insert(group_var.clone());
+            for expr in group {
+                let vv = expr.fold(&mut |expr, mut child_pre_atoms| -> VarOrValue {
+                    let vv = match expr {
+                        Expr::Leaf(value) => VarOrValue::Value(value.clone()),
+                        Expr::Var(var) => VarOrValue::Var(*var),
+                        Expr::Node(op, _) => {
+                            let aux = VarOrValue::Var(format!("_aux_{}", aux_counter).into());
+                            aux_counter += 1;
+                            child_pre_atoms.push(aux.clone());
+                            pre_atoms.push((*op, child_pre_atoms));
+                            aux
+                        }
+                    };
+                    uf.insert(vv.clone());
+                    vv
+                });
+                uf.union(group_var.clone(), vv);
+            }
+        }
+
+        let mut next_var_index = 0;
+        let mut bindings = IndexMap::default();
+
+        for set in uf.sets() {
+            let mut values: Vec<Value> = set
                 .iter()
-                .find_map(|e| e.get_var())
-                .unwrap_or_else(|| format!("__group_{}", i).into());
-            for e in group {
-                if e != Expr::Var(var) {
-                    bindings.push((var, e))
-                }
+                .filter_map(|vv| match vv {
+                    VarOrValue::Var(_) => None,
+                    VarOrValue::Value(val) => Some(val.clone()),
+                })
+                .collect();
+
+            if values.len() > 1 {
+                panic!("too many values")
             }
-        }
-        Self::from_patterns(bindings)
-    }
 
-    pub fn from_patterns(patterns: Vec<(Symbol, Pattern)>) -> Self {
-        let mut bindings = IndexSet::default();
-        let mut atoms = vec![];
+            let atom_term = if let Some(value) = values.pop() {
+                AtomTerm::Value(value)
+            } else {
+                debug_assert!(set.iter().all(|vv| matches!(vv, VarOrValue::Var(_))));
+                let a = AtomTerm::Var(next_var_index);
+                next_var_index += 1;
+                a
+            };
 
-        for (root, pattern) in &patterns {
-            match pattern {
-                Expr::Var(_) => panic!("Not allowed to bind a var to a var for now"),
-                Expr::Leaf(_) => panic!("Not allowed to bind a leaf to a var for now"),
-                Expr::Node(op, args) => {
-                    let mut rootterms: Vec<AtomTerm> = args
-                        .iter()
-                        .map(|child| {
-                            child.fold(&mut |p, mut atomterms| match p {
-                                Expr::Leaf(val) => AtomTerm::Value(val.clone()),
-                                Expr::Var(var) => AtomTerm::Var(bindings.insert_full(*var).0),
-                                Expr::Node(op, _args) => {
-                                    let aux = Symbol::from(format!("_aux_{}", bindings.len()));
-                                    let (i, was_new) = bindings.insert_full(aux);
-                                    assert!(was_new);
-                                    let var = AtomTerm::Var(i);
-                                    atomterms.push(var.clone());
-                                    atoms.push(Atom(*op, atomterms));
-                                    var
-                                }
-                            })
-                        })
-                        .collect();
-
-                    let (i, was_new) = bindings.insert_full(*root);
-                    assert!(was_new);
-                    let root = AtomTerm::Var(i);
-                    rootterms.push(root);
-                    atoms.push(Atom(*op, rootterms));
+            assert!(values.is_empty());
+            for vv in set {
+                if let VarOrValue::Var(var) = vv {
+                    let old = bindings.insert(var, atom_term.clone());
+                    assert!(old.is_none());
                 }
             }
         }
 
+        let vv_to_atomterm = |vv: VarOrValue| match vv {
+            VarOrValue::Var(v) => bindings[&v].clone(),
+            VarOrValue::Value(val) => AtomTerm::Value(val),
+        };
+        let atoms = pre_atoms
+            .into_iter()
+            .map(|(sym, vvs)| Atom(sym, vvs.into_iter().map(vv_to_atomterm).collect()))
+            .collect();
+
+        println!("atoms: {:?}", atoms);
         Self {
             bindings,
             atoms,
-            patterns,
+            groups,
         }
     }
 }

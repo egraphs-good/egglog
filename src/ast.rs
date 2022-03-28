@@ -24,11 +24,13 @@ pub struct Variant {
 pub enum Action {
     Define(Symbol, Expr),
     Union(Vec<Expr>),
+    Assert(Vec<Expr>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
     Sort(Symbol),
+    Bool,
     Int,
 }
 
@@ -42,6 +44,15 @@ impl Type {
 pub struct Schema {
     pub input: Vec<Type>,
     pub output: Type,
+}
+
+impl Schema {
+    pub fn relation(input: Vec<Type>) -> Self {
+        Schema {
+            input,
+            output: Type::Bool,
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
@@ -96,9 +107,9 @@ pub struct Rule {
 
 impl Rule {
     pub fn rewrite(lhs: Pattern, rhs: Pattern) -> Self {
-        let root = Symbol::from("__root");
-        let query = Query::from_patterns(vec![(root, lhs)]);
-        let actions = vec![Action::Union(vec![Expr::Var(root), rhs])];
+        let root = Expr::Var(Symbol::from("__root"));
+        let query = Query::from_groups(vec![vec![root.clone(), lhs]]);
+        let actions = vec![Action::Union(vec![root, rhs])];
         Self { query, actions }
     }
 }

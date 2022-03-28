@@ -1,10 +1,12 @@
 use crate::Id;
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
-pub struct Value(ValueInner);
+// FIXME this shouldn't be pub
+pub struct Value(pub ValueInner);
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
 pub enum ValueInner {
+    Bool(bool),
     Id(Id),
     Int(i64),
 }
@@ -36,3 +38,4 @@ macro_rules! impl_from {
 
 impl_from!(Id(Id));
 impl_from!(Int(i64));
+impl_from!(Bool(bool));

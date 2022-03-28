@@ -1,5 +1,7 @@
-use crate::{Id, Value};
+use crate::{util::IndexMap, Id, Value};
+
 use std::fmt::Debug;
+use std::hash::Hash;
 
 #[derive(Debug, Clone, Default)]
 #[cfg_attr(feature = "serde-1", derive(serde::Serialize, serde::Deserialize))]
@@ -64,6 +66,109 @@ impl UnionFind {
 
     pub fn union_values(&mut self, value1: Value, value2: Value) -> Value {
         self.union(value1.into(), value2.into()).into()
+    }
+}
+
+pub trait UnionFindLike<K> {
+    fn len(&self) -> usize;
+    fn insert(&mut self, key: K);
+    fn index(&self, key: K) -> usize;
+    fn key(&self, index: usize) -> &K;
+    fn get_parent_index(&self, index: usize) -> usize;
+    fn set_parent_index(&mut self, index: usize, new_parent: usize);
+
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    fn find_index(&self, query: K) -> usize {
+        let mut current = self.index(query);
+        while current != self.get_parent_index(current) {
+            current = self.get_parent_index(current)
+        }
+        current
+    }
+
+    fn find_index_mut(&mut self, query: K) -> usize {
+        let mut current = self.index(query);
+        while current != self.get_parent_index(current) {
+            let grandparent = self.get_parent_index(self.get_parent_index(current));
+            self.set_parent_index(current, grandparent);
+            current = grandparent;
+        }
+        current
+    }
+
+    /// Given two leader ids, unions the two eclasses making root1 the leader.
+    fn union(&mut self, query1: K, query2: K) -> &K {
+        let root1 = self.find_index_mut(query1);
+        let root2 = self.find_index_mut(query2);
+        let root = if root1 != root2 {
+            self.union_roots(root1, root2)
+        } else {
+            root1
+        };
+        self.key(root)
+    }
+
+    fn union_roots(&mut self, a: usize, b: usize) -> usize {
+        self.set_parent_index(b, a);
+        a
+    }
+
+    fn sets(&self) -> Vec<Vec<K>>
+    where
+        K: Clone,
+    {
+        let mut sets = vec![vec![]; self.len()];
+        #[allow(clippy::needless_range_loop)]
+        for i in 0..self.len() {
+            let k = self.key(i);
+            let ii = self.find_index(k.clone());
+            sets[ii].push(k.clone());
+        }
+        sets.retain(|set| !set.is_empty());
+        sets
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SparseUnionFind<K> {
+    map: IndexMap<K, usize>,
+}
+
+impl<K> Default for SparseUnionFind<K> {
+    fn default() -> Self {
+        Self {
+            map: Default::default(),
+        }
+    }
+}
+
+impl<K: Hash + Eq> UnionFindLike<K> for SparseUnionFind<K> {
+    fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    fn insert(&mut self, key: K) {
+        let len = self.map.len();
+        self.map.entry(key).or_insert(len);
+    }
+
+    fn index(&self, key: K) -> usize {
+        self.map.get_index_of(&key).unwrap()
+    }
+
+    fn key(&self, index: usize) -> &K {
+        self.map.get_index(index).unwrap().0
+    }
+
+    fn get_parent_index(&self, index: usize) -> usize {
+        *self.map.get_index(index).unwrap().1
+    }
+
+    fn set_parent_index(&mut self, index: usize, new_parent: usize) {
+        *self.map.get_index_mut(index).unwrap().1 = new_parent;
     }
 }
 
