@@ -1,0 +1,13 @@
+(relation path (Int Int))
+(relation edge (Int Int))
+
+(rule ((true (edge x y)))
+      ((assert (path x y))))
+
+(rule ((true (path x y) (edge y z)))
+      ((assert (path x z))))
+        
+(assert (edge 1 2) (edge 2 3) (edge 3 4))
+(check-eq true (edge 1 2))
+(run 3)
+(check-eq true (path 1 4))
