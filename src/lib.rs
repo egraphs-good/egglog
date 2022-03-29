@@ -124,13 +124,64 @@ impl Relation {
 
 pub type Subst = IndexMap<Symbol, Value>;
 
-#[derive(Default)]
+pub struct Primitive {
+    _schema: Schema,
+    f: fn(&[Value]) -> Value,
+}
+
+fn default_primitives() -> HashMap<Symbol, Primitive> {
+    macro_rules! prim {
+        (@type Int) => { i64 };
+        (@type Bool) => { bool };
+        (|$($param:ident : $t:ident),*| -> $output:ident { $body:expr }) => {
+            Primitive {
+                _schema: Schema {
+                    input: vec![$(Type::$t),*],
+                    output: Type::$output,
+                },
+                f: |values: &[Value]| -> Value {
+                    let mut values = values.iter();
+                    $(
+                        let $param: prim!(@type $t) = values.next().unwrap().clone().into();
+                    )*
+                    Value::from($body)
+                }
+            }
+        };
+    }
+
+    [
+        ("+", prim!(|a: Int, b: Int| -> Int { a + b })),
+        ("-", prim!(|a: Int, b: Int| -> Int { a - b })),
+        ("*", prim!(|a: Int, b: Int| -> Int { a * b })),
+        ("max", prim!(|a: Int, b: Int| -> Int { a.max(b) })),
+        ("min", prim!(|a: Int, b: Int| -> Int { a.min(b) })),
+    ]
+    .into_iter()
+    .map(|(k, v)| (Symbol::from(k), v))
+    .collect()
+}
+
 pub struct EGraph {
     unionfind: UnionFind,
     sorts: HashSet<Symbol>,
+    primitives: HashMap<Symbol, Primitive>,
     relations: HashMap<Symbol, Relation>,
     rules: HashMap<Symbol, Rule>,
     globals: HashMap<Symbol, Value>,
+}
+
+impl Default for EGraph {
+    fn default() -> Self {
+        Self {
+            unionfind: Default::default(),
+            sorts: Default::default(),
+            relations: Default::default(),
+            rules: Default::default(),
+            globals: Default::default(),
+            primitives: default_primitives(),
+        }
+    }
 }
 
 impl EGraph {
@@ -228,10 +279,13 @@ impl EGraph {
             Expr::Leaf(value) => value.clone(),
             Expr::Node(op, args) => {
                 let values: Vec<Value> = args.iter().map(|a| self.eval_expr(ctx, a)).collect();
-                self.relations
-                    .get_mut(op)
-                    .unwrap_or_else(|| panic!("Relation '{}' doesn't exist", op))
-                    .get(&mut self.unionfind, &values)
+                if let Some(rel) = self.relations.get_mut(op) {
+                    rel.get(&mut self.unionfind, &values)
+                } else if let Some(prim) = self.primitives.get(op) {
+                    (prim.f)(&values)
+                } else {
+                    panic!("Couldn't find relation/primitive: {op}")
+                }
             }
         }
     }
@@ -287,9 +341,10 @@ impl EGraph {
             self.step_rules();
             let updates = self.rebuild();
             println!("Made {updates} updates",);
-            if updates == 0 {
-                break;
-            }
+            // if updates == 0 {
+            //     println!("Breaking early!");
+            //     break;
+            // }
         }
 
         // TODO detect functions

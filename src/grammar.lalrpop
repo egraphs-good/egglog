@@ -42,7 +42,9 @@ Expr: Expr = {
     <Bool> => Expr::leaf(<>),
     <Ident> => Expr::Var(<>),
     "(" <head:Ident> <tail:(Expr)*> ")" => Expr::Node(head, tail),
+    "(" <head:PrimitiveSymbol> <tail:(Expr)+> ")" => Expr::Node(head, tail),
 };
+
 
 ExprList: Vec<Expr> = { "(" <sexps:(Expr)*> ")" => sexps }
 
@@ -55,9 +57,10 @@ Type: Type = {
     <Ident> => Type::Sort(<>),
 }
 
-Num: i64 = <s:r"[0-9]+"> => s.parse().unwrap();
+Num: i64 = <s:r"(-)?[0-9]+"> => s.parse().unwrap();
 Bool: bool = {
     "true" => true,
     "false" => false,
 }
 Ident: Symbol = <s:r"[[:alpha:]][\w-]*"> => s.parse().unwrap();
+PrimitiveSymbol: Symbol = <r"[+*/-]"> => Symbol::from(<>);
