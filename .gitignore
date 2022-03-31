@@ -1,4 +1,7 @@
-/target
+target/
 notes.md
 .vscode
 Cargo.lock
+node_modules
+dist/
+pkg/

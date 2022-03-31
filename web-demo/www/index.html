@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8" />
+    <style>
+        body {
+            margin: 0;
+            display: flex;
+            height: 100vh;
+            width: 100vw;
+            font-size: large;
+        }
+
+        #editor {
+            width: 60%;
+            resize: horizontal;
+            overflow: auto;
+        }
+
+        #editor .CodeMirror {
+            width: 100%;
+            height: 100%;
+            font-size: 1.2rem;
+        }
+
+        .CodeMirror-scroll {
+            padding-top: 15px;
+        }
+
+        #panel {
+            padding: 10px;
+            flex: 1 1 0;
+            border-left: 2px solid gray;
+
+            display: flex;
+            flex-flow: column;
+        }
+
+        #toolbar button {
+            margin-right: 5px;
+        }
+
+        #output {
+            margin-top: 10px;
+            flex-grow: 1;
+        }
+    </style>
+    <link rel="stylesheet" href="//unpkg.com/codemirror@5.65.2/lib/codemirror.css">
+    <script src="//unpkg.com/codemirror@5.65.2/lib/codemirror.js"></script>
+    <script>
+        let editor, output;
+
+        console.log("Main script is running");
+        let worker = new Worker("worker.js");
+        worker.onmessage = function (event) {
+            console.log(event);
+            output.textContent = event.data;
+        }
+
+        window.onload = function () {
+            let url = new URL(location);
+            let program = url.searchParams.get("program") || "(check-eq 2 2)";
+            output = document.getElementById("output");
+            editor = CodeMirror(document.getElementById("editor"), {
+                value: program,
+                lineNumbers: true,
+            });
+        }
+
+        window.onpopstate = function (event) {
+            console.log(event)
+            if (event.state) {
+                editor.setValue(event.state)
+            }
+        }
+
+        function run(event) {
+            let program = editor.getValue();
+            worker.postMessage(program);
+            console.log("posted a message to worker!")
+            output.textContent = "running..."
+        }
+
+        function share(event) {
+            let url = new URL(location);
+            let state = editor.getValue()
+            url.searchParams.set("program", state);
+            if (history.state != state) {
+                history.pushState(state, "", url)
+            }
+        }
+    </script>
+</head>
+
+<body>
+    <div id="editor"></div>
+    <div id="panel">
+        <div id="toolbar">
+            <button onclick="run()">Run</button>
+            <button onclick="share()">Share</button>
+        </div>
+        <div id="output">
+            Click "Run" to run code
+        </div>
+    </div>
+</body>
+
+</html>
