@@ -46,26 +46,18 @@
             flex-grow: 1;
         }
     </style>
+
     <link rel="stylesheet" href="//unpkg.com/codemirror@5.65.2/lib/codemirror.css">
     <script src="//unpkg.com/codemirror@5.65.2/lib/codemirror.js"></script>
+
     <script>
         let editor, output;
 
         console.log("Main script is running");
         let worker = new Worker("worker.js");
-        worker.onmessage = function (event) {
-            console.log(event);
-            output.textContent = event.data;
-        }
-
-        window.onload = function () {
-            let url = new URL(location);
-            let program = url.searchParams.get("program") || "(check-eq 2 2)";
-            output = document.getElementById("output");
-            editor = CodeMirror(document.getElementById("editor"), {
-                value: program,
-                lineNumbers: true,
-            });
+        worker.onmessage = function (message) {
+            console.log("got message", message);
+            output.innerHTML = message.data;
         }
 
         window.onpopstate = function (event) {
@@ -75,20 +67,53 @@
             }
         }
 
-        function run(event) {
+        function run() {
             let program = editor.getValue();
             worker.postMessage(program);
             console.log("posted a message to worker!")
             output.textContent = "running..."
         }
 
-        function share(event) {
+        function share() {
             let url = new URL(location);
             let state = editor.getValue()
             url.searchParams.set("program", state);
             if (history.state != state) {
                 history.pushState(state, "", url)
             }
+        }
+
+        CONTENT = `
+(datatype Math
+  (Num Int)
+  (Var Int)
+  (Add Math Math))
+
+(define start (Add (Num 3) (Add (Num 4) (Var 42))))
+(define goal  (Add (Num 7) (Var 42)))
+
+(rewrite (Add x y) (Add y x))
+(rewrite (Add (Add x y) z) (Add x (Add y z)))
+(rewrite (Add (Num x) (Num y)) (Num (+ x y)))
+
+(run 3)
+(check-eq start goal)
+        `.trim();
+
+        window.onload = function () {
+            console.log("Running onload...")
+            let url = new URL(location);
+            let program = url.searchParams.get("program") || CONTENT
+            output = document.getElementById("output");
+            editor = CodeMirror(document.getElementById("editor"), {
+                value: program,
+                lineNumbers: true,
+                extraKeys: {
+                    "Ctrl-Enter": run,
+                }
+            });
+
+            editor.on()
         }
     </script>
 </head>

@@ -21,7 +21,7 @@ fn test_files() {
             println!("Running test {path:?}");
             let program = std::fs::read_to_string(path).unwrap();
             let mut egraph = EGraph::default();
-            egraph.run_program(&program);
+            egraph.run_program(&program).unwrap();
         }
     });
 }

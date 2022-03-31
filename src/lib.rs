@@ -4,6 +4,9 @@ mod util;
 mod value;
 
 mod ast;
+
+use thiserror::Error;
+
 use lalrpop_util::lalrpop_mod;
 lalrpop_mod!(
     #[allow(clippy::all)]
@@ -416,43 +419,53 @@ impl EGraph {
         }
     }
 
-    pub fn run_command(&mut self, command: Command) {
+    pub fn run_command(&mut self, command: Command) -> Result<String, Error> {
+        #[allow(clippy::useless_format)]
         match command {
             Command::Datatype { name, variants } => {
                 self.declare_sort(name);
                 for variant in variants {
                     self.declare_constructor(variant.name, variant.types);
                 }
+                Ok(format!("Declared datatype {name}."))
             }
             Command::Function(name, schema) => {
                 self.declare_function(name, schema);
+                Ok(format!("Declared function {name}."))
             }
             Command::Rule(name, rule) => {
                 if let Some(name) = name {
                     self.add_named_rule(name, rule);
+                    Ok(format!("Declared rule {name}."))
                 } else {
                     self.add_rule(rule);
+                    Ok(format!("Declared rule."))
                 }
             }
             Command::Action(a) => match a {
                 Action::Define(v, e) => {
                     let val = self.eval_closed_expr(&e);
                     self.globals.insert(v, val);
+                    Ok(format!("Defined {v}."))
                 }
                 Action::Union(exprs) => {
                     let ctx = Default::default();
                     self.union_exprs(&ctx, &exprs);
+                    Ok(format!("Unioned."))
                 }
                 Action::Assert(exprs) => {
                     let ctx = Default::default();
                     self.assert_exprs(&ctx, &exprs);
+                    Ok(format!("Asserted."))
                 }
             },
             Command::Run(limit) => {
                 self.run_rules(limit);
+                Ok(format!("Ran {limit}."))
             }
             Command::Extract(_) => todo!(),
             Command::CheckEq(exprs) => {
+                let n = exprs.len();
                 let mut exprs = exprs.iter();
                 if let Some(first) = exprs.next() {
                     let val = self.eval_closed_expr(first);
@@ -463,6 +476,7 @@ impl EGraph {
                         assert_eq!(val, v2);
                     }
                 }
+                Ok(format!("Checked {} exprs equal.", n))
             }
         }
     }
@@ -476,13 +490,22 @@ impl EGraph {
         }
     }
 
-    pub fn run_program(&mut self, input: &str) {
+    pub fn run_program(&mut self, input: &str) -> Result<Vec<String>, Error> {
         let parser = grammar::ProgramParser::new();
-        let program = parser.parse(input).unwrap();
-        for command in program {
-            self.run_command(command)
-        }
+        let program = parser
+            .parse(input)
+            .map_err(|e| e.map_token(|tok| tok.to_string()))?;
+        program
+            .into_iter()
+            .map(|cmd| self.run_command(cmd))
+            .collect()
     }
+}
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error(transparent)]
+    ParseError(#[from] lalrpop_util::ParseError<usize, String, &'static str>),
 }
 
 pub type Pattern = Expr;

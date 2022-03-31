@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 
-set -ev
+cd $(dirname "${BASH_SOURCE[0]}")
 
-wasm-pack build --target no-modules --no-typescript
+set -ev
+wasm-pack build --target no-modules --no-typescript --out-dir www/pkg/
