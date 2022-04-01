@@ -1,9 +1,9 @@
-importScripts("pkg/web_demo.js")
+importScripts("web_demo.js")
 console.log("I'm in the worker")
 
 let { run_program } = wasm_bindgen;
 async function work() {
-    await wasm_bindgen("pkg/web_demo_bg.wasm");
+    await wasm_bindgen("web_demo_bg.wasm");
 
     // Set callback to handle messages passed to the worker.
     self.onmessage = async event => {

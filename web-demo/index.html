@@ -83,27 +83,29 @@
             }
         }
 
-        CONTENT = `
-(datatype Math
-  (Num Int)
-  (Var Int)
-  (Add Math Math))
+        window.onload = async function () {
+            let examples = await fetch("examples.json").then(r => r.json());
+            let select = document.getElementById("examples");
+            for (name in examples) {
+                let node = document.createElement("option");
+                node.value = name;
+                node.innerHTML = name;
+                select.appendChild(node);
+            }
 
-(define start (Add (Num 3) (Add (Num 4) (Var 42))))
-(define goal  (Add (Num 7) (Var 42)))
+            select.onchange = function () {
+                console.log("Loading example", select.value);
+                if (select.value) {
+                    editor.setValue(examples[select.value]);
+                }
+                select.value = "";
+            };
 
-(rewrite (Add x y) (Add y x))
-(rewrite (Add (Add x y) z) (Add x (Add y z)))
-(rewrite (Add (Num x) (Num y)) (Num (+ x y)))
+            console.log(select)
 
-(run 3)
-(check-eq start goal)
-        `.trim();
-
-        window.onload = function () {
             console.log("Running onload...")
             let url = new URL(location);
-            let program = url.searchParams.get("program") || CONTENT
+            let program = url.searchParams.get("program") || "";
             output = document.getElementById("output");
             editor = CodeMirror(document.getElementById("editor"), {
                 value: program,
@@ -113,8 +115,13 @@
                 }
             });
 
-            editor.on()
+            if (!program) {
+                // pick an example
+                select.value = select.options[2].value;
+                select.onchange()
+            }
         }
+
     </script>
 </head>
 
@@ -124,6 +131,11 @@
         <div id="toolbar">
             <button onclick="run()">Run</button>
             <button onclick="share()">Share</button>
+
+            <!-- <label for="examples">Examples:</label> -->
+            <select name="examples" id="examples">
+                <option value=""> Load an example </option>
+            </select>
         </div>
         <div id="output">
             Click "Run" to run code
