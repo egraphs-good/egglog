@@ -16,11 +16,20 @@ jobs:
     - name: Install wasm-pack
       run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
+    - name: Cache
+      uses: Swatinem/rust-cache@v1
+
     - name: Build
-      run: make web && tree target/www/
+      run: make web
+      
+    - name: Prepare for Deployment
+      run: |
+        tree target/www
+        find -name .gitignore -delete  # ignored files are wonky to deploy
 
     - name: Deploy 🚀
       uses: JamesIves/github-pages-deploy-action@v4.2.5
       with:
+        single-commit: true
         branch: gh-pages
-        folder: target/www/
+        folder: target/www
