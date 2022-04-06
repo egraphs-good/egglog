@@ -30,8 +30,13 @@ fn test_files() {
             println!("Running test {path:?}");
             let program = std::fs::read_to_string(path).unwrap();
             let mut egraph = EGraph::default();
-            if let Err(err) = egraph.run_program(&program) {
-                panic!("Top level error: {err}")
+            match egraph.run_program(&program) {
+                Ok(msgs) => {
+                    for msg in msgs {
+                        println!("  {}", msg);
+                    }
+                }
+                Err(err) => panic!("Top level error: {err}"),
             }
         }
     }

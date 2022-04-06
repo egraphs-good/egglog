@@ -27,9 +27,9 @@ jobs:
         tree target/www
         find -name .gitignore -delete  # ignored files are wonky to deploy
 
-    - name: Deploy 🚀
-      uses: JamesIves/github-pages-deploy-action@v4.2.5
+    - name: Deploy
+      uses: peaceiris/actions-gh-pages@v3
       with:
-        single-commit: true
-        branch: gh-pages
-        folder: target/www
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        publish_dir: target/www
+        force_orphan: true

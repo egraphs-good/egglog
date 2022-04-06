@@ -505,8 +505,8 @@ impl EGraph {
             Command::Action(a) => match a {
                 Action::Define(v, e) => {
                     let val = self.eval_closed_expr(&e)?;
-                    self.globals.insert(v, val);
-                    Ok(format!("Defined {v}."))
+                    self.globals.insert(v, val.clone());
+                    Ok(format!("Defined {v} = {val}."))
                 }
                 Action::Union(exprs) => {
                     let ctx = Default::default();
@@ -530,18 +530,19 @@ impl EGraph {
             }
             Command::Extract(_) => todo!(),
             Command::CheckEq(exprs) => {
-                let n = exprs.len();
-                let mut exprs = exprs.iter();
-                if let Some(first) = exprs.next() {
+                let mut iter = exprs.iter();
+                if let Some(first) = iter.next() {
                     let val = self.eval_closed_expr(first)?;
                     let val = self.bad_find_value(val);
-                    for e2 in exprs {
+                    for e2 in iter {
                         let v2 = self.eval_closed_expr(e2)?;
                         let v2 = self.bad_find_value(v2);
                         assert_eq!(val, v2);
                     }
+                    Ok(format!("Checked {} exprs equal to {val}.", exprs.len()))
+                } else {
+                    Ok("Empty assert.".into())
                 }
-                Ok(format!("Checked {} exprs equal.", n))
             }
         }
     }
