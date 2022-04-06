@@ -3,16 +3,27 @@ use crate::*;
 
 grammar;
 
+// lexer
+match {
+    r"\s*" => { }, // skip whitespace
+    r";[^\n\r]*[\n\r]*" => { }, // skip ; comments
+    _
+}
+
 pub Program: Vec<Command> = { (Command)* => <> }
 
 List<T>: Vec<T> = { 
     "(" <T*> ")" => <>,
 }
 
+MergeFn: MergeFn = {
+    "(" "merge" <var1:Ident> <var2:Ident> <expr:Expr> ")" => MergeFn { vars: (var1, var2), expr }
+}
+
 Command: Command = {
     "(" "datatype" <name:Ident> <variants:(Variant)*> ")" => Command::Datatype { <> },
-    "(" "function" <name:Ident> <schema:Schema> ")" => Command::Function(name, schema),
-    "(" "relation" <name:Ident> <types:List<Type>> ")" => Command::Function(name, Schema::relation(types)),
+    "(" "function" <name:Ident> <schema:Schema> <merge:MergeFn?> ")" => Command::Function { name, schema, merge },
+    "(" "relation" <name:Ident> <types:List<Type>> ")" => Command::Function { name, schema: Schema::relation(types), merge: None },
     "(" "rule" <name:Name?> <query:Query> <actions:List<Action>> ")" => Command::Rule(name, Rule {query, actions}),
     "(" "rewrite" <name:Name?> <lhs:Expr> <rhs:Expr> ")" => Command::Rule(name, Rule::rewrite(lhs, rhs)),
     <Action> => Command::Action(<>),
@@ -27,6 +38,7 @@ Action: Action = {
     "(" "define" <Ident> <Expr> ")" => Action::Define(<>),
     "(" "union" <Expr*> ")" => Action::Union(<>),
     "(" "assert" <Expr*> ")" => Action::Assert(<>),
+    "(" "set" <NodeExpr> <Expr+> ")" => Action::Set(<>),
 }
 
 Schema: Schema = {
@@ -41,9 +53,13 @@ Expr: Expr = {
     <Num> => Expr::leaf(<>),
     <Bool> => Expr::leaf(<>),
     <Ident> => Expr::Var(<>),
-    "(" <head:Ident> <tail:(Expr)*> ")" => Expr::Node(head, tail),
+    <NodeExpr> => <>,
     "(" <head:PrimitiveSymbol> <tail:(Expr)+> ")" => Expr::Node(head, tail),
 };
+
+NodeExpr: Expr = {
+    "(" <head:Ident> <tail:(Expr)*> ")" => Expr::Node(head, tail),
+}
 
 
 ExprList: Vec<Expr> = { "(" <sexps:(Expr)*> ")" => sexps }

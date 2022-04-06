@@ -51,7 +51,7 @@
     <script src="//unpkg.com/codemirror@5.65.2/lib/codemirror.js"></script>
 
     <script>
-        let editor, output;
+        let editor, output, examples;
 
         console.log("Main script is running");
         let worker = new Worker("worker.js");
@@ -62,8 +62,21 @@
 
         window.onpopstate = function (event) {
             console.log(event)
-            if (event.state) {
-                editor.setValue(event.state)
+            loadEditor()
+        }
+
+        function loadEditor() {
+            let url = new URL(location);
+            let example = url.searchParams.get("example");
+            let program = url.searchParams.get("program");
+            if (example) {
+                if (examples[example]) {
+                    editor.setValue(examples[example]);
+                } else {
+                    console.warn("Bad example choice", example, "choices: ", Object.keys(examples));
+                }
+            } else if (program) {
+                editor.setValue(program);
             }
         }
 
@@ -74,17 +87,33 @@
             output.textContent = "running..."
         }
 
-        function share() {
+        function pushState() {
             let url = new URL(location);
-            let state = editor.getValue()
-            url.searchParams.set("program", state);
+            url.searchParams.delete("program");
+            url.searchParams.delete("example");
+
+            let state;
+            let content = editor.getValue();
+            for (let ex in examples) {
+                if (content == examples[ex]) {
+                    state = ex;
+                    url.searchParams.set("example", ex);
+                    break;
+                }
+            }
+
+            if (!state) {
+                state = content;
+                url.searchParams.set("program", content);
+            }
+
             if (history.state != state) {
                 history.pushState(state, "", url)
             }
         }
 
         window.onload = async function () {
-            let examples = await fetch("examples.json").then(r => r.json());
+            examples = await fetch("examples.json").then(r => r.json());
             let select = document.getElementById("examples");
             for (name in examples) {
                 let node = document.createElement("option");
@@ -95,31 +124,23 @@
 
             select.onchange = function () {
                 console.log("Loading example", select.value);
+
                 if (select.value) {
                     editor.setValue(examples[select.value]);
+                    pushState()
                 }
                 select.value = "";
             };
 
-            console.log(select)
-
-            console.log("Running onload...")
-            let url = new URL(location);
-            let program = url.searchParams.get("program") || "";
             output = document.getElementById("output");
             editor = CodeMirror(document.getElementById("editor"), {
-                value: program,
                 lineNumbers: true,
                 extraKeys: {
                     "Ctrl-Enter": run,
                 }
             });
 
-            if (!program) {
-                // pick an example
-                select.value = select.options[2].value;
-                select.onchange()
-            }
+            loadEditor()
         }
 
     </script>
@@ -130,7 +151,7 @@
     <div id="panel">
         <div id="toolbar">
             <button onclick="run()">Run</button>
-            <button onclick="share()">Share</button>
+            <button onclick="pushState()">Share</button>
 
             <!-- <label for="examples">Examples:</label> -->
             <select name="examples" id="examples">

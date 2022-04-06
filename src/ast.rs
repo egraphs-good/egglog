@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use crate::*;
 
 #[derive(Debug)]
@@ -6,7 +8,11 @@ pub enum Command {
         name: Symbol,
         variants: Vec<Variant>,
     },
-    Function(Symbol, Schema),
+    Function {
+        name: Symbol,
+        schema: Schema,
+        merge: Option<MergeFn>,
+    },
     Rule(Option<Symbol>, Rule),
     Action(Action),
     Run(usize),
@@ -21,16 +27,24 @@ pub struct Variant {
 }
 
 #[derive(Clone, Debug)]
+pub struct MergeFn {
+    pub vars: (Symbol, Symbol),
+    pub expr: Expr,
+}
+
+#[derive(Clone, Debug)]
 pub enum Action {
     Define(Symbol, Expr),
     Union(Vec<Expr>),
     Assert(Vec<Expr>),
+    Set(Expr, Vec<Expr>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
     Sort(Symbol),
     Bool,
+    Unit,
     Int,
 }
 
@@ -50,7 +64,7 @@ impl Schema {
     pub fn relation(input: Vec<Type>) -> Self {
         Schema {
             input,
-            output: Type::Bool,
+            output: Type::Unit,
         }
     }
 }
@@ -96,6 +110,22 @@ impl<T> Expr<T> {
     pub fn fold<Out>(&self, f: &mut impl FnMut(&Self, Vec<Out>) -> Out) -> Out {
         let ts = self.children().iter().map(|child| child.fold(f)).collect();
         f(self, ts)
+    }
+}
+
+impl<T: Display> Display for Expr<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Expr::Leaf(val) => val.fmt(f),
+            Expr::Var(var) => Display::fmt(var, f),
+            Expr::Node(op, args) => {
+                write!(f, "({}", op)?;
+                for arg in args {
+                    write!(f, " {}", arg)?;
+                }
+                write!(f, ")")
+            }
+        }
     }
 }
 

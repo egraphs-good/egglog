@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use crate::Id;
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
@@ -9,6 +11,16 @@ pub enum ValueInner {
     Bool(bool),
     Id(Id),
     Int(i64),
+}
+
+impl Display for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            ValueInner::Bool(b) => b.fmt(f),
+            ValueInner::Id(id) => write!(f, "id{}", id.0),
+            ValueInner::Int(i) => i.fmt(f),
+        }
+    }
 }
 
 impl Value {

@@ -118,7 +118,7 @@ impl EGraph {
     where
         F: FnMut(&[Value]),
     {
-        println!("Eval {:?}", query.atoms);
+        log::debug!("Eval {:?}", query.atoms);
         let tries = query
             .atoms
             .iter()
@@ -166,7 +166,7 @@ impl EGraph {
     ) where
         F: FnMut(&[Value]),
     {
-        // println!("{:?}", tuple);
+        // log::debug!("{:?}", tuple);
         if depth == query.var_order.len() {
             return f(tuple);
         }
@@ -185,7 +185,7 @@ impl EGraph {
             .unwrap();
 
         // for &j in js {
-        //     println!("{:?}", relations[j].0.keys());
+        //     log::debug!("{:?}", relations[j].0.keys());
         // }
 
         let mut intersection: Vec<Value> = relations[j_min].0.keys().cloned().collect();
@@ -197,7 +197,7 @@ impl EGraph {
             }
         }
 
-        // println!("intersection of {:?}: {:?}", x, intersection);
+        // log::debug!("intersection of {:?}: {:?}", x, intersection);
 
         let empty = Trie::default();
 

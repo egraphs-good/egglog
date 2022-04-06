@@ -1,14 +1,20 @@
 use egg_smol::*;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-fn walk_directory(path: &Path, f: &mut impl FnMut(&Path)) {
+fn init() {
+    let _ = env_logger::builder().is_test(true).try_init();
+}
+
+fn walk_directory(path: &Path) -> Vec<PathBuf> {
     if path.is_file() {
-        f(path)
+        vec![path.to_path_buf()]
     } else if path.is_dir() {
+        let mut vec = vec![];
         for entry in std::fs::read_dir(path).unwrap() {
             let path = entry.unwrap().path();
-            walk_directory(&path, f);
+            vec.extend(walk_directory(&path));
         }
+        vec
     } else {
         panic!("Not a file or directory??")
     }
@@ -16,12 +22,17 @@ fn walk_directory(path: &Path, f: &mut impl FnMut(&Path)) {
 
 #[test]
 fn test_files() {
-    walk_directory(Path::new("tests/"), &mut |path| {
+    init();
+    let paths = walk_directory(Path::new("tests/"));
+
+    for path in paths {
         if path.extension().unwrap_or_default() == "egg" {
             println!("Running test {path:?}");
             let program = std::fs::read_to_string(path).unwrap();
             let mut egraph = EGraph::default();
-            egraph.run_program(&program).unwrap();
+            if let Err(err) = egraph.run_program(&program) {
+                panic!("Top level error: {err}")
+            }
         }
-    });
+    }
 }

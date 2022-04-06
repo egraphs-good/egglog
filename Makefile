@@ -1,4 +1,4 @@
-.PHONY: all web test
+.PHONY: all web test serve
 
 RUST_SRC=$(shell find -type f -wholename '*/src/*.rs' -or -name 'Cargo.toml')
 TESTS=$(shell find tests/ -type f -name '*.egg')
@@ -20,6 +20,9 @@ test:
 web: ${DIST_WASM} ${WEB_SRC} ${WWW}/examples.json
 	mkdir -p ${WWW}
 	cp ${WEB_SRC} ${WWW}
+
+serve: web
+	python3 -m http.server 8080 -d ${WWW}
 
 ${WWW}/examples.json: web-demo/examples.py ${TESTS}
 	$^ > $@

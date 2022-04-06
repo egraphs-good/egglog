@@ -46,34 +46,34 @@ impl From<Id> for usize {
     }
 }
 
-pub struct Relation {
+pub struct Function {
     schema: Schema,
     nodes: HashMap<Vec<Value>, Value>,
     updates: usize,
+    merge_fn: Option<MergeFn>,
 }
 
-impl Relation {
-    pub fn new(schema: Schema) -> Self {
+impl Function {
+    pub fn new(schema: Schema, merge_fn: Option<MergeFn>) -> Self {
         Self {
             schema,
             nodes: Default::default(),
             updates: 0,
+            merge_fn,
         }
     }
 
-    pub fn get(&mut self, uf: &mut UnionFind, args: &[Value]) -> Value {
+    pub fn get(&mut self, uf: &mut UnionFind, args: &[Value]) -> Option<Value> {
         // TODO typecheck?
-        self.nodes
-            .entry(args.into())
-            .or_insert_with(|| {
-                self.updates += 1;
-                match self.schema.output {
-                    Type::Sort(_) => uf.make_set().into(),
-                    Type::Bool => false.into(),
-                    Type::Int => todo!(),
-                }
-            })
-            .clone()
+        if self.schema.output.is_sort() {
+            let id = self
+                .nodes
+                .entry(args.into())
+                .or_insert_with(|| uf.make_set().into());
+            Some(id.clone())
+        } else {
+            self.nodes.get(args).cloned()
+        }
     }
 
     pub fn set(&mut self, uf: &mut UnionFind, args: &[Value], value: Value) -> Value {
@@ -85,11 +85,24 @@ impl Relation {
                     value
                 } else {
                     self.updates += 1;
-                    if self.schema.output.is_sort() {
-                        e.insert(uf.union_values(old, value))
+                    let new_value = if self.schema.output.is_sort() {
+                        uf.union_values(old, value)
+                    } else if let Some(merge) = &self.merge_fn {
+                        match merge.expr {
+                            Expr::Node(s, _) if s.as_str() == "max" => {
+                                i64::max(old.into(), value.into()).into()
+                            }
+                            Expr::Node(s, _) if s.as_str() == "min" => {
+                                i64::min(old.into(), value.into()).into()
+                            }
+                            _ => panic!("Unsupported merge for now"),
+                        }
                     } else {
-                        e.insert(value)
-                    }
+                        panic!("no merge!")
+                    };
+
+                    e.insert(new_value.clone());
+                    new_value
                 }
             }
             Entry::Vacant(e) => {
@@ -169,7 +182,7 @@ pub struct EGraph {
     unionfind: UnionFind,
     sorts: HashSet<Symbol>,
     primitives: HashMap<Symbol, Primitive>,
-    relations: HashMap<Symbol, Relation>,
+    functions: HashMap<Symbol, Function>,
     rules: HashMap<Symbol, Rule>,
     globals: HashMap<Symbol, Value>,
 }
@@ -179,7 +192,7 @@ impl Default for EGraph {
         Self {
             unionfind: Default::default(),
             sorts: Default::default(),
-            relations: Default::default(),
+            functions: Default::default(),
             rules: Default::default(),
             globals: Default::default(),
             primitives: default_primitives(),
@@ -187,29 +200,46 @@ impl Default for EGraph {
     }
 }
 
+#[derive(Debug, Error)]
+#[error("Not found: {0}")]
+pub struct NotFoundError(Expr);
+
 impl EGraph {
     pub fn union(&mut self, id1: Id, id2: Id) -> Id {
         self.unionfind.union(id1, id2)
     }
 
-    pub fn union_exprs(&mut self, ctx: &Subst, exprs: &[Expr]) -> Option<Value> {
+    pub fn union_exprs(&mut self, ctx: &Subst, exprs: &[Expr]) -> Result<Value, NotFoundError> {
         let mut exprs = exprs.iter();
-        if let Some(e) = exprs.next() {
-            let mut val = self.eval_expr(ctx, e);
-            for e2 in exprs {
-                let val2 = self.eval_expr(ctx, e2);
-                val = self.unionfind.union_values(val, val2);
-            }
-            Some(val)
-        } else {
-            None
+        let e = exprs.next().expect("shouldn't be empty");
+        let mut val = self.eval_expr(ctx, e)?;
+        for e2 in exprs {
+            let val2 = self.eval_expr(ctx, e2)?;
+            val = self.unionfind.union_values(val, val2);
         }
+        Ok(val)
     }
 
-    pub fn assert_exprs(&mut self, ctx: &Subst, exprs: &[Expr]) {
+    pub fn assert_exprs(&mut self, ctx: &Subst, exprs: &[Expr]) -> Result<(), NotFoundError> {
+        assert!(!exprs.is_empty());
         for e in exprs {
-            self.set_expr(ctx, e, true.into());
+            self.set_expr(ctx, e, &[true.into()])?;
         }
+        Ok(())
+    }
+
+    fn set_exprs(
+        &mut self,
+        ctx: &Subst,
+        dst: &Expr,
+        srcs: &[Expr],
+    ) -> Result<Value, NotFoundError> {
+        assert!(!srcs.is_empty());
+        let values: Vec<Value> = srcs
+            .iter()
+            .map(|e| self.eval_expr(ctx, e))
+            .collect::<Result<_, _>>()?;
+        self.set_expr(ctx, dst, &values)
     }
 
     pub fn find(&self, id: Id) -> Id {
@@ -225,17 +255,17 @@ impl EGraph {
                 return updates;
             }
         }
-        // for (op, r) in &self.relations {
+        // for (op, r) in &self.functions {
         //     for (children, value) in &r.nodes {
-        //         println!("{op:?}{children:?} = {value:?}");
+        //         log::debug!("{op:?}{children:?} = {value:?}");
         //     }
         // }
     }
 
     fn rebuild_one(&mut self) -> usize {
         let mut new_unions = 0;
-        for relation in self.relations.values_mut() {
-            new_unions += relation.rebuild(&mut self.unionfind);
+        for function in self.functions.values_mut() {
+            new_unions += function.rebuild(&mut self.unionfind);
         }
         new_unions
     }
@@ -246,11 +276,16 @@ impl EGraph {
         Type::Sort(name)
     }
 
-    pub fn declare_function(&mut self, name: impl Into<Symbol>, schema: Schema) -> &mut Relation {
+    pub fn declare_function(
+        &mut self,
+        name: impl Into<Symbol>,
+        schema: Schema,
+        merge: Option<MergeFn>,
+    ) -> &mut Function {
         let name = name.into();
-        match self.relations.entry(name) {
-            Entry::Vacant(e) => e.insert(Relation::new(schema)),
-            Entry::Occupied(_) => panic!("Relation '{}' already exists", name),
+        match self.functions.entry(name) {
+            Entry::Vacant(e) => e.insert(Function::new(schema, merge)),
+            Entry::Occupied(_) => panic!("Function '{}' already exists", name),
         }
     }
 
@@ -258,7 +293,7 @@ impl EGraph {
         &mut self,
         name: impl Into<Symbol>,
         types: Vec<Type>,
-    ) -> &mut Relation {
+    ) -> &mut Function {
         let name = name.into();
         self.declare_function(
             name,
@@ -266,47 +301,63 @@ impl EGraph {
                 input: types,
                 output: Type::Sort(name),
             },
+            None,
         )
     }
 
     // this must be &mut because it'll call "make_set",
     // but it'd be nice if that didn't have to happen
-    pub fn eval_expr(&mut self, ctx: &Subst, expr: &Expr) -> Value {
+    pub fn eval_expr(&mut self, ctx: &Subst, expr: &Expr) -> Result<Value, NotFoundError> {
         match expr {
             // TODO should we canonicalize here?
-            Expr::Var(var) => ctx
+            Expr::Var(var) => Ok(ctx
                 .get(var)
                 .or_else(|| self.globals.get(var))
                 .cloned()
-                .unwrap_or_else(|| panic!("Couldn't find variable '{var}'")),
-            Expr::Leaf(value) => value.clone(),
+                .unwrap_or_else(|| panic!("Couldn't find variable '{var}'"))),
+            Expr::Leaf(value) => Ok(value.clone()),
             Expr::Node(op, args) => {
-                let values: Vec<Value> = args.iter().map(|a| self.eval_expr(ctx, a)).collect();
-                if let Some(rel) = self.relations.get_mut(op) {
+                let values: Vec<Value> = args
+                    .iter()
+                    .map(|a| self.eval_expr(ctx, a))
+                    .collect::<Result<_, _>>()?;
+                if let Some(rel) = self.functions.get_mut(op) {
                     rel.get(&mut self.unionfind, &values)
+                        .ok_or_else(|| NotFoundError(expr.clone()))
                 } else if let Some(prim) = self.primitives.get(op) {
-                    (prim.f)(&values)
+                    Ok((prim.f)(&values))
                 } else {
-                    panic!("Couldn't find relation/primitive: {op}")
+                    panic!("Couldn't find function/primitive: {op}")
                 }
             }
         }
     }
 
-    pub fn eval_closed_expr(&mut self, expr: &Expr) -> Value {
+    pub fn eval_closed_expr(&mut self, expr: &Expr) -> Result<Value, NotFoundError> {
         self.eval_expr(&Default::default(), expr)
     }
 
-    pub fn set_expr(&mut self, ctx: &Subst, expr: &Expr, value: Value) -> Value {
+    pub fn set_expr(
+        &mut self,
+        ctx: &Subst,
+        expr: &Expr,
+        values: &[Value],
+    ) -> Result<Value, NotFoundError> {
+        assert!(!values.is_empty());
         match expr {
-            Expr::Var(var) => ctx[var].clone(),
-            Expr::Leaf(value) => value.clone(),
+            Expr::Var(var) => Ok(ctx[var].clone()),
+            Expr::Leaf(value) => Ok(value.clone()),
             Expr::Node(op, args) => {
-                let values: Vec<Value> = args.iter().map(|a| self.eval_expr(ctx, a)).collect();
-                self.relations
-                    .get_mut(op)
-                    .unwrap()
-                    .set(&mut self.unionfind, &values, value)
+                let args: Vec<Value> = args
+                    .iter()
+                    .map(|a| self.eval_expr(ctx, a))
+                    .collect::<Result<_, _>>()?;
+                let func = self.functions.get_mut(op).unwrap();
+                Ok(values
+                    .iter()
+                    .map(|v| func.set(&mut self.unionfind, &args, v.clone()))
+                    .last()
+                    .unwrap())
             }
         }
     }
@@ -316,12 +367,12 @@ impl EGraph {
         self.run_query(&compiled_query, callback)
     }
 
-    fn apply(&mut self, actions: &[Action], subst: &Subst) {
+    fn apply(&mut self, actions: &[Action], subst: &Subst) -> Result<(), NotFoundError> {
         let mut subst = subst.clone(); // This is slow
         for action in actions {
             match action {
                 Action::Define(v, e) => {
-                    let value = self.eval_expr(&subst, e);
+                    let value = self.eval_expr(&subst, e)?;
                     subst
                         .entry(*v)
                         .and_modify(|old| {
@@ -330,31 +381,35 @@ impl EGraph {
                         .or_insert(value);
                 }
                 Action::Union(exprs) => {
-                    self.union_exprs(&subst, exprs);
+                    self.union_exprs(&subst, exprs)?;
                 }
                 Action::Assert(exprs) => {
-                    self.assert_exprs(&subst, exprs);
+                    self.assert_exprs(&subst, exprs)?;
+                }
+                Action::Set(dst, srcs) => {
+                    self.set_exprs(&subst, dst, srcs)?;
                 }
             }
         }
+        Ok(())
     }
 
     pub fn run_rules(&mut self, limit: usize) {
         for _ in 0..limit {
             self.step_rules();
             let updates = self.rebuild();
-            println!("Made {updates} updates",);
+            log::debug!("Made {updates} updates",);
             // if updates == 0 {
-            //     println!("Breaking early!");
+            //     log::debug!("Breaking early!");
             //     break;
             // }
         }
 
         // TODO detect functions
-        for (name, r) in &self.relations {
-            println!("{name}:");
+        for (name, r) in &self.functions {
+            log::debug!("{name}:");
             for (args, val) in &r.nodes {
-                println!("  {args:?} = {val:?}");
+                log::debug!("  {args:?} = {val}");
             }
         }
     }
@@ -387,7 +442,8 @@ impl EGraph {
         let rules = std::mem::take(&mut self.rules);
         for (rule, substs) in rules.values().zip(searched) {
             for subst in substs {
-                self.apply(&rule.actions, &subst);
+                // we ignore the result here because rule applications are best effort
+                let _result: Result<_, NotFoundError> = self.apply(&rule.actions, &subst);
             }
         }
         self.rules = rules;
@@ -407,9 +463,9 @@ impl EGraph {
         name
     }
 
-    fn for_each_canonicalized(&self, relation: Symbol, mut f: impl FnMut(&[Value])) {
+    fn for_each_canonicalized(&self, name: Symbol, mut f: impl FnMut(&[Value])) {
         let mut ids = vec![];
-        for (children, value) in &self.relations[&relation].nodes {
+        for (children, value) in &self.functions[&name].nodes {
             ids.clear();
             // FIXME canonicalize, do we need to with rebuilding?
             // ids.extend(children.iter().map(|id| self.find(value)));
@@ -429,8 +485,12 @@ impl EGraph {
                 }
                 Ok(format!("Declared datatype {name}."))
             }
-            Command::Function(name, schema) => {
-                self.declare_function(name, schema);
+            Command::Function {
+                name,
+                schema,
+                merge,
+            } => {
+                self.declare_function(name, schema, merge);
                 Ok(format!("Declared function {name}."))
             }
             Command::Rule(name, rule) => {
@@ -444,19 +504,24 @@ impl EGraph {
             }
             Command::Action(a) => match a {
                 Action::Define(v, e) => {
-                    let val = self.eval_closed_expr(&e);
+                    let val = self.eval_closed_expr(&e)?;
                     self.globals.insert(v, val);
                     Ok(format!("Defined {v}."))
                 }
                 Action::Union(exprs) => {
                     let ctx = Default::default();
-                    self.union_exprs(&ctx, &exprs);
+                    self.union_exprs(&ctx, &exprs)?;
                     Ok(format!("Unioned."))
                 }
                 Action::Assert(exprs) => {
                     let ctx = Default::default();
-                    self.assert_exprs(&ctx, &exprs);
+                    self.assert_exprs(&ctx, &exprs)?;
                     Ok(format!("Asserted."))
+                }
+                Action::Set(dst, srcs) => {
+                    let ctx = Default::default();
+                    self.set_exprs(&ctx, &dst, &srcs)?;
+                    Ok(format!("Set."))
                 }
             },
             Command::Run(limit) => {
@@ -468,10 +533,10 @@ impl EGraph {
                 let n = exprs.len();
                 let mut exprs = exprs.iter();
                 if let Some(first) = exprs.next() {
-                    let val = self.eval_closed_expr(first);
+                    let val = self.eval_closed_expr(first)?;
                     let val = self.bad_find_value(val);
                     for e2 in exprs {
-                        let v2 = self.eval_closed_expr(e2);
+                        let v2 = self.eval_closed_expr(e2)?;
                         let v2 = self.bad_find_value(v2);
                         assert_eq!(val, v2);
                     }
@@ -506,6 +571,8 @@ impl EGraph {
 pub enum Error {
     #[error(transparent)]
     ParseError(#[from] lalrpop_util::ParseError<usize, String, &'static str>),
+    #[error(transparent)]
+    NotFoundError(#[from] NotFoundError),
 }
 
 pub type Pattern = Expr;
@@ -596,7 +663,7 @@ impl Query {
             .map(|(sym, vvs)| Atom(sym, vvs.into_iter().map(vv_to_atomterm).collect()))
             .collect();
 
-        println!("atoms: {:?}", atoms);
+        log::debug!("atoms: {:?}", atoms);
         Self {
             bindings,
             atoms,
