@@ -6,23 +6,23 @@
 (function hi (Expr) Int (merge a b (min a b)))
 (function lo (Expr) Int (merge a b (max a b)))
 
-(rule ((mul (Mul a b)))
-      ((set (lo mul) 
-            (min (min (* (lo a) (lo b)) (* (lo a) (hi b)))
-                 (min (* (hi a) (lo b)) (* (hi a) (hi b)))))))
+(rule ((= mul (Mul a b)))
+      ((= (lo mul) 
+          (min (min (* (lo a) (lo b)) (* (lo a) (hi b)))
+               (min (* (hi a) (lo b)) (* (hi a) (hi b)))))))
 
 (define x (Var 234))
 (define e (Mul x x))
 
-(set (lo x) -10)
-(set (hi x)  10)
+(assert (= (lo x) -10))
+(assert (= (hi x)  10))
 
 (run 1)
 
-(check-eq (lo e) -100)
+(check (= (lo e) -100))
 
-(rule ((mul (Mul a a)))
-      ((set (lo mul) (* (lo a) (lo a)))))
+(rule ((= mul (Mul a a)))
+      ((= (lo mul) (* (lo a) (lo a)))))
 
 (run 1)
-(check-eq (lo e) 100)
+(check (= (lo e) 100))

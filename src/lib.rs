@@ -187,6 +187,12 @@ pub struct EGraph {
     globals: HashMap<Symbol, Value>,
 }
 
+#[derive(Clone, Debug)]
+struct Rule {
+    query: Query,
+    head: Vec<Fact>,
+}
+
 impl Default for EGraph {
     fn default() -> Self {
         Self {
@@ -220,26 +226,110 @@ impl EGraph {
         Ok(val)
     }
 
-    pub fn assert_exprs(&mut self, ctx: &Subst, exprs: &[Expr]) -> Result<(), NotFoundError> {
-        assert!(!exprs.is_empty());
-        for e in exprs {
-            self.set_expr(ctx, e, &[true.into()])?;
+    pub fn assert_with(&mut self, ctx: &Subst, fact: &Fact) -> Result<(), Error> {
+        match fact {
+            Fact::Eq(exprs) => {
+                assert!(exprs.len() > 1);
+                let mut should_union = true;
+                if let Expr::Node(sym, args) = &exprs[0] {
+                    if !self.functions[sym].schema.output.is_sort() {
+                        assert_eq!(exprs.len(), 2);
+                        let arg_values: Vec<Value> = args
+                            .iter()
+                            .map(|e| self.eval_expr(ctx, e))
+                            .collect::<Result<_, _>>()?;
+                        let value = self.eval_expr(ctx, &exprs[1])?;
+                        let f = self
+                            .functions
+                            .get_mut(sym)
+                            .expect("FIXME add error message");
+                        f.set(&mut self.unionfind, &arg_values, value);
+                        should_union = false;
+                    }
+                }
+
+                if should_union {
+                    self.union_exprs(ctx, exprs)?;
+                }
+            }
+            Fact::Fact(expr) => match expr {
+                Expr::Leaf(_) => panic!("can't assert a leaf"),
+                Expr::Var(_) => panic!("can't assert a var"),
+                Expr::Node(sym, args) => {
+                    let values: Vec<Value> = args
+                        .iter()
+                        .map(|e| self.eval_expr(ctx, e))
+                        .collect::<Result<_, _>>()?;
+                    let f = self
+                        .functions
+                        .get_mut(sym)
+                        .expect("FIXME add error message");
+                    // FIXME We don't have a unit value
+                    f.set(&mut self.unionfind, &values, true.into());
+                    assert_eq!(f.schema.output, Type::Unit);
+                }
+            },
         }
         Ok(())
     }
 
-    fn set_exprs(
-        &mut self,
-        ctx: &Subst,
-        dst: &Expr,
-        srcs: &[Expr],
-    ) -> Result<Value, NotFoundError> {
-        assert!(!srcs.is_empty());
-        let values: Vec<Value> = srcs
-            .iter()
-            .map(|e| self.eval_expr(ctx, e))
-            .collect::<Result<_, _>>()?;
-        self.set_expr(ctx, dst, &values)
+    pub fn check_with(&mut self, ctx: &Subst, fact: &Fact) -> Result<(), Error> {
+        match fact {
+            Fact::Eq(exprs) => {
+                assert!(exprs.len() > 1);
+                let values: Vec<Value> = exprs
+                    .iter()
+                    .map(|e| self.eval_expr(ctx, e).map(|v| self.bad_find_value(v)))
+                    .collect::<Result<_, _>>()?;
+                for v in &values[1..] {
+                    assert_eq!(&values[0], v);
+                }
+                // let mut should_union = true;
+                // if let Expr::Node(sym, args) = &exprs[0] {
+                //     if !self.functions[sym].schema.output.is_sort() {
+                //         assert_eq!(exprs.len(), 2);
+                //         let arg_values: Vec<Value> = args
+                //             .iter()
+                //             .map(|e| self.eval_expr(ctx, e))
+                //             .collect::<Result<_, _>>()?;
+                //         let value = self.eval_expr(ctx, &exprs[1])?;
+                //         let f = self
+                //             .functions
+                //             .get_mut(sym)
+                //             .expect("FIXME add error message");
+                //         assert_eq!(f.get(&mut self.unionfind, &arg_values).unwrap(), value);
+                //         should_union = false;
+                //     }
+                // }
+
+                // if should_union {
+                //     self.union_exprs(ctx, exprs)?;
+                // }
+            }
+            Fact::Fact(expr) => match expr {
+                Expr::Leaf(_) => panic!("can't assert a leaf"),
+                Expr::Var(_) => panic!("can't assert a var"),
+                Expr::Node(sym, args) => {
+                    let values: Vec<Value> = args
+                        .iter()
+                        .map(|e| self.eval_expr(ctx, e))
+                        .collect::<Result<_, _>>()?;
+                    let f = self
+                        .functions
+                        .get_mut(sym)
+                        .expect("FIXME add error message");
+                    // FIXME We don't have a unit value
+                    f.get(&mut self.unionfind, &values)
+                        .ok_or_else(|| NotFoundError(expr.clone()))?;
+                    assert_eq!(f.schema.output, Type::Unit);
+                }
+            },
+        }
+        Ok(())
+    }
+
+    pub fn assert(&mut self, fact: &Fact) -> Result<(), Error> {
+        self.assert_with(&Default::default(), fact)
     }
 
     pub fn find(&self, id: Id) -> Id {
@@ -255,11 +345,6 @@ impl EGraph {
                 return updates;
             }
         }
-        // for (op, r) in &self.functions {
-        //     for (children, value) in &r.nodes {
-        //         log::debug!("{op:?}{children:?} = {value:?}");
-        //     }
-        // }
     }
 
     fn rebuild_one(&mut self) -> usize {
@@ -367,32 +452,32 @@ impl EGraph {
         self.run_query(&compiled_query, callback)
     }
 
-    fn apply(&mut self, actions: &[Action], subst: &Subst) -> Result<(), NotFoundError> {
-        let mut subst = subst.clone(); // This is slow
-        for action in actions {
-            match action {
-                Action::Define(v, e) => {
-                    let value = self.eval_expr(&subst, e)?;
-                    subst
-                        .entry(*v)
-                        .and_modify(|old| {
-                            *old = self.unionfind.union_values(value.clone(), old.clone())
-                        })
-                        .or_insert(value);
-                }
-                Action::Union(exprs) => {
-                    self.union_exprs(&subst, exprs)?;
-                }
-                Action::Assert(exprs) => {
-                    self.assert_exprs(&subst, exprs)?;
-                }
-                Action::Set(dst, srcs) => {
-                    self.set_exprs(&subst, dst, srcs)?;
-                }
-            }
-        }
-        Ok(())
-    }
+    // fn apply(&mut self, actions: &[Action], subst: &Subst) -> Result<(), NotFoundError> {
+    //     let mut subst = subst.clone(); // This is slow
+    //     for action in actions {
+    //         match action {
+    //             Action::Define(v, e) => {
+    //                 let value = self.eval_expr(&subst, e)?;
+    //                 subst
+    //                     .entry(*v)
+    //                     .and_modify(|old| {
+    //                         *old = self.unionfind.union_values(value.clone(), old.clone())
+    //                     })
+    //                     .or_insert(value);
+    //             }
+    //             Action::Union(exprs) => {
+    //                 self.union_exprs(&subst, exprs)?;
+    //             }
+    //             Action::Assert(exprs) => {
+    //                 self.assert_exprs(&subst, exprs)?;
+    //             }
+    //             Action::Set(dst, srcs) => {
+    //                 self.set_exprs(&subst, dst, srcs)?;
+    //             }
+    //         }
+    //     }
+    //     Ok(())
+    // }
 
     pub fn run_rules(&mut self, limit: usize) {
         for _ in 0..limit {
@@ -443,35 +528,50 @@ impl EGraph {
         for (rule, substs) in rules.values().zip(searched) {
             for subst in substs {
                 // we ignore the result here because rule applications are best effort
-                let _result: Result<_, NotFoundError> = self.apply(&rule.actions, &subst);
+                for fact in &rule.head {
+                    let _result: Result<_, _> = self.assert_with(&subst, fact);
+                }
             }
         }
         self.rules = rules;
     }
 
-    pub fn add_named_rule(&mut self, name: impl Into<Symbol>, rule: Rule) {
-        let name = name.into();
+    pub fn add_rule(&mut self, rule: ast::Rule) -> Result<Symbol, Error> {
+        let name = Symbol::from(format!("{:?}", rule));
+        let compiled_rule = Rule {
+            query: Query::from_facts(rule.body),
+            head: rule.head,
+        };
         match self.rules.entry(name) {
             Entry::Occupied(_) => panic!("Rule '{name}' was already present"),
-            Entry::Vacant(e) => e.insert(rule),
+            Entry::Vacant(e) => e.insert(compiled_rule),
         };
+        Ok(name)
     }
 
-    pub fn add_rule(&mut self, rule: Rule) -> Symbol {
-        let name = Symbol::from(format!("{:?}", rule));
-        self.add_named_rule(name, rule);
-        name
+    pub fn add_rewrite(&mut self, rewrite: ast::Rewrite) -> Result<Symbol, Error> {
+        // let name = Symbol::from(format!("{} -> {}", rule.lhs, rule.rhs));
+        let var = Symbol::from("__rewrite_var");
+        let rule = ast::Rule {
+            body: vec![Fact::Eq(vec![Expr::Var(var), rewrite.lhs])],
+            head: vec![Fact::Eq(vec![Expr::Var(var), rewrite.rhs])],
+        };
+        self.add_rule(rule)
     }
 
-    fn for_each_canonicalized(&self, name: Symbol, mut f: impl FnMut(&[Value])) {
+    fn for_each_canonicalized(&self, name: Symbol, mut cb: impl FnMut(&[Value])) {
         let mut ids = vec![];
-        for (children, value) in &self.functions[&name].nodes {
+        let f = self
+            .functions
+            .get(&name)
+            .unwrap_or_else(|| panic!("No function {name}"));
+        for (children, value) in &f.nodes {
             ids.clear();
             // FIXME canonicalize, do we need to with rebuilding?
             // ids.extend(children.iter().map(|id| self.find(value)));
             ids.extend(children.iter().cloned());
             ids.push(value.clone());
-            f(&ids);
+            cb(&ids);
         }
     }
 
@@ -493,56 +593,32 @@ impl EGraph {
                 self.declare_function(name, schema, merge);
                 Ok(format!("Declared function {name}."))
             }
-            Command::Rule(name, rule) => {
-                if let Some(name) = name {
-                    self.add_named_rule(name, rule);
-                    Ok(format!("Declared rule {name}."))
-                } else {
-                    self.add_rule(rule);
-                    Ok(format!("Declared rule."))
-                }
+            Command::Rule(rule) => {
+                let name = self.add_rule(rule)?;
+                Ok(format!("Declared rule {name}."))
             }
-            Command::Action(a) => match a {
-                Action::Define(v, e) => {
-                    let val = self.eval_closed_expr(&e)?;
-                    self.globals.insert(v, val.clone());
-                    Ok(format!("Defined {v} = {val}."))
-                }
-                Action::Union(exprs) => {
-                    let ctx = Default::default();
-                    self.union_exprs(&ctx, &exprs)?;
-                    Ok(format!("Unioned."))
-                }
-                Action::Assert(exprs) => {
-                    let ctx = Default::default();
-                    self.assert_exprs(&ctx, &exprs)?;
-                    Ok(format!("Asserted."))
-                }
-                Action::Set(dst, srcs) => {
-                    let ctx = Default::default();
-                    self.set_exprs(&ctx, &dst, &srcs)?;
-                    Ok(format!("Set."))
-                }
-            },
+            Command::Rewrite(rewrite) => {
+                let name = self.add_rewrite(rewrite)?;
+                Ok(format!("Declared rewrite rule {name}."))
+            }
             Command::Run(limit) => {
                 self.run_rules(limit);
                 Ok(format!("Ran {limit}."))
             }
             Command::Extract(_) => todo!(),
-            Command::CheckEq(exprs) => {
-                let mut iter = exprs.iter();
-                if let Some(first) = iter.next() {
-                    let val = self.eval_closed_expr(first)?;
-                    let val = self.bad_find_value(val);
-                    for e2 in iter {
-                        let v2 = self.eval_closed_expr(e2)?;
-                        let v2 = self.bad_find_value(v2);
-                        assert_eq!(val, v2);
-                    }
-                    Ok(format!("Checked {} exprs equal to {val}.", exprs.len()))
-                } else {
-                    Ok("Empty assert.".into())
-                }
+            Command::Check(fact) => {
+                self.check_with(&Default::default(), &fact)?;
+                Ok(format!("Checked."))
+            }
+            Command::Fact(fact) => {
+                self.assert(&fact)?;
+                Ok(format!("Asserted {fact:?}."))
+            }
+            Command::Define(name, expr) => {
+                let value = self.eval_closed_expr(&expr)?;
+                let old = self.globals.insert(name, value);
+                assert!(old.is_none());
+                Ok(format!("Defined {name}"))
             }
         }
     }
@@ -580,14 +656,12 @@ pub type Pattern = Expr;
 
 #[derive(Clone, Debug)]
 pub struct Query {
-    #[allow(dead_code)]
-    groups: Vec<Vec<Pattern>>,
     bindings: IndexMap<Symbol, AtomTerm>,
     atoms: Vec<Atom>,
 }
 
 impl Query {
-    pub fn from_groups(groups: Vec<Vec<Pattern>>) -> Self {
+    pub fn from_facts(facts: Vec<Fact>) -> Self {
         #[derive(PartialEq, Eq, Hash, Clone)]
         enum VarOrValue {
             Var(Symbol),
@@ -598,9 +672,13 @@ impl Query {
         let mut uf = SparseUnionFind::<VarOrValue>::default();
         let mut pre_atoms: Vec<(Symbol, Vec<VarOrValue>)> = vec![];
 
-        for (i, group) in groups.iter().enumerate() {
+        for (i, fact) in facts.into_iter().enumerate() {
             let group_var = VarOrValue::Var(Symbol::from(format!("__group_{i}")));
             uf.insert(group_var.clone());
+            let group: Vec<Expr> = match fact {
+                Fact::Eq(exprs) => exprs,
+                Fact::Fact(expr) => vec![expr],
+            };
             for expr in group {
                 let vv = expr.fold(&mut |expr, mut child_pre_atoms| -> VarOrValue {
                     let vv = match expr {
@@ -665,10 +743,6 @@ impl Query {
             .collect();
 
         log::debug!("atoms: {:?}", atoms);
-        Self {
-            bindings,
-            atoms,
-            groups,
-        }
+        Self { bindings, atoms }
     }
 }

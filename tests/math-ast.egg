@@ -11,4 +11,4 @@
 (rewrite (Add (Num x) (Num y)) (Num (+ x y)))
 
 (run 3)
-(check-eq start goal)
+(check (= start goal))

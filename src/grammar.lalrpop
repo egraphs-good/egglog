@@ -1,5 +1,5 @@
 use crate::ast::*;
-use crate::*;
+use crate::Symbol;
 
 grammar;
 
@@ -24,29 +24,27 @@ Command: Command = {
     "(" "datatype" <name:Ident> <variants:(Variant)*> ")" => Command::Datatype { <> },
     "(" "function" <name:Ident> <schema:Schema> <merge:MergeFn?> ")" => Command::Function { name, schema, merge },
     "(" "relation" <name:Ident> <types:List<Type>> ")" => Command::Function { name, schema: Schema::relation(types), merge: None },
-    "(" "rule" <name:Name?> <query:Query> <actions:List<Action>> ")" => Command::Rule(name, Rule {query, actions}),
-    "(" "rewrite" <name:Name?> <lhs:Expr> <rhs:Expr> ")" => Command::Rule(name, Rule::rewrite(lhs, rhs)),
-    <Action> => Command::Action(<>),
+    "(" "rule" <body:List<Fact>> <head:List<Fact>> ")" => Command::Rule(Rule { head, body }),
+    "(" "rewrite" <lhs:Expr> <rhs:Expr> ")" => Command::Rewrite(Rewrite { <> }),
+    "(" "define" <name:Ident> <expr:Expr> ")" => Command::Define(name, expr),
+    "(" "assert" <Fact> ")" => Command::Fact(<>),
     "(" "run" <Num> ")" => Command::Run(<>.try_into().unwrap()),
     "(" "extract" <Expr> ")" => Command::Extract(<>),
-    "(" "check-eq" <(Expr)+> ")" => Command::CheckEq(<>),
+    "(" "check" <Fact> ")" => Command::Check(<>),
 }
 
 Name: Symbol = { "[" <Ident> "]" => <> }
 
-Action: Action = {
-    "(" "define" <Ident> <Expr> ")" => Action::Define(<>),
-    "(" "union" <Expr*> ")" => Action::Union(<>),
-    "(" "assert" <Expr*> ")" => Action::Assert(<>),
-    "(" "set" <NodeExpr> <Expr+> ")" => Action::Set(<>),
+Fact: Fact = {
+    "(" "=" <mut es:Expr+> <e:Expr> ")" => {
+        es.push(e);
+        Fact::Eq(es)
+    },
+    <Expr> => Fact::Fact(<>),
 }
 
 Schema: Schema = {
     <types:List<Type>> <output:Type> => Schema { input: types, output }
-}
-
-Query: Query = {
-    <groups:List<List<Expr>>> => Query::from_groups(groups)
 }
 
 Expr: Expr = {
@@ -60,7 +58,6 @@ Expr: Expr = {
 NodeExpr: Expr = {
     "(" <head:Ident> <tail:(Expr)*> ")" => Expr::Node(head, tail),
 }
-
 
 ExprList: Vec<Expr> = { "(" <sexps:(Expr)*> ")" => sexps }
 

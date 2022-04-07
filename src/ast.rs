@@ -13,11 +13,14 @@ pub enum Command {
         schema: Schema,
         merge: Option<MergeFn>,
     },
-    Rule(Option<Symbol>, Rule),
-    Action(Action),
+    Define(Symbol, Expr),
+    Rule(Rule),
+    Rewrite(Rewrite),
+    Fact(Fact),
     Run(usize),
     Extract(Expr),
-    CheckEq(Vec<Expr>),
+    // TODO: this could just become an empty query
+    Check(Fact),
 }
 
 #[derive(Clone, Debug)]
@@ -30,14 +33,6 @@ pub struct Variant {
 pub struct MergeFn {
     pub vars: (Symbol, Symbol),
     pub expr: Expr,
-}
-
-#[derive(Clone, Debug)]
-pub enum Action {
-    Define(Symbol, Expr),
-    Union(Vec<Expr>),
-    Assert(Vec<Expr>),
-    Set(Expr, Vec<Expr>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -73,6 +68,7 @@ impl Schema {
 pub enum Expr<T = Value> {
     Leaf(T),
     Var(Symbol),
+    // TODO make this its own type
     Node(Symbol, Vec<Self>),
 }
 
@@ -130,16 +126,22 @@ impl<T: Display> Display for Expr<T> {
 }
 
 #[derive(Clone, Debug)]
-pub struct Rule {
-    pub query: Query,
-    pub actions: Vec<Action>,
+pub enum Fact {
+    /// Must be at least two things in an eq fact
+    Eq(Vec<Expr>),
+    Fact(Expr),
 }
 
-impl Rule {
-    pub fn rewrite(lhs: Pattern, rhs: Pattern) -> Self {
-        let root = Expr::Var(Symbol::from("__root"));
-        let query = Query::from_groups(vec![vec![root.clone(), lhs]]);
-        let actions = vec![Action::Union(vec![root, rhs])];
-        Self { query, actions }
-    }
+#[derive(Clone, Debug)]
+pub struct Rule {
+    // pub query: Query,
+    // pub actions: Vec<Action>,
+    pub head: Vec<Fact>,
+    pub body: Vec<Fact>,
+}
+
+#[derive(Clone, Debug)]
+pub struct Rewrite {
+    pub lhs: Expr,
+    pub rhs: Expr,
 }
