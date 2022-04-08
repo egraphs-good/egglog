@@ -1,71 +1,52 @@
-use std::fmt::Display;
-
 use crate::*;
 
-#[derive(Debug)]
-pub enum Command {
-    Datatype {
-        name: Symbol,
-        variants: Vec<Variant>,
-    },
-    Function {
-        name: Symbol,
-        schema: Schema,
-        merge: Option<MergeFn>,
-    },
-    Define(Symbol, Expr),
-    Rule(Rule),
-    Rewrite(Rewrite),
-    Fact(Fact),
-    Run(usize),
-    Extract(Expr),
-    // TODO: this could just become an empty query
-    Check(Fact),
+use std::fmt::Display;
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
+pub enum Literal {
+    Int(i64),
 }
 
-#[derive(Clone, Debug)]
-pub struct Variant {
-    pub name: Symbol,
-    pub types: Vec<Type>,
+macro_rules! impl_from {
+    ($ctor:ident($t:ty)) => {
+        impl From<Literal> for $t {
+            fn from(literal: Literal) -> Self {
+                match literal {
+                    Literal::$ctor(t) => t,
+                    #[allow(unreachable_patterns)]
+                    _ => panic!("Expected {}, got {literal}", stringify!($ctor)),
+                }
+            }
+        }
+
+        impl From<$t> for Literal {
+            fn from(t: $t) -> Self {
+                Literal::$ctor(t)
+            }
+        }
+    };
 }
 
-#[derive(Clone, Debug)]
-pub struct MergeFn {
-    pub vars: (Symbol, Symbol),
-    pub expr: Expr,
-}
+impl_from!(Int(i64));
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum Type {
-    Sort(Symbol),
-    Bool,
-    Unit,
-    Int,
-}
-
-impl Type {
-    pub fn is_sort(&self) -> bool {
-        matches!(self, Self::Sort(..))
+impl Literal {
+    pub fn to_value(&self) -> Value {
+        match self {
+            Literal::Int(i) => Value::from(*i),
+        }
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct Schema {
-    pub input: Vec<Type>,
-    pub output: Type,
-}
-
-impl Schema {
-    pub fn relation(input: Vec<Type>) -> Self {
-        Schema {
-            input,
-            output: Type::Unit,
+impl Display for Literal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Literal::Int(i) => Display::fmt(i, f),
         }
     }
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
-pub enum Expr<T = Value> {
+pub enum Expr<T = Literal> {
     Leaf(T),
     Var(Symbol),
     // TODO make this its own type
@@ -123,25 +104,4 @@ impl<T: Display> Display for Expr<T> {
             }
         }
     }
-}
-
-#[derive(Clone, Debug)]
-pub enum Fact {
-    /// Must be at least two things in an eq fact
-    Eq(Vec<Expr>),
-    Fact(Expr),
-}
-
-#[derive(Clone, Debug)]
-pub struct Rule {
-    // pub query: Query,
-    // pub actions: Vec<Action>,
-    pub head: Vec<Fact>,
-    pub body: Vec<Fact>,
-}
-
-#[derive(Clone, Debug)]
-pub struct Rewrite {
-    pub lhs: Expr,
-    pub rhs: Expr,
 }

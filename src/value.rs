@@ -17,7 +17,7 @@ impl Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.0 {
             ValueInner::Bool(b) => b.fmt(f),
-            ValueInner::Id(id) => write!(f, "id{}", id.0),
+            ValueInner::Id(id) => id.fmt(f),
             ValueInner::Int(i) => i.fmt(f),
         }
     }

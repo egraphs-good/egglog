@@ -10,7 +10,7 @@ WEB_SRC=web-demo/index.html web-demo/worker.js
 WASM=web_demo.js web_demo_bg.wasm
 DIST_WASM=$(addprefix ${WWW}, ${WASM})
 
-all: web test
+all: test web
 
 test:
 	cargo test

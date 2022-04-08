@@ -49,7 +49,7 @@ Schema: Schema = {
 
 Expr: Expr = {
     <Num> => Expr::leaf(<>),
-    <Bool> => Expr::leaf(<>),
+    // <Bool> => Expr::leaf(<>),
     <Ident> => Expr::Var(<>),
     <NodeExpr> => <>,
     "(" <head:PrimitiveSymbol> <tail:(Expr)+> ")" => Expr::Node(head, tail),

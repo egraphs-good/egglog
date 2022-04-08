@@ -1,50 +1,21 @@
+pub mod ast;
 mod gj;
 mod unionfind;
 mod util;
 mod value;
 
-mod ast;
-
 use thiserror::Error;
 
-use lalrpop_util::lalrpop_mod;
-lalrpop_mod!(
-    #[allow(clippy::all)]
-    grammar
-);
-
+use ast::*;
 use std::collections::hash_map::Entry;
 use std::fmt::Debug;
 use std::{collections::HashMap, hash::Hash};
 
-pub use util::Symbol;
-pub use value::Value;
+pub use value::*;
 
-pub use ast::*;
 use gj::*;
 use unionfind::*;
 use util::*;
-
-#[derive(Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, Debug)]
-pub struct Id(usize);
-
-impl Id {
-    pub(crate) fn fake() -> Self {
-        Id(0xbadbeef)
-    }
-}
-
-impl From<usize> for Id {
-    fn from(n: usize) -> Self {
-        Id(n)
-    }
-}
-
-impl From<Id> for usize {
-    fn from(id: Id) -> Self {
-        id.0
-    }
-}
 
 pub struct Function {
     schema: Schema,
@@ -400,7 +371,7 @@ impl EGraph {
                 .or_else(|| self.globals.get(var))
                 .cloned()
                 .unwrap_or_else(|| panic!("Couldn't find variable '{var}'"))),
-            Expr::Leaf(value) => Ok(value.clone()),
+            Expr::Leaf(lit) => Ok(lit.to_value()),
             Expr::Node(op, args) => {
                 let values: Vec<Value> = args
                     .iter()
@@ -431,7 +402,7 @@ impl EGraph {
         assert!(!values.is_empty());
         match expr {
             Expr::Var(var) => Ok(ctx[var].clone()),
-            Expr::Leaf(value) => Ok(value.clone()),
+            Expr::Leaf(lit) => Ok(lit.to_value()),
             Expr::Node(op, args) => {
                 let args: Vec<Value> = args
                     .iter()
@@ -626,14 +597,14 @@ impl EGraph {
     // this is bad because we shouldn't inspect values like this, we should use type information
     fn bad_find_value(&self, value: Value) -> Value {
         match value.0 {
-            value::ValueInner::Bool(b) => b.into(),
-            value::ValueInner::Id(id) => self.unionfind.find(id).into(),
-            value::ValueInner::Int(i) => i.into(),
+            ValueInner::Bool(b) => b.into(),
+            ValueInner::Id(id) => self.unionfind.find(id).into(),
+            ValueInner::Int(i) => i.into(),
         }
     }
 
     pub fn run_program(&mut self, input: &str) -> Result<Vec<String>, Error> {
-        let parser = grammar::ProgramParser::new();
+        let parser = ast::parse::ProgramParser::new();
         let program = parser
             .parse(input)
             .map_err(|e| e.map_token(|tok| tok.to_string()))?;
@@ -682,7 +653,7 @@ impl Query {
             for expr in group {
                 let vv = expr.fold(&mut |expr, mut child_pre_atoms| -> VarOrValue {
                     let vv = match expr {
-                        Expr::Leaf(value) => VarOrValue::Value(value.clone()),
+                        Expr::Leaf(lit) => VarOrValue::Value(lit.to_value()),
                         Expr::Var(var) => VarOrValue::Var(*var),
                         Expr::Node(op, _) => {
                             let aux = VarOrValue::Var(format!("_aux_{}", aux_counter).into());
