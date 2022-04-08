@@ -633,19 +633,19 @@ pub struct Query {
 
 impl Query {
     pub fn from_facts(facts: Vec<Fact>) -> Self {
-        #[derive(PartialEq, Eq, Hash, Clone)]
+        #[derive(PartialEq, Eq, Hash, Clone, Debug)]
         enum VarOrValue {
             Var(Symbol),
             Value(Value),
         }
 
         let mut aux_counter = 0;
-        let mut uf = SparseUnionFind::<VarOrValue>::default();
+        let mut uf = SparseUnionFind::<VarOrValue, ()>::default();
         let mut pre_atoms: Vec<(Symbol, Vec<VarOrValue>)> = vec![];
 
         for (i, fact) in facts.into_iter().enumerate() {
             let group_var = VarOrValue::Var(Symbol::from(format!("__group_{i}")));
-            uf.insert(group_var.clone());
+            uf.insert(group_var.clone(), ());
             let group: Vec<Expr> = match fact {
                 Fact::Eq(exprs) => exprs,
                 Fact::Fact(expr) => vec![expr],
@@ -663,7 +663,7 @@ impl Query {
                             aux
                         }
                     };
-                    uf.insert(vv.clone());
+                    uf.insert(vv.clone(), ());
                     vv
                 });
                 uf.union(group_var.clone(), vv);
