@@ -1,15 +1,16 @@
 pub mod ast;
 mod gj;
+mod typecheck;
 mod unionfind;
 mod util;
 mod value;
 
+use hashbrown::hash_map::Entry;
 use thiserror::Error;
 
 use ast::*;
-use std::collections::hash_map::Entry;
 use std::fmt::Debug;
-use std::{collections::HashMap, hash::Hash};
+use std::hash::Hash;
 
 pub use value::*;
 
@@ -348,6 +349,7 @@ impl EGraph {
     pub fn declare_constructor(
         &mut self,
         name: impl Into<Symbol>,
+        sort: impl Into<Symbol>,
         types: Vec<Type>,
     ) -> &mut Function {
         let name = name.into();
@@ -355,7 +357,7 @@ impl EGraph {
             name,
             Schema {
                 input: types,
-                output: Type::Sort(name),
+                output: Type::Sort(sort.into()),
             },
             None,
         )
@@ -510,7 +512,7 @@ impl EGraph {
     pub fn add_rule(&mut self, rule: ast::Rule) -> Result<Symbol, Error> {
         let name = Symbol::from(format!("{:?}", rule));
         let compiled_rule = Rule {
-            query: Query::from_facts(rule.body),
+            query: self.build_query(rule.body)?,
             head: rule.head,
         };
         match self.rules.entry(name) {
@@ -552,7 +554,7 @@ impl EGraph {
             Command::Datatype { name, variants } => {
                 self.declare_sort(name);
                 for variant in variants {
-                    self.declare_constructor(variant.name, variant.types);
+                    self.declare_constructor(variant.name, name, variant.types);
                 }
                 Ok(format!("Declared datatype {name}."))
             }
@@ -621,13 +623,15 @@ pub enum Error {
     ParseError(#[from] lalrpop_util::ParseError<usize, String, &'static str>),
     #[error(transparent)]
     NotFoundError(#[from] NotFoundError),
+    #[error(transparent)]
+    TypeErrors(#[from] typecheck::TypeErrors),
 }
 
 pub type Pattern = Expr;
 
-#[derive(Clone, Debug)]
+#[derive(Default, Clone, Debug)]
 pub struct Query {
-    bindings: IndexMap<Symbol, AtomTerm>,
+    bindings: HashMap<Symbol, AtomTerm>,
     atoms: Vec<Atom>,
 }
 
@@ -671,7 +675,7 @@ impl Query {
         }
 
         let mut next_var_index = 0;
-        let mut bindings = IndexMap::default();
+        let mut bindings = HashMap::default();
 
         for set in uf.sets() {
             let mut values: Vec<Value> = set

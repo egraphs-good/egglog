@@ -3,22 +3,37 @@ use crate::{util::IndexMap, Id, Value};
 use std::fmt::Debug;
 use std::hash::Hash;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde-1", derive(serde::Serialize, serde::Deserialize))]
-pub struct UnionFind {
-    parents: Vec<Id>,
+pub struct UnionFind<V = ()> {
+    parents: Vec<(Id, V)>,
     n_unions: usize,
 }
 
-impl UnionFind {
-    pub fn make_set(&mut self) -> Id {
-        let id = Id::from(self.parents.len());
-        self.parents.push(id);
-        id
+impl<V> Default for UnionFind<V> {
+    fn default() -> Self {
+        Self {
+            parents: Default::default(),
+            n_unions: Default::default(),
+        }
     }
+}
 
+impl<V> UnionFind<V> {
     pub fn n_unions(&self) -> usize {
         self.n_unions
+    }
+
+    pub fn make_set_with(&mut self, value: V) -> Id {
+        let id = Id::from(self.parents.len());
+        self.parents.push((id, value));
+        id
+    }
+}
+
+impl UnionFind<()> {
+    pub fn make_set(&mut self) -> Id {
+        self.make_set_with(())
     }
 
     pub fn find_mut_value(&mut self, value: Value) -> Value {
@@ -30,12 +45,12 @@ impl UnionFind {
     }
 }
 
-impl UnionFindLike<Id, ()> for UnionFind {
+impl<V: UnifyValue> UnionFindLike<Id, V> for UnionFind<V> {
     fn len(&self) -> usize {
         self.parents.len()
     }
 
-    fn insert_new(&mut self, _: Id, _: ()) -> usize {
+    fn insert_new(&mut self, _: Id, _: V) -> usize {
         panic!("should never insert_new")
     }
 
@@ -50,18 +65,20 @@ impl UnionFindLike<Id, ()> for UnionFind {
         index.into()
     }
 
-    fn get_value_index(&self, _: usize) -> &() {
-        &()
+    fn get_value_index(&self, i: usize) -> &V {
+        &self.parents[i].1
     }
 
-    fn set_value_index(&mut self, _: usize, _: ()) {}
+    fn set_value_index(&mut self, i: usize, value: V) {
+        self.parents[i].1 = value
+    }
 
     fn get_parent_index(&self, index: usize) -> usize {
-        self.parents[index].into()
+        self.parents[index].0.into()
     }
 
     fn set_parent_index(&mut self, index: usize, new_parent: usize) {
-        self.parents[index] = new_parent.into();
+        self.parents[index].0 = new_parent.into();
     }
 
     fn did_union(&mut self, _: usize) {
@@ -72,9 +89,9 @@ impl UnionFindLike<Id, ()> for UnionFind {
 pub trait UnifyKey: Hash + Eq + Clone + Debug {}
 impl<K: Hash + Eq + Clone + Debug> UnifyKey for K {}
 
-pub trait UnifyValue: Clone {
+pub trait UnifyValue: Sized {
     type Error;
-    fn merge(a: &Self, other: &Self) -> Result<Self, Self::Error>;
+    fn merge(a: &Self, b: &Self) -> Result<Self, Self::Error>;
 }
 
 impl UnifyValue for () {
@@ -110,16 +127,20 @@ pub(crate) trait UnionFindLike<K: UnifyKey, V: UnifyValue> {
         self.try_union(query1, query2).unwrap()
     }
 
-    fn insert(&mut self, key: K, value: V)
+    fn insert(&mut self, key: K, value: V) -> &V
     where
         V: UnifyValue<Error = std::convert::Infallible>,
     {
         self.try_insert(key, value).unwrap()
     }
 
+    fn get_value(&self, key: K) -> &V {
+        let root = self.find_index(self.index(key));
+        self.get_value_index(root)
+    }
+
     fn find(&self, key: K) -> K {
-        let index = self.index(key);
-        let index = self.find_index(index);
+        let index = self.find_index(self.index(key));
         self.key(index)
     }
 
@@ -159,16 +180,17 @@ pub(crate) trait UnionFindLike<K: UnifyKey, V: UnifyValue> {
         Ok(self.key(root))
     }
 
-    fn try_insert(&mut self, key: K, value: V) -> Result<(), V::Error> {
-        if let Some(index) = self.get_index(key.clone()) {
+    fn try_insert(&mut self, key: K, value: V) -> Result<&V, V::Error> {
+        let root = if let Some(index) = self.get_index(key.clone()) {
             let root = self.find_index_mut(index);
             let old_value = self.get_value_index(root);
             let value = V::merge(old_value, &value)?;
             self.set_value_index(root, value);
+            root
         } else {
-            self.insert_new(key, value);
-        }
-        Ok(())
+            self.insert_new(key, value)
+        };
+        Ok(self.get_value_index(root))
     }
 
     fn union_roots(&mut self, a: usize, b: usize) -> Result<usize, V::Error> {
@@ -268,7 +290,10 @@ mod tests {
         }
 
         // test the initial condition of everyone in their own set
-        assert_eq!(uf.parents, ids(0..n));
+        assert_eq!(
+            uf.parents.iter().map(|(i, _)| *i).collect::<Vec<Id>>(),
+            ids(0..n)
+        );
 
         // build up one set
         uf.union(id(0), id(1));
@@ -287,6 +312,9 @@ mod tests {
 
         // indexes:         0, 1, 2, 3, 4, 5, 6, 7, 8, 9
         let expected = vec![0, 0, 0, 0, 4, 5, 6, 6, 6, 6];
-        assert_eq!(uf.parents, ids(expected));
+        assert_eq!(
+            uf.parents.iter().map(|(i, _)| *i).collect::<Vec<Id>>(),
+            ids(expected)
+        );
     }
 }
