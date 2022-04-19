@@ -29,38 +29,6 @@ pub enum TypeError {
     InferenceFailure(Symbol),
 }
 
-#[derive(Debug, Clone, Error, Default)]
-#[error("{}", ListDisplay(.0))]
-pub struct TypeErrors(pub(crate) Vec<TypeError>);
-
-impl<E: Into<Self>> From<Result<(), E>> for TypeErrors {
-    fn from(result: Result<(), E>) -> Self {
-        match result {
-            Ok(()) => Self::default(),
-            Err(errs) => errs.into(),
-        }
-    }
-}
-
-impl TypeErrors {
-    pub(crate) fn add(&mut self, errs: impl Into<Self>) {
-        self.0.extend(errs.into().0)
-    }
-
-    pub(crate) fn with<T>(mut self, f: impl FnOnce(&mut Self) -> T) -> Result<T, Self> {
-        let t = f(&mut self);
-        if self.0.is_empty() {
-            Ok(t)
-        } else {
-            Err(self)
-        }
-    }
-
-    pub(crate) fn ok(self) -> Result<(), Self> {
-        self.with(|_| ())
-    }
-}
-
 #[derive(Debug, Hash, PartialEq, Eq)]
 enum ENode {
     Literal(Literal),
@@ -74,7 +42,7 @@ struct QueryBuilder<'a> {
     unionfind: UnionFind<Info<'a>>,
     nodes: HashMap<ENode, Id>,
     // foo: UnionFind<Info<'a>>,
-    errors: TypeErrors,
+    errors: Vec<TypeError>,
     egraph: &'a EGraph,
 }
 
@@ -131,7 +99,7 @@ impl<'a> QueryBuilder<'a> {
     fn unify(&mut self, id1: Id, id2: Id) -> Id {
         if let Err((a, b)) = self.unionfind.try_union(id1, id2) {
             // TODO unification error?
-            self.errors.0.push(TypeError::Mismatch {
+            self.errors.push(TypeError::Mismatch {
                 expr: a.expr.clone(),
                 expected: a.ty.unwrap_or(OutputType::Unit),
                 actual: b.ty.unwrap_or(OutputType::Unit),
@@ -144,7 +112,7 @@ impl<'a> QueryBuilder<'a> {
     fn unify_info(&mut self, id: Id, info: Info<'a>) {
         if let Err((old_info, new_info)) = self.unionfind.try_insert(id, info) {
             let expect = "unification can't fail on None types";
-            self.errors.0.push(TypeError::Mismatch {
+            self.errors.push(TypeError::Mismatch {
                 expr: new_info.expr.clone(),
                 expected: new_info.ty.expect(expect),
                 actual: old_info.ty.expect(expect),
@@ -213,14 +181,14 @@ impl<'a> QueryBuilder<'a> {
                         }
                     } else {
                         // arity mismatch, don't worry about constraining the inputs
-                        self.errors.0.push(TypeError::Arity {
+                        self.errors.push(TypeError::Arity {
                             expr: expr.clone(),
                             expected: f.schema.input.len(),
                         });
                     }
                     Some(f.schema.output.clone())
                 } else {
-                    self.errors.0.push(TypeError::Unbound(*sym));
+                    self.errors.push(TypeError::Unbound(*sym));
                     None
                 };
 
@@ -241,7 +209,7 @@ impl<'a> QueryBuilder<'a> {
 }
 
 impl EGraph {
-    pub(crate) fn compile_query(&self, facts: Vec<Fact>) -> Result<Query, TypeErrors> {
+    pub(crate) fn compile_query(&self, facts: Vec<Fact>) -> Result<Query, Error> {
         let mut builder = QueryBuilder {
             unionfind: Default::default(),
             nodes: Default::default(),
@@ -281,7 +249,6 @@ impl EGraph {
                 if class.lits.len() > 1 {
                     builder
                         .errors
-                        .0
                         .push(TypeError::TooManyLiterals(class.lits.clone()));
                 }
                 AtomTerm::Value(lit.to_value())
@@ -305,11 +272,11 @@ impl EGraph {
                 // TODO do something with the type
                 let _ty = if let Some(ty) = info.ty.clone() {
                     if ty == OutputType::Unit {
-                        builder.errors.0.push(TypeError::UnitVar(var));
+                        builder.errors.push(TypeError::UnitVar(var));
                     }
                     ty
                 } else {
-                    builder.errors.0.push(TypeError::InferenceFailure(var));
+                    builder.errors.push(TypeError::InferenceFailure(var));
                     OutputType::Unit
                 };
                 query.bindings.insert(var, atomterm.clone());
@@ -325,13 +292,15 @@ impl EGraph {
             }
         }
 
-        builder.errors.ok().map(|()| {
+        if builder.errors.is_empty() {
             log::debug!("Compiled {facts:?} to {query:?}");
-            query
-        })
+            Ok(query)
+        } else {
+            Err(Error::TypeErrors(builder.errors))
+        }
     }
 
-    pub(crate) fn compile_expr(&self, expr: Expr) -> Result<Expr, TypeErrors> {
+    pub(crate) fn compile_expr(&self, expr: Expr) -> Result<Expr, Error> {
         Ok(expr)
     }
 }

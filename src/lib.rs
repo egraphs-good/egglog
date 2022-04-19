@@ -11,7 +11,6 @@ use thiserror::Error;
 use ast::*;
 use std::fmt::Debug;
 use std::hash::Hash;
-use typecheck::TypeErrors;
 
 pub use value::*;
 
@@ -165,7 +164,7 @@ fn default_primitives() -> HashMap<Symbol, Primitive> {
 
 pub struct EGraph {
     unionfind: UnionFind,
-    sorts: HashSet<Symbol>,
+    sorts: HashMap<Symbol, Vec<Symbol>>,
     primitives: HashMap<Symbol, Primitive>,
     functions: HashMap<Symbol, Function>,
     rules: HashMap<Symbol, Rule>,
@@ -342,40 +341,44 @@ impl EGraph {
         new_unions
     }
 
-    pub fn declare_sort(&mut self, name: impl Into<Symbol>) -> InputType {
+    pub fn declare_sort(&mut self, name: impl Into<Symbol>) -> Result<(), Error> {
         let name = name.into();
-        assert!(self.sorts.insert(name), "Sort '{}' already exists", name);
-        InputType::Sort(name)
+        match self.sorts.entry(name) {
+            Entry::Occupied(_) => Err(Error::SortAlreadyBound(name)),
+            Entry::Vacant(e) => {
+                e.insert(vec![]);
+                Ok(())
+            }
+        }
     }
 
     pub fn declare_function(
         &mut self,
         name: impl Into<Symbol>,
         schema: Schema,
-    ) -> Result<(), TypeErrors> {
+    ) -> Result<(), Error> {
         let name = name.into();
-        let mut errs = TypeErrors::default();
 
         for ty in &schema.input {
             if let InputType::Sort(sort) = ty {
-                if !self.sorts.contains(sort) {
-                    errs.0.push(TypeError::UndefinedSort(*sort));
+                if !self.sorts.contains_key(sort) {
+                    return Err(TypeError::UndefinedSort(*sort).into());
                 }
             }
         }
 
         if let OutputType::Type(InputType::Sort(sort)) = &schema.output {
-            if !self.sorts.contains(sort) {
-                errs.0.push(TypeError::UndefinedSort(*sort));
+            if !self.sorts.contains_key(sort) {
+                return Err(TypeError::UndefinedSort(*sort).into());
             }
         }
 
         let old = self.functions.insert(name, Function::new(schema));
         if old.is_some() {
-            errs.0.push(TypeError::FunctionAlreadyBound(name));
+            return Err(TypeError::FunctionAlreadyBound(name).into());
         }
 
-        errs.ok()
+        Ok(())
     }
 
     pub fn declare_constructor(
@@ -383,7 +386,7 @@ impl EGraph {
         name: impl Into<Symbol>,
         types: Vec<InputType>,
         sort: impl Into<Symbol>,
-    ) -> Result<(), TypeErrors> {
+    ) -> Result<(), Error> {
         let name = name.into();
         self.declare_function(
             name,
@@ -391,7 +394,8 @@ impl EGraph {
                 input: types,
                 output: OutputType::Type(InputType::Sort(sort.into())),
             },
-        )
+        )?;
+        Ok(())
     }
 
     // this must be &mut because it'll call "make_set",
@@ -582,12 +586,10 @@ impl EGraph {
     fn run_command(&mut self, command: Command, should_run: bool) -> Result<String, Error> {
         Ok(match command {
             Command::Datatype { name, variants } => {
-                TypeErrors::default().with(|errs| {
-                    self.declare_sort(name); // TODO this could fail
-                    for variant in variants {
-                        errs.add(self.declare_constructor(variant.name, variant.types, name));
-                    }
-                })?;
+                self.declare_sort(name)?;
+                for variant in variants {
+                    self.declare_constructor(variant.name, variant.types, name)?;
+                }
                 format!("Declared datatype {name}.")
             }
             Command::Function { name, schema } => {
@@ -642,30 +644,16 @@ impl EGraph {
     }
 
     fn run_program(&mut self, program: Vec<Command>) -> Result<Vec<String>, Error> {
-        let mut errs = TypeErrors::default();
         let mut msgs = vec![];
-        let mut should_run = true;
+        let should_run = true;
 
         for command in program {
-            match self.run_command(command, should_run) {
-                Ok(msg) => {
-                    log::info!("{}", msg);
-                    msgs.push(msg)
-                }
-                Err(e) => {
-                    should_run = false;
-                    log::error!("{}", e);
-                    if let Error::TypeErrors(more_errs) = e {
-                        assert!(!more_errs.0.is_empty());
-                        errs.0.extend(more_errs.0)
-                    } else {
-                        return Err(e);
-                    }
-                }
-            }
+            let msg = self.run_command(command, should_run)?;
+            log::info!("{}", msg);
+            msgs.push(msg);
         }
 
-        errs.ok().map(|_| msgs).map_err(Error::TypeErrors)
+        Ok(msgs)
     }
 
     // this is bad because we shouldn't inspect values like this, we should use type information
@@ -692,9 +680,13 @@ pub enum Error {
     #[error(transparent)]
     NotFoundError(#[from] NotFoundError),
     #[error(transparent)]
-    TypeErrors(#[from] typecheck::TypeErrors),
-    #[error("Check failed: {} != {}", .0, .1)]
+    TypeError(#[from] TypeError),
+    #[error("{}", ListDisplay(.0))]
+    TypeErrors(Vec<TypeError>),
+    #[error("Check failed: {0} != {1}")]
     CheckError(Value, Value),
+    #[error("Sort {0} already declared.")]
+    SortAlreadyBound(Symbol),
 }
 
 pub type Pattern = Expr;
