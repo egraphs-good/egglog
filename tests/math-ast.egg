@@ -12,3 +12,4 @@
 
 (run 3)
 (check (= start goal))
+(extract start)

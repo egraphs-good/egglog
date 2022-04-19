@@ -1,6 +1,9 @@
 use std::fmt::Display;
 
-use crate::{ast::Symbol, Id};
+use crate::{
+    ast::{Literal, Symbol},
+    Id,
+};
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
 // FIXME this shouldn't be pub
@@ -28,6 +31,15 @@ impl Display for Value {
 impl Value {
     pub fn fake() -> Self {
         Value(ValueInner::Id(Id::fake()))
+    }
+
+    pub(crate) fn to_literal(&self) -> Literal {
+        match self.0 {
+            ValueInner::Bool(_) => todo!(),
+            ValueInner::Id(_) => panic!("Id isn't a literal"),
+            ValueInner::I64(i) => Literal::Int(i),
+            ValueInner::String(s) => Literal::String(s),
+        }
     }
 }
 

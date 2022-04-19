@@ -1,4 +1,5 @@
 pub mod ast;
+mod extract;
 mod gj;
 mod typecheck;
 mod unionfind;
@@ -388,13 +389,17 @@ impl EGraph {
         sort: impl Into<Symbol>,
     ) -> Result<(), Error> {
         let name = name.into();
+        let sort = sort.into();
         self.declare_function(
             name,
             Schema {
                 input: types,
-                output: OutputType::Type(InputType::Sort(sort.into())),
+                output: OutputType::Type(InputType::Sort(sort)),
             },
         )?;
+        if let Some(ctors) = self.sorts.get_mut(&sort) {
+            ctors.push(name);
+        }
         Ok(())
     }
 
@@ -613,7 +618,17 @@ impl EGraph {
                     format!("Skipped run {limit}.")
                 }
             }
-            Command::Extract(_) => todo!(),
+            Command::Extract(e) => {
+                if should_run {
+                    // TODO typecheck
+                    let value = self.eval_closed_expr(&e)?;
+                    let id = Id::from(value);
+                    let (cost, expr) = self.extract(id);
+                    format!("Extracted with cost {cost}: {expr}")
+                } else {
+                    "Skipping extraction.".into()
+                }
+            }
             Command::Check(fact) => {
                 if should_run {
                     self.check_with(&Default::default(), &fact)?;
