@@ -192,7 +192,7 @@ impl<'a> QueryBuilder<'a> {
 
     fn add_expr(&mut self, expr: &'a Expr) -> Id {
         match expr {
-            Expr::Leaf(lit) => {
+            Expr::Lit(lit) => {
                 let ty = Some(match lit {
                     Literal::Int(_) => OutputType::Type(InputType::NumType(NumType::I64)),
                     Literal::String(_) => OutputType::Type(InputType::String),
@@ -204,7 +204,7 @@ impl<'a> QueryBuilder<'a> {
                 // FIXME no! constants are distinct from nullary partial functions
                 self.add_node(ENode::Var(*var), Info { ty: None, expr })
             }
-            Expr::Node(sym, args) => {
+            Expr::Call(sym, args) => {
                 let mut ids = vec![];
                 let ty = if let Some(f) = self.egraph.functions.get(sym) {
                     if args.len() == f.schema.input.len() {

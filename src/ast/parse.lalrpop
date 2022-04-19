@@ -49,16 +49,19 @@ Schema: Schema = {
 }
 
 Expr: Expr = {
-    <Num> => Expr::leaf(<>),
-    <SymString> => Expr::leaf(<>),
-    // <Bool> => Expr::leaf(<>),
+    <Literal> => Expr::Lit(<>),
     <Ident> => Expr::Var(<>),
-    <NodeExpr> => <>,
-    "(" <head:PrimitiveSymbol> <tail:(Expr)+> ")" => Expr::Node(head, tail),
+    <CallExpr> => <>,
+    "(" <head:PrimitiveSymbol> <tail:(Expr)+> ")" => Expr::Call(head, tail),
 };
 
-NodeExpr: Expr = {
-    "(" <head:Ident> <tail:(Expr)*> ")" => Expr::Node(head, tail),
+Literal: Literal = {
+    <Num> => Literal::Int(<>),
+    <SymString> => Literal::String(<>),
+}
+
+CallExpr: Expr = {
+    "(" <head:Ident> <tail:(Expr)*> ")" => Expr::Call(head, tail),
 }
 
 ExprList: Vec<Expr> = { "(" <sexps:(Expr)*> ")" => sexps }

@@ -216,7 +216,7 @@ impl EGraph {
             Fact::Eq(exprs) => {
                 assert!(exprs.len() > 1);
                 let mut should_union = true;
-                if let Expr::Node(sym, args) = &exprs[0] {
+                if let Expr::Call(sym, args) = &exprs[0] {
                     if !self.functions[sym].schema.output.is_sort() {
                         assert_eq!(exprs.len(), 2);
                         let arg_values: Vec<Value> = args
@@ -238,9 +238,9 @@ impl EGraph {
                 }
             }
             Fact::Fact(expr) => match expr {
-                Expr::Leaf(_) => panic!("can't assert a leaf"),
+                Expr::Lit(_) => panic!("can't assert a literal"),
                 Expr::Var(_) => panic!("can't assert a var"),
-                Expr::Node(sym, args) => {
+                Expr::Call(sym, args) => {
                     let values: Vec<Value> = args
                         .iter()
                         .map(|e| self.eval_expr(ctx, e))
@@ -294,9 +294,9 @@ impl EGraph {
                 // }
             }
             Fact::Fact(expr) => match expr {
-                Expr::Leaf(_) => panic!("can't assert a leaf"),
+                Expr::Lit(_) => panic!("can't assert a literal"),
                 Expr::Var(_) => panic!("can't assert a var"),
-                Expr::Node(sym, args) => {
+                Expr::Call(sym, args) => {
                     let values: Vec<Value> = args
                         .iter()
                         .map(|e| self.eval_expr(ctx, e))
@@ -404,8 +404,8 @@ impl EGraph {
                 .or_else(|| self.globals.get(var))
                 .cloned()
                 .unwrap_or_else(|| panic!("Couldn't find variable '{var}'"))),
-            Expr::Leaf(lit) => Ok(lit.to_value()),
-            Expr::Node(op, args) => {
+            Expr::Lit(lit) => Ok(lit.to_value()),
+            Expr::Call(op, args) => {
                 let values: Vec<Value> = args
                     .iter()
                     .map(|a| self.eval_expr(ctx, a))
@@ -435,8 +435,8 @@ impl EGraph {
         assert!(!values.is_empty());
         match expr {
             Expr::Var(var) => Ok(ctx[var].clone()),
-            Expr::Leaf(lit) => Ok(lit.to_value()),
-            Expr::Node(op, args) => {
+            Expr::Lit(lit) => Ok(lit.to_value()),
+            Expr::Call(op, args) => {
                 let args: Vec<Value> = args
                     .iter()
                     .map(|a| self.eval_expr(ctx, a))
@@ -727,9 +727,9 @@ impl Query {
             for expr in group {
                 let vv = expr.fold(&mut |expr, mut child_pre_atoms| -> VarOrValue {
                     let vv = match expr {
-                        Expr::Leaf(lit) => VarOrValue::Value(lit.to_value()),
+                        Expr::Lit(lit) => VarOrValue::Value(lit.to_value()),
                         Expr::Var(var) => VarOrValue::Var(*var),
-                        Expr::Node(op, _) => {
+                        Expr::Call(op, _) => {
                             let aux = VarOrValue::Var(format!("_aux_{}", aux_counter).into());
                             aux_counter += 1;
                             child_pre_atoms.push(aux.clone());

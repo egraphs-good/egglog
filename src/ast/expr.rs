@@ -50,20 +50,20 @@ impl Display for Literal {
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
-pub enum Expr<T = Literal> {
-    Leaf(T),
+pub enum Expr {
+    Lit(Literal),
     Var(Symbol),
     // TODO make this its own type
-    Node(Symbol, Vec<Self>),
+    Call(Symbol, Vec<Self>),
 }
 
-impl<T> Expr<T> {
-    pub fn new(op: impl Into<Symbol>, children: impl IntoIterator<Item = Self>) -> Self {
-        Self::Node(op.into(), children.into_iter().collect())
+impl Expr {
+    pub fn call(op: impl Into<Symbol>, children: impl IntoIterator<Item = Self>) -> Self {
+        Self::Call(op.into(), children.into_iter().collect())
     }
 
-    pub fn leaf(op: impl Into<T>) -> Self {
-        Self::Leaf(op.into())
+    pub fn lit(lit: impl Into<Literal>) -> Self {
+        Self::Lit(lit.into())
     }
 
     pub fn get_var(&self) -> Option<Symbol> {
@@ -75,8 +75,8 @@ impl<T> Expr<T> {
 
     fn children(&self) -> &[Self] {
         match self {
-            Expr::Var(_) | Expr::Leaf(_) => &[],
-            Expr::Node(_, children) => children,
+            Expr::Var(_) | Expr::Lit(_) => &[],
+            Expr::Call(_, children) => children,
         }
     }
 
@@ -94,12 +94,12 @@ impl<T> Expr<T> {
     }
 }
 
-impl<T: Display> Display for Expr<T> {
+impl Display for Expr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Expr::Leaf(val) => val.fmt(f),
+            Expr::Lit(lit) => Display::fmt(lit, f),
             Expr::Var(var) => Display::fmt(var, f),
-            Expr::Node(op, args) => {
+            Expr::Call(op, args) => {
                 write!(f, "({}", op)?;
                 for arg in args {
                     write!(f, " {}", arg)?;
