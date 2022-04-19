@@ -56,7 +56,7 @@ pub struct CompiledQuery {
 }
 
 impl EGraph {
-    pub(crate) fn compile_query(&self, atoms: &[Atom]) -> CompiledQuery {
+    pub(crate) fn compile_gj_query(&self, atoms: &[Atom]) -> CompiledQuery {
         let n_vars = atoms
             .iter()
             .flat_map(|a| a.vars())

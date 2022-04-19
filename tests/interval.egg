@@ -1,17 +1,17 @@
 (datatype Math
-  (Num Int)
-  (Var Int)
+  (Num i64)
+  (Var String)
   (Mul Math Math))
 
-(function hi (Expr) Int (merge a b (min a b)))
-(function lo (Expr) Int (merge a b (max a b)))
+(function hi (Math) (Min i64))
+(function lo (Math) (Max i64))
 
 (rule ((= mul (Mul a b)))
       ((= (lo mul) 
           (min (min (* (lo a) (lo b)) (* (lo a) (hi b)))
                (min (* (hi a) (lo b)) (* (hi a) (hi b)))))))
 
-(define x (Var 234))
+(define x (Var "x"))
 (define e (Mul x x))
 
 (assert (= (lo x) -10))

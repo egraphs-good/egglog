@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use crate::Id;
+use crate::{ast::Symbol, Id};
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
 // FIXME this shouldn't be pub
@@ -10,7 +10,8 @@ pub struct Value(pub ValueInner);
 pub enum ValueInner {
     Bool(bool),
     Id(Id),
-    Int(i64),
+    I64(i64),
+    String(Symbol),
 }
 
 impl Display for Value {
@@ -18,7 +19,8 @@ impl Display for Value {
         match self.0 {
             ValueInner::Bool(b) => b.fmt(f),
             ValueInner::Id(id) => id.fmt(f),
-            ValueInner::Int(i) => i.fmt(f),
+            ValueInner::I64(i) => i.fmt(f),
+            ValueInner::String(s) => write!(f, "\"{s}\""),
         }
     }
 }
@@ -49,5 +51,6 @@ macro_rules! impl_from {
 }
 
 impl_from!(Id(Id));
-impl_from!(Int(i64));
+impl_from!(I64(i64));
 impl_from!(Bool(bool));
+impl_from!(String(Symbol));

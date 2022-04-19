@@ -1,9 +1,9 @@
 (datatype Math
-  (Num Int)
-  (Var Int)
+  (Num i64)
+  (Var String)
   (Add Math Math))
 
-(define start (Add (Num 3) (Add (Num 4) (Var 42))))
+(define start (Add (Num 3) (Add (Num 4) (Var 42)))) ;; TODO typecheck this!
 (define goal  (Add (Num 7) (Var 42)))
 
 (rewrite (Add x y) (Add y x))

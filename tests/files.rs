@@ -30,7 +30,7 @@ fn test_files() {
             println!("Running test {path:?}");
             let program = std::fs::read_to_string(path).unwrap();
             let mut egraph = EGraph::default();
-            match egraph.run_program(&program) {
+            match egraph.parse_and_run_program(&program) {
                 Ok(msgs) => {
                     for msg in msgs {
                         println!("  {}", msg);

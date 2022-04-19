@@ -5,6 +5,7 @@ use std::fmt::Display;
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
 pub enum Literal {
     Int(i64),
+    String(Symbol),
 }
 
 macro_rules! impl_from {
@@ -28,11 +29,13 @@ macro_rules! impl_from {
 }
 
 impl_from!(Int(i64));
+impl_from!(String(Symbol));
 
 impl Literal {
     pub fn to_value(&self) -> Value {
         match self {
             Literal::Int(i) => Value::from(*i),
+            Literal::String(s) => Value::from(*s),
         }
     }
 }
@@ -41,6 +44,7 @@ impl Display for Literal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Literal::Int(i) => Display::fmt(i, f),
+            Literal::String(s) => write!(f, "\"{s}\""),
         }
     }
 }

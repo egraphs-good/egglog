@@ -11,6 +11,7 @@ use thiserror::Error;
 use ast::*;
 use std::fmt::Debug;
 use std::hash::Hash;
+use typecheck::TypeErrors;
 
 pub use value::*;
 
@@ -18,20 +19,20 @@ use gj::*;
 use unionfind::*;
 use util::*;
 
+use crate::typecheck::TypeError;
+
 pub struct Function {
     schema: Schema,
     nodes: HashMap<Vec<Value>, Value>,
     updates: usize,
-    merge_fn: Option<MergeFn>,
 }
 
 impl Function {
-    pub fn new(schema: Schema, merge_fn: Option<MergeFn>) -> Self {
+    pub fn new(schema: Schema) -> Self {
         Self {
             schema,
             nodes: Default::default(),
             updates: 0,
-            merge_fn,
         }
     }
 
@@ -57,21 +58,34 @@ impl Function {
                     value
                 } else {
                     self.updates += 1;
-                    let new_value = if self.schema.output.is_sort() {
-                        uf.union_values(old, value)
-                    } else if let Some(merge) = &self.merge_fn {
-                        match merge.expr {
-                            Expr::Node(s, _) if s.as_str() == "max" => {
-                                i64::max(old.into(), value.into()).into()
-                            }
-                            Expr::Node(s, _) if s.as_str() == "min" => {
-                                i64::min(old.into(), value.into()).into()
-                            }
-                            _ => panic!("Unsupported merge for now"),
+                    let new_value = match self.schema.output {
+                        OutputType::Type(InputType::Sort(_)) => uf.union_values(old, value),
+                        OutputType::Type(_) => {
+                            assert_ne!(old, value);
+                            panic!("bad merge")
                         }
-                    } else {
-                        panic!("no merge!")
+                        OutputType::Max(NumType::I64) => i64::max(old.into(), value.into()).into(),
+                        // OutputType::Max(NumType::F64) => f64::max(old.into(), value.into()).into(),
+                        OutputType::Min(NumType::I64) => i64::min(old.into(), value.into()).into(),
+                        // we use 0 for unit
+                        OutputType::Unit => 0.into(),
+                        // OutputType::Min(NumType::F64) => f64::min(old.into(), value.into()).into(),
                     };
+                    // if self.schema.output.is_sort() {
+                    //     uf.union_values(old, value)
+                    // } else if let Some(merge) = &self.merge_fn {
+                    //     match merge.expr {
+                    //         Expr::Node(s, _) if s.as_str() == "max" => {
+                    //             i64::max(old.into(), value.into()).into()
+                    //         }
+                    //         Expr::Node(s, _) if s.as_str() == "min" => {
+                    //             i64::min(old.into(), value.into()).into()
+                    //         }
+                    //         _ => panic!("Unsupported merge for now"),
+                    //     }
+                    // } else {
+                    //     panic!("no merge!")
+                    // };
 
                     e.insert(new_value.clone());
                     new_value
@@ -112,21 +126,20 @@ impl Function {
 
 pub type Subst = IndexMap<Symbol, Value>;
 
+#[allow(dead_code)]
 pub struct Primitive {
-    _schema: Schema,
+    input: Vec<NumType>,
+    output: NumType,
     f: fn(&[Value]) -> Value,
 }
 
 fn default_primitives() -> HashMap<Symbol, Primitive> {
     macro_rules! prim {
-        (@type Int) => { i64 };
-        (@type Bool) => { bool };
+        (@type I64) => { i64 };
         (|$($param:ident : $t:ident),*| -> $output:ident { $body:expr }) => {
             Primitive {
-                _schema: Schema {
-                    input: vec![$(Type::$t),*],
-                    output: Type::$output,
-                },
+                input: vec![$(NumType::$t),*],
+                output: NumType::$output,
                 f: |values: &[Value]| -> Value {
                     let mut values = values.iter();
                     $(
@@ -139,11 +152,11 @@ fn default_primitives() -> HashMap<Symbol, Primitive> {
     }
 
     [
-        ("+", prim!(|a: Int, b: Int| -> Int { a + b })),
-        ("-", prim!(|a: Int, b: Int| -> Int { a - b })),
-        ("*", prim!(|a: Int, b: Int| -> Int { a * b })),
-        ("max", prim!(|a: Int, b: Int| -> Int { a.max(b) })),
-        ("min", prim!(|a: Int, b: Int| -> Int { a.min(b) })),
+        ("+", prim!(|a: I64, b: I64| -> I64 { a + b })),
+        ("-", prim!(|a: I64, b: I64| -> I64 { a - b })),
+        ("*", prim!(|a: I64, b: I64| -> I64 { a * b })),
+        ("max", prim!(|a: I64, b: I64| -> I64 { a.max(b) })),
+        ("min", prim!(|a: I64, b: I64| -> I64 { a.min(b) })),
     ]
     .into_iter()
     .map(|(k, v)| (Symbol::from(k), v))
@@ -238,7 +251,7 @@ impl EGraph {
                         .expect("FIXME add error message");
                     // FIXME We don't have a unit value
                     f.set(&mut self.unionfind, &values, true.into());
-                    assert_eq!(f.schema.output, Type::Unit);
+                    assert_eq!(f.schema.output, OutputType::Unit);
                 }
             },
         }
@@ -254,7 +267,9 @@ impl EGraph {
                     .map(|e| self.eval_expr(ctx, e).map(|v| self.bad_find_value(v)))
                     .collect::<Result<_, _>>()?;
                 for v in &values[1..] {
-                    assert_eq!(&values[0], v);
+                    if &values[0] != v {
+                        return Err(Error::CheckError(values[0].clone(), v.clone()));
+                    }
                 }
                 // let mut should_union = true;
                 // if let Expr::Node(sym, args) = &exprs[0] {
@@ -293,7 +308,7 @@ impl EGraph {
                     // FIXME We don't have a unit value
                     f.get(&mut self.unionfind, &values)
                         .ok_or_else(|| NotFoundError(expr.clone()))?;
-                    assert_eq!(f.schema.output, Type::Unit);
+                    assert_eq!(f.schema.output, OutputType::Unit);
                 }
             },
         }
@@ -327,39 +342,55 @@ impl EGraph {
         new_unions
     }
 
-    pub fn declare_sort(&mut self, name: impl Into<Symbol>) -> Type {
+    pub fn declare_sort(&mut self, name: impl Into<Symbol>) -> InputType {
         let name = name.into();
         assert!(self.sorts.insert(name), "Sort '{}' already exists", name);
-        Type::Sort(name)
+        InputType::Sort(name)
     }
 
     pub fn declare_function(
         &mut self,
         name: impl Into<Symbol>,
         schema: Schema,
-        merge: Option<MergeFn>,
-    ) -> &mut Function {
+    ) -> Result<(), TypeErrors> {
         let name = name.into();
-        match self.functions.entry(name) {
-            Entry::Vacant(e) => e.insert(Function::new(schema, merge)),
-            Entry::Occupied(_) => panic!("Function '{}' already exists", name),
+        let mut errs = TypeErrors::default();
+
+        for ty in &schema.input {
+            if let InputType::Sort(sort) = ty {
+                if !self.sorts.contains(sort) {
+                    errs.0.push(TypeError::UndefinedSort(*sort));
+                }
+            }
         }
+
+        if let OutputType::Type(InputType::Sort(sort)) = &schema.output {
+            if !self.sorts.contains(sort) {
+                errs.0.push(TypeError::UndefinedSort(*sort));
+            }
+        }
+
+        let old = self.functions.insert(name, Function::new(schema));
+        if old.is_some() {
+            errs.0.push(TypeError::FunctionAlreadyBound(name));
+        }
+
+        errs.ok()
     }
 
     pub fn declare_constructor(
         &mut self,
         name: impl Into<Symbol>,
+        types: Vec<InputType>,
         sort: impl Into<Symbol>,
-        types: Vec<Type>,
-    ) -> &mut Function {
+    ) -> Result<(), TypeErrors> {
         let name = name.into();
         self.declare_function(
             name,
             Schema {
                 input: types,
-                output: Type::Sort(sort.into()),
+                output: OutputType::Type(InputType::Sort(sort.into())),
             },
-            None,
         )
     }
 
@@ -421,7 +452,7 @@ impl EGraph {
     }
 
     fn query(&self, query: &Query, callback: impl FnMut(&[Value])) {
-        let compiled_query = self.compile_query(&query.atoms);
+        let compiled_query = self.compile_gj_query(&query.atoms);
         self.run_query(&compiled_query, callback)
     }
 
@@ -512,7 +543,7 @@ impl EGraph {
     pub fn add_rule(&mut self, rule: ast::Rule) -> Result<Symbol, Error> {
         let name = Symbol::from(format!("{:?}", rule));
         let compiled_rule = Rule {
-            query: self.build_query(rule.body)?,
+            query: self.compile_query(rule.body)?,
             head: rule.head,
         };
         match self.rules.entry(name) {
@@ -548,83 +579,122 @@ impl EGraph {
         }
     }
 
-    pub fn run_command(&mut self, command: Command) -> Result<String, Error> {
-        #[allow(clippy::useless_format)]
-        match command {
+    fn run_command(&mut self, command: Command, should_run: bool) -> Result<String, Error> {
+        Ok(match command {
             Command::Datatype { name, variants } => {
-                self.declare_sort(name);
-                for variant in variants {
-                    self.declare_constructor(variant.name, name, variant.types);
-                }
-                Ok(format!("Declared datatype {name}."))
+                TypeErrors::default().with(|errs| {
+                    self.declare_sort(name); // TODO this could fail
+                    for variant in variants {
+                        errs.add(self.declare_constructor(variant.name, variant.types, name));
+                    }
+                })?;
+                format!("Declared datatype {name}.")
             }
-            Command::Function {
-                name,
-                schema,
-                merge,
-            } => {
-                self.declare_function(name, schema, merge);
-                Ok(format!("Declared function {name}."))
+            Command::Function { name, schema } => {
+                self.declare_function(name, schema)?;
+                format!("Declared function {name}.")
             }
             Command::Rule(rule) => {
                 let name = self.add_rule(rule)?;
-                Ok(format!("Declared rule {name}."))
+                format!("Declared rule {name}.")
             }
             Command::Rewrite(rewrite) => {
                 let name = self.add_rewrite(rewrite)?;
-                Ok(format!("Declared rewrite rule {name}."))
+                format!("Declared rewrite rule {name}.")
             }
             Command::Run(limit) => {
-                self.run_rules(limit);
-                Ok(format!("Ran {limit}."))
+                if should_run {
+                    self.run_rules(limit);
+                    format!("Ran {limit}.")
+                } else {
+                    log::info!("Skipping running!");
+                    format!("Skipped run {limit}.")
+                }
             }
             Command::Extract(_) => todo!(),
             Command::Check(fact) => {
-                self.check_with(&Default::default(), &fact)?;
-                Ok(format!("Checked."))
+                if should_run {
+                    self.check_with(&Default::default(), &fact)?;
+                    "Checked.".into()
+                } else {
+                    "Skipping check.".into()
+                }
             }
             Command::Fact(fact) => {
-                self.assert(&fact)?;
-                Ok(format!("Asserted {fact:?}."))
+                if should_run {
+                    self.assert(&fact)?;
+                    format!("Asserted {fact:?}.")
+                } else {
+                    format!("Skipping assert {fact:?}.")
+                }
             }
             Command::Define(name, expr) => {
-                let value = self.eval_closed_expr(&expr)?;
-                let old = self.globals.insert(name, value);
-                assert!(old.is_none());
-                Ok(format!("Defined {name}"))
+                if should_run {
+                    let value = self.eval_closed_expr(&expr)?;
+                    let old = self.globals.insert(name, value);
+                    assert!(old.is_none());
+                    format!("Defined {name}")
+                } else {
+                    format!("Skipping define {name}")
+                }
+            }
+        })
+    }
+
+    fn run_program(&mut self, program: Vec<Command>) -> Result<Vec<String>, Error> {
+        let mut errs = TypeErrors::default();
+        let mut msgs = vec![];
+        let mut should_run = true;
+
+        for command in program {
+            match self.run_command(command, should_run) {
+                Ok(msg) => {
+                    log::info!("{}", msg);
+                    msgs.push(msg)
+                }
+                Err(e) => {
+                    should_run = false;
+                    log::error!("{}", e);
+                    if let Error::TypeErrors(more_errs) = e {
+                        assert!(!more_errs.0.is_empty());
+                        errs.0.extend(more_errs.0)
+                    } else {
+                        return Err(e);
+                    }
+                }
             }
         }
+
+        errs.ok().map(|_| msgs).map_err(Error::TypeErrors)
     }
 
     // this is bad because we shouldn't inspect values like this, we should use type information
     fn bad_find_value(&self, value: Value) -> Value {
-        match value.0 {
-            ValueInner::Bool(b) => b.into(),
-            ValueInner::Id(id) => self.unionfind.find(id).into(),
-            ValueInner::Int(i) => i.into(),
+        match &value.0 {
+            ValueInner::Id(id) => self.unionfind.find(*id).into(),
+            _ => value,
         }
     }
 
-    pub fn run_program(&mut self, input: &str) -> Result<Vec<String>, Error> {
+    pub fn parse_and_run_program(&mut self, input: &str) -> Result<Vec<String>, Error> {
         let parser = ast::parse::ProgramParser::new();
         let program = parser
             .parse(input)
             .map_err(|e| e.map_token(|tok| tok.to_string()))?;
-        program
-            .into_iter()
-            .map(|cmd| self.run_command(cmd))
-            .collect()
+        self.run_program(program)
     }
 }
 
 #[derive(Debug, Error)]
 pub enum Error {
     #[error(transparent)]
-    ParseError(#[from] lalrpop_util::ParseError<usize, String, &'static str>),
+    ParseError(#[from] lalrpop_util::ParseError<usize, String, String>),
     #[error(transparent)]
     NotFoundError(#[from] NotFoundError),
     #[error(transparent)]
     TypeErrors(#[from] typecheck::TypeErrors),
+    #[error("Check failed: {} != {}", .0, .1)]
+    CheckError(Value, Value),
 }
 
 pub type Pattern = Expr;

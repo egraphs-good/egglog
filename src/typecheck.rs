@@ -11,23 +11,55 @@ pub enum TypeError {
     )]
     Mismatch {
         expr: Expr,
-        expected: Type,
-        actual: Type,
+        expected: OutputType,
+        actual: OutputType,
         reason: String,
     },
     #[error("Tried to unify too many literals: {}", ListDisplay(.0))]
     TooManyLiterals(Vec<Literal>),
     #[error("Unbound symbol {0}")]
     Unbound(Symbol),
+    #[error("Undefined sort {0}")]
+    UndefinedSort(Symbol),
+    #[error("Function already bound {0}")]
+    FunctionAlreadyBound(Symbol),
     #[error("Cannot type a variable as unit: {0}")]
     UnitVar(Symbol),
     #[error("Failed to infer a type for variable: {0}")]
     InferenceFailure(Symbol),
 }
 
-#[derive(Debug, Clone, Error)]
+#[derive(Debug, Clone, Error, Default)]
 #[error("{}", ListDisplay(.0))]
-pub struct TypeErrors(pub Vec<TypeError>);
+pub struct TypeErrors(pub(crate) Vec<TypeError>);
+
+impl<E: Into<Self>> From<Result<(), E>> for TypeErrors {
+    fn from(result: Result<(), E>) -> Self {
+        match result {
+            Ok(()) => Self::default(),
+            Err(errs) => errs.into(),
+        }
+    }
+}
+
+impl TypeErrors {
+    pub(crate) fn add(&mut self, errs: impl Into<Self>) {
+        self.0.extend(errs.into().0)
+    }
+
+    pub(crate) fn with<T>(mut self, f: impl FnOnce(&mut Self) -> T) -> Result<T, Self> {
+        let t = f(&mut self);
+        if self.0.is_empty() {
+            Ok(t)
+        } else {
+            Err(self)
+        }
+    }
+
+    pub(crate) fn ok(self) -> Result<(), Self> {
+        self.with(|_| ())
+    }
+}
 
 #[derive(Debug, Hash, PartialEq, Eq)]
 enum ENode {
@@ -42,13 +74,13 @@ struct QueryBuilder<'a> {
     unionfind: UnionFind<Info<'a>>,
     nodes: HashMap<ENode, Id>,
     // foo: UnionFind<Info<'a>>,
-    errors: Vec<TypeError>,
+    errors: TypeErrors,
     egraph: &'a EGraph,
 }
 
 #[derive(Clone)]
 struct Info<'a> {
-    ty: Option<Type>,
+    ty: Option<OutputType>,
     expr: &'a Expr,
 }
 
@@ -72,8 +104,144 @@ impl<'a> UnifyValue for Info<'a> {
     }
 }
 
+impl<'a> QueryBuilder<'a> {
+    fn rebuild(&mut self) {
+        let mut keep_going = true;
+        while keep_going {
+            keep_going = false;
+            let nodes = std::mem::take(&mut self.nodes);
+            for (mut node, id) in nodes {
+                // canonicalize
+                let id = self.unionfind.find_mut(id);
+                if let ENode::Node(_, children) = &mut node {
+                    for child in children {
+                        *child = self.unionfind.find_mut(*child);
+                    }
+                }
+
+                // reinsert and handle hit
+                if let Some(old) = self.nodes.insert(node, id) {
+                    keep_going = true;
+                    self.unify(old, id);
+                }
+            }
+        }
+    }
+
+    fn unify(&mut self, id1: Id, id2: Id) -> Id {
+        if let Err((a, b)) = self.unionfind.try_union(id1, id2) {
+            // TODO unification error?
+            self.errors.0.push(TypeError::Mismatch {
+                expr: a.expr.clone(),
+                expected: a.ty.unwrap_or(OutputType::Unit),
+                actual: b.ty.unwrap_or(OutputType::Unit),
+                reason: "unification".into(),
+            })
+        }
+        id1
+    }
+
+    fn unify_info(&mut self, id: Id, info: Info<'a>) {
+        if let Err((old_info, new_info)) = self.unionfind.try_insert(id, info) {
+            let expect = "unification can't fail on None types";
+            self.errors.0.push(TypeError::Mismatch {
+                expr: new_info.expr.clone(),
+                expected: new_info.ty.expect(expect),
+                actual: old_info.ty.expect(expect),
+                reason: "mismatch".into(),
+            })
+        }
+    }
+
+    fn add_fact(&mut self, fact: &'a Fact) -> Id {
+        match fact {
+            Fact::Eq(exprs) => {
+                assert!(exprs.len() > 1);
+                let mut iter = exprs.iter();
+                let mut id = self.add_expr(iter.next().unwrap());
+                for e in iter {
+                    let id2 = self.add_expr(e);
+                    id = self.unify(id, id2);
+                }
+                id
+            }
+            Fact::Fact(e) => self.add_expr_at(e, OutputType::Unit),
+        }
+    }
+
+    fn add_node(&mut self, node: ENode, info: Info<'a>) -> Id {
+        match self.nodes.entry(node) {
+            Entry::Occupied(e) => {
+                let id = *e.get();
+                self.unify_info(id, info);
+                id
+            }
+            Entry::Vacant(e) => {
+                let id = self.unionfind.make_set_with(info);
+                *e.insert(id)
+            }
+        }
+    }
+
+    fn add_expr_at(&mut self, expr: &'a Expr, ty: OutputType) -> Id {
+        let id = self.add_expr(expr);
+        let info = Info { ty: Some(ty), expr };
+        self.unify_info(id, info);
+        id
+    }
+
+    fn add_expr(&mut self, expr: &'a Expr) -> Id {
+        match expr {
+            Expr::Leaf(lit) => {
+                let ty = Some(match lit {
+                    Literal::Int(_) => OutputType::Type(InputType::NumType(NumType::I64)),
+                    Literal::String(_) => OutputType::Type(InputType::String),
+                });
+                self.add_node(ENode::Literal(lit.clone()), Info { ty, expr })
+            }
+            Expr::Var(var) => {
+                // TODO handle constants?
+                // FIXME no! constants are distinct from nullary partial functions
+                self.add_node(ENode::Var(*var), Info { ty: None, expr })
+            }
+            Expr::Node(sym, args) => {
+                let mut ids = vec![];
+                let ty = if let Some(f) = self.egraph.functions.get(sym) {
+                    if args.len() == f.schema.input.len() {
+                        for (arg, ty) in args.iter().zip(&f.schema.input) {
+                            ids.push(self.add_expr_at(arg, OutputType::Type(ty.clone())));
+                        }
+                    } else {
+                        // arity mismatch, don't worry about constraining the inputs
+                        self.errors.0.push(TypeError::Arity {
+                            expr: expr.clone(),
+                            expected: f.schema.input.len(),
+                        });
+                    }
+                    Some(f.schema.output.clone())
+                } else {
+                    self.errors.0.push(TypeError::Unbound(*sym));
+                    None
+                };
+
+                // if we haven't pushed type constrainted arguments,
+                // add some fake stuff for now
+                if ids.len() != args.len() {
+                    assert!(ids.is_empty());
+                    for arg in args {
+                        ids.push(self.add_expr(arg));
+                    }
+                }
+                assert_eq!(ids.len(), args.len());
+
+                self.add_node(ENode::Node(*sym, ids), Info { ty, expr })
+            }
+        }
+    }
+}
+
 impl EGraph {
-    pub(crate) fn build_query(&self, facts: Vec<Fact>) -> Result<Query, TypeErrors> {
+    pub(crate) fn compile_query(&self, facts: Vec<Fact>) -> Result<Query, TypeErrors> {
         let mut builder = QueryBuilder {
             unionfind: Default::default(),
             nodes: Default::default(),
@@ -113,6 +281,7 @@ impl EGraph {
                 if class.lits.len() > 1 {
                     builder
                         .errors
+                        .0
                         .push(TypeError::TooManyLiterals(class.lits.clone()));
                 }
                 AtomTerm::Value(lit.to_value())
@@ -135,13 +304,13 @@ impl EGraph {
             for &var in &class.vars {
                 // TODO do something with the type
                 let _ty = if let Some(ty) = info.ty.clone() {
-                    if ty == Type::Unit {
-                        builder.errors.push(TypeError::UnitVar(var));
+                    if ty == OutputType::Unit {
+                        builder.errors.0.push(TypeError::UnitVar(var));
                     }
                     ty
                 } else {
-                    builder.errors.push(TypeError::InferenceFailure(var));
-                    Type::Unit
+                    builder.errors.0.push(TypeError::InferenceFailure(var));
+                    OutputType::Unit
                 };
                 query.bindings.insert(var, atomterm.clone());
             }
@@ -156,146 +325,13 @@ impl EGraph {
             }
         }
 
-        if builder.errors.is_empty() {
+        builder.errors.ok().map(|()| {
             log::debug!("Compiled {facts:?} to {query:?}");
-            Ok(query)
-        } else {
-            Err(TypeErrors(builder.errors))
-        }
-    }
-}
-
-impl<'a> QueryBuilder<'a> {
-    fn rebuild(&mut self) {
-        let mut keep_going = true;
-        while keep_going {
-            keep_going = false;
-            let nodes = std::mem::take(&mut self.nodes);
-            for (mut node, id) in nodes {
-                // canonicalize
-                let id = self.unionfind.find_mut(id);
-                if let ENode::Node(_, children) = &mut node {
-                    for child in children {
-                        *child = self.unionfind.find_mut(*child);
-                    }
-                }
-
-                // reinsert and handle hit
-                if let Some(old) = self.nodes.insert(node, id) {
-                    keep_going = true;
-                    self.unify(old, id);
-                }
-            }
-        }
+            query
+        })
     }
 
-    fn unify(&mut self, id1: Id, id2: Id) -> Id {
-        if let Err((a, b)) = self.unionfind.try_union(id1, id2) {
-            // TODO unification error?
-            self.errors.push(TypeError::Mismatch {
-                expr: a.expr.clone(),
-                expected: a.ty.unwrap_or(Type::Unit),
-                actual: b.ty.unwrap_or(Type::Unit),
-                reason: "unification".into(),
-            })
-        }
-        id1
-    }
-
-    fn unify_info(&mut self, id: Id, info: Info<'a>) {
-        if let Err((old_info, new_info)) = self.unionfind.try_insert(id, info) {
-            let expect = "unification can't fail on None types";
-            self.errors.push(TypeError::Mismatch {
-                expr: new_info.expr.clone(),
-                expected: new_info.ty.expect(expect),
-                actual: old_info.ty.expect(expect),
-                reason: "mismatch".into(),
-            })
-        }
-    }
-
-    fn add_fact(&mut self, fact: &'a Fact) -> Id {
-        match fact {
-            Fact::Eq(exprs) => {
-                assert!(exprs.len() > 1);
-                let mut iter = exprs.iter();
-                let mut id = self.add_expr(iter.next().unwrap());
-                for e in iter {
-                    let id2 = self.add_expr(e);
-                    id = self.unify(id, id2);
-                }
-                id
-            }
-            Fact::Fact(e) => self.add_expr_at(e, Type::Unit),
-        }
-    }
-
-    fn add_node(&mut self, node: ENode, info: Info<'a>) -> Id {
-        match self.nodes.entry(node) {
-            Entry::Occupied(e) => {
-                let id = *e.get();
-                self.unify_info(id, info);
-                id
-            }
-            Entry::Vacant(e) => {
-                let id = self.unionfind.make_set_with(info);
-                *e.insert(id)
-            }
-        }
-    }
-
-    fn add_expr_at(&mut self, expr: &'a Expr, ty: Type) -> Id {
-        let id = self.add_expr(expr);
-        let info = Info { ty: Some(ty), expr };
-        self.unify_info(id, info);
-        id
-    }
-
-    fn add_expr(&mut self, expr: &'a Expr) -> Id {
-        match expr {
-            Expr::Leaf(lit) => {
-                let ty = Some(match lit {
-                    Literal::Int(_) => Type::Int,
-                });
-                self.add_node(ENode::Literal(lit.clone()), Info { ty, expr })
-            }
-            Expr::Var(var) => {
-                // TODO handle constants?
-                // FIXME no! constants are distinct from nullary partial functions
-                self.add_node(ENode::Var(*var), Info { ty: None, expr })
-            }
-            Expr::Node(sym, args) => {
-                let mut ids = vec![];
-                let ty = if let Some(f) = self.egraph.functions.get(sym) {
-                    if args.len() == f.schema.input.len() {
-                        for (arg, ty) in args.iter().zip(&f.schema.input) {
-                            ids.push(self.add_expr_at(arg, ty.clone()));
-                        }
-                    } else {
-                        // arity mismatch, don't worry about constraining the inputs
-                        self.errors.push(TypeError::Arity {
-                            expr: expr.clone(),
-                            expected: f.schema.input.len(),
-                        });
-                    }
-                    Some(f.schema.output.clone())
-                } else {
-                    self.errors.push(TypeError::Unbound(*sym));
-                    None
-                };
-
-                // if we haven't pushed type constrainted arguments,
-                // add some fake stuff for now
-                if ids.len() != args.len() {
-                    assert!(ids.is_empty());
-                    for arg in args {
-                        ids.push(self.add_expr(arg));
-                    }
-                }
-                assert_eq!(ids.len(), args.len());
-
-                self.add_node(ENode::Node(*sym, ids), Info { ty, expr })
-            }
-        }
+    pub(crate) fn compile_expr(&self, expr: Expr) -> Result<Expr, TypeErrors> {
+        Ok(expr)
     }
 }

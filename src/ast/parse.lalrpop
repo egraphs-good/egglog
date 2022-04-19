@@ -3,10 +3,15 @@ use crate::Symbol;
 
 grammar;
 
+extern {
+    type Error = String;
+}
+
 // lexer
 match {
     r"\s*" => { }, // skip whitespace
     r";[^\n\r]*[\n\r]*" => { }, // skip ; comments
+    r"Int|int|I64|number" => reserved,
     _
 }
 
@@ -16,14 +21,10 @@ List<T>: Vec<T> = {
     "(" <T*> ")" => <>,
 }
 
-MergeFn: MergeFn = {
-    "(" "merge" <var1:Ident> <var2:Ident> <expr:Expr> ")" => MergeFn { vars: (var1, var2), expr }
-}
-
 Command: Command = {
     "(" "datatype" <name:Ident> <variants:(Variant)*> ")" => Command::Datatype { <> },
-    "(" "function" <name:Ident> <schema:Schema> <merge:MergeFn?> ")" => Command::Function { name, schema, merge },
-    "(" "relation" <name:Ident> <types:List<Type>> ")" => Command::Function { name, schema: Schema::relation(types), merge: None },
+    "(" "function" <name:Ident> <schema:Schema> ")" => Command::Function { name, schema },
+    "(" "relation" <name:Ident> <types:List<InputType>> ")" => Command::Function { name, schema: Schema::relation(types) },
     "(" "rule" <body:List<Fact>> <head:List<Fact>> ")" => Command::Rule(Rule { head, body }),
     "(" "rewrite" <lhs:Expr> <rhs:Expr> ")" => Command::Rewrite(Rewrite { <> }),
     "(" "define" <name:Ident> <expr:Expr> ")" => Command::Define(name, expr),
@@ -44,11 +45,12 @@ Fact: Fact = {
 }
 
 Schema: Schema = {
-    <types:List<Type>> <output:Type> => Schema { input: types, output }
+    <types:List<InputType>> <output:OutputType> => Schema { input: types, output }
 }
 
 Expr: Expr = {
     <Num> => Expr::leaf(<>),
+    <SymString> => Expr::leaf(<>),
     // <Bool> => Expr::leaf(<>),
     <Ident> => Expr::Var(<>),
     <NodeExpr> => <>,
@@ -62,12 +64,25 @@ NodeExpr: Expr = {
 ExprList: Vec<Expr> = { "(" <sexps:(Expr)*> ")" => sexps }
 
 Variant: Variant = {
-    "(" <name:Ident> <types:(Type)*> ")" => Variant { <> },
+    "(" <name:Ident> <types:(InputType)*> ")" => Variant { <> },
 }
 
-Type: Type = { 
-    "Int" => Type::Int,
-    <Ident> => Type::Sort(<>),
+InputType: InputType = { 
+    "String" => InputType::String,
+    <NumType> => InputType::NumType(<>),
+    <Ident> => InputType::Sort(<>),
+}
+
+NumType: NumType = {
+    "i64" => NumType::I64,
+    <s:reserved> =>? lalrpop_error!("{} is reserved.", s)
+    // "f64" => NumType::F64,
+}
+
+OutputType: OutputType = {
+    <InputType> => OutputType::Type(<>),
+    "(" "Max" <NumType> ")" => OutputType::Max(<>),
+    "(" "Min" <NumType> ")" => OutputType::Min(<>),
 }
 
 Num: i64 = <s:r"(-)?[0-9]+"> => s.parse().unwrap();
@@ -77,3 +92,4 @@ Bool: bool = {
 }
 Ident: Symbol = <s:r"[[:alpha:]][\w-]*"> => s.parse().unwrap();
 PrimitiveSymbol: Symbol = <r"[+*/-]"> => Symbol::from(<>);
+SymString: Symbol = <r#""[^"]*""#> => Symbol::from(<>);

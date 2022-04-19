@@ -3,6 +3,10 @@ mod symbol;
 
 use std::fmt::Display;
 
+macro_rules! lalrpop_error {
+    ($($x:tt)*) => { Err(::lalrpop_util::ParseError::User { error: format!($($x)*)}) }
+}
+
 use lalrpop_util::lalrpop_mod;
 lalrpop_mod!(
     #[allow(clippy::all)]
@@ -51,7 +55,6 @@ pub enum Command {
     Function {
         name: Symbol,
         schema: Schema,
-        merge: Option<MergeFn>,
     },
     Define(Symbol, Expr),
     Rule(Rule),
@@ -66,35 +69,70 @@ pub enum Command {
 #[derive(Clone, Debug)]
 pub struct Variant {
     pub name: Symbol,
-    pub types: Vec<Type>,
-}
-
-#[derive(Clone, Debug)]
-pub struct MergeFn {
-    pub vars: (Symbol, Symbol),
-    pub expr: Expr,
+    pub types: Vec<InputType>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Type {
+pub enum InputType {
     Sort(Symbol),
-    Bool,
-    Unit,
-    Int,
+    NumType(NumType),
+    String,
 }
 
-impl Display for Type {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Type::Sort(s) => Display::fmt(s, f),
-            Type::Bool => write!(f, "Bool"),
-            Type::Unit => write!(f, "Unit"),
-            Type::Int => write!(f, "Int"),
+#[derive(Debug, Clone, PartialEq)]
+pub enum NumType {
+    // F64,
+    I64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum OutputType {
+    Unit,
+    Type(InputType),
+    Max(NumType),
+    Min(NumType),
+}
+
+impl OutputType {
+    pub fn is_sort(&self) -> bool {
+        if let OutputType::Type(ty) = self {
+            ty.is_sort()
+        } else {
+            false
         }
     }
 }
 
-impl Type {
+impl Display for NumType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NumType::I64 => write!(f, "i64"),
+        }
+    }
+}
+
+impl Display for OutputType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OutputType::Type(t) => Display::fmt(t, f),
+            OutputType::Unit => write!(f, "Unit"),
+            OutputType::Max(t) => write!(f, "(max {t})"),
+            OutputType::Min(t) => write!(f, "(min {t})"),
+        }
+    }
+}
+
+impl Display for InputType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InputType::Sort(s) => Display::fmt(s, f),
+            InputType::NumType(t) => Display::fmt(t, f),
+            InputType::String => write!(f, "String"),
+        }
+    }
+}
+
+impl InputType {
     pub fn is_sort(&self) -> bool {
         matches!(self, Self::Sort(..))
     }
@@ -102,15 +140,15 @@ impl Type {
 
 #[derive(Clone, Debug)]
 pub struct Schema {
-    pub input: Vec<Type>,
-    pub output: Type,
+    pub input: Vec<InputType>,
+    pub output: OutputType,
 }
 
 impl Schema {
-    pub fn relation(input: Vec<Type>) -> Self {
+    pub fn relation(input: Vec<InputType>) -> Self {
         Schema {
             input,
-            output: Type::Unit,
+            output: OutputType::Unit,
         }
     }
 }
