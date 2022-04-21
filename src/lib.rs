@@ -21,6 +21,7 @@ use util::*;
 
 use crate::typecheck::TypeError;
 
+#[derive(Clone)]
 pub struct Function {
     schema: Schema,
     nodes: HashMap<Vec<Value>, Value>,
@@ -126,6 +127,7 @@ impl Function {
 
 pub type Subst = IndexMap<Symbol, Value>;
 
+#[derive(Clone)]
 #[allow(dead_code)]
 pub struct Primitive {
     input: Vec<NumType>,
@@ -163,6 +165,7 @@ fn default_primitives() -> HashMap<Symbol, Primitive> {
     .collect()
 }
 
+#[derive(Clone)]
 pub struct EGraph {
     unionfind: UnionFind,
     sorts: HashMap<Symbol, Vec<Symbol>>,

@@ -299,8 +299,4 @@ impl EGraph {
             Err(Error::TypeErrors(builder.errors))
         }
     }
-
-    pub(crate) fn compile_expr(&self, expr: Expr) -> Result<Expr, Error> {
-        Ok(expr)
-    }
 }
