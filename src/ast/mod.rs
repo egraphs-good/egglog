@@ -52,10 +52,7 @@ pub enum Command {
         name: Symbol,
         variants: Vec<Variant>,
     },
-    Function {
-        name: Symbol,
-        schema: Schema,
-    },
+    Function(FunctionDecl),
     Define(Symbol, Expr),
     Rule(Rule),
     Rewrite(Rewrite),
@@ -64,6 +61,12 @@ pub enum Command {
     Extract(Expr),
     // TODO: this could just become an empty query
     Check(Fact),
+}
+
+#[derive(Clone, Debug)]
+pub struct FunctionDecl {
+    pub name: Symbol,
+    pub schema: Schema,
 }
 
 #[derive(Clone, Debug)]
@@ -144,11 +147,14 @@ pub struct Schema {
     pub output: OutputType,
 }
 
-impl Schema {
-    pub fn relation(input: Vec<InputType>) -> Self {
-        Schema {
-            input,
-            output: OutputType::Unit,
+impl FunctionDecl {
+    pub fn relation(name: Symbol, input: Vec<InputType>) -> Self {
+        Self {
+            name,
+            schema: Schema {
+                input,
+                output: OutputType::Unit,
+            },
         }
     }
 }

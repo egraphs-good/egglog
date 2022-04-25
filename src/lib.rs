@@ -356,14 +356,8 @@ impl EGraph {
         }
     }
 
-    pub fn declare_function(
-        &mut self,
-        name: impl Into<Symbol>,
-        schema: Schema,
-    ) -> Result<(), Error> {
-        let name = name.into();
-
-        for ty in &schema.input {
+    pub fn declare_function(&mut self, decl: &FunctionDecl) -> Result<(), Error> {
+        for ty in &decl.schema.input {
             if let InputType::Sort(sort) = ty {
                 if !self.sorts.contains_key(sort) {
                     return Err(TypeError::UndefinedSort(*sort).into());
@@ -371,15 +365,17 @@ impl EGraph {
             }
         }
 
-        if let OutputType::Type(InputType::Sort(sort)) = &schema.output {
+        if let OutputType::Type(InputType::Sort(sort)) = &decl.schema.output {
             if !self.sorts.contains_key(sort) {
                 return Err(TypeError::UndefinedSort(*sort).into());
             }
         }
 
-        let old = self.functions.insert(name, Function::new(schema));
+        let old = self
+            .functions
+            .insert(decl.name, Function::new(decl.schema.clone()));
         if old.is_some() {
-            return Err(TypeError::FunctionAlreadyBound(name).into());
+            return Err(TypeError::FunctionAlreadyBound(decl.name).into());
         }
 
         Ok(())
@@ -393,13 +389,13 @@ impl EGraph {
     ) -> Result<(), Error> {
         let name = name.into();
         let sort = sort.into();
-        self.declare_function(
+        self.declare_function(&FunctionDecl {
             name,
-            Schema {
+            schema: Schema {
                 input: types,
                 output: OutputType::Type(InputType::Sort(sort)),
             },
-        )?;
+        })?;
         if let Some(ctors) = self.sorts.get_mut(&sort) {
             ctors.push(name);
         }
@@ -600,9 +596,9 @@ impl EGraph {
                 }
                 format!("Declared datatype {name}.")
             }
-            Command::Function { name, schema } => {
-                self.declare_function(name, schema)?;
-                format!("Declared function {name}.")
+            Command::Function(fdecl) => {
+                self.declare_function(&fdecl)?;
+                format!("Declared function {}.", fdecl.name)
             }
             Command::Rule(rule) => {
                 let name = self.add_rule(rule)?;

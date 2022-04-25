@@ -23,8 +23,8 @@ List<T>: Vec<T> = {
 
 Command: Command = {
     "(" "datatype" <name:Ident> <variants:(Variant)*> ")" => Command::Datatype { <> },
-    "(" "function" <name:Ident> <schema:Schema> ")" => Command::Function { name, schema },
-    "(" "relation" <name:Ident> <types:List<InputType>> ")" => Command::Function { name, schema: Schema::relation(types) },
+    "(" "function" <name:Ident> <schema:Schema> ")" => Command::Function(FunctionDecl { name, schema }),
+    "(" "relation" <name:Ident> <types:List<InputType>> ")" => Command::Function(FunctionDecl::relation(name, types)),
     "(" "rule" <body:List<Fact>> <head:List<Fact>> ")" => Command::Rule(Rule { head, body }),
     "(" "rewrite" <lhs:Expr> <rhs:Expr> ")" => Command::Rewrite(Rewrite { <> }),
     "(" "define" <name:Ident> <expr:Expr> ")" => Command::Define(name, expr),
