@@ -1,6 +1,6 @@
 (datatype Expr
   (Mul Expr Expr)
-  (Var i64)
+  (Var String)
   (Lit i64)
 )
 
@@ -15,11 +15,11 @@
 (rule ((= (Lit i) (Mul a b)))
       ((False 0)))
 
-(assert (= (Mul (Var 1) (Var 1)) 
+(assert (= (Mul (Var "a") (Var "a")) 
            (Mul (Lit 1) (Lit 2))))
 
 
 (run 3)
-(check (= (Var 1) (Lit 1)))
+(check (= (Var "a") (Lit 1)))
 (check (= (Lit 2) (Lit 1)))
-(check (False 0))
+; (check (False 0)) ;; this should fail because we don't want prove false
