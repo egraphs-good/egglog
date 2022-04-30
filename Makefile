@@ -21,8 +21,8 @@ web: ${DIST_WASM} ${WEB_SRC} ${WWW}/examples.json
 	mkdir -p ${WWW}
 	cp ${WEB_SRC} ${WWW}
 
-serve: web
-	python3 -m http.server 8080 -d ${WWW}
+serve: 
+	cargo watch --shell "make web && python3 -m http.server 8080 -d ${WWW}"
 
 ${WWW}/examples.json: web-demo/examples.py ${TESTS}
 	$^ > $@

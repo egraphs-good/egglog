@@ -15,7 +15,7 @@ pub enum TypeError {
         actual: OutputType,
         reason: String,
     },
-    #[error("Tried to unify too many literals: {}", ListDisplay(.0))]
+    #[error("Tried to unify too many literals: {}", ListDisplay(.0, "\n"))]
     TooManyLiterals(Vec<Literal>),
     #[error("Unbound symbol {0}")]
     Unbound(Symbol),

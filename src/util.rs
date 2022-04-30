@@ -21,7 +21,7 @@ pub(crate) fn concat_vecs<T>(to: &mut Vec<T>, mut from: Vec<T>) {
     to.extend(from);
 }
 
-pub(crate) struct ListDisplay<'a, T>(pub &'a [T]);
+pub(crate) struct ListDisplay<'a, T>(pub &'a [T], pub &'a str);
 
 impl<'a, T> Display for ListDisplay<'a, T>
 where
@@ -31,7 +31,7 @@ where
         let mut did_something = false;
         for item in self.0 {
             if did_something {
-                write!(f, ", ")?;
+                f.write_str(self.1)?;
             }
             Display::fmt(&item, f)?;
             did_something = true;

@@ -165,12 +165,32 @@ pub enum Fact {
     Fact(Expr),
 }
 
+impl Display for Fact {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Fact::Eq(exprs) => write!(f, "(= {})", ListDisplay(exprs, " ")),
+            Fact::Fact(e) => Display::fmt(e, f),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Rule {
     // pub query: Query,
     // pub actions: Vec<Action>,
     pub head: Vec<Fact>,
     pub body: Vec<Fact>,
+}
+
+impl Display for Rule {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} ==> {}",
+            ListDisplay(&self.body, " "),
+            ListDisplay(&self.head, " ")
+        )
+    }
 }
 
 #[derive(Clone, Debug)]

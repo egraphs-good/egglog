@@ -574,8 +574,8 @@ impl EGraph {
         self.rules = rules;
     }
 
-    pub fn add_rule(&mut self, rule: ast::Rule) -> Result<Symbol, Error> {
-        let name = Symbol::from(format!("{:?}", rule));
+    fn add_rule_with_name(&mut self, name: String, rule: ast::Rule) -> Result<Symbol, Error> {
+        let name = Symbol::from(name);
         let compiled_rule = Rule {
             query: self.compile_query(rule.body)?,
             head: rule.head,
@@ -587,14 +587,19 @@ impl EGraph {
         Ok(name)
     }
 
+    pub fn add_rule(&mut self, rule: ast::Rule) -> Result<Symbol, Error> {
+        let name = format!("{}", rule);
+        self.add_rule_with_name(name, rule)
+    }
+
     pub fn add_rewrite(&mut self, rewrite: ast::Rewrite) -> Result<Symbol, Error> {
-        // let name = Symbol::from(format!("{} -> {}", rule.lhs, rule.rhs));
+        let name = format!("{} -> {}", rewrite.lhs, rewrite.rhs);
         let var = Symbol::from("__rewrite_var");
         let rule = ast::Rule {
             body: vec![Fact::Eq(vec![Expr::Var(var), rewrite.lhs])],
             head: vec![Fact::Eq(vec![Expr::Var(var), rewrite.rhs])],
         };
-        self.add_rule(rule)
+        self.add_rule_with_name(name, rule)
     }
 
     fn for_each_canonicalized(&self, name: Symbol, mut cb: impl FnMut(&[Value])) {
@@ -632,7 +637,7 @@ impl EGraph {
             }
             Command::Rewrite(rewrite) => {
                 let name = self.add_rewrite(rewrite)?;
-                format!("Declared rewrite rule {name}.")
+                format!("Declared rw {name}.")
             }
             Command::Run(limit) => {
                 if should_run {
@@ -667,9 +672,9 @@ impl EGraph {
             Command::Fact(fact) => {
                 if should_run {
                     self.assert(&fact)?;
-                    format!("Asserted {fact:?}.")
+                    format!("Asserted {fact}.")
                 } else {
-                    format!("Skipping assert {fact:?}.")
+                    format!("Skipping assert {fact}.")
                 }
             }
             Command::Define(name, expr) => {
@@ -723,7 +728,7 @@ pub enum Error {
     NotFoundError(#[from] NotFoundError),
     #[error(transparent)]
     TypeError(#[from] TypeError),
-    #[error("{}", ListDisplay(.0))]
+    #[error("{}", ListDisplay(.0, "\n"))]
     TypeErrors(Vec<TypeError>),
     #[error("Check failed: {0} != {1}")]
     CheckError(Value, Value),
