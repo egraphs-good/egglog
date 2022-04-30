@@ -109,17 +109,17 @@ impl Function {
                     *a = uf.find_mut_value(a.clone())
                 }
             }
-            if self.schema.output.is_sort() {
+            let _new_value = if self.schema.output.is_sort() {
                 self.nodes
                     .entry(args)
                     .and_modify(|value2| *value2 = uf.union_values(value.clone(), value2.clone()))
-                    .or_insert_with(|| uf.find_mut_value(value));
+                    .or_insert_with(|| uf.find_mut_value(value))
             } else {
                 self.nodes
                     .entry(args)
                     // .and_modify(|value2| *value2 = uf.union_values(value.clone(), value2.clone()))
-                    .or_insert(value);
-            }
+                    .or_insert(value)
+            };
         }
         uf.n_unions() - n_unions + std::mem::take(&mut self.updates)
     }
@@ -201,6 +201,29 @@ pub struct NotFoundError(Expr);
 impl EGraph {
     pub fn union(&mut self, id1: Id, id2: Id) -> Id {
         self.unionfind.union(id1, id2)
+    }
+
+    #[track_caller]
+    fn debug_assert_invariants(&self) {
+        #[cfg(debug_assertions)]
+        for (name, function) in self.functions.iter() {
+            for (inputs, output) in function.nodes.iter() {
+                for input in inputs {
+                    assert_eq!(
+                        input,
+                        &self.bad_find_value(input.clone()),
+                        "{name}({inputs:?}) = {output}\n{:?}",
+                        function.schema,
+                    )
+                }
+                assert_eq!(
+                    output,
+                    &self.bad_find_value(output.clone()),
+                    "{name}({inputs:?}) = {output}\n{:?}",
+                    function.schema,
+                )
+            }
+        }
     }
 
     pub fn union_exprs(&mut self, ctx: &Subst, exprs: &[Expr]) -> Result<Value, NotFoundError> {
@@ -330,11 +353,14 @@ impl EGraph {
         let mut updates = 0;
         loop {
             let new = self.rebuild_one();
+            log::debug!("{new} rebuilds?");
             updates += new;
             if new == 0 {
-                return updates;
+                break;
             }
         }
+        self.debug_assert_invariants();
+        updates
     }
 
     fn rebuild_one(&mut self) -> usize {
@@ -621,7 +647,9 @@ impl EGraph {
                 if should_run {
                     // TODO typecheck
                     let value = self.eval_closed_expr(&e)?;
+                    self.rebuild();
                     let id = Id::from(value);
+                    log::info!("Extracting {e} at {id}");
                     let (cost, expr) = self.extract(id);
                     format!("Extracted with cost {cost}: {expr}")
                 } else {

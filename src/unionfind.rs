@@ -177,6 +177,7 @@ pub(crate) trait UnionFindLike<K: UnifyKey, V: UnifyValue> {
         } else {
             root1
         };
+        debug_assert_eq!(self.find_index(root), root);
         Ok(self.key(root))
     }
 
@@ -200,6 +201,7 @@ pub(crate) trait UnionFindLike<K: UnifyKey, V: UnifyValue> {
         let v = V::merge(self.get_value_index(a), self.get_value_index(b))?;
         self.set_value_index(a, v);
         self.set_parent_index(b, a);
+        self.did_union(a);
         Ok(a)
     }
 
