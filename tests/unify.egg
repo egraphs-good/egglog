@@ -1,0 +1,25 @@
+(datatype Expr
+  (Mul Expr Expr)
+  (Var i64)
+  (Lit i64)
+)
+
+; Assume injectivity of Mul for unification
+(rule ((= (Mul a b) (Mul c d)))
+   ((= a c) (= b d)))
+
+(relation False (i64))
+; If any Literal make equal to something it can't be, false is derived
+;(rule ((= (Lit i) (Lit j)) (!= i j))
+;      ((False 0)))
+(rule ((= (Lit i) (Mul a b)))
+      ((False 0)))
+
+(assert (= (Mul (Var 1) (Var 1)) 
+           (Mul (Lit 1) (Lit 2))))
+
+
+(run 3)
+(check (= (Var 1) (Lit 1)))
+(check (= (Lit 2) (Lit 1)))
+(check (False 0))
