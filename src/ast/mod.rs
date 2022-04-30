@@ -1,7 +1,6 @@
-mod expr;
-mod symbol;
-
 use std::fmt::Display;
+
+pub use symbol_table::GlobalSymbol as Symbol;
 
 macro_rules! lalrpop_error {
     ($($x:tt)*) => { Err(::lalrpop_util::ParseError::User { error: format!($($x)*)}) }
@@ -16,8 +15,8 @@ lalrpop_mod!(
 
 use crate::*;
 
+mod expr;
 pub use expr::*;
-pub use symbol::*;
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct Id(usize);
