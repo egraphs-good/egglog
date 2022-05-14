@@ -1,0 +1,70 @@
+(datatype Math
+  (Num i64)
+  (Var String)
+  (Add Math Math)
+;  (Select Array Math)
+)
+
+
+(datatype Array
+  (Const i64)
+  (AVar String)
+  ;(Store Array Math Math)
+)
+
+(function select (Array Math) Math)
+(function store (Array Math Math) Array)
+
+(relation neq (Math Math))
+
+(relation blowup ())
+
+(rule ((neq x y))
+      ((neq y x)))
+
+(rule ((neq x x))
+      ((blowup)))
+
+
+; injectivity rules take not equal to not equal.
+(rule  ((neq x y) (= (Add x z) e))
+       ((neq (Add x z) (Add y z))))
+(rule  ((= (Add x z) e) (neq z (Num 0)))
+       ((neq (Add x z) x)))
+
+; rule is not working
+;(rule ((= (Num a) n1) (= (Num b) n2) (= (~ a b) 0))
+;      ((neq (Num a) (Num b))))
+
+; select gets from store
+(rewrite (select (store mem i e) i) e)
+; aliasing writes destroy old value
+(rewrite (store (store mem i e1) i e2) (store mem i e2))
+; non-aliasing writes commutes
+(rule ((= (store (store mem i2 e2) i1 e1) mem1) (neq i1 i2))
+      ((= (store (store mem i1 e1) i2 e2) mem1)))
+
+; typical math rules
+(rewrite (Add x y) (Add y x))
+(rewrite (Add (Add x y) z) (Add x (Add y z)))
+(rewrite (Add (Num x) (Num y)) (Num (+ x y)))
+
+(define r1 (Var "r1"))
+(define r2 (Var "r2"))
+(define r3 (Var "r3"))
+(define mem1 (AVar "mem1"))
+
+(assert (neq r1 r2))
+(assert (neq r2 r3))
+(assert (neq r1 r3))
+(define test1  (select (store mem1 r1 (Num 42)) r1))
+(define test2  (select (store mem1 r1 (Num 42)) (Add r1 (Num 17))))
+(define test3  (select (store (store mem1 (Add r1 r2) (Num 1)) (Add r2 r1) (Num 2)) (Add r1 r3)))
+
+(run 3)
+(check (= test1 (Num 42)))
+(extract test2)
+(extract test3)
+
+
+
