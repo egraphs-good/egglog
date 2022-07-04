@@ -21,6 +21,16 @@ List<T>: Vec<T> = {
     "(" <T*> ")" => <>,
 }
 
+Comma<T>: Vec<T> = {
+    <mut v:(<T> ",")*> <e:T?> => match e {
+        None => v,
+        Some(e) => {
+            v.push(e);
+            v
+        }
+    }
+};
+
 Command: Command = {
     "(" "datatype" <name:Ident> <variants:(Variant)*> ")" => Command::Datatype { <> },
     "(" "function" <name:Ident> <schema:Schema> ")" => Command::Function(FunctionDecl { name, schema }),
@@ -32,6 +42,22 @@ Command: Command = {
     "(" "run" <Num> ")" => Command::Run(<>.try_into().unwrap()),
     "(" "extract" <Expr> ")" => Command::Extract(<>),
     "(" "check" <Fact> ")" => Command::Check(<>),
+    "(" "dl" <Datalog> ")" => <>
+}
+
+Datalog : Command = {
+    <DLFact> "." => Command::Fact(<>),
+    <head:Comma<DLFact>> ":-" <body:Comma<DLFact>> "." => Command::Rule(Rule {head, body})
+}
+
+DLFact : Fact = {
+    <DLExpr> => Fact::Fact(<>)
+}
+
+DLExpr : Expr = {
+    <Literal> => Expr::Lit(<>),
+    <Ident> => Expr::Var(<>),
+    <f:Ident> "(" <args:Comma<DLExpr>> ")" => Expr::Call(f, args)
 }
 
 Name: Symbol = { "[" <Ident> "]" => <> }
