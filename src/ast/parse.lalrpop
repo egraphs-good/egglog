@@ -42,10 +42,10 @@ Command: Command = {
     "(" "run" <Num> ")" => Command::Run(<>.try_into().unwrap()),
     "(" "extract" <Expr> ")" => Command::Extract(<>),
     "(" "check" <Fact> ")" => Command::Check(<>),
-    "(" "dl" <Datalog> ")" => <>
+    "(" "dl" <DLCommand> ")" => <>
 }
 
-Datalog : Command = {
+DLCommand : Command = {
     <DLFact> "." => Command::Fact(<>),
     <head:Comma<DLFact>> ":-" <body:Comma<DLFact>> "." => Command::Rule(Rule {head, body})
 }
