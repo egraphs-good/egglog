@@ -85,6 +85,7 @@ pub enum InputType {
 pub enum NumType {
     // F64,
     I64,
+    Rational,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -109,6 +110,7 @@ impl Display for NumType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             NumType::I64 => write!(f, "i64"),
+            NumType::Rational => write!(f, "rational"),
         }
     }
 }

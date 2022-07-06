@@ -18,6 +18,7 @@ pub use value::*;
 use gj::*;
 use unionfind::*;
 use util::*;
+use num_rational::BigRational;
 
 use crate::typecheck::TypeError;
 
@@ -70,7 +71,12 @@ impl Function {
                         OutputType::Min(NumType::I64) => i64::min(old.into(), value.into()).into(),
                         // we use 0 for unit
                         OutputType::Unit => 0.into(),
+                        // we use 0 for unit
                         // OutputType::Min(NumType::F64) => f64::min(old.into(), value.into()).into(),
+                        OutputType::Max(NumType::Rational) => 
+                            std::cmp::max(BigRational::from(old), BigRational::from(value)).into(),
+                        OutputType::Min(NumType::Rational) => 
+                            std::cmp::min(BigRational::from(old), BigRational::from(value)).into(),
                     };
                     // if self.schema.output.is_sort() {
                     //     uf.union_values(old, value)
