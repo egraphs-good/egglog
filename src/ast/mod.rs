@@ -60,7 +60,11 @@ pub enum Command {
     Extract(Expr),
     // TODO: this could just become an empty query
     Check(Fact),
+<<<<<<< HEAD
     ClearRules,
+=======
+    Query(Vec<Fact>),
+>>>>>>> eeb9f51... initial attempt at adding query command
 }
 
 #[derive(Clone, Debug)]
