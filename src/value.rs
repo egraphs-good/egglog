@@ -4,6 +4,7 @@ use num_rational::BigRational;
 use crate::{
     ast::{Literal, Symbol},
     Id,
+    InputType, NumType,
 };
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
@@ -43,6 +44,16 @@ impl Value {
             ValueInner::I64(i) => Literal::Int(*i),
             ValueInner::String(s) => Literal::String(*s),
             ValueInner::Rational(r) => Literal::Rational(r.clone()),
+        }
+    }
+
+    pub fn get_type(&self) -> InputType {
+        match &self.0 {
+            ValueInner::Bool(_) => todo!(),
+            ValueInner::Id(_) => panic!("Does't know the type of id without context"),
+            ValueInner::I64(_) => InputType::NumType(NumType::I64),
+            ValueInner::String(_) => InputType::String,
+            ValueInner::Rational(_) => InputType::NumType(NumType::Rational),
         }
     }
 }
