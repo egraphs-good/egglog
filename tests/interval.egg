@@ -1,10 +1,10 @@
 (datatype Math
-  (Num i64)
+  (Num rational)
   (Var String)
   (Mul Math Math))
 
-(function hi (Math) (Min i64))
-(function lo (Math) (Max i64))
+(function hi (Math) (Min rational))
+(function lo (Math) (Max rational))
 
 (rule ((= mul (Mul a b)))
       ((= (lo mul) 
@@ -14,15 +14,15 @@
 (define x (Var "x"))
 (define e (Mul x x))
 
-(assert (= (lo x) -10))
-(assert (= (hi x)  10))
+(assert (= (lo x) -10//1))
+(assert (= (hi x)  10//1))
 
 (run 1)
 
-(check (= (lo e) -100))
+(check (= (lo e) -100//1))
 
 (rule ((= mul (Mul a a)))
       ((= (lo mul) (* (lo a) (lo a)))))
 
 (run 1)
-(check (= (lo e) 100))
+(check (= (lo e) 100//1))

@@ -16,6 +16,7 @@ use std::hash::Hash;
 pub use value::*;
 
 use gj::*;
+use num_rational::BigRational;
 use unionfind::*;
 use util::*;
 
@@ -70,7 +71,14 @@ impl Function {
                         OutputType::Min(NumType::I64) => i64::min(old.into(), value.into()).into(),
                         // we use 0 for unit
                         OutputType::Unit => 0.into(),
+                        // we use 0 for unit
                         // OutputType::Min(NumType::F64) => f64::min(old.into(), value.into()).into(),
+                        OutputType::Max(NumType::Rational) => {
+                            std::cmp::max(BigRational::from(old), BigRational::from(value)).into()
+                        }
+                        OutputType::Min(NumType::Rational) => {
+                            std::cmp::min(BigRational::from(old), BigRational::from(value)).into()
+                        }
                     };
                     // if self.schema.output.is_sort() {
                     //     uf.union_values(old, value)
@@ -135,9 +143,23 @@ pub struct Primitive {
     f: fn(&[Value]) -> Value,
 }
 
-fn default_primitives() -> HashMap<Symbol, Primitive> {
+impl Primitive {
+    pub fn accept(&self, values: &[Value]) -> bool {
+        self.input
+            .iter()
+            .zip(values.iter())
+            .all(|(t, v)| matches!(v.get_type(), InputType::NumType(t1) if &t1 == t))
+    }
+
+    pub fn apply(&self, values: &[Value]) -> Value {
+        (self.f)(values)
+    }
+}
+
+fn default_primitives() -> HashMap<Symbol, Vec<Primitive>> {
     macro_rules! prim {
         (@type I64) => { i64 };
+        (@type Rational) => { BigRational };
         (|$($param:ident : $t:ident),*| -> $output:ident { $body:expr }) => {
             Primitive {
                 input: vec![$(NumType::$t),*],
@@ -154,11 +176,41 @@ fn default_primitives() -> HashMap<Symbol, Primitive> {
     }
 
     [
-        ("+", prim!(|a: I64, b: I64| -> I64 { a + b })),
-        ("-", prim!(|a: I64, b: I64| -> I64 { a - b })),
-        ("*", prim!(|a: I64, b: I64| -> I64 { a * b })),
-        ("max", prim!(|a: I64, b: I64| -> I64 { a.max(b) })),
-        ("min", prim!(|a: I64, b: I64| -> I64 { a.min(b) })),
+        (
+            "+",
+            vec![
+                prim!(|a: I64, b: I64| -> I64 { a + b }),
+                prim!(|a: Rational, b: Rational| -> Rational { a + b }),
+            ],
+        ),
+        (
+            "-",
+            vec![
+                prim!(|a: I64, b: I64| -> I64 { a - b }),
+                prim!(|a: Rational, b: Rational| -> Rational { a - b }),
+            ],
+        ),
+        (
+            "*",
+            vec![
+                prim!(|a: I64, b: I64| -> I64 { a * b }),
+                prim!(|a: Rational, b: Rational| -> Rational { a * b }),
+            ],
+        ),
+        (
+            "max",
+            vec![
+                prim!(|a: I64, b: I64| -> I64 { a.max(b) }),
+                prim!(|a: Rational, b: Rational| -> Rational { a.max(b) }),
+            ],
+        ),
+        (
+            "min",
+            vec![
+                prim!(|a: I64, b: I64| -> I64 { a.min(b) }),
+                prim!(|a: Rational, b: Rational| -> Rational { a.min(b) }),
+            ],
+        ),
     ]
     .into_iter()
     .map(|(k, v)| (Symbol::from(k), v))
@@ -169,7 +221,7 @@ fn default_primitives() -> HashMap<Symbol, Primitive> {
 pub struct EGraph {
     unionfind: UnionFind,
     sorts: HashMap<Symbol, Vec<Symbol>>,
-    primitives: HashMap<Symbol, Primitive>,
+    primitives: HashMap<Symbol, Vec<Primitive>>,
     functions: HashMap<Symbol, Function>,
     rules: HashMap<Symbol, Rule>,
     globals: HashMap<Symbol, Value>,
@@ -447,8 +499,18 @@ impl EGraph {
                 if let Some(rel) = self.functions.get_mut(op) {
                     rel.get(&mut self.unionfind, &values)
                         .ok_or_else(|| NotFoundError(expr.clone()))
-                } else if let Some(prim) = self.primitives.get(op) {
-                    Ok((prim.f)(&values))
+                } else if let Some(prims) = self.primitives.get(op) {
+                    let mut res = None;
+                    for prim in prims.iter() {
+                        if prim.accept(&values) {
+                            if res.is_none() {
+                                res = Some(prim.apply(&values));
+                            } else {
+                                panic!("multiple implementation matches primitives {op}");
+                            }
+                        }
+                    }
+                    res.ok_or_else(|| NotFoundError(expr.clone()))
                 } else {
                     panic!("Couldn't find function/primitive: {op}")
                 }

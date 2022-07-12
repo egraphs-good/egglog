@@ -1,5 +1,6 @@
 use crate::ast::*;
 use crate::Symbol;
+use num_rational::BigRational;
 
 grammar;
 
@@ -83,6 +84,7 @@ Expr: Expr = {
 
 Literal: Literal = {
     <Num> => Literal::Int(<>),
+    <numer:Num> "//" <denom:Num> => Literal::Rational(BigRational::new(numer.into(), denom.into())),
     <SymString> => Literal::String(<>),
 }
 
@@ -104,6 +106,7 @@ InputType: InputType = {
 
 NumType: NumType = {
     "i64" => NumType::I64,
+    "rational" => NumType::Rational,
     <s:reserved> =>? lalrpop_error!("{} is reserved.", s)
     // "f64" => NumType::F64,
 }

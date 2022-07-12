@@ -164,6 +164,7 @@ impl<'a> QueryBuilder<'a> {
                 let ty = Some(match lit {
                     Literal::Int(_) => OutputType::Type(InputType::NumType(NumType::I64)),
                     Literal::String(_) => OutputType::Type(InputType::String),
+                    Literal::Rational(_) => OutputType::Type(InputType::NumType(NumType::Rational)),
                 });
                 self.add_node(ENode::Literal(lit.clone()), Info { ty, expr })
             }
