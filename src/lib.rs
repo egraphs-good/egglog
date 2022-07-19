@@ -592,6 +592,10 @@ impl EGraph {
         self.add_rule_with_name(name, rule)
     }
 
+    pub fn clear_rules(&mut self) {
+        self.rules = Default::default();
+    }
+
     pub fn add_rewrite(&mut self, rewrite: ast::Rewrite) -> Result<Symbol, Error> {
         let name = format!("{} -> {}", rewrite.lhs, rewrite.rhs);
         let var = Symbol::from("__rewrite_var");
@@ -686,6 +690,10 @@ impl EGraph {
                 } else {
                     format!("Skipping define {name}")
                 }
+            }
+            Command::ClearRules => {
+                self.clear_rules();
+                "Clearing rules.".into()
             }
         })
     }
