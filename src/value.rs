@@ -1,10 +1,9 @@
-use std::fmt::Display;
 use num_rational::BigRational;
+use std::fmt::Display;
 
 use crate::{
     ast::{Literal, Symbol},
-    Id,
-    InputType, NumType,
+    Id, InputType, NumType,
 };
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]

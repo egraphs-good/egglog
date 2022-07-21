@@ -11,7 +11,6 @@ use thiserror::Error;
 
 use ast::*;
 use std::fmt::Debug;
-use std::fmt::Write;
 use std::hash::Hash;
 
 pub use value::*;
@@ -759,12 +758,11 @@ impl EGraph {
                 "Clearing rules.".into()
             }
             Command::Query(q) => {
-                let mut msg = String::new();
-                write!(msg, "Query: (");
-                for fact in &q {
-                    write!(msg, "{}", fact).unwrap_or_else(|_| panic!("Could not print query"));
-                }
-                write!(msg, ")\n");
+                let qsexp = sexp::Sexp::List(
+                    q.iter()
+                        .map(|fact| sexp::parse(&fact.to_string()).unwrap())
+                        .collect(),
+                );
                 let qcomp = self
                     .compile_query(q)
                     .unwrap_or_else(|_| panic!("Could not compile query"));
@@ -776,14 +774,12 @@ impl EGraph {
                             .collect(),
                     ));
                 });
-                write!(
-                    msg,
-                    "  Bindings: {:?}\n  Results: {}",
+                format!(
+                    "Query: {}\n  Bindings: {:?}\n  Results: {}",
+                    qsexp,
                     qcomp,
                     sexp::Sexp::List(res)
                 )
-                .unwrap_or_else(|_| panic!("Could not print query"));
-                msg
             }
         })
     }
