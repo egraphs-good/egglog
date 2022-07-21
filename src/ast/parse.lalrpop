@@ -53,6 +53,7 @@ DLCommand : Command = {
 }
 
 DLFact : Fact = {
+    <a:DLExpr> "=" <b:DLExpr> => Fact::Eq(vec![a,b]),
     <DLExpr> => Fact::Fact(<>)
 }
 
