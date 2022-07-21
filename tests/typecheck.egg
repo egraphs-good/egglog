@@ -1,0 +1,99 @@
+; type checking for simply typed lambda calculus
+
+(datatype Type 
+  (TUnit) 
+  (TArr Type Type) ; t1 -> t2
+)
+
+(rule ( ; injectivity of ->
+  (= (TArr fr1 to1) (TArr fr2 to2))
+)(
+  (= fr1 fr2) (= to1 to2))
+)
+
+(datatype Expr 
+  (Lam String Type Expr) ; lam x : t . e
+  (App Expr Expr) 
+  (Var String) 
+  (Unit)
+)
+
+(datatype Ctx 
+  (Nil) 
+  (Cons String Type Ctx)
+)
+
+; ctx |- expr : type
+(function typeof (Ctx Expr) Type)
+
+; ctx |- () : unit
+(rewrite (typeof ctx (Unit)) (TUnit))
+
+; ctx; x: t |- x : t
+(rewrite (typeof (Cons x t ctx) (Var x)) t)
+
+; ctx |- e1 :- t1 -> t2
+; ctx |- e2 : t1
+; -----------------
+; ctx |- e1 e2 : t2
+
+(rule ( ; creating demand to check ctx |- x : t
+  (= (typeof (Cons y ty ctx) vx) t)
+  (= vx (Var x))
+  (!= x y)
+)(
+  (= (typeof ctx vx) (typeof ctx vx))
+))
+
+(rule ( ; only check ctx; y: t |- x : t that has a demand
+    (= (typeof ctx xv) t1)
+    (= (typeof (Cons y ty ctx) xv) t2)
+    (= xv (Var x))
+    (!= x y)
+)(
+    (= t1 t2)
+))
+
+; ctx |- x : t
+; ------------------ y != x 
+; ctx; y: t |- x : t
+(rule ( ; creating demand to check ctx |- x : t
+  (= (typeof (Cons y ty ctx) x) t)
+  ; (!= x y) TODO disequality not supported yet
+)(
+  (= (typeof ctx x) (typeof ctx x))
+))
+
+(rule ( ; only check ctx; y: t |- x : t that has a demand
+    (= (typeof ctx x) t1)
+    (= (typeof (Cons y ty ctx) x) t2)
+    ; (!= x y) TODO disequality not supported yet
+)(
+    (= t1 t2)
+))
+
+; ctx; x: t1 |- e : t2
+; ------------------------------
+; ctx |- lam x: t1. e : t1 -> t2
+
+; rhs of rewrite creates demand
+(rewrite (typeof ctx (Lam x t1 e)) (TArr t1 (typeof (Cons x t1 ctx) e)))
+
+; TEST
+; ----
+
+; lam x : unit, f : unit -> unit . f x
+(define e 
+  (Lam "x" (TUnit) 
+       (Lam "f" (TArr (TUnit) (TUnit))
+            (App (Var "f") (Var "x")))))
+
+; lam x : unit . x
+(define id (Lam "x" (TUnit) (Var "x")))
+
+; (e () id) = ()
+(define t (typeof (Nil) (App (App e (Unit)) id)))
+
+(run 15)
+
+(check (= t (TUnit)))
