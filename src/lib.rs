@@ -757,6 +757,30 @@ impl EGraph {
                 self.clear_rules();
                 "Clearing rules.".into()
             }
+            Command::Query(q) => {
+                let qsexp = sexp::Sexp::List(
+                    q.iter()
+                        .map(|fact| sexp::parse(&fact.to_string()).unwrap())
+                        .collect(),
+                );
+                let qcomp = self
+                    .compile_query(q)
+                    .unwrap_or_else(|_| panic!("Could not compile query"));
+                let mut res = vec![];
+                self.query(&qcomp, |v| {
+                    res.push(sexp::Sexp::List(
+                        v.iter()
+                            .map(|val| sexp::Sexp::Atom(sexp::Atom::S(format!("{}", val))))
+                            .collect(),
+                    ));
+                });
+                format!(
+                    "Query: {}\n  Bindings: {:?}\n  Results: {}",
+                    qsexp,
+                    qcomp,
+                    sexp::Sexp::List(res)
+                )
+            }
         })
     }
 
