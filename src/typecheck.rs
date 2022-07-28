@@ -25,8 +25,8 @@ pub enum TypeError {
     FunctionAlreadyBound(Symbol),
     #[error("Cannot type a variable as unit: {0}")]
     UnitVar(Symbol),
-    #[error("Failed to infer a type for variable: {0}")]
-    InferenceFailure(Symbol),
+    #[error("Failed to infer a type for expression: {0}")]
+    InferenceFailure(Expr),
 }
 
 #[derive(Debug, Hash, PartialEq, Eq)]
@@ -187,23 +187,58 @@ impl<'a> QueryBuilder<'a> {
                             expected: f.schema.input.len(),
                         });
                     }
+
+                    // if we haven't pushed type constrainted arguments,
+                    // add some fake stuff for now
+                    if ids.len() != args.len() {
+                        assert!(ids.is_empty());
+                        for arg in args {
+                            ids.push(self.add_expr(arg));
+                        }
+                    }
+                    assert_eq!(ids.len(), args.len());
+    
                     Some(f.schema.output.clone())
+                } else if let Some(preds) = self.egraph.predicates.get(sym) {
+                    // We assume the type of arguments is known at the time of inference.
+                    // This type inference algorithm should be refactored in the future.
+                    let mut inptypes = vec![];
+                    let mut failed = false;
+                    for arg in args {
+                        let id = self.add_expr(arg);
+                        ids.push(id);
+                        if let Some(ty) = self.unionfind.get_value(id).ty.clone() {
+                            inptypes.push(ty);
+                        } else {
+                            self.errors.push(TypeError::InferenceFailure(arg.clone()));
+                            failed = true;
+                        }
+                    }
+                    if failed {
+                        None
+                    } else {
+                        let mut res = None;
+                        for pred in preds {
+                            if pred.args.len() != inptypes.len() {
+                                continue;
+                            }
+                            if pred.args.iter().zip(inptypes.iter()).all(|(t1, t2)| match t2 {
+                                OutputType::Type(t2) => t1 == t2,
+                                _ => false
+                            }) {
+                                res = Some(OutputType::Unit);
+                                break;
+                            }
+                        }
+                        res
+                    }
                 } else {
                     self.errors.push(TypeError::Unbound(*sym));
                     None
                 };
-
-                // if we haven't pushed type constrainted arguments,
-                // add some fake stuff for now
-                if ids.len() != args.len() {
-                    assert!(ids.is_empty());
-                    for arg in args {
-                        ids.push(self.add_expr(arg));
-                    }
-                }
-                assert_eq!(ids.len(), args.len());
-
-                self.add_node(ENode::Node(*sym, ids), Info { ty, expr })
+                let enode = ENode::Node(*sym, ids);
+                log::info!("add enode {:?}", enode);
+                self.add_node(enode, Info { ty, expr })
             }
         }
     }
@@ -277,7 +312,7 @@ impl EGraph {
                     }
                     ty
                 } else {
-                    builder.errors.push(TypeError::InferenceFailure(var));
+                    builder.errors.push(TypeError::InferenceFailure(Expr::Var(var)));
                     OutputType::Unit
                 };
                 query.bindings.insert(var, atomterm.clone());
@@ -288,7 +323,10 @@ impl EGraph {
                     .iter()
                     .map(|c| classes[c].atomterm.clone().unwrap())
                     .collect();
-                terms.push(atomterm.clone());
+                // predicates "relations" do not have the output column.
+                if !self.predicates.contains_key(sym) {
+                    terms.push(atomterm.clone());
+                }
                 query.atoms.push(Atom(*sym, terms))
             }
         }

@@ -53,6 +53,7 @@ pub struct CompiledQuery {
     atoms: Vec<Atom>,
     var_order: Vec<IndexVar>,
     occurences: VarOccurences,
+    buffer_size: usize,
 }
 
 impl EGraph {
@@ -71,11 +72,13 @@ impl EGraph {
             }
         }
 
-        for (v, occs) in occurences.iter().enumerate() {
-            assert!(!occs.is_empty(), "var {} has no occurences", v)
-        }
+        // for (v, occs) in occurences.iter().enumerate() {
+        //     assert!(!occs.is_empty(), "var {} has no occurences", v)
+        // }
 
-        let mut var_order: Vec<IndexVar> = (0..n_vars).collect();
+        let mut var_order: Vec<IndexVar> = (0..n_vars)
+            .filter(|i| !occurences[*i].is_empty())
+            .collect();
 
         // simple variable ordering for now
         var_order.sort_unstable_by_key(|&v| -(occurences[v].len() as i32));
@@ -84,6 +87,7 @@ impl EGraph {
             atoms: atoms.into(),
             var_order,
             occurences,
+            buffer_size: n_vars,
         }
     }
 
@@ -152,7 +156,7 @@ impl EGraph {
 
         let tries: Vec<&Trie> = tries.iter().collect();
 
-        let tuple = vec![Value::fake(); query.var_order.len()];
+        let tuple = vec![Value::fake(); query.buffer_size];
         self.gj(0, query, &mut f, &tuple, &tries);
     }
 
