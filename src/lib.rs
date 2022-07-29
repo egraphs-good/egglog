@@ -5,7 +5,6 @@ mod typecheck;
 mod unionfind;
 mod util;
 mod value;
-mod back;
 
 use hashbrown::hash_map::Entry;
 use thiserror::Error;
@@ -20,8 +19,6 @@ use gj::*;
 use num_rational::BigRational;
 use unionfind::*;
 use util::*;
-use back::index::*;
-use bimap::BiMap;
 
 use crate::typecheck::TypeError;
 
@@ -139,63 +136,6 @@ impl Function {
 pub type Subst = IndexMap<Symbol, Value>;
 
 #[derive(Clone)]
-pub struct Predicate {
-    args: Vec<InputType>,
-    f: fn(&[Value]) -> bool,
-}
-
-// Redundant code (see primitive)
-impl Predicate {
-    pub fn accept(&self, values: &[Value]) -> bool {
-        self.args
-            .iter()
-            .zip(values.iter())
-            .all(|(t, v)| &v.get_type() == t)
-    }
-
-    pub fn apply(&self, values: &[Value]) -> bool {
-        (self.f)(values)
-    }
-}
-
-fn default_predicates() -> HashMap<Symbol, Vec<Predicate>> {
-    macro_rules! pred {
-        (@inptype I64) => { InputType::NumType(NumType::I64) };
-        (@inptype Rational) => { InputType::NumType(NumType::Rational) };
-        (@inptype String) => { InputType::String };
-        (@type I64) => { i64 };
-        (@type Rational) => { BigRational };
-        (@type String) => { Symbol };
-        (|$($param:ident : $t:ident),*| { $body:expr }) => {
-            Predicate {
-                args: vec![$(pred!(@inptype $t)),*],
-                f: |values: &[Value]| -> bool {
-                    let mut values = values.iter();
-                    $(
-                        let $param: pred!(@type $t) = values.next().unwrap().clone().into();
-                    )*
-                    $body
-                }
-            }
-        };
-    }
-
-    [
-        (
-            "!=",
-            vec![
-                pred!(|a: String, b: String| { a != b }),
-                pred!(|a: I64, b: I64| { a != b }),
-                pred!(|a: Rational, b: Rational| { a != b }),
-            ],
-        ),
-    ]
-    .into_iter()
-    .map(|(k, v)| (Symbol::from(k), v))
-    .collect()
-}
-
-#[derive(Clone)]
 #[allow(dead_code)]
 pub struct Primitive {
     input: Vec<NumType>,
@@ -277,19 +217,14 @@ fn default_primitives() -> HashMap<Symbol, Vec<Primitive>> {
     .collect()
 }
 
-pub type DictEncoding = BiMap<Value, DenseValue>;
-
 #[derive(Clone)]
 pub struct EGraph {
     unionfind: UnionFind,
     sorts: HashMap<Symbol, Vec<Symbol>>,
     primitives: HashMap<Symbol, Vec<Primitive>>,
-    predicates: HashMap<Symbol, Vec<Predicate>>,
     functions: HashMap<Symbol, Function>,
     rules: HashMap<Symbol, Rule>,
     globals: HashMap<Symbol, Value>,
-    indices: HashMap<IdxName, Trie>,
-    dict_encoding: DictEncoding,
 }
 
 #[derive(Clone, Debug)]
@@ -307,9 +242,6 @@ impl Default for EGraph {
             rules: Default::default(),
             globals: Default::default(),
             primitives: default_primitives(),
-            predicates: default_predicates(),
-            indices: todo!(),
-            dict_encoding: Default::default(),
         }
     }
 }
@@ -319,14 +251,6 @@ impl Default for EGraph {
 pub struct NotFoundError(Expr);
 
 impl EGraph {
-    pub fn get_index(&self, idx_name: &IdxName) -> &Trie {
-        todo!()
-    }
-
-    pub fn get_index_mut(&self, idx_name: &IdxName) -> &mut Trie {
-        todo!()
-    }
-
     pub fn union(&mut self, id1: Id, id2: Id) -> Id {
         self.unionfind.union(id1, id2)
     }
@@ -623,54 +547,9 @@ impl EGraph {
         }
     }
 
-    fn eval_predicate(&self, pred_atom: &Atom, values: &[Value]) -> bool {
-        let args: Vec<_> = pred_atom.1.iter().map(|t| match t {
-            AtomTerm::Var(v) => values[*v].clone(),
-            AtomTerm::Value(v) => v.clone(),
-        }).collect();
-        
-        let symbol = pred_atom.0;
-        let preds = self.predicates.get(&symbol).expect("predicates {symbol1} not found");
-        let mut res = None;
-        for pred in preds.iter() {
-            if pred.accept(&args) {
-                if res.is_none() {
-                    res = Some(pred.apply(&args));
-                } else {
-                    panic!("multiple implementation matches predicate {symbol}");
-                }
-            }
-        }
-        res.expect("no implementation matches predicate {symbol}")
-    }
-
-    fn query(&self, query: &Query, mut callback: impl FnMut(Subst)) {
-        let (preds, atoms): (Vec<_>, Vec<_>) = query
-            .atoms
-            .iter()
-            .cloned()
-            .partition(|atom| self.predicates.contains_key(&atom.0));
-
-        let compiled_query = self.compile_gj_query(&atoms);
-        self.run_query(&compiled_query, |values| {
-            if !preds.iter().all(|pred| self.eval_predicate(pred, values)) {
-                return;
-            }
-
-            let get = |a: &AtomTerm| -> Value {
-                match a {
-                    AtomTerm::Var(i) => values[*i].clone(),
-                    AtomTerm::Value(val) => val.clone(),
-                }
-            };
-            let subst: Subst = query
-                .bindings
-                .iter()
-                .map(|(sym, a)| (*sym, get(a)))
-                .collect();
-
-            callback(subst)
-        });
+    fn query(&self, query: &Query, callback: impl FnMut(&[Value])) {
+        let compiled_query = self.compile_gj_query(&query.atoms);
+        self.run_query(&compiled_query, callback)
     }
 
     // fn apply(&mut self, actions: &[Action], subst: &Subst) -> Result<(), NotFoundError> {
@@ -726,8 +605,20 @@ impl EGraph {
             .values()
             .map(|rule| {
                 let mut substs = Vec::<Subst>::new();
-                self.query(&rule.query, |subst| {
-                    substs.push(subst);
+                self.query(&rule.query, |values| {
+                    let get = |a: &AtomTerm| -> Value {
+                        match a {
+                            AtomTerm::Var(i) => values[*i].clone(),
+                            AtomTerm::Value(val) => val.clone(),
+                        }
+                    };
+                    substs.push(
+                        rule.query
+                            .bindings
+                            .iter()
+                            .map(|(sym, a)| (*sym, get(a)))
+                            .collect(),
+                    )
                 });
                 substs
             })
@@ -879,7 +770,7 @@ impl EGraph {
                 self.query(&qcomp, |v| {
                     res.push(sexp::Sexp::List(
                         v.iter()
-                            .map(|val| sexp::Sexp::Atom(sexp::Atom::S(format!("{:?}", val))))
+                            .map(|val| sexp::Sexp::Atom(sexp::Atom::S(format!("{}", val))))
                             .collect(),
                     ));
                 });

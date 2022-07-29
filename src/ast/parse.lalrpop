@@ -126,5 +126,5 @@ Bool: bool = {
     "false" => false,
 }
 Ident: Symbol = <s:r"[[:alpha:]][\w-]*"> => s.parse().unwrap();
-PrimitiveSymbol: Symbol = <r"[!+*/-][=!+*/-]+"> => Symbol::from(<>);
+PrimitiveSymbol: Symbol = <r"[+*/-]"> => Symbol::from(<>);
 SymString: Symbol = <r#""[^"]*""#> => Symbol::from(<>);
