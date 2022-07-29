@@ -1,0 +1,50 @@
+(datatype Math
+  (Num i64)
+  (Var String)
+  (Add Math Math))
+
+(define start (Add (Num 18) (Add (Num 17) (Add (Num 3) (Add (Num 4) (Var 42))))))
+(define goal  (Add (Num 7) (Var 42)))
+
+(function depth (Math) (Min i64))
+
+(rewrite (Add x y) (Add y x))
+(rewrite (Add (Add x y) z) (Add x (Add y z)))
+(rewrite (Add (Num x) (Num y)) (Num (+ x y)))
+
+(rule ((= e (Num x)))  ((= (depth e) 0)))
+(rule ((= e (Var x)))  ((= (depth e) 0)))
+(rule ((= z (Add x y)) (= dx (depth x)) (= dy (depth y)))  
+    ((= (depth z) (+ 1 (max dx dy)) )))
+
+(run 3)
+(extract (Num 4))
+(check (= 0 (depth (Num 4))))
+
+
+;(query ((= e (Num x)) (= d (depth e))))
+;(query ((= e (Add x y)) (= d (depth e))))
+;(query ((= t (Add x y))))
+
+(clear-rules)
+
+(datatype EMath
+  (ENum i64)
+  (EVar String)
+  (EAdd Math Math))
+
+; The idea here is to copy over exactly the terms that satruate the depth bound
+; These can then be printed using the ordinary extraction facilities
+
+(relation bestdepth (Math EMath))
+
+(rule ((= e (Num x)))  ((bestdepth e (ENum x))))
+(rule ((= e (Var x)))  ((bestdepth e (EVar x))))
+(rule ((= t (Add x y)) 
+       (bestdepth x ex) (bestdepth y ey)
+       (= (depth t) (+ 1 (max (depth x) (depth y)))))
+      ((bestdepth t (EAdd ex ey))))
+
+(run 3)
+; Hmm going to need something like this
+;(extract ((bestdepth start e)))
