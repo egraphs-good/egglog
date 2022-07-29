@@ -30,12 +30,6 @@ pub type IndexVar = usize;
 struct Trie(HashMap<Value, Self>);
 
 impl Trie {
-    fn len(&self) -> usize {
-        self.0.len()
-    }
-}
-
-impl Trie {
     fn insert(&mut self, shuffle: &[usize], tuple: &[Value]) {
         // debug_assert_eq!(shuffle.len(), tuple.len());
         debug_assert!(shuffle.len() <= tuple.len());

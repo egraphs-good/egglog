@@ -5,6 +5,7 @@ mod typecheck;
 mod unionfind;
 mod util;
 mod value;
+mod back;
 
 use hashbrown::hash_map::Entry;
 use thiserror::Error;
@@ -19,6 +20,8 @@ use gj::*;
 use num_rational::BigRational;
 use unionfind::*;
 use util::*;
+use back::index::*;
+use bimap::BiMap;
 
 use crate::typecheck::TypeError;
 
@@ -274,6 +277,8 @@ fn default_primitives() -> HashMap<Symbol, Vec<Primitive>> {
     .collect()
 }
 
+pub type DictEncoding = BiMap<Value, DenseValue>;
+
 #[derive(Clone)]
 pub struct EGraph {
     unionfind: UnionFind,
@@ -283,6 +288,8 @@ pub struct EGraph {
     functions: HashMap<Symbol, Function>,
     rules: HashMap<Symbol, Rule>,
     globals: HashMap<Symbol, Value>,
+    indices: HashMap<IdxName, Trie>,
+    dict_encoding: DictEncoding,
 }
 
 #[derive(Clone, Debug)]
@@ -301,6 +308,8 @@ impl Default for EGraph {
             globals: Default::default(),
             primitives: default_primitives(),
             predicates: default_predicates(),
+            indices: todo!(),
+            dict_encoding: Default::default(),
         }
     }
 }
@@ -310,6 +319,14 @@ impl Default for EGraph {
 pub struct NotFoundError(Expr);
 
 impl EGraph {
+    pub fn get_index(&self, idx_name: &IdxName) -> &Trie {
+        todo!()
+    }
+
+    pub fn get_index_mut(&self, idx_name: &IdxName) -> &mut Trie {
+        todo!()
+    }
+
     pub fn union(&mut self, id1: Id, id2: Id) -> Id {
         self.unionfind.union(id1, id2)
     }
@@ -862,7 +879,7 @@ impl EGraph {
                 self.query(&qcomp, |v| {
                     res.push(sexp::Sexp::List(
                         v.iter()
-                            .map(|val| sexp::Sexp::Atom(sexp::Atom::S(format!("{}", val))))
+                            .map(|val| sexp::Sexp::Atom(sexp::Atom::S(format!("{:?}", val))))
                             .collect(),
                     ));
                 });
