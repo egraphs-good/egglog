@@ -1,0 +1,61 @@
+
+; Identifiers represented as strings, keep some newtypes around to aid clarity
+(datatype Class (Class String))
+(datatype Field (Field String))
+
+(datatype Stmt
+    (New String Class)
+    ; Assign dst src
+    (Assign String String)
+    ; Store dst field src
+    (Store String Field String)
+    ; Load dst src field
+    (Load String String Field))
+
+(relation VarPointsTo (String Class))
+(relation HeapPointsTo (Class Field Class))
+
+
+; New variables point to classes they're initialized as
+(rule ((= x (New a b))) ((VarPointsTo a b)))
+
+; If I assign v1 <- v2 and v2 points to a class c2, then v1 points to class c2
+; as well
+(rule ((= x (Assign v1 v2)) (VarPointsTo v2 c2))
+      ((VarPointsTo v1 c2)))
+
+; If c1.f points to c2, and v2 points to class c1, then assigning v1 <- v2.f
+; means v1 points to c2
+(rule ((= x (Load v1 v2 f)) 
+       (VarPointsTo v2 c1)
+       (HeapPointsTo c1 f c2))
+      ((VarPointsTo v1 v2)))
+
+; If v1 points to class c1, and v2 to c2, and if v1.f <- v2, then c1.f points to
+; c2
+(rule ((= x (Store v1 f v2))
+       (VarPointsTo v1 c1)
+       (VarPointsTo v2 c2))
+      ((HeapPointsTo c1 f c2)))
+
+; Example in "From Datalog to Flix"
+; l1 ClassA o1 = new ClassA();
+; l2 ClassB o2 = new ClassB();
+; l3 ClassB o3 = o2;
+; l4 o2.f = o1;
+; l5 Object r = o3.f;
+
+(define A (Class "A"))
+(define B (Class "B"))
+(define f (Field "f"))
+
+(define l1 (New "o1" A))
+(define l2 (New "o2" B))
+(define l3 (Assign "o3" "o2"))
+(define l4 (Store "o2" f "o2"))
+(define l5 (Load "r" "o3" f))
+
+(run 3)
+
+(check (VarPointsTo "o1" A))
+(check (VarPointsTo "r" A))
