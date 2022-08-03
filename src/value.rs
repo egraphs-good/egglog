@@ -3,7 +3,7 @@ use std::fmt::Display;
 
 use crate::{
     ast::{Literal, Symbol},
-    Id, InputType, NumType,
+    Id, NumType, Type,
 };
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
@@ -12,6 +12,7 @@ pub struct Value(pub ValueInner);
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
 pub enum ValueInner {
+    Unit,
     Bool(bool),
     Id(Id),
     I64(i64),
@@ -27,6 +28,7 @@ impl Display for Value {
             ValueInner::I64(i) => i.fmt(f),
             ValueInner::String(s) => write!(f, "\"{s}\""),
             ValueInner::Rational(r) => r.fmt(f),
+            ValueInner::Unit => write!(f, "()"),
         }
     }
 }
@@ -43,16 +45,18 @@ impl Value {
             ValueInner::I64(i) => Literal::Int(*i),
             ValueInner::String(s) => Literal::String(*s),
             ValueInner::Rational(r) => Literal::Rational(r.clone()),
+            ValueInner::Unit => Literal::Unit,
         }
     }
 
-    pub fn get_type(&self) -> InputType {
+    pub fn get_type(&self) -> Type {
         match &self.0 {
             ValueInner::Bool(_) => todo!(),
             ValueInner::Id(_) => panic!("Does't know the type of id without context"),
-            ValueInner::I64(_) => InputType::NumType(NumType::I64),
-            ValueInner::String(_) => InputType::String,
-            ValueInner::Rational(_) => InputType::NumType(NumType::Rational),
+            ValueInner::I64(_) => Type::NumType(NumType::I64),
+            ValueInner::String(_) => Type::String,
+            ValueInner::Rational(_) => Type::NumType(NumType::Rational),
+            ValueInner::Unit => Type::Unit,
         }
     }
 }

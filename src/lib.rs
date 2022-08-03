@@ -22,88 +22,21 @@ use util::*;
 
 use crate::typecheck::TypeError;
 
+type PrimFn = fn(&[Value]) -> Value;
+
 #[derive(Clone)]
 pub struct Function {
-    schema: Schema,
+    decl: FunctionDecl,
     nodes: HashMap<Vec<Value>, Value>,
     updates: usize,
 }
 
 impl Function {
-    pub fn new(schema: Schema) -> Self {
+    pub fn new(decl: FunctionDecl) -> Self {
         Self {
-            schema,
+            decl,
             nodes: Default::default(),
             updates: 0,
-        }
-    }
-
-    pub fn get(&mut self, uf: &mut UnionFind, args: &[Value]) -> Option<Value> {
-        // TODO typecheck?
-        if self.schema.output.is_sort() {
-            let id = self
-                .nodes
-                .entry(args.into())
-                .or_insert_with(|| uf.make_set().into());
-            Some(id.clone())
-        } else {
-            self.nodes.get(args).cloned()
-        }
-    }
-
-    pub fn set(&mut self, uf: &mut UnionFind, args: &[Value], value: Value) -> Value {
-        // TODO typecheck?
-        match self.nodes.entry(args.into()) {
-            Entry::Occupied(mut e) => {
-                let old = e.get().clone();
-                if old == value {
-                    value
-                } else {
-                    self.updates += 1;
-                    let new_value = match self.schema.output {
-                        OutputType::Type(InputType::Sort(_)) => uf.union_values(old, value),
-                        OutputType::Type(_) => {
-                            assert_ne!(old, value);
-                            panic!("bad merge")
-                        }
-                        OutputType::Max(NumType::I64) => i64::max(old.into(), value.into()).into(),
-                        // OutputType::Max(NumType::F64) => f64::max(old.into(), value.into()).into(),
-                        OutputType::Min(NumType::I64) => i64::min(old.into(), value.into()).into(),
-                        // we use 0 for unit
-                        OutputType::Unit => 0.into(),
-                        // we use 0 for unit
-                        // OutputType::Min(NumType::F64) => f64::min(old.into(), value.into()).into(),
-                        OutputType::Max(NumType::Rational) => {
-                            std::cmp::max(BigRational::from(old), BigRational::from(value)).into()
-                        }
-                        OutputType::Min(NumType::Rational) => {
-                            std::cmp::min(BigRational::from(old), BigRational::from(value)).into()
-                        }
-                    };
-                    // if self.schema.output.is_sort() {
-                    //     uf.union_values(old, value)
-                    // } else if let Some(merge) = &self.merge_fn {
-                    //     match merge.expr {
-                    //         Expr::Node(s, _) if s.as_str() == "max" => {
-                    //             i64::max(old.into(), value.into()).into()
-                    //         }
-                    //         Expr::Node(s, _) if s.as_str() == "min" => {
-                    //             i64::min(old.into(), value.into()).into()
-                    //         }
-                    //         _ => panic!("Unsupported merge for now"),
-                    //     }
-                    // } else {
-                    //     panic!("no merge!")
-                    // };
-
-                    e.insert(new_value.clone());
-                    new_value
-                }
-            }
-            Entry::Vacant(e) => {
-                self.updates += 1;
-                e.insert(value).clone()
-            }
         }
     }
 
@@ -112,12 +45,12 @@ impl Function {
         let n_unions = uf.n_unions();
         let old_nodes = std::mem::take(&mut self.nodes);
         for (mut args, value) in old_nodes {
-            for (a, ty) in args.iter_mut().zip(&self.schema.input) {
+            for (a, ty) in args.iter_mut().zip(&self.decl.schema.input) {
                 if ty.is_sort() {
                     *a = uf.find_mut_value(a.clone())
                 }
             }
-            let _new_value = if self.schema.output.is_sort() {
+            let _new_value = if self.decl.schema.output.is_sort() {
                 self.nodes
                     .entry(args)
                     .and_modify(|value2| *value2 = uf.union_values(value.clone(), value2.clone()))
@@ -140,7 +73,7 @@ pub type Subst = IndexMap<Symbol, Value>;
 pub struct Primitive {
     input: Vec<NumType>,
     output: NumType,
-    f: fn(&[Value]) -> Value,
+    f: PrimFn,
 }
 
 impl Primitive {
@@ -148,7 +81,7 @@ impl Primitive {
         self.input
             .iter()
             .zip(values.iter())
-            .all(|(t, v)| matches!(v.get_type(), InputType::NumType(t1) if &t1 == t))
+            .all(|(t, v)| matches!(v.get_type(), Type::NumType(t1) if &t1 == t))
     }
 
     pub fn apply(&self, values: &[Value]) -> Value {
@@ -230,7 +163,7 @@ pub struct EGraph {
 #[derive(Clone, Debug)]
 struct Rule {
     query: Query,
-    head: Vec<Fact>,
+    head: Vec<Action>,
 }
 
 impl Default for EGraph {
@@ -265,14 +198,14 @@ impl EGraph {
                         input,
                         &self.bad_find_value(input.clone()),
                         "{name}({inputs:?}) = {output}\n{:?}",
-                        function.schema,
+                        function.decl.schema,
                     )
                 }
                 assert_eq!(
                     output,
                     &self.bad_find_value(output.clone()),
                     "{name}({inputs:?}) = {output}\n{:?}",
-                    function.schema,
+                    function.decl.schema,
                 )
             }
         }
@@ -289,49 +222,68 @@ impl EGraph {
         Ok(val)
     }
 
-    pub fn assert_with(&mut self, ctx: &Subst, fact: &Fact) -> Result<(), Error> {
-        match fact {
-            Fact::Eq(exprs) => {
-                assert!(exprs.len() > 1);
-                let mut should_union = true;
-                if let Expr::Call(sym, args) = &exprs[0] {
-                    if !self.functions[sym].schema.output.is_sort() {
-                        assert_eq!(exprs.len(), 2);
-                        let arg_values: Vec<Value> = args
-                            .iter()
-                            .map(|e| self.eval_expr(ctx, e))
-                            .collect::<Result<_, _>>()?;
-                        let value = self.eval_expr(ctx, &exprs[1])?;
-                        let f = self
-                            .functions
-                            .get_mut(sym)
-                            .expect("FIXME add error message");
-                        f.set(&mut self.unionfind, &arg_values, value);
-                        should_union = false;
+    pub fn eval_actions(
+        &mut self,
+        mut ctx: Option<Subst>,
+        actions: &[Action],
+    ) -> Result<(), Error> {
+        let default = Subst::default();
+        for action in actions {
+            match action {
+                Action::Panic(msg) => panic!("panic {}", msg),
+                Action::Expr(e) => {
+                    self.eval_expr(ctx.as_ref().unwrap_or(&default), e)?;
+                }
+                Action::Define(x, e) => {
+                    if let Some(ctx) = ctx.as_mut() {
+                        let value = self.eval_expr(ctx, e)?;
+                        ctx.insert(*x, value);
+                    } else {
+                        let value = self.eval_expr(&default, e)?;
+                        self.globals.insert(*x, value);
                     }
                 }
-
-                if should_union {
-                    self.union_exprs(ctx, exprs)?;
+                Action::Set(f, args, e) => {
+                    let ctx = ctx.as_ref().unwrap_or(&default);
+                    let values = args
+                        .iter()
+                        .map(|a| self.eval_expr(ctx, a))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let value = self.eval_expr(ctx, e)?;
+                    let function = self
+                        .functions
+                        .get_mut(f)
+                        .ok_or_else(|| NotFoundError(e.clone()))?;
+                    let old_value = function.nodes.insert(values.clone(), value.clone());
+                    if let Some(old_value) = old_value {
+                        match (function.decl.merge.as_ref(), &function.decl.schema.output) {
+                            (None, Type::Unit) => (),
+                            (None, Type::Sort(_)) => {
+                                self.unionfind.union_values(old_value, value);
+                            }
+                            (Some(expr), _) => {
+                                let mut ctx = Subst::default();
+                                ctx.insert("old".into(), old_value);
+                                ctx.insert("new".into(), value);
+                                let expr = expr.clone(); // break the borrow of `function`
+                                let new_value = self.eval_expr(&ctx, &expr)?;
+                                self.functions
+                                    .get_mut(f)
+                                    .unwrap()
+                                    .nodes
+                                    .insert(values, new_value);
+                            }
+                            _ => panic!("invalid merge function"),
+                        }
+                    }
+                }
+                Action::Union(a, b) => {
+                    let ctx = ctx.as_ref().unwrap_or(&default);
+                    let a = self.eval_expr(ctx, a)?;
+                    let b = self.eval_expr(ctx, b)?;
+                    self.unionfind.union_values(a, b);
                 }
             }
-            Fact::Fact(expr) => match expr {
-                Expr::Lit(_) => panic!("can't assert a literal"),
-                Expr::Var(_) => panic!("can't assert a var"),
-                Expr::Call(sym, args) => {
-                    let values: Vec<Value> = args
-                        .iter()
-                        .map(|e| self.eval_expr(ctx, e))
-                        .collect::<Result<_, _>>()?;
-                    let f = self
-                        .functions
-                        .get_mut(sym)
-                        .expect("FIXME add error message");
-                    // FIXME We don't have a unit value
-                    f.set(&mut self.unionfind, &values, true.into());
-                    assert_eq!(f.schema.output, OutputType::Unit);
-                }
-            },
         }
         Ok(())
     }
@@ -351,7 +303,7 @@ impl EGraph {
                 }
                 // let mut should_union = true;
                 // if let Expr::Node(sym, args) = &exprs[0] {
-                //     if !self.functions[sym].schema.output.is_sort() {
+                //     if !self.functions[sym].decl.schema.output.is_sort() {
                 //         assert_eq!(exprs.len(), 2);
                 //         let arg_values: Vec<Value> = args
                 //             .iter()
@@ -384,17 +336,14 @@ impl EGraph {
                         .get_mut(sym)
                         .expect("FIXME add error message");
                     // FIXME We don't have a unit value
-                    f.get(&mut self.unionfind, &values)
+                    f.nodes
+                        .get(&values)
                         .ok_or_else(|| NotFoundError(expr.clone()))?;
-                    assert_eq!(f.schema.output, OutputType::Unit);
+                    assert_eq!(f.decl.schema.output, Type::Unit);
                 }
             },
         }
         Ok(())
-    }
-
-    pub fn assert(&mut self, fact: &Fact) -> Result<(), Error> {
-        self.assert_with(&Default::default(), fact)
     }
 
     pub fn find(&self, id: Id) -> Id {
@@ -436,14 +385,14 @@ impl EGraph {
 
     pub fn declare_function(&mut self, decl: &FunctionDecl) -> Result<(), Error> {
         for ty in &decl.schema.input {
-            if let InputType::Sort(sort) = ty {
+            if let Type::Sort(sort) = ty {
                 if !self.sorts.contains_key(sort) {
                     return Err(TypeError::UndefinedSort(*sort).into());
                 }
             }
         }
 
-        if let OutputType::Type(InputType::Sort(sort)) = &decl.schema.output {
+        if let Type::Sort(sort) = &decl.schema.output {
             if !self.sorts.contains_key(sort) {
                 return Err(TypeError::UndefinedSort(*sort).into());
             }
@@ -451,7 +400,7 @@ impl EGraph {
 
         let old = self
             .functions
-            .insert(decl.name, Function::new(decl.schema.clone()));
+            .insert(decl.name, Function::new(decl.clone()));
         if old.is_some() {
             return Err(TypeError::FunctionAlreadyBound(decl.name).into());
         }
@@ -462,7 +411,7 @@ impl EGraph {
     pub fn declare_constructor(
         &mut self,
         name: impl Into<Symbol>,
-        types: Vec<InputType>,
+        types: Vec<Type>,
         sort: impl Into<Symbol>,
     ) -> Result<(), Error> {
         let name = name.into();
@@ -471,8 +420,10 @@ impl EGraph {
             name,
             schema: Schema {
                 input: types,
-                output: OutputType::Type(InputType::Sort(sort)),
+                output: Type::Sort(sort),
             },
+            merge: None,
+            default: None,
         })?;
         if let Some(ctors) = self.sorts.get_mut(&sort) {
             ctors.push(name);
@@ -496,9 +447,30 @@ impl EGraph {
                     .iter()
                     .map(|a| self.eval_expr(ctx, a))
                     .collect::<Result<_, _>>()?;
-                if let Some(rel) = self.functions.get_mut(op) {
-                    rel.get(&mut self.unionfind, &values)
-                        .ok_or_else(|| NotFoundError(expr.clone()))
+                if let Some(function) = self.functions.get_mut(op) {
+                    if let Some(value) = function.nodes.get(&values) {
+                        Ok(value.clone())
+                    } else {
+                        match (function.decl.default.as_ref(), &function.decl.schema.output) {
+                            (None, Type::Unit) => {
+                                function.nodes.insert(values, Value(ValueInner::Unit));
+                                Ok(Value(ValueInner::Unit))
+                            }
+                            (None, Type::Sort(_)) => {
+                                let id = self.unionfind.make_set();
+                                function.nodes.insert(values, Value(ValueInner::Id(id)));
+                                Ok(Value(ValueInner::Id(id)))
+                            }
+                            (Some(default), _) => {
+                                let default = default.clone(); // break the borrow
+                                let value = self.eval_expr(ctx, &default)?;
+                                let function = self.functions.get_mut(op).unwrap();
+                                function.nodes.insert(values, value.clone());
+                                Ok(value)
+                            }
+                            _ => panic!("invalid default"),
+                        }
+                    }
                 } else if let Some(prims) = self.primitives.get(op) {
                     let mut res = None;
                     for prim in prims.iter() {
@@ -522,62 +494,10 @@ impl EGraph {
         self.eval_expr(&Default::default(), expr)
     }
 
-    pub fn set_expr(
-        &mut self,
-        ctx: &Subst,
-        expr: &Expr,
-        values: &[Value],
-    ) -> Result<Value, NotFoundError> {
-        assert!(!values.is_empty());
-        match expr {
-            Expr::Var(var) => Ok(ctx[var].clone()),
-            Expr::Lit(lit) => Ok(lit.to_value()),
-            Expr::Call(op, args) => {
-                let args: Vec<Value> = args
-                    .iter()
-                    .map(|a| self.eval_expr(ctx, a))
-                    .collect::<Result<_, _>>()?;
-                let func = self.functions.get_mut(op).unwrap();
-                Ok(values
-                    .iter()
-                    .map(|v| func.set(&mut self.unionfind, &args, v.clone()))
-                    .last()
-                    .unwrap())
-            }
-        }
-    }
-
     fn query(&self, query: &Query, callback: impl FnMut(&[Value])) {
         let compiled_query = self.compile_gj_query(&query.atoms);
         self.run_query(&compiled_query, callback)
     }
-
-    // fn apply(&mut self, actions: &[Action], subst: &Subst) -> Result<(), NotFoundError> {
-    //     let mut subst = subst.clone(); // This is slow
-    //     for action in actions {
-    //         match action {
-    //             Action::Define(v, e) => {
-    //                 let value = self.eval_expr(&subst, e)?;
-    //                 subst
-    //                     .entry(*v)
-    //                     .and_modify(|old| {
-    //                         *old = self.unionfind.union_values(value.clone(), old.clone())
-    //                     })
-    //                     .or_insert(value);
-    //             }
-    //             Action::Union(exprs) => {
-    //                 self.union_exprs(&subst, exprs)?;
-    //             }
-    //             Action::Assert(exprs) => {
-    //                 self.assert_exprs(&subst, exprs)?;
-    //             }
-    //             Action::Set(dst, srcs) => {
-    //                 self.set_exprs(&subst, dst, srcs)?;
-    //             }
-    //         }
-    //     }
-    //     Ok(())
-    // }
 
     pub fn run_rules(&mut self, limit: usize) {
         for _ in 0..limit {
@@ -628,9 +548,7 @@ impl EGraph {
         for (rule, substs) in rules.values().zip(searched) {
             for subst in substs {
                 // we ignore the result here because rule applications are best effort
-                for fact in &rule.head {
-                    let _result: Result<_, _> = self.assert_with(&subst, fact);
-                }
+                let _result: Result<_, _> = self.eval_actions(Some(subst), &rule.head);
             }
         }
         self.rules = rules;
@@ -663,7 +581,7 @@ impl EGraph {
         let var = Symbol::from("__rewrite_var");
         let rule = ast::Rule {
             body: vec![Fact::Eq(vec![Expr::Var(var), rewrite.lhs])],
-            head: vec![Fact::Eq(vec![Expr::Var(var), rewrite.rhs])],
+            head: vec![Action::Union(Expr::Var(var), rewrite.rhs)],
         };
         self.add_rule_with_name(name, rule)
     }
@@ -735,12 +653,12 @@ impl EGraph {
                     "Skipping check.".into()
                 }
             }
-            Command::Fact(fact) => {
+            Command::Action(action) => {
                 if should_run {
-                    self.assert(&fact)?;
-                    format!("Asserted {fact}.")
+                    self.eval_actions(None, std::slice::from_ref(&action))?;
+                    format!("Run {action}.")
                 } else {
-                    format!("Skipping assert {fact}.")
+                    format!("Skipping running {action}.")
                 }
             }
             Command::Define(name, expr) => {

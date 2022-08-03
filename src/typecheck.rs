@@ -11,8 +11,8 @@ pub enum TypeError {
     )]
     Mismatch {
         expr: Expr,
-        expected: OutputType,
-        actual: OutputType,
+        expected: Type,
+        actual: Type,
         reason: String,
     },
     #[error("Tried to unify too many literals: {}", ListDisplay(.0, "\n"))]
@@ -48,7 +48,7 @@ struct QueryBuilder<'a> {
 
 #[derive(Clone)]
 struct Info<'a> {
-    ty: Option<OutputType>,
+    ty: Option<Type>,
     expr: &'a Expr,
 }
 
@@ -101,8 +101,8 @@ impl<'a> QueryBuilder<'a> {
             // TODO unification error?
             self.errors.push(TypeError::Mismatch {
                 expr: a.expr.clone(),
-                expected: a.ty.unwrap_or(OutputType::Unit),
-                actual: b.ty.unwrap_or(OutputType::Unit),
+                expected: a.ty.unwrap_or(Type::Unit),
+                actual: b.ty.unwrap_or(Type::Unit),
                 reason: "unification".into(),
             })
         }
@@ -133,7 +133,7 @@ impl<'a> QueryBuilder<'a> {
                 }
                 id
             }
-            Fact::Fact(e) => self.add_expr_at(e, OutputType::Unit),
+            Fact::Fact(e) => self.add_expr_at(e, Type::Unit),
         }
     }
 
@@ -151,7 +151,7 @@ impl<'a> QueryBuilder<'a> {
         }
     }
 
-    fn add_expr_at(&mut self, expr: &'a Expr, ty: OutputType) -> Id {
+    fn add_expr_at(&mut self, expr: &'a Expr, ty: Type) -> Id {
         let id = self.add_expr(expr);
         let info = Info { ty: Some(ty), expr };
         self.unify_info(id, info);
@@ -162,9 +162,10 @@ impl<'a> QueryBuilder<'a> {
         match expr {
             Expr::Lit(lit) => {
                 let ty = Some(match lit {
-                    Literal::Int(_) => OutputType::Type(InputType::NumType(NumType::I64)),
-                    Literal::String(_) => OutputType::Type(InputType::String),
-                    Literal::Rational(_) => OutputType::Type(InputType::NumType(NumType::Rational)),
+                    Literal::Int(_) => Type::NumType(NumType::I64),
+                    Literal::String(_) => Type::String,
+                    Literal::Rational(_) => Type::NumType(NumType::Rational),
+                    Literal::Unit => Type::Unit,
                 });
                 self.add_node(ENode::Literal(lit.clone()), Info { ty, expr })
             }
@@ -176,18 +177,18 @@ impl<'a> QueryBuilder<'a> {
             Expr::Call(sym, args) => {
                 let mut ids = vec![];
                 let ty = if let Some(f) = self.egraph.functions.get(sym) {
-                    if args.len() == f.schema.input.len() {
-                        for (arg, ty) in args.iter().zip(&f.schema.input) {
-                            ids.push(self.add_expr_at(arg, OutputType::Type(ty.clone())));
+                    if args.len() == f.decl.schema.input.len() {
+                        for (arg, ty) in args.iter().zip(&f.decl.schema.input) {
+                            ids.push(self.add_expr_at(arg, ty.clone()));
                         }
                     } else {
                         // arity mismatch, don't worry about constraining the inputs
                         self.errors.push(TypeError::Arity {
                             expr: expr.clone(),
-                            expected: f.schema.input.len(),
+                            expected: f.decl.schema.input.len(),
                         });
                     }
-                    Some(f.schema.output.clone())
+                    Some(f.decl.schema.output.clone())
                 } else {
                     self.errors.push(TypeError::Unbound(*sym));
                     None
@@ -272,13 +273,13 @@ impl EGraph {
             for &var in &class.vars {
                 // TODO do something with the type
                 let _ty = if let Some(ty) = info.ty.clone() {
-                    if ty == OutputType::Unit {
+                    if ty == Type::Unit {
                         builder.errors.push(TypeError::UnitVar(var));
                     }
                     ty
                 } else {
                     builder.errors.push(TypeError::InferenceFailure(var));
-                    OutputType::Unit
+                    Type::Unit
                 };
                 query.bindings.insert(var, atomterm.clone());
             }

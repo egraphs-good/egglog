@@ -34,34 +34,26 @@ Comma<T>: Vec<T> = {
 
 Command: Command = {
     "(" "datatype" <name:Ident> <variants:(Variant)*> ")" => Command::Datatype { <> },
-    "(" "function" <name:Ident> <schema:Schema> ")" => Command::Function(FunctionDecl { name, schema }),
-    "(" "relation" <name:Ident> <types:List<InputType>> ")" => Command::Function(FunctionDecl::relation(name, types)),
-    "(" "rule" <body:List<Fact>> <head:List<Fact>> ")" => Command::Rule(Rule { head, body }),
+    "(" "function" <name:Ident> <schema:Schema> <merge:(":merge" <Expr>)?> <default:(":default" <Expr>)?> ")" => {
+        Command::Function(FunctionDecl { name, schema, merge, default })
+    },
+    "(" "relation" <name:Ident> <types:List<Type>> ")" => Command::Function(FunctionDecl::relation(name, types)),
+    "(" "rule" <body:List<Fact>> <head:List<Action>> ")" => Command::Rule(Rule { head, body }),
     "(" "rewrite" <lhs:Expr> <rhs:Expr> ")" => Command::Rewrite(Rewrite { <> }),
-    "(" "define" <name:Ident> <expr:Expr> ")" => Command::Define(name, expr),
-    "(" "assert" <Fact> ")" => Command::Fact(<>),
+    <Action> => Command::Action(<>),
     "(" "run" <Num> ")" => Command::Run(<>.try_into().unwrap()),
     "(" "extract" <Expr> ")" => Command::Extract(<>),
     "(" "check" <Fact> ")" => Command::Check(<>),
     "(" "clear-rules" ")" => Command::ClearRules,
     "(" "query" <List<Fact>> ")" => Command::Query(<>),
-    "(" "dl" <DLCommand> ")" => <>
 }
 
-DLCommand : Command = {
-    <DLFact> "." => Command::Fact(<>),
-    <head:Comma<DLFact>> ":-" <body:Comma<DLFact>> "." => Command::Rule(Rule {head, body})
-}
-
-DLFact : Fact = {
-    <a:DLExpr> "=" <b:DLExpr> => Fact::Eq(vec![a,b]),
-    <DLExpr> => Fact::Fact(<>)
-}
-
-DLExpr : Expr = {
-    <Literal> => Expr::Lit(<>),
-    <Ident> => Expr::Var(<>),
-    <f:Ident> "(" <args:Comma<DLExpr>> ")" => Expr::Call(f, args)
+Action: Action = {
+    "(" "set" "(" <f: Ident> <args:Expr*> ")" <v:Expr> ")" => Action::Set ( f, args, v ),
+    "(" "union" <e1:Expr> <e2:Expr> ")" => Action::Union(<>),
+    "(" "define" <name:Ident> <expr:Expr> ")" => Action::Define(name, expr),
+    "(" "panic" <msg:String> ")" => Action::Panic(msg),
+    <e:Expr> => Action::Expr(e),
 }
 
 Name: Symbol = { "[" <Ident> "]" => <> }
@@ -75,7 +67,7 @@ Fact: Fact = {
 }
 
 Schema: Schema = {
-    <types:List<InputType>> <output:OutputType> => Schema { input: types, output }
+    <types:List<Type>> <output:Type> => Schema { input: types, output }
 }
 
 Expr: Expr = {
@@ -86,6 +78,7 @@ Expr: Expr = {
 };
 
 Literal: Literal = {
+    // "(" ")" => Literal::Unit, // shouldn't need unit literals for now
     <Num> => Literal::Int(<>),
     <numer:Num> "//" <denom:Num> => Literal::Rational(BigRational::new(numer.into(), denom.into())),
     <SymString> => Literal::String(<>),
@@ -98,13 +91,13 @@ CallExpr: Expr = {
 ExprList: Vec<Expr> = { "(" <sexps:(Expr)*> ")" => sexps }
 
 Variant: Variant = {
-    "(" <name:Ident> <types:(InputType)*> ")" => Variant { <> },
+    "(" <name:Ident> <types:(Type)*> ")" => Variant { <> },
 }
 
-InputType: InputType = { 
-    "String" => InputType::String,
-    <NumType> => InputType::NumType(<>),
-    <Ident> => InputType::Sort(<>),
+Type: Type = { 
+    "String" => Type::String,
+    <NumType> => Type::NumType(<>),
+    <Ident> => Type::Sort(<>),
 }
 
 NumType: NumType = {
@@ -112,12 +105,6 @@ NumType: NumType = {
     "rational" => NumType::Rational,
     <s:reserved> =>? lalrpop_error!("{} is reserved.", s)
     // "f64" => NumType::F64,
-}
-
-OutputType: OutputType = {
-    <InputType> => OutputType::Type(<>),
-    "(" "Max" <NumType> ")" => OutputType::Max(<>),
-    "(" "Min" <NumType> ")" => OutputType::Min(<>),
 }
 
 Num: i64 = <s:r"(-)?[0-9]+"> => s.parse().unwrap();
@@ -128,3 +115,4 @@ Bool: bool = {
 Ident: Symbol = <s:r"[[:alpha:]][\w-]*"> => s.parse().unwrap();
 PrimitiveSymbol: Symbol = <r"[+*/-]"> => Symbol::from(<>);
 SymString: Symbol = <r#""[^"]*""#> => Symbol::from(<>);
+String: String = <r#""[^"]*""#> => (<>).to_owned();

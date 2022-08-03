@@ -4,11 +4,9 @@
 (rule ((edge x y))
       ((path x y)))
 
-
-        
-(assert (edge 1 2))
-(assert (edge 2 3))
-(assert (edge 3 4))
+(edge 1 2)
+(edge 2 3)
+(edge 3 4)
 (check (edge 1 2))
 (run 3)
 (check (path 1 2))
@@ -17,7 +15,7 @@
 (rule ((path x y) (edge y z))
       ((path x z)))
 
-(assert (edge 3 8))
+(edge 3 8)
 (run 1)
 (check (path 1 3))
 

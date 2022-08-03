@@ -55,7 +55,7 @@ pub enum Command {
     Define(Symbol, Expr),
     Rule(Rule),
     Rewrite(Rewrite),
-    Fact(Fact),
+    Action(Action),
     Run(usize),
     Extract(Expr),
     // TODO: this could just become an empty query
@@ -68,16 +68,19 @@ pub enum Command {
 pub struct FunctionDecl {
     pub name: Symbol,
     pub schema: Schema,
+    pub default: Option<Expr>,
+    pub merge: Option<Expr>,
 }
 
 #[derive(Clone, Debug)]
 pub struct Variant {
     pub name: Symbol,
-    pub types: Vec<InputType>,
+    pub types: Vec<Type>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum InputType {
+pub enum Type {
+    Unit,
     Sort(Symbol),
     NumType(NumType),
     String,
@@ -90,24 +93,6 @@ pub enum NumType {
     Rational,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum OutputType {
-    Unit,
-    Type(InputType),
-    Max(NumType),
-    Min(NumType),
-}
-
-impl OutputType {
-    pub fn is_sort(&self) -> bool {
-        if let OutputType::Type(ty) = self {
-            ty.is_sort()
-        } else {
-            false
-        }
-    }
-}
-
 impl Display for NumType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -117,28 +102,18 @@ impl Display for NumType {
     }
 }
 
-impl Display for OutputType {
+impl Display for Type {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            OutputType::Type(t) => Display::fmt(t, f),
-            OutputType::Unit => write!(f, "Unit"),
-            OutputType::Max(t) => write!(f, "(max {t})"),
-            OutputType::Min(t) => write!(f, "(min {t})"),
+            Type::Sort(s) => Display::fmt(s, f),
+            Type::NumType(t) => Display::fmt(t, f),
+            Type::String => write!(f, "String"),
+            Type::Unit => write!(f, "Unit"),
         }
     }
 }
 
-impl Display for InputType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            InputType::Sort(s) => Display::fmt(s, f),
-            InputType::NumType(t) => Display::fmt(t, f),
-            InputType::String => write!(f, "String"),
-        }
-    }
-}
-
-impl InputType {
+impl Type {
     pub fn is_sort(&self) -> bool {
         matches!(self, Self::Sort(..))
     }
@@ -146,18 +121,20 @@ impl InputType {
 
 #[derive(Clone, Debug)]
 pub struct Schema {
-    pub input: Vec<InputType>,
-    pub output: OutputType,
+    pub input: Vec<Type>,
+    pub output: Type,
 }
 
 impl FunctionDecl {
-    pub fn relation(name: Symbol, input: Vec<InputType>) -> Self {
+    pub fn relation(name: Symbol, input: Vec<Type>) -> Self {
         Self {
             name,
             schema: Schema {
                 input,
-                output: OutputType::Unit,
+                output: Type::Unit,
             },
+            merge: None,
+            default: None,
         }
     }
 }
@@ -179,10 +156,35 @@ impl Display for Fact {
 }
 
 #[derive(Clone, Debug)]
+pub enum Action {
+    Define(Symbol, Expr),
+    Set(Symbol, Vec<Expr>, Expr),
+    Union(Expr, Expr),
+    Panic(String),
+    Expr(Expr),
+    // If(Expr, Action, Action),
+}
+
+impl Display for Action {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Action::Define(lhs, rhs) => write!(f, "(define {} {})", lhs, rhs),
+            Action::Set(lhs, args, rhs) => {
+                write!(f, "(set ({} {}) {})", lhs, ListDisplay(args, ""), rhs)
+            }
+            Action::Union(lhs, rhs) => write!(f, "(union {} {})", lhs, rhs),
+            Action::Panic(msg) => write!(f, "(panic {:?})", msg),
+            Action::Expr(e) => Display::fmt(e, f),
+            // Action::If(cond, then, else_) => write!(f, "(if {} {} {})", cond, then, else_),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct Rule {
     // pub query: Query,
     // pub actions: Vec<Action>,
-    pub head: Vec<Fact>,
+    pub head: Vec<Action>,
     pub body: Vec<Fact>,
 }
 

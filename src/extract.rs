@@ -1,6 +1,6 @@
 use hashbrown::hash_map::Entry;
 
-use crate::ast::{InputType, Symbol};
+use crate::ast::{Symbol, Type};
 use crate::util::HashMap;
 use crate::{EGraph, Expr, Id, Value};
 
@@ -46,6 +46,7 @@ impl<'a> Extractor<'a> {
         let (cost, node) = &self.costs[&id];
         let mut children = vec![];
         for (ty, value) in self.egraph.functions[&node.sym]
+            .decl
             .schema
             .input
             .iter()
@@ -62,7 +63,7 @@ impl<'a> Extractor<'a> {
         (*cost, expr)
     }
 
-    fn node_total_cost(&self, types: &[InputType], children: &[Value]) -> Option<Cost> {
+    fn node_total_cost(&self, types: &[Type], children: &[Value]) -> Option<Cost> {
         let mut cost = 1;
         for (ty, value) in types.iter().zip(children) {
             cost += if ty.is_sort() {
@@ -81,9 +82,9 @@ impl<'a> Extractor<'a> {
 
             for &sym in &self.ctors {
                 let func = &self.egraph.functions[&sym];
-                assert!(func.schema.output.is_sort());
+                assert!(func.decl.schema.output.is_sort());
                 for (inputs, output) in &func.nodes {
-                    if let Some(new_cost) = self.node_total_cost(&func.schema.input, inputs) {
+                    if let Some(new_cost) = self.node_total_cost(&func.decl.schema.input, inputs) {
                         let make_new_pair = || {
                             let values = inputs.clone();
                             (new_cost, Node { sym, values })
