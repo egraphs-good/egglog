@@ -8,7 +8,7 @@
 (rule ( ; injectivity of ->
   (= (TArr fr1 to1) (TArr fr2 to2))
 )(
-  (= fr1 fr2) (= to1 to2))
+  (union fr1 fr2) (union to1 to2))
 )
 
 (datatype Expr 
@@ -32,44 +32,43 @@
 ; ctx; x: t |- x : t
 (rewrite (typeof (Cons x t ctx) (Var x)) t)
 
-; ctx |- e1 :- t1 -> t2
-; ctx |- e2 : t1
+; ctx |- f :- t1 -> t2
+; ctx |- e : t1
 ; -----------------
-; ctx |- e1 e2 : t2
+; ctx |- f e : t2
 
-(rule ( ; creating demand to check ctx |- x : t
-  (= (typeof (Cons y ty ctx) vx) t)
-  (= vx (Var x))
-  (!= x y)
+(rule (
+  (= (typeof ctx (App f e)) t2)
 )(
-  (= (typeof ctx vx) (typeof ctx vx))
+  (union (typeof ctx f) (typeof ctx f))
+  (union (typeof ctx e) (typeof ctx e))
 ))
 
-(rule ( ; only check ctx; y: t |- x : t that has a demand
-    (= (typeof ctx xv) t1)
-    (= (typeof (Cons y ty ctx) xv) t2)
-    (= xv (Var x))
-    (!= x y)
+(rule (
+  (= (typeof ctx (App f e)) t)
+  (= (typeof ctx f) (TArr t1 t2))
+  (= (typeof ctx e) t1)
 )(
-    (= t1 t2)
+  (union t t2)
 ))
 
 ; ctx |- x : t
 ; ------------------ y != x 
 ; ctx; y: t |- x : t
+
 (rule ( ; creating demand to check ctx |- x : t
-  (= (typeof (Cons y ty ctx) x) t)
+  (= (typeof (Cons y ty ctx) (Var x)) t)
   ; (!= x y) TODO disequality not supported yet
 )(
-  (= (typeof ctx x) (typeof ctx x))
+  (union (typeof ctx (Var x)) (typeof ctx (Var x)))
 ))
 
 (rule ( ; only check ctx; y: t |- x : t that has a demand
-    (= (typeof ctx x) t1)
-    (= (typeof (Cons y ty ctx) x) t2)
+    (= (typeof ctx (Var x)) t1)
+    (= (typeof (Cons y ty ctx) (Var x)) t2)
     ; (!= x y) TODO disequality not supported yet
 )(
-    (= t1 t2)
+    (union t1 t2)
 ))
 
 ; ctx; x: t1 |- e : t2
