@@ -6,17 +6,18 @@
 
 ; Assume injectivity of Mul for unification
 (rule ((= (Mul a b) (Mul c d)))
-   ((= a c) (= b d)))
+      ((union a c)
+       (union b d)))
 
-(relation False (i64))
+;; (relation False (i64))
 ; If any Literal make equal to something it can't be, false is derived
 ;(rule ((= (Lit i) (Lit j)) (!= i j))
 ;      ((False 0)))
 (rule ((= (Lit i) (Mul a b)))
-      ((False 0)))
+      ((panic "Literal cannot be equal to a product")))
 
-(assert (= (Mul (Var "a") (Var "a")) 
-           (Mul (Lit 1) (Lit 2))))
+(set (Mul (Var "a") (Var "a")) 
+     (Mul (Lit 1) (Lit 2)))
 
 
 (run 3)

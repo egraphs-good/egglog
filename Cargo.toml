@@ -18,6 +18,7 @@ num-bigint = "0.4.3"
 num-integer = "0.1.45"
 num-rational = "0.4.0"
 num-traits = "0.2.15"
+sexp = "1.1.4"
 
 lalrpop-util = { version = "0.19.7", features = ["lexer"] }
 regex = "1"

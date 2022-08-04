@@ -9,6 +9,7 @@ pub enum Literal {
     Int(i64),
     Rational(BigRational),
     String(Symbol),
+    Unit,
 }
 
 macro_rules! impl_from {
@@ -40,6 +41,7 @@ impl Literal {
             Literal::Int(i) => Value::from(*i),
             Literal::String(s) => Value::from(*s),
             Literal::Rational(r) => Value::from(r.clone()),
+            Literal::Unit => Value(ValueInner::Unit),
         }
     }
 }
@@ -50,6 +52,7 @@ impl Display for Literal {
             Literal::Int(i) => Display::fmt(i, f),
             Literal::String(s) => write!(f, "{s}"),
             Literal::Rational(r) => write!(f, "{}//{}", r.numer(), r.denom()),
+            Literal::Unit => write!(f, "()"),
         }
     }
 }

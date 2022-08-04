@@ -9,14 +9,14 @@
 (rewrite (Add (Add x y) z) (Add x (Add y z)))
 (rewrite (Add (Num x) (Num y)) (Num (+ x y)))
 (rule ((= (Add x y) z))
-      ((= (Add z (Neg y)) x)))
+      ((union (Add z (Neg y)) x)))
 (rewrite (Neg (Neg x)) x)
 (rewrite (Neg (Num n)) (Num (- 0 n)))
 ;system 1: x + 2 = 7
-(assert (= (Add (Var "x") (Num 2)) (Num 7)))
+(set (Add (Var "x") (Num 2)) (Num 7))
 ;system 2: z + y = 7, 2z = y
-(assert (= (Add (Var "z") (Var "y")) (Num 7)))
-(assert (= (Add (Var "z") (Var "z")) (Var "y")))
+(set (Add (Var "z") (Var "y")) (Num 7))
+(set (Add (Var "z") (Var "z")) (Var "y"))
 
 (run 3)
 (extract (Var "x"))
