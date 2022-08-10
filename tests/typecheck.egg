@@ -58,7 +58,7 @@
 
 (rule ( ; creating demand to check ctx |- x : t
   (= (typeof (Cons y ty ctx) (Var x)) t)
-  ; (!= x y) TODO disequality not supported yet
+  ;; (!= x y); TODO disequality not supported yet
 )(
   (union (typeof ctx (Var x)) (typeof ctx (Var x)))
 ))

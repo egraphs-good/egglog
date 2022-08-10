@@ -80,6 +80,7 @@ pub struct Variant {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
+    Error,
     Unit,
     Sort(Symbol),
     NumType(NumType),
@@ -109,6 +110,7 @@ impl Display for Type {
             Type::NumType(t) => Display::fmt(t, f),
             Type::String => write!(f, "String"),
             Type::Unit => write!(f, "Unit"),
+            Type::Error => write!(f, "Error"),
         }
     }
 }

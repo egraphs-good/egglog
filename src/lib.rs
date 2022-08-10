@@ -12,6 +12,7 @@ use thiserror::Error;
 use ast::*;
 use std::fmt::Debug;
 use std::hash::Hash;
+use typecheck::{AtomTerm, Bindings};
 
 pub use value::*;
 
@@ -22,7 +23,30 @@ use util::*;
 
 use crate::typecheck::TypeError;
 
-type PrimFn = fn(&[Value]) -> Value;
+#[derive(Clone)]
+pub struct PrimFn {
+    name: Symbol,
+    f: fn(&'_ [Value]) -> Value,
+}
+
+impl Debug for PrimFn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "PrimFn({})", self.name)
+    }
+}
+
+impl Hash for PrimFn {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        (self.f as usize).hash(state);
+    }
+}
+
+impl Eq for PrimFn {}
+impl PartialEq for PrimFn {
+    fn eq(&self, other: &Self) -> bool {
+        self.f as usize == other.f as usize
+    }
+}
 
 #[derive(Clone)]
 pub struct Function {
@@ -77,15 +101,21 @@ pub struct Primitive {
 }
 
 impl Primitive {
-    pub fn accept(&self, values: &[Value]) -> bool {
-        self.input
+    pub fn accept(&self, types: &[Type]) -> Option<Type> {
+        if self
+            .input
             .iter()
-            .zip(values.iter())
-            .all(|(t, v)| matches!(v.get_type(), Type::NumType(t1) if &t1 == t))
+            .zip(types.iter())
+            .all(|(t, v)| matches!(v, Type::NumType(t1) if t1 == t))
+        {
+            Some(Type::NumType(self.output.clone()))
+        } else {
+            None
+        }
     }
 
     pub fn apply(&self, values: &[Value]) -> Value {
-        (self.f)(values)
+        (self.f.f)(values)
     }
 }
 
@@ -93,61 +123,45 @@ fn default_primitives() -> HashMap<Symbol, Vec<Primitive>> {
     macro_rules! prim {
         (@type I64) => { i64 };
         (@type Rational) => { BigRational };
-        (|$($param:ident : $t:ident),*| -> $output:ident { $body:expr }) => {
-            Primitive {
+        ($name: expr, |$($param:ident : $t:ident),*| -> $output:ident { $body:expr }) => {{
+            let name = Symbol::from($name);
+            let prim = Primitive {
                 input: vec![$(NumType::$t),*],
                 output: NumType::$output,
-                f: |values: &[Value]| -> Value {
-                    let mut values = values.iter();
-                    $(
-                        let $param: prim!(@type $t) = values.next().unwrap().clone().into();
-                    )*
-                    Value::from($body)
+                f: PrimFn {
+                    name,
+                    f: |values: &[Value]| -> Value {
+                        let mut values = values.iter();
+                        $(
+                            let $param: prim!(@type $t) = values.next().unwrap().clone().into();
+                        )*
+                        Value::from($body)
+                    }
                 }
-            }
-        };
+            };
+            (name, prim)
+        }};
     }
 
-    [
-        (
-            "+",
-            vec![
-                prim!(|a: I64, b: I64| -> I64 { a + b }),
-                prim!(|a: Rational, b: Rational| -> Rational { a + b }),
-            ],
-        ),
-        (
-            "-",
-            vec![
-                prim!(|a: I64, b: I64| -> I64 { a - b }),
-                prim!(|a: Rational, b: Rational| -> Rational { a - b }),
-            ],
-        ),
-        (
-            "*",
-            vec![
-                prim!(|a: I64, b: I64| -> I64 { a * b }),
-                prim!(|a: Rational, b: Rational| -> Rational { a * b }),
-            ],
-        ),
-        (
-            "max",
-            vec![
-                prim!(|a: I64, b: I64| -> I64 { a.max(b) }),
-                prim!(|a: Rational, b: Rational| -> Rational { a.max(b) }),
-            ],
-        ),
-        (
-            "min",
-            vec![
-                prim!(|a: I64, b: I64| -> I64 { a.min(b) }),
-                prim!(|a: Rational, b: Rational| -> Rational { a.min(b) }),
-            ],
-        ),
-    ]
-    .into_iter()
-    .map(|(k, v)| (Symbol::from(k), v))
-    .collect()
+    let pairs = [
+        prim!("+", |a: I64, b: I64| -> I64 { a + b }),
+        prim!("+", |a: Rational, b: Rational| -> Rational { a + b }),
+        prim!("-", |a: I64, b: I64| -> I64 { a - b }),
+        prim!("-", |a: Rational, b: Rational| -> Rational { a - b }),
+        prim!("*", |a: I64, b: I64| -> I64 { a * b }),
+        prim!("*", |a: Rational, b: Rational| -> Rational { a * b }),
+        prim!("max", |a: I64, b: I64| -> I64 { a.max(b) }),
+        prim!("max", |a: Rational, b: Rational| -> Rational { a.max(b) }),
+        prim!("min", |a: I64, b: I64| -> I64 { a.min(b) }),
+        prim!("min", |a: Rational, b: Rational| -> Rational { a.min(b) }),
+    ];
+
+    let mut primitives = HashMap::<Symbol, Vec<Primitive>>::new();
+    for (name, prim) in pairs {
+        primitives.entry(name).or_default().push(prim);
+    }
+
+    primitives
 }
 
 #[derive(Clone)]
@@ -162,7 +176,8 @@ pub struct EGraph {
 
 #[derive(Clone, Debug)]
 struct Rule {
-    query: Query,
+    query: CompiledQuery,
+    bindings: Bindings,
     head: Vec<Action>,
 }
 
@@ -230,7 +245,9 @@ impl EGraph {
         let default = Subst::default();
         for action in actions {
             match action {
-                Action::Panic(msg) => panic!("panic {}", msg),
+                Action::Panic(msg) => {
+                    panic!("panic {} {:?}", msg, ctx.as_ref().unwrap_or(&default))
+                }
                 Action::Expr(e) => {
                     self.eval_expr(ctx.as_ref().unwrap_or(&default), e)?;
                 }
@@ -474,7 +491,9 @@ impl EGraph {
                 } else if let Some(prims) = self.primitives.get(op) {
                     let mut res = None;
                     for prim in prims.iter() {
-                        if prim.accept(&values) {
+                        // HACK
+                        let types = values.iter().map(|v| v.get_type()).collect::<Vec<_>>();
+                        if prim.accept(&types).is_some() {
                             if res.is_none() {
                                 res = Some(prim.apply(&values));
                             } else {
@@ -492,11 +511,6 @@ impl EGraph {
 
     pub fn eval_closed_expr(&mut self, expr: &Expr) -> Result<Value, NotFoundError> {
         self.eval_expr(&Default::default(), expr)
-    }
-
-    fn query(&self, query: &Query, callback: impl FnMut(&[Value])) {
-        let compiled_query = self.compile_gj_query(&query.atoms);
-        self.run_query(&compiled_query, callback)
     }
 
     pub fn run_rules(&mut self, limit: usize) {
@@ -524,19 +538,24 @@ impl EGraph {
             .rules
             .values()
             .map(|rule| {
+                dbg!(&rule);
                 let mut substs = Vec::<Subst>::new();
-                self.query(&rule.query, |values| {
-                    let get = |a: &AtomTerm| -> Value {
-                        match a {
-                            AtomTerm::Var(i) => values[*i].clone(),
-                            AtomTerm::Value(val) => val.clone(),
-                        }
-                    };
+                self.run_query(&rule.query, |values| {
                     substs.push(
-                        rule.query
-                            .bindings
+                        rule.bindings
                             .iter()
-                            .map(|(sym, a)| (*sym, get(a)))
+                            .map(|(k, t)| {
+                                let val = match t {
+                                    AtomTerm::Var(sym) => {
+                                        let i = rule.query.vars.get_index_of(sym).unwrap_or_else(
+                                            || panic!("Couldn't find variable '{sym}'"),
+                                        );
+                                        values[i].clone()
+                                    }
+                                    AtomTerm::Value(val) => val.clone(),
+                                };
+                                (*k, val)
+                            })
                             .collect(),
                     )
                 });
@@ -556,8 +575,12 @@ impl EGraph {
 
     fn add_rule_with_name(&mut self, name: String, rule: ast::Rule) -> Result<Symbol, Error> {
         let name = Symbol::from(name);
+        let mut ctx = typecheck::Context::new(self);
+        let (atoms, bindings) = ctx.typecheck_query(&rule.body).map_err(Error::TypeErrors)?;
+        let query = self.compile_gj_query(atoms, ctx.types);
         let compiled_rule = Rule {
-            query: self.compile_query(rule.body)?,
+            query,
+            bindings,
             head: rule.head,
         };
         match self.rules.entry(name) {
@@ -675,29 +698,30 @@ impl EGraph {
                 self.clear_rules();
                 "Clearing rules.".into()
             }
-            Command::Query(q) => {
-                let qsexp = sexp::Sexp::List(
-                    q.iter()
-                        .map(|fact| sexp::parse(&fact.to_string()).unwrap())
-                        .collect(),
-                );
-                let qcomp = self
-                    .compile_query(q)
-                    .unwrap_or_else(|_| panic!("Could not compile query"));
-                let mut res = vec![];
-                self.query(&qcomp, |v| {
-                    res.push(sexp::Sexp::List(
-                        v.iter()
-                            .map(|val| sexp::Sexp::Atom(sexp::Atom::S(format!("{}", val))))
-                            .collect(),
-                    ));
-                });
-                format!(
-                    "Query: {}\n  Bindings: {:?}\n  Results: {}",
-                    qsexp,
-                    qcomp,
-                    sexp::Sexp::List(res)
-                )
+            Command::Query(_q) => {
+                // let qsexp = sexp::Sexp::List(
+                //     q.iter()
+                //         .map(|fact| sexp::parse(&fact.to_string()).unwrap())
+                //         .collect(),
+                // );
+                // let qcomp = self
+                //     .compile_query(q)
+                //     .unwrap_or_else(|_| panic!("Could not compile query"));
+                // let mut res = vec![];
+                // self.query(&qcomp, |v| {
+                //     res.push(sexp::Sexp::List(
+                //         v.iter()
+                //             .map(|val| sexp::Sexp::Atom(sexp::Atom::S(format!("{}", val))))
+                //             .collect(),
+                //     ));
+                // });
+                // format!(
+                //     "Query: {}\n  Bindings: {:?}\n  Results: {}",
+                //     qsexp,
+                //     qcomp,
+                //     sexp::Sexp::List(res)
+                // )
+                todo!()
             }
         })
     }
@@ -746,99 +770,4 @@ pub enum Error {
     CheckError(Value, Value),
     #[error("Sort {0} already declared.")]
     SortAlreadyBound(Symbol),
-}
-
-pub type Pattern = Expr;
-
-#[derive(Default, Clone, Debug)]
-pub struct Query {
-    bindings: HashMap<Symbol, AtomTerm>,
-    atoms: Vec<Atom>,
-}
-
-impl Query {
-    pub fn from_facts(facts: Vec<Fact>) -> Self {
-        #[derive(PartialEq, Eq, Hash, Clone, Debug)]
-        enum VarOrValue {
-            Var(Symbol),
-            Value(Value),
-        }
-
-        let mut aux_counter = 0;
-        let mut uf = SparseUnionFind::<VarOrValue, ()>::default();
-        let mut pre_atoms: Vec<(Symbol, Vec<VarOrValue>)> = vec![];
-
-        for (i, fact) in facts.into_iter().enumerate() {
-            let group_var = VarOrValue::Var(Symbol::from(format!("__group_{i}")));
-            uf.insert(group_var.clone(), ());
-            let group: Vec<Expr> = match fact {
-                Fact::Eq(exprs) => exprs,
-                Fact::Fact(expr) => vec![expr],
-            };
-            for expr in group {
-                let vv = expr.fold(&mut |expr, mut child_pre_atoms| -> VarOrValue {
-                    let vv = match expr {
-                        Expr::Lit(lit) => VarOrValue::Value(lit.to_value()),
-                        Expr::Var(var) => VarOrValue::Var(*var),
-                        Expr::Call(op, _) => {
-                            let aux = VarOrValue::Var(format!("_aux_{}", aux_counter).into());
-                            aux_counter += 1;
-                            child_pre_atoms.push(aux.clone());
-                            pre_atoms.push((*op, child_pre_atoms));
-                            aux
-                        }
-                    };
-                    uf.insert(vv.clone(), ());
-                    vv
-                });
-                uf.union(group_var.clone(), vv);
-            }
-        }
-
-        let mut next_var_index = 0;
-        let mut bindings = HashMap::default();
-
-        for set in uf.sets() {
-            let mut values: Vec<Value> = set
-                .iter()
-                .filter_map(|vv| match vv {
-                    VarOrValue::Var(_) => None,
-                    VarOrValue::Value(val) => Some(val.clone()),
-                })
-                .collect();
-
-            if values.len() > 1 {
-                panic!("too many values")
-            }
-
-            let atom_term = if let Some(value) = values.pop() {
-                AtomTerm::Value(value)
-            } else {
-                debug_assert!(set.iter().all(|vv| matches!(vv, VarOrValue::Var(_))));
-                let a = AtomTerm::Var(next_var_index);
-                next_var_index += 1;
-                a
-            };
-
-            assert!(values.is_empty());
-            for vv in set {
-                if let VarOrValue::Var(var) = vv {
-                    let old = bindings.insert(var, atom_term.clone());
-                    assert!(old.is_none());
-                }
-            }
-        }
-
-        let vv_to_atomterm = |vv: VarOrValue| match vv {
-            VarOrValue::Var(v) => bindings[&v].clone(),
-            VarOrValue::Value(val) => AtomTerm::Value(val),
-        };
-        let atoms = pre_atoms
-            .into_iter()
-            .map(|(sym, vvs)| Atom(sym, vvs.into_iter().map(vv_to_atomterm).collect()))
-            .collect();
-
-        log::debug!("atoms: {:?}", atoms);
-        Self { bindings, atoms }
-    }
 }
