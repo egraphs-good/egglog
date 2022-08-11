@@ -118,7 +118,7 @@ pub struct SimplePrimitive {
     name: Symbol,
     input: Vec<Type>,
     output: Type,
-    f: fn(&[Value]) -> Value,
+    f: fn(&[Value]) -> Option<Value>,
 }
 
 impl PrimitiveLike for SimplePrimitive {
@@ -129,7 +129,7 @@ impl PrimitiveLike for SimplePrimitive {
         (types == self.input).then(|| self.output.clone())
     }
     fn apply(&self, values: &[Value]) -> Option<Value> {
-        Some((self.f)(values))
+        (self.f)(values)
     }
 }
 
@@ -154,37 +154,49 @@ impl PrimitiveLike for NotEqualPrimitive {
 
 fn default_primitives() -> Vec<Primitive> {
     macro_rules! prim {
-        (@type I64) => { i64 };
-        (@type Rational) => { BigRational };
-        ($name: expr, |$($param:ident : $t:ident),*| -> $output:ident { $body:expr }) => {{
+        (@type ()) => { Type::Unit };
+        (@type i64) => { Type::NumType(NumType::I64) };
+        (@type BigRational) => { Type::NumType(NumType::Rational) };
+        ($name: expr, |$($param:ident : $t:tt),*| -> $output:tt { $body:expr }) => {{
             Primitive::from(SimplePrimitive {
                 name: Symbol::from($name),
-                input: vec![$(Type::NumType(NumType::$t)),*],
-                output: Type::NumType(NumType::$output),
-                f: |values: &[Value]| -> Value {
+                input: vec![$(prim!(@type $t)),*],
+                output: prim!(@type $output),
+                f: |values| {
                     let mut values = values.iter();
                     $(
-                        let $param: prim!(@type $t) = values.next().unwrap().clone().into();
+                        let $param: $t = values.next().unwrap().clone().into();
                     )*
-                    Value::from($body)
+                    let opt: Option<_> = $body;
+                    opt.map(Value::from)
                 }
             })
         }};
     }
 
-    vec![
+    #[rustfmt::skip]
+    let vec = vec![
         NotEqualPrimitive.into(),
-        prim!("+", |a: I64, b: I64| -> I64 { a + b }),
-        prim!("+", |a: Rational, b: Rational| -> Rational { a + b }),
-        prim!("-", |a: I64, b: I64| -> I64 { a - b }),
-        prim!("-", |a: Rational, b: Rational| -> Rational { a - b }),
-        prim!("*", |a: I64, b: I64| -> I64 { a * b }),
-        prim!("*", |a: Rational, b: Rational| -> Rational { a * b }),
-        prim!("max", |a: I64, b: I64| -> I64 { a.max(b) }),
-        prim!("max", |a: Rational, b: Rational| -> Rational { a.max(b) }),
-        prim!("min", |a: I64, b: I64| -> I64 { a.min(b) }),
-        prim!("min", |a: Rational, b: Rational| -> Rational { a.min(b) }),
-    ]
+        prim!("<", |a: i64, b: i64| -> () { (a < b).then(|| ()) }),
+        prim!("<=", |a: i64, b: i64| -> () { (a <= b).then(|| ()) }),
+        prim!(">", |a: i64, b: i64| -> () { (a > b).then(|| ()) }),
+        prim!(">=", |a: i64, b: i64| -> () { (a >= b).then(|| ()) }),
+        prim!("+", |a: i64, b: i64| -> i64 { Some(a + b) }),
+        prim!("-", |a: i64, b: i64| -> i64 { Some(a - b) }),
+        prim!("*", |a: i64, b: i64| -> i64 { Some(a * b) }),
+        prim!("max", |a: i64, b: i64| -> i64 { Some(a.max(b)) }),
+        prim!("min", |a: i64, b: i64| -> i64 { Some(a.min(b)) }),
+        prim!("<", |a: BigRational, b: BigRational| -> () { (a < b).then(|| ()) }),
+        prim!("<=", |a: BigRational, b: BigRational| -> () { (a <= b).then(|| ()) }),
+        prim!(">", |a: BigRational, b: BigRational| -> () { (a > b).then(|| ()) }),
+        prim!(">=", |a: BigRational, b: BigRational| -> () { (a >= b).then(|| ()) }),
+        prim!("+", |a: BigRational, b: BigRational| -> BigRational { Some(a + b) }),
+        prim!("-", |a: BigRational, b: BigRational| -> BigRational { Some(a - b) }),
+        prim!("*", |a: BigRational, b: BigRational| -> BigRational { Some(a * b) }),
+        prim!("max", |a: BigRational, b: BigRational| -> BigRational { Some(a.max(b)) }),
+        prim!("min", |a: BigRational, b: BigRational| -> BigRational { Some(a.min(b)) }),
+    ];
+    vec
 }
 
 #[derive(Clone)]
@@ -382,15 +394,20 @@ impl EGraph {
                         .iter()
                         .map(|e| self.eval_expr(ctx, e))
                         .collect::<Result<_, _>>()?;
-                    let f = self
-                        .functions
-                        .get_mut(sym)
-                        .expect("FIXME add error message");
-                    // FIXME We don't have a unit value
-                    f.nodes
-                        .get(&values)
-                        .ok_or_else(|| NotFoundError(expr.clone()))?;
-                    assert_eq!(f.decl.schema.output, Type::Unit);
+                    if let Some(f) = self.functions.get_mut(sym) {
+                        // FIXME We don't have a unit value
+                        assert_eq!(f.decl.schema.output, Type::Unit);
+                        f.nodes
+                            .get(&values)
+                            .ok_or_else(|| NotFoundError(expr.clone()))?;
+                    } else if self.primitives.contains_key(sym) {
+                        // HACK
+                        // we didn't typecheck so we don't know which prim to call
+                        let val = self.eval_expr(ctx, expr)?;
+                        assert_eq!(val, ().into());
+                    } else {
+                        return Err(Error::TypeError(TypeError::Unbound(*sym)));
+                    }
                 }
             },
         }

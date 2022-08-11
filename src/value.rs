@@ -80,6 +80,12 @@ macro_rules! impl_from {
     };
 }
 
+impl From<()> for Value {
+    fn from(_: ()) -> Self {
+        Value(ValueInner::Unit)
+    }
+}
+
 impl_from!(Id(Id));
 impl_from!(I64(i64));
 impl_from!(Bool(bool));
