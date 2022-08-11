@@ -78,7 +78,7 @@ pub struct Variant {
     pub types: Vec<Type>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
     Error,
     Unit,
@@ -87,7 +87,7 @@ pub enum Type {
     String,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NumType {
     // F64,
     I64,

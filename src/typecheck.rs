@@ -42,7 +42,7 @@ pub struct Context<'a> {
 #[derive(Hash, Eq, PartialEq)]
 enum ENode {
     Func(Symbol, Vec<Id>),
-    Prim(PrimFn, Vec<Id>),
+    Prim(Primitive, Vec<Id>),
     Literal(Literal),
     Var(Symbol),
 }
@@ -56,7 +56,7 @@ pub enum AtomTerm {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Atom {
     Func(Symbol, Vec<AtomTerm>),
-    Prim(PrimFn, Vec<AtomTerm>),
+    Prim(Primitive, Vec<AtomTerm>),
 }
 
 impl Atom {
@@ -252,6 +252,7 @@ impl<'a> Context<'a> {
 
     fn infer_query_expr(&mut self, expr: &'a Expr) -> (Id, Type) {
         match expr {
+            // TODO handle global variables
             Expr::Var(sym) => {
                 let ty = if let Some(ty) = self.types.get(sym) {
                     ty.clone()
@@ -291,7 +292,7 @@ impl<'a> Context<'a> {
                         args.iter().map(|arg| self.infer_query_expr(arg)).unzip();
                     for prim in prims {
                         if let Some(output_type) = prim.accept(&arg_tys) {
-                            let id = self.add_node(ENode::Prim(prim.f.clone(), ids));
+                            let id = self.add_node(ENode::Prim(prim.clone(), ids));
                             return (id, output_type);
                         }
                     }

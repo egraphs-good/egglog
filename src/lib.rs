@@ -10,8 +10,9 @@ use hashbrown::hash_map::Entry;
 use thiserror::Error;
 
 use ast::*;
-use std::fmt::Debug;
 use std::hash::Hash;
+use std::ops::Deref;
+use std::{fmt::Debug, sync::Arc};
 use typecheck::{AtomTerm, Bindings};
 
 pub use value::*;
@@ -22,31 +23,6 @@ use unionfind::*;
 use util::*;
 
 use crate::typecheck::TypeError;
-
-#[derive(Clone)]
-pub struct PrimFn {
-    name: Symbol,
-    f: fn(&'_ [Value]) -> Value,
-}
-
-impl Debug for PrimFn {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "PrimFn({})", self.name)
-    }
-}
-
-impl Hash for PrimFn {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        (self.f as usize).hash(state);
-    }
-}
-
-impl Eq for PrimFn {}
-impl PartialEq for PrimFn {
-    fn eq(&self, other: &Self) -> bool {
-        self.f as usize == other.f as usize
-    }
-}
 
 #[derive(Clone)]
 pub struct Function {
@@ -92,58 +68,112 @@ impl Function {
 
 pub type Subst = IndexMap<Symbol, Value>;
 
-#[derive(Clone)]
-#[allow(dead_code)]
-pub struct Primitive {
-    input: Vec<NumType>,
-    output: NumType,
-    f: PrimFn,
+pub trait PrimitiveLike {
+    fn name(&self) -> Symbol;
+    fn accept(&self, types: &[Type]) -> Option<Type>;
+    fn apply(&self, values: &[Value]) -> Option<Value>;
 }
 
-impl Primitive {
-    pub fn accept(&self, types: &[Type]) -> Option<Type> {
-        if self
-            .input
-            .iter()
-            .zip(types.iter())
-            .all(|(t, v)| matches!(v, Type::NumType(t1) if t1 == t))
-        {
-            Some(Type::NumType(self.output.clone()))
-        } else {
-            None
+#[derive(Clone)]
+pub struct Primitive(Arc<dyn PrimitiveLike>);
+
+impl Deref for Primitive {
+    type Target = dyn PrimitiveLike;
+    fn deref(&self) -> &Self::Target {
+        &*self.0
+    }
+}
+
+impl Hash for Primitive {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        Arc::as_ptr(&self.0).hash(state);
+    }
+}
+
+impl Eq for Primitive {}
+impl PartialEq for Primitive {
+    fn eq(&self, other: &Self) -> bool {
+        // this is a bit of a hack, but clippy says we don't want to compare the
+        // vtables, just the data pointers
+        std::ptr::eq(
+            Arc::as_ptr(&self.0) as *const u8,
+            Arc::as_ptr(&other.0) as *const u8,
+        )
+    }
+}
+
+impl Debug for Primitive {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Prim({})", self.0.name())
+    }
+}
+
+impl<T: PrimitiveLike + 'static> From<T> for Primitive {
+    fn from(p: T) -> Self {
+        Self(Arc::new(p))
+    }
+}
+
+pub struct SimplePrimitive {
+    name: Symbol,
+    input: Vec<Type>,
+    output: Type,
+    f: fn(&[Value]) -> Value,
+}
+
+impl PrimitiveLike for SimplePrimitive {
+    fn name(&self) -> Symbol {
+        self.name
+    }
+    fn accept(&self, types: &[Type]) -> Option<Type> {
+        (types == self.input).then(|| self.output.clone())
+    }
+    fn apply(&self, values: &[Value]) -> Option<Value> {
+        Some((self.f)(values))
+    }
+}
+
+pub struct NotEqualPrimitive;
+
+impl PrimitiveLike for NotEqualPrimitive {
+    fn name(&self) -> Symbol {
+        "!=".into()
+    }
+
+    fn accept(&self, types: &[Type]) -> Option<Type> {
+        match types {
+            [a, b] if a == b => Some(Type::Unit),
+            _ => None,
         }
     }
 
-    pub fn apply(&self, values: &[Value]) -> Value {
-        (self.f.f)(values)
+    fn apply(&self, values: &[Value]) -> Option<Value> {
+        (values[0] != values[1]).then(|| Value(ValueInner::Unit))
     }
 }
 
-fn default_primitives() -> HashMap<Symbol, Vec<Primitive>> {
+fn default_primitives() -> Vec<Primitive> {
     macro_rules! prim {
         (@type I64) => { i64 };
         (@type Rational) => { BigRational };
         ($name: expr, |$($param:ident : $t:ident),*| -> $output:ident { $body:expr }) => {{
-            let name = Symbol::from($name);
-            let prim = Primitive {
-                input: vec![$(NumType::$t),*],
-                output: NumType::$output,
-                f: PrimFn {
-                    name,
-                    f: |values: &[Value]| -> Value {
-                        let mut values = values.iter();
-                        $(
-                            let $param: prim!(@type $t) = values.next().unwrap().clone().into();
-                        )*
-                        Value::from($body)
-                    }
+            Primitive::from(SimplePrimitive {
+                name: Symbol::from($name),
+                input: vec![$(Type::NumType(NumType::$t)),*],
+                output: Type::NumType(NumType::$output),
+                f: |values: &[Value]| -> Value {
+                    let mut values = values.iter();
+                    $(
+                        let $param: prim!(@type $t) = values.next().unwrap().clone().into();
+                    )*
+                    Value::from($body)
                 }
-            };
-            (name, prim)
+            })
         }};
     }
 
-    let pairs = [
+    vec![
+        NotEqualPrimitive.into(),
         prim!("+", |a: I64, b: I64| -> I64 { a + b }),
         prim!("+", |a: Rational, b: Rational| -> Rational { a + b }),
         prim!("-", |a: I64, b: I64| -> I64 { a - b }),
@@ -154,14 +184,7 @@ fn default_primitives() -> HashMap<Symbol, Vec<Primitive>> {
         prim!("max", |a: Rational, b: Rational| -> Rational { a.max(b) }),
         prim!("min", |a: I64, b: I64| -> I64 { a.min(b) }),
         prim!("min", |a: Rational, b: Rational| -> Rational { a.min(b) }),
-    ];
-
-    let mut primitives = HashMap::<Symbol, Vec<Primitive>>::new();
-    for (name, prim) in pairs {
-        primitives.entry(name).or_default().push(prim);
-    }
-
-    primitives
+    ]
 }
 
 #[derive(Clone)]
@@ -183,14 +206,18 @@ struct Rule {
 
 impl Default for EGraph {
     fn default() -> Self {
-        Self {
+        let mut egraph = Self {
             unionfind: Default::default(),
             sorts: Default::default(),
             functions: Default::default(),
             rules: Default::default(),
             globals: Default::default(),
-            primitives: default_primitives(),
+            primitives: Default::default(),
+        };
+        for prim in default_primitives() {
+            egraph.add_primitive(prim);
         }
+        egraph
     }
 }
 
@@ -199,6 +226,10 @@ impl Default for EGraph {
 pub struct NotFoundError(Expr);
 
 impl EGraph {
+    fn add_primitive(&mut self, prim: Primitive) {
+        self.primitives.entry(prim.name()).or_default().push(prim);
+    }
+
     pub fn union(&mut self, id1: Id, id2: Id) -> Id {
         self.unionfind.union(id1, id2)
     }
@@ -272,25 +303,28 @@ impl EGraph {
                         .get_mut(f)
                         .ok_or_else(|| NotFoundError(e.clone()))?;
                     let old_value = function.nodes.insert(values.clone(), value.clone());
+
                     if let Some(old_value) = old_value {
-                        match (function.decl.merge.as_ref(), &function.decl.schema.output) {
-                            (None, Type::Unit) => (),
-                            (None, Type::Sort(_)) => {
-                                self.unionfind.union_values(old_value, value);
+                        if value != old_value {
+                            match (function.decl.merge.as_ref(), &function.decl.schema.output) {
+                                (None, Type::Unit) => (),
+                                (None, Type::Sort(_)) => {
+                                    self.unionfind.union_values(old_value, value);
+                                }
+                                (Some(expr), _) => {
+                                    let mut ctx = Subst::default();
+                                    ctx.insert("old".into(), old_value);
+                                    ctx.insert("new".into(), value);
+                                    let expr = expr.clone(); // break the borrow of `function`
+                                    let new_value = self.eval_expr(&ctx, &expr)?;
+                                    self.functions
+                                        .get_mut(f)
+                                        .unwrap()
+                                        .nodes
+                                        .insert(values, new_value);
+                                }
+                                _ => panic!("invalid merge function"),
                             }
-                            (Some(expr), _) => {
-                                let mut ctx = Subst::default();
-                                ctx.insert("old".into(), old_value);
-                                ctx.insert("new".into(), value);
-                                let expr = expr.clone(); // break the borrow of `function`
-                                let new_value = self.eval_expr(&ctx, &expr)?;
-                                self.functions
-                                    .get_mut(f)
-                                    .unwrap()
-                                    .nodes
-                                    .insert(values, new_value);
-                            }
-                            _ => panic!("invalid merge function"),
                         }
                     }
                 }
@@ -495,7 +529,7 @@ impl EGraph {
                         let types = values.iter().map(|v| v.get_type()).collect::<Vec<_>>();
                         if prim.accept(&types).is_some() {
                             if res.is_none() {
-                                res = Some(prim.apply(&values));
+                                res = prim.apply(&values);
                             } else {
                                 panic!("multiple implementation matches primitives {op}");
                             }
@@ -538,7 +572,7 @@ impl EGraph {
             .rules
             .values()
             .map(|rule| {
-                dbg!(&rule);
+                // dbg!(&rule);
                 let mut substs = Vec::<Subst>::new();
                 self.run_query(&rule.query, |values| {
                     substs.push(
@@ -764,7 +798,7 @@ pub enum Error {
     NotFoundError(#[from] NotFoundError),
     #[error(transparent)]
     TypeError(#[from] TypeError),
-    #[error("{}", ListDisplay(.0, "\n"))]
+    #[error("Errors:\n{}", ListDisplay(.0, "\n"))]
     TypeErrors(Vec<TypeError>),
     #[error("Check failed: {0} != {1}")]
     CheckError(Value, Value),

@@ -1,4 +1,5 @@
 use bumpalo::Bump;
+use indexmap::map::Entry;
 
 use crate::{
     typecheck::{Atom, AtomTerm},
@@ -6,11 +7,16 @@ use crate::{
 };
 use std::fmt::Debug;
 
+#[derive(Debug, Clone)]
 enum Instr {
-    // write
     Intersect {
         idx: usize,
         trie_indices: Vec<usize>,
+    },
+    Call {
+        prim: Primitive,
+        args: Vec<AtomTerm>,
+        check: bool, // check or assign to output variable
     },
 }
 
@@ -22,6 +28,7 @@ struct TrieRequest {
 
 struct Context<'b> {
     bump: &'b Bump,
+    query: &'b CompiledQuery,
     egraph: &'b EGraph,
     tries: Vec<&'b Trie<'b>>,
     tuple: Vec<Value>,
@@ -81,6 +88,38 @@ impl<'b> Context<'b> {
                     self.tries[j] = r;
                 }
             }
+            Instr::Call { prim, args, check } => {
+                let (out, args) = args.split_last().unwrap();
+                let mut values: Vec<Value> = vec![];
+                for arg in args {
+                    values.push(match arg {
+                        AtomTerm::Var(v) => {
+                            let i = self.query.vars.get_index_of(v).unwrap();
+                            self.tuple[i].clone()
+                        }
+                        AtomTerm::Value(val) => val.clone(),
+                    })
+                }
+
+                if let Some(res) = prim.apply(&values) {
+                    match out {
+                        AtomTerm::Var(v) => {
+                            let i = self.query.vars.get_index_of(v).unwrap();
+                            if *check && self.tuple[i] != res {
+                                return;
+                            }
+                            self.tuple[i] = res;
+                        }
+                        AtomTerm::Value(val) => {
+                            assert!(check);
+                            if val != &res {
+                                return;
+                            }
+                        }
+                    }
+                    self.eval(program, f);
+                }
+            }
         }
     }
 
@@ -137,6 +176,7 @@ impl<'b> Trie<'b> {
 
 #[derive(Debug, Default, Clone)]
 pub struct VarInfo {
+    /// indexes into the `atoms` field of CompiledQuery
     occurences: Vec<usize>,
 }
 
@@ -144,6 +184,14 @@ pub struct VarInfo {
 pub struct CompiledQuery {
     atoms: Vec<Atom>,
     pub vars: IndexMap<Symbol, VarInfo>,
+    // extra: Vec<PrimCall>,
+    program: Vec<Instr>,
+}
+
+#[derive(Debug, Clone)]
+struct PrimCall {
+    prim: Primitive,
+    args: Vec<AtomTerm>,
 }
 
 impl EGraph {
@@ -152,22 +200,82 @@ impl EGraph {
         atoms: Vec<Atom>,
         _types: HashMap<Symbol, Type>,
     ) -> CompiledQuery {
-        let mut vars = IndexMap::<Symbol, VarInfo>::default();
+        let mut extra = vec![];
+        let mut vars: IndexMap<Symbol, VarInfo> = Default::default();
+        //     types.keys().map(|sym| (*sym, Default::default())).collect();
         for (i, atom) in atoms.iter().enumerate() {
-            for v in atom.vars() {
-                vars.entry(v).or_default().occurences.push(i)
+            match atom {
+                Atom::Func(_, _) => {
+                    for v in atom.vars() {
+                        // only count grounded occurrences
+                        vars.entry(v).or_default().occurences.push(i)
+                    }
+                }
+                Atom::Prim(p, args) => {
+                    extra.push(PrimCall {
+                        prim: p.clone(),
+                        args: args.clone(),
+                    });
+                }
             }
         }
 
+        // right now, vars should only contain grounded variables
         for (v, info) in &mut vars {
             debug_assert!(info.occurences.windows(2).all(|w| w[0] <= w[1]));
             info.occurences.dedup();
-            assert!(!info.occurences.is_empty(), "var {} has no occurences", v)
+            assert!(!info.occurences.is_empty(), "var {} has no occurences", v);
         }
 
         vars.sort_by(|_v1, i1, _v2, i2| i1.occurences.len().cmp(&i2.occurences.len()));
 
-        CompiledQuery { atoms, vars }
+        let mut program: Vec<Instr> = vars
+            .iter()
+            .enumerate()
+            .map(|(idx, (_v, info))| Instr::Intersect {
+                idx,
+                trie_indices: info.occurences.clone(),
+            })
+            .collect();
+
+        // now we can try to add primitives
+        // TODO this is very inefficient, since primitives all at the end
+        while !extra.is_empty() {
+            let next = extra.iter().position(|p| {
+                assert!(!p.args.is_empty());
+                p.args[..p.args.len() - 1].iter().all(|a| match a {
+                    AtomTerm::Var(v) => vars.contains_key(v),
+                    AtomTerm::Value(_) => true,
+                })
+            });
+
+            if let Some(i) = next {
+                let p = extra.remove(i);
+                let check = match p.args.last().unwrap() {
+                    AtomTerm::Var(v) => match vars.entry(*v) {
+                        Entry::Occupied(_) => true,
+                        Entry::Vacant(e) => {
+                            e.insert(Default::default());
+                            false
+                        }
+                    },
+                    AtomTerm::Value(_) => true,
+                };
+                program.push(Instr::Call {
+                    prim: p.prim.clone(),
+                    args: p.args.clone(),
+                    check,
+                });
+            } else {
+                panic!("cycle")
+            }
+        }
+
+        CompiledQuery {
+            atoms,
+            vars,
+            program,
+        }
     }
 
     pub(crate) fn run_query<F>(&self, query: &CompiledQuery, mut f: F)
@@ -175,74 +283,52 @@ impl EGraph {
         F: FnMut(&[Value]),
     {
         let bump = Bump::new();
+        let default_trie = bump.alloc(Trie::default());
         let mut ctx = Context {
             egraph: self,
+            query,
             bump: &bump,
             tuple: vec![Value::fake(); query.vars.len()],
-            tries: vec![],
+            tries: vec![default_trie; query.atoms.len()],
             empty: bump.alloc(Trie::default()),
         };
 
-        ctx.tries = query
-            .atoms
-            .iter()
-            .map(|atom| {
-                // let mut to_project = vec![];
-                let mut constraints = vec![];
-                let (sym, args) = match atom {
-                    Atom::Func(sym, args) => (*sym, args),
-                    Atom::Prim(_, _) => todo!(),
-                };
+        for (atom_i, atom) in query.atoms.iter().enumerate() {
+            // let mut to_project = vec![];
+            let mut constraints = vec![];
+            let (sym, args) = match atom {
+                Atom::Func(sym, args) => (*sym, args),
+                Atom::Prim(_, _) => continue,
+            };
 
-                for (i, t) in args.iter().enumerate() {
-                    match t {
-                        AtomTerm::Value(val) => constraints.push(Constraint::Const(i, val.clone())),
-                        AtomTerm::Var(_v) => {
-                            if let Some(j) = args[..i].iter().position(|t2| t == t2) {
-                                constraints.push(Constraint::Eq(j, i));
-                            } else {
-                                // to_project.push(v)
-                            }
+            for (i, t) in args.iter().enumerate() {
+                match t {
+                    AtomTerm::Value(val) => constraints.push(Constraint::Const(i, val.clone())),
+                    AtomTerm::Var(_v) => {
+                        if let Some(j) = args[..i].iter().position(|t2| t == t2) {
+                            constraints.push(Constraint::Eq(j, i));
+                        } else {
+                            // to_project.push(v)
                         }
                     }
                 }
+            }
 
-                let mut projection = vec![];
-                for v in query.vars.keys() {
-                    if let Some(i) = args.iter().position(|t| t == &AtomTerm::Var(*v)) {
-                        assert!(!projection.contains(&i));
-                        projection.push(i);
-                    }
+            let mut projection = vec![];
+            for v in query.vars.keys() {
+                if let Some(i) = args.iter().position(|t| t == &AtomTerm::Var(*v)) {
+                    assert!(!projection.contains(&i));
+                    projection.push(i);
                 }
+            }
 
-                ctx.build_trie(&TrieRequest {
-                    sym,
-                    projection,
-                    constraints,
-                })
-            })
-            .collect::<Vec<_>>();
-
-        let mut program = vec![];
-        // let mut atom_positions: Vec<usize> = (0..query.atoms.len()).collect();
-        // let mut next_position = atom_positions.len();
-
-        for (idx, info) in query.vars.values().enumerate() {
-            program.push(Instr::Intersect {
-                idx,
-                trie_indices: info.occurences.clone(),
-            })
-            // let placed_occs: Vec<usize> = occs
-            //     .iter()
-            //     .map(|&i| {
-            //         let placed = atom_positions[i];
-            //         atom_positions[i] = occs.len();
-            //         placed
-            //     })
-            //     .collect();
-            // program.push(Instr::Intersect(placed_occs));
+            ctx.tries[atom_i] = ctx.build_trie(&TrieRequest {
+                sym,
+                projection,
+                constraints,
+            });
         }
 
-        ctx.eval(&program, &mut f)
+        ctx.eval(&query.program, &mut f)
     }
 }

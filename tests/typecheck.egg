@@ -58,7 +58,7 @@
 
 (rule ( ; creating demand to check ctx |- x : t
   (= (typeof (Cons y ty ctx) (Var x)) t)
-  ;; (!= x y); TODO disequality not supported yet
+  (!= x y)
 )(
   (union (typeof ctx (Var x)) (typeof ctx (Var x)))
 ))
@@ -66,7 +66,7 @@
 (rule ( ; only check ctx; y: t |- x : t that has a demand
     (= (typeof ctx (Var x)) t1)
     (= (typeof (Cons y ty ctx) (Var x)) t2)
-    ; (!= x y) TODO disequality not supported yet
+    (!= x y)
 )(
     (union t1 t2)
 ))
