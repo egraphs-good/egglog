@@ -32,9 +32,9 @@
 (rule  ((= (Add x z) e) (neq z (Num 0)))
        ((neq (Add x z) x)))
 
-; rule is not working
-;(rule ((= (Num a) n1) (= (Num b) n2) (= (~ a b) 0))
-;      ((neq (Num a) (Num b))))
+
+(rule ((= (Num a) n1) (= (Num b) n2) (!= a b))
+      ((neq (Num a) (Num b))))
 
 ; select gets from store
 (rewrite (select (store mem i e) i) e)
