@@ -63,12 +63,10 @@
   (union (typeof ctx (Var x)) (typeof ctx (Var x)))
 ))
 
-(rule ( ; only check ctx; y: t |- x : t that has a demand
-    (= (typeof ctx (Var x)) t1)
-    (= (typeof (Cons y ty ctx) (Var x)) t2)
-    (!= x y)
-)(
-    (union t1 t2)
+; only check ctx; y: t |- x : t that has a demand
+(rewrite (typeof ctx (Var x)) t2 :when (
+  (= t2 (typeof (Cons y ty ctx) (Var x)))
+  (!= x y)
 ))
 
 ; ctx; x: t1 |- e : t2

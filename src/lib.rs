@@ -654,7 +654,10 @@ impl EGraph {
         let name = format!("{} -> {}", rewrite.lhs, rewrite.rhs);
         let var = Symbol::from("__rewrite_var");
         let rule = ast::Rule {
-            body: vec![Fact::Eq(vec![Expr::Var(var), rewrite.lhs])],
+            body: [Fact::Eq(vec![Expr::Var(var), rewrite.lhs])]
+                .into_iter()
+                .chain(rewrite.conditions)
+                .collect(),
             head: vec![Action::Union(Expr::Var(var), rewrite.rhs)],
         };
         self.add_rule_with_name(name, rule)

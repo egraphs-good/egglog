@@ -205,4 +205,5 @@ impl Display for Rule {
 pub struct Rewrite {
     pub lhs: Expr,
     pub rhs: Expr,
+    pub conditions: Vec<Fact>,
 }
