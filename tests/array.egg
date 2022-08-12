@@ -25,7 +25,7 @@
       ((neq y x)))
 
 (rule ((neq x x))
-      ((blowup)))
+      ((panic "query (neq x x) found something equal to itself")))
 
 
 ; injectivity rules take not equal to not equal.
