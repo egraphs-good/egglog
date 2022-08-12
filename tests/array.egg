@@ -19,8 +19,6 @@
 
 (relation neq (Math Math))
 
-(relation blowup ())
-
 (rule ((neq x y))
       ((neq y x)))
 
