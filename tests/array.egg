@@ -31,8 +31,6 @@
 ; injectivity rules take not equal to not equal.
 (rule  ((neq x y) (= (add x z) e))
        ((neq (add x z) (add y z))))
-;(rule  ((= (add x z) e) (neq z (Num 0)))
-;       ((neq (add x z) x)))
 (rule  ((= (add x (Num i)) e) (!= i 0))
        ((neq e x)))
 
