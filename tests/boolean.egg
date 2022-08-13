@@ -46,8 +46,8 @@
 
 
 ; complementation
-(rewrite (band (bnot a) (a)) (BoolConst false))
-(rewrite (bor (bnot a) (a)) (BoolConst true))
+(rewrite (band (bnot a) a) (BoolConst false))
+(rewrite (bor (bnot a) a) (BoolConst true))
 
 ; de morgan
 (rewrite (bnot (bor a b)) (band (bnot a) (bnot b)))
@@ -57,7 +57,7 @@
 
 (define a (BoolVar "a"))
 (define test1 (band (BoolConst true) a))
-(define test1 (band a a))
+(define test2 (band a a))
 (run 3)
 (extract test1)
 (check (= true (&& true true)))
