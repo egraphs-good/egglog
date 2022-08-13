@@ -84,6 +84,7 @@ Literal: Literal = {
     <Num> => Literal::Int(<>),
     <numer:Num> "//" <denom:Num> => Literal::Rational(BigRational::new(numer.into(), denom.into())),
     <SymString> => Literal::String(<>),
+    <Bool> => Literal::Bool(<>)
 }
 
 CallExpr: Expr = {
@@ -98,6 +99,7 @@ Variant: Variant = {
 
 Type: Type = { 
     "String" => Type::String,
+    "bool" => Type::Bool,
     <NumType> => Type::NumType(<>),
     <Ident> => Type::Sort(<>),
 }
@@ -105,7 +107,7 @@ Type: Type = {
 NumType: NumType = {
     "i64" => NumType::I64,
     "rational" => NumType::Rational,
-    <s:reserved> =>? lalrpop_error!("{} is reserved.", s)
+    <s:reserved> =>? lalrpop_error!("{} is reserved.", s),
     // "f64" => NumType::F64,
 }
 
@@ -115,6 +117,6 @@ Bool: bool = {
     "false" => false,
 }
 Ident: Symbol = <s:r"[[:alpha:]][\w-]*"> => s.parse().unwrap();
-PrimitiveSymbol: Symbol = <r"[-+*/!=<>]+"> => Symbol::from(<>);
+PrimitiveSymbol: Symbol = <r"[-+*/!=<>&|]+"> => Symbol::from(<>);
 SymString: Symbol = <r#""[^"]*""#> => Symbol::from(<>);
 String: String = <r#""[^"]*""#> => (<>).to_owned();

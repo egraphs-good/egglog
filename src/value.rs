@@ -40,7 +40,7 @@ impl Value {
 
     pub(crate) fn to_literal(&self) -> Literal {
         match &self.0 {
-            ValueInner::Bool(_) => todo!(),
+            ValueInner::Bool(b) => Literal::Bool(*b),
             ValueInner::Id(_) => panic!("Id isn't a literal"),
             ValueInner::I64(i) => Literal::Int(*i),
             ValueInner::String(s) => Literal::String(*s),
@@ -51,7 +51,7 @@ impl Value {
 
     pub fn get_type(&self) -> Type {
         match &self.0 {
-            ValueInner::Bool(_) => todo!(),
+            ValueInner::Bool(_) => Type::Bool,
             ValueInner::Id(_) => panic!("Does't know the type of id without context"),
             ValueInner::I64(_) => Type::NumType(NumType::I64),
             ValueInner::String(_) => Type::String,

@@ -1,0 +1,67 @@
+(datatype BoolSort
+    (BoolConst bool)
+    (BoolVar String)
+)
+
+; https://en.wikipedia.org/wiki/Boolean_algebra#Laws
+
+(function band (BoolSort BoolSort) BoolSort)
+(function bor (BoolSort BoolSort) BoolSort)
+(function bnot (BoolSort) BoolSort)
+
+; commutativity
+(rewrite (band a b) (band b a))
+(rewrite (bor a b) (bor b a))
+
+; associativity
+(rewrite (band a (band b c)) (band (band a b) c))
+(rewrite (bor a (bor b c)) (bor (bor a b) c))
+(rewrite (band (band a b) c) (band a (band b c)))
+(rewrite (bor (bor a b) c) (bor a (bor b c)))
+
+; idempotence
+(rewrite (band a a) a)
+(rewrite (bor a a) a)
+
+; distributive law
+(rewrite (band a (bor b c)) (bor (band a b) (band a c)))
+(rewrite (bor a (band b c)) (band (bor a b) (bor a c)))
+
+; identity
+(rewrite (bor (BoolConst false) b) b)
+(rewrite (band (BoolConst true) b) b)
+
+; annihilator
+(rewrite (bor (BoolConst true) b) (BoolConst true))
+(rewrite (band (BoolConst false) b) (BoolConst false))
+
+; absorptive law
+(rewrite (band x (bor x y)) x)
+(rewrite (bor x (band x y)) x)
+
+(rewrite (bnot (BoolConst b)) (BolConst (! b)))
+
+; Double negation
+(rewrite (bnot (bnot x)) x)
+
+
+; complementation
+(rewrite (band (bnot a) (a)) (BoolConst false))
+(rewrite (bor (bnot a) (a)) (BoolConst true))
+
+; de morgan
+(rewrite (bnot (bor a b)) (band (bnot a) (bnot b)))
+(rewrite (bnot (band a b)) (bor (bnot a) (bnot b)))
+(rewrite (band (bnot a) (bnot b)) (bnot (bor a b)))
+(rewrite (bor (bnot a) (bnot b)) (bnot (band a b)))
+
+(define a (BoolVar "a"))
+(define test1 (band (BoolConst true) a))
+(define test1 (band a a))
+(run 3)
+(extract test1)
+(check (= true (&& true true)))
+(check (= false (&& false true)))
+(check (= true (|| false true)))
+(check (= true (! false)))
+(check (= false (== true false)))

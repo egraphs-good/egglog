@@ -85,6 +85,7 @@ pub enum Type {
     Sort(Symbol),
     NumType(NumType),
     String,
+    Bool
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,6 +110,7 @@ impl Display for Type {
             Type::Sort(s) => Display::fmt(s, f),
             Type::NumType(t) => Display::fmt(t, f),
             Type::String => write!(f, "String"),
+            Type::Bool => write!(f, "bool"),
             Type::Unit => write!(f, "Unit"),
             Type::Error => write!(f, "Error"),
         }

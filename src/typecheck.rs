@@ -265,6 +265,7 @@ impl<'a> Context<'a> {
             Expr::Lit(lit) => {
                 let t = match lit {
                     Literal::Int(_) => Type::NumType(NumType::I64),
+                    Literal::Bool(_) => Type::Bool,
                     Literal::Rational(_) => Type::NumType(NumType::Rational),
                     Literal::String(_) => Type::String,
                     Literal::Unit => Type::Unit,

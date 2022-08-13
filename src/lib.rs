@@ -156,6 +156,7 @@ fn default_primitives() -> Vec<Primitive> {
     macro_rules! prim {
         (@type ()) => { Type::Unit };
         (@type i64) => { Type::NumType(NumType::I64) };
+        (@type bool) => { Type::Bool };
         (@type BigRational) => { Type::NumType(NumType::Rational) };
         ($name: expr, |$($param:ident : $t:tt),*| -> $output:tt { $body:expr }) => {{
             Primitive::from(SimplePrimitive {
@@ -186,6 +187,10 @@ fn default_primitives() -> Vec<Primitive> {
         prim!("*", |a: i64, b: i64| -> i64 { Some(a * b) }),
         prim!("max", |a: i64, b: i64| -> i64 { Some(a.max(b)) }),
         prim!("min", |a: i64, b: i64| -> i64 { Some(a.min(b)) }),
+        prim!("&&", |a: bool, b: bool| -> bool { Some(a && b) }),
+        prim!("||", |a: bool, b: bool| -> bool { Some(a || b) }),
+        prim!("!", |a: bool| -> bool { Some(!a) }),
+        prim!("==", |a: bool, b: bool| -> bool { Some(a == b) }),
         prim!("<", |a: BigRational, b: BigRational| -> () { (a < b).then(|| ()) }),
         prim!("<=", |a: BigRational, b: BigRational| -> () { (a <= b).then(|| ()) }),
         prim!(">", |a: BigRational, b: BigRational| -> () { (a > b).then(|| ()) }),
