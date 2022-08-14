@@ -1,0 +1,202 @@
+; Algorithm W for HM type system
+; TODO: how does our algo differ from Prolog?
+; How does one write this program in Prolog?
+
+;;;;;;;;;;;;;;;;;;;;;;
+;; Exprs and Types
+;;;;;;;;;;;;;;;;;;;;;;
+
+(datatype Expr 
+  (Var String)
+  (App Expr Expr) 
+  (Abs String Expr)
+  (Let String Expr Expr)
+  ; primitives
+  (Num i64)
+  (True)
+  (False)
+  (Unit)
+)
+
+(datatype Type 
+  (TVar String) 
+  (TArr Type Type)
+  (TInt)
+  (TBool)
+  (TUnit)
+)
+;;;;;;;;;;;;;;;;;;;;;;
+;; Free variables
+;;;;;;;;;;;;;;;;;;;;;;
+
+; (fv x y) means y is a free variable of x
+(relation ftv (Type String))
+
+; ftv(a) = a
+(rule (
+  (= t (TVar x))
+)(
+  (ftv t x)
+))
+
+; ftv(t1 -> t2) = ftv(t1) + ftv(t2)
+(rule (
+  (= t (TArr t1 t2))
+  (ftv t1 x)
+)(
+  (ftv t x)
+))
+
+(rule (
+  (= t (TArr t1 t2))
+  (ftv t2 x)
+)(
+  (ftv t x)
+))
+
+;;;;;;;;;;;;;;;;;;;;;;
+;; Scheme and Context
+;;;;;;;;;;;;;;;;;;;;;;
+
+;; (datatype StringSet
+;;   (ConsS String StringSet)
+;;   (NilS))
+(datatype StringSet
+  (EmptySSet)
+  (FromContext Ctx)
+  (FromFV Type)
+  (SetDiff StringSet StringSet)
+)
+
+;; TODO: add demand so containsStr is not instantiated for every context
+;; TODO: needs recursive type definition
+(relation containsStr (StringSet String))
+(rule ((= ls (FromCtx ctx)))
+      ((haskey-demand ctx ctx)))
+
+(rule ((= s (FromCtx ctx))
+       (haskey ctx x))
+      ((containsStr s x)))
+
+(rule ((= s (FromFV t))
+       (ftv t x))
+      ((containsStr s x)))
+
+(rule ((= s (SetDiff a b))
+       (containsStr a x)
+       (! (containsStr b x)))
+      ((containsStr s x)))
+
+; Scheme := forall xs. t
+(datatype Scheme
+  (Forall StringSet Type))
+
+; A context is a map from vars to schemes
+(datatype Ctx 
+  (Nil) 
+  (Cons String Scheme Ctx)
+)
+
+(function lookup (Ctx String) Scheme)
+
+(rewrite (lookup (Cons x s tl) x) s)
+
+(rule (
+  (= t (lookup (Cons y s tl) x))
+  (!= x y)
+)(
+  (union t (lookup tl x))
+))
+
+(relation haskey (Ctx String))
+(relation haskey-demand (Ctx Ctx))
+(rule (
+  (haskey-demand target-ctx current-ctx)
+  (= current-ctx (Cons x s next-ctx))
+)(
+  (haskey target-ctx x)
+  (haskey-demand target-ctx next-ctx)
+))
+
+;;;;;;;;;;;;;;;;;;;;;;
+;; Generalization and Instantiation
+;;;;;;;;;;;;;;;;;;;;;;
+
+(function generalize (Ctx Type) Scheme)
+(function instantiate (Scheme) Type)
+
+;; TODO: how do we handle negation / stratification?
+;; This is not negation stratified
+;; alternative semantics we can have is to start from scratch at each iteration.
+;; (instead of built on top of the previous one)
+(rewrite (generalize ctx t) 
+         (Forall (SetDiff (FromCtx ctx) 
+                          (FromFV t)) 
+                  t))
+
+(function subst-fresh (StringSet Type) Type)
+
+(rewrite (subst-fresh ss (TInt)) (TInt))
+(rewrite (subst-fresh ss (TBool)) (TBool))
+(rewrite (subst-fresh ss (TUnit)) (TUnit))
+(rewrite (subst-fresh ss (TArr fr to)) (TArr (subst ss fr) (subst ss to)))
+(rule ((= otype (subst-fresh ss (TVar s)))
+       (containsStr ss s))
+      ((union otype (TVar (fresh-str)))))
+
+(rewrite (instantiate (Forall ss t))
+         (subst-fresh ss t))
+
+
+;;;;;;;;;;;;;;;;;;;;;;
+;; Injectivity
+;;;;;;;;;;;;;;;;;;;;;;
+
+(rule ( ; injectivity of ->
+  (= (TArr fr1 to1) (TArr fr2 to2))
+)(
+  (union fr1 fr2) 
+  (union to1 to2)
+))
+
+;;;;;;;;;;;;;;;;;;;;;;
+;; Type inference
+;;;;;;;;;;;;;;;;;;;;;;
+
+; ctx |- expr : type
+(function typeof (Ctx Expr) Type)
+
+;; Basic types (TInt, TBool, TUnit)
+(rewrite (typeof ctx (Num x)) (TInt))
+(rewrite (typeof ctx (True)) (TBool))
+(rewrite (typeof ctx (False)) (TBool))
+(rewrite (typeof ctx (Unit)) (TUnit))
+
+; sc = lookup(ctx, x)
+; t = instantiate(sc)
+; ---------------
+; ctx |- x :- 
+(rewrite (typeof ctx (Var x))
+         (instantiate (lookup ctx x)))
+
+(rule (
+    (= t (typeof ctx (Abs x e)))
+)(
+    (let tv (TVar (fresh-name)))
+    (let te (typeof (Cons x (Forall (EmptySSet) tv) ctx) 
+                  e))
+    (union t (TArr tv te))
+))
+
+(rule (
+    (= fr (typeof ctx (App e1 e2)))
+)(
+    (union (typeof ctx e2) 
+           (TArr (typeof ctx e1) to))
+))
+
+(rewrite (typeof ctx (Let x e1 e2))
+         (typeof (Cons x (generalize ctx (typeof ctx e1)) 
+                       ctx) 
+                 e2))
+
