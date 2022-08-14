@@ -33,6 +33,7 @@
 (relation ftv (Type String))
 
 ; ftv(a) = a
+; TODO: when the TVar is resolved, it is still not removed and therefore will occur in the ftv set...
 (rule (
   (= t (TVar x))
 )(
