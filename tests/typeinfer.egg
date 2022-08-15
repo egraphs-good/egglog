@@ -138,8 +138,8 @@
 ;; alternative semantics we can have is to start from scratch at each iteration.
 ;; (instead of built on top of the previous one)
 (rewrite (generalize ctx t) 
-         (Forall (SetDiff (FromCtx ctx) 
-                          (FromFV t)) 
+         (Forall (SetDiff (FromFV t) 
+                          (FromCtx ctx))
                   t))
 
 (function subst-fresh (StringSet Type) Type)
@@ -197,10 +197,10 @@
 ))
 
 (rule (
-    (= fr (typeof ctx (App e1 e2)))
+    (= to (typeof ctx (App e1 e2)))
 )(
-    (union (typeof ctx e2) 
-           (TArr (typeof ctx e1) to))
+    (union (typeof ctx e1) 
+           (TArr (typeof ctx e2) to))
 ))
 
 (rewrite (typeof ctx (Let x e1 e2))
