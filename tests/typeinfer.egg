@@ -39,6 +39,8 @@
 
 ; ftv(a) = a
 ; TODO: when the TVar is resolved, it is still not removed and therefore will occur in the ftv set...
+; <del>we can potentially work around this by having an analysis: Unresolved < Resolved </del>
+; essentially, the set of free variable is not monotonic across iteration
 (rule (
   (= t (TVar x))
 )(
