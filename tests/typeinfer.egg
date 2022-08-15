@@ -6,6 +6,10 @@
 ;; Exprs and Types
 ;;;;;;;;;;;;;;;;;;;;;;
 
+(datatype Ident
+  (FreshFromSubst StringSet String)
+  (FreshFromLam Expr Ctx String Expr))
+
 (datatype Expr 
   (Var String)
   (App Expr Expr) 
@@ -19,12 +23,13 @@
 )
 
 (datatype Type 
-  (TVar String) 
+  (TVar Ident) 
   (TArr Type Type)
   (TInt)
   (TBool)
   (TUnit)
 )
+
 ;;;;;;;;;;;;;;;;;;;;;;
 ;; Free variables
 ;;;;;;;;;;;;;;;;;;;;;;
@@ -143,7 +148,7 @@
 (rewrite (subst-fresh ss (TArr fr to)) (TArr (subst ss fr) (subst ss to)))
 (rule ((= otype (subst-fresh ss (TVar s)))
        (containsStr ss s))
-      ((union otype (TVar (fresh-str)))))
+      ((union otype (TVar (FreshFromSubst ss s)))))
 
 (rewrite (instantiate (Forall ss t))
          (subst-fresh ss t))
@@ -183,7 +188,7 @@
 (rule (
     (= t (typeof ctx (Abs x e)))
 )(
-    (let tv (TVar (fresh-name)))
+    (let tv (TVar (FreshFromLam ctx x e)))
     (let te (typeof (Cons x (Forall (EmptySSet) tv) ctx) 
                   e))
     (union t (TArr tv te))
