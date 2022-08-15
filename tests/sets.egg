@@ -1,0 +1,72 @@
+; (Finite?) sets are encodable as a theory
+; You can play some fun monkey games with first class sets.
+; The AC formulation is simple but undesirable
+; Nothing stops the sets from being heterogenous
+; https://cvc4.github.io/sets-and-relations.html
+
+; I make no claim that the following axioms are complete.
+
+(datatype Set)
+
+(function set-union (Set Set) Set)
+(function set-inter (Set Set) Set)
+(function set-diff (Set Set) Set)
+(function sing-i64 (i64) Set)
+(function sing-string (String) Set)
+; Sets of sets :)
+(function sing-set (Set) Set)
+(function empty () Set)
+
+(rewrite (set-union (sing-i64 i) (sing-i64 i)) (sing-i64 i))
+(rewrite (set-union a b) (set-union b a))
+(rewrite (set-union a (empty)) a)
+(rewrite (set-union a (set-union b c)) (set-union (set-union a b) c))
+
+(rewrite (set-inter (sing-i64 i) (sing-i64 i)) (sing-i64 i))
+(rewrite (set-inter a (empty)) (empty))
+
+; requires primitive disequality
+;(rule 
+;     ((= (set-inter (sing-i64 i) (sing-i64 j) s) (!= i j) ) + (sing-i64 i))  ((= empty e))
+
+(rewrite (set-inter a b) (set-inter b a))
+(rewrite (set-inter a (set-inter b c)) (set-inter (set-inter a b) c))
+
+; distributivity of inter and union
+
+
+(rewrite (set-diff (sing-i64 i) (sing-i64 i)) (empty))
+; requires primitive disequality
+; (rule (= (set-diff (sing-i64 i) (sing-i64 j)) s) (!= i j) (= (sing-i64 i) s))
+(rewrite (set-diff (set-union a b) c) (set-union (set-diff a c) (set-diff b c)))
+(rewrite (set-diff (set-inter a b) c) (set-union (set-diff a c) (set-diff b c)))
+
+
+(function insert (Set i64) Set)
+(function remove (Set i64) Set)
+(rewrite (insert s i) (set-union s (sing-i64 i)))
+(rewrite (remove s i) (set-diff s (sing-i64 i)))
+
+(relation elem (i64 Set))
+(rule ((= (set-union (sing-i64 i) s1) s))  ((elem i s)))
+
+(relation subset (Set Set))
+
+(rule ((= (set-union a b) s))  ((subset a s) (subset b s)))
+(rule ((= (set-inter a b) s))  ((subset s a) (subset s a)))
+(rule ((= (set-diff a b) s))  ((subset s a) (set (set-inter b s) (empty))))
+
+; Clunky reflexivity. Needs more cases or a (relation set (Set))
+(rule ((= (sing-i64 i) s))  ((subset s s) (subset s s)))
+; lifting subset to equality.
+(rule ((subset a b) (subset b a)) ((set a b)))
+
+
+; cardinality
+; Clunky.
+
+(define s1 (set-union (empty) (sing-i64 1)))
+(run 3)
+(check (= s1 (sing-i64 1)))
+
+
