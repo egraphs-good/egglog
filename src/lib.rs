@@ -10,6 +10,7 @@ use hashbrown::hash_map::Entry;
 use thiserror::Error;
 
 use ast::*;
+use std::fmt::Write;
 use std::hash::Hash;
 use std::ops::Deref;
 use std::{fmt::Debug, sync::Arc};
@@ -184,6 +185,14 @@ fn default_primitives() -> Vec<Primitive> {
         prim!("+", |a: i64, b: i64| -> i64 { Some(a + b) }),
         prim!("-", |a: i64, b: i64| -> i64 { Some(a - b) }),
         prim!("*", |a: i64, b: i64| -> i64 { Some(a * b) }),
+        prim!("/", |a: i64, b: i64| -> i64 { Some(a / b) }),
+        prim!("%", |a: i64, b: i64| -> i64 { Some(a % b) }),
+        prim!("&", |a: i64, b: i64| -> i64 { Some(a & b) }),
+        prim!("|", |a: i64, b: i64| -> i64 { Some(a | b) }),
+        prim!("^", |a: i64, b: i64| -> i64 { Some(a ^ b) }),
+        prim!(">>", |a: i64, b: i64| -> i64 { Some(a >> b) }),
+        prim!("<<", |a: i64, b: i64| -> i64 { Some(a << b) }),
+        prim!("not-i64", |a: i64| -> i64 { Some(!a) }),
         prim!("max", |a: i64, b: i64| -> i64 { Some(a.max(b)) }),
         prim!("min", |a: i64, b: i64| -> i64 { Some(a.min(b)) }),
         prim!("<", |a: BigRational, b: BigRational| -> () { (a < b).then(|| ()) }),
@@ -361,30 +370,16 @@ impl EGraph {
                     .collect::<Result<_, _>>()?;
                 for v in &values[1..] {
                     if &values[0] != v {
+                        // the check failed, so print out some useful info
+                        for value in &values {
+                            if let Value(ValueInner::Id(id)) = value {
+                                let best = self.extract(*id).1;
+                                println!("{}: {}", id, best);
+                            }
+                        }
                         return Err(Error::CheckError(values[0].clone(), v.clone()));
                     }
                 }
-                // let mut should_union = true;
-                // if let Expr::Node(sym, args) = &exprs[0] {
-                //     if !self.functions[sym].decl.schema.output.is_sort() {
-                //         assert_eq!(exprs.len(), 2);
-                //         let arg_values: Vec<Value> = args
-                //             .iter()
-                //             .map(|e| self.eval_expr(ctx, e))
-                //             .collect::<Result<_, _>>()?;
-                //         let value = self.eval_expr(ctx, &exprs[1])?;
-                //         let f = self
-                //             .functions
-                //             .get_mut(sym)
-                //             .expect("FIXME add error message");
-                //         assert_eq!(f.get(&mut self.unionfind, &arg_values).unwrap(), value);
-                //         should_union = false;
-                //     }
-                // }
-
-                // if should_union {
-                //     self.union_exprs(ctx, exprs)?;
-                // }
             }
             Fact::Fact(expr) => match expr {
                 Expr::Lit(_) => panic!("can't assert a literal"),
@@ -654,7 +649,10 @@ impl EGraph {
         let name = format!("{} -> {}", rewrite.lhs, rewrite.rhs);
         let var = Symbol::from("__rewrite_var");
         let rule = ast::Rule {
-            body: vec![Fact::Eq(vec![Expr::Var(var), rewrite.lhs])],
+            body: [Fact::Eq(vec![Expr::Var(var), rewrite.lhs])]
+                .into_iter()
+                .chain(rewrite.conditions)
+                .collect(),
             head: vec![Action::Union(Expr::Var(var), rewrite.rhs)],
         };
         self.add_rule_with_name(name, rule)
@@ -706,7 +704,7 @@ impl EGraph {
                     format!("Skipped run {limit}.")
                 }
             }
-            Command::Extract(e) => {
+            Command::Extract { e, variants } => {
                 if should_run {
                     // TODO typecheck
                     let value = self.eval_closed_expr(&e)?;
@@ -714,7 +712,14 @@ impl EGraph {
                     let id = Id::from(value);
                     log::info!("Extracting {e} at {id}");
                     let (cost, expr) = self.extract(id);
-                    format!("Extracted with cost {cost}: {expr}")
+                    let mut msg = format!("Extracted with cost {cost}: {expr}");
+                    if variants > 0 {
+                        let exprs = self.extract_variants(id, variants);
+                        let line = "\n    ";
+                        let varnts = ListDisplay(&exprs, line);
+                        write!(msg, "\nVariants of {expr}:{line}{varnts}").unwrap();
+                    }
+                    msg
                 } else {
                     "Skipping extraction.".into()
                 }
@@ -773,6 +778,12 @@ impl EGraph {
                 //     sexp::Sexp::List(res)
                 // )
                 todo!()
+            }
+            Command::Clear => {
+                for f in self.functions.values_mut() {
+                    f.nodes.clear();
+                }
+                "Cleared.".into()
             }
         })
     }

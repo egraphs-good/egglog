@@ -39,12 +39,18 @@ Command: Command = {
     },
     "(" "relation" <name:Ident> <types:List<Type>> ")" => Command::Function(FunctionDecl::relation(name, types)),
     "(" "rule" <body:List<Fact>> <head:List<Action>> ")" => Command::Rule(Rule { head, body }),
-    "(" "rewrite" <lhs:Expr> <rhs:Expr> ")" => Command::Rewrite(Rewrite { <> }),
+    "(" "rewrite" <lhs:Expr> <rhs:Expr>
+        <conditions:(":when" <List<Fact>>)?>
+    ")" => Command::Rewrite(Rewrite { lhs, rhs, conditions: conditions.unwrap_or_default() }),
     <Action> => Command::Action(<>),
     "(" "run" <Num> ")" => Command::Run(<>.try_into().unwrap()),
-    "(" "extract" <Expr> ")" => Command::Extract(<>),
+    "(" "extract" <e:Expr> ")" => Command::Extract { <>, variants: 0 },
+    "(" "extract" ":variants" <variants:Num> <e:Expr> ")" => Command::Extract { 
+        e, variants: variants.try_into().unwrap()
+    },  
     "(" "check" <Fact> ")" => Command::Check(<>),
     "(" "clear-rules" ")" => Command::ClearRules,
+    "(" "clear" ")" => Command::Clear,
     "(" "query" <List<Fact>> ")" => Command::Query(<>),
 }
 
@@ -113,6 +119,6 @@ Bool: bool = {
     "false" => false,
 }
 Ident: Symbol = <s:r"[[:alpha:]][\w-]*"> => s.parse().unwrap();
-PrimitiveSymbol: Symbol = <r"[-+*/!=<>]+"> => Symbol::from(<>);
+PrimitiveSymbol: Symbol = <r"[-+*/!=<>&|^/%]+"> => Symbol::from(<>);
 SymString: Symbol = <r#""[^"]*""#> => Symbol::from(<>);
 String: String = <r#""[^"]*""#> => (<>).to_owned();
