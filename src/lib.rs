@@ -361,30 +361,16 @@ impl EGraph {
                     .collect::<Result<_, _>>()?;
                 for v in &values[1..] {
                     if &values[0] != v {
+                        // the check failed, so print out some useful info
+                        for value in &values {
+                            if let Value(ValueInner::Id(id)) = value {
+                                let best = self.extract(*id).1;
+                                println!("{}: {}", id, best);
+                            }
+                        }
                         return Err(Error::CheckError(values[0].clone(), v.clone()));
                     }
                 }
-                // let mut should_union = true;
-                // if let Expr::Node(sym, args) = &exprs[0] {
-                //     if !self.functions[sym].decl.schema.output.is_sort() {
-                //         assert_eq!(exprs.len(), 2);
-                //         let arg_values: Vec<Value> = args
-                //             .iter()
-                //             .map(|e| self.eval_expr(ctx, e))
-                //             .collect::<Result<_, _>>()?;
-                //         let value = self.eval_expr(ctx, &exprs[1])?;
-                //         let f = self
-                //             .functions
-                //             .get_mut(sym)
-                //             .expect("FIXME add error message");
-                //         assert_eq!(f.get(&mut self.unionfind, &arg_values).unwrap(), value);
-                //         should_union = false;
-                //     }
-                // }
-
-                // if should_union {
-                //     self.union_exprs(ctx, exprs)?;
-                // }
             }
             Fact::Fact(expr) => match expr {
                 Expr::Lit(_) => panic!("can't assert a literal"),
@@ -776,6 +762,12 @@ impl EGraph {
                 //     sexp::Sexp::List(res)
                 // )
                 todo!()
+            }
+            Command::Clear => {
+                for f in self.functions.values_mut() {
+                    f.nodes.clear();
+                }
+                "Cleared.".into()
             }
         })
     }

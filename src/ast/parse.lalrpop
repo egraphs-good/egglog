@@ -47,6 +47,7 @@ Command: Command = {
     "(" "extract" <Expr> ")" => Command::Extract(<>),
     "(" "check" <Fact> ")" => Command::Check(<>),
     "(" "clear-rules" ")" => Command::ClearRules,
+    "(" "clear" ")" => Command::Clear,
     "(" "query" <List<Fact>> ")" => Command::Query(<>),
 }
 
