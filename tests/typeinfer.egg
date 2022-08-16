@@ -1,6 +1,7 @@
 ; Algorithm W for HM type system
 ; TODO: how does our algo differ from Prolog?
 ; How does one write this program in Prolog?
+; TODO: Does the current algorithm work if the e-graph contains more than one expr?
 
 ;;;;;;;;;;;;;;;;;;;;;;
 ;; Exprs and Types
