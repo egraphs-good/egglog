@@ -11,9 +11,6 @@
 (rewrite (Add (Num x) (Num y)) (Num (+ x y)))
 (rule ((= (Add x y) z))
       ((union (Add z (Neg y)) x)))
-(rule ((= (Mul (Num x) y) (Num z))
-       (= (% z x) 0))
-      ((union y (Num (/ z x)))))
 (rewrite (Neg (Neg x)) x)
 (rewrite (Neg (Num n)) (Num (- 0 n)))
 
@@ -21,6 +18,9 @@
 (rule ((= x (Add x1 x2))) ((union (Mul (Num 1) x) x)))
 (rewrite (Add (Mul y x) (Mul z x)) (Mul (Add y z) x))
 (rewrite (Mul x y) (Mul y x))
+(rule ((= (Mul (Num x) y) (Num z))
+       (= (% z x) 0))
+      ((union y (Num (/ z x)))))
 
 ; system 1: x + 2 = 7
 (set (Add (Var "x") (Num 2)) (Num 7))
