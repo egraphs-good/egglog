@@ -12,8 +12,8 @@ thiserror = "1"
 indexmap = "1.8"
 hashbrown = "0.12"
 log = "0.4"
-ahash = { version = "0.7", default-features = false }
-symbol_table = { version = "0.1", features = ["global"] }
+rustc-hash = "1.1"
+symbol_table = { version = "0.2", features = ["global"] }
 num-bigint = "0.4.3"
 num-integer = "0.1.45"
 num-rational = "0.4.0"
