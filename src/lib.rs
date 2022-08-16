@@ -10,6 +10,7 @@ use hashbrown::hash_map::Entry;
 use thiserror::Error;
 
 use ast::*;
+use std::fmt::Write;
 use std::hash::Hash;
 use std::ops::Deref;
 use std::{fmt::Debug, sync::Arc};
@@ -695,7 +696,7 @@ impl EGraph {
                     format!("Skipped run {limit}.")
                 }
             }
-            Command::Extract(e) => {
+            Command::Extract { e, variants } => {
                 if should_run {
                     // TODO typecheck
                     let value = self.eval_closed_expr(&e)?;
@@ -703,7 +704,14 @@ impl EGraph {
                     let id = Id::from(value);
                     log::info!("Extracting {e} at {id}");
                     let (cost, expr) = self.extract(id);
-                    format!("Extracted with cost {cost}: {expr}")
+                    let mut msg = format!("Extracted with cost {cost}: {expr}");
+                    if variants > 0 {
+                        let exprs = self.extract_variants(id, variants);
+                        let line = "\n    ";
+                        let varnts = ListDisplay(&exprs, line);
+                        write!(msg, "\nVariants of {expr}:{line}{varnts}").unwrap();
+                    }
+                    msg
                 } else {
                     "Skipping extraction.".into()
                 }

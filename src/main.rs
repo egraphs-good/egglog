@@ -22,7 +22,7 @@ fn main() {
             match egraph.parse_and_run_program(&s) {
                 Ok(msgs) => {
                     for msg in msgs {
-                        println!("  {}", msg);
+                        println!("{}", msg);
                     }
                 }
                 Err(err) => {

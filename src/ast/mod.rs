@@ -57,7 +57,10 @@ pub enum Command {
     Rewrite(Rewrite),
     Action(Action),
     Run(usize),
-    Extract(Expr),
+    Extract {
+        variants: usize,
+        e: Expr,
+    },
     // TODO: this could just become an empty query
     Check(Fact),
     ClearRules,
@@ -173,7 +176,7 @@ impl Display for Action {
         match self {
             Action::Define(lhs, rhs) => write!(f, "(define {} {})", lhs, rhs),
             Action::Set(lhs, args, rhs) => {
-                write!(f, "(set ({} {}) {})", lhs, ListDisplay(args, ""), rhs)
+                write!(f, "(set ({} {}) {})", lhs, ListDisplay(args, " "), rhs)
             }
             Action::Union(lhs, rhs) => write!(f, "(union {} {})", lhs, rhs),
             Action::Panic(msg) => write!(f, "(panic {:?})", msg),

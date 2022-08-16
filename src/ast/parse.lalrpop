@@ -44,7 +44,10 @@ Command: Command = {
     ")" => Command::Rewrite(Rewrite { lhs, rhs, conditions: conditions.unwrap_or_default() }),
     <Action> => Command::Action(<>),
     "(" "run" <Num> ")" => Command::Run(<>.try_into().unwrap()),
-    "(" "extract" <Expr> ")" => Command::Extract(<>),
+    "(" "extract" <e:Expr> ")" => Command::Extract { <>, variants: 0 },
+    "(" "extract" ":variants" <variants:Num> <e:Expr> ")" => Command::Extract { 
+        e, variants: variants.try_into().unwrap()
+    },  
     "(" "check" <Fact> ")" => Command::Check(<>),
     "(" "clear-rules" ")" => Command::ClearRules,
     "(" "clear" ")" => Command::Clear,
