@@ -191,10 +191,18 @@
 (rule (
     (= t (typeof ctx (Abs x e)))
 )(
-    (let tv (TVar (FreshFromLam ctx x e)))
-    (let te (typeof (Cons x (Forall (EmptySSet) tv) ctx) 
-                  e))
-    (union t (TArr tv te))
+    ;; (let tv (TVar (FreshFromLam ctx x e)))
+    ;; (let te (typeof (Cons x (Forall (EmptySSet) tv) ctx) 
+    ;;               e))
+    ;; (union t (TArr tv te))
+    ;; unfolds to
+    (union 
+      t 
+      (TArr (TVar (FreshFromLam ctx x e)) 
+            (typeof (Cons x (Forall (EmptySSet) 
+                                    (TVar (FreshFromLam ctx x e))) 
+                          ctx) 
+                  e)))
 ))
 
 (rule (
@@ -206,6 +214,6 @@
 
 (rewrite (typeof ctx (Let x e1 e2))
          (typeof (Cons x (generalize ctx (typeof ctx e1)) 
-                       ctx) 
+                       ctx)
                  e2))
 
