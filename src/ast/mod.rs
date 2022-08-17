@@ -2,9 +2,9 @@ use std::fmt::Display;
 
 pub use symbol_table::GlobalSymbol as Symbol;
 
-macro_rules! lalrpop_error {
-    ($($x:tt)*) => { Err(::lalrpop_util::ParseError::User { error: format!($($x)*)}) }
-}
+// macro_rules! lalrpop_error {
+//     ($($x:tt)*) => { Err(::lalrpop_util::ParseError::User { error: format!($($x)*)}) }
+// }
 
 use lalrpop_util::lalrpop_mod;
 lalrpop_mod!(
@@ -20,12 +20,6 @@ pub use expr::*;
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct Id(usize);
-
-impl Id {
-    pub(crate) fn fake() -> Self {
-        Id(0xbadbeef)
-    }
-}
 
 impl From<usize> for Id {
     fn from(n: usize) -> Self {
@@ -79,65 +73,22 @@ pub struct FunctionDecl {
 #[derive(Clone, Debug)]
 pub struct Variant {
     pub name: Symbol,
-    pub types: Vec<Type>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Type {
-    Error,
-    Unit,
-    Sort(Symbol),
-    NumType(NumType),
-    String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum NumType {
-    // F64,
-    I64,
-    Rational,
-}
-
-impl Display for NumType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            NumType::I64 => write!(f, "i64"),
-            NumType::Rational => write!(f, "rational"),
-        }
-    }
-}
-
-impl Display for Type {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Type::Sort(s) => Display::fmt(s, f),
-            Type::NumType(t) => Display::fmt(t, f),
-            Type::String => write!(f, "String"),
-            Type::Unit => write!(f, "Unit"),
-            Type::Error => write!(f, "Error"),
-        }
-    }
-}
-
-impl Type {
-    pub fn is_sort(&self) -> bool {
-        matches!(self, Self::Sort(..))
-    }
+    pub types: Vec<Symbol>,
 }
 
 #[derive(Clone, Debug)]
 pub struct Schema {
-    pub input: Vec<Type>,
-    pub output: Type,
+    pub input: Vec<Symbol>,
+    pub output: Symbol,
 }
 
 impl FunctionDecl {
-    pub fn relation(name: Symbol, input: Vec<Type>) -> Self {
+    pub fn relation(name: Symbol, input: Vec<Symbol>) -> Self {
         Self {
             name,
             schema: Schema {
                 input,
-                output: Type::Unit,
+                output: Symbol::from("Unit"),
             },
             merge: None,
             default: None,
