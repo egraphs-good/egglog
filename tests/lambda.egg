@@ -56,8 +56,11 @@
 ; if-false
 (rewrite (If (Bool (False)) then else) else)
 ; if-elim
+(rule ((= term (If (Eq (Var x) e) then else)))
+      ((Let x e then)
+       (Let x e else)))
 (rewrite (If (Eq (Var x) e) then else) else
-    :when TODO)
+    :when ((= (let x e then) (let x e else))))
 
 ; add-comm
 (rewrite (Add a b) (Add b a))
@@ -77,7 +80,7 @@
 ; let-eq
 (rewrite (Let v e (Eq a b)) (Eq (Let v e a) (Let v e b)))
 ; let-const
-(rewrite (Let v e c) c :when TODO)
+(rewrite (Let v e c) c :when ((= const (evals-to c))))
 ; let-if
 (rewrite (Let v e (If cond then else)) 
          (If (Let v e cond) (Let v e then) (Let v e else)))
