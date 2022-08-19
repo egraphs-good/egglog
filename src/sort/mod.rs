@@ -11,9 +11,10 @@ mod unit;
 pub use unit::*;
 mod i64;
 pub use self::i64::*;
+mod map;
+pub use map::*;
 
-use crate::ast::Expr;
-use crate::{ast::Symbol, EGraph, Value};
+use crate::*;
 
 pub trait Sort: Any + Send + Sync + Debug {
     fn name(&self) -> Symbol;
@@ -69,3 +70,5 @@ impl<T: IntoSort> IntoSort for Option<T> {
         self?.store(sort)
     }
 }
+
+pub type PreSort = fn(egraph: &mut EGraph, name: Symbol, params: &[Expr]) -> Result<ArcSort, Error>;

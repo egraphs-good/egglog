@@ -149,6 +149,7 @@ impl PrimitiveLike for SimplePrimitive {
 #[derive(Clone)]
 pub struct EGraph {
     unionfind: UnionFind,
+    presorts: HashMap<Symbol, PreSort>,
     sorts: HashMap<Symbol, Arc<dyn Sort>>,
     primitives: HashMap<Symbol, Vec<Primitive>>,
     functions: HashMap<Symbol, Function>,
@@ -172,11 +173,13 @@ impl Default for EGraph {
             rules: Default::default(),
             globals: Default::default(),
             primitives: Default::default(),
+            presorts: Default::default(),
         };
         egraph.add_sort(UnitSort::new("Unit".into()));
         egraph.add_sort(StringSort::new("String".into()));
         egraph.add_sort(I64Sort::new("i64".into()));
         egraph.add_sort(RationalSort::new("Rational".into()));
+        egraph.presorts.insert("Map".into(), MapSort::make_sort);
         egraph
     }
 }
@@ -187,10 +190,13 @@ pub struct NotFoundError(Expr);
 
 impl EGraph {
     pub fn add_sort<S: Sort + 'static>(&mut self, sort: S) {
+        self.add_arcsort(Arc::new(sort));
+    }
+
+    pub fn add_arcsort(&mut self, sort: ArcSort) {
         match self.sorts.entry(sort.name()) {
             Entry::Occupied(_) => panic!(),
             Entry::Vacant(e) => {
-                let sort = Arc::new(sort);
                 e.insert(sort.clone());
                 sort.register_primitives(self);
             }
@@ -209,7 +215,8 @@ impl EGraph {
         panic!("Failed to lookup sort: {}", std::any::type_name::<S>());
     }
 
-    fn add_primitive(&mut self, prim: Primitive) {
+    fn add_primitive(&mut self, prim: impl Into<Primitive>) {
+        let prim = prim.into();
         self.primitives.entry(prim.name()).or_default().push(prim);
     }
 
@@ -663,6 +670,17 @@ impl EGraph {
                     self.declare_constructor(variant.name, variant.types, name)?;
                 }
                 format!("Declared datatype {name}.")
+            }
+            Command::Sort(name, presort, args) => {
+                // TODO extract this into a function
+                assert!(!self.sorts.contains_key(&name));
+                let mksort = self.presorts[&presort];
+                let sort = mksort(self, name, &args)?;
+                self.add_arcsort(sort);
+                format!(
+                    "Declared sort {name} = ({presort} {})",
+                    ListDisplay(&args, " ")
+                )
             }
             Command::Function(fdecl) => {
                 self.declare_function(&fdecl)?;

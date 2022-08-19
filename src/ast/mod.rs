@@ -45,6 +45,7 @@ pub enum Command {
         name: Symbol,
         variants: Vec<Variant>,
     },
+    Sort(Symbol, Symbol, Vec<Expr>),
     Function(FunctionDecl),
     Define(Symbol, Expr),
     Rule(Rule),
