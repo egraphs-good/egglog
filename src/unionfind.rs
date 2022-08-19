@@ -36,12 +36,18 @@ impl UnionFind<()> {
         self.make_set_with(())
     }
 
-    pub fn find_mut_value(&mut self, value: Value) -> Value {
-        self.find_mut(value.into()).into()
+    pub fn find_mut_value(&mut self, mut value: Value) -> Value {
+        // HACK this is not safe
+        let id = Id::from(value.bits as usize);
+        value.bits = usize::from(self.find_mut(id)) as u64;
+        value
     }
 
     pub fn union_values(&mut self, value1: Value, value2: Value) -> Value {
-        self.union(value1.into(), value2.into()).into()
+        let id1 = Id::from(value1.bits as usize);
+        let id2 = Id::from(value2.bits as usize);
+        assert_eq!(value1.tag, value2.tag);
+        Value::from_id(value1.tag, self.union(id1, id2))
     }
 }
 

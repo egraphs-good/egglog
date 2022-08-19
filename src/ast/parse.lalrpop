@@ -1,6 +1,5 @@
 use crate::ast::*;
 use crate::Symbol;
-use num_rational::BigRational;
 
 grammar;
 
@@ -34,6 +33,7 @@ Comma<T>: Vec<T> = {
 
 Command: Command = {
     "(" "datatype" <name:Ident> <variants:(Variant)*> ")" => Command::Datatype { <> },
+    "(" "sort" <name:Ident> "(" <head:Ident> <tail:(Expr)*> ")" ")" => Command::Sort (<>),
     "(" "function" <name:Ident> <schema:Schema> <merge:(":merge" <Expr>)?> <default:(":default" <Expr>)?> ")" => {
         Command::Function(FunctionDecl { name, schema, merge, default })
     },
@@ -86,7 +86,6 @@ Expr: Expr = {
 Literal: Literal = {
     // "(" ")" => Literal::Unit, // shouldn't need unit literals for now
     <Num> => Literal::Int(<>),
-    <numer:Num> "//" <denom:Num> => Literal::Rational(BigRational::new(numer.into(), denom.into())),
     <SymString> => Literal::String(<>),
 }
 
@@ -100,18 +99,7 @@ Variant: Variant = {
     "(" <name:Ident> <types:(Type)*> ")" => Variant { <> },
 }
 
-Type: Type = { 
-    "String" => Type::String,
-    <NumType> => Type::NumType(<>),
-    <Ident> => Type::Sort(<>),
-}
-
-NumType: NumType = {
-    "i64" => NumType::I64,
-    "rational" => NumType::Rational,
-    <s:reserved> =>? lalrpop_error!("{} is reserved.", s)
-    // "f64" => NumType::F64,
-}
+Type: Symbol = <Ident>;
 
 Num: i64 = <s:r"(-)?[0-9]+"> => s.parse().unwrap();
 Bool: bool = {

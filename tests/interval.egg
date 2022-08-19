@@ -1,10 +1,10 @@
 (datatype Math
-  (Num rational)
+  (Num Rational)
   (Var String)
   (Mul Math Math))
 
-(function hi (Math) rational :merge (min old new))
-(function lo (Math) rational :merge (max old new))
+(function hi (Math) Rational :merge (min old new))
+(function lo (Math) Rational :merge (max old new))
 
 (rule ((= mul (Mul a b)))
       ((set (lo mul) 
@@ -14,15 +14,18 @@
 (define x (Var "x"))
 (define e (Mul x x))
 
-(set (lo x) -10//1)
-(set (hi x)  10//1)
+(set (lo x) (rational -10 1))
+(set (hi x) (rational 10 1))
 
 (run 1)
 
-(check (= (lo e) -100//1))
+(check (= (lo e) (rational -100 1)))
 
 (rule ((= mul (Mul a a)))
       ((set (lo mul) (* (lo a) (lo a)))))
 
 (run 1)
-(check (= (lo e) 100//1))
+(check (= (lo e) (rational 100 1)))
+
+;; testing extraction of rationals
+(extract (lo e))

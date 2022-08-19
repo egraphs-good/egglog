@@ -2,12 +2,9 @@ use crate::*;
 
 use std::fmt::Display;
 
-use num_rational::BigRational;
-
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
 pub enum Literal {
     Int(i64),
-    Rational(BigRational),
     String(Symbol),
     Unit,
 }
@@ -35,23 +32,11 @@ macro_rules! impl_from {
 impl_from!(Int(i64));
 impl_from!(String(Symbol));
 
-impl Literal {
-    pub fn to_value(&self) -> Value {
-        match &self {
-            Literal::Int(i) => Value::from(*i),
-            Literal::String(s) => Value::from(*s),
-            Literal::Rational(r) => Value::from(r.clone()),
-            Literal::Unit => Value(ValueInner::Unit),
-        }
-    }
-}
-
 impl Display for Literal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self {
             Literal::Int(i) => Display::fmt(i, f),
             Literal::String(s) => write!(f, "{s}"),
-            Literal::Rational(r) => write!(f, "{}//{}", r.numer(), r.denom()),
             Literal::Unit => write!(f, "()"),
         }
     }
