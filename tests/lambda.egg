@@ -48,7 +48,7 @@
        (= (Bool vb) (evals-to b))
        (!= va vb)) ; TODO: if true and false are non-mergeable datatype, 
                    ; we should be able to do != over it
-      (union (evals-to e) (Bool (False))))
+      ((union (evals-to e) (Bool (False)))))
 ;; END evals-to
 
 ; if-true
