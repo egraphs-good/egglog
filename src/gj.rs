@@ -202,7 +202,6 @@ impl EGraph {
     ) -> CompiledQuery {
         let mut extra = vec![];
         let mut vars: IndexMap<Symbol, VarInfo> = Default::default();
-        //     types.keys().map(|sym| (*sym, Default::default())).collect();
         for (i, atom) in atoms.iter().enumerate() {
             match atom {
                 Atom::Func(_, _) => {

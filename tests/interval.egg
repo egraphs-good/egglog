@@ -26,3 +26,6 @@
 
 (run 1)
 (check (= (lo e) (rational 100 1)))
+
+;; testing extraction of rationals
+(extract (lo e))

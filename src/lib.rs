@@ -38,16 +38,10 @@ pub struct Function {
     updates: usize,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct ResolvedSchema {
     input: Vec<ArcSort>,
     output: ArcSort,
-}
-
-impl Debug for ResolvedSchema {
-    fn fmt(&self, _f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        todo!()
-    }
 }
 
 impl Function {

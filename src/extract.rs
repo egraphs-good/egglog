@@ -107,21 +107,22 @@ impl<'a> Extractor<'a> {
 
             for &sym in &self.ctors {
                 let func = &self.egraph.functions[&sym];
-                assert!(func.schema.output.is_eq_sort());
-                for (inputs, output) in &func.nodes {
-                    if let Some(new_cost) = self.node_total_cost(&func.schema.input, inputs) {
-                        let make_new_pair = || (new_cost, Node { sym, inputs });
+                if func.schema.output.is_eq_sort() {
+                    for (inputs, output) in &func.nodes {
+                        if let Some(new_cost) = self.node_total_cost(&func.schema.input, inputs) {
+                            let make_new_pair = || (new_cost, Node { sym, inputs });
 
-                        let id = Id::from(output.bits as usize);
-                        match self.costs.entry(id) {
-                            Entry::Vacant(e) => {
-                                did_something = true;
-                                e.insert(make_new_pair());
-                            }
-                            Entry::Occupied(mut e) => {
-                                if new_cost < e.get().0 {
+                            let id = Id::from(output.bits as usize);
+                            match self.costs.entry(id) {
+                                Entry::Vacant(e) => {
                                     did_something = true;
                                     e.insert(make_new_pair());
+                                }
+                                Entry::Occupied(mut e) => {
+                                    if new_cost < e.get().0 {
+                                        did_something = true;
+                                        e.insert(make_new_pair());
+                                    }
                                 }
                             }
                         }

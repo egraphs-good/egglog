@@ -1,7 +1,7 @@
 use num_rational::BigRational;
 use std::sync::Mutex;
 
-use crate::util::IndexSet;
+use crate::{ast::Literal, util::IndexSet};
 
 use super::*;
 
@@ -44,36 +44,18 @@ impl Sort for RationalSort {
     }
     fn make_expr(&self, value: Value) -> Expr {
         assert!(value.tag == self.name());
-        // Expr::Lit(Literal::Int(value.bits as _))
-        todo!()
+        let rat = BigRational::load(self, &value);
+        let numer = i64::try_from(rat.numer()).unwrap();
+        let denom = i64::try_from(rat.denom()).unwrap();
+        Expr::call(
+            "rational",
+            vec![
+                Expr::Lit(Literal::Int(numer)),
+                Expr::Lit(Literal::Int(denom)),
+            ],
+        )
     }
 }
-
-// impl<'a> TypedSort<'a, BigRational> for RationalSort {
-//     fn load(&'a self, value: &Value) -> BigRational {
-//         let i = value.bits as usize;
-//         self.rats.lock().unwrap().get_index(i).unwrap().clone()
-//     }
-//     fn store(&'a self, t: BigRational) -> Value {
-//         let i = self.rats.lock().unwrap().insert(t);
-//         Value {
-//             tag: self.name,
-//             bits: i as u64,
-//         }
-//     }
-// }
-
-// impl TypedSort<'_> for BigRational {
-//     type Load = BigRational;
-//     type Store = BigRational;
-
-//     fn load(&self) -> BigRational {
-//         self.clone()
-//     }
-//     fn store(&self) -> BigRational {
-//         self.clone()
-//     }
-// }
 
 impl FromSort for BigRational {
     type Sort = RationalSort;
@@ -93,18 +75,3 @@ impl IntoSort for BigRational {
         })
     }
 }
-
-// impl<'a> TypedSort<'a, &'a BigRational> for RationalSort {
-//     fn load(&'a self, value: &Value) -> &'a BigRational {
-//         let i = value.bits as usize;
-//         self.rats.lock().unwrap().get_index(i).unwrap()
-//     }
-
-//     fn store(&self, t: &BigRational) -> Value {
-//         let i = self.rats.lock().unwrap().insert(t.clone());
-//         Value {
-//             tag: self.name,
-//             bits: i as u64,
-//         }
-//     }
-// }

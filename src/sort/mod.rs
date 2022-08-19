@@ -59,20 +59,7 @@ pub trait FromSort: Sized {
 
 pub trait IntoSort: Sized {
     type Sort: Sort;
-    // fn load(sort: &Self::Sort, value: &Value) -> Self;
     fn store(self, sort: &Self::Sort) -> Option<Value>;
-    // fn into_option(self) -> Option<Self> {
-    //     Some(self)
-    // }
-    // fn name() -> &'static str {
-    //     Self::Sort::name()
-    // }
-    // fn get_type() -> Symbol {
-    //     Self::Sort::get_type()
-    // }
-    // fn is_type(t: &Symbol) -> bool {
-    //     Self::Sort::is_type(t)
-    // }
 }
 
 impl<T: IntoSort> IntoSort for Option<T> {

@@ -17,14 +17,12 @@ macro_rules! unpack {
 
 #[macro_export]
 macro_rules! add_primitives {
-    ($egraph:expr, $($rest:tt)*) => {
-         add_primitives!(@doubled $egraph, $($rest)*, $($rest)*)
-    };
-    (@doubled $egraph:expr,
-        // { $($t:ident),* }, // TODO unused
-        // $name:literal = |$($param:ident : $($r:tt)? $t:ident),*| -> $ret:ty { $body:expr }
-        $name:literal = |$($param:ident : $param_t:ty),*| -> $ret:ty { $body:expr },
-        $name2:literal = |$($param2:ident : $(&)? $base_param_t:ident),*| -> $ret2:ty { $body2:expr }
+    // ($egraph:expr, $($rest:tt)*) => {
+    //      add_primitives!(@doubled $egraph, $($rest)*, $($rest)*)
+    // };
+    ($egraph:expr,
+        $name:literal = |$($param:ident : $param_t:ty),*| -> $ret:ty { $body:expr }
+        // $name2:literal = |$($param2:ident : $(&)? $base_param_t:ident),*| -> $ret2:ty { $body2:expr }
     ) => {{
         let egraph: &mut _ = $egraph;
         #[allow(unused_imports, non_snake_case)]
@@ -32,9 +30,7 @@ macro_rules! add_primitives {
             use $crate::{*, sort::*};
 
             struct MyPrim {$(
-                // $param: to_tt!($t, unpack),
-                // $t: Arc<<$t as IntoSort>::Sort>,
-                $param: Arc<<$base_param_t as FromSort>::Sort>,
+                $param: Arc<<$param_t as FromSort>::Sort>,
             )*
                 __out: Arc<<$ret as IntoSort>::Sort>,
             }
@@ -73,7 +69,7 @@ macro_rules! add_primitives {
             }
 
             egraph.add_primitive($crate::Primitive::from(MyPrim {
-                $( $param: egraph.get_sort::<<$base_param_t as IntoSort>::Sort>(), )*
+                $( $param: egraph.get_sort::<<$param_t as IntoSort>::Sort>(), )*
                 __out: egraph.get_sort::<<$ret as IntoSort>::Sort>(),
             }))
         }
