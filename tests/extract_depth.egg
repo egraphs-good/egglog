@@ -6,16 +6,16 @@
 (define start (Add (Num 18) (Add (Num 17) (Add (Num 3) (Add (Num 4) (Var 42))))))
 (define goal  (Add (Num 7) (Var 42)))
 
-(function depth (Math) (Min i64))
+(function depth (Math) i64 :merge (min old new))
 
 (rewrite (Add x y) (Add y x))
 (rewrite (Add (Add x y) z) (Add x (Add y z)))
 (rewrite (Add (Num x) (Num y)) (Num (+ x y)))
 
-(rule ((= e (Num x)))  ((= (depth e) 0)))
-(rule ((= e (Var x)))  ((= (depth e) 0)))
+(rule ((= e (Num x)))  ((set (depth e) 0)))
+(rule ((= e (Var x)))  ((set (depth e) 0)))
 (rule ((= z (Add x y)) (= dx (depth x)) (= dy (depth y)))  
-    ((= (depth z) (+ 1 (max dx dy)) )))
+    ((set (depth z) (+ 1 (max dx dy)) )))
 
 (run 3)
 (extract (Num 4))
