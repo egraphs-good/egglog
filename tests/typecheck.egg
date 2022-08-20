@@ -5,12 +5,6 @@
   (TArr Type Type) ; t1 -> t2
 )
 
-(rule ( ; injectivity of ->
-  (= (TArr fr1 to1) (TArr fr2 to2))
-)(
-  (union fr1 fr2) (union to1 to2))
-)
-
 (datatype Expr 
   (Lam String Type Expr) ; lam x : t . e
   (App Expr Expr) 
@@ -40,41 +34,32 @@
 (rule (
   (= (typeof ctx (App f e)) t2)
 )(
-  (union (typeof ctx f) (typeof ctx f))
-  (union (typeof ctx e) (typeof ctx e))
+  (typeof ctx f)
+  (typeof ctx e)
 ))
 
 (rule (
-  (= (typeof ctx (App f e)) t)
-  (= (typeof ctx f) (TArr t1 t2))
-  (= (typeof ctx e) t1)
+  (= (typeof ctx (App f e)) t1)
+  (= (typeof ctx f) (TArr (typeof ctx e) t2))
 )(
-  (union t t2)
+  (union t1 t2)
 ))
 
 ; ctx |- x : t
 ; ------------------ y != x 
 ; ctx; y: t |- x : t
 
-(rule ( ; creating demand to check ctx |- x : t
-  (= (typeof (Cons y ty ctx) (Var x)) t)
-  (!= x y)
-)(
-  (union (typeof ctx (Var x)) (typeof ctx (Var x)))
-))
-
-; only check ctx; y: t |- x : t that has a demand
-(rewrite (typeof ctx (Var x)) t2 :when (
-  (= t2 (typeof (Cons y ty ctx) (Var x)))
-  (!= x y)
-))
+(rewrite (typeof (Cons y ty ctx) (Var x))
+         (typeof ctx (Var x))
+    :when ((!= x y)))
 
 ; ctx; x: t1 |- e : t2
 ; ------------------------------
 ; ctx |- lam x: t1. e : t1 -> t2
 
 ; rhs of rewrite creates demand
-(rewrite (typeof ctx (Lam x t1 e)) (TArr t1 (typeof (Cons x t1 ctx) e)))
+(rewrite (typeof ctx (Lam x t1 e))
+         (TArr t1 (typeof (Cons x t1 ctx) e)))
 
 ; TEST
 ; ----
@@ -87,10 +72,28 @@
 
 ; lam x : unit . x
 (define id (Lam "x" (TUnit) (Var "x")))
+(define t-id (typeof (Nil) id))
 
 ; (e () id) = ()
-(define t (typeof (Nil) (App (App e (Unit)) id)))
+(define app-unit-id (App (App e (Unit)) id))
+(define t-app (typeof (Nil) app-unit-id))
+
+(define free (Lam "x" (TUnit) (Var "y")))
+(define t-free-ill (typeof (Nil) free))
+(define t-free-1 (typeof (Cons "y" (TUnit) (Nil)) free))
+(define t-free-2 (typeof (Cons "y" (TArr (TArr (TUnit) (TUnit)) (TUnit)) (Nil)) free))
 
 (run 15)
 
-(check (= t (TUnit)))
+(extract t-id)
+(check (= t-id (TArr (TUnit) (TUnit))))
+
+(extract t-app)
+(check (= t-app (TUnit)))
+
+(extract t-free-1)
+(check (= t-free-1 (TArr (TUnit) (TUnit))))
+(extract t-free-2)
+(check (= t-free-2 (TArr (TUnit) (TArr (TArr (TUnit) (TUnit)) (TUnit)))))
+; this will err
+; (extract t-free-ill)
