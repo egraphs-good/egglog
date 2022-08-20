@@ -71,7 +71,7 @@ impl<'b> Context<'b> {
                 let rs: Vec<&'b Trie> = trie_indices.iter().map(|&j| self.tries[j]).collect();
 
                 for val in intersection {
-                    self.tuple[*idx] = val.clone();
+                    self.tuple[*idx] = val;
 
                     for (r, &j) in rs.iter().zip(trie_indices) {
                         self.tries[j] = match r.0.get(&val) {
@@ -95,9 +95,9 @@ impl<'b> Context<'b> {
                     values.push(match arg {
                         AtomTerm::Var(v) => {
                             let i = self.query.vars.get_index_of(v).unwrap();
-                            self.tuple[i].clone()
+                            self.tuple[i]
                         }
-                        AtomTerm::Value(val) => val.clone(),
+                        AtomTerm::Value(val) => *val,
                     })
                 }
 
@@ -168,7 +168,7 @@ impl<'b> Trie<'b> {
         for i in shuffle {
             trie = trie
                 .0
-                .entry(tuple[*i].clone())
+                .entry(tuple[*i])
                 .or_insert_with(|| bump.alloc(Trie::default()));
         }
     }
@@ -198,11 +198,10 @@ impl EGraph {
     pub(crate) fn compile_gj_query(
         &self,
         atoms: Vec<Atom>,
-        _types: HashMap<Symbol, Type>,
+        _types: HashMap<Symbol, ArcSort>,
     ) -> CompiledQuery {
         let mut extra = vec![];
         let mut vars: IndexMap<Symbol, VarInfo> = Default::default();
-        //     types.keys().map(|sym| (*sym, Default::default())).collect();
         for (i, atom) in atoms.iter().enumerate() {
             match atom {
                 Atom::Func(_, _) => {
@@ -303,7 +302,7 @@ impl EGraph {
 
             for (i, t) in args.iter().enumerate() {
                 match t {
-                    AtomTerm::Value(val) => constraints.push(Constraint::Const(i, val.clone())),
+                    AtomTerm::Value(val) => constraints.push(Constraint::Const(i, *val)),
                     AtomTerm::Var(_v) => {
                         if let Some(j) = args[..i].iter().position(|t2| t == t2) {
                             constraints.push(Constraint::Eq(j, i));
