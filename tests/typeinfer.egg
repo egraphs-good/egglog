@@ -7,29 +7,27 @@
 ;; Exprs and Types
 ;;;;;;;;;;;;;;;;;;;;;;
 
-(datatype Ident
-  (FreshFromSubst StringSet String)
-  (FreshFromLam Expr Ctx String Expr))
+(datatype Ident)
+(datatype Expr)
+(datatype Type)
 
-(datatype Expr 
-  (Var String)
-  (App Expr Expr) 
-  (Abs String Expr)
-  (Let String Expr Expr)
-  ; primitives
-  (Num i64)
-  (True)
-  (False)
-  (Unit)
-)
+(function FreshFromSubst (QualifiedVs String) Ident)
+(function FreshFromLam (Expr Ctx String Expr) Ident)
+ 
+(function Var (String) Expr)
+(function App (Expr Expr)) Expr 
+(function Abs (String Expr) Expr)
+(function Let (String Expr Expr) Expr)
+(function Num (i64) Expr)
+(function True () Expr)
+(function False () Expr)
+(function Unit () Expr)
 
-(datatype Type 
-  (TVar Ident) 
-  (TArr Type Type)
-  (TInt)
-  (TBool)
-  (TUnit)
-)
+(function (TVar Ident) Type)
+(function (TArr Type Type) Type)
+(function (TInt) Type)
+(function (TBool) Type)
+(function (TUnit) Type)
 
 ;;;;;;;;;;;;;;;;;;;;;;
 ;; Free variables
@@ -67,25 +65,16 @@
 ;; Scheme and Context
 ;;;;;;;;;;;;;;;;;;;;;;
 
-;; (datatype StringSet
-;;   (ConsS String StringSet)
-;;   (NilS))
-(datatype StringSet
-  (EmptySSet)
-  (FromContext Ctx)
+(datatype QualifiedVs
+  (EmptyVSet)
+  ;; (FromCtx Ctx)
   (FromFV Type)
-  (SetDiff StringSet StringSet)
+  (SetDiff QualifiedVs StringSet)
 )
 
 ;; TODO: add demand so containsStr is not instantiated for every context
 ;; TODO: needs recursive type definition
-(relation containsStr (StringSet String))
-(rule ((= ls (FromCtx ctx)))
-      ((haskey-demand ctx ctx)))
-
-(rule ((= s (FromCtx ctx))
-       (haskey ctx x))
-      ((containsStr s x)))
+(relation containsStr (QualifiedVs String))
 
 (rule ((= s (FromFV t))
        (ftv t x))
@@ -93,18 +82,27 @@
 
 (rule ((= s (SetDiff a b))
        (containsStr a x)
-       (! (containsStr b x)))
+       (! (get b x)))
       ((containsStr s x)))
 
 ; Scheme := forall xs. t
 (datatype Scheme
-  (Forall StringSet Type))
+  (Forall QualifiedVs Type))
 
 ; A context is a map from vars to schemes
 (datatype Ctx 
   (Nil) 
   (Cons String Scheme Ctx)
 )
+(sort StringSet (Map String i64))
+;; TODO: can't do unit right now
+;; (sort StringSet (Map String Unit))
+
+(relation keySet (Ctx StringSet))
+(rule ((= c Nil)) (keySet c (empty)))
+(rule ((= c (Cons x s n))
+       (keySet n fvs)) 
+      ((keySet c (insert x 1 fvs))))
 
 (function lookup (Ctx String) Scheme)
 
@@ -134,27 +132,24 @@
 (function generalize (Ctx Type) Scheme)
 (function instantiate (Scheme) Type)
 
-;; TODO: how do we handle negation / stratification?
-;; This is not negation stratified
-;; alternative semantics we can have is to start from scratch at each iteration.
-;; (instead of built on top of the previous one)
 (rewrite (generalize ctx t) 
          (Forall (SetDiff (FromFV t) 
-                          (FromCtx ctx))
-                  t))
+                          key-set)
+                  t)
+         :when (keySet ctx key-set))
 
-(function subst-fresh (StringSet Type) Type)
+(function subst-fresh (QualifiedVs Type) Type)
 
-(rewrite (subst-fresh ss (TInt)) (TInt))
-(rewrite (subst-fresh ss (TBool)) (TBool))
-(rewrite (subst-fresh ss (TUnit)) (TUnit))
-(rewrite (subst-fresh ss (TArr fr to)) (TArr (subst ss fr) (subst ss to)))
-(rule ((= otype (subst-fresh ss (TVar s)))
-       (containsStr ss s))
-      ((union otype (TVar (FreshFromSubst ss s)))))
+(rewrite (subst-fresh vs (TInt)) (TInt))
+(rewrite (subst-fresh vs (TBool)) (TBool))
+(rewrite (subst-fresh vs (TUnit)) (TUnit))
+(rewrite (subst-fresh vs (TArr fr to)) (TArr (subst vs fr) (subst vs to)))
+(rule ((= otype (subst-fresh vs (TVar s)))
+       (containvstr vs s))
+      ((union otype (TVar (FreshFromSubst vs s)))))
 
-(rewrite (instantiate (Forall ss t))
-         (subst-fresh ss t))
+(rewrite (instantiate (Forall vs t))
+         (subst-fresh vs t))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;
@@ -192,14 +187,14 @@
     (= t (typeof ctx (Abs x e)))
 )(
     ;; (let tv (TVar (FreshFromLam ctx x e)))
-    ;; (let te (typeof (Cons x (Forall (EmptySSet) tv) ctx) 
+    ;; (let te (typeof (Cons x (Forall (EmptyVSet) tv) ctx) 
     ;;               e))
     ;; (union t (TArr tv te))
     ;; unfolds to
     (union 
       t 
       (TArr (TVar (FreshFromLam ctx x e)) 
-            (typeof (Cons x (Forall (EmptySSet) 
+            (typeof (Cons x (Forall (EmptyVSet) 
                                     (TVar (FreshFromLam ctx x e))) 
                           ctx) 
                   e)))
