@@ -1,0 +1,96 @@
+; Binary Decision Diagrams are if-then-else trees/ compressed tries that hash cons their leaves
+; This is easily expressible in the facilities provided. Everything in egg-smol is automatcally shared
+; and Compression is easily expressible as a rule.
+
+; They are a notion of first class set useful for certain classes of uniformly describable sets.
+; https://en.wikipedia.org/wiki/Binary_decision_diagram
+; https://www.lri.fr/~filliatr/ftp/publis/hash-consing2.pdf Type-Safe Modular Hash-Consing - Section 3.3
+
+(datatype BDD
+    (ITE i64 BDD BDD) ; variables labelled by number
+    (True)
+    (False)
+)
+
+; compress unneeded nodes
+(rewrite (ITE n a a) a)
+
+(function and (BDD BDD) BDD)
+(rewrite (and (False) n) (False))
+(rewrite (and n (False)) (False))
+(rewrite (and (True) x) x)
+(rewrite (and x (True)) x)
+; We use an order where low variables are higher in tree
+; Could go the other way.
+(rewrite (and (ITE n a1 a2) (ITE m b1 b2))
+    (ITE n (and a1 (ITE m b1 b2)) (and a2 (ITE m b1 b2)))
+    :when ((< n m))
+)
+(rewrite (and (ITE n a1 a2) (ITE m b1 b2))
+    (ITE m (and (ITE n a1 a2) b1) (and (ITE n a1 a2) b2))
+    :when ((> n m))
+)
+(rewrite (and (ITE n a1 a2) (ITE n b1 b2))
+    (ITE n (and a1 b1) (and a2 b2))
+)
+
+(define b0 (ITE 0 (True) (False)))
+(define b1 (ITE 1 (True) (False)))
+(define b2 (ITE 2 (True) (False)))
+
+(define b123 (and b2 (and b0 b1)))
+(define b11 (and b1 b1))
+(define b12 (and b1 b2))
+(run 5)
+(extract b11)
+(extract b12)
+(extract b123)
+(check (= (and (ITE 1 (True) (False)) (ITE 2 (True) (False)))
+       (ITE 1 (ITE 2 (True) (False)) (False)))
+)
+;(check (= b123 (ITE 3 ()))
+
+(function or (BDD BDD) BDD)
+(rewrite (or (True) n) (True))
+(rewrite (or n (True)) (True))
+(rewrite (or (False) x) x)
+(rewrite (or x (False)) x)
+(rewrite (or (ITE n a1 a2) (ITE m b1 b2))
+    (ITE n (or a1 (ITE m b1 b2)) (or a2 (ITE m b1 b2)))
+    :when ((< n m))
+)
+(rewrite (or (ITE n a1 a2) (ITE m b1 b2))
+    (ITE m (or (ITE n a1 a2) b1) (or (ITE n a1 a2) b2))
+    :when ((> n m))
+)
+(rewrite (or (ITE n a1 a2) (ITE n b1 b2))
+    (ITE n (or a1 b1) (or a2 b2))
+)
+
+(define or121 (or b1 (or b2 b1)))
+(run 5)
+(extract or121)
+
+(function not (BDD) BDD)
+(rewrite (not (True)) (False))
+(rewrite (not (False)) (True))
+(rewrite (not (ITE n a1 a2)) (not (ITE n (not a1) (not a2))))
+
+(function xor (BDD BDD) BDD)
+(rewrite (xor (True) n) (not n))
+(rewrite (xor n (True)) (not n))
+(rewrite (xor (False) x) x)
+(rewrite (xor x (False)) x)
+(rewrite (xor (ITE n a1 a2) (ITE m b1 b2))
+    (ITE n (xor a1 (ITE m b1 b2)) (or a2 (ITE m b1 b2)))
+    :when ((< n m))
+)
+(rewrite (xor (ITE n a1 a2) (ITE m b1 b2))
+    (ITE m (xor (ITE n a1 a2) b1) (or (ITE n a1 a2) b2))
+    :when ((> n m))
+)
+(rewrite (xor (ITE n a1 a2) (ITE n b1 b2))
+    (ITE n (xor a1 b1) (xor a2 b2))
+)
+
+
