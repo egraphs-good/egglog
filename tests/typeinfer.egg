@@ -10,6 +10,9 @@
 (datatype Ident)
 (datatype Expr)
 (datatype Type)
+(datatype QualifiedVs)
+(datatype Scheme)
+(datatype Ctx)
 
 (function FreshFromSubst (QualifiedVs String) Ident)
 (function FreshFromLam (Expr Ctx String Expr) Ident)
@@ -65,12 +68,9 @@
 ;; Scheme and Context
 ;;;;;;;;;;;;;;;;;;;;;;
 
-(datatype QualifiedVs
-  (EmptyVSet)
-  ;; (FromCtx Ctx)
-  (FromFV Type)
-  (SetDiff QualifiedVs StringSet)
-)
+(function EmptyVSet () QualifiedVs)
+(function FromFV (Type) QualifiedVs)
+(function SetDiff (QualifiedVs StringSet) QualifiedVs)
 
 ;; TODO: add demand so containsStr is not instantiated for every context
 ;; TODO: needs recursive type definition
@@ -86,14 +86,13 @@
       ((containsStr s x)))
 
 ; Scheme := forall xs. t
-(datatype Scheme
-  (Forall QualifiedVs Type))
+(function Forall (QualifiedVs Type) Scheme)
 
 ; A context is a map from vars to schemes
-(datatype Ctx 
-  (Nil) 
-  (Cons String Scheme Ctx)
-)
+
+(function Nil () Ctx)
+(function Cons (String Scheme Ctx) Ctx)
+
 (sort StringSet (Map String i64))
 ;; TODO: can't do unit right now
 ;; (sort StringSet (Map String Unit))
