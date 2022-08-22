@@ -325,6 +325,18 @@ impl EGraph {
                     let b = self.eval_expr(ctx, b)?;
                     self.unionfind.union_values(a, b);
                 }
+                Action::Delete(sym, args) => {
+                    let ctx = ctx.as_ref().unwrap_or(&default);
+                    let values = args
+                        .iter()
+                        .map(|a| self.eval_expr(ctx, a))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let function = self
+                        .functions
+                        .get_mut(sym)
+                        .ok_or(TypeError::Unbound(*sym))?;
+                    function.nodes.remove(&values);
+                }
             }
         }
         Ok(())

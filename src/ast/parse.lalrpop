@@ -56,6 +56,7 @@ Command: Command = {
 
 Action: Action = {
     "(" "set" "(" <f: Ident> <args:Expr*> ")" <v:Expr> ")" => Action::Set ( f, args, v ),
+    "(" "delete" "(" <f: Ident> <args:Expr*> ")" ")" => Action::Delete ( f, args),
     "(" "union" <e1:Expr> <e2:Expr> ")" => Action::Union(<>),
     "(" "define" <name:Ident> <expr:Expr> ")" => Action::Define(name, expr),
     "(" "panic" <msg:String> ")" => Action::Panic(msg),
