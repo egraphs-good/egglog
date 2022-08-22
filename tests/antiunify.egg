@@ -1,20 +1,20 @@
 (datatype Expr
   (Num i64)
   (Var String)
-  (AUVar Expr Expr)
   (Add Expr Expr))
 
 (rewrite (Add x y) (Add y x))
 (rewrite (Add (Num x) (Num y)) (Num (+ x y)))
 
+;; antiunificaiton returns an expression that could unify with either
+;; of the input expressions
+;; (AU x y) can be considered a placeholder variable
 (function AU (Expr Expr) Expr)
 
-(rewrite (AU x y) (AUVar x y))
 (rewrite (AU x x) x)
 (rewrite
  (AU (Add a b) (Add c d))
  (Add (AU a c) (AU b d)))
-
 
 (define e1 (Add (Var "x") (Add (Num 1) (Num 2))))
 (define e2 (Add (Num 3) (Var "y")))
@@ -22,5 +22,6 @@
 (define au12 (AU e1 e2))
 
 (run 4)
-(check (= au12  (Add (Num 3) (AU (Var "x") (Var "y")))))
+(check (= au12 (Add (Num 3) (AU (Var "x") (Var "y")))))
 (extract au12)
+(clear)
