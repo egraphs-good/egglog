@@ -352,7 +352,9 @@ impl EGraph {
                     .collect::<Result<_, _>>()?;
                 for v in &values[1..] {
                     if &values[0] != v {
+                        println!("Check failed");
                         // the check failed, so print out some useful info
+                        self.rebuild();
                         for value in &values {
                             if let Some((_tag, id)) = self.value_to_id(*value) {
                                 let best = self.extract(*value).1;
@@ -718,16 +720,16 @@ impl EGraph {
             Command::Extract { e, variants } => {
                 if should_run {
                     // TODO typecheck
-                    let value = self.eval_closed_expr(&e)?;
                     self.rebuild();
+                    let value = self.eval_closed_expr(&e)?;
                     log::info!("Extracting {e} at {value:?}");
                     let (cost, expr) = self.extract(value);
                     let mut msg = format!("Extracted with cost {cost}: {expr}");
                     if variants > 0 {
                         let exprs = self.extract_variants(value, variants);
                         let line = "\n    ";
-                        let varnts = ListDisplay(&exprs, line);
-                        write!(msg, "\nVariants of {expr}:{line}{varnts}").unwrap();
+                        let v_exprs = ListDisplay(&exprs, line);
+                        write!(msg, "\nVariants of {expr}:{line}{v_exprs}").unwrap();
                     }
                     msg
                 } else {
@@ -814,7 +816,7 @@ impl EGraph {
     // this is bad because we shouldn't inspect values like this, we should use type information
     fn bad_find_value(&self, value: Value) -> Value {
         if let Some((tag, id)) = self.value_to_id(value) {
-            Value::from_id(tag, id)
+            Value::from_id(tag, self.find(id))
         } else {
             value
         }

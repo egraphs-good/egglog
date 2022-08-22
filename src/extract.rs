@@ -80,7 +80,10 @@ impl<'a> Extractor<'a> {
         let sort = self.egraph.sorts.get(&value.tag).unwrap();
         if sort.is_eq_sort() {
             let id = self.egraph.find(Id::from(value.bits as usize));
-            let (cost, node) = &self.costs[&id];
+            let (cost, node) = &self
+                .costs
+                .get(&id)
+                .unwrap_or_else(|| panic!("No cost for {:?}", value));
             (*cost, self.expr_from_node(node))
         } else {
             (0, sort.make_expr(value))
@@ -91,8 +94,9 @@ impl<'a> Extractor<'a> {
         let mut cost = 1;
         for (ty, value) in types.iter().zip(children) {
             cost += if ty.is_eq_sort() {
+                let id = self.egraph.find(Id::from(value.bits as usize));
                 // TODO costs should probably map values?
-                self.costs.get(&Id::from(value.bits as usize))?.0
+                self.costs.get(&id)?.0
             } else {
                 0
             }
@@ -112,7 +116,7 @@ impl<'a> Extractor<'a> {
                         if let Some(new_cost) = self.node_total_cost(&func.schema.input, inputs) {
                             let make_new_pair = || (new_cost, Node { sym, inputs });
 
-                            let id = Id::from(output.bits as usize);
+                            let id = self.egraph.find(Id::from(output.bits as usize));
                             match self.costs.entry(id) {
                                 Entry::Vacant(e) => {
                                     did_something = true;
