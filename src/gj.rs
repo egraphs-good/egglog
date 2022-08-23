@@ -33,6 +33,8 @@ struct Context<'b> {
     tries: Vec<&'b Trie<'b>>,
     tuple: Vec<Value>,
     empty: &'b Trie<'b>,
+    val_pool: Vec<Vec<Value>>,
+    trie_pool: Vec<Vec<&'b Trie<'b>>>,
 }
 
 impl<'b> Context<'b> {
@@ -57,9 +59,8 @@ impl<'b> Context<'b> {
                     .copied()
                     .min_by_key(|j| self.tries[*j].len())
                     .unwrap();
-
-                // TODO reuse this allocation
-                let mut intersection: Vec<Value> = self.tries[j_min].0.keys().cloned().collect();
+                let mut intersection = self.val_pool.pop().unwrap_or_default();
+                intersection.extend(self.tries[j_min].0.keys().cloned());
 
                 for &j in trie_indices {
                     if j != j_min {
@@ -67,10 +68,10 @@ impl<'b> Context<'b> {
                         intersection.retain(|t| r.contains_key(t));
                     }
                 }
+                let mut rs = self.trie_pool.pop().unwrap_or_default();
+                rs.extend(trie_indices.iter().map(|&j| self.tries[j]));
 
-                let rs: Vec<&'b Trie> = trie_indices.iter().map(|&j| self.tries[j]).collect();
-
-                for val in intersection {
+                for val in intersection.drain(..) {
                     self.tuple[*idx] = val;
 
                     for (r, &j) in rs.iter().zip(trie_indices) {
@@ -82,11 +83,14 @@ impl<'b> Context<'b> {
 
                     self.eval(program, f);
                 }
+                self.val_pool.push(intersection);
 
                 // TODO is it necessary to reset the tries?
                 for (r, &j) in rs.iter().zip(trie_indices) {
                     self.tries[j] = r;
                 }
+                rs.clear();
+                self.trie_pool.push(rs);
             }
             Instr::Call { prim, args, check } => {
                 let (out, args) = args.split_last().unwrap();
@@ -290,6 +294,8 @@ impl EGraph {
             tuple: vec![Value::fake(); query.vars.len()],
             tries: vec![default_trie; query.atoms.len()],
             empty: bump.alloc(Trie::default()),
+            val_pool: Default::default(),
+            trie_pool: Default::default(),
         };
 
         for (atom_i, atom) in query.atoms.iter().enumerate() {
