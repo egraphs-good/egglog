@@ -5,3 +5,9 @@ Cargo.lock
 node_modules
 dist/
 pkg/
+
+# perf stuff
+flamegraph.svg
+perf.data*
+
+tests/_scratch.egg

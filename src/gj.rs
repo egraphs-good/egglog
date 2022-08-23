@@ -70,8 +70,8 @@ impl<'b> Context<'b> {
                             .filter(|k| rs[(!si) as usize].0.contains_key(k));
                         for val in intersection {
                             self.tuple[*idx] = *val;
-                            self.tries[trie_indices[0]] = rs[0].0.get(&val).unwrap();
-                            self.tries[trie_indices[1]] = rs[1].0.get(&val).unwrap();
+                            self.tries[trie_indices[0]] = rs[0].0.get(val).unwrap();
+                            self.tries[trie_indices[1]] = rs[1].0.get(val).unwrap();
 
                             self.eval(program, f);
                         }
