@@ -13,12 +13,14 @@
 (datatype QualifiedVs)
 (datatype Scheme)
 (datatype Ctx)
+(sort StringSet (Map Ident i64))
 
 (function FreshFromSubst (QualifiedVs String) Ident)
 (function FreshFromLam (Expr Ctx String Expr) Ident)
+(function FromString (String) Ident)
  
 (function Var (String) Expr)
-(function App (Expr Expr)) Expr 
+(function App (Expr Expr) Expr)
 (function Abs (String Expr) Expr)
 (function Let (String Expr Expr) Expr)
 (function Num (i64) Expr)
@@ -26,18 +28,18 @@
 (function False () Expr)
 (function Unit () Expr)
 
-(function (TVar Ident) Type)
-(function (TArr Type Type) Type)
-(function (TInt) Type)
-(function (TBool) Type)
-(function (TUnit) Type)
+(function TVar (Ident) Type)
+(function TArr (Type Type) Type)
+(function TInt () Type)
+(function TBool () Type)
+(function TUnit () Type)
 
 ;;;;;;;;;;;;;;;;;;;;;;
 ;; Free variables
 ;;;;;;;;;;;;;;;;;;;;;;
 
 ; (fv x y) means y is a free variable of x
-(relation ftv (Type String))
+(relation ftv (Type Ident))
 
 ; ftv(a) = a
 ; TODO: when the TVar is resolved, it is still not removed and therefore will occur in the ftv set...
@@ -74,7 +76,7 @@
 
 ;; TODO: add demand so containsStr is not instantiated for every context
 ;; TODO: needs recursive type definition
-(relation containsStr (QualifiedVs String))
+(relation containsStr (QualifiedVs Ident))
 
 (rule ((= s (FromFV t))
        (ftv t x))
@@ -82,7 +84,7 @@
 
 (rule ((= s (SetDiff a b))
        (containsStr a x)
-       (! (get b x)))
+       (not-contains b x))
       ((containsStr s x)))
 
 ; Scheme := forall xs. t
@@ -93,12 +95,11 @@
 (function Nil () Ctx)
 (function Cons (String Scheme Ctx) Ctx)
 
-(sort StringSet (Map String i64))
 ;; TODO: can't do unit right now
 ;; (sort StringSet (Map String Unit))
 
 (relation keySet (Ctx StringSet))
-(rule ((= c Nil)) (keySet c (empty)))
+(rule ((= c (Nil))) (keySet c (empty)))
 (rule ((= c (Cons x s n))
        (keySet n fvs)) 
       ((keySet c (insert x 1 fvs))))
@@ -131,11 +132,18 @@
 (function generalize (Ctx Type) Scheme)
 (function instantiate (Scheme) Type)
 
-(rewrite (generalize ctx t) 
-         (Forall (SetDiff (FromFV t) 
-                          key-set)
-                  t)
-         :when (keySet ctx key-set))
+;; TODO: this does not work
+;; (rewrite (generalize ctx t) 
+;;          (Forall (SetDiff (FromFV t) 
+;;                           key-set)
+;;                   t)
+;;          :when (keySet ctx key-set)
+;;          )
+(rule ((= o (generalize ctx t))
+       (keySet ctx key-set))
+      ((Forall (SetDiff (FromFV t) 
+                        key-set)
+                t)))
 
 (function subst-fresh (QualifiedVs Type) Type)
 
@@ -144,7 +152,7 @@
 (rewrite (subst-fresh vs (TUnit)) (TUnit))
 (rewrite (subst-fresh vs (TArr fr to)) (TArr (subst vs fr) (subst vs to)))
 (rule ((= otype (subst-fresh vs (TVar s)))
-       (containvstr vs s))
+       (containsStr vs s))
       ((union otype (TVar (FreshFromSubst vs s)))))
 
 (rewrite (instantiate (Forall vs t))
@@ -178,7 +186,7 @@
 ; sc = lookup(ctx, x)
 ; t = instantiate(sc)
 ; ---------------
-; ctx |- x :- 
+; ctx |- x : t
 (rewrite (typeof ctx (Var x))
          (instantiate (lookup ctx x)))
 
