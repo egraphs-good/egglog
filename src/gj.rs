@@ -49,48 +49,76 @@ impl<'b> Context<'b> {
 
         match instr {
             Instr::Intersect { idx, trie_indices } => {
-                // debug_assert!(js
-                //     .iter()
-                //     .all(|&j| query.atoms[j].1.contains(&AtomTerm::Var(x))));
-
-                // the index of the smallest trie
-                let j_min = trie_indices
-                    .iter()
-                    .copied()
-                    .min_by_key(|j| self.tries[*j].len())
-                    .unwrap();
-                let mut intersection = self.val_pool.pop().unwrap_or_default();
-                intersection.extend(self.tries[j_min].0.keys().cloned());
-
-                for &j in trie_indices {
-                    if j != j_min {
-                        let r = &self.tries[j].0;
-                        intersection.retain(|t| r.contains_key(t));
-                    }
-                }
-                let mut rs = self.trie_pool.pop().unwrap_or_default();
-                rs.extend(trie_indices.iter().map(|&j| self.tries[j]));
-
-                for val in intersection.drain(..) {
-                    self.tuple[*idx] = val;
-
-                    for (r, &j) in rs.iter().zip(trie_indices) {
-                        self.tries[j] = match r.0.get(&val) {
-                            Some(t) => *t,
-                            None => self.empty,
+                match trie_indices.len() {
+                    1 => {
+                        let j = trie_indices[0];
+                        let r = self.tries[j];
+                        for (val, trie) in r.0.iter() {
+                            self.tuple[*idx] = *val;
+                            self.tries[j] = trie;
+                            self.eval(program, f);
                         }
+                        self.tries[j] = r;
                     }
+                    2 => {
+                        let rs = [self.tries[trie_indices[0]], self.tries[trie_indices[1]]];
+                        // smaller_idx
+                        let si = rs[0].len() > rs[1].len();
+                        let intersection = rs[si as usize]
+                            .0
+                            .keys()
+                            .filter(|k| rs[(!si) as usize].0.contains_key(k));
+                        for val in intersection {
+                            self.tuple[*idx] = *val;
+                            self.tries[trie_indices[0]] = rs[0].0.get(&val).unwrap();
+                            self.tries[trie_indices[1]] = rs[1].0.get(&val).unwrap();
 
-                    self.eval(program, f);
-                }
-                self.val_pool.push(intersection);
+                            self.eval(program, f);
+                        }
+                        self.tries[trie_indices[0]] = rs[0];
+                        self.tries[trie_indices[1]] = rs[1];
+                    }
+                    _ => {
+                        // the index of the smallest trie
+                        let j_min = trie_indices
+                            .iter()
+                            .copied()
+                            .min_by_key(|j| self.tries[*j].len())
+                            .unwrap();
+                        let mut intersection = self.val_pool.pop().unwrap_or_default();
+                        intersection.extend(self.tries[j_min].0.keys().cloned());
 
-                // TODO is it necessary to reset the tries?
-                for (r, &j) in rs.iter().zip(trie_indices) {
-                    self.tries[j] = r;
-                }
-                rs.clear();
-                self.trie_pool.push(rs);
+                        for &j in trie_indices {
+                            if j != j_min {
+                                let r = &self.tries[j].0;
+                                intersection.retain(|t| r.contains_key(t));
+                            }
+                        }
+                        let mut rs = self.trie_pool.pop().unwrap_or_default();
+                        rs.extend(trie_indices.iter().map(|&j| self.tries[j]));
+
+                        for val in intersection.drain(..) {
+                            self.tuple[*idx] = val;
+
+                            for (r, &j) in rs.iter().zip(trie_indices) {
+                                self.tries[j] = match r.0.get(&val) {
+                                    Some(t) => *t,
+                                    None => self.empty,
+                                }
+                            }
+
+                            self.eval(program, f);
+                        }
+                        self.val_pool.push(intersection);
+
+                        // TODO is it necessary to reset the tries?
+                        for (r, &j) in rs.iter().zip(trie_indices) {
+                            self.tries[j] = r;
+                        }
+                        rs.clear();
+                        self.trie_pool.push(rs);
+                    }
+                };
             }
             Instr::Call { prim, args, check } => {
                 let (out, args) = args.split_last().unwrap();
