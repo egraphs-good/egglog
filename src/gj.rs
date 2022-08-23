@@ -38,6 +38,58 @@ struct Context<'b> {
 }
 
 impl<'b> Context<'b> {
+    fn new(bump: &'b Bump, egraph: &'b EGraph, query: &'b CompiledQuery) -> Self {
+        let default_trie = bump.alloc(Trie::default());
+        let mut ctx = Context {
+            egraph,
+            query,
+            bump,
+            tuple: vec![Value::fake(); query.vars.len()],
+            tries: vec![default_trie; query.atoms.len()],
+            empty: bump.alloc(Trie::default()),
+            val_pool: Default::default(),
+            trie_pool: Default::default(),
+        };
+
+        for (atom_i, atom) in query.atoms.iter().enumerate() {
+            // let mut to_project = vec![];
+            let mut constraints = vec![];
+            let (sym, args) = match atom {
+                Atom::Func(sym, args) => (*sym, args),
+                Atom::Prim(_, _) => continue,
+            };
+
+            for (i, t) in args.iter().enumerate() {
+                match t {
+                    AtomTerm::Value(val) => constraints.push(Constraint::Const(i, *val)),
+                    AtomTerm::Var(_v) => {
+                        if let Some(j) = args[..i].iter().position(|t2| t == t2) {
+                            constraints.push(Constraint::Eq(j, i));
+                        } else {
+                            // to_project.push(v)
+                        }
+                    }
+                }
+            }
+
+            let mut projection = vec![];
+            for v in query.vars.keys() {
+                if let Some(i) = args.iter().position(|t| t == &AtomTerm::Var(*v)) {
+                    assert!(!projection.contains(&i));
+                    projection.push(i);
+                }
+            }
+
+            ctx.tries[atom_i] = ctx.build_trie(&TrieRequest {
+                sym,
+                projection,
+                constraints,
+            });
+        }
+
+        ctx
+    }
+
     fn eval<F>(&mut self, program: &[Instr], f: &mut F)
     where
         F: FnMut(&[Value]),
@@ -314,54 +366,7 @@ impl EGraph {
         F: FnMut(&[Value]),
     {
         let bump = Bump::new();
-        let default_trie = bump.alloc(Trie::default());
-        let mut ctx = Context {
-            egraph: self,
-            query,
-            bump: &bump,
-            tuple: vec![Value::fake(); query.vars.len()],
-            tries: vec![default_trie; query.atoms.len()],
-            empty: bump.alloc(Trie::default()),
-            val_pool: Default::default(),
-            trie_pool: Default::default(),
-        };
-
-        for (atom_i, atom) in query.atoms.iter().enumerate() {
-            // let mut to_project = vec![];
-            let mut constraints = vec![];
-            let (sym, args) = match atom {
-                Atom::Func(sym, args) => (*sym, args),
-                Atom::Prim(_, _) => continue,
-            };
-
-            for (i, t) in args.iter().enumerate() {
-                match t {
-                    AtomTerm::Value(val) => constraints.push(Constraint::Const(i, *val)),
-                    AtomTerm::Var(_v) => {
-                        if let Some(j) = args[..i].iter().position(|t2| t == t2) {
-                            constraints.push(Constraint::Eq(j, i));
-                        } else {
-                            // to_project.push(v)
-                        }
-                    }
-                }
-            }
-
-            let mut projection = vec![];
-            for v in query.vars.keys() {
-                if let Some(i) = args.iter().position(|t| t == &AtomTerm::Var(*v)) {
-                    assert!(!projection.contains(&i));
-                    projection.push(i);
-                }
-            }
-
-            ctx.tries[atom_i] = ctx.build_trie(&TrieRequest {
-                sym,
-                projection,
-                constraints,
-            });
-        }
-
+        let mut ctx = Context::new(&bump, self, query);
         ctx.eval(&query.program, &mut f)
     }
 }
