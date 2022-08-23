@@ -1,0 +1,109 @@
+; Terms vs Values
+; Terms are trees. They have no equational theory
+; Values do have equations?
+; https://en.wikipedia.org/wiki/Normalisation_by_evaluation
+
+; https://github.com/AndrasKovacs/elaboration-zoo/blob/master/01-eval-closures-debruijn/Main.hs 
+; https://proofassistants.stackexchange.com/questions/900/when-should-i-use-de-bruijn-levels-instead-of-indices
+; https://www.andres-loeh.de/LambdaPi/LambdaPi.pdf
+
+(datatype Term
+    (App Term Term)
+    (Lam Term)
+    (Var i64)
+)
+
+(datatype Value)
+
+(datatype Neutral
+    (NApp Neutral Value)
+    (NVar i64)
+)
+
+(datatype Env
+    (Nil)
+    (Cons Value Env)
+)
+
+(datatype VClosure 
+    (VClosure Env Term)
+)
+
+(function VLam (VClosure) Value)
+(function VNeutral (Neutral) Value)
+(function vapp (Value Value) Value)
+
+
+(function length (Env) i64)
+(set (length (Nil)) 0)
+(rule ((= (Cons x xs) e) (= (length e) l))
+      ((set (length e) (+ l 1)))
+)
+
+(function lookup (Env i64) Value)
+(rewrite (lookup (Cons x xs) 0) x) 
+;(rewrite (lookup (Cons x xs) n) (lookup xs (- n 1)) :when ((> n 0)))
+
+(function eval (Env Term) Value)
+(rewrite (eval e (Var x)) (lookup e x))
+(rewrite (eval e (Lam t)) (VLam (VClosure e t)))
+(rewrite (eval e (App f x)) (vapp (eval e f) (eval e x)))
+
+;(rewrite (eval e (App (Lam t) x)) (eval (Cons (eval e x) e) t))
+
+;
+; possible (rewrite (VApp (VClosure e t) x) (eval (Cons x e) t))
+
+(rewrite (vapp (VLam (VClosure e t)) x) (eval (Cons x e) t))
+(rewrite (vapp (VNeutral f) x) (VNeutral (NApp f x)))
+
+;(rule ((= v (eval e (App f x))))
+;     ((define demand (eval e f))))
+
+(define test (eval (Nil) (App (Lam (Var 0)) (Var 42))))
+(run 6)
+(extract test)
+
+; quote is extract?
+(function quote (i64 Value) Term)
+; This doesn't work. I need to overwrite term?
+
+;(relation quote (i64 Value Term)) ?
+
+; quote is kind of an injector into term.
+; maybe it has no rules? Or only interacts with eval?
+
+; There is only one neutral term representation for each Value.
+; That is why it is ok to write these equations.
+(rewrite (quote lvl (VLam (VClosure e t))) (Lam (quote (+ 1 lvl) (eval (Cons (VNeutral (NVar lvl)) e) t))))
+(rewrite (quote lvl (VNeutral (NVar i))) (Var (- (- lvl i) 1)))
+(rewrite (quote lvl (VNeutral (NApp f x))) (App (quote lvl f) (quote lvl x)))
+; (rewrite (eval e (quote lvl v)) )
+; I can't write the App equation. SOmething that is app could become something else.
+; Neutral terms
+; It's not stable.
+; 
+
+
+
+
+(function nf (Env Term) Term)
+(rewrite (nf e t) (quote (length e) (eval e t)))
+
+(define test2 (nf (Nil) (App (Lam (Var 0)) (Var 42))))
+
+(define test3 (nf (Nil) (App (Lam (Var 0)) (Lam (Var 0)))))
+(run 10)
+
+(extract test3)
+(check (= test3 (Lam (Var 0))))
+(check (= test3 (quote 0 (VLam (VClosure (Nil) (Var 0))))))
+(check (= test3 (Lam (quote 1 (eval (Cons (VNeutral (NVar 0)) (Nil)) (Var 0))))))
+(check (= test3 (Lam (quote 1 (lookup (Cons (VNeutral (NVar 0)) (Nil)) 0)))))
+(check (= test3 (Lam (quote 1 (VNeutral (NVar 0))))))
+
+
+
+
+
+

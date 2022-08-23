@@ -8,7 +8,7 @@ if len(sys.argv) <= 1:
     print("ERROR: give some files as input")
     sys.exit(1)
 
-files = sys.argv[1:]
+files = sorted(sys.argv[1:])
 
 result = {}
 for filename in files:

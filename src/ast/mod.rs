@@ -117,6 +117,7 @@ impl Display for Fact {
 pub enum Action {
     Define(Symbol, Expr),
     Set(Symbol, Vec<Expr>, Expr),
+    Delete(Symbol, Vec<Expr>),
     Union(Expr, Expr),
     Panic(String),
     Expr(Expr),
@@ -131,8 +132,9 @@ impl Display for Action {
                 write!(f, "(set ({} {}) {})", lhs, ListDisplay(args, " "), rhs)
             }
             Action::Union(lhs, rhs) => write!(f, "(union {} {})", lhs, rhs),
-            Action::Panic(msg) => write!(f, "(panic {:?})", msg),
+            Action::Panic(msg) => write!(f, "(panic {})", msg),
             Action::Expr(e) => Display::fmt(e, f),
+            Action::Delete(sym, args) => write!(f, "(delete ({} {}))", sym, ListDisplay(args, " ")),
             // Action::If(cond, then, else_) => write!(f, "(if {} {} {})", cond, then, else_),
         }
     }
