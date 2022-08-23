@@ -230,7 +230,7 @@ impl EGraph {
             assert!(!info.occurences.is_empty(), "var {} has no occurences", v);
         }
 
-        vars.sort_by(|_v1, i1, _v2, i2| i1.occurences.len().cmp(&i2.occurences.len()));
+        vars.sort_by(|_v1, i1, _v2, i2| i2.occurences.len().cmp(&i1.occurences.len()));
 
         let mut program: Vec<Instr> = vars
             .iter()
