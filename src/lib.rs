@@ -592,9 +592,6 @@ impl EGraph {
     }
 
     fn step_rules(&mut self) -> [Duration; 2] {
-        let search_start = Instant::now();
-        let mut searched = vec![];
-
         fn make_subst(rule: &Rule, values: &[Value]) -> Subst {
             let get_val = |t: &AtomTerm| match t {
                 AtomTerm::Var(sym) => {
@@ -614,18 +611,24 @@ impl EGraph {
                 .collect()
         }
 
+        let search_start = Instant::now();
+        let mut searched = vec![];
         for rule in self.rules.values() {
-            let mut substs = Vec::<Subst>::new();
-            self.run_query(&rule.query, |values| substs.push(make_subst(rule, values)));
-            searched.push(substs);
+            let mut all_values = vec![];
+            self.run_query(&rule.query, |values| {
+                assert_eq!(values.len(), rule.query.vars.len());
+                all_values.extend_from_slice(values);
+            });
+            searched.push(all_values);
         }
         let search_elapsed = search_start.elapsed();
 
         let apply_start = Instant::now();
         let rules = std::mem::take(&mut self.rules);
-        for (rule, substs) in rules.values().zip(searched) {
-            for subst in substs {
-                // we ignore the result here because rule applications are best effort
+        for (rule, all_values) in rules.values().zip(searched) {
+            let n = rule.query.vars.len();
+            for values in all_values.chunks(n) {
+                let subst = make_subst(rule, values);
                 let _result: Result<_, _> = self.eval_actions(Some(subst), &rule.head);
             }
         }

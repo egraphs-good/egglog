@@ -10,4 +10,4 @@ pkg/
 flamegraph.svg
 perf.data*
 
-tests/_scratch.egg
+_scratch.egg
