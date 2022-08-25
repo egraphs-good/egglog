@@ -1,13 +1,17 @@
+use crate::util::HashSet;
 use crate::{util::IndexMap, Id, Value};
 
 use std::fmt::Debug;
 use std::hash::Hash;
+use std::mem;
 
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde-1", derive(serde::Serialize, serde::Deserialize))]
 pub struct UnionFind<V = ()> {
     parents: Vec<(Id, V)>,
     n_unions: usize,
+    recently_merged: HashSet<Id>,
+    staging_merged: HashSet<Id>,
 }
 
 impl<V> Default for UnionFind<V> {
@@ -15,6 +19,8 @@ impl<V> Default for UnionFind<V> {
         Self {
             parents: Default::default(),
             n_unions: Default::default(),
+            recently_merged: Default::default(),
+            staging_merged: Default::default(),
         }
     }
 }
@@ -28,6 +34,14 @@ impl<V> UnionFind<V> {
         let id = Id::from(self.parents.len());
         self.parents.push((id, value));
         id
+    }
+    pub fn update(&mut self) {
+        mem::swap(&mut self.recently_merged, &mut self.staging_merged);
+        self.staging_merged.clear();
+    }
+
+    pub fn recently_merged(&self) -> &HashSet<Id> {
+        &self.recently_merged
     }
 }
 
@@ -87,7 +101,8 @@ impl<V: UnifyValue> UnionFindLike<Id, V> for UnionFind<V> {
         self.parents[index].0 = new_parent.into();
     }
 
-    fn did_union(&mut self, _: usize) {
+    fn did_union(&mut self, _parent: usize, child: usize) {
+        self.staging_merged.insert(child.into());
         self.n_unions += 1;
     }
 }
@@ -207,11 +222,11 @@ pub(crate) trait UnionFindLike<K: UnifyKey, V: UnifyValue> {
         let v = V::merge(self.get_value_index(a), self.get_value_index(b))?;
         self.set_value_index(a, v);
         self.set_parent_index(b, a);
-        self.did_union(a);
+        self.did_union(a, b);
         Ok(a)
     }
 
-    fn did_union(&mut self, _index: usize) {}
+    fn did_union(&mut self, _index: usize, _child: usize) {}
 
     fn sets(&self) -> Vec<Vec<K>>
     where
@@ -286,6 +301,11 @@ mod tests {
     fn ids(us: impl IntoIterator<Item = usize>) -> Vec<Id> {
         us.into_iter().map(|u| u.into()).collect()
     }
+    fn recent_ids(uf: &UnionFind) -> Vec<Id> {
+        let mut merged = Vec::from_iter(uf.recently_merged().iter().copied());
+        merged.sort_unstable();
+        merged
+    }
 
     #[test]
     fn union_find() {
@@ -307,11 +327,15 @@ mod tests {
         uf.union(id(0), id(1));
         uf.union(id(0), id(2));
         uf.union(id(0), id(3));
+        uf.update();
+        assert_eq!(recent_ids(&uf), vec![id(1), id(2), id(3)]);
 
         // build up another set
         uf.union(id(6), id(7));
         uf.union(id(6), id(8));
         uf.union(id(6), id(9));
+        uf.update();
+        assert_eq!(recent_ids(&uf), vec![id(7), id(8), id(9)]);
 
         // this should compress all paths
         for i in 0..n {
@@ -324,5 +348,7 @@ mod tests {
             uf.parents.iter().map(|(i, _)| *i).collect::<Vec<Id>>(),
             ids(expected)
         );
+        uf.update();
+        assert!(recent_ids(&uf).is_empty());
     }
 }
