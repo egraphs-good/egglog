@@ -531,7 +531,7 @@ impl EGraph {
                                 function.nodes.insert(values, value);
                                 Ok(value)
                             }
-                            _ => panic!("invalid default"),
+                            _ => panic!("invalid default for {:?}", function.decl.name),
                         }
                     }
                 } else if let Some(prims) = self.primitives.get(op) {

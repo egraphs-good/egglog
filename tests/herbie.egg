@@ -86,63 +86,96 @@
 
 ;; The interval analyses are similar to the constant-folding analysis,
 ;; except we have to take the lower/upper bound of the results we get
-(rule ((= e (Add a b)))
-      ((set (lo e) (+ (lo a) (lo b)))))
-(rule ((= e (Add a b)))
-      ((set (hi e) (+ (hi a) (hi b)))))
+(rule ((= e (Add a b))
+       (= la (lo a))
+       (= lb (lo b)))
+      ((set (lo e) (+ la lb))))
+(rule ((= e (Add a b))
+       (= ha (hi a))
+       (= hb (hi b)))
+      ((set (hi e) (+ ha hb))))
       
-(rule ((= e (Sub a b)))
+(rule ((= e (Sub a b))
+       (= la (lo a))
+       (= ha (hi a))
+       (= lb (lo b))
+       (= hb (hi b)))
       ((set (lo e) 
-          (min (min (- (lo a) (lo b)) (- (lo a) (hi b)))
-               (min (- (hi a) (lo b)) (- (hi a) (hi b)))))))
-(rule ((= e (Sub a b)))
+          (min (min (- la lb) (- la hb))
+               (min (- ha lb) (- ha hb))))))
+(rule ((= e (Sub a b))
+       (= la (lo a))
+       (= ha (hi a))
+       (= lb (lo b))
+       (= hb (hi b)))
       ((set (hi e) 
-          (max (max (- (lo a) (lo b)) (- (lo a) (hi b)))
-               (max (- (hi a) (lo b)) (- (hi a) (hi b)))))))
+          (max (max (- la lb) (- la hb))
+               (max (- ha lb) (- ha hb))))))
 
-(rule ((= mul (Mul a b)))
-      ((set (lo mul) 
-          (min (min (* (lo a) (lo b)) (* (lo a) (hi b)))
-               (min (* (hi a) (lo b)) (* (hi a) (hi b)))))))
-(rule ((= mul (Mul a b)))
-      ((set (hi mul) 
-          (max (max (* (lo a) (lo b)) (* (lo a) (hi b)))
-               (max (* (hi a) (lo b)) (* (hi a) (hi b)))))))
+(rule ((= e (Mul a b))
+       (= la (lo a))
+       (= ha (hi a))
+       (= lb (lo b))
+       (= hb (hi b)))
+      ((set (lo e) 
+          (min (min (* la lb) (* la hb))
+               (min (* ha lb) (* ha hb))))))
+(rule ((= e (Mul a b))
+       (= la (lo a))
+       (= ha (hi a))
+       (= lb (lo b))
+       (= hb (hi b)))
+      ((set (hi e) 
+          (max (max (* la lb) (* la hb))
+               (max (* ha lb) (* ha hb))))))
 
 ; TODO: is this right lmao
-(rule ((= e (Div a b)))
+(rule ((= e (Div a b))
+       (= la (lo a))
+       (= ha (hi a))
+       (= lb (lo b))
+       (= hb (hi b)))
       ((set (lo e) 
-          (min (min (div (lo a) (lo b)) (div (lo a) (hi b)))
-               (min (div (hi a) (lo b)) (div (hi a) (hi b)))))))
-(rule ((= e (Div a b)))
+          (min (min (/ la lb) (/ la hb))
+               (min (/ ha lb) (/ ha hb))))))
+(rule ((= e (Div a b))
+       (= la (lo a))
+       (= ha (hi a))
+       (= lb (lo b))
+       (= hb (hi b)))
       ((set (hi e) 
-          (max (max (div (lo a) (lo b)) (div (lo a) (hi b)))
-               (max (div (hi a) (lo b)) (div (hi a) (hi b)))))))
+          (max (max (/ la lb) (/ la hb))
+               (max (/ ha lb) (/ ha hb))))))
 
 ; TODO: Pow
 
-(rule ((= e (Neg a)))
-      ((set (lo e) (neg (hi a)))))
-(rule ((= e (Neg a)))
-      ((set (hi e) (neg (lo a)))))
+(rule ((= e (Neg a))
+       (= ha (hi a)))
+      ((set (lo e) (neg ha))))
+(rule ((= e (Neg a))
+       (= la (lo a)))
+      ((set (hi e) (neg la))))
 
 ; TODO: Sqrt
 ; TODO: Cbrt
 
-(rule ((= e (Fabs a)))
-      ((set (lo e) (min (abs (lo a)) (abs (hi a))))))
-(rule ((= e (Fabs a)))
-      ((set (hi e) (max (abs (lo a)) (abs (hi a))))))
+(rule ((= e (Fabs a))
+       (= la (lo a))
+       (= ha (hi a)))
+      ((set (lo e) (min (abs la) (abs ha)))))
+(rule ((= e (Fabs a))
+       (= la (lo a))
+       (= ha (hi a)))
+      ((set (hi e) (max (abs la) (abs ha)))))
 
 ; TODO: Ceil
 ; TODO: Floor
 ; TODO: Round
 ; TODO: Log
 
-;; General rewrite rules
-; TODO: this doesn't work bc rational is a prim, not a fn
-; (rewrite (rational 0 x) (rational 0 1))
+;; TODO: General rewrite rules
 
+;; Test 1: zero-check
 (define x (Num (rational 2 1)))
 (define e (Sub x x))
 
@@ -150,21 +183,22 @@
 
 (check (= (is-zero e) (True)))
 
-; (define x (Var "x"))
-; (define e (Mul x x))
-; 
-; (set (lo x) (rational -10 1))
-; (set (hi x) (rational 10 1))
-; 
-; (run 1)
-; 
-; (check (= (lo e) (rational -100 1)))
-; 
-; (rule ((= mul (Mul a a)))
-;       ((set (lo mul) (* (lo a) (lo a)))))
-; 
-; (run 1)
-; (check (= (lo e) (rational 100 1)))
-; 
-; ;; testing extraction of rationals
-; (extract (lo e))
+;; Test 2: interval analysis
+(define x (Var "x"))
+(define e (Mul x x))
+
+(set (lo x) (rational -10 1))
+(set (hi x) (rational 10 1))
+
+(run 1)
+
+(check (= (lo e) (rational -100 1)))
+
+(rule ((= mul (Mul a a)))
+      ((set (lo mul) (* (lo a) (lo a)))))
+
+(run 1)
+(check (= (lo e) (rational 100 1)))
+
+;; testing extraction of rationals
+(extract (lo e))
