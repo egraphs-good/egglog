@@ -218,9 +218,7 @@ impl PrimitiveLike for Union {
 
     fn accept(&self, types: &[&dyn Sort]) -> Option<ArcSort> {
         match types {
-            [map1, map2]
-                if map1.name() == self.map.name && map2.name() == self.map.name() =>
-            {
+            [map1, map2] if map1.name() == self.map.name && map2.name() == self.map.name() => {
                 Some(self.map.clone())
             }
             _ => None,

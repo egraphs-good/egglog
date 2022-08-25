@@ -45,12 +45,15 @@ impl EGraph {
                     return vec![];
                 }
                 assert!(func.schema.output.is_eq_sort());
-                func.nodes.iter().filter_map(move |(inputs, output)| {
-                    (output == output_value).then(|| {
-                        let node = Node { sym, inputs };
-                        ext.expr_from_node(&node)
+                func.nodes
+                    .iter()
+                    .filter_map(move |(inputs, output)| {
+                        (output == output_value).then(|| {
+                            let node = Node { sym, inputs };
+                            ext.expr_from_node(&node)
+                        })
                     })
-                }).collect()
+                    .collect()
             })
             .take(limit)
             .collect()
