@@ -269,7 +269,7 @@ impl<'a> Context<'a> {
             Expr::Lit(lit) => {
                 let t = match lit {
                     Literal::Int(_) => self.egraph.sorts.get(&"i64".into()),
-                    Literal::String(_) => todo!(),
+                    Literal::String(_) => self.egraph.sorts.get(&"String".into()),
                     Literal::Unit => self.egraph.sorts.get(&"Unit".into()),
                 };
                 (self.add_node(ENode::Literal(lit.clone())), t.cloned())

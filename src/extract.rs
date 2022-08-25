@@ -37,17 +37,23 @@ impl EGraph {
         let (tag, id) = self.value_to_id(value).unwrap();
         let output_value = &Value::from_id(tag, id);
         let ext = &Extractor::new(self);
+        log::warn!("extracting value: {:?}", value);
+        log::warn!("ctor: {:?}", ext.ctors);
         ext.ctors
             .iter()
             .flat_map(|&sym| {
                 let func = &self.functions[&sym];
+                log::warn!("{:?}", func.schema);
+                if !func.schema.output.is_eq_sort() {
+                    return vec![];
+                }
                 assert!(func.schema.output.is_eq_sort());
                 func.nodes.iter().filter_map(move |(inputs, output)| {
                     (output == output_value).then(|| {
                         let node = Node { sym, inputs };
                         ext.expr_from_node(&node)
                     })
-                })
+                }).collect()
             })
             .take(limit)
             .collect()
