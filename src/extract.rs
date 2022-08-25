@@ -37,13 +37,10 @@ impl EGraph {
         let (tag, id) = self.value_to_id(value).unwrap();
         let output_value = &Value::from_id(tag, id);
         let ext = &Extractor::new(self);
-        log::warn!("extracting value: {:?}", value);
-        log::warn!("ctor: {:?}", ext.ctors);
         ext.ctors
             .iter()
             .flat_map(|&sym| {
                 let func = &self.functions[&sym];
-                log::warn!("{:?}", func.schema);
                 if !func.schema.output.is_eq_sort() {
                     return vec![];
                 }
