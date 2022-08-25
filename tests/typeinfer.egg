@@ -193,7 +193,8 @@
                        (App (Var "id") (True)))))
 (define t-let-poly (typeof (Nil) let-poly))
 
-(run 10)
+(run 20)
+
 (check (= t-id (TArr (TVar (FreshFromLam (Nil) "x" (Var "x")))
                      (TVar (FreshFromLam (Nil) "x" (Var "x"))))))
 (check (= t-let-poly (TBool)))
