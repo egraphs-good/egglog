@@ -76,7 +76,7 @@
 (rule ((has-qs-demand ctx (TArr fr to))
        (has-qs ctx fr qs1)
        (has-qs ctx to qs2))
-      ((has-qs ctx (set-union qs1 qs2))))
+      ((has-qs ctx (TArr fr to) (set-union qs1 qs2))))
 
 (rule ((has-qs-demand ctx (TVar x))
        (keySet ctx key-set)
@@ -88,7 +88,7 @@
       ((has-qs ctx (TVar x) (insert (empty) x 1))))
 
 (rule ((= sc (generalize ctx t)))
-      (has-qs-demand ctx t))
+      ((has-qs-demand ctx t)))
 (rewrite (generalize ctx t)
          (Forall qs t)
          :when ((has-qs ctx t qs)))
@@ -109,7 +109,7 @@
 ;;       ((union otype (TUnit))
 ;;        (substQs vs (TUnit) (empty))))
 
-(rewrite (subst-fresh vs (TArr fr to)) (TArr (subst vs fr) (subst vs to)))
+(rewrite (subst-fresh vs (TArr fr to)) (TArr (subst-fresh vs fr) (subst-fresh vs to)))
 ;; (rule ((= otype (subst-fresh vs (TArr fr to)))
 ;;        (substQs vs fr qvs1)
 ;;        (substQs vs to qvs2))
@@ -186,9 +186,14 @@
                  e2))
 
 (define id (Abs "x" (Var "x")))
-
 (define t-id (typeof (Nil) id))
 
-(run 7)
+(define let-poly (Let "id" (Abs "x" (Var "x"))
+                  (App (App (Var "id") (Var "id"))
+                       (App (Var "id") (True)))))
+(define t-let-poly (typeof (Nil) let-poly))
+
+(run 10)
 (check (= t-id (TArr (TVar (FreshFromLam (Nil) "x" (Var "x")))
                      (TVar (FreshFromLam (Nil) "x" (Var "x"))))))
+(check (= t-let-poly (TBool)))
