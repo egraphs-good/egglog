@@ -1,0 +1,170 @@
+;; Implements the simplification layer of herbie in egg-smol🫡
+
+;; Bools!
+(datatype B (True) (False))
+(function or (B B) B)
+(rewrite (or (True) x) (True))
+(rewrite (or x (True)) (True))
+(rewrite (or (False) (False)) (False))
+
+;; Operators from FPCore
+(datatype Math
+  ; Ground terms
+  (Num Rational)
+  (Var String)
+
+  ; Constant-folding ops
+  (Add Math Math)
+  (Sub Math Math)
+  (Mul Math Math)
+  (Div Math Math)
+  (Pow Math Math)
+  (Neg Math)
+  (Sqrt Math)
+  (Cbrt Math) ; cube root
+  (Fabs Math)
+  (Ceil Math)
+  (Floor Math)
+  (Round Math)
+  (Log Math))
+
+;; This example has four analyses:
+;; an interval analysis consisting of a hi and lo component,
+;; a constant folding analysis, and a nonzero analysis
+(function hi (Math) Rational :merge (min old new))
+(function lo (Math) Rational :merge (max old new))
+(function evals-to (Math) Rational)
+(function is-zero (Math) B
+  :merge (or old new)
+  :default (False))
+
+;; First, define our constant folding analysis
+(rule ((= e (Num n)))
+      ((set (evals-to e) n)))
+(rule ((= e (Add a b))
+       (= va (evals-to a))
+       (= vb (evals-to b)))
+      ((set (evals-to e) (+ va vb))))
+(rule ((= e (Sub a b))
+       (= va (evals-to a))
+       (= vb (evals-to b)))
+      ((set (evals-to e) (- va vb))))
+(rule ((= e (Mul a b))
+       (= va (evals-to a))
+       (= vb (evals-to b)))
+      ((set (evals-to e) (* va vb))))
+(rule ((= e (Div a b))
+       (= va (evals-to a))
+       (= vb (evals-to b))
+       ; TODO: this next one only works if Ratios are reduced in ops
+       ;       should confirm this
+       (!= (rational 0 1) vb))
+      ((set (evals-to e) (/ va vb))))
+; TODO: pow
+(rule ((= e (Neg a))
+       (= va (evals-to a)))
+      ((set (evals-to e) (neg va))))
+; TODO: sqrt
+; TODO: cbrt
+(rule ((= e (Fabs a))
+       (= va (evals-to a)))
+      ((set (evals-to e) (abs va))))
+(rule ((= e (Ceil a))
+       (= va (evals-to a)))
+      ((set (evals-to e) (ceil va))))
+(rule ((= e (Floor a))
+       (= va (evals-to a)))
+      ((set (evals-to e) (floor va))))
+(rule ((= e (Round a))
+       (= va (evals-to a)))
+      ((set (evals-to e) (round va))))
+; TODO: log
+
+;; To check if something is zero, we just check if it evaluates to zero
+(rule ((= (rational 0 1) (evals-to e)))
+      ((set (is-zero e) (True))))
+
+;; The interval analyses are similar to the constant-folding analysis,
+;; except we have to take the lower/upper bound of the results we get
+(rule ((= e (Add a b)))
+      ((set (lo e) (+ (lo a) (lo b)))))
+(rule ((= e (Add a b)))
+      ((set (hi e) (+ (hi a) (hi b)))))
+      
+(rule ((= e (Sub a b)))
+      ((set (lo e) 
+          (min (min (- (lo a) (lo b)) (- (lo a) (hi b)))
+               (min (- (hi a) (lo b)) (- (hi a) (hi b)))))))
+(rule ((= e (Sub a b)))
+      ((set (hi e) 
+          (max (max (- (lo a) (lo b)) (- (lo a) (hi b)))
+               (max (- (hi a) (lo b)) (- (hi a) (hi b)))))))
+
+(rule ((= mul (Mul a b)))
+      ((set (lo mul) 
+          (min (min (* (lo a) (lo b)) (* (lo a) (hi b)))
+               (min (* (hi a) (lo b)) (* (hi a) (hi b)))))))
+(rule ((= mul (Mul a b)))
+      ((set (hi mul) 
+          (max (max (* (lo a) (lo b)) (* (lo a) (hi b)))
+               (max (* (hi a) (lo b)) (* (hi a) (hi b)))))))
+
+; TODO: is this right lmao
+(rule ((= e (Div a b)))
+      ((set (lo e) 
+          (min (min (div (lo a) (lo b)) (div (lo a) (hi b)))
+               (min (div (hi a) (lo b)) (div (hi a) (hi b)))))))
+(rule ((= e (Div a b)))
+      ((set (hi e) 
+          (max (max (div (lo a) (lo b)) (div (lo a) (hi b)))
+               (max (div (hi a) (lo b)) (div (hi a) (hi b)))))))
+
+; TODO: Pow
+
+(rule ((= e (Neg a)))
+      ((set (lo e) (neg (hi a)))))
+(rule ((= e (Neg a)))
+      ((set (hi e) (neg (lo a)))))
+
+; TODO: Sqrt
+; TODO: Cbrt
+
+(rule ((= e (Fabs a)))
+      ((set (lo e) (min (abs (lo a)) (abs (hi a))))))
+(rule ((= e (Fabs a)))
+      ((set (hi e) (max (abs (lo a)) (abs (hi a))))))
+
+; TODO: Ceil
+; TODO: Floor
+; TODO: Round
+; TODO: Log
+
+;; General rewrite rules
+; TODO: this doesn't work bc rational is a prim, not a fn
+; (rewrite (rational 0 x) (rational 0 1))
+
+(define x (Num (rational 2 1)))
+(define e (Sub x x))
+
+(run 25)
+
+(check (= (is-zero e) (True)))
+
+; (define x (Var "x"))
+; (define e (Mul x x))
+; 
+; (set (lo x) (rational -10 1))
+; (set (hi x) (rational 10 1))
+; 
+; (run 1)
+; 
+; (check (= (lo e) (rational -100 1)))
+; 
+; (rule ((= mul (Mul a a)))
+;       ((set (lo mul) (* (lo a) (lo a)))))
+; 
+; (run 1)
+; (check (= (lo e) (rational 100 1)))
+; 
+; ;; testing extraction of rationals
+; (extract (lo e))

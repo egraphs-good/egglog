@@ -1,4 +1,5 @@
 use num_rational::BigRational;
+use num_traits::Signed;
 use std::sync::Mutex;
 
 use crate::{ast::Literal, util::IndexSet};
@@ -40,6 +41,11 @@ impl Sort for RationalSort {
         add_primitives!(eg, "/" = |a: R, b: R| -> R { a / b }); // TODO option
         add_primitives!(eg, "min" = |a: R, b: R| -> R { a.min(b) });
         add_primitives!(eg, "max" = |a: R, b: R| -> R { a.max(b) });
+        add_primitives!(eg, "neg" = |a: R| -> R { -a });
+        add_primitives!(eg, "abs" = |a: R| -> R { a.abs() });
+        add_primitives!(eg, "floor" = |a: R| -> R { a.floor() });
+        add_primitives!(eg, "ceil" = |a: R| -> R { a.ceil() });
+        add_primitives!(eg, "round" = |a: R| -> R { a.round() });
         add_primitives!(eg, "rational" = |a: i64, b: i64| -> R { R::new(a.into(), b.into()) });
     }
     fn make_expr(&self, value: Value) -> Expr {
