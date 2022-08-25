@@ -1,8 +1,3 @@
-; Algorithm W for HM type system
-; TODO: how does our algo differ from Prolog?
-; How does one write this program in Prolog?
-; TODO: Does the current algorithm work if the e-graph contains more than one expr?
-
 ;;;;;;;;;;;;;;;;;;;;;;
 ;; Exprs and Types
 ;;;;;;;;;;;;;;;;;;;;;;
@@ -13,7 +8,9 @@
 (datatype QualifiedVs)
 (datatype Scheme)
 (datatype Ctx)
-(sort StringSet (Map Ident i64))
+;; TODO: can't do unit right now
+;; (sort QualifiedVs (Map String Unit))
+(sort QualifiedVs (Map Ident i64))
 
 (function FreshFromSubst (QualifiedVs String) Ident)
 (function FreshFromLam (Expr Ctx String Expr) Ident)
@@ -34,95 +31,30 @@
 (function TBool () Type)
 (function TUnit () Type)
 
-;;;;;;;;;;;;;;;;;;;;;;
-;; Free variables
-;;;;;;;;;;;;;;;;;;;;;;
+(function Forall (QualifiedVs Type) Scheme)
+(function Nil () Ctx)
+(function Cons (String Scheme Ctx) Ctx)
 
-; (fv x y) means y is a free variable of x
-(relation ftv (Type Ident))
-
-; ftv(a) = a
-; TODO: when the TVar is resolved, it is still not removed and therefore will occur in the ftv set...
-; <del>we can potentially work around this by having an analysis: Unresolved < Resolved </del>
-; essentially, the set of free variable is not monotonic across iteration
-(rule (
-  (= t (TVar x))
-)(
-  (ftv t x)
-))
-
-; ftv(t1 -> t2) = ftv(t1) + ftv(t2)
-(rule (
-  (= t (TArr t1 t2))
-  (ftv t1 x)
-)(
-  (ftv t x)
-))
-
-(rule (
-  (= t (TArr t1 t2))
-  (ftv t2 x)
-)(
-  (ftv t x)
-))
+(relation keySet (Ctx QualifiedVs))
+(relation fvSet (Type QualifiedVs))
 
 ;;;;;;;;;;;;;;;;;;;;;;
 ;; Scheme and Context
 ;;;;;;;;;;;;;;;;;;;;;;
 
-(function EmptyVSet () QualifiedVs)
-(function FromFV (Type) QualifiedVs)
-(function SetDiff (QualifiedVs StringSet) QualifiedVs)
-
-;; TODO: add demand so containsStr is not instantiated for every context
-;; TODO: needs recursive type definition
-(relation containsStr (QualifiedVs Ident))
-
-(rule ((= s (FromFV t))
-       (ftv t x))
-      ((containsStr s x)))
-
-(rule ((= s (SetDiff a b))
-       (containsStr a x)
-       (not-contains b x))
-      ((containsStr s x)))
-
-; Scheme := forall xs. t
-(function Forall (QualifiedVs Type) Scheme)
-
-; A context is a map from vars to schemes
-
-(function Nil () Ctx)
-(function Cons (String Scheme Ctx) Ctx)
-
-;; TODO: can't do unit right now
-;; (sort StringSet (Map String Unit))
-
-(relation keySet (Ctx StringSet))
 (rule ((= c (Nil))) (keySet c (empty)))
 (rule ((= c (Cons x s n))
        (keySet n fvs)) 
       ((keySet c (insert x 1 fvs))))
 
+;; TODO: rewrite lookup to use native sets
 (function lookup (Ctx String) Scheme)
-
 (rewrite (lookup (Cons x s tl) x) s)
-
 (rule (
   (= t (lookup (Cons y s tl) x))
   (!= x y)
 )(
   (union t (lookup tl x))
-))
-
-(relation haskey (Ctx String))
-(relation haskey-demand (Ctx Ctx))
-(rule (
-  (haskey-demand target-ctx current-ctx)
-  (= current-ctx (Cons x s next-ctx))
-)(
-  (haskey target-ctx x)
-  (haskey-demand target-ctx next-ctx)
 ))
 
 ;;;;;;;;;;;;;;;;;;;;;;
@@ -132,43 +64,53 @@
 (function generalize (Ctx Type) Scheme)
 (function instantiate (Scheme) Type)
 
-;; TODO: this does not work
-;; (rewrite (generalize ctx t) 
-;;          (Forall (SetDiff (FromFV t) 
-;;                           key-set)
-;;                   t)
-;;          :when (keySet ctx key-set)
-;;          )
-(rule ((= o (generalize ctx t))
-       (keySet ctx key-set))
-      ((Forall (SetDiff (FromFV t) 
-                        key-set)
-                t)))
+(rewrite (generalize ctx t) 
+         (Forall (set-diff fv-set key-set) t)
+         :when ((keySet ctx key-set) (fvSet t fv-set)))
 
 (function subst-fresh (QualifiedVs Type) Type)
+;; the type produced by (subst-fresh qvs type) has these free type variables
+(relation substFvSet (QualifiedVs Type QualifiedVs))
 
-(rewrite (subst-fresh vs (TInt)) (TInt))
-(rewrite (subst-fresh vs (TBool)) (TBool))
-(rewrite (subst-fresh vs (TUnit)) (TUnit))
+;; (rewrite (subst-fresh vs (TInt)) (TInt))
+(rule ((= otype (subst-fresh vs (TInt))))
+      ((union otype (TInt))
+       (substFvSet vs (TInt) (empty))))
+;; (rewrite (subst-fresh vs (TBool)) (TBool))
+(rule ((= otype (subst-fresh vs (TBool))))
+      ((union otype (TBool))
+       (substFvSet vs (TBool) (empty))))
+;; (rewrite (subst-fresh vs (TUnit)) (TUnit))
+(rule ((= otype (subst-fresh vs (TUnit))))
+      ((union otype (TUnit))
+       (substFvSet vs (TUnit) (empty))))
+
 (rewrite (subst-fresh vs (TArr fr to)) (TArr (subst vs fr) (subst vs to)))
+(rule ((= otype (subst-fresh vs (TArr fr to)))
+       (substFvSet vs fr qvs1)
+       (substFvSet vs to qvs2))
+      ((substFvSet vs (TArr fr to) (set-union qvs1 qvs2))))
+
 (rule ((= otype (subst-fresh vs (TVar s)))
-       (containsStr vs s))
-      ((union otype (TVar (FreshFromSubst vs s)))))
+       (= unused (get vs s)))
+      ((union otype (TVar (FreshFromSubst vs s)))
+       (substFvSet vs (TVar s) (insert (empty) (FreshFromSubst vs s) 1))))
+
+(rule ((= otype (subst-fresh vs (TVar s)))
+       (not-contains vs s))
+      ((union otype (TVar s))
+       (substFvSet vs (TVar s) (insert (empty) (TVar s)))))
 
 (rewrite (instantiate (Forall vs t))
          (subst-fresh vs t))
-
 
 ;;;;;;;;;;;;;;;;;;;;;;
 ;; Injectivity
 ;;;;;;;;;;;;;;;;;;;;;;
 
-(rule ( ; injectivity of ->
-  (= (TArr fr1 to1) (TArr fr2 to2))
-)(
-  (union fr1 fr2) 
-  (union to1 to2)
-))
+(rule ((= (TArr fr1 to1) (TArr fr2 to2)))
+      ((union fr1 fr2) 
+       (union to1 to2)))
 
 ;;;;;;;;;;;;;;;;;;;;;;
 ;; Type inference
@@ -183,29 +125,42 @@
 (rewrite (typeof ctx (False)) (TBool))
 (rewrite (typeof ctx (Unit)) (TUnit))
 
+(rule () ((fvSet (TInt) (empty))
+          (fvSet (TBool) (empty))
+          (fvSet (TUnit) (empty))))
+
 ; sc = lookup(ctx, x)
 ; t = instantiate(sc)
 ; ---------------
 ; ctx |- x : t
 (rewrite (typeof ctx (Var x))
          (instantiate (lookup ctx x)))
+(rule ((= otype (instantiate (Forall vs t)))
+       (substFvSet vs t ftv))
+      ((fvSet otype ftv)))
 
 (rule (
     (= t (typeof ctx (Abs x e)))
 )(
     ;; (let tv (TVar (FreshFromLam ctx x e)))
-    ;; (let te (typeof (Cons x (Forall (EmptyVSet) tv) ctx) 
+    ;; (let te (typeof (Cons x (Forall (empty) tv) ctx) 
     ;;               e))
     ;; (union t (TArr tv te))
     ;; unfolds to
     (union 
       t 
       (TArr (TVar (FreshFromLam ctx x e)) 
-            (typeof (Cons x (Forall (EmptyVSet) 
+            (typeof (Cons x (Forall (empty) 
                                     (TVar (FreshFromLam ctx x e))) 
                           ctx) 
                   e)))
 ))
+(rule ((= otype (typeof ctx (Abs x e)))
+       (= t (typeof (Cons x (Forall (empty) (TVar (FreshFromLam ctx x e))) ctx) e)) 
+       (fvSet t fv-set))
+      ((fvSet otype 
+              (insert fv-set (TVar (FreshFromLam ctx x e)) 1))))
+
 
 (rule (
     (= to (typeof ctx (App e1 e2)))
@@ -214,8 +169,16 @@
            (TArr (typeof ctx e2) to))
 ))
 
+;; TODO: also note that the set of FVs can be recalculated from different places
+;; and they must be equivalent
+(rule (
+    (= otype (typeof ctx (App e1 e2)))
+    (fvSet )
+)(
+
+))
+
 (rewrite (typeof ctx (Let x e1 e2))
          (typeof (Cons x (generalize ctx (typeof ctx e1)) 
                        ctx)
                  e2))
-
