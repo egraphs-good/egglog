@@ -8,6 +8,7 @@ mod util;
 mod value;
 
 use hashbrown::hash_map::Entry;
+use instant::{Duration, Instant};
 use sort::*;
 use thiserror::Error;
 
@@ -503,10 +504,10 @@ impl EGraph {
                 .unwrap_or_else(|| panic!("Couldn't find variable '{var}'"))),
             Expr::Lit(lit) => Ok(self.eval_lit(lit)),
             Expr::Call(op, args) => {
-                let values: Vec<Value> = args
-                    .iter()
-                    .map(|a| self.eval_expr(ctx, a))
-                    .collect::<Result<_, _>>()?;
+                let mut values = Vec::with_capacity(args.len());
+                for arg in args {
+                    values.push(self.eval_expr(ctx, arg)?);
+                }
                 if let Some(function) = self.functions.get_mut(op) {
                     if let Some(value) = function.nodes.get(&values) {
                         Ok(*value)
@@ -561,11 +562,19 @@ impl EGraph {
         self.eval_expr(&Default::default(), expr)
     }
 
-    pub fn run_rules(&mut self, limit: usize) {
+    pub fn run_rules(&mut self, limit: usize) -> [Duration; 3] {
+        let mut search_time = Duration::default();
+        let mut apply_time = Duration::default();
+        let mut rebuild_time = Duration::default();
         for _ in 0..limit {
-            self.step_rules();
+            let [st, at] = self.step_rules();
+            search_time += st;
+            apply_time += at;
+
+            let rebuild_start = Instant::now();
             let updates = self.rebuild();
             log::debug!("Made {updates} updates",);
+            rebuild_time += rebuild_start.elapsed();
             // if updates == 0 {
             //     log::debug!("Breaking early!");
             //     break;
@@ -579,38 +588,40 @@ impl EGraph {
                 log::debug!("  {args:?} = {val:?}");
             }
         }
+        [search_time, apply_time, rebuild_time]
     }
 
-    fn step_rules(&mut self) {
-        let searched: Vec<_> = self
-            .rules
-            .values()
-            .map(|rule| {
-                // dbg!(&rule);
-                let mut substs = Vec::<Subst>::new();
-                self.run_query(&rule.query, |values| {
-                    substs.push(
-                        rule.bindings
-                            .iter()
-                            .map(|(k, t)| {
-                                let val = match t {
-                                    AtomTerm::Var(sym) => {
-                                        let i = rule.query.vars.get_index_of(sym).unwrap_or_else(
-                                            || panic!("Couldn't find variable '{sym}'"),
-                                        );
-                                        values[i]
-                                    }
-                                    AtomTerm::Value(val) => *val,
-                                };
-                                (*k, val)
-                            })
-                            .collect(),
-                    )
-                });
-                substs
-            })
-            .collect();
+    fn step_rules(&mut self) -> [Duration; 2] {
+        let search_start = Instant::now();
+        let mut searched = vec![];
 
+        fn make_subst(rule: &Rule, values: &[Value]) -> Subst {
+            let get_val = |t: &AtomTerm| match t {
+                AtomTerm::Var(sym) => {
+                    let i = rule
+                        .query
+                        .vars
+                        .get_index_of(sym)
+                        .unwrap_or_else(|| panic!("Couldn't find variable '{sym}'"));
+                    values[i]
+                }
+                AtomTerm::Value(val) => *val,
+            };
+
+            rule.bindings
+                .iter()
+                .map(|(k, t)| (*k, get_val(t)))
+                .collect()
+        }
+
+        for rule in self.rules.values() {
+            let mut substs = Vec::<Subst>::new();
+            self.run_query(&rule.query, |values| substs.push(make_subst(rule, values)));
+            searched.push(substs);
+        }
+        let search_elapsed = search_start.elapsed();
+
+        let apply_start = Instant::now();
         let rules = std::mem::take(&mut self.rules);
         for (rule, substs) in rules.values().zip(searched) {
             for subst in substs {
@@ -619,6 +630,8 @@ impl EGraph {
             }
         }
         self.rules = rules;
+        let apply_elapsed = apply_start.elapsed();
+        [search_elapsed, apply_elapsed]
     }
 
     fn add_rule_with_name(&mut self, name: String, rule: ast::Rule) -> Result<Symbol, Error> {
@@ -710,8 +723,17 @@ impl EGraph {
             }
             Command::Run(limit) => {
                 if should_run {
-                    self.run_rules(limit);
-                    format!("Ran {limit}.")
+                    let [st, at, rt] = self.run_rules(limit);
+                    let st = st.as_secs_f64();
+                    let at = at.as_secs_f64();
+                    let rt = rt.as_secs_f64();
+                    format!(
+                        "Ran {limit} in {total:10.6}s.\n\
+                        Search:  {st:10.6}s\n\
+                        Apply:   {at:10.6}s\n\
+                        Rebuild: {rt:10.6}s",
+                        total = st + at + rt,
+                    )
                 } else {
                     log::info!("Skipping running!");
                     format!("Skipped run {limit}.")

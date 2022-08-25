@@ -14,7 +14,7 @@ all: test web
 
 test:
 	cargo test
-	cargo clippy --tests
+	cargo clippy --tests -- -D warnings
 	cargo fmt --check
 
 web: ${DIST_WASM} ${WEB_SRC} ${WWW}/examples.json

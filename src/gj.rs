@@ -38,6 +38,58 @@ struct Context<'b> {
 }
 
 impl<'b> Context<'b> {
+    fn new(bump: &'b Bump, egraph: &'b EGraph, query: &'b CompiledQuery) -> Self {
+        let default_trie = bump.alloc(Trie::default());
+        let mut ctx = Context {
+            egraph,
+            query,
+            bump,
+            tuple: vec![Value::fake(); query.vars.len()],
+            tries: vec![default_trie; query.atoms.len()],
+            empty: bump.alloc(Trie::default()),
+            val_pool: Default::default(),
+            trie_pool: Default::default(),
+        };
+
+        for (atom_i, atom) in query.atoms.iter().enumerate() {
+            // let mut to_project = vec![];
+            let mut constraints = vec![];
+            let (sym, args) = match atom {
+                Atom::Func(sym, args) => (*sym, args),
+                Atom::Prim(_, _) => continue,
+            };
+
+            for (i, t) in args.iter().enumerate() {
+                match t {
+                    AtomTerm::Value(val) => constraints.push(Constraint::Const(i, *val)),
+                    AtomTerm::Var(_v) => {
+                        if let Some(j) = args[..i].iter().position(|t2| t == t2) {
+                            constraints.push(Constraint::Eq(j, i));
+                        } else {
+                            // to_project.push(v)
+                        }
+                    }
+                }
+            }
+
+            let mut projection = vec![];
+            for v in query.vars.keys() {
+                if let Some(i) = args.iter().position(|t| t == &AtomTerm::Var(*v)) {
+                    assert!(!projection.contains(&i));
+                    projection.push(i);
+                }
+            }
+
+            ctx.tries[atom_i] = ctx.build_trie(&TrieRequest {
+                sym,
+                projection,
+                constraints,
+            });
+        }
+
+        ctx
+    }
+
     fn eval<F>(&mut self, program: &[Instr], f: &mut F)
     where
         F: FnMut(&[Value]),
@@ -49,48 +101,76 @@ impl<'b> Context<'b> {
 
         match instr {
             Instr::Intersect { idx, trie_indices } => {
-                // debug_assert!(js
-                //     .iter()
-                //     .all(|&j| query.atoms[j].1.contains(&AtomTerm::Var(x))));
-
-                // the index of the smallest trie
-                let j_min = trie_indices
-                    .iter()
-                    .copied()
-                    .min_by_key(|j| self.tries[*j].len())
-                    .unwrap();
-                let mut intersection = self.val_pool.pop().unwrap_or_default();
-                intersection.extend(self.tries[j_min].0.keys().cloned());
-
-                for &j in trie_indices {
-                    if j != j_min {
-                        let r = &self.tries[j].0;
-                        intersection.retain(|t| r.contains_key(t));
-                    }
-                }
-                let mut rs = self.trie_pool.pop().unwrap_or_default();
-                rs.extend(trie_indices.iter().map(|&j| self.tries[j]));
-
-                for val in intersection.drain(..) {
-                    self.tuple[*idx] = val;
-
-                    for (r, &j) in rs.iter().zip(trie_indices) {
-                        self.tries[j] = match r.0.get(&val) {
-                            Some(t) => *t,
-                            None => self.empty,
+                match trie_indices.len() {
+                    1 => {
+                        let j = trie_indices[0];
+                        let r = self.tries[j];
+                        for (val, trie) in r.0.iter() {
+                            self.tuple[*idx] = *val;
+                            self.tries[j] = trie;
+                            self.eval(program, f);
                         }
+                        self.tries[j] = r;
                     }
+                    2 => {
+                        let rs = [self.tries[trie_indices[0]], self.tries[trie_indices[1]]];
+                        // smaller_idx
+                        let si = rs[0].len() > rs[1].len();
+                        let intersection = rs[si as usize]
+                            .0
+                            .keys()
+                            .filter(|k| rs[(!si) as usize].0.contains_key(k));
+                        for val in intersection {
+                            self.tuple[*idx] = *val;
+                            self.tries[trie_indices[0]] = rs[0].0.get(val).unwrap();
+                            self.tries[trie_indices[1]] = rs[1].0.get(val).unwrap();
 
-                    self.eval(program, f);
-                }
-                self.val_pool.push(intersection);
+                            self.eval(program, f);
+                        }
+                        self.tries[trie_indices[0]] = rs[0];
+                        self.tries[trie_indices[1]] = rs[1];
+                    }
+                    _ => {
+                        // the index of the smallest trie
+                        let j_min = trie_indices
+                            .iter()
+                            .copied()
+                            .min_by_key(|j| self.tries[*j].len())
+                            .unwrap();
+                        let mut intersection = self.val_pool.pop().unwrap_or_default();
+                        intersection.extend(self.tries[j_min].0.keys().cloned());
 
-                // TODO is it necessary to reset the tries?
-                for (r, &j) in rs.iter().zip(trie_indices) {
-                    self.tries[j] = r;
-                }
-                rs.clear();
-                self.trie_pool.push(rs);
+                        for &j in trie_indices {
+                            if j != j_min {
+                                let r = &self.tries[j].0;
+                                intersection.retain(|t| r.contains_key(t));
+                            }
+                        }
+                        let mut rs = self.trie_pool.pop().unwrap_or_default();
+                        rs.extend(trie_indices.iter().map(|&j| self.tries[j]));
+
+                        for val in intersection.drain(..) {
+                            self.tuple[*idx] = val;
+
+                            for (r, &j) in rs.iter().zip(trie_indices) {
+                                self.tries[j] = match r.0.get(&val) {
+                                    Some(t) => *t,
+                                    None => self.empty,
+                                }
+                            }
+
+                            self.eval(program, f);
+                        }
+                        self.val_pool.push(intersection);
+
+                        // TODO is it necessary to reset the tries?
+                        for (r, &j) in rs.iter().zip(trie_indices) {
+                            self.tries[j] = r;
+                        }
+                        rs.clear();
+                        self.trie_pool.push(rs);
+                    }
+                };
             }
             Instr::Call { prim, args, check } => {
                 let (out, args) = args.split_last().unwrap();
@@ -230,7 +310,7 @@ impl EGraph {
             assert!(!info.occurences.is_empty(), "var {} has no occurences", v);
         }
 
-        vars.sort_by(|_v1, i1, _v2, i2| i1.occurences.len().cmp(&i2.occurences.len()));
+        vars.sort_by(|_v1, i1, _v2, i2| i2.occurences.len().cmp(&i1.occurences.len()));
 
         let mut program: Vec<Instr> = vars
             .iter()
@@ -286,54 +366,7 @@ impl EGraph {
         F: FnMut(&[Value]),
     {
         let bump = Bump::new();
-        let default_trie = bump.alloc(Trie::default());
-        let mut ctx = Context {
-            egraph: self,
-            query,
-            bump: &bump,
-            tuple: vec![Value::fake(); query.vars.len()],
-            tries: vec![default_trie; query.atoms.len()],
-            empty: bump.alloc(Trie::default()),
-            val_pool: Default::default(),
-            trie_pool: Default::default(),
-        };
-
-        for (atom_i, atom) in query.atoms.iter().enumerate() {
-            // let mut to_project = vec![];
-            let mut constraints = vec![];
-            let (sym, args) = match atom {
-                Atom::Func(sym, args) => (*sym, args),
-                Atom::Prim(_, _) => continue,
-            };
-
-            for (i, t) in args.iter().enumerate() {
-                match t {
-                    AtomTerm::Value(val) => constraints.push(Constraint::Const(i, *val)),
-                    AtomTerm::Var(_v) => {
-                        if let Some(j) = args[..i].iter().position(|t2| t == t2) {
-                            constraints.push(Constraint::Eq(j, i));
-                        } else {
-                            // to_project.push(v)
-                        }
-                    }
-                }
-            }
-
-            let mut projection = vec![];
-            for v in query.vars.keys() {
-                if let Some(i) = args.iter().position(|t| t == &AtomTerm::Var(*v)) {
-                    assert!(!projection.contains(&i));
-                    projection.push(i);
-                }
-            }
-
-            ctx.tries[atom_i] = ctx.build_trie(&TrieRequest {
-                sym,
-                projection,
-                constraints,
-            });
-        }
-
+        let mut ctx = Context::new(&bump, self, query);
         ctx.eval(&query.program, &mut f)
     }
 }
