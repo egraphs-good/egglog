@@ -5,14 +5,14 @@
 (datatype Ident)
 (datatype Expr)
 (datatype Type)
-(datatype QualifiedVs)
+(datatype QuantifiedVs)
 (datatype Scheme)
 (datatype Ctx)
 ;; TODO: can't do unit right now
-;; (sort QualifiedVs (Map String Unit))
-(sort QualifiedVs (Map Ident i64))
+;; (sort QuantifiedVs (Map String Unit))
+(sort QuantifiedVs (Map Ident i64))
 
-(function FreshFromSubst (QualifiedVs String) Ident)
+(function FreshFromSubst (QuantifiedVs String) Ident)
 (function FreshFromLam (Expr Ctx String Expr) Ident)
 (function FromString (String) Ident)
  
@@ -31,12 +31,12 @@
 (function TBool () Type)
 (function TUnit () Type)
 
-(function Forall (QualifiedVs Type) Scheme)
+(function Forall (QuantifiedVs Type) Scheme)
 (function Nil () Ctx)
 (function Cons (String Scheme Ctx) Ctx)
 
-(relation keySet (Ctx QualifiedVs))
-(relation fvSet (Type QualifiedVs))
+(relation keySet (Ctx QuantifiedVs))
+(relation fvSet (Type QuantifiedVs))
 
 ;;;;;;;;;;;;;;;;;;;;;;
 ;; Scheme and Context
@@ -65,12 +65,12 @@
 (function instantiate (Scheme) Type)
 
 (rewrite (generalize ctx t) 
-         (Forall (set-diff fv-set key-set) t)
+         (Forall (quantifiers fv-set key-set) t)
          :when ((keySet ctx key-set) (fvSet t fv-set)))
 
-(function subst-fresh (QualifiedVs Type) Type)
+(function subst-fresh (QuantifiedVs Type) Type)
 ;; the type produced by (subst-fresh qvs type) has these free type variables
-(relation substFvSet (QualifiedVs Type QualifiedVs))
+(relation substFvSet (QuantifiedVs Type QuantifiedVs))
 
 ;; (rewrite (subst-fresh vs (TInt)) (TInt))
 (rule ((= otype (subst-fresh vs (TInt))))
