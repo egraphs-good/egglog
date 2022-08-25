@@ -1,4 +1,8 @@
-;; Implements the simplification layer of herbie in egg-smol🫡
+;; Implements part of the simplification layer of herbie in egg-smol🫡
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; Datatypes
 
 ;; Bools!
 (datatype B (True) (False))
@@ -28,9 +32,14 @@
   (Round Math)
   (Log Math))
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; Analyses
+;; --------
 ;; This example has four analyses:
 ;; an interval analysis consisting of a hi and lo component,
-;; a constant folding analysis, and a nonzero analysis
+;; a constant folding analysis, and a nonzero analysis.
+
 (function hi (Math) Rational :merge (min old new))
 (function lo (Math) Rational :merge (max old new))
 (function evals-to (Math) Rational)
@@ -39,6 +48,12 @@
   :default (False))
 
 ;; First, define our constant folding analysis
+
+; If this expression is constant-foldable, union it with its evaled form
+(rule ((= ve (evals-to e)))
+      ((union e (Num ve))))
+
+; Cases
 (rule ((= e (Num n)))
       ((set (evals-to e) n)))
 (rule ((= e (Add a b))
@@ -80,6 +95,7 @@
       ((set (evals-to e) (round va))))
 ; TODO: log
 
+; TODO: this works if (zero) ratios are reduced
 ;; To check if something is zero, we just check if it evaluates to zero
 (rule ((= (rational 0 1) (evals-to e)))
       ((set (is-zero e) (True))))
@@ -173,7 +189,60 @@
 ; TODO: Round
 ; TODO: Log
 
-;; TODO: General rewrite rules
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; Rewrites
+
+;; Commutativity
+(rewrite (Add a b) (Add b a))
+(rewrite (Mul a b) (Mul b a))
+
+;; Associativity (unsafe)
+(rewrite (Add a (Add b c)) (Add (Add a b) c))
+(rewrite (Add (Add a b) c) (Add a (Add b c)))
+(rewrite (Add a (Sub b c)) (Sub (Add a b) c))
+(rewrite (Add (Sub a b) c) (Sub a (Sub b c)))
+(rewrite (Sub a (Add b c)) (Sub (Sub a b) c))
+(rewrite (Sub (Add a b) c) (Add a (Sub b c)))
+(rewrite (Sub (Sub a b) c) (Sub a (Add b c)))
+(rewrite (Sub a (Sub b c)) (Add (Sub a b) c))
+(rewrite (Mul a (Mul b c)) (Mul (Mul a b) c))
+(rewrite (Mul (Mul a b) c) (Mul a (Mul b c)))
+(rewrite (Mul a (Div b c)) (Div (Mul a b) c))
+(rewrite (Mul (Div a b) c) (Div (Mul a c) b))
+(rewrite (Div a (Mul b c)) (Div (Div a b) c))
+(rewrite (Div (Mul b c) a) (Div b (Div a c)))
+(rewrite (Div a (Div b c)) (Mul (Div a b) c))
+(rewrite (Div (Div b c) a) (Div b (Mul a c)))
+
+;; Counting (unsafe)
+(rewrite (Add x x) (Mul (Num (rational 2 1)) x))
+
+;; TODO: Distributivity (unsafe)
+;; TODO: Distributivity
+;; TODO: Difference of squares canonicalization (unsafe)
+;; TODO: Identity (unsafe)
+;; TODO: Identity
+;; TODO: Fractions (unsafe)
+;; TODO: Square root (unsafe)
+;; TODO: Square root
+;; TODO: Cube root (unsafe)
+;; TODO: Exponentials (unsafe)
+;; TODO: Exponentials
+;; TODO: Powers (unsafe)
+;; TODO: Powers
+;; TODO: Logs (unsafe)
+;; TODO: Logs
+;; TODO: Trig (unsafe)
+;; TODO: Trig
+;; TODO: Misc.
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; Testing
+;; -------
+;; In actuality, herbie would be responsible for plugging exprs in here.
+;; For testing purposes we just come up with some example test cases
 
 ;; Test 1: zero-check
 (define x (Num (rational 2 1)))
@@ -193,12 +262,6 @@
 (run 1)
 
 (check (= (lo e) (rational -100 1)))
-
-(rule ((= mul (Mul a a)))
-      ((set (lo mul) (* (lo a) (lo a)))))
-
-(run 1)
-(check (= (lo e) (rational 100 1)))
 
 ;; testing extraction of rationals
 (extract (lo e))
