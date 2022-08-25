@@ -94,33 +94,15 @@
          :when ((has-qs ctx t qs)))
 
 (function subst-fresh (QuantifiedVs Type) Type)
-;; (relation substQs (QuantifiedVs Type QuantifiedVs))
 
 (rewrite (subst-fresh vs (TInt)) (TInt))
-;; (rule ((= otype (subst-fresh vs (TInt))))
-;;       ((union otype (TInt))
-;;        (substQs vs (TInt) (empty))))
 (rewrite (subst-fresh vs (TBool)) (TBool))
-;; (rule ((= otype (subst-fresh vs (TBool))))
-;;       ((union otype (TBool))
-;;        (substQs vs (TBool) (empty))))
 (rewrite (subst-fresh vs (TUnit)) (TUnit))
-;; (rule ((= otype (subst-fresh vs (TUnit))))
-;;       ((union otype (TUnit))
-;;        (substQs vs (TUnit) (empty))))
-
-(rewrite (subst-fresh vs (TArr fr to)) (TArr (subst-fresh vs fr) (subst-fresh vs to)))
-;; (rule ((= otype (subst-fresh vs (TArr fr to)))
-;;        (substQs vs fr qvs1)
-;;        (substQs vs to qvs2))
-;;       ((substQs vs (TArr fr to) (set-union qvs1 qvs2))))
+(rewrite (subst-fresh vs (TArr fr to)) 
+         (TArr (subst-fresh vs fr) (subst-fresh vs to)))
 (rule ((= otype (subst-fresh vs (TVar s)))
        (= unused (get vs s)))
       ((union otype (TVar (FreshFromSubst vs s)))))
-;; (rule ((= otype (subst-fresh vs (TVar s)))
-;;        (= unused (get vs s)))
-;;       ((union otype (TVar (FreshFromSubst vs s)))
-;;        (substQs vs (TVar s) (insert (empty) (FreshFromSubst vs s) 1))))
 (rule ((= otype (subst-fresh vs (TVar s)))
        (not-contains vs s))
       ((union otype (TVar s))))
@@ -156,29 +138,16 @@
 (rewrite (typeof ctx (Var x))
          (instantiate (lookup ctx x)))
 
-(rule (
-    (= t (typeof ctx (Abs x e)))
-)(
-    ;; (let tv (TVar (FreshFromLam ctx x e)))
-    ;; (let te (typeof (Cons x (Forall (empty) tv) ctx) 
-    ;;               e))
-    ;; (union t (TArr tv te))
-    ;; unfolds to
-    (union 
-      t 
-      (TArr (TVar (FreshFromLam ctx x e)) 
-            (typeof (Cons x (Forall (empty) 
-                                    (TVar (FreshFromLam ctx x e))) 
-                          ctx) 
-                  e)))
-))
+(rewrite 
+  (typeof ctx (Abs x e))
+  (TArr (TVar (FreshFromLam ctx x e)) 
+        (typeof (Cons x (Forall (empty) (TVar (FreshFromLam ctx x e)))
+                      ctx) 
+                e)))
 
-(rule (
-    (= to (typeof ctx (App e1 e2)))
-)(
-    (union (typeof ctx e1) 
-           (TArr (typeof ctx e2) to))
-))
+(rule ((= to (typeof ctx (App e1 e2))))
+      ((union (typeof ctx e1) 
+              (TArr (typeof ctx e2) to))))
 
 (rewrite (typeof ctx (Let x e1 e2))
          (typeof (Cons x (generalize ctx (typeof ctx e1)) 
