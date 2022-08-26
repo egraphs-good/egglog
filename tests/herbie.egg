@@ -207,8 +207,8 @@
 (rewrite (Sub (Mul a b) (Mul a c)) (Mul a (Sub b c)))
 (rewrite (Add (Mul b a) (Mul c a)) (Mul a (Add b c)))
 (rewrite (Sub (Mul b a) (Mul c a)) (Mul a (Sub b c)))
-(rewrite (Add (Mul b a) a)         (Mul (Add b 1) a))
-(rewrite (Add a (Mul c a))         (Mul (Add c 1) a))
+(rewrite (Add (Mul b a) a)         (Mul (Add b (Num (rational 1 1))) a))
+(rewrite (Add a (Mul c a))         (Mul (Add c (Num (rational 1 1))) a))
 
 (rewrite (Neg (Mul a b))       (Mul (Neg a) b))
 (rewrite (Neg (Mul a b))       (Mul a (Neg b)))
@@ -259,7 +259,7 @@
 ; (rewrite (Add a (Neg b)) (Sub a b))
 ; (rewrite (Neg x) (Sub (Num (rational 0 1)) x))
 ; (rewrite (Neg x) (Mul (Num (rational -1 1)) x))
-
+; 
 ; (rewrite (Div x y) (Mul x (Div (Num (rational 1 1)) y)))
 ; (rewrite (Mul x (Div (Num (rational 1 1)) y)) (Div x y))
 ; (rewrite (Div x y) (Div (Num (rational 1 1)) (Div y x))
@@ -293,7 +293,7 @@
 
 (define e (Div one (Add x one)))
 
-(run 5)
+(run 6)
 (check (non-zero e))
 
 ; should break:
