@@ -92,6 +92,10 @@
        (ival-non-zero l h))
       ((non-zero e)))
 
+(rule ((= ve (evals-to e)))
+      ((set (lo e) ve)
+       (set (hi e) ve)))
+
 ;; The interval analyses are similar to the constant-folding analysis,
 ;; except we have to take the lower/upper bound of the results we get
 (rule ((= e (Add a b))
@@ -269,7 +273,7 @@
 ; (rewrite (Add a (Neg b)) (Sub a b))
 ; (rewrite (Neg x) (Sub (Num (rational 0 1)) x))
 ; (rewrite (Neg x) (Mul (Num (rational -1 1)) x))
- 
+
 ; (rewrite (Div x y) (Mul x (Div (Num (rational 1 1)) y)))
 ; (rewrite (Mul x (Div (Num (rational 1 1)) y)) (Div x y))
 ; (rewrite (Div x y) (Div (Num (rational 1 1)) (Div y x))
@@ -296,16 +300,14 @@
 
 ;; Test 1: zero-check
 (define one (Num (rational 1 1)))
-(set (lo one) (rational 1 1))
-(set (hi one) (rational 1 1))
 
-(define x (Num (rational 2 1)))
+(define x (Var "x"))
 (set (lo x) (rational 0 1))
 (set (hi x) (rational 100 1))
 
 (define e (Div one (Add x one)))
 
-(run 100)
+(run 5)
 (extract (lo (Add x one)))
 (extract (hi (Add x one)))
 (check (non-zero e))
