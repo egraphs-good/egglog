@@ -6,10 +6,11 @@
 
 ;; Bools!
 (datatype B (True) (False))
-(function or (B B) B)
-(rewrite (or (True) x) (True))
-(rewrite (or x (True)) (True))
-(rewrite (or (False) (False)) (False))
+
+(function and (B B) B)
+(rewrite (and (True) x) x)
+(rewrite (and x (True)) x)
+(rewrite (and (False) (False)) (False))
 
 ;; Operators from FPCore
 (datatype Math
@@ -43,8 +44,8 @@
 (function hi (Math) Rational :merge (min old new))
 (function lo (Math) Rational :merge (max old new))
 (function evals-to (Math) Rational)
-(function is-zero (Math) B
-  :merge (or old new)
+(function non-zero (Math) B
+  :merge (and old new)
   :default (False))
 
 ;; First, define our constant folding analysis
@@ -95,10 +96,13 @@
       ((set (evals-to e) (round va))))
 ; TODO: log
 
-; TODO: this works if (zero) ratios are reduced
-;; To check if something is zero, we just check if it evaluates to zero
-(rule ((= (rational 0 1) (evals-to e)))
-      ((set (is-zero e) (True))))
+; TODO: do we need "bool" for this?
+;; To check if something is zero, we check that zero is not contained in the
+;; interval. This is defined as a primitive in the Rational sort rn
+(rule ((= l (lo e))
+       (= h (hi e))
+       (ival-non-zero l h))
+      ((set (non-zero e) (True))))
 
 ;; The interval analyses are similar to the constant-folding analysis,
 ;; except we have to take the lower/upper bound of the results we get
@@ -197,7 +201,7 @@
 (rewrite (Add a b) (Add b a))
 (rewrite (Mul a b) (Mul b a))
 
-;; Associativity (unsafe)
+;; Associativity
 (rewrite (Add a (Add b c)) (Add (Add a b) c))
 (rewrite (Add (Add a b) c) (Add a (Add b c)))
 (rewrite (Add a (Sub b c)) (Sub (Add a b) c))
@@ -215,7 +219,7 @@
 (rewrite (Div a (Div b c)) (Mul (Div a b) c))
 (rewrite (Div (Div b c) a) (Div b (Mul a c)))
 
-;; Counting (unsafe)
+;; Counting
 (rewrite (Add x x) (Mul (Num (rational 2 1)) x))
 
 ;; TODO: Distributivity (unsafe)
@@ -245,23 +249,18 @@
 ;; For testing purposes we just come up with some example test cases
 
 ;; Test 1: zero-check
+(define one (Num (rational 1 1)))
+(set (lo one) (rational 1 1))
+(set (hi one) (rational 1 1))
+
 (define x (Num (rational 2 1)))
-(define e (Sub x x))
+(set (lo x) (rational 0 1))
+(set (hi x) (rational 100 1))
 
-(run 25)
+(define e (Div one (Add x one)))
 
-(check (= (is-zero e) (True)))
-
-;; Test 2: interval analysis
-(define x (Var "x"))
-(define e (Mul x x))
-
-(set (lo x) (rational -10 1))
-(set (hi x) (rational 10 1))
-
-(run 1)
-
-(check (= (lo e) (rational -100 1)))
-
-;; testing extraction of rationals
-(extract (lo e))
+(run 3)
+(extract (lo (Add x one)))
+(extract (hi (Add x one)))
+(check (= (non-zero (Div one x)) (False)))
+(check (= (non-zero e) (True)))

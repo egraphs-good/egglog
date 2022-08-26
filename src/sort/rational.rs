@@ -1,5 +1,5 @@
 use num_rational::BigRational;
-use num_traits::Signed;
+use num_traits::{Signed, Zero};
 use std::sync::Mutex;
 
 use crate::{ast::Literal, util::IndexSet};
@@ -33,6 +33,8 @@ impl Sort for RationalSort {
     #[rustfmt::skip]
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
         type R = BigRational;
+        type Opt<T=()> = Option<T>;
+
         // TODO we can't have primitives take borrows just yet, since it
         // requires returning a reference to the locked sort
         add_primitives!(eg, "+" = |a: R, b: R| -> R { a + b });
@@ -47,6 +49,8 @@ impl Sort for RationalSort {
         add_primitives!(eg, "ceil" = |a: R| -> R { a.ceil() });
         add_primitives!(eg, "round" = |a: R| -> R { a.round() });
         add_primitives!(eg, "rational" = |a: i64, b: i64| -> R { R::new(a.into(), b.into()) });
+
+        add_primitives!(eg, "ival-non-zero" = |lo: R, hi: R| -> Opt { (!(lo <= R::zero() && hi >= R::zero())).then(|| ()) } );
     }
     fn make_expr(&self, value: Value) -> Expr {
         assert!(value.tag == self.name());
