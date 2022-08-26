@@ -4,14 +4,6 @@
 ;;
 ;; Datatypes
 
-;; Bools!
-(datatype B (True) (False))
-
-(function and (B B) B)
-(rewrite (and (True) x) x)
-(rewrite (and x (True)) x)
-(rewrite (and (False) (False)) (False))
-
 ;; Operators from FPCore
 (datatype Math
   ; Ground terms
@@ -44,9 +36,7 @@
 (function hi (Math) Rational :merge (min old new))
 (function lo (Math) Rational :merge (max old new))
 (function evals-to (Math) Rational)
-(function non-zero (Math) B
-  :merge (and old new)
-  :default (False))
+(relation non-zero (Math))
 
 ;; First, define our constant folding analysis
 
@@ -72,9 +62,7 @@
 (rule ((= e (Div a b))
        (= va (evals-to a))
        (= vb (evals-to b))
-       ; TODO: this next one only works if Ratios are reduced in ops
-       ;       should confirm this
-       (!= (rational 0 1) vb))
+       (non-zero b))
       ((set (evals-to e) (/ va vb))))
 ; TODO: pow
 (rule ((= e (Neg a))
@@ -102,7 +90,7 @@
 (rule ((= l (lo e))
        (= h (hi e))
        (ival-non-zero l h))
-      ((set (non-zero e) (True))))
+      ((non-zero e)))
 
 ;; The interval analyses are similar to the constant-folding analysis,
 ;; except we have to take the lower/upper bound of the results we get
@@ -215,29 +203,87 @@
 (rewrite (Mul a (Div b c)) (Div (Mul a b) c))
 (rewrite (Mul (Div a b) c) (Div (Mul a c) b))
 (rewrite (Div a (Mul b c)) (Div (Div a b) c))
-(rewrite (Div (Mul b c) a) (Div b (Div a c)))
-(rewrite (Div a (Div b c)) (Mul (Div a b) c))
-(rewrite (Div (Div b c) a) (Div b (Mul a c)))
+(rewrite (Div (Mul b c) a) (Div b (Div a c)) :when ((non-zero c)))
+(rewrite (Div a (Div b c)) (Mul (Div a b) c) :when ((non-zero c)))
+(rewrite (Div (Div b c) a) (Div b (Mul a c)) :when ((non-zero a)))
 
 ;; Counting
 (rewrite (Add x x) (Mul (Num (rational 2 1)) x))
 
-;; TODO: Distributivity (unsafe)
-;; TODO: Distributivity
-;; TODO: Difference of squares canonicalization (unsafe)
-;; TODO: Identity (unsafe)
-;; TODO: Identity
-;; TODO: Fractions (unsafe)
-;; TODO: Square root (unsafe)
+;; Distributivity
+(rewrite (Mul a (Add b c))         (Add (Mul a b) (Mul a c)))
+(rewrite (Mul a (Add b c))         (Add (Mul b a) (Mul c a)))
+(rewrite (Add (Mul a b) (Mul a c)) (Mul a (Add b c)))
+(rewrite (Sub (Mul a b) (Mul a c)) (Mul a (Sub b c)))
+(rewrite (Add (Mul b a) (Mul c a)) (Mul a (Add b c)))
+(rewrite (Sub (Mul b a) (Mul c a)) (Mul a (Sub b c)))
+(rewrite (Add (Mul b a) a)         (Mul (Add b 1) a))
+(rewrite (Add a (Mul c a))         (Mul (Add c 1) a))
+
+(rewrite (Neg (Mul a b))       (Mul (Neg a) b))
+(rewrite (Neg (Mul a b))       (Mul a (Neg b)))
+(rewrite (Mul (Neg a) b)       (Neg (Mul a b)))
+(rewrite (Mul a (Neg b))       (Neg (Mul a b)))
+(rewrite (Neg (Add a b))       (Add (Neg a) (Neg b)))
+(rewrite (Add (Neg a) (Neg b)) (Neg (Add a b)))
+(rewrite (Div (Neg a) b)       (Neg (Div a b)))
+(rewrite (Neg (Div a b))       (Div (Neg a) b))
+
+(rewrite (Sub a (Mul (Neg b) c)) (Add a (Mul b c)))
+(rewrite (Sub a (Mul b c))       (Add a (Mul (Neg b) c)))
+
+;; TODO: Difference of squares canonicalization
+
+;; Identity
+;; This isn't subsumed by const folding since this can return results
+;; even if we can't evaluate a precise value for x
+; (rewrite (Div (Num (rational 1 1)) (Div (Num (rational 1 1)) x))
+;          x
+;          :when ((non-zero x)))
+; (rewrite (Mul x (Div (Num (rational 1 1)) x))
+;          (Num (rational 1 1))
+;          :when ((non-zero x)))
+; (rewrite (Mul (Div (Num (rational 1 1)) x) x)
+;          (Num (rational 1 1))
+;          :when ((non-zero x)))
+; 
+; (rewrite (Sub x x) (Num (rational 0 1)))
+; (rewrite (Div x x) (Num (rational 1 1))
+;          :when ((non-zero x)))
+; (rewrite (Div (Num (rational 0 1)) x) (Num (rational 0 1))
+;          :when ((non-zero x)))
+; (rewrite (Mul (Num (rational 0 1)) x) (Num (rational 0 1)))
+; (rewrite (Mul x (Num (rational 0 1))) (Num (rational 0 1)))
+; 
+; (rewrite (Add (Num (rational 0 1)) x) x)
+; (rewrite (Add x (Num (rational 0 1))) x)
+; (rewrite (Sub (Num (rational 0 1)) x) (Neg x))
+; (rewrite (Sub x (Num (rational 0 1))) x)
+; (rewrite (Neg (Neg x)) x)
+; (rewrite (Mul (Num (rational 1 1)) x) x)
+; (rewrite (Mul x (Num (rational 1 1))) x)
+; (rewrite (Div x (Num (rational 1 1))) x)
+; (rewrite (Mul (Num (rational -1 1)) x) (Neg x))
+;  
+; (rewrite (Sub a b) (Add a (Neg b)))
+; (rewrite (Add a (Neg b)) (Sub a b))
+; (rewrite (Neg x) (Sub (Num (rational 0 1)) x))
+; (rewrite (Neg x) (Mul (Num (rational -1 1)) x))
+ 
+; (rewrite (Div x y) (Mul x (Div (Num (rational 1 1)) y)))
+; (rewrite (Mul x (Div (Num (rational 1 1)) y)) (Div x y))
+; (rewrite (Div x y) (Div (Num (rational 1 1)) (Div y x))
+;   :when ((non-zero x)
+;          (non-zero y)))
+; doesn't work
+; (rewrite x (Mul (Num (rational 1 1)) x))
+
+;; TODO: Fractions
 ;; TODO: Square root
-;; TODO: Cube root (unsafe)
-;; TODO: Exponentials (unsafe)
+;; TODO: Cube root
 ;; TODO: Exponentials
-;; TODO: Powers (unsafe)
 ;; TODO: Powers
-;; TODO: Logs (unsafe)
 ;; TODO: Logs
-;; TODO: Trig (unsafe)
 ;; TODO: Trig
 ;; TODO: Misc.
 
@@ -259,8 +305,15 @@
 
 (define e (Div one (Add x one)))
 
-(run 3)
+(run 100)
 (extract (lo (Add x one)))
 (extract (hi (Add x one)))
-(check (= (non-zero (Div one x)) (False)))
-(check (= (non-zero e) (True)))
+(check (non-zero e))
+
+; should break:
+; (check (non-zero (Div one x)))
+
+;; Test 2: const eval
+(define ten-e (Mul (Num (rational 5 1)) (Num (rational 2 1))))
+(run 3)
+(check (= (Num (rational 10 1)) ten-e))

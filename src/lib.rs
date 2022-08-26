@@ -315,7 +315,7 @@ impl EGraph {
                                         .nodes
                                         .insert(values, new_value);
                                 }
-                                _ => panic!("invalid merge"),
+                                _ => panic!("invalid merge for {}", function.decl.name),
                             }
                         }
                     }
