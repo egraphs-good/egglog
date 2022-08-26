@@ -114,13 +114,8 @@
        (= hb (hi b)))
       ((set (lo e) 
           (min (min (- la lb) (- la hb))
-               (min (- ha lb) (- ha hb))))))
-(rule ((= e (Sub a b))
-       (= la (lo a))
-       (= ha (hi a))
-       (= lb (lo b))
-       (= hb (hi b)))
-      ((set (hi e) 
+               (min (- ha lb) (- ha hb))))
+       (set (hi e) 
           (max (max (- la lb) (- la hb))
                (max (- ha lb) (- ha hb))))))
 
@@ -131,31 +126,22 @@
        (= hb (hi b)))
       ((set (lo e) 
           (min (min (* la lb) (* la hb))
-               (min (* ha lb) (* ha hb))))))
-(rule ((= e (Mul a b))
-       (= la (lo a))
-       (= ha (hi a))
-       (= lb (lo b))
-       (= hb (hi b)))
-      ((set (hi e) 
+               (min (* ha lb) (* ha hb))))
+       (set (hi e) 
           (max (max (* la lb) (* la hb))
                (max (* ha lb) (* ha hb))))))
 
-; TODO: is this right lmao
 (rule ((= e (Div a b))
        (= la (lo a))
        (= ha (hi a))
        (= lb (lo b))
-       (= hb (hi b)))
+       (= hb (hi b))
+       (!= lb (rational 0 1))
+       (!= hb (rational 0 1)))
       ((set (lo e) 
           (min (min (/ la lb) (/ la hb))
-               (min (/ ha lb) (/ ha hb))))))
-(rule ((= e (Div a b))
-       (= la (lo a))
-       (= ha (hi a))
-       (= lb (lo b))
-       (= hb (hi b)))
-      ((set (hi e) 
+               (min (/ ha lb) (/ ha hb))))
+       (set (hi e) 
           (max (max (/ la lb) (/ la hb))
                (max (/ ha lb) (/ ha hb))))))
 
@@ -238,9 +224,9 @@
 
 ;; TODO: Difference of squares canonicalization
 
-;; Identity
-;; This isn't subsumed by const folding since this can return results
-;; even if we can't evaluate a precise value for x
+; ;; Identity
+; ;; This isn't subsumed by const folding since this can return results
+; ;; even if we can't evaluate a precise value for x
 ; (rewrite (Div (Num (rational 1 1)) (Div (Num (rational 1 1)) x))
 ;          x
 ;          :when ((non-zero x)))
@@ -308,8 +294,6 @@
 (define e (Div one (Add x one)))
 
 (run 5)
-(extract (lo (Add x one)))
-(extract (hi (Add x one)))
 (check (non-zero e))
 
 ; should break:
@@ -317,5 +301,15 @@
 
 ;; Test 2: const eval
 (define ten-e (Mul (Num (rational 5 1)) (Num (rational 2 1))))
-(run 3)
-(check (= (Num (rational 10 1)) ten-e))
+(run 6)
+(extract ten-e)
+
+;; Test 3: simplification
+; (define y (Var "y"))
+; (set (lo y) (rational 1 1))
+; (set (hi y) (rational 100 1))
+
+; (define e2 (Sub y y))
+
+; (run 3)
+; (extract e2)
