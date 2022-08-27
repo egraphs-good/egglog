@@ -372,7 +372,7 @@ impl EGraph {
                 Expr::Call(sym, args) => {
                     let values: Vec<Value> = args
                         .iter()
-                        .map(|e| self.eval_expr(ctx, e))
+                        .map(|e| self.eval_expr(ctx, e).map(|v| self.bad_find_value(v)))
                         .collect::<Result<_, _>>()?;
                     if let Some(f) = self.functions.get_mut(sym) {
                         // FIXME We don't have a unit value
