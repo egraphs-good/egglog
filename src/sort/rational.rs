@@ -1,5 +1,5 @@
 use num_rational::BigRational;
-use num_traits::{Signed, Zero};
+use num_traits::Signed;
 use std::sync::Mutex;
 
 use crate::{ast::Literal, util::IndexSet};
@@ -50,7 +50,8 @@ impl Sort for RationalSort {
         add_primitives!(eg, "round" = |a: R| -> R { a.round() });
         add_primitives!(eg, "rational" = |a: i64, b: i64| -> R { R::new(a.into(), b.into()) });
 
-        add_primitives!(eg, "ival-non-zero" = |lo: R, hi: R| -> Opt { (!(lo <= R::zero() && hi >= R::zero())).then(|| ()) } );
+        add_primitives!(eg, "<" = |a: R, b: R| -> Opt { (a < b).then(|| ()) }); 
+        add_primitives!(eg, ">" = |a: R, b: R| -> Opt { (a > b).then(|| ()) }); 
     }
     fn make_expr(&self, value: Value) -> Expr {
         assert!(value.tag == self.name());

@@ -31,9 +31,13 @@
 ;; --------
 ;; This example has four analyses:
 ;; an interval analysis consisting of a hi and lo component,
-;; a constant folding analysis, and a nonzero analysis.
+;; a constant folding analysis, and a non-zero analysis.
+;; The non-zero analysis is built off the interval analysis (in order to prove
+;; that rewrites are sound, even if some parts of an expr can't be const-evaled)
 
+; No upper bound = positive infinity
 (function hi (Math) Rational :merge (min old new))
+; No lower bound = negative infinity
 (function lo (Math) Rational :merge (max old new))
 (function evals-to (Math) Rational)
 (relation non-zero (Math))
@@ -84,12 +88,20 @@
       ((set (evals-to e) (round va))))
 ; TODO: log
 
-; TODO: do we need "bool" for this?
 ;; To check if something is zero, we check that zero is not contained in the
-;; interval. This is defined as a primitive in the Rational sort rn
+;; interval. There are two possible (overlapping!) cases:
+;; - There exists a lo interval, in which case it must be larger than 0
+;; - There exists a hi interval, in which case it must be smaller than 0
+;; This allows for numbers with one-sided intervals to also be non-zero
+;; (although right now in practice the way we've defined interval computation
+;; precludes this), and removes the need for an "interval contains zero" primitive
+;; (though it requires comparison prims).
+;; This assumes that intervals are well-formed: lo <= hi at all times.
 (rule ((= l (lo e))
-       (= h (hi e))
-       (ival-non-zero l h))
+       (> l (rational 0 1)))
+      ((non-zero e)))
+(rule ((= h (hi e))
+       (< h (rational 0 1)))
       ((non-zero e)))
 
 (rule ((= ve (evals-to e)))
@@ -98,6 +110,7 @@
 
 ;; The interval analyses are similar to the constant-folding analysis,
 ;; except we have to take the lower/upper bound of the results we get
+; TODO: Deal with unbounded intervals?
 (rule ((= e (Add a b))
        (= la (lo a))
        (= lb (lo b)))
@@ -160,20 +173,38 @@
 (rule ((= e (Fabs a))
        (= la (lo a))
        (= ha (hi a)))
-      ((set (lo e) (min (abs la) (abs ha)))))
-(rule ((= e (Fabs a))
-       (= la (lo a))
-       (= ha (hi a)))
-      ((set (hi e) (max (abs la) (abs ha)))))
+      ((set (lo e) (min (abs la) (abs ha)))
+       (set (hi e) (max (abs la) (abs ha)))))
 
-; TODO: Ceil
-; TODO: Floor
-; TODO: Round
+(rule ((= e (Ceil a))
+       (= la (lo a)))
+      ((set (lo e) (ceil la))))
+(rule ((= e (Ceil a))
+       (= ha (hi a)))
+      ((set (hi e) (ceil ha))))
+
+(rule ((= e (Floor a))
+       (= la (lo a)))
+      ((set (lo e) (floor la))))
+(rule ((= e (Floor a))
+       (= ha (hi a)))
+      ((set (hi e) (floor ha))))
+
+(rule ((= e (Round a))
+       (= la (lo a)))
+      ((set (lo e) (round la))))
+(rule ((= e (Round a))
+       (= ha (hi a)))
+      ((set (hi e) (round ha))))
+
 ; TODO: Log
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;
 ;; Rewrites
+;; --------
+;; These rewrites were compiled from src/syntax/rules.rkt in the herbie repo,
+;; using all rewrites in the `simplify` rewrite group.
 
 ;; Commutativity
 (rewrite (Add a b) (Add b a))
@@ -222,54 +253,81 @@
 (rewrite (Sub a (Mul (Neg b) c)) (Add a (Mul b c)))
 (rewrite (Sub a (Mul b c))       (Add a (Mul (Neg b) c)))
 
-;; TODO: Difference of squares canonicalization
+;; Difference of squares
+(rewrite (Mul (Mul a b) (Mul a b))                           (Mul (Mul a a) (Mul b b)))
+(rewrite (Mul (Mul a a) (Mul b b))                           (Mul (Mul a b) (Mul a b)))
+(rewrite (Sub (Mul a a) (Mul b b))                           (Mul (Add a b) (Sub a b)))
+(rewrite (Sub (Mul a a) (Num (rational 1 1)))                (Mul (Add a (Num (rational 1 1))) (Sub a (Num (rational 1 1)))))
+(rewrite (Add (Mul a a) (Neg (Num (rational 1 1))))          (Mul (Add a (Num (rational 1 1))) (Sub a (Num (rational 1 1)))))
+(rewrite (Pow a b) (Mul (Pow a (Div b (Num (rational 2 1)))) (Pow a (Div b (Num (rational 2 1))))))
+(rewrite (Mul (Pow a b) (Pow a b))                           (Pow a (Mul (Num (rational 2 1)) b)))
 
-; ;; Identity
-; ;; This isn't subsumed by const folding since this can return results
-; ;; even if we can't evaluate a precise value for x
-; (rewrite (Div (Num (rational 1 1)) (Div (Num (rational 1 1)) x))
-;          x
-;          :when ((non-zero x)))
-; (rewrite (Mul x (Div (Num (rational 1 1)) x))
-;          (Num (rational 1 1))
-;          :when ((non-zero x)))
-; (rewrite (Mul (Div (Num (rational 1 1)) x) x)
-;          (Num (rational 1 1))
-;          :when ((non-zero x)))
-; 
-; (rewrite (Sub x x) (Num (rational 0 1)))
-; (rewrite (Div x x) (Num (rational 1 1))
-;          :when ((non-zero x)))
-; (rewrite (Div (Num (rational 0 1)) x) (Num (rational 0 1))
-;          :when ((non-zero x)))
-; (rewrite (Mul (Num (rational 0 1)) x) (Num (rational 0 1)))
-; (rewrite (Mul x (Num (rational 0 1))) (Num (rational 0 1)))
-; 
-; (rewrite (Add (Num (rational 0 1)) x) x)
-; (rewrite (Add x (Num (rational 0 1))) x)
-; (rewrite (Sub (Num (rational 0 1)) x) (Neg x))
-; (rewrite (Sub x (Num (rational 0 1))) x)
-; (rewrite (Neg (Neg x)) x)
-; (rewrite (Mul (Num (rational 1 1)) x) x)
-; (rewrite (Mul x (Num (rational 1 1))) x)
-; (rewrite (Div x (Num (rational 1 1))) x)
-; (rewrite (Mul (Num (rational -1 1)) x) (Neg x))
-;  
-; (rewrite (Sub a b) (Add a (Neg b)))
-; (rewrite (Add a (Neg b)) (Sub a b))
-; (rewrite (Neg x) (Sub (Num (rational 0 1)) x))
-; (rewrite (Neg x) (Mul (Num (rational -1 1)) x))
-; 
-; (rewrite (Div x y) (Mul x (Div (Num (rational 1 1)) y)))
-; (rewrite (Mul x (Div (Num (rational 1 1)) y)) (Div x y))
-; (rewrite (Div x y) (Div (Num (rational 1 1)) (Div y x))
-;   :when ((non-zero x)
-;          (non-zero y)))
-; doesn't work
+;; Identity
+;; This isn't subsumed by const folding since this can return results
+;; even if we can't evaluate a precise value for x
+(rewrite (Div (Num (rational 1 1)) (Div (Num (rational 1 1)) x))
+         x
+         :when ((non-zero x)))
+(rewrite (Mul x (Div (Num (rational 1 1)) x))
+         (Num (rational 1 1))
+         :when ((non-zero x)))
+(rewrite (Mul (Div (Num (rational 1 1)) x) x)
+         (Num (rational 1 1))
+         :when ((non-zero x)))
+
+(rewrite (Sub x x) (Num (rational 0 1)))
+(rewrite (Div x x) (Num (rational 1 1))
+         :when ((non-zero x)))
+(rewrite (Div (Num (rational 0 1)) x) (Num (rational 0 1))
+         :when ((non-zero x)))
+(rewrite (Mul (Num (rational 0 1)) x) (Num (rational 0 1)))
+(rewrite (Mul x (Num (rational 0 1))) (Num (rational 0 1)))
+
+(rewrite (Add (Num (rational 0 1)) x) x)
+(rewrite (Add x (Num (rational 0 1))) x)
+(rewrite (Sub (Num (rational 0 1)) x) (Neg x))
+(rewrite (Sub x (Num (rational 0 1))) x)
+(rewrite (Neg (Neg x)) x)
+(rewrite (Mul (Num (rational 1 1)) x) x)
+(rewrite (Mul x (Num (rational 1 1))) x)
+(rewrite (Div x (Num (rational 1 1))) x)
+(rewrite (Mul (Num (rational -1 1)) x) (Neg x))
+ 
+(rewrite (Sub a b) (Add a (Neg b)))
+(rewrite (Add a (Neg b)) (Sub a b))
+(rewrite (Neg x) (Sub (Num (rational 0 1)) x))
+(rewrite (Neg x) (Mul (Num (rational -1 1)) x))
+
+(rewrite (Div x y) (Mul x (Div (Num (rational 1 1)) y)))
+(rewrite (Mul x (Div (Num (rational 1 1)) y)) (Div x y))
+(rewrite (Div x y) (Div (Num (rational 1 1)) (Div y x))
+  :when ((non-zero x)
+         (non-zero y)))
+
+; TODO: this rule can't be expressed because egg-smol can't infer a type for
+;       the var `x`
+;       this would be fixed if we could do sort annotations on x (i.e. "(Math x)")
 ; (rewrite x (Mul (Num (rational 1 1)) x))
 
-;; TODO: Fractions
-;; TODO: Square root
+;; Fractions
+(rewrite (Div (Sub a b) c)         (Sub (Div a c) (Div b c)))
+(rewrite (Div (Mul a b) (Mul c d)) (Mul (Div a c) (Div b d)))
+
+;; Square root
+(rewrite (Mul (Sqrt x) (Sqrt x)) x)
+(rewrite (Sqrt (Mul x x)) (Fabs x))
+
+(rewrite (Mul (Neg x) (Neg x)) (Mul x x))
+(rewrite (Mul (Fabs x) (Fabs x)) (Mul x x))
+
+;; Absolute values
+(rewrite (Fabs (Fabs x)) (Fabs x))
+(rewrite (Fabs (Sub a b)) (Fabs (Sub b a)))
+(rewrite (Fabs (Neg x)) (Fabs x))
+(rewrite (Fabs (Mul x x)) (Mul x x))
+(rewrite (Fabs (Mul a b)) (Mul (Fabs a) (Fabs b)))
+(rewrite (Fabs (Div a b)) (Div (Fabs a) (Fabs b)))
+
 ;; TODO: Cube root
 ;; TODO: Exponentials
 ;; TODO: Powers
@@ -296,20 +354,7 @@
 (run 6)
 (check (non-zero e))
 
-; should break:
-; (check (non-zero (Div one x)))
-
 ;; Test 2: const eval
 (define ten-e (Mul (Num (rational 5 1)) (Num (rational 2 1))))
 (run 6)
 (extract ten-e)
-
-;; Test 3: simplification
-; (define y (Var "y"))
-; (set (lo y) (rational 1 1))
-; (set (hi y) (rational 100 1))
-
-; (define e2 (Sub y y))
-
-; (run 3)
-; (extract e2)
