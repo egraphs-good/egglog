@@ -1,17 +1,19 @@
 use crate::util::HashSet;
 use crate::{util::IndexMap, Id, Value};
 
+use std::cell::{Ref, RefCell};
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::mem;
+use std::rc::Rc;
 
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde-1", derive(serde::Serialize, serde::Deserialize))]
 pub struct UnionFind<V = ()> {
     parents: Vec<(Id, V)>,
     n_unions: usize,
-    recently_merged: HashSet<Id>,
-    staging_merged: HashSet<Id>,
+    recently_merged: Rc<RefCell<HashSet<Id>>>,
+    staging_merged: Rc<RefCell<HashSet<Id>>>,
 }
 
 impl<V> Default for UnionFind<V> {
@@ -37,11 +39,14 @@ impl<V> UnionFind<V> {
     }
     pub fn update(&mut self) {
         mem::swap(&mut self.recently_merged, &mut self.staging_merged);
-        self.staging_merged.clear();
+        self.staging_merged.borrow_mut().clear();
     }
 
-    pub fn recently_merged(&self) -> &HashSet<Id> {
-        &self.recently_merged
+    pub fn recently_merged(&self) -> Ref<HashSet<Id>> {
+        self.recently_merged.borrow()
+    }
+    pub fn recently_merged_dyn(&self) -> Rc<RefCell<HashSet<Id>>> {
+        self.recently_merged.clone()
     }
 }
 
@@ -102,7 +107,7 @@ impl<V: UnifyValue> UnionFindLike<Id, V> for UnionFind<V> {
     }
 
     fn did_union(&mut self, _parent: usize, child: usize) {
-        self.staging_merged.insert(child.into());
+        self.staging_merged.borrow_mut().insert(child.into());
         self.n_unions += 1;
     }
 }

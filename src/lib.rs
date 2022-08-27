@@ -16,7 +16,10 @@ use ast::*;
 
 use std::fmt::Write;
 use std::hash::Hash;
+use std::iter::once;
+use std::mem;
 use std::ops::Deref;
+use std::rc::Rc;
 use std::{fmt::Debug, sync::Arc};
 use typecheck::{AtomTerm, Bindings};
 
@@ -31,12 +34,64 @@ use util::*;
 
 use crate::typecheck::TypeError;
 
+#[derive(Default, Clone, Debug)]
+struct FunctionData {
+    nodes: HashMap<Rc<[Value]>, Value>,
+    index: HashMap<Id, HashSet<Rc<[Value]>>>,
+}
+
+impl FunctionData {
+    fn add_to_index(
+        id_index: &mut HashMap<Id, HashSet<Rc<[Value]>>>,
+        schema: &ResolvedSchema,
+        vs: Rc<[Value]>,
+        ret: &Value,
+    ) {
+        for (v, ty) in vs
+            .iter()
+            .zip(&schema.input)
+            .chain(once((ret, &schema.output)))
+        {
+            if !ty.is_eq_sort() {
+                continue;
+            }
+            // XXX: Hack
+            let id = Id::from(v.bits as usize);
+            id_index.entry(id).or_default().insert(vs.clone());
+        }
+    }
+    fn remove_from_index(
+        id_index: &mut HashMap<Id, HashSet<Rc<[Value]>>>,
+        schema: &ResolvedSchema,
+        vs: Rc<[Value]>,
+        ret: &Value,
+    ) {
+        for (v, ty) in vs
+            .iter()
+            .zip(&schema.input)
+            .chain(once((ret, &schema.output)))
+        {
+            if !ty.is_eq_sort() {
+                continue;
+            }
+            // XXX: Hack
+            let id = Id::from(v.bits as usize);
+            if let Some(set) = id_index.get_mut(&id) {
+                set.remove(&vs);
+                if set.is_empty() {
+                    id_index.remove(&id);
+                }
+            }
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct Function {
     decl: FunctionDecl,
     schema: ResolvedSchema,
-    nodes: HashMap<Vec<Value>, Value>,
-    updates: usize,
+    data: FunctionData,
+    scratch_indexes: Vec<Rc<[Value]>>,
 }
 
 #[derive(Clone, Debug)]
@@ -46,29 +101,143 @@ struct ResolvedSchema {
 }
 
 impl Function {
-    pub fn rebuild(&mut self, uf: &mut UnionFind) -> usize {
-        // FIXME this doesn't compute updates properly
-        let n_unions = uf.n_unions();
-        let old_nodes = std::mem::take(&mut self.nodes);
-        for (mut args, value) in old_nodes {
-            for (a, ty) in args.iter_mut().zip(&self.schema.input) {
-                if ty.is_eq_sort() {
-                    *a = uf.find_mut_value(*a)
+    fn insert_value(&mut self, uf: &mut UnionFind, vs: Rc<[Value]>, ret: Value) -> Option<Value> {
+        self.insert_value_maybe_unify(uf, vs, |_, prev| (ret, prev))
+    }
+    fn canonicalize_args(&self, uf: &mut UnionFind, vs: Rc<[Value]>) -> Rc<[Value]> {
+        let mut is_canon = true;
+        for (ty, v) in self.schema.input.iter().zip(vs.iter()) {
+            if ty.is_eq_sort() {
+                let id = Id::from(v.bits as usize);
+                if id != uf.find(id) {
+                    is_canon = false;
+                    break;
                 }
             }
-            let _new_value = if self.schema.output.is_eq_sort() {
-                self.nodes
-                    .entry(args)
-                    .and_modify(|value2| *value2 = uf.union_values(value, *value2))
-                    .or_insert_with(|| uf.find_mut_value(value))
-            } else {
-                self.nodes
-                    .entry(args)
-                    // .and_modify(|value2| *value2 = uf.union_values(value.clone(), value2.clone()))
-                    .or_insert(value)
-            };
         }
-        uf.n_unions() - n_unions + std::mem::take(&mut self.updates)
+        if is_canon {
+            return vs;
+        }
+        let mut scratch = Vec::from_iter(vs.iter().copied());
+        for (ty, v) in self.schema.input.iter().zip(scratch.iter_mut()) {
+            if ty.is_eq_sort() {
+                *v = uf.find_mut_value(*v);
+            }
+        }
+        scratch.into()
+    }
+    fn canonicalize(
+        &self,
+        uf: &mut UnionFind,
+        vs: Rc<[Value]>,
+        mut ret: Value,
+    ) -> (Rc<[Value]>, Value) {
+        let vs = self.canonicalize_args(uf, vs);
+        if self.schema.output.is_eq_sort() {
+            ret = uf.find_mut_value(ret);
+        }
+        (vs, ret)
+    }
+    fn insert_value_maybe_unify(
+        &mut self,
+        uf: &mut UnionFind,
+        vs: Rc<[Value]>,
+        mut merge: impl FnMut(&mut UnionFind, Option<Value>) -> (Value, Option<Value>),
+    ) -> Option<Value> {
+        if let Some(v) = self.data.nodes.get_mut(&vs) {
+            let (to_insert, to_return) = merge(uf, Some(*v));
+            if !self.schema.output.is_eq_sort() {
+                *v = to_insert;
+                return to_return;
+            }
+            // We are removing an eq sort value from the map and replacing
+            // it with a new one. We have to do the same to the index first.
+            // XXX: hack.
+            let id = Id::from(v.bits as usize);
+            let ixs = self
+                .data
+                .index
+                .get_mut(&id)
+                .expect("all return values must be mapped");
+            let _prev = ixs.remove(&vs);
+            debug_assert!(_prev, "all return values should be present in the index");
+            if ixs.is_empty() {
+                self.data.index.remove(&id);
+            }
+            // XXX: hack.
+            let new_id = Id::from(to_insert.bits as usize);
+            self.data
+                .index
+                .entry(new_id)
+                .or_default()
+                .insert(vs.clone());
+            *v = to_insert;
+            return to_return;
+        }
+        let (to_insert, to_return) = merge(uf, None);
+        let (canon, ret) = self.canonicalize(uf, vs, to_insert);
+        FunctionData::add_to_index(
+            &mut self.data.index,
+            &self.schema,
+            canon.clone(),
+            &to_insert,
+        );
+        self.data.nodes.insert(canon, ret);
+        to_return
+    }
+
+    fn remove_value(&mut self, vs: &[Value]) -> Option<Value> {
+        let (vs, prev) = self.data.nodes.remove_entry(vs)?;
+        // First, remove all the mappings for the old entries.
+        FunctionData::remove_from_index(&mut self.data.index, &self.schema, vs, &prev);
+        Some(prev)
+    }
+
+    fn get(&mut self, vs: &[Value]) -> Option<&Value> {
+        self.data.nodes.get(vs)
+    }
+
+    fn clear(&mut self) {
+        self.data.nodes.clear();
+        self.data.index.clear();
+    }
+
+    pub fn rebuild(&mut self, uf: &mut UnionFind) {
+        let mut scratch = mem::take(&mut self.scratch_indexes);
+        // For each Id that has a new root.
+        for id in &*uf.recently_merged_dyn().borrow() {
+            // Get all of the argument tuples that mention it.
+            scratch.extend(
+                self.data
+                    .index
+                    .get(id)
+                    .into_iter()
+                    .flat_map(|x| x.iter().cloned()),
+            );
+            for vs in scratch.drain(..) {
+                // Remove them from the function mapping.
+                let ret = if let Some(ret) = self.remove_value(&vs) {
+                    ret
+                } else {
+                    continue;
+                };
+                let (vs, ret) = self.canonicalize(uf, vs, ret);
+                let is_eq_output = self.schema.output.is_eq_sort();
+                // Insert them back, unifying the old return value whatever is
+                // already there.
+                self.insert_value_maybe_unify(uf, vs, |uf, prev| {
+                    if let Some(prev) = prev {
+                        if is_eq_output {
+                            (uf.union_values(prev, ret), None)
+                        } else {
+                            (prev, None)
+                        }
+                    } else {
+                        (ret, None)
+                    }
+                });
+            }
+        }
     }
 }
 
@@ -245,8 +414,8 @@ impl EGraph {
     fn debug_assert_invariants(&self) {
         #[cfg(debug_assertions)]
         for (name, function) in self.functions.iter() {
-            for (inputs, output) in function.nodes.iter() {
-                for input in inputs {
+            for (inputs, output) in function.data.nodes.iter() {
+                for input in inputs.iter() {
                     assert_eq!(
                         input,
                         &self.bad_find_value(*input),
@@ -309,7 +478,8 @@ impl EGraph {
                         .functions
                         .get_mut(f)
                         .ok_or_else(|| NotFoundError(e.clone()))?;
-                    let old_value = function.nodes.insert(values.clone(), value);
+                    let old_value =
+                        function.insert_value(&mut self.unionfind, values.clone().into(), value);
 
                     if let Some(old_value) = old_value {
                         if value != old_value {
@@ -325,11 +495,11 @@ impl EGraph {
                                     ctx.insert("new".into(), value);
                                     let expr = expr.clone(); // break the borrow of `function`
                                     let new_value = self.eval_expr(&ctx, &expr)?;
-                                    self.functions
-                                        .get_mut(f)
-                                        .unwrap()
-                                        .nodes
-                                        .insert(values, new_value);
+                                    self.functions.get_mut(f).unwrap().insert_value(
+                                        &mut self.unionfind,
+                                        values.into(),
+                                        new_value,
+                                    );
                                 }
                                 _ => panic!("invalid merge for {}", function.decl.name),
                             }
@@ -352,7 +522,7 @@ impl EGraph {
                         .functions
                         .get_mut(sym)
                         .ok_or(TypeError::Unbound(*sym))?;
-                    function.nodes.remove(&values);
+                    function.remove_value(&values);
                 }
             }
         }
@@ -393,9 +563,7 @@ impl EGraph {
                     if let Some(f) = self.functions.get_mut(sym) {
                         // FIXME We don't have a unit value
                         assert_eq!(f.schema.output.name().as_str(), "Unit");
-                        f.nodes
-                            .get(&values)
-                            .ok_or_else(|| NotFoundError(expr.clone()))?;
+                        f.get(&values).ok_or_else(|| NotFoundError(expr.clone()))?;
                     } else if self.primitives.contains_key(sym) {
                         // HACK
                         // we didn't typecheck so we don't know which prim to call
@@ -429,11 +597,11 @@ impl EGraph {
     }
 
     fn rebuild_one(&mut self) -> usize {
-        let mut new_unions = 0;
+        self.unionfind.update();
         for function in self.functions.values_mut() {
-            new_unions += function.rebuild(&mut self.unionfind);
+            function.rebuild(&mut self.unionfind);
         }
-        new_unions
+        self.unionfind.recently_merged().len()
     }
 
     pub fn declare_sort(&mut self, name: impl Into<Symbol>) -> Result<(), Error> {
@@ -464,8 +632,8 @@ impl EGraph {
         let function = Function {
             decl: decl.clone(),
             schema: ResolvedSchema { input, output },
-            nodes: HashMap::default(),
-            updates: 0,
+            data: Default::default(),
+            scratch_indexes: Default::default(),
             // TODO figure out merge and default here
         };
 
@@ -525,26 +693,30 @@ impl EGraph {
                     values.push(self.eval_expr(ctx, arg)?);
                 }
                 if let Some(function) = self.functions.get_mut(op) {
-                    if let Some(value) = function.nodes.get(&values) {
+                    if let Some(value) = function.get(&values) {
                         Ok(*value)
                     } else {
                         let out = &function.schema.output;
                         match function.decl.default.as_ref() {
                             None if out.name() == "Unit".into() => {
-                                function.nodes.insert(values, Value::unit());
+                                function.insert_value(
+                                    &mut self.unionfind,
+                                    values.into(),
+                                    Value::unit(),
+                                );
                                 Ok(Value::unit())
                             }
                             None if out.is_eq_sort() => {
                                 let id = self.unionfind.make_set();
                                 let value = Value::from_id(out.name(), id);
-                                function.nodes.insert(values, value);
+                                function.insert_value(&mut self.unionfind, values.into(), value);
                                 Ok(value)
                             }
                             Some(default) => {
                                 let default = default.clone(); // break the borrow
                                 let value = self.eval_expr(ctx, &default)?;
                                 let function = self.functions.get_mut(op).unwrap();
-                                function.nodes.insert(values, value);
+                                function.insert_value(&mut self.unionfind, values.into(), value);
                                 Ok(value)
                             }
                             _ => panic!("invalid default for {:?}", function.decl.name),
@@ -600,7 +772,7 @@ impl EGraph {
         // TODO detect functions
         for (name, r) in &self.functions {
             log::debug!("{name}:");
-            for (args, val) in &r.nodes {
+            for (args, val) in &r.data.nodes {
                 log::debug!("  {args:?} = {val:?}");
             }
         }
@@ -698,7 +870,7 @@ impl EGraph {
             .functions
             .get(&name)
             .unwrap_or_else(|| panic!("No function {name}"));
-        for (children, value) in &f.nodes {
+        for (children, value) in &f.data.nodes {
             ids.clear();
             // FIXME canonicalize, do we need to with rebuilding?
             // ids.extend(children.iter().map(|id| self.find(value)));
@@ -834,7 +1006,7 @@ impl EGraph {
             }
             Command::Clear => {
                 for f in self.functions.values_mut() {
-                    f.nodes.clear();
+                    f.clear();
                 }
                 "Cleared.".into()
             }
