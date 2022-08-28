@@ -346,14 +346,15 @@
          (Div (Pow x (Num (rational 3 1))) (Pow y (Num (rational 3 1)))))
  
 (rewrite (Pow x (Num (rational 3 1))) (Mul x (Mul x x)))
-; note: this rewrite is slow and has the potential to blow up the egraph
-; before the powers rewrites were added, when this rewrite is enabled
-; and ≥ 3 iters are run on test 2 (* 5 2), perf goes into the gutter
-; this is bc this rule and the second-to-last difference of squares rule
-; have some cyclic behavior goin on
-; the last identity rule compounds this behavior
-; this is fixed by adding the powers rewrites, but perf still gets noticeably worse
-; compared to if this rewrite isn't enabled (0.003s -> 0.129s)
+; FIXME: this rewrite is slow and has the potential to blow up the egraph
+;        before the powers rewrites were added, when this rewrite is enabled
+;        and ≥ 3 iters are run on test 2 (* 5 2), perf goes into the gutter
+;        this is bc this rule and the second-to-last difference of squares rule
+;        have some cyclic behavior goin on
+;        the last identity rule compounds this behavior
+;        this is improved somewhat by adding the powers rewrites, but it's still
+;        really bad compared to if this rewrite isn't enabled (0.003s -> 0.129s)
+;        it's bad enough to where test 1 can't be run with ≥ 6 iters
 (rewrite (Mul x (Mul x x)) (Pow x (Num (rational 3 1))))
 
 ;; TODO: Exponentials
@@ -405,6 +406,15 @@
 
 (run 5)
 (check (non-zero e))
+
+; Note: we want to test running more iters;
+; we only need 5 iters to check that e is non-zero,
+; however, to bug test if e's non-zero-ness is stable, we run
+; for a few more iters and check again
+; However, with our rewrite set this is prohibitively slow.
+; See FIXME above
+; (run 1)
+; (check (non-zero e))
 
 ;; Test 2: const eval
 (define ten-e (Mul (Num (rational 5 1)) (Num (rational 2 1))))
