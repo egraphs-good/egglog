@@ -10,6 +10,9 @@
   (Num Rational)
   (Var String)
 
+  ; TODO: custom ops
+  ; (Const String), (Unary String Math), (Binary String Math Math)?
+
   ; Constant-folding ops
   (Add Math Math)
   (Sub Math Math)
@@ -111,6 +114,8 @@
 ;; The interval analyses are similar to the constant-folding analysis,
 ;; except we have to take the lower/upper bound of the results we get
 ; TODO: Deal with unbounded intervals?
+;       This would require some notion of "relation does not contain";
+;       does this require negation?
 (rule ((= e (Add a b))
        (= la (lo a))
        (= lb (lo b)))
@@ -341,17 +346,44 @@
          (Div (Pow x (Num (rational 3 1))) (Pow y (Num (rational 3 1)))))
  
 (rewrite (Pow x (Num (rational 3 1))) (Mul x (Mul x x)))
-; FIXME: when this rewrite is enabled and ≥ 3 iters are run on test 2 (* 5 2),
-;        perf goes into the gutter
-;        this is bc this rule and the second-to-last difference of squares rule
-;        have some cyclic behavior goin on
-;        the last identity rule compounds this behavior
-;        this might be fixed by adding more rewrites later on?
-; (rewrite (Mul x (Mul x x)) (Pow x (Num (rational 3 1))))
+; note: this rewrite is slow and has the potential to blow up the egraph
+; before the powers rewrites were added, when this rewrite is enabled
+; and ≥ 3 iters are run on test 2 (* 5 2), perf goes into the gutter
+; this is bc this rule and the second-to-last difference of squares rule
+; have some cyclic behavior goin on
+; the last identity rule compounds this behavior
+; this is fixed by adding the powers rewrites, but perf still gets noticeably worse
+; compared to if this rewrite isn't enabled (0.003s -> 0.129s)
+(rewrite (Mul x (Mul x x)) (Pow x (Num (rational 3 1))))
 
 ;; TODO: Exponentials
-;; TODO: Powers
-;; TODO: Logs
+
+;; Powers
+(rewrite (Pow a (Num (rational -1 1))) (Div (Num (rational 1 1)) a))
+(rewrite (Pow a (Num (rational 1 1))) a)
+
+; 0^0 is undefined
+(rewrite (Pow a (Num (rational 0 1))) (Num (rational 1 1)) :when ((non-zero a)))
+(rewrite (Pow (Num (rational 1 1)) a) (Num (rational 1 1)))
+
+; TODO: exp
+; (rewrite (Exp (Mul (Log a) b)) (Pow a b))
+(rewrite (Mul (Pow a b) a) (Pow a (Add b (Num (rational 1 1)))))
+(rewrite (Pow a (Num (rational 1 2))) (Sqrt a))
+(rewrite (Pow a (Num (rational 2 1))) (Mul a a))
+(rewrite (Pow a (Num (rational 1 3))) (Cbrt a))
+(rewrite (Pow a (Num (rational 3 1))) (Mul (Mul a a) a))
+
+; 0^0 is undefined
+(rewrite (Pow (Num (rational 0 1)) a) (Num (rational 0 1)) :when ((non-zero a)))
+
+;; Logarithms
+(rewrite (Log (Mul a b)) (Add (Log a) (Log b)))
+(rewrite (Log (Div a b)) (Sub (Log a) (Log b)))
+(rewrite (Log (Div (Num (rational 1 1)) a)) (Neg (Log a)))
+(rewrite (Log (Pow a b)) (Mul b (Log a)))
+; TODO: (rewrite (Log (E)) (Num (rational 1 1)))
+
 ;; TODO: Trig
 ;; TODO: Misc.
 
