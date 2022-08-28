@@ -35,9 +35,9 @@
 ;;
 ;; Analyses
 ;; --------
-;; This example has four analyses:
-;; an interval analysis consisting of a hi and lo component,
-;; a constant folding analysis, and a non-zero analysis.
+;; This example has three analyses:
+;; an interval analysis consisting of a hi and lo component
+;; and a non-zero analysis.
 ;; The non-zero analysis is built off the interval analysis (in order to prove
 ;; that rewrites are sound, even if some parts of an expr can't be const-evaled)
 
@@ -45,53 +45,25 @@
 (function hi (Math) Rational :merge (min old new))
 ; No lower bound = negative infinity
 (function lo (Math) Rational :merge (max old new))
-(function evals-to (Math) Rational)
 (relation non-zero (Math))
 
-;; First, define our constant folding analysis
-
-; If this expression is constant-foldable, union it with its evaled form
-(rule ((= ve (evals-to e)))
-      ((union e (Num ve))))
+;; First, constant folding!
+;; We don't need an explicit constant folding analysis, we can just union
+;; with nums when we can
 
 ; Cases
-(rule ((= e (Num n)))
-      ((set (evals-to e) n)))
-(rule ((= e (Add a b))
-       (= va (evals-to a))
-       (= vb (evals-to b)))
-      ((set (evals-to e) (+ va vb))))
-(rule ((= e (Sub a b))
-       (= va (evals-to a))
-       (= vb (evals-to b)))
-      ((set (evals-to e) (- va vb))))
-(rule ((= e (Mul a b))
-       (= va (evals-to a))
-       (= vb (evals-to b)))
-      ((set (evals-to e) (* va vb))))
-(rule ((= e (Div a b))
-       (= va (evals-to a))
-       (= vb (evals-to b))
-       (non-zero b))
-      ((set (evals-to e) (/ va vb))))
+(rewrite (Add (Num a) (Num b)) (Num (+ a b)))
+(rewrite (Sub (Num a) (Num b)) (Num (- a b)))
+(rewrite (Mul (Num a) (Num b)) (Num (* a b)))
+(rewrite (Div (Num a) denom) (Num (/ a b)) :when ((= denom (Num b)) (non-zero denom)))
 ; TODO: pow
-(rule ((= e (Neg a))
-       (= va (evals-to a)))
-      ((set (evals-to e) (neg va))))
+(rewrite (Neg (Num a)) (Num (neg a)))
 ; TODO: sqrt
 ; TODO: cbrt
-(rule ((= e (Fabs a))
-       (= va (evals-to a)))
-      ((set (evals-to e) (abs va))))
-(rule ((= e (Ceil a))
-       (= va (evals-to a)))
-      ((set (evals-to e) (ceil va))))
-(rule ((= e (Floor a))
-       (= va (evals-to a)))
-      ((set (evals-to e) (floor va))))
-(rule ((= e (Round a))
-       (= va (evals-to a)))
-      ((set (evals-to e) (round va))))
+(rewrite (Fabs (Num a)) (Num (abs a)))
+(rewrite (Ceil (Num a)) (Num (ceil a)))
+(rewrite (Floor (Num a)) (Num (floor a)))
+(rewrite (Round (Num a)) (Num (round a)))
 ; TODO: log
 
 ;; To check if something is zero, we check that zero is not contained in the
@@ -110,7 +82,7 @@
        (< h (rational 0 1)))
       ((non-zero e)))
 
-(rule ((= ve (evals-to e)))
+(rule ((= e (Num ve)))
       ((set (lo e) ve)
        (set (hi e) ve)))
 
@@ -421,5 +393,5 @@
 
 ;; Test 2: const eval
 (define ten-e (Mul (Num (rational 5 1)) (Num (rational 2 1))))
-(run 6)
+(run 5)
 (extract ten-e)
