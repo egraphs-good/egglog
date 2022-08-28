@@ -328,7 +328,27 @@
 (rewrite (Fabs (Mul a b)) (Mul (Fabs a) (Fabs b)))
 (rewrite (Fabs (Div a b)) (Div (Fabs a) (Fabs b)))
 
-;; TODO: Cube root
+;; Cube root
+(rewrite (Pow (Cbrt x) (Num (rational 3 1)))    x)
+(rewrite (Cbrt (Pow x (Num (rational 3 1))))    x)
+(rewrite (Mul (Mul (Cbrt x) (Cbrt x)) (Cbrt x)) x)
+(rewrite (Mul (Cbrt x) (Mul (Cbrt x) (Cbrt x))) x)
+(rewrite (Pow (Neg x) (Num (rational 3 1)))     (Neg (Pow x (Num (rational 3 1)))))
+
+(rewrite (Pow (Mul x y) (Num (rational 3 1)))
+         (Mul (Pow x (Num (rational 3 1))) (Pow y (Num (rational 3 1)))))
+(rewrite (Pow (Div x y) (Num (rational 3 1)))
+         (Div (Pow x (Num (rational 3 1))) (Pow y (Num (rational 3 1)))))
+ 
+(rewrite (Pow x (Num (rational 3 1))) (Mul x (Mul x x)))
+; FIXME: when this rewrite is enabled and ≥ 3 iters are run on test 2 (* 5 2),
+;        perf goes into the gutter
+;        this is bc this rule and the second-to-last difference of squares rule
+;        have some cyclic behavior goin on
+;        the last identity rule compounds this behavior
+;        this might be fixed by adding more rewrites later on?
+; (rewrite (Mul x (Mul x x)) (Pow x (Num (rational 3 1))))
+
 ;; TODO: Exponentials
 ;; TODO: Powers
 ;; TODO: Logs
@@ -351,7 +371,7 @@
 
 (define e (Div one (Add x one)))
 
-(run 6)
+(run 5)
 (check (non-zero e))
 
 ;; Test 2: const eval
