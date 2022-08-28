@@ -330,7 +330,7 @@
 ;        this is improved somewhat by adding the powers rewrites, but it's still
 ;        really bad compared to if this rewrite isn't enabled (0.003s -> 0.129s)
 ;        it's bad enough to where test 1 can't be run with ≥ 6 iters
-(rewrite (Mul x (Mul x x)) (Pow x (Num (rational 3 1))))
+; (rewrite (Mul x (Mul x x)) (Pow x (Num (rational 3 1))))
 
 ;; TODO: Exponentials
 
