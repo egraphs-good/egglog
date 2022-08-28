@@ -10,8 +10,11 @@
   (Num Rational)
   (Var String)
 
-  ; TODO: custom ops
-  ; (Const String), (Unary String Math), (Binary String Math Math)?
+  ; Custom ops
+  (Const String)
+  (Unary String Math)
+  ; unneeded for now
+  ; (Binary String Math Math)
 
   ; Constant-folding ops
   (Add Math Math)
