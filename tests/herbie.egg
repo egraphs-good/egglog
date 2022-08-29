@@ -55,15 +55,15 @@
 (rewrite (Sub (Num a) (Num b)) (Num (- a b)))
 (rewrite (Mul (Num a) (Num b)) (Num (* a b)))
 (rewrite (Div (Num a) denom) (Num (/ a b)) :when ((= denom (Num b)) (non-zero denom)))
-; TODO: pow
+(rewrite (Pow (Num a) (Num b)) (Num res) :when ((= res (try-pow a b))))
 (rewrite (Neg (Num a)) (Num (neg a)))
-; TODO: sqrt
-; TODO: cbrt
+(rewrite (Sqrt (Num a)) (Num res) :when ((= res (try-sqrt a))))
+(rewrite (Cbrt (Num a)) (Num res) :when ((= res (try-cbrt a))))
 (rewrite (Fabs (Num a)) (Num (abs a)))
 (rewrite (Ceil (Num a)) (Num (ceil a)))
 (rewrite (Floor (Num a)) (Num (floor a)))
 (rewrite (Round (Num a)) (Num (round a)))
-; TODO: log
+(rewrite (Log (Num a)) (Num res) :when ((= res (try-log a))))
 
 ;; To check if something is zero, we check that zero is not contained in the
 ;; interval. There are two possible (overlapping!) cases:
@@ -386,7 +386,8 @@
 ;; In actuality, herbie would be responsible for plugging exprs in here.
 ;; For testing purposes we just come up with some example test cases
 
-;; Test 1: zero-check
+;; All exprs are defined first before just running egraph iters once
+; Test 1: zero-check
 (define one (Num (rational 1 1)))
 
 (define x (Var "x"))
@@ -395,31 +396,31 @@
 
 (define e1 (Div one (Add x one)))
 
-(run 5)
-(check (non-zero e1))
-
-; Note: we want to test running more iters;
-; we only need 5 iters to check that e is non-zero,
-; however, to bug test if e's non-zero-ness is stable, we run
-; for a few more iters and check again
-; However, with our rewrite set this is prohibitively slow.
-; See FIXME above
-; (run 1)
-; (check (non-zero e))
-
-;; Test 2: const eval
+; Test 2: const eval
 (define ten-e (Mul (Num (rational 5 1)) (Num (rational 2 1))))
-(run 5)
-(extract ten-e)
 
-;; Test 3: simplify!
+; Test 3: simplification
 ; x/x - 2x/2 = 1 - x if x is non-zero, x/x - x otherwise
-(define x1 (Var "x1"))
+(define x1 (Var "x"))
 (set (lo x1) (rational 1 1))
 (set (hi x1) (rational 100 1))
-
-(define x2 (Var "x2")) ; potentially not non-zero
-
 (define e2 (Sub (Div x1 x1) (Div (Mul (Num (rational 2 1)) x1) (Num (rational 2 1)))))
+
+(define x2 (Var "x")) ; potentially not non-zero
+(define e3 (Sub (Div x2 x2) (Div (Mul (Num (rational 2 1)) x2) (Num (rational 2 1)))))
+
+;; Run the egraph
 (run 5)
-(extract e2)
+
+;; Check each test
+; Test 1: zero-check
+; Should check
+(check (non-zero e1))
+
+; Test 2: const eval
+; Should return (Num (rational 10 1))
+(check (= (Num (rational 10 1)) ten-e))
+
+; Test 3: simplify!
+(check (= e2 (Sub (Num (rational 1 1)) (Var "x"))))
+(check (= e3 (Sub (Div (Var "x") (Var "x")) (Var "x"))))

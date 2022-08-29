@@ -1,5 +1,6 @@
+use num_bigint::BigInt;
 use num_rational::BigRational;
-use num_traits::Signed;
+use num_traits::{Signed, Zero, One, Pow};
 use std::sync::Mutex;
 
 use crate::{ast::Literal, util::IndexSet};
@@ -49,6 +50,50 @@ impl Sort for RationalSort {
         add_primitives!(eg, "ceil" = |a: R| -> R { a.ceil() });
         add_primitives!(eg, "round" = |a: R| -> R { a.round() });
         add_primitives!(eg, "rational" = |a: i64, b: i64| -> R { R::new(a.into(), b.into()) });
+
+        add_primitives!(eg, "try-pow" = |a: R, b: R| -> Option<R> {
+            if a.is_zero() {
+                if b.is_positive() {
+                    Some(R::zero())
+                } else {
+                    None
+                }
+            } else if b.is_zero() {
+                Some(R::one())
+            } else if b.is_integer() {
+                Some(Pow::pow(a, b.to_integer()))
+            } else {
+                None
+            }
+        });
+        add_primitives!(eg, "try-log" = |a: R| -> Option<R> {
+            if a.is_one() {
+                Some(R::zero())
+            } else {
+                None
+            }
+        });
+        add_primitives!(eg, "try-sqrt" = |a: R| -> Option<R> {
+            if *a.numer() > BigInt::from(0) && *a.denom() > BigInt::from(0) {
+                let s1 = a.numer().sqrt();
+                let s2 = a.denom().sqrt();
+                let is_perfect = &(&s1 * &s1) == a.numer() && &(&s2 * &s2) == a.denom();
+                if is_perfect {
+                    Some(R::new(s1, s2))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        });
+        add_primitives!(eg, "try-cbrt" = |a: R| -> Option<R> {
+            if a.is_one() {
+                Some(R::one())
+            } else {
+                None
+            }
+        });
 
         add_primitives!(eg, "<" = |a: R, b: R| -> Opt { (a < b).then(|| ()) }); 
         add_primitives!(eg, ">" = |a: R, b: R| -> Opt { (a > b).then(|| ()) }); 
