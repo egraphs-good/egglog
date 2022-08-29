@@ -11,3 +11,5 @@ flamegraph.svg
 perf.data*
 
 tests/_scratch.egg
+
+**/.DS_Store
