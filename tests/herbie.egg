@@ -337,14 +337,14 @@
 (rewrite (Unary "exp" (Sub a b)) (Div (Unary "exp" a) (Unary "exp" b)))
 (rewrite (Unary "exp" (Neg a))   (Div (Num (rational 1 1)) (Unary "exp" a)))
 
-(rewrite (Mul (Unary "exp" a) (Unary "exp" b))      (Unary "exp" (+ a b)))
-(rewrite (Div (Num (rational 1 1)) (Unary "exp" a)) (Unary "exp" (neg a)))
-(rewrite (Div (Unary "exp" a) (Unary "exp" b))      (Unary "exp" (- a b)))
-(rewrite (Unary "exp" (Mul a b))                    (pow (Unary "exp" a) b))
-(rewrite (Unary "exp" (Div a (Num (rational 2 1)))) (sqrt (Unary "exp" a)))
-(rewrite (Unary "exp" (Div a (Num (rational 3 1)))) (cbrt (Unary "exp" a)))
+(rewrite (Mul (Unary "exp" a) (Unary "exp" b))      (Unary "exp" (Add a b)))
+(rewrite (Div (Num (rational 1 1)) (Unary "exp" a)) (Unary "exp" (Neg a)))
+(rewrite (Div (Unary "exp" a) (Unary "exp" b))      (Unary "exp" (Sub a b)))
+(rewrite (Unary "exp" (Mul a b))                    (Pow (Unary "exp" a) b))
+(rewrite (Unary "exp" (Div a (Num (rational 2 1)))) (Sqrt (Unary "exp" a)))
+(rewrite (Unary "exp" (Div a (Num (rational 3 1)))) (Cbrt (Unary "exp" a)))
 (rewrite (Unary "exp" (Mul a (Num (rational 2 1)))) (Mul (Unary "exp" a) (Unary "exp" a)))
-(rewrite (Unary "exp" (Mul a (Num (rational 3 1)))) (pow (Unary "exp" a) (Num (rational 3 1))))
+(rewrite (Unary "exp" (Mul a (Num (rational 3 1)))) (Pow (Unary "exp" a) (Num (rational 3 1))))
 
 ;; Powers
 (rewrite (Pow a (Num (rational -1 1))) (Div (Num (rational 1 1)) a))
