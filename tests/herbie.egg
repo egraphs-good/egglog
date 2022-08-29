@@ -41,9 +41,8 @@
 ;; The non-zero analysis is built off the interval analysis (in order to prove
 ;; that rewrites are sound, even if some parts of an expr can't be const-evaled)
 
-; No upper bound = positive infinity
+; TODO: unbounded intervals?
 (function hi (Math) Rational :merge (min old new))
-; No lower bound = negative infinity
 (function lo (Math) Rational :merge (max old new))
 (relation non-zero (Math))
 
@@ -88,9 +87,6 @@
 
 ;; The interval analyses are similar to the constant-folding analysis,
 ;; except we have to take the lower/upper bound of the results we get
-; TODO: Deal with unbounded intervals?
-;       This would require some notion of "relation does not contain";
-;       does this require negation?
 (rule ((= e (Add a b))
        (= la (lo a))
        (= lb (lo b)))
@@ -141,11 +137,10 @@
 ; TODO: Pow
 
 (rule ((= e (Neg a))
+       (= la (lo a))
        (= ha (hi a)))
-      ((set (lo e) (neg ha))))
-(rule ((= e (Neg a))
-       (= la (lo a)))
-      ((set (hi e) (neg la))))
+      ((set (lo e) (neg ha))
+       (set (hi e) (neg la))))
 
 ; TODO: Sqrt
 ; TODO: Cbrt
@@ -284,10 +279,12 @@
   :when ((non-zero x)
          (non-zero y)))
 
-; TODO: this rule can't be expressed because egg-smol can't infer a type for
-;       the var `x`
-;       this would be fixed if we could do sort annotations on x (i.e. "(Math x)")
-; (rewrite x (Mul (Num (rational 1 1)) x))
+; FIXME: this rule can't be expressed because we can't express a rule
+;        x -> 1/x
+;        i.e. we can't quantify over Math yet
+;        for now we just apply it to vars
+;        it's also kinda slow so i just disabled it for now lmao
+; (rewrite (Var x) (Mul (Num (rational 1 1)) (Var x)))
 
 ;; Fractions
 (rewrite (Div (Sub a b) c)         (Sub (Div a c) (Div b c)))
@@ -332,7 +329,27 @@
 ;        it's bad enough to where test 1 can't be run with ≥ 6 iters
 ; (rewrite (Mul x (Mul x x)) (Pow x (Num (rational 3 1))))
 
-;; TODO: Exponentials
+;; Exponentials
+(rewrite (Unary "Exp" (Log x)) x)
+(rewrite (Log (Unary "Exp" x)) x)
+
+(rewrite (Unary "Exp" (Num (rational 0 1))) (Num (rational 1 1)))
+(rewrite (Unary "Exp" (Num (rational 1 1))) (Const "E"))
+(rewrite (Num (rational 1 1))               (Unary "Exp" (Num (rational 0 1))))
+(rewrite (Const "E")                        (Unary "Exp" (Num (rational 0 1))))
+
+(rewrite (Unary "Exp" (Add a b)) (Mul (Unary "Exp" a) (Unary "Exp" b)))
+(rewrite (Unary "Exp" (Sub a b)) (Div (Unary "Exp" a) (Unary "Exp" b)))
+(rewrite (Unary "Exp" (Neg a))   (Div (Num (rational 1 1)) (Unary "Exp" a)))
+
+(rewrite (Mul (Unary "Exp" a) (Unary "Exp" b))      (Unary "Exp" (+ a b)))
+(rewrite (Div (Num (rational 1 1)) (Unary "Exp" a)) (Unary "Exp" (neg a)))
+(rewrite (Div (Unary "Exp" a) (Unary "Exp" b))      (Unary "Exp" (- a b)))
+(rewrite (Unary "Exp" (Mul a b))                    (pow (Unary "Exp" a) b))
+(rewrite (Unary "Exp" (Div a (Num (rational 2 1)))) (sqrt (Unary "Exp" a)))
+(rewrite (Unary "Exp" (Div a (Num (rational 3 1)))) (cbrt (Unary "Exp" a)))
+(rewrite (Unary "Exp" (Mul a (Num (rational 2 1)))) (Mul (Unary "Exp" a) (Unary "Exp" a)))
+(rewrite (Unary "Exp" (Mul a (Num (rational 3 1)))) (pow (Unary "Exp" a) (Num (rational 3 1))))
 
 ;; Powers
 (rewrite (Pow a (Num (rational -1 1))) (Div (Num (rational 1 1)) a))
@@ -342,8 +359,7 @@
 (rewrite (Pow a (Num (rational 0 1))) (Num (rational 1 1)) :when ((non-zero a)))
 (rewrite (Pow (Num (rational 1 1)) a) (Num (rational 1 1)))
 
-; TODO: exp
-; (rewrite (Exp (Mul (Log a) b)) (Pow a b))
+(rewrite (Unary "Exp" (Mul (Log a) b)) (Pow a b))
 (rewrite (Mul (Pow a b) a) (Pow a (Add b (Num (rational 1 1)))))
 (rewrite (Pow a (Num (rational 1 2))) (Sqrt a))
 (rewrite (Pow a (Num (rational 2 1))) (Mul a a))
@@ -358,7 +374,7 @@
 (rewrite (Log (Div a b)) (Sub (Log a) (Log b)))
 (rewrite (Log (Div (Num (rational 1 1)) a)) (Neg (Log a)))
 (rewrite (Log (Pow a b)) (Mul b (Log a)))
-; TODO: (rewrite (Log (E)) (Num (rational 1 1)))
+(rewrite (Log (Const "E")) (Num (rational 1 1)))
 
 ;; TODO: Trig
 ;; TODO: Misc.
@@ -377,10 +393,10 @@
 (set (lo x) (rational 0 1))
 (set (hi x) (rational 100 1))
 
-(define e (Div one (Add x one)))
+(define e1 (Div one (Add x one)))
 
 (run 5)
-(check (non-zero e))
+(check (non-zero e1))
 
 ; Note: we want to test running more iters;
 ; we only need 5 iters to check that e is non-zero,
@@ -395,3 +411,15 @@
 (define ten-e (Mul (Num (rational 5 1)) (Num (rational 2 1))))
 (run 5)
 (extract ten-e)
+
+;; Test 3: simplify!
+; x/x - 2x/2 = 1 - x if x is non-zero, x/x - x otherwise
+(define x1 (Var "x1"))
+(set (lo x1) (rational 1 1))
+(set (hi x1) (rational 100 1))
+
+(define x2 (Var "x2")) ; potentially not non-zero
+
+(define e2 (Sub (Div x1 x1) (Div (Mul (Num (rational 2 1)) x1) (Num (rational 2 1)))))
+(run 5)
+(extract e2)
