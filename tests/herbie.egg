@@ -69,10 +69,6 @@
 ;; interval. There are two possible (overlapping!) cases:
 ;; - There exists a lo interval, in which case it must be larger than 0
 ;; - There exists a hi interval, in which case it must be smaller than 0
-;; This allows for numbers with one-sided intervals to also be non-zero
-;; (although right now in practice the way we've defined interval computation
-;; precludes this), and removes the need for an "interval contains zero" primitive
-;; (though it requires comparison prims).
 ;; This assumes that intervals are well-formed: lo <= hi at all times.
 (rule ((= l (lo e))
        (> l (rational 0 1)))
