@@ -279,12 +279,12 @@
   :when ((non-zero x)
          (non-zero y)))
 
-; FIXME: this rule can't be expressed because we can't express a rule
-;        x -> 1/x
-;        i.e. we can't quantify over Math yet
+; FIXME: this rule can't be expressed in its full generality;
+;        we can't express the general rule x -> 1/x since
+;        we can't quantify over Math yet
 ;        for now we just apply it to vars
-;        it's also kinda slow so i just disabled it for now lmao
-; (rewrite (Var x) (Mul (Num (rational 1 1)) (Var x)))
+;        it's also kinda slow lmao
+(rewrite (Var x) (Mul (Num (rational 1 1)) (Var x)))
 
 ;; Fractions
 (rewrite (Div (Sub a b) c)         (Sub (Div a c) (Div b c)))
@@ -319,37 +319,32 @@
  
 (rewrite (Pow x (Num (rational 3 1))) (Mul x (Mul x x)))
 ; FIXME: this rewrite is slow and has the potential to blow up the egraph
-;        before the powers rewrites were added, when this rewrite is enabled
-;        and ≥ 3 iters are run on test 2 (* 5 2), perf goes into the gutter
 ;        this is bc this rule and the second-to-last difference of squares rule
 ;        have some cyclic behavior goin on
 ;        the last identity rule compounds this behavior
-;        this is improved somewhat by adding the powers rewrites, but it's still
-;        really bad compared to if this rewrite isn't enabled (0.003s -> 0.129s)
-;        it's bad enough to where test 1 can't be run with ≥ 6 iters
-; (rewrite (Mul x (Mul x x)) (Pow x (Num (rational 3 1))))
+(rewrite (Mul x (Mul x x)) (Pow x (Num (rational 3 1))))
 
 ;; Exponentials
-(rewrite (Unary "Exp" (Log x)) x)
-(rewrite (Log (Unary "Exp" x)) x)
+(rewrite (Unary "exp" (Log x)) x)
+(rewrite (Log (Unary "exp" x)) x)
 
-(rewrite (Unary "Exp" (Num (rational 0 1))) (Num (rational 1 1)))
-(rewrite (Unary "Exp" (Num (rational 1 1))) (Const "E"))
-(rewrite (Num (rational 1 1))               (Unary "Exp" (Num (rational 0 1))))
-(rewrite (Const "E")                        (Unary "Exp" (Num (rational 0 1))))
+(rewrite (Unary "exp" (Num (rational 0 1))) (Num (rational 1 1)))
+(rewrite (Unary "exp" (Num (rational 1 1))) (Const "E"))
+(rewrite (Num (rational 1 1))               (Unary "exp" (Num (rational 0 1))))
+(rewrite (Const "E")                        (Unary "exp" (Num (rational 0 1))))
 
-(rewrite (Unary "Exp" (Add a b)) (Mul (Unary "Exp" a) (Unary "Exp" b)))
-(rewrite (Unary "Exp" (Sub a b)) (Div (Unary "Exp" a) (Unary "Exp" b)))
-(rewrite (Unary "Exp" (Neg a))   (Div (Num (rational 1 1)) (Unary "Exp" a)))
+(rewrite (Unary "exp" (Add a b)) (Mul (Unary "exp" a) (Unary "exp" b)))
+(rewrite (Unary "exp" (Sub a b)) (Div (Unary "exp" a) (Unary "exp" b)))
+(rewrite (Unary "exp" (Neg a))   (Div (Num (rational 1 1)) (Unary "exp" a)))
 
-(rewrite (Mul (Unary "Exp" a) (Unary "Exp" b))      (Unary "Exp" (+ a b)))
-(rewrite (Div (Num (rational 1 1)) (Unary "Exp" a)) (Unary "Exp" (neg a)))
-(rewrite (Div (Unary "Exp" a) (Unary "Exp" b))      (Unary "Exp" (- a b)))
-(rewrite (Unary "Exp" (Mul a b))                    (pow (Unary "Exp" a) b))
-(rewrite (Unary "Exp" (Div a (Num (rational 2 1)))) (sqrt (Unary "Exp" a)))
-(rewrite (Unary "Exp" (Div a (Num (rational 3 1)))) (cbrt (Unary "Exp" a)))
-(rewrite (Unary "Exp" (Mul a (Num (rational 2 1)))) (Mul (Unary "Exp" a) (Unary "Exp" a)))
-(rewrite (Unary "Exp" (Mul a (Num (rational 3 1)))) (pow (Unary "Exp" a) (Num (rational 3 1))))
+(rewrite (Mul (Unary "exp" a) (Unary "exp" b))      (Unary "exp" (+ a b)))
+(rewrite (Div (Num (rational 1 1)) (Unary "exp" a)) (Unary "exp" (neg a)))
+(rewrite (Div (Unary "exp" a) (Unary "exp" b))      (Unary "exp" (- a b)))
+(rewrite (Unary "exp" (Mul a b))                    (pow (Unary "exp" a) b))
+(rewrite (Unary "exp" (Div a (Num (rational 2 1)))) (sqrt (Unary "exp" a)))
+(rewrite (Unary "exp" (Div a (Num (rational 3 1)))) (cbrt (Unary "exp" a)))
+(rewrite (Unary "exp" (Mul a (Num (rational 2 1)))) (Mul (Unary "exp" a) (Unary "exp" a)))
+(rewrite (Unary "exp" (Mul a (Num (rational 3 1)))) (pow (Unary "exp" a) (Num (rational 3 1))))
 
 ;; Powers
 (rewrite (Pow a (Num (rational -1 1))) (Div (Num (rational 1 1)) a))
@@ -376,8 +371,93 @@
 (rewrite (Log (Pow a b)) (Mul b (Log a)))
 (rewrite (Log (Const "E")) (Num (rational 1 1)))
 
-;; TODO: Trig
-;; TODO: Misc.
+;; Trigonometry
+(rewrite (Add (Mul (Unary "cos" a) (Unary "cos" a)) (Mul (Unary "sin" a) (Unary "sin" a)))
+         (Num (rational 1 1)))
+(rewrite (Sub (Num (rational 1 1)) (Mul (Unary "cos" a) (Unary "cos" a)))
+         (Mul (Unary "sin" a) (Unary "sin" a)))
+(rewrite (Sub (Num (rational 1 1)) (Mul (Unary "sin" a) (Unary "sin" a)))
+         (Mul (Unary "cos" a) (Unary "cos" a)))
+(rewrite (Add (Mul (Unary "cos" a) (Unary "cos" a)) (Num (rational -1 1))) 
+         (Neg (Mul (Unary "sin" a) (Unary "sin" a))))
+(rewrite (Add (Mul (Unary "sin" a) (Unary "sin" a)) (Num (rational -1 1))) 
+         (Neg (Mul (Unary "cos" a) (Unary "cos" a))))
+(rewrite (Sub (Mul (Unary "cos" a) (Unary "cos" a)) (Num (rational 1 1)))  
+         (Neg (Mul (Unary "sin" a) (Unary "sin" a))))
+(rewrite (Sub (Mul (Unary "sin" a) (Unary "sin" a)) (Num (rational 1 1)))  
+         (Neg (Mul (Unary "cos" a) (Unary "cos" a))))
+(rewrite (Unary "sin" (Div (Const "PI") (Num (rational 6 1))))       
+         (Num (rational 1 2)))
+(rewrite (Unary "sin" (Div (Const "PI") (Num (rational 4 1))))       
+         (Div (Sqrt (Num (rational 2 1))) (Num (rational 2 1))))
+(rewrite (Unary "sin" (Div (Const "PI") (Num (rational 3 1))))       
+         (Div (Sqrt (Num (rational 3 1))) (Num (rational 2 1))))
+(rewrite (Unary "sin" (Div (Const "PI") (Num (rational 2 1))))       
+         (Num (rational 1 1)))
+(rewrite (Unary "sin" (Const "PI"))             
+         (Num (rational 0 1)))
+(rewrite (Unary "sin" (Add x (Const "PI")))       
+         (Neg (Unary "sin" x)))
+(rewrite (Unary "sin" (Add x (Div (Const "PI") (Num (rational 2 1))))) 
+         (Unary "cos" x))
+(rewrite (Unary "cos" (Div (Const "PI") (Num (rational 6 1))))       
+         (Div (Sqrt (Num (rational 3 1))) (Num (rational 2 1))))
+(rewrite (Unary "cos" (Div (Const "PI") (Num (rational 4 1))))       
+         (Div (Sqrt (Num (rational 2 1))) (Num (rational 2 1))))
+(rewrite (Unary "cos" (Div (Const "PI") (Num (rational 3 1))))       
+         (Num (rational 1 (Num (rational 2 1)))))
+(rewrite (Unary "cos" (Div (Const "PI") (Num (rational 2 1))))       
+         (Num (rational 0 1)))
+(rewrite (Unary "cos" (Const "PI"))             
+         (Num (rational -1 1)))
+(rewrite (Unary "cos" (Add x (Const "PI")))       
+         (Neg (Unary "cos" x)))
+(rewrite (Unary "cos" (Add x (Div (Const "PI") (Num (rational 2 1))))) 
+         (Neg (Unary "sin" x)))
+(rewrite (Unary "tan" (Div (Const "PI") (Num (rational 6 1))))       
+         (Div (Num (rational 1 1)) (Sqrt (Num (rational 3 1)))))
+(rewrite (Unary "tan" (Div (Const "PI") (Num (rational 4 1))))       
+         (Num (rational 1 1)))
+(rewrite (Unary "tan" (Div (Const "PI") (Num (rational 3 1))))       
+         (Sqrt (Num (rational 3 1))))
+(rewrite (Unary "tan" (Const "PI"))             
+         (Num (rational 0 1)))
+(rewrite (Unary "tan" (Add x (Const "PI")))       
+         (Unary "tan" x))
+(rewrite (Unary "tan" (Add x (Div (Const "PI") (Num (rational 2 1))))) 
+         (Div (Num (rational -1 1)) (Unary "tan" x)))
+(rewrite (Div (Unary "sin" a) (Add (Num (rational 1 1)) (Unary "cos" a)))    
+         (Unary "tan" (Div a (Num (rational 2 1)))))
+(rewrite (Div (Neg (Unary "sin" a)) (Add (Num (rational 1 1)) (Unary "cos" a)))
+         (Unary "tan" (Div (Neg a) (Num (rational 2 1)))))
+(rewrite (Div (Sub (Num (rational 1 1)) (Unary "cos" a)) (Unary "sin" a))    
+         (Unary "tan" (Div a (Num (rational 2 1)))))
+(rewrite (Div (Sub (Num (rational 1 1)) (Unary "cos" a)) (Neg (Unary "sin" a)))
+         (Unary "tan" (Div (Neg a) (Num (rational 2 1)))))
+(rewrite (Div (Add (Unary "sin" a) (Unary "sin" b)) (Add (Unary "cos" a) (Unary "cos" b)))
+         (Unary "tan" (Div (Add a b) (Num (rational 2 1)))))
+(rewrite (Div (Sub (Unary "sin" a) (Unary "sin" b)) (Add (Unary "cos" a) (Unary "cos" b)))
+         (Unary "tan" (Div (Sub a b) (Num (rational 2 1)))))
+
+(rewrite (Unary "sin" (Num (rational 0 1))) (Num (rational 0 1)))
+(rewrite (Unary "cos" (Num (rational 0 1))) (Num (rational 1 1)))
+(rewrite (Unary "tan" (Num (rational 0 1))) (Num (rational 0 1)))
+
+(rewrite (Unary "sin" (Neg x)) (Neg (Unary "sin" x)))
+(rewrite (Unary "cos" (Neg x)) (Unary "cos" x))
+(rewrite (Unary "tan" (Neg x)) (Neg (Unary "cos" x)))
+
+; Hyperbolics
+(rewrite (Unary "sinh" x) (Div (Sub (Unary "exp" x) (Unary "exp" (Neg x))) (Num (rational 2 1))))
+(rewrite (Unary "cosh" x) (Div (Add (Unary "exp" x) (Unary "exp" (Neg x))) (Num (rational 2 1))))
+(rewrite (Unary "tanh" x) (Div (Sub (Unary "exp" x) (Unary "exp" (Neg x))) (Add (Unary "exp" x) (Unary "exp" (Neg x)))))
+(rewrite (Unary "tanh" x) (Div (Sub (Unary "exp" (Mul (Num (rational 2 1)) x)) (Num (rational 1 1))) (Add (Unary "exp" (Mul (Num (rational 2 1)) x)) (Num (rational 1 1)))))
+(rewrite (Unary "tanh" x) (Div (Sub (Num (rational 1 1)) (Unary "exp" (Mul (Num (rational -2 1)) x))) (Add (Num (rational 1 1)) (Unary "exp" (Mul (Num (rational -2 1)) x)))))
+(rewrite (Sub (Mul (Unary "cosh" x) (Unary "cosh" x)) (Mul (Unary "sinh" x) (Unary "sinh" x))) (Num (rational 1 1)))
+(rewrite (Add (Unary "cosh" x) (Unary "sinh" x)) (Unary "exp" x))
+(rewrite (Sub (Unary "cosh" x) (Unary "sinh" x)) (Unary "exp" (Neg x)))
+
+;; Unimplemented: misc. rewrites (conditionals, specialized numerical fns)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;
@@ -406,7 +486,7 @@
 (set (hi x1) (rational 100 1))
 (define e2 (Sub (Div x1 x1) (Div (Mul (Num (rational 2 1)) x1) (Num (rational 2 1)))))
 
-(define x2 (Var "x")) ; potentially not non-zero
+(define x2 (Var "x")) ; maybe zero!
 (define e3 (Sub (Div x2 x2) (Div (Mul (Num (rational 2 1)) x2) (Num (rational 2 1)))))
 
 ;; Run the egraph
