@@ -70,6 +70,10 @@
 (rewrite (Mul a b) (Mul b a))
 (rewrite (Add a (Add b c)) (Add (Add a b) c))
 (rewrite (Mul a (Mul b c)) (Mul (Mul a b) c))
+;; These two rules are not present in the original egg tests,
+;; but are necessary for the last check
+(rewrite (Add (Add a b) c) (Add a (Add b c)))
+(rewrite (Mul (Mul a b) c) (Mul a (Mul b c)))
 
 (rewrite (Sub a b) (Add a (Mul (Const (rational -1 1)) b)))
 (rewrite (Div a b) (Mul a (Pow b (Const (rational -1 1)))) :when ((is-not-zero b)))
@@ -84,7 +88,6 @@
 
 (rewrite (Sub a a) (Const (rational 0 1)))
 (rewrite (Div a a) (Const (rational 1 1)) :when ((is-not-zero a)))
-
 
 (rewrite (Mul a (Add b c)) (Add (Mul a b) (Mul a c)))
 (rewrite (Add (Mul a b) (Mul a c)) (Mul a (Add b c)))
@@ -163,14 +166,13 @@
 
 (clear)
 
-;; unable to prove this due to timeout
 ;; math_simplify_factor
-;; (define start-expr (Mul (Add (Var "x") (Const (rational 3 1)))
-;;                         (Add (Var "x") (Const (rational 1 1)))))
-;; (run 7)
-;; (define end-expr (Add (Add (Mul (Var "x") (Var "x")) 
-;;                            (Mul (Const (rational 4 1) (Var "x"))) 
-;;                            (Const (rational 3 1)))))
-;; (check (= start-expr end-expr))
+(define start-expr (Mul (Add (Var "x") (Const (rational 3 1)))
+                        (Add (Var "x") (Const (rational 1 1)))))
+(run 7)
+(define end-expr (Add (Add (Mul (Var "x") (Var "x"))
+                           (Mul (Const (rational 4 1)) (Var "x")))
+                           (Const (rational 3 1))))
+(check (= start-expr end-expr))
 
-;; (clear)
+(clear)
