@@ -4,7 +4,6 @@
 ;;
 ;; Datatypes
 
-;; Operators from FPCore
 (datatype Math
   ; Ground terms
   (Num Rational)
@@ -279,7 +278,7 @@
 ;        we can't express the general rule x -> 1/x since
 ;        we can't quantify over Math yet
 ;        for now we just apply it to vars
-;        it's also kinda slow lmao
+;        it's also p slow lmao
 (rewrite (Var x) (Mul (Num (rational 1 1)) (Var x)))
 
 ;; Fractions
@@ -401,7 +400,7 @@
 (rewrite (Unary "cos" (Div (Const "PI") (Num (rational 4 1))))       
          (Div (Sqrt (Num (rational 2 1))) (Num (rational 2 1))))
 (rewrite (Unary "cos" (Div (Const "PI") (Num (rational 3 1))))       
-         (Num (rational 1 (Num (rational 2 1)))))
+         (Num (rational 1 2)))
 (rewrite (Unary "cos" (Div (Const "PI") (Num (rational 2 1))))       
          (Num (rational 0 1)))
 (rewrite (Unary "cos" (Const "PI"))             
@@ -460,43 +459,115 @@
 ;; Testing
 ;; -------
 ;; In actuality, herbie would be responsible for plugging exprs in here.
-;; For testing purposes we just come up with some example test cases
+;; For our purposes, we take some test cases from herbie
+;; (src/core/simplify.rkt)
 
-;; All exprs are defined first before just running egraph iters once
-; Test 1: zero-check
 (define one (Num (rational 1 1)))
+(define zero (Num (rational 0 1)))
+(define e (Add one zero))
+(run 1)
+(check (= e one))
+(clear)
+
+(define one (Num (rational 1 1)))
+(define five (Num (rational 5 1)))
+(define six (Num (rational 6 1)))
+(define e (Add one five))
+(run 1)
+(check (= e six))
+(clear)
 
 (define x (Var "x"))
-(set (lo x) (rational 0 1))
-(set (hi x) (rational 100 1))
+(define zero (Num (rational 0 1)))
+(define e (Add x zero))
+(run 1)
+(check (= e x))
+(clear)
 
-(define e1 (Div one (Add x one)))
+(define x (Var "x"))
+(define zero (Num (rational 0 1)))
+(define e (Sub x zero))
+(run 1)
+(check (= e x))
+(clear)
 
-; Test 2: const eval
-(define ten-e (Mul (Num (rational 5 1)) (Num (rational 2 1))))
+(define x (Var "x"))
+(define one (Num (rational 1 1)))
+(define e (Mul x one))
+(run 1)
+(check (= e x))
+(clear)
 
-; Test 3: simplification
-; x/x - 2x/2 = 1 - x if x is non-zero, x/x - x otherwise
-(define x1 (Var "x"))
-(set (lo x1) (rational 1 1))
-(set (hi x1) (rational 100 1))
-(define e2 (Sub (Div x1 x1) (Div (Mul (Num (rational 2 1)) x1) (Num (rational 2 1)))))
+(define x (Var "x"))
+(define one (Num (rational 1 1)))
+(define e (Div x one))
+(run 1)
+(check (= e x))
+(clear)
 
-(define x2 (Var "x")) ; maybe zero!
-(define e3 (Sub (Div x2 x2) (Div (Mul (Num (rational 2 1)) x2) (Num (rational 2 1)))))
+(define x (Var "x"))
+(define one (Num (rational 1 1)))
+(define e (Sub (Mul one x) (Mul (Add x one) one)))
+(run 3)
+(check (= e (Num (rational -1 1))))
+(clear)
 
-;; Run the egraph
+(define x (Var "x"))
+(define one (Num (rational 1 1)))
+(define e (Sub (Add x one) x))
+(run 4)
+(check (= e one))
+(clear)
+
+(define x (Var "x"))
+(define one (Num (rational 1 1)))
+(define e (Sub (Add x one) one))
+(run 4)
+(check (= e x))
+(clear)
+
+(define x (Var "x"))
+(set (lo x) (rational 1 1))
+(define three (Num (rational 3 1)))
+(define e (Div (Mul x three) x))
+(run 3)
+(check (= e three))
+(clear)
+
+(define one (Num (rational 1 1)))
+(define x (Var "x"))
+(define e (Sub (Mul (Sqrt (Add x one)) (Sqrt (Add x one))) (Mul (Sqrt x) (Sqrt x))))
 (run 5)
+(check (= one e))
+(clear)
 
-;; Check each test
-; Test 1: zero-check
-; Should check
-(check (non-zero e1))
+(define e (Add (Num (rational 1 5)) (Num (rational 3 10))))
+(run 1)
+(check (= e (Num (rational 1 2))))
+(clear)
 
-; Test 2: const eval
-; Should return (Num (rational 10 1))
-(check (= (Num (rational 10 1)) ten-e))
+(define e (Unary "cos" (Const "PI")))
+(run 1)
+(check (= e (Num (rational -1 1))))
+(clear)
 
-; Test 3: simplify!
-(check (= e2 (Sub (Num (rational 1 1)) (Var "x"))))
-(check (= e3 (Sub (Div (Var "x") (Var "x")) (Var "x"))))
+(define one (Num (rational 1 1)))
+(define two (Num (rational 2 1)))
+(define sqrt5 (Sqrt (Num (rational 5 1))))
+(define e
+  (Div one (Sub (Div (Add one sqrt5) two) (Div (Sub one sqrt5) two))))
+(define tgt (Div one sqrt5))
+(run 6)
+(check (= e tgt))
+; TODO: we can't just do (= e (Div one sqrt5)) cause that doesn't work
+;       unless we add the following lines to check_with after evaluating
+;       the exprs into values:
+;
+;       self.rebuild();
+;       let values: Vec<Value> = values
+;           .into_iter()
+;           .map(|v| self.bad_find_value(v))
+;           .collect::<Vec<_>>();
+;
+;       i have no idea if that's correct to do so i didn't do it
+(clear)
