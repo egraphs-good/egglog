@@ -54,15 +54,15 @@
 (rewrite (Sub (Num a) (Num b)) (Num (- a b)))
 (rewrite (Mul (Num a) (Num b)) (Num (* a b)))
 (rewrite (Div (Num a) denom) (Num (/ a b)) :when ((= denom (Num b)) (non-zero denom)))
-(rewrite (Pow (Num a) (Num b)) (Num res) :when ((= res (try-pow a b))))
+(rewrite (Pow (Num a) (Num b)) (Num res) :when ((= res (pow a b))))
 (rewrite (Neg (Num a)) (Num (neg a)))
-(rewrite (Sqrt (Num a)) (Num res) :when ((= res (try-sqrt a))))
-(rewrite (Cbrt (Num a)) (Num res) :when ((= res (try-cbrt a))))
+(rewrite (Sqrt (Num a)) (Num res) :when ((= res (sqrt a))))
+(rewrite (Cbrt (Num a)) (Num res) :when ((= res (cbrt a))))
 (rewrite (Fabs (Num a)) (Num (abs a)))
 (rewrite (Ceil (Num a)) (Num (ceil a)))
 (rewrite (Floor (Num a)) (Num (floor a)))
 (rewrite (Round (Num a)) (Num (round a)))
-(rewrite (Log (Num a)) (Num res) :when ((= res (try-log a))))
+(rewrite (Log (Num a)) (Num res) :when ((= res (log a))))
 
 ;; To check if something is zero, we check that zero is not contained in the
 ;; interval. There are two possible (overlapping!) cases:

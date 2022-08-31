@@ -51,7 +51,7 @@ impl Sort for RationalSort {
         add_primitives!(eg, "round" = |a: R| -> R { a.round() });
         add_primitives!(eg, "rational" = |a: i64, b: i64| -> R { R::new(a.into(), b.into()) });
 
-        add_primitives!(eg, "try-pow" = |a: R, b: R| -> Option<R> {
+        add_primitives!(eg, "pow" = |a: R, b: R| -> Option<R> {
             if a.is_zero() {
                 if b.is_positive() {
                     Some(R::zero())
@@ -66,14 +66,14 @@ impl Sort for RationalSort {
                 None
             }
         });
-        add_primitives!(eg, "try-log" = |a: R| -> Option<R> {
+        add_primitives!(eg, "log" = |a: R| -> Option<R> {
             if a.is_one() {
                 Some(R::zero())
             } else {
                 None
             }
         });
-        add_primitives!(eg, "try-sqrt" = |a: R| -> Option<R> {
+        add_primitives!(eg, "sqrt" = |a: R| -> Option<R> {
             if *a.numer() > BigInt::from(0) && *a.denom() > BigInt::from(0) {
                 let s1 = a.numer().sqrt();
                 let s2 = a.denom().sqrt();
@@ -87,7 +87,7 @@ impl Sort for RationalSort {
                 None
             }
         });
-        add_primitives!(eg, "try-cbrt" = |a: R| -> Option<R> {
+        add_primitives!(eg, "cbrt" = |a: R| -> Option<R> {
             if a.is_one() {
                 Some(R::one())
             } else {
