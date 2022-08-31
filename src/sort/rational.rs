@@ -1,6 +1,6 @@
 use num_bigint::BigInt;
 use num_rational::BigRational;
-use num_traits::{Signed, Zero, One, Pow};
+use num_traits::{One, Pow, Signed, Zero};
 use std::sync::Mutex;
 
 use crate::{ast::Literal, util::IndexSet};
