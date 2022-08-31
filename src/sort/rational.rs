@@ -41,7 +41,13 @@ impl Sort for RationalSort {
         add_primitives!(eg, "+" = |a: R, b: R| -> R { a + b });
         add_primitives!(eg, "-" = |a: R, b: R| -> R { a - b });
         add_primitives!(eg, "*" = |a: R, b: R| -> R { a * b });
-        add_primitives!(eg, "/" = |a: R, b: R| -> R { a / b }); // TODO option
+        add_primitives!(eg, "/" = |a: R, b: R| -> Option<R> {
+            if !b.is_zero() {
+                Some(a / b)
+            } else {
+                None
+            }
+        });
         add_primitives!(eg, "min" = |a: R, b: R| -> R { a.min(b) });
         add_primitives!(eg, "max" = |a: R, b: R| -> R { a.max(b) });
         add_primitives!(eg, "neg" = |a: R| -> R { -a });
