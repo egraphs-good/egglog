@@ -1,0 +1,169 @@
+;;;;;;;;;;;;;;;;;;;;;;
+;; Exprs and Types
+;;;;;;;;;;;;;;;;;;;;;;
+
+(datatype Ident)
+(datatype Expr)
+(datatype Type)
+(datatype Scheme)
+(datatype Ctx)
+;; TODO: can't do unit right now
+;; (sort QuantifiedVs (Map String Unit))
+(sort QuantifiedVs (Map Ident i64))
+
+(function FreshFromSubst (QuantifiedVs String) Ident)
+(function FreshFromLam (Ctx String Expr) Ident)
+ 
+(function Var (String) Expr)
+(function App (Expr Expr) Expr)
+(function Abs (String Expr) Expr)
+(function Let (String Expr Expr) Expr)
+(function Num (i64) Expr)
+(function True () Expr)
+(function False () Expr)
+(function Unit () Expr)
+
+(function TVar (Ident) Type)
+(function TArr (Type Type) Type)
+(function TInt () Type)
+(function TBool () Type)
+(function TUnit () Type)
+
+(function Forall (QuantifiedVs Type) Scheme)
+(function Nil () Ctx)
+(function Cons (String Scheme Ctx) Ctx)
+
+(relation keySet (Ctx QuantifiedVs))
+(relation has-qs (Ctx Type QuantifiedVs))
+(relation has-qs-demand (Ctx Type))
+
+;;;;;;;;;;;;;;;;;;;;;;
+;; Scheme and Context
+;;;;;;;;;;;;;;;;;;;;;;
+
+(rule ((= c (Nil))) ((keySet c (empty))))
+(rule ((= c (Cons x s n))
+       (keySet n fvs))
+      ((keySet c (insert x 1 fvs))))
+
+;; TODO: rewrite lookup to use native sets
+(function lookup (Ctx String) Scheme)
+(rewrite (lookup (Cons x s tl) x) s)
+(rule (
+  (= t (lookup (Cons y s tl) x))
+  (!= x y)
+)(
+  (union t (lookup tl x))
+))
+
+;;;;;;;;;;;;;;;;;;;;;;
+;; Generalization and Instantiation
+;;;;;;;;;;;;;;;;;;;;;;
+
+(function generalize (Ctx Type) Scheme)
+(function instantiate (Scheme) Type)
+
+(rule ((has-qs-demand ctx (TInt)))
+      ((has-qs ctx (TInt) (empty))))
+(rule ((has-qs-demand ctx (TBool)))
+      ((has-qs ctx (TBool) (empty))))
+(rule ((has-qs-demand ctx (TUnit)))
+      ((has-qs ctx (TUnit) (empty))))
+
+(rule ((has-qs-demand ctx (TArr fr to)))
+      ((has-qs-demand ctx fr)
+       (has-qs-demand ctx to)))
+(rule ((has-qs-demand ctx (TArr fr to))
+       (has-qs ctx fr qs1)
+       (has-qs ctx to qs2))
+      ((has-qs ctx (TArr fr to) (set-union qs1 qs2))))
+
+(rule ((has-qs-demand ctx (TVar x))
+       (keySet ctx key-set)
+       (= unused (get key-set x)))
+      ((has-qs ctx (TVar x) (empty))))
+(rule ((has-qs-demand ctx (TVar x))
+       (keySet ctx key-set)
+       (not-contains key-set x))
+      ((has-qs ctx (TVar x) (insert (empty) x 1))))
+
+(rule ((= sc (generalize ctx t)))
+      ((has-qs-demand ctx t)))
+(rewrite (generalize ctx t)
+         (Forall qs t)
+         :when ((has-qs ctx t qs)))
+
+(function subst-fresh (QuantifiedVs Type) Type)
+
+(rewrite (subst-fresh vs (TInt)) (TInt))
+(rewrite (subst-fresh vs (TBool)) (TBool))
+(rewrite (subst-fresh vs (TUnit)) (TUnit))
+(rewrite (subst-fresh vs (TArr fr to)) 
+         (TArr (subst-fresh vs fr) (subst-fresh vs to)))
+(rule ((= otype (subst-fresh vs (TVar s)))
+       (= unused (get vs s)))
+      ((union otype (TVar (FreshFromSubst vs s)))))
+(rule ((= otype (subst-fresh vs (TVar s)))
+       (not-contains vs s))
+      ((union otype (TVar s))))
+
+(rewrite (instantiate (Forall vs t))
+         (subst-fresh vs t))
+
+;;;;;;;;;;;;;;;;;;;;;;
+;; Injectivity
+;;;;;;;;;;;;;;;;;;;;;;
+
+(rule ((= (TArr fr1 to1) (TArr fr2 to2)))
+      ((union fr1 fr2) 
+       (union to1 to2)))
+
+;;;;;;;;;;;;;;;;;;;;;;
+;; Type inference
+;;;;;;;;;;;;;;;;;;;;;;
+
+; ctx |- expr : type
+(function typeof (Ctx Expr) Type)
+
+;; Basic types (TInt, TBool, TUnit)
+(rewrite (typeof ctx (Num x)) (TInt))
+(rewrite (typeof ctx (True)) (TBool))
+(rewrite (typeof ctx (False)) (TBool))
+(rewrite (typeof ctx (Unit)) (TUnit))
+
+; sc = lookup(ctx, x)
+; t = instantiate(sc)
+; ---------------
+; ctx |- x : t
+(rewrite (typeof ctx (Var x))
+         (instantiate (lookup ctx x)))
+
+(rewrite 
+  (typeof ctx (Abs x e))
+  (TArr (TVar (FreshFromLam ctx x e)) 
+        (typeof (Cons x (Forall (empty) (TVar (FreshFromLam ctx x e)))
+                      ctx) 
+                e)))
+
+(rule ((= to (typeof ctx (App e1 e2))))
+      ((union (typeof ctx e1) 
+              (TArr (typeof ctx e2) to))))
+
+(rewrite (typeof ctx (Let x e1 e2))
+         (typeof (Cons x (generalize ctx (typeof ctx e1)) 
+                       ctx)
+                 e2))
+
+(define id (Abs "x" (Var "x")))
+(define t-id (typeof (Nil) id))
+
+(define let-poly (Let "id" (Abs "x" (Var "x"))
+                  (App (App (Var "id") (Var "id"))
+                       (App (Var "id") (True)))))
+(define t-let-poly (typeof (Nil) let-poly))
+
+(run 20)
+
+(check (= t-id (TArr (TVar (FreshFromLam (Nil) "x" (Var "x")))
+                     (TVar (FreshFromLam (Nil) "x" (Var "x"))))))
+(check (= t-let-poly (TBool)))
