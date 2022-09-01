@@ -28,15 +28,18 @@ impl<V> Default for UnionFind<V> {
 }
 
 impl<V> UnionFind<V> {
-    pub fn n_unions(&self) -> usize {
-        self.n_unions
-    }
-
     pub fn make_set_with(&mut self, value: V) -> Id {
         let id = Id::from(self.parents.len());
         self.parents.push((id, value));
         id
     }
+
+    /// Clear any state to do with incremental updates to the union-find.
+    pub fn clear_update_state(&mut self) {
+        self.staging_merged.borrow_mut().clear();
+        self.recently_merged.borrow_mut().clear();
+    }
+
     pub fn update(&mut self) {
         mem::swap(&mut self.recently_merged, &mut self.staging_merged);
         self.staging_merged.borrow_mut().clear();
@@ -45,6 +48,10 @@ impl<V> UnionFind<V> {
     pub fn recently_merged(&self) -> Ref<HashSet<Id>> {
         self.recently_merged.borrow()
     }
+
+    /// Why keep this in a RefCell? We want to be able to iterate over these Ids
+    /// while still making modifications to the rest of the union-find
+    /// data-structure.
     pub fn recently_merged_dyn(&self) -> Rc<RefCell<HashSet<Id>>> {
         self.recently_merged.clone()
     }
@@ -60,6 +67,14 @@ impl UnionFind<()> {
         let id = Id::from(value.bits as usize);
         value.bits = usize::from(self.find_mut(id)) as u64;
         value
+    }
+
+    pub fn find_mut_value_with_update(&mut self, mut value: Value) -> (Value, bool /* changed */) {
+        // HACK this is not safe
+        let prev_bits = value.bits;
+        let id = Id::from(value.bits as usize);
+        value.bits = usize::from(self.find_mut(id)) as u64;
+        (value, value.bits != prev_bits)
     }
 
     pub fn union_values(&mut self, value1: Value, value2: Value) -> Value {

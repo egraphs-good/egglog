@@ -34,10 +34,12 @@ use util::*;
 
 use crate::typecheck::TypeError;
 
+type ArgPtrSet = HashSet<Rc<[Value]>>;
+
 #[derive(Default, Clone, Debug)]
 struct FunctionData {
     nodes: HashMap<Rc<[Value]>, Value>,
-    index: HashMap<Id, HashSet<Rc<[Value]>>>,
+    index: HashMap<Id, ArgPtrSet>,
 }
 
 impl FunctionData {
@@ -46,41 +48,19 @@ impl FunctionData {
         schema: &ResolvedSchema,
         vs: Rc<[Value]>,
         ret: &Value,
+        scratch: &mut ScratchData,
     ) {
         for (v, ty) in vs
             .iter()
             .zip(&schema.input)
             .chain(once((ret, &schema.output)))
         {
-            if !ty.is_eq_sort() {
-                continue;
-            }
-            // XXX: Hack
-            let id = Id::from(v.bits as usize);
-            id_index.entry(id).or_default().insert(vs.clone());
-        }
-    }
-    fn remove_from_index(
-        id_index: &mut HashMap<Id, HashSet<Rc<[Value]>>>,
-        schema: &ResolvedSchema,
-        vs: Rc<[Value]>,
-        ret: &Value,
-    ) {
-        for (v, ty) in vs
-            .iter()
-            .zip(&schema.input)
-            .chain(once((ret, &schema.output)))
-        {
-            if !ty.is_eq_sort() {
-                continue;
-            }
-            // XXX: Hack
-            let id = Id::from(v.bits as usize);
-            if let Some(set) = id_index.get_mut(&id) {
-                set.remove(&vs);
-                if set.is_empty() {
-                    id_index.remove(&id);
-                }
+            if ty.is_eq_sort() {
+                let id = Id::from(v.bits as usize);
+                id_index
+                    .entry(id)
+                    .or_insert_with(|| scratch.buckets.pop().unwrap_or_default())
+                    .insert(vs.clone());
             }
         }
     }
@@ -91,7 +71,6 @@ pub struct Function {
     decl: FunctionDecl,
     schema: ResolvedSchema,
     data: FunctionData,
-    scratch_indexes: Vec<Rc<[Value]>>,
 }
 
 #[derive(Clone, Debug)]
@@ -104,7 +83,26 @@ impl Function {
     fn insert_value(&mut self, uf: &mut UnionFind, vs: Rc<[Value]>, ret: Value) -> Option<Value> {
         self.insert_value_maybe_unify(uf, vs, |_, prev| (ret, prev))
     }
-    fn canonicalize_args(&self, uf: &mut UnionFind, vs: Rc<[Value]>) -> Rc<[Value]> {
+
+    fn canonicalize_args(
+        &self,
+        uf: &mut UnionFind,
+        mut vs: Rc<[Value]>,
+    ) -> (Rc<[Value]>, bool /* changed */) {
+        // This method is a bit of a slog thanks to tip-toeing around `Rc`.
+        let mut changed = false;
+        if let Some(to_modify) = Rc::get_mut(&mut vs) {
+            // fast path:
+            for (ty, v) in self.schema.input.iter().zip(to_modify.iter_mut()) {
+                if ty.is_eq_sort() {
+                    let (next, updated) = uf.find_mut_value_with_update(*v);
+                    *v = next;
+                    changed |= updated
+                }
+            }
+            return (vs, changed);
+        }
+        // Slow path, shared access:
         let mut is_canon = true;
         for (ty, v) in self.schema.input.iter().zip(vs.iter()) {
             if ty.is_eq_sort() {
@@ -116,28 +114,43 @@ impl Function {
             }
         }
         if is_canon {
-            return vs;
+            return (vs, false);
         }
-        let mut scratch = Vec::from_iter(vs.iter().copied());
-        for (ty, v) in self.schema.input.iter().zip(scratch.iter_mut()) {
-            if ty.is_eq_sort() {
-                *v = uf.find_mut_value(*v);
-            }
-        }
-        scratch.into()
+
+        // NB: this wastes an allocation. We could use the new_uninit_slice on
+        // nightly to eliminate it.
+        let res: Rc<[Value]> = self
+            .schema
+            .input
+            .iter()
+            .zip(vs.iter().copied())
+            .map(|(ty, v)| {
+                if ty.is_eq_sort() {
+                    uf.find_mut_value(v)
+                } else {
+                    v
+                }
+            })
+            .collect();
+        (res, true)
     }
+
     fn canonicalize(
         &self,
         uf: &mut UnionFind,
         vs: Rc<[Value]>,
         mut ret: Value,
-    ) -> (Rc<[Value]>, Value) {
-        let vs = self.canonicalize_args(uf, vs);
+    ) -> (Rc<[Value]>, Value, bool /* updated */) {
+        let (vs, args_changed) = self.canonicalize_args(uf, vs);
+        let mut ret_changed = false;
         if self.schema.output.is_eq_sort() {
-            ret = uf.find_mut_value(ret);
+            let (next, updated) = uf.find_mut_value_with_update(ret);
+            ret = next;
+            ret_changed = updated;
         }
-        (vs, ret)
+        (vs, ret, ret_changed || args_changed)
     }
+
     fn insert_value_maybe_unify(
         &mut self,
         uf: &mut UnionFind,
@@ -146,51 +159,16 @@ impl Function {
     ) -> Option<Value> {
         if let Some(v) = self.data.nodes.get_mut(&vs) {
             let (to_insert, to_return) = merge(uf, Some(*v));
-            if !self.schema.output.is_eq_sort() {
-                *v = to_insert;
-                return to_return;
-            }
-            // We are removing an eq sort value from the map and replacing
-            // it with a new one. We have to do the same to the index first.
-            // XXX: hack.
-            let id = Id::from(v.bits as usize);
-            let ixs = self
-                .data
-                .index
-                .get_mut(&id)
-                .expect("all return values must be mapped");
-            let _prev = ixs.remove(&vs);
-            debug_assert!(_prev, "all return values should be present in the index");
-            if ixs.is_empty() {
-                self.data.index.remove(&id);
-            }
-            // XXX: hack.
-            let new_id = Id::from(to_insert.bits as usize);
-            self.data
-                .index
-                .entry(new_id)
-                .or_default()
-                .insert(vs.clone());
             *v = to_insert;
             return to_return;
         }
         let (to_insert, to_return) = merge(uf, None);
-        let (canon, ret) = self.canonicalize(uf, vs, to_insert);
-        FunctionData::add_to_index(
-            &mut self.data.index,
-            &self.schema,
-            canon.clone(),
-            &to_insert,
-        );
-        self.data.nodes.insert(canon, ret);
+        self.data.nodes.insert(vs, to_insert);
         to_return
     }
 
     fn remove_value(&mut self, vs: &[Value]) -> Option<Value> {
-        let (vs, prev) = self.data.nodes.remove_entry(vs)?;
-        // First, remove all the mappings for the old entries.
-        FunctionData::remove_from_index(&mut self.data.index, &self.schema, vs, &prev);
-        Some(prev)
+        self.data.nodes.remove(vs)
     }
 
     fn get(&mut self, vs: &[Value]) -> Option<&Value> {
@@ -202,40 +180,129 @@ impl Function {
         self.data.index.clear();
     }
 
-    pub fn rebuild(&mut self, uf: &mut UnionFind) {
-        let mut scratch = mem::take(&mut self.scratch_indexes);
-        // For each Id that has a new root.
+    /// Initialize incremental rebuilding state and run the first round of
+    /// canonicalizations.
+    fn start_rebuild(&mut self, uf: &mut UnionFind, scratch: &mut ScratchData) {
+        scratch.table.clear();
+        mem::swap(&mut self.data.nodes, &mut scratch.table);
+        for (args, ret) in scratch.table.drain() {
+            let (args, ret, _) = self.canonicalize(uf, args, ret);
+            let is_eq = self.schema.output.is_eq_sort();
+            self.insert_value_maybe_unify(uf, args, |uf, prev| {
+                if let Some(prev) = prev {
+                    if is_eq {
+                        (uf.union_values(ret, prev), None)
+                    } else {
+                        (prev, None)
+                    }
+                } else {
+                    (ret, None)
+                }
+            });
+        }
+        self.build_index(scratch);
+    }
+
+    /// Clean up any state around indexes; we don't maintain them outside of a
+    /// rebuild.
+    fn finish_rebuild(&mut self, scratch: &mut ScratchData) {
+        for (_, mut bucket) in self.data.index.drain() {
+            bucket.clear();
+            scratch.buckets.push(bucket);
+        }
+    }
+
+    fn build_index(&mut self, scratch: &mut ScratchData) {
+        for (args, ret) in &self.data.nodes {
+            FunctionData::add_to_index(
+                &mut self.data.index,
+                &self.schema,
+                args.clone(),
+                ret,
+                scratch,
+            );
+        }
+    }
+
+    pub(crate) fn continue_rebuild(&mut self, uf: &mut UnionFind, scratch: &mut ScratchData) {
+        let mut scratch_vals = Vec::new();
+        // Now that we've built our index, iterate only over the Ids that have a new root.
         for id in &*uf.recently_merged_dyn().borrow() {
             // Get all of the argument tuples that mention it.
-            scratch.extend(
+            scratch_vals.extend(
                 self.data
                     .index
                     .get(id)
                     .into_iter()
                     .flat_map(|x| x.iter().cloned()),
             );
-            for vs in scratch.drain(..) {
+            for vs in scratch_vals.drain(..) {
                 // Remove them from the function mapping.
                 let ret = if let Some(ret) = self.remove_value(&vs) {
                     ret
                 } else {
                     continue;
                 };
-                let (vs, ret) = self.canonicalize(uf, vs, ret);
+                let (vs, mut ret, mut changed) = self.canonicalize(uf, vs, ret);
                 let is_eq_output = self.schema.output.is_eq_sort();
                 // Insert them back, unifying the old return value whatever is
                 // already there.
-                self.insert_value_maybe_unify(uf, vs, |uf, prev| {
-                    if let Some(prev) = prev {
+                self.insert_value_maybe_unify(uf, vs.clone(), |uf, prev| {
+                    ret = if let Some(prev) = prev {
                         if is_eq_output {
-                            (uf.union_values(prev, ret), None)
+                            let new = uf.union_values(prev, ret);
+                            changed |= new.bits != ret.bits;
+                            new
                         } else {
-                            (prev, None)
+                            prev
                         }
                     } else {
-                        (ret, None)
-                    }
+                        ret
+                    };
+                    (ret, None)
                 });
+                if changed {
+                    // NB: index is now hanging onto the last pointer to the
+                    // original tuple. That means we may search for it
+                    // spuriously later on when we scan the index. We have
+                    // options here, but removing all ids ends up adding to the
+                    // cost substantially.
+                    FunctionData::add_to_index(
+                        &mut self.data.index,
+                        &self.schema,
+                        vs,
+                        &ret,
+                        scratch,
+                    )
+                }
+            }
+        }
+    }
+
+    // Helpful for debugging
+    #[allow(unused)]
+    fn debug_assert_index_complete(&self) {
+        #[cfg(debug_assertions)]
+        {
+            for (vs, ret) in &self.data.nodes {
+                for (v, ty) in vs
+                    .iter()
+                    .zip(&self.schema.input)
+                    .chain(once((ret, &self.schema.output)))
+                {
+                    if !ty.is_eq_sort() {
+                        continue;
+                    }
+                    let id = Id::from(v.bits as usize);
+                    if let Some(args) = self.data.index.get(&id) {
+                        assert!(
+                            args.contains(vs.as_ref()),
+                            "index for id {id:?} does not contain an entry for {vs:?}=>{ret:?}"
+                        )
+                    } else {
+                        panic!("We have a tuple {vs:?}=>{ret:?} in the function, but the id {id:?} is not mapped");
+                    }
+                }
             }
         }
     }
@@ -316,6 +383,19 @@ impl PrimitiveLike for SimplePrimitive {
     }
 }
 
+#[derive(Default)]
+struct ScratchData {
+    table: HashMap<Rc<[Value]>, Value>,
+    buckets: Vec<ArgPtrSet>,
+}
+
+impl Clone for ScratchData {
+    fn clone(&self) -> Self {
+        // The contents of scratch data do not matter.
+        Self::default()
+    }
+}
+
 #[derive(Clone)]
 pub struct EGraph {
     egraphs: Vec<Self>,
@@ -326,6 +406,7 @@ pub struct EGraph {
     functions: HashMap<Symbol, Function>,
     rules: HashMap<Symbol, Rule>,
     globals: HashMap<Symbol, Value>,
+    scratch_data: ScratchData,
 }
 
 #[derive(Clone, Debug)]
@@ -346,6 +427,7 @@ impl Default for EGraph {
             globals: Default::default(),
             primitives: Default::default(),
             presorts: Default::default(),
+            scratch_data: Default::default(),
         };
         egraph.add_sort(UnitSort::new("Unit".into()));
         egraph.add_sort(StringSort::new("String".into()));
@@ -583,24 +665,32 @@ impl EGraph {
     }
 
     pub fn rebuild(&mut self) -> usize {
+        self.unionfind.clear_update_state();
         let mut updates = 0;
-        loop {
-            let new = self.rebuild_one();
+        for iter in 0.. {
+            let new = self.rebuild_one(iter);
             log::debug!("{new} rebuilds?");
             updates += new;
             if new == 0 {
                 break;
             }
         }
+        self.functions
+            .values_mut()
+            .for_each(|f| f.finish_rebuild(&mut self.scratch_data));
         self.debug_assert_invariants();
         updates
     }
 
-    fn rebuild_one(&mut self) -> usize {
-        self.unionfind.update();
+    fn rebuild_one(&mut self, iter: usize) -> usize {
         for function in self.functions.values_mut() {
-            function.rebuild(&mut self.unionfind);
+            if iter == 0 {
+                function.start_rebuild(&mut self.unionfind, &mut self.scratch_data);
+            } else {
+                function.continue_rebuild(&mut self.unionfind, &mut self.scratch_data);
+            }
         }
+        self.unionfind.update();
         self.unionfind.recently_merged().len()
     }
 
@@ -633,7 +723,6 @@ impl EGraph {
             decl: decl.clone(),
             schema: ResolvedSchema { input, output },
             data: Default::default(),
-            scratch_indexes: Default::default(),
             // TODO figure out merge and default here
         };
 
