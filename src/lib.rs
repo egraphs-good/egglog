@@ -315,7 +315,7 @@ impl EGraph {
                                         .nodes
                                         .insert(values, new_value);
                                 }
-                                _ => panic!("invalid merge"),
+                                _ => panic!("invalid merge for {}", function.decl.name),
                             }
                         }
                     }
@@ -372,7 +372,7 @@ impl EGraph {
                 Expr::Call(sym, args) => {
                     let values: Vec<Value> = args
                         .iter()
-                        .map(|e| self.eval_expr(ctx, e))
+                        .map(|e| self.eval_expr(ctx, e).map(|v| self.bad_find_value(v)))
                         .collect::<Result<_, _>>()?;
                     if let Some(f) = self.functions.get_mut(sym) {
                         // FIXME We don't have a unit value
@@ -531,7 +531,7 @@ impl EGraph {
                                 function.nodes.insert(values, value);
                                 Ok(value)
                             }
-                            _ => panic!("invalid default"),
+                            _ => panic!("invalid default for {:?}", function.decl.name),
                         }
                     }
                 } else if let Some(prims) = self.primitives.get(op) {
