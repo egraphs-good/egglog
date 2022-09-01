@@ -1,6 +1,6 @@
 use num_bigint::BigInt;
 use num_rational::BigRational;
-use num_traits::{One, Pow, Signed, Zero};
+use num_traits::{CheckedDiv, One, Pow, Signed, Zero};
 use std::sync::Mutex;
 
 use crate::{ast::Literal, util::IndexSet};
@@ -42,11 +42,7 @@ impl Sort for RationalSort {
         add_primitives!(eg, "-" = |a: R, b: R| -> R { a - b });
         add_primitives!(eg, "*" = |a: R, b: R| -> R { a * b });
         add_primitives!(eg, "/" = |a: R, b: R| -> Option<R> {
-            if !b.is_zero() {
-                Some(a / b)
-            } else {
-                None
-            }
+            a.checked_div(&b)
         });
         add_primitives!(eg, "min" = |a: R, b: R| -> R { a.min(b) });
         add_primitives!(eg, "max" = |a: R, b: R| -> R { a.max(b) });
@@ -76,7 +72,7 @@ impl Sort for RationalSort {
             if a.is_one() {
                 Some(R::zero())
             } else {
-                None
+                todo!()
             }
         });
         add_primitives!(eg, "sqrt" = |a: R| -> Option<R> {
@@ -97,7 +93,7 @@ impl Sort for RationalSort {
             if a.is_one() {
                 Some(R::one())
             } else {
-                None
+                todo!()
             }
         });
 
