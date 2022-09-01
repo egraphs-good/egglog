@@ -70,10 +70,6 @@
 (rewrite (Mul a b) (Mul b a))
 (rewrite (Add a (Add b c)) (Add (Add a b) c))
 (rewrite (Mul a (Mul b c)) (Mul (Mul a b) c))
-;; These two rules are not present in the original egg tests,
-;; but are necessary for the last check
-(rewrite (Add (Add a b) c) (Add a (Add b c)))
-(rewrite (Mul (Mul a b) c) (Mul a (Mul b c)))
 
 (rewrite (Sub a b) (Add a (Mul (Const (rational -1 1)) b)))
 (rewrite (Div a b) (Mul a (Pow b (Const (rational -1 1)))) :when ((is-not-zero b)))
@@ -82,9 +78,9 @@
 (rewrite (Mul a (Const (rational 0 1))) (Const (rational 0 1)))
 (rewrite (Mul a (Const (rational 1 1))) a)
 
-;; These two rules can make the first goal time out
-;; (rule ((MathU a)) ((union a (Add a (Const (rational 0 1))))))
-;; (rule ((MathU a)) ((union a (Mul a (Const (rational 1 1))))))
+;; NOTE: these two rules are different from math.rs, as math.rs does pruning
+(rule ((MathU a) (!= a (Const (rational 0 1)))) ((union a (Add a (Const (rational 0 1))))))
+(rule ((MathU a) (!= a (Const (rational 1 1)))) ((union a (Mul a (Const (rational 1 1))))))
 
 (rewrite (Sub a a) (Const (rational 0 1)))
 (rewrite (Div a a) (Const (rational 1 1)) :when ((is-not-zero a)))
@@ -169,7 +165,7 @@
 ;; math_simplify_factor
 (define start-expr (Mul (Add (Var "x") (Const (rational 3 1)))
                         (Add (Var "x") (Const (rational 1 1)))))
-(run 7)
+(run 8)
 (define end-expr (Add (Add (Mul (Var "x") (Var "x"))
                            (Mul (Const (rational 4 1)) (Var "x")))
                            (Const (rational 3 1))))
