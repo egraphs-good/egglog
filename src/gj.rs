@@ -354,6 +354,8 @@ impl EGraph {
             }
         }
 
+        log::debug!("vars: [{}]", ListDisplay(vars.keys(), ", "));
+
         CompiledQuery {
             atoms,
             vars,

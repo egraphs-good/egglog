@@ -10,6 +10,4 @@ pkg/
 flamegraph.svg
 perf.data*
 
-tests/_scratch.egg
-
-**/.DS_Store
+_scratch.egg
