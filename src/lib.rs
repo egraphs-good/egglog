@@ -149,6 +149,7 @@ impl PrimitiveLike for SimplePrimitive {
 
 #[derive(Clone)]
 pub struct EGraph {
+    egraphs: Vec<Self>,
     unionfind: UnionFind,
     presorts: HashMap<Symbol, PreSort>,
     sorts: HashMap<Symbol, Arc<dyn Sort>>,
@@ -168,6 +169,7 @@ struct Rule {
 impl Default for EGraph {
     fn default() -> Self {
         let mut egraph = Self {
+            egraphs: vec![],
             unionfind: Default::default(),
             sorts: Default::default(),
             functions: Default::default(),
@@ -192,6 +194,20 @@ pub struct NotFoundError(Expr);
 impl EGraph {
     pub fn add_sort<S: Sort + 'static>(&mut self, sort: S) {
         self.add_arcsort(Arc::new(sort));
+    }
+
+    pub fn push(&mut self) {
+        self.egraphs.push(self.clone());
+    }
+
+    pub fn pop(&mut self) -> Result<(), Error> {
+        match self.egraphs.pop() {
+            Some(e) => {
+                *self = e;
+                Ok(())
+            }
+            None => Err(Error::Pop),
+        }
     }
 
     pub fn add_arcsort(&mut self, sort: ArcSort) {
@@ -822,6 +838,16 @@ impl EGraph {
                 }
                 "Cleared.".into()
             }
+            Command::Push(n) => {
+                (0..n).for_each(|_| self.push());
+                format!("Pushed {n} levels.")
+            }
+            Command::Pop(n) => {
+                for _ in 0..n {
+                    self.pop()?;
+                }
+                format!("Popped {n} levels.")
+            }
         })
     }
 
@@ -870,4 +896,6 @@ pub enum Error {
     CheckError(Value, Value),
     #[error("Sort {0} already declared.")]
     SortAlreadyBound(Symbol),
+    #[error("Tried to pop too much")]
+    Pop,
 }

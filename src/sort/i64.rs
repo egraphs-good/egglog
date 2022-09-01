@@ -41,6 +41,9 @@ impl Sort for I64Sort {
 
         add_primitives!(eg, "<" = |a: i64, b: i64| -> Opt { (a < b).then(|| ()) }); 
         add_primitives!(eg, ">" = |a: i64, b: i64| -> Opt { (a > b).then(|| ()) }); 
+
+        add_primitives!(eg, "min" = |a: i64, b: i64| -> i64 { a.min(b) }); 
+        add_primitives!(eg, "max" = |a: i64, b: i64| -> i64 { a.max(b) });
     }
 
     fn make_expr(&self, value: Value) -> Expr {
