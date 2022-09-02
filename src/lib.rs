@@ -38,7 +38,7 @@ type ArgPtrSet = HashSet<Rc<[Value]>>;
 
 #[derive(Default, Clone, Debug)]
 struct FunctionData {
-    nodes: HashMap<Rc<[Value]>, Value>,
+    nodes: IndexMap<Rc<[Value]>, Value>,
     index: HashMap<Id, ArgPtrSet>,
 }
 
@@ -185,7 +185,7 @@ impl Function {
     fn start_rebuild(&mut self, uf: &mut UnionFind, scratch: &mut ScratchData) {
         scratch.table.clear();
         mem::swap(&mut self.data.nodes, &mut scratch.table);
-        for (args, ret) in scratch.table.drain() {
+        for (args, ret) in scratch.table.drain(..) {
             let (args, ret, _) = self.canonicalize(uf, args, ret);
             let is_eq = self.schema.output.is_eq_sort();
             self.insert_value_maybe_unify(uf, args, |uf, prev| {
@@ -385,7 +385,7 @@ impl PrimitiveLike for SimplePrimitive {
 
 #[derive(Default)]
 struct ScratchData {
-    table: HashMap<Rc<[Value]>, Value>,
+    table: IndexMap<Rc<[Value]>, Value>,
     buckets: Vec<ArgPtrSet>,
 }
 
