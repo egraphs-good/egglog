@@ -1,8 +1,8 @@
-use num_bigint::BigInt;
-use num_rational::BigRational;
-use num_traits::{CheckedDiv, One, Pow, Signed, Zero};
+use num_integer::Roots;
+use num_traits::{CheckedDiv, One, Signed, ToPrimitive, Zero, CheckedAdd, CheckedSub, CheckedMul};
 use std::sync::Mutex;
 
+type R = num_rational::Rational64;
 use crate::{ast::Literal, util::IndexSet};
 
 use super::*;
@@ -10,7 +10,7 @@ use super::*;
 #[derive(Debug)]
 pub struct RationalSort {
     name: Symbol,
-    rats: Mutex<IndexSet<BigRational>>,
+    rats: Mutex<IndexSet<R>>,
 }
 
 impl RationalSort {
@@ -33,17 +33,15 @@ impl Sort for RationalSort {
 
     #[rustfmt::skip]
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
-        type R = BigRational;
         type Opt<T=()> = Option<T>;
 
         // TODO we can't have primitives take borrows just yet, since it
         // requires returning a reference to the locked sort
-        add_primitives!(eg, "+" = |a: R, b: R| -> R { a + b });
-        add_primitives!(eg, "-" = |a: R, b: R| -> R { a - b });
-        add_primitives!(eg, "*" = |a: R, b: R| -> R { a * b });
-        add_primitives!(eg, "/" = |a: R, b: R| -> Option<R> {
-            a.checked_div(&b)
-        });
+        add_primitives!(eg, "+" = |a: R, b: R| -> Opt<R> { a.checked_add(&b) });
+        add_primitives!(eg, "-" = |a: R, b: R| -> Opt<R> { a.checked_sub(&b) });
+        add_primitives!(eg, "*" = |a: R, b: R| -> Opt<R> { a.checked_mul(&b) });
+        add_primitives!(eg, "/" = |a: R, b: R| -> Opt<R> { a.checked_div(&b) });
+
         add_primitives!(eg, "min" = |a: R, b: R| -> R { a.min(b) });
         add_primitives!(eg, "max" = |a: R, b: R| -> R { a.max(b) });
         add_primitives!(eg, "neg" = |a: R| -> R { -a });
@@ -51,7 +49,7 @@ impl Sort for RationalSort {
         add_primitives!(eg, "floor" = |a: R| -> R { a.floor() });
         add_primitives!(eg, "ceil" = |a: R| -> R { a.ceil() });
         add_primitives!(eg, "round" = |a: R| -> R { a.round() });
-        add_primitives!(eg, "rational" = |a: i64, b: i64| -> R { R::new(a.into(), b.into()) });
+        add_primitives!(eg, "rational" = |a: i64, b: i64| -> R { R::new(a, b) });
 
         add_primitives!(eg, "pow" = |a: R, b: R| -> Option<R> {
             if a.is_zero() {
@@ -62,8 +60,13 @@ impl Sort for RationalSort {
                 }
             } else if b.is_zero() {
                 Some(R::one())
-            } else if b.is_integer() {
-                Some(Pow::pow(a, b.to_integer()))
+            } else if let Some(b) = b.to_i64() { 
+                if let Ok(b) = usize::try_from(b) {
+                    num_traits::checked_pow(a, b)
+                } else {
+                    // TODO handle negative powers
+                    None
+                }
             } else {
                 None
             }
@@ -76,10 +79,10 @@ impl Sort for RationalSort {
             }
         });
         add_primitives!(eg, "sqrt" = |a: R| -> Option<R> {
-            if *a.numer() > BigInt::from(0) && *a.denom() > BigInt::from(0) {
+            if a.numer().is_positive() && a.denom().is_positive() {
                 let s1 = a.numer().sqrt();
                 let s2 = a.denom().sqrt();
-                let is_perfect = &(&s1 * &s1) == a.numer() && &(&s2 * &s2) == a.denom();
+                let is_perfect = &(s1 * s1) == a.numer() && &(s2 * s2) == a.denom();
                 if is_perfect {
                     Some(R::new(s1, s2))
                 } else {
@@ -102,9 +105,9 @@ impl Sort for RationalSort {
     }
     fn make_expr(&self, value: Value) -> Expr {
         assert!(value.tag == self.name());
-        let rat = BigRational::load(self, &value);
-        let numer = i64::try_from(rat.numer()).unwrap();
-        let denom = i64::try_from(rat.denom()).unwrap();
+        let rat = R::load(self, &value);
+        let numer = *rat.numer();
+        let denom = *rat.denom();
         Expr::call(
             "rational",
             vec![
@@ -115,15 +118,15 @@ impl Sort for RationalSort {
     }
 }
 
-impl FromSort for BigRational {
+impl FromSort for R {
     type Sort = RationalSort;
     fn load(sort: &Self::Sort, value: &Value) -> Self {
         let i = value.bits as usize;
-        sort.rats.lock().unwrap().get_index(i).unwrap().clone()
+        *sort.rats.lock().unwrap().get_index(i).unwrap()
     }
 }
 
-impl IntoSort for BigRational {
+impl IntoSort for R {
     type Sort = RationalSort;
     fn store(self, sort: &Self::Sort) -> Option<Value> {
         let (i, _) = sort.rats.lock().unwrap().insert_full(self);
