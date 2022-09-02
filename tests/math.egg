@@ -129,6 +129,7 @@
               (Integral (Mul (Diff x a) (Integral b x)) x)))
 
 ;; math_simplify_root
+(push)
 (define start-expr
     (Div (Const (rational 1 1))
          (Sub (Div (Add (Const (rational 1 1))
@@ -137,18 +138,15 @@
               (Div (Sub (Const (rational 1 1))
                         (Sqrt (Var "five")))
                    (Const (rational 2 1))))))
-
 (run 11)
-
 (define end-expr
     (Div (Const (rational 1 1))
          (Sqrt (Var "five"))))
-
 (check (= start-expr end-expr))
-
-(clear)
+(pop)
 
 ;; math_simplify_const
+(push)
 (define start-expr (Add (Const (rational 1 1))
                         (Sub (Var "a") 
                              (Mul (Sub (Const (rational 2 1)) 
@@ -159,10 +157,10 @@
 
 (define end-expr (Const (rational 1 1)))
 (check (= start-expr end-expr))
-
-(clear)
+(pop)
 
 ;; math_simplify_factor
+(push)
 (define start-expr (Mul (Add (Var "x") (Const (rational 3 1)))
                         (Add (Var "x") (Const (rational 1 1)))))
 (run 8)
@@ -170,5 +168,4 @@
                            (Mul (Const (rational 4 1)) (Var "x")))
                            (Const (rational 3 1))))
 (check (= start-expr end-expr))
-
-(clear)
+(pop)

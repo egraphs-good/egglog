@@ -310,7 +310,20 @@ impl EGraph {
             assert!(!info.occurences.is_empty(), "var {} has no occurences", v);
         }
 
-        vars.sort_by(|_v1, i1, _v2, i2| i2.occurences.len().cmp(&i1.occurences.len()));
+        let has_constant = |info: &VarInfo| {
+            info.occurences.iter().any(|&i| {
+                if let Atom::Func(f, _) = &atoms[i] {
+                    self.functions[f].schema.input.is_empty()
+                } else {
+                    false
+                }
+            })
+        };
+        vars.sort_by(|_v1, i1, _v2, i2| {
+            let constant = has_constant(i1).cmp(&has_constant(i2));
+            let len = i1.occurences.len().cmp(&i2.occurences.len());
+            constant.then(len).reverse()
+        });
 
         let mut program: Vec<Instr> = vars
             .iter()

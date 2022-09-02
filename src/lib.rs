@@ -156,7 +156,6 @@ pub struct EGraph {
     primitives: HashMap<Symbol, Vec<Primitive>>,
     functions: HashMap<Symbol, Function>,
     rules: HashMap<Symbol, Rule>,
-    globals: HashMap<Symbol, Value>,
 }
 
 #[derive(Clone, Debug)]
@@ -164,6 +163,7 @@ struct Rule {
     query: CompiledQuery,
     bindings: Bindings,
     head: Vec<Action>,
+    matches: usize,
 }
 
 impl Default for EGraph {
@@ -174,7 +174,6 @@ impl Default for EGraph {
             sorts: Default::default(),
             functions: Default::default(),
             rules: Default::default(),
-            globals: Default::default(),
             primitives: Default::default(),
             presorts: Default::default(),
         };
@@ -294,8 +293,9 @@ impl EGraph {
                         let value = self.eval_expr(ctx, e)?;
                         ctx.insert(*x, value);
                     } else {
-                        let value = self.eval_expr(&default, e)?;
-                        self.globals.insert(*x, value);
+                        unreachable!("Global define should be handled elsewhere");
+                        // let value = self.eval_expr(&default, e)?;
+                        // self.globals.insert(*x, value);
                     }
                 }
                 Action::Set(f, args, e) => {
@@ -513,11 +513,24 @@ impl EGraph {
     pub fn eval_expr(&mut self, ctx: &Subst, expr: &Expr) -> Result<Value, NotFoundError> {
         match expr {
             // TODO should we canonicalize here?
-            Expr::Var(var) => Ok(ctx
-                .get(var)
-                .or_else(|| self.globals.get(var))
-                .cloned()
-                .unwrap_or_else(|| panic!("Couldn't find variable '{var}'"))),
+            Expr::Var(var) => {
+                if let Some(value) = ctx.get(var) {
+                    Ok(*value)
+                } else if let Some(f) = self.functions.get(var) {
+                    assert!(f.schema.input.is_empty());
+                    f.nodes
+                        .get(&vec![])
+                        .copied()
+                        .ok_or_else(|| NotFoundError(expr.clone()))
+                } else {
+                    Err(NotFoundError(expr.clone()))
+                }
+            }
+            // Ok(ctx
+            //     .get(var)
+            //     .or_else(|| self.globals.get(var))
+            //     .cloned()
+            //     .unwrap_or_else(|| panic!("Couldn't find variable '{var}'"))),
             Expr::Lit(lit) => Ok(self.eval_lit(lit)),
             Expr::Call(op, args) => {
                 let mut values = Vec::with_capacity(args.len());
@@ -640,11 +653,17 @@ impl EGraph {
         let search_elapsed = search_start.elapsed();
 
         let apply_start = Instant::now();
-        let rules = std::mem::take(&mut self.rules);
-        for (rule, all_values) in rules.values().zip(searched) {
+        let mut rules = std::mem::take(&mut self.rules);
+        'outer: for ((name, rule), all_values) in rules.iter_mut().zip(searched) {
             let n = rule.query.vars.len();
             for values in all_values.chunks(n) {
+                rule.matches += 1;
+                if rule.matches > 10000 {
+                    log::warn!("Rule {} has matched {} times, bailing!", name, rule.matches);
+                    break 'outer;
+                }
                 let subst = make_subst(rule, values);
+                log::trace!("Applying with {subst:?}");
                 let _result: Result<_, _> = self.eval_actions(Some(subst), &rule.head);
             }
         }
@@ -662,6 +681,7 @@ impl EGraph {
             query,
             bindings,
             head: rule.head,
+            matches: 0,
         };
         match self.rules.entry(name) {
             Entry::Occupied(_) => panic!("Rule '{name}' was already present"),
@@ -796,9 +816,20 @@ impl EGraph {
             Command::Define(name, expr) => {
                 if should_run {
                     let value = self.eval_closed_expr(&expr)?;
-                    let old = self.globals.insert(name, value);
-                    assert!(old.is_none());
-                    format!("Defined {name}")
+                    let sort = self.sorts[&value.tag].clone();
+                    self.declare_function(&FunctionDecl {
+                        name,
+                        schema: Schema {
+                            input: vec![],
+                            output: value.tag,
+                        },
+                        default: None,
+                        merge: None,
+                    })?;
+
+                    let f = self.functions.get_mut(&name).unwrap();
+                    f.nodes.insert(vec![], value);
+                    format!("Defined {name}: {sort:?}")
                 } else {
                     format!("Skipping define {name}")
                 }

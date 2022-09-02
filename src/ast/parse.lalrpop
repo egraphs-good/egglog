@@ -42,7 +42,10 @@ Command: Command = {
     "(" "rewrite" <lhs:Expr> <rhs:Expr>
         <conditions:(":when" <List<Fact>>)?>
     ")" => Command::Rewrite(Rewrite { lhs, rhs, conditions: conditions.unwrap_or_default() }),
-    <Action> => Command::Action(<>),
+    <Action> => match <> {
+        Action::Define(name, expr) => Command::Define(name, expr),
+        a => Command::Action(a),
+    },
     "(" "run" <UNum> ")" => Command::Run(<>),
     "(" "extract" <e:Expr> ")" => Command::Extract { <>, variants: 0 },
     "(" "extract" ":variants" <variants:Num> <e:Expr> ")" => Command::Extract { 

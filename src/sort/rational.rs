@@ -1,5 +1,5 @@
 use num_integer::Roots;
-use num_traits::{CheckedDiv, One, Signed, ToPrimitive, Zero, CheckedAdd, CheckedSub, CheckedMul};
+use num_traits::{CheckedAdd, CheckedDiv, CheckedMul, CheckedSub, One, Signed, ToPrimitive, Zero};
 use std::sync::Mutex;
 
 type R = num_rational::Rational64;
@@ -60,7 +60,7 @@ impl Sort for RationalSort {
                 }
             } else if b.is_zero() {
                 Some(R::one())
-            } else if let Some(b) = b.to_i64() { 
+            } else if let Some(b) = b.to_i64() {
                 if let Ok(b) = usize::try_from(b) {
                     num_traits::checked_pow(a, b)
                 } else {
