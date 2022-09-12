@@ -5,7 +5,7 @@ TESTS=$(shell find tests/ -type f -name '*.egg')
 
 WWW=${PWD}/target/www/
 
-WEB_SRC=web-demo/index.html web-demo/worker.js
+WEB_SRC=$(wildcard web-demo/static/*)
 
 WASM=web_demo.js web_demo_bg.wasm
 DIST_WASM=$(addprefix ${WWW}, ${WASM})
@@ -14,7 +14,7 @@ all: test web
 
 test:
 	cargo test
-	cargo clippy --tests
+	cargo clippy --tests -- -D warnings
 	cargo fmt --check
 
 web: ${DIST_WASM} ${WEB_SRC} ${WWW}/examples.json

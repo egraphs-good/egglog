@@ -42,8 +42,11 @@ Command: Command = {
     "(" "rewrite" <lhs:Expr> <rhs:Expr>
         <conditions:(":when" <List<Fact>>)?>
     ")" => Command::Rewrite(Rewrite { lhs, rhs, conditions: conditions.unwrap_or_default() }),
-    <Action> => Command::Action(<>),
-    "(" "run" <Num> ")" => Command::Run(<>.try_into().unwrap()),
+    <Action> => match <> {
+        Action::Define(name, expr) => Command::Define(name, expr),
+        a => Command::Action(a),
+    },
+    "(" "run" <UNum> ")" => Command::Run(<>),
     "(" "extract" <e:Expr> ")" => Command::Extract { <>, variants: 0 },
     "(" "extract" ":variants" <variants:Num> <e:Expr> ")" => Command::Extract { 
         e, variants: variants.try_into().unwrap()
@@ -52,6 +55,8 @@ Command: Command = {
     "(" "clear-rules" ")" => Command::ClearRules,
     "(" "clear" ")" => Command::Clear,
     "(" "query" <List<Fact>> ")" => Command::Query(<>),
+    "(" "push" <UNum?> ")" => Command::Push(<>.unwrap_or(1)),
+    "(" "pop" <UNum?> ")" => Command::Pop(<>.unwrap_or(1)),
 }
 
 Action: Action = {
@@ -103,6 +108,9 @@ Variant: Variant = {
 Type: Symbol = <Ident>;
 
 Num: i64 = <s:r"(-)?[0-9]+"> => s.parse().unwrap();
+UNum: usize = {
+    <Num> => <>.try_into().unwrap(),
+}
 Bool: bool = {
     "true" => true,
     "false" => false,

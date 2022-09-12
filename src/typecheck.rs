@@ -176,7 +176,7 @@ impl<'a> Context<'a> {
         }
     }
 
-    fn typecheck_fact(&mut self, fact: &'a Fact) {
+    fn typecheck_fact(&mut self, fact: &Fact) {
         match fact {
             Fact::Eq(exprs) => {
                 let mut later = vec![];
@@ -189,7 +189,12 @@ impl<'a> Context<'a> {
                         }
                         // This is a variable the we couldn't infer the type of,
                         // so we'll try again later when we can check its type
-                        (Expr::Var(v), None) if !self.types.contains_key(v) => later.push(expr),
+                        (Expr::Var(v), None)
+                            if !self.types.contains_key(v)
+                                && !self.egraph.functions.contains_key(v) =>
+                        {
+                            later.push(expr)
+                        }
                         (_, None) => match self.infer_query_expr(expr) {
                             (_, None) => (),
                             (id, Some(t)) => {
@@ -218,7 +223,7 @@ impl<'a> Context<'a> {
         }
     }
 
-    fn check_query_expr(&mut self, expr: &'a Expr, expected: ArcSort) -> Id {
+    fn check_query_expr(&mut self, expr: &Expr, expected: ArcSort) -> Id {
         if let Expr::Var(sym) = expr {
             match self.types.entry(*sym) {
                 Entry::Occupied(ty) => {
@@ -254,10 +259,13 @@ impl<'a> Context<'a> {
         }
     }
 
-    fn infer_query_expr(&mut self, expr: &'a Expr) -> (Id, Option<ArcSort>) {
+    fn infer_query_expr(&mut self, expr: &Expr) -> (Id, Option<ArcSort>) {
         match expr {
             // TODO handle global variables
             Expr::Var(sym) => {
+                if self.egraph.functions.contains_key(sym) {
+                    return self.infer_query_expr(&Expr::call(*sym, []));
+                }
                 let ty = if let Some(ty) = self.types.get(sym) {
                     Some(ty.clone())
                 } else {
@@ -269,7 +277,7 @@ impl<'a> Context<'a> {
             Expr::Lit(lit) => {
                 let t = match lit {
                     Literal::Int(_) => self.egraph.sorts.get(&"i64".into()),
-                    Literal::String(_) => todo!(),
+                    Literal::String(_) => self.egraph.sorts.get(&"String".into()),
                     Literal::Unit => self.egraph.sorts.get(&"Unit".into()),
                 };
                 (self.add_node(ENode::Literal(lit.clone())), t.cloned())

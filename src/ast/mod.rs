@@ -61,6 +61,8 @@ pub enum Command {
     ClearRules,
     Clear,
     Query(Vec<Fact>),
+    Push(usize),
+    Pop(usize),
 }
 
 #[derive(Clone, Debug)]

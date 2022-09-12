@@ -54,6 +54,15 @@ impl Sort for MapSort {
         });
         egraph.add_primitive(Get {
             name: "get".into(),
+            map: self.clone(),
+        });
+        egraph.add_primitive(NotContains {
+            name: "not-contains".into(),
+            map: self.clone(),
+            unit: egraph.get_sort(),
+        });
+        egraph.add_primitive(Union {
+            name: "set-union".into(),
             map: self,
         });
     }
@@ -164,5 +173,63 @@ impl PrimitiveLike for Get {
     fn apply(&self, values: &[Value]) -> Option<Value> {
         let map = ValueMap::load(&self.map, &values[0]);
         map.get(&values[1]).copied()
+    }
+}
+
+struct NotContains {
+    name: Symbol,
+    map: Arc<MapSort>,
+    unit: Arc<UnitSort>,
+}
+
+impl PrimitiveLike for NotContains {
+    fn name(&self) -> Symbol {
+        self.name
+    }
+
+    fn accept(&self, types: &[&dyn Sort]) -> Option<ArcSort> {
+        match types {
+            [map, key] if (map.name(), key.name()) == (self.map.name, self.map.key.name()) => {
+                Some(self.unit.clone())
+            }
+            _ => None,
+        }
+    }
+
+    fn apply(&self, values: &[Value]) -> Option<Value> {
+        let map = ValueMap::load(&self.map, &values[0]);
+        if map.contains_key(&values[1]) {
+            None
+        } else {
+            Some(Value::unit())
+        }
+    }
+}
+
+struct Union {
+    name: Symbol,
+    map: Arc<MapSort>,
+}
+
+impl PrimitiveLike for Union {
+    fn name(&self) -> Symbol {
+        self.name
+    }
+
+    fn accept(&self, types: &[&dyn Sort]) -> Option<ArcSort> {
+        match types {
+            [map1, map2] if map1.name() == self.map.name && map2.name() == self.map.name() => {
+                Some(self.map.clone())
+            }
+            _ => None,
+        }
+    }
+
+    fn apply(&self, values: &[Value]) -> Option<Value> {
+        let mut map1 = ValueMap::load(&self.map, &values[0]);
+        let map2 = ValueMap::load(&self.map, &values[0]);
+        map1.extend(map2.iter());
+        // map.insert(values[1], values[2]);
+        map1.store(&self.map)
     }
 }

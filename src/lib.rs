@@ -8,6 +8,7 @@ mod util;
 mod value;
 
 use hashbrown::hash_map::Entry;
+use instant::{Duration, Instant};
 use sort::*;
 use thiserror::Error;
 
@@ -148,13 +149,13 @@ impl PrimitiveLike for SimplePrimitive {
 
 #[derive(Clone)]
 pub struct EGraph {
+    egraphs: Vec<Self>,
     unionfind: UnionFind,
     presorts: HashMap<Symbol, PreSort>,
     sorts: HashMap<Symbol, Arc<dyn Sort>>,
     primitives: HashMap<Symbol, Vec<Primitive>>,
     functions: HashMap<Symbol, Function>,
     rules: HashMap<Symbol, Rule>,
-    globals: HashMap<Symbol, Value>,
 }
 
 #[derive(Clone, Debug)]
@@ -162,16 +163,17 @@ struct Rule {
     query: CompiledQuery,
     bindings: Bindings,
     head: Vec<Action>,
+    matches: usize,
 }
 
 impl Default for EGraph {
     fn default() -> Self {
         let mut egraph = Self {
+            egraphs: vec![],
             unionfind: Default::default(),
             sorts: Default::default(),
             functions: Default::default(),
             rules: Default::default(),
-            globals: Default::default(),
             primitives: Default::default(),
             presorts: Default::default(),
         };
@@ -191,6 +193,20 @@ pub struct NotFoundError(Expr);
 impl EGraph {
     pub fn add_sort<S: Sort + 'static>(&mut self, sort: S) {
         self.add_arcsort(Arc::new(sort));
+    }
+
+    pub fn push(&mut self) {
+        self.egraphs.push(self.clone());
+    }
+
+    pub fn pop(&mut self) -> Result<(), Error> {
+        match self.egraphs.pop() {
+            Some(e) => {
+                *self = e;
+                Ok(())
+            }
+            None => Err(Error::Pop),
+        }
     }
 
     pub fn add_arcsort(&mut self, sort: ArcSort) {
@@ -277,8 +293,9 @@ impl EGraph {
                         let value = self.eval_expr(ctx, e)?;
                         ctx.insert(*x, value);
                     } else {
-                        let value = self.eval_expr(&default, e)?;
-                        self.globals.insert(*x, value);
+                        unreachable!("Global define should be handled elsewhere");
+                        // let value = self.eval_expr(&default, e)?;
+                        // self.globals.insert(*x, value);
                     }
                 }
                 Action::Set(f, args, e) => {
@@ -314,7 +331,7 @@ impl EGraph {
                                         .nodes
                                         .insert(values, new_value);
                                 }
-                                _ => panic!("invalid merge"),
+                                _ => panic!("invalid merge for {}", function.decl.name),
                             }
                         }
                     }
@@ -371,7 +388,7 @@ impl EGraph {
                 Expr::Call(sym, args) => {
                     let values: Vec<Value> = args
                         .iter()
-                        .map(|e| self.eval_expr(ctx, e))
+                        .map(|e| self.eval_expr(ctx, e).map(|v| self.bad_find_value(v)))
                         .collect::<Result<_, _>>()?;
                     if let Some(f) = self.functions.get_mut(sym) {
                         // FIXME We don't have a unit value
@@ -496,17 +513,30 @@ impl EGraph {
     pub fn eval_expr(&mut self, ctx: &Subst, expr: &Expr) -> Result<Value, NotFoundError> {
         match expr {
             // TODO should we canonicalize here?
-            Expr::Var(var) => Ok(ctx
-                .get(var)
-                .or_else(|| self.globals.get(var))
-                .cloned()
-                .unwrap_or_else(|| panic!("Couldn't find variable '{var}'"))),
+            Expr::Var(var) => {
+                if let Some(value) = ctx.get(var) {
+                    Ok(*value)
+                } else if let Some(f) = self.functions.get(var) {
+                    assert!(f.schema.input.is_empty());
+                    f.nodes
+                        .get(&vec![])
+                        .copied()
+                        .ok_or_else(|| NotFoundError(expr.clone()))
+                } else {
+                    Err(NotFoundError(expr.clone()))
+                }
+            }
+            // Ok(ctx
+            //     .get(var)
+            //     .or_else(|| self.globals.get(var))
+            //     .cloned()
+            //     .unwrap_or_else(|| panic!("Couldn't find variable '{var}'"))),
             Expr::Lit(lit) => Ok(self.eval_lit(lit)),
             Expr::Call(op, args) => {
-                let values: Vec<Value> = args
-                    .iter()
-                    .map(|a| self.eval_expr(ctx, a))
-                    .collect::<Result<_, _>>()?;
+                let mut values = Vec::with_capacity(args.len());
+                for arg in args {
+                    values.push(self.eval_expr(ctx, arg)?);
+                }
                 if let Some(function) = self.functions.get_mut(op) {
                     if let Some(value) = function.nodes.get(&values) {
                         Ok(*value)
@@ -530,7 +560,7 @@ impl EGraph {
                                 function.nodes.insert(values, value);
                                 Ok(value)
                             }
-                            _ => panic!("invalid default"),
+                            _ => panic!("invalid default for {:?}", function.decl.name),
                         }
                     }
                 } else if let Some(prims) = self.primitives.get(op) {
@@ -561,11 +591,19 @@ impl EGraph {
         self.eval_expr(&Default::default(), expr)
     }
 
-    pub fn run_rules(&mut self, limit: usize) {
+    pub fn run_rules(&mut self, limit: usize) -> [Duration; 3] {
+        let mut search_time = Duration::default();
+        let mut apply_time = Duration::default();
+        let mut rebuild_time = Duration::default();
         for _ in 0..limit {
-            self.step_rules();
+            let [st, at] = self.step_rules();
+            search_time += st;
+            apply_time += at;
+
+            let rebuild_start = Instant::now();
             let updates = self.rebuild();
             log::debug!("Made {updates} updates",);
+            rebuild_time += rebuild_start.elapsed();
             // if updates == 0 {
             //     log::debug!("Breaking early!");
             //     break;
@@ -579,46 +617,59 @@ impl EGraph {
                 log::debug!("  {args:?} = {val:?}");
             }
         }
+        [search_time, apply_time, rebuild_time]
     }
 
-    fn step_rules(&mut self) {
-        let searched: Vec<_> = self
-            .rules
-            .values()
-            .map(|rule| {
-                // dbg!(&rule);
-                let mut substs = Vec::<Subst>::new();
-                self.run_query(&rule.query, |values| {
-                    substs.push(
-                        rule.bindings
-                            .iter()
-                            .map(|(k, t)| {
-                                let val = match t {
-                                    AtomTerm::Var(sym) => {
-                                        let i = rule.query.vars.get_index_of(sym).unwrap_or_else(
-                                            || panic!("Couldn't find variable '{sym}'"),
-                                        );
-                                        values[i]
-                                    }
-                                    AtomTerm::Value(val) => *val,
-                                };
-                                (*k, val)
-                            })
-                            .collect(),
-                    )
-                });
-                substs
-            })
-            .collect();
+    fn step_rules(&mut self) -> [Duration; 2] {
+        fn make_subst(rule: &Rule, values: &[Value]) -> Subst {
+            let get_val = |t: &AtomTerm| match t {
+                AtomTerm::Var(sym) => {
+                    let i = rule
+                        .query
+                        .vars
+                        .get_index_of(sym)
+                        .unwrap_or_else(|| panic!("Couldn't find variable '{sym}'"));
+                    values[i]
+                }
+                AtomTerm::Value(val) => *val,
+            };
 
-        let rules = std::mem::take(&mut self.rules);
-        for (rule, substs) in rules.values().zip(searched) {
-            for subst in substs {
-                // we ignore the result here because rule applications are best effort
+            rule.bindings
+                .iter()
+                .map(|(k, t)| (*k, get_val(t)))
+                .collect()
+        }
+
+        let search_start = Instant::now();
+        let mut searched = vec![];
+        for rule in self.rules.values() {
+            let mut all_values = vec![];
+            self.run_query(&rule.query, |values| {
+                assert_eq!(values.len(), rule.query.vars.len());
+                all_values.extend_from_slice(values);
+            });
+            searched.push(all_values);
+        }
+        let search_elapsed = search_start.elapsed();
+
+        let apply_start = Instant::now();
+        let mut rules = std::mem::take(&mut self.rules);
+        'outer: for ((name, rule), all_values) in rules.iter_mut().zip(searched) {
+            let n = rule.query.vars.len();
+            for values in all_values.chunks(n) {
+                rule.matches += 1;
+                if rule.matches > 10000 {
+                    log::warn!("Rule {} has matched {} times, bailing!", name, rule.matches);
+                    break 'outer;
+                }
+                let subst = make_subst(rule, values);
+                log::trace!("Applying with {subst:?}");
                 let _result: Result<_, _> = self.eval_actions(Some(subst), &rule.head);
             }
         }
         self.rules = rules;
+        let apply_elapsed = apply_start.elapsed();
+        [search_elapsed, apply_elapsed]
     }
 
     fn add_rule_with_name(&mut self, name: String, rule: ast::Rule) -> Result<Symbol, Error> {
@@ -630,6 +681,7 @@ impl EGraph {
             query,
             bindings,
             head: rule.head,
+            matches: 0,
         };
         match self.rules.entry(name) {
             Entry::Occupied(_) => panic!("Rule '{name}' was already present"),
@@ -710,8 +762,17 @@ impl EGraph {
             }
             Command::Run(limit) => {
                 if should_run {
-                    self.run_rules(limit);
-                    format!("Ran {limit}.")
+                    let [st, at, rt] = self.run_rules(limit);
+                    let st = st.as_secs_f64();
+                    let at = at.as_secs_f64();
+                    let rt = rt.as_secs_f64();
+                    format!(
+                        "Ran {limit} in {total:10.6}s.\n\
+                        Search:  {st:10.6}s\n\
+                        Apply:   {at:10.6}s\n\
+                        Rebuild: {rt:10.6}s",
+                        total = st + at + rt,
+                    )
                 } else {
                     log::info!("Skipping running!");
                     format!("Skipped run {limit}.")
@@ -755,9 +816,20 @@ impl EGraph {
             Command::Define(name, expr) => {
                 if should_run {
                     let value = self.eval_closed_expr(&expr)?;
-                    let old = self.globals.insert(name, value);
-                    assert!(old.is_none());
-                    format!("Defined {name}")
+                    let sort = self.sorts[&value.tag].clone();
+                    self.declare_function(&FunctionDecl {
+                        name,
+                        schema: Schema {
+                            input: vec![],
+                            output: value.tag,
+                        },
+                        default: None,
+                        merge: None,
+                    })?;
+
+                    let f = self.functions.get_mut(&name).unwrap();
+                    f.nodes.insert(vec![], value);
+                    format!("Defined {name}: {sort:?}")
                 } else {
                     format!("Skipping define {name}")
                 }
@@ -796,6 +868,16 @@ impl EGraph {
                     f.nodes.clear();
                 }
                 "Cleared.".into()
+            }
+            Command::Push(n) => {
+                (0..n).for_each(|_| self.push());
+                format!("Pushed {n} levels.")
+            }
+            Command::Pop(n) => {
+                for _ in 0..n {
+                    self.pop()?;
+                }
+                format!("Popped {n} levels.")
             }
         })
     }
@@ -845,4 +927,6 @@ pub enum Error {
     CheckError(Value, Value),
     #[error("Sort {0} already declared.")]
     SortAlreadyBound(Symbol),
+    #[error("Tried to pop too much")]
+    Pop,
 }

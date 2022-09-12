@@ -6,8 +6,11 @@ edition = "2021"
 [lib]
 crate-type = ["cdylib"]
 
+[dependencies.egg-smol]
+path = ".."
+features = ["wasm-bindgen"]
+
 [dependencies]
-egg-smol = { path = ".." }
 wee_alloc = "0.4.5"
 
 log = "0.4.6"
