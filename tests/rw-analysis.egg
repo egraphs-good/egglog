@@ -1,4 +1,4 @@
-; Top means the value does not exist
+; Top means it can be an arbitrary value
 (datatype Val (Top) (I i64) (True) (False))
 
 (function merge-val (Val Val) Val)
@@ -116,15 +116,14 @@
 ))
 
 ;; ; propagate vars
-;; ; TODO: we should test if b is neither true nor false
-;; ; this requires Val being a lattice
 (rewrite (const-prop l1 x) val
-    :when ((= (Prog (L li)) (If b l1 l2))
-           (= val (const-prop (L li) x))))
+    :when ((= (Prog l) (If b l1 l2))
+           (= (const-prop l b) (Top))
+           (= val (const-prop l x))))
 
 (rewrite (const-prop l2 x) val
-    :when ((= (Prog (L li)) (If b l1 l2))
-           (= val (const-prop (L li) x))))
+    :when ((= (Prog l) (If b l1 l2))
+           (= val (const-prop l x))))
 
 ;;;;;;;;;;;;;;;;
 ;; GOTO CASE
