@@ -1,5 +1,28 @@
+; Top means the value does not exist
+(datatype Val (Top) (I i64) (True) (False))
+
+(function merge-val (Val Val) Val)
+
+(rewrite (merge-val (Top) x) (Top))
+(rewrite (merge-val x (Top)) (Top))
+(rewrite (merge-val (True)  (False)) (Top))
+(rewrite (merge-val (True)  (I x))   (Top))
+(rewrite (merge-val (False) (True))  (Top))
+(rewrite (merge-val (False) (I x))   (Top))
+(rewrite (merge-val (I x) (I y)) (Top) :when ((!= x y)))
+(rewrite (merge-val x x) x)
+
+(function add-val (Val Val) Val)
+
+(rewrite (add-val (Top) x) (Top))
+(rewrite (add-val x (Top)) (Top))
+(rewrite (add-val (True) x) (Top))
+(rewrite (add-val (False) x) (Top))
+(rewrite (add-val x (True)) (Top))
+(rewrite (add-val x (False)) (Top))
+(rewrite (add-val (I x) (I y)) (I (+ x y)))
+
 (datatype Var (V String))
-(datatype Val (I i64) (True) (False))
 (datatype Loc (L i64))
 (datatype Exp
     (Add Var Var)
@@ -14,12 +37,7 @@
     (End))
 (function Prog (Loc) ProgStmt)
 
-
-;; we need the following lattice:
-;;         top
-;;   1 2 3 4 5 6 ...
-;;         bot
-(function const-prop (Loc Var) Val :merge (I 1000) :default (I 1000))
+(function const-prop (Loc Var) Val :merge (merge-val old new))
 
 ;;;;;;;;;;;;;;;;
 ;; ASS Case
@@ -28,41 +46,40 @@
 ; propagate x = k
 (rule (
     (= (Prog (L li)) (Ass x (Const k)))
-    (= li+1 (+ li 1))
 )(
-    (set (const-prop (L li+1) x) k)
+    (set (const-prop (L (+ li 1)) x) k)
 ))
 
 ; propagate x = a + b (non-constant)
 (rule (
-    (= (Prog (L li)) (Ass x (Add v1 v2)))
-    (= (I i1) (const-prop l v1))
-    (= (I i2) (const-prop l v2))
-    (= val (+ i1 i2))
-    (> val 1000)
-    (= li+1 (+ li 1))
+    (= (Prog l) (Ass x (Add x1 x2)))
+    (= l (L li))
 )(
-    (set (const-prop (L li+1) x) (I 1000))
+    ; (set (f arg) e) does not populate e, we need to populate explicitly here
+    ;; (add-val (const-prop l x1) (const-prop l x2))
+    (set (const-prop (L (+ li 1)) x) 
+         (add-val (const-prop l x1) (const-prop l x2)))
 ))
 
-;; ; propagate other vars
+; propagate other vars
 (rule (
     (= (Prog (L li)) (Ass (V x) e))
     (= val (const-prop (L li) (V y)))
-    (= li+1 (+ li 1))
     (!= x y)
 )(
-    (set (const-prop (L li+1) (V y)) val)
+    (set (const-prop (L (+ li 1)) (V y)) val)
 ))
 
-;; ; replace x = a + b (constant)
+; replace x = a + b (constant)
+; TODO: usually because add-val is not computed on-demand, 
+; we have to demand-transform the rule
+; however, because the rule for propagate x = a + b (non-constant)
+; populates the add-val already, we don't need to do it here.
 (rule (
-    (= p (Ass x (Add v1 v2)))
-    (= p (Prog l)) 
-    (= (I i1) (const-prop l v1))
-    (= (I i2) (const-prop l v2))
-    (= val (+ i1 i2))
-    (< val 1000)
+    (= p (Ass x (Add x1 x2)))
+    (= p (Prog l))
+    (= (I val) (add-val (const-prop l x1)
+                        (const-prop l x2)))
 )(
     (union p (Ass x (Const (I val))))
 ))
@@ -74,9 +91,8 @@
     (= p (Call f))
     (= p (Prog l))
     (= val (const-prop (L li) x))
-    (= li+1 (+ li 1))
 )(
-    (set (const-prop (L li+1) x) val)
+    (set (const-prop (L (+ li 1)) x) val)
 ))
 
 ;;;;;;;;;;;;;;;;
@@ -151,7 +167,6 @@
 (union (Prog (L 13)) (Ass (V "y") (Add (V "x") (V "zero"))))
 (union (Prog (L 14)) (End))
 
-
-(run 10)
+(run 20)
 
 (check (= (const-prop (L 14) (V "y")) (I 10)))
