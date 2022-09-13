@@ -55,8 +55,6 @@
     (= (Prog l) (Ass x (Add x1 x2)))
     (= l (L li))
 )(
-    ; (set (f arg) e) does not populate e, we need to populate explicitly here
-    ;; (add-val (const-prop l x1) (const-prop l x2))
     (set (const-prop (L (+ li 1)) x) 
          (add-val (const-prop l x1) (const-prop l x2)))
 ))
