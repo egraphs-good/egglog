@@ -115,7 +115,7 @@ Bool: bool = {
     "true" => true,
     "false" => false,
 }
-Ident: Symbol = <s:r"[[:alpha:]][\w+-]*"> => s.parse().unwrap();
+Ident: Symbol = <s:r"[[:alpha:]][\w-]*"> => s.parse().unwrap();
 PrimitiveSymbol: Symbol = <r"[-+*/!=<>&|^/%]+"> => Symbol::from(<>);
 SymString: Symbol = <r#""[^"]*""#> => Symbol::from(<>);
 String: String = <r#""[^"]*""#> => (<>).to_owned();
