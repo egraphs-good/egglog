@@ -4,6 +4,9 @@
 
 ; Top means it can be an arbitrary value
 (datatype Val (Top) (I i64) (True) (False))
+(relation Bool (Val))
+(Bool (True))
+(Bool (False))
 
 (function merge-val (Val Val) Val)
 
@@ -25,6 +28,18 @@
 (rewrite (add-val x (True)) (Top))
 (rewrite (add-val x (False)) (Top))
 (rewrite (add-val (I x) (I y)) (I (+ x y)))
+
+(function eq-val (Val Val) Val)
+
+(rewrite (eq-val (Top) x) (Top))
+(rewrite (eq-val x (Top)) (Top))
+(rewrite (eq-val (True) (False)) (False))
+(rewrite (eq-val (True) (I x)) (False))
+(rewrite (eq-val (False) (True)) (False))
+(rewrite (eq-val (False) (I x)) (False))
+(rewrite (eq-val (I x) (True)) (False))
+(rewrite (eq-val (I x) (False)) (False))
+(rewrite (eq-val x x) (True))
 
 (datatype Var (V String))
 (datatype Loc (L i64))
@@ -60,10 +75,21 @@
 ; propagate x = a + b (non-constant)
 (rule (
     (RProg l (Ass x (Add x1 x2)))
+    (= v1 (const-prop l x1))
+    (= v2 (const-prop l x2))
     (= l (L li))
 )(
-    (set (const-prop (L (+ li 1)) x) 
-         (add-val (const-prop l x1) (const-prop l x2)))
+    (set (const-prop (L (+ li 1)) x) (add-val v1 v2))
+))
+
+; propagate x = a == b
+(rule (
+    (RProg l (Ass x (Eq x1 x2)))
+    (= v1 (const-prop l x1))
+    (= v2 (const-prop l x2))
+    (= l (L li))
+)(
+    (set (const-prop (L (+ li 1)) x) (eq-val v1 v2))
 ))
 
 ; propagate other vars
@@ -77,12 +103,21 @@
 
 ;; TRANSFORMATION 
 
+; generate demand for biop
 (rule (
     (= (Prog l) (Ass x (Add x1 x2)))
     (= v1 (const-prop l x1))
     (= v2 (const-prop l x2))
 )(
     (add-val v1 v2)
+))
+
+(rule (
+    (= (Prog l) (Ass x (Eq x1 x2)))
+    (= v1 (const-prop l x1))
+    (= v2 (const-prop l x2))
+)(
+    (eq-val v1 v2)
 ))
 
 ; replace x = a + b (constant)
@@ -103,6 +138,23 @@
     (RProg l (Ass x (Add x1 x2)))
 ))
 
+; replace x = a == b (constant)
+(rule (
+    (= (Prog l) (Ass x (Eq x1 x2)))
+    (= b (eq-val (const-prop l x1) (const-prop l x2)))
+    (Bool b)
+)(
+    (RProg l (Ass x (Const b)))
+))
+
+; replace x = a == b (non-constant)
+(rule (
+    (= (Prog l) (Ass x (Eq x1 x2)))
+    (= (Top) (eq-val (const-prop l x1) (const-prop l x2)))
+)(
+    (RProg l (Ass x (Eq x1 x2)))
+))
+
 ; replace x = k
 (rule (
     (= (Prog l) (Ass x (Const val)))
@@ -117,7 +169,8 @@
 ;; PROPAGATION
 (rule (
     (RProg l (Call f))
-    (= val (const-prop (L li) x))
+    (= val (const-prop l x))
+    (= l (L li))
 )(
     (set (const-prop (L (+ li 1)) x) val)
 ))
@@ -191,6 +244,7 @@
 ;; TEST
 ;;;;;;;;;;;;;;;;
 
+(union (Prog (L 0)) (Ass (V "b") (Const (Top))))
 (union (Prog (L 1)) (Ass (V "ten") (Const (I 10))))
 (union (Prog (L 2)) (Ass (V "one") (Const (I 1))))
 (union (Prog (L 3)) (Ass (V "zero") (Const (I 0))))
@@ -199,7 +253,7 @@
 ; while (...) {
 (union (Prog (L 5)) (If (V "b") (L 6) (L 13)))
 ;     if (x == 10) {
-(union (Prog (L 6)) (Ass (V "cond") (Eq (V "x")) (V "ten")))
+(union (Prog (L 6)) (Ass (V "cond") (Eq (V "x") (V "ten"))))
 (union (Prog (L 7)) (If (V "cond") (L 8) (L 10)))
 ;         DoSomething();
 (union (Prog (L 8)) (Call (V "DoSomething")))
@@ -217,9 +271,7 @@
 (union (Prog (L 13)) (Ass (V "y") (Add (V "x") (V "zero"))))
 (union (Prog (L 14)) (End))
 
-(run 30)
+(run 20)
 
-(check (= (const-prop (L 5) (V "x")) (I 10)))
-(check (= (const-prop (L 6) (V "x")) (I 10)))
-(check (= (const-prop (L 14) (V "x")) (I 10)))
-;; (check (RProg (L 13) (Ass (V "y") (I 10))))
+(check (= (const-prop (L 14) (V "y")) (I 10)))
+
