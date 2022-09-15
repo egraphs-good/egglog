@@ -1,3 +1,7 @@
+;;;;;;;;;;;;;;;;
+;; Abstact Domain
+;;;;;;;;;;;;;;;;
+
 ; Top means it can be an arbitrary value
 (datatype Val (Top) (I i64) (True) (False))
 
@@ -36,6 +40,7 @@
     (Call Var)
     (End))
 (function Prog (Loc) ProgStmt)
+(relation RProg (Loc ProgStmt))
 
 (function const-prop (Loc Var) Val :merge (merge-val old new))
 
@@ -43,16 +48,18 @@
 ;; ASS Case
 ;;;;;;;;;;;;;;;;
 
+;; PROPAGATION
+
 ; propagate x = k
 (rule (
-    (= (Prog (L li)) (Ass x (Const k)))
+    (RProg (L li) (Ass x (Const k)))
 )(
     (set (const-prop (L (+ li 1)) x) k)
 ))
 
 ; propagate x = a + b (non-constant)
 (rule (
-    (= (Prog l) (Ass x (Add x1 x2)))
+    (RProg l (Ass x (Add x1 x2)))
     (= l (L li))
 )(
     (set (const-prop (L (+ li 1)) x) 
@@ -61,79 +68,124 @@
 
 ; propagate other vars
 (rule (
-    (= (Prog (L li)) (Ass (V x) e))
+    (RProg (L li) (Ass (V x) e))
     (= val (const-prop (L li) (V y)))
     (!= x y)
 )(
     (set (const-prop (L (+ li 1)) (V y)) val)
 ))
 
-; replace x = a + b (constant)
-; TODO: usually because add-val is not computed on-demand, 
-; we have to demand-transform the rule
-; however, because the rule for propagate x = a + b (non-constant)
-; populates the add-val already, we don't need to do it here.
+;; TRANSFORMATION 
+
 (rule (
-    (= p (Ass x (Add x1 x2)))
-    (= p (Prog l))
+    (= (Prog l) (Ass x (Add x1 x2)))
+    (= v1 (const-prop l x1))
+    (= v2 (const-prop l x2))
+)(
+    (add-val v1 v2)
+))
+
+; replace x = a + b (constant)
+(rule (
+    (= (Prog l) (Ass x (Add x1 x2)))
     (= (I val) (add-val (const-prop l x1)
                         (const-prop l x2)))
 )(
-    (union p (Ass x (Const (I val))))
+    (RProg l (Ass x (Const (I val))))
+))
+
+; replace x = a + b (non-contant)
+(rule (
+    (= (Prog l) (Ass x (Add x1 x2)))
+    (= (Top) (add-val (const-prop l x1)
+                      (const-prop l x2)))
+)(
+    (RProg l (Ass x (Add x1 x2)))
+))
+
+; replace x = k
+(rule (
+    (= (Prog l) (Ass x (Const val)))
+)(
+    (RProg l (Ass x (Const val)))
 ))
 
 ;;;;;;;;;;;;;;;;
 ;; CALL CASE
 ;;;;;;;;;;;;;;;;
+
+;; PROPAGATION
 (rule (
-    (= p (Call f))
-    (= p (Prog l))
+    (RProg l (Call f))
     (= val (const-prop (L li) x))
 )(
     (set (const-prop (L (+ li 1)) x) val)
+))
+
+;; TRANSFORMATION
+(rule (
+    (= (Prog l) (Call f))
+)(
+    (RProg l (Call f))
 ))
 
 ;;;;;;;;;;;;;;;;
 ;; IF CASE
 ;;;;;;;;;;;;;;;;
 
+;; PROPAGATION
+(rule (
+    (RProg l (If b l1 l2))
+    (= val (const-prop l x))
+)(
+    (set (const-prop l1 x) val)
+    (set (const-prop l2 x) val)
+))
+
+;; TRANSFORMATION
+
 ; replace if true
 (rule (
-    (= p (Prog l))
-    (= p (If b l1 l2))
+    (= (Prog l) (If b l1 l2))
     (= (True) (const-prop l b))
 )(
-    (union p (Goto l1))
+    (RProg l (Goto l1))
 ))
 
-;; ; replace if false
+; replace if false
 (rule (
-    (= p (Prog l))
-    (= p (If b l1 l2))
+    (= (Prog l) (If b l1 l2))
     (= (False) (const-prop l b))
 )(
-    (union p (Goto l2))
+    (RProg l (Goto l2))
 ))
 
-;; ; propagate vars
-(rewrite (const-prop l1 x) val
-    :when ((= (Prog l) (If b l1 l2))
-           (= (const-prop l b) (Top))
-           (= val (const-prop l x))))
-
-(rewrite (const-prop l2 x) val
-    :when ((= (Prog l) (If b l1 l2))
-           (= val (const-prop l x))))
+; replace if Top
+(rule (
+    (= (Prog l) (If b l1 l2))
+    (= (Top) (const-prop l b))
+)(
+    (RProg l (If b l1 l2))
+))
 
 ;;;;;;;;;;;;;;;;
 ;; GOTO CASE
 ;;;;;;;;;;;;;;;;
 
-; propagate vars
-;; TODO name conflict with last one
-(rewrite (const-prop l2-avoid-name-conflict x) val
-    :when ((= (Prog l1) (Goto l2-avoid-name-conflict))
-           (= val (const-prop l1  x))))
+;; PROPAGATION
+(rule (
+    (RProg l1 (Goto l2))
+    (= val (const-prop l1 x))
+)(
+    (set (const-prop l2 x) val)
+))
+
+;; TRANSFORMATION
+(rule (
+    (= (Prog l1) (Goto l2))
+)(
+    (RProg l1 (Goto l2))
+))
 
 ;;;;;;;;;;;;;;;;
 ;; TEST
@@ -158,12 +210,16 @@
 (union (Prog (L 10)) (Call (V "DoSomethingElse")))
 ;         x := x + 1;
 (union (Prog (L 11)) (Ass (V "x") (Add (V "x") (V "one"))))
+;; (union (Prog (L 11)) (Call (V "DoSomethingElse")))
 ;     }
 (union (Prog (L 12)) (Goto (L 5)))
 ; y := x
 (union (Prog (L 13)) (Ass (V "y") (Add (V "x") (V "zero"))))
 (union (Prog (L 14)) (End))
 
-(run 20)
+(run 30)
 
-(check (= (const-prop (L 14) (V "y")) (I 10)))
+(check (= (const-prop (L 5) (V "x")) (I 10)))
+(check (= (const-prop (L 6) (V "x")) (I 10)))
+(check (= (const-prop (L 14) (V "x")) (I 10)))
+;; (check (RProg (L 13) (Ass (V "y") (I 10))))
