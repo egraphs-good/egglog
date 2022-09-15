@@ -658,7 +658,7 @@ impl EGraph {
             let n = rule.query.vars.len();
             for values in all_values.chunks(n) {
                 rule.matches += 1;
-                if rule.matches > 100000 {
+                if rule.matches > 10000000 {
                     log::warn!("Rule {} has matched {} times, bailing!", name, rule.matches);
                     break 'outer;
                 }
