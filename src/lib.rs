@@ -658,7 +658,7 @@ impl EGraph {
             let n = rule.query.vars.len();
             for values in all_values.chunks(n) {
                 rule.matches += 1;
-                if rule.matches > 10000 {
+                if rule.matches > 100000 {
                     log::warn!("Rule {} has matched {} times, bailing!", name, rule.matches);
                     break 'outer;
                 }
@@ -766,12 +766,17 @@ impl EGraph {
                     let st = st.as_secs_f64();
                     let at = at.as_secs_f64();
                     let rt = rt.as_secs_f64();
+                    let total = st + at + rt;
+                    let size = self.num_tuples();
                     format!(
                         "Ran {limit} in {total:10.6}s.\n\
-                        Search:  {st:10.6}s\n\
-                        Apply:   {at:10.6}s\n\
-                        Rebuild: {rt:10.6}s",
-                        total = st + at + rt,
+                        Search:  ({:.02}) {st:10.6}s\n\
+                        Apply:   ({:.02}) {at:10.6}s\n\
+                        Rebuild: ({:.02}) {rt:10.6}s\n\
+                        Database size: {size}",
+                        st / total,
+                        at / total,
+                        rt / total,
                     )
                 } else {
                     log::info!("Skipping running!");
@@ -910,6 +915,10 @@ impl EGraph {
             .parse(input)
             .map_err(|e| e.map_token(|tok| tok.to_string()))?;
         self.run_program(program)
+    }
+
+    pub fn num_tuples(&self) -> usize {
+        self.functions.values().map(|f| f.nodes.len()).sum()
     }
 }
 
