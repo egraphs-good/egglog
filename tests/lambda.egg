@@ -19,8 +19,14 @@
 ; e.g., x is free in x - x, but not freer in x - x
 (relation freer (Term StringSet))
 (rule ((= e (Var v)))
+      ((free e (insert v 1 (empty))))
+(rule ((= e (Add e1 e2))
+       (free e1 fv1)
+       (free e2 fv2))
+      ((free e (set-union fv1 fv2))))
+(rule ((= e (Add e1 e2))
+       (free e1 v))
       ((free e v)))
-
 
 ;; START evals-to
 (function evals-to (Term) Term)
