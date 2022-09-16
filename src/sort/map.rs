@@ -227,7 +227,7 @@ impl PrimitiveLike for Union {
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
         let mut map1 = ValueMap::load(&self.map, &values[0]);
-        let map2 = ValueMap::load(&self.map, &values[0]);
+        let map2 = ValueMap::load(&self.map, &values[1]);
         map1.extend(map2.iter());
         // map.insert(values[1], values[2]);
         map1.store(&self.map)
