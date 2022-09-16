@@ -1,6 +1,5 @@
 use crate::ast::*;
 use crate::Symbol;
-use num_rational::BigRational;
 
 grammar;
 
@@ -34,6 +33,7 @@ Comma<T>: Vec<T> = {
 
 Command: Command = {
     "(" "datatype" <name:Ident> <variants:(Variant)*> ")" => Command::Datatype { <> },
+    "(" "sort" <name:Ident> "(" <head:Ident> <tail:(Expr)*> ")" ")" => Command::Sort (<>),
     "(" "function" <name:Ident> <schema:Schema> <merge:(":merge" <Expr>)?> <default:(":default" <Expr>)?> ")" => {
         Command::Function(FunctionDecl { name, schema, merge, default })
     },
@@ -42,8 +42,11 @@ Command: Command = {
     "(" "rewrite" <lhs:Expr> <rhs:Expr>
         <conditions:(":when" <List<Fact>>)?>
     ")" => Command::Rewrite(Rewrite { lhs, rhs, conditions: conditions.unwrap_or_default() }),
-    <Action> => Command::Action(<>),
-    "(" "run" <Num> ")" => Command::Run(<>.try_into().unwrap()),
+    <Action> => match <> {
+        Action::Define(name, expr) => Command::Define(name, expr),
+        a => Command::Action(a),
+    },
+    "(" "run" <UNum> ")" => Command::Run(<>),
     "(" "extract" <e:Expr> ")" => Command::Extract { <>, variants: 0 },
     "(" "extract" ":variants" <variants:Num> <e:Expr> ")" => Command::Extract { 
         e, variants: variants.try_into().unwrap()
@@ -52,10 +55,13 @@ Command: Command = {
     "(" "clear-rules" ")" => Command::ClearRules,
     "(" "clear" ")" => Command::Clear,
     "(" "query" <List<Fact>> ")" => Command::Query(<>),
+    "(" "push" <UNum?> ")" => Command::Push(<>.unwrap_or(1)),
+    "(" "pop" <UNum?> ")" => Command::Pop(<>.unwrap_or(1)),
 }
 
 Action: Action = {
     "(" "set" "(" <f: Ident> <args:Expr*> ")" <v:Expr> ")" => Action::Set ( f, args, v ),
+    "(" "delete" "(" <f: Ident> <args:Expr*> ")" ")" => Action::Delete ( f, args),
     "(" "union" <e1:Expr> <e2:Expr> ")" => Action::Union(<>),
     "(" "define" <name:Ident> <expr:Expr> ")" => Action::Define(name, expr),
     "(" "panic" <msg:String> ")" => Action::Panic(msg),
@@ -86,7 +92,6 @@ Expr: Expr = {
 Literal: Literal = {
     // "(" ")" => Literal::Unit, // shouldn't need unit literals for now
     <Num> => Literal::Int(<>),
-    <numer:Num> "//" <denom:Num> => Literal::Rational(BigRational::new(numer.into(), denom.into())),
     <SymString> => Literal::String(<>),
 }
 
@@ -100,20 +105,12 @@ Variant: Variant = {
     "(" <name:Ident> <types:(Type)*> ")" => Variant { <> },
 }
 
-Type: Type = { 
-    "String" => Type::String,
-    <NumType> => Type::NumType(<>),
-    <Ident> => Type::Sort(<>),
-}
-
-NumType: NumType = {
-    "i64" => NumType::I64,
-    "rational" => NumType::Rational,
-    <s:reserved> =>? lalrpop_error!("{} is reserved.", s)
-    // "f64" => NumType::F64,
-}
+Type: Symbol = <Ident>;
 
 Num: i64 = <s:r"(-)?[0-9]+"> => s.parse().unwrap();
+UNum: usize = {
+    <Num> => <>.try_into().unwrap(),
+}
 Bool: bool = {
     "true" => true,
     "false" => false,

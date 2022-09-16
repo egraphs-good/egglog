@@ -46,7 +46,9 @@
     <link rel="stylesheet" href="//unpkg.com/codemirror@5.65.2/lib/codemirror.css">
     <script src="//unpkg.com/codemirror@5.65.2/lib/codemirror.js"></script>
 
-    <script>
+    <script type="module">
+        import { compressUrlSafe, decompressUrlSafe } from './lzma-url.mjs'
+
         let editor, output, examples;
 
         console.log("Main script is running");
@@ -72,18 +74,20 @@
                     console.warn("Bad example choice", example, "choices: ", Object.keys(examples));
                 }
             } else if (program) {
-                editor.setValue(program);
+                let decompressed = decompressUrlSafe(program);
+                editor.setValue(decompressed);
             }
         }
 
-        function run() {
+        window.run = function run() {
             let program = editor.getValue();
             worker.postMessage(program);
             console.log("posted a message to worker!")
             output.textContent = "running..."
         }
 
-        function pushState() {
+        window.pushState = function pushState() {
+            output.textContent = "";
             let url = new URL(location);
             url.searchParams.delete("program");
             url.searchParams.delete("example");
@@ -100,7 +104,15 @@
 
             if (!state) {
                 state = content;
-                url.searchParams.set("program", content);
+                let compressed = compressUrlSafe(content);
+                let length = compressed.length;
+                let limit = 2000;
+                if (length > limit) {
+                    output.textContent = `Program is too large to share: ${length} > ${limit} bytes.`;
+                } else {
+                    url.searchParams.set("program", compressed);
+                    output.textContent = `Program shared: ${length} bytes.`;
+                }
             }
 
             if (history.state != state) {

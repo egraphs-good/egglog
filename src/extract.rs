@@ -1,8 +1,8 @@
 use hashbrown::hash_map::Entry;
 
-use crate::ast::{Symbol, Type};
+use crate::ast::Symbol;
 use crate::util::HashMap;
-use crate::{EGraph, Expr, Id, Value};
+use crate::{ArcSort, EGraph, Expr, Id, Value};
 
 type Cost = usize;
 
@@ -19,25 +19,41 @@ struct Extractor<'a> {
 }
 
 impl EGraph {
-    pub fn extract(&mut self, id: Id) -> (Cost, Expr) {
-        Extractor::new(self).find_best(id)
+    pub fn value_to_id(&self, value: Value) -> Option<(Symbol, Id)> {
+        if let Some(sort) = self.sorts.get(&value.tag) {
+            if sort.is_eq_sort() {
+                let id = Id::from(value.bits as usize);
+                return Some((sort.name(), self.find(id)));
+            }
+        }
+        None
     }
 
-    pub fn extract_variants(&mut self, id: Id, limit: usize) -> Vec<Expr> {
-        let id = self.find(id);
-        let output_value = &Value::from(id);
+    pub fn extract(&mut self, value: Value) -> (Cost, Expr) {
+        Extractor::new(self).find_best(value)
+    }
+
+    pub fn extract_variants(&mut self, value: Value, limit: usize) -> Vec<Expr> {
+        let (tag, id) = self.value_to_id(value).unwrap();
+        let output_value = &Value::from_id(tag, id);
         let ext = &Extractor::new(self);
         ext.ctors
             .iter()
             .flat_map(|&sym| {
                 let func = &self.functions[&sym];
-                assert!(func.decl.schema.output.is_sort());
-                func.nodes.iter().filter_map(move |(inputs, output)| {
-                    (output == output_value).then(|| {
-                        let node = Node { sym, inputs };
-                        ext.expr_from_node(&node)
+                if !func.schema.output.is_eq_sort() {
+                    return vec![];
+                }
+                assert!(func.schema.output.is_eq_sort());
+                func.nodes
+                    .iter()
+                    .filter_map(move |(inputs, output)| {
+                        (output == output_value).then(|| {
+                            let node = Node { sym, inputs };
+                            ext.expr_from_node(&node)
+                        })
                     })
-                })
+                    .collect()
             })
             .take(limit)
             .collect()
@@ -52,9 +68,9 @@ impl<'a> Extractor<'a> {
             ctors: vec![],
         };
 
-        for ctors in egraph.sorts.values() {
-            extractor.ctors.extend(ctors.iter().copied())
-        }
+        // HACK
+        // just consider all functions constructors for now...
+        extractor.ctors.extend(egraph.functions.keys().cloned());
 
         log::debug!("Extracting from ctors: {:?}", extractor.ctors);
         extractor.find_costs();
@@ -62,34 +78,31 @@ impl<'a> Extractor<'a> {
     }
 
     fn expr_from_node(&self, node: &Node) -> Expr {
-        let mut children = vec![];
-        for (ty, value) in self.egraph.functions[&node.sym]
-            .decl
-            .schema
-            .input
-            .iter()
-            .zip(node.inputs)
-        {
-            if ty.is_sort() {
-                children.push(self.find_best(Id::from(value.clone())).1)
-            } else {
-                children.push(Expr::Lit(value.to_literal()))
-            }
-        }
+        let children = node.inputs.iter().map(|&value| self.find_best(value).1);
         Expr::call(node.sym, children)
     }
 
-    fn find_best(&self, id: Id) -> (Cost, Expr) {
-        let id = self.egraph.find(id);
-        let (cost, node) = &self.costs[&id];
-        (*cost, self.expr_from_node(node))
+    fn find_best(&self, value: Value) -> (Cost, Expr) {
+        let sort = self.egraph.sorts.get(&value.tag).unwrap();
+        if sort.is_eq_sort() {
+            let id = self.egraph.find(Id::from(value.bits as usize));
+            let (cost, node) = &self
+                .costs
+                .get(&id)
+                .unwrap_or_else(|| panic!("No cost for {:?}", value));
+            (*cost, self.expr_from_node(node))
+        } else {
+            (0, sort.make_expr(value))
+        }
     }
 
-    fn node_total_cost(&self, types: &[Type], children: &[Value]) -> Option<Cost> {
+    fn node_total_cost(&self, types: &[ArcSort], children: &[Value]) -> Option<Cost> {
         let mut cost = 1;
         for (ty, value) in types.iter().zip(children) {
-            cost += if ty.is_sort() {
-                self.costs.get(&Id::from(value.clone()))?.0
+            cost += if ty.is_eq_sort() {
+                let id = self.egraph.find(Id::from(value.bits as usize));
+                // TODO costs should probably map values?
+                self.costs.get(&id)?.0
             } else {
                 0
             }
@@ -104,19 +117,22 @@ impl<'a> Extractor<'a> {
 
             for &sym in &self.ctors {
                 let func = &self.egraph.functions[&sym];
-                assert!(func.decl.schema.output.is_sort());
-                for (inputs, output) in &func.nodes {
-                    if let Some(new_cost) = self.node_total_cost(&func.decl.schema.input, inputs) {
-                        let make_new_pair = || (new_cost, Node { sym, inputs });
-                        match self.costs.entry(Id::from(output.clone())) {
-                            Entry::Vacant(e) => {
-                                did_something = true;
-                                e.insert(make_new_pair());
-                            }
-                            Entry::Occupied(mut e) => {
-                                if new_cost < e.get().0 {
+                if func.schema.output.is_eq_sort() {
+                    for (inputs, output) in &func.nodes {
+                        if let Some(new_cost) = self.node_total_cost(&func.schema.input, inputs) {
+                            let make_new_pair = || (new_cost, Node { sym, inputs });
+
+                            let id = self.egraph.find(Id::from(output.bits as usize));
+                            match self.costs.entry(id) {
+                                Entry::Vacant(e) => {
                                     did_something = true;
                                     e.insert(make_new_pair());
+                                }
+                                Entry::Occupied(mut e) => {
+                                    if new_cost < e.get().0 {
+                                        did_something = true;
+                                        e.insert(make_new_pair());
+                                    }
                                 }
                             }
                         }

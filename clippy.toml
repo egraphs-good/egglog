@@ -1,0 +1,7 @@
+disallowed-types = [
+    # prefer hashbrown
+    "std::collections::HashMap",
+    "std::collections::HashSet",
+    # prefer instant crate, it works on wasm
+    "std::time::Instant",
+]

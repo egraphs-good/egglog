@@ -4,16 +4,22 @@ version = "0.1.0"
 edition = "2021"
 
 [workspace]
-
 members = [".", "web-demo"]
+
+[features]
+default = []
+wasm-bindgen = ["instant/wasm-bindgen"]
 
 [dependencies]
 thiserror = "1"
 indexmap = "1.8"
 hashbrown = "0.12"
+instant = "0.1"
 log = "0.4"
-ahash = { version = "0.7", default-features = false }
-symbol_table = { version = "0.1", features = ["global"] }
+rustc-hash = "1.1"
+symbol_table = { git = "https://github.com/mwillsey/symbol_table", rev = "acddcf8938d1b4ed2fce048c9d83c30203d404b9", features = ["global"] }
+# symbol_table = { version = "0.2", features = ["global"] }
+# symbol_table = { path = "../symbol_table", features = ["global"] }
 num-bigint = "0.4.3"
 num-integer = "0.1.45"
 num-rational = "0.4.0"

@@ -7,12 +7,13 @@ pub enum TypeError {
     #[error("Arity mismatch, expected {expected} args: {expr}")]
     Arity { expr: Expr, expected: usize },
     #[error(
-        "Type mismatch: expr = {expr}, expected = {expected}, actual = {actual}, reason: {reason}"
+        "Type mismatch: expr = {expr}, expected = {}, actual = {}, reason: {reason}", 
+        .expected.name(), .actual.name(),
     )]
     Mismatch {
         expr: Expr,
-        expected: Type,
-        actual: Type,
+        expected: ArcSort,
+        actual: ArcSort,
         reason: String,
     },
     #[error("Tried to unify too many literals: {}", ListDisplay(.0, "\n"))]
@@ -28,12 +29,13 @@ pub enum TypeError {
     #[error("Failed to infer a type for: {0}")]
     InferenceFailure(Expr),
     #[error("No matching primitive for: ({op} {})", ListDisplay(.inputs, " "))]
-    NoMatchingPrimitive { op: Symbol, inputs: Vec<Type> },
+    NoMatchingPrimitive { op: Symbol, inputs: Vec<Symbol> },
 }
 
 pub struct Context<'a> {
     pub egraph: &'a EGraph,
-    pub types: HashMap<Symbol, Type>,
+    pub types: HashMap<Symbol, ArcSort>,
+    unit: ArcSort,
     errors: Vec<TypeError>,
     unionfind: UnionFind,
     nodes: HashMap<ENode, Id>,
@@ -75,6 +77,7 @@ impl<'a> Context<'a> {
     pub fn new(egraph: &'a EGraph) -> Self {
         Self {
             egraph,
+            unit: egraph.sorts[&"Unit".into()].clone(),
             types: HashMap::default(),
             errors: Vec::default(),
             unionfind: UnionFind::default(),
@@ -104,7 +107,7 @@ impl<'a> Context<'a> {
             debug_assert_eq!(id, self.unionfind.find(id));
             match node {
                 ENode::Literal(lit) => {
-                    let old = leaves.insert(id, AtomTerm::Value(lit.to_value()));
+                    let old = leaves.insert(id, AtomTerm::Value(self.egraph.eval_lit(lit)));
                     if let Some(AtomTerm::Value(old)) = old {
                         panic!("Duplicate literal: {:?} {:?}", old, lit);
                     }
@@ -173,11 +176,11 @@ impl<'a> Context<'a> {
         }
     }
 
-    fn typecheck_fact(&mut self, fact: &'a Fact) {
+    fn typecheck_fact(&mut self, fact: &Fact) {
         match fact {
             Fact::Eq(exprs) => {
                 let mut later = vec![];
-                let mut ty: Option<Type> = None;
+                let mut ty: Option<ArcSort> = None;
                 let mut ids = Vec::with_capacity(exprs.len());
                 for expr in exprs {
                     match (expr, &ty) {
@@ -186,10 +189,15 @@ impl<'a> Context<'a> {
                         }
                         // This is a variable the we couldn't infer the type of,
                         // so we'll try again later when we can check its type
-                        (Expr::Var(v), None) if !self.types.contains_key(v) => later.push(expr),
+                        (Expr::Var(v), None)
+                            if !self.types.contains_key(v)
+                                && !self.egraph.functions.contains_key(v) =>
+                        {
+                            later.push(expr)
+                        }
                         (_, None) => match self.infer_query_expr(expr) {
-                            (_, Type::Error) => (),
-                            (id, t) => {
+                            (_, None) => (),
+                            (id, Some(t)) => {
                                 ty = Some(t);
                                 ids.push(id);
                             }
@@ -198,7 +206,6 @@ impl<'a> Context<'a> {
                 }
 
                 if let Some(ty) = ty {
-                    assert_ne!(ty, Type::Error);
                     for e in later {
                         ids.push(self.check_query_expr(e, ty.clone()));
                     }
@@ -211,17 +218,17 @@ impl<'a> Context<'a> {
                 ids.into_iter().reduce(|a, b| self.unionfind.union(a, b));
             }
             Fact::Fact(e) => {
-                self.check_query_expr(e, Type::Unit);
+                self.check_query_expr(e, self.unit.clone());
             }
         }
     }
 
-    fn check_query_expr(&mut self, expr: &'a Expr, expected: Type) -> Id {
-        assert_ne!(expected, Type::Error);
+    fn check_query_expr(&mut self, expr: &Expr, expected: ArcSort) -> Id {
         if let Expr::Var(sym) = expr {
             match self.types.entry(*sym) {
                 Entry::Occupied(ty) => {
-                    if ty.get() != &expected {
+                    // TODO name comparison??
+                    if ty.get().name() != expected.name() {
                         self.errors.push(TypeError::Mismatch {
                             expr: expr.clone(),
                             expected,
@@ -238,75 +245,84 @@ impl<'a> Context<'a> {
             self.add_node(ENode::Var(*sym))
         } else {
             let (id, actual) = self.infer_query_expr(expr);
-            if actual != expected {
-                self.errors.push(TypeError::Mismatch {
-                    expr: expr.clone(),
-                    expected,
-                    actual,
-                    reason: "mismatch".into(),
-                })
+            if let Some(actual) = actual {
+                if actual.name() != expected.name() {
+                    self.errors.push(TypeError::Mismatch {
+                        expr: expr.clone(),
+                        expected,
+                        actual,
+                        reason: "mismatch".into(),
+                    })
+                }
             }
             id
         }
     }
 
-    fn infer_query_expr(&mut self, expr: &'a Expr) -> (Id, Type) {
+    fn infer_query_expr(&mut self, expr: &Expr) -> (Id, Option<ArcSort>) {
         match expr {
             // TODO handle global variables
             Expr::Var(sym) => {
+                if self.egraph.functions.contains_key(sym) {
+                    return self.infer_query_expr(&Expr::call(*sym, []));
+                }
                 let ty = if let Some(ty) = self.types.get(sym) {
-                    ty.clone()
+                    Some(ty.clone())
                 } else {
                     self.errors.push(TypeError::Unbound(*sym));
-                    Type::Error
+                    None
                 };
                 (self.add_node(ENode::Var(*sym)), ty)
             }
             Expr::Lit(lit) => {
                 let t = match lit {
-                    Literal::Int(_) => Type::NumType(NumType::I64),
-                    Literal::Rational(_) => Type::NumType(NumType::Rational),
-                    Literal::String(_) => Type::String,
-                    Literal::Unit => Type::Unit,
+                    Literal::Int(_) => self.egraph.sorts.get(&"i64".into()),
+                    Literal::String(_) => self.egraph.sorts.get(&"String".into()),
+                    Literal::Unit => self.egraph.sorts.get(&"Unit".into()),
                 };
-                (self.add_node(ENode::Literal(lit.clone())), t)
+                (self.add_node(ENode::Literal(lit.clone())), t.cloned())
             }
             Expr::Call(sym, args) => {
                 if let Some(f) = self.egraph.functions.get(sym) {
-                    if f.decl.schema.input.len() != args.len() {
+                    if f.schema.input.len() != args.len() {
                         self.errors.push(TypeError::Arity {
                             expr: expr.clone(),
-                            expected: f.decl.schema.input.len(),
+                            expected: f.schema.input.len(),
                         });
                     }
 
                     let ids: Vec<Id> = args
                         .iter()
-                        .zip(&f.decl.schema.input)
+                        .zip(&f.schema.input)
                         .map(|(arg, ty)| self.check_query_expr(arg, ty.clone()))
                         .collect();
-                    let t = f.decl.schema.output.clone();
-                    (self.add_node(ENode::Func(*sym, ids)), t)
+                    let t = f.schema.output.clone();
+                    (self.add_node(ENode::Func(*sym, ids)), Some(t))
                 } else if let Some(prims) = self.egraph.primitives.get(sym) {
-                    let (ids, arg_tys): (Vec<Id>, Vec<Type>) =
+                    let (ids, arg_tys): (Vec<Id>, Vec<Option<ArcSort>>) =
                         args.iter().map(|arg| self.infer_query_expr(arg)).unzip();
-                    for prim in prims {
-                        if let Some(output_type) = prim.accept(&arg_tys) {
-                            let id = self.add_node(ENode::Prim(prim.clone(), ids));
-                            return (id, output_type);
+
+                    if let Some(arg_tys) = arg_tys
+                        .iter()
+                        .map(|opta| opta.as_deref())
+                        .collect::<Option<Vec<&dyn Sort>>>()
+                    {
+                        for prim in prims {
+                            if let Some(output_type) = prim.accept(&arg_tys) {
+                                let id = self.add_node(ENode::Prim(prim.clone(), ids));
+                                return (id, Some(output_type));
+                            }
                         }
-                    }
-                    // No need to push this error if the argument types are wrong
-                    if !arg_tys.contains(&Type::Error) {
                         self.errors.push(TypeError::NoMatchingPrimitive {
                             op: *sym,
-                            inputs: arg_tys,
+                            inputs: arg_tys.iter().map(|t| t.name()).collect(),
                         });
                     }
-                    (self.unionfind.make_set(), Type::Error)
+
+                    (self.unionfind.make_set(), None)
                 } else {
                     self.errors.push(TypeError::Unbound(*sym));
-                    (self.unionfind.make_set(), Type::Error)
+                    (self.unionfind.make_set(), None)
                 }
             }
         }

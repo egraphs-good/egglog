@@ -5,8 +5,7 @@ use std::fmt::Display;
 #[allow(unused_imports)]
 use crate::*;
 
-pub(crate) type BuildHasher = ahash::RandomState;
-pub(crate) const BUILD_HASHER: BuildHasher = BuildHasher::with_seeds(0, 0, 0, 0);
+pub(crate) type BuildHasher = std::hash::BuildHasherDefault<rustc_hash::FxHasher>;
 
 pub(crate) type HashMap<K, V> = hashbrown::HashMap<K, V, BuildHasher>;
 pub(crate) type HashSet<K> = hashbrown::HashSet<K, BuildHasher>;
@@ -21,15 +20,16 @@ pub(crate) fn concat_vecs<T>(to: &mut Vec<T>, mut from: Vec<T>) {
     to.extend(from);
 }
 
-pub(crate) struct ListDisplay<'a, T>(pub &'a [T], pub &'a str);
+pub(crate) struct ListDisplay<'a, TS>(pub TS, pub &'a str);
 
-impl<'a, T> Display for ListDisplay<'a, T>
+impl<'a, TS> Display for ListDisplay<'a, TS>
 where
-    T: Display,
+    TS: Clone + IntoIterator,
+    TS::Item: Display,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut did_something = false;
-        for item in self.0 {
+        for item in self.0.clone().into_iter() {
             if did_something {
                 f.write_str(self.1)?;
             }
