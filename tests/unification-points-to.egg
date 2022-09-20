@@ -177,7 +177,7 @@
     (= (expr-points-to e) a)
     (field ef e f)
 )(
-    (union (expr-points-to e) a)    
+    (union (expr-points-to ef) a)    
 ))
 
 ;; If `u -> a` and `a -> b`, then `&(u->f) -> b`.
