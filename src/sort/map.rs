@@ -61,6 +61,11 @@ impl Sort for MapSort {
             map: self.clone(),
             unit: egraph.get_sort(),
         });
+        egraph.add_primitive(Contains {
+            name: "contains".into(),
+            map: self.clone(),
+            unit: egraph.get_sort(),
+        });
         egraph.add_primitive(Union {
             name: "set-union".into(),
             map: self.clone(),
@@ -210,6 +215,36 @@ impl PrimitiveLike for NotContains {
             None
         } else {
             Some(Value::unit())
+        }
+    }
+}
+
+struct Contains {
+    name: Symbol,
+    map: Arc<MapSort>,
+    unit: Arc<UnitSort>,
+}
+
+impl PrimitiveLike for Contains {
+    fn name(&self) -> Symbol {
+        self.name
+    }
+
+    fn accept(&self, types: &[&dyn Sort]) -> Option<ArcSort> {
+        match types {
+            [map, key] if (map.name(), key.name()) == (self.map.name, self.map.key.name()) => {
+                Some(self.unit.clone())
+            }
+            _ => None,
+        }
+    }
+
+    fn apply(&self, values: &[Value]) -> Option<Value> {
+        let map = ValueMap::load(&self.map, &values[0]);
+        if map.contains_key(&values[1]) {
+            Some(Value::unit())
+        } else {
+            None
         }
     }
 }
