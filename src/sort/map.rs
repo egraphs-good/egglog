@@ -61,8 +61,21 @@ impl Sort for MapSort {
             map: self.clone(),
             unit: egraph.get_sort(),
         });
+        egraph.add_primitive(Contains {
+            name: "contains".into(),
+            map: self.clone(),
+            unit: egraph.get_sort(),
+        });
         egraph.add_primitive(Union {
             name: "set-union".into(),
+            map: self.clone(),
+        });
+        egraph.add_primitive(Intersect {
+            name: "set-intersect".into(),
+            map: self.clone(),
+        });
+        egraph.add_primitive(Remove {
+            name: "map-remove".into(),
             map: self,
         });
     }
@@ -206,6 +219,36 @@ impl PrimitiveLike for NotContains {
     }
 }
 
+struct Contains {
+    name: Symbol,
+    map: Arc<MapSort>,
+    unit: Arc<UnitSort>,
+}
+
+impl PrimitiveLike for Contains {
+    fn name(&self) -> Symbol {
+        self.name
+    }
+
+    fn accept(&self, types: &[&dyn Sort]) -> Option<ArcSort> {
+        match types {
+            [map, key] if (map.name(), key.name()) == (self.map.name, self.map.key.name()) => {
+                Some(self.unit.clone())
+            }
+            _ => None,
+        }
+    }
+
+    fn apply(&self, values: &[Value]) -> Option<Value> {
+        let map = ValueMap::load(&self.map, &values[0]);
+        if map.contains_key(&values[1]) {
+            Some(Value::unit())
+        } else {
+            None
+        }
+    }
+}
+
 struct Union {
     name: Symbol,
     map: Arc<MapSort>,
@@ -231,5 +274,59 @@ impl PrimitiveLike for Union {
         map1.extend(map2.iter());
         // map.insert(values[1], values[2]);
         map1.store(&self.map)
+    }
+}
+
+struct Intersect {
+    name: Symbol,
+    map: Arc<MapSort>,
+}
+
+impl PrimitiveLike for Intersect {
+    fn name(&self) -> Symbol {
+        self.name
+    }
+
+    fn accept(&self, types: &[&dyn Sort]) -> Option<ArcSort> {
+        match types {
+            [map1, map2] if map1.name() == self.map.name && map2.name() == self.map.name() => {
+                Some(self.map.clone())
+            }
+            _ => None,
+        }
+    }
+
+    fn apply(&self, values: &[Value]) -> Option<Value> {
+        let mut map1 = ValueMap::load(&self.map, &values[0]);
+        let map2 = ValueMap::load(&self.map, &values[1]);
+        map1.retain(|k, _| map2.contains_key(k));
+        // map.insert(values[1], values[2]);
+        map1.store(&self.map)
+    }
+}
+
+struct Remove {
+    name: Symbol,
+    map: Arc<MapSort>,
+}
+
+impl PrimitiveLike for Remove {
+    fn name(&self) -> Symbol {
+        self.name
+    }
+
+    fn accept(&self, types: &[&dyn Sort]) -> Option<ArcSort> {
+        match types {
+            [map, key] if (map.name(), key.name()) == (self.map.name, self.map.key.name()) => {
+                Some(self.map.value.clone())
+            }
+            _ => None,
+        }
+    }
+
+    fn apply(&self, values: &[Value]) -> Option<Value> {
+        let mut map = ValueMap::load(&self.map, &values[0]);
+        map.remove(&values[1]);
+        map.store(&self.map)
     }
 }
