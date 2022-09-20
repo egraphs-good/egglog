@@ -144,7 +144,7 @@
     (assign s t1 v c)
     (malloc c t2)
 )(
-    (union (expr-points-to v) (AllocVar v))
+    (union (expr-points-to v) (Alloc v))
 ))
 
 ;; If `t v = e` and `e -> a`, then `v -> a`.
@@ -236,5 +236,5 @@
 
 (run 40)
 
-(extract :variants 100 (AllocVar (Expr "u")))
-(extract :variants 100 (AllocVar (Expr "sp")))
+(extract :variants 100 (Alloc (Expr "u")))
+(extract :variants 100 (Alloc (Expr "sp")))
