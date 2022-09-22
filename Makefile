@@ -16,6 +16,7 @@ test:
 	cargo test
 	@rustup component add clippy
 	cargo clippy --tests -- -D warnings
+	@rustup component add rustfmt
 	cargo fmt --check
 
 web: ${DIST_WASM} ${WEB_SRC} ${WWW}/examples.json
