@@ -14,6 +14,7 @@ all: test web
 
 test:
 	cargo test
+	@rustup component add clippy
 	cargo clippy --tests -- -D warnings
 	cargo fmt --check
 
