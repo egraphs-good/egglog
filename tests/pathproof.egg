@@ -27,3 +27,4 @@
 ;(check (path 1 2 _))
 ; or extract
 ;(extract (path 1 4 ?p))
+(print path)

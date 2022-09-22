@@ -57,6 +57,7 @@ Command: Command = {
     "(" "query" <List<Fact>> ")" => Command::Query(<>),
     "(" "push" <UNum?> ")" => Command::Push(<>.unwrap_or(1)),
     "(" "pop" <UNum?> ")" => Command::Pop(<>.unwrap_or(1)),
+    "(" "print" <sym:Ident> <n:UNum?> ")" => Command::Print(sym, n.unwrap_or(10)),
 }
 
 Action: Action = {

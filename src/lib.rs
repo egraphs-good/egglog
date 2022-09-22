@@ -587,6 +587,57 @@ impl EGraph {
         }
     }
 
+    fn print_function(&mut self, sym: Symbol, n: usize) -> Result<String, Error> {
+        let f = self.functions.get(&sym).ok_or(TypeError::Unbound(sym))?;
+        let schema = f.schema.clone();
+        let nodes = f
+            .nodes
+            .iter()
+            .take(n)
+            .map(|(k, v)| (k.clone(), *v))
+            .collect::<Vec<_>>();
+
+        let out_is_unit = f.schema.output.name() == "Unit".into();
+
+        let mut buf = String::new();
+        let s = &mut buf;
+        for (ins, out) in nodes {
+            write!(s, "({}", sym).unwrap();
+            for (a, t) in ins.iter().zip(&schema.input) {
+                s.push(' ');
+                let e = if t.is_eq_sort() {
+                    self.extract(*a).1
+                } else {
+                    t.make_expr(*a)
+                };
+                write!(s, "{}", e).unwrap();
+            }
+
+            if out_is_unit {
+                s.push(')');
+            } else {
+                let e = if schema.output.is_eq_sort() {
+                    self.extract(out).1
+                } else {
+                    schema.output.make_expr(out)
+                };
+                write!(s, ") -> {}", e).unwrap();
+            }
+            s.push('\n');
+            // write!(s, "{}(", self.decl.name)?;
+            // for (i, arg) in args.iter().enumerate() {
+            //     if i > 0 {
+            //         write!(s, ", ")?;
+            //     }
+            //     write!(s, "{}", arg)?;
+            // }
+            // write!(s, ") = {}", value)?;
+            // println!("{}", s);
+        }
+
+        Ok(buf)
+    }
+
     pub fn eval_closed_expr(&mut self, expr: &Expr) -> Result<Value, NotFoundError> {
         self.eval_expr(&Default::default(), expr)
     }
@@ -884,6 +935,7 @@ impl EGraph {
                 }
                 format!("Popped {n} levels.")
             }
+            Command::Print(f, n) => self.print_function(f, n)?,
         })
     }
 

@@ -60,6 +60,7 @@ pub enum Command {
     Check(Fact),
     ClearRules,
     Clear,
+    Print(Symbol, usize),
     Query(Vec<Fact>),
     Push(usize),
     Pop(usize),
