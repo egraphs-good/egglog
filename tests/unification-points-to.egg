@@ -155,7 +155,7 @@
     (union (expr-points-to v) a)
 ))
 
-;; ;; If `*v = u`, `v -> a`, and `u -> b`, then `a -> b`.
+;; If `*v = u`, `v -> a`, and `u -> b`, then `a -> b`.
 (rule (
     (store s v u)
     (= (expr-points-to v) a)
