@@ -156,6 +156,7 @@ pub struct EGraph {
     primitives: HashMap<Symbol, Vec<Primitive>>,
     functions: HashMap<Symbol, Function>,
     rules: HashMap<Symbol, Rule>,
+    pub match_limit: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -164,6 +165,8 @@ struct Rule {
     bindings: Bindings,
     head: Vec<Action>,
     matches: usize,
+    times_banned: usize,
+    banned_until: usize,
 }
 
 impl Default for EGraph {
@@ -176,6 +179,7 @@ impl Default for EGraph {
             rules: Default::default(),
             primitives: Default::default(),
             presorts: Default::default(),
+            match_limit: 10_000_000,
         };
         egraph.add_sort(UnitSort::new("Unit".into()));
         egraph.add_sort(StringSort::new("String".into()));
@@ -646,8 +650,8 @@ impl EGraph {
         let mut search_time = Duration::default();
         let mut apply_time = Duration::default();
         let mut rebuild_time = Duration::default();
-        for _ in 0..limit {
-            let [st, at] = self.step_rules();
+        for i in 0..limit {
+            let [st, at] = self.step_rules(i);
             search_time += st;
             apply_time += at;
 
@@ -671,7 +675,7 @@ impl EGraph {
         [search_time, apply_time, rebuild_time]
     }
 
-    fn step_rules(&mut self) -> [Duration; 2] {
+    fn step_rules(&mut self, iteration: usize) -> [Duration; 2] {
         fn make_subst(rule: &Rule, values: &[Value]) -> Subst {
             let get_val = |t: &AtomTerm| match t {
                 AtomTerm::Var(sym) => {
@@ -691,14 +695,18 @@ impl EGraph {
                 .collect()
         }
 
+        let ban_length = 5;
+
         let search_start = Instant::now();
         let mut searched = vec![];
         for rule in self.rules.values() {
             let mut all_values = vec![];
-            self.run_query(&rule.query, |values| {
-                assert_eq!(values.len(), rule.query.vars.len());
-                all_values.extend_from_slice(values);
-            });
+            if rule.banned_until <= iteration {
+                self.run_query(&rule.query, |values| {
+                    assert_eq!(values.len(), rule.query.vars.len());
+                    all_values.extend_from_slice(values);
+                });
+            }
             searched.push(all_values);
         }
         let search_elapsed = search_start.elapsed();
@@ -707,9 +715,20 @@ impl EGraph {
         let mut rules = std::mem::take(&mut self.rules);
         'outer: for ((name, rule), all_values) in rules.iter_mut().zip(searched) {
             let n = rule.query.vars.len();
+
+            // backoff logic
+            let len = all_values.len() / n;
+            let threshold = self.match_limit << rule.times_banned;
+            if len > threshold {
+                rule.times_banned += 1;
+                rule.banned_until = iteration + ban_length;
+                log::info!("Banning rule {name} for {ban_length} iterations, matched {len} times");
+                continue;
+            }
+
             for values in all_values.chunks(n) {
                 rule.matches += 1;
-                if rule.matches > 10000000 {
+                if rule.matches > 10_000_000 {
                     log::warn!("Rule {} has matched {} times, bailing!", name, rule.matches);
                     break 'outer;
                 }
@@ -733,6 +752,8 @@ impl EGraph {
             bindings,
             head: rule.head,
             matches: 0,
+            times_banned: 0,
+            banned_until: 0,
         };
         match self.rules.entry(name) {
             Entry::Occupied(_) => panic!("Rule '{name}' was already present"),
