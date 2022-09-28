@@ -2,7 +2,7 @@ use hashbrown::hash_map::Entry;
 
 use crate::ast::Symbol;
 use crate::util::HashMap;
-use crate::{ArcSort, EGraph, Expr, Id, Value};
+use crate::{EGraph, Expr, Function, Id, Value};
 
 type Cost = usize;
 
@@ -96,15 +96,16 @@ impl<'a> Extractor<'a> {
         }
     }
 
-    fn node_total_cost(&self, types: &[ArcSort], children: &[Value]) -> Option<Cost> {
-        let mut cost = 1;
+    fn node_total_cost(&self, function: &Function, children: &[Value]) -> Option<Cost> {
+        let mut cost = function.decl.cost.unwrap_or(1);
+        let types = &function.schema.input;
         for (ty, value) in types.iter().zip(children) {
             cost += if ty.is_eq_sort() {
                 let id = self.egraph.find(Id::from(value.bits as usize));
                 // TODO costs should probably map values?
                 self.costs.get(&id)?.0
             } else {
-                0
+                1
             }
         }
         Some(cost)
@@ -119,7 +120,7 @@ impl<'a> Extractor<'a> {
                 let func = &self.egraph.functions[&sym];
                 if func.schema.output.is_eq_sort() {
                     for (inputs, output) in &func.nodes {
-                        if let Some(new_cost) = self.node_total_cost(&func.schema.input, inputs) {
+                        if let Some(new_cost) = self.node_total_cost(func, inputs) {
                             let make_new_pair = || (new_cost, Node { sym, inputs });
 
                             let id = self.egraph.find(Id::from(output.bits as usize));

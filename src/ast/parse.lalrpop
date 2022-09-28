@@ -34,23 +34,19 @@ Comma<T>: Vec<T> = {
 Command: Command = {
     "(" "datatype" <name:Ident> <variants:(Variant)*> ")" => Command::Datatype { <> },
     "(" "sort" <name:Ident> "(" <head:Ident> <tail:(Expr)*> ")" ")" => Command::Sort (<>),
-    "(" "function" <name:Ident> <schema:Schema> <merge:(":merge" <Expr>)?> <default:(":default" <Expr>)?> ")" => {
-        Command::Function(FunctionDecl { name, schema, merge, default })
+    "(" "function" <name:Ident> <schema:Schema> <cost:Cost>
+        <merge:(":merge" <Expr>)?> <default:(":default" <Expr>)?> ")" => {
+        Command::Function(FunctionDecl { name, schema, merge, default, cost })
     },
     "(" "relation" <name:Ident> <types:List<Type>> ")" => Command::Function(FunctionDecl::relation(name, types)),
     "(" "rule" <body:List<Fact>> <head:List<Action>> ")" => Command::Rule(Rule { head, body }),
     "(" "rewrite" <lhs:Expr> <rhs:Expr>
         <conditions:(":when" <List<Fact>>)?>
     ")" => Command::Rewrite(Rewrite { lhs, rhs, conditions: conditions.unwrap_or_default() }),
-    <Action> => match <> {
-        Action::Define(name, expr) => Command::Define(name, expr),
-        a => Command::Action(a),
-    },
+    "(" "define" <name:Ident> <expr:Expr> <cost:Cost> ")" => Command::Define { name, expr, cost },
+    <NonDefineAction> => Command::Action(<>),
     "(" "run" <UNum> ")" => Command::Run(<>),
-    "(" "extract" <e:Expr> ")" => Command::Extract { <>, variants: 0 },
-    "(" "extract" ":variants" <variants:Num> <e:Expr> ")" => Command::Extract { 
-        e, variants: variants.try_into().unwrap()
-    },  
+    "(" "extract" <variants:(":variants" <UNum>)?> <e:Expr> ")" => Command::Extract { e, variants: variants.unwrap_or(0) },
     "(" "check" <Fact> ")" => Command::Check(<>),
     "(" "clear-rules" ")" => Command::ClearRules,
     "(" "clear" ")" => Command::Clear,
@@ -60,13 +56,22 @@ Command: Command = {
     "(" "print" <sym:Ident> <n:UNum?> ")" => Command::Print(sym, n.unwrap_or(10)),
 }
 
-Action: Action = {
+Cost: Option<usize> = {
+    ":cost" <UNum> => Some(<>),
+    => None,
+}
+
+NonDefineAction: Action = {
     "(" "set" "(" <f: Ident> <args:Expr*> ")" <v:Expr> ")" => Action::Set ( f, args, v ),
     "(" "delete" "(" <f: Ident> <args:Expr*> ")" ")" => Action::Delete ( f, args),
     "(" "union" <e1:Expr> <e2:Expr> ")" => Action::Union(<>),
-    "(" "define" <name:Ident> <expr:Expr> ")" => Action::Define(name, expr),
     "(" "panic" <msg:String> ")" => Action::Panic(msg),
     <e:Expr> => Action::Expr(e),
+}
+
+Action: Action = {
+    "(" "define" <name:Ident> <expr:Expr> ")" => Action::Define(name, expr),
+    <NonDefineAction> => <>,
 }
 
 Name: Symbol = { "[" <Ident> "]" => <> }
@@ -103,7 +108,7 @@ CallExpr: Expr = {
 ExprList: Vec<Expr> = { "(" <sexps:(Expr)*> ")" => sexps }
 
 Variant: Variant = {
-    "(" <name:Ident> <types:(Type)*> ")" => Variant { <> },
+    "(" <name:Ident> <types:(Type)*> <cost:Cost> ")" => Variant { <> },
 }
 
 Type: Symbol = <Ident>;

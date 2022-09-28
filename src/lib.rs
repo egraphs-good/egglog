@@ -483,20 +483,20 @@ impl EGraph {
 
     pub fn declare_constructor(
         &mut self,
-        name: impl Into<Symbol>,
-        types: Vec<Symbol>,
+        variant: Variant,
         sort: impl Into<Symbol>,
     ) -> Result<(), Error> {
-        let name = name.into();
+        let name = variant.name;
         let sort = sort.into();
         self.declare_function(&FunctionDecl {
             name,
             schema: Schema {
-                input: types,
+                input: variant.types,
                 output: sort,
             },
             merge: None,
             default: None,
+            cost: variant.cost,
         })?;
         // if let Some(ctors) = self.sorts.get_mut(&sort) {
         //     ctors.push(name);
@@ -805,7 +805,7 @@ impl EGraph {
             Command::Datatype { name, variants } => {
                 self.declare_sort(name)?;
                 for variant in variants {
-                    self.declare_constructor(variant.name, variant.types, name)?;
+                    self.declare_constructor(variant, name)?;
                 }
                 format!("Declared datatype {name}.")
             }
@@ -890,7 +890,7 @@ impl EGraph {
                     format!("Skipping running {action}.")
                 }
             }
-            Command::Define(name, expr) => {
+            Command::Define { name, expr, cost } => {
                 if should_run {
                     let value = self.eval_closed_expr(&expr)?;
                     let sort = self.sorts[&value.tag].clone();
@@ -902,6 +902,7 @@ impl EGraph {
                         },
                         default: None,
                         merge: None,
+                        cost,
                     })?;
 
                     let f = self.functions.get_mut(&name).unwrap();

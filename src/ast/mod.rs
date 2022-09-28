@@ -47,7 +47,11 @@ pub enum Command {
     },
     Sort(Symbol, Symbol, Vec<Expr>),
     Function(FunctionDecl),
-    Define(Symbol, Expr),
+    Define {
+        name: Symbol,
+        expr: Expr,
+        cost: Option<usize>,
+    },
     Rule(Rule),
     Rewrite(Rewrite),
     Action(Action),
@@ -72,12 +76,14 @@ pub struct FunctionDecl {
     pub schema: Schema,
     pub default: Option<Expr>,
     pub merge: Option<Expr>,
+    pub cost: Option<usize>,
 }
 
 #[derive(Clone, Debug)]
 pub struct Variant {
     pub name: Symbol,
     pub types: Vec<Symbol>,
+    pub cost: Option<usize>,
 }
 
 #[derive(Clone, Debug)]
@@ -96,6 +102,7 @@ impl FunctionDecl {
             },
             merge: None,
             default: None,
+            cost: None,
         }
     }
 }
