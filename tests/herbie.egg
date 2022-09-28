@@ -544,7 +544,7 @@
 (push)
 (define x (Var "x"))
 (define e (Sub (Mul (Sqrt (Add x one)) (Sqrt (Add x one))) (Mul (Sqrt x) (Sqrt x))))
-(run 3)
+(run 5)
 (check (= one e))
 (pop)
 
@@ -565,7 +565,7 @@
 (define e
   (Div one (Sub (Div (Add one sqrt5) two) (Div (Sub one sqrt5) two))))
 (define tgt (Div one sqrt5))
-(run 3)
+(run 6)
 (check (= e tgt))
 ; TODO: we can't just do (= e (Div one sqrt5)) cause that doesn't work
 ;       unless we add the following lines to check_with after evaluating

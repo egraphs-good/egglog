@@ -224,38 +224,41 @@ impl<'a> Context<'a> {
     }
 
     fn check_query_expr(&mut self, expr: &Expr, expected: ArcSort) -> Id {
-        if let Expr::Var(sym) = expr {
-            match self.types.entry(*sym) {
-                Entry::Occupied(ty) => {
-                    // TODO name comparison??
-                    if ty.get().name() != expected.name() {
+        match expr {
+            Expr::Var(sym) if !self.egraph.functions.contains_key(sym) => {
+                match self.types.entry(*sym) {
+                    Entry::Occupied(ty) => {
+                        // TODO name comparison??
+                        if ty.get().name() != expected.name() {
+                            self.errors.push(TypeError::Mismatch {
+                                expr: expr.clone(),
+                                expected,
+                                actual: ty.get().clone(),
+                                reason: "mismatch".into(),
+                            })
+                        }
+                    }
+                    // we can actually bind the variable here
+                    Entry::Vacant(entry) => {
+                        entry.insert(expected);
+                    }
+                }
+                self.add_node(ENode::Var(*sym))
+            }
+            _ => {
+                let (id, actual) = self.infer_query_expr(expr);
+                if let Some(actual) = actual {
+                    if actual.name() != expected.name() {
                         self.errors.push(TypeError::Mismatch {
                             expr: expr.clone(),
                             expected,
-                            actual: ty.get().clone(),
+                            actual,
                             reason: "mismatch".into(),
                         })
                     }
                 }
-                // we can actually bind the variable here
-                Entry::Vacant(entry) => {
-                    entry.insert(expected);
-                }
+                id
             }
-            self.add_node(ENode::Var(*sym))
-        } else {
-            let (id, actual) = self.infer_query_expr(expr);
-            if let Some(actual) = actual {
-                if actual.name() != expected.name() {
-                    self.errors.push(TypeError::Mismatch {
-                        expr: expr.clone(),
-                        expected,
-                        actual,
-                        reason: "mismatch".into(),
-                    })
-                }
-            }
-            id
         }
     }
 
