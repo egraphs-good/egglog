@@ -65,6 +65,10 @@ pub enum Command {
     ClearRules,
     Clear,
     Print(Symbol, usize),
+    Input {
+        name: Symbol,
+        file: String,
+    },
     Query(Vec<Fact>),
     Push(usize),
     Pop(usize),

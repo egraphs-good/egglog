@@ -15,7 +15,9 @@ use thiserror::Error;
 use ast::*;
 
 use std::fmt::Write;
+use std::fs::File;
 use std::hash::Hash;
+use std::io::Read;
 use std::ops::Deref;
 use std::{fmt::Debug, sync::Arc};
 use typecheck::{AtomTerm, Bindings};
@@ -958,6 +960,56 @@ impl EGraph {
                 format!("Popped {n} levels.")
             }
             Command::Print(f, n) => self.print_function(f, n)?,
+            Command::Input { name, file } => {
+                let func = self.functions.get_mut(&name).unwrap();
+                let is_unit = func.schema.output.name().as_str() == "Unit";
+
+                // check that the function uses supported types
+                for t in &func.schema.input {
+                    match t.name().as_str() {
+                        "i64" | "String" => {}
+                        s => panic!("Unsupported type {} for input", s),
+                    }
+                }
+                match func.schema.output.name().as_str() {
+                    "i64" | "String" | "Unit" => {}
+                    s => panic!("Unsupported type {} for input", s),
+                }
+
+                log::info!("Opening file '{}'...", file);
+                let mut f = File::open(file.as_str()).unwrap();
+                let mut contents = String::new();
+                f.read_to_string(&mut contents).unwrap();
+
+                let mut actions: Vec<Action> = vec![];
+                let mut str_buf: Vec<&str> = vec![];
+                for line in contents.lines() {
+                    str_buf.clear();
+                    str_buf.extend(line.split('\t').map(|s| s.trim()));
+                    if str_buf.is_empty() {
+                        continue;
+                    }
+
+                    let parse = |s: &str| -> Expr {
+                        if let Ok(i) = s.parse() {
+                            Expr::Lit(Literal::Int(i))
+                        } else {
+                            Expr::Lit(Literal::String(s.into()))
+                        }
+                    };
+
+                    let mut exprs: Vec<Expr> = str_buf.iter().map(|&s| parse(s)).collect();
+
+                    actions.push(if is_unit {
+                        Action::Expr(Expr::Call(name, exprs))
+                    } else {
+                        let out = exprs.pop().unwrap();
+                        Action::Set(name, exprs, out)
+                    });
+                }
+                self.eval_actions(None, &actions)?;
+                format!("Read {} facts into {name} from '{file}'.", actions.len())
+            }
         })
     }
 

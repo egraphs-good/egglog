@@ -54,6 +54,7 @@ Command: Command = {
     "(" "push" <UNum?> ")" => Command::Push(<>.unwrap_or(1)),
     "(" "pop" <UNum?> ")" => Command::Pop(<>.unwrap_or(1)),
     "(" "print" <sym:Ident> <n:UNum?> ")" => Command::Print(sym, n.unwrap_or(10)),
+    "(" "input" <name:Ident> <file:String> ")" => Command::Input { name, file },
 }
 
 Cost: Option<usize> = {
@@ -124,4 +125,4 @@ Bool: bool = {
 Ident: Symbol = <s:r"[[:alpha:]][\w-]*"> => s.parse().unwrap();
 PrimitiveSymbol: Symbol = <r"[-+*/!=<>&|^/%]+"> => Symbol::from(<>);
 SymString: Symbol = <r#""[^"]*""#> => Symbol::from(<>);
-String: String = <r#""[^"]*""#> => (<>).to_owned();
+String: String = <r#""[^"]*""#> => (<>).trim_matches('"').to_owned();
