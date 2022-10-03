@@ -53,6 +53,7 @@ impl Function {
         for (mut args, value) in old_nodes {
             for (a, ty) in args.iter_mut().zip(&self.schema.input) {
                 if ty.is_eq_sort() {
+                    assert_eq!(a.tag, ty.name());
                     *a = uf.find_mut_value(*a)
                 }
             }

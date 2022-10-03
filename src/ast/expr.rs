@@ -51,6 +51,10 @@ pub enum Expr {
 }
 
 impl Expr {
+    pub fn var(name: impl Into<Symbol>) -> Self {
+        Expr::Var(name.into())
+    }
+
     pub fn call(op: impl Into<Symbol>, children: impl IntoIterator<Item = Self>) -> Self {
         Self::Call(op.into(), children.into_iter().collect())
     }

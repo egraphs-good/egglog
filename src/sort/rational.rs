@@ -75,7 +75,7 @@ impl Sort for RationalSort {
             if a.is_one() {
                 Some(R::zero())
             } else {
-                todo!()
+                None
             }
         });
         add_primitives!(eg, "sqrt" = |a: R| -> Option<R> {
@@ -96,7 +96,7 @@ impl Sort for RationalSort {
             if a.is_one() {
                 Some(R::one())
             } else {
-                todo!()
+                None
             }
         });
 
