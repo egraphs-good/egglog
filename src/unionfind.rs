@@ -3,7 +3,7 @@ use crate::{util::IndexMap, Id, Value};
 use std::fmt::Debug;
 use std::hash::Hash;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash)]
 #[cfg_attr(feature = "serde-1", derive(serde::Serialize, serde::Deserialize))]
 pub struct UnionFind<V = ()> {
     parents: Vec<(Id, V)>,
