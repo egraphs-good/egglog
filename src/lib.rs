@@ -353,7 +353,9 @@ impl EGraph {
                     let ctx = ctx.as_ref().unwrap_or(&default);
                     let a = self.eval_expr(ctx, a)?;
                     let b = self.eval_expr(ctx, b)?;
-                    if self.unionfind.find(Id::from(a.bits as usize)) != self.unionfind.find(Id::from(b.bits as usize)) {
+                    if self.unionfind.find(Id::from(a.bits as usize))
+                        != self.unionfind.find(Id::from(b.bits as usize))
+                    {
                         self.saturated = false;
                     }
                     self.unionfind.union_values(a, b);
