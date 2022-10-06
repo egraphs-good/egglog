@@ -65,6 +65,7 @@ pub enum Command {
     ClearRules,
     Clear,
     Print(Symbol, usize),
+    PrintSize(Symbol),
     Input {
         name: Symbol,
         file: String,

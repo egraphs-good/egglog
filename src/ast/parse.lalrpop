@@ -54,6 +54,7 @@ Command: Command = {
     "(" "push" <UNum?> ")" => Command::Push(<>.unwrap_or(1)),
     "(" "pop" <UNum?> ")" => Command::Pop(<>.unwrap_or(1)),
     "(" "print" <sym:Ident> <n:UNum?> ")" => Command::Print(sym, n.unwrap_or(10)),
+    "(" "print-size" <sym:Ident> ")" => Command::PrintSize(sym),
     "(" "input" <name:Ident> <file:String> ")" => Command::Input { name, file },
 }
 
