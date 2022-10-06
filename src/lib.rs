@@ -158,6 +158,7 @@ pub struct EGraph {
     primitives: HashMap<Symbol, Vec<Primitive>>,
     functions: HashMap<Symbol, Function>,
     rules: HashMap<Symbol, Rule>,
+    saturated: bool,
     pub match_limit: usize,
 }
 
@@ -182,6 +183,7 @@ impl Default for EGraph {
             primitives: Default::default(),
             presorts: Default::default(),
             match_limit: 10_000_000,
+            saturated: false,
         };
         egraph.add_sort(UnitSort::new("Unit".into()));
         egraph.add_sort(StringSort::new("String".into()));
@@ -317,6 +319,11 @@ impl EGraph {
                         .ok_or_else(|| NotFoundError(e.clone()))?;
                     let old_value = function.nodes.insert(values.clone(), value);
 
+                    // if the value does not exist or the two values differ
+                    if old_value.is_none() || old_value != Some(value) {
+                        self.saturated = false;
+                    }
+
                     if let Some(old_value) = old_value {
                         if value != old_value {
                             let out = &function.schema.output;
@@ -346,6 +353,11 @@ impl EGraph {
                     let ctx = ctx.as_ref().unwrap_or(&default);
                     let a = self.eval_expr(ctx, a)?;
                     let b = self.eval_expr(ctx, b)?;
+                    if self.unionfind.find(Id::from(a.bits as usize))
+                        != self.unionfind.find(Id::from(b.bits as usize))
+                    {
+                        self.saturated = false;
+                    }
                     self.unionfind.union_values(a, b);
                 }
                 Action::Delete(sym, args) => {
@@ -358,7 +370,9 @@ impl EGraph {
                         .functions
                         .get_mut(sym)
                         .ok_or(TypeError::Unbound(*sym))?;
-                    function.nodes.remove(&values);
+                    if function.nodes.remove(&values).is_some() {
+                        self.saturated = false;
+                    }
                 }
             }
         }
@@ -547,6 +561,7 @@ impl EGraph {
                     if let Some(value) = function.nodes.get(&values) {
                         Ok(*value)
                     } else {
+                        self.saturated = false;
                         let out = &function.schema.output;
                         match function.decl.default.as_ref() {
                             None if out.name() == "Unit".into() => {
@@ -658,18 +673,20 @@ impl EGraph {
         let mut apply_time = Duration::default();
         let mut rebuild_time = Duration::default();
         for i in 0..limit {
+            self.saturated = true;
             let [st, at] = self.step_rules(i);
             search_time += st;
             apply_time += at;
 
             let rebuild_start = Instant::now();
             let updates = self.rebuild();
-            log::debug!("Made {updates} updates",);
+            log::info!("database size: {}", self.num_tuples());
+            log::info!("Made {updates} updates",);
             rebuild_time += rebuild_start.elapsed();
-            // if updates == 0 {
-            //     log::debug!("Breaking early!");
-            //     break;
-            // }
+            if self.saturated {
+                log::info!("Breaking early at iteration {}!", i);
+                break;
+            }
         }
 
         // TODO detect functions
