@@ -28,7 +28,8 @@ num-traits = "0.2.15"
 lalrpop-util = {version = "0.19.8", features = ["lexer"]}
 regex = "1"
 
-# TODO should be dev dependency, but easier to just log for now
+# binary dependencies
+clap = {version = "4", features = ["derive"]}
 env_logger = "0.9"
 
 [build-dependencies]
@@ -40,7 +41,3 @@ datatest-stable = "0.1.3"
 [[test]]
 harness = false
 name = "files"
-# pest = "2.1"
-# pest_derive = "2.1"
-
-# logos = "0.12"

@@ -19,6 +19,7 @@ use std::fs::File;
 use std::hash::Hash;
 use std::io::Read;
 use std::ops::Deref;
+use std::path::PathBuf;
 use std::{fmt::Debug, sync::Arc};
 use typecheck::{AtomTerm, Bindings};
 
@@ -160,6 +161,7 @@ pub struct EGraph {
     rules: HashMap<Symbol, Rule>,
     saturated: bool,
     pub match_limit: usize,
+    pub fact_directory: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug)]
@@ -184,6 +186,7 @@ impl Default for EGraph {
             presorts: Default::default(),
             match_limit: 10_000_000,
             saturated: false,
+            fact_directory: None,
         };
         egraph.add_sort(UnitSort::new("Unit".into()));
         egraph.add_sort(StringSort::new("String".into()));
@@ -987,6 +990,9 @@ impl EGraph {
                 let func = self.functions.get_mut(&name).unwrap();
                 let is_unit = func.schema.output.name().as_str() == "Unit";
 
+                let mut filename = self.fact_directory.clone().unwrap_or_default();
+                filename.push(file.as_str());
+
                 // check that the function uses supported types
                 for t in &func.schema.input {
                     match t.name().as_str() {
@@ -999,8 +1005,8 @@ impl EGraph {
                     s => panic!("Unsupported type {} for input", s),
                 }
 
-                log::info!("Opening file '{}'...", file);
-                let mut f = File::open(file.as_str()).unwrap();
+                log::info!("Opening file '{:?}'...", filename);
+                let mut f = File::open(filename).unwrap();
                 let mut contents = String::new();
                 f.read_to_string(&mut contents).unwrap();
 

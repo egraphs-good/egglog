@@ -11,3 +11,4 @@ flamegraph.svg
 perf.data*
 
 _scratch.egg
+/*.egg
