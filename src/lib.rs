@@ -659,6 +659,11 @@ impl EGraph {
         Ok(buf)
     }
 
+    pub fn print_size(&self, sym: Symbol) -> Result<String, Error> {
+        let f = self.functions.get(&sym).ok_or(TypeError::Unbound(sym))?;
+        Ok(format!("Function {} has size {}", sym, f.nodes.len()))
+    }
+
     pub fn eval_closed_expr(&mut self, expr: &Expr) -> Result<Value, NotFoundError> {
         self.eval_expr(&Default::default(), expr)
     }
@@ -977,6 +982,7 @@ impl EGraph {
                 format!("Popped {n} levels.")
             }
             Command::Print(f, n) => self.print_function(f, n)?,
+            Command::PrintSize(f) => self.print_size(f)?,
             Command::Input { name, file } => {
                 let func = self.functions.get_mut(&name).unwrap();
                 let is_unit = func.schema.output.name().as_str() == "Unit";
