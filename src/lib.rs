@@ -7,7 +7,7 @@ mod unionfind;
 mod util;
 mod value;
 
-use hashbrown::hash_map::Entry;
+use hashbrown::hash_map::{Entry, EntryRef};
 use instant::{Duration, Instant};
 use sort::*;
 use thiserror::Error;
@@ -38,8 +38,14 @@ use crate::typecheck::TypeError;
 pub struct Function {
     decl: FunctionDecl,
     schema: ResolvedSchema,
-    nodes: HashMap<Vec<Value>, Value>,
+    nodes: HashMap<Vec<Value>, TupleOutput>,
     updates: usize,
+}
+
+#[derive(Debug, Clone)]
+struct TupleOutput {
+    value: Value,
+    timestamp: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -49,27 +55,57 @@ struct ResolvedSchema {
 }
 
 impl Function {
-    pub fn rebuild(&mut self, uf: &mut UnionFind) -> usize {
+    pub fn insert(&mut self, inputs: &[Value], value: Value, timestamp: u32) -> Option<Value> {
+        match self.nodes.entry_ref(inputs) {
+            EntryRef::Occupied(mut entry) => {
+                let old = entry.get_mut();
+                if old.value == value {
+                    None
+                } else {
+                    let saved = old.value;
+                    old.value = value;
+                    old.timestamp = timestamp;
+                    self.updates += 1;
+                    Some(saved)
+                }
+            }
+            EntryRef::Vacant(entry) => {
+                entry.insert(TupleOutput { value, timestamp });
+                self.updates += 1;
+                None
+            }
+        }
+    }
+
+    pub fn rebuild(&mut self, uf: &mut UnionFind, timestamp: u32) -> usize {
         // FIXME this doesn't compute updates properly
         let n_unions = uf.n_unions();
         let old_nodes = std::mem::take(&mut self.nodes);
-        for (mut args, value) in old_nodes {
+        for (mut args, out) in old_nodes {
+            let value = out.value;
             for (a, ty) in args.iter_mut().zip(&self.schema.input) {
                 if ty.is_eq_sort() {
                     *a = uf.find_mut_value(*a)
                 }
             }
+
+            // TODO call the merge fn!!!
             let _new_value = if self.schema.output.is_eq_sort() {
                 self.nodes
                     .entry(args)
-                    .and_modify(|value2| *value2 = uf.union_values(value, *value2))
-                    .or_insert_with(|| uf.find_mut_value(value))
+                    .and_modify(|out2| out2.value = uf.union_values(value, out2.value))
+                    .or_insert_with(|| TupleOutput {
+                        value: uf.find_mut_value(value),
+                        timestamp,
+                    })
             } else {
                 self.nodes
                     .entry(args)
                     // .and_modify(|value2| *value2 = uf.union_values(value.clone(), value2.clone()))
-                    .or_insert(value)
+                    .or_insert(TupleOutput { value, timestamp })
             };
+            // todo!("timestamps");
+            // todo!("merge fn");
         }
         uf.n_unions() - n_unions + std::mem::take(&mut self.updates)
     }
@@ -160,6 +196,7 @@ pub struct EGraph {
     functions: HashMap<Symbol, Function>,
     rules: HashMap<Symbol, Rule>,
     saturated: bool,
+    timestamp: u32,
     pub match_limit: usize,
     pub fact_directory: Option<PathBuf>,
 }
@@ -185,6 +222,7 @@ impl Default for EGraph {
             primitives: Default::default(),
             presorts: Default::default(),
             match_limit: 10_000_000,
+            timestamp: 0,
             saturated: false,
             fact_directory: None,
         };
@@ -265,8 +303,8 @@ impl EGraph {
                     )
                 }
                 assert_eq!(
-                    output,
-                    &self.bad_find_value(*output),
+                    output.value,
+                    self.bad_find_value(output.value),
                     "{name}({inputs:?}) = {output:?}\n{:?}",
                     function.schema,
                 )
@@ -320,12 +358,14 @@ impl EGraph {
                         .functions
                         .get_mut(f)
                         .ok_or_else(|| NotFoundError(e.clone()))?;
-                    let old_value = function.nodes.insert(values.clone(), value);
+                    let old_value = function.insert(&values, value, self.timestamp);
 
                     // if the value does not exist or the two values differ
                     if old_value.is_none() || old_value != Some(value) {
                         self.saturated = false;
                     }
+
+                    // TODO neaten saturation logic
 
                     if let Some(old_value) = old_value {
                         if value != old_value {
@@ -341,11 +381,11 @@ impl EGraph {
                                     ctx.insert("new".into(), value);
                                     let expr = expr.clone(); // break the borrow of `function`
                                     let new_value = self.eval_expr(&ctx, &expr)?;
-                                    self.functions
-                                        .get_mut(f)
-                                        .unwrap()
-                                        .nodes
-                                        .insert(values, new_value);
+                                    self.functions.get_mut(f).unwrap().insert(
+                                        &values,
+                                        new_value,
+                                        self.timestamp,
+                                    );
                                 }
                                 _ => panic!("invalid merge for {}", function.decl.name),
                             }
@@ -454,7 +494,7 @@ impl EGraph {
     fn rebuild_one(&mut self) -> usize {
         let mut new_unions = 0;
         for function in self.functions.values_mut() {
-            new_unions += function.rebuild(&mut self.unionfind);
+            new_unions += function.rebuild(&mut self.unionfind, self.timestamp);
         }
         new_unions
     }
@@ -541,10 +581,10 @@ impl EGraph {
                     Ok(*value)
                 } else if let Some(f) = self.functions.get(var) {
                     assert!(f.schema.input.is_empty());
-                    f.nodes
-                        .get(&vec![])
-                        .copied()
-                        .ok_or_else(|| NotFoundError(expr.clone()))
+                    match f.nodes.get(&vec![]) {
+                        Some(out) => Ok(out.value),
+                        None => Err(NotFoundError(expr.clone())),
+                    }
                 } else {
                     Err(NotFoundError(expr.clone()))
                 }
@@ -561,27 +601,28 @@ impl EGraph {
                     values.push(self.eval_expr(ctx, arg)?);
                 }
                 if let Some(function) = self.functions.get_mut(op) {
-                    if let Some(value) = function.nodes.get(&values) {
-                        Ok(*value)
+                    if let Some(out) = function.nodes.get(&values) {
+                        Ok(out.value)
                     } else {
+                        let ts = self.timestamp;
                         self.saturated = false;
                         let out = &function.schema.output;
                         match function.decl.default.as_ref() {
                             None if out.name() == "Unit".into() => {
-                                function.nodes.insert(values, Value::unit());
+                                function.insert(&values, Value::unit(), ts);
                                 Ok(Value::unit())
                             }
                             None if out.is_eq_sort() => {
                                 let id = self.unionfind.make_set();
                                 let value = Value::from_id(out.name(), id);
-                                function.nodes.insert(values, value);
+                                function.insert(&values, value, ts);
                                 Ok(value)
                             }
                             Some(default) => {
                                 let default = default.clone(); // break the borrow
                                 let value = self.eval_expr(ctx, &default)?;
                                 let function = self.functions.get_mut(op).unwrap();
-                                function.nodes.insert(values, value);
+                                function.insert(&values, value, ts);
                                 Ok(value)
                             }
                             _ => panic!("invalid default for {:?}", function.decl.name),
@@ -618,7 +659,7 @@ impl EGraph {
             .nodes
             .iter()
             .take(n)
-            .map(|(k, v)| (k.clone(), *v))
+            .map(|(k, v)| (k.clone(), v.clone()))
             .collect::<Vec<_>>();
 
         let out_is_unit = f.schema.output.name() == "Unit".into();
@@ -641,9 +682,9 @@ impl EGraph {
                 s.push(')');
             } else {
                 let e = if schema.output.is_eq_sort() {
-                    self.extract(out).1
+                    self.extract(out.value).1
                 } else {
-                    schema.output.make_expr(out)
+                    schema.output.make_expr(out.value)
                 };
                 write!(s, ") -> {}", e).unwrap();
             }
@@ -766,6 +807,7 @@ impl EGraph {
         }
         self.rules = rules;
         let apply_elapsed = apply_start.elapsed();
+        self.timestamp += 1;
         [search_elapsed, apply_elapsed]
     }
 
@@ -817,12 +859,12 @@ impl EGraph {
             .functions
             .get(&name)
             .unwrap_or_else(|| panic!("No function {name}"));
-        for (children, value) in &f.nodes {
+        for (children, out) in &f.nodes {
             ids.clear();
             // FIXME canonicalize, do we need to with rebuilding?
             // ids.extend(children.iter().map(|id| self.find(value)));
             ids.extend(children.iter().cloned());
-            ids.push(*value);
+            ids.push(out.value);
             cb(&ids);
         }
     }
@@ -933,7 +975,7 @@ impl EGraph {
                     })?;
 
                     let f = self.functions.get_mut(&name).unwrap();
-                    f.nodes.insert(vec![], value);
+                    f.insert(&[], value, self.timestamp);
                     format!("Defined {name}: {sort:?}")
                 } else {
                     format!("Skipping define {name}")
