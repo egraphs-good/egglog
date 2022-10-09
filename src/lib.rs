@@ -60,10 +60,11 @@ impl Function {
             EntryRef::Occupied(mut entry) => {
                 let old = entry.get_mut();
                 if old.value == value {
-                    None
+                    Some(value)
                 } else {
                     let saved = old.value;
                     old.value = value;
+                    assert!(old.timestamp <= timestamp);
                     old.timestamp = timestamp;
                     self.updates += 1;
                     debug_assert_ne!(saved, value);
@@ -94,7 +95,10 @@ impl Function {
             let _new_value = if self.schema.output.is_eq_sort() {
                 self.nodes
                     .entry(args)
-                    .and_modify(|out2| out2.value = uf.union_values(value, out2.value))
+                    .and_modify(|out2| {
+                        out2.value = uf.union_values(value, out2.value);
+                        out2.timestamp = out2.timestamp.max(timestamp);
+                    })
                     .or_insert_with(|| TupleOutput {
                         value: uf.find_mut_value(value),
                         timestamp,
@@ -102,7 +106,10 @@ impl Function {
             } else {
                 self.nodes
                     .entry(args)
-                    // .and_modify(|value2| *value2 = uf.union_values(value.clone(), value2.clone()))
+                    .and_modify(|out2| {
+                        // out2.value = uf.union_values(value, out2.value);
+                        out2.timestamp = out2.timestamp.max(timestamp);
+                    })
                     .or_insert(TupleOutput { value, timestamp })
             };
             // todo!("timestamps");
