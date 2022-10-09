@@ -66,6 +66,7 @@ impl Function {
                     old.value = value;
                     old.timestamp = timestamp;
                     self.updates += 1;
+                    debug_assert_ne!(saved, value);
                     Some(saved)
                 }
             }
@@ -209,6 +210,7 @@ struct Rule {
     matches: usize,
     times_banned: usize,
     banned_until: usize,
+    todo_timestamp: u32,
 }
 
 impl Default for EGraph {
@@ -767,21 +769,23 @@ impl EGraph {
 
         let search_start = Instant::now();
         let mut searched = vec![];
-        for rule in self.rules.values() {
+        for (&name, rule) in self.rules.iter() {
             let mut all_values = vec![];
             if rule.banned_until <= iteration {
-                self.run_query(&rule.query, |values| {
+                self.run_query(&rule.query, rule.todo_timestamp, |values| {
                     assert_eq!(values.len(), rule.query.vars.len());
                     all_values.extend_from_slice(values);
                 });
+                searched.push((name, all_values));
             }
-            searched.push(all_values);
         }
         let search_elapsed = search_start.elapsed();
 
         let apply_start = Instant::now();
         let mut rules = std::mem::take(&mut self.rules);
-        'outer: for ((name, rule), all_values) in rules.iter_mut().zip(searched) {
+        'outer: for (name, all_values) in searched {
+            let rule = rules.get_mut(&name).unwrap();
+            rule.todo_timestamp = self.timestamp + 1;
             let n = rule.query.vars.len();
 
             // backoff logic
@@ -823,6 +827,7 @@ impl EGraph {
             matches: 0,
             times_banned: 0,
             banned_until: 0,
+            todo_timestamp: 0,
         };
         match self.rules.entry(name) {
             Entry::Occupied(_) => panic!("Rule '{name}' was already present"),
@@ -853,19 +858,21 @@ impl EGraph {
         self.add_rule_with_name(name, rule)
     }
 
-    fn for_each_canonicalized(&self, name: Symbol, mut cb: impl FnMut(&[Value])) {
+    fn for_each_canonicalized(&self, name: Symbol, timestamp: u32, mut cb: impl FnMut(&[Value])) {
         let mut ids = vec![];
         let f = self
             .functions
             .get(&name)
             .unwrap_or_else(|| panic!("No function {name}"));
         for (children, out) in &f.nodes {
-            ids.clear();
-            // FIXME canonicalize, do we need to with rebuilding?
-            // ids.extend(children.iter().map(|id| self.find(value)));
-            ids.extend(children.iter().cloned());
-            ids.push(out.value);
-            cb(&ids);
+            if out.timestamp >= timestamp {
+                ids.clear();
+                // FIXME canonicalize, do we need to with rebuilding?
+                // ids.extend(children.iter().map(|id| self.find(value)));
+                ids.extend(children.iter().cloned());
+                ids.push(out.value);
+                cb(&ids);
+            }
         }
     }
 

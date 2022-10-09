@@ -24,6 +24,7 @@ struct TrieRequest {
     sym: Symbol,
     projection: Vec<usize>,
     constraints: Vec<Constraint>,
+    timestamp: u32,
 }
 
 struct Context<'b> {
@@ -37,8 +38,18 @@ struct Context<'b> {
     trie_pool: Vec<Vec<&'b Trie<'b>>>,
 }
 
+struct Delta {
+    atom_i: usize,
+    timestamp: u32,
+}
+
 impl<'b> Context<'b> {
-    fn new(bump: &'b Bump, egraph: &'b EGraph, query: &'b CompiledQuery) -> Self {
+    fn new(
+        bump: &'b Bump,
+        egraph: &'b EGraph,
+        query: &'b CompiledQuery,
+        delta: Option<Delta>,
+    ) -> Self {
         let default_trie = bump.alloc(Trie::default());
         let mut ctx = Context {
             egraph,
@@ -52,6 +63,11 @@ impl<'b> Context<'b> {
         };
 
         for (atom_i, atom) in query.atoms.iter().enumerate() {
+            let timestamp = match &delta {
+                Some(d) if d.atom_i == atom_i => d.timestamp,
+                _ => 0,
+            };
+
             // let mut to_project = vec![];
             let mut constraints = vec![];
             let (sym, args) = match atom {
@@ -84,6 +100,7 @@ impl<'b> Context<'b> {
                 sym,
                 projection,
                 constraints,
+                timestamp,
             });
         }
 
@@ -210,21 +227,23 @@ impl<'b> Context<'b> {
     fn build_trie(&self, req: &TrieRequest) -> &'b Trie<'b> {
         let mut trie = Trie::default();
         if req.constraints.is_empty() {
-            self.egraph.for_each_canonicalized(req.sym, |tuple| {
-                trie.insert(self.bump, &req.projection, tuple);
-            });
+            self.egraph
+                .for_each_canonicalized(req.sym, req.timestamp, |tuple| {
+                    trie.insert(self.bump, &req.projection, tuple);
+                });
         } else {
-            self.egraph.for_each_canonicalized(req.sym, |tuple| {
-                for constraint in &req.constraints {
-                    let ok = match constraint {
-                        Constraint::Eq(i, j) => tuple[*i] == tuple[*j],
-                        Constraint::Const(i, t) => &tuple[*i] == t,
-                    };
-                    if ok {
-                        trie.insert(self.bump, &req.projection, tuple);
+            self.egraph
+                .for_each_canonicalized(req.sym, req.timestamp, |tuple| {
+                    for constraint in &req.constraints {
+                        let ok = match constraint {
+                            Constraint::Eq(i, j) => tuple[*i] == tuple[*j],
+                            Constraint::Const(i, t) => &tuple[*i] == t,
+                        };
+                        if ok {
+                            trie.insert(self.bump, &req.projection, tuple);
+                        }
                     }
-                }
-            });
+                });
         }
         self.bump.alloc(trie)
     }
@@ -264,10 +283,12 @@ pub struct VarInfo {
     occurences: Vec<usize>,
 }
 
+type VarMap = IndexMap<Symbol, VarInfo>;
+
 #[derive(Debug, Clone)]
 pub struct CompiledQuery {
     atoms: Vec<Atom>,
-    pub vars: IndexMap<Symbol, VarInfo>,
+    pub vars: VarMap,
     // extra: Vec<PrimCall>,
     program: Vec<Instr>,
 }
@@ -279,6 +300,19 @@ struct PrimCall {
 }
 
 impl EGraph {
+    // pub(crate) fn compile_gj_query_since(
+    //     &self,
+    //     atoms: &[Atom],
+    //     vars: &VarMap,
+    //     timestamp: u32,
+    // ) -> Vec<Instr> {
+    //     for (i, atom) in atoms.iter().enumerate() {
+    //         if let Atom::Func(f, args) {
+
+    //         }
+    //     }
+    // }
+
     pub(crate) fn compile_gj_query(
         &self,
         atoms: Vec<Atom>,
@@ -376,12 +410,25 @@ impl EGraph {
         }
     }
 
-    pub(crate) fn run_query<F>(&self, query: &CompiledQuery, mut f: F)
+    pub(crate) fn run_query<F>(&self, query: &CompiledQuery, timestamp: u32, mut f: F)
     where
         F: FnMut(&[Value]),
     {
         let bump = Bump::new();
-        let mut ctx = Context::new(&bump, self, query);
-        ctx.eval(&query.program, &mut f)
+
+        let has_functions = query.atoms.iter().any(|a| matches!(a, Atom::Func(_, _)));
+
+        if has_functions {
+            for (atom_i, atom) in query.atoms.iter().enumerate() {
+                if let Atom::Func(_, _) = atom {
+                    let delta = Delta { atom_i, timestamp };
+                    let mut ctx = Context::new(&bump, self, query, Some(delta));
+                    ctx.eval(&query.program, &mut f)
+                }
+            }
+        } else {
+            let mut ctx = Context::new(&bump, self, query, None);
+            ctx.eval(&query.program, &mut f)
+        }
     }
 }
