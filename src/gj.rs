@@ -5,7 +5,7 @@ use crate::{
     typecheck::{AtomTerm, Query},
     *,
 };
-use std::fmt::Debug;
+use std::{fmt::Debug, ops::Range};
 
 #[derive(Debug, Clone)]
 enum Instr {
@@ -24,7 +24,7 @@ struct TrieRequest {
     sym: Symbol,
     projection: Vec<usize>,
     constraints: Vec<Constraint>,
-    timestamp: u32,
+    timestamp_range: Range<u32>,
 }
 
 struct Context<'b> {
@@ -38,17 +38,12 @@ struct Context<'b> {
     trie_pool: Vec<Vec<&'b Trie<'b>>>,
 }
 
-struct Delta {
-    atom_i: usize,
-    timestamp: u32,
-}
-
 impl<'b> Context<'b> {
     fn new(
         bump: &'b Bump,
         egraph: &'b EGraph,
         cq: &'b CompiledQuery,
-        delta: Option<Delta>,
+        timestamp_ranges: &[Range<u32>],
     ) -> Self {
         let default_trie = bump.alloc(Trie::default());
         let mut ctx = Context {
@@ -63,11 +58,6 @@ impl<'b> Context<'b> {
         };
 
         for (atom_i, atom) in cq.query.atoms.iter().enumerate() {
-            let timestamp = match &delta {
-                Some(d) if d.atom_i == atom_i => d.timestamp,
-                _ => 0,
-            };
-
             // let mut to_project = vec![];
             let mut constraints = vec![];
 
@@ -96,7 +86,7 @@ impl<'b> Context<'b> {
                 sym: atom.head,
                 projection,
                 constraints,
-                timestamp,
+                timestamp_range: timestamp_ranges[atom_i].clone(),
             });
         }
 
@@ -224,12 +214,12 @@ impl<'b> Context<'b> {
         let mut trie = Trie::default();
         if req.constraints.is_empty() {
             self.egraph
-                .for_each_canonicalized(req.sym, req.timestamp, |tuple| {
+                .for_each_canonicalized(req.sym, &req.timestamp_range, |tuple| {
                     trie.insert(self.bump, &req.projection, tuple);
                 });
         } else {
             self.egraph
-                .for_each_canonicalized(req.sym, req.timestamp, |tuple| {
+                .for_each_canonicalized(req.sym, &req.timestamp_range, |tuple| {
                     for constraint in &req.constraints {
                         let ok = match constraint {
                             Constraint::Eq(i, j) => tuple[*i] == tuple[*j],
@@ -391,17 +381,28 @@ impl EGraph {
         F: FnMut(&[Value]),
     {
         let bump = Bump::new();
-
         let has_atoms = !cq.query.atoms.is_empty();
 
         if has_atoms {
+            // for the later atoms, we consider everything
+            let mut timestamp_ranges = vec![0..u32::MAX; cq.query.atoms.len()];
             for (atom_i, _atom) in cq.query.atoms.iter().enumerate() {
-                let delta = Delta { atom_i, timestamp };
-                let mut ctx = Context::new(&bump, self, cq, Some(delta));
-                ctx.eval(&cq.program, &mut f)
+                // this time, we only consider "new stuff" for this atom
+                timestamp_ranges[atom_i] = timestamp..u32::MAX;
+
+                // do the gj
+                let bump = Bump::new();
+                let mut ctx = Context::new(&bump, self, cq, &timestamp_ranges);
+                ctx.eval(&cq.program, &mut f);
+
+                // now we can fix this atom to be "old stuff" only
+                // range is half-open; timestamp is excluded
+                timestamp_ranges[atom_i] = 0..timestamp;
+
+                // let delta = Delta { atom_i, timestamp };
             }
         } else {
-            let mut ctx = Context::new(&bump, self, cq, None);
+            let mut ctx = Context::new(&bump, self, cq, &[]);
             ctx.eval(&cq.program, &mut f)
         }
     }

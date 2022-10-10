@@ -18,7 +18,7 @@ use std::fmt::Write;
 use std::fs::File;
 use std::hash::Hash;
 use std::io::Read;
-use std::ops::Deref;
+use std::ops::{Deref, Range};
 use std::path::PathBuf;
 use std::{fmt::Debug, sync::Arc};
 use typecheck::{AtomTerm, Bindings};
@@ -865,14 +865,19 @@ impl EGraph {
         self.add_rule_with_name(name, rule)
     }
 
-    fn for_each_canonicalized(&self, name: Symbol, timestamp: u32, mut cb: impl FnMut(&[Value])) {
+    fn for_each_canonicalized(
+        &self,
+        name: Symbol,
+        timestamp_range: &Range<u32>,
+        mut cb: impl FnMut(&[Value]),
+    ) {
         let mut ids = vec![];
         let f = self
             .functions
             .get(&name)
             .unwrap_or_else(|| panic!("No function {name}"));
         for (children, out) in &f.nodes {
-            if out.timestamp >= timestamp {
+            if timestamp_range.contains(&out.timestamp) {
                 ids.clear();
                 // FIXME canonicalize, do we need to with rebuilding?
                 // ids.extend(children.iter().map(|id| self.find(value)));
