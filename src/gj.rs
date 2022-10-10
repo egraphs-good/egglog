@@ -2,7 +2,7 @@ use bumpalo::Bump;
 use indexmap::map::Entry;
 
 use crate::{
-    typecheck::{Atom, AtomTerm},
+    typecheck::{AtomTerm, Query},
     *,
 };
 use std::fmt::Debug;
@@ -47,22 +47,22 @@ impl<'b> Context<'b> {
     fn new(
         bump: &'b Bump,
         egraph: &'b EGraph,
-        query: &'b CompiledQuery,
+        cq: &'b CompiledQuery,
         delta: Option<Delta>,
     ) -> Self {
         let default_trie = bump.alloc(Trie::default());
         let mut ctx = Context {
             egraph,
-            query,
+            query: cq,
             bump,
-            tuple: vec![Value::fake(); query.vars.len()],
-            tries: vec![default_trie; query.atoms.len()],
+            tuple: vec![Value::fake(); cq.vars.len()],
+            tries: vec![default_trie; cq.query.atoms.len()],
             empty: bump.alloc(Trie::default()),
             val_pool: Default::default(),
             trie_pool: Default::default(),
         };
 
-        for (atom_i, atom) in query.atoms.iter().enumerate() {
+        for (atom_i, atom) in cq.query.atoms.iter().enumerate() {
             let timestamp = match &delta {
                 Some(d) if d.atom_i == atom_i => d.timestamp,
                 _ => 0,
@@ -70,16 +70,12 @@ impl<'b> Context<'b> {
 
             // let mut to_project = vec![];
             let mut constraints = vec![];
-            let (sym, args) = match atom {
-                Atom::Func(sym, args) => (*sym, args),
-                Atom::Prim(_, _) => continue,
-            };
 
-            for (i, t) in args.iter().enumerate() {
+            for (i, t) in atom.args.iter().enumerate() {
                 match t {
                     AtomTerm::Value(val) => constraints.push(Constraint::Const(i, *val)),
                     AtomTerm::Var(_v) => {
-                        if let Some(j) = args[..i].iter().position(|t2| t == t2) {
+                        if let Some(j) = atom.args[..i].iter().position(|t2| t == t2) {
                             constraints.push(Constraint::Eq(j, i));
                         } else {
                             // to_project.push(v)
@@ -89,15 +85,15 @@ impl<'b> Context<'b> {
             }
 
             let mut projection = vec![];
-            for v in query.vars.keys() {
-                if let Some(i) = args.iter().position(|t| t == &AtomTerm::Var(*v)) {
+            for v in cq.vars.keys() {
+                if let Some(i) = atom.args.iter().position(|t| t == &AtomTerm::Var(*v)) {
                     assert!(!projection.contains(&i));
                     projection.push(i);
                 }
             }
 
             ctx.tries[atom_i] = ctx.build_trie(&TrieRequest {
-                sym,
+                sym: atom.head,
                 projection,
                 constraints,
                 timestamp,
@@ -287,16 +283,9 @@ type VarMap = IndexMap<Symbol, VarInfo>;
 
 #[derive(Debug, Clone)]
 pub struct CompiledQuery {
-    atoms: Vec<Atom>,
+    query: Query,
     pub vars: VarMap,
-    // extra: Vec<PrimCall>,
     program: Vec<Instr>,
-}
-
-#[derive(Debug, Clone)]
-struct PrimCall {
-    prim: Primitive,
-    args: Vec<AtomTerm>,
 }
 
 impl EGraph {
@@ -315,25 +304,14 @@ impl EGraph {
 
     pub(crate) fn compile_gj_query(
         &self,
-        atoms: Vec<Atom>,
+        query: Query,
         _types: HashMap<Symbol, ArcSort>,
     ) -> CompiledQuery {
-        let mut extra = vec![];
         let mut vars: IndexMap<Symbol, VarInfo> = Default::default();
-        for (i, atom) in atoms.iter().enumerate() {
-            match atom {
-                Atom::Func(_, _) => {
-                    for v in atom.vars() {
-                        // only count grounded occurrences
-                        vars.entry(v).or_default().occurences.push(i)
-                    }
-                }
-                Atom::Prim(p, args) => {
-                    extra.push(PrimCall {
-                        prim: p.clone(),
-                        args: args.clone(),
-                    });
-                }
+        for (i, atom) in query.atoms.iter().enumerate() {
+            for v in atom.vars() {
+                // only count grounded occurrences
+                vars.entry(v).or_default().occurences.push(i)
             }
         }
 
@@ -346,11 +324,8 @@ impl EGraph {
 
         let has_constant = |info: &VarInfo| {
             info.occurences.iter().any(|&i| {
-                if let Atom::Func(f, _) = &atoms[i] {
-                    self.functions[f].schema.input.is_empty()
-                } else {
-                    false
-                }
+                let f = query.atoms[i].head;
+                self.functions[&f].schema.input.is_empty()
             })
         };
         vars.sort_by(|_v1, i1, _v2, i2| {
@@ -370,6 +345,7 @@ impl EGraph {
 
         // now we can try to add primitives
         // TODO this is very inefficient, since primitives all at the end
+        let mut extra = query.filters.clone();
         while !extra.is_empty() {
             let next = extra.iter().position(|p| {
                 assert!(!p.args.is_empty());
@@ -392,7 +368,7 @@ impl EGraph {
                     AtomTerm::Value(_) => true,
                 };
                 program.push(Instr::Call {
-                    prim: p.prim.clone(),
+                    prim: p.head.clone(),
                     args: p.args.clone(),
                     check,
                 });
@@ -404,31 +380,29 @@ impl EGraph {
         log::debug!("vars: [{}]", ListDisplay(vars.keys(), ", "));
 
         CompiledQuery {
-            atoms,
+            query,
             vars,
             program,
         }
     }
 
-    pub(crate) fn run_query<F>(&self, query: &CompiledQuery, timestamp: u32, mut f: F)
+    pub(crate) fn run_query<F>(&self, cq: &CompiledQuery, timestamp: u32, mut f: F)
     where
         F: FnMut(&[Value]),
     {
         let bump = Bump::new();
 
-        let has_functions = query.atoms.iter().any(|a| matches!(a, Atom::Func(_, _)));
+        let has_atoms = !cq.query.atoms.is_empty();
 
-        if has_functions {
-            for (atom_i, atom) in query.atoms.iter().enumerate() {
-                if let Atom::Func(_, _) = atom {
-                    let delta = Delta { atom_i, timestamp };
-                    let mut ctx = Context::new(&bump, self, query, Some(delta));
-                    ctx.eval(&query.program, &mut f)
-                }
+        if has_atoms {
+            for (atom_i, _atom) in cq.query.atoms.iter().enumerate() {
+                let delta = Delta { atom_i, timestamp };
+                let mut ctx = Context::new(&bump, self, cq, Some(delta));
+                ctx.eval(&cq.program, &mut f)
             }
         } else {
-            let mut ctx = Context::new(&bump, self, query, None);
-            ctx.eval(&query.program, &mut f)
+            let mut ctx = Context::new(&bump, self, cq, None);
+            ctx.eval(&cq.program, &mut f)
         }
     }
 }

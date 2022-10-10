@@ -56,19 +56,23 @@ pub enum AtomTerm {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Atom {
-    Func(Symbol, Vec<AtomTerm>),
-    Prim(Primitive, Vec<AtomTerm>),
+pub struct Atom<T> {
+    pub head: T,
+    pub args: Vec<AtomTerm>,
 }
 
-impl Atom {
+#[derive(Default, Debug, Clone)]
+pub struct Query {
+    pub atoms: Vec<Atom<Symbol>>,
+    pub filters: Vec<Atom<Primitive>>,
+}
+
+impl<T> Atom<T> {
     pub fn vars(&self) -> impl Iterator<Item = Symbol> + '_ {
-        match self {
-            Atom::Func(_, terms) | Atom::Prim(_, terms) => terms.iter().filter_map(|t| match t {
-                AtomTerm::Var(v) => Some(*v),
-                AtomTerm::Value(_) => None,
-            }),
-        }
+        self.args.iter().filter_map(|t| match t {
+            AtomTerm::Var(v) => Some(*v),
+            AtomTerm::Value(_) => None,
+        })
     }
 }
 pub type Bindings = HashMap<Symbol, AtomTerm>;
@@ -93,7 +97,7 @@ impl<'a> Context<'a> {
     pub fn typecheck_query(
         &mut self,
         facts: &'a [Fact],
-    ) -> Result<(Vec<Atom>, Bindings), Vec<TypeError>> {
+    ) -> Result<(Query, Bindings), Vec<TypeError>> {
         for fact in facts {
             self.typecheck_fact(fact);
         }
@@ -124,18 +128,21 @@ impl<'a> Context<'a> {
             leaves.get(id).cloned().unwrap_or_else(mk)
         };
 
-        let mut atoms = vec![];
+        let mut query = Query::default();
         // Now we can fill in the nodes with the canonical leaves
         for (node, id) in &self.nodes {
             match node {
-                ENode::Func(f, ids) => atoms.push(Atom::Func(
-                    *f,
-                    ids.iter().chain([id]).map(&get_leaf).collect(),
-                )),
-                ENode::Prim(p, ids) => atoms.push(Atom::Prim(
-                    p.clone(),
-                    ids.iter().chain([id]).map(&get_leaf).collect(),
-                )),
+                ENode::Func(f, ids) => {
+                    let args = ids.iter().chain([id]).map(get_leaf).collect();
+                    query.atoms.push(Atom { head: *f, args });
+                }
+                ENode::Prim(p, ids) => {
+                    let args = ids.iter().chain([id]).map(get_leaf).collect();
+                    query.filters.push(Atom {
+                        head: p.clone(),
+                        args,
+                    });
+                }
                 _ => {}
             }
         }
@@ -147,7 +154,7 @@ impl<'a> Context<'a> {
                     bindings.insert(*var, leaves[id].clone());
                 }
             }
-            Ok((atoms, bindings))
+            Ok((query, bindings))
         } else {
             Err(self.errors.clone())
         }
