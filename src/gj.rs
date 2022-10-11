@@ -20,6 +20,24 @@ enum Instr {
     },
 }
 
+struct Program(Vec<Instr>);
+
+impl std::fmt::Display for Program {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for instr in &self.0 {
+            match instr {
+                Instr::Intersect { idx, trie_indices } => {
+                    writeln!(f, " Intersect {} {:?}", idx, trie_indices)?;
+                }
+                Instr::Call { prim, args, check } => {
+                    writeln!(f, " Call {:?} {:?} {:?}", prim, args, check)?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 struct TrieRequest {
     sym: Symbol,
     projection: Vec<usize>,
@@ -44,7 +62,7 @@ impl<'b> Context<'b> {
         egraph: &'b EGraph,
         cq: &'b CompiledQuery,
         timestamp_ranges: &[Range<u32>],
-    ) -> Option<(Self, Vec<Instr>)> {
+    ) -> Option<(Self, Program)> {
         let default_trie = bump.alloc(Trie::default());
         let mut ctx = Context {
             egraph,
@@ -92,7 +110,20 @@ impl<'b> Context<'b> {
             })?;
         }
 
-        Some((ctx, program))
+        // // Density test
+        // for t in &ctx.tries {
+        //     assert!(!t.0.is_empty());
+        //     let min = t.0.keys().map(|v| v.bits).min().unwrap();
+        //     let max = t.0.keys().map(|v| v.bits).max().unwrap();
+        //     let len = t.0.len();
+        //     if max - min > len as u64 * 2 {
+        //         println!("Trie is dense with len {len}!");
+        //     } else {
+        //         println!("Trie is not dense with len {len}!");
+        //     }
+        // }
+
+        Some((ctx, Program(program)))
     }
 
     fn eval<F>(&mut self, program: &[Instr], f: &mut F)
@@ -401,8 +432,6 @@ impl EGraph {
             }
         }
 
-        log::debug!("vars: [{}]", ListDisplay(vars.keys(), ", "));
-
         (program, vars.into_keys().collect())
     }
 
@@ -423,7 +452,13 @@ impl EGraph {
                 // do the gj
                 let bump = Bump::new();
                 if let Some((mut ctx, program)) = Context::new(&bump, self, cq, &timestamp_ranges) {
-                    ctx.eval(&program, &mut f)
+                    log::debug!(
+                        "Query: {}\nVars: {}\nProgram\n{}",
+                        cq.query,
+                        ListDisplay(cq.vars.keys(), " "),
+                        program
+                    );
+                    ctx.eval(&program.0, &mut f)
                 }
 
                 // now we can fix this atom to be "old stuff" only
@@ -431,7 +466,7 @@ impl EGraph {
                 timestamp_ranges[atom_i] = 0..timestamp;
             }
         } else if let Some((mut ctx, program)) = Context::new(&bump, self, cq, &[]) {
-            ctx.eval(&program, &mut f)
+            ctx.eval(&program.0, &mut f)
         }
     }
 }

@@ -55,6 +55,15 @@ pub enum AtomTerm {
     Value(Value),
 }
 
+impl std::fmt::Display for AtomTerm {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AtomTerm::Var(v) => write!(f, "{}", v),
+            AtomTerm::Value(_) => write!(f, "<value>"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Atom<T> {
     pub head: T,
@@ -65,6 +74,26 @@ pub struct Atom<T> {
 pub struct Query {
     pub atoms: Vec<Atom<Symbol>>,
     pub filters: Vec<Atom<Primitive>>,
+}
+
+impl std::fmt::Display for Query {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for atom in &self.atoms {
+            write!(f, "({} {}) ", atom.head, ListDisplay(&atom.args, " "))?;
+        }
+        if !self.filters.is_empty() {
+            write!(f, "where ")?;
+            for filter in &self.filters {
+                write!(
+                    f,
+                    "({} {}) ",
+                    filter.head.name(),
+                    ListDisplay(&filter.args, " ")
+                )?;
+            }
+        }
+        Ok(())
+    }
 }
 
 impl<T> Atom<T> {
