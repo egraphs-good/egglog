@@ -117,6 +117,26 @@ impl Function {
         }
         uf.n_unions() - n_unions + std::mem::take(&mut self.updates)
     }
+
+    pub(crate) fn get_size(&self, range: &Range<u32>) -> usize {
+        if range.start == 0 {
+            if range.end == u32::MAX {
+                self.nodes.len()
+            } else {
+                // TODO binary search or something
+                self.nodes
+                    .values()
+                    .filter(|out| out.timestamp < range.end)
+                    .count()
+            }
+        } else {
+            assert_eq!(range.end, u32::MAX);
+            self.nodes
+                .values()
+                .filter(|out| out.timestamp >= range.end)
+                .count()
+        }
+    }
 }
 
 pub type Subst = IndexMap<Symbol, Value>;

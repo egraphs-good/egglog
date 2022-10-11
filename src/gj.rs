@@ -44,7 +44,7 @@ impl<'b> Context<'b> {
         egraph: &'b EGraph,
         cq: &'b CompiledQuery,
         timestamp_ranges: &[Range<u32>],
-    ) -> Self {
+    ) -> Option<(Self, Vec<Instr>)> {
         let default_trie = bump.alloc(Trie::default());
         let mut ctx = Context {
             egraph,
@@ -56,6 +56,8 @@ impl<'b> Context<'b> {
             val_pool: Default::default(),
             trie_pool: Default::default(),
         };
+
+        let (program, vars) = egraph.compile_program(cq, timestamp_ranges);
 
         for (atom_i, atom) in cq.query.atoms.iter().enumerate() {
             // let mut to_project = vec![];
@@ -75,7 +77,7 @@ impl<'b> Context<'b> {
             }
 
             let mut projection = vec![];
-            for v in cq.vars.keys() {
+            for v in &vars {
                 if let Some(i) = atom.args.iter().position(|t| t == &AtomTerm::Var(*v)) {
                     assert!(!projection.contains(&i));
                     projection.push(i);
@@ -87,10 +89,10 @@ impl<'b> Context<'b> {
                 projection,
                 constraints,
                 timestamp_range: timestamp_ranges[atom_i].clone(),
-            });
+            })?;
         }
 
-        ctx
+        Some((ctx, program))
     }
 
     fn eval<F>(&mut self, program: &[Instr], f: &mut F)
@@ -210,7 +212,7 @@ impl<'b> Context<'b> {
         }
     }
 
-    fn build_trie(&self, req: &TrieRequest) -> &'b Trie<'b> {
+    fn build_trie(&self, req: &TrieRequest) -> Option<&'b Trie<'b>> {
         let mut trie = Trie::default();
         if req.constraints.is_empty() {
             self.egraph
@@ -231,7 +233,12 @@ impl<'b> Context<'b> {
                     }
                 });
         }
-        self.bump.alloc(trie)
+
+        if trie.0.is_empty() {
+            None
+        } else {
+            Some(self.bump.alloc(trie))
+        }
     }
 }
 
@@ -275,28 +282,17 @@ type VarMap = IndexMap<Symbol, VarInfo>;
 pub struct CompiledQuery {
     query: Query,
     pub vars: VarMap,
-    program: Vec<Instr>,
+    // program: Vec<Instr>,
 }
 
 impl EGraph {
-    // pub(crate) fn compile_gj_query_since(
-    //     &self,
-    //     atoms: &[Atom],
-    //     vars: &VarMap,
-    //     timestamp: u32,
-    // ) -> Vec<Instr> {
-    //     for (i, atom) in atoms.iter().enumerate() {
-    //         if let Atom::Func(f, args) {
-
-    //         }
-    //     }
-    // }
-
     pub(crate) fn compile_gj_query(
         &self,
         query: Query,
         _types: HashMap<Symbol, ArcSort>,
     ) -> CompiledQuery {
+        // NOTE: this vars order only used for ordering the tuple,
+        // It is not the GJ variable order.
         let mut vars: IndexMap<Symbol, VarInfo> = Default::default();
         for (i, atom) in query.atoms.iter().enumerate() {
             for v in atom.vars() {
@@ -305,37 +301,75 @@ impl EGraph {
             }
         }
 
-        // right now, vars should only contain grounded variables
-        for (v, info) in &mut vars {
-            debug_assert!(info.occurences.windows(2).all(|w| w[0] <= w[1]));
-            info.occurences.dedup();
-            assert!(!info.occurences.is_empty(), "var {} has no occurences", v);
+        for prim in &query.filters {
+            for v in prim.vars() {
+                vars.entry(v).or_default();
+            }
         }
 
-        let has_constant = |info: &VarInfo| {
-            info.occurences.iter().any(|&i| {
-                let f = query.atoms[i].head;
-                self.functions[&f].schema.input.is_empty()
-            })
-        };
+        CompiledQuery { query, vars }
+    }
+
+    fn compile_program(
+        &self,
+        query: &CompiledQuery,
+        timestamp_ranges: &[Range<u32>],
+    ) -> (Vec<Instr>, Vec<Symbol>) {
+        #[derive(Default)]
+        struct VarInfo2 {
+            occurences: Vec<usize>,
+            // intersected_on: usize,
+            size_guess: usize,
+        }
+
+        let mut vars: IndexMap<Symbol, VarInfo2> = Default::default();
+        for (i, atom) in query.query.atoms.iter().enumerate() {
+            for v in atom.vars() {
+                vars.entry(v).or_default().occurences.push(i)
+            }
+        }
+
+        let relation_sizes: Vec<usize> = query
+            .query
+            .atoms
+            .iter()
+            .zip(timestamp_ranges)
+            .map(|(atom, range)| self.functions[&atom.head].get_size(range))
+            .collect();
+
+        for (_v, info) in &mut vars {
+            assert!(!info.occurences.is_empty());
+            info.size_guess = info
+                .occurences
+                .iter()
+                .map(|&i| relation_sizes[i])
+                .min()
+                .unwrap();
+            // info.size_guess >>= info.occurences.len();
+        }
+
         vars.sort_by(|_v1, i1, _v2, i2| {
-            let constant = has_constant(i1).cmp(&has_constant(i2));
-            let len = i1.occurences.len().cmp(&i2.occurences.len());
-            constant.then(len).reverse()
+            // i1.size_guess.cmp(&i2.size_guess)
+            i1.occurences
+                .len()
+                .cmp(&i2.occurences.len())
+                // more occurences first
+                .reverse()
+                // then smaller relations
+                .then_with(|| i1.size_guess.cmp(&i2.size_guess))
         });
 
         let mut program: Vec<Instr> = vars
             .iter()
-            .enumerate()
-            .map(|(idx, (_v, info))| Instr::Intersect {
-                idx,
+            .map(|(v, info)| Instr::Intersect {
+                idx: query.vars.get_index_of(v).unwrap(),
                 trie_indices: info.occurences.clone(),
             })
             .collect();
 
         // now we can try to add primitives
         // TODO this is very inefficient, since primitives all at the end
-        let mut extra = query.filters.clone();
+        let mut extra = query.query.filters.clone();
         while !extra.is_empty() {
             let next = extra.iter().position(|p| {
                 assert!(!p.args.is_empty());
@@ -369,11 +403,7 @@ impl EGraph {
 
         log::debug!("vars: [{}]", ListDisplay(vars.keys(), ", "));
 
-        CompiledQuery {
-            query,
-            vars,
-            program,
-        }
+        (program, vars.into_keys().collect())
     }
 
     pub(crate) fn run_query<F>(&self, cq: &CompiledQuery, timestamp: u32, mut f: F)
@@ -392,18 +422,16 @@ impl EGraph {
 
                 // do the gj
                 let bump = Bump::new();
-                let mut ctx = Context::new(&bump, self, cq, &timestamp_ranges);
-                ctx.eval(&cq.program, &mut f);
+                if let Some((mut ctx, program)) = Context::new(&bump, self, cq, &timestamp_ranges) {
+                    ctx.eval(&program, &mut f)
+                }
 
                 // now we can fix this atom to be "old stuff" only
                 // range is half-open; timestamp is excluded
                 timestamp_ranges[atom_i] = 0..timestamp;
-
-                // let delta = Delta { atom_i, timestamp };
             }
-        } else {
-            let mut ctx = Context::new(&bump, self, cq, &[]);
-            ctx.eval(&cq.program, &mut f)
+        } else if let Some((mut ctx, program)) = Context::new(&bump, self, cq, &[]) {
+            ctx.eval(&program, &mut f)
         }
     }
 }
