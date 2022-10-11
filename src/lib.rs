@@ -745,7 +745,13 @@ impl EGraph {
     pub fn run_rules(&mut self, limit: usize) -> [Duration; 3] {
         let mut search_time = Duration::default();
         let mut apply_time = Duration::default();
-        let mut rebuild_time = Duration::default();
+
+        // we might have to do a rebuild before starting,
+        // because the use can manually do stuff
+        let initial_rebuild_start = Instant::now();
+        self.rebuild();
+        let mut rebuild_time = initial_rebuild_start.elapsed();
+
         for i in 0..limit {
             self.saturated = true;
             let [st, at] = self.step_rules(i);
@@ -904,6 +910,11 @@ impl EGraph {
                 // ids.extend(children.iter().map(|id| self.find(value)));
                 ids.extend(children.iter().cloned());
                 ids.push(out.value);
+                if cfg!(debug_assertions) {
+                    for &id in &ids {
+                        assert_eq!(self.bad_find_value(id), id, "Not canonicalized {:?}", ids);
+                    }
+                }
                 cb(&ids);
             }
         }
