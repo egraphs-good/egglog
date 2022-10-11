@@ -7,7 +7,8 @@ mod unionfind;
 mod util;
 mod value;
 
-use hashbrown::hash_map::{Entry, EntryRef};
+use hashbrown::hash_map::Entry;
+use indexmap::map::Entry as IEntry;
 use instant::{Duration, Instant};
 use sort::*;
 use thiserror::Error;
@@ -38,7 +39,7 @@ use crate::typecheck::TypeError;
 pub struct Function {
     decl: FunctionDecl,
     schema: ResolvedSchema,
-    nodes: HashMap<Vec<Value>, TupleOutput>,
+    nodes: IndexMap<Vec<Value>, TupleOutput>,
     updates: usize,
 }
 
@@ -55,9 +56,9 @@ struct ResolvedSchema {
 }
 
 impl Function {
-    pub fn insert(&mut self, inputs: &[Value], value: Value, timestamp: u32) -> Option<Value> {
-        match self.nodes.entry_ref(inputs) {
-            EntryRef::Occupied(mut entry) => {
+    pub fn insert(&mut self, inputs: Vec<Value>, value: Value, timestamp: u32) -> Option<Value> {
+        match self.nodes.entry(inputs) {
+            IEntry::Occupied(mut entry) => {
                 let old = entry.get_mut();
                 if old.value == value {
                     Some(value)
@@ -71,7 +72,7 @@ impl Function {
                     Some(saved)
                 }
             }
-            EntryRef::Vacant(entry) => {
+            IEntry::Vacant(entry) => {
                 entry.insert(TupleOutput { value, timestamp });
                 self.updates += 1;
                 None
@@ -387,7 +388,7 @@ impl EGraph {
                         .functions
                         .get_mut(f)
                         .ok_or_else(|| NotFoundError(e.clone()))?;
-                    let old_value = function.insert(&values, value, self.timestamp);
+                    let old_value = function.insert(values.clone(), value, self.timestamp);
 
                     // if the value does not exist or the two values differ
                     if old_value.is_none() || old_value != Some(value) {
@@ -411,7 +412,7 @@ impl EGraph {
                                     let expr = expr.clone(); // break the borrow of `function`
                                     let new_value = self.eval_expr(&ctx, &expr)?;
                                     self.functions.get_mut(f).unwrap().insert(
-                                        &values,
+                                        values,
                                         new_value,
                                         self.timestamp,
                                     );
@@ -556,7 +557,7 @@ impl EGraph {
         let function = Function {
             decl: decl.clone(),
             schema: ResolvedSchema { input, output },
-            nodes: HashMap::default(),
+            nodes: Default::default(),
             updates: 0,
             // TODO figure out merge and default here
         };
@@ -638,20 +639,20 @@ impl EGraph {
                         let out = &function.schema.output;
                         match function.decl.default.as_ref() {
                             None if out.name() == "Unit".into() => {
-                                function.insert(&values, Value::unit(), ts);
+                                function.insert(values, Value::unit(), ts);
                                 Ok(Value::unit())
                             }
                             None if out.is_eq_sort() => {
                                 let id = self.unionfind.make_set();
                                 let value = Value::from_id(out.name(), id);
-                                function.insert(&values, value, ts);
+                                function.insert(values, value, ts);
                                 Ok(value)
                             }
                             Some(default) => {
                                 let default = default.clone(); // break the borrow
                                 let value = self.eval_expr(ctx, &default)?;
                                 let function = self.functions.get_mut(op).unwrap();
-                                function.insert(&values, value, ts);
+                                function.insert(values, value, ts);
                                 Ok(value)
                             }
                             _ => panic!("invalid default for {:?}", function.decl.name),
@@ -1014,7 +1015,7 @@ impl EGraph {
                     })?;
 
                     let f = self.functions.get_mut(&name).unwrap();
-                    f.insert(&[], value, self.timestamp);
+                    f.insert(vec![], value, self.timestamp);
                     format!("Defined {name}: {sort:?}")
                 } else {
                     format!("Skipping define {name}")
