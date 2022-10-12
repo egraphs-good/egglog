@@ -1,17 +1,15 @@
-use bumpalo::Bump;
 use indexmap::map::Entry;
 
 use crate::{
-    typecheck::{AtomTerm, Query},
+    typecheck::{Atom, AtomTerm, Query},
     *,
 };
-use std::{fmt::Debug, ops::Range};
+use std::{cell::UnsafeCell, fmt::Debug, ops::Range};
 
-#[derive(Debug, Clone)]
-enum Instr {
+enum Instr<'a> {
     Intersect {
-        idx: usize,
-        trie_indices: Vec<usize>,
+        value_idx: usize,
+        trie_accesses: Vec<(usize, TrieAccess<'a>)>,
     },
     Call {
         prim: Primitive,
@@ -20,14 +18,21 @@ enum Instr {
     },
 }
 
-struct Program(Vec<Instr>);
+struct Program<'a>(Vec<Instr<'a>>);
 
-impl std::fmt::Display for Program {
+impl<'a> std::fmt::Display for Program<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for instr in &self.0 {
             match instr {
-                Instr::Intersect { idx, trie_indices } => {
-                    writeln!(f, " Intersect {} {:?}", idx, trie_indices)?;
+                Instr::Intersect {
+                    value_idx,
+                    trie_accesses,
+                } => {
+                    write!(f, " Intersect @ {} ", value_idx)?;
+                    for (trie_idx, a) in trie_accesses {
+                        write!(f, "  {}: {}", trie_idx, a)?;
+                    }
+                    writeln!(f)?
                 }
                 Instr::Call { prim, args, check } => {
                     writeln!(f, " Call {:?} {:?} {:?}", prim, args, check)?;
@@ -38,95 +43,61 @@ impl std::fmt::Display for Program {
     }
 }
 
-struct TrieRequest {
-    sym: Symbol,
-    projection: Vec<usize>,
-    constraints: Vec<Constraint>,
-    timestamp_range: Range<u32>,
-}
-
 struct Context<'b> {
-    bump: &'b Bump,
     query: &'b CompiledQuery,
-    egraph: &'b EGraph,
-    tries: Vec<&'b Trie<'b>>,
     tuple: Vec<Value>,
-    empty: &'b Trie<'b>,
-    val_pool: Vec<Vec<Value>>,
-    trie_pool: Vec<Vec<&'b Trie<'b>>>,
 }
 
 impl<'b> Context<'b> {
     fn new(
-        bump: &'b Bump,
         egraph: &'b EGraph,
         cq: &'b CompiledQuery,
         timestamp_ranges: &[Range<u32>],
-    ) -> Option<(Self, Program)> {
-        let default_trie = bump.alloc(Trie::default());
-        let mut ctx = Context {
-            egraph,
+    ) -> Option<(Self, Program<'b>)> {
+        let ctx = Context {
             query: cq,
-            bump,
             tuple: vec![Value::fake(); cq.vars.len()],
-            tries: vec![default_trie; cq.query.atoms.len()],
-            empty: bump.alloc(Trie::default()),
-            val_pool: Default::default(),
-            trie_pool: Default::default(),
         };
 
-        let (program, vars) = egraph.compile_program(cq, timestamp_ranges);
+        let (program, _vars) = egraph.compile_program(cq, timestamp_ranges);
 
-        for (atom_i, atom) in cq.query.atoms.iter().enumerate() {
-            // let mut to_project = vec![];
-            let mut constraints = vec![];
+        // for (atom_i, atom) in cq.query.atoms.iter().enumerate() {
+        //     // let mut to_project = vec![];
+        //     let mut constraints = vec![];
 
-            for (i, t) in atom.args.iter().enumerate() {
-                match t {
-                    AtomTerm::Value(val) => constraints.push(Constraint::Const(i, *val)),
-                    AtomTerm::Var(_v) => {
-                        if let Some(j) = atom.args[..i].iter().position(|t2| t == t2) {
-                            constraints.push(Constraint::Eq(j, i));
-                        } else {
-                            // to_project.push(v)
-                        }
-                    }
-                }
-            }
-
-            let mut projection = vec![];
-            for v in &vars {
-                if let Some(i) = atom.args.iter().position(|t| t == &AtomTerm::Var(*v)) {
-                    assert!(!projection.contains(&i));
-                    projection.push(i);
-                }
-            }
-
-            ctx.tries[atom_i] = ctx.build_trie(&TrieRequest {
-                sym: atom.head,
-                projection,
-                constraints,
-                timestamp_range: timestamp_ranges[atom_i].clone(),
-            })?;
-        }
-
-        // // Density test
-        // for t in &ctx.tries {
-        //     assert!(!t.0.is_empty());
-        //     let min = t.0.keys().map(|v| v.bits).min().unwrap();
-        //     let max = t.0.keys().map(|v| v.bits).max().unwrap();
-        //     let len = t.0.len();
-        //     if max - min > len as u64 * 2 {
-        //         println!("Trie is dense with len {len}!");
-        //     } else {
-        //         println!("Trie is not dense with len {len}!");
+        //     for (i, t) in atom.args.iter().enumerate() {
+        //         match t {
+        //             AtomTerm::Value(val) => constraints.push(Constraint::Const(i, *val)),
+        //             AtomTerm::Var(_v) => {
+        //                 if let Some(j) = atom.args[..i].iter().position(|t2| t == t2) {
+        //                     constraints.push(Constraint::Eq(j, i));
+        //                 } else {
+        //                     // to_project.push(v)
+        //                 }
+        //             }
+        //         }
         //     }
+
+        //     let mut projection = vec![];
+        //     for v in &vars {
+        //         if let Some(i) = atom.args.iter().position(|t| t == &AtomTerm::Var(*v)) {
+        //             assert!(!projection.contains(&i));
+        //             projection.push(i);
+        //         }
+        //     }
+
+        //     ctx.tries[atom_i] = ctx.build_trie(&TrieRequest {
+        //         sym: atom.head,
+        //         projection,
+        //         constraints,
+        //         timestamp_range: timestamp_ranges[atom_i].clone(),
+        //     })?;
         // }
 
-        Some((ctx, Program(program)))
+        Some((ctx, program))
     }
 
-    fn eval<F>(&mut self, program: &[Instr], f: &mut F)
+    fn eval<F>(&mut self, tries: &[&LazyTrie], program: &[Instr], f: &mut F)
     where
         F: FnMut(&[Value]),
     {
@@ -136,77 +107,33 @@ impl<'b> Context<'b> {
         };
 
         match instr {
-            Instr::Intersect { idx, trie_indices } => {
-                match trie_indices.len() {
-                    1 => {
-                        let j = trie_indices[0];
-                        let r = self.tries[j];
-                        for (val, trie) in r.0.iter() {
-                            self.tuple[*idx] = *val;
-                            self.tries[j] = trie;
-                            self.eval(program, f);
-                        }
-                        self.tries[j] = r;
-                    }
-                    2 => {
-                        let rs = [self.tries[trie_indices[0]], self.tries[trie_indices[1]]];
-                        // smaller_idx
-                        let si = rs[0].len() > rs[1].len();
-                        let intersection = rs[si as usize]
-                            .0
-                            .keys()
-                            .filter(|k| rs[(!si) as usize].0.contains_key(k));
-                        for val in intersection {
-                            self.tuple[*idx] = *val;
-                            self.tries[trie_indices[0]] = rs[0].0.get(val).unwrap();
-                            self.tries[trie_indices[1]] = rs[1].0.get(val).unwrap();
+            Instr::Intersect {
+                value_idx,
+                trie_accesses,
+            } => {
+                let (j_min, access_min) = trie_accesses
+                    .iter()
+                    .min_by_key(|(j, _a)| tries[*j].len())
+                    .unwrap();
 
-                            self.eval(program, f);
-                        }
-                        self.tries[trie_indices[0]] = rs[0];
-                        self.tries[trie_indices[1]] = rs[1];
-                    }
-                    _ => {
-                        // the index of the smallest trie
-                        let j_min = trie_indices
-                            .iter()
-                            .copied()
-                            .min_by_key(|j| self.tries[*j].len())
-                            .unwrap();
-                        let mut intersection = self.val_pool.pop().unwrap_or_default();
-                        intersection.extend(self.tries[j_min].0.keys().cloned());
+                let mut new_tries = tries.to_vec();
 
-                        for &j in trie_indices {
-                            if j != j_min {
-                                let r = &self.tries[j].0;
-                                intersection.retain(|t| r.contains_key(t));
+                tries[*j_min].for_each(access_min, |value, min_trie| {
+                    new_tries[*j_min] = min_trie;
+                    for (j, access) in trie_accesses {
+                        if j != j_min {
+                            if let Some(t) = tries[*j].get(access, value) {
+                                new_tries[*j] = t;
+                            } else {
+                                return;
                             }
                         }
-                        let mut rs = self.trie_pool.pop().unwrap_or_default();
-                        rs.extend(trie_indices.iter().map(|&j| self.tries[j]));
-
-                        for val in intersection.drain(..) {
-                            self.tuple[*idx] = val;
-
-                            for (r, &j) in rs.iter().zip(trie_indices) {
-                                self.tries[j] = match r.0.get(&val) {
-                                    Some(t) => *t,
-                                    None => self.empty,
-                                }
-                            }
-
-                            self.eval(program, f);
-                        }
-                        self.val_pool.push(intersection);
-
-                        // TODO is it necessary to reset the tries?
-                        for (r, &j) in rs.iter().zip(trie_indices) {
-                            self.tries[j] = r;
-                        }
-                        rs.clear();
-                        self.trie_pool.push(rs);
                     }
-                };
+
+                    // at this point, new_tries is ready to go
+                    self.tuple[*value_idx] = value;
+                    self.eval(&new_tries, program, f);
+                });
             }
             Instr::Call { prim, args, check } => {
                 let (out, args) = args.split_last().unwrap();
@@ -237,40 +164,40 @@ impl<'b> Context<'b> {
                             }
                         }
                     }
-                    self.eval(program, f);
+                    self.eval(tries, program, f);
                 }
             }
         }
     }
 
-    fn build_trie(&self, req: &TrieRequest) -> Option<&'b Trie<'b>> {
-        let mut trie = Trie::default();
-        if req.constraints.is_empty() {
-            self.egraph
-                .for_each_canonicalized(req.sym, &req.timestamp_range, |tuple| {
-                    trie.insert(self.bump, &req.projection, tuple);
-                });
-        } else {
-            self.egraph
-                .for_each_canonicalized(req.sym, &req.timestamp_range, |tuple| {
-                    for constraint in &req.constraints {
-                        let ok = match constraint {
-                            Constraint::Eq(i, j) => tuple[*i] == tuple[*j],
-                            Constraint::Const(i, t) => &tuple[*i] == t,
-                        };
-                        if ok {
-                            trie.insert(self.bump, &req.projection, tuple);
-                        }
-                    }
-                });
-        }
+    // fn build_trie(&self, req: &TrieRequest) -> Option<&'b Trie<'b>> {
+    //     let mut trie = Trie::default();
+    //     if req.constraints.is_empty() {
+    //         self.egraph
+    //             .for_each_canonicalized(req.sym, &req.timestamp_range, |tuple| {
+    //                 trie.insert(self.bump, &req.projection, tuple);
+    //             });
+    //     } else {
+    //         self.egraph
+    //             .for_each_canonicalized(req.sym, &req.timestamp_range, |tuple| {
+    //                 for constraint in &req.constraints {
+    //                     let ok = match constraint {
+    //                         Constraint::Eq(i, j) => tuple[*i] == tuple[*j],
+    //                         Constraint::Const(i, t) => &tuple[*i] == t,
+    //                     };
+    //                     if ok {
+    //                         trie.insert(self.bump, &req.projection, tuple);
+    //                     }
+    //                 }
+    //             });
+    //     }
 
-        if trie.0.is_empty() {
-            None
-        } else {
-            Some(self.bump.alloc(trie))
-        }
-    }
+    //     if trie.0.is_empty() {
+    //         None
+    //     } else {
+    //         Some(self.bump.alloc(trie))
+    //     }
+    // }
 }
 
 enum Constraint {
@@ -278,28 +205,45 @@ enum Constraint {
     Const(usize, Value),
 }
 
-#[derive(Debug, Default)]
-struct Trie<'b>(HashMap<Value, &'b mut Self>);
-
-impl Trie<'_> {
-    fn len(&self) -> usize {
-        self.0.len()
-    }
-}
-
-impl<'b> Trie<'b> {
-    fn insert(&mut self, bump: &'b Bump, shuffle: &[usize], tuple: &[Value]) {
-        // debug_assert_eq!(shuffle.len(), tuple.len());
-        debug_assert!(shuffle.len() <= tuple.len());
-        let mut trie = self;
-        for i in shuffle {
-            trie = trie
-                .0
-                .entry(tuple[*i])
-                .or_insert_with(|| bump.alloc(Trie::default()));
+impl Constraint {
+    fn check(&self, tuple: &[Value], out: &TupleOutput) -> bool {
+        let get = |i: usize| {
+            if i < tuple.len() {
+                &tuple[i]
+            } else {
+                debug_assert_eq!(i, tuple.len());
+                &out.value
+            }
+        };
+        match self {
+            Constraint::Eq(i, j) => get(*i) == get(*j),
+            Constraint::Const(i, t) => get(*i) == t,
         }
     }
 }
+
+// #[derive(Debug, Default)]
+// struct Trie<'b>(HashMap<Value, &'b mut Self>);
+
+// impl Trie<'_> {
+//     fn len(&self) -> usize {
+//         self.0.len()
+//     }
+// }
+
+// impl<'b> Trie<'b> {
+//     fn insert(&mut self, bump: &'b Bump, shuffle: &[usize], tuple: &[Value]) {
+//         // debug_assert_eq!(shuffle.len(), tuple.len());
+//         debug_assert!(shuffle.len() <= tuple.len());
+//         let mut trie = self;
+//         for i in shuffle {
+//             trie = trie
+//                 .0
+//                 .entry(tuple[*i])
+//                 .or_insert_with(|| bump.alloc(Trie::default()));
+//         }
+//     }
+// }
 
 #[derive(Debug, Default, Clone)]
 pub struct VarInfo {
@@ -341,11 +285,45 @@ impl EGraph {
         CompiledQuery { query, vars }
     }
 
+    fn make_trie_access(
+        &self,
+        var: Symbol,
+        atom: &Atom<Symbol>,
+        timestamp_range: Range<u32>,
+    ) -> TrieAccess {
+        let column = atom
+            .args
+            .iter()
+            .position(|arg| arg == &AtomTerm::Var(var))
+            .unwrap();
+
+        let function = &self.functions[&atom.head];
+
+        let mut constraints = vec![];
+        for (i, t) in atom.args.iter().enumerate() {
+            match t {
+                AtomTerm::Value(val) => constraints.push(Constraint::Const(i, *val)),
+                AtomTerm::Var(_v) => {
+                    if let Some(j) = atom.args[..i].iter().position(|t2| t == t2) {
+                        constraints.push(Constraint::Eq(j, i));
+                    }
+                }
+            }
+        }
+
+        TrieAccess {
+            function,
+            timestamp_range,
+            column,
+            constraints,
+        }
+    }
+
     fn compile_program(
         &self,
         query: &CompiledQuery,
         timestamp_ranges: &[Range<u32>],
-    ) -> (Vec<Instr>, Vec<Symbol>) {
+    ) -> (Program, Vec<Symbol>) {
         #[derive(Default)]
         struct VarInfo2 {
             occurences: Vec<usize>,
@@ -353,16 +331,15 @@ impl EGraph {
             size_guess: usize,
         }
 
+        let atoms = &query.query.atoms;
         let mut vars: IndexMap<Symbol, VarInfo2> = Default::default();
-        for (i, atom) in query.query.atoms.iter().enumerate() {
+        for (i, atom) in atoms.iter().enumerate() {
             for v in atom.vars() {
                 vars.entry(v).or_default().occurences.push(i)
             }
         }
 
-        let relation_sizes: Vec<usize> = query
-            .query
-            .atoms
+        let relation_sizes: Vec<usize> = atoms
             .iter()
             .zip(timestamp_ranges)
             .map(|(atom, range)| self.functions[&atom.head].get_size(range))
@@ -392,9 +369,21 @@ impl EGraph {
 
         let mut program: Vec<Instr> = vars
             .iter()
-            .map(|(v, info)| Instr::Intersect {
-                idx: query.vars.get_index_of(v).unwrap(),
-                trie_indices: info.occurences.clone(),
+            .map(|(&v, info)| {
+                let idx = query.vars.get_index_of(&v).unwrap();
+                Instr::Intersect {
+                    value_idx: idx,
+                    trie_accesses: info
+                        .occurences
+                        .iter()
+                        .map(|&atom_idx| {
+                            let atom = &atoms[atom_idx];
+                            let range = timestamp_ranges[atom_idx].clone();
+                            let access = self.make_trie_access(v, atom, range);
+                            (atom_idx, access)
+                        })
+                        .collect(),
+                }
             })
             .collect();
 
@@ -432,41 +421,183 @@ impl EGraph {
             }
         }
 
-        (program, vars.into_keys().collect())
+        (Program(program), vars.into_keys().collect())
     }
 
     pub(crate) fn run_query<F>(&self, cq: &CompiledQuery, timestamp: u32, mut f: F)
     where
         F: FnMut(&[Value]),
     {
-        let bump = Bump::new();
         let has_atoms = !cq.query.atoms.is_empty();
 
         if has_atoms {
+            let do_seminaive = true;
             // for the later atoms, we consider everything
             let mut timestamp_ranges = vec![0..u32::MAX; cq.query.atoms.len()];
             for (atom_i, _atom) in cq.query.atoms.iter().enumerate() {
                 // this time, we only consider "new stuff" for this atom
-                timestamp_ranges[atom_i] = timestamp..u32::MAX;
+                if do_seminaive {
+                    timestamp_ranges[atom_i] = timestamp..u32::MAX;
+                }
 
                 // do the gj
-                let bump = Bump::new();
-                if let Some((mut ctx, program)) = Context::new(&bump, self, cq, &timestamp_ranges) {
+                if let Some((mut ctx, program)) = Context::new(self, cq, &timestamp_ranges) {
                     log::debug!(
                         "Query: {}\nVars: {}\nProgram\n{}",
                         cq.query,
                         ListDisplay(cq.vars.keys(), " "),
                         program
                     );
-                    ctx.eval(&program.0, &mut f)
+                    let tries = LazyTrie::make_initial_vec(cq.query.atoms.len());
+                    let trie_refs = tries.iter().collect::<Vec<_>>();
+                    ctx.eval(&trie_refs, &program.0, &mut f)
+                }
+
+                if !do_seminaive {
+                    break;
                 }
 
                 // now we can fix this atom to be "old stuff" only
                 // range is half-open; timestamp is excluded
                 timestamp_ranges[atom_i] = 0..timestamp;
             }
-        } else if let Some((mut ctx, program)) = Context::new(&bump, self, cq, &[]) {
-            ctx.eval(&program.0, &mut f)
+        } else if let Some((mut ctx, program)) = Context::new(self, cq, &[]) {
+            let tries = LazyTrie::make_initial_vec(cq.query.atoms.len());
+            let trie_refs = tries.iter().collect::<Vec<_>>();
+            ctx.eval(&trie_refs, &program.0, &mut f)
         }
+    }
+}
+
+struct LazyTrie(UnsafeCell<LazyTrieInner>);
+
+enum LazyTrieInner {
+    Delayed(Vec<u32>),
+    Sparse(SparseMap),
+}
+
+type SparseMap = HashMap<Value, LazyTrie>;
+
+type RowIdx = u32;
+impl LazyTrie {
+    fn make_initial_vec(n: usize) -> Vec<Self> {
+        (0..n)
+            .map(|_| LazyTrie(UnsafeCell::new(LazyTrieInner::Delayed(vec![]))))
+            .collect()
+    }
+
+    fn len(&self) -> usize {
+        match unsafe { &*self.0.get() } {
+            LazyTrieInner::Delayed(v) => v.len(),
+            LazyTrieInner::Sparse(m) => m.len(),
+        }
+    }
+
+    fn force(&self, access: &TrieAccess) -> &LazyTrieInner {
+        let this = unsafe { &mut *self.0.get() };
+        if let LazyTrieInner::Delayed(idxs) = this {
+            *this = access.make_trie_inner(idxs);
+        }
+        unsafe { &*self.0.get() }
+    }
+
+    fn for_each<'a>(&'a self, access: &TrieAccess, mut f: impl FnMut(Value, &'a LazyTrie)) {
+        match self.force(access) {
+            LazyTrieInner::Sparse(m) => {
+                for (k, v) in m {
+                    f(*k, v)
+                }
+            }
+            LazyTrieInner::Delayed(_) => unreachable!(),
+        }
+    }
+
+    fn get(&self, access: &TrieAccess, value: Value) -> Option<&LazyTrie> {
+        match self.force(access) {
+            LazyTrieInner::Sparse(m) => m.get(&value),
+            LazyTrieInner::Delayed(_) => unreachable!(),
+        }
+    }
+}
+
+struct TrieAccess<'a> {
+    function: &'a Function,
+    timestamp_range: Range<u32>,
+    column: usize,
+    constraints: Vec<Constraint>,
+}
+
+impl<'a> std::fmt::Display for TrieAccess<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}", self.function.decl.name, self.column)
+    }
+}
+
+impl<'a> TrieAccess<'a> {
+    #[cold]
+    fn make_trie_inner(&self, idxs: &[RowIdx]) -> LazyTrieInner {
+        let arity = self.function.schema.input.len();
+        let mut map = SparseMap::default();
+        let mut insert = |i: usize, tup: &[Value], out: &TupleOutput, val: Value| {
+            use hashbrown::hash_map::Entry;
+            if self.timestamp_range.contains(&out.timestamp)
+                && self.constraints.iter().all(|c| c.check(tup, out))
+            {
+                match map.entry(val) {
+                    Entry::Occupied(mut e) => {
+                        if let LazyTrieInner::Delayed(ref mut v) = e.get_mut().0.get_mut() {
+                            v.push(i as RowIdx)
+                        } else {
+                            unreachable!()
+                        }
+                    }
+                    Entry::Vacant(e) => {
+                        e.insert(LazyTrie(UnsafeCell::new(LazyTrieInner::Delayed(vec![
+                            i as RowIdx,
+                        ]))));
+                    }
+                }
+            }
+        };
+
+        if idxs.is_empty() {
+            if self.column < arity {
+                for (i, (tup, out)) in self.function.nodes.iter().enumerate() {
+                    insert(i, tup, out, tup[self.column])
+                }
+            } else {
+                assert_eq!(self.column, arity);
+                for (i, (tup, out)) in self.function.nodes.iter().enumerate() {
+                    insert(i, tup, out, out.value);
+                }
+            };
+        } else if self.column < arity {
+            for idx in idxs {
+                let i = *idx as usize;
+                let (tup, out) = &self.function.nodes.get_index(i).unwrap();
+                insert(i, tup, out, tup[self.column])
+            }
+        } else {
+            assert_eq!(self.column, arity);
+            for idx in idxs {
+                let i = *idx as usize;
+                let (tup, out) = &self.function.nodes.get_index(i).unwrap();
+                insert(i, tup, out, out.value)
+            }
+        }
+
+        // // Density test
+        // if !map.is_empty() {
+        //     let min = map.keys().map(|v| v.bits).min().unwrap();
+        //     let max = map.keys().map(|v| v.bits).max().unwrap();
+        //     let len = map.len();
+        //     if max - min <= len as u64 * 2 {
+        //         println!("Trie is dense with len {len}!");
+        //     } else {
+        //         println!("Trie is not dense with len {len}!");
+        //     }
+        // }
+
+        LazyTrieInner::Sparse(map)
     }
 }

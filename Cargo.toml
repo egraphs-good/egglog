@@ -20,7 +20,6 @@ symbol_table = {git = "https://github.com/mwillsey/symbol_table", rev = "acddcf8
 thiserror = "1"
 # symbol_table = { version = "0.2", features = ["global"] }
 # symbol_table = { path = "../symbol_table", features = ["global"] }
-bumpalo = "3.10"
 num-integer = "0.1.45"
 num-rational = "0.4.0"
 num-traits = "0.2.15"
