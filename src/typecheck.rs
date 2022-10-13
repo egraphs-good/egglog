@@ -70,6 +70,12 @@ pub struct Atom<T> {
     pub args: Vec<AtomTerm>,
 }
 
+impl<T: std::fmt::Display> std::fmt::Display for Atom<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "({} {}) ", self.head, ListDisplay(&self.args, " "))
+    }
+}
+
 #[derive(Default, Debug, Clone)]
 pub struct Query {
     pub atoms: Vec<Atom<Symbol>>,
@@ -79,7 +85,7 @@ pub struct Query {
 impl std::fmt::Display for Query {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for atom in &self.atoms {
-            write!(f, "({} {}) ", atom.head, ListDisplay(&atom.args, " "))?;
+            write!(f, "{atom}")?;
         }
         if !self.filters.is_empty() {
             write!(f, "where ")?;

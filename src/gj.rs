@@ -291,9 +291,9 @@ impl EGraph {
             .map(|(atom, range)| self.functions[&atom.head].get_size(range))
             .collect();
 
-        // if relation_sizes.iter().any(|&s| s == 0) {
-        //     return None;
-        // }
+        if relation_sizes.iter().any(|&s| s == 0) {
+            return None;
+        }
 
         for (_v, info) in &mut vars {
             assert!(!info.occurences.is_empty());
@@ -396,7 +396,7 @@ impl EGraph {
             let do_seminaive = true;
             // for the later atoms, we consider everything
             let mut timestamp_ranges = vec![0..u32::MAX; cq.query.atoms.len()];
-            for (atom_i, _atom) in cq.query.atoms.iter().enumerate() {
+            for (atom_i, atom) in cq.query.atoms.iter().enumerate() {
                 // this time, we only consider "new stuff" for this atom
                 if do_seminaive {
                     timestamp_ranges[atom_i] = timestamp..u32::MAX;
@@ -405,8 +405,9 @@ impl EGraph {
                 // do the gj
                 if let Some((mut ctx, program)) = Context::new(self, cq, &timestamp_ranges) {
                     log::debug!(
-                        "Query: {}\nVars: {}\nProgram\n{}",
+                        "Query: {}\nNew atom: {}\nVars: {}\nProgram\n{}",
                         cq.query,
+                        atom,
                         ListDisplay(cq.vars.keys(), " "),
                         program
                     );
