@@ -46,6 +46,7 @@ impl<'a> std::fmt::Display for Program<'a> {
 struct Context<'b> {
     query: &'b CompiledQuery,
     tuple: Vec<Value>,
+    matches: usize,
 }
 
 impl<'b> Context<'b> {
@@ -57,52 +58,23 @@ impl<'b> Context<'b> {
         let ctx = Context {
             query: cq,
             tuple: vec![Value::fake(); cq.vars.len()],
+            matches: 0,
         };
 
-        let (program, _vars) = egraph.compile_program(cq, timestamp_ranges);
-
-        // for (atom_i, atom) in cq.query.atoms.iter().enumerate() {
-        //     // let mut to_project = vec![];
-        //     let mut constraints = vec![];
-
-        //     for (i, t) in atom.args.iter().enumerate() {
-        //         match t {
-        //             AtomTerm::Value(val) => constraints.push(Constraint::Const(i, *val)),
-        //             AtomTerm::Var(_v) => {
-        //                 if let Some(j) = atom.args[..i].iter().position(|t2| t == t2) {
-        //                     constraints.push(Constraint::Eq(j, i));
-        //                 } else {
-        //                     // to_project.push(v)
-        //                 }
-        //             }
-        //         }
-        //     }
-
-        //     let mut projection = vec![];
-        //     for v in &vars {
-        //         if let Some(i) = atom.args.iter().position(|t| t == &AtomTerm::Var(*v)) {
-        //             assert!(!projection.contains(&i));
-        //             projection.push(i);
-        //         }
-        //     }
-
-        //     ctx.tries[atom_i] = ctx.build_trie(&TrieRequest {
-        //         sym: atom.head,
-        //         projection,
-        //         constraints,
-        //         timestamp_range: timestamp_ranges[atom_i].clone(),
-        //     })?;
-        // }
+        let (program, _vars) = egraph.compile_program(cq, timestamp_ranges)?;
 
         Some((ctx, program))
     }
 
-    fn eval<F>(&mut self, tries: &[&LazyTrie], program: &[Instr], f: &mut F)
+    fn eval<F>(&mut self, tries: &mut [&LazyTrie], program: &[Instr], f: &mut F)
     where
         F: FnMut(&[Value]),
     {
         let (instr, program) = match program.split_first() {
-            None => return f(&self.tuple),
+            None => {
+                self.matches += 1;
+                return f(&self.tuple);
+            }
             Some(pair) => pair,
         };
 
@@ -111,29 +83,56 @@ impl<'b> Context<'b> {
                 value_idx,
                 trie_accesses,
             } => {
-                let (j_min, access_min) = trie_accesses
-                    .iter()
-                    .min_by_key(|(j, _a)| tries[*j].len())
-                    .unwrap();
-
-                let mut new_tries = tries.to_vec();
-
-                tries[*j_min].for_each(access_min, |value, min_trie| {
-                    new_tries[*j_min] = min_trie;
-                    for (j, access) in trie_accesses {
-                        if j != j_min {
-                            if let Some(t) = tries[*j].get(access, value) {
-                                new_tries[*j] = t;
-                            } else {
-                                return;
+                match trie_accesses.as_slice() {
+                    [(j, access)] => tries[*j].for_each(access, |value, trie| {
+                        let old_trie = std::mem::replace(&mut tries[*j], trie);
+                        self.tuple[*value_idx] = value;
+                        self.eval(tries, program, f);
+                        tries[*j] = old_trie;
+                    }),
+                    [a, b] => {
+                        let (a, b) = if tries[a.0].len() <= tries[b.0].len() {
+                            (a, b)
+                        } else {
+                            (b, a)
+                        };
+                        tries[a.0].for_each(&a.1, |value, ta| {
+                            if let Some(tb) = tries[b.0].get(&b.1, value) {
+                                let old_ta = std::mem::replace(&mut tries[a.0], ta);
+                                let old_tb = std::mem::replace(&mut tries[b.0], tb);
+                                self.tuple[*value_idx] = value;
+                                self.eval(tries, program, f);
+                                tries[a.0] = old_ta;
+                                tries[b.0] = old_tb;
                             }
-                        }
+                        })
                     }
+                    _ => {
+                        let (j_min, access_min) = trie_accesses
+                            .iter()
+                            .min_by_key(|(j, _a)| tries[*j].len())
+                            .unwrap();
 
-                    // at this point, new_tries is ready to go
-                    self.tuple[*value_idx] = value;
-                    self.eval(&new_tries, program, f);
-                });
+                        let mut new_tries = tries.to_vec();
+
+                        tries[*j_min].for_each(access_min, |value, min_trie| {
+                            new_tries[*j_min] = min_trie;
+                            for (j, access) in trie_accesses {
+                                if j != j_min {
+                                    if let Some(t) = tries[*j].get(access, value) {
+                                        new_tries[*j] = t;
+                                    } else {
+                                        return;
+                                    }
+                                }
+                            }
+
+                            // at this point, new_tries is ready to go
+                            self.tuple[*value_idx] = value;
+                            self.eval(&mut new_tries, program, f);
+                        });
+                    }
+                }
             }
             Instr::Call { prim, args, check } => {
                 let (out, args) = args.split_last().unwrap();
@@ -169,35 +168,6 @@ impl<'b> Context<'b> {
             }
         }
     }
-
-    // fn build_trie(&self, req: &TrieRequest) -> Option<&'b Trie<'b>> {
-    //     let mut trie = Trie::default();
-    //     if req.constraints.is_empty() {
-    //         self.egraph
-    //             .for_each_canonicalized(req.sym, &req.timestamp_range, |tuple| {
-    //                 trie.insert(self.bump, &req.projection, tuple);
-    //             });
-    //     } else {
-    //         self.egraph
-    //             .for_each_canonicalized(req.sym, &req.timestamp_range, |tuple| {
-    //                 for constraint in &req.constraints {
-    //                     let ok = match constraint {
-    //                         Constraint::Eq(i, j) => tuple[*i] == tuple[*j],
-    //                         Constraint::Const(i, t) => &tuple[*i] == t,
-    //                     };
-    //                     if ok {
-    //                         trie.insert(self.bump, &req.projection, tuple);
-    //                     }
-    //                 }
-    //             });
-    //     }
-
-    //     if trie.0.is_empty() {
-    //         None
-    //     } else {
-    //         Some(self.bump.alloc(trie))
-    //     }
-    // }
 }
 
 enum Constraint {
@@ -222,29 +192,6 @@ impl Constraint {
     }
 }
 
-// #[derive(Debug, Default)]
-// struct Trie<'b>(HashMap<Value, &'b mut Self>);
-
-// impl Trie<'_> {
-//     fn len(&self) -> usize {
-//         self.0.len()
-//     }
-// }
-
-// impl<'b> Trie<'b> {
-//     fn insert(&mut self, bump: &'b Bump, shuffle: &[usize], tuple: &[Value]) {
-//         // debug_assert_eq!(shuffle.len(), tuple.len());
-//         debug_assert!(shuffle.len() <= tuple.len());
-//         let mut trie = self;
-//         for i in shuffle {
-//             trie = trie
-//                 .0
-//                 .entry(tuple[*i])
-//                 .or_insert_with(|| bump.alloc(Trie::default()));
-//         }
-//     }
-// }
-
 #[derive(Debug, Default, Clone)]
 pub struct VarInfo {
     /// indexes into the `atoms` field of CompiledQuery
@@ -257,7 +204,6 @@ type VarMap = IndexMap<Symbol, VarInfo>;
 pub struct CompiledQuery {
     query: Query,
     pub vars: VarMap,
-    // program: Vec<Instr>,
 }
 
 impl EGraph {
@@ -323,11 +269,11 @@ impl EGraph {
         &self,
         query: &CompiledQuery,
         timestamp_ranges: &[Range<u32>],
-    ) -> (Program, Vec<Symbol>) {
+    ) -> Option<(Program, Vec<Symbol>)> {
         #[derive(Default)]
         struct VarInfo2 {
             occurences: Vec<usize>,
-            // intersected_on: usize,
+            intersected_on: usize,
             size_guess: usize,
         }
 
@@ -345,6 +291,10 @@ impl EGraph {
             .map(|(atom, range)| self.functions[&atom.head].get_size(range))
             .collect();
 
+        // if relation_sizes.iter().any(|&s| s == 0) {
+        //     return None;
+        // }
+
         for (_v, info) in &mut vars {
             assert!(!info.occurences.is_empty());
             info.size_guess = info
@@ -353,19 +303,31 @@ impl EGraph {
                 .map(|&i| relation_sizes[i])
                 .min()
                 .unwrap();
-            // info.size_guess >>= info.occurences.len();
+            // info.size_guess >>= info.occurences.len() - 1;
         }
 
-        vars.sort_by(|_v1, i1, _v2, i2| {
-            // i1.size_guess.cmp(&i2.size_guess)
-            i1.occurences
-                .len()
-                .cmp(&i2.occurences.len())
-                // more occurences first
-                .reverse()
-                // then smaller relations
-                .then_with(|| i1.size_guess.cmp(&i2.size_guess))
-        });
+        let mut ordered_vars = IndexMap::default();
+        while !vars.is_empty() {
+            let (&var, _info) = vars
+                .iter()
+                .max_by_key(|(_v, info)| {
+                    let size = info.size_guess as isize;
+                    (info.occurences.len(), info.intersected_on, -size)
+                })
+                .unwrap();
+
+            let info = vars.remove(&var).unwrap();
+            for &i in &info.occurences {
+                for v in atoms[i].vars() {
+                    if let Some(info) = vars.get_mut(&v) {
+                        info.intersected_on += 1;
+                    }
+                }
+            }
+
+            ordered_vars.insert(var, info);
+        }
+        vars = ordered_vars;
 
         let mut program: Vec<Instr> = vars
             .iter()
@@ -421,7 +383,7 @@ impl EGraph {
             }
         }
 
-        (Program(program), vars.into_keys().collect())
+        Some((Program(program), vars.into_keys().collect()))
     }
 
     pub(crate) fn run_query<F>(&self, cq: &CompiledQuery, timestamp: u32, mut f: F)
@@ -449,8 +411,9 @@ impl EGraph {
                         program
                     );
                     let tries = LazyTrie::make_initial_vec(cq.query.atoms.len());
-                    let trie_refs = tries.iter().collect::<Vec<_>>();
-                    ctx.eval(&trie_refs, &program.0, &mut f)
+                    let mut trie_refs = tries.iter().collect::<Vec<_>>();
+                    ctx.eval(&mut trie_refs, &program.0, &mut f);
+                    log::debug!("Matched {} times", ctx.matches);
                 }
 
                 if !do_seminaive {
@@ -463,8 +426,8 @@ impl EGraph {
             }
         } else if let Some((mut ctx, program)) = Context::new(self, cq, &[]) {
             let tries = LazyTrie::make_initial_vec(cq.query.atoms.len());
-            let trie_refs = tries.iter().collect::<Vec<_>>();
-            ctx.eval(&trie_refs, &program.0, &mut f)
+            let mut trie_refs = tries.iter().collect::<Vec<_>>();
+            ctx.eval(&mut trie_refs, &program.0, &mut f)
         }
     }
 }

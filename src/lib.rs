@@ -81,14 +81,24 @@ impl Function {
     }
 
     pub fn rebuild(&mut self, uf: &mut UnionFind, timestamp: u32) -> usize {
+        if self.schema.input.iter().all(|s| !s.is_eq_sort()) && !self.schema.output.is_eq_sort() {
+            return std::mem::take(&mut self.updates);
+        }
+
         // FIXME this doesn't compute updates properly
         let n_unions = uf.n_unions();
         let old_nodes = std::mem::take(&mut self.nodes);
         for (mut args, out) in old_nodes {
+            let mut new_timestamp = out.timestamp;
+            assert!(out.timestamp <= timestamp);
             let value = out.value;
             for (a, ty) in args.iter_mut().zip(&self.schema.input) {
                 if ty.is_eq_sort() {
-                    *a = uf.find_mut_value(*a)
+                    let new_a = uf.find_mut_value(*a);
+                    if new_a != *a {
+                        *a = new_a;
+                        new_timestamp = timestamp;
+                    }
                 }
             }
 
@@ -98,45 +108,68 @@ impl Function {
                     .entry(args)
                     .and_modify(|out2| {
                         out2.value = uf.union_values(value, out2.value);
-                        out2.timestamp = out2.timestamp.max(timestamp);
+                        out2.timestamp = timestamp; // just use the big timestamp
+                        assert!(out2.timestamp <= timestamp);
                     })
-                    .or_insert_with(|| TupleOutput {
-                        value: uf.find_mut_value(value),
-                        timestamp,
+                    .or_insert_with(|| {
+                        let new_value = uf.find_mut_value(value);
+                        if new_value != value {
+                            new_timestamp = timestamp;
+                        }
+                        TupleOutput {
+                            value: uf.find_mut_value(value),
+                            timestamp: new_timestamp,
+                        }
                     })
             } else {
                 self.nodes
                     .entry(args)
                     .and_modify(|out2| {
                         // out2.value = uf.union_values(value, out2.value);
-                        out2.timestamp = out2.timestamp.max(timestamp);
+                        out2.timestamp = out2.timestamp.max(out.timestamp);
                     })
-                    .or_insert(TupleOutput { value, timestamp })
+                    .or_insert(TupleOutput {
+                        value,
+                        timestamp: new_timestamp,
+                    })
             };
             // todo!("timestamps");
             // todo!("merge fn");
         }
+
+        // if cfg!(debug_assertions) {
+        //     let mut seen = 0;
+        //     for out in self.nodes.values() {
+        //         assert!(seen <= out.timestamp, "Timestamps should be ordered");
+        //         seen = out.timestamp;
+        //     }
+        // }
+
         uf.n_unions() - n_unions + std::mem::take(&mut self.updates)
     }
 
     pub(crate) fn get_size(&self, range: &Range<u32>) -> usize {
-        if range.start == 0 {
-            if range.end == u32::MAX {
-                self.nodes.len()
-            } else {
-                // TODO binary search or something
-                self.nodes
-                    .values()
-                    .filter(|out| out.timestamp < range.end)
-                    .count()
-            }
-        } else {
-            assert_eq!(range.end, u32::MAX);
-            self.nodes
-                .values()
-                .filter(|out| out.timestamp >= range.end)
-                .count()
-        }
+        self.nodes
+            .values()
+            .filter(|out| range.contains(&out.timestamp))
+            .count()
+        // if range.start == 0 {
+        //     if range.end == u32::MAX {
+        //         self.nodes.len()
+        //     } else {
+        //         // TODO binary search or something
+        //         self.nodes
+        //             .values()
+        //             .filter(|out| out.timestamp < range.end)
+        //             .count()
+        //     }
+        // } else {
+        //     assert_eq!(range.end, u32::MAX);
+        //     self.nodes
+        //         .values()
+        //         .filter(|out| out.timestamp >= range.end)
+        //         .count()
+        // }
     }
 }
 
@@ -239,6 +272,8 @@ struct Rule {
     times_banned: usize,
     banned_until: usize,
     todo_timestamp: u32,
+    search_time: Duration,
+    apply_time: Duration,
 }
 
 impl Default for EGraph {
@@ -763,19 +798,37 @@ impl EGraph {
             log::info!("database size: {}", self.num_tuples());
             log::info!("Made {updates} updates",);
             rebuild_time += rebuild_start.elapsed();
+            self.timestamp += 1;
             if self.saturated {
                 log::info!("Breaking early at iteration {}!", i);
                 break;
             }
         }
 
-        // TODO detect functions
-        for (name, r) in &self.functions {
-            log::debug!("{name}:");
-            for (args, val) in &r.nodes {
-                log::debug!("  {args:?} = {val:?}");
+        // Report the worst offenders
+        log::debug!("Slowest rules:\n{}", {
+            let mut msg = String::new();
+            let mut vec = self.rules.iter().collect::<Vec<_>>();
+            vec.sort_by_key(|(_, r)| r.search_time + r.apply_time);
+            for (name, rule) in vec.iter().rev().take(5) {
+                write!(
+                    msg,
+                    "{name}\n  Search: {}\n  Apply: {}\n",
+                    rule.search_time.as_secs_f64(),
+                    rule.apply_time.as_secs_f64()
+                )
+                .unwrap();
             }
-        }
+            msg
+        });
+
+        // // TODO detect functions
+        // for (name, r) in &self.functions {
+        //     log::debug!("{name}:");
+        //     for (args, val) in &r.nodes {
+        //         log::debug!("  {args:?} = {val:?}");
+        //     }
+        // }
         [search_time, apply_time, rebuild_time]
     }
 
@@ -801,25 +854,33 @@ impl EGraph {
 
         let ban_length = 5;
 
+        let mut rules = std::mem::take(&mut self.rules);
         let search_start = Instant::now();
         let mut searched = vec![];
-        for (&name, rule) in self.rules.iter() {
+        for (&name, rule) in rules.iter_mut() {
             let mut all_values = vec![];
             if rule.banned_until <= iteration {
+                let rule_search_start = Instant::now();
                 self.run_query(&rule.query, rule.todo_timestamp, |values| {
                     assert_eq!(values.len(), rule.query.vars.len());
                     all_values.extend_from_slice(values);
                 });
+                rule.todo_timestamp = self.timestamp;
+                let rule_search_time = rule_search_start.elapsed();
+                log::trace!(
+                    "Searched for {name} in {} ({} results)",
+                    rule_search_time.as_secs_f64(),
+                    all_values.len()
+                );
+                rule.search_time += rule_search_time;
                 searched.push((name, all_values));
             }
         }
         let search_elapsed = search_start.elapsed();
 
         let apply_start = Instant::now();
-        let mut rules = std::mem::take(&mut self.rules);
         'outer: for (name, all_values) in searched {
             let rule = rules.get_mut(&name).unwrap();
-            rule.todo_timestamp = self.timestamp + 1;
             let n = rule.query.vars.len();
 
             // backoff logic
@@ -832,6 +893,8 @@ impl EGraph {
                 continue;
             }
 
+            let rule_apply_start = Instant::now();
+
             for values in all_values.chunks(n) {
                 rule.matches += 1;
                 if rule.matches > 10_000_000 {
@@ -842,10 +905,11 @@ impl EGraph {
                 log::trace!("Applying with {subst:?}");
                 let _result: Result<_, _> = self.eval_actions(Some(subst), &rule.head);
             }
+
+            rule.apply_time += rule_apply_start.elapsed();
         }
         self.rules = rules;
         let apply_elapsed = apply_start.elapsed();
-        self.timestamp += 1;
         [search_elapsed, apply_elapsed]
     }
 
@@ -862,6 +926,8 @@ impl EGraph {
             times_banned: 0,
             banned_until: 0,
             todo_timestamp: 0,
+            search_time: Duration::default(),
+            apply_time: Duration::default(),
         };
         match self.rules.entry(name) {
             Entry::Occupied(_) => panic!("Rule '{name}' was already present"),
@@ -890,34 +956,6 @@ impl EGraph {
             head: vec![Action::Union(Expr::Var(var), rewrite.rhs)],
         };
         self.add_rule_with_name(name, rule)
-    }
-
-    fn for_each_canonicalized(
-        &self,
-        name: Symbol,
-        timestamp_range: &Range<u32>,
-        mut cb: impl FnMut(&[Value]),
-    ) {
-        let mut ids = vec![];
-        let f = self
-            .functions
-            .get(&name)
-            .unwrap_or_else(|| panic!("No function {name}"));
-        for (children, out) in &f.nodes {
-            if timestamp_range.contains(&out.timestamp) {
-                ids.clear();
-                // FIXME canonicalize, do we need to with rebuilding?
-                // ids.extend(children.iter().map(|id| self.find(value)));
-                ids.extend(children.iter().cloned());
-                ids.push(out.value);
-                if cfg!(debug_assertions) {
-                    for &id in &ids {
-                        assert_eq!(self.bad_find_value(id), id, "Not canonicalized {:?}", ids);
-                    }
-                }
-                cb(&ids);
-            }
-        }
     }
 
     fn run_command(&mut self, command: Command, should_run: bool) -> Result<String, Error> {
