@@ -1,4 +1,5 @@
 use indexmap::map::Entry;
+use smallvec::SmallVec;
 
 use crate::{
     typecheck::{Atom, AtomTerm, Query},
@@ -436,7 +437,7 @@ impl EGraph {
 struct LazyTrie(UnsafeCell<LazyTrieInner>);
 
 enum LazyTrieInner {
-    Delayed(Vec<u32>),
+    Delayed(SmallVec<[u32; 4]>),
     Sparse(SparseMap),
 }
 
@@ -446,7 +447,7 @@ type RowIdx = u32;
 impl LazyTrie {
     fn make_initial_vec(n: usize) -> Vec<Self> {
         (0..n)
-            .map(|_| LazyTrie(UnsafeCell::new(LazyTrieInner::Delayed(vec![]))))
+            .map(|_| LazyTrie(UnsafeCell::new(LazyTrieInner::Delayed(Default::default()))))
             .collect()
     }
 
@@ -516,9 +517,9 @@ impl<'a> TrieAccess<'a> {
                         }
                     }
                     Entry::Vacant(e) => {
-                        e.insert(LazyTrie(UnsafeCell::new(LazyTrieInner::Delayed(vec![
-                            i as RowIdx,
-                        ]))));
+                        e.insert(LazyTrie(UnsafeCell::new(LazyTrieInner::Delayed(
+                            smallvec::smallvec![i as RowIdx,],
+                        ))));
                     }
                 }
             }
