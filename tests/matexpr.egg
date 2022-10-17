@@ -1,0 +1,123 @@
+
+(datatype Math
+    (Times Math Math)
+    (Plus Math Math)
+    (NamedDim String)
+    (Lit i64)
+)
+
+(datatype MExpr 
+    (Id Math)  ; Identity matrix needs to be parametrized by dim. Obvious or not depending on who you ask
+               ; Identity matrices of different dimensionality are not equal.
+    (MMul MExpr MExpr) ; A @ B
+    (MSum MExpr MExpr) ; A + B
+    (Kron MExpr MExpr) 
+    (NamedMat String)
+    ; DSum
+    ; HStack
+    ; VStack
+    ; Transpose
+    ; Inverse
+    ; Zero Math Math rectangular 
+    ; ScalarMul 
+
+
+)
+
+
+(function nrows (MExpr) Math)
+(function ncols (MExpr) Math)
+
+(rewrite (nrows (Id n)) n)
+(rewrite (ncols (Id n)) n)
+
+(rewrite (nrows (Kron A B)) (Times (nrows A) (nrows B)))
+(rewrite (ncols (Kron A B)) (Times (ncols A) (ncols B)))
+
+(rewrite (nrows (MMul A B)) (nrows A))
+(rewrite (ncols (MMul A B)) (ncols B))
+
+(rewrite (nrows (MSum A B)) (nrows A))
+(rewrite (ncols (MSum A B)) (nrows A))
+
+;(datatype Type (Mat Math Math))
+;(function type (MExpr) Type)
+; kind of mixed up eta rule
+;(rewrite (type A) (Mat (nrows A) (ncols A)))
+;(rewrite (Mat (nrows A) (ncols A)) (type A))
+
+
+(rewrite (MMul (Id n) A) A)
+(rewrite (MMul A (Id n)) A)
+
+(rewrite (MMul A (MMul B C)) (MMul (MMul A B) C))
+(rewrite (MMul (MMul A B) C) (MMul A (MMul B C)))
+
+(rewrite (Kron A (Kron B C)) (Kron (Kron A B) C))
+(rewrite (Kron (Kron A B) C) (Kron A (Kron B C)))
+
+(rewrite (Kron (MMul A B) C) (Kron A C))
+
+; fusion rule
+
+; The less useful direction is fine without guards
+; If we assumed the left side is well type, the right side is.
+(rewrite (Kron (MMul A C) (MMul B D))  (MMul (Kron A B) (Kron C D)))
+
+(rule
+((= (MMul (Kron A B) (Kron C D)) E)
+ (= (ncols A) (nrows C))
+ (= (ncols B) (nrows D)) ; inplied
+ ; alternative encoding in terms of "type"
+ ;(= (type A) (Mat ra ca)) 
+ ;(= (type B) (Mat ra ca)) 
+ ;(= (type C) (Mat rc cc)) 
+ ;(= (type D) (Mat rd cd)) 
+ ;(= ca rc)
+ ;(= cb rd) ; implied
+ )
+  ((set 
+   (Kron (MMul A C) (MMul B D))
+   E
+  )))
+
+
+; The above algebra can be generalized. These are the axioms of a monoidal category
+; Matmul becomes Comp, Id stays Id, Kron becomes OTimes, 
+; http://www.philipzucker.com/rust-category/
+; Other examples of monoidal categories include relations and functions
+; See for example the Haskell Arrow library
+; The same fusion and interchange laws apply and are guarded by types lining up correctly
+
+
+(define A (NamedMat "A"))
+(define B (NamedMat "B"))
+(define n (NamedDim "n"))
+(define m (NamedDim "m"))
+(set (Lit 100) (ncols A))
+
+; domain specific rules
+; 
+
+; ludemp(L,E)
+
+; These are almost just giving names to particlar equalities
+(relation idempotent (MExpr))
+(relation orthogonal (MExpr))
+
+(rule ((idempotent A) (= (nrows A) n))
+    ((set (Id n) (MMul A  A))))
+(rule ((orthogonal A) (= (nrows A) n))
+    ((set (Id n) (MMul A (Transpose A)))))
+
+; Don't really have equational laws, but certainly effect costs
+(relation uppertriangular (MExpr))
+(relation diagonal (MExpr))
+(relation bandeddiagonal (MExpr i64)) ; The band might actually be a min lattice value
+; (rule ((diagonal A) (diagonal B)) ((diagonal (MMul A B)))
+(relation circulant (MExpr))
+
+; abstract analysis of sparsity
+(relation sparsity_bound (MExpr i64))
+
+; low rank
