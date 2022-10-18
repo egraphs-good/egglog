@@ -25,7 +25,7 @@ fn main() {
         std::process::exit(1)
     }
 
-    for input in &args.inputs {
+    for (idx, input) in args.inputs.iter().enumerate() {
         let s = std::fs::read_to_string(input).unwrap_or_else(|_| {
             let arg = input.to_string_lossy();
             panic!("Failed to read file {arg}")
@@ -42,6 +42,11 @@ fn main() {
                 log::error!("{}", err);
                 std::process::exit(1)
             }
+        }
+
+        // no need to drop the egraph if we are going to exit
+        if idx == args.inputs.len() - 1 {
+            std::mem::forget(egraph)
         }
     }
 }
