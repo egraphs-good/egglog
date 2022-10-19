@@ -199,23 +199,26 @@ pub struct VarInfo {
     occurences: Vec<usize>,
 }
 
-type VarMap = IndexMap<Symbol, VarInfo>;
-
 #[derive(Debug, Clone)]
 pub struct CompiledQuery {
     query: Query,
-    pub vars: VarMap,
+    pub vars: IndexMap<Symbol, VarInfo>,
 }
 
 impl EGraph {
     pub(crate) fn compile_gj_query(
         &self,
         query: Query,
-        _types: HashMap<Symbol, ArcSort>,
+        types: &IndexMap<Symbol, ArcSort>,
     ) -> CompiledQuery {
         // NOTE: this vars order only used for ordering the tuple,
         // It is not the GJ variable order.
         let mut vars: IndexMap<Symbol, VarInfo> = Default::default();
+
+        for var in types.keys() {
+            vars.entry(*var).or_default();
+        }
+
         for (i, atom) in query.atoms.iter().enumerate() {
             for v in atom.vars() {
                 // only count grounded occurrences
@@ -333,7 +336,9 @@ impl EGraph {
         let mut program: Vec<Instr> = vars
             .iter()
             .map(|(&v, info)| {
-                let idx = query.vars.get_index_of(&v).unwrap();
+                let idx = query.vars.get_index_of(&v).unwrap_or_else(|| {
+                    panic!("variable {} not found in query", v);
+                });
                 Instr::Intersect {
                     value_idx: idx,
                     trie_accesses: info

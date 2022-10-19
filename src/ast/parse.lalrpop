@@ -68,7 +68,7 @@ NonDefineAction: Action = {
     "(" "delete" "(" <f: Ident> <args:Expr*> ")" ")" => Action::Delete ( f, args),
     "(" "union" <e1:Expr> <e2:Expr> ")" => Action::Union(<>),
     "(" "panic" <msg:String> ")" => Action::Panic(msg),
-    <e:Expr> => Action::Expr(e),
+    <e:CallExpr> => Action::Expr(e),
 }
 
 Action: Action = {

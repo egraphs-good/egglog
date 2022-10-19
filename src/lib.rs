@@ -21,8 +21,9 @@ use std::hash::Hash;
 use std::io::Read;
 use std::ops::{Deref, Range};
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::{fmt::Debug, sync::Arc};
-use typecheck::{AtomTerm, Bindings};
+use typecheck::Program;
 
 type ArcSort = Arc<dyn Sort>;
 
@@ -39,8 +40,18 @@ use crate::typecheck::TypeError;
 pub struct Function {
     decl: FunctionDecl,
     schema: ResolvedSchema,
+    merge: MergeFn,
     nodes: IndexMap<Vec<Value>, TupleOutput>,
     updates: usize,
+}
+
+#[derive(Clone)]
+enum MergeFn {
+    AssertEq,
+    Union,
+    // the rc is make sure it's cheaply clonable, since calling the merge fn
+    // requires a clone
+    Expr(Rc<Program>),
 }
 
 #[derive(Debug, Clone)]
@@ -177,7 +188,7 @@ pub type Subst = IndexMap<Symbol, Value>;
 
 pub trait PrimitiveLike {
     fn name(&self) -> Symbol;
-    fn accept(&self, types: &[&dyn Sort]) -> Option<ArcSort>;
+    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort>;
     fn apply(&self, values: &[Value]) -> Option<Value>;
 }
 
@@ -232,7 +243,7 @@ impl PrimitiveLike for SimplePrimitive {
     fn name(&self) -> Symbol {
         self.name
     }
-    fn accept(&self, types: &[&dyn Sort]) -> Option<ArcSort> {
+    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
         if self.input.len() != types.len() {
             return None;
         }
@@ -266,7 +277,7 @@ pub struct EGraph {
 #[derive(Clone, Debug)]
 struct Rule {
     query: CompiledQuery,
-    bindings: Bindings,
+    program: Program,
     head: Vec<Action>,
     matches: usize,
     times_banned: usize,
@@ -589,11 +600,26 @@ impl EGraph {
             None => return Err(Error::TypeError(TypeError::Unbound(decl.schema.output))),
         };
 
+        let merge = if let Some(merge_expr) = &decl.merge {
+            let mut types = IndexMap::<Symbol, ArcSort>::default();
+            types.insert("old".into(), output.clone());
+            types.insert("new".into(), output.clone());
+            let program = self
+                .compile_expr(&types, merge_expr, output.clone())
+                .map_err(Error::TypeErrors)?;
+            MergeFn::Expr(Rc::new(program))
+        } else if output.is_eq_sort() {
+            MergeFn::Union
+        } else {
+            MergeFn::AssertEq
+        };
+
         let function = Function {
             decl: decl.clone(),
             schema: ResolvedSchema { input, output },
             nodes: Default::default(),
             updates: 0,
+            merge,
             // TODO figure out merge and default here
         };
 
@@ -699,7 +725,7 @@ impl EGraph {
                         // HACK
                         let types = values
                             .iter()
-                            .map(|v| &*self.sorts[&v.tag])
+                            .map(|v| self.sorts[&v.tag].clone())
                             .collect::<Vec<_>>();
                         if prim.accept(&types).is_some() {
                             if res.is_none() {
@@ -833,24 +859,25 @@ impl EGraph {
     }
 
     fn step_rules(&mut self, iteration: usize) -> [Duration; 2] {
-        fn make_subst(rule: &Rule, values: &[Value]) -> Subst {
-            let get_val = |t: &AtomTerm| match t {
-                AtomTerm::Var(sym) => {
-                    let i = rule
-                        .query
-                        .vars
-                        .get_index_of(sym)
-                        .unwrap_or_else(|| panic!("Couldn't find variable '{sym}'"));
-                    values[i]
-                }
-                AtomTerm::Value(val) => *val,
-            };
+        // fn make_subst(rule: &Rule, values: &[Value]) -> Subst {
+        //     let get_val = |t: &AtomTerm| match t {
+        //         AtomTerm::Var(sym) => {
+        //             let i = rule
+        //                 .query
+        //                 .vars
+        //                 .get_index_of(sym)
+        //                 .unwrap_or_else(|| panic!("Couldn't find variable '{sym}'"));
+        //             values[i]
+        //         }
+        //         AtomTerm::Value(val) => *val,
+        //     };
 
-            rule.bindings
-                .iter()
-                .map(|(k, t)| (*k, get_val(t)))
-                .collect()
-        }
+        //     todo!()
+        //     // rule.bindings
+        //     //     .iter()
+        //     //     .map(|(k, t)| (*k, get_val(t)))
+        //     //     .collect()
+        // }
 
         let ban_length = 5;
 
@@ -895,15 +922,17 @@ impl EGraph {
 
             let rule_apply_start = Instant::now();
 
+            let stack = &mut vec![];
             for values in all_values.chunks(n) {
                 rule.matches += 1;
                 if rule.matches > 10_000_000 {
                     log::warn!("Rule {} has matched {} times, bailing!", name, rule.matches);
                     break 'outer;
                 }
-                let subst = make_subst(rule, values);
-                log::trace!("Applying with {subst:?}");
-                let _result: Result<_, _> = self.eval_actions(Some(subst), &rule.head);
+                // log::trace!("Applying with {subst:?}");
+                assert!(stack.is_empty());
+                self.run_actions(stack, values, &rule.program);
+                // let _result: Result<_, _> = self.eval_actions(Some(subst), &rule.head);
             }
 
             rule.apply_time += rule_apply_start.elapsed();
@@ -916,16 +945,23 @@ impl EGraph {
     fn add_rule_with_name(&mut self, name: String, rule: ast::Rule) -> Result<Symbol, Error> {
         let name = Symbol::from(name);
         let mut ctx = typecheck::Context::new(self);
-        let (query0, bindings) = ctx.typecheck_query(&rule.body).map_err(Error::TypeErrors)?;
-        let query = self.compile_gj_query(query0, ctx.types);
+        let query0 = ctx.typecheck_query(&rule.body).map_err(Error::TypeErrors)?;
+        let query = self.compile_gj_query(query0, &ctx.types);
+        let program = self
+            .compile_actions(&ctx.types, &rule.head)
+            .map_err(Error::TypeErrors)?;
+        // println!(
+        //     "Compiled rule {rule:?}\n{subst:?}to {program:#?}",
+        //     subst = &ctx.types
+        // );
         let compiled_rule = Rule {
             query,
-            bindings,
             head: rule.head,
             matches: 0,
             times_banned: 0,
             banned_until: 0,
             todo_timestamp: 0,
+            program,
             search_time: Duration::default(),
             apply_time: Duration::default(),
         };

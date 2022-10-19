@@ -64,7 +64,7 @@
        (= v (Var vv))
        (= w (Var vw))
        (!= vv vw))
-      (is-const-or-distinct-var v w))
+      ((is-const-or-distinct-var v w)))
 
 (rewrite (Add a b) (Add b a))
 (rewrite (Mul a b) (Mul b a))
