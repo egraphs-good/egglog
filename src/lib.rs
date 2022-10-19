@@ -278,7 +278,6 @@ pub struct EGraph {
 struct Rule {
     query: CompiledQuery,
     program: Program,
-    head: Vec<Action>,
     matches: usize,
     times_banned: usize,
     banned_until: usize,
@@ -388,161 +387,38 @@ impl EGraph {
         }
     }
 
-    pub fn union_exprs(&mut self, ctx: &Subst, exprs: &[Expr]) -> Result<Value, NotFoundError> {
-        let mut exprs = exprs.iter();
-        let e = exprs.next().expect("shouldn't be empty");
-        let mut val = self.eval_expr(ctx, e)?;
-        for e2 in exprs {
-            let val2 = self.eval_expr(ctx, e2)?;
-            val = self.unionfind.union_values(val, val2);
-        }
-        Ok(val)
-    }
-
-    pub fn eval_actions(
-        &mut self,
-        mut ctx: Option<Subst>,
-        actions: &[Action],
-    ) -> Result<(), Error> {
-        let default = Subst::default();
-        for action in actions {
-            match action {
-                Action::Panic(msg) => {
-                    panic!("panic {} {:?}", msg, ctx.as_ref().unwrap_or(&default))
-                }
-                Action::Expr(e) => {
-                    self.eval_expr(ctx.as_ref().unwrap_or(&default), e)?;
-                }
-                Action::Define(x, e) => {
-                    if let Some(ctx) = ctx.as_mut() {
-                        let value = self.eval_expr(ctx, e)?;
-                        ctx.insert(*x, value);
-                    } else {
-                        unreachable!("Global define should be handled elsewhere");
-                        // let value = self.eval_expr(&default, e)?;
-                        // self.globals.insert(*x, value);
-                    }
-                }
-                Action::Set(f, args, e) => {
-                    let ctx = ctx.as_ref().unwrap_or(&default);
-                    let values = args
-                        .iter()
-                        .map(|a| self.eval_expr(ctx, a))
-                        .collect::<Result<Vec<_>, _>>()?;
-                    let value = self.eval_expr(ctx, e)?;
-                    let function = self
-                        .functions
-                        .get_mut(f)
-                        .ok_or_else(|| NotFoundError(e.clone()))?;
-                    let old_value = function.insert(values.clone(), value, self.timestamp);
-
-                    // if the value does not exist or the two values differ
-                    if old_value.is_none() || old_value != Some(value) {
-                        self.saturated = false;
-                    }
-
-                    // TODO neaten saturation logic
-
-                    if let Some(old_value) = old_value {
-                        if value != old_value {
-                            let out = &function.schema.output;
-                            match function.decl.merge.as_ref() {
-                                None if out.name().as_str() == "Unit" => (),
-                                None if out.is_eq_sort() => {
-                                    self.unionfind.union_values(old_value, value);
-                                }
-                                Some(expr) => {
-                                    let mut ctx = Subst::default();
-                                    ctx.insert("old".into(), old_value);
-                                    ctx.insert("new".into(), value);
-                                    let expr = expr.clone(); // break the borrow of `function`
-                                    let new_value = self.eval_expr(&ctx, &expr)?;
-                                    self.functions.get_mut(f).unwrap().insert(
-                                        values,
-                                        new_value,
-                                        self.timestamp,
-                                    );
-                                }
-                                _ => panic!("invalid merge for {}", function.decl.name),
-                            }
-                        }
-                    }
-                }
-                Action::Union(a, b) => {
-                    let ctx = ctx.as_ref().unwrap_or(&default);
-                    let a = self.eval_expr(ctx, a)?;
-                    let b = self.eval_expr(ctx, b)?;
-                    if self.unionfind.find(Id::from(a.bits as usize))
-                        != self.unionfind.find(Id::from(b.bits as usize))
-                    {
-                        self.saturated = false;
-                    }
-                    self.unionfind.union_values(a, b);
-                }
-                Action::Delete(sym, args) => {
-                    let ctx = ctx.as_ref().unwrap_or(&default);
-                    let values = args
-                        .iter()
-                        .map(|a| self.eval_expr(ctx, a))
-                        .collect::<Result<Vec<_>, _>>()?;
-                    let function = self
-                        .functions
-                        .get_mut(sym)
-                        .ok_or(TypeError::Unbound(*sym))?;
-                    if function.nodes.remove(&values).is_some() {
-                        self.saturated = false;
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-
-    pub fn check_with(&mut self, ctx: &Subst, fact: &Fact) -> Result<(), Error> {
+    pub fn check_fact(&mut self, fact: &Fact) -> Result<(), Error> {
         match fact {
             Fact::Eq(exprs) => {
                 assert!(exprs.len() > 1);
-                let values: Vec<Value> = exprs
+                let values: Vec<(ArcSort, Value)> = exprs
                     .iter()
-                    .map(|e| self.eval_expr(ctx, e).map(|v| self.bad_find_value(v)))
+                    .map(|e| self.eval_expr(e, None, false))
                     .collect::<Result<_, _>>()?;
-                for v in &values[1..] {
-                    if &values[0] != v {
+
+                let (_t0, v0) = &values[0];
+                for (_t, v) in &values[1..] {
+                    if v0 != v {
                         println!("Check failed");
                         // the check failed, so print out some useful info
                         self.rebuild();
-                        for value in &values {
+                        for (_t, value) in &values {
                             if let Some((_tag, id)) = self.value_to_id(*value) {
                                 let best = self.extract(*value).1;
                                 println!("{}: {}", id, best);
                             }
                         }
-                        return Err(Error::CheckError(values[0], *v));
+                        return Err(Error::CheckError(values[0].1, *v));
                     }
                 }
             }
             Fact::Fact(expr) => match expr {
-                Expr::Lit(_) => panic!("can't assert a literal"),
-                Expr::Var(_) => panic!("can't assert a var"),
-                Expr::Call(sym, args) => {
-                    let values: Vec<Value> = args
-                        .iter()
-                        .map(|e| self.eval_expr(ctx, e).map(|v| self.bad_find_value(v)))
-                        .collect::<Result<_, _>>()?;
-                    if let Some(f) = self.functions.get_mut(sym) {
-                        // FIXME We don't have a unit value
-                        assert_eq!(f.schema.output.name().as_str(), "Unit");
-                        f.nodes
-                            .get(&values)
-                            .ok_or_else(|| NotFoundError(expr.clone()))?;
-                    } else if self.primitives.contains_key(sym) {
-                        // HACK
-                        // we didn't typecheck so we don't know which prim to call
-                        let val = self.eval_expr(ctx, expr)?;
-                        assert_eq!(val, Value::unit());
-                    } else {
-                        return Err(Error::TypeError(TypeError::Unbound(*sym)));
-                    }
+                Expr::Lit(_) => panic!("can't check a literal"),
+                Expr::Var(_) => panic!("can't check a var"),
+                Expr::Call(_, _) => {
+                    // println!("Checking fact: {}", expr);
+                    let unit = self.get_sort::<UnitSort>();
+                    self.eval_expr(expr, Some(unit), true)?;
                 }
             },
         }
@@ -604,8 +480,8 @@ impl EGraph {
             let mut types = IndexMap::<Symbol, ArcSort>::default();
             types.insert("old".into(), output.clone());
             types.insert("new".into(), output.clone());
-            let program = self
-                .compile_expr(&types, merge_expr, output.clone())
+            let (_, program) = self
+                .compile_expr(&types, merge_expr, Some(output.clone()))
                 .map_err(Error::TypeErrors)?;
             MergeFn::Expr(Rc::new(program))
         } else if output.is_eq_sort() {
@@ -659,87 +535,6 @@ impl EGraph {
             Literal::Int(i) => i.store(&*self.get_sort()).unwrap(),
             Literal::String(s) => s.store(&*self.get_sort()).unwrap(),
             Literal::Unit => ().store(&*self.get_sort()).unwrap(),
-        }
-    }
-
-    // this must be &mut because it'll call "make_set",
-    // but it'd be nice if that didn't have to happen
-    pub fn eval_expr(&mut self, ctx: &Subst, expr: &Expr) -> Result<Value, NotFoundError> {
-        match expr {
-            // TODO should we canonicalize here?
-            Expr::Var(var) => {
-                if let Some(value) = ctx.get(var) {
-                    Ok(*value)
-                } else if let Some(f) = self.functions.get(var) {
-                    assert!(f.schema.input.is_empty());
-                    match f.nodes.get(&vec![]) {
-                        Some(out) => Ok(out.value),
-                        None => Err(NotFoundError(expr.clone())),
-                    }
-                } else {
-                    Err(NotFoundError(expr.clone()))
-                }
-            }
-            // Ok(ctx
-            //     .get(var)
-            //     .or_else(|| self.globals.get(var))
-            //     .cloned()
-            //     .unwrap_or_else(|| panic!("Couldn't find variable '{var}'"))),
-            Expr::Lit(lit) => Ok(self.eval_lit(lit)),
-            Expr::Call(op, args) => {
-                let mut values = Vec::with_capacity(args.len());
-                for arg in args {
-                    values.push(self.eval_expr(ctx, arg)?);
-                }
-                if let Some(function) = self.functions.get_mut(op) {
-                    if let Some(out) = function.nodes.get(&values) {
-                        Ok(out.value)
-                    } else {
-                        let ts = self.timestamp;
-                        self.saturated = false;
-                        let out = &function.schema.output;
-                        match function.decl.default.as_ref() {
-                            None if out.name() == "Unit".into() => {
-                                function.insert(values, Value::unit(), ts);
-                                Ok(Value::unit())
-                            }
-                            None if out.is_eq_sort() => {
-                                let id = self.unionfind.make_set();
-                                let value = Value::from_id(out.name(), id);
-                                function.insert(values, value, ts);
-                                Ok(value)
-                            }
-                            Some(default) => {
-                                let default = default.clone(); // break the borrow
-                                let value = self.eval_expr(ctx, &default)?;
-                                let function = self.functions.get_mut(op).unwrap();
-                                function.insert(values, value, ts);
-                                Ok(value)
-                            }
-                            _ => panic!("invalid default for {:?}", function.decl.name),
-                        }
-                    }
-                } else if let Some(prims) = self.primitives.get(op) {
-                    let mut res = None;
-                    for prim in prims.iter() {
-                        // HACK
-                        let types = values
-                            .iter()
-                            .map(|v| self.sorts[&v.tag].clone())
-                            .collect::<Vec<_>>();
-                        if prim.accept(&types).is_some() {
-                            if res.is_none() {
-                                res = prim.apply(&values);
-                            } else {
-                                panic!("multiple implementation matches primitives {op}");
-                            }
-                        }
-                    }
-                    res.ok_or_else(|| NotFoundError(expr.clone()))
-                } else {
-                    panic!("Couldn't find function/primitive: {op}")
-                }
-            }
         }
     }
 
@@ -797,10 +592,6 @@ impl EGraph {
     pub fn print_size(&self, sym: Symbol) -> Result<String, Error> {
         let f = self.functions.get(&sym).ok_or(TypeError::Unbound(sym))?;
         Ok(format!("Function {} has size {}", sym, f.nodes.len()))
-    }
-
-    pub fn eval_closed_expr(&mut self, expr: &Expr) -> Result<Value, NotFoundError> {
-        self.eval_expr(&Default::default(), expr)
     }
 
     pub fn run_rules(&mut self, limit: usize) -> [Duration; 3] {
@@ -929,10 +720,9 @@ impl EGraph {
                     log::warn!("Rule {} has matched {} times, bailing!", name, rule.matches);
                     break 'outer;
                 }
-                // log::trace!("Applying with {subst:?}");
                 assert!(stack.is_empty());
-                self.run_actions(stack, values, &rule.program);
-                // let _result: Result<_, _> = self.eval_actions(Some(subst), &rule.head);
+                // we can ignore results here
+                let _ = self.run_actions(stack, values, &rule.program, true);
             }
 
             rule.apply_time += rule_apply_start.elapsed();
@@ -956,7 +746,6 @@ impl EGraph {
         // );
         let compiled_rule = Rule {
             query,
-            head: rule.head,
             matches: 0,
             times_banned: 0,
             banned_until: 0,
@@ -992,6 +781,32 @@ impl EGraph {
             head: vec![Action::Union(Expr::Var(var), rewrite.rhs)],
         };
         self.add_rule_with_name(name, rule)
+    }
+
+    fn eval_actions(&mut self, actions: &[Action]) -> Result<(), Error> {
+        let types = Default::default();
+        let program = self
+            .compile_actions(&types, actions)
+            .map_err(Error::TypeErrors)?;
+        let mut stack = vec![];
+        self.run_actions(&mut stack, &[], &program, true)?;
+        Ok(())
+    }
+
+    fn eval_expr(
+        &mut self,
+        expr: &Expr,
+        expected_type: Option<ArcSort>,
+        make_defaults: bool,
+    ) -> Result<(ArcSort, Value), Error> {
+        let types = Default::default();
+        let (t, program) = self
+            .compile_expr(&types, expr, expected_type)
+            .map_err(Error::TypeErrors)?;
+        let mut stack = vec![];
+        self.run_actions(&mut stack, &[], &program, make_defaults)?;
+        assert_eq!(stack.len(), 1);
+        Ok((t, stack.pop().unwrap()))
     }
 
     fn run_command(&mut self, command: Command, should_run: bool) -> Result<String, Error> {
@@ -1053,7 +868,7 @@ impl EGraph {
                 if should_run {
                     // TODO typecheck
                     self.rebuild();
-                    let value = self.eval_closed_expr(&e)?;
+                    let (_t, value) = self.eval_expr(&e, None, true)?;
                     log::info!("Extracting {e} at {value:?}");
                     let (cost, expr) = self.extract(value);
                     let mut msg = format!("Extracted with cost {cost}: {expr}");
@@ -1070,7 +885,7 @@ impl EGraph {
             }
             Command::Check(fact) => {
                 if should_run {
-                    self.check_with(&Default::default(), &fact)?;
+                    self.check_fact(&fact)?;
                     "Checked.".into()
                 } else {
                     "Skipping check.".into()
@@ -1078,7 +893,7 @@ impl EGraph {
             }
             Command::Action(action) => {
                 if should_run {
-                    self.eval_actions(None, std::slice::from_ref(&action))?;
+                    self.eval_actions(std::slice::from_ref(&action))?;
                     format!("Run {action}.")
                 } else {
                     format!("Skipping running {action}.")
@@ -1086,8 +901,7 @@ impl EGraph {
             }
             Command::Define { name, expr, cost } => {
                 if should_run {
-                    let value = self.eval_closed_expr(&expr)?;
-                    let sort = self.sorts[&value.tag].clone();
+                    let (sort, value) = self.eval_expr(&expr, None, true)?;
                     self.declare_function(&FunctionDecl {
                         name,
                         schema: Schema {
@@ -1203,7 +1017,7 @@ impl EGraph {
                         Action::Set(name, exprs, out)
                     });
                 }
-                self.eval_actions(None, &actions)?;
+                self.eval_actions(&actions)?;
                 format!("Read {} facts into {name} from '{file}'.", actions.len())
             }
         })

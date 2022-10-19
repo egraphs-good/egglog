@@ -298,7 +298,6 @@ impl<'a> Context<'a> {
 
     fn infer_query_expr(&mut self, expr: &Expr) -> (Id, Option<ArcSort>) {
         match expr {
-            // TODO handle global variables
             Expr::Var(sym) => {
                 if self.egraph.functions.contains_key(sym) {
                     return self.infer_query_expr(&Expr::call(*sym, []));
@@ -361,7 +360,6 @@ impl<'a> Context<'a> {
 
 struct ActionChecker<'a> {
     egraph: &'a EGraph,
-    unit: ArcSort,
     types: &'a IndexMap<Symbol, ArcSort>,
     locals: IndexMap<Symbol, ArcSort>,
     instructions: Vec<Instruction>,
@@ -387,7 +385,14 @@ impl<'a> ActionChecker<'a> {
                 self.instructions.push(Instruction::Set(*f));
                 Ok(())
             }
-            Action::Delete(_, _) => todo!(),
+            Action::Delete(f, args) => {
+                let fake_call = Expr::Call(*f, args.clone());
+                let (_, _ty) = self.infer_expr(&fake_call)?;
+                let fake_instr = self.instructions.pop().unwrap();
+                assert!(matches!(fake_instr, Instruction::CallFunction(..)));
+                self.instructions.push(Instruction::DeleteRow(*f));
+                Ok(())
+            }
             Action::Union(a, b) => {
                 let (_, ty) = self.infer_expr(a)?;
                 if !ty.is_eq_sort() {
@@ -552,6 +557,7 @@ enum Instruction {
     Load(Load),
     CallFunction(Symbol),
     CallPrimitive(Primitive, usize),
+    DeleteRow(Symbol),
     Set(Symbol),
     Union(usize),
     Panic(String),
@@ -579,7 +585,6 @@ impl EGraph {
     ) -> Result<Program, Vec<TypeError>> {
         let mut checker = ActionChecker {
             egraph: self,
-            unit: self.sorts.get(&"Unit".into()).unwrap().clone(),
             types,
             locals: IndexMap::default(),
             instructions: Vec::new(),
@@ -603,23 +608,35 @@ impl EGraph {
         &self,
         types: &IndexMap<Symbol, ArcSort>,
         expr: &Expr,
-        expected_type: ArcSort,
-    ) -> Result<Program, Vec<TypeError>> {
+        expected_type: Option<ArcSort>,
+    ) -> Result<(ArcSort, Program), Vec<TypeError>> {
         let mut checker = ActionChecker {
             egraph: self,
-            unit: self.sorts.get(&"Unit".into()).unwrap().clone(),
             types,
             locals: IndexMap::default(),
             instructions: Vec::new(),
         };
 
-        match checker.check_expr(expr, expected_type) {
-            Ok(_) => Ok(Program(checker.instructions)),
-            Err(err) => Err(vec![err]),
-        }
+        let t: ArcSort = if let Some(expected) = expected_type {
+            checker
+                .check_expr(expr, expected.clone())
+                .map_err(|err| vec![err])?;
+            expected
+        } else {
+            checker.infer_expr(expr).map_err(|err| vec![err])?.1
+        };
+
+        Ok((t, Program(checker.instructions)))
     }
 
-    pub fn run_actions(&mut self, stack: &mut Vec<Value>, subst: &[Value], program: &Program) {
+    pub fn run_actions(
+        &mut self,
+        stack: &mut Vec<Value>,
+        subst: &[Value],
+        program: &Program,
+        make_defaults: bool,
+    ) -> Result<(), Error> {
+        // println!("{:?}", program);
         for instr in &program.0 {
             match instr {
                 Instruction::Load(load) => match load {
@@ -639,7 +656,7 @@ impl EGraph {
 
                     let value = if let Some(out) = function.nodes.get(values) {
                         out.value
-                    } else {
+                    } else if make_defaults {
                         let ts = self.timestamp;
                         self.saturated = false;
                         let out = &function.schema.output;
@@ -664,6 +681,10 @@ impl EGraph {
                             }
                             _ => panic!("invalid default for {:?}", function.decl.name),
                         }
+                    } else {
+                        return Err(Error::NotFoundError(NotFoundError(Expr::Var(
+                            format!("fake expression {f} {:?}", values).into(),
+                        ))));
                     };
                     stack.truncate(new_len);
                     stack.push(value);
@@ -680,6 +701,7 @@ impl EGraph {
                     }
                 }
                 Instruction::Set(f) => {
+                    assert!(make_defaults);
                     let function = self.functions.get_mut(f).unwrap();
                     let new_value = stack.pop().unwrap();
                     let new_len = stack.len() - function.schema.input.len();
@@ -693,13 +715,14 @@ impl EGraph {
 
                     if let Some(old_value) = old_value {
                         if new_value != old_value {
+                            self.saturated = false;
                             let merged: Value = match function.merge.clone() {
                                 MergeFn::AssertEq => panic!("No error for this yet"),
                                 MergeFn::Union => self.unionfind.union_values(old_value, new_value),
                                 MergeFn::Expr(merge_prog) => {
                                     let values = [old_value, new_value];
                                     let old_len = stack.len();
-                                    self.run_actions(stack, &values, &merge_prog);
+                                    self.run_actions(stack, &values, &merge_prog, true)?;
                                     assert_eq!(stack.len(), old_len + 1);
                                     stack.pop().unwrap()
                                 }
@@ -734,7 +757,18 @@ impl EGraph {
                 Instruction::Pop => {
                     stack.pop().unwrap();
                 }
+                Instruction::DeleteRow(f) => {
+                    let function = self.functions.get_mut(f).unwrap();
+                    let new_len = stack.len() - function.schema.input.len();
+                    let args = &stack[new_len..];
+                    let old_value = function.nodes.remove(args);
+                    if old_value.is_some() {
+                        self.saturated = false;
+                    }
+                    stack.truncate(new_len);
+                }
             }
         }
+        Ok(())
     }
 }
