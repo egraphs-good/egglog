@@ -48,7 +48,7 @@ impl EGraph {
                 func.nodes
                     .iter()
                     .filter_map(move |(inputs, output)| {
-                        (output == output_value).then(|| {
+                        (&output.value == output_value).then(|| {
                             let node = Node { sym, inputs };
                             ext.expr_from_node(&node)
                         })
@@ -123,7 +123,7 @@ impl<'a> Extractor<'a> {
                         if let Some(new_cost) = self.node_total_cost(func, inputs) {
                             let make_new_pair = || (new_cost, Node { sym, inputs });
 
-                            let id = self.egraph.find(Id::from(output.bits as usize));
+                            let id = self.egraph.find(Id::from(output.value.bits as usize));
                             match self.costs.entry(id) {
                                 Entry::Vacant(e) => {
                                     did_something = true;

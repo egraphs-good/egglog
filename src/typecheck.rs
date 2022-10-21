@@ -1,4 +1,5 @@
 use crate::*;
+use indexmap::map::Entry as IEntry;
 
 use thiserror::Error;
 
@@ -30,11 +31,13 @@ pub enum TypeError {
     InferenceFailure(Expr),
     #[error("No matching primitive for: ({op} {})", ListDisplay(.inputs, " "))]
     NoMatchingPrimitive { op: Symbol, inputs: Vec<Symbol> },
+    #[error("Variable {0} was already defined")]
+    AlreadyDefined(Symbol),
 }
 
 pub struct Context<'a> {
     pub egraph: &'a EGraph,
-    pub types: HashMap<Symbol, ArcSort>,
+    pub types: IndexMap<Symbol, ArcSort>,
     unit: ArcSort,
     errors: Vec<TypeError>,
     unionfind: UnionFind,
@@ -55,30 +58,67 @@ pub enum AtomTerm {
     Value(Value),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Atom {
-    Func(Symbol, Vec<AtomTerm>),
-    Prim(Primitive, Vec<AtomTerm>),
-}
-
-impl Atom {
-    pub fn vars(&self) -> impl Iterator<Item = Symbol> + '_ {
+impl std::fmt::Display for AtomTerm {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Atom::Func(_, terms) | Atom::Prim(_, terms) => terms.iter().filter_map(|t| match t {
-                AtomTerm::Var(v) => Some(*v),
-                AtomTerm::Value(_) => None,
-            }),
+            AtomTerm::Var(v) => write!(f, "{}", v),
+            AtomTerm::Value(_) => write!(f, "<value>"),
         }
     }
 }
-pub type Bindings = HashMap<Symbol, AtomTerm>;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Atom<T> {
+    pub head: T,
+    pub args: Vec<AtomTerm>,
+}
+
+impl<T: std::fmt::Display> std::fmt::Display for Atom<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "({} {}) ", self.head, ListDisplay(&self.args, " "))
+    }
+}
+
+#[derive(Default, Debug, Clone)]
+pub struct Query {
+    pub atoms: Vec<Atom<Symbol>>,
+    pub filters: Vec<Atom<Primitive>>,
+}
+
+impl std::fmt::Display for Query {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for atom in &self.atoms {
+            write!(f, "{atom}")?;
+        }
+        if !self.filters.is_empty() {
+            write!(f, "where ")?;
+            for filter in &self.filters {
+                write!(
+                    f,
+                    "({} {}) ",
+                    filter.head.name(),
+                    ListDisplay(&filter.args, " ")
+                )?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl<T> Atom<T> {
+    pub fn vars(&self) -> impl Iterator<Item = Symbol> + '_ {
+        self.args.iter().filter_map(|t| match t {
+            AtomTerm::Var(v) => Some(*v),
+            AtomTerm::Value(_) => None,
+        })
+    }
+}
 impl<'a> Context<'a> {
     pub fn new(egraph: &'a EGraph) -> Self {
         Self {
             egraph,
             unit: egraph.sorts[&"Unit".into()].clone(),
-            types: HashMap::default(),
+            types: Default::default(),
             errors: Vec::default(),
             unionfind: UnionFind::default(),
             nodes: HashMap::default(),
@@ -90,10 +130,7 @@ impl<'a> Context<'a> {
         *entry.or_insert_with(|| self.unionfind.make_set())
     }
 
-    pub fn typecheck_query(
-        &mut self,
-        facts: &'a [Fact],
-    ) -> Result<(Vec<Atom>, Bindings), Vec<TypeError>> {
+    pub fn typecheck_query(&mut self, facts: &'a [Fact]) -> Result<Query, Vec<TypeError>> {
         for fact in facts {
             self.typecheck_fact(fact);
         }
@@ -124,30 +161,27 @@ impl<'a> Context<'a> {
             leaves.get(id).cloned().unwrap_or_else(mk)
         };
 
-        let mut atoms = vec![];
+        let mut query = Query::default();
         // Now we can fill in the nodes with the canonical leaves
         for (node, id) in &self.nodes {
             match node {
-                ENode::Func(f, ids) => atoms.push(Atom::Func(
-                    *f,
-                    ids.iter().chain([id]).map(&get_leaf).collect(),
-                )),
-                ENode::Prim(p, ids) => atoms.push(Atom::Prim(
-                    p.clone(),
-                    ids.iter().chain([id]).map(&get_leaf).collect(),
-                )),
+                ENode::Func(f, ids) => {
+                    let args = ids.iter().chain([id]).map(get_leaf).collect();
+                    query.atoms.push(Atom { head: *f, args });
+                }
+                ENode::Prim(p, ids) => {
+                    let args = ids.iter().chain([id]).map(get_leaf).collect();
+                    query.filters.push(Atom {
+                        head: p.clone(),
+                        args,
+                    });
+                }
                 _ => {}
             }
         }
 
         if self.errors.is_empty() {
-            let mut bindings = Bindings::default();
-            for (node, id) in &self.nodes {
-                if let ENode::Var(var) = node {
-                    bindings.insert(*var, leaves[id].clone());
-                }
-            }
-            Ok((atoms, bindings))
+            Ok(query)
         } else {
             Err(self.errors.clone())
         }
@@ -227,7 +261,7 @@ impl<'a> Context<'a> {
         match expr {
             Expr::Var(sym) if !self.egraph.functions.contains_key(sym) => {
                 match self.types.entry(*sym) {
-                    Entry::Occupied(ty) => {
+                    IEntry::Occupied(ty) => {
                         // TODO name comparison??
                         if ty.get().name() != expected.name() {
                             self.errors.push(TypeError::Mismatch {
@@ -239,7 +273,7 @@ impl<'a> Context<'a> {
                         }
                     }
                     // we can actually bind the variable here
-                    Entry::Vacant(entry) => {
+                    IEntry::Vacant(entry) => {
                         entry.insert(expected);
                     }
                 }
@@ -264,7 +298,6 @@ impl<'a> Context<'a> {
 
     fn infer_query_expr(&mut self, expr: &Expr) -> (Id, Option<ArcSort>) {
         match expr {
-            // TODO handle global variables
             Expr::Var(sym) => {
                 if self.egraph.functions.contains_key(sym) {
                     return self.infer_query_expr(&Expr::call(*sym, []));
@@ -278,12 +311,8 @@ impl<'a> Context<'a> {
                 (self.add_node(ENode::Var(*sym)), ty)
             }
             Expr::Lit(lit) => {
-                let t = match lit {
-                    Literal::Int(_) => self.egraph.sorts.get(&"i64".into()),
-                    Literal::String(_) => self.egraph.sorts.get(&"String".into()),
-                    Literal::Unit => self.egraph.sorts.get(&"Unit".into()),
-                };
-                (self.add_node(ENode::Literal(lit.clone())), t.cloned())
+                let t = self.egraph.infer_literal(lit);
+                (self.add_node(ENode::Literal(lit.clone())), Some(t))
             }
             Expr::Call(sym, args) => {
                 if let Some(f) = self.egraph.functions.get(sym) {
@@ -305,10 +334,7 @@ impl<'a> Context<'a> {
                     let (ids, arg_tys): (Vec<Id>, Vec<Option<ArcSort>>) =
                         args.iter().map(|arg| self.infer_query_expr(arg)).unzip();
 
-                    if let Some(arg_tys) = arg_tys
-                        .iter()
-                        .map(|opta| opta.as_deref())
-                        .collect::<Option<Vec<&dyn Sort>>>()
+                    if let Some(arg_tys) = arg_tys.iter().cloned().collect::<Option<Vec<ArcSort>>>()
                     {
                         for prim in prims {
                             if let Some(output_type) = prim.accept(&arg_tys) {
@@ -329,5 +355,420 @@ impl<'a> Context<'a> {
                 }
             }
         }
+    }
+}
+
+struct ActionChecker<'a> {
+    egraph: &'a EGraph,
+    types: &'a IndexMap<Symbol, ArcSort>,
+    locals: IndexMap<Symbol, ArcSort>,
+    instructions: Vec<Instruction>,
+}
+
+impl<'a> ActionChecker<'a> {
+    fn check_action(&mut self, action: &Action) -> Result<(), TypeError> {
+        match action {
+            Action::Define(v, e) => {
+                if self.types.contains_key(v) || self.locals.contains_key(v) {
+                    return Err(TypeError::AlreadyDefined(*v));
+                }
+                let (_, ty) = self.infer_expr(e)?;
+                self.locals.insert(*v, ty);
+                Ok(())
+            }
+            Action::Set(f, args, val) => {
+                let fake_call = Expr::Call(*f, args.clone());
+                let (_, ty) = self.infer_expr(&fake_call)?;
+                let fake_instr = self.instructions.pop().unwrap();
+                assert!(matches!(fake_instr, Instruction::CallFunction(..)));
+                self.check_expr(val, ty)?;
+                self.instructions.push(Instruction::Set(*f));
+                Ok(())
+            }
+            Action::Delete(f, args) => {
+                let fake_call = Expr::Call(*f, args.clone());
+                let (_, _ty) = self.infer_expr(&fake_call)?;
+                let fake_instr = self.instructions.pop().unwrap();
+                assert!(matches!(fake_instr, Instruction::CallFunction(..)));
+                self.instructions.push(Instruction::DeleteRow(*f));
+                Ok(())
+            }
+            Action::Union(a, b) => {
+                let (_, ty) = self.infer_expr(a)?;
+                if !ty.is_eq_sort() {
+                    panic!("no error for this yet")
+                }
+                self.check_expr(b, ty)?;
+                self.instructions.push(Instruction::Union(2));
+                Ok(())
+            }
+            Action::Panic(msg) => {
+                self.instructions.push(Instruction::Panic(msg.clone()));
+                Ok(())
+            }
+            Action::Expr(expr) => {
+                self.infer_expr(expr)?;
+                self.instructions.push(Instruction::Pop);
+                Ok(())
+            }
+        }
+    }
+}
+
+impl<'a> ExprChecker<'a> for ActionChecker<'a> {
+    type T = ();
+
+    fn egraph(&self) -> &'a EGraph {
+        self.egraph
+    }
+
+    fn do_lit(&mut self, lit: &Literal) -> Self::T {
+        self.instructions.push(Instruction::Literal(lit.clone()));
+    }
+
+    fn infer_var(&mut self, sym: Symbol) -> Result<(Self::T, ArcSort), TypeError> {
+        if let Some((i, _, ty)) = self.locals.get_full(&sym) {
+            self.instructions.push(Instruction::Load(Load::Stack(i)));
+            Ok(((), ty.clone()))
+        } else if let Some((i, _, ty)) = self.types.get_full(&sym) {
+            self.instructions.push(Instruction::Load(Load::Subst(i)));
+            Ok(((), ty.clone()))
+        } else {
+            Err(TypeError::Unbound(sym))
+        }
+    }
+
+    fn do_function(&mut self, f: Symbol, _args: Vec<Self::T>) -> Self::T {
+        self.instructions.push(Instruction::CallFunction(f));
+    }
+
+    fn do_prim(&mut self, prim: Primitive, args: Vec<Self::T>) -> Self::T {
+        self.instructions
+            .push(Instruction::CallPrimitive(prim, args.len()));
+    }
+}
+
+trait ExprChecker<'a> {
+    type T;
+    fn egraph(&self) -> &'a EGraph;
+    fn do_lit(&mut self, lit: &Literal) -> Self::T;
+    fn do_function(&mut self, f: Symbol, args: Vec<Self::T>) -> Self::T;
+    fn do_prim(&mut self, prim: Primitive, args: Vec<Self::T>) -> Self::T;
+
+    fn infer_var(&mut self, var: Symbol) -> Result<(Self::T, ArcSort), TypeError>;
+    fn check_var(&mut self, var: Symbol, ty: ArcSort) -> Result<Self::T, TypeError> {
+        let (t, actual) = self.infer_var(var)?;
+        if actual.name() != ty.name() {
+            Err(TypeError::Mismatch {
+                expr: Expr::Var(var),
+                expected: ty,
+                actual,
+                reason: "mismatch".into(),
+            })
+        } else {
+            Ok(t)
+        }
+    }
+
+    fn check_expr(&mut self, expr: &Expr, ty: ArcSort) -> Result<Self::T, TypeError> {
+        match expr {
+            Expr::Var(v) if !self.egraph().functions.contains_key(v) => self.check_var(*v, ty),
+            _ => {
+                let (t, actual) = self.infer_expr(expr)?;
+                if actual.name() != ty.name() {
+                    Err(TypeError::Mismatch {
+                        expr: expr.clone(),
+                        expected: ty,
+                        actual,
+                        reason: "mismatch".into(),
+                    })
+                } else {
+                    Ok(t)
+                }
+            }
+        }
+    }
+
+    fn infer_expr(&mut self, expr: &Expr) -> Result<(Self::T, ArcSort), TypeError> {
+        match expr {
+            Expr::Lit(lit) => {
+                let t = self.do_lit(lit);
+                Ok((t, self.egraph().infer_literal(lit)))
+            }
+            Expr::Var(sym) => {
+                if self.egraph().functions.contains_key(sym) {
+                    return self.infer_expr(&Expr::call(*sym, []));
+                }
+                self.infer_var(*sym)
+            }
+            Expr::Call(sym, args) => {
+                if let Some(f) = self.egraph().functions.get(sym) {
+                    if f.schema.input.len() != args.len() {
+                        return Err(TypeError::Arity {
+                            expr: expr.clone(),
+                            expected: f.schema.input.len(),
+                        });
+                    }
+
+                    let mut ts = vec![];
+                    for (expected, arg) in f.schema.input.iter().zip(args) {
+                        ts.push(self.check_expr(arg, expected.clone())?);
+                    }
+
+                    let t = self.do_function(*sym, ts);
+                    Ok((t, f.schema.output.clone()))
+                } else if let Some(prims) = self.egraph().primitives.get(sym) {
+                    let mut ts = Vec::with_capacity(args.len());
+                    let mut tys = Vec::with_capacity(args.len());
+                    for arg in args {
+                        let (t, ty) = self.infer_expr(arg)?;
+                        ts.push(t);
+                        tys.push(ty);
+                    }
+
+                    for prim in prims {
+                        if let Some(output_type) = prim.accept(&tys) {
+                            let t = self.do_prim(prim.clone(), ts);
+                            return Ok((t, output_type));
+                        }
+                    }
+
+                    Err(TypeError::NoMatchingPrimitive {
+                        op: *sym,
+                        inputs: tys.iter().map(|ty| ty.name()).collect(),
+                    })
+                } else {
+                    Err(TypeError::Unbound(*sym))
+                }
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+enum Load {
+    Stack(usize),
+    Subst(usize),
+}
+
+#[derive(Clone, Debug)]
+enum Instruction {
+    Literal(Literal),
+    Load(Load),
+    CallFunction(Symbol),
+    CallPrimitive(Primitive, usize),
+    DeleteRow(Symbol),
+    Set(Symbol),
+    Union(usize),
+    Panic(String),
+    Pop,
+}
+
+#[derive(Clone, Debug)]
+pub struct Program(Vec<Instruction>);
+
+impl EGraph {
+    fn infer_literal(&self, lit: &Literal) -> ArcSort {
+        match lit {
+            Literal::Int(_) => self.sorts.get(&"i64".into()),
+            Literal::String(_) => self.sorts.get(&"String".into()),
+            Literal::Unit => self.sorts.get(&"Unit".into()),
+        }
+        .unwrap()
+        .clone()
+    }
+
+    pub fn compile_actions(
+        &self,
+        types: &IndexMap<Symbol, ArcSort>,
+        actions: &[Action],
+    ) -> Result<Program, Vec<TypeError>> {
+        let mut checker = ActionChecker {
+            egraph: self,
+            types,
+            locals: IndexMap::default(),
+            instructions: Vec::new(),
+        };
+
+        let mut errors = vec![];
+        for a in actions {
+            if let Err(err) = checker.check_action(a) {
+                errors.push(err);
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(Program(checker.instructions))
+        } else {
+            Err(errors)
+        }
+    }
+
+    pub fn compile_expr(
+        &self,
+        types: &IndexMap<Symbol, ArcSort>,
+        expr: &Expr,
+        expected_type: Option<ArcSort>,
+    ) -> Result<(ArcSort, Program), Vec<TypeError>> {
+        let mut checker = ActionChecker {
+            egraph: self,
+            types,
+            locals: IndexMap::default(),
+            instructions: Vec::new(),
+        };
+
+        let t: ArcSort = if let Some(expected) = expected_type {
+            checker
+                .check_expr(expr, expected.clone())
+                .map_err(|err| vec![err])?;
+            expected
+        } else {
+            checker.infer_expr(expr).map_err(|err| vec![err])?.1
+        };
+
+        Ok((t, Program(checker.instructions)))
+    }
+
+    pub fn run_actions(
+        &mut self,
+        stack: &mut Vec<Value>,
+        subst: &[Value],
+        program: &Program,
+        make_defaults: bool,
+    ) -> Result<(), Error> {
+        // println!("{:?}", program);
+        for instr in &program.0 {
+            match instr {
+                Instruction::Load(load) => match load {
+                    Load::Stack(idx) => stack.push(stack[*idx]),
+                    Load::Subst(idx) => stack.push(subst[*idx]),
+                },
+                Instruction::CallFunction(f) => {
+                    let function = self.functions.get_mut(f).unwrap();
+                    let new_len = stack.len() - function.schema.input.len();
+                    let values = &stack[new_len..];
+
+                    if cfg!(debug_assertions) {
+                        for (ty, val) in function.schema.input.iter().zip(values) {
+                            assert_eq!(ty.name(), val.tag);
+                        }
+                    }
+
+                    let value = if let Some(out) = function.nodes.get(values) {
+                        out.value
+                    } else if make_defaults {
+                        let ts = self.timestamp;
+                        self.saturated = false;
+                        let out = &function.schema.output;
+                        match function.decl.default.as_ref() {
+                            None if out.name() == "Unit".into() => {
+                                function.insert(values.to_vec(), Value::unit(), ts);
+                                Value::unit()
+                            }
+                            None if out.is_eq_sort() => {
+                                let id = self.unionfind.make_set();
+                                let value = Value::from_id(out.name(), id);
+                                function.insert(values.to_vec(), value, ts);
+                                value
+                            }
+                            Some(_default) => {
+                                todo!("Handle default expr")
+                                // let default = default.clone(); // break the borrow
+                                // let value = self.eval_expr(ctx, &default)?;
+                                // let function = self.functions.get_mut(f).unwrap();
+                                // function.insert(values.to_vec(), value, ts);
+                                // Ok(value)
+                            }
+                            _ => panic!("invalid default for {:?}", function.decl.name),
+                        }
+                    } else {
+                        return Err(Error::NotFoundError(NotFoundError(Expr::Var(
+                            format!("fake expression {f} {:?}", values).into(),
+                        ))));
+                    };
+                    stack.truncate(new_len);
+                    stack.push(value);
+                }
+                Instruction::CallPrimitive(p, arity) => {
+                    let new_len = stack.len() - arity;
+                    let values = &stack[new_len..];
+                    if let Some(value) = p.apply(values) {
+                        stack.truncate(new_len);
+                        stack.push(value);
+                    } else {
+                        panic!("prim was partial... do we allow this?");
+                        // return;
+                    }
+                }
+                Instruction::Set(f) => {
+                    assert!(make_defaults);
+                    let function = self.functions.get_mut(f).unwrap();
+                    let new_value = stack.pop().unwrap();
+                    let new_len = stack.len() - function.schema.input.len();
+                    let args = &stack[new_len..];
+                    let old_value = function.insert(args.to_vec(), new_value, self.timestamp);
+
+                    // if the value does not exist or the two values differ
+                    if old_value.is_none() || old_value != Some(new_value) {
+                        self.saturated = false;
+                    }
+
+                    if let Some(old_value) = old_value {
+                        if new_value != old_value {
+                            self.saturated = false;
+                            let merged: Value = match function.merge.clone() {
+                                MergeFn::AssertEq => panic!("No error for this yet"),
+                                MergeFn::Union => self.unionfind.union_values(old_value, new_value),
+                                MergeFn::Expr(merge_prog) => {
+                                    let values = [old_value, new_value];
+                                    let old_len = stack.len();
+                                    self.run_actions(stack, &values, &merge_prog, true)?;
+                                    assert_eq!(stack.len(), old_len + 1);
+                                    stack.pop().unwrap()
+                                }
+                            };
+                            // re-borrow
+                            let args = &stack[new_len..];
+                            let function = self.functions.get_mut(f).unwrap();
+                            function.insert(args.to_vec(), merged, self.timestamp);
+                        }
+                    }
+                    stack.truncate(new_len)
+                }
+                Instruction::Union(arity) => {
+                    let new_len = stack.len() - arity;
+                    let values = &stack[new_len..];
+                    let first = self.unionfind.find(Id::from(values[0].bits as usize));
+                    values[1..].iter().fold(first, |a, b| {
+                        let b = self.unionfind.find(Id::from(b.bits as usize));
+                        if a != b {
+                            self.saturated = false;
+                        }
+                        self.unionfind.union(a, b)
+                    });
+                    stack.truncate(new_len);
+                }
+                Instruction::Panic(msg) => panic!("Panic: {}", msg),
+                Instruction::Literal(lit) => match lit {
+                    Literal::Int(i) => stack.push(Value::from(*i)),
+                    Literal::String(s) => stack.push(Value::from(*s)),
+                    Literal::Unit => stack.push(Value::unit()),
+                },
+                Instruction::Pop => {
+                    stack.pop().unwrap();
+                }
+                Instruction::DeleteRow(f) => {
+                    let function = self.functions.get_mut(f).unwrap();
+                    let new_len = stack.len() - function.schema.input.len();
+                    let args = &stack[new_len..];
+                    let old_value = function.nodes.remove(args);
+                    if old_value.is_some() {
+                        self.saturated = false;
+                    }
+                    stack.truncate(new_len);
+                }
+            }
+        }
+        Ok(())
     }
 }
