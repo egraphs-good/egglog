@@ -6,6 +6,20 @@
     (Lit i64)
 )
 
+
+(rewrite (Times a b) (Times b a))
+(rewrite (Plus a b) (Plus b a))
+
+(rewrite (Times a (Times b c)) (Times (Times a b) c))
+(rewrite (Plus a (Plus b c)) (Plus (Plus a b) c))
+
+(rewrite (Times (Times a b) c) (Times a (Times b c)))
+(rewrite (Plus (Plus a b) c) (Plus a (Plus b c)))
+
+(rewrite (Plus (Lit n) (Lit m)) (Lit (+ n m)))
+(rewrite (Times (Lit n) (Lit m)) (Lit (* n m)))
+
+
 (datatype MExpr 
     (Id Math)  ; Identity matrix needs to be parametrized by dim. Obvious or not depending on who you ask
                ; Identity matrices of different dimensionality are not equal.
@@ -83,7 +97,7 @@
 
 
 ; The above algebra can be generalized. These are the axioms of a monoidal category
-; Matmul becomes Comp, Id stays Id, Kron becomes OTimes, 
+; Matmul becomes Comp, Id stays Id, Kron becomes OTimes, nrow and ncol become dom and codom.
 ; http://www.philipzucker.com/rust-category/
 ; Other examples of monoidal categories include relations and functions
 ; See for example the Haskell Arrow library
@@ -110,7 +124,7 @@
 (rule ((orthogonal A) (= (nrows A) n))
     ((set (Id n) (MMul A (Transpose A)))))
 
-; Don't really have equational laws, but certainly effect costs
+; Don't really have equational laws, but certainly affect costs
 (relation uppertriangular (MExpr))
 (relation diagonal (MExpr))
 (relation bandeddiagonal (MExpr i64)) ; The band might actually be a min lattice value
