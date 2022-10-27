@@ -63,6 +63,8 @@ pub enum Command {
     // TODO: this could just become an empty query
     Check(Fact),
     ClearRules,
+    AddRuleset(Symbol),
+    LoadRuleset(Symbol),
     Clear,
     Print(Symbol, usize),
     Query(Vec<Fact>),

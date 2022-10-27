@@ -157,6 +157,7 @@ pub struct EGraph {
     primitives: HashMap<Symbol, Vec<Primitive>>,
     functions: HashMap<Symbol, Function>,
     rules: HashMap<Symbol, Rule>,
+    rulesets: HashMap<Symbol, Vec<(Symbol, Rule)>>,
     pub match_limit: usize,
 }
 
@@ -178,6 +179,7 @@ impl Default for EGraph {
             sorts: Default::default(),
             functions: Default::default(),
             rules: Default::default(),
+            rulesets: Default::default(),
             primitives: Default::default(),
             presorts: Default::default(),
             match_limit: 10_000_000,
@@ -772,6 +774,20 @@ impl EGraph {
         self.rules = Default::default();
     }
 
+    pub fn add_ruleset(&mut self, name: Symbol) {
+        self.rulesets.insert(
+            name,
+            self.rules
+                .iter()
+                .map(|pair| (pair.0.clone(), pair.1.clone()))
+                .collect(),
+        );
+    }
+
+    pub fn load_ruleset(&mut self, name: Symbol) {
+        self.rules.extend(self.rulesets.get(&name).unwrap().clone());
+    }
+
     pub fn add_rewrite(&mut self, rewrite: ast::Rewrite) -> Result<Symbol, Error> {
         let name = format!("{} -> {}", rewrite.lhs, rewrite.rhs);
         let var = Symbol::from("__rewrite_var");
@@ -916,6 +932,14 @@ impl EGraph {
             Command::ClearRules => {
                 self.clear_rules();
                 "Clearing rules.".into()
+            }
+            Command::AddRuleset(name) => {
+                self.add_ruleset(name);
+                format!("Added ruleset {}", name)
+            }
+            Command::LoadRuleset(name) => {
+                self.load_ruleset(name);
+                format!("Loaded ruleset {}", name)
             }
             Command::Query(_q) => {
                 // let qsexp = sexp::Sexp::List(
