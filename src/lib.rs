@@ -10,6 +10,7 @@ mod value;
 use hashbrown::hash_map::Entry;
 use indexmap::map::Entry as IEntry;
 use instant::{Duration, Instant};
+use smallvec::SmallVec;
 use sort::*;
 use thiserror::Error;
 
@@ -36,12 +37,14 @@ use util::*;
 
 use crate::typecheck::TypeError;
 
+type ValueVec = SmallVec<[Value; 3]>;
+
 #[derive(Clone)]
 pub struct Function {
     decl: FunctionDecl,
     schema: ResolvedSchema,
     merge: MergeFn,
-    nodes: IndexMap<Vec<Value>, TupleOutput>,
+    nodes: IndexMap<ValueVec, TupleOutput>,
     updates: usize,
 }
 
@@ -67,7 +70,7 @@ struct ResolvedSchema {
 }
 
 impl Function {
-    pub fn insert(&mut self, inputs: Vec<Value>, value: Value, timestamp: u32) -> Option<Value> {
+    pub fn insert(&mut self, inputs: ValueVec, value: Value, timestamp: u32) -> Option<Value> {
         match self.nodes.entry(inputs) {
             IEntry::Occupied(mut entry) => {
                 let old = entry.get_mut();
@@ -914,7 +917,7 @@ impl EGraph {
                     })?;
 
                     let f = self.functions.get_mut(&name).unwrap();
-                    f.insert(vec![], value, self.timestamp);
+                    f.insert(ValueVec::default(), value, self.timestamp);
                     format!("Defined {name}: {sort:?}")
                 } else {
                     format!("Skipping define {name}")
