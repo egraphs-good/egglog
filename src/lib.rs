@@ -98,21 +98,48 @@ impl Function {
 
         // FIXME this doesn't compute updates properly
         let n_unions = uf.n_unions();
-        let old_nodes = std::mem::take(&mut self.nodes);
-        for (mut args, out) in old_nodes {
+        let mut to_delete = vec![];
+        let mut to_add = vec![];
+        for (args, out) in &self.nodes {
             let mut new_timestamp = out.timestamp;
             assert!(out.timestamp <= timestamp);
-            let value = out.value;
-            for (a, ty) in args.iter_mut().zip(&self.schema.input) {
+            // let value = out.value;
+            let mut new_args = args.clone();
+            let mut new_out = out.clone();
+            let mut modified = false;
+            for (a, ty) in new_args.iter_mut().zip(&self.schema.input) {
                 if ty.is_eq_sort() {
                     let new_a = uf.find_mut_value(*a);
                     if new_a != *a {
                         *a = new_a;
                         new_timestamp = timestamp;
+                        modified = true;
                     }
                 }
             }
+            if self.schema.output.is_eq_sort() {
+                new_out.value = uf.find_mut_value(out.value);
+                if new_out.value != out.value {
+                    modified = true;
+                }
+            }
 
+            if modified {
+                to_delete.push(args.clone());
+                to_add.push((new_args, new_out, new_timestamp));
+            }
+            // todo!("timestamps");
+            // todo!("merge fn");
+        }
+        println!("to_add size: {}", to_add.len());
+        println!("node size: {}", self.nodes.len());
+
+        for args in to_delete {
+            self.nodes.remove(&args);
+        }
+
+        for (args, out, mut new_timestamp) in to_add {
+            let value = out.value;
             // TODO call the merge fn!!!
             let _new_value = if self.schema.output.is_eq_sort() {
                 self.nodes
@@ -128,7 +155,7 @@ impl Function {
                             new_timestamp = timestamp;
                         }
                         TupleOutput {
-                            value: uf.find_mut_value(value),
+                            value: new_value,
                             timestamp: new_timestamp,
                         }
                     })
@@ -144,8 +171,6 @@ impl Function {
                         timestamp: new_timestamp,
                     })
             };
-            // todo!("timestamps");
-            // todo!("merge fn");
         }
 
         // if cfg!(debug_assertions) {
