@@ -102,6 +102,8 @@ impl Sort for RationalSort {
 
         add_primitives!(eg, "<" = |a: R, b: R| -> Opt { (a < b).then(|| ()) }); 
         add_primitives!(eg, ">" = |a: R, b: R| -> Opt { (a > b).then(|| ()) }); 
+        add_primitives!(eg, ">=" = |a: R, b: R| -> Opt { (a >= b).then(|| ()) });
+        add_primitives!(eg, "<=" = |a: R, b: R| -> Opt { (a <= b).then(|| ()) });
     }
     fn make_expr(&self, value: Value) -> Expr {
         assert!(value.tag == self.name());
