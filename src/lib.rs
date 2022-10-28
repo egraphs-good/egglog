@@ -102,6 +102,7 @@ impl Function {
         // FIXME this doesn't compute updates properly
         let n_unions = uf.n_unions();
         let old_nodes = std::mem::take(&mut self.nodes);
+        self.nodes.reserve(old_nodes.len());
         for (mut args, out) in old_nodes {
             let mut new_timestamp = out.timestamp;
             assert!(out.timestamp <= timestamp);
