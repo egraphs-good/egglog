@@ -119,7 +119,6 @@ impl Function {
             if self.schema.output.is_eq_sort() {
                 let new_value = uf.find_mut_value(out.value);
                 if out.value != new_value {
-                    new_timestamp = timestamp;
                     modified = true;
                 }
             }
