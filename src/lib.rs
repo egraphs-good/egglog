@@ -105,7 +105,6 @@ impl Function {
             assert!(out.timestamp <= timestamp);
             // let value = out.value;
             let mut new_args = args.clone();
-            let mut new_out = out.clone();
             let mut modified = false;
             for (a, ty) in new_args.iter_mut().zip(&self.schema.input) {
                 if ty.is_eq_sort() {
@@ -118,15 +117,16 @@ impl Function {
                 }
             }
             if self.schema.output.is_eq_sort() {
-                new_out.value = uf.find_mut_value(out.value);
-                if new_out.value != out.value {
+                let new_value = uf.find_mut_value(out.value);
+                if out.value != new_value {
+                    new_timestamp = timestamp;
                     modified = true;
                 }
             }
 
             if modified {
                 to_delete.push(args.clone());
-                to_add.push((new_args, new_out, new_timestamp));
+                to_add.push((new_args, out.clone(), new_timestamp));
             }
             // todo!("timestamps");
             // todo!("merge fn");
