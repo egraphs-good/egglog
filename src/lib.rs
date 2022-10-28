@@ -156,10 +156,7 @@ impl Function {
                         // out2.value = uf.union_values(value, out2.value);
                         out2.timestamp = out2.timestamp.max(out.timestamp);
                     })
-                    .or_insert(TupleOutput {
-                        value,
-                        timestamp,
-                    })
+                    .or_insert(TupleOutput { value, timestamp })
             };
         }
 
