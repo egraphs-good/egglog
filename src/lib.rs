@@ -101,12 +101,9 @@ impl Function {
 
         // FIXME this doesn't compute updates properly
         let n_unions = uf.n_unions();
-        let mut to_delete = vec![];
         let mut to_add = vec![];
-        for (args, out) in &self.nodes {
-            let mut new_timestamp = out.timestamp;
+        self.nodes.retain(|args, out| {
             assert!(out.timestamp <= timestamp);
-            // let value = out.value;
             let mut new_args = args.clone();
             let mut modified = false;
             for (a, ty) in new_args.iter_mut().zip(&self.schema.input) {
@@ -114,7 +111,6 @@ impl Function {
                     let new_a = uf.find_mut_value(*a);
                     if new_a != *a {
                         *a = new_a;
-                        new_timestamp = timestamp;
                         modified = true;
                     }
                 }
@@ -127,36 +123,30 @@ impl Function {
             }
 
             if modified {
-                to_delete.push(args.clone());
-                to_add.push((new_args, out.clone(), new_timestamp));
+                to_add.push((new_args, out.clone()));
             }
-            // todo!("timestamps");
-            // todo!("merge fn");
-        }
+            !modified
+        });
 
-        for args in to_delete {
-            self.nodes.remove(&args);
-        }
-
-        for (args, out, mut new_timestamp) in to_add {
+        for (args, out) in to_add {
             let value = out.value;
             // TODO call the merge fn!!!
             let _new_value = if self.schema.output.is_eq_sort() {
                 self.nodes
                     .entry(args)
                     .and_modify(|out2| {
-                        out2.value = uf.union_values(value, out2.value);
-                        out2.timestamp = timestamp; // just use the big timestamp
+                        let new_value = uf.union_values(value, out2.value);
+                        if out2.value != new_value {
+                            out2.value = new_value;
+                            out2.timestamp = timestamp;
+                        }
                         assert!(out2.timestamp <= timestamp);
                     })
                     .or_insert_with(|| {
                         let new_value = uf.find_mut_value(value);
-                        if new_value != value {
-                            new_timestamp = timestamp;
-                        }
                         TupleOutput {
                             value: new_value,
-                            timestamp: new_timestamp,
+                            timestamp,
                         }
                     })
             } else {
@@ -168,7 +158,7 @@ impl Function {
                     })
                     .or_insert(TupleOutput {
                         value,
-                        timestamp: new_timestamp,
+                        timestamp,
                     })
             };
         }
