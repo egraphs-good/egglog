@@ -131,8 +131,6 @@ impl Function {
             // todo!("timestamps");
             // todo!("merge fn");
         }
-        println!("to_add size: {}", to_add.len());
-        println!("node size: {}", self.nodes.len());
 
         for args in to_delete {
             self.nodes.remove(&args);
