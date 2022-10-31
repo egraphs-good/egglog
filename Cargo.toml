@@ -12,7 +12,7 @@ wasm-bindgen = ["instant/wasm-bindgen"]
 
 [dependencies]
 hashbrown = "0.12"
-indexmap = "1.8"
+indexmap = "1.9"
 instant = "0.1"
 log = "0.4"
 rustc-hash = "1.1"
@@ -20,15 +20,16 @@ symbol_table = {git = "https://github.com/mwillsey/symbol_table", rev = "acddcf8
 thiserror = "1"
 # symbol_table = { version = "0.2", features = ["global"] }
 # symbol_table = { path = "../symbol_table", features = ["global"] }
-bumpalo = "3.10"
 num-integer = "0.1.45"
 num-rational = "0.4.0"
 num-traits = "0.2.15"
+smallvec = "1.10"
 
 lalrpop-util = {version = "0.19.8", features = ["lexer"]}
 regex = "1"
 
-# TODO should be dev dependency, but easier to just log for now
+# binary dependencies
+clap = {version = "4", features = ["derive"]}
 env_logger = "0.9"
 
 [build-dependencies]
@@ -40,7 +41,3 @@ datatest-stable = "0.1.3"
 [[test]]
 harness = false
 name = "files"
-# pest = "2.1"
-# pest_derive = "2.1"
-
-# logos = "0.12"

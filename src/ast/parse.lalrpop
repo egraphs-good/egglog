@@ -56,6 +56,8 @@ Command: Command = {
     "(" "push" <UNum?> ")" => Command::Push(<>.unwrap_or(1)),
     "(" "pop" <UNum?> ")" => Command::Pop(<>.unwrap_or(1)),
     "(" "print" <sym:Ident> <n:UNum?> ")" => Command::Print(sym, n.unwrap_or(10)),
+    "(" "print-size" <sym:Ident> ")" => Command::PrintSize(sym),
+    "(" "input" <name:Ident> <file:String> ")" => Command::Input { name, file },
 }
 
 Cost: Option<usize> = {
@@ -68,7 +70,7 @@ NonDefineAction: Action = {
     "(" "delete" "(" <f: Ident> <args:Expr*> ")" ")" => Action::Delete ( f, args),
     "(" "union" <e1:Expr> <e2:Expr> ")" => Action::Union(<>),
     "(" "panic" <msg:String> ")" => Action::Panic(msg),
-    <e:Expr> => Action::Expr(e),
+    <e:CallExpr> => Action::Expr(e),
 }
 
 Action: Action = {
@@ -126,4 +128,4 @@ Bool: bool = {
 Ident: Symbol = <s:r"[[:alpha:]][\w-]*"> => s.parse().unwrap();
 PrimitiveSymbol: Symbol = <r"[-+*/!=<>&|^/%]+"> => Symbol::from(<>);
 SymString: Symbol = <r#""[^"]*""#> => Symbol::from(<>);
-String: String = <r#""[^"]*""#> => (<>).to_owned();
+String: String = <r#""[^"]*""#> => (<>).trim_matches('"').to_owned();

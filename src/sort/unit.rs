@@ -48,7 +48,7 @@ impl PrimitiveLike for NotEqualPrimitive {
         "!=".into()
     }
 
-    fn accept(&self, types: &[&dyn Sort]) -> Option<ArcSort> {
+    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
         match types {
             [a, b] if a.name() == b.name() => Some(self.unit.clone()),
             _ => None,

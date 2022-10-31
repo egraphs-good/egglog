@@ -67,6 +67,11 @@ pub enum Command {
     LoadRuleset(Symbol),
     Clear,
     Print(Symbol, usize),
+    PrintSize(Symbol),
+    Input {
+        name: Symbol,
+        file: String,
+    },
     Query(Vec<Fact>),
     Push(usize),
     Pop(usize),

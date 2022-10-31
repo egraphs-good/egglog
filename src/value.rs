@@ -44,7 +44,7 @@ impl From<i64> for Value {
 impl From<Symbol> for Value {
     fn from(s: Symbol) -> Self {
         Self {
-            tag: Symbol::from("i64"),
+            tag: Symbol::from("String"),
             bits: NonZeroU32::from(s).get().into(),
         }
     }
