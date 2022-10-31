@@ -11,8 +11,7 @@
 ;; (sort QuantifiedVs (Map String Unit))
 (sort QuantifiedVs (Map Ident i64))
 
-(function FreshFromSubst (QuantifiedVs Ident) Ident)
-(function FreshFromLam (Ctx Ident Expr) Ident)
+(function Fresh (Ident i64) Ident)
 (function V (String) Ident)
 
 (function Var (Ident) Expr)
@@ -39,6 +38,28 @@
 (relation has-qs-demand (Ctx Type))
 
 ;;;;;;;;;;;;;;;;;;;;;;
+;; Expression size
+;;;;;;;;;;;;;;;;;;;;;;
+(relation expr-size (Expr i64))
+(rule ((= e (Num n)))((expr-size e 1)))
+(rule ((= e (Var x)))((expr-size e 1)))
+;; asserted facts will be cleared so we define them as rules
+(rule ((= e (True))) ((expr-size e 1)))
+(rule ((= e (False))) ((expr-size e 1)))
+(rule ((= e (Unit))) ((expr-size e 1)))
+(rule ((= e (App e1 e2)) 
+       (expr-size e1 s1) 
+       (expr-size e2 s2))
+      ((expr-size e (+ (+ s1 s2) 1))))
+(rule ((= e (Let x e1 e2)) 
+       (expr-size e1 s1) 
+       (expr-size e2 s2))
+      ((expr-size e (+ (+ s1 s2) 1))))
+(rule ((= e (Abs x e1)) 
+       (expr-size e1 s1))
+      ((expr-size e (+ s1 1))))
+
+;;;;;;;;;;;;;;;;;;;;;;
 ;; Scheme and Context
 ;;;;;;;;;;;;;;;;;;;;;;
 
@@ -62,7 +83,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;
 
 (function generalize (Ctx Type) Scheme)
-(function instantiate (Scheme) Type)
+(function instantiate (Scheme i64) Type)
 
 (rule ((has-qs-demand ctx (TInt)))
       ((has-qs ctx (TInt) (empty))))
@@ -94,22 +115,21 @@
          (Forall qs t)
          :when ((has-qs ctx t qs)))
 
-(function subst-fresh (QuantifiedVs Type) Type)
-
-(rewrite (subst-fresh vs (TInt)) (TInt))
-(rewrite (subst-fresh vs (TBool)) (TBool))
-(rewrite (subst-fresh vs (TUnit)) (TUnit))
-(rewrite (subst-fresh vs (TArr fr to)) 
-         (TArr (subst-fresh vs fr) (subst-fresh vs to)))
-(rule ((= otype (subst-fresh vs (TVar s)))
+(function subst-fresh (QuantifiedVs Type i64) Type)
+(rewrite (subst-fresh vs (TInt) c) (TInt))
+(rewrite (subst-fresh vs (TBool) c) (TBool))
+(rewrite (subst-fresh vs (TUnit) c) (TUnit))
+(rewrite (subst-fresh vs (TArr fr to) c) 
+         (TArr (subst-fresh vs fr c) (subst-fresh vs to c)))
+(rule ((= otype (subst-fresh vs (TVar s) c))
        (= unused (get vs s)))
-      ((union otype (TVar (FreshFromSubst vs s)))))
-(rule ((= otype (subst-fresh vs (TVar s)))
+      ((union otype (TVar (Fresh s c)))))
+(rule ((= otype (subst-fresh vs (TVar s) c))
        (not-contains vs s))
       ((union otype (TVar s))))
 
-(rewrite (instantiate (Forall vs t))
-         (subst-fresh vs t))
+(rewrite (instantiate (Forall vs t) c)
+         (subst-fresh vs t c))
 
 ;;;;;;;;;;;;;;;;;;;;;;
 ;; Injectivity
@@ -124,47 +144,141 @@
 ;;;;;;;;;;;;;;;;;;;;;;
 
 ; ctx |- expr : type
-(function typeof (Ctx Expr) Type)
+(function typeof (Ctx Expr i64) Type)
 
 ;; Basic types (TInt, TBool, TUnit)
-(rewrite (typeof ctx (Num x)) (TInt))
-(rewrite (typeof ctx (True)) (TBool))
-(rewrite (typeof ctx (False)) (TBool))
-(rewrite (typeof ctx (Unit)) (TUnit))
+(rewrite (typeof ctx (Num x) c) (TInt))
+(rewrite (typeof ctx (True) c) (TBool))
+(rewrite (typeof ctx (False) c) (TBool))
+(rewrite (typeof ctx (Unit) c) (TUnit))
 
 ; sc = lookup(ctx, x)
 ; t = instantiate(sc)
 ; ---------------
 ; ctx |- x : t
-(rewrite (typeof ctx (Var x))
-         (instantiate (lookup ctx x)))
+(rewrite (typeof ctx (Var x)  c)
+         (instantiate (lookup ctx x) c))
 
 (rewrite 
-  (typeof ctx (Abs x e))
-  (TArr (TVar (FreshFromLam ctx x e)) 
-        (typeof (Cons x (Forall (empty) (TVar (FreshFromLam ctx x e)))
-                      ctx) 
-                e)))
+  (typeof ctx (Abs x e) c)
+  (TArr (TVar (Fresh x c)) 
+        (typeof (Cons x (Forall (empty) (TVar (Fresh x c)))
+                      ctx)
+                e cc))
+    :when ((= cc (+ c 1))))
 
-(rule ((= to (typeof ctx (App e1 e2))))
-      ((union (typeof ctx e1) 
-              (TArr (typeof ctx e2) to))))
+(rule ((= to (typeof ctx (App e1 e2) c))
+       (= c1 (+ c 1))
+       (expr-size e1 sz)
+       (= c2 (+ c (+ sz 1))))
+      ((union (typeof ctx e1 c1) 
+              (TArr (typeof ctx e2 c2) to))))
 
-(rewrite (typeof ctx (Let x e1 e2))
-         (typeof (Cons x (generalize ctx (typeof ctx e1)) 
+(rewrite (typeof ctx (Let x e1 e2) c)
+         (typeof (Cons x (generalize ctx (typeof ctx e1 c1)) 
                        ctx)
-                 e2))
+                 e2 c2)
+    :when ((= c1 (+ c 1))
+           (expr-size e1 sz)
+           (= c2 (+ c (+ sz 1)))))
 
+;;;;;;;;;;;;;;;;;;;;;;
+;; Occurs check
+;;;;;;;;;;;;;;;;;;;;;;
+(relation occurs-check (Ident Type))
+(function errors () Ident)
+(rule ((= (TVar x) (TArr fr to)))
+      ((occurs-check x fr)
+       (occurs-check x to)))
+(rule ((occurs-check x (TVar x)))
+      ;; ((set (errors) x)))
+      ((panic "occurs check fail")))
+(rule ((occurs-check x (TArr fr to)))
+      ((occurs-check x fr)
+       (occurs-check x to)))
+
+;;;;;;;;;;;;;;;;;;;;;;
+;; TEST
+;;;;;;;;;;;;;;;;;;;;;;
 (define id (Abs (V "x") (Var (V "x"))))
-(define t-id (typeof (Nil) id))
+(define t-id (typeof (Nil) id 0))
+(run 100)
+(check (= t-id (TArr (TVar (Fresh (V "x") 0)) (TVar (Fresh (V "x") 0)))))
+(clear)
 
 (define let-poly (Let (V "id") (Abs (V "x") (Var (V "x")))
                   (App (App (Var (V "id")) (Var (V "id")))
                        (App (Var (V "id")) (True)))))
-(define t-let-poly (typeof (Nil) let-poly))
-
-(run 20)
-
-(check (= t-id (TArr (TVar (FreshFromLam (Nil) (V "x") (Var (V "x"))))
-                     (TVar (FreshFromLam (Nil) (V "x") (Var (V "x")))))))
+(define t-let-poly (typeof (Nil) let-poly 0))
+(run 100)
 (check (= t-let-poly (TBool)))
+(clear)
+
+(define id-id (App (Abs (V "x") (Var (V "x")))
+                   (Abs (V "y") (Var (V "y")))))
+(define t-id-id (typeof (Nil) id-id 0))
+(run 100)
+(check (= t-id-id (TArr (TVar (Fresh (V "y") 3)) (TVar (Fresh (V "y") 3)))))
+(clear)
+
+(define let-true (Let (V "x") (True) (True)))
+(define t-let-true (typeof (Nil) let-true 0))
+(run 100)
+(check (= t-let-true (TBool)))
+(clear)
+
+(define let-var-true (Let (V "x") (True) (Var (V "x"))))
+(define t-let-var-true (typeof (Nil) let-var-true 0))
+(run 100)
+(check (= t-let-var-true (TBool)))
+(clear)
+
+(define abs-id (Abs (V "x") 
+                    (Let (V "y") (Abs (V "z") (Var (V "z"))) (Var (V "y")))))
+(define t-abs-id (typeof (Nil) abs-id 0))
+(run 100)
+(define x (Fresh (V "x") 0))
+(define z (Fresh (Fresh (V "z") 2) 4))
+(check (= t-abs-id (TArr (TVar x) (TArr (TVar z) (TVar z)))))
+(clear)
+
+(define let-env (Let (V "x") (True) 
+                (Let (V "f") (Abs (V "a") (Var (V "a")))
+                (Let (V "x") (Unit)
+                (App (Var (V "f")) (Var (V "x")))
+                ))))
+(define t-let-env (typeof (Nil) let-env 0))
+(run 100)
+(check (= t-let-env (TUnit)))
+(clear)
+
+(define let-env-2a (Let (V "x") (Unit)
+                   (Let (V "f") (Abs (V "y") (Var (V "x")))
+                   (Let (V "x") (True)
+                   (App (Var (V "f")) (Var (V "x")))))))
+(define t-let-env-2a (typeof (Nil) let-env-2a 0))
+(run 100)
+(check (= t-let-env-2a (TUnit)))
+(clear)
+
+(define let-env-2b (App (Abs (V "x")
+                             (Let (V "f") (Abs (V "y") (Var (V "x")))
+                             (Let (V "x") (True)
+                             (App (Var (V "f")) (Var (V "x"))))))
+                        (Unit)))
+(define t-let-env-2b (typeof (Nil) let-env-2b 0))
+(run 100)
+(check (= t-let-env-2b (TUnit)))
+(clear)
+
+;; ((lambda (x) ((lambda (f) ((lambda (x) (f x)) #t)) (lambda (y) x))) 5)
+(define let-env-hard (App (Abs (V "x") 
+                               (App (Abs (V "f") 
+                                         (App (Abs (V "x") (App (Var (V "f")) (Var (V "x")))) 
+                                              (True)))
+                                    (Abs (V "y") (Var (V "x")))))
+                          (Unit)))
+(define t-let-env-hard (typeof (Nil) let-env-hard 0))
+(run 100)
+(check (= t-let-env-hard (TUnit)))
+(clear)                        

@@ -49,7 +49,8 @@ impl Sort for EqSort {
     }
 
     fn make_expr(&self, _value: Value) -> Expr {
-        unimplemented!("No make_expr for EqSort {}", self.name)
+        Expr::Var("<eqsort>".into())
+        // unimplemented!("No make_expr for EqSort {}", self.name)
     }
 }
 
