@@ -783,7 +783,10 @@ impl EGraph {
     }
 
     pub fn add_rewrite(&mut self, rewrite: ast::Rewrite) -> Result<Symbol, Error> {
-        let name = format!("{} -> {}", rewrite.lhs, rewrite.rhs);
+        let mut name = format!("{} -> {}", rewrite.lhs, rewrite.rhs);
+        if !rewrite.conditions.is_empty() {
+            write!(name, " if {}", ListDisplay(&rewrite.conditions, ", ")).unwrap();
+        }
         let var = Symbol::from("__rewrite_var");
         let rule = ast::Rule {
             body: [Fact::Eq(vec![Expr::Var(var), rewrite.lhs])]
