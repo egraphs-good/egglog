@@ -732,7 +732,6 @@ impl EGraph {
                     log::warn!("Rule {} has matched {} times, bailing!", name, rule.matches);
                     break 'outer;
                 }
-                assert!(stack.is_empty());
                 // we can ignore results here
                 let _ = self.run_actions(stack, values, &rule.program, true);
             }

@@ -636,6 +636,7 @@ impl EGraph {
         program: &Program,
         make_defaults: bool,
     ) -> Result<(), Error> {
+        stack.clear();
         // println!("{:?}", program);
         for instr in &program.0 {
             match instr {
