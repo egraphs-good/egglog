@@ -335,7 +335,6 @@ impl PrimitiveLike for Remove {
     }
 }
 
-
 struct Diff {
     name: Symbol,
     map: Arc<MapSort>,
