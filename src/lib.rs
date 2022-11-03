@@ -769,7 +769,7 @@ impl EGraph {
             apply_time: Duration::default(),
         };
         match self.rules.entry(name) {
-            Entry::Occupied(_) => eprintln!("Warning: Rule '{name}' was already present"),
+            Entry::Occupied(_) => panic!("Rule '{name}' was already present"),
             Entry::Vacant(e) => {
                 e.insert(compiled_rule);
             },
