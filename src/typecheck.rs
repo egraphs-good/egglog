@@ -598,6 +598,9 @@ impl EGraph {
         }
 
         if errors.is_empty() {
+            for _ in 0..checker.locals.len() {
+                checker.instructions.push(Instruction::Pop);
+            }
             Ok(Program(checker.instructions))
         } else {
             Err(errors)
