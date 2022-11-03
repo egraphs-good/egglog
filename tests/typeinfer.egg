@@ -212,6 +212,16 @@
       ((occurs-check x fr)
        (occurs-check x to)))
 
+(relation base-types (Type))
+(base-types (TInt))
+(base-types (TBool))
+(base-types (TUnit))
+(rule ((base-types t)
+       (= t (TArr fr to)))
+      ((panic "Unifying base types with functions")) )
+(rule ((= (TInt) (TBool))) ((panic "Unifying base types")))
+(rule ((= (TInt) (TUnit))) ((panic "Unifying base types")))
+(rule ((= (TBool) (TUnit))) ((panic "Unifying base types")))
 ;;;;;;;;;;;;;;;;;;;;;;
 ;; TEST
 ;;;;;;;;;;;;;;;;;;;;;;
