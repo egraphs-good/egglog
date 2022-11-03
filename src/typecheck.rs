@@ -636,7 +636,6 @@ impl EGraph {
         program: &Program,
         make_defaults: bool,
     ) -> Result<(), Error> {
-        stack.clear();
         // println!("{:?}", program);
         for instr in &program.0 {
             match instr {
@@ -724,8 +723,9 @@ impl EGraph {
                                     let values = [old_value, new_value];
                                     let old_len = stack.len();
                                     self.run_actions(stack, &values, &merge_prog, true)?;
-                                    assert_eq!(stack.len(), old_len + 1);
-                                    stack.pop().unwrap()
+                                    let result = stack.pop().unwrap();
+                                    stack.truncate(old_len);
+                                    result
                                 }
                             };
                             // re-borrow

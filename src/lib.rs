@@ -733,6 +733,7 @@ impl EGraph {
                     break 'outer;
                 }
                 // we can ignore results here
+                stack.clear();
                 let _ = self.run_actions(stack, values, &rule.program, true);
             }
 
