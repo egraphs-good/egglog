@@ -769,8 +769,10 @@ impl EGraph {
             apply_time: Duration::default(),
         };
         match self.rules.entry(name) {
-            Entry::Occupied(_) => panic!("Rule '{name}' was already present"),
-            Entry::Vacant(e) => e.insert(compiled_rule),
+            Entry::Occupied(_) => eprintln!("Warning: Rule '{name}' was already present"),
+            Entry::Vacant(e) => {
+                e.insert(compiled_rule);
+            },
         };
         Ok(name)
     }
@@ -821,7 +823,7 @@ impl EGraph {
         Ok(())
     }
 
-    fn eval_expr(
+    pub fn eval_expr(
         &mut self,
         expr: &Expr,
         expected_type: Option<ArcSort>,

@@ -696,8 +696,9 @@ impl EGraph {
                         stack.truncate(new_len);
                         stack.push(value);
                     } else {
-                        panic!("prim was partial... do we allow this?");
-                        // return;
+                        //panic!("prim was partial... do we allow this?");
+                        stack.clear();
+                        return Ok (());
                     }
                 }
                 Instruction::Set(f) => {
