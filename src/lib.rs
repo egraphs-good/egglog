@@ -980,8 +980,16 @@ impl EGraph {
                 }
                 format!("Popped {n} levels.")
             }
-            Command::Print(f, n) => self.print_function(f, n)?,
-            Command::PrintSize(f) => self.print_size(f)?,
+            Command::Print(f, n) => {
+                let msg = self.print_function(f, n)?;
+                println!("{}", msg);
+                msg
+            }
+            Command::PrintSize(f) => {
+                let msg = self.print_size(f)?;
+                println!("{}", msg);
+                msg
+            }
             Command::Input { name, file } => {
                 let func = self.functions.get_mut(&name).unwrap();
                 let is_unit = func.schema.output.name().as_str() == "Unit";

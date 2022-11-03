@@ -33,11 +33,7 @@ fn main() {
         let mut egraph = EGraph::default();
         egraph.fact_directory = args.fact_directory.clone();
         match egraph.parse_and_run_program(&s) {
-            Ok(msgs) => {
-                for msg in msgs {
-                    println!("{}", msg);
-                }
-            }
+            Ok(_msgs) => {}
             Err(err) => {
                 log::error!("{}", err);
                 std::process::exit(1)
