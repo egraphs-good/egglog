@@ -23,17 +23,19 @@
 (function False () Expr)
 (function Unit () Expr)
 
-(function TVar (Ident) Type)
-(function TArr (Type Type) Type)
-(function TInt () Type)
-(function TBool () Type)
-(function TUnit () Type)
+(function TVar (Ident) Type :cost 3)
+(function TArr (Type Type) Type :cost 1)
+(function TInt () Type :cost 1)
+(function TBool () Type :cost 1)
+(function TUnit () Type :cost 1)
 
 (function Forall (QuantifiedVs Type) Scheme)
 (function Nil () Ctx)
 (function Cons (Ident Scheme Ctx) Ctx)
 
-(relation keySet (Ctx QuantifiedVs))
+(relation ftvCtx (Ctx QuantifiedVs))
+(relation ftv (Type QuantifiedVs))
+(relation ftvScheme (Scheme QuantifiedVs))
 (relation has-qs (Ctx Type QuantifiedVs))
 (relation has-qs-demand (Ctx Type))
 
@@ -63,13 +65,26 @@
 ;; Scheme and Context
 ;;;;;;;;;;;;;;;;;;;;;;
 
-(rule ((= c (Nil))) ((keySet c (empty))))
+(rule ((= e (TBool)))((ftv e (empty))))
+(rule ((= e (TUnit)))((ftv e (empty))))
+(rule ((= e (TInt)))((ftv e (empty))))
+(rule ((= e (TVar x)))((ftv e (insert (empty) x 1))))
+(rule ((= e (TArr fr to))
+       (ftv fr s1)
+       (ftv to s2))
+      ((ftv e (set-union s1 s2))))
+(rule ((= c (Nil))) ((ftvCtx c (empty))))
+(rule ((= e (Forall qs t))
+       (ftv t fvs))
+      ((ftvScheme e (set-diff fvs qs)))) 
 (rule ((= c (Cons x s n))
-       (keySet n fvs))
-      ((keySet c (insert fvs x 1))))
+       (ftvCtx n fvs1)
+       (ftvScheme s fvs2))
+      ((ftvCtx c (set-union fvs1 fvs2))))
+
 
 ;; TODO: rewrite lookup to use native sets
-(function lookup (Ctx Ident) Scheme)
+(function lookup (Ctx Ident) Scheme :cost 1000)
 (rewrite (lookup (Cons x s tl) x) s)
 (rule (
   (= t (lookup (Cons y s tl) x))
@@ -82,8 +97,8 @@
 ;; Generalization and Instantiation
 ;;;;;;;;;;;;;;;;;;;;;;
 
-(function generalize (Ctx Type) Scheme)
-(function instantiate (Scheme i64) Type)
+(function generalize (Ctx Type) Scheme :cost 1000)
+(function instantiate (Scheme i64) Type :cost 1000)
 
 (rule ((has-qs-demand ctx (TInt)))
       ((has-qs ctx (TInt) (empty))))
@@ -101,11 +116,11 @@
       ((has-qs ctx (TArr fr to) (set-union qs1 qs2))))
 
 (rule ((has-qs-demand ctx (TVar x))
-       (keySet ctx key-set)
+       (ftvCtx ctx key-set)
        (= unused (get key-set x)))
       ((has-qs ctx (TVar x) (empty))))
 (rule ((has-qs-demand ctx (TVar x))
-       (keySet ctx key-set)
+       (ftvCtx ctx key-set)
        (not-contains key-set x))
       ((has-qs ctx (TVar x) (insert (empty) x 1))))
 
@@ -115,7 +130,7 @@
          (Forall qs t)
          :when ((has-qs ctx t qs)))
 
-(function subst-fresh (QuantifiedVs Type i64) Type)
+(function subst-fresh (QuantifiedVs Type i64) Type :cost 1000)
 (rewrite (subst-fresh vs (TInt) c) (TInt))
 (rewrite (subst-fresh vs (TBool) c) (TBool))
 (rewrite (subst-fresh vs (TUnit) c) (TUnit))
@@ -144,7 +159,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;
 
 ; ctx |- expr : type
-(function typeof (Ctx Expr i64) Type)
+(function typeof (Ctx Expr i64) Type :cost 1000)
 
 ;; Basic types (TInt, TBool, TUnit)
 (rewrite (typeof ctx (Num x) c) (TInt))
@@ -281,4 +296,15 @@
 (define t-let-env-hard (typeof (Nil) let-env-hard 0))
 (run 100)
 (check (= t-let-env-hard (TUnit)))
+(clear)
+
+
+(define let-inst (Let (V "id") (Abs (V "x") (Var (V "x")))
+                 (Let (V "iid") (Abs (V "y") (Var (V "id")))
+                 (App (Var (V "iid")) 
+                      (App (Var (V "id")) (True))))) 
+      :cost 1000)
+(define t-let-inst (typeof (Nil) let-inst 0) :cost 1000)
+(run 100)
+(check (= t-let-inst  (TArr (TVar (Fresh (Fresh (Fresh (V "x") 1) 5) 7)) (TVar (Fresh (Fresh (Fresh (V "x") 1) 5) 7)))))
 (clear)

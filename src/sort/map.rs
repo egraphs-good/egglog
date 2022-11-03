@@ -76,6 +76,10 @@ impl Sort for MapSort {
         });
         egraph.add_primitive(Remove {
             name: "map-remove".into(),
+            map: self.clone(),
+        });
+        egraph.add_primitive(Diff {
+            name: "set-diff".into(),
             map: self,
         });
     }
@@ -328,5 +332,33 @@ impl PrimitiveLike for Remove {
         let mut map = ValueMap::load(&self.map, &values[0]);
         map.remove(&values[1]);
         map.store(&self.map)
+    }
+}
+
+
+struct Diff {
+    name: Symbol,
+    map: Arc<MapSort>,
+}
+
+impl PrimitiveLike for Diff {
+    fn name(&self) -> Symbol {
+        self.name
+    }
+
+    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
+        match types {
+            [map1, map2] if map1.name() == self.map.name && map2.name() == self.map.name() => {
+                Some(self.map.clone())
+            }
+            _ => None,
+        }
+    }
+
+    fn apply(&self, values: &[Value]) -> Option<Value> {
+        let mut map1 = ValueMap::load(&self.map, &values[0]);
+        let map2 = ValueMap::load(&self.map, &values[1]);
+        map1.retain(|k, _| !map2.contains_key(k));
+        map1.store(&self.map)
     }
 }
