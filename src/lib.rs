@@ -413,13 +413,13 @@ impl EGraph {
                 let (_t0, v0) = &values[0];
                 for (_t, v) in &values[1..] {
                     if v0 != v {
-                        println!("Check failed");
+                        log::error!("Check failed");
                         // the check failed, so print out some useful info
                         self.rebuild();
                         for (_t, value) in &values {
                             if let Some((_tag, id)) = self.value_to_id(*value) {
                                 let best = self.extract(*value).1;
-                                println!("{}: {}", id, best);
+                                log::error!("{}: {}", id, best);
                             }
                         }
                         return Err(Error::CheckError(values[0].1, *v));
@@ -801,7 +801,10 @@ impl EGraph {
     }
 
     pub fn add_rewrite(&mut self, rewrite: ast::Rewrite) -> Result<Symbol, Error> {
-        let name = format!("{} -> {}", rewrite.lhs, rewrite.rhs);
+        let mut name = format!("{} -> {}", rewrite.lhs, rewrite.rhs);
+        if !rewrite.conditions.is_empty() {
+            write!(name, " if {}", ListDisplay(&rewrite.conditions, ", ")).unwrap();
+        }
         let var = Symbol::from("__rewrite_var");
         let rule = ast::Rule {
             body: [Fact::Eq(vec![Expr::Var(var), rewrite.lhs])]
@@ -1003,8 +1006,16 @@ impl EGraph {
                 }
                 format!("Popped {n} levels.")
             }
-            Command::Print(f, n) => self.print_function(f, n)?,
-            Command::PrintSize(f) => self.print_size(f)?,
+            Command::Print(f, n) => {
+                let msg = self.print_function(f, n)?;
+                println!("{}", msg);
+                msg
+            }
+            Command::PrintSize(f) => {
+                let msg = self.print_size(f)?;
+                println!("{}", msg);
+                msg
+            }
             Command::Input { name, file } => {
                 let func = self.functions.get_mut(&name).unwrap();
                 let is_unit = func.schema.output.name().as_str() == "Unit";

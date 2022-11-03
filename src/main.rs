@@ -1,7 +1,7 @@
-use std::path::PathBuf;
-
 use clap::Parser;
 use egg_smol::EGraph;
+use std::io::{self, BufRead};
+use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
 struct Args {
@@ -21,7 +21,19 @@ fn main() {
     let args = Args::parse();
 
     if args.inputs.is_empty() {
-        eprintln!("Pass in some files as arguments");
+        let stdin = io::stdin();
+        log::info!("Welcome to Egglog!");
+        let mut egraph = EGraph::default();
+        for line in stdin.lock().lines() {
+            let line = line.unwrap_or_else(|_| panic!("Failed to read line from stdout"));
+            match egraph.parse_and_run_program(&line) {
+                Ok(_msgs) => {}
+                Err(err) => {
+                    log::error!("{}", err);
+                }
+            }
+        }
+
         std::process::exit(1)
     }
 
@@ -33,11 +45,7 @@ fn main() {
         let mut egraph = EGraph::default();
         egraph.fact_directory = args.fact_directory.clone();
         match egraph.parse_and_run_program(&s) {
-            Ok(msgs) => {
-                for msg in msgs {
-                    println!("{}", msg);
-                }
-            }
+            Ok(_msgs) => {}
             Err(err) => {
                 log::error!("{}", err);
                 std::process::exit(1)
