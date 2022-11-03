@@ -411,13 +411,13 @@ impl EGraph {
                 let (_t0, v0) = &values[0];
                 for (_t, v) in &values[1..] {
                     if v0 != v {
-                        println!("Check failed");
+                        log::error!("Check failed");
                         // the check failed, so print out some useful info
                         self.rebuild();
                         for (_t, value) in &values {
                             if let Some((_tag, id)) = self.value_to_id(*value) {
                                 let best = self.extract(*value).1;
-                                println!("{}: {}", id, best);
+                                log::error!("{}: {}", id, best);
                             }
                         }
                         return Err(Error::CheckError(values[0].1, *v));
