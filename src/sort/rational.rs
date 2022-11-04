@@ -54,14 +54,16 @@ impl Sort for RationalSort {
         add_primitives!(eg, "pow" = |a: R, b: R| -> Option<R> {
             if a.is_zero() {
                 if b.is_positive() {
+                    println!("rzero");
                     Some(R::zero())
                 } else {
                     None
                 }
             } else if b.is_zero() {
                 Some(R::one())
-            } else if let Some(b) = b.to_i64() {
-                if let Ok(b) = usize::try_from(b) {
+            } else if b.is_integer() {
+                if let Some(b) = b.to_usize() {
+                    println!("checked pow {a} {b}", a = a, b = b);
                     num_traits::checked_pow(a, b)
                 } else {
                     // TODO handle negative powers
