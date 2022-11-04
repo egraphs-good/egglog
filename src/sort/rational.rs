@@ -63,7 +63,6 @@ impl Sort for RationalSort {
                 Some(R::one())
             } else if b.is_integer() {
                 if let Some(b) = b.to_usize() {
-                    println!("checked pow {a} {b}", a = a, b = b);
                     num_traits::checked_pow(a, b)
                 } else {
                     // TODO handle negative powers
