@@ -54,7 +54,6 @@ impl Sort for RationalSort {
         add_primitives!(eg, "pow" = |a: R, b: R| -> Option<R> {
             if a.is_zero() {
                 if b.is_positive() {
-                    println!("rzero");
                     Some(R::zero())
                 } else {
                     None
