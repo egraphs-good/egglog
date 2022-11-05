@@ -916,20 +916,7 @@ impl EGraph {
             }
             Command::Define { name, expr, cost } => {
                 if should_run {
-                    let (sort, value) = self.eval_expr(&expr, None, true)?;
-                    self.declare_function(&FunctionDecl {
-                        name,
-                        schema: Schema {
-                            input: vec![],
-                            output: value.tag,
-                        },
-                        default: None,
-                        merge: None,
-                        cost,
-                    })?;
-
-                    let f = self.functions.get_mut(&name).unwrap();
-                    f.insert(ValueVec::default(), value, self.timestamp);
+                    let sort = self.define(name, expr, cost)?;
                     format!("Defined {name}: {sort:?}")
                 } else {
                     format!("Skipping define {name}")
@@ -1044,6 +1031,23 @@ impl EGraph {
                 format!("Read {} facts into {name} from '{file}'.", actions.len())
             }
         })
+    }
+
+    pub fn define(&mut self,  name: Symbol, expr: Expr,cost: Option<usize>) -> Result<ArcSort, Error> {
+        let (sort, value) = self.eval_expr(&expr, None, true)?;
+        self.declare_function(&FunctionDecl {
+            name,
+            schema: Schema {
+                input: vec![],
+                output: value.tag,
+            },
+            default: None,
+            merge: None,
+            cost,
+        })?;
+        let f = self.functions.get_mut(&name).unwrap();
+        f.insert(ValueVec::default(), value, self.timestamp);
+        Ok(sort)
     }
 
     fn run_program(&mut self, program: Vec<Command>) -> Result<Vec<String>, Error> {
