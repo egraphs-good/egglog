@@ -10,13 +10,13 @@
 (edge "L6" "L8") (edge "L8" "L2")
 
 
-(function span-tree (String) String :merge (const old new))
+(function span-tree (String) String :merge old)
 
 (set (span-tree "L1") "root")
 
 (rule ((= (span-tree v) w) (edge v u)) ((set (span-tree u) v)))
 
 (run 10)
-;(print span-tree)
+(print span-tree)
 (check (= (span-tree "L2") "L1"))
 (check (!= (span-tree "L2") "L8"))
