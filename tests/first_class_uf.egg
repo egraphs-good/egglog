@@ -1,0 +1,56 @@
+; A "first class" / local / scope union find is encodable in egglog.
+; This is perhaps not surprising, since there are also encodings to 
+; souffle subsumption
+; It's fairly natural to write though
+
+
+(function root (i64) i64 :merge (min old new))
+
+; To make this more first class
+; One can give union finds some kind of posibly structured "name" 
+; in the standard first orderi representation of named first class functions
+; (function apply_uf (Name i64) i64)
+
+; root being undefined is it being the same eclass as itself
+
+; reflexivity
+
+; should this work?
+;(rule ((< x (root x))) ((set (root x) x)))
+(rule ((= y (root x)) (< x y)) ((set (root x) x)))
+
+; transitivity
+(rule ((= (root x) y) (= (root y) z)) 
+    ((set (root x) z))
+)
+
+(set (root 0) 1)
+(set (root 1) 2)
+(set (root 4) 7)
+(set (root 7) 0)
+(set (root 7) 7)
+
+(run 10)
+(print root)
+(check (= (root 0) (root 4)))
+
+
+; It also plays nice with eclasses
+;(datatype EClass (Name String))
+; Need to define min. For this purpose, min over eids is probably ok?
+;(function root2 (EClass) EClass :merge (min old new))
+
+;(rule ((= y (root2 x))) ((set (root2 x) x)))
+
+; transitivity
+;(rule ((= (root2 x) y) (= (root2 y) z)) 
+;    ((set (root2 x) z))
+;)
+
+
+; To use a particular first class union find in a rule under context C
+; 
+; one needs to now explicitly join with respect to (apply_uf C _) 
+; over the eq relation. This is _not_ an N^2 join though.
+
+
