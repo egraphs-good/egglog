@@ -6,6 +6,12 @@
 
 ; I make no claim that the following axioms are complete.
 
+
+; For primitive sorts, built in native sets are vastly preferable
+; For eqable sorts, this representation has the benefit
+; that the sets can collapse and discover equalities
+
+
 (datatype Set)
 
 (function set-union (Set Set) Set)
@@ -17,27 +23,40 @@
 (function sing-set (Set) Set)
 (function empty () Set)
 
-(rewrite (set-union (sing-i64 i) (sing-i64 i)) (sing-i64 i))
+(rewrite (set-union s s) s)
 (rewrite (set-union a b) (set-union b a))
 (rewrite (set-union a (empty)) a)
 (rewrite (set-union a (set-union b c)) (set-union (set-union a b) c))
+(rewrite (set-union (set-union a b) c) (set-union a (set-union b c)))
+
+(define sing1 (sing-i64 1))
+(define sing2 (sing-i64 2))
+(define set12 (set-union sing1 sing2))
+(define set21 (set-union sing2 sing1))
+(define setset12 (set-union (sing-set set12) (sing-set set21)))
+
+(run 10)
+(check (= set12 set21))
+(check (!= sing1 sing2))
+(check (= setset12 (sing-set set21)))
+
 
 (rewrite (set-inter (sing-i64 i) (sing-i64 i)) (sing-i64 i))
 (rewrite (set-inter a (empty)) (empty))
 
 ; requires primitive disequality
-;(rule 
-;     ((= (set-inter (sing-i64 i) (sing-i64 j) s) (!= i j) ) + (sing-i64 i))  ((= empty e))
+(rewrite (set-inter (sing-i64 i) (sing-i64 j)) empty
+    :when ((!= i j)))
 
 (rewrite (set-inter a b) (set-inter b a))
 (rewrite (set-inter a (set-inter b c)) (set-inter (set-inter a b) c))
 
 ; distributivity of inter and union
 
-
 (rewrite (set-diff (sing-i64 i) (sing-i64 i)) (empty))
-; requires primitive disequality
-; (rule (= (set-diff (sing-i64 i) (sing-i64 j)) s) (!= i j) (= (sing-i64 i) s))
+(rewrite (set-diff (sing-i64 i) (sing-i64 j)) (sing-i64 i)
+    :when ((!= i j)))
+
 (rewrite (set-diff (set-union a b) c) (set-union (set-diff a c) (set-diff b c)))
 (rewrite (set-diff (set-inter a b) c) (set-union (set-diff a c) (set-diff b c)))
 
@@ -59,7 +78,7 @@
 ; Clunky reflexivity. Needs more cases or a (relation set (Set))
 (rule ((= (sing-i64 i) s))  ((subset s s) (subset s s)))
 ; lifting subset to equality.
-(rule ((subset a b) (subset b a)) ((set a b)))
+(rule ((subset a b) (subset b a)) ((union a b)))
 
 
 ; cardinality
