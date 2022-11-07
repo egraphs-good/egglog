@@ -24,6 +24,12 @@ impl Sort for StringSort {
         self
     }
 
+    #[rustfmt::skip]
+    fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
+
+        add_primitives!(eg, "const" = |a: Symbol, _b: Symbol| -> Symbol { a });
+    }
+
     fn make_expr(&self, value: Value) -> Expr {
         assert!(value.tag == self.name);
         let sym = Symbol::from(NonZeroU32::new(value.bits as _).unwrap());

@@ -1,0 +1,22 @@
+; Example from https://souffle-lang.github.io/choice
+; choice-domain is a somewhat subtle construct
+; Using it in combination with other egglog features may be unsound.
+; Perhaps it needs to be in it's own strata
+
+(relation edge (String String))
+
+(edge "L1" "L2") (edge "L2" "L10") (edge "L2" "L3")
+(edge "L3" "L4") (edge "L4" "L8") (edge "L3" "L6")
+(edge "L6" "L8") (edge "L8" "L2")
+
+
+(function span-tree (String) String :merge (const old new))
+
+(set (span-tree "L1") "root")
+
+(rule ((= (span-tree v) w) (edge v u)) ((set (span-tree u) v)))
+
+(run 10)
+;(print span-tree)
+(check (= (span-tree "L2") "L1"))
+(check (!= (span-tree "L2") "L8"))
