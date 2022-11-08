@@ -7,6 +7,8 @@ use std::path::PathBuf;
 struct Args {
     #[clap(short = 'F', long)]
     fact_directory: Option<PathBuf>,
+    #[clap(long)]
+    naive: bool,
     inputs: Vec<PathBuf>,
 }
 
@@ -44,6 +46,7 @@ fn main() {
         });
         let mut egraph = EGraph::default();
         egraph.fact_directory = args.fact_directory.clone();
+        egraph.seminaive = !args.naive;
         match egraph.parse_and_run_program(&s) {
             Ok(_msgs) => {}
             Err(err) => {

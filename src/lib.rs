@@ -284,6 +284,7 @@ pub struct EGraph {
     timestamp: u32,
     pub match_limit: usize,
     pub fact_directory: Option<PathBuf>,
+    pub seminaive: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -312,6 +313,7 @@ impl Default for EGraph {
             timestamp: 0,
             saturated: false,
             fact_directory: None,
+            seminaive: true,
         };
         egraph.add_sort(UnitSort::new("Unit".into()));
         egraph.add_sort(StringSort::new("String".into()));
