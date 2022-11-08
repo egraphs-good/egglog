@@ -35,6 +35,59 @@
 (check (= (root 0) (root 4)))
 
 
+(datatype EClass)
+
+; way more direct encoding
+
+(function root2 (i64) EClass)
+
+(set (root2 0) (root2 1))
+(set (root2 1) (root2 2))
+(set (root2 4) (root2 7))
+(set (root2 7) (root2 0))
+(set (root2 7) (root2 7))
+(run 10)
+(print root2)
+(check (= (root2 0) (root2 4)))
+
+
+; A keyed union find built out of union operations.
+
+(datatype UF (Union i64 i64 UF) (Empty))
+(function root3 (UF i64) EClass)
+
+; These are nice compression laws / extensionality, but not necessary
+; They are definitely not complete extensionality
+; (rewrtie (union i j (union k l uf))) (union k l (union i j uf))))
+(rewrite (Union i i uf) uf)
+(rewrite (Union i j uf) (Union j i uf))
+(rewrite (Union i j uf) uf
+    :when ((= (root3 uf i) (root3 uf j))))
+
+;(rewrite (root3 (Union i j uf) a) (root3 (Union i j uf) b)
+; :when ((= (root3 uf a) (root uf b)))
+;)
+
+; Maybe this is smarter. Does this copy cleanly?
+; Well it makes demand which is nice.
+; And it avoid the large number of bound variables of the other trasnference rules.
+
+(rewrite (root3 (Union i j uf) i) (root3 (Union i j uf) j))
+(function root3-trans (UF EClass) EClass)
+(rewrite (root3 (Union i j uf) a) (root3-trans (Union i j uf) (root3 uf a)))
+
+(define uf1 (Union 2 3 (Union 1 2 Empty)))
+(define r1 (root3 uf1 1))
+(define r3 (root3 uf1 3))
+(define r4 (root3 uf1 4))
+(run 10)
+(check (= r1 r3))
+(check (!= r1 r4))
+(print root3)
+(print Union)
+
+
+
 ; It also plays nice with eclasses
 ;(datatype EClass (Name String))
 ; Need to define min. For this purpose, min over eids is probably ok?
@@ -51,6 +104,6 @@
 ; To use a particular first class union find in a rule under context C
 ; 
 ; one needs to now explicitly join with respect to (apply_uf C _) 
-; over the eq relation. This is _not_ an N^2 join though.
+; over the eq relation. This is _not_ an N^2 join though. Maybe it is...
 
 
