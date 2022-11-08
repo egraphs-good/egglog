@@ -399,7 +399,7 @@ impl EGraph {
         let has_atoms = !cq.query.atoms.is_empty();
 
         if has_atoms {
-            let do_seminaive = true;
+            let do_seminaive = self.seminaive;
             // for the later atoms, we consider everything
             let mut timestamp_ranges = vec![0..u32::MAX; cq.query.atoms.len()];
             for (atom_i, atom) in cq.query.atoms.iter().enumerate() {
