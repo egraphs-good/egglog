@@ -1,0 +1,84 @@
+
+; Prolog modulo equality.
+; This is prolog that supports only fully grounded queries.
+; In that sense it is not a prolog at all
+
+
+
+
+(datatype Term
+    (TSucc Term)
+    (TZero)
+)
+(datatype Goal
+    (GAdd Term Term Term)
+    (GLTE Term Term)
+    ; GAppend
+)
+(datatype GoalList (Cons Goal GoalList) (Nil))
+(datatype Proof (True))
+
+(function append (GoalList GoalList) GoalList)
+(rewrite (append Nil l) l)
+(rewrite (append (Cons g gs) l) (Cons g (append gs l)))
+
+(function resolve (GoalList) Proof)
+
+
+; The head-body relation could be inlined perhaps into it's use site
+(relation head-body (Goal GoalList))
+
+(set (resolve Nil) True)
+; We reuse nondetermistic rewriting to achieve the proplog search 
+(rewrite (resolve (Cons g gs)) (resolve (append body gs))
+    :when ((head-body g body))
+) ; (!= (resolve (Cons g gs)) True) can be used to perhaps prune unneeded rewriting
+
+
+; If we want clauses with patterns, we can't use head-body unless we reify pattern matching
+(rewrite (resolve (Cons (GAdd TZero x x) gs)) (resolve gs)) ; (!= (resolve (Cons g gs)) True) can be used to perhaps prune unneeded rewriting
+(rewrite (resolve (Cons (GAdd (TSucc x) y (TSucc z)) gs)) (resolve (Cons (GAdd x y z) gs)))
+
+
+(rewrite (resolve (Cons (GLTE TZero x) gs)) (resolve gs)) ; (!= (resolve (Cons g gs)) True) can be used to perhaps prune unneeded rewriting
+(rewrite (resolve (Cons (GLTE (TSucc x) (TSucc y)) gs)) (resolve (Cons (GLTE x y) gs)))
+
+
+; We can't support prolog with ungrounded unification vars in the body (?).
+; What would y be?
+; (rewrite (resolve (Cons (GPath x z) gs)) (resolve (Cons (GEdge x y) (Cons (GPath y z) gs)))
+
+; Could use metalevel edge. That's kind of neato.
+; (rewrite (resolve (Cons (GPath x z) gs))  (resolve (Cons (GPath y z) gs))
+; :when ((edge x y)))
+
+; One can also generate ground queries as a search
+; (rule ((nat x) (nat y)) (define (resolve (GAdd x y TZero)))
+ 
+ ; Can we skolemize y? (Skolem 1 gs) (Skolem 2 gs) etc. 
+ ; Or carry a fresh counter.
+ ; (QueryVar String)
+ ; But then what if we unify skolem in different branches.
+ ; We need a substitution operation.
+ ; We manually need to pattern match on (Skolem), manually unify 
+ ;  
+ ; The problem is I can't use egglog nondetermisn for prolog and egglog UF for prolog's uf at the same time.
+ ; If I explicitly model choice poibts, I could probably use egglog's union find
+ ; unification will still need t be explicit rules
+
+(define one (TSucc TZero))
+(define two (TSucc one))
+(define three (TSucc two))
+(define q1 (resolve (Cons (GAdd two one three) Nil)))
+(define q2 (resolve (Cons (GAdd two one two) Nil)))
+
+(define q3 (resolve (Cons (GLTE one three) Nil)))
+(define q4 (resolve (Cons (GLTE two one) Nil)))
+(run 10)
+(check (= q1 True))
+(check (!= q2 True))
+(check (= q3 True))
+(check (!= q4 True))
+;(head-body GZero x x)
+
+
