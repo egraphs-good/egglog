@@ -704,6 +704,8 @@ impl EGraph {
                 );
                 rule.search_time += rule_search_time;
                 searched.push((name, all_values));
+            } else {
+                self.saturated = false;
             }
         }
         let search_elapsed = search_start.elapsed();
@@ -720,6 +722,7 @@ impl EGraph {
                 rule.times_banned += 1;
                 rule.banned_until = iteration + (ban_length << rule.times_banned);
                 log::info!("Banning rule {name} for {ban_length} iterations, matched {len} times");
+                self.saturated = false;
                 continue;
             }
 
