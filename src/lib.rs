@@ -1033,7 +1033,12 @@ impl EGraph {
         })
     }
 
-    pub fn define(&mut self,  name: Symbol, expr: Expr,cost: Option<usize>) -> Result<ArcSort, Error> {
+    pub fn define(
+        &mut self,
+        name: Symbol,
+        expr: Expr,
+        cost: Option<usize>,
+    ) -> Result<ArcSort, Error> {
         let (sort, value) = self.eval_expr(&expr, None, true)?;
         self.declare_function(&FunctionDecl {
             name,
