@@ -285,6 +285,7 @@ pub struct EGraph {
     timestamp: u32,
     pub match_limit: usize,
     pub fact_directory: Option<PathBuf>,
+    pub seminaive: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -314,6 +315,7 @@ impl Default for EGraph {
             timestamp: 0,
             saturated: false,
             fact_directory: None,
+            seminaive: true,
         };
         egraph.add_sort(UnitSort::new("Unit".into()));
         egraph.add_sort(StringSort::new("String".into()));
@@ -706,6 +708,8 @@ impl EGraph {
                 );
                 rule.search_time += rule_search_time;
                 searched.push((name, all_values));
+            } else {
+                self.saturated = false;
             }
         }
         let search_elapsed = search_start.elapsed();
@@ -722,6 +726,7 @@ impl EGraph {
                 rule.times_banned += 1;
                 rule.banned_until = iteration + (ban_length << rule.times_banned);
                 log::info!("Banning rule {name} for {ban_length} iterations, matched {len} times");
+                self.saturated = false;
                 continue;
             }
 
@@ -734,8 +739,8 @@ impl EGraph {
                     log::warn!("Rule {} has matched {} times, bailing!", name, rule.matches);
                     break 'outer;
                 }
-                assert!(stack.is_empty());
                 // we can ignore results here
+                stack.clear();
                 let _ = self.run_actions(stack, values, &rule.program, true);
             }
 
