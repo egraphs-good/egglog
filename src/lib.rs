@@ -7,8 +7,8 @@ mod unionfind;
 mod util;
 mod value;
 
-use hashbrown::hash_map::Entry;
 use indexmap::map::Entry as IEntry;
+use IEntry as Entry;
 use instant::{Duration, Instant};
 use smallvec::SmallVec;
 use sort::*;
@@ -275,12 +275,12 @@ impl PrimitiveLike for SimplePrimitive {
 pub struct EGraph {
     egraphs: Vec<Self>,
     unionfind: UnionFind,
-    presorts: HashMap<Symbol, PreSort>,
-    sorts: HashMap<Symbol, Arc<dyn Sort>>,
-    primitives: HashMap<Symbol, Vec<Primitive>>,
-    functions: HashMap<Symbol, Function>,
-    rules: HashMap<Symbol, Rule>,
-    rulesets: HashMap<Symbol, Vec<(Symbol, Rule)>>,
+    presorts: IndexMap<Symbol, PreSort>,
+    sorts: IndexMap<Symbol, Arc<dyn Sort>>,
+    primitives: IndexMap<Symbol, Vec<Primitive>>,
+    functions: IndexMap<Symbol, Function>,
+    rules: IndexMap<Symbol, Rule>,
+    rulesets: IndexMap<Symbol, Vec<(Symbol, Rule)>>,
     saturated: bool,
     timestamp: u32,
     pub match_limit: usize,
