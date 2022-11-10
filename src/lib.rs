@@ -732,6 +732,7 @@ impl EGraph {
             let threshold = self.match_limit << rule.times_banned;
             if len > threshold {
                 rule.times_banned += 1;
+                rule.todo_timestamp = self.timestamp - 1;
                 rule.banned_until = iteration + (ban_length << rule.times_banned);
                 log::info!("Banning rule {name} for {ban_length} iterations, matched {len} times");
                 self.saturated = false;
