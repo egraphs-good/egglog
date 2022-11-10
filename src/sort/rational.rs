@@ -62,9 +62,7 @@ impl Sort for RationalSort {
             } else if b.is_zero() {
                 Some(R::one())
             } else if b.is_integer() {
-                if b > R::from(BigInt::from(10000000)) {
-                    None
-                } else if let Some(b) = b.to_usize() {
+                if let Some(b) = b.to_usize() {
                     num_traits::checked_pow(a, b)
                 } else {
                     // TODO handle negative powers
