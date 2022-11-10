@@ -283,6 +283,7 @@ pub struct EGraph {
     saturated: bool,
     timestamp: u32,
     pub match_limit: usize,
+    pub node_limit: usize,
     pub fact_directory: Option<PathBuf>,
     pub seminaive: bool,
 }
@@ -310,6 +311,7 @@ impl Default for EGraph {
             primitives: Default::default(),
             presorts: Default::default(),
             match_limit: 10_000_000,
+            node_limit: 100_000_000,
             timestamp: 0,
             saturated: false,
             fact_directory: None,
@@ -632,6 +634,14 @@ impl EGraph {
             self.timestamp += 1;
             if self.saturated {
                 log::info!("Breaking early at iteration {}!", i);
+                break;
+            }
+            if self.num_tuples() > self.node_limit {
+                log::warn!(
+                    "Node limit reached at iteration {}, {} nodes. Stopping!",
+                    i,
+                    self.num_tuples()
+                );
                 break;
             }
         }
