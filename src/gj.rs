@@ -289,6 +289,11 @@ impl EGraph {
             }
         }
 
+        for info in vars.values_mut() {
+            info.occurences.sort_unstable();
+            info.occurences.dedup();
+        }
+
         let relation_sizes: Vec<usize> = atoms
             .iter()
             .zip(timestamp_ranges)
