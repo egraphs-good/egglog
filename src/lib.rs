@@ -702,10 +702,17 @@ impl EGraph {
         for (&name, rule) in rules.iter_mut() {
             let mut all_values = vec![];
             if rule.banned_until <= iteration {
+                let mut fuel = self.match_limit << rule.times_banned;
                 let rule_search_start = Instant::now();
                 self.run_query(&rule.query, rule.todo_timestamp, |values| {
                     assert_eq!(values.len(), rule.query.vars.len());
                     all_values.extend_from_slice(values);
+                    if fuel > 0 {
+                        fuel -= 1;
+                        Ok(())
+                    } else {
+                        Err(())
+                    }
                 });
                 let rule_search_time = rule_search_start.elapsed();
                 log::trace!(
@@ -730,9 +737,10 @@ impl EGraph {
             let len = all_values.len() / n;
             let threshold = self.match_limit << rule.times_banned;
             if len > threshold {
+                let ban_length = ban_length << rule.times_banned;
                 rule.times_banned += 1;
-                rule.banned_until = iteration + (ban_length << rule.times_banned);
-                log::info!("Banning rule {name} for {ban_length} iterations, matched {len} times");
+                rule.banned_until = iteration + ban_length;
+                log::info!("Banning rule {name} for {ban_length} iterations, matched {len} > {threshold} times");
                 self.saturated = false;
                 continue;
             }
