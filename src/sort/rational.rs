@@ -3,7 +3,7 @@ use num_traits::{CheckedAdd, CheckedDiv, CheckedMul, CheckedSub, One, Signed, To
 use std::sync::Mutex;
 use num::BigInt;
 
-type R = num_rational::BigRational;
+type R = num_rational::Rational64;
 use crate::{ast::Literal, util::IndexSet};
 
 use super::*;
