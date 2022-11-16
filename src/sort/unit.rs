@@ -39,6 +39,13 @@ impl IntoSort for () {
     }
 }
 
+impl FromSort for () {
+    type Sort = UnitSort;
+    fn load(_sort: &Self::Sort, value: &Value) -> Self {
+        ()
+    }
+}
+
 pub struct NotEqualPrimitive {
     unit: ArcSort,
 }
