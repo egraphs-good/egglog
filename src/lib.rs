@@ -798,7 +798,7 @@ impl EGraph {
         self.add_rule_with_name(name, rule)
     }
 
-    fn eval_actions(&mut self, actions: &[Action]) -> Result<(), Error> {
+    pub fn eval_actions(&mut self, actions: &[Action]) -> Result<(), Error> {
         let types = Default::default();
         let program = self
             .compile_actions(&types, actions)
