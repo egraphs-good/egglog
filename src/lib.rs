@@ -1058,7 +1058,11 @@ impl EGraph {
 
     // Extract an expression from the current state, returning the cost, the extracted expression and some number
     // of other variants, if variants is not zero.
-    pub fn extract_expr(&mut self, e: Expr, variants: usize) -> Result<(usize, Expr, Vec<Expr>), Error> {
+    pub fn extract_expr(
+        &mut self,
+        e: Expr,
+        variants: usize,
+    ) -> Result<(usize, Expr, Vec<Expr>), Error> {
         self.rebuild();
         let (_t, value) = self.eval_expr(&e, None, true)?;
         let (cost, expr) = self.extract(value);
