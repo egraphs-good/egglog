@@ -19,6 +19,8 @@ enum Instr<'a> {
     },
 }
 
+type Result = std::result::Result<(), ()>;
+
 struct Program<'a>(Vec<Instr<'a>>);
 
 impl<'a> std::fmt::Display for Program<'a> {
@@ -67,9 +69,9 @@ impl<'b> Context<'b> {
         Some((ctx, program))
     }
 
-    fn eval<F>(&mut self, tries: &mut [&LazyTrie], program: &[Instr], f: &mut F)
+    fn eval<F>(&mut self, tries: &mut [&LazyTrie], program: &[Instr], f: &mut F) -> Result
     where
-        F: FnMut(&[Value]),
+        F: FnMut(&[Value]) -> Result,
     {
         let (instr, program) = match program.split_first() {
             None => {
@@ -88,8 +90,9 @@ impl<'b> Context<'b> {
                     [(j, access)] => tries[*j].for_each(access, |value, trie| {
                         let old_trie = std::mem::replace(&mut tries[*j], trie);
                         self.tuple[*value_idx] = value;
-                        self.eval(tries, program, f);
+                        self.eval(tries, program, f)?;
                         tries[*j] = old_trie;
+                        Ok(())
                     }),
                     [a, b] => {
                         let (a, b) = if tries[a.0].len() <= tries[b.0].len() {
@@ -102,10 +105,11 @@ impl<'b> Context<'b> {
                                 let old_ta = std::mem::replace(&mut tries[a.0], ta);
                                 let old_tb = std::mem::replace(&mut tries[b.0], tb);
                                 self.tuple[*value_idx] = value;
-                                self.eval(tries, program, f);
+                                self.eval(tries, program, f)?;
                                 tries[a.0] = old_ta;
                                 tries[b.0] = old_tb;
                             }
+                            Ok(())
                         })
                     }
                     _ => {
@@ -123,15 +127,15 @@ impl<'b> Context<'b> {
                                     if let Some(t) = tries[*j].get(access, value) {
                                         new_tries[*j] = t;
                                     } else {
-                                        return;
+                                        return Ok(());
                                     }
                                 }
                             }
 
                             // at this point, new_tries is ready to go
                             self.tuple[*value_idx] = value;
-                            self.eval(&mut new_tries, program, f);
-                        });
+                            self.eval(&mut new_tries, program, f)
+                        })
                     }
                 }
             }
@@ -153,19 +157,21 @@ impl<'b> Context<'b> {
                         AtomTerm::Var(v) => {
                             let i = self.query.vars.get_index_of(v).unwrap();
                             if *check && self.tuple[i] != res {
-                                return;
+                                return Ok(());
                             }
                             self.tuple[i] = res;
                         }
                         AtomTerm::Value(val) => {
                             assert!(check);
                             if val != &res {
-                                return;
+                                return Ok(());
                             }
                         }
                     }
-                    self.eval(tries, program, f);
+                    self.eval(tries, program, f)?;
                 }
+
+                Ok(())
             }
         }
     }
@@ -289,6 +295,11 @@ impl EGraph {
             }
         }
 
+        for info in vars.values_mut() {
+            info.occurences.sort_unstable();
+            info.occurences.dedup();
+        }
+
         let relation_sizes: Vec<usize> = atoms
             .iter()
             .zip(timestamp_ranges)
@@ -394,12 +405,12 @@ impl EGraph {
 
     pub(crate) fn run_query<F>(&self, cq: &CompiledQuery, timestamp: u32, mut f: F)
     where
-        F: FnMut(&[Value]),
+        F: FnMut(&[Value]) -> Result,
     {
         let has_atoms = !cq.query.atoms.is_empty();
 
         if has_atoms {
-            let do_seminaive = true;
+            let do_seminaive = self.seminaive;
             // for the later atoms, we consider everything
             let mut timestamp_ranges = vec![0..u32::MAX; cq.query.atoms.len()];
             for (atom_i, atom) in cq.query.atoms.iter().enumerate() {
@@ -419,7 +430,7 @@ impl EGraph {
                     );
                     let tries = LazyTrie::make_initial_vec(cq.query.atoms.len());
                     let mut trie_refs = tries.iter().collect::<Vec<_>>();
-                    ctx.eval(&mut trie_refs, &program.0, &mut f);
+                    ctx.eval(&mut trie_refs, &program.0, &mut f).unwrap_or(());
                     log::debug!("Matched {} times", ctx.matches);
                 }
 
@@ -434,7 +445,7 @@ impl EGraph {
         } else if let Some((mut ctx, program)) = Context::new(self, cq, &[]) {
             let tries = LazyTrie::make_initial_vec(cq.query.atoms.len());
             let mut trie_refs = tries.iter().collect::<Vec<_>>();
-            ctx.eval(&mut trie_refs, &program.0, &mut f)
+            ctx.eval(&mut trie_refs, &program.0, &mut f).unwrap_or(());
         }
     }
 }
@@ -471,12 +482,17 @@ impl LazyTrie {
         unsafe { &*self.0.get() }
     }
 
-    fn for_each<'a>(&'a self, access: &TrieAccess, mut f: impl FnMut(Value, &'a LazyTrie)) {
+    fn for_each<'a>(
+        &'a self,
+        access: &TrieAccess,
+        mut f: impl FnMut(Value, &'a LazyTrie) -> Result,
+    ) -> Result {
         match self.force(access) {
             LazyTrieInner::Sparse(m) => {
                 for (k, v) in m {
-                    f(*k, v)
+                    f(*k, v)?;
                 }
+                Ok(())
             }
             LazyTrieInner::Delayed(_) => unreachable!(),
         }

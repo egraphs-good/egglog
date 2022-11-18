@@ -1,0 +1,99 @@
+; Resolution theorem proving
+; 
+; Traditional resolution theorem provers maintain a clause database
+; of formulas in Conjunction Normal Form (CNF a big And of Ors).
+; Each clause is a set of positive and negative literals
+; The prover saturates this set by taking two clauses 
+; {a}\/c1  {not a}\/c2 and creating a new clause c1 \/ c2.
+; Clauses also are pruned by simplications, unit propagation,
+; and subsumption.
+; These systems use sophisticated term indexing to find matching clauses
+
+; A natural question is whether egglog's saturation and term indexing gives
+; a leg up towards building one of these systems. A programmable one even,
+; with built in support for equality reasoning
+
+; Resolution is provided by a join
+; unit propagation is an equation solving process and egraph substitution
+; Clause Simplification is provided by rewrite rules
+
+; This encoding seems about right but is unsatisfying
+; Using AC to encode the set nature of clauses is inefficient
+
+; An important aspect of these provers that seems challenging to encode shallowly
+; is that the match also occurs modulo _unification_.
+; The unification variables of each clause are not globally scoped, really
+; they are scoped outside the body of each clase in an implicit \forall
+; This encoding as it stands really only supports ground atoms modulo equality
+
+(datatype Bool (True) (False))
+(function or (Bool Bool) Bool)
+(function neg (Bool) Bool)
+
+; clauses are assumed in the normal form (or a (or b (or c False)))
+
+(set (neg False) True)
+(set (neg True) False)
+
+; "Solving" negation equations
+(rule ((= (neg p) True)) ((union p False)))
+(rule ((= (neg p) False)) ((union p True)))
+
+; canonicalize associtivity. "append" for clauses
+; terminate with false
+(rewrite (or (or a  b) c) (or a (or b c)))
+; commutativity
+(rewrite (or a (or b c)) (or b (or a c)))
+
+;absoprtion
+(rewrite (or a (or a b)) (or a b))
+(rewrite (or a (or (neg a) b)) True)
+
+; simplification
+(rewrite (or False a) a)
+(rewrite (or a False) a)
+(rewrite (or True a) True)
+(rewrite (or a True) True)
+
+; unit propagation
+; This is kind of interesting actually.
+; Looks a bit like equation solving
+
+; The following is not valid egglog but could be?
+;(rewrite p True    
+;    :when ((= True (or p False))))
+
+(rule ((= True (or p False))) ((union p True)))
+
+; resolution
+; This counts on commutativity to bubble everything possible up to the front of the clause.
+(rule ((= True (or a as)) (= True (or (neg a) bs)))
+      ((set (or as bs) True)))
+
+; example predicate
+(function p (i64) Bool)
+(define p0 (p 0))
+(define p1 (p 1))
+(define p2 (p 2))
+;(set (or p0 (or p1 (or p2 False))) True)
+;(set (or (neg p0) (or p1 (or (neg p2) False))) True)
+(set (or p1 (or (neg p2) False)) True)
+(set (or p2 (or (neg p0) False)) True)
+(set (or p0 (or (neg p1) False)) True)
+(union p1 False)
+(set (or (neg p0) (or p1 (or p2 False))) True)
+(run 10)
+(print or)
+(print p)
+(print True)
+(print False)
+(check (!= True False))
+(check (= p0 False))
+(check (= p2 False))
+
+; we could turn the original axioms into _patterns_  in all possible directions.
+; Which is kind of compelling
+; (rule ((or (pat x)))  )
+; or let a unification expansion happen and use thos
+
+
