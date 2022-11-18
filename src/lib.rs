@@ -882,13 +882,9 @@ impl EGraph {
             Command::Extract { e, variants } => {
                 if should_run {
                     // TODO typecheck
-                    self.rebuild();
-                    let (_t, value) = self.eval_expr(&e, None, true)?;
-                    log::info!("Extracting {e} at {value:?}");
-                    let (cost, expr) = self.extract(value);
+                    let (cost, expr, exprs) = self.extract_expr(e, variants)?;
                     let mut msg = format!("Extracted with cost {cost}: {expr}");
                     if variants > 0 {
-                        let exprs = self.extract_variants(value, variants);
                         let line = "\n    ";
                         let v_exprs = ListDisplay(&exprs, line);
                         write!(msg, "\nVariants of {expr}:{line}{v_exprs}").unwrap();
@@ -1031,6 +1027,20 @@ impl EGraph {
                 format!("Read {} facts into {name} from '{file}'.", actions.len())
             }
         })
+    }
+
+    // Extract an expression from the current state, returning the cost, the extracted expression and some number
+    // of other variants, if variants is not zero.
+    pub fn extract_expr(&mut self, e: Expr, variants: usize) -> Result<(usize, Expr, Vec<Expr>), Error> {
+        self.rebuild();
+        let (_t, value) = self.eval_expr(&e, None, true)?;
+        let (cost, expr) = self.extract(value);
+        let exprs = if variants > 0 {
+            self.extract_variants(value, variants)
+        } else {
+            vec![]
+        };
+        Ok((cost, expr, exprs))
     }
 
     pub fn define(
