@@ -24,7 +24,6 @@ fn main() {
 
     if args.inputs.is_empty() {
         let stdin = io::stdin();
-        log::info!("Welcome to Egglog!");
         let mut egraph = EGraph::default();
         for line in stdin.lock().lines() {
             let line = line.unwrap_or_else(|_| panic!("Failed to read line from stdout"));

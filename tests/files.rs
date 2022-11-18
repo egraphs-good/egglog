@@ -8,7 +8,7 @@ fn run(path: &Path) -> datatest_stable::Result<()> {
     match egraph.parse_and_run_program(&program) {
         Ok(msgs) => {
             for msg in msgs {
-                log::info!("  {}", msg);
+                //log::info!("  {}", msg);
             }
         }
         Err(err) => panic!("Top level error: {err}"),

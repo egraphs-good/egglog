@@ -630,12 +630,12 @@ impl EGraph {
 
             let rebuild_start = Instant::now();
             let updates = self.rebuild();
-            log::info!("database size: {}", self.num_tuples());
-            log::info!("Made {updates} updates",);
+            //log::info!("database size: {}", self.num_tuples());
+            //log::info!("Made {updates} updates",);
             rebuild_time += rebuild_start.elapsed();
             self.timestamp += 1;
             if self.saturated {
-                log::info!("Breaking early at iteration {}!", i);
+                //log::info!("Breaking early at iteration {}!", i);
                 break;
             }
             if self.num_tuples() > self.node_limit {
@@ -735,7 +735,7 @@ impl EGraph {
             if len > threshold {
                 rule.times_banned += 1;
                 rule.banned_until = iteration + (ban_length << rule.times_banned);
-                log::info!("Banning rule {name} for {ban_length} iterations, matched {len} times");
+                //log::info!("Banning rule {name} for {ban_length} iterations, matched {len} times");
                 self.saturated = false;
                 continue;
             }
@@ -908,7 +908,7 @@ impl EGraph {
                         rt / total,
                     )
                 } else {
-                    log::info!("Skipping running!");
+                    //log::info!("Skipping running!");
                     format!("Skipped run {limit}.")
                 }
             }
@@ -917,9 +917,10 @@ impl EGraph {
                     // TODO typecheck
                     self.rebuild();
                     let (_t, value) = self.eval_expr(&e, None, true)?;
-                    log::info!("Extracting {e} at {value:?}");
+                    //log::info!("Extracting {e} at {value:?}");
                     let (cost, expr) = self.extract(value);
                     let mut msg = format!("Extracted with cost {cost}: {expr}");
+                    println!("{}", expr);
                     if variants > 0 {
                         let exprs = self.extract_variants(value, variants);
                         let line = "\n    ";
@@ -1050,7 +1051,7 @@ impl EGraph {
                     s => panic!("Unsupported type {} for input", s),
                 }
 
-                log::info!("Opening file '{:?}'...", filename);
+                //log::info!("Opening file '{:?}'...", filename);
                 let mut f = File::open(filename).unwrap();
                 let mut contents = String::new();
                 f.read_to_string(&mut contents).unwrap();
@@ -1093,7 +1094,7 @@ impl EGraph {
 
         for command in program {
             let msg = self.run_command(command, should_run)?;
-            log::info!("{}", msg);
+            //log::info!("{}", msg);
             msgs.push(msg);
         }
 
