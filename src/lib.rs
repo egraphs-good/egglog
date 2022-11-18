@@ -550,7 +550,7 @@ impl EGraph {
         }
     }
 
-    fn print_function(&mut self, sym: Symbol, n: usize) -> Result<String, Error> {
+    pub fn print_function(&mut self, sym: Symbol, n: usize) -> Result<String, Error> {
         let f = self.functions.get(&sym).ok_or(TypeError::Unbound(sym))?;
         let schema = f.schema.clone();
         let nodes = f
@@ -948,9 +948,7 @@ impl EGraph {
                 todo!()
             }
             Command::Clear => {
-                for f in self.functions.values_mut() {
-                    f.nodes.clear();
-                }
+                self.clear();
                 "Cleared.".into()
             }
             Command::Push(n) => {
@@ -1027,6 +1025,12 @@ impl EGraph {
                 format!("Read {} facts into {name} from '{file}'.", actions.len())
             }
         })
+    }
+
+    pub fn clear(&mut self) {
+        for f in self.functions.values_mut() {
+            f.nodes.clear();
+        }
     }
 
     // Extract an expression from the current state, returning the cost, the extracted expression and some number
