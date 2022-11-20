@@ -41,7 +41,7 @@ impl IntoSort for () {
 
 impl FromSort for () {
     type Sort = UnitSort;
-    fn load(_sort: &Self::Sort, value: &Value) -> Self {
+    fn load(_sort: &Self::Sort, _value: &Value) -> Self {
         ()
     }
 }

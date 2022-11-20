@@ -13,6 +13,8 @@ mod i64;
 pub use self::i64::*;
 mod map;
 pub use map::*;
+mod z3_sort;
+pub use z3_sort::*;
 
 use crate::*;
 
