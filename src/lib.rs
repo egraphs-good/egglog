@@ -332,7 +332,7 @@ pub struct NotFoundError(Expr);
 
 impl EGraph {
     pub fn add_sort<S: Sort + 'static>(&mut self, sort: S) {
-        self.add_arcsort(Arc::new(sort));
+        self.add_arcsort(Arc::new(sort)).unwrap()
     }
 
     pub fn push(&mut self) {
@@ -349,14 +349,16 @@ impl EGraph {
         }
     }
 
-    pub fn add_arcsort(&mut self, sort: ArcSort) {
-        match self.sorts.entry(sort.name()) {
-            Entry::Occupied(_) => panic!(),
+    pub fn add_arcsort(&mut self, sort: ArcSort) -> Result<(), Error> {
+        let name = sort.name();
+        match self.sorts.entry(name) {
+            Entry::Occupied(_) => Err(Error::SortAlreadyBound(name)),
             Entry::Vacant(e) => {
                 e.insert(sort.clone());
                 sort.register_primitives(self);
+                Ok(())
             }
-        };
+        }
     }
 
     fn get_sort<S: Sort + Send + Sync>(&self) -> Arc<S> {
@@ -467,15 +469,23 @@ impl EGraph {
         new_unions
     }
 
-    pub fn declare_sort(&mut self, name: impl Into<Symbol>) -> Result<(), Error> {
+    pub fn declare_sort(
+        &mut self,
+        name: impl Into<Symbol>,
+        presort_and_args: Option<(Symbol, &[Expr])>,
+    ) -> Result<(), Error> {
         let name = name.into();
-        match self.sorts.entry(name) {
-            Entry::Occupied(_) => Err(Error::SortAlreadyBound(name)),
-            Entry::Vacant(e) => {
-                e.insert(Arc::new(EqSort { name }));
-                Ok(())
+        let sort = match presort_and_args {
+            Some((presort, args)) => {
+                let mksort = self
+                    .presorts
+                    .get(&presort)
+                    .ok_or(Error::PresortNotFound(presort))?;
+                mksort(self, name, args)?
             }
-        }
+            None => Arc::new(EqSort { name }),
+        };
+        self.add_arcsort(sort)
     }
 
     pub fn declare_function(&mut self, decl: &FunctionDecl) -> Result<(), Error> {
@@ -850,14 +860,14 @@ impl EGraph {
     fn run_command(&mut self, command: Command, should_run: bool) -> Result<String, Error> {
         Ok(match command {
             Command::Datatype { name, variants } => {
-                self.declare_sort(name)?;
+                self.declare_sort(name, None)?;
                 for variant in variants {
                     self.declare_constructor(variant, name)?;
                 }
                 format!("Declared datatype {name}.")
             }
             Command::Sort(name, presort, args) => {
-                self.declare_sort_alias(presort, name, &args)?;
+                self.declare_sort(name, Some((presort, &args)))?;
                 format!(
                     "Declared sort {name} = ({presort} {})",
                     ListDisplay(&args, " ")
@@ -1046,19 +1056,6 @@ impl EGraph {
         })
     }
 
-    pub fn declare_sort_alias(
-        &mut self,
-        name: Symbol,
-        presort: Symbol,
-        args: &[Expr],
-    ) -> Result<(), Error> {
-        assert!(!self.sorts.contains_key(&name));
-        let mksort = self.presorts[&presort];
-        let sort = mksort(self, name, args)?;
-        self.add_arcsort(sort);
-        Ok(())
-    }
-
     pub fn clear(&mut self) {
         for f in self.functions.values_mut() {
             f.nodes.clear();
@@ -1154,6 +1151,8 @@ pub enum Error {
     CheckError(Value, Value),
     #[error("Sort {0} already declared.")]
     SortAlreadyBound(Symbol),
+    #[error("Presort {0} not found.")]
+    PresortNotFound(Symbol),
     #[error("Tried to pop too much")]
     Pop,
 }
