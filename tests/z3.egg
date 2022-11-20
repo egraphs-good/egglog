@@ -1,9 +1,12 @@
 (define t (z3true))
 (define f (z3false))
 (define tandt (and t (not t)))
+(define unsat "unsat")
 (define res (check-sat tandt))
 
 (print t)
 (print f)
 (print tandt)
 (print res)
+(print unsat)
+(check (= res "unsat"))
