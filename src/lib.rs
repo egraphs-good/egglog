@@ -318,13 +318,11 @@ impl Default for EGraph {
             seminaive: true,
         };
         egraph.add_sort(UnitSort::new("Unit".into()));
-        egraph.add_sort(StringSort::new("String".into()));
+        let string_sort = Arc::new(StringSort::new("String".into()));
+        egraph.add_arcsort(string_sort.clone());
         egraph.add_sort(I64Sort::new("i64".into()));
         egraph.add_sort(RationalSort::new("Rational".into()));
-        egraph.add_sort(Z3Sort::new(
-            "Z3Sort".into(),
-            StringSort::new("String".into()),
-        ));
+        egraph.add_sort(Z3Sort::new("Z3Sort".into(), string_sort));
         egraph.presorts.insert("Map".into(), MapSort::make_sort);
         egraph
     }

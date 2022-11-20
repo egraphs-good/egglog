@@ -33,7 +33,7 @@ There are a couple choices:
 pub struct Z3Sort {
     name: Symbol,
     ctx: Arc<z3::Context>,
-    stringsort: StringSort,
+    stringsort: Arc<StringSort>,
     asts: Mutex<IndexSet<z3::ast::Dynamic<'static>>>,
 }
 
@@ -41,7 +41,7 @@ unsafe impl Send for Z3Sort {}
 unsafe impl Sync for Z3Sort {}
 
 impl Z3Sort {
-    pub fn new(name: Symbol, stringsort: StringSort) -> Self {
+    pub fn new(name: Symbol, stringsort: Arc<StringSort>) -> Self {
         let cfg = z3::Config::new();
         Self {
             name,
@@ -228,9 +228,9 @@ impl PrimitiveLike for Z3Check {
                 //
                 /* */
                 let res: &str = match res {
-                    z3::SatResult::Sat => "sat",
-                    z3::SatResult::Unsat => "unsat",
-                    z3::SatResult::Unknown => "unknown",
+                    z3::SatResult::Sat => "\"sat\"",
+                    z3::SatResult::Unsat => "\"unsat\"",
+                    z3::SatResult::Unknown => "\"unknown\"",
                 };
                 let res: Symbol = res.into();
                 res.store(&self.sort.stringsort)
@@ -251,29 +251,27 @@ impl Sort for Z3Sort {
         self
     }
 
-    #[rustfmt::skip]
     fn register_primitives(self: Arc<Self>, egraph: &mut EGraph) {
         egraph.add_primitive(Z3True {
             name: "z3true".into(),
             sort: self.clone(),
-        }); 
-        egraph.add_primitive(Z3False{
+        });
+        egraph.add_primitive(Z3False {
             name: "z3false".into(),
             sort: self.clone(),
-        }); 
-        egraph.add_primitive(Z3Not{
+        });
+        egraph.add_primitive(Z3Not {
             name: "not".into(),
             sort: self.clone(),
-        }); 
-        egraph.add_primitive(Z3And{
+        });
+        egraph.add_primitive(Z3And {
             name: "and".into(),
             sort: self.clone(),
-        }); 
-        egraph.add_primitive(Z3Check{
+        });
+        egraph.add_primitive(Z3Check {
             name: "check-sat".into(),
             sort: self,
-        }); 
-        
+        });
     }
 
     fn make_expr(&self, value: Value) -> Expr {
