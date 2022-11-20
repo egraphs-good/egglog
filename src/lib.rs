@@ -857,11 +857,7 @@ impl EGraph {
                 format!("Declared datatype {name}.")
             }
             Command::Sort(name, presort, args) => {
-                // TODO extract this into a function
-                assert!(!self.sorts.contains_key(&name));
-                let mksort = self.presorts[&presort];
-                let sort = mksort(self, name, &args)?;
-                self.add_arcsort(sort);
+                self.declare_sort_alias(presort, name, &args)?;
                 format!(
                     "Declared sort {name} = ({presort} {})",
                     ListDisplay(&args, " ")
@@ -1048,6 +1044,19 @@ impl EGraph {
                 format!("Read {} facts into {name} from '{file}'.", actions.len())
             }
         })
+    }
+
+    pub fn declare_sort_alias(
+        &mut self,
+        name: Symbol,
+        presort: Symbol,
+        args: &[Expr],
+    ) -> Result<(), Error> {
+        assert!(!self.sorts.contains_key(&name));
+        let mksort = self.presorts[&presort];
+        let sort = mksort(self, name, args)?;
+        self.add_arcsort(sort);
+        Ok(())
     }
 
     pub fn clear(&mut self) {
