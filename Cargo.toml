@@ -31,6 +31,7 @@ regex = "1"
 # binary dependencies
 clap = {version = "4", features = ["derive"]}
 env_logger = "0.9"
+z3 = "0.11.2"
 
 [build-dependencies]
 lalrpop = "0.19.7"
