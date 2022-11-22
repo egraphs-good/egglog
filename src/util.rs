@@ -10,8 +10,8 @@ pub(crate) type BuildHasher = std::hash::BuildHasherDefault<rustc_hash::FxHasher
 pub(crate) type HashMap<K, V> = hashbrown::HashMap<K, V, BuildHasher>;
 pub(crate) type HashSet<K> = hashbrown::HashSet<K, BuildHasher>;
 
-pub(crate) type IndexMap<K, V> = indexmap::IndexMap<K, V, BuildHasher>;
-pub(crate) type IndexSet<K> = indexmap::IndexSet<K, BuildHasher>;
+pub type IndexMap<K, V> = indexmap::IndexMap<K, V, BuildHasher>;
+pub type IndexSet<K> = indexmap::IndexSet<K, BuildHasher>;
 
 pub(crate) fn concat_vecs<T>(to: &mut Vec<T>, mut from: Vec<T>) {
     if to.len() < from.len() {

@@ -4,7 +4,7 @@ mod gj;
 pub mod sort;
 mod typecheck;
 mod unionfind;
-mod util;
+pub mod util;
 mod value;
 
 use hashbrown::hash_map::Entry;
@@ -361,7 +361,7 @@ impl EGraph {
         }
     }
 
-    fn get_sort<S: Sort + Send + Sync>(&self) -> Arc<S> {
+    pub fn get_sort<S: Sort + Send + Sync>(&self) -> Arc<S> {
         for sort in self.sorts.values() {
             let sort = sort.clone().as_arc_any();
             if let Ok(sort) = Arc::downcast(sort) {
@@ -373,7 +373,7 @@ impl EGraph {
         panic!("Failed to lookup sort: {}", std::any::type_name::<S>());
     }
 
-    fn add_primitive(&mut self, prim: impl Into<Primitive>) {
+    pub fn add_primitive(&mut self, prim: impl Into<Primitive>) {
         let prim = prim.into();
         self.primitives.entry(prim.name()).or_default().push(prim);
     }
