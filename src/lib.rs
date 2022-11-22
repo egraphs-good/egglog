@@ -361,7 +361,7 @@ impl EGraph {
         }
     }
 
-    fn get_sort<S: Sort + Send + Sync>(&self) -> Arc<S> {
+    pub fn get_sort<S: Sort + Send + Sync>(&self) -> Arc<S> {
         for sort in self.sorts.values() {
             let sort = sort.clone().as_arc_any();
             if let Ok(sort) = Arc::downcast(sort) {
