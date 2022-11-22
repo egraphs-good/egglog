@@ -373,7 +373,7 @@ impl EGraph {
         panic!("Failed to lookup sort: {}", std::any::type_name::<S>());
     }
 
-    fn add_primitive(&mut self, prim: impl Into<Primitive>) {
+    pub fn add_primitive(&mut self, prim: impl Into<Primitive>) {
         let prim = prim.into();
         self.primitives.entry(prim.name()).or_default().push(prim);
     }
