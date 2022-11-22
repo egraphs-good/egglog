@@ -4,7 +4,7 @@ mod gj;
 pub mod sort;
 mod typecheck;
 mod unionfind;
-mod util;
+pub mod util;
 mod value;
 
 use hashbrown::hash_map::Entry;
