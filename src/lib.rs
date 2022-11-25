@@ -16,9 +16,10 @@ use thiserror::Error;
 
 use ast::*;
 
+use std::borrow::Borrow;
 use std::fmt::Write;
 use std::fs::File;
-use std::hash::Hash;
+use std::hash::{Hash, Hasher};
 use std::io::Read;
 use std::ops::{Deref, Range};
 use std::path::PathBuf;
@@ -39,12 +40,67 @@ use crate::typecheck::TypeError;
 
 type ValueVec = SmallVec<[Value; 3]>;
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct Input {
+    data: ValueVec,
+}
+
+impl Input {
+    fn new(data: ValueVec) -> Input {
+        Input { data }
+    }
+
+    fn data(&self) -> &[Value] {
+        self.data.as_slice()
+    }
+
+    fn iter_mut(&mut self) -> impl Iterator<Item = &mut Value> {
+        self.data.iter_mut()
+    }
+
+    fn live(&self) -> bool {
+        true
+    }
+}
+
+/// A custom type used to look elements up in the map. InputRefs can be created
+/// from a slice of values without copying data, and they can serve as keys in
+/// the map that only find live elements.
+#[derive(Eq)]
+#[repr(transparent)]
+struct InputRef(pub [Value]);
+
+impl InputRef {
+    fn from_slice(vals: &[Value]) -> &InputRef {
+        // SAFETY: InputRef is repr(transparent)
+        unsafe { std::mem::transmute::<&[Value], &InputRef>(vals) }
+    }
+}
+
+impl PartialEq for InputRef {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl Hash for InputRef {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.hash(state)
+    }
+}
+
+impl Borrow<InputRef> for Input {
+    fn borrow(&self) -> &InputRef {
+        InputRef::from_slice(self.data())
+    }
+}
+
 #[derive(Clone)]
 pub struct Function {
     decl: FunctionDecl,
     schema: ResolvedSchema,
     merge: MergeFn,
-    nodes: IndexMap<ValueVec, TupleOutput>,
+    nodes: IndexMap<Input, TupleOutput>,
     updates: usize,
 }
 
@@ -71,7 +127,7 @@ struct ResolvedSchema {
 
 impl Function {
     pub fn insert(&mut self, inputs: ValueVec, value: Value, timestamp: u32) -> Option<Value> {
-        match self.nodes.entry(inputs) {
+        match self.nodes.entry(Input::new(inputs)) {
             IEntry::Occupied(mut entry) => {
                 let old = entry.get_mut();
                 if old.value == value {
@@ -387,7 +443,10 @@ impl EGraph {
         #[cfg(debug_assertions)]
         for (name, function) in self.functions.iter() {
             for (inputs, output) in function.nodes.iter() {
-                for input in inputs {
+                if !inputs.live() {
+                    continue;
+                }
+                for input in inputs.data() {
                     assert_eq!(
                         input,
                         &self.bad_find_value(*input),
@@ -579,8 +638,11 @@ impl EGraph {
         let mut buf = String::new();
         let s = &mut buf;
         for (ins, out) in nodes {
+            if !ins.live() {
+                continue;
+            }
             write!(s, "({}", sym).unwrap();
-            for (a, t) in ins.iter().zip(&schema.input) {
+            for (a, t) in ins.data().iter().zip(&schema.input) {
                 s.push(' ');
                 let e = if t.is_eq_sort() {
                     self.extract(*a).1

@@ -654,7 +654,8 @@ impl EGraph {
                         }
                     }
 
-                    let value = if let Some(out) = function.nodes.get(values) {
+                    let value = if let Some(out) = function.nodes.get(InputRef::from_slice(values))
+                    {
                         out.value
                     } else if make_defaults {
                         let ts = self.timestamp;
@@ -762,7 +763,7 @@ impl EGraph {
                     let function = self.functions.get_mut(f).unwrap();
                     let new_len = stack.len() - function.schema.input.len();
                     let args = &stack[new_len..];
-                    let old_value = function.nodes.remove(args);
+                    let old_value = function.nodes.remove(InputRef::from_slice(args));
                     if old_value.is_some() {
                         self.saturated = false;
                     }

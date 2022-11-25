@@ -549,26 +549,26 @@ impl<'a> TrieAccess<'a> {
         if idxs.is_empty() {
             if self.column < arity {
                 for (i, (tup, out)) in self.function.nodes.iter().enumerate() {
-                    insert(i, tup, out, tup[self.column])
+                    insert(i, tup.data(), out, tup.data()[self.column])
                 }
             } else {
                 assert_eq!(self.column, arity);
                 for (i, (tup, out)) in self.function.nodes.iter().enumerate() {
-                    insert(i, tup, out, out.value);
+                    insert(i, tup.data(), out, out.value);
                 }
             };
         } else if self.column < arity {
             for idx in idxs {
                 let i = *idx as usize;
                 let (tup, out) = &self.function.nodes.get_index(i).unwrap();
-                insert(i, tup, out, tup[self.column])
+                insert(i, tup.data(), out, tup.data()[self.column])
             }
         } else {
             assert_eq!(self.column, arity);
             for idx in idxs {
                 let i = *idx as usize;
                 let (tup, out) = &self.function.nodes.get_index(i).unwrap();
-                insert(i, tup, out, out.value)
+                insert(i, tup.data(), out, out.value)
             }
         }
 

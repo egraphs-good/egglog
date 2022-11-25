@@ -49,7 +49,10 @@ impl EGraph {
                     .iter()
                     .filter_map(move |(inputs, output)| {
                         (&output.value == output_value).then(|| {
-                            let node = Node { sym, inputs };
+                            let node = Node {
+                                sym,
+                                inputs: inputs.data(),
+                            };
                             ext.expr_from_node(&node)
                         })
                     })
@@ -120,6 +123,7 @@ impl<'a> Extractor<'a> {
                 let func = &self.egraph.functions[&sym];
                 if func.schema.output.is_eq_sort() {
                     for (inputs, output) in &func.nodes {
+                        let inputs = inputs.data();
                         if let Some(new_cost) = self.node_total_cost(func, inputs) {
                             let make_new_pair = || (new_cost, Node { sym, inputs });
 
