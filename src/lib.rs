@@ -229,6 +229,11 @@ impl Function {
     }
 
     fn maybe_rehash(&mut self) {
+        // Note for future: this is very much a necessary step. We see major
+        // slowdowns in some tests without this code in place, but it also
+        // removes old versions of tuples. The slowdown happens because certain
+        // operations (rebuilding, index construction) still need to do O(n)
+        // scans, where 'n' is the number of tuples, live or stale.
         if self.n_stale > (self.nodes.len() / 4) {
             self.nodes.retain(|k, _| k.live());
             self.n_stale = 0;
