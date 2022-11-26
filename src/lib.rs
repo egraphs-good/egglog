@@ -1,7 +1,10 @@
 pub mod ast;
+mod binary_search;
 mod extract;
 mod gj;
 pub mod sort;
+#[cfg(test)]
+mod tests;
 mod typecheck;
 mod unionfind;
 pub mod util;
@@ -37,6 +40,7 @@ use gj::*;
 use unionfind::*;
 use util::*;
 
+use crate::binary_search::transform_range;
 use crate::typecheck::TypeError;
 
 type ValueVec = SmallVec<[Value; 3]>;
@@ -285,10 +289,8 @@ impl Function {
     }
 
     pub(crate) fn get_size(&self, range: &Range<u32>) -> usize {
-        self.nodes
-            .values()
-            .filter(|out| range.contains(&out.timestamp))
-            .count()
+        let indexes = transform_range(&self.nodes, |v| &v.timestamp, range);
+        indexes.end - indexes.start
     }
 }
 
