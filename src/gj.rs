@@ -548,12 +548,12 @@ impl<'a> TrieAccess<'a> {
 
         if idxs.is_empty() {
             if self.column < arity {
-                for (i, (tup, out)) in self.function.nodes.iter().enumerate() {
+                for (i, tup, out) in self.function.iter_timestamp_range(&self.timestamp_range) {
                     insert(i, tup.data(), out, tup.data()[self.column])
                 }
             } else {
                 assert_eq!(self.column, arity);
-                for (i, (tup, out)) in self.function.nodes.iter().enumerate() {
+                for (i, tup, out) in self.function.iter_timestamp_range(&self.timestamp_range) {
                     insert(i, tup.data(), out, out.value);
                 }
             };

@@ -241,6 +241,17 @@ impl Function {
         }
     }
 
+    pub(crate) fn iter_timestamp_range(
+        &self,
+        timestamps: &Range<u32>,
+    ) -> impl Iterator<Item = (usize, &Input, &TupleOutput)> {
+        let indexes = transform_range(&self.nodes, |v| &v.timestamp, timestamps);
+        indexes.map(|i| {
+            let (k, v) = self.nodes.get_index(i).unwrap();
+            (i, k, v)
+        })
+    }
+
     pub fn rebuild(&mut self, uf: &mut UnionFind, timestamp: u32) -> usize {
         if self.schema.input.iter().all(|s| !s.is_eq_sort()) && !self.schema.output.is_eq_sort() {
             return std::mem::take(&mut self.updates);
