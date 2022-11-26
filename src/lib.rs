@@ -8,8 +8,8 @@ pub mod util;
 mod value;
 
 use hashbrown::hash_map::Entry;
-use indexmap::map::Entry as IEntry;
 use instant::{Duration, Instant};
+use lazy_static::lazy_static;
 use smallvec::SmallVec;
 use sort::*;
 use thiserror::Error;
@@ -21,6 +21,7 @@ use std::fmt::Write;
 use std::fs::File;
 use std::hash::{Hash, Hasher};
 use std::io::Read;
+use std::iter::once;
 use std::ops::{Deref, Range};
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -40,26 +41,44 @@ use crate::typecheck::TypeError;
 
 type ValueVec = SmallVec<[Value; 3]>;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Eq)]
 struct Input {
     data: ValueVec,
+    /// The timestamp at which the given input became "stale"
+    stale_at: u32,
+    /// Counter used to ensure uniqueness
+    counter: u32,
+}
+
+impl Hash for Input {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.data.as_slice().hash(state);
+        self.stale_at.hash(state);
+        self.counter.hash(state);
+    }
+}
+
+impl PartialEq for Input {
+    fn eq(&self, other: &Self) -> bool {
+        self.data == other.data && self.stale_at == other.stale_at && self.counter == other.counter
+    }
 }
 
 impl Input {
     fn new(data: ValueVec) -> Input {
-        Input { data }
+        Input {
+            data,
+            stale_at: u32::MAX,
+            counter: 0,
+        }
     }
 
     fn data(&self) -> &[Value] {
         self.data.as_slice()
     }
 
-    fn iter_mut(&mut self) -> impl Iterator<Item = &mut Value> {
-        self.data.iter_mut()
-    }
-
     fn live(&self) -> bool {
-        true
+        self.stale_at == u32::MAX
     }
 }
 
@@ -85,13 +104,31 @@ impl PartialEq for InputRef {
 
 impl Hash for InputRef {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.hash(state)
+        self.0.hash(state);
+        // Only look for live values
+        u32::MAX.hash(state);
+        0.hash(state)
     }
 }
 
 impl Borrow<InputRef> for Input {
     fn borrow(&self) -> &InputRef {
-        InputRef::from_slice(self.data())
+        // Lookups via InputRef should never be able to "find" stale data.
+        lazy_static! {
+            pub static ref BOGUS: Vec<Value> = vec![Value::fake()];
+        }
+        // Warning: it's unclear if this is safe. We break the Borrow rules
+        // by doing this! We are probably better off building our own variant of
+        // IndexMap that allows us to insert "holes" or "tombstones." But we
+        // should only do that once we understand the full story on rollback
+        // support.
+        if self.live() {
+            InputRef::from_slice(self.data())
+        } else if self.data().is_empty() {
+            InputRef::from_slice(BOGUS.as_slice())
+        } else {
+            InputRef::from_slice(&[])
+        }
     }
 }
 
@@ -102,6 +139,8 @@ pub struct Function {
     merge: MergeFn,
     nodes: IndexMap<Input, TupleOutput>,
     updates: usize,
+    counter: usize,
+    n_stale: usize,
 }
 
 #[derive(Clone)]
@@ -127,26 +166,69 @@ struct ResolvedSchema {
 
 impl Function {
     pub fn insert(&mut self, inputs: ValueVec, value: Value, timestamp: u32) -> Option<Value> {
-        match self.nodes.entry(Input::new(inputs)) {
-            IEntry::Occupied(mut entry) => {
-                let old = entry.get_mut();
-                if old.value == value {
-                    Some(value)
-                } else {
-                    let saved = old.value;
-                    old.value = value;
-                    assert!(old.timestamp <= timestamp);
-                    old.timestamp = timestamp;
-                    self.updates += 1;
-                    debug_assert_ne!(saved, value);
-                    Some(saved)
-                }
-            }
-            IEntry::Vacant(entry) => {
-                entry.insert(TupleOutput { value, timestamp });
+        self.insert_internal(inputs, value, timestamp, true)
+    }
+    pub fn insert_internal(
+        &mut self,
+        inputs: ValueVec,
+        value: Value,
+        timestamp: u32,
+        maybe_rehash: bool,
+    ) -> Option<Value> {
+        let (index, old) = if let Some((index, _, old)) = self
+            .nodes
+            .get_full_mut(InputRef::from_slice(inputs.as_slice()))
+        {
+            if old.value == value {
+                return Some(value);
+            } else if old.timestamp == timestamp {
+                // Timestamps match, so we can update this value in-place.
+                //
+                // Note for Future: This has to change to support rollbacks,
+                // we'll have to think about whether it makes sense to have
+                // multiple values for the same tuple modified at the same
+                // timestamp. But we currently rely on this (e.g. to do merges
+                // during rebuild).
                 self.updates += 1;
-                None
+                let saved = old.value;
+                old.value = value;
+                return Some(saved);
+            } else {
+                self.updates += 1;
+                (index, old.value)
             }
+        } else {
+            self.nodes
+                .insert(Input::new(inputs), TupleOutput { value, timestamp });
+            self.updates += 1;
+            return None;
+        };
+        self.set_stale(index, timestamp);
+        self.nodes
+            .insert(Input::new(inputs), TupleOutput { value, timestamp });
+        if maybe_rehash {
+            self.maybe_rehash();
+        }
+        Some(old)
+    }
+
+    fn set_stale(&mut self, i: usize, ts: u32) {
+        debug_assert!(i < self.nodes.len());
+        let (mut inp, out) = self.nodes.swap_remove_index(i).unwrap();
+        debug_assert!(inp.live());
+        inp.stale_at = ts;
+        inp.counter = self.counter as u32;
+        self.counter += 1;
+        self.nodes.insert(inp, out);
+        self.n_stale += 1;
+        self.nodes.swap_indices(i, self.nodes.len() - 1);
+    }
+
+    fn maybe_rehash(&mut self) {
+        if self.n_stale > (self.nodes.len() / 4) {
+            self.nodes.retain(|k, _| k.live());
+            self.n_stale = 0;
+            self.counter = 0;
         }
     }
 
@@ -154,76 +236,51 @@ impl Function {
         if self.schema.input.iter().all(|s| !s.is_eq_sort()) && !self.schema.output.is_eq_sort() {
             return std::mem::take(&mut self.updates);
         }
-
         // FIXME this doesn't compute updates properly
         let n_unions = uf.n_unions();
-        let mut to_add = vec![];
-        self.nodes.retain(|args, out| {
-            assert!(out.timestamp <= timestamp);
-            let mut new_args = args.clone();
+        let mut scratch = ValueVec::new();
+        for i in 0..self.nodes.len() {
             let mut modified = false;
-            for (a, ty) in new_args.iter_mut().zip(&self.schema.input) {
-                if ty.is_eq_sort() {
-                    let new_a = uf.find_mut_value(*a);
-                    if new_a != *a {
-                        *a = new_a;
-                        modified = true;
-                    }
-                }
+            let (args, out) = self.nodes.get_index(i).unwrap();
+            if !args.live() {
+                continue;
             }
-            if self.schema.output.is_eq_sort() {
-                let new_value = uf.find_mut_value(out.value);
-                if out.value != new_value {
+            let mut out_val = out.value;
+            scratch.clear();
+            scratch.extend(args.data.iter().copied());
+            for (val, ty) in scratch
+                .iter_mut()
+                .zip(&self.schema.input)
+                .chain(once((&mut out_val, &self.schema.output)))
+            {
+                if !ty.is_eq_sort() {
+                    continue;
+                }
+                let new = uf.find_mut_value(*val);
+                if &new != val {
+                    *val = new;
                     modified = true;
                 }
             }
-
-            if modified {
-                to_add.push((new_args, out.clone()));
+            if !modified {
+                continue;
             }
-            !modified
-        });
-
-        for (args, out) in to_add {
-            let value = out.value;
-            // TODO call the merge fn!!!
-            let _new_value = if self.schema.output.is_eq_sort() {
-                self.nodes
-                    .entry(args)
-                    .and_modify(|out2| {
-                        let new_value = uf.union_values(value, out2.value);
-                        if out2.value != new_value {
-                            out2.value = new_value;
-                            out2.timestamp = timestamp;
-                        }
-                        assert!(out2.timestamp <= timestamp);
-                    })
-                    .or_insert_with(|| {
-                        let new_value = uf.find_mut_value(value);
-                        TupleOutput {
-                            value: new_value,
-                            timestamp,
-                        }
-                    })
-            } else {
-                self.nodes
-                    .entry(args)
-                    .and_modify(|out2| {
-                        // out2.value = uf.union_values(value, out2.value);
-                        out2.timestamp = out2.timestamp.max(out.timestamp);
-                    })
-                    .or_insert(TupleOutput { value, timestamp })
-            };
+            self.set_stale(i, timestamp);
+            if let Some(prev) = self.insert_internal(scratch.clone(), out_val, timestamp, false) {
+                // We need to merge these ids
+                // TODO: call the merge fn
+                if !self.schema.output.is_eq_sort() {
+                    continue;
+                }
+                let next = uf.union_values(prev, out_val);
+                if next != out_val {
+                    // No change and no need to update.
+                    continue;
+                }
+                self.insert_internal(scratch.clone(), next, timestamp, false);
+            }
         }
-
-        // if cfg!(debug_assertions) {
-        //     let mut seen = 0;
-        //     for out in self.nodes.values() {
-        //         assert!(seen <= out.timestamp, "Timestamps should be ordered");
-        //         seen = out.timestamp;
-        //     }
-        // }
-
+        self.maybe_rehash();
         uf.n_unions() - n_unions + std::mem::take(&mut self.updates)
     }
 
@@ -232,23 +289,6 @@ impl Function {
             .values()
             .filter(|out| range.contains(&out.timestamp))
             .count()
-        // if range.start == 0 {
-        //     if range.end == u32::MAX {
-        //         self.nodes.len()
-        //     } else {
-        //         // TODO binary search or something
-        //         self.nodes
-        //             .values()
-        //             .filter(|out| out.timestamp < range.end)
-        //             .count()
-        //     }
-        // } else {
-        //     assert_eq!(range.end, u32::MAX);
-        //     self.nodes
-        //         .values()
-        //         .filter(|out| out.timestamp >= range.end)
-        //         .count()
-        // }
     }
 }
 
@@ -442,6 +482,11 @@ impl EGraph {
     fn debug_assert_invariants(&self) {
         #[cfg(debug_assertions)]
         for (name, function) in self.functions.iter() {
+            let timestamps = Vec::from_iter(function.nodes.iter().map(|(_, y)| y.timestamp));
+            assert!(
+                timestamps.windows(2).all(|x| x[0] <= x[1]),
+                "functions must be sorted by timestamp"
+            );
             for (inputs, output) in function.nodes.iter() {
                 if !inputs.live() {
                     continue;
@@ -580,6 +625,8 @@ impl EGraph {
             schema: ResolvedSchema { input, output },
             nodes: Default::default(),
             updates: 0,
+            counter: 0,
+            n_stale: 0,
             merge,
             // TODO figure out merge and default here
         };
@@ -701,7 +748,7 @@ impl EGraph {
             let rebuild_start = Instant::now();
             let updates = self.rebuild();
             log::info!("database size: {}", self.num_tuples());
-            log::info!("Made {updates} updates",);
+            log::info!("Made {updates} updates (iteration {i})");
             rebuild_time += rebuild_start.elapsed();
             self.timestamp += 1;
             if self.saturated {
