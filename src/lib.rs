@@ -276,7 +276,7 @@ impl Function {
                 if !ty.is_eq_sort() {
                     continue;
                 }
-                let new = uf.find_mut_value(*val);
+                let new = uf.find_value(*val);
                 if &new != val {
                     *val = new;
                     modified = true;

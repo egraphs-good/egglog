@@ -194,10 +194,10 @@ impl<'a> Context<'a> {
             let nodes = std::mem::take(&mut self.nodes);
             for (mut node, id) in nodes {
                 // canonicalize
-                let id = self.unionfind.find_mut(id);
+                let id = self.unionfind.find(id);
                 if let ENode::Func(_, children) | ENode::Prim(_, children) = &mut node {
                     for child in children {
-                        *child = self.unionfind.find_mut(*child);
+                        *child = self.unionfind.find(*child);
                     }
                 }
 
