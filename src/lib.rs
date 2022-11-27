@@ -2,6 +2,7 @@ pub mod ast;
 mod binary_search;
 mod extract;
 mod gj;
+mod index;
 pub mod sort;
 #[cfg(test)]
 mod tests;
