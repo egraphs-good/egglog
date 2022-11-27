@@ -293,7 +293,7 @@ impl Function {
                 if !self.schema.output.is_eq_sort() {
                     continue;
                 }
-                let next = uf.union_values(prev, out_val);
+                let next = uf.union_values(prev, out_val, self.schema.output.name());
                 if next != out_val {
                     // No change and no need to update.
                     continue;
@@ -493,8 +493,8 @@ impl EGraph {
         self.primitives.entry(prim.name()).or_default().push(prim);
     }
 
-    pub fn union(&mut self, id1: Id, id2: Id) -> Id {
-        self.unionfind.union(id1, id2)
+    pub fn union(&mut self, id1: Id, id2: Id, sort: Symbol) -> Id {
+        self.unionfind.union(id1, id2, sort)
     }
 
     #[track_caller]

@@ -2,16 +2,30 @@
 //! halving for compression.
 //!
 //! This implementation uses interior mutability for `find`.
+use symbol_table::GlobalSymbol;
+
+use crate::util::HashMap;
 use crate::{Id, Value};
 
 use std::cell::Cell;
 use std::fmt::Debug;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde-1", derive(serde::Serialize, serde::Deserialize))]
 pub struct UnionFind {
     parents: Vec<Cell<Id>>,
     n_unions: usize,
+    recent_ids: HashMap<GlobalSymbol, Vec<Id>>,
+}
+
+impl Default for UnionFind {
+    fn default() -> Self {
+        UnionFind {
+            parents: Default::default(),
+            n_unions: Default::default(),
+            recent_ids: Default::default(),
+        }
+    }
 }
 
 impl UnionFind {
@@ -57,25 +71,48 @@ impl UnionFind {
     ///
     /// This method assumes that the given values belong to the same, "eq-able",
     /// sort.  Its behavior is unspecified on other values.
-    pub fn union_values(&mut self, val1: Value, val2: Value) -> Value {
+    pub fn union_values(&mut self, val1: Value, val2: Value, sort: GlobalSymbol) -> Value {
         debug_assert_eq!(val1.tag, val2.tag);
         let id1 = Id::from(val1.bits as usize);
         let id2 = Id::from(val2.bits as usize);
-        let res = self.union(id1, id2);
+        let res = self.union(id1, id2, sort);
         Value {
             bits: usize::from(res) as u64,
             tag: val1.tag,
         }
     }
 
-    pub fn union(&mut self, id1: Id, id2: Id) -> Id {
+    /// Like [`union_values`], but operating on raw [`Id`]s.
+    ///
+    /// [`union_values`]: UnionFind::union_values
+    pub fn union(&mut self, id1: Id, id2: Id, sort: GlobalSymbol) -> Id {
+        let (res, reparented) = self.do_union(id1, id2);
+        if let Some(id) = reparented {
+            self.recent_ids.entry(sort).or_default().push(id)
+        }
+        res
+    }
+
+    /// Merge the underlying equivalence classes for the two ids.
+    ///
+    /// This method does not update any metadata related to timestamps or sorts;
+    /// that metadata will eventually be required for the correctness of
+    /// rebuilding. This method should only be used for "out-of-band" use-cases,
+    /// such as typechecking.
+    pub fn union_raw(&mut self, id1: Id, id2: Id) -> Id {
+        self.do_union(id1, id2).0
+    }
+
+    fn do_union(&mut self, id1: Id, id2: Id) -> (Id, Option<Id>) {
         let id1 = self.find(id1);
         let id2 = self.find(id2);
         if id1 != id2 {
             self.parent(id2).set(id1);
             self.n_unions += 1;
+            (id1, Some(id2))
+        } else {
+            (id1, None)
         }
-        id1
     }
 
     fn parent(&self, id: Id) -> &Cell<Id> {
@@ -105,14 +142,14 @@ mod tests {
         assert_eq!(uf.parents, ids(0..n));
 
         // build up one set
-        uf.union(id(0), id(1));
-        uf.union(id(0), id(2));
-        uf.union(id(0), id(3));
+        uf.union_raw(id(0), id(1));
+        uf.union_raw(id(0), id(2));
+        uf.union_raw(id(0), id(3));
 
         // build up another set
-        uf.union(id(6), id(7));
-        uf.union(id(6), id(8));
-        uf.union(id(6), id(9));
+        uf.union_raw(id(6), id(7));
+        uf.union_raw(id(6), id(8));
+        uf.union_raw(id(6), id(9));
 
         // this should compress all paths
         for i in 0..n {

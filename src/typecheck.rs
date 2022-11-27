@@ -204,7 +204,7 @@ impl<'a> Context<'a> {
                 // reinsert and handle hit
                 if let Some(old) = self.nodes.insert(node, id) {
                     keep_going = true;
-                    self.unionfind.union(old, id);
+                    self.unionfind.union_raw(old, id);
                 }
             }
         }
@@ -249,7 +249,8 @@ impl<'a> Context<'a> {
                     }
                 }
 
-                ids.into_iter().reduce(|a, b| self.unionfind.union(a, b));
+                ids.into_iter()
+                    .reduce(|a, b| self.unionfind.union_raw(a, b));
             }
             Fact::Fact(e) => {
                 self.check_query_expr(e, self.unit.clone());
@@ -717,9 +718,12 @@ impl EGraph {
                     if let Some(old_value) = old_value {
                         if new_value != old_value {
                             self.saturated = false;
+                            let tag = old_value.tag;
                             let merged: Value = match function.merge.clone() {
                                 MergeFn::AssertEq => panic!("No error for this yet"),
-                                MergeFn::Union => self.unionfind.union_values(old_value, new_value),
+                                MergeFn::Union => {
+                                    self.unionfind.union_values(old_value, new_value, tag)
+                                }
                                 MergeFn::Expr(merge_prog) => {
                                     let values = [old_value, new_value];
                                     let old_len = stack.len();
@@ -740,13 +744,14 @@ impl EGraph {
                 Instruction::Union(arity) => {
                     let new_len = stack.len() - arity;
                     let values = &stack[new_len..];
+                    let sort = values[0].tag;
                     let first = self.unionfind.find(Id::from(values[0].bits as usize));
                     values[1..].iter().fold(first, |a, b| {
                         let b = self.unionfind.find(Id::from(b.bits as usize));
                         if a != b {
                             self.saturated = false;
                         }
-                        self.unionfind.union(a, b)
+                        self.unionfind.union(a, b, sort)
                     });
                     stack.truncate(new_len);
                 }
