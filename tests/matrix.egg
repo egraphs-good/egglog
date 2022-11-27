@@ -54,17 +54,17 @@
 
 ; demand
 (rule ((= e (MMul A B)))
-((define demand1 (ncols A))
-(define demand2 (nrows A))
-(define demand3 (ncols B))
-(define demand4 (nrows B)))
+((let demand1 (ncols A))
+(let demand2 (nrows A))
+(let demand3 (ncols B))
+(let demand4 (nrows B)))
 )
 
 (rule ((= e (Kron A B)))
-((define demand1 (ncols A))
-(define demand2 (nrows A))
-(define demand3 (ncols B))
-(define demand4 (nrows B)))
+((let demand1 (ncols A))
+(let demand2 (nrows A))
+(let demand3 (ncols B))
+(let demand4 (nrows B)))
 )
 
 

@@ -44,7 +44,7 @@ Command: Command = {
         <conditions:(":when" <List<Fact>>)?>
     ")" => Command::Rewrite(Rewrite { lhs, rhs, conditions: conditions.unwrap_or_default() }),
     "(" "define" <name:Ident> <expr:Expr> <cost:Cost> ")" => Command::Define { name, expr, cost },
-    <NonDefineAction> => Command::Action(<>),
+    <NonLetAction> => Command::Action(<>),
     "(" "run" <UNum> ")" => Command::Run(<>),
     "(" "extract" <variants:(":variants" <UNum>)?> <e:Expr> ")" => Command::Extract { e, variants: variants.unwrap_or(0) },
     "(" "check" <Fact> ")" => Command::Check(<>),
@@ -63,7 +63,7 @@ Cost: Option<usize> = {
     => None,
 }
 
-NonDefineAction: Action = {
+NonLetAction: Action = {
     "(" "set" "(" <f: Ident> <args:Expr*> ")" <v:Expr> ")" => Action::Set ( f, args, v ),
     "(" "delete" "(" <f: Ident> <args:Expr*> ")" ")" => Action::Delete ( f, args),
     "(" "union" <e1:Expr> <e2:Expr> ")" => Action::Union(<>),
@@ -72,8 +72,8 @@ NonDefineAction: Action = {
 }
 
 Action: Action = {
-    "(" "define" <name:Ident> <expr:Expr> ")" => Action::Define(name, expr),
-    <NonDefineAction> => <>,
+    "(" "let" <name:Ident> <expr:Expr> ")" => Action::Let(name, expr),
+    <NonLetAction> => <>,
 }
 
 Name: Symbol = { "[" <Ident> "]" => <> }
