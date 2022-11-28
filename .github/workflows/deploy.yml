@@ -15,7 +15,7 @@ jobs:
       run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
     - name: Cache
-      uses: Swatinem/rust-cache@v3
+      uses: Swatinem/rust-cache@v2
 
     - name: Build
       run: make web
