@@ -9,23 +9,15 @@ use crate::{Id, Value};
 
 use std::cell::Cell;
 use std::fmt::Debug;
+use std::mem;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 #[cfg_attr(feature = "serde-1", derive(serde::Serialize, serde::Deserialize))]
 pub struct UnionFind {
     parents: Vec<Cell<Id>>,
     n_unions: usize,
     recent_ids: HashMap<GlobalSymbol, Vec<Id>>,
-}
-
-impl Default for UnionFind {
-    fn default() -> Self {
-        UnionFind {
-            parents: Default::default(),
-            n_unions: Default::default(),
-            recent_ids: Default::default(),
-        }
-    }
+    staged_ids: HashMap<GlobalSymbol, Vec<Id>>,
 }
 
 impl UnionFind {
@@ -40,6 +32,28 @@ impl UnionFind {
         let res = Id::from(self.parents.len());
         self.parents.push(Cell::new(res));
         res
+    }
+
+    /// Clear any ids currently marked as dirty and then move any ids marked
+    /// non-canonical since the last call to this method (or the
+    /// data-structure's creation) into the dirty set.
+    pub fn clear_recent_ids(&mut self) {
+        mem::swap(&mut self.recent_ids, &mut self.staged_ids);
+        self.staged_ids.clear();
+    }
+
+    /// Iterate over the ids of the given sort marked as "dirty", i.e. any
+    /// [`Id`]s that ceased to be canonical between the last call to
+    /// [`clear_recent_ids`] and the call prior to that.
+    ///
+    /// [`clear_recent_ids`]: UnionFind::clear_recent_ids
+    pub fn dirty_ids(&self, sort: GlobalSymbol) -> impl Iterator<Item = Id> + '_ {
+        let ids = self
+            .recent_ids
+            .get(&sort)
+            .map(|ids| ids.as_slice())
+            .unwrap_or(&[]);
+        ids.iter().copied()
     }
 
     /// Canonicalize a [`Value`].
@@ -88,7 +102,7 @@ impl UnionFind {
     pub fn union(&mut self, id1: Id, id2: Id, sort: GlobalSymbol) -> Id {
         let (res, reparented) = self.do_union(id1, id2);
         if let Some(id) = reparented {
-            self.recent_ids.entry(sort).or_default().push(id)
+            self.staged_ids.entry(sort).or_default().push(id)
         }
         res
     }

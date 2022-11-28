@@ -12,6 +12,7 @@ pub mod util;
 mod value;
 
 use hashbrown::hash_map::Entry;
+use index::ColumnIndex;
 use instant::{Duration, Instant};
 use lazy_static::lazy_static;
 use smallvec::SmallVec;
@@ -143,6 +144,8 @@ pub struct Function {
     schema: ResolvedSchema,
     merge: MergeFn,
     nodes: IndexMap<Input, TupleOutput>,
+    indexes: Vec<ColumnIndex>,
+    index_updated_through: usize,
     updates: usize,
     counter: usize,
     n_stale: usize,
@@ -170,16 +173,33 @@ struct ResolvedSchema {
 }
 
 impl Function {
-    pub fn insert(&mut self, inputs: ValueVec, value: Value, timestamp: u32) -> Option<Value> {
-        self.insert_internal(inputs, value, timestamp, true)
-    }
-    pub fn insert_internal(
+    pub fn insert(
         &mut self,
         inputs: ValueVec,
         value: Value,
         timestamp: u32,
-        maybe_rehash: bool,
+        uf: &UnionFind,
     ) -> Option<Value> {
+        self.insert_internal(inputs, value, timestamp, true, Some(uf))
+    }
+    pub fn insert_internal(
+        &mut self,
+        mut inputs: ValueVec,
+        mut value: Value,
+        timestamp: u32,
+        maybe_rehash: bool,
+        canon: Option<&UnionFind>,
+    ) -> Option<Value> {
+        if let Some(uf) = canon {
+            for (val, _) in inputs
+                .iter_mut()
+                .zip(&self.schema.input)
+                .chain(once((&mut value, &self.schema.output)))
+                .filter(|(_, ty)| ty.is_eq_sort())
+            {
+                *val = uf.find_value(*val);
+            }
+        }
         let (index, old) = if let Some((index, _, old)) = self
             .nodes
             .get_full_mut(InputRef::from_slice(inputs.as_slice()))
@@ -229,6 +249,28 @@ impl Function {
         self.nodes.swap_indices(i, self.nodes.len() - 1);
     }
 
+    fn build_indexes(&mut self, indexes: Range<usize>) {
+        for slot in indexes {
+            let (inp, out) = self.nodes.get_index(slot).unwrap();
+            if !inp.live() {
+                continue;
+            }
+            for (v, index) in inp
+                .data
+                .iter()
+                .chain(once(&out.value))
+                .zip(self.indexes.iter_mut())
+            {
+                index.add(*v, slot);
+            }
+        }
+    }
+
+    fn update_indexes(&mut self, through: usize) {
+        self.build_indexes(self.index_updated_through..through);
+        self.index_updated_through = self.index_updated_through.max(through);
+    }
+
     fn maybe_rehash(&mut self) {
         // Note for future: this is very much a necessary step. We see major
         // slowdowns in some tests without this code in place, but it also
@@ -239,6 +281,9 @@ impl Function {
             self.nodes.retain(|k, _| k.live());
             self.n_stale = 0;
             self.counter = 0;
+            self.indexes.iter_mut().for_each(ColumnIndex::clear);
+            self.index_updated_through = 0;
+            self.update_indexes(self.nodes.len());
         }
     }
 
@@ -254,13 +299,19 @@ impl Function {
     }
 
     pub fn rebuild(&mut self, uf: &mut UnionFind, timestamp: u32) -> usize {
+        // Make sure indexes are up to date.
+        self.update_indexes(self.nodes.len());
         if self.schema.input.iter().all(|s| !s.is_eq_sort()) && !self.schema.output.is_eq_sort() {
             return std::mem::take(&mut self.updates);
         }
+        let mut to_canon = IndexSet::default();
+        to_canon.extend(self.indexes.iter().flat_map(|x| x.to_canonicalize(uf)));
+
         // FIXME this doesn't compute updates properly
         let n_unions = uf.n_unions();
         let mut scratch = ValueVec::new();
-        for i in 0..self.nodes.len() {
+        eprintln!("{to_canon:?}");
+        for i in to_canon.iter().copied() {
             let mut modified = false;
             let (args, out) = self.nodes.get_index(i).unwrap();
             if !args.live() {
@@ -287,7 +338,9 @@ impl Function {
                 continue;
             }
             self.set_stale(i, timestamp);
-            if let Some(prev) = self.insert_internal(scratch.clone(), out_val, timestamp, false) {
+            if let Some(prev) =
+                self.insert_internal(scratch.clone(), out_val, timestamp, false, None)
+            {
                 // We need to merge these ids
                 // TODO: call the merge fn
                 if !self.schema.output.is_eq_sort() {
@@ -298,7 +351,7 @@ impl Function {
                     // No change and no need to update.
                     continue;
                 }
-                self.insert_internal(scratch.clone(), next, timestamp, false);
+                self.insert_internal(scratch.clone(), next, timestamp, false, None);
             }
         }
         self.maybe_rehash();
@@ -571,6 +624,7 @@ impl EGraph {
     }
 
     pub fn rebuild(&mut self) -> usize {
+        self.unionfind.clear_recent_ids();
         let mut updates = 0;
         loop {
             let new = self.rebuild_one();
@@ -579,6 +633,7 @@ impl EGraph {
             if new == 0 {
                 break;
             }
+            self.unionfind.clear_recent_ids();
         }
         self.debug_assert_invariants();
         updates
@@ -639,10 +694,20 @@ impl EGraph {
             MergeFn::AssertEq
         };
 
+        let indexes = Vec::from_iter(
+            input
+                .iter()
+                .chain(once(&output))
+                .map(|x| ColumnIndex::new(x.name())),
+        );
+
         let function = Function {
             decl: decl.clone(),
             schema: ResolvedSchema { input, output },
             nodes: Default::default(),
+            // TODO: build indexes for primitive sorts lazily
+            indexes,
+            index_updated_through: 0,
             updates: 0,
             counter: 0,
             n_stale: 0,
@@ -1226,7 +1291,7 @@ impl EGraph {
             cost,
         })?;
         let f = self.functions.get_mut(&name).unwrap();
-        f.insert(ValueVec::default(), value, self.timestamp);
+        f.insert(ValueVec::default(), value, self.timestamp, &self.unionfind);
         Ok(sort)
     }
 
