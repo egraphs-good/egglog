@@ -130,7 +130,7 @@ impl Display for Fact {
 
 #[derive(Clone, Debug)]
 pub enum Action {
-    Define(Symbol, Expr),
+    Let(Symbol, Expr),
     Set(Symbol, Vec<Expr>, Expr),
     Delete(Symbol, Vec<Expr>),
     Union(Expr, Expr),
@@ -142,7 +142,7 @@ pub enum Action {
 impl Display for Action {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Action::Define(lhs, rhs) => write!(f, "(define {} {})", lhs, rhs),
+            Action::Let(lhs, rhs) => write!(f, "(define {} {})", lhs, rhs),
             Action::Set(lhs, args, rhs) => {
                 write!(f, "(set ({} {}) {})", lhs, ListDisplay(args, " "), rhs)
             }
