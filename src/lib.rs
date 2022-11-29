@@ -918,18 +918,20 @@ impl EGraph {
                     self.rebuild();
                     let (_t, value) = self.eval_expr(&e, None, true)?;
                     //log::info!("Extracting {e} at {value:?}");
-                    let (cost, expr) = self.extract(value);
-                    let mut msg = format!("Extracted with cost {cost}: {expr}");
-                    println!("{}", expr);
-                    if variants > 0 {
+                    
+                    let msg = if variants > 0 {
                         let exprs = self.extract_variants(value, variants);
                         let line = "\n    ";
                         let v_exprs = ListDisplay(&exprs, line);
-                        write!(msg, "\nVariants of {expr}:{line}{v_exprs}").unwrap();
-                    }
-                    msg
+                        format!("({})", v_exprs)
+                    } else {
+                        let (cost, expr) = self.extract(value);
+                        format!("({})", expr)
+                    };
+                    println!("{}", msg);
+                    msg.into()
                 } else {
-                    "Skipping extraction.".into()
+                    "Skipping Extraction".into()
                 }
             }
             Command::Check(fact) => {
