@@ -13,7 +13,7 @@ DIST_WASM=$(addprefix ${WWW}, ${WASM})
 all: test web
 
 test:
-	cargo install tarpaulin
+	cargo install cargo-tarpaulin
 	cargo tarpaulin --engine llvm --out Html --out lcov
 	@rustup component add clippy
 	cargo clippy --tests -- -D warnings
