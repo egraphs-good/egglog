@@ -22,11 +22,11 @@ test:
 	cargo fmt --check
 
 coverage-html:
-	grcov ./target/debug/instrument-coverage/ -s src/ --binary-path ./target/debug/ -t html --branch  -o ./target/debug/coverage/
+	grcov ./target/debug/instrument-coverage/ -s src/ --binary-path ./target/debug/ -t html  -o ./target/debug/coverage/
 	echo 'Wrote coverage report to ./target/debug/coverage/index.html'
 
 coverage-lcov:
-	grcov ./target/debug/instrument-coverage/ -s src/ --binary-path ./target/debug/ -t lcov --branch  -o ./target/debug/lcov.info
+	grcov ./target/debug/instrument-coverage/ -s src/ --binary-path ./target/debug/ -t lcov  -o ./target/debug/lcov.info
 
 web: ${DIST_WASM} ${WEB_SRC} ${WWW}/examples.json
 	mkdir -p ${WWW}
