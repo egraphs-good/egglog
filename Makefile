@@ -13,20 +13,12 @@ DIST_WASM=$(addprefix ${WWW}, ${WASM})
 all: test web
 
 test:
-	@rustup component add llvm-tools-preview
-	cargo install grcov
-	RUSTFLAGS='-Cinstrument-coverage' LLVM_PROFILE_FILE='target/debug/instrument-coverage/%p-%m.profraw' cargo test
+	cargo install tarpaulin
+	cargo tarpaulin --engine llvm --out Html --out lcov
 	@rustup component add clippy
 	cargo clippy --tests -- -D warnings
 	@rustup component add rustfmt
 	cargo fmt --check
-
-coverage-html:
-	grcov ./target/debug/instrument-coverage/ -s src/ --binary-path ./target/debug/ -t html  -o ./target/debug/coverage/
-	echo 'Wrote coverage report to ./target/debug/coverage/index.html'
-
-coverage-lcov:
-	grcov ./target/debug/instrument-coverage/ -s src/ --binary-path ./target/debug/ -t lcov  -o ./target/debug/lcov.info
 
 web: ${DIST_WASM} ${WEB_SRC} ${WWW}/examples.json
 	mkdir -p ${WWW}
