@@ -2,6 +2,8 @@ name: Build
 
 on: [push, pull_request]
 
+env:
+  CODECOV_TOKEN: 9ce1d224-e986-4e7c-8ed1-5bdcce684f7c
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -17,4 +19,4 @@ jobs:
       uses: codecov/codecov-action@v3
       with:
         files: ./target/debug/lcov.info
-        fail_ci_if_error: true
+        token: ${{ secrets.CODECOV_TOKEN }}
