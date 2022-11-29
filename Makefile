@@ -14,7 +14,7 @@ all: test web
 
 test:
 	cargo install cargo-tarpaulin
-	cargo tarpaulin --engine llvm --out Html --out lcov
+	cargo tarpaulin --skip-clean --engine llvm --out Html --out lcov
 	@rustup component add clippy
 	cargo clippy --tests -- -D warnings
 	@rustup component add rustfmt
