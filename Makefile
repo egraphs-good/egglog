@@ -14,6 +14,7 @@ all: test web
 
 test:
 	@rustup component add llvm-tools-preview
+	cargo install grcov
 	RUSTFLAGS='-Cinstrument-coverage' LLVM_PROFILE_FILE='target/debug/instrument-coverage/%p-%m.profraw' cargo test
 	@rustup component add clippy
 	cargo clippy --tests -- -D warnings
