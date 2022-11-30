@@ -284,6 +284,7 @@ pub struct EGraph {
     rulesets: IndexMap<Symbol, Vec<(Symbol, Rule)>>,
     saturated: bool,
     timestamp: u32,
+    parser: Arc<ast::parse::ProgramParser>,
     pub match_limit: usize,
     pub node_limit: usize,
     pub fact_directory: Option<PathBuf>,
@@ -313,6 +314,7 @@ impl Default for EGraph {
             rulesets: Default::default(),
             primitives: Default::default(),
             presorts: Default::default(),
+            parser: Arc::new(ast::parse::ProgramParser::new()),
             dont_extract: Default::default(),
             match_limit: 10_000_000,
             node_limit: 100_000_000,
@@ -1116,8 +1118,7 @@ impl EGraph {
     }
 
     pub fn parse_and_run_program(&mut self, input: &str) -> Result<Vec<String>, Error> {
-        let parser = ast::parse::ProgramParser::new();
-        let program = parser
+        let program = self.parser
             .parse(input)
             .map_err(|e| e.map_token(|tok| tok.to_string()))?;
         self.run_program(program)
