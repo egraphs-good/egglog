@@ -664,13 +664,13 @@ impl EGraph {
                         let out = &function.schema.output;
                         match function.decl.default.as_ref() {
                             None if out.name() == "Unit".into() => {
-                                function.insert(values.into(), Value::unit(), ts, &self.unionfind);
+                                function.insert(values.into(), Value::unit(), ts);
                                 Value::unit()
                             }
                             None if out.is_eq_sort() => {
                                 let id = self.unionfind.make_set();
                                 let value = Value::from_id(out.name(), id);
-                                function.insert(values.into(), value, ts, &self.unionfind);
+                                function.insert(values.into(), value, ts);
                                 value
                             }
                             Some(_default) => {
@@ -716,7 +716,6 @@ impl EGraph {
                         self.timestamp,
                         true,
                         false,
-                        None,
                     );
 
                     // if the value does not exist or the two values differ
@@ -751,7 +750,6 @@ impl EGraph {
                                 self.timestamp,
                                 true,
                                 false,
-                                None,
                             );
                         }
                     }

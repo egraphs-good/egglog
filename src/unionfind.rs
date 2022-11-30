@@ -84,7 +84,7 @@ impl UnionFind {
     /// Merge the equivalence classes associated with the two values.
     ///
     /// This method assumes that the given values belong to the same, "eq-able",
-    /// sort.  Its behavior is unspecified on other values.
+    /// sort. Its behavior is unspecified on other values.
     pub fn union_values(&mut self, val1: Value, val2: Value, sort: GlobalSymbol) -> Value {
         debug_assert_eq!(val1.tag, val2.tag);
         let id1 = Id::from(val1.bits as usize);

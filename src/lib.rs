@@ -27,6 +27,7 @@ use std::fs::File;
 use std::hash::{Hash, Hasher};
 use std::io::Read;
 use std::iter::once;
+use std::mem;
 use std::ops::{Deref, Range};
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -149,6 +150,7 @@ pub struct Function {
     updates: usize,
     counter: usize,
     n_stale: usize,
+    scratch: IndexSet<usize>,
 }
 
 #[derive(Clone)]
@@ -173,20 +175,13 @@ struct ResolvedSchema {
 }
 
 impl Function {
-    pub fn insert(
-        &mut self,
-        inputs: ValueVec,
-        value: Value,
-        timestamp: u32,
-        // TODO: clean this up
-        _uf: &UnionFind,
-    ) -> Option<Value> {
-        self.insert_internal(inputs, value, timestamp, true, false, None)
+    pub fn insert(&mut self, inputs: ValueVec, value: Value, timestamp: u32) -> Option<Value> {
+        self.insert_internal(inputs, value, timestamp, true, false)
     }
     pub fn insert_internal(
         &mut self,
-        mut inputs: ValueVec,
-        mut value: Value,
+        inputs: ValueVec,
+        value: Value,
         timestamp: u32,
         // Clean out all stale entries if they account for a sufficiently large
         // portion of the table after this entry is inserted.
@@ -195,21 +190,7 @@ impl Function {
         // indexes. Most of the time this is redundant, but we _need_ to do this
         // during rebuilding, otherwise we can miss updates.
         maintain_in_place: bool,
-        // Canonicalize inputs before inserting them. This is relevant during
-        // operations that may be "out-of-band". It's possible that this option
-        // is not necessary.
-        canon: Option<&UnionFind>,
     ) -> Option<Value> {
-        if let Some(uf) = canon {
-            for (val, _) in inputs
-                .iter_mut()
-                .zip(&self.schema.input)
-                .chain(once((&mut value, &self.schema.output)))
-                .filter(|(_, ty)| ty.is_eq_sort())
-            {
-                *val = uf.find_value(*val);
-            }
-        }
         let (index, old) = if let Some((index, _, old)) = self
             .nodes
             .get_full_mut(InputRef::from_slice(inputs.as_slice()))
@@ -290,7 +271,7 @@ impl Function {
         // removes old versions of tuples. The slowdown happens because certain
         // operations (rebuilding, index construction) still need to do O(n)
         // scans, where 'n' is the number of tuples, live or stale.
-        if self.n_stale > (self.nodes.len() / 4) {
+        if self.n_stale > (self.nodes.len() / 2) {
             self.nodes.retain(|k, _| k.live());
             self.n_stale = 0;
             self.counter = 0;
@@ -321,10 +302,10 @@ impl Function {
         if self.schema.input.iter().all(|s| !s.is_eq_sort()) && !self.schema.output.is_eq_sort() {
             return std::mem::take(&mut self.updates);
         }
-        let mut to_canon = IndexSet::default();
+        let mut to_canon = mem::take(&mut self.scratch);
+        to_canon.clear();
         to_canon.extend(self.indexes.iter().flat_map(|x| x.to_canonicalize(uf)));
 
-        // FIXME this doesn't compute updates properly
         let n_unions = uf.n_unions();
         let mut scratch = ValueVec::new();
         for i in to_canon.iter().copied() {
@@ -355,7 +336,7 @@ impl Function {
             }
             self.set_stale(i, timestamp);
             if let Some(prev) =
-                self.insert_internal(scratch.clone(), out_val, timestamp, false, true, None)
+                self.insert_internal(scratch.clone(), out_val, timestamp, false, true)
             {
                 // We need to merge these ids
                 // TODO: call the merge fn
@@ -367,10 +348,11 @@ impl Function {
                     // No change and no need to update.
                     continue;
                 }
-                self.insert_internal(scratch.clone(), next, timestamp, false, true, None);
+                self.insert_internal(scratch.clone(), next, timestamp, false, true);
             }
         }
         self.maybe_rehash();
+        self.scratch = to_canon;
         uf.n_unions() - n_unions + std::mem::take(&mut self.updates)
     }
 
@@ -721,6 +703,7 @@ impl EGraph {
             decl: decl.clone(),
             schema: ResolvedSchema { input, output },
             nodes: Default::default(),
+            scratch: Default::default(),
             // TODO: build indexes for primitive sorts lazily
             indexes,
             index_updated_through: 0,
@@ -1307,7 +1290,7 @@ impl EGraph {
             cost,
         })?;
         let f = self.functions.get_mut(&name).unwrap();
-        f.insert(ValueVec::default(), value, self.timestamp, &self.unionfind);
+        f.insert(ValueVec::default(), value, self.timestamp);
         Ok(sort)
     }
 
