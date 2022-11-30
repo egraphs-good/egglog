@@ -279,6 +279,7 @@ pub struct EGraph {
     sorts: IndexMap<Symbol, Arc<dyn Sort>>,
     primitives: IndexMap<Symbol, Vec<Primitive>>,
     functions: IndexMap<Symbol, Function>,
+    dont_extract: IndexSet<Symbol>,
     rules: IndexMap<Symbol, Rule>,
     rulesets: IndexMap<Symbol, Vec<(Symbol, Rule)>>,
     saturated: bool,
@@ -312,6 +313,7 @@ impl Default for EGraph {
             rulesets: Default::default(),
             primitives: Default::default(),
             presorts: Default::default(),
+            dont_extract: Default::default(),
             match_limit: 10_000_000,
             node_limit: 100_000_000,
             timestamp: 0,
@@ -963,6 +965,7 @@ impl EGraph {
                         merge: None,
                         cost,
                     })?;
+                    self.dont_extract.insert(name);
 
                     let f = self.functions.get_mut(&name).unwrap();
                     f.insert(ValueVec::default(), value, self.timestamp);

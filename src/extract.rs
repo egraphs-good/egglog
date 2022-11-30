@@ -43,6 +43,8 @@ impl EGraph {
                 let func = &self.functions[&sym];
                 if !func.schema.output.is_eq_sort() {
                     return vec![];
+                } else if self.dont_extract.contains(&sym) {
+                    return vec![];
                 }
                 assert!(func.schema.output.is_eq_sort());
                 func.nodes
@@ -55,6 +57,7 @@ impl EGraph {
                     })
                     .collect()
             })
+
             .take(limit)
             .collect()
     }
@@ -117,6 +120,9 @@ impl<'a> Extractor<'a> {
             did_something = false;
 
             for &sym in &self.ctors {
+                if self.egraph.dont_extract.contains(&sym) {
+                    continue;
+                }
                 let func = &self.egraph.functions[&sym];
                 if func.schema.output.is_eq_sort() {
                     for (inputs, output) in &func.nodes {
