@@ -708,12 +708,14 @@ impl EGraph {
                     let new_value = stack.pop().unwrap();
                     let new_len = stack.len() - function.schema.input.len();
                     let args = &stack[new_len..];
+
                     // We should only have canonical values here: omit the canonicalization step
                     let old_value = function.insert_internal(
                         args.into(),
                         new_value,
                         self.timestamp,
                         true,
+                        false,
                         None,
                     );
 
@@ -748,6 +750,7 @@ impl EGraph {
                                 merged,
                                 self.timestamp,
                                 true,
+                                false,
                                 None,
                             );
                         }

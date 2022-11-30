@@ -39,7 +39,7 @@ impl UnionFind {
     /// data-structure's creation) into the dirty set.
     pub fn clear_recent_ids(&mut self) {
         mem::swap(&mut self.recent_ids, &mut self.staged_ids);
-        self.staged_ids.clear();
+        self.staged_ids.values_mut().for_each(Vec::clear);
     }
 
     /// Iterate over the ids of the given sort marked as "dirty", i.e. any

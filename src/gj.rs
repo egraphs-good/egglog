@@ -561,14 +561,18 @@ impl<'a> TrieAccess<'a> {
             for idx in idxs {
                 let i = *idx as usize;
                 let (tup, out) = &self.function.nodes.get_index(i).unwrap();
-                insert(i, tup.data(), out, tup.data()[self.column])
+                if tup.live() {
+                    insert(i, tup.data(), out, tup.data()[self.column])
+                }
             }
         } else {
             assert_eq!(self.column, arity);
             for idx in idxs {
                 let i = *idx as usize;
                 let (tup, out) = &self.function.nodes.get_index(i).unwrap();
-                insert(i, tup.data(), out, out.value)
+                if tup.live() {
+                    insert(i, tup.data(), out, out.value)
+                }
             }
         }
 

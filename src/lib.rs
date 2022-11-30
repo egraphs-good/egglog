@@ -178,16 +178,26 @@ impl Function {
         inputs: ValueVec,
         value: Value,
         timestamp: u32,
-        uf: &UnionFind,
+        // TODO: clean this up
+        _uf: &UnionFind,
     ) -> Option<Value> {
-        self.insert_internal(inputs, value, timestamp, true, Some(uf))
+        self.insert_internal(inputs, value, timestamp, true, false, None)
     }
     pub fn insert_internal(
         &mut self,
         mut inputs: ValueVec,
         mut value: Value,
         timestamp: u32,
+        // Clean out all stale entries if they account for a sufficiently large
+        // portion of the table after this entry is inserted.
         maybe_rehash: bool,
+        // When performing an in-place update, maintain the column-level
+        // indexes. Most of the time this is redundant, but we _need_ to do this
+        // during rebuilding, otherwise we can miss updates.
+        maintain_in_place: bool,
+        // Canonicalize inputs before inserting them. This is relevant during
+        // operations that may be "out-of-band". It's possible that this option
+        // is not necessary.
         canon: Option<&UnionFind>,
     ) -> Option<Value> {
         if let Some(uf) = canon {
@@ -214,6 +224,9 @@ impl Function {
                 // multiple values for the same tuple modified at the same
                 // timestamp. But we currently rely on this (e.g. to do merges
                 // during rebuild).
+                if maintain_in_place {
+                    self.indexes.last_mut().unwrap().add(value, index);
+                }
                 self.updates += 1;
                 let saved = old.value;
                 old.value = value;
@@ -292,9 +305,13 @@ impl Function {
         timestamps: &Range<u32>,
     ) -> impl Iterator<Item = (usize, &Input, &TupleOutput)> {
         let indexes = transform_range(&self.nodes, |v| &v.timestamp, timestamps);
-        indexes.map(|i| {
+        indexes.filter_map(|i| {
             let (k, v) = self.nodes.get_index(i).unwrap();
-            (i, k, v)
+            if k.live() {
+                Some((i, k, v))
+            } else {
+                None
+            }
         })
     }
 
@@ -310,7 +327,6 @@ impl Function {
         // FIXME this doesn't compute updates properly
         let n_unions = uf.n_unions();
         let mut scratch = ValueVec::new();
-        eprintln!("{to_canon:?}");
         for i in to_canon.iter().copied() {
             let mut modified = false;
             let (args, out) = self.nodes.get_index(i).unwrap();
@@ -339,7 +355,7 @@ impl Function {
             }
             self.set_stale(i, timestamp);
             if let Some(prev) =
-                self.insert_internal(scratch.clone(), out_val, timestamp, false, None)
+                self.insert_internal(scratch.clone(), out_val, timestamp, false, true, None)
             {
                 // We need to merge these ids
                 // TODO: call the merge fn
@@ -347,11 +363,11 @@ impl Function {
                     continue;
                 }
                 let next = uf.union_values(prev, out_val, self.schema.output.name());
-                if next != out_val {
+                if next == out_val {
                     // No change and no need to update.
                     continue;
                 }
-                self.insert_internal(scratch.clone(), next, timestamp, false, None);
+                self.insert_internal(scratch.clone(), next, timestamp, false, true, None);
             }
         }
         self.maybe_rehash();
@@ -559,7 +575,7 @@ impl EGraph {
                 timestamps.windows(2).all(|x| x[0] <= x[1]),
                 "functions must be sorted by timestamp"
             );
-            for (inputs, output) in function.nodes.iter() {
+            for (i, (inputs, output)) in function.nodes.iter().enumerate() {
                 if !inputs.live() {
                     continue;
                 }
@@ -567,14 +583,14 @@ impl EGraph {
                     assert_eq!(
                         input,
                         &self.bad_find_value(*input),
-                        "{name}({inputs:?}) = {output:?}\n{:?}",
+                        "[{i}] {name}({inputs:?}) = {output:?}\n{:?}",
                         function.schema,
                     )
                 }
                 assert_eq!(
                     output.value,
                     self.bad_find_value(output.value),
-                    "{name}({inputs:?}) = {output:?}\n{:?}",
+                    "[{i}] {name}({inputs:?}) = {output:?}\n{:?}",
                     function.schema,
                 )
             }
@@ -629,11 +645,11 @@ impl EGraph {
         loop {
             let new = self.rebuild_one();
             log::debug!("{new} rebuilds?");
+            self.unionfind.clear_recent_ids();
             updates += new;
             if new == 0 {
                 break;
             }
-            self.unionfind.clear_recent_ids();
         }
         self.debug_assert_invariants();
         updates
