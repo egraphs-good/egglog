@@ -619,6 +619,9 @@ impl EGraph {
     pub fn run_rules(&mut self, limit: usize) -> [Duration; 3] {
         let mut search_time = Duration::default();
         let mut apply_time = Duration::default();
+        if self.num_tuples() > self.node_limit {
+            return [search_time, apply_time, Duration::default()];
+        }
 
         // we might have to do a rebuild before starting,
         // because the use can manually do stuff
@@ -643,11 +646,6 @@ impl EGraph {
                 break;
             }
             if self.num_tuples() > self.node_limit {
-                log::warn!(
-                    "Node limit reached at iteration {}, {} nodes. Stopping!",
-                    i,
-                    self.num_tuples()
-                );
                 break;
             }
         }
