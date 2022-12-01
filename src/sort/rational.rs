@@ -1,7 +1,7 @@
+use num::BigInt;
 use num_integer::Roots;
 use num_traits::{CheckedAdd, CheckedDiv, CheckedMul, CheckedSub, One, Signed, ToPrimitive, Zero};
 use std::sync::Mutex;
-use num::BigInt;
 
 type R = num_rational::BigRational;
 use crate::{ast::Literal, util::IndexSet};

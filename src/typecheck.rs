@@ -698,7 +698,7 @@ impl EGraph {
                     } else {
                         //panic!("prim was partial... do we allow this?");
                         stack.clear();
-                        return Ok (());
+                        return Ok(());
                     }
                 }
                 Instruction::Set(f) => {

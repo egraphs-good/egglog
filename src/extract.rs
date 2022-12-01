@@ -57,7 +57,6 @@ impl EGraph {
                     })
                     .collect()
             })
-
             .take(limit)
             .collect()
     }

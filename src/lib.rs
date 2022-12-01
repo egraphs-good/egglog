@@ -8,11 +8,11 @@ mod util;
 mod value;
 
 use indexmap::map::Entry as IEntry;
-use IEntry as Entry;
 use instant::{Duration, Instant};
 use smallvec::SmallVec;
 use sort::*;
 use thiserror::Error;
+use IEntry as Entry;
 
 use ast::*;
 
@@ -791,7 +791,7 @@ impl EGraph {
             Entry::Occupied(_) => panic!("Rule '{name}' was already present"),
             Entry::Vacant(e) => {
                 e.insert(compiled_rule);
-            },
+            }
         };
         Ok(name)
     }
@@ -835,6 +835,7 @@ impl EGraph {
                     panic!("node_limit must be an integer");
                 }
             }
+            _ => panic!("Unknown option '{}'", name),
         }
     }
 
@@ -941,7 +942,7 @@ impl EGraph {
                     self.rebuild();
                     let (_t, value) = self.eval_expr(&e, None, true)?;
                     //log::info!("Extracting {e} at {value:?}");
-                    
+
                     let msg = if variants > 0 {
                         let exprs = self.extract_variants(value, variants);
                         let line = "\n    ";
@@ -1007,9 +1008,10 @@ impl EGraph {
                 self.load_ruleset(name);
                 format!("Loaded ruleset {}", name)
             }
-            Command::SetOption(name, value) => {
+            Command::SetOption { name, value } => {
+                let str = format!("Set option {} to {}", name, value);
                 self.set_option(name.into(), value);
-                format!("Set option {} to {}", name, value)
+                str
             }
             Command::Query(_q) => {
                 // let qsexp = sexp::Sexp::List(
@@ -1141,7 +1143,8 @@ impl EGraph {
     }
 
     pub fn parse_and_run_program(&mut self, input: &str) -> Result<Vec<String>, Error> {
-        let program = self.parser
+        let program = self
+            .parser
             .parse(input)
             .map_err(|e| e.map_token(|tok| tok.to_string()))?;
         self.run_program(program)
