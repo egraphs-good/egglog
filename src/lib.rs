@@ -885,6 +885,17 @@ impl EGraph {
                 let name = self.add_rewrite(rewrite)?;
                 format!("Declared rw {name}.")
             }
+            Command::BiRewrite(rewrite) => {
+                let rw2 = rewrite.clone();
+                let _name = self.add_rewrite(rewrite)?;
+                let rewrite = Rewrite {
+                    lhs: rw2.rhs,
+                    rhs: rw2.lhs,
+                    conditions: rw2.conditions,
+                };
+                let name = self.add_rewrite(rewrite)?;
+                format!("Declared bi-rw {name}.")
+            }
             Command::Run(limit) => {
                 if should_run {
                     let [st, at, rt] = self.run_rules(limit);

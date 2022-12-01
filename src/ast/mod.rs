@@ -54,6 +54,7 @@ pub enum Command {
     },
     Rule(Rule),
     Rewrite(Rewrite),
+    BiRewrite(Rewrite),
     Action(Action),
     Run(usize),
     Extract {
