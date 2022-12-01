@@ -819,6 +819,25 @@ impl EGraph {
         self.rules.extend(self.rulesets.get(&name).unwrap().clone());
     }
 
+    pub fn set_option(&mut self, name: &str, value: Expr) {
+        match name {
+            "match_limit" => {
+                if let Expr::Lit(Literal::Int(i)) = value {
+                    self.match_limit = i as usize;
+                } else {
+                    panic!("match_limit must be an integer");
+                }
+            }
+            "node_limit" => {
+                if let Expr::Lit(Literal::Int(i)) = value {
+                    self.node_limit = i as usize;
+                } else {
+                    panic!("node_limit must be an integer");
+                }
+            }
+        }
+    }
+
     pub fn add_rewrite(&mut self, rewrite: ast::Rewrite) -> Result<Symbol, Error> {
         let mut name = format!("{} -> {}", rewrite.lhs, rewrite.rhs);
         if !rewrite.conditions.is_empty() {
@@ -987,6 +1006,10 @@ impl EGraph {
             Command::LoadRuleset(name) => {
                 self.load_ruleset(name);
                 format!("Loaded ruleset {}", name)
+            }
+            Command::SetOption(name, value) => {
+                self.set_option(name.into(), value);
+                format!("Set option {} to {}", name, value)
             }
             Command::Query(_q) => {
                 // let qsexp = sexp::Sexp::List(

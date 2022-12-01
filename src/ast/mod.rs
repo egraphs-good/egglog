@@ -65,6 +65,7 @@ pub enum Command {
     ClearRules,
     AddRuleset(Symbol),
     LoadRuleset(Symbol),
+    SetOption(Symbol, Expr),
     Clear,
     Print(Symbol, usize),
     PrintSize(Symbol),

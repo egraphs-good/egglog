@@ -51,6 +51,7 @@ Command: Command = {
     "(" "clear-rules" ")" => Command::ClearRules,
     "(" "add-ruleset" <name:Ident> ")" => Command::AddRuleset(name),
     "(" "load-ruleset" <name:Ident> ")" => Command::LoadRuleset(name),
+    "(" "set-option" <name:Ident> <value:Expr> ")" => Command::SetOption { name, value },
     "(" "clear" ")" => Command::Clear,
     "(" "query" <List<Fact>> ")" => Command::Query(<>),
     "(" "push" <UNum?> ")" => Command::Push(<>.unwrap_or(1)),
