@@ -4,7 +4,7 @@ use symbol_table::GlobalSymbol;
 
 use crate::{unionfind::UnionFind, util::HashMap, Value};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct ColumnIndex {
     sort: GlobalSymbol,
     ids: HashMap<u64, SmallVec<[usize; 3]>>,
@@ -26,8 +26,28 @@ impl ColumnIndex {
         self.ids.clear()
     }
 
-    fn get_indexes_for_bits(&self, bits: u64) -> &[usize] {
-        self.ids.get(&bits).map(|x| x.as_slice()).unwrap_or(&[])
+    pub(crate) fn len(&self) -> usize {
+        self.ids.len()
+    }
+
+    pub(crate) fn get(&self, v: &Value) -> Option<&[usize]> {
+        self.get_indexes_for_bits(v.bits)
+    }
+
+    fn get_indexes_for_bits(&self, bits: u64) -> Option<&[usize]> {
+        self.ids.get(&bits).map(|x| x.as_slice())
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (Value, &[usize])> + '_ {
+        self.ids.iter().map(|(bits, v)| {
+            (
+                Value {
+                    tag: self.sort,
+                    bits: *bits,
+                },
+                v.as_slice(),
+            )
+        })
     }
 
     pub(crate) fn to_canonicalize<'a>(
@@ -36,6 +56,7 @@ impl ColumnIndex {
     ) -> impl Iterator<Item = usize> + '_ {
         uf.dirty_ids(self.sort).flat_map(|x| {
             self.get_indexes_for_bits(usize::from(x) as u64)
+                .unwrap_or(&[])
                 .iter()
                 .copied()
         })

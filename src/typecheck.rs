@@ -637,7 +637,6 @@ impl EGraph {
         program: &Program,
         make_defaults: bool,
     ) -> Result<(), Error> {
-        // println!("{:?}", program);
         for instr in &program.0 {
             match instr {
                 Instruction::Load(load) => match load {
@@ -710,13 +709,7 @@ impl EGraph {
                     let args = &stack[new_len..];
 
                     // We should only have canonical values here: omit the canonicalization step
-                    let old_value = function.insert_internal(
-                        args.into(),
-                        new_value,
-                        self.timestamp,
-                        true,
-                        false,
-                    );
+                    let old_value = function.insert(args.into(), new_value, self.timestamp);
 
                     // if the value does not exist or the two values differ
                     if old_value.is_none() || old_value != Some(new_value) {
@@ -744,13 +737,7 @@ impl EGraph {
                             // re-borrow
                             let args = &stack[new_len..];
                             let function = self.functions.get_mut(f).unwrap();
-                            function.insert_internal(
-                                args.into(),
-                                merged,
-                                self.timestamp,
-                                true,
-                                false,
-                            );
+                            function.insert(args.into(), merged, self.timestamp);
                         }
                     }
                     stack.truncate(new_len)

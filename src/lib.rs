@@ -145,7 +145,7 @@ pub struct Function {
     schema: ResolvedSchema,
     merge: MergeFn,
     nodes: IndexMap<Input, TupleOutput>,
-    indexes: Vec<ColumnIndex>,
+    indexes: Vec<Rc<ColumnIndex>>,
     index_updated_through: usize,
     updates: usize,
     counter: usize,
@@ -176,7 +176,7 @@ struct ResolvedSchema {
 
 impl Function {
     pub fn insert(&mut self, inputs: ValueVec, value: Value, timestamp: u32) -> Option<Value> {
-        self.insert_internal(inputs, value, timestamp, true, false)
+        self.insert_internal(inputs, value, timestamp, true)
     }
     pub fn insert_internal(
         &mut self,
@@ -186,10 +186,6 @@ impl Function {
         // Clean out all stale entries if they account for a sufficiently large
         // portion of the table after this entry is inserted.
         maybe_rehash: bool,
-        // When performing an in-place update, maintain the column-level
-        // indexes. Most of the time this is redundant, but we _need_ to do this
-        // during rebuilding, otherwise we can miss updates.
-        maintain_in_place: bool,
     ) -> Option<Value> {
         let (index, old) = if let Some((index, _, old)) = self
             .nodes
@@ -197,21 +193,6 @@ impl Function {
         {
             if old.value == value {
                 return Some(value);
-            } else if old.timestamp == timestamp {
-                // Timestamps match, so we can update this value in-place.
-                //
-                // Note for Future: This has to change to support rollbacks,
-                // we'll have to think about whether it makes sense to have
-                // multiple values for the same tuple modified at the same
-                // timestamp. But we currently rely on this (e.g. to do merges
-                // during rebuild).
-                if maintain_in_place {
-                    self.indexes.last_mut().unwrap().add(value, index);
-                }
-                self.updates += 1;
-                let saved = old.value;
-                old.value = value;
-                return Some(saved);
             } else {
                 self.updates += 1;
                 (index, old.value)
@@ -231,6 +212,27 @@ impl Function {
         Some(old)
     }
 
+    /// Return a column index that contains (a superset of) the offsets for the
+    /// given column. This method can return nothing if the indexes available
+    /// contain too many irrelevant offsets.
+    pub(crate) fn column_index(
+        &self,
+        col: usize,
+        timestamps: &Range<u32>,
+    ) -> Option<Rc<ColumnIndex>> {
+        let range = transform_range(&self.nodes, |out| &out.timestamp, timestamps);
+        if range.end > self.index_updated_through {
+            return None;
+        }
+        let size = range.end.saturating_sub(range.start);
+        // If this represents >12.5% overhead, don't use the index
+        if (self.nodes.len() - size) > (size / 8) {
+            return None;
+        }
+        let target = &self.indexes[col];
+        Some(target.clone())
+    }
+
     fn set_stale(&mut self, i: usize, ts: u32) {
         debug_assert!(i < self.nodes.len());
         let (mut inp, out) = self.nodes.swap_remove_index(i).unwrap();
@@ -244,18 +246,24 @@ impl Function {
     }
 
     fn build_indexes(&mut self, indexes: Range<usize>) {
-        for slot in indexes {
-            let (inp, out) = self.nodes.get_index(slot).unwrap();
-            if !inp.live() {
-                continue;
-            }
-            for (v, index) in inp
-                .data
-                .iter()
-                .chain(once(&out.value))
-                .zip(self.indexes.iter_mut())
-            {
-                index.add(*v, slot);
+        for (col, index) in self.indexes.iter_mut().enumerate() {
+            let as_mut = Rc::make_mut(index);
+            if col == self.schema.input.len() {
+                for slot in indexes.clone() {
+                    let (inp, out) = self.nodes.get_index(slot).unwrap();
+                    if !inp.live() {
+                        continue;
+                    }
+                    as_mut.add(out.value, slot)
+                }
+            } else {
+                for slot in indexes.clone() {
+                    let (inp, _) = self.nodes.get_index(slot).unwrap();
+                    if !inp.live() {
+                        continue;
+                    }
+                    as_mut.add(inp.data()[col], slot)
+                }
             }
         }
     }
@@ -271,14 +279,19 @@ impl Function {
         // removes old versions of tuples. The slowdown happens because certain
         // operations (rebuilding, index construction) still need to do O(n)
         // scans, where 'n' is the number of tuples, live or stale.
-        if self.n_stale > (self.nodes.len() / 2) {
-            self.nodes.retain(|k, _| k.live());
-            self.n_stale = 0;
-            self.counter = 0;
-            self.indexes.iter_mut().for_each(ColumnIndex::clear);
-            self.index_updated_through = 0;
-            self.update_indexes(self.nodes.len());
+        if self.n_stale <= (self.nodes.len() / 2) {
+            return;
         }
+        for index in &mut self.indexes {
+            // Everything works if we don't have a unique copy of the indexes,
+            // but we ought to be able to avoid this copy.
+            Rc::make_mut(index).clear();
+        }
+        self.nodes.retain(|k, _| k.live());
+        self.n_stale = 0;
+        self.counter = 0;
+        self.index_updated_through = 0;
+        self.update_indexes(self.nodes.len());
     }
 
     pub(crate) fn iter_timestamp_range(
@@ -335,9 +348,7 @@ impl Function {
                 continue;
             }
             self.set_stale(i, timestamp);
-            if let Some(prev) =
-                self.insert_internal(scratch.clone(), out_val, timestamp, false, true)
-            {
+            if let Some(prev) = self.insert_internal(scratch.clone(), out_val, timestamp, false) {
                 // We need to merge these ids
                 // TODO: call the merge fn
                 if !self.schema.output.is_eq_sort() {
@@ -348,7 +359,7 @@ impl Function {
                     // No change and no need to update.
                     continue;
                 }
-                self.insert_internal(scratch.clone(), next, timestamp, false, true);
+                self.insert_internal(scratch.clone(), next, timestamp, false);
             }
         }
         self.maybe_rehash();
@@ -696,7 +707,7 @@ impl EGraph {
             input
                 .iter()
                 .chain(once(&output))
-                .map(|x| ColumnIndex::new(x.name())),
+                .map(|x| Rc::new(ColumnIndex::new(x.name()))),
         );
 
         let function = Function {
@@ -1308,6 +1319,7 @@ impl EGraph {
     }
 
     // this is bad because we shouldn't inspect values like this, we should use type information
+    #[cfg(debug_assertions)]
     fn bad_find_value(&self, value: Value) -> Value {
         if let Some((tag, id)) = self.value_to_id(value) {
             Value::from_id(tag, self.find(id))
