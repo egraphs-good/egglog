@@ -117,7 +117,7 @@ impl<'a> Context<'a> {
     pub fn new(egraph: &'a EGraph) -> Self {
         Self {
             egraph,
-            unit: egraph.sorts[&"Unit".into()].clone(),
+            unit: egraph.sorts[&Symbol::from("Unit")].clone(),
             types: Default::default(),
             errors: Vec::default(),
             unionfind: UnionFind::default(),
@@ -369,7 +369,7 @@ struct ActionChecker<'a> {
 impl<'a> ActionChecker<'a> {
     fn check_action(&mut self, action: &Action) -> Result<(), TypeError> {
         match action {
-            Action::Define(v, e) => {
+            Action::Let(v, e) => {
                 if self.types.contains_key(v) || self.locals.contains_key(v) {
                     return Err(TypeError::AlreadyDefined(*v));
                 }
@@ -571,9 +571,9 @@ pub struct Program(Vec<Instruction>);
 impl EGraph {
     fn infer_literal(&self, lit: &Literal) -> ArcSort {
         match lit {
-            Literal::Int(_) => self.sorts.get(&"i64".into()),
-            Literal::String(_) => self.sorts.get(&"String".into()),
-            Literal::Unit => self.sorts.get(&"Unit".into()),
+            Literal::Int(_) => self.sorts.get(&Symbol::from("i64")),
+            Literal::String(_) => self.sorts.get(&Symbol::from("String")),
+            Literal::Unit => self.sorts.get(&Symbol::from("Unit")),
         }
         .unwrap()
         .clone()
