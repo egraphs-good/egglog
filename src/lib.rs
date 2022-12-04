@@ -844,8 +844,8 @@ impl EGraph {
 
             let rebuild_start = Instant::now();
             let updates = self.rebuild();
-            log::info!("database size: {}", self.num_tuples());
-            log::info!("Made {updates} updates (iteration {i})");
+            log::debug!("database size: {}", self.num_tuples());
+            log::debug!("Made {updates} updates (iteration {i})");
             rebuild_time += rebuild_start.elapsed();
             self.timestamp += 1;
             if self.saturated {

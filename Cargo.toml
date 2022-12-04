@@ -35,6 +35,9 @@ regex = "1"
 clap = {version = "4", features = ["derive"], optional = true}
 env_logger = {version = "0.10", optional = true}
 
+[target.'cfg(not(target_env = "msvc"))'.dependencies]
+tikv-jemallocator = "0.5"
+
 [build-dependencies]
 lalrpop = "0.19.8"
 
