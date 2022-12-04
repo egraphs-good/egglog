@@ -662,7 +662,7 @@ impl EGraph {
                         self.saturated = false;
                         let out = &function.schema.output;
                         match function.decl.default.as_ref() {
-                            None if out.name() == "Unit".into() => {
+                            None if out.name() == self.unit_sym => {
                                 function.insert(values.into(), Value::unit(), ts);
                                 Value::unit()
                             }

@@ -459,6 +459,7 @@ pub struct EGraph {
     rules: HashMap<Symbol, Rule>,
     saturated: bool,
     timestamp: u32,
+    unit_sym: Symbol,
     pub match_limit: usize,
     pub node_limit: usize,
     pub fact_directory: Option<PathBuf>,
@@ -479,6 +480,7 @@ struct Rule {
 
 impl Default for EGraph {
     fn default() -> Self {
+        let unit_sym = "Unit".into();
         let mut egraph = Self {
             egraphs: vec![],
             unionfind: Default::default(),
@@ -487,6 +489,7 @@ impl Default for EGraph {
             rules: Default::default(),
             primitives: Default::default(),
             presorts: Default::default(),
+            unit_sym,
             match_limit: 10_000_000,
             node_limit: 100_000_000,
             timestamp: 0,
@@ -494,7 +497,7 @@ impl Default for EGraph {
             fact_directory: None,
             seminaive: true,
         };
-        egraph.add_sort(UnitSort::new("Unit".into()));
+        egraph.add_sort(UnitSort::new(unit_sym));
         egraph.add_sort(StringSort::new("String".into()));
         egraph.add_sort(I64Sort::new("i64".into()));
         egraph.add_sort(RationalSort::new("Rational".into()));
