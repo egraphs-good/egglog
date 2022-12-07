@@ -622,7 +622,8 @@ impl EGraph {
         Ok(format!("Function {} has size {}", sym, f.nodes.len()))
     }
 
-    pub fn run_rules(&mut self, limit: usize, until: Option<&Fact>) -> [Duration; 3] {
+    pub fn run_rules(&mut self, config: &RunConfig) -> [Duration; 3] {
+        let RunConfig { limit, until } = config;
         let mut search_time = Duration::default();
         let mut apply_time = Duration::default();
 
@@ -632,7 +633,7 @@ impl EGraph {
         self.rebuild();
         let mut rebuild_time = initial_rebuild_start.elapsed();
 
-        for i in 0..limit {
+        for i in 0..*limit {
             self.saturated = true;
             let [st, at] = self.step_rules(i);
             search_time += st;
@@ -908,9 +909,10 @@ impl EGraph {
                 let name = self.add_rewrite(rewrite)?;
                 format!("Declared bi-rw {name}.")
             }
-            Command::Run { limit, until } => {
+            Command::Run(config) => {
+                let limit = config.limit;
                 if should_run {
-                    let [st, at, rt] = self.run_rules(limit, until.as_ref());
+                    let [st, at, rt] = self.run_rules(&config);
                     let st = st.as_secs_f64();
                     let at = at.as_secs_f64();
                     let rt = rt.as_secs_f64();
