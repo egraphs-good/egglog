@@ -56,7 +56,7 @@ pub enum Command {
     Rewrite(Rewrite),
     BiRewrite(Rewrite),
     Action(Action),
-    Run(usize),
+    Run(RunConfig),
     Extract {
         variants: usize,
         e: Expr,
@@ -74,6 +74,12 @@ pub enum Command {
     Query(Vec<Fact>),
     Push(usize),
     Pop(usize),
+}
+
+#[derive(Clone, Debug)]
+pub struct RunConfig {
+    pub limit: usize,
+    pub until: Option<Fact>,
 }
 
 #[derive(Clone, Debug)]
