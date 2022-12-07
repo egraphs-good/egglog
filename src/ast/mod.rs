@@ -56,7 +56,10 @@ pub enum Command {
     Rewrite(Rewrite),
     BiRewrite(Rewrite),
     Action(Action),
-    Run(usize),
+    Run {
+        limit: usize,
+        until: Option<Fact>,
+    },
     Extract {
         variants: usize,
         e: Expr,
