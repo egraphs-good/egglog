@@ -1,3 +1,4 @@
+; A simple group
 (datatype G (I) (A) (B))
 (function * (G G) G)
 (function inv (G) G)
@@ -20,3 +21,7 @@
 ; if you remove :until, this will take a very long time
 (run 100000 :until (= A8 I))
 (check (= A8 I))
+(check (!= B A))
+(check (!= I A))
+; If you need multiple stop conditions, consider using a (relation relation stop (unit))
+; With rules filling it in with different stop conditions of interest.
