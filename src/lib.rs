@@ -787,7 +787,7 @@ impl EGraph {
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect::<Vec<_>>();
 
-        let out_is_unit = f.schema.output.name() == "Unit".into();
+        let out_is_unit = f.schema.output.name() == self.unit_sym;
 
         let mut buf = String::new();
         let s = &mut buf;

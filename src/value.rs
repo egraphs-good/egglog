@@ -1,5 +1,7 @@
 use std::num::NonZeroU32;
 
+use lazy_static::lazy_static;
+
 use crate::{ast::Symbol, Id};
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
@@ -9,17 +11,22 @@ pub struct Value {
     pub bits: u64,
 }
 
+lazy_static! {
+    static ref BOGUS: Symbol = "__bogus__".into();
+    static ref UNIT: Symbol = "Unit".into();
+}
+
 impl Value {
     pub fn unit() -> Self {
         Value {
-            tag: Symbol::new("Unit"),
+            tag: *UNIT,
             bits: 0,
         }
     }
 
     pub fn fake() -> Self {
         Value {
-            tag: Symbol::new("__bogus__"),
+            tag: *BOGUS,
             bits: 1234567890,
         }
     }
