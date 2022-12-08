@@ -934,40 +934,12 @@ impl EGraph {
                 }
             }
             Command::Calc(idents, exprs) => {
-                let mut iter = exprs.into_iter();
-                // If it errors out, I'm in a bad pop state.
-                let mut depth = 0;
-                if let Some(a) = iter.next() {
-                    self.push();
-                    depth += 1;
-                    for TypeBind { ident, sort } in idents {
-                        let sort = self.sorts.get(&sort).unwrap().clone();
-                        self.declare_const(ident, &sort)?;
-                    }
-                    let mut a = a;
-                    for b in iter {
-                        self.push();
-                        depth += 1;
-                        self.eval_expr(&a, None, true)?;
-                        self.eval_expr(&b, None, true)?;
-                        let cond = Fact::Eq(vec![a, b.clone()]);
-                        self.run_command(
-                            Command::Run(RunConfig {
-                                limit: 100000,
-                                until: Some(cond.clone()),
-                            }),
-                            true,
-                        )?;
-                        self.run_command(Command::Check(cond), true)?;
-                        self.pop()?;
-                        depth -= 1;
-                        a = b;
-                    }
-                    self.pop()?;
-                    depth -= 1;
-                }
-                assert!(depth == 0);
-                format!("Calc proof succeeded.")
+                self.calc(idents.clone(), exprs.clone())?;
+                format!(
+                    "Calc proof succeeded: forall {}, {}",
+                    ListDisplay(idents, " "),
+                    ListDisplay(exprs, " = ")
+                )
             }
             Command::Extract { e, variants } => {
                 if should_run {
@@ -1121,6 +1093,62 @@ impl EGraph {
         for f in self.functions.values_mut() {
             f.nodes.clear();
         }
+    }
+
+    fn calc_helper(
+        &mut self,
+        idents: Vec<IdentSort>,
+        exprs: Vec<Expr>,
+        depth: &mut i64,
+    ) -> Result<(), Error> {
+        let mut iter = exprs.into_iter();
+        if let Some(a) = iter.next() {
+            self.push();
+            *depth += 1;
+            // Insert fresh symbols for locally universally quantified reasoning.
+            for IdentSort { ident, sort } in idents {
+                let sort = self.sorts.get(&sort).unwrap().clone();
+                self.declare_const(ident, &sort)?;
+            }
+            let mut a = a;
+            // Insert each expression pair and run until they match.
+            for b in iter {
+                self.push();
+                *depth += 1;
+                self.eval_expr(&a, None, true)?;
+                self.eval_expr(&b, None, true)?;
+                let cond = Fact::Eq(vec![a, b.clone()]);
+                self.run_command(
+                    Command::Run(RunConfig {
+                        limit: 100000,
+                        until: Some(cond.clone()),
+                    }),
+                    true,
+                )?;
+                self.run_command(Command::Check(cond), true)?;
+                self.pop()?;
+                *depth -= 1;
+                a = b;
+            }
+            self.pop()?;
+            *depth -= 1;
+        }
+        Ok(())
+    }
+
+    // Prove a sequence of equalities universally quantified over idents
+    pub fn calc(&mut self, idents: Vec<IdentSort>, exprs: Vec<Expr>) -> Result<(), Error> {
+        let mut depth = 0;
+        let res = self.calc_helper(idents, exprs, &mut depth);
+        if res.is_err() {
+            // pop egraph back to original state if error
+            for _ in 0..depth {
+                self.pop()?;
+            }
+        } else {
+            assert!(depth == 0);
+        }
+        res
     }
 
     // Extract an expression from the current state, returning the cost, the extracted expression and some number

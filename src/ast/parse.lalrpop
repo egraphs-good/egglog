@@ -49,7 +49,7 @@ Command: Command = {
     "(" "define" <name:Ident> <expr:Expr> <cost:Cost> ")" => Command::Define { name, expr, cost },
     <NonLetAction> => Command::Action(<>),
     "(" "run" <limit:UNum>  <until:(":until" <Fact>)?> ")" => Command::Run(RunConfig { limit, until }),
-    "(" "calc" "(" <idents:TypeBind*> ")" <exprs:Expr+> ")" => Command::Calc(idents, exprs),
+    "(" "calc" "(" <idents:IdentSort*> ")" <exprs:Expr+> ")" => Command::Calc(idents, exprs),
     "(" "extract" <variants:(":variants" <UNum>)?> <e:Expr> ")" => Command::Extract { e, variants: variants.unwrap_or(0) },
     "(" "check" <Fact> ")" => Command::Check(<>),
     "(" "clear-rules" ")" => Command::ClearRules,
@@ -118,7 +118,7 @@ Variant: Variant = {
 
 Type: Symbol = <Ident>;
 
-TypeBind: TypeBind = "(" <ident:Ident> <sort:Type> ")" => TypeBind { ident, sort };
+IdentSort: IdentSort = "(" <ident:Ident> <sort:Type> ")" => IdentSort { ident, sort };
 Num: i64 = <s:r"(-)?[0-9]+"> => s.parse().unwrap();
 UNum: usize = {
     <Num> => <>.try_into().unwrap(),
