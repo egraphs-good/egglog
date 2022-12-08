@@ -1101,23 +1101,21 @@ impl EGraph {
         exprs: Vec<Expr>,
         depth: &mut i64,
     ) -> Result<(), Error> {
-        let mut iter = exprs.into_iter();
-        if let Some(a) = iter.next() {
-            self.push();
-            *depth += 1;
-            // Insert fresh symbols for locally universally quantified reasoning.
-            for IdentSort { ident, sort } in idents {
-                let sort = self.sorts.get(&sort).unwrap().clone();
-                self.declare_const(ident, &sort)?;
-            }
-            let mut a = a;
-            // Insert each expression pair and run until they match.
-            for b in iter {
+        self.push();
+        *depth += 1;
+        // Insert fresh symbols for locally universally quantified reasoning.
+        for IdentSort { ident, sort } in idents {
+            let sort = self.sorts.get(&sort).unwrap().clone();
+            self.declare_const(ident, &sort)?;
+        }
+        // Insert each expression pair and run until they match.
+        for ab in exprs.windows(2) {
+            if let [a, b] = ab {
                 self.push();
                 *depth += 1;
                 self.eval_expr(&a, None, true)?;
                 self.eval_expr(&b, None, true)?;
-                let cond = Fact::Eq(vec![a, b.clone()]);
+                let cond = Fact::Eq(vec![a.clone(), b.clone()]);
                 self.run_command(
                     Command::Run(RunConfig {
                         limit: 100000,
@@ -1126,29 +1124,34 @@ impl EGraph {
                     true,
                 )?;
                 self.run_command(Command::Check(cond), true)?;
-                self.pop()?;
+                self.pop().unwrap();
                 *depth -= 1;
-                a = b;
+            } else {
+                panic!();
             }
-            self.pop()?;
-            *depth -= 1;
         }
+        self.pop().unwrap();
+        *depth -= 1;
         Ok(())
     }
 
     // Prove a sequence of equalities universally quantified over idents
     pub fn calc(&mut self, idents: Vec<IdentSort>, exprs: Vec<Expr>) -> Result<(), Error> {
-        let mut depth = 0;
-        let res = self.calc_helper(idents, exprs, &mut depth);
-        if res.is_err() {
-            // pop egraph back to original state if error
-            for _ in 0..depth {
-                self.pop()?;
+        if exprs.len() >= 2 {
+            let mut depth = 0;
+            let res = self.calc_helper(idents, exprs, &mut depth);
+            if res.is_err() {
+                // pop egraph back to original state if error
+                for _ in 0..depth {
+                    self.pop()?;
+                }
+            } else {
+                assert!(depth == 0);
             }
+            res
         } else {
-            assert!(depth == 0);
+            Ok(())
         }
-        res
     }
 
     // Extract an expression from the current state, returning the cost, the extracted expression and some number

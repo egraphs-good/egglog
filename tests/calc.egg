@@ -15,15 +15,14 @@
 (define A4 (* A2 A2))
 (define A8 (* A4 A4))
 
-; if you remove :until, this will take a very long time
+
 (calc ()
     (* A4 A4)
     (* (* A2 A2) (* A2 A2))
     (* A2 (* A2 (* A2 A2)))
 )
-; If you need multiple stop conditions, consider using a (relation relation stop (unit))
-; With rules filling it in with different stop conditions of interest.
 
+; Note that (calc ((I G) (b G)) ...) will fail because names must be unused
 (calc ((a G) (b G))
     (* (* b (* (inv a) a)) (inv b))
     (* b (inv b))
