@@ -79,7 +79,6 @@ pub enum Command {
     Include(String),
 }
 #[derive(Clone, Debug)]
-<<<<<<< HEAD
 pub struct IdentSort {
     pub ident: Symbol,
     pub sort: Symbol,
@@ -90,12 +89,6 @@ impl Display for IdentSort {
         write!(f, "({} {})", self.ident, self.sort)
     }
 }
-=======
-pub struct TypeBind {
-    pub ident: Symbol,
-    pub sort: Symbol,
-}
->>>>>>> 850cd71 (calc command)
 
 #[derive(Clone, Debug)]
 pub struct RunConfig {
