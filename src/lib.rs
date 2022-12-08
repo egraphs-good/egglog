@@ -1110,25 +1110,23 @@ impl EGraph {
         }
         // Insert each expression pair and run until they match.
         for ab in exprs.windows(2) {
-            if let [a, b] = ab {
-                self.push();
-                *depth += 1;
-                self.eval_expr(a, None, true)?;
-                self.eval_expr(b, None, true)?;
-                let cond = Fact::Eq(vec![a.clone(), b.clone()]);
-                self.run_command(
-                    Command::Run(RunConfig {
-                        limit: 100000,
-                        until: Some(cond.clone()),
-                    }),
-                    true,
-                )?;
-                self.run_command(Command::Check(cond), true)?;
-                self.pop().unwrap();
-                *depth -= 1;
-            } else {
-                panic!();
-            }
+            let a = &ab[0];
+            let b = &ab[1];
+            self.push();
+            *depth += 1;
+            self.eval_expr(a, None, true)?;
+            self.eval_expr(b, None, true)?;
+            let cond = Fact::Eq(vec![a.clone(), b.clone()]);
+            self.run_command(
+                Command::Run(RunConfig {
+                    limit: 100000,
+                    until: Some(cond.clone()),
+                }),
+                true,
+            )?;
+            self.run_command(Command::Check(cond), true)?;
+            self.pop().unwrap();
+            *depth -= 1;
         }
         self.pop().unwrap();
         *depth -= 1;
