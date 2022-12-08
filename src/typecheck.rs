@@ -663,13 +663,13 @@ impl EGraph {
                         let out = &function.schema.output;
                         match function.decl.default.as_ref() {
                             None if out.name() == self.unit_sym => {
-                                function.insert(values.into(), Value::unit(), ts);
+                                function.insert(values, Value::unit(), ts);
                                 Value::unit()
                             }
                             None if out.is_eq_sort() => {
                                 let id = self.unionfind.make_set();
                                 let value = Value::from_id(out.name(), id);
-                                function.insert(values.into(), value, ts);
+                                function.insert(values, value, ts);
                                 value
                             }
                             Some(_default) => {
@@ -709,7 +709,7 @@ impl EGraph {
                     let args = &stack[new_len..];
 
                     // We should only have canonical values here: omit the canonicalization step
-                    let old_value = function.insert(args.into(), new_value, self.timestamp);
+                    let old_value = function.insert(args, new_value, self.timestamp);
 
                     // if the value does not exist or the two values differ
                     if old_value.is_none() || old_value != Some(new_value) {
@@ -737,7 +737,7 @@ impl EGraph {
                             // re-borrow
                             let args = &stack[new_len..];
                             let function = self.functions.get_mut(f).unwrap();
-                            function.insert(args.into(), merged, self.timestamp);
+                            function.insert(args, merged, self.timestamp);
                         }
                     }
                     stack.truncate(new_len)

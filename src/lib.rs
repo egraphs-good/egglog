@@ -175,37 +175,35 @@ struct ResolvedSchema {
 }
 
 impl Function {
-    pub fn insert(&mut self, inputs: ValueVec, value: Value, timestamp: u32) -> Option<Value> {
+    pub fn insert(&mut self, inputs: &[Value], value: Value, timestamp: u32) -> Option<Value> {
         self.insert_internal(inputs, value, timestamp, true)
     }
     pub fn insert_internal(
         &mut self,
-        inputs: ValueVec,
+        inputs: &[Value],
         value: Value,
         timestamp: u32,
         // Clean out all stale entries if they account for a sufficiently large
         // portion of the table after this entry is inserted.
         maybe_rehash: bool,
     ) -> Option<Value> {
-        let (index, old) = if let Some((index, _, old)) = self
-            .nodes
-            .get_full_mut(InputRef::from_slice(inputs.as_slice()))
-        {
-            if old.value == value {
-                return Some(value);
+        let (index, old) =
+            if let Some((index, _, old)) = self.nodes.get_full_mut(InputRef::from_slice(inputs)) {
+                if old.value == value {
+                    return Some(value);
+                } else {
+                    self.updates += 1;
+                    (index, old.value)
+                }
             } else {
+                self.nodes
+                    .insert(Input::new(inputs.into()), TupleOutput { value, timestamp });
                 self.updates += 1;
-                (index, old.value)
-            }
-        } else {
-            self.nodes
-                .insert(Input::new(inputs), TupleOutput { value, timestamp });
-            self.updates += 1;
-            return None;
-        };
+                return None;
+            };
         self.set_stale(index, timestamp);
         self.nodes
-            .insert(Input::new(inputs), TupleOutput { value, timestamp });
+            .insert(Input::new(inputs.into()), TupleOutput { value, timestamp });
         if maybe_rehash {
             self.maybe_rehash();
         }
@@ -360,7 +358,7 @@ impl Function {
                 continue;
             }
             self.set_stale(i, timestamp);
-            if let Some(prev) = self.insert_internal(scratch.clone(), out_val, timestamp, false) {
+            if let Some(prev) = self.insert_internal(&scratch, out_val, timestamp, false) {
                 // We need to merge these ids
                 // TODO: call the merge fn
                 if !self.schema.output.is_eq_sort() {
@@ -371,7 +369,7 @@ impl Function {
                     // No change and no need to update.
                     continue;
                 }
-                self.insert_internal(scratch.clone(), next, timestamp, false);
+                self.insert_internal(&scratch, next, timestamp, false);
             }
         }
         self.maybe_rehash();
@@ -1327,7 +1325,7 @@ impl EGraph {
             cost,
         })?;
         let f = self.functions.get_mut(&name).unwrap();
-        f.insert(ValueVec::default(), value, self.timestamp);
+        f.insert(&[], value, self.timestamp);
         Ok(sort)
     }
 
