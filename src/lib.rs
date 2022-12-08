@@ -1113,8 +1113,8 @@ impl EGraph {
             if let [a, b] = ab {
                 self.push();
                 *depth += 1;
-                self.eval_expr(&a, None, true)?;
-                self.eval_expr(&b, None, true)?;
+                self.eval_expr(a, None, true)?;
+                self.eval_expr(b, None, true)?;
                 let cond = Fact::Eq(vec![a.clone(), b.clone()]);
                 self.run_command(
                     Command::Run(RunConfig {
@@ -1137,7 +1137,9 @@ impl EGraph {
 
     // Prove a sequence of equalities universally quantified over idents
     pub fn calc(&mut self, idents: Vec<IdentSort>, exprs: Vec<Expr>) -> Result<(), Error> {
-        if exprs.len() >= 2 {
+        if exprs.len() < 2 {
+            Ok(())
+        } else {
             let mut depth = 0;
             let res = self.calc_helper(idents, exprs, &mut depth);
             if res.is_err() {
@@ -1149,8 +1151,6 @@ impl EGraph {
                 assert!(depth == 0);
             }
             res
-        } else {
-            Ok(())
         }
     }
 
