@@ -57,6 +57,7 @@ pub enum Command {
     BiRewrite(Rewrite),
     Action(Action),
     Run(RunConfig),
+    Calc(Vec<TypeBind>, Vec<Expr>),
     Extract {
         variants: usize,
         e: Expr,
@@ -74,6 +75,11 @@ pub enum Command {
     Query(Vec<Fact>),
     Push(usize),
     Pop(usize),
+}
+#[derive(Clone, Debug)]
+pub struct TypeBind {
+    pub ident: Symbol,
+    pub sort: Symbol,
 }
 
 #[derive(Clone, Debug)]

@@ -933,6 +933,42 @@ impl EGraph {
                     format!("Skipped run {limit}.")
                 }
             }
+            Command::Calc(idents, exprs) => {
+                let mut iter = exprs.into_iter();
+                // If it errors out, I'm in a bad pop state.
+                let mut depth = 0;
+                if let Some(a) = iter.next() {
+                    self.push();
+                    depth += 1;
+                    for TypeBind { ident, sort } in idents {
+                        let sort = self.sorts.get(&sort).unwrap().clone();
+                        self.declare_const(ident, &sort)?;
+                    }
+                    let mut a = a;
+                    for b in iter {
+                        self.push();
+                        depth += 1;
+                        self.eval_expr(&a, None, true)?;
+                        self.eval_expr(&b, None, true)?;
+                        let cond = Fact::Eq(vec![a, b.clone()]);
+                        self.run_command(
+                            Command::Run(RunConfig {
+                                limit: 100000,
+                                until: Some(cond.clone()),
+                            }),
+                            true,
+                        )?;
+                        self.run_command(Command::Check(cond), true)?;
+                        self.pop()?;
+                        depth -= 1;
+                        a = b;
+                    }
+                    self.pop()?;
+                    depth -= 1;
+                }
+                assert!(depth == 0);
+                format!("Calc proof succeeded.")
+            }
             Command::Extract { e, variants } => {
                 if should_run {
                     // TODO typecheck
@@ -1105,6 +1141,24 @@ impl EGraph {
         Ok((cost, expr, exprs))
     }
 
+    pub fn declare_const(&mut self, name: Symbol, sort: &ArcSort) -> Result<(), Error> {
+        assert!(sort.is_eq_sort());
+        self.declare_function(&FunctionDecl {
+            name,
+            schema: Schema {
+                input: vec![],
+                output: sort.name(),
+            },
+            default: None,
+            merge: None,
+            cost: None,
+        })?;
+        let f = self.functions.get_mut(&name).unwrap();
+        let id = self.unionfind.make_set();
+        let value = Value::from_id(sort.name(), id);
+        f.insert(ValueVec::default(), value, self.timestamp);
+        Ok(())
+    }
     pub fn define(
         &mut self,
         name: Symbol,
