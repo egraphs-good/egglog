@@ -769,10 +769,7 @@ impl EGraph {
                     let function = self.functions.get_mut(f).unwrap();
                     let new_len = stack.len() - function.schema.input.len();
                     let args = &stack[new_len..];
-                    let old_value = function.nodes.remove(InputRef::from_slice(args));
-                    if old_value.is_some() {
-                        self.saturated = false;
-                    }
+                    self.saturated &= !function.remove(args, self.timestamp);
                     stack.truncate(new_len);
                 }
             }

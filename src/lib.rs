@@ -233,6 +233,18 @@ impl Function {
         Some(target.clone())
     }
 
+    pub(crate) fn remove(&mut self, ks: &[Value], ts: u32) -> bool {
+        let i = if let Some((i, _, _)) = self.nodes.get_full(InputRef::from_slice(ks)) {
+            // TODO: use `let else`
+            i
+        } else {
+            return false;
+        };
+        self.set_stale(i, ts);
+        self.maybe_rehash();
+        true
+    }
+
     fn set_stale(&mut self, i: usize, ts: u32) {
         debug_assert!(i < self.nodes.len());
         let (mut inp, out) = self.nodes.swap_remove_index(i).unwrap();
