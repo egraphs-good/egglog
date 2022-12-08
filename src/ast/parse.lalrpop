@@ -119,7 +119,11 @@ Variant: Variant = {
 
 Type: Symbol = <Ident>;
 
+<<<<<<< HEAD
 IdentSort: IdentSort = "(" <ident:Ident> <sort:Type> ")" => IdentSort { ident, sort };
+=======
+TypeBind: TypeBind = "(" <ident:Ident> <sort:Type> ")" => TypeBind { ident, sort };
+>>>>>>> 850cd71 (calc command)
 Num: i64 = <s:r"(-)?[0-9]+"> => s.parse().unwrap();
 UNum: usize = {
     <Num> => <>.try_into().unwrap(),
