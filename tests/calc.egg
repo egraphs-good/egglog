@@ -15,6 +15,7 @@
 (define A4 (* A2 A2))
 (define A8 (* A4 A4))
 
+
 (calc ()
     (* A4 A4)
     (* (* A2 A2) (* A2 A2))
