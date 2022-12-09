@@ -1,5 +1,6 @@
 use crate::ast::*;
 use crate::Symbol;
+use ordered_float::OrderedFloat;
 
 grammar;
 
@@ -103,7 +104,7 @@ Expr: Expr = {
 Literal: Literal = {
     // "(" ")" => Literal::Unit, // shouldn't need unit literals for now
     <Integer> => Literal::Int(<>),
-    <Float> => Literal::Float(F64 { value: <>}),
+    <Float> => Literal::Float(OrderedFloat(<>)),
     <SymString> => Literal::String(<>),
 }
 

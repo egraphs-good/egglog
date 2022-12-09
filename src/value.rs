@@ -54,7 +54,7 @@ impl From<F64> for Value {
     fn from(f: F64) -> Self {
         Self {
             tag: Symbol::from("f64"),
-            bits: f.value.to_bits(),
+            bits: f.to_bits(),
         }
     }
 }

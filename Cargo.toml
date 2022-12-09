@@ -25,8 +25,9 @@ num-rational = "0.4.0"
 num-traits = "0.2.15"
 num = "0.4.0"
 smallvec = "1.10"
-intervals-good = "0.1.0"
+intervals-good = "0.1.1"
 rug = { version = "1.16.0", features = ["num-traits"]}
+ordered-float = "3.4.0"
 
 
 lalrpop-util = {version = "0.19.8", features = ["lexer"]}

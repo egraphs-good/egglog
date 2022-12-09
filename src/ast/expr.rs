@@ -2,35 +2,9 @@ use crate::*;
 
 use std::fmt::Display;
 use std::hash::{Hash, Hasher};
+use ordered_float::OrderedFloat;
 
-#[derive(Debug, PartialOrd, Clone, Copy)]
-pub struct F64 {
-    pub value: f64,
-}
-
-impl F64 {
-    pub fn new(value: f64) -> Self {
-        Self { value }
-    }
-}
-
-fn cannon_bits(n: f64) -> u64 {
-    return (if n.is_nan() { f64::NAN } else { n }).to_bits();
-}
-
-impl Hash for F64 {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        return cannon_bits(self.value).hash(state);
-    }
-}
-
-impl PartialEq for F64 {
-    fn eq(&self, other: &Self) -> bool {
-        return cannon_bits(self.value) == cannon_bits(other.value);
-    }
-}
-
-impl Eq for F64 {}
+pub type F64 = OrderedFloat<f64>;
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Hash, Clone)]
 pub enum Literal {
@@ -68,7 +42,7 @@ impl Display for Literal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self {
             Literal::Int(i) => Display::fmt(i, f),
-            Literal::Float(n) => Display::fmt(&n.value, f),
+            Literal::Float(n) => Display::fmt(&n, f),
             Literal::String(s) => write!(f, "{s}"),
             Literal::Unit => write!(f, "()"),
         }

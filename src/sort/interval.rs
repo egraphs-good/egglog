@@ -1,6 +1,7 @@
 use intervals_good::{ErrorInterval, Interval};
 use rug::{float::Round, ops::*, Float, Rational};
 use std::sync::Mutex;
+use ordered_float::OrderedFloat;
 
 // 53 is double precision
 const INTERVAL_PRECISION: u32 = 200;
@@ -13,7 +14,7 @@ use super::*;
 #[derive(Debug)]
 pub struct IntervalSort {
     name: Symbol,
-    rats: Mutex<Vec<R>>,
+    rats: Mutex<IndexSet<R>>,
 }
 
 impl IntervalSort {
@@ -50,21 +51,17 @@ impl Sort for IntervalSort {
         add_primitives!(eg, "floor" = |a: R| -> R { a.floor() });
         add_primitives!(eg, "ceil" = |a: R| -> R { a.ceil() });
         add_primitives!(eg, "round" = |a: R| -> R { a.round() });
-        add_primitives!(eg, "interval" = |a: F64, b: F64| -> R { R::new(INTERVAL_PRECISION, a.value, b.value) });
+        add_primitives!(eg, "interval" = |a: F64, b: F64| -> R { R::new(INTERVAL_PRECISION, a.into_inner(), b.into_inner()) });
         add_primitives!(eg, "interval" = |a: Rational, b: Rational| -> R {
             if (true) {
                 let mut lo = Float::with_val(INTERVAL_PRECISION, 0.0);
                 let mut hi = Float::with_val(INTERVAL_PRECISION, 0.0);
                 lo.add_from_round(a, Round::Down);
                 hi.add_from_round(b, Round::Up);
-                Interval {
-                    lo,
-                    hi,
-                    err: ErrorInterval {
-                        lo: false,
-                        hi: false,
-                    }
-                }
+                Interval::make(lo, hi, ErrorInterval {
+                    lo: false,
+                    hi: false,
+                })
         } else {
             panic!("TODO fix macro");
         }
@@ -86,17 +83,15 @@ impl Sort for IntervalSort {
         add_primitives!(eg, "<" = |a: R, b: R| -> Opt { (a.hi < b.lo).then(|| ()) }); 
         add_primitives!(eg, ">" = |a: R, b: R| -> Opt { (a.lo > b.hi).then(|| ()) });
         add_primitives!(eg, "intersect" = |a: R, b: R| -> Opt<R> {
-            if (true) {
-            let lo = a.lo.max(&b.lo);
-            let hi = a.hi.min(&b.hi);
+            if true {
+            let loF: Float = a.lo.clone().into();
+            let hiF: Float = a.hi.clone().into();
+            let lo = loF.max(b.lo.as_float());
+            let hi = hiF.min(b.hi.as_float());
             if lo > hi {
                 None
             } else {
-                Some(Interval {
-                    lo,
-                    hi,
-                    err: a.err.union(&b.err),
-                })
+                Some(Interval::make(lo, hi, a.err.union(&b.err)))
             }
         } else {
             None
@@ -110,8 +105,8 @@ impl Sort for IntervalSort {
         Expr::call(
             "interval",
             vec![
-                Expr::Lit(Literal::Float(F64::new(left.to_f64()))),
-                Expr::Lit(Literal::Float(F64::new(right.to_f64()))),
+                Expr::Lit(Literal::Float(OrderedFloat(left.as_float().to_f64()))),
+                Expr::Lit(Literal::Float(OrderedFloat(right.as_float().to_f64()))),
             ],
         )
     }
@@ -121,15 +116,14 @@ impl FromSort for R {
     type Sort = IntervalSort;
     fn load(sort: &Self::Sort, value: &Value) -> Self {
         let i = value.bits as usize;
-        sort.rats.lock().unwrap().get(i).unwrap().clone()
+        sort.rats.lock().unwrap().get_index(i).unwrap().clone()
     }
 }
 
 impl IntoSort for R {
     type Sort = IntervalSort;
     fn store(self, sort: &Self::Sort) -> Option<Value> {
-        let i = sort.rats.lock().unwrap().len();
-        sort.rats.lock().unwrap().push(self);
+        let (i, _) = sort.rats.lock().unwrap().insert_full(self);
         Some(Value {
             tag: sort.name,
             bits: i as u64,
