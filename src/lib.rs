@@ -178,6 +178,15 @@ impl Function {
     pub fn insert(&mut self, inputs: &[Value], value: Value, timestamp: u32) -> Option<Value> {
         self.insert_internal(inputs, value, timestamp, true)
     }
+    pub fn clear(&mut self) {
+        self.nodes.clear();
+        self.indexes
+            .iter_mut()
+            .for_each(|x| Rc::make_mut(x).clear());
+        self.index_updated_through = 0;
+        self.n_stale = 0;
+        self.counter = 0;
+    }
     pub fn insert_internal(
         &mut self,
         inputs: &[Value],
@@ -292,6 +301,7 @@ impl Function {
         if self.n_stale <= (self.nodes.len() / 2) {
             return;
         }
+
         for index in &mut self.indexes {
             // Everything works if we don't have a unique copy of the indexes,
             // but we ought to be able to avoid this copy.
@@ -599,6 +609,16 @@ impl EGraph {
                     "[{i}] {name}({inputs:?}) = {output:?}\n{:?}",
                     function.schema,
                 )
+            }
+            for ix in &function.indexes {
+                for (_, offs) in ix.iter() {
+                    for off in offs {
+                        assert!(
+                            function.nodes.get_index(*off).is_some(),
+                            "index contains offset {off:?}, which is out of range for function {name}"
+                        );
+                    }
+                }
             }
         }
     }
@@ -1299,7 +1319,7 @@ impl EGraph {
 
     pub fn clear(&mut self) {
         for f in self.functions.values_mut() {
-            f.nodes.clear();
+            f.clear();
         }
     }
 
