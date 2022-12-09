@@ -15,14 +15,7 @@ impl F64 {
 }
 
 fn cannon_bits(n: f64) -> u64 {
-    unsafe {
-        return std::mem::transmute(
-            if n.is_nan() {
-                f64::NAN
-            } else {
-                n
-            });
-  }
+    return (if n.is_nan() { f64::NAN } else { n }).to_bits();
 }
 
 impl Hash for F64 {
@@ -37,8 +30,7 @@ impl PartialEq for F64 {
     }
 }
 
-impl Eq for F64 {
-}
+impl Eq for F64 {}
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Hash, Clone)]
 pub enum Literal {

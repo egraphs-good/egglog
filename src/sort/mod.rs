@@ -9,10 +9,10 @@ mod string;
 pub use string::*;
 mod unit;
 pub use unit::*;
-mod i64;
 mod f64;
-pub use self::i64::*;
+mod i64;
 pub use self::f64::*;
+pub use self::i64::*;
 mod map;
 pub use map::*;
 

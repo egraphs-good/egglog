@@ -46,6 +46,13 @@ impl Sort for F64Sort {
 
         add_primitives!(eg, "min" = |a: F64, b: F64| -> F64 { F64::new(a.value.min(b.value)) }); 
         add_primitives!(eg, "max" = |a: F64, b: F64| -> F64 { F64::new(a.value.max(b.value)) });
+
+        add_primitives!(eg, "sqrt" = |a: F64| -> F64 { 
+          if(true) {
+            println!("sqrt: {}", a.value);
+            F64::new(a.value.sqrt()) 
+          } else { panic!("sqrt") }});
+        add_primitives!(eg, "ln" = |a: F64| -> F64 { F64::new(a.value.ln()) });
     }
 
     fn make_expr(&self, value: Value) -> Expr {
@@ -59,7 +66,7 @@ impl IntoSort for F64 {
     fn store(self, sort: &Self::Sort) -> Option<Value> {
         Some(Value {
             tag: sort.name,
-            bits: self.value as u64,
+            bits: self.value.to_bits(),
         })
     }
 }
@@ -67,6 +74,6 @@ impl IntoSort for F64 {
 impl FromSort for F64 {
     type Sort = F64Sort;
     fn load(_sort: &Self::Sort, value: &Value) -> Self {
-        F64::new(value.bits as f64)
+        F64::new(f64::from_bits(value.bits))
     }
 }

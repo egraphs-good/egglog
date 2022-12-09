@@ -571,7 +571,7 @@ impl EGraph {
     fn infer_literal(&self, lit: &Literal) -> ArcSort {
         match lit {
             Literal::Int(_) => self.sorts.get(&Symbol::from("i64")),
-            Literal::Float(_) => self.sorts.get(&Symbol::from("F64")),
+            Literal::Float(_) => self.sorts.get(&Symbol::from("f64")),
             Literal::String(_) => self.sorts.get(&Symbol::from("String")),
             Literal::Unit => self.sorts.get(&Symbol::from("Unit")),
         }
