@@ -1,0 +1,21 @@
+(datatype Math
+    (Ival Interval)
+    (Add Math Math)
+    (Div Math Math)
+    (Ln Math)
+    (Sqrt Math)
+    
+    (Sin Math)
+    (Cos Math))
+
+
+(rewrite (Sqrt (Ival a)) (Ival (sqrt a)))
+(rewrite (Add (Ival a) (Ival b)) (Ival (+ a b)))
+
+(define term (Add (Ival (interval 1.0 1.0)) (Ival (interval 2.0 2.0))))
+
+(define res (Ival (interval 3.0 3.0)))
+
+(run 1)
+
+(check (= term res))
