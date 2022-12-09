@@ -1,6 +1,6 @@
 use std::num::NonZeroU32;
 
-use crate::{ast::Symbol, Id};
+use crate::{ast::Symbol, Id, F64};
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
 // FIXME this shouldn't be pub
@@ -37,6 +37,24 @@ impl From<i64> for Value {
         Self {
             tag: Symbol::from("i64"),
             bits: i as u64,
+        }
+    }
+}
+
+impl From<f64> for Value {
+    fn from(f: f64) -> Self {
+        Self {
+            tag: Symbol::from("f64"),
+            bits: f.to_bits(),
+        }
+    }
+}
+
+impl From<F64> for Value {
+    fn from(f: F64) -> Self {
+        Self {
+            tag: Symbol::from("f64"),
+            bits: f.value.to_bits(),
         }
     }
 }

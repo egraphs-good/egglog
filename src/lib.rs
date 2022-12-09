@@ -326,6 +326,7 @@ impl Default for EGraph {
         egraph.add_sort(UnitSort::new("Unit".into()));
         egraph.add_sort(StringSort::new("String".into()));
         egraph.add_sort(I64Sort::new("i64".into()));
+        egraph.add_sort(F64Sort::new("f64".into()));
         egraph.add_sort(RationalSort::new("Rational".into()));
         egraph.presorts.insert("Map".into(), MapSort::make_sort);
         egraph
@@ -555,6 +556,7 @@ impl EGraph {
     pub fn eval_lit(&self, lit: &Literal) -> Value {
         match lit {
             Literal::Int(i) => i.store(&*self.get_sort()).unwrap(),
+            Literal::Float(f) => f.store(&*self.get_sort()).unwrap(),
             Literal::String(s) => s.store(&*self.get_sort()).unwrap(),
             Literal::Unit => ().store(&*self.get_sort()).unwrap(),
         }

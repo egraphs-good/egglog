@@ -1,10 +1,49 @@
 use crate::*;
 
 use std::fmt::Display;
+use std::hash::{Hash, Hasher};
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
+#[derive(Debug, PartialOrd, Clone, Copy)]
+pub struct F64 {
+    pub value: f64,
+}
+
+impl F64 {
+    pub fn new(value: f64) -> Self {
+        Self { value }
+    }
+}
+
+fn cannon_bits(n: f64) -> u64 {
+    unsafe {
+        return std::mem::transmute(
+            if n.is_nan() {
+                f64::NAN
+            } else {
+                n
+            });
+  }
+}
+
+impl Hash for F64 {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        return cannon_bits(self.value).hash(state);
+    }
+}
+
+impl PartialEq for F64 {
+    fn eq(&self, other: &Self) -> bool {
+        return cannon_bits(self.value) == cannon_bits(other.value);
+    }
+}
+
+impl Eq for F64 {
+}
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Hash, Clone)]
 pub enum Literal {
     Int(i64),
+    Float(F64),
     String(Symbol),
     Unit,
 }
@@ -30,19 +69,21 @@ macro_rules! impl_from {
 }
 
 impl_from!(Int(i64));
+impl_from!(Float(F64));
 impl_from!(String(Symbol));
 
 impl Display for Literal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self {
             Literal::Int(i) => Display::fmt(i, f),
+            Literal::Float(n) => Display::fmt(&n.value, f),
             Literal::String(s) => write!(f, "{s}"),
             Literal::Unit => write!(f, "()"),
         }
     }
 }
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Hash, Clone)]
 pub enum Expr {
     Lit(Literal),
     Var(Symbol),

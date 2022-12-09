@@ -102,7 +102,8 @@ Expr: Expr = {
 
 Literal: Literal = {
     // "(" ")" => Literal::Unit, // shouldn't need unit literals for now
-    <Num> => Literal::Int(<>),
+    <Integer> => Literal::Int(<>),
+    <Float> => Literal::Float(F64 { value: <>}),
     <SymString> => Literal::String(<>),
 }
 
@@ -118,9 +119,11 @@ Variant: Variant = {
 
 Type: Symbol = <Ident>;
 
-Num: i64 = <s:r"(-)?[0-9]+"> => s.parse().unwrap();
+Float: f64 = <s:r"[-+]?[0-9]*\.[0-9]+"> => s.parse().unwrap();
+
+Integer: i64 = <s:r"(-)?[0-9]+"> => s.parse().unwrap();
 UNum: usize = {
-    <Num> => <>.try_into().unwrap(),
+    <Integer> => <>.try_into().unwrap(),
 }
 Bool: bool = {
     "true" => true,

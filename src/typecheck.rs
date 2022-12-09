@@ -571,6 +571,7 @@ impl EGraph {
     fn infer_literal(&self, lit: &Literal) -> ArcSort {
         match lit {
             Literal::Int(_) => self.sorts.get(&Symbol::from("i64")),
+            Literal::Float(_) => self.sorts.get(&Symbol::from("F64")),
             Literal::String(_) => self.sorts.get(&Symbol::from("String")),
             Literal::Unit => self.sorts.get(&Symbol::from("Unit")),
         }
@@ -753,6 +754,7 @@ impl EGraph {
                 Instruction::Panic(msg) => panic!("Panic: {}", msg),
                 Instruction::Literal(lit) => match lit {
                     Literal::Int(i) => stack.push(Value::from(*i)),
+                    Literal::Float(f) => stack.push(Value::from(*f)),
                     Literal::String(s) => stack.push(Value::from(*s)),
                     Literal::Unit => stack.push(Value::unit()),
                 },
