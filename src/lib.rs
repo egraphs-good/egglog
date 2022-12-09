@@ -941,6 +941,14 @@ impl EGraph {
                     ListDisplay(exprs, " = ")
                 )
             }
+            Command::Prove(goal) => {
+                self.backchain_goal(goal.clone())?;
+                format!("Proof succeeded: {:?}", goal)
+            }
+            Command::Assert(prog) => {
+                self.assert_prog(&mut vec![], prog.clone())?;
+                format!("Asserted {:?}", prog)
+            }
             Command::Extract { e, variants } => {
                 if should_run {
                     // TODO typecheck
@@ -978,6 +986,15 @@ impl EGraph {
                     format!("Defined {name}: {sort:?}")
                 } else {
                     format!("Skipping define {name}")
+                }
+            }
+            Command::Declare(IdentSort { name, sort }) => {
+                if should_run {
+                    let arcsort = self.sorts.get(&sort).unwrap().clone();
+                    self.declare_const(name, &arcsort);
+                    format!("Declared {name}: {sort}")
+                } else {
+                    format!("Skipping decare {name}")
                 }
             }
             Command::ClearRules => {
@@ -1116,9 +1133,9 @@ impl EGraph {
         self.push();
         *depth += 1;
         // Insert fresh symbols for locally universally quantified reasoning.
-        for IdentSort { ident, sort } in idents {
+        for IdentSort { name, sort } in idents {
             let sort = self.sorts.get(&sort).unwrap().clone();
-            self.declare_const(ident, &sort)?;
+            self.declare_const(name, &sort)?;
         }
         // Insert each expression pair and run until they match.
         for ab in exprs.windows(2) {
@@ -1162,6 +1179,99 @@ impl EGraph {
             }
             res
         }
+    }
+
+    fn backchain_primgoal(&mut self, goal: PrimGoal) -> Result<(), Error> {
+        match goal {
+            PrimGoal::Atom(fact) => {
+                if self.check_fact(&fact, true).is_err() {
+                    dbg!("here runnign");
+                    self.run_command(
+                        Command::Run(RunConfig {
+                            limit: 100000,
+                            until: Some(fact),
+                        }),
+                        true,
+                    )?;
+                }
+                Ok(())
+            }
+            PrimGoal::And(goals) => {
+                for goal in goals {
+                    self.backchain_primgoal(goal)?;
+                }
+                Ok(())
+            }
+        }
+    }
+    fn assert_prog(&mut self, body: &mut Vec<Fact>, prog: Prog) -> Result<(), Error> {
+        match prog {
+            Prog::Atom(action) => {
+                if body.len() == 0 {
+                    self.eval_actions(&vec![action])
+                } else {
+                    let _ = self.add_rule(ast::Rule {
+                        body: body.clone(),
+                        head: vec![action],
+                    })?; // Hmm duplicate rules error?
+                    Ok(())
+                }
+            }
+            Prog::And(progs) => {
+                for prog in progs {
+                    self.assert_prog(&mut body.clone(), prog)?;
+                }
+                Ok(())
+            }
+            Prog::ForAll(idents, prog) => {
+                for ident in idents {
+                    // This is fishy
+                    // I should actually track what is in the context.
+                    assert!(!self.functions.contains_key(&ident.name));
+                }
+                self.assert_prog(body, *prog)
+            }
+            Prog::Implies(goal, prog) => {
+                EGraph::body_from_primgoal(body, goal);
+                self.assert_prog(body, *prog)
+            }
+        }
+    }
+    fn body_from_primgoal(body: &mut Vec<Fact>, g: PrimGoal) {
+        match g {
+            PrimGoal::Atom(f) => body.push(f),
+            PrimGoal::And(goals) => {
+                for goal in goals {
+                    EGraph::body_from_primgoal(body, goal);
+                }
+            }
+        }
+    }
+    fn backchain_goal_helper(&mut self, goal: Goal) -> Result<(), Error> {
+        match goal {
+            Goal::ForAll(idents, goal) => {
+                for IdentSort { name, sort } in idents {
+                    let sort = self.sorts.get(&sort).unwrap().clone();
+                    self.declare_const(name, &sort)?;
+                }
+                self.backchain_goal_helper(*goal)
+            }
+            Goal::PrimGoal(goal) => {
+                dbg!("primgoal");
+                self.backchain_primgoal(goal)
+            }
+            Goal::Implies(prog, goal) => {
+                self.assert_prog(&mut vec![], prog)?;
+                self.backchain_goal_helper(*goal)
+            }
+        }
+    }
+    pub fn backchain_goal(&mut self, goal: Goal) -> Result<(), Error> {
+        self.push();
+        dbg!("backchainign");
+        let res = self.backchain_goal_helper(goal);
+        self.pop().unwrap();
+        res
     }
 
     // Extract an expression from the current state, returning the cost, the extracted expression and some number

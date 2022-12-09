@@ -46,7 +46,7 @@ Command: Command = {
         <conditions:(":when" <List<Fact>>)?>
     ")" => Command::BiRewrite(Rewrite { lhs, rhs, conditions: conditions.unwrap_or_default() }),
     "(" "define" <name:Ident> <expr:Expr> <cost:Cost> ")" => Command::Define { name, expr, cost },
-    <NonLetAction> => Command::Action(<>),
+    "(" "declare" <name:Ident> <sort:Type> ")" => Command::Declare(IdentSort{ name, sort }),
     "(" "run" <limit:UNum>  <until:(":until" <Fact>)?> ")" => Command::Run(RunConfig { limit, until }),
     "(" "calc" "(" <idents:IdentSort*> ")" <exprs:Expr+> ")" => Command::Calc(idents, exprs),
     "(" "extract" <variants:(":variants" <UNum>)?> <e:Expr> ")" => Command::Extract { e, variants: variants.unwrap_or(0) },
@@ -61,6 +61,9 @@ Command: Command = {
     "(" "input" <name:Ident> <file:String> ")" => Command::Input { name, file },
     "(" "fail" <Command> ")" => Command::Fail(Box::new(<>)),
     "(" "include" <file:String> ")" => Command::Include(file),
+    "(" "prove" <Goal> ")" => Command::Prove(<>),
+    "(" "assert" <Prog> ")" => Command::Assert(<>),
+    <NonLetAction> => Command::Action(<>),
 }
 
 Cost: Option<usize> = {
@@ -119,7 +122,7 @@ Variant: Variant = {
 
 Type: Symbol = <Ident>;
 
-IdentSort: IdentSort = "(" <ident:Ident> <sort:Type> ")" => IdentSort { ident, sort };
+IdentSort: IdentSort = "(" <name:Ident> <sort:Type> ")" => IdentSort { name, sort };
 Num: i64 = <s:r"(-)?[0-9]+"> => s.parse().unwrap();
 UNum: usize = {
     <Num> => <>.try_into().unwrap(),
@@ -127,3 +130,27 @@ UNum: usize = {
 Ident: Symbol = <s:r"([[:alpha:]][\w-]*)|([-+*/!=<>&|^/%]+)"> => s.parse().unwrap();
 SymString: Symbol = <r#""[^"]*""#> => Symbol::from(<>);
 String: String = <r#""[^"]*""#> => (<>).trim_matches('"').to_owned();
+
+PrimGoal: PrimGoal = {
+    "(" "and" <PrimGoal*> ")" => PrimGoal::And(<>),
+    // or is doable but also a pain.
+    //"(" "or" <Goal*> ")" => Goal::Or(<>),
+    // exists in the head of a simple rule feels easier. That's query.
+    //"(" "exists" "(" <idents:IdentSort*> ")" <g:Goal> ")" => Goal::Exists(idents, g),
+    <Fact> => PrimGoal::Atom(<>)
+}
+
+Goal: Goal = {
+    "(" "=>" <p:Prog> <g:Goal> ")" => Goal::Implies(p, Box::new(g)),
+    "(" "forall" "(" <idents:IdentSort*> ")" <g:Goal> ")" => Goal::ForAll(idents, Box::new(g)),
+    <PrimGoal> => Goal::PrimGoal(<>)
+
+}
+
+Prog: Prog = {
+    "(" "=>" <g:PrimGoal> <p:Prog> ")" => Prog::Implies(g, Box::new(p)),
+    "(" "and" <Prog*> ")" => Prog::And(<>),
+    "(" "forall" "(" <idents:IdentSort*> ")" <g:Prog> ")" => Prog::ForAll(idents, Box::new(g)),
+    "(" "=" <e1:Expr> <e2:Expr> ")" => Prog::Atom(Action::Union(<>)),
+    <Action> => Prog::Atom(<>)
+}

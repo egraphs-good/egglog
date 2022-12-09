@@ -17,6 +17,8 @@ use crate::*;
 
 mod expr;
 pub use expr::*;
+mod formula;
+pub use formula::*;
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct Id(usize);
@@ -52,12 +54,15 @@ pub enum Command {
         expr: Expr,
         cost: Option<usize>,
     },
+    Declare(IdentSort),
     Rule(Rule),
     Rewrite(Rewrite),
     BiRewrite(Rewrite),
     Action(Action),
     Run(RunConfig),
     Calc(Vec<IdentSort>, Vec<Expr>),
+    Prove(Goal),
+    Assert(Prog),
     Extract {
         variants: usize,
         e: Expr,
@@ -80,13 +85,13 @@ pub enum Command {
 }
 #[derive(Clone, Debug)]
 pub struct IdentSort {
-    pub ident: Symbol,
+    pub name: Symbol,
     pub sort: Symbol,
 }
 
 impl Display for IdentSort {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "({} {})", self.ident, self.sort)
+        write!(f, "({} {})", self.name, self.sort)
     }
 }
 
