@@ -60,7 +60,7 @@ macro_rules! add_primitives {
                         //print!("{}( ", $name);
                         //$( print!("{}:{}={:?}, ", stringify!($param), self.$param.name(), $param); )*
                         use std::io::*;
-                        std::io::stdout().flush();
+                        //std::io::stdout().flush();
                         let result: $ret = $body;
                         //println!(") = {result:?}");
                         result.store(&self.__out)
