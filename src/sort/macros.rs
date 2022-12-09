@@ -57,10 +57,12 @@ macro_rules! add_primitives {
                 fn apply(&self, values: &[Value]) -> Option<Value> {
                     if let [$($param),*] = values {
                         $(let $param: $param_t = <$param_t as FromSort>::load(&self.$param, $param);)*
-                        // print!("{}( ", $name);
-                        // $( print!("{}={:?}, ", stringify!($param), $param); )*
+                        //print!("{}( ", $name);
+                        //$( print!("{}:{}={:?}, ", stringify!($param), self.$param.name(), $param); )*
+                        use std::io::*;
+                        std::io::stdout().flush();
                         let result: $ret = $body;
-                        // println!(") = {result:?}");
+                        //println!(") = {result:?}");
                         result.store(&self.__out)
                     } else {
                         panic!()
