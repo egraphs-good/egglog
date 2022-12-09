@@ -603,7 +603,7 @@ impl EGraph {
         }
     }
 
-    pub fn check_fact(&mut self, fact: &Fact) -> Result<(), Error> {
+    pub fn check_fact(&mut self, fact: &Fact, log: bool) -> Result<(), Error> {
         match fact {
             Fact::Eq(exprs) => {
                 assert!(exprs.len() > 1);
@@ -615,13 +615,15 @@ impl EGraph {
                 let (_t0, v0) = &values[0];
                 for (_t, v) in &values[1..] {
                     if v0 != v {
-                        log::error!("Check failed");
-                        // the check failed, so print out some useful info
-                        self.rebuild();
-                        for (_t, value) in &values {
-                            if let Some((_tag, id)) = self.value_to_id(*value) {
-                                let best = self.extract(*value).1;
-                                log::error!("{}: {}", id, best);
+                        if log {
+                            log::error!("Check failed");
+                            // the check failed, so print out some useful info
+                            self.rebuild();
+                            for (_t, value) in &values {
+                                if let Some((_tag, id)) = self.value_to_id(*value) {
+                                    let best = self.extract(*value).1;
+                                    log::error!("{}: {}", id, best);
+                                }
                             }
                         }
                         return Err(Error::CheckError(values[0].1, *v));
@@ -836,7 +838,8 @@ impl EGraph {
         Ok(format!("Function {} has size {}", sym, f.nodes.len()))
     }
 
-    pub fn run_rules(&mut self, limit: usize) -> [Duration; 3] {
+    pub fn run_rules(&mut self, config: &RunConfig) -> [Duration; 3] {
+        let RunConfig { limit, until } = config;
         let mut search_time = Duration::default();
         let mut apply_time = Duration::default();
 
@@ -846,7 +849,7 @@ impl EGraph {
         self.rebuild();
         let mut rebuild_time = initial_rebuild_start.elapsed();
 
-        for i in 0..limit {
+        for i in 0..*limit {
             self.saturated = true;
             let [st, at] = self.step_rules(i);
             search_time += st;
@@ -861,6 +864,16 @@ impl EGraph {
             if self.saturated {
                 log::info!("Breaking early at iteration {}!", i);
                 break;
+            }
+            if let Some(fact) = until {
+                if self.check_fact(fact, false).is_ok() {
+                    log::info!(
+                        "Breaking early at iteration {} because of fact {}!",
+                        i,
+                        fact
+                    );
+                    break;
+                }
             }
             if self.num_tuples() > self.node_limit {
                 log::warn!(
@@ -1112,9 +1125,10 @@ impl EGraph {
                 let name = self.add_rewrite(rewrite)?;
                 format!("Declared bi-rw {name}.")
             }
-            Command::Run(limit) => {
+            Command::Run(config) => {
+                let limit = config.limit;
                 if should_run {
-                    let [st, at, rt] = self.run_rules(limit);
+                    let [st, at, rt] = self.run_rules(&config);
                     let st = st.as_secs_f64();
                     let at = at.as_secs_f64();
                     let rt = rt.as_secs_f64();
@@ -1152,7 +1166,7 @@ impl EGraph {
             }
             Command::Check(fact) => {
                 if should_run {
-                    self.check_fact(&fact)?;
+                    self.check_fact(&fact, true)?;
                     "Checked.".into()
                 } else {
                     "Skipping check.".into()

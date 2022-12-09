@@ -42,8 +42,10 @@ impl Sort for I64Sort {
         add_primitives!(eg, ">>" = |a: i64, b: i64| -> Opt<i64> { b.try_into().ok().and_then(|b| a.checked_shr(b)) });
         add_primitives!(eg, "not-i64" = |a: i64| -> i64 { !a });
 
-        add_primitives!(eg, "<" = |a: i64, b: i64| -> Opt { (a < b).then_some(()) }); 
-        add_primitives!(eg, ">" = |a: i64, b: i64| -> Opt { (a > b).then_some(()) }); 
+        add_primitives!(eg, "<" = |a: i64, b: i64| -> Opt { (a < b).then(|| ()) }); 
+        add_primitives!(eg, ">" = |a: i64, b: i64| -> Opt { (a > b).then(|| ()) }); 
+        add_primitives!(eg, "<=" = |a: i64, b: i64| -> Opt { (a <= b).then(|| ()) }); 
+        add_primitives!(eg, ">=" = |a: i64, b: i64| -> Opt { (a >= b).then(|| ()) }); 
 
         add_primitives!(eg, "min" = |a: i64, b: i64| -> i64 { a.min(b) }); 
         add_primitives!(eg, "max" = |a: i64, b: i64| -> i64 { a.max(b) });
