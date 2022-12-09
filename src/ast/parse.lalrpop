@@ -119,7 +119,7 @@ Variant: Variant = {
 
 Type: Symbol = <Ident>;
 
-Float: f64 = <s:r"[-+]?[0-9]*\.[0-9]+"> => s.parse().unwrap();
+Float: f64 = <s:r"[-+]?[0-9]*\.[0-9]+(e[-+][0-9]+)?"> => s.parse().unwrap();
 
 Integer: i64 = <s:r"(-)?[0-9]+"> => s.parse().unwrap();
 UNum: usize = {

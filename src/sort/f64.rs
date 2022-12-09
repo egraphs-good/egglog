@@ -35,23 +35,21 @@ impl Sort for F64Sort {
             Some(())
         } else {
             None
-        } }); 
+        } });
         add_primitives!(eg, ">" = |a: F64, b: F64| -> Opt { 
           if (a.value > b.value) {
             Some(())
         } else {
             None
-        } 
-         }); 
+        }
+         });
 
         add_primitives!(eg, "min" = |a: F64, b: F64| -> F64 { F64::new(a.value.min(b.value)) }); 
         add_primitives!(eg, "max" = |a: F64, b: F64| -> F64 { F64::new(a.value.max(b.value)) });
 
         add_primitives!(eg, "sqrt" = |a: F64| -> F64 { 
-          if(true) {
-            println!("sqrt: {}", a.value);
-            F64::new(a.value.sqrt()) 
-          } else { panic!("sqrt") }});
+            F64::new(a.value.sqrt())
+});
         add_primitives!(eg, "ln" = |a: F64| -> F64 { F64::new(a.value.ln()) });
     }
 
