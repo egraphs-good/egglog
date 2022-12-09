@@ -1,9 +1,11 @@
-use num::BigInt;
 use num_integer::Roots;
-use num_traits::{CheckedAdd, CheckedDiv, CheckedMul, CheckedSub, One, Signed, ToPrimitive, Zero};
+use num_traits::identities::*;
+use num_traits::*;
+use core::ops::*;
 use std::sync::Mutex;
+use rug::Integer;
 
-type R = num_rational::BigRational;
+type R = rug::Rational;
 use crate::{ast::Literal, util::IndexSet};
 
 use super::*;
@@ -38,10 +40,10 @@ impl Sort for RationalSort {
 
         // TODO we can't have primitives take borrows just yet, since it
         // requires returning a reference to the locked sort
-        add_primitives!(eg, "+" = |a: R, b: R| -> Opt<R> { a.checked_add(&b) });
-        add_primitives!(eg, "-" = |a: R, b: R| -> Opt<R> { a.checked_sub(&b) });
-        add_primitives!(eg, "*" = |a: R, b: R| -> Opt<R> { a.checked_mul(&b) });
-        add_primitives!(eg, "/" = |a: R, b: R| -> Opt<R> { a.checked_div(&b) });
+        add_primitives!(eg, "+" = |a: R, b: R| -> R { a.add(&b) });
+        add_primitives!(eg, "-" = |a: R, b: R| -> R { a.sub(&b) });
+        add_primitives!(eg, "*" = |a: R, b: R| -> R { a.mul(&b) });
+        add_primitives!(eg, "/" = |a: R, b: R| -> R { a.div(&b) });
 
         add_primitives!(eg, "min" = |a: R, b: R| -> R { a.min(b) });
         add_primitives!(eg, "max" = |a: R, b: R| -> R { a.max(b) });
@@ -50,11 +52,18 @@ impl Sort for RationalSort {
         add_primitives!(eg, "floor" = |a: R| -> R { a.floor() });
         add_primitives!(eg, "ceil" = |a: R| -> R { a.ceil() });
         add_primitives!(eg, "round" = |a: R| -> R { a.round() });
-        add_primitives!(eg, "rational" = |a: Symbol, b: Symbol| -> R { R::new(a.to_string().parse().unwrap(), b.to_string().parse().unwrap()) });
+        add_primitives!(eg, "rational" = |a: Symbol, b: Symbol| -> R { 
+            if (true) {
+                let tuple: (Integer, Integer) = (a.to_string().parse().unwrap(), b.to_string().parse().unwrap());
+                R::from(tuple)
+     } else {
+        panic!("todo");
+     }
+      });
 
         add_primitives!(eg, "pow" = |a: R, b: R| -> Option<R> {
             if a.is_zero() {
-                if b.is_positive() {
+                if b.signum() == 1 {
                     Some(R::zero())
                 } else {
                     None
@@ -62,8 +71,8 @@ impl Sort for RationalSort {
             } else if b.is_zero() {
                 Some(R::one())
             } else if b.is_integer() {
-                if let Some(b) = b.to_usize() {
-                    num_traits::checked_pow(a, b)
+                if let Some(b) = b.to_u32() {
+                    Some(a.pow(b))
                 } else {
                     // TODO handle negative powers
                     None
@@ -73,7 +82,7 @@ impl Sort for RationalSort {
             }
         });
         add_primitives!(eg, "log" = |a: R| -> Option<R> {
-            if a.is_one() {
+            if One::is_one(&a) {
                 Some(R::zero())
             } else {
                 None
@@ -85,7 +94,7 @@ impl Sort for RationalSort {
                 let s2 = a.denom().sqrt();
                 let is_perfect = &(s1.clone() * s1.clone()) == a.numer() && &(s2.clone() * s2.clone()) == a.denom();
                 if is_perfect {
-                    Some(R::new(s1.clone(), s2.clone()))
+                    Some(R::from((s1.clone(), s2.clone())))
                 } else {
                     None
                 }

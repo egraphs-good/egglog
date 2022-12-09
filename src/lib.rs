@@ -326,6 +326,7 @@ impl Default for EGraph {
         egraph.add_sort(UnitSort::new("Unit".into()));
         egraph.add_sort(StringSort::new("String".into()));
         egraph.add_sort(I64Sort::new("i64".into()));
+        egraph.add_sort(IntervalSort::new("Interval".into()));
         egraph.add_sort(F64Sort::new("f64".into()));
         egraph.add_sort(RationalSort::new("Rational".into()));
         egraph.presorts.insert("Map".into(), MapSort::make_sort);

@@ -1,7 +1,9 @@
-use num_integer::Roots;
-use num_traits::{CheckedAdd, CheckedDiv, CheckedMul, CheckedSub, One, Signed, ToPrimitive, Zero};
+use intervals_good::{ErrorInterval, Interval};
+use rug::{float::Round, ops::*, Float, Rational};
 use std::sync::Mutex;
-use intervals_good::Interval;
+
+// 53 is double precision
+const INTERVAL_PRECISION: u32 = 200;
 
 type R = Interval;
 use crate::{ast::Literal, util::IndexSet};
@@ -11,7 +13,7 @@ use super::*;
 #[derive(Debug)]
 pub struct IntervalSort {
     name: Symbol,
-    rats: Mutex<IndexSet<R>>,
+    rats: Mutex<Vec<R>>,
 }
 
 impl IntervalSort {
@@ -36,21 +38,37 @@ impl Sort for IntervalSort {
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
         type Opt<T=()> = Option<T>;
 
-        // TODO we can't have primitives take borrows just yet, since it
-        // requires returning a reference to the locked sort
         add_primitives!(eg, "+" = |a: R, b: R| -> R { a.add(&b) });
         add_primitives!(eg, "-" = |a: R, b: R| -> R { a.sub(&b) });
         add_primitives!(eg, "*" = |a: R, b: R| -> R { a.mul(&b) });
         add_primitives!(eg, "/" = |a: R, b: R| -> R { a.div(&b) });
 
-        add_primitives!(eg, "min" = |a: R, b: R| -> R { a.fmin(b) });
-        add_primitives!(eg, "max" = |a: R, b: R| -> R { a.fmax(b) });
+        add_primitives!(eg, "min" = |a: R, b: R| -> R { a.fmin(&b) });
+        add_primitives!(eg, "max" = |a: R, b: R| -> R { a.fmax(&b) });
         add_primitives!(eg, "neg" = |a: R| -> R { a.neg() });
         add_primitives!(eg, "abs" = |a: R| -> R { a.fabs() });
         add_primitives!(eg, "floor" = |a: R| -> R { a.floor() });
         add_primitives!(eg, "ceil" = |a: R| -> R { a.ceil() });
         add_primitives!(eg, "round" = |a: R| -> R { a.round() });
-        add_primitives!(eg, "interval" = |a: i64, b: i64| -> R { R::new(53, a as f64, b as f64) });
+        add_primitives!(eg, "interval" = |a: F64, b: F64| -> R { R::new(INTERVAL_PRECISION, a.value, b.value) });
+        add_primitives!(eg, "interval" = |a: Rational, b: Rational| -> R {
+            if (true) {
+                let mut lo = Float::with_val(INTERVAL_PRECISION, 0.0);
+                let mut hi = Float::with_val(INTERVAL_PRECISION, 0.0);
+                lo.add_from_round(a, Round::Down);
+                hi.add_from_round(b, Round::Up);
+                Interval {
+                    lo,
+                    hi,
+                    err: ErrorInterval {
+                        lo: false,
+                        hi: false,
+                    }
+                }
+        } else {
+            panic!("TODO fix macro");
+        }
+        });
 
         add_primitives!(eg, "pow" = |a: R, b: R| -> R {
             a.pow(&b)
@@ -66,18 +84,34 @@ impl Sort for IntervalSort {
         });
 
         add_primitives!(eg, "<" = |a: R, b: R| -> Opt { (a.hi < b.lo).then(|| ()) }); 
-        add_primitives!(eg, ">" = |a: R, b: R| -> Opt { (a.lo > b.hi).then(|| ()) }); 
+        add_primitives!(eg, ">" = |a: R, b: R| -> Opt { (a.lo > b.hi).then(|| ()) });
+        add_primitives!(eg, "intersect" = |a: R, b: R| -> Opt<R> {
+            if (true) {
+            let lo = a.lo.max(&b.lo);
+            let hi = a.hi.min(&b.hi);
+            if lo > hi {
+                None
+            } else {
+                Some(Interval {
+                    lo,
+                    hi,
+                    err: a.err.union(&b.err),
+                })
+            }
+        } else {
+            None
+        }});
     }
     fn make_expr(&self, value: Value) -> Expr {
         assert!(value.tag == self.name());
         let rat = R::load(self, &value);
-        let left = rat.lo.floor();
-        let denom = rat.hi;
+        let left = rat.lo;
+        let right = rat.hi;
         Expr::call(
             "interval",
             vec![
-                Expr::Lit(Literal::Int(numer)),
-                Expr::Lit(Literal::Int(denom)),
+                Expr::Lit(Literal::Float(F64::new(left.to_f64()))),
+                Expr::Lit(Literal::Float(F64::new(right.to_f64()))),
             ],
         )
     }
@@ -87,14 +121,15 @@ impl FromSort for R {
     type Sort = IntervalSort;
     fn load(sort: &Self::Sort, value: &Value) -> Self {
         let i = value.bits as usize;
-        *sort.rats.lock().unwrap().get_index(i).unwrap()
+        sort.rats.lock().unwrap().get(i).unwrap().clone()
     }
 }
 
 impl IntoSort for R {
     type Sort = IntervalSort;
     fn store(self, sort: &Self::Sort) -> Option<Value> {
-        let (i, _) = sort.rats.lock().unwrap().insert_full(self);
+        let i = sort.rats.lock().unwrap().len();
+        sort.rats.lock().unwrap().push(self);
         Some(Value {
             tag: sort.name,
             bits: i as u64,

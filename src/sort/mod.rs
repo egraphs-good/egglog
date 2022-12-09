@@ -13,6 +13,8 @@ mod f64;
 mod i64;
 pub use self::f64::*;
 pub use self::i64::*;
+mod interval;
+pub use interval::*;
 mod map;
 pub use map::*;
 
