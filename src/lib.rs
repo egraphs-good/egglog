@@ -1037,7 +1037,7 @@ impl EGraph {
                 if self.run_command(*c, should_run).is_ok() {
                     return Err(Error::ExpectFail);
                 }
-                format!("Command failed as expected.")
+                "Command failed as expected.".into()
             }
             Command::Input { name, file } => {
                 let func = self.functions.get_mut(&name).unwrap();
