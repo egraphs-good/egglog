@@ -95,4 +95,4 @@
 
 (define ex2 (MMul (Kron (Id p) C) (Kron A (Id m))))
 (run 10)
-(check (!= ex2 (Kron A C)))
+(fail (check (= ex2 (Kron A C))))

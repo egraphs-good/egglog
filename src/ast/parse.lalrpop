@@ -60,6 +60,7 @@ Command: Command = {
     "(" "print" <sym:Ident> <n:UNum?> ")" => Command::Print(sym, n.unwrap_or(10)),
     "(" "print-size" <sym:Ident> ")" => Command::PrintSize(sym),
     "(" "input" <name:Ident> <file:String> ")" => Command::Input { name, file },
+    "(" "fail" <Command> ")" => Command::Fail(Box::new(<>))
 }
 
 Cost: Option<usize> = {

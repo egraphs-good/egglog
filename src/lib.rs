@@ -438,7 +438,7 @@ impl EGraph {
                 Expr::Call(_, _) => {
                     // println!("Checking fact: {}", expr);
                     let unit = self.get_sort::<UnitSort>();
-                    self.eval_expr(expr, Some(unit), true)?;
+                    self.eval_expr(expr, Some(unit), false)?;
                 }
             },
         }
@@ -1033,6 +1033,12 @@ impl EGraph {
                 println!("{}", msg);
                 msg
             }
+            Command::Fail(c) => {
+                if self.run_command(*c, should_run).is_ok() {
+                    return Err(Error::ExpectFail);
+                }
+                format!("Command failed as expected.")
+            }
             Command::Input { name, file } => {
                 let func = self.functions.get_mut(&name).unwrap();
                 let is_unit = func.schema.output.name().as_str() == "Unit";
@@ -1263,4 +1269,6 @@ pub enum Error {
     PresortNotFound(Symbol),
     #[error("Tried to pop too much")]
     Pop,
+    #[error("Command should have failed.")]
+    ExpectFail,
 }
