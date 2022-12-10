@@ -1421,7 +1421,7 @@ impl EGraph {
         let f = self.functions.get_mut(&name).unwrap();
         let id = self.unionfind.make_set();
         let value = Value::from_id(sort.name(), id);
-        f.insert(ValueVec::default(), value, self.timestamp);
+        f.insert(&[], value, self.timestamp);
         Ok(())
     }
     pub fn define(
