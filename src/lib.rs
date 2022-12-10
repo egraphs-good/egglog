@@ -1169,6 +1169,14 @@ impl EGraph {
                     format!("Skipped run {limit}.")
                 }
             }
+            Command::Calc(idents, exprs) => {
+                self.calc(idents.clone(), exprs.clone())?;
+                format!(
+                    "Calc proof succeeded: forall {}, {}",
+                    ListDisplay(idents, " "),
+                    ListDisplay(exprs, " = ")
+                )
+            }
             Command::Extract { e, variants } => {
                 if should_run {
                     // TODO typecheck
@@ -1323,6 +1331,63 @@ impl EGraph {
         }
     }
 
+    fn calc_helper(
+        &mut self,
+        idents: Vec<IdentSort>,
+        exprs: Vec<Expr>,
+        depth: &mut i64,
+    ) -> Result<(), Error> {
+        self.push();
+        *depth += 1;
+        // Insert fresh symbols for locally universally quantified reasoning.
+        for IdentSort { ident, sort } in idents {
+            let sort = self.sorts.get(&sort).unwrap().clone();
+            self.declare_const(ident, &sort)?;
+        }
+        // Insert each expression pair and run until they match.
+        for ab in exprs.windows(2) {
+            let a = &ab[0];
+            let b = &ab[1];
+            self.push();
+            *depth += 1;
+            self.eval_expr(a, None, true)?;
+            self.eval_expr(b, None, true)?;
+            let cond = Fact::Eq(vec![a.clone(), b.clone()]);
+            self.run_command(
+                Command::Run(RunConfig {
+                    limit: 100000,
+                    until: Some(cond.clone()),
+                }),
+                true,
+            )?;
+            self.run_command(Command::Check(cond), true)?;
+            self.pop().unwrap();
+            *depth -= 1;
+        }
+        self.pop().unwrap();
+        *depth -= 1;
+        Ok(())
+    }
+
+    // Prove a sequence of equalities universally quantified over idents
+    pub fn calc(&mut self, idents: Vec<IdentSort>, exprs: Vec<Expr>) -> Result<(), Error> {
+        if exprs.len() < 2 {
+            Ok(())
+        } else {
+            let mut depth = 0;
+            let res = self.calc_helper(idents, exprs, &mut depth);
+            if res.is_err() {
+                // pop egraph back to original state if error
+                for _ in 0..depth {
+                    self.pop()?;
+                }
+            } else {
+                assert!(depth == 0);
+            }
+            res
+        }
+    }
+
     // Extract an expression from the current state, returning the cost, the extracted expression and some number
     // of other variants, if variants is not zero.
     pub fn extract_expr(
@@ -1341,6 +1406,24 @@ impl EGraph {
         Ok((cost, expr, exprs))
     }
 
+    pub fn declare_const(&mut self, name: Symbol, sort: &ArcSort) -> Result<(), Error> {
+        assert!(sort.is_eq_sort());
+        self.declare_function(&FunctionDecl {
+            name,
+            schema: Schema {
+                input: vec![],
+                output: sort.name(),
+            },
+            default: None,
+            merge: None,
+            cost: None,
+        })?;
+        let f = self.functions.get_mut(&name).unwrap();
+        let id = self.unionfind.make_set();
+        let value = Value::from_id(sort.name(), id);
+        f.insert(ValueVec::default(), value, self.timestamp);
+        Ok(())
+    }
     pub fn define(
         &mut self,
         name: Symbol,
