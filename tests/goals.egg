@@ -1,0 +1,59 @@
+(datatype Vert)
+
+(declare a Vert)
+(declare b Vert)
+(declare c Vert)
+(relation edge (Vert Vert))
+(relation path (Vert Vert))
+
+(fail (check (edge (a) (c))))
+
+(assert (forall ((x Vert) (y Vert)) (=> (edge x y) (path x y))))
+(assert (forall ((x Vert) (y Vert) (z Vert)) (=> (and (edge x y) (path y z)) (path x z))))
+(assert (edge a b))
+(assert (edge b c))
+
+(check (edge a b))
+(fail check (edge a c)))
+(fail (check (path c a)))
+
+
+(goal (path a b))
+(goal (path a c))
+(fail (goal (path c a)))
+
+
+(clear-rules)
+(check a)
+
+; (print d) fails
+(goal
+    (=>
+        (and  
+            (forall ((x Vert) (y Vert)) (=> (edge x y) (path x y)))
+            (forall ((x Vert) (y Vert) (z Vert)) 
+                (=> (and (edge x y) (path y z)) (path x z)))
+        )
+        (path a c)
+    )
+)
+
+(clear)
+(fail (check a))
+
+(goal 
+    (forall ((p Vert) (q Vert) (r Vert))
+        (=>
+            (and  
+                (edge p q)
+                (edge q r)
+                (forall ((x Vert) (y Vert)) (=> (edge x y) (path x y)))
+                (forall ((x Vert) (y Vert) (z Vert)) 
+                    (=> (and (edge x y) (path y z)) (path x z)))
+            )
+            (path p r)
+        )
+    )
+)
+
+(check (p))

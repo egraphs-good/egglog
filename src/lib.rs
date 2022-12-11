@@ -946,7 +946,7 @@ impl EGraph {
             }
             Command::Assert(prog) => {
                 self.assert_prog(prog.clone())?;
-                format!("Asserted {:?}", prog)
+                format!("Asserted {}", prog)
             }
             Command::Extract { e, variants } => {
                 if should_run {
