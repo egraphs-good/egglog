@@ -83,7 +83,25 @@ impl EGraph {
             }
         }
     }
-    fn assert_prog_helper(&mut self, body: &mut Vec<Fact>, prog: Prog) -> Result<(), Error> {
+    fn body_from_query(body: &mut Vec<Fact>, sig: &HashSet<Symbol>, g: Query) {
+        match g {
+            Query::Atom(f) => {
+                // TODO: check all pattern variables in f are in sig.
+                body.push(f)
+            }
+            Query::And(goals) => {
+                for goal in goals {
+                    EGraph::body_from_query(body, sig, goal);
+                }
+            }
+        }
+    }
+    fn assert_prog_helper(
+        &mut self,
+        body: &mut Vec<Fact>,
+        sig: &mut HashSet<Symbol>,
+        prog: Prog,
+    ) -> Result<(), Error> {
         match prog {
             Prog::Atom(action) => {
                 if body.is_empty() {
@@ -92,43 +110,33 @@ impl EGraph {
                     let _ = self.add_rule(ast::Rule {
                         body: body.clone(),
                         head: vec![action],
-                    })?; // Hmm duplicate rules error?
+                    })?; // TODO: allow duplicate rule error?
                     Ok(())
                 }
             }
             Prog::And(progs) => {
                 for prog in progs {
-                    self.assert_prog_helper(&mut body.clone(), prog)?;
+                    self.assert_prog_helper(&mut body.clone(), &mut sig.clone(), prog)?;
                 }
                 Ok(())
             }
             Prog::ForAll(idents, prog) => {
                 for ident in idents {
-                    // This is fishy
-                    // I should actually track what is in the context.
                     assert!(!self.functions.contains_key(&ident.name));
+                    // TODO: This should actually be shadowing.
+                    assert!(!sig.contains(&ident.name));
                 }
-                self.assert_prog_helper(body, *prog)
+                self.assert_prog_helper(body, sig, *prog)
             }
             Prog::Implies(goal, prog) => {
-                EGraph::body_from_query(body, goal);
-                self.assert_prog_helper(body, *prog)
+                EGraph::body_from_query(body, sig, goal);
+                self.assert_prog_helper(body, sig, *prog)
             }
         }
     }
 
     pub fn assert_prog(&mut self, prog: Prog) -> Result<(), Error> {
-        self.assert_prog_helper(&mut vec![], prog)
-    }
-    fn body_from_query(body: &mut Vec<Fact>, g: Query) {
-        match g {
-            Query::Atom(f) => body.push(f),
-            Query::And(goals) => {
-                for goal in goals {
-                    EGraph::body_from_query(body, goal);
-                }
-            }
-        }
+        self.assert_prog_helper(&mut vec![], &mut Default::default(), prog)
     }
     fn reduce_goal(&mut self, goal: Goal) -> Result<(), Error> {
         match goal {
