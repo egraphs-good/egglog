@@ -940,8 +940,8 @@ impl EGraph {
                     ListDisplay(exprs, " = ")
                 )
             }
-            Command::Prove(goal) => {
-                self.backchain_goal(goal.clone())?;
+            Command::Goal(goal) => {
+                self.prove_goal(goal.clone())?;
                 format!("Proof succeeded: {}", goal)
             }
             Command::Assert(prog) => {

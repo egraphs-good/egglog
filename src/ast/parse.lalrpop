@@ -61,7 +61,7 @@ Command: Command = {
     "(" "input" <name:Ident> <file:String> ")" => Command::Input { name, file },
     "(" "fail" <Command> ")" => Command::Fail(Box::new(<>)),
     "(" "include" <file:String> ")" => Command::Include(file),
-    "(" "prove" <Goal> ")" => Command::Prove(<>),
+    "(" "goal" <Goal> ")" => Command::Goal(<>),
     "(" "assert" <Prog> ")" => Command::Assert(<>),
     <NonLetAction> => Command::Action(<>),
 }
@@ -131,24 +131,20 @@ Ident: Symbol = <s:r"([[:alpha:]][\w-]*)|([-+*/!=<>&|^/%]+)"> => s.parse().unwra
 SymString: Symbol = <r#""[^"]*""#> => Symbol::from(<>);
 String: String = <r#""[^"]*""#> => (<>).trim_matches('"').to_owned();
 
-PrimGoal: PrimGoal = {
-    "(" "and" <PrimGoal*> ")" => PrimGoal::And(<>),
-    // or is doable but also a pain.
-    //"(" "or" <Goal*> ")" => Goal::Or(<>),
-    // exists in the head of a simple rule feels easier. That's query.
-    //"(" "exists" "(" <idents:IdentSort*> ")" <g:Goal> ")" => Goal::Exists(idents, g),
-    <Fact> => PrimGoal::Atom(<>)
+Query: Query = {
+    "(" "and" <Query*> ")" => Query::And(<>),
+    <Fact> => Query::Atom(<>)
 }
 
 Goal: Goal = {
     "(" "=>" <p:Prog> <g:Goal> ")" => Goal::Implies(p, Box::new(g)),
     "(" "forall" "(" <idents:IdentSort*> ")" <g:Goal> ")" => Goal::ForAll(idents, Box::new(g)),
-    <PrimGoal> => Goal::PrimGoal(<>)
+    <Query> => Goal::Query(<>)
 
 }
 
 Prog: Prog = {
-    "(" "=>" <g:PrimGoal> <p:Prog> ")" => Prog::Implies(g, Box::new(p)),
+    "(" "=>" <g:Query> <p:Prog> ")" => Prog::Implies(g, Box::new(p)),
     "(" "and" <Prog*> ")" => Prog::And(<>),
     "(" "forall" "(" <idents:IdentSort*> ")" <g:Prog> ")" => Prog::ForAll(idents, Box::new(g)),
     "(" "=" <e1:Expr> <e2:Expr> ")" => Prog::Atom(Action::Union(<>)),

@@ -61,7 +61,7 @@ pub enum Command {
     Action(Action),
     Run(RunConfig),
     Calc(Vec<IdentSort>, Vec<Expr>),
-    Prove(Goal),
+    Goal(Goal),
     Assert(Prog),
     Extract {
         variants: usize,

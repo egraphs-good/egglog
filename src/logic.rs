@@ -57,9 +57,9 @@ impl EGraph {
         }
     }
 
-    fn backchain_primgoal(&mut self, goal: PrimGoal) -> Result<(), Error> {
+    fn run_query_formula(&mut self, goal: Query) -> Result<(), Error> {
         match goal {
-            PrimGoal::Atom(fact) => {
+            Query::Atom(fact) => {
                 if self.check_fact(&fact, true).is_err() {
                     println!("{}", self.summary());
                     // I should actually have run check until first if it doesn't already
@@ -75,9 +75,9 @@ impl EGraph {
                     Ok(())
                 }
             }
-            PrimGoal::And(goals) => {
+            Query::And(goals) => {
                 for goal in goals {
-                    self.backchain_primgoal(goal)?;
+                    self.run_query_formula(goal)?;
                 }
                 Ok(())
             }
@@ -111,7 +111,7 @@ impl EGraph {
                 self.assert_prog_helper(body, *prog)
             }
             Prog::Implies(goal, prog) => {
-                EGraph::body_from_primgoal(body, goal);
+                EGraph::body_from_query(body, goal);
                 self.assert_prog_helper(body, *prog)
             }
         }
@@ -120,35 +120,35 @@ impl EGraph {
     pub fn assert_prog(&mut self, prog: Prog) -> Result<(), Error> {
         self.assert_prog_helper(&mut vec![], prog)
     }
-    fn body_from_primgoal(body: &mut Vec<Fact>, g: PrimGoal) {
+    fn body_from_query(body: &mut Vec<Fact>, g: Query) {
         match g {
-            PrimGoal::Atom(f) => body.push(f),
-            PrimGoal::And(goals) => {
+            Query::Atom(f) => body.push(f),
+            Query::And(goals) => {
                 for goal in goals {
-                    EGraph::body_from_primgoal(body, goal);
+                    EGraph::body_from_query(body, goal);
                 }
             }
         }
     }
-    fn backchain_goal_helper(&mut self, goal: Goal) -> Result<(), Error> {
+    fn reduce_goal(&mut self, goal: Goal) -> Result<(), Error> {
         match goal {
             Goal::ForAll(idents, goal) => {
                 for IdentSort { name, sort } in idents {
                     let sort = self.sorts.get(&sort).unwrap().clone();
                     self.declare_const(name, &sort)?;
                 }
-                self.backchain_goal_helper(*goal)
+                self.reduce_goal(*goal)
             }
-            Goal::PrimGoal(goal) => self.backchain_primgoal(goal),
+            Goal::Query(goal) => self.run_query_formula(goal),
             Goal::Implies(prog, goal) => {
                 self.assert_prog(prog)?;
-                self.backchain_goal_helper(*goal)
+                self.reduce_goal(*goal)
             }
         }
     }
-    pub fn backchain_goal(&mut self, goal: Goal) -> Result<(), Error> {
+    pub fn prove_goal(&mut self, goal: Goal) -> Result<(), Error> {
         self.push();
-        let res = self.backchain_goal_helper(goal);
+        let res = self.reduce_goal(goal);
         self.pop().unwrap();
         res
     }
