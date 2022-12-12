@@ -15,6 +15,8 @@ pub use self::f64::*;
 pub use self::i64::*;
 mod interval;
 pub use interval::*;
+mod boolinterval;
+pub use boolinterval::*;
 mod map;
 pub use map::*;
 

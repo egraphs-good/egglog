@@ -4,7 +4,7 @@ use std::sync::Mutex;
 use ordered_float::OrderedFloat;
 
 // 53 is double precision
-const INTERVAL_PRECISION: u32 = 200;
+pub(crate) const INTERVAL_PRECISION: u32 = 200;
 
 type R = Interval;
 use crate::{ast::Literal, util::IndexSet};
@@ -80,8 +80,6 @@ impl Sort for IntervalSort {
             a.cbrt()
         });
 
-        add_primitives!(eg, "<" = |a: R, b: R| -> Opt { (a.hi < b.lo).then(|| ()) }); 
-        add_primitives!(eg, ">" = |a: R, b: R| -> Opt { (a.lo > b.hi).then(|| ()) });
         add_primitives!(eg, "intersect" = |a: R, b: R| -> Opt<R> {
             if true {
             let loF: Float = a.lo.clone().into();
@@ -96,6 +94,12 @@ impl Sort for IntervalSort {
         } else {
             None
         }});
+        add_primitives!(eg, "interval-pi" = | | -> R {
+            Interval::pi(INTERVAL_PRECISION)
+        });
+        add_primitives!(eg, "interval-e" = | | -> R {
+            Interval::e(INTERVAL_PRECISION)
+        });
     }
     fn make_expr(&self, value: Value) -> Expr {
         assert!(value.tag == self.name());
