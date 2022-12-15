@@ -39,18 +39,29 @@ impl Sort for IntervalSort {
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
         type Opt<T=()> = Option<T>;
 
-        add_primitives!(eg, "+" = |a: R, b: R| -> R { a.add(&b) });
-        add_primitives!(eg, "-" = |a: R, b: R| -> R { a.sub(&b) });
-        add_primitives!(eg, "*" = |a: R, b: R| -> R { a.mul(&b) });
-        add_primitives!(eg, "/" = |a: R, b: R| -> R { a.div(&b) });
+        add_primitives!(eg, "ival-Add" = |a: R, b: R| -> R { a.add(&b) });
+        add_primitives!(eg, "ival-Sub" = |a: R, b: R| -> R { a.sub(&b) });
+        add_primitives!(eg, "ival-Mul" = |a: R, b: R| -> R { a.mul(&b) });
+        add_primitives!(eg, "ival-Div" = |a: R, b: R| -> R { a.div(&b) });
 
-        add_primitives!(eg, "min" = |a: R, b: R| -> R { a.fmin(&b) });
-        add_primitives!(eg, "max" = |a: R, b: R| -> R { a.fmax(&b) });
-        add_primitives!(eg, "neg" = |a: R| -> R { a.neg() });
-        add_primitives!(eg, "abs" = |a: R| -> R { a.fabs() });
-        add_primitives!(eg, "floor" = |a: R| -> R { a.floor() });
-        add_primitives!(eg, "ceil" = |a: R| -> R { a.ceil() });
-        add_primitives!(eg, "round" = |a: R| -> R { a.round() });
+        add_primitives!(eg, "ival-Min" = |a: R, b: R| -> R { a.fmin(&b) });
+        add_primitives!(eg, "ival-Max" = |a: R, b: R| -> R { a.fmax(&b) });
+        add_primitives!(eg, "ival-Neg" = |a: R| -> R { a.neg() });
+        add_primitives!(eg, "ival-Abs" = |a: R| -> R { a.fabs() });
+        add_primitives!(eg, "ival-Floor" = |a: R| -> R { a.floor() });
+        add_primitives!(eg, "ival-Ceil" = |a: R| -> R { a.ceil() });
+        add_primitives!(eg, "ival-Round" = |a: R| -> R { a.round() });
+        add_primitives!(eg, "ival-Sin" = |a: R| -> R { a.sin() });
+        add_primitives!(eg, "ival-Cos" = |a: R| -> R { a.cos() });
+        add_primitives!(eg, "ival-Tan" = |a: R| -> R { a.tan() });
+        add_primitives!(eg, "ival-Asin" = |a: R| -> R { a.asin() });
+        add_primitives!(eg, "ival-Acos" = |a: R| -> R { a.acos() });
+        add_primitives!(eg, "ival-Atan" = |a: R| -> R { a.atan() });
+        add_primitives!(eg, "ival-Sinh" = |a: R| -> R { a.sinh() });
+        add_primitives!(eg, "ival-Cosh" = |a: R| -> R { a.cosh() });
+        add_primitives!(eg, "ival-Tanh" = |a: R| -> R { a.tanh() });
+        add_primitives!(eg, "ival-Atan2" = |a: R, b: R| -> R { a.atan2(&b) });
+        add_primitives!(eg, "ival-hypot" = |a: R, b: R| -> R { a.hypot(&b) });
         add_primitives!(eg, "interval" = |a: F64, b: F64| -> R { R::new(INTERVAL_PRECISION, a.into_inner(), b.into_inner()) });
         add_primitives!(eg, "interval" = |a: Rational, b: Rational| -> R {
             if (true) {
@@ -67,16 +78,16 @@ impl Sort for IntervalSort {
         }
         });
 
-        add_primitives!(eg, "pow" = |a: R, b: R| -> R {
+        add_primitives!(eg, "ival-Pow" = |a: R, b: R| -> R {
             a.pow(&b)
         });
-        add_primitives!(eg, "ln" = |a: R| -> R {
+        add_primitives!(eg, "ival-Log" = |a: R| -> R {
             a.ln()
         });
-        add_primitives!(eg, "sqrt" = |a: R| -> R {
+        add_primitives!(eg, "ival-Sqrt" = |a: R| -> R {
             a.sqrt()
         });
-        add_primitives!(eg, "cbrt" = |a: R| -> R {
+        add_primitives!(eg, "ival-Cbrt" = |a: R| -> R {
             a.cbrt()
         });
 
@@ -94,11 +105,14 @@ impl Sort for IntervalSort {
         } else {
             None
         }});
-        add_primitives!(eg, "interval-pi" = | | -> R {
+        add_primitives!(eg, "interval-Pi" = | | -> R {
             Interval::pi(INTERVAL_PRECISION)
         });
-        add_primitives!(eg, "interval-e" = | | -> R {
+        add_primitives!(eg, "interval-E" = | | -> R {
             Interval::e(INTERVAL_PRECISION)
+        });
+        add_primitives!(eg, "interval-Inf" = | | -> R {
+            Interval::inf(INTERVAL_PRECISION)
         });
     }
     fn make_expr(&self, value: Value) -> Expr {

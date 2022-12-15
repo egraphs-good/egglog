@@ -34,23 +34,28 @@ impl Sort for BoolIntervalSort {
 
     #[rustfmt::skip]
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
-        add_primitives!(eg, "and" = |a: R, b: R| -> R { a.and(&b) });
-        add_primitives!(eg, "or" = |a: R, b: R| -> R { a.or(&b) });
+        add_primitives!(eg, "ival-And" = |a: R, b: R| -> R { a.and(&b) });
+        add_primitives!(eg, "ival-Or" = |a: R, b: R| -> R { a.or(&b) });
 
-        add_primitives!(eg, "trueinterval" = | | -> R {
+        add_primitives!(eg, "true-interval" = | | -> R {
           R::true_interval()
         });
-        add_primitives!(eg, "falseinterval" = | | -> R {
+        add_primitives!(eg, "false-interval" = | | -> R {
           R::false_interval()
         });
-        add_primitives!(eg, "unknowninterval" = | | -> R {
+        add_primitives!(eg, "unknown-interval" = | | -> R {
           R::unknown_interval()
         });
 
-        add_primitives!(eg, "<" = |a: Interval, b: Interval| -> R { a.less_than(&b) }); 
-        add_primitives!(eg, "<=" = |a: Interval, b: Interval| -> R { a.less_than_or_equal(&b) });
-        add_primitives!(eg, ">" = |a: Interval, b: Interval| -> R { a.greater_than(&b) });
-        add_primitives!(eg, ">=" = |a: Interval, b: Interval| -> R { a.greater_than_or_equal(&b) });
+        add_primitives!(eg, "ival-Less" = |a: Interval, b: Interval| -> BooleanInterval { a.less_than(&b) });
+        add_primitives!(eg, "ival-LessEq" = |a: Interval, b: Interval| -> BooleanInterval { a.less_than_or_equal(&b) });
+
+        add_primitives!(eg, "ival-Greater" = |a: Interval, b: Interval| -> BooleanInterval { a.greater_than(&b) });
+        add_primitives!(eg, "ival-GreaterEq" = |a: Interval, b: Interval| -> BooleanInterval { a.greater_than_or_equal(&b) });
+
+        add_primitives!(eg, "ival-Eq" = |a: Interval, b: Interval| -> BooleanInterval { a.equal_to(&b) });
+        add_primitives!(eg, "ival-NotEq" = |a: Interval, b: Interval| -> BooleanInterval { a.not_equal_to(&b) });
+
     }
     fn make_expr(&self, value: Value) -> Expr {
         assert!(value.tag == self.name());
