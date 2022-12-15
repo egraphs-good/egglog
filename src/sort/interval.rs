@@ -61,7 +61,7 @@ impl Sort for IntervalSort {
         add_primitives!(eg, "ival-Cosh" = |a: R| -> R { a.cosh() });
         add_primitives!(eg, "ival-Tanh" = |a: R| -> R { a.tanh() });
         add_primitives!(eg, "ival-Atan2" = |a: R, b: R| -> R { a.atan2(&b) });
-        add_primitives!(eg, "ival-hypot" = |a: R, b: R| -> R { a.hypot(&b) });
+        add_primitives!(eg, "ival-Hypot" = |a: R, b: R| -> R { a.hypot(&b) });
         add_primitives!(eg, "interval" = |a: F64, b: F64| -> R { R::new(INTERVAL_PRECISION, a.into_inner(), b.into_inner()) });
         add_primitives!(eg, "interval" = |a: Rational, b: Rational| -> R {
             if (true) {
@@ -113,6 +113,28 @@ impl Sort for IntervalSort {
         });
         add_primitives!(eg, "interval-Inf" = | | -> R {
             Interval::inf(INTERVAL_PRECISION)
+        });
+
+        add_primitives!(eg, "ival-Fabs" = |a: R| -> R {
+            a.fabs()
+        });
+        add_primitives!(eg, "ival-Floor" = |a: R| -> R {
+            a.floor()
+        });
+        add_primitives!(eg, "ival-Ceil" = |a: R| -> R {
+            a.ceil()
+        });
+        add_primitives!(eg, "ival-Round" = |a: R| -> R {
+            a.round()
+        });
+        add_primitives!(eg, "ival-Exp" = |a: R| -> R {
+            a.exp()
+        });
+        add_primitives!(eg, "ival-Expm1" = |a: R| -> R {
+            a.exp_m1()
+        });
+        add_primitives!(eg, "ival-Log1p" = |a: R| -> R {
+            a.ln_1p()
         });
     }
     fn make_expr(&self, value: Value) -> Expr {

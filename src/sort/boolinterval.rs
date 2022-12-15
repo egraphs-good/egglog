@@ -56,6 +56,8 @@ impl Sort for BoolIntervalSort {
         add_primitives!(eg, "ival-Eq" = |a: Interval, b: Interval| -> BooleanInterval { a.equal_to(&b) });
         add_primitives!(eg, "ival-NotEq" = |a: Interval, b: Interval| -> BooleanInterval { a.not_equal_to(&b) });
 
+        add_primitives!(eg, "ival-Not" = |a: BooleanInterval| -> BooleanInterval { a.not() });
+        
     }
     fn make_expr(&self, value: Value) -> Expr {
         assert!(value.tag == self.name());
