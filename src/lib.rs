@@ -1034,7 +1034,7 @@ impl EGraph {
                 msg
             }
             Command::Include(file) => {
-                let s = std::fs::read_to_string(file)
+                let s = std::fs::read_to_string(&file)
                     .unwrap_or_else(|_| panic!("Failed to read file {file}"));
                 self.parse_and_run_program(&s)?;
                 format!("Included file {file}")
