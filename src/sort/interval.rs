@@ -136,6 +136,10 @@ impl Sort for IntervalSort {
         add_primitives!(eg, "ival-Log1p" = |a: R| -> R {
             a.ln_1p()
         });
+
+        add_primitives!(eg, "ival-Fma" = |a: R, b: R, c: R| -> R {
+            a.fma(&b, &c)
+        });
     }
     fn make_expr(&self, value: Value) -> Expr {
         assert!(value.tag == self.name());
