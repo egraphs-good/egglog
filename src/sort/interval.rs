@@ -113,7 +113,7 @@ impl Sort for IntervalSort {
             let lo = loF.max(b.lo.as_float());
             let hi = hiF.min(b.hi.as_float());
             if lo > hi {
-                None
+                panic!("Intersect failed!");
             } else {
                 Some(Interval::make(lo, hi, a.err.union(&b.err)))
             }
@@ -164,8 +164,8 @@ impl Sort for IntervalSort {
         Expr::call(
             "interval",
             vec![
-                Expr::Lit(Literal::Float(OrderedFloat(left.as_float().to_f64()))),
-                Expr::Lit(Literal::Float(OrderedFloat(right.as_float().to_f64()))),
+                Expr::Lit(Literal::Float(OrderedFloat(left.as_float().to_f64_round(Round::Down)))),
+                Expr::Lit(Literal::Float(OrderedFloat(right.as_float().to_f64_round(Round::Up)))),
             ],
         )
     }

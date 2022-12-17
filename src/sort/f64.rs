@@ -56,7 +56,7 @@ impl Sort for F64Sort {
 
     fn make_expr(&self, value: Value) -> Expr {
         assert!(value.tag == self.name());
-        Expr::Lit(Literal::Int(value.bits as _))
+        Expr::Lit(Literal::Float(OrderedFloat(f64::from_bits(value.bits))))
     }
 }
 
