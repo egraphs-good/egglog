@@ -839,6 +839,9 @@ impl EGraph {
     }
 
     pub fn add_ruleset(&mut self, name: Symbol) {
+        if self.rulesets.contains_key(&name) {
+            panic!("Ruleset '{name}' was already present");
+        }
         self.rulesets.insert(
             name,
             self.rules
