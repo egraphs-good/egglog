@@ -995,7 +995,6 @@ impl EGraph {
                         let v_exprs = ListDisplay(&exprs, line);
                         format!("({})", v_exprs)
                     } else {
-                        let (cost, expr) = self.extract(value);
                         format!("({})", expr)
                     };
                     println!("{}", msg);

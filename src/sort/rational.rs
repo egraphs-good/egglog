@@ -25,6 +25,13 @@ impl RationalSort {
     }
 }
 
+fn rem_first_and_last(value: &str) -> &str {
+    let mut chars = value.chars();
+    chars.next();
+    chars.next_back();
+    chars.as_str()
+}
+
 impl Sort for RationalSort {
     fn name(&self) -> Symbol {
         self.name
@@ -58,7 +65,7 @@ impl Sort for RationalSort {
         add_primitives!(eg, "round" = |a: R| -> R { a.round() });
         add_primitives!(eg, "rational" = |a: Symbol, b: Symbol| -> R { 
             if (true) {
-                let tuple: (Integer, Integer) = (a.to_string().parse().unwrap(), b.to_string().parse().unwrap());
+                let tuple: (Integer, Integer) = (rem_first_and_last(a.into()).parse().unwrap(), rem_first_and_last(b.into()).parse().unwrap());
                 R::from(tuple)
      } else {
         panic!("todo");

@@ -1,7 +1,7 @@
 use intervals_good::{ErrorInterval, Interval};
+use ordered_float::OrderedFloat;
 use rug::{float::Round, ops::*, Float, Rational};
 use std::sync::Mutex;
-use ordered_float::OrderedFloat;
 
 // 53 is double precision
 pub(crate) const INTERVAL_PRECISION: u32 = 200;
