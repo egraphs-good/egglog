@@ -4,7 +4,7 @@ mod gj;
 pub mod sort;
 mod typecheck;
 mod unionfind;
-mod util;
+pub mod util;
 mod value;
 
 use indexmap::map::Entry as IEntry;
@@ -341,7 +341,7 @@ pub struct NotFoundError(Expr);
 
 impl EGraph {
     pub fn add_sort<S: Sort + 'static>(&mut self, sort: S) {
-        self.add_arcsort(Arc::new(sort));
+        self.add_arcsort(Arc::new(sort)).unwrap()
     }
 
     pub fn push(&mut self) {
@@ -358,17 +358,19 @@ impl EGraph {
         }
     }
 
-    pub fn add_arcsort(&mut self, sort: ArcSort) {
-        match self.sorts.entry(sort.name()) {
-            Entry::Occupied(_) => panic!(),
+    pub fn add_arcsort(&mut self, sort: ArcSort) -> Result<(), Error> {
+        let name = sort.name();
+        match self.sorts.entry(name) {
+            Entry::Occupied(_) => Err(Error::SortAlreadyBound(name)),
             Entry::Vacant(e) => {
                 e.insert(sort.clone());
                 sort.register_primitives(self);
+                Ok(())
             }
-        };
+        }
     }
 
-    fn get_sort<S: Sort + Send + Sync>(&self) -> Arc<S> {
+    pub fn get_sort<S: Sort + Send + Sync>(&self) -> Arc<S> {
         for sort in self.sorts.values() {
             let sort = sort.clone().as_arc_any();
             if let Ok(sort) = Arc::downcast(sort) {
@@ -380,7 +382,7 @@ impl EGraph {
         panic!("Failed to lookup sort: {}", std::any::type_name::<S>());
     }
 
-    fn add_primitive(&mut self, prim: impl Into<Primitive>) {
+    pub fn add_primitive(&mut self, prim: impl Into<Primitive>) {
         let prim = prim.into();
         self.primitives.entry(prim.name()).or_default().push(prim);
     }
@@ -412,7 +414,7 @@ impl EGraph {
         }
     }
 
-    pub fn check_fact(&mut self, fact: &Fact) -> Result<(), Error> {
+    pub fn check_fact(&mut self, fact: &Fact, log: bool) -> Result<(), Error> {
         match fact {
             Fact::Eq(exprs) => {
                 assert!(exprs.len() > 1);
@@ -424,13 +426,15 @@ impl EGraph {
                 let (_t0, v0) = &values[0];
                 for (_t, v) in &values[1..] {
                     if v0 != v {
-                        log::error!("Check failed");
-                        // the check failed, so print out some useful info
-                        self.rebuild();
-                        for (_t, value) in &values {
-                            if let Some((_tag, id)) = self.value_to_id(*value) {
-                                let best = self.extract(*value).1;
-                                log::error!("{}: {}", id, best);
+                        if log {
+                            log::error!("Check failed");
+                            // the check failed, so print out some useful info
+                            self.rebuild();
+                            for (_t, value) in &values {
+                                if let Some((_tag, id)) = self.value_to_id(*value) {
+                                    let best = self.extract(*value).1;
+                                    log::error!("{}: {}", id, best);
+                                }
                             }
                         }
                         return Err(Error::CheckError(values[0].1, *v));
@@ -476,15 +480,23 @@ impl EGraph {
         new_unions
     }
 
-    pub fn declare_sort(&mut self, name: impl Into<Symbol>) -> Result<(), Error> {
+    pub fn declare_sort(
+        &mut self,
+        name: impl Into<Symbol>,
+        presort_and_args: Option<(Symbol, &[Expr])>,
+    ) -> Result<(), Error> {
         let name = name.into();
-        match self.sorts.entry(name) {
-            Entry::Occupied(_) => Err(Error::SortAlreadyBound(name)),
-            Entry::Vacant(e) => {
-                e.insert(Arc::new(EqSort { name }));
-                Ok(())
+        let sort = match presort_and_args {
+            Some((presort, args)) => {
+                let mksort = self
+                    .presorts
+                    .get(&presort)
+                    .ok_or(Error::PresortNotFound(presort))?;
+                mksort(self, name, args)?
             }
-        }
+            None => Arc::new(EqSort { name }),
+        };
+        self.add_arcsort(sort)
     }
 
     pub fn declare_function(&mut self, decl: &FunctionDecl) -> Result<(), Error> {
@@ -564,7 +576,7 @@ impl EGraph {
         }
     }
 
-    fn print_function(&mut self, sym: Symbol, n: usize) -> Result<String, Error> {
+    pub fn print_function(&mut self, sym: Symbol, n: usize) -> Result<String, Error> {
         let f = self.functions.get(&sym).ok_or(TypeError::Unbound(sym))?;
         let schema = f.schema.clone();
         let nodes = f
@@ -620,7 +632,8 @@ impl EGraph {
         Ok(format!("Function {} has size {}", sym, f.nodes.len()))
     }
 
-    pub fn run_rules(&mut self, limit: usize) -> [Duration; 3] {
+    pub fn run_rules(&mut self, config: &RunConfig) -> [Duration; 3] {
+        let RunConfig { limit, until } = config;
         let mut search_time = Duration::default();
         let mut apply_time = Duration::default();
         if self.num_tuples() > self.node_limit {
@@ -633,7 +646,7 @@ impl EGraph {
         self.rebuild();
         let mut rebuild_time = initial_rebuild_start.elapsed();
 
-        for i in 0..limit {
+        for i in 0..*limit {
             self.saturated = true;
             let [st, at] = self.step_rules(i);
             search_time += st;
@@ -648,6 +661,16 @@ impl EGraph {
             if self.saturated {
                 //log::info!("Breaking early at iteration {}!", i);
                 break;
+            }
+            if let Some(fact) = until {
+                if self.check_fact(fact, false).is_ok() {
+                    log::info!(
+                        "Breaking early at iteration {} because of fact {}!",
+                        i,
+                        fact
+                    );
+                    break;
+                }
             }
             if self.num_tuples() > self.node_limit {
                 break;
@@ -710,12 +733,18 @@ impl EGraph {
         for (&name, rule) in rules.iter_mut() {
             let mut all_values = vec![];
             if rule.banned_until <= iteration {
+                let mut fuel = self.match_limit << rule.times_banned;
                 let rule_search_start = Instant::now();
                 self.run_query(&rule.query, rule.todo_timestamp, |values| {
                     assert_eq!(values.len(), rule.query.vars.len());
                     all_values.extend_from_slice(values);
+                    if fuel > 0 {
+                        fuel -= 1;
+                        Ok(())
+                    } else {
+                        Err(())
+                    }
                 });
-                rule.todo_timestamp = self.timestamp;
                 let rule_search_time = rule_search_start.elapsed();
                 log::trace!(
                     "Searched for {name} in {} ({} results)",
@@ -739,13 +768,15 @@ impl EGraph {
             let len = all_values.len() / n;
             let threshold = self.match_limit << rule.times_banned;
             if len > threshold {
+                let ban_length = ban_length << rule.times_banned;
                 rule.times_banned += 1;
-                rule.banned_until = iteration + (ban_length << rule.times_banned);
-                //log::info!("Banning rule {name} for {ban_length} iterations, matched {len} times");
+                rule.banned_until = iteration + ban_length;
+                //log::info!("Banning rule {name} for {ban_length} iterations, matched {len} > {threshold} times");
                 self.saturated = false;
                 continue;
             }
 
+            rule.todo_timestamp = self.timestamp;
             let rule_apply_start = Instant::now();
 
             let stack = &mut vec![];
@@ -857,7 +888,7 @@ impl EGraph {
         self.add_rule_with_name(name, rule)
     }
 
-    fn eval_actions(&mut self, actions: &[Action]) -> Result<(), Error> {
+    pub fn eval_actions(&mut self, actions: &[Action]) -> Result<(), Error> {
         let types = Default::default();
         let program = self
             .compile_actions(&types, actions)
@@ -886,18 +917,14 @@ impl EGraph {
     fn run_command(&mut self, command: Command, should_run: bool) -> Result<String, Error> {
         Ok(match command {
             Command::Datatype { name, variants } => {
-                self.declare_sort(name)?;
+                self.declare_sort(name, None)?;
                 for variant in variants {
                     self.declare_constructor(variant, name)?;
                 }
                 format!("Declared datatype {name}.")
             }
             Command::Sort(name, presort, args) => {
-                // TODO extract this into a function
-                assert!(!self.sorts.contains_key(&name));
-                let mksort = self.presorts[&presort];
-                let sort = mksort(self, name, &args)?;
-                self.add_arcsort(sort);
+                self.declare_sort(name, Some((presort, &args)))?;
                 format!(
                     "Declared sort {name} = ({presort} {})",
                     ListDisplay(&args, " ")
@@ -915,9 +942,21 @@ impl EGraph {
                 let name = self.add_rewrite(rewrite)?;
                 format!("Declared rw {name}.")
             }
-            Command::Run(limit) => {
+            Command::BiRewrite(rewrite) => {
+                let rw2 = rewrite.clone();
+                let _name = self.add_rewrite(rewrite)?;
+                let rewrite = Rewrite {
+                    lhs: rw2.rhs,
+                    rhs: rw2.lhs,
+                    conditions: rw2.conditions,
+                };
+                let name = self.add_rewrite(rewrite)?;
+                format!("Declared bi-rw {name}.")
+            }
+            Command::Run(config) => {
+                let limit = config.limit;
                 if should_run {
-                    let [st, at, rt] = self.run_rules(limit);
+                    let [st, at, rt] = self.run_rules(&config);
                     let st = st.as_secs_f64();
                     let at = at.as_secs_f64();
                     let rt = rt.as_secs_f64();
@@ -938,15 +977,20 @@ impl EGraph {
                     format!("Skipped run {limit}.")
                 }
             }
+            Command::Calc(idents, exprs) => {
+                self.calc(idents.clone(), exprs.clone())?;
+                format!(
+                    "Calc proof succeeded: forall {}, {}",
+                    ListDisplay(idents, " "),
+                    ListDisplay(exprs, " = ")
+                )
+            }
             Command::Extract { e, variants } => {
                 if should_run {
                     // TODO typecheck
-                    self.rebuild();
-                    let (_t, value) = self.eval_expr(&e, None, true)?;
-                    //log::info!("Extracting {e} at {value:?}");
-
-                    let msg = if variants > 0 {
-                        let exprs = self.extract_variants(value, variants);
+                    let (cost, expr, exprs) = self.extract_expr(e, variants)?;
+                    let mut msg = format!("Extracted with cost {cost}: {expr}");
+                    if variants > 0 {
                         let line = "\n    ";
                         let v_exprs = ListDisplay(&exprs, line);
                         format!("({})", v_exprs)
@@ -962,7 +1006,7 @@ impl EGraph {
             }
             Command::Check(fact) => {
                 if should_run {
-                    self.check_fact(&fact)?;
+                    self.check_fact(&fact, true)?;
                     "Checked.".into()
                 } else {
                     "Skipping check.".into()
@@ -978,21 +1022,7 @@ impl EGraph {
             }
             Command::Define { name, expr, cost } => {
                 if should_run {
-                    let (sort, value) = self.eval_expr(&expr, None, true)?;
-                    self.declare_function(&FunctionDecl {
-                        name,
-                        schema: Schema {
-                            input: vec![],
-                            output: value.tag,
-                        },
-                        default: None,
-                        merge: None,
-                        cost,
-                    })?;
-                    self.dont_extract.insert(name);
-
-                    let f = self.functions.get_mut(&name).unwrap();
-                    f.insert(ValueVec::default(), value, self.timestamp);
+                    let sort = self.define(name, expr, cost)?;
                     format!("Defined {name}: {sort:?}")
                 } else {
                     format!("Skipping define {name}")
@@ -1041,9 +1071,7 @@ impl EGraph {
                 todo!()
             }
             Command::Clear => {
-                for f in self.functions.values_mut() {
-                    f.nodes.clear();
-                }
+                self.clear();
                 "Cleared.".into()
             }
             Command::Push(n) => {
@@ -1065,6 +1093,12 @@ impl EGraph {
                 let msg = self.print_size(f)?;
                 println!("{}", msg);
                 msg
+            }
+            Command::Include(file) => {
+                let s = std::fs::read_to_string(&file)
+                    .unwrap_or_else(|_| panic!("Failed to read file {file}"));
+                self.parse_and_run_program(&s)?;
+                format!("Included file {file}")
             }
             Command::Input { name, file } => {
                 let func = self.functions.get_mut(&name).unwrap();
@@ -1122,6 +1156,129 @@ impl EGraph {
         })
     }
 
+    pub fn clear(&mut self) {
+        for f in self.functions.values_mut() {
+            f.nodes.clear();
+        }
+    }
+
+    fn calc_helper(
+        &mut self,
+        idents: Vec<IdentSort>,
+        exprs: Vec<Expr>,
+        depth: &mut i64,
+    ) -> Result<(), Error> {
+        self.push();
+        *depth += 1;
+        // Insert fresh symbols for locally universally quantified reasoning.
+        for IdentSort { ident, sort } in idents {
+            let sort = self.sorts.get(&sort).unwrap().clone();
+            self.declare_const(ident, &sort)?;
+        }
+        // Insert each expression pair and run until they match.
+        for ab in exprs.windows(2) {
+            let a = &ab[0];
+            let b = &ab[1];
+            self.push();
+            *depth += 1;
+            self.eval_expr(a, None, true)?;
+            self.eval_expr(b, None, true)?;
+            let cond = Fact::Eq(vec![a.clone(), b.clone()]);
+            self.run_command(
+                Command::Run(RunConfig {
+                    limit: 100000,
+                    until: Some(cond.clone()),
+                }),
+                true,
+            )?;
+            self.run_command(Command::Check(cond), true)?;
+            self.pop().unwrap();
+            *depth -= 1;
+        }
+        self.pop().unwrap();
+        *depth -= 1;
+        Ok(())
+    }
+
+    // Prove a sequence of equalities universally quantified over idents
+    pub fn calc(&mut self, idents: Vec<IdentSort>, exprs: Vec<Expr>) -> Result<(), Error> {
+        if exprs.len() < 2 {
+            Ok(())
+        } else {
+            let mut depth = 0;
+            let res = self.calc_helper(idents, exprs, &mut depth);
+            if res.is_err() {
+                // pop egraph back to original state if error
+                for _ in 0..depth {
+                    self.pop()?;
+                }
+            } else {
+                assert!(depth == 0);
+            }
+            res
+        }
+    }
+
+    // Extract an expression from the current state, returning the cost, the extracted expression and some number
+    // of other variants, if variants is not zero.
+    pub fn extract_expr(
+        &mut self,
+        e: Expr,
+        variants: usize,
+    ) -> Result<(usize, Expr, Vec<Expr>), Error> {
+        self.rebuild();
+        let (_t, value) = self.eval_expr(&e, None, true)?;
+        let (cost, expr) = self.extract(value);
+        let exprs = if variants > 0 {
+            self.extract_variants(value, variants)
+        } else {
+            vec![]
+        };
+        Ok((cost, expr, exprs))
+    }
+
+    pub fn declare_const(&mut self, name: Symbol, sort: &ArcSort) -> Result<(), Error> {
+        assert!(sort.is_eq_sort());
+        self.declare_function(&FunctionDecl {
+            name,
+            schema: Schema {
+                input: vec![],
+                output: sort.name(),
+            },
+            default: None,
+            merge: None,
+            cost: None,
+        })?;
+        let f = self.functions.get_mut(&name).unwrap();
+        let id = self.unionfind.make_set();
+        let value = Value::from_id(sort.name(), id);
+        f.insert(ValueVec::default(), value, self.timestamp);
+        Ok(())
+    }
+    pub fn define(
+        &mut self,
+        name: Symbol,
+        expr: Expr,
+        cost: Option<usize>,
+    ) -> Result<ArcSort, Error> {
+        let (sort, value) = self.eval_expr(&expr, None, true)?;
+        self.declare_function(&FunctionDecl {
+            name,
+            schema: Schema {
+                input: vec![],
+                output: value.tag,
+            },
+            default: None,
+            merge: None,
+            cost,
+        })?;
+        self.dont_extract.insert(name);
+
+        let f = self.functions.get_mut(&name).unwrap();
+        f.insert(ValueVec::default(), value, self.timestamp);
+        Ok(sort)
+    }
+
     fn run_program(&mut self, program: Vec<Command>) -> Result<Vec<String>, Error> {
         let mut msgs = vec![];
         let should_run = true;
@@ -1171,6 +1328,8 @@ pub enum Error {
     CheckError(Value, Value),
     #[error("Sort {0} already declared.")]
     SortAlreadyBound(Symbol),
+    #[error("Presort {0} not found.")]
+    PresortNotFound(Symbol),
     #[error("Tried to pop too much")]
     Pop,
 }

@@ -44,9 +44,13 @@ Command: Command = {
     "(" "rewrite" <lhs:Expr> <rhs:Expr>
         <conditions:(":when" <List<Fact>>)?>
     ")" => Command::Rewrite(Rewrite { lhs, rhs, conditions: conditions.unwrap_or_default() }),
+    "(" "birewrite" <lhs:Expr> <rhs:Expr>
+        <conditions:(":when" <List<Fact>>)?>
+    ")" => Command::BiRewrite(Rewrite { lhs, rhs, conditions: conditions.unwrap_or_default() }),
     "(" "define" <name:Ident> <expr:Expr> <cost:Cost> ")" => Command::Define { name, expr, cost },
-    <NonDefineAction> => Command::Action(<>),
-    "(" "run" <UNum> ")" => Command::Run(<>),
+    <NonLetAction> => Command::Action(<>),
+    "(" "run" <limit:UNum>  <until:(":until" <Fact>)?> ")" => Command::Run(RunConfig { limit, until }),
+    "(" "calc" "(" <idents:IdentSort*> ")" <exprs:Expr+> ")" => Command::Calc(idents, exprs),
     "(" "extract" <variants:(":variants" <UNum>)?> <e:Expr> ")" => Command::Extract { e, variants: variants.unwrap_or(0) },
     "(" "check" <Fact> ")" => Command::Check(<>),
     "(" "clear-rules" ")" => Command::ClearRules,
@@ -60,6 +64,7 @@ Command: Command = {
     "(" "print" <sym:Ident> <n:UNum?> ")" => Command::Print(sym, n.unwrap_or(10)),
     "(" "print-size" <sym:Ident> ")" => Command::PrintSize(sym),
     "(" "input" <name:Ident> <file:String> ")" => Command::Input { name, file },
+    "(" "include" <file:String> ")" => Command::Include(file),
 }
 
 Cost: Option<usize> = {
@@ -67,7 +72,7 @@ Cost: Option<usize> = {
     => None,
 }
 
-NonDefineAction: Action = {
+NonLetAction: Action = {
     "(" "set" "(" <f: Ident> <args:Expr*> ")" <v:Expr> ")" => Action::Set ( f, args, v ),
     "(" "delete" "(" <f: Ident> <args:Expr*> ")" ")" => Action::Delete ( f, args),
     "(" "union" <e1:Expr> <e2:Expr> ")" => Action::Union(<>),
@@ -76,8 +81,8 @@ NonDefineAction: Action = {
 }
 
 Action: Action = {
-    "(" "define" <name:Ident> <expr:Expr> ")" => Action::Define(name, expr),
-    <NonDefineAction> => <>,
+    "(" "let" <name:Ident> <expr:Expr> ")" => Action::Let(name, expr),
+    <NonLetAction> => <>,
 }
 
 Name: Symbol = { "[" <Ident> "]" => <> }
@@ -98,7 +103,6 @@ Expr: Expr = {
     <Literal> => Expr::Lit(<>),
     <Ident> => Expr::Var(<>),
     <CallExpr> => <>,
-    "(" <head:PrimitiveSymbol> <tail:(Expr)+> ")" => Expr::Call(head, tail),
 };
 
 Literal: Literal = {
@@ -123,6 +127,7 @@ Type: Symbol = <Ident>;
 Float: f64 = <s:r"[-+]?[0-9]*\.[0-9]+(e[-+][0-9]+)?"> => s.parse().unwrap();
 
 Integer: i64 = <s:r"(-)?[0-9]+"> => s.parse().unwrap();
+IdentSort: IdentSort = "(" <ident:Ident> <sort:Type> ")" => IdentSort { ident, sort };
 UNum: usize = {
     <Integer> => <>.try_into().unwrap(),
 }
@@ -130,7 +135,6 @@ Bool: bool = {
     "true" => true,
     "false" => false,
 }
-Ident: Symbol = <s:r"[[:alpha:]][\w-]*"> => s.parse().unwrap();
-PrimitiveSymbol: Symbol = <r"[-+*/!=<>&|^/%]+"> => Symbol::from(<>);
-SymString: Symbol = <r#""[^"]*""#> => Symbol::from(<>.trim_matches('"'));
+Ident: Symbol = <s:r"([[:alpha:]][\w-]*)|([-+*/!=<>&|^/%]+)"> => s.parse().unwrap();
+SymString: Symbol = <r#""[^"]*""#> => Symbol::from(<>);
 String: String = <r#""[^"]*""#> => (<>).trim_matches('"').to_owned();

@@ -1,0 +1,98 @@
+
+(datatype Dim (Times Dim Dim) (NamedDim String) (Lit i64))
+
+(rewrite (Times a (Times b c)) (Times (Times a b) c))
+(rewrite (Times (Times a b) c) (Times a (Times b c)) )
+(rewrite (Times (Lit i) (Lit j)) (Lit (* i j)))
+(rewrite (Times a b) (Times b a))
+
+(datatype MExpr 
+    (MMul MExpr MExpr) 
+    (Kron MExpr MExpr) 
+    (NamedMat String)
+    (Id Dim)
+    ; DSum
+    ; HStack
+    ; VStack
+    ; Transpose
+    ; Inverse
+    ; Zero Math Math
+    ; ScalarMul 
+)
+
+; alternative encoding (type A) = (Matrix n m) may be more useful for "large story example"
+(function nrows (MExpr) Dim)
+(function ncols (MExpr) Dim)
+
+(rewrite (nrows (Kron A B)) (Times (nrows A) (nrows B)))
+(rewrite (ncols (Kron A B)) (Times (ncols A) (ncols B)))
+
+(rewrite (nrows (MMul A B)) (nrows A))
+(rewrite (ncols (MMul A B)) (ncols B))
+
+(rewrite (nrows (Id n)) n)
+(rewrite (ncols (Id n)) n)
+
+(rewrite (MMul (Id n) A) A)
+(rewrite (MMul A (Id n)) A)
+
+(rewrite (MMul A (MMul B C)) (MMul (MMul A B) C))
+(rewrite (MMul (MMul A B) C) (MMul A (MMul B C)))
+
+(rewrite (Kron A (Kron B C)) (Kron (Kron A B) C))
+(rewrite (Kron (Kron A B) C) (Kron A (Kron B C)))
+
+(rewrite (Kron (MMul A C) (MMul B D))  (MMul (Kron A B) (Kron C D)))
+
+
+(rewrite (MMul (Kron A B) (Kron C D)) 
+    (Kron (MMul A C) (MMul B D))
+    :when  
+        ((= (ncols A) (nrows C))
+        (= (ncols B) (nrows D)))
+)
+
+; demand
+(rule ((= e (MMul A B)))
+((let demand1 (ncols A))
+(let demand2 (nrows A))
+(let demand3 (ncols B))
+(let demand4 (nrows B)))
+)
+
+(rule ((= e (Kron A B)))
+((let demand1 (ncols A))
+(let demand2 (nrows A))
+(let demand3 (ncols B))
+(let demand4 (nrows B)))
+)
+
+
+(define n (NamedDim "n"))
+(define m (NamedDim "m"))
+(define p (NamedDim "p"))
+
+(define A (NamedMat "A"))
+(define B (NamedMat "B"))
+(define C (NamedMat "C"))
+
+(set (nrows A) n)
+(set (ncols A) n)
+(set (nrows B) m)
+(set (ncols B) m)
+(set (nrows C) p)
+(set (ncols C) p)
+(define ex1 (MMul (Kron (Id n) B) (Kron A (Id m))))
+(define rows1 (nrows ex1))
+(define cols1 (ncols ex1))
+
+(run 20)
+
+(check (= (nrows B) m))
+(check (= (nrows (Kron (Id n) B)) (Times n m)))
+(define simple_ex1 (Kron A B))
+(check (= ex1 simple_ex1))
+
+(define ex2 (MMul (Kron (Id p) C) (Kron A (Id m))))
+(run 10)
+(check (!= ex2 (Kron A C)))

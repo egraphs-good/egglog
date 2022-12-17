@@ -368,7 +368,7 @@ struct ActionChecker<'a> {
 impl<'a> ActionChecker<'a> {
     fn check_action(&mut self, action: &Action) -> Result<(), TypeError> {
         match action {
-            Action::Define(v, e) => {
+            Action::Let(v, e) => {
                 if self.types.contains_key(v) || self.locals.contains_key(v) {
                     return Err(TypeError::AlreadyDefined(*v));
                 }

@@ -54,8 +54,10 @@ pub enum Command {
     },
     Rule(Rule),
     Rewrite(Rewrite),
+    BiRewrite(Rewrite),
     Action(Action),
-    Run(usize),
+    Run(RunConfig),
+    Calc(Vec<IdentSort>, Vec<Expr>),
     Extract {
         variants: usize,
         e: Expr,
@@ -79,6 +81,24 @@ pub enum Command {
     Query(Vec<Fact>),
     Push(usize),
     Pop(usize),
+    Include(String),
+}
+#[derive(Clone, Debug)]
+pub struct IdentSort {
+    pub ident: Symbol,
+    pub sort: Symbol,
+}
+
+impl Display for IdentSort {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "({} {})", self.ident, self.sort)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct RunConfig {
+    pub limit: usize,
+    pub until: Option<Fact>,
 }
 
 #[derive(Clone, Debug)]
@@ -136,7 +156,7 @@ impl Display for Fact {
 
 #[derive(Clone, Debug)]
 pub enum Action {
-    Define(Symbol, Expr),
+    Let(Symbol, Expr),
     Set(Symbol, Vec<Expr>, Expr),
     Delete(Symbol, Vec<Expr>),
     Union(Expr, Expr),
@@ -148,7 +168,7 @@ pub enum Action {
 impl Display for Action {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Action::Define(lhs, rhs) => write!(f, "(define {} {})", lhs, rhs),
+            Action::Let(lhs, rhs) => write!(f, "(define {} {})", lhs, rhs),
             Action::Set(lhs, args, rhs) => {
                 write!(f, "(set ({} {}) {})", lhs, ListDisplay(args, " "), rhs)
             }
