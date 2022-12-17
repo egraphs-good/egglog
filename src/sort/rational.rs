@@ -1,9 +1,9 @@
+use core::ops::*;
 use num_integer::Roots;
 use num_traits::identities::*;
 use num_traits::*;
-use core::ops::*;
-use std::sync::Mutex;
 use rug::Integer;
+use std::sync::Mutex;
 
 type R = rug::Rational;
 use crate::{ast::Literal, util::IndexSet};
@@ -47,7 +47,6 @@ impl Sort for RationalSort {
             None
      } else {
         Some(a.div(&b))
-     
       }});
 
         add_primitives!(eg, "min" = |a: R, b: R| -> R { a.min(b) });

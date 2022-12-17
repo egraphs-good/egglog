@@ -1,7 +1,7 @@
-use intervals_good::{ErrorInterval, BooleanInterval, Interval};
+use intervals_good::{BooleanInterval, ErrorInterval, Interval};
+use ordered_float::OrderedFloat;
 use rug::{float::Round, ops::*, Float, Rational};
 use std::sync::Mutex;
-use ordered_float::OrderedFloat;
 
 type R = BooleanInterval;
 use crate::{ast::Literal, util::IndexSet};
@@ -66,11 +66,11 @@ impl Sort for BoolIntervalSort {
         let left = rat.lo;
         let right = rat.hi;
         if left && right {
-          Expr::call("trueinterval", vec![])
+            Expr::call("trueinterval", vec![])
         } else if !left && !right {
-          Expr::call("falseinterval", vec![])
+            Expr::call("falseinterval", vec![])
         } else {
-          Expr::call("unknowninterval", vec![])
+            Expr::call("unknowninterval", vec![])
         }
     }
 }

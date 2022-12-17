@@ -1,8 +1,8 @@
 use crate::*;
 
-use std::fmt::Display;
-use std::hash::{Hash};
 use ordered_float::OrderedFloat;
+use std::fmt::Display;
+use std::hash::Hash;
 
 pub type F64 = OrderedFloat<f64>;
 

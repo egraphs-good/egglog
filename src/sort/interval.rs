@@ -39,6 +39,21 @@ impl Sort for IntervalSort {
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
         type Opt<T=()> = Option<T>;
 
+        add_primitives!(eg, "to-f64" = |a: R| -> Opt<OrderedFloat<f64>> {
+            if true {
+                let loF: Float = a.lo.clone().into();
+                let hiF: Float = a.hi.clone().into();
+            let top = loF.to_f64();
+            let bot = hiF.to_f64();
+            if top == bot {
+                Some(OrderedFloat(top))
+            } else {
+                None
+            }
+        } else {
+            None
+        }});
+
         add_primitives!(eg, "ival-Add" = |a: R, b: R| -> R { a.add(&b) });
         add_primitives!(eg, "ival-Sub" = |a: R, b: R| -> R { a.sub(&b) });
         add_primitives!(eg, "ival-Mul" = |a: R, b: R| -> R { a.mul(&b) });
