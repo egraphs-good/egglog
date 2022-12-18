@@ -15,7 +15,6 @@ mod value;
 use hashbrown::hash_map::Entry;
 use index::ColumnIndex;
 use instant::{Duration, Instant};
-use lazy_static::lazy_static;
 use smallvec::SmallVec;
 use sort::*;
 use table::Table;
@@ -23,10 +22,9 @@ use thiserror::Error;
 
 use ast::*;
 
-use std::borrow::Borrow;
 use std::fmt::Write;
 use std::fs::File;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::io::Read;
 use std::iter::once;
 use std::mem;
@@ -45,101 +43,9 @@ use gj::*;
 use unionfind::*;
 use util::*;
 
-use crate::binary_search::transform_range;
 use crate::typecheck::TypeError;
 
 type ValueVec = SmallVec<[Value; 3]>;
-
-#[derive(Debug, Clone, Eq)]
-struct Input {
-    data: ValueVec,
-    /// The timestamp at which the given input became "stale"
-    stale_at: u32,
-    /// Counter used to ensure uniqueness
-    counter: u32,
-}
-
-impl Hash for Input {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.data.as_slice().hash(state);
-        self.stale_at.hash(state);
-        self.counter.hash(state);
-    }
-}
-
-impl PartialEq for Input {
-    fn eq(&self, other: &Self) -> bool {
-        self.data == other.data && self.stale_at == other.stale_at && self.counter == other.counter
-    }
-}
-
-impl Input {
-    fn new(data: ValueVec) -> Input {
-        Input {
-            data,
-            stale_at: u32::MAX,
-            counter: 0,
-        }
-    }
-
-    fn data(&self) -> &[Value] {
-        self.data.as_slice()
-    }
-
-    fn live(&self) -> bool {
-        self.stale_at == u32::MAX
-    }
-}
-
-/// A custom type used to look elements up in the map. InputRefs can be created
-/// from a slice of values without copying data, and they can serve as keys in
-/// the map that only find live elements.
-#[derive(Eq)]
-#[repr(transparent)]
-struct InputRef(pub [Value]);
-
-impl InputRef {
-    fn from_slice(vals: &[Value]) -> &InputRef {
-        // SAFETY: InputRef is repr(transparent)
-        unsafe { std::mem::transmute::<&[Value], &InputRef>(vals) }
-    }
-}
-
-impl PartialEq for InputRef {
-    fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0
-    }
-}
-
-impl Hash for InputRef {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.hash(state);
-        // Only look for live values
-        u32::MAX.hash(state);
-        0.hash(state)
-    }
-}
-
-impl Borrow<InputRef> for Input {
-    fn borrow(&self) -> &InputRef {
-        // Lookups via InputRef should never be able to "find" stale data.
-        lazy_static! {
-            pub static ref BOGUS: Vec<Value> = vec![Value::fake()];
-        }
-        // Warning: it's unclear if this is safe. We break the Borrow rules
-        // by doing this! We are probably better off building our own variant of
-        // IndexMap that allows us to insert "holes" or "tombstones." But we
-        // should only do that once we understand the full story on rollback
-        // support.
-        if self.live() {
-            InputRef::from_slice(self.data())
-        } else if self.data().is_empty() {
-            InputRef::from_slice(BOGUS.as_slice())
-        } else {
-            InputRef::from_slice(&[])
-        }
-    }
-}
 
 #[derive(Clone)]
 pub struct Function {
@@ -151,8 +57,7 @@ pub struct Function {
     indexes: Vec<Rc<ColumnIndex>>,
     index_updated_through: usize,
     updates: usize,
-    counter: usize,
-    scratch: IndexSet<usize>,
+    scratch: HashSet<usize>,
 }
 
 #[derive(Clone)]
@@ -186,7 +91,6 @@ impl Function {
             .iter_mut()
             .for_each(|x| Rc::make_mut(x).clear());
         self.index_updated_through = 0;
-        self.counter = 0;
     }
     pub fn insert_internal(
         &mut self,
@@ -231,15 +135,15 @@ impl Function {
         res
     }
 
-    fn build_indexes(&mut self, indexes: Range<usize>) {
+    fn build_indexes(&mut self, offsets: Range<usize>) {
         for (col, index) in self.indexes.iter_mut().enumerate() {
             let as_mut = Rc::make_mut(index);
             if col == self.schema.input.len() {
-                for (slot, _, out) in self.nodes.iter_range(indexes.clone()) {
+                for (slot, _, out) in self.nodes.iter_range(offsets.clone()) {
                     as_mut.add(out.value, slot)
                 }
             } else {
-                for (slot, inp, out) in self.nodes.iter_range(indexes.clone()) {
+                for (slot, inp, _) in self.nodes.iter_range(offsets.clone()) {
                     as_mut.add(inp[col], slot)
                 }
             }
@@ -262,7 +166,6 @@ impl Function {
             Rc::make_mut(index).clear();
         }
         self.nodes.rehash();
-        self.counter = 0;
         self.index_updated_through = 0;
         self.update_indexes(self.nodes.len());
     }
@@ -717,7 +620,6 @@ impl EGraph {
             indexes,
             index_updated_through: 0,
             updates: 0,
-            counter: 0,
             merge,
             // TODO figure out merge and default here
         };
