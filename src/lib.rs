@@ -57,7 +57,7 @@ pub struct Function {
     indexes: Vec<Rc<ColumnIndex>>,
     index_updated_through: usize,
     updates: usize,
-    scratch: HashSet<usize>,
+    scratch: IndexSet<usize>,
 }
 
 #[derive(Clone)]
