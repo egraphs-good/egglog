@@ -654,8 +654,7 @@ impl EGraph {
                         }
                     }
 
-                    let value = if let Some(out) = function.nodes.get(InputRef::from_slice(values))
-                    {
+                    let value = if let Some(out) = function.nodes.get(values) {
                         out.value
                     } else if make_defaults {
                         let ts = self.timestamp;

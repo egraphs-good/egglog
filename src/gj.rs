@@ -3,6 +3,7 @@ use indexmap::map::Entry;
 use smallvec::SmallVec;
 
 use crate::{
+    index::Offset,
     typecheck::{Atom, AtomTerm, Query},
     *,
 };
@@ -616,12 +617,17 @@ impl<'a> std::fmt::Display for TrieAccess<'a> {
 }
 
 impl<'a> TrieAccess<'a> {
-    fn filter_live<'b: 'a>(&'b self, ixs: &'b [usize]) -> impl Iterator<Item = usize> + 'a {
-        ixs.iter().copied().filter(|ix| {
-            let (inp, out) = self.function.nodes.get_index(*ix).unwrap();
-            inp.live()
-                && self.timestamp_range.contains(&out.timestamp)
-                && self.constraints.iter().all(|c| c.check(inp.data(), out))
+    fn filter_live<'b: 'a>(&'b self, ixs: &'b [Offset]) -> impl Iterator<Item = usize> + 'a {
+        ixs.iter().copied().filter_map(|ix| {
+            let ix = ix as usize;
+            let (inp, out) = self.function.nodes.get_index(ix)?;
+            if self.timestamp_range.contains(&out.timestamp)
+                && self.constraints.iter().all(|c| c.check(inp, out))
+            {
+                Some(ix)
+            } else {
+                None
+            }
         })
     }
     #[cold]
@@ -653,29 +659,27 @@ impl<'a> TrieAccess<'a> {
         if idxs.is_empty() {
             if self.column < arity {
                 for (i, tup, out) in self.function.iter_timestamp_range(&self.timestamp_range) {
-                    insert(i, tup.data(), out, tup.data()[self.column])
+                    insert(i, tup, out, tup[self.column])
                 }
             } else {
                 assert_eq!(self.column, arity);
                 for (i, tup, out) in self.function.iter_timestamp_range(&self.timestamp_range) {
-                    insert(i, tup.data(), out, out.value);
+                    insert(i, tup, out, out.value);
                 }
             };
         } else if self.column < arity {
             for idx in idxs {
                 let i = *idx as usize;
-                let (tup, out) = &self.function.nodes.get_index(i).unwrap();
-                if tup.live() {
-                    insert(i, tup.data(), out, tup.data()[self.column])
+                if let Some((tup, out)) = self.function.nodes.get_index(i) {
+                    insert(i, tup, out, tup[self.column])
                 }
             }
         } else {
             assert_eq!(self.column, arity);
             for idx in idxs {
                 let i = *idx as usize;
-                let (tup, out) = &self.function.nodes.get_index(i).unwrap();
-                if tup.live() {
-                    insert(i, tup.data(), out, out.value)
+                if let Some((tup, out)) = self.function.nodes.get_index(i) {
+                    insert(i, tup, out, out.value)
                 }
             }
         }

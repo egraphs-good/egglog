@@ -4,10 +4,12 @@ use symbol_table::GlobalSymbol;
 
 use crate::{unionfind::UnionFind, util::HashMap, Value};
 
+pub(crate) type Offset = u32;
+
 #[derive(Clone, Debug)]
 pub(crate) struct ColumnIndex {
     sort: GlobalSymbol,
-    ids: HashMap<u64, SmallVec<[usize; 3]>>,
+    ids: HashMap<u64, SmallVec<[Offset; 8]>>,
 }
 
 impl ColumnIndex {
@@ -19,7 +21,7 @@ impl ColumnIndex {
     }
     pub(crate) fn add(&mut self, v: Value, i: usize) {
         assert_eq!(v.tag, self.sort);
-        self.ids.entry(v.bits).or_default().push(i);
+        self.ids.entry(v.bits).or_default().push(i as Offset);
     }
 
     pub(crate) fn clear(&mut self) {
@@ -30,15 +32,15 @@ impl ColumnIndex {
         self.ids.len()
     }
 
-    pub(crate) fn get(&self, v: &Value) -> Option<&[usize]> {
+    pub(crate) fn get(&self, v: &Value) -> Option<&[Offset]> {
         self.get_indexes_for_bits(v.bits)
     }
 
-    fn get_indexes_for_bits(&self, bits: u64) -> Option<&[usize]> {
+    fn get_indexes_for_bits(&self, bits: u64) -> Option<&[Offset]> {
         self.ids.get(&bits).map(|x| x.as_slice())
     }
 
-    pub(crate) fn iter(&self) -> impl Iterator<Item = (Value, &[usize])> + '_ {
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (Value, &[Offset])> + '_ {
         self.ids.iter().map(|(bits, v)| {
             (
                 Value {
@@ -59,6 +61,7 @@ impl ColumnIndex {
                 .unwrap_or(&[])
                 .iter()
                 .copied()
+                .map(|x| x as usize)
         })
     }
 }

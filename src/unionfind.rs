@@ -34,6 +34,20 @@ impl UnionFind {
         res
     }
 
+    /// The number of ids that recently stopped being canonical.
+    pub fn new_ids(&self, sort_filter: impl Fn(GlobalSymbol) -> bool) -> usize {
+        self.recent_ids
+            .iter()
+            .filter_map(|(sort, ids)| {
+                if sort_filter(*sort) {
+                    Some(ids.len())
+                } else {
+                    None
+                }
+            })
+            .sum()
+    }
+
     /// Clear any ids currently marked as dirty and then move any ids marked
     /// non-canonical since the last call to this method (or the
     /// data-structure's creation) into the dirty set.

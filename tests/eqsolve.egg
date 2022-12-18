@@ -28,7 +28,7 @@
 (set (Add (Var "z") (Var "y")) (Num 6))
 (set (Add (Var "z") (Var "z")) (Var "y"))
 
-(run 5)
+(run 12)
 (extract (Var "x"))
 (extract (Var "y"))
 (extract (Var "z"))

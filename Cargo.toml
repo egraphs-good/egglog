@@ -13,7 +13,7 @@ bin = ["dep:clap", "dep:env_logger"]
 wasm-bindgen = ["instant/wasm-bindgen"]
 
 [dependencies]
-hashbrown = "0.13"
+hashbrown = { version = "0.13", features = ["raw"] }
 indexmap = "1.9"
 instant = "0.1"
 log = "0.4"
