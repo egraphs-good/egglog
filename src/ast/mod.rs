@@ -75,6 +75,7 @@ pub enum Command {
     Query(Vec<Fact>),
     Push(usize),
     Pop(usize),
+    Include(String),
 }
 #[derive(Clone, Debug)]
 pub struct IdentSort {
