@@ -287,6 +287,7 @@ pub struct EGraph {
     parser: Arc<ast::parse::ProgramParser>,
     pub match_limit: usize,
     pub node_limit: usize,
+    pub use_backoff: bool,
     pub fact_directory: Option<PathBuf>,
     pub seminaive: bool,
 }
@@ -318,6 +319,7 @@ impl Default for EGraph {
             dont_extract: Default::default(),
             match_limit: 10_000_000,
             node_limit: 100_000_000,
+            use_backoff: true,
             timestamp: 0,
             saturated: false,
             fact_directory: None,
@@ -767,7 +769,7 @@ impl EGraph {
             // backoff logic
             let len = all_values.len() / n;
             let threshold = self.match_limit << rule.times_banned;
-            if len > threshold {
+            if len > threshold && self.use_backoff {
                 let ban_length = ban_length << rule.times_banned;
                 rule.times_banned += 1;
                 rule.banned_until = iteration + ban_length;
@@ -869,6 +871,19 @@ impl EGraph {
                     self.node_limit = i as usize;
                 } else {
                     panic!("node_limit must be an integer");
+                }
+            }
+            "use_backoff" => {
+                if let Expr::Lit(Literal::Int(i)) = value {
+                    if i == 1 {
+                        self.use_backoff = true;
+                    } else if i == 0 {
+                        self.use_backoff = false;
+                    } else {
+                        panic!("use_backoff must be 0 or 1");
+                    }
+                } else {
+                    panic!("use_backoff must be a boolean");
                 }
             }
             _ => panic!("Unknown option '{}'", name),
