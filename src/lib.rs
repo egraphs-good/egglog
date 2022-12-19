@@ -996,11 +996,10 @@ impl EGraph {
                     if variants > 0 {
                         let line = "\n    ";
                         let v_exprs = ListDisplay(&exprs, line);
-                        format!("({})", v_exprs)
+                        println!("({})", v_exprs)
                     } else {
-                        format!("({})", expr)
+                        println!("({})", expr)
                     };
-                    println!("{}", msg);
                     msg.into()
                 } else {
                     "Skipping Extraction".into()

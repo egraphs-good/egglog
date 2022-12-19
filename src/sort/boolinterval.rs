@@ -34,6 +34,26 @@ impl Sort for BoolIntervalSort {
 
     #[rustfmt::skip]
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
+        add_primitives!(eg, "assert-eq" = |a: R, b: R| -> R {
+            if a == b {
+                a
+            } else {
+                panic!("assertion failed: {:?} != {:?}", a, b);
+            }
+        });
+
+        add_primitives!(eg, "to-bool" = |a: R| -> Option<R> {
+            if a.lo == a.hi {
+                Some(if a.lo {
+                    BooleanInterval::true_interval()
+                } else {
+                    BooleanInterval::false_interval()
+                })
+            } else {
+                None
+            }
+        });
+
         add_primitives!(eg, "ival-And" = |a: R, b: R| -> R { a.and(&b) });
         add_primitives!(eg, "ival-Or" = |a: R, b: R| -> R { a.or(&b) });
 

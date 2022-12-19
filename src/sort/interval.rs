@@ -43,13 +43,13 @@ impl Sort for IntervalSort {
             if true {
                 let loF: Float = a.lo.clone().into();
                 let hiF: Float = a.hi.clone().into();
-            let top = loF.to_f64();
-            let bot = hiF.to_f64();
-            if top == bot {
-                Some(OrderedFloat(top))
-            } else {
-                None
-            }
+                let top = loF.to_f64();
+                let bot = hiF.to_f64();
+                if top == bot {
+                    Some(OrderedFloat(top))
+                } else {
+                    None
+                }
         } else {
             None
         }});
@@ -164,8 +164,12 @@ impl Sort for IntervalSort {
         Expr::call(
             "interval",
             vec![
-                Expr::Lit(Literal::Float(OrderedFloat(left.as_float().to_f64_round(Round::Down)))),
-                Expr::Lit(Literal::Float(OrderedFloat(right.as_float().to_f64_round(Round::Up)))),
+                Expr::Lit(Literal::Float(OrderedFloat(
+                    left.as_float().to_f64_round(Round::Down),
+                ))),
+                Expr::Lit(Literal::Float(OrderedFloat(
+                    right.as_float().to_f64_round(Round::Up),
+                ))),
             ],
         )
     }

@@ -27,6 +27,14 @@ impl Sort for F64Sort {
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
         type Opt<T=()> = Option<T>;
 
+        add_primitives!(eg, "assert-eq" = |a: F64, b: F64| -> F64 { 
+            if a == b {
+                a
+            } else {
+                panic!("assertion failed: {:?} != {:?}", a, b);
+            }
+         });
+
         add_primitives!(eg, "+" = |a: F64, b: F64| -> F64 { a + b });
         add_primitives!(eg, "-" = |a: F64, b: F64| -> F64 { a - b });
         add_primitives!(eg, "*" = |a: F64, b: F64| -> F64 { a * b });
