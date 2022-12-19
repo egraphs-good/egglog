@@ -43,7 +43,9 @@ impl Sort for BoolIntervalSort {
         });
 
         add_primitives!(eg, "to-bool" = |a: R| -> Option<R> {
-            if a.lo == a.hi {
+            if a.err.lo || a.err.hi {
+                None
+            } else if a.lo == a.hi {
                 Some(if a.lo {
                     BooleanInterval::true_interval()
                 } else {
@@ -51,8 +53,7 @@ impl Sort for BoolIntervalSort {
                 })
             } else {
                 None
-            }
-        });
+            }});
 
         add_primitives!(eg, "ival-And" = |a: R, b: R| -> R { a.and(&b) });
         add_primitives!(eg, "ival-Or" = |a: R, b: R| -> R { a.or(&b) });

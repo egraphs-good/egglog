@@ -4,7 +4,7 @@ use rug::{float::Round, ops::*, Float, Rational};
 use std::sync::Mutex;
 
 // 53 is double precision
-pub(crate) const INTERVAL_PRECISION: u32 = 200;
+pub(crate) const INTERVAL_PRECISION: u32 = 53;
 
 type R = Interval;
 use crate::{ast::Literal, util::IndexSet};
@@ -40,7 +40,12 @@ impl Sort for IntervalSort {
         type Opt<T=()> = Option<T>;
 
         add_primitives!(eg, "to-f64" = |a: R| -> Opt<OrderedFloat<f64>> {
-            if true {
+            if a.err.lo && a.err.hi {
+                // return NaN
+                Some(OrderedFloat(f64::NAN))
+            } else if a.err.lo || a.err.hi {
+                None
+            } else {
                 let loF: Float = a.lo.clone().into();
                 let hiF: Float = a.hi.clone().into();
                 let top = loF.to_f64();
@@ -50,8 +55,6 @@ impl Sort for IntervalSort {
                 } else {
                     None
                 }
-        } else {
-            None
         }});
 
         add_primitives!(eg, "ival-Add" = |a: R, b: R| -> R { a.add(&b) });
