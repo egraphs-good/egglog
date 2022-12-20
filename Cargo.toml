@@ -27,7 +27,7 @@ num-rational = "0.4.1"
 num-traits = "0.2.15"
 num = "0.4.0"
 smallvec = "1.10"
-intervals-good = { git = "https://github.com/oflatt/intervals-good", rev = "17c520ce022c83ca1e899a99270bb716266ed38e" }
+intervals-good = { git = "https://github.com/oflatt/intervals-good", rev = "f08a593633170876e547b0d422f64137157e335b" }
 rug = { version = "1.16.0", features = ["num-traits"]}
 ordered-float = "3.4.0"
 

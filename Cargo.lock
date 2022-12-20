@@ -356,6 +356,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ce7134b9999ecaf8bcd65542e436736ef32ddca1b3e06094cb6ec5755203b80"
 
 [[package]]
+name = "float_next_after"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8bf7cc16383c4b8d58b9905a8509f02926ce3058053c056376248d958c9df1e8"
+
+[[package]]
 name = "fxhash"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -458,9 +464,10 @@ dependencies = [
 [[package]]
 name = "intervals-good"
 version = "0.1.1"
-source = "git+https://github.com/oflatt/intervals-good?rev=17c520ce022c83ca1e899a99270bb716266ed38e#17c520ce022c83ca1e899a99270bb716266ed38e"
+source = "git+https://github.com/oflatt/intervals-good?rev=f08a593633170876e547b0d422f64137157e335b#f08a593633170876e547b0d422f64137157e335b"
 dependencies = [
  "egg",
+ "float_next_after",
  "rand",
  "rug",
 ]
