@@ -111,15 +111,26 @@ impl Sort for IntervalSort {
 
         add_primitives!(eg, "intersect" = |a: R, b: R| -> Opt<R> {
             if true {
-            let loF: Float = a.lo.clone().into();
-            let hiF: Float = a.hi.clone().into();
-            let lo = loF.max(b.lo.as_float());
-            let hi = hiF.min(b.hi.as_float());
-            if lo > hi {
-                panic!("Intersect failed!");
-            } else {
-                Some(Interval::make(lo, hi, a.err.union(&b.err)))
-            }
+                // they disagree on guaranteed error and no error
+                if (a.err.lo && a.err.hi && !b.err.lo && !b.err.hi) || 
+                   (b.err.lo && b.err.hi && !a.err.lo && !a.err.hi) {
+                    panic!("Intersect failed! Intervals: {:?} and {:?}", a, b);
+                } else if (a.err.lo && a.err.hi) || (b.err.lo && b.err.hi) {
+                    Some(Interval::make(Float::with_val(INTERVAL_PRECISION, f64::NAN), Float::with_val(INTERVAL_PRECISION, f64::NAN), ErrorInterval {
+                        lo: true,
+                        hi: true
+                    }))
+                } else {
+                    let loF: Float = a.lo.clone().into();
+                    let hiF: Float = a.hi.clone().into();
+                    let lo = loF.max(b.lo.as_float());
+                    let hi = hiF.min(b.hi.as_float());
+                    if lo > hi {
+                        panic!("Intersect failed! Intervals: {:?} and {:?}", a, b);
+                    } else {
+                        Some(Interval::make(lo, hi, a.err.union(&b.err)))
+                    }
+                }
         } else {
             None
         }});
