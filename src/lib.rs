@@ -964,6 +964,15 @@ impl EGraph {
                     "Skipping check.".into()
                 }
             }
+            Command::Simplify { expr, limit } => {
+                if should_run {
+                    let (cost, expr) = self.simplify(expr, limit)?;
+                    println!("{}", expr);
+                    format!("Simplified with cost {cost} to {expr}")
+                } else {
+                    "Skipping simplify.".into()
+                }
+            }
             Command::Action(action) => {
                 if should_run {
                     self.eval_actions(std::slice::from_ref(&action))?;
@@ -974,7 +983,7 @@ impl EGraph {
             }
             Command::Define { name, expr, cost } => {
                 if should_run {
-                    let sort = self.define(name, expr, cost)?;
+                    let sort = self.define(name, &expr, cost)?;
                     format!("Defined {name}: {sort:?}")
                 } else {
                     format!("Skipping define {name}")
@@ -1164,6 +1173,31 @@ impl EGraph {
         }
     }
 
+    // Simplify uses a simple greedy strategy. If the extraction lowers the cost, it clears the database
+    // and restarts it using this simplified term
+    fn simplify(&mut self, mut expr: Expr, limit: usize) -> Result<(usize, Expr), Error> {
+        let mut cost = 10000000;
+        self.push();
+        let (_t, mut value) = self.eval_expr(&expr, None, true).unwrap();
+        for _ in 1..limit {
+            self.run_rules(&RunConfig {
+                limit: 1,
+                until: None,
+            });
+            let (new_cost, new_expr) = self.extract(value);
+            if new_cost < cost {
+                self.pop().unwrap();
+                self.push();
+                let (_t, new_value) = self.eval_expr(&new_expr, None, true).unwrap();
+                cost = new_cost;
+                expr = new_expr;
+                value = new_value;
+                log::info!("Improved Expr {expr}");
+            }
+        }
+        self.pop().unwrap();
+        Ok((cost, expr))
+    }
     // Extract an expression from the current state, returning the cost, the extracted expression and some number
     // of other variants, if variants is not zero.
     pub fn extract_expr(
@@ -1203,10 +1237,10 @@ impl EGraph {
     pub fn define(
         &mut self,
         name: Symbol,
-        expr: Expr,
+        expr: &Expr,
         cost: Option<usize>,
     ) -> Result<ArcSort, Error> {
-        let (sort, value) = self.eval_expr(&expr, None, true)?;
+        let (sort, value) = self.eval_expr(expr, None, true)?;
         self.declare_function(&FunctionDecl {
             name,
             schema: Schema {

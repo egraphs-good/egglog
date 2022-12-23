@@ -57,6 +57,10 @@ pub enum Command {
     BiRewrite(Rewrite),
     Action(Action),
     Run(RunConfig),
+    Simplify {
+        expr: Expr,
+        limit: usize,
+    },
     Calc(Vec<IdentSort>, Vec<Expr>),
     Extract {
         variants: usize,
