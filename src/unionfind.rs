@@ -179,6 +179,7 @@ pub(crate) trait UnionFindLike<K: UnifyKey, V: UnifyValue> {
         let root1 = self.find_index_mut(index1);
         let root2 = self.find_index_mut(index2);
         let root = if root1 != root2 {
+            log::trace!("(union {index1} {index2} {root1} {root2})");
             self.union_roots(root1, root2)?
         } else {
             root1

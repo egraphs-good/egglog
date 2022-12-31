@@ -71,7 +71,7 @@ struct ResolvedSchema {
 
 impl Function {
     pub fn insert(&mut self, inputs: ValueVec, value: Value, timestamp: u32) -> Option<Value> {
-        match self.nodes.entry(inputs) {
+        match self.nodes.entry(inputs.clone()) {
             IEntry::Occupied(mut entry) => {
                 let old = entry.get_mut();
                 if old.value == value {
@@ -83,10 +83,23 @@ impl Function {
                     old.timestamp = timestamp;
                     self.updates += 1;
                     debug_assert_ne!(saved, value);
+                    log::trace!(
+                        "(merge {} {} {} {})",
+                        self.decl.name,
+                        ListDisplay(inputs.into_iter().map(|v| v.bits), " "),
+                        saved.bits,
+                        value.bits
+                    );
                     Some(saved)
                 }
             }
             IEntry::Vacant(entry) => {
+                log::trace!(
+                    "(set {} {} {})",
+                    self.decl.name,
+                    ListDisplay(inputs.into_iter().map(|v| v.bits), " "),
+                    value.bits
+                );
                 entry.insert(TupleOutput { value, timestamp });
                 self.updates += 1;
                 None
@@ -133,10 +146,17 @@ impl Function {
             // TODO call the merge fn!!!
             let _new_value = if self.schema.output.is_eq_sort() {
                 self.nodes
-                    .entry(args)
+                    .entry(args.clone())
                     .and_modify(|out2| {
                         let new_value = uf.union_values(value, out2.value);
                         if out2.value != new_value {
+                            log::trace!(
+                                "(cong {} {} {} {})",
+                                self.decl.name,
+                                ListDisplay(args.into_iter().map(|v| v.bits), " "),
+                                out2.value.bits,
+                                new_value.bits
+                            );
                             out2.value = new_value;
                             out2.timestamp = timestamp;
                         }
@@ -738,7 +758,7 @@ impl EGraph {
                     }
                 });
                 let rule_search_time = rule_search_start.elapsed();
-                log::trace!(
+                log::debug!(
                     "Searched for {name} in {} ({} results)",
                     rule_search_time.as_secs_f64(),
                     all_values.len()
