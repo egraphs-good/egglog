@@ -32,8 +32,10 @@ impl<V> UnionFind<V> {
 }
 
 impl UnionFind<()> {
-    pub fn make_set(&mut self) -> Id {
-        self.make_set_with(())
+    pub fn make_set(&mut self, reason: &Reason) -> Id {
+        let id = self.make_set_with(());
+        log::trace!("(exists {id} :reason {reason}");
+        id
     }
 
     pub fn find_mut_value(&mut self, mut value: Value) -> Value {
@@ -300,7 +302,7 @@ mod tests {
 
         let mut uf = UnionFind::default();
         for _ in 0..n {
-            uf.make_set();
+            uf.make_set(&Reason::Unknown);
         }
 
         // test the initial condition of everyone in their own set

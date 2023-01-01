@@ -127,7 +127,7 @@ impl<'a> Context<'a> {
 
     fn add_node(&mut self, node: ENode) -> Id {
         let entry = self.nodes.entry(node);
-        *entry.or_insert_with(|| self.unionfind.make_set())
+        *entry.or_insert_with(|| self.unionfind.make_set(&Reason::Unknown))
     }
 
     pub fn typecheck_query(&mut self, facts: &'a [Fact]) -> Result<Query, Vec<TypeError>> {
@@ -349,10 +349,10 @@ impl<'a> Context<'a> {
                         });
                     }
 
-                    (self.unionfind.make_set(), None)
+                    (self.unionfind.make_set(&Reason::Unknown), None)
                 } else {
                     self.errors.push(TypeError::Unbound(*sym));
-                    (self.unionfind.make_set(), None)
+                    (self.unionfind.make_set(&Reason::Unknown), None)
                 }
             }
         }
@@ -668,7 +668,7 @@ impl EGraph {
                                 Value::unit()
                             }
                             None if out.is_eq_sort() => {
-                                let id = self.unionfind.make_set();
+                                let id = self.unionfind.make_set(reason);
                                 let value = Value::from_id(out.name(), id);
                                 function.insert(values.into(), value, ts, reason);
                                 value

@@ -1219,7 +1219,7 @@ impl EGraph {
             cost: None,
         })?;
         let f = self.functions.get_mut(&name).unwrap();
-        let id = self.unionfind.make_set();
+        let id = self.unionfind.make_set(&Reason::Declare);
         let value = Value::from_id(sort.name(), id);
         f.insert(ValueVec::default(), value, self.timestamp, &Reason::Declare);
         Ok(())
