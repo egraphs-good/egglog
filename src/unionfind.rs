@@ -34,7 +34,7 @@ impl<V> UnionFind<V> {
 impl UnionFind<()> {
     pub fn make_set(&mut self, reason: &Reason) -> Id {
         let id = self.make_set_with(());
-        log::trace!("(exists {id} :reason {reason}");
+        log::trace!("(exists {id} :reason {reason})");
         id
     }
 
@@ -128,7 +128,7 @@ pub(crate) trait UnionFindLike<K: UnifyKey, V: UnifyValue> {
         self.len() == 0
     }
 
-    fn union(&mut self, query1: K, query2: K, reason: &crate::ast::Reason) -> K
+    fn union(&mut self, query1: K, query2: K, reason: &Reason) -> K
     where
         V: UnifyValue<Error = std::convert::Infallible>,
     {
@@ -175,12 +175,7 @@ pub(crate) trait UnionFindLike<K: UnifyKey, V: UnifyValue> {
     }
 
     /// Given two leader ids, unions the two eclasses making root1 the leader.
-    fn try_union(
-        &mut self,
-        query1: K,
-        query2: K,
-        reason: &crate::ast::Reason,
-    ) -> Result<K, V::Error> {
+    fn try_union(&mut self, query1: K, query2: K, reason: &Reason) -> Result<K, V::Error> {
         let index1 = self.index(query1);
         let index2 = self.index(query2);
         let root1 = self.find_index_mut(index1);

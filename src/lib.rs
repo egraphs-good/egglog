@@ -90,7 +90,7 @@ impl Function {
                     self.updates += 1;
                     debug_assert_ne!(saved, value);
                     log::trace!(
-                        "(merge {} {} {} {} :reason {})",
+                        "(merge ({} {}) {} {} :reason {})",
                         self.decl.name,
                         ListDisplay(inputs.into_iter().map(|v| v.bits), " "),
                         saved.bits,
@@ -102,7 +102,7 @@ impl Function {
             }
             IEntry::Vacant(entry) => {
                 log::trace!(
-                    "(set {} {} {} :reason {})",
+                    "(set ({} {}) {} :reason {})",
                     self.decl.name,
                     ListDisplay(inputs.into_iter().map(|v| v.bits), " "),
                     value.bits,
