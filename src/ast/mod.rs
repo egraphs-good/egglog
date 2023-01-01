@@ -187,7 +187,7 @@ impl Display for Rule {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{} ==> {}",
+            "({} ==> {})",
             ListDisplay(&self.body, " "),
             ListDisplay(&self.head, " ")
         )
@@ -199,4 +199,31 @@ pub struct Rewrite {
     pub lhs: Expr,
     pub rhs: Expr,
     pub conditions: Vec<Fact>,
+}
+
+#[derive(Clone, Debug)]
+pub enum Reason {
+    Define,
+    Declare,
+    Eval,
+    Unknown,
+    Cong(Symbol, SmallVec<[Value; 3]>),
+    Rule(Symbol),
+}
+
+impl Display for Reason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Reason::Define => write!(f, "define"),
+            Reason::Declare => write!(f, "declare"),
+            Reason::Rule(name) => write!(f, "{name}"),
+            Reason::Cong(name, args) => write!(
+                f,
+                "(cong ({name} {}))",
+                ListDisplay(args.into_iter().map(|v| v.bits), " ")
+            ),
+            Reason::Eval => write!(f, "eval"),
+            Reason::Unknown => write!(f, "unknown"),
+        }
+    }
 }

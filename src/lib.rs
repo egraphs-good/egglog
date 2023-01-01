@@ -70,7 +70,13 @@ struct ResolvedSchema {
 }
 
 impl Function {
-    pub fn insert(&mut self, inputs: ValueVec, value: Value, timestamp: u32) -> Option<Value> {
+    pub fn insert(
+        &mut self,
+        inputs: ValueVec,
+        value: Value,
+        timestamp: u32,
+        reason: &Reason,
+    ) -> Option<Value> {
         match self.nodes.entry(inputs.clone()) {
             IEntry::Occupied(mut entry) => {
                 let old = entry.get_mut();
@@ -84,21 +90,23 @@ impl Function {
                     self.updates += 1;
                     debug_assert_ne!(saved, value);
                     log::trace!(
-                        "(merge {} {} {} {})",
+                        "(merge {} {} {} {} :reason {})",
                         self.decl.name,
                         ListDisplay(inputs.into_iter().map(|v| v.bits), " "),
                         saved.bits,
-                        value.bits
+                        value.bits,
+                        reason
                     );
                     Some(saved)
                 }
             }
             IEntry::Vacant(entry) => {
                 log::trace!(
-                    "(set {} {} {})",
+                    "(set {} {} {} :reason {})",
                     self.decl.name,
                     ListDisplay(inputs.into_iter().map(|v| v.bits), " "),
-                    value.bits
+                    value.bits,
+                    reason
                 );
                 entry.insert(TupleOutput { value, timestamp });
                 self.updates += 1;
@@ -148,15 +156,16 @@ impl Function {
                 self.nodes
                     .entry(args.clone())
                     .and_modify(|out2| {
-                        let new_value = uf.union_values(value, out2.value);
+                        let new_value =
+                            uf.union_values(value, out2.value, &Reason::Cong(self.decl.name, args));
                         if out2.value != new_value {
-                            log::trace!(
+                            /*log::trace!(
                                 "(cong {} {} {} {})",
                                 self.decl.name,
                                 ListDisplay(args.into_iter().map(|v| v.bits), " "),
                                 out2.value.bits,
                                 new_value.bits
-                            );
+                            ); */
                             out2.value = new_value;
                             out2.timestamp = timestamp;
                         }
@@ -398,8 +407,8 @@ impl EGraph {
         self.primitives.entry(prim.name()).or_default().push(prim);
     }
 
-    pub fn union(&mut self, id1: Id, id2: Id) -> Id {
-        self.unionfind.union(id1, id2)
+    pub fn union(&mut self, id1: Id, id2: Id, reason: &Reason) -> Id {
+        self.unionfind.union(id1, id2, reason)
     }
 
     #[track_caller]
@@ -800,7 +809,7 @@ impl EGraph {
                 }
                 // we can ignore results here
                 stack.clear();
-                let _ = self.run_actions(stack, values, &rule.program, true);
+                let _ = self.run_actions(stack, values, &rule.program, true, &Reason::Rule(name));
             }
 
             rule.apply_time += rule_apply_start.elapsed();
@@ -849,10 +858,11 @@ impl EGraph {
     }
 
     pub fn add_rewrite(&mut self, rewrite: ast::Rewrite) -> Result<Symbol, Error> {
-        let mut name = format!("{} -> {}", rewrite.lhs, rewrite.rhs);
+        let mut name = format!("({} -> {}", rewrite.lhs, rewrite.rhs);
         if !rewrite.conditions.is_empty() {
             write!(name, " if {}", ListDisplay(&rewrite.conditions, ", ")).unwrap();
         }
+        write!(name, ")").unwrap();
         let var = Symbol::from("__rewrite_var");
         let rule = ast::Rule {
             body: [Fact::Eq(vec![Expr::Var(var), rewrite.lhs])]
@@ -870,7 +880,7 @@ impl EGraph {
             .compile_actions(&types, actions)
             .map_err(Error::TypeErrors)?;
         let mut stack = vec![];
-        self.run_actions(&mut stack, &[], &program, true)?;
+        self.run_actions(&mut stack, &[], &program, true, &Reason::Eval)?;
         Ok(())
     }
 
@@ -885,7 +895,7 @@ impl EGraph {
             .compile_expr(&types, expr, expected_type)
             .map_err(Error::TypeErrors)?;
         let mut stack = vec![];
-        self.run_actions(&mut stack, &[], &program, make_defaults)?;
+        self.run_actions(&mut stack, &[], &program, make_defaults, &Reason::Eval)?;
         assert_eq!(stack.len(), 1);
         Ok((t, stack.pop().unwrap()))
     }
@@ -1211,7 +1221,7 @@ impl EGraph {
         let f = self.functions.get_mut(&name).unwrap();
         let id = self.unionfind.make_set();
         let value = Value::from_id(sort.name(), id);
-        f.insert(ValueVec::default(), value, self.timestamp);
+        f.insert(ValueVec::default(), value, self.timestamp, &Reason::Declare);
         Ok(())
     }
     pub fn define(
@@ -1232,7 +1242,7 @@ impl EGraph {
             cost,
         })?;
         let f = self.functions.get_mut(&name).unwrap();
-        f.insert(ValueVec::default(), value, self.timestamp);
+        f.insert(ValueVec::default(), value, self.timestamp, &Reason::Define);
         Ok(sort)
     }
 

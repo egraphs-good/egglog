@@ -1,4 +1,4 @@
-use crate::{util::IndexMap, Id, Value};
+use crate::{ast::Reason, util::IndexMap, Id, Value};
 
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -43,11 +43,11 @@ impl UnionFind<()> {
         value
     }
 
-    pub fn union_values(&mut self, value1: Value, value2: Value) -> Value {
+    pub fn union_values(&mut self, value1: Value, value2: Value, reason: &Reason) -> Value {
         let id1 = Id::from(value1.bits as usize);
         let id2 = Id::from(value2.bits as usize);
         assert_eq!(value1.tag, value2.tag);
-        Value::from_id(value1.tag, self.union(id1, id2))
+        Value::from_id(value1.tag, self.union(id1, id2, reason))
     }
 }
 
@@ -126,11 +126,11 @@ pub(crate) trait UnionFindLike<K: UnifyKey, V: UnifyValue> {
         self.len() == 0
     }
 
-    fn union(&mut self, query1: K, query2: K) -> K
+    fn union(&mut self, query1: K, query2: K, reason: &crate::ast::Reason) -> K
     where
         V: UnifyValue<Error = std::convert::Infallible>,
     {
-        self.try_union(query1, query2).unwrap()
+        self.try_union(query1, query2, reason).unwrap()
     }
 
     fn insert(&mut self, key: K, value: V) -> &V
@@ -173,13 +173,18 @@ pub(crate) trait UnionFindLike<K: UnifyKey, V: UnifyValue> {
     }
 
     /// Given two leader ids, unions the two eclasses making root1 the leader.
-    fn try_union(&mut self, query1: K, query2: K) -> Result<K, V::Error> {
+    fn try_union(
+        &mut self,
+        query1: K,
+        query2: K,
+        reason: &crate::ast::Reason,
+    ) -> Result<K, V::Error> {
         let index1 = self.index(query1);
         let index2 = self.index(query2);
         let root1 = self.find_index_mut(index1);
         let root2 = self.find_index_mut(index2);
         let root = if root1 != root2 {
-            log::trace!("(union {index1} {index2} {root1} {root2})");
+            log::trace!("(union {index1} {index2} {root1} {root2} :reason {reason})");
             self.union_roots(root1, root2)?
         } else {
             root1
@@ -305,14 +310,14 @@ mod tests {
         );
 
         // build up one set
-        uf.union(id(0), id(1));
-        uf.union(id(0), id(2));
-        uf.union(id(0), id(3));
+        uf.union(id(0), id(1), &Reason::Unknown);
+        uf.union(id(0), id(2), &Reason::Unknown);
+        uf.union(id(0), id(3), &Reason::Unknown);
 
         // build up another set
-        uf.union(id(6), id(7));
-        uf.union(id(6), id(8));
-        uf.union(id(6), id(9));
+        uf.union(id(6), id(7), &Reason::Unknown);
+        uf.union(id(6), id(8), &Reason::Unknown);
+        uf.union(id(6), id(9), &Reason::Unknown);
 
         // this should compress all paths
         for i in 0..n {

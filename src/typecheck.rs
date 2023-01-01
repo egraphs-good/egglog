@@ -204,7 +204,7 @@ impl<'a> Context<'a> {
                 // reinsert and handle hit
                 if let Some(old) = self.nodes.insert(node, id) {
                     keep_going = true;
-                    self.unionfind.union(old, id);
+                    self.unionfind.union(old, id, &Reason::Unknown);
                 }
             }
         }
@@ -249,7 +249,8 @@ impl<'a> Context<'a> {
                     }
                 }
 
-                ids.into_iter().reduce(|a, b| self.unionfind.union(a, b));
+                ids.into_iter()
+                    .reduce(|a, b| self.unionfind.union(a, b, &Reason::Unknown));
             }
             Fact::Fact(e) => {
                 self.check_query_expr(e, self.unit.clone());
@@ -635,6 +636,7 @@ impl EGraph {
         subst: &[Value],
         program: &Program,
         make_defaults: bool,
+        reason: &Reason,
     ) -> Result<(), Error> {
         // println!("{:?}", program);
         for instr in &program.0 {
@@ -662,13 +664,13 @@ impl EGraph {
                         let out = &function.schema.output;
                         match function.decl.default.as_ref() {
                             None if out.name() == "Unit".into() => {
-                                function.insert(values.into(), Value::unit(), ts);
+                                function.insert(values.into(), Value::unit(), ts, reason);
                                 Value::unit()
                             }
                             None if out.is_eq_sort() => {
                                 let id = self.unionfind.make_set();
                                 let value = Value::from_id(out.name(), id);
-                                function.insert(values.into(), value, ts);
+                                function.insert(values.into(), value, ts, reason);
                                 value
                             }
                             Some(_default) => {
@@ -706,7 +708,7 @@ impl EGraph {
                     let new_value = stack.pop().unwrap();
                     let new_len = stack.len() - function.schema.input.len();
                     let args = &stack[new_len..];
-                    let old_value = function.insert(args.into(), new_value, self.timestamp);
+                    let old_value = function.insert(args.into(), new_value, self.timestamp, reason);
 
                     // if the value does not exist or the two values differ
                     if old_value.is_none() || old_value != Some(new_value) {
@@ -718,11 +720,13 @@ impl EGraph {
                             self.saturated = false;
                             let merged: Value = match function.merge.clone() {
                                 MergeFn::AssertEq => panic!("No error for this yet"),
-                                MergeFn::Union => self.unionfind.union_values(old_value, new_value),
+                                MergeFn::Union => {
+                                    self.unionfind.union_values(old_value, new_value, reason)
+                                }
                                 MergeFn::Expr(merge_prog) => {
                                     let values = [old_value, new_value];
                                     let old_len = stack.len();
-                                    self.run_actions(stack, &values, &merge_prog, true)?;
+                                    self.run_actions(stack, &values, &merge_prog, true, reason)?;
                                     let result = stack.pop().unwrap();
                                     stack.truncate(old_len);
                                     result
@@ -731,7 +735,7 @@ impl EGraph {
                             // re-borrow
                             let args = &stack[new_len..];
                             let function = self.functions.get_mut(f).unwrap();
-                            function.insert(args.into(), merged, self.timestamp);
+                            function.insert(args.into(), merged, self.timestamp, reason);
                         }
                     }
                     stack.truncate(new_len)
@@ -745,7 +749,7 @@ impl EGraph {
                         if a != b {
                             self.saturated = false;
                         }
-                        self.unionfind.union(a, b)
+                        self.unionfind.union(a, b, reason)
                     });
                     stack.truncate(new_len);
                 }
