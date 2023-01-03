@@ -1174,9 +1174,11 @@ impl EGraph {
     }
 
     fn simplify(&mut self, expr: Expr, config: &RunConfig) -> Result<(usize, Expr), Error> {
+        self.push();
         let (_t, value) = self.eval_expr(&expr, None, true).unwrap();
         self.run_rules(config);
         let (cost, expr) = self.extract(value);
+        self.pop().unwrap();
         Ok((cost, expr))
     }
     // Extract an expression from the current state, returning the cost, the extracted expression and some number
