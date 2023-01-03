@@ -76,6 +76,7 @@ pub enum Command {
     Push(usize),
     Pop(usize),
     Fail(Box<Command>),
+    Include(String),
 }
 #[derive(Clone, Debug)]
 pub struct IdentSort {

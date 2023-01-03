@@ -1038,6 +1038,11 @@ impl EGraph {
                     return Err(Error::ExpectFail);
                 }
                 "Command failed as expected.".into()
+            Command::Include(file) => {
+                let s = std::fs::read_to_string(&file)
+                    .unwrap_or_else(|_| panic!("Failed to read file {file}"));
+                self.parse_and_run_program(&s)?;
+                format!("Included file {file}")
             }
             Command::Input { name, file } => {
                 let func = self.functions.get_mut(&name).unwrap();
