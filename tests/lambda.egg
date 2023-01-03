@@ -159,7 +159,7 @@
 (define e (Let (V "x") (Val (Num 1)) 
           (Lam (V "x") (Var (V "x")))))
 (run 10)
-(check (!= e (Lam (V "x") (Val (Num 1)))))
+(fail (check (= e (Lam (V "x") (Val (Num 1))))))
 (pop)
 
 ;; lambda_capture_free
@@ -168,7 +168,7 @@
            (Lam (V "x") (Var (V "y")))))
 (run 10)
 (check (contains (freer (Lam (V "x") (Var (V "y")))) (V "y")))
-(check (!= e (Lam (V "x") (Add (Var (V "x")) (Var (V "x"))))))
+(fail (check (= e (Lam (V "x") (Add (Var (V "x")) (Var (V "x")))))))
 (pop)
 
 ;; lambda_closure_not_seven
@@ -179,7 +179,7 @@
      (Let (V "five") (Val (Num 6))
      (App (Var (V "add-five")) (Val (Num 1)))))))
 (run 10)
-(check (!= e (Val (Num 7))))
+(fail (check (= e (Val (Num 7)))))
 (check (= e (Val (Num 6))))
 (pop)
 

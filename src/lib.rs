@@ -438,7 +438,7 @@ impl EGraph {
                 Expr::Call(_, _) => {
                     // println!("Checking fact: {}", expr);
                     let unit = self.get_sort::<UnitSort>();
-                    self.eval_expr(expr, Some(unit), true)?;
+                    self.eval_expr(expr, Some(unit), false)?;
                 }
             },
         }
@@ -1033,6 +1033,12 @@ impl EGraph {
                 println!("{}", msg);
                 msg
             }
+            Command::Fail(c) => {
+                if self.run_command(*c, should_run).is_ok() {
+                    return Err(Error::ExpectFail);
+                }
+                "Command failed as expected.".into()
+            }
             Command::Include(file) => {
                 let s = std::fs::read_to_string(&file)
                     .unwrap_or_else(|_| panic!("Failed to read file {file}"));
@@ -1269,4 +1275,6 @@ pub enum Error {
     PresortNotFound(Symbol),
     #[error("Tried to pop too much")]
     Pop,
+    #[error("Command should have failed.")]
+    ExpectFail,
 }

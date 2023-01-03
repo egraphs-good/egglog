@@ -75,6 +75,7 @@ pub enum Command {
     Query(Vec<Fact>),
     Push(usize),
     Pop(usize),
+    Fail(Box<Command>),
     Include(String),
 }
 #[derive(Clone, Debug)]
