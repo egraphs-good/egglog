@@ -59,7 +59,7 @@ pub enum Command {
     Run(RunConfig),
     Simplify {
         expr: Expr,
-        limit: usize,
+        config: RunConfig,
     },
     Calc(Vec<IdentSort>, Vec<Expr>),
     Extract {

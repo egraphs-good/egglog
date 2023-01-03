@@ -170,7 +170,7 @@
 (check (= start-expr end-expr))
 (pop)
 
-(simplify 10 (Add (Const (rational 1 1))
+(simplify 5 (Add (Const (rational 1 1))
                         (Sub (Var "a") 
                              (Mul (Sub (Const (rational 2 1)) 
                                        (Const (rational 1 1))) 

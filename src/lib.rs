@@ -964,9 +964,9 @@ impl EGraph {
                     "Skipping check.".into()
                 }
             }
-            Command::Simplify { expr, limit } => {
+            Command::Simplify { expr, config } => {
                 if should_run {
-                    let (cost, expr) = self.simplify(expr, limit)?;
+                    let (cost, expr) = self.simplify(expr, &config)?;
                     println!("{}", expr);
                     format!("Simplified with cost {cost} to {expr}")
                 } else {
@@ -1173,29 +1173,10 @@ impl EGraph {
         }
     }
 
-    // Simplify uses a simple greedy strategy. If the extraction lowers the cost, it clears the database
-    // and restarts it using this simplified term
-    fn simplify(&mut self, mut expr: Expr, limit: usize) -> Result<(usize, Expr), Error> {
-        let mut cost = 10000000;
-        self.push();
-        let (_t, mut value) = self.eval_expr(&expr, None, true).unwrap();
-        for _ in 1..limit {
-            self.run_rules(&RunConfig {
-                limit: 1,
-                until: None,
-            });
-            let (new_cost, new_expr) = self.extract(value);
-            if new_cost < cost {
-                self.pop().unwrap();
-                self.push();
-                let (_t, new_value) = self.eval_expr(&new_expr, None, true).unwrap();
-                cost = new_cost;
-                expr = new_expr;
-                value = new_value;
-                log::info!("Improved Expr {expr}");
-            }
-        }
-        self.pop().unwrap();
+    fn simplify(&mut self, expr: Expr, config: &RunConfig) -> Result<(usize, Expr), Error> {
+        let (_t, value) = self.eval_expr(&expr, None, true).unwrap();
+        self.run_rules(config);
+        let (cost, expr) = self.extract(value);
         Ok((cost, expr))
     }
     // Extract an expression from the current state, returning the cost, the extracted expression and some number
