@@ -11,7 +11,6 @@ extern {
 match {
     r"\s*" => { }, // skip whitespace
     r";[^\n\r]*[\n\r]*" => { }, // skip ; comments
-    r"Int|int|I64|number" => reserved,
     _
 }
 
@@ -60,6 +59,7 @@ Command: Command = {
     "(" "print" <sym:Ident> <n:UNum?> ")" => Command::Print(sym, n.unwrap_or(10)),
     "(" "print-size" <sym:Ident> ")" => Command::PrintSize(sym),
     "(" "input" <name:Ident> <file:String> ")" => Command::Input { name, file },
+    "(" "fail" <Command> ")" => Command::Fail(Box::new(<>)),
     "(" "include" <file:String> ")" => Command::Include(file),
 }
 
@@ -123,10 +123,6 @@ IdentSort: IdentSort = "(" <ident:Ident> <sort:Type> ")" => IdentSort { ident, s
 Num: i64 = <s:r"(-)?[0-9]+"> => s.parse().unwrap();
 UNum: usize = {
     <Num> => <>.try_into().unwrap(),
-}
-Bool: bool = {
-    "true" => true,
-    "false" => false,
 }
 Ident: Symbol = <s:r"([[:alpha:]][\w-]*)|([-+*/!=<>&|^/%]+)"> => s.parse().unwrap();
 SymString: Symbol = <r#""[^"]*""#> => Symbol::from(<>);
