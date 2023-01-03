@@ -11,7 +11,6 @@ extern {
 match {
     r"\s*" => { }, // skip whitespace
     r";[^\n\r]*[\n\r]*" => { }, // skip ; comments
-    r"Int|int|I64|number" => reserved,
     _
 }
 
@@ -123,10 +122,6 @@ IdentSort: IdentSort = "(" <ident:Ident> <sort:Type> ")" => IdentSort { ident, s
 Num: i64 = <s:r"(-)?[0-9]+"> => s.parse().unwrap();
 UNum: usize = {
     <Num> => <>.try_into().unwrap(),
-}
-Bool: bool = {
-    "true" => true,
-    "false" => false,
 }
 Ident: Symbol = <s:r"([[:alpha:]][\w-]*)|([-+*/!=<>&|^/%]+)"> => s.parse().unwrap();
 SymString: Symbol = <r#""[^"]*""#> => Symbol::from(<>);
