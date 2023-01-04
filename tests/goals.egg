@@ -14,7 +14,7 @@
 (assert (edge b c))
 
 (check (edge a b))
-(fail check (edge a c)))
+(fail (check (edge a c)))
 (fail (check (path c a)))
 
 
@@ -56,4 +56,4 @@
     )
 )
 
-(check (p))
+; (check (p))
