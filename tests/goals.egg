@@ -24,7 +24,8 @@
 
 
 (clear-rules)
-(check a)
+(check (= a a))
+(fail (check (= a b)))
 
 ; (print d) fails
 (goal
@@ -39,7 +40,9 @@
 )
 
 (clear)
-(fail (check a))
+
+(fail (check (= a a)))
+(fail (check (= a b)))
 
 (goal 
     (forall ((p Vert) (q Vert) (r Vert))

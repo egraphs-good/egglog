@@ -433,7 +433,10 @@ impl EGraph {
             }
             Fact::Fact(expr) => match expr {
                 Expr::Lit(_) => panic!("can't check a literal"),
-                Expr::Var(_) => panic!("can't check a var"),
+                Expr::Var(x) => {
+                    println!("{}", self.summary());
+                    panic!("can't check a var {x}")
+                }
                 Expr::Call(_, _) => {
                     // println!("Checking fact: {}", expr);
                     let unit = self.get_sort::<UnitSort>();
