@@ -464,7 +464,7 @@ dependencies = [
 [[package]]
 name = "intervals-good"
 version = "0.1.1"
-source = "git+https://github.com/oflatt/intervals-good?rev=f08a593633170876e547b0d422f64137157e335b#f08a593633170876e547b0d422f64137157e335b"
+source = "git+https://github.com/oflatt/intervals-good?rev=08309e2ec26a248c655a8308ad698ab6eb9905de#08309e2ec26a248c655a8308ad698ab6eb9905de"
 dependencies = [
  "egg",
  "float_next_after",
