@@ -23,6 +23,9 @@ impl Sort for I64Sort {
     }
 
     #[rustfmt::skip]
+    // We need the closure for division and mod operations, as they can panic.
+    // cf https://github.com/rust-lang/rust-clippy/issues/9422
+    #[allow(clippy::unnecessary_lazy_evaluations)]
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
         type Opt<T=()> = Option<T>;
 

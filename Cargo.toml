@@ -13,7 +13,7 @@ bin = ["dep:clap", "dep:env_logger"]
 wasm-bindgen = ["instant/wasm-bindgen"]
 
 [dependencies]
-hashbrown = "0.13"
+hashbrown = { version = "0.13", features = ["raw"] }
 indexmap = "1.9"
 instant = "0.1"
 log = "0.4"
@@ -26,6 +26,7 @@ num-integer = "0.1.45"
 num-rational = "0.4.1"
 num-traits = "0.2.15"
 smallvec = "1.10"
+lazy_static  = "1.4"
 
 lalrpop-util = {version = "0.19.8", features = ["lexer"]}
 regex = "1"
@@ -33,6 +34,9 @@ regex = "1"
 # binary dependencies
 clap = {version = "4", features = ["derive"], optional = true}
 env_logger = {version = "0.10", optional = true}
+
+[target.'cfg(not(target_env = "msvc"))'.dependencies]
+tikv-jemallocator = "0.5"
 
 [build-dependencies]
 lalrpop = "0.19.8"
