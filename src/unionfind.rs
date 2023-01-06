@@ -2,10 +2,8 @@
 //! halving for compression.
 //!
 //! This implementation uses interior mutability for `find`.
-use symbol_table::GlobalSymbol;
-
 use crate::util::HashMap;
-use crate::{Id, Value};
+use crate::{Id, Symbol, Value};
 
 use std::cell::Cell;
 use std::fmt::Debug;
@@ -16,8 +14,8 @@ use std::mem;
 pub struct UnionFind {
     parents: Vec<Cell<Id>>,
     n_unions: usize,
-    recent_ids: HashMap<GlobalSymbol, Vec<Id>>,
-    staged_ids: HashMap<GlobalSymbol, Vec<Id>>,
+    recent_ids: HashMap<Symbol, Vec<Id>>,
+    staged_ids: HashMap<Symbol, Vec<Id>>,
 }
 
 impl UnionFind {
@@ -35,7 +33,7 @@ impl UnionFind {
     }
 
     /// The number of ids that recently stopped being canonical.
-    pub fn new_ids(&self, sort_filter: impl Fn(GlobalSymbol) -> bool) -> usize {
+    pub fn new_ids(&self, sort_filter: impl Fn(Symbol) -> bool) -> usize {
         self.recent_ids
             .iter()
             .filter_map(|(sort, ids)| {
@@ -61,7 +59,7 @@ impl UnionFind {
     /// [`clear_recent_ids`] and the call prior to that.
     ///
     /// [`clear_recent_ids`]: UnionFind::clear_recent_ids
-    pub fn dirty_ids(&self, sort: GlobalSymbol) -> impl Iterator<Item = Id> + '_ {
+    pub fn dirty_ids(&self, sort: Symbol) -> impl Iterator<Item = Id> + '_ {
         let ids = self
             .recent_ids
             .get(&sort)
@@ -99,7 +97,7 @@ impl UnionFind {
     ///
     /// This method assumes that the given values belong to the same, "eq-able",
     /// sort. Its behavior is unspecified on other values.
-    pub fn union_values(&mut self, val1: Value, val2: Value, sort: GlobalSymbol) -> Value {
+    pub fn union_values(&mut self, val1: Value, val2: Value, sort: Symbol) -> Value {
         debug_assert_eq!(val1.tag, val2.tag);
         let id1 = Id::from(val1.bits as usize);
         let id2 = Id::from(val2.bits as usize);
@@ -113,7 +111,7 @@ impl UnionFind {
     /// Like [`union_values`], but operating on raw [`Id`]s.
     ///
     /// [`union_values`]: UnionFind::union_values
-    pub fn union(&mut self, id1: Id, id2: Id, sort: GlobalSymbol) -> Id {
+    pub fn union(&mut self, id1: Id, id2: Id, sort: Symbol) -> Id {
         let (res, reparented) = self.do_union(id1, id2);
         if let Some(id) = reparented {
             self.staged_ids.entry(sort).or_default().push(id)
