@@ -3,7 +3,7 @@ use indexmap::map::Entry;
 use smallvec::SmallVec;
 
 use crate::{
-    index::Offset,
+    function::index::Offset,
     typecheck::{Atom, AtomTerm, Query},
     *,
 };
@@ -630,6 +630,7 @@ impl<'a> TrieAccess<'a> {
             }
         })
     }
+
     #[cold]
     fn make_trie_inner(&self, idxs: &[RowIdx]) -> LazyTrieInner {
         let arity = self.function.schema.input.len();

@@ -33,10 +33,8 @@ use std::{
 
 use hashbrown::raw::RawTable;
 
-use crate::{
-    binary_search::binary_search_table_by_key, util::BuildHasher as BH, TupleOutput, Value,
-    ValueVec,
-};
+use super::binary_search::binary_search_table_by_key;
+use crate::{util::BuildHasher as BH, TupleOutput, Value, ValueVec};
 
 type Offset = usize;
 

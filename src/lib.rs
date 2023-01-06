@@ -1,12 +1,8 @@
 pub mod ast;
-mod binary_search;
 mod extract;
+mod function;
 mod gj;
-mod index;
 pub mod sort;
-mod table;
-#[cfg(test)]
-mod tests;
 mod typecheck;
 mod unionfind;
 pub mod util;
@@ -15,9 +11,7 @@ mod value;
 use hashbrown::hash_map::Entry;
 use index::ColumnIndex;
 use instant::{Duration, Instant};
-use smallvec::SmallVec;
 use sort::*;
-use table::Table;
 use thiserror::Error;
 
 use ast::*;
@@ -38,226 +32,12 @@ type ArcSort = Arc<dyn Sort>;
 
 pub use value::*;
 
+use function::*;
 use gj::*;
-
 use unionfind::*;
 use util::*;
 
 use crate::typecheck::TypeError;
-
-type ValueVec = SmallVec<[Value; 3]>;
-
-#[derive(Clone)]
-pub struct Function {
-    decl: FunctionDecl,
-    schema: ResolvedSchema,
-    merge: MergeFn,
-    nodes: Table,
-    sorts: HashSet<Symbol>,
-    indexes: Vec<Rc<ColumnIndex>>,
-    index_updated_through: usize,
-    updates: usize,
-    scratch: IndexSet<usize>,
-}
-
-#[derive(Clone)]
-enum MergeFn {
-    AssertEq,
-    Union,
-    // the rc is make sure it's cheaply clonable, since calling the merge fn
-    // requires a clone
-    Expr(Rc<Program>),
-}
-
-#[derive(Debug, Clone)]
-struct TupleOutput {
-    value: Value,
-    timestamp: u32,
-}
-
-#[derive(Clone, Debug)]
-struct ResolvedSchema {
-    input: Vec<ArcSort>,
-    output: ArcSort,
-}
-
-impl Function {
-    pub fn insert(&mut self, inputs: &[Value], value: Value, timestamp: u32) -> Option<Value> {
-        self.insert_internal(inputs, value, timestamp, true)
-    }
-    pub fn clear(&mut self) {
-        self.nodes.clear();
-        self.indexes
-            .iter_mut()
-            .for_each(|x| Rc::make_mut(x).clear());
-        self.index_updated_through = 0;
-    }
-    pub fn insert_internal(
-        &mut self,
-        inputs: &[Value],
-        value: Value,
-        timestamp: u32,
-        // Clean out all stale entries if they account for a sufficiently large
-        // portion of the table after this entry is inserted.
-        maybe_rehash: bool,
-    ) -> Option<Value> {
-        let res = self.nodes.insert(inputs, value, timestamp);
-        if maybe_rehash {
-            self.maybe_rehash();
-        }
-        res
-    }
-
-    /// Return a column index that contains (a superset of) the offsets for the
-    /// given column. This method can return nothing if the indexes available
-    /// contain too many irrelevant offsets.
-    pub(crate) fn column_index(
-        &self,
-        col: usize,
-        timestamps: &Range<u32>,
-    ) -> Option<Rc<ColumnIndex>> {
-        let range = self.nodes.transform_range(timestamps);
-        if range.end > self.index_updated_through {
-            return None;
-        }
-        let size = range.end.saturating_sub(range.start);
-        // If this represents >12.5% overhead, don't use the index
-        if (self.nodes.len() - size) > (size / 8) {
-            return None;
-        }
-        let target = &self.indexes[col];
-        Some(target.clone())
-    }
-
-    pub(crate) fn remove(&mut self, ks: &[Value], ts: u32) -> bool {
-        let res = self.nodes.remove(ks, ts);
-        self.maybe_rehash();
-        res
-    }
-
-    fn build_indexes(&mut self, offsets: Range<usize>) {
-        for (col, index) in self.indexes.iter_mut().enumerate() {
-            let as_mut = Rc::make_mut(index);
-            if col == self.schema.input.len() {
-                for (slot, _, out) in self.nodes.iter_range(offsets.clone()) {
-                    as_mut.add(out.value, slot)
-                }
-            } else {
-                for (slot, inp, _) in self.nodes.iter_range(offsets.clone()) {
-                    as_mut.add(inp[col], slot)
-                }
-            }
-        }
-    }
-
-    fn update_indexes(&mut self, through: usize) {
-        self.build_indexes(self.index_updated_through..through);
-        self.index_updated_through = self.index_updated_through.max(through);
-    }
-
-    fn maybe_rehash(&mut self) {
-        if !self.nodes.too_stale() {
-            return;
-        }
-
-        for index in &mut self.indexes {
-            // Everything works if we don't have a unique copy of the indexes,
-            // but we ought to be able to avoid this copy.
-            Rc::make_mut(index).clear();
-        }
-        self.nodes.rehash();
-        self.index_updated_through = 0;
-        self.update_indexes(self.nodes.len());
-    }
-
-    pub(crate) fn iter_timestamp_range(
-        &self,
-        timestamps: &Range<u32>,
-    ) -> impl Iterator<Item = (usize, &[Value], &TupleOutput)> {
-        self.nodes.iter_timestamp_range(timestamps)
-    }
-
-    pub fn rebuild(&mut self, uf: &mut UnionFind, timestamp: u32) -> usize {
-        // Make sure indexes are up to date.
-        self.update_indexes(self.nodes.len());
-        if self.schema.input.iter().all(|s| !s.is_eq_sort()) && !self.schema.output.is_eq_sort() {
-            return std::mem::take(&mut self.updates);
-        }
-        let mut scratch = ValueVec::new();
-        let n_unions = uf.n_unions();
-        if uf.new_ids(|sort| self.sorts.contains(&sort)) > (self.nodes.len() / 2) {
-            // basic heuristic: if we displaced a large number of ids relative
-            // to the size of the table, then just rebuild everything.
-            for i in 0..self.nodes.len() {
-                self.rebuild_at(i, timestamp, uf, &mut scratch)
-            }
-        } else {
-            let mut to_canon = mem::take(&mut self.scratch);
-            to_canon.clear();
-            to_canon.extend(self.indexes.iter().flat_map(|x| x.to_canonicalize(uf)));
-
-            for i in to_canon.iter().copied() {
-                self.rebuild_at(i, timestamp, uf, &mut scratch);
-            }
-            self.scratch = to_canon;
-        }
-        self.maybe_rehash();
-        uf.n_unions() - n_unions + std::mem::take(&mut self.updates)
-    }
-
-    fn rebuild_at(&mut self, i: usize, timestamp: u32, uf: &mut UnionFind, scratch: &mut ValueVec) {
-        let mut modified = false;
-        let (args, out) = if let Some(x) = self.nodes.get_index(i) {
-            x
-        } else {
-            // Entry is stale
-            return;
-        };
-        let mut out_val = out.value;
-        scratch.clear();
-        scratch.extend(args.iter().copied());
-
-        for (val, ty) in scratch.iter_mut().zip(&self.schema.input) {
-            if !ty.is_eq_sort() {
-                continue;
-            }
-            let new = uf.find_value(*val);
-            if new.bits != val.bits {
-                *val = new;
-                modified = true;
-            }
-        }
-
-        if self.schema.output.is_eq_sort() {
-            let new = uf.find_value(out_val);
-            if new.bits != out_val.bits {
-                out_val = new;
-                modified = true;
-            }
-        }
-
-        if !modified {
-            return;
-        }
-        self.nodes.remove_index(i, timestamp);
-        self.nodes.insert_and_merge(scratch, timestamp, |prev| {
-            if let Some(prev) = prev {
-                if !self.schema.output.is_eq_sort() {
-                    // TODO: call the merge fn
-                    prev
-                } else {
-                    uf.union_values(prev, out_val, self.schema.output.name())
-                }
-            } else {
-                out_val
-            }
-        });
-    }
-
-    pub(crate) fn get_size(&self, range: &Range<u32>) -> usize {
-        self.nodes.approximate_range_size(range)
-    }
-}
 
 pub type Subst = IndexMap<Symbol, Value>;
 
@@ -570,60 +350,7 @@ impl EGraph {
     }
 
     pub fn declare_function(&mut self, decl: &FunctionDecl) -> Result<(), Error> {
-        let mut input = Vec::with_capacity(decl.schema.input.len());
-        for s in &decl.schema.input {
-            input.push(match self.sorts.get(s) {
-                Some(sort) => sort.clone(),
-                None => return Err(Error::TypeError(TypeError::Unbound(*s))),
-            })
-        }
-
-        let output = match self.sorts.get(&decl.schema.output) {
-            Some(sort) => sort.clone(),
-            None => return Err(Error::TypeError(TypeError::Unbound(decl.schema.output))),
-        };
-
-        let merge = if let Some(merge_expr) = &decl.merge {
-            let mut types = IndexMap::<Symbol, ArcSort>::default();
-            types.insert("old".into(), output.clone());
-            types.insert("new".into(), output.clone());
-            let (_, program) = self
-                .compile_expr(&types, merge_expr, Some(output.clone()))
-                .map_err(Error::TypeErrors)?;
-            MergeFn::Expr(Rc::new(program))
-        } else if output.is_eq_sort() {
-            MergeFn::Union
-        } else {
-            MergeFn::AssertEq
-        };
-
-        let indexes = Vec::from_iter(
-            input
-                .iter()
-                .chain(once(&output))
-                .map(|x| Rc::new(ColumnIndex::new(x.name()))),
-        );
-
-        let sorts: HashSet<Symbol> = input
-            .iter()
-            .map(|x| x.name())
-            .chain(once(output.name()))
-            .collect();
-
-        let function = Function {
-            decl: decl.clone(),
-            schema: ResolvedSchema { input, output },
-            nodes: Default::default(),
-            scratch: Default::default(),
-            sorts,
-            // TODO: build indexes for primitive sorts lazily
-            indexes,
-            index_updated_through: 0,
-            updates: 0,
-            merge,
-            // TODO figure out merge and default here
-        };
-
+        let function = Function::new(self, decl)?;
         let old = self.functions.insert(decl.name, function);
         if old.is_some() {
             return Err(TypeError::FunctionAlreadyBound(decl.name).into());
