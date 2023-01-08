@@ -38,14 +38,117 @@ egg-smol
 
 for the REPL.
 
-## Syntax
+# Syntax
 
 The syntax of the .egg files is defined in `src/ast/parse.lalrpop`.
+## Commands
 
-### Commands
+### `datatype` command
+
+Declare a datatype with this syntax:
 
 ```
     ( datatype <name:Ident> <variants:(Variant)*> )
+```
+
+where variants are:
+
+```
+    ( <name:Ident> <types:(Type)*> <cost:Cost> )
+```
+
+Example:
+```
+(datatype Math
+  (Num i64)
+  (Var String)
+  (Add Math Math)
+  (Mul Math Math))
+```
+
+defines a simple `Math` datatype with variants for numbers, named variables, addition and multiplication.
+
+Datatypes are also known as algebraic data types, tagged unions and sum types.
+
+### `function` command
+
+```
+    ( function <name:Ident> <schema:Schema> <cost:Cost>
+        <merge:(:merge <Expr>)?> )
+```
+
+Defines a named function with a type schema, an optional integer cost, an optional `:merge` expression, which can refer to `old` and `new` values.
+
+Example:
+```
+(function add (Math Math) Math)
+```
+
+defines a function `add` which adds two `Math` datatypes and gives a `Math` as the result.
+
+Functions are basically lookup tables from inputs to the output. They can be considered as a kind of database table.
+
+Explicit function values can be defined using `set`:
+
+```
+(function Fib (i64) i64)
+(set (Fib 0) 0)
+(set (Fib 1) 1)
+```
+
+You can extract the value of specific points of the function using `extract`:
+
+```
+(extract (Fib 1))
+```
+
+### `relation` command
+
+The `relation` command defines a named function which returns the `Unit` type.
+
+```
+    ( relation <name:Ident> <types:List<Type>> )
+```
+
+Thus `(relation <name> <args>)` is equivalent to  `(function <name> <args> Unit)`.
+
+Example:
+```
+(relation path (i64 i64))
+(relation edge (i64 i64))
+```
+
+defines a `path` and an `edge` relation between two `i64`s.
+
+```
+(edge 1 2)
+(edge 2 3)
+```
+
+inserts two edges into the store for the `edge` function. If your function is relation between the inputs, use `relation` and the above syntax to define the relations, since there is no syntax to define a unit value using `set`.
+
+### `rule` command
+
+```
+    ( rule <body:List<Fact>> <head:List<Action>> )
+```
+
+defines a rule, which matches a list of facts, and runs a bunch of actions. It is useful to maintain invariants and inductive definitions.
+
+Example:
+```
+(rule ((edge x y))
+      ((path x y)))
+
+(rule ((path x y) (edge y z))
+      ((path x z)))
+```
+
+These rules maintains path relations for a graph: If there is an edge from `x` to `y`, there is also a path from `x` to `y`. Transitivity is handled by the second rule: If there is a path from `x` to `y` *and* there is an edge from `y` to `z`, there is also a path from `x` and `z`.
+
+### `extract` command
+
+```
     ( extract <variants:(:variants <UNum>)?> <e:Expr> )
 ```
 
@@ -55,22 +158,47 @@ where variants are:
     ( <name:Ident> <types:(Type)*> <cost:Cost> )
 ```
 
+The `extract` queries the store to find the cheapest values matching the expression.
+
+### `rewrite` and `birewrite` commands
+
 ```
-    ( sort <name:Ident> ( <head:Ident> <tail:(Expr)*> ) )
-    ( function <name:Ident> <schema:Schema> <cost:Cost>
-        <merge:(:merge <Expr>)?> <default:(:default <Expr>)?> )
-    ( relation <name:Ident> <types:List<Type>> )
-    ( rule <body:List<Fact>> <head:List<Action>> )
     ( rewrite <lhs:Expr> <rhs:Expr>
         <conditions:(:when <List<Fact>>)?>
     )
+```
+
+defines a rule which matches the `lhs` expressions, and rewrites them to the `rhs` expression. It is possible to guard the rewrite with a condition that has to be satisfied before the rule applies.
+
+```
     ( birewrite <lhs:Expr> <rhs:Expr>
         <conditions:(:when <List<Fact>>)?>
     )
+```
+
+does the same, but where both directions apply.
+
+Example:
+
+```
+(rewrite (Add a b)
+         (Add b a))
+```
+
+declares a rule that a `Add` variant is commutative. 
+
+```
+(birewrite (* (* a b) c) (* a (* b c)))
+```
+
+declares a rule that multiplication is associative in both directions.
+
+### Other commands
+
+```
+    ( sort <name:Ident> ( <head:Ident> <tail:(Expr)*> ) )
     ( define <name:Ident> <expr:Expr> <cost:Cost> )
-
     ( run <limit:UNum>  <until:(:until <Fact>)?> )
-
     ( check <Fact> )
     ( clear-rules )
     ( clear )
