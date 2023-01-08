@@ -30,13 +30,13 @@ make all
 ## Usage
 
 ```
-egg-smol [-f fact-path] [-naive] <files.egg>
+target/debug/egg-smol [-f fact-path] [-naive] <files.egg>
 ```
 
 or just
 
 ```
-egg-smol
+target/debug/egg-smol
 ```
 
 for the REPL.
