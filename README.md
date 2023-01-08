@@ -14,6 +14,8 @@ with this paper to go along:
 
 https://effect.systems/doc/pldi-2022-egraphs/abstract.pdf
 
+Also see papers about egglog.
+
 ## Prerequisites & compilation
 
 ```
@@ -121,3 +123,50 @@ where sorts are:
     identifier
     call: ( <head:Ident> <tail:(Expr)*> )
 ```
+
+## Sorts
+
+### Sort: i64
+
+Signed 64-bit integers supporting these primitives:
+
+```
++ - * / %           ; arithmetic
+& | ^ << >> not-i64 ; bit-wise operations
+< > <= >=           ; comparisons
+min max
+```
+
+### Sort: map
+
+A map from a key type to a value type supporting these primitives:
+
+```
+empty
+insert
+get
+not-contains
+contains
+set-union
+set-diff
+set-intersect
+map-remove
+```
+
+### Sort: rational
+
+Rational numbers (fractions) with 64-bit precision for numerator and denominator with these primitives:
+
+```
++ - * /         ; arithmetic
+min max neg abs floor ceil round
+rational        ; construct from a numerator and denominator
+pow log sqrt
+< > <= >=       ; comparisons
+```
+
+These primitives are only defined when the result itself is a pure rational.
+
+### Sort: string
+
+No primitives defined.
