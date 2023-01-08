@@ -16,6 +16,9 @@ https://effect.systems/doc/pldi-2022-egraphs/abstract.pdf
 
 Also see papers about egglog.
 
+See also the Python binding, which provides a bit more documentation:
+https://egg-smol-python.readthedocs.io/en/latest/
+
 ## Prerequisites & compilation
 
 ```
@@ -77,7 +80,7 @@ Datatypes are also known as algebraic data types, tagged unions and sum types.
         <merge:(:merge <Expr>)?> )
 ```
 
-Defines a named function with a type schema, an optional integer cost, an optional `:merge` expression, which can refer to `old` and `new` values.
+Defines a named function with a type schema, an optional integer cost, and an optional `:merge` expression, which can refer to `old` and `new` values.
 
 Example:
 ```
@@ -86,7 +89,7 @@ Example:
 
 defines a function `add` which adds two `Math` datatypes and gives a `Math` as the result.
 
-Functions are basically lookup tables from inputs to the output. They can be considered as a kind of database table.
+Functions are basically lookup tables from input tuples to the output. They can be considered as a kind of database table.
 
 Explicit function values can be defined using `set`:
 
@@ -102,7 +105,7 @@ You can extract the value of specific points of the function using `extract`:
 (extract (Fib 1))
 ```
 
-If you define a `:merge` expression, you can update specific values, and the function relation will be updated using the merge expression:
+If you define a `:merge` expression, you can update specific values in the function, and the function relation will be updated using the merge expression:
 
 ```
 (function KeepMax (i64) i64 :merge (max new old)); when updated, keep the biggest value
@@ -121,7 +124,7 @@ The `relation` command defines a named function which returns the `Unit` type.
     ( relation <name:Ident> <types:List<Type>> )
 ```
 
-Thus `(relation <name> <args>)` is equivalent to  `(function <name> <args> Unit)`.
+Thus `(relation <name> <args>)` is equivalent to `(function <name> <args> Unit)`.
 
 Example:
 ```
@@ -144,7 +147,7 @@ inserts two edges into the store for the `edge` function. If your function is re
     ( define <name:Ident> <expr:Expr> <cost:Cost> )
 ```
 
-defines a named 0-arity function with a given, singular value.
+defines a named value. This is the same as a 0-arity function with a given, singular value.
 
 Example:
 ```
@@ -220,12 +223,37 @@ declares a rule that a `Add` variant is commutative.
 
 declares a rule that multiplication is associative in both directions.
 
+### `check` and `fail` commands
+
+```
+    ( check <Fact> )
+    ( fail <Command> )
+```
+
+This evaluates the fact and checks that it is true.
+
+Example:
+
+```
+(check (= (+ 1 2) 3))
+(check (<= 0 3) (>= 3 0))
+(fail (check (= 1 2)))
+```
+
+prints
+
+```
+[INFO ] Checked.
+[INFO ] Checked.
+[ERROR] Check failed
+[INFO ] Command failed as expected.
+```
+
 ### Other commands
 
 ```
     ( sort <name:Ident> ( <head:Ident> <tail:(Expr)*> ) )
     ( run <limit:UNum>  <until:(:until <Fact>)?> )
-    ( check <Fact> )
     ( clear-rules )
     ( clear )
     ( query <List<Fact>> )
@@ -234,7 +262,6 @@ declares a rule that multiplication is associative in both directions.
     ( print <sym:Ident> <n:UNum?> )
     ( print-size <sym:Ident> )
     ( input <name:Ident> <file:String> )
-    ( fail <Command> )
     ( include <file:String> )
     ( calc ( <idents:IdentSort*> ) <exprs:Expr+> )
 ```
@@ -255,6 +282,19 @@ where sorts are:
     ( let <name:Ident> <expr:Expr> )
 ```
 
+### Union
+
+The underlying data structure maintained by egg-smol is an e-graph. That means that specific values can be unified to be equivalent. To extract a value, use `extract` and it will extract the cheapest option according to the costs.
+
+```
+(datatype Math (Num i64))
+(union (Num 1) (Num 2)); Define that Num 1 and Num 2 are equivalent
+(extract (Num 1)); Extracts Num 1
+(extract (Num 2)); Extracts Num 1
+```
+
+Union only works on variants, not sorts.
+
 ### Name
 
 ```
@@ -264,8 +304,11 @@ where sorts are:
 ### Facts
 
 ```
-    ( = <mut es:Expr+> <e:Expr> ) 
+    ( = <mut es:Expr+> <e:Expr> )
+    <Expr>
 ```
+
+These are conditions used in check and other commands. There is no boolean type in egg-smol. Instead, boolean are modelled morally as `Option<Unit>`, so if something is true, it is `Some<()>`. If something is false, it does not match and is `None`.
 
 ### Expressions
 
