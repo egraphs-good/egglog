@@ -102,6 +102,17 @@ You can extract the value of specific points of the function using `extract`:
 (extract (Fib 1))
 ```
 
+If you define a `:merge` expression, you can update specific values, and the function relation will be updated using the merge expression:
+
+```
+(function KeepMax (i64) i64 :merge (max new old)); when updated, keep the biggest value
+(set (KeepMax 0) 0)
+(set (KeepMax 1) 1)
+(set (KeepMax 1) 2)   ; we redefine 1 to be 2
+(set (KeepMax 1) 0)   ; this does not change since we use max
+(extract (KeepMax 1)) ; this is 2  
+```
+
 ### `relation` command
 
 The `relation` command defines a named function which returns the `Unit` type.
@@ -126,6 +137,22 @@ defines a `path` and an `edge` relation between two `i64`s.
 ```
 
 inserts two edges into the store for the `edge` function. If your function is relation between the inputs, use `relation` and the above syntax to define the relations, since there is no syntax to define a unit value using `set`.
+
+### `define` command
+
+```
+    ( define <name:Ident> <expr:Expr> <cost:Cost> )
+```
+
+defines a named 0-arity function with a given, singular value.
+
+Example:
+```
+(define one 1)
+(define two 2)
+(define three (+ one two))
+(extract three); extracts 3 as a i64
+```
 
 ### `rule` command
 
@@ -197,7 +224,6 @@ declares a rule that multiplication is associative in both directions.
 
 ```
     ( sort <name:Ident> ( <head:Ident> <tail:(Expr)*> ) )
-    ( define <name:Ident> <expr:Expr> <cost:Cost> )
     ( run <limit:UNum>  <until:(:until <Fact>)?> )
     ( check <Fact> )
     ( clear-rules )
@@ -210,7 +236,6 @@ declares a rule that multiplication is associative in both directions.
     ( input <name:Ident> <file:String> )
     ( fail <Command> )
     ( include <file:String> )
-
     ( calc ( <idents:IdentSort*> ) <exprs:Expr+> )
 ```
 
@@ -227,7 +252,6 @@ where sorts are:
     ( delete ( <f: Ident> <args:Expr*> ) )
     ( union <e1:Expr> <e2:Expr> )
     ( panic <msg:String> )
-
     ( let <name:Ident> <expr:Expr> )
 ```
 
