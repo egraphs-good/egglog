@@ -4,6 +4,16 @@
 
 This is the working repo for egg-smol.
 
+## Background
+
+See this presentation for background information:
+
+https://youtu.be/dbgZJyw3hnk?t=3983
+
+with this paper to go along:
+
+https://effect.systems/doc/pldi-2022-egraphs/abstract.pdf
+
 ## Prerequisites & compilation
 
 ```
