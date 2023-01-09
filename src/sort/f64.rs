@@ -60,6 +60,10 @@ impl Sort for F64Sort {
             OrderedFloat(a.sqrt())
 });
         add_primitives!(eg, "ln" = |a: F64| -> F64 { OrderedFloat(a.ln()) });
+
+        add_primitives!(eg, "dist" = |a: F64, b: F64| -> F64 {
+            OrderedFloat((a - b).abs())
+        });
     }
 
     fn make_expr(&self, value: Value) -> Expr {
