@@ -11,6 +11,7 @@ pub enum Literal {
     Int(i64),
     Float(F64),
     String(Symbol),
+    Bool(bool),
     Unit,
 }
 
@@ -43,6 +44,7 @@ impl Display for Literal {
         match &self {
             Literal::Int(i) => Display::fmt(i, f),
             Literal::Float(n) => Display::fmt(&n, f),
+            Literal::Bool(b) => Display::fmt(b, f),
             Literal::String(s) => write!(f, "{s}"),
             Literal::Unit => write!(f, "()"),
         }

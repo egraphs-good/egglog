@@ -67,3 +67,12 @@ impl From<Symbol> for Value {
         }
     }
 }
+
+impl From<bool> for Value {
+    fn from(b: bool) -> Self {
+        Self {
+            tag: Symbol::from("bool"),
+            bits: b as u64,
+        }
+    }
+}

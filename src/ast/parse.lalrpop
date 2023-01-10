@@ -110,6 +110,7 @@ Literal: Literal = {
     <Integer> => Literal::Int(<>),
     <Float> => Literal::Float(OrderedFloat(<>)),
     <SymString> => Literal::String(<>),
+    <Bool> => Literal::Bool(<>),
 }
 
 CallExpr: Expr = {

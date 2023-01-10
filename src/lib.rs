@@ -329,6 +329,7 @@ impl Default for EGraph {
         egraph.add_sort(StringSort::new("String".into()));
         egraph.add_sort(I64Sort::new("i64".into()));
         egraph.add_sort(F64Sort::new("f64".into()));
+        egraph.add_sort(BoolSort::new("bool".into()));
         egraph.add_sort(RationalSort::new("Rational".into()));
         egraph.add_sort(IntervalSort::new("Interval".into()));
         egraph.add_sort(BoolIntervalSort::new("BooleanInterval".into()));
@@ -573,6 +574,7 @@ impl EGraph {
         match lit {
             Literal::Int(i) => i.store(&*self.get_sort()).unwrap(),
             Literal::Float(f) => f.store(&*self.get_sort()).unwrap(),
+            Literal::Bool(b) => b.store(&*self.get_sort()).unwrap(),
             Literal::String(s) => s.store(&*self.get_sort()).unwrap(),
             Literal::Unit => ().store(&*self.get_sort()).unwrap(),
         }

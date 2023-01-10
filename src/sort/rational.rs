@@ -7,6 +7,7 @@ use std::sync::Mutex;
 
 type R = rug::Rational;
 use crate::{ast::Literal, util::IndexSet};
+use ordered_float::OrderedFloat;
 
 use super::*;
 

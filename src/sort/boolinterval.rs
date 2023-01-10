@@ -42,15 +42,11 @@ impl Sort for BoolIntervalSort {
             }
         });
 
-        add_primitives!(eg, "to-bool" = |a: R| -> Option<R> {
+        add_primitives!(eg, "to-bool" = |a: R| -> Option<bool> {
             if a.err.lo || a.err.hi {
                 None
             } else if a.lo == a.hi {
-                Some(if a.lo {
-                    BooleanInterval::true_interval()
-                } else {
-                    BooleanInterval::false_interval()
-                })
+                Some(a.lo)
             } else {
                 None
             }});
