@@ -53,9 +53,7 @@ impl From<OrderedFloat<f64>> for Value {
     fn from(f: OrderedFloat<f64>) -> Self {
         Self {
             tag: Symbol::from("f64"),
-            bits: unsafe {
-                std::mem::transmute::<f64, u64>(f.into_inner())
-            }
+            bits: f.into_inner().to_bits()
         }
     }
 }

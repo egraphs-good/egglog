@@ -46,9 +46,7 @@ impl Sort for F64Sort {
 
     fn make_expr(&self, value: Value) -> Expr {
         assert!(value.tag == self.name());
-        Expr::Lit(Literal::F64(OrderedFloat(unsafe { 
-            std::mem::transmute::<u64, f64>(value.bits)
-        })))
+        Expr::Lit(Literal::F64(OrderedFloat(f64::from_bits(value.bits))))
     }
 }
 
@@ -57,7 +55,7 @@ impl IntoSort for f64 {
     fn store(self, sort: &Self::Sort) -> Option<Value> {
         Some(Value {
             tag: sort.name,
-            bits: unsafe { std::mem::transmute::<f64, u64>(self) },
+            bits: self.to_bits(),
         })
     }
 }
@@ -65,6 +63,6 @@ impl IntoSort for f64 {
 impl FromSort for f64 {
     type Sort = F64Sort;
     fn load(_sort: &Self::Sort, value: &Value) -> Self {
-        unsafe { std::mem::transmute::<u64, f64>(value.bits) }
+        f64::from_bits(value.bits)
     }
 }
