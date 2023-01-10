@@ -1,5 +1,5 @@
-use std::num::NonZeroU32;
 use ordered_float::OrderedFloat;
+use std::num::NonZeroU32;
 
 use lazy_static::lazy_static;
 
@@ -53,7 +53,7 @@ impl From<OrderedFloat<f64>> for Value {
     fn from(f: OrderedFloat<f64>) -> Self {
         Self {
             tag: Symbol::from("f64"),
-            bits: f.into_inner().to_bits()
+            bits: f.into_inner().to_bits(),
         }
     }
 }

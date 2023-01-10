@@ -1,6 +1,6 @@
+use super::*;
 use crate::ast::Literal;
 use ordered_float::OrderedFloat;
-use super::*;
 
 #[derive(Debug)]
 pub struct F64Sort {
