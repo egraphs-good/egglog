@@ -126,6 +126,8 @@ impl Sort for RationalSort {
         add_primitives!(eg, ">" = |a: R, b: R| -> Opt { (a > b).then(|| ()) }); 
         add_primitives!(eg, ">=" = |a: R, b: R| -> Opt { (a >= b).then(|| ()) });
         add_primitives!(eg, "<=" = |a: R, b: R| -> Opt { (a <= b).then(|| ()) });
+
+        add_primitives!(eg, "to-f64" = |a: R| -> F64 { OrderedFloat(a.to_f64()) });
     }
     fn make_expr(&self, value: Value) -> Expr {
         assert!(value.tag == self.name());
