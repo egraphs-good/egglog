@@ -1,4 +1,5 @@
 use std::num::NonZeroU32;
+use ordered_float::OrderedFloat;
 
 use lazy_static::lazy_static;
 
@@ -44,6 +45,17 @@ impl From<i64> for Value {
         Self {
             tag: Symbol::from("i64"),
             bits: i as u64,
+        }
+    }
+}
+
+impl From<OrderedFloat<f64>> for Value {
+    fn from(f: OrderedFloat<f64>) -> Self {
+        Self {
+            tag: Symbol::from("f64"),
+            bits: unsafe {
+                std::mem::transmute::<f64, u64>(f.into_inner())
+            }
         }
     }
 }

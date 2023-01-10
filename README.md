@@ -332,6 +332,16 @@ Signed 64-bit integers supporting these primitives:
 min max
 ```
 
+### Sort: f64
+
+64-bit floating point numbers supporting these primitives:
+
+```
++ - * / %           ; arithmetic
+< > <= >=           ; comparisons
+min max
+```
+
 ### Sort: map
 
 A map from a key type to a value type supporting these primitives:
