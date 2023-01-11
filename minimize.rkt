@@ -8,9 +8,15 @@
       '()
       (cons line (read-lines port))))
 
+;; don't remove any check statements
 (define (remove-at n lst)
   (define-values (head tail) (split-at lst n))
-  (append head (cdr tail)))
+  (define line (car tail))
+  (if (and (list? line)
+           (or (equal? (first line) 'check)
+               (equal? (first line) 'keep)))
+      lst
+      (append head (cdr tail))))
 
 (define-runtime-path egglog-binary
   "target/release/egg-smol")
@@ -18,25 +24,39 @@
 ;; timeout in seconds
 (define TIMEOUT 5)
 (define ITERATIONS 1)
-(define RANDOM-SAMPLE-FACTOR 2)
+(define RANDOM-SAMPLE-FACTOR 1)
+(define MUST-NOT-STRINGS `("h0 failed"))
+(define TARGET-STRINGS `("h1 failed"))
+
+(define (desugar line)
+  (match line
+    [`(keep ,body)
+     body]
+    [else line]))
 
 (define (desired-error? program)
   (displayln (format "Trying program of size ~a" (length program)))
-  (define-values (egglog-process egglog-output egglog-in err)
-    (subprocess #f #f #f egglog-binary))
-  (close-input-port egglog-output)
-  (for ([line program])
-    (writeln line egglog-in))
-  (close-output-port egglog-in)
   (flush-output)
+  (define-values (egglog-process egglog-output egglog-in err)
+    (subprocess (current-output-port) #f #f egglog-binary))
+
+  (for ([line program])
+    (writeln (desugar line) egglog-in))
+  (close-output-port egglog-in)
+
   (when (not (sync/timeout TIMEOUT egglog-process))
     (displayln "Timed out"))
   (subprocess-kill egglog-process #t)
   (displayln "checking output")
   (flush-output)
-  (define err-str (read-string 100 err))
+  (define err-str (read-string 800 err))
   (close-input-port err)
-  (define still-unsound (and (string? err-str) (string-contains? err-str "Unsound")))
+  (define still-unsound (and (string? err-str)
+                             (for/and ([must-not-string MUST-NOT-STRINGS])
+                               (not (string-contains? err-str must-not-string)))
+                             (for/or ([TARGET-STRING TARGET-STRINGS])
+                               (string-contains? err-str TARGET-STRING))))
+  (println err-str)
   (if still-unsound
       (displayln "Reduced program")
       (displayln "Did not reduce"))
@@ -45,11 +65,25 @@
 (define (min-program program index)
   (fprintf (current-output-port) "Trying to remove index ~a out of ~a\n" index (length program))
   (flush-output)
+
   (cond
     [(>= index (length program)) program]
-    [(desired-error? (remove-at index program))
-     (min-program (remove-at index program) index)]
-    [else (min-program program (+ index 1))]))
+    [else
+     (define removed (remove-at index program))
+     (cond
+       [(equal? (length removed) (length program))
+        (min-program removed (+ index 1))]
+       [(desired-error? removed)
+        (min-program removed index)]
+       [else (min-program program (+ index 1))])]))
+
+(define (remove-random-lines program n)
+  (cond
+    [(<= n 0) program]
+    [else
+     (define index (random (length program)))
+     (define new-program (remove-at index program))
+     (remove-random-lines new-program (- n 1))]))
 
 (define (min-program-random program iters)
   (cond
@@ -61,8 +95,19 @@
          (min-program-random new-program (- iters 1))
          (min-program-random program (- iters 1)))]))
 
+(define (min-program-greedy program num)
+  (cond
+    [(< num 1)
+     program]
+    [else
+     (define prog (remove-random-lines program num))
+     (if (desired-error? prog)
+         (min-program-greedy prog num)
+         (min-program-greedy program (* num 2/3)))]))
+
 (define (random-and-sequential program)
-  (define random-prog (min-program-random program (* (length program) RANDOM-SAMPLE-FACTOR)))
+  (define binary (min-program-greedy program (/ (length program) 2)))
+  (define random-prog (min-program-random binary (* (length binary) RANDOM-SAMPLE-FACTOR)))
   (min-program random-prog 0))
 
 (define (min-iterations program)
@@ -71,10 +116,16 @@
   (first (sort programs (lambda (a b) (< (length a) (length b))))))
 
 (define (minimize port-in port-out)
+  (define-values (egglog-process egglog-output egglog-in err)
+    (subprocess #f #f #f "cargo build --release"))
+  (close-input-port egglog-output)
+  (close-output-port egglog-in)
+  (close-input-port err)
+  (subprocess-wait egglog-process)
   (define egglog (read-lines port-in))
   (define minimized (min-iterations egglog))
   (for ([line minimized])
-    (writeln line port-out)))
+    (writeln (desugar line) port-out)))
 
 
 (module+ main

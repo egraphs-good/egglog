@@ -417,14 +417,20 @@ impl EGraph {
         }
     }
 
-    pub fn check_fact(&mut self, fact: &Fact, log: bool) -> Result<(), Error> {
+    pub fn check_fact(&mut self, fact: &Fact, log: bool, custom_err: Option<String>) -> Result<(), Error> {
         match fact {
             Fact::Eq(exprs) => {
                 assert!(exprs.len() > 1);
-                let values: Vec<(ArcSort, Value)> = exprs
+                let values_r: Result<Vec<(ArcSort, Value)>, Error> = exprs
                     .iter()
                     .map(|e| self.eval_expr(e, None, false))
-                    .collect::<Result<_, _>>()?;
+                    .collect::<Result<_, _>>();
+
+                if let Result::Err(err) = values_r {
+                    return Err(Error::CustomError(Box::new(err), custom_err.unwrap_or("".to_string())))
+                }
+
+                let values = values_r.unwrap();
 
                 let (_t0, v0) = &values[0];
                 for (_t, v) in &values[1..] {
@@ -440,7 +446,13 @@ impl EGraph {
                                 }
                             }
                         }
-                        return Err(Error::CheckError(values[0].1, *v));
+
+                        let checkerr = Error::CheckError(values[0].1, *v);
+                        return if let Some(msg) = custom_err {
+                            Err(Error::CustomError(Box::new(checkerr), msg))
+                        } else {
+                            Err(checkerr)
+                        }
                     }
                 }
             }
@@ -667,7 +679,7 @@ impl EGraph {
                 break;
             }
             if let Some(fact) = until {
-                if self.check_fact(fact, false).is_ok() {
+                if self.check_fact(fact, false, None).is_ok() {
                     log::info!(
                         "Breaking early at iteration {} because of fact {}!",
                         i,
@@ -1022,9 +1034,9 @@ impl EGraph {
                     "Skipping Extraction".into()
                 }
             }
-            Command::Check(fact) => {
+            Command::Check(fact, error) => {
                 if should_run {
-                    self.check_fact(&fact, true)?;
+                    self.check_fact(&fact, true, error)?;
                     "Checked.".into()
                 } else {
                     "Skipping check.".into()
@@ -1209,7 +1221,7 @@ impl EGraph {
                 }),
                 true,
             )?;
-            self.run_command(Command::Check(cond), true)?;
+            self.run_command(Command::Check(cond, None), true)?;
             self.pop().unwrap();
             *depth -= 1;
         }
@@ -1344,6 +1356,8 @@ pub enum Error {
     TypeErrors(Vec<TypeError>),
     #[error("Check failed: {0:?} != {1:?}")]
     CheckError(Value, Value),
+    #[error("{0}, {1}")]
+    CustomError(Box<Error>, String),
     #[error("Sort {0} already declared.")]
     SortAlreadyBound(Symbol),
     #[error("Presort {0} not found.")]

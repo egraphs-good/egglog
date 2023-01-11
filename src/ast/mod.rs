@@ -63,7 +63,7 @@ pub enum Command {
         e: Expr,
     },
     // TODO: this could just become an empty query
-    Check(Fact),
+    Check(Fact, Option<String>),
     ClearRules,
     AddRuleset(Symbol),
     LoadRuleset(Symbol),
