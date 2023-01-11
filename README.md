@@ -41,6 +41,11 @@ target/debug/egg-smol
 
 for the REPL.
 
+
+# VS Code extension
+
+In the vscode/eggsmol-1.0.0 folder, there is a plugin for VS Code, which provides syntax highlighting and execution of your .egg files using F7. Install using "Install from .vsix" in the 3-dot menu of the extensions tab.
+
 # Syntax
 
 The syntax of the .egg files is defined in `src/ast/parse.lalrpop`.

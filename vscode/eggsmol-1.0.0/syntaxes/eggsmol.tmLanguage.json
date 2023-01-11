@@ -1,0 +1,38 @@
+{
+	"$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+	"name": "Eggsmol",
+	"patterns": [
+		{ "include": "#ident" },
+		{ "include": "#num" },
+		{ "include": "#string" },
+		{ "include": "#linecomment" }
+	],
+	"repository": {
+		"ident": {
+			"patterns": [{
+				"name": "variable.parameter",
+				"match": "[a-zA-Z][a-zA-Z0-9_]*"
+			}]
+		},
+		"num": {
+			"patterns": [{
+				"name": "constant.numeric",
+				"match": "\\-?[0-9]+"
+			}]
+		},
+		"string": {
+			"name": "string.quoted.double",
+			"begin": "\"",
+			"end": "\""
+
+		}
+		,
+		"linecomment": {
+			"patterns": [{
+				"name": "comment.line",
+				"match": ";.*$\n?"
+			}]
+		}
+	},
+	"scopeName": "source.eggsmol"
+}
