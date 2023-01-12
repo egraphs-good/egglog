@@ -1,0 +1,76 @@
+(datatype Math
+    (Add Math Math)
+    (Sub Math Math)
+    (Const Rational)
+    (Var String))
+
+(datatype AstMath
+  (AstAdd AstMath AstMath)
+  (AstSub AstMath AstMath)
+  (AstConst Rational)
+  (AstVar String))
+
+(datatype Proof
+  (Original AstMath)
+  (Multi ProofList Rule-Name)
+  (Term AstMath)
+  (Congruence ProofList)
+  (Equality AstMath AstMath))
+
+
+(datatype Proof-List
+  (Cons Proof Proof-List)
+  (Null))
+
+;; prove two terms equal
+(relation (Eq AstMath AstMath String))
+
+;; For every Add in the database,
+;; store a AstAdd representative
+;; and a proof of that representative
+(relation (AddRep Math Math AstMath Proof))
+
+;; get children of terms
+(function (Child1 AstMath) AstMath)
+(function (Child2 AstMath) AstMath)
+
+;; children
+(rule ((= a (AstAdd c1 c2)))
+      ((set (Child1 a) c1))
+      ((set (Child2 a) c2)))
+
+;; make a connection when an add node is represented
+;; in two different ways
+(rule ((AddRep a b t1)
+       (AddRep a b t2)
+       (= a1 (Child1 t1))
+       (= a2 (Child2 t1))
+       (= b1 (Child1 t2))
+       (= b2 (Child2 t2))
+       )
+      ((delete (AddRep a b t2))
+       (Eq t1 t2 (Congruence
+                   (Cons (Equality a1 b1)
+                         (Cons (Equality b1 b2)
+                               Null))))))
+
+(rule ((Add a b)
+       (AddRep a b term proof)
+       (= c1 (Child1 term))
+       (= c2 (Child2 term)))
+      ((union (Add a b) (Add b a))
+       (AddRep b a (AstAdd c2 c1))
+       (Eq term (AstAdd c1 c2)
+           "add-commute")))
+
+
+
+
+(define start-expr (Mul (Add (Var "x") (Const (rational 3 1)))
+                        (Add (Var "x") (Const (rational 1 1)))))
+(run 8)
+(define end-expr (Add (Add (Mul (Var "x") (Var "x"))
+                           (Mul (Const (rational 4 1)) (Var "x")))
+                           (Const (rational 3 1))))
+(check (= start-expr end-expr))
+
