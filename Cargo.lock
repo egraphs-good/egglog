@@ -251,6 +251,7 @@ dependencies = [
  "num-integer",
  "num-rational",
  "num-traits",
+ "ordered-float",
  "regex",
  "rustc-hash",
  "smallvec",
@@ -589,6 +590,15 @@ name = "once_cell"
 version = "1.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "86f0b0d4bf799edbc74508c1e8bf170ff5f41238e5f8225603ca7caaae2b7860"
+
+[[package]]
+name = "ordered-float"
+version = "3.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d84eb1409416d254e4a9c8fa56cc24701755025b458f0fcd8e59e1f5f40c23bf"
+dependencies = [
+ "num-traits",
+]
 
 [[package]]
 name = "os_str_bytes"

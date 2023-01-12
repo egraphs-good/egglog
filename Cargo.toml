@@ -35,6 +35,8 @@ regex = "1"
 clap = {version = "4", features = ["derive"], optional = true}
 env_logger = {version = "0.10", optional = true}
 
+ordered-float = { version = "3.4" }
+
 [build-dependencies]
 lalrpop = "0.19.8"
 
