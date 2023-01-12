@@ -10,67 +10,167 @@
   (AstConst Rational)
   (AstVar String))
 
+(datatype ProofList)
+
 (datatype Proof
+  ;; Terms that are originally inserted into the database
   (Original AstMath)
-  (Multi ProofList Rule-Name)
-  (Term AstMath)
+  ;; Multi is a single rule application with a list of proofs for the necessary arguments
+  (Multi ProofList String)
+  ;; Trasitivity is a proof between two terms, from the last item to the most recent
+  (Transitivity ProofList)
+  ;; Congruence provides a proof between two terms using proofs of equalities between their children
   (Congruence ProofList)
-  (Equality AstMath AstMath))
+  ;; Equality is a placeholder- during proof extraction, a proof for the equality is computed
+  ;; by finding a path between the two terms
+  (Equality AstMath AstMath :cost 10000000))
 
 
-(datatype Proof-List
-  (Cons Proof Proof-List)
-  (Null))
+(function Cons (Proof ProofList) ProofList)
+(function Null () ProofList)
 
 ;; prove two terms equal
-(relation (Eq AstMath AstMath String))
+(relation Eq (AstMath AstMath Proof))
 
 ;; For every Add in the database,
 ;; store a AstAdd representative
 ;; and a proof of that representative
-(relation (AddRep Math Math AstMath Proof))
+(relation AddRep (Math Math AstMath Proof))
+(relation SubRep (Math Math AstMath Proof))
+(relation ConstRep (Rational AstMath Proof))
+(relation VarRep (String AstMath Proof))
 
 ;; get children of terms
-(function (Child1 AstMath) AstMath)
-(function (Child2 AstMath) AstMath)
+(function Child1 (AstMath) AstMath)
+(function Child2 (AstMath) AstMath)
+
+;; ############################## NORMAL RULES
+
+(rule ((= t (Add a b))
+       (AddRep a b term proof)
+       (= c1 (Child1 term))
+       (= c2 (Child2 term)))
+      ((union (Add a b) (Add b a))
+       (AddRep b a (AstAdd c2 c1)
+                   (Multi (Cons proof
+                                (Null))
+                          "add-commute"))
+       (Eq term (AstAdd c2 c1)
+           (Multi (Cons proof
+                                (Null))
+                          "add-commute"))
+       (Eq (AstAdd c2 c1) term
+           (Multi (Cons proof
+                                (Null))
+                          "add-commute"))
+      ))
+
+(add-ruleset rules)
+(clear-rules)
+
+
+;; ########################## PROOF RULES
 
 ;; children
 (rule ((= a (AstAdd c1 c2)))
-      ((set (Child1 a) c1))
-      ((set (Child2 a) c2)))
+      ((set (Child1 a) c1)
+       (set (Child2 a) c2)))
+(rule ((= a (AstSub c1 c2)))
+      ((set (Child1 a) c1)
+       (set (Child2 a) c2)))
 
 ;; make a connection when an add node is represented
 ;; in two different ways
-(rule ((AddRep a b t1)
-       (AddRep a b t2)
+(rule ((AddRep a b t1 p1)
+       (AddRep a b t2 p2)
+       (!= t1 t2)
        (= a1 (Child1 t1))
        (= a2 (Child2 t1))
        (= b1 (Child1 t2))
        (= b2 (Child2 t2))
        )
-      ((delete (AddRep a b t2))
+      ((delete (AddRep a b t2 p2))
        (Eq t1 t2 (Congruence
                    (Cons (Equality a1 b1)
                          (Cons (Equality b1 b2)
-                               Null))))))
+                               Null))))
+       (Eq t2 t1 (Congruence
+                   (Cons (Equality a1 b1)
+                         (Cons (Equality b1 b2)
+                               Null))))
+       ))
 
-(rule ((Add a b)
-       (AddRep a b term proof)
-       (= c1 (Child1 term))
-       (= c2 (Child2 term)))
-      ((union (Add a b) (Add b a))
-       (AddRep b a (AstAdd c2 c1))
-       (Eq term (AstAdd c1 c2)
-           "add-commute")))
-
+(add-ruleset proof-rules)
+(clear-rules)
 
 
 
-(define start-expr (Mul (Add (Var "x") (Const (rational 3 1)))
-                        (Add (Var "x") (Const (rational 1 1)))))
-(run 8)
-(define end-expr (Add (Add (Mul (Var "x") (Var "x"))
-                           (Mul (Const (rational 4 1)) (Var "x")))
-                           (Const (rational 3 1))))
-(check (= start-expr end-expr))
+;; Silly function since the proofs are relations
+(function GetProof (AstMath) Proof :cost 1000000000)
+(rule ((AddRep a b term proof))
+      ((set (GetProof term) proof)))
+(rule ((SubRep a b term proof))
+      ((set (GetProof term) proof)))
+(rule ((ConstRep a term proof))
+      ((set (GetProof term) proof)))
+(rule ((VarRep a term proof))
+      ((set (GetProof term) proof)))
 
+;; start term, end term, current progress term, proof
+(function ProofBetween (AstMath AstMath AstMath) ProofList :merge old)
+
+;; start proof search for equalities
+(rule ((= e (Equality t1 t2)))
+      ((set (ProofBetween t1 t2 t1) Null)))
+;; do one step of proof search to find a path
+(rule ((= proof (ProofBetween t1 t2 tmid))
+       (Eq tmid next eproof))
+      ((set (ProofBetween t1 t2 next)
+            (Cons eproof proof))))
+;; when you find a path, union it with the equality proof
+(rule ((= e (Equality t1 t2))
+       (= prooflist (ProofBetween t1 t2 t2)))
+      ((set (Equality t1 t2) (Transitivity prooflist))))
+
+(add-ruleset proof-extract)
+(clear-rules)
+
+
+(define two (rational 2 1))
+(define start (Add (Var "x") (Const two)))
+;; add original proofs
+(VarRep "x" (AstVar "x") (Original (AstVar "x")))
+(ConstRep two (AstConst two) (Original (AstConst two)))
+(define addx2 (AstAdd (AstVar "x") (AstConst two)) :cost 10000)
+(define add2x (AstAdd (AstConst two) (AstVar "x")) :cost 10000)
+(AddRep (Var "x") (Const two)
+        addx2
+        (Original (AstAdd (AstVar "x") (AstConst two))))
+
+
+(load-ruleset proof-rules)
+(run 1000)
+(clear-rules)
+(load-ruleset rules)
+(run 1)
+(clear-rules)
+(load-ruleset proof-rules)
+(run 1000)
+(clear-rules)
+
+(Equality addx2 add2x)
+
+(load-ruleset proof-extract)
+(run 100)
+(clear-rules)
+
+(check (= (Add (Var "x") (Const two))
+          (Add (Const two) (Var "x"))))
+(check
+  (= (GetProof (AstAdd (AstVar "x") (AstConst two)))
+     (Original (AstAdd (AstVar "x") (AstConst two)))))
+(check
+  (= (GetProof (AstAdd (AstConst two) (AstVar "x")))
+     (Multi (Cons (Original (AstAdd (AstVar "x") (AstConst (rational 2 1)))) (Null)) "add-commute")))
+(print Eq)
+(extract (Equality addx2 add2x))
