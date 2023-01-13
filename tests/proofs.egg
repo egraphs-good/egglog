@@ -46,20 +46,20 @@
 
 ;; ############################## NORMAL RULES
 
-(rule ((= t (Add a b))
+(rule ((= t (Add a b)) ;; (rewrite (Add a b) (Add b c))
        (AddRep a b term proof)
        (= c1 (Child1 term))
        (= c2 (Child2 term)))
-      ((union (Add a b) (Add b a))
-       (AddRep b a (AstAdd c2 c1)
+      ((union (Add a b) (Add b a)) ;; normal rhs
+       (AddRep b a (AstAdd c2 c1) ;; provenance
                    (Multi (Cons proof
                                 (Null))
                           "add-commute"))
-       (Eq term (AstAdd c2 c1)
+       (Eq term (AstAdd c2 c1) ;; equality edge ->
            (Multi (Cons proof
                                 (Null))
                           "add-commute"))
-       (Eq (AstAdd c2 c1) term
+       (Eq (AstAdd c2 c1) term ;; equality edge <-
            (Multi (Cons proof
                                 (Null))
                           "add-commute"))
@@ -100,6 +100,35 @@
                                Null))))
        ))
 
+(rule ((SubRep a b t1 p1)
+       (SubRep a b t2 p2)
+       (!= t1 t2)
+       (= a1 (Child1 t1))
+       (= a2 (Child2 t1))
+       (= b1 (Child1 t2))
+       (= b2 (Child2 t2))
+       )
+      ((delete (SubRep a b t2 p2))
+       (Eq t1 t2 (Congruence
+                   (Cons (Equality a1 b1)
+                         (Cons (Equality b1 b2)
+                               Null))))
+       (Eq t2 t1 (Congruence
+                   (Cons (Equality a1 b1)
+                         (Cons (Equality b1 b2)
+                               Null))))
+       ))
+
+(rule ((VarRep a t1 p1)
+       (VarRep a t2 p2)
+       (!= t1 t2)
+       )
+      ((panic "Variables should have a unique representation")))
+(rule ((ConstRep a t1 p1)
+       (ConstRep a t2 p2)
+       (!= t1 t2))
+      ((panic "Constants should have a unique representation")))
+
 (add-ruleset proof-rules)
 (clear-rules)
 
@@ -137,7 +166,7 @@
 
 
 (define two (rational 2 1))
-(define start (Add (Var "x") (Const two)))
+(define start1 (Add (Var "x") (Const two)))
 ;; add original proofs
 (VarRep "x" (AstVar "x") (Original (AstVar "x")))
 (ConstRep two (AstConst two) (Original (AstConst two)))
