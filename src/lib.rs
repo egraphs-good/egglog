@@ -924,6 +924,25 @@ impl EGraph {
                 self.eval_actions(&actions)?;
                 format!("Read {} facts into {name} from '{file}'.", actions.len())
             }
+            Command::Output { file, exprs } => {
+                let mut filename = self.fact_directory.clone().unwrap_or_default();
+                filename.push(file.as_str());
+                // append to file
+                let mut f = File::options()
+                    .write(true)
+                    .append(true)
+                    .create(true)
+                    .open(&filename)
+                    .map_err(|e| Error::IoError(filename.clone(), e))?;
+
+                for expr in exprs {
+                    use std::io::Write;
+                    let (_cost, expr, _exprs) = self.extract_expr(expr, 1)?;
+                    writeln!(f, "{expr}").map_err(|e| Error::IoError(filename.clone(), e))?;
+                }
+
+                format!("Output to '{filename:?}'.")
+            }
         })
     }
 
@@ -1000,10 +1019,10 @@ impl EGraph {
         self.rebuild();
         let (_t, value) = self.eval_expr(&e, None, true)?;
         let (cost, expr) = self.extract(value);
-        let exprs = if variants > 0 {
-            self.extract_variants(value, variants)
-        } else {
-            vec![]
+        let exprs = match variants {
+            0 => vec![],
+            1 => vec![expr.clone()],
+            _ => self.extract_variants(value, variants),
         };
         Ok((cost, expr, exprs))
     }
@@ -1104,4 +1123,6 @@ pub enum Error {
     Pop,
     #[error("Command should have failed.")]
     ExpectFail,
+    #[error("IO error: {0}: {1}")]
+    IoError(PathBuf, std::io::Error),
 }

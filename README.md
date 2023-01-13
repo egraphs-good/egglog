@@ -262,6 +262,7 @@ prints
     ( print <sym:Ident> <n:UNum?> )
     ( print-size <sym:Ident> )
     ( input <name:Ident> <file:String> )
+    ( output <file:String> <exprs:Expr+> )
     ( include <file:String> )
     ( calc ( <idents:IdentSort*> ) <exprs:Expr+> )
 ```
