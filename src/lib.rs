@@ -325,10 +325,39 @@ impl EGraph {
 
     fn rebuild_one(&mut self) -> usize {
         let mut new_unions = 0;
+        let mut deferred_merges = Vec::new();
         for function in self.functions.values_mut() {
-            new_unions += function.rebuild(&mut self.unionfind, self.timestamp);
+            let (unions, merges) = function.rebuild(&mut self.unionfind, self.timestamp);
+            if !merges.is_empty() {
+                deferred_merges.push((function.decl.name, merges));
+            }
+            new_unions += unions;
+        }
+        for (func, merges) in deferred_merges {
+            new_unions += self.apply_merges(func, &merges);
         }
         new_unions
+    }
+
+    fn apply_merges(&mut self, func: Symbol, merges: &[(ValueVec, Value, Value)]) -> usize {
+        let mut stack = Vec::new();
+        let mut function = self.functions.get_mut(&func).unwrap();
+        let n_unions = self.unionfind.n_unions();
+        let prog = match &function.merge {
+            MergeFn::Expr(e) => e.clone(),
+            MergeFn::AssertEq => panic!("No error for this yet"),
+            MergeFn::Union => panic!("union-style merge in `apply_merges`: these merges should be applied during the main rebuild pass"),
+        };
+        for (inputs, old, new) in merges {
+            // TODO: error handling?
+            self.run_actions(&mut stack, &[*old, *new], &prog, true)
+                .unwrap();
+            let merged = stack.pop().expect("merges should produce a value");
+            stack.clear();
+            function = self.functions.get_mut(&func).unwrap();
+            function.insert(inputs, merged, self.timestamp);
+        }
+        self.unionfind.n_unions() - n_unions + function.clear_updates()
     }
 
     pub fn declare_sort(

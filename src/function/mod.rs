@@ -152,6 +152,10 @@ impl Function {
         res
     }
 
+    pub(crate) fn clear_updates(&mut self) -> usize {
+        mem::take(&mut self.updates)
+    }
+
     fn build_indexes(&mut self, offsets: Range<usize>) {
         for (col, index) in self.indexes.iter_mut().enumerate() {
             let as_mut = Rc::make_mut(index);
@@ -194,19 +198,24 @@ impl Function {
         self.nodes.iter_timestamp_range(timestamps)
     }
 
-    pub fn rebuild(&mut self, uf: &mut UnionFind, timestamp: u32) -> usize {
+    pub fn rebuild(
+        &mut self,
+        uf: &mut UnionFind,
+        timestamp: u32,
+    ) -> (usize, Vec<(ValueVec, Value, Value)>) {
         // Make sure indexes are up to date.
         self.update_indexes(self.nodes.len());
         if self.schema.input.iter().all(|s| !s.is_eq_sort()) && !self.schema.output.is_eq_sort() {
-            return std::mem::take(&mut self.updates);
+            return (std::mem::take(&mut self.updates), Default::default());
         }
+        let mut deferred_merges = Vec::new();
         let mut scratch = ValueVec::new();
         let n_unions = uf.n_unions();
         if uf.new_ids(|sort| self.sorts.contains(&sort)) > (self.nodes.len() / 2) {
             // basic heuristic: if we displaced a large number of ids relative
             // to the size of the table, then just rebuild everything.
             for i in 0..self.nodes.len() {
-                self.rebuild_at(i, timestamp, uf, &mut scratch)
+                self.rebuild_at(i, timestamp, uf, &mut scratch, &mut deferred_merges)
             }
         } else {
             let mut to_canon = mem::take(&mut self.scratch);
@@ -214,15 +223,25 @@ impl Function {
             to_canon.extend(self.indexes.iter().flat_map(|x| x.to_canonicalize(uf)));
 
             for i in to_canon.iter().copied() {
-                self.rebuild_at(i, timestamp, uf, &mut scratch);
+                self.rebuild_at(i, timestamp, uf, &mut scratch, &mut deferred_merges);
             }
             self.scratch = to_canon;
         }
         self.maybe_rehash();
-        uf.n_unions() - n_unions + std::mem::take(&mut self.updates)
+        (
+            uf.n_unions() - n_unions + std::mem::take(&mut self.updates),
+            deferred_merges,
+        )
     }
 
-    fn rebuild_at(&mut self, i: usize, timestamp: u32, uf: &mut UnionFind, scratch: &mut ValueVec) {
+    fn rebuild_at(
+        &mut self,
+        i: usize,
+        timestamp: u32,
+        uf: &mut UnionFind,
+        scratch: &mut ValueVec,
+        deferred_merges: &mut Vec<(ValueVec, Value, Value)>,
+    ) {
         let mut modified = false;
         let (args, out) = if let Some(x) = self.nodes.get_index(i) {
             x
@@ -259,8 +278,8 @@ impl Function {
         self.nodes.remove_index(i, timestamp);
         self.nodes.insert_and_merge(scratch, timestamp, |prev| {
             if let Some(prev) = prev {
-                if !self.schema.output.is_eq_sort() {
-                    // TODO: call the merge fn
+                if !self.schema.output.is_eq_sort() && !matches!(self.merge, MergeFn::Union) {
+                    deferred_merges.push((scratch.clone(), prev, out_val));
                     prev
                 } else {
                     uf.union_values(prev, out_val, self.schema.output.name())
