@@ -721,7 +721,9 @@ impl EGraph {
                             self.saturated = false;
                             let tag = old_value.tag;
                             let merged: Value = match function.merge.clone() {
-                                MergeFn::AssertEq => panic!("No error for this yet"),
+                                MergeFn::AssertEq => {
+                                    return Err(Error::MergeError(*f, new_value, old_value))
+                                }
                                 MergeFn::Union => {
                                     self.unionfind.union_values(old_value, new_value, tag)
                                 }
