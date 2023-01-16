@@ -19,8 +19,10 @@
 
 ;; There are two types of proofs:
 ;; 1) Provenance proofs justify the existance of a term 
-;; 2) Equality proofs prove two terms are equal and also
-;;    provide a provenance proof for both terms
+;; 2) Equality proofs prove two terms are equal 
+;; Equality proofs `a = b` also double as
+;; provenance proofs `a` and `b`
+;; When a proof `a = b` is used as a provenance proof, it is a proof of `b`
 (datatype Proof
   ;; proves that a term exists in the database
   (Original AstMath)
@@ -93,44 +95,100 @@
              (AstAdd c1 c2)
              (AstAdd c2 c1))))))
 
-;; (rewrite (Add a (Add b c)) (Add (Add a b) c))
-; (rule ((= t (Add a (Add b c)))
-;        (AddRep a (Add b c) term proof)
-;        (= c1 (Child1 term))
-;        (= c2 (Child2 term))
-;        (AddRep b c c2term proof-right)
-;        (= c2termc1 (Child1 c2term))
-;        (= c2termc2 (Child2 c2term)))
-;       ((union (Add a (Add b c)) (Add (Add a b) c))
-;        ;; first, add our new representative to the graph via congruence
-;        (EqGraph term
-;            (AstAdd c1 c2term)
-;            (Congruence
-;              term
-;              proof
-;              (Cons 
-;                 (DemandEq c1 c1)
-;                 (DemandEq c2 c2term)
-;                     Null)))
+; (rewrite (Add a (Add b c)) (Add (Add a b) c))
+;; this rule is giant because we don't have let
+;; in the rhs of rules
+;; mostly we prove (Rule ...) for the rule firing
+(rule ((= t (Add a (Add b c)))
+       (AddRep a (Add b c) term proof)
+       (= c1 (Child1 term))
+       (= c2 (Child2 term))
+       (AddRep b c c2term proof-right)
+       (= c2termc1 (Child1 c2term))
+       (= c2termc2 (Child2 c2term)))
+      ((union (Add a (Add b c)) (Add (Add a b) c))
+       ;; first, add our new representative to the graph via congruence
+       (EqGraph term
+           (AstAdd c1 c2term)
+           (Congruence
+             proof
+             (Cons 
+                (DemandEq c1 c1)
+                (Cons
+                  (DemandEq c2 c2term)
+                    (Null)))))
+       (EqGraph 
+           (AstAdd c1 c2term)
+           term
+           (Flip
+           (Congruence
+             proof
+             (Cons 
+                (DemandEq c1 c1)
+                (Cons
+                  (DemandEq c2 c2term)
+                    (Null))))))
        
-;        (AddRep (Add a b) c
-;                (AstAdd (AstAdd c1 c2termc1)
-;                        c2termc2)
-;                ;; use the same proof with the rule application
-;                (Rule (Cons (Congruence
-;                             term
-;                             proof
-;                             (Cons 
-;                                 (DemandEq c1 c1)
-;                                 (DemandEq c2 c2term)
-;                                     Null))
-;                             (Null))
-;                       "add-assoc"))
+       ;; Add a proof for our RHS
+       (AddRep (Add a b) c
+               (AstAdd (AstAdd c1 c2termc1)
+                       c2termc2)
+               ;; use the same proof with the rule application
+               (RuleTerm
+                (Rule 
+                  (Cons
+                    (Congruence
+                      proof
+                      (Cons 
+                          (DemandEq c1 c1)
+                          (Cons
+                            (DemandEq c2 c2term)
+                              (Null))))
+                    (Null))
+                  "add-assoc")
+                (AstAdd (AstAdd c1 c2termc1)
+                        c2termc2)))
 
-;       ;; prove equality between new term and 
-;       (EqGraph (AstAdd c1 c2term) (AstAdd ...))))
+      ;; prove equality between new representative and the RHS 
+      (EqGraph (AstAdd c1 c2term)
+               (AstAdd (AstAdd c1 c2termc1)
+                        c2termc2)
+               (RuleEquality
+                 (Rule 
+                  (Cons
+                    (Congruence
+                      proof
+                      (Cons 
+                          (DemandEq c1 c1)
+                          (Cons
+                            (DemandEq c2 c2term)
+                              (Null))))
+                    (Null))
+                  "add-assoc")
+                 (AstAdd c1 c2term)
+                  (AstAdd (AstAdd c1 c2termc1)
+                            c2termc2)))
 
-
+      (EqGraph (AstAdd (AstAdd c1 c2termc1)
+                        c2termc2)
+               (AstAdd c1 c2term)
+               (Flip
+               (RuleEquality
+                 (Rule 
+                  (Cons
+                    (Congruence
+                      proof
+                      (Cons 
+                          (DemandEq c1 c1)
+                          (Cons
+                            (DemandEq c2 c2term)
+                              (Null))))
+                    (Null))
+                  "add-assoc")
+                 (AstAdd c1 c2term)
+                  (AstAdd (AstAdd c1 c2termc1)
+                            c2termc2))))
+      ))
 
 (add-ruleset rules)
 (clear-rules)
@@ -162,14 +220,14 @@
                    p1
                    (Cons (DemandEq a1 b1)
                          (Cons (DemandEq b1 b2)
-                               Null))))
+                               (Null)))))
        (EqGraph t2 t1
                 (Flip
                 (Congruence
                    p1
                    (Cons (DemandEq a1 b1)
                          (Cons (DemandEq b1 b2)
-                               Null)))))
+                               (Null))))))
        ))
 
 (rule ((SubRep a b t1 p1)
@@ -185,14 +243,14 @@
                    p1
                    (Cons (DemandEq a1 b1)
                          (Cons (DemandEq b1 b2)
-                               Null))))
+                               (Null)))))
        (EqGraph t2 t1
                 (Flip
                 (Congruence
                    p1
                    (Cons (DemandEq a1 b1)
                          (Cons (DemandEq b1 b2)
-                               Null)))))
+                               (Null))))))
        ))
 
 (rule ((VarRep a t1 p1)
@@ -226,7 +284,7 @@
 
 ;; start proof search for equalities
 (rule ((= e (DemandEq t1 t2)))
-      ((set (ProofBetween t1 t2 t1) Null)))
+      ((set (ProofBetween t1 t2 t1) (Null))))
 ;; do one step of proof search to find a path
 (rule ((= proof (ProofBetween t1 t2 tmid))
        (EqGraph tmid next eproof))
