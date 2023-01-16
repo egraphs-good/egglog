@@ -63,10 +63,37 @@
 (relation VarRep (String AstMath Proof))
 
 ;; get children of terms
-(function Child1 (AstMath) AstMath)
-(function Child2 (AstMath) AstMath)
+(function Child1 (AstMath) AstMath :cost 100000)
+(function Child2 (AstMath) AstMath :cost 100000)
 
 ;; ############################## NORMAL RULES
+
+(rule ((= t (Add a b))
+       (AddRep a b term proof))
+      ((union (Add a b) (Add (Add a b) (Const (rational 0 1))))
+       (AddRep (Add a b) (Const (rational 0 1))
+               (AstAdd term (AstConst (rational 0 1)))
+               (RuleTerm
+                   (Rule (Cons proof
+                            (Null))
+                          "add-identity")
+                   (AstAdd term (AstConst (rational 0 1)))))
+                   
+        (EqGraph term (AstAdd term (AstConst (rational 0 1)))
+            (RuleEquality
+                (Rule (Cons proof
+                            (Null))
+                          "add-identity")
+                term
+                (AstAdd term (AstConst (rational 0 1)))))
+        (EqGraph (AstAdd term (AstConst (rational 0 1))) term
+            (Flip
+            (RuleEquality
+                (Rule (Cons proof
+                            (Null))
+                          "add-identity")
+                term
+                (AstAdd term (AstConst (rational 0 1))))))))
 
 (rule ((= t (Add a b)) ;; (rewrite (Add a b) (Add b c))
        (AddRep a b term proof)
@@ -304,8 +331,8 @@
 ;; add original proofs
 (VarRep "x" (AstVar "x") (Original (AstVar "x")))
 (ConstRep two (AstConst two) (Original (AstConst two)))
-(define addx2 (AstAdd (AstVar "x") (AstConst two)) :cost 10000)
-(define add2x (AstAdd (AstConst two) (AstVar "x")) :cost 10000)
+(define addx2 (AstAdd (AstVar "x") (AstConst two)))
+(define add2x (AstAdd (AstConst two) (AstVar "x")))
 (AddRep (Var "x") (Const two)
         addx2
         (Original (AstAdd (AstVar "x") (AstConst two))))
@@ -314,6 +341,7 @@
 (load-ruleset proof-rules)
 (run 1000)
 (clear-rules)
+
 (load-ruleset rules)
 (run 1)
 (clear-rules)
@@ -321,7 +349,27 @@
 (run 1000)
 (clear-rules)
 
+(load-ruleset rules)
+(run 1)
+(clear-rules)
+(load-ruleset proof-rules)
+(run 1000)
+(clear-rules)
+
+(load-ruleset rules)
+(run 1)
+(clear-rules)
+(load-ruleset proof-rules)
+(run 1000)
+(clear-rules)
+
+
+(define zero (AstConst (rational 0 1)))
+(define addzero (AstAdd addx2 zero))
+(define addzerofront (AstAdd (AstAdd zero (AstVar "x")) (AstConst two)))
+
 (DemandEq addx2 add2x)
+(DemandEq addx2 addzerofront)
 
 (load-ruleset proof-extract)
 (run 100)
@@ -332,8 +380,6 @@
 (check
   (= (GetProof (AstAdd (AstVar "x") (AstConst two)))
      (Original (AstAdd (AstVar "x") (AstConst two)))))
-
-(extract (GetProof (AstAdd (AstConst two) (AstVar "x"))))
 
 (check
   (= (GetProof add2x)
@@ -350,3 +396,53 @@
                 addx2
                 add2x)
               (Null)))))
+
+
+(check (= (DemandEq addx2 addzero)
+          (Transitivity
+            (Cons
+              (RuleEquality
+                (Rule
+                  (Cons
+                    (Original addx2) (Null)) "add-identity")
+                addx2
+                addzero)
+              (Null)))))
+
+(check (= (DemandEq addx2 addzerofront)
+          (Transitivity
+            (Cons
+              ;; 0+(x+2) -> (0+x)+2
+              (RuleEquality
+                ;; proof that the assoc rule fires
+                (Rule
+                  (Cons
+                   (Congruence 
+                     ;; proof of 0+(x+2)
+                     (RuleTerm
+                      (Rule (Cons (RuleTerm (Rule (Cons (Original (addx2)) (Null)) "add-identity") (addzero)) (Null)) "add-commute")
+                     (AstAdd (zero) (addx2)))
+                    
+                     ;; children already equal
+                     (Cons (Transitivity (Null)) (Cons (Transitivity (Null)) (Null))))
+                   (Null)) "add-assoc")
+                (AstAdd (zero) (addx2)) (addzerofront))
+              
+              
+              ;; (x+2)+0 -> 0+(x+2)
+              (Cons
+                (RuleEquality
+                  (Rule (Cons (RuleTerm (Rule (Cons (Original (addx2)) (Null)) "add-identity") (addzero)) (Null)) "add-commute")
+                  
+                  (addzero)
+                  
+                  (AstAdd (zero) (addx2)))
+              
+              ;; x+2 -> (x+2)+0
+              (Cons (RuleEquality
+                      (Rule (Cons (Original (addx2)) (Null)) "add-identity")
+                      (addx2)
+                      (addzero))
+              
+              (Null))))
+          )))
