@@ -4,33 +4,53 @@
     (Const Rational)
     (Var String))
 
+
 (datatype AstMath
   (AstAdd AstMath AstMath)
   (AstSub AstMath AstMath)
   (AstConst Rational)
   (AstVar String))
 
+(datatype Op
+  (OpAdd) (OpSub) (OpConst) (OpVar))
+
+
 (datatype ProofList)
 
+;; There are two types of proofs:
+;; 1) Provenance proofs justify the existance of a term 
+;; 2) Equality proofs prove two terms are equal and also
+;;    provide a provenance proof for both terms
 (datatype Proof
-  ;; Terms that are originally inserted into the database
+  ;; proves that a term exists in the database
   (Original AstMath)
-  ;; Multi is a single rule application with a list of proofs for the necessary arguments
-  (Multi ProofList String)
-  ;; Trasitivity is a proof between two terms, from the last item to the most recent
+  ;; justifies the fact that a rule fired
+  (Rule ProofList String)
+  ;; using a rule justification,
+  ;; proves a term exists
+  (RuleTerm Proof AstMath)
+  ;; using a rule justification, proves two terms are equal
+  (RuleEquality Proof AstMath AstMath)
+
+  ;; given proofs for x1 = x2, x2 = x3, ..., xn = xn+1
+  ;; proves that x1 = xn+1 and x1 and xn+1 exist
   (Transitivity ProofList)
-  ;; Congruence provides a proof between two terms using proofs of equalities between their children
-  (Congruence ProofList)
-  ;; Equality is a placeholder- during proof extraction, a proof for the equality is computed
-  ;; by finding a path between the two terms
-  (Equality AstMath AstMath :cost 10000000))
+  ;; given x1 = x2, proves x2 = x1
+  (Flip Proof)
+  ;; given a proof for a term t1, proves that t1 is equal
+  ;; to another term t2 via equality proofs on their children
+  (Congruence Proof ProofList)
+  ;; a placeholder for a proof of equality between two
+  ;; terms which can be proven equal using the graph
+  ;; stored in the `Eq` relation
+  (DemandEq AstMath AstMath :cost 10000000))
 
-
+;; ProofList definitions
 (function Cons (Proof ProofList) ProofList)
 (function Null () ProofList)
 
 ;; prove two terms equal
-(relation Eq (AstMath AstMath Proof))
+(relation EqGraph (AstMath AstMath Proof))
 
 ;; For every Add in the database,
 ;; store a AstAdd representative
@@ -52,18 +72,65 @@
        (= c2 (Child2 term)))
       ((union (Add a b) (Add b a)) ;; normal rhs
        (AddRep b a (AstAdd c2 c1) ;; provenance
-                   (Multi (Cons proof
+                   (RuleTerm
+                       (Rule (Cons proof
                                 (Null))
-                          "add-commute"))
-       (Eq term (AstAdd c2 c1) ;; equality edge ->
-           (Multi (Cons proof
-                                (Null))
-                          "add-commute"))
-       (Eq (AstAdd c2 c1) term ;; equality edge <-
-           (Multi (Cons proof
-                                (Null))
-                          "add-commute"))
-      ))
+                          "add-commute")
+                       (AstAdd c2 c1)))
+       (EqGraph term (AstAdd c2 c1) ;; equality edge ->
+           (RuleEquality
+             (Rule (Cons proof
+                       (Null))
+                        "add-commute")
+             (AstAdd c1 c2)
+             (AstAdd c2 c1)))
+       (EqGraph (AstAdd c2 c1) term ;; equality edge ->
+           (Flip 
+           (RuleEquality
+             (Rule (Cons proof
+                       (Null))
+                        "add-commute")
+             (AstAdd c1 c2)
+             (AstAdd c2 c1))))))
+
+;; (rewrite (Add a (Add b c)) (Add (Add a b) c))
+; (rule ((= t (Add a (Add b c)))
+;        (AddRep a (Add b c) term proof)
+;        (= c1 (Child1 term))
+;        (= c2 (Child2 term))
+;        (AddRep b c c2term proof-right)
+;        (= c2termc1 (Child1 c2term))
+;        (= c2termc2 (Child2 c2term)))
+;       ((union (Add a (Add b c)) (Add (Add a b) c))
+;        ;; first, add our new representative to the graph via congruence
+;        (EqGraph term
+;            (AstAdd c1 c2term)
+;            (Congruence
+;              term
+;              proof
+;              (Cons 
+;                 (DemandEq c1 c1)
+;                 (DemandEq c2 c2term)
+;                     Null)))
+       
+;        (AddRep (Add a b) c
+;                (AstAdd (AstAdd c1 c2termc1)
+;                        c2termc2)
+;                ;; use the same proof with the rule application
+;                (Rule (Cons (Congruence
+;                             term
+;                             proof
+;                             (Cons 
+;                                 (DemandEq c1 c1)
+;                                 (DemandEq c2 c2term)
+;                                     Null))
+;                             (Null))
+;                       "add-assoc"))
+
+;       ;; prove equality between new term and 
+;       (EqGraph (AstAdd c1 c2term) (AstAdd ...))))
+
+
 
 (add-ruleset rules)
 (clear-rules)
@@ -79,6 +146,7 @@
       ((set (Child1 a) c1)
        (set (Child2 a) c2)))
 
+
 ;; make a connection when an add node is represented
 ;; in two different ways
 (rule ((AddRep a b t1 p1)
@@ -90,14 +158,18 @@
        (= b2 (Child2 t2))
        )
       ((delete (AddRep a b t2 p2))
-       (Eq t1 t2 (Congruence
-                   (Cons (Equality a1 b1)
-                         (Cons (Equality b1 b2)
+       (EqGraph t1 t2 (Congruence
+                   p1
+                   (Cons (DemandEq a1 b1)
+                         (Cons (DemandEq b1 b2)
                                Null))))
-       (Eq t2 t1 (Congruence
-                   (Cons (Equality a1 b1)
-                         (Cons (Equality b1 b2)
-                               Null))))
+       (EqGraph t2 t1
+                (Flip
+                (Congruence
+                   p1
+                   (Cons (DemandEq a1 b1)
+                         (Cons (DemandEq b1 b2)
+                               Null)))))
        ))
 
 (rule ((SubRep a b t1 p1)
@@ -109,14 +181,18 @@
        (= b2 (Child2 t2))
        )
       ((delete (SubRep a b t2 p2))
-       (Eq t1 t2 (Congruence
-                   (Cons (Equality a1 b1)
-                         (Cons (Equality b1 b2)
+       (EqGraph t1 t2 (Congruence
+                   p1
+                   (Cons (DemandEq a1 b1)
+                         (Cons (DemandEq b1 b2)
                                Null))))
-       (Eq t2 t1 (Congruence
-                   (Cons (Equality a1 b1)
-                         (Cons (Equality b1 b2)
-                               Null))))
+       (EqGraph t2 t1
+                (Flip
+                (Congruence
+                   p1
+                   (Cons (DemandEq a1 b1)
+                         (Cons (DemandEq b1 b2)
+                               Null)))))
        ))
 
 (rule ((VarRep a t1 p1)
@@ -146,20 +222,20 @@
       ((set (GetProof term) proof)))
 
 ;; start term, end term, current progress term, proof
-(function ProofBetween (AstMath AstMath AstMath) ProofList :merge old)
+(function ProofBetween (AstMath AstMath AstMath) ProofList :cost 100000 :merge old)
 
 ;; start proof search for equalities
-(rule ((= e (Equality t1 t2)))
+(rule ((= e (DemandEq t1 t2)))
       ((set (ProofBetween t1 t2 t1) Null)))
 ;; do one step of proof search to find a path
 (rule ((= proof (ProofBetween t1 t2 tmid))
-       (Eq tmid next eproof))
+       (EqGraph tmid next eproof))
       ((set (ProofBetween t1 t2 next)
             (Cons eproof proof))))
 ;; when you find a path, union it with the equality proof
-(rule ((= e (Equality t1 t2))
+(rule ((= e (DemandEq t1 t2))
        (= prooflist (ProofBetween t1 t2 t2)))
-      ((set (Equality t1 t2) (Transitivity prooflist))))
+      ((set (DemandEq t1 t2) (Transitivity prooflist))))
 
 (add-ruleset proof-extract)
 (clear-rules)
@@ -187,7 +263,7 @@
 (run 1000)
 (clear-rules)
 
-(Equality addx2 add2x)
+(DemandEq addx2 add2x)
 
 (load-ruleset proof-extract)
 (run 100)
@@ -198,8 +274,21 @@
 (check
   (= (GetProof (AstAdd (AstVar "x") (AstConst two)))
      (Original (AstAdd (AstVar "x") (AstConst two)))))
+
+(extract (GetProof (AstAdd (AstConst two) (AstVar "x"))))
+
 (check
-  (= (GetProof (AstAdd (AstConst two) (AstVar "x")))
-     (Multi (Cons (Original (AstAdd (AstVar "x") (AstConst (rational 2 1)))) (Null)) "add-commute")))
-(print Eq)
-(extract (Equality addx2 add2x))
+  (= (GetProof add2x)
+     (RuleTerm
+       (Rule (Cons (Original addx2) (Null))"add-commute")
+       add2x
+       )))
+
+(check (= (DemandEq addx2 add2x)
+          (Transitivity
+            (Cons
+              (RuleEquality
+                (Rule (Cons (Original addx2) (Null))"add-commute")
+                addx2
+                add2x)
+              (Null)))))
