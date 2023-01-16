@@ -20,8 +20,8 @@ function activate(context) {
 				folder = ".";
 			}
 			const relativeFile = document.uri.fsPath;
-			eggsmolChannel.appendLine("Running '" + `target/debug/eggsmol ${relativeFile}` + "' in " + folder);
-			exec(`target/debug/eggsmol ${relativeFile}`, {cwd: folder}, (err, stdout, stderr) => {
+			eggsmolChannel.appendLine("Running '" + `cargo run ${relativeFile}` + "' in " + folder);
+			exec(`cargo run ${relativeFile}`, {cwd: folder}, (err, stdout, stderr) => {
 				eggsmolChannel.show(true);
 				if (err) {
 					eggsmolChannel.append(err);
