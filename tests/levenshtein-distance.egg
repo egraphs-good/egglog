@@ -1,0 +1,70 @@
+; Datatypes
+
+(datatype expr 
+    (Num i64)
+    (Add expr expr)
+    (Min expr expr expr))
+(rewrite (Add (Num a) (Num b)) (Num (+ a b)))
+(rewrite (Min (Num a) (Num b) (Num c)) (Num (min (min a b) c)))
+
+(datatype str
+    (Empty)
+    (Cons i64 str))
+
+; Length function
+
+(function Length (str) expr)
+
+(rule ((= f (Length Empty)))
+      ((set (Length Empty) (Num 0))))
+
+(rule ((= f (Length (Cons c cs))))
+      ((set (Length (Cons c cs)) (Add (Num 1) (Length cs)))))
+
+; EditDist function
+
+(function EditDist (str str) expr)
+
+(rule ((= f (EditDist Empty s)))
+      ((set (EditDist Empty s) (Length s))))
+
+(rule ((= f (EditDist s Empty)))
+      ((set (EditDist s Empty) (Length s))))
+
+(rule ((= f (EditDist (Cons head1 rest1) (Cons head2 rest2))) (= 0 (- head1 head2)))  ; use (= head1 head2) instead once bug fixed
+      ((set (EditDist (Cons head1 rest1) (Cons head2 rest2))
+            (EditDist rest1 rest2))))
+
+(rule ((= f (EditDist (Cons head1 rest1) (Cons head2 rest2))) (!= head1 head2))
+      ((set (EditDist (Cons head1 rest1) (Cons head2 rest2))
+            (Add (Num 1)
+                 (Min (EditDist rest1 rest2)
+                      (EditDist (Cons head1 rest1) rest2)
+                      (EditDist rest1 (Cons head2 rest2)))))))
+
+; Unwrap function - turn a (Num n) into n
+
+(function Unwrap (expr) i64)
+(rule ((= x (Num n))) ((set (Unwrap (Num n)) n)))
+
+; Tests
+
+(define HorseStr (Cons 8 (Cons 15 (Cons 18 (Cons 19 (Cons 5 Empty))))))
+(define RosStr (Cons 18 (Cons 15 (Cons 19 Empty))))
+(define IntentionStr (Cons 9 (Cons 14 (Cons 20 (Cons 5 (Cons 14 (Cons 20 (Cons 9 (Cons 15 (Cons 14 Empty))))))))))
+(define ExecutionStr (Cons 5 (Cons 24 (Cons 5 (Cons 3 (Cons 21 (Cons 20 (Cons 9 (Cons 15 (Cons 14 Empty))))))))))
+
+(define Test1 (EditDist HorseStr RosStr))
+(define Test2 (EditDist IntentionStr ExecutionStr))
+(define Test3 (EditDist HorseStr Empty))
+
+(run 100)
+
+(extract (Unwrap Test1))
+(check (= Test1 (Num 3)))
+
+(extract (Unwrap Test2))
+(check (= Test2 (Num 5)))
+
+(extract (Unwrap Test3))
+(check (= Test3 (Num 5)))
