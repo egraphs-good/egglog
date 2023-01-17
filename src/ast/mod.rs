@@ -56,7 +56,8 @@ pub enum Command {
     Rewrite(Rewrite),
     BiRewrite(Rewrite),
     Action(Action),
-    Run(usize),
+    Run(RunConfig),
+    Calc(Vec<IdentSort>, Vec<Expr>),
     Extract {
         variants: usize,
         e: Expr,
@@ -71,9 +72,32 @@ pub enum Command {
         name: Symbol,
         file: String,
     },
+    Output {
+        file: String,
+        exprs: Vec<Expr>,
+    },
     Query(Vec<Fact>),
     Push(usize),
     Pop(usize),
+    Fail(Box<Command>),
+    Include(String),
+}
+#[derive(Clone, Debug)]
+pub struct IdentSort {
+    pub ident: Symbol,
+    pub sort: Symbol,
+}
+
+impl Display for IdentSort {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "({} {})", self.ident, self.sort)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct RunConfig {
+    pub limit: usize,
+    pub until: Option<Fact>,
 }
 
 #[derive(Clone, Debug)]

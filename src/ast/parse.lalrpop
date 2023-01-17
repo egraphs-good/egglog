@@ -1,5 +1,6 @@
 use crate::ast::*;
 use crate::Symbol;
+use ordered_float::OrderedFloat;
 
 grammar;
 
@@ -11,7 +12,6 @@ extern {
 match {
     r"\s*" => { }, // skip whitespace
     r";[^\n\r]*[\n\r]*" => { }, // skip ; comments
-    r"Int|int|I64|number" => reserved,
     _
 }
 
@@ -48,7 +48,8 @@ Command: Command = {
     ")" => Command::BiRewrite(Rewrite { lhs, rhs, conditions: conditions.unwrap_or_default() }),
     "(" "define" <name:Ident> <expr:Expr> <cost:Cost> ")" => Command::Define { name, expr, cost },
     <NonLetAction> => Command::Action(<>),
-    "(" "run" <UNum> ")" => Command::Run(<>),
+    "(" "run" <limit:UNum>  <until:(":until" <Fact>)?> ")" => Command::Run(RunConfig { limit, until }),
+    "(" "calc" "(" <idents:IdentSort*> ")" <exprs:Expr+> ")" => Command::Calc(idents, exprs),
     "(" "extract" <variants:(":variants" <UNum>)?> <e:Expr> ")" => Command::Extract { e, variants: variants.unwrap_or(0) },
     "(" "check" <Fact> ")" => Command::Check(<>),
     "(" "clear-rules" ")" => Command::ClearRules,
@@ -59,6 +60,9 @@ Command: Command = {
     "(" "print" <sym:Ident> <n:UNum?> ")" => Command::Print(sym, n.unwrap_or(10)),
     "(" "print-size" <sym:Ident> ")" => Command::PrintSize(sym),
     "(" "input" <name:Ident> <file:String> ")" => Command::Input { name, file },
+    "(" "output" <file:String> <exprs:Expr+> ")" => Command::Output { file, exprs },
+    "(" "fail" <Command> ")" => Command::Fail(Box::new(<>)),
+    "(" "include" <file:String> ")" => Command::Include(file),
 }
 
 Cost: Option<usize> = {
@@ -97,12 +101,12 @@ Expr: Expr = {
     <Literal> => Expr::Lit(<>),
     <Ident> => Expr::Var(<>),
     <CallExpr> => <>,
-    "(" <head:PrimitiveSymbol> <tail:(Expr)+> ")" => Expr::Call(head, tail),
 };
 
 Literal: Literal = {
     // "(" ")" => Literal::Unit, // shouldn't need unit literals for now
     <Num> => Literal::Int(<>),
+    <F64> => Literal::F64(<>),
     <SymString> => Literal::String(<>),
 }
 
@@ -118,15 +122,12 @@ Variant: Variant = {
 
 Type: Symbol = <Ident>;
 
+IdentSort: IdentSort = "(" <ident:Ident> <sort:Type> ")" => IdentSort { ident, sort };
 Num: i64 = <s:r"(-)?[0-9]+"> => s.parse().unwrap();
 UNum: usize = {
     <Num> => <>.try_into().unwrap(),
 }
-Bool: bool = {
-    "true" => true,
-    "false" => false,
-}
-Ident: Symbol = <s:r"[[:alpha:]][\w-]*"> => s.parse().unwrap();
-PrimitiveSymbol: Symbol = <r"[-+*/!=<>&|^/%]+"> => Symbol::from(<>);
+F64: OrderedFloat<f64> = <s:r"(-)?[0-9]+\.[0-9]+"> => OrderedFloat::<f64>(s.parse().unwrap());
+Ident: Symbol = <s:r"([[:alpha:]][\w-]*)|([-+*/!=<>&|^/%]+)"> => s.parse().unwrap();
 SymString: Symbol = <r#""[^"]*""#> => Symbol::from(<>);
 String: String = <r#""[^"]*""#> => (<>).trim_matches('"').to_owned();

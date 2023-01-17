@@ -194,17 +194,17 @@ impl<'a> Context<'a> {
             let nodes = std::mem::take(&mut self.nodes);
             for (mut node, id) in nodes {
                 // canonicalize
-                let id = self.unionfind.find_mut(id);
+                let id = self.unionfind.find(id);
                 if let ENode::Func(_, children) | ENode::Prim(_, children) = &mut node {
                     for child in children {
-                        *child = self.unionfind.find_mut(*child);
+                        *child = self.unionfind.find(*child);
                     }
                 }
 
                 // reinsert and handle hit
                 if let Some(old) = self.nodes.insert(node, id) {
                     keep_going = true;
-                    self.unionfind.union(old, id);
+                    self.unionfind.union_raw(old, id);
                 }
             }
         }
@@ -249,7 +249,8 @@ impl<'a> Context<'a> {
                     }
                 }
 
-                ids.into_iter().reduce(|a, b| self.unionfind.union(a, b));
+                ids.into_iter()
+                    .reduce(|a, b| self.unionfind.union_raw(a, b));
             }
             Fact::Fact(e) => {
                 self.check_query_expr(e, self.unit.clone());
@@ -571,6 +572,7 @@ impl EGraph {
     fn infer_literal(&self, lit: &Literal) -> ArcSort {
         match lit {
             Literal::Int(_) => self.sorts.get(&Symbol::from("i64")),
+            Literal::F64(_) => self.sorts.get(&Symbol::from("f64")),
             Literal::String(_) => self.sorts.get(&Symbol::from("String")),
             Literal::Unit => self.sorts.get(&Symbol::from("Unit")),
         }
@@ -636,7 +638,6 @@ impl EGraph {
         program: &Program,
         make_defaults: bool,
     ) -> Result<(), Error> {
-        // println!("{:?}", program);
         for instr in &program.0 {
             match instr {
                 Instruction::Load(load) => match load {
@@ -661,14 +662,14 @@ impl EGraph {
                         self.saturated = false;
                         let out = &function.schema.output;
                         match function.decl.default.as_ref() {
-                            None if out.name() == "Unit".into() => {
-                                function.insert(values.into(), Value::unit(), ts);
+                            None if out.name() == self.unit_sym => {
+                                function.insert(values, Value::unit(), ts);
                                 Value::unit()
                             }
                             None if out.is_eq_sort() => {
                                 let id = self.unionfind.make_set();
                                 let value = Value::from_id(out.name(), id);
-                                function.insert(values.into(), value, ts);
+                                function.insert(values, value, ts);
                                 value
                             }
                             Some(_default) => {
@@ -706,7 +707,9 @@ impl EGraph {
                     let new_value = stack.pop().unwrap();
                     let new_len = stack.len() - function.schema.input.len();
                     let args = &stack[new_len..];
-                    let old_value = function.insert(args.into(), new_value, self.timestamp);
+
+                    // We should only have canonical values here: omit the canonicalization step
+                    let old_value = function.insert(args, new_value, self.timestamp);
 
                     // if the value does not exist or the two values differ
                     if old_value.is_none() || old_value != Some(new_value) {
@@ -716,9 +719,14 @@ impl EGraph {
                     if let Some(old_value) = old_value {
                         if new_value != old_value {
                             self.saturated = false;
+                            let tag = old_value.tag;
                             let merged: Value = match function.merge.clone() {
-                                MergeFn::AssertEq => panic!("No error for this yet"),
-                                MergeFn::Union => self.unionfind.union_values(old_value, new_value),
+                                MergeFn::AssertEq => {
+                                    return Err(Error::MergeError(*f, new_value, old_value))
+                                }
+                                MergeFn::Union => {
+                                    self.unionfind.union_values(old_value, new_value, tag)
+                                }
                                 MergeFn::Expr(merge_prog) => {
                                     let values = [old_value, new_value];
                                     let old_len = stack.len();
@@ -731,7 +739,7 @@ impl EGraph {
                             // re-borrow
                             let args = &stack[new_len..];
                             let function = self.functions.get_mut(f).unwrap();
-                            function.insert(args.into(), merged, self.timestamp);
+                            function.insert(args, merged, self.timestamp);
                         }
                     }
                     stack.truncate(new_len)
@@ -739,19 +747,21 @@ impl EGraph {
                 Instruction::Union(arity) => {
                     let new_len = stack.len() - arity;
                     let values = &stack[new_len..];
+                    let sort = values[0].tag;
                     let first = self.unionfind.find(Id::from(values[0].bits as usize));
                     values[1..].iter().fold(first, |a, b| {
                         let b = self.unionfind.find(Id::from(b.bits as usize));
                         if a != b {
                             self.saturated = false;
                         }
-                        self.unionfind.union(a, b)
+                        self.unionfind.union(a, b, sort)
                     });
                     stack.truncate(new_len);
                 }
                 Instruction::Panic(msg) => panic!("Panic: {}", msg),
                 Instruction::Literal(lit) => match lit {
                     Literal::Int(i) => stack.push(Value::from(*i)),
+                    Literal::F64(f) => stack.push(Value::from(*f)),
                     Literal::String(s) => stack.push(Value::from(*s)),
                     Literal::Unit => stack.push(Value::unit()),
                 },
@@ -762,10 +772,7 @@ impl EGraph {
                     let function = self.functions.get_mut(f).unwrap();
                     let new_len = stack.len() - function.schema.input.len();
                     let args = &stack[new_len..];
-                    let old_value = function.nodes.remove(args);
-                    if old_value.is_some() {
-                        self.saturated = false;
-                    }
+                    self.saturated &= !function.remove(args, self.timestamp);
                     stack.truncate(new_len);
                 }
             }

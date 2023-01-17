@@ -1,10 +1,12 @@
 use crate::*;
+use ordered_float::OrderedFloat;
 
 use std::fmt::Display;
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
 pub enum Literal {
     Int(i64),
+    F64(OrderedFloat<f64>),
     String(Symbol),
     Unit,
 }
@@ -30,12 +32,14 @@ macro_rules! impl_from {
 }
 
 impl_from!(Int(i64));
+impl_from!(F64(OrderedFloat<f64>));
 impl_from!(String(Symbol));
 
 impl Display for Literal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self {
             Literal::Int(i) => Display::fmt(i, f),
+            Literal::F64(n) => Display::fmt(n, f),
             Literal::String(s) => write!(f, "{s}"),
             Literal::Unit => write!(f, "()"),
         }

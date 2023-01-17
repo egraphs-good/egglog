@@ -1,11 +1,17 @@
+use hashbrown::hash_map::Entry as HEntry;
 use indexmap::map::Entry;
 use smallvec::SmallVec;
 
 use crate::{
+    function::index::Offset,
     typecheck::{Atom, AtomTerm, Query},
     *,
 };
-use std::{cell::UnsafeCell, fmt::Debug, ops::Range};
+use std::{
+    cell::UnsafeCell,
+    fmt::{self, Debug},
+    ops::Range,
+};
 
 enum Instr<'a> {
     Intersect {
@@ -57,16 +63,16 @@ impl<'b> Context<'b> {
         egraph: &'b EGraph,
         cq: &'b CompiledQuery,
         timestamp_ranges: &[Range<u32>],
-    ) -> Option<(Self, Program<'b>)> {
+    ) -> Option<(Self, Program<'b>, Vec<Option<usize>>)> {
         let ctx = Context {
             query: cq,
             tuple: vec![Value::fake(); cq.vars.len()],
             matches: 0,
         };
 
-        let (program, _vars) = egraph.compile_program(cq, timestamp_ranges)?;
+        let (program, _vars, intersections) = egraph.compile_program(cq, timestamp_ranges)?;
 
-        Some((ctx, program))
+        Some((ctx, program, intersections))
     }
 
     fn eval<F>(&mut self, tries: &mut [&LazyTrie], program: &[Instr], f: &mut F) -> Result
@@ -279,7 +285,11 @@ impl EGraph {
         &self,
         query: &CompiledQuery,
         timestamp_ranges: &[Range<u32>],
-    ) -> Option<(Program, Vec<Symbol>)> {
+    ) -> Option<(
+        Program,
+        Vec<Symbol>,        /* variable ordering */
+        Vec<Option<usize>>, /* the first column accessed per-atom */
+    )> {
         #[derive(Default)]
         struct VarInfo2 {
             occurences: Vec<usize>,
@@ -344,6 +354,7 @@ impl EGraph {
         }
         vars = ordered_vars;
 
+        let mut initial_columns = vec![None; atoms.len()];
         let mut program: Vec<Instr> = vars
             .iter()
             .map(|(&v, info)| {
@@ -359,6 +370,10 @@ impl EGraph {
                             let atom = &atoms[atom_idx];
                             let range = timestamp_ranges[atom_idx].clone();
                             let access = self.make_trie_access(v, atom, range);
+                            let initial_col = &mut initial_columns[atom_idx];
+                            if initial_col.is_none() {
+                                *initial_col = Some(access.column);
+                            }
                             (atom_idx, access)
                         })
                         .collect(),
@@ -400,7 +415,11 @@ impl EGraph {
             }
         }
 
-        Some((Program(program), vars.into_keys().collect()))
+        Some((
+            Program(program),
+            vars.into_keys().collect(),
+            initial_columns,
+        ))
     }
 
     pub(crate) fn run_query<F>(&self, cq: &CompiledQuery, timestamp: u32, mut f: F)
@@ -420,7 +439,7 @@ impl EGraph {
                 }
 
                 // do the gj
-                if let Some((mut ctx, program)) = Context::new(self, cq, &timestamp_ranges) {
+                if let Some((mut ctx, program, cols)) = Context::new(self, cq, &timestamp_ranges) {
                     log::debug!(
                         "Query: {}\nNew atom: {}\nVars: {}\nProgram\n{}",
                         cq.query,
@@ -428,7 +447,26 @@ impl EGraph {
                         ListDisplay(cq.vars.keys(), " "),
                         program
                     );
-                    let tries = LazyTrie::make_initial_vec(cq.query.atoms.len());
+                    let mut tries = Vec::with_capacity(cq.query.atoms.len());
+                    for ((atom, ts), col) in cq
+                        .query
+                        .atoms
+                        .iter()
+                        .zip(timestamp_ranges.iter())
+                        .zip(cols.iter())
+                    {
+                        // tries.push(LazyTrie::default());
+                        if let Some(target) = col {
+                            if let Some(col) = self.functions[&atom.head].column_index(*target, ts)
+                            {
+                                tries.push(LazyTrie::from_column_index(col))
+                            } else {
+                                tries.push(LazyTrie::default());
+                            }
+                        } else {
+                            tries.push(LazyTrie::default());
+                        }
+                    }
                     let mut trie_refs = tries.iter().collect::<Vec<_>>();
                     ctx.eval(&mut trie_refs, &program.0, &mut f).unwrap_or(());
                     log::debug!("Matched {} times", ctx.matches);
@@ -442,7 +480,7 @@ impl EGraph {
                 // range is half-open; timestamp is excluded
                 timestamp_ranges[atom_i] = 0..timestamp;
             }
-        } else if let Some((mut ctx, program)) = Context::new(self, cq, &[]) {
+        } else if let Some((mut ctx, program, _)) = Context::new(self, cq, &[]) {
             let tries = LazyTrie::make_initial_vec(cq.query.atoms.len());
             let mut trie_refs = tries.iter().collect::<Vec<_>>();
             ctx.eval(&mut trie_refs, &program.0, &mut f).unwrap_or(());
@@ -452,32 +490,80 @@ impl EGraph {
 
 struct LazyTrie(UnsafeCell<LazyTrieInner>);
 
-enum LazyTrieInner {
-    Delayed(SmallVec<[u32; 4]>),
-    Sparse(SparseMap),
+impl Debug for LazyTrie {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        Debug::fmt(unsafe { &*self.0.get() }, f)
+    }
 }
 
 type SparseMap = HashMap<Value, LazyTrie>;
-
 type RowIdx = u32;
+
+#[derive(Debug)]
+enum LazyTrieInner {
+    Borrowed {
+        index: Rc<ColumnIndex>,
+        map: SparseMap,
+    },
+    Delayed(SmallVec<[RowIdx; 4]>),
+    Sparse(SparseMap),
+}
+
+impl Default for LazyTrie {
+    fn default() -> Self {
+        LazyTrie(UnsafeCell::new(LazyTrieInner::Delayed(Default::default())))
+    }
+}
+
 impl LazyTrie {
     fn make_initial_vec(n: usize) -> Vec<Self> {
-        (0..n)
-            .map(|_| LazyTrie(UnsafeCell::new(LazyTrieInner::Delayed(Default::default()))))
-            .collect()
+        (0..n).map(|_| LazyTrie::default()).collect()
     }
 
     fn len(&self) -> usize {
         match unsafe { &*self.0.get() } {
             LazyTrieInner::Delayed(v) => v.len(),
             LazyTrieInner::Sparse(m) => m.len(),
+            LazyTrieInner::Borrowed { index, .. } => index.len(),
         }
     }
+    fn from_column_index(index: Rc<ColumnIndex>) -> LazyTrie {
+        LazyTrie(UnsafeCell::new(LazyTrieInner::Borrowed {
+            index,
+            map: Default::default(),
+        }))
+    }
+    fn from_indexes(ixs: impl Iterator<Item = usize>) -> Option<LazyTrie> {
+        let data = SmallVec::from_iter(ixs.map(|x| x as RowIdx));
+        if data.is_empty() {
+            return None;
+        }
 
-    fn force(&self, access: &TrieAccess) -> &LazyTrieInner {
-        let this = unsafe { &mut *self.0.get() };
+        Some(LazyTrie(UnsafeCell::new(LazyTrieInner::Delayed(data))))
+    }
+
+    unsafe fn force_mut(&self, access: &TrieAccess) -> *mut LazyTrieInner {
+        let this = &mut *self.0.get();
         if let LazyTrieInner::Delayed(idxs) = this {
             *this = access.make_trie_inner(idxs);
+        }
+        self.0.get()
+    }
+
+    fn force_borrowed(&self, access: &TrieAccess) -> &LazyTrieInner {
+        let this = unsafe { &mut *self.0.get() };
+        match this {
+            LazyTrieInner::Borrowed { index, .. } => {
+                let mut map = SparseMap::with_capacity_and_hasher(index.len(), Default::default());
+                map.extend(index.iter().filter_map(|(v, ixs)| {
+                    LazyTrie::from_indexes(access.filter_live(ixs)).map(|trie| (v, trie))
+                }));
+                *this = LazyTrieInner::Sparse(map);
+            }
+            LazyTrieInner::Delayed(idxs) => {
+                *this = access.make_trie_inner(idxs);
+            }
+            LazyTrieInner::Sparse(_) => {}
         }
         unsafe { &*self.0.get() }
     }
@@ -487,20 +573,31 @@ impl LazyTrie {
         access: &TrieAccess,
         mut f: impl FnMut(Value, &'a LazyTrie) -> Result,
     ) -> Result {
-        match self.force(access) {
+        // There is probably something cleaner to do here compared with the
+        // `force_borrowed` construct.
+        match self.force_borrowed(access) {
             LazyTrieInner::Sparse(m) => {
                 for (k, v) in m {
                     f(*k, v)?;
                 }
                 Ok(())
             }
-            LazyTrieInner::Delayed(_) => unreachable!(),
+            LazyTrieInner::Borrowed { .. } | LazyTrieInner::Delayed(_) => unreachable!(),
         }
     }
 
     fn get(&self, access: &TrieAccess, value: Value) -> Option<&LazyTrie> {
-        match self.force(access) {
+        match unsafe { &mut *self.force_mut(access) } {
             LazyTrieInner::Sparse(m) => m.get(&value),
+            LazyTrieInner::Borrowed { index, map } => {
+                let ixs = index.get(&value)?;
+                match map.entry(value) {
+                    HEntry::Occupied(o) => Some(o.into_mut()),
+                    HEntry::Vacant(v) => {
+                        Some(v.insert(LazyTrie::from_indexes(access.filter_live(ixs))?))
+                    }
+                }
+            }
             LazyTrieInner::Delayed(_) => unreachable!(),
         }
     }
@@ -520,6 +617,20 @@ impl<'a> std::fmt::Display for TrieAccess<'a> {
 }
 
 impl<'a> TrieAccess<'a> {
+    fn filter_live<'b: 'a>(&'b self, ixs: &'b [Offset]) -> impl Iterator<Item = usize> + 'a {
+        ixs.iter().copied().filter_map(|ix| {
+            let ix = ix as usize;
+            let (inp, out) = self.function.nodes.get_index(ix)?;
+            if self.timestamp_range.contains(&out.timestamp)
+                && self.constraints.iter().all(|c| c.check(inp, out))
+            {
+                Some(ix)
+            } else {
+                None
+            }
+        })
+    }
+
     #[cold]
     fn make_trie_inner(&self, idxs: &[RowIdx]) -> LazyTrieInner {
         let arity = self.function.schema.input.len();
@@ -548,27 +659,29 @@ impl<'a> TrieAccess<'a> {
 
         if idxs.is_empty() {
             if self.column < arity {
-                for (i, (tup, out)) in self.function.nodes.iter().enumerate() {
+                for (i, tup, out) in self.function.iter_timestamp_range(&self.timestamp_range) {
                     insert(i, tup, out, tup[self.column])
                 }
             } else {
                 assert_eq!(self.column, arity);
-                for (i, (tup, out)) in self.function.nodes.iter().enumerate() {
+                for (i, tup, out) in self.function.iter_timestamp_range(&self.timestamp_range) {
                     insert(i, tup, out, out.value);
                 }
             };
         } else if self.column < arity {
             for idx in idxs {
                 let i = *idx as usize;
-                let (tup, out) = &self.function.nodes.get_index(i).unwrap();
-                insert(i, tup, out, tup[self.column])
+                if let Some((tup, out)) = self.function.nodes.get_index(i) {
+                    insert(i, tup, out, tup[self.column])
+                }
             }
         } else {
             assert_eq!(self.column, arity);
             for idx in idxs {
                 let i = *idx as usize;
-                let (tup, out) = &self.function.nodes.get_index(i).unwrap();
-                insert(i, tup, out, out.value)
+                if let Some((tup, out)) = self.function.nodes.get_index(i) {
+                    insert(i, tup, out, out.value)
+                }
             }
         }
 

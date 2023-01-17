@@ -1,0 +1,41 @@
+;; computes "e-graph intersection"
+
+(datatype Expr
+    (Var String)
+    (f Expr))
+
+(function intersect (Expr Expr) Expr)
+
+(rule (
+    (= x3 (intersect x1 x2))
+    (= f1 (f x1))
+    (= f2 (f x2))
+)(
+    (set (intersect f1 f2) (f x3))
+))
+
+(define a1 (Var "a1")) (define a2 (Var "a2")) (define a3 (Var "a3"))
+(define b1 (Var "b1")) (define b2 (Var "b2")) (define b3 (Var "b3"))
+
+;; e-graph 1: f(a) = f(b), f(f(a))
+(define t1 (f (f a1)))
+(define fb1 (f b1))
+(union (f a1) fb1)
+
+;; e-graph 2: f(f(a)) = f(f(b))
+(define t2  (f (f a2)))
+(define t2p (f (f b2)))
+(union t2 t2p)
+
+(set (intersect a1 a2) a3)
+(set (intersect b1 b2) b3)
+
+(run 100)
+
+(define t3 (f (f a3)))
+(extract :variants 5 t3)
+
+;; f(f(a)) = f(f(b)) is preserved
+(check (= (f (f a3)) (f (f b3))))
+;; but not f(a) = f(b), it was only in e-graph 1
+(check (!= (f a3) (f b3)))
