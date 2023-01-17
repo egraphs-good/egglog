@@ -651,7 +651,7 @@ impl EGraph {
 
                     if cfg!(debug_assertions) {
                         for (ty, val) in function.schema.input.iter().zip(values) {
-                            assert_eq!(ty.name(), val.tag);
+                            assert_eq!(ty.name(), val.tag,);
                         }
                     }
 
@@ -687,6 +687,8 @@ impl EGraph {
                             format!("fake expression {f} {:?}", values).into(),
                         ))));
                     };
+
+                    debug_assert_eq!(function.schema.output.name(), value.tag);
                     stack.truncate(new_len);
                     stack.push(value);
                 }
@@ -720,7 +722,16 @@ impl EGraph {
                         if new_value != old_value {
                             self.saturated = false;
                             let tag = old_value.tag;
-                            let merged: Value = match function.merge.clone() {
+                            if let Some(prog) = function.merge.on_merge.clone() {
+                                let values = [old_value, new_value];
+                                // XXX: we get an error if we pass the current
+                                // stack and then truncate it to the old length.
+                                // Why?
+                                self.run_actions(&mut Vec::new(), &values, &prog, true)?;
+                            }
+                            // re-borrow
+                            let function = self.functions.get_mut(f).unwrap();
+                            let merged: Value = match function.merge.merge_vals.clone() {
                                 MergeFn::AssertEq => {
                                     return Err(Error::MergeError(*f, new_value, old_value))
                                 }

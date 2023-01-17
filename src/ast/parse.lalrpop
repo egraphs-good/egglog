@@ -35,8 +35,9 @@ Command: Command = {
     "(" "datatype" <name:Ident> <variants:(Variant)*> ")" => Command::Datatype { <> },
     "(" "sort" <name:Ident> "(" <head:Ident> <tail:(Expr)*> ")" ")" => Command::Sort (<>),
     "(" "function" <name:Ident> <schema:Schema> <cost:Cost>
+        <merge_action:(":on_merge" <List<Action>>)?>
         <merge:(":merge" <Expr>)?> <default:(":default" <Expr>)?> ")" => {
-        Command::Function(FunctionDecl { name, schema, merge, default, cost })
+        Command::Function(FunctionDecl { name, schema, merge, merge_action: merge_action.unwrap_or_default(), default, cost })
     },
     "(" "relation" <name:Ident> <types:List<Type>> ")" => Command::Function(FunctionDecl::relation(name, types)),
     "(" "rule" <body:List<Fact>> <head:List<Action>> ")" => Command::Rule(Rule { head, body }),

@@ -352,20 +352,26 @@ impl EGraph {
         let mut stack = Vec::new();
         let mut function = self.functions.get_mut(&func).unwrap();
         let n_unions = self.unionfind.n_unions();
-        let prog = match &function.merge {
-            MergeFn::Expr(e) => e.clone(),
-            MergeFn::AssertEq | MergeFn::Union => {
-                panic!("the only kind of deferred merge supported is 'Expr'")
-            }
+        let merge_prog = match &function.merge.merge_vals {
+            MergeFn::Expr(e) => Some(e.clone()),
+            MergeFn::AssertEq | MergeFn::Union => None,
         };
         for (inputs, old, new) in merges {
-            // TODO: error handling?
-            self.run_actions(&mut stack, &[*old, *new], &prog, true)
-                .unwrap();
-            let merged = stack.pop().expect("merges should produce a value");
-            stack.clear();
-            function = self.functions.get_mut(&func).unwrap();
-            function.insert(inputs, merged, self.timestamp);
+            if let Some(prog) = function.merge.on_merge.clone() {
+                self.run_actions(&mut stack, &[*old, *new], &prog, true)
+                    .unwrap();
+                function = self.functions.get_mut(&func).unwrap();
+                stack.clear();
+            }
+            if let Some(prog) = &merge_prog {
+                // TODO: error handling?
+                self.run_actions(&mut stack, &[*old, *new], prog, true)
+                    .unwrap();
+                let merged = stack.pop().expect("merges should produce a value");
+                stack.clear();
+                function = self.functions.get_mut(&func).unwrap();
+                function.insert(inputs, merged, self.timestamp);
+            }
         }
         self.unionfind.n_unions() - n_unions + function.clear_updates()
     }
@@ -413,6 +419,7 @@ impl EGraph {
                 output: sort,
             },
             merge: None,
+            merge_action: vec![],
             default: None,
             cost: variant.cost,
         })?;
@@ -1076,6 +1083,7 @@ impl EGraph {
             },
             default: None,
             merge: None,
+            merge_action: vec![],
             cost: None,
         })?;
         let f = self.functions.get_mut(&name).unwrap();
@@ -1099,6 +1107,7 @@ impl EGraph {
             },
             default: None,
             merge: None,
+            merge_action: vec![],
             cost,
         })?;
         let f = self.functions.get_mut(&name).unwrap();

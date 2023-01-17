@@ -106,6 +106,7 @@ pub struct FunctionDecl {
     pub schema: Schema,
     pub default: Option<Expr>,
     pub merge: Option<Expr>,
+    pub merge_action: Vec<Action>,
     pub cost: Option<usize>,
 }
 
@@ -131,6 +132,7 @@ impl FunctionDecl {
                 output: Symbol::from("Unit"),
             },
             merge: None,
+            merge_action: vec![],
             default: None,
             cost: None,
         }
