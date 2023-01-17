@@ -41,6 +41,28 @@ target/debug/egg-smol
 
 for the REPL.
 
+## VS Code plugin
+
+There is a VS Code extension in the vscode folder. Install using 'Install from VSIX...' in the three-dot menu of the extensions tab and pick npm install -g @vscode/vscode/eggsmol.vsix`.
+
+### Enhancing the VS code extension
+
+If you want to hack on the VS Code extension, install nodejs, and make your changes in the files in the `vscode/eggsmol-1.0.0` folder.
+
+Then run
+
+```
+code vscode/eggsmol-1.0.0
+```
+
+and use F5 to run the extension in a new window. When satisfied, then install VSCE if you do not already have it:
+
+```
+npm install -g @vscode/vsce
+```
+
+Run `vsce package` in the `vscode/eggsmol-1.0.0` folder to reconstruct the .vsix file and install it manually.
+
 # Syntax
 
 The syntax of the .egg files is defined in `src/ast/parse.lalrpop`.
@@ -262,6 +284,7 @@ prints
     ( print <sym:Ident> <n:UNum?> )
     ( print-size <sym:Ident> )
     ( input <name:Ident> <file:String> )
+    ( output <file:String> <exprs:Expr+> )
     ( include <file:String> )
     ( calc ( <idents:IdentSort*> ) <exprs:Expr+> )
 ```

@@ -72,6 +72,10 @@ pub enum Command {
         name: Symbol,
         file: String,
     },
+    Output {
+        file: String,
+        exprs: Vec<Expr>,
+    },
     Query(Vec<Fact>),
     Push(usize),
     Pop(usize),
