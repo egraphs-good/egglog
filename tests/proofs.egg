@@ -298,7 +298,6 @@
 (run 1000)
 (clear-rules)
 
-
 (define zero (AstConst (rational 0 1)))
 (define addzero (AstAdd addx2 zero))
 (define addzerofront (AstAdd (AstAdd zero (AstVar "x")) (AstConst two)))
@@ -309,6 +308,9 @@
 (load-ruleset proof-extract)
 (run 100)
 (clear-rules)
+
+(print DemandEq)
+(print TrmOf)
 
 (check (!= (Var "x") (Const two)))
 (check (= (Add (Var "x") (Const two))
@@ -324,9 +326,6 @@
        add2x
        )))
 
-(print ProofBetween)
-(print DemandEq)
-(extract (DemandEq addx2 add2x))
 (check (= (DemandEq addx2 add2x)
           (Transitivity
             (Cons
@@ -337,7 +336,6 @@
               (Null)))))
 
 
-(extract (DemandEq addx2 addzero))
 (check (= (DemandEq addx2 addzero)
           (Transitivity
             (Cons
