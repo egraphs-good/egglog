@@ -45,7 +45,7 @@ pub enum Command {
         name: Symbol,
         variants: Vec<Variant>,
     },
-    Sort(Symbol, Symbol, Vec<Expr>),
+    Sort(Symbol, Option<(Symbol, Vec<Expr>)>),
     Function(FunctionDecl),
     Define {
         name: Symbol,
@@ -84,6 +84,7 @@ pub enum Command {
     Fail(Box<Command>),
     Include(String),
 }
+
 #[derive(Clone, Debug)]
 pub struct IdentSort {
     pub ident: Symbol,

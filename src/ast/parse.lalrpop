@@ -33,7 +33,7 @@ Comma<T>: Vec<T> = {
 
 Command: Command = {
     "(" "datatype" <name:Ident> <variants:(Variant)*> ")" => Command::Datatype { <> },
-    "(" "sort" <name:Ident> "(" <head:Ident> <tail:(Expr)*> ")" ")" => Command::Sort (<>),
+    "(" "sort" <name:Ident> "(" <head:Ident> <tail:(Expr)*> ")" ")" => Command::Sort (name, Some((head, tail))),
     "(" "function" <name:Ident> <schema:Schema> <cost:Cost>
         <merge_action:(":on_merge" <List<Action>>)?>
         <merge:(":merge" <Expr>)?> <default:(":default" <Expr>)?> ")" => {

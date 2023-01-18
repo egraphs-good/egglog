@@ -1,7 +1,9 @@
 pub mod ast;
+mod desugar;
 mod extract;
 mod function;
 mod gj;
+mod proofs;
 pub mod sort;
 mod typecheck;
 mod unionfind;
@@ -13,6 +15,9 @@ use index::ColumnIndex;
 use instant::{Duration, Instant};
 use sort::*;
 use thiserror::Error;
+
+use proofs::add_proofs;
+use desugar::desugar_program;
 
 use ast::*;
 
@@ -764,19 +769,21 @@ impl EGraph {
     fn run_command(&mut self, command: Command, should_run: bool) -> Result<String, Error> {
         Ok(match command {
             Command::Datatype { name, variants } => {
-                self.declare_sort(name, None)?;
-                for variant in variants {
-                    self.declare_constructor(variant, name)?;
+                panic!("Datatype should have been desugared");
+            }
+            Command::Sort(name, presort_and_args) => match presort_and_args {
+                Some((presort, args)) => {
+                    self.declare_sort(name, Some((presort, &args)))?;
+                    format!(
+                        "Declared sort {name} = ({presort} {})",
+                        ListDisplay(&args, " ")
+                    )
                 }
-                format!("Declared datatype {name}.")
-            }
-            Command::Sort(name, presort, args) => {
-                self.declare_sort(name, Some((presort, &args)))?;
-                format!(
-                    "Declared sort {name} = ({presort} {})",
-                    ListDisplay(&args, " ")
-                )
-            }
+                None => {
+                    self.declare_sort(name, None)?;
+                    format!("Declared sort {name}.")
+                }
+            },
             Command::Function(fdecl) => {
                 self.declare_function(&fdecl)?;
                 format!("Declared function {}.", fdecl.name)
@@ -1146,7 +1153,8 @@ impl EGraph {
         let mut msgs = vec![];
         let should_run = true;
 
-        for command in program {
+        let desugared = desugar_program(program);
+        for command in desugared {
             let msg = self.run_command(command, should_run)?;
             log::info!("{}", msg);
             msgs.push(msg);
@@ -1170,6 +1178,7 @@ impl EGraph {
         let program = parser
             .parse(input)
             .map_err(|e| e.map_token(|tok| tok.to_string()))?;
+
         self.run_program(program)
     }
 
