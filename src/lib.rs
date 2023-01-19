@@ -121,7 +121,6 @@ impl PrimitiveLike for SimplePrimitive {
     }
 }
 
-#[derive(Clone)]
 pub struct EGraph {
     egraphs: Vec<Self>,
     unionfind: UnionFind,
@@ -134,10 +133,36 @@ pub struct EGraph {
     saturated: bool,
     timestamp: u32,
     unit_sym: Symbol,
+    parser: ast::parse::ProgramParser,
+    actionParser: ast::parse::ActionParser,
     pub match_limit: usize,
     pub node_limit: usize,
     pub fact_directory: Option<PathBuf>,
     pub seminaive: bool,
+}
+
+impl Clone for EGraph {
+    fn clone(&self) -> EGraph {
+        EGraph {
+            egraphs: self.egraphs.clone(),
+            unionfind: self.unionfind.clone(),
+            presorts: self.presorts.clone(),
+            sorts: self.sorts.clone(),
+            primitives: self.primitives.clone(),
+            functions: self.functions.clone(),
+            rules: self.rules.clone(),
+            rulesets: self.rulesets.clone(),
+            saturated: self.saturated,
+            timestamp: self.timestamp,
+            unit_sym: self.unit_sym.clone(),
+            parser: ast::parse::ProgramParser::new(),
+            actionParser: ast::parse::ActionParser::new(),
+            match_limit: self.match_limit,
+            node_limit: self.node_limit,
+            fact_directory: self.fact_directory.clone(),
+            seminaive: self.seminaive,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -165,6 +190,8 @@ impl Default for EGraph {
             primitives: Default::default(),
             presorts: Default::default(),
             unit_sym,
+            parser: ast::parse::ProgramParser::new(),
+            actionParser: ast::parse::ActionParser::new(),
             match_limit: 10_000_000,
             node_limit: 100_000_000,
             timestamp: 0,
@@ -1130,7 +1157,8 @@ impl EGraph {
         let mut msgs = vec![];
         let should_run = true;
         let with_proofs = add_proofs(&self, program.clone());
-        //println!("{}", ListDisplay(with_proofs.clone(), "\n"));
+        
+        println!("{}", ListDisplay(with_proofs.clone(), "\n"));
 
         for command in with_proofs {
             let msg = self.run_command(command, should_run)?;
@@ -1152,8 +1180,8 @@ impl EGraph {
     }
 
     pub fn parse_program(&self, input: &str) -> Result<Vec<Command>, Error> {
-        let parser = ast::parse::ProgramParser::new();
-        let program = parser
+        let program = self
+            .parser
             .parse(input)
             .map_err(|e| e.map_token(|tok| tok.to_string()))?;
         desugar_program(self, program)

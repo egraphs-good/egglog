@@ -48,15 +48,21 @@ pub(crate) fn desugar_command(egraph: &EGraph, command: Command) -> Result<Vec<C
         Command::Rewrite(rewrite) => desugar_rewrite(&rewrite),
         Command::BiRewrite(rewrite) => desugar_birewrite(&rewrite),
         Command::Include(file) => {
-          let s = std::fs::read_to_string(&file)
-                    .unwrap_or_else(|_| panic!("Failed to read file {file}"));
-          egraph.parse_program(&s)?
+            let s = std::fs::read_to_string(&file)
+                .unwrap_or_else(|_| panic!("Failed to read file {file}"));
+            egraph.parse_program(&s)?
         }
         _ => vec![command],
     })
 }
 
-pub(crate) fn desugar_program(egraph: &EGraph, program: Vec<Command>) -> Result<Vec<Command>, Error> {
-  let intermediate: Result<Vec<Vec<Command>>, Error> = program.into_iter().map(|command| desugar_command(egraph, command)).collect();
-  intermediate.map(|v| v.into_iter().flatten().collect())
+pub(crate) fn desugar_program(
+    egraph: &EGraph,
+    program: Vec<Command>,
+) -> Result<Vec<Command>, Error> {
+    let intermediate: Result<Vec<Vec<Command>>, Error> = program
+        .into_iter()
+        .map(|command| desugar_command(egraph, command))
+        .collect();
+    intermediate.map(|v| v.into_iter().flatten().collect())
 }
