@@ -717,7 +717,7 @@ impl EGraph {
             name,
             self.rules
                 .iter()
-                .map(|pair| (pair.0.clone(), pair.1.clone()))
+                .map(|pair| (*pair.0, pair.1.clone()))
                 .collect(),
         );
     }
@@ -754,7 +754,10 @@ impl EGraph {
 
     fn run_command(&mut self, command: Command, should_run: bool) -> Result<String, Error> {
         Ok(match command {
-            Command::Datatype { name, variants } => {
+            Command::Datatype {
+                name: _,
+                variants: _,
+            } => {
                 panic!("Datatype should have been desugared");
             }
             Command::Sort(name, presort_and_args) => match presort_and_args {
@@ -778,10 +781,10 @@ impl EGraph {
                 let name = self.add_rule(rule)?;
                 format!("Declared rule {name}.")
             }
-            Command::Rewrite(rewrite) => {
+            Command::Rewrite(_rewrite) => {
                 panic!("Rewrite should have been desugared");
             }
-            Command::BiRewrite(rewrite) => {
+            Command::BiRewrite(_rewrite) => {
                 panic!("Birewrite should have been desugared");
             }
             Command::Run(config) => {
@@ -1129,7 +1132,7 @@ impl EGraph {
     fn run_program(&mut self, program: Vec<Command>) -> Result<Vec<String>, Error> {
         let mut msgs = vec![];
         let should_run = true;
-        let with_proofs = add_proofs(&self, program.clone());
+        //let with_proofs = add_proofs(&self, program.clone());
         //println!("{}", ListDisplay(program.clone(), "\n"));
 
         for command in program {

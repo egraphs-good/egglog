@@ -91,7 +91,10 @@ impl Command {
             Command::Rewrite(_) | Command::BiRewrite(_) => {
                 panic!("Rewrites should be desugared before printing");
             }
-            Command::Datatype { name, variants } => {
+            Command::Datatype {
+                name: _,
+                variants: _,
+            } => {
                 panic!("Datatypes should be desugared before printing");
             }
             Command::Action(a) => a.to_sexp(),
@@ -202,7 +205,7 @@ impl Command {
             Command::Fail(cmd) => Sexp::List(vec![Sexp::String("fail".into()), cmd.to_sexp()]),
             Command::Include(file) => Sexp::List(vec![
                 Sexp::String("include".into()),
-                Sexp::String(format!("\"{}\"", file.to_string())),
+                Sexp::String(format!("\"{}\"", file)),
             ]),
         }
     }
@@ -256,25 +259,6 @@ pub struct Variant {
     pub name: Symbol,
     pub types: Vec<Symbol>,
     pub cost: Option<usize>,
-}
-
-impl Variant {
-    pub(crate) fn to_sexp(&self) -> Sexp {
-        Sexp::List(
-            vec![Sexp::String(self.name.to_string())]
-                .into_iter()
-                .chain(self.types.iter().map(|s| Sexp::String(s.to_string())))
-                .chain(if let Some(cost) = self.cost {
-                    vec![
-                        Sexp::String(":cost".to_string()),
-                        Sexp::String(cost.to_string()),
-                    ]
-                } else {
-                    vec![]
-                })
-                .collect(),
-        )
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -331,7 +315,7 @@ impl FunctionDecl {
             ]);
         }
 
-        if self.merge_action.len() > 0 {
+        if !self.merge_action.is_empty() {
             res.push(Sexp::String(":merge-action".into()));
             res.push(Sexp::List(
                 self.merge_action.iter().map(|a| a.to_sexp()).collect(),
