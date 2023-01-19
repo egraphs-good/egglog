@@ -3,7 +3,6 @@ mod desugar;
 mod extract;
 mod function;
 mod gj;
-mod proofs;
 pub mod sort;
 mod typecheck;
 mod unionfind;
@@ -17,7 +16,6 @@ use sort::*;
 use thiserror::Error;
 
 use desugar::desugar_program;
-use proofs::add_proofs;
 
 use symbolic_expressions::Sexp;
 
@@ -1132,8 +1130,6 @@ impl EGraph {
     fn run_program(&mut self, program: Vec<Command>) -> Result<Vec<String>, Error> {
         let mut msgs = vec![];
         let should_run = true;
-        //let with_proofs = add_proofs(&self, program.clone());
-        //println!("{}", ListDisplay(program.clone(), "\n"));
 
         for command in program {
             let msg = self.run_command(command, should_run)?;

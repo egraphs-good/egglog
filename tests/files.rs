@@ -3,7 +3,7 @@ use std::path::Path;
 
 fn test_program(program: &str, message: &str) {
     let mut egraph = EGraph::default();
-    match egraph.parse_and_run_program(&program) {
+    match egraph.parse_and_run_program(program) {
         Ok(msgs) => {
             for msg in msgs {
                 log::info!("  {}", msg);
