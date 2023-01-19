@@ -926,10 +926,7 @@ impl EGraph {
                 "Command failed as expected.".into()
             }
             Command::Include(file) => {
-                let s = std::fs::read_to_string(&file)
-                    .unwrap_or_else(|_| panic!("Failed to read file {file}"));
-                self.parse_and_run_program(&s)?;
-                format!("Included file {file}")
+                panic!("Include should have been desugared");
             }
             Command::Input { name, file } => {
                 let func = self.functions.get_mut(&name).unwrap();
@@ -1132,10 +1129,10 @@ impl EGraph {
     fn run_program(&mut self, program: Vec<Command>) -> Result<Vec<String>, Error> {
         let mut msgs = vec![];
         let should_run = true;
-        //let with_proofs = add_proofs(&self, program.clone());
-        //println!("{}", ListDisplay(program.clone(), "\n"));
+        let with_proofs = add_proofs(&self, program.clone());
+        //println!("{}", ListDisplay(with_proofs.clone(), "\n"));
 
-        for command in program {
+        for command in with_proofs {
             let msg = self.run_command(command, should_run)?;
             log::info!("{}", msg);
             msgs.push(msg);
@@ -1159,7 +1156,7 @@ impl EGraph {
         let program = parser
             .parse(input)
             .map_err(|e| e.map_token(|tok| tok.to_string()))?;
-        Ok(desugar_program(program))
+        desugar_program(self, program)
     }
 
     pub fn parse_and_run_program(&mut self, input: &str) -> Result<Vec<String>, Error> {

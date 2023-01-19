@@ -1,7 +1,7 @@
 use crate::*;
 
 fn proof_header(egraph: &EGraph) -> Vec<Command> {
-    let str = include_str!("../tests/proofheader.egg");
+    let str = include_str!("proofheader.egg");
     egraph.parse_program(str).unwrap()
 }
 
@@ -9,7 +9,7 @@ fn make_ast_version(egraph: &EGraph, name: &Symbol) -> Symbol {
     if egraph.sorts.get(name).is_some() {
         name.clone()
     } else {
-        Symbol::from(format!("_Ast{}", name))
+        Symbol::from(format!("Ast{}__", name))
     }
 }
 
@@ -23,7 +23,7 @@ fn make_ast_func(egraph: &EGraph, fdecl: &FunctionDecl) -> FunctionDecl {
                 .iter()
                 .map(|sort| make_ast_version(egraph, sort))
                 .collect(),
-            output: "Ast".into(),
+            output: "Ast__".into(),
         },
         merge: None,
         merge_action: vec![],
