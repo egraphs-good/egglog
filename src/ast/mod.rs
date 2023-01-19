@@ -85,6 +85,43 @@ pub enum Command {
     Include(String),
 }
 
+impl Command {
+    fn to_sexp(&self) -> Sexp {
+        match self {
+            Command::Datatype { name, variants } => Sexp::List(
+                vec![
+                    Sexp::String("datatype".into()),
+                    Sexp::String(name.to_string()),
+                ]
+                .into_iter()
+                .chain(variants.iter().map(|v| v.to_sexp()))
+                .collect(),
+            ),
+            Command::Sort(name, None) => Sexp::List(vec![
+                Sexp::String("sort".into()),
+                Sexp::String(name.to_string()),
+            ]),
+            Command::Sort(name, Some((name2, args))) => Sexp::List(vec![
+                Sexp::String("sort".into()),
+                Sexp::String(name.to_string()),
+                Sexp::List(
+                    vec![Sexp::String(name2.to_string())]
+                        .into_iter()
+                        .chain(args.iter().map(|e| panic!("TODO"))).collect()
+                ),
+            ]),
+
+            _ => panic!("TODO"),
+        }
+    }
+}
+
+impl Display for Command {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_sexp())
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct IdentSort {
     pub ident: Symbol,
@@ -118,6 +155,25 @@ pub struct Variant {
     pub name: Symbol,
     pub types: Vec<Symbol>,
     pub cost: Option<usize>,
+}
+
+impl Variant {
+    pub(crate) fn to_sexp(&self) -> Sexp {
+        Sexp::List(
+            vec![Sexp::String(self.name.to_string())]
+                .into_iter()
+                .chain(self.types.iter().map(|s| Sexp::String(s.to_string())))
+                .chain(if let Some(cost) = self.cost {
+                    vec![
+                        Sexp::String(":cost".to_string()),
+                        Sexp::String(cost.to_string()),
+                    ]
+                } else {
+                    vec![]
+                })
+                .collect(),
+        )
+    }
 }
 
 #[derive(Clone, Debug)]

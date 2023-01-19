@@ -256,6 +256,7 @@ dependencies = [
  "rustc-hash",
  "smallvec",
  "symbol_table",
+ "symbolic_expressions",
  "thiserror",
 ]
 
@@ -819,6 +820,12 @@ dependencies = [
  "ahash 0.7.6",
  "hashbrown 0.12.3",
 ]
+
+[[package]]
+name = "symbolic_expressions"
+version = "5.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7c68d531d83ec6c531150584c42a4290911964d5f0d79132b193b67252a23b71"
 
 [[package]]
 name = "syn"

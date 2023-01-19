@@ -16,12 +16,14 @@ use instant::{Duration, Instant};
 use sort::*;
 use thiserror::Error;
 
-use proofs::add_proofs;
 use desugar::desugar_program;
+use proofs::add_proofs;
+
+use symbolic_expressions::Sexp;
 
 use ast::*;
 
-use std::fmt::Write;
+use std::fmt::{Display, Formatter, Write};
 use std::fs::File;
 use std::hash::Hash;
 use std::io::Read;
@@ -1153,7 +1155,9 @@ impl EGraph {
         let mut msgs = vec![];
         let should_run = true;
 
-        let desugared = desugar_program(program);
+        let desugared =  desugar_program(program);
+        println!("Desugared program: {:#?}", desugared);
+
         for command in desugared {
             let msg = self.run_command(command, should_run)?;
             log::info!("{}", msg);
