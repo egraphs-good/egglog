@@ -39,7 +39,15 @@ impl Display for Literal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self {
             Literal::Int(i) => Display::fmt(i, f),
-            Literal::F64(n) => Display::fmt(n, f),
+            Literal::F64(n) => {
+                // need to display with decimal if there is none
+                let str = n.to_string();
+                if let Ok(_num) = str.parse::<i64>() {
+                    write!(f, "{}.0", str)
+                } else {
+                    write!(f, "{}", str)
+                }
+            }
             Literal::String(s) => write!(f, "{s}"),
             Literal::Unit => write!(f, "()"),
         }
@@ -91,7 +99,7 @@ impl Expr {
     }
 
     pub(crate) fn to_sexp(&self) -> Sexp {
-        match self {
+        let res = match self {
             Expr::Lit(lit) => Sexp::String(lit.to_string()),
             Expr::Var(v) => Sexp::String(v.to_string()),
             Expr::Call(op, children) => Sexp::List(
@@ -100,22 +108,13 @@ impl Expr {
                     .chain(children.iter().map(|c| c.to_sexp()))
                     .collect(),
             ),
-        }
+        };
+        res
     }
 }
 
 impl Display for Expr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Expr::Lit(lit) => Display::fmt(lit, f),
-            Expr::Var(var) => Display::fmt(var, f),
-            Expr::Call(op, args) => {
-                write!(f, "({}", op)?;
-                for arg in args {
-                    write!(f, " {}", arg)?;
-                }
-                write!(f, ")")
-            }
-        }
+        write!(f, "{}", self.to_sexp())
     }
 }

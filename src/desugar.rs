@@ -20,7 +20,7 @@ fn desugar_datatype(name: Symbol, variants: Vec<Variant>) -> Vec<Command> {
 }
 
 fn desugar_rewrite(rewrite: &Rewrite) -> Vec<Command> {
-  let var = Symbol::from("__rewrite_var");
+  let var = Symbol::from("rewrite_var__");
   vec![
     Command::Rule(Rule {
       body: [Fact::Eq(vec![Expr::Var(var), rewrite.lhs.clone()])]

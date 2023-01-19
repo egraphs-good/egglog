@@ -20,7 +20,8 @@ fn run(path: &Path) -> datatest_stable::Result<()> {
 
     let egraph = EGraph::default();
     let program_str = egraph.parse_program(&program).unwrap().into_iter().map(|x| x.to_string()).collect::<Vec<String>>().join("\n");
-    //test_program(&program_str, "Error after parse, to_string, and parse");
+    //println!("{}", program_str);
+    test_program(&program_str, "Error after parse, to_string, and parse");
 
     Ok(())
 }

@@ -202,7 +202,7 @@ impl Command {
             Command::Fail(cmd) => Sexp::List(vec![Sexp::String("fail".into()), cmd.to_sexp()]),
             Command::Include(file) => Sexp::List(vec![
                 Sexp::String("include".into()),
-                Sexp::String(file.to_string()),
+                Sexp::String(format!("\"{}\"", file.to_string())),
             ]),
         }
     }
@@ -325,10 +325,10 @@ impl FunctionDecl {
         }
 
         if let Some(cost) = self.cost {
-            res.push(Sexp::List(vec![
+            res.extend(vec![
                 Sexp::String(":cost".into()),
                 Sexp::String(cost.to_string()),
-            ]));
+            ]);
         }
 
         if self.merge_action.len() > 0 {
@@ -424,7 +424,7 @@ impl Action {
             ]),
             Action::Panic(msg) => Sexp::List(vec![
                 Sexp::String("panic".into()),
-                Sexp::String(msg.clone()),
+                Sexp::String(format!("\"{}\"", msg.clone())),
             ]),
             Action::Expr(e) => e.to_sexp(),
         }
