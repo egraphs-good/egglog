@@ -1154,11 +1154,9 @@ impl EGraph {
     fn run_program(&mut self, program: Vec<Command>) -> Result<Vec<String>, Error> {
         let mut msgs = vec![];
         let should_run = true;
+        let with_proofs = add_proofs(&self, program);
 
-        let desugared =  desugar_program(program);
-        println!("Desugared program: {:#?}", desugared);
-
-        for command in desugared {
+        for command in with_proofs {
             let msg = self.run_command(command, should_run)?;
             log::info!("{}", msg);
             msgs.push(msg);
@@ -1177,11 +1175,17 @@ impl EGraph {
         }
     }
 
-    pub fn parse_and_run_program(&mut self, input: &str) -> Result<Vec<String>, Error> {
+    pub fn parse_program(&self, input: &str) -> Result<Vec<Command>, Error> {
         let parser = ast::parse::ProgramParser::new();
         let program = parser
             .parse(input)
             .map_err(|e| e.map_token(|tok| tok.to_string()))?;
+        Ok(desugar_program(program))
+    }
+    
+
+    pub fn parse_and_run_program(&mut self, input: &str) -> Result<Vec<String>, Error> {
+        let program = self.parse_program(input)?;
 
         self.run_program(program)
     }

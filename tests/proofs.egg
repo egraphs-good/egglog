@@ -11,10 +11,6 @@
   (AstConst Rational)
   (AstVar String))
 
-(datatype Op
-  (OpAdd) (OpSub) (OpConst) (OpVar))
-
-
 (datatype ProofList)
 
 ;; There are two types of proofs:
