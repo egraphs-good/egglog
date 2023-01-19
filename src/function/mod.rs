@@ -12,13 +12,19 @@ pub type ValueVec = SmallVec<[Value; 3]>;
 pub struct Function {
     pub decl: FunctionDecl,
     pub schema: ResolvedSchema,
-    pub merge: MergeFn,
+    pub merge: MergeAction,
     pub(crate) nodes: table::Table,
     sorts: HashSet<Symbol>,
     pub(crate) indexes: Vec<Rc<ColumnIndex>>,
     index_updated_through: usize,
     updates: usize,
     scratch: IndexSet<usize>,
+}
+
+#[derive(Clone)]
+pub struct MergeAction {
+    pub on_merge: Option<Rc<Program>>,
+    pub merge_vals: MergeFn,
 }
 
 #[derive(Clone)]
@@ -61,7 +67,7 @@ impl Function {
             None => return Err(Error::TypeError(TypeError::Unbound(decl.schema.output))),
         };
 
-        let merge = if let Some(merge_expr) = &decl.merge {
+        let merge_vals = if let Some(merge_expr) = &decl.merge {
             let mut types = IndexMap::<Symbol, ArcSort>::default();
             types.insert("old".into(), output.clone());
             types.insert("new".into(), output.clone());
@@ -73,6 +79,18 @@ impl Function {
             MergeFn::Union
         } else {
             MergeFn::AssertEq
+        };
+
+        let on_merge = if decl.merge_action.is_empty() {
+            None
+        } else {
+            let mut types = IndexMap::<Symbol, ArcSort>::default();
+            types.insert("old".into(), output.clone());
+            types.insert("new".into(), output.clone());
+            let program = egraph
+                .compile_actions(&types, &decl.merge_action)
+                .map_err(Error::TypeErrors)?;
+            Some(Rc::new(program))
         };
 
         let indexes = Vec::from_iter(
@@ -98,7 +116,10 @@ impl Function {
             indexes,
             index_updated_through: 0,
             updates: 0,
-            merge,
+            merge: MergeAction {
+                on_merge,
+                merge_vals,
+            },
             // TODO figure out merge and default here
         })
     }
@@ -122,6 +143,15 @@ impl Function {
         // portion of the table after this entry is inserted.
         maybe_rehash: bool,
     ) -> Option<Value> {
+        if cfg!(debug_assertions) {
+            for (v, sort) in inputs
+                .iter()
+                .zip(self.schema.input.iter())
+                .chain(once((&value, &self.schema.output)))
+            {
+                assert_eq!(sort.name(), v.tag);
+            }
+        }
         let res = self.nodes.insert(inputs, value, timestamp);
         if maybe_rehash {
             self.maybe_rehash();
@@ -283,7 +313,12 @@ impl Function {
         self.nodes.remove_index(i, timestamp);
         self.nodes.insert_and_merge(scratch, timestamp, |prev| {
             if let Some(prev) = prev {
-                match self.merge {
+                let mut appended = false;
+                if self.merge.on_merge.is_some() && prev != out_val {
+                    deferred_merges.push((scratch.clone(), prev, out_val));
+                    appended = true;
+                }
+                match &self.merge.merge_vals {
                     MergeFn::Union => {
                         debug_assert!(self.schema.output.is_eq_sort());
                         uf.union_values(prev, out_val, self.schema.output.name())
@@ -295,7 +330,9 @@ impl Function {
                         prev
                     }
                     MergeFn::Expr(_) => {
-                        deferred_merges.push((scratch.clone(), prev, out_val));
+                        if !appended {
+                            deferred_merges.push((scratch.clone(), prev, out_val));
+                        }
                         prev
                     }
                 }
