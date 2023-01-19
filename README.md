@@ -21,7 +21,7 @@ https://egg-smol-python.readthedocs.io/en/latest/
 
 ## Chat
 
-There is a Tulip chat about egg-smol here:
+There is a Zulip chat about egg-smol here:
 https://egraphs.zulipchat.com/#narrow/stream/328979-Implementation/topic/Eggsmol
 
 ## Prerequisites & compilation
