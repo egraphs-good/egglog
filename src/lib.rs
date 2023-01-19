@@ -278,7 +278,7 @@ impl EGraph {
                         if log {
                             log::error!("Check failed");
                             // the check failed, so print out some useful info
-                            self.rebuild();
+                            self.rebuild()?;
                             for (_t, value) in &values {
                                 if let Some((_tag, id)) = self.value_to_id(*value) {
                                     let best = self.extract(*value).1;
@@ -307,11 +307,20 @@ impl EGraph {
         self.unionfind.find(id)
     }
 
-    pub fn rebuild(&mut self) -> usize {
+    pub fn rebuild_nofail(&mut self) -> usize {
+        match self.rebuild() {
+            Ok(updates) => updates,
+            Err(e) => {
+                panic!("Unsoundness detected during rebuild. Exiting: {e}")
+            }
+        }
+    }
+
+    pub fn rebuild(&mut self) -> Result<usize, Error> {
         self.unionfind.clear_recent_ids();
         let mut updates = 0;
         loop {
-            let new = self.rebuild_one();
+            let new = self.rebuild_one()?;
             log::debug!("{new} rebuilds?");
             self.unionfind.clear_recent_ids();
             updates += new;
@@ -320,15 +329,45 @@ impl EGraph {
             }
         }
         self.debug_assert_invariants();
-        updates
+        Ok(updates)
     }
 
-    fn rebuild_one(&mut self) -> usize {
+    fn rebuild_one(&mut self) -> Result<usize, Error> {
         let mut new_unions = 0;
+        let mut deferred_merges = Vec::new();
         for function in self.functions.values_mut() {
-            new_unions += function.rebuild(&mut self.unionfind, self.timestamp);
+            let (unions, merges) = function.rebuild(&mut self.unionfind, self.timestamp)?;
+            if !merges.is_empty() {
+                deferred_merges.push((function.decl.name, merges));
+            }
+            new_unions += unions;
         }
-        new_unions
+        for (func, merges) in deferred_merges {
+            new_unions += self.apply_merges(func, &merges);
+        }
+        Ok(new_unions)
+    }
+
+    fn apply_merges(&mut self, func: Symbol, merges: &[DeferredMerge]) -> usize {
+        let mut stack = Vec::new();
+        let mut function = self.functions.get_mut(&func).unwrap();
+        let n_unions = self.unionfind.n_unions();
+        let prog = match &function.merge {
+            MergeFn::Expr(e) => e.clone(),
+            MergeFn::AssertEq | MergeFn::Union => {
+                panic!("the only kind of deferred merge supported is 'Expr'")
+            }
+        };
+        for (inputs, old, new) in merges {
+            // TODO: error handling?
+            self.run_actions(&mut stack, &[*old, *new], &prog, true)
+                .unwrap();
+            let merged = stack.pop().expect("merges should produce a value");
+            stack.clear();
+            function = self.functions.get_mut(&func).unwrap();
+            function.insert(inputs, merged, self.timestamp);
+        }
+        self.unionfind.n_unions() - n_unions + function.clear_updates()
     }
 
     pub fn declare_sort(
@@ -456,7 +495,7 @@ impl EGraph {
         // we might have to do a rebuild before starting,
         // because the use can manually do stuff
         let initial_rebuild_start = Instant::now();
-        self.rebuild();
+        self.rebuild_nofail();
         let mut rebuild_time = initial_rebuild_start.elapsed();
 
         for i in 0..*limit {
@@ -466,7 +505,7 @@ impl EGraph {
             apply_time += at;
 
             let rebuild_start = Instant::now();
-            let updates = self.rebuild();
+            let updates = self.rebuild_nofail();
             log::debug!("database size: {}", self.num_tuples());
             log::debug!("Made {updates} updates (iteration {i})");
             rebuild_time += rebuild_start.elapsed();
@@ -924,6 +963,25 @@ impl EGraph {
                 self.eval_actions(&actions)?;
                 format!("Read {} facts into {name} from '{file}'.", actions.len())
             }
+            Command::Output { file, exprs } => {
+                let mut filename = self.fact_directory.clone().unwrap_or_default();
+                filename.push(file.as_str());
+                // append to file
+                let mut f = File::options()
+                    .write(true)
+                    .append(true)
+                    .create(true)
+                    .open(&filename)
+                    .map_err(|e| Error::IoError(filename.clone(), e))?;
+
+                for expr in exprs {
+                    use std::io::Write;
+                    let (_cost, expr, _exprs) = self.extract_expr(expr, 1)?;
+                    writeln!(f, "{expr}").map_err(|e| Error::IoError(filename.clone(), e))?;
+                }
+
+                format!("Output to '{filename:?}'.")
+            }
         })
     }
 
@@ -997,13 +1055,13 @@ impl EGraph {
         e: Expr,
         variants: usize,
     ) -> Result<(usize, Expr, Vec<Expr>), Error> {
-        self.rebuild();
+        self.rebuild()?;
         let (_t, value) = self.eval_expr(&e, None, true)?;
         let (cost, expr) = self.extract(value);
-        let exprs = if variants > 0 {
-            self.extract_variants(value, variants)
-        } else {
-            vec![]
+        let exprs = match variants {
+            0 => vec![],
+            1 => vec![expr.clone()],
+            _ => self.extract_variants(value, variants),
         };
         Ok((cost, expr, exprs))
     }
@@ -1096,6 +1154,8 @@ pub enum Error {
     TypeErrors(Vec<TypeError>),
     #[error("Check failed: {0:?} != {1:?}")]
     CheckError(Value, Value),
+    #[error("Illegal merge attempted for function {0}, {1:?} != {2:?}")]
+    MergeError(Symbol, Value, Value),
     #[error("Sort {0} already declared.")]
     SortAlreadyBound(Symbol),
     #[error("Presort {0} not found.")]
@@ -1104,4 +1164,6 @@ pub enum Error {
     Pop,
     #[error("Command should have failed.")]
     ExpectFail,
+    #[error("IO error: {0}: {1}")]
+    IoError(PathBuf, std::io::Error),
 }

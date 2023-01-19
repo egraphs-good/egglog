@@ -19,6 +19,11 @@ Also see papers about egglog.
 See also the Python binding, which provides a bit more documentation:
 https://egg-smol-python.readthedocs.io/en/latest/
 
+## Chat
+
+There is a Zulip chat about egg-smol here:
+https://egraphs.zulipchat.com/#narrow/stream/328979-Implementation/topic/Eggsmol
+
 ## Prerequisites & compilation
 
 ```
@@ -30,20 +35,43 @@ make all
 ## Usage
 
 ```
-target/debug/egg-smol [-f fact-path] [-naive] <files.egg>
+cargo run [-f fact-path] [-naive] <files.egg>
 ```
 
 or just
 
 ```
-target/debug/egg-smol
+cargo run
 ```
 
 for the REPL.
 
+## VS Code plugin
+
+There is a VS Code extension in the vscode folder. Install using 'Install from VSIX...' in the three-dot menu of the extensions tab and pick npm install -g @vscode/vscode/eggsmol.vsix`.
+
+### Enhancing the VS code extension
+
+If you want to hack on the VS Code extension, install nodejs, and make your changes in the files in the `vscode/eggsmol-1.0.0` folder.
+
+Then run
+
+```
+code vscode/eggsmol-1.0.0
+```
+
+and use F5 to run the extension in a new window. When satisfied, then install VSCE if you do not already have it:
+
+```
+npm install -g @vscode/vsce
+```
+
+Run `vsce package` in the `vscode/eggsmol-1.0.0` folder to reconstruct the .vsix file and install it manually.
+
 # Syntax
 
 The syntax of the .egg files is defined in `src/ast/parse.lalrpop`.
+
 ## Commands
 
 ### `datatype` command
@@ -253,15 +281,16 @@ prints
 
 ```
     ( sort <name:Ident> ( <head:Ident> <tail:(Expr)*> ) )
-    ( run <limit:UNum>  <until:(:until <Fact>)?> )
-    ( clear-rules )
-    ( clear )
+    ( run <limit:UNum>  <until:(:until <Fact>)?> )  ; evaluate rules N steps or until a condition is met
+    ( clear-rules )                         
+    ( clear )                               
     ( query <List<Fact>> )
-    ( push <UNum?> )
-    ( pop <UNum?> )
-    ( print <sym:Ident> <n:UNum?> )
+    ( push <UNum?> )                        ; saves the state of the database on the stack
+    ( pop <UNum?> )                         ; restores the state of the database on the stack
+    ( print <sym:Ident> <n:UNum?> )         ; print the value of an id
     ( print-size <sym:Ident> )
     ( input <name:Ident> <file:String> )
+    ( output <file:String> <exprs:Expr+> )  ; Saves the expression to a file
     ( include <file:String> )
     ( calc ( <idents:IdentSort*> ) <exprs:Expr+> )
 ```
