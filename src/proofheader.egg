@@ -1,0 +1,47 @@
+(datatype ProofList__)
+(datatype Ast__)
+
+;; There are two types of proofs:
+;; 1) Provenance proofs justify the existance of a term 
+;; 2) Equality proofs prove two terms are equal 
+;; Equality proofs `a = b` also double as
+;; provenance proofs `a` and `b`
+;; When a proof `a = b` is used as a provenance proof, it is a proof of `b`
+(datatype Proof__
+  ;; proves that a term exists in the database
+  (Original__ Ast__)
+  ;; justifies the fact that a rule fired
+  (Rule__ ProofList__ String)
+  ;; using a rule justification,
+  ;; proves a term exists
+  (RuleTerm__ Proof__ Ast__)
+  ;; using a rule justification, proves two terms are equal
+  (RuleEquality__ Proof__ Ast__ Ast__)
+
+  ;; given proofs for x1 = x2, x2 = x3, ..., xn = xn+1
+  ;; proves that x1 = xn+1 and x1 and xn+1 exist
+  (Transitivity__ ProofList__)
+  ;; given x1 = x2, proves x2 = x1
+  (Flip__ Proof__)
+  ;; given a proof for a term t1, proves that t1 is equal
+  ;; to another term t2 via equality proofs on their children
+  (Congruence__ Proof__ ProofList__)
+  ;; a placeholder for a proof of equality between two
+  ;; terms which can be proven equal using the graph
+  ;; stored in the `Eq` relation
+  (DemandEq__ Ast__ Ast__ :cost 10000000))
+
+;; ProofList definitions
+(function Cons__ (Proof__ ProofList__) ProofList__)
+(function Null__ () ProofList__)
+
+;; prove two terms equal
+(function EqGraph__ (Ast__ Ast__) Proof__  :cost 100000 :merge old)
+
+(datatype TrmPrf__
+  (MakeTrmPrf__ Ast__ Proof__))
+
+;; get child terms, proofs, and child terms
+(function TrmOf__ (TrmPrf__) Ast__ :cost 10000)
+(function PrfOf__ (TrmPrf__) Proof__ :cost 100000)
+(function GetChild__ (Ast__ i64) Ast__ :cost 100000)
