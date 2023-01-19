@@ -19,7 +19,13 @@ fn run(path: &Path) -> datatest_stable::Result<()> {
     test_program(&program, "Top level error");
 
     let egraph = EGraph::default();
-    let program_str = egraph.parse_program(&program).unwrap().into_iter().map(|x| x.to_string()).collect::<Vec<String>>().join("\n");
+    let program_str = egraph
+        .parse_program(&program)
+        .unwrap()
+        .into_iter()
+        .map(|x| x.to_string())
+        .collect::<Vec<String>>()
+        .join("\n");
     //println!("{}", program_str);
     test_program(&program_str, "Error after parse, to_string, and parse");
 
