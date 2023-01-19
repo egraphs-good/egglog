@@ -316,8 +316,13 @@ impl FunctionDecl {
         let mut res = vec![
             Sexp::String("function".into()),
             Sexp::String(self.name.to_string()),
-            self.schema.to_sexp(),
         ];
+
+        if let Sexp::List(contents) = self.schema.to_sexp() {
+            res.extend(contents);
+        } else {
+            unreachable!();
+        }
 
         if let Some(cost) = self.cost {
             res.push(Sexp::List(vec![
@@ -444,8 +449,8 @@ impl Rule {
     pub(crate) fn to_sexp(&self) -> Sexp {
         Sexp::List(vec![
             Sexp::String("rule".into()),
-            Sexp::List(self.head.iter().map(|a| a.to_sexp()).collect()),
             Sexp::List(self.body.iter().map(|f| f.to_sexp()).collect()),
+            Sexp::List(self.head.iter().map(|a| a.to_sexp()).collect()),
         ])
     }
 }

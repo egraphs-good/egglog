@@ -726,22 +726,6 @@ impl EGraph {
         self.rules.extend(self.rulesets.get(&name).unwrap().clone());
     }
 
-    pub fn add_rewrite(&mut self, rewrite: ast::Rewrite) -> Result<Symbol, Error> {
-        let mut name = format!("{} -> {}", rewrite.lhs, rewrite.rhs);
-        if !rewrite.conditions.is_empty() {
-            write!(name, " if {}", ListDisplay(&rewrite.conditions, ", ")).unwrap();
-        }
-        let var = Symbol::from("__rewrite_var");
-        let rule = ast::Rule {
-            body: [Fact::Eq(vec![Expr::Var(var), rewrite.lhs])]
-                .into_iter()
-                .chain(rewrite.conditions)
-                .collect(),
-            head: vec![Action::Union(Expr::Var(var), rewrite.rhs)],
-        };
-        self.add_rule_with_name(name, rule)
-    }
-
     pub fn eval_actions(&mut self, actions: &[Action]) -> Result<(), Error> {
         let types = Default::default();
         let program = self
@@ -795,19 +779,10 @@ impl EGraph {
                 format!("Declared rule {name}.")
             }
             Command::Rewrite(rewrite) => {
-                let name = self.add_rewrite(rewrite)?;
-                format!("Declared rw {name}.")
+                panic!("Rewrite should have been desugared");
             }
             Command::BiRewrite(rewrite) => {
-                let rw2 = rewrite.clone();
-                let _name = self.add_rewrite(rewrite)?;
-                let rewrite = Rewrite {
-                    lhs: rw2.rhs,
-                    rhs: rw2.lhs,
-                    conditions: rw2.conditions,
-                };
-                let name = self.add_rewrite(rewrite)?;
-                format!("Declared bi-rw {name}.")
+                panic!("Birewrite should have been desugared");
             }
             Command::Run(config) => {
                 let limit = config.limit;
@@ -1154,9 +1129,10 @@ impl EGraph {
     fn run_program(&mut self, program: Vec<Command>) -> Result<Vec<String>, Error> {
         let mut msgs = vec![];
         let should_run = true;
-        let with_proofs = add_proofs(&self, program);
+        let with_proofs = add_proofs(&self, program.clone());
+        //println!("{}", ListDisplay(program.clone(), "\n"));
 
-        for command in with_proofs {
+        for command in program {
             let msg = self.run_command(command, should_run)?;
             log::info!("{}", msg);
             msgs.push(msg);
