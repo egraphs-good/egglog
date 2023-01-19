@@ -1,8 +1,8 @@
 use crate::*;
 
 fn proof_header(egraph: &EGraph) -> Vec<Command> {
-  let str = include_str!("../tests/proofheader.egg");
-  egraph.parse_program(str).unwrap()
+    let str = include_str!("../tests/proofheader.egg");
+    egraph.parse_program(str).unwrap()
 }
 
 fn make_ast_version(egraph: &EGraph, name: &Symbol) -> Symbol {
@@ -44,16 +44,16 @@ pub(crate) fn add_proofs(egraph: &EGraph, program: Vec<Command>) -> Vec<Command>
                 panic!("Datatype should have been desugared");
             }
             Command::Sort(name, presort_and_args) => {
-              res.push(command.clone());
-              res.push(Command::Sort(
-                  make_ast_version(egraph, name),
-                  presort_and_args.clone(),
-              ));
+                res.push(command.clone());
+                res.push(Command::Sort(
+                    make_ast_version(egraph, name),
+                    presort_and_args.clone(),
+                ));
             }
             Command::Function(fdecl) => {
-              res.push(command.clone());
-              res.push(Command::Function(make_ast_func(egraph, fdecl)));
-              //res.push(Command::Function(make_rep_func(egraph, fdecl)));
+                res.push(command.clone());
+                res.push(Command::Function(make_ast_func(egraph, fdecl)));
+                //res.push(Command::Function(make_rep_func(egraph, fdecl)));
             }
             _ => res.push(command),
         }

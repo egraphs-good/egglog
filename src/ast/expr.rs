@@ -89,6 +89,19 @@ impl Expr {
         let ts = self.children().iter().map(|child| child.fold(f)).collect();
         f(self, ts)
     }
+
+    pub(crate) fn to_sexp(&self) -> Sexp {
+        match self {
+            Expr::Lit(lit) => Sexp::String(lit.to_string()),
+            Expr::Var(v) => Sexp::String(v.to_string()),
+            Expr::Call(op, children) => Sexp::List(
+                vec![Sexp::String(op.to_string())]
+                    .into_iter()
+                    .chain(children.iter().map(|c| c.to_sexp()))
+                    .collect(),
+            ),
+        }
+    }
 }
 
 impl Display for Expr {

@@ -23,7 +23,7 @@ use symbolic_expressions::Sexp;
 
 use ast::*;
 
-use std::fmt::{Display, Formatter, Write};
+use std::fmt::{Formatter, Write};
 use std::fs::File;
 use std::hash::Hash;
 use std::io::Read;
@@ -1182,7 +1182,6 @@ impl EGraph {
             .map_err(|e| e.map_token(|tok| tok.to_string()))?;
         Ok(desugar_program(program))
     }
-    
 
     pub fn parse_and_run_program(&mut self, input: &str) -> Result<Vec<String>, Error> {
         let program = self.parse_program(input)?;

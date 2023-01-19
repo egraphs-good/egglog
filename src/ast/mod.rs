@@ -88,15 +88,13 @@ pub enum Command {
 impl Command {
     fn to_sexp(&self) -> Sexp {
         match self {
-            Command::Datatype { name, variants } => Sexp::List(
-                vec![
-                    Sexp::String("datatype".into()),
-                    Sexp::String(name.to_string()),
-                ]
-                .into_iter()
-                .chain(variants.iter().map(|v| v.to_sexp()))
-                .collect(),
-            ),
+            Command::Rewrite(_) | Command::BiRewrite(_) => {
+                panic!("Rewrites should be desugared before printing");
+            }
+            Command::Datatype { name, variants } => {
+                panic!("Datatypes should be desugared before printing");
+            }
+            Command::Action(a) => a.to_sexp(),
             Command::Sort(name, None) => Sexp::List(vec![
                 Sexp::String("sort".into()),
                 Sexp::String(name.to_string()),
@@ -107,11 +105,105 @@ impl Command {
                 Sexp::List(
                     vec![Sexp::String(name2.to_string())]
                         .into_iter()
-                        .chain(args.iter().map(|e| panic!("TODO"))).collect()
+                        .chain(args.iter().map(|e| e.to_sexp()))
+                        .collect(),
                 ),
             ]),
+            Command::Function(f) => f.to_sexp(),
+            Command::Rule(r) => r.to_sexp(),
+            Command::Define { name, expr, cost } => {
+                let mut res = vec![
+                    Sexp::String("define".into()),
+                    Sexp::String(name.to_string()),
+                    expr.to_sexp(),
+                ];
+                if let Some(cost) = cost {
+                    res.push(Sexp::String(":cost".into()));
+                    res.push(Sexp::String(cost.to_string()));
+                }
 
-            _ => panic!("TODO"),
+                Sexp::List(res)
+            }
+            Command::Run(limit) => {
+                let mut res = vec![
+                    Sexp::String("run".into()),
+                    Sexp::String(limit.limit.to_string()),
+                ];
+                if let Some(until) = &limit.until {
+                    res.push(Sexp::String(":until".into()));
+                    res.push(until.to_sexp());
+                }
+
+                Sexp::List(res)
+            }
+            Command::AddRuleset(name) => Sexp::List(vec![
+                Sexp::String("add-ruleset".into()),
+                Sexp::String(name.to_string()),
+            ]),
+            Command::LoadRuleset(name) => Sexp::List(vec![
+                Sexp::String("load-ruleset".into()),
+                Sexp::String(name.to_string()),
+            ]),
+            Command::Calc(args, exprs) => Sexp::List(
+                vec![
+                    Sexp::String("calc".into()),
+                    Sexp::List(args.iter().map(|arg| arg.to_sexp()).collect()),
+                ]
+                .into_iter()
+                .chain(exprs.iter().map(|e| e.to_sexp()))
+                .collect(),
+            ),
+            Command::Extract { variants, e } => Sexp::List(vec![
+                Sexp::String("extract".into()),
+                Sexp::String(":variants".into()),
+                Sexp::String(variants.to_string()),
+                e.to_sexp(),
+            ]),
+            Command::Check(fact) => Sexp::List(vec![Sexp::String("check".into()), fact.to_sexp()]),
+            Command::ClearRules => Sexp::List(vec![Sexp::String("clear-rules".into())]),
+            Command::Clear => Sexp::List(vec![Sexp::String("clear".into())]),
+            Command::Query(facts) => Sexp::List(
+                vec![Sexp::String("query".into())]
+                    .into_iter()
+                    .chain(facts.iter().map(|f| f.to_sexp()))
+                    .collect(),
+            ),
+            Command::Push(n) => Sexp::List(vec![
+                Sexp::String("push".into()),
+                Sexp::String(n.to_string()),
+            ]),
+            Command::Pop(n) => Sexp::List(vec![
+                Sexp::String("pop".into()),
+                Sexp::String(n.to_string()),
+            ]),
+            Command::Print(name, n) => Sexp::List(vec![
+                Sexp::String("print".into()),
+                Sexp::String(name.to_string()),
+                Sexp::String(n.to_string()),
+            ]),
+            Command::PrintSize(name) => Sexp::List(vec![
+                Sexp::String("print-size".into()),
+                Sexp::String(name.to_string()),
+            ]),
+            Command::Input { name, file } => Sexp::List(vec![
+                Sexp::String("input".into()),
+                Sexp::String(name.to_string()),
+                Sexp::String(file.to_string()),
+            ]),
+            Command::Output { file, exprs } => Sexp::List(
+                vec![
+                    Sexp::String("output".into()),
+                    Sexp::String(file.to_string()),
+                ]
+                .into_iter()
+                .chain(exprs.iter().map(|e| e.to_sexp()))
+                .collect(),
+            ),
+            Command::Fail(cmd) => Sexp::List(vec![Sexp::String("fail".into()), cmd.to_sexp()]),
+            Command::Include(file) => Sexp::List(vec![
+                Sexp::String("include".into()),
+                Sexp::String(file.to_string()),
+            ]),
         }
     }
 }
@@ -128,9 +220,18 @@ pub struct IdentSort {
     pub sort: Symbol,
 }
 
+impl IdentSort {
+    fn to_sexp(&self) -> Sexp {
+        Sexp::List(vec![
+            Sexp::String(self.ident.to_string()),
+            Sexp::String(self.sort.to_string()),
+        ])
+    }
+}
+
 impl Display for IdentSort {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "({} {})", self.ident, self.sort)
+        write!(f, "{}", self.to_sexp())
     }
 }
 
@@ -182,6 +283,20 @@ pub struct Schema {
     pub output: Symbol,
 }
 
+impl Schema {
+    pub(crate) fn to_sexp(&self) -> Sexp {
+        Sexp::List(vec![
+            Sexp::List(
+                self.input
+                    .iter()
+                    .map(|s| Sexp::String(s.to_string()))
+                    .collect(),
+            ),
+            Sexp::String(self.output.to_string()),
+        ])
+    }
+}
+
 impl FunctionDecl {
     pub fn relation(name: Symbol, input: Vec<Symbol>) -> Self {
         Self {
@@ -196,6 +311,40 @@ impl FunctionDecl {
             cost: None,
         }
     }
+
+    fn to_sexp(&self) -> Sexp {
+        let mut res = vec![
+            Sexp::String("function".into()),
+            Sexp::String(self.name.to_string()),
+            self.schema.to_sexp(),
+        ];
+
+        if let Some(cost) = self.cost {
+            res.push(Sexp::List(vec![
+                Sexp::String(":cost".into()),
+                Sexp::String(cost.to_string()),
+            ]));
+        }
+
+        if self.merge_action.len() > 0 {
+            res.push(Sexp::String(":merge-action".into()));
+            res.push(Sexp::List(
+                self.merge_action.iter().map(|a| a.to_sexp()).collect(),
+            ));
+        }
+
+        if let Some(merge) = &self.merge {
+            res.push(Sexp::String(":merge".into()));
+            res.push(merge.to_sexp());
+        }
+
+        if let Some(default) = &self.default {
+            res.push(Sexp::String(":default".into()));
+            res.push(default.to_sexp());
+        }
+
+        Sexp::List(res)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -205,12 +354,23 @@ pub enum Fact {
     Fact(Expr),
 }
 
+impl Fact {
+    pub(crate) fn to_sexp(&self) -> Sexp {
+        match self {
+            Fact::Eq(exprs) => Sexp::List(
+                vec![Sexp::String("=".into())]
+                    .into_iter()
+                    .chain(exprs.iter().map(|e| e.to_sexp()))
+                    .collect(),
+            ),
+            Fact::Fact(expr) => expr.to_sexp(),
+        }
+    }
+}
+
 impl Display for Fact {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Fact::Eq(exprs) => write!(f, "(= {})", ListDisplay(exprs, " ")),
-            Fact::Fact(e) => Display::fmt(e, f),
-        }
+        write!(f, "{}", self.to_sexp())
     }
 }
 
@@ -225,19 +385,50 @@ pub enum Action {
     // If(Expr, Action, Action),
 }
 
+impl Action {
+    pub(crate) fn to_sexp(&self) -> Sexp {
+        match self {
+            Action::Let(lhs, rhs) => Sexp::List(vec![
+                Sexp::String("let".into()),
+                Sexp::String(lhs.to_string()),
+                rhs.to_sexp(),
+            ]),
+            Action::Set(lhs, args, rhs) => Sexp::List(vec![
+                Sexp::String("set".into()),
+                Sexp::List(
+                    vec![Sexp::String(lhs.to_string())]
+                        .into_iter()
+                        .chain(args.iter().map(|e| e.to_sexp()))
+                        .collect(),
+                ),
+                rhs.to_sexp(),
+            ]),
+            Action::Union(lhs, rhs) => Sexp::List(vec![
+                Sexp::String("union".into()),
+                lhs.to_sexp(),
+                rhs.to_sexp(),
+            ]),
+            Action::Delete(lhs, args) => Sexp::List(vec![
+                Sexp::String("delete".into()),
+                Sexp::List(
+                    vec![Sexp::String(lhs.to_string())]
+                        .into_iter()
+                        .chain(args.iter().map(|e| e.to_sexp()))
+                        .collect(),
+                ),
+            ]),
+            Action::Panic(msg) => Sexp::List(vec![
+                Sexp::String("panic".into()),
+                Sexp::String(msg.clone()),
+            ]),
+            Action::Expr(e) => e.to_sexp(),
+        }
+    }
+}
+
 impl Display for Action {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Action::Let(lhs, rhs) => write!(f, "(define {} {})", lhs, rhs),
-            Action::Set(lhs, args, rhs) => {
-                write!(f, "(set ({} {}) {})", lhs, ListDisplay(args, " "), rhs)
-            }
-            Action::Union(lhs, rhs) => write!(f, "(union {} {})", lhs, rhs),
-            Action::Panic(msg) => write!(f, "(panic {})", msg),
-            Action::Expr(e) => Display::fmt(e, f),
-            Action::Delete(sym, args) => write!(f, "(delete ({} {}))", sym, ListDisplay(args, " ")),
-            // Action::If(cond, then, else_) => write!(f, "(if {} {} {})", cond, then, else_),
-        }
+        write!(f, "{}", self.to_sexp())
     }
 }
 
@@ -249,14 +440,19 @@ pub struct Rule {
     pub body: Vec<Fact>,
 }
 
+impl Rule {
+    pub(crate) fn to_sexp(&self) -> Sexp {
+        Sexp::List(vec![
+            Sexp::String("rule".into()),
+            Sexp::List(self.head.iter().map(|a| a.to_sexp()).collect()),
+            Sexp::List(self.body.iter().map(|f| f.to_sexp()).collect()),
+        ])
+    }
+}
+
 impl Display for Rule {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{} ==> {}",
-            ListDisplay(&self.body, " "),
-            ListDisplay(&self.head, " ")
-        )
+        write!(f, "{}", self.to_sexp())
     }
 }
 
