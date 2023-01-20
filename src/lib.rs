@@ -1160,7 +1160,7 @@ impl EGraph {
 
         println!("{}", ListDisplay(program.clone(), "\n"));
 
-        for command in with_proofs {
+        for command in program {
             let msg = self.run_command(command, should_run)?;
             log::info!("{}", msg);
             msgs.push(msg);
