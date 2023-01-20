@@ -216,7 +216,7 @@
 (add-ruleset proof-rules)
 (clear-rules)
 
-;; Silly function since the proofs are relations
+;; Silly function to get the proof
 (function GetProof (AstMath) Proof :cost 1000000000)
 (rule ((= tp (AddRep a b))
        (= term (TrmOf tp))

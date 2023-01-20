@@ -56,27 +56,31 @@ fn merge_action(egraph: &EGraph, fdecl: &FunctionDecl) -> Vec<Action> {
         ]);
     }
 
-
     vec![
         "(let t1 (TrmOf__ old))".to_string(),
         "(let t2 (TrmOf__ new))".to_string(),
         "(let p1 (PrfOf__ old))".to_string(),
-    ].into_iter()
+    ]
+    .into_iter()
     .chain(fdecl.schema.input.iter().enumerate().flat_map(|(i, sort)| {
         vec![
             format!("(let {} (GetChild__ t1 {}))", child1(i), i),
             format!("(let {} (GetChild__ t2 {}))", child2(i), i),
         ]
     }))
-    .chain(
-        vec![
-            format!("(let congr_prf__ (Congruence__ p1 {}))", congr_prf),
-            "(set (EqGraph__ t1 t2) congr_prf__)".to_string(),
-            "(set (EqGraph__ t2 t1) (Flip__ congr_prf__))".to_string(),
-        ]
-    )
-    .map(|s| egraph.actionParser.parse(&s).unwrap())
+    .chain(vec![
+        format!("(let congr_prf__ (Congruence__ p1 {}))", congr_prf),
+        "(set (EqGraph__ t1 t2) congr_prf__)".to_string(),
+        "(set (EqGraph__ t2 t1) (Flip__ congr_prf__))".to_string(),
+    ])
+    .map(|s| egraph.action_parser.parse(&s).unwrap())
     .collect()
+}
+
+fn instrument_rule(_egraph: &EGraph, rule: &Rule) -> Rule {
+    let res = rule.clone();
+    // res.head.extend();
+    res
 }
 
 fn make_rep_func(egraph: &EGraph, fdecl: &FunctionDecl) -> FunctionDecl {
@@ -115,6 +119,9 @@ pub(crate) fn add_proofs(egraph: &EGraph, program: Vec<Command>) -> Vec<Command>
                 res.push(command.clone());
                 res.push(Command::Function(make_ast_func(egraph, fdecl)));
                 res.push(Command::Function(make_rep_func(egraph, fdecl)));
+            }
+            Command::Rule(rule) => {
+                res.push(Command::Rule(instrument_rule(egraph, &rule)));
             }
             _ => res.push(command),
         }

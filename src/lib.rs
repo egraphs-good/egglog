@@ -134,7 +134,7 @@ pub struct EGraph {
     timestamp: u32,
     unit_sym: Symbol,
     parser: ast::parse::ProgramParser,
-    actionParser: ast::parse::ActionParser,
+    action_parser: ast::parse::ActionParser,
     pub match_limit: usize,
     pub node_limit: usize,
     pub fact_directory: Option<PathBuf>,
@@ -156,7 +156,7 @@ impl Clone for EGraph {
             timestamp: self.timestamp,
             unit_sym: self.unit_sym.clone(),
             parser: ast::parse::ProgramParser::new(),
-            actionParser: ast::parse::ActionParser::new(),
+            action_parser: ast::parse::ActionParser::new(),
             match_limit: self.match_limit,
             node_limit: self.node_limit,
             fact_directory: self.fact_directory.clone(),
@@ -191,7 +191,7 @@ impl Default for EGraph {
             presorts: Default::default(),
             unit_sym,
             parser: ast::parse::ProgramParser::new(),
-            actionParser: ast::parse::ActionParser::new(),
+            action_parser: ast::parse::ActionParser::new(),
             match_limit: 10_000_000,
             node_limit: 100_000_000,
             timestamp: 0,
@@ -1157,8 +1157,8 @@ impl EGraph {
         let mut msgs = vec![];
         let should_run = true;
         let with_proofs = add_proofs(&self, program.clone());
-        
-        println!("{}", ListDisplay(with_proofs.clone(), "\n"));
+
+        println!("{}", ListDisplay(program.clone(), "\n"));
 
         for command in with_proofs {
             let msg = self.run_command(command, should_run)?;

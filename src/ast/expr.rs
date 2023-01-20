@@ -54,6 +54,8 @@ impl Display for Literal {
     }
 }
 
+// after flattening, exprs do not have nested
+// calls
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
 pub enum Expr {
     Lit(Literal),

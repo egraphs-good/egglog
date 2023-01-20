@@ -336,6 +336,9 @@ impl FunctionDecl {
     }
 }
 
+// TODO make a new type for flattened facts
+// after flattening, they always have the form
+// var = expr
 #[derive(Clone, Debug)]
 pub enum Fact {
     /// Must be at least two things in an eq fact
