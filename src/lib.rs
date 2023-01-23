@@ -672,7 +672,9 @@ impl EGraph {
     fn add_rule_with_name(&mut self, name: String, rule: ast::Rule) -> Result<Symbol, Error> {
         let name = Symbol::from(name);
         let mut ctx = typecheck::Context::new(self);
-        let (query0, action0) = ctx.typecheck_query(&rule.body, &rule.head).map_err(Error::TypeErrors)?;
+        let (query0, action0) = ctx
+            .typecheck_query(&rule.body, &rule.head)
+            .map_err(Error::TypeErrors)?;
         let query = self.compile_gj_query(query0, &ctx.types);
         let program = self
             .compile_actions(&ctx.types, &action0)

@@ -130,7 +130,11 @@ impl<'a> Context<'a> {
         *entry.or_insert_with(|| self.unionfind.make_set())
     }
 
-    pub fn typecheck_query(&mut self, facts: &'a [Fact], actions: &'a [Action]) -> Result<(Query, Vec<Action>), Vec<TypeError>> {
+    pub fn typecheck_query(
+        &mut self,
+        facts: &'a [Fact],
+        actions: &'a [Action],
+    ) -> Result<(Query, Vec<Action>), Vec<TypeError>> {
         for fact in facts {
             self.typecheck_fact(fact);
         }
@@ -150,17 +154,15 @@ impl<'a> Context<'a> {
                         panic!("Duplicate literal: {:?} {:?}", expr, lit);
                     }
                 }
-                ENode::Var(var) => {
-                    match leaves.entry(id) {
-                        Entry::Occupied(existing) => {
-                            canon.insert(*var, existing.get().clone());   
-                        },
-                        Entry::Vacant(v) => {
-                            v.insert(Expr::Var(*var));
-                            canon.insert(*var, Expr::Var(*var));
-                        }
+                ENode::Var(var) => match leaves.entry(id) {
+                    Entry::Occupied(existing) => {
+                        canon.insert(*var, existing.get().clone());
                     }
-                }
+                    Entry::Vacant(v) => {
+                        v.insert(Expr::Var(*var));
+                        canon.insert(*var, Expr::Var(*var));
+                    }
+                },
                 _ => continue,
             }
         }

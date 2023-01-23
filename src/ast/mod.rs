@@ -17,7 +17,6 @@ use crate::*;
 
 mod expr;
 pub use expr::*;
-use typecheck::AtomTerm;
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct Id(usize);
@@ -417,23 +416,18 @@ impl Action {
 
     pub fn replace_canon(&self, canon: &HashMap<Symbol, Expr>) -> Self {
         match self {
-            Action::Let(lhs, rhs) => Action::Let(
-                lhs.clone(),
-                rhs.replace_canon(canon),
-            ),
+            Action::Let(lhs, rhs) => Action::Let(*lhs, rhs.replace_canon(canon)),
             Action::Set(lhs, args, rhs) => Action::Set(
-                lhs.clone(),
+                *lhs,
                 args.iter().map(|e| e.replace_canon(canon)).collect(),
                 rhs.replace_canon(canon),
             ),
-            Action::Delete(lhs, args) => Action::Delete(
-                lhs.clone(),
-                args.iter().map(|e| e.replace_canon(canon)).collect(),
-            ),
-            Action::Union(lhs, rhs) => Action::Union(
-                lhs.replace_canon(canon),
-                rhs.replace_canon(canon),
-            ),
+            Action::Delete(lhs, args) => {
+                Action::Delete(*lhs, args.iter().map(|e| e.replace_canon(canon)).collect())
+            }
+            Action::Union(lhs, rhs) => {
+                Action::Union(lhs.replace_canon(canon), rhs.replace_canon(canon))
+            }
             Action::Panic(msg) => Action::Panic(msg.clone()),
             Action::Expr(e) => Action::Expr(e.replace_canon(canon)),
         }
