@@ -1,0 +1,9 @@
+(datatype Nat
+    (Num i64))
+
+(rule ((= y 2))
+      ((Num y)))
+
+(Num 2)
+
+(run 100)
