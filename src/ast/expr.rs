@@ -2,6 +2,7 @@ use crate::*;
 use ordered_float::OrderedFloat;
 
 use std::fmt::Display;
+use typecheck::AtomTerm;
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
 pub enum Literal {
@@ -110,6 +111,19 @@ impl Expr {
             ),
         };
         res
+    }
+
+    pub fn replace_canon(&self, canon: &HashMap<Symbol, Expr>) -> Self {
+        match self {
+            Expr::Lit(lit) => self.clone(),
+            Expr::Var(v) => {
+                canon.get(v).cloned().unwrap_or(self.clone())
+            },
+            Expr::Call(op, children) => {
+                let children = children.iter().map(|c| c.replace_canon(canon)).collect();
+                Expr::Call(*op, children)
+            }
+        }
     }
 }
 

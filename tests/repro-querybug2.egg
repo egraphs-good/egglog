@@ -1,9 +1,15 @@
 (datatype Nat
-    (Num i64))
+    (Num i64)
+    (OtherNum i64))
+
+
 
 (rule ((= y 2))
-      ((Num y)))
+      ((union (OtherNum y) (Num y))))
 
 (Num 2)
 
+
 (run 100)
+
+(check (= (OtherNum 2) (Num 2)))
