@@ -150,8 +150,8 @@ impl<'a> Context<'a> {
             match node {
                 ENode::Literal(lit) => {
                     let old = leaves.insert(id, Expr::Lit(lit.clone()));
-                    if let Some(expr) = old {
-                        panic!("Duplicate literal: {:?} {:?}", expr, lit);
+                    if let Some(Expr::Lit(old_lit)) = old {
+                        panic!("Duplicate literal: {:?} {:?}", old_lit, lit);
                     }
                 }
                 ENode::Var(var) => match leaves.entry(id) {

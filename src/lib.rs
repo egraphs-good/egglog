@@ -1202,6 +1202,7 @@ impl EGraph {
 
     pub fn parse_and_run_program(&mut self, input: &str) -> Result<Vec<String>, Error> {
         let program = self.parse_program(input)?;
+        //println!("{}", ListDisplay(program.clone(), "\n"));
 
         self.run_program(program)
     }
