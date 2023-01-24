@@ -53,6 +53,7 @@ pub enum Command {
         cost: Option<usize>,
     },
     Rule(Rule),
+    FlatRule(FlatRule),
     Rewrite(Rewrite),
     BiRewrite(Rewrite),
     Action(Action),
@@ -114,6 +115,7 @@ impl Command {
             ]),
             Command::Function(f) => f.to_sexp(),
             Command::Rule(r) => r.to_sexp(),
+            Command::FlatRule(r) => r.to_rule().to_sexp(),
             Command::Define { name, expr, cost } => {
                 let mut res = vec![
                     Sexp::String("define".into()),
@@ -336,14 +338,28 @@ impl FunctionDecl {
     }
 }
 
-// TODO make a new type for flattened facts
-// after flattening, they always have the form
-// var = expr
 #[derive(Clone, Debug)]
 pub enum Fact {
     /// Must be at least two things in an eq fact
     Eq(Vec<Expr>),
     Fact(Expr),
+}
+
+#[derive(Clone, Debug)]
+pub struct FlatFact {
+    pub symbol: Symbol,
+    pub expr: FlatExpr,
+}
+
+impl FlatFact {
+    pub fn new(symbol: Symbol, expr: FlatExpr) -> Self {
+        Self { symbol, expr }
+    }
+
+    pub fn to_fact(&self) -> Fact {
+        Fact::Eq(vec![Expr::Var(self.symbol),
+                      self.expr.to_expr()])
+    }
 }
 
 impl Fact {
@@ -375,6 +391,33 @@ pub enum Action {
     Panic(String),
     Expr(Expr),
     // If(Expr, Action, Action),
+}
+
+#[derive(Clone, Debug)]
+pub enum FlatAction {
+    Let(Symbol, FlatExpr),
+    Set(Symbol, Vec<FlatExpr>, FlatExpr),
+    Delete(Symbol, Vec<FlatExpr>),
+    Union(FlatExpr, FlatExpr),
+    Panic(String),
+    Expr(FlatExpr),
+}
+
+impl FlatAction {
+    pub fn to_action(&self) -> Action {
+        match self {
+            FlatAction::Let(lhs, rhs) => Action::Let(lhs.clone(), rhs.to_expr()),
+            FlatAction::Set(lhs, args, rhs) => {
+                Action::Set(lhs.clone(), args.iter().map(|e| e.to_expr()).collect(), rhs.to_expr())
+            }
+            FlatAction::Delete(lhs, args) => {
+                Action::Delete(lhs.clone(), args.iter().map(|e| e.to_expr()).collect())
+            }
+            FlatAction::Union(lhs, rhs) => Action::Union(lhs.to_expr(), rhs.to_expr()),
+            FlatAction::Panic(msg) => Action::Panic(msg.clone()),
+            FlatAction::Expr(expr) => Action::Expr(expr.to_expr()),
+        }
+    }
 }
 
 impl Action {
@@ -449,6 +492,21 @@ pub struct Rule {
     // pub actions: Vec<Action>,
     pub head: Vec<Action>,
     pub body: Vec<Fact>,
+}
+
+#[derive(Clone, Debug)]
+pub struct FlatRule {
+    pub head: Vec<FlatAction>,
+    pub body: Vec<FlatFact>,
+}
+
+impl FlatRule {
+    pub fn to_rule(&self) -> Rule {
+        Rule {
+            head: self.head.iter().map(|a| a.to_action()).collect(),
+            body: self.body.iter().map(|f| f.to_fact()).collect(),
+        }
+    }
 }
 
 impl Rule {

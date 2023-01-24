@@ -54,14 +54,29 @@ impl Display for Literal {
     }
 }
 
-// after flattening, exprs do not have nested
-// calls
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
 pub enum Expr {
     Lit(Literal),
     Var(Symbol),
     // TODO make this its own type
     Call(Symbol, Vec<Self>),
+}
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
+pub enum FlatExpr {
+    Lit(Literal),
+    Var(Symbol),
+    Call(Symbol, Vec<Symbol>),
+}
+
+impl FlatExpr {
+    pub fn to_expr(&self) -> Expr {
+        match self {
+            FlatExpr::Lit(lit) => Expr::Lit(lit.clone()),
+            FlatExpr::Var(v) => Expr::Var(*v),
+            FlatExpr::Call(op, args) => Expr::Call(*op, args.into_iter().map(|a| Expr::Var(*a)).collect()),
+        }
+    }
 }
 
 impl Expr {

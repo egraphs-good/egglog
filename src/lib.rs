@@ -821,6 +821,9 @@ impl EGraph {
                 let name = self.add_rule(rule)?;
                 format!("Declared rule {name}.")
             }
+            Command::FlatRule(_) => {
+                todo!("Support flat rules and deprecate rule");
+            }
             Command::Rewrite(_rewrite) => {
                 panic!("Rewrite should have been desugared");
             }
@@ -1171,7 +1174,7 @@ impl EGraph {
         let should_run = true;
         let with_proofs = add_proofs(&self, program.clone());
 
-        //println!("{}", ListDisplay(program.clone(), "\n"));
+        println!("{}", ListDisplay(with_proofs.clone(), "\n"));
 
         for command in with_proofs {
             let msg = self.run_command(command, should_run)?;

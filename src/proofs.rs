@@ -62,7 +62,7 @@ fn merge_action(egraph: &EGraph, fdecl: &FunctionDecl) -> Vec<Action> {
         "(let p1 (PrfOf__ old))".to_string(),
     ]
     .into_iter()
-    .chain(fdecl.schema.input.iter().enumerate().flat_map(|(i, sort)| {
+    .chain(fdecl.schema.input.iter().enumerate().flat_map(|(i, _sort)| {
         vec![
             format!("(let {} (GetChild__ t1 {}))", child1(i), i),
             format!("(let {} (GetChild__ t2 {}))", child2(i), i),
@@ -77,10 +77,66 @@ fn merge_action(egraph: &EGraph, fdecl: &FunctionDecl) -> Vec<Action> {
     .collect()
 }
 
-fn instrument_rule(_egraph: &EGraph, rule: &Rule) -> Rule {
-    let res = rule.clone();
+fn instrument_rule(_egraph: &EGraph, rule: &FlatRule) -> FlatRule {
+    let mut varcount = 0;
+    let mut get_fresh = move || {
+        varcount += 1;
+        Symbol::from(format!("pvar{}__", varcount))
+    };
+
+    let mut facts = rule.body.clone();
+    // TODO make flat expessions only be calls
+    // contrain two variables to be equal
+    let mut var_eq_constraints = vec![];
+    // contrain a variable to be equal to a literal
+    let mut lit_constraints = vec![];
+    // all of the variables for the proofs of all of the representatives
+    let mut term_proofs = vec![];
+    // maps each variable to the variable representing a term
+    // these terms need to be proven to be equal for the proof to go through
+    let mut var_terms: HashMap<Symbol, Vec<Symbol>> = Default::default();
+
+    for fact in &rule.body {
+        match &fact.expr {
+            FlatExpr::Var(v) => var_eq_constraints.push((fact.symbol, v)),
+            FlatExpr::Lit(l) => lit_constraints.push((fact.symbol, l)),
+            FlatExpr::Call(head, body) => {
+                let rep = get_fresh();
+                let rep_trm = get_fresh();
+                let rep_prf = get_fresh();
+                facts.push(FlatFact::new(rep, FlatExpr::Call(make_rep_version(head), body.clone())));
+                facts.push(FlatFact::new(
+                    rep_trm,
+                    FlatExpr::Call("TrmOf__".into(), vec![rep]),
+                ));
+                facts.push(FlatFact::new(
+                    rep_prf,
+                    FlatExpr::Call("PrfOf__".into(), vec![rep]),
+                ));
+                term_proofs.push(rep_prf);
+
+                for (i, child) in body.iter().enumerate() {
+                    let child_trm = get_fresh();
+                    let const_var = get_fresh();
+                    facts.push(FlatFact::new(const_var,
+                                             FlatExpr::Lit(Literal::Int(i as i64))));
+                    facts.push(FlatFact::new(child_trm, FlatExpr::Call("GetChild__".into(), vec![rep_trm, const_var])));
+                    if let Some(vars) = var_terms.get_mut(child) {
+                        vars.push(child_trm);
+                    } else {
+                        var_terms.insert(child.clone(), vec![child_trm]);
+                    }
+                }
+            }
+        }
+    }
+    
+
     // res.head.extend();
-    res
+    FlatRule {
+        head: rule.head.clone(),
+        body: facts,
+    }
 }
 
 fn make_rep_func(egraph: &EGraph, fdecl: &FunctionDecl) -> FunctionDecl {
@@ -120,8 +176,12 @@ pub(crate) fn add_proofs(egraph: &EGraph, program: Vec<Command>) -> Vec<Command>
                 res.push(Command::Function(make_ast_func(egraph, fdecl)));
                 res.push(Command::Function(make_rep_func(egraph, fdecl)));
             }
-            Command::Rule(rule) => {
-                res.push(Command::Rule(instrument_rule(egraph, &rule)));
+            Command::Rule(_rule) => {
+                panic!("Rule should have been desugared");
+            }
+            Command::FlatRule(rule) => {
+                res.push(Command::Rule(rule.to_rule()));
+                //res.push(Command::Rule(instrument_rule(egraph, &rule).to_rule()));
             }
             _ => res.push(command),
         }
