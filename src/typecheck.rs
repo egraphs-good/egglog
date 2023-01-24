@@ -160,7 +160,6 @@ impl<'a> Context<'a> {
                     }
                     Entry::Vacant(v) => {
                         v.insert(Expr::Var(*var));
-                        canon.insert(*var, Expr::Var(*var));
                     }
                 },
                 _ => continue,
@@ -169,6 +168,9 @@ impl<'a> Context<'a> {
 
         // replace canonical things in the actions
         let res_actions = actions.iter().map(|a| a.replace_canon(&canon)).collect();
+        for (var, _expr) in canon {
+            self.types.remove(&var);
+        }
 
         let get_leaf = |id: &Id| -> AtomTerm {
             let mk = || AtomTerm::Var(Symbol::from(format!("?__{}", id)));

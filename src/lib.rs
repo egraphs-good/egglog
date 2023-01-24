@@ -633,33 +633,44 @@ impl EGraph {
         let apply_start = Instant::now();
         'outer: for (name, all_values) in searched {
             let rule = rules.get_mut(&name).unwrap();
-            let n = rule.query.vars.len();
+            let num_vars = rule.query.vars.len();
 
-            // backoff logic
-            let len = all_values.len() / n;
-            let threshold = self.match_limit << rule.times_banned;
-            if len > threshold {
-                let ban_length = ban_length << rule.times_banned;
-                rule.times_banned += 1;
-                rule.banned_until = iteration + ban_length;
-                log::info!("Banning rule {name} for {ban_length} iterations, matched {len} > {threshold} times");
-                self.saturated = false;
-                continue;
+            // the query doesn't require matches
+            if num_vars != 0 {
+                // backoff logic
+                let len = all_values.len() / num_vars;
+                let threshold = self.match_limit << rule.times_banned;
+                if len > threshold {
+                    let ban_length = ban_length << rule.times_banned;
+                    rule.times_banned += 1;
+                    rule.banned_until = iteration + ban_length;
+                    log::info!("Banning rule {name} for {ban_length} iterations, matched {len} > {threshold} times");
+                    self.saturated = false;
+                    continue;
+                }
             }
 
             rule.todo_timestamp = self.timestamp;
             let rule_apply_start = Instant::now();
 
             let stack = &mut vec![];
-            for values in all_values.chunks(n) {
+            // run one iteration when n == 0
+            if num_vars == 0 {
                 rule.matches += 1;
-                if rule.matches > 10_000_000 {
-                    log::warn!("Rule {} has matched {} times, bailing!", name, rule.matches);
-                    break 'outer;
-                }
                 // we can ignore results here
                 stack.clear();
-                let _ = self.run_actions(stack, values, &rule.program, true);
+                let _ = self.run_actions(stack, &[], &rule.program, true);
+            } else {
+                for values in all_values.chunks(num_vars) {
+                    rule.matches += 1;
+                    if rule.matches > 10_000_000 {
+                        log::warn!("Rule {} has matched {} times, bailing!", name, rule.matches);
+                        break 'outer;
+                    }
+                    // we can ignore results here
+                    stack.clear();
+                    let _ = self.run_actions(stack, values, &rule.program, true);
+                }
             }
 
             rule.apply_time += rule_apply_start.elapsed();
