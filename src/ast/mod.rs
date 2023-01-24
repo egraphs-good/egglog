@@ -316,7 +316,7 @@ impl FunctionDecl {
         }
 
         if !self.merge_action.is_empty() {
-            res.push(Sexp::String(":merge-action".into()));
+            res.push(Sexp::String(":on_merge".into()));
             res.push(Sexp::List(
                 self.merge_action.iter().map(|a| a.to_sexp()).collect(),
             ));

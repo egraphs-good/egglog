@@ -129,8 +129,8 @@
        (= tp (AddRep a b))
        (= lhs (TrmOf tp))
        (= proof (PrfOf tp))
-       (= c1 (Child1 term))
-       (= c2 (Child2 term)))
+       (= c1 (Child1 lhs))
+       (= c2 (Child2 lhs)))
       ((union (Add a b) (Add b a)) ;; normal rhs
        (let ruleprf (Rule (Cons proof
                                 (Null))
