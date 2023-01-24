@@ -130,7 +130,11 @@ impl<'a> Context<'a> {
         *entry.or_insert_with(|| self.unionfind.make_set())
     }
 
-    pub fn typecheck_query(&mut self, facts: &'a [Fact]) -> Result<Query, Vec<TypeError>> {
+    pub fn typecheck_query(
+        &mut self,
+        facts: &'a [Fact],
+        actions: &'a [Action],
+    ) -> Result<(Query, Vec<Action>), Vec<TypeError>> {
         for fact in facts {
             self.typecheck_fact(fact);
         }
@@ -139,26 +143,42 @@ impl<'a> Context<'a> {
         self.rebuild();
 
         // First find the canoncial version of each leaf
-        let mut leaves = HashMap::<Id, AtomTerm>::default();
+        let mut leaves = HashMap::<Id, Expr>::default();
+        let mut canon = HashMap::<Symbol, Expr>::default();
         for (node, &id) in &self.nodes {
             debug_assert_eq!(id, self.unionfind.find(id));
             match node {
                 ENode::Literal(lit) => {
-                    let old = leaves.insert(id, AtomTerm::Value(self.egraph.eval_lit(lit)));
-                    if let Some(AtomTerm::Value(old)) = old {
-                        panic!("Duplicate literal: {:?} {:?}", old, lit);
+                    let old = leaves.insert(id, Expr::Lit(lit.clone()));
+                    if let Some(expr) = old {
+                        panic!("Duplicate literal: {:?} {:?}", expr, lit);
                     }
                 }
-                ENode::Var(var) => {
-                    leaves.entry(id).or_insert_with(|| AtomTerm::Var(*var));
-                }
+                ENode::Var(var) => match leaves.entry(id) {
+                    Entry::Occupied(existing) => {
+                        canon.insert(*var, existing.get().clone());
+                    }
+                    Entry::Vacant(v) => {
+                        v.insert(Expr::Var(*var));
+                    }
+                },
                 _ => continue,
             }
         }
 
+        // replace canonical things in the actions
+        let res_actions = actions.iter().map(|a| a.replace_canon(&canon)).collect();
+        for (var, _expr) in canon {
+            self.types.remove(&var);
+        }
+
         let get_leaf = |id: &Id| -> AtomTerm {
             let mk = || AtomTerm::Var(Symbol::from(format!("?__{}", id)));
-            leaves.get(id).cloned().unwrap_or_else(mk)
+            match leaves.get(id) {
+                Some(Expr::Var(v)) => AtomTerm::Var(*v),
+                Some(Expr::Lit(l)) => AtomTerm::Value(self.egraph.eval_lit(l)),
+                _ => mk(),
+            }
         };
 
         let mut query = Query::default();
@@ -181,7 +201,7 @@ impl<'a> Context<'a> {
         }
 
         if self.errors.is_empty() {
-            Ok(query)
+            Ok((query, res_actions))
         } else {
             Err(self.errors.clone())
         }
