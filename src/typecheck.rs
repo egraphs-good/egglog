@@ -672,13 +672,13 @@ impl EGraph {
                                 function.insert(values, value, ts);
                                 value
                             }
-                            Some(_default) => {
-                                todo!("Handle default expr")
-                                // let default = default.clone(); // break the borrow
-                                // let value = self.eval_expr(ctx, &default)?;
-                                // let function = self.functions.get_mut(f).unwrap();
-                                // function.insert(values.to_vec(), value, ts);
-                                // Ok(value)
+                            Some(default) => {
+                                // TODO: this is not efficient due to cloning
+                                let out = out.clone();
+                                let default = default.clone();
+                                let (_, value) = self.eval_expr(&default, Some(out), true)?;
+                                self.functions.get_mut(f).unwrap().insert(values, value, ts);
+                                value
                             }
                             _ => panic!("invalid default for {:?}", function.decl.name),
                         }
