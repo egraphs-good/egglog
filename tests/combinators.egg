@@ -73,7 +73,7 @@
 (rewrite (CAbs v CIf) (CApp K CIf))
 (rewrite (CAbs v CAdd) (CApp K CAdd))
 (rewrite (CAbs v (CApp x y)) (CApp (CApp S (CAbs v x)) (CAbs v y)))
-; eta reduce ?
+; May be needed for multiple nested variables
 (rewrite (CAbs v (CApp K (CVar v))) K)
 
 ;;;; Primitive Evaluation rules (defined on "surface syntax")
