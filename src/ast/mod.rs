@@ -409,7 +409,9 @@ impl SSAAction {
     pub fn to_action(&self) -> Action {
         match self {
             SSAAction::Let(symbol, expr) => Action::Let(symbol.clone(), expr.to_expr()),
-            SSAAction::LetVar(symbol, other) => Action::Let(symbol.clone(), Expr::Var(other.clone())),
+            SSAAction::LetVar(symbol, other) => {
+                Action::Let(symbol.clone(), Expr::Var(other.clone()))
+            }
             SSAAction::LetLit(symbol, lit) => Action::Let(symbol.clone(), Expr::Lit(lit.clone())),
             SSAAction::Set(symbol, args, other) => Action::Set(
                 symbol.clone(),
@@ -514,6 +516,12 @@ impl FlatRule {
             head: self.head.iter().map(|a| a.to_action()).collect(),
             body: self.body.iter().map(|f| f.to_fact()).collect(),
         }
+    }
+}
+
+impl Display for FlatRule {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_rule())
     }
 }
 

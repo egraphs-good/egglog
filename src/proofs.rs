@@ -1,6 +1,6 @@
 use crate::*;
 
-use crate::desugar::Fresh;
+use crate::desugar::{make_ssa_again, Fresh};
 use symbolic_expressions::Sexp;
 
 fn proof_header(egraph: &EGraph) -> Vec<Command> {
@@ -10,9 +10,6 @@ fn proof_header(egraph: &EGraph) -> Vec<Command> {
 
 // make ast versions even for primitives
 fn make_ast_version(_egraph: &EGraph, name: &Symbol) -> Symbol {
-    /*if egraph.sorts.get(name).is_some() {
-        name.clone()
-    } else {*/
     Symbol::from(format!("Ast{}__", name))
 }
 
@@ -107,16 +104,10 @@ fn merge_action(egraph: &EGraph, fdecl: &FunctionDecl) -> Vec<Action> {
 
 #[derive(Default, Clone)]
 struct ProofInfo {
-    // TODO make flat expessions only be calls
-    // contrain two variables to be equal
-    pub var_eq_constraints: Vec<(Symbol, Symbol)>,
-    // contrain a variable to be equal to a literal
-    pub lit_constraints: Vec<(Symbol, Literal)>,
+    // proof for each variable bound in an assignment (lhs or rhs)
+    pub var_term: HashMap<Symbol, Symbol>,
     // proofs for each variable
-    pub term_proofs: HashMap<Symbol, Symbol>,
-    // maps each variable to variables each representing a term
-    // these terms need to be proven to be equal for the proof to go through
-    pub var_terms: HashMap<Symbol, Vec<Symbol>>,
+    pub var_proof: HashMap<Symbol, Symbol>,
 }
 
 // This function makes use of the property that the body is SSA
@@ -126,50 +117,49 @@ fn instrument_facts(body: &Vec<SSAFact>, get_fresh: &mut Fresh) -> (ProofInfo, V
     let mut info: ProofInfo = Default::default();
     let mut facts = body.clone();
 
-    /*for fact in body {
-        match &fact.expr {
-            SSAExpr::Var(v) => info.var_eq_constraints.push((fact.symbol, *v)),
-            SSAExpr::Lit(l) => info.lit_constraints.push((fact.symbol, l.clone())),
-            SSAExpr::Call(head, body) => {
+    for fact in body {
+        match fact {
+            SSAFact::Assign(lhs, rhs) => {
+                let head = match rhs {
+                    SSAExpr::Call(head, _) => head,
+                };
+                let body = match rhs {
+                    SSAExpr::Call(_, body) => body,
+                };
                 let rep = get_fresh();
                 let rep_trm = get_fresh();
                 let rep_prf = get_fresh();
-                facts.push(SSAFact::new(
+                facts.push(SSAFact::Assign(
                     rep,
                     SSAExpr::Call(make_rep_version(head), body.clone()),
                 ));
-                facts.push(SSAFact::new(
+                facts.push(SSAFact::Assign(
                     rep_trm,
                     SSAExpr::Call("TrmOf__".into(), vec![rep]),
                 ));
-                facts.push(SSAFact::new(
+                facts.push(SSAFact::Assign(
                     rep_prf,
                     SSAExpr::Call("PrfOf__".into(), vec![rep]),
                 ));
-                info.term_proofs.insert(rep, rep_prf);
+
+                assert!(info.var_proof.insert(*lhs, rep_prf).is_none());
 
                 for (i, child) in body.iter().enumerate() {
                     let child_trm = get_fresh();
                     let const_var = get_fresh();
-                    facts.push(SSAFact::new(
-                        const_var,
-                        SSAExpr::Lit(Literal::Int(i as i64)),
-                    ));
-                    facts.push(SSAFact::new(
+                    facts.push(SSAFact::ConstrainLit(const_var, Literal::Int(i as i64)));
+                    facts.push(SSAFact::Assign(
                         child_trm,
                         SSAExpr::Call("GetChild__".into(), vec![rep_trm, const_var]),
                     ));
-                    if let Some(vars) = info.var_terms.get_mut(child) {
-                        vars.push(child_trm);
-                    } else {
-                        info.var_terms.insert(child.clone(), vec![child_trm]);
-                    }
+                    assert!(info.var_term.insert(*child, child_trm).is_none());
                 }
             }
+            _ => (),
         }
-    }*/
+    }
 
-    (info, facts)
+    (info, make_ssa_again(facts))
 }
 
 // Adds the proof for an expr
@@ -183,7 +173,32 @@ fn add_expr_proof(info: &ProofInfo, expr: &Expr, res: &mut Vec<SSAAction>) {
     }
 }
 
-fn add_rule_proof(info: &ProofInfo, res: &mut Vec<SSAAction>) {}
+fn add_rule_proof(rule_name: Symbol, info: &ProofInfo, facts: &Vec<SSAFact>, res: &mut Vec<SSAAction>, get_fresh: &mut Fresh) -> Symbol {
+    let current_proof = get_fresh();
+    res.push(SSAAction::Let(current_proof, SSAExpr::Call("Null__".into(), vec![])));
+    println!("{:?}", facts);
+    println!("{:?}", info.var_proof);
+
+    for fact in facts {
+        match fact {
+            SSAFact::Assign(lhs, rhs) => {
+                let head = match rhs {
+                    SSAExpr::Call(head, _) => head,
+                };
+                let fresh = get_fresh();
+                println!("{}", lhs);
+                res.push(SSAAction::Let(fresh, SSAExpr::Call("Cons__".into(), vec![info.var_proof[lhs], current_proof])));
+            }
+            _ => (),
+        }
+    }
+
+    let name_const = get_fresh();
+    res.push(SSAAction::LetLit(name_const, Literal::String(rule_name)));
+    let fresh = get_fresh();
+    res.push(SSAAction::Let(fresh, SSAExpr::Call("Rule__".into(), vec![ current_proof, name_const])));
+    current_proof
+}
 
 fn instrument_rule(_egraph: &EGraph, rule: &FlatRule) -> FlatRule {
     let mut varcount = 0;
@@ -194,10 +209,8 @@ fn instrument_rule(_egraph: &EGraph, rule: &FlatRule) -> FlatRule {
 
     let (mut info, facts) = instrument_facts(&rule.body, &mut get_fresh);
 
-    let mut actions = vec![];
-    for action in &rule.head {
-        actions.push(action.clone());
-    }
+    let mut actions = rule.head.clone();
+    let rule_proof = add_rule_proof(format!("{}", rule).into(), &info, &rule.body, &mut actions, &mut get_fresh);
 
     // res.head.extend();
     FlatRule {
@@ -317,10 +330,7 @@ pub(crate) fn add_proofs(egraph: &EGraph, program: Vec<Command>) -> Vec<Command>
             }
             Command::FlatRule(ruleset, rule) => {
                 //res.push(Command::Rule(*ruleset, rule.to_rule()));
-                res.push(Command::Rule(
-                    *ruleset,
-                    instrument_rule(egraph, &rule).to_rule(),
-                ));
+                res.push(Command::FlatRule(*ruleset, instrument_rule(egraph, &rule)));
             }
             Command::Run(config) => {
                 res.extend(make_runner(config));

@@ -1178,6 +1178,7 @@ impl EGraph {
 
         println!("{}", ListDisplay(program.clone(), "\n"));
 
+        // TODO: remove this to_rules call and migrate codebase to SSA IR
         for command in to_rules(program) {
             let msg = self.run_command(command, should_run)?;
             log::info!("{}", msg);

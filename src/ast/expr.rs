@@ -65,16 +65,12 @@ pub enum Expr {
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
 pub enum SSAExpr {
     Call(Symbol, Vec<Symbol>),
-    Primative(Symbol, Vec<Symbol>),
 }
 
 impl SSAExpr {
     pub fn to_expr(&self) -> Expr {
         match self {
             SSAExpr::Call(op, args) => {
-                Expr::Call(*op, args.into_iter().map(|a| Expr::Var(*a)).collect())
-            }
-            SSAExpr::Primative(op, args) => {
                 Expr::Call(*op, args.into_iter().map(|a| Expr::Var(*a)).collect())
             }
         }

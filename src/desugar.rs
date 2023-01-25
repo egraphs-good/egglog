@@ -83,7 +83,14 @@ fn expr_to_ssa(
         Expr::Call(f, children) => {
             let mut new_children = vec![];
             for child in children {
-                new_children.push(expr_to_ssa(child, get_fresh, var_used, varJustUsed, res, constraints));
+                new_children.push(expr_to_ssa(
+                    child,
+                    get_fresh,
+                    var_used,
+                    varJustUsed,
+                    res,
+                    constraints,
+                ));
             }
             let fresh = get_fresh();
             res.push(SSAFact::Assign(
@@ -102,19 +109,60 @@ fn ssa_valid_expr(expr: &SSAExpr, var_used: &mut HashSet<Symbol>) -> bool {
         SSAExpr::Call(_, children) => {
             for child in children {
                 if !var_used.insert(*child) {
-                    return false
-                }
-            }
-        }
-        SSAExpr::Primative(_, children) => {
-            for child in children {
-                if !var_used.insert(*child) {
-                    return false
+                    return false;
                 }
             }
         }
     }
     true
+}
+
+// Given facts where variables are referenced multiple times,
+// refactor it into SSA form again
+// TODO all of the get_fresh functions should be unified
+pub(crate) fn make_ssa_again(facts: Vec<SSAFact>) -> Vec<SSAFact> {
+    let mut vars_used: HashSet<Symbol> = Default::default();
+    let mut res = vec![];
+    let mut var_counter = 0;
+    let mut get_fresh = || {
+        let fresh = format!("ssa{}__", var_counter);
+        var_counter += 1;
+        fresh.into()
+    };
+    for fact in facts {
+        match fact {
+            SSAFact::Assign(v, expr) => {
+                if !vars_used.insert(v) {
+                    panic!("invalid assignment to SSA variable: {:?}", v);
+                }
+                match expr {
+                    SSAExpr::Call(f, children) => {
+                        let mut new_children = vec![];
+                        let mut constraints = vec![];
+                        for child in children {
+                            if vars_used.insert(child) {
+                                new_children.push(child);
+                            } else {
+                                let fresh = get_fresh();
+                                constraints.push(SSAFact::ConstrainEq(fresh, child));
+                                new_children.push(fresh);
+                            }
+                        }
+                        res.push(SSAFact::Assign(v, SSAExpr::Call(f, new_children)));
+                        res.extend(constraints);
+                    }
+                }
+            }
+            SSAFact::ConstrainEq(v, v2) => {
+                res.push(SSAFact::ConstrainEq(v, v2));
+            }
+            SSAFact::ConstrainLit(v, l) => {
+                res.push(SSAFact::ConstrainLit(v, l));
+            }
+        }
+    }
+    assert_ssa_valid(&res);
+    res
 }
 
 fn assert_ssa_valid(facts: &Vec<SSAFact>) -> bool {
@@ -151,18 +199,23 @@ fn assert_ssa_valid(facts: &Vec<SSAFact>) -> bool {
 
 fn flatten_equalities(equalities: Vec<(Symbol, Expr)>, get_fresh: &mut Fresh) -> Vec<SSAFact> {
     let mut res = vec![];
-    
+
     let mut var_used = Default::default();
     for (lhs, rhs) in equalities {
         let mut constraints = vec![];
-        let result = expr_to_ssa(&rhs, get_fresh, &mut var_used, &mut Default::default(),  &mut res, &mut constraints);
+        let result = expr_to_ssa(
+            &rhs,
+            get_fresh,
+            &mut var_used,
+            &mut Default::default(),
+            &mut res,
+            &mut constraints,
+        );
         res.extend(constraints);
 
-        
         var_used.insert(lhs);
         res.push(SSAFact::ConstrainEq(lhs, result));
     }
-    println!("equalities: {:?}", res);
     assert_ssa_valid(&res);
     res
 }
@@ -178,7 +231,7 @@ fn flatten_facts(facts: &Vec<Fact>, get_fresh: &mut Fresh) -> Vec<SSAFact> {
                 if let Expr::Var(v) = lhs {
                     equalities.push((v.clone(), rhs.clone()));
                 } else if let Expr::Var(v) = rhs {
-                    equalities.push((v.clone(), lhs.clone()));  
+                    equalities.push((v.clone(), lhs.clone()));
                 } else {
                     let fresh = get_fresh();
                     equalities.push((fresh, lhs.clone()));
