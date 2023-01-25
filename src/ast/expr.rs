@@ -74,7 +74,9 @@ impl FlatExpr {
         match self {
             FlatExpr::Lit(lit) => Expr::Lit(lit.clone()),
             FlatExpr::Var(v) => Expr::Var(*v),
-            FlatExpr::Call(op, args) => Expr::Call(*op, args.into_iter().map(|a| Expr::Var(*a)).collect()),
+            FlatExpr::Call(op, args) => {
+                Expr::Call(*op, args.into_iter().map(|a| Expr::Var(*a)).collect())
+            }
         }
     }
 }

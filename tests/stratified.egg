@@ -11,12 +11,14 @@
 (run 3)
 (check (path 1 2))
 
-(clear-rules)
+(ruleset path-rules)
+
 (rule ((path x y) (edge y z))
-      ((path x z)))
+      ((path x z))
+      :ruleset path-rules)
 
 (edge 3 8)
-(run 1)
+(run path-rules 1)
 (check (path 1 3))
 
 

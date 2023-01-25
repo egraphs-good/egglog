@@ -52,10 +52,11 @@ pub enum Command {
         expr: Expr,
         cost: Option<usize>,
     },
-    Rule(Rule),
-    FlatRule(FlatRule),
-    Rewrite(Rewrite),
-    BiRewrite(Rewrite),
+    AddRuleset(Symbol),
+    Rule(Symbol, Rule),
+    FlatRule(Symbol, FlatRule),
+    Rewrite(Symbol, Rewrite),
+    BiRewrite(Symbol, Rewrite),
     Action(Action),
     Run(RunConfig),
     Calc(Vec<IdentSort>, Vec<Expr>),
@@ -65,9 +66,6 @@ pub enum Command {
     },
     // TODO: this could just become an empty query
     Check(Fact),
-    ClearRules,
-    AddRuleset(Symbol),
-    LoadRuleset(Symbol),
     Clear,
     Print(Symbol, usize),
     PrintSize(Symbol),
@@ -89,7 +87,7 @@ pub enum Command {
 impl Command {
     fn to_sexp(&self) -> Sexp {
         match self {
-            Command::Rewrite(_) | Command::BiRewrite(_) => {
+            Command::Rewrite(_, _) | Command::BiRewrite(_, _) => {
                 panic!("Rewrites should be desugared before printing");
             }
             Command::Datatype {
@@ -114,8 +112,12 @@ impl Command {
                 ),
             ]),
             Command::Function(f) => f.to_sexp(),
-            Command::Rule(r) => r.to_sexp(),
-            Command::FlatRule(r) => r.to_rule().to_sexp(),
+            Command::AddRuleset(name) => Sexp::List(vec![
+                Sexp::String("ruleset".into()),
+                Sexp::String(name.to_string()),
+            ]),
+            Command::Rule(ruleset, r) => r.to_sexp(*ruleset),
+            Command::FlatRule(ruleset, r) => r.to_rule().to_sexp(*ruleset),
             Command::Define { name, expr, cost } => {
                 let mut res = vec![
                     Sexp::String("define".into()),
@@ -129,26 +131,21 @@ impl Command {
 
                 Sexp::List(res)
             }
-            Command::Run(limit) => {
+            Command::Run(config) => {
                 let mut res = vec![
                     Sexp::String("run".into()),
-                    Sexp::String(limit.limit.to_string()),
                 ];
-                if let Some(until) = &limit.until {
+                if config.ruleset != "".into() {
+                    res.push(Sexp::String(config.ruleset.to_string()));
+                }
+                res.push(Sexp::String(config.limit.to_string()));
+                if let Some(until) = &config.until {
                     res.push(Sexp::String(":until".into()));
                     res.push(until.to_sexp());
                 }
 
                 Sexp::List(res)
             }
-            Command::AddRuleset(name) => Sexp::List(vec![
-                Sexp::String("add-ruleset".into()),
-                Sexp::String(name.to_string()),
-            ]),
-            Command::LoadRuleset(name) => Sexp::List(vec![
-                Sexp::String("load-ruleset".into()),
-                Sexp::String(name.to_string()),
-            ]),
             Command::Calc(args, exprs) => Sexp::List(
                 vec![
                     Sexp::String("calc".into()),
@@ -165,7 +162,6 @@ impl Command {
                 e.to_sexp(),
             ]),
             Command::Check(fact) => Sexp::List(vec![Sexp::String("check".into()), fact.to_sexp()]),
-            Command::ClearRules => Sexp::List(vec![Sexp::String("clear-rules".into())]),
             Command::Clear => Sexp::List(vec![Sexp::String("clear".into())]),
             Command::Query(facts) => Sexp::List(
                 vec![Sexp::String("query".into())]
@@ -242,6 +238,7 @@ impl Display for IdentSort {
 
 #[derive(Clone, Debug)]
 pub struct RunConfig {
+    pub ruleset: Symbol,
     pub limit: usize,
     pub until: Option<Fact>,
 }
@@ -357,8 +354,7 @@ impl FlatFact {
     }
 
     pub fn to_fact(&self) -> Fact {
-        Fact::Eq(vec![Expr::Var(self.symbol),
-                      self.expr.to_expr()])
+        Fact::Eq(vec![Expr::Var(self.symbol), self.expr.to_expr()])
     }
 }
 
@@ -407,9 +403,11 @@ impl FlatAction {
     pub fn to_action(&self) -> Action {
         match self {
             FlatAction::Let(lhs, rhs) => Action::Let(lhs.clone(), rhs.to_expr()),
-            FlatAction::Set(lhs, args, rhs) => {
-                Action::Set(lhs.clone(), args.iter().map(|e| e.to_expr()).collect(), rhs.to_expr())
-            }
+            FlatAction::Set(lhs, args, rhs) => Action::Set(
+                lhs.clone(),
+                args.iter().map(|e| e.to_expr()).collect(),
+                rhs.to_expr(),
+            ),
             FlatAction::Delete(lhs, args) => {
                 Action::Delete(lhs.clone(), args.iter().map(|e| e.to_expr()).collect())
             }
@@ -510,18 +508,23 @@ impl FlatRule {
 }
 
 impl Rule {
-    pub(crate) fn to_sexp(&self) -> Sexp {
-        Sexp::List(vec![
+    pub(crate) fn to_sexp(&self, ruleset: Symbol) -> Sexp {
+        let mut res = vec![
             Sexp::String("rule".into()),
             Sexp::List(self.body.iter().map(|f| f.to_sexp()).collect()),
             Sexp::List(self.head.iter().map(|a| a.to_sexp()).collect()),
-        ])
+        ];
+        if ruleset != "".into() {
+            res.push(Sexp::String(":ruleset".into()));
+            res.push(Sexp::String(ruleset.to_string()));
+        }
+        Sexp::List(res)
     }
 }
 
 impl Display for Rule {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.to_sexp())
+        write!(f, "{}", self.to_sexp("".into()))
     }
 }
 

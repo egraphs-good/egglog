@@ -128,8 +128,7 @@ pub struct EGraph {
     sorts: HashMap<Symbol, Arc<dyn Sort>>,
     primitives: HashMap<Symbol, Vec<Primitive>>,
     functions: HashMap<Symbol, Function>,
-    rules: HashMap<Symbol, Rule>,
-    rulesets: IndexMap<Symbol, Vec<(Symbol, Rule)>>,
+    rulesets: HashMap<Symbol, HashMap<Symbol, Rule>>,
     saturated: bool,
     timestamp: u32,
     unit_sym: Symbol,
@@ -150,7 +149,6 @@ impl Clone for EGraph {
             sorts: self.sorts.clone(),
             primitives: self.primitives.clone(),
             functions: self.functions.clone(),
-            rules: self.rules.clone(),
             rulesets: self.rulesets.clone(),
             saturated: self.saturated,
             timestamp: self.timestamp,
@@ -185,7 +183,6 @@ impl Default for EGraph {
             unionfind: Default::default(),
             sorts: Default::default(),
             functions: Default::default(),
-            rules: Default::default(),
             rulesets: Default::default(),
             primitives: Default::default(),
             presorts: Default::default(),
@@ -199,6 +196,7 @@ impl Default for EGraph {
             fact_directory: None,
             seminaive: true,
         };
+        egraph.rulesets.insert("".into(), Default::default());
         egraph.add_sort(UnitSort::new(unit_sym));
         egraph.add_sort(StringSort::new("String".into()));
         egraph.add_sort(I64Sort::new("i64".into()));
@@ -531,7 +529,11 @@ impl EGraph {
     }
 
     pub fn run_rules(&mut self, config: &RunConfig) -> [Duration; 3] {
-        let RunConfig { limit, until } = config;
+        let RunConfig {
+            ruleset,
+            limit,
+            until,
+        } = config;
         let mut search_time = Duration::default();
         let mut apply_time = Duration::default();
 
@@ -543,7 +545,7 @@ impl EGraph {
 
         for i in 0..*limit {
             self.saturated = true;
-            let [st, at] = self.step_rules(i);
+            let [st, at] = self.step_rules(i, *ruleset);
             search_time += st;
             apply_time += at;
 
@@ -580,7 +582,11 @@ impl EGraph {
         // Report the worst offenders
         log::debug!("Slowest rules:\n{}", {
             let mut msg = String::new();
-            let mut vec = self.rules.iter().collect::<Vec<_>>();
+            let mut vec = self
+                .rulesets
+                .iter()
+                .flat_map(|(name, rules)| rules)
+                .collect::<Vec<_>>();
             vec.sort_by_key(|(_, r)| r.search_time + r.apply_time);
             for (name, rule) in vec.iter().rev().take(5) {
                 write!(
@@ -604,7 +610,7 @@ impl EGraph {
         [search_time, apply_time, rebuild_time]
     }
 
-    fn step_rules(&mut self, iteration: usize) -> [Duration; 2] {
+    fn step_rules(&mut self, iteration: usize, ruleset: Symbol) -> [Duration; 2] {
         // fn make_subst(rule: &Rule, values: &[Value]) -> Subst {
         //     let get_val = |t: &AtomTerm| match t {
         //         AtomTerm::Var(sym) => {
@@ -627,10 +633,12 @@ impl EGraph {
 
         let ban_length = 5;
 
-        let mut rules = std::mem::take(&mut self.rules);
+        let mut rules: HashMap<Symbol, Rule> = std::mem::take(self.rulesets.get_mut(&ruleset).unwrap());
+        // TODO why did I have to copy the rules here for the first for loop?
+        let copy_rules = rules.clone();
         let search_start = Instant::now();
         let mut searched = vec![];
-        for (&name, rule) in rules.iter_mut() {
+        for (name, rule) in copy_rules.iter() {
             let mut all_values = vec![];
             if rule.banned_until <= iteration {
                 let mut fuel = self.match_limit << rule.times_banned;
@@ -651,17 +659,18 @@ impl EGraph {
                     rule_search_time.as_secs_f64(),
                     all_values.len()
                 );
-                rule.search_time += rule_search_time;
-                searched.push((name, all_values));
+                searched.push((name, all_values, rule_search_time));
             } else {
                 self.saturated = false;
             }
         }
+
         let search_elapsed = search_start.elapsed();
 
         let apply_start = Instant::now();
-        'outer: for (name, all_values) in searched {
-            let rule = rules.get_mut(&name).unwrap();
+        'outer: for (name, all_values, time) in searched {
+            let rule = rules.get_mut(name).unwrap();
+            rule.search_time += time;
             let num_vars = rule.query.vars.len();
 
             // the query doesn't require matches
@@ -704,12 +713,17 @@ impl EGraph {
 
             rule.apply_time += rule_apply_start.elapsed();
         }
-        self.rules = rules;
+        self.rulesets.insert(ruleset, rules);
         let apply_elapsed = apply_start.elapsed();
         [search_elapsed, apply_elapsed]
     }
 
-    fn add_rule_with_name(&mut self, name: String, rule: ast::Rule) -> Result<Symbol, Error> {
+    fn add_rule_with_name(
+        &mut self,
+        name: String,
+        rule: ast::Rule,
+        ruleset: Symbol,
+    ) -> Result<Symbol, Error> {
         let name = Symbol::from(name);
         let mut ctx = typecheck::Context::new(self);
         let (query0, action0) = ctx
@@ -733,37 +747,20 @@ impl EGraph {
             search_time: Duration::default(),
             apply_time: Duration::default(),
         };
-        match self.rules.entry(name) {
-            Entry::Occupied(_) => panic!("Rule '{name}' was already present"),
-            Entry::Vacant(e) => e.insert(compiled_rule),
-        };
+        if let Some(rules) = self.rulesets.get_mut(&ruleset) {
+            match rules.entry(name) {
+                Entry::Occupied(_) => panic!("Rule '{name}' was already present"),
+                Entry::Vacant(e) => e.insert(compiled_rule),
+            };
+        } else {
+            panic!("No such ruleset {ruleset}");
+        }
         Ok(name)
     }
 
-    pub fn add_rule(&mut self, rule: ast::Rule) -> Result<Symbol, Error> {
+    pub fn add_rule(&mut self, rule: ast::Rule, ruleset: Symbol) -> Result<Symbol, Error> {
         let name = format!("{}", rule);
-        self.add_rule_with_name(name, rule)
-    }
-
-    pub fn clear_rules(&mut self) {
-        self.rules = Default::default();
-    }
-
-    pub fn add_ruleset(&mut self, name: Symbol) {
-        if self.rulesets.contains_key(&name) {
-            panic!("Ruleset '{name}' was already present");
-        }
-        self.rulesets.insert(
-            name,
-            self.rules
-                .iter()
-                .map(|pair| (*pair.0, pair.1.clone()))
-                .collect(),
-        );
-    }
-
-    pub fn load_ruleset(&mut self, name: Symbol) {
-        self.rules.extend(self.rulesets.get(&name).unwrap().clone());
+        self.add_rule_with_name(name, rule, ruleset)
     }
 
     pub fn eval_actions(&mut self, actions: &[Action]) -> Result<(), Error> {
@@ -792,6 +789,13 @@ impl EGraph {
         Ok((t, stack.pop().unwrap()))
     }
 
+    fn add_ruleset(&mut self, name: Symbol) {
+        match self.rulesets.entry(name) {
+            Entry::Occupied(_) => panic!("Ruleset '{name}' was already present"),
+            Entry::Vacant(e) => e.insert(Default::default()),
+        };
+    }
+
     fn run_command(&mut self, command: Command, should_run: bool) -> Result<String, Error> {
         Ok(match command {
             Command::Datatype {
@@ -817,17 +821,21 @@ impl EGraph {
                 self.declare_function(&fdecl)?;
                 format!("Declared function {}.", fdecl.name)
             }
-            Command::Rule(rule) => {
-                let name = self.add_rule(rule)?;
+            Command::AddRuleset(name) => {
+                self.add_ruleset(name);
+                format!("Declared ruleset {name}.")
+            }
+            Command::Rule(ruleset, rule) => {
+                let name = self.add_rule(rule, ruleset.into())?;
                 format!("Declared rule {name}.")
             }
-            Command::FlatRule(_) => {
+            Command::FlatRule(_, _) => {
                 todo!("Support flat rules and deprecate rule");
             }
-            Command::Rewrite(_rewrite) => {
+            Command::Rewrite(_, _rewrite) => {
                 panic!("Rewrite should have been desugared");
             }
-            Command::BiRewrite(_rewrite) => {
+            Command::BiRewrite(_, _rewrite) => {
                 panic!("Birewrite should have been desugared");
             }
             Command::Run(config) => {
@@ -900,18 +908,6 @@ impl EGraph {
                 } else {
                     format!("Skipping define {name}")
                 }
-            }
-            Command::ClearRules => {
-                self.clear_rules();
-                "Clearing rules.".into()
-            }
-            Command::AddRuleset(name) => {
-                self.add_ruleset(name);
-                format!("Added ruleset {}", name)
-            }
-            Command::LoadRuleset(name) => {
-                self.load_ruleset(name);
-                format!("Loaded ruleset {}", name)
             }
             Command::Query(_q) => {
                 // let qsexp = sexp::Sexp::List(
@@ -1076,6 +1072,7 @@ impl EGraph {
             let cond = Fact::Eq(vec![a.clone(), b.clone()]);
             self.run_command(
                 Command::Run(RunConfig {
+                    ruleset: "".into(),
                     limit: 100000,
                     until: Some(cond.clone()),
                 }),
@@ -1174,7 +1171,7 @@ impl EGraph {
         let should_run = true;
         let with_proofs = add_proofs(&self, program.clone());
 
-        println!("{}", ListDisplay(with_proofs.clone(), "\n"));
+        //println!("{}", ListDisplay(with_proofs.clone(), "\n"));
 
         for command in with_proofs {
             let msg = self.run_command(command, should_run)?;

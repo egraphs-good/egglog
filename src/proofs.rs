@@ -62,12 +62,19 @@ fn merge_action(egraph: &EGraph, fdecl: &FunctionDecl) -> Vec<Action> {
         "(let p1 (PrfOf__ old))".to_string(),
     ]
     .into_iter()
-    .chain(fdecl.schema.input.iter().enumerate().flat_map(|(i, _sort)| {
-        vec![
-            format!("(let {} (GetChild__ t1 {}))", child1(i), i),
-            format!("(let {} (GetChild__ t2 {}))", child2(i), i),
-        ]
-    }))
+    .chain(
+        fdecl
+            .schema
+            .input
+            .iter()
+            .enumerate()
+            .flat_map(|(i, _sort)| {
+                vec![
+                    format!("(let {} (GetChild__ t1 {}))", child1(i), i),
+                    format!("(let {} (GetChild__ t2 {}))", child2(i), i),
+                ]
+            }),
+    )
     .chain(vec![
         format!("(let congr_prf__ (Congruence__ p1 {}))", congr_prf),
         "(set (EqGraph__ t1 t2) congr_prf__)".to_string(),
@@ -104,7 +111,10 @@ fn instrument_rule(_egraph: &EGraph, rule: &FlatRule) -> FlatRule {
                 let rep = get_fresh();
                 let rep_trm = get_fresh();
                 let rep_prf = get_fresh();
-                facts.push(FlatFact::new(rep, FlatExpr::Call(make_rep_version(head), body.clone())));
+                facts.push(FlatFact::new(
+                    rep,
+                    FlatExpr::Call(make_rep_version(head), body.clone()),
+                ));
                 facts.push(FlatFact::new(
                     rep_trm,
                     FlatExpr::Call("TrmOf__".into(), vec![rep]),
@@ -118,9 +128,14 @@ fn instrument_rule(_egraph: &EGraph, rule: &FlatRule) -> FlatRule {
                 for (i, child) in body.iter().enumerate() {
                     let child_trm = get_fresh();
                     let const_var = get_fresh();
-                    facts.push(FlatFact::new(const_var,
-                                             FlatExpr::Lit(Literal::Int(i as i64))));
-                    facts.push(FlatFact::new(child_trm, FlatExpr::Call("GetChild__".into(), vec![rep_trm, const_var])));
+                    facts.push(FlatFact::new(
+                        const_var,
+                        FlatExpr::Lit(Literal::Int(i as i64)),
+                    ));
+                    facts.push(FlatFact::new(
+                        child_trm,
+                        FlatExpr::Call("GetChild__".into(), vec![rep_trm, const_var]),
+                    ));
                     if let Some(vars) = var_terms.get_mut(child) {
                         vars.push(child_trm);
                     } else {
@@ -130,7 +145,6 @@ fn instrument_rule(_egraph: &EGraph, rule: &FlatRule) -> FlatRule {
             }
         }
     }
-    
 
     // res.head.extend();
     FlatRule {
@@ -153,9 +167,42 @@ fn make_rep_func(egraph: &EGraph, fdecl: &FunctionDecl) -> FunctionDecl {
     }
 }
 
+fn make_proof_rule(_egraph: &EGraph, fdecl: &FunctionDecl) -> Command {
+    Command::Rule("proofrules__".into(),
+        Rule {
+        body: vec![Fact::Eq(vec![
+            Expr::Var("ast__".into()),
+            Expr::Call(
+                fdecl.name.clone(),
+                fdecl
+                    .schema
+                    .input
+                    .iter()
+                    .map(|s| Expr::Var(s.clone()))
+                    .collect(),
+            ),
+        ])],
+        head: fdecl
+            .schema
+            .input
+            .iter()
+            .enumerate()
+            .map(|(i, s)| {
+                Action::Set(
+                    "GetChild__".into(),
+                    vec![Expr::Var("ast__".into()), Expr::Lit(Literal::Int(i as i64))],
+                    Expr::Var(s.clone()),
+                )
+            })
+            .collect(),
+    })
+}
+
 // the egraph is the initial egraph with only default sorts
 pub(crate) fn add_proofs(egraph: &EGraph, program: Vec<Command>) -> Vec<Command> {
     let mut res = proof_header(egraph);
+    let mut proof_rules = vec![];
+
     for command in program {
         match &command {
             Command::Datatype {
@@ -175,14 +222,18 @@ pub(crate) fn add_proofs(egraph: &EGraph, program: Vec<Command>) -> Vec<Command>
                 res.push(command.clone());
                 res.push(Command::Function(make_ast_func(egraph, fdecl)));
                 res.push(Command::Function(make_rep_func(egraph, fdecl)));
+                proof_rules.push(make_proof_rule(egraph, fdecl));
             }
-            Command::Rule(_rule) => {
+            Command::Rule(_ruleset, _rule) => {
                 panic!("Rule should have been desugared");
             }
-            Command::FlatRule(rule) => {
-                res.push(Command::Rule(rule.to_rule()));
-                //res.push(Command::Rule(instrument_rule(egraph, &rule).to_rule()));
-            }
+            Command::FlatRule(ruleset, rule) => {
+                res.push(Command::Rule(*ruleset, rule.to_rule()));
+                /*res.push(Command::Rule(
+                *ruleset,
+                instrument_rule(egraph, &rule).to_rule(),
+            ))*/
+        },
             _ => res.push(command),
         }
     }

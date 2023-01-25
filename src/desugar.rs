@@ -21,26 +21,29 @@ fn desugar_datatype(name: Symbol, variants: Vec<Variant>) -> Vec<Command> {
         .collect()
 }
 
-fn desugar_rewrite(rewrite: &Rewrite) -> Vec<Command> {
+fn desugar_rewrite(ruleset: Symbol, rewrite: &Rewrite) -> Vec<Command> {
     let var = Symbol::from("rewrite_var__");
-    vec![Command::FlatRule(flatten_rule(Rule {
-        body: [Fact::Eq(vec![Expr::Var(var), rewrite.lhs.clone()])]
-            .into_iter()
-            .chain(rewrite.conditions.clone())
-            .collect(),
-        head: vec![Action::Union(Expr::Var(var), rewrite.rhs.clone())],
-    }))]
+    vec![Command::FlatRule(
+        ruleset,
+        flatten_rule(Rule {
+            body: [Fact::Eq(vec![Expr::Var(var), rewrite.lhs.clone()])]
+                .into_iter()
+                .chain(rewrite.conditions.clone())
+                .collect(),
+            head: vec![Action::Union(Expr::Var(var), rewrite.rhs.clone())],
+        }),
+    )]
 }
 
-fn desugar_birewrite(rewrite: &Rewrite) -> Vec<Command> {
+fn desugar_birewrite(ruleset: Symbol, rewrite: &Rewrite) -> Vec<Command> {
     let rw2 = Rewrite {
         lhs: rewrite.rhs.clone(),
         rhs: rewrite.lhs.clone(),
         conditions: rewrite.conditions.clone(),
     };
-    desugar_rewrite(rewrite)
+    desugar_rewrite(ruleset, rewrite)
         .into_iter()
-        .chain(desugar_rewrite(&rw2))
+        .chain(desugar_rewrite(ruleset, &rw2))
         .collect()
 }
 
@@ -65,7 +68,6 @@ fn flatten_expr(expr: &Expr, res: &mut Vec<(Symbol, FlatExpr)>, get_fresh: &mut 
     }
 }
 
-
 // Makes sure the expression does not have nested calls
 fn flatten_equality(equality: (Symbol, Expr), get_fresh: &mut Fresh) -> Vec<FlatFact> {
     let mut flattened = vec![];
@@ -79,7 +81,10 @@ fn flatten_equality(equality: (Symbol, Expr), get_fresh: &mut Fresh) -> Vec<Flat
 }
 
 fn flatten_equalities(equalities: Vec<(Symbol, Expr)>, get_fresh: &mut Fresh) -> Vec<FlatFact> {
-    equalities.into_iter().flat_map(|e| flatten_equality(e, get_fresh)).collect()
+    equalities
+        .into_iter()
+        .flat_map(|e| flatten_equality(e, get_fresh))
+        .collect()
 }
 
 fn flatten_facts(facts: &Vec<Fact>, get_fresh: &mut Fresh) -> Vec<FlatFact> {
@@ -122,15 +127,16 @@ fn flatten_actions(actions: &Vec<Action>, get_fresh: &mut Fresh) -> Vec<FlatActi
 
     for action in actions {
         res.push(match action {
-            Action::Let(symbol, expr) => {
-                FlatAction::Let(*symbol, add_expr(expr.clone()))
-            }
-            Action::Set(symbol, exprs, rhs) => {
-                FlatAction::Set(*symbol, exprs.clone().into_iter().map(&mut add_expr).collect(), add_expr(rhs.clone()))
-            }
-            Action::Delete(symbol, exprs) => {
-                FlatAction::Delete(*symbol, exprs.clone().into_iter().map(&mut add_expr).collect())
-            }
+            Action::Let(symbol, expr) => FlatAction::Let(*symbol, add_expr(expr.clone())),
+            Action::Set(symbol, exprs, rhs) => FlatAction::Set(
+                *symbol,
+                exprs.clone().into_iter().map(&mut add_expr).collect(),
+                add_expr(rhs.clone()),
+            ),
+            Action::Delete(symbol, exprs) => FlatAction::Delete(
+                *symbol,
+                exprs.clone().into_iter().map(&mut add_expr).collect(),
+            ),
             Action::Union(lhs, rhs) => {
                 FlatAction::Union(add_expr(lhs.clone()), add_expr(rhs.clone()))
             }
@@ -158,14 +164,14 @@ fn flatten_rule(rule: Rule) -> FlatRule {
 pub(crate) fn desugar_command(egraph: &EGraph, command: Command) -> Result<Vec<Command>, Error> {
     Ok(match command {
         Command::Datatype { name, variants } => desugar_datatype(name, variants),
-        Command::Rewrite(rewrite) => desugar_rewrite(&rewrite),
-        Command::BiRewrite(rewrite) => desugar_birewrite(&rewrite),
+        Command::Rewrite(ruleset, rewrite) => desugar_rewrite(ruleset, &rewrite),
+        Command::BiRewrite(ruleset, rewrite) => desugar_birewrite(ruleset, &rewrite),
         Command::Include(file) => {
             let s = std::fs::read_to_string(&file)
                 .unwrap_or_else(|_| panic!("Failed to read file {file}"));
             egraph.parse_program(&s)?
         }
-        Command::Rule(rule) => vec![Command::FlatRule(flatten_rule(rule))],
+        Command::Rule(ruleset, rule) => vec![Command::FlatRule(ruleset, flatten_rule(rule))],
         _ => vec![command],
     })
 }
