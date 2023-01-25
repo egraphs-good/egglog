@@ -119,6 +119,9 @@ struct ProofInfo {
     pub var_terms: HashMap<Symbol, Vec<Symbol>>,
 }
 
+// This function makes use of the property that the body is SSA
+// variables appear at most once (including the rhs of assignments)
+// besides when they appear in constraints
 fn instrument_facts(body: &Vec<SSAFact>, get_fresh: &mut Fresh) -> (ProofInfo, Vec<SSAFact>) {
     let mut info: ProofInfo = Default::default();
     let mut facts = body.clone();
