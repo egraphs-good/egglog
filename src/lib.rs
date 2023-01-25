@@ -438,10 +438,10 @@ impl EGraph {
 
     pub fn eval_lit(&self, lit: &Literal) -> Value {
         match lit {
-            Literal::Int(i) => i.store(&*self.get_sort()).unwrap(),
-            Literal::F64(f) => f.store(&*self.get_sort()).unwrap(),
-            Literal::String(s) => s.store(&*self.get_sort()).unwrap(),
-            Literal::Unit => ().store(&*self.get_sort()).unwrap(),
+            Literal::Int(i) => i.store(&self.get_sort()).unwrap(),
+            Literal::F64(f) => f.store(&self.get_sort()).unwrap(),
+            Literal::String(s) => s.store(&self.get_sort()).unwrap(),
+            Literal::Unit => ().store(&self.get_sort()).unwrap(),
         }
     }
 

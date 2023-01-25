@@ -646,6 +646,7 @@ impl EGraph {
                 },
                 Instruction::CallFunction(f) => {
                     let function = self.functions.get_mut(f).unwrap();
+                    let output_tag = function.schema.output.name();
                     let new_len = stack.len() - function.schema.input.len();
                     let values = &stack[new_len..];
 
@@ -688,7 +689,7 @@ impl EGraph {
                         ))));
                     };
 
-                    debug_assert_eq!(function.schema.output.name(), value.tag);
+                    debug_assert_eq!(output_tag, value.tag);
                     stack.truncate(new_len);
                     stack.push(value);
                 }
