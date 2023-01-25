@@ -104,9 +104,9 @@ fn flatten_equalities(equalities: Vec<(Symbol, Expr)>, get_fresh: &mut Fresh) ->
         let result = expr_to_ssa(&rhs, get_fresh, &mut varUsed, &mut Default::default(),  &mut res, &mut constraints);
         res.extend(constraints);
 
-        if varUsed.insert(lhs) {
-            res.push(SSAFact::ConstrainEq(lhs, result));
-        }
+        
+        varUsed.insert(lhs);
+        res.push(SSAFact::ConstrainEq(lhs, result));
     }
     res
 }
