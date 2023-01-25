@@ -1176,7 +1176,7 @@ impl EGraph {
         let should_run = true;
         //let with_proofs = add_proofs(&self, program.clone());
 
-        //println!("{}", ListDisplay(with_proofs.clone(), "\n"));
+        println!("{}", ListDisplay(program.clone(), "\n"));
 
         for command in to_rules(program) {
             let msg = self.run_command(command, should_run)?;

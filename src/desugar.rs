@@ -113,12 +113,11 @@ fn flatten_facts(facts: &Vec<Fact>, get_fresh: &mut Fresh) -> Vec<FlatFact> {
 }
 
 fn flatten_actions(actions: &Vec<Action>, get_fresh: &mut Fresh) -> Vec<FlatAction> {
-    let mut setup = vec![];
-    let mut add_expr = |expr: Expr| {
+    let mut add_expr = |expr: Expr, res: &mut Vec<FlatAction>| {
         let mut flattened = vec![];
         let fvar = flatten_expr(&expr, &mut flattened, get_fresh);
         for (var, expr) in flattened {
-            setup.push(FlatAction::Let(var, expr));
+            res.push(FlatAction::Let(var, expr));
         }
         FlatExpr::Var(fvar)
     };
@@ -126,26 +125,27 @@ fn flatten_actions(actions: &Vec<Action>, get_fresh: &mut Fresh) -> Vec<FlatActi
     let mut res = vec![];
 
     for action in actions {
-        res.push(match action {
-            Action::Let(symbol, expr) => FlatAction::Let(*symbol, add_expr(expr.clone())),
+        let flat = match action {
+            Action::Let(symbol, expr) => FlatAction::Let(*symbol, add_expr(expr.clone(), &mut res)),
             Action::Set(symbol, exprs, rhs) => FlatAction::Set(
                 *symbol,
-                exprs.clone().into_iter().map(&mut add_expr).collect(),
-                add_expr(rhs.clone()),
+                exprs.clone().into_iter().map(|ex| add_expr(ex, &mut res)).collect(),
+                add_expr(rhs.clone(), &mut res),
             ),
             Action::Delete(symbol, exprs) => FlatAction::Delete(
                 *symbol,
-                exprs.clone().into_iter().map(&mut add_expr).collect(),
+                exprs.clone().into_iter().map(|ex| add_expr(ex, &mut res)).collect(),
             ),
             Action::Union(lhs, rhs) => {
-                FlatAction::Union(add_expr(lhs.clone()), add_expr(rhs.clone()))
+                FlatAction::Union(add_expr(lhs.clone(), &mut res), add_expr(rhs.clone(), &mut res))
             }
             Action::Panic(msg) => FlatAction::Panic(msg.clone()),
-            Action::Expr(expr) => FlatAction::Expr(add_expr(expr.clone())),
-        });
+            Action::Expr(expr) => FlatAction::Expr(add_expr(expr.clone(), &mut res)),
+        };
+        res.push(flat);
     }
 
-    setup.into_iter().chain(res.into_iter()).collect()
+    res
 }
 
 fn flatten_rule(rule: Rule) -> FlatRule {

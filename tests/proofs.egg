@@ -4,7 +4,6 @@
     (Const Rational)
     (Var String))
 
-
 (datatype AstMath
   (AstAdd AstMath AstMath)
   (AstSub AstMath AstMath)
@@ -196,63 +195,70 @@
                (Flip (RuleEquality ruleproof
                   newrep rhs)))))
 
-(add-ruleset rules)
-(clear-rules)
 
 ;; ########################## PROOF RULES
 
+(ruleset proof-rules)
 ;; children
 (rule ((= a (AstAdd c1 c2)))
       ((set (Child1 a) c1)
-       (set (Child2 a) c2)))
+       (set (Child2 a) c2))
+      :ruleset proof-rules)
 (rule ((= a (AstSub c1 c2)))
       ((set (Child1 a) c1)
-       (set (Child2 a) c2)))
+       (set (Child2 a) c2))
+      :ruleset proof-rules)
 
 (rule ((= trmprf (MakeTrmPrf t p)))
       ((set (TrmOf trmprf) t)
-       (set (PrfOf trmprf) p)))
+       (set (PrfOf trmprf) p))
+      :ruleset proof-rules)
 
-(add-ruleset proof-rules)
-(clear-rules)
+
+(ruleset proof-extract)
 
 ;; Silly function to get the proof
 (function GetProof (AstMath) Proof :cost 1000000000)
 (rule ((= tp (AddRep a b))
        (= term (TrmOf tp))
        (= proof (PrfOf tp)))
-      ((set (GetProof term) proof)))
+      ((set (GetProof term) proof))
+      :ruleset proof-extract)
 (rule ((= tp (SubRep a b))
        (= term (TrmOf tp))
        (= proof (PrfOf tp)))
-      ((set (GetProof term) proof)))
+      ((set (GetProof term) proof))
+      :ruleset proof-extract)
 (rule ((= tp (ConstRep a))
        (= term (TrmOf tp))
        (= proof (PrfOf tp)))
-      ((set (GetProof term) proof)))
+      ((set (GetProof term) proof))
+      :ruleset proof-extract)
 (rule ((= tp (VarRep a))
        (= term (TrmOf tp))
        (= proof (PrfOf tp)))
-      ((set (GetProof term) proof)))
+      ((set (GetProof term) proof))
+      :ruleset proof-extract)
 
 ;; start term, end term, current progress term, proof
 (function ProofBetween (AstMath AstMath AstMath) ProofList :cost 100000 :merge old)
 
 ;; start proof search for equalities
 (rule ((= e (DemandEq t1 t2)))
-      ((set (ProofBetween t1 t2 t1) (Null))))
+      ((set (ProofBetween t1 t2 t1) (Null)))
+      :ruleset proof-extract)
 ;; do one step of proof search to find a path
 (rule ((= proof (ProofBetween t1 t2 tmid))
        (= eproof (EqGraph tmid next)))
       ((set (ProofBetween t1 t2 next)
-            (Cons eproof proof))))
+            (Cons eproof proof)))
+      :ruleset proof-extract)
 ;; when you find a path, union it with the equality proof
 (rule ((= e (DemandEq t1 t2))
        (= prooflist (ProofBetween t1 t2 t2)))
-      ((set (DemandEq t1 t2) (Transitivity prooflist))))
+      ((set (DemandEq t1 t2) (Transitivity prooflist)))
+      :ruleset proof-extract)
 
-(add-ruleset proof-extract)
-(clear-rules)
 
 
 (define two (rational 2 1))
@@ -269,30 +275,13 @@
        addx2
        (Original (AstAdd (AstVar "x") (AstConst two)))))
 
-(load-ruleset proof-rules)
-(run 1000)
-(clear-rules)
-
-(load-ruleset rules)
+(run proof-rules 1000)
 (run 1)
-(clear-rules)
-(load-ruleset proof-rules)
-(run 1000)
-(clear-rules)
-
-(load-ruleset rules)
+(run proof-rules 1000)
 (run 1)
-(clear-rules)
-(load-ruleset proof-rules)
-(run 1000)
-(clear-rules)
-
-(load-ruleset rules)
+(run proof-rules 1000)
 (run 1)
-(clear-rules)
-(load-ruleset proof-rules)
-(run 1000)
-(clear-rules)
+(run proof-rules 1000)
 
 (define zero (AstConst (rational 0 1)))
 (define addzero (AstAdd addx2 zero))
@@ -301,12 +290,8 @@
 (DemandEq addx2 add2x)
 (DemandEq addx2 addzerofront)
 
-(load-ruleset proof-extract)
-(run 100)
-(clear-rules)
+(run proof-extract 100)
 
-(print DemandEq)
-(print TrmOf)
 
 (check (!= (Var "x") (Const two)))
 (check (= (Add (Var "x") (Const two))
