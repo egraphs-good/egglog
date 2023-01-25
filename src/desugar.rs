@@ -186,3 +186,15 @@ pub(crate) fn desugar_program(
         .collect();
     intermediate.map(|v| v.into_iter().flatten().collect())
 }
+
+
+pub fn to_rules(program: Vec<Command>) -> Vec<Command> {
+    program.into_iter().map(|command| {
+        match command {
+            Command::FlatRule(ruleset, rule) => {
+                Command::Rule(ruleset, rule.to_rule())
+            }
+            _ => command
+        }
+    }).collect()
+}

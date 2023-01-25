@@ -164,12 +164,18 @@ fn instrument_rule(_egraph: &EGraph, rule: &FlatRule) -> FlatRule {
         }
     }
 
+    let mut actions = vec![];
+    for action in &rule.head {
+        actions.push(action.clone());
+    }
+
     // res.head.extend();
     FlatRule {
-        head: rule.head.clone(),
+        head: actions,
         body: facts,
     }
 }
+
 
 fn make_rep_func(egraph: &EGraph, fdecl: &FunctionDecl) -> FunctionDecl {
     FunctionDecl {
@@ -185,7 +191,7 @@ fn make_rep_func(egraph: &EGraph, fdecl: &FunctionDecl) -> FunctionDecl {
     }
 }
 
-fn make_proof_rule(egraph: &EGraph, fdecl: &FunctionDecl) -> Command {
+fn make_getchild_rule(egraph: &EGraph, fdecl: &FunctionDecl) -> Command {
     let getchild = |i| Symbol::from(format!("c{}__", i));
     Command::Rule(
         "proofrules__".into(),
@@ -204,7 +210,7 @@ fn make_proof_rule(egraph: &EGraph, fdecl: &FunctionDecl) -> Command {
                 .input
                 .iter()
                 .enumerate()
-                .map(|(i, s)| {
+                .map(|(i, _s)| {
                     Action::Set(
                         "GetChild__".into(),
                         vec![Expr::Var("ast__".into()), Expr::Lit(Literal::Int(i as i64))],
@@ -215,6 +221,7 @@ fn make_proof_rule(egraph: &EGraph, fdecl: &FunctionDecl) -> Command {
         },
     )
 }
+
 
 fn make_runner(config: &RunConfig) -> Vec<Command> {
     let mut res = vec![];
@@ -237,7 +244,20 @@ fn make_runner(config: &RunConfig) -> Vec<Command> {
 
 // the egraph is the initial egraph with only default sorts
 pub(crate) fn add_proofs(egraph: &EGraph, program: Vec<Command>) -> Vec<Command> {
-    let mut res = proof_header(egraph);
+    let mut res = vec![];
+    
+
+    for command in proof_header(egraph) {
+        match command {
+            Command::FlatRule(ruleset, rule) => {
+                res.push(Command::Rule(ruleset, rule.to_rule()));
+            }
+            _ => {
+                res.push(command);
+            }
+        }
+    }
+
     res.extend(make_ast_primitives(egraph));
 
     for command in program {
@@ -259,7 +279,7 @@ pub(crate) fn add_proofs(egraph: &EGraph, program: Vec<Command>) -> Vec<Command>
                 res.push(command.clone());
                 res.push(Command::Function(make_ast_func(egraph, fdecl)));
                 res.push(Command::Function(make_rep_func(egraph, fdecl)));
-                res.push(make_proof_rule(egraph, fdecl));
+                res.push(make_getchild_rule(egraph, fdecl));
             }
             Command::Rule(_ruleset, _rule) => {
                 panic!("Rule should have been desugared");

@@ -51,3 +51,4 @@
 (rule ((= trmprf (MakeTrmPrf__ t p)))
       ((set (TrmOf__ trmprf) t)
        (set (PrfOf__ trmprf) p)) :ruleset proofrules__)
+

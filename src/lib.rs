@@ -16,7 +16,7 @@ use instant::{Duration, Instant};
 use sort::*;
 use thiserror::Error;
 
-use desugar::desugar_program;
+use desugar::{desugar_program, to_rules};
 use proofs::add_proofs;
 
 use symbolic_expressions::Sexp;
@@ -834,7 +834,7 @@ impl EGraph {
                 let name = self.add_rule(rule, ruleset.into())?;
                 format!("Declared rule {name}.")
             }
-            Command::FlatRule(_, _) => {
+            Command::FlatRule(_, _rule) => {
                 todo!("Support flat rules and deprecate rule");
             }
             Command::Rewrite(_, _rewrite) => {
@@ -1174,13 +1174,11 @@ impl EGraph {
     fn run_program(&mut self, program: Vec<Command>) -> Result<Vec<String>, Error> {
         let mut msgs = vec![];
         let should_run = true;
-        let with_proofs = add_proofs(&self, program.clone());
+        //let with_proofs = add_proofs(&self, program.clone());
 
-        println!("With proofs:");
-        println!("{}", ListDisplay(with_proofs.clone(), "\n"));
-        println!("end");
+        //println!("{}", ListDisplay(with_proofs.clone(), "\n"));
 
-        for command in with_proofs {
+        for command in to_rules(program) {
             let msg = self.run_command(command, should_run)?;
             log::info!("{}", msg);
             msgs.push(msg);
