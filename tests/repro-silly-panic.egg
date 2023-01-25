@@ -1,0 +1,11 @@
+(datatype KAT
+    (A)
+    (par KAT KAT)
+)
+
+(rewrite (par p p) p)
+(rule ((= r (par q r)) (= q (par q r))) ((union r q)))
+
+; tests
+(define q (par A A))
+(run 10)

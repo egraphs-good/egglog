@@ -42,6 +42,7 @@ fn desugar_birewrite(rewrite: &Rewrite) -> Vec<Command> {
         .collect()
 }
 
+// TODO: write an IR that these commands desugar to
 pub(crate) fn desugar_command(command: Command) -> Vec<Command> {
     match command {
         Command::Datatype { name, variants } => desugar_datatype(name, variants),
