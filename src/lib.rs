@@ -1174,7 +1174,7 @@ impl EGraph {
     fn run_program(&mut self, program: Vec<Command>) -> Result<Vec<String>, Error> {
         let mut msgs = vec![];
         let should_run = true;
-        //let with_proofs = add_proofs(&self, program.clone());
+        let with_proofs = add_proofs(&self, program.clone());
 
         println!("{}", ListDisplay(program.clone(), "\n"));
 

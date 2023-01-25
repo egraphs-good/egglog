@@ -63,20 +63,22 @@ pub enum Expr {
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
-pub enum FlatExpr {
-    Lit(Literal),
-    Var(Symbol),
+pub enum SSAExpr {
     Call(Symbol, Vec<Symbol>),
+    Primative(Symbol, Vec<Symbol>),
+    Lit(Literal),
 }
 
-impl FlatExpr {
+impl SSAExpr {
     pub fn to_expr(&self) -> Expr {
         match self {
-            FlatExpr::Lit(lit) => Expr::Lit(lit.clone()),
-            FlatExpr::Var(v) => Expr::Var(*v),
-            FlatExpr::Call(op, args) => {
+            SSAExpr::Call(op, args) => {
                 Expr::Call(*op, args.into_iter().map(|a| Expr::Var(*a)).collect())
             }
+            SSAExpr::Primative(op, args) => {
+                Expr::Call(*op, args.into_iter().map(|a| Expr::Var(*a)).collect())
+            }
+            SSAExpr::Lit(lit) => Expr::Lit(lit.clone()),
         }
     }
 }

@@ -1,6 +1,6 @@
 use crate::*;
 
-type Fresh = dyn FnMut() -> Symbol;
+pub(crate) type Fresh = dyn FnMut() -> Symbol;
 
 fn desugar_datatype(name: Symbol, variants: Vec<Variant>) -> Vec<Command> {
     vec![Command::Sort(name, None)]
@@ -47,47 +47,71 @@ fn desugar_birewrite(ruleset: Symbol, rewrite: &Rewrite) -> Vec<Command> {
         .collect()
 }
 
-// TODO make new flat expr type like AtomTerm
-fn flatten_expr(expr: &Expr, res: &mut Vec<(Symbol, FlatExpr)>, get_fresh: &mut Fresh) -> Symbol {
+// TODO use an egraph to perform the SSA translation without introducing
+// so many fresh variables
+fn expr_to_ssa(
+    expr: &Expr,
+    get_fresh: &mut Fresh,
+    varUsed: &mut HashSet<Symbol>,
+    varJustUsed: &mut HashSet<Symbol>,
+    res: &mut Vec<SSAFact>,
+    constraints: &mut Vec<SSAFact>,
+) -> Symbol {
     match expr {
         Expr::Lit(l) => {
-            let rvar = get_fresh();
-            res.push((rvar, FlatExpr::Lit(l.clone())));
-            rvar
+            let fresh = get_fresh();
+            res.push(SSAFact::Assign(fresh, SSAExpr::Lit(l.clone())));
+            fresh
         }
-        Expr::Var(v) => *v,
+        Expr::Var(v) => {
+            if varUsed.insert(*v) {
+                varJustUsed.insert(*v);
+                *v
+            } else {
+                let fresh = get_fresh();
+                // logic to satisfy typechecker
+                // if we used the variable in this recurrence, add the constraint afterwards
+                if varJustUsed.contains(v) {
+                    constraints.push(SSAFact::ConstrainEq(fresh, *v));
+                // otherwise add the constrain immediately so we have the type
+                } else {
+                    res.push(SSAFact::ConstrainEq(fresh, *v));
+                }
+                fresh
+            }
+        }
         Expr::Call(f, children) => {
             let mut new_children = vec![];
             for child in children {
-                new_children.push(flatten_expr(child, res, get_fresh));
+                new_children.push(expr_to_ssa(child, get_fresh, varUsed, varJustUsed, res, constraints));
             }
-            let rvar = get_fresh();
-            res.push((rvar, FlatExpr::Call(f.clone(), new_children)));
-            rvar
+            let fresh = get_fresh();
+            res.push(SSAFact::Assign(
+                fresh,
+                SSAExpr::Call(f.clone(), new_children),
+            ));
+            fresh
         }
     }
 }
 
-// Makes sure the expression does not have nested calls
-fn flatten_equality(equality: (Symbol, Expr), get_fresh: &mut Fresh) -> Vec<FlatFact> {
-    let mut flattened = vec![];
-    let fvar = flatten_expr(&equality.1, &mut flattened, get_fresh);
+fn flatten_equalities(equalities: Vec<(Symbol, Expr)>, get_fresh: &mut Fresh) -> Vec<SSAFact> {
     let mut res = vec![];
-    for (var, expr) in flattened {
-        res.push(FlatFact::new(var, expr));
+    
+    let mut varUsed = Default::default();
+    for (lhs, rhs) in equalities {
+        let mut constraints = vec![];
+        let result = expr_to_ssa(&rhs, get_fresh, &mut varUsed, &mut Default::default(),  &mut res, &mut constraints);
+        res.extend(constraints);
+
+        if varUsed.insert(lhs) {
+            res.push(SSAFact::ConstrainEq(lhs, result));
+        }
     }
-    res.push(FlatFact::new(equality.0, FlatExpr::Var(fvar)));
     res
 }
 
-fn flatten_equalities(equalities: Vec<(Symbol, Expr)>, get_fresh: &mut Fresh) -> Vec<FlatFact> {
-    equalities
-        .into_iter()
-        .flat_map(|e| flatten_equality(e, get_fresh))
-        .collect()
-}
-
-fn flatten_facts(facts: &Vec<Fact>, get_fresh: &mut Fresh) -> Vec<FlatFact> {
+fn flatten_facts(facts: &Vec<Fact>, get_fresh: &mut Fresh) -> Vec<SSAFact> {
     let mut equalities = vec![];
     for fact in facts {
         match fact {
@@ -97,6 +121,8 @@ fn flatten_facts(facts: &Vec<Fact>, get_fresh: &mut Fresh) -> Vec<FlatFact> {
                 let rhs = &args[1];
                 if let Expr::Var(v) = lhs {
                     equalities.push((v.clone(), rhs.clone()));
+                } else if let Expr::Var(v) = rhs {
+                    equalities.push((v.clone(), lhs.clone()));  
                 } else {
                     let fresh = get_fresh();
                     equalities.push((fresh, lhs.clone()));
@@ -112,37 +138,86 @@ fn flatten_facts(facts: &Vec<Fact>, get_fresh: &mut Fresh) -> Vec<FlatFact> {
     flatten_equalities(equalities, get_fresh)
 }
 
-fn flatten_actions(actions: &Vec<Action>, get_fresh: &mut Fresh) -> Vec<FlatAction> {
-    let mut add_expr = |expr: Expr, res: &mut Vec<FlatAction>| {
-        let mut flattened = vec![];
-        let fvar = flatten_expr(&expr, &mut flattened, get_fresh);
-        for (var, expr) in flattened {
-            res.push(FlatAction::Let(var, expr));
+fn expr_to_flat_actions(
+    assign: Symbol,
+    expr: &Expr,
+    get_fresh: &mut Fresh,
+    res: &mut Vec<SSAAction>,
+) {
+    match expr {
+        Expr::Lit(l) => {
+            res.push(SSAAction::Let(assign, SSAExpr::Lit(l.clone())));
         }
-        FlatExpr::Var(fvar)
+        Expr::Var(v) => {
+            res.push(SSAAction::LetVar(assign, v.clone()));
+        }
+        Expr::Call(f, children) => {
+            let mut new_children = vec![];
+            for child in children {
+                let fresh = get_fresh();
+                expr_to_flat_actions(fresh, child, get_fresh, res);
+                new_children.push(fresh);
+            }
+            res.push(SSAAction::Let(
+                assign,
+                SSAExpr::Call(f.clone(), new_children),
+            ));
+        }
+    }
+}
+
+fn flatten_actions(actions: &Vec<Action>, get_fresh: &mut Fresh) -> Vec<SSAAction> {
+    let mut add_expr = |expr: Expr, res: &mut Vec<SSAAction>| {
+        let fresh = get_fresh();
+        expr_to_flat_actions(fresh, &expr, get_fresh, res);
+        fresh
     };
 
     let mut res = vec![];
 
     for action in actions {
-        let flat = match action {
-            Action::Let(symbol, expr) => FlatAction::Let(*symbol, add_expr(expr.clone(), &mut res)),
-            Action::Set(symbol, exprs, rhs) => FlatAction::Set(
-                *symbol,
-                exprs.clone().into_iter().map(|ex| add_expr(ex, &mut res)).collect(),
-                add_expr(rhs.clone(), &mut res),
-            ),
-            Action::Delete(symbol, exprs) => FlatAction::Delete(
-                *symbol,
-                exprs.clone().into_iter().map(|ex| add_expr(ex, &mut res)).collect(),
-            ),
-            Action::Union(lhs, rhs) => {
-                FlatAction::Union(add_expr(lhs.clone(), &mut res), add_expr(rhs.clone(), &mut res))
+        match action {
+            Action::Let(symbol, expr) => {
+                let added = add_expr(expr.clone(), &mut res);
+                res.push(SSAAction::LetVar(*symbol, added));
             }
-            Action::Panic(msg) => FlatAction::Panic(msg.clone()),
-            Action::Expr(expr) => FlatAction::Expr(add_expr(expr.clone(), &mut res)),
+            Action::Set(symbol, exprs, rhs) => {
+                let set = SSAAction::Set(
+                    *symbol,
+                    exprs
+                        .clone()
+                        .into_iter()
+                        .map(|ex| add_expr(ex, &mut res))
+                        .collect(),
+                    add_expr(rhs.clone(), &mut res),
+                );
+                res.push(set);
+            }
+            Action::Delete(symbol, exprs) => {
+                let del = SSAAction::Delete(
+                    *symbol,
+                    exprs
+                        .clone()
+                        .into_iter()
+                        .map(|ex| add_expr(ex, &mut res))
+                        .collect(),
+                );
+                res.push(del);
+            }
+            Action::Union(lhs, rhs) => {
+                let un = SSAAction::Union(
+                    add_expr(lhs.clone(), &mut res),
+                    add_expr(rhs.clone(), &mut res),
+                );
+                res.push(un);
+            }
+            Action::Panic(msg) => {
+                res.push(SSAAction::Panic(msg.clone()));
+            }
+            Action::Expr(expr) => {
+                add_expr(expr.clone(), &mut res);
+            }
         };
-        res.push(flat);
     }
 
     res
@@ -187,14 +262,12 @@ pub(crate) fn desugar_program(
     intermediate.map(|v| v.into_iter().flatten().collect())
 }
 
-
 pub fn to_rules(program: Vec<Command>) -> Vec<Command> {
-    program.into_iter().map(|command| {
-        match command {
-            Command::FlatRule(ruleset, rule) => {
-                Command::Rule(ruleset, rule.to_rule())
-            }
-            _ => command
-        }
-    }).collect()
+    program
+        .into_iter()
+        .map(|command| match command {
+            Command::FlatRule(ruleset, rule) => Command::Rule(ruleset, rule.to_rule()),
+            _ => command,
+        })
+        .collect()
 }

@@ -341,18 +341,21 @@ pub enum Fact {
 }
 
 #[derive(Clone, Debug)]
-pub struct FlatFact {
-    pub symbol: Symbol,
-    pub expr: FlatExpr,
+pub enum SSAFact {
+    Assign(Symbol, SSAExpr),
+    ConstrainEq(Symbol, Symbol),
 }
 
-impl FlatFact {
-    pub fn new(symbol: Symbol, expr: FlatExpr) -> Self {
-        Self { symbol, expr }
-    }
-
+impl SSAFact {
     pub fn to_fact(&self) -> Fact {
-        Fact::Eq(vec![Expr::Var(self.symbol), self.expr.to_expr()])
+        match self {
+            SSAFact::Assign(symbol, expr) => {
+                Fact::Eq(vec![Expr::Var(symbol.clone()), expr.to_expr()])
+            }
+            SSAFact::ConstrainEq(lhs, rhs) => {
+                Fact::Eq(vec![Expr::Var(lhs.clone()), Expr::Var(rhs.clone())])
+            }
+        }
     }
 }
 
@@ -388,30 +391,33 @@ pub enum Action {
 }
 
 #[derive(Clone, Debug)]
-pub enum FlatAction {
-    Let(Symbol, FlatExpr),
-    Set(Symbol, Vec<FlatExpr>, FlatExpr),
-    Delete(Symbol, Vec<FlatExpr>),
-    Union(FlatExpr, FlatExpr),
+pub enum SSAAction {
+    Let(Symbol, SSAExpr),
+    LetVar(Symbol, Symbol),
+    Set(Symbol, Vec<Symbol>, Symbol),
+    Delete(Symbol, Vec<Symbol>),
+    Union(Symbol, Symbol),
     Panic(String),
-    Expr(FlatExpr),
 }
 
-impl FlatAction {
+impl SSAAction {
     pub fn to_action(&self) -> Action {
         match self {
-            FlatAction::Let(lhs, rhs) => Action::Let(lhs.clone(), rhs.to_expr()),
-            FlatAction::Set(lhs, args, rhs) => Action::Set(
-                lhs.clone(),
-                args.iter().map(|e| e.to_expr()).collect(),
-                rhs.to_expr(),
+            SSAAction::Let(symbol, expr) => Action::Let(symbol.clone(), expr.to_expr()),
+            SSAAction::LetVar(symbol, other) => Action::Let(symbol.clone(), Expr::Var(other.clone())),
+            SSAAction::Set(symbol, args, other) => Action::Set(
+                symbol.clone(),
+                args.iter().map(|s| Expr::Var(s.clone())).collect(),
+                Expr::Var(*other),
             ),
-            FlatAction::Delete(lhs, args) => {
-                Action::Delete(lhs.clone(), args.iter().map(|e| e.to_expr()).collect())
+            SSAAction::Delete(symbol, args) => Action::Delete(
+                symbol.clone(),
+                args.iter().map(|s| Expr::Var(s.clone())).collect(),
+            ),
+            SSAAction::Union(lhs, rhs) => {
+                Action::Union(Expr::Var(lhs.clone()), Expr::Var(rhs.clone()))
             }
-            FlatAction::Union(lhs, rhs) => Action::Union(lhs.to_expr(), rhs.to_expr()),
-            FlatAction::Panic(msg) => Action::Panic(msg.clone()),
-            FlatAction::Expr(expr) => Action::Expr(expr.to_expr()),
+            SSAAction::Panic(msg) => Action::Panic(msg.clone()),
         }
     }
 }
@@ -492,8 +498,8 @@ pub struct Rule {
 
 #[derive(Clone, Debug)]
 pub struct FlatRule {
-    pub head: Vec<FlatAction>,
-    pub body: Vec<FlatFact>,
+    pub head: Vec<SSAAction>,
+    pub body: Vec<SSAFact>,
 }
 
 impl FlatRule {
