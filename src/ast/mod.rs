@@ -132,9 +132,7 @@ impl Command {
                 Sexp::List(res)
             }
             Command::Run(config) => {
-                let mut res = vec![
-                    Sexp::String("run".into()),
-                ];
+                let mut res = vec![Sexp::String("run".into())];
                 if config.ruleset != "".into() {
                     res.push(Sexp::String(config.ruleset.to_string()));
                 }

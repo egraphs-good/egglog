@@ -430,6 +430,7 @@ impl EGraph {
     }
 
     pub fn declare_function(&mut self, decl: &FunctionDecl) -> Result<(), Error> {
+        self.declare_sort(decl.name, None)?;
         let function = Function::new(self, decl)?;
         let old = self.functions.insert(decl.name, function);
         if old.is_some() {
@@ -633,7 +634,11 @@ impl EGraph {
 
         let ban_length = 5;
 
-        let mut rules: HashMap<Symbol, Rule> = std::mem::take(self.rulesets.get_mut(&ruleset).unwrap());
+        if !self.rulesets.contains_key(&ruleset) {
+            panic!("run: No ruleset named '{ruleset}'");
+        }
+        let mut rules: HashMap<Symbol, Rule> =
+            std::mem::take(self.rulesets.get_mut(&ruleset).unwrap());
         // TODO why did I have to copy the rules here for the first for loop?
         let copy_rules = rules.clone();
         let search_start = Instant::now();
@@ -1171,7 +1176,9 @@ impl EGraph {
         let should_run = true;
         let with_proofs = add_proofs(&self, program.clone());
 
-        //println!("{}", ListDisplay(with_proofs.clone(), "\n"));
+        println!("With proofs:");
+        println!("{}", ListDisplay(with_proofs.clone(), "\n"));
+        println!("end");
 
         for command in with_proofs {
             let msg = self.run_command(command, should_run)?;

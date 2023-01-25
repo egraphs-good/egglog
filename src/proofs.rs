@@ -7,16 +7,34 @@ fn proof_header(egraph: &EGraph) -> Vec<Command> {
     egraph.parse_program(str).unwrap()
 }
 
-fn make_ast_version(egraph: &EGraph, name: &Symbol) -> Symbol {
-    if egraph.sorts.get(name).is_some() {
+// make ast versions even for primitives
+fn make_ast_version(_egraph: &EGraph, name: &Symbol) -> Symbol {
+    /*if egraph.sorts.get(name).is_some() {
         name.clone()
-    } else {
-        Symbol::from(format!("Ast{}__", name))
-    }
+    } else {*/
+    Symbol::from(format!("Ast{}__", name))
 }
 
 fn make_rep_version(name: &Symbol) -> Symbol {
     Symbol::from(format!("{}Rep__", name))
+}
+
+fn make_ast_primitives(egraph: &EGraph) -> Vec<Command> {
+    egraph.sorts.iter().map(|(name, _)| {
+        Command::Function(
+            FunctionDecl {
+                name: make_ast_version(egraph, name),
+                schema: Schema {
+                    input: vec![*name],
+                    output: "Ast__".into(),
+                },
+                merge: None,
+                merge_action: vec![],
+                default: None,
+                cost: None,
+            }
+        )
+    }).collect()
 }
 
 fn make_ast_func(egraph: &EGraph, fdecl: &FunctionDecl) -> FunctionDecl {
@@ -27,7 +45,7 @@ fn make_ast_func(egraph: &EGraph, fdecl: &FunctionDecl) -> FunctionDecl {
                 .schema
                 .input
                 .iter()
-                .map(|sort| make_ast_version(egraph, sort))
+                .map(|sort| "Ast__".into())
                 .collect(),
             output: "Ast__".into(),
         },
@@ -167,41 +185,60 @@ fn make_rep_func(egraph: &EGraph, fdecl: &FunctionDecl) -> FunctionDecl {
     }
 }
 
-fn make_proof_rule(_egraph: &EGraph, fdecl: &FunctionDecl) -> Command {
-    Command::Rule("proofrules__".into(),
+fn make_proof_rule(egraph: &EGraph, fdecl: &FunctionDecl) -> Command {
+    let getchild = |i| Symbol::from(format!("c{}__", i));
+    Command::Rule(
+        "proofrules__".into(),
         Rule {
-        body: vec![Fact::Eq(vec![
-            Expr::Var("ast__".into()),
-            Expr::Call(
-                fdecl.name.clone(),
-                fdecl
-                    .schema
-                    .input
-                    .iter()
-                    .map(|s| Expr::Var(s.clone()))
-                    .collect(),
-            ),
-        ])],
-        head: fdecl
-            .schema
-            .input
-            .iter()
-            .enumerate()
-            .map(|(i, s)| {
-                Action::Set(
-                    "GetChild__".into(),
-                    vec![Expr::Var("ast__".into()), Expr::Lit(Literal::Int(i as i64))],
-                    Expr::Var(s.clone()),
-                )
-            })
-            .collect(),
-    })
+            body: vec![Fact::Eq(vec![
+                Expr::Var("ast__".into()),
+                Expr::Call(
+                    make_ast_version(egraph, &fdecl.name),
+                    fdecl.schema.input.iter().enumerate().map(|(i, _)| {
+                        Expr::Var(getchild(i))
+                    }).collect()
+                ),
+            ])],
+            head: fdecl
+                .schema
+                .input
+                .iter()
+                .enumerate()
+                .map(|(i, s)| {
+                    Action::Set(
+                        "GetChild__".into(),
+                        vec![Expr::Var("ast__".into()), Expr::Lit(Literal::Int(i as i64))],
+                        Expr::Var(getchild(i)),
+                    )
+                })
+                .collect(),
+        },
+    )
+}
+
+fn make_runner(config: &RunConfig) -> Vec<Command> {
+    let mut res = vec![];
+    let run_proof_rules = Command::Run(RunConfig {
+        ruleset: "proofrules__".into(),
+        limit: 100,
+        until: None
+    });
+    for i in 0..config.limit {
+        res.push(run_proof_rules.clone());
+        res.push(Command::Run(RunConfig {
+            ruleset: config.ruleset,
+            limit: 1,
+            until: config.until.clone(),
+        }));
+    }
+    res.push(run_proof_rules);
+    res
 }
 
 // the egraph is the initial egraph with only default sorts
 pub(crate) fn add_proofs(egraph: &EGraph, program: Vec<Command>) -> Vec<Command> {
     let mut res = proof_header(egraph);
-    let mut proof_rules = vec![];
+    res.extend(make_ast_primitives(egraph));
 
     for command in program {
         match &command {
@@ -222,18 +259,21 @@ pub(crate) fn add_proofs(egraph: &EGraph, program: Vec<Command>) -> Vec<Command>
                 res.push(command.clone());
                 res.push(Command::Function(make_ast_func(egraph, fdecl)));
                 res.push(Command::Function(make_rep_func(egraph, fdecl)));
-                proof_rules.push(make_proof_rule(egraph, fdecl));
+                res.push(make_proof_rule(egraph, fdecl));
             }
             Command::Rule(_ruleset, _rule) => {
                 panic!("Rule should have been desugared");
             }
             Command::FlatRule(ruleset, rule) => {
-                res.push(Command::Rule(*ruleset, rule.to_rule()));
-                /*res.push(Command::Rule(
-                *ruleset,
-                instrument_rule(egraph, &rule).to_rule(),
-            ))*/
-        },
+                //res.push(Command::Rule(*ruleset, rule.to_rule()));
+                res.push(Command::Rule(
+                    *ruleset,
+                    instrument_rule(egraph, &rule).to_rule(),
+                ));
+            }
+            Command::Run(config) => {
+                res.extend(make_runner(config));
+            }
             _ => res.push(command),
         }
     }

@@ -45,3 +45,9 @@
 (function TrmOf__ (TrmPrf__) Ast__ :cost 10000)
 (function PrfOf__ (TrmPrf__) Proof__ :cost 100000)
 (function GetChild__ (Ast__ i64) Ast__ :cost 100000)
+
+(ruleset proofrules__)
+
+(rule ((= trmprf (MakeTrmPrf__ t p)))
+      ((set (TrmOf__ trmprf) t)
+       (set (PrfOf__ trmprf) p)) :ruleset proofrules__)
