@@ -52,7 +52,7 @@ fn desugar_birewrite(ruleset: Symbol, rewrite: &Rewrite) -> Vec<Command> {
 fn expr_to_ssa(
     expr: &Expr,
     get_fresh: &mut Fresh,
-    varUsed: &mut HashSet<Symbol>,
+    var_used: &mut HashSet<Symbol>,
     varJustUsed: &mut HashSet<Symbol>,
     res: &mut Vec<SSAFact>,
     constraints: &mut Vec<SSAFact>,
@@ -60,11 +60,11 @@ fn expr_to_ssa(
     match expr {
         Expr::Lit(l) => {
             let fresh = get_fresh();
-            res.push(SSAFact::Assign(fresh, SSAExpr::Lit(l.clone())));
+            res.push(SSAFact::ConstrainLit(fresh, l.clone()));
             fresh
         }
         Expr::Var(v) => {
-            if varUsed.insert(*v) {
+            if var_used.insert(*v) {
                 varJustUsed.insert(*v);
                 *v
             } else {
@@ -83,31 +83,87 @@ fn expr_to_ssa(
         Expr::Call(f, children) => {
             let mut new_children = vec![];
             for child in children {
-                new_children.push(expr_to_ssa(child, get_fresh, varUsed, varJustUsed, res, constraints));
+                new_children.push(expr_to_ssa(child, get_fresh, var_used, varJustUsed, res, constraints));
             }
             let fresh = get_fresh();
             res.push(SSAFact::Assign(
                 fresh,
                 SSAExpr::Call(f.clone(), new_children),
             ));
-            fresh
+            let fresh2 = get_fresh();
+            res.push(SSAFact::ConstrainEq(fresh2, fresh));
+            fresh2
         }
     }
+}
+
+fn ssa_valid_expr(expr: &SSAExpr, var_used: &mut HashSet<Symbol>) -> bool {
+    match expr {
+        SSAExpr::Call(_, children) => {
+            for child in children {
+                if !var_used.insert(*child) {
+                    return false
+                }
+            }
+        }
+        SSAExpr::Primative(_, children) => {
+            for child in children {
+                if !var_used.insert(*child) {
+                    return false
+                }
+            }
+        }
+    }
+    true
+}
+
+fn assert_ssa_valid(facts: &Vec<SSAFact>) -> bool {
+    let mut var_used: HashSet<Symbol> = Default::default();
+    let mut var_used_constraints: HashSet<Symbol> = Default::default();
+    for fact in facts {
+        match fact {
+            SSAFact::Assign(v, expr) => {
+                if !var_used.insert(*v) {
+                    panic!("invalid SSA variable: {:?}", v);
+                }
+
+                if !ssa_valid_expr(expr, &mut var_used) {
+                    panic!("invalid SSA fact: {:?}", expr);
+                }
+            }
+            SSAFact::ConstrainEq(v, v2) => {
+                let b1 = var_used_constraints.insert(*v);
+                let b2 = var_used_constraints.insert(*v2);
+                // any constraints on variables are valid, but one needs to be defined
+                if !var_used.contains(v) && !var_used.contains(v2) {
+                    if b1 && b2 {
+                        panic!("invalid SSA constraint: {:?} = {:?}", v, v2);
+                    }
+                }
+            }
+            SSAFact::ConstrainLit(v, _) => {
+                var_used_constraints.insert(*v);
+            }
+        }
+    }
+    true
 }
 
 fn flatten_equalities(equalities: Vec<(Symbol, Expr)>, get_fresh: &mut Fresh) -> Vec<SSAFact> {
     let mut res = vec![];
     
-    let mut varUsed = Default::default();
+    let mut var_used = Default::default();
     for (lhs, rhs) in equalities {
         let mut constraints = vec![];
-        let result = expr_to_ssa(&rhs, get_fresh, &mut varUsed, &mut Default::default(),  &mut res, &mut constraints);
+        let result = expr_to_ssa(&rhs, get_fresh, &mut var_used, &mut Default::default(),  &mut res, &mut constraints);
         res.extend(constraints);
 
         
-        varUsed.insert(lhs);
+        var_used.insert(lhs);
         res.push(SSAFact::ConstrainEq(lhs, result));
     }
+    println!("equalities: {:?}", res);
+    assert_ssa_valid(&res);
     res
 }
 
@@ -146,7 +202,7 @@ fn expr_to_flat_actions(
 ) {
     match expr {
         Expr::Lit(l) => {
-            res.push(SSAAction::Let(assign, SSAExpr::Lit(l.clone())));
+            res.push(SSAAction::LetLit(assign, l.clone()));
         }
         Expr::Var(v) => {
             res.push(SSAAction::LetVar(assign, v.clone()));

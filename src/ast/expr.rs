@@ -66,7 +66,6 @@ pub enum Expr {
 pub enum SSAExpr {
     Call(Symbol, Vec<Symbol>),
     Primative(Symbol, Vec<Symbol>),
-    Lit(Literal),
 }
 
 impl SSAExpr {
@@ -78,7 +77,6 @@ impl SSAExpr {
             SSAExpr::Primative(op, args) => {
                 Expr::Call(*op, args.into_iter().map(|a| Expr::Var(*a)).collect())
             }
-            SSAExpr::Lit(lit) => Expr::Lit(lit.clone()),
         }
     }
 }

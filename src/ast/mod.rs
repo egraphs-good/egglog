@@ -344,6 +344,7 @@ pub enum Fact {
 pub enum SSAFact {
     Assign(Symbol, SSAExpr),
     ConstrainEq(Symbol, Symbol),
+    ConstrainLit(Symbol, Literal),
 }
 
 impl SSAFact {
@@ -354,6 +355,9 @@ impl SSAFact {
             }
             SSAFact::ConstrainEq(lhs, rhs) => {
                 Fact::Eq(vec![Expr::Var(lhs.clone()), Expr::Var(rhs.clone())])
+            }
+            SSAFact::ConstrainLit(symbol, lit) => {
+                Fact::Eq(vec![Expr::Var(symbol.clone()), Expr::Lit(lit.clone())])
             }
         }
     }
@@ -394,6 +398,7 @@ pub enum Action {
 pub enum SSAAction {
     Let(Symbol, SSAExpr),
     LetVar(Symbol, Symbol),
+    LetLit(Symbol, Literal),
     Set(Symbol, Vec<Symbol>, Symbol),
     Delete(Symbol, Vec<Symbol>),
     Union(Symbol, Symbol),
@@ -405,6 +410,7 @@ impl SSAAction {
         match self {
             SSAAction::Let(symbol, expr) => Action::Let(symbol.clone(), expr.to_expr()),
             SSAAction::LetVar(symbol, other) => Action::Let(symbol.clone(), Expr::Var(other.clone())),
+            SSAAction::LetLit(symbol, lit) => Action::Let(symbol.clone(), Expr::Lit(lit.clone())),
             SSAAction::Set(symbol, args, other) => Action::Set(
                 symbol.clone(),
                 args.iter().map(|s| Expr::Var(s.clone())).collect(),
