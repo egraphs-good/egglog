@@ -256,6 +256,7 @@ dependencies = [
  "rustc-hash",
  "smallvec",
  "symbol_table",
+ "symbolic_expressions",
  "thiserror",
 ]
 
@@ -819,6 +820,11 @@ dependencies = [
  "ahash 0.7.6",
  "hashbrown 0.12.3",
 ]
+
+[[package]]
+name = "symbolic_expressions"
+version = "5.0.3"
+source = "git+https://github.com/oflatt/symbolic-expressions?rev=4c0ea5ca008f972450b2af72387e64d2c1c6a791#4c0ea5ca008f972450b2af72387e64d2c1c6a791"
 
 [[package]]
 name = "syn"
