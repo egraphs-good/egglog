@@ -60,8 +60,10 @@ fn expr_to_ssa(
     match expr {
         Expr::Lit(l) => {
             let fresh = get_fresh();
-            res.push(SSAFact::ConstrainLit(fresh, l.clone()));
-            fresh
+            res.push(SSAFact::AssignLit(fresh, l.clone()));
+            let fresh2 = get_fresh();
+            res.push(SSAFact::ConstrainEq(fresh2, fresh));
+            fresh2
         }
         Expr::Var(v) => {
             if var_used.insert(*v) {
@@ -156,8 +158,14 @@ pub(crate) fn make_ssa_again(facts: Vec<SSAFact>) -> Vec<SSAFact> {
             SSAFact::ConstrainEq(v, v2) => {
                 res.push(SSAFact::ConstrainEq(v, v2));
             }
-            SSAFact::ConstrainLit(v, l) => {
-                res.push(SSAFact::ConstrainLit(v, l));
+            SSAFact::AssignLit(v, l) => {
+                if vars_used.insert(v) {
+                    res.push(SSAFact::AssignLit(v, l));
+                } else {
+                    let fresh = get_fresh();
+                    res.push(SSAFact::AssignLit(fresh, l));
+                    res.push(SSAFact::ConstrainEq(fresh, v));
+                }
             }
         }
     }
@@ -166,6 +174,7 @@ pub(crate) fn make_ssa_again(facts: Vec<SSAFact>) -> Vec<SSAFact> {
 }
 
 fn assert_ssa_valid(facts: &Vec<SSAFact>) -> bool {
+    println!("assert_ssa_valid: {:?}", facts);
     let mut var_used: HashSet<Symbol> = Default::default();
     let mut var_used_constraints: HashSet<Symbol> = Default::default();
     for fact in facts {
@@ -189,8 +198,10 @@ fn assert_ssa_valid(facts: &Vec<SSAFact>) -> bool {
                     }
                 }
             }
-            SSAFact::ConstrainLit(v, _) => {
-                var_used_constraints.insert(*v);
+            SSAFact::AssignLit(v, _) => {
+                if !var_used.insert(*v) {
+                    panic!("invalid SSA variable: {:?}", v);
+                }
             }
         }
     }

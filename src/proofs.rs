@@ -17,6 +17,11 @@ fn make_rep_version(name: &Symbol) -> Symbol {
     Symbol::from(format!("{}Rep__", name))
 }
 
+
+fn literal_name(egraph: &EGraph, literal: &Literal) -> Symbol {
+    egraph.infer_literal(literal).name()
+}
+
 fn make_ast_primitives(egraph: &EGraph) -> Vec<Command> {
     egraph
         .sorts
@@ -45,7 +50,7 @@ fn make_ast_func(egraph: &EGraph, fdecl: &FunctionDecl) -> FunctionDecl {
                 .schema
                 .input
                 .iter()
-                .map(|sort| "Ast__".into())
+                .map(|_sort| "Ast__".into())
                 .collect(),
             output: "Ast__".into(),
         },
@@ -113,12 +118,33 @@ struct ProofInfo {
 // This function makes use of the property that the body is SSA
 // variables appear at most once (including the rhs of assignments)
 // besides when they appear in constraints
-fn instrument_facts(body: &Vec<SSAFact>, get_fresh: &mut Fresh) -> (ProofInfo, Vec<SSAFact>) {
+fn instrument_facts(egraph: &EGraph, body: &Vec<SSAFact>, get_fresh: &mut Fresh) -> (ProofInfo, Vec<SSAFact>) {
     let mut info: ProofInfo = Default::default();
     let mut facts = body.clone();
 
     for fact in body {
         match fact {
+            SSAFact::AssignLit(lhs, rhs) => {
+                let literal_name = literal_name(&egraph, rhs);
+                let rep = get_fresh();
+                let rep_trm = get_fresh();
+                let rep_prf = get_fresh();
+                facts.push(SSAFact::Assign(
+                    rep,
+                    SSAExpr::Call(make_rep_version(&literal_name), vec![*lhs]),
+                ));
+                facts.push(SSAFact::Assign(
+                    rep_trm,
+                    SSAExpr::Call("TrmOf__".into(), vec![rep]),
+                ));
+                facts.push(SSAFact::Assign(
+                    rep_prf,
+                    SSAExpr::Call("PrfOf__".into(), vec![rep]),
+                ));
+
+                assert!(info.var_term.insert(*lhs, rep_trm).is_none());
+                assert!(info.var_proof.insert(*lhs, rep_prf).is_none());
+            }
             SSAFact::Assign(lhs, rhs) => {
                 let head = match rhs {
                     SSAExpr::Call(head, _) => head,
@@ -142,12 +168,14 @@ fn instrument_facts(body: &Vec<SSAFact>, get_fresh: &mut Fresh) -> (ProofInfo, V
                     SSAExpr::Call("PrfOf__".into(), vec![rep]),
                 ));
 
+                assert!(info.var_term.insert(*lhs, rep_trm).is_none());
                 assert!(info.var_proof.insert(*lhs, rep_prf).is_none());
 
                 for (i, child) in body.iter().enumerate() {
+                    println!("child: {:?}", child);
                     let child_trm = get_fresh();
                     let const_var = get_fresh();
-                    facts.push(SSAFact::ConstrainLit(const_var, Literal::Int(i as i64)));
+                    facts.push(SSAFact::AssignLit(const_var, Literal::Int(i as i64)));
                     facts.push(SSAFact::Assign(
                         child_trm,
                         SSAExpr::Call("GetChild__".into(), vec![rep_trm, const_var]),
@@ -155,7 +183,27 @@ fn instrument_facts(body: &Vec<SSAFact>, get_fresh: &mut Fresh) -> (ProofInfo, V
                     assert!(info.var_term.insert(*child, child_trm).is_none());
                 }
             }
-            _ => (),
+            SSAFact::ConstrainEq(lhs, rhs) => ()
+        }
+    }
+
+    // now fill in representitive terms for any aliases
+    for fact in body {
+        match fact {
+            SSAFact::ConstrainEq(lhs, rhs) => {
+                if let Some(rep_term) = info.var_term.get(lhs) {
+                    if info.var_term.get(rhs).is_none() {
+                        info.var_term.insert(*rhs, *rep_term);
+                    }
+                } else if let Some(rep_term) = info.var_term.get(rhs) {
+                    if info.var_term.get(lhs).is_none() {
+                        info.var_term.insert(*lhs, *rep_term);
+                    }
+                } else {
+                    panic!("Contraint without representative term for at least one side {} = {}", lhs, rhs);
+                }
+            }
+            _ => ()
         }
     }
 
@@ -174,22 +222,30 @@ fn add_expr_proof(info: &ProofInfo, expr: &Expr, res: &mut Vec<SSAAction>) {
 }
 
 fn add_rule_proof(rule_name: Symbol, info: &ProofInfo, facts: &Vec<SSAFact>, res: &mut Vec<SSAAction>, get_fresh: &mut Fresh) -> Symbol {
-    let current_proof = get_fresh();
+    let mut current_proof = get_fresh();
     res.push(SSAAction::Let(current_proof, SSAExpr::Call("Null__".into(), vec![])));
     println!("{:?}", facts);
     println!("{:?}", info.var_proof);
+    println!("{:?}", info.var_term);
 
     for fact in facts {
         match fact {
-            SSAFact::Assign(lhs, rhs) => {
-                let head = match rhs {
-                    SSAExpr::Call(head, _) => head,
-                };
+            SSAFact::Assign(lhs, _rhs) => {
                 let fresh = get_fresh();
-                println!("{}", lhs);
                 res.push(SSAAction::Let(fresh, SSAExpr::Call("Cons__".into(), vec![info.var_proof[lhs], current_proof])));
+                current_proof = fresh;
             }
-            _ => (),
+            // same as Assign case
+            SSAFact::AssignLit(lhs, _rhs) =>  {
+                let fresh = get_fresh();
+                res.push(SSAAction::Let(fresh, SSAExpr::Call("Cons__".into(), vec![info.var_proof[lhs], current_proof])));
+                current_proof = fresh;
+            }
+            SSAFact::ConstrainEq(lhs, rhs) => {
+                let pfresh = get_fresh();
+                println!("{} = {}", lhs, rhs);
+                res.push(SSAAction::Let(pfresh, SSAExpr::Call("DemandEq__".into(), vec![info.var_term[lhs], info.var_term[rhs]])));
+            }
         }
     }
 
@@ -200,14 +256,14 @@ fn add_rule_proof(rule_name: Symbol, info: &ProofInfo, facts: &Vec<SSAFact>, res
     current_proof
 }
 
-fn instrument_rule(_egraph: &EGraph, rule: &FlatRule) -> FlatRule {
+fn instrument_rule(egraph: &EGraph, rule: &FlatRule) -> FlatRule {
     let mut varcount = 0;
     let mut get_fresh = move || {
         varcount += 1;
         Symbol::from(format!("pvar{}__", varcount))
     };
 
-    let (mut info, facts) = instrument_facts(&rule.body, &mut get_fresh);
+    let (info, facts) = instrument_facts(egraph, &rule.body, &mut get_fresh);
 
     let mut actions = rule.head.clone();
     let rule_proof = add_rule_proof(format!("{}", rule).into(), &info, &rule.body, &mut actions, &mut get_fresh);
@@ -275,7 +331,7 @@ fn make_runner(config: &RunConfig) -> Vec<Command> {
         limit: 100,
         until: None,
     });
-    for i in 0..config.limit {
+    for _i in 0..config.limit {
         res.push(run_proof_rules.clone());
         res.push(Command::Run(RunConfig {
             ruleset: config.ruleset,

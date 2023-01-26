@@ -343,8 +343,8 @@ pub enum Fact {
 #[derive(Clone, Debug)]
 pub enum SSAFact {
     Assign(Symbol, SSAExpr),
+    AssignLit(Symbol, Literal),
     ConstrainEq(Symbol, Symbol),
-    ConstrainLit(Symbol, Literal),
 }
 
 impl SSAFact {
@@ -356,7 +356,7 @@ impl SSAFact {
             SSAFact::ConstrainEq(lhs, rhs) => {
                 Fact::Eq(vec![Expr::Var(lhs.clone()), Expr::Var(rhs.clone())])
             }
-            SSAFact::ConstrainLit(symbol, lit) => {
+            SSAFact::AssignLit(symbol, lit) => {
                 Fact::Eq(vec![Expr::Var(symbol.clone()), Expr::Lit(lit.clone())])
             }
         }

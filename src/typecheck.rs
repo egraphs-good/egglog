@@ -589,7 +589,7 @@ enum Instruction {
 pub struct Program(Vec<Instruction>);
 
 impl EGraph {
-    fn infer_literal(&self, lit: &Literal) -> ArcSort {
+    pub(crate) fn infer_literal(&self, lit: &Literal) -> ArcSort {
         match lit {
             Literal::Int(_) => self.sorts.get(&Symbol::from("i64")),
             Literal::F64(_) => self.sorts.get(&Symbol::from("f64")),
