@@ -440,6 +440,7 @@ impl EGraph {
 
                 // do the gj
                 if let Some((mut ctx, program, cols)) = Context::new(self, cq, &timestamp_ranges) {
+                    let start = Instant::now();
                     log::debug!(
                         "Query: {}\nNew atom: {}\nVars: {}\nProgram\n{}",
                         cq.query,
@@ -469,7 +470,11 @@ impl EGraph {
                     }
                     let mut trie_refs = tries.iter().collect::<Vec<_>>();
                     ctx.eval(&mut trie_refs, &program.0, &mut f).unwrap_or(());
-                    log::debug!("Matched {} times", ctx.matches);
+                    log::debug!(
+                        "Matched {} times (took {:?})",
+                        ctx.matches,
+                        Instant::now().duration_since(start)
+                    );
                 }
 
                 if !do_seminaive {

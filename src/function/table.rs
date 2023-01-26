@@ -110,8 +110,8 @@ impl Table {
     pub(crate) fn get(&self, inputs: &[Value]) -> Option<&TupleOutput> {
         let hash = hash_values(inputs);
         let TableOffset { off, .. } = self.table.get(hash, search_for!(self, hash, inputs))?;
-        debug_assert!(self.vals[*off as usize].0.live());
-        Some(&self.vals[*off as usize].1)
+        debug_assert!(self.vals[*off].0.live());
+        Some(&self.vals[*off].1)
     }
 
     /// Insert the given data into the table at the given timestamp. Return the
@@ -144,7 +144,7 @@ impl Table {
         if let Some(TableOffset { off, .. }) =
             self.table.get_mut(hash, search_for!(self, hash, inputs))
         {
-            let (inp, prev) = &mut self.vals[*off as usize];
+            let (inp, prev) = &mut self.vals[*off];
             let next = on_merge(Some(prev.value));
             if next == prev.value {
                 return;
@@ -216,7 +216,7 @@ impl Table {
         } else {
             return false;
         };
-        self.vals[entry.off as usize].0.stale_at = ts;
+        self.vals[entry.off].0.stale_at = ts;
         self.n_stale += 1;
         true
     }
