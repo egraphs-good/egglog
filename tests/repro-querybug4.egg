@@ -1,0 +1,13 @@
+(sort Nat)
+(function Num (i64) Nat)
+(function OtherNum (i64) Nat)
+(rule ((= fvar5__ 2) (= fvar6__ fvar5__) (= y fvar6__))
+      ((let fvar2__ y)
+       (let fvar1__ (OtherNum fvar2__))
+       (let fvar4__ y)
+       (let fvar3__ (Num fvar4__))
+       (union fvar1__ fvar3__)))
+
+(Num 2)
+(run 100)
+(check (= (OtherNum 2) (Num 2)))
