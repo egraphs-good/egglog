@@ -130,7 +130,11 @@ impl<'a> Context<'a> {
         *entry.or_insert_with(|| self.unionfind.make_set())
     }
 
-    pub fn typecheck_query(&mut self, facts: &'a [Fact]) -> Result<Query, Vec<TypeError>> {
+    pub fn typecheck_query(
+        &mut self,
+        facts: &'a [Fact],
+        actions: &'a [Action],
+    ) -> Result<(Query, Vec<Action>), Vec<TypeError>> {
         for fact in facts {
             self.typecheck_fact(fact);
         }
@@ -139,26 +143,42 @@ impl<'a> Context<'a> {
         self.rebuild();
 
         // First find the canoncial version of each leaf
-        let mut leaves = HashMap::<Id, AtomTerm>::default();
+        let mut leaves = HashMap::<Id, Expr>::default();
+        let mut canon = HashMap::<Symbol, Expr>::default();
         for (node, &id) in &self.nodes {
             debug_assert_eq!(id, self.unionfind.find(id));
             match node {
                 ENode::Literal(lit) => {
-                    let old = leaves.insert(id, AtomTerm::Value(self.egraph.eval_lit(lit)));
-                    if let Some(AtomTerm::Value(old)) = old {
-                        panic!("Duplicate literal: {:?} {:?}", old, lit);
+                    let old = leaves.insert(id, Expr::Lit(lit.clone()));
+                    if let Some(expr) = old {
+                        panic!("Duplicate literal: {:?} {:?}", expr, lit);
                     }
                 }
-                ENode::Var(var) => {
-                    leaves.entry(id).or_insert_with(|| AtomTerm::Var(*var));
-                }
+                ENode::Var(var) => match leaves.entry(id) {
+                    Entry::Occupied(existing) => {
+                        canon.insert(*var, existing.get().clone());
+                    }
+                    Entry::Vacant(v) => {
+                        v.insert(Expr::Var(*var));
+                    }
+                },
                 _ => continue,
             }
         }
 
+        // replace canonical things in the actions
+        let res_actions = actions.iter().map(|a| a.replace_canon(&canon)).collect();
+        for (var, _expr) in canon {
+            self.types.remove(&var);
+        }
+
         let get_leaf = |id: &Id| -> AtomTerm {
             let mk = || AtomTerm::Var(Symbol::from(format!("?__{}", id)));
-            leaves.get(id).cloned().unwrap_or_else(mk)
+            match leaves.get(id) {
+                Some(Expr::Var(v)) => AtomTerm::Var(*v),
+                Some(Expr::Lit(l)) => AtomTerm::Value(self.egraph.eval_lit(l)),
+                _ => mk(),
+            }
         };
 
         let mut query = Query::default();
@@ -181,7 +201,7 @@ impl<'a> Context<'a> {
         }
 
         if self.errors.is_empty() {
-            Ok(query)
+            Ok((query, res_actions))
         } else {
             Err(self.errors.clone())
         }
@@ -646,6 +666,7 @@ impl EGraph {
                 },
                 Instruction::CallFunction(f) => {
                     let function = self.functions.get_mut(f).unwrap();
+                    let output_tag = function.schema.output.name();
                     let new_len = stack.len() - function.schema.input.len();
                     let values = &stack[new_len..];
 
@@ -672,13 +693,13 @@ impl EGraph {
                                 function.insert(values, value, ts);
                                 value
                             }
-                            Some(_default) => {
-                                todo!("Handle default expr")
-                                // let default = default.clone(); // break the borrow
-                                // let value = self.eval_expr(ctx, &default)?;
-                                // let function = self.functions.get_mut(f).unwrap();
-                                // function.insert(values.to_vec(), value, ts);
-                                // Ok(value)
+                            Some(default) => {
+                                // TODO: this is not efficient due to cloning
+                                let out = out.clone();
+                                let default = default.clone();
+                                let (_, value) = self.eval_expr(&default, Some(out), true)?;
+                                self.functions.get_mut(f).unwrap().insert(values, value, ts);
+                                value
                             }
                             _ => panic!("invalid default for {:?}", function.decl.name),
                         }
@@ -688,7 +709,7 @@ impl EGraph {
                         ))));
                     };
 
-                    debug_assert_eq!(function.schema.output.name(), value.tag);
+                    debug_assert_eq!(output_tag, value.tag);
                     stack.truncate(new_len);
                     stack.push(value);
                 }
@@ -713,14 +734,13 @@ impl EGraph {
                     // We should only have canonical values here: omit the canonicalization step
                     let old_value = function.insert(args, new_value, self.timestamp);
 
-                    // if the value does not exist or the two values differ
-                    if old_value.is_none() || old_value != Some(new_value) {
+                    // if the value does not exist
+                    if old_value.is_none() {
                         self.saturated = false;
                     }
 
                     if let Some(old_value) = old_value {
                         if new_value != old_value {
-                            self.saturated = false;
                             let tag = old_value.tag;
                             if let Some(prog) = function.merge.on_merge.clone() {
                                 let values = [old_value, new_value];
@@ -733,9 +753,11 @@ impl EGraph {
                             let function = self.functions.get_mut(f).unwrap();
                             let merged: Value = match function.merge.merge_vals.clone() {
                                 MergeFn::AssertEq => {
+                                    self.saturated = false;
                                     return Err(Error::MergeError(*f, new_value, old_value))
                                 }
                                 MergeFn::Union => {
+                                    self.saturated = false;
                                     self.unionfind.union_values(old_value, new_value, tag)
                                 }
                                 MergeFn::Expr(merge_prog) => {
@@ -744,6 +766,7 @@ impl EGraph {
                                     self.run_actions(stack, &values, &merge_prog, true)?;
                                     let result = stack.pop().unwrap();
                                     stack.truncate(old_len);
+                                    self.saturated &= result == old_value;
                                     result
                                 }
                             };

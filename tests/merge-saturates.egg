@@ -1,0 +1,24 @@
+(function foo () i64 :merge (min old new))
+
+(set (foo) 0)
+
+; This should break at iteration 0 because the merge doesn't cause any updates
+(rule ((= f (foo))) ((set (foo) 1)))
+(run 100)
+
+
+; This should run for about 50 iterations, because even though the merge doesn't
+; change the value of baz, it has a side effect of expanding the domain of bar.
+
+(function baz (i64) i64 :default 0)
+
+(function bar () i64 :merge (min (baz new) 0))
+
+(set (bar) 1)
+(set (bar) 2)
+
+(rule ((= f (baz x)) (< x 50))
+      ((set (bar) (+ x 1))))
+
+(run 100)
+(check (= 0 (baz 50)))
