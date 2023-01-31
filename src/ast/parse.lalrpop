@@ -12,7 +12,6 @@ extern {
 match {
     r"\s*" => { }, // skip whitespace
     r";[^\n\r]*[\n\r]*" => { }, // skip ; comments
-    r"Int|int|I64|number" => reserved,
     _
 }
 
@@ -34,10 +33,12 @@ Comma<T>: Vec<T> = {
 
 Command: Command = {
     "(" "datatype" <name:Ident> <variants:(Variant)*> ")" => Command::Datatype { <> },
-    "(" "sort" <name:Ident> "(" <head:Ident> <tail:(Expr)*> ")" ")" => Command::Sort (<>),
+    "(" "sort" <name:Ident> "(" <head:Ident> <tail:(Expr)*> ")" ")" => Command::Sort (name, Some((head, tail))),
+    "(" "sort" <name:Ident> ")" => Command::Sort (name, None),
     "(" "function" <name:Ident> <schema:Schema> <cost:Cost>
+        <merge_action:(":on_merge" <List<Action>>)?>
         <merge:(":merge" <Expr>)?> <default:(":default" <Expr>)?> ")" => {
-        Command::Function(FunctionDecl { name, schema, merge, default, cost })
+        Command::Function(FunctionDecl { name, schema, merge, merge_action: merge_action.unwrap_or_default(), default, cost })
     },
     "(" "relation" <name:Ident> <types:List<Type>> ")" => Command::Function(FunctionDecl::relation(name, types)),
     "(" "rule" <body:List<Fact>> <head:List<Action>> ")" => Command::Rule(Rule { head, body }),
@@ -50,13 +51,13 @@ Command: Command = {
     "(" "define" <name:Ident> <expr:Expr> <cost:Cost> ")" => Command::Define { name, expr, cost },
     <NonLetAction> => Command::Action(<>),
     "(" "run" <limit:UNum>  <until:(":until" <Fact>)?> ")" => Command::Run(RunConfig { limit, until }),
+    "(" "add-ruleset" <name:Ident> ")" => Command::AddRuleset(name),
+    "(" "load-ruleset" <name:Ident> ")" => Command::LoadRuleset(name),
     "(" "calc" "(" <idents:IdentSort*> ")" <exprs:Expr+> ")" => Command::Calc(idents, exprs),
     "(" "extract" <variants:(":variants" <UNum>)?> <e:Expr> ")" => Command::Extract { e, variants: variants.unwrap_or(0) },
     "(" "check" <fact:Fact> ")" => Command::Check(fact, None),
     "(" "check" <fact:Fact> <msg:String> ")" => Command::Check(fact, Some(msg)),
     "(" "clear-rules" ")" => Command::ClearRules,
-    "(" "add-ruleset" <name:Ident> ")" => Command::AddRuleset(name),
-    "(" "load-ruleset" <name:Ident> ")" => Command::LoadRuleset(name),
     "(" "set-option" <name:Ident> <value:Expr> ")" => Command::SetOption { name, value },
     "(" "clear" ")" => Command::Clear,
     "(" "query" <List<Fact>> ")" => Command::Query(<>),
@@ -65,6 +66,8 @@ Command: Command = {
     "(" "print" <sym:Ident> <n:UNum?> ")" => Command::Print(sym, n.unwrap_or(10)),
     "(" "print-size" <sym:Ident> ")" => Command::PrintSize(sym),
     "(" "input" <name:Ident> <file:String> ")" => Command::Input { name, file },
+    "(" "output" <file:String> <exprs:Expr+> ")" => Command::Output { file, exprs },
+    "(" "fail" <Command> ")" => Command::Fail(Box::new(<>)),
     "(" "include" <file:String> ")" => Command::Include(file),
 }
 
@@ -109,7 +112,7 @@ Expr: Expr = {
 Literal: Literal = {
     // "(" ")" => Literal::Unit, // shouldn't need unit literals for now
     <Integer> => Literal::Int(<>),
-    <Float> => Literal::Float(OrderedFloat(<>)),
+    <F64> => Literal::F64(<>),
     <SymString> => Literal::String(<>),
     <Bool> => Literal::Bool(<>),
 }
@@ -126,17 +129,20 @@ Variant: Variant = {
 
 Type: Symbol = <Ident>;
 
-Float: f64 = <s:r"[-+]?[0-9]*\.[0-9]+(e[-+][0-9]+)?"> => s.parse().unwrap();
-
+Bool: bool = {
+    "true" => true,
+    "false" => false,
+}
 Integer: i64 = <s:r"(-)?[0-9]+"> => s.parse().unwrap();
 IdentSort: IdentSort = "(" <ident:Ident> <sort:Type> ")" => IdentSort { ident, sort };
 UNum: usize = {
     <Integer> => <>.try_into().unwrap(),
 }
-Bool: bool = {
-    "true" => true,
-    "false" => false,
-}
+F64: OrderedFloat<f64> = <s:r"(-)?[0-9]+\.[0-9]+"> => OrderedFloat::<f64>(s.parse().unwrap());
 Ident: Symbol = <s:r"([[:alpha:]][\w-]*)|([-+*/!=<>&|^/%]+)"> => s.parse().unwrap();
-SymString: Symbol = <r#""[^"]*""#> => Symbol::from(<>);
-String: String = <r#""[^"]*""#> => (<>).trim_matches('"').to_owned();
+SymString: Symbol = <r#"("[^"]*")+"#> => Symbol::from(<>);
+String: String = <r#"("[^"]*")+"#> => {
+    let string: &str = <>;
+    let first_last_off: &str = &string[1..string.len() - 1];
+    first_last_off.replace("\"\"", "\"")
+};

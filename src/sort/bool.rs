@@ -35,15 +35,15 @@ impl Sort for BoolSort {
             }
          });
 
-        add_primitives!(eg, "dist" = |a: bool, b: bool| -> F64 {
+        add_primitives!(eg, "dist" = |a: bool, b: bool| -> f64 {
             if a == b {
-              OrderedFloat(0.0)
+              0.0
             } else {
-              OrderedFloat(1.0)
+              1.0
             }
         });
 
-        add_primitives!(eg, "f64-If" = |a: bool, b: F64, c: F64| -> F64 {
+        add_primitives!(eg, "f64-If" = |a: bool, b: f64, c: f64| -> f64 {
             if a {
               b
             } else {
@@ -55,12 +55,12 @@ impl Sort for BoolSort {
         add_primitives!(eg, "bool-Or" = |a: bool, b: bool| -> bool { a || b });
         add_primitives!(eg, "bool-Not" = |a: bool| -> bool { !a });
 
-        add_primitives!(eg, "bool-Less" = |a: F64, b: F64| -> bool { a < b });
-        add_primitives!(eg, "bool-LessEq" = |a: F64, b: F64| -> bool { a <= b });
-        add_primitives!(eg, "bool-Greater" = |a: F64, b: F64| -> bool { a > b });
-        add_primitives!(eg, "bool-GreaterEq" = |a: F64, b: F64| -> bool { a >= b });
-        add_primitives!(eg, "bool-Eq" = |a: F64, b: F64| -> bool { a == b });
-        add_primitives!(eg, "bool-NotEq" = |a: F64, b: F64| -> bool { a != b });
+        add_primitives!(eg, "bool-Less" = |a: f64, b: f64| -> bool { OrderedFloat(a) < OrderedFloat(b) });
+        add_primitives!(eg, "bool-LessEq" = |a: f64, b: f64| -> bool { OrderedFloat(a) <= OrderedFloat(b) });
+        add_primitives!(eg, "bool-Greater" = |a: f64, b: f64| -> bool { OrderedFloat(a) > OrderedFloat(b) });
+        add_primitives!(eg, "bool-GreaterEq" = |a: f64, b: f64| -> bool { OrderedFloat(a) >= OrderedFloat(b) });
+        add_primitives!(eg, "bool-Eq" = |a: f64, b: f64| -> bool { OrderedFloat(a) == OrderedFloat(b) });
+        add_primitives!(eg, "bool-NotEq" = |a: f64, b: f64| -> bool { OrderedFloat(a) != OrderedFloat(b) });
 
         add_primitives!(eg, "bool-TRUE" = | | -> bool { true });
         add_primitives!(eg, "bool-FALSE" = | | -> bool { false });

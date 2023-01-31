@@ -1,0 +1,18 @@
+; This file tests that non-union merges can be triggered during rebuilds as well
+; as "inline" during a set action. See issue #42
+
+(datatype N (Node i64))
+(function distance (N N) i64 :merge (min old new))
+
+(define a (Node 0))
+(define b (Node 1))
+(define x (Node 2))
+(define y (Node 3))
+(set (distance x y) 1)
+(set (distance a b) 2)
+
+(union a x)
+(union b y)
+
+(run 1)
+(check (= (distance x y) 1)) ; fails, the distance has gone up!

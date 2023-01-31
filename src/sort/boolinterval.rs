@@ -77,11 +77,11 @@ impl Sort for BoolIntervalSort {
 
         add_primitives!(eg, "ival-If" = |a: BooleanInterval, b: Interval, c: Interval| -> Interval { a.if_real_result(&b, &c) });
 
-        add_primitives!(eg, "dist" = |a: BooleanInterval, b: BooleanInterval| -> F64 { 
+        add_primitives!(eg, "dist" = |a: BooleanInterval, b: BooleanInterval| -> f64 { 
             if a == b {
-                OrderedFloat(0.0)
+                0.0
             } else {
-                OrderedFloat(1.0)
+                1.0
             }
          });
     }

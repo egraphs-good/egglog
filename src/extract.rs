@@ -124,7 +124,7 @@ impl<'a> Extractor<'a> {
                 }
                 let func = &self.egraph.functions[&sym];
                 if func.schema.output.is_eq_sort() {
-                    for (inputs, output) in &func.nodes {
+                    for (inputs, output) in func.nodes.iter() {
                         if let Some(new_cost) = self.node_total_cost(func, inputs) {
                             let make_new_pair = || (new_cost, Node { sym, inputs });
 

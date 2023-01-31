@@ -260,7 +260,7 @@ dependencies = [
  "log",
  "smallvec",
  "symbol_table 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "symbolic_expressions",
+ "symbolic_expressions 5.0.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "thiserror",
 ]
 
@@ -277,6 +277,7 @@ dependencies = [
  "intervals-good",
  "lalrpop",
  "lalrpop-util",
+ "lazy_static",
  "log",
  "num",
  "num-integer",
@@ -288,6 +289,7 @@ dependencies = [
  "rustc-hash",
  "smallvec",
  "symbol_table 0.2.0 (git+https://github.com/mwillsey/symbol_table?rev=acddcf8938d1b4ed2fce048c9d83c30203d404b9)",
+ "symbolic_expressions 5.0.3 (git+https://github.com/oflatt/symbolic-expressions?rev=4c0ea5ca008f972450b2af72387e64d2c1c6a791)",
  "thiserror",
 ]
 
@@ -543,6 +545,12 @@ checksum = "bcf796c978e9b4d983414f4caedc9273aa33ee214c5b887bd55fde84c85d2dc4"
 dependencies = [
  "regex",
 ]
+
+[[package]]
+name = "lazy_static"
+version = "1.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
 
 [[package]]
 name = "libc"
@@ -989,6 +997,11 @@ name = "symbolic_expressions"
 version = "5.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c68d531d83ec6c531150584c42a4290911964d5f0d79132b193b67252a23b71"
+
+[[package]]
+name = "symbolic_expressions"
+version = "5.0.3"
+source = "git+https://github.com/oflatt/symbolic-expressions?rev=4c0ea5ca008f972450b2af72387e64d2c1c6a791#4c0ea5ca008f972450b2af72387e64d2c1c6a791"
 
 [[package]]
 name = "syn"

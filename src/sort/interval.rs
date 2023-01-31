@@ -39,10 +39,10 @@ impl Sort for IntervalSort {
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
         type Opt<T=()> = Option<T>;
 
-        add_primitives!(eg, "to-f64" = |a: R| -> Opt<OrderedFloat<f64>> {
+        add_primitives!(eg, "to-f64" = |a: R| -> Opt<f64> {
             if a.err.lo && a.err.hi {
                 // return NaN
-                Some(OrderedFloat(f64::NAN))
+                Some(f64::NAN)
             } else if a.err.lo || a.err.hi {
                 None
             } else {
@@ -51,7 +51,7 @@ impl Sort for IntervalSort {
                 let top = loF.to_f64();
                 let bot = hiF.to_f64();
                 if top == bot {
-                    Some(OrderedFloat(top))
+                    Some(top)
                 } else {
                     None
                 }
@@ -81,7 +81,7 @@ impl Sort for IntervalSort {
         add_primitives!(eg, "ival-Atanh" = |a: R| -> R { a.atanh() });
         add_primitives!(eg, "ival-Atan2" = |a: R, b: R| -> R { a.atan2(&b) });
         add_primitives!(eg, "ival-Hypot" = |a: R, b: R| -> R { a.hypot(&b) });
-        add_primitives!(eg, "interval" = |a: F64, b: F64| -> R { R::new(INTERVAL_PRECISION, a.into_inner(), b.into_inner()) });
+        add_primitives!(eg, "interval" = |a: f64, b: f64| -> R { R::new(INTERVAL_PRECISION, a, b) });
         add_primitives!(eg, "interval" = |a: Rational, b: Rational| -> R {
             if (true) {
                 let mut lo = Float::with_val(INTERVAL_PRECISION, 0.0);
@@ -179,10 +179,10 @@ impl Sort for IntervalSort {
         Expr::call(
             "interval",
             vec![
-                Expr::Lit(Literal::Float(OrderedFloat(
+                Expr::Lit(Literal::F64(OrderedFloat(
                     left.as_float().to_f64_round(Round::Down),
                 ))),
-                Expr::Lit(Literal::Float(OrderedFloat(
+                Expr::Lit(Literal::F64(OrderedFloat(
                     right.as_float().to_f64_round(Round::Up),
                 ))),
             ],

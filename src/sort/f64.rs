@@ -1,9 +1,7 @@
-use std::f64::consts::PI;
-
-use crate::ast::Literal;
-
 use super::*;
+use crate::ast::Literal;
 use ordered_float::OrderedFloat;
+use std::f64::consts::PI;
 
 #[derive(Debug)]
 pub struct F64Sort {
@@ -25,11 +23,14 @@ impl Sort for F64Sort {
         self
     }
 
+    // We need the closure for division and mod operations, as they can panic.
+    // cf https://github.com/rust-lang/rust-clippy/issues/9422
+    #[allow(clippy::unnecessary_lazy_evaluations)]
     #[rustfmt::skip]
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
         type Opt<T=()> = Option<T>;
 
-        add_primitives!(eg, "assert-eq" = |a: F64, b: F64| -> F64 { 
+        add_primitives!(eg, "assert-eq" = |a: f64, b: f64| -> f64 { 
             if a == b {
                 a
             } else {
@@ -37,128 +38,121 @@ impl Sort for F64Sort {
             }
          });
 
-        add_primitives!(eg, "+" = |a: F64, b: F64| -> F64 { a + b });
-        add_primitives!(eg, "-" = |a: F64, b: F64| -> F64 { a - b });
-        add_primitives!(eg, "*" = |a: F64, b: F64| -> F64 { a * b });
-        add_primitives!(eg, "/" = |a: F64, b: F64| -> F64 { a / b });
-
-        add_primitives!(eg, "<" = |a: F64, b: F64| -> Opt { if a < b {
-            Some(())
-        } else {
-            None
-        } });
-        add_primitives!(eg, ">" = |a: F64, b: F64| -> Opt { 
-          if a > b {
-            Some(())
-        } else {
-            None
-        }
-         });
-
-        add_primitives!(eg, "min" = |a: F64, b: F64| -> F64 { a.min(b) }); 
-        add_primitives!(eg, "max" = |a: F64, b: F64| -> F64 { a.max(b) });
-
-        add_primitives!(eg, "sqrt" = |a: F64| -> F64 { 
-            OrderedFloat(a.sqrt())
+        add_primitives!(eg, "sqrt" = |a: f64| -> f64 { 
+            a.sqrt()
 });
-        add_primitives!(eg, "ln" = |a: F64| -> F64 { OrderedFloat(a.ln()) });
+        add_primitives!(eg, "ln" = |a: f64| -> f64 { a.ln() });
 
-        add_primitives!(eg, "dist" = |a: F64, b: F64| -> F64 {
-            OrderedFloat((a - b).abs())
+        add_primitives!(eg, "dist" = |a: f64, b: f64| -> f64 {
+            (a - b).abs()
         });
         
-        add_primitives!(eg, "f64-PI" = | | -> F64 {
-            OrderedFloat(PI)
+        add_primitives!(eg, "f64-PI" = | | -> f64 {
+            PI
         });
-        add_primitives!(eg, "f64-E" = | | -> F64 {
-            OrderedFloat(std::f64::consts::E)
+        add_primitives!(eg, "f64-E" = | | -> f64 {
+            std::f64::consts::E
         });
-        add_primitives!(eg, "f64-INFINITY" = | | -> F64 {
-            OrderedFloat(std::f64::INFINITY)
+        add_primitives!(eg, "f64-INFINITY" = | | -> f64 {
+            std::f64::INFINITY
         });
 
-        add_primitives!(eg, "f64-Neg" = |a: F64| -> F64 {
+        add_primitives!(eg, "f64-Neg" = |a: f64| -> f64 {
             -a
         });
 
-        add_primitives!(eg, "f64-Sqrt" = |a: F64| -> F64 {
-            OrderedFloat(a.sqrt())
+        add_primitives!(eg, "f64-Sqrt" = |a: f64| -> f64 {
+            a.sqrt()
         });
-        add_primitives!(eg, "f64-Cbrt" = |a: F64| -> F64 {
-            OrderedFloat(a.cbrt())
+        add_primitives!(eg, "f64-Cbrt" = |a: f64| -> f64 {
+            a.cbrt()
         });
-        add_primitives!(eg, "f64-Fabs" = |a: F64| -> F64 {
-            OrderedFloat(a.abs())
+        add_primitives!(eg, "f64-Fabs" = |a: f64| -> f64 {
+            a.abs()
         });
-        add_primitives!(eg, "f64-Ceil" = |a: F64| -> F64 {
-            OrderedFloat(a.ceil())
+        add_primitives!(eg, "f64-Ceil" = |a: f64| -> f64 {
+            a.ceil()
         });
-        add_primitives!(eg, "f64-Floor" = |a: F64| -> F64 {
-            OrderedFloat(a.floor())
+        add_primitives!(eg, "f64-Floor" = |a: f64| -> f64 {
+            a.floor()
         });
-        add_primitives!(eg, "f64-Round" = |a: F64| -> F64 {
-            OrderedFloat(a.round())
+        add_primitives!(eg, "f64-Round" = |a: f64| -> f64 {
+            a.round()
         });
-        add_primitives!(eg, "f64-Log" = |a: F64| -> F64 {
-            OrderedFloat(a.ln())
+        add_primitives!(eg, "f64-Log" = |a: f64| -> f64 {
+            a.ln()
         });
-        add_primitives!(eg, "f64-Exp" = |a: F64| -> F64 {
-            OrderedFloat(a.exp())
+        add_primitives!(eg, "f64-Exp" = |a: f64| -> f64 {
+            a.exp()
         });
-        add_primitives!(eg, "f64-Sin" = |a: F64| -> F64 {
-            OrderedFloat(a.sin())
+        add_primitives!(eg, "f64-Sin" = |a: f64| -> f64 {
+            a.sin()
         });
-        add_primitives!(eg, "f64-Cos" = |a: F64| -> F64 {
-            OrderedFloat(a.cos())
+        add_primitives!(eg, "f64-Cos" = |a: f64| -> f64 {
+            a.cos()
         });
-        add_primitives!(eg, "f64-Tan" = |a: F64| -> F64 {
-            OrderedFloat(a.tan())
+        add_primitives!(eg, "f64-Tan" = |a: f64| -> f64 {
+            a.tan()
         });
-        add_primitives!(eg, "f64-Asin" = |a: F64| -> F64 {
-            OrderedFloat(a.asin())
+        add_primitives!(eg, "f64-Asin" = |a: f64| -> f64 {
+            a.asin()
         });
-        add_primitives!(eg, "f64-Acos" = |a: F64| -> F64 {
-            OrderedFloat(a.acos())
+        add_primitives!(eg, "f64-Acos" = |a: f64| -> f64 {
+            a.acos()
         });
-        add_primitives!(eg, "f64-Atan" = |a: F64| -> F64 {
-            OrderedFloat(a.atan())
+        add_primitives!(eg, "f64-Atan" = |a: f64| -> f64 {
+            a.atan()
         });
-        add_primitives!(eg, "f64-Sinh" = |a: F64| -> F64 {
-            OrderedFloat(a.sinh())
+        add_primitives!(eg, "f64-Sinh" = |a: f64| -> f64 {
+            a.sinh()
         });
-        add_primitives!(eg, "f64-Cosh" = |a: F64| -> F64 {
-            OrderedFloat(a.cosh())
+        add_primitives!(eg, "f64-Cosh" = |a: f64| -> f64 {
+            a.cosh()
         });
-        add_primitives!(eg, "f64-Tanh" = |a: F64| -> F64 {
-            OrderedFloat(a.tanh())
+        add_primitives!(eg, "f64-Tanh" = |a: f64| -> f64 {
+            a.tanh()
         });
-        add_primitives!(eg, "f64-Atanh" = |a: F64| -> F64 {
-            OrderedFloat(a.atanh())
+        add_primitives!(eg, "f64-Atanh" = |a: f64| -> f64 {
+            a.atanh()
         });
-        add_primitives!(eg, "f64-Expm1" = |a: F64| -> F64 {
-            OrderedFloat(a.exp_m1())
+        add_primitives!(eg, "f64-Expm1" = |a: f64| -> f64 {
+            a.exp_m1()
         });
-        add_primitives!(eg, "f64-Log1p" = |a: F64| -> F64 {
-            OrderedFloat(a.ln_1p())
+        add_primitives!(eg, "f64-Log1p" = |a: f64| -> f64 {
+            a.ln_1p()
         });
 
-        add_primitives!(eg, "f64-Add" = |a: F64, b: F64| -> F64 { a + b });
-        add_primitives!(eg, "f64-Sub" = |a: F64, b: F64| -> F64 { a - b });
-        add_primitives!(eg, "f64-Mul" = |a: F64, b: F64| -> F64 { a * b });
-        add_primitives!(eg, "f64-Div" = |a: F64, b: F64| -> F64 { a / b });
-        add_primitives!(eg, "f64-Pow" = |a: F64, b: F64| -> F64 { OrderedFloat(a.into_inner().powf(b.into_inner())) });
-        add_primitives!(eg, "f64-Atan2" = |a: F64, b: F64| -> F64 { OrderedFloat(a.into_inner().atan2(b.into_inner())) });
-        add_primitives!(eg, "f64-Hypot" = |a: F64, b: F64| -> F64 { OrderedFloat(a.into_inner().hypot(b.into_inner())) });
-        add_primitives!(eg, "f64-Fma" = |a: F64, b: F64, c: F64| -> F64 { OrderedFloat(a.into_inner().mul_add(b.into_inner(), c.into_inner())) });
+        add_primitives!(eg, "f64-Add" = |a: f64, b: f64| -> f64 { a + b });
+        add_primitives!(eg, "f64-Sub" = |a: f64, b: f64| -> f64 { a - b });
+        add_primitives!(eg, "f64-Mul" = |a: f64, b: f64| -> f64 { a * b });
+        add_primitives!(eg, "f64-Div" = |a: f64, b: f64| -> f64 { a / b });
+        add_primitives!(eg, "f64-Pow" = |a: f64, b: f64| -> f64 { a.powf(b) });
+        add_primitives!(eg, "f64-Atan2" = |a: f64, b: f64| -> f64 { a.atan2(b) });
+        add_primitives!(eg, "f64-Hypot" = |a: f64, b: f64| -> f64 { a.hypot(b) });
+        add_primitives!(eg, "f64-Fma" = |a: f64, b: f64, c: f64| -> f64 { a.mul_add(b, c) });
+    
+        add_primitives!(eg, "+" = |a: f64, b: f64| -> f64 { a + b });
+        add_primitives!(eg, "-" = |a: f64, b: f64| -> f64 { a - b });
+        add_primitives!(eg, "*" = |a: f64, b: f64| -> f64 { a * b });
+        add_primitives!(eg, "/" = |a: f64, b: f64| -> Opt<f64> { (b != 0.0).then(|| a / b) });
+        add_primitives!(eg, "%" = |a: f64, b: f64| -> Opt<f64> { (b != 0.0).then(|| a % b) });
+
+        add_primitives!(eg, "<" = |a: f64, b: f64| -> Opt { (a < b).then(|| ()) }); 
+        add_primitives!(eg, ">" = |a: f64, b: f64| -> Opt { (a > b).then(|| ()) }); 
+        add_primitives!(eg, "<=" = |a: f64, b: f64| -> Opt { (a <= b).then(|| ()) }); 
+        add_primitives!(eg, ">=" = |a: f64, b: f64| -> Opt { (a >= b).then(|| ()) }); 
+
+        add_primitives!(eg, "min" = |a: f64, b: f64| -> f64 { a.min(b) }); 
+        add_primitives!(eg, "max" = |a: f64, b: f64| -> f64 { a.max(b) });
     }
 
     fn make_expr(&self, value: Value) -> Expr {
         assert!(value.tag == self.name());
-        Expr::Lit(Literal::Float(OrderedFloat(f64::from_bits(value.bits))))
+        Expr::Lit(Literal::F64(OrderedFloat(f64::from_bits(value.bits))))
     }
 }
 
-impl IntoSort for F64 {
+impl IntoSort for f64 {
     type Sort = F64Sort;
     fn store(self, sort: &Self::Sort) -> Option<Value> {
         Some(Value {
@@ -168,9 +162,9 @@ impl IntoSort for F64 {
     }
 }
 
-impl FromSort for F64 {
+impl FromSort for f64 {
     type Sort = F64Sort;
     fn load(_sort: &Self::Sort, value: &Value) -> Self {
-        OrderedFloat(f64::from_bits(value.bits))
+        f64::from_bits(value.bits)
     }
 }

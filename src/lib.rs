@@ -1,5 +1,7 @@
 pub mod ast;
+mod desugar;
 mod extract;
+mod function;
 mod gj;
 pub mod sort;
 mod typecheck;
@@ -7,19 +9,26 @@ mod unionfind;
 pub mod util;
 mod value;
 
+use hashbrown::hash_map::Entry;
+use index::ColumnIndex;
 use indexmap::map::Entry as IEntry;
 use instant::{Duration, Instant};
-use smallvec::SmallVec;
 use sort::*;
 use thiserror::Error;
 use IEntry as Entry;
 
+use desugar::desugar_program;
+
+use symbolic_expressions::Sexp;
+
 use ast::*;
 
-use std::fmt::Write;
+use std::fmt::{Formatter, Write};
 use std::fs::File;
 use std::hash::Hash;
 use std::io::Read;
+use std::iter::once;
+use std::mem;
 use std::ops::{Deref, Range};
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -30,171 +39,12 @@ type ArcSort = Arc<dyn Sort>;
 
 pub use value::*;
 
+use function::*;
 use gj::*;
-
 use unionfind::*;
 use util::*;
 
 use crate::typecheck::TypeError;
-
-type ValueVec = SmallVec<[Value; 3]>;
-
-#[derive(Clone)]
-pub struct Function {
-    decl: FunctionDecl,
-    schema: ResolvedSchema,
-    merge: MergeFn,
-    nodes: IndexMap<ValueVec, TupleOutput>,
-    updates: usize,
-}
-
-#[derive(Clone)]
-enum MergeFn {
-    AssertEq,
-    Union,
-    // the rc is make sure it's cheaply clonable, since calling the merge fn
-    // requires a clone
-    Expr(Rc<Program>),
-}
-
-#[derive(Debug, Clone)]
-struct TupleOutput {
-    value: Value,
-    timestamp: u32,
-}
-
-#[derive(Clone, Debug)]
-struct ResolvedSchema {
-    input: Vec<ArcSort>,
-    output: ArcSort,
-}
-
-impl Function {
-    pub fn insert(&mut self, inputs: ValueVec, value: Value, timestamp: u32) -> Option<Value> {
-        match self.nodes.entry(inputs) {
-            IEntry::Occupied(mut entry) => {
-                let old = entry.get_mut();
-                if old.value == value {
-                    Some(value)
-                } else {
-                    let saved = old.value;
-                    old.value = value;
-                    assert!(old.timestamp <= timestamp);
-                    old.timestamp = timestamp;
-                    self.updates += 1;
-                    debug_assert_ne!(saved, value);
-                    Some(saved)
-                }
-            }
-            IEntry::Vacant(entry) => {
-                entry.insert(TupleOutput { value, timestamp });
-                self.updates += 1;
-                None
-            }
-        }
-    }
-
-    pub fn rebuild(&mut self, uf: &mut UnionFind, timestamp: u32) -> usize {
-        if self.schema.input.iter().all(|s| !s.is_eq_sort()) && !self.schema.output.is_eq_sort() {
-            return std::mem::take(&mut self.updates);
-        }
-
-        // FIXME this doesn't compute updates properly
-        let n_unions = uf.n_unions();
-        let mut to_add = vec![];
-        self.nodes.retain(|args, out| {
-            assert!(out.timestamp <= timestamp);
-            let mut new_args = args.clone();
-            let mut modified = false;
-            for (a, ty) in new_args.iter_mut().zip(&self.schema.input) {
-                if ty.is_eq_sort() {
-                    let new_a = uf.find_mut_value(*a);
-                    if new_a != *a {
-                        *a = new_a;
-                        modified = true;
-                    }
-                }
-            }
-            if self.schema.output.is_eq_sort() {
-                let new_value = uf.find_mut_value(out.value);
-                if out.value != new_value {
-                    modified = true;
-                }
-            }
-
-            if modified {
-                to_add.push((new_args, out.clone()));
-            }
-            !modified
-        });
-
-        for (args, out) in to_add {
-            let value = out.value;
-            // TODO call the merge fn!!!
-            let _new_value = if self.schema.output.is_eq_sort() {
-                self.nodes
-                    .entry(args)
-                    .and_modify(|out2| {
-                        let new_value = uf.union_values(value, out2.value);
-                        if out2.value != new_value {
-                            out2.value = new_value;
-                            out2.timestamp = timestamp;
-                        }
-                        assert!(out2.timestamp <= timestamp);
-                    })
-                    .or_insert_with(|| {
-                        let new_value = uf.find_mut_value(value);
-                        TupleOutput {
-                            value: new_value,
-                            timestamp,
-                        }
-                    })
-            } else {
-                self.nodes
-                    .entry(args)
-                    .and_modify(|out2| {
-                        // out2.value = uf.union_values(value, out2.value);
-                        out2.timestamp = out2.timestamp.max(out.timestamp);
-                    })
-                    .or_insert(TupleOutput { value, timestamp })
-            };
-        }
-
-        // if cfg!(debug_assertions) {
-        //     let mut seen = 0;
-        //     for out in self.nodes.values() {
-        //         assert!(seen <= out.timestamp, "Timestamps should be ordered");
-        //         seen = out.timestamp;
-        //     }
-        // }
-
-        uf.n_unions() - n_unions + std::mem::take(&mut self.updates)
-    }
-
-    pub(crate) fn get_size(&self, range: &Range<u32>) -> usize {
-        self.nodes
-            .values()
-            .filter(|out| range.contains(&out.timestamp))
-            .count()
-        // if range.start == 0 {
-        //     if range.end == u32::MAX {
-        //         self.nodes.len()
-        //     } else {
-        //         // TODO binary search or something
-        //         self.nodes
-        //             .values()
-        //             .filter(|out| out.timestamp < range.end)
-        //             .count()
-        //     }
-        // } else {
-        //     assert_eq!(range.end, u32::MAX);
-        //     self.nodes
-        //         .values()
-        //         .filter(|out| out.timestamp >= range.end)
-        //         .count()
-        // }
-    }
-}
 
 pub type Subst = IndexMap<Symbol, Value>;
 
@@ -275,16 +125,17 @@ impl PrimitiveLike for SimplePrimitive {
 pub struct EGraph {
     egraphs: Vec<Self>,
     unionfind: UnionFind,
-    presorts: IndexMap<Symbol, PreSort>,
-    sorts: IndexMap<Symbol, Arc<dyn Sort>>,
-    primitives: IndexMap<Symbol, Vec<Primitive>>,
-    functions: IndexMap<Symbol, Function>,
-    dont_extract: IndexSet<Symbol>,
-    rules: IndexMap<Symbol, Rule>,
+    presorts: HashMap<Symbol, PreSort>,
+    sorts: HashMap<Symbol, Arc<dyn Sort>>,
+    primitives: HashMap<Symbol, Vec<Primitive>>,
+    functions: HashMap<Symbol, Function>,
+    dont_extract: HashSet<Symbol>,
+    rules: HashMap<Symbol, Rule>,
     rulesets: IndexMap<Symbol, Vec<(Symbol, Rule)>>,
     saturated: bool,
     timestamp: u32,
     parser: Arc<ast::parse::ProgramParser>,
+    unit_sym: Symbol,
     pub match_limit: usize,
     pub node_limit: usize,
     pub use_backoff: bool,
@@ -306,6 +157,7 @@ struct Rule {
 
 impl Default for EGraph {
     fn default() -> Self {
+        let unit_sym = "Unit".into();
         let mut egraph = Self {
             egraphs: vec![],
             unionfind: Default::default(),
@@ -317,6 +169,7 @@ impl Default for EGraph {
             presorts: Default::default(),
             parser: Arc::new(ast::parse::ProgramParser::new()),
             dont_extract: Default::default(),
+            unit_sym,
             match_limit: 10_000_000,
             node_limit: 100_000_000,
             use_backoff: true,
@@ -325,7 +178,7 @@ impl Default for EGraph {
             fact_directory: None,
             seminaive: true,
         };
-        egraph.add_sort(UnitSort::new("Unit".into()));
+        egraph.add_sort(UnitSort::new(unit_sym));
         egraph.add_sort(StringSort::new("String".into()));
         egraph.add_sort(I64Sort::new("i64".into()));
         egraph.add_sort(F64Sort::new("f64".into()));
@@ -390,34 +243,50 @@ impl EGraph {
         self.primitives.entry(prim.name()).or_default().push(prim);
     }
 
-    pub fn union(&mut self, id1: Id, id2: Id) -> Id {
-        self.unionfind.union(id1, id2)
+    pub fn union(&mut self, id1: Id, id2: Id, sort: Symbol) -> Id {
+        self.unionfind.union(id1, id2, sort)
     }
 
     #[track_caller]
     fn debug_assert_invariants(&self) {
         #[cfg(debug_assertions)]
         for (name, function) in self.functions.iter() {
-            for (inputs, output) in function.nodes.iter() {
+            function.nodes.assert_sorted();
+            for (i, inputs, output) in function.nodes.iter_range(0..function.nodes.len()) {
                 for input in inputs {
                     assert_eq!(
                         input,
                         &self.bad_find_value(*input),
-                        "{name}({inputs:?}) = {output:?}\n{:?}",
+                        "[{i}] {name}({inputs:?}) = {output:?}\n{:?}",
                         function.schema,
                     )
                 }
                 assert_eq!(
                     output.value,
                     self.bad_find_value(output.value),
-                    "{name}({inputs:?}) = {output:?}\n{:?}",
+                    "[{i}] {name}({inputs:?}) = {output:?}\n{:?}",
                     function.schema,
                 )
+            }
+            for ix in &function.indexes {
+                for (_, offs) in ix.iter() {
+                    for off in offs {
+                        assert!(
+                            (*off as usize) < function.nodes.len(),
+                            "index contains offset {off:?}, which is out of range for function {name}"
+                        );
+                    }
+                }
             }
         }
     }
 
-    pub fn check_fact(&mut self, fact: &Fact, log: bool, custom_err: Option<String>) -> Result<(), Error> {
+    pub fn check_fact(
+        &mut self,
+        fact: &Fact,
+        log: bool,
+        custom_err: Option<String>,
+    ) -> Result<(), Error> {
         match fact {
             Fact::Eq(exprs) => {
                 assert!(exprs.len() > 1);
@@ -427,7 +296,10 @@ impl EGraph {
                     .collect::<Result<_, _>>();
 
                 if let Result::Err(err) = values_r {
-                    return Err(Error::CustomError(Box::new(err), custom_err.unwrap_or("".to_string())))
+                    return Err(Error::CustomError(
+                        Box::new(err),
+                        custom_err.unwrap_or("".to_string()),
+                    ));
                 }
 
                 let values = values_r.unwrap();
@@ -438,7 +310,7 @@ impl EGraph {
                         if log {
                             log::error!("Check failed");
                             // the check failed, so print out some useful info
-                            self.rebuild();
+                            self.rebuild()?;
                             for (_t, value) in &values {
                                 if let Some((_tag, id)) = self.value_to_id(*value) {
                                     let best = self.extract(*value).1;
@@ -452,7 +324,7 @@ impl EGraph {
                             Err(Error::CustomError(Box::new(checkerr), msg))
                         } else {
                             Err(checkerr)
-                        }
+                        };
                     }
                 }
             }
@@ -462,7 +334,7 @@ impl EGraph {
                 Expr::Call(_, _) => {
                     // println!("Checking fact: {}", expr);
                     let unit = self.get_sort::<UnitSort>();
-                    self.eval_expr(expr, Some(unit), true)?;
+                    self.eval_expr(expr, Some(unit), false)?;
                 }
             },
         }
@@ -473,26 +345,73 @@ impl EGraph {
         self.unionfind.find(id)
     }
 
-    pub fn rebuild(&mut self) -> usize {
+    pub fn rebuild_nofail(&mut self) -> usize {
+        match self.rebuild() {
+            Ok(updates) => updates,
+            Err(e) => {
+                panic!("Unsoundness detected during rebuild. Exiting: {e}")
+            }
+        }
+    }
+
+    pub fn rebuild(&mut self) -> Result<usize, Error> {
+        self.unionfind.clear_recent_ids();
         let mut updates = 0;
         loop {
-            let new = self.rebuild_one();
+            let new = self.rebuild_one()?;
             log::debug!("{new} rebuilds?");
+            self.unionfind.clear_recent_ids();
             updates += new;
             if new == 0 {
                 break;
             }
         }
         self.debug_assert_invariants();
-        updates
+        Ok(updates)
     }
 
-    fn rebuild_one(&mut self) -> usize {
+    fn rebuild_one(&mut self) -> Result<usize, Error> {
         let mut new_unions = 0;
+        let mut deferred_merges = Vec::new();
         for function in self.functions.values_mut() {
-            new_unions += function.rebuild(&mut self.unionfind, self.timestamp);
+            let (unions, merges) = function.rebuild(&mut self.unionfind, self.timestamp)?;
+            if !merges.is_empty() {
+                deferred_merges.push((function.decl.name, merges));
+            }
+            new_unions += unions;
         }
-        new_unions
+        for (func, merges) in deferred_merges {
+            new_unions += self.apply_merges(func, &merges);
+        }
+        Ok(new_unions)
+    }
+
+    fn apply_merges(&mut self, func: Symbol, merges: &[DeferredMerge]) -> usize {
+        let mut stack = Vec::new();
+        let mut function = self.functions.get_mut(&func).unwrap();
+        let n_unions = self.unionfind.n_unions();
+        let merge_prog = match &function.merge.merge_vals {
+            MergeFn::Expr(e) => Some(e.clone()),
+            MergeFn::AssertEq | MergeFn::Union => None,
+        };
+        for (inputs, old, new) in merges {
+            if let Some(prog) = function.merge.on_merge.clone() {
+                self.run_actions(&mut stack, &[*old, *new], &prog, true)
+                    .unwrap();
+                function = self.functions.get_mut(&func).unwrap();
+                stack.clear();
+            }
+            if let Some(prog) = &merge_prog {
+                // TODO: error handling?
+                self.run_actions(&mut stack, &[*old, *new], prog, true)
+                    .unwrap();
+                let merged = stack.pop().expect("merges should produce a value");
+                stack.clear();
+                function = self.functions.get_mut(&func).unwrap();
+                function.insert(inputs, merged, self.timestamp);
+            }
+        }
+        self.unionfind.n_unions() - n_unions + function.clear_updates()
     }
 
     pub fn declare_sort(
@@ -515,42 +434,7 @@ impl EGraph {
     }
 
     pub fn declare_function(&mut self, decl: &FunctionDecl) -> Result<(), Error> {
-        let mut input = Vec::with_capacity(decl.schema.input.len());
-        for s in &decl.schema.input {
-            input.push(match self.sorts.get(s) {
-                Some(sort) => sort.clone(),
-                None => return Err(Error::TypeError(TypeError::Unbound(*s))),
-            })
-        }
-
-        let output = match self.sorts.get(&decl.schema.output) {
-            Some(sort) => sort.clone(),
-            None => return Err(Error::TypeError(TypeError::Unbound(decl.schema.output))),
-        };
-
-        let merge = if let Some(merge_expr) = &decl.merge {
-            let mut types = IndexMap::<Symbol, ArcSort>::default();
-            types.insert("old".into(), output.clone());
-            types.insert("new".into(), output.clone());
-            let (_, program) = self
-                .compile_expr(&types, merge_expr, Some(output.clone()))
-                .map_err(Error::TypeErrors)?;
-            MergeFn::Expr(Rc::new(program))
-        } else if output.is_eq_sort() {
-            MergeFn::Union
-        } else {
-            MergeFn::AssertEq
-        };
-
-        let function = Function {
-            decl: decl.clone(),
-            schema: ResolvedSchema { input, output },
-            nodes: Default::default(),
-            updates: 0,
-            merge,
-            // TODO figure out merge and default here
-        };
-
+        let function = Function::new(self, decl)?;
         let old = self.functions.insert(decl.name, function);
         if old.is_some() {
             return Err(TypeError::FunctionAlreadyBound(decl.name).into());
@@ -573,6 +457,7 @@ impl EGraph {
                 output: sort,
             },
             merge: None,
+            merge_action: vec![],
             default: None,
             cost: variant.cost,
         })?;
@@ -585,7 +470,7 @@ impl EGraph {
     pub fn eval_lit(&self, lit: &Literal) -> Value {
         match lit {
             Literal::Int(i) => i.store(&*self.get_sort()).unwrap(),
-            Literal::Float(f) => f.store(&*self.get_sort()).unwrap(),
+            Literal::F64(f) => f.store(&self.get_sort()).unwrap(),
             Literal::Bool(b) => b.store(&*self.get_sort()).unwrap(),
             Literal::String(s) => s.store(&*self.get_sort()).unwrap(),
             Literal::Unit => ().store(&*self.get_sort()).unwrap(),
@@ -599,21 +484,21 @@ impl EGraph {
             .nodes
             .iter()
             .take(n)
-            .map(|(k, v)| (k.clone(), v.clone()))
+            .map(|(k, v)| (ValueVec::from(k), v.clone()))
             .collect::<Vec<_>>();
 
-        let out_is_unit = f.schema.output.name() == "Unit".into();
+        let out_is_unit = f.schema.output.name() == self.unit_sym;
 
         let mut buf = String::new();
         let s = &mut buf;
         for (ins, out) in nodes {
             write!(s, "({}", sym).unwrap();
-            for (a, t) in ins.iter().zip(&schema.input) {
+            for (a, t) in ins.iter().copied().zip(&schema.input) {
                 s.push(' ');
                 let e = if t.is_eq_sort() {
-                    self.extract(*a).1
+                    self.extract(a).1
                 } else {
-                    t.make_expr(*a)
+                    t.make_expr(a)
                 };
                 write!(s, "{}", e).unwrap();
             }
@@ -659,7 +544,7 @@ impl EGraph {
         // we might have to do a rebuild before starting,
         // because the use can manually do stuff
         let initial_rebuild_start = Instant::now();
-        self.rebuild();
+        self.rebuild_nofail();
         let mut rebuild_time = initial_rebuild_start.elapsed();
 
         for i in 0..*limit {
@@ -669,9 +554,9 @@ impl EGraph {
             apply_time += at;
 
             let rebuild_start = Instant::now();
-            let updates = self.rebuild();
-            //log::info!("database size: {}", self.num_tuples());
-            //log::info!("Made {updates} updates",);
+            let updates = self.rebuild_nofail();
+            log::debug!("database size: {}", self.num_tuples());
+            log::debug!("Made {updates} updates (iteration {i})");
             rebuild_time += rebuild_start.elapsed();
             self.timestamp += 1;
             if self.saturated {
@@ -778,33 +663,44 @@ impl EGraph {
         let apply_start = Instant::now();
         'outer: for (name, all_values) in searched {
             let rule = rules.get_mut(&name).unwrap();
-            let n = rule.query.vars.len();
+            let num_vars = rule.query.vars.len();
 
-            // backoff logic
-            let len = all_values.len() / n;
-            let threshold = self.match_limit << rule.times_banned;
-            if len > threshold && self.use_backoff {
-                let ban_length = ban_length << rule.times_banned;
-                rule.times_banned += 1;
-                rule.banned_until = iteration + ban_length;
-                //log::info!("Banning rule {name} for {ban_length} iterations, matched {len} > {threshold} times");
-                self.saturated = false;
-                continue;
+            // the query doesn't require matches
+            if num_vars != 0 {
+                // backoff logic
+                let len = all_values.len() / num_vars;
+                let threshold = self.match_limit << rule.times_banned;
+                if len > threshold {
+                    let ban_length = ban_length << rule.times_banned;
+                    rule.times_banned += 1;
+                    rule.banned_until = iteration + ban_length;
+                    log::info!("Banning rule {name} for {ban_length} iterations, matched {len} > {threshold} times");
+                    self.saturated = false;
+                    continue;
+                }
             }
 
             rule.todo_timestamp = self.timestamp;
             let rule_apply_start = Instant::now();
 
             let stack = &mut vec![];
-            for values in all_values.chunks(n) {
+            // run one iteration when n == 0
+            if num_vars == 0 {
                 rule.matches += 1;
-                if rule.matches > 10_000_000 {
-                    log::warn!("Rule {} has matched {} times, bailing!", name, rule.matches);
-                    break 'outer;
-                }
                 // we can ignore results here
                 stack.clear();
-                let _ = self.run_actions(stack, values, &rule.program, true);
+                let _ = self.run_actions(stack, &[], &rule.program, true);
+            } else {
+                for values in all_values.chunks(num_vars) {
+                    rule.matches += 1;
+                    if rule.matches > 10_000_000 {
+                        log::warn!("Rule {} has matched {} times, bailing!", name, rule.matches);
+                        break 'outer;
+                    }
+                    // we can ignore results here
+                    stack.clear();
+                    let _ = self.run_actions(stack, values, &rule.program, true);
+                }
             }
 
             rule.apply_time += rule_apply_start.elapsed();
@@ -817,10 +713,12 @@ impl EGraph {
     fn add_rule_with_name(&mut self, name: String, rule: ast::Rule) -> Result<Symbol, Error> {
         let name = Symbol::from(name);
         let mut ctx = typecheck::Context::new(self);
-        let query0 = ctx.typecheck_query(&rule.body).map_err(Error::TypeErrors)?;
+        let (query0, action0) = ctx
+            .typecheck_query(&rule.body, &rule.head)
+            .map_err(Error::TypeErrors)?;
         let query = self.compile_gj_query(query0, &ctx.types);
         let program = self
-            .compile_actions(&ctx.types, &rule.head)
+            .compile_actions(&ctx.types, &action0)
             .map_err(Error::TypeErrors)?;
         // println!(
         //     "Compiled rule {rule:?}\n{subst:?}to {program:#?}",
@@ -862,62 +760,13 @@ impl EGraph {
             name,
             self.rules
                 .iter()
-                .map(|pair| (pair.0.clone(), pair.1.clone()))
+                .map(|pair| (*pair.0, pair.1.clone()))
                 .collect(),
         );
     }
 
     pub fn load_ruleset(&mut self, name: Symbol) {
         self.rules.extend(self.rulesets.get(&name).unwrap().clone());
-    }
-
-    pub fn set_option(&mut self, name: &str, value: Expr) {
-        match name {
-            "match_limit" => {
-                if let Expr::Lit(Literal::Int(i)) = value {
-                    self.match_limit = i as usize;
-                } else {
-                    panic!("match_limit must be an integer");
-                }
-            }
-            "node_limit" => {
-                if let Expr::Lit(Literal::Int(i)) = value {
-                    self.node_limit = i as usize;
-                } else {
-                    panic!("node_limit must be an integer");
-                }
-            }
-            "use_backoff" => {
-                if let Expr::Lit(Literal::Int(i)) = value {
-                    if i == 1 {
-                        self.use_backoff = true;
-                    } else if i == 0 {
-                        self.use_backoff = false;
-                    } else {
-                        panic!("use_backoff must be 0 or 1");
-                    }
-                } else {
-                    panic!("use_backoff must be a boolean");
-                }
-            }
-            _ => panic!("Unknown option '{}'", name),
-        }
-    }
-
-    pub fn add_rewrite(&mut self, rewrite: ast::Rewrite) -> Result<Symbol, Error> {
-        let mut name = format!("{} -> {}", rewrite.lhs, rewrite.rhs);
-        if !rewrite.conditions.is_empty() {
-            write!(name, " if {}", ListDisplay(&rewrite.conditions, ", ")).unwrap();
-        }
-        let var = Symbol::from("__rewrite_var");
-        let rule = ast::Rule {
-            body: [Fact::Eq(vec![Expr::Var(var), rewrite.lhs])]
-                .into_iter()
-                .chain(rewrite.conditions)
-                .collect(),
-            head: vec![Action::Union(Expr::Var(var), rewrite.rhs)],
-        };
-        self.add_rule_with_name(name, rule)
     }
 
     pub fn eval_actions(&mut self, actions: &[Action]) -> Result<(), Error> {
@@ -948,20 +797,25 @@ impl EGraph {
 
     fn run_command(&mut self, command: Command, should_run: bool) -> Result<String, Error> {
         Ok(match command {
-            Command::Datatype { name, variants } => {
-                self.declare_sort(name, None)?;
-                for variant in variants {
-                    self.declare_constructor(variant, name)?;
+            Command::Datatype {
+                name: _,
+                variants: _,
+            } => {
+                panic!("Datatype should have been desugared");
+            }
+            Command::Sort(name, presort_and_args) => match presort_and_args {
+                Some((presort, args)) => {
+                    self.declare_sort(name, Some((presort, &args)))?;
+                    format!(
+                        "Declared sort {name} = ({presort} {})",
+                        ListDisplay(&args, " ")
+                    )
                 }
-                format!("Declared datatype {name}.")
-            }
-            Command::Sort(name, presort, args) => {
-                self.declare_sort(name, Some((presort, &args)))?;
-                format!(
-                    "Declared sort {name} = ({presort} {})",
-                    ListDisplay(&args, " ")
-                )
-            }
+                None => {
+                    self.declare_sort(name, None)?;
+                    format!("Declared sort {name}.")
+                }
+            },
             Command::Function(fdecl) => {
                 self.declare_function(&fdecl)?;
                 format!("Declared function {}.", fdecl.name)
@@ -970,20 +824,11 @@ impl EGraph {
                 let name = self.add_rule(rule)?;
                 format!("Declared rule {name}.")
             }
-            Command::Rewrite(rewrite) => {
-                let name = self.add_rewrite(rewrite)?;
-                format!("Declared rw {name}.")
+            Command::Rewrite(_rewrite) => {
+                panic!("Rewrite should have been desugared");
             }
-            Command::BiRewrite(rewrite) => {
-                let rw2 = rewrite.clone();
-                let _name = self.add_rewrite(rewrite)?;
-                let rewrite = Rewrite {
-                    lhs: rw2.rhs,
-                    rhs: rw2.lhs,
-                    conditions: rw2.conditions,
-                };
-                let name = self.add_rewrite(rewrite)?;
-                format!("Declared bi-rw {name}.")
+            Command::BiRewrite(_rewrite) => {
+                panic!("Birewrite should have been desugared");
             }
             Command::Run(config) => {
                 let limit = config.limit;
@@ -1124,6 +969,12 @@ impl EGraph {
                 println!("{}", msg);
                 msg
             }
+            Command::Fail(c) => {
+                if self.run_command(*c, should_run).is_ok() {
+                    return Err(Error::ExpectFail);
+                }
+                "Command failed as expected.".into()
+            }
             Command::Include(file) => {
                 let s = std::fs::read_to_string(&file)
                     .unwrap_or_else(|_| panic!("Failed to read file {file}"));
@@ -1183,12 +1034,31 @@ impl EGraph {
                 self.eval_actions(&actions)?;
                 format!("Read {} facts into {name} from '{file}'.", actions.len())
             }
+            Command::Output { file, exprs } => {
+                let mut filename = self.fact_directory.clone().unwrap_or_default();
+                filename.push(file.as_str());
+                // append to file
+                let mut f = File::options()
+                    .write(true)
+                    .append(true)
+                    .create(true)
+                    .open(&filename)
+                    .map_err(|e| Error::IoError(filename.clone(), e))?;
+
+                for expr in exprs {
+                    use std::io::Write;
+                    let (_cost, expr, _exprs) = self.extract_expr(expr, 1)?;
+                    writeln!(f, "{expr}").map_err(|e| Error::IoError(filename.clone(), e))?;
+                }
+
+                format!("Output to '{filename:?}'.")
+            }
         })
     }
 
     pub fn clear(&mut self) {
         for f in self.functions.values_mut() {
-            f.nodes.clear();
+            f.clear();
         }
     }
 
@@ -1256,13 +1126,13 @@ impl EGraph {
         e: Expr,
         variants: usize,
     ) -> Result<(usize, Expr, Vec<Expr>), Error> {
-        self.rebuild();
+        self.rebuild()?;
         let (_t, value) = self.eval_expr(&e, None, true)?;
         let (cost, expr) = self.extract(value);
-        let exprs = if variants > 0 {
-            self.extract_variants(value, variants)
-        } else {
-            vec![]
+        let exprs = match variants {
+            0 => vec![],
+            1 => vec![expr.clone()],
+            _ => self.extract_variants(value, variants),
         };
         Ok((cost, expr, exprs))
     }
@@ -1277,12 +1147,13 @@ impl EGraph {
             },
             default: None,
             merge: None,
+            merge_action: vec![],
             cost: None,
         })?;
         let f = self.functions.get_mut(&name).unwrap();
         let id = self.unionfind.make_set();
         let value = Value::from_id(sort.name(), id);
-        f.insert(ValueVec::default(), value, self.timestamp);
+        f.insert(&[], value, self.timestamp);
         Ok(())
     }
     pub fn define(
@@ -1300,12 +1171,13 @@ impl EGraph {
             },
             default: None,
             merge: None,
+            merge_action: vec![],
             cost,
         })?;
         self.dont_extract.insert(name);
 
         let f = self.functions.get_mut(&name).unwrap();
-        f.insert(ValueVec::default(), value, self.timestamp);
+        f.insert(&[], value, self.timestamp);
         Ok(sort)
     }
 
@@ -1323,6 +1195,7 @@ impl EGraph {
     }
 
     // this is bad because we shouldn't inspect values like this, we should use type information
+    #[cfg(debug_assertions)]
     fn bad_find_value(&self, value: Value) -> Value {
         if let Some((tag, id)) = self.value_to_id(value) {
             Value::from_id(tag, self.find(id))
@@ -1331,11 +1204,17 @@ impl EGraph {
         }
     }
 
-    pub fn parse_and_run_program(&mut self, input: &str) -> Result<Vec<String>, Error> {
-        let program = self
-            .parser
+    pub fn parse_program(&self, input: &str) -> Result<Vec<Command>, Error> {
+        let parser = ast::parse::ProgramParser::new();
+        let program = parser
             .parse(input)
             .map_err(|e| e.map_token(|tok| tok.to_string()))?;
+        Ok(desugar_program(program))
+    }
+
+    pub fn parse_and_run_program(&mut self, input: &str) -> Result<Vec<String>, Error> {
+        let program = self.parse_program(input)?;
+
         self.run_program(program)
     }
 
@@ -1358,10 +1237,16 @@ pub enum Error {
     CheckError(Value, Value),
     #[error("{0}, {1}")]
     CustomError(Box<Error>, String),
+    #[error("Illegal merge attempted for function {0}, {1:?} != {2:?}")]
+    MergeError(Symbol, Value, Value),
     #[error("Sort {0} already declared.")]
     SortAlreadyBound(Symbol),
     #[error("Presort {0} not found.")]
     PresortNotFound(Symbol),
     #[error("Tried to pop too much")]
     Pop,
+    #[error("Command should have failed.")]
+    ExpectFail,
+    #[error("IO error: {0}: {1}")]
+    IoError(PathBuf, std::io::Error),
 }
