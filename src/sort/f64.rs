@@ -132,6 +132,9 @@ impl Sort for F64Sort {
         add_primitives!(eg, "f64-Tanh" = |a: F64| -> F64 {
             OrderedFloat(a.tanh())
         });
+        add_primitives!(eg, "f64-Atanh" = |a: F64| -> F64 {
+            OrderedFloat(a.atanh())
+        });
         add_primitives!(eg, "f64-Expm1" = |a: F64| -> F64 {
             OrderedFloat(a.exp_m1())
         });
