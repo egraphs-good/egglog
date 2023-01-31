@@ -769,6 +769,39 @@ impl EGraph {
         self.rules.extend(self.rulesets.get(&name).unwrap().clone());
     }
 
+    pub fn set_option(&mut self, name: &str, value: Expr) {
+        match name {
+            "match_limit" => {
+                if let Expr::Lit(Literal::Int(i)) = value {
+                    self.match_limit = i as usize;
+                } else {
+                    panic!("match_limit must be an integer");
+                }
+            }
+            "node_limit" => {
+                if let Expr::Lit(Literal::Int(i)) = value {
+                    self.node_limit = i as usize;
+                } else {
+                    panic!("node_limit must be an integer");
+                }
+            }
+            "use_backoff" => {
+                if let Expr::Lit(Literal::Int(i)) = value {
+                    if i == 1 {
+                        self.use_backoff = true;
+                    } else if i == 0 {
+                        self.use_backoff = false;
+                    } else {
+                        panic!("use_backoff must be 0 or 1");
+                    }
+                } else {
+                    panic!("use_backoff must be a boolean");
+                }
+            }
+            _ => panic!("Unknown option '{}'", name),
+        }
+    }
+
     pub fn eval_actions(&mut self, actions: &[Action]) -> Result<(), Error> {
         let types = Default::default();
         let program = self
