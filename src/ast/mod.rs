@@ -151,6 +151,11 @@ impl Command {
                 Sexp::String("load-ruleset".into()),
                 Sexp::String(name.to_string()),
             ]),
+            Command::SetOption { name, value } => Sexp::List(vec![
+                Sexp::String("set-option".into()),
+                Sexp::String(name.to_string()),
+                value.to_sexp(),
+            ]),
             Command::Calc(args, exprs) => Sexp::List(
                 vec![
                     Sexp::String("calc".into()),
@@ -169,7 +174,7 @@ impl Command {
             Command::Check(fact, reason) => {
                 let mut res = vec![Sexp::String("check".into()), fact.to_sexp()];
                 if let Some(reason) = reason {
-                    res.push(Sexp::String(fmt!("\"{}\"", reason.to_string())));
+                    res.push(Sexp::String(format!("\"{}\"", reason.to_string())));
                 }
                 Sexp::List(res)
             }

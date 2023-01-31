@@ -113,7 +113,7 @@ impl Sort for IntervalSort {
         add_primitives!(eg, "intersect" = |a: R, b: R| -> Opt<R> {
             if true {
                 // they disagree on guaranteed error and no error
-                if (a.err.lo && a.err.hi && !b.err.lo && !b.err.hi) || 
+                if (a.err.lo && a.err.hi && !b.err.lo && !b.err.hi) ||
                    (b.err.lo && b.err.hi && !a.err.lo && !a.err.hi) {
                     panic!("Intersect failed! Intervals: {:?} and {:?}", a, b);
                 } else if (a.err.lo && a.err.hi) || (b.err.lo && b.err.hi) {

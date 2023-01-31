@@ -15,7 +15,6 @@ use indexmap::map::Entry as IEntry;
 use instant::{Duration, Instant};
 use sort::*;
 use thiserror::Error;
-use IEntry as Entry;
 
 use desugar::desugar_program;
 

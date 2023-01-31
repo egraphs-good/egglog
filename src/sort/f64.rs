@@ -46,7 +46,6 @@ impl Sort for F64Sort {
         add_primitives!(eg, "dist" = |a: f64, b: f64| -> f64 {
             (a - b).abs()
         });
-        
         add_primitives!(eg, "f64-PI" = | | -> f64 {
             PI
         });
@@ -130,7 +129,6 @@ impl Sort for F64Sort {
         add_primitives!(eg, "f64-Atan2" = |a: f64, b: f64| -> f64 { a.atan2(b) });
         add_primitives!(eg, "f64-Hypot" = |a: f64, b: f64| -> f64 { a.hypot(b) });
         add_primitives!(eg, "f64-Fma" = |a: f64, b: f64, c: f64| -> f64 { a.mul_add(b, c) });
-    
         add_primitives!(eg, "+" = |a: f64, b: f64| -> f64 { a + b });
         add_primitives!(eg, "-" = |a: f64, b: f64| -> f64 { a - b });
         add_primitives!(eg, "*" = |a: f64, b: f64| -> f64 { a * b });
