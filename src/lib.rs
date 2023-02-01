@@ -682,7 +682,7 @@ impl EGraph {
         let (query0, action0) = ctx
             .typecheck_query(&rule.body, &rule.head)
             .map_err(Error::TypeErrors)?;
-        let query = self.compile_gj_query(query0.clone(), &ctx.types);
+        let query = self.compile_gj_query(query0, &ctx.types);
         let program = self
             .compile_actions(&ctx.types, &action0)
             .map_err(Error::TypeErrors)?;
