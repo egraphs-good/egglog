@@ -403,4 +403,5 @@ These primitives are only defined when the result itself is a pure rational.
 
 ### Sort: string
 
+Use double quotes to get a quote: "Foo "" Bar" is 'Foo " Bar'.
 No primitives defined.
