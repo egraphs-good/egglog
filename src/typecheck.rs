@@ -145,7 +145,7 @@ impl<'a> Context<'a> {
         // First find the canoncial version of each leaf
         let mut leaves = HashMap::<Id, Expr>::default();
         let mut canon = HashMap::<Symbol, Expr>::default();
-        
+
         // Do literals first
         for (node, &id) in &self.nodes {
             match node {

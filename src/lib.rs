@@ -683,9 +683,6 @@ impl EGraph {
             .typecheck_query(&rule.body, &rule.head)
             .map_err(Error::TypeErrors)?;
         let query = self.compile_gj_query(query0.clone(), &ctx.types);
-        println!("Query0: {query0:?}");
-        println!("Compiled query {query:?}");
-        println!("Compile action {action0:?}");
         let program = self
             .compile_actions(&ctx.types, &action0)
             .map_err(Error::TypeErrors)?;
@@ -766,7 +763,10 @@ impl EGraph {
         let pre_rebuild = Instant::now();
         let rebuild_num = self.rebuild()?;
         if rebuild_num > 0 {
-            log::info!("Rebuild before command: {:10.6}s", pre_rebuild.elapsed().as_millis());
+            log::info!(
+                "Rebuild before command: {:10.6}s",
+                pre_rebuild.elapsed().as_millis()
+            );
         }
         Ok(match command {
             Command::Datatype {
