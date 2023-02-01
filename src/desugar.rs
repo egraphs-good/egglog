@@ -192,10 +192,8 @@ fn assert_ssa_valid(facts: &Vec<SSAFact>) -> bool {
                 let b1 = var_used_constraints.insert(*v);
                 let b2 = var_used_constraints.insert(*v2);
                 // any constraints on variables are valid, but one needs to be defined
-                if !var_used.contains(v) && !var_used.contains(v2) {
-                    if b1 && b2 {
-                        panic!("invalid SSA constraint: {:?} = {:?}", v, v2);
-                    }
+                if !var_used.contains(v) && !var_used.contains(v2) && b1 && b2 {
+                    panic!("invalid SSA constraint: {:?} = {:?}", v, v2);
                 }
             }
             SSAFact::AssignLit(v, _) => {
