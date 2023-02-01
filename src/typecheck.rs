@@ -145,8 +145,9 @@ impl<'a> Context<'a> {
         // First find the canoncial version of each leaf
         let mut leaves = HashMap::<Id, Expr>::default();
         let mut canon = HashMap::<Symbol, Expr>::default();
+        
+        // Do literals first
         for (node, &id) in &self.nodes {
-            debug_assert_eq!(id, self.unionfind.find(id));
             match node {
                 ENode::Literal(lit) => {
                     let old = leaves.insert(id, Expr::Lit(lit.clone()));
@@ -156,6 +157,13 @@ impl<'a> Context<'a> {
                         }
                     }
                 }
+                _ => continue,
+            }
+        }
+        // Now do variables
+        for (node, &id) in &self.nodes {
+            debug_assert_eq!(id, self.unionfind.find(id));
+            match node {
                 ENode::Var(var) => match leaves.entry(id) {
                     Entry::Occupied(existing) => {
                         canon.insert(*var, existing.get().clone());
