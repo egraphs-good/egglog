@@ -730,8 +730,7 @@ impl EGraph {
                         stack.truncate(new_len);
                         stack.push(value);
                     } else {
-                        panic!("prim was partial... do we allow this?");
-                        // return;
+                        return Err(Error::PrimitiveError(p.clone(), values.to_vec()));
                     }
                 }
                 Instruction::Set(f) => {

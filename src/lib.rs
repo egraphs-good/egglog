@@ -767,6 +767,7 @@ impl EGraph {
     }
 
     fn run_command(&mut self, command: Command, should_run: bool) -> Result<String, Error> {
+        self.rebuild()?;
         Ok(match command {
             Command::Datatype {
                 name: _,
@@ -1197,6 +1198,8 @@ pub enum Error {
     TypeErrors(Vec<TypeError>),
     #[error("Check failed: {0:?} != {1:?}")]
     CheckError(Value, Value),
+    #[error("Evaluating primitive {0:?} failed. ({0:?} {:?})", ListDebug(.1, " "))]
+    PrimitiveError(Primitive, Vec<Value>),
     #[error("Illegal merge attempted for function {0}, {1:?} != {2:?}")]
     MergeError(Symbol, Value, Value),
     #[error("Sort {0} already declared.")]
