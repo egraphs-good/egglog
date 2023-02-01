@@ -285,7 +285,6 @@ impl EGraph {
                         if log {
                             log::error!("Check failed");
                             // the check failed, so print out some useful info
-                            self.rebuild()?;
                             for (_t, value) in &values {
                                 if let Some((_tag, id)) = self.value_to_id(*value) {
                                     let best = self.extract(*value).1;
@@ -506,11 +505,8 @@ impl EGraph {
         let mut search_time = Duration::default();
         let mut apply_time = Duration::default();
 
-        // we might have to do a rebuild before starting,
-        // because the use can manually do stuff
-        let initial_rebuild_start = Instant::now();
-        self.rebuild_nofail();
-        let mut rebuild_time = initial_rebuild_start.elapsed();
+        // we rebuild on every command so we are in a valid state
+        let mut rebuild_time = Duration::ZERO;
 
         for i in 0..*limit {
             self.saturated = true;
@@ -767,7 +763,11 @@ impl EGraph {
     }
 
     fn run_command(&mut self, command: Command, should_run: bool) -> Result<String, Error> {
-        self.rebuild()?;
+        let pre_rebuild = Instant::now();
+        let rebuild_num = self.rebuild()?;
+        if rebuild_num > 0 {
+            log::info!("Rebuild before command: {:10.6}s", pre_rebuild.elapsed().as_millis());
+        }
         Ok(match command {
             Command::Datatype {
                 name: _,
@@ -1091,7 +1091,6 @@ impl EGraph {
         e: Expr,
         variants: usize,
     ) -> Result<(usize, Expr, Vec<Expr>), Error> {
-        self.rebuild()?;
         let (_t, value) = self.eval_expr(&e, None, true)?;
         let (cost, expr) = self.extract(value);
         let exprs = match variants {
