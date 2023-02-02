@@ -1,4 +1,7 @@
+use ordered_float::OrderedFloat;
 use std::num::NonZeroU32;
+
+use lazy_static::lazy_static;
 
 use crate::{ast::Symbol, Id};
 
@@ -9,17 +12,22 @@ pub struct Value {
     pub bits: u64,
 }
 
+lazy_static! {
+    static ref BOGUS: Symbol = "__bogus__".into();
+    static ref UNIT: Symbol = "Unit".into();
+}
+
 impl Value {
     pub fn unit() -> Self {
         Value {
-            tag: Symbol::new("Unit"),
+            tag: *UNIT,
             bits: 0,
         }
     }
 
     pub fn fake() -> Self {
         Value {
-            tag: Symbol::new("__bogus__"),
+            tag: *BOGUS,
             bits: 1234567890,
         }
     }
@@ -37,6 +45,15 @@ impl From<i64> for Value {
         Self {
             tag: Symbol::from("i64"),
             bits: i as u64,
+        }
+    }
+}
+
+impl From<OrderedFloat<f64>> for Value {
+    fn from(f: OrderedFloat<f64>) -> Self {
+        Self {
+            tag: Symbol::from("f64"),
+            bits: f.into_inner().to_bits(),
         }
     }
 }

@@ -1,5 +1,6 @@
 use crate::ast::*;
 use crate::Symbol;
+use ordered_float::OrderedFloat;
 
 grammar;
 
@@ -32,10 +33,12 @@ Comma<T>: Vec<T> = {
 
 Command: Command = {
     "(" "datatype" <name:Ident> <variants:(Variant)*> ")" => Command::Datatype { <> },
-    "(" "sort" <name:Ident> "(" <head:Ident> <tail:(Expr)*> ")" ")" => Command::Sort (<>),
+    "(" "sort" <name:Ident> "(" <head:Ident> <tail:(Expr)*> ")" ")" => Command::Sort (name, Some((head, tail))),
+    "(" "sort" <name:Ident> ")" => Command::Sort (name, None),
     "(" "function" <name:Ident> <schema:Schema> <cost:Cost>
+        <merge_action:(":on_merge" <List<Action>>)?>
         <merge:(":merge" <Expr>)?> <default:(":default" <Expr>)?> ")" => {
-        Command::Function(FunctionDecl { name, schema, merge, default, cost })
+        Command::Function(FunctionDecl { name, schema, merge, merge_action: merge_action.unwrap_or_default(), default, cost })
     },
     "(" "relation" <name:Ident> <types:List<Type>> ")" => Command::Function(FunctionDecl::relation(name, types)),
     "(" "rule" <body:List<Fact>> <head:List<Action>> ")" => Command::Rule(Rule { head, body }),
@@ -50,6 +53,8 @@ Command: Command = {
     "(" "run" <limit:UNum>  <until:(":until" <Fact>)?> ")" => Command::Run(RunConfig { limit, until }),
     "(" "simplify"  <limit:UNum> <expr:Expr> <until:(":until" <Fact>)?> ")" 
         => Command::Simplify { expr, config : RunConfig { limit, until } },
+    "(" "add-ruleset" <name:Ident> ")" => Command::AddRuleset(name),
+    "(" "load-ruleset" <name:Ident> ")" => Command::LoadRuleset(name),
     "(" "calc" "(" <idents:IdentSort*> ")" <exprs:Expr+> ")" => Command::Calc(idents, exprs),
     "(" "extract" <variants:(":variants" <UNum>)?> <e:Expr> ")" => Command::Extract { e, variants: variants.unwrap_or(0) },
     "(" "check" <Fact> ")" => Command::Check(<>),
@@ -61,6 +66,7 @@ Command: Command = {
     "(" "print" <sym:Ident> <n:UNum?> ")" => Command::Print(sym, n.unwrap_or(10)),
     "(" "print-size" <sym:Ident> ")" => Command::PrintSize(sym),
     "(" "input" <name:Ident> <file:String> ")" => Command::Input { name, file },
+    "(" "output" <file:String> <exprs:Expr+> ")" => Command::Output { file, exprs },
     "(" "fail" <Command> ")" => Command::Fail(Box::new(<>)),
     "(" "include" <file:String> ")" => Command::Include(file),
 }
@@ -106,6 +112,7 @@ Expr: Expr = {
 Literal: Literal = {
     // "(" ")" => Literal::Unit, // shouldn't need unit literals for now
     <Num> => Literal::Int(<>),
+    <F64> => Literal::F64(<>),
     <SymString> => Literal::String(<>),
 }
 
@@ -126,6 +133,11 @@ Num: i64 = <s:r"(-)?[0-9]+"> => s.parse().unwrap();
 UNum: usize = {
     <Num> => <>.try_into().unwrap(),
 }
+F64: OrderedFloat<f64> = <s:r"(-)?[0-9]+\.[0-9]+(e(-)?[0-9]+)?"> => OrderedFloat::<f64>(s.parse().unwrap());
 Ident: Symbol = <s:r"([[:alpha:]][\w-]*)|([-+*/!=<>&|^/%]+)"> => s.parse().unwrap();
-SymString: Symbol = <r#""[^"]*""#> => Symbol::from(<>);
-String: String = <r#""[^"]*""#> => (<>).trim_matches('"').to_owned();
+SymString: Symbol = <r#"("[^"]*")+"#> => Symbol::from(<>);
+String: String = <r#"("[^"]*")+"#> => {
+    let string: &str = <>;
+    let first_last_off: &str = &string[1..string.len() - 1];
+    first_last_off.replace("\"\"", "\"")
+};

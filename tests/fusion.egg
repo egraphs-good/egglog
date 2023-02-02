@@ -135,7 +135,7 @@
 
 (run 100)
 
-(define output
+(define my-output
     (CaseSplit (Var (V "expr")) (Num 0) 
            (Lam (V "x") (Lam (V "xs'") 
                 (Add (Add (Var (V "x")) (Num 1)) 
