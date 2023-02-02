@@ -57,6 +57,7 @@ pub enum Command {
     BiRewrite(Rewrite),
     Action(Action),
     Run(RunConfig),
+    RunSchedule(Schedule),
     Calc(Vec<IdentSort>, Vec<Expr>),
     Extract {
         variants: usize,
@@ -139,6 +140,10 @@ impl Command {
 
                 Sexp::List(res)
             }
+            Command::RunSchedule(_sched) => Sexp::List(vec![
+                // TODO: sched to sexp
+                Sexp::String("run-schedule".into()),
+            ]),
             Command::AddRuleset(name) => Sexp::List(vec![
                 Sexp::String("add-ruleset".into()),
                 Sexp::String(name.to_string()),
@@ -361,6 +366,14 @@ impl Display for Fact {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.to_sexp())
     }
+}
+
+#[derive(Debug, Clone)]
+pub enum Schedule {
+    Saturate(Box<Schedule>),
+    Repeat(usize, Box<Schedule>),
+    Ruleset(Symbol),
+    Sequence(Vec<Schedule>),
 }
 
 #[derive(Clone, Debug)]

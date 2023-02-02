@@ -1,5 +1,6 @@
 use crate::ast::*;
 use crate::Symbol;
+use crate::Schedule;
 use ordered_float::OrderedFloat;
 
 grammar;
@@ -53,6 +54,7 @@ Command: Command = {
     "(" "run" <limit:UNum>  <until:(":until" <Fact>)?> ")" => Command::Run(RunConfig { limit, until }),
     "(" "add-ruleset" <name:Ident> ")" => Command::AddRuleset(name),
     "(" "load-ruleset" <name:Ident> ")" => Command::LoadRuleset(name),
+    "(" "run-schedule" <Schedule*> ")" => Command::RunSchedule(Schedule::Sequence(<>)), 
     "(" "calc" "(" <idents:IdentSort*> ")" <exprs:Expr+> ")" => Command::Calc(idents, exprs),
     "(" "extract" <variants:(":variants" <UNum>)?> <e:Expr> ")" => Command::Extract { e, variants: variants.unwrap_or(0) },
     "(" "check" <Fact> ")" => Command::Check(<>),
@@ -67,6 +69,12 @@ Command: Command = {
     "(" "output" <file:String> <exprs:Expr+> ")" => Command::Output { file, exprs },
     "(" "fail" <Command> ")" => Command::Fail(Box::new(<>)),
     "(" "include" <file:String> ")" => Command::Include(file),
+}
+
+Schedule: Schedule = {
+    "(" "saturate" <Schedule*> ")" => Schedule::Saturate(Box::new(Schedule::Sequence(<>))),
+    "(" "repeat" <limit:UNum> <scheds:Schedule*> ")" => Schedule::Repeat(limit, Box::new(Schedule::Sequence(scheds))),
+    <sym:Ident> => Schedule::Ruleset(sym),
 }
 
 Cost: Option<usize> = {
