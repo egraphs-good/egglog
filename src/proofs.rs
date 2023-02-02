@@ -345,18 +345,7 @@ fn make_runner(config: &RunConfig) -> Vec<Command> {
 
 // the egraph is the initial egraph with only default sorts
 pub(crate) fn add_proofs(egraph: &EGraph, program: Vec<Command>) -> Vec<Command> {
-    let mut res = vec![];
-
-    for command in proof_header(egraph) {
-        match command {
-            Command::FlatRule(ruleset, rule) => {
-                res.push(Command::Rule(ruleset, rule.to_rule()));
-            }
-            _ => {
-                res.push(command);
-            }
-        }
-    }
+    let mut res = proof_header(egraph);
 
     res.extend(make_ast_primitives(egraph));
 
@@ -385,8 +374,7 @@ pub(crate) fn add_proofs(egraph: &EGraph, program: Vec<Command>) -> Vec<Command>
                 panic!("Rule should have been desugared");
             }
             Command::FlatRule(ruleset, rule) => {
-                //res.push(Command::Rule(*ruleset, rule.to_rule()));
-                res.push(Command::FlatRule(*ruleset, instrument_rule(egraph, &rule)));
+                res.push(Command::FlatRule(*ruleset, instrument_rule(egraph, rule)));
             }
             Command::Run(config) => {
                 res.extend(make_runner(config));

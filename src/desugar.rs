@@ -174,7 +174,7 @@ pub(crate) fn make_ssa_again(facts: Vec<SSAFact>) -> Vec<SSAFact> {
 }
 
 fn assert_ssa_valid(facts: &Vec<SSAFact>) -> bool {
-    println!("assert_ssa_valid: {:?}", facts);
+    //println!("assert_ssa_valid: {:?}", facts);
     let mut var_used: HashSet<Symbol> = Default::default();
     let mut var_used_constraints: HashSet<Symbol> = Default::default();
     for fact in facts {
@@ -341,6 +341,19 @@ fn flatten_actions(actions: &Vec<Action>, get_fresh: &mut Fresh) -> Vec<SSAActio
     res
 }
 
+
+// In egglog, you are allowed to refer to variables
+// (which desugar to functions with no args)
+// without parenthesis.
+// This fixes that so normal translation is easier.
+fn parenthesize_globals(rule: Rule, globals: &HashSet<Symbol>) -> Rule {
+    rule.map_exprs(&mut |e| match e {
+        Expr::Var(v) if globals.contains(v) => Expr::Call(*v, vec![]),
+        _ => e.clone(),
+    })
+}
+
+
 fn flatten_rule(rule: Rule) -> FlatRule {
     let mut varcount = 0;
     let mut get_fresh = move || {
@@ -354,7 +367,7 @@ fn flatten_rule(rule: Rule) -> FlatRule {
     }
 }
 
-pub(crate) fn desugar_command(egraph: &EGraph, command: Command) -> Result<Vec<Command>, Error> {
+pub(crate) fn desugar_command(egraph: &EGraph, command: Command, globals: &mut HashSet<Symbol>) -> Result<Vec<Command>, Error> {
     Ok(match command {
         Command::Datatype { name, variants } => desugar_datatype(name, variants),
         Command::Rewrite(ruleset, rewrite) => desugar_rewrite(ruleset, &rewrite),
@@ -364,20 +377,40 @@ pub(crate) fn desugar_command(egraph: &EGraph, command: Command) -> Result<Vec<C
                 .unwrap_or_else(|_| panic!("Failed to read file {file}"));
             egraph.parse_program(&s)?
         }
-        Command::Rule(ruleset, rule) => vec![Command::FlatRule(ruleset, flatten_rule(rule))],
+        Command::Rule(ruleset, rule) => vec![Command::FlatRule(ruleset, flatten_rule(parenthesize_globals(rule, globals)))],
         _ => vec![command],
     })
 }
 
+// TODO desugar define to function tables (it requires type inference)
 pub(crate) fn desugar_program(
     egraph: &EGraph,
     program: Vec<Command>,
 ) -> Result<Vec<Command>, Error> {
-    let intermediate: Result<Vec<Vec<Command>>, Error> = program
-        .into_iter()
-        .map(|command| desugar_command(egraph, command))
-        .collect();
-    intermediate.map(|v| v.into_iter().flatten().collect())
+    let mut globals: HashSet<Symbol> = Default::default();
+    let mut res = vec![];
+
+    for command in program {
+        let desugared = desugar_command(egraph, command, &mut globals)?;
+
+        for newcommand in &desugared {
+            match newcommand {
+                Command::Define {name, expr: _, cost: _ } => {
+                globals.insert(*name);
+            }
+            Command::Function(fdecl) => {
+                // add to globals if it has no arguments
+                if fdecl.schema.input.is_empty() {
+                    globals.insert(fdecl.name);
+                }
+            }
+            _ => ()
+        }
+        }
+
+        res.extend(desugared);
+    }
+    Ok(res)
 }
 
 pub fn to_rules(program: Vec<Command>) -> Vec<Command> {

@@ -375,6 +375,13 @@ impl Fact {
             Fact::Fact(expr) => expr.to_sexp(),
         }
     }
+
+    pub(crate) fn map_exprs(&self, f: &mut impl FnMut(&Expr) -> Expr) -> Fact {
+        match self {
+            Fact::Eq(exprs) => Fact::Eq(exprs.iter().map(|e| f(e)).collect()),
+            Fact::Fact(expr) => Fact::Fact(f(expr)),
+        }
+    }
 }
 
 impl Display for Fact {
@@ -470,6 +477,22 @@ impl Action {
         }
     }
 
+    pub(crate) fn map_exprs(&self, f: &mut impl FnMut(&Expr) -> Expr) -> Self {
+        match self {
+            Action::Let(lhs, rhs) => Action::Let(*lhs, f(rhs)),
+            Action::Set(lhs, args, rhs) => {
+                Action::Set(*lhs, args.iter().map(|e| f(e)).collect(), f(rhs))
+            }
+            Action::Delete(lhs, args) => {
+                Action::Delete(*lhs, args.iter().map(|e| f(e)).collect())
+            }
+            Action::Union(lhs, rhs) => Action::Union(f(lhs), f(rhs)),
+            Action::Panic(msg) => Action::Panic(msg.clone()),
+            Action::Expr(e) => Action::Expr(f(e)),
+        }
+    }
+     
+
     pub fn replace_canon(&self, canon: &HashMap<Symbol, Expr>) -> Self {
         match self {
             Action::Let(lhs, rhs) => Action::Let(*lhs, rhs.replace_canon(canon)),
@@ -537,6 +560,13 @@ impl Rule {
             res.push(Sexp::String(ruleset.to_string()));
         }
         Sexp::List(res)
+    }
+
+    pub(crate) fn map_exprs(&self, f: &mut impl FnMut(&Expr) -> Expr) -> Self {
+        Rule {
+            head: self.head.iter().map(|a| a.map_exprs(f)).collect(),
+            body: self.body.iter().map(|fact| fact.map_exprs(f)).collect(),
+        }
     }
 }
 

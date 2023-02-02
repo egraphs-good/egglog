@@ -1,0 +1,8 @@
+(datatype Nat
+  (S Nat)
+  (Zero))
+
+(define two (S (S Zero)))
+
+(union (two) (S (S (S (Zero)))))
+(check (= (two) (S (S (S (Zero))))))
