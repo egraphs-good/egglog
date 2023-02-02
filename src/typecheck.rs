@@ -145,15 +145,25 @@ impl<'a> Context<'a> {
         // First find the canoncial version of each leaf
         let mut leaves = HashMap::<Id, Expr>::default();
         let mut canon = HashMap::<Symbol, Expr>::default();
+
+        // Do literals first
         for (node, &id) in &self.nodes {
-            debug_assert_eq!(id, self.unionfind.find(id));
             match node {
                 ENode::Literal(lit) => {
                     let old = leaves.insert(id, Expr::Lit(lit.clone()));
                     if let Some(expr) = old {
-                        panic!("Duplicate literal: {:?} {:?}", expr, lit);
+                        if let Expr::Lit(_lit2) = &expr {
+                            panic!("Duplicate literal: {:?} {:?}", expr, lit);
+                        }
                     }
                 }
+                _ => continue,
+            }
+        }
+        // Now do variables
+        for (node, &id) in &self.nodes {
+            debug_assert_eq!(id, self.unionfind.find(id));
+            match node {
                 ENode::Var(var) => match leaves.entry(id) {
                     Entry::Occupied(existing) => {
                         canon.insert(*var, existing.get().clone());
@@ -720,8 +730,7 @@ impl EGraph {
                         stack.truncate(new_len);
                         stack.push(value);
                     } else {
-                        panic!("prim was partial... do we allow this?");
-                        // return;
+                        return Err(Error::PrimitiveError(p.clone(), values.to_vec()));
                     }
                 }
                 Instruction::Set(f) => {
@@ -754,7 +763,7 @@ impl EGraph {
                             let merged: Value = match function.merge.merge_vals.clone() {
                                 MergeFn::AssertEq => {
                                     self.saturated = false;
-                                    return Err(Error::MergeError(*f, new_value, old_value))
+                                    return Err(Error::MergeError(*f, new_value, old_value));
                                 }
                                 MergeFn::Union => {
                                     self.saturated = false;

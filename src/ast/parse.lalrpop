@@ -52,6 +52,8 @@ Command: Command = {
     "(" "define" <name:Ident> <expr:Expr> <cost:Cost> ")" => Command::Define { name, expr, cost },
     <NonLetAction> => Command::Action(<>),
     "(" "run" <limit:UNum>  <until:(":until" <Fact>)?> ")" => Command::Run(RunConfig { limit, until }),
+    "(" "simplify"  <limit:UNum> <expr:Expr> <until:(":until" <Fact>)?> ")" 
+        => Command::Simplify { expr, config : RunConfig { limit, until } },
     "(" "add-ruleset" <name:Ident> ")" => Command::AddRuleset(name),
     "(" "load-ruleset" <name:Ident> ")" => Command::LoadRuleset(name),
     "(" "run-schedule" <Schedule*> ")" => Command::RunSchedule(Schedule::Sequence(<>)), 
@@ -139,7 +141,7 @@ Num: i64 = <s:r"(-)?[0-9]+"> => s.parse().unwrap();
 UNum: usize = {
     <Num> => <>.try_into().unwrap(),
 }
-F64: OrderedFloat<f64> = <s:r"(-)?[0-9]+\.[0-9]+"> => OrderedFloat::<f64>(s.parse().unwrap());
+F64: OrderedFloat<f64> = <s:r"(-)?[0-9]+\.[0-9]+(e(-)?[0-9]+)?"> => OrderedFloat::<f64>(s.parse().unwrap());
 Ident: Symbol = <s:r"([[:alpha:]][\w-]*)|([-+*/!=<>&|^/%]+)"> => s.parse().unwrap();
 SymString: Symbol = <r#"("[^"]*")+"#> => Symbol::from(<>);
 String: String = <r#"("[^"]*")+"#> => {
