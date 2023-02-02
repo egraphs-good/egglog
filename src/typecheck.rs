@@ -763,7 +763,7 @@ impl EGraph {
                             let merged: Value = match function.merge.merge_vals.clone() {
                                 MergeFn::AssertEq => {
                                     self.saturated = false;
-                                    return Err(Error::MergeError(*f, new_value, old_value))
+                                    return Err(Error::MergeError(*f, new_value, old_value));
                                 }
                                 MergeFn::Union => {
                                     self.saturated = false;
