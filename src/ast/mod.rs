@@ -57,6 +57,10 @@ pub enum Command {
     BiRewrite(Rewrite),
     Action(Action),
     Run(RunConfig),
+    Simplify {
+        expr: Expr,
+        config: RunConfig,
+    },
     Calc(Vec<IdentSort>, Vec<Expr>),
     Extract {
         variants: usize,
@@ -207,6 +211,19 @@ impl Command {
                 Sexp::String("include".into()),
                 Sexp::String(format!("\"{}\"", file)),
             ]),
+            Command::Simplify { expr, config } => {
+                let mut res = vec![
+                    Sexp::String("simplify".into()),
+                    Sexp::String(config.limit.to_string()),
+                    expr.to_sexp(),
+                ];
+                if let Some(until) = &config.until {
+                    res.push(Sexp::String(":until".into()));
+                    res.push(until.to_sexp());
+                }
+
+                Sexp::List(res)
+            }
         }
     }
 }
