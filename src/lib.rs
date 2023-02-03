@@ -285,7 +285,6 @@ impl EGraph {
                         if log {
                             log::error!("Check failed");
                             // the check failed, so print out some useful info
-                            self.rebuild()?;
                             for (_t, value) in &values {
                                 if let Some((_tag, id)) = self.value_to_id(*value) {
                                     let best = self.extract(*value).1;
@@ -506,11 +505,8 @@ impl EGraph {
         let mut search_time = Duration::default();
         let mut apply_time = Duration::default();
 
-        // we might have to do a rebuild before starting,
-        // because the use can manually do stuff
-        let initial_rebuild_start = Instant::now();
-        self.rebuild_nofail();
-        let mut rebuild_time = initial_rebuild_start.elapsed();
+        // we rebuild on every command so we are in a valid state
+        let mut rebuild_time = Duration::ZERO;
 
         for i in 0..*limit {
             self.saturated = true;
@@ -764,6 +760,14 @@ impl EGraph {
     }
 
     fn run_command(&mut self, command: Command, should_run: bool) -> Result<String, Error> {
+        let pre_rebuild = Instant::now();
+        let rebuild_num = self.rebuild()?;
+        if rebuild_num > 0 {
+            log::info!(
+                "Rebuild before command: {:10.6}s",
+                pre_rebuild.elapsed().as_millis()
+            );
+        }
         Ok(match command {
             Command::Datatype {
                 name: _,
@@ -853,6 +857,15 @@ impl EGraph {
                     "Skipping check.".into()
                 }
             }
+            Command::Simplify { expr, config } => {
+                if should_run {
+                    let (cost, expr) = self.simplify(expr, &config)?;
+                    println!("{}", expr);
+                    format!("Simplified with cost {cost} to {expr}")
+                } else {
+                    "Skipping simplify.".into()
+                }
+            }
             Command::Action(action) => {
                 if should_run {
                     self.eval_actions(std::slice::from_ref(&action))?;
@@ -863,7 +876,7 @@ impl EGraph {
             }
             Command::Define { name, expr, cost } => {
                 if should_run {
-                    let sort = self.define(name, expr, cost)?;
+                    let sort = self.define(name, &expr, cost)?;
                     format!("Defined {name}: {sort:?}")
                 } else {
                     format!("Skipping define {name}")
@@ -1080,6 +1093,14 @@ impl EGraph {
         }
     }
 
+    fn simplify(&mut self, expr: Expr, config: &RunConfig) -> Result<(usize, Expr), Error> {
+        self.push();
+        let (_t, value) = self.eval_expr(&expr, None, true).unwrap();
+        self.run_rules(config);
+        let (cost, expr) = self.extract(value);
+        self.pop().unwrap();
+        Ok((cost, expr))
+    }
     // Extract an expression from the current state, returning the cost, the extracted expression and some number
     // of other variants, if variants is not zero.
     pub fn extract_expr(
@@ -1087,7 +1108,6 @@ impl EGraph {
         e: Expr,
         variants: usize,
     ) -> Result<(usize, Expr, Vec<Expr>), Error> {
-        self.rebuild()?;
         let (_t, value) = self.eval_expr(&e, None, true)?;
         let (cost, expr) = self.extract(value);
         let exprs = match variants {
@@ -1120,10 +1140,10 @@ impl EGraph {
     pub fn define(
         &mut self,
         name: Symbol,
-        expr: Expr,
+        expr: &Expr,
         cost: Option<usize>,
     ) -> Result<ArcSort, Error> {
-        let (sort, value) = self.eval_expr(&expr, None, true)?;
+        let (sort, value) = self.eval_expr(expr, None, true)?;
         self.declare_function(&FunctionDecl {
             name,
             schema: Schema {
@@ -1194,6 +1214,8 @@ pub enum Error {
     TypeErrors(Vec<TypeError>),
     #[error("Check failed: {0:?} != {1:?}")]
     CheckError(Value, Value),
+    #[error("Evaluating primitive {0:?} failed. ({0:?} {:?})", ListDebug(.1, " "))]
+    PrimitiveError(Primitive, Vec<Value>),
     #[error("Illegal merge attempted for function {0}, {1:?} != {2:?}")]
     MergeError(Symbol, Value, Value),
     #[error("Sort {0} already declared.")]

@@ -51,6 +51,8 @@ Command: Command = {
     "(" "define" <name:Ident> <expr:Expr> <cost:Cost> ")" => Command::Define { name, expr, cost },
     <NonLetAction> => Command::Action(<>),
     "(" "run" <limit:UNum>  <until:(":until" <Fact>)?> ")" => Command::Run(RunConfig { limit, until }),
+    "(" "simplify"  <limit:UNum> <expr:Expr> <until:(":until" <Fact>)?> ")" 
+        => Command::Simplify { expr, config : RunConfig { limit, until } },
     "(" "add-ruleset" <name:Ident> ")" => Command::AddRuleset(name),
     "(" "load-ruleset" <name:Ident> ")" => Command::LoadRuleset(name),
     "(" "calc" "(" <idents:IdentSort*> ")" <exprs:Expr+> ")" => Command::Calc(idents, exprs),

@@ -145,15 +145,25 @@ impl<'a> Context<'a> {
         // First find the canoncial version of each leaf
         let mut leaves = HashMap::<Id, Expr>::default();
         let mut canon = HashMap::<Symbol, Expr>::default();
+
+        // Do literals first
         for (node, &id) in &self.nodes {
-            debug_assert_eq!(id, self.unionfind.find(id));
             match node {
                 ENode::Literal(lit) => {
                     let old = leaves.insert(id, Expr::Lit(lit.clone()));
                     if let Some(expr) = old {
-                        panic!("Duplicate literal: {:?} {:?}", expr, lit);
+                        if let Expr::Lit(_lit2) = &expr {
+                            panic!("Duplicate literal: {:?} {:?}", expr, lit);
+                        }
                     }
                 }
+                _ => continue,
+            }
+        }
+        // Now do variables
+        for (node, &id) in &self.nodes {
+            debug_assert_eq!(id, self.unionfind.find(id));
+            match node {
                 ENode::Var(var) => match leaves.entry(id) {
                     Entry::Occupied(existing) => {
                         canon.insert(*var, existing.get().clone());
@@ -720,8 +730,7 @@ impl EGraph {
                         stack.truncate(new_len);
                         stack.push(value);
                     } else {
-                        panic!("prim was partial... do we allow this?");
-                        // return;
+                        return Err(Error::PrimitiveError(p.clone(), values.to_vec()));
                     }
                 }
                 Instruction::Set(f) => {
@@ -734,14 +743,13 @@ impl EGraph {
                     // We should only have canonical values here: omit the canonicalization step
                     let old_value = function.insert(args, new_value, self.timestamp);
 
-                    // if the value does not exist or the two values differ
-                    if old_value.is_none() || old_value != Some(new_value) {
+                    // if the value does not exist
+                    if old_value.is_none() {
                         self.saturated = false;
                     }
 
                     if let Some(old_value) = old_value {
                         if new_value != old_value {
-                            self.saturated = false;
                             let tag = old_value.tag;
                             if let Some(prog) = function.merge.on_merge.clone() {
                                 let values = [old_value, new_value];
@@ -754,9 +762,11 @@ impl EGraph {
                             let function = self.functions.get_mut(f).unwrap();
                             let merged: Value = match function.merge.merge_vals.clone() {
                                 MergeFn::AssertEq => {
-                                    return Err(Error::MergeError(*f, new_value, old_value))
+                                    self.saturated = false;
+                                    return Err(Error::MergeError(*f, new_value, old_value));
                                 }
                                 MergeFn::Union => {
+                                    self.saturated = false;
                                     self.unionfind.union_values(old_value, new_value, tag)
                                 }
                                 MergeFn::Expr(merge_prog) => {
@@ -765,6 +775,7 @@ impl EGraph {
                                     self.run_actions(stack, &values, &merge_prog, true)?;
                                     let result = stack.pop().unwrap();
                                     stack.truncate(old_len);
+                                    self.saturated &= result == old_value;
                                     result
                                 }
                             };
