@@ -48,7 +48,7 @@ for the REPL.
 
 ## VS Code plugin
 
-There is a VS Code extension in the vscode folder. Install using 'Install from VSIX...' in the three-dot menu of the extensions tab and pick npm install -g @vscode/vscode/eggsmol.vsix`.
+There is a VS Code extension in the vscode folder. Install using 'Install from VSIX...' in the three-dot menu of the extensions tab and pick `vscode/vscode/eggsmol.vsix`.
 
 ### Enhancing the VS code extension
 
@@ -292,7 +292,7 @@ prints
     ( print <sym:Ident> <n:UNum?> )         ; print the value of an id
     ( print-size <sym:Ident> )
     ( input <name:Ident> <file:String> )
-    ( output <file:String> <exprs:Expr+> )  ; Saves the expression to a file
+    ( output <file:String> <exprs:Expr+> )  ; Appends the expression to a file
     ( include <file:String> )
     ( add-ruleset <id:String> )             ; Saves all rules as a ruleset with a given name (EXPERIMENTAL)
     ( load-ruleset <id:String> )            ; Add the rules from a ruleset previously added (EXPERIMENTAL)
@@ -407,5 +407,5 @@ These primitives are only defined when the result itself is a pure rational.
 
 ### Sort: string
 
-Use double quotes to get a quote: "Foo "" Bar" is `Foo " Bar`.
+Use double quotes to get a quote: `"Foo "" Bar"` is `Foo " Bar`.
 No primitives defined.
