@@ -1179,7 +1179,7 @@ impl EGraph {
         let should_run = true;
         //let with_proofs = add_proofs(&self, program.clone());
 
-        println!("{}", ListDisplay(program.clone(), "\n"));
+        //println!("{}", ListDisplay(with_proofs.clone(), "\n"));
 
         // TODO: remove this to_rules call and migrate codebase to SSA IR
         for command in to_rules(program) {

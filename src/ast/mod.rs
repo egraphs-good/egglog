@@ -209,7 +209,11 @@ impl Command {
 
 impl Display for Command {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.to_sexp())
+        match self {
+            Command::Rule(ruleset, r) => r.fmt_with_ruleset(f, *ruleset),
+            Command::FlatRule(ruleset, r) => r.to_rule().fmt_with_ruleset(f, *ruleset),
+            _ => write!(f, "{}", self.to_sexp()),
+        }
     }
 }
 
@@ -434,8 +438,12 @@ impl SSAAction {
     // fvar accepts a variable and if it is being defined (true) or used (false)
     pub(crate) fn map_def_use(&self, fvar: &mut impl FnMut(Symbol, bool) -> Symbol) -> SSAAction {
         match self {
-            SSAAction::Let(symbol, expr) => SSAAction::Let(fvar(*symbol, true), expr.map_def_use(fvar)),
-            SSAAction::LetVar(symbol, other) => SSAAction::LetVar(fvar(*symbol, true), fvar(*other, false)),
+            SSAAction::Let(symbol, expr) => {
+                SSAAction::Let(fvar(*symbol, true), expr.map_def_use(fvar))
+            }
+            SSAAction::LetVar(symbol, other) => {
+                SSAAction::LetVar(fvar(*symbol, true), fvar(*other, false))
+            }
             SSAAction::LetLit(symbol, lit) => SSAAction::LetLit(fvar(*symbol, true), lit.clone()),
             SSAAction::Set(symbol, args, other) => SSAAction::Set(
                 *symbol,
@@ -445,9 +453,7 @@ impl SSAAction {
             SSAAction::Delete(symbol, args) => {
                 SSAAction::Delete(*symbol, args.iter().map(|s| fvar(*s, false)).collect())
             }
-            SSAAction::Union(lhs, rhs) => {
-                SSAAction::Union(fvar(*lhs, false), fvar(*rhs, false))
-            }
+            SSAAction::Union(lhs, rhs) => SSAAction::Union(fvar(*lhs, false), fvar(*rhs, false)),
             SSAAction::Panic(msg) => SSAAction::Panic(msg.clone()),
         }
     }
@@ -581,10 +587,12 @@ impl Rule {
             body: self.body.iter().map(|fact| fact.map_exprs(f)).collect(),
         }
     }
-}
 
-impl Display for Rule {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    pub(crate) fn fmt_with_ruleset(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        ruleset: Symbol,
+    ) -> std::fmt::Result {
         let indent = " ".repeat(7);
         write!(f, "(rule (")?;
         for (i, fact) in self.body.iter().enumerate() {
@@ -606,7 +614,17 @@ impl Display for Rule {
                 writeln!(f, "")?;
             }
         }
-        write!(f, "))")
+        if ruleset != "".into() {
+            write!(f, ")\n{}:ruleset {})", indent, ruleset)
+        } else {
+            write!(f, "))")
+        }
+    }
+}
+
+impl Display for Rule {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.fmt_with_ruleset(f, "".into())
     }
 }
 

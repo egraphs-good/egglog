@@ -25,17 +25,24 @@ fn desugar_rewrite(ruleset: Symbol, rewrite: &Rewrite, globals: &HashSet<Symbol>
     let var = Symbol::from("rewrite_var__");
     vec![Command::FlatRule(
         ruleset,
-        flatten_rule(parenthesize_globals(Rule {
-            body: [Fact::Eq(vec![Expr::Var(var), rewrite.lhs.clone()])]
-                .into_iter()
-                .chain(rewrite.conditions.clone())
-                .collect(),
-            head: vec![Action::Union(Expr::Var(var), rewrite.rhs.clone())],
-        }, globals)),
+        flatten_rule(parenthesize_globals(
+            Rule {
+                body: [Fact::Eq(vec![Expr::Var(var), rewrite.lhs.clone()])]
+                    .into_iter()
+                    .chain(rewrite.conditions.clone())
+                    .collect(),
+                head: vec![Action::Union(Expr::Var(var), rewrite.rhs.clone())],
+            },
+            globals,
+        )),
     )]
 }
 
-fn desugar_birewrite(ruleset: Symbol, rewrite: &Rewrite, globals: &HashSet<Symbol>) -> Vec<Command> {
+fn desugar_birewrite(
+    ruleset: Symbol,
+    rewrite: &Rewrite,
+    globals: &HashSet<Symbol>,
+) -> Vec<Command> {
     let rw2 = Rewrite {
         lhs: rewrite.rhs.clone(),
         rhs: rewrite.lhs.clone(),
@@ -207,10 +214,10 @@ pub(crate) fn assert_ssa_valid(facts: &Vec<SSAFact>, actions: &Vec<SSAAction>) -
 
     let mut fdefuse = |var, isdef| {
         if isdef {
-        if !var_used.insert(var) {
-            panic!("invalid SSA variable: {:?}", var);
-        }
-    } else if !var_used.contains(&var) {
+            if !var_used.insert(var) {
+                panic!("invalid SSA variable: {:?}", var);
+            }
+        } else if !var_used.contains(&var) {
             panic!("invalid SSA variable: {:?}", var);
         }
         var
@@ -241,7 +248,7 @@ fn flatten_equalities(equalities: Vec<(Symbol, Expr)>, get_fresh: &mut Fresh) ->
         var_used.insert(lhs);
         res.push(SSAFact::ConstrainEq(lhs, result));
     }
-    
+
     res
 }
 
@@ -379,8 +386,6 @@ fn flatten_rule(rule: Rule) -> FlatRule {
         head: flatten_actions(&rule.head, &mut get_fresh),
         body: flatten_facts(&rule.body, &mut get_fresh),
     };
-    println!("Before rule: {}", rule);
-    println!("Flat rule: {}", res);
     assert_ssa_valid(&res.body, &res.head);
     res
 }

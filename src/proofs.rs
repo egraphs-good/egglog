@@ -1,6 +1,6 @@
 use crate::*;
 
-use crate::desugar::{make_ssa_again, Fresh, assert_ssa_valid};
+use crate::desugar::{assert_ssa_valid, make_ssa_again, Fresh};
 use symbolic_expressions::Sexp;
 
 fn proof_header(egraph: &EGraph) -> Vec<Command> {
@@ -223,7 +223,6 @@ fn add_action_proof(
 ) {
     match action {
         SSAAction::LetVar(var1, var2) => {
-            println!("var2: {:?}", var2);
             info.var_term
                 .insert(*var1, *info.var_term.get(var2).unwrap());
         }
@@ -392,7 +391,7 @@ fn add_rule_proof(
     rule_proof
 }
 
-fn instrument_rule(egraph: &EGraph, rule: &FlatRule) -> FlatRule {
+fn instrument_rule(egraph: &EGraph, rule: &FlatRule, rule_name: Symbol) -> FlatRule {
     let mut varcount = 0;
     let mut get_fresh = move || {
         varcount += 1;
@@ -403,17 +402,8 @@ fn instrument_rule(egraph: &EGraph, rule: &FlatRule) -> FlatRule {
     assert_ssa_valid(&facts, &rule.head);
 
     let mut actions = rule.head.clone();
-    let rule_proof = add_rule_proof(
-        format!("{}", rule).into(),
-        &info,
-        &rule.body,
-        &mut actions,
-        &mut get_fresh,
-    );
+    let rule_proof = add_rule_proof(rule_name, &info, &rule.body, &mut actions, &mut get_fresh);
 
-    println!("rule: {}", rule);
-    println!("facts: {:?}", facts);
-    println!("info: {:?}", info);
     for action in &rule.head {
         add_action_proof(
             rule_proof,
@@ -533,7 +523,10 @@ pub(crate) fn add_proofs(egraph: &EGraph, program: Vec<Command>) -> Vec<Command>
                 panic!("Rule should have been desugared");
             }
             Command::FlatRule(ruleset, rule) => {
-                res.push(Command::FlatRule(*ruleset, instrument_rule(egraph, rule)));
+                res.push(Command::FlatRule(
+                    *ruleset,
+                    instrument_rule(egraph, rule, "TODOrulename".into()),
+                ));
             }
             Command::Run(config) => {
                 res.extend(make_runner(config));
