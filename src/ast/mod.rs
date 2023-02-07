@@ -40,6 +40,71 @@ impl Display for Id {
 }
 
 #[derive(Debug, Clone)]
+pub enum FlatCommand {
+    Sort(Symbol, Option<(Symbol, Vec<Expr>)>),
+    Function(FunctionDecl),
+    AddRuleset(Symbol),
+    FlatRule(Symbol, FlatRule),
+    SSAAction(SSAAction),
+    Run(RunConfig),
+    // TODO flatten calc, add proof support
+    Calc(Vec<IdentSort>, Vec<Expr>),
+    Extract {
+        variants: usize,
+        var: Symbol,
+    },
+    // TODO: this could just become an empty query
+    Check(Fact),
+    Clear,
+    Print(Symbol, usize),
+    PrintSize(Symbol),
+    Output {
+        file: String,
+        exprs: Vec<Expr>,
+    },
+    // TODO flatten query
+    Query(Vec<Fact>),
+    Push(usize),
+    Pop(usize),
+    Fail(Box<FlatCommand>),
+    // TODO desugar
+    Input { name: Symbol, file: String },
+}
+
+
+impl FlatCommand {
+    pub fn to_command(&self) -> Command {
+        match self {
+            FlatCommand::Sort(name, params) => Command::Sort(*name, params.clone()),
+            FlatCommand::Function(f) => Command::Function(f.clone()),
+            FlatCommand::AddRuleset(name) => Command::AddRuleset(*name),
+            FlatCommand::FlatRule(name, rule) => Command::Rule(*name, rule.to_rule()),
+            FlatCommand::SSAAction(action) => Command::Action(action.to_action()),
+            FlatCommand::Run(config) => Command::Run(config.clone()),
+            FlatCommand::Calc(args, exprs) => Command::Calc(args.clone(), exprs.clone()),
+            FlatCommand::Extract { variants, var } => Command::Extract {
+                variants: *variants,
+                e: Expr::Var(*var),
+            },
+            FlatCommand::Check(fact) => Command::Query(vec![fact.clone()]),
+            FlatCommand::Clear => Command::Query(vec![]),
+            FlatCommand::Print(name, n) => Command::Print(*name, *n),
+            FlatCommand::PrintSize(name) => Command::PrintSize(*name),
+            FlatCommand::Output { file, exprs } => Command::Output{ file: file.to_string(), exprs: exprs.clone() },
+            FlatCommand::Query(facts) => Command::Query(facts.clone()),
+            FlatCommand::Push(n) => Command::Push(*n),
+            FlatCommand::Pop(n) => Command::Pop(*n),
+            FlatCommand::Fail(cmd) => Command::Fail(Box::new(cmd.to_command())),
+            FlatCommand::Input { name, file } => Command::Input {
+                name: *name,
+                file: file.clone(),
+            },
+        }
+    }
+}
+
+// TODO command before and after desugaring should be different
+#[derive(Debug, Clone)]
 pub enum Command {
     Datatype {
         name: Symbol,
@@ -54,7 +119,6 @@ pub enum Command {
     },
     AddRuleset(Symbol),
     Rule(Symbol, Rule),
-    FlatRule(Symbol, FlatRule),
     Rewrite(Symbol, Rewrite),
     BiRewrite(Symbol, Rewrite),
     Action(Action),
@@ -81,6 +145,7 @@ pub enum Command {
     Push(usize),
     Pop(usize),
     Fail(Box<Command>),
+    // TODO desugar include
     Include(String),
 }
 
@@ -117,7 +182,6 @@ impl Command {
                 Sexp::String(name.to_string()),
             ]),
             Command::Rule(ruleset, r) => r.to_sexp(*ruleset),
-            Command::FlatRule(ruleset, r) => r.to_rule().to_sexp(*ruleset),
             Command::Define { name, expr, cost } => {
                 let mut res = vec![
                     Sexp::String("define".into()),
@@ -207,11 +271,16 @@ impl Command {
     }
 }
 
+impl Display for FlatCommand {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_command())
+    }
+}
+
 impl Display for Command {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Command::Rule(ruleset, r) => r.fmt_with_ruleset(f, *ruleset),
-            Command::FlatRule(ruleset, r) => r.to_rule().fmt_with_ruleset(f, *ruleset),
             _ => write!(f, "{}", self.to_sexp()),
         }
     }
@@ -532,6 +601,12 @@ impl Action {
     }
 }
 
+impl Display for SSAAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_action())
+    }
+}
+
 impl Display for Action {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.to_sexp())
@@ -634,3 +709,4 @@ pub struct Rewrite {
     pub rhs: Expr,
     pub conditions: Vec<Fact>,
 }
+

@@ -2,11 +2,11 @@ use crate::*;
 
 pub(crate) type Fresh = dyn FnMut() -> Symbol;
 
-fn desugar_datatype(name: Symbol, variants: Vec<Variant>) -> Vec<Command> {
-    vec![Command::Sort(name, None)]
+fn desugar_datatype(name: Symbol, variants: Vec<Variant>) -> Vec<FlatCommand> {
+    vec![FlatCommand::Sort(name, None)]
         .into_iter()
         .chain(variants.into_iter().map(|variant| {
-            Command::Function(FunctionDecl {
+            FlatCommand::Function(FunctionDecl {
                 name: variant.name,
                 schema: Schema {
                     input: variant.types,
@@ -21,9 +21,9 @@ fn desugar_datatype(name: Symbol, variants: Vec<Variant>) -> Vec<Command> {
         .collect()
 }
 
-fn desugar_rewrite(ruleset: Symbol, rewrite: &Rewrite, globals: &HashSet<Symbol>) -> Vec<Command> {
+fn desugar_rewrite(ruleset: Symbol, rewrite: &Rewrite, globals: &HashSet<Symbol>) -> Vec<FlatCommand> {
     let var = Symbol::from("rewrite_var__");
-    vec![Command::FlatRule(
+    vec![FlatCommand::FlatRule(
         ruleset,
         flatten_rule(parenthesize_globals(
             Rule {
@@ -42,7 +42,7 @@ fn desugar_birewrite(
     ruleset: Symbol,
     rewrite: &Rewrite,
     globals: &HashSet<Symbol>,
-) -> Vec<Command> {
+) -> Vec<FlatCommand> {
     let rw2 = Rewrite {
         lhs: rewrite.rhs.clone(),
         rhs: rewrite.lhs.clone(),
@@ -390,52 +390,120 @@ fn flatten_rule(rule: Rule) -> FlatRule {
     res
 }
 
+pub(crate) struct Desugar {
+    pub(crate) globals: HashSet<Symbol>,
+    pub(crate) get_fresh: Box<Fresh>,
+}
+
 pub(crate) fn desugar_command(
     egraph: &EGraph,
     command: Command,
-    globals: &mut HashSet<Symbol>,
-) -> Result<Vec<Command>, Error> {
+    desugar: &mut Desugar,
+) -> Result<Vec<FlatCommand>, Error> {
     Ok(match command {
+        Command::Function(fdecl) => {
+            vec![FlatCommand::Function(fdecl)]
+        }
         Command::Datatype { name, variants } => desugar_datatype(name, variants),
-        Command::Rewrite(ruleset, rewrite) => desugar_rewrite(ruleset, &rewrite, &globals),
-        Command::BiRewrite(ruleset, rewrite) => desugar_birewrite(ruleset, &rewrite, &globals),
+        Command::Rewrite(ruleset, rewrite) => desugar_rewrite(ruleset, &rewrite, &desugar.globals),
+        Command::BiRewrite(ruleset, rewrite) => desugar_birewrite(ruleset, &rewrite, &desugar.globals),
         Command::Include(file) => {
             let s = std::fs::read_to_string(&file)
                 .unwrap_or_else(|_| panic!("Failed to read file {file}"));
-            egraph.parse_program(&s)?
+            desugar_commands(egraph, 
+                egraph.parse_program(&s)?, desugar)?
         }
-        Command::Rule(ruleset, rule) => vec![Command::FlatRule(
+        Command::Rule(ruleset, rule) => vec![FlatCommand::FlatRule(
             ruleset,
-            flatten_rule(parenthesize_globals(rule, globals)),
+            flatten_rule(parenthesize_globals(rule, &desugar.globals)),
         )],
-        _ => vec![command],
+        Command::Sort(sort, option) => vec![FlatCommand::Sort(sort, option)],
+        Command::Define { name, expr, cost } => {
+            let mut commands = vec![];
+
+            let mut actions = vec![];
+            expr_to_flat_actions(name, &expr, &mut desugar.get_fresh, &mut actions);
+            for action in actions {
+                commands.push(FlatCommand::SSAAction(action));
+            }
+            commands
+        }
+        Command::AddRuleset(name) => vec![FlatCommand::AddRuleset(name)],
+        Command::Action(action) => {
+            flatten_actions(&vec![action], &mut desugar.get_fresh)
+                .into_iter()
+                .map(FlatCommand::SSAAction)
+                .collect()
+        }
+        Command::Run(run) => vec![FlatCommand::Run(run)],
+        Command::Calc(idents, exprs) => vec![FlatCommand::Calc(idents, exprs)],
+        Command::Extract { variants, e } => {
+            let fresh = (desugar.get_fresh)();
+            flatten_actions(&vec![Action::Let(fresh, e)], &mut desugar.get_fresh)
+                .into_iter()
+                .map(FlatCommand::SSAAction)
+                .chain(vec![FlatCommand::Extract{ variants, var: fresh}].into_iter())
+                .collect()
+        }
+        Command::Check(check) => vec![FlatCommand::Check(check)],
+        Command::Clear => vec![FlatCommand::Clear],
+        Command::Print(symbol, size) => vec![FlatCommand::Print(symbol, size)],
+        Command::PrintSize(symbol) => vec![FlatCommand::PrintSize(symbol)],
+        Command::Output{ file, exprs } => vec![FlatCommand::Output{ file, exprs }],
+        Command::Query(facts) => {
+            vec![FlatCommand::Query(facts)]
+        }
+        Command::Push(num) => vec![FlatCommand::Push(num)],
+        Command::Pop(num) => vec![FlatCommand::Pop(num)],
+        Command::Fail(cmd) => {
+            let mut desugared = desugar_command(egraph, *cmd, desugar)?;
+
+            desugared.push(FlatCommand::Fail(Box::new(desugared.pop().unwrap())));
+            desugared
+        }
+        Command::Input { name, file } => {
+            todo!("desugar input");
+        }
     })
 }
 
-// TODO desugar define to function tables (it requires type inference)
 pub(crate) fn desugar_program(
     egraph: &EGraph,
     program: Vec<Command>,
-) -> Result<Vec<Command>, Error> {
-    let mut globals: HashSet<Symbol> = Default::default();
+) -> Result<Vec<FlatCommand>, Error> {
+    let mut counter = 0;
+    desugar_commands(egraph, program, &mut Desugar {
+    globals: Default::default(),
+    get_fresh: Box::new(move || {
+        counter += 1;
+        Symbol::from(format!("var{}__", counter))
+    }) 
+})
+}
+
+pub(crate) fn desugar_commands(
+    egraph: &EGraph,
+    program: Vec<Command>,
+    desugar: &mut Desugar,
+) -> Result<Vec<FlatCommand>, Error> {
     let mut res = vec![];
 
     for command in program {
-        let desugared = desugar_command(egraph, command, &mut globals)?;
+        let desugared = desugar_command(egraph, command, desugar)?;
 
         for newcommand in &desugared {
             match newcommand {
-                Command::Define {
-                    name,
-                    expr: _,
-                    cost: _,
-                } => {
-                    globals.insert(*name);
+                FlatCommand::SSAAction (
+                    action
+                ) => {
+                    if let SSAAction::Let(name, _) = action {
+                        desugar.globals.insert(*name);
+                    }
                 }
-                Command::Function(fdecl) => {
+                FlatCommand::Function(fdecl) => {
                     // add to globals if it has no arguments
                     if fdecl.schema.input.is_empty() {
-                        globals.insert(fdecl.name);
+                        desugar.globals.insert(fdecl.name);
                     }
                 }
                 _ => (),
@@ -445,14 +513,4 @@ pub(crate) fn desugar_program(
         res.extend(desugared);
     }
     Ok(res)
-}
-
-pub fn to_rules(program: Vec<Command>) -> Vec<Command> {
-    program
-        .into_iter()
-        .map(|command| match command {
-            Command::FlatRule(ruleset, rule) => Command::Rule(ruleset, rule.to_rule()),
-            _ => command,
-        })
-        .collect()
 }
