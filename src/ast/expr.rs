@@ -71,7 +71,16 @@ impl SSAExpr {
     pub fn to_expr(&self) -> Expr {
         match self {
             SSAExpr::Call(op, args) => {
-                Expr::Call(*op, args.into_iter().map(|a| Expr::Var(*a)).collect())
+                Expr::Call(*op, args.iter().map(|a| Expr::Var(*a)).collect())
+            }
+        }
+    }
+
+    pub(crate) fn map_def_use(&self, fvar: &mut impl FnMut(Symbol, bool) -> Symbol) -> SSAExpr {
+        match self {
+            SSAExpr::Call(op, args) => {
+                let args = args.iter().map(|a| fvar(*a, false)).collect();
+                SSAExpr::Call(*op, args)
             }
         }
     }

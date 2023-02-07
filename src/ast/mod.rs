@@ -350,14 +350,12 @@ pub enum SSAFact {
 impl SSAFact {
     pub fn to_fact(&self) -> Fact {
         match self {
-            SSAFact::Assign(symbol, expr) => {
-                Fact::Eq(vec![Expr::Var(symbol.clone()), expr.to_expr()])
-            }
+            SSAFact::Assign(symbol, expr) => Fact::Eq(vec![Expr::Var(*symbol), expr.to_expr()]),
             SSAFact::ConstrainEq(lhs, rhs) => {
                 Fact::Eq(vec![Expr::Var(lhs.clone()), Expr::Var(rhs.clone())])
             }
             SSAFact::AssignLit(symbol, lit) => {
-                Fact::Eq(vec![Expr::Var(symbol.clone()), Expr::Lit(lit.clone())])
+                Fact::Eq(vec![Expr::Var(*symbol), Expr::Lit(lit.clone())])
             }
         }
     }
@@ -415,24 +413,42 @@ pub enum SSAAction {
 impl SSAAction {
     pub fn to_action(&self) -> Action {
         match self {
-            SSAAction::Let(symbol, expr) => Action::Let(symbol.clone(), expr.to_expr()),
-            SSAAction::LetVar(symbol, other) => {
-                Action::Let(symbol.clone(), Expr::Var(other.clone()))
-            }
-            SSAAction::LetLit(symbol, lit) => Action::Let(symbol.clone(), Expr::Lit(lit.clone())),
+            SSAAction::Let(symbol, expr) => Action::Let(*symbol, expr.to_expr()),
+            SSAAction::LetVar(symbol, other) => Action::Let(*symbol, Expr::Var(other.clone())),
+            SSAAction::LetLit(symbol, lit) => Action::Let(*symbol, Expr::Lit(lit.clone())),
             SSAAction::Set(symbol, args, other) => Action::Set(
-                symbol.clone(),
+                *symbol,
                 args.iter().map(|s| Expr::Var(s.clone())).collect(),
                 Expr::Var(*other),
             ),
-            SSAAction::Delete(symbol, args) => Action::Delete(
-                symbol.clone(),
-                args.iter().map(|s| Expr::Var(s.clone())).collect(),
-            ),
+            SSAAction::Delete(symbol, args) => {
+                Action::Delete(*symbol, args.iter().map(|s| Expr::Var(s.clone())).collect())
+            }
             SSAAction::Union(lhs, rhs) => {
                 Action::Union(Expr::Var(lhs.clone()), Expr::Var(rhs.clone()))
             }
             SSAAction::Panic(msg) => Action::Panic(msg.clone()),
+        }
+    }
+
+    // fvar accepts a variable and if it is being defined (true) or used (false)
+    pub(crate) fn map_def_use(&self, fvar: &mut impl FnMut(Symbol, bool) -> Symbol) -> SSAAction {
+        match self {
+            SSAAction::Let(symbol, expr) => SSAAction::Let(fvar(*symbol, true), expr.map_def_use(fvar)),
+            SSAAction::LetVar(symbol, other) => SSAAction::LetVar(fvar(*symbol, true), fvar(*other, false)),
+            SSAAction::LetLit(symbol, lit) => SSAAction::LetLit(fvar(*symbol, true), lit.clone()),
+            SSAAction::Set(symbol, args, other) => SSAAction::Set(
+                *symbol,
+                args.iter().map(|s| fvar(*s, false)).collect(),
+                fvar(*other, false),
+            ),
+            SSAAction::Delete(symbol, args) => {
+                SSAAction::Delete(*symbol, args.iter().map(|s| fvar(*s, false)).collect())
+            }
+            SSAAction::Union(lhs, rhs) => {
+                SSAAction::Union(fvar(*lhs, false), fvar(*rhs, false))
+            }
+            SSAAction::Panic(msg) => SSAAction::Panic(msg.clone()),
         }
     }
 }
@@ -483,15 +499,12 @@ impl Action {
             Action::Set(lhs, args, rhs) => {
                 Action::Set(*lhs, args.iter().map(|e| f(e)).collect(), f(rhs))
             }
-            Action::Delete(lhs, args) => {
-                Action::Delete(*lhs, args.iter().map(|e| f(e)).collect())
-            }
+            Action::Delete(lhs, args) => Action::Delete(*lhs, args.iter().map(|e| f(e)).collect()),
             Action::Union(lhs, rhs) => Action::Union(f(lhs), f(rhs)),
             Action::Panic(msg) => Action::Panic(msg.clone()),
             Action::Expr(e) => Action::Expr(f(e)),
         }
     }
-     
 
     pub fn replace_canon(&self, canon: &HashMap<Symbol, Expr>) -> Self {
         match self {
@@ -572,7 +585,28 @@ impl Rule {
 
 impl Display for Rule {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.to_sexp("".into()))
+        let indent = " ".repeat(7);
+        write!(f, "(rule (")?;
+        for (i, fact) in self.body.iter().enumerate() {
+            if i > 0 {
+                write!(f, "{}", indent)?;
+            }
+            write!(f, "{}", fact)?;
+            if i != self.body.len() - 1 {
+                writeln!(f, "")?;
+            }
+        }
+        write!(f, ")\n      (")?;
+        for (i, action) in self.head.iter().enumerate() {
+            if i > 0 {
+                write!(f, "{}", indent)?;
+            }
+            write!(f, "{}", action)?;
+            if i != self.head.len() - 1 {
+                writeln!(f, "")?;
+            }
+        }
+        write!(f, "))")
     }
 }
 

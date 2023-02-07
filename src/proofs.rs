@@ -1,6 +1,6 @@
 use crate::*;
 
-use crate::desugar::{make_ssa_again, Fresh};
+use crate::desugar::{make_ssa_again, Fresh, assert_ssa_valid};
 use symbolic_expressions::Sexp;
 
 fn proof_header(egraph: &EGraph) -> Vec<Command> {
@@ -16,7 +16,6 @@ fn make_ast_version(_egraph: &EGraph, name: &Symbol) -> Symbol {
 fn make_rep_version(name: &Symbol) -> Symbol {
     Symbol::from(format!("{}Rep__", name))
 }
-
 
 fn literal_name(egraph: &EGraph, literal: &Literal) -> Symbol {
     egraph.infer_literal(literal).name()
@@ -107,7 +106,7 @@ fn merge_action(egraph: &EGraph, fdecl: &FunctionDecl) -> Vec<Action> {
     .collect()
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)]
 struct ProofInfo {
     // proof for each variable bound in an assignment (lhs or rhs)
     pub var_term: HashMap<Symbol, Symbol>,
@@ -118,7 +117,11 @@ struct ProofInfo {
 // This function makes use of the property that the body is SSA
 // variables appear at most once (including the rhs of assignments)
 // besides when they appear in constraints
-fn instrument_facts(egraph: &EGraph, body: &Vec<SSAFact>, get_fresh: &mut Fresh) -> (ProofInfo, Vec<SSAFact>) {
+fn instrument_facts(
+    egraph: &EGraph,
+    body: &Vec<SSAFact>,
+    get_fresh: &mut Fresh,
+) -> (ProofInfo, Vec<SSAFact>) {
     let mut info: ProofInfo = Default::default();
     let mut facts = body.clone();
 
@@ -172,7 +175,7 @@ fn instrument_facts(egraph: &EGraph, body: &Vec<SSAFact>, get_fresh: &mut Fresh)
                 assert!(info.var_proof.insert(*lhs, rep_prf).is_none());
 
                 for (i, child) in body.iter().enumerate() {
-                    println!("child: {:?}", child);
+                    //println!("child: {:?}", child);
                     let child_trm = get_fresh();
                     let const_var = get_fresh();
                     facts.push(SSAFact::AssignLit(const_var, Literal::Int(i as i64)));
@@ -183,77 +186,210 @@ fn instrument_facts(egraph: &EGraph, body: &Vec<SSAFact>, get_fresh: &mut Fresh)
                     assert!(info.var_term.insert(*child, child_trm).is_none());
                 }
             }
-            SSAFact::ConstrainEq(lhs, rhs) => ()
+            SSAFact::ConstrainEq(lhs, rhs) => (),
         }
     }
 
     // now fill in representitive terms for any aliases
     for fact in body {
-        match fact {
-            SSAFact::ConstrainEq(lhs, rhs) => {
-                if let Some(rep_term) = info.var_term.get(lhs) {
-                    if info.var_term.get(rhs).is_none() {
-                        info.var_term.insert(*rhs, *rep_term);
-                    }
-                } else if let Some(rep_term) = info.var_term.get(rhs) {
-                    if info.var_term.get(lhs).is_none() {
-                        info.var_term.insert(*lhs, *rep_term);
-                    }
-                } else {
-                    panic!("Contraint without representative term for at least one side {} = {}", lhs, rhs);
+        if let SSAFact::ConstrainEq(lhs, rhs) = fact {
+            if let Some(rep_term) = info.var_term.get(lhs) {
+                if info.var_term.get(rhs).is_none() {
+                    info.var_term.insert(*rhs, *rep_term);
                 }
+            } else if let Some(rep_term) = info.var_term.get(rhs) {
+                if info.var_term.get(lhs).is_none() {
+                    info.var_term.insert(*lhs, *rep_term);
+                }
+            } else {
+                panic!(
+                    "Contraint without representative term for at least one side {} = {}",
+                    lhs, rhs
+                );
             }
-            _ => ()
         }
     }
 
     (info, make_ssa_again(facts))
 }
 
-// Adds the proof for an expr
-fn add_expr_proof(info: &ProofInfo, expr: &Expr, res: &mut Vec<SSAAction>) {
-    match expr {
-        Expr::Var(v) => (),
-        Expr::Lit(l) => (),
-        Expr::Call(head, body) => {
-            todo!()
+fn add_action_proof(
+    rule_proof: Symbol,
+    info: &mut ProofInfo,
+    action: &SSAAction,
+    res: &mut Vec<SSAAction>,
+    get_fresh: &mut Fresh,
+    egraph: &EGraph,
+) {
+    match action {
+        SSAAction::LetVar(var1, var2) => {
+            println!("var2: {:?}", var2);
+            info.var_term
+                .insert(*var1, *info.var_term.get(var2).unwrap());
+        }
+        SSAAction::Delete(..) | SSAAction::Panic(..) => (),
+        SSAAction::Union(var1, var2) => {
+            res.push(SSAAction::Set(
+                "EqGraph__".into(),
+                vec![
+                    *info.var_term.get(var1).unwrap(),
+                    *info.var_term.get(var2).unwrap(),
+                ],
+                rule_proof,
+            ));
+            res.push(SSAAction::Set(
+                "EqGraph__".into(),
+                vec![
+                    *info.var_term.get(var2).unwrap(),
+                    *info.var_term.get(var1).unwrap(),
+                ],
+                rule_proof,
+            ));
+        }
+        SSAAction::Set(head, children, rhs) => {
+            // add to the equality graph when we set things equal to each other
+            let newterm = get_fresh();
+            res.push(SSAAction::Let(
+                newterm,
+                SSAExpr::Call(
+                    make_ast_version(egraph, head),
+                    children
+                        .iter()
+                        .map(|v| *info.var_term.get(v).unwrap())
+                        .collect(),
+                ),
+            ));
+            res.push(SSAAction::Set(
+                "EqGraph__".into(),
+                vec![newterm, *info.var_term.get(rhs).unwrap()],
+                rule_proof,
+            ));
+            res.push(SSAAction::Set(
+                "EqGraph__".into(),
+                vec![*info.var_term.get(rhs).unwrap(), newterm],
+                rule_proof,
+            ));
+        }
+        SSAAction::Let(lhs, SSAExpr::Call(rhsname, rhsvars)) => {
+            let newterm = get_fresh();
+            // make the term for this variable
+            res.push(SSAAction::Let(
+                newterm,
+                SSAExpr::Call(
+                    make_ast_version(egraph, rhsname),
+                    rhsvars
+                        .iter()
+                        .map(|v| *info.var_term.get(v).unwrap())
+                        .collect(),
+                ),
+            ));
+            info.var_term.insert(*lhs, newterm);
+
+            let ruletrm = get_fresh();
+            res.push(SSAAction::Let(
+                ruletrm,
+                SSAExpr::Call("RuleTerm__".into(), vec![rule_proof, newterm]),
+            ));
+
+            let trmprf = get_fresh();
+            res.push(SSAAction::Let(
+                trmprf,
+                SSAExpr::Call("MakeTrmPrf__".into(), vec![newterm, ruletrm]),
+            ));
+
+            res.push(SSAAction::Set(
+                make_rep_version(rhsname),
+                rhsvars.clone(),
+                trmprf,
+            ));
+        }
+        // very similar to let case
+        SSAAction::LetLit(lhs, lit) => {
+            let newterm = get_fresh();
+            // make the term for this variable
+            res.push(SSAAction::Let(
+                newterm,
+                SSAExpr::Call(
+                    make_ast_version(egraph, &literal_name(egraph, lit)),
+                    vec![*lhs],
+                ),
+            ));
+            info.var_term.insert(*lhs, newterm);
+
+            let ruletrm = get_fresh();
+            res.push(SSAAction::Let(
+                ruletrm,
+                SSAExpr::Call("RuleTerm__".into(), vec![rule_proof, newterm]),
+            ));
+
+            let trmprf = get_fresh();
+            res.push(SSAAction::Let(
+                trmprf,
+                SSAExpr::Call("MakeTrmPrf__".into(), vec![newterm, ruletrm]),
+            ));
+
+            res.push(SSAAction::Set(
+                make_rep_version(&literal_name(egraph, lit)),
+                vec![*lhs],
+                trmprf,
+            ));
         }
     }
 }
 
-fn add_rule_proof(rule_name: Symbol, info: &ProofInfo, facts: &Vec<SSAFact>, res: &mut Vec<SSAAction>, get_fresh: &mut Fresh) -> Symbol {
+fn add_rule_proof(
+    rule_name: Symbol,
+    info: &ProofInfo,
+    facts: &Vec<SSAFact>,
+    res: &mut Vec<SSAAction>,
+    get_fresh: &mut Fresh,
+) -> Symbol {
     let mut current_proof = get_fresh();
-    res.push(SSAAction::Let(current_proof, SSAExpr::Call("Null__".into(), vec![])));
-    println!("{:?}", facts);
-    println!("{:?}", info.var_proof);
-    println!("{:?}", info.var_term);
+    res.push(SSAAction::Let(
+        current_proof,
+        SSAExpr::Call("Null__".into(), vec![]),
+    ));
 
     for fact in facts {
         match fact {
             SSAFact::Assign(lhs, _rhs) => {
                 let fresh = get_fresh();
-                res.push(SSAAction::Let(fresh, SSAExpr::Call("Cons__".into(), vec![info.var_proof[lhs], current_proof])));
+                res.push(SSAAction::Let(
+                    fresh,
+                    SSAExpr::Call("Cons__".into(), vec![info.var_proof[lhs], current_proof]),
+                ));
                 current_proof = fresh;
             }
             // same as Assign case
-            SSAFact::AssignLit(lhs, _rhs) =>  {
+            SSAFact::AssignLit(lhs, _rhs) => {
                 let fresh = get_fresh();
-                res.push(SSAAction::Let(fresh, SSAExpr::Call("Cons__".into(), vec![info.var_proof[lhs], current_proof])));
+                res.push(SSAAction::Let(
+                    fresh,
+                    SSAExpr::Call("Cons__".into(), vec![info.var_proof[lhs], current_proof]),
+                ));
                 current_proof = fresh;
             }
             SSAFact::ConstrainEq(lhs, rhs) => {
                 let pfresh = get_fresh();
-                println!("{} = {}", lhs, rhs);
-                res.push(SSAAction::Let(pfresh, SSAExpr::Call("DemandEq__".into(), vec![info.var_term[lhs], info.var_term[rhs]])));
+                res.push(SSAAction::Let(
+                    pfresh,
+                    SSAExpr::Call(
+                        "DemandEq__".into(),
+                        vec![info.var_term[lhs], info.var_term[rhs]],
+                    ),
+                ));
             }
         }
     }
 
     let name_const = get_fresh();
     res.push(SSAAction::LetLit(name_const, Literal::String(rule_name)));
-    let fresh = get_fresh();
-    res.push(SSAAction::Let(fresh, SSAExpr::Call("Rule__".into(), vec![ current_proof, name_const])));
-    current_proof
+    let rule_proof = get_fresh();
+    res.push(SSAAction::Let(
+        rule_proof,
+        SSAExpr::Call("Rule__".into(), vec![current_proof, name_const]),
+    ));
+    rule_proof
 }
 
 fn instrument_rule(egraph: &EGraph, rule: &FlatRule) -> FlatRule {
@@ -263,16 +399,39 @@ fn instrument_rule(egraph: &EGraph, rule: &FlatRule) -> FlatRule {
         Symbol::from(format!("pvar{}__", varcount))
     };
 
-    let (info, facts) = instrument_facts(egraph, &rule.body, &mut get_fresh);
+    let (mut info, facts) = instrument_facts(egraph, &rule.body, &mut get_fresh);
+    assert_ssa_valid(&facts, &rule.head);
 
     let mut actions = rule.head.clone();
-    let rule_proof = add_rule_proof(format!("{}", rule).into(), &info, &rule.body, &mut actions, &mut get_fresh);
+    let rule_proof = add_rule_proof(
+        format!("{}", rule).into(),
+        &info,
+        &rule.body,
+        &mut actions,
+        &mut get_fresh,
+    );
+
+    println!("rule: {}", rule);
+    println!("facts: {:?}", facts);
+    println!("info: {:?}", info);
+    for action in &rule.head {
+        add_action_proof(
+            rule_proof,
+            &mut info,
+            action,
+            &mut actions,
+            &mut get_fresh,
+            egraph,
+        );
+    }
 
     // res.head.extend();
-    FlatRule {
+    let res = FlatRule {
         head: actions,
         body: facts,
-    }
+    };
+    assert_ssa_valid(&res.body, &res.head);
+    res
 }
 
 fn make_rep_func(egraph: &EGraph, fdecl: &FunctionDecl) -> FunctionDecl {

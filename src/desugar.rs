@@ -21,29 +21,29 @@ fn desugar_datatype(name: Symbol, variants: Vec<Variant>) -> Vec<Command> {
         .collect()
 }
 
-fn desugar_rewrite(ruleset: Symbol, rewrite: &Rewrite) -> Vec<Command> {
+fn desugar_rewrite(ruleset: Symbol, rewrite: &Rewrite, globals: &HashSet<Symbol>) -> Vec<Command> {
     let var = Symbol::from("rewrite_var__");
     vec![Command::FlatRule(
         ruleset,
-        flatten_rule(Rule {
+        flatten_rule(parenthesize_globals(Rule {
             body: [Fact::Eq(vec![Expr::Var(var), rewrite.lhs.clone()])]
                 .into_iter()
                 .chain(rewrite.conditions.clone())
                 .collect(),
             head: vec![Action::Union(Expr::Var(var), rewrite.rhs.clone())],
-        }),
+        }, globals)),
     )]
 }
 
-fn desugar_birewrite(ruleset: Symbol, rewrite: &Rewrite) -> Vec<Command> {
+fn desugar_birewrite(ruleset: Symbol, rewrite: &Rewrite, globals: &HashSet<Symbol>) -> Vec<Command> {
     let rw2 = Rewrite {
         lhs: rewrite.rhs.clone(),
         rhs: rewrite.lhs.clone(),
         conditions: rewrite.conditions.clone(),
     };
-    desugar_rewrite(ruleset, rewrite)
+    desugar_rewrite(ruleset, rewrite, globals)
         .into_iter()
-        .chain(desugar_rewrite(ruleset, &rw2))
+        .chain(desugar_rewrite(ruleset, &rw2, globals))
         .collect()
 }
 
@@ -169,11 +169,10 @@ pub(crate) fn make_ssa_again(facts: Vec<SSAFact>) -> Vec<SSAFact> {
             }
         }
     }
-    assert_ssa_valid(&res);
     res
 }
 
-fn assert_ssa_valid(facts: &Vec<SSAFact>) -> bool {
+pub(crate) fn assert_ssa_valid(facts: &Vec<SSAFact>, actions: &Vec<SSAAction>) -> bool {
     //println!("assert_ssa_valid: {:?}", facts);
     let mut var_used: HashSet<Symbol> = Default::default();
     let mut var_used_constraints: HashSet<Symbol> = Default::default();
@@ -203,6 +202,23 @@ fn assert_ssa_valid(facts: &Vec<SSAFact>) -> bool {
             }
         }
     }
+
+    var_used.extend(var_used_constraints);
+
+    let mut fdefuse = |var, isdef| {
+        if isdef {
+        if !var_used.insert(var) {
+            panic!("invalid SSA variable: {:?}", var);
+        }
+    } else if !var_used.contains(&var) {
+            panic!("invalid SSA variable: {:?}", var);
+        }
+        var
+    };
+    for action in actions {
+        action.map_def_use(&mut fdefuse);
+    }
+
     true
 }
 
@@ -225,7 +241,7 @@ fn flatten_equalities(equalities: Vec<(Symbol, Expr)>, get_fresh: &mut Fresh) ->
         var_used.insert(lhs);
         res.push(SSAFact::ConstrainEq(lhs, result));
     }
-    assert_ssa_valid(&res);
+    
     res
 }
 
@@ -341,7 +357,6 @@ fn flatten_actions(actions: &Vec<Action>, get_fresh: &mut Fresh) -> Vec<SSAActio
     res
 }
 
-
 // In egglog, you are allowed to refer to variables
 // (which desugar to functions with no args)
 // without parenthesis.
@@ -353,7 +368,6 @@ fn parenthesize_globals(rule: Rule, globals: &HashSet<Symbol>) -> Rule {
     })
 }
 
-
 fn flatten_rule(rule: Rule) -> FlatRule {
     let mut varcount = 0;
     let mut get_fresh = move || {
@@ -361,23 +375,34 @@ fn flatten_rule(rule: Rule) -> FlatRule {
         Symbol::from(format!("fvar{}__", varcount))
     };
 
-    FlatRule {
+    let res = FlatRule {
         head: flatten_actions(&rule.head, &mut get_fresh),
         body: flatten_facts(&rule.body, &mut get_fresh),
-    }
+    };
+    println!("Before rule: {}", rule);
+    println!("Flat rule: {}", res);
+    assert_ssa_valid(&res.body, &res.head);
+    res
 }
 
-pub(crate) fn desugar_command(egraph: &EGraph, command: Command, globals: &mut HashSet<Symbol>) -> Result<Vec<Command>, Error> {
+pub(crate) fn desugar_command(
+    egraph: &EGraph,
+    command: Command,
+    globals: &mut HashSet<Symbol>,
+) -> Result<Vec<Command>, Error> {
     Ok(match command {
         Command::Datatype { name, variants } => desugar_datatype(name, variants),
-        Command::Rewrite(ruleset, rewrite) => desugar_rewrite(ruleset, &rewrite),
-        Command::BiRewrite(ruleset, rewrite) => desugar_birewrite(ruleset, &rewrite),
+        Command::Rewrite(ruleset, rewrite) => desugar_rewrite(ruleset, &rewrite, &globals),
+        Command::BiRewrite(ruleset, rewrite) => desugar_birewrite(ruleset, &rewrite, &globals),
         Command::Include(file) => {
             let s = std::fs::read_to_string(&file)
                 .unwrap_or_else(|_| panic!("Failed to read file {file}"));
             egraph.parse_program(&s)?
         }
-        Command::Rule(ruleset, rule) => vec![Command::FlatRule(ruleset, flatten_rule(parenthesize_globals(rule, globals)))],
+        Command::Rule(ruleset, rule) => vec![Command::FlatRule(
+            ruleset,
+            flatten_rule(parenthesize_globals(rule, globals)),
+        )],
         _ => vec![command],
     })
 }
@@ -395,17 +420,21 @@ pub(crate) fn desugar_program(
 
         for newcommand in &desugared {
             match newcommand {
-                Command::Define {name, expr: _, cost: _ } => {
-                globals.insert(*name);
-            }
-            Command::Function(fdecl) => {
-                // add to globals if it has no arguments
-                if fdecl.schema.input.is_empty() {
-                    globals.insert(fdecl.name);
+                Command::Define {
+                    name,
+                    expr: _,
+                    cost: _,
+                } => {
+                    globals.insert(*name);
                 }
+                Command::Function(fdecl) => {
+                    // add to globals if it has no arguments
+                    if fdecl.schema.input.is_empty() {
+                        globals.insert(fdecl.name);
+                    }
+                }
+                _ => (),
             }
-            _ => ()
-        }
         }
 
         res.extend(desugared);
