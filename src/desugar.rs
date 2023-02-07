@@ -458,7 +458,8 @@ pub(crate) fn desugar_command(
         Command::Fail(cmd) => {
             let mut desugared = desugar_command(egraph, *cmd, desugar)?;
 
-            desugared.push(FlatCommand::Fail(Box::new(desugared.pop().unwrap())));
+            let last = desugared.pop();
+            desugared.push(FlatCommand::Fail(Box::new(last.unwrap())));
             desugared
         }
         Command::Input { name, file } => {

@@ -493,47 +493,38 @@ fn make_runner(config: &RunConfig) -> Vec<Command> {
 }
 
 // the egraph is the initial egraph with only default sorts
-pub(crate) fn add_proofs(egraph: &EGraph, program: Vec<Command>) -> Vec<Command> {
+pub(crate) fn add_proofs(egraph: &EGraph, program: Vec<FlatCommand>) -> Vec<FlatCommand> {
     let mut res = proof_header(egraph);
 
     res.extend(make_ast_primitives(egraph));
 
     for command in program {
         match &command {
-            Command::Datatype {
-                name: _,
-                variants: _,
-            } => {
-                panic!("Datatype should have been desugared");
-            }
-            Command::Sort(name, presort_and_args) => {
-                res.push(command.clone());
+            FlatCommand::Sort(name, presort_and_args) => {
+                res.push(command.to_command());
                 res.push(Command::Sort(
                     make_ast_version(egraph, name),
                     presort_and_args.clone(),
                 ));
             }
-            Command::Function(fdecl) => {
-                res.push(command.clone());
+            FlatCommand::Function(fdecl) => {
+                res.push(command.to_command());
                 res.push(Command::Function(make_ast_func(egraph, fdecl)));
                 res.push(Command::Function(make_rep_func(egraph, fdecl)));
                 res.push(make_getchild_rule(egraph, fdecl));
             }
-            Command::Rule(_ruleset, _rule) => {
-                panic!("Rule should have been desugared");
-            }
-            Command::FlatRule(ruleset, rule) => {
-                res.push(Command::FlatRule(
+            FlatCommand::FlatRule(ruleset, rule) => {
+                res.push(Command::Rule(
                     *ruleset,
-                    instrument_rule(egraph, rule, "TODOrulename".into()),
+                    instrument_rule(egraph, rule, "TODOrulename".into()).to_rule(),
                 ));
             }
-            Command::Run(config) => {
+            FlatCommand::Run(config) => {
                 res.extend(make_runner(config));
             }
-            _ => res.push(command),
+            _ => res.push(command.to_command()),
         }
     }
 
-    res
+    desugar_program(egraph, res).unwrap()
 }
