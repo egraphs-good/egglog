@@ -25,7 +25,7 @@ fn desugar_rewrite(ruleset: Symbol, rewrite: &Rewrite, globals: &HashSet<Symbol>
     let var = Symbol::from("rewrite_var__");
     vec![FlatCommand::FlatRule(
         ruleset,
-        flatten_rule(parenthesize_globals(
+        flatten_rule(
             Rule {
                 body: [Fact::Eq(vec![Expr::Var(var), rewrite.lhs.clone()])]
                     .into_iter()
@@ -34,7 +34,7 @@ fn desugar_rewrite(ruleset: Symbol, rewrite: &Rewrite, globals: &HashSet<Symbol>
                 head: vec![Action::Union(Expr::Var(var), rewrite.rhs.clone())],
             },
             globals,
-        )),
+        ),
     )]
 }
 
@@ -369,13 +369,16 @@ fn flatten_actions(actions: &Vec<Action>, get_fresh: &mut Fresh) -> Vec<SSAActio
 // without parenthesis.
 // This fixes that so normal translation is easier.
 fn parenthesize_globals(rule: Rule, globals: &HashSet<Symbol>) -> Rule {
-    rule.map_exprs(&mut |e| match e {
-        Expr::Var(v) if globals.contains(v) => Expr::Call(*v, vec![]),
-        _ => e.clone(),
+    rule.map_exprs(&mut |e| {
+        e.map(&mut |e| match e {
+            Expr::Var(v) if globals.contains(v) => Expr::Call(*v, vec![]),
+            _ => e.clone(),
+        })
     })
 }
 
-fn flatten_rule(rule: Rule) -> FlatRule {
+fn flatten_rule(rule_in: Rule, globals: &HashSet<Symbol>) -> FlatRule {
+    let rule = parenthesize_globals(rule_in, globals);
     let mut varcount = 0;
     let mut get_fresh = move || {
         varcount += 1;
@@ -415,10 +418,11 @@ pub(crate) fn desugar_command(
         }
         Command::Rule(ruleset, rule) => vec![FlatCommand::FlatRule(
             ruleset,
-            flatten_rule(parenthesize_globals(rule, &desugar.globals)),
+            flatten_rule(rule, &desugar.globals),
         )],
         Command::Sort(sort, option) => vec![FlatCommand::Sort(sort, option)],
-        Command::Define { name, expr, cost } => {
+        // TODO ignoring cost for now
+        Command::Define { name, expr, cost: _cost } => {
             let mut commands = vec![];
 
             let mut actions = vec![];
@@ -491,15 +495,21 @@ pub(crate) fn desugar_commands(
 
     for command in program {
         let desugared = desugar_command(egraph, command, desugar)?;
+        println!("desugared: {}", ListDisplay(desugared.clone(), "\n".into()));
 
         for newcommand in &desugared {
             match newcommand {
                 FlatCommand::SSAAction (
-                    action
-                ) => {
-                    if let SSAAction::Let(name, _) = action {
-                        desugar.globals.insert(*name);
-                    }
+                    SSAAction::Let(name, _)
+                ) |
+                FlatCommand::SSAAction (
+                    SSAAction::LetLit(name, _)
+                ) |
+                FlatCommand::SSAAction (
+                    SSAAction::LetVar(name, _)
+                ) 
+                => {
+                    desugar.globals.insert(*name);
                 }
                 FlatCommand::Function(fdecl) => {
                     // add to globals if it has no arguments

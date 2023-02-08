@@ -122,6 +122,17 @@ impl Expr {
         f(self, ts)
     }
 
+    pub fn map(&self, f: &mut impl FnMut(&Self) -> Self) -> Self {
+        match self {
+            Expr::Lit(_) => f(self),
+            Expr::Var(_) => f(self),
+            Expr::Call(op, children) => {
+                let children = children.iter().map(|c| c.map(f)).collect();
+                f(&Expr::Call(*op, children))
+            }
+        }
+    }
+
     pub(crate) fn to_sexp(&self) -> Sexp {
         let res = match self {
             Expr::Lit(lit) => Sexp::String(lit.to_string()),

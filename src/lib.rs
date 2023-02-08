@@ -891,7 +891,21 @@ impl EGraph {
             }
             FlatCommand::SSAAction(action) => {
                 if should_run {
-                    self.eval_actions(std::slice::from_ref(&action.to_action()))?;
+                    match &action {
+                        SSAAction::Let(name, contents) => {
+                            // define with high cost
+                            self.define(*name, contents.to_expr(), Some(10000))?;
+                        }
+                        SSAAction::LetVar(var1, var2) => {
+                            self.define(*var1, Expr::Var(*var2), Some(10000))?;
+                        }
+                        SSAAction::LetLit(var, lit) => {
+                            self.define(*var, Expr::Lit(lit.clone()), Some(10000))?;
+                        }
+                        _ => {
+                            self.eval_actions(std::slice::from_ref(&action.to_action()))?;
+                        }
+                    }
                     format!("Run {action}.")
                 } else {
                     format!("Skipping running {action}.")

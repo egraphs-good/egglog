@@ -152,14 +152,23 @@ pub enum Command {
 impl Command {
     fn to_sexp(&self) -> Sexp {
         match self {
-            Command::Rewrite(_, _) | Command::BiRewrite(_, _) => {
-                panic!("Rewrites should be desugared before printing");
+            Command::Rewrite(name, rewrite) => {
+                rewrite.to_sexp(*name, false)
+            }
+            Command::BiRewrite(name, rewrite) => {
+                rewrite.to_sexp(*name, true)
             }
             Command::Datatype {
-                name: _,
-                variants: _,
+                name,
+                variants,
             } => {
-                panic!("Datatypes should be desugared before printing");
+                Sexp::List(vec![
+                    Sexp::String("datatype".into()),
+                    Sexp::String(name.to_string()),
+                    Sexp::List(
+                        variants.iter().map(|v| v.to_sexp()).collect(),
+                    )
+                ])
             }
             Command::Action(a) => a.to_sexp(),
             Command::Sort(name, None) => Sexp::List(vec![
@@ -331,6 +340,24 @@ pub struct Variant {
     pub cost: Option<usize>,
 }
 
+impl Variant {
+    pub(crate) fn to_sexp(&self) -> Sexp {
+        let mut res = vec![Sexp::String(self.name.to_string())];
+        if !self.types.is_empty() {
+            res.extend(
+                self.types
+                    .iter()
+                    .map(|s| Sexp::String(s.to_string()))
+            );
+        }
+        if let Some(cost) = self.cost {
+            res.push(Sexp::String(":cost".into()));
+            res.push(Sexp::String(cost.to_string()));
+        }
+        Sexp::List(res)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Schema {
     pub input: Vec<Symbol>,
@@ -449,7 +476,7 @@ impl Fact {
 
     pub(crate) fn map_exprs(&self, f: &mut impl FnMut(&Expr) -> Expr) -> Fact {
         match self {
-            Fact::Eq(exprs) => Fact::Eq(exprs.iter().map(|e| f(e)).collect()),
+            Fact::Eq(exprs) => Fact::Eq(exprs.iter().map(f).collect()),
             Fact::Fact(expr) => Fact::Fact(f(expr)),
         }
     }
@@ -710,3 +737,30 @@ pub struct Rewrite {
     pub conditions: Vec<Fact>,
 }
 
+
+impl Rewrite {
+    pub(crate) fn to_sexp(&self, ruleset: Symbol, is_bidirectional: bool) -> Sexp {
+        let mut res = vec![
+            Sexp::String(
+                if is_bidirectional {
+                    "bidirectional-rewrite".into()
+                } else {
+                    "rewrite".into()
+                }
+                ),
+            self.lhs.to_sexp(),
+            self.rhs.to_sexp(),
+        ];
+
+        if !self.conditions.is_empty() {
+            res.push(Sexp::String(":when".into()));
+            res.push(Sexp::List(self.conditions.iter().map(|f| f.to_sexp()).collect()));
+        }
+
+        if ruleset != "".into() {
+            res.push(Sexp::String(":ruleset".into()));
+            res.push(Sexp::String(ruleset.to_string()));
+        }
+        Sexp::List(res)
+    }
+}
