@@ -512,7 +512,6 @@ pub(crate) fn desugar_commands(
 
     for command in program {
         let desugared = desugar_command(egraph, command, desugar)?;
-        println!("desugared: {}", ListDisplay(desugared.clone(), "\n".into()));
 
         for newcommand in &desugared {
             match newcommand {

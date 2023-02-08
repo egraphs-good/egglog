@@ -150,11 +150,13 @@ impl Command {
         match self {
             Command::Rewrite(name, rewrite) => rewrite.to_sexp(*name, false),
             Command::BiRewrite(name, rewrite) => rewrite.to_sexp(*name, true),
-            Command::Datatype { name, variants } => Sexp::List(vec![
-                Sexp::String("datatype".into()),
-                Sexp::String(name.to_string()),
-                Sexp::List(variants.iter().map(|v| v.to_sexp()).collect()),
-            ]),
+            Command::Datatype { name, variants } => {
+                let mut res = vec![
+                    Sexp::String("datatype".into()),
+                    Sexp::String(name.to_string())];
+                res.extend(variants.iter().map(|v| v.to_sexp()));
+                Sexp::List(res)
+            },
             Command::Action(a) => a.to_sexp(),
             Command::Sort(name, None) => Sexp::List(vec![
                 Sexp::String("sort".into()),
@@ -722,7 +724,7 @@ impl Rewrite {
     pub(crate) fn to_sexp(&self, ruleset: Symbol, is_bidirectional: bool) -> Sexp {
         let mut res = vec![
             Sexp::String(if is_bidirectional {
-                "bidirectional-rewrite".into()
+                "birewrite".into()
             } else {
                 "rewrite".into()
             }),

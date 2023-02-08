@@ -48,7 +48,7 @@ impl Display for Literal {
                     write!(f, "{}", str)
                 }
             }
-            Literal::String(s) => write!(f, "\"{s}\""),
+            Literal::String(s) => write!(f, "{}", s),
             Literal::Unit => write!(f, "()"),
         }
     }
