@@ -153,10 +153,11 @@ impl Command {
             Command::Datatype { name, variants } => {
                 let mut res = vec![
                     Sexp::String("datatype".into()),
-                    Sexp::String(name.to_string())];
+                    Sexp::String(name.to_string()),
+                ];
                 res.extend(variants.iter().map(|v| v.to_sexp()));
                 Sexp::List(res)
-            },
+            }
             Command::Action(a) => a.to_sexp(),
             Command::Sort(name, None) => Sexp::List(vec![
                 Sexp::String("sort".into()),
@@ -434,9 +435,7 @@ impl NormFact {
     pub fn to_fact(&self) -> Fact {
         match self {
             NormFact::Assign(symbol, expr) => Fact::Eq(vec![Expr::Var(*symbol), expr.to_expr()]),
-            NormFact::ConstrainEq(lhs, rhs) => {
-                Fact::Eq(vec![Expr::Var(lhs.clone()), Expr::Var(rhs.clone())])
-            }
+            NormFact::ConstrainEq(lhs, rhs) => Fact::Eq(vec![Expr::Var(*lhs), Expr::Var(*rhs)]),
             NormFact::AssignLit(symbol, lit) => {
                 Fact::Eq(vec![Expr::Var(*symbol), Expr::Lit(lit.clone())])
             }
@@ -497,19 +496,17 @@ impl NormAction {
     pub fn to_action(&self) -> Action {
         match self {
             NormAction::Let(symbol, expr) => Action::Let(*symbol, expr.to_expr()),
-            NormAction::LetVar(symbol, other) => Action::Let(*symbol, Expr::Var(other.clone())),
+            NormAction::LetVar(symbol, other) => Action::Let(*symbol, Expr::Var(*other)),
             NormAction::LetLit(symbol, lit) => Action::Let(*symbol, Expr::Lit(lit.clone())),
             NormAction::Set(symbol, args, other) => Action::Set(
                 *symbol,
-                args.iter().map(|s| Expr::Var(s.clone())).collect(),
+                args.iter().map(|s| Expr::Var(*s)).collect(),
                 Expr::Var(*other),
             ),
             NormAction::Delete(symbol, args) => {
-                Action::Delete(*symbol, args.iter().map(|s| Expr::Var(s.clone())).collect())
+                Action::Delete(*symbol, args.iter().map(|s| Expr::Var(*s)).collect())
             }
-            NormAction::Union(lhs, rhs) => {
-                Action::Union(Expr::Var(lhs.clone()), Expr::Var(rhs.clone()))
-            }
+            NormAction::Union(lhs, rhs) => Action::Union(Expr::Var(*lhs), Expr::Var(*rhs)),
             NormAction::Panic(msg) => Action::Panic(msg.clone()),
         }
     }
@@ -582,9 +579,10 @@ impl Action {
         match self {
             Action::Let(lhs, rhs) => Action::Let(*lhs, f(rhs)),
             Action::Set(lhs, args, rhs) => {
-                Action::Set(*lhs, args.iter().map(|e| f(e)).collect(), f(rhs))
+                let right = f(rhs);
+                Action::Set(*lhs, args.iter().map(f).collect(), right)
             }
-            Action::Delete(lhs, args) => Action::Delete(*lhs, args.iter().map(|e| f(e)).collect()),
+            Action::Delete(lhs, args) => Action::Delete(*lhs, args.iter().map(f).collect()),
             Action::Union(lhs, rhs) => Action::Union(f(lhs), f(rhs)),
             Action::Panic(msg) => Action::Panic(msg.clone()),
             Action::Expr(e) => Action::Expr(f(e)),
@@ -684,9 +682,11 @@ impl Rule {
             if i > 0 {
                 write!(f, "{}", indent)?;
             }
-            write!(f, "{}", fact)?;
+
             if i != self.body.len() - 1 {
-                writeln!(f, "")?;
+                writeln!(f, "{}", fact)?;
+            } else {
+                write!(f, "{}", fact)?;
             }
         }
         write!(f, ")\n      (")?;
@@ -694,9 +694,10 @@ impl Rule {
             if i > 0 {
                 write!(f, "{}", indent)?;
             }
-            write!(f, "{}", action)?;
             if i != self.head.len() - 1 {
-                writeln!(f, "")?;
+                writeln!(f, "{}", action)?;
+            } else {
+                write!(f, "{}", action)?;
             }
         }
         if ruleset != "".into() {

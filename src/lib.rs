@@ -3,7 +3,7 @@ mod desugar;
 mod extract;
 mod function;
 mod gj;
-mod proofs;
+//mod proofs;
 pub mod sort;
 mod typecheck;
 mod unionfind;
@@ -17,7 +17,7 @@ use sort::*;
 use thiserror::Error;
 
 use desugar::desugar_program;
-use proofs::add_proofs;
+//use proofs::add_proofs;
 
 use symbolic_expressions::Sexp;
 
@@ -133,7 +133,6 @@ pub struct EGraph {
     timestamp: u32,
     unit_sym: Symbol,
     parser: ast::parse::ProgramParser,
-    action_parser: ast::parse::ActionParser,
     pub match_limit: usize,
     pub node_limit: usize,
     pub fact_directory: Option<PathBuf>,
@@ -152,9 +151,8 @@ impl Clone for EGraph {
             rulesets: self.rulesets.clone(),
             saturated: self.saturated,
             timestamp: self.timestamp,
-            unit_sym: self.unit_sym.clone(),
+            unit_sym: self.unit_sym,
             parser: ast::parse::ProgramParser::new(),
-            action_parser: ast::parse::ActionParser::new(),
             match_limit: self.match_limit,
             node_limit: self.node_limit,
             fact_directory: self.fact_directory.clone(),
@@ -188,7 +186,6 @@ impl Default for EGraph {
             presorts: Default::default(),
             unit_sym,
             parser: ast::parse::ProgramParser::new(),
-            action_parser: ast::parse::ActionParser::new(),
             match_limit: 10_000_000,
             node_limit: 100_000_000,
             timestamp: 0,
@@ -582,7 +579,7 @@ impl EGraph {
             let mut vec = self
                 .rulesets
                 .iter()
-                .flat_map(|(name, rules)| rules)
+                .flat_map(|(_name, rules)| rules)
                 .collect::<Vec<_>>();
             vec.sort_by_key(|(_, r)| r.search_time + r.apply_time);
             for (name, rule) in vec.iter().rev().take(5) {
@@ -829,7 +826,7 @@ impl EGraph {
                 format!("Declared ruleset {name}.")
             }
             NormCommand::NormRule(ruleset, rule) => {
-                let name = self.add_rule(rule.to_rule(), ruleset.into())?;
+                let name = self.add_rule(rule.to_rule(), ruleset)?;
                 format!("Declared rule {name}.")
             }
 
@@ -1169,7 +1166,7 @@ impl EGraph {
         let mut msgs = vec![];
         let should_run = true;
 
-        println!("{}", ListDisplay(program.clone(), "\n"));
+        //println!("{}", ListDisplay(program.clone(), "\n"));
 
         for command in program {
             let msg = self.run_command(command, should_run)?;

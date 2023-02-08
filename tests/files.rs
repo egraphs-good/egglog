@@ -26,7 +26,13 @@ fn run(path: &Path) -> datatest_stable::Result<()> {
         .map(|x| x.to_string())
         .collect::<Vec<String>>()
         .join("\n");
-    test_program(&program_str, &format!("Program:\n{}\n ERROR after parse, to_string, and parse again.", program_str));
+    test_program(
+        &program_str,
+        &format!(
+            "Program:\n{}\n ERROR after parse, to_string, and parse again.",
+            program_str
+        ),
+    );
 
     Ok(())
 }
