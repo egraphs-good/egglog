@@ -388,6 +388,7 @@ pub(crate) fn desugar_command(
             .map(NormCommand::NormAction)
             .collect(),
         Command::Run(run) => vec![NormCommand::Run(run)],
+        Command::Simplify { expr, config } => vec![NormCommand::Simplify { expr, config }],
         Command::Calc(idents, exprs) => vec![NormCommand::Calc(idents, exprs)],
         Command::Extract { variants, e } => {
             let fresh = (desugar.get_fresh)();

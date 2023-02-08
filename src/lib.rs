@@ -886,19 +886,27 @@ impl EGraph {
                     "Skipping check.".into()
                 }
             }
-            // TODO bandaid that treats all lets as define
+            NormCommand::Simplify { expr, config } => {
+                if should_run {
+                    let (cost, expr) = self.simplify(expr, &config)?;
+                    println!("{}", expr);
+                    format!("Simplified with cost {cost} to {expr}")
+                } else {
+                    "Skipping simplify.".into()
+                }
+            }
             NormCommand::NormAction(action) => {
                 if should_run {
                     match &action {
                         NormAction::Let(name, contents) => {
                             // define with high cost
-                            self.define(*name, contents.to_expr(), Some(10000))?;
+                            self.define(*name, &contents.to_expr(), Some(10000))?;
                         }
                         NormAction::LetVar(var1, var2) => {
-                            self.define(*var1, Expr::Var(*var2), Some(10000))?;
+                            self.define(*var1, &Expr::Var(*var2), Some(10000))?;
                         }
                         NormAction::LetLit(var, lit) => {
-                            self.define(*var, Expr::Lit(lit.clone()), Some(10000))?;
+                            self.define(*var, &Expr::Lit(lit.clone()), Some(10000))?;
                         }
                         _ => {
                             self.eval_actions(std::slice::from_ref(&action.to_action()))?;
@@ -1103,6 +1111,14 @@ impl EGraph {
         }
     }
 
+    fn simplify(&mut self, expr: Expr, config: &RunConfig) -> Result<(usize, Expr), Error> {
+        self.push();
+        let (_t, value) = self.eval_expr(&expr, None, true).unwrap();
+        self.run_rules(config);
+        let (cost, expr) = self.extract(value);
+        self.pop().unwrap();
+        Ok((cost, expr))
+    }
     // Extract an expression from the current state, returning the cost, the extracted expression and some number
     // of other variants, if variants is not zero.
     pub fn extract_expr(
@@ -1142,10 +1158,10 @@ impl EGraph {
     pub fn define(
         &mut self,
         name: Symbol,
-        expr: Expr,
+        expr: &Expr,
         cost: Option<usize>,
     ) -> Result<ArcSort, Error> {
-        let (sort, value) = self.eval_expr(&expr, None, true)?;
+        let (sort, value) = self.eval_expr(expr, None, true)?;
         self.declare_function(&FunctionDecl {
             name,
             schema: Schema {

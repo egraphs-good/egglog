@@ -47,6 +47,7 @@ pub enum NormCommand {
     NormRule(Symbol, NormRule),
     NormAction(NormAction),
     Run(RunConfig),
+    Simplify{ expr: Expr, config: RunConfig},
     // TODO flatten calc, add proof support
     Calc(Vec<IdentSort>, Vec<Expr>),
     Extract { variants: usize, var: Symbol },
@@ -74,6 +75,10 @@ impl NormCommand {
             NormCommand::NormRule(name, rule) => Command::Rule(*name, rule.to_rule()),
             NormCommand::NormAction(action) => Command::Action(action.to_action()),
             NormCommand::Run(config) => Command::Run(config.clone()),
+            NormCommand::Simplify { expr, config } => Command::Simplify {
+                expr: expr.clone(),
+                config: config.clone(),
+            },
             NormCommand::Calc(args, exprs) => Command::Calc(args.clone(), exprs.clone()),
             NormCommand::Extract { variants, var } => Command::Extract {
                 variants: *variants,
@@ -119,6 +124,10 @@ pub enum Command {
     BiRewrite(Symbol, Rewrite),
     Action(Action),
     Run(RunConfig),
+    Simplify {
+        expr: Expr,
+        config: RunConfig,
+    },
     Calc(Vec<IdentSort>, Vec<Expr>),
     Extract {
         variants: usize,
@@ -264,6 +273,19 @@ impl Command {
                 Sexp::String("include".into()),
                 Sexp::String(format!("\"{}\"", file)),
             ]),
+            Command::Simplify { expr, config } => {
+                let mut res = vec![
+                    Sexp::String("simplify".into()),
+                    Sexp::String(config.limit.to_string()),
+                    expr.to_sexp(),
+                ];
+                if let Some(until) = &config.until {
+                    res.push(Sexp::String(":until".into()));
+                    res.push(until.to_sexp());
+                }
+
+                Sexp::List(res)
+            }
         }
     }
 }
