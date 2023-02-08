@@ -86,7 +86,7 @@ NonLetAction: Action = {
     <e:CallExpr> => Action::Expr(e),
 }
 
-pub Action: Action = {
+Action: Action = {
     "(" "let" <name:Ident> <expr:Expr> ")" => Action::Let(name, expr),
     <NonLetAction> => <>,
 }
