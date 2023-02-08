@@ -889,6 +889,7 @@ impl EGraph {
                     "Skipping check.".into()
                 }
             }
+            // TODO bandaid that treats all lets as define
             FlatCommand::SSAAction(action) => {
                 if should_run {
                     match &action {
