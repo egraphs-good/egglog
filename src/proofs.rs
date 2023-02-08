@@ -1,6 +1,6 @@
 use crate::*;
 
-use crate::desugar::{assert_ssa_valid, make_ssa_again, Fresh};
+use crate::desugar::{assert_ssa_valid, Fresh};
 use symbolic_expressions::Sexp;
 
 fn proof_header(egraph: &EGraph) -> Vec<Command> {
@@ -121,9 +121,9 @@ fn instrument_facts(
     egraph: &EGraph,
     body: &Vec<NormFact>,
     get_fresh: &mut Fresh,
-) -> (ProofInfo, Vec<NormFact>) {
+) -> (ProofInfo, Vec<Fact>) {
     let mut info: ProofInfo = Default::default();
-    let mut facts = body.clone();
+    let mut facts: Vec<Fact> = body.iter().map(|f| f.to_fact()).collect();
 
     for fact in body {
         match fact {
@@ -132,17 +132,17 @@ fn instrument_facts(
                 let rep = get_fresh();
                 let rep_trm = get_fresh();
                 let rep_prf = get_fresh();
-                facts.push(NormFact::Assign(
-                    rep,
-                    NormExpr::Call(make_rep_version(&literal_name), vec![*lhs]),
+                facts.push(Fact::Eq(
+                    vec![Expr::Var(rep),
+                    Expr::Call(make_rep_version(&literal_name), vec![Expr::Var(*lhs)])]
                 ));
-                facts.push(NormFact::Assign(
-                    rep_trm,
-                    NormExpr::Call("TrmOf__".into(), vec![rep]),
+                facts.push(Fact::Eq(
+                    vec![Expr::Var(rep_trm),
+                    Expr::Call("TrmOf__".into(), vec![Expr::Var(rep)])]
                 ));
-                facts.push(NormFact::Assign(
-                    rep_prf,
-                    NormExpr::Call("PrfOf__".into(), vec![rep]),
+                facts.push(Fact::Eq(vec![
+                    Expr::Var(rep_prf),
+                    Expr::Call("PrfOf__".into(), vec![Expr::Var(rep)])]
                 ));
 
                 assert!(info.var_term.insert(*lhs, rep_trm).is_none());
@@ -158,17 +158,17 @@ fn instrument_facts(
                 let rep = get_fresh();
                 let rep_trm = get_fresh();
                 let rep_prf = get_fresh();
-                facts.push(NormFact::Assign(
-                    rep,
-                    NormExpr::Call(make_rep_version(head), body.clone()),
+                facts.push(Fact::Eq(vec![
+                    Expr::Var(rep),
+                    Expr::Call(make_rep_version(head), body.iter().map(|x| Expr::Var(*x)).collect())]
                 ));
-                facts.push(NormFact::Assign(
-                    rep_trm,
-                    NormExpr::Call("TrmOf__".into(), vec![rep]),
+                facts.push(Fact::Eq(vec![
+                    Expr::Var(rep_trm),
+                    Expr::Call("TrmOf__".into(), vec![Expr::Var(rep)])]
                 ));
-                facts.push(NormFact::Assign(
-                    rep_prf,
-                    NormExpr::Call("PrfOf__".into(), vec![rep]),
+                facts.push(Fact::Eq(vec![
+                    Expr::Var(rep_prf),
+                    Expr::Call("PrfOf__".into(), vec![Expr::Var(rep)])]
                 ));
 
                 assert!(info.var_term.insert(*lhs, rep_trm).is_none());
@@ -178,10 +178,12 @@ fn instrument_facts(
                     //println!("child: {:?}", child);
                     let child_trm = get_fresh();
                     let const_var = get_fresh();
-                    facts.push(NormFact::AssignLit(const_var, Literal::Int(i as i64)));
-                    facts.push(NormFact::Assign(
-                        child_trm,
-                        NormExpr::Call("GetChild__".into(), vec![rep_trm, const_var]),
+                    facts.push(Fact::Eq(vec![Expr::Var(const_var),
+                    Expr::Lit(Literal::Int(i as i64))]));
+
+                    facts.push(Fact::Eq(vec![
+                        Expr::Var(child_trm),
+                        Expr::Call("GetChild__".into(), vec![Expr::Var(rep_trm), Expr::Var(const_var)])]
                     ));
                     assert!(info.var_term.insert(*child, child_trm).is_none());
                 }
@@ -210,7 +212,7 @@ fn instrument_facts(
         }
     }
 
-    (info, make_ssa_again(facts))
+    (info, facts)
 }
 
 fn add_action_proof(
@@ -391,7 +393,7 @@ fn add_rule_proof(
     rule_proof
 }
 
-fn instrument_rule(egraph: &EGraph, rule: &NormRule, rule_name: Symbol) -> NormRule {
+fn instrument_rule(egraph: &EGraph, rule: &NormRule, rule_name: Symbol) -> Rule {
     let mut varcount = 0;
     let mut get_fresh = move || {
         varcount += 1;
@@ -399,7 +401,6 @@ fn instrument_rule(egraph: &EGraph, rule: &NormRule, rule_name: Symbol) -> NormR
     };
 
     let (mut info, facts) = instrument_facts(egraph, &rule.body, &mut get_fresh);
-    assert_ssa_valid(&facts, &rule.head);
 
     let mut actions = rule.head.clone();
     let rule_proof = add_rule_proof(rule_name, &info, &rule.body, &mut actions, &mut get_fresh);
@@ -416,11 +417,10 @@ fn instrument_rule(egraph: &EGraph, rule: &NormRule, rule_name: Symbol) -> NormR
     }
 
     // res.head.extend();
-    let res = NormRule {
-        head: actions,
+    let res = Rule {
+        head: actions.iter().map(|a| a.to_action()).collect(),
         body: facts,
     };
-    assert_ssa_valid(&res.body, &res.head);
     res
 }
 
@@ -516,7 +516,7 @@ pub(crate) fn add_proofs(egraph: &EGraph, program: Vec<NormCommand>) -> Vec<Norm
             NormCommand::NormRule(ruleset, rule) => {
                 res.push(Command::Rule(
                     *ruleset,
-                    instrument_rule(egraph, rule, "TODOrulename".into()).to_rule(),
+                    instrument_rule(egraph, rule, "TODOrulename".into()),
                 ));
             }
             NormCommand::Run(config) => {
@@ -527,4 +527,8 @@ pub(crate) fn add_proofs(egraph: &EGraph, program: Vec<NormCommand>) -> Vec<Norm
     }
 
     desugar_program(egraph, res).unwrap()
+}
+
+pub(crate) fn should_add_proofs(_program: &[NormCommand]) -> bool {
+    true
 }

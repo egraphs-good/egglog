@@ -3,7 +3,7 @@ mod desugar;
 mod extract;
 mod function;
 mod gj;
-//mod proofs;
+mod proofs;
 pub mod sort;
 mod typecheck;
 mod unionfind;
@@ -17,7 +17,7 @@ use sort::*;
 use thiserror::Error;
 
 use desugar::desugar_program;
-//use proofs::add_proofs;
+use proofs::{add_proofs, should_add_proofs};
 
 use symbolic_expressions::Sexp;
 
@@ -133,6 +133,7 @@ pub struct EGraph {
     timestamp: u32,
     unit_sym: Symbol,
     parser: ast::parse::ProgramParser,
+    action_parser: ast::parse::ActionParser,
     pub match_limit: usize,
     pub node_limit: usize,
     pub fact_directory: Option<PathBuf>,
@@ -153,6 +154,7 @@ impl Clone for EGraph {
             timestamp: self.timestamp,
             unit_sym: self.unit_sym,
             parser: ast::parse::ProgramParser::new(),
+            action_parser: ast::parse::ActionParser::new(),
             match_limit: self.match_limit,
             node_limit: self.node_limit,
             fact_directory: self.fact_directory.clone(),
@@ -186,6 +188,7 @@ impl Default for EGraph {
             presorts: Default::default(),
             unit_sym,
             parser: ast::parse::ProgramParser::new(),
+            action_parser: ast::parse::ActionParser::new(),
             match_limit: 10_000_000,
             node_limit: 100_000_000,
             timestamp: 0,
@@ -1216,8 +1219,11 @@ impl EGraph {
     }
 
     pub fn parse_and_run_program(&mut self, input: &str) -> Result<Vec<String>, Error> {
-        let program = self.parse_desugar(input)?;
+        let mut program = self.parse_desugar(input)?;
         //println!("{}", ListDisplay(program.clone(), "\n"));
+        if should_add_proofs(&program) {
+            program = add_proofs(self, program);
+        }
 
         self.run_program(program)
     }
@@ -1226,6 +1232,7 @@ impl EGraph {
         self.functions.values().map(|f| f.nodes.len()).sum()
     }
 }
+
 
 #[derive(Debug, Error)]
 pub enum Error {
