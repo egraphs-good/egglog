@@ -1,6 +1,6 @@
 use crate::*;
 
-use crate::desugar::{assert_ssa_valid, Fresh};
+use crate::desugar::{Fresh};
 use symbolic_expressions::Sexp;
 
 fn proof_header(egraph: &EGraph) -> Vec<Command> {

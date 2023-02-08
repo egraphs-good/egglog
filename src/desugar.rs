@@ -1,6 +1,31 @@
+use std::cmp::max;
+
 use crate::*;
 
 pub(crate) type Fresh = dyn FnMut() -> Symbol;
+
+fn make_get_fresh(program: &Vec<Command>) -> impl FnMut() -> Symbol
+{
+    let mut max_underscores: usize = 0;
+    let program_str = ListDisplay(program, "\n").to_string();
+    let mut counter: i64 = -1;
+    for char in program_str.chars() {
+        if char == '_' {
+            counter = max(counter, 0);
+            counter += 1;
+            max_underscores = max(max_underscores,  counter as usize);
+        } else {
+            counter = -1;
+        }
+    }
+
+    let underscores = "_".repeat(max_underscores);
+    let mut fcounter = 0;
+    move || {
+        fcounter += 1;
+        format!("v{}{}", fcounter, underscores).into()
+    }
+}
 
 fn desugar_datatype(name: Symbol, variants: Vec<Variant>) -> Vec<NormCommand> {
     vec![NormCommand::Sort(name, None)]
@@ -24,7 +49,7 @@ fn desugar_datatype(name: Symbol, variants: Vec<Variant>) -> Vec<NormCommand> {
 fn desugar_rewrite(
     ruleset: Symbol,
     rewrite: &Rewrite,
-    globals: &HashSet<Symbol>,
+    desugar: &mut Desugar,
 ) -> Vec<NormCommand> {
     let var = Symbol::from("rewrite_var__");
     vec![NormCommand::NormRule(
@@ -37,7 +62,7 @@ fn desugar_rewrite(
                     .collect(),
                 head: vec![Action::Union(Expr::Var(var), rewrite.rhs.clone())],
             },
-            globals,
+            desugar
         ),
     )]
 }
@@ -45,16 +70,16 @@ fn desugar_rewrite(
 fn desugar_birewrite(
     ruleset: Symbol,
     rewrite: &Rewrite,
-    globals: &HashSet<Symbol>,
+    desugar: &mut Desugar,
 ) -> Vec<NormCommand> {
     let rw2 = Rewrite {
         lhs: rewrite.rhs.clone(),
         rhs: rewrite.lhs.clone(),
         conditions: rewrite.conditions.clone(),
     };
-    desugar_rewrite(ruleset, rewrite, globals)
+    desugar_rewrite(ruleset, rewrite, desugar)
         .into_iter()
-        .chain(desugar_rewrite(ruleset, &rw2, globals))
+        .chain(desugar_rewrite(ruleset, &rw2, desugar))
         .collect()
 }
 
@@ -62,7 +87,7 @@ fn desugar_birewrite(
 // so many fresh variables
 fn expr_to_ssa(
     expr: &Expr,
-    get_fresh: &mut Fresh,
+    desugar: &mut Desugar,
     var_used: &mut HashSet<Symbol>,
     var_just_used: &mut HashSet<Symbol>,
     res: &mut Vec<NormFact>,
@@ -70,9 +95,9 @@ fn expr_to_ssa(
 ) -> Symbol {
     match expr {
         Expr::Lit(l) => {
-            let fresh = get_fresh();
+            let fresh = (desugar.get_fresh)();
             res.push(NormFact::AssignLit(fresh, l.clone()));
-            let fresh2 = get_fresh();
+            let fresh2 = (desugar.get_fresh)();
             res.push(NormFact::ConstrainEq(fresh2, fresh));
             fresh2
         }
@@ -81,7 +106,7 @@ fn expr_to_ssa(
                 var_just_used.insert(*v);
                 *v
             } else {
-                let fresh = get_fresh();
+                let fresh = (desugar.get_fresh)();
                 // logic to satisfy typechecker
                 // if we used the variable in this recurrence, add the constraint afterwards
                 if var_just_used.contains(v) {
@@ -98,16 +123,16 @@ fn expr_to_ssa(
             for child in children {
                 new_children.push(expr_to_ssa(
                     child,
-                    get_fresh,
+                    desugar,
                     var_used,
                     var_just_used,
                     res,
                     constraints,
                 ));
             }
-            let fresh = get_fresh();
+            let fresh = (desugar.get_fresh)();
             res.push(NormFact::Assign(fresh, NormExpr::Call(*f, new_children)));
-            let fresh2 = get_fresh();
+            let fresh2 = (desugar.get_fresh)();
             res.push(NormFact::ConstrainEq(fresh2, fresh));
             fresh2
         }
@@ -177,7 +202,7 @@ pub(crate) fn assert_ssa_valid(facts: &Vec<NormFact>, actions: &Vec<NormAction>)
     true
 }
 
-fn flatten_equalities(equalities: Vec<(Symbol, Expr)>, get_fresh: &mut Fresh) -> Vec<NormFact> {
+fn flatten_equalities(equalities: Vec<(Symbol, Expr)>, desugar: &mut Desugar) -> Vec<NormFact> {
     let mut res = vec![];
 
     let mut var_used = Default::default();
@@ -185,7 +210,7 @@ fn flatten_equalities(equalities: Vec<(Symbol, Expr)>, get_fresh: &mut Fresh) ->
         let mut constraints = vec![];
         let result = expr_to_ssa(
             &rhs,
-            get_fresh,
+            desugar,
             &mut var_used,
             &mut Default::default(),
             &mut res,
@@ -200,7 +225,7 @@ fn flatten_equalities(equalities: Vec<(Symbol, Expr)>, get_fresh: &mut Fresh) ->
     res
 }
 
-fn flatten_facts(facts: &Vec<Fact>, get_fresh: &mut Fresh) -> Vec<NormFact> {
+fn flatten_facts(facts: &Vec<Fact>, desugar: &mut Desugar) -> Vec<NormFact> {
     let mut equalities = vec![];
     for fact in facts {
         match fact {
@@ -213,24 +238,24 @@ fn flatten_facts(facts: &Vec<Fact>, get_fresh: &mut Fresh) -> Vec<NormFact> {
                 } else if let Expr::Var(v) = rhs {
                     equalities.push((*v, lhs.clone()));
                 } else {
-                    let fresh = get_fresh();
+                    let fresh = (desugar.get_fresh)();
                     equalities.push((fresh, lhs.clone()));
                     equalities.push((fresh, rhs.clone()));
                 }
             }
             Fact::Fact(expr) => {
-                equalities.push((get_fresh(), expr.clone()));
+                equalities.push(((desugar.get_fresh)(), expr.clone()));
             }
         }
     }
 
-    flatten_equalities(equalities, get_fresh)
+    flatten_equalities(equalities, desugar)
 }
 
 fn expr_to_flat_actions(
     assign: Symbol,
     expr: &Expr,
-    get_fresh: &mut Fresh,
+    desugar: &mut Desugar,
     res: &mut Vec<NormAction>,
 ) {
     match expr {
@@ -243,8 +268,8 @@ fn expr_to_flat_actions(
         Expr::Call(f, children) => {
             let mut new_children = vec![];
             for child in children {
-                let fresh = get_fresh();
-                expr_to_flat_actions(fresh, child, get_fresh, res);
+                let fresh = (desugar.get_fresh)();
+                expr_to_flat_actions(fresh, child, desugar, res);
                 new_children.push(fresh);
             }
             res.push(NormAction::Let(assign, NormExpr::Call(*f, new_children)));
@@ -252,10 +277,10 @@ fn expr_to_flat_actions(
     }
 }
 
-fn flatten_actions(actions: &Vec<Action>, get_fresh: &mut Fresh) -> Vec<NormAction> {
+fn flatten_actions(actions: &Vec<Action>, desugar: &mut Desugar) -> Vec<NormAction> {
     let mut add_expr = |expr: Expr, res: &mut Vec<NormAction>| {
-        let fresh = get_fresh();
-        expr_to_flat_actions(fresh, &expr, get_fresh, res);
+        let fresh = (desugar.get_fresh)();
+        expr_to_flat_actions(fresh, &expr, desugar, res);
         fresh
     };
 
@@ -322,17 +347,12 @@ fn parenthesize_globals(rule: Rule, globals: &HashSet<Symbol>) -> Rule {
     })
 }
 
-fn flatten_rule(rule_in: Rule, globals: &HashSet<Symbol>) -> NormRule {
-    let rule = parenthesize_globals(rule_in, globals);
-    let mut varcount = 0;
-    let mut get_fresh = move || {
-        varcount += 1;
-        Symbol::from(format!("fvar{}__", varcount))
-    };
+fn flatten_rule(rule_in: Rule, desugar: &mut Desugar) -> NormRule {
+    let rule = parenthesize_globals(rule_in, &desugar.globals);
 
     let res = NormRule {
-        head: flatten_actions(&rule.head, &mut get_fresh),
-        body: flatten_facts(&rule.body, &mut get_fresh),
+        head: flatten_actions(&rule.head, desugar),
+        body: flatten_facts(&rule.body, desugar),
     };
     assert_ssa_valid(&res.body, &res.head);
     res
@@ -353,9 +373,9 @@ pub(crate) fn desugar_command(
             vec![NormCommand::Function(fdecl)]
         }
         Command::Datatype { name, variants } => desugar_datatype(name, variants),
-        Command::Rewrite(ruleset, rewrite) => desugar_rewrite(ruleset, &rewrite, &desugar.globals),
+        Command::Rewrite(ruleset, rewrite) => desugar_rewrite(ruleset, &rewrite, desugar),
         Command::BiRewrite(ruleset, rewrite) => {
-            desugar_birewrite(ruleset, &rewrite, &desugar.globals)
+            desugar_birewrite(ruleset, &rewrite, desugar)
         }
         Command::Include(file) => {
             let s = std::fs::read_to_string(&file)
@@ -364,7 +384,7 @@ pub(crate) fn desugar_command(
         }
         Command::Rule(ruleset, rule) => vec![NormCommand::NormRule(
             ruleset,
-            flatten_rule(rule, &desugar.globals),
+            flatten_rule(rule, desugar),
         )],
         Command::Sort(sort, option) => vec![NormCommand::Sort(sort, option)],
         // TODO ignoring cost for now
@@ -376,14 +396,14 @@ pub(crate) fn desugar_command(
             let mut commands = vec![];
 
             let mut actions = vec![];
-            expr_to_flat_actions(name, &expr, &mut desugar.get_fresh, &mut actions);
+            expr_to_flat_actions(name, &expr, desugar, &mut actions);
             for action in actions {
                 commands.push(NormCommand::NormAction(action));
             }
             commands
         }
         Command::AddRuleset(name) => vec![NormCommand::AddRuleset(name)],
-        Command::Action(action) => flatten_actions(&vec![action], &mut desugar.get_fresh)
+        Command::Action(action) => flatten_actions(&vec![action], desugar)
             .into_iter()
             .map(NormCommand::NormAction)
             .collect(),
@@ -392,7 +412,7 @@ pub(crate) fn desugar_command(
         Command::Calc(idents, exprs) => vec![NormCommand::Calc(idents, exprs)],
         Command::Extract { variants, e } => {
             let fresh = (desugar.get_fresh)();
-            flatten_actions(&vec![Action::Let(fresh, e)], &mut desugar.get_fresh)
+            flatten_actions(&vec![Action::Let(fresh, e)], desugar)
                 .into_iter()
                 .map(NormCommand::NormAction)
                 .chain(
@@ -450,6 +470,7 @@ pub(crate) fn desugar_commands(
     program: Vec<Command>,
     desugar: &mut Desugar,
 ) -> Result<Vec<NormCommand>, Error> {
+    let mut get_fresh = make_get_fresh(&program);
     let mut res = vec![];
 
     for command in program {
