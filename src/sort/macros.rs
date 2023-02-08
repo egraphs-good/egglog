@@ -15,6 +15,12 @@ macro_rules! unpack {
     };
 }
 
+macro_rules! count {
+    () => (0usize);
+    ( $x:tt $($xs:tt)* ) => (1usize + count!($($xs)*));
+}
+
+
 #[macro_export]
 macro_rules! add_primitives {
     // ($egraph:expr, $($rest:tt)*) => {
@@ -65,6 +71,10 @@ macro_rules! add_primitives {
                     } else {
                         panic!()
                     }
+                }
+
+                fn arity(&self) -> usize {
+                    count!($($param),*)-1
                 }
             }
 

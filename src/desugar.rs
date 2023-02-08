@@ -19,7 +19,7 @@ fn make_get_fresh(program: &Vec<Command>) -> impl FnMut() -> Symbol
         }
     }
 
-    let underscores = "_".repeat(max_underscores);
+    let underscores = "_".repeat(max_underscores+1);
     let mut fcounter = 0;
     move || {
         fcounter += 1;
@@ -451,16 +451,13 @@ pub(crate) fn desugar_program(
     egraph: &EGraph,
     program: Vec<Command>,
 ) -> Result<Vec<NormCommand>, Error> {
-    let mut counter = 0;
+    let get_fresh = Box::new(make_get_fresh(&program));
     desugar_commands(
         egraph,
         program,
         &mut Desugar {
             globals: Default::default(),
-            get_fresh: Box::new(move || {
-                counter += 1;
-                Symbol::from(format!("var{}__", counter))
-            }),
+            get_fresh,
         },
     )
 }
@@ -470,7 +467,6 @@ pub(crate) fn desugar_commands(
     program: Vec<Command>,
     desugar: &mut Desugar,
 ) -> Result<Vec<NormCommand>, Error> {
-    let mut get_fresh = make_get_fresh(&program);
     let mut res = vec![];
 
     for command in program {

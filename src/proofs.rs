@@ -8,9 +8,14 @@ fn proof_header(egraph: &EGraph) -> Vec<Command> {
     egraph.parse_program(str).unwrap()
 }
 
-// make ast versions even for primitives
-fn make_ast_version(_egraph: &EGraph, name: &Symbol) -> Symbol {
-    Symbol::from(format!("Ast{}__", name))
+// make ast versions, but include arity for primitives
+// TODO I think we have to include type info for primitives too ):
+fn make_ast_version(egraph: &EGraph, name: Symbol, arity: usize) -> Symbol {
+    if let Some(_prims) = egraph.primitives.get(&name) {
+        Symbol::from(format!("Ast{}_{}__", name, arity))
+    } else {
+        Symbol::from(format!("Ast{}__", name))
+    }
 }
 
 fn make_rep_version(name: &Symbol) -> Symbol {
@@ -21,13 +26,68 @@ fn literal_name(egraph: &EGraph, literal: &Literal) -> Symbol {
     egraph.infer_literal(literal).name()
 }
 
-fn make_ast_primitives(egraph: &EGraph) -> Vec<Command> {
+fn setup_primitives(egraph: &EGraph) -> Vec<Command> {
+    let mut commands = vec![];
+    commands.extend(make_ast_primitives_funcs(egraph));
+    commands.extend(make_ast_primitives_sorts(egraph));
+    commands.extend(make_rep_primitive_sorts(egraph));
+    commands
+}
+
+fn make_rep_primitive_sorts(egraph: &EGraph) -> Vec<Command> {
     egraph
         .sorts
         .iter()
         .map(|(name, _)| {
             Command::Function(FunctionDecl {
-                name: make_ast_version(egraph, name),
+                name: make_rep_version(name),
+                schema: Schema {
+                    input: vec![*name],
+                    output: "TrmPrf__".into(),
+                },
+                // Right now we just union every proof of some primitive.
+                merge: None,
+                merge_action: vec![],
+                default: None,
+                cost: None,
+            })
+        })
+        .collect()
+}
+
+fn make_ast_primitives_funcs(egraph: &EGraph) -> Vec<Command> {
+    let mut res = vec![];
+    for (name, primitives) in &egraph.primitives {
+        let mut arities: Vec<usize> = primitives.iter()
+                                .map(|prim| prim.0.arity()).collect();
+        arities.sort();
+        arities.dedup();
+        for arity in arities {
+            res.push(Command::Function(
+                FunctionDecl {
+                    name: make_ast_version(egraph, *name, arity),
+                    schema: Schema {
+                        input: vec!["Ast__".into(); arity],
+                        output: "Ast__".into(),
+                    },
+                    merge: None,
+                    merge_action: vec![],
+                    default: None,
+                    cost: None,
+                }
+            ));
+        }
+    }
+    res
+}
+
+fn make_ast_primitives_sorts(egraph: &EGraph) -> Vec<Command> {
+    egraph
+        .sorts
+        .iter()
+        .map(|(name, _)| {
+            Command::Function(FunctionDecl {
+                name: make_ast_version(egraph, *name, 1),
                 schema: Schema {
                     input: vec![*name],
                     output: "Ast__".into(),
@@ -43,7 +103,7 @@ fn make_ast_primitives(egraph: &EGraph) -> Vec<Command> {
 
 fn make_ast_func(egraph: &EGraph, fdecl: &FunctionDecl) -> FunctionDecl {
     FunctionDecl {
-        name: make_ast_version(egraph, &fdecl.name),
+        name: make_ast_version(egraph, fdecl.name, fdecl.schema.input.len()),
         schema: Schema {
             input: fdecl
                 .schema
@@ -128,7 +188,7 @@ fn instrument_facts(
     for fact in body {
         match fact {
             NormFact::AssignLit(lhs, rhs) => {
-                let literal_name = literal_name(&egraph, rhs);
+                let literal_name = literal_name(egraph, rhs);
                 let rep = get_fresh();
                 let rep_trm = get_fresh();
                 let rep_prf = get_fresh();
@@ -188,7 +248,7 @@ fn instrument_facts(
                     assert!(info.var_term.insert(*child, child_trm).is_none());
                 }
             }
-            NormFact::ConstrainEq(lhs, rhs) => (),
+            NormFact::ConstrainEq(_lhs, _rhs) => (),
         }
     }
 
@@ -253,7 +313,7 @@ fn add_action_proof(
             res.push(NormAction::Let(
                 newterm,
                 NormExpr::Call(
-                    make_ast_version(egraph, head),
+                    make_ast_version(egraph, *head, children.len()),
                     children
                         .iter()
                         .map(|v| *info.var_term.get(v).unwrap())
@@ -277,7 +337,7 @@ fn add_action_proof(
             res.push(NormAction::Let(
                 newterm,
                 NormExpr::Call(
-                    make_ast_version(egraph, rhsname),
+                    make_ast_version(egraph, *rhsname, rhsvars.len()),
                     rhsvars
                         .iter()
                         .map(|v| *info.var_term.get(v).unwrap())
@@ -311,7 +371,7 @@ fn add_action_proof(
             res.push(NormAction::Let(
                 newterm,
                 NormExpr::Call(
-                    make_ast_version(egraph, &literal_name(egraph, lit)),
+                    make_ast_version(egraph, literal_name(egraph, lit), 1),
                     vec![*lhs],
                 ),
             ));
@@ -446,7 +506,7 @@ fn make_getchild_rule(egraph: &EGraph, fdecl: &FunctionDecl) -> Command {
             body: vec![Fact::Eq(vec![
                 Expr::Var("ast__".into()),
                 Expr::Call(
-                    make_ast_version(egraph, &fdecl.name),
+                    make_ast_version(egraph, fdecl.name, fdecl.schema.input.len()),
                     fdecl
                         .schema
                         .input
@@ -496,16 +556,12 @@ fn make_runner(config: &RunConfig) -> Vec<Command> {
 pub(crate) fn add_proofs(egraph: &EGraph, program: Vec<NormCommand>) -> Vec<NormCommand> {
     let mut res = proof_header(egraph);
 
-    res.extend(make_ast_primitives(egraph));
+    res.extend(setup_primitives(egraph));
 
     for command in program {
         match &command {
-            NormCommand::Sort(name, presort_and_args) => {
+            NormCommand::Sort(_name, _presort_and_args) => {
                 res.push(command.to_command());
-                res.push(Command::Sort(
-                    make_ast_version(egraph, name),
-                    presort_and_args.clone(),
-                ));
             }
             NormCommand::Function(fdecl) => {
                 res.push(command.to_command());

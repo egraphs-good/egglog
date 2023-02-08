@@ -137,6 +137,9 @@ impl PrimitiveLike for Ctor {
         assert!(values.is_empty());
         ValueMap::default().store(&self.map)
     }
+    fn arity(&self) -> usize {
+        0
+    }
 }
 
 struct Insert {
@@ -166,6 +169,10 @@ impl PrimitiveLike for Insert {
         map.insert(values[1], values[2]);
         map.store(&self.map)
     }
+
+    fn arity(&self) -> usize {
+        3
+    }
 }
 
 struct Get {
@@ -190,6 +197,10 @@ impl PrimitiveLike for Get {
     fn apply(&self, values: &[Value]) -> Option<Value> {
         let map = ValueMap::load(&self.map, &values[0]);
         map.get(&values[1]).copied()
+    }
+
+    fn arity(&self) -> usize {
+        2
     }
 }
 
@@ -221,6 +232,10 @@ impl PrimitiveLike for NotContains {
             Some(Value::unit())
         }
     }
+
+    fn arity(&self) -> usize {
+        2
+    }
 }
 
 struct Contains {
@@ -251,6 +266,10 @@ impl PrimitiveLike for Contains {
             None
         }
     }
+
+    fn arity(&self) -> usize {
+        2
+    }
 }
 
 struct Union {
@@ -278,6 +297,10 @@ impl PrimitiveLike for Union {
         map1.extend(map2.iter());
         // map.insert(values[1], values[2]);
         map1.store(&self.map)
+    }
+
+    fn arity(&self) -> usize {
+        2
     }
 }
 
@@ -307,6 +330,10 @@ impl PrimitiveLike for Intersect {
         // map.insert(values[1], values[2]);
         map1.store(&self.map)
     }
+
+    fn arity(&self) -> usize {
+        2
+    }
 }
 
 struct Remove {
@@ -332,6 +359,10 @@ impl PrimitiveLike for Remove {
         let mut map = ValueMap::load(&self.map, &values[0]);
         map.remove(&values[1]);
         map.store(&self.map)
+    }
+
+    fn arity(&self) -> usize {
+        2
     }
 }
 
@@ -359,5 +390,9 @@ impl PrimitiveLike for Diff {
         let map2 = ValueMap::load(&self.map, &values[1]);
         map1.retain(|k, _| !map2.contains_key(k));
         map1.store(&self.map)
+    }
+
+    fn arity(&self) -> usize {
+        2
     }
 }

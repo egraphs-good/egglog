@@ -52,6 +52,7 @@ pub trait PrimitiveLike {
     fn name(&self) -> Symbol;
     fn accept(&self, types: &[ArcSort]) -> Option<ArcSort>;
     fn apply(&self, values: &[Value]) -> Option<Value>;
+    fn arity(&self) -> usize;
 }
 
 #[derive(Clone)]
@@ -118,6 +119,9 @@ impl PrimitiveLike for SimplePrimitive {
     }
     fn apply(&self, values: &[Value]) -> Option<Value> {
         (self.f)(values)
+    }
+    fn arity(&self) -> usize {
+        self.input.len()
     }
 }
 
@@ -1220,10 +1224,12 @@ impl EGraph {
 
     pub fn parse_and_run_program(&mut self, input: &str) -> Result<Vec<String>, Error> {
         let mut program = self.parse_desugar(input)?;
-        //println!("{}", ListDisplay(program.clone(), "\n"));
+        
         if should_add_proofs(&program) {
             program = add_proofs(self, program);
         }
+        println!("{}", ListDisplay(program.clone(), "\n"));
+
 
         self.run_program(program)
     }
