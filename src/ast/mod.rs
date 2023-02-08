@@ -47,7 +47,7 @@ pub enum NormCommand {
     NormRule(Symbol, NormRule),
     NormAction(NormAction),
     Run(RunConfig),
-    Simplify{ expr: Expr, config: RunConfig},
+    Simplify { expr: Expr, config: RunConfig },
     // TODO flatten calc, add proof support
     Calc(Vec<IdentSort>, Vec<Expr>),
     Extract { variants: usize, var: Symbol },
