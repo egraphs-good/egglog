@@ -21,6 +21,8 @@
 (datatype Proof
   ;; proves that a term exists in the database
   (Original AstMath)
+  ;; proves two terms were set equal in the database
+  (OriginalEq AstMath AstMath)
   ;; justifies the fact that a rule fired
   ;; the proof list justifies each of the premises in order
   ;; it then justifies all of the equality constraints in order

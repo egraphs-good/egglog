@@ -1,6 +1,6 @@
 use crate::*;
 
-use crate::desugar::{Fresh};
+use crate::desugar::{Fresh, make_get_fresh_norm};
 use symbolic_expressions::Sexp;
 
 fn proof_header(egraph: &EGraph) -> Vec<Command> {
@@ -552,9 +552,93 @@ fn make_runner(config: &RunConfig) -> Vec<Command> {
     res
 }
 
+pub(crate) struct ProofState {
+    pub(crate) global_var_ast: HashMap<Symbol, Symbol>,
+    pub(crate) get_fresh: Box<Fresh>,
+}
+
+fn proof_original_action(action: &NormAction, proof_state: &mut ProofState, egraph: &EGraph) -> Vec<Command> {
+    match action {
+        NormAction::Let(lhs, NormExpr::Call(head, body)) => {
+            let ast_var = (proof_state.get_fresh)();
+            proof_state.global_var_ast.insert(lhs.clone(), ast_var.clone());
+            vec![
+                Command::Action(
+                    egraph.action_parser.parse(&format!("(let {} ({} {}))",
+                    ast_var,
+                    make_ast_version(egraph, *head, body.len()),
+                    ListDisplay(body.iter().map(|e| proof_state.global_var_ast[e]), " "))).unwrap()
+                ),
+                Command::Action(
+                    egraph.action_parser.parse(&format!("(set ({} {})
+                         (MakeTrmPrf__ {} (Original__ {})))",
+                    make_rep_version(head),
+                    ListDisplay(body, " "),
+                    ast_var,
+                    ast_var
+                )).unwrap())
+            ]
+        },
+        NormAction::LetVar(var1, var2) => {
+            proof_state.global_var_ast.insert(var1.clone(), proof_state.global_var_ast[var2].clone());
+            vec![]
+        },
+        NormAction::LetLit(lhs, literal) => {
+            let ast_var = (proof_state.get_fresh)();
+            proof_state.global_var_ast.insert(lhs.clone(), ast_var.clone());
+            vec![
+                Command::Action(
+                    egraph.action_parser.parse(&format!("(let {} ({} {}))", ast_var, make_ast_version(egraph, literal_name(egraph, literal), 1), literal)).unwrap()
+                ),
+                Command::Action(
+                    egraph.action_parser.parse(&format!("(set ({} {})
+                         (MakeTrmPrf__ {} (Original__ {})))",
+                    make_rep_version(&literal_name(egraph, &literal)),
+                    literal,
+                    ast_var,
+                    ast_var
+                )).unwrap())
+            ]
+        }
+        NormAction::Set(head, body, var) => {
+            let left_ast = Expr::Call(
+                make_ast_version(egraph, *head, body.len()),
+                body.iter().map(|e| Expr::Var(proof_state.global_var_ast[e])).collect(),
+            );
+            vec![
+                Command::Action(
+                    egraph.action_parser.parse(
+                        &format!("(set (EqGraph__ {} {}) (OriginalEq__ {} {}))",
+                    left_ast,
+                    proof_state.global_var_ast[var],
+                    left_ast,
+                    proof_state.global_var_ast[var]
+                )).unwrap())
+            ]
+        }
+        NormAction::Union(var1, var2) => {
+            vec![
+                Command::Action(
+                    egraph.action_parser.parse(
+                        &format!("(set (EqGraph__ {} {}) (OriginalEq__ {} {}))",
+                    proof_state.global_var_ast[var1],
+                    proof_state.global_var_ast[var2],
+                    proof_state.global_var_ast[var1],
+                    proof_state.global_var_ast[var2]
+                )).unwrap())
+            ]
+        }
+        NormAction::Delete(..) | NormAction::Panic(..) => vec![]
+    }
+}
+
 // the egraph is the initial egraph with only default sorts
 pub(crate) fn add_proofs(egraph: &EGraph, program: Vec<NormCommand>) -> Vec<NormCommand> {
     let mut res = proof_header(egraph);
+    let mut proof_state = ProofState {
+        global_var_ast: Default::default(),
+        get_fresh: Box::new(make_get_fresh_norm(&program)),
+    };
 
     res.extend(setup_primitives(egraph));
 
@@ -577,6 +661,10 @@ pub(crate) fn add_proofs(egraph: &EGraph, program: Vec<NormCommand>) -> Vec<Norm
             }
             NormCommand::Run(config) => {
                 res.extend(make_runner(config));
+            }
+            NormCommand::NormAction(action) => {
+                res.push(Command::Action(action.to_action()));
+                res.extend(proof_original_action(action, &mut proof_state, egraph));
             }
             _ => res.push(command.to_command()),
         }

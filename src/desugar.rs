@@ -4,10 +4,17 @@ use crate::*;
 
 pub(crate) type Fresh = dyn FnMut() -> Symbol;
 
-fn make_get_fresh(program: &Vec<Command>) -> impl FnMut() -> Symbol
+pub(crate) fn make_get_fresh_norm(program: &Vec<NormCommand>) -> impl FnMut() -> Symbol {
+    make_get_fresh_from_str(&ListDisplay(program, "\n").to_string())
+}
+
+pub(crate) fn make_get_fresh(program: &Vec<Command>) -> impl FnMut() -> Symbol {
+    make_get_fresh_from_str(&ListDisplay(program, "\n").to_string())
+}
+
+fn make_get_fresh_from_str(program_str: &str) -> impl FnMut() -> Symbol
 {
     let mut max_underscores: usize = 0;
-    let program_str = ListDisplay(program, "\n").to_string();
     let mut counter: i64 = -1;
     for char in program_str.chars() {
         if char == '_' {
