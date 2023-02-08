@@ -84,7 +84,7 @@ impl NormCommand {
                 variants: *variants,
                 e: Expr::Var(*var),
             },
-            NormCommand::Check(fact) => Command::Query(vec![fact.clone()]),
+            NormCommand::Check(fact) => Command::Check(fact.clone()),
             NormCommand::Clear => Command::Query(vec![]),
             NormCommand::Print(name, n) => Command::Print(*name, *n),
             NormCommand::PrintSize(name) => Command::PrintSize(*name),
