@@ -2,11 +2,11 @@ use crate::*;
 
 pub(crate) type Fresh = dyn FnMut() -> Symbol;
 
-fn desugar_datatype(name: Symbol, variants: Vec<Variant>) -> Vec<FlatCommand> {
-    vec![FlatCommand::Sort(name, None)]
+fn desugar_datatype(name: Symbol, variants: Vec<Variant>) -> Vec<NormCommand> {
+    vec![NormCommand::Sort(name, None)]
         .into_iter()
         .chain(variants.into_iter().map(|variant| {
-            FlatCommand::Function(FunctionDecl {
+            NormCommand::Function(FunctionDecl {
                 name: variant.name,
                 schema: Schema {
                     input: variant.types,
@@ -21,9 +21,13 @@ fn desugar_datatype(name: Symbol, variants: Vec<Variant>) -> Vec<FlatCommand> {
         .collect()
 }
 
-fn desugar_rewrite(ruleset: Symbol, rewrite: &Rewrite, globals: &HashSet<Symbol>) -> Vec<FlatCommand> {
+fn desugar_rewrite(
+    ruleset: Symbol,
+    rewrite: &Rewrite,
+    globals: &HashSet<Symbol>,
+) -> Vec<NormCommand> {
     let var = Symbol::from("rewrite_var__");
-    vec![FlatCommand::FlatRule(
+    vec![NormCommand::NormRule(
         ruleset,
         flatten_rule(
             Rule {
@@ -42,7 +46,7 @@ fn desugar_birewrite(
     ruleset: Symbol,
     rewrite: &Rewrite,
     globals: &HashSet<Symbol>,
-) -> Vec<FlatCommand> {
+) -> Vec<NormCommand> {
     let rw2 = Rewrite {
         lhs: rewrite.rhs.clone(),
         rhs: rewrite.lhs.clone(),
@@ -54,22 +58,22 @@ fn desugar_birewrite(
         .collect()
 }
 
-// TODO use an egraph to perform the SSA translation without introducing
+// TODO use an egraph to perform the Norm translation without introducing
 // so many fresh variables
 fn expr_to_ssa(
     expr: &Expr,
     get_fresh: &mut Fresh,
     var_used: &mut HashSet<Symbol>,
     varJustUsed: &mut HashSet<Symbol>,
-    res: &mut Vec<SSAFact>,
-    constraints: &mut Vec<SSAFact>,
+    res: &mut Vec<NormFact>,
+    constraints: &mut Vec<NormFact>,
 ) -> Symbol {
     match expr {
         Expr::Lit(l) => {
             let fresh = get_fresh();
-            res.push(SSAFact::AssignLit(fresh, l.clone()));
+            res.push(NormFact::AssignLit(fresh, l.clone()));
             let fresh2 = get_fresh();
-            res.push(SSAFact::ConstrainEq(fresh2, fresh));
+            res.push(NormFact::ConstrainEq(fresh2, fresh));
             fresh2
         }
         Expr::Var(v) => {
@@ -81,10 +85,10 @@ fn expr_to_ssa(
                 // logic to satisfy typechecker
                 // if we used the variable in this recurrence, add the constraint afterwards
                 if varJustUsed.contains(v) {
-                    constraints.push(SSAFact::ConstrainEq(fresh, *v));
+                    constraints.push(NormFact::ConstrainEq(fresh, *v));
                 // otherwise add the constrain immediately so we have the type
                 } else {
-                    res.push(SSAFact::ConstrainEq(fresh, *v));
+                    res.push(NormFact::ConstrainEq(fresh, *v));
                 }
                 fresh
             }
@@ -102,20 +106,20 @@ fn expr_to_ssa(
                 ));
             }
             let fresh = get_fresh();
-            res.push(SSAFact::Assign(
+            res.push(NormFact::Assign(
                 fresh,
-                SSAExpr::Call(f.clone(), new_children),
+                NormExpr::Call(f.clone(), new_children),
             ));
             let fresh2 = get_fresh();
-            res.push(SSAFact::ConstrainEq(fresh2, fresh));
+            res.push(NormFact::ConstrainEq(fresh2, fresh));
             fresh2
         }
     }
 }
 
-fn ssa_valid_expr(expr: &SSAExpr, var_used: &mut HashSet<Symbol>) -> bool {
+fn ssa_valid_expr(expr: &NormExpr, var_used: &mut HashSet<Symbol>) -> bool {
     match expr {
-        SSAExpr::Call(_, children) => {
+        NormExpr::Call(_, children) => {
             for child in children {
                 if !var_used.insert(*child) {
                     return false;
@@ -127,9 +131,9 @@ fn ssa_valid_expr(expr: &SSAExpr, var_used: &mut HashSet<Symbol>) -> bool {
 }
 
 // Given facts where variables are referenced multiple times,
-// refactor it into SSA form again
+// refactor it into Norm form again
 // TODO all of the get_fresh functions should be unified
-pub(crate) fn make_ssa_again(facts: Vec<SSAFact>) -> Vec<SSAFact> {
+pub(crate) fn make_ssa_again(facts: Vec<NormFact>) -> Vec<NormFact> {
     let mut vars_used: HashSet<Symbol> = Default::default();
     let mut res = vec![];
     let mut var_counter = 0;
@@ -140,12 +144,12 @@ pub(crate) fn make_ssa_again(facts: Vec<SSAFact>) -> Vec<SSAFact> {
     };
     for fact in facts {
         match fact {
-            SSAFact::Assign(v, expr) => {
+            NormFact::Assign(v, expr) => {
                 if !vars_used.insert(v) {
-                    panic!("invalid assignment to SSA variable: {:?}", v);
+                    panic!("invalid assignment to Norm variable: {:?}", v);
                 }
                 match expr {
-                    SSAExpr::Call(f, children) => {
+                    NormExpr::Call(f, children) => {
                         let mut new_children = vec![];
                         let mut constraints = vec![];
                         for child in children {
@@ -153,25 +157,25 @@ pub(crate) fn make_ssa_again(facts: Vec<SSAFact>) -> Vec<SSAFact> {
                                 new_children.push(child);
                             } else {
                                 let fresh = get_fresh();
-                                constraints.push(SSAFact::ConstrainEq(fresh, child));
+                                constraints.push(NormFact::ConstrainEq(fresh, child));
                                 new_children.push(fresh);
                             }
                         }
-                        res.push(SSAFact::Assign(v, SSAExpr::Call(f, new_children)));
+                        res.push(NormFact::Assign(v, NormExpr::Call(f, new_children)));
                         res.extend(constraints);
                     }
                 }
             }
-            SSAFact::ConstrainEq(v, v2) => {
-                res.push(SSAFact::ConstrainEq(v, v2));
+            NormFact::ConstrainEq(v, v2) => {
+                res.push(NormFact::ConstrainEq(v, v2));
             }
-            SSAFact::AssignLit(v, l) => {
+            NormFact::AssignLit(v, l) => {
                 if vars_used.insert(v) {
-                    res.push(SSAFact::AssignLit(v, l));
+                    res.push(NormFact::AssignLit(v, l));
                 } else {
                     let fresh = get_fresh();
-                    res.push(SSAFact::AssignLit(fresh, l));
-                    res.push(SSAFact::ConstrainEq(fresh, v));
+                    res.push(NormFact::AssignLit(fresh, l));
+                    res.push(NormFact::ConstrainEq(fresh, v));
                 }
             }
         }
@@ -179,32 +183,32 @@ pub(crate) fn make_ssa_again(facts: Vec<SSAFact>) -> Vec<SSAFact> {
     res
 }
 
-pub(crate) fn assert_ssa_valid(facts: &Vec<SSAFact>, actions: &Vec<SSAAction>) -> bool {
+pub(crate) fn assert_ssa_valid(facts: &Vec<NormFact>, actions: &Vec<NormAction>) -> bool {
     //println!("assert_ssa_valid: {:?}", facts);
     let mut var_used: HashSet<Symbol> = Default::default();
     let mut var_used_constraints: HashSet<Symbol> = Default::default();
     for fact in facts {
         match fact {
-            SSAFact::Assign(v, expr) => {
+            NormFact::Assign(v, expr) => {
                 if !var_used.insert(*v) {
-                    panic!("invalid SSA variable: {:?}", v);
+                    panic!("invalid Norm variable: {:?}", v);
                 }
 
                 if !ssa_valid_expr(expr, &mut var_used) {
-                    panic!("invalid SSA fact: {:?}", expr);
+                    panic!("invalid Norm fact: {:?}", expr);
                 }
             }
-            SSAFact::ConstrainEq(v, v2) => {
+            NormFact::ConstrainEq(v, v2) => {
                 let b1 = var_used_constraints.insert(*v);
                 let b2 = var_used_constraints.insert(*v2);
                 // any constraints on variables are valid, but one needs to be defined
                 if !var_used.contains(v) && !var_used.contains(v2) && b1 && b2 {
-                    panic!("invalid SSA constraint: {:?} = {:?}", v, v2);
+                    panic!("invalid Norm constraint: {:?} = {:?}", v, v2);
                 }
             }
-            SSAFact::AssignLit(v, _) => {
+            NormFact::AssignLit(v, _) => {
                 if !var_used.insert(*v) {
-                    panic!("invalid SSA variable: {:?}", v);
+                    panic!("invalid Norm variable: {:?}", v);
                 }
             }
         }
@@ -215,10 +219,10 @@ pub(crate) fn assert_ssa_valid(facts: &Vec<SSAFact>, actions: &Vec<SSAAction>) -
     let mut fdefuse = |var, isdef| {
         if isdef {
             if !var_used.insert(var) {
-                panic!("invalid SSA variable: {:?}", var);
+                panic!("invalid Norm variable: {:?}", var);
             }
         } else if !var_used.contains(&var) {
-            panic!("invalid SSA variable: {:?}", var);
+            panic!("invalid Norm variable: {:?}", var);
         }
         var
     };
@@ -229,7 +233,7 @@ pub(crate) fn assert_ssa_valid(facts: &Vec<SSAFact>, actions: &Vec<SSAAction>) -
     true
 }
 
-fn flatten_equalities(equalities: Vec<(Symbol, Expr)>, get_fresh: &mut Fresh) -> Vec<SSAFact> {
+fn flatten_equalities(equalities: Vec<(Symbol, Expr)>, get_fresh: &mut Fresh) -> Vec<NormFact> {
     let mut res = vec![];
 
     let mut var_used = Default::default();
@@ -246,13 +250,13 @@ fn flatten_equalities(equalities: Vec<(Symbol, Expr)>, get_fresh: &mut Fresh) ->
         res.extend(constraints);
 
         var_used.insert(lhs);
-        res.push(SSAFact::ConstrainEq(lhs, result));
+        res.push(NormFact::ConstrainEq(lhs, result));
     }
 
     res
 }
 
-fn flatten_facts(facts: &Vec<Fact>, get_fresh: &mut Fresh) -> Vec<SSAFact> {
+fn flatten_facts(facts: &Vec<Fact>, get_fresh: &mut Fresh) -> Vec<NormFact> {
     let mut equalities = vec![];
     for fact in facts {
         match fact {
@@ -283,14 +287,14 @@ fn expr_to_flat_actions(
     assign: Symbol,
     expr: &Expr,
     get_fresh: &mut Fresh,
-    res: &mut Vec<SSAAction>,
+    res: &mut Vec<NormAction>,
 ) {
     match expr {
         Expr::Lit(l) => {
-            res.push(SSAAction::LetLit(assign, l.clone()));
+            res.push(NormAction::LetLit(assign, l.clone()));
         }
         Expr::Var(v) => {
-            res.push(SSAAction::LetVar(assign, v.clone()));
+            res.push(NormAction::LetVar(assign, v.clone()));
         }
         Expr::Call(f, children) => {
             let mut new_children = vec![];
@@ -299,16 +303,16 @@ fn expr_to_flat_actions(
                 expr_to_flat_actions(fresh, child, get_fresh, res);
                 new_children.push(fresh);
             }
-            res.push(SSAAction::Let(
+            res.push(NormAction::Let(
                 assign,
-                SSAExpr::Call(f.clone(), new_children),
+                NormExpr::Call(f.clone(), new_children),
             ));
         }
     }
 }
 
-fn flatten_actions(actions: &Vec<Action>, get_fresh: &mut Fresh) -> Vec<SSAAction> {
-    let mut add_expr = |expr: Expr, res: &mut Vec<SSAAction>| {
+fn flatten_actions(actions: &Vec<Action>, get_fresh: &mut Fresh) -> Vec<NormAction> {
+    let mut add_expr = |expr: Expr, res: &mut Vec<NormAction>| {
         let fresh = get_fresh();
         expr_to_flat_actions(fresh, &expr, get_fresh, res);
         fresh
@@ -320,10 +324,10 @@ fn flatten_actions(actions: &Vec<Action>, get_fresh: &mut Fresh) -> Vec<SSAActio
         match action {
             Action::Let(symbol, expr) => {
                 let added = add_expr(expr.clone(), &mut res);
-                res.push(SSAAction::LetVar(*symbol, added));
+                res.push(NormAction::LetVar(*symbol, added));
             }
             Action::Set(symbol, exprs, rhs) => {
-                let set = SSAAction::Set(
+                let set = NormAction::Set(
                     *symbol,
                     exprs
                         .clone()
@@ -335,7 +339,7 @@ fn flatten_actions(actions: &Vec<Action>, get_fresh: &mut Fresh) -> Vec<SSAActio
                 res.push(set);
             }
             Action::Delete(symbol, exprs) => {
-                let del = SSAAction::Delete(
+                let del = NormAction::Delete(
                     *symbol,
                     exprs
                         .clone()
@@ -346,14 +350,14 @@ fn flatten_actions(actions: &Vec<Action>, get_fresh: &mut Fresh) -> Vec<SSAActio
                 res.push(del);
             }
             Action::Union(lhs, rhs) => {
-                let un = SSAAction::Union(
+                let un = NormAction::Union(
                     add_expr(lhs.clone(), &mut res),
                     add_expr(rhs.clone(), &mut res),
                 );
                 res.push(un);
             }
             Action::Panic(msg) => {
-                res.push(SSAAction::Panic(msg.clone()));
+                res.push(NormAction::Panic(msg.clone()));
             }
             Action::Expr(expr) => {
                 add_expr(expr.clone(), &mut res);
@@ -377,7 +381,7 @@ fn parenthesize_globals(rule: Rule, globals: &HashSet<Symbol>) -> Rule {
     })
 }
 
-fn flatten_rule(rule_in: Rule, globals: &HashSet<Symbol>) -> FlatRule {
+fn flatten_rule(rule_in: Rule, globals: &HashSet<Symbol>) -> NormRule {
     let rule = parenthesize_globals(rule_in, globals);
     let mut varcount = 0;
     let mut get_fresh = move || {
@@ -385,7 +389,7 @@ fn flatten_rule(rule_in: Rule, globals: &HashSet<Symbol>) -> FlatRule {
         Symbol::from(format!("fvar{}__", varcount))
     };
 
-    let res = FlatRule {
+    let res = NormRule {
         head: flatten_actions(&rule.head, &mut get_fresh),
         body: flatten_facts(&rule.body, &mut get_fresh),
     };
@@ -402,68 +406,77 @@ pub(crate) fn desugar_command(
     egraph: &EGraph,
     command: Command,
     desugar: &mut Desugar,
-) -> Result<Vec<FlatCommand>, Error> {
+) -> Result<Vec<NormCommand>, Error> {
     Ok(match command {
         Command::Function(fdecl) => {
-            vec![FlatCommand::Function(fdecl)]
+            vec![NormCommand::Function(fdecl)]
         }
         Command::Datatype { name, variants } => desugar_datatype(name, variants),
         Command::Rewrite(ruleset, rewrite) => desugar_rewrite(ruleset, &rewrite, &desugar.globals),
-        Command::BiRewrite(ruleset, rewrite) => desugar_birewrite(ruleset, &rewrite, &desugar.globals),
+        Command::BiRewrite(ruleset, rewrite) => {
+            desugar_birewrite(ruleset, &rewrite, &desugar.globals)
+        }
         Command::Include(file) => {
             let s = std::fs::read_to_string(&file)
                 .unwrap_or_else(|_| panic!("Failed to read file {file}"));
-            desugar_commands(egraph, 
-                egraph.parse_program(&s)?, desugar)?
+            desugar_commands(egraph, egraph.parse_program(&s)?, desugar)?
         }
-        Command::Rule(ruleset, rule) => vec![FlatCommand::FlatRule(
+        Command::Rule(ruleset, rule) => vec![NormCommand::NormRule(
             ruleset,
             flatten_rule(rule, &desugar.globals),
         )],
-        Command::Sort(sort, option) => vec![FlatCommand::Sort(sort, option)],
+        Command::Sort(sort, option) => vec![NormCommand::Sort(sort, option)],
         // TODO ignoring cost for now
-        Command::Define { name, expr, cost: _cost } => {
+        Command::Define {
+            name,
+            expr,
+            cost: _cost,
+        } => {
             let mut commands = vec![];
 
             let mut actions = vec![];
             expr_to_flat_actions(name, &expr, &mut desugar.get_fresh, &mut actions);
             for action in actions {
-                commands.push(FlatCommand::SSAAction(action));
+                commands.push(NormCommand::NormAction(action));
             }
             commands
         }
-        Command::AddRuleset(name) => vec![FlatCommand::AddRuleset(name)],
-        Command::Action(action) => {
-            flatten_actions(&vec![action], &mut desugar.get_fresh)
-                .into_iter()
-                .map(FlatCommand::SSAAction)
-                .collect()
-        }
-        Command::Run(run) => vec![FlatCommand::Run(run)],
-        Command::Calc(idents, exprs) => vec![FlatCommand::Calc(idents, exprs)],
+        Command::AddRuleset(name) => vec![NormCommand::AddRuleset(name)],
+        Command::Action(action) => flatten_actions(&vec![action], &mut desugar.get_fresh)
+            .into_iter()
+            .map(NormCommand::NormAction)
+            .collect(),
+        Command::Run(run) => vec![NormCommand::Run(run)],
+        Command::Calc(idents, exprs) => vec![NormCommand::Calc(idents, exprs)],
         Command::Extract { variants, e } => {
             let fresh = (desugar.get_fresh)();
             flatten_actions(&vec![Action::Let(fresh, e)], &mut desugar.get_fresh)
                 .into_iter()
-                .map(FlatCommand::SSAAction)
-                .chain(vec![FlatCommand::Extract{ variants, var: fresh}].into_iter())
+                .map(NormCommand::NormAction)
+                .chain(
+                    vec![NormCommand::Extract {
+                        variants,
+                        var: fresh,
+                    }]
+                    .into_iter(),
+                )
                 .collect()
         }
-        Command::Check(check) => vec![FlatCommand::Check(check)],
-        Command::Clear => vec![FlatCommand::Clear],
-        Command::Print(symbol, size) => vec![FlatCommand::Print(symbol, size)],
-        Command::PrintSize(symbol) => vec![FlatCommand::PrintSize(symbol)],
-        Command::Output{ file, exprs } => vec![FlatCommand::Output{ file, exprs }],
+        Command::Check(check) => vec![NormCommand::Check(check)],
+        Command::Clear => vec![NormCommand::Clear],
+        Command::Print(symbol, size) => vec![NormCommand::Print(symbol, size)],
+        Command::PrintSize(symbol) => vec![NormCommand::PrintSize(symbol)],
+        Command::Output { file, exprs } => vec![NormCommand::Output { file, exprs }],
         Command::Query(facts) => {
-            vec![FlatCommand::Query(facts)]
+            vec![NormCommand::Query(facts)]
         }
-        Command::Push(num) => vec![FlatCommand::Push(num)],
-        Command::Pop(num) => vec![FlatCommand::Pop(num)],
+        Command::Push(num) => vec![NormCommand::Push(num)],
+        Command::Pop(num) => vec![NormCommand::Pop(num)],
         Command::Fail(cmd) => {
             let mut desugared = desugar_command(egraph, *cmd, desugar)?;
 
             let last = desugared.pop();
-            desugared.push(FlatCommand::Fail(Box::new(last.unwrap())));
+            desugared.push(NormCommand::Fail(Box::new(last.unwrap())));
             desugared
         }
         Command::Input { name, file } => {
@@ -475,22 +488,26 @@ pub(crate) fn desugar_command(
 pub(crate) fn desugar_program(
     egraph: &EGraph,
     program: Vec<Command>,
-) -> Result<Vec<FlatCommand>, Error> {
+) -> Result<Vec<NormCommand>, Error> {
     let mut counter = 0;
-    desugar_commands(egraph, program, &mut Desugar {
-    globals: Default::default(),
-    get_fresh: Box::new(move || {
-        counter += 1;
-        Symbol::from(format!("var{}__", counter))
-    }) 
-})
+    desugar_commands(
+        egraph,
+        program,
+        &mut Desugar {
+            globals: Default::default(),
+            get_fresh: Box::new(move || {
+                counter += 1;
+                Symbol::from(format!("var{}__", counter))
+            }),
+        },
+    )
 }
 
 pub(crate) fn desugar_commands(
     egraph: &EGraph,
     program: Vec<Command>,
     desugar: &mut Desugar,
-) -> Result<Vec<FlatCommand>, Error> {
+) -> Result<Vec<NormCommand>, Error> {
     let mut res = vec![];
 
     for command in program {
@@ -499,19 +516,12 @@ pub(crate) fn desugar_commands(
 
         for newcommand in &desugared {
             match newcommand {
-                FlatCommand::SSAAction (
-                    SSAAction::Let(name, _)
-                ) |
-                FlatCommand::SSAAction (
-                    SSAAction::LetLit(name, _)
-                ) |
-                FlatCommand::SSAAction (
-                    SSAAction::LetVar(name, _)
-                ) 
-                => {
+                NormCommand::NormAction(NormAction::Let(name, _))
+                | NormCommand::NormAction(NormAction::LetLit(name, _))
+                | NormCommand::NormAction(NormAction::LetVar(name, _)) => {
                     desugar.globals.insert(*name);
                 }
-                FlatCommand::Function(fdecl) => {
+                NormCommand::Function(fdecl) => {
                     // add to globals if it has no arguments
                     if fdecl.schema.input.is_empty() {
                         desugar.globals.insert(fdecl.name);

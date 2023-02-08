@@ -40,62 +40,58 @@ impl Display for Id {
 }
 
 #[derive(Debug, Clone)]
-pub enum FlatCommand {
+pub enum NormCommand {
     Sort(Symbol, Option<(Symbol, Vec<Expr>)>),
     Function(FunctionDecl),
     AddRuleset(Symbol),
-    FlatRule(Symbol, FlatRule),
-    SSAAction(SSAAction),
+    NormRule(Symbol, NormRule),
+    NormAction(NormAction),
     Run(RunConfig),
     // TODO flatten calc, add proof support
     Calc(Vec<IdentSort>, Vec<Expr>),
-    Extract {
-        variants: usize,
-        var: Symbol,
-    },
+    Extract { variants: usize, var: Symbol },
     // TODO: this could just become an empty query
     Check(Fact),
     Clear,
     Print(Symbol, usize),
     PrintSize(Symbol),
-    Output {
-        file: String,
-        exprs: Vec<Expr>,
-    },
+    Output { file: String, exprs: Vec<Expr> },
     // TODO flatten query
     Query(Vec<Fact>),
     Push(usize),
     Pop(usize),
-    Fail(Box<FlatCommand>),
+    Fail(Box<NormCommand>),
     // TODO desugar
     Input { name: Symbol, file: String },
 }
 
-
-impl FlatCommand {
+impl NormCommand {
     pub fn to_command(&self) -> Command {
         match self {
-            FlatCommand::Sort(name, params) => Command::Sort(*name, params.clone()),
-            FlatCommand::Function(f) => Command::Function(f.clone()),
-            FlatCommand::AddRuleset(name) => Command::AddRuleset(*name),
-            FlatCommand::FlatRule(name, rule) => Command::Rule(*name, rule.to_rule()),
-            FlatCommand::SSAAction(action) => Command::Action(action.to_action()),
-            FlatCommand::Run(config) => Command::Run(config.clone()),
-            FlatCommand::Calc(args, exprs) => Command::Calc(args.clone(), exprs.clone()),
-            FlatCommand::Extract { variants, var } => Command::Extract {
+            NormCommand::Sort(name, params) => Command::Sort(*name, params.clone()),
+            NormCommand::Function(f) => Command::Function(f.clone()),
+            NormCommand::AddRuleset(name) => Command::AddRuleset(*name),
+            NormCommand::NormRule(name, rule) => Command::Rule(*name, rule.to_rule()),
+            NormCommand::NormAction(action) => Command::Action(action.to_action()),
+            NormCommand::Run(config) => Command::Run(config.clone()),
+            NormCommand::Calc(args, exprs) => Command::Calc(args.clone(), exprs.clone()),
+            NormCommand::Extract { variants, var } => Command::Extract {
                 variants: *variants,
                 e: Expr::Var(*var),
             },
-            FlatCommand::Check(fact) => Command::Query(vec![fact.clone()]),
-            FlatCommand::Clear => Command::Query(vec![]),
-            FlatCommand::Print(name, n) => Command::Print(*name, *n),
-            FlatCommand::PrintSize(name) => Command::PrintSize(*name),
-            FlatCommand::Output { file, exprs } => Command::Output{ file: file.to_string(), exprs: exprs.clone() },
-            FlatCommand::Query(facts) => Command::Query(facts.clone()),
-            FlatCommand::Push(n) => Command::Push(*n),
-            FlatCommand::Pop(n) => Command::Pop(*n),
-            FlatCommand::Fail(cmd) => Command::Fail(Box::new(cmd.to_command())),
-            FlatCommand::Input { name, file } => Command::Input {
+            NormCommand::Check(fact) => Command::Query(vec![fact.clone()]),
+            NormCommand::Clear => Command::Query(vec![]),
+            NormCommand::Print(name, n) => Command::Print(*name, *n),
+            NormCommand::PrintSize(name) => Command::PrintSize(*name),
+            NormCommand::Output { file, exprs } => Command::Output {
+                file: file.to_string(),
+                exprs: exprs.clone(),
+            },
+            NormCommand::Query(facts) => Command::Query(facts.clone()),
+            NormCommand::Push(n) => Command::Push(*n),
+            NormCommand::Pop(n) => Command::Pop(*n),
+            NormCommand::Fail(cmd) => Command::Fail(Box::new(cmd.to_command())),
+            NormCommand::Input { name, file } => Command::Input {
                 name: *name,
                 file: file.clone(),
             },
@@ -152,24 +148,13 @@ pub enum Command {
 impl Command {
     fn to_sexp(&self) -> Sexp {
         match self {
-            Command::Rewrite(name, rewrite) => {
-                rewrite.to_sexp(*name, false)
-            }
-            Command::BiRewrite(name, rewrite) => {
-                rewrite.to_sexp(*name, true)
-            }
-            Command::Datatype {
-                name,
-                variants,
-            } => {
-                Sexp::List(vec![
-                    Sexp::String("datatype".into()),
-                    Sexp::String(name.to_string()),
-                    Sexp::List(
-                        variants.iter().map(|v| v.to_sexp()).collect(),
-                    )
-                ])
-            }
+            Command::Rewrite(name, rewrite) => rewrite.to_sexp(*name, false),
+            Command::BiRewrite(name, rewrite) => rewrite.to_sexp(*name, true),
+            Command::Datatype { name, variants } => Sexp::List(vec![
+                Sexp::String("datatype".into()),
+                Sexp::String(name.to_string()),
+                Sexp::List(variants.iter().map(|v| v.to_sexp()).collect()),
+            ]),
             Command::Action(a) => a.to_sexp(),
             Command::Sort(name, None) => Sexp::List(vec![
                 Sexp::String("sort".into()),
@@ -280,7 +265,7 @@ impl Command {
     }
 }
 
-impl Display for FlatCommand {
+impl Display for NormCommand {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.to_command())
     }
@@ -344,11 +329,7 @@ impl Variant {
     pub(crate) fn to_sexp(&self) -> Sexp {
         let mut res = vec![Sexp::String(self.name.to_string())];
         if !self.types.is_empty() {
-            res.extend(
-                self.types
-                    .iter()
-                    .map(|s| Sexp::String(s.to_string()))
-            );
+            res.extend(self.types.iter().map(|s| Sexp::String(s.to_string())));
         }
         if let Some(cost) = self.cost {
             res.push(Sexp::String(":cost".into()));
@@ -441,20 +422,20 @@ pub enum Fact {
 }
 
 #[derive(Clone, Debug)]
-pub enum SSAFact {
-    Assign(Symbol, SSAExpr),
+pub enum NormFact {
+    Assign(Symbol, NormExpr),
     AssignLit(Symbol, Literal),
     ConstrainEq(Symbol, Symbol),
 }
 
-impl SSAFact {
+impl NormFact {
     pub fn to_fact(&self) -> Fact {
         match self {
-            SSAFact::Assign(symbol, expr) => Fact::Eq(vec![Expr::Var(*symbol), expr.to_expr()]),
-            SSAFact::ConstrainEq(lhs, rhs) => {
+            NormFact::Assign(symbol, expr) => Fact::Eq(vec![Expr::Var(*symbol), expr.to_expr()]),
+            NormFact::ConstrainEq(lhs, rhs) => {
                 Fact::Eq(vec![Expr::Var(lhs.clone()), Expr::Var(rhs.clone())])
             }
-            SSAFact::AssignLit(symbol, lit) => {
+            NormFact::AssignLit(symbol, lit) => {
                 Fact::Eq(vec![Expr::Var(*symbol), Expr::Lit(lit.clone())])
             }
         }
@@ -500,8 +481,8 @@ pub enum Action {
 }
 
 #[derive(Clone, Debug)]
-pub enum SSAAction {
-    Let(Symbol, SSAExpr),
+pub enum NormAction {
+    Let(Symbol, NormExpr),
     LetVar(Symbol, Symbol),
     LetLit(Symbol, Literal),
     Set(Symbol, Vec<Symbol>, Symbol),
@@ -510,47 +491,47 @@ pub enum SSAAction {
     Panic(String),
 }
 
-impl SSAAction {
+impl NormAction {
     pub fn to_action(&self) -> Action {
         match self {
-            SSAAction::Let(symbol, expr) => Action::Let(*symbol, expr.to_expr()),
-            SSAAction::LetVar(symbol, other) => Action::Let(*symbol, Expr::Var(other.clone())),
-            SSAAction::LetLit(symbol, lit) => Action::Let(*symbol, Expr::Lit(lit.clone())),
-            SSAAction::Set(symbol, args, other) => Action::Set(
+            NormAction::Let(symbol, expr) => Action::Let(*symbol, expr.to_expr()),
+            NormAction::LetVar(symbol, other) => Action::Let(*symbol, Expr::Var(other.clone())),
+            NormAction::LetLit(symbol, lit) => Action::Let(*symbol, Expr::Lit(lit.clone())),
+            NormAction::Set(symbol, args, other) => Action::Set(
                 *symbol,
                 args.iter().map(|s| Expr::Var(s.clone())).collect(),
                 Expr::Var(*other),
             ),
-            SSAAction::Delete(symbol, args) => {
+            NormAction::Delete(symbol, args) => {
                 Action::Delete(*symbol, args.iter().map(|s| Expr::Var(s.clone())).collect())
             }
-            SSAAction::Union(lhs, rhs) => {
+            NormAction::Union(lhs, rhs) => {
                 Action::Union(Expr::Var(lhs.clone()), Expr::Var(rhs.clone()))
             }
-            SSAAction::Panic(msg) => Action::Panic(msg.clone()),
+            NormAction::Panic(msg) => Action::Panic(msg.clone()),
         }
     }
 
     // fvar accepts a variable and if it is being defined (true) or used (false)
-    pub(crate) fn map_def_use(&self, fvar: &mut impl FnMut(Symbol, bool) -> Symbol) -> SSAAction {
+    pub(crate) fn map_def_use(&self, fvar: &mut impl FnMut(Symbol, bool) -> Symbol) -> NormAction {
         match self {
-            SSAAction::Let(symbol, expr) => {
-                SSAAction::Let(fvar(*symbol, true), expr.map_def_use(fvar))
+            NormAction::Let(symbol, expr) => {
+                NormAction::Let(fvar(*symbol, true), expr.map_def_use(fvar))
             }
-            SSAAction::LetVar(symbol, other) => {
-                SSAAction::LetVar(fvar(*symbol, true), fvar(*other, false))
+            NormAction::LetVar(symbol, other) => {
+                NormAction::LetVar(fvar(*symbol, true), fvar(*other, false))
             }
-            SSAAction::LetLit(symbol, lit) => SSAAction::LetLit(fvar(*symbol, true), lit.clone()),
-            SSAAction::Set(symbol, args, other) => SSAAction::Set(
+            NormAction::LetLit(symbol, lit) => NormAction::LetLit(fvar(*symbol, true), lit.clone()),
+            NormAction::Set(symbol, args, other) => NormAction::Set(
                 *symbol,
                 args.iter().map(|s| fvar(*s, false)).collect(),
                 fvar(*other, false),
             ),
-            SSAAction::Delete(symbol, args) => {
-                SSAAction::Delete(*symbol, args.iter().map(|s| fvar(*s, false)).collect())
+            NormAction::Delete(symbol, args) => {
+                NormAction::Delete(*symbol, args.iter().map(|s| fvar(*s, false)).collect())
             }
-            SSAAction::Union(lhs, rhs) => SSAAction::Union(fvar(*lhs, false), fvar(*rhs, false)),
-            SSAAction::Panic(msg) => SSAAction::Panic(msg.clone()),
+            NormAction::Union(lhs, rhs) => NormAction::Union(fvar(*lhs, false), fvar(*rhs, false)),
+            NormAction::Panic(msg) => NormAction::Panic(msg.clone()),
         }
     }
 }
@@ -628,7 +609,7 @@ impl Action {
     }
 }
 
-impl Display for SSAAction {
+impl Display for NormAction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.to_action())
     }
@@ -649,12 +630,12 @@ pub struct Rule {
 }
 
 #[derive(Clone, Debug)]
-pub struct FlatRule {
-    pub head: Vec<SSAAction>,
-    pub body: Vec<SSAFact>,
+pub struct NormRule {
+    pub head: Vec<NormAction>,
+    pub body: Vec<NormFact>,
 }
 
-impl FlatRule {
+impl NormRule {
     pub fn to_rule(&self) -> Rule {
         Rule {
             head: self.head.iter().map(|a| a.to_action()).collect(),
@@ -663,7 +644,7 @@ impl FlatRule {
     }
 }
 
-impl Display for FlatRule {
+impl Display for NormRule {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.to_rule())
     }
@@ -737,24 +718,23 @@ pub struct Rewrite {
     pub conditions: Vec<Fact>,
 }
 
-
 impl Rewrite {
     pub(crate) fn to_sexp(&self, ruleset: Symbol, is_bidirectional: bool) -> Sexp {
         let mut res = vec![
-            Sexp::String(
-                if is_bidirectional {
-                    "bidirectional-rewrite".into()
-                } else {
-                    "rewrite".into()
-                }
-                ),
+            Sexp::String(if is_bidirectional {
+                "bidirectional-rewrite".into()
+            } else {
+                "rewrite".into()
+            }),
             self.lhs.to_sexp(),
             self.rhs.to_sexp(),
         ];
 
         if !self.conditions.is_empty() {
             res.push(Sexp::String(":when".into()));
-            res.push(Sexp::List(self.conditions.iter().map(|f| f.to_sexp()).collect()));
+            res.push(Sexp::List(
+                self.conditions.iter().map(|f| f.to_sexp()).collect(),
+            ));
         }
 
         if ruleset != "".into() {

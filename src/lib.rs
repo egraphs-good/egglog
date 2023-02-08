@@ -16,7 +16,7 @@ use instant::{Duration, Instant};
 use sort::*;
 use thiserror::Error;
 
-use desugar::{desugar_program};
+use desugar::desugar_program;
 use proofs::add_proofs;
 
 use symbolic_expressions::Sexp;
@@ -797,7 +797,7 @@ impl EGraph {
         };
     }
 
-    fn run_command(&mut self, command: FlatCommand, should_run: bool) -> Result<String, Error> {
+    fn run_command(&mut self, command: NormCommand, should_run: bool) -> Result<String, Error> {
         let pre_rebuild = Instant::now();
         let rebuild_num = self.rebuild()?;
         if rebuild_num > 0 {
@@ -807,7 +807,7 @@ impl EGraph {
             );
         }
         Ok(match command {
-            FlatCommand::Sort(name, presort_and_args) => match presort_and_args {
+            NormCommand::Sort(name, presort_and_args) => match presort_and_args {
                 Some((presort, args)) => {
                     self.declare_sort(name, Some((presort, &args)))?;
                     format!(
@@ -820,20 +820,20 @@ impl EGraph {
                     format!("Declared sort {name}.")
                 }
             },
-            FlatCommand::Function(fdecl) => {
+            NormCommand::Function(fdecl) => {
                 self.declare_function(&fdecl)?;
                 format!("Declared function {}.", fdecl.name)
             }
-            FlatCommand::AddRuleset(name) => {
+            NormCommand::AddRuleset(name) => {
                 self.add_ruleset(name);
                 format!("Declared ruleset {name}.")
             }
-            FlatCommand::FlatRule(ruleset, rule) => {
+            NormCommand::NormRule(ruleset, rule) => {
                 let name = self.add_rule(rule.to_rule(), ruleset.into())?;
                 format!("Declared rule {name}.")
             }
-            
-            FlatCommand::Run(config) => {
+
+            NormCommand::Run(config) => {
                 let limit = config.limit;
                 if should_run {
                     let [st, at, rt] = self.run_rules(&config);
@@ -857,7 +857,7 @@ impl EGraph {
                     format!("Skipped run {limit}.")
                 }
             }
-            FlatCommand::Calc(idents, exprs) => {
+            NormCommand::Calc(idents, exprs) => {
                 self.calc(idents.clone(), exprs.clone())?;
                 format!(
                     "Calc proof succeeded: forall {}, {}",
@@ -865,7 +865,7 @@ impl EGraph {
                     ListDisplay(exprs, " = ")
                 )
             }
-            FlatCommand::Extract { var, variants } => {
+            NormCommand::Extract { var, variants } => {
                 let expr = Expr::Var(var);
                 if should_run {
                     // TODO typecheck
@@ -881,7 +881,7 @@ impl EGraph {
                     "Skipping extraction.".into()
                 }
             }
-            FlatCommand::Check(fact) => {
+            NormCommand::Check(fact) => {
                 if should_run {
                     self.check_fact(&fact, true)?;
                     "Checked.".into()
@@ -890,17 +890,17 @@ impl EGraph {
                 }
             }
             // TODO bandaid that treats all lets as define
-            FlatCommand::SSAAction(action) => {
+            NormCommand::NormAction(action) => {
                 if should_run {
                     match &action {
-                        SSAAction::Let(name, contents) => {
+                        NormAction::Let(name, contents) => {
                             // define with high cost
                             self.define(*name, contents.to_expr(), Some(10000))?;
                         }
-                        SSAAction::LetVar(var1, var2) => {
+                        NormAction::LetVar(var1, var2) => {
                             self.define(*var1, Expr::Var(*var2), Some(10000))?;
                         }
-                        SSAAction::LetLit(var, lit) => {
+                        NormAction::LetLit(var, lit) => {
                             self.define(*var, Expr::Lit(lit.clone()), Some(10000))?;
                         }
                         _ => {
@@ -912,7 +912,7 @@ impl EGraph {
                     format!("Skipping running {action}.")
                 }
             }
-            FlatCommand::Query(_q) => {
+            NormCommand::Query(_q) => {
                 // let qsexp = sexp::Sexp::List(
                 //     q.iter()
                 //         .map(|fact| sexp::parse(&fact.to_string()).unwrap())
@@ -937,37 +937,37 @@ impl EGraph {
                 // )
                 todo!()
             }
-            FlatCommand::Clear => {
+            NormCommand::Clear => {
                 self.clear();
                 "Cleared.".into()
             }
-            FlatCommand::Push(n) => {
+            NormCommand::Push(n) => {
                 (0..n).for_each(|_| self.push());
                 format!("Pushed {n} levels.")
             }
-            FlatCommand::Pop(n) => {
+            NormCommand::Pop(n) => {
                 for _ in 0..n {
                     self.pop()?;
                 }
                 format!("Popped {n} levels.")
             }
-            FlatCommand::Print(f, n) => {
+            NormCommand::Print(f, n) => {
                 let msg = self.print_function(f, n)?;
                 println!("{}", msg);
                 msg
             }
-            FlatCommand::PrintSize(f) => {
+            NormCommand::PrintSize(f) => {
                 let msg = self.print_size(f)?;
                 println!("{}", msg);
                 msg
             }
-            FlatCommand::Fail(c) => {
+            NormCommand::Fail(c) => {
                 if self.run_command(*c, should_run).is_ok() {
                     return Err(Error::ExpectFail);
                 }
                 "Command failed as expected.".into()
             }
-            FlatCommand::Input { name, file } => {
+            NormCommand::Input { name, file } => {
                 let func = self.functions.get_mut(&name).unwrap();
                 let is_unit = func.schema.output.name().as_str() == "Unit";
 
@@ -1020,7 +1020,7 @@ impl EGraph {
                 self.eval_actions(&actions)?;
                 format!("Read {} facts into {name} from '{file}'.", actions.len())
             }
-            FlatCommand::Output { file, exprs } => {
+            NormCommand::Output { file, exprs } => {
                 let mut filename = self.fact_directory.clone().unwrap_or_default();
                 filename.push(file.as_str());
                 // append to file
@@ -1071,14 +1071,14 @@ impl EGraph {
             self.eval_expr(b, None, true)?;
             let cond = Fact::Eq(vec![a.clone(), b.clone()]);
             self.run_command(
-                FlatCommand::Run(RunConfig {
+                NormCommand::Run(RunConfig {
                     ruleset: "".into(),
                     limit: 100000,
                     until: Some(cond.clone()),
                 }),
                 true,
             )?;
-            self.run_command(FlatCommand::Check(cond), true)?;
+            self.run_command(NormCommand::Check(cond), true)?;
             self.pop().unwrap();
             *depth -= 1;
         }
@@ -1165,7 +1165,7 @@ impl EGraph {
         Ok(sort)
     }
 
-    fn run_program(&mut self, program: Vec<FlatCommand>) -> Result<Vec<String>, Error> {
+    fn run_program(&mut self, program: Vec<NormCommand>) -> Result<Vec<String>, Error> {
         let mut msgs = vec![];
         let should_run = true;
 
@@ -1198,7 +1198,7 @@ impl EGraph {
         Ok(program)
     }
 
-    pub fn parse_desugar(&self, input: &str) -> Result<Vec<FlatCommand>, Error> {
+    pub fn parse_desugar(&self, input: &str) -> Result<Vec<NormCommand>, Error> {
         desugar_program(self, self.parse_program(input)?)
     }
 

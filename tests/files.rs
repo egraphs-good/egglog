@@ -27,8 +27,7 @@ fn run(path: &Path) -> datatest_stable::Result<()> {
         .collect::<Vec<String>>()
         .join("\n");
     //println!("{}", program_str);
-    // TODO re-enable this test
-    //test_program(&program_str, "Error after parse, to_string, and parse");
+    test_program(&program_str, "Error after parse, to_string, and parse");
 
     Ok(())
 }

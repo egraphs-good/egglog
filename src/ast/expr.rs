@@ -63,24 +63,24 @@ pub enum Expr {
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
-pub enum SSAExpr {
+pub enum NormExpr {
     Call(Symbol, Vec<Symbol>),
 }
 
-impl SSAExpr {
+impl NormExpr {
     pub fn to_expr(&self) -> Expr {
         match self {
-            SSAExpr::Call(op, args) => {
+            NormExpr::Call(op, args) => {
                 Expr::Call(*op, args.iter().map(|a| Expr::Var(*a)).collect())
             }
         }
     }
 
-    pub(crate) fn map_def_use(&self, fvar: &mut impl FnMut(Symbol, bool) -> Symbol) -> SSAExpr {
+    pub(crate) fn map_def_use(&self, fvar: &mut impl FnMut(Symbol, bool) -> Symbol) -> NormExpr {
         match self {
-            SSAExpr::Call(op, args) => {
+            NormExpr::Call(op, args) => {
                 let args = args.iter().map(|a| fvar(*a, false)).collect();
-                SSAExpr::Call(*op, args)
+                NormExpr::Call(*op, args)
             }
         }
     }
