@@ -10,6 +10,8 @@
 (datatype Proof__
   ;; proves that a term exists in the database
   (Original__ Ast__)
+  ;; proves two terms were set equal in the database
+  (OriginalEq__ Ast__ Ast__)
   ;; justifies the fact that a rule fired
   (Rule__ ProofList__ String)
   ;; using a rule justification,

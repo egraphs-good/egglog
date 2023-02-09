@@ -452,8 +452,9 @@ pub enum Fact {
 
 #[derive(Clone, Debug)]
 pub enum NormFact {
-    Assign(Symbol, NormExpr),
+    Assign(Symbol, NormExpr), // assign symbol to a tuple
     AssignLit(Symbol, Literal),
+    Compute(Symbol, NormExpr), // compute using a primative
     ConstrainEq(Symbol, Symbol),
 }
 
@@ -461,6 +462,7 @@ impl NormFact {
     pub fn to_fact(&self) -> Fact {
         match self {
             NormFact::Assign(symbol, expr) => Fact::Eq(vec![Expr::Var(*symbol), expr.to_expr()]),
+            NormFact::Compute(symbol, expr) => Fact::Eq(vec![Expr::Var(*symbol), expr.to_expr()]),
             NormFact::ConstrainEq(lhs, rhs) => Fact::Eq(vec![Expr::Var(*lhs), Expr::Var(*rhs)]),
             NormFact::AssignLit(symbol, lit) => {
                 Fact::Eq(vec![Expr::Var(*symbol), Expr::Lit(lit.clone())])

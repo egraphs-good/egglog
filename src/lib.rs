@@ -9,6 +9,7 @@ mod typecheck;
 mod unionfind;
 pub mod util;
 mod value;
+mod typechecking;
 
 use hashbrown::hash_map::Entry;
 use index::ColumnIndex;
@@ -44,13 +45,13 @@ use gj::*;
 use unionfind::*;
 use util::*;
 
-use crate::typecheck::TypeError;
+use crate::typechecking::TypeError;
 
 pub type Subst = IndexMap<Symbol, Value>;
 
 pub trait PrimitiveLike {
     fn name(&self) -> Symbol;
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort>;
+    fn accept(&self, types: &[Symbol]) -> Option<ArcSort>;
     fn apply(&self, values: &[Value]) -> Option<Value>;
     fn get_type(&self) -> (Vec<ArcSort>, ArcSort);
 }
@@ -106,7 +107,7 @@ impl PrimitiveLike for SimplePrimitive {
     fn name(&self) -> Symbol {
         self.name
     }
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
+    fn accept(&self, types: &[Symbol]) -> Option<ArcSort> {
         if self.input.len() != types.len() {
             return None;
         }
@@ -114,7 +115,7 @@ impl PrimitiveLike for SimplePrimitive {
         self.input
             .iter()
             .zip(types)
-            .all(|(a, b)| a.name() == b.name())
+            .all(|(a, b)| a.name() == *b)
             .then(|| self.output.clone())
     }
     fn apply(&self, values: &[Value]) -> Option<Value> {
@@ -131,7 +132,7 @@ pub struct EGraph {
     unionfind: UnionFind,
     presorts: HashMap<Symbol, PreSort>,
     sorts: HashMap<Symbol, Arc<dyn Sort>>,
-    primitives: HashMap<Symbol, Vec<Primitive>>,
+    pub(crate) primitives: HashMap<Symbol, Vec<Primitive>>,
     functions: HashMap<Symbol, Function>,
     rulesets: HashMap<Symbol, HashMap<Symbol, Rule>>,
     saturated: bool,

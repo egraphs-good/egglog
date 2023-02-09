@@ -8,10 +8,9 @@ pub(crate) fn literal_name(egraph: &EGraph, literal: &Literal) -> Symbol {
     egraph.infer_literal(literal).name()
 }
 
-pub(crate) fn make_get_fresh_norm(program: &Vec<NormCommand>) -> impl FnMut() -> Symbol {
-    make_get_fresh_from_str(&ListDisplay(program, "\n").to_string())
-}
 
+// Makes a function that gets fresh names by counting
+// the max number of underscores in the program
 pub(crate) fn make_get_fresh(program: &Vec<Command>) -> impl FnMut() -> Symbol {
     make_get_fresh_from_str(&ListDisplay(program, "\n").to_string())
 }
@@ -136,8 +135,16 @@ fn expr_to_ssa(
                     constraints,
                 ));
             }
+            // fresh variable for call
             let fresh = (desugar.get_fresh)();
-            res.push(NormFact::Assign(fresh, NormExpr::Call(*f, new_children)));
+            if desugar.egraph.primitives.contains_key(f) {
+                res.push(NormFact::Compute(fresh, NormExpr::Call(*f, new_children)));
+            } else {
+                res.push(NormFact::Assign(fresh, NormExpr::Call(*f, new_children)));
+            }
+            
+
+            // fresh variable for any use
             let fresh2 = (desugar.get_fresh)();
             res.push(NormFact::ConstrainEq(fresh2, fresh));
             fresh2
@@ -159,12 +166,11 @@ fn ssa_valid_expr(expr: &NormExpr, var_used: &mut HashSet<Symbol>) -> bool {
 }
 
 pub(crate) fn assert_ssa_valid(facts: &Vec<NormFact>, actions: &Vec<NormAction>) -> bool {
-    //println!("assert_ssa_valid: {:?}", facts);
     let mut var_used: HashSet<Symbol> = Default::default();
     let mut var_used_constraints: HashSet<Symbol> = Default::default();
     for fact in facts {
         match fact {
-            NormFact::Assign(v, expr) => {
+            NormFact::Assign(v, expr) | NormFact::Compute(v, expr)=> {
                 if !var_used.insert(*v) {
                     panic!("invalid Norm variable: {:?}", v);
                 }
@@ -274,9 +280,16 @@ fn expr_to_flat_actions(
         Expr::Call(f, children) => {
             let mut new_children = vec![];
             for child in children {
-                let fresh = (desugar.get_fresh)();
-                expr_to_flat_actions(fresh, child, desugar, res);
-                new_children.push(fresh);
+                match child {
+                    Expr::Var(v) => {
+                        new_children.push(*v);
+                    }
+                    _ => {
+                        let fresh = (desugar.get_fresh)();
+                        expr_to_flat_actions(fresh, child, desugar, res);
+                        new_children.push(fresh);
+                    }
+                }
             }
             res.push(NormAction::Let(assign, NormExpr::Call(*f, new_children)));
         }
@@ -370,13 +383,14 @@ fn flatten_rule(rule_in: Rule, desugar: &mut Desugar) -> NormRule {
     res
 }
 
-pub struct Desugar {
+pub struct Desugar<'a> {
     pub func_types: HashMap<Symbol, Schema>,
     pub let_types: HashMap<Symbol, Schema>,
     pub get_fresh: Box<Fresh>,
+    pub egraph: &'a EGraph,
 }
 
-impl Desugar {
+impl<'a> Desugar<'a> {
     pub fn get_type(&self, symbol: Symbol) -> Option<&Schema> {
         self.func_types
             .get(&symbol)
@@ -482,6 +496,7 @@ pub(crate) fn desugar_program(
         func_types: Default::default(),
         let_types: Default::default(),
         get_fresh,
+        egraph
     };
     let res = desugar_commands(egraph, program, &mut desugar)?;
     Ok((res, desugar))

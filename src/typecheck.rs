@@ -1,39 +1,7 @@
 use crate::*;
 use indexmap::map::Entry as IEntry;
-
+use typechecking::TypeError;
 use thiserror::Error;
-
-#[derive(Debug, Clone, Error)]
-pub enum TypeError {
-    #[error("Arity mismatch, expected {expected} args: {expr}")]
-    Arity { expr: Expr, expected: usize },
-    #[error(
-        "Type mismatch: expr = {expr}, expected = {}, actual = {}, reason: {reason}", 
-        .expected.name(), .actual.name(),
-    )]
-    Mismatch {
-        expr: Expr,
-        expected: ArcSort,
-        actual: ArcSort,
-        reason: String,
-    },
-    #[error("Tried to unify too many literals: {}", ListDisplay(.0, "\n"))]
-    TooManyLiterals(Vec<Literal>),
-    #[error("Unbound symbol {0}")]
-    Unbound(Symbol),
-    #[error("Undefined sort {0}")]
-    UndefinedSort(Symbol),
-    #[error("Function already bound {0}")]
-    FunctionAlreadyBound(Symbol),
-    #[error("Cannot type a variable as unit: {0}")]
-    UnitVar(Symbol),
-    #[error("Failed to infer a type for: {0}")]
-    InferenceFailure(Expr),
-    #[error("No matching primitive for: ({op} {})", ListDisplay(.inputs, " "))]
-    NoMatchingPrimitive { op: Symbol, inputs: Vec<Symbol> },
-    #[error("Variable {0} was already defined")]
-    AlreadyDefined(Symbol),
-}
 
 pub struct Context<'a> {
     pub egraph: &'a EGraph,
@@ -363,7 +331,7 @@ impl<'a> Context<'a> {
                     let (ids, arg_tys): (Vec<Id>, Vec<Option<ArcSort>>) =
                         args.iter().map(|arg| self.infer_query_expr(arg)).unzip();
 
-                    if let Some(arg_tys) = arg_tys.iter().cloned().collect::<Option<Vec<ArcSort>>>()
+                    if let Some(arg_tys) = arg_tys.iter().map(|sort| sort.as_ref().map(|inner| inner.name())).collect::<Option<Vec<Symbol>>>()
                     {
                         for prim in prims {
                             if let Some(output_type) = prim.accept(&arg_tys) {
@@ -373,7 +341,7 @@ impl<'a> Context<'a> {
                         }
                         self.errors.push(TypeError::NoMatchingPrimitive {
                             op: *sym,
-                            inputs: arg_tys.iter().map(|t| t.name()).collect(),
+                            inputs: arg_tys,
                         });
                     }
 
@@ -552,7 +520,7 @@ trait ExprChecker<'a> {
                     for arg in args {
                         let (t, ty) = self.infer_expr(arg)?;
                         ts.push(t);
-                        tys.push(ty);
+                        tys.push(ty.name());
                     }
 
                     for prim in prims {
@@ -564,7 +532,7 @@ trait ExprChecker<'a> {
 
                     Err(TypeError::NoMatchingPrimitive {
                         op: *sym,
-                        inputs: tys.iter().map(|ty| ty.name()).collect(),
+                        inputs: tys,
                     })
                 } else {
                     Err(TypeError::Unbound(*sym))
