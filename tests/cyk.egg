@@ -1,6 +1,5 @@
 (datatype Term (Term String))
 (datatype NonTerm (NonTerm String))
-
 (datatype Tree (NT String Tree Tree)
                   (T String String))
 
@@ -10,28 +9,9 @@
 (relation End (NonTerm String))
 
 
-; let P[n,n,r] be an array of booleans. Initialize all elements of P to false.
-; let back[n,n,r] be an array of lists of backpointing triples. 
-; Initialize all elements of back to the empty list.
-
-; for each s = 1 to n
-;     for each unit production Rv -> as
-;         set P[1,s,v] = true
-
-;; for each l = 2 to n -- Length of span
-;;     for each s = 1 to n-l+1 -- Start of span
-;;         for each p = 1 to l-1 -- Partition of span
-;;             for each production Ra -> Rb Rc
-;;                 if P[p,s,b] and P[l-p,s+p,c] then
-;;                     set P[l,s,a] = true, 
-;;                     append <p,b,c> to back[l,s,a]
-
-; [p ... s][l-p ... s+p]
-; [l         s]
 
 (relation P (i64 i64 NonTerm))
 (function B (i64 i64 NonTerm) Tree :cost 1000)
-; (relation B (i64 i64 NonTerm Tree))
 
 (rule ((End (NonTerm a) s)
        (= s (getString pos)))
