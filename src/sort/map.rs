@@ -137,8 +137,9 @@ impl PrimitiveLike for Ctor {
         assert!(values.is_empty());
         ValueMap::default().store(&self.map)
     }
-    fn arity(&self) -> usize {
-        0
+
+    fn get_type(&self) -> (Vec<ArcSort>, ArcSort) {
+        (vec![], self.map.clone())
     }
 }
 
@@ -170,8 +171,15 @@ impl PrimitiveLike for Insert {
         map.store(&self.map)
     }
 
-    fn arity(&self) -> usize {
-        3
+    fn get_type(&self) -> (Vec<ArcSort>, ArcSort) {
+        (
+            vec![
+                self.map.clone(),
+                self.map.key.clone(),
+                self.map.value.clone(),
+            ],
+            Arc::new(UnitSort::new("Unit".into())),
+        )
     }
 }
 
@@ -199,8 +207,11 @@ impl PrimitiveLike for Get {
         map.get(&values[1]).copied()
     }
 
-    fn arity(&self) -> usize {
-        2
+    fn get_type(&self) -> (Vec<ArcSort>, ArcSort) {
+        (
+            vec![self.map.clone(), self.map.key.clone()],
+            self.map.value.clone(),
+        )
     }
 }
 
@@ -233,8 +244,11 @@ impl PrimitiveLike for NotContains {
         }
     }
 
-    fn arity(&self) -> usize {
-        2
+    fn get_type(&self) -> (Vec<ArcSort>, ArcSort) {
+        (
+            vec![self.map.clone(), self.map.key.clone()],
+            self.unit.clone(),
+        )
     }
 }
 
@@ -267,8 +281,11 @@ impl PrimitiveLike for Contains {
         }
     }
 
-    fn arity(&self) -> usize {
-        2
+    fn get_type(&self) -> (Vec<ArcSort>, ArcSort) {
+        (
+            vec![self.map.clone(), self.map.key.clone()],
+            self.unit.clone(),
+        )
     }
 }
 
@@ -299,8 +316,12 @@ impl PrimitiveLike for Union {
         map1.store(&self.map)
     }
 
-    fn arity(&self) -> usize {
-        2
+    fn get_type(&self) -> (Vec<ArcSort>, ArcSort) {
+        let (k, v) = self.map.kv_names();
+        (
+            vec![self.map.clone(), self.map.clone(), self.map.clone()],
+            Arc::new(UnitSort::new("Unit".into())),
+        )
     }
 }
 
@@ -331,8 +352,11 @@ impl PrimitiveLike for Intersect {
         map1.store(&self.map)
     }
 
-    fn arity(&self) -> usize {
-        2
+    fn get_type(&self) -> (Vec<ArcSort>, ArcSort) {
+        (
+            vec![self.map.clone(), self.map.clone(), self.map.clone()],
+            Arc::new(UnitSort::new("Unit".into())),
+        )
     }
 }
 
@@ -361,8 +385,12 @@ impl PrimitiveLike for Remove {
         map.store(&self.map)
     }
 
-    fn arity(&self) -> usize {
-        2
+    fn get_type(&self) -> (Vec<ArcSort>, ArcSort) {
+        let (k, v) = self.map.kv_names();
+        (
+            vec![self.map.clone(), self.map.key.clone()],
+            self.map.clone(),
+        )
     }
 }
 
@@ -392,7 +420,11 @@ impl PrimitiveLike for Diff {
         map1.store(&self.map)
     }
 
-    fn arity(&self) -> usize {
-        2
+    fn get_type(&self) -> (Vec<ArcSort>, ArcSort) {
+        let (k, v) = self.map.kv_names();
+        (
+            vec![self.map.clone(), self.map.clone(), self.map.clone()],
+            Arc::new(UnitSort::new("Unit".into())),
+        )
     }
 }

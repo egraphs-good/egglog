@@ -16,7 +16,7 @@ use instant::{Duration, Instant};
 use sort::*;
 use thiserror::Error;
 
-use desugar::desugar_program;
+use desugar::{desugar_program, Desugar};
 use proofs::{add_proofs, should_add_proofs};
 
 use symbolic_expressions::Sexp;
@@ -52,7 +52,7 @@ pub trait PrimitiveLike {
     fn name(&self) -> Symbol;
     fn accept(&self, types: &[ArcSort]) -> Option<ArcSort>;
     fn apply(&self, values: &[Value]) -> Option<Value>;
-    fn arity(&self) -> usize;
+    fn get_type(&self) -> (Vec<ArcSort>, ArcSort);
 }
 
 #[derive(Clone)]
@@ -120,8 +120,9 @@ impl PrimitiveLike for SimplePrimitive {
     fn apply(&self, values: &[Value]) -> Option<Value> {
         (self.f)(values)
     }
-    fn arity(&self) -> usize {
-        self.input.len()
+
+    fn get_type(&self) -> (Vec<ArcSort>, ArcSort) {
+        (self.input.clone(), self.output.clone())
     }
 }
 
@@ -236,6 +237,7 @@ impl EGraph {
 
     pub fn add_arcsort(&mut self, sort: ArcSort) -> Result<(), Error> {
         let name = sort.name();
+
         match self.sorts.entry(name) {
             Entry::Occupied(_) => Err(Error::SortAlreadyBound(name)),
             Entry::Vacant(e) => {
@@ -1218,18 +1220,18 @@ impl EGraph {
         Ok(program)
     }
 
-    pub fn parse_desugar(&self, input: &str) -> Result<Vec<NormCommand>, Error> {
+    pub fn parse_desugar(&self, input: &str) -> Result<(Vec<NormCommand>, Desugar), Error> {
         desugar_program(self, self.parse_program(input)?)
     }
 
     pub fn parse_and_run_program(&mut self, input: &str) -> Result<Vec<String>, Error> {
-        let mut program = self.parse_desugar(input)?;
-        
+        let (mut program, desugar) = self.parse_desugar(input)?;
+
+        //println!("{}", ListDisplay(program.clone(), "\n"));
         if should_add_proofs(&program) {
-            program = add_proofs(self, program);
+            program = add_proofs(self, program, desugar);
         }
         println!("{}", ListDisplay(program.clone(), "\n"));
-
 
         self.run_program(program)
     }
@@ -1238,7 +1240,6 @@ impl EGraph {
         self.functions.values().map(|f| f.nodes.len()).sum()
     }
 }
-
 
 #[derive(Debug, Error)]
 pub enum Error {

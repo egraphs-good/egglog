@@ -4,6 +4,10 @@ use crate::*;
 
 pub(crate) type Fresh = dyn FnMut() -> Symbol;
 
+pub(crate) fn literal_name(egraph: &EGraph, literal: &Literal) -> Symbol {
+    egraph.infer_literal(literal).name()
+}
+
 pub(crate) fn make_get_fresh_norm(program: &Vec<NormCommand>) -> impl FnMut() -> Symbol {
     make_get_fresh_from_str(&ListDisplay(program, "\n").to_string())
 }
@@ -12,21 +16,20 @@ pub(crate) fn make_get_fresh(program: &Vec<Command>) -> impl FnMut() -> Symbol {
     make_get_fresh_from_str(&ListDisplay(program, "\n").to_string())
 }
 
-fn make_get_fresh_from_str(program_str: &str) -> impl FnMut() -> Symbol
-{
+fn make_get_fresh_from_str(program_str: &str) -> impl FnMut() -> Symbol {
     let mut max_underscores: usize = 0;
     let mut counter: i64 = -1;
     for char in program_str.chars() {
         if char == '_' {
             counter = max(counter, 0);
             counter += 1;
-            max_underscores = max(max_underscores,  counter as usize);
+            max_underscores = max(max_underscores, counter as usize);
         } else {
             counter = -1;
         }
     }
 
-    let underscores = "_".repeat(max_underscores+1);
+    let underscores = "_".repeat(max_underscores + 1);
     let mut fcounter = 0;
     move || {
         fcounter += 1;
@@ -53,11 +56,7 @@ fn desugar_datatype(name: Symbol, variants: Vec<Variant>) -> Vec<NormCommand> {
         .collect()
 }
 
-fn desugar_rewrite(
-    ruleset: Symbol,
-    rewrite: &Rewrite,
-    desugar: &mut Desugar,
-) -> Vec<NormCommand> {
+fn desugar_rewrite(ruleset: Symbol, rewrite: &Rewrite, desugar: &mut Desugar) -> Vec<NormCommand> {
     let var = Symbol::from("rewrite_var__");
     vec![NormCommand::NormRule(
         ruleset,
@@ -69,7 +68,7 @@ fn desugar_rewrite(
                     .collect(),
                 head: vec![Action::Union(Expr::Var(var), rewrite.rhs.clone())],
             },
-            desugar
+            desugar,
         ),
     )]
 }
@@ -341,21 +340,27 @@ fn flatten_actions(actions: &Vec<Action>, desugar: &mut Desugar) -> Vec<NormActi
     res
 }
 
+fn parenthesize_globals_expr(e: &Expr, desugar: &Desugar) -> Expr {
+    e.map(&mut |e| match e {
+        Expr::Var(v) if desugar.func_types.get(v).is_some() => Expr::Call(*v, vec![]),
+        _ => e.clone(),
+    })
+}
+
+fn parenthesize_globals_action(action: &Action, desugar: &Desugar) -> Action {
+    action.map_exprs(&mut |e| parenthesize_globals_expr(e, desugar))
+}
+
 // In egglog, you are allowed to refer to variables
 // (which desugar to functions with no args)
 // without parenthesis.
 // This fixes that so normal translation is easier.
-fn parenthesize_globals(rule: Rule, globals: &HashSet<Symbol>) -> Rule {
-    rule.map_exprs(&mut |e| {
-        e.map(&mut |e| match e {
-            Expr::Var(v) if globals.contains(v) => Expr::Call(*v, vec![]),
-            _ => e.clone(),
-        })
-    })
+fn parenthesize_globals(rule: Rule, desugar: &Desugar) -> Rule {
+    rule.map_exprs(&mut |e| parenthesize_globals_expr(e, desugar))
 }
 
 fn flatten_rule(rule_in: Rule, desugar: &mut Desugar) -> NormRule {
-    let rule = parenthesize_globals(rule_in, &desugar.globals);
+    let rule = parenthesize_globals(rule_in, &desugar);
 
     let res = NormRule {
         head: flatten_actions(&rule.head, desugar),
@@ -365,9 +370,18 @@ fn flatten_rule(rule_in: Rule, desugar: &mut Desugar) -> NormRule {
     res
 }
 
-pub(crate) struct Desugar {
-    pub(crate) globals: HashSet<Symbol>,
-    pub(crate) get_fresh: Box<Fresh>,
+pub struct Desugar {
+    pub func_types: HashMap<Symbol, Schema>,
+    pub let_types: HashMap<Symbol, Schema>,
+    pub get_fresh: Box<Fresh>,
+}
+
+impl Desugar {
+    pub fn get_type(&self, symbol: Symbol) -> Option<&Schema> {
+        self.func_types
+            .get(&symbol)
+            .or_else(|| self.let_types.get(&symbol))
+    }
 }
 
 pub(crate) fn desugar_command(
@@ -381,18 +395,15 @@ pub(crate) fn desugar_command(
         }
         Command::Datatype { name, variants } => desugar_datatype(name, variants),
         Command::Rewrite(ruleset, rewrite) => desugar_rewrite(ruleset, &rewrite, desugar),
-        Command::BiRewrite(ruleset, rewrite) => {
-            desugar_birewrite(ruleset, &rewrite, desugar)
-        }
+        Command::BiRewrite(ruleset, rewrite) => desugar_birewrite(ruleset, &rewrite, desugar),
         Command::Include(file) => {
             let s = std::fs::read_to_string(&file)
                 .unwrap_or_else(|_| panic!("Failed to read file {file}"));
             desugar_commands(egraph, egraph.parse_program(&s)?, desugar)?
         }
-        Command::Rule(ruleset, rule) => vec![NormCommand::NormRule(
-            ruleset,
-            flatten_rule(rule, desugar),
-        )],
+        Command::Rule(ruleset, rule) => {
+            vec![NormCommand::NormRule(ruleset, flatten_rule(rule, desugar))]
+        }
         Command::Sort(sort, option) => vec![NormCommand::Sort(sort, option)],
         // TODO ignoring cost for now
         Command::Define {
@@ -403,17 +414,25 @@ pub(crate) fn desugar_command(
             let mut commands = vec![];
 
             let mut actions = vec![];
-            expr_to_flat_actions(name, &expr, desugar, &mut actions);
+            expr_to_flat_actions(
+                name,
+                &parenthesize_globals_expr(&expr, desugar),
+                desugar,
+                &mut actions,
+            );
             for action in actions {
                 commands.push(NormCommand::NormAction(action));
             }
             commands
         }
         Command::AddRuleset(name) => vec![NormCommand::AddRuleset(name)],
-        Command::Action(action) => flatten_actions(&vec![action], desugar)
-            .into_iter()
-            .map(NormCommand::NormAction)
-            .collect(),
+        Command::Action(action) => flatten_actions(
+            &vec![parenthesize_globals_action(&action, desugar)],
+            desugar,
+        )
+        .into_iter()
+        .map(NormCommand::NormAction)
+        .collect(),
         Command::Run(run) => vec![NormCommand::Run(run)],
         Command::Simplify { expr, config } => vec![NormCommand::Simplify { expr, config }],
         Command::Calc(idents, exprs) => vec![NormCommand::Calc(idents, exprs)],
@@ -457,16 +476,15 @@ pub(crate) fn desugar_command(
 pub(crate) fn desugar_program(
     egraph: &EGraph,
     program: Vec<Command>,
-) -> Result<Vec<NormCommand>, Error> {
+) -> Result<(Vec<NormCommand>, Desugar), Error> {
     let get_fresh = Box::new(make_get_fresh(&program));
-    desugar_commands(
-        egraph,
-        program,
-        &mut Desugar {
-            globals: Default::default(),
-            get_fresh,
-        },
-    )
+    let mut desugar = Desugar {
+        func_types: Default::default(),
+        let_types: Default::default(),
+        get_fresh,
+    };
+    let res = desugar_commands(egraph, program, &mut desugar)?;
+    Ok((res, desugar))
 }
 
 pub(crate) fn desugar_commands(
@@ -481,16 +499,26 @@ pub(crate) fn desugar_commands(
 
         for newcommand in &desugared {
             match newcommand {
-                NormCommand::NormAction(NormAction::Let(name, _))
-                | NormCommand::NormAction(NormAction::LetLit(name, _))
-                | NormCommand::NormAction(NormAction::LetVar(name, _)) => {
-                    desugar.globals.insert(*name);
+                NormCommand::NormAction(NormAction::Let(name, NormExpr::Call(head, _body))) => {
+                    desugar
+                        .let_types
+                        .insert(*name, Schema::new(vec![], desugar.func_types[head].output));
+                }
+                NormCommand::NormAction(NormAction::LetLit(name, literal)) => {
+                    desugar
+                        .let_types
+                        .insert(*name, Schema::new(vec![], literal_name(egraph, literal)));
+                }
+                NormCommand::NormAction(NormAction::LetVar(name, rhs)) => {
+                    desugar
+                        .let_types
+                        .insert(*name, Schema::new(vec![], desugar.let_types[rhs].output));
                 }
                 NormCommand::Function(fdecl) => {
-                    // add to globals if it has no arguments
-                    if fdecl.schema.input.is_empty() {
-                        desugar.globals.insert(fdecl.name);
-                    }
+                    desugar.func_types.insert(
+                        fdecl.name,
+                        Schema::new(fdecl.schema.input.clone(), fdecl.schema.output),
+                    );
                 }
                 _ => (),
             }

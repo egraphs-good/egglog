@@ -1,6 +1,6 @@
 use crate::*;
 
-use crate::desugar::{Fresh, make_get_fresh_norm};
+use crate::desugar::{desugar_commands, literal_name, Desugar, Fresh};
 use symbolic_expressions::Sexp;
 
 fn proof_header(egraph: &EGraph) -> Vec<Command> {
@@ -8,22 +8,37 @@ fn proof_header(egraph: &EGraph) -> Vec<Command> {
     egraph.parse_program(str).unwrap()
 }
 
+fn literal_schema(egraph: &EGraph, literal: &Literal) -> Schema {
+    Schema {
+        input: vec![],
+        output: literal_name(egraph, literal),
+    }
+}
+
+fn type_to_symbols(types: (Vec<ArcSort>, ArcSort)) -> Schema {
+    let mut arg_types = vec![];
+    for arg_type in types.0 {
+        arg_types.push(arg_type.name());
+    }
+    Schema {
+        input: arg_types,
+        output: types.1.name(),
+    }
+}
+
 // make ast versions, but include arity for primitives
 // TODO I think we have to include type info for primitives too ):
-fn make_ast_version(egraph: &EGraph, name: Symbol, arity: usize) -> Symbol {
-    if let Some(_prims) = egraph.primitives.get(&name) {
-        Symbol::from(format!("Ast{}_{}__", name, arity))
-    } else {
-        Symbol::from(format!("Ast{}__", name))
-    }
+fn make_ast_version(egraph: &EGraph, name: Symbol, types: Schema) -> Symbol {
+    Symbol::from(format!(
+        "Ast{}_{}_{}__",
+        name,
+        ListDisplay(types.input, "_"),
+        types.output
+    ))
 }
 
 fn make_rep_version(name: &Symbol) -> Symbol {
     Symbol::from(format!("{}Rep__", name))
-}
-
-fn literal_name(egraph: &EGraph, literal: &Literal) -> Symbol {
-    egraph.infer_literal(literal).name()
 }
 
 fn setup_primitives(egraph: &EGraph) -> Vec<Command> {
@@ -58,24 +73,18 @@ fn make_rep_primitive_sorts(egraph: &EGraph) -> Vec<Command> {
 fn make_ast_primitives_funcs(egraph: &EGraph) -> Vec<Command> {
     let mut res = vec![];
     for (name, primitives) in &egraph.primitives {
-        let mut arities: Vec<usize> = primitives.iter()
-                                .map(|prim| prim.0.arity()).collect();
-        arities.sort();
-        arities.dedup();
-        for arity in arities {
-            res.push(Command::Function(
-                FunctionDecl {
-                    name: make_ast_version(egraph, *name, arity),
-                    schema: Schema {
-                        input: vec!["Ast__".into(); arity],
-                        output: "Ast__".into(),
-                    },
-                    merge: None,
-                    merge_action: vec![],
-                    default: None,
-                    cost: None,
-                }
-            ));
+        for prim in primitives {
+            res.push(Command::Function(FunctionDecl {
+                name: make_ast_version(egraph, *name, type_to_symbols(prim.get_type())),
+                schema: Schema {
+                    input: vec!["Ast__".into(); prim.get_type().0.len()],
+                    output: "Ast__".into(),
+                },
+                merge: None,
+                merge_action: vec![],
+                default: None,
+                cost: None,
+            }));
         }
     }
     res
@@ -87,7 +96,14 @@ fn make_ast_primitives_sorts(egraph: &EGraph) -> Vec<Command> {
         .iter()
         .map(|(name, _)| {
             Command::Function(FunctionDecl {
-                name: make_ast_version(egraph, *name, 1),
+                name: make_ast_version(
+                    egraph,
+                    *name,
+                    Schema {
+                        input: vec![],
+                        output: name.clone(),
+                    },
+                ),
                 schema: Schema {
                     input: vec![*name],
                     output: "Ast__".into(),
@@ -103,7 +119,7 @@ fn make_ast_primitives_sorts(egraph: &EGraph) -> Vec<Command> {
 
 fn make_ast_func(egraph: &EGraph, fdecl: &FunctionDecl) -> FunctionDecl {
     FunctionDecl {
-        name: make_ast_version(egraph, fdecl.name, fdecl.schema.input.len()),
+        name: make_ast_version(egraph, fdecl.name, fdecl.schema.clone()),
         schema: Schema {
             input: fdecl
                 .schema
@@ -180,7 +196,7 @@ struct ProofInfo {
 fn instrument_facts(
     egraph: &EGraph,
     body: &Vec<NormFact>,
-    get_fresh: &mut Fresh,
+    proof_state: &mut ProofState,
 ) -> (ProofInfo, Vec<Fact>) {
     let mut info: ProofInfo = Default::default();
     let mut facts: Vec<Fact> = body.iter().map(|f| f.to_fact()).collect();
@@ -189,21 +205,21 @@ fn instrument_facts(
         match fact {
             NormFact::AssignLit(lhs, rhs) => {
                 let literal_name = literal_name(egraph, rhs);
-                let rep = get_fresh();
-                let rep_trm = get_fresh();
-                let rep_prf = get_fresh();
-                facts.push(Fact::Eq(
-                    vec![Expr::Var(rep),
-                    Expr::Call(make_rep_version(&literal_name), vec![Expr::Var(*lhs)])]
-                ));
-                facts.push(Fact::Eq(
-                    vec![Expr::Var(rep_trm),
-                    Expr::Call("TrmOf__".into(), vec![Expr::Var(rep)])]
-                ));
+                let rep = proof_state.get_fresh();
+                let rep_trm = proof_state.get_fresh();
+                let rep_prf = proof_state.get_fresh();
+                facts.push(Fact::Eq(vec![
+                    Expr::Var(rep),
+                    Expr::Call(make_rep_version(&literal_name), vec![Expr::Var(*lhs)]),
+                ]));
+                facts.push(Fact::Eq(vec![
+                    Expr::Var(rep_trm),
+                    Expr::Call("TrmOf__".into(), vec![Expr::Var(rep)]),
+                ]));
                 facts.push(Fact::Eq(vec![
                     Expr::Var(rep_prf),
-                    Expr::Call("PrfOf__".into(), vec![Expr::Var(rep)])]
-                ));
+                    Expr::Call("PrfOf__".into(), vec![Expr::Var(rep)]),
+                ]));
 
                 assert!(info.var_term.insert(*lhs, rep_trm).is_none());
                 assert!(info.var_proof.insert(*lhs, rep_prf).is_none());
@@ -215,36 +231,44 @@ fn instrument_facts(
                 let body = match rhs {
                     NormExpr::Call(_, body) => body,
                 };
-                let rep = get_fresh();
-                let rep_trm = get_fresh();
-                let rep_prf = get_fresh();
+                let rep = proof_state.get_fresh();
+                let rep_trm = proof_state.get_fresh();
+                let rep_prf = proof_state.get_fresh();
                 facts.push(Fact::Eq(vec![
                     Expr::Var(rep),
-                    Expr::Call(make_rep_version(head), body.iter().map(|x| Expr::Var(*x)).collect())]
-                ));
+                    Expr::Call(
+                        make_rep_version(head),
+                        body.iter().map(|x| Expr::Var(*x)).collect(),
+                    ),
+                ]));
                 facts.push(Fact::Eq(vec![
                     Expr::Var(rep_trm),
-                    Expr::Call("TrmOf__".into(), vec![Expr::Var(rep)])]
-                ));
+                    Expr::Call("TrmOf__".into(), vec![Expr::Var(rep)]),
+                ]));
                 facts.push(Fact::Eq(vec![
                     Expr::Var(rep_prf),
-                    Expr::Call("PrfOf__".into(), vec![Expr::Var(rep)])]
-                ));
+                    Expr::Call("PrfOf__".into(), vec![Expr::Var(rep)]),
+                ]));
 
                 assert!(info.var_term.insert(*lhs, rep_trm).is_none());
                 assert!(info.var_proof.insert(*lhs, rep_prf).is_none());
 
                 for (i, child) in body.iter().enumerate() {
                     //println!("child: {:?}", child);
-                    let child_trm = get_fresh();
-                    let const_var = get_fresh();
-                    facts.push(Fact::Eq(vec![Expr::Var(const_var),
-                    Expr::Lit(Literal::Int(i as i64))]));
+                    let child_trm = proof_state.get_fresh();
+                    let const_var = proof_state.get_fresh();
+                    facts.push(Fact::Eq(vec![
+                        Expr::Var(const_var),
+                        Expr::Lit(Literal::Int(i as i64)),
+                    ]));
 
                     facts.push(Fact::Eq(vec![
                         Expr::Var(child_trm),
-                        Expr::Call("GetChild__".into(), vec![Expr::Var(rep_trm), Expr::Var(const_var)])]
-                    ));
+                        Expr::Call(
+                            "GetChild__".into(),
+                            vec![Expr::Var(rep_trm), Expr::Var(const_var)],
+                        ),
+                    ]));
                     assert!(info.var_term.insert(*child, child_trm).is_none());
                 }
             }
@@ -280,7 +304,7 @@ fn add_action_proof(
     info: &mut ProofInfo,
     action: &NormAction,
     res: &mut Vec<NormAction>,
-    get_fresh: &mut Fresh,
+    proof_state: &mut ProofState,
     egraph: &EGraph,
 ) {
     match action {
@@ -309,11 +333,15 @@ fn add_action_proof(
         }
         NormAction::Set(head, children, rhs) => {
             // add to the equality graph when we set things equal to each other
-            let newterm = get_fresh();
+            let newterm = proof_state.get_fresh();
             res.push(NormAction::Let(
                 newterm,
                 NormExpr::Call(
-                    make_ast_version(egraph, *head, children.len()),
+                    make_ast_version(
+                        egraph,
+                        *head,
+                        proof_state.desugar.func_types.get(head).unwrap().clone(),
+                    ),
                     children
                         .iter()
                         .map(|v| *info.var_term.get(v).unwrap())
@@ -332,12 +360,16 @@ fn add_action_proof(
             ));
         }
         NormAction::Let(lhs, NormExpr::Call(rhsname, rhsvars)) => {
-            let newterm = get_fresh();
+            let newterm = proof_state.get_fresh();
             // make the term for this variable
             res.push(NormAction::Let(
                 newterm,
                 NormExpr::Call(
-                    make_ast_version(egraph, *rhsname, rhsvars.len()),
+                    make_ast_version(
+                        egraph,
+                        *rhsname,
+                        proof_state.desugar.func_types.get(rhsname).unwrap().clone(),
+                    ),
                     rhsvars
                         .iter()
                         .map(|v| *info.var_term.get(v).unwrap())
@@ -346,13 +378,13 @@ fn add_action_proof(
             ));
             info.var_term.insert(*lhs, newterm);
 
-            let ruletrm = get_fresh();
+            let ruletrm = proof_state.get_fresh();
             res.push(NormAction::Let(
                 ruletrm,
                 NormExpr::Call("RuleTerm__".into(), vec![rule_proof, newterm]),
             ));
 
-            let trmprf = get_fresh();
+            let trmprf = proof_state.get_fresh();
             res.push(NormAction::Let(
                 trmprf,
                 NormExpr::Call("MakeTrmPrf__".into(), vec![newterm, ruletrm]),
@@ -366,24 +398,28 @@ fn add_action_proof(
         }
         // very similar to let case
         NormAction::LetLit(lhs, lit) => {
-            let newterm = get_fresh();
+            let newterm = proof_state.get_fresh();
             // make the term for this variable
             res.push(NormAction::Let(
                 newterm,
                 NormExpr::Call(
-                    make_ast_version(egraph, literal_name(egraph, lit), 1),
+                    make_ast_version(
+                        egraph,
+                        literal_name(egraph, lit),
+                        literal_schema(egraph, lit),
+                    ),
                     vec![*lhs],
                 ),
             ));
             info.var_term.insert(*lhs, newterm);
 
-            let ruletrm = get_fresh();
+            let ruletrm = proof_state.get_fresh();
             res.push(NormAction::Let(
                 ruletrm,
                 NormExpr::Call("RuleTerm__".into(), vec![rule_proof, newterm]),
             ));
 
-            let trmprf = get_fresh();
+            let trmprf = proof_state.get_fresh();
             res.push(NormAction::Let(
                 trmprf,
                 NormExpr::Call("MakeTrmPrf__".into(), vec![newterm, ruletrm]),
@@ -403,9 +439,9 @@ fn add_rule_proof(
     info: &ProofInfo,
     facts: &Vec<NormFact>,
     res: &mut Vec<NormAction>,
-    get_fresh: &mut Fresh,
+    proof_state: &mut ProofState,
 ) -> Symbol {
-    let mut current_proof = get_fresh();
+    let mut current_proof = proof_state.get_fresh();
     res.push(NormAction::Let(
         current_proof,
         NormExpr::Call("Null__".into(), vec![]),
@@ -414,7 +450,7 @@ fn add_rule_proof(
     for fact in facts {
         match fact {
             NormFact::Assign(lhs, _rhs) => {
-                let fresh = get_fresh();
+                let fresh = proof_state.get_fresh();
                 res.push(NormAction::Let(
                     fresh,
                     NormExpr::Call("Cons__".into(), vec![info.var_proof[lhs], current_proof]),
@@ -423,7 +459,7 @@ fn add_rule_proof(
             }
             // same as Assign case
             NormFact::AssignLit(lhs, _rhs) => {
-                let fresh = get_fresh();
+                let fresh = proof_state.get_fresh();
                 res.push(NormAction::Let(
                     fresh,
                     NormExpr::Call("Cons__".into(), vec![info.var_proof[lhs], current_proof]),
@@ -431,7 +467,7 @@ fn add_rule_proof(
                 current_proof = fresh;
             }
             NormFact::ConstrainEq(lhs, rhs) => {
-                let pfresh = get_fresh();
+                let pfresh = proof_state.get_fresh();
                 res.push(NormAction::Let(
                     pfresh,
                     NormExpr::Call(
@@ -443,9 +479,9 @@ fn add_rule_proof(
         }
     }
 
-    let name_const = get_fresh();
+    let name_const = proof_state.get_fresh();
     res.push(NormAction::LetLit(name_const, Literal::String(rule_name)));
-    let rule_proof = get_fresh();
+    let rule_proof = proof_state.get_fresh();
     res.push(NormAction::Let(
         rule_proof,
         NormExpr::Call("Rule__".into(), vec![current_proof, name_const]),
@@ -453,17 +489,16 @@ fn add_rule_proof(
     rule_proof
 }
 
-fn instrument_rule(egraph: &EGraph, rule: &NormRule, rule_name: Symbol) -> Rule {
-    let mut varcount = 0;
-    let mut get_fresh = move || {
-        varcount += 1;
-        Symbol::from(format!("pvar{}__", varcount))
-    };
-
-    let (mut info, facts) = instrument_facts(egraph, &rule.body, &mut get_fresh);
+fn instrument_rule(
+    egraph: &EGraph,
+    rule: &NormRule,
+    rule_name: Symbol,
+    proof_state: &mut ProofState,
+) -> Rule {
+    let (mut info, facts) = instrument_facts(egraph, &rule.body, proof_state);
 
     let mut actions = rule.head.clone();
-    let rule_proof = add_rule_proof(rule_name, &info, &rule.body, &mut actions, &mut get_fresh);
+    let rule_proof = add_rule_proof(rule_name, &info, &rule.body, &mut actions, proof_state);
 
     for action in &rule.head {
         add_action_proof(
@@ -471,7 +506,7 @@ fn instrument_rule(egraph: &EGraph, rule: &NormRule, rule_name: Symbol) -> Rule 
             &mut info,
             action,
             &mut actions,
-            &mut get_fresh,
+            proof_state,
             egraph,
         );
     }
@@ -506,7 +541,7 @@ fn make_getchild_rule(egraph: &EGraph, fdecl: &FunctionDecl) -> Command {
             body: vec![Fact::Eq(vec![
                 Expr::Var("ast__".into()),
                 Expr::Call(
-                    make_ast_version(egraph, fdecl.name, fdecl.schema.input.len()),
+                    make_ast_version(egraph, fdecl.name, fdecl.schema.clone()),
                     fdecl
                         .schema
                         .input
@@ -554,90 +589,136 @@ fn make_runner(config: &RunConfig) -> Vec<Command> {
 
 pub(crate) struct ProofState {
     pub(crate) global_var_ast: HashMap<Symbol, Symbol>,
-    pub(crate) get_fresh: Box<Fresh>,
+    pub(crate) desugar: Desugar,
 }
 
-fn proof_original_action(action: &NormAction, proof_state: &mut ProofState, egraph: &EGraph) -> Vec<Command> {
+impl ProofState {
+    pub(crate) fn get_fresh(&mut self) -> Symbol {
+        (self.desugar.get_fresh)()
+    }
+}
+
+fn proof_original_action(
+    action: &NormAction,
+    proof_state: &mut ProofState,
+    egraph: &EGraph,
+) -> Vec<Command> {
     match action {
         NormAction::Let(lhs, NormExpr::Call(head, body)) => {
-            let ast_var = (proof_state.get_fresh)();
-            proof_state.global_var_ast.insert(lhs.clone(), ast_var.clone());
+            let ast_var = proof_state.get_fresh();
+            proof_state.global_var_ast.insert(*lhs, ast_var);
+            let ast_action = format!(
+                "(let {} ({} {}))",
+                ast_var,
+                make_ast_version(egraph, *head, proof_state.desugar.func_types[head].clone()),
+                ListDisplay(body.iter().map(|e| proof_state.global_var_ast[e]), " ")
+            );
+
             vec![
+                Command::Action(egraph.action_parser.parse(&ast_action).unwrap()),
                 Command::Action(
-                    egraph.action_parser.parse(&format!("(let {} ({} {}))",
-                    ast_var,
-                    make_ast_version(egraph, *head, body.len()),
-                    ListDisplay(body.iter().map(|e| proof_state.global_var_ast[e]), " "))).unwrap()
-                ),
-                Command::Action(
-                    egraph.action_parser.parse(&format!("(set ({} {})
+                    egraph
+                        .action_parser
+                        .parse(&format!(
+                            "(set ({} {})
                          (MakeTrmPrf__ {} (Original__ {})))",
-                    make_rep_version(head),
-                    ListDisplay(body, " "),
-                    ast_var,
-                    ast_var
-                )).unwrap())
+                            make_rep_version(head),
+                            ListDisplay(body, " "),
+                            ast_var,
+                            ast_var
+                        ))
+                        .unwrap(),
+                ),
             ]
-        },
+        }
         NormAction::LetVar(var1, var2) => {
-            proof_state.global_var_ast.insert(var1.clone(), proof_state.global_var_ast[var2].clone());
+            proof_state
+                .global_var_ast
+                .insert(*var1, proof_state.global_var_ast[var2]);
             vec![]
-        },
+        }
         NormAction::LetLit(lhs, literal) => {
-            let ast_var = (proof_state.get_fresh)();
-            proof_state.global_var_ast.insert(lhs.clone(), ast_var.clone());
+            let ast_var = proof_state.get_fresh();
+            proof_state.global_var_ast.insert(*lhs, ast_var);
             vec![
                 Command::Action(
-                    egraph.action_parser.parse(&format!("(let {} ({} {}))", ast_var, make_ast_version(egraph, literal_name(egraph, literal), 1), literal)).unwrap()
+                    egraph
+                        .action_parser
+                        .parse(&format!(
+                            "(let {} ({} {}))",
+                            ast_var,
+                            make_ast_version(
+                                egraph,
+                                literal_name(egraph, literal),
+                                literal_schema(egraph, literal)
+                            ),
+                            literal
+                        ))
+                        .unwrap(),
                 ),
                 Command::Action(
-                    egraph.action_parser.parse(&format!("(set ({} {})
+                    egraph
+                        .action_parser
+                        .parse(&format!(
+                            "(set ({} {})
                          (MakeTrmPrf__ {} (Original__ {})))",
-                    make_rep_version(&literal_name(egraph, &literal)),
-                    literal,
-                    ast_var,
-                    ast_var
-                )).unwrap())
+                            make_rep_version(&literal_name(egraph, literal)),
+                            literal,
+                            ast_var,
+                            ast_var
+                        ))
+                        .unwrap(),
+                ),
             ]
         }
         NormAction::Set(head, body, var) => {
             let left_ast = Expr::Call(
-                make_ast_version(egraph, *head, body.len()),
-                body.iter().map(|e| Expr::Var(proof_state.global_var_ast[e])).collect(),
+                make_ast_version(egraph, *head, proof_state.desugar.func_types[head].clone()),
+                body.iter()
+                    .map(|e| Expr::Var(proof_state.global_var_ast[e]))
+                    .collect(),
             );
-            vec![
-                Command::Action(
-                    egraph.action_parser.parse(
-                        &format!("(set (EqGraph__ {} {}) (OriginalEq__ {} {}))",
-                    left_ast,
-                    proof_state.global_var_ast[var],
-                    left_ast,
-                    proof_state.global_var_ast[var]
-                )).unwrap())
-            ]
+            vec![Command::Action(
+                egraph
+                    .action_parser
+                    .parse(&format!(
+                        "(set (EqGraph__ {} {}) (OriginalEq__ {} {}))",
+                        left_ast,
+                        proof_state.global_var_ast[var],
+                        left_ast,
+                        proof_state.global_var_ast[var]
+                    ))
+                    .unwrap(),
+            )]
         }
         NormAction::Union(var1, var2) => {
-            vec![
-                Command::Action(
-                    egraph.action_parser.parse(
-                        &format!("(set (EqGraph__ {} {}) (OriginalEq__ {} {}))",
-                    proof_state.global_var_ast[var1],
-                    proof_state.global_var_ast[var2],
-                    proof_state.global_var_ast[var1],
-                    proof_state.global_var_ast[var2]
-                )).unwrap())
-            ]
+            vec![Command::Action(
+                egraph
+                    .action_parser
+                    .parse(&format!(
+                        "(set (EqGraph__ {} {}) (OriginalEq__ {} {}))",
+                        proof_state.global_var_ast[var1],
+                        proof_state.global_var_ast[var2],
+                        proof_state.global_var_ast[var1],
+                        proof_state.global_var_ast[var2]
+                    ))
+                    .unwrap(),
+            )]
         }
-        NormAction::Delete(..) | NormAction::Panic(..) => vec![]
+        NormAction::Delete(..) | NormAction::Panic(..) => vec![],
     }
 }
 
 // the egraph is the initial egraph with only default sorts
-pub(crate) fn add_proofs(egraph: &EGraph, program: Vec<NormCommand>) -> Vec<NormCommand> {
+pub(crate) fn add_proofs(
+    egraph: &EGraph,
+    program: Vec<NormCommand>,
+    desugar: Desugar,
+) -> Vec<NormCommand> {
     let mut res = proof_header(egraph);
     let mut proof_state = ProofState {
         global_var_ast: Default::default(),
-        get_fresh: Box::new(make_get_fresh_norm(&program)),
+        desugar,
     };
 
     res.extend(setup_primitives(egraph));
@@ -656,7 +737,7 @@ pub(crate) fn add_proofs(egraph: &EGraph, program: Vec<NormCommand>) -> Vec<Norm
             NormCommand::NormRule(ruleset, rule) => {
                 res.push(Command::Rule(
                     *ruleset,
-                    instrument_rule(egraph, rule, "TODOrulename".into()),
+                    instrument_rule(egraph, rule, "TODOrulename".into(), &mut proof_state),
                 ));
             }
             NormCommand::Run(config) => {
@@ -670,7 +751,13 @@ pub(crate) fn add_proofs(egraph: &EGraph, program: Vec<NormCommand>) -> Vec<Norm
         }
     }
 
-    desugar_program(egraph, res).unwrap()
+    let mut desugar = Desugar {
+        func_types: Default::default(),
+        let_types: Default::default(),
+        get_fresh: proof_state.desugar.get_fresh,
+    };
+
+    desugar_commands(egraph, res, &mut desugar).unwrap()
 }
 
 pub(crate) fn should_add_proofs(_program: &[NormCommand]) -> bool {

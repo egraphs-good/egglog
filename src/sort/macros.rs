@@ -20,7 +20,6 @@ macro_rules! count {
     ( $x:tt $($xs:tt)* ) => (1usize + count!($($xs)*));
 }
 
-
 #[macro_export]
 macro_rules! add_primitives {
     // ($egraph:expr, $($rest:tt)*) => {
@@ -73,11 +72,10 @@ macro_rules! add_primitives {
                     }
                 }
 
-                fn arity(&self) -> usize {
-                    count!($($param),*)-1
+                fn get_type(&self) -> (Vec<ArcSort>, ArcSort) {
+                    (vec![$(self.$param.clone()),*], self.__out.clone())
                 }
             }
-
             egraph.add_primitive($crate::Primitive::from(MyPrim {
                 $( $param: egraph.get_sort::<<$param_t as IntoSort>::Sort>(), )*
                 __out: egraph.get_sort::<<$ret as IntoSort>::Sort>(),

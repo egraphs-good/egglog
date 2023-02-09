@@ -382,6 +382,10 @@ impl Schema {
             Sexp::String(self.output.to_string()),
         ])
     }
+
+    pub fn new(input: Vec<Symbol>, output: Symbol) -> Self {
+        Self { input, output }
+    }
 }
 
 impl FunctionDecl {

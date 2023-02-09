@@ -59,7 +59,8 @@ impl PrimitiveLike for NotEqualPrimitive {
         (values[0] != values[1]).then(Value::unit)
     }
 
-    fn arity(&self) -> usize {
-        2
+    // TODO will this cause problems with proofs?
+    fn get_type(&self) -> (Vec<ArcSort>, ArcSort) {
+        (vec![], Arc::new(UnitSort::new("Unit".into())))
     }
 }
