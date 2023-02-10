@@ -225,7 +225,7 @@ impl TypeInfo {
     ) -> Result<(), TypeError> {
         match action {
             NormAction::Let(var, expr) => {
-                let expr_type = self.typecheck_expr(ctx, expr)?;
+                let expr_type = self.typecheck_expr_initialize(ctx, expr)?.output;
 
                 self.introduce_binding(ctx, *var, expr_type, is_global)?;
             }
@@ -270,12 +270,12 @@ impl TypeInfo {
     fn typecheck_fact(&mut self, ctx: CommandId, fact: &NormFact) -> Result<(), TypeError> {
         match fact {
             NormFact::Assign(var, expr) | NormFact::Compute(var, expr) => {
-                let expr_type = self.typecheck_expr(ctx, expr)?;
+                let expr_type = self.typecheck_expr_initialize(ctx, expr)?;
                 if let Some(existing) = self
                     .local_types
                     .get_mut(&ctx)
                     .unwrap()
-                    .insert(*var, expr_type)
+                    .insert(*var, expr_type.output)
                 {
                     return Err(TypeError::LocalAlreadyBound(*var, existing));
                 }
@@ -336,6 +336,7 @@ impl TypeInfo {
         ctx: CommandId,
         sym: Symbol,
         sym_type: ArcSort,
+        initialize: bool
     ) -> Result<(), TypeError> {
         if let Some(existing) = self
             .local_types
@@ -343,7 +344,7 @@ impl TypeInfo {
             .unwrap()
             .insert(sym, sym_type.clone())
         {
-            if existing.name() != sym_type.name() {
+            if initialize || existing.name() != sym_type.name() {
                 return Err(TypeError::LocalAlreadyBound(sym, existing));
             }
         }
@@ -374,7 +375,15 @@ impl TypeInfo {
         }
     }
 
-    fn typecheck_expr(&mut self, ctx: CommandId, expr: &NormExpr) -> Result<ArcSort, TypeError> {
+    fn typecheck_expr_initialize(&mut self, ctx: CommandId, expr: &NormExpr) ->  Result<FuncType, TypeError> {
+        self.typecheck_expr(ctx, expr, true)
+    }
+
+    pub(crate) fn lookup_expr(&mut self, ctx: CommandId, expr: &NormExpr) -> Result<FuncType, TypeError> {
+        self.typecheck_expr(ctx, expr, false)
+    }
+
+    fn typecheck_expr(&mut self, ctx: CommandId, expr: &NormExpr, initialize: bool) -> Result<FuncType, TypeError> {
         match expr {
             NormExpr::Call(head, body) => {
                 let child_types = if let Some(found) = self.func_types.get(head) {
@@ -385,10 +394,10 @@ impl TypeInfo {
                         .collect::<Result<Vec<_>, _>>()?
                 };
                 for (child_type, var) in child_types.iter().zip(body.iter()) {
-                    self.set_local_type(ctx, *var, child_type.clone())?;
+                    self.set_local_type(ctx, *var, child_type.clone(), initialize)?;
                 }
 
-                self.lookup_func(ctx, *head, child_types)
+                Ok(FuncType::new(child_types, self.lookup_func(ctx, *head, child_types)?))
             }
         }
     }

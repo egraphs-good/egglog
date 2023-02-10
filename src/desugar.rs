@@ -155,7 +155,7 @@ fn ssa_valid_expr(expr: &NormExpr, var_used: &mut HashSet<Symbol>, desugar: &Des
     match expr {
         NormExpr::Call(_, children) => {
             for child in children {
-                if !desugar.let_types.contains_key(child) && !var_used.insert(*child) {
+                if !desugar.egraph.type_info.global_types.contains_key(child) && !var_used.insert(*child) {
                     return false;
                 }
             }
@@ -164,70 +164,6 @@ fn ssa_valid_expr(expr: &NormExpr, var_used: &mut HashSet<Symbol>, desugar: &Des
     true
 }
 
-pub(crate) fn assert_ssa_valid(
-    facts: &Vec<NormFact>,
-    actions: &Vec<NormAction>,
-    desugar: &Desugar,
-) -> bool {
-    let mut var_used: HashSet<Symbol> = Default::default();
-    let mut var_used_constraints: HashSet<Symbol> = Default::default();
-    for fact in facts {
-        match fact {
-            NormFact::Assign(v, expr) | NormFact::Compute(v, expr) => {
-                if desugar.let_types.contains_key(v) {
-                    panic!("invalid Norm variable: {:?}", v);
-                }
-                if !var_used.insert(*v) {
-                    panic!("invalid Norm variable: {:?}", v);
-                }
-
-                if !ssa_valid_expr(expr, &mut var_used, desugar) {
-                    panic!("invalid Norm fact: {:?}", expr);
-                }
-            }
-            NormFact::ConstrainEq(v, v2) => {
-                let b1 = var_used_constraints.insert(*v);
-                let b2 = var_used_constraints.insert(*v2);
-                // any constraints on variables are valid, but one needs to be defined
-                if !desugar.let_types.contains_key(v)
-                    && !desugar.let_types.contains_key(v2)
-                    && !var_used.contains(v)
-                    && !var_used.contains(v2)
-                    && b1
-                    && b2
-                {
-                    panic!("invalid Norm constraint: {:?} = {:?}", v, v2);
-                }
-            }
-            NormFact::AssignLit(v, _) => {
-                if !var_used.insert(*v) {
-                    panic!("invalid Norm variable: {:?}", v);
-                }
-            }
-        }
-    }
-
-    var_used.extend(var_used_constraints);
-
-    let mut fdefuse = |var, isdef| {
-        if isdef {
-            if desugar.let_types.contains_key(&var) {
-                panic!("invalid Norm variable: {:?}", var);
-            }
-            if !var_used.insert(var) {
-                panic!("invalid Norm variable: {:?}", var);
-            }
-        } else if !var_used.contains(&var) && !desugar.let_types.contains_key(&var) {
-            panic!("invalid Norm variable: {:?}", var);
-        }
-        var
-    };
-    for action in actions {
-        action.map_def_use(&mut fdefuse);
-    }
-
-    true
-}
 
 fn flatten_equalities(equalities: Vec<(Symbol, Expr)>, desugar: &mut Desugar) -> Vec<NormFact> {
     let mut res = vec![];
@@ -379,19 +315,9 @@ fn flatten_rule(rule: Rule, desugar: &mut Desugar) -> NormRule {
 }
 
 pub struct Desugar<'a> {
-    pub func_types: HashMap<Symbol, Schema>,
-    pub let_types: HashMap<Symbol, Schema>,
     pub get_fresh: Box<Fresh>,
     pub get_new_id: Box<NewId>,
     pub egraph: &'a mut EGraph,
-}
-
-impl<'a> Desugar<'a> {
-    pub fn get_type(&self, symbol: Symbol) -> Option<&Schema> {
-        self.func_types
-            .get(&symbol)
-            .or_else(|| self.let_types.get(&symbol))
-    }
 }
 
 pub(crate) fn desugar_command(
@@ -503,8 +429,6 @@ pub(crate) fn desugar_program(
 ) -> Result<(Vec<NormCommand>, Desugar), Error> {
     let get_fresh = Box::new(make_get_fresh(&program));
     let mut desugar = Desugar {
-        func_types: Default::default(),
-        let_types: Default::default(),
         get_fresh,
         get_new_id: Box::new(make_get_new_id()),
         egraph,
