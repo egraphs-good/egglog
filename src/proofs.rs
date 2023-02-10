@@ -244,7 +244,6 @@ fn instrument_facts(body: &Vec<NormFact>, proof_state: &mut ProofState) -> (Proo
                 assert!(info.var_proof.insert(*lhs, rep_prf).is_none());
 
                 for (i, child) in body.iter().enumerate() {
-                    println!("child: {}", child);
                     let child_trm = proof_state.get_fresh();
                     let const_var = proof_state.get_fresh();
                     facts.push(Fact::Eq(vec![
@@ -319,7 +318,6 @@ fn add_action_proof(
     res: &mut Vec<NormAction>,
     proof_state: &mut ProofState,
 ) {
-    println!("Action: {action}");
     match action {
         NormAction::LetVar(var1, var2) => {
             // check if it's a global variable
@@ -505,8 +503,6 @@ fn add_rule_proof(
 fn instrument_rule(rule: &NormRule, rule_name: Symbol, proof_state: &mut ProofState) -> Rule {
     let (mut info, facts) = instrument_facts(&rule.body, proof_state);
 
-    println!("Instrumented facts: {}", ListDisplay(&facts, "\n"));
-    println!("Instrumented info: {:?}", info);
 
     let mut actions = rule.head.clone();
     let rule_proof = add_rule_proof(rule_name, &info, &rule.body, &mut actions, proof_state);
@@ -741,7 +737,6 @@ pub(crate) fn add_proofs(program: Vec<NormCommand>, desugar: Desugar) -> Vec<Nor
     res.extend(setup_primitives());
 
     for command in program {
-        println!("{command}");
         proof_state.current_ctx = command.metadata.id;
 
         // first, set up any rep functions that we need
