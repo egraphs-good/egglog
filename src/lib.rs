@@ -504,7 +504,6 @@ impl EGraph {
     pub fn run_schedule(&mut self, sched: &Schedule) -> bool {
         match sched {
             Schedule::Ruleset(ruleset_name) => {
-
                 self.saturated = true;
 
                 let mut rules = HashMap::default();
@@ -519,7 +518,6 @@ impl EGraph {
                     });
                     searched.push((name, all_values));
                 }
-                
 
                 for (name, all_values) in searched {
                     let rule = rules.get_mut(&name).unwrap();
@@ -531,35 +529,31 @@ impl EGraph {
                         let _ = self.run_actions(stack, values, &rule.program, true);
                     }
                 }
-
                 self.rebuild_nofail();
-                return !self.saturated;
+                !self.saturated
             },
             Schedule::Repeat(limit, sched) => {
                 let mut updated = false;
                 for _ in 0..*limit {
                     updated |= self.run_schedule(sched);
                 }
-                return updated;
+                updated
             },
             Schedule::Saturate(sched) => {
                 let mut updated = false;
-
                 let mut still_updating = true;
                 while still_updating {
                     still_updating = self.run_schedule(sched);
                     updated |= still_updating;
                 }
-
-                return updated;
+                updated
             },
             Schedule::Sequence(scheds) => {
                 let mut updated = false;
                 for sched in scheds {
                     updated |= self.run_schedule(sched);
                 }
-
-                return updated;
+                updated
             },
 
         }
@@ -894,9 +888,9 @@ impl EGraph {
             Command::RunSchedule(sched) => {
                 if should_run {
                     self.run_schedule(&sched);
-                    format!("Ran schedule")
+                    format!("Ran schedule {}.", sched)
                 } else {
-                    format!("Skipping schedule")
+                    "Skipping schedule.".to_string()
                 }
             }
             Command::Calc(idents, exprs) => {

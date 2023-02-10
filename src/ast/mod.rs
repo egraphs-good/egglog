@@ -402,7 +402,7 @@ impl Schedule {
             ]),
             Schedule::Repeat(size, sched) => Sexp::List(vec![
                 Sexp::String("repeat".into()),
-                Sexp::String(size.to_string().into()),
+                Sexp::String(size.to_string()),
                 sched.to_sexp(),
             ]),
             Schedule::Ruleset(sym) => Sexp::String(sym.to_string()),
@@ -411,9 +411,15 @@ impl Schedule {
                 for sched in scheds {
                     sexps.push(sched.to_sexp());
                 }
-                return Sexp::List(sexps);
+                Sexp::List(sexps)
             },
         }
+    }
+}
+
+impl Display for Schedule {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_sexp())
     }
 }
 
