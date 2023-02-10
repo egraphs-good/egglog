@@ -19,7 +19,7 @@
 (allgs A)
 
 ; if you remove :until, this will take a very long time
-(run 100000 :until (= A8 I))
+(run 10000 :until (= A8 I))
 (check (= A8 I))
 (check (!= B A))
 (check (!= I A))

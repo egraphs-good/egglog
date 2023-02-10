@@ -486,6 +486,17 @@ impl EGraph {
         let mut rebuild_time = Duration::ZERO;
 
         for i in 0..*limit {
+            if let Some(fact) = until {
+                if self.check_fact(fact, false).is_ok() {
+                    log::info!(
+                        "Breaking early at iteration {} because of fact {}!",
+                        i,
+                        fact
+                    );
+                    break;
+                }
+            }
+
             self.saturated = true;
             let [st, at] = self.step_rules(i, *ruleset);
             search_time += st;
@@ -501,16 +512,7 @@ impl EGraph {
                 log::info!("Breaking early at iteration {}!", i);
                 break;
             }
-            if let Some(fact) = until {
-                if self.check_fact(fact, false).is_ok() {
-                    log::info!(
-                        "Breaking early at iteration {} because of fact {}!",
-                        i,
-                        fact
-                    );
-                    break;
-                }
-            }
+            
             if self.num_tuples() > self.node_limit {
                 log::warn!(
                     "Node limit reached at iteration {}, {} nodes. Stopping!",
