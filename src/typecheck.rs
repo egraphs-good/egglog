@@ -81,6 +81,7 @@ impl<T> Atom<T> {
         })
     }
 }
+
 impl<'a> Context<'a> {
     pub fn new(egraph: &'a EGraph) -> Self {
         Self {

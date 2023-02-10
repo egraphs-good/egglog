@@ -244,7 +244,7 @@ fn instrument_facts(body: &Vec<NormFact>, proof_state: &mut ProofState) -> (Proo
                 assert!(info.var_proof.insert(*lhs, rep_prf).is_none());
 
                 for (i, child) in body.iter().enumerate() {
-                    //println!("child: {:?}", child);
+                    println!("child: {}", child);
                     let child_trm = proof_state.get_fresh();
                     let const_var = proof_state.get_fresh();
                     facts.push(Fact::Eq(vec![
@@ -262,7 +262,7 @@ fn instrument_facts(body: &Vec<NormFact>, proof_state: &mut ProofState) -> (Proo
                     assert!(info.var_term.insert(*child, child_trm).is_none());
                 }
             }
-            NormFact::ConstrainEq(lhs, rhs) => (),
+            NormFact::ConstrainEq(_lhs, _rhs) => (),
         }
     }
 
@@ -306,11 +306,10 @@ fn make_declare_proof(
 }
 
 fn get_var_term(var: Symbol, proof_state: &ProofState, proof_info: &ProofInfo) -> Symbol {
-    if proof_state.desugar.egraph.type_info.global_types.get(&var).is_some() {
-        *proof_state.global_var_ast.get(&var).unwrap()
-    } else {
-        *proof_info.var_term.get(&var).unwrap()
-    }
+    *proof_info.var_term.get(&var).unwrap_or_else(
+        || {
+            proof_state.global_var_ast.get(&var).unwrap()
+        })
 }
 
 fn add_action_proof(
@@ -320,6 +319,7 @@ fn add_action_proof(
     res: &mut Vec<NormAction>,
     proof_state: &mut ProofState,
 ) {
+    println!("Action: {action}");
     match action {
         NormAction::LetVar(var1, var2) => {
             // check if it's a global variable
@@ -504,6 +504,9 @@ fn add_rule_proof(
 
 fn instrument_rule(rule: &NormRule, rule_name: Symbol, proof_state: &mut ProofState) -> Rule {
     let (mut info, facts) = instrument_facts(&rule.body, proof_state);
+
+    println!("Instrumented facts: {}", ListDisplay(&facts, "\n"));
+    println!("Instrumented info: {:?}", info);
 
     let mut actions = rule.head.clone();
     let rule_proof = add_rule_proof(rule_name, &info, &rule.body, &mut actions, proof_state);
@@ -738,6 +741,7 @@ pub(crate) fn add_proofs(program: Vec<NormCommand>, desugar: Desugar) -> Vec<Nor
     res.extend(setup_primitives());
 
     for command in program {
+        println!("{command}");
         proof_state.current_ctx = command.metadata.id;
 
         // first, set up any rep functions that we need

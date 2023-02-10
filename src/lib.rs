@@ -1187,7 +1187,7 @@ impl EGraph {
         //println!("{}", ListDisplay(program.clone(), "\n"));
         if should_add_proofs(&program) {
             program = add_proofs(program, desugar);
-            println!("{}", ListDisplay(program.clone(), "\n"));
+            //println!("{}", ListDisplay(program.clone(), "\n"));
             self.type_info = TypeInfo::new();
             self.type_info.typecheck_program(&program)?;
         }
