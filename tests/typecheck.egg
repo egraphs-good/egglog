@@ -72,16 +72,16 @@
 
 ; lam x : unit . x
 (define id (Lam "x" TUnit (Var "x")))
-(define t-id (typeof (Nil) id))
+(define t-id (typeof Nil id))
 
 ; (e () id) = ()
 (define app-unit-id (App (App e MyUnit) id))
-(define t-app (typeof (Nil) app-unit-id))
+(define t-app (typeof Nil app-unit-id))
 
 (define free (Lam "x" TUnit (Var "y")))
-(define t-free-ill (typeof (Nil) free))
-(define t-free-1 (typeof (Cons "y" TUnit (Nil)) free))
-(define t-free-2 (typeof (Cons "y" (TArr (TArr TUnit TUnit) TUnit) (Nil)) free))
+(define t-free-ill (typeof Nil free))
+(define t-free-1 (typeof (Cons "y" TUnit Nil) free))
+(define t-free-2 (typeof (Cons "y" (TArr (TArr TUnit TUnit) TUnit) Nil) free))
 
 (run 15)
 
