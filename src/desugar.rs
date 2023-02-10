@@ -5,8 +5,8 @@ use crate::*;
 pub(crate) type Fresh = dyn FnMut() -> Symbol;
 pub(crate) type NewId = dyn FnMut() -> CommandId;
 
-pub(crate) fn literal_name(egraph: &EGraph, literal: &Literal) -> Symbol {
-    egraph.type_info.infer_literal(literal).name()
+pub(crate) fn literal_name(desugar: &Desugar, literal: &Literal) -> Symbol {
+    desugar.egraph.type_info.infer_literal(literal).name()
 }
 
 // Makes a function that gets fresh names by counting
@@ -387,7 +387,7 @@ pub struct Desugar<'a> {
     pub let_types: HashMap<Symbol, Schema>,
     pub get_fresh: Box<Fresh>,
     pub get_new_id: Box<NewId>,
-    pub egraph: &'a EGraph,
+    pub egraph: &'a mut EGraph,
 }
 
 impl<'a> Desugar<'a> {
@@ -499,7 +499,7 @@ fn make_get_new_id() -> impl FnMut() -> usize {
 }
 
 pub(crate) fn desugar_program(
-    egraph: &EGraph,
+    egraph: &mut EGraph,
     program: Vec<Command>,
 ) -> Result<(Vec<NormCommand>, Desugar), Error> {
     let get_fresh = Box::new(make_get_fresh(&program));

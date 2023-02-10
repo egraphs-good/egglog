@@ -85,13 +85,13 @@ impl TypeInfo {
     }
 
     pub(crate) fn typecheck_program(
+        &mut self,
         program: &Vec<NormCommand>,
-    ) -> Result<Self, TypeError> {
-        let mut type_info = TypeInfo::default();
+    ) -> Result<(), TypeError> {
         for command in program {
-            type_info.typecheck_command(command)?;
+            self.typecheck_command(command)?;
         }
-        Ok(type_info)
+        Ok(())
     }
 
     pub(crate) fn schema_to_functype(&self, schema: &Schema) -> Result<FuncType, TypeError> {
@@ -350,9 +350,18 @@ impl TypeInfo {
             })
     }
 
+    fn set_local_type(&mut self, ctx: CommandId, sym: Symbol, sym_type: ArcSort) -> Result<(), TypeError>{
+        if let Some(existing) = self.local_types.get_mut(&ctx).unwrap().insert(sym, sym_type.clone()) {
+            if existing.name() != sym_type.name() {
+                return Err(TypeError::LocalAlreadyBound(sym, existing));
+            }
+        }
+        Ok(())
+    }
+
     fn lookup_func(
         &self,
-        ctx: CommandId,
+        _ctx: CommandId,
         sym: Symbol,
         input_types: Vec<ArcSort>,
     ) -> Result<ArcSort, TypeError> {
@@ -372,16 +381,25 @@ impl TypeInfo {
     }
 
     fn typecheck_expr(
-        &self,
+        &mut self,
         ctx: CommandId,
         expr: &NormExpr,
     ) -> Result<ArcSort, TypeError> {
         match expr {
             NormExpr::Call(head, body) => {
-                let child_types = body
-                    .iter()
-                    .map(|var| self.lookup(ctx, *var))
-                    .collect::<Result<Vec<_>, _>>()?;
+                let child_types = 
+                if let Some(found) = self.func_types.get(head) {
+                    found.input.clone()
+                } else  {
+                    body
+                        .iter()
+                        .map(|var| self.lookup(ctx, *var))
+                        .collect::<Result<Vec<_>, _>>()?
+                };
+                for (child_type, var) in child_types.iter().zip(body.iter()) {
+                    self.set_local_type(ctx, *var, child_type.clone())?;
+                }
+
                 self.lookup_func(ctx, *head, child_types)
             }
         }

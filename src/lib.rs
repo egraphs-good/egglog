@@ -183,7 +183,7 @@ impl Default for EGraph {
             unionfind: Default::default(),
             functions: Default::default(),
             rulesets: Default::default(),
-            type_info: Default::default(),
+            type_info: TypeInfo::new(),
             parser: ast::parse::ProgramParser::new(),
             action_parser: ast::parse::ActionParser::new(),
             match_limit: 10_000_000,
@@ -1170,9 +1170,12 @@ impl EGraph {
         Ok(program)
     }
 
-    pub fn parse_desugar(&self, input: &str) -> Result<(Vec<NormCommand>, Desugar), Error> {
+    pub fn parse_desugar(&mut self, input: &str) -> Result<(Vec<NormCommand>, Desugar), Error> {
         let (desugared, desugar) = desugar_program(self, self.parse_program(input)?)?;
-        let _type_info = TypeInfo::typecheck_program(&desugared)?;
+        
+        println!("{}", ListDisplay(desugared.clone(), "\n"));
+        desugar.egraph.type_info.typecheck_program(&desugared)?;
+
         Ok((desugared, desugar))
     }
 
