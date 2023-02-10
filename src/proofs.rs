@@ -14,31 +14,47 @@ fn make_ast_version_prim(proof_state: &ProofState, name: Symbol) -> Symbol {
     Symbol::from(format!("Ast{}__", name))
 }
 
-fn make_ast_version(proof_state: &ProofState, expr: &NormExpr) -> Symbol {
+fn make_ast_version(proof_state: &mut ProofState, expr: &NormExpr) -> Symbol {
     let NormExpr::Call(name, _) = expr;
-    let types = proof_state.desugar.egraph.type_info.lookup_expr(proof_state.current_ctx, expr).unwrap();
-    Symbol::from(format!("Ast{}_{}__", name, ListDisplay(types.input.iter().map(|sort| sort.name()), "_"),))
+    let types = proof_state
+        .desugar
+        .egraph
+        .type_info
+        .lookup_expr(proof_state.current_ctx, expr)
+        .unwrap();
+    Symbol::from(format!(
+        "Ast{}_{}__",
+        name,
+        ListDisplay(types.input.iter().map(|sort| sort.name()), "_"),
+    ))
 }
 
-fn make_rep_version(proof_state: &ProofState, expr: &NormExpr) -> Symbol {
+fn make_rep_version(proof_state: &mut ProofState, expr: &NormExpr) -> Symbol {
     let NormExpr::Call(name, _) = expr;
-    let types = proof_state.desugar.egraph.type_info.lookup_expr(proof_state.current_ctx, expr).unwrap();
-    Symbol::from(format!("Rep{}_{}__", name, ListDisplay(types.input.iter().map(|sort| sort.name()), "_"),))
+    let types = proof_state
+        .desugar
+        .egraph
+        .type_info
+        .lookup_expr(proof_state.current_ctx, expr)
+        .unwrap();
+    Symbol::from(format!(
+        "Rep{}_{}__",
+        name,
+        ListDisplay(types.input.iter().map(|sort| sort.name()), "_"),
+    ))
 }
 
 // representatives for primitive values
 fn make_rep_version_prim(name: &Symbol) -> Symbol {
     Symbol::from(format!("{}Rep__", name))
 }
-/*
+
 fn setup_primitives(proof_state: &ProofState) -> Vec<Command> {
     let mut commands = vec![];
-    commands.extend(make_ast_primitives_funcs(proof_state));
     commands.extend(make_ast_primitives_sorts(proof_state));
     commands.extend(make_rep_primitive_sorts(proof_state));
-    commands.extend(make_rep_primitive_funcs(proof_state));
     commands
-}*/
+}
 
 fn prim_input_types(prim: &Primitive) -> Vec<Symbol> {
     prim.get_type()
@@ -69,7 +85,7 @@ fn make_rep_primitive_funcs(proof_state: &ProofState) -> Vec<Command> {
 
     res
 }*/
-/*
+
 fn make_rep_primitive_sorts(proof_state: &ProofState) -> Vec<Command> {
     proof_state
         .desugar
@@ -92,7 +108,7 @@ fn make_rep_primitive_sorts(proof_state: &ProofState) -> Vec<Command> {
             })
         })
         .collect()
-}*/
+}
 
 /*
 fn make_ast_primitives_funcs(proof_state: &ProofState) -> Vec<Command> {
@@ -137,14 +153,12 @@ fn make_ast_primitives_sorts(proof_state: &ProofState) -> Vec<Command> {
         })
         .collect()
 }
-/*
-fn make_ast_func(proof_state: &ProofState, fdecl: &FunctionDecl) -> FunctionDecl {
+fn make_ast_function(proof_state: &mut ProofState, expr: &NormExpr) -> FunctionDecl {
+    let NormExpr::Call(_head, body) = expr;
     FunctionDecl {
-        name: make_ast_version(proof_state, fdecl.name, fdecl.schema.input.clone()),
+        name: make_ast_version(proof_state, expr),
         schema: Schema {
-            input: fdecl
-                .schema
-                .input
+            input: body
                 .iter()
                 .map(|_sort| "Ast__".into())
                 .collect(),
@@ -155,15 +169,15 @@ fn make_ast_func(proof_state: &ProofState, fdecl: &FunctionDecl) -> FunctionDecl
         default: None,
         cost: None,
     }
-}*/
+}
 
-fn merge_action(egraph: &EGraph, fdecl: &FunctionDecl) -> Vec<Action> {
+fn merge_action(egraph: &EGraph, types: FuncType) -> Vec<Action> {
     let child1 = |i| Symbol::from(format!("c1_{}__", i));
     let child2 = |i| Symbol::from(format!("c2_{}__", i));
 
     let mut congr_prf = Sexp::String("Null__".to_string());
-    for i in 0..fdecl.schema.input.len() {
-        let current = fdecl.schema.input.len() - i - 1;
+    for i in 0..types.input.len() {
+        let current = types.input.len() - i - 1;
         congr_prf = Sexp::List(vec![
             Sexp::String("Cons__".to_string()),
             Sexp::List(vec![
@@ -182,8 +196,7 @@ fn merge_action(egraph: &EGraph, fdecl: &FunctionDecl) -> Vec<Action> {
     ]
     .into_iter()
     .chain(
-        fdecl
-            .schema
+        types
             .input
             .iter()
             .enumerate()
@@ -370,32 +383,33 @@ fn add_action_proof(
         NormAction::Delete(..) | NormAction::Panic(..) => (),
         NormAction::Union(var1, var2) => {
             res.push(NormAction::Set(
-                "EqGraph__".into(),
-                vec![
-                    *info.var_term.get(var1).unwrap(),
-                    *info.var_term.get(var2).unwrap(),
-                ],
+                NormExpr::Call(
+                    "EqGraph__".into(),
+                    vec![
+                        *info.var_term.get(var1).unwrap(),
+                        *info.var_term.get(var2).unwrap(),
+                    ],
+                ),
                 rule_proof,
             ));
             res.push(NormAction::Set(
-                "EqGraph__".into(),
-                vec![
-                    *info.var_term.get(var2).unwrap(),
-                    *info.var_term.get(var1).unwrap(),
-                ],
+                NormExpr::Call(
+                    "EqGraph__".into(),
+                    vec![
+                        *info.var_term.get(var2).unwrap(),
+                        *info.var_term.get(var1).unwrap(),
+                    ],
+                ),
                 rule_proof,
             ));
         }
-        NormAction::Set(head, children, rhs) => {
+        NormAction::Set(NormExpr::Call(head, children), rhs) => {
             // add to the equality graph when we set things equal to each other
             let newterm = proof_state.get_fresh();
             res.push(NormAction::Let(
                 newterm,
                 NormExpr::Call(
-                    make_ast_version(
-                        proof_state,
-                        &NormExpr::Call(*head, children.clone()),
-                    ),
+                    make_ast_version(proof_state, &NormExpr::Call(*head, children.clone())),
                     children
                         .iter()
                         .map(|v| *info.var_term.get(v).unwrap())
@@ -403,13 +417,17 @@ fn add_action_proof(
                 ),
             ));
             res.push(NormAction::Set(
-                "EqGraph__".into(),
-                vec![newterm, *info.var_term.get(rhs).unwrap()],
+                NormExpr::Call(
+                    "EqGraph__".into(),
+                    vec![newterm, *info.var_term.get(rhs).unwrap()],
+                ),
                 rule_proof,
             ));
             res.push(NormAction::Set(
-                "EqGraph__".into(),
-                vec![*info.var_term.get(rhs).unwrap(), newterm],
+                NormExpr::Call(
+                    "EqGraph__".into(),
+                    vec![*info.var_term.get(rhs).unwrap(), newterm],
+                ),
                 rule_proof,
             ));
         }
@@ -419,10 +437,7 @@ fn add_action_proof(
             res.push(NormAction::Let(
                 newterm,
                 NormExpr::Call(
-                    make_ast_version(
-                        proof_state,
-                        &NormExpr::Call(*rhsname, rhsvars.clone()),
-                    ),
+                    make_ast_version(proof_state, &NormExpr::Call(*rhsname, rhsvars.clone())),
                     rhsvars
                         .iter()
                         .map(|v| *info.var_term.get(v).unwrap())
@@ -444,8 +459,10 @@ fn add_action_proof(
             ));
 
             res.push(NormAction::Set(
-                make_rep_version(proof_state,  &NormExpr::Call(*rhsname, rhsvars.clone())),
-                rhsvars.clone(),
+                NormExpr::Call(
+                    make_rep_version(proof_state, &NormExpr::Call(*rhsname, rhsvars.clone())),
+                    rhsvars.clone(),
+                ),
                 trmprf,
             ));
         }
@@ -475,8 +492,10 @@ fn add_action_proof(
             ));
 
             res.push(NormAction::Set(
-                make_rep_version_prim(&literal_name(&proof_state.desugar, lit)),
-                vec![*lhs],
+                NormExpr::Call(
+                    make_rep_version_prim(&literal_name(&proof_state.desugar, lit)),
+                    vec![*lhs],
+                ),
                 trmprf,
             ));
         }
@@ -555,22 +574,23 @@ fn instrument_rule(rule: &NormRule, rule_name: Symbol, proof_state: &mut ProofSt
     };
     res
 }
-/*
-fn make_rep_func(proof_state: &ProofState, fdecl: &FunctionDecl) -> FunctionDecl {
+fn make_rep_function(proof_state: &mut ProofState, expr: &NormExpr) -> FunctionDecl {
+    let types = proof_state.desugar.egraph.type_info.lookup_expr(proof_state.current_ctx, expr).unwrap();
     FunctionDecl {
-        name: make_rep_version(proof_state, &fdecl.name, ),
+        name: make_rep_version(proof_state, expr),
         schema: Schema {
-            input: fdecl.schema.input.clone(),
+            input: types.input.iter().map(|sort| sort.name()).collect(),
             output: "TrmPrf__".into(),
         },
         merge: Some(Expr::Var("old".into())),
-        merge_action: merge_action(proof_state.desugar.egraph, fdecl),
+        merge_action: merge_action(proof_state.desugar.egraph, types),
         default: None,
         cost: None,
     }
-}*/
-/*
-fn make_getchild_rule(proof_state: &ProofState, fdecl: &FunctionDecl) -> Command {
+}
+
+fn make_getchild_rule(proof_state: &mut ProofState, expr: &NormExpr) -> Command {
+    let NormExpr::Call(_name, body) = expr;
     let getchild = |i| Symbol::from(format!("c{}__", i));
     Command::Rule(
         "proofrules__".into(),
@@ -578,19 +598,15 @@ fn make_getchild_rule(proof_state: &ProofState, fdecl: &FunctionDecl) -> Command
             body: vec![Fact::Eq(vec![
                 Expr::Var("ast__".into()),
                 Expr::Call(
-                    make_ast_version(proof_state, fdecl.name, fdecl.schema.input.clone()),
-                    fdecl
-                        .schema
-                        .input
+                    make_ast_version(proof_state, expr),
+                    body
                         .iter()
                         .enumerate()
                         .map(|(i, _)| Expr::Var(getchild(i)))
                         .collect(),
                 ),
             ])],
-            head: fdecl
-                .schema
-                .input
+            head: body
                 .iter()
                 .enumerate()
                 .map(|(i, _s)| {
@@ -603,7 +619,7 @@ fn make_getchild_rule(proof_state: &ProofState, fdecl: &FunctionDecl) -> Command
                 .collect(),
         },
     )
-}*/
+}
 
 fn make_runner(config: &RunConfig) -> Vec<Command> {
     let mut res = vec![];
@@ -626,6 +642,7 @@ fn make_runner(config: &RunConfig) -> Vec<Command> {
 
 pub(crate) struct ProofState<'a> {
     pub(crate) global_var_ast: HashMap<Symbol, Symbol>,
+    pub(crate) ast_funcs_created: HashSet<Symbol>,
     pub(crate) current_ctx: CommandId,
     pub(crate) desugar: Desugar<'a>,
 }
@@ -644,12 +661,10 @@ fn proof_original_action(action: &NormAction, proof_state: &mut ProofState) -> V
             let ast_action = format!(
                 "(let {} ({} {}))",
                 ast_var,
-                make_ast_version(
-                    &proof_state,
-                    &NormExpr::Call(*head, body.clone())
-                ),
+                make_ast_version(proof_state, &NormExpr::Call(*head, body.clone())),
                 ListDisplay(body.iter().map(|e| proof_state.global_var_ast[e]), " ")
             );
+            let rep = make_rep_version(proof_state, &NormExpr::Call(*head, body.clone()));
 
             vec![
                 Command::Action(
@@ -668,7 +683,7 @@ fn proof_original_action(action: &NormAction, proof_state: &mut ProofState) -> V
                         .parse(&format!(
                             "(set ({} {})
                          (MakeTrmPrf__ {} (Original__ {})))",
-                            make_rep_version(proof_state, &NormExpr::Call(*head, body.clone())),
+                            rep,
                             ListDisplay(body, " "),
                             ast_var,
                             ast_var
@@ -720,12 +735,9 @@ fn proof_original_action(action: &NormAction, proof_state: &mut ProofState) -> V
                 ),
             ]
         }
-        NormAction::Set(head, body, var) => {
+        NormAction::Set(NormExpr::Call(head, body), var) => {
             let left_ast = Expr::Call(
-                make_ast_version(
-                    &proof_state,
-                    &NormExpr::Call(*head, body.clone())
-                ),
+                make_ast_version(proof_state, &NormExpr::Call(*head, body.clone())),
                 body.iter()
                     .map(|e| Expr::Var(proof_state.global_var_ast[e]))
                     .collect(),
@@ -769,24 +781,34 @@ fn proof_original_action(action: &NormAction, proof_state: &mut ProofState) -> V
 pub(crate) fn add_proofs(program: Vec<NormCommand>, desugar: Desugar) -> Vec<NormCommand> {
     let mut res = proof_header(&desugar.egraph);
     let mut proof_state = ProofState {
+        ast_funcs_created: Default::default(),
         current_ctx: 0,
         global_var_ast: Default::default(),
         desugar,
     };
 
-    //res.extend(setup_primitives(&proof_state));
+    res.extend(setup_primitives(&proof_state));
 
     for command in program {
         proof_state.current_ctx = command.metadata.id;
+
+        // first, set up any rep functions that we need
+        command.command.map_exprs(&mut |expr| {
+            let ast_name = make_ast_version(&mut proof_state, expr);
+            if proof_state.ast_funcs_created.insert(ast_name) {
+                res.push(Command::Function(make_ast_function(&mut proof_state, expr)));
+                res.push(Command::Function(make_rep_function(&mut proof_state, expr)));
+                res.push(make_getchild_rule(&mut proof_state, expr));
+            }
+            expr.clone()
+        });
+
         match &command.command {
             NCommand::Sort(_name, _presort_and_args) => {
                 res.push(command.to_command());
             }
             NCommand::Function(fdecl) => {
                 res.push(command.to_command());
-                //res.push(Command::Function(make_ast_func(&proof_state, fdecl)));
-                //res.push(Command::Function(make_rep_func(&proof_state, fdecl)));
-                //res.push(make_getchild_rule(&proof_state, fdecl));
             }
             NCommand::NormRule(ruleset, rule) => {
                 res.push(Command::Rule(
@@ -809,5 +831,5 @@ pub(crate) fn add_proofs(program: Vec<NormCommand>, desugar: Desugar) -> Vec<Nor
 }
 
 pub(crate) fn should_add_proofs(_program: &[NormCommand]) -> bool {
-    false
+    true
 }

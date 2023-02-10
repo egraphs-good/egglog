@@ -137,6 +137,44 @@ impl NCommand {
             },
         }
     }
+
+    pub fn map_exprs(&self, f: &mut impl FnMut(&NormExpr) -> NormExpr) -> NCommand {
+        match self {
+            NCommand::Sort(name, params) => NCommand::Sort(*name, params.clone()),
+            NCommand::Function(f) => NCommand::Function(f.clone()),
+            NCommand::Declare(name, parent_type) => NCommand::Declare(*name, *parent_type),
+            NCommand::AddRuleset(name) => NCommand::AddRuleset(*name),
+            NCommand::NormRule(name, rule) => NCommand::NormRule(*name, rule.map_exprs(f)),
+            NCommand::NormAction(action) => NCommand::NormAction(action.map_exprs(f)),
+            NCommand::Run(config) => NCommand::Run(config.clone()),
+            NCommand::Simplify { expr, config } => NCommand::Simplify {
+                // TODO fix this
+                expr: expr.clone(),
+                config: config.clone(),
+            },
+            NCommand::Calc(args, exprs) => NCommand::Calc(args.clone(), exprs.clone()),
+            NCommand::Extract { variants, var } => NCommand::Extract {
+                variants: *variants,
+                var: *var,
+            },
+            NCommand::Check(fact) => NCommand::Check(fact.clone()),
+            NCommand::Clear => NCommand::Clear,
+            NCommand::Print(name, n) => NCommand::Print(*name, *n),
+            NCommand::PrintSize(name) => NCommand::PrintSize(*name),
+            NCommand::Output { file, exprs } => NCommand::Output {
+                file: file.to_string(),
+                exprs: exprs.clone(),
+            },
+            NCommand::Query(facts) => NCommand::Query(facts.clone()),
+            NCommand::Push(n) => NCommand::Push(*n),
+            NCommand::Pop(n) => NCommand::Pop(*n),
+            NCommand::Fail(cmd) => NCommand::Fail(Box::new(cmd.map_exprs(f))),
+            NCommand::Input { name, file } => NCommand::Input {
+                name: *name,
+                file: file.clone(),
+            },
+        }
+    }
 }
 
 // TODO command before and after desugaring should be different
@@ -516,6 +554,15 @@ impl NormFact {
             }
         }
     }
+
+    pub fn map_exprs(&self, f: &mut impl FnMut(&NormExpr) -> NormExpr) -> NormFact {
+        match self {
+            NormFact::Assign(symbol, expr) => NormFact::Assign(*symbol, f(expr)),
+            NormFact::Compute(symbol, expr) => NormFact::Compute(*symbol, f(expr)),
+            NormFact::ConstrainEq(lhs, rhs) => NormFact::ConstrainEq(*lhs, *rhs),
+            NormFact::AssignLit(symbol, lit) => NormFact::AssignLit(*symbol, lit.clone()),
+        }
+    }
 }
 
 impl Fact {
@@ -561,8 +608,8 @@ pub enum NormAction {
     Let(Symbol, NormExpr),
     LetVar(Symbol, Symbol),
     LetLit(Symbol, Literal),
-    Set(Symbol, Vec<Symbol>, Symbol),
-    Delete(Symbol, Vec<Symbol>),
+    Set(NormExpr, Symbol),
+    Delete(NormExpr),
     Union(Symbol, Symbol),
     Panic(String),
 }
@@ -573,16 +620,28 @@ impl NormAction {
             NormAction::Let(symbol, expr) => Action::Let(*symbol, expr.to_expr()),
             NormAction::LetVar(symbol, other) => Action::Let(*symbol, Expr::Var(*other)),
             NormAction::LetLit(symbol, lit) => Action::Let(*symbol, Expr::Lit(lit.clone())),
-            NormAction::Set(symbol, args, other) => Action::Set(
-                *symbol,
-                args.iter().map(|s| Expr::Var(*s)).collect(),
+            NormAction::Set(NormExpr::Call(head, body), other) => Action::Set(
+                *head,
+                body.iter().map(|s| Expr::Var(*s)).collect(),
                 Expr::Var(*other),
             ),
-            NormAction::Delete(symbol, args) => {
+            NormAction::Delete(NormExpr::Call(symbol, args)) => {
                 Action::Delete(*symbol, args.iter().map(|s| Expr::Var(*s)).collect())
             }
             NormAction::Union(lhs, rhs) => Action::Union(Expr::Var(*lhs), Expr::Var(*rhs)),
             NormAction::Panic(msg) => Action::Panic(msg.clone()),
+        }
+    }
+
+    pub fn map_exprs(&self, f: &mut impl FnMut(&NormExpr) -> NormExpr) -> NormAction {
+        match self {
+            NormAction::Let(symbol, expr) => NormAction::Let(*symbol, f(expr)),
+            NormAction::LetVar(symbol, other) => NormAction::LetVar(*symbol, *other),
+            NormAction::LetLit(symbol, lit) => NormAction::LetLit(*symbol, lit.clone()),
+            NormAction::Set(expr, other) => NormAction::Set(f(expr), *other),
+            NormAction::Delete(expr) => NormAction::Delete(f(expr)),
+            NormAction::Union(lhs, rhs) => NormAction::Union(*lhs, *rhs),
+            NormAction::Panic(msg) => NormAction::Panic(msg.clone()),
         }
     }
 
@@ -596,14 +655,10 @@ impl NormAction {
                 NormAction::LetVar(fvar(*symbol, true), fvar(*other, false))
             }
             NormAction::LetLit(symbol, lit) => NormAction::LetLit(fvar(*symbol, true), lit.clone()),
-            NormAction::Set(symbol, args, other) => NormAction::Set(
-                *symbol,
-                args.iter().map(|s| fvar(*s, false)).collect(),
-                fvar(*other, false),
-            ),
-            NormAction::Delete(symbol, args) => {
-                NormAction::Delete(*symbol, args.iter().map(|s| fvar(*s, false)).collect())
+            NormAction::Set(expr, other) => {
+                NormAction::Set(expr.map_def_use(fvar), fvar(*other, false))
             }
+            NormAction::Delete(expr) => NormAction::Delete(expr.map_def_use(fvar)),
             NormAction::Union(lhs, rhs) => NormAction::Union(fvar(*lhs, false), fvar(*rhs, false)),
             NormAction::Panic(msg) => NormAction::Panic(msg.clone()),
         }
@@ -715,6 +770,13 @@ impl NormRule {
         Rule {
             head: self.head.iter().map(|a| a.to_action()).collect(),
             body: self.body.iter().map(|f| f.to_fact()).collect(),
+        }
+    }
+
+    pub fn map_exprs(&self, f: &mut impl FnMut(&NormExpr) -> NormExpr) -> Self {
+        NormRule {
+            head: self.head.iter().map(|a| a.map_exprs(f)).collect(),
+            body: self.body.iter().map(|fac| fac.map_exprs(f)).collect(),
         }
     }
 }

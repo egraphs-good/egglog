@@ -155,7 +155,9 @@ fn ssa_valid_expr(expr: &NormExpr, var_used: &mut HashSet<Symbol>, desugar: &Des
     match expr {
         NormExpr::Call(_, children) => {
             for child in children {
-                if !desugar.egraph.type_info.global_types.contains_key(child) && !var_used.insert(*child) {
+                if !desugar.egraph.type_info.global_types.contains_key(child)
+                    && !var_used.insert(*child)
+                {
                     return false;
                 }
             }
@@ -163,7 +165,6 @@ fn ssa_valid_expr(expr: &NormExpr, var_used: &mut HashSet<Symbol>, desugar: &Des
     }
     true
 }
-
 
 fn flatten_equalities(equalities: Vec<(Symbol, Expr)>, desugar: &mut Desugar) -> Vec<NormFact> {
     let mut res = vec![];
@@ -264,25 +265,27 @@ fn flatten_actions(actions: &Vec<Action>, desugar: &mut Desugar) -> Vec<NormActi
             }
             Action::Set(symbol, exprs, rhs) => {
                 let set = NormAction::Set(
-                    *symbol,
-                    exprs
-                        .clone()
-                        .into_iter()
-                        .map(|ex| add_expr(ex, &mut res))
-                        .collect(),
+                    NormExpr::Call(
+                        *symbol,
+                        exprs
+                            .clone()
+                            .into_iter()
+                            .map(|ex| add_expr(ex, &mut res))
+                            .collect(),
+                    ),
                     add_expr(rhs.clone(), &mut res),
                 );
                 res.push(set);
             }
             Action::Delete(symbol, exprs) => {
-                let del = NormAction::Delete(
+                let del = NormAction::Delete(NormExpr::Call(
                     *symbol,
                     exprs
                         .clone()
                         .into_iter()
                         .map(|ex| add_expr(ex, &mut res))
                         .collect(),
-                );
+                ));
                 res.push(del);
             }
             Action::Union(lhs, rhs) => {
