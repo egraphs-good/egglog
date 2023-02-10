@@ -197,10 +197,8 @@
 ; (in_cnf 2 (Or Neg 36 (Or Neg 35 (Or Neg 34 (Or Neg 33 (Or Neg 32 (Or Neg 31 False)))))))
 ; (in_cnf 2 (Or Neg 42 (Or Neg 41 (Or Neg 40 (Or Neg 39 (Or Neg 38 (Or Neg 37 False)))))))
 
-; Example 3
-; http://logicrunch.it.uu.se:4096/~wv/minisat/
-(in_cnf 3 (Or Neg 1 (Or Pos 3 False)))
-(in_cnf 3 (Or Neg 2 (Or Neg 3 (Or Pos 1 False))))
+; (in_cnf 3 (Or Neg 1 (Or Pos 3 False)))
+; (in_cnf 3 (Or Neg 2 (Or Neg 3 (Or Pos 1 False))))
 
 (run 100)
 
