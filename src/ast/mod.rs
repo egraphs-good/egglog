@@ -144,9 +144,9 @@ impl Command {
 
                 Sexp::List(res)
             }
-            Command::RunSchedule(_sched) => Sexp::List(vec![
-                // TODO: sched to sexp
+            Command::RunSchedule(sched) => Sexp::List(vec![
                 Sexp::String("run-schedule".into()),
+                sched.to_sexp(),
             ]),
             Command::AddRuleset(name) => Sexp::List(vec![
                 Sexp::String("add-ruleset".into()),
@@ -391,6 +391,30 @@ pub enum Schedule {
     Repeat(usize, Box<Schedule>),
     Ruleset(Symbol),
     Sequence(Vec<Schedule>),
+}
+
+impl Schedule {
+    fn to_sexp(&self) -> Sexp {
+        match self {
+            Schedule::Saturate(sched) => Sexp::List(vec![
+                Sexp::String("saturate".into()),
+                sched.to_sexp(),
+            ]),
+            Schedule::Repeat(size, sched) => Sexp::List(vec![
+                Sexp::String("repeat".into()),
+                Sexp::String(size.to_string().into()),
+                sched.to_sexp(),
+            ]),
+            Schedule::Ruleset(sym) => Sexp::String(sym.to_string()),
+            Schedule::Sequence(scheds) => {
+                let mut sexps = vec![Sexp::String("seq".into())];
+                for sched in scheds {
+                    sexps.push(sched.to_sexp());
+                }
+                return Sexp::List(sexps);
+            },
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

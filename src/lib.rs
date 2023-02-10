@@ -508,7 +508,7 @@ impl EGraph {
                 self.saturated = true;
 
                 let mut rules = HashMap::default();
-                rules.extend(self.rulesets.get(ruleset_name).unwrap().clone()); 
+                rules.extend(self.rulesets.get(ruleset_name).unwrap().clone());
                 let mut searched = vec![];
                 for (&name, rule) in rules.iter_mut() {
                     let mut all_values = vec![];
