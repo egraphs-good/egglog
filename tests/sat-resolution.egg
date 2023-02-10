@@ -1,6 +1,6 @@
 (datatype sign (Pos) (Neg))
 
-; a clause is a list of disjoined, signed variables
+; clauses are a list of implicitly-disjoined signed variables
 ; must be sorted
 (datatype clause
     (False)  ; empty clause
@@ -15,7 +15,8 @@
 ; filter out a var
 (function filter (clause i64) clause)
 (rule ((= f (filter False x)))
-      ((set (filter False x) False)))
+      ((set (filter False x)
+            False)))
 (rule ((= f (filter (Or s x rest) x)))
       ((set (filter (Or s x rest) x)
             (filter rest x))))
