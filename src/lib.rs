@@ -194,7 +194,7 @@ impl Default for EGraph {
             seminaive: true,
         };
         egraph.rulesets.insert("".into(), Default::default());
-        
+
         egraph
     }
 }
@@ -217,8 +217,6 @@ impl EGraph {
             None => Err(Error::Pop),
         }
     }
-
-    
 
     pub fn union(&mut self, id1: Id, id2: Id, sort: Symbol) -> Id {
         self.unionfind.union(id1, id2, sort)
@@ -374,7 +372,10 @@ impl EGraph {
         let function = Function::new(self, decl, is_var)?;
         let old = self.functions.insert(decl.name, function);
         if old.is_some() {
-            panic!("Typechecking should have caught function already bound: {}", decl.name);
+            panic!(
+                "Typechecking should have caught function already bound: {}",
+                decl.name
+            );
         }
 
         Ok(())
@@ -1172,7 +1173,7 @@ impl EGraph {
 
     pub fn parse_desugar(&mut self, input: &str) -> Result<(Vec<NormCommand>, Desugar), Error> {
         let (desugared, desugar) = desugar_program(self, self.parse_program(input)?)?;
-        
+
         println!("{}", ListDisplay(desugared.clone(), "\n"));
         desugar.egraph.type_info.typecheck_program(&desugared)?;
 

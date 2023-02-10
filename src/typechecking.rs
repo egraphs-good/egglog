@@ -23,7 +23,6 @@ pub struct TypeInfo {
     pub local_types: HashMap<CommandId, HashMap<Symbol, ArcSort>>,
 }
 
-
 pub const UNIT_SYM: &str = "Unit";
 
 impl TypeInfo {
@@ -73,7 +72,7 @@ impl TypeInfo {
                 return sort;
             }
         }
-        
+
         // TODO handle if multiple match?
         // could handle by type id??
         panic!("Failed to lookup sort: {}", std::any::type_name::<S>());
@@ -114,21 +113,15 @@ impl TypeInfo {
         Ok(FuncType::new(input, output))
     }
 
-    pub(crate) fn typecheck_command(
-        &mut self,
-        command: &NormCommand,
-    ) -> Result<(), TypeError> {
+    pub(crate) fn typecheck_command(&mut self, command: &NormCommand) -> Result<(), TypeError> {
+        assert!(self.local_types.insert(command.metadata.id, Default::default()).is_none());
         match &command.command {
             NCommand::Function(fdecl) => {
                 if self.sorts.contains_key(&fdecl.name) {
                     return Err(TypeError::SortAlreadyBound(fdecl.name));
                 }
                 let ftype = self.schema_to_functype(&fdecl.schema)?;
-                if self
-                    .func_types
-                    .insert(fdecl.name, ftype)
-                    .is_some()
-                {
+                if self.func_types.insert(fdecl.name, ftype).is_some() {
                     return Err(TypeError::FunctionAlreadyBound(fdecl.name));
                 }
             }
@@ -151,6 +144,9 @@ impl TypeInfo {
             NCommand::Sort(sort, presort_and_args) => {
                 self.declare_sort(*sort, presort_and_args)?;
             }
+            NCommand::NormAction(action) => {
+                self.typecheck_action(command.metadata.id, action, true)?;
+            }
             _ => (),
         }
         Ok(())
@@ -166,7 +162,6 @@ impl TypeInfo {
             return Err(TypeError::FunctionAlreadyBound(name));
         }
 
-
         let sort = match presort_and_args {
             Some((presort, args)) => {
                 let mksort = self
@@ -180,22 +175,13 @@ impl TypeInfo {
         self.add_arcsort(sort)
     }
 
-    fn typecheck_rule(
-        &mut self,
-        ctx: CommandId,
-        rule: &NormRule,
-    ) -> Result<(), TypeError> {
-        assert!(self.local_types.insert(ctx, Default::default()).is_none());
+    fn typecheck_rule(&mut self, ctx: CommandId, rule: &NormRule) -> Result<(), TypeError> {
         self.typecheck_facts(ctx, &rule.body)?;
         self.typecheck_actions(ctx, &rule.head)?;
         Ok(())
     }
 
-    fn typecheck_facts(
-        &mut self,
-        ctx: CommandId,
-        facts: &Vec<NormFact>,
-    ) -> Result<(), TypeError> {
+    fn typecheck_facts(&mut self, ctx: CommandId, facts: &Vec<NormFact>) -> Result<(), TypeError> {
         for fact in facts {
             self.typecheck_fact(ctx, fact)?;
         }
@@ -208,45 +194,51 @@ impl TypeInfo {
         actions: &Vec<NormAction>,
     ) -> Result<(), TypeError> {
         for action in actions {
-            self.typecheck_action(ctx, action)?;
+            self.typecheck_action(ctx, action, false)?;
         }
         Ok(())
+    }
+
+    fn introduce_binding(
+        &mut self,
+        ctx: CommandId,
+        var: Symbol,
+        sort: Arc<dyn Sort>,
+        is_global: bool,
+    ) -> Result<(), TypeError> {
+        if is_global {
+            if let Some(existing) = self.global_types.insert(var, sort) {
+                return Err(TypeError::GlobalAlreadyBound(var));
+            }
+        } else if let Some(existing) = self.local_types.get_mut(&ctx).unwrap().insert(var, sort) {
+            return Err(TypeError::LocalAlreadyBound(var, existing));
+        }
+
+        return Ok(());
     }
 
     fn typecheck_action(
         &mut self,
         ctx: CommandId,
         action: &NormAction,
+        is_global: bool,
     ) -> Result<(), TypeError> {
         match action {
             NormAction::Let(var, expr) => {
                 let expr_type = self.typecheck_expr(ctx, expr)?;
-                if let Some(existing) = self
-                    .local_types
-                    .get_mut(&ctx)
-                    .unwrap()
-                    .insert(*var, expr_type)
-                {
-                    return Err(TypeError::LocalAlreadyBound(*var, existing));
-                }
+
+                self.introduce_binding(ctx, *var, expr_type, is_global)?;
             }
             NormAction::LetLit(var, lit) => {
                 let lit_type = self.infer_literal(lit);
-                if let Some(existing) = self
-                    .local_types
-                    .get_mut(&ctx)
-                    .unwrap()
-                    .insert(*var, lit_type)
-                {
-                    return Err(TypeError::LocalAlreadyBound(*var, existing));
-                }
+                self.introduce_binding(ctx, *var, lit_type, is_global)?;
             }
             NormAction::Delete(head, body) => {
                 let child_types = body
                     .iter()
                     .map(|var| self.lookup(ctx, *var))
                     .collect::<Result<Vec<_>, _>>()?;
-                let func_type = self.lookup_func(ctx, *head, child_types)?;
+                let _func_type = self.lookup_func(ctx, *head, child_types)?;
             }
             NormAction::Set(head, body, other) => {
                 let child_types = body
@@ -268,25 +260,14 @@ impl TypeInfo {
             }
             NormAction::LetVar(var1, var2) => {
                 let var2_type = self.lookup(ctx, *var2)?;
-                if let Some(existing) = self
-                    .local_types
-                    .get_mut(&ctx)
-                    .unwrap()
-                    .insert(*var1, var2_type)
-                {
-                    return Err(TypeError::LocalAlreadyBound(*var1, existing));
-                }
+                self.introduce_binding(ctx, *var1, var2_type, is_global)?;
             }
             NormAction::Panic(..) => (),
         }
         Ok(())
     }
 
-    fn typecheck_fact(
-        &mut self,
-        ctx: CommandId,
-        fact: &NormFact,
-    ) -> Result<(), TypeError> {
+    fn typecheck_fact(&mut self, ctx: CommandId, fact: &NormFact) -> Result<(), TypeError> {
         match fact {
             NormFact::Assign(var, expr) | NormFact::Compute(var, expr) => {
                 let expr_type = self.typecheck_expr(ctx, expr)?;
@@ -350,8 +331,18 @@ impl TypeInfo {
             })
     }
 
-    fn set_local_type(&mut self, ctx: CommandId, sym: Symbol, sym_type: ArcSort) -> Result<(), TypeError>{
-        if let Some(existing) = self.local_types.get_mut(&ctx).unwrap().insert(sym, sym_type.clone()) {
+    fn set_local_type(
+        &mut self,
+        ctx: CommandId,
+        sym: Symbol,
+        sym_type: ArcSort,
+    ) -> Result<(), TypeError> {
+        if let Some(existing) = self
+            .local_types
+            .get_mut(&ctx)
+            .unwrap()
+            .insert(sym, sym_type.clone())
+        {
             if existing.name() != sym_type.name() {
                 return Err(TypeError::LocalAlreadyBound(sym, existing));
             }
@@ -368,11 +359,14 @@ impl TypeInfo {
         if let Some(found) = self.func_types.get(&sym) {
             Ok(found.output.clone())
         } else {
-            for prim in self.primitives.get(&sym).unwrap() {
-                if let Some(return_type) = prim.accept(&input_types) {
-                    return Ok(return_type);
+            if let Some(prims) = self.primitives.get(&sym) {
+                for prim in prims {
+                    if let Some(return_type) = prim.accept(&input_types) {
+                        return Ok(return_type);
+                    }
                 }
             }
+
             Err(TypeError::NoMatchingPrimitive {
                 op: sym,
                 inputs: input_types.iter().map(|s| s.name()).collect(),
@@ -380,19 +374,13 @@ impl TypeInfo {
         }
     }
 
-    fn typecheck_expr(
-        &mut self,
-        ctx: CommandId,
-        expr: &NormExpr,
-    ) -> Result<ArcSort, TypeError> {
+    fn typecheck_expr(&mut self, ctx: CommandId, expr: &NormExpr) -> Result<ArcSort, TypeError> {
         match expr {
             NormExpr::Call(head, body) => {
-                let child_types = 
-                if let Some(found) = self.func_types.get(head) {
+                let child_types = if let Some(found) = self.func_types.get(head) {
                     found.input.clone()
-                } else  {
-                    body
-                        .iter()
+                } else {
+                    body.iter()
                         .map(|var| self.lookup(ctx, *var))
                         .collect::<Result<Vec<_>, _>>()?
                 };

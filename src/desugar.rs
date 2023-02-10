@@ -76,11 +76,7 @@ fn desugar_rewrite(ruleset: Symbol, rewrite: &Rewrite, desugar: &mut Desugar) ->
     )]
 }
 
-fn desugar_birewrite(
-    ruleset: Symbol,
-    rewrite: &Rewrite,
-    desugar: &mut Desugar,
-) -> Vec<NCommand> {
+fn desugar_birewrite(ruleset: Symbol, rewrite: &Rewrite, desugar: &mut Desugar) -> Vec<NCommand> {
     let rw2 = Rewrite {
         lhs: rewrite.rhs.clone(),
         rhs: rewrite.lhs.clone(),
@@ -413,7 +409,7 @@ pub(crate) fn desugar_command(
         Command::Include(file) => {
             let s = std::fs::read_to_string(&file)
                 .unwrap_or_else(|_| panic!("Failed to read file {file}"));
-            return desugar_commands(desugar.egraph.parse_program(&s)?, desugar)
+            return desugar_commands(desugar.egraph.parse_program(&s)?, desugar);
         }
         Command::Rule(ruleset, rule) => {
             vec![NCommand::NormRule(ruleset, flatten_rule(rule, desugar))]
@@ -472,21 +468,24 @@ pub(crate) fn desugar_command(
             let last = desugared.pop().unwrap();
             desugared.push(NormCommand {
                 metadata: last.metadata,
-                command: NCommand::Fail(Box::new(last.command))
-        });
-            return Ok(desugared)
+                command: NCommand::Fail(Box::new(last.command)),
+            });
+            return Ok(desugared);
         }
         Command::Input { .. } => {
             todo!("desugar input");
         }
     };
 
-    Ok(res.into_iter().map(|c| {
-        NormCommand {
-            metadata: Metadata { id: (desugar.get_new_id)() },
+    Ok(res
+        .into_iter()
+        .map(|c| NormCommand {
+            metadata: Metadata {
+                id: (desugar.get_new_id)(),
+            },
             command: c,
-        }
-    }).collect())
+        })
+        .collect())
 }
 
 fn make_get_new_id() -> impl FnMut() -> usize {

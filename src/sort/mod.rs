@@ -73,4 +73,5 @@ impl<T: IntoSort> IntoSort for Option<T> {
     }
 }
 
-pub type PreSort = fn(typeinfo: &mut TypeInfo, name: Symbol, params: &[Expr]) -> Result<ArcSort, TypeError>;
+pub type PreSort =
+    fn(typeinfo: &mut TypeInfo, name: Symbol, params: &[Expr]) -> Result<ArcSort, TypeError>;

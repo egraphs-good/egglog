@@ -147,7 +147,7 @@
 
 ;; math_simplify_const
 (push)
-(define start-expr (Add (Const (rational 1 1))
+(define start-expr2 (Add (Const (rational 1 1))
                         (Sub (Var "a") 
                              (Mul (Sub (Const (rational 2 1)) 
                                        (Const (rational 1 1))) 
@@ -155,19 +155,19 @@
 
 (run 6)
 
-(define end-expr (Const (rational 1 1)))
-(check (= start-expr end-expr))
+(define end-expr2 (Const (rational 1 1)))
+(check (= start-expr2 end-expr2))
 (pop)
 
 ;; math_simplify_factor
 (push)
-(define start-expr (Mul (Add (Var "x") (Const (rational 3 1)))
+(define start-expr3 (Mul (Add (Var "x") (Const (rational 3 1)))
                         (Add (Var "x") (Const (rational 1 1)))))
 (run 8)
-(define end-expr (Add (Add (Mul (Var "x") (Var "x"))
+(define end-expr3 (Add (Add (Mul (Var "x") (Var "x"))
                            (Mul (Const (rational 4 1)) (Var "x")))
                            (Const (rational 3 1))))
-(check (= start-expr end-expr))
+(check (= start-expr3 end-expr3))
 (pop)
 
 (simplify 5 (Add (Const (rational 1 1))

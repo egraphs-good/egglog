@@ -80,7 +80,9 @@ fn make_rep_primitive_funcs(proof_state: &ProofState) -> Vec<Command> {
 }
 
 fn make_rep_primitive_sorts(proof_state: &ProofState) -> Vec<Command> {
-    proof_state.desugar.egraph
+    proof_state
+        .desugar
+        .egraph
         .type_info
         .sorts
         .iter()
@@ -122,7 +124,9 @@ fn make_ast_primitives_funcs(proof_state: &ProofState) -> Vec<Command> {
 }
 
 fn make_ast_primitives_sorts(proof_state: &ProofState) -> Vec<Command> {
-    proof_state.desugar.egraph
+    proof_state
+        .desugar
+        .egraph
         .type_info
         .sorts
         .iter()
@@ -218,10 +222,7 @@ struct ProofInfo {
 // This function makes use of the property that the body is Norm
 // variables appear at most once (including the rhs of assignments)
 // besides when they appear in constraints
-fn instrument_facts(
-    body: &Vec<NormFact>,
-    proof_state: &mut ProofState,
-) -> (ProofInfo, Vec<Fact>) {
+fn instrument_facts(body: &Vec<NormFact>, proof_state: &mut ProofState) -> (ProofInfo, Vec<Fact>) {
     let mut info: ProofInfo = Default::default();
     let mut facts: Vec<Fact> = body.iter().map(|f| f.to_fact()).collect();
 
@@ -559,24 +560,14 @@ fn add_rule_proof(
     rule_proof
 }
 
-fn instrument_rule(
-    rule: &NormRule,
-    rule_name: Symbol,
-    proof_state: &mut ProofState,
-) -> Rule {
+fn instrument_rule(rule: &NormRule, rule_name: Symbol, proof_state: &mut ProofState) -> Rule {
     let (mut info, facts) = instrument_facts(&rule.body, proof_state);
 
     let mut actions = rule.head.clone();
     let rule_proof = add_rule_proof(rule_name, &info, &rule.body, &mut actions, proof_state);
 
     for action in &rule.head {
-        add_action_proof(
-            rule_proof,
-            &mut info,
-            action,
-            &mut actions,
-            proof_state,
-        );
+        add_action_proof(rule_proof, &mut info, action, &mut actions, proof_state);
     }
 
     // res.head.extend();
@@ -742,10 +733,7 @@ fn proof_original_action(action: &NormAction, proof_state: &mut ProofState) -> V
                         .parse(&format!(
                             "(set ({} {})
                          (MakeTrmPrf__ {} (Original__ {})))",
-                            make_rep_version_prim(&literal_name(
-                                &proof_state.desugar,
-                                literal
-                            )),
+                            make_rep_version_prim(&literal_name(&proof_state.desugar, literal)),
                             literal,
                             ast_var,
                             ast_var
@@ -817,21 +805,14 @@ pub(crate) fn add_proofs(program: Vec<NormCommand>, desugar: Desugar) -> Vec<Nor
             }
             NCommand::Function(fdecl) => {
                 res.push(command.to_command());
-                res.push(Command::Function(make_ast_func(
-                    &proof_state,
-                    fdecl,
-                )));
+                res.push(Command::Function(make_ast_func(&proof_state, fdecl)));
                 res.push(Command::Function(make_rep_func(&proof_state, fdecl)));
                 res.push(make_getchild_rule(&proof_state, fdecl));
             }
             NCommand::NormRule(ruleset, rule) => {
                 res.push(Command::Rule(
                     *ruleset,
-                    instrument_rule(
-                        rule,
-                        "TODOrulename".into(),
-                        &mut proof_state,
-                    ),
+                    instrument_rule(rule, "TODOrulename".into(), &mut proof_state),
                 ));
             }
             NCommand::Run(config) => {

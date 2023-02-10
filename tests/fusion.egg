@@ -44,7 +44,7 @@
        (= (freer e1) fv1)
        (= (freer e2) fv2))
       ((set (freer e) (set-union fv1 fv2))))
-(rule ((= e (Nil)))
+(rule ((= e Nil))
       ((set (freer e) (empty))))
 
 ;; ==== eval ====
@@ -58,7 +58,7 @@
 ; let-num
 (rewrite (Let v e (Num n)) (Num n))
 ; let-nil
-(rewrite (Let v e (Nil)) (Nil))
+(rewrite (Let v e Nil) Nil)
 ; let-var-same
 (rewrite (Let v1 e (TVar v1)) e)
 ; let-var-diff
@@ -104,7 +104,7 @@
 (rule ((= demand (pushdown f e)) (= e (Lam x e))) ((is-tail e)))
 (rule ((= demand (pushdown f e)) (= e (TVar x))) ((is-tail e)))
 (rule ((= demand (pushdown f e)) (= e (Cons e1 e2))) ((is-tail e)))
-(rule ((= demand (pushdown f e)) (= e (Nil))) ((is-tail e)))
+(rule ((= demand (pushdown f e)) (= e Nil)) ((is-tail e)))
 (rule ((= demand (pushdown f e)) (= e (Add e1 e2))) ((is-tail e)))
 (rule ((= demand (pushdown f e)) (= e (Num n1))) ((is-tail e)))
 (rewrite (pushdown f e) (App f e) :when ((is-tail e)))
@@ -123,7 +123,7 @@
 
 (union (mapf) (Lam (V "xs")
     (CaseSplit (TVar (V "xs"))
-        (Nil)
+        Nil
         (Lam (V "x") (Lam (V "xs'")
             (Cons (Add (TVar (V "x")) (Num 1))
                   (App (mapf) (TVar (V "xs'")))))))))
