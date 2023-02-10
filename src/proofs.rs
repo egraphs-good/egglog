@@ -10,7 +10,7 @@ fn proof_header(egraph: &EGraph) -> Vec<Command> {
 }
 
 // primitives don't need type info
-fn make_ast_version_prim(proof_state: &ProofState, name: Symbol) -> Symbol {
+fn make_ast_version_prim(name: Symbol) -> Symbol {
     Symbol::from(format!("Ast{}__", name))
 }
 
@@ -46,13 +46,14 @@ fn make_rep_version(proof_state: &mut ProofState, expr: &NormExpr) -> Symbol {
 
 // representatives for primitive values
 fn make_rep_version_prim(name: &Symbol) -> Symbol {
-    Symbol::from(format!("{}Rep__", name))
+    Symbol::from(format!("Rep{}__", name))
 }
 
-fn setup_primitives(proof_state: &ProofState) -> Vec<Command> {
+fn setup_primitives() -> Vec<Command> {
     let mut commands = vec![];
-    commands.extend(make_ast_primitives_sorts(proof_state));
-    commands.extend(make_rep_primitive_sorts(proof_state));
+    let fresh_types = TypeInfo::new();
+    commands.extend(make_ast_primitives_sorts(&fresh_types));
+    commands.extend(make_rep_primitive_sorts(&fresh_types));
     commands
 }
 
@@ -63,34 +64,10 @@ fn prim_input_types(prim: &Primitive) -> Vec<Symbol> {
         .map(|x| x.name())
         .collect::<Vec<Symbol>>()
 }
-/*
-fn make_rep_primitive_funcs(proof_state: &ProofState) -> Vec<Command> {
-    let mut res = vec![];
-    for (name, primitives) in &proof_state.desugar.egraph.type_info.primitives {
-        for prim in primitives {
-            res.push(Command::Function(FunctionDecl {
-                name: make_rep_version(name, proof_state),
-                schema: Schema {
-                    input: vec![make_rep_version_prim(name); prim.get_type().0.len()],
-                    output: "TrmPrf__".into(),
-                },
-                // Right now we just union every proof of some primitive.
-                merge: None,
-                merge_action: vec![],
-                default: None,
-                cost: None,
-            }))
-        }
-    }
 
-    res
-}*/
 
-fn make_rep_primitive_sorts(proof_state: &ProofState) -> Vec<Command> {
-    proof_state
-        .desugar
-        .egraph
-        .type_info
+fn make_rep_primitive_sorts(type_info: &TypeInfo) -> Vec<Command> {
+    type_info
         .sorts
         .iter()
         .map(|(name, _)| {
@@ -131,16 +108,13 @@ fn make_ast_primitives_funcs(proof_state: &ProofState) -> Vec<Command> {
     res
 }*/
 
-fn make_ast_primitives_sorts(proof_state: &ProofState) -> Vec<Command> {
-    proof_state
-        .desugar
-        .egraph
-        .type_info
+fn make_ast_primitives_sorts(type_info: &TypeInfo) -> Vec<Command> {
+    type_info
         .sorts
         .iter()
         .map(|(name, _)| {
             Command::Function(FunctionDecl {
-                name: make_ast_version_prim(proof_state, *name),
+                name: make_ast_version_prim(*name),
                 schema: Schema {
                     input: vec![*name],
                     output: "Ast__".into(),
@@ -158,10 +132,7 @@ fn make_ast_function(proof_state: &mut ProofState, expr: &NormExpr) -> FunctionD
     FunctionDecl {
         name: make_ast_version(proof_state, expr),
         schema: Schema {
-            input: body
-                .iter()
-                .map(|_sort| "Ast__".into())
-                .collect(),
+            input: body.iter().map(|_sort| "Ast__".into()).collect(),
             output: "Ast__".into(),
         },
         merge: None,
@@ -195,18 +166,12 @@ fn merge_action(egraph: &EGraph, types: FuncType) -> Vec<Action> {
         "(let p1 (PrfOf__ old))".to_string(),
     ]
     .into_iter()
-    .chain(
-        types
-            .input
-            .iter()
-            .enumerate()
-            .flat_map(|(i, _sort)| {
-                vec![
-                    format!("(let {} (GetChild__ t1 {}))", child1(i), i),
-                    format!("(let {} (GetChild__ t2 {}))", child2(i), i),
-                ]
-            }),
-    )
+    .chain(types.input.iter().enumerate().flat_map(|(i, _sort)| {
+        vec![
+            format!("(let {} (GetChild__ t1 {}))", child1(i), i),
+            format!("(let {} (GetChild__ t2 {}))", child2(i), i),
+        ]
+    }))
     .chain(vec![
         format!("(let congr_prf__ (Congruence__ p1 {}))", congr_prf),
         "(set (EqGraph__ t1 t2) congr_prf__)".to_string(),
@@ -255,50 +220,7 @@ fn instrument_facts(body: &Vec<NormFact>, proof_state: &mut ProofState) -> (Proo
                 assert!(info.var_term.insert(*lhs, rep_trm).is_none());
                 assert!(info.var_proof.insert(*lhs, rep_prf).is_none());
             }
-            NormFact::Compute(lhs, NormExpr::Call(head, body)) => {
-                let rep = proof_state.get_fresh();
-                let rep_trm = proof_state.get_fresh();
-                let rep_prf = proof_state.get_fresh();
-
-                facts.push(Fact::Eq(vec![
-                    Expr::Var(rep),
-                    Expr::Call(
-                        make_rep_version_prim(head),
-                        body.iter().map(|x| Expr::Var(*x)).collect(),
-                    ),
-                ]));
-                facts.push(Fact::Eq(vec![
-                    Expr::Var(rep_trm),
-                    Expr::Call("TrmOf__".into(), vec![Expr::Var(rep)]),
-                ]));
-                facts.push(Fact::Eq(vec![
-                    Expr::Var(rep_prf),
-                    Expr::Call("PrfOf__".into(), vec![Expr::Var(rep)]),
-                ]));
-
-                assert!(info.var_term.insert(*lhs, rep_trm).is_none());
-                assert!(info.var_proof.insert(*lhs, rep_prf).is_none());
-
-                for (i, child) in body.iter().enumerate() {
-                    //println!("child: {:?}", child);
-                    let child_trm = proof_state.get_fresh();
-                    let const_var = proof_state.get_fresh();
-                    facts.push(Fact::Eq(vec![
-                        Expr::Var(const_var),
-                        Expr::Lit(Literal::Int(i as i64)),
-                    ]));
-
-                    facts.push(Fact::Eq(vec![
-                        Expr::Var(child_trm),
-                        Expr::Call(
-                            "GetChild__".into(),
-                            vec![Expr::Var(rep_trm), Expr::Var(const_var)],
-                        ),
-                    ]));
-                    assert!(info.var_term.insert(*child, child_trm).is_none());
-                }
-            }
-            NormFact::Assign(lhs, NormExpr::Call(head, body)) => {
+            NormFact::Assign(lhs, NormExpr::Call(head, body)) | NormFact::Compute(lhs, NormExpr::Call(head, body)) => {
                 let rep = proof_state.get_fresh();
                 let rep_trm = proof_state.get_fresh();
                 let rep_prf = proof_state.get_fresh();
@@ -473,7 +395,7 @@ fn add_action_proof(
             res.push(NormAction::Let(
                 newterm,
                 NormExpr::Call(
-                    make_ast_version_prim(proof_state, literal_name(&proof_state.desugar, lit)),
+                    make_ast_version_prim(literal_name(&proof_state.desugar, lit)),
                     vec![*lhs],
                 ),
             ));
@@ -510,9 +432,9 @@ fn add_rule_proof(
     proof_state: &mut ProofState,
 ) -> Symbol {
     let mut current_proof = proof_state.get_fresh();
-    res.push(NormAction::Let(
+    res.push(NormAction::LetVar(
         current_proof,
-        NormExpr::Call("Null__".into(), vec![]),
+        "Null__".into(),
     ));
 
     for fact in facts {
@@ -575,7 +497,12 @@ fn instrument_rule(rule: &NormRule, rule_name: Symbol, proof_state: &mut ProofSt
     res
 }
 fn make_rep_function(proof_state: &mut ProofState, expr: &NormExpr) -> FunctionDecl {
-    let types = proof_state.desugar.egraph.type_info.lookup_expr(proof_state.current_ctx, expr).unwrap();
+    let types = proof_state
+        .desugar
+        .egraph
+        .type_info
+        .lookup_expr(proof_state.current_ctx, expr)
+        .unwrap();
     FunctionDecl {
         name: make_rep_version(proof_state, expr),
         schema: Schema {
@@ -599,8 +526,7 @@ fn make_getchild_rule(proof_state: &mut ProofState, expr: &NormExpr) -> Command 
                 Expr::Var("ast__".into()),
                 Expr::Call(
                     make_ast_version(proof_state, expr),
-                    body
-                        .iter()
+                    body.iter()
                         .enumerate()
                         .map(|(i, _)| Expr::Var(getchild(i)))
                         .collect(),
@@ -710,10 +636,7 @@ fn proof_original_action(action: &NormAction, proof_state: &mut ProofState) -> V
                         .parse(&format!(
                             "(let {} ({} {}))",
                             ast_var,
-                            make_ast_version_prim(
-                                &proof_state,
-                                literal_name(&proof_state.desugar, literal)
-                            ),
+                            make_ast_version_prim(literal_name(&proof_state.desugar, literal)),
                             literal
                         ))
                         .unwrap(),
@@ -787,7 +710,7 @@ pub(crate) fn add_proofs(program: Vec<NormCommand>, desugar: Desugar) -> Vec<Nor
         desugar,
     };
 
-    res.extend(setup_primitives(&proof_state));
+    res.extend(setup_primitives());
 
     for command in program {
         proof_state.current_ctx = command.metadata.id;
