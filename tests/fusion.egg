@@ -114,24 +114,24 @@
 (function sum () Term :cost 1000)
 (function mapf () Term :cost 1000)
 (function sum-o-mapf () Term)
-(rewrite (App (sum) (App (mapf) x)) (App sum-o-mapf x))
-(union sum (Lam (V "xs")
+(rewrite (App (sum) (App (mapf) x)) (App (sum-o-mapf) x))
+(union (sum) (Lam (V "xs")
     (CaseSplit (TVar (V "xs")) 
         (Num 0)
         (Lam (V "x") (Lam (V "xs'") 
-            (Add (TVar (V "x")) (App sum (TVar (V "xs'")))))))))
+            (Add (TVar (V "x")) (App (sum) (TVar (V "xs'")))))))))
 
-(union mapf (Lam (V "xs")
+(union (mapf) (Lam (V "xs")
     (CaseSplit (TVar (V "xs"))
         (Nil)
         (Lam (V "x") (Lam (V "xs'")
             (Cons (Add (TVar (V "x")) (Num 1))
-                  (App mapf (TVar (V "xs'")))))))))
+                  (App (mapf) (TVar (V "xs'")))))))))
 
 (set (freer (sum)) (empty))
 (set (freer (mapf)) (empty))
 
-(define expr (App sum (App mapf (TVar (V "expr")))))
+(define expr (App (sum) (App (mapf) (TVar (V "expr")))))
 
 (run 100)
 

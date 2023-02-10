@@ -43,6 +43,8 @@ impl Display for Id {
 pub enum NormCommand {
     Sort(Symbol, Option<(Symbol, Vec<Expr>)>),
     Function(FunctionDecl),
+    // Declare a variable with a given name and type
+    Declare(Symbol, Symbol),
     AddRuleset(Symbol),
     NormRule(Symbol, NormRule),
     NormAction(NormAction),
@@ -71,6 +73,7 @@ impl NormCommand {
         match self {
             NormCommand::Sort(name, params) => Command::Sort(*name, params.clone()),
             NormCommand::Function(f) => Command::Function(f.clone()),
+            NormCommand::Declare(name, parent_type) => Command::Declare(*name, *parent_type),
             NormCommand::AddRuleset(name) => Command::AddRuleset(*name),
             NormCommand::NormRule(name, rule) => Command::Rule(*name, rule.to_rule()),
             NormCommand::NormAction(action) => Command::Action(action.to_action()),
@@ -113,6 +116,7 @@ pub enum Command {
     },
     Sort(Symbol, Option<(Symbol, Vec<Expr>)>),
     Function(FunctionDecl),
+    Declare(Symbol, Symbol),
     Define {
         name: Symbol,
         expr: Expr,
@@ -167,6 +171,11 @@ impl Command {
                 res.extend(variants.iter().map(|v| v.to_sexp()));
                 Sexp::List(res)
             }
+            Command::Declare(name, parent_type) => Sexp::List(vec![
+                Sexp::String("declare".into()),
+                Sexp::String(name.to_string()),
+                Sexp::String(parent_type.to_string()),
+            ]),
             Command::Action(a) => a.to_sexp(),
             Command::Sort(name, None) => Sexp::List(vec![
                 Sexp::String("sort".into()),

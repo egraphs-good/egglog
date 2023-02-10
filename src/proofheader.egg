@@ -35,7 +35,7 @@
 
 ;; ProofList definitions
 (function Cons__ (Proof__ ProofList__) ProofList__)
-(function Null__ () ProofList__)
+(declare Null__ ProofList__)
 
 ;; prove two terms equal
 (function EqGraph__ (Ast__ Ast__) Proof__  :cost 100000 :merge old)

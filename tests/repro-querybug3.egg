@@ -26,6 +26,6 @@
      ((set (freer e) (set-union fv1 fv2))))
 (rule ((= e (Var v))) ((set (freer e) (insert (empty) v 1))))
 (function sum () Term :cost 1000)
-(union sum (Lam (V "xs") (CaseSplit (Var (V "xs")) (Num 0) (Lam (V "x") (Lam (V "xs'") (Add (Var (V "x")) (App sum (Var (V "xs'")))))))))
+(union (sum) (Lam (V "xs") (CaseSplit (Var (V "xs")) (Num 0) (Lam (V "x") (Lam (V "xs'") (Add (Var (V "x")) (App (sum) (Var (V "xs'")))))))))
 (set (freer (sum)) (empty))
 (run 100)

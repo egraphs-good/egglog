@@ -8,7 +8,6 @@ pub(crate) fn literal_name(egraph: &EGraph, literal: &Literal) -> Symbol {
     egraph.infer_literal(literal).name()
 }
 
-
 // Makes a function that gets fresh names by counting
 // the max number of underscores in the program
 pub(crate) fn make_get_fresh(program: &Vec<Command>) -> impl FnMut() -> Symbol {
@@ -40,17 +39,21 @@ fn desugar_datatype(name: Symbol, variants: Vec<Variant>) -> Vec<NormCommand> {
     vec![NormCommand::Sort(name, None)]
         .into_iter()
         .chain(variants.into_iter().map(|variant| {
-            NormCommand::Function(FunctionDecl {
-                name: variant.name,
-                schema: Schema {
-                    input: variant.types,
-                    output: name,
-                },
-                merge: None,
-                merge_action: vec![],
-                default: None,
-                cost: variant.cost,
-            })
+            if variant.types.is_empty() {
+                NormCommand::Declare(variant.name, name)
+            } else {
+                NormCommand::Function(FunctionDecl {
+                    name: variant.name,
+                    schema: Schema {
+                        input: variant.types,
+                        output: name,
+                    },
+                    merge: None,
+                    merge_action: vec![],
+                    default: None,
+                    cost: variant.cost,
+                })
+            }
         }))
         .collect()
 }
@@ -142,7 +145,6 @@ fn expr_to_ssa(
             } else {
                 res.push(NormFact::Assign(fresh, NormExpr::Call(*f, new_children)));
             }
-            
 
             // fresh variable for any use
             let fresh2 = (desugar.get_fresh)();
@@ -152,11 +154,11 @@ fn expr_to_ssa(
     }
 }
 
-fn ssa_valid_expr(expr: &NormExpr, var_used: &mut HashSet<Symbol>) -> bool {
+fn ssa_valid_expr(expr: &NormExpr, var_used: &mut HashSet<Symbol>, desugar: &Desugar) -> bool {
     match expr {
         NormExpr::Call(_, children) => {
             for child in children {
-                if !var_used.insert(*child) {
+                if !desugar.let_types.contains_key(child) && !var_used.insert(*child) {
                     return false;
                 }
             }
@@ -165,17 +167,20 @@ fn ssa_valid_expr(expr: &NormExpr, var_used: &mut HashSet<Symbol>) -> bool {
     true
 }
 
-pub(crate) fn assert_ssa_valid(facts: &Vec<NormFact>, actions: &Vec<NormAction>) -> bool {
+pub(crate) fn assert_ssa_valid(facts: &Vec<NormFact>, actions: &Vec<NormAction>, desugar: &Desugar) -> bool {
     let mut var_used: HashSet<Symbol> = Default::default();
     let mut var_used_constraints: HashSet<Symbol> = Default::default();
     for fact in facts {
         match fact {
-            NormFact::Assign(v, expr) | NormFact::Compute(v, expr)=> {
+            NormFact::Assign(v, expr) | NormFact::Compute(v, expr) => {
+                if desugar.let_types.contains_key(v) {
+                    panic!("invalid Norm variable: {:?}", v);
+                }
                 if !var_used.insert(*v) {
                     panic!("invalid Norm variable: {:?}", v);
                 }
 
-                if !ssa_valid_expr(expr, &mut var_used) {
+                if !ssa_valid_expr(expr, &mut var_used, desugar) {
                     panic!("invalid Norm fact: {:?}", expr);
                 }
             }
@@ -183,7 +188,7 @@ pub(crate) fn assert_ssa_valid(facts: &Vec<NormFact>, actions: &Vec<NormAction>)
                 let b1 = var_used_constraints.insert(*v);
                 let b2 = var_used_constraints.insert(*v2);
                 // any constraints on variables are valid, but one needs to be defined
-                if !var_used.contains(v) && !var_used.contains(v2) && b1 && b2 {
+                if !desugar.let_types.contains_key(v) && !desugar.let_types.contains_key(v2) && !var_used.contains(v) && !var_used.contains(v2) && b1 && b2 {
                     panic!("invalid Norm constraint: {:?} = {:?}", v, v2);
                 }
             }
@@ -199,10 +204,13 @@ pub(crate) fn assert_ssa_valid(facts: &Vec<NormFact>, actions: &Vec<NormAction>)
 
     let mut fdefuse = |var, isdef| {
         if isdef {
+            if desugar.let_types.contains_key(&var) {
+                panic!("invalid Norm variable: {:?}", var);
+            }
             if !var_used.insert(var) {
                 panic!("invalid Norm variable: {:?}", var);
             }
-        } else if !var_used.contains(&var) {
+        } else if !var_used.contains(&var) && !desugar.let_types.contains_key(&var) {
             panic!("invalid Norm variable: {:?}", var);
         }
         var
@@ -353,33 +361,13 @@ fn flatten_actions(actions: &Vec<Action>, desugar: &mut Desugar) -> Vec<NormActi
     res
 }
 
-fn parenthesize_globals_expr(e: &Expr, desugar: &Desugar) -> Expr {
-    e.map(&mut |e| match e {
-        Expr::Var(v) if desugar.func_types.get(v).is_some() => Expr::Call(*v, vec![]),
-        _ => e.clone(),
-    })
-}
-
-fn parenthesize_globals_action(action: &Action, desugar: &Desugar) -> Action {
-    action.map_exprs(&mut |e| parenthesize_globals_expr(e, desugar))
-}
-
-// In egglog, you are allowed to refer to variables
-// (which desugar to functions with no args)
-// without parenthesis.
-// This fixes that so normal translation is easier.
-fn parenthesize_globals(rule: Rule, desugar: &Desugar) -> Rule {
-    rule.map_exprs(&mut |e| parenthesize_globals_expr(e, desugar))
-}
-
-fn flatten_rule(rule_in: Rule, desugar: &mut Desugar) -> NormRule {
-    let rule = parenthesize_globals(rule_in, &desugar);
-
+fn flatten_rule(rule: Rule, desugar: &mut Desugar) -> NormRule {
     let res = NormRule {
         head: flatten_actions(&rule.head, desugar),
         body: flatten_facts(&rule.body, desugar),
     };
-    assert_ssa_valid(&res.body, &res.head);
+    // TODO re-add with type info
+    //assert_ssa_valid(&res.body, &res.head, desugar);
     res
 }
 
@@ -399,7 +387,6 @@ impl<'a> Desugar<'a> {
 }
 
 pub(crate) fn desugar_command(
-    egraph: &EGraph,
     command: Command,
     desugar: &mut Desugar,
 ) -> Result<Vec<NormCommand>, Error> {
@@ -408,12 +395,13 @@ pub(crate) fn desugar_command(
             vec![NormCommand::Function(fdecl)]
         }
         Command::Datatype { name, variants } => desugar_datatype(name, variants),
+        Command::Declare(name, parent) => vec![NormCommand::Declare(name, parent)],
         Command::Rewrite(ruleset, rewrite) => desugar_rewrite(ruleset, &rewrite, desugar),
         Command::BiRewrite(ruleset, rewrite) => desugar_birewrite(ruleset, &rewrite, desugar),
         Command::Include(file) => {
             let s = std::fs::read_to_string(&file)
                 .unwrap_or_else(|_| panic!("Failed to read file {file}"));
-            desugar_commands(egraph, egraph.parse_program(&s)?, desugar)?
+            desugar_commands(desugar.egraph.parse_program(&s)?, desugar)?
         }
         Command::Rule(ruleset, rule) => {
             vec![NormCommand::NormRule(ruleset, flatten_rule(rule, desugar))]
@@ -428,25 +416,17 @@ pub(crate) fn desugar_command(
             let mut commands = vec![];
 
             let mut actions = vec![];
-            expr_to_flat_actions(
-                name,
-                &parenthesize_globals_expr(&expr, desugar),
-                desugar,
-                &mut actions,
-            );
+            expr_to_flat_actions(name, &expr, desugar, &mut actions);
             for action in actions {
                 commands.push(NormCommand::NormAction(action));
             }
             commands
         }
         Command::AddRuleset(name) => vec![NormCommand::AddRuleset(name)],
-        Command::Action(action) => flatten_actions(
-            &vec![parenthesize_globals_action(&action, desugar)],
-            desugar,
-        )
-        .into_iter()
-        .map(NormCommand::NormAction)
-        .collect(),
+        Command::Action(action) => flatten_actions(&vec![action], desugar)
+            .into_iter()
+            .map(NormCommand::NormAction)
+            .collect(),
         Command::Run(run) => vec![NormCommand::Run(run)],
         Command::Simplify { expr, config } => vec![NormCommand::Simplify { expr, config }],
         Command::Calc(idents, exprs) => vec![NormCommand::Calc(idents, exprs)],
@@ -475,7 +455,7 @@ pub(crate) fn desugar_command(
         Command::Push(num) => vec![NormCommand::Push(num)],
         Command::Pop(num) => vec![NormCommand::Pop(num)],
         Command::Fail(cmd) => {
-            let mut desugared = desugar_command(egraph, *cmd, desugar)?;
+            let mut desugared = desugar_command(*cmd, desugar)?;
 
             let last = desugared.pop();
             desugared.push(NormCommand::Fail(Box::new(last.unwrap())));
@@ -496,49 +476,20 @@ pub(crate) fn desugar_program(
         func_types: Default::default(),
         let_types: Default::default(),
         get_fresh,
-        egraph
+        egraph,
     };
-    let res = desugar_commands(egraph, program, &mut desugar)?;
+    let res = desugar_commands(program, &mut desugar)?;
     Ok((res, desugar))
 }
 
 pub(crate) fn desugar_commands(
-    egraph: &EGraph,
     program: Vec<Command>,
     desugar: &mut Desugar,
 ) -> Result<Vec<NormCommand>, Error> {
     let mut res = vec![];
 
     for command in program {
-        let desugared = desugar_command(egraph, command, desugar)?;
-
-        for newcommand in &desugared {
-            match newcommand {
-                NormCommand::NormAction(NormAction::Let(name, NormExpr::Call(head, _body))) => {
-                    desugar
-                        .let_types
-                        .insert(*name, Schema::new(vec![], desugar.func_types[head].output));
-                }
-                NormCommand::NormAction(NormAction::LetLit(name, literal)) => {
-                    desugar
-                        .let_types
-                        .insert(*name, Schema::new(vec![], literal_name(egraph, literal)));
-                }
-                NormCommand::NormAction(NormAction::LetVar(name, rhs)) => {
-                    desugar
-                        .let_types
-                        .insert(*name, Schema::new(vec![], desugar.let_types[rhs].output));
-                }
-                NormCommand::Function(fdecl) => {
-                    desugar.func_types.insert(
-                        fdecl.name,
-                        Schema::new(fdecl.schema.input.clone(), fdecl.schema.output),
-                    );
-                }
-                _ => (),
-            }
-        }
-
+        let desugared = desugar_command(command, desugar)?;
         res.extend(desugared);
     }
     Ok(res)

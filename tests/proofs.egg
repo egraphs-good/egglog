@@ -48,7 +48,7 @@
 
 ;; ProofList definitions
 (function Cons (Proof ProofList) ProofList)
-(function Null () ProofList)
+(declare Null ProofList)
 
 ;; prove two terms equal
 (function EqGraph (AstMath AstMath) Proof  :cost 100000 :merge old)

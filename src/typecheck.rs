@@ -1,7 +1,7 @@
 use crate::*;
 use indexmap::map::Entry as IEntry;
-use typechecking::TypeError;
 use thiserror::Error;
+use typechecking::TypeError;
 
 pub struct Context<'a> {
     pub egraph: &'a EGraph,
@@ -331,7 +331,10 @@ impl<'a> Context<'a> {
                     let (ids, arg_tys): (Vec<Id>, Vec<Option<ArcSort>>) =
                         args.iter().map(|arg| self.infer_query_expr(arg)).unzip();
 
-                    if let Some(arg_tys) = arg_tys.iter().map(|sort| sort.as_ref().map(|inner| inner.name())).collect::<Option<Vec<Symbol>>>()
+                    if let Some(arg_tys) = arg_tys
+                        .iter()
+                        .map(|sort| sort.as_ref().map(|inner| inner.name()))
+                        .collect::<Option<Vec<Symbol>>>()
                     {
                         for prim in prims {
                             if let Some(output_type) = prim.accept(&arg_tys) {
@@ -467,9 +470,17 @@ trait ExprChecker<'a> {
         }
     }
 
+    fn variable_function(&self, var: Symbol) -> bool {
+        if let Some(func) = self.egraph().functions.get(&var) {
+            func.is_variable
+        } else {
+            false
+        }
+    }
+
     fn check_expr(&mut self, expr: &Expr, ty: ArcSort) -> Result<Self::T, TypeError> {
         match expr {
-            Expr::Var(v) if !self.egraph().functions.contains_key(v) => self.check_var(*v, ty),
+            Expr::Var(v) if !self.variable_function(*v) => self.check_var(*v, ty),
             _ => {
                 let (t, actual) = self.infer_expr(expr)?;
                 if actual.name() != ty.name() {
@@ -493,7 +504,7 @@ trait ExprChecker<'a> {
                 Ok((t, self.egraph().infer_literal(lit)))
             }
             Expr::Var(sym) => {
-                if self.egraph().functions.contains_key(sym) {
+                if self.variable_function(*sym) {
                     return self.infer_expr(&Expr::call(*sym, []));
                 }
                 self.infer_var(*sym)

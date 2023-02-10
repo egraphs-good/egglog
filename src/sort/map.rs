@@ -155,10 +155,7 @@ impl PrimitiveLike for Insert {
 
     fn accept(&self, types: &[Symbol]) -> Option<ArcSort> {
         match types {
-            [map, key, value]
-                if (*map, (*key, *value))
-                    == (self.map.name, self.map.kv_names()) =>
-            {
+            [map, key, value] if (*map, (*key, *value)) == (self.map.name, self.map.kv_names()) => {
                 Some(self.map.clone())
             }
             _ => None,

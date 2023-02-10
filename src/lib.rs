@@ -6,10 +6,10 @@ mod gj;
 mod proofs;
 pub mod sort;
 mod typecheck;
+mod typechecking;
 mod unionfind;
 pub mod util;
 mod value;
-mod typechecking;
 
 use hashbrown::hash_map::Entry;
 use index::ColumnIndex;
@@ -435,9 +435,9 @@ impl EGraph {
         self.add_arcsort(sort)
     }
 
-    pub fn declare_function(&mut self, decl: &FunctionDecl) -> Result<(), Error> {
+    pub fn declare_function(&mut self, decl: &FunctionDecl, is_var: bool) -> Result<(), Error> {
         self.declare_sort(decl.name, None)?;
-        let function = Function::new(self, decl)?;
+        let function = Function::new(self, decl, is_var)?;
         let old = self.functions.insert(decl.name, function);
         if old.is_some() {
             return Err(TypeError::FunctionAlreadyBound(decl.name).into());
@@ -463,7 +463,7 @@ impl EGraph {
             merge_action: vec![],
             default: None,
             cost: variant.cost,
-        })?;
+        }, false)?;
         // if let Some(ctors) = self.sorts.get_mut(&sort) {
         //     ctors.push(name);
         // }
@@ -828,8 +828,22 @@ impl EGraph {
                 }
             },
             NormCommand::Function(fdecl) => {
-                self.declare_function(&fdecl)?;
+                self.declare_function(&fdecl, false)?;
                 format!("Declared function {}.", fdecl.name)
+            }
+            NormCommand::Declare(name, sort) => {
+                self.declare_function(&FunctionDecl {
+                    name,
+                    schema: Schema {
+                        input: vec![],
+                        output: sort,
+                    },
+                    default: None,
+                    merge: None,
+                    merge_action: vec![],
+                    cost: None,
+                }, true)?;
+                format!("Declared variable {}.", name)
             }
             NormCommand::AddRuleset(name) => {
                 self.add_ruleset(name);
@@ -1158,7 +1172,7 @@ impl EGraph {
             merge: None,
             merge_action: vec![],
             cost: None,
-        })?;
+        }, true)?;
         let f = self.functions.get_mut(&name).unwrap();
         let id = self.unionfind.make_set();
         let value = Value::from_id(sort.name(), id);
@@ -1182,7 +1196,7 @@ impl EGraph {
             merge: None,
             merge_action: vec![],
             cost,
-        })?;
+        }, true)?;
         let f = self.functions.get_mut(&name).unwrap();
         f.insert(&[], value, self.timestamp);
         Ok(sort)
@@ -1230,7 +1244,7 @@ impl EGraph {
 
         //println!("{}", ListDisplay(program.clone(), "\n"));
         if should_add_proofs(&program) {
-            program = add_proofs(self, program, desugar);
+            program = add_proofs(program, desugar);
         }
         println!("{}", ListDisplay(program.clone(), "\n"));
 
