@@ -51,7 +51,7 @@ pub type Subst = IndexMap<Symbol, Value>;
 
 pub trait PrimitiveLike {
     fn name(&self) -> Symbol;
-    fn accept(&self, types: &[Symbol]) -> Option<ArcSort>;
+    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort>;
     fn apply(&self, values: &[Value]) -> Option<Value>;
     fn get_type(&self) -> (Vec<ArcSort>, ArcSort);
 }
@@ -107,7 +107,7 @@ impl PrimitiveLike for SimplePrimitive {
     fn name(&self) -> Symbol {
         self.name
     }
-    fn accept(&self, types: &[Symbol]) -> Option<ArcSort> {
+    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
         if self.input.len() != types.len() {
             return None;
         }
@@ -115,7 +115,7 @@ impl PrimitiveLike for SimplePrimitive {
         self.input
             .iter()
             .zip(types)
-            .all(|(a, b)| a.name() == *b)
+            .all(|(a, b)| a.name() == b.name())
             .then(|| self.output.clone())
     }
     fn apply(&self, values: &[Value]) -> Option<Value> {
@@ -453,17 +453,20 @@ impl EGraph {
     ) -> Result<(), Error> {
         let name = variant.name;
         let sort = sort.into();
-        self.declare_function(&FunctionDecl {
-            name,
-            schema: Schema {
-                input: variant.types,
-                output: sort,
+        self.declare_function(
+            &FunctionDecl {
+                name,
+                schema: Schema {
+                    input: variant.types,
+                    output: sort,
+                },
+                merge: None,
+                merge_action: vec![],
+                default: None,
+                cost: variant.cost,
             },
-            merge: None,
-            merge_action: vec![],
-            default: None,
-            cost: variant.cost,
-        }, false)?;
+            false,
+        )?;
         // if let Some(ctors) = self.sorts.get_mut(&sort) {
         //     ctors.push(name);
         // }
@@ -804,7 +807,7 @@ impl EGraph {
         };
     }
 
-    fn run_command(&mut self, command: NormCommand, should_run: bool) -> Result<String, Error> {
+    fn run_command(&mut self, command: NCommand, should_run: bool) -> Result<String, Error> {
         let pre_rebuild = Instant::now();
         let rebuild_num = self.rebuild()?;
         if rebuild_num > 0 {
@@ -814,7 +817,7 @@ impl EGraph {
             );
         }
         Ok(match command {
-            NormCommand::Sort(name, presort_and_args) => match presort_and_args {
+            NCommand::Sort(name, presort_and_args) => match presort_and_args {
                 Some((presort, args)) => {
                     self.declare_sort(name, Some((presort, &args)))?;
                     format!(
@@ -827,34 +830,37 @@ impl EGraph {
                     format!("Declared sort {name}.")
                 }
             },
-            NormCommand::Function(fdecl) => {
+            NCommand::Function(fdecl) => {
                 self.declare_function(&fdecl, false)?;
                 format!("Declared function {}.", fdecl.name)
             }
-            NormCommand::Declare(name, sort) => {
-                self.declare_function(&FunctionDecl {
-                    name,
-                    schema: Schema {
-                        input: vec![],
-                        output: sort,
+            NCommand::Declare(name, sort) => {
+                self.declare_function(
+                    &FunctionDecl {
+                        name,
+                        schema: Schema {
+                            input: vec![],
+                            output: sort,
+                        },
+                        default: None,
+                        merge: None,
+                        merge_action: vec![],
+                        cost: None,
                     },
-                    default: None,
-                    merge: None,
-                    merge_action: vec![],
-                    cost: None,
-                }, true)?;
+                    true,
+                )?;
                 format!("Declared variable {}.", name)
             }
-            NormCommand::AddRuleset(name) => {
+            NCommand::AddRuleset(name) => {
                 self.add_ruleset(name);
                 format!("Declared ruleset {name}.")
             }
-            NormCommand::NormRule(ruleset, rule) => {
+            NCommand::NormRule(ruleset, rule) => {
                 let name = self.add_rule(rule.to_rule(), ruleset)?;
                 format!("Declared rule {name}.")
             }
 
-            NormCommand::Run(config) => {
+            NCommand::Run(config) => {
                 let limit = config.limit;
                 if should_run {
                     let [st, at, rt] = self.run_rules(&config);
@@ -878,7 +884,7 @@ impl EGraph {
                     format!("Skipped run {limit}.")
                 }
             }
-            NormCommand::Calc(idents, exprs) => {
+            NCommand::Calc(idents, exprs) => {
                 self.calc(idents.clone(), exprs.clone())?;
                 format!(
                     "Calc proof succeeded: forall {}, {}",
@@ -886,7 +892,7 @@ impl EGraph {
                     ListDisplay(exprs, " = ")
                 )
             }
-            NormCommand::Extract { var, variants } => {
+            NCommand::Extract { var, variants } => {
                 let expr = Expr::Var(var);
                 if should_run {
                     // TODO typecheck
@@ -902,7 +908,7 @@ impl EGraph {
                     "Skipping extraction.".into()
                 }
             }
-            NormCommand::Check(fact) => {
+            NCommand::Check(fact) => {
                 if should_run {
                     self.check_fact(&fact, true)?;
                     "Checked.".into()
@@ -910,7 +916,7 @@ impl EGraph {
                     "Skipping check.".into()
                 }
             }
-            NormCommand::Simplify { expr, config } => {
+            NCommand::Simplify { expr, config } => {
                 if should_run {
                     let (cost, expr) = self.simplify(expr, &config)?;
                     println!("{}", expr);
@@ -919,7 +925,7 @@ impl EGraph {
                     "Skipping simplify.".into()
                 }
             }
-            NormCommand::NormAction(action) => {
+            NCommand::NormAction(action) => {
                 if should_run {
                     match &action {
                         NormAction::Let(name, contents) => {
@@ -941,7 +947,7 @@ impl EGraph {
                     format!("Skipping running {action}.")
                 }
             }
-            NormCommand::Query(_q) => {
+            NCommand::Query(_q) => {
                 // let qsexp = sexp::Sexp::List(
                 //     q.iter()
                 //         .map(|fact| sexp::parse(&fact.to_string()).unwrap())
@@ -966,37 +972,37 @@ impl EGraph {
                 // )
                 todo!()
             }
-            NormCommand::Clear => {
+            NCommand::Clear => {
                 self.clear();
                 "Cleared.".into()
             }
-            NormCommand::Push(n) => {
+            NCommand::Push(n) => {
                 (0..n).for_each(|_| self.push());
                 format!("Pushed {n} levels.")
             }
-            NormCommand::Pop(n) => {
+            NCommand::Pop(n) => {
                 for _ in 0..n {
                     self.pop()?;
                 }
                 format!("Popped {n} levels.")
             }
-            NormCommand::Print(f, n) => {
+            NCommand::Print(f, n) => {
                 let msg = self.print_function(f, n)?;
                 println!("{}", msg);
                 msg
             }
-            NormCommand::PrintSize(f) => {
+            NCommand::PrintSize(f) => {
                 let msg = self.print_size(f)?;
                 println!("{}", msg);
                 msg
             }
-            NormCommand::Fail(c) => {
+            NCommand::Fail(c) => {
                 if self.run_command(*c, should_run).is_ok() {
                     return Err(Error::ExpectFail);
                 }
                 "Command failed as expected.".into()
             }
-            NormCommand::Input { name, file } => {
+            NCommand::Input { name, file } => {
                 let func = self.functions.get_mut(&name).unwrap();
                 let is_unit = func.schema.output.name().as_str() == "Unit";
 
@@ -1049,7 +1055,7 @@ impl EGraph {
                 self.eval_actions(&actions)?;
                 format!("Read {} facts into {name} from '{file}'.", actions.len())
             }
-            NormCommand::Output { file, exprs } => {
+            NCommand::Output { file, exprs } => {
                 let mut filename = self.fact_directory.clone().unwrap_or_default();
                 filename.push(file.as_str());
                 // append to file
@@ -1100,14 +1106,14 @@ impl EGraph {
             self.eval_expr(b, None, true)?;
             let cond = Fact::Eq(vec![a.clone(), b.clone()]);
             self.run_command(
-                NormCommand::Run(RunConfig {
+                NCommand::Run(RunConfig {
                     ruleset: "".into(),
                     limit: 100000,
                     until: Some(cond.clone()),
                 }),
                 true,
             )?;
-            self.run_command(NormCommand::Check(cond), true)?;
+            self.run_command(NCommand::Check(cond), true)?;
             self.pop().unwrap();
             *depth -= 1;
         }
@@ -1162,17 +1168,20 @@ impl EGraph {
 
     pub fn declare_const(&mut self, name: Symbol, sort: &ArcSort) -> Result<(), Error> {
         assert!(sort.is_eq_sort());
-        self.declare_function(&FunctionDecl {
-            name,
-            schema: Schema {
-                input: vec![],
-                output: sort.name(),
+        self.declare_function(
+            &FunctionDecl {
+                name,
+                schema: Schema {
+                    input: vec![],
+                    output: sort.name(),
+                },
+                default: None,
+                merge: None,
+                merge_action: vec![],
+                cost: None,
             },
-            default: None,
-            merge: None,
-            merge_action: vec![],
-            cost: None,
-        }, true)?;
+            true,
+        )?;
         let f = self.functions.get_mut(&name).unwrap();
         let id = self.unionfind.make_set();
         let value = Value::from_id(sort.name(), id);
@@ -1186,17 +1195,20 @@ impl EGraph {
         cost: Option<usize>,
     ) -> Result<ArcSort, Error> {
         let (sort, value) = self.eval_expr(expr, None, true)?;
-        self.declare_function(&FunctionDecl {
-            name,
-            schema: Schema {
-                input: vec![],
-                output: value.tag,
+        self.declare_function(
+            &FunctionDecl {
+                name,
+                schema: Schema {
+                    input: vec![],
+                    output: value.tag,
+                },
+                default: None,
+                merge: None,
+                merge_action: vec![],
+                cost,
             },
-            default: None,
-            merge: None,
-            merge_action: vec![],
-            cost,
-        }, true)?;
+            true,
+        )?;
         let f = self.functions.get_mut(&name).unwrap();
         f.insert(&[], value, self.timestamp);
         Ok(sort)
@@ -1209,7 +1221,7 @@ impl EGraph {
         //println!("{}", ListDisplay(program.clone(), "\n"));
 
         for command in program {
-            let msg = self.run_command(command, should_run)?;
+            let msg = self.run_command(command.command, should_run)?;
             log::info!("{}", msg);
             msgs.push(msg);
         }

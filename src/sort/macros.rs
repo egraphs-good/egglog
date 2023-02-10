@@ -45,10 +45,10 @@ macro_rules! add_primitives {
                     $name.into()
                 }
 
-                fn accept(&self, types: &[Symbol]) -> Option<ArcSort> {
+                fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
                     let mut types = types.iter();
                     $(
-                        if self.$param.name() != *types.next()? {
+                        if self.$param.name() != types.next()?.name() {
                             return None;
                         }
                     )*

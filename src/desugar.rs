@@ -3,6 +3,7 @@ use std::cmp::max;
 use crate::*;
 
 pub(crate) type Fresh = dyn FnMut() -> Symbol;
+pub(crate) type NewId = dyn FnMut() -> CommandId;
 
 pub(crate) fn literal_name(egraph: &EGraph, literal: &Literal) -> Symbol {
     egraph.infer_literal(literal).name()
@@ -35,14 +36,14 @@ fn make_get_fresh_from_str(program_str: &str) -> impl FnMut() -> Symbol {
     }
 }
 
-fn desugar_datatype(name: Symbol, variants: Vec<Variant>) -> Vec<NormCommand> {
-    vec![NormCommand::Sort(name, None)]
+fn desugar_datatype(name: Symbol, variants: Vec<Variant>) -> Vec<NCommand> {
+    vec![NCommand::Sort(name, None)]
         .into_iter()
         .chain(variants.into_iter().map(|variant| {
             if variant.types.is_empty() {
-                NormCommand::Declare(variant.name, name)
+                NCommand::Declare(variant.name, name)
             } else {
-                NormCommand::Function(FunctionDecl {
+                NCommand::Function(FunctionDecl {
                     name: variant.name,
                     schema: Schema {
                         input: variant.types,
@@ -58,9 +59,9 @@ fn desugar_datatype(name: Symbol, variants: Vec<Variant>) -> Vec<NormCommand> {
         .collect()
 }
 
-fn desugar_rewrite(ruleset: Symbol, rewrite: &Rewrite, desugar: &mut Desugar) -> Vec<NormCommand> {
+fn desugar_rewrite(ruleset: Symbol, rewrite: &Rewrite, desugar: &mut Desugar) -> Vec<NCommand> {
     let var = Symbol::from("rewrite_var__");
-    vec![NormCommand::NormRule(
+    vec![NCommand::NormRule(
         ruleset,
         flatten_rule(
             Rule {
@@ -79,7 +80,7 @@ fn desugar_birewrite(
     ruleset: Symbol,
     rewrite: &Rewrite,
     desugar: &mut Desugar,
-) -> Vec<NormCommand> {
+) -> Vec<NCommand> {
     let rw2 = Rewrite {
         lhs: rewrite.rhs.clone(),
         rhs: rewrite.lhs.clone(),
@@ -167,7 +168,11 @@ fn ssa_valid_expr(expr: &NormExpr, var_used: &mut HashSet<Symbol>, desugar: &Des
     true
 }
 
-pub(crate) fn assert_ssa_valid(facts: &Vec<NormFact>, actions: &Vec<NormAction>, desugar: &Desugar) -> bool {
+pub(crate) fn assert_ssa_valid(
+    facts: &Vec<NormFact>,
+    actions: &Vec<NormAction>,
+    desugar: &Desugar,
+) -> bool {
     let mut var_used: HashSet<Symbol> = Default::default();
     let mut var_used_constraints: HashSet<Symbol> = Default::default();
     for fact in facts {
@@ -188,7 +193,13 @@ pub(crate) fn assert_ssa_valid(facts: &Vec<NormFact>, actions: &Vec<NormAction>,
                 let b1 = var_used_constraints.insert(*v);
                 let b2 = var_used_constraints.insert(*v2);
                 // any constraints on variables are valid, but one needs to be defined
-                if !desugar.let_types.contains_key(v) && !desugar.let_types.contains_key(v2) && !var_used.contains(v) && !var_used.contains(v2) && b1 && b2 {
+                if !desugar.let_types.contains_key(v)
+                    && !desugar.let_types.contains_key(v2)
+                    && !var_used.contains(v)
+                    && !var_used.contains(v2)
+                    && b1
+                    && b2
+                {
                     panic!("invalid Norm constraint: {:?} = {:?}", v, v2);
                 }
             }
@@ -375,6 +386,7 @@ pub struct Desugar<'a> {
     pub func_types: HashMap<Symbol, Schema>,
     pub let_types: HashMap<Symbol, Schema>,
     pub get_fresh: Box<Fresh>,
+    pub get_new_id: Box<NewId>,
     pub egraph: &'a EGraph,
 }
 
@@ -390,23 +402,23 @@ pub(crate) fn desugar_command(
     command: Command,
     desugar: &mut Desugar,
 ) -> Result<Vec<NormCommand>, Error> {
-    Ok(match command {
+    let res = match command.clone() {
         Command::Function(fdecl) => {
-            vec![NormCommand::Function(fdecl)]
+            vec![NCommand::Function(fdecl)]
         }
         Command::Datatype { name, variants } => desugar_datatype(name, variants),
-        Command::Declare(name, parent) => vec![NormCommand::Declare(name, parent)],
+        Command::Declare(name, parent) => vec![NCommand::Declare(name, parent)],
         Command::Rewrite(ruleset, rewrite) => desugar_rewrite(ruleset, &rewrite, desugar),
         Command::BiRewrite(ruleset, rewrite) => desugar_birewrite(ruleset, &rewrite, desugar),
         Command::Include(file) => {
             let s = std::fs::read_to_string(&file)
                 .unwrap_or_else(|_| panic!("Failed to read file {file}"));
-            desugar_commands(desugar.egraph.parse_program(&s)?, desugar)?
+            return desugar_commands(desugar.egraph.parse_program(&s)?, desugar)
         }
         Command::Rule(ruleset, rule) => {
-            vec![NormCommand::NormRule(ruleset, flatten_rule(rule, desugar))]
+            vec![NCommand::NormRule(ruleset, flatten_rule(rule, desugar))]
         }
-        Command::Sort(sort, option) => vec![NormCommand::Sort(sort, option)],
+        Command::Sort(sort, option) => vec![NCommand::Sort(sort, option)],
         // TODO ignoring cost for now
         Command::Define {
             name,
@@ -418,25 +430,25 @@ pub(crate) fn desugar_command(
             let mut actions = vec![];
             expr_to_flat_actions(name, &expr, desugar, &mut actions);
             for action in actions {
-                commands.push(NormCommand::NormAction(action));
+                commands.push(NCommand::NormAction(action));
             }
             commands
         }
-        Command::AddRuleset(name) => vec![NormCommand::AddRuleset(name)],
+        Command::AddRuleset(name) => vec![NCommand::AddRuleset(name)],
         Command::Action(action) => flatten_actions(&vec![action], desugar)
             .into_iter()
-            .map(NormCommand::NormAction)
+            .map(NCommand::NormAction)
             .collect(),
-        Command::Run(run) => vec![NormCommand::Run(run)],
-        Command::Simplify { expr, config } => vec![NormCommand::Simplify { expr, config }],
-        Command::Calc(idents, exprs) => vec![NormCommand::Calc(idents, exprs)],
+        Command::Run(run) => vec![NCommand::Run(run)],
+        Command::Simplify { expr, config } => vec![NCommand::Simplify { expr, config }],
+        Command::Calc(idents, exprs) => vec![NCommand::Calc(idents, exprs)],
         Command::Extract { variants, e } => {
             let fresh = (desugar.get_fresh)();
             flatten_actions(&vec![Action::Let(fresh, e)], desugar)
                 .into_iter()
-                .map(NormCommand::NormAction)
+                .map(NCommand::NormAction)
                 .chain(
-                    vec![NormCommand::Extract {
+                    vec![NCommand::Extract {
                         variants,
                         var: fresh,
                     }]
@@ -444,27 +456,46 @@ pub(crate) fn desugar_command(
                 )
                 .collect()
         }
-        Command::Check(check) => vec![NormCommand::Check(check)],
-        Command::Clear => vec![NormCommand::Clear],
-        Command::Print(symbol, size) => vec![NormCommand::Print(symbol, size)],
-        Command::PrintSize(symbol) => vec![NormCommand::PrintSize(symbol)],
-        Command::Output { file, exprs } => vec![NormCommand::Output { file, exprs }],
+        Command::Check(check) => vec![NCommand::Check(check)],
+        Command::Clear => vec![NCommand::Clear],
+        Command::Print(symbol, size) => vec![NCommand::Print(symbol, size)],
+        Command::PrintSize(symbol) => vec![NCommand::PrintSize(symbol)],
+        Command::Output { file, exprs } => vec![NCommand::Output { file, exprs }],
         Command::Query(facts) => {
-            vec![NormCommand::Query(facts)]
+            vec![NCommand::Query(facts)]
         }
-        Command::Push(num) => vec![NormCommand::Push(num)],
-        Command::Pop(num) => vec![NormCommand::Pop(num)],
+        Command::Push(num) => vec![NCommand::Push(num)],
+        Command::Pop(num) => vec![NCommand::Pop(num)],
         Command::Fail(cmd) => {
             let mut desugared = desugar_command(*cmd, desugar)?;
 
-            let last = desugared.pop();
-            desugared.push(NormCommand::Fail(Box::new(last.unwrap())));
-            desugared
+            let last = desugared.pop().unwrap();
+            desugared.push(NormCommand {
+                metadata: last.metadata,
+                command: NCommand::Fail(Box::new(last.command))
+        });
+            return Ok(desugared)
         }
         Command::Input { .. } => {
             todo!("desugar input");
         }
-    })
+    };
+
+    Ok(res.into_iter().map(|c| {
+        NormCommand {
+            metadata: Metadata { id: (desugar.get_new_id)() },
+            command: c,
+        }
+    }).collect())
+}
+
+fn make_get_new_id() -> impl FnMut() -> usize {
+    let mut id = 0;
+    move || {
+        let res = id;
+        id += 1;
+        res
+    }
 }
 
 pub(crate) fn desugar_program(
@@ -476,6 +507,7 @@ pub(crate) fn desugar_program(
         func_types: Default::default(),
         let_types: Default::default(),
         get_fresh,
+        get_new_id: Box::new(make_get_new_id()),
         egraph,
     };
     let res = desugar_commands(program, &mut desugar)?;

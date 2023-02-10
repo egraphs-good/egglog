@@ -126,7 +126,7 @@ impl PrimitiveLike for Ctor {
         self.name
     }
 
-    fn accept(&self, types: &[Symbol]) -> Option<ArcSort> {
+    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
         match types {
             [] => Some(self.map.clone()),
             _ => None,
@@ -153,9 +153,12 @@ impl PrimitiveLike for Insert {
         self.name
     }
 
-    fn accept(&self, types: &[Symbol]) -> Option<ArcSort> {
+    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
         match types {
-            [map, key, value] if (*map, (*key, *value)) == (self.map.name, self.map.kv_names()) => {
+            [map, key, value]
+                if (map.name(), (key.name(), value.name()))
+                    == (self.map.name, self.map.kv_names()) =>
+            {
                 Some(self.map.clone())
             }
             _ => None,
@@ -190,9 +193,9 @@ impl PrimitiveLike for Get {
         self.name
     }
 
-    fn accept(&self, types: &[Symbol]) -> Option<ArcSort> {
+    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
         match types {
-            [map, key] if (*map, *key) == (self.map.name, self.map.key.name()) => {
+            [map, key] if (map.name(), key.name()) == (self.map.name, self.map.key.name()) => {
                 Some(self.map.value.clone())
             }
             _ => None,
@@ -223,9 +226,9 @@ impl PrimitiveLike for NotContains {
         self.name
     }
 
-    fn accept(&self, types: &[Symbol]) -> Option<ArcSort> {
+    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
         match types {
-            [map, key] if (*map, *key) == (self.map.name, self.map.key.name()) => {
+            [map, key] if (map.name(), key.name()) == (self.map.name, self.map.key.name()) => {
                 Some(self.unit.clone())
             }
             _ => None,
@@ -260,9 +263,9 @@ impl PrimitiveLike for Contains {
         self.name
     }
 
-    fn accept(&self, types: &[Symbol]) -> Option<ArcSort> {
+    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
         match types {
-            [map, key] if (*map, *key) == (self.map.name, self.map.key.name()) => {
+            [map, key] if (map.name(), key.name()) == (self.map.name, self.map.key.name()) => {
                 Some(self.unit.clone())
             }
             _ => None,
@@ -296,9 +299,9 @@ impl PrimitiveLike for Union {
         self.name
     }
 
-    fn accept(&self, types: &[Symbol]) -> Option<ArcSort> {
+    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
         match types {
-            [map1, map2] if *map1 == self.map.name && *map2 == self.map.name() => {
+            [map1, map2] if map1.name() == self.map.name && map2.name() == self.map.name() => {
                 Some(self.map.clone())
             }
             _ => None,
@@ -332,9 +335,9 @@ impl PrimitiveLike for Intersect {
         self.name
     }
 
-    fn accept(&self, types: &[Symbol]) -> Option<ArcSort> {
+    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
         match types {
-            [map1, map2] if *map1 == self.map.name && *map2 == self.map.name() => {
+            [map1, map2] if map1.name() == self.map.name && map2.name() == self.map.name() => {
                 Some(self.map.clone())
             }
             _ => None,
@@ -367,9 +370,9 @@ impl PrimitiveLike for Remove {
         self.name
     }
 
-    fn accept(&self, types: &[Symbol]) -> Option<ArcSort> {
+    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
         match types {
-            [map, key] if (*map, *key) == (self.map.name, self.map.key.name()) => {
+            [map, key] if (map.name(), key.name()) == (self.map.name, self.map.key.name()) => {
                 Some(self.map.clone())
             }
             _ => None,
@@ -401,9 +404,9 @@ impl PrimitiveLike for Diff {
         self.name
     }
 
-    fn accept(&self, types: &[Symbol]) -> Option<ArcSort> {
+    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
         match types {
-            [map1, map2] if *map1 == self.map.name && *map2 == self.map.name() => {
+            [map1, map2] if map1.name() == self.map.name && map2.name() == self.map.name() => {
                 Some(self.map.clone())
             }
             _ => None,

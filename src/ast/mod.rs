@@ -39,8 +39,34 @@ impl Display for Id {
     }
 }
 
-#[derive(Debug, Clone)]
-pub enum NormCommand {
+pub type CommandId = usize;
+
+// TODO put line numbers in metadata
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct Metadata {
+    pub id: CommandId,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct NormCommand {
+    pub metadata: Metadata,
+    pub command: NCommand,
+}
+
+impl NormCommand {
+    pub fn transforms_to(&self, others: Vec<NCommand>) -> Vec<NormCommand> {
+        others
+            .into_iter()
+            .map(|c| NormCommand {
+                metadata: self.metadata.clone(),
+                command: c,
+            })
+            .collect()
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub enum NCommand {
     Sort(Symbol, Option<(Symbol, Vec<Expr>)>),
     Function(FunctionDecl),
     // Declare a variable with a given name and type
@@ -63,43 +89,49 @@ pub enum NormCommand {
     Query(Vec<Fact>),
     Push(usize),
     Pop(usize),
-    Fail(Box<NormCommand>),
+    Fail(Box<NCommand>),
     // TODO desugar
     Input { name: Symbol, file: String },
 }
 
 impl NormCommand {
     pub fn to_command(&self) -> Command {
+        self.command.to_command()
+    }
+}
+
+impl NCommand {
+    pub fn to_command(&self) -> Command {
         match self {
-            NormCommand::Sort(name, params) => Command::Sort(*name, params.clone()),
-            NormCommand::Function(f) => Command::Function(f.clone()),
-            NormCommand::Declare(name, parent_type) => Command::Declare(*name, *parent_type),
-            NormCommand::AddRuleset(name) => Command::AddRuleset(*name),
-            NormCommand::NormRule(name, rule) => Command::Rule(*name, rule.to_rule()),
-            NormCommand::NormAction(action) => Command::Action(action.to_action()),
-            NormCommand::Run(config) => Command::Run(config.clone()),
-            NormCommand::Simplify { expr, config } => Command::Simplify {
+            NCommand::Sort(name, params) => Command::Sort(*name, params.clone()),
+            NCommand::Function(f) => Command::Function(f.clone()),
+            NCommand::Declare(name, parent_type) => Command::Declare(*name, *parent_type),
+            NCommand::AddRuleset(name) => Command::AddRuleset(*name),
+            NCommand::NormRule(name, rule) => Command::Rule(*name, rule.to_rule()),
+            NCommand::NormAction(action) => Command::Action(action.to_action()),
+            NCommand::Run(config) => Command::Run(config.clone()),
+            NCommand::Simplify { expr, config } => Command::Simplify {
                 expr: expr.clone(),
                 config: config.clone(),
             },
-            NormCommand::Calc(args, exprs) => Command::Calc(args.clone(), exprs.clone()),
-            NormCommand::Extract { variants, var } => Command::Extract {
+            NCommand::Calc(args, exprs) => Command::Calc(args.clone(), exprs.clone()),
+            NCommand::Extract { variants, var } => Command::Extract {
                 variants: *variants,
                 e: Expr::Var(*var),
             },
-            NormCommand::Check(fact) => Command::Check(fact.clone()),
-            NormCommand::Clear => Command::Query(vec![]),
-            NormCommand::Print(name, n) => Command::Print(*name, *n),
-            NormCommand::PrintSize(name) => Command::PrintSize(*name),
-            NormCommand::Output { file, exprs } => Command::Output {
+            NCommand::Check(fact) => Command::Check(fact.clone()),
+            NCommand::Clear => Command::Query(vec![]),
+            NCommand::Print(name, n) => Command::Print(*name, *n),
+            NCommand::PrintSize(name) => Command::PrintSize(*name),
+            NCommand::Output { file, exprs } => Command::Output {
                 file: file.to_string(),
                 exprs: exprs.clone(),
             },
-            NormCommand::Query(facts) => Command::Query(facts.clone()),
-            NormCommand::Push(n) => Command::Push(*n),
-            NormCommand::Pop(n) => Command::Pop(*n),
-            NormCommand::Fail(cmd) => Command::Fail(Box::new(cmd.to_command())),
-            NormCommand::Input { name, file } => Command::Input {
+            NCommand::Query(facts) => Command::Query(facts.clone()),
+            NCommand::Push(n) => Command::Push(*n),
+            NCommand::Pop(n) => Command::Pop(*n),
+            NCommand::Fail(cmd) => Command::Fail(Box::new(cmd.to_command())),
+            NCommand::Input { name, file } => Command::Input {
                 name: *name,
                 file: file.clone(),
             },
@@ -305,6 +337,12 @@ impl Display for NormCommand {
     }
 }
 
+impl Display for NCommand {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_command())
+    }
+}
+
 impl Display for Command {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -314,7 +352,7 @@ impl Display for Command {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct IdentSort {
     pub ident: Symbol,
     pub sort: Symbol,
@@ -335,14 +373,14 @@ impl Display for IdentSort {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct RunConfig {
     pub ruleset: Symbol,
     pub limit: usize,
     pub until: Option<Fact>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct FunctionDecl {
     pub name: Symbol,
     pub schema: Schema,
@@ -352,7 +390,7 @@ pub struct FunctionDecl {
     pub cost: Option<usize>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Variant {
     pub name: Symbol,
     pub types: Vec<Symbol>,
@@ -373,7 +411,7 @@ impl Variant {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Schema {
     pub input: Vec<Symbol>,
     pub output: Symbol,
@@ -452,14 +490,14 @@ impl FunctionDecl {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Fact {
     /// Must be at least two things in an eq fact
     Eq(Vec<Expr>),
     Fact(Expr),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum NormFact {
     Assign(Symbol, NormExpr), // assign symbol to a tuple
     AssignLit(Symbol, Literal),
@@ -507,7 +545,7 @@ impl Display for Fact {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Action {
     Let(Symbol, Expr),
     Set(Symbol, Vec<Expr>, Expr),
@@ -518,7 +556,7 @@ pub enum Action {
     // If(Expr, Action, Action),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum NormAction {
     Let(Symbol, NormExpr),
     LetVar(Symbol, Symbol),
@@ -666,7 +704,7 @@ pub struct Rule {
     pub body: Vec<Fact>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct NormRule {
     pub head: Vec<NormAction>,
     pub body: Vec<NormFact>,

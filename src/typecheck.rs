@@ -331,10 +331,7 @@ impl<'a> Context<'a> {
                     let (ids, arg_tys): (Vec<Id>, Vec<Option<ArcSort>>) =
                         args.iter().map(|arg| self.infer_query_expr(arg)).unzip();
 
-                    if let Some(arg_tys) = arg_tys
-                        .iter()
-                        .map(|sort| sort.as_ref().map(|inner| inner.name()))
-                        .collect::<Option<Vec<Symbol>>>()
+                    if let Some(arg_tys) = arg_tys.iter().cloned().collect::<Option<Vec<ArcSort>>>()
                     {
                         for prim in prims {
                             if let Some(output_type) = prim.accept(&arg_tys) {
@@ -344,7 +341,7 @@ impl<'a> Context<'a> {
                         }
                         self.errors.push(TypeError::NoMatchingPrimitive {
                             op: *sym,
-                            inputs: arg_tys,
+                            inputs: arg_tys.iter().map(|t| t.name()).collect(),
                         });
                     }
 
@@ -531,7 +528,7 @@ trait ExprChecker<'a> {
                     for arg in args {
                         let (t, ty) = self.infer_expr(arg)?;
                         ts.push(t);
-                        tys.push(ty.name());
+                        tys.push(ty);
                     }
 
                     for prim in prims {
@@ -543,7 +540,7 @@ trait ExprChecker<'a> {
 
                     Err(TypeError::NoMatchingPrimitive {
                         op: *sym,
-                        inputs: tys,
+                        inputs: tys.into_iter().map(|t| t.name()).collect(),
                     })
                 } else {
                     Err(TypeError::Unbound(*sym))

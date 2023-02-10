@@ -8,28 +8,6 @@ fn proof_header(egraph: &EGraph) -> Vec<Command> {
     egraph.parse_program(str).unwrap()
 }
 
-fn function_type(
-    egraph: &EGraph,
-    proof_state: &ProofState,
-    func: Symbol,
-    input_types: Vec<Symbol>,
-) -> Symbol {
-    if let Some(existing) = proof_state.desugar.func_types.get(&func) {
-        assert_eq!(input_types, existing.input);
-        return existing.output;
-    } else {
-        for prim in egraph.primitives.get(&func).unwrap() {
-            if let Some(return_type) = prim.accept(&input_types) {
-                return return_type.name();
-            }
-        }
-        panic!(
-            "No primitive found for {} with input types {:?}",
-            func, input_types
-        );
-    }
-}
-
 // primitives don't need type info
 fn make_ast_version_prim(egraph: &EGraph, name: Symbol) -> Symbol {
     make_ast_version(egraph, name, vec![])
@@ -835,11 +813,11 @@ pub(crate) fn add_proofs(program: Vec<NormCommand>, desugar: Desugar) -> Vec<Nor
     res.extend(setup_primitives(&proof_state));
 
     for command in program {
-        match &command {
-            NormCommand::Sort(_name, _presort_and_args) => {
+        match &command.command {
+            NCommand::Sort(_name, _presort_and_args) => {
                 res.push(command.to_command());
             }
-            NormCommand::Function(fdecl) => {
+            NCommand::Function(fdecl) => {
                 res.push(command.to_command());
                 res.push(Command::Function(make_ast_func(
                     &proof_state.desugar.egraph,
@@ -848,7 +826,7 @@ pub(crate) fn add_proofs(program: Vec<NormCommand>, desugar: Desugar) -> Vec<Nor
                 res.push(Command::Function(make_rep_func(&proof_state, fdecl)));
                 res.push(make_getchild_rule(&proof_state.desugar.egraph, fdecl));
             }
-            NormCommand::NormRule(ruleset, rule) => {
+            NCommand::NormRule(ruleset, rule) => {
                 res.push(Command::Rule(
                     *ruleset,
                     instrument_rule(
@@ -859,10 +837,10 @@ pub(crate) fn add_proofs(program: Vec<NormCommand>, desugar: Desugar) -> Vec<Nor
                     ),
                 ));
             }
-            NormCommand::Run(config) => {
+            NCommand::Run(config) => {
                 res.extend(make_runner(config));
             }
-            NormCommand::NormAction(action) => {
+            NCommand::NormAction(action) => {
                 res.push(Command::Action(action.to_action()));
                 res.extend(proof_original_action(action, &mut proof_state));
             }
@@ -874,6 +852,7 @@ pub(crate) fn add_proofs(program: Vec<NormCommand>, desugar: Desugar) -> Vec<Nor
         func_types: Default::default(),
         let_types: Default::default(),
         get_fresh: proof_state.desugar.get_fresh,
+        get_new_id: proof_state.desugar.get_new_id,
         egraph: proof_state.desugar.egraph,
     };
 
