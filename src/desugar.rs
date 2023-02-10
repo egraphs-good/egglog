@@ -6,7 +6,7 @@ pub(crate) type Fresh = dyn FnMut() -> Symbol;
 pub(crate) type NewId = dyn FnMut() -> CommandId;
 
 pub(crate) fn literal_name(egraph: &EGraph, literal: &Literal) -> Symbol {
-    egraph.infer_literal(literal).name()
+    egraph.type_info.infer_literal(literal).name()
 }
 
 // Makes a function that gets fresh names by counting
@@ -141,7 +141,7 @@ fn expr_to_ssa(
             }
             // fresh variable for call
             let fresh = (desugar.get_fresh)();
-            if desugar.egraph.primitives.contains_key(f) {
+            if desugar.egraph.type_info.primitives.contains_key(f) {
                 res.push(NormFact::Compute(fresh, NormExpr::Call(*f, new_children)));
             } else {
                 res.push(NormFact::Assign(fresh, NormExpr::Call(*f, new_children)));

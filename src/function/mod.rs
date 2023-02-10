@@ -57,13 +57,13 @@ impl Function {
     pub fn new(egraph: &EGraph, decl: &FunctionDecl, is_variable: bool) -> Result<Self, Error> {
         let mut input = Vec::with_capacity(decl.schema.input.len());
         for s in &decl.schema.input {
-            input.push(match egraph.sorts.get(s) {
+            input.push(match egraph.type_info.sorts.get(s) {
                 Some(sort) => sort.clone(),
                 None => return Err(Error::TypeError(TypeError::Unbound(*s))),
             })
         }
 
-        let output = match egraph.sorts.get(&decl.schema.output) {
+        let output = match egraph.type_info.sorts.get(&decl.schema.output) {
             Some(sort) => sort.clone(),
             None => return Err(Error::TypeError(TypeError::Unbound(decl.schema.output))),
         };

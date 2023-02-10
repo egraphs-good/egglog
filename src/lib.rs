@@ -23,6 +23,7 @@ use proofs::{add_proofs, should_add_proofs};
 use symbolic_expressions::Sexp;
 
 use ast::*;
+use typechecking::{TypeInfo, UNIT_SYM};
 
 use std::fmt::{Formatter, Write};
 use std::fs::File;
@@ -130,14 +131,11 @@ impl PrimitiveLike for SimplePrimitive {
 pub struct EGraph {
     egraphs: Vec<Self>,
     unionfind: UnionFind,
-    presorts: HashMap<Symbol, PreSort>,
-    sorts: HashMap<Symbol, Arc<dyn Sort>>,
-    pub(crate) primitives: HashMap<Symbol, Vec<Primitive>>,
+    pub(crate) type_info: TypeInfo,
     functions: HashMap<Symbol, Function>,
     rulesets: HashMap<Symbol, HashMap<Symbol, Rule>>,
     saturated: bool,
     timestamp: u32,
-    unit_sym: Symbol,
     parser: ast::parse::ProgramParser,
     action_parser: ast::parse::ActionParser,
     pub match_limit: usize,
@@ -151,14 +149,11 @@ impl Clone for EGraph {
         EGraph {
             egraphs: self.egraphs.clone(),
             unionfind: self.unionfind.clone(),
-            presorts: self.presorts.clone(),
-            sorts: self.sorts.clone(),
-            primitives: self.primitives.clone(),
             functions: self.functions.clone(),
             rulesets: self.rulesets.clone(),
+            type_info: self.type_info.clone(),
             saturated: self.saturated,
             timestamp: self.timestamp,
-            unit_sym: self.unit_sym,
             parser: ast::parse::ProgramParser::new(),
             action_parser: ast::parse::ActionParser::new(),
             match_limit: self.match_limit,
@@ -183,16 +178,12 @@ struct Rule {
 
 impl Default for EGraph {
     fn default() -> Self {
-        let unit_sym = "Unit".into();
         let mut egraph = Self {
             egraphs: vec![],
             unionfind: Default::default(),
-            sorts: Default::default(),
             functions: Default::default(),
             rulesets: Default::default(),
-            primitives: Default::default(),
-            presorts: Default::default(),
-            unit_sym,
+            type_info: Default::default(),
             parser: ast::parse::ProgramParser::new(),
             action_parser: ast::parse::ActionParser::new(),
             match_limit: 10_000_000,
@@ -203,12 +194,7 @@ impl Default for EGraph {
             seminaive: true,
         };
         egraph.rulesets.insert("".into(), Default::default());
-        egraph.add_sort(UnitSort::new(unit_sym));
-        egraph.add_sort(StringSort::new("String".into()));
-        egraph.add_sort(I64Sort::new("i64".into()));
-        egraph.add_sort(F64Sort::new("f64".into()));
-        egraph.add_sort(RationalSort::new("Rational".into()));
-        egraph.presorts.insert("Map".into(), MapSort::make_sort);
+        
         egraph
     }
 }
@@ -218,10 +204,6 @@ impl Default for EGraph {
 pub struct NotFoundError(Expr);
 
 impl EGraph {
-    pub fn add_sort<S: Sort + 'static>(&mut self, sort: S) {
-        self.add_arcsort(Arc::new(sort)).unwrap()
-    }
-
     pub fn push(&mut self) {
         self.egraphs.push(self.clone());
     }
@@ -236,35 +218,7 @@ impl EGraph {
         }
     }
 
-    pub fn add_arcsort(&mut self, sort: ArcSort) -> Result<(), Error> {
-        let name = sort.name();
-
-        match self.sorts.entry(name) {
-            Entry::Occupied(_) => Err(Error::SortAlreadyBound(name)),
-            Entry::Vacant(e) => {
-                e.insert(sort.clone());
-                sort.register_primitives(self);
-                Ok(())
-            }
-        }
-    }
-
-    pub fn get_sort<S: Sort + Send + Sync>(&self) -> Arc<S> {
-        for sort in self.sorts.values() {
-            let sort = sort.clone().as_arc_any();
-            if let Ok(sort) = Arc::downcast(sort) {
-                return sort;
-            }
-        }
-        // TODO handle if multiple match?
-        // could handle by type id??
-        panic!("Failed to lookup sort: {}", std::any::type_name::<S>());
-    }
-
-    pub fn add_primitive(&mut self, prim: impl Into<Primitive>) {
-        let prim = prim.into();
-        self.primitives.entry(prim.name()).or_default().push(prim);
-    }
+    
 
     pub fn union(&mut self, id1: Id, id2: Id, sort: Symbol) -> Id {
         self.unionfind.union(id1, id2, sort)
@@ -335,7 +289,7 @@ impl EGraph {
                 Expr::Var(_) => panic!("can't check a var"),
                 Expr::Call(_, _) => {
                     // println!("Checking fact: {}", expr);
-                    let unit = self.get_sort::<UnitSort>();
+                    let unit = self.type_info.get_sort::<UnitSort>();
                     self.eval_expr(expr, Some(unit), false)?;
                 }
             },
@@ -416,31 +370,11 @@ impl EGraph {
         self.unionfind.n_unions() - n_unions + function.clear_updates()
     }
 
-    pub fn declare_sort(
-        &mut self,
-        name: impl Into<Symbol>,
-        presort_and_args: Option<(Symbol, &[Expr])>,
-    ) -> Result<(), Error> {
-        let name = name.into();
-        let sort = match presort_and_args {
-            Some((presort, args)) => {
-                let mksort = self
-                    .presorts
-                    .get(&presort)
-                    .ok_or(Error::PresortNotFound(presort))?;
-                mksort(self, name, args)?
-            }
-            None => Arc::new(EqSort { name }),
-        };
-        self.add_arcsort(sort)
-    }
-
     pub fn declare_function(&mut self, decl: &FunctionDecl, is_var: bool) -> Result<(), Error> {
-        self.declare_sort(decl.name, None)?;
         let function = Function::new(self, decl, is_var)?;
         let old = self.functions.insert(decl.name, function);
         if old.is_some() {
-            return Err(TypeError::FunctionAlreadyBound(decl.name).into());
+            panic!("Typechecking should have caught function already bound: {}", decl.name);
         }
 
         Ok(())
@@ -475,10 +409,10 @@ impl EGraph {
 
     pub fn eval_lit(&self, lit: &Literal) -> Value {
         match lit {
-            Literal::Int(i) => i.store(&self.get_sort()).unwrap(),
-            Literal::F64(f) => f.store(&self.get_sort()).unwrap(),
-            Literal::String(s) => s.store(&self.get_sort()).unwrap(),
-            Literal::Unit => ().store(&self.get_sort()).unwrap(),
+            Literal::Int(i) => i.store(&self.type_info.get_sort()).unwrap(),
+            Literal::F64(f) => f.store(&self.type_info.get_sort()).unwrap(),
+            Literal::String(s) => s.store(&self.type_info.get_sort()).unwrap(),
+            Literal::Unit => ().store(&self.type_info.get_sort()).unwrap(),
         }
     }
 
@@ -492,7 +426,7 @@ impl EGraph {
             .map(|(k, v)| (ValueVec::from(k), v.clone()))
             .collect::<Vec<_>>();
 
-        let out_is_unit = f.schema.output.name() == self.unit_sym;
+        let out_is_unit = f.schema.output.name() == UNIT_SYM.into();
 
         let mut buf = String::new();
         let s = &mut buf;
@@ -817,19 +751,8 @@ impl EGraph {
             );
         }
         Ok(match command {
-            NCommand::Sort(name, presort_and_args) => match presort_and_args {
-                Some((presort, args)) => {
-                    self.declare_sort(name, Some((presort, &args)))?;
-                    format!(
-                        "Declared sort {name} = ({presort} {})",
-                        ListDisplay(&args, " ")
-                    )
-                }
-                None => {
-                    self.declare_sort(name, None)?;
-                    format!("Declared sort {name}.")
-                }
-            },
+            // Sorts are already declared during typechecking
+            NCommand::Sort(name, presort_and_args) => format!("Declared sort {}.", name),
             NCommand::Function(fdecl) => {
                 self.declare_function(&fdecl, false)?;
                 format!("Declared function {}.", fdecl.name)
@@ -1093,7 +1016,7 @@ impl EGraph {
         *depth += 1;
         // Insert fresh symbols for locally universally quantified reasoning.
         for IdentSort { ident, sort } in idents {
-            let sort = self.sorts.get(&sort).unwrap().clone();
+            let sort = self.type_info.sorts.get(&sort).unwrap().clone();
             self.declare_const(ident, &sort)?;
         }
         // Insert each expression pair and run until they match.
@@ -1248,7 +1171,9 @@ impl EGraph {
     }
 
     pub fn parse_desugar(&self, input: &str) -> Result<(Vec<NormCommand>, Desugar), Error> {
-        desugar_program(self, self.parse_program(input)?)
+        let (desugared, desugar) = desugar_program(self, self.parse_program(input)?)?;
+        let _type_info = TypeInfo::typecheck_program(&desugared)?;
+        Ok((desugared, desugar))
     }
 
     pub fn parse_and_run_program(&mut self, input: &str) -> Result<Vec<String>, Error> {
@@ -1284,10 +1209,6 @@ pub enum Error {
     PrimitiveError(Primitive, Vec<Value>),
     #[error("Illegal merge attempted for function {0}, {1:?} != {2:?}")]
     MergeError(Symbol, Value, Value),
-    #[error("Sort {0} already declared.")]
-    SortAlreadyBound(Symbol),
-    #[error("Presort {0} not found.")]
-    PresortNotFound(Symbol),
     #[error("Tried to pop too much")]
     Pop,
     #[error("Command should have failed.")]

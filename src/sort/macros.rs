@@ -25,11 +25,11 @@ macro_rules! add_primitives {
     // ($egraph:expr, $($rest:tt)*) => {
     //      add_primitives!(@doubled $egraph, $($rest)*, $($rest)*)
     // };
-    ($egraph:expr,
+    ($type_info:expr,
         $name:literal = |$($param:ident : $param_t:ty),*| -> $ret:ty { $body:expr }
         // $name2:literal = |$($param2:ident : $(&)? $base_param_t:ident),*| -> $ret2:ty { $body2:expr }
     ) => {{
-        let egraph: &mut _ = $egraph;
+        let type_info: &mut _ = $type_info;
         #[allow(unused_imports, non_snake_case)]
         {
             use $crate::{*, sort::*};
@@ -76,9 +76,9 @@ macro_rules! add_primitives {
                     (vec![$(self.$param.clone()),*], self.__out.clone())
                 }
             }
-            egraph.add_primitive($crate::Primitive::from(MyPrim {
-                $( $param: egraph.get_sort::<<$param_t as IntoSort>::Sort>(), )*
-                __out: egraph.get_sort::<<$ret as IntoSort>::Sort>(),
+            type_info.add_primitive($crate::Primitive::from(MyPrim {
+                $( $param: type_info.get_sort::<<$param_t as IntoSort>::Sort>(), )*
+                __out: type_info.get_sort::<<$ret as IntoSort>::Sort>(),
             }))
         }
     }};

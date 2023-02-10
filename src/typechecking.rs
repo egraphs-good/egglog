@@ -12,68 +12,121 @@ impl FuncType {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct TypeInfo {
-    pub sorts: HashMap<Symbol, ArcSort>,
+    // get the sort from the sorts name()
+    pub presorts: HashMap<Symbol, PreSort>,
+    pub sorts: HashMap<Symbol, Arc<dyn Sort>>,
+    pub primitives: HashMap<Symbol, Vec<Primitive>>,
     pub func_types: HashMap<Symbol, FuncType>,
     pub global_types: HashMap<Symbol, ArcSort>,
     pub local_types: HashMap<CommandId, HashMap<Symbol, ArcSort>>,
 }
 
-/*fn function_type(
-  egraph: &EGraph,
-  proof_state: &ProofState,
-  func: Symbol,
-  input_types: Vec<Symbol>,
-) -> Symbol {
-  if let Some(existing) = proof_state.desugar.func_types.get(&func) {
-      assert_eq!(input_types, existing.input);
-      return existing.output;
-  } else {
-      for prim in egraph.primitives.get(&func).unwrap() {
-          if let Some(return_type) = prim.accept(&input_types) {
-              return return_type.name();
-          }
-      }
-      panic!(
-          "No primitive found for {} with input types {:?}",
-          func, input_types
-      );
-  }
-}*/
+
+pub const UNIT_SYM: &str = "Unit";
 
 impl TypeInfo {
+    pub fn new() -> Self {
+        let mut res = Self::default();
+        res.add_sort(UnitSort::new(UNIT_SYM.into()));
+        res.add_sort(StringSort::new("String".into()));
+        res.add_sort(I64Sort::new("i64".into()));
+        res.add_sort(F64Sort::new("f64".into()));
+        res.add_sort(RationalSort::new("Rational".into()));
+        res.presorts.insert("Map".into(), MapSort::make_sort);
+        res
+    }
+
+    pub(crate) fn infer_literal(&self, lit: &Literal) -> ArcSort {
+        match lit {
+            Literal::Int(_) => self.sorts.get(&Symbol::from("i64")),
+            Literal::F64(_) => self.sorts.get(&Symbol::from("f64")),
+            Literal::String(_) => self.sorts.get(&Symbol::from("String")),
+            Literal::Unit => self.sorts.get(&Symbol::from("Unit")),
+        }
+        .unwrap()
+        .clone()
+    }
+
+    pub fn add_sort<S: Sort + 'static>(&mut self, sort: S) {
+        self.add_arcsort(Arc::new(sort)).unwrap()
+    }
+
+    pub fn add_arcsort(&mut self, sort: ArcSort) -> Result<(), TypeError> {
+        let name = sort.name();
+
+        match self.sorts.entry(name) {
+            Entry::Occupied(_) => Err(TypeError::SortAlreadyBound(name)),
+            Entry::Vacant(e) => {
+                e.insert(sort.clone());
+                sort.register_primitives(self);
+                Ok(())
+            }
+        }
+    }
+
+    pub fn get_sort<S: Sort + Send + Sync>(&self) -> Arc<S> {
+        for sort in self.sorts.values() {
+            let sort = sort.clone().as_arc_any();
+            if let Ok(sort) = Arc::downcast(sort) {
+                return sort;
+            }
+        }
+        
+        // TODO handle if multiple match?
+        // could handle by type id??
+        panic!("Failed to lookup sort: {}", std::any::type_name::<S>());
+    }
+
+    pub fn add_primitive(&mut self, prim: impl Into<Primitive>) {
+        let prim = prim.into();
+        self.primitives.entry(prim.name()).or_default().push(prim);
+    }
+
     pub(crate) fn typecheck_program(
-        egraph: &EGraph,
         program: &Vec<NormCommand>,
     ) -> Result<Self, TypeError> {
         let mut type_info = TypeInfo::default();
         for command in program {
-            type_info.typecheck_command(egraph, command)?;
+            type_info.typecheck_command(command)?;
         }
         Ok(type_info)
     }
 
-    pub(crate) fn schema_to_functype(&self, schema: &Schema) -> FuncType {
+    pub(crate) fn schema_to_functype(&self, schema: &Schema) -> Result<FuncType, TypeError> {
         let input = schema
             .input
             .iter()
-            .map(|s| self.sorts.get(s).unwrap().clone())
-            .collect();
-        let output = self.sorts.get(&schema.output).unwrap().clone();
-        FuncType::new(input, output)
+            .map(|name| {
+                if let Some(sort) = self.sorts.get(name) {
+                    Ok(sort.clone())
+                } else {
+                    Err(TypeError::Unbound(*name))
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let output = if let Some(sort) = self.sorts.get(&schema.output) {
+            Ok(sort.clone())
+        } else {
+            Err(TypeError::Unbound(schema.output))
+        }?;
+        Ok(FuncType::new(input, output))
     }
 
     pub(crate) fn typecheck_command(
         &mut self,
-        egraph: &EGraph,
         command: &NormCommand,
     ) -> Result<(), TypeError> {
         match &command.command {
             NCommand::Function(fdecl) => {
+                if self.sorts.contains_key(&fdecl.name) {
+                    return Err(TypeError::SortAlreadyBound(fdecl.name));
+                }
+                let ftype = self.schema_to_functype(&fdecl.schema)?;
                 if self
                     .func_types
-                    .insert(fdecl.name, self.schema_to_functype(&fdecl.schema))
+                    .insert(fdecl.name, ftype)
                     .is_some()
                 {
                     return Err(TypeError::FunctionAlreadyBound(fdecl.name));
@@ -93,58 +146,81 @@ impl TypeInfo {
                 }
             }
             NCommand::NormRule(_ruleset, rule) => {
-                self.typecheck_rule(egraph, command.metadata.id, rule)?;
+                self.typecheck_rule(command.metadata.id, rule)?;
+            }
+            NCommand::Sort(sort, presort_and_args) => {
+                self.declare_sort(*sort, presort_and_args)?;
             }
             _ => (),
         }
         Ok(())
     }
 
+    pub fn declare_sort(
+        &mut self,
+        name: impl Into<Symbol>,
+        presort_and_args: &Option<(Symbol, Vec<Expr>)>,
+    ) -> Result<(), TypeError> {
+        let name = name.into();
+        if self.func_types.contains_key(&name) {
+            return Err(TypeError::FunctionAlreadyBound(name));
+        }
+
+
+        let sort = match presort_and_args {
+            Some((presort, args)) => {
+                let mksort = self
+                    .presorts
+                    .get(presort)
+                    .ok_or(TypeError::PresortNotFound(*presort))?;
+                mksort(self, name, args)?
+            }
+            None => Arc::new(EqSort { name }),
+        };
+        self.add_arcsort(sort)
+    }
+
     fn typecheck_rule(
         &mut self,
-        egraph: &EGraph,
         ctx: CommandId,
         rule: &NormRule,
     ) -> Result<(), TypeError> {
         assert!(self.local_types.insert(ctx, Default::default()).is_none());
-        self.typecheck_facts(egraph, ctx, &rule.body)?;
-        self.typecheck_actions(egraph, ctx, &rule.head)?;
+        self.typecheck_facts(ctx, &rule.body)?;
+        self.typecheck_actions(ctx, &rule.head)?;
         Ok(())
     }
 
     fn typecheck_facts(
         &mut self,
-        egraph: &EGraph,
         ctx: CommandId,
         facts: &Vec<NormFact>,
     ) -> Result<(), TypeError> {
         for fact in facts {
-            self.typecheck_fact(egraph, ctx, fact)?;
+            self.typecheck_fact(ctx, fact)?;
         }
         Ok(())
     }
 
     fn typecheck_actions(
         &mut self,
-        egraph: &EGraph,
         ctx: CommandId,
         actions: &Vec<NormAction>,
     ) -> Result<(), TypeError> {
         for action in actions {
-            self.typecheck_action(egraph, ctx, action)?;
+            self.typecheck_action(ctx, action)?;
         }
         Ok(())
     }
 
     fn typecheck_action(
         &mut self,
-        egraph: &EGraph,
         ctx: CommandId,
         action: &NormAction,
     ) -> Result<(), TypeError> {
         match action {
             NormAction::Let(var, expr) => {
-                let expr_type = self.typecheck_expr(egraph, ctx, expr)?;
+                let expr_type = self.typecheck_expr(ctx, expr)?;
                 if let Some(existing) = self
                     .local_types
                     .get_mut(&ctx)
@@ -155,7 +231,7 @@ impl TypeInfo {
                 }
             }
             NormAction::LetLit(var, lit) => {
-                let lit_type = egraph.infer_literal(lit);
+                let lit_type = self.infer_literal(lit);
                 if let Some(existing) = self
                     .local_types
                     .get_mut(&ctx)
@@ -170,14 +246,14 @@ impl TypeInfo {
                     .iter()
                     .map(|var| self.lookup(ctx, *var))
                     .collect::<Result<Vec<_>, _>>()?;
-                let func_type = self.lookup_func(egraph, ctx, *head, child_types)?;
+                let func_type = self.lookup_func(ctx, *head, child_types)?;
             }
             NormAction::Set(head, body, other) => {
                 let child_types = body
                     .iter()
                     .map(|var| self.lookup(ctx, *var))
                     .collect::<Result<Vec<_>, _>>()?;
-                let func_type = self.lookup_func(egraph, ctx, *head, child_types)?;
+                let func_type = self.lookup_func(ctx, *head, child_types)?;
                 let other_type = self.lookup(ctx, *other)?;
                 if func_type.name() != other_type.name() {
                     return Err(TypeError::TypeMismatch(func_type, other_type));
@@ -208,13 +284,12 @@ impl TypeInfo {
 
     fn typecheck_fact(
         &mut self,
-        egraph: &EGraph,
         ctx: CommandId,
         fact: &NormFact,
     ) -> Result<(), TypeError> {
         match fact {
             NormFact::Assign(var, expr) | NormFact::Compute(var, expr) => {
-                let expr_type = self.typecheck_expr(egraph, ctx, expr)?;
+                let expr_type = self.typecheck_expr(ctx, expr)?;
                 if let Some(existing) = self
                     .local_types
                     .get_mut(&ctx)
@@ -225,7 +300,7 @@ impl TypeInfo {
                 }
             }
             NormFact::AssignLit(var, lit) => {
-                let lit_type = egraph.infer_literal(lit);
+                let lit_type = self.infer_literal(lit);
                 if let Some(existing) = self
                     .local_types
                     .get_mut(&ctx)
@@ -277,7 +352,6 @@ impl TypeInfo {
 
     fn lookup_func(
         &self,
-        egraph: &EGraph,
         ctx: CommandId,
         sym: Symbol,
         input_types: Vec<ArcSort>,
@@ -285,7 +359,7 @@ impl TypeInfo {
         if let Some(found) = self.func_types.get(&sym) {
             Ok(found.output.clone())
         } else {
-            for prim in egraph.primitives.get(&sym).unwrap() {
+            for prim in self.primitives.get(&sym).unwrap() {
                 if let Some(return_type) = prim.accept(&input_types) {
                     return Ok(return_type);
                 }
@@ -299,7 +373,6 @@ impl TypeInfo {
 
     fn typecheck_expr(
         &self,
-        egraph: &EGraph,
         ctx: CommandId,
         expr: &NormExpr,
     ) -> Result<ArcSort, TypeError> {
@@ -309,7 +382,7 @@ impl TypeInfo {
                     .iter()
                     .map(|var| self.lookup(ctx, *var))
                     .collect::<Result<Vec<_>, _>>()?;
-                self.lookup_func(egraph, ctx, *head, child_types)
+                self.lookup_func(ctx, *head, child_types)
             }
         }
     }
@@ -341,8 +414,12 @@ pub enum TypeError {
     GlobalAlreadyBound(Symbol),
     #[error("Local already bound {0} with type {}", .1.name())]
     LocalAlreadyBound(Symbol, ArcSort),
+    #[error("Sort {0} already declared.")]
+    SortAlreadyBound(Symbol),
     #[error("Type mismatch: expected {}, actual {}", .0.name(), .1.name())]
     TypeMismatch(ArcSort, ArcSort),
+    #[error("Presort {0} not found.")]
+    PresortNotFound(Symbol),
     #[error("Cannot type a variable as unit: {0}")]
     UnitVar(Symbol),
     #[error("Failed to infer a type for: {0}")]

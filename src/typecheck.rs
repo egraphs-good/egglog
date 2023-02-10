@@ -85,7 +85,7 @@ impl<'a> Context<'a> {
     pub fn new(egraph: &'a EGraph) -> Self {
         Self {
             egraph,
-            unit: egraph.sorts[&Symbol::from("Unit")].clone(),
+            unit: egraph.type_info.sorts[&Symbol::from(UNIT_SYM)].clone(),
             types: Default::default(),
             errors: Vec::default(),
             unionfind: UnionFind::default(),
@@ -308,7 +308,7 @@ impl<'a> Context<'a> {
                 (self.add_node(ENode::Var(*sym)), ty)
             }
             Expr::Lit(lit) => {
-                let t = self.egraph.infer_literal(lit);
+                let t = self.egraph.type_info.infer_literal(lit);
                 (self.add_node(ENode::Literal(lit.clone())), Some(t))
             }
             Expr::Call(sym, args) => {
@@ -327,7 +327,7 @@ impl<'a> Context<'a> {
                         .collect();
                     let t = f.schema.output.clone();
                     (self.add_node(ENode::Func(*sym, ids)), Some(t))
-                } else if let Some(prims) = self.egraph.primitives.get(sym) {
+                } else if let Some(prims) = self.egraph.type_info.primitives.get(sym) {
                     let (ids, arg_tys): (Vec<Id>, Vec<Option<ArcSort>>) =
                         args.iter().map(|arg| self.infer_query_expr(arg)).unzip();
 
@@ -498,7 +498,7 @@ trait ExprChecker<'a> {
         match expr {
             Expr::Lit(lit) => {
                 let t = self.do_lit(lit);
-                Ok((t, self.egraph().infer_literal(lit)))
+                Ok((t, self.egraph().type_info.infer_literal(lit)))
             }
             Expr::Var(sym) => {
                 if self.variable_function(*sym) {
@@ -522,7 +522,7 @@ trait ExprChecker<'a> {
 
                     let t = self.do_function(*sym, ts);
                     Ok((t, f.schema.output.clone()))
-                } else if let Some(prims) = self.egraph().primitives.get(sym) {
+                } else if let Some(prims) = self.egraph().type_info.primitives.get(sym) {
                     let mut ts = Vec::with_capacity(args.len());
                     let mut tys = Vec::with_capacity(args.len());
                     for arg in args {
@@ -573,17 +573,6 @@ enum Instruction {
 pub struct Program(Vec<Instruction>);
 
 impl EGraph {
-    pub(crate) fn infer_literal(&self, lit: &Literal) -> ArcSort {
-        match lit {
-            Literal::Int(_) => self.sorts.get(&Symbol::from("i64")),
-            Literal::F64(_) => self.sorts.get(&Symbol::from("f64")),
-            Literal::String(_) => self.sorts.get(&Symbol::from("String")),
-            Literal::Unit => self.sorts.get(&Symbol::from("Unit")),
-        }
-        .unwrap()
-        .clone()
-    }
-
     pub fn compile_actions(
         &self,
         types: &IndexMap<Symbol, ArcSort>,
@@ -667,7 +656,7 @@ impl EGraph {
                         self.saturated = false;
                         let out = &function.schema.output;
                         match function.decl.default.as_ref() {
-                            None if out.name() == self.unit_sym => {
+                            None if out.name() == UNIT_SYM.into() => {
                                 function.insert(values, Value::unit(), ts);
                                 Value::unit()
                             }

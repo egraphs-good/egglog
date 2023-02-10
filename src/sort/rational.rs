@@ -32,7 +32,7 @@ impl Sort for RationalSort {
     }
 
     #[rustfmt::skip]
-    fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
+    fn register_primitives(self: Arc<Self>, eg: &mut TypeInfo) {
         type Opt<T=()> = Option<T>;
 
         // TODO we can't have primitives take borrows just yet, since it

@@ -59,7 +59,7 @@ fn prim_input_types(prim: &Primitive) -> Vec<Symbol> {
 
 fn make_rep_primitive_funcs(proof_state: &ProofState) -> Vec<Command> {
     let mut res = vec![];
-    for (name, primitives) in &proof_state.desugar.egraph.primitives {
+    for (name, primitives) in &proof_state.desugar.egraph.type_info.primitives {
         for prim in primitives {
             res.push(Command::Function(FunctionDecl {
                 name: make_rep_version(name, proof_state),
@@ -81,6 +81,7 @@ fn make_rep_primitive_funcs(proof_state: &ProofState) -> Vec<Command> {
 
 fn make_rep_primitive_sorts(egraph: &EGraph) -> Vec<Command> {
     egraph
+        .type_info
         .sorts
         .iter()
         .map(|(name, _)| {
@@ -102,7 +103,7 @@ fn make_rep_primitive_sorts(egraph: &EGraph) -> Vec<Command> {
 
 fn make_ast_primitives_funcs(egraph: &EGraph) -> Vec<Command> {
     let mut res = vec![];
-    for (name, primitives) in &egraph.primitives {
+    for (name, primitives) in &egraph.type_info.primitives {
         for prim in primitives {
             res.push(Command::Function(FunctionDecl {
                 name: make_ast_version(egraph, *name, prim_input_types(prim)),
@@ -122,6 +123,7 @@ fn make_ast_primitives_funcs(egraph: &EGraph) -> Vec<Command> {
 
 fn make_ast_primitives_sorts(egraph: &EGraph) -> Vec<Command> {
     egraph
+        .type_info
         .sorts
         .iter()
         .map(|(name, _)| {

@@ -21,8 +21,8 @@ impl Sort for UnitSort {
         self
     }
 
-    fn register_primitives(self: Arc<Self>, egraph: &mut EGraph) {
-        egraph.add_primitive(NotEqualPrimitive { unit: self })
+    fn register_primitives(self: Arc<Self>, type_info: &mut TypeInfo) {
+        type_info.add_primitive(NotEqualPrimitive { unit: self })
     }
 
     fn make_expr(&self, value: Value) -> Expr {

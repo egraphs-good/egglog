@@ -20,7 +20,7 @@ struct Extractor<'a> {
 
 impl EGraph {
     pub fn value_to_id(&self, value: Value) -> Option<(Symbol, Id)> {
-        if let Some(sort) = self.sorts.get(&value.tag) {
+        if let Some(sort) = self.type_info.sorts.get(&value.tag) {
             if sort.is_eq_sort() {
                 let id = Id::from(value.bits as usize);
                 return Some((sort.name(), self.find(id)));
@@ -83,7 +83,7 @@ impl<'a> Extractor<'a> {
     }
 
     fn find_best(&self, value: Value) -> (Cost, Expr) {
-        let sort = self.egraph.sorts.get(&value.tag).unwrap();
+        let sort = self.egraph.type_info.sorts.get(&value.tag).unwrap();
         if sort.is_eq_sort() {
             let id = self.egraph.find(Id::from(value.bits as usize));
             let (cost, node) = &self
