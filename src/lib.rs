@@ -531,14 +531,14 @@ impl EGraph {
                 }
                 self.rebuild_nofail();
                 !self.saturated
-            },
+            }
             Schedule::Repeat(limit, sched) => {
                 let mut updated = false;
                 for _ in 0..*limit {
                     updated |= self.run_schedule(sched);
                 }
                 updated
-            },
+            }
             Schedule::Saturate(sched) => {
                 let mut updated = false;
                 let mut still_updating = true;
@@ -547,15 +547,14 @@ impl EGraph {
                     updated |= still_updating;
                 }
                 updated
-            },
+            }
             Schedule::Sequence(scheds) => {
                 let mut updated = false;
                 for sched in scheds {
                     updated |= self.run_schedule(sched);
                 }
                 updated
-            },
-
+            }
         }
     }
 
