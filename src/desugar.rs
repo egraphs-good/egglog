@@ -164,11 +164,15 @@ fn flatten_facts(facts: &Vec<Fact>, desugar: &mut Desugar) -> Vec<NormFact> {
 }
 
 fn expr_to_flat_actions(
-    assign: Symbol,
     expr: &Expr,
     desugar: &mut Desugar,
     res: &mut Vec<NormAction>,
-) {
+    memo: &mut HashMap<Expr, Symbol>,
+) -> Symbol {
+    if let Some(existing) = memo.get(expr) {
+        return *existing;
+    }
+    let assign = (desugar.get_fresh)();
     match expr {
         Expr::Lit(l) => {
             res.push(NormAction::LetLit(assign, l.clone()));
@@ -184,22 +188,22 @@ fn expr_to_flat_actions(
                         new_children.push(*v);
                     }
                     _ => {
-                        let fresh = (desugar.get_fresh)();
-                        expr_to_flat_actions(fresh, child, desugar, res);
-                        new_children.push(fresh);
+                        let child = expr_to_flat_actions(child, desugar, res, memo);
+                        new_children.push(child);
                     }
                 }
             }
             res.push(NormAction::Let(assign, NormExpr::Call(*f, new_children)));
         }
     }
+    memo.insert(expr.clone(), assign);
+    assign
 }
 
 fn flatten_actions(actions: &Vec<Action>, desugar: &mut Desugar) -> Vec<NormAction> {
-    let mut add_expr = |expr: Expr, res: &mut Vec<NormAction>| {
-        let fresh = (desugar.get_fresh)();
-        expr_to_flat_actions(fresh, &expr, desugar, res);
-        fresh
+    let mut memo = Default::default();
+    let mut add_expr = |expr: Expr, res: &mut Vec<NormAction>| -> Symbol {
+        expr_to_flat_actions(&expr, desugar, res, &mut memo)
     };
 
     let mut res = vec![];
@@ -309,7 +313,7 @@ pub(crate) fn desugar_command(
     command: Command,
     desugar: &mut Desugar,
 ) -> Result<Vec<NormCommand>, Error> {
-    let res = match command.clone() {
+    let res = match command {
         Command::Function(fdecl) => {
             vec![NCommand::Function(fdecl)]
         }
@@ -335,7 +339,8 @@ pub(crate) fn desugar_command(
             let mut commands = vec![];
 
             let mut actions = vec![];
-            expr_to_flat_actions(name, &expr, desugar, &mut actions);
+            let fresh = expr_to_flat_actions(&expr, desugar, &mut actions, &mut Default::default());
+            actions.push(NormAction::LetVar(name, fresh));
             for action in actions {
                 commands.push(NCommand::NormAction(action));
             }
