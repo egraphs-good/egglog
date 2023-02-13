@@ -165,14 +165,14 @@ fn flatten_facts(facts: &Vec<Fact>, desugar: &mut Desugar) -> Vec<NormFact> {
 
 fn expr_to_flat_actions(
     expr: &Expr,
-    desugar: &mut Desugar,
+    get_fresh: &mut Box<Fresh>,
     res: &mut Vec<NormAction>,
     memo: &mut HashMap<Expr, Symbol>,
 ) -> Symbol {
     if let Some(existing) = memo.get(expr) {
         return *existing;
     }
-    let assign = (desugar.get_fresh)();
+    let assign = (get_fresh)();
     match expr {
         Expr::Lit(l) => {
             res.push(NormAction::LetLit(assign, l.clone()));
@@ -188,7 +188,7 @@ fn expr_to_flat_actions(
                         new_children.push(*v);
                     }
                     _ => {
-                        let child = expr_to_flat_actions(child, desugar, res, memo);
+                        let child = expr_to_flat_actions(child, get_fresh, res, memo);
                         new_children.push(child);
                     }
                 }
@@ -203,7 +203,7 @@ fn expr_to_flat_actions(
 fn flatten_actions(actions: &Vec<Action>, desugar: &mut Desugar) -> Vec<NormAction> {
     let mut memo = Default::default();
     let mut add_expr = |expr: Expr, res: &mut Vec<NormAction>| -> Symbol {
-        expr_to_flat_actions(&expr, desugar, res, &mut memo)
+        expr_to_flat_actions(&expr, &mut desugar.get_fresh, res, &mut memo)
     };
 
     let mut res = vec![];
@@ -307,6 +307,7 @@ pub struct Desugar<'a> {
     pub get_fresh: Box<Fresh>,
     pub get_new_id: Box<NewId>,
     pub egraph: &'a mut EGraph,
+    pub define_memo: HashMap<Expr, Symbol>,
 }
 
 pub(crate) fn desugar_command(
@@ -339,7 +340,7 @@ pub(crate) fn desugar_command(
             let mut commands = vec![];
 
             let mut actions = vec![];
-            let fresh = expr_to_flat_actions(&expr, desugar, &mut actions, &mut Default::default());
+            let fresh = expr_to_flat_actions(&expr, &mut desugar.get_fresh, &mut actions, &mut desugar.define_memo);
             actions.push(NormAction::LetVar(name, fresh));
             for action in actions {
                 commands.push(NCommand::NormAction(action));
@@ -376,8 +377,14 @@ pub(crate) fn desugar_command(
         Command::Query(facts) => {
             vec![NCommand::Query(facts)]
         }
-        Command::Push(num) => vec![NCommand::Push(num)],
-        Command::Pop(num) => vec![NCommand::Pop(num)],
+        Command::Push(num) => {
+            desugar.define_memo.clear();
+            vec![NCommand::Push(num)]
+        }
+        Command::Pop(num) => {
+            desugar.define_memo.clear();
+            vec![NCommand::Pop(num)]
+        }
         Command::Fail(cmd) => {
             let mut desugared = desugar_command(*cmd, desugar)?;
 
@@ -421,6 +428,7 @@ pub(crate) fn desugar_program(
     let mut desugar = Desugar {
         get_fresh,
         get_new_id: Box::new(make_get_new_id()),
+        define_memo: Default::default(),
         egraph,
     };
     let res = desugar_commands(program, &mut desugar)?;
