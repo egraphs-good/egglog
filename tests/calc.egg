@@ -1,5 +1,5 @@
 ; A simple group
 (datatype G (I) (A) (B))
-(function * (G G) G)
+(function g* (G G) G)
 (function inv (G) G)
-(rewrite (* I a) a) ; idl
+(rewrite (g* I a) a) ; idl

@@ -123,6 +123,9 @@ impl TypeInfo {
                 if self.sorts.contains_key(&fdecl.name) {
                     return Err(TypeError::SortAlreadyBound(fdecl.name));
                 }
+                if self.primitives.contains_key(&fdecl.name) {
+                    return Err(TypeError::PrimitiveAlreadyBound(fdecl.name));
+                }
                 let ftype = self.schema_to_functype(&fdecl.schema)?;
                 if self.func_types.insert(fdecl.name, ftype).is_some() {
                     return Err(TypeError::FunctionAlreadyBound(fdecl.name));
@@ -426,6 +429,10 @@ impl TypeInfo {
         Ok(())
     }
 
+    pub(crate) fn is_primitive(&self, sym: Symbol) -> bool {
+        self.primitives.contains_key(&sym)
+    }
+
     fn lookup_func(
         &self,
         _ctx: CommandId,
@@ -505,6 +512,8 @@ pub enum TypeError {
     LocalAlreadyBound(Symbol, ArcSort),
     #[error("Sort {0} already declared.")]
     SortAlreadyBound(Symbol),
+    #[error("Primitive {0} already declared.")]
+    PrimitiveAlreadyBound(Symbol),
     #[error("Type mismatch: expected {}, actual {}", .0.name(), .1.name())]
     TypeMismatch(ArcSort, ArcSort),
     #[error("Presort {0} not found.")]

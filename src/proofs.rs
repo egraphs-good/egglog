@@ -736,6 +736,7 @@ fn proof_original_action(action: &NormAction, proof_state: &mut ProofState) -> V
 // the egraph is the initial egraph with only default sorts
 pub(crate) fn add_proofs(program: Vec<NormCommand>, desugar: Desugar) -> Vec<NormCommand> {
     let mut res = proof_header(&desugar.egraph);
+    let mut funcs_to_add: HashMap<Symbol, Vec<Command>> = Default::default();
     let mut proof_state = ProofState {
         ast_funcs_created: Default::default(),
         current_ctx: 0,
@@ -746,26 +747,39 @@ pub(crate) fn add_proofs(program: Vec<NormCommand>, desugar: Desugar) -> Vec<Nor
 
     res.extend(setup_primitives());
 
-    for command in program {
+    for command in &program {
         proof_state.current_ctx = command.metadata.id;
-
         // first, set up any rep functions that we need
         command.command.map_exprs(&mut |expr| {
             let ast_name = make_ast_version(&mut proof_state, expr);
             if proof_state.ast_funcs_created.insert(ast_name) {
-                res.push(Command::Function(make_ast_function(&mut proof_state, expr)));
-                res.push(Command::Function(make_rep_function(&mut proof_state, expr)));
-                res.push(make_getchild_rule(&mut proof_state, expr));
+                let commands = vec![
+                Command::Function(make_ast_function(&mut proof_state, expr)),
+                Command::Function(make_rep_function(&mut proof_state, expr)),
+                make_getchild_rule(&mut proof_state, expr),
+                ];
+                let NormExpr::Call(head, _body) = expr;
+
+                if proof_state.desugar.egraph.type_info.is_primitive(*head) {
+                    res.extend(commands)
+                } else {
+                    funcs_to_add.entry(*head).or_default().extend(commands);
+                }
             }
             expr.clone()
         });
+    }
 
+    for command in program {
+        proof_state.current_ctx = command.metadata.id;
+        
         match &command.command {
             NCommand::Sort(_name, _presort_and_args) => {
                 res.push(command.to_command());
             }
-            NCommand::Function(_fdecl) => {
+            NCommand::Function(fdecl) => {
                 res.push(command.to_command());
+                res.extend(funcs_to_add.remove(&fdecl.name).unwrap_or_default());
             }
             NCommand::Declare(name, sort) => {
                 res.extend(make_declare_proof(*name, *sort, &mut proof_state));
@@ -788,9 +802,11 @@ pub(crate) fn add_proofs(program: Vec<NormCommand>, desugar: Desugar) -> Vec<Nor
         }
     }
 
+    assert!(funcs_to_add.is_empty());
+
     desugar_commands(res, &mut proof_state.desugar).unwrap()
 }
 
 pub(crate) fn should_add_proofs(_program: &[NormCommand]) -> bool {
-    false
+    true
 }
