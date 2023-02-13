@@ -563,6 +563,19 @@ impl NormFact {
             NormFact::AssignLit(symbol, lit) => NormFact::AssignLit(*symbol, lit.clone()),
         }
     }
+
+    pub(crate) fn map_def_use(&self, fvar: &mut impl FnMut(Symbol, bool) -> Symbol) -> NormFact {
+        match self {
+            NormFact::Assign(symbol, expr) => {
+                NormFact::Assign(fvar(*symbol, true), expr.map_def_use(fvar, true))
+            }
+            NormFact::Compute(symbol, expr) => {
+                NormFact::Compute(fvar(*symbol, true), expr.map_def_use(fvar, true))
+            }
+            NormFact::AssignLit(symbol, lit) => NormFact::AssignLit(fvar(*symbol, true), lit.clone()),
+            NormFact::ConstrainEq(lhs, rhs) => NormFact::ConstrainEq(fvar(*lhs, false), fvar(*rhs, false)),
+        }
+    }
 }
 
 impl Fact {
@@ -655,16 +668,16 @@ impl NormAction {
     pub(crate) fn map_def_use(&self, fvar: &mut impl FnMut(Symbol, bool) -> Symbol) -> NormAction {
         match self {
             NormAction::Let(symbol, expr) => {
-                NormAction::Let(fvar(*symbol, true), expr.map_def_use(fvar))
+                NormAction::Let(fvar(*symbol, true), expr.map_def_use(fvar, false))
             }
             NormAction::LetVar(symbol, other) => {
                 NormAction::LetVar(fvar(*symbol, true), fvar(*other, false))
             }
             NormAction::LetLit(symbol, lit) => NormAction::LetLit(fvar(*symbol, true), lit.clone()),
             NormAction::Set(expr, other) => {
-                NormAction::Set(expr.map_def_use(fvar), fvar(*other, false))
+                NormAction::Set(expr.map_def_use(fvar, false), fvar(*other, false))
             }
-            NormAction::Delete(expr) => NormAction::Delete(expr.map_def_use(fvar)),
+            NormAction::Delete(expr) => NormAction::Delete(expr.map_def_use(fvar, false)),
             NormAction::Union(lhs, rhs) => NormAction::Union(fvar(*lhs, false), fvar(*rhs, false)),
             NormAction::Panic(msg) => NormAction::Panic(msg.clone()),
         }

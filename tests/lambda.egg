@@ -126,6 +126,8 @@
        (contains fvs v2))
       ((union expr (Lam (From expr) (Let v1 e (Let v2 (Var (From expr)) body))))))
 
+(relation result ())
+
 ;; lambda_under
 (push)
 (define e 
@@ -183,7 +185,7 @@
 (check (= e6 (Val (Num 6))))
 (pop)
 
-(relation result ())
+
 ;; lambda_compose
 (push)
 (define e7

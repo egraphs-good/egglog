@@ -236,7 +236,7 @@ impl TypeInfo {
 
     fn verify_normal_form_facts(&self, facts: &Vec<NormFact>) -> HashSet<Symbol> {
         let mut let_bound: HashSet<Symbol> = Default::default();
-        let mut let_bound_in_body: HashSet<Symbol> = Default::default();
+        let mut bound_in_constraint = vec![];
 
         for fact in facts {
             match fact {
@@ -255,19 +255,17 @@ impl TypeInfo {
                 NormFact::ConstrainEq(var1, var2) => {
                     if !let_bound.contains(var1)
                         && !let_bound.contains(var2)
-                        && !let_bound_in_body.contains(var1)
-                        && !let_bound_in_body.contains(var2)
                         && !self.global_types.contains_key(var1)
                         && !self.global_types.contains_key(var2)
                     {
                         panic!("ConstrainEq on unbound variables");
                     }
-                    let_bound_in_body.insert(*var1);
-                    let_bound_in_body.insert(*var2);
+                    bound_in_constraint.push(*var1);
+                    bound_in_constraint.push(*var2);
                 }
             }
         }
-        let_bound.extend(let_bound_in_body);
+        let_bound.extend(bound_in_constraint);
         let_bound
     }
 
@@ -379,9 +377,11 @@ impl TypeInfo {
                     .local_types
                     .get_mut(&ctx)
                     .unwrap()
-                    .insert(*var, expr_type.output)
+                    .insert(*var, expr_type.output.clone())
                 {
-                    return Err(TypeError::LocalAlreadyBound(*var, existing));
+                    if expr_type.output.name() != existing.name() {
+                        return Err(TypeError::TypeMismatch(expr_type.output, existing));
+                    }
                 }
             }
             NormFact::AssignLit(var, lit) => {
@@ -390,9 +390,11 @@ impl TypeInfo {
                     .local_types
                     .get_mut(&ctx)
                     .unwrap()
-                    .insert(*var, lit_type)
+                    .insert(*var, lit_type.clone())
                 {
-                    return Err(TypeError::LocalAlreadyBound(*var, existing));
+                    if lit_type.name() != existing.name() {
+                        return Err(TypeError::TypeMismatch(lit_type, existing));
+                    }
                 }
             }
             NormFact::ConstrainEq(var1, var2) => {

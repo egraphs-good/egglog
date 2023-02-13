@@ -1175,6 +1175,7 @@ impl EGraph {
 
     pub fn parse_desugar(&mut self, input: &str) -> Result<(Vec<NormCommand>, Desugar), Error> {
         let (desugared, desugar) = desugar_program(self, self.parse_program(input)?)?;
+        println!("{}", ListDisplay(desugared.clone(), "\n"));
 
         desugar.egraph.type_info.typecheck_program(&desugared)?;
 

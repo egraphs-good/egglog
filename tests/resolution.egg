@@ -28,16 +28,16 @@
 
 (datatype Bool (True) (False))
 (function or (Bool Bool) Bool)
-(function neg (Bool) Bool)
+(function negate (Bool) Bool)
 
 ; clauses are assumed in the normal form (or a (or b (or c False)))
 
-(set (neg False) True)
-(set (neg True) False)
+(set (negate False) True)
+(set (negate True) False)
 
 ; "Solving" negation equations
-(rule ((= (neg p) True)) ((union p False)))
-(rule ((= (neg p) False)) ((union p True)))
+(rule ((= (negate p) True)) ((union p False)))
+(rule ((= (negate p) False)) ((union p True)))
 
 ; canonicalize associtivity. "append" for clauses
 ; terminate with false
@@ -47,7 +47,7 @@
 
 ;absoprtion
 (rewrite (or a (or a b)) (or a b))
-(rewrite (or a (or (neg a) b)) True)
+(rewrite (or a (or (negate a) b)) True)
 
 ; simplification
 (rewrite (or False a) a)
@@ -67,7 +67,7 @@
 
 ; resolution
 ; This counts on commutativity to bubble everything possible up to the front of the clause.
-(rule ((= True (or a as)) (= True (or (neg a) bs)))
+(rule ((= True (or a as)) (= True (or (negate a) bs)))
       ((set (or as bs) True)))
 
 ; example predicate
@@ -76,12 +76,12 @@
 (define p1 (p 1))
 (define p2 (p 2))
 ;(set (or p0 (or p1 (or p2 False))) True)
-;(set (or (neg p0) (or p1 (or (neg p2) False))) True)
-(set (or p1 (or (neg p2) False)) True)
-(set (or p2 (or (neg p0) False)) True)
-(set (or p0 (or (neg p1) False)) True)
+;(set (or (negate p0) (or p1 (or (negate p2) False))) True)
+(set (or p1 (or (negate p2) False)) True)
+(set (or p2 (or (negate p0) False)) True)
+(set (or p0 (or (negate p1) False)) True)
 (union p1 False)
-(set (or (neg p0) (or p1 (or p2 False))) True)
+(set (or (negate p0) (or p1 (or p2 False))) True)
 (run 10)
 (print or)
 (print p)

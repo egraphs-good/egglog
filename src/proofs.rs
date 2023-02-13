@@ -268,14 +268,14 @@ fn instrument_facts(body: &Vec<NormFact>, proof_state: &mut ProofState) -> (Proo
     // now fill in representitive terms for any aliases
     for fact in body {
         if let NormFact::ConstrainEq(lhs, rhs) = fact {
-            if let Some(rep_term) = info.var_term.get(lhs) {
-                if info.var_term.get(rhs).is_none() {
-                    info.var_term.insert(*rhs, *rep_term);
+            let lhsterm = get_var_term_option(*lhs, proof_state, &info);
+            let rhsterm = get_var_term_option(*rhs, proof_state, &info);
+            if let Some(rep_term) = lhsterm {
+                if rhsterm.is_none() {
+                    info.var_term.insert(*rhs,rep_term);
                 }
-            } else if let Some(rep_term) = info.var_term.get(rhs) {
-                if info.var_term.get(lhs).is_none() {
-                    info.var_term.insert(*lhs, *rep_term);
-                }
+            } else if let Some(rep_term) = rhsterm {
+                info.var_term.insert(*lhs, rep_term);
             } else {
                 panic!(
                     "Contraint without representative term for at least one side {} = {}",
@@ -307,11 +307,17 @@ fn make_declare_proof(
     ]
 }
 
-fn get_var_term(var: Symbol, proof_state: &ProofState, proof_info: &ProofInfo) -> Symbol {
-    *proof_info
+fn get_var_term_option(var: Symbol, proof_state: &ProofState, proof_info: &ProofInfo) -> Option<Symbol> {
+    proof_info
         .var_term
         .get(&var)
-        .unwrap_or_else(|| proof_state.global_var_ast.get(&var).unwrap())
+        .or_else(|| {
+            proof_state.global_var_ast.get(&var)
+    }).cloned()
+}
+
+fn get_var_term(var: Symbol, proof_state: &ProofState, proof_info: &ProofInfo) -> Symbol {
+    get_var_term_option(var, proof_state, proof_info).unwrap()
 }
 
 fn add_action_proof(
@@ -792,5 +798,5 @@ pub(crate) fn add_proofs(program: Vec<NormCommand>, desugar: Desugar) -> Vec<Nor
 }
 
 pub(crate) fn should_add_proofs(_program: &[NormCommand]) -> bool {
-    true
+    false
 }

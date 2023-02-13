@@ -89,84 +89,48 @@ fn desugar_birewrite(ruleset: Symbol, rewrite: &Rewrite, desugar: &mut Desugar) 
 }
 
 fn expr_to_ssa(
+    lhs: Symbol,
     expr: &Expr,
     desugar: &mut Desugar,
-    var_used: &mut HashSet<Symbol>,
-    var_just_used: &mut HashSet<Symbol>,
     res: &mut Vec<NormFact>,
-    constraints: &mut Vec<NormFact>,
-) -> Symbol {
+) {
     match expr {
         Expr::Lit(l) => {
-            let fresh = (desugar.get_fresh)();
-            res.push(NormFact::AssignLit(fresh, l.clone()));
-            let fresh2 = (desugar.get_fresh)();
-            res.push(NormFact::ConstrainEq(fresh2, fresh));
-            fresh2
+            res.push(NormFact::AssignLit(lhs, l.clone()));
         }
         Expr::Var(v) => {
-            if var_used.insert(*v) {
-                var_just_used.insert(*v);
-                *v
-            } else {
-                let fresh = (desugar.get_fresh)();
-                // logic to satisfy typechecker
-                // if we used the variable in this recurrence, add the constraint afterwards
-                if var_just_used.contains(v) {
-                    constraints.push(NormFact::ConstrainEq(fresh, *v));
-                // otherwise add the constrain immediately so we have the type
-                } else {
-                    res.push(NormFact::ConstrainEq(fresh, *v));
-                }
-                fresh
-            }
+            res.push(NormFact::ConstrainEq(lhs, *v));
         }
         Expr::Call(f, children) => {
             let mut new_children = vec![];
             for child in children {
-                new_children.push(expr_to_ssa(
-                    child,
-                    desugar,
-                    var_used,
-                    var_just_used,
-                    res,
-                    constraints,
-                ));
+                match child {
+                    Expr::Var(v) => {
+                        new_children.push(*v);
+                    }
+                    _ => {
+                        let fresh = (desugar.get_fresh)();
+                        expr_to_ssa(fresh, child, desugar, res);
+                        new_children.push(fresh);
+                    }
+                }
             }
-            // fresh variable for call
-            let fresh = (desugar.get_fresh)();
-            if desugar.egraph.type_info.primitives.contains_key(f) {
-                res.push(NormFact::Compute(fresh, NormExpr::Call(*f, new_children)));
-            } else {
-                res.push(NormFact::Assign(fresh, NormExpr::Call(*f, new_children)));
-            }
-
-            // fresh variable for any use
-            let fresh2 = (desugar.get_fresh)();
-            res.push(NormFact::ConstrainEq(fresh2, fresh));
-            fresh2
+            res.push(NormFact::Assign(lhs, NormExpr::Call(*f, new_children)));
         }
     }
 }
 
+
 fn flatten_equalities(equalities: Vec<(Symbol, Expr)>, desugar: &mut Desugar) -> Vec<NormFact> {
     let mut res = vec![];
 
-    let mut var_used = Default::default();
     for (lhs, rhs) in equalities {
-        let mut constraints = vec![];
-        let result = expr_to_ssa(
+        expr_to_ssa(
+            lhs,
             &rhs,
             desugar,
-            &mut var_used,
-            &mut Default::default(),
             &mut res,
-            &mut constraints,
         );
-        res.extend(constraints);
-
-        var_used.insert(lhs);
-        res.push(NormFact::ConstrainEq(lhs, result));
     }
 
     res
@@ -290,10 +254,48 @@ fn flatten_actions(actions: &Vec<Action>, desugar: &mut Desugar) -> Vec<NormActi
     res
 }
 
+fn give_unique_names(desugar: &mut Desugar, facts: Vec<NormFact>) -> Vec<NormFact> {
+    let mut name_used: HashSet<Symbol> = Default::default();
+    let mut constraints: Vec<NormFact> = Default::default();
+    let mut res = vec![];
+    for fact in facts {
+        let mut name_used_immediately: HashSet<Symbol> = Default::default();
+        let mut constraints_before = vec![];
+        let new_fact = fact.map_def_use(&mut |var, is_def| {
+            if is_def {
+                if name_used.insert(var) {
+                    name_used_immediately.insert(var);
+                    var
+                } else {
+                    let fresh = (desugar.get_fresh)();
+                    // typechecking BS- for primitives
+                    // we need to define variables before they are used
+                    if name_used_immediately.contains(&var) {
+                        constraints.push(NormFact::ConstrainEq(fresh, var));
+                    } else {
+                        constraints_before.push(NormFact::ConstrainEq(fresh, var));
+                    }
+                    fresh
+                }
+            } else {
+                var
+            }
+            });
+        res.extend(constraints_before);
+        res.push(new_fact);
+    }
+
+    res.extend(constraints);
+    res
+}
+
 fn flatten_rule(rule: Rule, desugar: &mut Desugar) -> NormRule {
+    let flat_facts = flatten_facts(&rule.body, desugar);
+    let with_unique_names = give_unique_names(desugar, flat_facts);
+
     NormRule {
         head: flatten_actions(&rule.head, desugar),
-        body: flatten_facts(&rule.body, desugar),
+        body: with_unique_names,
     }
 }
 
