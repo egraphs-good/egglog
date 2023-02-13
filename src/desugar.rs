@@ -88,9 +88,9 @@ fn desugar_birewrite(ruleset: Symbol, rewrite: &Rewrite, desugar: &mut Desugar) 
         .collect()
 }
 
-// TODO use an egraph to perform the Norm translation without introducing
-// so many fresh variables
 fn expr_to_ssa(
+    // the variable we are assigning to, guaranted to be fresh
+    assign_to: Option<Symbol>,
     expr: &Expr,
     desugar: &mut Desugar,
     var_used: &mut HashSet<Symbol>,
@@ -98,35 +98,43 @@ fn expr_to_ssa(
     res: &mut Vec<NormFact>,
     constraints: &mut Vec<NormFact>,
 ) -> Symbol {
+    if let Some(assign_to) = assign_to {
+        var_used.insert(assign_to);
+        var_just_used.insert(assign_to);
+    }
     match expr {
         Expr::Lit(l) => {
-            let fresh = (desugar.get_fresh)();
-            res.push(NormFact::AssignLit(fresh, l.clone()));
-            let fresh2 = (desugar.get_fresh)();
-            res.push(NormFact::ConstrainEq(fresh2, fresh));
-            fresh2
+            let rvar = assign_to.unwrap_or_else(|| (desugar.get_fresh)());
+            res.push(NormFact::AssignLit(rvar, l.clone()));
+            rvar
         }
         Expr::Var(v) => {
             if var_used.insert(*v) {
                 var_just_used.insert(*v);
-                *v
+                if let Some(assign_to) = assign_to {
+                    res.push(NormFact::ConstrainEq(assign_to, *v));
+                    assign_to
+                } else {
+                    *v
+                }
             } else {
-                let fresh = (desugar.get_fresh)();
+                let rvar = assign_to.unwrap_or_else(|| (desugar.get_fresh)());
                 // logic to satisfy typechecker
                 // if we used the variable in this recurrence, add the constraint afterwards
                 if var_just_used.contains(v) {
-                    constraints.push(NormFact::ConstrainEq(fresh, *v));
-                // otherwise add the constrain immediately so we have the type
+                    constraints.push(NormFact::ConstrainEq(rvar, *v));
+                // otherwise add the constraint immediately so we have the type
                 } else {
-                    res.push(NormFact::ConstrainEq(fresh, *v));
+                    res.push(NormFact::ConstrainEq(rvar, *v));
                 }
-                fresh
+                rvar
             }
         }
         Expr::Call(f, children) => {
             let mut new_children = vec![];
             for child in children {
                 new_children.push(expr_to_ssa(
+                    None,
                     child,
                     desugar,
                     var_used,
@@ -136,17 +144,13 @@ fn expr_to_ssa(
                 ));
             }
             // fresh variable for call
-            let fresh = (desugar.get_fresh)();
+            let rvar = assign_to.unwrap_or_else(|| (desugar.get_fresh)());
             if desugar.egraph.type_info.primitives.contains_key(f) {
-                res.push(NormFact::Compute(fresh, NormExpr::Call(*f, new_children)));
+                res.push(NormFact::Compute(rvar, NormExpr::Call(*f, new_children)));
             } else {
-                res.push(NormFact::Assign(fresh, NormExpr::Call(*f, new_children)));
+                res.push(NormFact::Assign(rvar, NormExpr::Call(*f, new_children)));
             }
-
-            // fresh variable for any use
-            let fresh2 = (desugar.get_fresh)();
-            res.push(NormFact::ConstrainEq(fresh2, fresh));
-            fresh2
+            rvar
         }
     }
 }
@@ -169,10 +173,20 @@ fn ssa_valid_expr(expr: &NormExpr, var_used: &mut HashSet<Symbol>, desugar: &Des
 fn flatten_equalities(equalities: Vec<(Symbol, Expr)>, desugar: &mut Desugar) -> Vec<NormFact> {
     let mut res = vec![];
 
-    let mut var_used = Default::default();
+    let mut var_used: HashSet<Symbol> = Default::default();
     for (lhs, rhs) in equalities {
         let mut constraints = vec![];
+        let var = if var_used.contains(&lhs) {
+            let fresh = (desugar.get_fresh)();
+            constraints.push(NormFact::ConstrainEq(fresh, lhs));
+            fresh
+        } else {
+            lhs
+        };
+
+        println!("{} = {}", var, rhs);
         let result = expr_to_ssa(
+            Some(var),
             &rhs,
             desugar,
             &mut var_used,
@@ -182,7 +196,6 @@ fn flatten_equalities(equalities: Vec<(Symbol, Expr)>, desugar: &mut Desugar) ->
         );
         res.extend(constraints);
 
-        var_used.insert(lhs);
         res.push(NormFact::ConstrainEq(lhs, result));
     }
 
@@ -308,13 +321,10 @@ fn flatten_actions(actions: &Vec<Action>, desugar: &mut Desugar) -> Vec<NormActi
 }
 
 fn flatten_rule(rule: Rule, desugar: &mut Desugar) -> NormRule {
-    let res = NormRule {
+    NormRule {
         head: flatten_actions(&rule.head, desugar),
         body: flatten_facts(&rule.body, desugar),
-    };
-    // TODO re-add with type info
-    //assert_ssa_valid(&res.body, &res.head, desugar);
-    res
+    }
 }
 
 pub struct Desugar<'a> {

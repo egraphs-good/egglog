@@ -179,6 +179,10 @@ impl TypeInfo {
     }
 
     fn typecheck_rule(&mut self, ctx: CommandId, rule: &NormRule) -> Result<(), TypeError> {
+        // also check the validity of the ssa
+        let mut bindings = self.verify_normal_form_facts(&rule.body);
+        self.verify_normal_form_actions(&rule.head, &mut bindings);
+
         self.typecheck_facts(ctx, &rule.body)?;
         self.typecheck_actions(ctx, &rule.head)?;
         Ok(())
@@ -200,6 +204,75 @@ impl TypeInfo {
             self.typecheck_action(ctx, action, false)?;
         }
         Ok(())
+    }
+
+    fn verify_normal_form_facts(&self, facts: &Vec<NormFact>) -> HashSet<Symbol> {
+        let mut let_bound: HashSet<Symbol> = Default::default();
+        let mut let_bound_in_body: HashSet<Symbol> = Default::default();
+
+        for fact in facts {
+            println!("fact: {}", fact);
+            match fact {
+                NormFact::Assign(var, NormExpr::Call(_head, body)) | NormFact::Compute(var, NormExpr::Call(_head, body)) => {
+                    assert!(let_bound.insert(*var));
+                    body.iter().for_each(|bvar| {
+                        assert!(let_bound.insert(*bvar));
+                    });
+                }
+                NormFact::AssignLit(var, _lit) => {
+                    assert!(let_bound.insert(*var));
+                }
+                NormFact::ConstrainEq(var1,var2 ) => {
+                    if !let_bound.contains(var1)
+                       && !let_bound.contains(var2)
+                       && !let_bound_in_body.contains(var1)
+                          && !let_bound_in_body.contains(var2) {
+                            panic!("ConstrainEq on unbound variables");
+                          }
+                    let_bound_in_body.insert(*var1);
+                    let_bound_in_body.insert(*var2);
+                }
+            }
+        }
+        let_bound.extend(let_bound_in_body);
+        let_bound
+    }
+
+    fn verify_normal_form_actions(&self, actions: &Vec<NormAction>, let_bound: &mut HashSet<Symbol>) {
+        for action in actions {
+            println!("action: {}", action);
+            match action {
+                NormAction::Let(var, NormExpr::Call(_head, body)) => {
+                    assert!(let_bound.insert(*var));
+                    body.iter().for_each(|bvar| {
+                        assert!(let_bound.contains(bvar));
+                    });
+                }
+                NormAction::LetVar(v1, v2) => {
+                    assert!(let_bound.contains(v2));
+                    assert!(let_bound.insert(*v1));
+                }
+                NormAction::LetLit(v1, _lit) => {
+                    assert!(let_bound.insert(*v1));
+                }
+                NormAction::Delete(NormExpr::Call(_head, body)) => {
+                    body.iter().for_each(|bvar| {
+                        assert!(let_bound.contains(bvar));
+                    });
+                }
+                NormAction::Set(NormExpr::Call(_head, body), var) => {
+                    body.iter().for_each(|bvar| {
+                        assert!(let_bound.contains(bvar));
+                    });
+                    assert!(let_bound.contains(var));
+                }
+                NormAction::Union(v1, v2) => {
+                    assert!(let_bound.contains(v1));
+                    assert!(let_bound.contains(v2));
+                }
+                NormAction::Panic(..) => (),
+            }
+        }
     }
 
     fn introduce_binding(
@@ -228,7 +301,7 @@ impl TypeInfo {
     ) -> Result<(), TypeError> {
         match action {
             NormAction::Let(var, expr) => {
-                let expr_type = self.typecheck_expr_initialize(ctx, expr)?.output;
+                let expr_type = self.typecheck_expr(ctx, expr)?.output;
 
                 self.introduce_binding(ctx, *var, expr_type, is_global)?;
             }
@@ -237,10 +310,10 @@ impl TypeInfo {
                 self.introduce_binding(ctx, *var, lit_type, is_global)?;
             }
             NormAction::Delete(expr) => {
-                self.typecheck_expr_initialize(ctx, expr)?;
+                self.typecheck_expr(ctx, expr)?;
             }
             NormAction::Set(expr, other) => {
-                let func_type = self.typecheck_expr_initialize(ctx, expr)?.output;
+                let func_type = self.typecheck_expr(ctx, expr)?.output;
                 let other_type = self.lookup(ctx, *other)?;
                 if func_type.name() != other_type.name() {
                     return Err(TypeError::TypeMismatch(func_type, other_type));
@@ -265,7 +338,7 @@ impl TypeInfo {
     fn typecheck_fact(&mut self, ctx: CommandId, fact: &NormFact) -> Result<(), TypeError> {
         match fact {
             NormFact::Assign(var, expr) | NormFact::Compute(var, expr) => {
-                let expr_type = self.typecheck_expr_initialize(ctx, expr)?;
+                let expr_type = self.typecheck_expr(ctx, expr)?;
                 if let Some(existing) = self
                     .local_types
                     .get_mut(&ctx)
@@ -331,7 +404,6 @@ impl TypeInfo {
         ctx: CommandId,
         sym: Symbol,
         sym_type: ArcSort,
-        _initialize: bool,
     ) -> Result<(), TypeError> {
         if let Some(existing) = self
             .local_types
@@ -370,27 +442,10 @@ impl TypeInfo {
         }
     }
 
-    fn typecheck_expr_initialize(
+    pub(crate) fn typecheck_expr(
         &mut self,
         ctx: CommandId,
         expr: &NormExpr,
-    ) -> Result<FuncType, TypeError> {
-        self.typecheck_expr(ctx, expr, true)
-    }
-
-    pub(crate) fn lookup_expr(
-        &mut self,
-        ctx: CommandId,
-        expr: &NormExpr,
-    ) -> Result<FuncType, TypeError> {
-        self.typecheck_expr(ctx, expr, false)
-    }
-
-    fn typecheck_expr(
-        &mut self,
-        ctx: CommandId,
-        expr: &NormExpr,
-        initialize: bool,
     ) -> Result<FuncType, TypeError> {
         match expr {
             NormExpr::Call(head, body) => {
@@ -402,7 +457,7 @@ impl TypeInfo {
                         .collect::<Result<Vec<_>, _>>()?
                 };
                 for (child_type, var) in child_types.iter().zip(body.iter()) {
-                    self.set_local_type(ctx, *var, child_type.clone(), initialize)?;
+                    self.set_local_type(ctx, *var, child_type.clone())?;
                 }
 
                 Ok(FuncType::new(

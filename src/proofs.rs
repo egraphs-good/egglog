@@ -20,7 +20,7 @@ fn make_ast_version(proof_state: &mut ProofState, expr: &NormExpr) -> Symbol {
         .desugar
         .egraph
         .type_info
-        .lookup_expr(proof_state.current_ctx, expr)
+        .typecheck_expr(proof_state.current_ctx, expr)
         .unwrap();
     Symbol::from(format!(
         "Ast{}_{}__",
@@ -35,7 +35,7 @@ fn make_rep_version(proof_state: &mut ProofState, expr: &NormExpr) -> Symbol {
         .desugar
         .egraph
         .type_info
-        .lookup_expr(proof_state.current_ctx, expr)
+        .typecheck_expr(proof_state.current_ctx, expr)
         .unwrap();
     Symbol::from(format!(
         "Rep{}_{}__",
@@ -523,7 +523,7 @@ fn make_rep_function(proof_state: &mut ProofState, expr: &NormExpr) -> FunctionD
         .desugar
         .egraph
         .type_info
-        .lookup_expr(proof_state.current_ctx, expr)
+        .typecheck_expr(proof_state.current_ctx, expr)
         .unwrap();
     FunctionDecl {
         name: make_rep_version(proof_state, expr),
@@ -782,5 +782,5 @@ pub(crate) fn add_proofs(program: Vec<NormCommand>, desugar: Desugar) -> Vec<Nor
 }
 
 pub(crate) fn should_add_proofs(_program: &[NormCommand]) -> bool {
-    true
+    false
 }
