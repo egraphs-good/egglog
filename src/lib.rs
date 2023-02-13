@@ -512,7 +512,7 @@ impl EGraph {
                 log::info!("Breaking early at iteration {}!", i);
                 break;
             }
-            
+
             if self.num_tuples() > self.node_limit {
                 log::warn!(
                     "Node limit reached at iteration {}, {} nodes. Stopping!",

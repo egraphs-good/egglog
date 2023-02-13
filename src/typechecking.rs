@@ -211,24 +211,29 @@ impl TypeInfo {
         let mut let_bound_in_body: HashSet<Symbol> = Default::default();
 
         for fact in facts {
-            println!("fact: {}", fact);
             match fact {
-                NormFact::Assign(var, NormExpr::Call(_head, body)) | NormFact::Compute(var, NormExpr::Call(_head, body)) => {
+                NormFact::Assign(var, NormExpr::Call(_head, body))
+                | NormFact::Compute(var, NormExpr::Call(_head, body)) => {
                     assert!(let_bound.insert(*var));
                     body.iter().for_each(|bvar| {
-                        assert!(let_bound.insert(*bvar));
+                        if !self.global_types.contains_key(bvar) {
+                            assert!(let_bound.insert(*bvar));
+                        }
                     });
                 }
                 NormFact::AssignLit(var, _lit) => {
                     assert!(let_bound.insert(*var));
                 }
-                NormFact::ConstrainEq(var1,var2 ) => {
+                NormFact::ConstrainEq(var1, var2) => {
                     if !let_bound.contains(var1)
-                       && !let_bound.contains(var2)
-                       && !let_bound_in_body.contains(var1)
-                          && !let_bound_in_body.contains(var2) {
-                            panic!("ConstrainEq on unbound variables");
-                          }
+                        && !let_bound.contains(var2)
+                        && !let_bound_in_body.contains(var1)
+                        && !let_bound_in_body.contains(var2)
+                        && !self.global_types.contains_key(var1)
+                        && !self.global_types.contains_key(var2)
+                    {
+                        panic!("ConstrainEq on unbound variables");
+                    }
                     let_bound_in_body.insert(*var1);
                     let_bound_in_body.insert(*var2);
                 }
@@ -238,18 +243,21 @@ impl TypeInfo {
         let_bound
     }
 
-    fn verify_normal_form_actions(&self, actions: &Vec<NormAction>, let_bound: &mut HashSet<Symbol>) {
+    fn verify_normal_form_actions(
+        &self,
+        actions: &Vec<NormAction>,
+        let_bound: &mut HashSet<Symbol>,
+    ) {
         for action in actions {
-            println!("action: {}", action);
             match action {
                 NormAction::Let(var, NormExpr::Call(_head, body)) => {
                     assert!(let_bound.insert(*var));
                     body.iter().for_each(|bvar| {
-                        assert!(let_bound.contains(bvar));
+                        assert!(let_bound.contains(bvar) || self.global_types.contains_key(bvar));
                     });
                 }
                 NormAction::LetVar(v1, v2) => {
-                    assert!(let_bound.contains(v2));
+                    assert!(let_bound.contains(v2) || self.global_types.contains_key(v2));
                     assert!(let_bound.insert(*v1));
                 }
                 NormAction::LetLit(v1, _lit) => {
@@ -257,18 +265,18 @@ impl TypeInfo {
                 }
                 NormAction::Delete(NormExpr::Call(_head, body)) => {
                     body.iter().for_each(|bvar| {
-                        assert!(let_bound.contains(bvar));
+                        assert!(let_bound.contains(bvar) || self.global_types.contains_key(bvar));
                     });
                 }
                 NormAction::Set(NormExpr::Call(_head, body), var) => {
                     body.iter().for_each(|bvar| {
-                        assert!(let_bound.contains(bvar));
+                        assert!(let_bound.contains(bvar) || self.global_types.contains_key(bvar));
                     });
-                    assert!(let_bound.contains(var));
+                    assert!(let_bound.contains(var) || self.global_types.contains_key(var));
                 }
                 NormAction::Union(v1, v2) => {
-                    assert!(let_bound.contains(v1));
-                    assert!(let_bound.contains(v2));
+                    assert!(let_bound.contains(v1) || self.global_types.contains_key(v1));
+                    assert!(let_bound.contains(v2) || self.global_types.contains_key(v2));
                 }
                 NormAction::Panic(..) => (),
             }

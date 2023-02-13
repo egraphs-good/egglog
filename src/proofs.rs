@@ -65,7 +65,6 @@ fn prim_input_types(prim: &Primitive) -> Vec<Symbol> {
         .collect::<Vec<Symbol>>()
 }
 
-
 fn make_rep_primitive_sorts(type_info: &TypeInfo) -> Vec<Command> {
     type_info
         .sorts
@@ -219,7 +218,8 @@ fn instrument_facts(body: &Vec<NormFact>, proof_state: &mut ProofState) -> (Proo
                 assert!(info.var_term.insert(*lhs, rep_trm).is_none());
                 assert!(info.var_proof.insert(*lhs, rep_prf).is_none());
             }
-            NormFact::Assign(lhs, NormExpr::Call(head, body)) | NormFact::Compute(lhs, NormExpr::Call(head, body)) => {
+            NormFact::Assign(lhs, NormExpr::Call(head, body))
+            | NormFact::Compute(lhs, NormExpr::Call(head, body)) => {
                 let rep = proof_state.get_fresh();
                 let rep_trm = proof_state.get_fresh();
                 let rep_prf = proof_state.get_fresh();
@@ -293,22 +293,25 @@ fn make_declare_proof(
     _type_name: Symbol,
     proof_state: &mut ProofState,
 ) -> Vec<Command> {
-
     let term = format!("Ast{}___", name).into();
     let proof = proof_state.get_fresh();
 
     proof_state.global_var_ast.insert(name, term);
     proof_state.global_var_proof.insert(name, proof);
-    vec![Command::Declare(term, "Ast__".into()),
-    Command::Action(Action::Let(proof,
-        Expr::Call("Original__".into(), vec![Expr::Var(term)])))]
+    vec![
+        Command::Declare(term, "Ast__".into()),
+        Command::Action(Action::Let(
+            proof,
+            Expr::Call("Original__".into(), vec![Expr::Var(term)]),
+        )),
+    ]
 }
 
 fn get_var_term(var: Symbol, proof_state: &ProofState, proof_info: &ProofInfo) -> Symbol {
-    *proof_info.var_term.get(&var).unwrap_or_else(
-        || {
-            proof_state.global_var_ast.get(&var).unwrap()
-        })
+    *proof_info
+        .var_term
+        .get(&var)
+        .unwrap_or_else(|| proof_state.global_var_ast.get(&var).unwrap())
 }
 
 fn add_action_proof(
@@ -321,7 +324,9 @@ fn add_action_proof(
     match action {
         NormAction::LetVar(var1, var2) => {
             // check if it's a global variable
-            proof_info.var_term.insert(*var1, get_var_term(*var2, proof_state, proof_info));
+            proof_info
+                .var_term
+                .insert(*var1, get_var_term(*var2, proof_state, proof_info));
         }
         NormAction::Delete(..) | NormAction::Panic(..) => (),
         NormAction::Union(var1, var2) => {
@@ -330,7 +335,7 @@ fn add_action_proof(
                     "EqGraph__".into(),
                     vec![
                         get_var_term(*var1, proof_state, proof_info),
-                        get_var_term(*var2, proof_state, proof_info)
+                        get_var_term(*var2, proof_state, proof_info),
                     ],
                 ),
                 rule_proof,
@@ -453,10 +458,7 @@ fn add_rule_proof(
     proof_state: &mut ProofState,
 ) -> Symbol {
     let mut current_proof = proof_state.get_fresh();
-    res.push(NormAction::LetVar(
-        current_proof,
-        "Null__".into(),
-    ));
+    res.push(NormAction::LetVar(current_proof, "Null__".into()));
 
     for fact in facts {
         match fact {
@@ -464,7 +466,10 @@ fn add_rule_proof(
                 let fresh = proof_state.get_fresh();
                 res.push(NormAction::Let(
                     fresh,
-                    NormExpr::Call("Cons__".into(), vec![proof_info.var_proof[lhs], current_proof]),
+                    NormExpr::Call(
+                        "Cons__".into(),
+                        vec![proof_info.var_proof[lhs], current_proof],
+                    ),
                 ));
                 current_proof = fresh;
             }
@@ -473,7 +478,10 @@ fn add_rule_proof(
                 let fresh = proof_state.get_fresh();
                 res.push(NormAction::Let(
                     fresh,
-                    NormExpr::Call("Cons__".into(), vec![proof_info.var_proof[lhs], current_proof]),
+                    NormExpr::Call(
+                        "Cons__".into(),
+                        vec![proof_info.var_proof[lhs], current_proof],
+                    ),
                 ));
                 current_proof = fresh;
             }
@@ -483,7 +491,10 @@ fn add_rule_proof(
                     pfresh,
                     NormExpr::Call(
                         "DemandEq__".into(),
-                        vec![get_var_term(*lhs, proof_state, proof_info), get_var_term(*rhs, proof_state, proof_info)],
+                        vec![
+                            get_var_term(*lhs, proof_state, proof_info),
+                            get_var_term(*rhs, proof_state, proof_info),
+                        ],
                     ),
                 ));
             }
@@ -502,7 +513,6 @@ fn add_rule_proof(
 
 fn instrument_rule(rule: &NormRule, rule_name: Symbol, proof_state: &mut ProofState) -> Rule {
     let (mut info, facts) = instrument_facts(&rule.body, proof_state);
-
 
     let mut actions = rule.head.clone();
     let rule_proof = add_rule_proof(rule_name, &info, &rule.body, &mut actions, proof_state);
