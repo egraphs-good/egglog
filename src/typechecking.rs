@@ -90,6 +90,31 @@ impl TypeInfo {
         for command in program {
             self.typecheck_command(command)?;
         }
+        self.check_no_sorts_after_push(program)?;
+
+        Ok(())
+    }
+
+    fn check_no_sorts_after_push(&self, program: &Vec<NormCommand>) -> Result<(), TypeError> {
+        let mut found_push = false;
+        for command in program {
+            match &command.command {
+                NCommand::Push(_) => {
+                    found_push = true;
+                }
+                NCommand::Function(fdecl) => {
+                    if found_push {
+                        return Err(TypeError::FunctionAfterPush(fdecl.name));
+                    }
+                }
+                NCommand::Sort(name, _) => {
+                    if found_push {
+                        return Err(TypeError::SortAfterPush(*name));
+                    }
+                }
+                _ => {}
+            }
+        }
         Ok(())
     }
 
@@ -506,6 +531,10 @@ pub enum TypeError {
     UndefinedSort(Symbol),
     #[error("Function already bound {0}")]
     FunctionAlreadyBound(Symbol),
+    #[error("Function declarations are not allowed after a push.")]
+    FunctionAfterPush(Symbol),
+    #[error("Sort declarations are not allowed after a push.")]
+    SortAfterPush(Symbol),
     #[error("Global already bound {0}")]
     GlobalAlreadyBound(Symbol),
     #[error("Local already bound {0} with type {}", .1.name())]
