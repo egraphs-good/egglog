@@ -88,12 +88,7 @@ fn desugar_birewrite(ruleset: Symbol, rewrite: &Rewrite, desugar: &mut Desugar) 
         .collect()
 }
 
-fn expr_to_ssa(
-    lhs: Symbol,
-    expr: &Expr,
-    desugar: &mut Desugar,
-    res: &mut Vec<NormFact>,
-) {
+fn expr_to_ssa(lhs: Symbol, expr: &Expr, desugar: &mut Desugar, res: &mut Vec<NormFact>) {
     match expr {
         Expr::Lit(l) => {
             res.push(NormFact::AssignLit(lhs, l.clone()));
@@ -120,17 +115,11 @@ fn expr_to_ssa(
     }
 }
 
-
 fn flatten_equalities(equalities: Vec<(Symbol, Expr)>, desugar: &mut Desugar) -> Vec<NormFact> {
     let mut res = vec![];
 
     for (lhs, rhs) in equalities {
-        expr_to_ssa(
-            lhs,
-            &rhs,
-            desugar,
-            &mut res,
-        );
+        expr_to_ssa(lhs, &rhs, desugar, &mut res);
     }
 
     res
@@ -284,7 +273,7 @@ fn give_unique_names(desugar: &mut Desugar, facts: Vec<NormFact>) -> Vec<NormFac
             } else {
                 var
             }
-            });
+        });
         res.extend(constraints_before);
         res.push(new_fact);
     }
@@ -325,7 +314,7 @@ pub(crate) fn desugar_command(
         Command::Include(file) => {
             let s = std::fs::read_to_string(&file)
                 .unwrap_or_else(|_| panic!("Failed to read file {file}"));
-            return desugar_commands(desugar.egraph.parse_program(&s)?, desugar);
+            return desugar_commands(desugar.egraph.parse_program(&s, false)?, desugar);
         }
         Command::Rule(ruleset, rule) => {
             vec![NCommand::NormRule(ruleset, flatten_rule(rule, desugar))]
@@ -340,7 +329,12 @@ pub(crate) fn desugar_command(
             let mut commands = vec![];
 
             let mut actions = vec![];
-            let fresh = expr_to_flat_actions(&expr, &mut desugar.get_fresh, &mut actions, &mut desugar.define_memo);
+            let fresh = expr_to_flat_actions(
+                &expr,
+                &mut desugar.get_fresh,
+                &mut actions,
+                &mut desugar.define_memo,
+            );
             actions.push(NormAction::LetVar(name, fresh));
             for action in actions {
                 commands.push(NCommand::NormAction(action));

@@ -6,7 +6,7 @@ use symbolic_expressions::Sexp;
 
 fn proof_header(egraph: &EGraph) -> Vec<Command> {
     let str = include_str!("proofheader.egg");
-    egraph.parse_program(str).unwrap()
+    egraph.parse_program(str, false).unwrap()
 }
 
 // primitives don't need type info
@@ -272,7 +272,7 @@ fn instrument_facts(body: &Vec<NormFact>, proof_state: &mut ProofState) -> (Proo
             let rhsterm = get_var_term_option(*rhs, proof_state, &info);
             if let Some(rep_term) = lhsterm {
                 if rhsterm.is_none() {
-                    info.var_term.insert(*rhs,rep_term);
+                    info.var_term.insert(*rhs, rep_term);
                 }
             } else if let Some(rep_term) = rhsterm {
                 info.var_term.insert(*lhs, rep_term);
@@ -307,13 +307,16 @@ fn make_declare_proof(
     ]
 }
 
-fn get_var_term_option(var: Symbol, proof_state: &ProofState, proof_info: &ProofInfo) -> Option<Symbol> {
+fn get_var_term_option(
+    var: Symbol,
+    proof_state: &ProofState,
+    proof_info: &ProofInfo,
+) -> Option<Symbol> {
     proof_info
         .var_term
         .get(&var)
-        .or_else(|| {
-            proof_state.global_var_ast.get(&var)
-    }).cloned()
+        .or_else(|| proof_state.global_var_ast.get(&var))
+        .cloned()
 }
 
 fn get_var_term(var: Symbol, proof_state: &ProofState, proof_info: &ProofInfo) -> Symbol {

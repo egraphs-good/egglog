@@ -3,7 +3,7 @@ use std::path::Path;
 
 fn test_program(program: &str, message: &str) {
     let mut egraph = EGraph::default();
-    match egraph.parse_and_run_program(program) {
+    match egraph.parse_and_run_program(program, false) {
         Ok(msgs) => {
             for msg in msgs {
                 log::info!("  {}", msg);
@@ -20,7 +20,7 @@ fn run(path: &Path) -> datatest_stable::Result<()> {
 
     let egraph = EGraph::default();
     let program_str = egraph
-        .parse_program(&program)
+        .parse_program(&program, false)
         .unwrap()
         .into_iter()
         .map(|x| x.to_string())

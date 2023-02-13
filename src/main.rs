@@ -1,6 +1,6 @@
 use clap::Parser;
 use egg_smol::EGraph;
-use std::io::{self, BufRead};
+use std::io::{self, BufRead, Read};
 use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
@@ -26,13 +26,15 @@ fn main() {
         let stdin = io::stdin();
         log::info!("Welcome to Egglog!");
         let mut egraph = EGraph::default();
-        for line in stdin.lock().lines() {
-            let line = line.unwrap_or_else(|_| panic!("Failed to read line from stdout"));
-            match egraph.parse_and_run_program(&line) {
-                Ok(_msgs) => {}
-                Err(err) => {
-                    log::error!("{}", err);
-                }
+        let mut program = String::new();
+        stdin
+            .lock()
+            .read_to_string(&mut program)
+            .unwrap_or_else(|_| panic!("Failed to read program from stdin"));
+        match egraph.parse_and_run_program(&program, true) {
+            Ok(_msgs) => {}
+            Err(err) => {
+                log::error!("{}", err);
             }
         }
 
@@ -47,7 +49,7 @@ fn main() {
         let mut egraph = EGraph::default();
         egraph.fact_directory = args.fact_directory.clone();
         egraph.seminaive = !args.naive;
-        match egraph.parse_and_run_program(&s) {
+        match egraph.parse_and_run_program(&s, false) {
             Ok(_msgs) => {}
             Err(err) => {
                 log::error!("{}", err);

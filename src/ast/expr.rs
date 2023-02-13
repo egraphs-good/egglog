@@ -76,7 +76,11 @@ impl NormExpr {
         }
     }
 
-    pub(crate) fn map_def_use(&self, fvar: &mut impl FnMut(Symbol, bool) -> Symbol, is_def: bool) -> NormExpr {
+    pub(crate) fn map_def_use(
+        &self,
+        fvar: &mut impl FnMut(Symbol, bool) -> Symbol,
+        is_def: bool,
+    ) -> NormExpr {
         match self {
             NormExpr::Call(op, args) => {
                 let args = args.iter().map(|a| fvar(*a, is_def)).collect();

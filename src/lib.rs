@@ -136,6 +136,7 @@ pub struct EGraph {
     rulesets: HashMap<Symbol, HashMap<Symbol, Rule>>,
     saturated: bool,
     timestamp: u32,
+    paren_parser: ast::parse::ParenthesizedProgramParser,
     parser: ast::parse::ProgramParser,
     action_parser: ast::parse::ActionParser,
     pub match_limit: usize,
@@ -154,6 +155,7 @@ impl Clone for EGraph {
             type_info: self.type_info.clone(),
             saturated: self.saturated,
             timestamp: self.timestamp,
+            paren_parser: ast::parse::ParenthesizedProgramParser::new(),
             parser: ast::parse::ProgramParser::new(),
             action_parser: ast::parse::ActionParser::new(),
             match_limit: self.match_limit,
@@ -184,6 +186,7 @@ impl Default for EGraph {
             functions: Default::default(),
             rulesets: Default::default(),
             type_info: TypeInfo::new(),
+            paren_parser: ast::parse::ParenthesizedProgramParser::new(),
             parser: ast::parse::ProgramParser::new(),
             action_parser: ast::parse::ActionParser::new(),
             match_limit: 10_000_000,
@@ -1165,16 +1168,26 @@ impl EGraph {
         }
     }
 
-    pub fn parse_program(&self, input: &str) -> Result<Vec<Command>, Error> {
-        let program = self
-            .parser
-            .parse(input)
-            .map_err(|e| e.map_token(|tok| tok.to_string()))?;
+    pub fn parse_program(&self, input: &str, parenthesized: bool) -> Result<Vec<Command>, Error> {
+        let program = if parenthesized {
+            self.paren_parser
+                .parse(input)
+                .map_err(|e| e.map_token(|tok| tok.to_string()))?
+        } else {
+            self.parser
+                .parse(input)
+                .map_err(|e| e.map_token(|tok| tok.to_string()))?
+        };
         Ok(program)
     }
 
-    pub fn parse_desugar(&mut self, input: &str) -> Result<(Vec<NormCommand>, Desugar), Error> {
-        let (desugared, desugar) = desugar_program(self, self.parse_program(input)?)?;
+    pub fn parse_desugar(
+        &mut self,
+        input: &str,
+        parenthesized: bool,
+    ) -> Result<(Vec<NormCommand>, Desugar), Error> {
+        let (desugared, desugar) =
+            desugar_program(self, self.parse_program(input, parenthesized)?)?;
         println!("{}", ListDisplay(desugared.clone(), "\n"));
 
         desugar.egraph.type_info.typecheck_program(&desugared)?;
@@ -1182,13 +1195,17 @@ impl EGraph {
         Ok((desugared, desugar))
     }
 
-    pub fn parse_and_run_program(&mut self, input: &str) -> Result<Vec<String>, Error> {
-        let (mut program, desugar) = self.parse_desugar(input)?;
+    pub fn parse_and_run_program(
+        &mut self,
+        input: &str,
+        is_parenthesized: bool,
+    ) -> Result<Vec<String>, Error> {
+        let (mut program, desugar) = self.parse_desugar(input, is_parenthesized)?;
 
-        //println!("{}", ListDisplay(program.clone(), "\n"));
+        println!("{}", ListDisplay(program.clone(), "\n"));
         if should_add_proofs(&program) {
             program = add_proofs(program, desugar);
-            println!("{}", ListDisplay(program.clone(), "\n"));
+            //println!("{}", ListDisplay(program.clone(), "\n"));
             self.type_info = TypeInfo::new();
             self.type_info.typecheck_program(&program)?;
         }

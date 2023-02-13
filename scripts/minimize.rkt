@@ -19,14 +19,14 @@
       (append head (cdr tail))))
 
 (define-runtime-path egglog-binary
-  "target/release/egg-smol")
+  "../target/release/egg-smol")
 
 ;; timeout in seconds
 (define TIMEOUT 5)
 (define ITERATIONS 1)
 (define RANDOM-SAMPLE-FACTOR 1)
 (define MUST-NOT-STRINGS `())
-(define TARGET-STRINGS `("Option::unwrap()"))
+(define TARGET-STRINGS `("invalid default for"))
 
 (define (desugar line)
   (match line
@@ -40,8 +40,10 @@
   (define-values (egglog-process egglog-output egglog-in err)
     (subprocess (current-output-port) #f #f egglog-binary))
 
+  (displayln "(" egglog-in)
   (for ([line program])
     (writeln (desugar line) egglog-in))
+  (displayln ")" egglog-in)
   (close-output-port egglog-in)
 
   (when (not (sync/timeout TIMEOUT egglog-process))
@@ -117,9 +119,10 @@
 
 (define (minimize port-in port-out)
   (define egglog (read-lines port-in))
+  (pretty-print egglog)
 
   (when (not (desired-error? egglog))
-    (error "Program did not original have error"))
+    (error "Original program did not have error"))
 
   (define minimized (min-iterations egglog))
   (for ([line minimized])

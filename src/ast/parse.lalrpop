@@ -15,6 +15,10 @@ match {
     _
 }
 
+
+pub ParenthesizedProgram: Vec<Command> = {
+    "(" <Program> ")" => <>,
+}
 pub Program: Vec<Command> = { (Command)* => <> }
 
 List<T>: Vec<T> = { 
@@ -53,6 +57,7 @@ Command: Command = {
         <ruleset:(":ruleset" <Ident>)?>
     ")" => Command::BiRewrite(ruleset.unwrap_or("".into()), Rewrite { lhs, rhs, conditions: conditions.unwrap_or_default() }),
     "(" "define" <name:Ident> <expr:Expr> <cost:Cost> ")" => Command::Define { name, expr, cost },
+    "(" "let" <name:Ident> <expr:Expr> ")" => Command::Action(Action::Let(name, expr)),
     <NonLetAction> => Command::Action(<>),
     "(" "run" <limit:UNum>  <until:(":until" <Fact>)?> ")" => Command::Run(RunConfig { ruleset: "".into(), limit, until }),
     "(" "run" <ruleset: Ident> <limit:UNum> <until:(":until" <Fact>)?> ")" => Command::Run(RunConfig { ruleset, limit, until }),

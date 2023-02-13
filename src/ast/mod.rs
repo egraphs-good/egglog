@@ -120,7 +120,7 @@ impl NCommand {
                 e: Expr::Var(*var),
             },
             NCommand::Check(fact) => Command::Check(fact.clone()),
-            NCommand::Clear => Command::Query(vec![]),
+            NCommand::Clear => Command::Clear,
             NCommand::Print(name, n) => Command::Print(*name, *n),
             NCommand::PrintSize(name) => Command::PrintSize(*name),
             NCommand::Output { file, exprs } => Command::Output {
@@ -572,8 +572,12 @@ impl NormFact {
             NormFact::Compute(symbol, expr) => {
                 NormFact::Compute(fvar(*symbol, true), expr.map_def_use(fvar, true))
             }
-            NormFact::AssignLit(symbol, lit) => NormFact::AssignLit(fvar(*symbol, true), lit.clone()),
-            NormFact::ConstrainEq(lhs, rhs) => NormFact::ConstrainEq(fvar(*lhs, false), fvar(*rhs, false)),
+            NormFact::AssignLit(symbol, lit) => {
+                NormFact::AssignLit(fvar(*symbol, true), lit.clone())
+            }
+            NormFact::ConstrainEq(lhs, rhs) => {
+                NormFact::ConstrainEq(fvar(*lhs, false), fvar(*rhs, false))
+            }
         }
     }
 }
