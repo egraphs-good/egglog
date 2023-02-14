@@ -525,6 +525,64 @@ impl EGraph {
         Ok(format!("Function {} has size {}", sym, f.nodes.len()))
     }
 
+    // returns whether the egraph was updated
+    pub fn run_schedule(&mut self, sched: &Schedule) -> bool {
+        match sched {
+            Schedule::Ruleset(ruleset_name) => {
+                self.saturated = true;
+
+                let mut rules = HashMap::default();
+                rules.extend(self.rulesets.get(ruleset_name).unwrap().clone());
+                let mut searched = vec![];
+                for (&name, rule) in rules.iter_mut() {
+                    let mut all_values = vec![];
+                    self.run_query(&rule.query, rule.todo_timestamp, |values| {
+                        assert_eq!(values.len(), rule.query.vars.len());
+                        all_values.extend_from_slice(values);
+                        Ok(())
+                    });
+                    searched.push((name, all_values));
+                }
+
+                for (name, all_values) in searched {
+                    let rule = rules.get_mut(&name).unwrap();
+                    let n = rule.query.vars.len();
+                    let stack = &mut vec![];
+                    for values in all_values.chunks(n) {
+                        // we can ignore results here
+                        stack.clear();
+                        let _ = self.run_actions(stack, values, &rule.program, true);
+                    }
+                }
+                self.rebuild_nofail();
+                !self.saturated
+            }
+            Schedule::Repeat(limit, sched) => {
+                let mut updated = false;
+                for _ in 0..*limit {
+                    updated |= self.run_schedule(sched);
+                }
+                updated
+            }
+            Schedule::Saturate(sched) => {
+                let mut updated = false;
+                let mut still_updating = true;
+                while still_updating {
+                    still_updating = self.run_schedule(sched);
+                    updated |= still_updating;
+                }
+                updated
+            }
+            Schedule::Sequence(scheds) => {
+                let mut updated = false;
+                for sched in scheds {
+                    updated |= self.run_schedule(sched);
+                }
+                updated
+            }
+        }
+    }
+
     pub fn run_rules(&mut self, config: &RunConfig) -> [Duration; 3] {
         let RunConfig {
             ruleset,
@@ -852,6 +910,14 @@ impl EGraph {
                 } else {
                     log::info!("Skipping running!");
                     format!("Skipped run {limit}.")
+                }
+            }
+            NormCommand::RunSchedule(sched) => {
+                if should_run {
+                    self.run_schedule(&sched);
+                    format!("Ran schedule {}.", sched)
+                } else {
+                    "Skipping schedule.".to_string()
                 }
             }
             NormCommand::Calc(idents, exprs) => {

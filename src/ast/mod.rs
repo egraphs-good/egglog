@@ -47,6 +47,7 @@ pub enum NormCommand {
     NormRule(Symbol, NormRule),
     NormAction(NormAction),
     Run(RunConfig),
+    RunSchedule(Schedule),
     Simplify { expr: Expr, config: RunConfig },
     // TODO flatten calc, add proof support
     Calc(Vec<IdentSort>, Vec<Expr>),
@@ -75,6 +76,7 @@ impl NormCommand {
             NormCommand::NormRule(name, rule) => Command::Rule(*name, rule.to_rule()),
             NormCommand::NormAction(action) => Command::Action(action.to_action()),
             NormCommand::Run(config) => Command::Run(config.clone()),
+            NormCommand::RunSchedule(sched) => Command::RunSchedule(sched.clone()),
             NormCommand::Simplify { expr, config } => Command::Simplify {
                 expr: expr.clone(),
                 config: config.clone(),
@@ -124,6 +126,7 @@ pub enum Command {
     BiRewrite(Symbol, Rewrite),
     Action(Action),
     Run(RunConfig),
+    RunSchedule(Schedule),
     Simplify {
         expr: Expr,
         config: RunConfig,
@@ -213,6 +216,9 @@ impl Command {
                 }
 
                 Sexp::List(res)
+            }
+            Command::RunSchedule(sched) => {
+                Sexp::List(vec![Sexp::String("run-schedule".into()), sched.to_sexp()])
             }
             Command::Calc(args, exprs) => Sexp::List(
                 vec![
@@ -487,6 +493,43 @@ impl Fact {
 }
 
 impl Display for Fact {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_sexp())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum Schedule {
+    Saturate(Box<Schedule>),
+    Repeat(usize, Box<Schedule>),
+    Ruleset(Symbol),
+    Sequence(Vec<Schedule>),
+}
+
+impl Schedule {
+    fn to_sexp(&self) -> Sexp {
+        match self {
+            Schedule::Saturate(sched) => {
+                Sexp::List(vec![Sexp::String("saturate".into()), sched.to_sexp()])
+            }
+            Schedule::Repeat(size, sched) => Sexp::List(vec![
+                Sexp::String("repeat".into()),
+                Sexp::String(size.to_string()),
+                sched.to_sexp(),
+            ]),
+            Schedule::Ruleset(sym) => Sexp::String(sym.to_string()),
+            Schedule::Sequence(scheds) => {
+                let mut sexps = vec![Sexp::String("seq".into())];
+                for sched in scheds {
+                    sexps.push(sched.to_sexp());
+                }
+                Sexp::List(sexps)
+            }
+        }
+    }
+}
+
+impl Display for Schedule {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.to_sexp())
     }
