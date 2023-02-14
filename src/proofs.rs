@@ -621,20 +621,18 @@ impl<'a> ProofState<'a> {
     }
 }
 
-fn proof_original_action(action: &NormAction, proof_state: &mut ProofState) -> Vec<Command> {
-    match action {
-        NormAction::Let(lhs, NormExpr::Call(head, body)) => {
-            let ast_var = proof_state.get_fresh();
-            proof_state.global_var_ast.insert(*lhs, ast_var);
-            let ast_action = format!(
-                "(let {} ({} {}))",
-                ast_var,
-                make_ast_version(proof_state, &NormExpr::Call(*head, body.clone())),
-                ListDisplay(body.iter().map(|e| proof_state.global_var_ast[e]), " ")
-            );
-            let rep = make_rep_version(proof_state, &NormExpr::Call(*head, body.clone()));
-
-            vec![
+fn make_rep_command(proof_state: &mut ProofState, lhs: Symbol, expr: &NormExpr) -> Vec<Command> {
+    let NormExpr::Call(head, body) = expr;
+    let ast_var = proof_state.get_fresh();
+    proof_state.global_var_ast.insert(lhs, ast_var);
+    let ast_action = format!(
+        "(let {} ({} {}))",
+        ast_var,
+        make_ast_version(proof_state, &NormExpr::Call(*head, body.clone())),
+        ListDisplay(body.iter().map(|e| proof_state.global_var_ast[e]), " ")
+    );
+    let rep = make_rep_version(proof_state, expr);
+    vec![
                 Command::Action(
                     proof_state
                         .desugar
@@ -659,6 +657,13 @@ fn proof_original_action(action: &NormAction, proof_state: &mut ProofState) -> V
                         .unwrap(),
                 ),
             ]
+
+}
+
+fn proof_original_action(action: &NormAction, proof_state: &mut ProofState) -> Vec<Command> {
+    match action {
+        NormAction::Let(lhs, expr) => {
+            make_rep_command(proof_state, *lhs, expr)
         }
         NormAction::LetVar(var1, var2) => {
             proof_state
@@ -700,27 +705,25 @@ fn proof_original_action(action: &NormAction, proof_state: &mut ProofState) -> V
                 ),
             ]
         }
-        NormAction::Set(NormExpr::Call(head, body), var) => {
-            let left_ast = Expr::Call(
-                make_ast_version(proof_state, &NormExpr::Call(*head, body.clone())),
-                body.iter()
-                    .map(|e| Expr::Var(proof_state.global_var_ast[e]))
-                    .collect(),
-            );
-            vec![Command::Action(
+        NormAction::Set(expr, var) => {
+            let fresh = proof_state.get_fresh();
+            let mut rep_commands = make_rep_command(proof_state, fresh, expr);
+            
+            rep_commands.push(Command::Action(
                 proof_state
                     .desugar
                     .egraph
                     .action_parser
                     .parse(&format!(
                         "(set (EqGraph__ {} {}) (OriginalEq__ {} {}))",
-                        left_ast,
+                        proof_state.global_var_ast[&fresh],
                         proof_state.global_var_ast[var],
-                        left_ast,
+                        proof_state.global_var_ast[&fresh],
                         proof_state.global_var_ast[var]
                     ))
                     .unwrap(),
-            )]
+            ));
+            rep_commands
         }
         NormAction::Union(var1, var2) => {
             vec![Command::Action(

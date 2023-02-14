@@ -846,9 +846,9 @@ impl EGraph {
                     "Skipping check.".into()
                 }
             }
-            NCommand::Simplify { expr, config } => {
+            NCommand::Simplify { var, config } => {
                 if should_run {
-                    let (cost, expr) = self.simplify(expr, &config)?;
+                    let (cost, expr) = self.simplify(Expr::Var(var), &config)?;
                     println!("{}", expr);
                     format!("Simplified with cost {cost} to {expr}")
                 } else {

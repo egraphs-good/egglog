@@ -356,7 +356,20 @@ pub(crate) fn desugar_command(
             .collect()
         },
         Command::Run(run) => vec![NCommand::Run(run)],
-        Command::Simplify { expr, config } => vec![NCommand::Simplify { expr, config }],
+        Command::Simplify { expr, config } => {
+            let fresh = (desugar.get_fresh)();
+            flatten_actions(&vec![Action::Let(fresh, expr)], desugar, true)
+                .into_iter()
+                .map(NCommand::NormAction)
+                .chain(
+                    vec![NCommand::Simplify {
+                        var: fresh,
+                        config,
+                    }]
+                    .into_iter(),
+                )
+                .collect()
+        }
         Command::Calc(idents, exprs) => vec![NCommand::Calc(idents, exprs)],
         Command::Extract { variants, e } => {
             let fresh = (desugar.get_fresh)();

@@ -75,7 +75,7 @@ pub enum NCommand {
     NormRule(Symbol, NormRule),
     NormAction(NormAction),
     Run(RunConfig),
-    Simplify { expr: Expr, config: RunConfig },
+    Simplify { var: Symbol, config: RunConfig },
     // TODO flatten calc, add proof support
     Calc(Vec<IdentSort>, Vec<Expr>),
     Extract { variants: usize, var: Symbol },
@@ -85,7 +85,7 @@ pub enum NCommand {
     Print(Symbol, usize),
     PrintSize(Symbol),
     Output { file: String, exprs: Vec<Expr> },
-    // TODO flatten query
+    // TODO flatten query, they are not supported currently
     Query(Vec<Fact>),
     Push(usize),
     Pop(usize),
@@ -110,8 +110,8 @@ impl NCommand {
             NCommand::NormRule(name, rule) => Command::Rule(*name, rule.to_rule()),
             NCommand::NormAction(action) => Command::Action(action.to_action()),
             NCommand::Run(config) => Command::Run(config.clone()),
-            NCommand::Simplify { expr, config } => Command::Simplify {
-                expr: expr.clone(),
+            NCommand::Simplify { var, config } => Command::Simplify {
+                expr: Expr::Var(*var),
                 config: config.clone(),
             },
             NCommand::Calc(args, exprs) => Command::Calc(args.clone(), exprs.clone()),
@@ -147,11 +147,7 @@ impl NCommand {
             NCommand::NormRule(name, rule) => NCommand::NormRule(*name, rule.map_exprs(f)),
             NCommand::NormAction(action) => NCommand::NormAction(action.map_exprs(f)),
             NCommand::Run(config) => NCommand::Run(config.clone()),
-            NCommand::Simplify { expr, config } => NCommand::Simplify {
-                // TODO fix this
-                expr: expr.clone(),
-                config: config.clone(),
-            },
+            NCommand::Simplify { .. } => self.clone(),
             NCommand::Calc(args, exprs) => NCommand::Calc(args.clone(), exprs.clone()),
             NCommand::Extract { variants, var } => NCommand::Extract {
                 variants: *variants,
