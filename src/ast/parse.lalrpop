@@ -41,24 +41,26 @@ Command: Command = {
         Command::Function(FunctionDecl { name, schema, merge, merge_action: merge_action.unwrap_or_default(), default, cost })
     },
     "(" "relation" <name:Ident> <types:List<Type>> ")" => Command::Function(FunctionDecl::relation(name, types)),
-    "(" "rule" <body:List<Fact>> <head:List<Action>> ")" => Command::Rule(Rule { head, body }),
+    "(" "ruleset" <name:Ident> ")" => Command::AddRuleset(name),
+    "(" "rule" <body:List<Fact>> <head:List<Action>> <ruleset:(":ruleset" <Ident>)?> ")" => Command::Rule(ruleset.unwrap_or("".into()), Rule { head, body }),
     "(" "rewrite" <lhs:Expr> <rhs:Expr>
         <conditions:(":when" <List<Fact>>)?>
-    ")" => Command::Rewrite(Rewrite { lhs, rhs, conditions: conditions.unwrap_or_default() }),
+        <ruleset:(":ruleset" <Ident>)?>
+    ")" => Command::Rewrite(ruleset.unwrap_or("".into()), Rewrite { lhs, rhs, conditions: conditions.unwrap_or_default() }),
     "(" "birewrite" <lhs:Expr> <rhs:Expr>
         <conditions:(":when" <List<Fact>>)?>
-    ")" => Command::BiRewrite(Rewrite { lhs, rhs, conditions: conditions.unwrap_or_default() }),
+        <ruleset:(":ruleset" <Ident>)?>
+    ")" => Command::BiRewrite(ruleset.unwrap_or("".into()), Rewrite { lhs, rhs, conditions: conditions.unwrap_or_default() }),
     "(" "define" <name:Ident> <expr:Expr> <cost:Cost> ")" => Command::Define { name, expr, cost },
     <NonLetAction> => Command::Action(<>),
-    "(" "run" <limit:UNum>  <until:(":until" <Fact>)?> ")" => Command::Run(RunConfig { limit, until }),
+    "(" "run" <limit:UNum>  <until:(":until" <Fact>)?> ")" => Command::Run(RunConfig { ruleset: "".into(), limit, until }),
+    "(" "run" <ruleset: Ident> <limit:UNum> <until:(":until" <Fact>)?> ")" => Command::Run(RunConfig { ruleset, limit, until }),
     "(" "simplify"  <limit:UNum> <expr:Expr> <until:(":until" <Fact>)?> ")" 
-        => Command::Simplify { expr, config : RunConfig { limit, until } },
+        => Command::Simplify { expr, config : RunConfig { ruleset: "".into(), limit, until } },
     "(" "add-ruleset" <name:Ident> ")" => Command::AddRuleset(name),
-    "(" "load-ruleset" <name:Ident> ")" => Command::LoadRuleset(name),
     "(" "calc" "(" <idents:IdentSort*> ")" <exprs:Expr+> ")" => Command::Calc(idents, exprs),
     "(" "extract" <variants:(":variants" <UNum>)?> <e:Expr> ")" => Command::Extract { e, variants: variants.unwrap_or(0) },
     "(" "check" <Fact> ")" => Command::Check(<>),
-    "(" "clear-rules" ")" => Command::ClearRules,
     "(" "clear" ")" => Command::Clear,
     "(" "query" <List<Fact>> ")" => Command::Query(<>),
     "(" "push" <UNum?> ")" => Command::Push(<>.unwrap_or(1)),
