@@ -830,6 +830,7 @@ impl EGraph {
                     if variants > 0 {
                         let line = "\n    ";
                         let v_exprs = ListDisplay(&exprs, line);
+                        println!("\nVariants of {expr}:{line}{v_exprs}");
                         write!(msg, "\nVariants of {expr}:{line}{v_exprs}").unwrap();
                     }
                     msg
@@ -1188,7 +1189,7 @@ impl EGraph {
     ) -> Result<(Vec<NormCommand>, Desugar), Error> {
         let (desugared, desugar) =
             desugar_program(self, self.parse_program(input, parenthesized)?)?;
-        println!("{}", ListDisplay(desugared.clone(), "\n"));
+        //println!("{}", ListDisplay(desugared.clone(), "\n"));
 
         desugar.egraph.type_info.typecheck_program(&desugared)?;
 
@@ -1202,10 +1203,10 @@ impl EGraph {
     ) -> Result<Vec<String>, Error> {
         let (mut program, desugar) = self.parse_desugar(input, is_parenthesized)?;
 
-        println!("{}", ListDisplay(program.clone(), "\n"));
+        //println!("{}", ListDisplay(program.clone(), "\n"));
         if should_add_proofs(&program) {
             program = add_proofs(program, desugar);
-            //println!("{}", ListDisplay(program.clone(), "\n"));
+            println!("{}", ListDisplay(program.clone(), "\n"));
             self.type_info = TypeInfo::new();
             self.type_info.typecheck_program(&program)?;
         }

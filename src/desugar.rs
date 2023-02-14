@@ -189,18 +189,24 @@ fn expr_to_flat_actions(
     assign
 }
 
-fn flatten_actions(actions: &Vec<Action>, desugar: &mut Desugar) -> Vec<NormAction> {
+fn flatten_actions(actions: &Vec<Action>, desugar: &mut Desugar, global: bool) -> Vec<NormAction> {
     let mut memo = Default::default();
     let mut add_expr = |expr: Expr, res: &mut Vec<NormAction>| -> Symbol {
-        expr_to_flat_actions(&expr, &mut desugar.get_fresh, res, &mut memo)
+        if global {
+            expr_to_flat_actions(&expr, &mut desugar.get_fresh, res, &mut desugar.define_memo)
+        } else {
+            expr_to_flat_actions(&expr, &mut desugar.get_fresh, res, &mut memo)
+        }
     };
 
     let mut res = vec![];
 
     for action in actions {
+        println!("action: {}", action);
         match action {
             Action::Let(symbol, expr) => {
                 let added = add_expr(expr.clone(), &mut res);
+                assert_ne!(*symbol, added);
                 res.push(NormAction::LetVar(*symbol, added));
             }
             Action::Set(symbol, exprs, rhs) => {
@@ -287,7 +293,7 @@ fn flatten_rule(rule: Rule, desugar: &mut Desugar) -> NormRule {
     let with_unique_names = give_unique_names(desugar, flat_facts);
 
     NormRule {
-        head: flatten_actions(&rule.head, desugar),
+        head: flatten_actions(&rule.head, desugar, false),
         body: with_unique_names,
     }
 }
@@ -342,16 +348,19 @@ pub(crate) fn desugar_command(
             commands
         }
         Command::AddRuleset(name) => vec![NCommand::AddRuleset(name)],
-        Command::Action(action) => flatten_actions(&vec![action], desugar)
+        Command::Action(action) => {
+            println!("caction: {}", action);
+            flatten_actions(&vec![action], desugar, true)
             .into_iter()
             .map(NCommand::NormAction)
-            .collect(),
+            .collect()
+        },
         Command::Run(run) => vec![NCommand::Run(run)],
         Command::Simplify { expr, config } => vec![NCommand::Simplify { expr, config }],
         Command::Calc(idents, exprs) => vec![NCommand::Calc(idents, exprs)],
         Command::Extract { variants, e } => {
             let fresh = (desugar.get_fresh)();
-            flatten_actions(&vec![Action::Let(fresh, e)], desugar)
+            flatten_actions(&vec![Action::Let(fresh, e)], desugar, true)
                 .into_iter()
                 .map(NCommand::NormAction)
                 .chain(
@@ -434,7 +443,6 @@ pub(crate) fn desugar_commands(
     desugar: &mut Desugar,
 ) -> Result<Vec<NormCommand>, Error> {
     let mut res = vec![];
-
     for command in program {
         let desugared = desugar_command(command, desugar)?;
         res.extend(desugared);

@@ -797,9 +797,10 @@ pub(crate) fn add_proofs(program: Vec<NormCommand>, desugar: Desugar) -> Vec<Nor
         }
     }
 
+    proof_state.desugar.define_memo.clear();
     desugar_commands(res, &mut proof_state.desugar).unwrap()
 }
 
 pub(crate) fn should_add_proofs(_program: &[NormCommand]) -> bool {
-    false
+    true
 }
