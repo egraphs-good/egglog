@@ -41,23 +41,23 @@
 (rewrite (eq-val (I x) (False)) (False))
 (rewrite (eq-val x x) (True))
 
-(datatype Var (V String))
+(datatype VarT (V String))
 (datatype Loc (L i64))
 (datatype Exp
-    (Add Var Var)
-    (Eq Var Var)
-    (Var Var)
+    (Add VarT VarT)
+    (Eq VarT VarT)
+    (Var VarT)
     (Const Val))
 (datatype ProgStmt
-    (Ass Var Exp)
-    (If Var Loc Loc)
+    (Ass VarT Exp)
+    (If VarT Loc Loc)
     (Goto Loc)
-    (Call Var)
+    (Call VarT)
     (End))
 (function Prog (Loc) ProgStmt)
 (relation RProg (Loc ProgStmt))
 
-(function const-prop (Loc Var) Val :merge (merge-val old new))
+(function const-prop (Loc VarT) Val :merge (merge-val old new))
 
 ;;;;;;;;;;;;;;;;
 ;; ASS Case

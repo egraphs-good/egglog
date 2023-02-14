@@ -5,15 +5,15 @@
 (left 0)
 (right 0)
 
+(ruleset step-left)
 (rule ((left x) (right x))
-      ((left (+ x 1))))
-(add-ruleset step-left)
-(clear-rules)
+      ((left (+ x 1)))
+      :ruleset step-left)
 
+(ruleset step-right)
 (rule ((left x) (right y) (= x (+ y 1)))
-      ((right x)))
-(add-ruleset step-right)
-(clear-rules)
+      ((right x))
+      :ruleset step-right)
 
 (run-schedule
       (repeat 10

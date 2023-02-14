@@ -1,18 +1,18 @@
 ;; NOTE: This file contains several unsafe operations
 (datatype Value (True) (False) (Num i64))
-(datatype Var)
+(datatype VarType)
 (datatype Term
     (Val Value)
-    (Var Var)
+    (Var VarType)
     (Add Term Term)
     (Eq Term Term)
     (App Term Term)
-    (Lam Var Term)
-    (Let Var Term Term)
-    (Fix Var Term)
+    (Lam VarType Term)
+    (Let VarType Term Term)
+    (Fix VarType Term)
     (If Term Term Term))
-(function V (String) Var) 
-(function From (Term) Var)
+(function V (String) VarType) 
+(function From (Term) VarType)
 
 ; All free variables are free,
 ; but some free variables are more free than others
@@ -20,7 +20,7 @@
 ; that will affect the evaluation
 ; of the corresponding term
 ; e.g., x is free in x - x, but not freer in x - x
-(sort StringSet (Map Var i64))
+(sort StringSet (Map VarType i64))
 (function freer (Term) StringSet :merge (set-intersect old new))
 (rule ((= e (Val v)))
       ((set (freer e) (empty))))

@@ -9,7 +9,7 @@
   (Lam String Type Expr) ; lam x : t . e
   (App Expr Expr) 
   (Var String) 
-  (Unit)
+  (MyUnit)
 )
 
 (datatype Ctx 
@@ -21,7 +21,7 @@
 (function typeof (Ctx Expr) Type)
 
 ; ctx |- () : unit
-(rewrite (typeof ctx (Unit)) (TUnit))
+(rewrite (typeof ctx (MyUnit)) (TUnit))
 
 ; ctx; x: t |- x : t
 (rewrite (typeof (Cons x t ctx) (Var x)) t)
@@ -75,7 +75,7 @@
 (define t-id (typeof (Nil) id))
 
 ; (e () id) = ()
-(define app-unit-id (App (App e (Unit)) id))
+(define app-unit-id (App (App e (MyUnit)) id))
 (define t-app (typeof (Nil) app-unit-id))
 
 (define free (Lam "x" (TUnit) (Var "y")))
