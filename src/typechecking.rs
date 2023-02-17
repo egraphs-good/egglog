@@ -178,6 +178,11 @@ impl TypeInfo {
             NCommand::NormAction(action) => {
                 self.typecheck_action(command.metadata.id, action, true)?;
             }
+            NCommand::Check(facts) => {
+                self.typecheck_facts(command.metadata.id, facts)?;
+            }
+
+            // TODO cover all cases in typechecking
             _ => (),
         }
         Ok(())

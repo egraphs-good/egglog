@@ -1105,7 +1105,6 @@ impl EGraph {
         let mut msgs = vec![];
         let should_run = true;
 
-        //println!("{}", ListDisplay(program.clone(), "\n"));
 
         for command in program {
             let msg = self.run_command(command.command, should_run)?;
@@ -1146,7 +1145,6 @@ impl EGraph {
     ) -> Result<(Vec<NormCommand>, Desugar), Error> {
         let (desugared, desugar) =
             desugar_program(self, self.parse_program(input, parenthesized)?)?;
-        //println!("{}", ListDisplay(desugared.clone(), "\n"));
 
         desugar.egraph.type_info.typecheck_program(&desugared)?;
 
@@ -1160,12 +1158,14 @@ impl EGraph {
     ) -> Result<Vec<String>, Error> {
         let (mut program, desugar) = self.parse_desugar(input, is_parenthesized)?;
 
+        //println!("{}", ListDisplay(program.clone(), "\n"));
         if should_add_proofs(&program) {
             program = add_proofs(program, desugar);
-            //println!("{}", ListDisplay(program.clone(), "\n"));
+            println!("{}", ListDisplay(program.clone(), "\n"));
             self.type_info = TypeInfo::new();
             self.type_info.typecheck_program(&program)?;
         }
+        println!("after typechecking");
 
         self.run_program(program)
     }

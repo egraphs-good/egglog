@@ -133,7 +133,7 @@ fn make_ast_function(proof_state: &mut ProofState, expr: &NormExpr) -> FunctionD
     }
 }
 
-fn merge_action(egraph: &EGraph, types: FuncType) -> Vec<Action> {
+fn merge_action(proof_state: &mut ProofState, types: FuncType) -> Vec<Action> {
     let child1 = |i| Symbol::from(format!("c1_{}__", i));
     let child2 = |i| Symbol::from(format!("c2_{}__", i));
 
@@ -150,25 +150,28 @@ fn merge_action(egraph: &EGraph, types: FuncType) -> Vec<Action> {
             congr_prf,
         ]);
     }
+    let t1 = proof_state.get_fresh();
+    let t2 = proof_state.get_fresh();
+    let p1 = proof_state.get_fresh();
 
     vec![
-        "(let t1 (TrmOf__ old))".to_string(),
-        "(let t2 (TrmOf__ new))".to_string(),
-        "(let p1 (PrfOf__ old))".to_string(),
+        format!("(let {t1} (TrmOf__ old))"),
+        format!("(let {t2} (TrmOf__ new))"),
+        format!("(let {p1} (PrfOf__ old))"),
     ]
     .into_iter()
     .chain(types.input.iter().enumerate().flat_map(|(i, _sort)| {
         vec![
-            format!("(let {} (GetChild__ t1 {}))", child1(i), i),
-            format!("(let {} (GetChild__ t2 {}))", child2(i), i),
+            format!("(let {} (GetChild__ {t1} {}))", child1(i), i),
+            format!("(let {} (GetChild__ {t2} {}))", child2(i), i),
         ]
     }))
     .chain(vec![
-        format!("(let congr_prf__ (Congruence__ p1 {}))", congr_prf),
-        "(set (EqGraph__ t1 t2) congr_prf__)".to_string(),
-        "(set (EqGraph__ t2 t1) (Flip__ congr_prf__))".to_string(),
+        format!("(let congr_prf__ (Congruence__ {p1} {}))", congr_prf),
+        format!("(set (EqGraph__ {t1} {t2}) congr_prf__)"),
+        format!("(set (EqGraph__ {t2} {t1}) (Flip__ congr_prf__))"),
     ])
-    .map(|s| egraph.action_parser.parse(&s).unwrap())
+    .map(|s| proof_state.desugar.egraph.action_parser.parse(&s).unwrap())
     .collect()
 }
 
@@ -614,7 +617,7 @@ fn make_rep_function(proof_state: &mut ProofState, expr: &NormExpr) -> FunctionD
             output: "TrmPrf__".into(),
         },
         merge: Some(Expr::Var("old".into())),
-        merge_action: merge_action(proof_state.desugar.egraph, types),
+        merge_action: merge_action(proof_state, types),
         default: None,
         cost: None,
     }
@@ -860,7 +863,7 @@ pub(crate) fn add_proofs(program: Vec<NormCommand>, desugar: Desugar) -> Vec<Nor
                 res.push(Command::Action(action.to_action()));
                 res.extend(proof_original_action(action, &mut proof_state));
             }
-            NCommand::Check(check) => {
+            NCommand::Check(_check) => {
                 res.push(command.to_command());
                 /*match fact {
                     Fact::Eq(exprs) => {
@@ -878,5 +881,5 @@ pub(crate) fn add_proofs(program: Vec<NormCommand>, desugar: Desugar) -> Vec<Nor
 }
 
 pub(crate) fn should_add_proofs(_program: &[NormCommand]) -> bool {
-    false
+    true
 }
