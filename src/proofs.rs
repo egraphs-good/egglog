@@ -209,30 +209,13 @@ fn instrument_facts(
                     NormExpr::Call("ComputePrim__".into(), vec![rep_trm]),
                 ));
 
-                info.var_term.insert(*lhs, rep_trm).is_none();
+                info.var_term.insert(*lhs, rep_trm);
                 assert!(info.var_proof.insert(*lhs, rep_prf).is_none());
             }
             NormFact::Assign(lhs, NormExpr::Call(head, body))
                 if proof_state.desugar.egraph.type_info.is_primitive(*head) =>
             {
-                // child terms are primitives so just
-                // make ast version
-                for child in body.iter() {
-                    let child_trm = proof_state.get_fresh();
-                    let child_type = proof_state
-                        .desugar
-                        .egraph
-                        .type_info
-                        .lookup(proof_state.current_ctx, *child)
-                        .unwrap()
-                        .name();
-                    actions.push(NormAction::Let(
-                        child_trm,
-                        NormExpr::Call(make_ast_version_prim(child_type), vec![*child]),
-                    ));
-                    info.var_term.insert(*child, child_trm);
-                }
-
+                // child terms should already exist if we are computing something
                 let rep_trm = proof_state.get_fresh();
                 actions.push(NormAction::Let(
                     rep_trm,
