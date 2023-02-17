@@ -1203,13 +1203,13 @@ impl EGraph {
     ) -> Result<Vec<String>, Error> {
         let (mut program, desugar) = self.parse_desugar(input, is_parenthesized)?;
 
-        //println!("{}", ListDisplay(program.clone(), "\n"));
         if should_add_proofs(&program) {
             program = add_proofs(program, desugar);
-            println!("{}", ListDisplay(program.clone(), "\n"));
+            //println!("{}", ListDisplay(program.clone(), "\n"));
             self.type_info = TypeInfo::new();
             self.type_info.typecheck_program(&program)?;
         }
+        
 
         self.run_program(program)
     }

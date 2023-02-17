@@ -202,7 +202,6 @@ fn flatten_actions(actions: &Vec<Action>, desugar: &mut Desugar, global: bool) -
     let mut res = vec![];
 
     for action in actions {
-        println!("action: {}", action);
         match action {
             Action::Let(symbol, expr) => {
                 let added = add_expr(expr.clone(), &mut res);
@@ -348,26 +347,17 @@ pub(crate) fn desugar_command(
             commands
         }
         Command::AddRuleset(name) => vec![NCommand::AddRuleset(name)],
-        Command::Action(action) => {
-            println!("caction: {}", action);
-            flatten_actions(&vec![action], desugar, true)
+        Command::Action(action) => flatten_actions(&vec![action], desugar, true)
             .into_iter()
             .map(NCommand::NormAction)
-            .collect()
-        },
+            .collect(),
         Command::Run(run) => vec![NCommand::Run(run)],
         Command::Simplify { expr, config } => {
             let fresh = (desugar.get_fresh)();
             flatten_actions(&vec![Action::Let(fresh, expr)], desugar, true)
                 .into_iter()
                 .map(NCommand::NormAction)
-                .chain(
-                    vec![NCommand::Simplify {
-                        var: fresh,
-                        config,
-                    }]
-                    .into_iter(),
-                )
+                .chain(vec![NCommand::Simplify { var: fresh, config }].into_iter())
                 .collect()
         }
         Command::Calc(idents, exprs) => vec![NCommand::Calc(idents, exprs)],

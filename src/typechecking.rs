@@ -240,8 +240,7 @@ impl TypeInfo {
 
         for fact in facts {
             match fact {
-                NormFact::Assign(var, NormExpr::Call(_head, body))
-                | NormFact::Compute(var, NormExpr::Call(_head, body)) => {
+                NormFact::Assign(var, NormExpr::Call(_head, body)) => {
                     assert!(let_bound.insert(*var));
                     body.iter().for_each(|bvar| {
                         if !self.global_types.contains_key(bvar) {
@@ -371,7 +370,7 @@ impl TypeInfo {
 
     fn typecheck_fact(&mut self, ctx: CommandId, fact: &NormFact) -> Result<(), TypeError> {
         match fact {
-            NormFact::Assign(var, expr) | NormFact::Compute(var, expr) => {
+            NormFact::Assign(var, expr) => {
                 let expr_type = self.typecheck_expr(ctx, expr)?;
                 if let Some(existing) = self
                     .local_types
@@ -424,7 +423,7 @@ impl TypeInfo {
         Ok(())
     }
 
-    fn lookup(&self, ctx: CommandId, sym: Symbol) -> Result<ArcSort, TypeError> {
+    pub fn lookup(&self, ctx: CommandId, sym: Symbol) -> Result<ArcSort, TypeError> {
         self.global_types
             .get(&sym)
             .map(|x| Ok(x.clone()))

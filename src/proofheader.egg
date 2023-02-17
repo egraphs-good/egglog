@@ -17,6 +17,10 @@
   ;; using a rule justification,
   ;; proves a term exists
   (RuleTerm__ Proof__ Ast__)
+  ;; either a primitive appearing as a constant in the rule
+  ;; or the computation of a primitive based on already-justified variables
+  (ComputePrim__ Ast__)
+
   ;; using a rule justification, proves two terms are equal
   (RuleEquality__ Proof__ Ast__ Ast__)
 
