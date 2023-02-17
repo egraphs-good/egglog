@@ -225,38 +225,48 @@
 ;;;;;;;;;;;;;;;;;;;;;;
 ;; TEST
 ;;;;;;;;;;;;;;;;;;;;;;
+
+(push)
 (define id (Abs (V "x") (Var (V "x"))))
 (define t-id (typeof (Nil) id 0))
 (run 100)
 (check (= t-id (TArr (TVar (Fresh (V "x") 0)) (TVar (Fresh (V "x") 0)))))
-(clear)
+(pop)
 
+(push)
 (define let-poly (Let (V "id") (Abs (V "x") (Var (V "x")))
                   (App (App (Var (V "id")) (Var (V "id")))
                        (App (Var (V "id")) (True)))))
 (define t-let-poly (typeof (Nil) let-poly 0))
 (run 100)
 (check (= t-let-poly (TBool)))
-(clear)
+(pop)
 
+(push)
 (define id-id (App (Abs (V "x") (Var (V "x")))
                    (Abs (V "y") (Var (V "y")))))
 (define t-id-id (typeof (Nil) id-id 0))
 (run 100)
 (check (= t-id-id (TArr (TVar (Fresh (V "y") 3)) (TVar (Fresh (V "y") 3)))))
-(clear)
+(pop)
 
+
+(push)
 (define let-true (Let (V "x") (True) (True)))
 (define t-let-true (typeof (Nil) let-true 0))
 (run 100)
 (check (= t-let-true (TBool)))
-(clear)
+(pop)
+
+(push)
 
 (define let-var-true (Let (V "x") (True) (Var (V "x"))))
 (define t-let-var-true (typeof (Nil) let-var-true 0))
 (run 100)
 (check (= t-let-var-true (TBool)))
-(clear)
+(pop)
+
+(push)
 
 (define abs-id (Abs (V "x") 
                     (Let (V "y") (Abs (V "z") (Var (V "z"))) (Var (V "y")))))
@@ -265,7 +275,9 @@
 (define x (Fresh (V "x") 0))
 (define z (Fresh (Fresh (V "z") 2) 4))
 (check (= t-abs-id (TArr (TVar x) (TArr (TVar z) (TVar z)))))
-(clear)
+(pop)
+
+(push)
 
 (define let-env (Let (V "x") (True) 
                 (Let (V "f") (Abs (V "a") (Var (V "a")))
@@ -275,7 +287,9 @@
 (define t-let-env (typeof (Nil) let-env 0))
 (run 100)
 (check (= t-let-env (TUnit)))
-(clear)
+(pop)
+
+(push)
 
 (define let-env-2a (Let (V "x") (MyUnit)
                    (Let (V "f") (Abs (V "y") (Var (V "x")))
@@ -284,7 +298,9 @@
 (define t-let-env-2a (typeof (Nil) let-env-2a 0))
 (run 100)
 (check (= t-let-env-2a (TUnit)))
-(clear)
+(pop)
+
+(push)
 
 (define let-env-2b (App (Abs (V "x")
                              (Let (V "f") (Abs (V "y") (Var (V "x")))
@@ -294,7 +310,9 @@
 (define t-let-env-2b (typeof (Nil) let-env-2b 0))
 (run 100)
 (check (= t-let-env-2b (TUnit)))
-(clear)
+(pop)
+
+(push)
 
 ;; ((lambda (x) ((lambda (f) ((lambda (x) (f x)) #t)) (lambda (y) x))) 5)
 (define let-env-hard (App (Abs (V "x") 
@@ -306,8 +324,9 @@
 (define t-let-env-hard (typeof (Nil) let-env-hard 0))
 (run 100)
 (check (= t-let-env-hard (TUnit)))
-(clear)
+(pop)
 
+(push)
 
 (define let-inst (Let (V "id") (Abs (V "x") (Var (V "x")))
                  (Let (V "iid") (Abs (V "y") (Var (V "id")))
@@ -317,4 +336,5 @@
 (define t-let-inst (typeof (Nil) let-inst 0) :cost 1000)
 (run 100)
 (check (= t-let-inst  (TArr (TVar (Fresh (Fresh (Fresh (V "x") 1) 5) 7)) (TVar (Fresh (Fresh (Fresh (V "x") 1) 5) 7)))))
-(clear)
+(pop)
+
