@@ -113,7 +113,9 @@ impl NCommand {
             }) => Command::Run(RunConfig {
                 ruleset: *ruleset,
                 limit: *limit,
-                until: until.as_ref().map(|facts| facts.iter().map(|fact| fact.to_fact()).collect()),
+                until: until
+                    .as_ref()
+                    .map(|facts| facts.iter().map(|fact| fact.to_fact()).collect()),
             }),
             NCommand::Simplify { var, config } => Command::Simplify {
                 expr: Expr::Var(*var),
@@ -290,9 +292,7 @@ impl Command {
                 res.push(Sexp::String(config.limit.to_string()));
                 if let Some(until) = &config.until {
                     res.push(Sexp::String(":until".into()));
-                    res.push(Sexp::List(
-                        until.iter().map(|fact| fact.to_sexp()).collect(),
-                    ));
+                    res.extend(until.iter().map(|fact| fact.to_sexp()));
                 }
 
                 Sexp::List(res)
@@ -435,7 +435,10 @@ impl NormRunConfig {
         RunConfig {
             ruleset: self.ruleset.clone(),
             limit: self.limit,
-            until: self.until.as_ref().map(|v| v.iter().map(|f| f.to_fact()).collect()),
+            until: self
+                .until
+                .as_ref()
+                .map(|v| v.iter().map(|f| f.to_fact()).collect()),
         }
     }
 }

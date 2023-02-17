@@ -663,7 +663,10 @@ fn make_runner(config: &NormRunConfig) -> Vec<Command> {
         res.push(Command::Run(RunConfig {
             ruleset: config.ruleset,
             limit: 1,
-            until: config.until.clone().map(|inner| inner.iter().map(|s| s.to_fact()).collect()),
+            until: config
+                .until
+                .clone()
+                .map(|inner| inner.iter().map(|s| s.to_fact()).collect()),
         }));
     }
     res.push(run_proof_rules);

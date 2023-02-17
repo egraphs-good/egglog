@@ -317,7 +317,6 @@ pub struct Desugar<'a> {
     pub define_memo: HashMap<Expr, Symbol>,
 }
 
-
 pub(crate) fn desugar_command(
     command: Command,
     desugar: &mut Desugar,
@@ -373,7 +372,13 @@ pub(crate) fn desugar_command(
             flatten_actions(&vec![Action::Let(fresh, expr)], desugar, true)
                 .into_iter()
                 .map(NCommand::NormAction)
-                .chain(vec![NCommand::Simplify { var: fresh, config: desugar_run_config(desugar, &config) }].into_iter())
+                .chain(
+                    vec![NCommand::Simplify {
+                        var: fresh,
+                        config: desugar_run_config(desugar, &config),
+                    }]
+                    .into_iter(),
+                )
                 .collect()
         }
         Command::Calc(idents, exprs) => vec![NCommand::Calc(idents, exprs)],

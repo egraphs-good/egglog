@@ -713,10 +713,7 @@ impl EGraph {
         let converted_facts = facts.iter().map(|f| f.to_fact()).collect::<Vec<Fact>>();
         let empty_actions = vec![];
         let (query0, _) = ctx
-            .typecheck_query(
-                &converted_facts,
-                &empty_actions,
-            )
+            .typecheck_query(&converted_facts, &empty_actions)
             .map_err(Error::TypeErrors)?;
         let query = self.compile_gj_query(query0, &ctx.types);
 
