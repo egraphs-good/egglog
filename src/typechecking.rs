@@ -138,12 +138,8 @@ impl TypeInfo {
         Ok(FuncType::new(input, output))
     }
 
-    pub(crate) fn typecheck_command(&mut self, command: &NormCommand) -> Result<(), TypeError> {
-        assert!(self
-            .local_types
-            .insert(command.metadata.id, Default::default())
-            .is_none());
-        match &command.command {
+    fn typecheck_ncommand(&mut self, command: &NCommand, id: CommandId) -> Result<(), TypeError> {
+        match command {
             NCommand::Function(fdecl) => {
                 if self.sorts.contains_key(&fdecl.name) {
                     return Err(TypeError::SortAlreadyBound(fdecl.name));
@@ -170,22 +166,33 @@ impl TypeInfo {
                 }
             }
             NCommand::NormRule(_ruleset, rule) => {
-                self.typecheck_rule(command.metadata.id, rule)?;
+                self.typecheck_rule(id, rule)?;
             }
             NCommand::Sort(sort, presort_and_args) => {
                 self.declare_sort(*sort, presort_and_args)?;
             }
             NCommand::NormAction(action) => {
-                self.typecheck_action(command.metadata.id, action, true)?;
+                self.typecheck_action(id, action, true)?;
             }
             NCommand::Check(facts) => {
-                self.typecheck_facts(command.metadata.id, facts)?;
+                self.typecheck_facts(id, facts)?;
+            }
+            NCommand::Fail(cmd) => {
+                self.typecheck_ncommand(cmd, id)?;
             }
 
             // TODO cover all cases in typechecking
             _ => (),
         }
         Ok(())
+    }
+
+    pub(crate) fn typecheck_command(&mut self, command: &NormCommand) -> Result<(), TypeError> {
+        assert!(self
+            .local_types
+            .insert(command.metadata.id, Default::default())
+            .is_none());
+        self.typecheck_ncommand(&command.command, command.metadata.id)
     }
 
     pub fn declare_sort(
