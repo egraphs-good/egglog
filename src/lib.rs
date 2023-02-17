@@ -259,45 +259,6 @@ impl EGraph {
         }
     }
 
-    pub fn check_fact(&mut self, fact: &Fact, log: bool) -> Result<(), Error> {
-        match fact {
-            Fact::Eq(exprs) => {
-                assert!(exprs.len() > 1);
-                let values: Vec<(ArcSort, Value)> = exprs
-                    .iter()
-                    .map(|e| self.eval_expr(e, None, false))
-                    .collect::<Result<_, _>>()?;
-
-                let (_t0, v0) = &values[0];
-                for (_t, v) in &values[1..] {
-                    if v0 != v {
-                        if log {
-                            log::error!("Check failed");
-                            // the check failed, so print out some useful info
-                            for (_t, value) in &values {
-                                if let Some((_tag, id)) = self.value_to_id(*value) {
-                                    let best = self.extract(*value).1;
-                                    log::error!("{}: {}", id, best);
-                                }
-                            }
-                        }
-                        return Err(Error::CheckError(values[0].1, *v));
-                    }
-                }
-            }
-            Fact::Fact(expr) => match expr {
-                Expr::Lit(_) => panic!("can't check a literal"),
-                Expr::Var(_) => panic!("can't check a var"),
-                Expr::Call(_, _) => {
-                    // println!("Checking fact: {}", expr);
-                    let unit = self.type_info.get_sort::<UnitSort>();
-                    self.eval_expr(expr, Some(unit), false)?;
-                }
-            },
-        }
-        Ok(())
-    }
-
     pub fn find(&self, id: Id) -> Id {
         self.unionfind.find(id)
     }
@@ -476,8 +437,8 @@ impl EGraph {
         Ok(format!("Function {} has size {}", sym, f.nodes.len()))
     }
 
-    pub fn run_rules(&mut self, config: &RunConfig) -> [Duration; 3] {
-        let RunConfig {
+    pub fn run_rules(&mut self, config: &NormRunConfig) -> [Duration; 3] {
+        let NormRunConfig {
             ruleset,
             limit,
             until,
@@ -489,12 +450,12 @@ impl EGraph {
         let mut rebuild_time = Duration::ZERO;
 
         for i in 0..*limit {
-            if let Some(fact) = until {
-                if self.check_fact(fact, false).is_ok() {
+            if let Some(facts) = until {
+                if self.check_facts(facts).is_ok() {
                     log::info!(
-                        "Breaking early at iteration {} because of fact {}!",
+                        "Breaking early at iteration {} because of facts:\n {}!",
                         i,
-                        fact
+                        ListDisplay(facts, "\n")
                     );
                     break;
                 }
@@ -747,6 +708,33 @@ impl EGraph {
         };
     }
 
+    fn check_facts(&mut self, facts: &Vec<NormFact>) -> Result<(), Error> {
+        let mut ctx = typecheck::Context::new(self);
+        let converted_facts = facts.iter().map(|f| f.to_fact()).collect::<Vec<Fact>>();
+        let empty_actions = vec![];
+        let (query0, _) = ctx
+            .typecheck_query(
+                &converted_facts,
+                &empty_actions,
+            )
+            .map_err(Error::TypeErrors)?;
+        let query = self.compile_gj_query(query0, &ctx.types);
+
+        let mut matched = false;
+        // TODO what timestamp to use?
+        self.run_query(&query, 0, |values| {
+            assert_eq!(values.len(), query.vars.len());
+            matched = true;
+            Err(())
+        });
+        if !matched {
+            // TODO add useful info here
+            Err(Error::CheckError(facts.clone()))
+        } else {
+            Ok(())
+        }
+    }
+
     fn run_command(&mut self, command: NCommand, should_run: bool) -> Result<String, Error> {
         let pre_rebuild = Instant::now();
         let rebuild_num = self.rebuild()?;
@@ -814,7 +802,8 @@ impl EGraph {
                 }
             }
             NCommand::Calc(idents, exprs) => {
-                self.calc(idents.clone(), exprs.clone())?;
+                todo!("Fix calc again");
+                //self.calc(idents.clone(), exprs.clone())?;
                 format!(
                     "Calc proof succeeded: forall {}, {}",
                     ListDisplay(idents, " "),
@@ -838,9 +827,9 @@ impl EGraph {
                     "Skipping extraction.".into()
                 }
             }
-            NCommand::Check(fact) => {
+            NCommand::Check(facts) => {
                 if should_run {
-                    self.check_fact(&fact, true)?;
+                    self.check_facts(&facts)?;
                     "Checked.".into()
                 } else {
                     "Skipping check.".into()
@@ -876,31 +865,6 @@ impl EGraph {
                 } else {
                     format!("Skipping running {action}.")
                 }
-            }
-            NCommand::Query(_q) => {
-                // let qsexp = sexp::Sexp::List(
-                //     q.iter()
-                //         .map(|fact| sexp::parse(&fact.to_string()).unwrap())
-                //         .collect(),
-                // );
-                // let qcomp = self
-                //     .compile_query(q)
-                //     .unwrap_or_else(|_| panic!("Could not compile query"));
-                // let mut res = vec![];
-                // self.query(&qcomp, |v| {
-                //     res.push(sexp::Sexp::List(
-                //         v.iter()
-                //             .map(|val| sexp::Sexp::Atom(sexp::Atom::S(format!("{}", val))))
-                //             .collect(),
-                //     ));
-                // });
-                // format!(
-                //     "Query: {}\n  Bindings: {:?}\n  Results: {}",
-                //     qsexp,
-                //     qcomp,
-                //     sexp::Sexp::List(res)
-                // )
-                todo!()
             }
             NCommand::Clear => {
                 self.clear();
@@ -1013,7 +977,7 @@ impl EGraph {
         }
     }
 
-    fn calc_helper(
+    /*fn calc_helper(
         &mut self,
         idents: Vec<IdentSort>,
         exprs: Vec<Expr>,
@@ -1069,9 +1033,9 @@ impl EGraph {
             }
             res
         }
-    }
+    }*/
 
-    fn simplify(&mut self, expr: Expr, config: &RunConfig) -> Result<(usize, Expr), Error> {
+    fn simplify(&mut self, expr: Expr, config: &NormRunConfig) -> Result<(usize, Expr), Error> {
         self.push();
         let (_t, value) = self.eval_expr(&expr, None, true).unwrap();
         self.run_rules(config);
@@ -1209,7 +1173,6 @@ impl EGraph {
             self.type_info = TypeInfo::new();
             self.type_info.typecheck_program(&program)?;
         }
-        
 
         self.run_program(program)
     }
@@ -1229,8 +1192,8 @@ pub enum Error {
     TypeError(#[from] TypeError),
     #[error("Errors:\n{}", ListDisplay(.0, "\n"))]
     TypeErrors(Vec<TypeError>),
-    #[error("Check failed: {0:?} != {1:?}")]
-    CheckError(Value, Value),
+    #[error("Check failed: \n{}", ListDisplay(.0, "\n"))]
+    CheckError(Vec<NormFact>),
     #[error("Evaluating primitive {0:?} failed. ({0:?} {:?})", ListDebug(.1, " "))]
     PrimitiveError(Primitive, Vec<Value>),
     #[error("Illegal merge attempted for function {0}, {1:?} != {2:?}")]

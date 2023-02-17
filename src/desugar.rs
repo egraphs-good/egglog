@@ -297,12 +297,26 @@ fn flatten_rule(rule: Rule, desugar: &mut Desugar) -> NormRule {
     }
 }
 
+fn desugar_run_config(desugar: &mut Desugar, run_config: &RunConfig) -> NormRunConfig {
+    let RunConfig {
+        ruleset,
+        limit,
+        until,
+    } = run_config;
+    NormRunConfig {
+        ruleset: *ruleset,
+        limit: *limit,
+        until: until.clone().map(|facts| flatten_facts(&facts, desugar)),
+    }
+}
+
 pub struct Desugar<'a> {
     pub get_fresh: Box<Fresh>,
     pub get_new_id: Box<NewId>,
     pub egraph: &'a mut EGraph,
     pub define_memo: HashMap<Expr, Symbol>,
 }
+
 
 pub(crate) fn desugar_command(
     command: Command,
@@ -351,13 +365,15 @@ pub(crate) fn desugar_command(
             .into_iter()
             .map(NCommand::NormAction)
             .collect(),
-        Command::Run(run) => vec![NCommand::Run(run)],
+        Command::Run(config) => {
+            vec![NCommand::Run(desugar_run_config(desugar, &config))]
+        }
         Command::Simplify { expr, config } => {
             let fresh = (desugar.get_fresh)();
             flatten_actions(&vec![Action::Let(fresh, expr)], desugar, true)
                 .into_iter()
                 .map(NCommand::NormAction)
-                .chain(vec![NCommand::Simplify { var: fresh, config }].into_iter())
+                .chain(vec![NCommand::Simplify { var: fresh, config: desugar_run_config(desugar, &config) }].into_iter())
                 .collect()
         }
         Command::Calc(idents, exprs) => vec![NCommand::Calc(idents, exprs)],
@@ -375,14 +391,13 @@ pub(crate) fn desugar_command(
                 )
                 .collect()
         }
-        Command::Check(check) => vec![NCommand::Check(check)],
+        Command::Check(facts) => {
+            vec![NCommand::Check(flatten_facts(&facts, desugar))]
+        }
         Command::Clear => vec![NCommand::Clear],
         Command::Print(symbol, size) => vec![NCommand::Print(symbol, size)],
         Command::PrintSize(symbol) => vec![NCommand::PrintSize(symbol)],
         Command::Output { file, exprs } => vec![NCommand::Output { file, exprs }],
-        Command::Query(facts) => {
-            vec![NCommand::Query(facts)]
-        }
         Command::Push(num) => {
             desugar.define_memo.clear();
             vec![NCommand::Push(num)]

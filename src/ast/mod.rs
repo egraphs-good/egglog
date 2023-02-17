@@ -74,19 +74,16 @@ pub enum NCommand {
     AddRuleset(Symbol),
     NormRule(Symbol, NormRule),
     NormAction(NormAction),
-    Run(RunConfig),
-    Simplify { var: Symbol, config: RunConfig },
+    Run(NormRunConfig),
+    Simplify { var: Symbol, config: NormRunConfig },
     // TODO flatten calc, add proof support
     Calc(Vec<IdentSort>, Vec<Expr>),
     Extract { variants: usize, var: Symbol },
-    // TODO: this could just become an empty query
-    Check(Fact),
+    Check(Vec<NormFact>),
     Clear,
     Print(Symbol, usize),
     PrintSize(Symbol),
     Output { file: String, exprs: Vec<Expr> },
-    // TODO flatten query, they are not supported currently
-    Query(Vec<Fact>),
     Push(usize),
     Pop(usize),
     Fail(Box<NCommand>),
@@ -109,17 +106,27 @@ impl NCommand {
             NCommand::AddRuleset(name) => Command::AddRuleset(*name),
             NCommand::NormRule(name, rule) => Command::Rule(*name, rule.to_rule()),
             NCommand::NormAction(action) => Command::Action(action.to_action()),
-            NCommand::Run(config) => Command::Run(config.clone()),
+            NCommand::Run(NormRunConfig {
+                ruleset,
+                limit,
+                until,
+            }) => Command::Run(RunConfig {
+                ruleset: *ruleset,
+                limit: *limit,
+                until: until.as_ref().map(|facts| facts.iter().map(|fact| fact.to_fact()).collect()),
+            }),
             NCommand::Simplify { var, config } => Command::Simplify {
                 expr: Expr::Var(*var),
-                config: config.clone(),
+                config: config.to_run_config(),
             },
             NCommand::Calc(args, exprs) => Command::Calc(args.clone(), exprs.clone()),
             NCommand::Extract { variants, var } => Command::Extract {
                 variants: *variants,
                 e: Expr::Var(*var),
             },
-            NCommand::Check(fact) => Command::Check(fact.clone()),
+            NCommand::Check(facts) => {
+                Command::Check(facts.iter().map(|fact| fact.to_fact()).collect())
+            }
             NCommand::Clear => Command::Clear,
             NCommand::Print(name, n) => Command::Print(*name, *n),
             NCommand::PrintSize(name) => Command::PrintSize(*name),
@@ -127,7 +134,6 @@ impl NCommand {
                 file: file.to_string(),
                 exprs: exprs.clone(),
             },
-            NCommand::Query(facts) => Command::Query(facts.clone()),
             NCommand::Push(n) => Command::Push(*n),
             NCommand::Pop(n) => Command::Pop(*n),
             NCommand::Fail(cmd) => Command::Fail(Box::new(cmd.to_command())),
@@ -153,7 +159,9 @@ impl NCommand {
                 variants: *variants,
                 var: *var,
             },
-            NCommand::Check(fact) => NCommand::Check(fact.clone()),
+            NCommand::Check(facts) => {
+                NCommand::Check(facts.iter().map(|fact| fact.map_exprs(f)).collect())
+            }
             NCommand::Clear => NCommand::Clear,
             NCommand::Print(name, n) => NCommand::Print(*name, *n),
             NCommand::PrintSize(name) => NCommand::PrintSize(*name),
@@ -161,7 +169,6 @@ impl NCommand {
                 file: file.to_string(),
                 exprs: exprs.clone(),
             },
-            NCommand::Query(facts) => NCommand::Query(facts.clone()),
             NCommand::Push(n) => NCommand::Push(*n),
             NCommand::Pop(n) => NCommand::Pop(*n),
             NCommand::Fail(cmd) => NCommand::Fail(Box::new(cmd.map_exprs(f))),
@@ -204,7 +211,7 @@ pub enum Command {
         e: Expr,
     },
     // TODO: this could just become an empty query
-    Check(Fact),
+    Check(Vec<Fact>),
     Clear,
     Print(Symbol, usize),
     PrintSize(Symbol),
@@ -216,7 +223,6 @@ pub enum Command {
         file: String,
         exprs: Vec<Expr>,
     },
-    Query(Vec<Fact>),
     Push(usize),
     Pop(usize),
     Fail(Box<Command>),
@@ -284,7 +290,9 @@ impl Command {
                 res.push(Sexp::String(config.limit.to_string()));
                 if let Some(until) = &config.until {
                     res.push(Sexp::String(":until".into()));
-                    res.push(until.to_sexp());
+                    res.push(Sexp::List(
+                        until.iter().map(|fact| fact.to_sexp()).collect(),
+                    ));
                 }
 
                 Sexp::List(res)
@@ -304,10 +312,9 @@ impl Command {
                 Sexp::String(variants.to_string()),
                 e.to_sexp(),
             ]),
-            Command::Check(fact) => Sexp::List(vec![Sexp::String("check".into()), fact.to_sexp()]),
             Command::Clear => Sexp::List(vec![Sexp::String("clear".into())]),
-            Command::Query(facts) => Sexp::List(
-                vec![Sexp::String("query".into())]
+            Command::Check(facts) => Sexp::List(
+                vec![Sexp::String("check".into())]
                     .into_iter()
                     .chain(facts.iter().map(|f| f.to_sexp()))
                     .collect(),
@@ -356,7 +363,9 @@ impl Command {
                 ];
                 if let Some(until) = &config.until {
                     res.push(Sexp::String(":until".into()));
-                    res.push(until.to_sexp());
+                    res.push(Sexp::List(
+                        until.iter().map(|fact| fact.to_sexp()).collect(),
+                    ));
                 }
 
                 Sexp::List(res)
@@ -411,7 +420,24 @@ impl Display for IdentSort {
 pub struct RunConfig {
     pub ruleset: Symbol,
     pub limit: usize,
-    pub until: Option<Fact>,
+    pub until: Option<Vec<Fact>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct NormRunConfig {
+    pub ruleset: Symbol,
+    pub limit: usize,
+    pub until: Option<Vec<NormFact>>,
+}
+
+impl NormRunConfig {
+    pub fn to_run_config(&self) -> RunConfig {
+        RunConfig {
+            ruleset: self.ruleset.clone(),
+            limit: self.limit,
+            until: self.until.as_ref().map(|v| v.iter().map(|f| f.to_fact()).collect()),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

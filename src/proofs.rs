@@ -197,8 +197,14 @@ fn instrument_facts(
                 let literal_name = literal_name(&proof_state.desugar, rhs);
                 let rep_trm = proof_state.get_fresh();
                 let rep_prf = proof_state.get_fresh();
-                actions.push(NormAction::Let(rep_trm, NormExpr::Call(make_ast_version_prim(literal_name), vec![*lhs])));
-                actions.push(NormAction::Let(rep_prf, NormExpr::Call("ComputePrim__".into(), vec![rep_trm])));
+                actions.push(NormAction::Let(
+                    rep_trm,
+                    NormExpr::Call(make_ast_version_prim(literal_name), vec![*lhs]),
+                ));
+                actions.push(NormAction::Let(
+                    rep_prf,
+                    NormExpr::Call("ComputePrim__".into(), vec![rep_trm]),
+                ));
 
                 info.var_term.insert(*lhs, rep_trm).is_none();
                 assert!(info.var_proof.insert(*lhs, rep_prf).is_none());
@@ -303,7 +309,7 @@ fn instrument_facts(
                         lhs, rhs
                     );
                 }
-            },
+            }
         }
     }
 
@@ -578,8 +584,6 @@ fn add_rule_proof(
     rule_proof
 }
 
-
-
 fn instrument_rule(rule: &NormRule, rule_name: Symbol, proof_state: &mut ProofState) -> Rule {
     let mut actions = rule.head.clone();
     let (mut info, facts) = instrument_facts(&rule.body, proof_state, &mut actions);
@@ -647,7 +651,7 @@ fn make_getchild_rule(proof_state: &mut ProofState, expr: &NormExpr) -> Command 
     )
 }
 
-fn make_runner(config: &RunConfig) -> Vec<Command> {
+fn make_runner(config: &NormRunConfig) -> Vec<Command> {
     let mut res = vec![];
     let run_proof_rules = Command::Run(RunConfig {
         ruleset: "proofrules__".into(),
@@ -659,7 +663,7 @@ fn make_runner(config: &RunConfig) -> Vec<Command> {
         res.push(Command::Run(RunConfig {
             ruleset: config.ruleset,
             limit: 1,
-            until: config.until.clone(),
+            until: config.until.clone().map(|inner| inner.iter().map(|s| s.to_fact()).collect()),
         }));
     }
     res.push(run_proof_rules);
@@ -801,7 +805,6 @@ fn proof_original_action(action: &NormAction, proof_state: &mut ProofState) -> V
     }
 }
 
-
 // TODO we need to also instrument merge actions and merge because they can add new terms that need representatives
 // the egraph is the initial egraph with only default sorts
 pub(crate) fn add_proofs(program: Vec<NormCommand>, desugar: Desugar) -> Vec<NormCommand> {
@@ -854,6 +857,15 @@ pub(crate) fn add_proofs(program: Vec<NormCommand>, desugar: Desugar) -> Vec<Nor
                 res.push(Command::Action(action.to_action()));
                 res.extend(proof_original_action(action, &mut proof_state));
             }
+            NCommand::Check(check) => {
+                res.push(command.to_command());
+                /*match fact {
+                    Fact::Eq(exprs) => {
+                        assert!(exprs.len() == 2);
+
+                    }
+                }*/
+            }
             _ => res.push(command.to_command()),
         }
     }
@@ -863,5 +875,5 @@ pub(crate) fn add_proofs(program: Vec<NormCommand>, desugar: Desugar) -> Vec<Nor
 }
 
 pub(crate) fn should_add_proofs(_program: &[NormCommand]) -> bool {
-    true
+    false
 }
