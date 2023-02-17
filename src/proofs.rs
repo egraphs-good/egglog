@@ -806,6 +806,11 @@ pub(crate) fn add_proofs(program: Vec<NormCommand>, desugar: Desugar) -> Vec<Nor
         desugar,
     };
 
+    // we disallow functions after push, so
+    // we add new functions to the res_before_push vec
+    let mut has_pushed = false;
+    let mut res_before_push = vec![];
+
     res.extend(setup_primitives());
 
     for command in program {
@@ -815,14 +820,28 @@ pub(crate) fn add_proofs(program: Vec<NormCommand>, desugar: Desugar) -> Vec<Nor
         command.command.map_exprs(&mut |expr| {
             let ast_name = make_ast_version(&mut proof_state, expr);
             if proof_state.ast_funcs_created.insert(ast_name) {
-                res.push(Command::Function(make_ast_function(&mut proof_state, expr)));
-                res.push(Command::Function(make_rep_function(&mut proof_state, expr)));
-                res.push(make_getchild_rule(&mut proof_state, expr));
+                let commands = vec![
+                Command::Function(make_ast_function(&mut proof_state, expr)),
+                Command::Function(make_rep_function(&mut proof_state, expr)),
+                make_getchild_rule(&mut proof_state, expr)];
+                if has_pushed {
+                    res_before_push.extend(commands);
+                } else {
+                    res.extend(commands);
+                }
             }
             expr.clone()
         });
 
         match &command.command {
+            NCommand::Push(_num) => {
+                if !has_pushed {
+                    has_pushed = true;
+                    res_before_push = res.clone();
+                    res = vec![];
+                }
+                res.push(command.to_command());
+            }
             NCommand::Sort(_name, _presort_and_args) => {
                 res.push(command.to_command());
             }
@@ -860,7 +879,8 @@ pub(crate) fn add_proofs(program: Vec<NormCommand>, desugar: Desugar) -> Vec<Nor
     }
 
     proof_state.desugar.define_memo.clear();
-    desugar_commands(res, &mut proof_state.desugar).unwrap()
+    res_before_push.extend(res);
+    desugar_commands(res_before_push, &mut proof_state.desugar).unwrap()
 }
 
 pub(crate) fn should_add_proofs(_program: &[NormCommand]) -> bool {
