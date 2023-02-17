@@ -80,7 +80,6 @@ pub enum NCommand {
     Calc(Vec<IdentSort>, Vec<Expr>),
     Extract { variants: usize, var: Symbol },
     Check(Vec<NormFact>),
-    Clear,
     Print(Symbol, usize),
     PrintSize(Symbol),
     Output { file: String, exprs: Vec<Expr> },
@@ -129,7 +128,6 @@ impl NCommand {
             NCommand::Check(facts) => {
                 Command::Check(facts.iter().map(|fact| fact.to_fact()).collect())
             }
-            NCommand::Clear => Command::Clear,
             NCommand::Print(name, n) => Command::Print(*name, *n),
             NCommand::PrintSize(name) => Command::PrintSize(*name),
             NCommand::Output { file, exprs } => Command::Output {
@@ -164,7 +162,6 @@ impl NCommand {
             NCommand::Check(facts) => {
                 NCommand::Check(facts.iter().map(|fact| fact.map_exprs(f)).collect())
             }
-            NCommand::Clear => NCommand::Clear,
             NCommand::Print(name, n) => NCommand::Print(*name, *n),
             NCommand::PrintSize(name) => NCommand::PrintSize(*name),
             NCommand::Output { file, exprs } => NCommand::Output {
@@ -214,7 +211,6 @@ pub enum Command {
     },
     // TODO: this could just become an empty query
     Check(Vec<Fact>),
-    Clear,
     Print(Symbol, usize),
     PrintSize(Symbol),
     Input {
@@ -312,7 +308,6 @@ impl Command {
                 Sexp::String(variants.to_string()),
                 e.to_sexp(),
             ]),
-            Command::Clear => Sexp::List(vec![Sexp::String("clear".into())]),
             Command::Check(facts) => Sexp::List(
                 vec![Sexp::String("check".into())]
                     .into_iter()

@@ -863,10 +863,6 @@ impl EGraph {
                     format!("Skipping running {action}.")
                 }
             }
-            NCommand::Clear => {
-                self.clear();
-                "Cleared.".into()
-            }
             NCommand::Push(n) => {
                 (0..n).for_each(|_| self.push());
                 format!("Pushed {n} levels.")

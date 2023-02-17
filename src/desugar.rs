@@ -399,7 +399,6 @@ pub(crate) fn desugar_command(
         Command::Check(facts) => {
             vec![NCommand::Check(flatten_facts(&facts, desugar))]
         }
-        Command::Clear => vec![NCommand::Clear],
         Command::Print(symbol, size) => vec![NCommand::Print(symbol, size)],
         Command::PrintSize(symbol) => vec![NCommand::PrintSize(symbol)],
         Command::Output { file, exprs } => vec![NCommand::Output { file, exprs }],
