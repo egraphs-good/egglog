@@ -343,29 +343,29 @@
                    (Congruence 
                      ;; proof of 0+(x+2)
                      (RuleTerm
-                      (Rule (Cons (RuleTerm (Rule (Cons (Original (addx2)) Null) "add-identity") (addzero)) Null) "add-commute")
-                     (AstAdd (zero) (addx2)))
+                      (Rule (Cons (RuleTerm (Rule (Cons (Original addx2) Null) "add-identity") addzero) Null) "add-commute")
+                     (AstAdd zero addx2))
                     
                      ;; children already equal
                      (Cons (Transitivity Null) (Cons (Transitivity Null) Null)))
                    Null) "add-assoc")
-                (AstAdd (zero) (addx2)) (addzerofront))
+                (AstAdd zero addx2) addzerofront)
               
               
               ;; (x+2)+0 -> 0+(x+2)
               (Cons
                 (RuleEquality
-                  (Rule (Cons (RuleTerm (Rule (Cons (Original (addx2)) Null) "add-identity") (addzero)) Null) "add-commute")
+                  (Rule (Cons (RuleTerm (Rule (Cons (Original addx2) Null) "add-identity") addzero) Null) "add-commute")
                   
-                  (addzero)
+                  addzero
                   
-                  (AstAdd (zero) (addx2)))
+                  (AstAdd zero addx2))
               
               ;; x+2 -> (x+2)+0
               (Cons (RuleEquality
-                      (Rule (Cons (Original (addx2)) Null) "add-identity")
-                      (addx2)
-                      (addzero))
+                      (Rule (Cons (Original addx2) Null) "add-identity")
+                      addx2
+                      addzero)
               
               Null)))
           )))
