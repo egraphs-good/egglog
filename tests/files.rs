@@ -1,5 +1,4 @@
 use egg_smol::*;
-use std::path::Path;
 
 fn test_program(program: &str, message: &str) {
     let mut egraph = EGraph::default();
@@ -13,7 +12,7 @@ fn test_program(program: &str, message: &str) {
     }
 }
 
-fn run(path: &Path) -> datatest_stable::Result<()> {
+fn run(path: &str) {
     let _ = env_logger::builder().is_test(true).try_init();
     let program = std::fs::read_to_string(path).unwrap();
     test_program(&program, "Top level error");
@@ -33,8 +32,7 @@ fn run(path: &Path) -> datatest_stable::Result<()> {
             program_str
         ),
     );
-
-    Ok(())
 }
 
-datatest_stable::harness!(run, "tests/", r"\.egg$");
+// include the tests generated from the build script
+include!(concat!(std::env!("OUT_DIR"), "/files.rs"));
