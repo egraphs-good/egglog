@@ -19,6 +19,11 @@ Also see papers about egglog.
 See also the Python binding, which provides a bit more documentation:
 https://egg-smol-python.readthedocs.io/en/latest/
 
+## Chat
+
+There is a Zulip chat about egg-smol here:
+https://egraphs.zulipchat.com/#narrow/stream/328979-Implementation/topic/Eggsmol
+
 ## Prerequisites & compilation
 
 ```
@@ -30,20 +35,20 @@ make all
 ## Usage
 
 ```
-target/debug/egg-smol [-f fact-path] [-naive] <files.egg>
+cargo run [-f fact-path] [-naive] <files.egg>
 ```
 
 or just
 
 ```
-target/debug/egg-smol
+cargo run
 ```
 
 for the REPL.
 
 ## VS Code plugin
 
-There is a VS Code extension in the vscode folder. Install using 'Install from VSIX...' in the three-dot menu of the extensions tab and pick npm install -g @vscode/vscode/eggsmol.vsix`.
+There is a VS Code extension in the vscode folder. Install using 'Install from VSIX...' in the three-dot menu of the extensions tab and pick `vscode/vscode/eggsmol.vsix`.
 
 ### Enhancing the VS code extension
 
@@ -66,6 +71,7 @@ Run `vsce package` in the `vscode/eggsmol-1.0.0` folder to reconstruct the .vsix
 # Syntax
 
 The syntax of the .egg files is defined in `src/ast/parse.lalrpop`.
+
 ## Commands
 
 ### `datatype` command
@@ -99,10 +105,12 @@ Datatypes are also known as algebraic data types, tagged unions and sum types.
 
 ```
     ( function <name:Ident> <schema:Schema> <cost:Cost>
-        <merge:(:merge <Expr>)?> )
+        (:on_merge <List<Action>>)?
+        (:merge <Expr>)?
+        (:default <Expr>)?
 ```
 
-Defines a named function with a type schema, an optional integer cost, and an optional `:merge` expression, which can refer to `old` and `new` values.
+Defines a named function with a type schema, an optional integer cost, and an optional `:on_merge` or `:merge` expression, which can refer to `old` and `new` values. You can also provide a default value using `:default`.
 
 Example:
 ```
@@ -275,17 +283,19 @@ prints
 
 ```
     ( sort <name:Ident> ( <head:Ident> <tail:(Expr)*> ) )
-    ( run <limit:UNum>  <until:(:until <Fact>)?> )
-    ( clear-rules )
-    ( clear )
+    ( run <limit:UNum>  <until:(:until <Fact>)?> )  ; evaluate rules N steps or until a condition is met
+    ( clear-rules )                         ; clear out all rules and rewrites
+    ( clear )                               ; clear data from the functions, not the function tables themselves
     ( query <List<Fact>> )
-    ( push <UNum?> )
-    ( pop <UNum?> )
-    ( print <sym:Ident> <n:UNum?> )
+    ( push <UNum?> )                        ; saves the state of the database on the stack
+    ( pop <UNum?> )                         ; restores the state of the database on the stack
+    ( print <sym:Ident> <n:UNum?> )         ; print the value of an id
     ( print-size <sym:Ident> )
     ( input <name:Ident> <file:String> )
-    ( output <file:String> <exprs:Expr+> )
+    ( output <file:String> <exprs:Expr+> )  ; Appends the expression to a file
     ( include <file:String> )
+    ( add-ruleset <id:String> )             ; Saves all rules as a ruleset with a given name (EXPERIMENTAL)
+    ( load-ruleset <id:String> )            ; Add the rules from a ruleset previously added (EXPERIMENTAL)
     ( calc ( <idents:IdentSort*> ) <exprs:Expr+> )
 ```
 
@@ -397,4 +407,5 @@ These primitives are only defined when the result itself is a pure rational.
 
 ### Sort: string
 
+Use double quotes to get a quote: `"Foo "" Bar"` is `Foo " Bar`.
 No primitives defined.

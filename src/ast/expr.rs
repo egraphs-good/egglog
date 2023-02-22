@@ -39,8 +39,16 @@ impl Display for Literal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self {
             Literal::Int(i) => Display::fmt(i, f),
-            Literal::F64(n) => Display::fmt(n, f),
-            Literal::String(s) => write!(f, "{s}"),
+            Literal::F64(n) => {
+                // need to display with decimal if there is none
+                let str = n.to_string();
+                if let Ok(_num) = str.parse::<i64>() {
+                    write!(f, "{}.0", str)
+                } else {
+                    write!(f, "{}", str)
+                }
+            }
+            Literal::String(s) => write!(f, "{}", s),
             Literal::Unit => write!(f, "()"),
         }
     }
@@ -52,6 +60,30 @@ pub enum Expr {
     Var(Symbol),
     // TODO make this its own type
     Call(Symbol, Vec<Self>),
+}
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
+pub enum NormExpr {
+    Call(Symbol, Vec<Symbol>),
+}
+
+impl NormExpr {
+    pub fn to_expr(&self) -> Expr {
+        match self {
+            NormExpr::Call(op, args) => {
+                Expr::Call(*op, args.iter().map(|a| Expr::Var(*a)).collect())
+            }
+        }
+    }
+
+    pub(crate) fn map_def_use(&self, fvar: &mut impl FnMut(Symbol, bool) -> Symbol) -> NormExpr {
+        match self {
+            NormExpr::Call(op, args) => {
+                let args = args.iter().map(|a| fvar(*a, false)).collect();
+                NormExpr::Call(*op, args)
+            }
+        }
+    }
 }
 
 impl Expr {
@@ -89,20 +121,46 @@ impl Expr {
         let ts = self.children().iter().map(|child| child.fold(f)).collect();
         f(self, ts)
     }
+
+    pub fn map(&self, f: &mut impl FnMut(&Self) -> Self) -> Self {
+        match self {
+            Expr::Lit(_) => f(self),
+            Expr::Var(_) => f(self),
+            Expr::Call(op, children) => {
+                let children = children.iter().map(|c| c.map(f)).collect();
+                f(&Expr::Call(*op, children))
+            }
+        }
+    }
+
+    pub(crate) fn to_sexp(&self) -> Sexp {
+        let res = match self {
+            Expr::Lit(lit) => Sexp::String(lit.to_string()),
+            Expr::Var(v) => Sexp::String(v.to_string()),
+            Expr::Call(op, children) => Sexp::List(
+                vec![Sexp::String(op.to_string())]
+                    .into_iter()
+                    .chain(children.iter().map(|c| c.to_sexp()))
+                    .collect(),
+            ),
+        };
+        res
+    }
+
+    pub fn replace_canon(&self, canon: &HashMap<Symbol, Expr>) -> Self {
+        match self {
+            Expr::Lit(_lit) => self.clone(),
+            Expr::Var(v) => canon.get(v).cloned().unwrap_or_else(|| self.clone()),
+            Expr::Call(op, children) => {
+                let children = children.iter().map(|c| c.replace_canon(canon)).collect();
+                Expr::Call(*op, children)
+            }
+        }
+    }
 }
 
 impl Display for Expr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Expr::Lit(lit) => Display::fmt(lit, f),
-            Expr::Var(var) => Display::fmt(var, f),
-            Expr::Call(op, args) => {
-                write!(f, "({}", op)?;
-                for arg in args {
-                    write!(f, " {}", arg)?;
-                }
-                write!(f, ")")
-            }
-        }
+        write!(f, "{}", self.to_sexp())
     }
 }
