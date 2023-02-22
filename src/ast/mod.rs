@@ -263,12 +263,12 @@ impl Command {
             Command::Input { name, file } => Sexp::List(vec![
                 Sexp::String("input".into()),
                 Sexp::String(name.to_string()),
-                Sexp::String(file.to_string()),
+                Sexp::String(format!("\"{}\"", file)),
             ]),
             Command::Output { file, exprs } => Sexp::List(
                 vec![
                     Sexp::String("output".into()),
-                    Sexp::String(file.to_string()),
+                    Sexp::String(format!("\"{}\"", file)),
                 ]
                 .into_iter()
                 .chain(exprs.iter().map(|e| e.to_sexp()))

@@ -146,7 +146,7 @@ UNum: usize = {
 }
 F64: OrderedFloat<f64> = <s:r"(-)?[0-9]+\.[0-9]+(e(-)?[0-9]+)?"> => OrderedFloat::<f64>(s.parse().unwrap());
 Ident: Symbol = <s:r"([[:alpha:]][\w-]*)|([-+*/!=<>&|^/%]+)"> => s.parse().unwrap();
-SymString: Symbol = <r#"("[^"]*")+"#> => Symbol::from(<>);
+SymString: Symbol = <String> => Symbol::from(<>);
 String: String = <r#"("[^"]*")+"#> => {
     let string: &str = <>;
     let first_last_off: &str = &string[1..string.len() - 1];
