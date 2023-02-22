@@ -320,6 +320,7 @@ pub struct Desugar<'a> {
 pub(crate) fn desugar_command(
     command: Command,
     desugar: &mut Desugar,
+    get_all_proofs: bool
 ) -> Result<Vec<NormCommand>, Error> {
     let res = match command {
         Command::Function(fdecl) => {
@@ -397,7 +398,43 @@ pub(crate) fn desugar_command(
                 .collect()
         }
         Command::Check(facts) => {
-            vec![NCommand::Check(flatten_facts(&facts, desugar))]
+            let mut res = vec![NCommand::Check(flatten_facts(&facts, desugar))];
+
+            if get_all_proofs {
+                let proofvar = (desugar.get_fresh)();
+                // declare a variable for the resulting proof
+                res.push(NCommand::Declare(proofvar, "Proof__".into()));
+
+                // make a dummy rule so that we get a proof for this check
+                let dummyrule = Rule {
+                    body: facts.clone(),
+                    head: vec![
+                        Action::Union(Expr::Var(proofvar),
+                            Expr::Var("rule-proof".into()))
+                    ],
+                };
+                let ruleset = (desugar.get_fresh)();
+                res.extend(desugar_command(Command::Rule(ruleset, dummyrule), desugar, get_all_proofs)?.into_iter().map(|cmd| cmd.command));
+
+                // now run the dummy rule and get the proof
+                res.push(NCommand::Run(NormRunConfig {
+                    ruleset,
+                    limit: 1,
+                    until: None
+                }));
+
+                // we need to run proof extraction rules again
+                res.push(NCommand::Run(NormRunConfig {
+                    ruleset: "proof-extract".into(),
+                    limit: 1000000,
+                    until: None
+                }));
+
+                // extract the proof
+                res.push(NCommand::Extract { variants: 0, var: proofvar });
+            }
+
+            res            
         }
         Command::Print(symbol, size) => vec![NCommand::Print(symbol, size)],
         Command::PrintSize(symbol) => vec![NCommand::PrintSize(symbol)],
@@ -411,7 +448,7 @@ pub(crate) fn desugar_command(
             vec![NCommand::Pop(num)]
         }
         Command::Fail(cmd) => {
-            let mut desugared = desugar_command(*cmd, desugar)?;
+            let mut desugared = desugar_command(*cmd, desugar, get_all_proofs)?;
 
             let last = desugared.pop().unwrap();
             desugared.push(NormCommand {
@@ -436,7 +473,7 @@ pub(crate) fn desugar_command(
         .collect())
 }
 
-fn make_get_new_id() -> impl FnMut() -> usize {
+pub fn make_get_new_id() -> impl FnMut() -> usize {
     let mut id = 0;
     move || {
         let res = id;
@@ -466,7 +503,7 @@ pub(crate) fn desugar_commands(
 ) -> Result<Vec<NormCommand>, Error> {
     let mut res = vec![];
     for command in program {
-        let desugared = desugar_command(command, desugar)?;
+        let desugared = desugar_command(command, desugar, false)?;
         res.extend(desugared);
     }
     Ok(res)

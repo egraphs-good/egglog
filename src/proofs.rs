@@ -4,10 +4,12 @@ use crate::desugar::{desugar_commands, literal_name, Desugar};
 use crate::typechecking::FuncType;
 use symbolic_expressions::Sexp;
 
-fn proof_header(egraph: &EGraph) -> Vec<Command> {
+
+pub fn proof_header(egraph: &EGraph) -> Vec<Command> {
     let str = include_str!("proofheader.egg");
     egraph.parse_program(str, false).unwrap()
 }
+
 
 // primitives don't need type info
 fn make_ast_version_prim(name: Symbol) -> Symbol {
@@ -175,13 +177,16 @@ fn merge_action(proof_state: &mut ProofState, types: FuncType) -> Vec<Action> {
     .collect()
 }
 
-#[derive(Default, Clone, Debug)]
+#[derive(Clone, Debug)]
 struct ProofInfo {
     // proof for each variable bound in an assignment (lhs or rhs)
     pub var_term: HashMap<Symbol, Symbol>,
     // proofs for each variable
     pub var_proof: HashMap<Symbol, Symbol>,
+    pub rule_proof: Option<Symbol>,
+    pub rule_proof_ast: Option<Symbol>,
 }
+
 
 // This function makes use of the property that the body is Norm
 // variables appear at most once (including the rhs of assignments)
@@ -191,7 +196,12 @@ fn instrument_facts(
     proof_state: &mut ProofState,
     actions: &mut Vec<NormAction>,
 ) -> (ProofInfo, Vec<Fact>) {
-    let mut info: ProofInfo = Default::default();
+    let mut info: ProofInfo = ProofInfo {
+        var_term: Default::default(),
+        var_proof: Default::default(),
+        rule_proof: None,
+        rule_proof_ast: None
+    };
     let mut facts: Vec<Fact> = body.iter().map(|f| f.to_fact()).collect();
 
     for fact in body {
@@ -346,6 +356,9 @@ fn get_var_term_option(
     proof_state: &ProofState,
     proof_info: &ProofInfo,
 ) -> Option<Symbol> {
+    if var == "rule-proof".into() {
+        return Some(proof_info.rule_proof_ast.unwrap());
+    }
     proof_info
         .var_term
         .get(&var)
@@ -408,7 +421,6 @@ fn make_expr_rep(
     proof_state: &mut ProofState,
     proof_info: &ProofInfo,
     expr: &NormExpr,
-    rule_proof: Symbol,
     res: &mut Vec<NormAction>,
 ) -> Symbol {
     let NormExpr::Call(head, body) = expr;
@@ -417,7 +429,7 @@ fn make_expr_rep(
     let ruletrm = proof_state.get_fresh();
     res.push(NormAction::Let(
         ruletrm,
-        NormExpr::Call("RuleTerm__".into(), vec![rule_proof, newterm]),
+        NormExpr::Call("RuleTerm__".into(), vec![proof_info.rule_proof.unwrap(), newterm]),
     ));
 
     let trmprf = proof_state.get_fresh();
@@ -437,7 +449,6 @@ fn make_expr_rep(
 }
 
 fn add_action_proof(
-    rule_proof: Symbol,
     proof_info: &mut ProofInfo,
     action: &NormAction,
     res: &mut Vec<NormAction>,
@@ -445,7 +456,7 @@ fn add_action_proof(
 ) {
     match action {
         NormAction::LetVar(var1, var2) => {
-            // check if it's a global variable
+            // update var1's term
             proof_info
                 .var_term
                 .insert(*var1, get_var_term(*var2, proof_state, proof_info));
@@ -455,22 +466,22 @@ fn add_action_proof(
             add_eqgraph_equality(
                 get_var_term(*var1, proof_state, proof_info),
                 get_var_term(*var2, proof_state, proof_info),
-                rule_proof,
+                proof_info.rule_proof.unwrap(),
                 res,
             );
         }
         NormAction::Set(expr, rhs) => {
-            let new_term = make_expr_rep(proof_state, proof_info, expr, rule_proof, res);
+            let new_term = make_expr_rep(proof_state, proof_info, expr, res);
             // add to the equality graph when we set things equal to each other
             add_eqgraph_equality(
                 new_term,
                 get_var_term(*rhs, proof_state, proof_info),
-                rule_proof,
+                proof_info.rule_proof.unwrap(),
                 res,
             )
         }
         NormAction::Let(lhs, expr) => {
-            let ast = make_expr_rep(proof_state, proof_info, expr, rule_proof, res);
+            let ast = make_expr_rep(proof_state, proof_info, expr, res);
             proof_info.var_term.insert(*lhs, ast);
         }
         // very similar to let case
@@ -489,7 +500,7 @@ fn add_action_proof(
             let ruletrm = proof_state.get_fresh();
             res.push(NormAction::Let(
                 ruletrm,
-                NormExpr::Call("RuleTerm__".into(), vec![rule_proof, newterm]),
+                NormExpr::Call("RuleTerm__".into(), vec![proof_info.rule_proof.unwrap(), newterm]),
             ));
 
             let trmprf = proof_state.get_fresh();
@@ -570,13 +581,41 @@ fn add_rule_proof(
     rule_proof
 }
 
+
+// replace the rule-proof keyword with the proof of the rule
+fn replace_rule_proof(actions: &[NormAction], rule_proof: Symbol) -> Vec<NormAction> {
+    actions.iter().map(|action| {
+        action.map_def_use(&mut |var, _isdef| {
+        if var == "rule-proof".into() {
+            rule_proof
+        } else {
+            var
+        }
+    })
+    }).collect()
+}
+
 fn instrument_rule(rule: &NormRule, rule_name: Symbol, proof_state: &mut ProofState) -> Rule {
-    let mut actions = rule.head.clone();
+    let mut actions = vec![];
     let (mut info, facts) = instrument_facts(&rule.body, proof_state, &mut actions);
     let rule_proof = add_rule_proof(rule_name, &info, &rule.body, &mut actions, proof_state);
 
+    let rule_proof_ast = 
+    proof_state.get_fresh();
+    actions.push(NormAction::Let(rule_proof_ast, NormExpr::Call("AstProof__".into(), vec![rule_proof])));
+
+    actions.extend(replace_rule_proof(&rule.head, rule_proof));
+
+    // make a new proofinfo with the rule_proof symbol added
+    let mut proof_info = ProofInfo {
+        var_term: info.var_term,
+        var_proof: info.var_proof,
+        rule_proof: Some(rule_proof),
+        rule_proof_ast: Some(rule_proof_ast),
+    };
+
     for action in &rule.head {
-        add_action_proof(rule_proof, &mut info, action, &mut actions, proof_state);
+        add_action_proof(&mut proof_info, action, &mut actions, proof_state);
     }
 
     // res.head.extend();
@@ -796,8 +835,8 @@ fn proof_original_action(action: &NormAction, proof_state: &mut ProofState) -> V
 
 // TODO we need to also instrument merge actions and merge because they can add new terms that need representatives
 // the egraph is the initial egraph with only default sorts
-pub(crate) fn add_proofs(program: Vec<NormCommand>, desugar: Desugar) -> Vec<NormCommand> {
-    let mut res = proof_header(desugar.egraph);
+pub(crate) fn add_proofs(program: Vec<NormCommand>, desugar: Desugar) -> Vec<Command> {
+    let mut res = vec![];
     let mut proof_state = ProofState {
         ast_funcs_created: Default::default(),
         current_ctx: 0,
@@ -865,14 +904,8 @@ pub(crate) fn add_proofs(program: Vec<NormCommand>, desugar: Desugar) -> Vec<Nor
                 res.push(Command::Action(action.to_action()));
                 res.extend(proof_original_action(action, &mut proof_state));
             }
-            NCommand::Check(_check) => {
+            NCommand::Check(facts) => {
                 res.push(command.to_command());
-                /*match fact {
-                    Fact::Eq(exprs) => {
-                        assert!(exprs.len() == 2);
-
-                    }
-                }*/
             }
             _ => res.push(command.to_command()),
         }
@@ -880,9 +913,9 @@ pub(crate) fn add_proofs(program: Vec<NormCommand>, desugar: Desugar) -> Vec<Nor
 
     proof_state.desugar.define_memo.clear();
     res_before_push.extend(res);
-    desugar_commands(res_before_push, &mut proof_state.desugar).unwrap()
+    res_before_push
 }
 
-pub(crate) fn should_add_proofs(_program: &[NormCommand]) -> bool {
+pub(crate) fn should_add_proofs(_program: &[Command]) -> bool {
     true
 }

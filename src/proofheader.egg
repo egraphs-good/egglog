@@ -41,6 +41,11 @@
 (function Cons__ (Proof__ ProofList__) ProofList__)
 (declare Null__ ProofList__)
 
+;; proofs may also act as AST values
+;; when the rule-proof keyword is used
+(function AstProof__ (Proof__) Ast__)
+
+
 ;; prove two terms equal
 (function EqGraph__ (Ast__ Ast__) Proof__  :cost 100000 :merge old)
 

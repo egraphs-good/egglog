@@ -285,16 +285,20 @@ impl TypeInfo {
         actions: &Vec<NormAction>,
         let_bound: &mut HashSet<Symbol>,
     ) {
+        let assert_bound = |var, let_bound: &HashSet<Symbol>| {
+            assert!(let_bound.contains(var) || self.global_types.contains_key(var) || self.reserved_type(*var).is_some())
+        };
+
         for action in actions {
             match action {
                 NormAction::Let(var, NormExpr::Call(_head, body)) => {
                     assert!(let_bound.insert(*var));
                     body.iter().for_each(|bvar| {
-                        assert!(let_bound.contains(bvar) || self.global_types.contains_key(bvar));
+                        assert_bound(bvar, let_bound);
                     });
                 }
                 NormAction::LetVar(v1, v2) => {
-                    assert!(let_bound.contains(v2) || self.global_types.contains_key(v2));
+                    assert_bound(v2, let_bound);
                     assert!(let_bound.insert(*v1));
                 }
                 NormAction::LetLit(v1, _lit) => {
@@ -302,18 +306,18 @@ impl TypeInfo {
                 }
                 NormAction::Delete(NormExpr::Call(_head, body)) => {
                     body.iter().for_each(|bvar| {
-                        assert!(let_bound.contains(bvar) || self.global_types.contains_key(bvar));
+                        assert_bound(bvar, let_bound);
                     });
                 }
                 NormAction::Set(NormExpr::Call(_head, body), var) => {
                     body.iter().for_each(|bvar| {
-                        assert!(let_bound.contains(bvar) || self.global_types.contains_key(bvar));
+                        assert_bound(bvar, let_bound);
                     });
-                    assert!(let_bound.contains(var) || self.global_types.contains_key(var));
+                    assert_bound(var, let_bound);
                 }
                 NormAction::Union(v1, v2) => {
-                    assert!(let_bound.contains(v1) || self.global_types.contains_key(v1));
-                    assert!(let_bound.contains(v2) || self.global_types.contains_key(v2));
+                    assert_bound(v1, let_bound);
+                    assert_bound(v2, let_bound);
                 }
                 NormAction::Panic(..) => (),
             }
@@ -435,7 +439,20 @@ impl TypeInfo {
         Ok(())
     }
 
+    pub fn reserved_type(&self, sym: Symbol) -> Option<ArcSort> {
+        if sym == "rule-proof".into() {
+            Some(self.sorts.get::<Symbol>(&"Proof__".into()).unwrap().clone())
+        } else {
+            None
+        }
+    }
+
     pub fn lookup(&self, ctx: CommandId, sym: Symbol) -> Result<ArcSort, TypeError> {
+        // special logic for reserved keywords
+        if let Some(t) = self.reserved_type(sym) {
+            return Ok(t);
+        }
+
         self.global_types
             .get(&sym)
             .map(|x| Ok(x.clone()))

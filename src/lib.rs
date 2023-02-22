@@ -17,8 +17,8 @@ use instant::{Duration, Instant};
 use sort::*;
 use thiserror::Error;
 
-use desugar::{desugar_program, Desugar};
-use proofs::{add_proofs, should_add_proofs};
+use desugar::{desugar_program, Desugar, make_get_fresh, make_get_new_id, desugar_commands};
+use proofs::{add_proofs, should_add_proofs, proof_header};
 
 use symbolic_expressions::Sexp;
 
@@ -1137,34 +1137,50 @@ impl EGraph {
         Ok(program)
     }
 
-    pub fn parse_desugar(
-        &mut self,
-        input: &str,
-        parenthesized: bool,
-    ) -> Result<(Vec<NormCommand>, Desugar), Error> {
-        let (desugared, desugar) =
-            desugar_program(self, self.parse_program(input, parenthesized)?)?;
-
-        //println!("{}", ListDisplay(&desugared, "\n"));
-        desugar.egraph.type_info.typecheck_program(&desugared)?;
-
-        Ok((desugared, desugar))
+    pub fn get_proof_header(&self, program: &[Command]) -> Vec<Command> {
+        if should_add_proofs(program) {
+            proof_header(self)
+        } else {
+            vec![]
+        }
     }
+
 
     pub fn parse_and_run_program(
         &mut self,
         input: &str,
         is_parenthesized: bool,
     ) -> Result<Vec<String>, Error> {
-        let (mut program, desugar) = self.parse_desugar(input, is_parenthesized)?;
+        let parsed = self.parse_program(input, is_parenthesized)?;
+        let should_add_proofs = should_add_proofs(&parsed);
+        let header = self.get_proof_header(&parsed);
 
-        //println!("{}", ListDisplay(program.clone(), "\n"));
-        if should_add_proofs(&program) {
-            program = add_proofs(program, desugar);
+        let get_fresh = Box::new(make_get_fresh(&parsed));
+        let mut desugar = Desugar {
+            get_fresh,
+            get_new_id: Box::new(make_get_new_id()),
+            define_memo: Default::default(),
+            egraph: self,
+        };
+
+        
+        let header_desugared = desugar_commands(header.clone(), &mut desugar)?;
+        let program_desugared = desugar_commands(parsed, &mut desugar)?;
+
+        desugar.egraph.type_info.typecheck_program(&header_desugared.iter().cloned().chain(program_desugared.iter().cloned()).collect())?;
+
+        let program = 
+        if should_add_proofs {
+            let proofs = add_proofs(program_desugared, desugar);
+            let with_header = header.into_iter().chain(proofs.into_iter()).collect();
             //println!("{}", ListDisplay(program.clone(), "\n"));
+            let (final_desugared, _desugar2) = desugar_program(self, with_header)?;
             self.type_info = TypeInfo::new();
-            self.type_info.typecheck_program(&program)?;
-        }
+            self.type_info.typecheck_program(&final_desugared)?;
+            final_desugared
+        } else {
+            program_desugared
+        };
 
         self.run_program(program)
     }
