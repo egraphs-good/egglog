@@ -75,6 +75,7 @@ pub enum NCommand {
     NormRule(Symbol, NormRule),
     NormAction(NormAction),
     Run(NormRunConfig),
+    RunSchedule(Schedule),
     Simplify { var: Symbol, config: NormRunConfig },
     // TODO flatten calc, add proof support
     Calc(Vec<IdentSort>, Vec<Expr>),
@@ -183,73 +184,6 @@ impl NCommand {
     }
 }
 
-// TODO command before and after desugaring should be different
-#[derive(Debug, Clone)]
-pub enum NormCommand {
-    Sort(Symbol, Option<(Symbol, Vec<Expr>)>),
-    Function(FunctionDecl),
-    AddRuleset(Symbol),
-    NormRule(Symbol, NormRule),
-    NormAction(NormAction),
-    Run(RunConfig),
-    RunSchedule(Schedule),
-    Simplify { expr: Expr, config: RunConfig },
-    // TODO flatten calc, add proof support
-    Calc(Vec<IdentSort>, Vec<Expr>),
-    Extract { variants: usize, var: Symbol },
-    // TODO: this could just become an empty query
-    Check(Fact),
-    Clear,
-    Print(Symbol, usize),
-    PrintSize(Symbol),
-    Output { file: String, exprs: Vec<Expr> },
-    // TODO flatten query
-    Query(Vec<Fact>),
-    Push(usize),
-    Pop(usize),
-    Fail(Box<NormCommand>),
-    // TODO desugar
-    Input { name: Symbol, file: String },
-}
-
-impl NormCommand {
-    pub fn to_command(&self) -> Command {
-        match self {
-            NormCommand::Sort(name, params) => Command::Sort(*name, params.clone()),
-            NormCommand::Function(f) => Command::Function(f.clone()),
-            NormCommand::AddRuleset(name) => Command::AddRuleset(*name),
-            NormCommand::NormRule(name, rule) => Command::Rule(*name, rule.to_rule()),
-            NormCommand::NormAction(action) => Command::Action(action.to_action()),
-            NormCommand::Run(config) => Command::Run(config.clone()),
-            NormCommand::RunSchedule(sched) => Command::RunSchedule(sched.clone()),
-            NormCommand::Simplify { expr, config } => Command::Simplify {
-                expr: expr.clone(),
-                config: config.clone(),
-            },
-            NormCommand::Calc(args, exprs) => Command::Calc(args.clone(), exprs.clone()),
-            NormCommand::Extract { variants, var } => Command::Extract {
-                variants: *variants,
-                e: Expr::Var(*var),
-            },
-            NormCommand::Check(fact) => Command::Check(fact.clone()),
-            NormCommand::Clear => Command::Query(vec![]),
-            NormCommand::Print(name, n) => Command::Print(*name, *n),
-            NormCommand::PrintSize(name) => Command::PrintSize(*name),
-            NormCommand::Output { file, exprs } => Command::Output {
-                file: file.to_string(),
-                exprs: exprs.clone(),
-            },
-            NormCommand::Query(facts) => Command::Query(facts.clone()),
-            NormCommand::Push(n) => Command::Push(*n),
-            NormCommand::Pop(n) => Command::Pop(*n),
-            NormCommand::Fail(cmd) => Command::Fail(Box::new(cmd.to_command())),
-            NormCommand::Input { name, file } => Command::Input {
-                name: *name,
-                file: file.clone(),
-            },
-        }
-    }
-}
 
 // TODO command before and after desugaring should be different
 #[derive(Debug, Clone)]

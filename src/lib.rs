@@ -855,7 +855,7 @@ impl EGraph {
                     format!("Skipped run {limit}.")
                 }
             }
-            NormCommand::RunSchedule(sched) => {
+            NCommand::RunSchedule(sched) => {
                 if should_run {
                     self.run_schedule(&sched);
                     format!("Ran schedule {}.", sched)
