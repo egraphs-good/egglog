@@ -18,6 +18,15 @@ fn generate_tests(glob: &str) {
             .unwrap()
             .to_string_lossy()
             .replace(['.', '-', ' '], "_");
-        writeln!(out, "#[test] fn {name}() {{ run({:?}); }}", f).unwrap();
+        // write a normal test
+        writeln!(out, "#[test] fn {name}() {{ run({:?}, false); }}", f).unwrap();
+
+        // write a test with proofs enabled
+        writeln!(
+            out,
+            "#[test] fn {name}_with_proofs() {{ run({:?}, true); }}",
+            f
+        )
+        .unwrap();
     }
 }

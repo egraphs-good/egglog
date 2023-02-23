@@ -1,6 +1,6 @@
 use std::cmp::max;
 
-use crate::*;
+use crate::{proofs::RULE_PROOF_KEYWORD, *};
 
 pub(crate) type Fresh = dyn FnMut() -> Symbol;
 pub(crate) type NewId = dyn FnMut() -> CommandId;
@@ -167,9 +167,7 @@ fn expr_to_flat_actions(
             res.push(NormAction::LetLit(assign, l.clone()));
             assign
         }
-        Expr::Var(v) => {
-            *v
-        }
+        Expr::Var(v) => *v,
         Expr::Call(f, children) => {
             let assign = (get_fresh)();
             let mut new_children = vec![];
@@ -320,8 +318,6 @@ pub struct Desugar<'a> {
     pub define_memo: HashMap<Expr, Symbol>,
 }
 
-
-
 pub(crate) fn desugar_command(
     command: Command,
     desugar: &mut Desugar,
@@ -394,7 +390,7 @@ pub(crate) fn desugar_command(
         Command::Calc(idents, exprs) => vec![NCommand::Calc(idents, exprs)],
         Command::RunSchedule(sched) => {
             vec![NCommand::RunSchedule(sched)]
-        },
+        }
         Command::Extract { variants, e } => {
             let fresh = (desugar.get_fresh)();
             flatten_actions(&vec![Action::Let(fresh, e)], desugar, true)
@@ -423,7 +419,7 @@ pub(crate) fn desugar_command(
                     body: facts.clone(),
                     head: vec![Action::Union(
                         Expr::Var(proofvar),
-                        Expr::Var("rule-proof".into()),
+                        Expr::Var(RULE_PROOF_KEYWORD.into()),
                     )],
                 };
                 let ruleset = (desugar.get_fresh)();
@@ -443,7 +439,7 @@ pub(crate) fn desugar_command(
 
                 // we need to run proof extraction rules again
                 res.push(NCommand::Run(NormRunConfig {
-                    ruleset: "proof-extract".into(),
+                    ruleset: "proof-extract__".into(),
                     limit: 100,
                     until: None,
                 }));

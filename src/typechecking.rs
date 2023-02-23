@@ -1,4 +1,4 @@
-use crate::*;
+use crate::{proofs::RULE_PROOF_KEYWORD, *};
 
 #[derive(Clone, Debug)]
 pub struct FuncType {
@@ -449,7 +449,7 @@ impl TypeInfo {
     }
 
     pub fn reserved_type(&self, sym: Symbol) -> Option<ArcSort> {
-        if sym == "rule-proof".into() {
+        if sym == RULE_PROOF_KEYWORD.into() {
             Some(self.sorts.get::<Symbol>(&"Proof__".into()).unwrap().clone())
         } else {
             None

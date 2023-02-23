@@ -186,7 +186,6 @@ impl NCommand {
     }
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Schedule {
     Saturate(Box<Schedule>),
@@ -223,7 +222,6 @@ impl Display for Schedule {
         write!(f, "{}", self.to_sexp())
     }
 }
-
 
 // TODO command before and after desugaring should be different
 #[derive(Debug, Clone)]

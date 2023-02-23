@@ -31,7 +31,7 @@ fn main() {
             .lock()
             .read_to_string(&mut program)
             .unwrap_or_else(|_| panic!("Failed to read program from stdin"));
-        match egraph.parse_and_run_program(&program, true) {
+        match egraph.parse_and_run_program(&program, true, false) {
             Ok(_msgs) => {}
             Err(err) => {
                 log::error!("{}", err);
@@ -49,7 +49,7 @@ fn main() {
         let mut egraph = EGraph::default();
         egraph.fact_directory = args.fact_directory.clone();
         egraph.seminaive = !args.naive;
-        match egraph.parse_and_run_program(&s, false) {
+        match egraph.parse_and_run_program(&s, false, false) {
             Ok(_msgs) => {}
             Err(err) => {
                 log::error!("{}", err);

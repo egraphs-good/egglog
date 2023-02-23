@@ -1205,23 +1205,19 @@ impl EGraph {
     }
 
     pub fn get_proof_header(&self, program: &[Command]) -> Vec<Command> {
-        if should_add_proofs(program) {
-            proof_header(self)
-        } else {
-            vec![]
-        }
+        proof_header(self)
     }
 
     pub fn parse_and_run_program(
         &mut self,
         input: &str,
         is_parenthesized: bool,
+        test_proofs: bool,
     ) -> Result<Vec<String>, Error> {
-        let get_all_proofs = false;
-
         let parsed = self.parse_program(input, is_parenthesized)?;
 
-        let should_add_proofs = should_add_proofs(&parsed);
+        let get_all_proofs = test_proofs;
+
         let header = self.get_proof_header(&parsed);
 
         let get_fresh = Box::new(make_get_fresh(&parsed));
@@ -1236,6 +1232,8 @@ impl EGraph {
 
         let program_desugared = desugar_commands(parsed, &mut desugar, get_all_proofs)?;
 
+        let should_add_proofs = should_add_proofs(&program_desugared) | test_proofs;
+
         desugar.egraph.type_info.typecheck_program(
             &header_desugared
                 .iter()
@@ -1243,7 +1241,6 @@ impl EGraph {
                 .chain(program_desugared.iter().cloned())
                 .collect(),
         )?;
-
 
         let program = if should_add_proofs {
             // proofs require type info, so

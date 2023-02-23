@@ -4,6 +4,8 @@ use crate::desugar::{desugar_commands, literal_name, Desugar};
 use crate::typechecking::FuncType;
 use symbolic_expressions::Sexp;
 
+pub const RULE_PROOF_KEYWORD: &str = "rule-proof";
+
 pub fn proof_header(egraph: &EGraph) -> Vec<Command> {
     let str = include_str!("proofheader.egg");
     egraph.parse_program(str, false).unwrap()
@@ -247,14 +249,21 @@ fn instrument_facts(
                 let rep_trm = proof_state.get_fresh();
                 let rep_prf = proof_state.get_fresh();
 
-                actions.push(NormAction::Let(rep, 
+                actions.push(NormAction::Let(
+                    rep,
                     NormExpr::Call(
                         make_rep_version(proof_state, &NormExpr::Call(*head, body.clone())),
                         body.clone(),
                     ),
                 ));
-                actions.push(NormAction::Let(rep_trm, NormExpr::Call("TrmOf__".into(), vec![rep])));
-                actions.push(NormAction::Let(rep_prf, NormExpr::Call("PrfOf__".into(), vec![rep])));
+                actions.push(NormAction::Let(
+                    rep_trm,
+                    NormExpr::Call("TrmOf__".into(), vec![rep]),
+                ));
+                actions.push(NormAction::Let(
+                    rep_prf,
+                    NormExpr::Call("PrfOf__".into(), vec![rep]),
+                ));
 
                 info.var_term.insert(*lhs, rep_trm).is_none();
                 assert!(info.var_proof.insert(*lhs, rep_prf).is_none());
@@ -262,11 +271,9 @@ fn instrument_facts(
                 for (i, child) in body.iter().enumerate() {
                     let child_trm = proof_state.get_fresh();
                     let const_var = proof_state.get_fresh();
-                    actions.push(NormAction::LetLit(
-                        const_var,
-                        Literal::Int(i as i64),
-                    ));
-                    actions.push(NormAction::Let(child_trm, 
+                    actions.push(NormAction::LetLit(const_var, Literal::Int(i as i64)));
+                    actions.push(NormAction::Let(
+                        child_trm,
                         NormExpr::Call("GetChild__".into(), vec![rep_trm, const_var]),
                     ));
                     info.var_term.insert(*child, child_trm);
@@ -341,7 +348,7 @@ fn get_var_term_option(
     proof_state: &ProofState,
     proof_info: &ProofInfo,
 ) -> Option<Symbol> {
-    if var == "rule-proof".into() {
+    if var == RULE_PROOF_KEYWORD.into() {
         return Some(proof_info.rule_proof_ast.unwrap());
     }
     proof_info
@@ -585,7 +592,7 @@ fn replace_rule_proof(actions: &[NormAction], rule_proof: Symbol) -> Vec<NormAct
         .iter()
         .map(|action| {
             action.map_def_use(&mut |var, _isdef| {
-                if var == "rule-proof".into() {
+                if var == RULE_PROOF_KEYWORD.into() {
                     rule_proof
                 } else {
                     var
@@ -623,7 +630,8 @@ fn instrument_rule(rule: &NormRule, rule_name: Symbol, proof_state: &mut ProofSt
     NormRule {
         head: actions,
         body: rule.body.clone(),
-    }.to_rule()
+    }
+    .to_rule()
 }
 fn make_rep_function(proof_state: &mut ProofState, expr: &NormExpr) -> FunctionDecl {
     let types = proof_state
@@ -843,23 +851,18 @@ fn instrument_schedule(proof_state: &ProofState, schedule: &Schedule) -> Schedul
         }
         // We only do anything for the ruleset case
         // Whenever we run a ruleset, first run the proof ruleset
-        Schedule::Ruleset(ruleset) => {
-            Schedule::Sequence(
-                vec![
-                    Schedule::Saturate(
-                        Box::new(Schedule::Ruleset("proofrules__".into()))
-                    ),
-                    Schedule::Ruleset(*ruleset)
-                ])
-            
-        }
-        Schedule::Sequence(schedules) => {
-            Schedule::Sequence(schedules.iter().map(|s| instrument_schedule(proof_state, s)).collect())
-        }
+        Schedule::Ruleset(ruleset) => Schedule::Sequence(vec![
+            Schedule::Saturate(Box::new(Schedule::Ruleset("proofrules__".into()))),
+            Schedule::Ruleset(*ruleset),
+        ]),
+        Schedule::Sequence(schedules) => Schedule::Sequence(
+            schedules
+                .iter()
+                .map(|s| instrument_schedule(proof_state, s))
+                .collect(),
+        ),
     }
 }
-
-
 
 // TODO we need to also instrument merge actions and merge because they can add new terms that need representatives
 // the egraph is the initial egraph with only default sorts
@@ -937,7 +940,10 @@ pub(crate) fn add_proofs(program: Vec<NormCommand>, desugar: Desugar) -> Vec<Com
                 res.push(command.to_command());
             }
             NCommand::RunSchedule(schedule) => {
-                res.push(Command::RunSchedule(instrument_schedule(&proof_state, schedule)));
+                res.push(Command::RunSchedule(instrument_schedule(
+                    &proof_state,
+                    schedule,
+                )));
             }
             _ => res.push(command.to_command()),
         }
@@ -948,6 +954,22 @@ pub(crate) fn add_proofs(program: Vec<NormCommand>, desugar: Desugar) -> Vec<Com
     res_before_push
 }
 
-pub(crate) fn should_add_proofs(_program: &[Command]) -> bool {
-    true
+pub(crate) fn should_add_proofs(program: &[NormCommand]) -> bool {
+    let mut has_proof_keyword = false;
+    for command in program {
+        command.command.map_exprs(&mut |expr| {
+            expr.map_def_use(
+                &mut |var, _def| {
+                    if var == RULE_PROOF_KEYWORD.into() {
+                        has_proof_keyword = true;
+                    }
+                    var
+                },
+                false,
+            );
+            expr.clone()
+        });
+    }
+
+    has_proof_keyword
 }
