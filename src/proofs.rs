@@ -4,12 +4,10 @@ use crate::desugar::{desugar_commands, literal_name, Desugar};
 use crate::typechecking::FuncType;
 use symbolic_expressions::Sexp;
 
-
 pub fn proof_header(egraph: &EGraph) -> Vec<Command> {
     let str = include_str!("proofheader.egg");
     egraph.parse_program(str, false).unwrap()
 }
-
 
 // primitives don't need type info
 fn make_ast_version_prim(name: Symbol) -> Symbol {
@@ -187,7 +185,6 @@ struct ProofInfo {
     pub rule_proof_ast: Option<Symbol>,
 }
 
-
 // This function makes use of the property that the body is Norm
 // variables appear at most once (including the rhs of assignments)
 // besides when they appear in constraints
@@ -200,7 +197,7 @@ fn instrument_facts(
         var_term: Default::default(),
         var_proof: Default::default(),
         rule_proof: None,
-        rule_proof_ast: None
+        rule_proof_ast: None,
     };
     let mut facts: Vec<Fact> = body.iter().map(|f| f.to_fact()).collect();
 
@@ -430,7 +427,10 @@ fn make_expr_rep(
     let ruletrm = proof_state.get_fresh();
     res.push(NormAction::Let(
         ruletrm,
-        NormExpr::Call("RuleTerm__".into(), vec![proof_info.rule_proof.unwrap(), newterm]),
+        NormExpr::Call(
+            "RuleTerm__".into(),
+            vec![proof_info.rule_proof.unwrap(), newterm],
+        ),
     ));
 
     let trmprf = proof_state.get_fresh();
@@ -501,7 +501,10 @@ fn add_action_proof(
             let ruletrm = proof_state.get_fresh();
             res.push(NormAction::Let(
                 ruletrm,
-                NormExpr::Call("RuleTerm__".into(), vec![proof_info.rule_proof.unwrap(), newterm]),
+                NormExpr::Call(
+                    "RuleTerm__".into(),
+                    vec![proof_info.rule_proof.unwrap(), newterm],
+                ),
             ));
 
             let trmprf = proof_state.get_fresh();
@@ -589,18 +592,20 @@ fn add_rule_proof(
     rule_proof
 }
 
-
 // replace the rule-proof keyword with the proof of the rule
 fn replace_rule_proof(actions: &[NormAction], rule_proof: Symbol) -> Vec<NormAction> {
-    actions.iter().map(|action| {
-        action.map_def_use(&mut |var, _isdef| {
-        if var == "rule-proof".into() {
-            rule_proof
-        } else {
-            var
-        }
-    })
-    }).collect()
+    actions
+        .iter()
+        .map(|action| {
+            action.map_def_use(&mut |var, _isdef| {
+                if var == "rule-proof".into() {
+                    rule_proof
+                } else {
+                    var
+                }
+            })
+        })
+        .collect()
 }
 
 fn instrument_rule(rule: &NormRule, rule_name: Symbol, proof_state: &mut ProofState) -> Rule {
@@ -608,9 +613,11 @@ fn instrument_rule(rule: &NormRule, rule_name: Symbol, proof_state: &mut ProofSt
     let (info, facts) = instrument_facts(&rule.body, proof_state, &mut actions);
     let rule_proof = add_rule_proof(rule_name, &info, &rule.body, &mut actions, proof_state);
 
-    let rule_proof_ast = 
-    proof_state.get_fresh();
-    actions.push(NormAction::Let(rule_proof_ast, NormExpr::Call("AstProof__".into(), vec![rule_proof])));
+    let rule_proof_ast = proof_state.get_fresh();
+    actions.push(NormAction::Let(
+        rule_proof_ast,
+        NormExpr::Call("AstProof__".into(), vec![rule_proof]),
+    ));
 
     actions.extend(replace_rule_proof(&rule.head, rule_proof));
 
@@ -868,9 +875,10 @@ pub(crate) fn add_proofs(program: Vec<NormCommand>, desugar: Desugar) -> Vec<Com
             let ast_name = make_ast_version(&mut proof_state, expr);
             if proof_state.ast_funcs_created.insert(ast_name) {
                 let commands = vec![
-                Command::Function(make_ast_function(&mut proof_state, expr)),
-                Command::Function(make_rep_function(&mut proof_state, expr)),
-                make_getchild_rule(&mut proof_state, expr)];
+                    Command::Function(make_ast_function(&mut proof_state, expr)),
+                    Command::Function(make_rep_function(&mut proof_state, expr)),
+                    make_getchild_rule(&mut proof_state, expr),
+                ];
                 if has_pushed {
                     res_before_push.extend(commands);
                 } else {

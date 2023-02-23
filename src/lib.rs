@@ -17,8 +17,8 @@ use instant::{Duration, Instant};
 use sort::*;
 use thiserror::Error;
 
-use desugar::{desugar_program, Desugar, make_get_fresh, make_get_new_id, desugar_commands};
-use proofs::{add_proofs, should_add_proofs, proof_header};
+use desugar::{desugar_commands, desugar_program, make_get_fresh, make_get_new_id, Desugar};
+use proofs::{add_proofs, proof_header, should_add_proofs};
 
 use symbolic_expressions::Sexp;
 
@@ -819,7 +819,6 @@ impl EGraph {
                         println!("\nVariants of {expr}:{line}{v_exprs}");
                         write!(msg, "\nVariants of {expr}:{line}{v_exprs}").unwrap();
                     }
-                    println!("{}", msg);
                     msg
                 } else {
                     "Skipping extraction.".into()
@@ -1146,7 +1145,6 @@ impl EGraph {
         }
     }
 
-
     pub fn parse_and_run_program(
         &mut self,
         input: &str,
@@ -1164,23 +1162,26 @@ impl EGraph {
             egraph: self,
         };
 
-        
         let header_desugared = desugar_commands(header.clone(), &mut desugar, false)?;
         let program_desugared = desugar_commands(parsed, &mut desugar, true)?;
 
-        desugar.egraph.type_info.typecheck_program(&header_desugared.iter().cloned().chain(program_desugared.iter().cloned()).collect())?;
+        desugar.egraph.type_info.typecheck_program(
+            &header_desugared
+                .iter()
+                .cloned()
+                .chain(program_desugared.iter().cloned())
+                .collect(),
+        )?;
 
-        let program = 
-        if should_add_proofs {
+        let program = if should_add_proofs {
             // proofs require type info, so
             // we need to pass in the desugar
             let proofs = add_proofs(program_desugared, desugar);
             let with_header = header.into_iter().chain(proofs.into_iter()).collect();
-            
+
             let (final_desugared, _desugar2) = desugar_program(self, with_header, false)?;
 
-
-            println!("{}", ListDisplay(&final_desugared, "\n"));
+            //println!("{}", ListDisplay(&final_desugared, "\n"));
             self.type_info = TypeInfo::new();
             self.type_info.typecheck_program(&final_desugared)?;
             final_desugared
@@ -1189,8 +1190,6 @@ impl EGraph {
         };
 
         //println!("{}", ListDisplay(&final_desugared, "\n"));
-
-        
 
         self.run_program(program)
     }

@@ -320,7 +320,7 @@ pub struct Desugar<'a> {
 pub(crate) fn desugar_command(
     command: Command,
     desugar: &mut Desugar,
-    get_all_proofs: bool
+    get_all_proofs: bool,
 ) -> Result<Vec<NormCommand>, Error> {
     let res = match command {
         Command::Function(fdecl) => {
@@ -333,7 +333,11 @@ pub(crate) fn desugar_command(
         Command::Include(file) => {
             let s = std::fs::read_to_string(&file)
                 .unwrap_or_else(|_| panic!("Failed to read file {file}"));
-            return desugar_commands(desugar.egraph.parse_program(&s, false)?, desugar, get_all_proofs);
+            return desugar_commands(
+                desugar.egraph.parse_program(&s, false)?,
+                desugar,
+                get_all_proofs,
+            );
         }
         Command::Rule(ruleset, rule) => {
             vec![NCommand::NormRule(ruleset, flatten_rule(rule, desugar))]
@@ -409,34 +413,41 @@ pub(crate) fn desugar_command(
                 // make a dummy rule so that we get a proof for this check
                 let dummyrule = Rule {
                     body: facts.clone(),
-                    head: vec![
-                        Action::Union(Expr::Var(proofvar),
-                            Expr::Var("rule-proof".into()))
-                    ],
+                    head: vec![Action::Union(
+                        Expr::Var(proofvar),
+                        Expr::Var("rule-proof".into()),
+                    )],
                 };
                 let ruleset = (desugar.get_fresh)();
                 res.push(NCommand::AddRuleset(ruleset));
-                res.extend(desugar_command(Command::Rule(ruleset, dummyrule), desugar, get_all_proofs)?.into_iter().map(|cmd| cmd.command));
+                res.extend(
+                    desugar_command(Command::Rule(ruleset, dummyrule), desugar, get_all_proofs)?
+                        .into_iter()
+                        .map(|cmd| cmd.command),
+                );
 
                 // now run the dummy rule and get the proof
                 res.push(NCommand::Run(NormRunConfig {
                     ruleset,
                     limit: 1,
-                    until: None
+                    until: None,
                 }));
 
                 // we need to run proof extraction rules again
                 res.push(NCommand::Run(NormRunConfig {
                     ruleset: "proof-extract".into(),
                     limit: 100,
-                    until: None
+                    until: None,
                 }));
 
                 // extract the proof
-                res.push(NCommand::Extract { variants: 0, var: proofvar });
+                res.push(NCommand::Extract {
+                    variants: 0,
+                    var: proofvar,
+                });
             }
 
-            res            
+            res
         }
         Command::Print(symbol, size) => vec![NCommand::Print(symbol, size)],
         Command::PrintSize(symbol) => vec![NCommand::PrintSize(symbol)],
@@ -487,7 +498,7 @@ pub fn make_get_new_id() -> impl FnMut() -> usize {
 pub(crate) fn desugar_program(
     egraph: &mut EGraph,
     program: Vec<Command>,
-    get_all_proofs: bool
+    get_all_proofs: bool,
 ) -> Result<(Vec<NormCommand>, Desugar), Error> {
     let get_fresh = Box::new(make_get_fresh(&program));
     let mut desugar = Desugar {

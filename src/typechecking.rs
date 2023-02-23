@@ -286,7 +286,11 @@ impl TypeInfo {
         let_bound: &mut HashSet<Symbol>,
     ) {
         let assert_bound = |var, let_bound: &HashSet<Symbol>| {
-            assert!(let_bound.contains(var) || self.global_types.contains_key(var) || self.reserved_type(*var).is_some())
+            assert!(
+                let_bound.contains(var)
+                    || self.global_types.contains_key(var)
+                    || self.reserved_type(*var).is_some()
+            )
         };
 
         for action in actions {
@@ -335,7 +339,12 @@ impl TypeInfo {
             if let Some(_existing) = self.global_types.insert(var, sort) {
                 return Err(TypeError::GlobalAlreadyBound(var));
             }
-        } else if let Some(existing) = self.local_types.get_mut(&ctx).unwrap().insert(var, sort.clone()) {
+        } else if let Some(existing) = self
+            .local_types
+            .get_mut(&ctx)
+            .unwrap()
+            .insert(var, sort.clone())
+        {
             return Err(TypeError::LocalAlreadyBound(var, existing, sort));
         }
 
