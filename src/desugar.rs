@@ -317,6 +317,8 @@ pub struct Desugar<'a> {
     pub define_memo: HashMap<Expr, Symbol>,
 }
 
+
+
 pub(crate) fn desugar_command(
     command: Command,
     desugar: &mut Desugar,
@@ -387,7 +389,9 @@ pub(crate) fn desugar_command(
                 .collect()
         }
         Command::Calc(idents, exprs) => vec![NCommand::Calc(idents, exprs)],
-        Command::RunSchedule(sched) => vec![NCommand::RunSchedule(sched)],
+        Command::RunSchedule(sched) => {
+            vec![NCommand::RunSchedule(sched)]
+        },
         Command::Extract { variants, e } => {
             let fresh = (desugar.get_fresh)();
             flatten_actions(&vec![Action::Let(fresh, e)], desugar, true)
@@ -471,8 +475,8 @@ pub(crate) fn desugar_command(
             });
             return Ok(desugared);
         }
-        Command::Input { .. } => {
-            todo!("desugar input");
+        Command::Input { name, file } => {
+            vec![NCommand::Input { name, file }]
         }
     };
 

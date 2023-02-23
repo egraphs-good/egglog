@@ -1217,7 +1217,7 @@ impl EGraph {
         input: &str,
         is_parenthesized: bool,
     ) -> Result<Vec<String>, Error> {
-        let get_all_proofs = true;
+        let get_all_proofs = false;
 
         let parsed = self.parse_program(input, is_parenthesized)?;
         let should_add_proofs = should_add_proofs(&parsed);

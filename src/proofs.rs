@@ -848,6 +848,34 @@ fn proof_original_action(action: &NormAction, proof_state: &mut ProofState) -> V
     }
 }
 
+fn instrument_schedule(proof_state: &ProofState, schedule: &Schedule) -> Schedule {
+    match schedule {
+        Schedule::Saturate(schedule) => {
+            Schedule::Saturate(Box::new(instrument_schedule(proof_state, schedule)))
+        }
+        Schedule::Repeat(times, schedule) => {
+            Schedule::Repeat(*times, Box::new(instrument_schedule(proof_state, schedule)))
+        }
+        // We only do anything for the ruleset case
+        // Whenever we run a ruleset, first run the proof ruleset
+        Schedule::Ruleset(ruleset) => {
+            Schedule::Sequence(
+                vec![
+                    Schedule::Saturate(
+                        Box::new(Schedule::Ruleset("proofrules__".into()))
+                    ),
+                    Schedule::Ruleset(*ruleset)
+                ])
+            
+        }
+        Schedule::Sequence(schedules) => {
+            Schedule::Sequence(schedules.iter().map(|s| instrument_schedule(proof_state, s)).collect())
+        }
+    }
+}
+
+
+
 // TODO we need to also instrument merge actions and merge because they can add new terms that need representatives
 // the egraph is the initial egraph with only default sorts
 pub(crate) fn add_proofs(program: Vec<NormCommand>, desugar: Desugar) -> Vec<Command> {
@@ -922,6 +950,9 @@ pub(crate) fn add_proofs(program: Vec<NormCommand>, desugar: Desugar) -> Vec<Com
             }
             NCommand::Check(facts) => {
                 res.push(command.to_command());
+            }
+            NCommand::RunSchedule(schedule) => {
+                res.push(Command::RunSchedule(instrument_schedule(&proof_state, schedule)));
             }
             _ => res.push(command.to_command()),
         }
