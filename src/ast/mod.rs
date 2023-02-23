@@ -153,7 +153,7 @@ impl NCommand {
             NCommand::Sort(name, params) => NCommand::Sort(*name, params.clone()),
             NCommand::Function(f) => NCommand::Function(f.clone()),
             NCommand::Declare(name, parent_type, cost) => {
-                NCommand::Declare(*name, *parent_type, cost.clone())
+                NCommand::Declare(*name, *parent_type, *cost)
             }
             NCommand::AddRuleset(name) => NCommand::AddRuleset(*name),
             NCommand::RunSchedule(schedule) => NCommand::RunSchedule(schedule.clone()),
@@ -871,6 +871,13 @@ impl NormRule {
         NormRule {
             head: self.head.iter().map(|a| a.map_exprs(f)).collect(),
             body: self.body.iter().map(|fac| fac.map_exprs(f)).collect(),
+        }
+    }
+
+    pub fn map_def_use(&self, fvar: &mut impl FnMut(Symbol, bool) -> Symbol) -> Self {
+        NormRule {
+            head: self.head.iter().map(|a| a.map_def_use(fvar)).collect(),
+            body: self.body.iter().map(|fac| fac.map_def_use(fvar)).collect(),
         }
     }
 }

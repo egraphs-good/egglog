@@ -957,19 +957,21 @@ pub(crate) fn add_proofs(program: Vec<NormCommand>, desugar: Desugar) -> Vec<Com
 pub(crate) fn should_add_proofs(program: &[NormCommand]) -> bool {
     let mut has_proof_keyword = false;
     for command in program {
-        command.command.map_exprs(&mut |expr| {
-            expr.map_def_use(
-                &mut |var, _def| {
-                    if var == RULE_PROOF_KEYWORD.into() {
-                        has_proof_keyword = true;
-                    }
-                    var
-                },
-                false,
-            );
-            expr.clone()
-        });
+        match command.command {
+            NCommand::NormRule(_, ref rule) => {
+                rule.map_def_use(
+                    &mut |var, _def| {
+                        if var == RULE_PROOF_KEYWORD.into() {
+                            has_proof_keyword = true;
+                        }
+                        var
+                    },
+                );
+            }
+            _ => (),
+        }
     }
+    eprintln!("has_proof_keyword: {}", has_proof_keyword);
 
     has_proof_keyword
 }

@@ -8,7 +8,6 @@
 (define r-neg-one (rational -1 1))
 (relation universe (Math HerbieType))
 (rule ((= t (Expm1 ty a))) ((universe t ty)))
-(rule ((= (Num ty n) (Num ty m)) (!= n m)) ((panic "Unsoundness detected!")))
 (rewrite (Mul ty a b) (Mul ty b a))
 
 (rewrite (Sub ty x x) (Num ty r-zero))
@@ -59,3 +58,8 @@
 (define eggvar1 (Div (Type "binary64") (Expm1 (Type "binary64") (Add (Type "binary64") (Var (Type "binary64") "h0") (Var (Type "binary64") "h0"))) (Expm1 (Type "binary64") (Var (Type "binary64") "h0"))) :cost 10000000)
 
 (run 13)
+
+(declare v Proof__ :cost 1000000)
+(rule ((= (Num ty n) (Num ty m)) (!= n m))
+      ((union v rule-proof)))
+(extract :variants 2 v)
