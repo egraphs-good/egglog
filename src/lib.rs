@@ -1220,6 +1220,7 @@ impl EGraph {
         let get_all_proofs = false;
 
         let parsed = self.parse_program(input, is_parenthesized)?;
+
         let should_add_proofs = should_add_proofs(&parsed);
         let header = self.get_proof_header(&parsed);
 
@@ -1232,6 +1233,7 @@ impl EGraph {
         };
 
         let header_desugared = desugar_commands(header.clone(), &mut desugar, false)?;
+
         let program_desugared = desugar_commands(parsed, &mut desugar, get_all_proofs)?;
 
         desugar.egraph.type_info.typecheck_program(
@@ -1241,6 +1243,7 @@ impl EGraph {
                 .chain(program_desugared.iter().cloned())
                 .collect(),
         )?;
+
 
         let program = if should_add_proofs {
             // proofs require type info, so

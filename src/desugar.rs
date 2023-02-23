@@ -161,15 +161,17 @@ fn expr_to_flat_actions(
     if let Some(existing) = memo.get(expr) {
         return *existing;
     }
-    let assign = (get_fresh)();
-    match expr {
+    let res = match expr {
         Expr::Lit(l) => {
+            let assign = (get_fresh)();
             res.push(NormAction::LetLit(assign, l.clone()));
+            assign
         }
         Expr::Var(v) => {
-            res.push(NormAction::LetVar(assign, *v));
+            *v
         }
         Expr::Call(f, children) => {
+            let assign = (get_fresh)();
             let mut new_children = vec![];
             for child in children {
                 match child {
@@ -183,10 +185,11 @@ fn expr_to_flat_actions(
                 }
             }
             res.push(NormAction::Let(assign, NormExpr::Call(*f, new_children)));
+            assign
         }
-    }
-    memo.insert(expr.clone(), assign);
-    assign
+    };
+    memo.insert(expr.clone(), res);
+    res
 }
 
 fn flatten_actions(actions: &Vec<Action>, desugar: &mut Desugar, global: bool) -> Vec<NormAction> {
