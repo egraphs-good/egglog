@@ -192,14 +192,13 @@ fn instrument_facts(
     body: &Vec<NormFact>,
     proof_state: &mut ProofState,
     actions: &mut Vec<NormAction>,
-) -> (ProofInfo, Vec<Fact>) {
+) -> ProofInfo {
     let mut info: ProofInfo = ProofInfo {
         var_term: Default::default(),
         var_proof: Default::default(),
         rule_proof: None,
         rule_proof_ast: None,
     };
-    let mut facts: Vec<Fact> = body.iter().map(|f| f.to_fact()).collect();
 
     for fact in body {
         match fact {
@@ -248,21 +247,14 @@ fn instrument_facts(
                 let rep_trm = proof_state.get_fresh();
                 let rep_prf = proof_state.get_fresh();
 
-                facts.push(Fact::Eq(vec![
-                    Expr::Var(rep),
-                    Expr::Call(
+                actions.push(NormAction::Let(rep, 
+                    NormExpr::Call(
                         make_rep_version(proof_state, &NormExpr::Call(*head, body.clone())),
-                        body.iter().map(|x| Expr::Var(*x)).collect(),
+                        body.clone(),
                     ),
-                ]));
-                facts.push(Fact::Eq(vec![
-                    Expr::Var(rep_trm),
-                    Expr::Call("TrmOf__".into(), vec![Expr::Var(rep)]),
-                ]));
-                facts.push(Fact::Eq(vec![
-                    Expr::Var(rep_prf),
-                    Expr::Call("PrfOf__".into(), vec![Expr::Var(rep)]),
-                ]));
+                ));
+                actions.push(NormAction::Let(rep_trm, NormExpr::Call("TrmOf__".into(), vec![rep])));
+                actions.push(NormAction::Let(rep_prf, NormExpr::Call("PrfOf__".into(), vec![rep])));
 
                 info.var_term.insert(*lhs, rep_trm).is_none();
                 assert!(info.var_proof.insert(*lhs, rep_prf).is_none());
@@ -270,18 +262,13 @@ fn instrument_facts(
                 for (i, child) in body.iter().enumerate() {
                     let child_trm = proof_state.get_fresh();
                     let const_var = proof_state.get_fresh();
-                    facts.push(Fact::Eq(vec![
-                        Expr::Var(const_var),
-                        Expr::Lit(Literal::Int(i as i64)),
-                    ]));
-
-                    facts.push(Fact::Eq(vec![
-                        Expr::Var(child_trm),
-                        Expr::Call(
-                            "GetChild__".into(),
-                            vec![Expr::Var(rep_trm), Expr::Var(const_var)],
-                        ),
-                    ]));
+                    actions.push(NormAction::LetLit(
+                        const_var,
+                        Literal::Int(i as i64),
+                    ));
+                    actions.push(NormAction::Let(child_trm, 
+                        NormExpr::Call("GetChild__".into(), vec![rep_trm, const_var]),
+                    ));
                     info.var_term.insert(*child, child_trm);
                 }
             }
@@ -326,7 +313,7 @@ fn instrument_facts(
         }
     }
 
-    (info, facts)
+    info
 }
 
 fn make_declare_proof(
@@ -610,7 +597,7 @@ fn replace_rule_proof(actions: &[NormAction], rule_proof: Symbol) -> Vec<NormAct
 
 fn instrument_rule(rule: &NormRule, rule_name: Symbol, proof_state: &mut ProofState) -> Rule {
     let mut actions = vec![];
-    let (info, facts) = instrument_facts(&rule.body, proof_state, &mut actions);
+    let info = instrument_facts(&rule.body, proof_state, &mut actions);
     let rule_proof = add_rule_proof(rule_name, &info, &rule.body, &mut actions, proof_state);
 
     let rule_proof_ast = proof_state.get_fresh();
@@ -633,12 +620,10 @@ fn instrument_rule(rule: &NormRule, rule_name: Symbol, proof_state: &mut ProofSt
         add_action_proof(&mut proof_info, action, &mut actions, proof_state);
     }
 
-    // res.head.extend();
-    let res = Rule {
-        head: actions.iter().map(|a| a.to_action()).collect(),
-        body: facts,
-    };
-    res
+    NormRule {
+        head: actions,
+        body: rule.body.clone(),
+    }.to_rule()
 }
 fn make_rep_function(proof_state: &mut ProofState, expr: &NormExpr) -> FunctionDecl {
     let types = proof_state
@@ -948,7 +933,7 @@ pub(crate) fn add_proofs(program: Vec<NormCommand>, desugar: Desugar) -> Vec<Com
                 res.push(Command::Action(action.to_action()));
                 res.extend(proof_original_action(action, &mut proof_state));
             }
-            NCommand::Check(facts) => {
+            NCommand::Check(_facts) => {
                 res.push(command.to_command());
             }
             NCommand::RunSchedule(schedule) => {
