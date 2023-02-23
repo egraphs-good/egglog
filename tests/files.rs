@@ -32,8 +32,6 @@ fn run(path: &str) {
             program_str
         ),
     );
-
-    Ok(())
 }
 
 // include the tests generated from the build script

@@ -107,6 +107,7 @@ impl NCommand {
             }
             NCommand::AddRuleset(name) => Command::AddRuleset(*name),
             NCommand::NormRule(name, rule) => Command::Rule(*name, rule.to_rule()),
+            NCommand::RunSchedule(schedule) => Command::RunSchedule(schedule.clone()),
             NCommand::NormAction(action) => Command::Action(action.to_action()),
             NCommand::Run(NormRunConfig {
                 ruleset,
@@ -155,6 +156,7 @@ impl NCommand {
                 NCommand::Declare(*name, *parent_type, cost.clone())
             }
             NCommand::AddRuleset(name) => NCommand::AddRuleset(*name),
+            NCommand::RunSchedule(schedule) => NCommand::RunSchedule(schedule.clone()),
             NCommand::NormRule(name, rule) => NCommand::NormRule(*name, rule.map_exprs(f)),
             NCommand::NormAction(action) => NCommand::NormAction(action.map_exprs(f)),
             NCommand::Run(config) => NCommand::Run(config.clone()),
@@ -181,6 +183,44 @@ impl NCommand {
                 file: file.clone(),
             },
         }
+    }
+}
+
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Schedule {
+    Saturate(Box<Schedule>),
+    Repeat(usize, Box<Schedule>),
+    Ruleset(Symbol),
+    Sequence(Vec<Schedule>),
+}
+
+impl Schedule {
+    fn to_sexp(&self) -> Sexp {
+        match self {
+            Schedule::Saturate(sched) => {
+                Sexp::List(vec![Sexp::String("saturate".into()), sched.to_sexp()])
+            }
+            Schedule::Repeat(size, sched) => Sexp::List(vec![
+                Sexp::String("repeat".into()),
+                Sexp::String(size.to_string()),
+                sched.to_sexp(),
+            ]),
+            Schedule::Ruleset(sym) => Sexp::String(sym.to_string()),
+            Schedule::Sequence(scheds) => {
+                let mut sexps = vec![Sexp::String("seq".into())];
+                for sched in scheds {
+                    sexps.push(sched.to_sexp());
+                }
+                Sexp::List(sexps)
+            }
+        }
+    }
+}
+
+impl Display for Schedule {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_sexp())
     }
 }
 

@@ -494,8 +494,8 @@ impl EGraph {
         }
     }
 
-    pub fn run_rules(&mut self, config: &RunConfig) -> [Duration; 3] {
-        let RunConfig {
+    pub fn run_rules(&mut self, config: &NormRunConfig) -> [Duration; 3] {
+        let NormRunConfig {
             ruleset,
             limit,
             until,
@@ -765,7 +765,7 @@ impl EGraph {
         };
     }
 
-    fn check_facts(&mut self, facts: &Vec<NormFact>) -> Result<(), Error> {
+    fn check_facts(&mut self, facts: &[NormFact]) -> Result<(), Error> {
         let mut ctx = typecheck::Context::new(self);
         let converted_facts = facts.iter().map(|f| f.to_fact()).collect::<Vec<Fact>>();
         let empty_actions = vec![];
@@ -783,7 +783,7 @@ impl EGraph {
         });
         if !matched {
             // TODO add useful info here
-            Err(Error::CheckError(facts.clone()))
+            Err(Error::CheckError(facts.to_vec()))
         } else {
             Ok(())
         }
@@ -800,7 +800,7 @@ impl EGraph {
         }
         Ok(match command {
             // Sorts are already declared during typechecking
-            NCommand::Sort(name, presort_and_args) => format!("Declared sort {}.", name),
+            NCommand::Sort(name, _presort_and_args) => format!("Declared sort {}.", name),
             NCommand::Function(fdecl) => {
                 self.declare_function(&fdecl, false)?;
                 format!("Declared function {}.", fdecl.name)
