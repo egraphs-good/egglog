@@ -44,7 +44,7 @@ Command: Command = {
         <merge:(":merge" <Expr>)?> <default:(":default" <Expr>)?> ")" => {
         Command::Function(FunctionDecl { name, schema, merge, merge_action: merge_action.unwrap_or_default(), default, cost })
     },
-    "(" "declare" <name:Ident> <var_type:Ident> ")" => Command::Declare(name, var_type),
+    "(" "declare" <name:Ident> <var_type:Ident> <cost:Cost> ")" => Command::Declare(name, var_type, cost),
     "(" "relation" <name:Ident> <types:List<Type>> ")" => Command::Function(FunctionDecl::relation(name, types)),
     "(" "ruleset" <name:Ident> ")" => Command::AddRuleset(name),
     "(" "rule" <body:List<Fact>> <head:List<Action>> <ruleset:(":ruleset" <Ident>)?> ")" => Command::Rule(ruleset.unwrap_or("".into()), Rule { head, body }),

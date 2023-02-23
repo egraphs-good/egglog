@@ -70,7 +70,7 @@ pub enum NCommand {
     Sort(Symbol, Option<(Symbol, Vec<Expr>)>),
     Function(FunctionDecl),
     // Declare a variable with a given name and type
-    Declare(Symbol, Symbol),
+    Declare(Symbol, Symbol, Option<usize>),
     AddRuleset(Symbol),
     NormRule(Symbol, NormRule),
     NormAction(NormAction),
@@ -101,7 +101,7 @@ impl NCommand {
         match self {
             NCommand::Sort(name, params) => Command::Sort(*name, params.clone()),
             NCommand::Function(f) => Command::Function(f.clone()),
-            NCommand::Declare(name, parent_type) => Command::Declare(*name, *parent_type),
+            NCommand::Declare(name, parent_type, cost) => Command::Declare(*name, *parent_type, cost.clone()),
             NCommand::AddRuleset(name) => Command::AddRuleset(*name),
             NCommand::NormRule(name, rule) => Command::Rule(*name, rule.to_rule()),
             NCommand::NormAction(action) => Command::Action(action.to_action()),
@@ -148,7 +148,7 @@ impl NCommand {
         match self {
             NCommand::Sort(name, params) => NCommand::Sort(*name, params.clone()),
             NCommand::Function(f) => NCommand::Function(f.clone()),
-            NCommand::Declare(name, parent_type) => NCommand::Declare(*name, *parent_type),
+            NCommand::Declare(name, parent_type, cost) => NCommand::Declare(*name, *parent_type, cost.clone()),
             NCommand::AddRuleset(name) => NCommand::AddRuleset(*name),
             NCommand::NormRule(name, rule) => NCommand::NormRule(*name, rule.map_exprs(f)),
             NCommand::NormAction(action) => NCommand::NormAction(action.map_exprs(f)),
@@ -188,7 +188,7 @@ pub enum Command {
     },
     Sort(Symbol, Option<(Symbol, Vec<Expr>)>),
     Function(FunctionDecl),
-    Declare(Symbol, Symbol),
+    Declare(Symbol, Symbol, Option<usize>),
     Define {
         name: Symbol,
         expr: Expr,
@@ -241,11 +241,22 @@ impl Command {
                 res.extend(variants.iter().map(|v| v.to_sexp()));
                 Sexp::List(res)
             }
-            Command::Declare(name, parent_type) => Sexp::List(vec![
+            Command::Declare(name, parent_type, cost) => Sexp::List(vec![
                 Sexp::String("declare".into()),
                 Sexp::String(name.to_string()),
                 Sexp::String(parent_type.to_string()),
-            ]),
+            ].into_iter()
+             .chain(
+                if let Some(c) = cost {
+                    vec![
+                        ":cost".into(),
+                        Sexp::String(c.to_string()),
+                    ]
+                } else {
+                    vec![]
+                }
+             ).collect()
+        ),
             Command::Action(a) => a.to_sexp(),
             Command::Sort(name, None) => Sexp::List(vec![
                 Sexp::String("sort".into()),

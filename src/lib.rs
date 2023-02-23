@@ -748,7 +748,7 @@ impl EGraph {
                 self.declare_function(&fdecl, false)?;
                 format!("Declared function {}.", fdecl.name)
             }
-            NCommand::Declare(name, sort) => {
+            NCommand::Declare(name, sort, cost) => {
                 self.declare_function(
                     &FunctionDecl {
                         name,
@@ -759,7 +759,7 @@ impl EGraph {
                         default: None,
                         merge: None,
                         merge_action: vec![],
-                        cost: None,
+                        cost,
                     },
                     true,
                 )?;
@@ -819,6 +819,7 @@ impl EGraph {
                         println!("\nVariants of {expr}:{line}{v_exprs}");
                         write!(msg, "\nVariants of {expr}:{line}{v_exprs}").unwrap();
                     }
+                    println!("{}", msg);
                     msg
                 } else {
                     "Skipping extraction.".into()
@@ -1164,23 +1165,32 @@ impl EGraph {
         };
 
         
-        let header_desugared = desugar_commands(header.clone(), &mut desugar)?;
-        let program_desugared = desugar_commands(parsed, &mut desugar)?;
+        let header_desugared = desugar_commands(header.clone(), &mut desugar, false)?;
+        let program_desugared = desugar_commands(parsed, &mut desugar, true)?;
 
         desugar.egraph.type_info.typecheck_program(&header_desugared.iter().cloned().chain(program_desugared.iter().cloned()).collect())?;
 
         let program = 
         if should_add_proofs {
+            // proofs require type info, so
+            // we need to pass in the desugar
             let proofs = add_proofs(program_desugared, desugar);
             let with_header = header.into_iter().chain(proofs.into_iter()).collect();
-            //println!("{}", ListDisplay(program.clone(), "\n"));
-            let (final_desugared, _desugar2) = desugar_program(self, with_header)?;
+            
+            let (final_desugared, _desugar2) = desugar_program(self, with_header, false)?;
+
+
+            println!("{}", ListDisplay(&final_desugared, "\n"));
             self.type_info = TypeInfo::new();
             self.type_info.typecheck_program(&final_desugared)?;
             final_desugared
         } else {
             program_desugared
         };
+
+        //println!("{}", ListDisplay(&final_desugared, "\n"));
+
+        
 
         self.run_program(program)
     }

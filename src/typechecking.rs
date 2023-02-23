@@ -152,7 +152,7 @@ impl TypeInfo {
                     return Err(TypeError::FunctionAlreadyBound(fdecl.name));
                 }
             }
-            NCommand::Declare(name, parent) => {
+            NCommand::Declare(name, parent, _cost) => {
                 if let Some(parent_type) = self.sorts.get(parent) {
                     if self
                         .global_types
@@ -332,14 +332,14 @@ impl TypeInfo {
         is_global: bool,
     ) -> Result<(), TypeError> {
         if is_global {
-            if let Some(existing) = self.global_types.insert(var, sort) {
+            if let Some(_existing) = self.global_types.insert(var, sort) {
                 return Err(TypeError::GlobalAlreadyBound(var));
             }
-        } else if let Some(existing) = self.local_types.get_mut(&ctx).unwrap().insert(var, sort) {
-            return Err(TypeError::LocalAlreadyBound(var, existing));
+        } else if let Some(existing) = self.local_types.get_mut(&ctx).unwrap().insert(var, sort.clone()) {
+            return Err(TypeError::LocalAlreadyBound(var, existing, sort));
         }
 
-        return Ok(());
+        Ok(())
     }
 
     fn typecheck_action(
@@ -478,7 +478,7 @@ impl TypeInfo {
             .insert(sym, sym_type.clone())
         {
             if existing.name() != sym_type.name() {
-                return Err(TypeError::LocalAlreadyBound(sym, existing));
+                return Err(TypeError::LocalAlreadyBound(sym, existing, sym_type));
             }
         }
         Ok(())
@@ -567,8 +567,8 @@ pub enum TypeError {
     SortAfterPush(Symbol),
     #[error("Global already bound {0}")]
     GlobalAlreadyBound(Symbol),
-    #[error("Local already bound {0} with type {}", .1.name())]
-    LocalAlreadyBound(Symbol, ArcSort),
+    #[error("Local already bound {0} with type {}. Got: {}", .1.name(), .2.name())]
+    LocalAlreadyBound(Symbol, ArcSort, ArcSort),
     #[error("Sort {0} already declared.")]
     SortAlreadyBound(Symbol),
     #[error("Primitive {0} already declared.")]

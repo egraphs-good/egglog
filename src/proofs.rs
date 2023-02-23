@@ -343,7 +343,8 @@ fn make_declare_proof(
     proof_state.global_var_ast.insert(name, term);
     proof_state.global_var_proof.insert(name, proof);
     vec![
-        Command::Declare(term, "Ast__".into()),
+        // TODO using high cost big const number
+        Command::Declare(term, "Ast__".into(), Some(1000000)),
         Command::Action(Action::Let(
             proof,
             Expr::Call("Original__".into(), vec![Expr::Var(term)]),
@@ -567,6 +568,13 @@ fn add_rule_proof(
                         ],
                     ),
                 ));
+
+                let fresh = proof_state.get_fresh();
+                res.push(NormAction::Let(
+                    fresh,
+                    NormExpr::Call("Cons__".into(), vec![pfresh, current_proof]),
+                ));
+                current_proof = fresh;
             }
         }
     }
@@ -597,7 +605,7 @@ fn replace_rule_proof(actions: &[NormAction], rule_proof: Symbol) -> Vec<NormAct
 
 fn instrument_rule(rule: &NormRule, rule_name: Symbol, proof_state: &mut ProofState) -> Rule {
     let mut actions = vec![];
-    let (mut info, facts) = instrument_facts(&rule.body, proof_state, &mut actions);
+    let (info, facts) = instrument_facts(&rule.body, proof_state, &mut actions);
     let rule_proof = add_rule_proof(rule_name, &info, &rule.body, &mut actions, proof_state);
 
     let rule_proof_ast = 
@@ -887,7 +895,7 @@ pub(crate) fn add_proofs(program: Vec<NormCommand>, desugar: Desugar) -> Vec<Com
             NCommand::Function(_fdecl) => {
                 res.push(command.to_command());
             }
-            NCommand::Declare(name, sort) => {
+            NCommand::Declare(name, sort, cost) => {
                 res.extend(make_declare_proof(*name, *sort, &mut proof_state));
                 res.push(command.to_command());
             }
