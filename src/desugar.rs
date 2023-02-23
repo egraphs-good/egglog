@@ -461,7 +461,7 @@ pub(crate) fn desugar_command(
             vec![NCommand::Pop(num)]
         }
         Command::Fail(cmd) => {
-            let mut desugared = desugar_command(*cmd, desugar, get_all_proofs)?;
+            let mut desugared = desugar_command(*cmd, desugar, false)?;
 
             let last = desugared.pop().unwrap();
             desugared.push(NormCommand {

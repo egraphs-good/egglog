@@ -1150,6 +1150,8 @@ impl EGraph {
         input: &str,
         is_parenthesized: bool,
     ) -> Result<Vec<String>, Error> {
+        let get_all_proofs = true;
+
         let parsed = self.parse_program(input, is_parenthesized)?;
         let should_add_proofs = should_add_proofs(&parsed);
         let header = self.get_proof_header(&parsed);
@@ -1163,7 +1165,7 @@ impl EGraph {
         };
 
         let header_desugared = desugar_commands(header.clone(), &mut desugar, false)?;
-        let program_desugared = desugar_commands(parsed, &mut desugar, true)?;
+        let program_desugared = desugar_commands(parsed, &mut desugar, get_all_proofs)?;
 
         desugar.egraph.type_info.typecheck_program(
             &header_desugared
@@ -1181,7 +1183,7 @@ impl EGraph {
 
             let (final_desugared, _desugar2) = desugar_program(self, with_header, false)?;
 
-            //println!("{}", ListDisplay(&final_desugared, "\n"));
+            println!("{}", ListDisplay(&final_desugared, "\n"));
             self.type_info = TypeInfo::new();
             self.type_info.typecheck_program(&final_desugared)?;
             final_desugared
