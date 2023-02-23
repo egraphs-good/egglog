@@ -1,5 +1,6 @@
 use crate::ast::*;
 use crate::Symbol;
+use crate::Schedule;
 use ordered_float::OrderedFloat;
 
 grammar;
@@ -67,6 +68,7 @@ Command: Command = {
     "(" "calc" "(" <idents:IdentSort*> ")" <exprs:Expr+> ")" => Command::Calc(idents, exprs),
     "(" "extract" <variants:(":variants" <UNum>)?> <e:Expr> ")" => Command::Extract { e, variants: variants.unwrap_or(0) },
     "(" "check" <(Fact)*> ")" => Command::Check(<>),
+    "(" "run-schedule" <Schedule*> ")" => Command::RunSchedule(Schedule::Sequence(<>)),
     "(" "push" <UNum?> ")" => Command::Push(<>.unwrap_or(1)),
     "(" "pop" <UNum?> ")" => Command::Pop(<>.unwrap_or(1)),
     "(" "print" <sym:Ident> <n:UNum?> ")" => Command::Print(sym, n.unwrap_or(10)),
@@ -75,6 +77,13 @@ Command: Command = {
     "(" "output" <file:String> <exprs:Expr+> ")" => Command::Output { file, exprs },
     "(" "fail" <Command> ")" => Command::Fail(Box::new(<>)),
     "(" "include" <file:String> ")" => Command::Include(file),
+}
+
+Schedule: Schedule = {
+    "(" "saturate" <Schedule*> ")" => Schedule::Saturate(Box::new(Schedule::Sequence(<>))),
+    "(" "seq" <Schedule*> ")" => Schedule::Sequence(<>),
+    "(" "repeat" <limit:UNum> <scheds:Schedule*> ")" => Schedule::Repeat(limit, Box::new(Schedule::Sequence(scheds))),
+    <sym:Ident> => Schedule::Ruleset(sym),
 }
 
 Cost: Option<usize> = {
@@ -141,7 +150,8 @@ UNum: usize = {
 }
 F64: OrderedFloat<f64> = <s:r"(-)?[0-9]+\.[0-9]+(e(-)?[0-9]+)?"> => OrderedFloat::<f64>(s.parse().unwrap());
 Ident: Symbol = <s:r"(([[:alpha:]][\w-]*)|([-+*/!=<>&|^/%_]))+"> => s.parse().unwrap();
-SymString: Symbol = <r#"("[^"]*")+"#> => Symbol::from(<>);
+SymString: Symbol = <String> => Symbol::from(<>);
+
 String: String = <r#"("[^"]*")+"#> => {
     let string: &str = <>;
     let first_last_off: &str = &string[1..string.len() - 1];

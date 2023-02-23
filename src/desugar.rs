@@ -387,6 +387,7 @@ pub(crate) fn desugar_command(
                 .collect()
         }
         Command::Calc(idents, exprs) => vec![NCommand::Calc(idents, exprs)],
+        Command::RunSchedule(sched) => vec![NormCommand::RunSchedule(sched)],
         Command::Extract { variants, e } => {
             let fresh = (desugar.get_fresh)();
             flatten_actions(&vec![Action::Let(fresh, e)], desugar, true)

@@ -4,5 +4,10 @@
 
 (define two (S (S Zero)))
 
+<<<<<<< HEAD
 (union two (S (S (S Zero))))
 (check (= two (S (S (S Zero)))))
+=======
+(union (two) (S (S (S (Zero)))))
+(check (= (two) (S (S (S (Zero))))))
+>>>>>>> mwillsey/main
