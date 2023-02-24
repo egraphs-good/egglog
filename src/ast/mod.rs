@@ -78,8 +78,7 @@ pub enum NCommand {
         rule: NormRule,
     },
     NormAction(NormAction),
-    Run(NormRunConfig),
-    RunSchedule(Schedule),
+    RunSchedule(NormSchedule),
     Simplify {
         var: Symbol,
         config: NormRunConfig,
@@ -129,19 +128,8 @@ impl NCommand {
                 ruleset: *ruleset,
                 rule: rule.to_rule(),
             },
-            NCommand::RunSchedule(schedule) => Command::RunSchedule(schedule.clone()),
+            NCommand::RunSchedule(schedule) => Command::RunSchedule(schedule.to_schedule()),
             NCommand::NormAction(action) => Command::Action(action.to_action()),
-            NCommand::Run(NormRunConfig {
-                ruleset,
-                limit,
-                until,
-            }) => Command::Run(RunConfig {
-                ruleset: *ruleset,
-                limit: *limit,
-                until: until
-                    .as_ref()
-                    .map(|facts| facts.iter().map(|fact| fact.to_fact()).collect()),
-            }),
             NCommand::Simplify { var, config } => Command::Simplify {
                 expr: Expr::Var(*var),
                 config: config.to_run_config(),
@@ -188,7 +176,6 @@ impl NCommand {
                 rule: rule.map_exprs(f),
             },
             NCommand::NormAction(action) => NCommand::NormAction(action.map_exprs(f)),
-            NCommand::Run(config) => NCommand::Run(config.clone()),
             NCommand::Simplify { .. } => self.clone(),
             NCommand::Extract { variants, var } => NCommand::Extract {
                 variants: *variants,
@@ -218,8 +205,31 @@ impl NCommand {
 pub enum Schedule {
     Saturate(Box<Schedule>),
     Repeat(usize, Box<Schedule>),
-    Ruleset(Symbol),
+    Run(RunConfig),
     Sequence(Vec<Schedule>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum NormSchedule {
+    Saturate(Box<NormSchedule>),
+    Repeat(usize, Box<NormSchedule>),
+    Run(NormRunConfig),
+    Sequence(Vec<NormSchedule>),
+}
+
+impl NormSchedule {
+    fn to_schedule(&self) -> Schedule {
+        match self {
+            NormSchedule::Saturate(sched) => Schedule::Saturate(Box::new(sched.to_schedule())),
+            NormSchedule::Repeat(size, sched) => {
+                Schedule::Repeat(*size, Box::new(sched.to_schedule()))
+            }
+            NormSchedule::Run(config) => Schedule::Run(config.to_run_config()),
+            NormSchedule::Sequence(scheds) => {
+                Schedule::Sequence(scheds.iter().map(|sched| sched.to_schedule()).collect())
+            }
+        }
+    }
 }
 
 impl Schedule {
@@ -233,7 +243,7 @@ impl Schedule {
                 Sexp::String(size.to_string()),
                 sched.to_sexp(),
             ]),
-            Schedule::Ruleset(sym) => Sexp::String(sym.to_string()),
+            Schedule::Run(config) => config.to_sexp(),
             Schedule::Sequence(scheds) => {
                 let mut sexps = vec![Sexp::String("seq".into())];
                 for sched in scheds {
@@ -248,6 +258,12 @@ impl Schedule {
 impl Display for Schedule {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.to_sexp())
+    }
+}
+
+impl Display for NormSchedule {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_schedule())
     }
 }
 
@@ -370,19 +386,7 @@ impl Command {
 
                 Sexp::List(res)
             }
-            Command::Run(config) => {
-                let mut res = vec![Sexp::String("run".into())];
-                if config.ruleset != "".into() {
-                    res.push(Sexp::String(config.ruleset.to_string()));
-                }
-                res.push(Sexp::String(config.limit.to_string()));
-                if let Some(until) = &config.until {
-                    res.push(Sexp::String(":until".into()));
-                    res.extend(until.iter().map(|fact| fact.to_sexp()));
-                }
-
-                Sexp::List(res)
-            }
+            Command::Run(config) => config.to_sexp(),
             Command::RunSchedule(sched) => {
                 Sexp::List(vec![Sexp::String("run-schedule".into()), sched.to_sexp()])
             }
@@ -515,6 +519,22 @@ pub struct RunConfig {
     pub until: Option<Vec<Fact>>,
 }
 
+impl RunConfig {
+    fn to_sexp(&self) -> Sexp {
+        let mut res = vec![Sexp::String("run".into())];
+        if self.ruleset != "".into() {
+            res.push(Sexp::String(self.ruleset.to_string()));
+        }
+        res.push(Sexp::String(self.limit.to_string()));
+        if let Some(until) = &self.until {
+            res.push(Sexp::String(":until".into()));
+            res.extend(until.iter().map(|fact| fact.to_sexp()));
+        }
+
+        Sexp::List(res)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct NormRunConfig {
     pub ruleset: Symbol,
@@ -532,6 +552,10 @@ impl NormRunConfig {
                 .as_ref()
                 .map(|v| v.iter().map(|f| f.to_fact()).collect()),
         }
+    }
+
+    fn to_sexp(&self) -> Sexp {
+        self.to_run_config().to_sexp()
     }
 }
 

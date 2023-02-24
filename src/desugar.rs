@@ -93,20 +93,15 @@ fn desugar_birewrite(
         rhs: rewrite.lhs.clone(),
         conditions: rewrite.conditions.clone(),
     };
-    desugar_rewrite(
-        ruleset,
-        format!("{}=>", name).into(),
-        rewrite,
-        desugar,
-    )
-    .into_iter()
-    .chain(desugar_rewrite(
-        ruleset,
-        format!("{}<=", name).into(),
-        &rw2,
-        desugar,
-    ))
-    .collect()
+    desugar_rewrite(ruleset, format!("{}=>", name).into(), rewrite, desugar)
+        .into_iter()
+        .chain(desugar_rewrite(
+            ruleset,
+            format!("{}<=", name).into(),
+            &rw2,
+            desugar,
+        ))
+        .collect()
 }
 
 fn expr_to_ssa(lhs: Symbol, expr: &Expr, desugar: &mut Desugar, res: &mut Vec<NormFact>) {
@@ -319,6 +314,30 @@ fn flatten_rule(rule: Rule, desugar: &mut Desugar) -> NormRule {
     }
 }
 
+fn desugar_schedule(desugar: &mut Desugar, schedule: &Schedule) -> NormSchedule {
+    match schedule {
+        Schedule::Repeat(num, schedule) => {
+            let norm_schedule = desugar_schedule(desugar, schedule);
+            NormSchedule::Repeat(*num, Box::new(norm_schedule))
+        }
+        Schedule::Saturate(schedule) => {
+            let norm_schedule = desugar_schedule(desugar, schedule);
+            NormSchedule::Saturate(Box::new(norm_schedule))
+        }
+        Schedule::Run(run_config) => {
+            let norm_run_config = desugar_run_config(desugar, run_config);
+            NormSchedule::Run(norm_run_config)
+        }
+        Schedule::Sequence(schedules) => {
+            let norm_schedules = schedules
+                .iter()
+                .map(|schedule| desugar_schedule(desugar, schedule))
+                .collect();
+            NormSchedule::Sequence(norm_schedules)
+        }
+    }
+}
+
 fn desugar_run_config(desugar: &mut Desugar, run_config: &RunConfig) -> NormRunConfig {
     let RunConfig {
         ruleset,
@@ -373,7 +392,7 @@ pub(crate) fn desugar_calc(
             &mut actions,
             &mut desugar.define_memo,
         );
-        res.extend(actions.into_iter().map( NCommand::NormAction));
+        res.extend(actions.into_iter().map(NCommand::NormAction));
 
         res.extend(
             desugar_command(
@@ -390,8 +409,7 @@ pub(crate) fn desugar_calc(
             .map(|c| c.command),
         );
 
-        res.push(
-            NCommand::Check(vec![NormFact::ConstrainEq(v1, v2)]));
+        res.push(NCommand::Check(vec![NormFact::ConstrainEq(v1, v2)]));
 
         res.push(NCommand::Pop(1));
         desugar.define_memo.clear();
@@ -468,7 +486,9 @@ pub(crate) fn desugar_command(
             .map(NCommand::NormAction)
             .collect(),
         Command::Run(config) => {
-            vec![NCommand::Run(desugar_run_config(desugar, &config))]
+            vec![NCommand::RunSchedule(NormSchedule::Run(
+                desugar_run_config(desugar, &config),
+            ))]
         }
         Command::Simplify { expr, config } => {
             let fresh = (desugar.get_fresh)();
@@ -486,7 +506,7 @@ pub(crate) fn desugar_command(
         }
         Command::Calc(idents, exprs) => desugar_calc(desugar, idents, exprs),
         Command::RunSchedule(sched) => {
-            vec![NCommand::RunSchedule(sched)]
+            vec![NCommand::RunSchedule(desugar_schedule(desugar, &sched))]
         }
         Command::Extract { variants, e } => {
             let fresh = (desugar.get_fresh)();
@@ -536,18 +556,18 @@ pub(crate) fn desugar_command(
                 );
 
                 // now run the dummy rule and get the proof
-                res.push(NCommand::Run(NormRunConfig {
+                res.push(NCommand::RunSchedule(NormSchedule::Run(NormRunConfig {
                     ruleset,
                     limit: 1,
                     until: None,
-                }));
+                })));
 
                 // we need to run proof extraction rules again
-                res.push(NCommand::Run(NormRunConfig {
+                res.push(NCommand::RunSchedule(NormSchedule::Run(NormRunConfig {
                     ruleset: "proof-extract__".into(),
                     limit: 100,
                     until: None,
-                }));
+                })));
 
                 // extract the proof
                 res.push(NCommand::Extract {

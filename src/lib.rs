@@ -437,45 +437,39 @@ impl EGraph {
     }
 
     // returns whether the egraph was updated
-    pub fn run_schedule(&mut self, sched: &Schedule) -> bool {
+    pub fn run_schedule(&mut self, sched: &NormSchedule) -> bool {
         match sched {
-            Schedule::Ruleset(ruleset_name) => {
-                self.saturated = true;
-
-                let mut rules = HashMap::default();
-                rules.extend(self.rulesets.get(ruleset_name).unwrap().clone());
-                let mut searched = vec![];
-                for (&name, rule) in rules.iter_mut() {
-                    let mut all_values = vec![];
-                    self.run_query(&rule.query, rule.todo_timestamp, |values| {
-                        assert_eq!(values.len(), rule.query.vars.len());
-                        all_values.extend_from_slice(values);
-                        Ok(())
-                    });
-                    searched.push((name, all_values));
-                }
-
-                for (name, all_values) in searched {
-                    let rule = rules.get_mut(&name).unwrap();
-                    let n = rule.query.vars.len();
-                    let stack = &mut vec![];
-                    for values in all_values.chunks(n) {
-                        // we can ignore results here
-                        stack.clear();
-                        let _ = self.run_actions(stack, values, &rule.program, true);
-                    }
-                }
-                self.rebuild_nofail();
+            NormSchedule::Run(config) => {
+                let limit = config.limit;
+                let [st, at, rt] = self.run_rules(config);
+                let st = st.as_secs_f64();
+                let at = at.as_secs_f64();
+                let rt = rt.as_secs_f64();
+                let total = st + at + rt;
+                let size = self.num_tuples();
+                log::info!(
+                    "Ran {limit} in {total:10.6}s.\n\
+                    Search:  ({:.02}) {st:10.6}s\n\
+                    Apply:   ({:.02}) {at:10.6}s\n\
+                    Rebuild: ({:.02}) {rt:10.6}s\n\
+                    Database size: {size}",
+                    st / total,
+                    at / total,
+                    rt / total,
+                );
                 !self.saturated
             }
-            Schedule::Repeat(limit, sched) => {
+            NormSchedule::Repeat(limit, sched) => {
                 let mut updated = false;
                 for _ in 0..*limit {
                     updated |= self.run_schedule(sched);
+                    if !updated {
+                        break;
+                    }
                 }
                 updated
             }
-            Schedule::Saturate(sched) => {
+            NormSchedule::Saturate(sched) => {
                 let mut updated = false;
                 let mut still_updating = true;
                 while still_updating {
@@ -484,7 +478,7 @@ impl EGraph {
                 }
                 updated
             }
-            Schedule::Sequence(scheds) => {
+            NormSchedule::Sequence(scheds) => {
                 let mut updated = false;
                 for sched in scheds {
                     updated |= self.run_schedule(sched);
@@ -834,31 +828,6 @@ impl EGraph {
                 self.add_rule(rule.to_rule(), ruleset)?;
                 format!("Declared rule {name}.")
             }
-
-            NCommand::Run(config) => {
-                let limit = config.limit;
-                if should_run {
-                    let [st, at, rt] = self.run_rules(&config);
-                    let st = st.as_secs_f64();
-                    let at = at.as_secs_f64();
-                    let rt = rt.as_secs_f64();
-                    let total = st + at + rt;
-                    let size = self.num_tuples();
-                    format!(
-                        "Ran {limit} in {total:10.6}s.\n\
-                        Search:  ({:.02}) {st:10.6}s\n\
-                        Apply:   ({:.02}) {at:10.6}s\n\
-                        Rebuild: ({:.02}) {rt:10.6}s\n\
-                        Database size: {size}",
-                        st / total,
-                        at / total,
-                        rt / total,
-                    )
-                } else {
-                    log::info!("Skipping running!");
-                    format!("Skipped run {limit}.")
-                }
-            }
             NCommand::RunSchedule(sched) => {
                 if should_run {
                     self.run_schedule(&sched);
@@ -1139,7 +1108,7 @@ impl EGraph {
         Ok(program)
     }
 
-    pub fn get_proof_header(&self, program: &[Command]) -> Vec<Command> {
+    pub fn get_proof_header(&self, _program: &[Command]) -> Vec<Command> {
         proof_header(self)
     }
 
@@ -1185,15 +1154,13 @@ impl EGraph {
 
             let (final_desugared, _desugar2) = desugar_program(self, with_header, false)?;
 
-            
             self.type_info = TypeInfo::new();
             self.type_info.typecheck_program(&final_desugared)?;
             final_desugared
         } else {
             program_desugared
         };
-        println!("{}", ListDisplay(&program, "\n"));
-
+        //println!("{}", ListDisplay(&program, "\n"));
 
         self.run_program(program)
     }

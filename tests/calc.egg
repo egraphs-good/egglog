@@ -27,6 +27,3 @@
     (g* b (inv b))
     I
 )
-
-
-(rule () ((let l rule-proof)))

@@ -842,21 +842,24 @@ fn proof_original_action(action: &NormAction, proof_state: &mut ProofState) -> V
     }
 }
 
-fn instrument_schedule(proof_state: &ProofState, schedule: &Schedule) -> Schedule {
+fn instrument_schedule(proof_state: &ProofState, schedule: &NormSchedule) -> Schedule {
     match schedule {
-        Schedule::Saturate(schedule) => {
+        NormSchedule::Saturate(schedule) => {
             Schedule::Saturate(Box::new(instrument_schedule(proof_state, schedule)))
         }
-        Schedule::Repeat(times, schedule) => {
+        NormSchedule::Repeat(times, schedule) => {
             Schedule::Repeat(*times, Box::new(instrument_schedule(proof_state, schedule)))
         }
-        // We only do anything for the ruleset case
-        // Whenever we run a ruleset, first run the proof ruleset
-        Schedule::Ruleset(ruleset) => Schedule::Sequence(vec![
-            Schedule::Saturate(Box::new(Schedule::Ruleset("proofrules__".into()))),
-            Schedule::Ruleset(*ruleset),
+        // We only do anything in the run case
+        NormSchedule::Run(run_config) => Schedule::Sequence(vec![
+            Schedule::Saturate(Box::new(Schedule::Run(RunConfig {
+                ruleset: "proofrules__".into(),
+                until: None,
+                limit: 1,
+            }))),
+            Schedule::Run(run_config.to_run_config()),
         ]),
-        Schedule::Sequence(schedules) => Schedule::Sequence(
+        NormSchedule::Sequence(schedules) => Schedule::Sequence(
             schedules
                 .iter()
                 .map(|s| instrument_schedule(proof_state, s))
@@ -934,9 +937,6 @@ pub(crate) fn add_proofs(program: Vec<NormCommand>, desugar: Desugar) -> Vec<Com
                     name: *name,
                     rule: instrument_rule(rule, *name, &mut proof_state),
                 });
-            }
-            NCommand::Run(config) => {
-                res.extend(make_runner(config));
             }
             NCommand::NormAction(action) => {
                 res.push(Command::Action(action.to_action()));
