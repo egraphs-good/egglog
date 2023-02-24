@@ -69,16 +69,29 @@
 
 ;; start term, end term, current progress term, proof
 (function ProofBetween__ (Ast__ Ast__ Ast__) ProofList__ :cost 100000 :merge old)
+(function ProofCost__ (Ast__ Ast__) i64 :merge (min old new))
+
 
 ;; start proof search for equalities
 (rule ((= e (DemandEq__ t1 t2)))
-      ((set (ProofBetween__ t1 t2 t1) Null__))
+      ((set (ProofBetween__ t1 t2 t1) Null__)
+       (set (ProofCost__ t1 t1) 0))
       :ruleset proof-extract__)
-;; do one step of proof search to find a path
+;; demand for proof cost
 (rule ((= proof (ProofBetween__ t1 t2 tmid))
        (= eproof (EqGraph__ tmid next)))
+      ((set (ProofCost__ t1 next)
+            100000000)))
+;; do one step of proof search to find a path
+(rule ((= proof (ProofBetween__ t1 t2 tmid))
+       (= eproof (EqGraph__ tmid next))
+       (< (+ (ProofCost__ t1 tmid) 1) ;; TODO will this desugar into a super inefficient query? I think it enumerates all ProofCost__ a b tuples.
+          (ProofCost__ t1 next)))
       ((set (ProofBetween__ t1 t2 next)
-            (Cons__ eproof proof)))
+            (Cons__ eproof proof))
+       (set (ProofCost__ t1 next)
+            (+ (ProofCost__ t1 tmid) 1))      
+      )
       :ruleset proof-extract__)
 ;; when you find a path, union it with the equality proof
 (rule ((= e (DemandEq__ t1 t2))

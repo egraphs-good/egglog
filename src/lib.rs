@@ -1155,7 +1155,7 @@ impl EGraph {
         } else {
             program_desugared
         };
-        //println!("{}", ListDisplay(&program, "\n"));
+        println!("{}", ListDisplay(&program, "\n"));
 
         self.run_program(program)
     }
