@@ -54,7 +54,6 @@ pub trait PrimitiveLike {
     fn name(&self) -> Symbol;
     fn accept(&self, types: &[ArcSort]) -> Option<ArcSort>;
     fn apply(&self, values: &[Value]) -> Option<Value>;
-    fn get_type(&self) -> (Vec<ArcSort>, ArcSort);
 }
 
 #[derive(Clone)]
@@ -121,10 +120,6 @@ impl PrimitiveLike for SimplePrimitive {
     }
     fn apply(&self, values: &[Value]) -> Option<Value> {
         (self.f)(values)
-    }
-
-    fn get_type(&self) -> (Vec<ArcSort>, ArcSort) {
-        (self.input.clone(), self.output.clone())
     }
 }
 

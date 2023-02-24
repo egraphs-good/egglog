@@ -116,7 +116,7 @@ impl NCommand {
             NCommand::Sort(name, params) => Command::Sort(*name, params.clone()),
             NCommand::Function(f) => Command::Function(f.clone()),
             NCommand::Declare(name, parent_type, cost) => {
-                Command::Declare(*name, *parent_type, cost.clone())
+                Command::Declare(*name, *parent_type, *cost)
             }
             NCommand::AddRuleset(name) => Command::AddRuleset(*name),
             NCommand::NormRule {
@@ -535,6 +535,7 @@ impl RunConfig {
     }
 }
 
+// TODO get rid of limit, just use Repeat
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct NormRunConfig {
     pub ruleset: Symbol,
@@ -545,17 +546,13 @@ pub struct NormRunConfig {
 impl NormRunConfig {
     pub fn to_run_config(&self) -> RunConfig {
         RunConfig {
-            ruleset: self.ruleset.clone(),
+            ruleset: self.ruleset,
             limit: self.limit,
             until: self
                 .until
                 .as_ref()
                 .map(|v| v.iter().map(|f| f.to_fact()).collect()),
         }
-    }
-
-    fn to_sexp(&self) -> Sexp {
-        self.to_run_config().to_sexp()
     }
 }
 
@@ -730,7 +727,7 @@ impl Fact {
         }
     }
 
-    pub(crate) fn map_exprs(&self, f: &mut impl FnMut(&Expr) -> Expr) -> Fact {
+    pub fn map_exprs(&self, f: &mut impl FnMut(&Expr) -> Expr) -> Fact {
         match self {
             Fact::Eq(exprs) => Fact::Eq(exprs.iter().map(f).collect()),
             Fact::Fact(expr) => Fact::Fact(f(expr)),
@@ -863,7 +860,7 @@ impl Action {
         }
     }
 
-    pub(crate) fn map_exprs(&self, f: &mut impl FnMut(&Expr) -> Expr) -> Self {
+    pub fn map_exprs(&self, f: &mut impl FnMut(&Expr) -> Expr) -> Self {
         match self {
             Action::Let(lhs, rhs) => Action::Let(*lhs, f(rhs)),
             Action::Set(lhs, args, rhs) => {
@@ -970,7 +967,7 @@ impl Rule {
         Sexp::List(res)
     }
 
-    pub(crate) fn map_exprs(&self, f: &mut impl FnMut(&Expr) -> Expr) -> Self {
+    pub fn map_exprs(&self, f: &mut impl FnMut(&Expr) -> Expr) -> Self {
         Rule {
             head: self.head.iter().map(|a| a.map_exprs(f)).collect(),
             body: self.body.iter().map(|fact| fact.map_exprs(f)).collect(),

@@ -1,6 +1,6 @@
 use clap::Parser;
 use egg_smol::EGraph;
-use std::io::{self, BufRead, Read};
+use std::io::{self, Read};
 use std::path::PathBuf;
 
 #[derive(Debug, Parser)]

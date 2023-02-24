@@ -15,11 +15,6 @@ macro_rules! unpack {
     };
 }
 
-macro_rules! count {
-    () => (0usize);
-    ( $x:tt $($xs:tt)* ) => (1usize + count!($($xs)*));
-}
-
 #[macro_export]
 macro_rules! add_primitives {
     // ($egraph:expr, $($rest:tt)*) => {
@@ -70,10 +65,6 @@ macro_rules! add_primitives {
                     } else {
                         panic!()
                     }
-                }
-
-                fn get_type(&self) -> (Vec<ArcSort>, ArcSort) {
-                    (vec![$(self.$param.clone()),*], self.__out.clone())
                 }
             }
             type_info.add_primitive($crate::Primitive::from(MyPrim {

@@ -58,9 +58,4 @@ impl PrimitiveLike for NotEqualPrimitive {
     fn apply(&self, values: &[Value]) -> Option<Value> {
         (values[0] != values[1]).then(Value::unit)
     }
-
-    // TODO will this cause problems with proofs?
-    fn get_type(&self) -> (Vec<ArcSort>, ArcSort) {
-        (vec![], Arc::new(UnitSort::new("Unit".into())))
-    }
 }

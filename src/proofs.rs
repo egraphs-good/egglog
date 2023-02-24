@@ -80,27 +80,6 @@ fn make_rep_primitive_sorts(type_info: &TypeInfo) -> Vec<Command> {
         .collect()
 }
 
-/*
-fn make_ast_primitives_funcs(proof_state: &ProofState) -> Vec<Command> {
-    let mut res = vec![];
-    for (name, primitives) in &proof_state.desugar.egraph.type_info.primitives {
-        for prim in primitives {
-            res.push(Command::Function(FunctionDecl {
-                name: make_ast_version(proof_state, *name, prim_input_types(prim)),
-                schema: Schema {
-                    input: vec!["Ast__".into(); prim.get_type().0.len()],
-                    output: "Ast__".into(),
-                },
-                merge: None,
-                merge_action: vec![],
-                default: None,
-                cost: None,
-            }));
-        }
-    }
-    res
-}*/
-
 fn make_ast_primitives_sorts(type_info: &TypeInfo) -> Vec<Command> {
     type_info
         .sorts
@@ -265,7 +244,7 @@ fn instrument_facts(
                     NormExpr::Call("PrfOf__".into(), vec![rep]),
                 ));
 
-                info.var_term.insert(*lhs, rep_trm).is_none();
+                info.var_term.insert(*lhs, rep_trm);
                 assert!(info.var_proof.insert(*lhs, rep_prf).is_none());
 
                 for (i, child) in body.iter().enumerate() {
@@ -332,7 +311,6 @@ fn make_declare_proof(
     let proof = proof_state.get_fresh();
 
     proof_state.global_var_ast.insert(name, term);
-    proof_state.global_var_proof.insert(name, proof);
     vec![
         // TODO using high cost big const number
         Command::Declare(term, "Ast__".into(), Some(1000000)),
@@ -360,15 +338,6 @@ fn get_var_term_option(
 
 fn get_var_term(var: Symbol, proof_state: &ProofState, proof_info: &ProofInfo) -> Symbol {
     get_var_term_option(var, proof_state, proof_info).unwrap()
-}
-
-fn get_var_proof(var: Symbol, proof_state: &ProofState, proof_info: &ProofInfo) -> Symbol {
-    proof_info
-        .var_proof
-        .get(&var)
-        .or_else(|| proof_state.global_var_proof.get(&var))
-        .cloned()
-        .unwrap()
 }
 
 fn add_eqgraph_equality(
@@ -685,31 +654,8 @@ fn make_getchild_rule(proof_state: &mut ProofState, expr: &NormExpr) -> Command 
     }
 }
 
-fn make_runner(config: &NormRunConfig) -> Vec<Command> {
-    let mut res = vec![];
-    let run_proof_rules = Command::Run(RunConfig {
-        ruleset: "proofrules__".into(),
-        limit: 100,
-        until: None,
-    });
-    for _i in 0..config.limit {
-        res.push(run_proof_rules.clone());
-        res.push(Command::Run(RunConfig {
-            ruleset: config.ruleset,
-            limit: 1,
-            until: config
-                .until
-                .clone()
-                .map(|inner| inner.iter().map(|s| s.to_fact()).collect()),
-        }));
-    }
-    res.push(run_proof_rules);
-    res
-}
-
 pub(crate) struct ProofState<'a> {
     pub(crate) global_var_ast: HashMap<Symbol, Symbol>,
-    pub(crate) global_var_proof: HashMap<Symbol, Symbol>,
     pub(crate) ast_funcs_created: HashSet<Symbol>,
     pub(crate) current_ctx: CommandId,
     pub(crate) desugar: Desugar<'a>,
@@ -842,13 +788,13 @@ fn proof_original_action(action: &NormAction, proof_state: &mut ProofState) -> V
     }
 }
 
-fn instrument_schedule(proof_state: &ProofState, schedule: &NormSchedule) -> Schedule {
+fn instrument_schedule(schedule: &NormSchedule) -> Schedule {
     match schedule {
         NormSchedule::Saturate(schedule) => {
-            Schedule::Saturate(Box::new(instrument_schedule(proof_state, schedule)))
+            Schedule::Saturate(Box::new(instrument_schedule(schedule)))
         }
         NormSchedule::Repeat(times, schedule) => {
-            Schedule::Repeat(*times, Box::new(instrument_schedule(proof_state, schedule)))
+            Schedule::Repeat(*times, Box::new(instrument_schedule(schedule)))
         }
         // We only do anything in the run case
         NormSchedule::Run(run_config) => Schedule::Sequence(vec![
@@ -859,12 +805,9 @@ fn instrument_schedule(proof_state: &ProofState, schedule: &NormSchedule) -> Sch
             }))),
             Schedule::Run(run_config.to_run_config()),
         ]),
-        NormSchedule::Sequence(schedules) => Schedule::Sequence(
-            schedules
-                .iter()
-                .map(|s| instrument_schedule(proof_state, s))
-                .collect(),
-        ),
+        NormSchedule::Sequence(schedules) => {
+            Schedule::Sequence(schedules.iter().map(instrument_schedule).collect())
+        }
     }
 }
 
@@ -876,7 +819,6 @@ pub(crate) fn add_proofs(program: Vec<NormCommand>, desugar: Desugar) -> Vec<Com
         ast_funcs_created: Default::default(),
         current_ctx: 0,
         global_var_ast: Default::default(),
-        global_var_proof: Default::default(),
         desugar,
     };
 
@@ -923,7 +865,7 @@ pub(crate) fn add_proofs(program: Vec<NormCommand>, desugar: Desugar) -> Vec<Com
             NCommand::Function(_fdecl) => {
                 res.push(command.to_command());
             }
-            NCommand::Declare(name, sort, cost) => {
+            NCommand::Declare(name, sort, _cost) => {
                 res.extend(make_declare_proof(*name, *sort, &mut proof_state));
                 res.push(command.to_command());
             }
@@ -946,10 +888,7 @@ pub(crate) fn add_proofs(program: Vec<NormCommand>, desugar: Desugar) -> Vec<Com
                 res.push(command.to_command());
             }
             NCommand::RunSchedule(schedule) => {
-                res.push(Command::RunSchedule(instrument_schedule(
-                    &proof_state,
-                    schedule,
-                )));
+                res.push(Command::RunSchedule(instrument_schedule(schedule)));
             }
             _ => res.push(command.to_command()),
         }

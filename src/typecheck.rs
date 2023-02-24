@@ -1,6 +1,5 @@
 use crate::*;
 use indexmap::map::Entry as IEntry;
-use thiserror::Error;
 use typechecking::TypeError;
 
 pub struct Context<'a> {
