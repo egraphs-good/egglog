@@ -72,23 +72,39 @@ pub enum NCommand {
     // Declare a variable with a given name and type
     Declare(Symbol, Symbol, Option<usize>),
     AddRuleset(Symbol),
-    NormRule(Symbol, NormRule),
+    NormRule {
+        name: Symbol,
+        ruleset: Symbol,
+        rule: NormRule,
+    },
     NormAction(NormAction),
     Run(NormRunConfig),
     RunSchedule(Schedule),
-    Simplify { var: Symbol, config: NormRunConfig },
+    Simplify {
+        var: Symbol,
+        config: NormRunConfig,
+    },
     // TODO flatten calc, add proof support
     Calc(Vec<IdentSort>, Vec<Expr>),
-    Extract { variants: usize, var: Symbol },
+    Extract {
+        variants: usize,
+        var: Symbol,
+    },
     Check(Vec<NormFact>),
     Print(Symbol, usize),
     PrintSize(Symbol),
-    Output { file: String, exprs: Vec<Expr> },
+    Output {
+        file: String,
+        exprs: Vec<Expr>,
+    },
     Push(usize),
     Pop(usize),
     Fail(Box<NCommand>),
     // TODO desugar
-    Input { name: Symbol, file: String },
+    Input {
+        name: Symbol,
+        file: String,
+    },
 }
 
 impl NormCommand {
@@ -106,7 +122,15 @@ impl NCommand {
                 Command::Declare(*name, *parent_type, cost.clone())
             }
             NCommand::AddRuleset(name) => Command::AddRuleset(*name),
-            NCommand::NormRule(name, rule) => Command::Rule(*name, rule.to_rule()),
+            NCommand::NormRule {
+                name,
+                ruleset,
+                rule,
+            } => Command::Rule {
+                name: *name,
+                ruleset: *ruleset,
+                rule: rule.to_rule(),
+            },
             NCommand::RunSchedule(schedule) => Command::RunSchedule(schedule.clone()),
             NCommand::NormAction(action) => Command::Action(action.to_action()),
             NCommand::Run(NormRunConfig {
@@ -157,7 +181,15 @@ impl NCommand {
             }
             NCommand::AddRuleset(name) => NCommand::AddRuleset(*name),
             NCommand::RunSchedule(schedule) => NCommand::RunSchedule(schedule.clone()),
-            NCommand::NormRule(name, rule) => NCommand::NormRule(*name, rule.map_exprs(f)),
+            NCommand::NormRule {
+                name,
+                ruleset,
+                rule,
+            } => NCommand::NormRule {
+                name: *name,
+                ruleset: *ruleset,
+                rule: rule.map_exprs(f),
+            },
             NCommand::NormAction(action) => NCommand::NormAction(action.map_exprs(f)),
             NCommand::Run(config) => NCommand::Run(config.clone()),
             NCommand::Simplify { .. } => self.clone(),
@@ -239,7 +271,11 @@ pub enum Command {
         cost: Option<usize>,
     },
     AddRuleset(Symbol),
-    Rule(Symbol, Rule),
+    Rule {
+        name: Symbol,
+        ruleset: Symbol,
+        rule: Rule,
+    },
     Rewrite(Symbol, Rewrite),
     BiRewrite(Symbol, Rewrite),
     Action(Action),
@@ -320,7 +356,11 @@ impl Command {
                 Sexp::String("ruleset".into()),
                 Sexp::String(name.to_string()),
             ]),
-            Command::Rule(ruleset, r) => r.to_sexp(*ruleset),
+            Command::Rule {
+                name,
+                ruleset,
+                rule,
+            } => rule.to_sexp(*ruleset, *name),
             Command::Define { name, expr, cost } => {
                 let mut res = vec![
                     Sexp::String("define".into()),
@@ -441,7 +481,11 @@ impl Display for NCommand {
 impl Display for Command {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Command::Rule(ruleset, r) => r.fmt_with_ruleset(f, *ruleset),
+            Command::Rule {
+                ruleset,
+                name,
+                rule,
+            } => rule.fmt_with_ruleset(f, *ruleset, *name),
             _ => write!(f, "{}", self.to_sexp()),
         }
     }
@@ -889,7 +933,7 @@ impl Display for NormRule {
 }
 
 impl Rule {
-    pub(crate) fn to_sexp(&self, ruleset: Symbol) -> Sexp {
+    pub(crate) fn to_sexp(&self, ruleset: Symbol, name: Symbol) -> Sexp {
         let mut res = vec![
             Sexp::String("rule".into()),
             Sexp::List(self.body.iter().map(|f| f.to_sexp()).collect()),
@@ -898,6 +942,10 @@ impl Rule {
         if ruleset != "".into() {
             res.push(Sexp::String(":ruleset".into()));
             res.push(Sexp::String(ruleset.to_string()));
+        }
+        if name != "".into() {
+            res.push(Sexp::String(":name".into()));
+            res.push(Sexp::String(format!("\"{}\"", name)));
         }
         Sexp::List(res)
     }
@@ -913,6 +961,7 @@ impl Rule {
         &self,
         f: &mut std::fmt::Formatter<'_>,
         ruleset: Symbol,
+        name: Symbol,
     ) -> std::fmt::Result {
         let indent = " ".repeat(7);
         write!(f, "(rule (")?;
@@ -938,17 +987,23 @@ impl Rule {
                 write!(f, "{}", action)?;
             }
         }
-        if ruleset != "".into() {
-            write!(f, ")\n{}:ruleset {})", indent, ruleset)
+        let ruleset = if ruleset != "".into() {
+            format!(":ruleset {}", ruleset)
         } else {
-            write!(f, "))")
-        }
+            "".into()
+        };
+        let name = if name != "".into() {
+            format!(":name \"{}\"", name)
+        } else {
+            "".into()
+        };
+        write!(f, ")\n{} {} {})", indent, ruleset, name)
     }
 }
 
 impl Display for Rule {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.fmt_with_ruleset(f, "".into())
+        self.fmt_with_ruleset(f, "".into(), "".into())
     }
 }
 
@@ -983,5 +1038,11 @@ impl Rewrite {
             res.push(Sexp::String(ruleset.to_string()));
         }
         Sexp::List(res)
+    }
+}
+
+impl Display for Rewrite {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_sexp("".into(), false))
     }
 }

@@ -59,11 +59,17 @@ fn desugar_datatype(name: Symbol, variants: Vec<Variant>) -> Vec<NCommand> {
         .collect()
 }
 
-fn desugar_rewrite(ruleset: Symbol, rewrite: &Rewrite, desugar: &mut Desugar) -> Vec<NCommand> {
+fn desugar_rewrite(
+    ruleset: Symbol,
+    name: Symbol,
+    rewrite: &Rewrite,
+    desugar: &mut Desugar,
+) -> Vec<NCommand> {
     let var = Symbol::from("rewrite_var__");
-    vec![NCommand::NormRule(
+    vec![NCommand::NormRule {
         ruleset,
-        flatten_rule(
+        name,
+        rule: flatten_rule(
             Rule {
                 body: [Fact::Eq(vec![Expr::Var(var), rewrite.lhs.clone()])]
                     .into_iter()
@@ -73,19 +79,34 @@ fn desugar_rewrite(ruleset: Symbol, rewrite: &Rewrite, desugar: &mut Desugar) ->
             },
             desugar,
         ),
-    )]
+    }]
 }
 
-fn desugar_birewrite(ruleset: Symbol, rewrite: &Rewrite, desugar: &mut Desugar) -> Vec<NCommand> {
+fn desugar_birewrite(
+    ruleset: Symbol,
+    name: Symbol,
+    rewrite: &Rewrite,
+    desugar: &mut Desugar,
+) -> Vec<NCommand> {
     let rw2 = Rewrite {
         lhs: rewrite.rhs.clone(),
         rhs: rewrite.lhs.clone(),
         conditions: rewrite.conditions.clone(),
     };
-    desugar_rewrite(ruleset, rewrite, desugar)
-        .into_iter()
-        .chain(desugar_rewrite(ruleset, &rw2, desugar))
-        .collect()
+    desugar_rewrite(
+        ruleset,
+        format!("{}=>", name.to_string()).into(),
+        rewrite,
+        desugar,
+    )
+    .into_iter()
+    .chain(desugar_rewrite(
+        ruleset,
+        format!("{}<=", name.to_string()).into(),
+        &rw2,
+        desugar,
+    ))
+    .collect()
 }
 
 fn expr_to_ssa(lhs: Symbol, expr: &Expr, desugar: &mut Desugar, res: &mut Vec<NormFact>) {
@@ -329,8 +350,12 @@ pub(crate) fn desugar_command(
         }
         Command::Datatype { name, variants } => desugar_datatype(name, variants),
         Command::Declare(name, parent, cost) => vec![NCommand::Declare(name, parent, cost)],
-        Command::Rewrite(ruleset, rewrite) => desugar_rewrite(ruleset, &rewrite, desugar),
-        Command::BiRewrite(ruleset, rewrite) => desugar_birewrite(ruleset, &rewrite, desugar),
+        Command::Rewrite(ruleset, rewrite) => {
+            desugar_rewrite(ruleset, rewrite.to_string().into(), &rewrite, desugar)
+        }
+        Command::BiRewrite(ruleset, rewrite) => {
+            desugar_birewrite(ruleset, rewrite.to_string().into(), &rewrite, desugar)
+        }
         Command::Include(file) => {
             let s = std::fs::read_to_string(&file)
                 .unwrap_or_else(|_| panic!("Failed to read file {file}"));
@@ -340,8 +365,19 @@ pub(crate) fn desugar_command(
                 get_all_proofs,
             );
         }
-        Command::Rule(ruleset, rule) => {
-            vec![NCommand::NormRule(ruleset, flatten_rule(rule, desugar))]
+        Command::Rule {
+            ruleset,
+            mut name,
+            rule,
+        } => {
+            if name == "".into() {
+                name = rule.to_string().replace("\"", "'").into();
+            }
+            vec![NCommand::NormRule {
+                ruleset,
+                name,
+                rule: flatten_rule(rule, desugar),
+            }]
         }
         Command::Sort(sort, option) => vec![NCommand::Sort(sort, option)],
         // TODO ignoring cost for now
@@ -425,9 +461,17 @@ pub(crate) fn desugar_command(
                 let ruleset = (desugar.get_fresh)();
                 res.push(NCommand::AddRuleset(ruleset));
                 res.extend(
-                    desugar_command(Command::Rule(ruleset, dummyrule), desugar, get_all_proofs)?
-                        .into_iter()
-                        .map(|cmd| cmd.command),
+                    desugar_command(
+                        Command::Rule {
+                            ruleset,
+                            name: "".into(),
+                            rule: dummyrule,
+                        },
+                        desugar,
+                        get_all_proofs,
+                    )?
+                    .into_iter()
+                    .map(|cmd| cmd.command),
                 );
 
                 // now run the dummy rule and get the proof

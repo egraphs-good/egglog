@@ -22,3 +22,15 @@
 (check (!= (Var "x") (Const two)))
 (check (= (Add (Var "x") (Const two))
           (Add (Const two) (Var "x"))))
+
+(declare p1 Proof__ :cost 100000)
+
+(rule ((= (Add (Var "x") (Const two))
+          (Add (Const two) (Var "x"))))
+      ((union rule-proof p1)))
+
+(run 1)
+
+
+(run-schedule (saturate proof-extract__))
+(extract p1)

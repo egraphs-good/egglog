@@ -656,9 +656,10 @@ fn make_rep_function(proof_state: &mut ProofState, expr: &NormExpr) -> FunctionD
 fn make_getchild_rule(proof_state: &mut ProofState, expr: &NormExpr) -> Command {
     let NormExpr::Call(_name, body) = expr;
     let getchild = |i| Symbol::from(format!("c{}__", i));
-    Command::Rule(
-        "proofrules__".into(),
-        Rule {
+    Command::Rule {
+        ruleset: "proofrules__".into(),
+        name: "".into(),
+        rule: Rule {
             body: vec![Fact::Eq(vec![
                 Expr::Var("ast__".into()),
                 Expr::Call(
@@ -681,7 +682,7 @@ fn make_getchild_rule(proof_state: &mut ProofState, expr: &NormExpr) -> Command 
                 })
                 .collect(),
         },
-    )
+    }
 }
 
 fn make_runner(config: &NormRunConfig) -> Vec<Command> {
@@ -923,11 +924,16 @@ pub(crate) fn add_proofs(program: Vec<NormCommand>, desugar: Desugar) -> Vec<Com
                 res.extend(make_declare_proof(*name, *sort, &mut proof_state));
                 res.push(command.to_command());
             }
-            NCommand::NormRule(ruleset, rule) => {
-                res.push(Command::Rule(
-                    *ruleset,
-                    instrument_rule(rule, "TODOrulename".into(), &mut proof_state),
-                ));
+            NCommand::NormRule {
+                ruleset,
+                name,
+                rule,
+            } => {
+                res.push(Command::Rule {
+                    ruleset: *ruleset,
+                    name: *name,
+                    rule: instrument_rule(rule, *name, &mut proof_state),
+                });
             }
             NCommand::Run(config) => {
                 res.extend(make_runner(config));
@@ -957,18 +963,18 @@ pub(crate) fn add_proofs(program: Vec<NormCommand>, desugar: Desugar) -> Vec<Com
 pub(crate) fn should_add_proofs(program: &[NormCommand]) -> bool {
     let mut has_proof_keyword = false;
     for command in program {
-        match command.command {
-            NCommand::NormRule(_, ref rule) => {
-                rule.map_def_use(
-                    &mut |var, _def| {
-                        if var == RULE_PROOF_KEYWORD.into() {
-                            has_proof_keyword = true;
-                        }
-                        var
-                    },
-                );
-            }
-            _ => (),
+        if let NCommand::NormRule {
+            name: _,
+            ruleset: _,
+            ref rule,
+        } = command.command
+        {
+            rule.map_def_use(&mut |var, _def| {
+                if var == RULE_PROOF_KEYWORD.into() {
+                    has_proof_keyword = true;
+                }
+                var
+            });
         }
     }
     eprintln!("has_proof_keyword: {}", has_proof_keyword);

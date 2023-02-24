@@ -165,7 +165,11 @@ impl TypeInfo {
                     return Err(TypeError::Unbound(*parent));
                 }
             }
-            NCommand::NormRule(_ruleset, rule) => {
+            NCommand::NormRule {
+                rule,
+                ruleset: _,
+                name: _,
+            } => {
                 self.typecheck_rule(id, rule)?;
             }
             NCommand::Sort(sort, presort_and_args) => {

@@ -48,7 +48,7 @@ Command: Command = {
     "(" "declare" <name:Ident> <var_type:Ident> <cost:Cost> ")" => Command::Declare(name, var_type, cost),
     "(" "relation" <name:Ident> <types:List<Type>> ")" => Command::Function(FunctionDecl::relation(name, types)),
     "(" "ruleset" <name:Ident> ")" => Command::AddRuleset(name),
-    "(" "rule" <body:List<Fact>> <head:List<Action>> <ruleset:(":ruleset" <Ident>)?> ")" => Command::Rule(ruleset.unwrap_or("".into()), Rule { head, body }),
+    "(" "rule" <body:List<Fact>> <head:List<Action>> <ruleset:(":ruleset" <Ident>)?> <name:(":name" <Ident>)?> ")" => Command::Rule{ruleset: ruleset.unwrap_or("".into()), name: name.unwrap_or("".into()), rule: Rule { head, body }},
     "(" "rewrite" <lhs:Expr> <rhs:Expr>
         <conditions:(":when" <List<Fact>>)?>
         <ruleset:(":ruleset" <Ident>)?>

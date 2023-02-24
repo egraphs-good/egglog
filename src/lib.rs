@@ -826,8 +826,12 @@ impl EGraph {
                 self.add_ruleset(name);
                 format!("Declared ruleset {name}.")
             }
-            NCommand::NormRule(ruleset, rule) => {
-                let name = self.add_rule(rule.to_rule(), ruleset)?;
+            NCommand::NormRule {
+                ruleset,
+                rule,
+                name,
+            } => {
+                self.add_rule(rule.to_rule(), ruleset)?;
                 format!("Declared rule {name}.")
             }
 
@@ -911,7 +915,7 @@ impl EGraph {
                     match &action {
                         NormAction::Let(name, contents) => {
                             // define with high cost
-                            self.define(*name, &contents.to_expr(), Some(10000))?;
+                            self.define(*name, &contents.to_expr(), Some(1000000))?;
                         }
                         NormAction::LetVar(var1, var2) => {
                             self.define(*var1, &Expr::Var(*var2), Some(10000))?;
@@ -1257,8 +1261,7 @@ impl EGraph {
         } else {
             program_desugared
         };
-
-        //println!("{}", ListDisplay(&final_desugared, "\n"));
+        println!("{}", ListDisplay(&program, "\n"));
 
         self.run_program(program)
     }

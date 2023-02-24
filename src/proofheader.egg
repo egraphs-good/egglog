@@ -86,3 +86,5 @@
       ((set (DemandEq__ t1 t2) (Transitivity__ prooflist)))
       :ruleset proof-extract__)
 
+
+
