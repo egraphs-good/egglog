@@ -95,14 +95,14 @@ fn desugar_birewrite(
     };
     desugar_rewrite(
         ruleset,
-        format!("{}=>", name.to_string()).into(),
+        format!("{}=>", name).into(),
         rewrite,
         desugar,
     )
     .into_iter()
     .chain(desugar_rewrite(
         ruleset,
-        format!("{}<=", name.to_string()).into(),
+        format!("{}<=", name).into(),
         &rw2,
         desugar,
     ))
@@ -339,6 +339,67 @@ pub struct Desugar<'a> {
     pub define_memo: HashMap<Expr, Symbol>,
 }
 
+pub(crate) fn desugar_calc(
+    desugar: &mut Desugar,
+    idents: Vec<IdentSort>,
+    exprs: Vec<Expr>,
+) -> Vec<NCommand> {
+    let mut res = vec![];
+
+    // first, push all the idents
+    for IdentSort { ident, sort } in idents {
+        res.push(NCommand::Declare(ident, sort, None));
+    }
+
+    // now, for every pair of exprs we need to prove them equal
+    for expr1and2 in exprs.windows(2) {
+        let expr1 = &expr1and2[0];
+        let expr2 = &expr1and2[1];
+        res.push(NCommand::Push(1));
+        // important to clear the memo of what's been defined!
+        desugar.define_memo.clear();
+
+        // add the two exprs
+        let mut actions = vec![];
+        let v1 = expr_to_flat_actions(
+            expr1,
+            &mut desugar.get_fresh,
+            &mut actions,
+            &mut desugar.define_memo,
+        );
+        let v2 = expr_to_flat_actions(
+            expr2,
+            &mut desugar.get_fresh,
+            &mut actions,
+            &mut desugar.define_memo,
+        );
+        res.extend(actions.into_iter().map( NCommand::NormAction));
+
+        res.extend(
+            desugar_command(
+                Command::Run(RunConfig {
+                    ruleset: "".into(),
+                    limit: 1000000,
+                    until: Some(vec![Fact::Eq(vec![expr1.clone(), expr2.clone()])]),
+                }),
+                desugar,
+                false,
+            )
+            .unwrap()
+            .into_iter()
+            .map(|c| c.command),
+        );
+
+        res.push(
+            NCommand::Check(vec![NormFact::ConstrainEq(v1, v2)]));
+
+        res.push(NCommand::Pop(1));
+        desugar.define_memo.clear();
+    }
+
+    res
+}
+
 pub(crate) fn desugar_command(
     command: Command,
     desugar: &mut Desugar,
@@ -371,7 +432,7 @@ pub(crate) fn desugar_command(
             rule,
         } => {
             if name == "".into() {
-                name = rule.to_string().replace("\"", "'").into();
+                name = rule.to_string().replace('\"', "'").into();
             }
             vec![NCommand::NormRule {
                 ruleset,
@@ -423,7 +484,7 @@ pub(crate) fn desugar_command(
                 )
                 .collect()
         }
-        Command::Calc(idents, exprs) => vec![NCommand::Calc(idents, exprs)],
+        Command::Calc(idents, exprs) => desugar_calc(desugar, idents, exprs),
         Command::RunSchedule(sched) => {
             vec![NCommand::RunSchedule(sched)]
         }

@@ -1,6 +1,6 @@
 use crate::*;
 
-use crate::desugar::{desugar_commands, literal_name, Desugar};
+use crate::desugar::{literal_name, Desugar};
 use crate::typechecking::FuncType;
 use symbolic_expressions::Sexp;
 

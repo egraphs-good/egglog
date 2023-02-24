@@ -84,8 +84,6 @@ pub enum NCommand {
         var: Symbol,
         config: NormRunConfig,
     },
-    // TODO flatten calc, add proof support
-    Calc(Vec<IdentSort>, Vec<Expr>),
     Extract {
         variants: usize,
         var: Symbol,
@@ -148,7 +146,6 @@ impl NCommand {
                 expr: Expr::Var(*var),
                 config: config.to_run_config(),
             },
-            NCommand::Calc(args, exprs) => Command::Calc(args.clone(), exprs.clone()),
             NCommand::Extract { variants, var } => Command::Extract {
                 variants: *variants,
                 e: Expr::Var(*var),
@@ -193,7 +190,6 @@ impl NCommand {
             NCommand::NormAction(action) => NCommand::NormAction(action.map_exprs(f)),
             NCommand::Run(config) => NCommand::Run(config.clone()),
             NCommand::Simplify { .. } => self.clone(),
-            NCommand::Calc(args, exprs) => NCommand::Calc(args.clone(), exprs.clone()),
             NCommand::Extract { variants, var } => NCommand::Extract {
                 variants: *variants,
                 var: *var,
