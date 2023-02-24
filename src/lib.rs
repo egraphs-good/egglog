@@ -1254,14 +1254,13 @@ impl EGraph {
 
             let (final_desugared, _desugar2) = desugar_program(self, with_header, false)?;
 
-            println!("{}", ListDisplay(&final_desugared, "\n"));
+            //println!("{}", ListDisplay(&final_desugared, "\n"));
             self.type_info = TypeInfo::new();
             self.type_info.typecheck_program(&final_desugared)?;
             final_desugared
         } else {
             program_desugared
         };
-        println!("{}", ListDisplay(&program, "\n"));
 
         self.run_program(program)
     }

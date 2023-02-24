@@ -59,7 +59,4 @@
 
 (run 13)
 
-(declare v Proof__ :cost 1000000)
-(rule ((= (Num ty n) (Num ty m)) (!= n m))
-      ((union v rule-proof)))
-(extract :variants 2 v)
+(check (= (Num ty n) (Num ty m)) (!= n m))
