@@ -810,10 +810,6 @@ impl ProofState {
     // the egraph is the initial egraph with only default sorts
     pub(crate) fn add_proofs(&mut self, program: Vec<NormCommand>) -> Vec<Command> {
         let mut res = vec![];
-        // we disallow functions after push, so
-        // we add new functions to the res_before_push vec
-        let mut has_pushed = false;
-        let mut res_before_push = vec![];
 
         for command in program {
             self.current_ctx = command.metadata.id;
@@ -827,22 +823,13 @@ impl ProofState {
                         Command::Function(make_rep_function(self, expr)),
                         make_getchild_rule(self, expr),
                     ];
-                    if has_pushed {
-                        res_before_push.extend(commands);
-                    } else {
-                        res.extend(commands);
-                    }
+                    res.extend(commands);
                 }
                 expr.clone()
             });
 
             match &command.command {
                 NCommand::Push(_num) => {
-                    if !has_pushed {
-                        has_pushed = true;
-                        res_before_push = res.clone();
-                        res = vec![];
-                    }
                     res.push(command.to_command());
                 }
                 NCommand::Sort(_name, _presort_and_args) => {
@@ -880,8 +867,7 @@ impl ProofState {
             }
         }
 
-        res_before_push.extend(res);
-        res_before_push
+        res
     }
 
     pub(crate) fn get_fresh(&mut self) -> Symbol {
