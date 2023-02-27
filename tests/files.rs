@@ -1,8 +1,15 @@
-use egg_smol::*;
+use egg_smol::{*, ast::{Command, Literal, Expr}};
 
 fn test_program(program: &str, message: &str, test_proofs: bool) {
     let mut egraph = EGraph::default();
-    match egraph.parse_and_run_program(program, false, test_proofs) {
+    if test_proofs {
+        egraph.run_program(vec![Command::SetOption {
+            name: "enable_proofs".into(),
+            value: Expr::Lit(Literal::Int(1)),
+        }]);
+        egraph.test_proofs = true;
+    }
+    match egraph.parse_and_run_program(program) {
         Ok(msgs) => {
             for msg in msgs {
                 log::info!("  {}", msg);
@@ -19,7 +26,7 @@ fn run(path: &str, test_proofs: bool) {
 
     let egraph = EGraph::default();
     let program_str = egraph
-        .parse_program(&program, false)
+        .parse_program(&program)
         .unwrap()
         .into_iter()
         .map(|x| x.to_string())

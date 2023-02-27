@@ -1,3 +1,4 @@
+(set-option enable_proofs 1)
 (datatype G (I) (A) (B))
 (function g* (G G) G)
 (function inv (G) G)

@@ -2,39 +2,9 @@ use std::cmp::max;
 
 use crate::{proofs::RULE_PROOF_KEYWORD, *};
 
-pub(crate) type Fresh = dyn FnMut() -> Symbol;
-pub(crate) type NewId = dyn FnMut() -> CommandId;
+// TODO fix getting fresh names using modules
+const PROOF_UNDERSCORES: &str = "___";
 
-pub(crate) fn literal_name(desugar: &Desugar, literal: &Literal) -> Symbol {
-    desugar.egraph.type_info.infer_literal(literal).name()
-}
-
-// Makes a function that gets fresh names by counting
-// the max number of underscores in the program
-pub(crate) fn make_get_fresh(program: &Vec<Command>) -> impl FnMut() -> Symbol {
-    make_get_fresh_from_str(&ListDisplay(program, "\n").to_string())
-}
-
-fn make_get_fresh_from_str(program_str: &str) -> impl FnMut() -> Symbol {
-    let mut max_underscores: usize = 0;
-    let mut counter: i64 = -1;
-    for char in program_str.chars() {
-        if char == '_' {
-            counter = max(counter, 0);
-            counter += 1;
-            max_underscores = max(max_underscores, counter as usize);
-        } else {
-            counter = -1;
-        }
-    }
-
-    let underscores = "_".repeat(max_underscores + 1);
-    let mut fcounter = 0;
-    move || {
-        fcounter += 1;
-        format!("v{}{}", fcounter, underscores).into()
-    }
-}
 
 fn desugar_datatype(name: Symbol, variants: Vec<Variant>) -> Vec<NCommand> {
     vec![NCommand::Sort(name, None)]
@@ -120,7 +90,7 @@ fn expr_to_ssa(lhs: Symbol, expr: &Expr, desugar: &mut Desugar, res: &mut Vec<No
                         new_children.push(*v);
                     }
                     _ => {
-                        let fresh = (desugar.get_fresh)();
+                        let fresh = desugar.get_fresh();
                         expr_to_ssa(fresh, child, desugar, res);
                         new_children.push(fresh);
                     }
@@ -154,13 +124,13 @@ fn flatten_facts(facts: &Vec<Fact>, desugar: &mut Desugar) -> Vec<NormFact> {
                 } else if let Expr::Var(v) = rhs {
                     equalities.push((*v, lhs.clone()));
                 } else {
-                    let fresh = (desugar.get_fresh)();
+                    let fresh = desugar.get_fresh();
                     equalities.push((fresh, lhs.clone()));
                     equalities.push((fresh, rhs.clone()));
                 }
             }
             Fact::Fact(expr) => {
-                equalities.push(((desugar.get_fresh)(), expr.clone()));
+                equalities.push((desugar.get_fresh(), expr.clone()));
             }
         }
     }
@@ -168,51 +138,17 @@ fn flatten_facts(facts: &Vec<Fact>, desugar: &mut Desugar) -> Vec<NormFact> {
     flatten_equalities(equalities, desugar)
 }
 
-fn expr_to_flat_actions(
-    expr: &Expr,
-    get_fresh: &mut Box<Fresh>,
-    res: &mut Vec<NormAction>,
-    memo: &mut HashMap<Expr, Symbol>,
-) -> Symbol {
-    if let Some(existing) = memo.get(expr) {
-        return *existing;
-    }
-    let res = match expr {
-        Expr::Lit(l) => {
-            let assign = (get_fresh)();
-            res.push(NormAction::LetLit(assign, l.clone()));
-            assign
-        }
-        Expr::Var(v) => *v,
-        Expr::Call(f, children) => {
-            let assign = (get_fresh)();
-            let mut new_children = vec![];
-            for child in children {
-                match child {
-                    Expr::Var(v) => {
-                        new_children.push(*v);
-                    }
-                    _ => {
-                        let child = expr_to_flat_actions(child, get_fresh, res, memo);
-                        new_children.push(child);
-                    }
-                }
-            }
-            res.push(NormAction::Let(assign, NormExpr::Call(*f, new_children)));
-            assign
-        }
-    };
-    memo.insert(expr.clone(), res);
-    res
-}
 
 fn flatten_actions(actions: &Vec<Action>, desugar: &mut Desugar, global: bool) -> Vec<NormAction> {
     let mut memo = Default::default();
     let mut add_expr = |expr: Expr, res: &mut Vec<NormAction>| -> Symbol {
         if global {
-            expr_to_flat_actions(&expr, &mut desugar.get_fresh, res, &mut desugar.define_memo)
+            std::mem::swap(&mut memo, &mut desugar.define_memo);
+            let res = desugar.expr_to_flat_actions(&expr,  res, &mut memo);
+            std::mem::swap(&mut memo, &mut desugar.define_memo);
+            res
         } else {
-            expr_to_flat_actions(&expr, &mut desugar.get_fresh, res, &mut memo)
+            desugar.expr_to_flat_actions(&expr,res, &mut memo)
         }
     };
 
@@ -282,7 +218,7 @@ fn give_unique_names(desugar: &mut Desugar, facts: Vec<NormFact>) -> Vec<NormFac
                     name_used_immediately.insert(var);
                     var
                 } else {
-                    let fresh = (desugar.get_fresh)();
+                    let fresh = desugar.get_fresh();
                     // typechecking BS- for primitives
                     // we need to define variables before they are used
                     if name_used_immediately.contains(&var) {
@@ -351,11 +287,12 @@ fn desugar_run_config(desugar: &mut Desugar, run_config: &RunConfig) -> NormRunC
     }
 }
 
-pub struct Desugar<'a> {
-    pub get_fresh: Box<Fresh>,
-    pub get_new_id: Box<NewId>,
-    pub egraph: &'a mut EGraph,
+pub struct Desugar {
+    next_fresh: usize,
+    next_command_id: usize,
     pub define_memo: HashMap<Expr, Symbol>,
+    pub(crate) parser: ast::parse::ProgramParser,
+    pub(crate) action_parser: ast::parse::ActionParser,
 }
 
 pub(crate) fn desugar_calc(
@@ -377,20 +314,19 @@ pub(crate) fn desugar_calc(
         res.push(NCommand::Push(1));
         // important to clear the memo of what's been defined!
         desugar.define_memo.clear();
+        let mut new_memo = Default::default();
 
         // add the two exprs
         let mut actions = vec![];
-        let v1 = expr_to_flat_actions(
+        let v1 = desugar.expr_to_flat_actions(
             expr1,
-            &mut desugar.get_fresh,
             &mut actions,
-            &mut desugar.define_memo,
+            &mut new_memo,
         );
-        let v2 = expr_to_flat_actions(
+        let v2 = desugar.expr_to_flat_actions(
             expr2,
-            &mut desugar.get_fresh,
             &mut actions,
-            &mut desugar.define_memo,
+            &mut new_memo,
         );
         res.extend(actions.into_iter().map(NCommand::NormAction));
 
@@ -412,7 +348,6 @@ pub(crate) fn desugar_calc(
         res.push(NCommand::Check(vec![NormFact::ConstrainEq(v1, v2)]));
 
         res.push(NCommand::Pop(1));
-        desugar.define_memo.clear();
     }
 
     res
@@ -424,6 +359,9 @@ pub(crate) fn desugar_command(
     get_all_proofs: bool,
 ) -> Result<Vec<NormCommand>, Error> {
     let res = match command {
+        Command::SetOption { name, value } => {
+            vec![NCommand::SetOption { name, value }]
+        }
         Command::Function(fdecl) => {
             vec![NCommand::Function(fdecl)]
         }
@@ -439,7 +377,7 @@ pub(crate) fn desugar_command(
             let s = std::fs::read_to_string(&file)
                 .unwrap_or_else(|_| panic!("Failed to read file {file}"));
             return desugar_commands(
-                desugar.egraph.parse_program(&s, false)?,
+                desugar.parse_program(&s)?,
                 desugar,
                 get_all_proofs,
             );
@@ -468,12 +406,14 @@ pub(crate) fn desugar_command(
             let mut commands = vec![];
 
             let mut actions = vec![];
-            let fresh = expr_to_flat_actions(
+            let mut temp = Default::default();
+            std::mem::swap(&mut temp, &mut desugar.define_memo);
+            let fresh = desugar.expr_to_flat_actions(
                 &expr,
-                &mut desugar.get_fresh,
                 &mut actions,
-                &mut desugar.define_memo,
+                &mut temp,
             );
+            std::mem::swap(&mut temp, &mut desugar.define_memo);
             actions.push(NormAction::LetVar(name, fresh));
             for action in actions {
                 commands.push(NCommand::NormAction(action));
@@ -491,7 +431,7 @@ pub(crate) fn desugar_command(
             ))]
         }
         Command::Simplify { expr, config } => {
-            let fresh = (desugar.get_fresh)();
+            let fresh = desugar.get_fresh();
             flatten_actions(&vec![Action::Let(fresh, expr)], desugar, true)
                 .into_iter()
                 .map(NCommand::NormAction)
@@ -509,7 +449,7 @@ pub(crate) fn desugar_command(
             vec![NCommand::RunSchedule(desugar_schedule(desugar, &sched))]
         }
         Command::Extract { variants, e } => {
-            let fresh = (desugar.get_fresh)();
+            let fresh = desugar.get_fresh();
             flatten_actions(&vec![Action::Let(fresh, e)], desugar, true)
                 .into_iter()
                 .map(NCommand::NormAction)
@@ -526,7 +466,7 @@ pub(crate) fn desugar_command(
             let mut res = vec![NCommand::Check(flatten_facts(&facts, desugar))];
 
             if get_all_proofs {
-                let proofvar = (desugar.get_fresh)();
+                let proofvar = desugar.get_fresh();
                 // declare a variable for the resulting proof
                 // TODO using constant high cost
                 res.push(NCommand::Declare(proofvar, "Proof__".into(), Some(100000)));
@@ -539,7 +479,7 @@ pub(crate) fn desugar_command(
                         Expr::Var(RULE_PROOF_KEYWORD.into()),
                     )],
                 };
-                let ruleset = (desugar.get_fresh)();
+                let ruleset = desugar.get_fresh();
                 res.push(NCommand::AddRuleset(ruleset));
                 res.extend(
                     desugar_command(
@@ -608,7 +548,7 @@ pub(crate) fn desugar_command(
         .into_iter()
         .map(|c| NormCommand {
             metadata: Metadata {
-                id: (desugar.get_new_id)(),
+                id: desugar.get_new_id(),
             },
             command: c,
         })
@@ -624,21 +564,6 @@ pub fn make_get_new_id() -> impl FnMut() -> usize {
     }
 }
 
-pub(crate) fn desugar_program(
-    egraph: &mut EGraph,
-    program: Vec<Command>,
-    get_all_proofs: bool,
-) -> Result<(Vec<NormCommand>, Desugar), Error> {
-    let get_fresh = Box::new(make_get_fresh(&program));
-    let mut desugar = Desugar {
-        get_fresh,
-        get_new_id: Box::new(make_get_new_id()),
-        define_memo: Default::default(),
-        egraph,
-    };
-    let res = desugar_commands(program, &mut desugar, get_all_proofs)?;
-    Ok((res, desugar))
-}
 
 pub(crate) fn desugar_commands(
     program: Vec<Command>,
@@ -651,4 +576,94 @@ pub(crate) fn desugar_commands(
         res.extend(desugared);
     }
     Ok(res)
+}
+
+impl Clone for Desugar {
+        fn clone(&self) -> Self {
+            Self {
+                next_fresh: self.next_fresh,
+                next_command_id: self.next_command_id,
+                define_memo: self.define_memo.clone(),
+                parser: ast::parse::ProgramParser::new(),
+                action_parser: ast::parse::ActionParser::new(),
+            }
+        }
+}
+
+impl Desugar {
+    pub fn new() -> Self {
+        Self {
+            next_fresh: 0,
+            next_command_id: 0,
+            define_memo: Default::default(),
+            parser: ast::parse::ProgramParser::new(),
+            action_parser: ast::parse::ActionParser::new(),
+        }
+    }
+
+    pub fn get_fresh(&mut self) -> Symbol {
+        self.next_fresh += 1;
+        format!("v{}{}", self.next_fresh-1, PROOF_UNDERSCORES).into()        
+    }
+
+    pub fn get_new_id(&mut self) -> CommandId {
+        let res = self.next_command_id;
+        self.next_command_id += 1;
+        res
+    }
+
+    pub(crate) fn desugar_program(
+        &mut self,
+        program: Vec<Command>,
+        get_all_proofs: bool,
+    ) -> Result<Vec<NormCommand>, Error> {
+        let res = desugar_commands(program,  self, get_all_proofs)?;
+        Ok(res)
+    }
+
+
+    fn expr_to_flat_actions(
+        &mut self,
+    expr: &Expr,
+    res: &mut Vec<NormAction>,
+    memo: &mut HashMap<Expr, Symbol>,
+) -> Symbol {
+    if let Some(existing) = memo.get(expr) {
+        return *existing;
+    }
+    let res = match expr {
+        Expr::Lit(l) => {
+            let assign = self.get_fresh();
+            res.push(NormAction::LetLit(assign, l.clone()));
+            assign
+        }
+        Expr::Var(v) => *v,
+        Expr::Call(f, children) => {
+            let assign = self.get_fresh();
+            let mut new_children = vec![];
+            for child in children {
+                match child {
+                    Expr::Var(v) => {
+                        new_children.push(*v);
+                    }
+                    _ => {
+                        let child = self.expr_to_flat_actions(child, res, memo);
+                        new_children.push(child);
+                    }
+                }
+            }
+            res.push(NormAction::Let(assign, NormExpr::Call(*f, new_children)));
+            assign
+        }
+    };
+    memo.insert(expr.clone(), res);
+    res
+}
+
+
+    pub fn parse_program(&self, input: &str) -> Result<Vec<Command>, Error> {
+        Ok(self.parser
+                .parse(input)
+                .map_err(|e| e.map_token(|tok| tok.to_string()))?)
+    }
 }

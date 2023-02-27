@@ -56,7 +56,9 @@ impl TypeInfo {
         let name = sort.name();
 
         match self.sorts.entry(name) {
-            Entry::Occupied(_) => Err(TypeError::SortAlreadyBound(name)),
+            Entry::Occupied(_) => {
+                Err(TypeError::SortAlreadyBound(name))
+            }
             Entry::Vacant(e) => {
                 e.insert(sort.clone());
                 sort.register_primitives(self);

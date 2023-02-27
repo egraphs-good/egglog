@@ -17,8 +17,8 @@ use instant::{Duration, Instant};
 use sort::*;
 use thiserror::Error;
 
-use desugar::{desugar_commands, desugar_program, make_get_fresh, make_get_new_id, Desugar};
-use proofs::{add_proofs, proof_header, should_add_proofs};
+use desugar::{desugar_commands, make_get_new_id, Desugar};
+use proofs::{ProofState};
 
 use symbolic_expressions::Sexp;
 
@@ -123,42 +123,21 @@ impl PrimitiveLike for SimplePrimitive {
     }
 }
 
+#[derive(Clone)]
 pub struct EGraph {
     egraphs: Vec<Self>,
     unionfind: UnionFind,
-    pub(crate) type_info: TypeInfo,
+    pub(crate) proof_state: ProofState,
     functions: HashMap<Symbol, Function>,
     rulesets: HashMap<Symbol, HashMap<Symbol, Rule>>,
     saturated: bool,
+    proofs_enabled: bool,
     timestamp: u32,
-    paren_parser: ast::parse::ParenthesizedProgramParser,
-    parser: ast::parse::ProgramParser,
-    action_parser: ast::parse::ActionParser,
+    pub test_proofs: bool,
     pub match_limit: usize,
     pub node_limit: usize,
     pub fact_directory: Option<PathBuf>,
     pub seminaive: bool,
-}
-
-impl Clone for EGraph {
-    fn clone(&self) -> EGraph {
-        EGraph {
-            egraphs: self.egraphs.clone(),
-            unionfind: self.unionfind.clone(),
-            functions: self.functions.clone(),
-            rulesets: self.rulesets.clone(),
-            type_info: self.type_info.clone(),
-            saturated: self.saturated,
-            timestamp: self.timestamp,
-            paren_parser: ast::parse::ParenthesizedProgramParser::new(),
-            parser: ast::parse::ProgramParser::new(),
-            action_parser: ast::parse::ActionParser::new(),
-            match_limit: self.match_limit,
-            node_limit: self.node_limit,
-            fact_directory: self.fact_directory.clone(),
-            seminaive: self.seminaive,
-        }
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -180,14 +159,13 @@ impl Default for EGraph {
             unionfind: Default::default(),
             functions: Default::default(),
             rulesets: Default::default(),
-            type_info: TypeInfo::new(),
-            paren_parser: ast::parse::ParenthesizedProgramParser::new(),
-            parser: ast::parse::ProgramParser::new(),
-            action_parser: ast::parse::ActionParser::new(),
+            proof_state: ProofState::new(),
             match_limit: 10_000_000,
             node_limit: 100_000_000,
             timestamp: 0,
             saturated: false,
+            proofs_enabled: false,
+            test_proofs: false,
             fact_directory: None,
             seminaive: true,
         };
@@ -368,10 +346,10 @@ impl EGraph {
 
     pub fn eval_lit(&self, lit: &Literal) -> Value {
         match lit {
-            Literal::Int(i) => i.store(&self.type_info.get_sort()).unwrap(),
-            Literal::F64(f) => f.store(&self.type_info.get_sort()).unwrap(),
-            Literal::String(s) => s.store(&self.type_info.get_sort()).unwrap(),
-            Literal::Unit => ().store(&self.type_info.get_sort()).unwrap(),
+            Literal::Int(i) => i.store(&self.proof_state.type_info.get_sort()).unwrap(),
+            Literal::F64(f) => f.store(&self.proof_state.type_info.get_sort()).unwrap(),
+            Literal::String(s) => s.store(&self.proof_state.type_info.get_sort()).unwrap(),
+            Literal::Unit => ().store(&self.proof_state.type_info.get_sort()).unwrap(),
         }
     }
 
@@ -754,6 +732,29 @@ impl EGraph {
         };
     }
 
+    pub fn set_option(&mut self, name: &str, value: Expr) {
+        match name {
+            "enable_proofs" => {
+                panic!("enable_proofs must be set as the first line of the file");
+            }
+            "match_limit" => {
+                if let Expr::Lit(Literal::Int(i)) = value {
+                    self.match_limit = i as usize;
+                } else {
+                    panic!("match_limit must be an integer");
+                }
+            }
+            "node_limit" => {
+                if let Expr::Lit(Literal::Int(i)) = value {
+                    self.node_limit = i as usize;
+                } else {
+                    panic!("node_limit must be an integer");
+                }
+            }
+            _ => panic!("Unknown option '{}'", name),
+        }
+    }
+
     fn check_facts(&mut self, facts: &[NormFact]) -> Result<(), Error> {
         let mut ctx = typecheck::Context::new(self);
         let converted_facts = facts.iter().map(|f| f.to_fact()).collect::<Vec<Fact>>();
@@ -788,6 +789,11 @@ impl EGraph {
             );
         }
         Ok(match command {
+            NCommand::SetOption { name, value } => {
+                let str = format!("Set option {} to {}", name, value);
+                self.set_option(name.into(), value);
+                str
+            }
             // Sorts are already declared during typechecking
             NCommand::Sort(name, _presort_and_args) => format!("Declared sort {}.", name),
             NCommand::Function(fdecl) => {
@@ -1067,14 +1073,63 @@ impl EGraph {
         Ok(sort)
     }
 
-    fn run_program(&mut self, program: Vec<NormCommand>) -> Result<Vec<String>, Error> {
-        let mut msgs = vec![];
+    fn process_command(&mut self, command: Command) -> Result<Vec<NormCommand>, Error> {
+        let program_desugared = self.proof_state.desugar.desugar_program(vec![command], self.test_proofs)?;
+
+        let type_info_before = self.proof_state.type_info.clone();
+        self.proof_state.type_info.typecheck_program(&program_desugared)?;
+
+        let program = if self.proofs_enabled {
+            // proofs require type info, so
+            // we need to pass in the desugar
+            let proofs = self.proof_state.add_proofs(program_desugared);
+
+            let final_desugared = self.proof_state.desugar.desugar_program(proofs, false)?;
+
+            println!("{}", ListDisplay(&final_desugared, "\n"));
+
+            // revert back to the type info before
+            // proofs were added, typecheck again
+            self.proof_state.type_info = type_info_before;
+            self.proof_state.type_info.typecheck_program(&final_desugared)?;
+            final_desugared
+        } else {
+            program_desugared
+        };
+        println!("{}", ListDisplay(&program, "\n"));
+
+        Ok(program)
+    }
+
+    fn enable_proofs(&mut self) {
+        let proofs_already_enabled = self.proofs_enabled;
+        self.proofs_enabled = true;
+        if !proofs_already_enabled && self.proofs_enabled {
+            self.proofs_enabled = false;
+            self.run_program(self.proof_state.proof_header()).unwrap();
+            self.proofs_enabled = true;
+        }
+    }
+
+    pub fn run_program(&mut self, mut program: Vec<Command>) -> Result<Vec<String>, Error> {
+        let mut msgs = vec![]; 
         let should_run = true;
 
+        if let Some(Command::SetOption { name, value: Expr::Lit(Literal::Int(1)) }) = program.first() {
+            if name == &"enable_proofs".into() {
+                self.enable_proofs();
+                program = program.split_off(1);
+            }
+        }
+
+        let mut normalized = vec![];
         for command in program {
-            let msg = self.run_command(command.command, should_run)?;
-            log::info!("{}", msg);
-            msgs.push(msg);
+            normalized.extend(self.process_command(command)?);
+        }
+        for command in normalized {
+                let msg = self.run_command(command.command, should_run)?;
+                log::info!("{}", msg);
+                msgs.push(msg);
         }
 
         Ok(msgs)
@@ -1090,78 +1145,24 @@ impl EGraph {
         }
     }
 
-    pub fn parse_program(&self, input: &str, parenthesized: bool) -> Result<Vec<Command>, Error> {
-        let program = if parenthesized {
-            self.paren_parser
-                .parse(input)
-                .map_err(|e| e.map_token(|tok| tok.to_string()))?
-        } else {
-            self.parser
-                .parse(input)
-                .map_err(|e| e.map_token(|tok| tok.to_string()))?
-        };
-        Ok(program)
-    }
-
-    pub fn get_proof_header(&self, _program: &[Command]) -> Vec<Command> {
-        proof_header(self)
+    pub fn parse_program(&self, input: &str) -> Result<Vec<Command>, Error> {
+        self.proof_state.parse_program(input)
     }
 
     pub fn parse_and_run_program(
         &mut self,
         input: &str,
-        is_parenthesized: bool,
-        test_proofs: bool,
     ) -> Result<Vec<String>, Error> {
-        let parsed = self.parse_program(input, is_parenthesized)?;
-
-        let get_all_proofs = test_proofs;
-
-        let header = self.get_proof_header(&parsed);
-
-        let get_fresh = Box::new(make_get_fresh(&parsed));
-        let mut desugar = Desugar {
-            get_fresh,
-            get_new_id: Box::new(make_get_new_id()),
-            define_memo: Default::default(),
-            egraph: self,
-        };
-
-        let header_desugared = desugar_commands(header.clone(), &mut desugar, false)?;
-
-        let program_desugared = desugar_commands(parsed, &mut desugar, get_all_proofs)?;
-
-        let should_add_proofs = should_add_proofs(&program_desugared) | test_proofs;
-
-        desugar.egraph.type_info.typecheck_program(
-            &header_desugared
-                .iter()
-                .cloned()
-                .chain(program_desugared.iter().cloned())
-                .collect(),
-        )?;
-
-        let program = if should_add_proofs {
-            // proofs require type info, so
-            // we need to pass in the desugar
-            let proofs = add_proofs(program_desugared, desugar);
-            let with_header = header.into_iter().chain(proofs.into_iter()).collect();
-
-            let (final_desugared, _desugar2) = desugar_program(self, with_header, false)?;
-
-            self.type_info = TypeInfo::new();
-            self.type_info.typecheck_program(&final_desugared)?;
-            final_desugared
-        } else {
-            program_desugared
-        };
-        println!("{}", ListDisplay(&program, "\n"));
-
-        self.run_program(program)
+        let parsed = self.proof_state.parse_program(input)?;
+        self.run_program(parsed)
     }
 
     pub fn num_tuples(&self) -> usize {
         self.functions.values().map(|f| f.nodes.len()).sum()
+    }
+
+    pub(crate) fn get_sort(&self, value: &Value) -> Option<&ArcSort> {
+        self.proof_state.type_info.sorts.get(&value.tag)
     }
 }
 

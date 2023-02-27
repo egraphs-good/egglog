@@ -67,6 +67,10 @@ impl NormCommand {
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum NCommand {
+    SetOption {
+        name: Symbol,
+        value: Expr,
+      },      
     Sort(Symbol, Option<(Symbol, Vec<Expr>)>),
     Function(FunctionDecl),
     // Declare a variable with a given name and type
@@ -113,6 +117,10 @@ impl NormCommand {
 impl NCommand {
     pub fn to_command(&self) -> Command {
         match self {
+            NCommand::SetOption { name, value } => Command::SetOption {
+                name: *name,
+                value: value.clone(),
+            },
             NCommand::Sort(name, params) => Command::Sort(*name, params.clone()),
             NCommand::Function(f) => Command::Function(f.clone()),
             NCommand::Declare(name, parent_type, cost) => {
@@ -159,6 +167,11 @@ impl NCommand {
 
     pub fn map_exprs(&self, f: &mut impl FnMut(&NormExpr) -> NormExpr) -> NCommand {
         match self {
+            // Don't map over setoption
+            NCommand::SetOption { name, value } => NCommand::SetOption {
+                name: *name,
+                value: value.clone(),
+            },
             NCommand::Sort(name, params) => NCommand::Sort(*name, params.clone()),
             NCommand::Function(f) => NCommand::Function(f.clone()),
             NCommand::Declare(name, parent_type, cost) => {
@@ -270,6 +283,10 @@ impl Display for NormSchedule {
 // TODO command before and after desugaring should be different
 #[derive(Debug, Clone)]
 pub enum Command {
+    SetOption {
+        name: Symbol,
+        value: Expr,
+      },      
     Datatype {
         name: Symbol,
         variants: Vec<Variant>,
@@ -324,6 +341,11 @@ pub enum Command {
 impl Command {
     fn to_sexp(&self) -> Sexp {
         match self {
+            Command::SetOption { name, value } => Sexp::List(vec![
+                Sexp::String("set-option".into()),
+                Sexp::String(name.to_string()),
+                value.to_sexp(),
+            ]),
             Command::Rewrite(name, rewrite) => rewrite.to_sexp(*name, false),
             Command::BiRewrite(name, rewrite) => rewrite.to_sexp(*name, true),
             Command::Datatype { name, variants } => {

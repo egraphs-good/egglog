@@ -1,15 +1,11 @@
 use crate::*;
 
-use crate::desugar::{literal_name, Desugar};
+use crate::desugar::{Desugar};
 use crate::typechecking::FuncType;
 use symbolic_expressions::Sexp;
 
 pub const RULE_PROOF_KEYWORD: &str = "rule-proof";
 
-pub fn proof_header(egraph: &EGraph) -> Vec<Command> {
-    let str = include_str!("proofheader.egg");
-    egraph.parse_program(str, false).unwrap()
-}
 
 // primitives don't need type info
 fn make_ast_version_prim(name: Symbol) -> Symbol {
@@ -19,8 +15,6 @@ fn make_ast_version_prim(name: Symbol) -> Symbol {
 fn make_ast_version(proof_state: &mut ProofState, expr: &NormExpr) -> Symbol {
     let NormExpr::Call(name, _) = expr;
     let types = proof_state
-        .desugar
-        .egraph
         .type_info
         .typecheck_expr(proof_state.current_ctx, expr)
         .unwrap();
@@ -34,8 +28,6 @@ fn make_ast_version(proof_state: &mut ProofState, expr: &NormExpr) -> Symbol {
 fn make_rep_version(proof_state: &mut ProofState, expr: &NormExpr) -> Symbol {
     let NormExpr::Call(name, _) = expr;
     let types = proof_state
-        .desugar
-        .egraph
         .type_info
         .typecheck_expr(proof_state.current_ctx, expr)
         .unwrap();
@@ -152,12 +144,12 @@ fn merge_action(proof_state: &mut ProofState, types: FuncType) -> Vec<Action> {
         format!("(set (EqGraph__ {t1} {t2}) congr_prf__)"),
         format!("(set (EqGraph__ {t2} {t1}) (Flip__ congr_prf__))"),
     ])
-    .map(|s| proof_state.desugar.egraph.action_parser.parse(&s).unwrap())
+    .map(|s| proof_state.desugar.action_parser.parse(&s).unwrap())
     .collect()
 }
 
 #[derive(Clone, Debug)]
-struct ProofInfo {
+pub(crate) struct ProofInfo {
     // proof for each variable bound in an assignment (lhs or rhs)
     pub var_term: HashMap<Symbol, Symbol>,
     // proofs for each variable
@@ -184,7 +176,7 @@ fn instrument_facts(
     for fact in body {
         match fact {
             NormFact::AssignLit(lhs, rhs) => {
-                let literal_name = literal_name(&proof_state.desugar, rhs);
+                let literal_name = proof_state.literal_name(rhs);
                 let rep_trm = proof_state.get_fresh();
                 let rep_prf = proof_state.get_fresh();
                 actions.push(NormAction::Let(
@@ -200,7 +192,7 @@ fn instrument_facts(
                 assert!(info.var_proof.insert(*lhs, rep_prf).is_none());
             }
             NormFact::Assign(lhs, NormExpr::Call(head, body))
-                if proof_state.desugar.egraph.type_info.is_primitive(*head) =>
+                if proof_state.type_info.is_primitive(*head) =>
             {
                 // child terms should already exist if we are computing something
                 let rep_trm = proof_state.get_fresh();
@@ -455,7 +447,7 @@ fn add_action_proof(
             res.push(NormAction::Let(
                 newterm,
                 NormExpr::Call(
-                    make_ast_version_prim(literal_name(&proof_state.desugar, lit)),
+                    make_ast_version_prim(proof_state.literal_name( lit)),
                     vec![*lhs],
                 ),
             ));
@@ -478,7 +470,7 @@ fn add_action_proof(
 
             res.push(NormAction::Set(
                 NormExpr::Call(
-                    make_rep_version_prim(&literal_name(&proof_state.desugar, lit)),
+                    make_rep_version_prim(&proof_state.literal_name( lit)),
                     vec![*lhs],
                 ),
                 trmprf,
@@ -604,8 +596,6 @@ fn instrument_rule(rule: &NormRule, rule_name: Symbol, proof_state: &mut ProofSt
 }
 fn make_rep_function(proof_state: &mut ProofState, expr: &NormExpr) -> FunctionDecl {
     let types = proof_state
-        .desugar
-        .egraph
         .type_info
         .typecheck_expr(proof_state.current_ctx, expr)
         .unwrap();
@@ -654,18 +644,15 @@ fn make_getchild_rule(proof_state: &mut ProofState, expr: &NormExpr) -> Command 
     }
 }
 
-pub(crate) struct ProofState<'a> {
+#[derive(Clone)]
+pub(crate) struct ProofState {
     pub(crate) global_var_ast: HashMap<Symbol, Symbol>,
     pub(crate) ast_funcs_created: HashSet<Symbol>,
     pub(crate) current_ctx: CommandId,
-    pub(crate) desugar: Desugar<'a>,
+    pub(crate) desugar: Desugar,
+    pub(crate) type_info: TypeInfo,
 }
 
-impl<'a> ProofState<'a> {
-    pub(crate) fn get_fresh(&mut self) -> Symbol {
-        (self.desugar.get_fresh)()
-    }
-}
 
 fn make_rep_command(proof_state: &mut ProofState, lhs: Symbol, expr: &NormExpr) -> Vec<Command> {
     let NormExpr::Call(head, body) = expr;
@@ -675,22 +662,22 @@ fn make_rep_command(proof_state: &mut ProofState, lhs: Symbol, expr: &NormExpr) 
         "(let {} ({} {}))",
         ast_var,
         make_ast_version(proof_state, &NormExpr::Call(*head, body.clone())),
-        ListDisplay(body.iter().map(|e| proof_state.global_var_ast[e]), " ")
+        ListDisplay(body.iter().map(|e| {
+            println!("{}", e);
+            proof_state.global_var_ast[e]}), " ")
     );
     let rep = make_rep_version(proof_state, expr);
     vec![
         Command::Action(
             proof_state
                 .desugar
-                .egraph
                 .action_parser
                 .parse(&ast_action)
                 .unwrap(),
         ),
         Command::Action(
             proof_state
-                .desugar
-                .egraph
+            .desugar
                 .action_parser
                 .parse(&format!(
                     "(set ({} {})
@@ -721,25 +708,23 @@ fn proof_original_action(action: &NormAction, proof_state: &mut ProofState) -> V
                 Command::Action(
                     proof_state
                         .desugar
-                        .egraph
                         .action_parser
                         .parse(&format!(
                             "(let {} ({} {}))",
                             ast_var,
-                            make_ast_version_prim(literal_name(&proof_state.desugar, literal)),
+                            make_ast_version_prim(proof_state.literal_name(literal)),
                             literal
                         ))
                         .unwrap(),
                 ),
                 Command::Action(
                     proof_state
-                        .desugar
-                        .egraph
+                    .desugar
                         .action_parser
                         .parse(&format!(
                             "(set ({} {})
                          (MakeTrmPrf__ {} (Original__ {})))",
-                            make_rep_version_prim(&literal_name(&proof_state.desugar, literal)),
+                            make_rep_version_prim(&proof_state.literal_name(literal)),
                             literal,
                             ast_var,
                             ast_var
@@ -755,7 +740,6 @@ fn proof_original_action(action: &NormAction, proof_state: &mut ProofState) -> V
             rep_commands.push(Command::Action(
                 proof_state
                     .desugar
-                    .egraph
                     .action_parser
                     .parse(&format!(
                         "(set (EqGraph__ {} {}) (OriginalEq__ {} {}))",
@@ -772,7 +756,6 @@ fn proof_original_action(action: &NormAction, proof_state: &mut ProofState) -> V
             vec![Command::Action(
                 proof_state
                     .desugar
-                    .egraph
                     .action_parser
                     .parse(&format!(
                         "(set (EqGraph__ {} {}) (OriginalEq__ {} {}))",
@@ -811,35 +794,42 @@ fn instrument_schedule(schedule: &NormSchedule) -> Schedule {
     }
 }
 
-// TODO we need to also instrument merge actions and merge because they can add new terms that need representatives
-// the egraph is the initial egraph with only default sorts
-pub(crate) fn add_proofs(program: Vec<NormCommand>, desugar: Desugar) -> Vec<Command> {
-    let mut res = vec![];
-    let mut proof_state = ProofState {
-        ast_funcs_created: Default::default(),
-        current_ctx: 0,
-        global_var_ast: Default::default(),
-        desugar,
-    };
 
+impl ProofState {
+    pub fn parse_program(&self, input: &str) -> Result<Vec<Command>, Error> {
+        self.desugar.parse_program(input)
+    }
+
+    pub fn new() -> Self {
+        ProofState {
+            type_info: TypeInfo::new(),
+            ast_funcs_created: Default::default(),
+            current_ctx: 0,
+            global_var_ast: Default::default(),
+            desugar: Desugar::new(),
+        }
+    }
+
+    // TODO we need to also instrument merge actions and merge because they can add new terms that need representatives
+// the egraph is the initial egraph with only default sorts
+pub(crate) fn add_proofs(&mut self, program: Vec<NormCommand>) -> Vec<Command> {
+    let mut res = vec![];
     // we disallow functions after push, so
     // we add new functions to the res_before_push vec
     let mut has_pushed = false;
     let mut res_before_push = vec![];
 
-    res.extend(setup_primitives());
-
     for command in program {
-        proof_state.current_ctx = command.metadata.id;
+        self.current_ctx = command.metadata.id;
 
         // first, set up any rep functions that we need
         command.command.map_exprs(&mut |expr| {
-            let ast_name = make_ast_version(&mut proof_state, expr);
-            if proof_state.ast_funcs_created.insert(ast_name) {
+            let ast_name = make_ast_version(self, expr);
+            if self.ast_funcs_created.insert(ast_name) {
                 let commands = vec![
-                    Command::Function(make_ast_function(&mut proof_state, expr)),
-                    Command::Function(make_rep_function(&mut proof_state, expr)),
-                    make_getchild_rule(&mut proof_state, expr),
+                    Command::Function(make_ast_function(self, expr)),
+                    Command::Function(make_rep_function(self, expr)),
+                    make_getchild_rule(self, expr),
                 ];
                 if has_pushed {
                     res_before_push.extend(commands);
@@ -866,7 +856,7 @@ pub(crate) fn add_proofs(program: Vec<NormCommand>, desugar: Desugar) -> Vec<Com
                 res.push(command.to_command());
             }
             NCommand::Declare(name, sort, _cost) => {
-                res.extend(make_declare_proof(*name, *sort, &mut proof_state));
+                res.extend(make_declare_proof(*name, *sort, self));
                 res.push(command.to_command());
             }
             NCommand::NormRule {
@@ -877,12 +867,12 @@ pub(crate) fn add_proofs(program: Vec<NormCommand>, desugar: Desugar) -> Vec<Com
                 res.push(Command::Rule {
                     ruleset: *ruleset,
                     name: *name,
-                    rule: instrument_rule(rule, *name, &mut proof_state),
+                    rule: instrument_rule(rule, *name, self),
                 });
             }
             NCommand::NormAction(action) => {
                 res.push(Command::Action(action.to_action()));
-                res.extend(proof_original_action(action, &mut proof_state));
+                res.extend(proof_original_action(action, self));
             }
             NCommand::Check(_facts) => {
                 res.push(command.to_command());
@@ -894,29 +884,23 @@ pub(crate) fn add_proofs(program: Vec<NormCommand>, desugar: Desugar) -> Vec<Com
         }
     }
 
-    proof_state.desugar.define_memo.clear();
+    self.desugar.define_memo.clear();
     res_before_push.extend(res);
     res_before_push
 }
 
-pub(crate) fn should_add_proofs(program: &[NormCommand]) -> bool {
-    let mut has_proof_keyword = false;
-    for command in program {
-        if let NCommand::NormRule {
-            name: _,
-            ruleset: _,
-            ref rule,
-        } = command.command
-        {
-            rule.map_def_use(&mut |var, _def| {
-                if var == RULE_PROOF_KEYWORD.into() {
-                    has_proof_keyword = true;
-                }
-                var
-            });
-        }
+    pub(crate) fn get_fresh(&mut self) -> Symbol {
+        self.desugar.get_fresh()
     }
-    eprintln!("has_proof_keyword: {}", has_proof_keyword);
 
-    has_proof_keyword
+    pub(crate) fn proof_header(&self) -> Vec<Command> {
+        let str = include_str!("proofheader.egg");
+        let rest_of_header = setup_primitives();
+        self.parse_program(str).unwrap().into_iter().chain(rest_of_header).collect()
+    }
+
+    pub(crate) fn literal_name(&self, lit: &Literal) -> Symbol {
+        self.type_info.infer_literal(lit
+        ).name()
+    }
 }

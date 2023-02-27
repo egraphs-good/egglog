@@ -17,9 +17,6 @@ match {
 }
 
 
-pub ParenthesizedProgram: Vec<Command> = {
-    "(" <Program> ")" => <>,
-}
 pub Program: Vec<Command> = { (Command)* => <> }
 
 List<T>: Vec<T> = { 
@@ -37,6 +34,7 @@ Comma<T>: Vec<T> = {
 };
 
 Command: Command = {
+    "(" "set-option" <name:Ident> <value:Expr> ")" => Command::SetOption { name, value },
     "(" "datatype" <name:Ident> <variants:(Variant)*> ")" => Command::Datatype { <> },
     "(" "sort" <name:Ident> "(" <head:Ident> <tail:(Expr)*> ")" ")" => Command::Sort (name, Some((head, tail))),
     "(" "sort" <name:Ident> ")" => Command::Sort (name, None),
