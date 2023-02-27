@@ -522,7 +522,8 @@ trait ExprChecker<'a> {
 
                     let t = self.do_function(*sym, ts);
                     Ok((t, f.schema.output.clone()))
-                } else if let Some(prims) = self.egraph().proof_state.type_info.primitives.get(sym) {
+                } else if let Some(prims) = self.egraph().proof_state.type_info.primitives.get(sym)
+                {
                     let mut ts = Vec::with_capacity(args.len());
                     let mut tys = Vec::with_capacity(args.len());
                     for arg in args {

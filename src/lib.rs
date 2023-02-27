@@ -17,8 +17,7 @@ use instant::{Duration, Instant};
 use sort::*;
 use thiserror::Error;
 
-use desugar::{desugar_commands, make_get_new_id, Desugar};
-use proofs::{ProofState};
+use proofs::ProofState;
 
 use symbolic_expressions::Sexp;
 
@@ -1074,10 +1073,15 @@ impl EGraph {
     }
 
     fn process_command(&mut self, command: Command) -> Result<Vec<NormCommand>, Error> {
-        let program_desugared = self.proof_state.desugar.desugar_program(vec![command], self.test_proofs)?;
+        let program_desugared = self
+            .proof_state
+            .desugar
+            .desugar_program(vec![command], self.test_proofs)?;
 
         let type_info_before = self.proof_state.type_info.clone();
-        self.proof_state.type_info.typecheck_program(&program_desugared)?;
+        self.proof_state
+            .type_info
+            .typecheck_program(&program_desugared)?;
 
         let program = if self.proofs_enabled {
             // proofs require type info, so
@@ -1091,7 +1095,9 @@ impl EGraph {
             // revert back to the type info before
             // proofs were added, typecheck again
             self.proof_state.type_info = type_info_before;
-            self.proof_state.type_info.typecheck_program(&final_desugared)?;
+            self.proof_state
+                .type_info
+                .typecheck_program(&final_desugared)?;
             final_desugared
         } else {
             program_desugared
@@ -1112,24 +1118,28 @@ impl EGraph {
     }
 
     pub fn run_program(&mut self, mut program: Vec<Command>) -> Result<Vec<String>, Error> {
-        let mut msgs = vec![]; 
+        let mut msgs = vec![];
         let should_run = true;
 
-        if let Some(Command::SetOption { name, value: Expr::Lit(Literal::Int(1)) }) = program.first() {
+        if let Some(Command::SetOption {
+            name,
+            value: Expr::Lit(Literal::Int(1)),
+        }) = program.first()
+        {
             if name == &"enable_proofs".into() {
                 self.enable_proofs();
                 program = program.split_off(1);
             }
         }
 
-        let mut normalized = vec![];
         for command in program {
-            normalized.extend(self.process_command(command)?);
-        }
-        for command in normalized {
-                let msg = self.run_command(command.command, should_run)?;
+            // Important to process each command individually
+            // because push and pop create new scopes
+            for processed in self.process_command(command)? {
+                let msg = self.run_command(processed.command, should_run)?;
                 log::info!("{}", msg);
                 msgs.push(msg);
+            }
         }
 
         Ok(msgs)
@@ -1149,10 +1159,7 @@ impl EGraph {
         self.proof_state.parse_program(input)
     }
 
-    pub fn parse_and_run_program(
-        &mut self,
-        input: &str,
-    ) -> Result<Vec<String>, Error> {
+    pub fn parse_and_run_program(&mut self, input: &str) -> Result<Vec<String>, Error> {
         let parsed = self.proof_state.parse_program(input)?;
         self.run_program(parsed)
     }

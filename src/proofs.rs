@@ -1,11 +1,10 @@
 use crate::*;
 
-use crate::desugar::{Desugar};
+use crate::desugar::Desugar;
 use crate::typechecking::FuncType;
 use symbolic_expressions::Sexp;
 
 pub const RULE_PROOF_KEYWORD: &str = "rule-proof";
-
 
 // primitives don't need type info
 fn make_ast_version_prim(name: Symbol) -> Symbol {
@@ -447,7 +446,7 @@ fn add_action_proof(
             res.push(NormAction::Let(
                 newterm,
                 NormExpr::Call(
-                    make_ast_version_prim(proof_state.literal_name( lit)),
+                    make_ast_version_prim(proof_state.literal_name(lit)),
                     vec![*lhs],
                 ),
             ));
@@ -470,7 +469,7 @@ fn add_action_proof(
 
             res.push(NormAction::Set(
                 NormExpr::Call(
-                    make_rep_version_prim(&proof_state.literal_name( lit)),
+                    make_rep_version_prim(&proof_state.literal_name(lit)),
                     vec![*lhs],
                 ),
                 trmprf,
@@ -594,6 +593,7 @@ fn instrument_rule(rule: &NormRule, rule_name: Symbol, proof_state: &mut ProofSt
     }
     .to_rule()
 }
+
 fn make_rep_function(proof_state: &mut ProofState, expr: &NormExpr) -> FunctionDecl {
     let types = proof_state
         .type_info
@@ -653,19 +653,16 @@ pub(crate) struct ProofState {
     pub(crate) type_info: TypeInfo,
 }
 
-
 fn make_rep_command(proof_state: &mut ProofState, lhs: Symbol, expr: &NormExpr) -> Vec<Command> {
     let NormExpr::Call(head, body) = expr;
     let ast_var = proof_state.get_fresh();
-    proof_state.global_var_ast.insert(lhs, ast_var);
     let ast_action = format!(
         "(let {} ({} {}))",
         ast_var,
         make_ast_version(proof_state, &NormExpr::Call(*head, body.clone())),
-        ListDisplay(body.iter().map(|e| {
-            println!("{}", e);
-            proof_state.global_var_ast[e]}), " ")
+        ListDisplay(body.iter().map(|e| { proof_state.global_var_ast[e] }), " ")
     );
+    proof_state.global_var_ast.insert(lhs, ast_var);
     let rep = make_rep_version(proof_state, expr);
     vec![
         Command::Action(
@@ -677,7 +674,7 @@ fn make_rep_command(proof_state: &mut ProofState, lhs: Symbol, expr: &NormExpr) 
         ),
         Command::Action(
             proof_state
-            .desugar
+                .desugar
                 .action_parser
                 .parse(&format!(
                     "(set ({} {})
@@ -719,7 +716,7 @@ fn proof_original_action(action: &NormAction, proof_state: &mut ProofState) -> V
                 ),
                 Command::Action(
                     proof_state
-                    .desugar
+                        .desugar
                         .action_parser
                         .parse(&format!(
                             "(set ({} {})
@@ -794,7 +791,6 @@ fn instrument_schedule(schedule: &NormSchedule) -> Schedule {
     }
 }
 
-
 impl ProofState {
     pub fn parse_program(&self, input: &str) -> Result<Vec<Command>, Error> {
         self.desugar.parse_program(input)
@@ -811,83 +807,82 @@ impl ProofState {
     }
 
     // TODO we need to also instrument merge actions and merge because they can add new terms that need representatives
-// the egraph is the initial egraph with only default sorts
-pub(crate) fn add_proofs(&mut self, program: Vec<NormCommand>) -> Vec<Command> {
-    let mut res = vec![];
-    // we disallow functions after push, so
-    // we add new functions to the res_before_push vec
-    let mut has_pushed = false;
-    let mut res_before_push = vec![];
+    // the egraph is the initial egraph with only default sorts
+    pub(crate) fn add_proofs(&mut self, program: Vec<NormCommand>) -> Vec<Command> {
+        let mut res = vec![];
+        // we disallow functions after push, so
+        // we add new functions to the res_before_push vec
+        let mut has_pushed = false;
+        let mut res_before_push = vec![];
 
-    for command in program {
-        self.current_ctx = command.metadata.id;
+        for command in program {
+            self.current_ctx = command.metadata.id;
 
-        // first, set up any rep functions that we need
-        command.command.map_exprs(&mut |expr| {
-            let ast_name = make_ast_version(self, expr);
-            if self.ast_funcs_created.insert(ast_name) {
-                let commands = vec![
-                    Command::Function(make_ast_function(self, expr)),
-                    Command::Function(make_rep_function(self, expr)),
-                    make_getchild_rule(self, expr),
-                ];
-                if has_pushed {
-                    res_before_push.extend(commands);
-                } else {
-                    res.extend(commands);
+            // first, set up any rep functions that we need
+            command.command.map_exprs(&mut |expr| {
+                let ast_name = make_ast_version(self, expr);
+                if self.ast_funcs_created.insert(ast_name) {
+                    let commands = vec![
+                        Command::Function(make_ast_function(self, expr)),
+                        Command::Function(make_rep_function(self, expr)),
+                        make_getchild_rule(self, expr),
+                    ];
+                    if has_pushed {
+                        res_before_push.extend(commands);
+                    } else {
+                        res.extend(commands);
+                    }
                 }
-            }
-            expr.clone()
-        });
+                expr.clone()
+            });
 
-        match &command.command {
-            NCommand::Push(_num) => {
-                if !has_pushed {
-                    has_pushed = true;
-                    res_before_push = res.clone();
-                    res = vec![];
+            match &command.command {
+                NCommand::Push(_num) => {
+                    if !has_pushed {
+                        has_pushed = true;
+                        res_before_push = res.clone();
+                        res = vec![];
+                    }
+                    res.push(command.to_command());
                 }
-                res.push(command.to_command());
+                NCommand::Sort(_name, _presort_and_args) => {
+                    res.push(command.to_command());
+                }
+                NCommand::Function(_fdecl) => {
+                    res.push(command.to_command());
+                }
+                NCommand::Declare(name, sort, _cost) => {
+                    res.extend(make_declare_proof(*name, *sort, self));
+                    res.push(command.to_command());
+                }
+                NCommand::NormRule {
+                    ruleset,
+                    name,
+                    rule,
+                } => {
+                    res.push(Command::Rule {
+                        ruleset: *ruleset,
+                        name: *name,
+                        rule: instrument_rule(rule, *name, self),
+                    });
+                }
+                NCommand::NormAction(action) => {
+                    res.push(Command::Action(action.to_action()));
+                    res.extend(proof_original_action(action, self));
+                }
+                NCommand::Check(_facts) => {
+                    res.push(command.to_command());
+                }
+                NCommand::RunSchedule(schedule) => {
+                    res.push(Command::RunSchedule(instrument_schedule(schedule)));
+                }
+                _ => res.push(command.to_command()),
             }
-            NCommand::Sort(_name, _presort_and_args) => {
-                res.push(command.to_command());
-            }
-            NCommand::Function(_fdecl) => {
-                res.push(command.to_command());
-            }
-            NCommand::Declare(name, sort, _cost) => {
-                res.extend(make_declare_proof(*name, *sort, self));
-                res.push(command.to_command());
-            }
-            NCommand::NormRule {
-                ruleset,
-                name,
-                rule,
-            } => {
-                res.push(Command::Rule {
-                    ruleset: *ruleset,
-                    name: *name,
-                    rule: instrument_rule(rule, *name, self),
-                });
-            }
-            NCommand::NormAction(action) => {
-                res.push(Command::Action(action.to_action()));
-                res.extend(proof_original_action(action, self));
-            }
-            NCommand::Check(_facts) => {
-                res.push(command.to_command());
-            }
-            NCommand::RunSchedule(schedule) => {
-                res.push(Command::RunSchedule(instrument_schedule(schedule)));
-            }
-            _ => res.push(command.to_command()),
         }
-    }
 
-    self.desugar.define_memo.clear();
-    res_before_push.extend(res);
-    res_before_push
-}
+        res_before_push.extend(res);
+        res_before_push
+    }
 
     pub(crate) fn get_fresh(&mut self) -> Symbol {
         self.desugar.get_fresh()
@@ -896,11 +891,14 @@ pub(crate) fn add_proofs(&mut self, program: Vec<NormCommand>) -> Vec<Command> {
     pub(crate) fn proof_header(&self) -> Vec<Command> {
         let str = include_str!("proofheader.egg");
         let rest_of_header = setup_primitives();
-        self.parse_program(str).unwrap().into_iter().chain(rest_of_header).collect()
+        self.parse_program(str)
+            .unwrap()
+            .into_iter()
+            .chain(rest_of_header)
+            .collect()
     }
 
     pub(crate) fn literal_name(&self, lit: &Literal) -> Symbol {
-        self.type_info.infer_literal(lit
-        ).name()
+        self.type_info.infer_literal(lit).name()
     }
 }

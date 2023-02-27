@@ -70,7 +70,7 @@ pub enum NCommand {
     SetOption {
         name: Symbol,
         value: Expr,
-      },      
+    },
     Sort(Symbol, Option<(Symbol, Vec<Expr>)>),
     Function(FunctionDecl),
     // Declare a variable with a given name and type
@@ -286,7 +286,7 @@ pub enum Command {
     SetOption {
         name: Symbol,
         value: Expr,
-      },      
+    },
     Datatype {
         name: Symbol,
         variants: Vec<Variant>,

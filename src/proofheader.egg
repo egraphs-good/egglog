@@ -85,7 +85,7 @@
 ;; do one step of proof search to find a path
 (rule ((= proof (ProofBetween__ t1 t2 tmid))
        (= eproof (EqGraph__ tmid next))
-       (< (+ (ProofCost__ t1 tmid) 1) ;; TODO will this desugar into a super inefficient query? I think it enumerates all ProofCost__ a b tuples.
+       (< (+ (ProofCost__ t1 tmid) 1)
           (ProofCost__ t1 next)))
       ((set (ProofBetween__ t1 t2 next)
             (Cons__ eproof proof))
