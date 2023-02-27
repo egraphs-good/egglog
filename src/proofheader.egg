@@ -47,15 +47,15 @@
 
 
 ;; prove two terms equal
-(function EqGraph__ (Ast__ Ast__) Proof__  :cost 100000 :merge old)
+(function EqGraph__ (Ast__ Ast__) Proof__  :cost 10000000 :merge old)
 
 (datatype TrmPrf__
   (MakeTrmPrf__ Ast__ Proof__))
 
 ;; get child terms, proofs, and child terms
-(function TrmOf__ (TrmPrf__) Ast__ :cost 10000)
-(function PrfOf__ (TrmPrf__) Proof__ :cost 100000)
-(function GetChild__ (Ast__ i64) Ast__ :cost 100000)
+(function TrmOf__ (TrmPrf__) Ast__ :cost 10000000)
+(function PrfOf__ (TrmPrf__) Proof__ :cost 10000000)
+(function GetChild__ (Ast__ i64) Ast__ :cost 10000000)
 
 (ruleset proofrules__)
 
@@ -81,7 +81,8 @@
 (rule ((= proof (ProofBetween__ t1 t2 tmid))
        (= eproof (EqGraph__ tmid next)))
       ((set (ProofCost__ t1 next)
-            100000000)))
+            10000000000))
+      :ruleset proof-extract__)
 ;; do one step of proof search to find a path
 (rule ((= proof (ProofBetween__ t1 t2 tmid))
        (= eproof (EqGraph__ tmid next))
@@ -90,8 +91,7 @@
       ((set (ProofBetween__ t1 t2 next)
             (Cons__ eproof proof))
        (set (ProofCost__ t1 next)
-            (+ (ProofCost__ t1 tmid) 1))      
-      )
+            (+ (ProofCost__ t1 tmid) 1)))
       :ruleset proof-extract__)
 ;; when you find a path, union it with the equality proof
 (rule ((= e (DemandEq__ t1 t2))

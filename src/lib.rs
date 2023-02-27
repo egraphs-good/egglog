@@ -55,6 +55,27 @@ pub trait PrimitiveLike {
     fn apply(&self, values: &[Value]) -> Option<Value>;
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct RunReport {
+    updated: bool,
+    search_time: Duration,
+    apply_time: Duration,
+    rebuild_time: Duration,
+}
+
+impl RunReport {
+    pub fn union(&self, other: &Self) -> Self {
+        Self {
+            updated: self.updated || other.updated,
+            search_time: self.search_time + other.search_time,
+            apply_time: self.apply_time + other.apply_time,
+            rebuild_time: self.rebuild_time + other.rebuild_time,
+        }
+    }
+}
+
+const HIGH_COST: usize = 1000000000000;
+
 #[derive(Clone)]
 pub struct Primitive(Arc<dyn PrimitiveLike>);
 
@@ -129,7 +150,6 @@ pub struct EGraph {
     pub(crate) proof_state: ProofState,
     functions: HashMap<Symbol, Function>,
     rulesets: HashMap<Symbol, HashMap<Symbol, Rule>>,
-    saturated: bool,
     proofs_enabled: bool,
     timestamp: u32,
     pub test_proofs: bool,
@@ -159,10 +179,9 @@ impl Default for EGraph {
             functions: Default::default(),
             rulesets: Default::default(),
             proof_state: ProofState::new(),
-            match_limit: 10_000_000,
-            node_limit: 100_000_000,
+            match_limit: 10_000_000_000_000,
+            node_limit: 10_000_000_000_000,
             timestamp: 0,
-            saturated: false,
             proofs_enabled: false,
             test_proofs: false,
             fact_directory: None,
@@ -409,69 +428,50 @@ impl EGraph {
     }
 
     // returns whether the egraph was updated
-    pub fn run_schedule(&mut self, sched: &NormSchedule) -> bool {
+    pub fn run_schedule(&mut self, sched: &NormSchedule) -> RunReport {
         match sched {
-            NormSchedule::Run(config) => {
-                let limit = config.limit;
-                let [st, at, rt] = self.run_rules(config);
-                let st = st.as_secs_f64();
-                let at = at.as_secs_f64();
-                let rt = rt.as_secs_f64();
-                let total = st + at + rt;
-                let size = self.num_tuples();
-                log::info!(
-                    "Ran {limit} in {total:10.6}s.\n\
-                    Search:  ({:.02}) {st:10.6}s\n\
-                    Apply:   ({:.02}) {at:10.6}s\n\
-                    Rebuild: ({:.02}) {rt:10.6}s\n\
-                    Database size: {size}",
-                    st / total,
-                    at / total,
-                    rt / total,
-                );
-                !self.saturated
-            }
+            NormSchedule::Run(config) => self.run_rules(config),
             NormSchedule::Repeat(limit, sched) => {
-                let mut updated = false;
-                for _ in 0..*limit {
-                    updated |= self.run_schedule(sched);
-                    if !updated {
+                let mut report = RunReport::default();
+                for _i in 0..*limit {
+                    let rec = report.union(&self.run_schedule(sched));
+                    report = report.union(&rec);
+                    if !rec.updated {
                         break;
                     }
                 }
-                updated
+                report
             }
             NormSchedule::Saturate(sched) => {
-                let mut updated = false;
-                let mut still_updating = true;
-                while still_updating {
-                    still_updating = self.run_schedule(sched);
-                    updated |= still_updating;
+                let mut report = RunReport::default();
+                loop {
+                    let rec = self.run_schedule(sched);
+                    report = report.union(&rec);
+                    if !rec.updated {
+                        break;
+                    }
                 }
-                updated
+                report
             }
             NormSchedule::Sequence(scheds) => {
-                let mut updated = false;
+                let mut report = RunReport::default();
                 for sched in scheds {
-                    updated |= self.run_schedule(sched);
+                    report = report.union(&self.run_schedule(sched));
                 }
-                updated
+                report
             }
         }
     }
 
-    pub fn run_rules(&mut self, config: &NormRunConfig) -> [Duration; 3] {
+    pub fn run_rules(&mut self, config: &NormRunConfig) -> RunReport {
         let NormRunConfig {
             ruleset,
             limit,
             until,
         } = config;
-        let mut search_time = Duration::default();
-        let mut apply_time = Duration::default();
+        let mut report: RunReport = Default::default();
 
-        // we rebuild on every command so we are in a valid state
-        let mut rebuild_time = Duration::ZERO;
-
+        // we rebuild on every command so we are in a valid state at this point
         for i in 0..*limit {
             if let Some(facts) = until {
                 if self.check_facts(facts).is_ok() {
@@ -484,18 +484,16 @@ impl EGraph {
                 }
             }
 
-            self.saturated = true;
-            let [st, at] = self.step_rules(i, *ruleset);
-            search_time += st;
-            apply_time += at;
+            let subreport = self.step_rules(i, *ruleset);
+            report = report.union(&subreport);
 
             let rebuild_start = Instant::now();
             let updates = self.rebuild_nofail();
             log::debug!("database size: {}", self.num_tuples());
             log::debug!("Made {updates} updates (iteration {i})");
-            rebuild_time += rebuild_start.elapsed();
+            report.rebuild_time += rebuild_start.elapsed();
             self.timestamp += 1;
-            if self.saturated {
+            if !subreport.updated {
                 log::info!("Breaking early at iteration {}!", i);
                 break;
             }
@@ -538,29 +536,11 @@ impl EGraph {
         //         log::debug!("  {args:?} = {val:?}");
         //     }
         // }
-        [search_time, apply_time, rebuild_time]
+        report
     }
 
-    fn step_rules(&mut self, iteration: usize, ruleset: Symbol) -> [Duration; 2] {
-        // fn make_subst(rule: &Rule, values: &[Value]) -> Subst {
-        //     let get_val = |t: &AtomTerm| match t {
-        //         AtomTerm::Var(sym) => {
-        //             let i = rule
-        //                 .query
-        //                 .vars
-        //                 .get_index_of(sym)
-        //                 .unwrap_or_else(|| panic!("Couldn't find variable '{sym}'"));
-        //             values[i]
-        //         }
-        //         AtomTerm::Value(val) => *val,
-        //     };
-
-        //     todo!()
-        //     // rule.bindings
-        //     //     .iter()
-        //     //     .map(|(k, t)| (*k, get_val(t)))
-        //     //     .collect()
-        // }
+    fn step_rules(&mut self, iteration: usize, ruleset: Symbol) -> RunReport {
+        let mut report = RunReport::default();
 
         let ban_length = 5;
 
@@ -594,13 +574,15 @@ impl EGraph {
                     rule_search_time.as_secs_f64(),
                     all_values.len()
                 );
+                report.updated |= !all_values.is_empty();
                 searched.push((name, all_values, rule_search_time));
             } else {
-                self.saturated = false;
+                report.updated = true;
             }
         }
 
         let search_elapsed = search_start.elapsed();
+        report.search_time += search_elapsed;
 
         let apply_start = Instant::now();
         'outer: for (name, all_values, time) in searched {
@@ -618,7 +600,7 @@ impl EGraph {
                     rule.times_banned += 1;
                     rule.banned_until = iteration + ban_length;
                     log::info!("Banning rule {name} for {ban_length} iterations, matched {len} > {threshold} times");
-                    self.saturated = false;
+                    report.updated = true;
                     continue;
                 }
             }
@@ -650,7 +632,8 @@ impl EGraph {
         }
         self.rulesets.insert(ruleset, rules);
         let apply_elapsed = apply_start.elapsed();
-        [search_elapsed, apply_elapsed]
+        report.apply_time += apply_elapsed;
+        report
     }
 
     fn add_rule_with_name(
@@ -873,13 +856,13 @@ impl EGraph {
                     match &action {
                         NormAction::Let(name, contents) => {
                             // define with high cost
-                            self.define(*name, &contents.to_expr(), Some(1000000))?;
+                            self.define(*name, &contents.to_expr(), Some(HIGH_COST))?;
                         }
                         NormAction::LetVar(var1, var2) => {
-                            self.define(*var1, &Expr::Var(*var2), Some(10000))?;
+                            self.define(*var1, &Expr::Var(*var2), Some(HIGH_COST))?;
                         }
                         NormAction::LetLit(var, lit) => {
-                            self.define(*var, &Expr::Lit(lit.clone()), Some(10000))?;
+                            self.define(*var, &Expr::Lit(lit.clone()), Some(HIGH_COST))?;
                         }
                         _ => {
                             self.eval_actions(std::slice::from_ref(&action.to_action()))?;

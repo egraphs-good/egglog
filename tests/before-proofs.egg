@@ -25,14 +25,18 @@
 (check (= (Add (Var "x") (Const two))
           (Add (Const two) (Var "x"))))
 
-(declare p1 Proof__ :cost 100000)
+(let zero (Const (rational 0 1)))
+(let addx2 (Add (Var "x") (Const two)))
+(let addx20 (Add addx2 zero))
 
-(rule ((= (Add (Var "x") (Const two))
-          (Add (Const two) (Var "x"))))
+(check (= addx2
+          addx20))
+
+(declare p1 Proof__ :cost 1000000000000)
+
+(rule ((= addx2 addx20))
       ((union rule-proof p1)))
 
 (run 1)
-
-
 (run-schedule (saturate proof-extract__))
 (extract p1)

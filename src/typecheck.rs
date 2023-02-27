@@ -654,7 +654,6 @@ impl EGraph {
                         out.value
                     } else if make_defaults {
                         let ts = self.timestamp;
-                        self.saturated = false;
                         let out = &function.schema.output;
                         match function.decl.default.as_ref() {
                             None if out.name() == UNIT_SYM.into() => {
@@ -707,11 +706,6 @@ impl EGraph {
                     // We should only have canonical values here: omit the canonicalization step
                     let old_value = function.insert(args, new_value, self.timestamp);
 
-                    // if the value does not exist
-                    if old_value.is_none() {
-                        self.saturated = false;
-                    }
-
                     if let Some(old_value) = old_value {
                         if new_value != old_value {
                             let tag = old_value.tag;
@@ -726,11 +720,9 @@ impl EGraph {
                             let function = self.functions.get_mut(f).unwrap();
                             let merged: Value = match function.merge.merge_vals.clone() {
                                 MergeFn::AssertEq => {
-                                    self.saturated = false;
                                     return Err(Error::MergeError(*f, new_value, old_value));
                                 }
                                 MergeFn::Union => {
-                                    self.saturated = false;
                                     self.unionfind.union_values(old_value, new_value, tag)
                                 }
                                 MergeFn::Expr(merge_prog) => {
@@ -739,7 +731,6 @@ impl EGraph {
                                     self.run_actions(stack, &values, &merge_prog, true)?;
                                     let result = stack.pop().unwrap();
                                     stack.truncate(old_len);
-                                    self.saturated &= result == old_value;
                                     result
                                 }
                             };
@@ -758,9 +749,6 @@ impl EGraph {
                     let first = self.unionfind.find(Id::from(values[0].bits as usize));
                     values[1..].iter().fold(first, |a, b| {
                         let b = self.unionfind.find(Id::from(b.bits as usize));
-                        if a != b {
-                            self.saturated = false;
-                        }
                         self.unionfind.union(a, b, sort)
                     });
                     stack.truncate(new_len);
@@ -779,7 +767,7 @@ impl EGraph {
                     let function = self.functions.get_mut(f).unwrap();
                     let new_len = stack.len() - function.schema.input.len();
                     let args = &stack[new_len..];
-                    self.saturated &= !function.remove(args, self.timestamp);
+                    function.remove(args, self.timestamp);
                     stack.truncate(new_len);
                 }
             }

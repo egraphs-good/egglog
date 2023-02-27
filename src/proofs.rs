@@ -304,7 +304,7 @@ fn make_declare_proof(
     proof_state.global_var_ast.insert(name, term);
     vec![
         // TODO using high cost big const number
-        Command::Declare(term, "Ast__".into(), Some(1000000)),
+        Command::Declare(term, "Ast__".into(), Some(HIGH_COST)),
         Command::Action(Action::Let(
             proof,
             Expr::Call("Original__".into(), vec![Expr::Var(term)]),
