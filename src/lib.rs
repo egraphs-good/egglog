@@ -845,7 +845,6 @@ impl EGraph {
                     if variants > 0 {
                         let line = "\n    ";
                         let v_exprs = ListDisplay(&exprs, line);
-                        println!("\nVariants of {expr}:{line}{v_exprs}");
                         write!(msg, "\nVariants of {expr}:{line}{v_exprs}").unwrap();
                     }
                     msg
@@ -864,7 +863,6 @@ impl EGraph {
             NCommand::Simplify { var, config } => {
                 if should_run {
                     let (cost, expr) = self.simplify(Expr::Var(var), &config)?;
-                    println!("{}", expr);
                     format!("Simplified with cost {cost} to {expr}")
                 } else {
                     "Skipping simplify.".into()
@@ -1090,8 +1088,6 @@ impl EGraph {
 
             let final_desugared = self.proof_state.desugar.desugar_program(proofs, false)?;
 
-            println!("{}", ListDisplay(&final_desugared, "\n"));
-
             // revert back to the type info before
             // proofs were added, typecheck again
             self.proof_state.type_info = type_info_before;
@@ -1102,7 +1098,6 @@ impl EGraph {
         } else {
             program_desugared
         };
-        println!("{}", ListDisplay(&program, "\n"));
 
         Ok(program)
     }
