@@ -422,8 +422,8 @@ pub(crate) fn desugar_command(
             desugared.push(NormCommand::Fail(Box::new(last.unwrap())));
             desugared
         }
-        Command::Input { .. } => {
-            todo!("desugar input");
+        Command::Input { name, file } => {
+            vec![NormCommand::Input { name, file }]
         }
     })
 }
