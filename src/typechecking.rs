@@ -200,11 +200,10 @@ impl TypeInfo {
 
     fn typecheck_rule(&mut self, ctx: CommandId, rule: &NormRule) -> Result<(), TypeError> {
         // also check the validity of the ssa
-        let mut bindings = self.verify_normal_form_facts(&rule.body);
-        self.verify_normal_form_actions(&rule.head, &mut bindings);
-
         self.typecheck_facts(ctx, &rule.body)?;
         self.typecheck_actions(ctx, &rule.head)?;
+        let mut bindings = self.verify_normal_form_facts(&rule.body);
+        self.verify_normal_form_actions(&rule.head, &mut bindings);
         Ok(())
     }
 
@@ -266,6 +265,7 @@ impl TypeInfo {
         let_bound: &mut HashSet<Symbol>,
     ) {
         let assert_bound = |var, let_bound: &HashSet<Symbol>| {
+            eprintln!("var {}", var);
             assert!(
                 let_bound.contains(var)
                     || self.global_types.contains_key(var)

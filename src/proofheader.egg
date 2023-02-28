@@ -35,7 +35,7 @@
   ;; a placeholder for a proof of equality between two
   ;; terms which can be proven equal using the graph
   ;; stored in the `Eq` relation
-  (DemandEq__ Ast__ Ast__ :cost 10000000))
+  (DemandEq__ Ast__ Ast__ :cost 1000000))
 
 ;; ProofList definitions
 (function Cons__ (Proof__ ProofList__) ProofList__)
@@ -47,15 +47,15 @@
 
 
 ;; prove two terms equal
-(function EqGraph__ (Ast__ Ast__) Proof__  :cost 10000000 :merge old)
+(function EqGraph__ (Ast__ Ast__) Proof__  :cost 1000000 :merge old)
 
 (datatype TrmPrf__
   (MakeTrmPrf__ Ast__ Proof__))
 
 ;; get child terms, proofs, and child terms
-(function TrmOf__ (TrmPrf__) Ast__ :cost 10000000)
-(function PrfOf__ (TrmPrf__) Proof__ :cost 10000000)
-(function GetChild__ (Ast__ i64) Ast__ :cost 10000000)
+(function TrmOf__ (TrmPrf__) Ast__ :cost 1000000)
+(function PrfOf__ (TrmPrf__) Proof__ :cost 1000000)
+(function GetChild__ (Ast__ i64) Ast__ :cost 1000000)
 
 (ruleset proofrules__)
 
@@ -68,32 +68,82 @@
 (ruleset proof-extract__)
 
 ;; start term, end term, current progress term, proof
-(function ProofBetween__ (Ast__ Ast__ Ast__) ProofList__ :cost 100000 :merge old)
-(function ProofCost__ (Ast__ Ast__) i64 :merge (min old new))
+(function ProofBetween__ (Ast__ Ast__ Ast__) ProofList__ :cost 1000000 :merge new)
+(function PathCost__ (Ast__ Ast__) i64 :merge (min old new))
 
+(function ProofCost__ (Proof__) i64 :merge (min old new))
+(function ProofListCost__ (ProofList__) i64 :merge (min old new))
+
+;; propagate demand for proofs
+(rule ((= p (Original__ a)))
+      ((set (ProofCost__ p) 1))
+      :ruleset proof-extract__)
+(rule ((= p (OriginalEq__ a b)))
+      ((set (ProofCost__ p) 1))
+      :ruleset proof-extract__)
+(rule ((= p (Rule__ pl s))
+       (= cost (ProofListCost__ pl)))
+      ((set (ProofCost__ p) cost))
+      :ruleset proof-extract__)
+(rule ((= p (RuleTerm__ p1 a))
+       (= cost (ProofCost__ p1)))
+      ((set (ProofCost__ p) cost))
+      :ruleset proof-extract__)
+(rule ((= p (ComputePrim__ a)))
+      ((set (ProofCost__ p) 1))
+      :ruleset proof-extract__)
+(rule ((= p (RuleEquality__ p1 a b))
+       (= cost (ProofCost__ p1)))
+      ((set (ProofCost__ p) cost))
+      :ruleset proof-extract__)
+(rule ((= p (Transitivity__ pl))
+       (= cost (ProofListCost__ pl)))
+      ((set (ProofCost__ p) cost))
+      :ruleset proof-extract__)
+(rule ((= p (Flip__ p1))
+       (= cost (ProofCost__ p1)))
+      ((set (ProofCost__ p) cost))
+      :ruleset proof-extract__)
+(rule ((= p (Congruence__ p1 pl))
+       (= cost (ProofListCost__ pl)))
+      ((set (ProofCost__ p) cost))
+      :ruleset proof-extract__)
+(rule ((= p (DemandEq__ a b)))
+      ((set (ProofCost__ p) 1000000))
+      :ruleset proof-extract__)
+(rule ((= p (Cons__ p1 pl))
+       (= cost (ProofCost__ p1))
+       (= cost2 (ProofListCost__ pl)))
+      ((set (ProofListCost__ p) (+ cost cost2)))
+      :ruleset proof-extract__)
+(rule ((= p Null__))
+      ((set (ProofListCost__ p) 0))
+      :ruleset proof-extract__)
 
 ;; start proof search for equalities
 (rule ((= e (DemandEq__ t1 t2)))
       ((set (ProofBetween__ t1 t2 t1) Null__)
-       (set (ProofCost__ t1 t1) 0))
+       (set (PathCost__ t1 t1) 0))
       :ruleset proof-extract__)
 ;; demand for proof cost
 (rule ((= proof (ProofBetween__ t1 t2 tmid))
        (= eproof (EqGraph__ tmid next)))
-      ((set (ProofCost__ t1 next)
-            10000000000))
+      ((set (PathCost__ t1 next)
+            1000000))
       :ruleset proof-extract__)
 ;; do one step of proof search to find a path
 (rule ((= proof (ProofBetween__ t1 t2 tmid))
        (= eproof (EqGraph__ tmid next))
-       (< (+ (ProofCost__ t1 tmid) 1)
-          (ProofCost__ t1 next)))
+       (= stepcost (ProofCost__ eproof))
+       (< (+ (PathCost__ t1 tmid) stepcost)
+          (PathCost__ t1 next)))
       ((set (ProofBetween__ t1 t2 next)
             (Cons__ eproof proof))
-       (set (ProofCost__ t1 next)
-            (+ (ProofCost__ t1 tmid) 1)))
+       (set (PathCost__ t1 next)
+            (+ (PathCost__ t1 tmid) stepcost)))
       :ruleset proof-extract__)
 ;; when you find a path, union it with the equality proof
+;; also demand the resulting proof
 (rule ((= e (DemandEq__ t1 t2))
        (= prooflist (ProofBetween__ t1 t2 t2)))
       ((set (DemandEq__ t1 t2) (Transitivity__ prooflist)))

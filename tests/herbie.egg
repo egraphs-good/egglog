@@ -567,15 +567,4 @@
 (define tgt (Div one sqrt5))
 (run 6)
 (check (= e14 tgt))
-; TODO: we can't just do (= e (Div one sqrt5)) cause that doesn't work
-;       unless we add the following lines to check_with after evaluating
-;       the exprs into values:
-;
-;       self.rebuild();
-;       let values: Vec<Value> = values
-;           .into_iter()
-;           .map(|v| self.bad_find_value(v))
-;           .collect::<Vec<_>>();
-;
-;       i have no idea if that's correct to do so i didn't do it
 (pop)

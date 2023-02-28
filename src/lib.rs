@@ -429,6 +429,7 @@ impl EGraph {
 
     // returns whether the egraph was updated
     pub fn run_schedule(&mut self, sched: &NormSchedule) -> RunReport {
+        log::info!("Running {}", sched);
         match sched {
             NormSchedule::Run(config) => self.run_rules(config),
             NormSchedule::Repeat(limit, sched) => {
@@ -618,10 +619,6 @@ impl EGraph {
             } else {
                 for values in all_values.chunks(num_vars) {
                     rule.matches += 1;
-                    if rule.matches > 10_000_000 {
-                        log::warn!("Rule {} has matched {} times, bailing!", name, rule.matches);
-                        break 'outer;
-                    }
                     // we can ignore results here
                     stack.clear();
                     let _ = self.run_actions(stack, values, &rule.program, true);

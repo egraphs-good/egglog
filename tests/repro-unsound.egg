@@ -59,7 +59,7 @@
 
 (define eggvar1 (Div (Type "binary64") (Expm1 (Type "binary64") (Add (Type "binary64") (Var (Type "binary64") "h0") (Var (Type "binary64") "h0"))) (Expm1 (Type "binary64") (Var (Type "binary64") "h0"))) :cost 10000000)
 
-(run 13)
+(run 10)
 
 (check (= (Num ty n) (Num ty m)) (!= n m))
 
@@ -69,8 +69,7 @@
       ((union p rule-proof))
       :ruleset extractproof)
 (run extractproof 1)
-(run-schedule
-      (saturate (run proof-extract__ 1)))
+
+(run proof-extract__ 10000 :until (< (ProofCost__ p) 1000000))
+
 (extract p)
-
-
