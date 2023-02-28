@@ -265,7 +265,6 @@ impl TypeInfo {
         let_bound: &mut HashSet<Symbol>,
     ) {
         let assert_bound = |var, let_bound: &HashSet<Symbol>| {
-            eprintln!("var {}", var);
             assert!(
                 let_bound.contains(var)
                     || self.global_types.contains_key(var)

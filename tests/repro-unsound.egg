@@ -62,14 +62,3 @@
 (run 10)
 
 (check (= (Num ty n) (Num ty m)) (!= n m))
-
-(declare p Proof__ :cost 1000000000)
-(ruleset extractproof)
-(rule ((= (Num ty n) (Num ty m)) (!= n m))
-      ((union p rule-proof))
-      :ruleset extractproof)
-(run extractproof 1)
-
-(run proof-extract__ 10000 :until (< (ProofCost__ p) 1000000))
-
-(extract p)

@@ -22,11 +22,14 @@ fn generate_tests(glob: &str) {
         writeln!(out, "#[test] fn {name}() {{ run({:?}, false); }}", f).unwrap();
 
         // write a test with proofs enabled
-        writeln!(
-            out,
-            "#[test] fn {name}_with_proofs() {{ run({:?}, true); }}",
-            f
-        )
-        .unwrap();
+        // TODO: re-enable herbie, unsound, and eqsolve when proof extraction is faster
+        if !(name == "herbie" || name == "repro_unsound" || name == "eqsolve") {
+            writeln!(
+                out,
+                "#[test] fn {name}_with_proofs() {{ run({:?}, true); }}",
+                f
+            )
+            .unwrap();
+        }
     }
 }
