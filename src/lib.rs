@@ -595,7 +595,7 @@ impl EGraph {
             if num_vars != 0 {
                 // backoff logic
                 let len = all_values.len() / num_vars;
-                let threshold = self.match_limit << rule.times_banned;
+                let threshold = safe_shl(self.match_limit, rule.times_banned);
                 if len > threshold {
                     let ban_length = safe_shl(ban_length, rule.times_banned);
                     rule.times_banned = rule.times_banned.saturating_add(1);
