@@ -33,20 +33,45 @@ fn desugar_rewrite(
     desugar: &mut Desugar,
 ) -> Vec<NCommand> {
     let var = Symbol::from("rewrite_var__");
-    vec![NCommand::NormRule {
-        ruleset,
-        name,
-        rule: flatten_rule(
-            Rule {
-                body: [Fact::Eq(vec![Expr::Var(var), rewrite.lhs.clone()])]
+    // make two rules- one to insert the rhs, and one to union
+    // this way, the union rule can only be fired once,
+    // which helps proofs not add too much info
+    vec![
+        NCommand::NormRule {
+            ruleset,
+            name: desugar.get_fresh(),
+            rule: flatten_rule(
+                Rule {
+                    body: [Fact::Eq(vec![Expr::Var(var), rewrite.lhs.clone()])]
+                        .into_iter()
+                        .chain(rewrite.conditions.clone())
+                        .collect(),
+                    head: vec![Action::Expr(rewrite.rhs.clone())],
+                },
+                desugar,
+            ),
+        },
+        NCommand::NormRule {
+            ruleset,
+            name,
+            rule: flatten_rule(
+                Rule {
+                    body: [
+                        Fact::Eq(vec![Expr::Var(var), rewrite.lhs.clone()]),
+                        Fact::Fact(Expr::Call(
+                            "!=".into(),
+                            vec![Expr::Var(var), rewrite.rhs.clone()],
+                        )),
+                    ]
                     .into_iter()
                     .chain(rewrite.conditions.clone())
                     .collect(),
-                head: vec![Action::Union(Expr::Var(var), rewrite.rhs.clone())],
-            },
-            desugar,
-        ),
-    }]
+                    head: vec![Action::Union(Expr::Var(var), rewrite.rhs.clone())],
+                },
+                desugar,
+            ),
+        },
+    ]
 }
 
 fn desugar_birewrite(
