@@ -74,7 +74,7 @@ impl RunReport {
     }
 }
 
-const HIGH_COST: usize = 100_000_000;
+const HIGH_COST: usize = usize::MAX;
 
 #[derive(Clone)]
 pub struct Primitive(Arc<dyn PrimitiveLike>);
@@ -179,8 +179,8 @@ impl Default for EGraph {
             functions: Default::default(),
             rulesets: Default::default(),
             proof_state: ProofState::new(),
-            match_limit: 100_000_000,
-            node_limit: 100_000_000,
+            match_limit: usize::MAX,
+            node_limit: usize::MAX,
             timestamp: 0,
             proofs_enabled: false,
             test_proofs: false,
@@ -557,7 +557,7 @@ impl EGraph {
         for (name, rule) in copy_rules.iter() {
             let mut all_values = vec![];
             if rule.banned_until <= iteration {
-                let mut fuel = self.match_limit << rule.times_banned;
+                let mut fuel = safe_shl(self.match_limit, rule.times_banned);
                 let rule_search_start = Instant::now();
                 self.run_query(&rule.query, rule.todo_timestamp, |values| {
                     assert_eq!(values.len(), rule.query.vars.len());
@@ -597,8 +597,8 @@ impl EGraph {
                 let len = all_values.len() / num_vars;
                 let threshold = self.match_limit << rule.times_banned;
                 if len > threshold {
-                    let ban_length = ban_length << rule.times_banned;
-                    rule.times_banned += 1;
+                    let ban_length = safe_shl(ban_length, rule.times_banned);
+                    rule.times_banned = rule.times_banned.saturating_add(1);
                     rule.banned_until = iteration + ban_length;
                     log::info!("Banning rule {name} for {ban_length} iterations, matched {len} > {threshold} times");
                     report.updated = true;
@@ -1153,4 +1153,8 @@ pub enum Error {
     ExpectFail,
     #[error("IO error: {0}: {1}")]
     IoError(PathBuf, std::io::Error),
+}
+
+fn safe_shl(a: usize, b: usize) -> usize {
+    a.checked_shl(b.try_into().unwrap()).unwrap_or(usize::MAX)
 }
