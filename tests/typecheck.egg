@@ -21,7 +21,7 @@
 (function typeof (Ctx Expr) Type)
 
 ; ctx |- () : unit
-(rewrite (typeof ctx (MyUnit)) (TUnit))
+(rewrite (typeof ctx MyUnit) TUnit)
 
 ; ctx; x: t |- x : t
 (rewrite (typeof (Cons x t ctx) (Var x)) t)
@@ -66,34 +66,34 @@
 
 ; lam x : unit, f : unit -> unit . f x
 (define e 
-  (Lam "x" (TUnit) 
-       (Lam "f" (TArr (TUnit) (TUnit))
+  (Lam "x" TUnit 
+       (Lam "f" (TArr TUnit TUnit)
             (App (Var "f") (Var "x")))))
 
 ; lam x : unit . x
-(define id (Lam "x" (TUnit) (Var "x")))
-(define t-id (typeof (Nil) id))
+(define id (Lam "x" TUnit (Var "x")))
+(define t-id (typeof Nil id))
 
 ; (e () id) = ()
-(define app-unit-id (App (App e (MyUnit)) id))
-(define t-app (typeof (Nil) app-unit-id))
+(define app-unit-id (App (App e MyUnit) id))
+(define t-app (typeof Nil app-unit-id))
 
-(define free (Lam "x" (TUnit) (Var "y")))
-(define t-free-ill (typeof (Nil) free))
-(define t-free-1 (typeof (Cons "y" (TUnit) (Nil)) free))
-(define t-free-2 (typeof (Cons "y" (TArr (TArr (TUnit) (TUnit)) (TUnit)) (Nil)) free))
+(define free (Lam "x" TUnit (Var "y")))
+(define t-free-ill (typeof Nil free))
+(define t-free-1 (typeof (Cons "y" TUnit Nil) free))
+(define t-free-2 (typeof (Cons "y" (TArr (TArr TUnit TUnit) TUnit) Nil) free))
 
 (run 15)
 
 (extract t-id)
-(check (= t-id (TArr (TUnit) (TUnit))))
+(check (= t-id (TArr TUnit TUnit)))
 
 (extract t-app)
-(check (= t-app (TUnit)))
+(check (= t-app TUnit))
 
 (extract t-free-1)
-(check (= t-free-1 (TArr (TUnit) (TUnit))))
+(check (= t-free-1 (TArr TUnit TUnit)))
 (extract t-free-2)
-(check (= t-free-2 (TArr (TUnit) (TArr (TArr (TUnit) (TUnit)) (TUnit)))))
+(check (= t-free-2 (TArr TUnit (TArr (TArr TUnit TUnit) TUnit))))
 ; this will err
 ; (extract t-free-ill)

@@ -21,6 +21,8 @@
 (datatype Proof
   ;; proves that a term exists in the database
   (Original AstMath)
+  ;; proves two terms were set equal in the database
+  (OriginalEq AstMath AstMath)
   ;; justifies the fact that a rule fired
   ;; the proof list justifies each of the premises in order
   ;; it then justifies all of the equality constraints in order
@@ -46,7 +48,7 @@
 
 ;; ProofList definitions
 (function Cons (Proof ProofList) ProofList)
-(function Null () ProofList)
+(declare Null ProofList)
 
 ;; prove two terms equal
 (function EqGraph (AstMath AstMath) Proof  :cost 100000 :merge old)
@@ -113,7 +115,7 @@
       ((union (Add a b) (Add (Add a b) (Const (rational 0 1))))
        (let rhs (AstAdd term (AstConst (rational 0 1))))
        (let ruleprf (Rule (Cons proof
-                            (Null))
+                            Null)
                           "add-identity"))
        (let trmprf (MakeTrmPrf rhs (RuleTerm ruleprf rhs)))
        (set (AddRep (Add a b) (Const (rational 0 1)))
@@ -134,7 +136,7 @@
        (= c2 (Child2 lhs)))
       ((union (Add a b) (Add b a)) ;; normal rhs
        (let ruleprf (Rule (Cons proof
-                                (Null))
+                                Null)
                           "add-commute"))
        (let rhs (AstAdd c2 c1))
        (let trmprf (MakeTrmPrf rhs (RuleTerm ruleprf rhs)))
@@ -169,12 +171,12 @@
                 (DemandEq c1 c1)
                 (Cons
                   (DemandEq c2 c2term)
-                    (Null)))))
+                    Null))))
        (let ruleproof
          (Rule 
           (Cons
             newrepproof
-            (Null))
+            Null)
           "add-assoc"))
        ;; first, add our new representative to the graph via congruence
        (set (EqGraph term newrep) newrepproof)
@@ -247,7 +249,7 @@
 
 ;; start proof search for equalities
 (rule ((= e (DemandEq t1 t2)))
-      ((set (ProofBetween t1 t2 t1) (Null)))
+      ((set (ProofBetween t1 t2 t1) Null))
       :ruleset proof-extract)
 ;; do one step of proof search to find a path
 (rule ((= proof (ProofBetween t1 t2 tmid))
@@ -305,7 +307,7 @@
 (check
   (= (GetProof add2x)
      (RuleTerm
-       (Rule (Cons (Original addx2) (Null))"add-commute")
+       (Rule (Cons (Original addx2) Null)"add-commute")
        add2x
        )))
 
@@ -313,10 +315,10 @@
           (Transitivity
             (Cons
               (RuleEquality
-                (Rule (Cons (Original addx2) (Null))"add-commute")
+                (Rule (Cons (Original addx2) Null)"add-commute")
                 addx2
                 add2x)
-              (Null)))))
+              Null))))
 
 
 (check (= (DemandEq addx2 addzero)
@@ -325,10 +327,10 @@
               (RuleEquality
                 (Rule
                   (Cons
-                    (Original addx2) (Null)) "add-identity")
+                    (Original addx2) Null) "add-identity")
                 addx2
                 addzero)
-              (Null)))))
+              Null))))
 
 (check (= (DemandEq addx2 addzerofront)
           (Transitivity
@@ -341,29 +343,29 @@
                    (Congruence 
                      ;; proof of 0+(x+2)
                      (RuleTerm
-                      (Rule (Cons (RuleTerm (Rule (Cons (Original (addx2)) (Null)) "add-identity") (addzero)) (Null)) "add-commute")
-                     (AstAdd (zero) (addx2)))
+                      (Rule (Cons (RuleTerm (Rule (Cons (Original addx2) Null) "add-identity") addzero) Null) "add-commute")
+                     (AstAdd zero addx2))
                     
                      ;; children already equal
-                     (Cons (Transitivity (Null)) (Cons (Transitivity (Null)) (Null))))
-                   (Null)) "add-assoc")
-                (AstAdd (zero) (addx2)) (addzerofront))
+                     (Cons (Transitivity Null) (Cons (Transitivity Null) Null)))
+                   Null) "add-assoc")
+                (AstAdd zero addx2) addzerofront)
               
               
               ;; (x+2)+0 -> 0+(x+2)
               (Cons
                 (RuleEquality
-                  (Rule (Cons (RuleTerm (Rule (Cons (Original (addx2)) (Null)) "add-identity") (addzero)) (Null)) "add-commute")
+                  (Rule (Cons (RuleTerm (Rule (Cons (Original addx2) Null) "add-identity") addzero) Null) "add-commute")
                   
-                  (addzero)
+                  addzero
                   
-                  (AstAdd (zero) (addx2)))
+                  (AstAdd zero addx2))
               
               ;; x+2 -> (x+2)+0
               (Cons (RuleEquality
-                      (Rule (Cons (Original (addx2)) (Null)) "add-identity")
-                      (addx2)
-                      (addzero))
+                      (Rule (Cons (Original addx2) Null) "add-identity")
+                      addx2
+                      addzero)
               
-              (Null))))
+              Null)))
           )))

@@ -18,10 +18,14 @@ impl MapSort {
         (self.key.name(), self.value.name())
     }
 
-    pub fn make_sort(egraph: &mut EGraph, name: Symbol, args: &[Expr]) -> Result<ArcSort, Error> {
+    pub fn make_sort(
+        typeinfo: &mut TypeInfo,
+        name: Symbol,
+        args: &[Expr],
+    ) -> Result<ArcSort, TypeError> {
         if let [Expr::Var(k), Expr::Var(v)] = args {
-            let k = egraph.sorts.get(k).ok_or(TypeError::UndefinedSort(*k))?;
-            let v = egraph.sorts.get(v).ok_or(TypeError::UndefinedSort(*v))?;
+            let k = typeinfo.sorts.get(k).ok_or(TypeError::UndefinedSort(*k))?;
+            let v = typeinfo.sorts.get(v).ok_or(TypeError::UndefinedSort(*v))?;
             Ok(Arc::new(Self {
                 name,
                 key: k.clone(),
@@ -43,42 +47,42 @@ impl Sort for MapSort {
         self
     }
 
-    fn register_primitives(self: Arc<Self>, egraph: &mut EGraph) {
-        egraph.add_primitive(Ctor {
+    fn register_primitives(self: Arc<Self>, typeinfo: &mut TypeInfo) {
+        typeinfo.add_primitive(Ctor {
             name: "empty".into(),
             map: self.clone(),
         });
-        egraph.add_primitive(Insert {
+        typeinfo.add_primitive(Insert {
             name: "insert".into(),
             map: self.clone(),
         });
-        egraph.add_primitive(Get {
+        typeinfo.add_primitive(Get {
             name: "get".into(),
             map: self.clone(),
         });
-        egraph.add_primitive(NotContains {
+        typeinfo.add_primitive(NotContains {
             name: "not-contains".into(),
             map: self.clone(),
-            unit: egraph.get_sort(),
+            unit: typeinfo.get_sort(),
         });
-        egraph.add_primitive(Contains {
+        typeinfo.add_primitive(Contains {
             name: "contains".into(),
             map: self.clone(),
-            unit: egraph.get_sort(),
+            unit: typeinfo.get_sort(),
         });
-        egraph.add_primitive(Union {
+        typeinfo.add_primitive(Union {
             name: "set-union".into(),
             map: self.clone(),
         });
-        egraph.add_primitive(Diff {
+        typeinfo.add_primitive(Diff {
             name: "set-diff".into(),
             map: self.clone(),
         });
-        egraph.add_primitive(Intersect {
+        typeinfo.add_primitive(Intersect {
             name: "set-intersect".into(),
             map: self.clone(),
         });
-        egraph.add_primitive(Remove {
+        typeinfo.add_primitive(Remove {
             name: "map-remove".into(),
             map: self,
         });

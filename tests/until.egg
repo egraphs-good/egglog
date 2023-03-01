@@ -1,25 +1,25 @@
 ; A simple group
 (datatype G (I) (A) (B))
-(function * (G G) G)
+(function g* (G G) G)
 (function inv (G) G)
-(birewrite (* (* a b) c) (* a (* b c))) ; assoc
-(rewrite (* I a) a) ; idl
-(rewrite (* a I) a) ; idr
+(birewrite (g* (g* a b) c) (g* a (g* b c))) ; assoc
+(rewrite (g* I a) a) ; idl
+(rewrite (g* a I) a) ; idr
 
 ; A is cyclic of period 4
-(rewrite (* A (* A (* A A))) I)
+(rewrite (g* A (g* A (g* A A))) I)
 
-(define A2 (* A A))
-(define A4 (* A2 A2))
-(define A8 (* A4 A4))
+(define A2 (g* A A))
+(define A4 (g* A2 A2))
+(define A8 (g* A4 A4))
 
 ; non terminating rule
 (relation allgs (G))
-(rule ((allgs x)) ((allgs (* B x))))
+(rule ((allgs x)) ((allgs (g* B x))))
 (allgs A)
 
 ; if you remove :until, this will take a very long time
-(run 100000 :until (= A8 I))
+(run 10000 :until (= A8 I))
 (check (= A8 I))
 (check (!= B A))
 (check (!= I A))

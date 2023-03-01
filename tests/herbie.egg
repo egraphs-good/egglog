@@ -479,103 +479,92 @@
 (push)
 (define five (Num (rational 5 1)))
 (define six (Num (rational 6 1)))
-(define e (Add one five))
+(define e2 (Add one five))
 (run 1)
-(check (= e six))
+(check (= e2 six))
+(pop)
+
+(define x (Var "x"))
+
+(push)
+(define e3 (Add x zero))
+(run 1)
+(check (= e3 x))
 (pop)
 
 (push)
-(define x (Var "x"))
-(define e (Add x zero))
+(define e4 (Sub x zero))
 (run 1)
-(check (= e x))
+(check (= e4 x))
 (pop)
 
 (push)
-(define x (Var "x"))
-(define e (Sub x zero))
+
+(define e5 (Mul x one))
 (run 1)
-(check (= e x))
+(check (= e5 x))
 (pop)
 
 (push)
-(define x (Var "x"))
-(define e (Mul x one))
+
+(define e6 (Div x one))
 (run 1)
-(check (= e x))
+(check (= e6 x))
 (pop)
 
 (push)
-(define x (Var "x"))
-(define e (Div x one))
-(run 1)
-(check (= e x))
-(pop)
 
-(push)
-(define x (Var "x"))
-(define e (Sub (Mul one x) (Mul (Add x one) one)))
+(define e7 (Sub (Mul one x) (Mul (Add x one) one)))
 (run 3)
-(check (= e (Num (rational -1 1))))
+(check (= e7 (Num (rational -1 1))))
 (pop)
 
 (push)
-(define x (Var "x"))
-(define e (Sub (Add x one) x))
+
+(define e8 (Sub (Add x one) x))
 (run 4)
-(check (= e one))
+(check (= e8 one))
 (pop)
 
 (push)
-(define x (Var "x"))
-(define e (Sub (Add x one) one))
+
+(define e9 (Sub (Add x one) one))
 (run 4)
-(check (= e x))
+(check (= e9 x))
 (pop)
 
 (push)
-(define x (Var "x"))
+
 (set (lo x) r-one)
-(define e (Div (Mul x three) x))
+(define e10 (Div (Mul x three) x))
 (run 3)
-(check (= e three))
+(check (= e10 three))
 (pop)
 
 (push)
-(define x (Var "x"))
-(define e (Sub (Mul (Sqrt (Add x one)) (Sqrt (Add x one))) (Mul (Sqrt x) (Sqrt x))))
+
+(define e11 (Sub (Mul (Sqrt (Add x one)) (Sqrt (Add x one))) (Mul (Sqrt x) (Sqrt x))))
 (run 5)
-(check (= one e))
+(check (= one e11))
 (pop)
 
 (push)
-(define e (Add (Num (rational 1 5)) (Num (rational 3 10))))
+(define e12 (Add (Num (rational 1 5)) (Num (rational 3 10))))
 (run 1)
-(check (= e (Num (rational 1 2))))
+(check (= e12 (Num (rational 1 2))))
 (pop)
 
 (push)
-(define e (Unary "cos" (Const "PI")))
+(define e13 (Unary "cos" (Const "PI")))
 (run 1)
-(check (= e (Num (rational -1 1))))
+(check (= e13 (Num (rational -1 1))))
 (pop)
 
 (push)
 (define sqrt5 (Sqrt (Num (rational 5 1))))
-(define e
+(define e14
   (Div one (Sub (Div (Add one sqrt5) two) (Div (Sub one sqrt5) two))))
 (define tgt (Div one sqrt5))
 (run 6)
-(check (= e tgt))
-; TODO: we can't just do (= e (Div one sqrt5)) cause that doesn't work
-;       unless we add the following lines to check_with after evaluating
-;       the exprs into values:
-;
-;       self.rebuild();
-;       let values: Vec<Value> = values
-;           .into_iter()
-;           .map(|v| self.bad_find_value(v))
-;           .collect::<Vec<_>>();
-;
-;       i have no idea if that's correct to do so i didn't do it
+(check (= e14 tgt))
 (pop)
