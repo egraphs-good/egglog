@@ -74,7 +74,7 @@ impl RunReport {
     }
 }
 
-const HIGH_COST: usize = 1000000000000;
+const HIGH_COST: usize = 100_000_000;
 
 #[derive(Clone)]
 pub struct Primitive(Arc<dyn PrimitiveLike>);
@@ -179,8 +179,8 @@ impl Default for EGraph {
             functions: Default::default(),
             rulesets: Default::default(),
             proof_state: ProofState::new(),
-            match_limit: 10_000_000_000_000,
-            node_limit: 10_000_000_000_000,
+            match_limit: 100_000_000,
+            node_limit: 100_000_000,
             timestamp: 0,
             proofs_enabled: false,
             test_proofs: false,
