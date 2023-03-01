@@ -151,10 +151,8 @@ impl<'a> Context<'a> {
             match node {
                 ENode::Literal(lit) => {
                     let old = leaves.insert(id, Expr::Lit(lit.clone()));
-                    if let Some(expr) = old {
-                        if let Expr::Lit(_lit2) = &expr {
-                            panic!("Duplicate literal: {:?} {:?}", expr, lit);
-                        }
+                    if let Some(Expr::Lit(old_lit)) = old {
+                        panic!("Duplicate literal: {:?} {:?}", old_lit, lit);
                     }
                 }
                 _ => continue,
@@ -599,7 +597,7 @@ enum Instruction {
 pub struct Program(Vec<Instruction>);
 
 impl EGraph {
-    fn infer_literal(&self, lit: &Literal) -> ArcSort {
+    pub(crate) fn infer_literal(&self, lit: &Literal) -> ArcSort {
         match lit {
             Literal::Int(_) => self.sorts.get(&Symbol::from("i64")),
             Literal::F64(_) => self.sorts.get(&Symbol::from("f64")),

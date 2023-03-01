@@ -1,18 +1,18 @@
 ; Identifiers represented as strings, keep some newtypes around to aid clarity
-(datatype Class (Class String))
-(datatype Field (Field String))
+(datatype ClassT (Class String))
+(datatype FieldT (Field String))
 
 (datatype Stmt
-    (New String Class)
+    (New String ClassT)
     ; Assign dst src
     (Assign String String)
     ; Store dst field src
-    (Store String Field String)
+    (Store String FieldT String)
     ; Load dst src field
-    (Load String String Field))
+    (Load String String FieldT))
 
-(relation VarPointsTo (String Class))
-(relation HeapPointsTo (Class Field Class))
+(relation VarPointsTo (String ClassT))
+(relation HeapPointsTo (ClassT FieldT ClassT))
 
 ; New variables point to classes they're initialized as
 (rule ((= x (New a b))) ((VarPointsTo a b)))
