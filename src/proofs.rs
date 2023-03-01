@@ -293,25 +293,6 @@ fn instrument_facts(
     info
 }
 
-fn make_declare_proof(
-    name: Symbol,
-    _type_name: Symbol,
-    proof_state: &mut ProofState,
-) -> Vec<Command> {
-    let term = format!("Ast{}___", name).into();
-    let proof = proof_state.get_fresh();
-
-    proof_state.global_var_ast.insert(name, term);
-    vec![
-        // TODO using high cost big const number
-        Command::Declare(term, "Ast__".into(), Some(HIGH_COST)),
-        Command::Action(Action::Let(
-            proof,
-            Expr::Call("Original__".into(), vec![Expr::Var(term)]),
-        )),
-    ]
-}
-
 fn get_var_term_option(
     var: Symbol,
     proof_state: &ProofState,
@@ -836,10 +817,6 @@ impl ProofState {
                     res.push(command.to_command());
                 }
                 NCommand::Function(_fdecl) => {
-                    res.push(command.to_command());
-                }
-                NCommand::Declare(name, sort, _cost) => {
-                    res.extend(make_declare_proof(*name, *sort, self));
                     res.push(command.to_command());
                 }
                 NCommand::NormRule {

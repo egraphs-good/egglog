@@ -3,7 +3,10 @@
 ;;;;;;;;;;;;;;;;
 
 ; Top means it can be an arbitrary value
-(datatype Val (Top) (I i64) (True) (False))
+(datatype Val (I i64))
+(declare Top Val)
+(declare True Val)
+(declare False Val)
 (relation Bool (Val))
 (Bool True)
 (Bool False)
@@ -52,8 +55,8 @@
     (Ass VarT Exp)
     (If VarT Loc Loc)
     (Goto Loc)
-    (Call VarT)
-    (End))
+    (Call VarT))
+(declare End ProgStmt)
 (function Prog (Loc) ProgStmt)
 (relation RProg (Loc ProgStmt))
 

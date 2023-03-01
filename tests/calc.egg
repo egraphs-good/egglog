@@ -1,4 +1,7 @@
-(datatype G (I) (A) (B))
+(datatype G)
+(declare I G)
+(declare A G)
+(declare B G)
 (function g* (G G) G)
 (function inv (G) G)
 (birewrite (g* (g* a b) c) (g* a (g* b c))) ; assoc

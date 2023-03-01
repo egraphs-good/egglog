@@ -7,9 +7,6 @@ fn desugar_datatype(name: Symbol, variants: Vec<Variant>) -> Vec<NCommand> {
     vec![NCommand::Sort(name, None)]
         .into_iter()
         .chain(variants.into_iter().map(|variant| {
-            if variant.types.is_empty() {
-                NCommand::Declare(variant.name, name, None)
-            } else {
                 NCommand::Function(FunctionDecl {
                     name: variant.name,
                     schema: Schema {
@@ -21,7 +18,6 @@ fn desugar_datatype(name: Symbol, variants: Vec<Variant>) -> Vec<NCommand> {
                     default: None,
                     cost: variant.cost,
                 })
-            }
         }))
         .collect()
 }
@@ -295,7 +291,7 @@ pub(crate) fn desugar_calc(
 
     // first, push all the idents
     for IdentSort { ident, sort } in idents {
-        res.push(NCommand::Declare(ident, sort, None));
+        res.extend(desugar.declare(ident, sort));
     }
 
     // now, for every pair of exprs we need to prove them equal
@@ -346,8 +342,10 @@ pub(crate) fn desugar_command(
         Command::Function(fdecl) => {
             vec![NCommand::Function(fdecl)]
         }
+        Command::Declare{name, sort} => {
+            desugar.declare(name, sort)
+        }
         Command::Datatype { name, variants } => desugar_datatype(name, variants),
-        Command::Declare(name, parent, cost) => vec![NCommand::Declare(name, parent, cost)],
         Command::Rewrite(ruleset, rewrite) => {
             desugar_rewrite(ruleset, rewrite.to_string().into(), &rewrite, desugar)
         }
@@ -440,7 +438,7 @@ pub(crate) fn desugar_command(
                 let proofvar = desugar.get_fresh();
                 // declare a variable for the resulting proof
                 // TODO using constant high cost
-                res.push(NCommand::Declare(proofvar, "Proof__".into(), Some(100000)));
+                res.extend(desugar.declare(proofvar, "Proof__".into()));
 
                 // make a dummy rule so that we get a proof for this check
                 let dummyrule = Rule {
@@ -623,5 +621,16 @@ impl Desugar {
             .parser
             .parse(input)
             .map_err(|e| e.map_token(|tok| tok.to_string()))?)
+    }
+
+    pub fn declare(&mut self, name: Symbol, sort: Symbol) -> Vec<NCommand> {
+        let fresh = self.get_fresh();
+        vec![
+            NCommand::Function(FunctionDecl { name: fresh, schema: Schema {
+                input: vec![],
+                output: sort,
+            }, default: None, merge: None, merge_action: vec![], cost: Some(HIGH_COST) }),
+            NCommand::NormAction(NormAction::Let(name, NormExpr::Call(fresh, vec![])))
+        ]
     }
 }

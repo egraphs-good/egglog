@@ -1,6 +1,6 @@
 (datatype list
-    (Empty)
     (Cons i64 list))
+(declare Empty list)
 
 (relation eq (list list))
 

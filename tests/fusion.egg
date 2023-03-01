@@ -7,8 +7,8 @@
     (Add Term Term)
     (Num i64)
     (CaseSplit Term Term Term)
-    (Cons Term Term)
-    (Nil))
+    (Cons Term Term))
+(declare Nil Term)
 
 (function V (String) Var) 
 (function From (Term) Var)

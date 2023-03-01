@@ -1,5 +1,7 @@
 ;; NOTE: This file contains several unsafe operations
-(datatype Value (True) (False) (Num i64))
+(datatype Value (Num i64))
+(declare True Value)
+(declare False Value)
 (datatype VarType)
 (datatype Term
     (Val Value)
