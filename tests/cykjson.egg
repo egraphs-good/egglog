@@ -34,7 +34,7 @@
 ; small size 801
 (input getString "./tests/cykjson_small_token.csv")
 
-; medium size 7821
+; medium size 7821 but runs for 2 min.
 ;(input getString "./tests/cykjson_medium_token.csv")
 
 (define test1 (B 801 1 "VAL"):cost 100000)
