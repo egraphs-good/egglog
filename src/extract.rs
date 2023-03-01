@@ -100,13 +100,13 @@ impl<'a> Extractor<'a> {
         let mut cost = function.decl.cost.unwrap_or(1);
         let types = &function.schema.input;
         for (ty, value) in types.iter().zip(children) {
-            cost += if ty.is_eq_sort() {
+            cost = cost.saturating_add(if ty.is_eq_sort() {
                 let id = self.egraph.find(Id::from(value.bits as usize));
                 // TODO costs should probably map values?
                 self.costs.get(&id)?.0
             } else {
                 1
-            }
+            });
         }
         Some(cost)
     }

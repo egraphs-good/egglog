@@ -7,7 +7,7 @@ static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
 #[wasm_bindgen]
 pub fn run_program(input: &str) -> String {
     let mut egraph = egg_smol::EGraph::default();
-    match egraph.parse_and_run_program(input, false) {
+    match egraph.parse_and_run_program(input) {
         Ok(outputs) => {
             log::info!("egg ok, {} outputs", outputs.len());
             outputs.join("<br>")
