@@ -7,17 +7,17 @@ fn desugar_datatype(name: Symbol, variants: Vec<Variant>) -> Vec<NCommand> {
     vec![NCommand::Sort(name, None)]
         .into_iter()
         .chain(variants.into_iter().map(|variant| {
-                NCommand::Function(FunctionDecl {
-                    name: variant.name,
-                    schema: Schema {
-                        input: variant.types,
-                        output: name,
-                    },
-                    merge: None,
-                    merge_action: vec![],
-                    default: None,
-                    cost: variant.cost,
-                })
+            NCommand::Function(FunctionDecl {
+                name: variant.name,
+                schema: Schema {
+                    input: variant.types,
+                    output: name,
+                },
+                merge: None,
+                merge_action: vec![],
+                default: None,
+                cost: variant.cost,
+            })
         }))
         .collect()
 }
@@ -342,9 +342,7 @@ pub(crate) fn desugar_command(
         Command::Function(fdecl) => {
             vec![NCommand::Function(fdecl)]
         }
-        Command::Declare{name, sort} => {
-            desugar.declare(name, sort)
-        }
+        Command::Declare { name, sort } => desugar.declare(name, sort),
         Command::Datatype { name, variants } => desugar_datatype(name, variants),
         Command::Rewrite(ruleset, rewrite) => {
             desugar_rewrite(ruleset, rewrite.to_string().into(), &rewrite, desugar)
@@ -626,11 +624,18 @@ impl Desugar {
     pub fn declare(&mut self, name: Symbol, sort: Symbol) -> Vec<NCommand> {
         let fresh = self.get_fresh();
         vec![
-            NCommand::Function(FunctionDecl { name: fresh, schema: Schema {
-                input: vec![],
-                output: sort,
-            }, default: None, merge: None, merge_action: vec![], cost: Some(HIGH_COST) }),
-            NCommand::NormAction(NormAction::Let(name, NormExpr::Call(fresh, vec![])))
+            NCommand::Function(FunctionDecl {
+                name: fresh,
+                schema: Schema {
+                    input: vec![],
+                    output: sort,
+                },
+                default: None,
+                merge: None,
+                merge_action: vec![],
+                cost: Some(HIGH_COST),
+            }),
+            NCommand::NormAction(NormAction::Let(name, NormExpr::Call(fresh, vec![]))),
         ]
     }
 }

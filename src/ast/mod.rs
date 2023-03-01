@@ -351,13 +351,11 @@ impl Command {
                 res.extend(variants.iter().map(|v| v.to_sexp()));
                 Sexp::List(res)
             }
-            Command::Declare{name, sort} => Sexp::List(
-                vec![
-                    Sexp::String("declare".into()),
-                    Sexp::String(name.to_string()),
-                    Sexp::String(sort.to_string()),
-                ]
-            ),
+            Command::Declare { name, sort } => Sexp::List(vec![
+                Sexp::String("declare".into()),
+                Sexp::String(name.to_string()),
+                Sexp::String(sort.to_string()),
+            ]),
             Command::Action(a) => a.to_sexp(),
             Command::Sort(name, None) => Sexp::List(vec![
                 Sexp::String("sort".into()),
