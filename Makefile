@@ -13,7 +13,7 @@ DIST_WASM=$(addprefix ${WWW}, ${WASM})
 all: test web
 
 test:
-	cargo test --release
+	cargo test --release -- -Zunstable-options --report-time
 	@rustup component add clippy
 	cargo clippy --tests -- -D warnings
 	@rustup component add rustfmt
