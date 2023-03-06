@@ -12,3 +12,6 @@ perf.data*
 _scratch.egg
 /*.egg
 *.log
+
+# racket
+scripts/compiled

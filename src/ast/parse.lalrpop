@@ -1,5 +1,6 @@
 use crate::ast::*;
 use crate::Symbol;
+use crate::Schedule;
 use ordered_float::OrderedFloat;
 
 grammar;
@@ -14,6 +15,7 @@ match {
     r";[^\n\r]*[\n\r]*" => { }, // skip ; comments
     _
 }
+
 
 pub Program: Vec<Command> = { (Command)* => <> }
 
@@ -32,6 +34,7 @@ Comma<T>: Vec<T> = {
 };
 
 Command: Command = {
+    "(" "set-option" <name:Ident> <value:Expr> ")" => Command::SetOption { name, value },
     "(" "datatype" <name:Ident> <variants:(Variant)*> ")" => Command::Datatype { <> },
     "(" "sort" <name:Ident> "(" <head:Ident> <tail:(Expr)*> ")" ")" => Command::Sort (name, Some((head, tail))),
     "(" "sort" <name:Ident> ")" => Command::Sort (name, None),
@@ -40,27 +43,30 @@ Command: Command = {
         <merge:(":merge" <Expr>)?> <default:(":default" <Expr>)?> ")" => {
         Command::Function(FunctionDecl { name, schema, merge, merge_action: merge_action.unwrap_or_default(), default, cost })
     },
+    "(" "declare" <name:Ident> <var_type:Ident> <cost:Cost> ")" => Command::Declare(name, var_type, cost),
     "(" "relation" <name:Ident> <types:List<Type>> ")" => Command::Function(FunctionDecl::relation(name, types)),
-    "(" "rule" <body:List<Fact>> <head:List<Action>> ")" => Command::Rule(Rule { head, body }),
+    "(" "ruleset" <name:Ident> ")" => Command::AddRuleset(name),
+    "(" "rule" <body:List<Fact>> <head:List<Action>> <ruleset:(":ruleset" <Ident>)?> <name:(":name" <Ident>)?> ")" => Command::Rule{ruleset: ruleset.unwrap_or("".into()), name: name.unwrap_or("".into()), rule: Rule { head, body }},
     "(" "rewrite" <lhs:Expr> <rhs:Expr>
         <conditions:(":when" <List<Fact>>)?>
-    ")" => Command::Rewrite(Rewrite { lhs, rhs, conditions: conditions.unwrap_or_default() }),
+        <ruleset:(":ruleset" <Ident>)?>
+    ")" => Command::Rewrite(ruleset.unwrap_or("".into()), Rewrite { lhs, rhs, conditions: conditions.unwrap_or_default() }),
     "(" "birewrite" <lhs:Expr> <rhs:Expr>
         <conditions:(":when" <List<Fact>>)?>
-    ")" => Command::BiRewrite(Rewrite { lhs, rhs, conditions: conditions.unwrap_or_default() }),
+        <ruleset:(":ruleset" <Ident>)?>
+    ")" => Command::BiRewrite(ruleset.unwrap_or("".into()), Rewrite { lhs, rhs, conditions: conditions.unwrap_or_default() }),
     "(" "define" <name:Ident> <expr:Expr> <cost:Cost> ")" => Command::Define { name, expr, cost },
+    "(" "let" <name:Ident> <expr:Expr> ")" => Command::Action(Action::Let(name, expr)),
     <NonLetAction> => Command::Action(<>),
-    "(" "run" <limit:UNum>  <until:(":until" <Fact>)?> ")" => Command::Run(RunConfig { limit, until }),
+    "(" "run" <limit:UNum>  <until:(":until" <(Fact)*>)?> ")" => Command::Run(RunConfig { ruleset: "".into(), limit, until }),
+    "(" "run" <ruleset: Ident> <limit:UNum> <until:(":until" <(Fact)*>)?> ")" => Command::Run(RunConfig { ruleset, limit, until }),
+    "(" "simplify"  <limit:UNum> <expr:Expr> <until:(":until" <(Fact)*>)?> ")" 
+        => Command::Simplify { expr, config : RunConfig { ruleset: "".into(), limit, until } },
     "(" "add-ruleset" <name:Ident> ")" => Command::AddRuleset(name),
-    "(" "load-ruleset" <name:Ident> ")" => Command::LoadRuleset(name),
     "(" "calc" "(" <idents:IdentSort*> ")" <exprs:Expr+> ")" => Command::Calc(idents, exprs),
     "(" "extract" <variants:(":variants" <UNum>)?> <e:Expr> ")" => Command::Extract { e, variants: variants.unwrap_or(0) },
-    "(" "check" <fact:Fact> ")" => Command::Check(fact, None),
-    "(" "check" <fact:Fact> <msg:String> ")" => Command::Check(fact, Some(msg)),
-    "(" "clear-rules" ")" => Command::ClearRules,
-    "(" "set-option" <name:Ident> <value:Expr> ")" => Command::SetOption { name, value },
-    "(" "clear" ")" => Command::Clear,
-    "(" "query" <List<Fact>> ")" => Command::Query(<>),
+    "(" "check" <(Fact)*> ")" => Command::Check(<>),
+    "(" "run-schedule" <Schedule*> ")" => Command::RunSchedule(Schedule::Sequence(<>)),
     "(" "push" <UNum?> ")" => Command::Push(<>.unwrap_or(1)),
     "(" "pop" <UNum?> ")" => Command::Pop(<>.unwrap_or(1)),
     "(" "print" <sym:Ident> <n:UNum?> ")" => Command::Print(sym, n.unwrap_or(10)),
@@ -69,6 +75,14 @@ Command: Command = {
     "(" "output" <file:String> <exprs:Expr+> ")" => Command::Output { file, exprs },
     "(" "fail" <Command> ")" => Command::Fail(Box::new(<>)),
     "(" "include" <file:String> ")" => Command::Include(file),
+}
+
+Schedule: Schedule = {
+    "(" "saturate" <Schedule*> ")" => Schedule::Saturate(Box::new(Schedule::Sequence(<>))),
+    "(" "seq" <Schedule*> ")" => Schedule::Sequence(<>),
+    "(" "repeat" <limit:UNum> <scheds:Schedule*> ")" => Schedule::Repeat(limit, Box::new(Schedule::Sequence(scheds))),
+    "(" "run" <ruleset: Ident> <limit:UNum>  <until:(":until" <(Fact)*>)?> ")" => Schedule::Run(RunConfig { ruleset, limit, until }),
+    <ident:Ident> => Schedule::Run(RunConfig { ruleset: ident, limit: 1, until: None }),
 }
 
 Cost: Option<usize> = {
@@ -84,7 +98,7 @@ NonLetAction: Action = {
     <e:CallExpr> => Action::Expr(e),
 }
 
-Action: Action = {
+pub Action: Action = {
     "(" "let" <name:Ident> <expr:Expr> ")" => Action::Let(name, expr),
     <NonLetAction> => <>,
 }
@@ -138,9 +152,10 @@ IdentSort: IdentSort = "(" <ident:Ident> <sort:Type> ")" => IdentSort { ident, s
 UNum: usize = {
     <Integer> => <>.try_into().unwrap(),
 }
-F64: OrderedFloat<f64> = <s:r"(-)?[0-9]+\.[0-9]+"> => OrderedFloat::<f64>(s.parse().unwrap());
-Ident: Symbol = <s:r"([[:alpha:]][\w-]*)|([-+*/!=<>&|^/%]+)"> => s.parse().unwrap();
-SymString: Symbol = <r#"("[^"]*")+"#> => Symbol::from(<>);
+F64: OrderedFloat<f64> = <s:r"(-)?[0-9]+\.[0-9]+(e(-)?[0-9]+)?"> => OrderedFloat::<f64>(s.parse().unwrap());
+Ident: Symbol = <s:r"(([[:alpha:]][\w-]*)|([-+*/!=<>&|^/%_]))+"> => s.parse().unwrap();
+SymString: Symbol = <String> => Symbol::from(<>);
+
 String: String = <r#"("[^"]*")+"#> => {
     let string: &str = <>;
     let first_last_off: &str = &string[1..string.len() - 1];

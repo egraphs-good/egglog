@@ -1,39 +1,6 @@
 use crate::*;
 use indexmap::map::Entry as IEntry;
-
-use thiserror::Error;
-
-#[derive(Debug, Clone, Error)]
-pub enum TypeError {
-    #[error("Arity mismatch, expected {expected} args: {expr}")]
-    Arity { expr: Expr, expected: usize },
-    #[error(
-        "Type mismatch: expr = {expr}, expected = {}, actual = {}, reason: {reason}", 
-        .expected.name(), .actual.name(),
-    )]
-    Mismatch {
-        expr: Expr,
-        expected: ArcSort,
-        actual: ArcSort,
-        reason: String,
-    },
-    #[error("Tried to unify too many literals: {}", ListDisplay(.0, "\n"))]
-    TooManyLiterals(Vec<Literal>),
-    #[error("Unbound symbol {0}")]
-    Unbound(Symbol),
-    #[error("Undefined sort {0}")]
-    UndefinedSort(Symbol),
-    #[error("Function already bound {0}")]
-    FunctionAlreadyBound(Symbol),
-    #[error("Cannot type a variable as unit: {0}")]
-    UnitVar(Symbol),
-    #[error("Failed to infer a type for: {0}")]
-    InferenceFailure(Expr),
-    #[error("No matching primitive for: ({op} {})", ListDisplay(.inputs, " "))]
-    NoMatchingPrimitive { op: Symbol, inputs: Vec<Symbol> },
-    #[error("Variable {0} was already defined")]
-    AlreadyDefined(Symbol),
-}
+use typechecking::TypeError;
 
 pub struct Context<'a> {
     pub egraph: &'a EGraph,
@@ -113,11 +80,12 @@ impl<T> Atom<T> {
         })
     }
 }
+
 impl<'a> Context<'a> {
     pub fn new(egraph: &'a EGraph) -> Self {
         Self {
             egraph,
-            unit: egraph.sorts[&Symbol::from("Unit")].clone(),
+            unit: egraph.proof_state.type_info.sorts[&Symbol::from(UNIT_SYM)].clone(),
             types: Default::default(),
             errors: Vec::default(),
             unionfind: UnionFind::default(),
@@ -145,15 +113,23 @@ impl<'a> Context<'a> {
         // First find the canoncial version of each leaf
         let mut leaves = HashMap::<Id, Expr>::default();
         let mut canon = HashMap::<Symbol, Expr>::default();
+
+        // Do literals first
         for (node, &id) in &self.nodes {
-            debug_assert_eq!(id, self.unionfind.find(id));
             match node {
                 ENode::Literal(lit) => {
                     let old = leaves.insert(id, Expr::Lit(lit.clone()));
-                    if let Some(expr) = old {
-                        panic!("Duplicate literal: {:?} {:?}", expr, lit);
+                    if let Some(Expr::Lit(old_lit)) = old {
+                        panic!("Duplicate literal: {:?} {:?}", old_lit, lit);
                     }
                 }
+                _ => continue,
+            }
+        }
+        // Now do variables
+        for (node, &id) in &self.nodes {
+            debug_assert_eq!(id, self.unionfind.find(id));
+            match node {
                 ENode::Var(var) => match leaves.entry(id) {
                     Entry::Occupied(existing) => {
                         canon.insert(*var, existing.get().clone());
@@ -332,7 +308,7 @@ impl<'a> Context<'a> {
                 (self.add_node(ENode::Var(*sym)), ty)
             }
             Expr::Lit(lit) => {
-                let t = self.egraph.infer_literal(lit);
+                let t = self.egraph.proof_state.type_info.infer_literal(lit);
                 (self.add_node(ENode::Literal(lit.clone())), Some(t))
             }
             Expr::Call(sym, args) => {
@@ -351,7 +327,7 @@ impl<'a> Context<'a> {
                         .collect();
                     let t = f.schema.output.clone();
                     (self.add_node(ENode::Func(*sym, ids)), Some(t))
-                } else if let Some(prims) = self.egraph.primitives.get(sym) {
+                } else if let Some(prims) = self.egraph.proof_state.type_info.primitives.get(sym) {
                     let (ids, arg_tys): (Vec<Id>, Vec<Option<ArcSort>>) =
                         args.iter().map(|arg| self.infer_query_expr(arg)).unzip();
 
@@ -491,9 +467,17 @@ trait ExprChecker<'a> {
         }
     }
 
+    fn variable_function(&self, var: Symbol) -> bool {
+        if let Some(func) = self.egraph().functions.get(&var) {
+            func.is_variable
+        } else {
+            false
+        }
+    }
+
     fn check_expr(&mut self, expr: &Expr, ty: ArcSort) -> Result<Self::T, TypeError> {
         match expr {
-            Expr::Var(v) if !self.egraph().functions.contains_key(v) => self.check_var(*v, ty),
+            Expr::Var(v) if !self.variable_function(*v) => self.check_var(*v, ty),
             _ => {
                 let (t, actual) = self.infer_expr(expr)?;
                 if actual.name() != ty.name() {
@@ -514,10 +498,10 @@ trait ExprChecker<'a> {
         match expr {
             Expr::Lit(lit) => {
                 let t = self.do_lit(lit);
-                Ok((t, self.egraph().infer_literal(lit)))
+                Ok((t, self.egraph().proof_state.type_info.infer_literal(lit)))
             }
             Expr::Var(sym) => {
-                if self.egraph().functions.contains_key(sym) {
+                if self.variable_function(*sym) {
                     return self.infer_expr(&Expr::call(*sym, []));
                 }
                 self.infer_var(*sym)
@@ -538,7 +522,8 @@ trait ExprChecker<'a> {
 
                     let t = self.do_function(*sym, ts);
                     Ok((t, f.schema.output.clone()))
-                } else if let Some(prims) = self.egraph().primitives.get(sym) {
+                } else if let Some(prims) = self.egraph().proof_state.type_info.primitives.get(sym)
+                {
                     let mut ts = Vec::with_capacity(args.len());
                     let mut tys = Vec::with_capacity(args.len());
                     for arg in args {
@@ -556,7 +541,7 @@ trait ExprChecker<'a> {
 
                     Err(TypeError::NoMatchingPrimitive {
                         op: *sym,
-                        inputs: tys.iter().map(|ty| ty.name()).collect(),
+                        inputs: tys.into_iter().map(|t| t.name()).collect(),
                     })
                 } else {
                     Err(TypeError::Unbound(*sym))
@@ -589,18 +574,6 @@ enum Instruction {
 pub struct Program(Vec<Instruction>);
 
 impl EGraph {
-    fn infer_literal(&self, lit: &Literal) -> ArcSort {
-        match lit {
-            Literal::Int(_) => self.sorts.get(&Symbol::from("i64")),
-            Literal::F64(_) => self.sorts.get(&Symbol::from("f64")),
-            Literal::Bool(_) => self.sorts.get(&Symbol::from("bool")),
-            Literal::String(_) => self.sorts.get(&Symbol::from("String")),
-            Literal::Unit => self.sorts.get(&Symbol::from("Unit")),
-        }
-        .unwrap()
-        .clone()
-    }
-
     pub fn compile_actions(
         &self,
         types: &IndexMap<Symbol, ArcSort>,
@@ -681,10 +654,9 @@ impl EGraph {
                         out.value
                     } else if make_defaults {
                         let ts = self.timestamp;
-                        self.saturated = false;
                         let out = &function.schema.output;
                         match function.decl.default.as_ref() {
-                            None if out.name() == self.unit_sym => {
+                            None if out.name() == UNIT_SYM.into() => {
                                 function.insert(values, Value::unit(), ts);
                                 Value::unit()
                             }
@@ -721,9 +693,7 @@ impl EGraph {
                         stack.truncate(new_len);
                         stack.push(value);
                     } else {
-                        //panic!("prim was partial... do we allow this?");
-                        stack.clear();
-                        return Ok(());
+                        return Err(Error::PrimitiveError(p.clone(), values.to_vec()));
                     }
                 }
                 Instruction::Set(f) => {
@@ -736,14 +706,8 @@ impl EGraph {
                     // We should only have canonical values here: omit the canonicalization step
                     let old_value = function.insert(args, new_value, self.timestamp);
 
-                    // if the value does not exist or the two values differ
-                    if old_value.is_none() || old_value != Some(new_value) {
-                        self.saturated = false;
-                    }
-
                     if let Some(old_value) = old_value {
                         if new_value != old_value {
-                            self.saturated = false;
                             let tag = old_value.tag;
                             if let Some(prog) = function.merge.on_merge.clone() {
                                 let values = [old_value, new_value];
@@ -756,7 +720,7 @@ impl EGraph {
                             let function = self.functions.get_mut(f).unwrap();
                             let merged: Value = match function.merge.merge_vals.clone() {
                                 MergeFn::AssertEq => {
-                                    return Err(Error::MergeError(*f, new_value, old_value))
+                                    return Err(Error::MergeError(*f, new_value, old_value));
                                 }
                                 MergeFn::Union => {
                                     self.unionfind.union_values(old_value, new_value, tag)
@@ -785,9 +749,6 @@ impl EGraph {
                     let first = self.unionfind.find(Id::from(values[0].bits as usize));
                     values[1..].iter().fold(first, |a, b| {
                         let b = self.unionfind.find(Id::from(b.bits as usize));
-                        if a != b {
-                            self.saturated = false;
-                        }
                         self.unionfind.union(a, b, sort)
                     });
                     stack.truncate(new_len);
@@ -807,7 +768,7 @@ impl EGraph {
                     let function = self.functions.get_mut(f).unwrap();
                     let new_len = stack.len() - function.schema.input.len();
                     let args = &stack[new_len..];
-                    self.saturated &= !function.remove(args, self.timestamp);
+                    function.remove(args, self.timestamp);
                     stack.truncate(new_len);
                 }
             }

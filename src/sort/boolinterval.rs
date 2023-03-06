@@ -33,7 +33,7 @@ impl Sort for BoolIntervalSort {
     }
 
     #[rustfmt::skip]
-    fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
+    fn register_primitives(self: Arc<Self>, eg: &mut TypeInfo) {
         add_primitives!(eg, "assert-eq" = |a: R, b: R| -> R {
             if a == b {
                 a

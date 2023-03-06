@@ -43,7 +43,7 @@ impl Sort for RationalSort {
     }
 
     #[rustfmt::skip]
-    fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
+    fn register_primitives(self: Arc<Self>, eg: &mut TypeInfo) {
         type Opt<T=()> = Option<T>;
 
         // TODO we can't have primitives take borrows just yet, since it
@@ -64,6 +64,7 @@ impl Sort for RationalSort {
         add_primitives!(eg, "floor" = |a: R| -> R { a.floor() });
         add_primitives!(eg, "ceil" = |a: R| -> R { a.ceil() });
         add_primitives!(eg, "round" = |a: R| -> R { a.round() });
+        add_primitives!(eg, "rational" = |a: i64, b: i64| -> R { R::from((a, b)) });
         add_primitives!(eg, "rational" = |a: Symbol, b: Symbol| -> R { 
             if (true) {
                 let tuple: (Integer, Integer) = (rem_first_and_last(a.into()).parse().unwrap(), rem_first_and_last(b.into()).parse().unwrap());

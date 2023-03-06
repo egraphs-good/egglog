@@ -52,7 +52,7 @@ impl Display for Literal {
                     write!(f, "{}", str)
                 }
             }
-            Literal::String(s) => write!(f, "{s}"),
+            Literal::String(s) => write!(f, "\"{}\"", s),
             Literal::Unit => write!(f, "()"),
         }
     }
@@ -64,6 +64,34 @@ pub enum Expr {
     Var(Symbol),
     // TODO make this its own type
     Call(Symbol, Vec<Self>),
+}
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
+pub enum NormExpr {
+    Call(Symbol, Vec<Symbol>),
+}
+
+impl NormExpr {
+    pub fn to_expr(&self) -> Expr {
+        match self {
+            NormExpr::Call(op, args) => {
+                Expr::Call(*op, args.iter().map(|a| Expr::Var(*a)).collect())
+            }
+        }
+    }
+
+    pub(crate) fn map_def_use(
+        &self,
+        fvar: &mut impl FnMut(Symbol, bool) -> Symbol,
+        is_def: bool,
+    ) -> NormExpr {
+        match self {
+            NormExpr::Call(op, args) => {
+                let args = args.iter().map(|a| fvar(*a, is_def)).collect();
+                NormExpr::Call(*op, args)
+            }
+        }
+    }
 }
 
 impl Expr {
@@ -106,6 +134,17 @@ impl Expr {
         f(self, ts)
     }
 
+    pub fn map(&self, f: &mut impl FnMut(&Self) -> Self) -> Self {
+        match self {
+            Expr::Lit(_) => f(self),
+            Expr::Var(_) => f(self),
+            Expr::Call(op, children) => {
+                let children = children.iter().map(|c| c.map(f)).collect();
+                f(&Expr::Call(*op, children))
+            }
+        }
+    }
+
     pub(crate) fn to_sexp(&self) -> Sexp {
         let res = match self {
             Expr::Lit(lit) => Sexp::String(lit.to_string()),
@@ -129,6 +168,12 @@ impl Expr {
                 Expr::Call(*op, children)
             }
         }
+    }
+}
+
+impl Display for NormExpr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_expr())
     }
 }
 

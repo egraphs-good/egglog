@@ -9,8 +9,8 @@
     (Cos Math))
 
 
-(rewrite (Sqrt (Ival a)) (Ival (sqrt a)))
-(rewrite (Add (Ival a) (Ival b)) (Ival (+ a b)))
+(rewrite (Sqrt (Ival a)) (Ival (ival-Sqrt a)))
+(rewrite (Add (Ival a) (Ival b)) (Ival (ival-Add a b)))
 
 (define term (Add (Ival (interval 1.0 1.0)) (Ival (interval 2.0 2.0))))
 

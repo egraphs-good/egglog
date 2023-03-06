@@ -1,25 +1,25 @@
-(datatype Func (Func String))
-(datatype Stmt (Stmt String))
-(datatype Expr (Expr String))
-(datatype Field (Field String))
-(datatype Type (Type String))
-(datatype Alloc (Alloc Alloc) (AllocVar Expr))
+(datatype FuncT (Func String))
+(datatype StmtT (Stmt String))
+(datatype ExprT (Expr String))
+(datatype FieldT (Field String))
+(datatype TypeT (Type String))
+(datatype AllocT (Alloc AllocT) (AllocVar ExprT))
 
-(relation func (Func Expr Type Type))
-(relation func-stmt (Func Stmt))
-(relation assign (Stmt Type Expr Expr))
-(relation field-assign (Stmt Expr Field Expr))
-(relation store (Stmt Expr Expr))
-(relation expr (Stmt Expr))
-(relation return (Stmt Expr))
-(relation eq (Expr Expr Expr))
-(relation call (Expr Func Expr))
-(relation add (Expr Expr Expr))
-(relation field (Expr Expr Field))
-(relation struct-lit-field (Expr Field Expr))
-(relation addr (Expr Expr Field))
-(relation load (Expr Expr))
-(relation malloc (Expr Type))
+(relation func (FuncT ExprT TypeT TypeT))
+(relation func-stmt (FuncT StmtT))
+(relation assign (StmtT TypeT ExprT ExprT))
+(relation field-assign (StmtT ExprT FieldT ExprT))
+(relation store (StmtT ExprT ExprT))
+(relation expr (StmtT ExprT))
+(relation return (StmtT ExprT))
+(relation eq (ExprT ExprT ExprT))
+(relation call (ExprT FuncT ExprT))
+(relation add (ExprT ExprT ExprT))
+(relation field (ExprT ExprT FieldT))
+(relation struct-lit-field (ExprT FieldT ExprT))
+(relation addr (ExprT ExprT FieldT))
+(relation load (ExprT ExprT))
+(relation malloc (ExprT TypeT))
 
 ;; typedef struct s {
 ;;   int x;
@@ -136,8 +136,8 @@
 (load (Expr "*zp") (Expr "zp"))
 
 ;; a variable points to its allocation
-(function expr-points-to (Expr) Alloc)
-(function ptr-points-to (Alloc) Alloc)
+(function expr-points-to (ExprT) AllocT)
+(function ptr-points-to (AllocT) AllocT)
 
 ;; If `v = malloc(...)`, then `v -> alloc[v]`.
 (rule (

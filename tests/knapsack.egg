@@ -1,0 +1,54 @@
+(datatype expr 
+    (Num i64)
+    (Add expr expr)
+    (Max expr expr))
+(rewrite (Add (Num a) (Num b)) (Num (+ a b)))
+(rewrite (Max (Num a) (Num b)) (Num (max a b)))
+
+; List of (weight, value) pairs
+(datatype objects
+    (Cons i64 i64 objects)
+    (Nil))
+
+; Given a capacity and a list of objects, finds the maximum value of a
+; collection of objects whose total weight does not exceed the capacity.
+(function Knap (i64 objects) expr)
+
+(rule ((= f (Knap capacity (Cons weight val rest))) (<= weight capacity))
+      ((set (Knap capacity (Cons weight val rest))
+            (Max
+                (Add (Num val) (Knap (- capacity weight) rest))
+                (Knap capacity rest)))))
+
+(rule ((= f (Knap capacity (Cons weight val rest))) (> weight capacity))
+      ((set (Knap capacity (Cons weight val rest))
+            (Knap capacity rest))))
+
+(rule ((= f (Knap capacity Nil)))
+      ((set (Knap capacity Nil) (Num 0))))
+
+(define test1 (Knap 13 (Cons 5 5 (Cons 3 3 (Cons 12 12 (Cons 5 5 Nil))))))
+
+(define test2 (Knap 5 (Cons 6 6 Nil)))
+
+(define test3 (Knap 5 (Cons 1 1 (Cons 1 1 (Cons 1 1 Nil)))))
+
+(define test4 (Knap 15 (Cons 12 40 (Cons 2 20 (Cons 1 20 (Cons 1 10 (Cons 4 100 Nil)))))))
+
+; turn a (Num n) into n
+(function Unwrap (expr) i64)
+(rule ((= x (Num n))) ((set (Unwrap (Num n)) n)))
+
+(run 100)
+
+(extract (Unwrap test1))
+(check (= test1 (Num 13)))
+
+(extract (Unwrap test2))
+(check (= test2 (Num 0)))
+
+(extract (Unwrap test3))
+(check (= test3 (Num 3)))
+
+(extract (Unwrap test4))
+(check (= test4 (Num 150)))

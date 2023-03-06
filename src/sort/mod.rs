@@ -32,8 +32,8 @@ pub trait Sort: Any + Send + Sync + Debug {
         false
     }
 
-    fn register_primitives(self: Arc<Self>, egraph: &mut EGraph) {
-        let _ = egraph;
+    fn register_primitives(self: Arc<Self>, info: &mut TypeInfo) {
+        let _ = info;
     }
 
     fn make_expr(&self, value: Value) -> Expr;
@@ -80,4 +80,5 @@ impl<T: IntoSort> IntoSort for Option<T> {
     }
 }
 
-pub type PreSort = fn(egraph: &mut EGraph, name: Symbol, params: &[Expr]) -> Result<ArcSort, Error>;
+pub type PreSort =
+    fn(typeinfo: &mut TypeInfo, name: Symbol, params: &[Expr]) -> Result<ArcSort, TypeError>;

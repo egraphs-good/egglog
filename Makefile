@@ -1,7 +1,7 @@
 .PHONY: all web test serve
 
 RUST_SRC=$(shell find -type f -wholename '*/src/*.rs' -or -name 'Cargo.toml')
-TESTS=$(shell find tests/ -type f -name '*.egg')
+TESTS=$(shell find tests/ -type f -name '*.egg' -not -name '*repro-*')
 
 WWW=${PWD}/target/www/
 
@@ -13,7 +13,7 @@ DIST_WASM=$(addprefix ${WWW}, ${WASM})
 all: test web
 
 test:
-	cargo test
+	cargo test --release -- -Zunstable-options --report-time
 	@rustup component add clippy
 	cargo clippy --tests -- -D warnings
 	@rustup component add rustfmt

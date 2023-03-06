@@ -36,7 +36,7 @@ impl Sort for IntervalSort {
     }
 
     #[rustfmt::skip]
-    fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
+    fn register_primitives(self: Arc<Self>, eg: &mut TypeInfo) {
         type Opt<T=()> = Option<T>;
 
         add_primitives!(eg, "to-f64" = |a: R| -> Opt<f64> {
