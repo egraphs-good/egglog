@@ -77,6 +77,9 @@ impl Sort for F64Sort {
         add_primitives!(eg, "f64-Round" = |a: f64| -> f64 {
             a.round()
         });
+        add_primitives!(eg, "f64-Fmod" = |a: f64, b: f64| -> f64 {
+            a % b
+        });
         add_primitives!(eg, "f64-Log" = |a: f64| -> f64 {
             a.ln()
         });
@@ -110,6 +113,12 @@ impl Sort for F64Sort {
         add_primitives!(eg, "f64-Tanh" = |a: f64| -> f64 {
             a.tanh()
         });
+        add_primitives!(eg, "f64-Asinh" = |a: f64| -> f64 {
+            a.asinh()
+        });
+        add_primitives!(eg, "f64-Acosh" = |a: f64| -> f64 {
+            a.acosh()
+        });
         add_primitives!(eg, "f64-Atanh" = |a: f64| -> f64 {
             a.atanh()
         });
@@ -128,6 +137,8 @@ impl Sort for F64Sort {
         add_primitives!(eg, "f64-Atan2" = |a: f64, b: f64| -> f64 { a.atan2(b) });
         add_primitives!(eg, "f64-Hypot" = |a: f64, b: f64| -> f64 { a.hypot(b) });
         add_primitives!(eg, "f64-Fma" = |a: f64, b: f64, c: f64| -> f64 { a.mul_add(b, c) });
+        add_primitives!(eg, "f64-Copysign" = |a: f64, b: f64| -> f64 { a.copysign(b) });
+
         add_primitives!(eg, "+" = |a: f64, b: f64| -> f64 { a + b });
         add_primitives!(eg, "-" = |a: f64, b: f64| -> f64 { a - b });
         add_primitives!(eg, "*" = |a: f64, b: f64| -> f64 { a * b });

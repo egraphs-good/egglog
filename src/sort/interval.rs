@@ -81,6 +81,10 @@ impl Sort for IntervalSort {
         add_primitives!(eg, "ival-Atanh" = |a: R| -> R { a.atanh() });
         add_primitives!(eg, "ival-Atan2" = |a: R, b: R| -> R { a.atan2(&b) });
         add_primitives!(eg, "ival-Hypot" = |a: R, b: R| -> R { a.hypot(&b) });
+        add_primitives!(eg, "ival-Asinh" = |a: R| -> R { a.asinh() });
+        add_primitives!(eg, "ival-Acosh" = |a: R| -> R { a.acosh() });
+        add_primitives!(eg, "ival-Copysign" = |a: R, b: R| -> R { a.copysign(&b) });
+        add_primitives!(eg, "ival-Fmod" = |a: R, b: R| -> R { a.fmod(&b) });
         add_primitives!(eg, "interval" = |a: f64, b: f64| -> R { R::new(INTERVAL_PRECISION, a, b) });
         add_primitives!(eg, "interval" = |a: Rational, b: Rational| -> R {
             if (true) {
