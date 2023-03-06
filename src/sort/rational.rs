@@ -67,7 +67,7 @@ impl Sort for RationalSort {
         add_primitives!(eg, "rational" = |a: i64, b: i64| -> R { R::from((a, b)) });
         add_primitives!(eg, "rational" = |a: Symbol, b: Symbol| -> R { 
             if (true) {
-                let tuple: (Integer, Integer) = (rem_first_and_last(a.into()).parse().unwrap(), rem_first_and_last(b.into()).parse().unwrap());
+                let tuple: (Integer, Integer) = (a.to_string().parse().unwrap(), b.to_string().parse().unwrap());
                 R::from(tuple)
      } else {
         panic!("todo");
