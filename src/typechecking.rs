@@ -128,19 +128,6 @@ impl TypeInfo {
                     return Err(TypeError::FunctionAlreadyBound(fdecl.name));
                 }
             }
-            NCommand::Declare(name, parent, _cost) => {
-                if let Some(parent_type) = self.sorts.get(parent) {
-                    if self
-                        .global_types
-                        .insert(*name, parent_type.clone())
-                        .is_some()
-                    {
-                        return Err(TypeError::GlobalAlreadyBound(*name));
-                    }
-                } else {
-                    return Err(TypeError::Unbound(*parent));
-                }
-            }
             NCommand::NormRule {
                 rule,
                 ruleset: _,

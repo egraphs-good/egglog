@@ -26,7 +26,9 @@
 ; they are scoped outside the body of each clase in an implicit \forall
 ; This encoding as it stands really only supports ground atoms modulo equality
 
-(datatype Bool (True) (False))
+(datatype Bool)
+(declare True Bool)
+(declare False Bool)
 (function or (Bool Bool) Bool)
 (function negate (Bool) Bool)
 

@@ -1,7 +1,7 @@
 (datatype KAT
-    (A)
     (par KAT KAT)
 )
+(declare A KAT)
 
 (rewrite (par p p) p)
 (rule ((= r (par q r)) (= q (par q r))) ((union r q)))

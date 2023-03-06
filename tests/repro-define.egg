@@ -1,6 +1,6 @@
 (datatype Nat
-  (S Nat)
-  (Zero))
+  (S Nat))
+(declare Zero Nat)
 
 (define two (S (S Zero)))
 

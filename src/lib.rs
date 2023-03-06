@@ -779,23 +779,6 @@ impl EGraph {
                 self.declare_function(&fdecl, false)?;
                 format!("Declared function {}.", fdecl.name)
             }
-            NCommand::Declare(name, sort, cost) => {
-                self.declare_function(
-                    &FunctionDecl {
-                        name,
-                        schema: Schema {
-                            input: vec![],
-                            output: sort,
-                        },
-                        default: None,
-                        merge: None,
-                        merge_action: vec![],
-                        cost,
-                    },
-                    true,
-                )?;
-                format!("Declared variable {}.", name)
-            }
             NCommand::AddRuleset(name) => {
                 self.add_ruleset(name);
                 format!("Declared ruleset {name}.")
