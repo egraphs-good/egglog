@@ -28,7 +28,7 @@ use typechecking::{TypeInfo, UNIT_SYM};
 use std::fmt::{Formatter, Write};
 use std::fs::File;
 use std::hash::Hash;
-use std::io::Read;
+use std::io::{Read, Write as _, self};
 use std::iter::once;
 use std::mem;
 use std::ops::{Deref, Range};
@@ -545,7 +545,7 @@ impl EGraph {
         let ban_length = 5;
 
         if !self.rulesets.contains_key(&ruleset) {
-            panic!("run: No ruleset named '{ruleset}'");
+            panic!("run: No ruleset named '{ruleset}'. Rulesets: {}", ListDisplay(self.rulesets.keys(), ", "));
         }
         let mut rules: HashMap<Symbol, Rule> =
             std::mem::take(self.rulesets.get_mut(&ruleset).unwrap());
@@ -828,6 +828,7 @@ impl EGraph {
                     } else {
                         println!("({})", expr)
                     };
+                    io::stdout().flush().unwrap();
                     msg.into()
                 } else {
                     "Skipping Extraction".into()

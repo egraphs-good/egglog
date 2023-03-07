@@ -45,6 +45,14 @@ impl Sort for F64Sort {
         add_primitives!(eg, "dist" = |a: f64, b: f64| -> f64 {
             (a - b).abs()
         });
+        add_primitives!(eg, "furthest-from" = |a: f64| -> f64 {
+            if a < 0.0 {
+                std::f64::INFINITY
+            } else {
+                std::f64::NEG_INFINITY
+            }
+        });
+
         add_primitives!(eg, "f64-PI" = | | -> f64 {
             PI
         });

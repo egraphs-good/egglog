@@ -43,6 +43,10 @@ impl Sort for BoolSort {
             }
         });
 
+        add_primitives!(eg, "furthest-from" = |a: bool| -> bool {
+            !a
+        });
+
         add_primitives!(eg, "f64-If" = |a: bool, b: f64, c: f64| -> f64 {
             if a {
               b

@@ -4,7 +4,7 @@ use rug::{float::Round, ops::*, Float, Rational};
 use std::sync::Mutex;
 
 // 53 is double precision
-pub(crate) const INTERVAL_PRECISION: u32 = 53;
+pub(crate) const INTERVAL_PRECISION: u32 = 8000;
 
 type R = Interval;
 use crate::{ast::Literal, util::IndexSet};
@@ -25,6 +25,7 @@ impl IntervalSort {
         }
     }
 }
+
 
 impl Sort for IntervalSort {
     fn name(&self) -> Symbol {
@@ -47,7 +48,7 @@ impl Sort for IntervalSort {
                 None
             } else {
                 let loF: Float = a.lo.clone().into();
-                let hiF: Float = a.hi.clone().into();
+                let hiF: Float = a.hi.into();
                 let top = loF.to_f64();
                 let bot = hiF.to_f64();
                 if top == bot {
@@ -133,7 +134,11 @@ impl Sort for IntervalSort {
                     if lo > hi {
                         panic!("Intersect failed! Intervals: {:?} and {:?}", a, b);
                     } else {
-                        Some(Interval::make(lo, hi, a.err.union(&b.err)))
+                        Some(Interval::make(lo, hi, 
+                            ErrorInterval {
+                            lo: a.err.lo || b.err.lo, // guarantee error if either lo or hi has error
+                            hi: a.err.hi && b.err.hi  // possibility of erro
+                            }))
                     }
                 }
         } else {
