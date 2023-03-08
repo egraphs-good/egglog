@@ -103,7 +103,7 @@
      (define prog (remove-random-lines program num))
      (if (desired-error? prog)
          (min-program-greedy prog num)
-         (min-program-greedy program (* num 2/3)))]))
+         (min-program-greedy program (* num 3/4)))]))
 
 (define (random-and-sequential program)
   (define binary (min-program-greedy program (/ (length program) 2)))
@@ -115,9 +115,9 @@
                      (random-and-sequential program)))
   (first (sort programs (lambda (a b) (< (length a) (length b))))))
 
-(define (run-cmd cmd)
+(define (run-cmd cmd args)
   (define-values (sp out in err)
-  (subprocess #f #f #f cmd))
+                 (apply subprocess #f #f #f cmd args))
   (printf "stdout:\n~a" (port->string out))
   (printf "stderr:\n~a" (port->string err))
   (close-input-port out)
@@ -126,8 +126,8 @@
   (subprocess-wait sp))
 
 (define (minimize port-in port-out)
-  (run-cmd "cargo build --release")
-
+  ;; TODO how to not use absolute path here?
+  (run-cmd "/Users/oflatt/.cargo/bin/cargo" (list  "build" "--release"))
 
   (define egglog (read-lines port-in))
 
