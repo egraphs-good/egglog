@@ -26,7 +26,7 @@
 (define ITERATIONS 1)
 (define RANDOM-SAMPLE-FACTOR 1)
 (define MUST-NOT-STRINGS `())
-(define TARGET-STRINGS `("invalid default for"))
+(define TARGET-STRINGS `("self.err.lo"))
 
 (define (desugar line)
   (match line

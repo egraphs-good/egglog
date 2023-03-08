@@ -556,7 +556,7 @@ impl EGraph {
         for (name, rule) in copy_rules.iter() {
             let mut all_values = vec![];
             if rule.banned_until <= iteration {
-                let mut fuel = safe_shl(self.match_limit, rule.times_banned);
+                let mut fuel = self.match_limit;
                 let rule_search_start = Instant::now();
                 self.run_query(&rule.query, rule.todo_timestamp, |values| {
                     assert_eq!(values.len(), rule.query.vars.len());
@@ -590,21 +590,6 @@ impl EGraph {
             rule.search_time += time;
             let num_vars = rule.query.vars.len();
 
-            // the query doesn't require matches
-            if num_vars != 0 {
-                // backoff logic
-                let len = all_values.len() / num_vars;
-                let threshold = safe_shl(self.match_limit, rule.times_banned);
-                if len > threshold {
-                    let ban_length = safe_shl(ban_length, rule.times_banned);
-                    rule.times_banned = rule.times_banned.saturating_add(1);
-                    rule.banned_until = iteration + ban_length;
-                    log::info!("Banning rule {name} for {ban_length} iterations, matched {len} > {threshold} times");
-                    report.updated = true;
-                    continue;
-                }
-            }
-
             rule.todo_timestamp = self.timestamp;
             let rule_apply_start = Instant::now();
 
@@ -616,7 +601,10 @@ impl EGraph {
                 stack.clear();
                 let _ = self.run_actions(stack, &[], &rule.program, true);
             } else {
-                for values in all_values.chunks(num_vars) {
+                for (index, values) in all_values.chunks(num_vars).enumerate() {
+                    if index >= self.match_limit {
+                        break;
+                    }
                     rule.matches += 1;
                     // we can ignore results here
                     stack.clear();

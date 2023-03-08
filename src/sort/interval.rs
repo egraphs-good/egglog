@@ -4,7 +4,7 @@ use rug::{float::Round, ops::*, Float, Rational};
 use std::sync::Mutex;
 
 // 53 is double precision
-pub(crate) const INTERVAL_PRECISION: u32 = 8000;
+pub(crate) const INTERVAL_PRECISION: u32 = 128;
 
 type R = Interval;
 use crate::{ast::Literal, util::IndexSet};
@@ -87,6 +87,18 @@ impl Sort for IntervalSort {
         add_primitives!(eg, "ival-Copysign" = |a: R, b: R| -> R { a.copysign(&b) });
         add_primitives!(eg, "ival-Fmod" = |a: R, b: R| -> R { a.fmod(&b) });
         add_primitives!(eg, "interval" = |a: f64, b: f64| -> R { R::new(INTERVAL_PRECISION, a, b) });
+        add_primitives!(eg, "interval" = |a: f64, b: f64, elo: bool, ehi: bool| -> R { 
+            if true {
+            let lo = Float::with_val(INTERVAL_PRECISION, a);
+            let hi = Float::with_val(INTERVAL_PRECISION, b);
+            Interval::make(lo, hi, ErrorInterval {
+                lo: elo,
+                hi: ehi,
+            })
+            } else {
+                panic!("TODO fix macro");
+            }
+            });
         add_primitives!(eg, "interval" = |a: Rational, b: Rational| -> R {
             if (true) {
                 let mut lo = Float::with_val(INTERVAL_PRECISION, 0.0);
@@ -113,6 +125,16 @@ impl Sort for IntervalSort {
         });
         add_primitives!(eg, "ival-Cbrt" = |a: R| -> R {
             a.cbrt()
+        });
+
+        add_primitives!(eg, "ival-disjoint" = |a: R, b: R| -> Option<()> {
+            if (a.err.lo && a.err.hi && !b.err.lo && !b.err.hi) ||
+                   (b.err.lo && b.err.hi && !a.err.lo && !a.err.hi) {
+                    Some(())
+
+                } else {
+                    None
+                }  
         });
 
         add_primitives!(eg, "intersect" = |a: R, b: R| -> Opt<R> {
@@ -194,6 +216,8 @@ impl Sort for IntervalSort {
                 Expr::Lit(Literal::F64(OrderedFloat(
                     right.as_float().to_f64_round(Round::Up),
                 ))),
+                Expr::Lit(Literal::Bool(rat.err.lo)),
+                Expr::Lit(Literal::Bool(rat.err.hi)),
             ],
         )
     }
