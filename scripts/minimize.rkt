@@ -40,10 +40,8 @@
   (define-values (egglog-process egglog-output egglog-in err)
     (subprocess (current-output-port) #f #f egglog-binary))
 
-  (displayln "(" egglog-in)
   (for ([line program])
     (writeln (desugar line) egglog-in))
-  (displayln ")" egglog-in)
   (close-output-port egglog-in)
 
   (when (not (sync/timeout TIMEOUT egglog-process))
@@ -117,9 +115,21 @@
                      (random-and-sequential program)))
   (first (sort programs (lambda (a b) (< (length a) (length b))))))
 
+(define (run-cmd cmd)
+  (define-values (sp out in err)
+  (subprocess #f #f #f cmd))
+  (printf "stdout:\n~a" (port->string out))
+  (printf "stderr:\n~a" (port->string err))
+  (close-input-port out)
+  (close-output-port in)
+  (close-input-port err)
+  (subprocess-wait sp))
+
 (define (minimize port-in port-out)
+  (run-cmd "cargo build --release")
+
+
   (define egglog (read-lines port-in))
-  (pretty-print egglog)
 
   (when (not (desired-error? egglog))
     (error "Original program did not have error"))
