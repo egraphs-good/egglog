@@ -343,7 +343,7 @@ impl TypeInfo {
     ) -> Result<(), TypeError> {
         match action {
             NormAction::Let(var, expr) => {
-                let expr_type = self.typecheck_expr(ctx, expr)?.output;
+                let expr_type = self.typecheck_expr(ctx, expr, true)?.output;
 
                 self.introduce_binding(ctx, *var, expr_type, is_global)?;
             }
@@ -352,10 +352,10 @@ impl TypeInfo {
                 self.introduce_binding(ctx, *var, lit_type, is_global)?;
             }
             NormAction::Delete(expr) => {
-                self.typecheck_expr(ctx, expr)?;
+                self.typecheck_expr(ctx, expr, true)?;
             }
             NormAction::Set(expr, other) => {
-                let func_type = self.typecheck_expr(ctx, expr)?.output;
+                let func_type = self.typecheck_expr(ctx, expr, true)?.output;
                 let other_type = self.lookup(ctx, *other)?;
                 if func_type.name() != other_type.name() {
                     return Err(TypeError::TypeMismatch(func_type, other_type));
@@ -380,7 +380,7 @@ impl TypeInfo {
     fn typecheck_fact(&mut self, ctx: CommandId, fact: &NormFact) -> Result<(), TypeError> {
         match fact {
             NormFact::Assign(var, expr) => {
-                let expr_type = self.typecheck_expr(ctx, expr)?;
+                let expr_type = self.typecheck_expr(ctx, expr, false)?;
                 if let Some(existing) = self
                     .local_types
                     .get_mut(&ctx)
@@ -509,6 +509,7 @@ impl TypeInfo {
         &mut self,
         ctx: CommandId,
         expr: &NormExpr,
+        expect_lookup: bool,
     ) -> Result<FuncType, TypeError> {
         match expr {
             NormExpr::Call(head, body) => {
@@ -520,7 +521,11 @@ impl TypeInfo {
                         .collect::<Result<Vec<_>, _>>()?
                 };
                 for (child_type, var) in child_types.iter().zip(body.iter()) {
-                    self.set_local_type(ctx, *var, child_type.clone())?;
+                    if expect_lookup {
+                        self.lookup(ctx, *var)?;
+                    } else {
+                        self.set_local_type(ctx, *var, child_type.clone())?;
+                    }
                 }
 
                 Ok(FuncType::new(
