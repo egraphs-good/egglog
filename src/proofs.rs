@@ -15,7 +15,7 @@ fn make_ast_version(proof_state: &mut ProofState, expr: &NormExpr) -> Symbol {
     let NormExpr::Call(name, _) = expr;
     let types = proof_state
         .type_info
-        .typecheck_expr(proof_state.current_ctx, expr)
+        .typecheck_expr(proof_state.current_ctx, expr, true)
         .unwrap();
     Symbol::from(format!(
         "Ast{}_{}__",
@@ -28,7 +28,7 @@ fn make_rep_version(proof_state: &mut ProofState, expr: &NormExpr) -> Symbol {
     let NormExpr::Call(name, _) = expr;
     let types = proof_state
         .type_info
-        .typecheck_expr(proof_state.current_ctx, expr)
+        .typecheck_expr(proof_state.current_ctx, expr, true)
         .unwrap();
     Symbol::from(format!(
         "Rep{}_{}__",
@@ -578,7 +578,7 @@ fn instrument_rule(rule: &NormRule, rule_name: Symbol, proof_state: &mut ProofSt
 fn make_rep_function(proof_state: &mut ProofState, expr: &NormExpr) -> FunctionDecl {
     let types = proof_state
         .type_info
-        .typecheck_expr(proof_state.current_ctx, expr)
+        .typecheck_expr(proof_state.current_ctx, expr, true)
         .unwrap();
     FunctionDecl {
         name: make_rep_version(proof_state, expr),

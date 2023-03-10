@@ -3,7 +3,7 @@ use egg_smol::{
     *,
 };
 
-fn test_program(program: &str, message: &str, test_proofs: bool) {
+fn test_program(program: &str, message: &str, test_proofs: bool, should_fail: bool) {
     let mut egraph = EGraph::default();
     if test_proofs {
         egraph
@@ -16,18 +16,29 @@ fn test_program(program: &str, message: &str, test_proofs: bool) {
     }
     match egraph.parse_and_run_program(program) {
         Ok(msgs) => {
-            for msg in msgs {
-                log::info!("  {}", msg);
+            if should_fail {
+                panic!(
+                    "Program should have failed! Instead, logged:\n {}",
+                    msgs.join("\n")
+                );
+            } else {
+                for msg in msgs {
+                    log::info!("  {}", msg);
+                }
             }
         }
-        Err(err) => panic!("{}: {err}", message),
+        Err(err) => {
+            if !should_fail {
+                panic!("{}: {err}", message)
+            }
+        }
     }
 }
 
-fn run(path: &str, test_proofs: bool) {
+fn run(path: &str, test_proofs: bool, should_fail: bool) {
     let _ = env_logger::builder().is_test(true).try_init();
     let program = std::fs::read_to_string(path).unwrap();
-    test_program(&program, "Top level error", test_proofs);
+    test_program(&program, "Top level error", test_proofs, should_fail);
 
     let egraph = EGraph::default();
     let program_str = egraph
@@ -44,6 +55,7 @@ fn run(path: &str, test_proofs: bool) {
             program_str
         ),
         test_proofs,
+        should_fail,
     );
 }
 
