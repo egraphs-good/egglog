@@ -4,7 +4,7 @@ use rug::{float::Round, ops::*, Float, Rational};
 use std::sync::Mutex;
 
 // 53 is double precision
-pub(crate) const INTERVAL_PRECISION: u32 = 53;
+pub(crate) const INTERVAL_PRECISION: u32 = 1024;
 
 type R = Interval;
 use crate::{ast::Literal, util::IndexSet};
@@ -179,6 +179,9 @@ impl Sort for IntervalSort {
         });
         add_primitives!(eg, "interval-E" = | | -> R {
             Interval::e(INTERVAL_PRECISION)
+        });
+        add_primitives!(eg, "interval-NAN" = | | -> R {
+            Interval::nan(INTERVAL_PRECISION)
         });
         add_primitives!(eg, "interval-Inf" = | | -> R {
             Interval::inf(INTERVAL_PRECISION)

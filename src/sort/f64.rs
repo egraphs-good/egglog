@@ -59,6 +59,9 @@ impl Sort for F64Sort {
         add_primitives!(eg, "f64-E" = | | -> f64 {
             std::f64::consts::E
         });
+        add_primitives!(eg, "f64-NAN" = | | -> f64 {
+            std::f64::NAN
+        });
         add_primitives!(eg, "f64-INFINITY" = | | -> f64 {
             std::f64::INFINITY
         });

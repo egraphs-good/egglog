@@ -625,6 +625,9 @@ impl EGraph {
             }
 
             rule.apply_time += rule_apply_start.elapsed();
+            if self.num_tuples() > self.node_limit {
+                break;
+            }
         }
         self.rulesets.insert(ruleset, rules);
         let apply_elapsed = apply_start.elapsed();
