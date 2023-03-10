@@ -14,7 +14,9 @@
   (define line (car tail))
   (if (and (list? line)
            (or (equal? (first line) 'check)
-               (equal? (first line) 'keep)))
+               (equal? (first line) 'keep)
+               ;; don't remove definitions- could result in free variables in rules
+               (equal? (first line) 'define)))
       lst
       (append head (cdr tail))))
 
@@ -26,7 +28,7 @@
 (define ITERATIONS 1)
 (define RANDOM-SAMPLE-FACTOR 1)
 (define MUST-NOT-STRINGS `())
-(define TARGET-STRINGS `("self.err.lo"))
+(define TARGET-STRINGS `("Intersect failed"))
 
 (define (desugar line)
   (match line
@@ -76,6 +78,7 @@
        [(desired-error? removed)
         (min-program removed index)]
        [else (min-program program (+ index 1))])]))
+
 
 (define (remove-random-lines program n)
   (cond

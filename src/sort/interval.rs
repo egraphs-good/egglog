@@ -4,7 +4,7 @@ use rug::{float::Round, ops::*, Float, Rational};
 use std::sync::Mutex;
 
 // 53 is double precision
-pub(crate) const INTERVAL_PRECISION: u32 = 128;
+pub(crate) const INTERVAL_PRECISION: u32 = 53;
 
 type R = Interval;
 use crate::{ast::Literal, util::IndexSet};
@@ -133,7 +133,15 @@ impl Sort for IntervalSort {
                     Some(())
 
                 } else {
-                    None
+                    let loF: Float = a.lo.clone().into();
+                    let hiF: Float = a.hi.clone().into();
+                    let lo = loF.max(b.lo.as_float());
+                    let hi = hiF.min(b.hi.as_float());
+                    if lo > hi {
+                        Some(())
+                    } else {
+                        None
+                    }
                 }  
         });
 
