@@ -7,21 +7,17 @@ fn desugar_datatype(name: Symbol, variants: Vec<Variant>) -> Vec<NCommand> {
     vec![NCommand::Sort(name, None)]
         .into_iter()
         .chain(variants.into_iter().map(|variant| {
-            if variant.types.is_empty() {
-                NCommand::Declare(variant.name, name, None)
-            } else {
-                NCommand::Function(FunctionDecl {
-                    name: variant.name,
-                    schema: Schema {
-                        input: variant.types,
-                        output: name,
-                    },
-                    merge: None,
-                    merge_action: vec![],
-                    default: None,
-                    cost: variant.cost,
-                })
-            }
+            NCommand::Function(FunctionDecl {
+                name: variant.name,
+                schema: Schema {
+                    input: variant.types,
+                    output: name,
+                },
+                merge: None,
+                merge_action: vec![],
+                default: None,
+                cost: variant.cost,
+            })
         }))
         .collect()
 }

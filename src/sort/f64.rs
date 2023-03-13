@@ -42,7 +42,20 @@ impl Sort for F64Sort {
 });
         add_primitives!(eg, "ln" = |a: f64| -> f64 { a.ln() });
 
-        add_primitives!(eg, "dist" = |a: f64, b: f64| -> f64 {
+        // calculate relative error
+        add_primitives!(eg, "rel-error" = |a: f64, b: f64| -> f64 {
+            if b == 0.0 {
+                if a == 0.0 {
+                    0.0
+                } else {
+                    // fall back to absolute error
+                    (a - b).abs()
+                }
+            } else {
+                (a - b).abs() / b.abs()
+            }
+        });
+        add_primitives!(eg, "abs-error" = |a: f64, b: f64| -> f64 {
             (a - b).abs()
         });
         add_primitives!(eg, "furthest-from" = |a: f64| -> f64 {

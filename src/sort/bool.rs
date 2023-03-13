@@ -35,7 +35,14 @@ impl Sort for BoolSort {
             }
          });
 
-        add_primitives!(eg, "dist" = |a: bool, b: bool| -> f64 {
+        add_primitives!(eg, "abs-error" = |a: bool, b: bool| -> f64 {
+            if a == b {
+              0.0
+            } else {
+              1.0
+            }
+        });
+        add_primitives!(eg, "rel-error" = |a: bool, b: bool| -> f64 {
             if a == b {
               0.0
             } else {

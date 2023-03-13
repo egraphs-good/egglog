@@ -1061,7 +1061,6 @@ impl EGraph {
             .proof_state
             .desugar
             .desugar_program(vec![command], self.test_proofs)?;
-
         let type_info_before = self.proof_state.type_info.clone();
         self.proof_state
             .type_info
