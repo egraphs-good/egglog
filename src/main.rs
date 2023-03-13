@@ -22,10 +22,17 @@ fn main() {
 
     let args = Args::parse();
 
+    let mk_egraph = || {
+        let mut egraph = EGraph::default();
+        egraph.fact_directory = args.fact_directory.clone();
+        egraph.seminaive = !args.naive;
+        egraph
+    };
+
     if args.inputs.is_empty() {
         let stdin = io::stdin();
         log::info!("Welcome to Egglog!");
-        let mut egraph = EGraph::default();
+        let mut egraph = mk_egraph();
         let mut program = String::new();
         stdin
             .lock()
@@ -46,9 +53,7 @@ fn main() {
             let arg = input.to_string_lossy();
             panic!("Failed to read file {arg}")
         });
-        let mut egraph = EGraph::default();
-        egraph.fact_directory = args.fact_directory.clone();
-        egraph.seminaive = !args.naive;
+        let mut egraph = mk_egraph();
         match egraph.parse_and_run_program(&s) {
             Ok(_msgs) => {}
             Err(err) => {
