@@ -282,6 +282,18 @@ pub struct Desugar {
     pub(crate) action_parser: ast::parse::ActionParser,
 }
 
+impl Default for Desugar {
+    fn default() -> Self {
+        Self {
+            next_fresh: Default::default(),
+            next_command_id: Default::default(),
+            // these come from lalrpop and don't have default impls
+            parser: ast::parse::ProgramParser::new(),
+            action_parser: ast::parse::ActionParser::new(),
+        }
+    }
+}
+
 pub(crate) fn desugar_calc(
     desugar: &mut Desugar,
     idents: Vec<IdentSort>,
@@ -547,15 +559,6 @@ impl Clone for Desugar {
 }
 
 impl Desugar {
-    pub fn new() -> Self {
-        Self {
-            next_fresh: 0,
-            next_command_id: 0,
-            parser: ast::parse::ProgramParser::new(),
-            action_parser: ast::parse::ActionParser::new(),
-        }
-    }
-
     pub fn get_fresh(&mut self) -> Symbol {
         self.next_fresh += 1;
         format!("v{}{}", self.next_fresh - 1, PROOF_UNDERSCORES).into()

@@ -1,7 +1,8 @@
 use crate::*;
 
-use crate::desugar::Desugar;
+use crate::ast::desugar::Desugar;
 use crate::typechecking::FuncType;
+
 use symbolic_expressions::Sexp;
 
 pub const RULE_PROOF_KEYWORD: &str = "rule-proof";
@@ -44,7 +45,7 @@ fn make_rep_version_prim(name: &Symbol) -> Symbol {
 
 fn setup_primitives() -> Vec<Command> {
     let mut commands = vec![];
-    let fresh_types = TypeInfo::new();
+    let fresh_types = TypeInfo::default();
     commands.extend(make_ast_primitives_sorts(&fresh_types));
     commands.extend(make_rep_primitive_sorts(&fresh_types));
     commands
@@ -625,7 +626,7 @@ fn make_getchild_rule(proof_state: &mut ProofState, expr: &NormExpr) -> Command 
     }
 }
 
-#[derive(Clone)]
+#[derive(Default, Clone)]
 pub(crate) struct ProofState {
     pub(crate) global_var_ast: HashMap<Symbol, Symbol>,
     pub(crate) ast_funcs_created: HashSet<Symbol>,
@@ -775,16 +776,6 @@ fn instrument_schedule(schedule: &NormSchedule) -> Schedule {
 impl ProofState {
     pub fn parse_program(&self, input: &str) -> Result<Vec<Command>, Error> {
         self.desugar.parse_program(input)
-    }
-
-    pub fn new() -> Self {
-        ProofState {
-            type_info: TypeInfo::new(),
-            ast_funcs_created: Default::default(),
-            current_ctx: 0,
-            global_var_ast: Default::default(),
-            desugar: Desugar::new(),
-        }
     }
 
     // TODO we need to also instrument merge actions and merge because they can add new terms that need representatives

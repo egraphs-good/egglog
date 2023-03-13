@@ -12,7 +12,7 @@ impl FuncType {
     }
 }
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub struct TypeInfo {
     // get the sort from the sorts name()
     pub presorts: HashMap<Symbol, PreSort>,
@@ -23,11 +23,17 @@ pub struct TypeInfo {
     pub local_types: HashMap<CommandId, HashMap<Symbol, ArcSort>>,
 }
 
-pub const UNIT_SYM: &str = "Unit";
+impl Default for TypeInfo {
+    fn default() -> Self {
+        let mut res = Self {
+            presorts: Default::default(),
+            sorts: Default::default(),
+            primitives: Default::default(),
+            func_types: Default::default(),
+            global_types: Default::default(),
+            local_types: Default::default(),
+        };
 
-impl TypeInfo {
-    pub fn new() -> Self {
-        let mut res = Self::default();
         res.add_sort(UnitSort::new(UNIT_SYM.into()));
         res.add_sort(StringSort::new("String".into()));
         res.add_sort(I64Sort::new("i64".into()));
@@ -36,7 +42,11 @@ impl TypeInfo {
         res.presorts.insert("Map".into(), MapSort::make_sort);
         res
     }
+}
 
+pub const UNIT_SYM: &str = "Unit";
+
+impl TypeInfo {
     pub(crate) fn infer_literal(&self, lit: &Literal) -> ArcSort {
         match lit {
             Literal::Int(_) => self.sorts.get(&Symbol::from("i64")),

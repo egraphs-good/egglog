@@ -1,5 +1,4 @@
 pub mod ast;
-mod desugar;
 mod extract;
 mod function;
 mod gj;
@@ -178,7 +177,7 @@ impl Default for EGraph {
             unionfind: Default::default(),
             functions: Default::default(),
             rulesets: Default::default(),
-            proof_state: ProofState::new(),
+            proof_state: ProofState::default(),
             match_limit: usize::MAX,
             node_limit: usize::MAX,
             timestamp: 0,
