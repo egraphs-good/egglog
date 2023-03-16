@@ -478,6 +478,10 @@ impl EGraph {
 
         // we rebuild on every command so we are in a valid state at this point
         for i in 0..*limit {
+            if self.num_tuples() > self.node_limit {
+                break;
+            }
+
             if let Some(facts) = until {
                 if self.check_facts(facts).is_ok() {
                     log::info!(
@@ -500,10 +504,6 @@ impl EGraph {
             self.timestamp += 1;
             if !subreport.updated {
                 log::info!("Breaking early at iteration {}!", i);
-                break;
-            }
-
-            if self.num_tuples() > self.node_limit {
                 break;
             }
         }
@@ -554,6 +554,9 @@ impl EGraph {
         let search_start = Instant::now();
         let mut searched = vec![];
         for (name, rule) in copy_rules.iter() {
+            if self.num_tuples() > self.node_limit {
+                break;
+            }
             let mut all_values = vec![];
             if rule.banned_until <= iteration {
                 let mut fuel = safe_shl(self.match_limit, rule.times_banned);

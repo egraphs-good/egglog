@@ -44,7 +44,9 @@ impl Sort for F64Sort {
 
         // calculate relative error
         add_primitives!(eg, "rel-error" = |a: f64, b: f64| -> f64 {
-            if b == 0.0 {
+            if a.is_nan() || b.is_nan() {
+                f64::INFINITY
+            } else if b == 0.0 {
                 if a == 0.0 {
                     0.0
                 } else {
@@ -56,7 +58,11 @@ impl Sort for F64Sort {
             }
         });
         add_primitives!(eg, "abs-error" = |a: f64, b: f64| -> f64 {
-            (a - b).abs()
+            if a.is_nan() || b.is_nan() {
+                f64::INFINITY
+            } else {
+                (a - b).abs()
+            }
         });
         add_primitives!(eg, "furthest-from" = |a: f64| -> f64 {
             if a < 0.0 {
