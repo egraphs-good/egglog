@@ -28,8 +28,8 @@ num-rational = "0.4.1"
 num-traits = "0.2.15"
 num = "0.4.0"
 smallvec = "1.10"
-#intervals-good = { git = "https://github.com/oflatt/intervals-good", rev = "6478b8f49245fc9a5177dd51b4fbd5d71be50852" }
-intervals-good = { path = "../../../../intervals-good" }
+intervals-good = { git = "https://github.com/oflatt/intervals-good", rev = "3f032f6457579d82c32feb4f11a47be41ada7210" }
+#intervals-good = { path = "../../../../intervals-good" }
 rug = { version = "1.16.0", features = ["num-traits"]}
 ordered-float = "3.4.0"
 symbolic_expressions = { git = "https://github.com/oflatt/symbolic-expressions", rev = "4c0ea5ca008f972450b2af72387e64d2c1c6a791" }
