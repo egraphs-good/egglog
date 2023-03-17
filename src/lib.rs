@@ -439,7 +439,7 @@ impl EGraph {
             NormSchedule::Repeat(limit, sched) => {
                 let mut report = RunReport::default();
                 for _i in 0..*limit {
-                    let rec = report.union(&self.run_schedule(sched));
+                    let rec = self.run_schedule(sched);
                     report = report.union(&rec);
                     if !rec.updated {
                         break;

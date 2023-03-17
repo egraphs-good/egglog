@@ -2,6 +2,15 @@
 
 (require racket/runtime-path)
 
+;; timeout in seconds
+(define TIMEOUT 5)
+(define ITERATIONS 1)
+(define RANDOM-SAMPLE-FACTOR 1)
+(define MUST-NOT-STRINGS `())
+(define TARGET-STRINGS `("Intersect failed"))
+(define DONT-REMOVE (list->set `(set-option check keep define)))
+
+
 (define should-transform-rewrites
   (make-parameter #f))
 
@@ -17,10 +26,7 @@
   (define line (car tail))
   (cond
     [(and (list? line)
-           (or (equal? (first line) 'check)
-               (equal? (first line) 'keep)
-               ;; don't remove definitions- could result in free variables in rules
-               (equal? (first line) 'define)))
+          (set-member? DONT-REMOVE (first line)))
       lst]
     [(should-transform-rewrites)
      (define new-line
@@ -36,12 +42,6 @@
 (define-runtime-path egglog-binary
   "../target/release/egg-smol")
 
-;; timeout in seconds
-(define TIMEOUT 5)
-(define ITERATIONS 1)
-(define RANDOM-SAMPLE-FACTOR 1)
-(define MUST-NOT-STRINGS `())
-(define TARGET-STRINGS `("Intersect failed"))
 
 (define (desugar line)
   (match line
@@ -64,7 +64,7 @@
   (subprocess-kill egglog-process #t)
   (displayln "checking output")
   (flush-output)
-  (define err-str (read-string 800 err))
+  (define err-str (read-string 10000 err))
   (close-input-port err)
   (define still-unsound (and (string? err-str)
                              (for/and ([must-not-string MUST-NOT-STRINGS])
