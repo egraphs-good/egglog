@@ -2,6 +2,9 @@
 
 (require racket/runtime-path)
 
+(define should-transform-rewrites
+  (make-parameter #f))
+
 (define (read-lines port)
   (define line (read port))
   (if (eof-object? line)
@@ -12,13 +15,23 @@
 (define (remove-at n lst)
   (define-values (head tail) (split-at lst n))
   (define line (car tail))
-  (if (and (list? line)
+  (cond
+    [(and (list? line)
            (or (equal? (first line) 'check)
                (equal? (first line) 'keep)
                ;; don't remove definitions- could result in free variables in rules
                (equal? (first line) 'define)))
-      lst
-      (append head (cdr tail))))
+      lst]
+    [(should-transform-rewrites)
+     (define new-line
+      (match line
+        [`(rewrite ,lhs ,rhs ,whatever ...)
+          `(rule (,lhs) (,rhs) ,@whatever)]
+        [else line]))
+     (append head (cons new-line (cdr tail)))
+    ]
+    [else
+      (append head (cdr tail))]))
 
 (define-runtime-path egglog-binary
   "../target/release/egg-smol")
@@ -73,7 +86,8 @@
     [else
      (define removed (remove-at index program))
      (cond
-       [(equal? (length removed) (length program))
+       [(and (equal? (length removed) (length program))
+              (desired-error? removed))
         (min-program removed (+ index 1))]
        [(desired-error? removed)
         (min-program removed index)]
@@ -138,7 +152,11 @@
     (error "Original program did not have error"))
 
   (define minimized (min-iterations egglog))
-  (for ([line minimized])
+  (displayln "Attempting to transform rewrites...")
+  (define transformed
+    (parameterize ([should-transform-rewrites #t])
+      (min-iterations minimized)))
+  (for ([line transformed])
     (writeln (desugar line) port-out)))
 
 
