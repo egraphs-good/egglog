@@ -1,6 +1,6 @@
 use intervals_good::{ErrorInterval, Interval};
 use ordered_float::OrderedFloat;
-use rug::{float::Round, ops::*, Float, Rational};
+use rug::{float::{Round, Special}, ops::*, Float, Rational};
 use std::sync::Mutex;
 
 // 53 is double precision
@@ -186,6 +186,14 @@ impl Sort for IntervalSort {
         add_primitives!(eg, "interval-Inf" = | | -> R {
             Interval::inf(INTERVAL_PRECISION)
         });
+        add_primitives!(eg, "interval-Empty" = | | -> R {
+            Interval::make(
+                Float::with_val(INTERVAL_PRECISION, Special::NegInfinity),
+                Float::with_val(INTERVAL_PRECISION, Special::Infinity),
+                ErrorInterval::default(),
+            )
+        });
+
 
         add_primitives!(eg, "ival-Fabs" = |a: R| -> R {
             a.fabs()
@@ -211,6 +219,37 @@ impl Sort for IntervalSort {
 
         add_primitives!(eg, "ival-Fma" = |a: R, b: R, c: R| -> R {
             a.fma(&b, &c)
+        });
+
+        add_primitives!(eg, "interval-NonError" = |a: R| -> Option<()> {
+            if a.err.is_possible() {
+                None
+            } else {
+                Some(())
+            }
+        });
+        add_primitives!(eg, "interval-Positive" = |a: R| -> Option<()> {
+            if a.lo > Float::with_val(INTERVAL_PRECISION, 0.0).into() {
+                Some(())
+            } else {
+                None
+            }
+        });
+        add_primitives!(eg, "interval-NonNegative" = |a: R| -> Option<()> {
+            if a.lo >= Float::with_val(INTERVAL_PRECISION, 0.0).into() {
+                Some(())
+            } else {
+                None
+            }
+        });
+        add_primitives!(eg, "interval-NonZero" = |a: R| -> Option<()> {
+            if a.lo > Float::with_val(INTERVAL_PRECISION, 0.0).into() ||
+               a.hi < Float::with_val(INTERVAL_PRECISION, 0.0).into()
+            {
+                Some(())
+            } else {
+                None
+            }
         });
     }
     fn make_expr(&self, value: Value) -> Expr {

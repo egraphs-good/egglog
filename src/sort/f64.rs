@@ -30,7 +30,7 @@ impl Sort for F64Sort {
         type Opt<T=()> = Option<T>;
 
         add_primitives!(eg, "assert-eq" = |a: f64, b: f64| -> f64 { 
-            if a == b {
+            if a == b || (a.is_nan() && b.is_nan()) {
                 a
             } else {
                 panic!("assertion failed: {:?} != {:?}", a, b);
