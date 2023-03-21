@@ -380,7 +380,7 @@ dependencies = [
 [[package]]
 name = "intervals-good"
 version = "0.1.1"
-source = "git+https://github.com/oflatt/intervals-good?rev=3f032f6457579d82c32feb4f11a47be41ada7210#3f032f6457579d82c32feb4f11a47be41ada7210"
+source = "git+https://github.com/oflatt/intervals-good?rev=a406785945400a8d15928da533a0766d250e34e3#a406785945400a8d15928da533a0766d250e34e3"
 dependencies = [
  "float_next_after",
  "rand",

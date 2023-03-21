@@ -120,7 +120,7 @@
      (define prog (remove-random-lines program num))
      (if (desired-error? prog)
          (min-program-greedy prog num)
-         (min-program-greedy program (* num 3/4)))]))
+         (min-program-greedy program (* num 4/5)))]))
 
 (define (random-and-sequential program)
   (define binary (min-program-greedy program (/ (length program) 2)))

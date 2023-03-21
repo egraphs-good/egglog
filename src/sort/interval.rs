@@ -162,7 +162,12 @@ impl Sort for IntervalSort {
                     let lo = loF.max(b.lo.as_float());
                     let hi = hiF.min(b.hi.as_float());
                     if lo > hi {
-                        panic!("Intersect failed! Intervals: {:?} and {:?}", a, b);
+                        if a.err.is_possible() && b.err.is_possible() {
+                            // We have proven an error because the intersection is empty
+                            Some(Interval::nan(INTERVAL_PRECISION))
+                        } else {
+                            panic!("Intersect failed! Intervals: {:?} and {:?}", a, b);
+                        }
                     } else {
                         Some(Interval::make(lo, hi, 
                             ErrorInterval {
@@ -174,19 +179,19 @@ impl Sort for IntervalSort {
         } else {
             None
         }});
-        add_primitives!(eg, "interval-Pi" = | | -> R {
+        add_primitives!(eg, "ival-Pi" = | | -> R {
             Interval::pi(INTERVAL_PRECISION)
         });
-        add_primitives!(eg, "interval-E" = | | -> R {
+        add_primitives!(eg, "ival-E" = | | -> R {
             Interval::e(INTERVAL_PRECISION)
         });
-        add_primitives!(eg, "interval-NAN" = | | -> R {
+        add_primitives!(eg, "ival-NAN" = | | -> R {
             Interval::nan(INTERVAL_PRECISION)
         });
-        add_primitives!(eg, "interval-Inf" = | | -> R {
+        add_primitives!(eg, "ival-Inf" = | | -> R {
             Interval::inf(INTERVAL_PRECISION)
         });
-        add_primitives!(eg, "interval-Empty" = | | -> R {
+        add_primitives!(eg, "ival-Empty" = | | -> R {
             Interval::make(
                 Float::with_val(INTERVAL_PRECISION, Special::NegInfinity),
                 Float::with_val(INTERVAL_PRECISION, Special::Infinity),
@@ -221,28 +226,36 @@ impl Sort for IntervalSort {
             a.fma(&b, &c)
         });
 
-        add_primitives!(eg, "interval-NonError" = |a: R| -> Option<()> {
+        add_primitives!(eg, "ival-NonError" = |a: R| -> Option<()> {
             if a.err.is_possible() {
                 None
             } else {
                 Some(())
             }
         });
-        add_primitives!(eg, "interval-Positive" = |a: R| -> Option<()> {
+        add_primitives!(eg, "ival-GuaranteeError" = |a: R| -> Option<()> {
+            if a.err.is_guaranteed() {
+                Some(())
+            } else {
+                None
+            }
+        });
+
+        add_primitives!(eg, "ival-Positive" = |a: R| -> Option<()> {
             if a.lo > Float::with_val(INTERVAL_PRECISION, 0.0).into() {
                 Some(())
             } else {
                 None
             }
         });
-        add_primitives!(eg, "interval-NonNegative" = |a: R| -> Option<()> {
+        add_primitives!(eg, "ival-NonNegative" = |a: R| -> Option<()> {
             if a.lo >= Float::with_val(INTERVAL_PRECISION, 0.0).into() {
                 Some(())
             } else {
                 None
             }
         });
-        add_primitives!(eg, "interval-NonZero" = |a: R| -> Option<()> {
+        add_primitives!(eg, "ival-NonZero" = |a: R| -> Option<()> {
             if a.lo > Float::with_val(INTERVAL_PRECISION, 0.0).into() ||
                a.hi < Float::with_val(INTERVAL_PRECISION, 0.0).into()
             {
