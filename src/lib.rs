@@ -28,7 +28,7 @@ use typechecking::{TypeInfo, UNIT_SYM};
 use std::fmt::{Formatter, Write};
 use std::fs::File;
 use std::hash::Hash;
-use std::io::{Read, Write as _, self};
+use std::io::{self, Read, Write as _};
 use std::iter::once;
 use std::mem;
 use std::ops::{Deref, Range};

@@ -357,14 +357,22 @@ impl TypeInfo {
                 let func_type = self.typecheck_expr(ctx, expr, true)?.output;
                 let other_type = self.lookup(ctx, *other)?;
                 if func_type.name() != other_type.name() {
-                    return Err(TypeError::TypeMismatch(func_type, other_type, other.to_string()));
+                    return Err(TypeError::TypeMismatch(
+                        func_type,
+                        other_type,
+                        other.to_string(),
+                    ));
                 }
             }
             NormAction::Union(var1, var2) => {
                 let var1_type = self.lookup(ctx, *var1)?;
                 let var2_type = self.lookup(ctx, *var2)?;
                 if var1_type.name() != var2_type.name() {
-                    return Err(TypeError::TypeMismatch(var1_type, var2_type, var2.to_string()));
+                    return Err(TypeError::TypeMismatch(
+                        var1_type,
+                        var2_type,
+                        var2.to_string(),
+                    ));
                 }
             }
             NormAction::LetVar(var1, var2) => {
@@ -388,7 +396,11 @@ impl TypeInfo {
                     .insert(*var, expr_type.output.clone())
                 {
                     if expr_type.output.name() != existing.name() {
-                        return Err(TypeError::TypeMismatch(existing, expr_type.output, expr.to_string()));
+                        return Err(TypeError::TypeMismatch(
+                            existing,
+                            expr_type.output,
+                            expr.to_string(),
+                        ));
                     }
                 }
             }

@@ -1,6 +1,10 @@
 use intervals_good::{ErrorInterval, Interval};
 use ordered_float::OrderedFloat;
-use rug::{float::{Round, Special}, ops::*, Float, Rational};
+use rug::{
+    float::{Round, Special},
+    ops::*,
+    Float, Rational,
+};
 use std::sync::Mutex;
 
 // 53 is double precision
@@ -25,7 +29,6 @@ impl IntervalSort {
         }
     }
 }
-
 
 impl Sort for IntervalSort {
     fn name(&self) -> Symbol {
@@ -142,7 +145,7 @@ impl Sort for IntervalSort {
                     } else {
                         None
                     }
-                }  
+                }
         });
 
         add_primitives!(eg, "intersect" = |a: R, b: R| -> Opt<R> {
@@ -169,7 +172,7 @@ impl Sort for IntervalSort {
                             panic!("Intersect failed! Intervals: {:?} and {:?}", a, b);
                         }
                     } else {
-                        Some(Interval::make(lo, hi, 
+                        Some(Interval::make(lo, hi,
                             ErrorInterval {
                             lo: a.err.lo || b.err.lo, // guarantee error if either lo or hi has error
                             hi: a.err.hi && b.err.hi  // possibility of erro
