@@ -106,10 +106,14 @@ impl Sort for F64Sort {
             }
         );
 
-        add_primitives!(eg, "f64-PI" = || -> f64 { PI });
-        add_primitives!(eg, "f64-E" = || -> f64 { std::f64::consts::E });
-        add_primitives!(eg, "f64-NAN" = || -> f64 { std::f64::NAN });
-        add_primitives!(eg, "f64-INFINITY" = || -> f64 { std::f64::INFINITY });
+        #[rustfmt::skip]
+        add_primitives!(eg, "f64-PI" = | | -> f64 { PI });
+        #[rustfmt::skip]
+        add_primitives!(eg, "f64-E" = | | -> f64 { std::f64::consts::E });
+        #[rustfmt::skip]
+        add_primitives!(eg, "f64-NAN" = | | -> f64 { std::f64::NAN });
+        #[rustfmt::skip]
+        add_primitives!(eg, "f64-INFINITY" = | | -> f64 { std::f64::INFINITY });
 
         add_primitives!(eg, "f64-Neg" = |a: f64| -> f64 { -a });
 
