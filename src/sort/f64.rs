@@ -42,6 +42,24 @@ impl Sort for F64Sort {
 });
         add_primitives!(eg, "ln" = |a: f64| -> f64 { a.ln() });
 
+        add_primitives!(eg, "rel-error" = |a: i64, b: i64| -> f64 {
+            if true {
+            let a = a as f64;
+            let b = b as f64;
+            if b == 0.0 {
+                if a == 0.0 {
+                    0.0
+                } else {
+                    // fall back to absolute error
+                    (a - b).abs()
+                }
+            } else {
+                (a - b).abs() / b.abs()
+            }
+        } else {
+            panic!("TODO");
+    }});
+
         // calculate relative error
         add_primitives!(eg, "rel-error" = |a: f64, b: f64| -> f64 {
             if a.is_nan() && b.is_nan() {

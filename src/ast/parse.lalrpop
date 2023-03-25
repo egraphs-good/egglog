@@ -126,8 +126,8 @@ Expr: Expr = {
 Literal: Literal = {
     // "(" ")" => Literal::Unit, // shouldn't need unit literals for now
     <Integer> => Literal::Int(<>),
-    <F64> => Literal::F64(<>),
     <SymString> => Literal::String(<>),
+    <F64> => Literal::F64(<>),
     <Bool> => Literal::Bool(<>),
 }
 
@@ -152,7 +152,11 @@ IdentSort: IdentSort = "(" <ident:Ident> <sort:Type> ")" => IdentSort { ident, s
 UNum: usize = {
     <Integer> => <>.try_into().unwrap(),
 }
-F64: OrderedFloat<f64> = <s:r"(-)?[0-9]+\.[0-9]+(e(\+)?(-)?[0-9]+)?"> => OrderedFloat::<f64>(s.parse().unwrap());
+F64: OrderedFloat<f64> = {
+    "NaN" => OrderedFloat::<f64>(f64::NAN),
+    <s:r"(-)?[0-9]+\.[0-9]+(e(\+)?(-)?[0-9]+)?"> => OrderedFloat::<f64>(s.parse().unwrap()),
+}
+
 Ident: Symbol = <s:r"(([[:alpha:]][\w-]*)|([-+*/!=<>&|^/%_]))+"> => s.parse().unwrap();
 SymString: Symbol = <String> => Symbol::from(<>);
 

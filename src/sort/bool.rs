@@ -75,6 +75,9 @@ impl Sort for BoolSort {
 
         add_primitives!(eg, "bool-TRUE" = | | -> bool { true });
         add_primitives!(eg, "bool-FALSE" = | | -> bool { false });
+
+        add_primitives!(eg, "to-i64" = |a: bool| -> i64 { a as i64 });
+        add_primitives!(eg, "to-bool" = |a: i64| -> bool { a != 0 });
     }
 
     fn make_expr(&self, value: Value) -> Expr {
