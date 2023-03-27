@@ -16,7 +16,7 @@ wasm-bindgen = ["instant/wasm-bindgen"]
 hashbrown = {version = "0.13", features = ["raw"]}
 indexmap = "1.9"
 instant = "0.1"
-log = "0.4"
+log = {version = "0.4", features  = ["release_max_level_off"] }
 rustc-hash = "1.1"
 symbol_table = {git = "https://github.com/mwillsey/symbol_table", rev = "acddcf8938d1b4ed2fce048c9d83c30203d404b9", features = ["global"]}
 thiserror = "1"
