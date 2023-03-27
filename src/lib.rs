@@ -1093,6 +1093,7 @@ impl EGraph {
             // Important to process each command individually
             // because push and pop create new scopes
             for processed in self.process_command(command)? {
+                println!("{}", processed);
                 let msg = self.run_command(processed.command, should_run)?;
                 log::info!("{}", msg);
                 msgs.push(msg);
