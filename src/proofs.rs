@@ -588,8 +588,8 @@ fn make_rep_function(proof_state: &mut ProofState, expr: &NormExpr) -> FunctionD
             output: "TrmPrf__".into(),
         },
         merge: Some(Expr::Var("old".into())),
-        // Merge action is only needed if the output is not primitive
-        merge_action: if proof_state.type_info.is_primitive(types.output.name()) {
+        // Merge action is only needed if the merge function is union
+        merge_action: if types.has_merge {
             vec![]
         } else {
             merge_action(proof_state, types)
