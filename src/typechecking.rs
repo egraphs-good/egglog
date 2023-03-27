@@ -4,12 +4,16 @@ use crate::{proofs::RULE_PROOF_KEYWORD, *};
 pub struct FuncType {
     pub input: Vec<ArcSort>,
     pub output: ArcSort,
-    pub has_merge: bool
+    pub has_merge: bool,
 }
 
 impl FuncType {
     pub fn new(input: Vec<ArcSort>, output: ArcSort, has_merge: bool) -> Self {
-        Self { input, output, has_merge }
+        Self {
+            input,
+            output,
+            has_merge,
+        }
     }
 }
 
@@ -106,7 +110,8 @@ impl TypeInfo {
     }
 
     pub(crate) fn function_to_functype(&self, func: &FunctionDecl) -> Result<FuncType, TypeError> {
-        let input = func.schema
+        let input = func
+            .schema
             .input
             .iter()
             .map(|name| {
