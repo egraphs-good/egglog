@@ -144,7 +144,6 @@
             (+ (PathCost__ t1 tmid) stepcost)))
       :ruleset proof-extract__)
 ;; when you find a path, union it with the equality proof
-;; also demand the resulting proof
 (rule ((= e (DemandEq__ t1 t2))
        (= prooflist (ProofBetween__ t1 t2 t2)))
       ((set (DemandEq__ t1 t2) (Transitivity__ prooflist)))

@@ -482,7 +482,7 @@ pub(crate) fn desugar_command(
                 })));
 
                 // we need to run proof extraction rules again
-                /*res.push(NCommand::RunSchedule(NormSchedule::Saturate(Box::new(
+                res.push(NCommand::RunSchedule(NormSchedule::Saturate(Box::new(
                     NormSchedule::Run(NormRunConfig {
                         ruleset: "proof-extract__".into(),
                         limit: 1,
@@ -494,7 +494,7 @@ pub(crate) fn desugar_command(
                 res.push(NCommand::Extract {
                     variants: 0,
                     var: proofvar,
-                });*/
+                });
             }
 
             res
