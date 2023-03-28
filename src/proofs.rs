@@ -588,7 +588,12 @@ fn make_rep_function(proof_state: &mut ProofState, expr: &NormExpr) -> FunctionD
             output: "TrmPrf__".into(),
         },
         merge: Some(Expr::Var("old".into())),
-        merge_action: merge_action(proof_state, types),
+        // Merge action is only needed if the merge function is union
+        merge_action: if types.has_merge {
+            vec![]
+        } else {
+            merge_action(proof_state, types)
+        },
         default: None,
         cost: None,
     }

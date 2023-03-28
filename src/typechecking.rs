@@ -4,11 +4,16 @@ use crate::{proofs::RULE_PROOF_KEYWORD, *};
 pub struct FuncType {
     pub input: Vec<ArcSort>,
     pub output: ArcSort,
+    pub has_merge: bool,
 }
 
 impl FuncType {
-    pub fn new(input: Vec<ArcSort>, output: ArcSort) -> Self {
-        Self { input, output }
+    pub fn new(input: Vec<ArcSort>, output: ArcSort, has_merge: bool) -> Self {
+        Self {
+            input,
+            output,
+            has_merge,
+        }
     }
 }
 
@@ -104,8 +109,9 @@ impl TypeInfo {
         Ok(())
     }
 
-    pub(crate) fn schema_to_functype(&self, schema: &Schema) -> Result<FuncType, TypeError> {
-        let input = schema
+    pub(crate) fn function_to_functype(&self, func: &FunctionDecl) -> Result<FuncType, TypeError> {
+        let input = func
+            .schema
             .input
             .iter()
             .map(|name| {
@@ -116,12 +122,12 @@ impl TypeInfo {
                 }
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let output = if let Some(sort) = self.sorts.get(&schema.output) {
+        let output = if let Some(sort) = self.sorts.get(&func.schema.output) {
             Ok(sort.clone())
         } else {
-            Err(TypeError::Unbound(schema.output))
+            Err(TypeError::Unbound(func.schema.output))
         }?;
-        Ok(FuncType::new(input, output))
+        Ok(FuncType::new(input, output, func.merge.is_some()))
     }
 
     fn typecheck_ncommand(&mut self, command: &NCommand, id: CommandId) -> Result<(), TypeError> {
@@ -133,7 +139,7 @@ impl TypeInfo {
                 if self.primitives.contains_key(&fdecl.name) {
                     return Err(TypeError::PrimitiveAlreadyBound(fdecl.name));
                 }
-                let ftype = self.schema_to_functype(&fdecl.schema)?;
+                let ftype = self.function_to_functype(fdecl)?;
                 if self.func_types.insert(fdecl.name, ftype).is_some() {
                     return Err(TypeError::FunctionAlreadyBound(fdecl.name));
                 }
@@ -478,14 +484,14 @@ impl TypeInfo {
         _ctx: CommandId,
         sym: Symbol,
         input_types: Vec<ArcSort>,
-    ) -> Result<ArcSort, TypeError> {
+    ) -> Result<FuncType, TypeError> {
         if let Some(found) = self.func_types.get(&sym) {
-            Ok(found.output.clone())
+            Ok(found.clone())
         } else {
             if let Some(prims) = self.primitives.get(&sym) {
                 for prim in prims {
                     if let Some(return_type) = prim.accept(&input_types) {
-                        return Ok(return_type);
+                        return Ok(FuncType::new(input_types, return_type, false));
                     }
                 }
             }
@@ -520,10 +526,7 @@ impl TypeInfo {
                     }
                 }
 
-                Ok(FuncType::new(
-                    child_types.clone(),
-                    self.lookup_func(ctx, *head, child_types)?,
-                ))
+                self.lookup_func(ctx, *head, child_types)
             }
         }
     }
