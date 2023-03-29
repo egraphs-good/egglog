@@ -8,12 +8,13 @@
 (datatype Expr
     (Var String :cost 100)
     (Abs String Expr)
-    (T)
-    (F)
     (If Expr Expr Expr)
     (N i64)
     (Add Expr Expr)
     (App Expr Expr))
+(declare T Expr)
+(declare F Expr)
+
 
 ; (\x. (if x then 0 else 1) + 2) false
 (define test
@@ -21,17 +22,17 @@
         (Abs "x" (Add (If (Var "x") (N 0) (N 1)) (N 2))) F))
 
 (datatype CExpr
-    (CT)
-    (CF)
-    (CIf)
     (CVar String :cost 10000) ; (variables that haven't been eliminated yet)
     (CAbs String CExpr :cost 10000) ; (abstractions that haven't been eliminated yet)
     (CN i64)
-    (CAdd)
-    (S)
-    (K)
-    (I)
     (CApp CExpr CExpr))
+(declare CT CExpr)
+(declare CF CExpr)
+(declare CIf CExpr)
+(declare CAdd CExpr)
+(declare S CExpr)
+(declare K CExpr)
+(declare I CExpr)
 
 ;;;; Conversion functions
 (function Comb (Expr) CExpr :cost 1000000)

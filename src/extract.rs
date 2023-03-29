@@ -20,7 +20,7 @@ struct Extractor<'a> {
 
 impl EGraph {
     pub fn value_to_id(&self, value: Value) -> Option<(Symbol, Id)> {
-        if let Some(sort) = self.sorts.get(&value.tag) {
+        if let Some(sort) = self.get_sort(&value) {
             if sort.is_eq_sort() {
                 let id = Id::from(value.bits as usize);
                 return Some((sort.name(), self.find(id)));
@@ -83,7 +83,7 @@ impl<'a> Extractor<'a> {
     }
 
     fn find_best(&self, value: Value) -> (Cost, Expr) {
-        let sort = self.egraph.sorts.get(&value.tag).unwrap();
+        let sort = self.egraph.get_sort(&value).unwrap();
         if sort.is_eq_sort() {
             let id = self.egraph.find(Id::from(value.bits as usize));
             let (cost, node) = &self
@@ -100,13 +100,13 @@ impl<'a> Extractor<'a> {
         let mut cost = function.decl.cost.unwrap_or(1);
         let types = &function.schema.input;
         for (ty, value) in types.iter().zip(children) {
-            cost += if ty.is_eq_sort() {
+            cost = cost.saturating_add(if ty.is_eq_sort() {
                 let id = self.egraph.find(Id::from(value.bits as usize));
                 // TODO costs should probably map values?
                 self.costs.get(&id)?.0
             } else {
                 1
-            }
+            });
         }
         Some(cost)
     }

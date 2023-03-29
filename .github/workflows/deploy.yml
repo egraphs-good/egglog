@@ -1,9 +1,6 @@
 name: Deploy Web Demo
 
-on:
-  push:
-    branches:
-      - main
+on: [push, pull_request]
 
 jobs:
   build:
@@ -27,6 +24,8 @@ jobs:
 
     - name: Deploy
       uses: peaceiris/actions-gh-pages@v3
+      # only actually deploy if pushed to main branch
+      if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         publish_dir: target/www

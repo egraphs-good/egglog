@@ -3,43 +3,46 @@
 ;;;;;;;;;;;;;;;;
 
 ; Top means it can be an arbitrary value
-(datatype Val (Top) (I i64) (True) (False))
+(datatype Val (I i64))
+(declare Top Val)
+(declare True Val)
+(declare False Val)
 (relation Bool (Val))
-(Bool (True))
-(Bool (False))
+(Bool True)
+(Bool False)
 
 (function merge-val (Val Val) Val)
 
-(rewrite (merge-val (Top) x) (Top))
-(rewrite (merge-val x (Top)) (Top))
-(rewrite (merge-val (True)  (False)) (Top))
-(rewrite (merge-val (True)  (I x))   (Top))
-(rewrite (merge-val (False) (True))  (Top))
-(rewrite (merge-val (False) (I x))   (Top))
-(rewrite (merge-val (I x) (I y)) (Top) :when ((!= x y)))
+(rewrite (merge-val Top x) Top)
+(rewrite (merge-val x Top) Top)
+(rewrite (merge-val True  False) Top)
+(rewrite (merge-val True  (I x))   Top)
+(rewrite (merge-val False True)  Top)
+(rewrite (merge-val False (I x))   Top)
+(rewrite (merge-val (I x) (I y)) Top :when ((!= x y)))
 (rewrite (merge-val x x) x)
 
 (function add-val (Val Val) Val)
 
-(rewrite (add-val (Top) x) (Top))
-(rewrite (add-val x (Top)) (Top))
-(rewrite (add-val (True) x) (Top))
-(rewrite (add-val (False) x) (Top))
-(rewrite (add-val x (True)) (Top))
-(rewrite (add-val x (False)) (Top))
+(rewrite (add-val Top x) Top)
+(rewrite (add-val x Top) Top)
+(rewrite (add-val True x) Top)
+(rewrite (add-val False x) Top)
+(rewrite (add-val x True) Top)
+(rewrite (add-val x False) Top)
 (rewrite (add-val (I x) (I y)) (I (+ x y)))
 
 (function eq-val (Val Val) Val)
 
-(rewrite (eq-val (Top) x) (Top))
-(rewrite (eq-val x (Top)) (Top))
-(rewrite (eq-val (True) (False)) (False))
-(rewrite (eq-val (True) (I x)) (False))
-(rewrite (eq-val (False) (True)) (False))
-(rewrite (eq-val (False) (I x)) (False))
-(rewrite (eq-val (I x) (True)) (False))
-(rewrite (eq-val (I x) (False)) (False))
-(rewrite (eq-val x x) (True))
+(rewrite (eq-val Top x) Top)
+(rewrite (eq-val x Top) Top)
+(rewrite (eq-val True False) False)
+(rewrite (eq-val True (I x)) False)
+(rewrite (eq-val False True) False)
+(rewrite (eq-val False (I x)) False)
+(rewrite (eq-val (I x) True) False)
+(rewrite (eq-val (I x) False) False)
+(rewrite (eq-val x x) True)
 
 (datatype VarT (V String))
 (datatype Loc (L i64))
@@ -52,8 +55,8 @@
     (Ass VarT Exp)
     (If VarT Loc Loc)
     (Goto Loc)
-    (Call VarT)
-    (End))
+    (Call VarT))
+(declare End ProgStmt)
 (function Prog (Loc) ProgStmt)
 (relation RProg (Loc ProgStmt))
 
@@ -132,7 +135,7 @@
 ; replace x = a + b (non-contant)
 (rule (
     (= (Prog l) (Ass x (Add x1 x2)))
-    (= (Top) (add-val (const-prop l x1)
+    (= Top (add-val (const-prop l x1)
                       (const-prop l x2)))
 )(
     (RProg l (Ass x (Add x1 x2)))
@@ -150,7 +153,7 @@
 ; replace x = a == b (non-constant)
 (rule (
     (= (Prog l) (Ass x (Eq x1 x2)))
-    (= (Top) (eq-val (const-prop l x1) (const-prop l x2)))
+    (= Top (eq-val (const-prop l x1) (const-prop l x2)))
 )(
     (RProg l (Ass x (Eq x1 x2)))
 ))
@@ -200,7 +203,7 @@
 ; replace if true
 (rule (
     (= (Prog l) (If b l1 l2))
-    (= (True) (const-prop l b))
+    (= True (const-prop l b))
 )(
     (RProg l (Goto l1))
 ))
@@ -208,7 +211,7 @@
 ; replace if false
 (rule (
     (= (Prog l) (If b l1 l2))
-    (= (False) (const-prop l b))
+    (= False (const-prop l b))
 )(
     (RProg l (Goto l2))
 ))
@@ -216,7 +219,7 @@
 ; replace if Top
 (rule (
     (= (Prog l) (If b l1 l2))
-    (= (Top) (const-prop l b))
+    (= Top (const-prop l b))
 )(
     (RProg l (If b l1 l2))
 ))
@@ -244,7 +247,7 @@
 ;; TEST
 ;;;;;;;;;;;;;;;;
 
-(union (Prog (L 0)) (Ass (V "b") (Const (Top))))
+(union (Prog (L 0)) (Ass (V "b") (Const Top)))
 (union (Prog (L 1)) (Ass (V "ten") (Const (I 10))))
 (union (Prog (L 2)) (Ass (V "one") (Const (I 1))))
 (union (Prog (L 3)) (Ass (V "zero") (Const (I 0))))
@@ -269,7 +272,7 @@
 (union (Prog (L 12)) (Goto (L 5)))
 ; y := x
 (union (Prog (L 13)) (Ass (V "y") (Add (V "x") (V "zero"))))
-(union (Prog (L 14)) (End))
+(union (Prog (L 14)) End)
 
 (run 20)
 

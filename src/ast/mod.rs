@@ -17,6 +17,7 @@ use crate::*;
 
 mod expr;
 pub use expr::*;
+pub mod desugar;
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct Id(usize);
@@ -39,66 +40,166 @@ impl Display for Id {
     }
 }
 
-#[derive(Debug, Clone)]
-pub enum NormCommand {
+pub type CommandId = usize;
+
+// TODO put line numbers in metadata
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct Metadata {
+    pub id: CommandId,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct NormCommand {
+    pub metadata: Metadata,
+    pub command: NCommand,
+}
+
+impl NormCommand {
+    pub fn transforms_to(&self, others: Vec<NCommand>) -> Vec<NormCommand> {
+        others
+            .into_iter()
+            .map(|c| NormCommand {
+                metadata: self.metadata.clone(),
+                command: c,
+            })
+            .collect()
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub enum NCommand {
+    SetOption {
+        name: Symbol,
+        value: Expr,
+    },
     Sort(Symbol, Option<(Symbol, Vec<Expr>)>),
     Function(FunctionDecl),
     AddRuleset(Symbol),
-    NormRule(Symbol, NormRule),
+    NormRule {
+        name: Symbol,
+        ruleset: Symbol,
+        rule: NormRule,
+    },
     NormAction(NormAction),
-    Run(RunConfig),
-    RunSchedule(Schedule),
-    Simplify { expr: Expr, config: RunConfig },
-    // TODO flatten calc, add proof support
-    Calc(Vec<IdentSort>, Vec<Expr>),
-    Extract { variants: usize, var: Symbol },
-    // TODO: this could just become an empty query
-    Check(Fact),
-    Clear,
+    RunSchedule(NormSchedule),
+    Simplify {
+        var: Symbol,
+        config: NormRunConfig,
+    },
+    Extract {
+        variants: usize,
+        var: Symbol,
+    },
+    Check(Vec<NormFact>),
     Print(Symbol, usize),
     PrintSize(Symbol),
-    Output { file: String, exprs: Vec<Expr> },
-    // TODO flatten query
-    Query(Vec<Fact>),
+    Output {
+        file: String,
+        exprs: Vec<Expr>,
+    },
     Push(usize),
     Pop(usize),
-    Fail(Box<NormCommand>),
+    Fail(Box<NCommand>),
     // TODO desugar
-    Input { name: Symbol, file: String },
+    Input {
+        name: Symbol,
+        file: String,
+    },
 }
 
 impl NormCommand {
     pub fn to_command(&self) -> Command {
+        self.command.to_command()
+    }
+}
+
+impl NCommand {
+    pub fn to_command(&self) -> Command {
         match self {
-            NormCommand::Sort(name, params) => Command::Sort(*name, params.clone()),
-            NormCommand::Function(f) => Command::Function(f.clone()),
-            NormCommand::AddRuleset(name) => Command::AddRuleset(*name),
-            NormCommand::NormRule(name, rule) => Command::Rule(*name, rule.to_rule()),
-            NormCommand::NormAction(action) => Command::Action(action.to_action()),
-            NormCommand::Run(config) => Command::Run(config.clone()),
-            NormCommand::RunSchedule(sched) => Command::RunSchedule(sched.clone()),
-            NormCommand::Simplify { expr, config } => Command::Simplify {
-                expr: expr.clone(),
-                config: config.clone(),
+            NCommand::SetOption { name, value } => Command::SetOption {
+                name: *name,
+                value: value.clone(),
             },
-            NormCommand::Calc(args, exprs) => Command::Calc(args.clone(), exprs.clone()),
-            NormCommand::Extract { variants, var } => Command::Extract {
+            NCommand::Sort(name, params) => Command::Sort(*name, params.clone()),
+            NCommand::Function(f) => Command::Function(f.clone()),
+            NCommand::AddRuleset(name) => Command::AddRuleset(*name),
+            NCommand::NormRule {
+                name,
+                ruleset,
+                rule,
+            } => Command::Rule {
+                name: *name,
+                ruleset: *ruleset,
+                rule: rule.to_rule(),
+            },
+            NCommand::RunSchedule(schedule) => Command::RunSchedule(schedule.to_schedule()),
+            NCommand::NormAction(action) => Command::Action(action.to_action()),
+            NCommand::Simplify { var, config } => Command::Simplify {
+                expr: Expr::Var(*var),
+                config: config.to_run_config(),
+            },
+            NCommand::Extract { variants, var } => Command::Extract {
                 variants: *variants,
                 e: Expr::Var(*var),
             },
-            NormCommand::Check(fact) => Command::Check(fact.clone()),
-            NormCommand::Clear => Command::Query(vec![]),
-            NormCommand::Print(name, n) => Command::Print(*name, *n),
-            NormCommand::PrintSize(name) => Command::PrintSize(*name),
-            NormCommand::Output { file, exprs } => Command::Output {
+            NCommand::Check(facts) => {
+                Command::Check(facts.iter().map(|fact| fact.to_fact()).collect())
+            }
+            NCommand::Print(name, n) => Command::Print(*name, *n),
+            NCommand::PrintSize(name) => Command::PrintSize(*name),
+            NCommand::Output { file, exprs } => Command::Output {
                 file: file.to_string(),
                 exprs: exprs.clone(),
             },
-            NormCommand::Query(facts) => Command::Query(facts.clone()),
-            NormCommand::Push(n) => Command::Push(*n),
-            NormCommand::Pop(n) => Command::Pop(*n),
-            NormCommand::Fail(cmd) => Command::Fail(Box::new(cmd.to_command())),
-            NormCommand::Input { name, file } => Command::Input {
+            NCommand::Push(n) => Command::Push(*n),
+            NCommand::Pop(n) => Command::Pop(*n),
+            NCommand::Fail(cmd) => Command::Fail(Box::new(cmd.to_command())),
+            NCommand::Input { name, file } => Command::Input {
+                name: *name,
+                file: file.clone(),
+            },
+        }
+    }
+
+    pub fn map_exprs(&self, f: &mut impl FnMut(&NormExpr) -> NormExpr) -> NCommand {
+        match self {
+            // Don't map over setoption
+            NCommand::SetOption { name, value } => NCommand::SetOption {
+                name: *name,
+                value: value.clone(),
+            },
+            NCommand::Sort(name, params) => NCommand::Sort(*name, params.clone()),
+            NCommand::Function(f) => NCommand::Function(f.clone()),
+            NCommand::AddRuleset(name) => NCommand::AddRuleset(*name),
+            NCommand::RunSchedule(schedule) => NCommand::RunSchedule(schedule.clone()),
+            NCommand::NormRule {
+                name,
+                ruleset,
+                rule,
+            } => NCommand::NormRule {
+                name: *name,
+                ruleset: *ruleset,
+                rule: rule.map_exprs(f),
+            },
+            NCommand::NormAction(action) => NCommand::NormAction(action.map_exprs(f)),
+            NCommand::Simplify { .. } => self.clone(),
+            NCommand::Extract { variants, var } => NCommand::Extract {
+                variants: *variants,
+                var: *var,
+            },
+            NCommand::Check(facts) => {
+                NCommand::Check(facts.iter().map(|fact| fact.map_exprs(f)).collect())
+            }
+            NCommand::Print(name, n) => NCommand::Print(*name, *n),
+            NCommand::PrintSize(name) => NCommand::PrintSize(*name),
+            NCommand::Output { file, exprs } => NCommand::Output {
+                file: file.to_string(),
+                exprs: exprs.clone(),
+            },
+            NCommand::Push(n) => NCommand::Push(*n),
+            NCommand::Pop(n) => NCommand::Pop(*n),
+            NCommand::Fail(cmd) => NCommand::Fail(Box::new(cmd.map_exprs(f))),
+            NCommand::Input { name, file } => NCommand::Input {
                 name: *name,
                 file: file.clone(),
             },
@@ -106,12 +207,114 @@ impl NormCommand {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Schedule {
+    Saturate(Box<Schedule>),
+    Repeat(usize, Box<Schedule>),
+    Run(RunConfig),
+    Sequence(Vec<Schedule>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum NormSchedule {
+    Saturate(Box<NormSchedule>),
+    Repeat(usize, Box<NormSchedule>),
+    Run(NormRunConfig),
+    Sequence(Vec<NormSchedule>),
+}
+
+impl NormSchedule {
+    fn to_schedule(&self) -> Schedule {
+        match self {
+            NormSchedule::Saturate(sched) => Schedule::Saturate(Box::new(sched.to_schedule())),
+            NormSchedule::Repeat(size, sched) => {
+                Schedule::Repeat(*size, Box::new(sched.to_schedule()))
+            }
+            NormSchedule::Run(config) => Schedule::Run(config.to_run_config()),
+            NormSchedule::Sequence(scheds) => {
+                Schedule::Sequence(scheds.iter().map(|sched| sched.to_schedule()).collect())
+            }
+        }
+    }
+}
+
+trait ToSexp {
+    fn to_sexp(&self) -> Sexp;
+}
+
+impl ToSexp for str {
+    fn to_sexp(&self) -> Sexp {
+        Sexp::String(String::from(self))
+    }
+}
+
+impl ToSexp for Symbol {
+    fn to_sexp(&self) -> Sexp {
+        Sexp::String(self.to_string())
+    }
+}
+
+impl ToSexp for usize {
+    fn to_sexp(&self) -> Sexp {
+        Sexp::String(self.to_string())
+    }
+}
+
+impl ToSexp for Sexp {
+    fn to_sexp(&self) -> Sexp {
+        self.clone()
+    }
+}
+
+macro_rules! list {
+    ($($e:expr,)* ++ $tail:expr) => {{
+        let mut list: Vec<Sexp> = vec![$($e.to_sexp(),)*];
+        list.extend($tail.iter().map(|e| e.to_sexp()));
+        Sexp::List(list)
+    }};
+    ($($e:expr),*) => {{
+        let list: Vec<Sexp> = vec![ $($e.to_sexp(),)* ];
+        Sexp::List(list)
+    }};
+}
+
+impl ToSexp for Schedule {
+    fn to_sexp(&self) -> Sexp {
+        match self {
+            Schedule::Saturate(sched) => list!("saturate", sched),
+            Schedule::Repeat(size, sched) => list!("repeat", size, sched),
+            Schedule::Run(config) => config.to_sexp(),
+            Schedule::Sequence(scheds) => list!("seq", ++ scheds),
+        }
+    }
+}
+
+impl Display for Schedule {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_sexp())
+    }
+}
+
+impl Display for NormSchedule {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_schedule())
+    }
+}
+
 // TODO command before and after desugaring should be different
 #[derive(Debug, Clone)]
 pub enum Command {
+    SetOption {
+        name: Symbol,
+        value: Expr,
+    },
     Datatype {
         name: Symbol,
         variants: Vec<Variant>,
+    },
+    Declare {
+        name: Symbol,
+        sort: Symbol,
     },
     Sort(Symbol, Option<(Symbol, Vec<Expr>)>),
     Function(FunctionDecl),
@@ -121,7 +324,11 @@ pub enum Command {
         cost: Option<usize>,
     },
     AddRuleset(Symbol),
-    Rule(Symbol, Rule),
+    Rule {
+        name: Symbol,
+        ruleset: Symbol,
+        rule: Rule,
+    },
     Rewrite(Symbol, Rewrite),
     BiRewrite(Symbol, Rewrite),
     Action(Action),
@@ -137,8 +344,7 @@ pub enum Command {
         e: Expr,
     },
     // TODO: this could just become an empty query
-    Check(Fact),
-    Clear,
+    Check(Vec<Fact>),
     Print(Symbol, usize),
     PrintSize(Symbol),
     Input {
@@ -149,7 +355,6 @@ pub enum Command {
         file: String,
         exprs: Vec<Expr>,
     },
-    Query(Vec<Fact>),
     Push(usize),
     Pop(usize),
     Fail(Box<Command>),
@@ -157,141 +362,45 @@ pub enum Command {
     Include(String),
 }
 
-impl Command {
+impl ToSexp for Command {
     fn to_sexp(&self) -> Sexp {
         match self {
+            Command::SetOption { name, value } => list!("set-option", name, value),
             Command::Rewrite(name, rewrite) => rewrite.to_sexp(*name, false),
             Command::BiRewrite(name, rewrite) => rewrite.to_sexp(*name, true),
-            Command::Datatype { name, variants } => {
-                let mut res = vec![
-                    Sexp::String("datatype".into()),
-                    Sexp::String(name.to_string()),
-                ];
-                res.extend(variants.iter().map(|v| v.to_sexp()));
-                Sexp::List(res)
-            }
+            Command::Datatype { name, variants } => list!("datatype", name, ++ variants),
+            Command::Declare { name, sort } => list!("declare", name, sort),
             Command::Action(a) => a.to_sexp(),
-            Command::Sort(name, None) => Sexp::List(vec![
-                Sexp::String("sort".into()),
-                Sexp::String(name.to_string()),
-            ]),
-            Command::Sort(name, Some((name2, args))) => Sexp::List(vec![
-                Sexp::String("sort".into()),
-                Sexp::String(name.to_string()),
-                Sexp::List(
-                    vec![Sexp::String(name2.to_string())]
-                        .into_iter()
-                        .chain(args.iter().map(|e| e.to_sexp()))
-                        .collect(),
-                ),
-            ]),
+            Command::Sort(name, None) => list!("sort", name),
+            Command::Sort(name, Some((name2, args))) => list!("sort", name, list!( name2, ++ args)),
             Command::Function(f) => f.to_sexp(),
-            Command::AddRuleset(name) => Sexp::List(vec![
-                Sexp::String("ruleset".into()),
-                Sexp::String(name.to_string()),
-            ]),
-            Command::Rule(ruleset, r) => r.to_sexp(*ruleset),
-            Command::Define { name, expr, cost } => {
-                let mut res = vec![
-                    Sexp::String("define".into()),
-                    Sexp::String(name.to_string()),
-                    expr.to_sexp(),
-                ];
-                if let Some(cost) = cost {
-                    res.push(Sexp::String(":cost".into()));
-                    res.push(Sexp::String(cost.to_string()));
-                }
-
-                Sexp::List(res)
-            }
-            Command::Run(config) => {
-                let mut res = vec![Sexp::String("run".into())];
-                if config.ruleset != "".into() {
-                    res.push(Sexp::String(config.ruleset.to_string()));
-                }
-                res.push(Sexp::String(config.limit.to_string()));
-                if let Some(until) = &config.until {
-                    res.push(Sexp::String(":until".into()));
-                    res.push(until.to_sexp());
-                }
-
-                Sexp::List(res)
-            }
-            Command::RunSchedule(sched) => {
-                Sexp::List(vec![Sexp::String("run-schedule".into()), sched.to_sexp()])
-            }
-            Command::Calc(args, exprs) => Sexp::List(
-                vec![
-                    Sexp::String("calc".into()),
-                    Sexp::List(args.iter().map(|arg| arg.to_sexp()).collect()),
-                ]
-                .into_iter()
-                .chain(exprs.iter().map(|e| e.to_sexp()))
-                .collect(),
-            ),
-            Command::Extract { variants, e } => Sexp::List(vec![
-                Sexp::String("extract".into()),
-                Sexp::String(":variants".into()),
-                Sexp::String(variants.to_string()),
-                e.to_sexp(),
-            ]),
-            Command::Check(fact) => Sexp::List(vec![Sexp::String("check".into()), fact.to_sexp()]),
-            Command::Clear => Sexp::List(vec![Sexp::String("clear".into())]),
-            Command::Query(facts) => Sexp::List(
-                vec![Sexp::String("query".into())]
-                    .into_iter()
-                    .chain(facts.iter().map(|f| f.to_sexp()))
-                    .collect(),
-            ),
-            Command::Push(n) => Sexp::List(vec![
-                Sexp::String("push".into()),
-                Sexp::String(n.to_string()),
-            ]),
-            Command::Pop(n) => Sexp::List(vec![
-                Sexp::String("pop".into()),
-                Sexp::String(n.to_string()),
-            ]),
-            Command::Print(name, n) => Sexp::List(vec![
-                Sexp::String("print".into()),
-                Sexp::String(name.to_string()),
-                Sexp::String(n.to_string()),
-            ]),
-            Command::PrintSize(name) => Sexp::List(vec![
-                Sexp::String("print-size".into()),
-                Sexp::String(name.to_string()),
-            ]),
-            Command::Input { name, file } => Sexp::List(vec![
-                Sexp::String("input".into()),
-                Sexp::String(name.to_string()),
-                Sexp::String(format!("\"{}\"", file)),
-            ]),
-            Command::Output { file, exprs } => Sexp::List(
-                vec![
-                    Sexp::String("output".into()),
-                    Sexp::String(format!("\"{}\"", file)),
-                ]
-                .into_iter()
-                .chain(exprs.iter().map(|e| e.to_sexp()))
-                .collect(),
-            ),
-            Command::Fail(cmd) => Sexp::List(vec![Sexp::String("fail".into()), cmd.to_sexp()]),
-            Command::Include(file) => Sexp::List(vec![
-                Sexp::String("include".into()),
-                Sexp::String(format!("\"{}\"", file)),
-            ]),
-            Command::Simplify { expr, config } => {
-                let mut res = vec![
-                    Sexp::String("simplify".into()),
-                    Sexp::String(config.limit.to_string()),
-                    expr.to_sexp(),
-                ];
-                if let Some(until) = &config.until {
-                    res.push(Sexp::String(":until".into()));
-                    res.push(until.to_sexp());
-                }
-
-                Sexp::List(res)
-            }
+            Command::AddRuleset(name) => list!("ruleset", name),
+            Command::Rule {
+                name,
+                ruleset,
+                rule,
+            } => rule.to_sexp(*ruleset, *name),
+            Command::Define { name, expr, cost } => match cost {
+                None => list!("define", name, expr),
+                Some(cost) => list!("define", name, expr, ":cost", cost),
+            },
+            Command::Run(config) => config.to_sexp(),
+            Command::RunSchedule(sched) => list!("run-schedule", sched),
+            Command::Calc(args, exprs) => list!("calc", list!(++ args), ++ exprs),
+            Command::Extract { variants, e } => list!("extract", ":variants", variants, e),
+            Command::Check(facts) => list!("check", ++ facts),
+            Command::Push(n) => list!("push", n),
+            Command::Pop(n) => list!("pop", n),
+            Command::Print(name, n) => list!("print", name, n),
+            Command::PrintSize(name) => list!("print-size", name),
+            Command::Input { name, file } => list!("input", name, format!("\"{}\"", file)),
+            Command::Output { file, exprs } => list!("output", format!("\"{}\"", file), ++ exprs),
+            Command::Fail(cmd) => list!("fail", cmd),
+            Command::Include(file) => list!("include", format!("\"{}\"", file)),
+            Command::Simplify { expr, config } => match &config.until {
+                Some(until) => list!("simplify", config.limit, expr, ":until", ++ until),
+                None => list!("simplify", config.limit, expr),
+            },
         }
     }
 }
@@ -302,27 +411,34 @@ impl Display for NormCommand {
     }
 }
 
+impl Display for NCommand {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_command())
+    }
+}
+
 impl Display for Command {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Command::Rule(ruleset, r) => r.fmt_with_ruleset(f, *ruleset),
+            Command::Rule {
+                ruleset,
+                name,
+                rule,
+            } => rule.fmt_with_ruleset(f, *ruleset, *name),
             _ => write!(f, "{}", self.to_sexp()),
         }
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct IdentSort {
     pub ident: Symbol,
     pub sort: Symbol,
 }
 
-impl IdentSort {
+impl ToSexp for IdentSort {
     fn to_sexp(&self) -> Sexp {
-        Sexp::List(vec![
-            Sexp::String(self.ident.to_string()),
-            Sexp::String(self.sort.to_string()),
-        ])
+        list!(self.ident, self.sort)
     }
 }
 
@@ -332,14 +448,51 @@ impl Display for IdentSort {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct RunConfig {
     pub ruleset: Symbol,
     pub limit: usize,
-    pub until: Option<Fact>,
+    pub until: Option<Vec<Fact>>,
 }
 
-#[derive(Clone, Debug)]
+impl ToSexp for RunConfig {
+    fn to_sexp(&self) -> Sexp {
+        let mut res = vec![Sexp::String("run".into())];
+        if self.ruleset != "".into() {
+            res.push(Sexp::String(self.ruleset.to_string()));
+        }
+        res.push(Sexp::String(self.limit.to_string()));
+        if let Some(until) = &self.until {
+            res.push(Sexp::String(":until".into()));
+            res.extend(until.iter().map(|fact| fact.to_sexp()));
+        }
+
+        Sexp::List(res)
+    }
+}
+
+// TODO get rid of limit, just use Repeat
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct NormRunConfig {
+    pub ruleset: Symbol,
+    pub limit: usize,
+    pub until: Option<Vec<NormFact>>,
+}
+
+impl NormRunConfig {
+    pub fn to_run_config(&self) -> RunConfig {
+        RunConfig {
+            ruleset: self.ruleset,
+            limit: self.limit,
+            until: self
+                .until
+                .as_ref()
+                .map(|v| v.iter().map(|f| f.to_fact()).collect()),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct FunctionDecl {
     pub name: Symbol,
     pub schema: Schema,
@@ -349,15 +502,15 @@ pub struct FunctionDecl {
     pub cost: Option<usize>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Variant {
     pub name: Symbol,
     pub types: Vec<Symbol>,
     pub cost: Option<usize>,
 }
 
-impl Variant {
-    pub(crate) fn to_sexp(&self) -> Sexp {
+impl ToSexp for Variant {
+    fn to_sexp(&self) -> Sexp {
         let mut res = vec![Sexp::String(self.name.to_string())];
         if !self.types.is_empty() {
             res.extend(self.types.iter().map(|s| Sexp::String(s.to_string())));
@@ -370,23 +523,21 @@ impl Variant {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Schema {
     pub input: Vec<Symbol>,
     pub output: Symbol,
 }
 
+impl ToSexp for Schema {
+    fn to_sexp(&self) -> Sexp {
+        list!(list!(++ self.input), self.output)
+    }
+}
+
 impl Schema {
-    pub(crate) fn to_sexp(&self) -> Sexp {
-        Sexp::List(vec![
-            Sexp::List(
-                self.input
-                    .iter()
-                    .map(|s| Sexp::String(s.to_string()))
-                    .collect(),
-            ),
-            Sexp::String(self.output.to_string()),
-        ])
+    pub fn new(input: Vec<Symbol>, output: Symbol) -> Self {
+        Self { input, output }
     }
 }
 
@@ -404,7 +555,9 @@ impl FunctionDecl {
             cost: None,
         }
     }
+}
 
+impl ToSexp for FunctionDecl {
     fn to_sexp(&self) -> Sexp {
         let mut res = vec![
             Sexp::String("function".into()),
@@ -445,16 +598,16 @@ impl FunctionDecl {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Fact {
     /// Must be at least two things in an eq fact
     Eq(Vec<Expr>),
     Fact(Expr),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum NormFact {
-    Assign(Symbol, NormExpr),
+    Assign(Symbol, NormExpr), // assign symbol to a tuple
     AssignLit(Symbol, Literal),
     ConstrainEq(Symbol, Symbol),
 }
@@ -469,26 +622,51 @@ impl NormFact {
             }
         }
     }
-}
 
-impl Fact {
-    pub(crate) fn to_sexp(&self) -> Sexp {
+    pub fn map_exprs(&self, f: &mut impl FnMut(&NormExpr) -> NormExpr) -> NormFact {
         match self {
-            Fact::Eq(exprs) => Sexp::List(
-                vec![Sexp::String("=".into())]
-                    .into_iter()
-                    .chain(exprs.iter().map(|e| e.to_sexp()))
-                    .collect(),
-            ),
-            Fact::Fact(expr) => expr.to_sexp(),
+            NormFact::Assign(symbol, expr) => NormFact::Assign(*symbol, f(expr)),
+            NormFact::ConstrainEq(lhs, rhs) => NormFact::ConstrainEq(*lhs, *rhs),
+            NormFact::AssignLit(symbol, lit) => NormFact::AssignLit(*symbol, lit.clone()),
         }
     }
 
-    pub(crate) fn map_exprs(&self, f: &mut impl FnMut(&Expr) -> Expr) -> Fact {
+    pub(crate) fn map_def_use(&self, fvar: &mut impl FnMut(Symbol, bool) -> Symbol) -> NormFact {
+        match self {
+            NormFact::Assign(symbol, expr) => {
+                NormFact::Assign(fvar(*symbol, true), expr.map_def_use(fvar, true))
+            }
+            NormFact::AssignLit(symbol, lit) => {
+                NormFact::AssignLit(fvar(*symbol, true), lit.clone())
+            }
+            NormFact::ConstrainEq(lhs, rhs) => {
+                NormFact::ConstrainEq(fvar(*lhs, false), fvar(*rhs, false))
+            }
+        }
+    }
+}
+
+impl ToSexp for Fact {
+    fn to_sexp(&self) -> Sexp {
+        match self {
+            Fact::Eq(exprs) => list!("=", ++ exprs),
+            Fact::Fact(expr) => expr.to_sexp(),
+        }
+    }
+}
+
+impl Fact {
+    pub fn map_exprs(&self, f: &mut impl FnMut(&Expr) -> Expr) -> Fact {
         match self {
             Fact::Eq(exprs) => Fact::Eq(exprs.iter().map(f).collect()),
             Fact::Fact(expr) => Fact::Fact(f(expr)),
         }
+    }
+}
+
+impl Display for NormFact {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_fact())
     }
 }
 
@@ -498,44 +676,7 @@ impl Display for Fact {
     }
 }
 
-#[derive(Debug, Clone)]
-pub enum Schedule {
-    Saturate(Box<Schedule>),
-    Repeat(usize, Box<Schedule>),
-    Ruleset(Symbol),
-    Sequence(Vec<Schedule>),
-}
-
-impl Schedule {
-    fn to_sexp(&self) -> Sexp {
-        match self {
-            Schedule::Saturate(sched) => {
-                Sexp::List(vec![Sexp::String("saturate".into()), sched.to_sexp()])
-            }
-            Schedule::Repeat(size, sched) => Sexp::List(vec![
-                Sexp::String("repeat".into()),
-                Sexp::String(size.to_string()),
-                sched.to_sexp(),
-            ]),
-            Schedule::Ruleset(sym) => Sexp::String(sym.to_string()),
-            Schedule::Sequence(scheds) => {
-                let mut sexps = vec![Sexp::String("seq".into())];
-                for sched in scheds {
-                    sexps.push(sched.to_sexp());
-                }
-                Sexp::List(sexps)
-            }
-        }
-    }
-}
-
-impl Display for Schedule {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.to_sexp())
-    }
-}
-
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Action {
     Let(Symbol, Expr),
     Set(Symbol, Vec<Expr>, Expr),
@@ -546,13 +687,13 @@ pub enum Action {
     // If(Expr, Action, Action),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum NormAction {
     Let(Symbol, NormExpr),
     LetVar(Symbol, Symbol),
     LetLit(Symbol, Literal),
-    Set(Symbol, Vec<Symbol>, Symbol),
-    Delete(Symbol, Vec<Symbol>),
+    Set(NormExpr, Symbol),
+    Delete(NormExpr),
     Union(Symbol, Symbol),
     Panic(String),
 }
@@ -563,12 +704,12 @@ impl NormAction {
             NormAction::Let(symbol, expr) => Action::Let(*symbol, expr.to_expr()),
             NormAction::LetVar(symbol, other) => Action::Let(*symbol, Expr::Var(*other)),
             NormAction::LetLit(symbol, lit) => Action::Let(*symbol, Expr::Lit(lit.clone())),
-            NormAction::Set(symbol, args, other) => Action::Set(
-                *symbol,
-                args.iter().map(|s| Expr::Var(*s)).collect(),
+            NormAction::Set(NormExpr::Call(head, body), other) => Action::Set(
+                *head,
+                body.iter().map(|s| Expr::Var(*s)).collect(),
                 Expr::Var(*other),
             ),
-            NormAction::Delete(symbol, args) => {
+            NormAction::Delete(NormExpr::Call(symbol, args)) => {
                 Action::Delete(*symbol, args.iter().map(|s| Expr::Var(*s)).collect())
             }
             NormAction::Union(lhs, rhs) => Action::Union(Expr::Var(*lhs), Expr::Var(*rhs)),
@@ -576,71 +717,53 @@ impl NormAction {
         }
     }
 
+    pub fn map_exprs(&self, f: &mut impl FnMut(&NormExpr) -> NormExpr) -> NormAction {
+        match self {
+            NormAction::Let(symbol, expr) => NormAction::Let(*symbol, f(expr)),
+            NormAction::LetVar(symbol, other) => NormAction::LetVar(*symbol, *other),
+            NormAction::LetLit(symbol, lit) => NormAction::LetLit(*symbol, lit.clone()),
+            NormAction::Set(expr, other) => NormAction::Set(f(expr), *other),
+            NormAction::Delete(expr) => NormAction::Delete(f(expr)),
+            NormAction::Union(lhs, rhs) => NormAction::Union(*lhs, *rhs),
+            NormAction::Panic(msg) => NormAction::Panic(msg.clone()),
+        }
+    }
+
     // fvar accepts a variable and if it is being defined (true) or used (false)
     pub(crate) fn map_def_use(&self, fvar: &mut impl FnMut(Symbol, bool) -> Symbol) -> NormAction {
         match self {
             NormAction::Let(symbol, expr) => {
-                NormAction::Let(fvar(*symbol, true), expr.map_def_use(fvar))
+                NormAction::Let(fvar(*symbol, true), expr.map_def_use(fvar, false))
             }
             NormAction::LetVar(symbol, other) => {
                 NormAction::LetVar(fvar(*symbol, true), fvar(*other, false))
             }
             NormAction::LetLit(symbol, lit) => NormAction::LetLit(fvar(*symbol, true), lit.clone()),
-            NormAction::Set(symbol, args, other) => NormAction::Set(
-                *symbol,
-                args.iter().map(|s| fvar(*s, false)).collect(),
-                fvar(*other, false),
-            ),
-            NormAction::Delete(symbol, args) => {
-                NormAction::Delete(*symbol, args.iter().map(|s| fvar(*s, false)).collect())
+            NormAction::Set(expr, other) => {
+                NormAction::Set(expr.map_def_use(fvar, false), fvar(*other, false))
             }
+            NormAction::Delete(expr) => NormAction::Delete(expr.map_def_use(fvar, false)),
             NormAction::Union(lhs, rhs) => NormAction::Union(fvar(*lhs, false), fvar(*rhs, false)),
             NormAction::Panic(msg) => NormAction::Panic(msg.clone()),
         }
     }
 }
 
-impl Action {
-    pub(crate) fn to_sexp(&self) -> Sexp {
+impl ToSexp for Action {
+    fn to_sexp(&self) -> Sexp {
         match self {
-            Action::Let(lhs, rhs) => Sexp::List(vec![
-                Sexp::String("let".into()),
-                Sexp::String(lhs.to_string()),
-                rhs.to_sexp(),
-            ]),
-            Action::Set(lhs, args, rhs) => Sexp::List(vec![
-                Sexp::String("set".into()),
-                Sexp::List(
-                    vec![Sexp::String(lhs.to_string())]
-                        .into_iter()
-                        .chain(args.iter().map(|e| e.to_sexp()))
-                        .collect(),
-                ),
-                rhs.to_sexp(),
-            ]),
-            Action::Union(lhs, rhs) => Sexp::List(vec![
-                Sexp::String("union".into()),
-                lhs.to_sexp(),
-                rhs.to_sexp(),
-            ]),
-            Action::Delete(lhs, args) => Sexp::List(vec![
-                Sexp::String("delete".into()),
-                Sexp::List(
-                    vec![Sexp::String(lhs.to_string())]
-                        .into_iter()
-                        .chain(args.iter().map(|e| e.to_sexp()))
-                        .collect(),
-                ),
-            ]),
-            Action::Panic(msg) => Sexp::List(vec![
-                Sexp::String("panic".into()),
-                Sexp::String(format!("\"{}\"", msg.clone())),
-            ]),
+            Action::Let(lhs, rhs) => list!("let", lhs, rhs),
+            Action::Set(lhs, args, rhs) => list!("set", list!(lhs, ++ args), rhs),
+            Action::Union(lhs, rhs) => list!("union", lhs, rhs),
+            Action::Delete(lhs, args) => list!("delete", list!(lhs, ++ args)),
+            Action::Panic(msg) => list!("panic", format!("\"{}\"", msg.clone())),
             Action::Expr(e) => e.to_sexp(),
         }
     }
+}
 
-    pub(crate) fn map_exprs(&self, f: &mut impl FnMut(&Expr) -> Expr) -> Self {
+impl Action {
+    pub fn map_exprs(&self, f: &mut impl FnMut(&Expr) -> Expr) -> Self {
         match self {
             Action::Let(lhs, rhs) => Action::Let(*lhs, f(rhs)),
             Action::Set(lhs, args, rhs) => {
@@ -694,7 +817,7 @@ pub struct Rule {
     pub body: Vec<Fact>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct NormRule {
     pub head: Vec<NormAction>,
     pub body: Vec<NormFact>,
@@ -707,6 +830,20 @@ impl NormRule {
             body: self.body.iter().map(|f| f.to_fact()).collect(),
         }
     }
+
+    pub fn map_exprs(&self, f: &mut impl FnMut(&NormExpr) -> NormExpr) -> Self {
+        NormRule {
+            head: self.head.iter().map(|a| a.map_exprs(f)).collect(),
+            body: self.body.iter().map(|fac| fac.map_exprs(f)).collect(),
+        }
+    }
+
+    pub fn map_def_use(&self, fvar: &mut impl FnMut(Symbol, bool) -> Symbol) -> Self {
+        NormRule {
+            head: self.head.iter().map(|a| a.map_def_use(fvar)).collect(),
+            body: self.body.iter().map(|fac| fac.map_def_use(fvar)).collect(),
+        }
+    }
 }
 
 impl Display for NormRule {
@@ -716,7 +853,7 @@ impl Display for NormRule {
 }
 
 impl Rule {
-    pub(crate) fn to_sexp(&self, ruleset: Symbol) -> Sexp {
+    pub(crate) fn to_sexp(&self, ruleset: Symbol, name: Symbol) -> Sexp {
         let mut res = vec![
             Sexp::String("rule".into()),
             Sexp::List(self.body.iter().map(|f| f.to_sexp()).collect()),
@@ -726,10 +863,14 @@ impl Rule {
             res.push(Sexp::String(":ruleset".into()));
             res.push(Sexp::String(ruleset.to_string()));
         }
+        if name != "".into() {
+            res.push(Sexp::String(":name".into()));
+            res.push(Sexp::String(format!("\"{}\"", name)));
+        }
         Sexp::List(res)
     }
 
-    pub(crate) fn map_exprs(&self, f: &mut impl FnMut(&Expr) -> Expr) -> Self {
+    pub fn map_exprs(&self, f: &mut impl FnMut(&Expr) -> Expr) -> Self {
         Rule {
             head: self.head.iter().map(|a| a.map_exprs(f)).collect(),
             body: self.body.iter().map(|fact| fact.map_exprs(f)).collect(),
@@ -740,6 +881,7 @@ impl Rule {
         &self,
         f: &mut std::fmt::Formatter<'_>,
         ruleset: Symbol,
+        name: Symbol,
     ) -> std::fmt::Result {
         let indent = " ".repeat(7);
         write!(f, "(rule (")?;
@@ -765,17 +907,23 @@ impl Rule {
                 write!(f, "{}", action)?;
             }
         }
-        if ruleset != "".into() {
-            write!(f, ")\n{}:ruleset {})", indent, ruleset)
+        let ruleset = if ruleset != "".into() {
+            format!(":ruleset {}", ruleset)
         } else {
-            write!(f, "))")
-        }
+            "".into()
+        };
+        let name = if name != "".into() {
+            format!(":name \"{}\"", name)
+        } else {
+            "".into()
+        };
+        write!(f, ")\n{} {} {})", indent, ruleset, name)
     }
 }
 
 impl Display for Rule {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.fmt_with_ruleset(f, "".into())
+        self.fmt_with_ruleset(f, "".into(), "".into())
     }
 }
 
@@ -810,5 +958,11 @@ impl Rewrite {
             res.push(Sexp::String(ruleset.to_string()));
         }
         Sexp::List(res)
+    }
+}
+
+impl Display for Rewrite {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_sexp("".into(), false))
     }
 }

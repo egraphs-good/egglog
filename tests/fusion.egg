@@ -7,8 +7,8 @@
     (Add Term Term)
     (Num i64)
     (CaseSplit Term Term Term)
-    (Cons Term Term)
-    (Nil))
+    (Cons Term Term))
+(declare Nil Term)
 
 (function V (String) Var) 
 (function From (Term) Var)
@@ -44,7 +44,7 @@
        (= (freer e1) fv1)
        (= (freer e2) fv2))
       ((set (freer e) (set-union fv1 fv2))))
-(rule ((= e (Nil)))
+(rule ((= e Nil))
       ((set (freer e) (empty))))
 
 ;; ==== eval ====
@@ -58,7 +58,7 @@
 ; let-num
 (rewrite (Let v e (Num n)) (Num n))
 ; let-nil
-(rewrite (Let v e (Nil)) (Nil))
+(rewrite (Let v e Nil) Nil)
 ; let-var-same
 (rewrite (Let v1 e (TVar v1)) e)
 ; let-var-diff
@@ -104,7 +104,7 @@
 (rule ((= demand (pushdown f e)) (= e (Lam x e))) ((is-tail e)))
 (rule ((= demand (pushdown f e)) (= e (TVar x))) ((is-tail e)))
 (rule ((= demand (pushdown f e)) (= e (Cons e1 e2))) ((is-tail e)))
-(rule ((= demand (pushdown f e)) (= e (Nil))) ((is-tail e)))
+(rule ((= demand (pushdown f e)) (= e Nil)) ((is-tail e)))
 (rule ((= demand (pushdown f e)) (= e (Add e1 e2))) ((is-tail e)))
 (rule ((= demand (pushdown f e)) (= e (Num n1))) ((is-tail e)))
 (rewrite (pushdown f e) (App f e) :when ((is-tail e)))
@@ -114,24 +114,24 @@
 (function sum () Term :cost 1000)
 (function mapf () Term :cost 1000)
 (function sum-o-mapf () Term)
-(rewrite (App (sum) (App (mapf) x)) (App sum-o-mapf x))
-(union sum (Lam (V "xs")
+(rewrite (App (sum) (App (mapf) x)) (App (sum-o-mapf) x))
+(union (sum) (Lam (V "xs")
     (CaseSplit (TVar (V "xs")) 
         (Num 0)
         (Lam (V "x") (Lam (V "xs'") 
-            (Add (TVar (V "x")) (App sum (TVar (V "xs'")))))))))
+            (Add (TVar (V "x")) (App (sum) (TVar (V "xs'")))))))))
 
-(union mapf (Lam (V "xs")
+(union (mapf) (Lam (V "xs")
     (CaseSplit (TVar (V "xs"))
-        (Nil)
+        Nil
         (Lam (V "x") (Lam (V "xs'")
             (Cons (Add (TVar (V "x")) (Num 1))
-                  (App mapf (TVar (V "xs'")))))))))
+                  (App (mapf) (TVar (V "xs'")))))))))
 
 (set (freer (sum)) (empty))
 (set (freer (mapf)) (empty))
 
-(define expr (App sum (App mapf (TVar (V "expr")))))
+(define expr (App (sum) (App (mapf) (TVar (V "expr")))))
 
 (run 100)
 

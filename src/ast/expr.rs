@@ -76,10 +76,14 @@ impl NormExpr {
         }
     }
 
-    pub(crate) fn map_def_use(&self, fvar: &mut impl FnMut(Symbol, bool) -> Symbol) -> NormExpr {
+    pub(crate) fn map_def_use(
+        &self,
+        fvar: &mut impl FnMut(Symbol, bool) -> Symbol,
+        is_def: bool,
+    ) -> NormExpr {
         match self {
             NormExpr::Call(op, args) => {
-                let args = args.iter().map(|a| fvar(*a, false)).collect();
+                let args = args.iter().map(|a| fvar(*a, is_def)).collect();
                 NormExpr::Call(*op, args)
             }
         }
@@ -156,6 +160,12 @@ impl Expr {
                 Expr::Call(*op, children)
             }
         }
+    }
+}
+
+impl Display for NormExpr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_expr())
     }
 }
 

@@ -1,5 +1,7 @@
 ;; NOTE: This file contains several unsafe operations
-(datatype Value (True) (False) (Num i64))
+(datatype Value (Num i64))
+(declare True Value)
+(declare False Value)
 (datatype VarType)
 (datatype Term
     (Val Value)
@@ -65,21 +67,21 @@
       ((union (evals-to e) (Num (+ va vb)))))
 (rule ((= e (Eq a b))
        (= (evals-to b) (evals-to a)))
-      ((union (evals-to e) (True))))
+      ((union (evals-to e) True)))
 (rule ((= e (Eq a b))
        (= va (evals-to a))
        (= vb (evals-to b))
        (!= va vb)) ; TODO: if true and false are non-mergeable datatype, 
                    ; we should be able to do != over it
-      ((union (evals-to e) (False))))
+      ((union (evals-to e) False)))
 (rule ((= v (evals-to e)))
       ((union e (Val v))))
 ;; END evals-to
 
 ; if-true
-(rewrite (If (Val (True)) then else) then)
+(rewrite (If (Val True) then else) then)
 ; if-false
-(rewrite (If (Val (False)) then else) else)
+(rewrite (If (Val False) then else) else)
 ; if-elim
 (rule ((= term (If (Eq (Var x) e) then else)))
       ((Let x e then)
@@ -126,6 +128,8 @@
        (contains fvs v2))
       ((union expr (Lam (From expr) (Let v1 e (Let v2 (Var (From expr)) body))))))
 
+(relation result ())
+
 ;; lambda_under
 (push)
 (define e 
@@ -138,54 +142,55 @@
 
 ;; lambda_if_elim
 (push)
-(define e (If (Eq (Var (V "a")) (Var (V "b")))
+(define e2 (If (Eq (Var (V "a")) (Var (V "b")))
               (Add (Var (V "a")) (Var (V "a")))
               (Add (Var (V "a")) (Var (V "b")))))
 (run 10)
-(check (= e (Add (Var (V "a")) (Var (V "b")))))
+(check (= e2 (Add (Var (V "a")) (Var (V "b")))))
 (pop)
 
 ;; lambda_let_simple
 (push)
-(define e (Let (V "x") (Val (Num 0))
+(define e3 (Let (V "x") (Val (Num 0))
           (Let (V "y") (Val (Num 1))
           (Add (Var (V "x")) (Var (V "y"))))))
 (run 10)
-(check (= e (Val (Num 1))))
+(check (= e3 (Val (Num 1))))
 (pop)
 
 ;; lambda_capture
 (push)
-(define e (Let (V "x") (Val (Num 1)) 
+(define e4 (Let (V "x") (Val (Num 1)) 
           (Lam (V "x") (Var (V "x")))))
 (run 10)
-(fail (check (= e (Lam (V "x") (Val (Num 1))))))
+(fail (check (= e4 (Lam (V "x") (Val (Num 1))))))
 (pop)
 
 ;; lambda_capture_free
 (push)
-(define e  (Let (V "y") (Add (Var (V "x")) (Var (V "x"))) 
+(define e5  (Let (V "y") (Add (Var (V "x")) (Var (V "x"))) 
            (Lam (V "x") (Var (V "y")))))
 (run 10)
 (check (contains (freer (Lam (V "x") (Var (V "y")))) (V "y")))
-(fail (check (= e (Lam (V "x") (Add (Var (V "x")) (Var (V "x")))))))
+(fail (check (= e5 (Lam (V "x") (Add (Var (V "x")) (Var (V "x")))))))
 (pop)
 
 ;; lambda_closure_not_seven
 (push)
-(define e
+(define e6
      (Let (V "five") (Val (Num 5))
      (Let (V "add-five") (Lam (V "x") (Add (Var (V "x")) (Var (V "five"))))
      (Let (V "five") (Val (Num 6))
      (App (Var (V "add-five")) (Val (Num 1)))))))
 (run 10)
-(fail (check (= e (Val (Num 7)))))
-(check (= e (Val (Num 6))))
+(fail (check (= e6 (Val (Num 7)))))
+(check (= e6 (Val (Num 6))))
 (pop)
+
 
 ;; lambda_compose
 (push)
-(define e
+(define e7
     (Let (V "compose") (Lam (V "f") 
                        (Lam (V "g") 
                        (Lam (V "x") (App (Var (V "f"))
@@ -194,7 +199,7 @@
     (Let (V "add1") (Lam (V "y") (Add (Var (V "y")) (Val (Num 1))))
     (App (App (Var (V "compose")) (Var (V "add1"))) (Var (V "add1"))))))
 (run 20)
-(relation result ())
+
 (rule (
     (= goal1 (Lam x (Add (Val (Num 1))
                          (App (Lam y (Add (Val (Num 1)) (Var y)))
@@ -209,14 +214,14 @@
 
 ;; lambda_if_simple
 (push)
-(define e (If (Eq (Val (Num 1)) (Val (Num 1))) (Val (Num 7)) (Val (Num 9))))
+(define e10 (If (Eq (Val (Num 1)) (Val (Num 1))) (Val (Num 7)) (Val (Num 9))))
 (run 4)
-(check (= e (Val (Num 7))))
+(check (= e10 (Val (Num 7))))
 (pop)
 
 ;; lambda_compose_many
 (push)
-(define e
+(define e11
     (Let (V "compose") (Lam (V "f") (Lam (V "g") (Lam (V "x") (App (Var (V "f"))
                                                               (App (Var (V "g")) (Var (V "x")))))))
     (Let (V "add1") (Lam (V "y") (Add (Var (V "y")) (Val (Num 1))))
@@ -229,9 +234,8 @@
                                   (Var (V "add1")))))))))))
 
 (run 30)
-(relation result ())
 (rule (
-    (= e (Lam x (Add (Var x) (Val (Num 7)))))
+    (= e11 (Lam x (Add (Var x) (Val (Num 7)))))
 )(
     (result)
 ))
@@ -241,7 +245,7 @@
 
 ;; lambda_if
 (push)
-(define e
+(define e8
     (Let (V "zeroone") (Lam (V "x")
          (If (Eq (Var (V "x")) (Val (Num 0)))
              (Val (Num 0))
@@ -250,5 +254,5 @@
               (App (Var (V "zeroone")) (Val (Num 10)))))
 )
 (run 20)
-(check (= e (Val (Num 1))))
+(check (= e8 (Val (Num 1))))
 (pop)

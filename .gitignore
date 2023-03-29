@@ -8,7 +8,11 @@ pkg/
 # perf stuff
 flamegraph.svg
 perf.data*
+profile.json
 
 _scratch.egg
 /*.egg
 *.log
+
+# racket
+scripts/compiled
