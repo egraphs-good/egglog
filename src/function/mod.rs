@@ -310,7 +310,6 @@ impl Function {
         } else {
             let mut to_canon = mem::take(&mut self.scratch);
             to_canon.clear();
-            // TODO: only need to call to_canonicalize on eq_sort/eq_container_sort columns
 
             for (i, (ridx, idx)) in self
                 .rebuild_indexes
@@ -329,6 +328,7 @@ impl Function {
                     debug_assert!(sort.is_eq_container_sort());
                     to_canon.extend(ridx.iter().flat_map(|idx| idx.to_canonicalize(uf)))
                 } else {
+                    debug_assert!(sort.is_eq_sort());
                     to_canon.extend(idx.to_canonicalize(uf))
                 }
             }

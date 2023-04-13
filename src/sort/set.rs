@@ -9,7 +9,7 @@ type ValueSet = BTreeSet<Value>;
 pub struct SetSort {
     name: Symbol,
     element: ArcSort,
-    maps: Mutex<IndexSet<ValueSet>>,
+    sets: Mutex<IndexSet<ValueSet>>,
 }
 
 impl SetSort {
@@ -34,7 +34,7 @@ impl SetSort {
             Ok(Arc::new(Self {
                 name,
                 element: e.clone(),
-                maps: Default::default(),
+                sets: Default::default(),
             }))
         } else {
             panic!()
@@ -61,8 +61,8 @@ impl Sort for SetSort {
 
     fn foreach_tracked_values<'a>(&'a self, value: &'a Value, mut f: Box<dyn FnMut(Value) + 'a>) {
         // TODO: Potential duplication of code
-        let maps = self.maps.lock().unwrap();
-        let set = maps.get_index(value.bits as usize).unwrap();
+        let sets = self.sets.lock().unwrap();
+        let set = sets.get_index(value.bits as usize).unwrap();
 
         if self.element.is_eq_sort() {
             for e in set.iter() {
@@ -72,8 +72,8 @@ impl Sort for SetSort {
     }
 
     fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
-        let maps = self.maps.lock().unwrap();
-        let set = maps.get_index(value.bits as usize).unwrap();
+        let sets = self.sets.lock().unwrap();
+        let set = sets.get_index(value.bits as usize).unwrap();
         let mut changed = false;
         let new_set: ValueSet = set
             .iter()
@@ -83,7 +83,7 @@ impl Sort for SetSort {
                 e
             })
             .collect();
-        drop(maps);
+        drop(sets);
         *value = new_set.store(self).unwrap();
         changed
     }
@@ -139,8 +139,8 @@ impl Sort for SetSort {
 impl IntoSort for ValueSet {
     type Sort = SetSort;
     fn store(self, sort: &Self::Sort) -> Option<Value> {
-        let mut maps = sort.maps.lock().unwrap();
-        let (i, _) = maps.insert_full(self);
+        let mut sets = sort.sets.lock().unwrap();
+        let (i, _) = sets.insert_full(self);
         Some(Value {
             tag: sort.name,
             bits: i as u64,
@@ -151,8 +151,8 @@ impl IntoSort for ValueSet {
 impl FromSort for ValueSet {
     type Sort = SetSort;
     fn load(sort: &Self::Sort, value: &Value) -> Self {
-        let maps = sort.maps.lock().unwrap();
-        maps.get_index(value.bits as usize).unwrap().clone()
+        let sets = sort.sets.lock().unwrap();
+        sets.get_index(value.bits as usize).unwrap().clone()
     }
 }
 
@@ -191,7 +191,7 @@ impl PrimitiveLike for Insert {
 
     fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
         match types {
-            [map, key] if (map.name(), key.name()) == (self.set.name, self.set.element_name()) => {
+            [set, key] if (set.name(), key.name()) == (self.set.name, self.set.element_name()) => {
                 Some(self.set.clone())
             }
             _ => None,
@@ -250,7 +250,7 @@ impl PrimitiveLike for Contains {
 
     fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
         match types {
-            [map, key] if (map.name(), key.name()) == (self.set.name, self.set.element_name()) => {
+            [set, key] if (set.name(), key.name()) == (self.set.name, self.set.element_name()) => {
                 Some(self.unit.clone())
             }
             _ => None,
@@ -306,7 +306,7 @@ impl PrimitiveLike for Intersect {
 
     fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
         match types {
-            [map1, map2] if map1.name() == self.set.name && map2.name() == self.set.name() => {
+            [set1, set2] if set1.name() == self.set.name && set2.name() == self.set.name() => {
                 Some(self.set.clone())
             }
             _ => None,
@@ -334,7 +334,7 @@ impl PrimitiveLike for Remove {
 
     fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
         match types {
-            [map, key] if (map.name(), key.name()) == (self.set.name, self.set.element_name()) => {
+            [set, key] if (set.name(), key.name()) == (self.set.name, self.set.element_name()) => {
                 Some(self.set.clone())
             }
             _ => None,
@@ -342,9 +342,9 @@ impl PrimitiveLike for Remove {
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
-        let mut map = ValueSet::load(&self.set, &values[0]);
-        map.remove(&values[1]);
-        map.store(&self.set)
+        let mut set = ValueSet::load(&self.set, &values[0]);
+        set.remove(&values[1]);
+        set.store(&self.set)
     }
 }
 
@@ -360,7 +360,7 @@ impl PrimitiveLike for Diff {
 
     fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
         match types {
-            [map1, map2] if map1.name() == self.set.name && map2.name() == self.set.name() => {
+            [set1, set2] if set1.name() == self.set.name && set2.name() == self.set.name() => {
                 Some(self.set.clone())
             }
             _ => None,
