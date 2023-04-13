@@ -21,7 +21,7 @@ impl ColumnIndex {
     }
 
     pub(crate) fn sort(&self) -> GlobalSymbol {
-        return self.sort;
+        self.sort
     }
 
     pub(crate) fn add(&mut self, v: Value, i: usize) {

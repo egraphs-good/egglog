@@ -271,10 +271,8 @@ impl Function {
             // but we ought to be able to avoid this copy.
             Rc::make_mut(index).clear();
         }
-        for rebuild_index in &mut self.rebuild_indexes {
-            if let Some(rebuild_index) = rebuild_index {
-                rebuild_index.clear();
-            }
+        for rebuild_index in self.rebuild_indexes.iter_mut().flatten() {
+            rebuild_index.clear();
         }
         self.nodes.rehash();
         self.index_updated_through = 0;
