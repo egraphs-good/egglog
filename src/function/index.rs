@@ -19,6 +19,11 @@ impl ColumnIndex {
             ids: Default::default(),
         }
     }
+
+    pub(crate) fn sort(&self) -> GlobalSymbol {
+        return self.sort;
+    }
+
     pub(crate) fn add(&mut self, v: Value, i: usize) {
         assert_eq!(v.tag, self.sort);
         self.ids.entry(v.bits).or_default().push(i as Offset);
@@ -63,5 +68,33 @@ impl ColumnIndex {
                 .copied()
                 .map(|x| x as usize)
         })
+    }
+}
+#[derive(Clone, Debug)]
+pub(crate) struct CompositeColumnIndex(SmallVec<[ColumnIndex; 2]>);
+
+impl CompositeColumnIndex {
+    pub(crate) fn new() -> CompositeColumnIndex {
+        CompositeColumnIndex(SmallVec::new())
+    }
+
+    pub(crate) fn add(&mut self, v: Value, i: usize) {
+        if let Some(i) = self.0.iter().position(|index| index.sort() == v.tag) {
+            (self.0)[i].add(v, i);
+        } else {
+            let mut index = ColumnIndex::new(v.tag);
+            index.add(v, i);
+            self.0.push(index);
+        }
+    }
+
+    pub(crate) fn clear(&mut self) {
+        for index in self.0.iter_mut() {
+            index.clear();
+        }
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &ColumnIndex> {
+        self.0.iter()
     }
 }

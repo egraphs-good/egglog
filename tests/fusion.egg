@@ -14,7 +14,7 @@
 (function From (Term) Var)
 
 ;; ==== FV ====
-(sort StringSet (Map Var i64))
+(sort StringSet (Set Var))
 (function freer (Term) StringSet :merge (set-intersect old new))
 (rule ((= e (App e1 e2))
        (= (freer e1) fv1)
@@ -22,19 +22,19 @@
       ((set (freer e) (set-union fv1 fv2))))
 (rule ((= e (Lam var body))
        (= (freer body) fv))
-      ((set (freer e) (map-remove fv var))))
+      ((set (freer e) (set-remove fv var))))
 (rule ((= e (TVar v)))
-      ((set (freer e) (insert (empty) v 1))))
+      ((set (freer e) (set-insert (set-empty) v))))
 (rule ((= e (Let var e1 e2))
        (= (freer e1) fv1)
        (= (freer e2) fv2))
-      ((set (freer e) (set-union (map-remove fv1 var) fv2))))
+      ((set (freer e) (set-union (set-remove fv1 var) fv2))))
 (rule ((= e (Add e1 e2))
        (= (freer e1) fv1)
        (= (freer e2) fv2))
       ((set (freer e) (set-union fv1 fv2))))
 (rule ((= e (Num v)))
-      ((set (freer e) (empty))))
+      ((set (freer e) (set-empty))))
 (rule ((= e (CaseSplit e1 e2 e3))
        (= (freer e1) fv1)
        (= (freer e2) fv2)
@@ -45,7 +45,7 @@
        (= (freer e2) fv2))
       ((set (freer e) (set-union fv1 fv2))))
 (rule ((= e Nil))
-      ((set (freer e) (empty))))
+      ((set (freer e) (set-empty))))
 
 ;; ==== eval ====
 ; beta
@@ -65,31 +65,31 @@
 (rewrite (Let v1 e (TVar v2)) (TVar v2) :when ((!= v1 v2)))
 
 ; let-lam-close
-(rewrite (Let v1 e expr) expr :when ((not-contains (freer expr) v1)))      
+(rewrite (Let v1 e expr) expr :when ((set-not-contains (freer expr) v1)))      
 ; let-app
-(rewrite (Let v e expr) (App (Let v e a) (Let v e b)) :when ((= expr (App a b)) (contains (freer expr) v)))
+(rewrite (Let v e expr) (App (Let v e a) (Let v e b)) :when ((= expr (App a b)) (set-contains (freer expr) v)))
 ; let-add
-(rewrite (Let v e expr) (Add (Let v e a) (Let v e b)) :when ((= expr (Add a b)) (contains (freer expr) v)))
+(rewrite (Let v e expr) (Add (Let v e a) (Let v e b)) :when ((= expr (Add a b)) (set-contains (freer expr) v)))
 ; let-cons
-(rewrite (Let v e expr) (Cons (Let v e x) (Let v e xs)) :when ((= expr (Cons x xs)) (contains (freer expr) v)))
+(rewrite (Let v e expr) (Cons (Let v e x) (Let v e xs)) :when ((= expr (Cons x xs)) (set-contains (freer expr) v)))
 ; let-case-split
 (rewrite (Let v e expr) 
          (CaseSplit (Let v e e1) (Let v e e2) (Let v e e3))
     :when ((= expr (CaseSplit e1 e2 e3))
-           (contains (freer expr) v)))
+           (set-contains (freer expr) v)))
 ; let-lam-same
 (rewrite (Let v1 e (Lam v1 body)) (Lam v1 body))
 ; let-lam-diff
 (rewrite (Let v1 e (Lam v2 body)) (Lam v2 (Let v1 e body))
-      :when ((contains (freer body) v1)
+      :when ((set-contains (freer body) v1)
              (!= v1 v2)
              (= fvs (freer e))
-             (not-contains fvs v2)))
+             (set-not-contains fvs v2)))
 (rule ((= expr (Let v1 e (Lam v2 body)))
-       (contains (freer body) v1)
+       (set-contains (freer body) v1)
        (!= v1 v2)
        (= fvs (freer e))
-       (contains fvs v2))
+       (set-contains fvs v2))
       ((union expr (Lam (From expr) (Let v1 e (Let v2 (TVar (From expr)) body))))))
 
 (function pushdown (Term Term) Term :cost 10000)
@@ -128,8 +128,8 @@
             (Cons (Add (TVar (V "x")) (Num 1))
                   (App (mapf) (TVar (V "xs'")))))))))
 
-(set (freer (sum)) (empty))
-(set (freer (mapf)) (empty))
+(set (freer (sum)) (set-empty))
+(set (freer (mapf)) (set-empty))
 
 (define expr (App (sum) (App (mapf) (TVar (V "expr")))))
 
