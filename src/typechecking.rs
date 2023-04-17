@@ -4,15 +4,20 @@ use crate::{proofs::RULE_PROOF_KEYWORD, *};
 pub struct FuncType {
     pub input: Vec<ArcSort>,
     pub output: ArcSort,
+    pub has_merge: bool,
 }
 
 impl FuncType {
-    pub fn new(input: Vec<ArcSort>, output: ArcSort) -> Self {
-        Self { input, output }
+    pub fn new(input: Vec<ArcSort>, output: ArcSort, has_merge: bool) -> Self {
+        Self {
+            input,
+            output,
+            has_merge,
+        }
     }
 }
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub struct TypeInfo {
     // get the sort from the sorts name()
     pub presorts: HashMap<Symbol, PreSort>,
@@ -23,11 +28,17 @@ pub struct TypeInfo {
     pub local_types: HashMap<CommandId, HashMap<Symbol, ArcSort>>,
 }
 
-pub const UNIT_SYM: &str = "Unit";
+impl Default for TypeInfo {
+    fn default() -> Self {
+        let mut res = Self {
+            presorts: Default::default(),
+            sorts: Default::default(),
+            primitives: Default::default(),
+            func_types: Default::default(),
+            global_types: Default::default(),
+            local_types: Default::default(),
+        };
 
-impl TypeInfo {
-    pub fn new() -> Self {
-        let mut res = Self::default();
         res.add_sort(UnitSort::new(UNIT_SYM.into()));
         res.add_sort(StringSort::new("String".into()));
         res.add_sort(I64Sort::new("i64".into()));
@@ -39,7 +50,11 @@ impl TypeInfo {
         res.presorts.insert("Map".into(), MapSort::make_sort);
         res
     }
+}
 
+pub const UNIT_SYM: &str = "Unit";
+
+impl TypeInfo {
     pub(crate) fn infer_literal(&self, lit: &Literal) -> ArcSort {
         match lit {
             Literal::Int(_) => self.sorts.get(&Symbol::from("i64")),
@@ -98,8 +113,9 @@ impl TypeInfo {
         Ok(())
     }
 
-    pub(crate) fn schema_to_functype(&self, schema: &Schema) -> Result<FuncType, TypeError> {
-        let input = schema
+    pub(crate) fn function_to_functype(&self, func: &FunctionDecl) -> Result<FuncType, TypeError> {
+        let input = func
+            .schema
             .input
             .iter()
             .map(|name| {
@@ -110,12 +126,12 @@ impl TypeInfo {
                 }
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let output = if let Some(sort) = self.sorts.get(&schema.output) {
+        let output = if let Some(sort) = self.sorts.get(&func.schema.output) {
             Ok(sort.clone())
         } else {
-            Err(TypeError::Unbound(schema.output))
+            Err(TypeError::Unbound(func.schema.output))
         }?;
-        Ok(FuncType::new(input, output))
+        Ok(FuncType::new(input, output, func.merge.is_some()))
     }
 
     fn typecheck_ncommand(&mut self, command: &NCommand, id: CommandId) -> Result<(), TypeError> {
@@ -127,22 +143,9 @@ impl TypeInfo {
                 if self.primitives.contains_key(&fdecl.name) {
                     return Err(TypeError::PrimitiveAlreadyBound(fdecl.name));
                 }
-                let ftype = self.schema_to_functype(&fdecl.schema)?;
+                let ftype = self.function_to_functype(fdecl)?;
                 if self.func_types.insert(fdecl.name, ftype).is_some() {
                     return Err(TypeError::FunctionAlreadyBound(fdecl.name));
-                }
-            }
-            NCommand::Declare(name, parent, _cost) => {
-                if let Some(parent_type) = self.sorts.get(parent) {
-                    if self
-                        .global_types
-                        .insert(*name, parent_type.clone())
-                        .is_some()
-                    {
-                        return Err(TypeError::GlobalAlreadyBound(*name));
-                    }
-                } else {
-                    return Err(TypeError::Unbound(*parent));
                 }
             }
             NCommand::NormRule {
@@ -387,8 +390,7 @@ impl TypeInfo {
     fn typecheck_fact(&mut self, ctx: CommandId, fact: &NormFact) -> Result<(), TypeError> {
         match fact {
             NormFact::Assign(var, expr) => {
-                let expr_type_res = self.typecheck_expr(ctx, expr, false);
-                let expr_type = expr_type_res?;
+                let expr_type = self.typecheck_expr(ctx, expr, false)?;
                 if let Some(existing) = self
                     .local_types
                     .get_mut(&ctx)
@@ -498,14 +500,14 @@ impl TypeInfo {
         _ctx: CommandId,
         sym: Symbol,
         input_types: Vec<ArcSort>,
-    ) -> Result<ArcSort, TypeError> {
+    ) -> Result<FuncType, TypeError> {
         if let Some(found) = self.func_types.get(&sym) {
-            Ok(found.output.clone())
+            Ok(found.clone())
         } else {
             if let Some(prims) = self.primitives.get(&sym) {
                 for prim in prims {
                     if let Some(return_type) = prim.accept(&input_types) {
-                        return Ok(return_type);
+                        return Ok(FuncType::new(input_types, return_type, false));
                     }
                 }
             }
@@ -540,10 +542,7 @@ impl TypeInfo {
                     }
                 }
 
-                Ok(FuncType::new(
-                    child_types.clone(),
-                    self.lookup_func(ctx, *head, child_types)?,
-                ))
+                self.lookup_func(ctx, *head, child_types)
             }
         }
     }

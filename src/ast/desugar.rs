@@ -282,6 +282,18 @@ pub struct Desugar {
     pub(crate) action_parser: ast::parse::ActionParser,
 }
 
+impl Default for Desugar {
+    fn default() -> Self {
+        Self {
+            next_fresh: Default::default(),
+            next_command_id: Default::default(),
+            // these come from lalrpop and don't have default impls
+            parser: ast::parse::ProgramParser::new(),
+            action_parser: ast::parse::ActionParser::new(),
+        }
+    }
+}
+
 pub(crate) fn desugar_calc(
     desugar: &mut Desugar,
     idents: Vec<IdentSort>,
@@ -291,7 +303,7 @@ pub(crate) fn desugar_calc(
 
     // first, push all the idents
     for IdentSort { ident, sort } in idents {
-        res.push(NCommand::Declare(ident, sort, None));
+        res.extend(desugar.declare(ident, sort));
     }
 
     // now, for every pair of exprs we need to prove them equal
@@ -342,8 +354,8 @@ pub(crate) fn desugar_command(
         Command::Function(fdecl) => {
             vec![NCommand::Function(fdecl)]
         }
+        Command::Declare { name, sort } => desugar.declare(name, sort),
         Command::Datatype { name, variants } => desugar_datatype(name, variants),
-        Command::Declare(name, parent, cost) => vec![NCommand::Declare(name, parent, cost)],
         Command::Rewrite(ruleset, rewrite) => {
             desugar_rewrite(ruleset, rewrite.to_string().into(), &rewrite, desugar)
         }
@@ -436,7 +448,7 @@ pub(crate) fn desugar_command(
                 let proofvar = desugar.get_fresh();
                 // declare a variable for the resulting proof
                 // TODO using constant high cost
-                res.push(NCommand::Declare(proofvar, "Proof__".into(), Some(100000)));
+                res.extend(desugar.declare(proofvar, "Proof__".into()));
 
                 // make a dummy rule so that we get a proof for this check
                 let dummyrule = Rule {
@@ -547,15 +559,6 @@ impl Clone for Desugar {
 }
 
 impl Desugar {
-    pub fn new() -> Self {
-        Self {
-            next_fresh: 0,
-            next_command_id: 0,
-            parser: ast::parse::ProgramParser::new(),
-            action_parser: ast::parse::ActionParser::new(),
-        }
-    }
-
     pub fn get_fresh(&mut self) -> Symbol {
         self.next_fresh += 1;
         format!("v{}{}", self.next_fresh - 1, PROOF_UNDERSCORES).into()
@@ -619,5 +622,23 @@ impl Desugar {
             .parser
             .parse(input)
             .map_err(|e| e.map_token(|tok| tok.to_string()))?)
+    }
+
+    pub fn declare(&mut self, name: Symbol, sort: Symbol) -> Vec<NCommand> {
+        let fresh = self.get_fresh();
+        vec![
+            NCommand::Function(FunctionDecl {
+                name: fresh,
+                schema: Schema {
+                    input: vec![],
+                    output: sort,
+                },
+                default: None,
+                merge: None,
+                merge_action: vec![],
+                cost: Some(HIGH_COST),
+            }),
+            NCommand::NormAction(NormAction::Let(name, NormExpr::Call(fresh, vec![]))),
+        ]
     }
 }

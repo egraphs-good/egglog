@@ -18,6 +18,11 @@ enum Instr<'a> {
         value_idx: usize,
         trie_accesses: Vec<(usize, TrieAccess<'a>)>,
     },
+    ConstrainConstant {
+        index: usize,
+        val: Value,
+        trie_access: TrieAccess<'a>,
+    },
     Call {
         prim: Primitive,
         args: Vec<AtomTerm>,
@@ -42,6 +47,13 @@ impl<'a> std::fmt::Display for Program<'a> {
                         write!(f, "  {}: {}", trie_idx, a)?;
                     }
                     writeln!(f)?
+                }
+                Instr::ConstrainConstant {
+                    index,
+                    val,
+                    trie_access,
+                } => {
+                    writeln!(f, " ConstrainConstant {index} {trie_access} = {val:?}")?;
                 }
                 Instr::Call { prim, args, check } => {
                     writeln!(f, " Call {:?} {:?} {:?}", prim, args, check)?;
@@ -88,6 +100,19 @@ impl<'b> Context<'b> {
         };
 
         match instr {
+            Instr::ConstrainConstant {
+                index,
+                val,
+                trie_access,
+            } => {
+                if let Some(next) = tries[*index].get(trie_access, *val) {
+                    let old = tries[*index];
+                    tries[*index] = next;
+                    self.eval(tries, program, f)?;
+                    tries[*index] = old;
+                }
+                Ok(())
+            }
             Instr::Intersect {
                 value_idx,
                 trie_accesses,
@@ -247,18 +272,12 @@ impl EGraph {
         CompiledQuery { query, vars }
     }
 
-    fn make_trie_access(
+    fn make_trie_access_for_column(
         &self,
-        var: Symbol,
         atom: &Atom<Symbol>,
+        column: usize,
         timestamp_range: Range<u32>,
     ) -> TrieAccess {
-        let column = atom
-            .args
-            .iter()
-            .position(|arg| arg == &AtomTerm::Var(var))
-            .unwrap();
-
         let function = &self.functions[&atom.head];
 
         let mut constraints = vec![];
@@ -281,6 +300,20 @@ impl EGraph {
         }
     }
 
+    fn make_trie_access(
+        &self,
+        var: Symbol,
+        atom: &Atom<Symbol>,
+        timestamp_range: Range<u32>,
+    ) -> TrieAccess {
+        let column = atom
+            .args
+            .iter()
+            .position(|arg| arg == &AtomTerm::Var(var))
+            .unwrap();
+        self.make_trie_access_for_column(atom, column, timestamp_range)
+    }
+
     fn compile_program(
         &self,
         query: &CompiledQuery,
@@ -299,9 +332,17 @@ impl EGraph {
 
         let atoms = &query.query.atoms;
         let mut vars: IndexMap<Symbol, VarInfo2> = Default::default();
+        let mut constants =
+            IndexMap::<usize /* atom */, Vec<(usize /* column */, Value)>>::default();
+
         for (i, atom) in atoms.iter().enumerate() {
-            for v in atom.vars() {
-                vars.entry(v).or_default().occurences.push(i)
+            for (col, arg) in atom.args.iter().enumerate() {
+                match arg {
+                    AtomTerm::Var(var) => vars.entry(*var).or_default().occurences.push(i),
+                    AtomTerm::Value(val) => {
+                        constants.entry(i).or_default().push((col, *val));
+                    }
+                }
             }
         }
 
@@ -355,31 +396,47 @@ impl EGraph {
         vars = ordered_vars;
 
         let mut initial_columns = vec![None; atoms.len()];
-        let mut program: Vec<Instr> = vars
-            .iter()
-            .map(|(&v, info)| {
-                let idx = query.vars.get_index_of(&v).unwrap_or_else(|| {
-                    panic!("variable {} not found in query", v);
-                });
-                Instr::Intersect {
-                    value_idx: idx,
-                    trie_accesses: info
-                        .occurences
-                        .iter()
-                        .map(|&atom_idx| {
-                            let atom = &atoms[atom_idx];
-                            let range = timestamp_ranges[atom_idx].clone();
-                            let access = self.make_trie_access(v, atom, range);
-                            let initial_col = &mut initial_columns[atom_idx];
-                            if initial_col.is_none() {
-                                *initial_col = Some(access.column);
-                            }
-                            (atom_idx, access)
-                        })
-                        .collect(),
+        let const_instrs = constants.iter().flat_map(|(atom, consts)| {
+            let initial_col = &mut initial_columns[*atom];
+            if initial_col.is_none() {
+                *initial_col = Some(consts[0].0);
+            }
+            consts.iter().map(|(col, val)| {
+                let range = timestamp_ranges[*atom].clone();
+                let trie_access = self.make_trie_access_for_column(&atoms[*atom], *col, range);
+
+                Instr::ConstrainConstant {
+                    index: *atom,
+                    val: *val,
+                    trie_access,
                 }
             })
-            .collect();
+        });
+        let mut program: Vec<Instr> = const_instrs.collect();
+
+        let var_instrs = vars.iter().map(|(&v, info)| {
+            let value_idx = query.vars.get_index_of(&v).unwrap_or_else(|| {
+                panic!("variable {} not found in query", v);
+            });
+            Instr::Intersect {
+                value_idx,
+                trie_accesses: info
+                    .occurences
+                    .iter()
+                    .map(|&atom_idx| {
+                        let atom = &atoms[atom_idx];
+                        let range = timestamp_ranges[atom_idx].clone();
+                        let access = self.make_trie_access(v, atom, range);
+                        let initial_col = &mut initial_columns[atom_idx];
+                        if initial_col.is_none() {
+                            *initial_col = Some(access.column);
+                        }
+                        (atom_idx, access)
+                    })
+                    .collect(),
+            }
+        });
+        program.extend(var_instrs);
 
         // now we can try to add primitives
         // TODO this is very inefficient, since primitives all at the end

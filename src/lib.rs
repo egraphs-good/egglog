@@ -1,5 +1,4 @@
 pub mod ast;
-mod desugar;
 mod extract;
 mod function;
 mod gj;
@@ -181,7 +180,7 @@ impl Default for EGraph {
             functions: Default::default(),
             rulesets: Default::default(),
             dont_extract: Default::default(),
-            proof_state: ProofState::new(),
+            proof_state: ProofState::default(),
             match_limit: usize::MAX,
             node_limit: usize::MAX,
             timestamp: 0,
@@ -783,23 +782,6 @@ impl EGraph {
             NCommand::Function(fdecl) => {
                 self.declare_function(&fdecl, false)?;
                 format!("Declared function {}.", fdecl.name)
-            }
-            NCommand::Declare(name, sort, cost) => {
-                self.declare_function(
-                    &FunctionDecl {
-                        name,
-                        schema: Schema {
-                            input: vec![],
-                            output: sort,
-                        },
-                        default: None,
-                        merge: None,
-                        merge_action: vec![],
-                        cost,
-                    },
-                    true,
-                )?;
-                format!("Declared variable {}.", name)
             }
             NCommand::AddRuleset(name) => {
                 self.add_ruleset(name);

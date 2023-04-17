@@ -8,9 +8,9 @@
 
 (datatype BDD
     (ITE i64 BDD BDD) ; variables labelled by number
-    (True)
-    (False)
 )
+(declare True BDD)
+(declare False BDD)
 
 ; compress unneeded nodes
 (rewrite (ITE n a a) a)

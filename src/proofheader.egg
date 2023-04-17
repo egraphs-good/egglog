@@ -39,7 +39,8 @@
 
 ;; ProofList definitions
 (function Cons__ (Proof__ ProofList__) ProofList__)
-(declare Null__ ProofList__)
+(function ProofNull__ () ProofList__)
+(let Null__ (ProofNull__))
 
 ;; proofs may also act as AST values
 ;; when the rule-proof keyword is used
@@ -143,7 +144,6 @@
             (+ (PathCost__ t1 tmid) stepcost)))
       :ruleset proof-extract__)
 ;; when you find a path, union it with the equality proof
-;; also demand the resulting proof
 (rule ((= e (DemandEq__ t1 t2))
        (= prooflist (ProofBetween__ t1 t2 t2)))
       ((set (DemandEq__ t1 t2) (Transitivity__ prooflist)))

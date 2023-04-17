@@ -1,21 +1,21 @@
 ; type checking for simply typed lambda calculus
 
 (datatype Type 
-  (TUnit) 
   (TArr Type Type) ; t1 -> t2
 )
+(declare TUnit Type)
 
 (datatype Expr 
   (Lam String Type Expr) ; lam x : t . e
   (App Expr Expr) 
   (Var String) 
-  (MyUnit)
 )
+(declare MyUnit Expr)
 
 (datatype Ctx 
-  (Nil) 
   (Cons String Type Ctx)
 )
+(declare Nil Ctx)
 
 ; ctx |- expr : type
 (function typeof (Ctx Expr) Type)

@@ -9,8 +9,8 @@
 
 ; `String` supports limited operations, let's just use it as a char type
 (datatype str
-    (Empty)
     (Cons String str))
+(declare Empty str)
 
 ; Length function
 

@@ -1,7 +1,8 @@
 use crate::*;
 
-use crate::desugar::Desugar;
+use crate::ast::desugar::Desugar;
 use crate::typechecking::FuncType;
+
 use symbolic_expressions::Sexp;
 
 pub const RULE_PROOF_KEYWORD: &str = "rule-proof";
@@ -44,7 +45,7 @@ fn make_rep_version_prim(name: &Symbol) -> Symbol {
 
 fn setup_primitives() -> Vec<Command> {
     let mut commands = vec![];
-    let fresh_types = TypeInfo::new();
+    let fresh_types = TypeInfo::default();
     commands.extend(make_ast_primitives_sorts(&fresh_types));
     commands.extend(make_rep_primitive_sorts(&fresh_types));
     commands
@@ -291,25 +292,6 @@ fn instrument_facts(
     }
 
     info
-}
-
-fn make_declare_proof(
-    name: Symbol,
-    _type_name: Symbol,
-    proof_state: &mut ProofState,
-) -> Vec<Command> {
-    let term = format!("Ast{}___", name).into();
-    let proof = proof_state.get_fresh();
-
-    proof_state.global_var_ast.insert(name, term);
-    vec![
-        // TODO using high cost big const number
-        Command::Declare(term, "Ast__".into(), Some(HIGH_COST)),
-        Command::Action(Action::Let(
-            proof,
-            Expr::Call("Original__".into(), vec![Expr::Var(term)]),
-        )),
-    ]
 }
 
 fn get_var_term_option(
@@ -606,7 +588,12 @@ fn make_rep_function(proof_state: &mut ProofState, expr: &NormExpr) -> FunctionD
             output: "TrmPrf__".into(),
         },
         merge: Some(Expr::Var("old".into())),
-        merge_action: merge_action(proof_state, types),
+        // Merge action is only needed if the merge function is union
+        merge_action: if types.has_merge {
+            vec![]
+        } else {
+            merge_action(proof_state, types)
+        },
         default: None,
         cost: None,
     }
@@ -644,7 +631,7 @@ fn make_getchild_rule(proof_state: &mut ProofState, expr: &NormExpr) -> Command 
     }
 }
 
-#[derive(Clone)]
+#[derive(Default, Clone)]
 pub(crate) struct ProofState {
     pub(crate) global_var_ast: HashMap<Symbol, Symbol>,
     pub(crate) ast_funcs_created: HashSet<Symbol>,
@@ -796,16 +783,6 @@ impl ProofState {
         self.desugar.parse_program(input)
     }
 
-    pub fn new() -> Self {
-        ProofState {
-            type_info: TypeInfo::new(),
-            ast_funcs_created: Default::default(),
-            current_ctx: 0,
-            global_var_ast: Default::default(),
-            desugar: Desugar::new(),
-        }
-    }
-
     // TODO we need to also instrument merge actions and merge because they can add new terms that need representatives
     // the egraph is the initial egraph with only default sorts
     pub(crate) fn add_proofs(&mut self, program: Vec<NormCommand>) -> Vec<Command> {
@@ -836,10 +813,6 @@ impl ProofState {
                     res.push(command.to_command());
                 }
                 NCommand::Function(_fdecl) => {
-                    res.push(command.to_command());
-                }
-                NCommand::Declare(name, sort, _cost) => {
-                    res.extend(make_declare_proof(*name, *sort, self));
                     res.push(command.to_command());
                 }
                 NCommand::NormRule {
