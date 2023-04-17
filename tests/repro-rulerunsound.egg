@@ -1,0 +1,78 @@
+(datatype Math
+    (Add Math Math)
+    (Sub Math Math)
+    (Mul Math Math)
+    (Div Math Math)
+    (Fabs Math)
+    (If Math Math Math)
+    
+    (Const Rational)
+    (Var String))
+
+(relation MathU (Math))
+(rule ((= e (Add x y))) ((MathU e)))
+(rule ((= e (Sub x y))) ((MathU e)))
+(rule ((= e (Mul x y))) ((MathU e)))
+(rule ((= e (Div x y))) ((MathU e)))
+(rule ((= e (Fabs x))) ((MathU e)))
+(rule ((= e (Const x))) ((MathU e)))
+(rule ((= e (Var x))) ((MathU e)))
+
+
+
+(rule ((= e (Add (Const a) (Const b)))
+       (= answer (+ a b)))
+      ((union e (Const answer))))
+(rule ((= e (Sub (Const a) (Const b)))
+       (= answer (- a b)))
+      ((union e (Const answer))))
+(rule ((= e (Mul (Const a) (Const b)))
+       (= answer (* a b)))
+      ((union e (Const answer))))
+(rule ((= e (Div (Const a) (Const b)))
+       (= answer (/ a b)))
+      ((union e (Const answer))))
+(rule ((= e (Fabs (Const a)))
+       (= answer (abs a)))
+      ((union e (Const answer))))
+(rule ((= e (If (Const a) (Const b) (Const c)))
+       (!= a (rational "0" "1")))
+      ((union e (Const b))))
+(rule ((= e (If (Const a) (Const b) (Const c)))
+       (= a (rational "0" "1")))
+      ((union e (Const c))))
+
+(let zero (Const (rational "0" "1")))
+(let one (Const (rational "1" "1")))
+
+(rewrite (Mul b a) (Mul a b))
+(rewrite (Sub a a) zero)
+(rule ((MathU a)) ((union a (Add a zero))))
+(rule ((MathU a)) ((union a (Mul a one))))
+(rule ((MathU a)) ((union a (Sub a zero))))
+(rule ((MathU a)) ((union a (Div a one))))
+(rewrite (Mul (Mul c b) (Div zero a)) (Div zero (Fabs a)))
+(rewrite (Div (Sub c b) (Div a a)) (Sub (Div zero a) (Sub b c)))
+(rewrite (Mul (Div c c) (Mul b a)) (Div (Mul b a) (Div c c)))
+(rewrite (Sub (Mul a c) (Mul b a)) (Mul a (Sub c b)))
+(rewrite (Div (Mul c b) a) (Mul b (Div c a)))
+(rewrite (Sub c (Sub b a)) (Sub a (Sub b c)))
+
+(rewrite (Sub (Sub b c) (Sub b a)) ;; b-c - (b-a) = a - c
+(If c (Mul (Div c c) (Sub a c)) (Sub (Sub b c) (Sub b a))))
+;; if c then (c/c) * (a-c) else b-c - (b-a)
+
+(Sub (Sub (Var "c") (Var "a")) (Sub (Var "b") (Var "a")))
+(If (Var "b") (Mul (Div (Var "b") (Var "b")) (Sub (Var "c") (Var "b"))) (Sub (Sub (Var "c") (Var "a")) (Sub (Var "b") (Var "a"))))
+(Sub (Sub (Var "c") (Var "a")) (Sub (Var "b") (Var "a")))
+(If (Var "c") (Mul (Sub (Var "c") (Var "b")) (Div (Var "c") (Var "c"))) (Sub (Sub (Var "c") (Var "a")) (Sub (Var "b") (Var "a"))))
+(Sub (Add (Var "c") (Var "a")) (Add (Var "b") (Var "a")))
+(If (Var "b") (Mul (Sub (Var "c") (Var "b")) (Div (Var "b") (Var "b"))) (Sub (Add (Var "c") (Var "a")) (Add (Var "b") (Var "a"))))
+
+(Div (Div zero (Var "b")) (Add (Var "b") (Var "a")))
+(If (Add (Var "b") (Var "a")) (Div zero (Var "b")) (Div (Div zero (Var "b")) (Add (Var "b") (Var "a"))))
+
+
+(run 8)
+
+(check (= (Const a) (Const b)) (!= a b))
