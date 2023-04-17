@@ -905,7 +905,7 @@ impl EGraph {
                     s => panic!("Unsupported type {} for input", s),
                 }
 
-                //log::info!("Opening file '{:?}'...", filename);
+                log::info!("Opening file '{:?}'...", filename);
                 let mut f = File::open(filename).unwrap();
                 let mut contents = String::new();
                 f.read_to_string(&mut contents).unwrap();
