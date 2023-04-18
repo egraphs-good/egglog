@@ -298,6 +298,7 @@ pub(crate) fn desugar_calc(
     desugar: &mut Desugar,
     idents: Vec<IdentSort>,
     exprs: Vec<Expr>,
+    seminaive: bool,
 ) -> Vec<NCommand> {
     let mut res = vec![];
 
@@ -328,6 +329,7 @@ pub(crate) fn desugar_calc(
                 }),
                 desugar,
                 false,
+                seminaive,
             )
             .unwrap()
             .into_iter()
@@ -346,6 +348,7 @@ pub(crate) fn desugar_command(
     command: Command,
     desugar: &mut Desugar,
     get_all_proofs: bool,
+    seminaive: bool,
 ) -> Result<Vec<NormCommand>, Error> {
     let res = match command {
         Command::SetOption { name, value } => {
@@ -365,7 +368,7 @@ pub(crate) fn desugar_command(
         Command::Include(file) => {
             let s = std::fs::read_to_string(&file)
                 .unwrap_or_else(|_| panic!("Failed to read file {file}"));
-            return desugar_commands(desugar.parse_program(&s)?, desugar, get_all_proofs);
+            return desugar_commands(desugar.parse_program(&s)?, desugar, get_all_proofs, seminaive);
         }
         Command::Rule {
             ruleset,
@@ -375,6 +378,10 @@ pub(crate) fn desugar_command(
             if name == "".into() {
                 name = rule.to_string().replace('\"', "'").into();
             }
+
+            // to do here
+
+
             vec![NCommand::NormRule {
                 ruleset,
                 name,
@@ -423,7 +430,7 @@ pub(crate) fn desugar_command(
                 )
                 .collect()
         }
-        Command::Calc(idents, exprs) => desugar_calc(desugar, idents, exprs),
+        Command::Calc(idents, exprs) => desugar_calc(desugar, idents, exprs, seminaive),
         Command::RunSchedule(sched) => {
             vec![NCommand::RunSchedule(desugar_schedule(desugar, &sched))]
         }
@@ -469,6 +476,7 @@ pub(crate) fn desugar_command(
                         },
                         desugar,
                         get_all_proofs,
+                        seminaive,
                     )?
                     .into_iter()
                     .map(|cmd| cmd.command),
@@ -509,7 +517,7 @@ pub(crate) fn desugar_command(
             vec![NCommand::Pop(num)]
         }
         Command::Fail(cmd) => {
-            let mut desugared = desugar_command(*cmd, desugar, false)?;
+            let mut desugared = desugar_command(*cmd, desugar, false, seminaive)?;
 
             let last = desugared.pop().unwrap();
             desugared.push(NormCommand {
@@ -538,10 +546,11 @@ pub(crate) fn desugar_commands(
     program: Vec<Command>,
     desugar: &mut Desugar,
     get_all_proofs: bool,
+    seminaive: bool,
 ) -> Result<Vec<NormCommand>, Error> {
     let mut res = vec![];
     for command in program {
-        let desugared = desugar_command(command, desugar, get_all_proofs)?;
+        let desugared = desugar_command(command, desugar, get_all_proofs, seminaive)?;
         res.extend(desugared);
     }
     Ok(res)
@@ -574,8 +583,9 @@ impl Desugar {
         &mut self,
         program: Vec<Command>,
         get_all_proofs: bool,
+        seminaive: bool,
     ) -> Result<Vec<NormCommand>, Error> {
-        let res = desugar_commands(program, self, get_all_proofs)?;
+        let res = desugar_commands(program, self, get_all_proofs, seminaive)?;
         Ok(res)
     }
 
