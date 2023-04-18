@@ -674,9 +674,11 @@ impl EGraph {
                                 self.functions.get_mut(f).unwrap().insert(values, value, ts);
                                 value
                             }
-                            _ => return Err(Error::NotFoundError(NotFoundError(Expr::Var(
-                                format!("fake expression {f} {:?}", values).into(),
-                            )))),
+                            _ => {
+                                return Err(Error::NotFoundError(NotFoundError(Expr::Var(
+                                    format!("fake expression {f} {:?}", values).into(),
+                                ))))
+                            }
                         }
                     } else {
                         return Err(Error::NotFoundError(NotFoundError(Expr::Var(
