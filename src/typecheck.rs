@@ -674,7 +674,9 @@ impl EGraph {
                                 self.functions.get_mut(f).unwrap().insert(values, value, ts);
                                 value
                             }
-                            _ => panic!("invalid default for {:?}", function.decl.name),
+                            _ => return Err(Error::NotFoundError(NotFoundError(Expr::Var(
+                                format!("fake expression {f} {:?}", values).into(),
+                            )))),
                         }
                     } else {
                         return Err(Error::NotFoundError(NotFoundError(Expr::Var(

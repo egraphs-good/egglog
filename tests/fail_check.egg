@@ -1,0 +1,11 @@
+(function f (i64) i64 :merge (min old new))
+
+(set (f 1) 4)
+(set (f 1) 5)
+
+(check (= (f 1) 4))
+(fail (check (= (f 1) 2)))
+
+(delete (f 1))
+
+(fail (check (= (f 1) 4)))
