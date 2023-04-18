@@ -1,3 +1,4 @@
+;; This test ensure check test fails for wrong assertion
 (function f (i64) i64 :merge (min old new))
 
 (set (f 1) 4)
