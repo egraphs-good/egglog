@@ -115,7 +115,7 @@ impl Sort for VecSort {
         });
         typeinfo.add_primitive(Contains {
             name: "vec-contains".into(),
-            vec: self.clone(),
+            vec: self,
             unit: typeinfo.get_sort(),
         });
     }
@@ -194,12 +194,7 @@ impl PrimitiveLike for Append {
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
-        let vec = ValueVec::from_iter(
-            values
-                .iter()
-                .map(|v| ValueVec::load(&self.vec, v))
-                .flatten(),
-        );
+        let vec = ValueVec::from_iter(values.iter().flat_map(|v| ValueVec::load(&self.vec, v)));
         vec.store(&self.vec)
     }
 }
