@@ -17,6 +17,8 @@ mod map;
 pub use map::*;
 mod set;
 pub use set::*;
+mod vec;
+pub use vec::*;
 
 use crate::*;
 

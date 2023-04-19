@@ -89,6 +89,10 @@ impl Sort for SetSort {
     }
 
     fn register_primitives(self: Arc<Self>, typeinfo: &mut TypeInfo) {
+        typeinfo.add_primitive(SetOf {
+            name: "set-of".into(),
+            set: self.clone(),
+        });
         typeinfo.add_primitive(Ctor {
             name: "set-empty".into(),
             set: self.clone(),
@@ -153,6 +157,30 @@ impl FromSort for ValueSet {
     fn load(sort: &Self::Sort, value: &Value) -> Self {
         let sets = sort.sets.lock().unwrap();
         sets.get_index(value.bits as usize).unwrap().clone()
+    }
+}
+
+struct SetOf {
+    name: Symbol,
+    set: Arc<SetSort>,
+}
+
+impl PrimitiveLike for SetOf {
+    fn name(&self) -> Symbol {
+        self.name
+    }
+
+    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
+        if types.iter().all(|t| t.name() == self.set.element_name()) {
+            Some(self.set.clone())
+        } else {
+            None
+        }
+    }
+
+    fn apply(&self, values: &[Value]) -> Option<Value> {
+        let set = ValueSet::from_iter(values.iter().copied());
+        set.store(&self.set)
     }
 }
 
