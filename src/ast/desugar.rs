@@ -386,7 +386,7 @@ pub(crate) fn desugar_command(
 
             if seminaive {
                 let mut new_rule = rule.clone();
-                // only add new rule where there is Call in head to avoid adding same rule again.
+                // only add new rule when there is Call in body to avoid adding same rule.
                 let mut add_new_rule = false;
 
                 for head_slice in new_rule.head.iter_mut() {
@@ -425,22 +425,21 @@ pub(crate) fn desugar_command(
                     _ => true,
                 });
 
-                println!("new rule = {}", new_rule);
-
                 if add_new_rule {
-                    vec![
-                    NCommand::NormRule {
-                        ruleset,
-                        name,
-                        rule: flatten_rule(rule, desugar),
-                    },
-                    NCommand::NormRule {
-                        ruleset,
-                        name,
-                        rule: flatten_rule(new_rule, desugar),
-                    },
-                ]
+                    log::debug!("Added semi-naive desugared rules:\n{}", new_rule);
 
+                    vec![
+                        NCommand::NormRule {
+                            ruleset,
+                            name,
+                            rule: flatten_rule(rule, desugar),
+                        },
+                        NCommand::NormRule {
+                            ruleset,
+                            name,
+                            rule: flatten_rule(new_rule, desugar),
+                        },
+                    ]
                 } else {
                     vec![NCommand::NormRule {
                         ruleset,
@@ -448,7 +447,6 @@ pub(crate) fn desugar_command(
                         rule: flatten_rule(rule, desugar),
                     }]
                 }
-
             } else {
                 vec![NCommand::NormRule {
                     ruleset,
