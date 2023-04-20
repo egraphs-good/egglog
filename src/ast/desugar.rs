@@ -386,8 +386,8 @@ pub(crate) fn desugar_command(
 
             if seminaive {
                 let mut new_rule = rule.clone();
-                // let mut iter_idx = 0;
-                // let mut remove_idx: Vec<i32> = Vec:new();
+                // only add new rule where there is Call in head to avoid adding same rule again.
+                let mut add_new_rule = false;
 
                 for head_slice in new_rule.head.iter_mut() {
                     match head_slice {
@@ -396,6 +396,7 @@ pub(crate) fn desugar_command(
                             // move it to body so seminaive fires
                             match value {
                                 Expr::Call(_, _) => {
+                                    add_new_rule = true;
                                     let mut eq_vec: Vec<Expr> = Vec::new();
                                     let fresh_symbol = desugar.get_fresh();
                                     eq_vec.push(Expr::Var(fresh_symbol));
@@ -426,7 +427,8 @@ pub(crate) fn desugar_command(
 
                 println!("new rule = {}", new_rule);
 
-                vec![
+                if add_new_rule {
+                    vec![
                     NCommand::NormRule {
                         ruleset,
                         name,
@@ -438,6 +440,15 @@ pub(crate) fn desugar_command(
                         rule: flatten_rule(new_rule, desugar),
                     },
                 ]
+
+                } else {
+                    vec![NCommand::NormRule {
+                        ruleset,
+                        name,
+                        rule: flatten_rule(rule, desugar),
+                    }]
+                }
+
             } else {
                 vec![NCommand::NormRule {
                     ruleset,
