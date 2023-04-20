@@ -1033,10 +1033,11 @@ impl EGraph {
     }
 
     fn process_command(&mut self, command: Command) -> Result<Vec<NormCommand>, Error> {
-        let program_desugared = self
-            .proof_state
-            .desugar
-            .desugar_program(vec![command], self.test_proofs, self.seminaive)?;
+        let program_desugared = self.proof_state.desugar.desugar_program(
+            vec![command],
+            self.test_proofs,
+            self.seminaive,
+        )?;
 
         let type_info_before = self.proof_state.type_info.clone();
         self.proof_state
@@ -1048,7 +1049,10 @@ impl EGraph {
             // we need to pass in the desugar
             let proofs = self.proof_state.add_proofs(program_desugared);
 
-            let final_desugared = self.proof_state.desugar.desugar_program(proofs, false, self.seminaive)?;
+            let final_desugared =
+                self.proof_state
+                    .desugar
+                    .desugar_program(proofs, false, self.seminaive)?;
 
             // revert back to the type info before
             // proofs were added, typecheck again
