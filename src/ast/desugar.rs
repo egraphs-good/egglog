@@ -383,9 +383,14 @@ pub(crate) fn desugar_command(
             if name == "".into() {
                 name = rule.to_string().replace('\"', "'").into();
             }
+            let mut result = vec![NCommand::NormRule {
+                ruleset,
+                name,
+                rule: flatten_rule(rule.clone(), desugar),
+            }];
 
             if seminaive {
-                let mut new_rule = rule.clone();
+                let mut new_rule = rule;
                 // only add new rule when there is Call in body to avoid adding same rule.
                 let mut add_new_rule = false;
 
@@ -394,66 +399,42 @@ pub(crate) fn desugar_command(
                         Action::Set(_, _, value) => {
                             // if the right hand side is a function call,
                             // move it to body so seminaive fires
-                            match value {
-                                Expr::Call(_, _) => {
-                                    add_new_rule = true;
-                                    let mut eq_vec: Vec<Expr> = Vec::new();
-                                    let fresh_symbol = desugar.get_fresh();
-                                    eq_vec.push(Expr::Var(fresh_symbol));
-                                    eq_vec.push(value.clone());
-                                    new_rule.body.push(Fact::Eq(eq_vec));
-                                    *value = Expr::Var(fresh_symbol);
-                                }
-                                _ => (),
+                            if let Expr::Call(_, _) = value {
+                                add_new_rule = true;
+                                let mut eq_vec: Vec<Expr> = Vec::new();
+                                let fresh_symbol = desugar.get_fresh();
+                                eq_vec.push(Expr::Var(fresh_symbol));
+                                eq_vec.push(value.clone());
+                                new_rule.body.push(Fact::Eq(eq_vec));
+                                *value = Expr::Var(fresh_symbol);
                             };
                         }
 
                         // move let binding to body.
                         Action::Let(symbol, expr) => {
-                            let mut eq_vec: Vec<Expr> = Vec::new();
-                            eq_vec.push(Expr::Var(symbol.clone()));
-                            eq_vec.push(expr.clone());
+                            let eq_vec: Vec<Expr> = vec![Expr::Var(*symbol), expr.clone()];
                             new_rule.body.push(Fact::Eq(eq_vec));
                         }
                         _ => (),
                     }
                 }
 
-                // remove all let action
-                new_rule.head.retain_mut(|action| match action {
-                    Action::Let(_, _) => false,
-                    _ => true,
-                });
-
                 if add_new_rule {
-                    log::debug!("Added semi-naive desugared rules:\n{}", new_rule);
+                    // remove all let action
+                    new_rule
+                        .head
+                        .retain_mut(|action| !matches!(action, Action::Let(_, _)));
+                    log::debug!("Added a semi-naive desugared rule:\n{}", new_rule);
 
-                    vec![
-                        NCommand::NormRule {
-                            ruleset,
-                            name,
-                            rule: flatten_rule(rule, desugar),
-                        },
-                        NCommand::NormRule {
-                            ruleset,
-                            name,
-                            rule: flatten_rule(new_rule, desugar),
-                        },
-                    ]
-                } else {
-                    vec![NCommand::NormRule {
+                    result.push(NCommand::NormRule {
                         ruleset,
                         name,
-                        rule: flatten_rule(rule, desugar),
-                    }]
+                        rule: flatten_rule(new_rule, desugar),
+                    })
                 }
-            } else {
-                vec![NCommand::NormRule {
-                    ruleset,
-                    name,
-                    rule: flatten_rule(rule, desugar),
-                }]
             }
+
+            result
         }
         Command::Sort(sort, option) => vec![NCommand::Sort(sort, option)],
         // TODO ignoring cost for now

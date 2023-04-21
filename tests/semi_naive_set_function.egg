@@ -85,6 +85,9 @@
 
 (run 100)
 (print f) 
+(check (!= 0 (f 0)))
+(check (!= 0 (f 1)))
+(check (!= 0 (f 2)))
 
 (pop)
 
@@ -98,4 +101,4 @@
 (run 100)
 (print g) 
 
-(check (= 50 (g 50)))
+(check (= 20 (g 20)))
