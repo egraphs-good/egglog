@@ -47,8 +47,14 @@
 (function AstProof__ (Proof__) Ast__)
 
 
+(function currentAge () i64 :merge (max new old))
+(set (currentAge) 0)
+
+(datatype ProofWithAge__
+  (MakeProofWithAge__ Proof__ i64))
+
 ;; prove two terms equal
-(function EqGraph__ (Ast__ Ast__) Proof__  :cost 1000000 :merge old)
+(function EqGraph__ (Ast__ Ast__) ProofWithAge__  :cost 1000000 :merge old)
 
 (datatype TrmPrf__
   (MakeTrmPrf__ Ast__ Proof__))
@@ -128,13 +134,13 @@
       :ruleset proof-extract__)
 ;; demand for proof cost
 (rule ((= proof (ProofBetween__ t1 t2 tmid))
-       (= eproof (EqGraph__ tmid next)))
+       (= (MakeProofWithAge__ eproof nextage) (EqGraph__ tmid next)))
       ((set (PathCost__ t1 next)
             1000000))
       :ruleset proof-extract__)
 ;; do one step of proof search to find a path
 (rule ((= proof (ProofBetween__ t1 t2 tmid))
-       (= eproof (EqGraph__ tmid next))
+       (= (MakeProofWithAge__ eproof nextage) (EqGraph__ tmid next))
        (= stepcost (ProofCost__ eproof))
        (< (+ (PathCost__ t1 tmid) stepcost)
           (PathCost__ t1 next)))
