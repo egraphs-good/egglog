@@ -1155,7 +1155,7 @@ impl EGraph {
     }
 
     // Takes the last run report and returns it, if the last command saved it.
-    pub fn takes_run_report(&mut self) -> Option<RunReport> {
+    pub fn take_run_report(&mut self) -> Option<RunReport> {
         self.run_report.take()
     }
 }
