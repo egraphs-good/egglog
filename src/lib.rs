@@ -56,11 +56,20 @@ pub trait PrimitiveLike {
 
 #[derive(Debug, Clone, Default)]
 pub struct RunReport {
-    updated: bool,
-    search_time: Duration,
-    apply_time: Duration,
-    rebuild_time: Duration,
+    pub updated: bool,
+    pub search_time: Duration,
+    pub apply_time: Duration,
+    pub rebuild_time: Duration,
 }
+
+
+#[derive(Debug, Clone)]
+pub struct ExtractReport {
+    pub cost: usize,
+    pub expr: Expr,
+    pub variants: Vec<Expr>,
+}
+
 
 impl RunReport {
     pub fn union(&self, other: &Self) -> Self {
@@ -73,7 +82,7 @@ impl RunReport {
     }
 }
 
-const HIGH_COST: usize = usize::MAX;
+pub const HIGH_COST: usize = usize::MAX;
 
 #[derive(Clone)]
 pub struct Primitive(Arc<dyn PrimitiveLike>);
@@ -156,6 +165,8 @@ pub struct EGraph {
     pub node_limit: usize,
     pub fact_directory: Option<PathBuf>,
     pub seminaive: bool,
+    extract_report: Option<ExtractReport>,
+    run_report: Option<RunReport>
 }
 
 #[derive(Clone, Debug)]
@@ -185,6 +196,8 @@ impl Default for EGraph {
             test_proofs: false,
             fact_directory: None,
             seminaive: true,
+            extract_report: None,
+            run_report: None,
         };
         egraph.rulesets.insert("".into(), Default::default());
         egraph
@@ -759,6 +772,8 @@ impl EGraph {
 
     fn run_command(&mut self, command: NCommand, should_run: bool) -> Result<String, Error> {
         let pre_rebuild = Instant::now();
+        self.extract_report = None;
+        self.run_report = None;
         let rebuild_num = self.rebuild()?;
         if rebuild_num > 0 {
             log::info!(
@@ -792,7 +807,7 @@ impl EGraph {
             }
             NCommand::RunSchedule(sched) => {
                 if should_run {
-                    self.run_schedule(&sched);
+                    self.run_report = Some(self.run_schedule(&sched));
                     format!("Ran schedule {}.", sched)
                 } else {
                     "Skipping schedule.".to_string()
@@ -802,13 +817,14 @@ impl EGraph {
                 let expr = Expr::Var(var);
                 if should_run {
                     // TODO typecheck
-                    let (cost, expr, exprs) = self.extract_expr(expr, variants)?;
-                    let mut msg = format!("Extracted with cost {cost}: {expr}");
+                    let report = self.extract_expr(expr, variants)?;
+                    let mut msg = format!("Extracted with cost {}: {}", report.cost, report.expr);
                     if variants > 0 {
                         let line = "\n    ";
-                        let v_exprs = ListDisplay(&exprs, line);
-                        write!(msg, "\nVariants of {expr}:{line}{v_exprs}").unwrap();
+                        let v_exprs = ListDisplay(&report.variants, line);
+                        write!(msg, "\nVariants of {}:{line}{v_exprs}", report.expr).unwrap();
                     }
+                    self.extract_report = Some(report);
                     msg
                 } else {
                     "Skipping extraction.".into()
@@ -824,8 +840,10 @@ impl EGraph {
             }
             NCommand::Simplify { var, config } => {
                 if should_run {
-                    let (cost, expr) = self.simplify(Expr::Var(var), &config)?;
-                    format!("Simplified with cost {cost} to {expr}")
+                    let report = self.simplify(Expr::Var(var), &config)?;
+                    let res = format!("Simplified with cost {} to {}", report.cost, report.expr);
+                    self.extract_report = Some(report);
+                    res
                 } else {
                     "Skipping simplify.".into()
                 }
@@ -944,8 +962,8 @@ impl EGraph {
 
                 for expr in exprs {
                     use std::io::Write;
-                    let (_cost, expr, _exprs) = self.extract_expr(expr, 1)?;
-                    writeln!(f, "{expr}").map_err(|e| Error::IoError(filename.clone(), e))?;
+                    let res = self.extract_expr(expr, 1)?;
+                    writeln!(f, "{}", res.expr).map_err(|e| Error::IoError(filename.clone(), e))?;
                 }
 
                 format!("Output to '{filename:?}'.")
@@ -959,13 +977,13 @@ impl EGraph {
         }
     }
 
-    fn simplify(&mut self, expr: Expr, config: &NormRunConfig) -> Result<(usize, Expr), Error> {
+    fn simplify(&mut self, expr: Expr, config: &NormRunConfig) -> Result<ExtractReport, Error> {
         self.push();
         let (_t, value) = self.eval_expr(&expr, None, true).unwrap();
-        self.run_rules(config);
+        self.run_report = Some(self.run_rules(config));
         let (cost, expr) = self.extract(value);
         self.pop().unwrap();
-        Ok((cost, expr))
+        Ok(ExtractReport { cost, expr, variants: vec![] })
     }
     // Extract an expression from the current state, returning the cost, the extracted expression and some number
     // of other variants, if variants is not zero.
@@ -973,7 +991,7 @@ impl EGraph {
         &mut self,
         e: Expr,
         variants: usize,
-    ) -> Result<(usize, Expr, Vec<Expr>), Error> {
+    ) -> Result<ExtractReport, Error> {
         let (_t, value) = self.eval_expr(&e, None, true)?;
         let (cost, expr) = self.extract(value);
         let exprs = match variants {
@@ -981,7 +999,7 @@ impl EGraph {
             1 => vec![expr.clone()],
             _ => self.extract_variants(value, variants),
         };
-        Ok((cost, expr, exprs))
+        Ok(ExtractReport { cost, expr, variants: exprs })
     }
 
     pub fn declare_const(&mut self, name: Symbol, sort: &ArcSort) -> Result<(), Error> {
@@ -1128,6 +1146,17 @@ impl EGraph {
     pub(crate) fn get_sort(&self, value: &Value) -> Option<&ArcSort> {
         self.proof_state.type_info.sorts.get(&value.tag)
     }
+
+    // Takes the last extract report and returns it, if the last command saved it.
+    pub fn take_extract_report(&mut self) -> Option<ExtractReport> {
+        self.extract_report.take()
+    }
+
+    // Takes the last run report and returns it, if the last command saved it.
+    pub fn takes_run_report(&mut self) -> Option<RunReport> {
+        self.run_report.take()
+    }
+
 }
 
 #[derive(Debug, Error)]
