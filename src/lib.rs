@@ -62,14 +62,12 @@ pub struct RunReport {
     pub rebuild_time: Duration,
 }
 
-
 #[derive(Debug, Clone)]
 pub struct ExtractReport {
     pub cost: usize,
     pub expr: Expr,
     pub variants: Vec<Expr>,
 }
-
 
 impl RunReport {
     pub fn union(&self, other: &Self) -> Self {
@@ -166,7 +164,7 @@ pub struct EGraph {
     pub fact_directory: Option<PathBuf>,
     pub seminaive: bool,
     extract_report: Option<ExtractReport>,
-    run_report: Option<RunReport>
+    run_report: Option<RunReport>,
 }
 
 #[derive(Clone, Debug)]
@@ -983,15 +981,15 @@ impl EGraph {
         self.run_report = Some(self.run_rules(config));
         let (cost, expr) = self.extract(value);
         self.pop().unwrap();
-        Ok(ExtractReport { cost, expr, variants: vec![] })
+        Ok(ExtractReport {
+            cost,
+            expr,
+            variants: vec![],
+        })
     }
     // Extract an expression from the current state, returning the cost, the extracted expression and some number
     // of other variants, if variants is not zero.
-    pub fn extract_expr(
-        &mut self,
-        e: Expr,
-        variants: usize,
-    ) -> Result<ExtractReport, Error> {
+    pub fn extract_expr(&mut self, e: Expr, variants: usize) -> Result<ExtractReport, Error> {
         let (_t, value) = self.eval_expr(&e, None, true)?;
         let (cost, expr) = self.extract(value);
         let exprs = match variants {
@@ -999,7 +997,11 @@ impl EGraph {
             1 => vec![expr.clone()],
             _ => self.extract_variants(value, variants),
         };
-        Ok(ExtractReport { cost, expr, variants: exprs })
+        Ok(ExtractReport {
+            cost,
+            expr,
+            variants: exprs,
+        })
     }
 
     pub fn declare_const(&mut self, name: Symbol, sort: &ArcSort) -> Result<(), Error> {
@@ -1156,7 +1158,6 @@ impl EGraph {
     pub fn takes_run_report(&mut self) -> Option<RunReport> {
         self.run_report.take()
     }
-
 }
 
 #[derive(Debug, Error)]
