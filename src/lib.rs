@@ -1149,14 +1149,14 @@ impl EGraph {
         self.proof_state.type_info.sorts.get(&value.tag)
     }
 
-    // Takes the last extract report and returns it, if the last command saved it.
-    pub fn take_extract_report(&mut self) -> Option<ExtractReport> {
-        self.extract_report.take()
+    // Gets the last extract report and returns it, if the last command saved it.
+    pub fn get_extract_report(&self) -> &Option<ExtractReport> {
+        &self.extract_report
     }
 
-    // Takes the last run report and returns it, if the last command saved it.
-    pub fn take_run_report(&mut self) -> Option<RunReport> {
-        self.run_report.take()
+    // Gets the last run report and returns it, if the last command saved it.
+    pub fn get_run_report(&self) -> &Option<RunReport> {
+        &self.run_report
     }
 }
 
