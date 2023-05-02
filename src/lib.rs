@@ -80,7 +80,9 @@ impl RunReport {
     }
 }
 
-pub const HIGH_COST: usize = usize::MAX;
+// Set a high cost to avoid being extracted
+// Use half of our bits to avoid overflow when adding costs
+pub const HIGH_COST: usize = usize::MAX >> (usize::BITS / 2);
 
 #[derive(Clone)]
 pub struct Primitive(Arc<dyn PrimitiveLike>);
