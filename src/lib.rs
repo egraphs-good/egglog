@@ -256,6 +256,28 @@ impl EGraph {
                     }
                 }
             }
+            for (rix, sort) in function.rebuild_indexes.iter().zip(
+                function
+                    .schema
+                    .input
+                    .iter()
+                    .chain(once(&function.schema.output)),
+            ) {
+                assert!(sort.is_eq_container_sort() == rix.is_some());
+                if sort.is_eq_container_sort() {
+                    let rix = rix.as_ref().unwrap();
+                    for ix in rix.iter() {
+                        for (_, offs) in ix.iter() {
+                            for off in offs {
+                                assert!(
+                                (*off as usize) < function.nodes.len(),
+                                "index contains offset {off:?}, which is out of range for function {name}"
+                            );
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
