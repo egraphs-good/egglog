@@ -1,8 +1,11 @@
-# egg-smol
+# egglog
 
-[web demo](https://www.mwillsey.com/egg-smol/)
+Try the [web demo](https://egraphs-good.github.io/egglog)!
 
-This is the working repo for egg-smol.
+This is repo for the `egglog` tool accompanying the paper
+  ["Better Together: Unifying Datalog and Equality Saturation"](https://arxiv.org/abs/2304.04332).
+
+If you use this work, please use [this citation](./CITATION.bib). 
 
 ## Background
 
