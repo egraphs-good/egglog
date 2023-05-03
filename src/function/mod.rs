@@ -1,6 +1,6 @@
-use smallvec::SmallVec;
-
 use crate::*;
+use index::*;
+use smallvec::SmallVec;
 
 mod binary_search;
 pub mod index;
@@ -16,6 +16,7 @@ pub struct Function {
     pub(crate) nodes: table::Table,
     sorts: HashSet<Symbol>,
     pub(crate) indexes: Vec<Rc<ColumnIndex>>,
+    pub(crate) rebuild_indexes: Vec<Option<CompositeColumnIndex>>,
     index_updated_through: usize,
     updates: usize,
     scratch: IndexSet<usize>,
@@ -46,6 +47,16 @@ pub struct TupleOutput {
 pub struct ResolvedSchema {
     pub input: Vec<ArcSort>,
     pub output: ArcSort,
+}
+
+impl ResolvedSchema {
+    pub fn get_by_pos(&self, index: usize) -> Option<&ArcSort> {
+        if self.input.len() == index {
+            Some(&self.output)
+        } else {
+            self.input.get(index)
+        }
+    }
 }
 
 /// A non-Union merge discovered during rebuilding that has to be applied before
@@ -100,6 +111,14 @@ impl Function {
                 .map(|x| Rc::new(ColumnIndex::new(x.name()))),
         );
 
+        let rebuild_indexes = Vec::from_iter(input.iter().chain(once(&output)).map(|x| {
+            if x.is_eq_container_sort() {
+                Some(CompositeColumnIndex::new())
+            } else {
+                None
+            }
+        }));
+
         let sorts: HashSet<Symbol> = input
             .iter()
             .map(|x| x.name())
@@ -114,6 +133,7 @@ impl Function {
             sorts,
             // TODO: build indexes for primitive sorts lazily
             indexes,
+            rebuild_indexes,
             index_updated_through: 0,
             updates: 0,
             merge: MergeAction {
@@ -132,6 +152,11 @@ impl Function {
         self.indexes
             .iter_mut()
             .for_each(|x| Rc::make_mut(x).clear());
+        self.rebuild_indexes.iter_mut().for_each(|x| {
+            if let Some(x) = x {
+                x.clear()
+            }
+        });
         self.index_updated_through = 0;
     }
     pub fn insert_internal(
@@ -191,7 +216,12 @@ impl Function {
     }
 
     fn build_indexes(&mut self, offsets: Range<usize>) {
-        for (col, index) in self.indexes.iter_mut().enumerate() {
+        for (col, (index, rebuild_index)) in self
+            .indexes
+            .iter_mut()
+            .zip(self.rebuild_indexes.iter_mut())
+            .enumerate()
+        {
             let as_mut = Rc::make_mut(index);
             if col == self.schema.input.len() {
                 for (slot, _, out) in self.nodes.iter_range(offsets.clone()) {
@@ -200,6 +230,25 @@ impl Function {
             } else {
                 for (slot, inp, _) in self.nodes.iter_range(offsets.clone()) {
                     as_mut.add(inp[col], slot)
+                }
+            }
+
+            // rebuild_index
+            if let Some(rebuild_index) = rebuild_index {
+                if col == self.schema.input.len() {
+                    for (slot, _, out) in self.nodes.iter_range(offsets.clone()) {
+                        self.schema.output.foreach_tracked_values(
+                            &out.value,
+                            Box::new(|value| rebuild_index.add(value, slot)),
+                        )
+                    }
+                } else {
+                    for (slot, inp, _) in self.nodes.iter_range(offsets.clone()) {
+                        self.schema.input[col].foreach_tracked_values(
+                            &inp[col],
+                            Box::new(|value| rebuild_index.add(value, slot)),
+                        )
+                    }
                 }
             }
         }
@@ -219,6 +268,9 @@ impl Function {
             // Everything works if we don't have a unique copy of the indexes,
             // but we ought to be able to avoid this copy.
             Rc::make_mut(index).clear();
+        }
+        for rebuild_index in self.rebuild_indexes.iter_mut().flatten() {
+            rebuild_index.clear();
         }
         self.nodes.rehash();
         self.index_updated_through = 0;
@@ -254,7 +306,28 @@ impl Function {
         } else {
             let mut to_canon = mem::take(&mut self.scratch);
             to_canon.clear();
-            to_canon.extend(self.indexes.iter().flat_map(|x| x.to_canonicalize(uf)));
+
+            for (i, (ridx, idx)) in self
+                .rebuild_indexes
+                .iter()
+                .zip(self.indexes.iter())
+                .enumerate()
+            {
+                let sort = self.schema.get_by_pos(i).unwrap();
+                if !sort.is_eq_container_sort() && !sort.is_eq_sort() {
+                    // No need to canonicalize in this case
+                    continue;
+                }
+
+                // attempt to use the rebuilding index if it exists
+                if let Some(ridx) = ridx {
+                    debug_assert!(sort.is_eq_container_sort());
+                    to_canon.extend(ridx.iter().flat_map(|idx| idx.to_canonicalize(uf)))
+                } else {
+                    debug_assert!(sort.is_eq_sort());
+                    to_canon.extend(idx.to_canonicalize(uf))
+                }
+            }
 
             for i in to_canon.iter().copied() {
                 self.rebuild_at(i, timestamp, uf, &mut scratch, &mut deferred_merges)?;
@@ -289,23 +362,10 @@ impl Function {
         scratch.extend(args.iter().copied());
 
         for (val, ty) in scratch.iter_mut().zip(&self.schema.input) {
-            if !ty.is_eq_sort() {
-                continue;
-            }
-            let new = uf.find_value(*val);
-            if new.bits != val.bits {
-                *val = new;
-                modified = true;
-            }
+            modified |= ty.canonicalize(val, uf);
         }
 
-        if self.schema.output.is_eq_sort() {
-            let new = uf.find_value(out_val);
-            if new.bits != out_val.bits {
-                out_val = new;
-                modified = true;
-            }
-        }
+        modified |= self.schema.output.canonicalize(&mut out_val, uf);
 
         if !modified {
             return result;

@@ -254,6 +254,28 @@ impl EGraph {
                     }
                 }
             }
+            for (rix, sort) in function.rebuild_indexes.iter().zip(
+                function
+                    .schema
+                    .input
+                    .iter()
+                    .chain(once(&function.schema.output)),
+            ) {
+                assert!(sort.is_eq_container_sort() == rix.is_some());
+                if sort.is_eq_container_sort() {
+                    let rix = rix.as_ref().unwrap();
+                    for ix in rix.iter() {
+                        for (_, offs) in ix.iter() {
+                            for off in offs {
+                                assert!(
+                                (*off as usize) < function.nodes.len(),
+                                "index contains offset {off:?}, which is out of range for function {name}"
+                            );
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -999,10 +1021,11 @@ impl EGraph {
     }
 
     fn process_command(&mut self, command: Command) -> Result<Vec<NormCommand>, Error> {
-        let program_desugared = self
-            .proof_state
-            .desugar
-            .desugar_program(vec![command], self.test_proofs)?;
+        let program_desugared = self.proof_state.desugar.desugar_program(
+            vec![command],
+            self.test_proofs,
+            self.seminaive,
+        )?;
 
         let type_info_before = self.proof_state.type_info.clone();
         self.proof_state
@@ -1014,7 +1037,10 @@ impl EGraph {
             // we need to pass in the desugar
             let proofs = self.proof_state.add_proofs(program_desugared);
 
-            let final_desugared = self.proof_state.desugar.desugar_program(proofs, false)?;
+            let final_desugared =
+                self.proof_state
+                    .desugar
+                    .desugar_program(proofs, false, self.seminaive)?;
 
             // revert back to the type info before
             // proofs were added, typecheck again

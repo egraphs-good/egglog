@@ -49,6 +49,8 @@ impl Default for TypeInfo {
         res.add_sort(F64Sort::new("f64".into()));
         res.add_sort(RationalSort::new("Rational".into()));
         res.presorts.insert("Map".into(), MapSort::make_sort);
+        res.presorts.insert("Set".into(), SetSort::make_sort);
+        res.presorts.insert("Vec".into(), SetSort::make_sort);
         res
     }
 }
