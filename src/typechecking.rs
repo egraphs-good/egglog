@@ -15,6 +15,10 @@ impl FuncType {
             has_merge,
         }
     }
+
+    pub(crate) fn is_const(&self) -> bool {
+        self.input.is_empty()
+    }
 }
 
 #[derive(Clone)]
@@ -140,6 +144,15 @@ impl TypeInfo {
                     return Err(TypeError::PrimitiveAlreadyBound(fdecl.name));
                 }
                 let ftype = self.function_to_functype(fdecl)?;
+                if ftype.is_const() {
+                    if self
+                        .global_types
+                        .insert(fdecl.name, ftype.output.clone())
+                        .is_some()
+                    {
+                        return Err(TypeError::AlreadyDefined(fdecl.name));
+                    }
+                }
                 if self.func_types.insert(fdecl.name, ftype).is_some() {
                     return Err(TypeError::FunctionAlreadyBound(fdecl.name));
                 }
@@ -446,14 +459,9 @@ impl TypeInfo {
 
         self.global_types
             .get(&sym)
-            .map(|x| Ok(x.clone()))
-            .unwrap_or_else(|| {
-                if let Some(found) = self.local_types.get(&ctx).unwrap().get(&sym) {
-                    Ok(found.clone())
-                } else {
-                    Err(TypeError::Unbound(sym))
-                }
-            })
+            .or_else(|| self.local_types.get(&ctx).unwrap().get(&sym))
+            .cloned()
+            .ok_or_else(|| TypeError::Unbound(sym))
     }
 
     fn set_local_type(

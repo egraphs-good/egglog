@@ -315,13 +315,13 @@ pub enum Command {
     Declare {
         name: Symbol,
         sort: Symbol,
+        cost: Option<usize>,
     },
     Sort(Symbol, Option<(Symbol, Vec<Expr>)>),
     Function(FunctionDecl),
     Define {
         name: Symbol,
         expr: Expr,
-        cost: Option<usize>,
     },
     AddRuleset(Symbol),
     Rule {
@@ -369,7 +369,10 @@ impl ToSexp for Command {
             Command::Rewrite(name, rewrite) => rewrite.to_sexp(*name, false),
             Command::BiRewrite(name, rewrite) => rewrite.to_sexp(*name, true),
             Command::Datatype { name, variants } => list!("datatype", name, ++ variants),
-            Command::Declare { name, sort } => list!("declare", name, sort),
+            Command::Declare { name, sort, cost } => match cost {
+                None => list!("declare", name, sort, ":noextract"),
+                Some(cost) => list!("declare", name, sort, ":cost", cost),
+            },
             Command::Action(a) => a.to_sexp(),
             Command::Sort(name, None) => list!("sort", name),
             Command::Sort(name, Some((name2, args))) => list!("sort", name, list!( name2, ++ args)),
@@ -380,10 +383,7 @@ impl ToSexp for Command {
                 ruleset,
                 rule,
             } => rule.to_sexp(*ruleset, *name),
-            Command::Define { name, expr, cost } => match cost {
-                None => list!("define", name, expr),
-                Some(cost) => list!("define", name, expr, ":cost", cost),
-            },
+            Command::Define { name, expr } => list!("define", name, expr),
             Command::Run(config) => config.to_sexp(),
             Command::RunSchedule(sched) => list!("run-schedule", sched),
             Command::Calc(args, exprs) => list!("calc", list!(++ args), ++ exprs),
@@ -518,6 +518,8 @@ impl ToSexp for Variant {
         if let Some(cost) = self.cost {
             res.push(Sexp::String(":cost".into()));
             res.push(Sexp::String(cost.to_string()));
+        } else {
+            res.push(Sexp::String(":noextract".into()));
         }
         Sexp::List(res)
     }
@@ -575,6 +577,8 @@ impl ToSexp for FunctionDecl {
                 Sexp::String(":cost".into()),
                 Sexp::String(cost.to_string()),
             ]);
+        } else {
+            res.push(Sexp::String(":noextract".into()));
         }
 
         if !self.merge_action.is_empty() {

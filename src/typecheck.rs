@@ -296,7 +296,12 @@ impl<'a> Context<'a> {
     fn infer_query_expr(&mut self, expr: &Expr) -> (Id, Option<ArcSort>) {
         match expr {
             Expr::Var(sym) => {
-                if self.egraph.functions.contains_key(sym) {
+                if self
+                    .egraph
+                    .functions
+                    .get(sym)
+                    .map_or(false, |f| f.is_const())
+                {
                     return self.infer_query_expr(&Expr::call(*sym, []));
                 }
                 let ty = if let Some(ty) = self.types.get(sym) {
@@ -467,9 +472,9 @@ trait ExprChecker<'a> {
         }
     }
 
-    fn variable_function(&self, var: Symbol) -> bool {
+    fn is_const_function(&self, var: Symbol) -> bool {
         if let Some(func) = self.egraph().functions.get(&var) {
-            func.is_variable
+            func.is_const()
         } else {
             false
         }
@@ -477,7 +482,7 @@ trait ExprChecker<'a> {
 
     fn check_expr(&mut self, expr: &Expr, ty: ArcSort) -> Result<Self::T, TypeError> {
         match expr {
-            Expr::Var(v) if !self.variable_function(*v) => self.check_var(*v, ty),
+            Expr::Var(v) if !self.is_const_function(*v) => self.check_var(*v, ty),
             _ => {
                 let (t, actual) = self.infer_expr(expr)?;
                 if actual.name() != ty.name() {
@@ -501,7 +506,7 @@ trait ExprChecker<'a> {
                 Ok((t, self.egraph().proof_state.type_info.infer_literal(lit)))
             }
             Expr::Var(sym) => {
-                if self.variable_function(*sym) {
+                if self.is_const_function(*sym) {
                     return self.infer_expr(&Expr::call(*sym, []));
                 }
                 self.infer_var(*sym)

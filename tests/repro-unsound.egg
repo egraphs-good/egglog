@@ -57,7 +57,7 @@
 
 
 
-(define eggvar1 (Div (Type "binary64") (Expm1 (Type "binary64") (Add (Type "binary64") (Var (Type "binary64") "h0") (Var (Type "binary64") "h0"))) (Expm1 (Type "binary64") (Var (Type "binary64") "h0"))) :cost 10000000)
+(define eggvar1 (Div (Type "binary64") (Expm1 (Type "binary64") (Add (Type "binary64") (Var (Type "binary64") "h0") (Var (Type "binary64") "h0"))) (Expm1 (Type "binary64") (Var (Type "binary64") "h0"))))
 
 (run 10)
 

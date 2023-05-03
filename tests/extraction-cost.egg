@@ -1,8 +1,13 @@
 (datatype Expr
   (Num i64 :cost 5))
 
-(define x (Num 1) :cost 10)
-(define y (Num 2) :cost 1)
+(declare x Expr :cost 10)
+(union x (Num 1))
+(declare y Expr :cost 1)
+(union y (Num 2))
+(declare z Expr :noextract)
+(union z (Num 3))
 
 (extract x) ;; (Num 1)
-(extract y) ;; (y)
+(extract y) ;; y
+(extract z) ;; (Num 3)

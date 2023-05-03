@@ -12,7 +12,6 @@ pub type ValueVec = SmallVec<[Value; 3]>;
 pub struct Function {
     pub decl: FunctionDecl,
     pub schema: ResolvedSchema,
-    pub(crate) is_variable: bool,
     pub merge: MergeAction,
     pub(crate) nodes: table::Table,
     sorts: HashSet<Symbol>,
@@ -54,7 +53,7 @@ pub struct ResolvedSchema {
 pub(crate) type DeferredMerge = (ValueVec, Value, Value);
 
 impl Function {
-    pub fn new(egraph: &EGraph, decl: &FunctionDecl, is_variable: bool) -> Result<Self, Error> {
+    pub fn new(egraph: &EGraph, decl: &FunctionDecl) -> Result<Self, Error> {
         let mut input = Vec::with_capacity(decl.schema.input.len());
         for s in &decl.schema.input {
             input.push(match egraph.proof_state.type_info.sorts.get(s) {
@@ -110,7 +109,6 @@ impl Function {
         Ok(Function {
             decl: decl.clone(),
             schema: ResolvedSchema { input, output },
-            is_variable,
             nodes: Default::default(),
             scratch: Default::default(),
             sorts,
@@ -347,5 +345,9 @@ impl Function {
 
     pub(crate) fn get_size(&self, range: &Range<u32>) -> usize {
         self.nodes.approximate_range_size(range)
+    }
+
+    pub(crate) fn is_const(&self) -> bool {
+        self.schema.input.is_empty()
     }
 }

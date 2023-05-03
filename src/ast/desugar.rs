@@ -303,7 +303,7 @@ pub(crate) fn desugar_calc(
 
     // first, push all the idents
     for IdentSort { ident, sort } in idents {
-        res.extend(desugar.declare(ident, sort));
+        res.extend(desugar.declare(ident, sort, None));
     }
 
     // now, for every pair of exprs we need to prove them equal
@@ -354,7 +354,7 @@ pub(crate) fn desugar_command(
         Command::Function(fdecl) => {
             vec![NCommand::Function(fdecl)]
         }
-        Command::Declare { name, sort } => desugar.declare(name, sort),
+        Command::Declare { name, sort, cost } => desugar.declare(name, sort, cost),
         Command::Datatype { name, variants } => desugar_datatype(name, variants),
         Command::Rewrite(ruleset, rewrite) => {
             desugar_rewrite(ruleset, rewrite.to_string().into(), &rewrite, desugar)
@@ -383,11 +383,8 @@ pub(crate) fn desugar_command(
         }
         Command::Sort(sort, option) => vec![NCommand::Sort(sort, option)],
         // TODO ignoring cost for now
-        Command::Define {
-            name,
-            expr,
-            cost: _cost,
-        } => {
+        // TODO: refactor this / connect with let
+        Command::Define { name, expr } => {
             let mut commands = vec![];
 
             let mut actions = vec![];
@@ -447,8 +444,7 @@ pub(crate) fn desugar_command(
             if get_all_proofs {
                 let proofvar = desugar.get_fresh();
                 // declare a variable for the resulting proof
-                // TODO using constant high cost
-                res.extend(desugar.declare(proofvar, "Proof__".into()));
+                res.extend(desugar.declare(proofvar, "Proof__".into(), None));
 
                 // make a dummy rule so that we get a proof for this check
                 let dummyrule = Rule {
@@ -624,21 +620,17 @@ impl Desugar {
             .map_err(|e| e.map_token(|tok| tok.to_string()))?)
     }
 
-    pub fn declare(&mut self, name: Symbol, sort: Symbol) -> Vec<NCommand> {
-        let fresh = self.get_fresh();
-        vec![
-            NCommand::Function(FunctionDecl {
-                name: fresh,
-                schema: Schema {
-                    input: vec![],
-                    output: sort,
-                },
-                default: None,
-                merge: None,
-                merge_action: vec![],
-                cost: Some(HIGH_COST),
-            }),
-            NCommand::NormAction(NormAction::Let(name, NormExpr::Call(fresh, vec![]))),
-        ]
+    pub fn declare(&mut self, name: Symbol, sort: Symbol, cost: Option<usize>) -> Vec<NCommand> {
+        vec![NCommand::Function(FunctionDecl {
+            name: name,
+            schema: Schema {
+                input: vec![],
+                output: sort,
+            },
+            default: None,
+            merge: None,
+            merge_action: vec![],
+            cost,
+        })]
     }
 }

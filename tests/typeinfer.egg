@@ -84,7 +84,7 @@
 
 
 ;; TODO: rewrite lookup to use native sets
-(function lookup (Ctx Ident) Scheme :cost 1000)
+(function lookup (Ctx Ident) Scheme :noextract)
 (rewrite (lookup (Cons x s tl) x) s)
 (rule (
   (= t (lookup (Cons y s tl) x))
@@ -97,8 +97,8 @@
 ;; Generalization and Instantiation
 ;;;;;;;;;;;;;;;;;;;;;;
 
-(function generalize (Ctx Type) Scheme :cost 1000)
-(function instantiate (Scheme i64) Type :cost 1000)
+(function generalize (Ctx Type) Scheme :noextract)
+(function instantiate (Scheme i64) Type :noextract)
 
 (rule ((has-qs-demand ctx (TInt)))
       ((has-qs ctx (TInt) (empty))))
@@ -130,7 +130,7 @@
          (Forall qs t)
          :when ((has-qs ctx t qs)))
 
-(function subst-fresh (QuantifiedVs Type i64) Type :cost 1000)
+(function subst-fresh (QuantifiedVs Type i64) Type :noextract)
 (rewrite (subst-fresh vs (TInt) c) (TInt))
 (rewrite (subst-fresh vs (TBool) c) (TBool))
 (rewrite (subst-fresh vs (TUnit) c) (TUnit))
@@ -159,7 +159,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;
 
 ; ctx |- expr : type
-(function typeof (Ctx Expr i64) Type :cost 1000)
+(function typeof (Ctx Expr i64) Type :noextract)
 
 ;; Basic types (TInt, TBool, TUnit)
 (rewrite (typeof ctx (Num x) c) (TInt))
@@ -330,9 +330,8 @@
 (define let-inst (Let (V "id") (Abs (V "x") (Var (V "x")))
                  (Let (V "iid") (Abs (V "y") (Var (V "id")))
                  (App (Var (V "iid")) 
-                      (App (Var (V "id")) (True))))) 
-      :cost 1000)
-(define t-let-inst (typeof (Nil) let-inst 0) :cost 1000)
+                      (App (Var (V "id")) (True))))) )
+(define t-let-inst (typeof (Nil) let-inst 0))
 (run 100)
 (check (= t-let-inst  (TArr (TVar (Fresh (Fresh (Fresh (V "x") 1) 5) 7)) (TVar (Fresh (Fresh (Fresh (V "x") 1) 5) 7)))))
 (pop)

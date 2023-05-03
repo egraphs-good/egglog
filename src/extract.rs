@@ -86,10 +86,12 @@ impl<'a> Extractor<'a> {
         let sort = self.egraph.get_sort(&value).unwrap();
         if sort.is_eq_sort() {
             let id = self.egraph.find(Id::from(value.bits as usize));
-            let (cost, node) = &self
-                .costs
-                .get(&id)
-                .unwrap_or_else(|| panic!("No cost for {:?}", value));
+            let (cost, node) = &self.costs.get(&id).unwrap_or_else(|| {
+                panic!(
+                    "Cannot find an extraction with a valid cost for {:?}",
+                    value
+                )
+            });
             (*cost, self.expr_from_node(node))
         } else {
             (0, sort.make_expr(value))
@@ -97,7 +99,7 @@ impl<'a> Extractor<'a> {
     }
 
     fn node_total_cost(&self, function: &Function, children: &[Value]) -> Option<Cost> {
-        let mut cost = function.decl.cost.unwrap_or(1);
+        let mut cost = function.decl.cost?;
         let types = &function.schema.input;
         for (ty, value) in types.iter().zip(children) {
             cost = cost.saturating_add(if ty.is_eq_sort() {

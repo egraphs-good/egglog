@@ -43,7 +43,7 @@ Command: Command = {
         <merge:(":merge" <Expr>)?> <default:(":default" <Expr>)?> ")" => {
         Command::Function(FunctionDecl { name, schema, merge, merge_action: merge_action.unwrap_or_default(), default, cost })
     },
-    "(" "declare" <name:Ident> <sort:Ident> ")" => Command::Declare{name, sort},
+    "(" "declare" <name:Ident> <sort:Ident> <cost:Cost> ")" => Command::Declare { name, sort, cost },
     "(" "relation" <name:Ident> <types:List<Type>> ")" => Command::Function(FunctionDecl::relation(name, types)),
     "(" "ruleset" <name:Ident> ")" => Command::AddRuleset(name),
     "(" "rule" <body:List<Fact>> <head:List<Action>> <ruleset:(":ruleset" <Ident>)?> <name:(":name" <String>)?> ")" => Command::Rule{ruleset: ruleset.unwrap_or("".into()), name: name.unwrap_or("".to_string()).into(), rule: Rule { head, body }},
@@ -55,7 +55,7 @@ Command: Command = {
         <conditions:(":when" <List<Fact>>)?>
         <ruleset:(":ruleset" <Ident>)?>
     ")" => Command::BiRewrite(ruleset.unwrap_or("".into()), Rewrite { lhs, rhs, conditions: conditions.unwrap_or_default() }),
-    "(" "define" <name:Ident> <expr:Expr> <cost:Cost> ")" => Command::Define { name, expr, cost },
+    "(" "define" <name:Ident> <expr:Expr> ")" => Command::Define { name, expr },
     "(" "let" <name:Ident> <expr:Expr> ")" => Command::Action(Action::Let(name, expr)),
     <NonLetAction> => Command::Action(<>),
     "(" "run" <limit:UNum>  <until:(":until" <(Fact)*>)?> ")" => Command::Run(RunConfig { ruleset: "".into(), limit, until }),
@@ -87,7 +87,8 @@ Schedule: Schedule = {
 
 Cost: Option<usize> = {
     ":cost" <UNum> => Some(<>),
-    => None,
+    ":noextract" => None,
+    => Some(1),
 }
 
 NonLetAction: Action = {
