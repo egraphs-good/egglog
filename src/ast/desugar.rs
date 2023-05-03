@@ -687,7 +687,7 @@ impl Desugar {
 
     pub fn declare(&mut self, name: Symbol, sort: Symbol, cost: Option<usize>) -> Vec<NCommand> {
         vec![NCommand::Function(FunctionDecl {
-            name: name,
+            name,
             schema: Schema {
                 input: vec![],
                 output: sort,

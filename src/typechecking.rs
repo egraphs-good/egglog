@@ -147,10 +147,8 @@ impl TypeInfo {
                 }
                 let ftype = self.function_to_functype(fdecl)?;
                 if ftype.is_const() {
-                    if self
-                        .global_types
-                        .insert(fdecl.name, ftype.output.clone())
-                        .is_some()
+                    if let Some(_existing) =
+                        self.global_types.insert(fdecl.name, ftype.output.clone())
                     {
                         return Err(TypeError::AlreadyDefined(fdecl.name));
                     }
