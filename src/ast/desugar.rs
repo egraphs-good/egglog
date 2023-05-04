@@ -149,7 +149,7 @@ fn flatten_actions(actions: &Vec<Action>, desugar: &mut Desugar) -> Vec<NormActi
                 assert_ne!(*symbol, added);
                 res.push(NormAction::LetVar(*symbol, added));
             }
-            Action::Set(symbol, exprs, rhs) => {
+            Action::Set(symbol, exprs, rhs) | Action::SetNoTrack(symbol, exprs, rhs) => {
                 let set = NormAction::Set(
                     NormExpr::Call(
                         *symbol,
