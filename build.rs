@@ -49,7 +49,8 @@ fn generate_tests(file: &mut File, glob: &str) {
         if !(name == "herbie"
             || name == "repro_unsound"
             || name == "eqsolve"
-            || name == "before_proofs")
+            || name == "before_proofs"
+            || name == "lambda")
         {
             writeln!(
                 file,

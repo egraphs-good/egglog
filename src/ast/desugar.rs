@@ -387,7 +387,7 @@ pub(crate) fn desugar_calc(
 }
 
 pub(crate) fn rewrite_name(rewrite: &Rewrite) -> String {
-    rewrite.to_string().replace("\"", "'")
+    rewrite.to_string().replace('\"', "'")
 }
 
 pub(crate) fn desugar_command(
