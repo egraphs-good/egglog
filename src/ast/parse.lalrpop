@@ -66,6 +66,7 @@ Command: Command = {
     "(" "calc" "(" <idents:IdentSort*> ")" <exprs:Expr+> ")" => Command::Calc(idents, exprs),
     "(" "extract" <variants:(":variants" <UNum>)?> <e:Expr> ")" => Command::Extract { e, variants: variants.unwrap_or(0) },
     "(" "check" <(Fact)*> ")" => Command::Check(<>),
+    "(" "check-proof" ")" => Command::CheckProof,
     "(" "run-schedule" <Schedule*> ")" => Command::RunSchedule(Schedule::Sequence(<>)),
     "(" "push" <UNum?> ")" => Command::Push(<>.unwrap_or(1)),
     "(" "pop" <UNum?> ")" => Command::Pop(<>.unwrap_or(1)),

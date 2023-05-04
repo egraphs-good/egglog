@@ -445,7 +445,10 @@ pub(crate) fn desugar_command(
             let mut res = vec![NCommand::Check(flatten_facts(&facts, desugar))];
 
             if get_all_proofs {
-                let proofvar = desugar.get_fresh();
+                // check that all the proofs in the egraph are valid
+                res.push(NCommand::CheckProof);
+
+                /*let proofvar = desugar.get_fresh();
                 // declare a variable for the resulting proof
                 // TODO using constant high cost
                 res.extend(desugar.declare(proofvar, "Proof__".into()));
@@ -494,11 +497,12 @@ pub(crate) fn desugar_command(
                 res.push(NCommand::Extract {
                     variants: 0,
                     var: proofvar,
-                });
+                });*/
             }
 
             res
         }
+        Command::CheckProof => vec![NCommand::CheckProof],
         Command::Print(symbol, size) => vec![NCommand::Print(symbol, size)],
         Command::PrintSize(symbol) => vec![NCommand::PrintSize(symbol)],
         Command::Output { file, exprs } => vec![NCommand::Output { file, exprs }],

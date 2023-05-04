@@ -1,21 +1,23 @@
 use hashbrown::hash_map::Entry;
 
 use crate::ast::Symbol;
+use crate::termdag::{Term, TermDag};
 use crate::util::HashMap;
 use crate::{EGraph, Expr, Function, Id, Value};
 
 type Cost = usize;
 
-#[derive(Debug)]
-struct Node<'a> {
-    sym: Symbol,
-    inputs: &'a [Value],
+#[derive(Debug, Clone)]
+pub(crate) struct Node<'a> {
+    pub(crate) sym: Symbol,
+    pub(crate) inputs: &'a [Value],
 }
 
 struct Extractor<'a> {
     costs: HashMap<Id, (Cost, Node<'a>)>,
     ctors: Vec<Symbol>,
     egraph: &'a EGraph,
+    termdag: &'a mut TermDag,
 }
 
 impl EGraph {
@@ -29,14 +31,19 @@ impl EGraph {
         None
     }
 
-    pub fn extract(&mut self, value: Value) -> (Cost, Expr) {
-        Extractor::new(self).find_best(value)
+    pub fn extract(&mut self, value: Value, termdag: &mut TermDag) -> (Cost, Term) {
+        Extractor::new(self, termdag).find_best(value)
     }
 
-    pub fn extract_variants(&mut self, value: Value, limit: usize) -> Vec<Expr> {
+    pub fn extract_variants(
+        &mut self,
+        value: Value,
+        limit: usize,
+        termdag: &mut TermDag,
+    ) -> Vec<Term> {
         let (tag, id) = self.value_to_id(value).unwrap();
         let output_value = &Value::from_id(tag, id);
-        let ext = &Extractor::new(self);
+        let ext = &Extractor::new(self, termdag);
         ext.ctors
             .iter()
             .flat_map(|&sym| {
@@ -61,11 +68,12 @@ impl EGraph {
 }
 
 impl<'a> Extractor<'a> {
-    fn new(egraph: &'a EGraph) -> Self {
+    fn new(egraph: &'a EGraph, termdag: &'a mut TermDag) -> Self {
         let mut extractor = Extractor {
             costs: HashMap::default(),
             egraph,
             ctors: vec![],
+            termdag,
         };
 
         // HACK
@@ -77,12 +85,12 @@ impl<'a> Extractor<'a> {
         extractor
     }
 
-    fn expr_from_node(&self, node: &Node) -> Expr {
+    fn expr_from_node(&mut self, node: &Node) -> Term {
         let children = node.inputs.iter().map(|&value| self.find_best(value).1);
-        Expr::call(node.sym, children)
+        self.termdag.make(node.sym, children.collect())
     }
 
-    fn find_best(&self, value: Value) -> (Cost, Expr) {
+    fn find_best(&mut self, value: Value) -> (Cost, Term) {
         let sort = self.egraph.get_sort(&value).unwrap();
         if sort.is_eq_sort() {
             let id = self.egraph.find(Id::from(value.bits as usize));
@@ -92,7 +100,7 @@ impl<'a> Extractor<'a> {
                 .unwrap_or_else(|| panic!("No cost for {:?}", value));
             (*cost, self.expr_from_node(node))
         } else {
-            (0, sort.make_expr(value))
+            (0, self.termdag.from_expr(&sort.make_expr(value)))
         }
     }
 

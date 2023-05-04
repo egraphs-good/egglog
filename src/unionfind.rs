@@ -32,6 +32,10 @@ impl UnionFind {
         res
     }
 
+    pub fn num_ids(&self) -> usize {
+        self.parents.len()
+    }
+
     /// The number of ids that recently stopped being canonical.
     pub fn new_ids(&self, sort_filter: impl Fn(Symbol) -> bool) -> usize {
         self.recent_ids

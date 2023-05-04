@@ -91,6 +91,7 @@ pub enum NCommand {
         var: Symbol,
     },
     Check(Vec<NormFact>),
+    CheckProof,
     Print(Symbol, usize),
     PrintSize(Symbol),
     Output {
@@ -145,6 +146,7 @@ impl NCommand {
             NCommand::Check(facts) => {
                 Command::Check(facts.iter().map(|fact| fact.to_fact()).collect())
             }
+            NCommand::CheckProof => Command::CheckProof,
             NCommand::Print(name, n) => Command::Print(*name, *n),
             NCommand::PrintSize(name) => Command::PrintSize(*name),
             NCommand::Output { file, exprs } => Command::Output {
@@ -190,6 +192,7 @@ impl NCommand {
             NCommand::Check(facts) => {
                 NCommand::Check(facts.iter().map(|fact| fact.map_exprs(f)).collect())
             }
+            NCommand::CheckProof => NCommand::CheckProof,
             NCommand::Print(name, n) => NCommand::Print(*name, *n),
             NCommand::PrintSize(name) => NCommand::PrintSize(*name),
             NCommand::Output { file, exprs } => NCommand::Output {
@@ -345,6 +348,7 @@ pub enum Command {
     },
     // TODO: this could just become an empty query
     Check(Vec<Fact>),
+    CheckProof,
     Print(Symbol, usize),
     PrintSize(Symbol),
     Input {
@@ -389,6 +393,7 @@ impl ToSexp for Command {
             Command::Calc(args, exprs) => list!("calc", list!(++ args), ++ exprs),
             Command::Extract { variants, e } => list!("extract", ":variants", variants, e),
             Command::Check(facts) => list!("check", ++ facts),
+            Command::CheckProof => list!("check-proof"),
             Command::Push(n) => list!("push", n),
             Command::Pop(n) => list!("pop", n),
             Command::Print(name, n) => list!("print", name, n),

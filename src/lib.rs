@@ -2,8 +2,10 @@ pub mod ast;
 mod extract;
 mod function;
 mod gj;
+mod proofchecker;
 mod proofs;
 pub mod sort;
+mod termdag;
 mod typecheck;
 mod typechecking;
 mod unionfind;
@@ -13,7 +15,9 @@ mod value;
 use hashbrown::hash_map::Entry;
 use index::ColumnIndex;
 use instant::{Duration, Instant};
+use proofchecker::check_proof;
 use sort::*;
+use termdag::{Term, TermDag};
 use thiserror::Error;
 
 use proofs::ProofState;
@@ -113,6 +117,13 @@ impl<T: PrimitiveLike + 'static> From<T> for Primitive {
     fn from(p: T) -> Self {
         Self(Arc::new(p))
     }
+}
+
+pub struct ExtractionResult {
+    cost: usize,
+    expr: Term,
+    variants: Vec<Term>,
+    termdag: TermDag,
 }
 
 pub struct SimplePrimitive {
@@ -384,27 +395,28 @@ impl EGraph {
 
         let mut buf = String::new();
         let s = &mut buf;
+        let mut termdag = TermDag::default();
         for (ins, out) in nodes {
             write!(s, "({}", sym).unwrap();
             for (a, t) in ins.iter().copied().zip(&schema.input) {
                 s.push(' ');
                 let e = if t.is_eq_sort() {
-                    self.extract(a).1
+                    self.extract(a, &mut termdag).1
                 } else {
-                    t.make_expr(a)
+                    termdag.from_expr(&t.make_expr(a))
                 };
-                write!(s, "{}", e).unwrap();
+                write!(s, "{}", termdag.to_string(&e)).unwrap();
             }
 
             if out_is_unit {
                 s.push(')');
             } else {
                 let e = if schema.output.is_eq_sort() {
-                    self.extract(out.value).1
+                    self.extract(out.value, &mut termdag).1
                 } else {
-                    schema.output.make_expr(out.value)
+                    termdag.from_expr(&schema.output.make_expr(out.value))
                 };
-                write!(s, ") -> {}", e).unwrap();
+                write!(s, ") -> {}", termdag.to_string(&e)).unwrap();
             }
             s.push('\n');
             // write!(s, "{}(", self.decl.name)?;
@@ -802,11 +814,20 @@ impl EGraph {
                 let expr = Expr::Var(var);
                 if should_run {
                     // TODO typecheck
-                    let (cost, expr, exprs) = self.extract_expr(expr, variants)?;
-                    let mut msg = format!("Extracted with cost {cost}: {expr}");
+                    let extract_result = self.extract_expr(expr, variants)?;
+                    let mut msg = format!(
+                        "Extracted with cost {}: {}",
+                        extract_result.cost,
+                        extract_result.termdag.to_string(&extract_result.expr)
+                    );
                     if variants > 0 {
                         let line = "\n    ";
-                        let v_exprs = ListDisplay(&exprs, line);
+                        let strings = extract_result
+                            .variants
+                            .iter()
+                            .map(|e| extract_result.termdag.to_string(e))
+                            .collect::<Vec<_>>();
+                        let v_exprs = ListDisplay(&strings, line);
                         write!(msg, "\nVariants of {expr}:{line}{v_exprs}").unwrap();
                     }
                     msg
@@ -822,10 +843,17 @@ impl EGraph {
                     "Skipping check.".into()
                 }
             }
+            NCommand::CheckProof => {
+                check_proof(self);
+                "Checked proof.".into()
+            }
             NCommand::Simplify { var, config } => {
                 if should_run {
-                    let (cost, expr) = self.simplify(Expr::Var(var), &config)?;
-                    format!("Simplified with cost {cost} to {expr}")
+                    let (cost, term, termdag) = self.simplify(Expr::Var(var), &config)?;
+                    format!(
+                        "Simplified with cost {cost} to {}",
+                        termdag.to_string(&term)
+                    )
                 } else {
                     "Skipping simplify.".into()
                 }
@@ -944,8 +972,13 @@ impl EGraph {
 
                 for expr in exprs {
                     use std::io::Write;
-                    let (_cost, expr, _exprs) = self.extract_expr(expr, 1)?;
-                    writeln!(f, "{expr}").map_err(|e| Error::IoError(filename.clone(), e))?;
+                    let extract_result = self.extract_expr(expr, 1)?;
+                    writeln!(
+                        f,
+                        "{}",
+                        extract_result.termdag.to_string(&extract_result.expr)
+                    )
+                    .map_err(|e| Error::IoError(filename.clone(), e))?;
                 }
 
                 format!("Output to '{filename:?}'.")
@@ -959,29 +992,40 @@ impl EGraph {
         }
     }
 
-    fn simplify(&mut self, expr: Expr, config: &NormRunConfig) -> Result<(usize, Expr), Error> {
+    fn simplify(
+        &mut self,
+        expr: Expr,
+        config: &NormRunConfig,
+    ) -> Result<(usize, Term, TermDag), Error> {
         self.push();
         let (_t, value) = self.eval_expr(&expr, None, true).unwrap();
         self.run_rules(config);
-        let (cost, expr) = self.extract(value);
+        let mut termdag = TermDag::default();
+        let (cost, expr) = self.extract(value, &mut termdag);
         self.pop().unwrap();
-        Ok((cost, expr))
+        Ok((cost, expr, termdag))
     }
     // Extract an expression from the current state, returning the cost, the extracted expression and some number
     // of other variants, if variants is not zero.
     pub fn extract_expr(
         &mut self,
         e: Expr,
-        variants: usize,
-    ) -> Result<(usize, Expr, Vec<Expr>), Error> {
+        num_variants: usize,
+    ) -> Result<ExtractionResult, Error> {
         let (_t, value) = self.eval_expr(&e, None, true)?;
-        let (cost, expr) = self.extract(value);
-        let exprs = match variants {
+        let mut termdag = TermDag::default();
+        let (cost, expr) = self.extract(value, &mut termdag);
+        let variants = match num_variants {
             0 => vec![],
             1 => vec![expr.clone()],
-            _ => self.extract_variants(value, variants),
+            _ => self.extract_variants(value, num_variants, &mut termdag),
         };
-        Ok((cost, expr, exprs))
+        Ok(ExtractionResult {
+            cost,
+            expr,
+            variants,
+            termdag,
+        })
     }
 
     pub fn declare_const(&mut self, name: Symbol, sort: &ArcSort) -> Result<(), Error> {
