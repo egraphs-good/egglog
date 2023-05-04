@@ -1,8 +1,5 @@
 use crate::{proofs::RULE_PROOF_KEYWORD, *};
 
-// TODO fix getting fresh names using modules
-const PROOF_UNDERSCORES: &str = "___";
-
 fn desugar_datatype(name: Symbol, variants: Vec<Variant>) -> Vec<NCommand> {
     vec![NCommand::Sort(name, None)]
         .into_iter()
@@ -322,6 +319,8 @@ pub struct Desugar {
     next_command_id: usize,
     pub(crate) parser: ast::parse::ProgramParser,
     pub(crate) action_parser: ast::parse::ActionParser,
+    // TODO fix getting fresh names using modules
+    pub(crate) number_underscores: usize,
 }
 
 impl Default for Desugar {
@@ -332,6 +331,7 @@ impl Default for Desugar {
             // these come from lalrpop and don't have default impls
             parser: ast::parse::ProgramParser::new(),
             action_parser: ast::parse::ActionParser::new(),
+            number_underscores: 3,
         }
     }
 }
@@ -386,6 +386,10 @@ pub(crate) fn desugar_calc(
     res
 }
 
+pub(crate) fn rewrite_name(rewrite: &Rewrite) -> String {
+    rewrite.to_string().replace("\"", "'")
+}
+
 pub(crate) fn desugar_command(
     command: Command,
     desugar: &mut Desugar,
@@ -402,10 +406,10 @@ pub(crate) fn desugar_command(
         Command::Declare { name, sort } => desugar.declare(name, sort),
         Command::Datatype { name, variants } => desugar_datatype(name, variants),
         Command::Rewrite(ruleset, rewrite) => {
-            desugar_rewrite(ruleset, rewrite.to_string().into(), &rewrite, desugar)
+            desugar_rewrite(ruleset, rewrite_name(&rewrite).into(), &rewrite, desugar)
         }
         Command::BiRewrite(ruleset, rewrite) => {
-            desugar_birewrite(ruleset, rewrite.to_string().into(), &rewrite, desugar)
+            desugar_birewrite(ruleset, rewrite_name(&rewrite).into(), &rewrite, desugar)
         }
         Command::Include(file) => {
             let s = std::fs::read_to_string(&file)
@@ -618,6 +622,7 @@ impl Clone for Desugar {
             next_command_id: self.next_command_id,
             parser: ast::parse::ProgramParser::new(),
             action_parser: ast::parse::ActionParser::new(),
+            number_underscores: self.number_underscores,
         }
     }
 }
@@ -625,7 +630,12 @@ impl Clone for Desugar {
 impl Desugar {
     pub fn get_fresh(&mut self) -> Symbol {
         self.next_fresh += 1;
-        format!("v{}{}", self.next_fresh - 1, PROOF_UNDERSCORES).into()
+        format!(
+            "v{}{}",
+            self.next_fresh - 1,
+            "_".repeat(self.number_underscores)
+        )
+        .into()
     }
 
     pub fn get_new_id(&mut self) -> CommandId {

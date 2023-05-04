@@ -15,26 +15,33 @@ impl Run {
         let program = std::fs::read_to_string(self.path).unwrap();
         self.test_program(&program, "Top level error");
 
-        let egraph = EGraph::default();
-        let program_str = egraph
-            .parse_program(&program)
-            .unwrap()
-            .into_iter()
-            .map(|x| x.to_string())
-            .collect::<Vec<String>>()
-            .join("\n");
+        if !self.should_fail {
+            let mut egraph = EGraph::default();
+            egraph.set_underscores_for_desugaring(4);
+            let parsed = egraph.parse_program(&program).unwrap();
+            let desugared_str = egraph
+                .process_commands(parsed)
+                .unwrap()
+                .into_iter()
+                .map(|x| x.to_string())
+                .collect::<Vec<String>>()
+                .join("\n");
 
-        self.test_program(
-            &program_str,
-            &format!(
-                "Program:\n{}\n ERROR after parse, to_string, and parse again.",
-                program_str
-            ),
-        );
+            println!("{}", desugared_str);
+
+            self.test_program(
+                &desugared_str,
+                &format!(
+                    "Program:\n{}\n ERROR after parse, to_string, and parse again.",
+                    desugared_str
+                ),
+            );
+        }
     }
 
     fn test_program(&self, program: &str, message: &str) {
         let mut egraph = EGraph::default();
+        egraph.set_underscores_for_desugaring(5);
         if self.test_proofs {
             egraph
                 .run_program(vec![Command::SetOption {
