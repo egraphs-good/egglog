@@ -1,6 +1,9 @@
 use crate::{
-    extract::Node, function::ValueVec, termdag::TermDag, util::HashMap, EGraph, Symbol, UnionFind,
-    Value,
+    extract::Node,
+    function::ValueVec,
+    termdag::{Term, TermDag},
+    util::HashMap,
+    EGraph, Symbol, UnionFind, Value,
 };
 
 struct ProofChecker {
@@ -11,16 +14,20 @@ struct ProofChecker {
 
 const EQ_GRAPH_NAME: &str = "EqGraph__";
 
-pub fn check_proof<'a>(egraph: &'a EGraph) {
+pub fn check_proof(egraph: &mut EGraph) {
     let mut proven_equal = UnionFind::default();
     for _i in 0..egraph.unionfind.num_ids() {
         proven_equal.make_set();
     }
 
+    let mut termdag = TermDag::default();
+}
+/*let to_check = egraph.extract_variants(
+
     ProofChecker { proven_equal }.check();
 }
 
-impl<'a> ProofChecker<'a> {
+impl ProofChecker {
     fn check(&mut self) {
         let eq_graph_func = self
             .egraph
@@ -63,3 +70,4 @@ impl<'a> ProofChecker<'a> {
         nodes[0].clone()
     }
 }
+*/

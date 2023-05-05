@@ -38,7 +38,7 @@ impl TermDag {
         if self.hashcons.get(&node).is_none() {
             let idx = self.nodes.len();
             self.nodes.push(node.clone());
-            self.hashcons.insert(node, idx);
+            self.hashcons.insert(node.clone(), idx);
         }
 
         node
@@ -51,7 +51,10 @@ impl TermDag {
             Expr::Call(op, args) => {
                 let args = args
                     .iter()
-                    .map(|a| self.lookup(&self.from_expr(a)))
+                    .map(|a| {
+                        let term = self.from_expr(a);
+                        self.lookup(&term)
+                    })
                     .collect();
                 Term(TermNode::App(*op, args))
             }
@@ -66,7 +69,7 @@ impl TermDag {
         while !stack.is_empty() {
             let next = stack.pop().unwrap();
 
-            match self.nodes[next].0 {
+            match self.nodes[next].0.clone() {
                 TermNode::App(name, children) => {
                     if children.is_empty() || stored.contains_key(&children[0]) {
                         let mut str = String::new();

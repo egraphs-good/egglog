@@ -381,7 +381,11 @@ impl EGraph {
         }
     }
 
-    pub fn print_function(&mut self, sym: Symbol, n: usize) -> Result<String, Error> {
+    pub fn extract_function(
+        &mut self,
+        sym: Symbol,
+        n: usize,
+    ) -> Result<(Vec<(Term, Term)>, TermDag), Error> {
         let f = self.functions.get(&sym).ok_or(TypeError::Unbound(sym))?;
         let schema = f.schema.clone();
         let nodes = f
@@ -393,41 +397,43 @@ impl EGraph {
 
         let out_is_unit = f.schema.output.name() == UNIT_SYM.into();
 
+        let mut termdag = TermDag::default();
+        let mut terms = Vec::new();
+        for (ins, out) in nodes {
+            let mut children = Vec::new();
+            for (a, t) in ins.iter().copied().zip(&schema.input) {
+                let e = if t.is_eq_sort() {
+                    children.push(self.extract(a, &mut termdag).1);
+                } else {
+                    children.push(termdag.from_expr(&t.make_expr(a)));
+                };
+            }
+
+            let out = if schema.output.is_eq_sort() {
+                self.extract(out.value, &mut termdag).1
+            } else {
+                termdag.from_expr(&schema.output.make_expr(out.value))
+            };
+            terms.push((termdag.make(sym, children), out));
+        }
+
+        Ok((terms, termdag))
+    }
+
+    pub fn print_function(&mut self, sym: Symbol, n: usize) -> Result<String, Error> {
+        let (terms_with_outputs, termdag) = self.extract_function(sym, n)?;
+        let f = self.functions.get(&sym).ok_or(TypeError::Unbound(sym))?;
+        let out_is_unit = f.schema.output.name() == UNIT_SYM.into();
+
         let mut buf = String::new();
         let s = &mut buf;
         let mut termdag = TermDag::default();
-        for (ins, out) in nodes {
-            write!(s, "({}", sym).unwrap();
-            for (a, t) in ins.iter().copied().zip(&schema.input) {
-                s.push(' ');
-                let e = if t.is_eq_sort() {
-                    self.extract(a, &mut termdag).1
-                } else {
-                    termdag.from_expr(&t.make_expr(a))
-                };
-                write!(s, "{}", termdag.to_string(&e)).unwrap();
-            }
-
-            if out_is_unit {
-                s.push(')');
-            } else {
-                let e = if schema.output.is_eq_sort() {
-                    self.extract(out.value, &mut termdag).1
-                } else {
-                    termdag.from_expr(&schema.output.make_expr(out.value))
-                };
-                write!(s, ") -> {}", termdag.to_string(&e)).unwrap();
+        for (term, output) in terms_with_outputs {
+            write!(s, "{}", termdag.to_string(&term)).unwrap();
+            if !out_is_unit {
+                write!(s, " -> {}", termdag.to_string(&output)).unwrap();
             }
             s.push('\n');
-            // write!(s, "{}(", self.decl.name)?;
-            // for (i, arg) in args.iter().enumerate() {
-            //     if i > 0 {
-            //         write!(s, ", ")?;
-            //     }
-            //     write!(s, "{}", arg)?;
-            // }
-            // write!(s, ") = {}", value)?;
-            // println!("{}", s);
         }
 
         Ok(buf)
@@ -814,7 +820,7 @@ impl EGraph {
                 let expr = Expr::Var(var);
                 if should_run {
                     // TODO typecheck
-                    let extract_result = self.extract_expr(expr, variants)?;
+                    let extract_result = self.extract_expr(expr.clone(), variants)?;
                     let mut msg = format!(
                         "Extracted with cost {}: {}",
                         extract_result.cost,
