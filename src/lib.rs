@@ -1091,10 +1091,12 @@ impl EGraph {
             // we need to pass in the desugar
             let proofs = self.proof_state.add_proofs(program_desugared);
 
-            let final_desugared =
-                self.proof_state
-                    .desugar
-                    .desugar_program(proofs, false, self.seminaive)?;
+            // set seminaive to false in desugar_program because we don't want to
+            // do the seminaive delta transformation again.
+            let final_desugared = self
+                .proof_state
+                .desugar
+                .desugar_program(proofs, false, false)?;
 
             // revert back to the type info before
             // proofs were added, typecheck again

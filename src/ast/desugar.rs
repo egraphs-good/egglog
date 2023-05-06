@@ -298,6 +298,7 @@ fn add_semi_naive_rule(desugar: &mut Desugar, rule: Rule) -> Option<Rule> {
 
             // move let binding to body.
             Action::Let(symbol, expr) => {
+                add_new_rule = true;
                 let eq_vec: Vec<Expr> = vec![Expr::Var(*symbol), expr.clone()];
                 new_rule.body.push(Fact::Eq(eq_vec));
             }
