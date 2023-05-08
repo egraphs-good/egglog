@@ -68,16 +68,6 @@ impl UnionFind {
         ids.iter().copied()
     }
 
-    /// Canonicalize a [`Value`].
-    ///
-    /// This method assumes that the given value belongs to an "eq-able" sort.
-    /// Its behavior is unspecified on other values.
-    pub fn find_value(&self, v: Value) -> Value {
-        // NB: this assumes you have an eq-able sort.
-        let bits = usize::from(self.find(Id::from(v.bits as usize))) as u64;
-        Value { bits, ..v }
-    }
-
     /// Look up the canonical representative for the given [`Id`].
     pub fn find(&self, id: Id) -> Id {
         let mut cur = self.parent(id);

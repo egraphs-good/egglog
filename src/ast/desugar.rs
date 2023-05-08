@@ -1,8 +1,5 @@
 use crate::{proofs::RULE_PROOF_KEYWORD, *};
 
-// TODO fix getting fresh names using modules
-const PROOF_UNDERSCORES: &str = "___";
-
 fn desugar_datatype(name: Symbol, variants: Vec<Variant>) -> Vec<NCommand> {
     vec![NCommand::Sort(name, None)]
         .into_iter()
@@ -149,7 +146,7 @@ fn flatten_actions(actions: &Vec<Action>, desugar: &mut Desugar) -> Vec<NormActi
                 assert_ne!(*symbol, added);
                 res.push(NormAction::LetVar(*symbol, added));
             }
-            Action::Set(symbol, exprs, rhs) => {
+            Action::Set(symbol, exprs, rhs) | Action::SetNoTrack(symbol, exprs, rhs) => {
                 let set = NormAction::Set(
                     NormExpr::Call(
                         *symbol,
@@ -275,11 +272,55 @@ fn desugar_run_config(desugar: &mut Desugar, run_config: &RunConfig) -> NormRunC
     }
 }
 
+fn add_semi_naive_rule(desugar: &mut Desugar, rule: Rule) -> Option<Rule> {
+    let mut new_rule = rule;
+    // only add new rule when there is Call in body to avoid adding same rule.
+    let mut add_new_rule = false;
+
+    for head_slice in new_rule.head.iter_mut() {
+        match head_slice {
+            Action::Set(_, _, value) => {
+                // if the right hand side is a function call,
+                // move it to body so seminaive fires
+                if let Expr::Call(_, _) = value {
+                    add_new_rule = true;
+                    let mut eq_vec: Vec<Expr> = Vec::new();
+                    let fresh_symbol = desugar.get_fresh();
+                    eq_vec.push(Expr::Var(fresh_symbol));
+                    eq_vec.push(value.clone());
+                    new_rule.body.push(Fact::Eq(eq_vec));
+                    *value = Expr::Var(fresh_symbol);
+                };
+            }
+
+            // move let binding to body.
+            Action::Let(symbol, expr) => {
+                let eq_vec: Vec<Expr> = vec![Expr::Var(*symbol), expr.clone()];
+                new_rule.body.push(Fact::Eq(eq_vec));
+            }
+            _ => (),
+        }
+    }
+
+    if add_new_rule {
+        // remove all let action
+        new_rule
+            .head
+            .retain_mut(|action| !matches!(action, Action::Let(_, _)));
+        log::debug!("Added a semi-naive desugared rule:\n{}", new_rule);
+        Some(new_rule)
+    } else {
+        None
+    }
+}
+
 pub struct Desugar {
     next_fresh: usize,
     next_command_id: usize,
     pub(crate) parser: ast::parse::ProgramParser,
     pub(crate) action_parser: ast::parse::ActionParser,
+    // TODO fix getting fresh names using modules
+    pub(crate) number_underscores: usize,
 }
 
 impl Default for Desugar {
@@ -290,6 +331,7 @@ impl Default for Desugar {
             // these come from lalrpop and don't have default impls
             parser: ast::parse::ProgramParser::new(),
             action_parser: ast::parse::ActionParser::new(),
+            number_underscores: 3,
         }
     }
 }
@@ -298,6 +340,7 @@ pub(crate) fn desugar_calc(
     desugar: &mut Desugar,
     idents: Vec<IdentSort>,
     exprs: Vec<Expr>,
+    seminaive: bool,
 ) -> Vec<NCommand> {
     let mut res = vec![];
 
@@ -328,6 +371,7 @@ pub(crate) fn desugar_calc(
                 }),
                 desugar,
                 false,
+                seminaive,
             )
             .unwrap()
             .into_iter()
@@ -342,10 +386,15 @@ pub(crate) fn desugar_calc(
     res
 }
 
+pub(crate) fn rewrite_name(rewrite: &Rewrite) -> String {
+    rewrite.to_string().replace('\"', "'")
+}
+
 pub(crate) fn desugar_command(
     command: Command,
     desugar: &mut Desugar,
     get_all_proofs: bool,
+    seminaive: bool,
 ) -> Result<Vec<NormCommand>, Error> {
     let res = match command {
         Command::SetOption { name, value } => {
@@ -357,15 +406,20 @@ pub(crate) fn desugar_command(
         Command::Declare { name, sort } => desugar.declare(name, sort),
         Command::Datatype { name, variants } => desugar_datatype(name, variants),
         Command::Rewrite(ruleset, rewrite) => {
-            desugar_rewrite(ruleset, rewrite.to_string().into(), &rewrite, desugar)
+            desugar_rewrite(ruleset, rewrite_name(&rewrite).into(), &rewrite, desugar)
         }
         Command::BiRewrite(ruleset, rewrite) => {
-            desugar_birewrite(ruleset, rewrite.to_string().into(), &rewrite, desugar)
+            desugar_birewrite(ruleset, rewrite_name(&rewrite).into(), &rewrite, desugar)
         }
         Command::Include(file) => {
             let s = std::fs::read_to_string(&file)
                 .unwrap_or_else(|_| panic!("Failed to read file {file}"));
-            return desugar_commands(desugar.parse_program(&s)?, desugar, get_all_proofs);
+            return desugar_commands(
+                desugar.parse_program(&s)?,
+                desugar,
+                get_all_proofs,
+                seminaive,
+            );
         }
         Command::Rule {
             ruleset,
@@ -375,11 +429,23 @@ pub(crate) fn desugar_command(
             if name == "".into() {
                 name = rule.to_string().replace('\"', "'").into();
             }
-            vec![NCommand::NormRule {
+            let mut result = vec![NCommand::NormRule {
                 ruleset,
                 name,
-                rule: flatten_rule(rule, desugar),
-            }]
+                rule: flatten_rule(rule.clone(), desugar),
+            }];
+
+            if seminaive {
+                if let Some(new_rule) = add_semi_naive_rule(desugar, rule) {
+                    result.push(NCommand::NormRule {
+                        ruleset,
+                        name,
+                        rule: flatten_rule(new_rule, desugar),
+                    });
+                }
+            }
+
+            result
         }
         Command::Sort(sort, option) => vec![NCommand::Sort(sort, option)],
         // TODO ignoring cost for now
@@ -423,7 +489,7 @@ pub(crate) fn desugar_command(
                 )
                 .collect()
         }
-        Command::Calc(idents, exprs) => desugar_calc(desugar, idents, exprs),
+        Command::Calc(idents, exprs) => desugar_calc(desugar, idents, exprs, seminaive),
         Command::RunSchedule(sched) => {
             vec![NCommand::RunSchedule(desugar_schedule(desugar, &sched))]
         }
@@ -469,6 +535,7 @@ pub(crate) fn desugar_command(
                         },
                         desugar,
                         get_all_proofs,
+                        seminaive,
                     )?
                     .into_iter()
                     .map(|cmd| cmd.command),
@@ -509,7 +576,7 @@ pub(crate) fn desugar_command(
             vec![NCommand::Pop(num)]
         }
         Command::Fail(cmd) => {
-            let mut desugared = desugar_command(*cmd, desugar, false)?;
+            let mut desugared = desugar_command(*cmd, desugar, false, seminaive)?;
 
             let last = desugared.pop().unwrap();
             desugared.push(NormCommand {
@@ -538,10 +605,11 @@ pub(crate) fn desugar_commands(
     program: Vec<Command>,
     desugar: &mut Desugar,
     get_all_proofs: bool,
+    seminaive: bool,
 ) -> Result<Vec<NormCommand>, Error> {
     let mut res = vec![];
     for command in program {
-        let desugared = desugar_command(command, desugar, get_all_proofs)?;
+        let desugared = desugar_command(command, desugar, get_all_proofs, seminaive)?;
         res.extend(desugared);
     }
     Ok(res)
@@ -554,6 +622,7 @@ impl Clone for Desugar {
             next_command_id: self.next_command_id,
             parser: ast::parse::ProgramParser::new(),
             action_parser: ast::parse::ActionParser::new(),
+            number_underscores: self.number_underscores,
         }
     }
 }
@@ -561,7 +630,12 @@ impl Clone for Desugar {
 impl Desugar {
     pub fn get_fresh(&mut self) -> Symbol {
         self.next_fresh += 1;
-        format!("v{}{}", self.next_fresh - 1, PROOF_UNDERSCORES).into()
+        format!(
+            "v{}{}",
+            self.next_fresh - 1,
+            "_".repeat(self.number_underscores)
+        )
+        .into()
     }
 
     pub fn get_new_id(&mut self) -> CommandId {
@@ -574,8 +648,9 @@ impl Desugar {
         &mut self,
         program: Vec<Command>,
         get_all_proofs: bool,
+        seminaive: bool,
     ) -> Result<Vec<NormCommand>, Error> {
-        let res = desugar_commands(program, self, get_all_proofs)?;
+        let res = desugar_commands(program, self, get_all_proofs, seminaive)?;
         Ok(res)
     }
 

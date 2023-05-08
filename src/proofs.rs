@@ -141,8 +141,10 @@ fn merge_action(proof_state: &mut ProofState, types: FuncType) -> Vec<Action> {
     }))
     .chain(vec![
         format!("(let congr_prf__ (Congruence__ {p1} {}))", congr_prf),
-        format!("(set (EqGraph__ {t1} {t2}) congr_prf__)"),
-        format!("(set (EqGraph__ {t2} {t1}) (Flip__ congr_prf__))"),
+        format!("(let age__ (currentAge))"),
+        format!("(set (currentAge) (+ age__ 1))"),
+        format!("(set (EqGraph__ {t1} {t2}) (MakeProofWithAge__ congr_prf__ age__))"),
+        format!("(set (EqGraph__ {t2} {t1}) (MakeProofWithAge__ (Flip__ congr_prf__) age__))"),
     ])
     .map(|s| proof_state.desugar.action_parser.parse(&s).unwrap())
     .collect()
@@ -314,18 +316,28 @@ fn get_var_term(var: Symbol, proof_state: &ProofState, proof_info: &ProofInfo) -
 }
 
 fn add_eqgraph_equality(
+    proof_state: &mut ProofState,
+    proof_info: &mut ProofInfo,
     astvar1: Symbol,
     astvar2: Symbol,
-    rule_proof: Symbol,
     res: &mut Vec<NormAction>,
 ) {
+    let rule_proof = proof_info.rule_proof.unwrap();
+    let proof_with_age = proof_state.get_fresh();
+    res.push(NormAction::Let(
+        proof_with_age,
+        NormExpr::Call(
+            "MakeProofWithAge__".into(),
+            vec![rule_proof, "age__".into()],
+        ),
+    ));
     res.push(NormAction::Set(
         NormExpr::Call("EqGraph__".into(), vec![astvar1, astvar2]),
-        rule_proof,
+        proof_with_age,
     ));
     res.push(NormAction::Set(
         NormExpr::Call("EqGraph__".into(), vec![astvar2, astvar1]),
-        rule_proof,
+        proof_with_age,
     ));
 }
 
@@ -401,9 +413,10 @@ fn add_action_proof(
         NormAction::Delete(..) | NormAction::Panic(..) => (),
         NormAction::Union(var1, var2) => {
             add_eqgraph_equality(
+                proof_state,
+                proof_info,
                 get_var_term(*var1, proof_state, proof_info),
                 get_var_term(*var2, proof_state, proof_info),
-                proof_info.rule_proof.unwrap(),
                 res,
             );
         }
@@ -411,9 +424,10 @@ fn add_action_proof(
             let new_term = make_expr_rep(proof_state, proof_info, expr, res);
             // add to the equality graph when we set things equal to each other
             add_eqgraph_equality(
+                proof_state,
+                proof_info,
                 new_term,
                 get_var_term(*rhs, proof_state, proof_info),
-                proof_info.rule_proof.unwrap(),
                 res,
             )
         }
@@ -544,8 +558,31 @@ fn replace_rule_proof(actions: &[NormAction], rule_proof: Symbol) -> Vec<NormAct
         .collect()
 }
 
+fn add_age_variable(proof_state: &mut ProofState) -> Vec<NormAction> {
+    let mut res = vec![];
+    let age_var = Symbol::from("age__");
+    res.push(NormAction::Let(
+        age_var,
+        NormExpr::Call("currentAge".into(), vec![]),
+    ));
+    let one = proof_state.get_fresh();
+    res.push(NormAction::LetLit(one, Literal::Int(1)));
+    let next_age = proof_state.get_fresh();
+    res.push(NormAction::Let(
+        next_age,
+        NormExpr::Call("+".into(), vec![age_var, one]),
+    ));
+    res.push(NormAction::Set(
+        NormExpr::Call("currentAge".into(), vec![]),
+        next_age,
+    ));
+
+    res
+}
+
 fn instrument_rule(rule: &NormRule, rule_name: Symbol, proof_state: &mut ProofState) -> Rule {
     let mut actions = vec![];
+    actions.extend(add_age_variable(proof_state));
     let info = instrument_facts(&rule.body, proof_state, &mut actions);
     let rule_proof = add_rule_proof(rule_name, &info, &rule.body, &mut actions, proof_state);
 
@@ -726,7 +763,7 @@ fn proof_original_action(action: &NormAction, proof_state: &mut ProofState) -> V
                     .desugar
                     .action_parser
                     .parse(&format!(
-                        "(set (EqGraph__ {} {}) (OriginalEq__ {} {}))",
+                        "(set (EqGraph__ {} {}) (MakeProofWithAge__ (OriginalEq__ {} {}) 0))",
                         proof_state.global_var_ast[&fresh],
                         proof_state.global_var_ast[var],
                         proof_state.global_var_ast[&fresh],
@@ -742,7 +779,7 @@ fn proof_original_action(action: &NormAction, proof_state: &mut ProofState) -> V
                     .desugar
                     .action_parser
                     .parse(&format!(
-                        "(set (EqGraph__ {} {}) (OriginalEq__ {} {}))",
+                        "(set (EqGraph__ {} {}) (MakeProofWithAge__ (OriginalEq__ {} {}) 0))",
                         proof_state.global_var_ast[var1],
                         proof_state.global_var_ast[var2],
                         proof_state.global_var_ast[var1],

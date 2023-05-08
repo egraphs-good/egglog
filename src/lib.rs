@@ -80,7 +80,7 @@ impl RunReport {
     }
 }
 
-pub const HIGH_COST: usize = usize::MAX;
+pub const HIGH_COST: usize = i64::MAX as usize;
 
 #[derive(Clone)]
 pub struct Primitive(Arc<dyn PrimitiveLike>);
@@ -253,6 +253,28 @@ impl EGraph {
                             (*off as usize) < function.nodes.len(),
                             "index contains offset {off:?}, which is out of range for function {name}"
                         );
+                    }
+                }
+            }
+            for (rix, sort) in function.rebuild_indexes.iter().zip(
+                function
+                    .schema
+                    .input
+                    .iter()
+                    .chain(once(&function.schema.output)),
+            ) {
+                assert!(sort.is_eq_container_sort() == rix.is_some());
+                if sort.is_eq_container_sort() {
+                    let rix = rix.as_ref().unwrap();
+                    for ix in rix.iter() {
+                        for (_, offs) in ix.iter() {
+                            for off in offs {
+                                assert!(
+                                (*off as usize) < function.nodes.len(),
+                                "index contains offset {off:?}, which is out of range for function {name}"
+                            );
+                            }
+                        }
                     }
                 }
             }
@@ -1052,11 +1074,56 @@ impl EGraph {
         Ok(sort)
     }
 
+    // process the commands but don't run them
+    pub fn process_commands(
+        &mut self,
+        mut program: Vec<Command>,
+    ) -> Result<Vec<NormCommand>, Error> {
+        let mut result = vec![];
+        if let Some(Command::SetOption {
+            name,
+            value: Expr::Lit(Literal::Int(1)),
+        }) = program.first()
+        {
+            if name == &"enable_proofs".into() {
+                program = program.split_off(1);
+                for step in self.proof_state.proof_header() {
+                    result.extend(self.process_command(step)?);
+                }
+                self.proofs_enabled = true;
+            }
+        }
+
+        for command in program {
+            match command {
+                Command::Push(num) => {
+                    for _ in 0..num {
+                        self.push();
+                    }
+                }
+                Command::Pop(num) => {
+                    for _ in 0..num {
+                        self.pop()
+                            .expect("Failed to desugar, popped too many times");
+                    }
+                }
+                _ => {}
+            }
+            result.extend(self.process_command(command)?);
+        }
+        Ok(result)
+    }
+
+    pub fn set_underscores_for_desugaring(&mut self, underscores: usize) {
+        self.proof_state.desugar.number_underscores = underscores;
+    }
+
     fn process_command(&mut self, command: Command) -> Result<Vec<NormCommand>, Error> {
-        let program_desugared = self
-            .proof_state
-            .desugar
-            .desugar_program(vec![command], self.test_proofs)?;
+        let program_desugared = self.proof_state.desugar.desugar_program(
+            vec![command],
+            self.test_proofs,
+            self.seminaive,
+        )?;
 
         let type_info_before = self.proof_state.type_info.clone();
         self.proof_state
@@ -1068,7 +1135,10 @@ impl EGraph {
             // we need to pass in the desugar
             let proofs = self.proof_state.add_proofs(program_desugared);
 
-            let final_desugared = self.proof_state.desugar.desugar_program(proofs, false)?;
+            let final_desugared =
+                self.proof_state
+                    .desugar
+                    .desugar_program(proofs, false, self.seminaive)?;
 
             // revert back to the type info before
             // proofs were added, typecheck again

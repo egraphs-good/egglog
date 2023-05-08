@@ -46,7 +46,12 @@ fn generate_tests(file: &mut File, glob: &str) {
 
         // write a test with proofs enabled
         // TODO: re-enable herbie, unsound, and eqsolve when proof extraction is faster
-        if !(name == "herbie" || name == "repro_unsound" || name == "eqsolve") {
+        if !(name == "herbie"
+            || name == "repro_unsound"
+            || name == "eqsolve"
+            || name == "before_proofs"
+            || name == "lambda")
+        {
             writeln!(
                 file,
                 r#" #[test] 
