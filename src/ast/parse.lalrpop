@@ -93,7 +93,7 @@ Cost: Option<usize> = {
 
 NonLetAction: Action = {
     "(" "set" "(" <f: Ident> <args:Expr*> ")" <v:Expr> ")" => Action::Set ( f, args, v ),
-    "(" "set-no-track" "(" <f: Ident> <args:Expr*> ")" <v:Expr> ")" => Action::SetNoTrack ( f, args, v ),
+    // "(" "set-no-track" "(" <f: Ident> <args:Expr*> ")" <v:Expr> ")" => Action::SetNoTrack ( f, args, v ),
     "(" "delete" "(" <f: Ident> <args:Expr*> ")" ")" => Action::Delete ( f, args),
     "(" "union" <e1:Expr> <e2:Expr> ")" => Action::Union(<>),
     "(" "panic" <msg:String> ")" => Action::Panic(msg),

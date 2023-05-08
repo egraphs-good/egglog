@@ -146,7 +146,7 @@ fn flatten_actions(actions: &Vec<Action>, desugar: &mut Desugar) -> Vec<NormActi
                 assert_ne!(*symbol, added);
                 res.push(NormAction::LetVar(*symbol, added));
             }
-            Action::Set(symbol, exprs, rhs) | Action::SetNoTrack(symbol, exprs, rhs) => {
+            Action::Set(symbol, exprs, rhs) => {
                 let set = NormAction::Set(
                     NormExpr::Call(
                         *symbol,
@@ -309,6 +309,7 @@ fn add_semi_naive_rule(desugar: &mut Desugar, rule: Rule) -> Option<Rule> {
             .head
             .retain_mut(|action| !matches!(action, Action::Let(_, _)));
         log::debug!("Added a semi-naive desugared rule:\n{}", new_rule);
+        //Some(desugar_rule(new_rule, desugar, false))
         Some(new_rule)
     } else {
         None

@@ -253,6 +253,8 @@ impl TypeInfo {
                         && !self.global_types.contains_key(var1)
                         && !self.global_types.contains_key(var2)
                     {
+                        println!("{} {}", var1, var2);
+                        println!("{:?}", let_bound);
                         panic!("ConstrainEq on unbound variables");
                     }
                     bound_in_constraint.push(*var1);

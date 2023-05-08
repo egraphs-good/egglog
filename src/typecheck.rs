@@ -373,7 +373,7 @@ impl<'a> ActionChecker<'a> {
                 self.locals.insert(*v, ty);
                 Ok(())
             }
-            Action::Set(f, args, val) | Action::SetNoTrack(f, args, val) => {
+            Action::Set(f, args, val)  => {
                 let fake_call = Expr::Call(*f, args.clone());
                 let (_, ty) = self.infer_expr(&fake_call)?;
                 let fake_instr = self.instructions.pop().unwrap();
