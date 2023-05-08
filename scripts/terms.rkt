@@ -23,7 +23,7 @@
 
     (ruleset parent)
     (rule ((Parent a b)
-          (Parent b c))
+           (Parent b c))
           ((Parent a c))
           :ruleset parent)
 
@@ -62,20 +62,25 @@
           :ruleset just-add)
     (rule ((= lhs (Add a b))
            (= rhs (Add b a))
+           (Parent a a)
+           (Parent b b)
            (Parent lhs p1)
            (Parent rhs p2)
-           (!= p1 p2)
+           (= 1 (ordering-less p1 p2))
            )
           ;; set lhs parent to rhs parent
           ((Parent p1 p2))
           :ruleset do-union)
 
     (let a (Add (Const 1) (Const 2)))
+    (Parent a a)
+    (Parent (Const 1) (Const 1))
+    (Parent (Const 2) (Const 2))
 
 
     ;; time to run!
     (run-schedule
-      (repeat 1
+      (repeat 10
         (saturate parent-subsume)
         (saturate parent)
         (saturate rebuilding1)

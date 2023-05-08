@@ -164,6 +164,31 @@ struct Ctor {
     map: Arc<MapSort>,
 }
 
+pub(crate) struct TermOrdering {
+    pub i64sort: ArcSort,
+}
+
+impl PrimitiveLike for TermOrdering {
+    fn name(&self) -> Symbol {
+        "ordering-less".into()
+    }
+
+    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
+        match types {
+            [a, b] if a.name() == b.name() => Some(self.i64sort.clone()),
+            _ => None,
+        }
+    }
+
+    fn apply(&self, values: &[Value]) -> Option<Value> {
+        assert_eq!(values.len(), 2);
+        Some(Value {
+            tag: "i64".into(),
+            bits: ((values[0] < values[1]) as i64) as u64,
+        })
+    }
+}
+
 impl PrimitiveLike for Ctor {
     fn name(&self) -> Symbol {
         self.name
