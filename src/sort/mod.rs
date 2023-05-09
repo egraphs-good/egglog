@@ -22,6 +22,10 @@ pub use self::f64::*;
 pub use boolinterval::*;
 mod map;
 pub use map::*;
+mod set;
+pub use set::*;
+mod vec;
+pub use vec::*;
 
 use crate::*;
 
@@ -29,6 +33,33 @@ pub trait Sort: Any + Send + Sync + Debug {
     fn name(&self) -> Symbol;
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static>;
     fn is_eq_sort(&self) -> bool {
+        false
+    }
+
+    // return true if it is a container sort.
+    fn is_container_sort(&self) -> bool {
+        false
+    }
+
+    // return true if it is a container sort that contains ids.
+    // only eq_sort and eq_container_sort need to be canonicalized.
+    fn is_eq_container_sort(&self) -> bool {
+        false
+    }
+
+    // Only eq_container_sort need to implement this method,
+    // which returns a list of ids to be tracked.
+    fn foreach_tracked_values<'a>(&'a self, value: &'a Value, f: Box<dyn FnMut(Value) + 'a>) {
+        let _ = value;
+        let _ = f;
+        unreachable!();
+    }
+
+    // Sort-wise canonicalization. Return true if value is modified.
+    // Only EqSort or containers of EqSort should override.
+    fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
+        debug_assert_eq!(self.name(), value.tag);
+        let _ = unionfind;
         false
     }
 
@@ -55,6 +86,17 @@ impl Sort for EqSort {
 
     fn is_eq_sort(&self) -> bool {
         true
+    }
+
+    fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
+        debug_assert_eq!(self.name(), value.tag);
+        let bits = usize::from(unionfind.find(Id::from(value.bits as usize))) as u64;
+        if bits != value.bits {
+            value.bits = bits;
+            true
+        } else {
+            false
+        }
     }
 
     fn make_expr(&self, _value: Value) -> Expr {

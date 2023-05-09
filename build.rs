@@ -50,7 +50,9 @@ fn generate_tests(file: &mut File, glob: &str) {
             || name == "repro_unsound"
             || name == "eqsolve"
             || name == "repro_rulerunsound"
-            || name == "math_match_limit")
+            || name == "math_match_limit"
+            || name == "before_proofs"
+            || name == "lambda")
         {
             writeln!(
                 file,

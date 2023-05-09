@@ -81,6 +81,7 @@ Schedule: Schedule = {
     "(" "saturate" <Schedule*> ")" => Schedule::Saturate(Box::new(Schedule::Sequence(<>))),
     "(" "seq" <Schedule*> ")" => Schedule::Sequence(<>),
     "(" "repeat" <limit:UNum> <scheds:Schedule*> ")" => Schedule::Repeat(limit, Box::new(Schedule::Sequence(scheds))),
+    "(" "run" <limit:UNum> <until:(":until" <(Fact)*>)?> ")" => Schedule::Run(RunConfig { ruleset: "".into(), limit, until }),
     "(" "run" <ruleset: Ident> <limit:UNum>  <until:(":until" <(Fact)*>)?> ")" => Schedule::Run(RunConfig { ruleset, limit, until }),
     <ident:Ident> => Schedule::Run(RunConfig { ruleset: ident, limit: 1, until: None }),
 }
@@ -92,6 +93,7 @@ Cost: Option<usize> = {
 
 NonLetAction: Action = {
     "(" "set" "(" <f: Ident> <args:Expr*> ")" <v:Expr> ")" => Action::Set ( f, args, v ),
+    "(" "set-no-track" "(" <f: Ident> <args:Expr*> ")" <v:Expr> ")" => Action::SetNoTrack ( f, args, v ),
     "(" "delete" "(" <f: Ident> <args:Expr*> ")" ")" => Action::Delete ( f, args),
     "(" "union" <e1:Expr> <e2:Expr> ")" => Action::Union(<>),
     "(" "panic" <msg:String> ")" => Action::Panic(msg),

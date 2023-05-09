@@ -8,8 +8,7 @@
 (datatype Scheme)
 (datatype Ctx)
 ;; TODO: can't do unit right now
-;; (sort QuantifiedVs (Map String MyUnit))
-(sort QuantifiedVs (Map Ident i64))
+(sort QuantifiedVs (Set Ident))
 
 (function Fresh (Ident i64) Ident)
 (function V (String) Ident)
@@ -65,15 +64,15 @@
 ;; Scheme and Context
 ;;;;;;;;;;;;;;;;;;;;;;
 
-(rule ((= e (TBool)))((ftv e (empty))))
-(rule ((= e (TUnit)))((ftv e (empty))))
-(rule ((= e (TInt)))((ftv e (empty))))
-(rule ((= e (TVar x)))((ftv e (insert (empty) x 1))))
+(rule ((= e (TBool)))((ftv e (set-empty))))
+(rule ((= e (TUnit)))((ftv e (set-empty))))
+(rule ((= e (TInt)))((ftv e (set-empty))))
+(rule ((= e (TVar x)))((ftv e (set-insert (set-empty) x))))
 (rule ((= e (TArr fr to))
        (ftv fr s1)
        (ftv to s2))
       ((ftv e (set-union s1 s2))))
-(rule ((= c (Nil))) ((ftvCtx c (empty))))
+(rule ((= c (Nil))) ((ftvCtx c (set-empty))))
 (rule ((= e (Forall qs t))
        (ftv t fvs))
       ((ftvScheme e (set-diff fvs qs)))) 
@@ -101,11 +100,11 @@
 (function instantiate (Scheme i64) Type :cost 1000)
 
 (rule ((has-qs-demand ctx (TInt)))
-      ((has-qs ctx (TInt) (empty))))
+      ((has-qs ctx (TInt) (set-empty))))
 (rule ((has-qs-demand ctx (TBool)))
-      ((has-qs ctx (TBool) (empty))))
+      ((has-qs ctx (TBool) (set-empty))))
 (rule ((has-qs-demand ctx (TUnit)))
-      ((has-qs ctx (TUnit) (empty))))
+      ((has-qs ctx (TUnit) (set-empty))))
 
 (rule ((has-qs-demand ctx (TArr fr to)))
       ((has-qs-demand ctx fr)
@@ -117,12 +116,12 @@
 
 (rule ((has-qs-demand ctx (TVar x))
        (ftvCtx ctx key-set)
-       (= unused (get key-set x)))
-      ((has-qs ctx (TVar x) (empty))))
+       (set-contains key-set x))
+      ((has-qs ctx (TVar x) (set-empty))))
 (rule ((has-qs-demand ctx (TVar x))
        (ftvCtx ctx key-set)
-       (not-contains key-set x))
-      ((has-qs ctx (TVar x) (insert (empty) x 1))))
+       (set-not-contains key-set x))
+      ((has-qs ctx (TVar x) (set-insert (set-empty) x))))
 
 (rule ((= sc (generalize ctx t)))
       ((has-qs-demand ctx t)))
@@ -137,10 +136,10 @@
 (rewrite (subst-fresh vs (TArr fr to) c) 
          (TArr (subst-fresh vs fr c) (subst-fresh vs to c)))
 (rule ((= otype (subst-fresh vs (TVar s) c))
-       (= unused (get vs s)))
+       (set-contains vs s))
       ((union otype (TVar (Fresh s c)))))
 (rule ((= otype (subst-fresh vs (TVar s) c))
-       (not-contains vs s))
+       (set-not-contains vs s))
       ((union otype (TVar s))))
 
 (rewrite (instantiate (Forall vs t) c)
@@ -177,7 +176,7 @@
 (rewrite 
   (typeof ctx (Abs x e) c)
   (TArr (TVar (Fresh x c)) 
-        (typeof (Cons x (Forall (empty) (TVar (Fresh x c)))
+        (typeof (Cons x (Forall (set-empty) (TVar (Fresh x c)))
                       ctx)
                 e cc))
     :when ((= cc (+ c 1))))

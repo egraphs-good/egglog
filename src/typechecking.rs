@@ -48,6 +48,8 @@ impl Default for TypeInfo {
         res.add_sort(IntervalSort::new("Interval".into()));
         res.add_sort(BoolIntervalSort::new("BooleanInterval".into()));
         res.presorts.insert("Map".into(), MapSort::make_sort);
+        res.presorts.insert("Set".into(), SetSort::make_sort);
+        res.presorts.insert("Vec".into(), SetSort::make_sort);
         res
     }
 }
