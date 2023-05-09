@@ -16,7 +16,7 @@ wasm-bindgen = ["instant/wasm-bindgen"]
 hashbrown = {version = "0.13", features = ["raw"]}
 indexmap = "1.9"
 instant = "0.1"
-log = "0.4"
+log = {version = "0.4", features  = ["release_max_level_off"] }
 rustc-hash = "1.1"
 symbol_table = {git = "https://github.com/mwillsey/symbol_table", rev = "acddcf8938d1b4ed2fce048c9d83c30203d404b9", features = ["global"]}
 thiserror = "1"
@@ -26,8 +26,12 @@ lazy_static = "1.4"
 num-integer = "0.1.45"
 num-rational = "0.4.1"
 num-traits = "0.2.15"
+num = "0.4.0"
 smallvec = "1.10"
-symbolic_expressions = {git = "https://github.com/oflatt/symbolic-expressions", rev = "4c0ea5ca008f972450b2af72387e64d2c1c6a791"}
+intervals-good = { git = "https://github.com/oflatt/intervals-good", rev = "a406785945400a8d15928da533a0766d250e34e3" }
+rug = { version = "1.16.0", features = ["num-traits"]}
+ordered-float = "3.4.0"
+symbolic_expressions = { git = "https://github.com/oflatt/symbolic-expressions", rev = "4c0ea5ca008f972450b2af72387e64d2c1c6a791" }
 
 lalrpop-util = {version = "0.19.8", features = ["lexer"]}
 regex = "1"
@@ -36,7 +40,7 @@ regex = "1"
 clap = {version = "4", features = ["derive"], optional = true}
 env_logger = {version = "0.10", optional = true}
 
-ordered-float = {version = "3.4"}
+
 
 [build-dependencies]
 glob = "0.3.1"

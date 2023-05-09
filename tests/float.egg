@@ -1,0 +1,23 @@
+(datatype Math
+    (Num f64)
+    (Add Math Math)
+    (Div Math Math)
+    (Ln Math)
+    (Sqrt Math)
+    
+    (Sin Math)
+    (Cos Math))
+
+
+(rewrite (Sqrt (Num n)) (Num (sqrt n)))
+(rewrite (Ln (Num n)) (Num (ln n)))
+
+(define sqrt-neg (Sqrt (Num -2.0)))
+(define ln-neg (Ln (Num -1.0)))
+(define sqrt-4 (Sqrt (Num 4.0)))
+
+(run 2)
+
+
+(check (= sqrt-neg ln-neg))
+(check (= sqrt-4 (Num 2.0)))

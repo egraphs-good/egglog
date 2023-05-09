@@ -1,0 +1,305 @@
+;; Implements part of the simplification layer of herbie in egg-smol🫡
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; Datatypes
+
+(datatype Math
+  ; Ground terms
+  (Num Rational)
+  (Var String)
+
+  ; Custom ops
+  (Unary String Math)
+  (Binary String Math Math)
+  (PI)
+  (E)
+
+  ; Constant-folding ops
+  (Add Math Math)
+  (Sub Math Math)
+  (Mul Math Math)
+  (Div Math Math)
+  (Pow Math Math)
+  (Neg Math)
+  (Sqrt Math)
+  (Cbrt Math) ; cube root
+  (Fabs Math)
+  (Ceil Math)
+  (Floor Math)
+  (Round Math)
+  (Log Math)
+  (Exp Math)
+  (If Math Math Math)
+  (Fma Math Math Math)
+  (Sin Math)
+  (Cos Math)
+  (Tan Math)
+  (Atan Math)
+  (Atan2 Math Math)
+  (Asin Math)
+  (Acos Math)
+  (Hypot Math Math)
+  (Expm1 Math)
+  (Log1p Math)
+  )
+
+;; shorthands- must be added to the exclude list of extraction
+(define r-zero (rational "0" "1"))
+(define r-one  (rational "1" "1"))
+(define r-two  (rational "2" "1"))
+(define r-three (rational "3" "1"))
+(define r-neg-one (rational "-1" "1"))
+(define zero (Num r-zero) :cost 10000000)
+(define one  (Num r-one) :cost 10000000)
+(define two  (Num r-two) :cost 10000000)
+(define three (Num r-three) :cost 10000000)
+(define neg-one (Neg one) :cost 10000000)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; Analyses
+;; --------
+;; This example has three analyses:
+;; an interval analysis consisting of a hi and lo component
+;; and a non-zero analysis.
+;; The non-zero analysis is built off the interval analysis (in order to prove
+;; that rewrites are sound, even if some parts of an expr can't be const-evaled)
+
+; TODO: unbounded intervals?
+(function hi (Math) Rational :merge (min old new))
+(function lo (Math) Rational :merge (max old new))
+;; universe is a hack so we can quantify over it
+(relation universe (Math))
+(relation non-zero (Math))
+(relation non-negative (Math))
+(relation neq (Math Math))
+
+;; First, constant folding!
+;; We don't need an explicit constant folding analysis, we can just union
+;; with nums when we can
+
+; Cases
+(rewrite (Add (Num a) (Num b)) (Num (+ a b)))
+(rewrite (Sub (Num a) (Num b)) (Num (- a b)))
+(rewrite (Mul (Num a) (Num b)) (Num (* a b)))
+(rewrite (Div (Num a) (Num b)) (Num (/ a b)))
+(rewrite (Pow (Num a) (Num b)) (Num (pow a b)))
+(rewrite (Neg (Num a)) (Num (neg a)))
+;; TODO unimplemented
+;; (rewrite (Sqrt (Num a)) (Num res) :when ((= res (sqrt a))))
+;; (rewrite (Cbrt (Num a)) (Num res) :when ((= res (cbrt a))))
+
+;; To check if something is zero, we check that zero is not contained in the
+;; interval. There are two possible (overlapping!) cases:
+;; - There exists a lo interval, in which case it must be larger than 0
+;; - There exists a hi interval, in which case it must be smaller than 0
+;; This assumes that intervals are well-formed: lo <= hi at all times.
+(rule ((= l (lo e))
+       (> l r-zero))
+      ((non-zero e)))
+(rule ((= h (hi e))
+       (< h r-zero))
+      ((non-zero e)))
+
+(rule ((= l (lo e))
+       (>= l r-zero))
+      ((non-negative e)))
+
+
+(rule ((= e (Num ve)))
+      ((set (lo e) ve)
+       (set (hi e) ve)))
+
+
+
+; TODO: Log
+
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Not equals analysis
+
+(rule ((= t1 (Add a b))
+       (= lob (lo b))
+       (> lob r-zero))
+      ((neq (Add a b) a)))
+
+
+;; UNIVERSE
+
+(rule ((= t (Num a)))
+      ((universe t)))
+(rule ((= t (Var a)))
+      ((universe t)))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;
+;; Rewrites
+;; --------
+;; These rewrites were compiled from src/syntax/rules.rkt in the herbie repo,
+;; using all rewrites in the `simplify` rewrite group.
+
+(add-ruleset analysis)
+(clear-rules)
+
+
+
+;; Commutativity
+(rewrite (Add a b) (Add b a))
+(rewrite (Mul a b) (Mul b a))
+
+
+;; Counting
+(rewrite (Add x x) (Mul two x))
+
+;; Distributivity
+(rewrite (Mul a (Add b c))         (Add (Mul a b) (Mul a c)))
+(rewrite (Add (Mul a b) (Mul a c)) (Mul a (Add b c)))
+(rewrite (Add (Mul b a) (Mul c a)) (Mul a (Add b c)))
+(rewrite (Add (Mul b a) a)         (Mul (Add b one) a))
+
+
+(rewrite (Sub a (Mul (Neg b) c)) (Add a (Mul b c)))
+(rewrite (Sub a (Mul b c))       (Add a (Mul (Neg b) c)))
+
+;; Difference of squares
+(rewrite (Mul (Mul a b) (Mul a b))                           (Mul (Mul a a) (Mul b b)))
+(rewrite (Mul (Mul a a) (Mul b b))                           (Mul (Mul a b) (Mul a b)))
+(rewrite (Sub (Mul a a) (Mul b b))                           (Mul (Add a b) (Sub a b)))
+
+
+
+;; Identity
+;; This isn't subsumed by const folding since this can return results
+;; even if we can't evaluate a precise value for x
+ 
+(rewrite (Sub a b) (Add a (Neg b)))
+(rewrite (Sub a b) (Neg (Sub b a)))
+(rewrite (Add a (Neg b)) (Sub a b))
+(rewrite (Neg x) (Sub zero x))
+(rewrite (Neg x) (Mul neg-one x))
+
+
+(rule ((universe t))
+      ((union t (Mul one t))))
+
+;; Fractions
+;; c is non zero so this is safe
+(rewrite (Div (Sub a b) c)         (Sub (Div a c) (Div b c)))
+;; c*d is nonzero => c and d are nonzero
+(rewrite (Div (Mul a b) (Mul c d)) (Mul (Div a c) (Div b d)))
+
+
+
+;; Powers
+
+(rule ((universe a))
+      ((union (Pow a one) a)))
+
+
+;;flip3--
+;; demand
+
+
+(rewrite (Sub a b)
+         (Div (Sub (Pow a three) (Pow b three))
+              (Add (Mul a a) (Add (Mul b b) (Mul a b))))
+         :when ((non-zero b)))
+(rewrite (Sub a b)
+         (Div (Sub (Pow a three) (Pow b three))
+              (Add (Mul a a) (Add (Mul b b) (Mul a b))))
+         :when ((neq a b)))
+
+
+
+
+
+;; x zero => y positive
+(rewrite (Sqrt (Pow x y))
+         (Pow x (Div y two)) :when ((non-negative x)))
+
+
+(rule ((universe t)
+       (= lox (lo t))
+       (>= lox r-zero))
+      ((union t (Mul (Sqrt t) (Sqrt t)))))
+
+
+;; cubes transform
+
+(rewrite (Cbrt (Mul x y))
+         (Mul (Cbrt x) (Cbrt y)))
+
+(rule ((= t1 (Num a))
+       (= t2 (Num b))
+       (= t1 t2)
+       (!= a b))
+      ((panic "bla")))
+
+(rule ((= (Var a) (Add (Var a) (Var a))))
+      ((panic "bla2")))
+
+
+(add-ruleset rules)
+(clear-rules)
+
+;; Herbie then adds expressions here and runs them
+
+(define nine (Num (rational "9" "1")) :cost 10000)
+
+(define expr (Mul nine (Mul (Var "x") (Var "x"))) :cost 100000)
+
+;;(define e (Add one zero))
+(load-ruleset analysis)
+(run 2)
+(clear-rules)
+
+(load-ruleset rules)
+(run 1)
+(clear-rules)
+
+
+(load-ruleset analysis)
+(run 2)
+(clear-rules)
+
+(load-ruleset rules)
+(run 1)
+(clear-rules)
+
+
+(load-ruleset analysis)
+(run 2)
+(clear-rules)
+
+(load-ruleset rules)
+(run 1)
+(clear-rules)
+
+(load-ruleset analysis)
+(run 2)
+(clear-rules)
+
+(load-ruleset rules)
+(run 1)
+(clear-rules)
+
+(load-ruleset analysis)
+(run 2)
+(clear-rules)
+
+
+(load-ruleset rules)
+(run 1)
+(clear-rules)
+
+
+
+
+
+(define goal (Pow (Mul three (Var "x")) two))
+
+
+(extract :variants 10 expr)
+(extract :variants 10 goal)

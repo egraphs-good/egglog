@@ -2,6 +2,18 @@
 
 (require racket/runtime-path)
 
+;; timeout in seconds
+(define TIMEOUT 5)
+(define ITERATIONS 1)
+(define RANDOM-SAMPLE-FACTOR 1)
+(define MUST-NOT-STRINGS `())
+(define TARGET-STRINGS `("Intersect failed"))
+(define DONT-REMOVE (list->set `(set-option check keep define)))
+
+
+(define should-transform-rewrites
+  (make-parameter #f))
+
 (define (read-lines port)
   (define line (read port))
   (if (eof-object? line)
@@ -12,21 +24,24 @@
 (define (remove-at n lst)
   (define-values (head tail) (split-at lst n))
   (define line (car tail))
-  (if (and (list? line)
-           (or (equal? (first line) 'check)
-               (equal? (first line) 'keep)))
-      lst
-      (append head (cdr tail))))
+  (cond
+    [(and (list? line)
+          (set-member? DONT-REMOVE (first line)))
+      lst]
+    [(should-transform-rewrites)
+     (define new-line
+      (match line
+        [`(rewrite ,lhs ,rhs ,whatever ...)
+          `(rule (,lhs) (,rhs) ,@whatever)]
+        [else line]))
+     (append head (cons new-line (cdr tail)))
+    ]
+    [else
+      (append head (cdr tail))]))
 
 (define-runtime-path egglog-binary
   "../target/release/egg-smol")
 
-;; timeout in seconds
-(define TIMEOUT 5)
-(define ITERATIONS 1)
-(define RANDOM-SAMPLE-FACTOR 1)
-(define MUST-NOT-STRINGS `())
-(define TARGET-STRINGS `("invalid default for"))
 
 (define (desugar line)
   (match line
@@ -40,10 +55,8 @@
   (define-values (egglog-process egglog-output egglog-in err)
     (subprocess (current-output-port) #f #f egglog-binary))
 
-  (displayln "(" egglog-in)
   (for ([line program])
     (writeln (desugar line) egglog-in))
-  (displayln ")" egglog-in)
   (close-output-port egglog-in)
 
   (when (not (sync/timeout TIMEOUT egglog-process))
@@ -51,7 +64,7 @@
   (subprocess-kill egglog-process #t)
   (displayln "checking output")
   (flush-output)
-  (define err-str (read-string 800 err))
+  (define err-str (read-string 10000 err))
   (close-input-port err)
   (define still-unsound (and (string? err-str)
                              (for/and ([must-not-string MUST-NOT-STRINGS])
@@ -73,11 +86,13 @@
     [else
      (define removed (remove-at index program))
      (cond
-       [(equal? (length removed) (length program))
+       [(and (equal? (length removed) (length program))
+              (desired-error? removed))
         (min-program removed (+ index 1))]
        [(desired-error? removed)
         (min-program removed index)]
        [else (min-program program (+ index 1))])]))
+
 
 (define (remove-random-lines program n)
   (cond
@@ -105,7 +120,7 @@
      (define prog (remove-random-lines program num))
      (if (desired-error? prog)
          (min-program-greedy prog num)
-         (min-program-greedy program (* num 2/3)))]))
+         (min-program-greedy program (* num 4/5)))]))
 
 (define (random-and-sequential program)
   (define binary (min-program-greedy program (/ (length program) 2)))
@@ -117,15 +132,31 @@
                      (random-and-sequential program)))
   (first (sort programs (lambda (a b) (< (length a) (length b))))))
 
+(define (run-cmd cmd args)
+  (define-values (sp out in err)
+                 (apply subprocess #f #f #f cmd args))
+  (printf "stdout:\n~a" (port->string out))
+  (printf "stderr:\n~a" (port->string err))
+  (close-input-port out)
+  (close-output-port in)
+  (close-input-port err)
+  (subprocess-wait sp))
+
 (define (minimize port-in port-out)
+  ;; TODO how to not use absolute path here?
+  (run-cmd "/Users/oflatt/.cargo/bin/cargo" (list  "build" "--release"))
+
   (define egglog (read-lines port-in))
-  (pretty-print egglog)
 
   (when (not (desired-error? egglog))
     (error "Original program did not have error"))
 
   (define minimized (min-iterations egglog))
-  (for ([line minimized])
+  (displayln "Attempting to transform rewrites...")
+  (define transformed
+    (parameterize ([should-transform-rewrites #t])
+      (min-iterations minimized)))
+  (for ([line transformed])
     (writeln (desugar line) port-out)))
 
 

@@ -1,13 +1,16 @@
 use crate::*;
 use ordered_float::OrderedFloat;
-
 use std::fmt::Display;
+use std::hash::Hash;
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
+pub type F64 = OrderedFloat<f64>;
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Hash, Clone)]
 pub enum Literal {
     Int(i64),
     F64(OrderedFloat<f64>),
     String(Symbol),
+    Bool(bool),
     Unit,
 }
 
@@ -39,6 +42,7 @@ impl Display for Literal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self {
             Literal::Int(i) => Display::fmt(i, f),
+            Literal::Bool(b) => Display::fmt(b, f),
             Literal::F64(n) => {
                 // need to display with decimal if there is none
                 let str = n.to_string();
@@ -54,7 +58,7 @@ impl Display for Literal {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Hash, Clone)]
 pub enum Expr {
     Lit(Literal),
     Var(Symbol),
@@ -91,6 +95,10 @@ impl NormExpr {
 }
 
 impl Expr {
+    pub fn var(name: impl Into<Symbol>) -> Self {
+        Expr::Var(name.into())
+    }
+
     pub fn call(op: impl Into<Symbol>, children: impl IntoIterator<Item = Self>) -> Self {
         Self::Call(op.into(), children.into_iter().collect())
     }

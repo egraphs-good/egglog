@@ -43,7 +43,10 @@ impl Default for TypeInfo {
         res.add_sort(StringSort::new("String".into()));
         res.add_sort(I64Sort::new("i64".into()));
         res.add_sort(F64Sort::new("f64".into()));
+        res.add_sort(BoolSort::new("bool".into()));
         res.add_sort(RationalSort::new("Rational".into()));
+        res.add_sort(IntervalSort::new("Interval".into()));
+        res.add_sort(BoolIntervalSort::new("BooleanInterval".into()));
         res.presorts.insert("Map".into(), MapSort::make_sort);
         res.presorts.insert("Set".into(), SetSort::make_sort);
         res.presorts.insert("Vec".into(), SetSort::make_sort);
@@ -58,6 +61,7 @@ impl TypeInfo {
         match lit {
             Literal::Int(_) => self.sorts.get(&Symbol::from("i64")),
             Literal::F64(_) => self.sorts.get(&Symbol::from("f64")),
+            Literal::Bool(_) => self.sorts.get(&Symbol::from("bool")),
             Literal::String(_) => self.sorts.get(&Symbol::from("String")),
             Literal::Unit => self.sorts.get(&Symbol::from("Unit")),
         }
@@ -358,14 +362,22 @@ impl TypeInfo {
                 let func_type = self.typecheck_expr(ctx, expr, true)?.output;
                 let other_type = self.lookup(ctx, *other)?;
                 if func_type.name() != other_type.name() {
-                    return Err(TypeError::TypeMismatch(func_type, other_type));
+                    return Err(TypeError::TypeMismatch(
+                        func_type,
+                        other_type,
+                        other.to_string(),
+                    ));
                 }
             }
             NormAction::Union(var1, var2) => {
                 let var1_type = self.lookup(ctx, *var1)?;
                 let var2_type = self.lookup(ctx, *var2)?;
                 if var1_type.name() != var2_type.name() {
-                    return Err(TypeError::TypeMismatch(var1_type, var2_type));
+                    return Err(TypeError::TypeMismatch(
+                        var1_type,
+                        var2_type,
+                        var2.to_string(),
+                    ));
                 }
             }
             NormAction::LetVar(var1, var2) => {
@@ -388,7 +400,11 @@ impl TypeInfo {
                     .insert(*var, expr_type.output.clone())
                 {
                     if expr_type.output.name() != existing.name() {
-                        return Err(TypeError::TypeMismatch(expr_type.output, existing));
+                        return Err(TypeError::TypeMismatch(
+                            existing,
+                            expr_type.output,
+                            expr.to_string(),
+                        ));
                     }
                 }
             }
@@ -401,7 +417,7 @@ impl TypeInfo {
                     .insert(*var, lit_type.clone())
                 {
                     if lit_type.name() != existing.name() {
-                        return Err(TypeError::TypeMismatch(lit_type, existing));
+                        return Err(TypeError::TypeMismatch(lit_type, existing, var.to_string()));
                     }
                 }
             }
@@ -411,7 +427,7 @@ impl TypeInfo {
                 if let Ok(v1type) = l1 {
                     if let Ok(v2type) = l2 {
                         if v1type.name() != v2type.name() {
-                            return Err(TypeError::TypeMismatch(v1type, v2type));
+                            return Err(TypeError::TypeMismatch(v1type, v2type, var2.to_string()));
                         }
                     } else {
                         self.local_types
@@ -568,8 +584,8 @@ pub enum TypeError {
     SortAlreadyBound(Symbol),
     #[error("Primitive {0} already declared.")]
     PrimitiveAlreadyBound(Symbol),
-    #[error("Type mismatch: expected {}, actual {}", .0.name(), .1.name())]
-    TypeMismatch(ArcSort, ArcSort),
+    #[error("Type mismatch: expected {}, actual {} in {}", .0.name(), .1.name(), .2)]
+    TypeMismatch(ArcSort, ArcSort, String),
     #[error("Presort {0} not found.")]
     PresortNotFound(Symbol),
     #[error("Cannot type a variable as unit: {0}")]

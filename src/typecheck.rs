@@ -761,6 +761,7 @@ impl EGraph {
                 Instruction::Literal(lit) => match lit {
                     Literal::Int(i) => stack.push(Value::from(*i)),
                     Literal::F64(f) => stack.push(Value::from(*f)),
+                    Literal::Bool(b) => stack.push(Value::from(*b)),
                     Literal::String(s) => stack.push(Value::from(*s)),
                     Literal::Unit => stack.push(Value::unit()),
                 },

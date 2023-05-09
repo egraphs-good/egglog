@@ -12,6 +12,7 @@ mod value;
 
 use hashbrown::hash_map::Entry;
 use index::ColumnIndex;
+use indexmap::map::Entry as IEntry;
 use instant::{Duration, Instant};
 use sort::*;
 use thiserror::Error;
@@ -26,7 +27,7 @@ use typechecking::{TypeInfo, UNIT_SYM};
 use std::fmt::{Formatter, Write};
 use std::fs::File;
 use std::hash::Hash;
-use std::io::Read;
+use std::io::{self, Read, Write as _};
 use std::iter::once;
 use std::mem;
 use std::ops::{Deref, Range};
@@ -155,6 +156,7 @@ pub struct EGraph {
     unionfind: UnionFind,
     pub(crate) proof_state: ProofState,
     functions: HashMap<Symbol, Function>,
+    dont_extract: HashSet<Symbol>,
     rulesets: HashMap<Symbol, HashMap<Symbol, Rule>>,
     proofs_enabled: bool,
     timestamp: u32,
@@ -186,6 +188,7 @@ impl Default for EGraph {
             unionfind: Default::default(),
             functions: Default::default(),
             rulesets: Default::default(),
+            dont_extract: Default::default(),
             proof_state: ProofState::default(),
             match_limit: usize::MAX,
             node_limit: usize::MAX,
@@ -398,6 +401,7 @@ impl EGraph {
         match lit {
             Literal::Int(i) => i.store(&self.proof_state.type_info.get_sort()).unwrap(),
             Literal::F64(f) => f.store(&self.proof_state.type_info.get_sort()).unwrap(),
+            Literal::Bool(b) => b.store(&self.proof_state.type_info.get_sort()).unwrap(),
             Literal::String(s) => s.store(&self.proof_state.type_info.get_sort()).unwrap(),
             Literal::Unit => ().store(&self.proof_state.type_info.get_sort()).unwrap(),
         }
@@ -467,7 +471,7 @@ impl EGraph {
             NormSchedule::Repeat(limit, sched) => {
                 let mut report = RunReport::default();
                 for _i in 0..*limit {
-                    let rec = report.union(&self.run_schedule(sched));
+                    let rec = self.run_schedule(sched);
                     report = report.union(&rec);
                     if !rec.updated {
                         break;
@@ -506,6 +510,10 @@ impl EGraph {
 
         // we rebuild on every command so we are in a valid state at this point
         for i in 0..*limit {
+            if self.num_tuples() > self.node_limit {
+                break;
+            }
+
             if let Some(facts) = until {
                 if self.check_facts(facts).is_ok() {
                     log::info!(
@@ -528,15 +536,6 @@ impl EGraph {
             self.timestamp += 1;
             if !subreport.updated {
                 log::info!("Breaking early at iteration {}!", i);
-                break;
-            }
-
-            if self.num_tuples() > self.node_limit {
-                log::warn!(
-                    "Node limit reached at iteration {}, {} nodes. Stopping!",
-                    i,
-                    self.num_tuples()
-                );
                 break;
             }
         }
@@ -587,6 +586,9 @@ impl EGraph {
         let search_start = Instant::now();
         let mut searched = vec![];
         for (name, rule) in copy_rules.iter() {
+            if self.num_tuples() > self.node_limit {
+                break;
+            }
             let mut all_values = vec![];
             if rule.banned_until <= iteration {
                 let mut fuel = safe_shl(self.match_limit, rule.times_banned);
@@ -658,6 +660,9 @@ impl EGraph {
             }
 
             rule.apply_time += rule_apply_start.elapsed();
+            if self.num_tuples() > self.node_limit {
+                break;
+            }
         }
         self.rulesets.insert(ruleset, rules);
         let apply_elapsed = apply_start.elapsed();
@@ -720,7 +725,7 @@ impl EGraph {
         Ok(())
     }
 
-    fn eval_expr(
+    pub fn eval_expr(
         &mut self,
         expr: &Expr,
         expected_type: Option<ArcSort>,
@@ -842,12 +847,14 @@ impl EGraph {
                     if variants > 0 {
                         let line = "\n    ";
                         let v_exprs = ListDisplay(&report.variants, line);
-                        write!(msg, "\nVariants of {}:{line}{v_exprs}", report.expr).unwrap();
-                    }
-                    self.extract_report = Some(report);
-                    msg
+                        println!("({})", v_exprs)
+                    } else {
+                        println!("({})", report.expr)
+                    };
+                    io::stdout().flush().unwrap();
+                    msg.into()
                 } else {
-                    "Skipping extraction.".into()
+                    "Skipping Extraction".into()
                 }
             }
             NCommand::Check(facts) => {
@@ -1069,6 +1076,7 @@ impl EGraph {
             },
             true,
         )?;
+        self.dont_extract.insert(name);
         let f = self.functions.get_mut(&name).unwrap();
         f.insert(&[], value, self.timestamp);
         Ok(sort)
@@ -1244,6 +1252,8 @@ pub enum Error {
     CheckError(Vec<NormFact>),
     #[error("Evaluating primitive {0:?} failed. ({0:?} {:?})", ListDebug(.1, " "))]
     PrimitiveError(Primitive, Vec<Value>),
+    #[error("{0}, {1}")]
+    CustomError(Box<Error>, String),
     #[error("Illegal merge attempted for function {0}, {1:?} != {2:?}")]
     MergeError(Symbol, Value, Value),
     #[error("Tried to pop too much")]
