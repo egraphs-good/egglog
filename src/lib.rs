@@ -2,6 +2,7 @@ pub mod ast;
 mod extract;
 mod function;
 mod gj;
+pub mod graph;
 mod proofs;
 pub mod sort;
 mod typecheck;
@@ -10,6 +11,8 @@ mod unionfind;
 pub mod util;
 mod value;
 
+use graph::{Graph};
+use graphviz_rust::printer::DotPrinter;
 use hashbrown::hash_map::Entry;
 use index::ColumnIndex;
 use instant::{Duration, Instant};
@@ -26,7 +29,7 @@ use typechecking::{TypeInfo, UNIT_SYM};
 use std::fmt::{Formatter, Write};
 use std::fs::File;
 use std::hash::Hash;
-use std::io::Read;
+use std::io::{Read};
 use std::iter::once;
 use std::mem;
 use std::ops::{Deref, Range};
@@ -1144,7 +1147,7 @@ impl EGraph {
                 msgs.push(msg);
             }
         }
-
+        self.save_graph()?;
         Ok(msgs)
     }
 
@@ -1183,6 +1186,81 @@ impl EGraph {
     // Gets the last run report and returns it, if the last command saved it.
     pub fn get_run_report(&self) -> &Option<RunReport> {
         &self.run_report
+    }
+    // Saves the egraph as a SVG file in `graph.svg`
+    fn save_graph(&self) -> Result<String, Error> {
+        let graph = self.to_graphviz();
+        std::io::Write::write_all(
+            &mut File::create("graph.dot").expect("df"),
+            graph
+                .print(&mut graphviz_rust::printer::PrinterContext::default())
+                .as_bytes(),
+        )
+        .expect("write");
+
+        graphviz_rust::exec(
+            graph,
+            &mut graphviz_rust::printer::PrinterContext::default(),
+            vec![
+                graphviz_rust::cmd::Format::Svg.into(),
+                graphviz_rust::cmd::CommandArg::Output("graph.svg".to_string()),
+            ],
+        )
+        .map_err(|e| Error::IoError(PathBuf::from(r"graph.svg"), e))
+    }
+
+    fn to_graphviz(&self) -> graphviz_rust::dot_structures::Graph {
+        let graph = self.to_graph();
+        // Print debug
+        // let mut w = File::create("out.log").unwrap();
+        println!("{:#?}", graph);
+        graph.to_graphviz()
+    }
+
+    fn to_graph(&self) -> Graph {
+        let mut prim_outputs = vec![];
+        let mut eclasses = std::collections::HashMap::new();
+        for (_id, function) in self.functions.iter() {
+            let name = function.decl.name.to_string();
+            for (input, output) in function.nodes.vals.iter() {
+                let input_values = input.data();
+                let output_value = output.value;
+
+                let fn_call = graph::FnCall(
+                    graph::Fn { name: name.clone() },
+                    input_values
+                        .into_iter()
+                        .map(|v| self.arg_from_value(*v))
+                        .collect(),
+                );
+
+                match self.arg_from_value(output_value) {
+                    graph::Arg::Eq(parent_id) => {
+                        eclasses.entry(parent_id).or_insert(vec![]).push(fn_call);
+                    }
+                    graph::Arg::Prim(prim_value) => {
+                        prim_outputs.push(graph::PrimOutput(fn_call, prim_value))
+                    }
+                }
+            }
+        }
+        Graph {
+            prim_outputs,
+            eclasses,
+        }
+    }
+
+    fn arg_from_value(&self, value: Value) -> graph::Arg {
+        let sort = self.get_sort(&value).unwrap();
+        if sort.is_eq_sort() {
+            let parent_id: usize = self.unionfind.find(Id::from(value.bits as usize)).into();
+            let parent_id_string = format!("{}", parent_id);
+            graph::Arg::Eq(parent_id_string)
+        } else {
+            let expr = sort.make_expr(value);
+            let prim_value = graph::from_expr(&expr).expect("wrong");
+            graph::Arg::Prim(prim_value)
+        }
     }
 }
 

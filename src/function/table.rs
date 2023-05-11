@@ -51,7 +51,7 @@ pub(crate) struct Table {
     max_ts: u32,
     n_stale: usize,
     table: RawTable<TableOffset>,
-    vals: Vec<(Input, TupleOutput)>,
+    pub(crate) vals: Vec<(Input, TupleOutput)>,
 }
 
 /// Used for the RawTable probe sequence.
@@ -313,7 +313,7 @@ fn hash_values(vs: &[Value]) -> u64 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Input {
+pub(crate) struct Input {
     data: ValueVec,
     /// The timestamp at which the given input became "stale"
     stale_at: u32,
@@ -327,7 +327,7 @@ impl Input {
         }
     }
 
-    fn data(&self) -> &[Value] {
+    pub(crate) fn data(&self) -> &[Value] {
         self.data.as_slice()
     }
 
