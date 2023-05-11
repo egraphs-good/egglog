@@ -1222,6 +1222,10 @@ impl EGraph {
         let mut eclasses = std::collections::HashMap::new();
         for (_id, function) in self.functions.iter() {
             let name = function.decl.name.to_string();
+            // Skip generated names
+            if name.ends_with("___") {
+                continue;
+            }
             for (input, output) in function.nodes.vals.iter() {
                 let input_values = input.data();
                 let output_value = output.value;
