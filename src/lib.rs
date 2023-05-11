@@ -1219,7 +1219,7 @@ impl EGraph {
 
     fn to_graph(&self) -> Graph {
         let mut prim_outputs = vec![];
-        let mut eclasses = std::collections::HashMap::new();
+        let mut eclasses = HashMap::default();
         for (_id, function) in self.functions.iter() {
             let name = function.decl.name.to_string();
             // Skip generated names
