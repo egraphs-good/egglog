@@ -1187,6 +1187,12 @@ impl EGraph {
     pub fn get_run_report(&self) -> &Option<RunReport> {
         &self.run_report
     }
+
+    pub fn to_graphviz_string(&self) -> String {
+        let graph = self.to_graphviz();
+        graph
+            .print(&mut graphviz_rust::printer::PrinterContext::default())
+    }
     // Saves the egraph as a SVG file in `graph.svg`
     fn save_graph(&self) -> Result<String, Error> {
         let graph = self.to_graphviz();
@@ -1209,15 +1215,15 @@ impl EGraph {
         .map_err(|e| Error::IoError(PathBuf::from(r"graph.svg"), e))
     }
 
-    fn to_graphviz(&self) -> graphviz_rust::dot_structures::Graph {
+    pub fn to_graphviz(&self) -> graphviz_rust::dot_structures::Graph {
         let graph = self.to_graph();
         // Print debug
         // let mut w = File::create("out.log").unwrap();
-        println!("{:#?}", graph);
+        // println!("{:#?}", graph);
         graph.to_graphviz()
     }
 
-    fn to_graph(&self) -> Graph {
+    pub fn to_graph(&self) -> Graph {
         let mut prim_outputs = vec![];
         let mut eclasses = HashMap::default();
         for (_id, function) in self.functions.iter() {
