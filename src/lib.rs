@@ -1223,7 +1223,7 @@ impl EGraph {
         graph.to_graphviz()
     }
 
-    pub fn to_graph(&self) -> Graph {
+    fn to_graph(&self) -> Graph {
         let mut prim_outputs = vec![];
         let mut eclasses = HashMap::default();
         for (_id, function) in self.functions.iter() {
