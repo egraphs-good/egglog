@@ -1225,7 +1225,7 @@ impl EGraph {
 
     fn to_graph(&self) -> Graph {
         let mut prim_outputs = vec![];
-        let mut eclasses = HashMap::default();
+        let mut eclasses = HashMap::<String, Vec<graph::FnCall>>::default();
         for (_id, function) in self.functions.iter() {
             let name = function.decl.name.to_string();
             // Skip generated names
@@ -1239,14 +1239,14 @@ impl EGraph {
                 let fn_call = graph::FnCall(
                     graph::Fn { name: name.clone() },
                     input_values
-                        .into_iter()
+                        .iter()
                         .map(|v| self.arg_from_value(*v))
                         .collect(),
                 );
 
                 match self.arg_from_value(output_value) {
                     graph::Arg::Eq(parent_id) => {
-                        eclasses.entry(parent_id).or_insert(vec![]).push(fn_call);
+                        eclasses.entry(parent_id).or_default().push(fn_call);
                     }
                     graph::Arg::Prim(prim_value) => {
                         prim_outputs.push(graph::PrimOutput(fn_call, prim_value))

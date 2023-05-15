@@ -67,7 +67,7 @@ fn eclass_to_graphviz(
     id_gen: &mut NodeIDGenerator,
 ) -> Vec<graphviz_rust::dot_structures::Stmt> {
     let mut stmts: Vec<graphviz_rust::dot_structures::Stmt> = fn_calls
-        .into_iter()
+        .iter()
         .enumerate()
         .flat_map(|(index, fn_call)| {
             fn_call
@@ -92,7 +92,7 @@ fn eclass_to_graphviz(
         graphviz_rust::dot_structures::Subgraph {
             id: graphviz_rust::dot_structures::Id::Plain(eclass_cluster_name(eclass_id)),
             stmts: fn_calls
-                .into_iter()
+                .iter()
                 .enumerate()
                 .map(|(index, fn_call)| {
                     graphviz_rust::dot_structures::Stmt::Node(
