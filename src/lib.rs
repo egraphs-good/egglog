@@ -11,7 +11,7 @@ mod unionfind;
 pub mod util;
 mod value;
 
-use graph::{Graph};
+use graph::Graph;
 use graphviz_rust::printer::DotPrinter;
 use hashbrown::hash_map::Entry;
 use index::ColumnIndex;
@@ -29,7 +29,7 @@ use typechecking::{TypeInfo, UNIT_SYM};
 use std::fmt::{Formatter, Write};
 use std::fs::File;
 use std::hash::Hash;
-use std::io::{Read};
+use std::io::Read;
 use std::iter::once;
 use std::mem;
 use std::ops::{Deref, Range};
@@ -1178,49 +1178,36 @@ impl EGraph {
         self.proof_state.type_info.sorts.get(&value.tag)
     }
 
-    // Gets the last extract report and returns it, if the last command saved it.
+    /// Gets the last extract report and returns it, if the last command saved it.
     pub fn get_extract_report(&self) -> &Option<ExtractReport> {
         &self.extract_report
     }
 
-    // Gets the last run report and returns it, if the last command saved it.
+    /// Gets the last run report and returns it, if the last command saved it.
     pub fn get_run_report(&self) -> &Option<RunReport> {
         &self.run_report
     }
 
+    /// Exports the egraph as a Graphviz dot string
     pub fn to_graphviz_string(&self) -> String {
-        let graph = self.to_graphviz();
-        graph
+        self.to_graph()
+            .to_graphviz()
             .print(&mut graphviz_rust::printer::PrinterContext::default())
     }
-    // Saves the egraph as a SVG file in `graph.svg`
+    /// Saves the egraph as a SVG file in `graph.svg`
     fn save_graph(&self) -> Result<String, Error> {
-        let graph = self.to_graphviz();
-        std::io::Write::write_all(
-            &mut File::create("graph.dot").expect("df"),
-            graph
-                .print(&mut graphviz_rust::printer::PrinterContext::default())
-                .as_bytes(),
-        )
-        .expect("write");
+        let dot = self.to_graphviz_string();
+        std::io::Write::write_all(&mut File::create("graph.dot").expect("df"), dot.as_bytes())
+            .expect("write");
 
-        graphviz_rust::exec(
-            graph,
-            &mut graphviz_rust::printer::PrinterContext::default(),
+        graphviz_rust::exec_dot(
+            dot,
             vec![
                 graphviz_rust::cmd::Format::Svg.into(),
                 graphviz_rust::cmd::CommandArg::Output("graph.svg".to_string()),
             ],
         )
         .map_err(|e| Error::IoError(PathBuf::from(r"graph.svg"), e))
-    }
-
-    pub fn to_graphviz(&self) -> graphviz_rust::dot_structures::Graph {
-        let graph = self.to_graph();
-        // Print debug
-        // let mut w = File::create("out.log").unwrap();
-        // println!("{:#?}", graph);
-        graph.to_graphviz()
     }
 
     fn to_graph(&self) -> Graph {
