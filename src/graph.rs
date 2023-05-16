@@ -1,10 +1,8 @@
-
 use graphviz_rust::attributes::GraphAttributes;
 
-use crate::{ast::{Expr, Literal}, util::HashMap};
+use crate::{ast::Expr, util::HashMap};
 
 type EClassID = String;
-
 
 // Exposed graph structure which can be used to print/visualize the state of the e-graph.
 #[derive(Debug)]
@@ -15,11 +13,9 @@ pub(crate) struct Graph {
     pub eclasses: HashMap<EClassID, Vec<FnCall>>,
 }
 
-
 // A primitive value which is output from a function.
 #[derive(Debug)]
 pub(crate) struct PrimOutput(pub FnCall, pub PrimValue);
-
 
 #[derive(Debug)]
 pub(crate) struct FnCall(pub Fn, pub Vec<Arg>);
@@ -39,14 +35,7 @@ pub(crate) struct Fn {
 
 /// A primitive value (str, float, int, etc)
 #[derive(Debug)]
-pub(crate) enum PrimValue {
-    Str(String),
-    Float(f64),
-    Int(i64),
-    Unit(),
-}
-
-
+pub(crate) struct PrimValue(String);
 
 fn eclass_cluster_name(eclass_id: &EClassID) -> String {
     format!("cluster_{}", eclass_id)
@@ -54,11 +43,10 @@ fn eclass_cluster_name(eclass_id: &EClassID) -> String {
 // The Node ID for the eclass is the first node in the eclass cluster
 fn eclass_node_id(eclass_id: &EClassID) -> graphviz_rust::dot_structures::NodeId {
     graphviz_rust::dot_structures::NodeId(
-        graphviz_rust::dot_structures::Id::Plain(format!("\"{}_0\"", eclass_id)),
+        graphviz_rust::dot_structures::Id::Plain(quote(format!("{}_0", eclass_id))),
         None,
     )
 }
-
 
 // An e-class is converted into a cluster with a node for each function call
 fn eclass_to_graphviz(
@@ -77,10 +65,10 @@ fn eclass_to_graphviz(
                     arg.to_graphviz(
                         id_gen,
                         graphviz_rust::dot_structures::NodeId(
-                            graphviz_rust::dot_structures::Id::Plain(format!(
-                                "\"{}_{}\"",
+                            graphviz_rust::dot_structures::Id::Plain(quote(format!(
+                                "{}_{}",
                                 eclass_id, index
-                            )),
+                            ))),
                             None,
                         ),
                     )
@@ -98,15 +86,13 @@ fn eclass_to_graphviz(
                     graphviz_rust::dot_structures::Stmt::Node(
                         graphviz_rust::dot_structures::Node::new(
                             graphviz_rust::dot_structures::NodeId(
-                                graphviz_rust::dot_structures::Id::Plain(format!(
-                                    "\"{}_{}\"",
+                                graphviz_rust::dot_structures::Id::Plain(quote(format!(
+                                    "{}_{}",
                                     eclass_id, index
-                                )),
+                                ))),
                                 None,
                             ),
-                            vec![graphviz_rust::attributes::NodeAttributes::label(
-                                fn_call.0.name.clone(),
-                            )],
+                            label_attributes(fn_call.0.name.clone()),
                         ),
                     )
                 })
@@ -123,13 +109,10 @@ impl PrimOutput {
         id_gen: &mut NodeIDGenerator,
     ) -> Vec<graphviz_rust::dot_structures::Stmt> {
         let mut stmts = Vec::new();
-        let label = format!("{:?}", format!("{}: {}", self.0 .0.name, self.1.to_string()));
+        let label = format!("{}: {}", self.0 .0.name, self.1.to_string());
         let res_id = id_gen.next();
         stmts.push(graphviz_rust::dot_structures::Stmt::Node(
-            graphviz_rust::dot_structures::Node::new(
-                res_id.clone(),
-                vec![graphviz_rust::attributes::NodeAttributes::label(label)],
-            ),
+            graphviz_rust::dot_structures::Node::new(res_id.clone(), label_attributes(label)),
         ));
         stmts.extend(
             self.0
@@ -140,8 +123,6 @@ impl PrimOutput {
         stmts
     }
 }
-
-
 
 impl Arg {
     // Returns an edge from the result to the argument
@@ -154,13 +135,12 @@ impl Arg {
     ) -> Vec<graphviz_rust::dot_structures::Stmt> {
         match self {
             Arg::Prim(p) => {
-                let label = p.to_string();
                 let arg_id = id_gen.next();
                 vec![
                     graphviz_rust::dot_structures::Stmt::Node(
                         graphviz_rust::dot_structures::Node::new(
                             arg_id.clone(),
-                            vec![graphviz_rust::attributes::NodeAttributes::label(label)],
+                            label_attributes(p.to_string()),
                         ),
                     ),
                     graphviz_rust::dot_structures::Stmt::Edge(
@@ -191,28 +171,13 @@ impl Arg {
     }
 }
 
-
-pub(crate) fn from_expr(expr: &Expr) -> Option<PrimValue> {
-    match expr {
-        Expr::Lit(lit) => match lit {
-            Literal::String(s) => Some(PrimValue::Str(s.to_string())),
-            Literal::F64(f) => Some(PrimValue::Float(**f)),
-            Literal::Int(i) => Some(PrimValue::Int(*i)),
-            Literal::Unit => Some(PrimValue::Unit()),
-        },
-        _ => None,
-    }
+pub(crate) fn from_expr(expr: &Expr) -> PrimValue {
+    PrimValue(expr.to_string())
 }
-
 
 impl ToString for PrimValue {
     fn to_string(&self) -> String {
-        match self {
-            PrimValue::Str(s) => format!("{:?}", s),
-            PrimValue::Float(f) => f.to_string(),
-            PrimValue::Int(i) => i.to_string(),
-            PrimValue::Unit() => "unit".to_string(),
-        }
+        self.0.clone()
     }
 }
 
@@ -260,4 +225,13 @@ impl NodeIDGenerator {
             None,
         )
     }
+}
+
+fn label_attributes(label: String) -> Vec<graphviz_rust::dot_structures::Attribute> {
+    vec![graphviz_rust::attributes::NodeAttributes::label(quote(
+        label,
+    ))]
+}
+fn quote(s: String) -> String {
+    format!("{:?}", s)
 }

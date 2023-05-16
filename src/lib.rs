@@ -33,7 +33,7 @@ use std::io::Read;
 use std::iter::once;
 use std::mem;
 use std::ops::{Deref, Range};
-use std::path::{PathBuf, Path};
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::{fmt::Debug, sync::Arc};
 use typecheck::Program;
@@ -1197,8 +1197,8 @@ impl EGraph {
     /// Saves the egraph as a DOT file at the given path
     pub fn save_graph_as_dot<P: AsRef<Path>>(&self, path: P) -> Result<(), Error> {
         let dot = self.to_graphviz_string();
-        let mut file = File::create(&path)
-            .map_err(|e| Error::IoError(path.as_ref().to_path_buf(), e))?;
+        let mut file =
+            File::create(&path).map_err(|e| Error::IoError(path.as_ref().to_path_buf(), e))?;
         std::io::Write::write_all(&mut file, dot.as_bytes())
             .map_err(|e| Error::IoError(path.as_ref().to_path_buf(), e))?;
         Ok(())
@@ -1263,7 +1263,7 @@ impl EGraph {
             graph::Arg::Eq(parent_id_string)
         } else {
             let expr = sort.make_expr(value);
-            let prim_value = graph::from_expr(&expr).expect("wrong");
+            let prim_value = graph::from_expr(&expr);
             graph::Arg::Prim(prim_value)
         }
     }
