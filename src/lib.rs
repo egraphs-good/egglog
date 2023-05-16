@@ -12,6 +12,7 @@ mod unionfind;
 pub mod util;
 mod value;
 
+use extract::Extractor;
 use hashbrown::hash_map::Entry;
 use index::ColumnIndex;
 use instant::{Duration, Instant};
@@ -398,24 +399,28 @@ impl EGraph {
         let out_is_unit = f.schema.output.name() == UNIT_SYM.into();
 
         let mut termdag = TermDag::default();
+        let mut extractor = Extractor::new(self, &mut termdag);
         let mut terms = Vec::new();
         for (ins, out) in nodes {
             let mut children = Vec::new();
             for (a, t) in ins.iter().copied().zip(&schema.input) {
-                let e = if t.is_eq_sort() {
-                    children.push(self.extract(a, &mut termdag).1);
+                if t.is_eq_sort() {
+                    children.push(extractor.find_best(a).1);
                 } else {
-                    children.push(termdag.from_expr(&t.make_expr(a)));
+                    children.push(extractor.termdag.expr_to_term(&t.make_expr(a)));
                 };
             }
 
             let out = if schema.output.is_eq_sort() {
-                self.extract(out.value, &mut termdag).1
+                extractor.find_best(out.value).1
             } else {
-                termdag.from_expr(&schema.output.make_expr(out.value))
+                extractor
+                    .termdag
+                    .expr_to_term(&schema.output.make_expr(out.value))
             };
-            terms.push((termdag.make(sym, children), out));
+            terms.push((extractor.termdag.make(sym, children), out));
         }
+        drop(extractor);
 
         Ok((terms, termdag))
     }
@@ -427,7 +432,6 @@ impl EGraph {
 
         let mut buf = String::new();
         let s = &mut buf;
-        let mut termdag = TermDag::default();
         for (term, output) in terms_with_outputs {
             write!(s, "{}", termdag.to_string(&term)).unwrap();
             if !out_is_unit {

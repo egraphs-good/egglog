@@ -27,6 +27,7 @@ fn generate_tests(file: &mut File, glob: &str) {
             .unwrap()
             .to_string_lossy()
             .replace(['.', '-', ' '], "_");
+        let contents = std::fs::read_to_string(&f).unwrap();
 
         let should_fail = f.to_string_lossy().contains("fail-typecheck");
 
@@ -46,7 +47,7 @@ fn generate_tests(file: &mut File, glob: &str) {
 
         // write a test with proofs enabled
         // TODO: re-enable herbie, unsound, and eqsolve when proof extraction is faster
-        if !(name == "herbie" || name == "repro_unsound" || name == "eqsolve") {
+        if !(contents.contains("(Set") || contents.contains("(Map")) {
             writeln!(
                 file,
                 r#" #[test] 

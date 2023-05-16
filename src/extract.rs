@@ -7,17 +7,11 @@ use crate::{EGraph, Function, Id, Value};
 
 type Cost = usize;
 
-#[derive(Debug, Clone)]
-pub(crate) struct Node<'a> {
-    pub(crate) sym: Symbol,
-    pub(crate) inputs: &'a [Value],
-}
-
-struct Extractor<'a> {
-    costs: HashMap<Id, (Cost, Node<'a>)>,
+pub(crate) struct Extractor<'a> {
+    costs: HashMap<Id, (Cost, Term)>,
     ctors: Vec<Symbol>,
     egraph: &'a EGraph,
-    termdag: &'a mut TermDag,
+    pub(crate) termdag: &'a mut TermDag,
 }
 
 impl EGraph {
@@ -58,8 +52,12 @@ impl EGraph {
                     return result;
                 }
                 if &output.value == output_value {
-                    let node = Node { sym, inputs };
-                    result.push(ext.expr_from_node(&node))
+                    let mut children = vec![];
+                    for input in inputs {
+                        let node = ext.find_best(*input).1;
+                        children.push(ext.termdag.lookup(&node));
+                    }
+                    result.push(Term::App(sym, children))
                 }
             }
         }
@@ -68,7 +66,7 @@ impl EGraph {
 }
 
 impl<'a> Extractor<'a> {
-    fn new(egraph: &'a EGraph, termdag: &'a mut TermDag) -> Self {
+    pub fn new(egraph: &'a EGraph, termdag: &'a mut TermDag) -> Self {
         let mut extractor = Extractor {
             costs: HashMap::default(),
             egraph,
@@ -85,15 +83,7 @@ impl<'a> Extractor<'a> {
         extractor
     }
 
-    fn expr_from_node(&mut self, node: &Node) -> Term {
-        let mut children = vec![];
-        for value in node.inputs.iter() {
-            children.push(self.find_best(*value).1);
-        }
-        self.termdag.make(node.sym, children)
-    }
-
-    fn find_best(&mut self, value: Value) -> (Cost, Term) {
+    pub fn find_best(&mut self, value: Value) -> (Cost, Term) {
         let sort = self.egraph.get_sort(&value).unwrap();
         if sort.is_eq_sort() {
             let id = self.egraph.find(Id::from(value.bits as usize));
@@ -102,25 +92,34 @@ impl<'a> Extractor<'a> {
                 .get(&id)
                 .unwrap_or_else(|| panic!("No cost for {:?}", value))
                 .clone();
-            (cost, self.expr_from_node(&node))
+            (cost, node)
         } else {
-            (0, self.termdag.from_expr(&sort.make_expr(value)))
+            (0, self.termdag.expr_to_term(&sort.make_expr(value)))
         }
     }
 
-    fn node_total_cost(&self, function: &Function, children: &[Value]) -> Option<Cost> {
+    fn node_total_cost(
+        &mut self,
+        function: &Function,
+        children: &[Value],
+    ) -> Option<(Vec<Term>, Cost)> {
         let mut cost = function.decl.cost.unwrap_or(1);
         let types = &function.schema.input;
+        let mut terms: Vec<Term> = vec![];
         for (ty, value) in types.iter().zip(children) {
             cost = cost.saturating_add(if ty.is_eq_sort() {
                 let id = self.egraph.find(Id::from(value.bits as usize));
                 // TODO costs should probably map values?
-                self.costs.get(&id)?.0
+                let (cost, term) = self.costs.get(&id)?;
+                terms.push(term.clone());
+                *cost
             } else {
+                let term = self.termdag.expr_to_term(&ty.make_expr(*value));
+                terms.push(term);
                 1
             });
         }
-        Some(cost)
+        Some((terms, cost))
     }
 
     fn find_costs(&mut self) {
@@ -128,12 +127,12 @@ impl<'a> Extractor<'a> {
         while did_something {
             did_something = false;
 
-            for &sym in &self.ctors {
+            for sym in self.ctors.clone() {
                 let func = &self.egraph.functions[&sym];
                 if func.schema.output.is_eq_sort() {
                     for (inputs, output) in func.nodes.iter() {
-                        if let Some(new_cost) = self.node_total_cost(func, inputs) {
-                            let make_new_pair = || (new_cost, Node { sym, inputs });
+                        if let Some((term_inputs, new_cost)) = self.node_total_cost(func, inputs) {
+                            let make_new_pair = || (new_cost, self.termdag.make(sym, term_inputs));
 
                             let id = self.egraph.find(Id::from(output.value.bits as usize));
                             match self.costs.entry(id) {

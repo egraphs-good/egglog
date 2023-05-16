@@ -35,7 +35,7 @@
   ;; a placeholder for a proof of equality between two
   ;; terms which can be proven equal using the graph
   ;; stored in the `Eq` relation
-  (DemandEq__ Ast__ Ast__ :cost 1000000))
+  (DemandEq__ Ast__ Ast__))
 
 ;; ProofList definitions
 (function Cons__ (Proof__ ProofList__) ProofList__)
@@ -54,7 +54,7 @@
   (MakeProofWithAge__ Proof__ i64))
 
 ;; prove two terms equal
-(function EqGraph__ (Ast__ Ast__) ProofWithAge__  :cost 1000000 :merge old)
+(function EqGraph__ (Ast__ Ast__) ProofWithAge__  :cost 10000000000 :merge old)
 
 (datatype TrmPrf__
   (MakeTrmPrf__ Ast__ Proof__))
@@ -154,6 +154,5 @@
        (= prooflist (ProofBetween__ t1 t2 t2)))
       ((set (DemandEq__ t1 t2) (Transitivity__ prooflist)))
       :ruleset proof-extract__)
-
 
 
