@@ -33,7 +33,7 @@ use std::io::Read;
 use std::iter::once;
 use std::mem;
 use std::ops::{Deref, Range};
-use std::path::PathBuf;
+use std::path::{PathBuf, Path};
 use std::rc::Rc;
 use std::{fmt::Debug, sync::Arc};
 use typecheck::Program;
@@ -1147,7 +1147,6 @@ impl EGraph {
                 msgs.push(msg);
             }
         }
-        self.save_graph()?;
         Ok(msgs)
     }
 
@@ -1194,20 +1193,29 @@ impl EGraph {
             .to_graphviz()
             .print(&mut graphviz_rust::printer::PrinterContext::default())
     }
-    /// Saves the egraph as a SVG file in `graph.svg`
-    fn save_graph(&self) -> Result<String, Error> {
-        let dot = self.to_graphviz_string();
-        std::io::Write::write_all(&mut File::create("graph.dot").expect("df"), dot.as_bytes())
-            .expect("write");
 
+    /// Saves the egraph as a DOT file at the given path
+    pub fn save_graph_as_dot<P: AsRef<Path>>(&self, path: P) -> Result<(), Error> {
+        let dot = self.to_graphviz_string();
+        let mut file = File::create(&path)
+            .map_err(|e| Error::IoError(path.as_ref().to_path_buf(), e))?;
+        std::io::Write::write_all(&mut file, dot.as_bytes())
+            .map_err(|e| Error::IoError(path.as_ref().to_path_buf(), e))?;
+        Ok(())
+    }
+
+    /// Saves the egraph as an SVG file at the given path
+    pub fn save_graph_as_svg<P: AsRef<Path>>(&self, path: P) -> Result<(), Error> {
+        let dot = self.to_graphviz_string();
         graphviz_rust::exec_dot(
             dot,
             vec![
                 graphviz_rust::cmd::Format::Svg.into(),
-                graphviz_rust::cmd::CommandArg::Output("graph.svg".to_string()),
+                graphviz_rust::cmd::CommandArg::Output(path.as_ref().to_str().unwrap().to_string()),
             ],
         )
-        .map_err(|e| Error::IoError(PathBuf::from(r"graph.svg"), e))
+        .map_err(|e| Error::IoError(path.as_ref().to_path_buf(), e))?;
+        Ok(())
     }
 
     fn to_graph(&self) -> Graph {
