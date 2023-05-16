@@ -373,7 +373,7 @@ impl<'a> ActionChecker<'a> {
                 self.locals.insert(*v, ty);
                 Ok(())
             }
-            Action::Set(f, args, val) => {
+            Action::Set(f, args, val) | Action::SetNoTrack(f, args, val) => {
                 let fake_call = Expr::Call(*f, args.clone());
                 let (_, ty) = self.infer_expr(&fake_call)?;
                 let fake_instr = self.instructions.pop().unwrap();
@@ -393,7 +393,7 @@ impl<'a> ActionChecker<'a> {
             Action::Union(a, b) => {
                 let (_, ty) = self.infer_expr(a)?;
                 if !ty.is_eq_sort() {
-                    panic!("no error for this yet")
+                    panic!("Base types cannot be unioned")
                 }
                 self.check_expr(b, ty)?;
                 self.instructions.push(Instruction::Union(2));
