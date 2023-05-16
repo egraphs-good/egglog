@@ -1,4 +1,4 @@
-.PHONY: all web test serve
+.PHONY: all web test serve test-graphs
 
 RUST_SRC=$(shell find -type f -wholename '*/src/*.rs' -or -name 'Cargo.toml')
 TESTS=$(shell find tests/ -type f -name '*.egg' -not -name '*repro-*')
@@ -23,7 +23,7 @@ web: ${DIST_WASM} ${WEB_SRC} ${WWW}/examples.json
 	mkdir -p ${WWW}
 	cp ${WEB_SRC} ${WWW}
 
-serve: 
+serve:
 	cargo watch --shell "make web && python3 -m http.server 8080 -d ${WWW}"
 
 ${WWW}/examples.json: web-demo/examples.py ${TESTS}
@@ -33,4 +33,6 @@ ${DIST_WASM}: ${RUST_SRC}
 	wasm-pack build web-demo --target no-modules --no-typescript --out-dir ${WWW}
 	rm -f ${WWW}/{.gitignore,package.json}
 
+test-graphs: ${TESTS}
+	cargo run  -- --save-dot --save-svg $^
 
