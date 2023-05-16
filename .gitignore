@@ -15,6 +15,7 @@ _scratch.egg
 *.log
 *.dot
 *.svg
+*.DS_Store
 
 # racket
 scripts/compiled
