@@ -33,6 +33,6 @@ ${DIST_WASM}: ${RUST_SRC}
 	wasm-pack build web-demo --target no-modules --no-typescript --out-dir ${WWW}
 	rm -f ${WWW}/{.gitignore,package.json}
 
-test-graphs: ${TESTS}
+test-graphs: $(filter-out tests//fail-typecheck/%, ${TESTS})
 	cargo run  -- --save-dot --save-svg $^
 
