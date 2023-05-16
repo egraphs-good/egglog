@@ -54,15 +54,15 @@
   (MakeProofWithAge__ Proof__ i64))
 
 ;; prove two terms equal
-(function EqGraph__ (Ast__ Ast__) ProofWithAge__  :cost 1000000000 :merge old)
+(function EqGraph__ (Ast__ Ast__) ProofWithAge__  :unextractable :merge old)
 
 (datatype TrmPrf__
   (MakeTrmPrf__ Ast__ Proof__))
 
 ;; get child terms, proofs, and child terms
-(function TrmOf__ (TrmPrf__) Ast__ :cost 1000000)
-(function PrfOf__ (TrmPrf__) Proof__ :cost 1000000)
-(function GetChild__ (Ast__ i64) Ast__ :cost 1000000)
+(function TrmOf__ (TrmPrf__) Ast__ :unextractable)
+(function PrfOf__ (TrmPrf__) Proof__ :unextractable)
+(function GetChild__ (Ast__ i64) Ast__ :unextractable)
 
 (ruleset proofrules__)
 

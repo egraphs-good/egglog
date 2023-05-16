@@ -39,9 +39,10 @@ Command: Command = {
     "(" "sort" <name:Ident> "(" <head:Ident> <tail:(Expr)*> ")" ")" => Command::Sort (name, Some((head, tail))),
     "(" "sort" <name:Ident> ")" => Command::Sort (name, None),
     "(" "function" <name:Ident> <schema:Schema> <cost:Cost>
+        <unextractable:(":unextractable")?>
         <merge_action:(":on_merge" <List<Action>>)?>
         <merge:(":merge" <Expr>)?> <default:(":default" <Expr>)?> ")" => {
-        Command::Function(FunctionDecl { name, schema, merge, merge_action: merge_action.unwrap_or_default(), default, cost })
+        Command::Function(FunctionDecl { name, schema, merge, merge_action: merge_action.unwrap_or_default(), default, cost, unextractable: unextractable.is_some() })
     },
     "(" "declare" <name:Ident> <sort:Ident> ")" => Command::Declare{name, sort},
     "(" "relation" <name:Ident> <types:List<Type>> ")" => Command::Function(FunctionDecl::relation(name, types)),

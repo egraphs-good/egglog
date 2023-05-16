@@ -391,6 +391,7 @@ impl EGraph {
                 merge_action: vec![],
                 default: None,
                 cost: variant.cost,
+                unextractable: false,
             },
             false,
         )?;
@@ -1077,6 +1078,7 @@ impl EGraph {
                 merge: None,
                 merge_action: vec![],
                 cost: None,
+                unextractable: false,
             },
             true,
         )?;
@@ -1104,6 +1106,7 @@ impl EGraph {
                 merge: None,
                 merge_action: vec![],
                 cost,
+                unextractable: false,
             },
             true,
         )?;

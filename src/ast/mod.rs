@@ -505,6 +505,7 @@ pub struct FunctionDecl {
     pub merge: Option<Expr>,
     pub merge_action: Vec<Action>,
     pub cost: Option<usize>,
+    pub unextractable: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -558,6 +559,7 @@ impl FunctionDecl {
             merge_action: vec![],
             default: None,
             cost: None,
+            unextractable: false,
         }
     }
 }

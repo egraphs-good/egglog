@@ -9,7 +9,6 @@ use crate::{
 
 struct ProofChecker {
     proven_equal: UnionFind,
-    proven_provenance: HashSet<usize>,
     termdag: TermDag,
     // a vector of input and output for the EqGraph__ table
     to_check: Vec<(Term, Term)>,
@@ -42,11 +41,27 @@ pub fn check_proof(egraph: &mut EGraph) {
 
     ProofChecker {
         proven_equal,
-        proven_provenance: HashSet::default(),
         termdag,
         to_check,
     }
     .check();
+}
+
+#[derive(Clone, Debug)]
+enum Proof {
+    Equality(Term, Term),
+    Provenance(Term),
+    Rule(Symbol),
+}
+
+impl Proof {
+    pub fn get_term(&self) -> Option<Term> {
+        match self {
+            Proof::Equality(_, term) => Some(term.clone()),
+            Proof::Provenance(term) => Some(term.clone()),
+            Proof::Rule(sym) => None,
+        }
+    }
 }
 
 impl ProofChecker {
@@ -64,57 +79,127 @@ impl ProofChecker {
         }
     }
 
-    fn check_proof_list(&mut self, prooflist: Term) {
-        match_term_app! (prooflist; {
-            ("Cons__", [proof, prooflist]) => {
-                self.check_proof(self.termdag.get(*proof));
-                self.check_proof_list(self.termdag.get(*prooflist));
-            },
-            ("Nil__", []) => (),
-        })
+    fn check_proof_list(&mut self, mut prooflist: Term) -> Vec<Proof> {
+        let mut terms = vec![];
+        loop {
+            match_term_app! (prooflist; {
+                ("Cons__", [proof, rest]) => {
+                    terms.push(self.check_proof(self.termdag.get(*proof)));
+                    prooflist = self.termdag.get(*rest);
+                },
+                ("ProofNull__", []) => break,
+            })
+        }
+        terms
     }
 
-    fn check_proof(&mut self, term: Term) {
+    fn check_proof(&mut self, term: Term) -> Proof {
+        //println!("Checking {}", self.termdag.to_string(&term));
+        //println!("");
         match_term_app! (term; {
             ("Original__", [ast]) => {
                 // TODO don't trust calls to "Original__"
-                self.proven_provenance.insert(*ast);
+                Proof::Provenance(self.termdag.get(*ast))
             },
             ("OriginalEq__", [term1, term2]) => {
                 // TODO don't trust calls to "OriginalEq__"
                 self.proven_equal.union(Id::from(*term1), Id::from(*term2), "".into());
+                Proof::Equality(self.termdag.get(*term1), self.termdag.get(*term2))
             },
             ("Rule__", [prooflist, rule_name]) => {
                 // TODO check the rule
                 self.check_proof_list(self.termdag.get(*prooflist));
+                if let Term::Lit(Literal::String(str)) = self.termdag.get(*rule_name) {
+                    Proof::Rule(str.clone())
+                } else {
+                    panic!("rule name not a string")
+                }
             },
             ("RuleTerm__", [ruleproof, term]) => {
                 self.check_proof(self.termdag.get(*ruleproof));
                 // TODO check that the term would have been created on the rhs of the rule
-                self.proven_provenance.insert(*term);
+                Proof::Provenance(self.termdag.get(*term))
             },
             ("RuleEquality__", [ruleproof, lhs, rhs]) => {
                 self.check_proof(self.termdag.get(*ruleproof));
                 // TODO check the lhs and rhs are unioned in the rhs of the rule
                 self.proven_equal.union(Id::from(*lhs), Id::from(*rhs), "".into());
+                Proof::Equality(self.termdag.get(*lhs), self.termdag.get(*rhs))
             },
             ("ComputePrim__", [prim]) => {
-                panic!("Not handled yet");
+                // TODO check the prim
+                // Return a dummy proof
+                Proof::Equality(self.termdag.get(*prim), self.termdag.get(*prim))
             },
             ("Transitivity__", [prooflist]) => {
-                self.check_proof_list(self.termdag.get(*prooflist));
+                let res = self.check_proof_list(self.termdag.get(*prooflist));
+                assert!(res.len() > 0);
+
+                for i in 0..(res.len()-1) {
+                    let current = res[i].clone();
+                    let next = res[i+1].clone();
+                    if let Proof::Equality(term1, term2) = current {
+                        if let Proof::Equality(term3, term4) = next {
+                            if term2 != term3 {
+                                panic!("Transitive proof did not match up");
+                            }
+                        } else {
+                            panic!("Not a proof of equality");
+                        }
+                    } else {
+                        panic!("Not a proof of equality");
+                    }
+                }
+                if let Proof::Equality(term1, term2) = res.first().unwrap() {
+                    if let Proof::Equality(term3, term4) = res.last().unwrap() {
+                        self.proven_equal.union(Id::from(self.termdag.lookup(term1)), Id::from(self.termdag.lookup(term4)), "".into());
+                        Proof::Equality(term1.clone(), term4.clone())
+                    } else {
+                        panic!("Not a proof of equality");
+                    }
+                } else {
+                    panic!("Not a proof of equality");
+                }
             },
             ("Flip__", [proof]) => {
-                self.check_proof(self.termdag.get(*proof));
+                if let Proof::Equality(t1, t2) = self.check_proof(self.termdag.get(*proof)) {
+                    Proof::Equality(t2, t1)
+                } else {
+                    panic!("Not a proof of equality");
+                }
             },
             ("Congruence__", [term_proof, prooflist]) => {
-                panic!("Not handled yet");
+                let terms = self.check_proof_list(self.termdag.get(*prooflist));
+                let prov = self.check_proof(self.termdag.get(*term_proof));
+                let term = prov.get_term().unwrap_or_else(|| panic!("Congruence term not a provenance proof"));
+                if let Term::App(op, children_ids) = term.clone() {
+                    let children = children_ids.iter().map(|id| self.termdag.get(*id)).collect::<Vec<_>>();
+                    assert!(terms.len() == children.len());
+                    let mut rhs_children = vec![];
+                    for (proof, child) in terms.iter().zip(children.iter()) {
+                        if let Proof::Equality(term1, term2) = proof {
+                            assert!(term1 == child);
+                            rhs_children.push(term2.clone());
+                        } else {
+                            panic!("Not a proof of equality");
+                        }
+                    }
+                    let size_before = self.termdag.size();
+                    let rhs = self.termdag.make(op.clone(), rhs_children);
+                    let size_after = self.termdag.size();
+                    assert!(size_before == size_after);
+                    self.proven_equal.union(Id::from(self.termdag.lookup(&term)), Id::from(self.termdag.lookup(&rhs)), "".into());
+                    Proof::Equality(term.clone(), rhs)
+                } else {
+                    Proof::Equality(term.clone(), term)
+                }
             },
             ("DemandEq__", [term1, term2]) => {
                 // should already be proven equal
                 // due to edge age ordering
-                assert!(self.proven_equal.find(Id::from(*term1)) == self.proven_equal.find(Id::from(*term2)));
+                assert_eq!(self.proven_equal.find(Id::from(*term1)), self.proven_equal.find(Id::from(*term2)));
+                Proof::Equality(self.termdag.get(*term1), self.termdag.get(*term2))
             }
-        });
+        })
     }
 }

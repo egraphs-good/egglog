@@ -76,7 +76,13 @@ impl<'a> Extractor<'a> {
 
         // HACK
         // just consider all functions constructors for now...
-        extractor.ctors.extend(egraph.functions.keys().cloned());
+        extractor.ctors.extend(
+            egraph
+                .functions
+                .keys()
+                .filter(|func| !egraph.functions.get(*func).unwrap().decl.unextractable)
+                .cloned(),
+        );
 
         log::debug!("Extracting from ctors: {:?}", extractor.ctors);
         extractor.find_costs();

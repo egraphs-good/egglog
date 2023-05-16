@@ -14,6 +14,7 @@ fn desugar_datatype(name: Symbol, variants: Vec<Variant>) -> Vec<NCommand> {
                 merge_action: vec![],
                 default: None,
                 cost: variant.cost,
+                unextractable: false,
             })
         }))
         .collect()
@@ -511,6 +512,14 @@ pub(crate) fn desugar_command(
             let mut res = vec![NCommand::Check(flatten_facts(&facts, desugar))];
 
             if get_all_proofs {
+                res.push(NCommand::RunSchedule(NormSchedule::Saturate(Box::new(
+                    NormSchedule::Run(NormRunConfig {
+                        ruleset: "proofrules__".into(),
+                        limit: 1,
+                        until: None,
+                    }),
+                ))));
+
                 // check that all the proofs in the egraph are valid
                 res.push(NCommand::CheckProof);
 
@@ -716,6 +725,7 @@ impl Desugar {
                 merge: None,
                 merge_action: vec![],
                 cost: Some(HIGH_COST),
+                unextractable: false,
             }),
             NCommand::NormAction(NormAction::Let(name, NormExpr::Call(fresh, vec![]))),
         ]
