@@ -54,11 +54,7 @@
   (MakeProofWithAge__ Proof__ i64))
 
 ;; prove two terms equal
-<<<<<<< HEAD
-(function EqGraph__ (Ast__ Ast__) ProofWithAge__  :cost 10000000000 :merge old)
-=======
-(function EqGraph__ (Ast__ Ast__) ProofWithAge__  :cost 1000000 :merge old)
->>>>>>> mwillsey/main
+(function EqGraph__ (Ast__ Ast__) ProofWithAge__  :cost 1000000000 :merge old)
 
 (datatype TrmPrf__
   (MakeTrmPrf__ Ast__ Proof__))
