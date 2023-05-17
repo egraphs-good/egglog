@@ -67,7 +67,7 @@ fn make_rep_primitive_sorts(type_info: &TypeInfo) -> Vec<Command> {
                 merge_action: vec![],
                 default: None,
                 cost: None,
-                unextractable: false,
+                unextractable: true,
             })
         })
         .collect()
@@ -636,7 +636,7 @@ fn make_rep_function(proof_state: &mut ProofState, expr: &NormExpr) -> FunctionD
         },
         default: None,
         cost: None,
-        unextractable: false,
+        unextractable: true,
     }
 }
 

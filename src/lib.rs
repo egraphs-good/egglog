@@ -424,8 +424,6 @@ impl EGraph {
             .map(|(k, v)| (ValueVec::from(k), v.clone()))
             .collect::<Vec<_>>();
 
-        let out_is_unit = f.schema.output.name() == UNIT_SYM.into();
-
         let mut termdag = TermDag::default();
         let mut extractor = Extractor::new(self, &mut termdag);
         let mut terms = Vec::new();

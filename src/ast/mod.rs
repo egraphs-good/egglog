@@ -584,6 +584,10 @@ impl ToSexp for FunctionDecl {
             ]);
         }
 
+        if self.unextractable {
+            res.push(Sexp::String(":unextractable".into()));
+        }
+
         if !self.merge_action.is_empty() {
             res.push(Sexp::String(":on_merge".into()));
             res.push(Sexp::List(

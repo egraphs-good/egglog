@@ -27,7 +27,7 @@ pub fn check_proof(egraph: &mut EGraph) {
     }
 
     // sort by ascending age
-    to_check.sort_by_key(|(input, proof)| {
+    to_check.sort_by_key(|(_input, proof)| {
         match_term_app! (proof; {
             ("MakeProofWithAge__", [_proof, age]) => {
                 if let Term::Lit(Literal::Int(lit)) = termdag.get(*age) {
@@ -94,8 +94,8 @@ impl ProofChecker {
     }
 
     fn check_proof(&mut self, term: Term) -> Proof {
-        //println!("Checking {}", self.termdag.to_string(&term));
-        //println!("");
+        println!("Checking {}", self.termdag.to_string(&term));
+        println!("");
         match_term_app! (term; {
             ("Original__", [ast]) => {
                 // TODO don't trust calls to "Original__"

@@ -12,7 +12,12 @@ struct Run {
 impl Run {
     fn run(&self) {
         let _ = env_logger::builder().is_test(true).try_init();
-        let program = std::fs::read_to_string(self.path).unwrap();
+        let program_read = std::fs::read_to_string(self.path).unwrap();
+        let program = if self.test_proofs {
+            format!("(set-option enable_proofs 1)\n{}", program_read)
+        } else {
+            program_read
+        };
         self.test_program(&program, "Top level error");
 
         if !self.should_fail {
@@ -41,16 +46,10 @@ impl Run {
 
     fn test_program(&self, program: &str, message: &str) {
         let mut egraph = EGraph::default();
-        egraph.set_underscores_for_desugaring(5);
         if self.test_proofs {
-            egraph
-                .run_program(vec![Command::SetOption {
-                    name: "enable_proofs".into(),
-                    value: Expr::Lit(Literal::Int(1)),
-                }])
-                .unwrap();
             egraph.test_proofs = true;
         }
+        egraph.set_underscores_for_desugaring(5);
         match egraph.parse_and_run_program(program) {
             Ok(msgs) => {
                 if self.should_fail {
