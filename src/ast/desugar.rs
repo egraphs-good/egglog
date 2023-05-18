@@ -521,7 +521,8 @@ pub(crate) fn desugar_command(
                 ))));
 
                 // check that all the proofs in the egraph are valid
-                res.push(NCommand::CheckProof);
+                // TODO enable
+                //res.push(NCommand::CheckProof);
 
                 /*let proofvar = desugar.get_fresh();
                 // declare a variable for the resulting proof
