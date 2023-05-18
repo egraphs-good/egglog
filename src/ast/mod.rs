@@ -680,7 +680,6 @@ impl Display for Fact {
 pub enum Action {
     Let(Symbol, Expr),
     Set(Symbol, Vec<Expr>, Expr),
-    //SetNoTrack(Symbol, Vec<Expr>, Expr),
     Delete(Symbol, Vec<Expr>),
     Union(Expr, Expr),
     Panic(String),
@@ -755,9 +754,6 @@ impl ToSexp for Action {
         match self {
             Action::Let(lhs, rhs) => list!("let", lhs, rhs),
             Action::Set(lhs, args, rhs) => list!("set", list!(lhs, ++ args), rhs),
-            // Action::SetNoTrack(lhs, args, rhs) => {
-            //     list!("set-no-track", list!(lhs, ++ args), rhs)
-            // }
             Action::Union(lhs, rhs) => list!("union", lhs, rhs),
             Action::Delete(lhs, args) => list!("delete", list!(lhs, ++ args)),
             Action::Panic(msg) => list!("panic", format!("\"{}\"", msg.clone())),
@@ -774,10 +770,6 @@ impl Action {
                 let right = f(rhs);
                 Action::Set(*lhs, args.iter().map(f).collect(), right)
             }
-            // Action::SetNoTrack(lhs, args, rhs) => {
-            //     let right = f(rhs);
-            //     Action::SetNoTrack(*lhs, args.iter().map(f).collect(), right)
-            // }
             Action::Delete(lhs, args) => Action::Delete(*lhs, args.iter().map(f).collect()),
             Action::Union(lhs, rhs) => Action::Union(f(lhs), f(rhs)),
             Action::Panic(msg) => Action::Panic(msg.clone()),
@@ -793,11 +785,6 @@ impl Action {
                 args.iter().map(|e| e.replace_canon(canon)).collect(),
                 rhs.replace_canon(canon),
             ),
-            // Action::SetNoTrack(lhs, args, rhs) => Action::SetNoTrack(
-            //     *lhs,
-            //     args.iter().map(|e| e.replace_canon(canon)).collect(),
-            //     rhs.replace_canon(canon),
-            // ),
             Action::Delete(lhs, args) => {
                 Action::Delete(*lhs, args.iter().map(|e| e.replace_canon(canon)).collect())
             }
