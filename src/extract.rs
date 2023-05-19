@@ -2,7 +2,7 @@ use hashbrown::hash_map::Entry;
 
 use crate::ast::Symbol;
 use crate::util::HashMap;
-use crate::{EGraph, Expr, Function, Id, Value, ArcSort};
+use crate::{ArcSort, EGraph, Expr, Function, Id, Value};
 
 type Cost = usize;
 
@@ -30,7 +30,7 @@ impl EGraph {
     }
 
     pub fn extract(&self, value: Value, arcsort: &ArcSort) -> (Cost, Expr) {
-        Extractor::new(self).find_best(value, Some(arcsort))
+        Extractor::new(self).find_best(value, arcsort)
     }
 
     pub fn extract_variants(&mut self, value: Value, limit: usize) -> Vec<Expr> {
@@ -78,12 +78,14 @@ impl<'a> Extractor<'a> {
     }
 
     fn expr_from_node(&self, node: &Node) -> Expr {
-        let children = node.inputs.iter().map(|&value| self.find_best(value, None).1);
+        let children = node.inputs.iter().map(|&value| {
+            let arcsort = self.egraph.get_sort(&value).unwrap();
+            self.find_best(value, arcsort).1
+        });
         Expr::call(node.sym, children)
     }
 
-    fn find_best(&self, value: Value, sort: Option<&ArcSort>) -> (Cost, Expr) {
-        let sort = sort.unwrap_or_else(|| self.egraph.get_sort(&value).unwrap());
+    fn find_best(&self, value: Value, sort: &ArcSort) -> (Cost, Expr) {
         if sort.is_eq_sort() {
             let id = self.egraph.find(Id::from(value.bits as usize));
             let (cost, node) = &self
