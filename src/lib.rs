@@ -301,9 +301,6 @@ impl EGraph {
     }
 
     pub fn rebuild(&mut self) -> Result<usize, Error> {
-        if self.proofs_enabled {
-            return Ok(0);
-        }
         self.unionfind.clear_recent_ids();
         let mut updates = 0;
         loop {

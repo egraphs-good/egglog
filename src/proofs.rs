@@ -109,6 +109,50 @@ fn make_ast_function(proof_state: &mut ProofState, expr: &NormExpr) -> FunctionD
     }
 }
 
+fn merge_action(proof_state: &mut ProofState, types: FuncType) -> Vec<Action> {
+    let child1 = |i| Symbol::from(format!("c1_{}__", i));
+    let child2 = |i| Symbol::from(format!("c2_{}__", i));
+
+    let mut congr_prf = Sexp::String("Null__".to_string());
+    for i in 0..types.input.len() {
+        let current = types.input.len() - i - 1;
+        congr_prf = Sexp::List(vec![
+            Sexp::String("Cons__".to_string()),
+            Sexp::List(vec![
+                Sexp::String("DemandEq__".to_string()),
+                Sexp::String(child1(current).to_string()),
+                Sexp::String(child2(current).to_string()),
+            ]),
+            congr_prf,
+        ]);
+    }
+    let t1 = proof_state.get_fresh();
+    let t2 = proof_state.get_fresh();
+    let p1 = proof_state.get_fresh();
+
+    vec![
+        format!("(let {t1} (TrmOf__ old))"),
+        format!("(let {t2} (TrmOf__ new))"),
+        format!("(let {p1} (PrfOf__ old))"),
+    ]
+    .into_iter()
+    .chain(types.input.iter().enumerate().flat_map(|(i, _sort)| {
+        vec![
+            format!("(let {} (GetChild__ {t1} {}))", child1(i), i),
+            format!("(let {} (GetChild__ {t2} {}))", child2(i), i),
+        ]
+    }))
+    .chain(vec![
+        format!("(let congr_prf__ (Congruence__ {p1} {}))", congr_prf),
+        format!("(let age__ (currentAge))"),
+        format!("(set (currentAge) (+ age__ 1))"),
+        format!("(set (EqGraph__ {t1} {t2}) (MakeProofWithAge__ congr_prf__ age__))"),
+        format!("(set (EqGraph__ {t2} {t1}) (MakeProofWithAge__ (Flip__ congr_prf__) age__))"),
+    ])
+    .map(|s| proof_state.desugar.action_parser.parse(&s).unwrap())
+    .collect()
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct ProofInfo {
     // proof for each variable bound in an assignment (lhs or rhs)
@@ -585,67 +629,15 @@ fn make_rep_function(proof_state: &mut ProofState, expr: &NormExpr) -> FunctionD
         },
         merge: Some(Expr::Var("old".into())),
         // Merge action is only needed if the merge function is union
-        merge_action: vec![],
+        merge_action: if types.has_merge {
+            vec![]
+        } else {
+            merge_action(proof_state, types)
+        },
         default: None,
         cost: None,
         unextractable: true,
     }
-}
-
-fn make_congruence_rule(proof_state: &mut ProofState, expr: &NormExpr) -> Vec<Command> {
-    let NormExpr::Call(name, body) = expr;
-    let getchild_a = |i| Symbol::from(format!("ca{}__", i));
-    let getchild_b = |i| Symbol::from(format!("cb{}__", i));
-    let v2expr = NormExpr::Call(
-        *name,
-        body.iter()
-            .enumerate()
-            .map(|(i, _)| getchild_b(i))
-            .collect(),
-    );
-    let norm = NormCommand {
-        metadata: Metadata {
-            id: proof_state.desugar.get_new_id(),
-        },
-        command: NCommand::NormRule {
-            ruleset: "proofrules__".into(),
-            name: format!("congruence__{}", name).into(),
-            rule: NormRule {
-                body: vec![
-                    NormFact::Assign(
-                        "v1".into(),
-                        NormExpr::Call(
-                            *name,
-                            body.iter()
-                                .enumerate()
-                                .map(|(i, _)| getchild_a(i))
-                                .collect(),
-                        ),
-                    ),
-                    NormFact::Assign("v2".into(), v2expr.clone()),
-                    NormFact::ConstrainEq("v1".into(), "v3".into()),
-                    NormFact::ConstrainEq("v2".into(), "v4".into()),
-                    NormFact::Assign(
-                        proof_state.get_fresh(),
-                        NormExpr::Call("!=".into(), vec!["v3".into(), "v4".into()]),
-                    ),
-                ]
-                .into_iter()
-                .chain(
-                    body.iter()
-                        .enumerate()
-                        .map(|(i, _)| NormFact::ConstrainEq(getchild_a(i), getchild_b(i))),
-                )
-                .collect(),
-                head: vec![NormAction::Set(v2expr, "v1".into())],
-            },
-        },
-    };
-    proof_state.type_info.typecheck_command(&norm).unwrap();
-    let ctx_before = proof_state.current_ctx;
-    let instrumented = proof_state.add_proofs(vec![norm]);
-    proof_state.current_ctx = ctx_before;
-    instrumented
 }
 
 fn make_getchild_rule(proof_state: &mut ProofState, expr: &NormExpr) -> Command {
@@ -849,11 +841,7 @@ impl ProofState {
                         Command::Function(make_rep_function(self, expr)),
                         make_getchild_rule(self, expr),
                     ];
-                    let NormExpr::Call(name, _body) = expr;
                     res.extend(commands);
-                    if !self.type_info.is_primitive(*name) {
-                        res.extend(make_congruence_rule(self, expr));
-                    }
                 }
                 expr.clone()
             });
