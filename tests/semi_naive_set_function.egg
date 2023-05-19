@@ -52,6 +52,17 @@
 (pop)
 (push)
 
+;; issue #142, while the right of set is not function, but binded to a function.
+(rule ((= f0 (f 0))) ((let a (f 3)) (set (f 0) a)))
+(run 100)
+(check (= (f 0) 3))
+(check (= (f 1) 3))
+(check (= (f 2) 3))
+(check (= (f 3) 3))
+
+(pop)
+(push)
+
 (function g (i64) i64 :merge (max old new))
 (set (g 0) 3)
 

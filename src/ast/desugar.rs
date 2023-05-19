@@ -274,7 +274,7 @@ fn desugar_run_config(desugar: &mut Desugar, run_config: &RunConfig) -> NormRunC
 
 fn add_semi_naive_rule(desugar: &mut Desugar, rule: Rule) -> Option<Rule> {
     let mut new_rule = rule;
-    // only add new rule when there is Call in body to avoid adding same rule.
+    // only add new rule when there is Call or Let in body to avoid adding same rule.
     let mut add_new_rule = false;
 
     for head_slice in new_rule.head.iter_mut() {
@@ -294,6 +294,7 @@ fn add_semi_naive_rule(desugar: &mut Desugar, rule: Rule) -> Option<Rule> {
             }
 
             // move let binding to body.
+            // TODO: maybe it could be optimized by having liveness analysis instead of adding all Let action to head.
             Action::Let(symbol, expr) => {
                 add_new_rule = true;
                 let eq_vec: Vec<Expr> = vec![Expr::Var(*symbol), expr.clone()];
@@ -309,7 +310,6 @@ fn add_semi_naive_rule(desugar: &mut Desugar, rule: Rule) -> Option<Rule> {
             .head
             .retain_mut(|action| !matches!(action, Action::Let(_, _)));
         log::debug!("Added a semi-naive desugared rule:\n{}", new_rule);
-        //Some(desugar_rule(new_rule, desugar, false))
         Some(new_rule)
     } else {
         None
