@@ -1254,7 +1254,7 @@ impl EGraph {
             let parent_id_string = format!("{}", parent_id);
             graph::Arg::Eq(parent_id_string)
         } else {
-            let expr = sort.make_expr(value);
+            let expr = sort.make_expr(self, value);
             let prim_value = graph::from_expr(&expr);
             graph::Arg::Prim(prim_value)
         }
