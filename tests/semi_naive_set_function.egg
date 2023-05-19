@@ -41,8 +41,7 @@
 (push)
 
 ;; adding let binding
-(rule ((= f0 (f 0))) ((let x 3) (set (f 0) (f x))))
-;; (rule ((= f0 (f 0))) ((let x 3) (let y x) (set (f 0) (f y))))
+(rule ((= f0 (f 0))) ((let x 3) (let y x) (set (f 0) (f y))))
 
 (run 100)
 (check (= (f 0) 3))
@@ -57,9 +56,7 @@
 (set (g 0) 3)
 
 ;; bind to another function
-;; (rule ((= f0 (f 0))) ((let x (g 0)) (let y x) (set (f 0) (f y))))
-(rule ((= f0 (f 0)) (let y (g 0))) ((set (f 0) (f y))))
-(rule ((= f0 (f 0))) ((let x (g 0)) (set (f 0) (f x))))
+(rule ((= f0 (f 0))) ((let x (g 0)) (let y x) (set (f 0) (f y))))
 
 (run 100)
 (check (= (f 0) 3))
