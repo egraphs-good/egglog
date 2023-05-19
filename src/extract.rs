@@ -29,8 +29,8 @@ impl EGraph {
         None
     }
 
-    pub fn extract(&self, value: Value, arcsort: Option<&ArcSort>) -> (Cost, Expr) {
-        Extractor::new(self).find_best(value, arcsort)
+    pub fn extract(&self, value: Value, arcsort: &ArcSort) -> (Cost, Expr) {
+        Extractor::new(self).find_best(value, Some(arcsort))
     }
 
     pub fn extract_variants(&mut self, value: Value, limit: usize) -> Vec<Expr> {

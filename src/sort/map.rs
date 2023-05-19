@@ -131,8 +131,8 @@ impl Sort for MapSort {
         let map = ValueMap::load(self, &value);
         let mut expr = Expr::call("map-empty", []);
         for (k, v) in map.iter().rev() {
-            let k = egraph.extract(*k, Some(&self.key)).1;
-            let v = egraph.extract(*v, Some(&self.value)).1;
+            let k = egraph.extract(*k, &self.key).1;
+            let v = egraph.extract(*v, &self.value).1;
             expr = Expr::call("map-insert", [expr, k, v])
         }
         expr

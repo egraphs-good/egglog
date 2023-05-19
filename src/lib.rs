@@ -421,14 +421,14 @@ impl EGraph {
             write!(s, "({}", sym).unwrap();
             for (a, t) in ins.iter().copied().zip(&schema.input) {
                 s.push(' ');
-                let e = self.extract(a, Some(t)).1;
+                let e = self.extract(a, t).1;
                 write!(s, "{}", e).unwrap();
             }
 
             if out_is_unit {
                 s.push(')');
             } else {
-                let e = self.extract(out.value, Some(&schema.output)).1;
+                let e = self.extract(out.value, &schema.output).1;
                 write!(s, ") -> {}", e).unwrap();
             }
             s.push('\n');
@@ -993,7 +993,7 @@ impl EGraph {
         self.push();
         let (t, value) = self.eval_expr(&expr, None, true).unwrap();
         self.run_report = Some(self.run_rules(config));
-        let (cost, expr) = self.extract(value, Some(&t));
+        let (cost, expr) = self.extract(value, &t);
         self.pop().unwrap();
         Ok(ExtractReport {
             cost,
@@ -1005,7 +1005,7 @@ impl EGraph {
     // of other variants, if variants is not zero.
     pub fn extract_expr(&mut self, e: Expr, variants: usize) -> Result<ExtractReport, Error> {
         let (t, value) = self.eval_expr(&e, None, true)?;
-        let (cost, expr) = self.extract(value, Some(&t));
+        let (cost, expr) = self.extract(value, &t);
         let exprs = match variants {
             0 => vec![],
             1 => vec![expr.clone()],
