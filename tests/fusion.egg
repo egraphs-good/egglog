@@ -135,6 +135,9 @@
 
 (run 100)
 
+(extract (freer expr))
+
+
 (define my-output
     (CaseSplit (TVar (V "expr")) (Num 0) 
            (Lam (V "x") (Lam (V "xs'") 

@@ -24,7 +24,7 @@ impl Sort for StringSort {
         self
     }
 
-    fn make_expr(&self, value: Value) -> Expr {
+    fn make_expr(&self, _egraph: &EGraph, value: Value) -> Expr {
         assert!(value.tag == self.name);
         let sym = Symbol::from(NonZeroU32::new(value.bits as _).unwrap());
         Expr::Lit(Literal::String(sym))
