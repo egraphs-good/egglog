@@ -60,7 +60,7 @@ pub trait Sort: Any + Send + Sync + Debug {
         let _ = info;
     }
 
-    fn make_expr(&self, value: Value) -> Expr;
+    fn make_expr(&self, egraph: &EGraph, value: Value) -> Expr;
 }
 
 #[derive(Debug)]
@@ -92,7 +92,7 @@ impl Sort for EqSort {
         }
     }
 
-    fn make_expr(&self, _value: Value) -> Expr {
+    fn make_expr(&self, _egraph: &EGraph, _value: Value) -> Expr {
         unimplemented!("No make_expr for EqSort {}", self.name)
     }
 }

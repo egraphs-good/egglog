@@ -129,11 +129,11 @@ impl Sort for SetSort {
         });
     }
 
-    fn make_expr(&self, value: Value) -> Expr {
+    fn make_expr(&self, egraph: &EGraph, value: Value) -> Expr {
         let set = ValueSet::load(self, &value);
         let mut expr = Expr::call("set-empty", []);
         for e in set.iter().rev() {
-            let e = self.element.make_expr(*e);
+            let e = egraph.extract(*e, Some(&self.element)).1;
             expr = Expr::call("set-insert", [expr, e])
         }
         expr
