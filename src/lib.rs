@@ -11,7 +11,7 @@ mod unionfind;
 pub mod util;
 mod value;
 
-use graph::Graph;
+use crate::graph::from_egraph::graph_from_egraph;
 use graphviz_rust::printer::DotPrinter;
 use hashbrown::hash_map::Entry;
 use index::ColumnIndex;
@@ -1181,7 +1181,7 @@ impl EGraph {
 
     /// Exports the egraph as a Graphviz dot string
     pub fn to_graphviz_string(&self) -> String {
-        self.to_graph()
+        graph_from_egraph(self)
             .to_graphviz()
             .print(&mut graphviz_rust::printer::PrinterContext::default())
     }
@@ -1210,55 +1210,6 @@ impl EGraph {
         Ok(())
     }
 
-    fn to_graph(&self) -> Graph {
-        let mut prim_outputs = vec![];
-        let mut eclasses = HashMap::<String, Vec<graph::FnCall>>::default();
-        for (_id, function) in self.functions.iter() {
-            let name = function.decl.name.to_string();
-            // Skip generated names
-            if name.ends_with("___") {
-                continue;
-            }
-            for (input, output) in function.nodes.vals.iter() {
-                let input_values = input.data();
-                let output_value = output.value;
-
-                let fn_call = graph::FnCall(
-                    graph::Fn { name: name.clone() },
-                    input_values
-                        .iter()
-                        .map(|v| self.arg_from_value(*v))
-                        .collect(),
-                );
-
-                match self.arg_from_value(output_value) {
-                    graph::Arg::Eq(parent_id) => {
-                        eclasses.entry(parent_id).or_default().push(fn_call);
-                    }
-                    graph::Arg::Prim(prim_value) => {
-                        prim_outputs.push(graph::PrimOutput(fn_call, prim_value))
-                    }
-                }
-            }
-        }
-        Graph {
-            prim_outputs,
-            eclasses,
-        }
-    }
-
-    fn arg_from_value(&self, value: Value) -> graph::Arg {
-        let sort = self.get_sort(&value).unwrap();
-        if sort.is_eq_sort() {
-            let parent_id: usize = self.unionfind.find(Id::from(value.bits as usize)).into();
-            let parent_id_string = format!("{}", parent_id);
-            graph::Arg::Eq(parent_id_string)
-        } else {
-            let expr = sort.make_expr(self, value);
-            let prim_value = graph::from_expr(&expr);
-            graph::Arg::Prim(prim_value)
-        }
-    }
 }
 
 #[derive(Debug, Error)]
