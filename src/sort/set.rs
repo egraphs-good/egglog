@@ -133,7 +133,7 @@ impl Sort for SetSort {
         let set = ValueSet::load(self, &value);
         let mut expr = Expr::call("set-empty", []);
         for e in set.iter().rev() {
-            let e = egraph.extract(*e, Some(&self.element)).1;
+            let e = egraph.extract(*e, &self.element).1;
             expr = Expr::call("set-insert", [expr, e])
         }
         expr

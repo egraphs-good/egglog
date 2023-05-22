@@ -124,7 +124,7 @@ impl Sort for VecSort {
         let vec = ValueVec::load(self, &value);
         let mut expr = Expr::call("vec-empty", []);
         for e in vec.iter().rev() {
-            let e = egraph.extract(*e, Some(&self.element)).1;
+            let e = egraph.extract(*e, &self.element).1;
             expr = Expr::call("vec-insert", [expr, e])
         }
         expr
