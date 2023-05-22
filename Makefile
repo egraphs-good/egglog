@@ -1,4 +1,4 @@
-.PHONY: all web test serve test-graphs
+.PHONY: all web test serve graphs rm-graphs
 
 RUST_SRC=$(shell find -type f -wholename '*/src/*.rs' -or -name 'Cargo.toml')
 TESTS=$(shell find tests/ -type f -name '*.egg' -not -name '*repro-*')
@@ -33,6 +33,10 @@ ${DIST_WASM}: ${RUST_SRC}
 	wasm-pack build web-demo --target no-modules --no-typescript --out-dir ${WWW}
 	rm -f ${WWW}/{.gitignore,package.json}
 
-test-graphs: $(filter-out tests//fail-typecheck/%, ${TESTS})
-	cargo run  -- --save-dot --save-svg $^
+graphs: $(patsubst %.egg,%.svg,$(filter-out tests//fail-typecheck/%, ${TESTS}))
 
+%.svg: %.egg
+	cargo run -- --save-dot --save-svg  $^
+
+rm-graphs:
+	rm -f tests/*.dot tests/*.svg
