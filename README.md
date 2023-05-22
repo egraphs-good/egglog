@@ -5,7 +5,7 @@ Try the [web demo](https://egraphs-good.github.io/egglog)!
 This is repo for the `egglog` tool accompanying the paper
   ["Better Together: Unifying Datalog and Equality Saturation"](https://arxiv.org/abs/2304.04332).
 
-If you use this work, please use [this citation](./CITATION.bib). 
+If you use this work, please use [this citation](./CITATION.bib).
 
 ## Background
 
@@ -38,7 +38,7 @@ make all
 ## Usage
 
 ```
-cargo run [-f fact-path] [-naive] <files.egg>
+cargo run [-f fact-path] [-naive] [--save-dot] [--save-svg] <files.egg>
 ```
 
 or just
@@ -48,6 +48,10 @@ cargo run
 ```
 
 for the REPL.
+
+* The `--save-dot` command will save a graphviz dot file at the end of the program, replacing the `.egg` extension with `.dot`.
+* The `--save-svg`, which requires [Graphviz to be installed](https://graphviz.org/download/), will save a graphviz svg file at the end of the program, replacing the `.egg` extension with `.svg`.
+
 
 ## VS Code plugin
 
@@ -146,7 +150,7 @@ If you define a `:merge` expression, you can update specific values in the funct
 (set (KeepMax 1) 1)
 (set (KeepMax 1) 2)   ; we redefine 1 to be 2
 (set (KeepMax 1) 0)   ; this does not change since we use max
-(extract (KeepMax 1)) ; this is 2  
+(extract (KeepMax 1)) ; this is 2
 ```
 
 ### `relation` command
@@ -248,7 +252,7 @@ Example:
          (Add b a))
 ```
 
-declares a rule that a `Add` variant is commutative. 
+declares a rule that a `Add` variant is commutative.
 
 ```
 (birewrite (* (* a b) c) (* a (* b c)))
@@ -334,7 +338,7 @@ Union only works on variants, not sorts.
 ### Name
 
 ```
-    [ <Ident> ] 
+    [ <Ident> ]
 ```
 
 ### Facts
