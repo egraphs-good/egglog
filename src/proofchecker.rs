@@ -12,6 +12,7 @@ struct ProofChecker {
     termdag: TermDag,
     // a vector of input and output for the EqGraph__ table
     to_check: Vec<(Term, Term)>,
+    checked: HashMap<Term, Proof>,
 }
 
 const EQ_GRAPH_NAME: &str = "EqGraph__";
@@ -43,6 +44,7 @@ pub fn check_proof(egraph: &mut EGraph) {
         proven_equal,
         termdag,
         to_check,
+        checked: HashMap::default(),
     }
     .check();
 }
@@ -73,6 +75,7 @@ impl ProofChecker {
                 },
             });
 
+            // todo
             match_term_app! (input; {
                 ("EqGraph__", [_lhs, _rhs]) => ()
             });
@@ -94,9 +97,12 @@ impl ProofChecker {
     }
 
     fn check_proof(&mut self, term: Term) -> Proof {
+        if let Some(answer) = self.checked.get(&term) {
+            return answer.clone();
+        }
         println!("Checking {}", self.termdag.to_string(&term));
         println!("");
-        match_term_app! (term; {
+        let res = match_term_app! (term.clone(); {
             ("Original__", [ast]) => {
                 // TODO don't trust calls to "Original__"
                 Proof::Provenance(self.termdag.get(*ast))
@@ -200,6 +206,8 @@ impl ProofChecker {
                 assert_eq!(self.proven_equal.find(Id::from(*term1)), self.proven_equal.find(Id::from(*term2)));
                 Proof::Equality(self.termdag.get(*term1), self.termdag.get(*term2))
             }
-        })
+        });
+        self.checked.insert(term, res.clone());
+        res
     }
 }
