@@ -3,7 +3,6 @@ use egg_smol::EGraph;
 use std::io::{self, Read};
 use std::path::PathBuf;
 
-
 #[derive(Debug, Parser)]
 struct Args {
     #[clap(short = 'F', long)]
@@ -85,7 +84,6 @@ fn main() {
                 Err(err) => log::error!("Failed to save graph as SVG file: {}", err),
             }
         }
-
 
         // no need to drop the egraph if we are going to exit
         if idx == args.inputs.len() - 1 {

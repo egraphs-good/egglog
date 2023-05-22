@@ -1,8 +1,6 @@
 pub(crate) mod from_egraph;
 pub(crate) mod to_graphviz;
 
-use graphviz_rust::attributes::GraphAttributes;
-
 use crate::{ast::Expr, util::HashMap};
 
 type EClassID = String;
