@@ -36,19 +36,24 @@ fn eclass_to_graphviz(
         .collect();
     stmts.push(d::Stmt::Subgraph(d::Subgraph {
         id: d::Id::Plain(eclass_cluster_name(eclass_id)),
-        stmts: fn_calls
-            .iter()
-            .enumerate()
-            .map(|(index, fn_call)| {
-                d::Stmt::Node(d::Node::new(
-                    d::NodeId(
-                        d::Id::Plain(quote(format!("{}_{}", eclass_id, index))),
-                        None,
-                    ),
-                    label_attributes(fn_call.0.name.clone()),
-                ))
-            })
-            .collect(),
+        // Nest in empty sub-graph so that we can use rank=same
+        // https://stackoverflow.com/a/55562026/907060
+        stmts: vec![d::Stmt::Subgraph(d::Subgraph {
+            id: d::Id::Plain("".to_string()),
+            stmts: fn_calls
+                .iter()
+                .enumerate()
+                .map(|(index, fn_call)| {
+                    d::Stmt::Node(d::Node::new(
+                        d::NodeId(
+                            d::Id::Plain(quote(format!("{}_{}", eclass_id, index))),
+                            None,
+                        ),
+                        label_attributes(fn_call.0.name.clone()),
+                    ))
+                })
+                .collect(),
+        })],
     }));
     stmts
 }
@@ -112,7 +117,10 @@ impl Graph {
     pub fn to_graphviz(&self) -> d::Graph {
         let id_generator = &mut NodeIDGenerator::new();
         let mut statements = vec![
+            // Set to compound so we can have edge to clusters
             d::Stmt::Attribute(a::GraphAttributes::compound(true)),
+            // Set default sub-graph rank to be same so that all nodes in e-class are on same level
+            d::Stmt::Attribute(a::SubgraphAttributes::rank(a::rank::same)),
             d::Stmt::Attribute(a::GraphAttributes::fontname("helvetica".to_string())),
             d::Stmt::Attribute(a::GraphAttributes::style(quote(
                 "rounded,dashed".to_string(),
