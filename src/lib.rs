@@ -421,22 +421,14 @@ impl EGraph {
             write!(s, "({}", sym).unwrap();
             for (a, t) in ins.iter().copied().zip(&schema.input) {
                 s.push(' ');
-                let e = if t.is_eq_sort() {
-                    self.extract(a).1
-                } else {
-                    t.make_expr(a)
-                };
+                let e = self.extract(a, t).1;
                 write!(s, "{}", e).unwrap();
             }
 
             if out_is_unit {
                 s.push(')');
             } else {
-                let e = if schema.output.is_eq_sort() {
-                    self.extract(out.value).1
-                } else {
-                    schema.output.make_expr(out.value)
-                };
+                let e = self.extract(out.value, &schema.output).1;
                 write!(s, ") -> {}", e).unwrap();
             }
             s.push('\n');
@@ -999,9 +991,9 @@ impl EGraph {
 
     fn simplify(&mut self, expr: Expr, config: &NormRunConfig) -> Result<ExtractReport, Error> {
         self.push();
-        let (_t, value) = self.eval_expr(&expr, None, true).unwrap();
+        let (t, value) = self.eval_expr(&expr, None, true).unwrap();
         self.run_report = Some(self.run_rules(config));
-        let (cost, expr) = self.extract(value);
+        let (cost, expr) = self.extract(value, &t);
         self.pop().unwrap();
         Ok(ExtractReport {
             cost,
@@ -1012,8 +1004,8 @@ impl EGraph {
     // Extract an expression from the current state, returning the cost, the extracted expression and some number
     // of other variants, if variants is not zero.
     pub fn extract_expr(&mut self, e: Expr, variants: usize) -> Result<ExtractReport, Error> {
-        let (_t, value) = self.eval_expr(&e, None, true)?;
-        let (cost, expr) = self.extract(value);
+        let (t, value) = self.eval_expr(&e, None, true)?;
+        let (cost, expr) = self.extract(value, &t);
         let exprs = match variants {
             0 => vec![],
             1 => vec![expr.clone()],
