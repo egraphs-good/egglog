@@ -331,7 +331,7 @@ impl Input {
         self.data.as_slice()
     }
 
-    fn live(&self) -> bool {
+    pub(crate) fn live(&self) -> bool {
         self.stale_at == u32::MAX
     }
 }

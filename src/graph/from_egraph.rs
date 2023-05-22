@@ -11,6 +11,9 @@ pub (crate) fn graph_from_egraph(egraph: &EGraph) -> Graph {
             continue;
         }
         for (input, output) in function.nodes.vals.iter() {
+            if !input.live() {
+                continue;
+            }
             let input_values = input.data();
             let output_value = output.value;
 
