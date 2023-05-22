@@ -1,7 +1,7 @@
-use crate::{EGraph, Value, ast::Id};
 use super::*;
+use crate::{ast::Id, EGraph, Value};
 
-pub (crate) fn graph_from_egraph(egraph: &EGraph) -> Graph {
+pub(crate) fn graph_from_egraph(egraph: &EGraph) -> Graph {
     let mut prim_outputs = vec![];
     let mut eclasses = HashMap::<String, Vec<FnCall>>::default();
     for (_id, function) in egraph.functions.iter() {
@@ -29,9 +29,7 @@ pub (crate) fn graph_from_egraph(egraph: &EGraph) -> Graph {
                 Arg::Eq(parent_id) => {
                     eclasses.entry(parent_id).or_default().push(fn_call);
                 }
-                Arg::Prim(prim_value) => {
-                    prim_outputs.push(PrimOutput(fn_call, prim_value))
-                }
+                Arg::Prim(prim_value) => prim_outputs.push(PrimOutput(fn_call, prim_value)),
             }
         }
     }
@@ -40,7 +38,6 @@ pub (crate) fn graph_from_egraph(egraph: &EGraph) -> Graph {
         eclasses,
     }
 }
-
 
 fn arg_from_value(egraph: &EGraph, value: Value) -> Arg {
     let sort = egraph.get_sort(&value).unwrap();

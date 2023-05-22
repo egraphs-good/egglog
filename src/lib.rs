@@ -1209,7 +1209,6 @@ impl EGraph {
         .map_err(|e| Error::IoError(path.as_ref().to_path_buf(), e))?;
         Ok(())
     }
-
 }
 
 #[derive(Debug, Error)]

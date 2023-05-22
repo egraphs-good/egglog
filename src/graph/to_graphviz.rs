@@ -1,5 +1,5 @@
 use super::*;
-use graphviz_rust::{dot_structures as d, attributes as a};
+use graphviz_rust::{attributes as a, dot_structures as d};
 
 fn eclass_cluster_name(eclass_id: &EClassID) -> String {
     format!("cluster_{}", eclass_id)
@@ -114,8 +114,12 @@ impl Graph {
         let mut statements = vec![
             d::Stmt::Attribute(a::GraphAttributes::compound(true)),
             d::Stmt::Attribute(a::GraphAttributes::fontname("helvetica".to_string())),
-            d::Stmt::Attribute(a::GraphAttributes::style(quote("rounded,dashed".to_string()))),
-            d::Stmt::GAttribute(d::GraphAttributes::Edge(vec![a::EdgeAttributes::arrowsize(0.5)])),
+            d::Stmt::Attribute(a::GraphAttributes::style(quote(
+                "rounded,dashed".to_string(),
+            ))),
+            d::Stmt::GAttribute(d::GraphAttributes::Edge(vec![
+                a::EdgeAttributes::arrowsize(0.5),
+            ])),
             d::Stmt::GAttribute(d::GraphAttributes::Node(vec![
                 a::NodeAttributes::shape(a::shape::box_),
                 a::NodeAttributes::style("rounded".to_string()),
