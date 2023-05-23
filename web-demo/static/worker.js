@@ -10,10 +10,12 @@ async function work() {
         try {
             let result = run_program(event.data);
             console.log("Got result from worker");
-            self.postMessage(result);
+            // Can't send the result directly, since it contains a reference to the
+            // wasm memory. Instead, we send the dot and text separately.
+            self.postMessage({dot: result.dot, text: result.text});
         } catch (error) {
             console.log(error);
-            self.postMessage("Something panicked! Check the console logs...");
+            self.postMessage({dot: "", text: "Something panicked! Check the console logs..."});
         }
     };
 }

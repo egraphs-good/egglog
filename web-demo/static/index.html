@@ -23,7 +23,6 @@
         }
 
         #panel {
-            padding: 10px;
             flex: 1 1 0;
             border-left: 2px solid gray;
 
@@ -31,32 +30,53 @@
             flex-flow: column;
         }
 
+        #toolbar {
+            padding: 10px;
+        }
+
         #toolbar button {
             margin-right: 5px;
         }
 
         #output {
+            padding-left: 10px;
             font-family: monospace;
-            margin-top: 10px;
-            flex-grow: 1;
             white-space: pre-wrap;
             overflow-y: scroll;
+            resize: vertical;
+            height: 60%;
+        }
+
+        #graph {
+            border-top: 2px solid gray;
+            flex-grow: 1;
         }
     </style>
 
     <link rel="stylesheet" href="//unpkg.com/codemirror@5.65.2/lib/codemirror.css">
     <script src="//unpkg.com/codemirror@5.65.2/lib/codemirror.js"></script>
-
+    <script src="https://unpkg.com/@hpcc-js/wasm/dist/graphviz.umd.js" type="javascript/worker"></script>
+    <script type="importmap">
+        {
+          "imports": {
+            "d3": "https://cdn.skypack.dev/pin/d3@v7.8.4-U7lzM69QcKPxzv4xSvs7/mode=imports,min/optimized/d3.js",
+            "d3-graphviz": "https://cdn.skypack.dev/pin/d3-graphviz@v5.0.2-ZoIcpbOADQcAxREohmOW/mode=imports,min/optimized/d3-graphviz.js"
+          }
+        }
+      </script>
     <script type="module">
-        import { compressUrlSafe, decompressUrlSafe } from './lzma-url.mjs'
+        import * as d3 from 'd3';
+        import 'd3-graphviz';
 
         let editor, output, examples;
-
         console.log("Main script is running");
         let worker = new Worker("worker.js");
         worker.onmessage = function (message) {
             console.log("got message", message);
-            output.innerHTML = message.data;
+            output.innerHTML = message.data.text;
+            d3.select("#graph")
+                .graphviz()
+                .renderDot(message.data.dot);
         }
 
         window.onpopstate = function (event) {
@@ -168,6 +188,7 @@
             </select>
         </div>
         <div id="output">Click "Run" to run code</div>
+        <div id="graph"></div>
     </div>
 </body>
 

@@ -4,17 +4,30 @@ use wasm_bindgen::prelude::*;
 #[global_allocator]
 static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
 
+#[wasm_bindgen(getter_with_clone)]
+pub struct Result {
+    pub text: String,
+    pub dot: String
+}
+
 #[wasm_bindgen]
-pub fn run_program(input: &str) -> String {
+pub fn run_program(input: &str) -> Result {
     let mut egraph = egg_smol::EGraph::default();
     match egraph.parse_and_run_program(input) {
         Ok(outputs) => {
             log::info!("egg ok, {} outputs", outputs.len());
-            outputs.join("<br>")
+            Result {
+                text: outputs.join("<br>"),
+                dot: egraph.to_graphviz_string(),
+            }
         }
         Err(e) => {
             log::info!("egg failed");
-            e.to_string()
+            Result {
+                text:  e.to_string(),
+                dot: "".to_string(),
+            }
+
         }
     }
 }
