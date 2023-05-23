@@ -47,8 +47,8 @@
 (function AstProof__ (Proof__) Ast__)
 
 
-(function currentAge () i64 :merge (max new old))
-(set (currentAge) 0)
+(function currentAge__ () i64 :merge (max new old))
+(set (currentAge__) 0)
 
 (datatype ProofWithAge__
   (MakeProofWithAge__ Proof__ i64))

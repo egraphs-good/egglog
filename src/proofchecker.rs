@@ -61,7 +61,7 @@ impl Proof {
         match self {
             Proof::Equality(_, term) => Some(term.clone()),
             Proof::Provenance(term) => Some(term.clone()),
-            Proof::Rule(sym) => None,
+            Proof::Rule(_sym) => None,
         }
     }
 }
@@ -71,7 +71,12 @@ impl ProofChecker {
         for (input, proof_with_age) in self.to_check.clone() {
             match_term_app! (proof_with_age; {
                 ("MakeProofWithAge__", [proof, _age]) => {
-                    self.check_proof(self.termdag.get(*proof));
+                    let checked = self.check_proof(self.termdag.get(*proof));
+                    if let Proof::Equality(_a, _b) = checked {
+
+                    } else {
+                        panic!("not an equality")
+                    }
                 },
             });
 
@@ -101,7 +106,7 @@ impl ProofChecker {
             return answer.clone();
         }
         println!("Checking {}", self.termdag.to_string(&term));
-        println!("");
+        println!();
         let res = match_term_app! (term.clone(); {
             ("Original__", [ast]) => {
                 // TODO don't trust calls to "Original__"
@@ -116,7 +121,7 @@ impl ProofChecker {
                 // TODO check the rule
                 self.check_proof_list(self.termdag.get(*prooflist));
                 if let Term::Lit(Literal::String(str)) = self.termdag.get(*rule_name) {
-                    Proof::Rule(str.clone())
+                    Proof::Rule(str)
                 } else {
                     panic!("rule name not a string")
                 }
@@ -132,20 +137,20 @@ impl ProofChecker {
                 self.proven_equal.union(Id::from(*lhs), Id::from(*rhs), "".into());
                 Proof::Equality(self.termdag.get(*lhs), self.termdag.get(*rhs))
             },
-            ("ComputePrim__", [prim, from]) => {
+            ("ComputePrim__", [prim, _from]) => {
                 // TODO check the prim
                 // Return a dummy proof
                 Proof::Provenance(self.termdag.get(*prim))
             },
             ("Transitivity__", [prooflist]) => {
                 let res = self.check_proof_list(self.termdag.get(*prooflist));
-                assert!(res.len() > 0);
+                assert!(!res.is_empty());
 
                 for i in 0..(res.len()-1) {
                     let current = res[i].clone();
                     let next = res[i+1].clone();
-                    if let Proof::Equality(term1, term2) = current {
-                        if let Proof::Equality(term3, term4) = next {
+                    if let Proof::Equality(_term1, term2) = current {
+                        if let Proof::Equality(term3, _term4) = next {
                             if term2 != term3 {
                                 panic!("Transitive proof did not match up");
                             }
@@ -156,8 +161,8 @@ impl ProofChecker {
                         panic!("Not a proof of equality");
                     }
                 }
-                if let Proof::Equality(term1, term2) = res.first().unwrap() {
-                    if let Proof::Equality(term3, term4) = res.last().unwrap() {
+                if let Proof::Equality(term1, _term2) = res.first().unwrap() {
+                    if let Proof::Equality(_term3, term4) = res.last().unwrap() {
                         self.proven_equal.union(Id::from(self.termdag.lookup(term1)), Id::from(self.termdag.lookup(term4)), "".into());
                         Proof::Equality(term1.clone(), term4.clone())
                     } else {
