@@ -237,6 +237,7 @@ impl TypeInfo {
         for fact in facts {
             match fact {
                 NormFact::Assign(var, NormExpr::Call(_head, body)) => {
+                    assert!(!self.global_types.contains_key(var));
                     assert!(let_bound.insert(*var));
                     body.iter().for_each(|bvar| {
                         if !self.global_types.contains_key(bvar) {

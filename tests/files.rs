@@ -13,7 +13,8 @@ impl Run {
     fn run(&self) {
         let _ = env_logger::builder().is_test(true).try_init();
         let program_read = std::fs::read_to_string(self.path).unwrap();
-        let program = if self.test_proofs {
+        let already_enables = program_read.starts_with("(set-option enable_proofs 1)");
+        let program = if self.test_proofs && !already_enables {
             format!("(set-option enable_proofs 1)\n{}", program_read)
         } else {
             program_read

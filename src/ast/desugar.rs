@@ -99,7 +99,13 @@ fn flatten_equalities(equalities: Vec<(Symbol, Expr)>, desugar: &mut Desugar) ->
     let mut res = vec![];
 
     for (lhs, rhs) in equalities {
-        expr_to_ssa(lhs, &rhs, desugar, &mut res);
+        if desugar.global_variables.contains(&lhs) {
+            let fresh = desugar.get_fresh();
+            expr_to_ssa(fresh, &rhs, desugar, &mut res);
+            res.push(NormFact::ConstrainEq(fresh, lhs));
+        } else {
+            expr_to_ssa(lhs, &rhs, desugar, &mut res);
+        }
     }
 
     res
@@ -322,6 +328,7 @@ pub struct Desugar {
     pub(crate) action_parser: ast::parse::ActionParser,
     // TODO fix getting fresh names using modules
     pub(crate) number_underscores: usize,
+    pub(crate) global_variables: HashSet<Symbol>,
 }
 
 impl Default for Desugar {
@@ -333,6 +340,7 @@ impl Default for Desugar {
             parser: ast::parse::ProgramParser::new(),
             action_parser: ast::parse::ActionParser::new(),
             number_underscores: 3,
+            global_variables: Default::default(),
         }
     }
 }
@@ -404,7 +412,10 @@ pub(crate) fn desugar_command(
         Command::Function(fdecl) => {
             vec![NCommand::Function(fdecl)]
         }
-        Command::Declare { name, sort } => desugar.declare(name, sort),
+        Command::Declare { name, sort } => {
+            desugar.global_variables.insert(name);
+            desugar.declare(name, sort)
+        }
         Command::Datatype { name, variants } => desugar_datatype(name, variants),
         Command::Rewrite(ruleset, rewrite) => {
             desugar_rewrite(ruleset, rewrite_name(&rewrite).into(), &rewrite, desugar)
@@ -455,6 +466,7 @@ pub(crate) fn desugar_command(
             expr,
             cost: _cost,
         } => {
+            desugar.global_variables.insert(name);
             let mut commands = vec![];
 
             let mut actions = vec![];
@@ -467,10 +479,15 @@ pub(crate) fn desugar_command(
             commands
         }
         Command::AddRuleset(name) => vec![NCommand::AddRuleset(name)],
-        Command::Action(action) => flatten_actions(&vec![action], desugar)
-            .into_iter()
-            .map(NCommand::NormAction)
-            .collect(),
+        Command::Action(action) => {
+            if let Action::Let(name, _) = action {
+                desugar.global_variables.insert(name);
+            }
+            flatten_actions(&vec![action], desugar)
+                .into_iter()
+                .map(NCommand::NormAction)
+                .collect()
+        }
         Command::Run(config) => {
             vec![NCommand::RunSchedule(NormSchedule::Run(
                 desugar_run_config(desugar, &config),
@@ -521,6 +538,7 @@ pub(crate) fn desugar_command(
                 ))));
 
                 // check that all the proofs in the egraph are valid
+                // TODO reenable
                 res.push(NCommand::CheckProof);
 
                 /*let proofvar = desugar.get_fresh();
@@ -636,6 +654,7 @@ impl Clone for Desugar {
             parser: ast::parse::ProgramParser::new(),
             action_parser: ast::parse::ActionParser::new(),
             number_underscores: self.number_underscores,
+            global_variables: self.global_variables.clone(),
         }
     }
 }
