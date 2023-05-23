@@ -4,12 +4,12 @@ use graphviz_rust::{attributes as a, dot_structures as d};
 fn eclass_cluster_name(eclass_id: &EClassID) -> String {
     format!("cluster_{}", eclass_id)
 }
-// The Node ID for the eclass is the first node in the eclass cluster
+/// The Node ID for the eclass is the first node in the eclass cluster
 fn eclass_node_id(eclass_id: &EClassID) -> d::NodeId {
     d::NodeId(d::Id::Plain(quote(format!("{}_0", eclass_id))), None)
 }
 
-// An e-class is converted into a cluster with a node for each function call
+/// An e-class is converted into a cluster with a node for each function call
 fn eclass_to_graphviz(
     eclass_id: &EClassID,
     fn_calls: &[FnCall],
@@ -59,7 +59,7 @@ fn eclass_to_graphviz(
 }
 
 impl PrimOutput {
-    // A primitive output, should be a node with the value and function call
+    /// A primitive output, should be a node with the value and function call
     fn to_graphviz(&self, id_gen: &mut NodeIDGenerator) -> Vec<d::Stmt> {
         let mut stmts = Vec::new();
         let label = format!("{}: {}", self.0 .0.name, self.1.to_string());
@@ -79,9 +79,9 @@ impl PrimOutput {
 }
 
 impl Arg {
-    // Returns an edge from the result to the argument
-    // If it's an e-class, use the e-class-id as the target
-    // Otherwise, create a node for the primitive value and use that as the target
+    /// Returns an edge from the result to the argument
+    /// If it's an e-class, use the e-class-id as the target
+    /// Otherwise, create a node for the primitive value and use that as the target
     fn to_graphviz(&self, id_gen: &mut NodeIDGenerator, result_id: d::NodeId) -> Vec<d::Stmt> {
         match self {
             Arg::Prim(p) => {
@@ -112,7 +112,7 @@ impl Arg {
     }
 }
 
-// Implement conversion of Graph to graphviz Graph
+/// Implement conversion of Graph to graphviz Graph
 impl Graph {
     pub fn to_graphviz(&self) -> d::Graph {
         let id_generator = &mut NodeIDGenerator::new();
@@ -153,7 +153,7 @@ impl Graph {
     }
 }
 
-// Struct which generates an incrementing ID for each node
+/// Struct which generates an incrementing ID for each node
 struct NodeIDGenerator {
     next_id: usize,
 }

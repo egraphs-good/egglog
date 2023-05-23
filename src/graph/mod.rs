@@ -5,16 +5,16 @@ use crate::{ast::Expr, util::HashMap};
 
 type EClassID = String;
 
-// Exposed graph structure which can be used to print/visualize the state of the e-graph.
+/// Exposed graph structure which can be used to print/visualize the state of the e-graph.
 #[derive(Debug)]
 pub(crate) struct Graph {
-    // All of the primitive values which are outputs of functions
+    /// All of the primitive values which are outputs of functions
     pub prim_outputs: Vec<PrimOutput>,
-    // All of the e-classes which are have non primitive types
+    /// All of the e-classes which are have non primitive types
     pub eclasses: HashMap<EClassID, Vec<FnCall>>,
 }
 
-// A primitive value which is output from a function.
+/// A primitive value which is output from a function.
 #[derive(Debug)]
 pub(crate) struct PrimOutput(pub FnCall, pub PrimValue);
 
