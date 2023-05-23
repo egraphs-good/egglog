@@ -50,6 +50,16 @@
         #graph {
             border-top: 2px solid gray;
             flex-grow: 1;
+            position: relative;
+            overflow: auto;
+        }
+        /* Don't let graph expand https://stackoverflow.com/a/38852981/907060 */
+        #graph-inner {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
         }
     </style>
 
@@ -74,8 +84,14 @@
         worker.onmessage = function (message) {
             console.log("got message", message);
             output.innerHTML = message.data.text;
-            d3.select("#graph")
-                .graphviz()
+            const graphContainer = d3.select("#graph-inner")
+            const width = graphContainer.node().clientWidth;
+            const height = graphContainer.node().clientHeight;
+            graphContainer.graphviz()
+                .width(width)
+                .height(height)
+                .fit(true)
+                // .scale(0.9)
                 .renderDot(message.data.dot);
         }
 
@@ -188,7 +204,9 @@
             </select>
         </div>
         <div id="output">Click "Run" to run code</div>
-        <div id="graph"></div>
+        <div id="graph">
+            <div id="graph-inner"></div>
+        </div>
     </div>
 </body>
 
