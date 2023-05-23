@@ -7,7 +7,7 @@ static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
 #[wasm_bindgen(getter_with_clone)]
 pub struct Result {
     pub text: String,
-    pub dot: String
+    pub dot: String,
 }
 
 #[wasm_bindgen]
@@ -24,10 +24,9 @@ pub fn run_program(input: &str) -> Result {
         Err(e) => {
             log::info!("egg failed");
             Result {
-                text:  e.to_string(),
+                text: e.to_string(),
                 dot: "".to_string(),
             }
-
         }
     }
 }
