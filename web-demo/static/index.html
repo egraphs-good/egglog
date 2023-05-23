@@ -87,18 +87,23 @@
             const graphContainer = d3.select("#graph-inner")
             const width = graphContainer.node().clientWidth;
             const height = graphContainer.node().clientHeight;
-            graphContainer.graphviz()
-                // Set to be as big as container
-                .width(width)
-                .height(height)
+            const graphviz = graphContainer.graphviz({
                 // Fit graph to that size, so that all is visible
-                .fit(true)
+                fit: true,
+                // Set to be as big as container
+                width,
+                height,
                 // Don't animate transitions between shapes for performance
-                .tweenShapes(false)
-                .tweenPaths(false)
-                // Transition between graphs
+                tweenPaths: false,
+                tweenShapes: false,
+            })
                 .transition(d3.transition().duration(2000))
-                .renderDot(message.data.dot);
+                .dot(message.data.dot).render();
+            // If we have made a zoom selection, reset that before transitioning
+            // TODO: figure out how to transition BOTH zoom an dot at once
+            if (graphviz._zoomSelection) {
+                graphviz.resetZoom();
+            }
         }
 
         window.onpopstate = function (event) {
