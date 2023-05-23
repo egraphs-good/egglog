@@ -132,10 +132,10 @@ impl ProofChecker {
                 self.proven_equal.union(Id::from(*lhs), Id::from(*rhs), "".into());
                 Proof::Equality(self.termdag.get(*lhs), self.termdag.get(*rhs))
             },
-            ("ComputePrim__", [prim]) => {
+            ("ComputePrim__", [prim, from]) => {
                 // TODO check the prim
                 // Return a dummy proof
-                Proof::Equality(self.termdag.get(*prim), self.termdag.get(*prim))
+                Proof::Provenance(self.termdag.get(*prim))
             },
             ("Transitivity__", [prooflist]) => {
                 let res = self.check_proof_list(self.termdag.get(*prooflist));

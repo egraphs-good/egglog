@@ -184,13 +184,22 @@ fn instrument_facts(
                 let literal_name = proof_state.literal_name(rhs);
                 let rep_trm = proof_state.get_fresh();
                 let rep_prf = proof_state.get_fresh();
+                let trm_prf = proof_state.get_fresh();
                 actions.push(NormAction::Let(
                     rep_trm,
                     NormExpr::Call(make_ast_version_prim(literal_name), vec![*lhs]),
                 ));
                 actions.push(NormAction::Let(
                     rep_prf,
-                    NormExpr::Call("ComputePrim__".into(), vec![rep_trm]),
+                    NormExpr::Call("Original__".into(), vec![rep_trm]),
+                ));
+                actions.push(NormAction::Let(
+                    trm_prf,
+                    NormExpr::Call("MakeTrmPrf__".into(), vec![rep_trm, rep_prf]),
+                ));
+                actions.push(NormAction::Set(
+                    NormExpr::Call(make_rep_version_prim(&literal_name), vec![*lhs]),
+                    trm_prf,
                 ));
 
                 info.var_term.insert(*lhs, rep_trm);
@@ -199,12 +208,28 @@ fn instrument_facts(
             NormFact::Assign(lhs, NormExpr::Call(head, body))
                 if proof_state.type_info.is_primitive(*head) =>
             {
+                let types = proof_state
+                    .type_info
+                    .typecheck_expr(
+                        proof_state.current_ctx,
+                        &NormExpr::Call(*head, body.clone()),
+                        true,
+                    )
+                    .unwrap();
+                let ast_name = make_ast_version(proof_state, &NormExpr::Call(*head, body.clone()));
+                let ast_prim = make_ast_version_prim(types.output.name());
+
                 // child terms should already exist if we are computing something
+                let compute_trm = proof_state.get_fresh();
                 let rep_trm = proof_state.get_fresh();
                 actions.push(NormAction::Let(
                     rep_trm,
+                    NormExpr::Call(ast_prim, vec![*lhs]),
+                ));
+                actions.push(NormAction::Let(
+                    compute_trm,
                     NormExpr::Call(
-                        make_ast_version(proof_state, &NormExpr::Call(*head, body.clone())),
+                        ast_name,
                         body.iter()
                             .map(|v| get_var_term(*v, proof_state, &info))
                             .collect(),
@@ -212,10 +237,9 @@ fn instrument_facts(
                 ));
 
                 let rep_prf = proof_state.get_fresh();
-
                 actions.push(NormAction::Let(
                     rep_prf,
-                    NormExpr::Call("ComputePrim__".into(), vec![rep_trm]),
+                    NormExpr::Call("ComputePrim__".into(), vec![rep_trm, compute_trm]),
                 ));
                 info.var_term.insert(*lhs, rep_trm);
                 info.var_proof.insert(*lhs, rep_prf);
@@ -374,30 +398,59 @@ fn make_expr_rep(
 ) -> Symbol {
     let NormExpr::Call(head, body) = expr;
     let newterm = make_expr_ast(proof_state, proof_info, expr, res);
+    if proof_state.type_info.is_primitive(*head) {
+        let types = proof_state
+            .type_info
+            .typecheck_expr(proof_state.current_ctx, expr, true)
+            .unwrap();
+        let ast_prim = make_ast_version_prim(types.output.name());
 
-    let ruletrm = proof_state.get_fresh();
-    res.push(NormAction::Let(
-        ruletrm,
-        NormExpr::Call(
-            "RuleTerm__".into(),
-            vec![proof_info.rule_proof.unwrap(), newterm],
-        ),
-    ));
+        let computed_literal = proof_state.get_fresh();
+        res.push(NormAction::Let(computed_literal, expr.clone()));
 
-    let trmprf = proof_state.get_fresh();
-    res.push(NormAction::Let(
-        trmprf,
-        NormExpr::Call("MakeTrmPrf__".into(), vec![newterm, ruletrm]),
-    ));
+        let computed = proof_state.get_fresh();
+        res.push(NormAction::Let(
+            computed,
+            NormExpr::Call(ast_prim, vec![computed_literal]),
+        ));
 
-    res.push(NormAction::Set(
-        NormExpr::Call(
-            make_rep_version(proof_state, &NormExpr::Call(*head, body.clone())),
-            body.clone(),
-        ),
-        trmprf,
-    ));
-    newterm
+        let compute_proof = proof_state.get_fresh();
+        res.push(NormAction::Let(
+            compute_proof,
+            NormExpr::Call("ComputePrim__".into(), vec![computed, newterm]),
+        ));
+
+        let trmprf = proof_state.get_fresh();
+        res.push(NormAction::Let(
+            trmprf,
+            NormExpr::Call("MakeTrmPrf__".into(), vec![computed, compute_proof]),
+        ));
+
+        computed
+    } else {
+        let ruletrm = proof_state.get_fresh();
+        res.push(NormAction::Let(
+            ruletrm,
+            NormExpr::Call(
+                "RuleTerm__".into(),
+                vec![proof_info.rule_proof.unwrap(), newterm],
+            ),
+        ));
+        let trmprf = proof_state.get_fresh();
+        res.push(NormAction::Let(
+            trmprf,
+            NormExpr::Call("MakeTrmPrf__".into(), vec![newterm, ruletrm]),
+        ));
+
+        res.push(NormAction::Set(
+            NormExpr::Call(
+                make_rep_version(proof_state, &NormExpr::Call(*head, body.clone())),
+                body.clone(),
+            ),
+            trmprf,
+        ));
+        newterm
+    }
 }
 
 fn add_action_proof(
@@ -824,6 +877,27 @@ impl ProofState {
         self.desugar.parse_program(input)
     }
 
+    fn add_prooflist(&mut self, proofs: Vec<Symbol>, res: &mut Vec<NormAction>) -> Symbol {
+        let mut prooflist = "Null__".into();
+        for proof in proofs {
+            let new_prooflist = self.get_fresh();
+            res.push(NormAction::Let(
+                new_prooflist,
+                NormExpr::Call("Cons__".into(), vec![proof, prooflist]),
+            ));
+            prooflist = new_prooflist;
+        }
+        prooflist
+    }
+
+    fn run_proof_rules(&self) -> Command {
+        Command::RunSchedule(Schedule::Saturate(Box::new(Schedule::Run(RunConfig {
+            ruleset: "proofrules__".into(),
+            until: None,
+            limit: 1,
+        }))))
+    }
+
     // TODO we need to also instrument merge actions and merge because they can add new terms that need representatives
     // the egraph is the initial egraph with only default sorts
     pub(crate) fn add_proofs(&mut self, program: Vec<NormCommand>) -> Vec<Command> {
@@ -872,12 +946,44 @@ impl ProofState {
                     res.extend(proof_original_action(action, self));
                 }
                 NCommand::Check(_facts) => {
+                    res.push(self.run_proof_rules());
                     res.push(command.to_command());
                 }
                 NCommand::RunSchedule(schedule) => {
                     res.push(Command::RunSchedule(instrument_schedule(schedule)));
                 }
-                _ => res.push(command.to_command()),
+                NCommand::Extract { .. } => {
+                    res.push(self.run_proof_rules());
+                    res.push(command.to_command());
+                }
+                NCommand::Print { .. } => {
+                    res.push(self.run_proof_rules());
+                    res.push(command.to_command());
+                }
+                NCommand::SetOption { .. } => {
+                    res.push(command.to_command());
+                }
+                NCommand::AddRuleset(..) => {
+                    res.push(command.to_command());
+                }
+                NCommand::Simplify { .. } => {
+                    res.push(self.run_proof_rules());
+                    res.push(command.to_command());
+                }
+                NCommand::CheckProof { .. } => {
+                    res.push(self.run_proof_rules());
+                    res.push(command.to_command());
+                }
+                NCommand::PrintSize { .. } => {
+                    res.push(self.run_proof_rules());
+                    res.push(command.to_command());
+                }
+                NCommand::Output { .. }
+                | NCommand::Pop(..)
+                | NCommand::Fail(..)
+                | NCommand::Input { .. } => {
+                    res.push(command.to_command());
+                }
             }
         }
 

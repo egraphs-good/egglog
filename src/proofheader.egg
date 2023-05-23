@@ -17,9 +17,9 @@
   ;; using a rule justification,
   ;; proves a term exists
   (RuleTerm__ Proof__ Ast__)
-  ;; either a primitive appearing as a constant in the rule
-  ;; or the computation of a primitive based on already-justified variables
-  (ComputePrim__ Ast__)
+  ;; Compute a primitive given 1) the result
+  ;; and 2) an ast with one operator with primitive children
+  (ComputePrim__ Ast__ Ast__)
 
   ;; using a rule justification, proves two terms are equal
   (RuleEquality__ Proof__ Ast__ Ast__)
@@ -96,7 +96,7 @@
        (= cost (ProofCost__ p1)))
       ((set (ProofCost__ p) cost))
       :ruleset proof-extract__)
-(rule ((= p (ComputePrim__ a)))
+(rule ((= p (ComputePrim__ a b)))
       ((set (ProofCost__ p) 1))
       :ruleset proof-extract__)
 (rule ((= p (RuleEquality__ p1 a b))

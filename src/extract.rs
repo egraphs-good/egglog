@@ -96,7 +96,19 @@ impl<'a> Extractor<'a> {
             let (cost, node) = self
                 .costs
                 .get(&id)
-                .unwrap_or_else(|| panic!("No cost for {:?}", value))
+                .unwrap_or_else(|| {
+                    eprintln!("No cost for {:?}", value);
+                    for func in self.egraph.functions.values() {
+                        for (inputs, output) in func.nodes.iter() {
+                            if output.value == value {
+                                eprintln!("Found unextractable function: {:?}", func.decl.name);
+                                eprintln!("Inputs: {:?}", inputs);
+                            }
+                        }
+                    }
+
+                    panic!("No cost for {:?}", value)
+                })
                 .clone();
             (cost, node)
         } else {

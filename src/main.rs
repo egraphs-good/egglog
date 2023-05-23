@@ -9,6 +9,8 @@ struct Args {
     fact_directory: Option<PathBuf>,
     #[clap(long)]
     naive: bool,
+    #[clap(long)]
+    desugar: bool,
     inputs: Vec<PathBuf>,
 }
 
@@ -54,11 +56,24 @@ fn main() {
             panic!("Failed to read file {arg}")
         });
         let mut egraph = mk_egraph();
-        match egraph.parse_and_run_program(&s) {
-            Ok(_msgs) => {}
-            Err(err) => {
-                log::error!("{}", err);
-                std::process::exit(1)
+
+        if args.desugar {
+            let parsed = egraph.parse_program(&s).unwrap();
+            let desugared_str = egraph
+                .process_commands(parsed)
+                .unwrap()
+                .into_iter()
+                .map(|x| x.to_string())
+                .collect::<Vec<String>>()
+                .join("\n");
+            println!("{}", desugared_str);
+        } else {
+            match egraph.parse_and_run_program(&s) {
+                Ok(_msgs) => {}
+                Err(err) => {
+                    log::error!("{}", err);
+                    std::process::exit(1)
+                }
             }
         }
 
