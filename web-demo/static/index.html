@@ -88,12 +88,16 @@
             const width = graphContainer.node().clientWidth;
             const height = graphContainer.node().clientHeight;
             graphContainer.graphviz()
+                // Set to be as big as container
                 .width(width)
                 .height(height)
+                // Fit graph to that size, so that all is visible
                 .fit(true)
+                // Don't animate transitions between shapes for performance
                 .tweenShapes(false)
                 .tweenPaths(false)
-                // .scale(0.9)
+                // Transition between graphs
+                .transition(d3.transition().duration(2000))
                 .renderDot(message.data.dot);
         }
 
