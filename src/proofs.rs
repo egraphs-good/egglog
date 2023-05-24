@@ -181,6 +181,8 @@ fn instrument_facts(
     for fact in body {
         match fact {
             NormFact::AssignLit(lhs, rhs) => {
+                // literals need no justification
+                // so we use "Original__"
                 let literal_name = proof_state.literal_name(rhs);
                 let rep_trm = proof_state.get_fresh();
                 let rep_prf = proof_state.get_fresh();

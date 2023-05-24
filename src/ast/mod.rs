@@ -64,6 +64,21 @@ impl NormCommand {
             })
             .collect()
     }
+
+    pub fn resugar(&self) -> Command {
+        match &self.command {
+            NCommand::NormRule {
+                name,
+                ruleset,
+                rule,
+            } => Command::Rule {
+                name: *name,
+                ruleset: *ruleset,
+                rule: rule.resugar(),
+            },
+            _ => self.command.to_command(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
@@ -798,25 +813,23 @@ impl Action {
 
     pub fn replace_canon(&self, canon: &HashMap<Symbol, Expr>) -> Self {
         match self {
-            Action::Let(lhs, rhs) => Action::Let(*lhs, rhs.replace_canon(canon)),
+            Action::Let(lhs, rhs) => Action::Let(*lhs, rhs.subst(canon)),
             Action::Set(lhs, args, rhs) => Action::Set(
                 *lhs,
-                args.iter().map(|e| e.replace_canon(canon)).collect(),
-                rhs.replace_canon(canon),
+                args.iter().map(|e| e.subst(canon)).collect(),
+                rhs.subst(canon),
             ),
             Action::SetNoTrack(lhs, args, rhs) => Action::SetNoTrack(
                 *lhs,
-                args.iter().map(|e| e.replace_canon(canon)).collect(),
-                rhs.replace_canon(canon),
+                args.iter().map(|e| e.subst(canon)).collect(),
+                rhs.subst(canon),
             ),
             Action::Delete(lhs, args) => {
-                Action::Delete(*lhs, args.iter().map(|e| e.replace_canon(canon)).collect())
+                Action::Delete(*lhs, args.iter().map(|e| e.subst(canon)).collect())
             }
-            Action::Union(lhs, rhs) => {
-                Action::Union(lhs.replace_canon(canon), rhs.replace_canon(canon))
-            }
+            Action::Union(lhs, rhs) => Action::Union(lhs.subst(canon), rhs.subst(canon)),
             Action::Panic(msg) => Action::Panic(msg.clone()),
-            Action::Expr(e) => Action::Expr(e.replace_canon(canon)),
+            Action::Expr(e) => Action::Expr(e.subst(canon)),
         }
     }
 }
@@ -851,6 +864,82 @@ impl NormRule {
     pub fn to_rule(&self) -> Rule {
         Rule {
             head: self.head.iter().map(|a| a.to_action()).collect(),
+            body: self.body.iter().map(|f| f.to_fact()).collect(),
+        }
+    }
+
+    pub fn resugar(&self) -> Rule {
+        let mut head = Vec::<Action>::default();
+        let mut subst = HashMap::<Symbol, Expr>::default();
+        let mut used = HashSet::<Symbol>::default();
+        for a in &self.head {
+            match a {
+                NormAction::Let(symbol, expr) => {
+                    let new_expr = expr.to_expr();
+                    new_expr.map(&mut |subexpr| {
+                        if let Expr::Var(v) = subexpr {
+                            used.insert(*v);
+                        }
+                        subexpr.clone()
+                    });
+                    subst.insert(*symbol, new_expr.subst(&subst));
+                }
+                NormAction::LetVar(symbol, other) => {
+                    let new_expr = subst.get(other).unwrap_or(&Expr::Var(*other)).clone();
+                    used.insert(*other);
+                    subst.insert(*symbol, new_expr);
+                }
+                NormAction::LetLit(symbol, lit) => {
+                    subst.insert(*symbol, Expr::Lit(lit.clone()));
+                }
+                NormAction::Set(expr, other) => {
+                    let new_expr = expr.to_expr();
+                    new_expr.map(&mut |subexpr| {
+                        if let Expr::Var(v) = subexpr {
+                            used.insert(*v);
+                        }
+                        subexpr.clone()
+                    });
+                    let other_expr = subst.get(other).unwrap_or(&Expr::Var(*other)).clone();
+                    used.insert(*other);
+                    let substituted = new_expr.subst(&subst);
+                    match substituted {
+                        Expr::Call(op, children) => {
+                            head.push(Action::Set(op, children, other_expr));
+                        }
+                        _ => panic!("Expected call in set"),
+                    }
+                }
+                NormAction::Delete(expr) => {
+                    let new_expr = expr.to_expr();
+                    new_expr.map(&mut |subexpr| {
+                        if let Expr::Var(v) = subexpr {
+                            used.insert(*v);
+                        }
+                        subexpr.clone()
+                    });
+                    match new_expr.subst(&subst) {
+                        Expr::Call(op, children) => {
+                            head.push(Action::Delete(op, children));
+                        }
+                        _ => panic!("Expected call in delete"),
+                    }
+                }
+                NormAction::Union(lhs, rhs) => {
+                    let new_lhs = subst.get(lhs).unwrap_or(&Expr::Var(*lhs)).clone();
+                    let new_rhs = subst.get(rhs).unwrap_or(&Expr::Var(*rhs)).clone();
+                    used.insert(*lhs);
+                    used.insert(*rhs);
+                    head.push(Action::Union(new_lhs, new_rhs));
+                }
+                NormAction::Panic(msg) => {
+                    head.push(Action::Panic(msg.clone()));
+                }
+            }
+        }
+
+        Rule {
+            head,
             body: self.body.iter().map(|f| f.to_fact()).collect(),
         }
     }
