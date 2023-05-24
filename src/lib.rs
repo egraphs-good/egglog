@@ -431,20 +431,20 @@ impl EGraph {
             let mut children = Vec::new();
             for (a, t) in ins.iter().copied().zip(&schema.input) {
                 if t.is_eq_sort() {
-                    children.push(extractor.find_best(a).1);
+                    children.push(extractor.find_best(a, &mut termdag, &schema.output).1);
                 } else {
-                    children.push(extractor.termdag.expr_to_term(&t.make_expr(a)));
+                    children.push(termdag.expr_to_term(&t.make_expr(self, a)));
                 };
             }
 
             let out = if schema.output.is_eq_sort() {
-                extractor.find_best(out.value).1
-            } else {
                 extractor
-                    .termdag
-                    .expr_to_term(&schema.output.make_expr(out.value))
+                    .find_best(out.value, &mut termdag, &schema.output)
+                    .1
+            } else {
+                termdag.expr_to_term(&schema.output.make_expr(self, out.value))
             };
-            terms.push((extractor.termdag.make(sym, children), out));
+            terms.push((termdag.make(sym, children), out));
         }
         drop(extractor);
 
@@ -1032,10 +1032,10 @@ impl EGraph {
 
     fn simplify(&mut self, expr: Expr, config: &NormRunConfig) -> Result<ExtractReport, Error> {
         self.push();
-        let (_t, value) = self.eval_expr(&expr, None, true).unwrap();
+        let (t, value) = self.eval_expr(&expr, None, true).unwrap();
         self.run_report = Some(self.run_rules(config));
         let mut termdag = TermDag::default();
-        let (cost, expr) = self.extract(value, &mut termdag);
+        let (cost, expr) = self.extract(value, &mut termdag, &t);
         self.pop().unwrap();
         Ok(ExtractReport {
             cost,
@@ -1047,9 +1047,9 @@ impl EGraph {
     // Extract an expression from the current state, returning the cost, the extracted expression and some number
     // of other variants, if variants is not zero.
     pub fn extract_expr(&mut self, e: Expr, num_variants: usize) -> Result<ExtractReport, Error> {
-        let (_t, value) = self.eval_expr(&e, None, true)?;
+        let (t, value) = self.eval_expr(&e, None, true)?;
         let mut termdag = TermDag::default();
-        let (cost, expr) = self.extract(value, &mut termdag);
+        let (cost, expr) = self.extract(value, &mut termdag, &t);
         let variants = match num_variants {
             0 => vec![],
             1 => vec![expr.clone()],
@@ -1174,10 +1174,10 @@ impl EGraph {
             // we need to pass in the desugar
             let proofs = self.proof_state.add_proofs(program_desugared);
 
-            let final_desugared =
-                self.proof_state
-                    .desugar
-                    .desugar_program(proofs, false, self.seminaive)?;
+            let final_desugared = self
+                .proof_state
+                .desugar
+                .desugar_program(proofs, false, false)?;
 
             // revert back to the type info before
             // proofs were added, typecheck again

@@ -127,13 +127,17 @@ impl Sort for MapSort {
         });
     }
 
-    fn make_expr(&self, value: Value) -> Expr {
+    fn make_expr(&self, egraph: &EGraph, value: Value) -> Expr {
         let map = ValueMap::load(self, &value);
         let mut expr = Expr::call("map-empty", []);
+        let mut termdag = TermDag::default();
         for (k, v) in map.iter().rev() {
-            let k = self.key.make_expr(*k);
-            let v = self.value.make_expr(*v);
-            expr = Expr::call("map-insert", [expr, k, v])
+            let k = egraph.extract(*k, &mut termdag, &self.key).1;
+            let v = egraph.extract(*v, &mut termdag, &self.value).1;
+            expr = Expr::call(
+                "map-insert",
+                [expr, termdag.term_to_expr(&k), termdag.term_to_expr(&v)],
+            )
         }
         expr
     }

@@ -3,15 +3,20 @@ use hashbrown::hash_map::Entry;
 use crate::ast::Symbol;
 use crate::termdag::{Term, TermDag};
 use crate::util::HashMap;
-use crate::{EGraph, Function, Id, Value};
+use crate::{ArcSort, EGraph, Expr, Function, Id, Value};
 
 type Cost = usize;
+
+#[derive(Debug)]
+struct Node<'a> {
+    sym: Symbol,
+    inputs: &'a [Value],
+}
 
 pub(crate) struct Extractor<'a> {
     costs: HashMap<Id, (Cost, Term)>,
     ctors: Vec<Symbol>,
     egraph: &'a EGraph,
-    pub(crate) termdag: &'a mut TermDag,
 }
 
 impl EGraph {
@@ -25,8 +30,8 @@ impl EGraph {
         None
     }
 
-    pub fn extract(&mut self, value: Value, termdag: &mut TermDag) -> (Cost, Term) {
-        Extractor::new(self, termdag).find_best(value)
+    pub fn extract(&self, value: Value, termdag: &mut TermDag, arcsort: &ArcSort) -> (Cost, Term) {
+        Extractor::new(self, termdag).find_best(value, termdag, arcsort)
     }
 
     pub fn extract_variants(
@@ -37,41 +42,36 @@ impl EGraph {
     ) -> Vec<Term> {
         let (tag, id) = self.value_to_id(value).unwrap();
         let output_value = &Value::from_id(tag, id);
-        let mut ext = Extractor::new(self, termdag);
-
-        let mut result = vec![];
-        for sym in ext.ctors.clone() {
-            let func = &self.functions[&sym];
-            if !func.schema.output.is_eq_sort() {
-                return vec![];
-            }
-            assert!(func.schema.output.is_eq_sort());
-
-            for (inputs, output) in func.nodes.iter() {
-                if result.len() >= limit {
-                    return result;
+        let ext = &Extractor::new(self, termdag);
+        ext.ctors
+            .iter()
+            .flat_map(|&sym| {
+                let func = &self.functions[&sym];
+                if !func.schema.output.is_eq_sort() {
+                    return vec![];
                 }
-                if &output.value == output_value {
-                    let mut children = vec![];
-                    for input in inputs {
-                        let node = ext.find_best(*input).1;
-                        children.push(ext.termdag.lookup(&node));
-                    }
-                    result.push(Term::App(sym, children))
-                }
-            }
-        }
-        result
+                assert!(func.schema.output.is_eq_sort());
+                func.nodes
+                    .iter()
+                    .filter_map(|(inputs, output)| {
+                        (&output.value == output_value).then(|| {
+                            let node = Node { sym, inputs };
+                            ext.expr_from_node(&node, termdag)
+                        })
+                    })
+                    .collect()
+            })
+            .take(limit)
+            .collect()
     }
 }
 
 impl<'a> Extractor<'a> {
-    pub fn new(egraph: &'a EGraph, termdag: &'a mut TermDag) -> Self {
+    pub fn new(egraph: &'a EGraph, termdag: &mut TermDag) -> Self {
         let mut extractor = Extractor {
             costs: HashMap::default(),
             egraph,
             ctors: vec![],
-            termdag,
         };
 
         // HACK
@@ -85,12 +85,20 @@ impl<'a> Extractor<'a> {
         );
 
         log::debug!("Extracting from ctors: {:?}", extractor.ctors);
-        extractor.find_costs();
+        extractor.find_costs(termdag);
         extractor
     }
 
-    pub fn find_best(&mut self, value: Value) -> (Cost, Term) {
-        let sort = self.egraph.get_sort(&value).unwrap();
+    fn expr_from_node(&self, node: &Node, termdag: &mut TermDag) -> Term {
+        let mut children = vec![];
+        for value in node.inputs {
+            let arcsort = self.egraph.get_sort(&value).unwrap();
+            children.push(self.find_best(value.clone(), termdag, arcsort).1)
+        }
+        termdag.make(node.sym, children)
+    }
+
+    pub fn find_best(&self, value: Value, termdag: &mut TermDag, sort: &ArcSort) -> (Cost, Term) {
         if sort.is_eq_sort() {
             let id = self.egraph.find(Id::from(value.bits as usize));
             let (cost, node) = self
@@ -112,7 +120,7 @@ impl<'a> Extractor<'a> {
                 .clone();
             (cost, node)
         } else {
-            (0, self.termdag.expr_to_term(&sort.make_expr(value)))
+            (0, termdag.expr_to_term(&sort.make_expr(self.egraph, value)))
         }
     }
 
@@ -120,6 +128,7 @@ impl<'a> Extractor<'a> {
         &mut self,
         function: &Function,
         children: &[Value],
+        termdag: &mut TermDag,
     ) -> Option<(Vec<Term>, Cost)> {
         let mut cost = function.decl.cost.unwrap_or(1);
         let types = &function.schema.input;
@@ -132,7 +141,7 @@ impl<'a> Extractor<'a> {
                 terms.push(term.clone());
                 *cost
             } else {
-                let term = self.termdag.expr_to_term(&ty.make_expr(*value));
+                let term = termdag.expr_to_term(&ty.make_expr(self.egraph, *value));
                 terms.push(term);
                 1
             });
@@ -140,7 +149,7 @@ impl<'a> Extractor<'a> {
         Some((terms, cost))
     }
 
-    fn find_costs(&mut self) {
+    fn find_costs(&mut self, termdag: &mut TermDag) {
         let mut did_something = true;
         while did_something {
             did_something = false;
@@ -149,8 +158,10 @@ impl<'a> Extractor<'a> {
                 let func = &self.egraph.functions[&sym];
                 if func.schema.output.is_eq_sort() {
                     for (inputs, output) in func.nodes.iter() {
-                        if let Some((term_inputs, new_cost)) = self.node_total_cost(func, inputs) {
-                            let make_new_pair = || (new_cost, self.termdag.make(sym, term_inputs));
+                        if let Some((term_inputs, new_cost)) =
+                            self.node_total_cost(func, inputs, termdag)
+                        {
+                            let make_new_pair = || (new_cost, termdag.make(sym, term_inputs));
 
                             let id = self.egraph.find(Id::from(output.value.bits as usize));
                             match self.costs.entry(id) {

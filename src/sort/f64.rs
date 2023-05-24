@@ -44,7 +44,7 @@ impl Sort for F64Sort {
         add_primitives!(eg, "max" = |a: f64, b: f64| -> f64 { a.max(b) });
     }
 
-    fn make_expr(&self, value: Value) -> Expr {
+    fn make_expr(&self, _egraph: &EGraph, value: Value) -> Expr {
         assert!(value.tag == self.name());
         Expr::Lit(Literal::F64(OrderedFloat(f64::from_bits(value.bits))))
     }

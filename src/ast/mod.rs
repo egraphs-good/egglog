@@ -985,6 +985,19 @@ impl Display for NormRule {
 }
 
 impl Rule {
+    pub fn is_proof_instrumented(&self) -> bool {
+        let mut instrumented = false;
+        self.map_exprs(&mut |e| {
+            if let Expr::Call(op, _) = e {
+                if op.to_string() == "currentAge__" {
+                    instrumented = true;
+                }
+            }
+            e.clone()
+        });
+        instrumented
+    }
+
     pub(crate) fn to_sexp(&self, ruleset: Symbol, name: Symbol) -> Sexp {
         let mut res = vec![
             Sexp::String("rule".into()),

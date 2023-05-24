@@ -92,6 +92,23 @@ impl TermDag {
         res
     }
 
+    pub fn term_to_expr(&mut self, term: &Term) -> Expr {
+        match term {
+            Term::Lit(lit) => Expr::Lit(lit.clone()),
+            Term::Var(v) => Expr::Var(*v),
+            Term::App(op, args) => {
+                let args = args
+                    .iter()
+                    .map(|a| {
+                        let term = self.get(*a);
+                        self.term_to_expr(&term)
+                    })
+                    .collect();
+                Expr::Call(*op, args)
+            }
+        }
+    }
+
     pub fn to_string(&self, term: &Term) -> String {
         let mut stored = HashMap::<usize, String>::default();
         let mut seen = HashSet::<usize>::default();
