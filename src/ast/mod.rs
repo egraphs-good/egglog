@@ -985,17 +985,11 @@ impl Display for NormRule {
 }
 
 impl Rule {
+    // TODO fix
+    // nasty function that detects if proofs have been
+    // added
     pub fn is_proof_instrumented(&self) -> bool {
-        let mut instrumented = false;
-        self.map_exprs(&mut |e| {
-            if let Expr::Call(op, _) = e {
-                if op.to_string() == "currentAge__" {
-                    instrumented = true;
-                }
-            }
-            e.clone()
-        });
-        instrumented
+        self.to_string().contains("currentAge__")
     }
 
     pub(crate) fn to_sexp(&self, ruleset: Symbol, name: Symbol) -> Sexp {
