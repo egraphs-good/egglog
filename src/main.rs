@@ -11,6 +11,8 @@ struct Args {
     naive: bool,
     #[clap(long)]
     desugar: bool,
+    #[clap(long)]
+    resugar: bool,
     inputs: Vec<PathBuf>,
 }
 
@@ -57,13 +59,19 @@ fn main() {
         });
         let mut egraph = mk_egraph();
 
-        if args.desugar {
+        if args.desugar || args.resugar {
             let parsed = egraph.parse_program(&s).unwrap();
             let desugared_str = egraph
                 .process_commands(parsed)
                 .unwrap()
                 .into_iter()
-                .map(|x| x.resugar().to_string())
+                .map(|x| {
+                    if args.resugar {
+                        x.resugar().to_string()
+                    } else {
+                        x.to_string()
+                    }
+                })
                 .collect::<Vec<String>>()
                 .join("\n");
             println!("{}", desugared_str);

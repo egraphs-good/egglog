@@ -716,8 +716,15 @@ impl Desugar {
                         }
                     }
                 }
-                res.push(NormAction::Let(assign, NormExpr::Call(*f, new_children)));
-                assign
+                let result = NormExpr::Call(*f, new_children);
+                let result_expr = result.to_expr();
+                if let Some(existing) = memo.get(&result_expr) {
+                    *existing
+                } else {
+                    memo.insert(result_expr.clone(), assign);
+                    res.push(NormAction::Let(assign, result));
+                    assign
+                }
             }
         };
         memo.insert(expr.clone(), res);
