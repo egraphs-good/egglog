@@ -29,7 +29,7 @@ impl Run {
                 .process_commands(parsed)
                 .unwrap()
                 .into_iter()
-                .map(|x| x.to_string())
+                .map(|x| x.resugar().to_string())
                 .collect::<Vec<String>>()
                 .join("\n");
 
