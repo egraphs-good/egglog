@@ -113,6 +113,12 @@ impl Expr {
         }
     }
 
+    pub fn ast_size(&self) -> usize {
+        let mut size = 0;
+        self.walk(&mut |e| size += 1, &mut |_| {});
+        size
+    }
+
     pub fn walk(&self, pre: &mut impl FnMut(&Self), post: &mut impl FnMut(&Self)) {
         pre(self);
         self.children()

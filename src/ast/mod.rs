@@ -882,7 +882,13 @@ impl NormRule {
                         }
                         subexpr.clone()
                     });
-                    subst.insert(*symbol, new_expr.subst(&subst));
+                    let substituted = new_expr.subst(&subst);
+
+                    if substituted.ast_size() > 3 {
+                        head.push(Action::Let(*symbol, substituted));
+                    } else {
+                        subst.insert(*symbol, substituted);
+                    }
                 }
                 NormAction::LetVar(symbol, other) => {
                     let new_expr = subst.get(other).unwrap_or(&Expr::Var(*other)).clone();
@@ -935,6 +941,19 @@ impl NormRule {
                 NormAction::Panic(msg) => {
                     head.push(Action::Panic(msg.clone()));
                 }
+            }
+        }
+
+        // unused substitutions need to be added
+        // to the action, since they have the side-effect
+        // of adding to the database
+        for (var, expr) in subst {
+            if !used.contains(&var) {
+                match expr {
+                    Expr::Var(..) => (),
+                    Expr::Lit(..) => (),
+                    Expr::Call(..) => head.push(Action::Expr(expr)),
+                };
             }
         }
 
