@@ -737,7 +737,7 @@ fn make_rep_command(proof_state: &mut ProofState, lhs: Symbol, expr: &NormExpr) 
         let ast_prim = make_ast_version_prim(types.output.name());
         let computed_ast = proof_state.get_fresh();
         proof_state.global_var_ast.insert(lhs, computed_ast);
-        vec![format!("(let {} ({} {}))", computed_ast, ast_prim, lhs)]
+        vec![format!("(let {} ({} {}))", computed_ast, ast_prim, expr)]
             .into_iter()
             .map(|s| Command::Action(proof_state.desugar.action_parser.parse(&s).unwrap()))
             .collect()
