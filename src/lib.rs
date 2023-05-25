@@ -519,7 +519,7 @@ impl EGraph {
         } = config;
         let mut report: RunReport = Default::default();
 
-        // we rebuild on every command so we are in a valid state at this point
+        self.rebuild_nofail();
         for i in 0..*limit {
             if let Some(facts) = until {
                 if self.check_facts(facts).is_ok() {

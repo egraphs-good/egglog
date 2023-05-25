@@ -141,7 +141,7 @@ pub(crate) struct ProofInfo {
 fn instrument_facts(
     body: &Vec<NormFact>,
     proof_state: &mut ProofState,
-    actions: &mut Vec<NormAction>,
+    actions: &mut Vec<Action>,
 ) -> ProofInfo {
     let mut info: ProofInfo = ProofInfo {
         var_term: Default::default(),
@@ -159,18 +159,18 @@ fn instrument_facts(
                 let rep_trm = proof_state.get_fresh();
                 let rep_prf = proof_state.get_fresh();
                 let trm_prf = proof_state.get_fresh();
-                actions.push(NormAction::Let(
-                    rep_trm,
-                    NormExpr::Call(make_ast_version_prim(literal_name), vec![*lhs]),
-                ));
-                actions.push(NormAction::Let(
-                    rep_prf,
-                    NormExpr::Call("Original__".into(), vec![rep_trm]),
-                ));
-                actions.push(NormAction::Let(
-                    trm_prf,
-                    NormExpr::Call("MakeTrmPrf__".into(), vec![rep_trm, rep_prf]),
-                ));
+                actions.push(
+                    NormAction::Let(
+                        rep_trm,
+                        NormExpr::Call(make_ast_version_prim(literal_name), vec![*lhs]),
+                    )
+                    .to_action(),
+                );
+                actions.push(
+                    NormAction::Let(rep_prf, NormExpr::Call("Original__".into(), vec![rep_trm]))
+                        .to_action(),
+                );
+                actions.extend(proof_state.make_term_prf(trm_prf, rep_trm, rep_prf.to_string()));
 
                 info.var_term.insert(*lhs, rep_trm);
                 assert!(info.var_proof.insert(*lhs, rep_prf).is_none());
@@ -192,25 +192,30 @@ fn instrument_facts(
                 // child terms should already exist if we are computing something
                 let compute_trm = proof_state.get_fresh();
                 let rep_trm = proof_state.get_fresh();
-                actions.push(NormAction::Let(
-                    rep_trm,
-                    NormExpr::Call(ast_prim, vec![*lhs]),
-                ));
-                actions.push(NormAction::Let(
-                    compute_trm,
-                    NormExpr::Call(
-                        ast_name,
-                        body.iter()
-                            .map(|v| get_var_term(*v, proof_state, &info))
-                            .collect(),
-                    ),
-                ));
+                actions.push(
+                    NormAction::Let(rep_trm, NormExpr::Call(ast_prim, vec![*lhs])).to_action(),
+                );
+                actions.push(
+                    NormAction::Let(
+                        compute_trm,
+                        NormExpr::Call(
+                            ast_name,
+                            body.iter()
+                                .map(|v| get_var_term(*v, proof_state, &info))
+                                .collect(),
+                        ),
+                    )
+                    .to_action(),
+                );
 
                 let rep_prf = proof_state.get_fresh();
-                actions.push(NormAction::Let(
-                    rep_prf,
-                    NormExpr::Call("ComputePrim__".into(), vec![rep_trm, compute_trm]),
-                ));
+                actions.push(
+                    NormAction::Let(
+                        rep_prf,
+                        NormExpr::Call("ComputePrim__".into(), vec![rep_trm, compute_trm]),
+                    )
+                    .to_action(),
+                );
                 info.var_term.insert(*lhs, rep_trm);
                 info.var_proof.insert(*lhs, rep_prf);
             }
@@ -219,21 +224,24 @@ fn instrument_facts(
                 let rep_trm = proof_state.get_fresh();
                 let rep_prf = proof_state.get_fresh();
 
-                actions.push(NormAction::Let(
-                    rep,
-                    NormExpr::Call(
-                        make_rep_version(proof_state, &NormExpr::Call(*head, body.clone())),
-                        body.clone(),
-                    ),
-                ));
-                actions.push(NormAction::Let(
-                    rep_trm,
-                    NormExpr::Call("TrmOf__".into(), vec![rep]),
-                ));
-                actions.push(NormAction::Let(
-                    rep_prf,
-                    NormExpr::Call("PrfOf__".into(), vec![rep]),
-                ));
+                actions.push(
+                    NormAction::Let(
+                        rep,
+                        NormExpr::Call(
+                            make_rep_version(proof_state, &NormExpr::Call(*head, body.clone())),
+                            body.clone(),
+                        ),
+                    )
+                    .to_action(),
+                );
+                actions.push(
+                    NormAction::Let(rep_trm, NormExpr::Call("TrmOf__".into(), vec![rep]))
+                        .to_action(),
+                );
+                actions.push(
+                    NormAction::Let(rep_prf, NormExpr::Call("PrfOf__".into(), vec![rep]))
+                        .to_action(),
+                );
 
                 info.var_term.insert(*lhs, rep_trm);
                 assert!(info.var_proof.insert(*lhs, rep_prf).is_none());
@@ -241,11 +249,14 @@ fn instrument_facts(
                 for (i, child) in body.iter().enumerate() {
                     let child_trm = proof_state.get_fresh();
                     let const_var = proof_state.get_fresh();
-                    actions.push(NormAction::LetLit(const_var, Literal::Int(i as i64)));
-                    actions.push(NormAction::Let(
-                        child_trm,
-                        NormExpr::Call("GetChild__".into(), vec![rep_trm, const_var]),
-                    ));
+                    actions.push(NormAction::LetLit(const_var, Literal::Int(i as i64)).to_action());
+                    actions.push(
+                        NormAction::Let(
+                            child_trm,
+                            NormExpr::Call("GetChild__".into(), vec![rep_trm, const_var]),
+                        )
+                        .to_action(),
+                    );
                     info.var_term.insert(*child, child_trm);
                 }
             }
@@ -317,51 +328,64 @@ fn add_eqgraph_equality(
     proof_info: &mut ProofInfo,
     astvar1: Symbol,
     astvar2: Symbol,
-    res: &mut Vec<NormAction>,
+    res: &mut Vec<Action>,
+    age_var: Symbol,
 ) {
     let rule_proof = proof_info.rule_proof.unwrap();
     let rule_equality = proof_state.get_fresh();
-    res.push(NormAction::Let(
-        rule_equality,
-        NormExpr::Call("RuleEquality__".into(), vec![rule_proof, astvar1, astvar2]),
-    ));
+    res.push(
+        NormAction::Let(
+            rule_equality,
+            NormExpr::Call("RuleEquality__".into(), vec![rule_proof, astvar1, astvar2]),
+        )
+        .to_action(),
+    );
 
     let proof_with_age = proof_state.get_fresh();
-    res.push(NormAction::Let(
-        proof_with_age,
-        NormExpr::Call(
-            "MakeProofWithAge__".into(),
-            vec![rule_equality, "age__".into()],
-        ),
-    ));
-    res.push(NormAction::Set(
-        NormExpr::Call("EqGraph__".into(), vec![astvar1, astvar2]),
-        proof_with_age,
-    ));
-    res.push(NormAction::Set(
-        NormExpr::Call("EqGraph__".into(), vec![astvar2, astvar1]),
-        proof_with_age,
-    ));
+    res.push(
+        NormAction::Let(
+            proof_with_age,
+            NormExpr::Call("MakeProofWithAge__".into(), vec![rule_equality, age_var]),
+        )
+        .to_action(),
+    );
+    res.push(
+        NormAction::Set(
+            NormExpr::Call("EqGraph__".into(), vec![astvar1, astvar2]),
+            proof_with_age,
+        )
+        .to_action(),
+    );
+    res.push(
+        NormAction::Set(
+            NormExpr::Call("EqGraph__".into(), vec![astvar2, astvar1]),
+            proof_with_age,
+        )
+        .to_action(),
+    );
 }
 
 fn make_expr_ast(
     proof_state: &mut ProofState,
     proof_info: &ProofInfo,
     expr: &NormExpr,
-    res: &mut Vec<NormAction>,
+    res: &mut Vec<Action>,
 ) -> Symbol {
     let NormExpr::Call(head, body) = expr;
     let newterm = proof_state.get_fresh();
     // make the term for this variable
-    res.push(NormAction::Let(
-        newterm,
-        NormExpr::Call(
-            make_ast_version(proof_state, &NormExpr::Call(*head, body.clone())),
-            body.iter()
-                .map(|v| get_var_term(*v, proof_state, proof_info))
-                .collect(),
-        ),
-    ));
+    res.push(
+        NormAction::Let(
+            newterm,
+            NormExpr::Call(
+                make_ast_version(proof_state, &NormExpr::Call(*head, body.clone())),
+                body.iter()
+                    .map(|v| get_var_term(*v, proof_state, proof_info))
+                    .collect(),
+            ),
+        )
+        .to_action(),
+    );
 
     newterm
 }
@@ -370,7 +394,7 @@ fn make_expr_rep(
     proof_state: &mut ProofState,
     proof_info: &ProofInfo,
     expr: &NormExpr,
-    res: &mut Vec<NormAction>,
+    res: &mut Vec<Action>,
 ) -> Symbol {
     let NormExpr::Call(head, body) = expr;
     let newterm = make_expr_ast(proof_state, proof_info, expr, res);
@@ -382,49 +406,51 @@ fn make_expr_rep(
         let ast_prim = make_ast_version_prim(types.output.name());
 
         let computed_literal = proof_state.get_fresh();
-        res.push(NormAction::Let(computed_literal, expr.clone()));
+        res.push(NormAction::Let(computed_literal, expr.clone()).to_action());
 
         let computed = proof_state.get_fresh();
-        res.push(NormAction::Let(
-            computed,
-            NormExpr::Call(ast_prim, vec![computed_literal]),
-        ));
+        res.push(
+            NormAction::Let(computed, NormExpr::Call(ast_prim, vec![computed_literal])).to_action(),
+        );
 
         let compute_proof = proof_state.get_fresh();
-        res.push(NormAction::Let(
-            compute_proof,
-            NormExpr::Call("ComputePrim__".into(), vec![computed, newterm]),
-        ));
+        res.push(
+            NormAction::Let(
+                compute_proof,
+                NormExpr::Call("ComputePrim__".into(), vec![computed, newterm]),
+            )
+            .to_action(),
+        );
 
         let trmprf = proof_state.get_fresh();
-        res.push(NormAction::Let(
-            trmprf,
-            NormExpr::Call("MakeTrmPrf__".into(), vec![computed, compute_proof]),
-        ));
+        res.extend(proof_state.make_term_prf(trmprf, computed, compute_proof.to_string()));
 
         computed
     } else {
         let ruletrm = proof_state.get_fresh();
-        res.push(NormAction::Let(
-            ruletrm,
-            NormExpr::Call(
-                "RuleTerm__".into(),
-                vec![proof_info.rule_proof.unwrap(), newterm],
-            ),
-        ));
+        res.push(
+            NormAction::Let(
+                ruletrm,
+                NormExpr::Call(
+                    "RuleTerm__".into(),
+                    vec![proof_info.rule_proof.unwrap(), newterm],
+                ),
+            )
+            .to_action(),
+        );
         let trmprf = proof_state.get_fresh();
-        res.push(NormAction::Let(
-            trmprf,
-            NormExpr::Call("MakeTrmPrf__".into(), vec![newterm, ruletrm]),
-        ));
+        res.extend(proof_state.make_term_prf(trmprf, newterm, ruletrm.to_string()));
 
-        res.push(NormAction::Set(
-            NormExpr::Call(
-                make_rep_version(proof_state, &NormExpr::Call(*head, body.clone())),
-                body.clone(),
-            ),
-            trmprf,
-        ));
+        res.push(
+            NormAction::Set(
+                NormExpr::Call(
+                    make_rep_version(proof_state, &NormExpr::Call(*head, body.clone())),
+                    body.clone(),
+                ),
+                trmprf,
+            )
+            .to_action(),
+        );
         newterm
     }
 }
@@ -432,8 +458,9 @@ fn make_expr_rep(
 fn add_action_proof(
     proof_info: &mut ProofInfo,
     action: &NormAction,
-    res: &mut Vec<NormAction>,
+    res: &mut Vec<Action>,
     proof_state: &mut ProofState,
+    age_var: Symbol,
 ) {
     match action {
         NormAction::LetVar(var1, var2) => {
@@ -450,6 +477,7 @@ fn add_action_proof(
                 get_var_term(*var1, proof_state, proof_info),
                 get_var_term(*var2, proof_state, proof_info),
                 res,
+                age_var,
             );
         }
         NormAction::Set(expr, rhs) => {
@@ -461,6 +489,7 @@ fn add_action_proof(
                 new_term,
                 get_var_term(*rhs, proof_state, proof_info),
                 res,
+                age_var,
             )
         }
         NormAction::Let(lhs, expr) => {
@@ -471,29 +500,32 @@ fn add_action_proof(
         NormAction::LetLit(lhs, lit) => {
             let newterm = proof_state.get_fresh();
             // make the term for this variable
-            res.push(NormAction::Let(
-                newterm,
-                NormExpr::Call(
-                    make_ast_version_prim(proof_state.literal_name(lit)),
-                    vec![*lhs],
-                ),
-            ));
+            res.push(
+                NormAction::Let(
+                    newterm,
+                    NormExpr::Call(
+                        make_ast_version_prim(proof_state.literal_name(lit)),
+                        vec![*lhs],
+                    ),
+                )
+                .to_action(),
+            );
             proof_info.var_term.insert(*lhs, newterm);
 
             let ruletrm = proof_state.get_fresh();
-            res.push(NormAction::Let(
-                ruletrm,
-                NormExpr::Call(
-                    "RuleTerm__".into(),
-                    vec![proof_info.rule_proof.unwrap(), newterm],
-                ),
-            ));
+            res.push(
+                NormAction::Let(
+                    ruletrm,
+                    NormExpr::Call(
+                        "RuleTerm__".into(),
+                        vec![proof_info.rule_proof.unwrap(), newterm],
+                    ),
+                )
+                .to_action(),
+            );
 
             let trmprf = proof_state.get_fresh();
-            res.push(NormAction::Let(
-                trmprf,
-                NormExpr::Call("MakeTrmPrf__".into(), vec![newterm, ruletrm]),
-            ));
+            res.extend(proof_state.make_term_prf(trmprf, newterm, ruletrm.to_string()));
         }
     }
 }
@@ -502,119 +534,118 @@ fn add_rule_proof(
     rule_name: Symbol,
     proof_info: &ProofInfo,
     facts: &Vec<NormFact>,
-    res: &mut Vec<NormAction>,
+    res: &mut Vec<Action>,
     proof_state: &mut ProofState,
 ) -> Symbol {
     let mut current_proof = proof_state.get_fresh();
-    res.push(NormAction::LetVar(current_proof, "Null__".into()));
+    res.push(NormAction::LetVar(current_proof, "Null__".into()).to_action());
 
     for fact in facts {
         match fact {
             NormFact::Assign(lhs, _rhs) => {
                 let fresh = proof_state.get_fresh();
-                res.push(NormAction::Let(
-                    fresh,
-                    NormExpr::Call(
-                        "Cons__".into(),
-                        vec![proof_info.var_proof[lhs], current_proof],
-                    ),
-                ));
+                res.push(
+                    NormAction::Let(
+                        fresh,
+                        NormExpr::Call(
+                            "Cons__".into(),
+                            vec![proof_info.var_proof[lhs], current_proof],
+                        ),
+                    )
+                    .to_action(),
+                );
                 current_proof = fresh;
             }
             // same as Assign case
             NormFact::AssignLit(lhs, _rhs) => {
                 let fresh = proof_state.get_fresh();
-                res.push(NormAction::Let(
-                    fresh,
-                    NormExpr::Call(
-                        "Cons__".into(),
-                        vec![proof_info.var_proof[lhs], current_proof],
-                    ),
-                ));
+                res.push(
+                    NormAction::Let(
+                        fresh,
+                        NormExpr::Call(
+                            "Cons__".into(),
+                            vec![proof_info.var_proof[lhs], current_proof],
+                        ),
+                    )
+                    .to_action(),
+                );
                 current_proof = fresh;
             }
             NormFact::ConstrainEq(lhs, rhs) => {
                 let pfresh = proof_state.get_fresh();
-                res.push(NormAction::Let(
-                    pfresh,
-                    NormExpr::Call(
-                        "DemandEq__".into(),
-                        vec![
-                            get_var_term(*lhs, proof_state, proof_info),
-                            get_var_term(*rhs, proof_state, proof_info),
-                        ],
-                    ),
-                ));
+                res.push(
+                    NormAction::Let(
+                        pfresh,
+                        NormExpr::Call(
+                            "DemandEq__".into(),
+                            vec![
+                                get_var_term(*lhs, proof_state, proof_info),
+                                get_var_term(*rhs, proof_state, proof_info),
+                            ],
+                        ),
+                    )
+                    .to_action(),
+                );
 
                 let fresh = proof_state.get_fresh();
-                res.push(NormAction::Let(
-                    fresh,
-                    NormExpr::Call("Cons__".into(), vec![pfresh, current_proof]),
-                ));
+                res.push(
+                    NormAction::Let(
+                        fresh,
+                        NormExpr::Call("Cons__".into(), vec![pfresh, current_proof]),
+                    )
+                    .to_action(),
+                );
                 current_proof = fresh;
             }
         }
     }
 
     let name_const = proof_state.get_fresh();
-    res.push(NormAction::LetLit(name_const, Literal::String(rule_name)));
+    res.push(NormAction::LetLit(name_const, Literal::String(rule_name)).to_action());
     let rule_proof = proof_state.get_fresh();
-    res.push(NormAction::Let(
-        rule_proof,
-        NormExpr::Call("Rule__".into(), vec![current_proof, name_const]),
-    ));
+    res.push(
+        NormAction::Let(
+            rule_proof,
+            NormExpr::Call("Rule__".into(), vec![current_proof, name_const]),
+        )
+        .to_action(),
+    );
     rule_proof
 }
 
 // replace the rule-proof keyword with the proof of the rule
-fn replace_rule_proof(actions: &[NormAction], rule_proof: Symbol) -> Vec<NormAction> {
+fn replace_rule_proof(actions: &[NormAction], rule_proof: Symbol) -> Vec<Action> {
     actions
         .iter()
         .map(|action| {
-            action.map_def_use(&mut |var, _isdef| {
-                if var == RULE_PROOF_KEYWORD.into() {
-                    rule_proof
-                } else {
-                    var
-                }
-            })
+            action
+                .map_def_use(&mut |var, _isdef| {
+                    if var == RULE_PROOF_KEYWORD.into() {
+                        rule_proof
+                    } else {
+                        var
+                    }
+                })
+                .to_action()
         })
         .collect()
 }
 
-fn add_age_variable(proof_state: &mut ProofState) -> Vec<NormAction> {
-    let mut res = vec![];
-    let age_var = Symbol::from("age__");
-    res.push(NormAction::Let(
-        age_var,
-        NormExpr::Call("currentAge__".into(), vec![]),
-    ));
-    let one = proof_state.get_fresh();
-    res.push(NormAction::LetLit(one, Literal::Int(1)));
-    let next_age = proof_state.get_fresh();
-    res.push(NormAction::Let(
-        next_age,
-        NormExpr::Call("+".into(), vec![age_var, one]),
-    ));
-    res.push(NormAction::Set(
-        NormExpr::Call("currentAge__".into(), vec![]),
-        next_age,
-    ));
-
-    res
-}
-
 fn instrument_rule(rule: &NormRule, rule_name: Symbol, proof_state: &mut ProofState) -> Rule {
     let mut actions = vec![];
-    actions.extend(add_age_variable(proof_state));
+    let (age_var, age_actions) = proof_state.save_and_increment_age();
+    actions.extend(age_actions);
     let info = instrument_facts(&rule.body, proof_state, &mut actions);
     let rule_proof = add_rule_proof(rule_name, &info, &rule.body, &mut actions, proof_state);
 
     let rule_proof_ast = proof_state.get_fresh();
-    actions.push(NormAction::Let(
-        rule_proof_ast,
-        NormExpr::Call("AstProof__".into(), vec![rule_proof]),
-    ));
+    actions.push(
+        NormAction::Let(
+            rule_proof_ast,
+            NormExpr::Call("AstProof__".into(), vec![rule_proof]),
+        )
+        .to_action(),
+    );
 
     actions.extend(replace_rule_proof(&rule.head, rule_proof));
 
@@ -627,14 +658,13 @@ fn instrument_rule(rule: &NormRule, rule_name: Symbol, proof_state: &mut ProofSt
     };
 
     for action in &rule.head {
-        add_action_proof(&mut proof_info, action, &mut actions, proof_state);
+        add_action_proof(&mut proof_info, action, &mut actions, proof_state, age_var);
     }
 
-    NormRule {
+    Rule {
         head: actions,
-        body: rule.body.clone(),
+        body: rule.body.iter().map(|fact| fact.to_fact()).collect(),
     }
-    .to_rule()
 }
 
 fn make_rep_function(proof_state: &mut ProofState, expr: &NormExpr) -> FunctionDecl {
@@ -649,12 +679,7 @@ fn make_rep_function(proof_state: &mut ProofState, expr: &NormExpr) -> FunctionD
             output: "TrmPrf__".into(),
         },
         merge: Some(Expr::Var("old".into())),
-        // Merge action is only needed if the merge function is union
-        merge_action: if types.has_merge {
-            vec![]
-        } else {
-            merge_action(proof_state, types)
-        },
+        merge_action: merge_action(proof_state, types),
         default: None,
         cost: None,
         unextractable: true,
@@ -726,29 +751,37 @@ fn make_rep_command(proof_state: &mut ProofState, lhs: Symbol, expr: &NormExpr) 
         );
         proof_state.global_var_ast.insert(lhs, ast_var);
         let rep = make_rep_version(proof_state, expr);
-        vec![
-            Command::Action(
-                proof_state
-                    .desugar
-                    .action_parser
-                    .parse(&ast_action)
-                    .unwrap(),
-            ),
-            Command::Action(
+        let trm_prf = proof_state.get_fresh();
+        vec![Command::Action(
+            proof_state
+                .desugar
+                .action_parser
+                .parse(&ast_action)
+                .unwrap(),
+        )]
+        .into_iter()
+        .chain(
+            proof_state
+                .make_term_prf(trm_prf, ast_var, format!("(Original__ {ast_var})"))
+                .into_iter()
+                .map(Command::Action),
+        )
+        .chain(
+            vec![Command::Action(
                 proof_state
                     .desugar
                     .action_parser
                     .parse(&format!(
                         "(set ({} {})
-                         (MakeTrmPrf__ {} (Original__ {})))",
+                         {trm_prf})",
                         rep,
                         ListDisplay(body, " "),
-                        ast_var,
-                        ast_var
                     ))
                     .unwrap(),
-            ),
-        ]
+            )]
+            .into_iter(),
+        )
+        .collect()
     }
 }
 
@@ -780,36 +813,44 @@ fn proof_original_action(action: &NormAction, proof_state: &mut ProofState) -> V
         NormAction::Set(expr, var) => {
             let fresh = proof_state.get_fresh();
             let mut rep_commands = make_rep_command(proof_state, fresh, expr);
+            let (age_var, actions) = proof_state.save_and_increment_age();
 
-            rep_commands.push(Command::Action(
+            rep_commands.extend(actions.into_iter().map(|action| Command::Action(action)));
+            rep_commands.extend([Command::Action(
                 proof_state
                     .desugar
                     .action_parser
                     .parse(&format!(
-                        "(set (EqGraph__ {} {}) (MakeProofWithAge__ (OriginalEq__ {} {}) (currentAge__)))",
+                        "(set (EqGraph__ {} {}) (MakeProofWithAge__ (OriginalEq__ {} {}) {}))",
                         proof_state.global_var_ast[&fresh],
                         proof_state.global_var_ast[var],
                         proof_state.global_var_ast[&fresh],
-                        proof_state.global_var_ast[var]
+                        proof_state.global_var_ast[var],
+                        age_var
                     ))
                     .unwrap(),
-            ));
+            )]);
             rep_commands
         }
         NormAction::Union(var1, var2) => {
+            let (age_var, actions) = proof_state.save_and_increment_age();
+            actions
+                    .into_iter()
+                    .map(|action| Command::Action(action)).chain(
             vec![Command::Action(
                 proof_state
                     .desugar
                     .action_parser
                     .parse(&format!(
-                        "(set (EqGraph__ {} {}) (MakeProofWithAge__ (OriginalEq__ {} {}) (currentAge__)))",
+                        "(set (EqGraph__ {} {}) (MakeProofWithAge__ (OriginalEq__ {} {}) {age_var}))",
                         proof_state.global_var_ast[var1],
                         proof_state.global_var_ast[var2],
                         proof_state.global_var_ast[var1],
                         proof_state.global_var_ast[var2]
                     ))
                     .unwrap(),
-            )]
+            ),
+            ].into_iter()).collect()
         }
         NormAction::Delete(..) | NormAction::Panic(..) => vec![],
     }
@@ -895,8 +936,8 @@ impl ProofState {
                     });
                 }
                 NCommand::NormAction(action) => {
-                    res.push(Command::Action(action.to_action()));
                     res.extend(proof_original_action(action, self));
+                    res.push(Command::Action(action.to_action()));
                 }
                 NCommand::Check(_facts) => {
                     res.push(self.run_proof_rules());
@@ -943,8 +984,38 @@ impl ProofState {
         res
     }
 
+    pub(crate) fn save_and_increment_age(&mut self) -> (Symbol, Vec<Action>) {
+        let age_var = self.get_fresh();
+
+        let res = vec![
+            format!("(let {age_var} (currentAge__))"),
+            format!("(set (currentAge__) (+ {age_var} 1))"),
+        ]
+        .into_iter()
+        .map(|s| self.desugar.action_parser.parse(&s).unwrap())
+        .collect();
+
+        (age_var, res)
+    }
+
     pub(crate) fn get_fresh(&mut self) -> Symbol {
         self.desugar.get_fresh()
+    }
+
+    pub(crate) fn make_term_prf(
+        &mut self,
+        trm_prf: Symbol,
+        rep_trm: Symbol,
+        rep_prf: String,
+    ) -> Vec<Action> {
+        vec![
+            format!("(let {trm_prf} (MakeTrmPrf__ {rep_trm} {rep_prf}))"),
+            format!("(set (TrmOf__ {trm_prf}) {rep_trm})"),
+            format!("(set (PrfOf__ {trm_prf}) {rep_prf})"),
+        ]
+        .into_iter()
+        .map(|s| self.desugar.action_parser.parse(&s).unwrap())
+        .collect()
     }
 
     pub(crate) fn proof_header(&self) -> Vec<Command> {

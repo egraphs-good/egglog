@@ -66,12 +66,6 @@
 
 (ruleset proofrules__)
 
-(rule ((= trmprf (MakeTrmPrf__ t p)))
-      ((set (TrmOf__ trmprf) t)
-       (set (PrfOf__ trmprf) p)) :ruleset proofrules__)
-
-
-
 (ruleset proof-extract__)
 
 ;; start term, end term, current progress term, proof

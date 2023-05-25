@@ -70,7 +70,12 @@ impl ProofChecker {
     fn check(&mut self) {
         for (input, proof_with_age) in self.to_check.clone() {
             match_term_app! (proof_with_age; {
-                ("MakeProofWithAge__", [proof, _age]) => {
+                ("MakeProofWithAge__", [proof, age]) => {
+                    if let Term::Lit(Literal::Int(lit)) = self.termdag.get(*age) {
+                        println!("Checking age {}", lit);
+                    } else {
+                        panic!("not an int")
+                    }
                     let checked = self.check_proof(self.termdag.get(*proof));
                     if let Proof::Equality(_a, _b) = checked {
 
