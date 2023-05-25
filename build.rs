@@ -47,7 +47,10 @@ fn generate_tests(file: &mut File, glob: &str) {
 
         // write a test with proofs enabled
         // TODO: re-enable herbie, unsound, and eqsolve when proof extraction is faster
-        if !(contents.contains("(Set") || contents.contains("(Map")) {
+        if !(contents.contains("(Set")
+            || contents.contains("(Map")
+            || contents.contains("SKIP_PROOFS"))
+        {
             writeln!(
                 file,
                 r#" #[test] 

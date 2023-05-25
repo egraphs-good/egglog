@@ -38,39 +38,11 @@ fn make_rep_version(proof_state: &mut ProofState, expr: &NormExpr) -> Symbol {
     ))
 }
 
-// representatives for primitive values
-fn make_rep_version_prim(name: &Symbol) -> Symbol {
-    Symbol::from(format!("Rep{}__", name))
-}
-
 fn setup_primitives() -> Vec<Command> {
     let mut commands = vec![];
     let fresh_types = TypeInfo::default();
     commands.extend(make_ast_primitives_sorts(&fresh_types));
-    commands.extend(make_rep_primitive_sorts(&fresh_types));
     commands
-}
-
-fn make_rep_primitive_sorts(type_info: &TypeInfo) -> Vec<Command> {
-    type_info
-        .sorts
-        .iter()
-        .map(|(name, _)| {
-            Command::Function(FunctionDecl {
-                name: make_rep_version_prim(name),
-                schema: Schema {
-                    input: vec![*name],
-                    output: "TrmPrf__".into(),
-                },
-                // Right now we just union every proof of some primitive.
-                merge: None,
-                merge_action: vec![],
-                default: None,
-                cost: None,
-                unextractable: true,
-            })
-        })
-        .collect()
 }
 
 fn make_ast_primitives_sorts(type_info: &TypeInfo) -> Vec<Command> {
@@ -198,10 +170,6 @@ fn instrument_facts(
                 actions.push(NormAction::Let(
                     trm_prf,
                     NormExpr::Call("MakeTrmPrf__".into(), vec![rep_trm, rep_prf]),
-                ));
-                actions.push(NormAction::Set(
-                    NormExpr::Call(make_rep_version_prim(&literal_name), vec![*lhs]),
-                    trm_prf,
                 ));
 
                 info.var_term.insert(*lhs, rep_trm);
@@ -526,14 +494,6 @@ fn add_action_proof(
                 trmprf,
                 NormExpr::Call("MakeTrmPrf__".into(), vec![newterm, ruletrm]),
             ));
-
-            res.push(NormAction::Set(
-                NormExpr::Call(
-                    make_rep_version_prim(&proof_state.literal_name(lit)),
-                    vec![*lhs],
-                ),
-                trmprf,
-            ));
         }
     }
 }
@@ -744,38 +704,52 @@ pub(crate) struct ProofState {
 
 fn make_rep_command(proof_state: &mut ProofState, lhs: Symbol, expr: &NormExpr) -> Vec<Command> {
     let NormExpr::Call(head, body) = expr;
-    let ast_var = proof_state.get_fresh();
-    let ast_action = format!(
-        "(let {} ({} {}))",
-        ast_var,
-        make_ast_version(proof_state, &NormExpr::Call(*head, body.clone())),
-        ListDisplay(body.iter().map(|e| { proof_state.global_var_ast[e] }), " ")
-    );
-    proof_state.global_var_ast.insert(lhs, ast_var);
-    let rep = make_rep_version(proof_state, expr);
-    vec![
-        Command::Action(
-            proof_state
-                .desugar
-                .action_parser
-                .parse(&ast_action)
-                .unwrap(),
-        ),
-        Command::Action(
-            proof_state
-                .desugar
-                .action_parser
-                .parse(&format!(
-                    "(set ({} {})
+    if proof_state.type_info.is_primitive(*head) {
+        let types = proof_state
+            .type_info
+            .typecheck_expr(proof_state.current_ctx, expr, true)
+            .unwrap();
+        let ast_prim = make_ast_version_prim(types.output.name());
+        let computed_ast = proof_state.get_fresh();
+        proof_state.global_var_ast.insert(lhs, computed_ast);
+        vec![format!("(let {} ({} {}))", computed_ast, ast_prim, lhs)]
+            .into_iter()
+            .map(|s| Command::Action(proof_state.desugar.action_parser.parse(&s).unwrap()))
+            .collect()
+    } else {
+        let ast_var = proof_state.get_fresh();
+        let ast_action = format!(
+            "(let {} ({} {}))",
+            ast_var,
+            make_ast_version(proof_state, &NormExpr::Call(*head, body.clone())),
+            ListDisplay(body.iter().map(|e| { proof_state.global_var_ast[e] }), " ")
+        );
+        proof_state.global_var_ast.insert(lhs, ast_var);
+        let rep = make_rep_version(proof_state, expr);
+        vec![
+            Command::Action(
+                proof_state
+                    .desugar
+                    .action_parser
+                    .parse(&ast_action)
+                    .unwrap(),
+            ),
+            Command::Action(
+                proof_state
+                    .desugar
+                    .action_parser
+                    .parse(&format!(
+                        "(set ({} {})
                          (MakeTrmPrf__ {} (Original__ {})))",
-                    rep,
-                    ListDisplay(body, " "),
-                    ast_var,
-                    ast_var
-                ))
-                .unwrap(),
-        ),
-    ]
+                        rep,
+                        ListDisplay(body, " "),
+                        ast_var,
+                        ast_var
+                    ))
+                    .unwrap(),
+            ),
+        ]
+    }
 }
 
 fn proof_original_action(action: &NormAction, proof_state: &mut ProofState) -> Vec<Command> {
@@ -790,34 +764,18 @@ fn proof_original_action(action: &NormAction, proof_state: &mut ProofState) -> V
         NormAction::LetLit(lhs, literal) => {
             let ast_var = proof_state.get_fresh();
             proof_state.global_var_ast.insert(*lhs, ast_var);
-            vec![
-                Command::Action(
-                    proof_state
-                        .desugar
-                        .action_parser
-                        .parse(&format!(
-                            "(let {} ({} {}))",
-                            ast_var,
-                            make_ast_version_prim(proof_state.literal_name(literal)),
-                            literal
-                        ))
-                        .unwrap(),
-                ),
-                Command::Action(
-                    proof_state
-                        .desugar
-                        .action_parser
-                        .parse(&format!(
-                            "(set ({} {})
-                         (MakeTrmPrf__ {} (Original__ {})))",
-                            make_rep_version_prim(&proof_state.literal_name(literal)),
-                            literal,
-                            ast_var,
-                            ast_var
-                        ))
-                        .unwrap(),
-                ),
-            ]
+            vec![Command::Action(
+                proof_state
+                    .desugar
+                    .action_parser
+                    .parse(&format!(
+                        "(let {} ({} {}))",
+                        ast_var,
+                        make_ast_version_prim(proof_state.literal_name(literal)),
+                        literal
+                    ))
+                    .unwrap(),
+            )]
         }
         NormAction::Set(expr, var) => {
             let fresh = proof_state.get_fresh();
@@ -883,19 +841,6 @@ fn instrument_schedule(schedule: &NormSchedule) -> Schedule {
 impl ProofState {
     pub fn parse_program(&self, input: &str) -> Result<Vec<Command>, Error> {
         self.desugar.parse_program(input)
-    }
-
-    fn add_prooflist(&mut self, proofs: Vec<Symbol>, res: &mut Vec<NormAction>) -> Symbol {
-        let mut prooflist = "Null__".into();
-        for proof in proofs {
-            let new_prooflist = self.get_fresh();
-            res.push(NormAction::Let(
-                new_prooflist,
-                NormExpr::Call("Cons__".into(), vec![proof, prooflist]),
-            ));
-            prooflist = new_prooflist;
-        }
-        prooflist
     }
 
     fn run_proof_rules(&self) -> Command {
