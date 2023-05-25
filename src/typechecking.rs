@@ -286,6 +286,9 @@ impl TypeInfo {
                         assert_bound(bvar, let_bound);
                     });
                 }
+                NormAction::LetIteration(var) => {
+                    assert!(let_bound.insert(*var));
+                }
                 NormAction::LetVar(v1, v2) => {
                     assert_bound(v2, let_bound);
                     assert!(let_bound.insert(*v1));
@@ -350,6 +353,10 @@ impl TypeInfo {
             }
             NormAction::LetLit(var, lit) => {
                 let lit_type = self.infer_literal(lit);
+                self.introduce_binding(ctx, *var, lit_type, is_global)?;
+            }
+            NormAction::LetIteration(var) => {
+                let lit_type = self.reserved_type("iteration".into()).unwrap();
                 self.introduce_binding(ctx, *var, lit_type, is_global)?;
             }
             NormAction::Delete(expr) => {
@@ -436,6 +443,8 @@ impl TypeInfo {
     pub fn reserved_type(&self, sym: Symbol) -> Option<ArcSort> {
         if sym == RULE_PROOF_KEYWORD.into() {
             Some(self.sorts.get::<Symbol>(&"Proof__".into()).unwrap().clone())
+        } else if sym == "iteration".into() {
+            Some(self.sorts.get::<Symbol>(&"i64".into()).unwrap().clone())
         } else {
             None
         }

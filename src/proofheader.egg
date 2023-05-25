@@ -46,10 +46,6 @@
 ;; when the rule-proof keyword is used
 (function AstProof__ (Proof__) Ast__)
 
-
-(function currentAge__ () i64 :merge (max new old))
-(set (currentAge__) 0)
-
 (datatype ProofWithAge__
   (MakeProofWithAge__ Proof__ i64))
 

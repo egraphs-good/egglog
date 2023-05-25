@@ -164,6 +164,7 @@ pub struct EGraph {
     rulesets: HashMap<Symbol, HashMap<Symbol, Rule>>,
     proofs_enabled: bool,
     timestamp: u32,
+    iteration: i64,
     pub test_proofs: bool,
     pub match_limit: usize,
     pub node_limit: usize,
@@ -193,6 +194,7 @@ impl Default for EGraph {
             functions: Default::default(),
             rulesets: Default::default(),
             proof_state: ProofState::default(),
+            iteration: 0,
             match_limit: usize::MAX,
             node_limit: usize::MAX,
             timestamp: 0,
@@ -319,6 +321,7 @@ impl EGraph {
     fn rebuild_one(&mut self) -> Result<usize, Error> {
         let mut new_unions = 0;
         let mut deferred_merges = Vec::new();
+        self.iteration += 1;
         for function in self.functions.values_mut() {
             let (unions, merges) = function.rebuild(&mut self.unionfind, self.timestamp)?;
             if !merges.is_empty() {
@@ -326,9 +329,11 @@ impl EGraph {
             }
             new_unions += unions;
         }
+        self.iteration += 1;
         for (func, merges) in deferred_merges {
             new_unions += self.apply_merges(func, &merges);
         }
+        self.iteration += 1;
         Ok(new_unions)
     }
 

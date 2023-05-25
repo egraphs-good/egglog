@@ -116,10 +116,8 @@ fn merge_action(proof_state: &mut ProofState, types: FuncType) -> Vec<Action> {
     }))
     .chain(vec![
         format!("(let congr_prf__ (Congruence__ {p1} {}))", congr_prf),
-        format!("(let age__ (currentAge__))"),
-        format!("(set (currentAge__) (+ age__ 1))"),
-        format!("(set (EqGraph__ {t1} {t2}) (MakeProofWithAge__ congr_prf__ age__))"),
-        format!("(set (EqGraph__ {t2} {t1}) (MakeProofWithAge__ (Flip__ congr_prf__) age__))"),
+        format!("(set (EqGraph__ {t1} {t2}) (MakeProofWithAge__ congr_prf__ iteration))"),
+        format!("(set (EqGraph__ {t2} {t1}) (MakeProofWithAge__ (Flip__ congr_prf__) iteration))"),
     ])
     .map(|s| proof_state.desugar.action_parser.parse(&s).unwrap())
     .collect()
@@ -329,7 +327,6 @@ fn add_eqgraph_equality(
     astvar1: Symbol,
     astvar2: Symbol,
     res: &mut Vec<Action>,
-    age_var: Symbol,
 ) {
     let rule_proof = proof_info.rule_proof.unwrap();
     let rule_equality = proof_state.get_fresh();
@@ -343,11 +340,13 @@ fn add_eqgraph_equality(
 
     let proof_with_age = proof_state.get_fresh();
     res.push(
-        NormAction::Let(
-            proof_with_age,
-            NormExpr::Call("MakeProofWithAge__".into(), vec![rule_equality, age_var]),
-        )
-        .to_action(),
+        proof_state
+            .desugar
+            .action_parser
+            .parse(&format!(
+                "(let {proof_with_age} (MakeProofWithAge__ {rule_equality} iteration))"
+            ))
+            .unwrap(),
     );
     res.push(
         NormAction::Set(
@@ -460,7 +459,6 @@ fn add_action_proof(
     action: &NormAction,
     res: &mut Vec<Action>,
     proof_state: &mut ProofState,
-    age_var: Symbol,
 ) {
     match action {
         NormAction::LetVar(var1, var2) => {
@@ -477,7 +475,6 @@ fn add_action_proof(
                 get_var_term(*var1, proof_state, proof_info),
                 get_var_term(*var2, proof_state, proof_info),
                 res,
-                age_var,
             );
         }
         NormAction::Set(expr, rhs) => {
@@ -489,7 +486,6 @@ fn add_action_proof(
                 new_term,
                 get_var_term(*rhs, proof_state, proof_info),
                 res,
-                age_var,
             )
         }
         NormAction::Let(lhs, expr) => {
@@ -511,21 +507,27 @@ fn add_action_proof(
                 .to_action(),
             );
             proof_info.var_term.insert(*lhs, newterm);
-
-            let ruletrm = proof_state.get_fresh();
+        }
+        NormAction::LetIteration(lhs) => {
+            let newterm = proof_state.get_fresh();
+            // make the term for this variable
             res.push(
                 NormAction::Let(
-                    ruletrm,
+                    newterm,
                     NormExpr::Call(
-                        "RuleTerm__".into(),
-                        vec![proof_info.rule_proof.unwrap(), newterm],
+                        make_ast_version_prim(
+                            proof_state
+                                .type_info
+                                .reserved_type("iteration".into())
+                                .unwrap()
+                                .name(),
+                        ),
+                        vec![*lhs],
                     ),
                 )
                 .to_action(),
             );
-
-            let trmprf = proof_state.get_fresh();
-            res.extend(proof_state.make_term_prf(trmprf, newterm, ruletrm.to_string()));
+            proof_info.var_term.insert(*lhs, newterm);
         }
     }
 }
@@ -633,8 +635,6 @@ fn replace_rule_proof(actions: &[NormAction], rule_proof: Symbol) -> Vec<Action>
 
 fn instrument_rule(rule: &NormRule, rule_name: Symbol, proof_state: &mut ProofState) -> Rule {
     let mut actions = vec![];
-    let (age_var, age_actions) = proof_state.save_and_increment_age();
-    actions.extend(age_actions);
     let info = instrument_facts(&rule.body, proof_state, &mut actions);
     let rule_proof = add_rule_proof(rule_name, &info, &rule.body, &mut actions, proof_state);
 
@@ -658,7 +658,7 @@ fn instrument_rule(rule: &NormRule, rule_name: Symbol, proof_state: &mut ProofSt
     };
 
     for action in &rule.head {
-        add_action_proof(&mut proof_info, action, &mut actions, proof_state, age_var);
+        add_action_proof(&mut proof_info, action, &mut actions, proof_state);
     }
 
     Rule {
@@ -810,39 +810,53 @@ fn proof_original_action(action: &NormAction, proof_state: &mut ProofState) -> V
                     .unwrap(),
             )]
         }
+        NormAction::LetIteration(lhs) => {
+            let ast_var = proof_state.get_fresh();
+            proof_state.global_var_ast.insert(*lhs, ast_var);
+            vec![Command::Action(
+                proof_state
+                    .desugar
+                    .action_parser
+                    .parse(&format!(
+                        "(let {} ({} iteration))",
+                        ast_var,
+                        make_ast_version_prim(
+                            proof_state
+                                .type_info
+                                .reserved_type("iteration".into())
+                                .unwrap()
+                                .name()
+                        ),
+                    ))
+                    .unwrap(),
+            )]
+        }
         NormAction::Set(expr, var) => {
             let fresh = proof_state.get_fresh();
             let mut rep_commands = make_rep_command(proof_state, fresh, expr);
-            let (age_var, actions) = proof_state.save_and_increment_age();
 
-            rep_commands.extend(actions.into_iter().map(|action| Command::Action(action)));
             rep_commands.extend([Command::Action(
                 proof_state
                     .desugar
                     .action_parser
                     .parse(&format!(
-                        "(set (EqGraph__ {} {}) (MakeProofWithAge__ (OriginalEq__ {} {}) {}))",
+                        "(set (EqGraph__ {} {}) (MakeProofWithAge__ (OriginalEq__ {} {}) iteration))",
                         proof_state.global_var_ast[&fresh],
                         proof_state.global_var_ast[var],
                         proof_state.global_var_ast[&fresh],
                         proof_state.global_var_ast[var],
-                        age_var
                     ))
                     .unwrap(),
             )]);
             rep_commands
         }
         NormAction::Union(var1, var2) => {
-            let (age_var, actions) = proof_state.save_and_increment_age();
-            actions
-                    .into_iter()
-                    .map(|action| Command::Action(action)).chain(
             vec![Command::Action(
                 proof_state
                     .desugar
                     .action_parser
                     .parse(&format!(
-                        "(set (EqGraph__ {} {}) (MakeProofWithAge__ (OriginalEq__ {} {}) {age_var}))",
+                        "(set (EqGraph__ {} {}) (MakeProofWithAge__ (OriginalEq__ {} {}) iteration))",
                         proof_state.global_var_ast[var1],
                         proof_state.global_var_ast[var2],
                         proof_state.global_var_ast[var1],
@@ -850,7 +864,7 @@ fn proof_original_action(action: &NormAction, proof_state: &mut ProofState) -> V
                     ))
                     .unwrap(),
             ),
-            ].into_iter()).collect()
+            ]
         }
         NormAction::Delete(..) | NormAction::Panic(..) => vec![],
     }
@@ -982,20 +996,6 @@ impl ProofState {
         }
 
         res
-    }
-
-    pub(crate) fn save_and_increment_age(&mut self) -> (Symbol, Vec<Action>) {
-        let age_var = self.get_fresh();
-
-        let res = vec![
-            format!("(let {age_var} (currentAge__))"),
-            format!("(set (currentAge__) (+ {age_var} 1))"),
-        ]
-        .into_iter()
-        .map(|s| self.desugar.action_parser.parse(&s).unwrap())
-        .collect();
-
-        (age_var, res)
     }
 
     pub(crate) fn get_fresh(&mut self) -> Symbol {
