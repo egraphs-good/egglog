@@ -6,15 +6,11 @@ fn eclass_cluster_name(eclass_id: &EClassID) -> String {
 }
 /// The Node ID for the eclass is the first node in the eclass cluster
 fn eclass_node_id(eclass_id: &EClassID) -> d::NodeId {
-    d::NodeId(d::Id::Plain(quote(format!("{}_0", eclass_id))), None)
+    d::NodeId(d::Id::Plain(quote(format!("e_{}_0", eclass_id))), None)
 }
 
 /// An e-class is converted into a cluster with a node for each function call
-fn eclass_to_graphviz(
-    eclass_id: &EClassID,
-    fn_calls: &[FnCall],
-    id_gen: &mut NodeIDGenerator,
-) -> Vec<d::Stmt> {
+fn eclass_to_graphviz(eclass_id: &EClassID, fn_calls: &[FnCall]) -> Vec<d::Stmt> {
     let mut stmts: Vec<d::Stmt> = fn_calls
         .iter()
         .enumerate()
@@ -22,15 +18,7 @@ fn eclass_to_graphviz(
             fn_call
                 .1
                 .iter()
-                .flat_map(|arg| {
-                    arg.to_graphviz(
-                        id_gen,
-                        d::NodeId(
-                            d::Id::Plain(quote(format!("{}_{}", eclass_id, index))),
-                            None,
-                        ),
-                    )
-                })
+                .flat_map(|arg| arg.to_graphviz(format!("e_{}_{}", eclass_id, index)))
                 .collect::<Vec<d::Stmt>>()
         })
         .collect();
@@ -46,7 +34,7 @@ fn eclass_to_graphviz(
                 .map(|(index, fn_call)| {
                     d::Stmt::Node(d::Node::new(
                         d::NodeId(
-                            d::Id::Plain(quote(format!("{}_{}", eclass_id, index))),
+                            d::Id::Plain(quote(format!("e_{}_{}", eclass_id, index))),
                             None,
                         ),
                         label_attributes(fn_call.0.name.clone()),
@@ -60,20 +48,18 @@ fn eclass_to_graphviz(
 
 impl PrimOutput {
     /// A primitive output, should be a node with the value and function call
-    fn to_graphviz(&self, id_gen: &mut NodeIDGenerator) -> Vec<d::Stmt> {
+    fn to_graphviz(&self) -> Vec<d::Stmt> {
         let mut stmts = Vec::new();
         let label = format!("{}: {}", self.0 .0.name, self.1.to_string());
-        let res_id = id_gen.next();
+        let res_id = format!("po_{}_{}", self.0 .0.name, self.2);
         stmts.push(d::Stmt::Node(d::Node::new(
-            res_id.clone(),
+            d::NodeId(
+                d::Id::Plain(quote(res_id.clone())),
+                None,
+            ),
             label_attributes(label),
         )));
-        stmts.extend(
-            self.0
-                 .1
-                .iter()
-                .flat_map(|arg| arg.to_graphviz(id_gen, res_id.clone())),
-        );
+        stmts.extend(self.0 .1.iter().flat_map(|arg| arg.to_graphviz(res_id.clone())));
         stmts
     }
 }
@@ -82,27 +68,28 @@ impl Arg {
     /// Returns an edge from the result to the argument
     /// If it's an e-class, use the e-class-id as the target
     /// Otherwise, create a node for the primitive value and use that as the target
-    fn to_graphviz(&self, id_gen: &mut NodeIDGenerator, result_id: d::NodeId) -> Vec<d::Stmt> {
+    fn to_graphviz(&self, result_id:String) -> Vec<d::Stmt> {
+        let result_node = d::Vertex::N(d::NodeId(d::Id::Plain(quote(result_id.clone())), None));
         match self {
             Arg::Prim(p) => {
-                let arg_id = id_gen.next();
+                let arg_id = d::NodeId(
+                    d::Id::Plain(quote(format!("p_{}_{}", result_id, p.to_string()))),
+                    None,
+                );
                 vec![
                     d::Stmt::Node(d::Node::new(
                         arg_id.clone(),
                         label_attributes(p.to_string()),
                     )),
                     d::Stmt::Edge(d::Edge {
-                        ty: d::EdgeTy::Pair(d::Vertex::N(result_id), d::Vertex::N(arg_id)),
+                        ty: d::EdgeTy::Pair(result_node, d::Vertex::N(arg_id)),
                         attributes: vec![],
                     }),
                 ]
             }
             Arg::Eq(eclass_id) => {
                 vec![d::Stmt::Edge(d::Edge {
-                    ty: d::EdgeTy::Pair(
-                        d::Vertex::N(result_id),
-                        d::Vertex::N(eclass_node_id(eclass_id)),
-                    ),
+                    ty: d::EdgeTy::Pair(result_node, d::Vertex::N(eclass_node_id(eclass_id))),
                     attributes: vec![graphviz_rust::attributes::EdgeAttributes::lhead(
                         eclass_cluster_name(eclass_id),
                     )],
@@ -115,7 +102,6 @@ impl Arg {
 /// Implement conversion of Graph to graphviz Graph
 impl Graph {
     pub fn to_graphviz(&self) -> d::Graph {
-        let id_generator = &mut NodeIDGenerator::new();
         let mut statements = vec![
             // Set to compound so we can have edge to clusters
             d::Stmt::Attribute(a::GraphAttributes::compound(true)),
@@ -135,38 +121,17 @@ impl Graph {
                 a::NodeAttributes::height(0.4),
             ])),
         ];
+        statements.extend(self.prim_outputs.iter().flat_map(|po| po.to_graphviz()));
         statements.extend(
-            self.prim_outputs
+            self.eclasses
                 .iter()
-                .flat_map(|po: &PrimOutput| po.to_graphviz(id_generator)),
-        );
-        statements.extend(
-            self.eclasses.iter().flat_map(|(eclass_id, eclass)| {
-                eclass_to_graphviz(eclass_id, eclass, id_generator)
-            }),
+                .flat_map(|(eclass_id, eclass)| eclass_to_graphviz(eclass_id, eclass)),
         );
         d::Graph::DiGraph {
             id: d::Id::Plain("egg_smol".to_string()),
             strict: false,
             stmts: statements,
         }
-    }
-}
-
-/// Struct which generates an incrementing ID for each node
-struct NodeIDGenerator {
-    next_id: usize,
-}
-
-impl NodeIDGenerator {
-    fn new() -> Self {
-        Self { next_id: 0 }
-    }
-
-    fn next(&mut self) -> d::NodeId {
-        let id = self.next_id;
-        self.next_id += 1;
-        d::NodeId(d::Id::Plain(id.to_string()), None)
     }
 }
 

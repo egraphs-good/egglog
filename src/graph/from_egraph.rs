@@ -10,7 +10,7 @@ pub(crate) fn graph_from_egraph(egraph: &EGraph) -> Graph {
         if name.ends_with("___") {
             continue;
         }
-        for (input, output) in function.nodes.vals.iter() {
+        for (offset, (input, output)) in function.nodes.vals.iter().enumerate() {
             if !input.live() {
                 continue;
             }
@@ -29,7 +29,7 @@ pub(crate) fn graph_from_egraph(egraph: &EGraph) -> Graph {
                 Arg::Eq(parent_id) => {
                     eclasses.entry(parent_id).or_default().push(fn_call);
                 }
-                Arg::Prim(prim_value) => prim_outputs.push(PrimOutput(fn_call, prim_value)),
+                Arg::Prim(prim_value) => prim_outputs.push(PrimOutput(fn_call, prim_value, offset)),
             }
         }
     }

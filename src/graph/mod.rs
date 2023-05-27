@@ -4,6 +4,7 @@ pub(crate) mod to_graphviz;
 use crate::{ast::Expr, util::HashMap};
 
 type EClassID = String;
+type Offset = usize;
 
 /// Exposed graph structure which can be used to print/visualize the state of the e-graph.
 #[derive(Debug)]
@@ -16,7 +17,7 @@ pub(crate) struct Graph {
 
 /// A primitive value which is output from a function.
 #[derive(Debug)]
-pub(crate) struct PrimOutput(pub FnCall, pub PrimValue);
+pub(crate) struct PrimOutput(pub FnCall, pub PrimValue, pub Offset);
 
 #[derive(Debug)]
 pub(crate) struct FnCall(pub Fn, pub Vec<Arg>);
