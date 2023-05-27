@@ -3,11 +3,11 @@ pub(crate) mod to_graphviz;
 
 use crate::{ast::Expr, util::HashMap};
 
-type EClassID = String;
 type Offset = usize;
+type EClassID = Offset;
 
 /// Exposed graph structure which can be used to print/visualize the state of the e-graph.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(crate) struct Graph {
     /// All of the primitive values which are outputs of functions
     pub prim_outputs: Vec<PrimOutput>,
@@ -17,7 +17,12 @@ pub(crate) struct Graph {
 
 /// A primitive value which is output from a function.
 #[derive(Debug)]
-pub(crate) struct PrimOutput(pub FnCall, pub PrimValue, pub Offset);
+pub(crate) struct PrimOutput(
+    pub FnCall,
+    pub PrimValue,
+    /// Unique offset, per function, of what call this is. Needed to preserve resulting graph ID's accross time.
+    pub Offset,
+);
 
 #[derive(Debug)]
 pub(crate) struct FnCall(pub Fn, pub Vec<Arg>);

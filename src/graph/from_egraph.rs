@@ -2,8 +2,7 @@ use super::*;
 use crate::{ast::Id, EGraph, Value};
 
 pub(crate) fn graph_from_egraph(egraph: &EGraph) -> Graph {
-    let mut prim_outputs = vec![];
-    let mut eclasses = HashMap::<String, Vec<FnCall>>::default();
+    let mut graph = Graph::default();
     for (_id, function) in egraph.functions.iter() {
         let name = function.decl.name.to_string();
         // Skip generated names
@@ -19,32 +18,30 @@ pub(crate) fn graph_from_egraph(egraph: &EGraph) -> Graph {
 
             let fn_call = FnCall(
                 Fn { name: name.clone() },
+                // Collect all inputs/args
                 input_values
                     .iter()
                     .map(|v| arg_from_value(egraph, *v))
                     .collect(),
             );
-
+            // Add output
             match arg_from_value(egraph, output_value) {
-                Arg::Eq(parent_id) => {
-                    eclasses.entry(parent_id).or_default().push(fn_call);
-                }
-                Arg::Prim(prim_value) => prim_outputs.push(PrimOutput(fn_call, prim_value, offset)),
+                Arg::Eq(id) => graph.eclasses.entry(id).or_default().push(fn_call),
+                Arg::Prim(prim_value) => graph
+                    .prim_outputs
+                    .push(PrimOutput(fn_call, prim_value, offset)),
             }
         }
     }
-    Graph {
-        prim_outputs,
-        eclasses,
-    }
+    graph
 }
 
 fn arg_from_value(egraph: &EGraph, value: Value) -> Arg {
     let sort = egraph.get_sort(&value).unwrap();
     if sort.is_eq_sort() {
-        let parent_id: usize = egraph.unionfind.find(Id::from(value.bits as usize)).into();
-        let parent_id_string = format!("{}", parent_id);
-        Arg::Eq(parent_id_string)
+        let id = value.bits as usize;
+        let canonical: usize = egraph.unionfind.find(Id::from(id)).into();
+        Arg::Eq(canonical)
     } else {
         let expr = sort.make_expr(egraph, value);
         let prim_value = from_expr(&expr);
