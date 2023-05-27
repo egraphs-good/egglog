@@ -2,7 +2,7 @@ use super::*;
 use graphviz_rust::{attributes as a, dot_structures as d};
 
 /// Implement conversion of Graph to graphviz Graph
-impl Graph {
+impl ExportedGraph {
     pub fn to_graphviz(&self) -> d::Graph {
         let mut statements = vec![
             // Set to compound so we can have edge to clusters

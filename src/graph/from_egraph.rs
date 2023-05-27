@@ -1,8 +1,8 @@
 use super::*;
 use crate::{ast::Id, function::table::hash_values, EGraph, Value};
 
-pub(crate) fn graph_from_egraph(egraph: &EGraph) -> Graph {
-    let mut graph = Graph::default();
+pub(crate) fn graph_from_egraph(egraph: &EGraph) -> ExportedGraph {
+    let mut graph = ExportedGraph::default();
     for (_id, function) in egraph.functions.iter() {
         let name = function.decl.name.to_string();
         // Skip generated names

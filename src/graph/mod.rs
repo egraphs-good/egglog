@@ -10,7 +10,7 @@ type EClasses = HashMap<EClassID, Vec<FnCall>>;
 
 /// Exposed graph structure which can be used to print/visualize the state of the e-graph.
 #[derive(Debug, Default)]
-pub(crate) struct Graph {
+pub(crate) struct ExportedGraph {
     /// All of the primitive values which are outputs of functions
     pub prim_outputs: Vec<PrimOutput>,
     /// All of the e-classes which are have non primitive types
