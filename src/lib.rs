@@ -80,7 +80,7 @@ impl RunReport {
     }
 }
 
-pub const HIGH_COST: usize = usize::MAX;
+pub const HIGH_COST: usize = i64::MAX as usize;
 
 #[derive(Clone)]
 pub struct Primitive(Arc<dyn PrimitiveLike>);
@@ -421,22 +421,14 @@ impl EGraph {
             write!(s, "({}", sym).unwrap();
             for (a, t) in ins.iter().copied().zip(&schema.input) {
                 s.push(' ');
-                let e = if t.is_eq_sort() {
-                    self.extract(a).1
-                } else {
-                    t.make_expr(a)
-                };
+                let e = self.extract(a, t).1;
                 write!(s, "{}", e).unwrap();
             }
 
             if out_is_unit {
                 s.push(')');
             } else {
-                let e = if schema.output.is_eq_sort() {
-                    self.extract(out.value).1
-                } else {
-                    schema.output.make_expr(out.value)
-                };
+                let e = self.extract(out.value, &schema.output).1;
                 write!(s, ") -> {}", e).unwrap();
             }
             s.push('\n');
@@ -999,9 +991,9 @@ impl EGraph {
 
     fn simplify(&mut self, expr: Expr, config: &NormRunConfig) -> Result<ExtractReport, Error> {
         self.push();
-        let (_t, value) = self.eval_expr(&expr, None, true).unwrap();
+        let (t, value) = self.eval_expr(&expr, None, true).unwrap();
         self.run_report = Some(self.run_rules(config));
-        let (cost, expr) = self.extract(value);
+        let (cost, expr) = self.extract(value, &t);
         self.pop().unwrap();
         Ok(ExtractReport {
             cost,
@@ -1012,8 +1004,8 @@ impl EGraph {
     // Extract an expression from the current state, returning the cost, the extracted expression and some number
     // of other variants, if variants is not zero.
     pub fn extract_expr(&mut self, e: Expr, variants: usize) -> Result<ExtractReport, Error> {
-        let (_t, value) = self.eval_expr(&e, None, true)?;
-        let (cost, expr) = self.extract(value);
+        let (t, value) = self.eval_expr(&e, None, true)?;
+        let (cost, expr) = self.extract(value, &t);
         let exprs = match variants {
             0 => vec![],
             1 => vec![expr.clone()],
@@ -1072,6 +1064,50 @@ impl EGraph {
         let f = self.functions.get_mut(&name).unwrap();
         f.insert(&[], value, self.timestamp);
         Ok(sort)
+    }
+
+    // process the commands but don't run them
+    pub fn process_commands(
+        &mut self,
+        mut program: Vec<Command>,
+    ) -> Result<Vec<NormCommand>, Error> {
+        let mut result = vec![];
+        if let Some(Command::SetOption {
+            name,
+            value: Expr::Lit(Literal::Int(1)),
+        }) = program.first()
+        {
+            if name == &"enable_proofs".into() {
+                program = program.split_off(1);
+                for step in self.proof_state.proof_header() {
+                    result.extend(self.process_command(step)?);
+                }
+                self.proofs_enabled = true;
+            }
+        }
+
+        for command in program {
+            match command {
+                Command::Push(num) => {
+                    for _ in 0..num {
+                        self.push();
+                    }
+                }
+                Command::Pop(num) => {
+                    for _ in 0..num {
+                        self.pop()
+                            .expect("Failed to desugar, popped too many times");
+                    }
+                }
+                _ => {}
+            }
+            result.extend(self.process_command(command)?);
+        }
+        Ok(result)
+    }
+
+    pub fn set_underscores_for_desugaring(&mut self, underscores: usize) {
+        self.proof_state.desugar.number_underscores = underscores;
     }
 
     fn process_command(&mut self, command: Command) -> Result<Vec<NormCommand>, Error> {

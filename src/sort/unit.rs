@@ -25,7 +25,7 @@ impl Sort for UnitSort {
         type_info.add_primitive(NotEqualPrimitive { unit: self })
     }
 
-    fn make_expr(&self, value: Value) -> Expr {
+    fn make_expr(&self, _egraph: &EGraph, value: Value) -> Expr {
         assert_eq!(value.tag, self.name);
         Expr::Lit(Literal::Unit)
     }
