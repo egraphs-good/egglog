@@ -1,5 +1,5 @@
 use super::*;
-use crate::{ast::Id, EGraph, Value};
+use crate::{ast::Id, function::table::hash_values, EGraph, Value};
 
 pub(crate) fn graph_from_egraph(egraph: &EGraph) -> Graph {
     let mut graph = Graph::default();
@@ -9,13 +9,12 @@ pub(crate) fn graph_from_egraph(egraph: &EGraph) -> Graph {
         if name.ends_with("___") {
             continue;
         }
-        for (offset, (input, output)) in function.nodes.vals.iter().enumerate() {
+        for (input, output) in function.nodes.vals.iter() {
             if !input.live() {
                 continue;
             }
             let input_values = input.data();
             let output_value = output.value;
-
             let fn_call = FnCall(
                 Fn { name: name.clone() },
                 // Collect all inputs/args
@@ -23,13 +22,12 @@ pub(crate) fn graph_from_egraph(egraph: &EGraph) -> Graph {
                     .iter()
                     .map(|v| arg_from_value(egraph, *v))
                     .collect(),
+                hash_values(input_values),
             );
             // Add output
             match arg_from_value(egraph, output_value) {
                 Arg::Eq(id) => graph.eclasses.entry(id).or_default().push(fn_call),
-                Arg::Prim(prim_value) => graph
-                    .prim_outputs
-                    .push(PrimOutput(fn_call, prim_value, offset)),
+                Arg::Prim(prim_value) => graph.prim_outputs.push(PrimOutput(fn_call, prim_value)),
             }
         }
     }

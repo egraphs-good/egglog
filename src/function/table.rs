@@ -302,7 +302,7 @@ impl Table {
     }
 }
 
-fn hash_values(vs: &[Value]) -> u64 {
+pub(crate) fn hash_values(vs: &[Value]) -> u64 {
     // Just hash the bits: all inputs to the same function should have matching
     // column types.
     let mut hasher = BH::default().build_hasher();

@@ -23,11 +23,15 @@ impl Graph {
                 a::NodeAttributes::height(0.4),
             ])),
         ];
-        statements.extend(self.prim_outputs.iter().flat_map(|po| po.to_graphviz()));
         statements.extend(
-            self.eclasses
+            self.prim_outputs
                 .iter()
-                .flat_map(|(eclass_id, eclass)| eclass_to_graphviz(eclass_id, eclass)),
+                .flat_map(|po| po.to_graphviz(&self.eclasses)),
+        );
+        statements.extend(
+            self.eclasses.iter().flat_map(|(eclass_id, eclass)| {
+                eclass_to_graphviz(eclass_id, eclass, &self.eclasses)
+            }),
         );
         d::Graph::DiGraph {
             id: d::Id::Plain("egg_smol".to_string()),
@@ -38,21 +42,19 @@ impl Graph {
 }
 
 /// An e-class is converted into a cluster with a node for each function call
-fn eclass_to_graphviz(eclass_id: &EClassID, fn_calls: &[FnCall]) -> Vec<d::Stmt> {
-    let calls_and_ids: Vec<(&FnCall, String)> = fn_calls
-        .iter()
-        .enumerate()
-        .map(|(index, fn_call)| (fn_call, enode_fn_id(eclass_id, index)))
-        .collect();
-
+fn eclass_to_graphviz(
+    eclass_id: &EClassID,
+    fn_calls: &[FnCall],
+    eclasses: &EClasses,
+) -> Vec<d::Stmt> {
     // Create node for all arguments of every function call
-    let mut stmts: Vec<d::Stmt> = calls_and_ids
+    let mut stmts: Vec<d::Stmt> = fn_calls
         .iter()
-        .flat_map(|(fn_call, id)| {
+        .flat_map(|fn_call| {
             fn_call
                 .1
                 .iter()
-                .flat_map(|arg| arg.to_graphviz(id.clone()))
+                .flat_map(|arg| arg.to_graphviz(fn_call_id(fn_call), eclasses))
                 .collect::<Vec<d::Stmt>>()
         })
         .collect();
@@ -63,11 +65,11 @@ fn eclass_to_graphviz(eclass_id: &EClassID, fn_calls: &[FnCall]) -> Vec<d::Stmt>
         // https://stackoverflow.com/a/55562026/907060
         stmts: vec![d::Stmt::Subgraph(d::Subgraph {
             id: d::Id::Plain("".to_string()),
-            stmts: calls_and_ids
+            stmts: fn_calls
                 .iter()
-                .map(|(fn_call, id)| {
+                .map(|fn_call| {
                     d::Stmt::Node(d::Node::new(
-                        d::NodeId(d::Id::Plain(quote(id.clone())), None),
+                        d::NodeId(d::Id::Plain(quote(fn_call_id(fn_call))), None),
                         label_attributes(fn_call.0.name.clone()),
                     ))
                 })
@@ -79,10 +81,10 @@ fn eclass_to_graphviz(eclass_id: &EClassID, fn_calls: &[FnCall]) -> Vec<d::Stmt>
 
 impl PrimOutput {
     /// A primitive output, should be a node with the value and function call
-    fn to_graphviz(&self) -> Vec<d::Stmt> {
+    fn to_graphviz(&self, eclasses: &EClasses) -> Vec<d::Stmt> {
         let mut stmts = Vec::new();
         let label = format!("{}: {}", self.0 .0.name, self.1.to_string());
-        let res_id = prim_output_id(self);
+        let res_id = fn_call_id(&self.0);
         stmts.push(d::Stmt::Node(d::Node::new(
             d::NodeId(d::Id::Plain(quote(res_id.clone())), None),
             label_attributes(label),
@@ -91,7 +93,7 @@ impl PrimOutput {
             self.0
                  .1
                 .iter()
-                .flat_map(|arg| arg.to_graphviz(res_id.clone())),
+                .flat_map(|arg| arg.to_graphviz(res_id.clone(), eclasses)),
         );
         stmts
     }
@@ -101,7 +103,7 @@ impl Arg {
     /// Returns an edge from the result to the argument
     /// If it's an e-class, use the e-class-id as the target
     /// Otherwise, create a node for the primitive value and use that as the target
-    fn to_graphviz(&self, result_id: String) -> Vec<d::Stmt> {
+    fn to_graphviz(&self, result_id: String, eclasses: &EClasses) -> Vec<d::Stmt> {
         let result_node = d::Vertex::N(d::NodeId(d::Id::Plain(quote(result_id.clone())), None));
         match self {
             Arg::Prim(p) => {
@@ -121,7 +123,10 @@ impl Arg {
                 vec![d::Stmt::Edge(d::Edge {
                     ty: d::EdgeTy::Pair(
                         result_node,
-                        d::Vertex::N(d::NodeId(d::Id::Plain(quote(enode_fn_id(id, 0))), None)),
+                        d::Vertex::N(d::NodeId(
+                            d::Id::Plain(quote(enode_fn_id(id, eclasses))),
+                            None,
+                        )),
                     ),
                     attributes: vec![graphviz_rust::attributes::EdgeAttributes::lhead(
                         cluster_name(id),
@@ -145,12 +150,14 @@ fn cluster_name(canonical_id: &EClassID) -> String {
     format!("cluster_{}", canonical_id)
 }
 
-fn enode_fn_id(eclass_id: &EClassID, index: usize) -> String {
-    format!("{}_{}", eclass_id, index)
+// Edges to enodes should point to the first function call in the e-class
+fn enode_fn_id(eclass_id: &EClassID, eclasses: &EClasses) -> String {
+    fn_call_id(&eclasses[eclass_id][0])
 }
 
-fn prim_output_id(prim_output: &PrimOutput) -> String {
-    format!("{}_{}", prim_output.0 .0.name, prim_output.2)
+// Function calls are uniquely identified by the function name and the hash of the arguments
+fn fn_call_id(fn_call: &FnCall) -> String {
+    format!("{}_{}", fn_call.0.name, fn_call.2)
 }
 
 fn prim_value_id(parent_name: String, value: &PrimValue) -> String {
