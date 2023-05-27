@@ -3,7 +3,8 @@ use graphviz_rust::{
     attributes::*,
     dot_generator::*,
     dot_structures::{
-        Edge, EdgeTy, Graph, GraphAttributes as GA, Id, Node, NodeId, Stmt, Subgraph, Vertex,
+        Attribute, Edge, EdgeTy, Graph, GraphAttributes as GA, Id, Node, NodeId, Port, Stmt,
+        Subgraph, Vertex,
     },
 };
 
@@ -16,13 +17,13 @@ impl ExportedGraph {
             // Set default sub-graph rank to be same so that all nodes in e-class are on same level
             stmt!(SubgraphAttributes::rank(rank::same)),
             stmt!(GraphAttributes::fontname("helvetica".to_string())),
-            stmt!(GraphAttributes::style("rounded".to_string())),
+            stmt!(GraphAttributes::style(quote("rounded,dashed".to_string()))),
+            stmt!(GraphAttributes::margin(3.0)),
+            stmt!(GraphAttributes::nodesep(0.0)),
             stmt!(GA::Edge(vec![EdgeAttributes::arrowsize(0.5)])),
             stmt!(GA::Node(vec![
-                NodeAttributes::shape(shape::box_),
-                NodeAttributes::style("rounded".to_string()),
-                NodeAttributes::width(0.4),
-                NodeAttributes::height(0.4),
+                NodeAttributes::shape(shape::none),
+                NodeAttributes::margin(0.0)
             ])),
         ];
         statements.extend(
@@ -35,7 +36,7 @@ impl ExportedGraph {
                 eclass_to_graphviz(eclass_id, eclass, &self.eclasses)
             }),
         );
-        graph!(di id!(), statements)
+        graph!(strict di id!(), statements)
     }
 }
 
@@ -48,7 +49,8 @@ fn eclass_to_graphviz(eclass_id: &EClassID, fn_calls: &[FnCall], eclasses: &ECla
             fn_call
                 .1
                 .iter()
-                .flat_map(|arg| arg.to_graphviz(fn_call_id(fn_call), eclasses))
+                .enumerate()
+                .flat_map(|(index, arg)| arg.to_graphviz(index, fn_call_id(fn_call), eclasses))
                 .collect::<Vec<Stmt>>()
         })
         .collect();
@@ -57,7 +59,7 @@ fn eclass_to_graphviz(eclass_id: &EClassID, fn_calls: &[FnCall], eclasses: &ECla
         .iter()
         .map(|fn_call| {
             let id = fn_call_id(fn_call);
-            stmt!(node!(esc id; NodeAttributes::label(quote(fn_call.0.name.clone()))))
+            stmt!(node!(esc id; html_label(fn_call.0.name.clone(), fn_call.1.len())))
         })
         .collect::<Vec<Stmt>>();
     let cluster_id = cluster_name(eclass_id);
@@ -73,12 +75,12 @@ impl PrimOutput {
         let label = format!("{}: {}", self.0 .0.name, self.1.to_string());
         let res_id = fn_call_id(&self.0);
         let node_id = quote(res_id.clone());
-        let mut stmts = vec![stmt!(node!(node_id; NodeAttributes::label(quote(label))))];
+        let args = &self.0 .1;
+        let mut stmts = vec![stmt!(node!(node_id; html_label(label, args.len())))];
         stmts.extend(
-            self.0
-                 .1
-                .iter()
-                .flat_map(|arg| arg.to_graphviz(res_id.clone(), eclasses)),
+            args.iter()
+                .enumerate()
+                .flat_map(|(index, arg)| arg.to_graphviz(index, res_id.clone(), eclasses)),
         );
         stmts
     }
@@ -88,19 +90,19 @@ impl Arg {
     /// Returns an edge from the result to the argument
     /// If it's an e-class, use the e-class-id as the target
     /// Otherwise, create a node for the primitive value and use that as the target
-    fn to_graphviz(&self, result_id: String, eclasses: &EClasses) -> Vec<Stmt> {
-        let result_name = quote(result_id.clone());
+    fn to_graphviz(&self, index: usize, result_id: String, eclasses: &EClasses) -> Vec<Stmt> {
+        let source = node_id!(quote(result_id.clone()), port!(id!(format!("a{}", index))));
         match self {
             Arg::Prim(p) => {
                 let arg_id = quote(prim_value_id(result_id, p));
                 vec![
-                    stmt!(node!(arg_id; NodeAttributes::label(quote(p.to_string())))),
-                    stmt!(edge!(node_id!(result_name) => node_id!(arg_id))),
+                    stmt!(node!(arg_id; html_label(p.to_string(), 0))),
+                    stmt!(edge!(source => node_id!(arg_id))),
                 ]
             }
             Arg::Eq(id) => {
                 vec![stmt!(edge!(
-                    node_id!(result_name) => node_id!(quote(enode_fn_id(id, eclasses)));
+                    source => node_id!(quote(enode_fn_id(id, eclasses)));
                     EdgeAttributes::lhead(cluster_name(id))
                 ))]
             }
@@ -128,4 +130,27 @@ fn fn_call_id(fn_call: &FnCall) -> String {
 
 fn prim_value_id(parent_name: String, value: &PrimValue) -> String {
     format!("{}_{}", parent_name, value.to_string())
+}
+
+/// Returns an html label for the node with the function name and ports for each argumetn
+fn html_label(label: String, n_args: usize) -> Attribute {
+    NodeAttributes::label(format!(
+        "<<TABLE CELLBORDER=\"0\" CELLSPACING=\"0\" CELLPADDING=\"0\" style=\"rounded\">
+        <tr><td CELLPADDING=\"4\" WIDTH=\"30\" HEIGHT=\"30\" colspan=\"{}\">{}</td></tr>
+        {}
+        </TABLE>>",
+        n_args,
+        label,
+        (if n_args == 0 {
+            "".to_string()
+        } else {
+            format!(
+                "<TR>{}</TR>",
+                (0..n_args)
+                    .map(|i| format!("<TD PORT=\"a{}\"></TD>", i))
+                    .collect::<Vec<String>>()
+                    .join("")
+            )
+        })
+    ))
 }
