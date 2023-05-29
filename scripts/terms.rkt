@@ -50,10 +50,12 @@
       (repeat 10
         (saturate parent)
         (saturate rebuilding)
+        (saturate parent)
         (saturate (run 1))))
     
     (run-schedule (saturate parent))
     (run-schedule (saturate rebuilding))
+    (run-schedule (saturate parent))
 
     (let b (Add (Const 2) (Const 1)))
 
