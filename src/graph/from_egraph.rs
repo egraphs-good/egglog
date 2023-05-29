@@ -1,12 +1,32 @@
+use clap::ValueEnum;
+
 use super::*;
 use crate::{ast::Id, function::table::hash_values, EGraph, Value};
 
-pub(crate) fn graph_from_egraph(egraph: &EGraph) -> ExportedGraph {
+/// Whether to include temporary functions in the exported graph
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+pub enum IncludeTempFunctions {
+    /// Include temporary functions if proofs are enabled, since some non temporary functions in proofs may depend on them
+    IfProofsEnabled,
+    /// Always include temporary functions
+    Always,
+    /// Never include temporary functions
+    Never,
+}
+
+pub(crate) fn graph_from_egraph(
+    egraph: &EGraph,
+    show_temp_functions: IncludeTempFunctions,
+) -> ExportedGraph {
     let mut graph = ExportedGraph::default();
     for (_id, function) in egraph.functions.iter() {
         let name = function.decl.name.to_string();
-        // Keep temporary functions if proofs are enabled, because the proofs reference them
-        if is_temp_name(name.clone()) && !egraph.proofs_enabled {
+        let include_temp_functions = match show_temp_functions {
+            IncludeTempFunctions::Never => false,
+            IncludeTempFunctions::IfProofsEnabled => egraph.proofs_enabled,
+            IncludeTempFunctions::Always => true,
+        };
+        if !include_temp_functions && is_temp_name(name.clone()) {
             continue;
         }
         for (input, output) in function.nodes.vals.iter() {
