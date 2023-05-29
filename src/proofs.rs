@@ -85,7 +85,7 @@ impl ProofState {
         Symbol::from(format!("{}_parent__", var.to_string()))
     }
 
-    fn instrument_fact(&self, fact: &NormFact) -> Vec<Fact> {
+    fn instrument_fact(&mut self, fact: &NormFact) -> Vec<Fact> {
         match fact {
             NormFact::Assign(lhs, expr) => {
                 let NormExpr::Call(head, body) = expr;
@@ -130,11 +130,11 @@ impl ProofState {
         }
     }
 
-    fn instrument_facts(&self, facts: &Vec<NormFact>) -> Vec<Fact> {
+    fn instrument_facts(&mut self, facts: &Vec<NormFact>) -> Vec<Fact> {
         facts.iter().flat_map(|f| self.instrument_fact(f)).collect()
     }
 
-    fn instrument_action(&self, action: &NormAction) -> Action {
+    /*fn instrument_action(&self, action: &NormAction) -> Action {
         match action {
             Action::Union(lhs, rhs) => Action::Set(
         }
@@ -142,14 +142,14 @@ impl ProofState {
 
     fn instrument_actions(&self, actions: &Vec<NormAction>) -> Vec<Action> {
         actions.iter().flat_map(|a| self.instrument_action(a)).collect()
-    }
+    }*/
 
-    fn instrument_rule(&self, ruleset: Symbol, name: Symbol, rule: &NormRule) -> Vec<Command> {
+    fn instrument_rule(&mut self, ruleset: Symbol, name: Symbol, rule: &NormRule) -> Vec<Command> {
         vec![Command::Rule {
             ruleset,
             name,
             rule: Rule {
-                head: self.instrument_actions(&rule.head),
+                head: rule.head.iter().map(|head| head.to_action()).collect(),
                 body: self.instrument_facts(&rule.body),
             },
         }]
@@ -182,47 +182,7 @@ impl ProofState {
                 } => {
                     res.extend(self.instrument_rule(*ruleset, *name, rule));
                 }
-                NCommand::NormAction(action) => {
-                    res.extend(proof_original_action(action, self));
-                    res.push(Command::Action(action.to_action()));
-                }
-                NCommand::Check(_facts) => {
-                    res.push(self.run_proof_rules());
-                    res.push(command.to_command());
-                }
-                NCommand::RunSchedule(schedule) => {
-                    res.push(Command::RunSchedule(instrument_schedule(schedule)));
-                }
-                NCommand::Extract { .. } => {
-                    res.push(self.run_proof_rules());
-                    res.push(command.to_command());
-                }
-                NCommand::Print { .. } => {
-                    res.push(self.run_proof_rules());
-                    res.push(command.to_command());
-                }
-                NCommand::SetOption { .. } => {
-                    res.push(command.to_command());
-                }
-                NCommand::AddRuleset(..) => {
-                    res.push(command.to_command());
-                }
-                NCommand::Simplify { .. } => {
-                    res.push(self.run_proof_rules());
-                    res.push(command.to_command());
-                }
-                NCommand::CheckProof { .. } => {
-                    res.push(self.run_proof_rules());
-                    res.push(command.to_command());
-                }
-                NCommand::PrintSize { .. } => {
-                    res.push(self.run_proof_rules());
-                    res.push(command.to_command());
-                }
-                NCommand::Output { .. }
-                | NCommand::Pop(..)
-                | NCommand::Fail(..)
-                | NCommand::Input { .. } => {
+                _ => {
                     res.push(command.to_command());
                 }
             }

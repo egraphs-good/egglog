@@ -657,6 +657,7 @@ impl Clone for Desugar {
             next_command_id: self.next_command_id,
             parser: ast::parse::ProgramParser::new(),
             action_parser: ast::parse::ActionParser::new(),
+            fact_parser: ast::parse::FactParser::new(),
             number_underscores: self.number_underscores,
             global_variables: self.global_variables.clone(),
         }
