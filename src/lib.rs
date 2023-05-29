@@ -83,7 +83,7 @@ impl RunReport {
     }
 }
 
-pub const HIGH_COST: usize = usize::MAX;
+pub const HIGH_COST: usize = i64::MAX as usize;
 
 #[derive(Clone)]
 pub struct Primitive(Arc<dyn PrimitiveLike>);
@@ -1067,6 +1067,50 @@ impl EGraph {
         let f = self.functions.get_mut(&name).unwrap();
         f.insert(&[], value, self.timestamp);
         Ok(sort)
+    }
+
+    // process the commands but don't run them
+    pub fn process_commands(
+        &mut self,
+        mut program: Vec<Command>,
+    ) -> Result<Vec<NormCommand>, Error> {
+        let mut result = vec![];
+        if let Some(Command::SetOption {
+            name,
+            value: Expr::Lit(Literal::Int(1)),
+        }) = program.first()
+        {
+            if name == &"enable_proofs".into() {
+                program = program.split_off(1);
+                for step in self.proof_state.proof_header() {
+                    result.extend(self.process_command(step)?);
+                }
+                self.proofs_enabled = true;
+            }
+        }
+
+        for command in program {
+            match command {
+                Command::Push(num) => {
+                    for _ in 0..num {
+                        self.push();
+                    }
+                }
+                Command::Pop(num) => {
+                    for _ in 0..num {
+                        self.pop()
+                            .expect("Failed to desugar, popped too many times");
+                    }
+                }
+                _ => {}
+            }
+            result.extend(self.process_command(command)?);
+        }
+        Ok(result)
+    }
+
+    pub fn set_underscores_for_desugaring(&mut self, underscores: usize) {
+        self.proof_state.desugar.number_underscores = underscores;
     }
 
     fn process_command(&mut self, command: Command) -> Result<Vec<NormCommand>, Error> {
