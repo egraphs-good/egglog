@@ -100,7 +100,7 @@
                 .transition(d3.transition().duration(2000))
                 .dot(message.data.dot).render();
             // If we have made a zoom selection, reset that before transitioning
-            // TODO: figure out how to transition BOTH zoom an dot at once
+            // TODO: figure out how to transition BOTH zoom and dot at once
             if (graphviz._zoomSelection) {
                 graphviz.resetZoom();
             }
