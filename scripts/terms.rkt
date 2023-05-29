@@ -11,66 +11,33 @@
       (Const i64)
       (Var String))
 
-    (relation Parent (Math Math))
+    (relation Parent (Math) Math :merge (ordering-less old new))
 
     ;; rebuilding rules
-    (ruleset parent-subsume)
-    (rule ((Parent a a)
-          (Parent a c)
-          (!= a c))
-        ((delete (Parent a a)))
-        :ruleset parent-subsume)
-
     (ruleset parent)
     (rule ((Parent a b)
            (Parent b c))
           ((Parent a c))
           :ruleset parent)
 
-    (ruleset rebuilding1)
+    (ruleset rebuilding)
 
-    ;; make the left child canonical and add it to the eclass
-    ;; TODO subsume the old one
+    ;; make the children canonical and add it to the eclass
     ,@(for/list ([op binary])
-       `(rule ((= e (,op a b))
-              (Parent e ep)
-              (Parent a p)
-              (!= a p))
-              ((Parent (Add p b) ep))
-              :ruleset rebuilding1))
-
-    (ruleset rebuilding2)
-
-    ;; make the right child canonical and add it to the eclass
-    ,@(for/list ([op binary])
-       `(rule ((= e (,op a b))
-              (Parent e ep)
-              (Parent b p)
-              (!= b p))
-              ((Parent (Add a p) ep))
-              :ruleset rebuilding2))
-
-
-    ;; rules
-    (ruleset just-add)
-    (ruleset do-union)
+       `(rule ((= e (,op a b)))
+              ((let lhs (Add (Parent a) (Parent b)))
+               (let rhs (Parent e))
+                (Parent lhs rhs)
+                (Parent rhs lhs))
+              :ruleset rebuilding))
 
     ;; commutativity of addition
-    (rule ((Add a b))
-          ((let rhs (Add b a))
-           (Parent rhs rhs))
-          :ruleset just-add)
     (rule ((= lhs (Add a b))
-           (= rhs (Add b a))
            (Parent a a)
-           (Parent b b)
-           (Parent lhs p1)
-           (Parent rhs p2)
-           (= 1 (ordering-less p1 p2))
-           )
+           (Parent b b))
           ;; set lhs parent to rhs parent
-          ((Parent p1 p2))
-          :ruleset do-union)
+          ((Parent lhs (Add b a))
+           (Parent (Add b a) lhs)))
 
     (let a (Add (Const 1) (Const 2)))
     (Parent a a)
@@ -81,15 +48,12 @@
     ;; time to run!
     (run-schedule
       (repeat 10
-        (saturate parent-subsume)
         (saturate parent)
-        (saturate rebuilding1)
-        (saturate rebuilding2)
-        (saturate just-add)
-        (saturate parent-subsume)
-        (saturate do-union)))
+        (saturate rebuilding)
+        (saturate (run 1))))
     
-    (run-schedule (saturate parent-subsume))
+    (run-schedule (saturate parent))
+    (run-schedule (saturate rebuilding))
 
     (let b (Add (Const 2) (Const 1)))
 
@@ -101,7 +65,7 @@
   ";; This file does equality saturation without using
 ;; union, and only sets relations
 ;; So it is eqsat using datalog, rulesets, and subsumption
-;; in the Parent function (:merge new)")
+;; in the Parent relation")
 
 (for ([line program])
   (pretty-write line))
