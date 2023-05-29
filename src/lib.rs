@@ -1180,8 +1180,6 @@ impl EGraph {
             self.seminaive,
         )?;
 
-        println!("Desugared to : {}", ListDisplay(&program_desugared, "\n"));
-
         let type_info_before = self.proof_state.type_info.clone();
         self.proof_state
             .type_info
@@ -1196,6 +1194,8 @@ impl EGraph {
                 .proof_state
                 .desugar
                 .desugar_program(proofs, false, false)?;
+
+            eprintln!("Desugared to : {}", ListDisplay(&final_desugared, "\n"));
 
             // revert back to the type info before
             // proofs were added, typecheck again
