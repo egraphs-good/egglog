@@ -109,7 +109,7 @@ pub Action: Action = {
 
 Name: Symbol = { "[" <Ident> "]" => <> }
 
-Fact: Fact = {
+pub Fact: Fact = {
     "(" "=" <mut es:Expr+> <e:Expr> ")" => {
         es.push(e);
         Fact::Eq(es)
