@@ -11,7 +11,7 @@
       (Const i64)
       (Var String))
 
-    (relation Parent (Math) Math :merge (ordering-less old new))
+    (function Parent (Math) Math :merge (ordering-less old new))
 
     ;; rebuilding rules
     (ruleset parent)
