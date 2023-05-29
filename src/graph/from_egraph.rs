@@ -5,8 +5,8 @@ pub(crate) fn graph_from_egraph(egraph: &EGraph) -> ExportedGraph {
     let mut graph = ExportedGraph::default();
     for (_id, function) in egraph.functions.iter() {
         let name = function.decl.name.to_string();
-        // Keep temporary functions if proofs are enabled, because the proofs reference them
-        if is_temp_name(name.clone()) && !egraph.proofs_enabled {
+        // Skip temporary names
+        if is_temp_name(name.clone()) {
             continue;
         }
         for (input, output) in function.nodes.vals.iter() {
