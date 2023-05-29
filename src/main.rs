@@ -1,6 +1,5 @@
 use clap::Parser;
 use egg_smol::EGraph;
-use egg_smol::IncludeTempFunctions;
 use std::io::{self, Read};
 use std::path::PathBuf;
 
@@ -14,12 +13,8 @@ struct Args {
     save_dot: bool,
     #[clap(long)]
     save_svg: bool,
-    #[clap(long)]
-    #[clap(value_enum, default_value_t=IncludeTempFunctions::IfProofsEnabled)]
-    viz_include_temp: IncludeTempFunctions,
     inputs: Vec<PathBuf>,
 }
-
 
 fn main() {
     env_logger::Builder::new()
@@ -75,7 +70,7 @@ fn main() {
         // Save the graph as a DOT file if the `save_dot` flag is set
         if args.save_dot {
             let dot_path = input.with_extension("dot");
-            match egraph.save_graph_as_dot(&dot_path, args.viz_include_temp) {
+            match egraph.save_graph_as_dot(&dot_path) {
                 Ok(()) => log::info!("Saved graph as DOT file: {}", dot_path.display()),
                 Err(err) => log::error!("Failed to save graph as DOT file: {}", err),
             }
@@ -84,7 +79,7 @@ fn main() {
         // Save the graph as an SVG file if the `save_svg` flag is set
         if args.save_svg {
             let svg_path = input.with_extension("svg");
-            match egraph.save_graph_as_svg(&svg_path, args.viz_include_temp) {
+            match egraph.save_graph_as_svg(&svg_path) {
                 Ok(()) => log::info!("Saved graph as SVG file: {}", svg_path.display()),
                 Err(err) => log::error!("Failed to save graph as SVG file: {}", err),
             }

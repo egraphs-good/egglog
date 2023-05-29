@@ -12,7 +12,6 @@ pub mod util;
 mod value;
 
 use crate::graph::from_egraph::graph_from_egraph;
-pub use graph::from_egraph::IncludeTempFunctions;
 use graphviz_rust::printer::DotPrinter;
 use hashbrown::hash_map::Entry;
 use index::ColumnIndex;
@@ -1225,15 +1224,15 @@ impl EGraph {
     }
 
     /// Exports the egraph as a Graphviz dot string
-    pub fn to_graphviz_string(&self, temp_functions: IncludeTempFunctions) -> String {
-        graph_from_egraph(self, temp_functions)
+    pub fn to_graphviz_string(&self) -> String {
+        graph_from_egraph(self)
             .to_graphviz()
             .print(&mut graphviz_rust::printer::PrinterContext::default())
     }
 
     /// Saves the egraph as a DOT file at the given path
-    pub fn save_graph_as_dot<P: AsRef<Path>>(&self, path: P, temp_functions: IncludeTempFunctions) -> Result<(), Error> {
-        let dot = self.to_graphviz_string(temp_functions);
+    pub fn save_graph_as_dot<P: AsRef<Path>>(&self, path: P) -> Result<(), Error> {
+        let dot = self.to_graphviz_string();
         let mut file =
             File::create(&path).map_err(|e| Error::IoError(path.as_ref().to_path_buf(), e))?;
         std::io::Write::write_all(&mut file, dot.as_bytes())
@@ -1242,8 +1241,8 @@ impl EGraph {
     }
 
     /// Saves the egraph as an SVG file at the given path
-    pub fn save_graph_as_svg<P: AsRef<Path>>(&self, path: P, temp_functions: IncludeTempFunctions) -> Result<(), Error> {
-        let dot = self.to_graphviz_string(temp_functions);
+    pub fn save_graph_as_svg<P: AsRef<Path>>(&self, path: P) -> Result<(), Error> {
+        let dot = self.to_graphviz_string();
         graphviz_rust::exec_dot(
             dot,
             vec![

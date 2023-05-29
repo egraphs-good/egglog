@@ -62,7 +62,7 @@ impl Run {
                     for msg in msgs {
                         log::info!("  {}", msg);
                     }
-                    egraph.to_graphviz_string(egg_smol::IncludeTempFunctions::Never);
+                    egraph.to_graphviz_string();
                 }
             }
             Err(err) => {
