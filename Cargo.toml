@@ -37,7 +37,9 @@ clap = {version = "4", features = ["derive"], optional = true}
 env_logger = {version = "0.10", optional = true}
 
 ordered-float = {version = "3.4"}
+
 graphviz-rust = "0.6.2"
+# Need to add "js" feature for "graphviz-rust" to work in wasm
 getrandom = {version="*", features = ["js"]}
 
 [build-dependencies]
