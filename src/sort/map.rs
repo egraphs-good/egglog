@@ -175,17 +175,18 @@ impl PrimitiveLike for TermOrdering {
 
     fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
         match types {
-            [a, b] if a.name() == b.name() => Some(self.i64sort.clone()),
+            [a, b] if a.name() == b.name() => Some(a.clone()),
             _ => None,
         }
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
         assert_eq!(values.len(), 2);
-        Some(Value {
-            tag: "i64".into(),
-            bits: ((values[0] < values[1]) as i64) as u64,
-        })
+        if values[0] < values[1] {
+            Some(values[0])
+        } else {
+            Some(values[1])
+        }
     }
 }
 
