@@ -5,8 +5,8 @@ pub(crate) fn graph_from_egraph(egraph: &EGraph) -> ExportedGraph {
     let mut graph = ExportedGraph::default();
     for (_id, function) in egraph.functions.iter() {
         let name = function.decl.name.to_string();
-        // Skip generated names
-        if name.ends_with("___") {
+        // Keep temporary functions if proofs are enabled, because the proofs reference them
+        if is_temp_name(name.clone()) && !egraph.proofs_enabled {
             continue;
         }
         for (input, output) in function.nodes.vals.iter() {
@@ -32,6 +32,12 @@ pub(crate) fn graph_from_egraph(egraph: &EGraph) -> ExportedGraph {
         }
     }
     graph
+}
+
+/// Returns true if the name is in the form v{digits}___
+/// like v78___
+fn is_temp_name(name: String) -> bool {
+    name.starts_with('v') && name.ends_with("___") && name[1..name.len() - 3].parse::<u32>().is_ok()
 }
 
 fn arg_from_value(egraph: &EGraph, value: Value) -> Arg {
