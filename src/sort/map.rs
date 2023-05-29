@@ -45,6 +45,19 @@ impl MapSort {
     }
 }
 
+impl MapSort {
+    pub fn presort_names() -> Vec<Symbol> {
+        vec![
+            "map-empty".into(),
+            "map-insert".into(),
+            "map-get".into(),
+            "map-not-contains".into(),
+            "map-contains".into(),
+            "map-remove".into(),
+        ]
+    }
+}
+
 impl Sort for MapSort {
     fn name(&self) -> Symbol {
         self.name

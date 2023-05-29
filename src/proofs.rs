@@ -87,7 +87,7 @@ impl ProofState {
 
     fn instrument_fact(&mut self, fact: &NormFact) -> Vec<Fact> {
         match fact {
-            NormFact::Assign(lhs, expr) => {
+            NormFact::Assign(lhs, expr) | NormFact::Compute(lhs, expr) => {
                 let NormExpr::Call(head, body) = expr;
                 let typeinfo = self
                     .type_info

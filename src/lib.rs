@@ -1180,7 +1180,7 @@ impl EGraph {
             self.seminaive,
         )?;
 
-        eprintln!("processing {}", ListDisplay(&program_desugared, "\n"));
+        println!("Desugared to : {}", ListDisplay(&program_desugared, "\n"));
 
         let type_info_before = self.proof_state.type_info.clone();
         self.proof_state

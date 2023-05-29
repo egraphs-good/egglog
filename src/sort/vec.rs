@@ -16,6 +16,18 @@ impl VecSort {
         self.element.name()
     }
 
+    pub fn presort_names() -> Vec<Symbol> {
+        vec![
+            "vec-of".into(),
+            "vec-append".into(),
+            "vec-empty".into(),
+            "vec-push".into(),
+            "vec-pop".into(),
+            "vec-not-contains".into(),
+            "vec-contains".into(),
+        ]
+    }
+
     pub fn make_sort(
         typeinfo: &mut TypeInfo,
         name: Symbol,

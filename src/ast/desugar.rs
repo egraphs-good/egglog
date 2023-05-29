@@ -68,15 +68,36 @@ fn desugar_birewrite(
         .collect()
 }
 
-fn expr_to_ssa(lhs: Symbol, expr: &Expr, desugar: &mut Desugar, res: &mut Vec<NormFact>) {
+fn expr_to_ssa(
+    lhs_in: Symbol,
+    expr: &Expr,
+    desugar: &mut Desugar,
+    res: &mut Vec<NormFact>,
+    constraints: &mut Vec<(Symbol, Symbol)>,
+    bound: &mut HashSet<Symbol>,
+) {
+    if let Expr::Var(v) = expr {
+        res.push(NormFact::ConstrainEq(lhs_in, *v));
+        return;
+    }
+
+    let lhs = if bound.insert(lhs_in) {
+        lhs_in
+    } else {
+        let fresh = desugar.get_fresh();
+        constraints.push((fresh, lhs_in));
+        fresh
+    };
+
+    if let Expr::Call(f, _) = expr {
+        eprintln!("is prim {} {}", f, TypeInfo::default().is_primitive(*f));
+        eprintln!("primtives {:?}", TypeInfo::default().primitives);
+    }
     match expr {
-        Expr::Lit(l) => {
-            res.push(NormFact::AssignLit(lhs, l.clone()));
-        }
-        Expr::Var(v) => {
-            res.push(NormFact::ConstrainEq(lhs, *v));
-        }
-        Expr::Call(f, children) => {
+        Expr::Lit(l) => res.push(NormFact::AssignLit(lhs, l.clone())),
+        Expr::Var(_v) => panic!("Should have been handled above"),
+
+        Expr::Call(f, children) if TypeInfo::default().is_primitive(*f) => {
             let mut new_children = vec![];
             for child in children {
                 match child {
@@ -85,27 +106,70 @@ fn expr_to_ssa(lhs: Symbol, expr: &Expr, desugar: &mut Desugar, res: &mut Vec<No
                     }
                     _ => {
                         let fresh = desugar.get_fresh();
-                        expr_to_ssa(fresh, child, desugar, res);
+                        expr_to_ssa(fresh, child, desugar, res, constraints, bound);
                         new_children.push(fresh);
                     }
                 }
             }
-            res.push(NormFact::Assign(lhs, NormExpr::Call(*f, new_children)));
+
+            res.push(NormFact::Compute(lhs, NormExpr::Call(*f, new_children)))
+        }
+        Expr::Call(f, children) => {
+            let mut new_children = vec![];
+            for child in children {
+                match child {
+                    Expr::Var(v) => {
+                        if bound.insert(*v) {
+                            new_children.push(*v);
+                        } else {
+                            let new = desugar.get_fresh();
+                            new_children.push(new);
+                            constraints.push((new, *v));
+                        }
+                    }
+                    _ => {
+                        let fresh = desugar.get_fresh();
+                        expr_to_ssa(fresh, child, desugar, res, constraints, bound);
+                        new_children.push(fresh);
+                    }
+                }
+            }
+            res.push(NormFact::Assign(lhs, NormExpr::Call(*f, new_children)))
         }
     }
 }
 
 fn flatten_equalities(equalities: Vec<(Symbol, Expr)>, desugar: &mut Desugar) -> Vec<NormFact> {
     let mut res = vec![];
+    let mut bound_variables: HashSet<Symbol> = Default::default();
+    let mut constraints: Vec<(Symbol, Symbol)> = Default::default();
 
     for (lhs, rhs) in equalities {
         if desugar.global_variables.contains(&lhs) {
             let fresh = desugar.get_fresh();
-            expr_to_ssa(fresh, &rhs, desugar, &mut res);
-            res.push(NormFact::ConstrainEq(fresh, lhs));
+            expr_to_ssa(
+                fresh,
+                &rhs,
+                desugar,
+                &mut res,
+                &mut constraints,
+                &mut bound_variables,
+            );
+            constraints.push((fresh, lhs));
         } else {
-            expr_to_ssa(lhs, &rhs, desugar, &mut res);
+            expr_to_ssa(
+                lhs,
+                &rhs,
+                desugar,
+                &mut res,
+                &mut constraints,
+                &mut bound_variables,
+            );
         }
+    }
+
+    for (lhs, rhs) in constraints {
+        res.push(NormFact::ConstrainEq(lhs, rhs));
     }
 
     res

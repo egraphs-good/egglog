@@ -633,7 +633,8 @@ pub enum Fact {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum NormFact {
-    Assign(Symbol, NormExpr), // assign symbol to a tuple
+    Assign(Symbol, NormExpr),  // assign symbol to a tuple
+    Compute(Symbol, NormExpr), // compute a primative
     AssignLit(Symbol, Literal),
     ConstrainEq(Symbol, Symbol),
 }
@@ -641,7 +642,9 @@ pub enum NormFact {
 impl NormFact {
     pub fn to_fact(&self) -> Fact {
         match self {
-            NormFact::Assign(symbol, expr) => Fact::Eq(vec![Expr::Var(*symbol), expr.to_expr()]),
+            NormFact::Assign(symbol, expr) | NormFact::Compute(symbol, expr) => {
+                Fact::Eq(vec![Expr::Var(*symbol), expr.to_expr()])
+            }
             NormFact::ConstrainEq(lhs, rhs) => Fact::Eq(vec![Expr::Var(*lhs), Expr::Var(*rhs)]),
             NormFact::AssignLit(symbol, lit) => {
                 Fact::Eq(vec![Expr::Var(*symbol), Expr::Lit(lit.clone())])
@@ -651,7 +654,9 @@ impl NormFact {
 
     pub fn map_exprs(&self, f: &mut impl FnMut(&NormExpr) -> NormExpr) -> NormFact {
         match self {
-            NormFact::Assign(symbol, expr) => NormFact::Assign(*symbol, f(expr)),
+            NormFact::Assign(symbol, expr) | NormFact::Compute(symbol, expr) => {
+                NormFact::Assign(*symbol, f(expr))
+            }
             NormFact::ConstrainEq(lhs, rhs) => NormFact::ConstrainEq(*lhs, *rhs),
             NormFact::AssignLit(symbol, lit) => NormFact::AssignLit(*symbol, lit.clone()),
         }
@@ -661,6 +666,9 @@ impl NormFact {
         match self {
             NormFact::Assign(symbol, expr) => {
                 NormFact::Assign(fvar(*symbol, true), expr.map_def_use(fvar, true))
+            }
+            NormFact::Compute(symbol, expr) => {
+                NormFact::Compute(fvar(*symbol, true), expr.map_def_use(fvar, false))
             }
             NormFact::AssignLit(symbol, lit) => {
                 NormFact::AssignLit(fvar(*symbol, true), lit.clone())
