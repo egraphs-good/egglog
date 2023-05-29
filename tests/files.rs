@@ -55,6 +55,7 @@ impl Run {
                     for msg in msgs {
                         log::info!("  {}", msg);
                     }
+                    egraph.to_graphviz_string();
                 }
             }
             Err(err) => {
