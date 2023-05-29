@@ -15,9 +15,9 @@
 
     ;; rebuilding rules
     (ruleset parent)
-    (rule ((Parent a b)
-           (Parent b c))
-          ((Parent a c))
+    (rule ((= (Parent a) b)
+           (= (Parent b) c))
+          ((set (Parent a) c))
           :ruleset parent)
 
     (ruleset rebuilding)
@@ -27,22 +27,22 @@
        `(rule ((= e (,op a b)))
               ((let lhs (Add (Parent a) (Parent b)))
                (let rhs (Parent e))
-                (Parent lhs rhs)
-                (Parent rhs lhs))
+                (set (Parent lhs) rhs)
+                (set (Parent rhs) lhs))
               :ruleset rebuilding))
 
     ;; commutativity of addition
     (rule ((= lhs (Add a b))
-           (Parent a a)
-           (Parent b b))
+           (= (Parent a) a)
+           (= (Parent b) b))
           ;; set lhs parent to rhs parent
-          ((Parent lhs (Add b a))
-           (Parent (Add b a) lhs)))
+          ((set (Parent lhs) (Add b a))
+           (set (Parent (Add b a)) lhs)))
 
     (let a (Add (Const 1) (Const 2)))
-    (Parent a a)
-    (Parent (Const 1) (Const 1))
-    (Parent (Const 2) (Const 2))
+    (set (Parent a) a)
+    (set (Parent (Const 1)) (Const 1))
+    (set (Parent (Const 2)) (Const 2))
 
 
     ;; time to run!
@@ -57,7 +57,7 @@
 
     (let b (Add (Const 2) (Const 1)))
 
-    (check (Parent a p1) (Parent b p2) (= p1 p2))
+    (check (= (Parent a) p1) (= (Parent b) p2) (= p1 p2))
   ))
 
 

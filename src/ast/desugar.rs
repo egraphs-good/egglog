@@ -89,10 +89,6 @@ fn expr_to_ssa(
         fresh
     };
 
-    if let Expr::Call(f, _) = expr {
-        eprintln!("is prim {} {}", f, TypeInfo::default().is_primitive(*f));
-        eprintln!("primtives {:?}", TypeInfo::default().primitives);
-    }
     match expr {
         Expr::Lit(l) => res.push(NormFact::AssignLit(lhs, l.clone())),
         Expr::Var(_v) => panic!("Should have been handled above"),
