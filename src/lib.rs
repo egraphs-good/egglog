@@ -320,30 +320,16 @@ impl EGraph {
     fn rebuild_one(&mut self) -> Result<usize, Error> {
         let mut new_unions = 0;
         let mut deferred_merges = Vec::new();
-        let mut deferred_unions = Vec::new();
-        self.iteration += 1;
         for function in self.functions.values_mut() {
             let (unions, merges) = function.rebuild(&mut self.unionfind, self.timestamp)?;
-            deferred_unions.extend(unions);
             if !merges.is_empty() {
                 deferred_merges.push((function.decl.name, merges));
             }
-            self.iteration += 1;
+            new_unions += unions;
         }
-
-        self.iteration += 1;
-
         for (func, merges) in deferred_merges {
             new_unions += self.apply_merges(func, &merges);
         }
-        self.iteration += 1;
-
-        for (lhs, rhs, name) in deferred_unions {
-            let before = self.unionfind.n_unions();
-            self.unionfind.union_values(lhs, rhs, name);
-            new_unions += self.unionfind.n_unions() - before;
-        }
-        self.iteration += 1;
         Ok(new_unions)
     }
 
