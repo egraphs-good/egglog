@@ -288,7 +288,7 @@ impl TypeInfo {
                     assert!(let_bound.insert(*var));
                     body.iter().for_each(|bvar| {
                         if !self.global_types.contains_key(bvar) {
-                            assert!(let_bound.insert(*bvar));
+                            assert!(let_bound.insert(*bvar), "{bvar} was already bound!");
                         }
                     });
                 }

@@ -125,6 +125,7 @@ fn expr_to_ssa(
                     }
                     _ => {
                         let fresh = desugar.get_fresh();
+                        bound.insert(fresh);
                         expr_to_ssa(fresh, child, desugar, res, constraints, bound);
                         new_children.push(fresh);
                     }
@@ -141,7 +142,7 @@ fn flatten_equalities(equalities: Vec<(Symbol, Expr)>, desugar: &mut Desugar) ->
     let mut constraints: Vec<(Symbol, Symbol)> = Default::default();
 
     for (lhs, rhs) in equalities {
-        if desugar.global_variables.contains(&lhs) {
+        if desugar.global_variables.contains(&lhs) || bound_variables.contains(&lhs) {
             let fresh = desugar.get_fresh();
             expr_to_ssa(
                 fresh,
@@ -593,13 +594,13 @@ pub(crate) fn desugar_command(
             let mut res = vec![NCommand::Check(flatten_facts(&facts, desugar))];
 
             if get_all_proofs {
-                res.push(NCommand::RunSchedule(NormSchedule::Saturate(Box::new(
+                /*res.push(NCommand::RunSchedule(NormSchedule::Saturate(Box::new(
                     NormSchedule::Run(NormRunConfig {
                         ruleset: "proofrules__".into(),
                         limit: 1,
                         until: None,
                     }),
-                ))));
+                ))));*/
 
                 // check that all the proofs in the egraph are valid
                 // TODO reenable
