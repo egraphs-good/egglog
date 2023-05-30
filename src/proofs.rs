@@ -39,12 +39,20 @@ impl ProofState {
         .collect()
     }
 
-    fn make_rebuilding_func(&self, fdecl: &FunctionDecl) -> Vec<Command> {
+    fn make_rebuilding_func(&mut self, fdecl: &FunctionDecl) -> Vec<Command> {
+        let types = self.type_info.func_types.get(&fdecl.name).unwrap().clone();
+        if !types.output.is_eq_sort() {
+            return vec![];
+        }
         let op = fdecl.name;
         let pname = self.parent_name(fdecl.schema.output);
         let child = |i| format!("c{i}_");
-        let child_parent =
-            |i| format!("({} {})", self.parent_name(fdecl.schema.input[i]), child(i));
+        let child_parent = |i| {
+            #[allow(clippy::iter_nth)]
+            let child_t: ArcSort = types.input.iter().nth(i).unwrap().clone();
+            self.wrap_parent(child(i), child_t)
+                .unwrap_or_else(|| child(i))
+        };
         let children = format!(
             "{}",
             ListDisplay(
@@ -74,24 +82,38 @@ impl ProofState {
         .collect()
     }
 
-    fn var_to_parent(&self, var: Symbol) -> Symbol {
-        Symbol::from(format!("{}_parent__", var))
-    }
-
     fn instrument_fact(&mut self, fact: &NormFact) -> Vec<Fact> {
         match fact {
             NormFact::ConstrainEq(lhs, rhs) => {
                 let lhs_t = self.type_info.lookup(self.current_ctx, *lhs).unwrap();
                 let rhs_t = self.type_info.lookup(self.current_ctx, *rhs).unwrap();
                 assert!(lhs_t.name() == rhs_t.name());
-                let parent = self.parent_name(lhs_t.name());
 
-                vec![format!("(= ({parent} {lhs}) ({parent} {rhs}))")]
+                if let (Some(lhs_wrapped), Some(rhs_wrapped)) = (
+                    self.wrap_parent(lhs.to_string(), lhs_t),
+                    self.wrap_parent(rhs.to_string(), rhs_t),
+                ) {
+                    vec![
+                        format!("(= {} {})", lhs_wrapped, rhs_wrapped),
+                        format!("(= {} {})", rhs_wrapped, lhs_wrapped),
+                    ]
                     .into_iter()
                     .map(|s| self.desugar.fact_parser.parse(&s).unwrap())
                     .collect::<Vec<Fact>>()
+                } else {
+                    vec![fact.to_fact()]
+                }
             }
             _ => vec![fact.to_fact()],
+        }
+    }
+
+    fn wrap_parent(&mut self, var: String, sort: ArcSort) -> Option<String> {
+        if sort.is_eq_sort() {
+            let parent = self.parent_name(sort.name());
+            Some(format!("({parent} {var})"))
+        } else {
+            None
         }
     }
 
@@ -116,36 +138,29 @@ impl ProofState {
                 }
                 NormAction::Let(lhs, _expr) => {
                     let lhs_type = self.type_info.lookup(self.current_ctx, *lhs).unwrap();
-                    let pname = self.parent_name(lhs_type.name());
-                    self.parse_actions(vec![format!("(set ({pname} {lhs}) {lhs})")])
+                    if let Some(lhs_wrapped) = self.wrap_parent(lhs.to_string(), lhs_type) {
+                        self.parse_actions(vec![format!("(set {lhs_wrapped} {lhs})",)])
+                    } else {
+                        vec![]
+                    }
                 }
                 NormAction::LetLit(..) => vec![],
                 NormAction::LetIteration(..) => vec![],
                 NormAction::LetVar(..) => vec![],
                 NormAction::Panic(..) => vec![],
-                NormAction::Set(expr, rhs) => {
-                    let type_info = self
-                        .type_info
-                        .typecheck_expr(self.current_ctx, expr, true)
-                        .unwrap();
-                    if !type_info.has_merge && type_info.output.is_eq_sort() {
-                        let pname = self.parent_name(type_info.output.name());
-                        self.parse_actions(vec![
-                            format!("(set ({pname} {expr}) ({pname} {rhs}))"),
-                            format!("(set ({pname} {rhs}) ({pname} {expr}))"),
-                        ])
-                    } else {
-                        vec![]
-                    }
-                }
+                // handled by merge action
+                NormAction::Set(expr, rhs) => vec![],
                 NormAction::Union(lhs, rhs) => {
                     let lhs_type = self.type_info.lookup(self.current_ctx, *lhs).unwrap();
                     let rhs_type = self.type_info.lookup(self.current_ctx, *rhs).unwrap();
                     assert_eq!(lhs_type.name(), rhs_type.name());
-                    let pname = self.parent_name(lhs_type.name());
+                    assert!(lhs_type.is_eq_sort());
+
+                    let lhs_parent = self.wrap_parent(lhs.to_string(), lhs_type).unwrap();
+                    let rhs_parent = self.wrap_parent(rhs.to_string(), rhs_type).unwrap();
                     self.parse_actions(vec![
-                        format!("(set ({pname} {lhs}) ({pname} {rhs}))"),
-                        format!("(set ({pname} {rhs}) ({pname} {lhs}))"),
+                        format!("(set {} {})", lhs_parent, rhs_parent),
+                        format!("(set {} {})", rhs_parent, lhs_parent),
                     ])
                 }
             },

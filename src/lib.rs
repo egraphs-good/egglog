@@ -1195,8 +1195,6 @@ impl EGraph {
                 .desugar
                 .desugar_program(proofs, false, false)?;
 
-            eprintln!("Desugared to : {}", ListDisplay(&final_desugared, "\n"));
-
             // revert back to the type info before
             // proofs were added, typecheck again
             self.proof_state.type_info = type_info_before;
