@@ -233,7 +233,6 @@ impl EGraph {
         self.unionfind.union(id1, id2, sort)
     }
 
-    #[track_caller]
     fn debug_assert_invariants(&self) {
         #[cfg(debug_assertions)]
         for (name, function) in self.functions.iter() {
@@ -1179,11 +1178,6 @@ impl EGraph {
             self.test_proofs,
             self.seminaive,
         )?;
-
-        eprintln!(
-            "desugared program: {}",
-            ListDisplay(&program_desugared, "\n")
-        );
 
         let type_info_before = self.proof_state.type_info.clone();
         self.proof_state

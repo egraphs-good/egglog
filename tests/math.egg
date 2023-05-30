@@ -1,4 +1,3 @@
-(set-option enable_proofs 1)
 (datatype Math
     (Diff Math Math)
     (Integral Math Math)

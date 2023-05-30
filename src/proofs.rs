@@ -174,7 +174,7 @@ impl ProofState {
                 NormAction::LetVar(..) => vec![],
                 NormAction::Panic(..) => vec![],
                 // handled by merge action
-                NormAction::Set(expr, rhs) => vec![],
+                NormAction::Set(_expr, _rhs) => vec![],
                 NormAction::Union(lhs, rhs) => {
                     let lhs_type = self.type_info.lookup(self.current_ctx, *lhs).unwrap();
                     let rhs_type = self.type_info.lookup(self.current_ctx, *rhs).unwrap();
@@ -242,6 +242,27 @@ impl ProofState {
         })
     }
 
+    fn instrument_fdecl(&mut self, fdecl: &FunctionDecl) -> FunctionDecl {
+        let mut res = fdecl.clone();
+        let types = self.type_info.func_types.get(&fdecl.name).unwrap().clone();
+
+        if types.output.is_eq_sort() && !types.has_merge {
+            if let (Some(lhs_wrapped), Some(rhs_wrapped)) = (
+                self.wrap_parent("old".to_string(), types.output.clone()),
+                self.wrap_parent("new".to_string(), types.output),
+            ) {
+                res.merge_action.extend(self.parse_actions(vec![
+                    format!("(set {lhs_wrapped} {rhs_wrapped})",),
+                    format!("(set {rhs_wrapped} {lhs_wrapped})",),
+                ]));
+            }
+
+            res
+        } else {
+            res
+        }
+    }
+
     // TODO we need to also instrument merge actions and merge because they can add new terms that need representatives
     // the egraph is the initial egraph with only default sorts
     pub(crate) fn add_proofs(&mut self, program: Vec<NormCommand>) -> Vec<Command> {
@@ -267,7 +288,7 @@ impl ProofState {
                     res.extend(self.make_rebuilding(*name));
                 }
                 NCommand::Function(fdecl) => {
-                    res.push(command.to_command());
+                    res.push(Command::Function(self.instrument_fdecl(fdecl)));
                     res.extend(self.make_rebuilding_func(fdecl));
                 }
                 NCommand::NormRule {
