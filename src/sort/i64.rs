@@ -28,8 +28,7 @@ impl Sort for I64Sort {
     #[allow(clippy::unnecessary_lazy_evaluations)]
     fn register_primitives(self: Arc<Self>, typeinfo: &mut TypeInfo) {
         typeinfo.add_primitive(TermOrdering {
-            i64sort: typeinfo.sorts.get::<Symbol>(&"i64".into()).unwrap().clone(),
-        });
+           });
 
         type Opt<T=()> = Option<T>;
 

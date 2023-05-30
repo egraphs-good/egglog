@@ -181,9 +181,7 @@ struct Ctor {
     map: Arc<MapSort>,
 }
 
-pub(crate) struct TermOrdering {
-    pub i64sort: ArcSort,
-}
+pub(crate) struct TermOrdering {}
 
 impl PrimitiveLike for TermOrdering {
     fn name(&self) -> Symbol {
