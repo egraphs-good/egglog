@@ -172,11 +172,42 @@ impl TypeInfo {
             NCommand::Fail(cmd) => {
                 self.typecheck_ncommand(cmd, id)?;
             }
+            NCommand::RunSchedule(schedule) => {
+                self.typecheck_schedule(id, schedule)?;
+            }
 
             // TODO cover all cases in typechecking
             _ => (),
         }
         Ok(())
+    }
+
+    fn typecheck_schedule(
+        &mut self,
+        ctx: CommandId,
+        schedule: &NormSchedule,
+    ) -> Result<(), TypeError> {
+        match schedule {
+            NormSchedule::Repeat(times, schedule) => {
+                self.typecheck_schedule(ctx, schedule)?;
+            }
+            NormSchedule::Sequence(schedules) => {
+                for schedule in schedules {
+                    self.typecheck_schedule(ctx, schedule)?;
+                }
+            }
+            NormSchedule::Saturate(schedule) => {
+                self.typecheck_schedule(ctx, schedule)?;
+            }
+            NormSchedule::Run(run_config) => {
+                if let Some(facts) = &run_config.until {
+                    self.typecheck_facts(ctx, &facts)?;
+                    self.verify_normal_form_facts(&facts);
+                }
+            }
+        }
+
+        Result::Ok(())
     }
 
     pub(crate) fn typecheck_command(&mut self, command: &NormCommand) -> Result<(), TypeError> {

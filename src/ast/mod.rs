@@ -254,6 +254,24 @@ impl NormSchedule {
             }
         }
     }
+
+    pub fn map_run_commands(&self, f: &mut impl FnMut(&NormRunConfig) -> Schedule) -> Schedule {
+        match self {
+            NormSchedule::Run(config) => f(config),
+            NormSchedule::Saturate(sched) => {
+                Schedule::Saturate(Box::new(sched.map_run_commands(f)))
+            }
+            NormSchedule::Repeat(size, sched) => {
+                Schedule::Repeat(*size, Box::new(sched.map_run_commands(f)))
+            }
+            NormSchedule::Sequence(scheds) => Schedule::Sequence(
+                scheds
+                    .iter()
+                    .map(|sched| sched.map_run_commands(f))
+                    .collect(),
+            ),
+        }
+    }
 }
 
 trait ToSexp {

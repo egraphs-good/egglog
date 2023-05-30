@@ -104,6 +104,24 @@ impl ProofState {
                     vec![fact.to_fact()]
                 }
             }
+            NormFact::Compute(lhs, expr) => {
+                let NormExpr::Call(head, children) = expr;
+                let children_parents = children
+                    .iter()
+                    .map(|child| {
+                        self.wrap_parent(
+                            child.to_string(),
+                            self.type_info.lookup(self.current_ctx, *child).unwrap(),
+                        )
+                        .unwrap_or_else(|| child.to_string())
+                    })
+                    .collect::<Vec<String>>();
+
+                self.parse_facts(vec![format!(
+                    "(= {lhs} ({head} {}))",
+                    ListDisplay(children_parents, " ")
+                )])
+            }
             _ => vec![fact.to_fact()],
         }
     }
@@ -119,6 +137,13 @@ impl ProofState {
 
     fn instrument_facts(&mut self, facts: &Vec<NormFact>) -> Vec<Fact> {
         facts.iter().flat_map(|f| self.instrument_fact(f)).collect()
+    }
+
+    fn parse_facts(&self, facts: Vec<String>) -> Vec<Fact> {
+        facts
+            .into_iter()
+            .map(|s| self.desugar.fact_parser.parse(&s).unwrap())
+            .collect()
     }
 
     fn parse_actions(&self, actions: Vec<String>) -> Vec<Action> {
@@ -186,6 +211,37 @@ impl ProofState {
         }]
     }
 
+    fn rebuild(&self) -> Schedule {
+        Schedule::Saturate(Box::new(Schedule::Sequence(vec![
+            Schedule::Saturate(Box::new(Schedule::Run(RunConfig {
+                ruleset: "parent__".into(),
+                until: None,
+                limit: 1,
+            }))),
+            Schedule::Saturate(Box::new(Schedule::Run(RunConfig {
+                ruleset: "rebuilding__".into(),
+                until: None,
+                limit: 1,
+            }))),
+        ])))
+    }
+
+    fn instrument_schedule(&mut self, schedule: &NormSchedule) -> Schedule {
+        schedule.map_run_commands(&mut |run_config| {
+            Schedule::Sequence(vec![
+                self.rebuild(),
+                Schedule::Run(RunConfig {
+                    ruleset: run_config.ruleset,
+                    limit: run_config.limit,
+                    until: run_config
+                        .until
+                        .as_ref()
+                        .map(|facts| self.instrument_facts(facts)),
+                }),
+            ])
+        })
+    }
+
     // TODO we need to also instrument merge actions and merge because they can add new terms that need representatives
     // the egraph is the initial egraph with only default sorts
     pub(crate) fn add_proofs(&mut self, program: Vec<NormCommand>) -> Vec<Command> {
@@ -193,6 +249,14 @@ impl ProofState {
 
         for command in program {
             self.current_ctx = command.metadata.id;
+
+            // run rebuilding before most commands
+            if let NCommand::Function(..) | NCommand::NormRule { .. } | NCommand::Sort(..) =
+                &command.command
+            {
+            } else {
+                res.push(Command::RunSchedule(self.rebuild()));
+            }
 
             match &command.command {
                 NCommand::Push(_num) => {
@@ -219,6 +283,12 @@ impl ProofState {
                             .into_iter()
                             .map(Command::Action),
                     );
+                }
+                NCommand::Check(facts) => {
+                    res.push(Command::Check(self.instrument_facts(facts)));
+                }
+                NCommand::RunSchedule(schedule) => {
+                    res.push(Command::RunSchedule(self.instrument_schedule(schedule)));
                 }
                 _ => {
                     res.push(command.to_command());

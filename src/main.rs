@@ -13,6 +13,8 @@ struct Args {
     desugar: bool,
     #[clap(long)]
     resugar: bool,
+    #[clap(long)]
+    proofs: bool,
     inputs: Vec<PathBuf>,
 }
 
@@ -37,6 +39,11 @@ fn main() {
         let stdin = io::stdin();
         log::info!("Welcome to Egglog!");
         let mut egraph = mk_egraph();
+        if args.proofs {
+            egraph
+                .parse_and_run_program("(set-option enable_proofs 1)")
+                .unwrap();
+        }
         let mut program = String::new();
         stdin
             .lock()
@@ -53,14 +60,20 @@ fn main() {
     }
 
     for (idx, input) in args.inputs.iter().enumerate() {
-        let s = std::fs::read_to_string(input).unwrap_or_else(|_| {
+        let program_read = std::fs::read_to_string(input).unwrap_or_else(|_| {
             let arg = input.to_string_lossy();
             panic!("Failed to read file {arg}")
         });
         let mut egraph = mk_egraph();
+        let already_enables = program_read.starts_with("(set-option enable_proofs 1)");
+        let program = if args.proofs && !already_enables {
+            format!("(set-option enable_proofs 1)\n{}", program_read)
+        } else {
+            program_read
+        };
 
         if args.desugar || args.resugar {
-            let parsed = egraph.parse_program(&s).unwrap();
+            let parsed = egraph.parse_program(&program).unwrap();
             let desugared_str = egraph
                 .process_commands(parsed)
                 .unwrap()
@@ -76,7 +89,7 @@ fn main() {
                 .join("\n");
             println!("{}", desugared_str);
         } else {
-            match egraph.parse_and_run_program(&s) {
+            match egraph.parse_and_run_program(&program) {
                 Ok(_msgs) => {}
                 Err(err) => {
                     log::error!("{}", err);
