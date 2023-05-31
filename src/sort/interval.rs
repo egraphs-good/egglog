@@ -194,13 +194,6 @@ impl Sort for IntervalSort {
         add_primitives!(eg, "ival-Inf" = | | -> R {
             Interval::inf(INTERVAL_PRECISION)
         });
-        add_primitives!(eg, "ival-Empty" = | | -> R {
-            Interval::make(
-                Float::with_val(INTERVAL_PRECISION, Special::NegInfinity),
-                Float::with_val(INTERVAL_PRECISION, Special::Infinity),
-                ErrorInterval::default(),
-            )
-        });
 
 
         add_primitives!(eg, "ival-Fabs" = |a: R| -> R {

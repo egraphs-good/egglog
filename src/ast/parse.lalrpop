@@ -157,6 +157,8 @@ UNum: usize = {
 F64: OrderedFloat<f64> = {
     "NaN" => OrderedFloat::<f64>(f64::NAN),
     <s:r"(-)?[0-9]+\.[0-9]+(e(\+)?(-)?[0-9]+)?"> => OrderedFloat::<f64>(s.parse().unwrap()),
+    "inf" => OrderedFloat::<f64>(f64::INFINITY),
+    "-inf" => OrderedFloat::<f64>(f64::NEG_INFINITY),
 }
 
 Ident: Symbol = <s:r"(([[:alpha:]][\w-]*)|([-+*/!=<>&|^/%_]))+"> => s.parse().unwrap();
