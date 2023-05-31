@@ -18,7 +18,7 @@ pub(crate) struct ExportedCall {
 }
 
 /// An argument is either a primitive value or a reference to a eclass
-#[derive(Debug, Hash, Clone)]
+#[derive(Debug, Hash, Clone, PartialEq, Eq)]
 pub(crate) enum ExportedValue {
     /// A primitive value, i.e. int, float, String
     Prim (String),

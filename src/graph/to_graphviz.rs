@@ -1,4 +1,4 @@
-use crate::util::HashMap;
+use crate::util::{HashMap, HashSet};
 use std::collections::VecDeque;
 
 use super::*;
@@ -56,6 +56,15 @@ pub(crate) fn to_graphviz(g: ExportedGraph) -> Graph {
     let mut subgraph_to_node_to_label = HashMap::<String, HashMap<String, String>>::default();
     // Nodes to process and add
     let mut values_to_add = VecDeque::<ExportedValue>::default();
+    // Nodes already added to the values_to_add queue
+    let mut added_value: HashSet<ExportedValue> = HashSet::default();
+
+    let mut add_value = |value: &ExportedValue| {
+        if !added_value.contains(value) {
+            values_to_add.push_back(value.clone());
+            added_value.insert(value.clone());
+        }
+    };
 
     let mut add_node =
         |subgraph_value: &ExportedValue, node_id: String, name: String, n_args: usize| {
@@ -77,10 +86,7 @@ pub(crate) fn to_graphviz(g: ExportedGraph) -> Graph {
 
     let mut add_edge =
         |source_node_id: String, source_index: usize, target_value: &ExportedValue| {
-            let source = node_id!(
-                quote(source_node_id),
-                port!(id!(port_id(source_index)))
-            );
+            let source = node_id!(quote(source_node_id), port!(id!(port_id(source_index))));
             let target = node_id!(quote(gen_value_id(target_value)));
             let target_subgraph_id = subgraph_id(target_value);
             let edge = edge!(source => target; EdgeAttributes::lhead(target_subgraph_id));
@@ -97,12 +103,13 @@ pub(crate) fn to_graphviz(g: ExportedGraph) -> Graph {
     {
         // Add function node
         let fn_id = format!("{}_{}", fn_name, input_hash);
+
         add_node(&output, fn_id.clone(), fn_name, inputs.len());
-        values_to_add.push_back(output.clone());
+        add_value(&output);
         // Add edges from function node to input nodes
         for (i, input) in inputs.into_iter().enumerate() {
             add_edge(fn_id.clone(), i, &input);
-            values_to_add.push_back(input.clone());
+            add_value(&input);
         }
     }
 
@@ -119,7 +126,7 @@ pub(crate) fn to_graphviz(g: ExportedGraph) -> Graph {
                 let value_id = container_id(name, *inner_hash);
                 add_node(&value, value_id.clone(), name.to_string(), inner.len());
                 for (i, inner_value) in inner.iter().enumerate() {
-                    values_to_add.push_back(inner_value.clone());
+                    add_value(&inner_value);
                     add_edge(value_id.clone(), i, inner_value);
                 }
             }
