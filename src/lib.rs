@@ -12,6 +12,7 @@ pub mod util;
 mod value;
 
 use crate::graph::from_egraph::graph_from_egraph;
+use graph::to_graphviz::to_graphviz;
 use graphviz_rust::printer::DotPrinter;
 use hashbrown::hash_map::Entry;
 use index::ColumnIndex;
@@ -266,7 +267,6 @@ impl EGraph {
                     .iter()
                     .chain(once(&function.schema.output)),
             ) {
-                assert!(sort.is_eq_container_sort() == rix.is_some());
                 if sort.is_eq_container_sort() {
                     let rix = rix.as_ref().unwrap();
                     for ix in rix.iter() {
@@ -1225,8 +1225,7 @@ impl EGraph {
 
     /// Exports the egraph as a Graphviz dot string
     pub fn to_graphviz_string(&self) -> String {
-        graph_from_egraph(self)
-            .to_graphviz()
+        to_graphviz(graph_from_egraph(self))
             .print(&mut graphviz_rust::printer::PrinterContext::default())
     }
 

@@ -58,16 +58,15 @@ impl Sort for VecSort {
         self.element.is_eq_sort()
     }
 
-    fn foreach_tracked_values<'a>(&'a self, value: &'a Value, mut f: Box<dyn FnMut(Value) + 'a>) {
+    fn inner_values(&self, value: &Value) -> Vec<(&ArcSort, Value)> {
         // TODO: Potential duplication of code
         let vecs = self.vecs.lock().unwrap();
         let vec = vecs.get_index(value.bits as usize).unwrap();
-
-        if self.element.is_eq_sort() {
-            for e in vec.iter() {
-                f(*e)
-            }
+        let mut result: Vec<(&Arc<dyn Sort>, Value)> = Vec::new();
+        for e in vec.into_iter() {
+            result.push((&self.element, *e));
         }
+        result
     }
 
     fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {

@@ -2,7 +2,7 @@ use super::*;
 use crate::{ast::Id, function::table::hash_values, EGraph, Value};
 
 pub(crate) fn graph_from_egraph(egraph: &EGraph) -> ExportedGraph {
-    let mut graph = ExportedGraph::default();
+    let mut calls = ExportedGraph::default();
     for (_id, function) in egraph.functions.iter() {
         let name = function.decl.name.to_string();
         // Skip temporary names
@@ -14,24 +14,19 @@ pub(crate) fn graph_from_egraph(egraph: &EGraph) -> ExportedGraph {
                 continue;
             }
             let input_values = input.data();
-            let output_value = output.value;
-            let fn_call = FnCall(
-                Fn { name: name.clone() },
-                // Collect all inputs/args
-                input_values
+            let fn_call = ExportedCall {
+                fn_name: name.clone(),
+                inputs: input_values
                     .iter()
-                    .map(|v| arg_from_value(egraph, *v))
+                    .map(|v| export_value(egraph, *v))
                     .collect(),
-                hash_values(input_values),
-            );
-            // Add output
-            match arg_from_value(egraph, output_value) {
-                Arg::Eq(id) => graph.eclasses.entry(id).or_default().push(fn_call),
-                Arg::Prim(prim_value) => graph.prim_outputs.push(PrimOutput(fn_call, prim_value)),
-            }
+                output: export_value(egraph, output.value),
+                input_hash: hash_values(input_values),
+            };
+            calls.push(fn_call);
         }
     }
-    graph
+    calls
 }
 
 /// Returns true if the name is in the form v{digits}___
@@ -40,15 +35,30 @@ fn is_temp_name(name: String) -> bool {
     name.starts_with('v') && name.ends_with("___") && name[1..name.len() - 3].parse::<u32>().is_ok()
 }
 
-fn arg_from_value(egraph: &EGraph, value: Value) -> Arg {
+fn export_value(egraph: &EGraph, value: Value) -> ExportedValue {
     let sort = egraph.get_sort(&value).unwrap();
+    println!("sort: {:?} {:?}", sort, sort.is_eq_container_sort());
     if sort.is_eq_sort() {
         let id = value.bits as usize;
         let canonical: usize = egraph.unionfind.find(Id::from(id)).into();
-        Arg::Eq(canonical)
+        ExportedValue::EClass(canonical)
+    } else if sort.is_eq_container_sort() {
+        let inner: Vec<Value> = sort
+            .inner_values(&value)
+            .into_iter()
+            .map(|(_, v)| v)
+            .collect();
+
+        ExportedValue::Container {
+            name: sort.name().to_string(),
+            inner: inner
+                .iter()
+                .map(|v| export_value(egraph, *v))
+                .collect(),
+            inner_hash: hash_values(&inner),
+        }
     } else {
         let expr = sort.make_expr(egraph, value);
-        let prim_value = from_expr(&expr);
-        Arg::Prim(prim_value)
+        ExportedValue::Prim(expr.to_string())
     }
 }

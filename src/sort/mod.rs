@@ -42,10 +42,12 @@ pub trait Sort: Any + Send + Sync + Debug {
 
     // Only eq_container_sort need to implement this method,
     // which returns a list of ids to be tracked.
-    fn foreach_tracked_values<'a>(&'a self, value: &'a Value, f: Box<dyn FnMut(Value) + 'a>) {
-        let _ = value;
-        let _ = f;
-        unreachable!();
+    fn foreach_tracked_values<'a>(&'a self, value: &'a Value, mut f: Box<dyn FnMut(Value) + 'a>) {
+        for (sort, value) in self.inner_values(value) {
+            if sort.is_eq_sort() {
+                f(value)
+            }
+        }
     }
 
     // Sort-wise canonicalization. Return true if value is modified.
@@ -54,6 +56,13 @@ pub trait Sort: Any + Send + Sync + Debug {
         debug_assert_eq!(self.name(), value.tag);
         let _ = unionfind;
         false
+    }
+
+    /// Return the inner values and sorts.
+    /// Only eq_container_sort need to implement this method,
+    fn inner_values(&self, value: &Value) -> Vec<(&ArcSort, Value)> {
+        let _ = value;
+        unreachable!();
     }
 
     fn register_primitives(self: Arc<Self>, info: &mut TypeInfo) {
