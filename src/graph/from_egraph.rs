@@ -37,12 +37,11 @@ fn is_temp_name(name: String) -> bool {
 
 fn export_value(egraph: &EGraph, value: Value) -> ExportedValue {
     let sort = egraph.get_sort(&value).unwrap();
-    println!("sort: {:?} {:?}", sort, sort.is_eq_container_sort());
     if sort.is_eq_sort() {
         let id = value.bits as usize;
         let canonical: usize = egraph.unionfind.find(Id::from(id)).into();
         ExportedValue::EClass(canonical)
-    } else if sort.is_eq_container_sort() {
+    } else if sort.is_container_sort() {
         let inner: Vec<Value> = sort
             .inner_values(&value)
             .into_iter()

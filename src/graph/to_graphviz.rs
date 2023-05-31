@@ -120,7 +120,7 @@ pub(crate) fn to_graphviz(g: ExportedGraph) -> Graph {
                 add_node(&value, value_id.clone(), name.to_string(), inner.len());
                 for (i, inner_value) in inner.iter().enumerate() {
                     values_to_add.push_back(inner_value.clone());
-                    add_edge(value_id.clone(), i, &value);
+                    add_edge(value_id.clone(), i, inner_value);
                 }
             }
         }
