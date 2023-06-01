@@ -33,8 +33,6 @@ impl Run {
                 .collect::<Vec<String>>()
                 .join("\n");
 
-            println!("{}", desugared_str);
-
             self.test_program(
                 &desugared_str,
                 &format!(
