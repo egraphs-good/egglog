@@ -207,7 +207,6 @@ pub struct EGraph {
     functions: HashMap<Symbol, Function>,
     rulesets: HashMap<Symbol, HashMap<Symbol, Rule>>,
     ruleset_iteration: HashMap<Symbol, usize>,
-    proofs_enabled: bool,
     timestamp: u32,
     iteration: i64,
     pub test_proofs: bool,
@@ -244,7 +243,6 @@ impl Default for EGraph {
             match_limit: usize::MAX,
             node_limit: usize::MAX,
             timestamp: 0,
-            proofs_enabled: false,
             test_proofs: false,
             fact_directory: None,
             seminaive: true,
@@ -473,13 +471,13 @@ impl EGraph {
             .collect::<Vec<_>>();
 
         let mut termdag = TermDag::default();
-        let mut extractor = Extractor::new(self, &mut termdag);
+        let extractor = Extractor::new(self, &mut termdag);
         let mut terms = Vec::new();
         for (ins, out) in nodes {
             let mut children = Vec::new();
             for (a, a_type) in ins.iter().copied().zip(&schema.input) {
                 if a_type.is_eq_sort() {
-                    children.push(extractor.find_best(a, &mut termdag, &a_type).1);
+                    children.push(extractor.find_best(a, &mut termdag, a_type).1);
                 } else {
                     children.push(termdag.expr_to_term(&a_type.make_expr(self, a)));
                 };
@@ -589,7 +587,6 @@ impl EGraph {
 
         if self.num_tuples() > self.node_limit {
             log::warn!("Node limit reached, {} nodes. Stopping!", self.num_tuples());
-            return;
         }
     }
 
@@ -639,7 +636,7 @@ impl EGraph {
         }
         let mut rules: HashMap<Symbol, Rule> =
             std::mem::take(self.rulesets.get_mut(&ruleset).unwrap());
-        let mut iteration = *self.ruleset_iteration.entry(ruleset).or_default();
+        let iteration = *self.ruleset_iteration.entry(ruleset).or_default();
         self.ruleset_iteration.insert(ruleset, iteration + 1);
         // TODO why did I have to copy the rules here for the first for loop?
         let copy_rules = rules.clone();
@@ -805,7 +802,7 @@ impl EGraph {
     pub fn set_option(&mut self, name: &str, value: Expr) {
         match name {
             "enable_proofs" => {
-                // TODO
+                // TODO re-enable
                 //assert!(self.proofs_enabled);
             }
             "match_limit" => {
@@ -1133,25 +1130,10 @@ impl EGraph {
     // process the commands but don't run them
     pub fn process_commands(
         &mut self,
-        mut program: Vec<Command>,
+        program: Vec<Command>,
         stop: CompilerPassStop,
     ) -> Result<Vec<NormCommand>, Error> {
         let mut result = vec![];
-        if let Some(Command::SetOption {
-            name,
-            value: Expr::Lit(Literal::Int(1)),
-        }) = program.first()
-        {
-            /*
-            if name == &"enable_proofs".into() {
-                program = program.split_off(1);
-                for step in self.proof_state.term_header() {
-                    result.extend(self.process_command(step, stop)?);
-                }
-                self.proofs_enabled = true;
-            }*/
-            // TODO run proof header
-        }
 
         for command in program {
             match command {
@@ -1208,64 +1190,46 @@ impl EGraph {
         }
 
         // reset type info
-        self.proof_state.type_info = type_info_before.clone();
+        self.proof_state.type_info = type_info_before;
         self.proof_state.type_info.typecheck_program(&program)?;
         if stop == CompilerPassStop::TypecheckTermEncoding {
             return Ok(program);
         }
 
-        assert!(stop == CompilerPassStop::All);
-        Ok(program)
-        /*
-        let program = if self.proofs_enabled {
+        // TODO add proofs
+        /*{
             // proofs require type info, so
             // we need to pass in the desugar
-            let proofs = self.proof_state.add_proofs(program_desugared);
+            let proofs = self.proof_state.add_proofs(program);
+            eprintln!("Proofs: {}", ListDisplay(&proofs, "\n"));
 
             let final_desugared = self
                 .proof_state
                 .desugar
                 .desugar_program(proofs, false, false)?;
 
-            // revert back to the type info before
-            // proofs were added, typecheck again
+            if stop == CompilerPassStop::Proofs {
+                return Ok(final_desugared);
+            }
+
+            // revert the type information again
             self.proof_state.type_info = type_info_before;
             self.proof_state
                 .type_info
                 .typecheck_program(&final_desugared)?;
-            final_desugared
-        } else {
-            program_desugared
-        };
+            program = final_desugared;
 
-        Ok(program)*/
+            if stop == CompilerPassStop::TypecheckProofs {
+                return Ok(program);
+            }
+        };*/
+
+        Ok(program)
     }
 
-    fn enable_proofs(&mut self) {
-        let proofs_already_enabled = self.proofs_enabled;
-        self.proofs_enabled = true;
-        if !proofs_already_enabled && self.proofs_enabled {
-            self.proofs_enabled = false;
-            // TODO run proof header instead
-            //self.run_program(self.proof_state.term_header()).unwrap();
-            self.proofs_enabled = true;
-        }
-    }
-
-    pub fn run_program(&mut self, mut program: Vec<Command>) -> Result<Vec<String>, Error> {
+    pub fn run_program(&mut self, program: Vec<Command>) -> Result<Vec<String>, Error> {
         let mut msgs = vec![];
         let should_run = true;
-
-        if let Some(Command::SetOption {
-            name,
-            value: Expr::Lit(Literal::Int(1)),
-        }) = program.first()
-        {
-            if name == &"enable_proofs".into() {
-                self.enable_proofs();
-                program = program.split_off(1);
-            }
-        }
 
         for command in program {
             // Important to process each command individually

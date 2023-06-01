@@ -1,5 +1,3 @@
-use symbolic_expressions::Sexp;
-
 use crate::{
     ast::{Expr, Literal},
     util::{HashMap, HashSet},
@@ -126,7 +124,7 @@ impl TermDag {
                         for c in children.iter() {
                             str.push_str(&format!(" {}", stored[c]));
                         }
-                        str.push_str(")");
+                        str.push(')');
                         stored.insert(next, str);
                     } else {
                         seen.insert(next);

@@ -1,7 +1,4 @@
-use egg_smol::{
-    ast::{Command, Expr, Literal},
-    *,
-};
+use egg_smol::*;
 
 struct Run {
     path: &'static str,

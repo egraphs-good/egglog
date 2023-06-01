@@ -1,10 +1,9 @@
 use crate::{
     ast::{Id, Literal},
-    function::ValueVec,
     match_term_app,
     termdag::{Term, TermDag},
-    util::{HashMap, HashSet},
-    EGraph, Symbol, UnionFind, Value,
+    util::HashMap,
+    EGraph, Symbol, UnionFind,
 };
 
 struct ProofChecker {
@@ -201,11 +200,11 @@ impl ProofChecker {
                         }
                     }
                     let size_before = self.termdag.size();
-                    let rhs = self.termdag.make(op.clone(), rhs_children);
+                    let rhs = self.termdag.make(op, rhs_children);
                     let size_after = self.termdag.size();
                     assert!(size_before == size_after);
                     self.proven_equal.union(Id::from(self.termdag.lookup(&term)), Id::from(self.termdag.lookup(&rhs)), "".into());
-                    Proof::Equality(term.clone(), rhs)
+                    Proof::Equality(term, rhs)
                 } else {
                     Proof::Equality(term.clone(), term)
                 }

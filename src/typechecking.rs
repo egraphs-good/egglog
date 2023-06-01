@@ -188,7 +188,7 @@ impl TypeInfo {
         schedule: &NormSchedule,
     ) -> Result<(), TypeError> {
         match schedule {
-            NormSchedule::Repeat(times, schedule) => {
+            NormSchedule::Repeat(_times, schedule) => {
                 self.typecheck_schedule(ctx, schedule)?;
             }
             NormSchedule::Sequence(schedules) => {
@@ -201,8 +201,8 @@ impl TypeInfo {
             }
             NormSchedule::Run(run_config) => {
                 if let Some(facts) = &run_config.until {
-                    self.typecheck_facts(ctx, &facts)?;
-                    self.verify_normal_form_facts(&facts);
+                    self.typecheck_facts(ctx, facts)?;
+                    self.verify_normal_form_facts(facts);
                 }
             }
         }

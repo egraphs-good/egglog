@@ -92,10 +92,7 @@ impl NormExpr {
 
 impl Expr {
     pub fn is_var(&self) -> bool {
-        match self {
-            Expr::Var(_) => true,
-            _ => false,
-        }
+        matches!(self, Expr::Var(_))
     }
 
     pub fn call(op: impl Into<Symbol>, children: impl IntoIterator<Item = Self>) -> Self {
@@ -122,7 +119,7 @@ impl Expr {
 
     pub fn ast_size(&self) -> usize {
         let mut size = 0;
-        self.walk(&mut |e| size += 1, &mut |_| {});
+        self.walk(&mut |_e| size += 1, &mut |_| {});
         size
     }
 

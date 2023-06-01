@@ -1,10 +1,6 @@
 use crate::*;
 
 impl ProofState {
-    pub fn parse_program(&self, input: &str) -> Result<Vec<Command>, Error> {
-        self.desugar.parse_program(input)
-    }
-
     fn parent_name(&self, sort: Symbol) -> Symbol {
         Symbol::from(format!(
             "{}_Parent{}",
@@ -337,5 +333,9 @@ impl ProofState {
             self.rebuilding_ruleset_name()
         );
         self.parse_program(&str).unwrap().into_iter().collect()
+    }
+
+    pub fn parse_program(&self, input: &str) -> Result<Vec<Command>, Error> {
+        self.desugar.parse_program(input)
     }
 }

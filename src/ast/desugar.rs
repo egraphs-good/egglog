@@ -1,4 +1,4 @@
-use crate::{proofs::RULE_PROOF_KEYWORD, *};
+use crate::*;
 
 fn desugar_datatype(name: Symbol, variants: Vec<Variant>) -> Vec<NCommand> {
     vec![NCommand::Sort(name, None)]
@@ -591,7 +591,7 @@ pub(crate) fn desugar_command(
                 .collect()
         }
         Command::Check(facts) => {
-            let mut res = vec![NCommand::Check(flatten_facts(&facts, desugar))];
+            let res = vec![NCommand::Check(flatten_facts(&facts, desugar))];
 
             if get_all_proofs {
                 /*res.push(NCommand::RunSchedule(NormSchedule::Saturate(Box::new(

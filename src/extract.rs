@@ -3,7 +3,7 @@ use hashbrown::hash_map::Entry;
 use crate::ast::Symbol;
 use crate::termdag::{Term, TermDag};
 use crate::util::HashMap;
-use crate::{ArcSort, EGraph, Expr, Function, Id, Value};
+use crate::{ArcSort, EGraph, Function, Id, Value};
 
 type Cost = usize;
 
@@ -92,8 +92,8 @@ impl<'a> Extractor<'a> {
     fn expr_from_node(&self, node: &Node, termdag: &mut TermDag) -> Term {
         let mut children = vec![];
         for value in node.inputs {
-            let arcsort = self.egraph.get_sort(&value).unwrap();
-            children.push(self.find_best(value.clone(), termdag, arcsort).1)
+            let arcsort = self.egraph.get_sort(value).unwrap();
+            children.push(self.find_best(*value, termdag, arcsort).1)
         }
         termdag.make(node.sym, children)
     }
