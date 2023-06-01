@@ -41,7 +41,6 @@ impl GraphExporter {
                 stmt!(SubgraphAttributes::rank(rank::same)),
                 stmt!(GraphAttributes::fontname("helvetica".to_string())),
                 stmt!(GraphAttributes::fontsize(9.0)),
-                stmt!(GraphAttributes::style(quote("rounded,dashed".to_string()))),
                 stmt!(GraphAttributes::margin(3.0)),
                 stmt!(GraphAttributes::nodesep(0.0)),
                 stmt!(GA::Edge(vec![EdgeAttributes::arrowsize(0.5)])),
@@ -115,10 +114,18 @@ impl GraphExporter {
                     stmt!(node!(node_id;NodeAttributes::label(label)))
                 })
                 .collect();
+            let subgraph_style = if subgraph_id.starts_with("\"cluster_eclass_") {
+                "dashed,rounded".to_string()
+            } else {
+                "dotted,rounded".to_string()
+            };
             // Nest in empty sub-graph so that we can use rank=same
             // https://stackoverflow.com/a/55562026/907060
-            self.statements
-                .push(stmt!(subgraph!(subgraph_id; NodeAttributes::label(subgraph_html_label(sort)), subgraph!("", subgraph_stmts))));
+            self.statements.push(stmt!(subgraph!(subgraph_id;
+                NodeAttributes::label(subgraph_html_label(sort)),
+                GA::Graph(vec![GraphAttributes::style(quote(subgraph_style))]),
+                subgraph!("", subgraph_stmts)
+            )));
         }
         graph!(di id!(), self.statements)
     }
