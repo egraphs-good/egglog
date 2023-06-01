@@ -67,7 +67,7 @@ impl Sort for MapSort {
         let maps = self.maps.lock().unwrap();
         let map = maps.get_index(value.bits as usize).unwrap();
         let mut result = Vec::new();
-        for (k, v) in map.into_iter() {
+        for (k, v) in map.iter() {
             result.push((&self.key, *k));
             result.push((&self.value, *v));
         }

@@ -11,11 +11,14 @@ pub(crate) type ExportedGraph = Vec<ExportedCall>;
 #[derive(Debug)]
 pub(crate) struct ExportedCall {
     fn_name: String,
-    inputs: Vec<ExportedValue>,
-    output: ExportedValue,
+    inputs: Vec<ExportedValueWithSort>,
+    output: ExportedValueWithSort,
     /// Hash of arguments
     input_hash: Hash,
 }
+
+#[derive(Debug, Hash, Clone, PartialEq, Eq)]
+pub(crate) struct ExportedValueWithSort(ExportedValue, String);
 
 /// An argument is either a primitive value or a reference to a eclass
 #[derive(Debug, Hash, Clone, PartialEq, Eq)]
@@ -25,7 +28,7 @@ pub(crate) enum ExportedValue {
     /// A container sort, i.e. Vec, Map, Set
     Container {
         name: String,
-        inner: Vec<ExportedValue>,
+        inner: Vec<ExportedValueWithSort>,
         inner_hash: Hash,
     },
     /// A reference to an eclass

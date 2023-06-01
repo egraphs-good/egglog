@@ -22,12 +22,12 @@ struct GraphExporter {
     statements: Vec<Stmt>,
     // Use VecDeque so we can rotate efficiently
     e_class_id_to_node_ids: HashMap<usize, VecDeque<String>>,
-    // Map from subgraph id to map of node id to label
-    subgraph_to_node_to_label: HashMap<String, HashMap<String, String>>,
+    // Map from subgraph id to sort and map of node id to label
+    subgraph_to_node_to_label: HashMap<String, (String, HashMap<String, String>)>,
     // Nodes to process and add
-    values_to_add: VecDeque<ExportedValue>,
+    values_to_add: VecDeque<ExportedValueWithSort>,
     // Nodes already added to the values_to_add queue
-    added_value: HashSet<ExportedValue>,
+    added_value: HashSet<ExportedValueWithSort>,
 }
 
 impl GraphExporter {
@@ -40,6 +40,7 @@ impl GraphExporter {
                 // Set default sub-graph rank to be same so that all nodes in e-class are on same level
                 stmt!(SubgraphAttributes::rank(rank::same)),
                 stmt!(GraphAttributes::fontname("helvetica".to_string())),
+                stmt!(GraphAttributes::fontsize(9.0)),
                 stmt!(GraphAttributes::style(quote("rounded,dashed".to_string()))),
                 stmt!(GraphAttributes::margin(3.0)),
                 stmt!(GraphAttributes::nodesep(0.0)),
@@ -52,7 +53,7 @@ impl GraphExporter {
             ..Self::default()
         };
         for call in g.iter() {
-            if let ExportedValue::EClass(id) = call.output {
+            if let ExportedValue::EClass(id) = call.output.0 {
                 let node_id = format!("{}_{}", call.fn_name, call.input_hash);
                 exporter
                     .e_class_id_to_node_ids
@@ -77,7 +78,7 @@ impl GraphExporter {
             exporter.add_value(&output);
             // Add edges from function node to input nodes
             for (i, input) in inputs.into_iter().enumerate() {
-                exporter.add_edge(fn_id.clone(), i, &input);
+                exporter.add_edge(fn_id.clone(), i, &input.0);
                 exporter.add_value(&input);
             }
         }
@@ -87,7 +88,7 @@ impl GraphExporter {
     fn into_graphviz(mut self) -> Graph {
         // Add nodes for primitive values. Skip e-classes, since these appear as subgraphs
         while let Some(value) = self.values_to_add.pop_front() {
-            match &value {
+            match &value.0 {
                 ExportedValue::EClass(_) => {}
                 ExportedValue::Prim(p) => self.add_node(&value, prim_id(p), p.into(), 0),
                 ExportedValue::Container {
@@ -99,14 +100,14 @@ impl GraphExporter {
                     self.add_node(&value, value_id.clone(), name.to_string(), inner.len());
                     for (i, inner_value) in inner.iter().enumerate() {
                         self.add_value(inner_value);
-                        self.add_edge(value_id.clone(), i, inner_value);
+                        self.add_edge(value_id.clone(), i, &inner_value.0);
                     }
                 }
             }
         }
 
         // Export each subgraph to nodes
-        for (subgraph_id, node_id_to_label) in self.subgraph_to_node_to_label {
+        for (subgraph_id, (sort, node_id_to_label)) in self.subgraph_to_node_to_label {
             let subgraph_stmts = node_id_to_label
                 .into_iter()
                 .map(|(node_id, label)| {
@@ -117,7 +118,7 @@ impl GraphExporter {
             // Nest in empty sub-graph so that we can use rank=same
             // https://stackoverflow.com/a/55562026/907060
             self.statements
-                .push(stmt!(subgraph!(subgraph_id; subgraph!("", subgraph_stmts))));
+                .push(stmt!(subgraph!(subgraph_id; NodeAttributes::label(subgraph_html_label(sort)), subgraph!("", subgraph_stmts))));
         }
         graph!(di id!(), self.statements)
     }
@@ -131,7 +132,7 @@ impl GraphExporter {
         node_id
     }
 
-    fn add_value(&mut self, value: &ExportedValue) {
+    fn add_value(&mut self, value: &ExportedValueWithSort) {
         if !self.added_value.contains(value) {
             self.values_to_add.push_back(value.clone());
             self.added_value.insert(value.clone());
@@ -140,15 +141,17 @@ impl GraphExporter {
 
     fn add_node(
         &mut self,
-        subgraph_value: &ExportedValue,
+        subgraph_value_and_sort: &ExportedValueWithSort,
         node_id: String,
         name: String,
         n_args: usize,
     ) {
-        self.subgraph_to_node_to_label
-            .entry(subgraph_id(subgraph_value))
-            .or_default()
-            .insert(node_id, html_label(name, n_args));
+        let entry = self
+            .subgraph_to_node_to_label
+            .entry(subgraph_id(&subgraph_value_and_sort.0))
+            .or_default();
+        entry.0 = subgraph_value_and_sort.1.to_string();
+        entry.1.insert(node_id, html_label(name, n_args));
     }
 
     fn gen_value_id(&mut self, value: &ExportedValue) -> String {
@@ -220,6 +223,9 @@ fn html_label(label: String, n_args: usize) -> String {
             )
         })
     )
+}
+fn subgraph_html_label(label: String) -> String {
+    format!("<<TABLE CELLBORDER=\"0\" CELLSPACING=\"0\" CELLPADDING=\"0\" border=\"0\"><tr><td><i>{}</i></td></tr></TABLE>>", label)
 }
 
 fn port_id(i: usize) -> String {

@@ -64,7 +64,7 @@ impl Sort for SetSort {
         let sets = self.sets.lock().unwrap();
         let set = sets.get_index(value.bits as usize).unwrap();
         let mut result = Vec::new();
-        for e in set.into_iter() {
+        for e in set.iter() {
             result.push((&self.element, *e));
         }
         result

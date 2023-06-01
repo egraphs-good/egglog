@@ -1,5 +1,5 @@
 use super::*;
-use crate::{ast::Id, function::table::hash_values, EGraph, Value};
+use crate::{ast::Id, function::table::hash_values, EGraph, Value, ArcSort};
 
 pub(crate) fn graph_from_egraph(egraph: &EGraph) -> ExportedGraph {
     let mut calls = ExportedGraph::default();
@@ -18,9 +18,9 @@ pub(crate) fn graph_from_egraph(egraph: &EGraph) -> ExportedGraph {
                 fn_name: name.clone(),
                 inputs: input_values
                     .iter()
-                    .map(|v| export_value(egraph, *v))
+                    .map(|v| export_value_with_sort(egraph, *v))
                     .collect(),
-                output: export_value(egraph, output.value),
+                output: export_value_with_sort(egraph, output.value),
                 input_hash: hash_values(input_values),
             };
             calls.push(fn_call);
@@ -35,8 +35,12 @@ fn is_temp_name(name: String) -> bool {
     name.starts_with('v') && name.ends_with("___") && name[1..name.len() - 3].parse::<u32>().is_ok()
 }
 
-fn export_value(egraph: &EGraph, value: Value) -> ExportedValue {
+fn export_value_with_sort(egraph: &EGraph, value: Value) -> ExportedValueWithSort {
     let sort = egraph.get_sort(&value).unwrap();
+    ExportedValueWithSort(export_value(egraph, value, sort), sort.name().to_string())
+}
+
+fn export_value(egraph: &EGraph, value: Value, sort: &ArcSort) -> ExportedValue {
     if sort.is_eq_sort() {
         let id = value.bits as usize;
         let canonical: usize = egraph.unionfind.find(Id::from(id)).into();
@@ -52,7 +56,7 @@ fn export_value(egraph: &EGraph, value: Value) -> ExportedValue {
             name: sort.name().to_string(),
             inner: inner
                 .iter()
-                .map(|v| export_value(egraph, *v))
+                .map(|v| export_value_with_sort(egraph, *v))
                 .collect(),
             inner_hash: hash_values(&inner),
         }

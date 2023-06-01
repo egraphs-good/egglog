@@ -63,7 +63,7 @@ impl Sort for VecSort {
         let vecs = self.vecs.lock().unwrap();
         let vec = vecs.get_index(value.bits as usize).unwrap();
         let mut result: Vec<(&Arc<dyn Sort>, Value)> = Vec::new();
-        for e in vec.into_iter() {
+        for e in vec.iter() {
             result.push((&self.element, *e));
         }
         result
