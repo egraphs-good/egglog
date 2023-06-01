@@ -431,11 +431,11 @@ impl EGraph {
         let mut terms = Vec::new();
         for (ins, out) in nodes {
             let mut children = Vec::new();
-            for (a, t) in ins.iter().copied().zip(&schema.input) {
-                if t.is_eq_sort() {
-                    children.push(extractor.find_best(a, &mut termdag, &schema.output).1);
+            for (a, a_type) in ins.iter().copied().zip(&schema.input) {
+                if a_type.is_eq_sort() {
+                    children.push(extractor.find_best(a, &mut termdag, &a_type).1);
                 } else {
-                    children.push(termdag.expr_to_term(&t.make_expr(self, a)));
+                    children.push(termdag.expr_to_term(&a_type.make_expr(self, a)));
                 };
             }
 
