@@ -7,6 +7,7 @@ struct Run {
     path: &'static str,
     test_proofs: bool,
     should_fail: bool,
+    resugar: bool,
 }
 
 impl Run {
@@ -19,14 +20,18 @@ impl Run {
         } else {
             program_read
         };
-        self.test_program(&program, "Top level error");
 
-        if !self.should_fail {
+        if !self.resugar {
+            self.test_program(&program, "Top level error");
+        } else if self.resugar {
             let mut egraph = EGraph::default();
-            egraph.set_underscores_for_desugaring(4);
+            egraph.set_underscores_for_desugaring(3);
             let parsed = egraph.parse_program(&program).unwrap();
+            // TODO can we test after term encoding instead?
+            // last time I tried it spun out becuase
+            // it adds term encoding to term encoding
             let desugared_str = egraph
-                .process_commands(parsed)
+                .process_commands(parsed, CompilerPassStop::TypecheckDesugared)
                 .unwrap()
                 .into_iter()
                 .map(|x| x.resugar().to_string())

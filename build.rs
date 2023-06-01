@@ -22,47 +22,56 @@ fn generate_tests(file: &mut File, glob: &str) {
     writeln!(file, "const N_TEST_FILES: usize = {};", paths.len()).unwrap();
 
     for f in paths {
-        let name = f
-            .file_stem()
-            .unwrap()
-            .to_string_lossy()
-            .replace(['.', '-', ' '], "_");
-        let contents = std::fs::read_to_string(&f).unwrap();
+        for resugar in [false, true] {
+            let resugar_text = if resugar { "_resugar" } else { "" };
+            let name = f
+                .file_stem()
+                .unwrap()
+                .to_string_lossy()
+                .replace(['.', '-', ' '], "_")
+                + resugar_text;
+            let contents = std::fs::read_to_string(&f).unwrap();
 
-        let should_fail = f.to_string_lossy().contains("fail-typecheck");
+            let should_fail = f.to_string_lossy().contains("fail-typecheck");
+            if should_fail && resugar {
+                continue;
+            }
 
-        // write a normal test
-        writeln!(
-            file,
-            r#" #[test] 
+            // write a normal test
+            writeln!(
+                file,
+                r#" #[test] 
             fn {name}() {{ 
                 Run {{
                     path: {f:?},
                     should_fail: {should_fail},
                     test_proofs: false,
+                    resugar: {resugar},
                 }}.run(); 
             }}"#,
-        )
-        .unwrap();
+            )
+            .unwrap();
 
-        // write a test with proofs enabled
-        // TODO: re-enable herbie, unsound, and eqsolve when proof extraction is faster
-        if !(contents.contains("(Set")
-            || contents.contains("(Map")
-            || contents.contains("SKIP_PROOFS"))
-        {
-            writeln!(
-                file,
-                r#" #[test] 
+            // write a test with proofs enabled
+            // TODO: re-enable herbie, unsound, and eqsolve when proof extraction is faster
+            if !(contents.contains("(Set")
+                || contents.contains("(Map")
+                || contents.contains("SKIP_PROOFS"))
+            {
+                writeln!(
+                    file,
+                    r#" #[test] 
                 fn {name}_with_proofs() {{ 
                     Run {{
                         path: {f:?},
                         should_fail: {should_fail},
                         test_proofs: true,
+                        resugar: {resugar},
                     }}.run(); 
                 }}"#,
-            )
-            .unwrap();
+                )
+                .unwrap();
+            }
         }
     }
 }

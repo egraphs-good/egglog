@@ -1,5 +1,5 @@
 use clap::Parser;
-use egg_smol::EGraph;
+use egg_smol::{CompilerPassStop, EGraph};
 use std::io::{self, Read};
 use std::path::PathBuf;
 
@@ -15,6 +15,11 @@ struct Args {
     resugar: bool,
     #[clap(long)]
     proofs: bool,
+    #[clap(long, default_value_t = CompilerPassStop::All)]
+    stop: CompilerPassStop,
+    // TODO remove this evil hack
+    #[clap(long, default_value_t = 3)]
+    num_underscores: usize,
     inputs: Vec<PathBuf>,
 }
 
@@ -30,6 +35,7 @@ fn main() {
 
     let mk_egraph = || {
         let mut egraph = EGraph::default();
+        egraph.set_underscores_for_desugaring(args.num_underscores);
         egraph.fact_directory = args.fact_directory.clone();
         egraph.seminaive = !args.naive;
         egraph
@@ -75,7 +81,7 @@ fn main() {
         if args.desugar || args.resugar {
             let parsed = egraph.parse_program(&program).unwrap();
             let desugared_str = egraph
-                .process_commands(parsed)
+                .process_commands(parsed, args.stop)
                 .unwrap()
                 .into_iter()
                 .map(|x| {

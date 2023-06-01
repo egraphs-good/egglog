@@ -6,6 +6,7 @@ mod proofchecker;
 mod proofs;
 pub mod sort;
 mod termdag;
+mod terms;
 mod typecheck;
 mod typechecking;
 mod unionfind;
@@ -28,7 +29,7 @@ use symbolic_expressions::Sexp;
 use ast::*;
 use typechecking::{TypeInfo, UNIT_SYM};
 
-use std::fmt::{Formatter, Write};
+use std::fmt::{Display, Formatter, Write};
 use std::fs::File;
 use std::hash::Hash;
 use std::io::Read;
@@ -37,6 +38,7 @@ use std::mem;
 use std::ops::{Deref, Range};
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::str::FromStr;
 use std::{fmt::Debug, sync::Arc};
 use typecheck::Program;
 
@@ -152,6 +154,48 @@ impl PrimitiveLike for SimplePrimitive {
     }
     fn apply(&self, values: &[Value]) -> Option<Value> {
         (self.f)(values)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
+pub enum CompilerPassStop {
+    Desugar,
+    TypecheckDesugared,
+    TermEncoding,
+    TypecheckTermEncoding,
+    Proofs,
+    TypecheckProofs,
+    All,
+}
+
+impl Display for CompilerPassStop {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CompilerPassStop::Desugar => write!(f, "desugar"),
+            CompilerPassStop::TypecheckDesugared => write!(f, "typecheck_desugared"),
+            CompilerPassStop::TermEncoding => write!(f, "term_encoding"),
+            CompilerPassStop::TypecheckTermEncoding => write!(f, "typecheck_term_encoding"),
+            CompilerPassStop::Proofs => write!(f, "proofs"),
+            CompilerPassStop::TypecheckProofs => write!(f, "typecheck_proofs"),
+            CompilerPassStop::All => write!(f, "all"),
+        }
+    }
+}
+
+impl FromStr for CompilerPassStop {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "desugar" => Ok(CompilerPassStop::Desugar),
+            "typecheck_desugared" => Ok(CompilerPassStop::TypecheckDesugared),
+            "term_encoding" => Ok(CompilerPassStop::TermEncoding),
+            "typecheck_term_encoding" => Ok(CompilerPassStop::TypecheckTermEncoding),
+            "proofs" => Ok(CompilerPassStop::Proofs),
+            "typecheck_proofs" => Ok(CompilerPassStop::TypecheckProofs),
+            "all" => Ok(CompilerPassStop::All),
+            _ => Err(format!("Unknown compiler pass stop: {}", s)),
+        }
     }
 }
 
@@ -761,7 +805,8 @@ impl EGraph {
     pub fn set_option(&mut self, name: &str, value: Expr) {
         match name {
             "enable_proofs" => {
-                panic!("enable_proofs must be set as the first line of the file");
+                // TODO
+                //assert!(self.proofs_enabled);
             }
             "match_limit" => {
                 if let Expr::Lit(Literal::Int(i)) = value {
@@ -1089,6 +1134,7 @@ impl EGraph {
     pub fn process_commands(
         &mut self,
         mut program: Vec<Command>,
+        stop: CompilerPassStop,
     ) -> Result<Vec<NormCommand>, Error> {
         let mut result = vec![];
         if let Some(Command::SetOption {
@@ -1096,13 +1142,15 @@ impl EGraph {
             value: Expr::Lit(Literal::Int(1)),
         }) = program.first()
         {
+            /*
             if name == &"enable_proofs".into() {
                 program = program.split_off(1);
-                for step in self.proof_state.proof_header() {
-                    result.extend(self.process_command(step)?);
+                for step in self.proof_state.term_header() {
+                    result.extend(self.process_command(step, stop)?);
                 }
                 self.proofs_enabled = true;
-            }
+            }*/
+            // TODO run proof header
         }
 
         for command in program {
@@ -1120,7 +1168,7 @@ impl EGraph {
                 }
                 _ => {}
             }
-            result.extend(self.process_command(command)?);
+            result.extend(self.process_command(command, stop)?);
         }
         Ok(result)
     }
@@ -1129,19 +1177,46 @@ impl EGraph {
         self.proof_state.desugar.number_underscores = underscores;
     }
 
-    fn process_command(&mut self, command: Command) -> Result<Vec<NormCommand>, Error> {
-        let program_desugared = self.proof_state.desugar.desugar_program(
+    fn process_command(
+        &mut self,
+        command: Command,
+        stop: CompilerPassStop,
+    ) -> Result<Vec<NormCommand>, Error> {
+        let mut program = self.proof_state.desugar.desugar_program(
             vec![command],
             self.test_proofs,
             self.seminaive,
         )?;
-        //eprintln!("desugared: {}", ListDisplay(&program_desugared, "\n"));
+        if stop == CompilerPassStop::Desugar {
+            return Ok(program);
+        }
 
         let type_info_before = self.proof_state.type_info.clone();
-        self.proof_state
-            .type_info
-            .typecheck_program(&program_desugared)?;
 
+        self.proof_state.type_info.typecheck_program(&program)?;
+        if stop == CompilerPassStop::TypecheckDesugared {
+            return Ok(program);
+        }
+
+        let program_terms = self.proof_state.add_term_encoding(program);
+        program = self
+            .proof_state
+            .desugar
+            .desugar_program(program_terms, false, false)?;
+        if stop == CompilerPassStop::TermEncoding {
+            return Ok(program);
+        }
+
+        // reset type info
+        self.proof_state.type_info = type_info_before.clone();
+        self.proof_state.type_info.typecheck_program(&program)?;
+        if stop == CompilerPassStop::TypecheckTermEncoding {
+            return Ok(program);
+        }
+
+        assert!(stop == CompilerPassStop::All);
+        Ok(program)
+        /*
         let program = if self.proofs_enabled {
             // proofs require type info, so
             // we need to pass in the desugar
@@ -1163,7 +1238,7 @@ impl EGraph {
             program_desugared
         };
 
-        Ok(program)
+        Ok(program)*/
     }
 
     fn enable_proofs(&mut self) {
@@ -1171,7 +1246,8 @@ impl EGraph {
         self.proofs_enabled = true;
         if !proofs_already_enabled && self.proofs_enabled {
             self.proofs_enabled = false;
-            self.run_program(self.proof_state.proof_header()).unwrap();
+            // TODO run proof header instead
+            //self.run_program(self.proof_state.term_header()).unwrap();
             self.proofs_enabled = true;
         }
     }
@@ -1194,7 +1270,7 @@ impl EGraph {
         for command in program {
             // Important to process each command individually
             // because push and pop create new scopes
-            for processed in self.process_command(command)? {
+            for processed in self.process_command(command, CompilerPassStop::All)? {
                 let msg = self.run_command(processed.command, should_run)?;
                 log::info!("{}", msg);
                 msgs.push(msg);
