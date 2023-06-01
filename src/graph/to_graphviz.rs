@@ -1,12 +1,14 @@
 use crate::util::{HashMap, HashSet};
 use std::collections::VecDeque;
+use std::fmt;
 
 use super::*;
 use graphviz_rust::{
     attributes::*,
     dot_generator::*,
     dot_structures::{
-        Edge, EdgeTy, Graph, GraphAttributes as GA, Id, Node, NodeId, Port, Stmt, Subgraph, Vertex,
+        Attribute, Edge, EdgeTy, Graph, GraphAttributes as GA, Id, Node, NodeId, Port, Stmt,
+        Subgraph, Vertex,
     },
 };
 
@@ -28,6 +30,8 @@ struct GraphExporter {
     values_to_add: VecDeque<ExportedValueWithSort>,
     // Nodes already added to the values_to_add queue
     added_value: HashSet<ExportedValueWithSort>,
+    // Unique list of sorts, to be used for colors
+    sorts: HashSet<String>,
 }
 
 impl GraphExporter {
@@ -43,6 +47,7 @@ impl GraphExporter {
                 stmt!(GraphAttributes::fontsize(9.0)),
                 stmt!(GraphAttributes::margin(3.0)),
                 stmt!(GraphAttributes::nodesep(0.0)),
+                stmt!(GraphAttributes::colorscheme("set312".to_string())),
                 stmt!(GA::Edge(vec![EdgeAttributes::arrowsize(0.5)])),
                 stmt!(GA::Node(vec![
                     NodeAttributes::shape(shape::none),
@@ -104,6 +109,13 @@ impl GraphExporter {
                 }
             }
         }
+        // Create a mapping from sort to the color index they are
+        let sort_color = self
+            .sorts
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (s.clone(), i % 12 + 1))
+            .collect::<HashMap<_, _>>();
 
         // Export each subgraph to nodes
         for (subgraph_id, (sort, node_id_to_label)) in self.subgraph_to_node_to_label {
@@ -115,14 +127,16 @@ impl GraphExporter {
                 })
                 .collect();
             let subgraph_style = if subgraph_id.starts_with("\"cluster_eclass_") {
-                "dashed,rounded".to_string()
+                "dashed,rounded,filled".to_string()
             } else {
-                "dotted,rounded".to_string()
+                "dotted,rounded,filled".to_string()
             };
+            let color = sort_color[&sort];
             // Nest in empty sub-graph so that we can use rank=same
             // https://stackoverflow.com/a/55562026/907060
             self.statements.push(stmt!(subgraph!(subgraph_id;
                 NodeAttributes::label(subgraph_html_label(sort)),
+                attr!("fillcolor", color),
                 GA::Graph(vec![GraphAttributes::style(quote(subgraph_style))]),
                 subgraph!("", subgraph_stmts)
             )));
@@ -143,6 +157,7 @@ impl GraphExporter {
         if !self.added_value.contains(value) {
             self.values_to_add.push_back(value.clone());
             self.added_value.insert(value.clone());
+            self.sorts.insert(value.1.clone());
         }
     }
 
@@ -158,6 +173,7 @@ impl GraphExporter {
             .entry(subgraph_id(&subgraph_value_and_sort.0))
             .or_default();
         entry.0 = subgraph_value_and_sort.1.to_string();
+        self.sorts.insert(entry.0.to_string());
         entry.1.insert(node_id, html_label(name, n_args));
     }
 
@@ -215,9 +231,9 @@ fn quote(s: String) -> String {
 /// Returns an html label for the node with the function name and ports for each argumetn
 fn html_label(label: String, n_args: usize) -> String {
     format!(
-        "<<TABLE CELLBORDER=\"0\" CELLSPACING=\"0\" CELLPADDING=\"0\" style=\"rounded\"><tr><td CELLPADDING=\"4\" WIDTH=\"30\" HEIGHT=\"30\" colspan=\"{}\">{}</td></tr>{}</TABLE>>",
+        "<<TABLE BGCOLOR=\"white\" CELLBORDER=\"0\" CELLSPACING=\"0\" CELLPADDING=\"0\" style=\"rounded\"><tr><td CELLPADDING=\"4\" WIDTH=\"30\" HEIGHT=\"30\" colspan=\"{}\">{}</td></tr>{}</TABLE>>",
         n_args,
-        label,
+        Escape(&label),
         (if n_args == 0 {
             "".to_string()
         } else {
@@ -232,9 +248,45 @@ fn html_label(label: String, n_args: usize) -> String {
     )
 }
 fn subgraph_html_label(label: String) -> String {
-    format!("<<TABLE CELLBORDER=\"0\" CELLSPACING=\"0\" CELLPADDING=\"0\" border=\"0\"><tr><td><i>{}</i></td></tr></TABLE>>", label)
+    format!("<<TABLE CELLBORDER=\"0\" CELLSPACING=\"0\" CELLPADDING=\"0\" border=\"0\"><tr><td><i>{}</i></td></tr></TABLE>>", Escape(&label))
 }
 
 fn port_id(i: usize) -> String {
     format!("i{}", i)
+}
+
+// Copied from https://doc.rust-lang.org/stable/nightly-rustc/src/rustdoc/html/escape.rs.html#10
+
+/// Wrapper struct which will emit the HTML-escaped version of the contained
+/// string when passed to a format string.
+pub(crate) struct Escape<'a>(pub &'a str);
+
+impl<'a> fmt::Display for Escape<'a> {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Because the internet is always right, turns out there's not that many
+        // characters to escape: http://stackoverflow.com/questions/7381974
+        let Escape(s) = *self;
+        let pile_o_bits = s;
+        let mut last = 0;
+        for (i, ch) in s.char_indices() {
+            let s = match ch {
+                '>' => "&gt;",
+                '<' => "&lt;",
+                '&' => "&amp;",
+                '\'' => "&#39;",
+                '"' => "&quot;",
+                _ => continue,
+            };
+            fmt.write_str(&pile_o_bits[last..i])?;
+            fmt.write_str(s)?;
+            // NOTE: we only expect single byte characters here - which is fine as long as we
+            // only match single byte characters
+            last = i + 1;
+        }
+
+        if last < s.len() {
+            fmt.write_str(&pile_o_bits[last..])?;
+        }
+        Ok(())
+    }
 }
