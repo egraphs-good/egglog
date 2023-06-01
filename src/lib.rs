@@ -162,6 +162,7 @@ pub struct EGraph {
     pub(crate) proof_state: ProofState,
     functions: HashMap<Symbol, Function>,
     rulesets: HashMap<Symbol, HashMap<Symbol, Rule>>,
+    ruleset_iteration: HashMap<Symbol, usize>,
     proofs_enabled: bool,
     timestamp: u32,
     iteration: i64,
@@ -193,6 +194,7 @@ impl Default for EGraph {
             unionfind: Default::default(),
             functions: Default::default(),
             rulesets: Default::default(),
+            ruleset_iteration: Default::default(),
             proof_state: ProofState::default(),
             iteration: 0,
             match_limit: usize::MAX,
@@ -484,7 +486,7 @@ impl EGraph {
             NormSchedule::Repeat(limit, sched) => {
                 let mut report = RunReport::default();
                 for _i in 0..*limit {
-                    let rec = report.union(&self.run_schedule(sched));
+                    let rec = self.run_schedule(sched);
                     report = report.union(&rec);
                     if !rec.updated {
                         break;
@@ -513,50 +515,44 @@ impl EGraph {
         }
     }
 
-    pub fn run_rules(&mut self, config: &NormRunConfig) -> RunReport {
-        let NormRunConfig {
-            ruleset,
-            limit,
-            until,
-        } = config;
-        let mut report: RunReport = Default::default();
+    pub fn run_rules_once(&mut self, config: &NormRunConfig, report: &mut RunReport) {
+        let NormRunConfig { ruleset, until } = config;
 
         self.rebuild_nofail();
-        for i in 0..*limit {
-            if let Some(facts) = until {
-                if self.check_facts(facts).is_ok() {
-                    log::info!(
-                        "Breaking early at iteration {} because of facts:\n {}!",
-                        i,
-                        ListDisplay(facts, "\n")
-                    );
-                    break;
-                }
-            }
-
-            let subreport = self.step_rules(i, *ruleset);
-            report = report.union(&subreport);
-
-            let rebuild_start = Instant::now();
-            let updates = self.rebuild_nofail();
-            log::debug!("database size: {}", self.num_tuples());
-            log::debug!("Made {updates} updates (iteration {i})");
-            report.rebuild_time += rebuild_start.elapsed();
-            self.timestamp += 1;
-            if !subreport.updated {
-                log::info!("Breaking early at iteration {}!", i);
-                break;
-            }
-
-            if self.num_tuples() > self.node_limit {
-                log::warn!(
-                    "Node limit reached at iteration {}, {} nodes. Stopping!",
-                    i,
-                    self.num_tuples()
+        if let Some(facts) = until {
+            if self.check_facts(facts).is_ok() {
+                log::info!(
+                    "Breaking early because of facts:\n {}!",
+                    ListDisplay(facts, "\n")
                 );
-                break;
+                return;
             }
         }
+
+        let subreport = self.step_rules(*ruleset);
+        *report = report.union(&subreport);
+
+        let rebuild_start = Instant::now();
+        let updates = self.rebuild_nofail();
+        log::debug!("database size: {}", self.num_tuples());
+        log::debug!("Made {updates} updates)");
+        report.rebuild_time += rebuild_start.elapsed();
+        self.timestamp += 1;
+        if !subreport.updated {
+            log::info!("Breaking early!");
+            return;
+        }
+
+        if self.num_tuples() > self.node_limit {
+            log::warn!("Node limit reached, {} nodes. Stopping!", self.num_tuples());
+            return;
+        }
+    }
+
+    pub fn run_rules(&mut self, config: &NormRunConfig) -> RunReport {
+        let mut report: RunReport = Default::default();
+
+        self.run_rules_once(config, &mut report);
 
         // Report the worst offenders
         log::debug!("Slowest rules:\n{}", {
@@ -589,7 +585,7 @@ impl EGraph {
         report
     }
 
-    fn step_rules(&mut self, iteration: usize, ruleset: Symbol) -> RunReport {
+    fn step_rules(&mut self, ruleset: Symbol) -> RunReport {
         let mut report = RunReport::default();
 
         let ban_length = 5;
@@ -599,6 +595,8 @@ impl EGraph {
         }
         let mut rules: HashMap<Symbol, Rule> =
             std::mem::take(self.rulesets.get_mut(&ruleset).unwrap());
+        let mut iteration = *self.ruleset_iteration.entry(ruleset).or_default();
+        self.ruleset_iteration.insert(ruleset, iteration + 1);
         // TODO why did I have to copy the rules here for the first for loop?
         let copy_rules = rules.clone();
         let search_start = Instant::now();
@@ -888,20 +886,6 @@ impl EGraph {
                 check_proof(self);
                 "Checked proof.".into()
             }
-            NCommand::Simplify { var, config } => {
-                if should_run {
-                    let report = self.simplify(Expr::Var(var), &config)?;
-                    let res = format!(
-                        "Simplified with cost {} to {}",
-                        report.cost,
-                        report.termdag.to_string(&report.expr)
-                    );
-                    self.extract_report = Some(report);
-                    res
-                } else {
-                    "Skipping simplify.".into()
-                }
-            }
             NCommand::NormAction(action) => {
                 if should_run {
                     match &action {
@@ -1032,20 +1016,6 @@ impl EGraph {
         }
     }
 
-    fn simplify(&mut self, expr: Expr, config: &NormRunConfig) -> Result<ExtractReport, Error> {
-        self.push();
-        let (t, value) = self.eval_expr(&expr, None, true).unwrap();
-        self.run_report = Some(self.run_rules(config));
-        let mut termdag = TermDag::default();
-        let (cost, expr) = self.extract(value, &mut termdag, &t);
-        self.pop().unwrap();
-        Ok(ExtractReport {
-            cost,
-            expr,
-            variants: vec![],
-            termdag,
-        })
-    }
     // Extract an expression from the current state, returning the cost, the extracted expression and some number
     // of other variants, if variants is not zero.
     pub fn extract_expr(&mut self, e: Expr, num_variants: usize) -> Result<ExtractReport, Error> {

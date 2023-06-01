@@ -330,14 +330,9 @@ fn desugar_schedule(desugar: &mut Desugar, schedule: &Schedule) -> NormSchedule 
 }
 
 fn desugar_run_config(desugar: &mut Desugar, run_config: &RunConfig) -> NormRunConfig {
-    let RunConfig {
-        ruleset,
-        limit,
-        until,
-    } = run_config;
+    let RunConfig { ruleset, until } = run_config;
     NormRunConfig {
         ruleset: *ruleset,
-        limit: *limit,
         until: until.clone().map(|facts| flatten_facts(&facts, desugar)),
     }
 }
@@ -410,6 +405,28 @@ impl Default for Desugar {
     }
 }
 
+pub(crate) fn desugar_simplify(
+    desugar: &mut Desugar,
+    expr: &Expr,
+    schedule: &Schedule,
+) -> Vec<NCommand> {
+    let mut res = vec![NCommand::Push(1)];
+    let lhs = desugar.get_fresh();
+    res.extend(
+        flatten_actions(&vec![Action::Let(lhs, expr.clone())], desugar)
+            .into_iter()
+            .map(NCommand::NormAction),
+    );
+    res.push(NCommand::RunSchedule(desugar_schedule(desugar, schedule)));
+    res.push(NCommand::Extract {
+        var: lhs,
+        variants: 0,
+    });
+
+    res.push(NCommand::Pop(1));
+    res
+}
+
 pub(crate) fn desugar_calc(
     desugar: &mut Desugar,
     idents: Vec<IdentSort>,
@@ -438,11 +455,10 @@ pub(crate) fn desugar_calc(
 
         res.extend(
             desugar_command(
-                Command::Run(RunConfig {
+                Command::RunSchedule(Schedule::Saturate(Box::new(Schedule::Run(RunConfig {
                     ruleset: "".into(),
-                    limit: 1000000,
                     until: Some(vec![Fact::Eq(vec![expr1.clone(), expr2.clone()])]),
-                }),
+                })))),
                 desugar,
                 false,
                 seminaive_transform,
@@ -555,25 +571,7 @@ pub(crate) fn desugar_command(
                 .map(NCommand::NormAction)
                 .collect()
         }
-        Command::Run(config) => {
-            vec![NCommand::RunSchedule(NormSchedule::Run(
-                desugar_run_config(desugar, &config),
-            ))]
-        }
-        Command::Simplify { expr, config } => {
-            let fresh = desugar.get_fresh();
-            flatten_actions(&vec![Action::Let(fresh, expr)], desugar)
-                .into_iter()
-                .map(NCommand::NormAction)
-                .chain(
-                    vec![NCommand::Simplify {
-                        var: fresh,
-                        config: desugar_run_config(desugar, &config),
-                    }]
-                    .into_iter(),
-                )
-                .collect()
-        }
+        Command::Simplify { expr, schedule } => desugar_simplify(desugar, &expr, &schedule),
         Command::Calc(idents, exprs) => desugar_calc(desugar, idents, exprs, seminaive_transform),
         Command::RunSchedule(sched) => {
             vec![NCommand::RunSchedule(desugar_schedule(desugar, &sched))]

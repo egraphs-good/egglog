@@ -32,12 +32,3 @@
 
 (check (= addx2
           addx20))
-
-(function p1 () Proof__ :cost 100000000)
-
-(rule ((= addx2 addzerofront))
-      ((union rule-proof (p1))))
-(run 1)
-
-(run proof-extract__ 10000 :until (< (ProofCost__ (p1)) 1000000))
-(extract (p1))

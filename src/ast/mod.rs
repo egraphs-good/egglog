@@ -97,10 +97,6 @@ pub enum NCommand {
     },
     NormAction(NormAction),
     RunSchedule(NormSchedule),
-    Simplify {
-        var: Symbol,
-        config: NormRunConfig,
-    },
     Extract {
         variants: usize,
         var: Symbol,
@@ -150,10 +146,6 @@ impl NCommand {
             },
             NCommand::RunSchedule(schedule) => Command::RunSchedule(schedule.to_schedule()),
             NCommand::NormAction(action) => Command::Action(action.to_action()),
-            NCommand::Simplify { var, config } => Command::Simplify {
-                expr: Expr::Var(*var),
-                config: config.to_run_config(),
-            },
             NCommand::Extract { variants, var } => Command::Extract {
                 variants: *variants,
                 e: Expr::Var(*var),
@@ -199,7 +191,6 @@ impl NCommand {
                 rule: rule.map_exprs(f),
             },
             NCommand::NormAction(action) => NCommand::NormAction(action.map_exprs(f)),
-            NCommand::Simplify { .. } => self.clone(),
             NCommand::Extract { variants, var } => NCommand::Extract {
                 variants: *variants,
                 var: *var,
@@ -368,11 +359,10 @@ pub enum Command {
     Rewrite(Symbol, Rewrite),
     BiRewrite(Symbol, Rewrite),
     Action(Action),
-    Run(RunConfig),
     RunSchedule(Schedule),
     Simplify {
         expr: Expr,
-        config: RunConfig,
+        schedule: Schedule,
     },
     Calc(Vec<IdentSort>, Vec<Expr>),
     Extract {
@@ -421,7 +411,6 @@ impl ToSexp for Command {
                 None => list!("define", name, expr),
                 Some(cost) => list!("define", name, expr, ":cost", cost),
             },
-            Command::Run(config) => config.to_sexp(),
             Command::RunSchedule(sched) => list!("run-schedule", sched),
             Command::Calc(args, exprs) => list!("calc", list!(++ args), ++ exprs),
             Command::Extract { variants, e } => list!("extract", ":variants", variants, e),
@@ -435,10 +424,7 @@ impl ToSexp for Command {
             Command::Output { file, exprs } => list!("output", format!("\"{}\"", file), ++ exprs),
             Command::Fail(cmd) => list!("fail", cmd),
             Command::Include(file) => list!("include", format!("\"{}\"", file)),
-            Command::Simplify { expr, config } => match &config.until {
-                Some(until) => list!("simplify", config.limit, expr, ":until", ++ until),
-                None => list!("simplify", config.limit, expr),
-            },
+            Command::Simplify { expr, schedule } => list!("simplify", schedule, expr),
         }
     }
 }
@@ -489,7 +475,6 @@ impl Display for IdentSort {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct RunConfig {
     pub ruleset: Symbol,
-    pub limit: usize,
     pub until: Option<Vec<Fact>>,
 }
 
@@ -499,7 +484,6 @@ impl ToSexp for RunConfig {
         if self.ruleset != "".into() {
             res.push(Sexp::String(self.ruleset.to_string()));
         }
-        res.push(Sexp::String(self.limit.to_string()));
         if let Some(until) = &self.until {
             res.push(Sexp::String(":until".into()));
             res.extend(until.iter().map(|fact| fact.to_sexp()));
@@ -509,11 +493,9 @@ impl ToSexp for RunConfig {
     }
 }
 
-// TODO get rid of limit, just use Repeat
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct NormRunConfig {
     pub ruleset: Symbol,
-    pub limit: usize,
     pub until: Option<Vec<NormFact>>,
 }
 
@@ -521,7 +503,6 @@ impl NormRunConfig {
     pub fn to_run_config(&self) -> RunConfig {
         RunConfig {
             ruleset: self.ruleset,
-            limit: self.limit,
             until: self
                 .until
                 .as_ref()

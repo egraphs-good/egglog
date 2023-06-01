@@ -59,10 +59,10 @@ Command: Command = {
     "(" "define" <name:Ident> <expr:Expr> <cost:Cost> ")" => Command::Define { name, expr, cost },
     "(" "let" <name:Ident> <expr:Expr> ")" => Command::Action(Action::Let(name, expr)),
     <NonLetAction> => Command::Action(<>),
-    "(" "run" <limit:UNum>  <until:(":until" <(Fact)*>)?> ")" => Command::Run(RunConfig { ruleset: "".into(), limit, until }),
-    "(" "run" <ruleset: Ident> <limit:UNum> <until:(":until" <(Fact)*>)?> ")" => Command::Run(RunConfig { ruleset, limit, until }),
-    "(" "simplify"  <limit:UNum> <expr:Expr> <until:(":until" <(Fact)*>)?> ")" 
-        => Command::Simplify { expr, config : RunConfig { ruleset: "".into(), limit, until } },
+    "(" "run" <limit:UNum>  <until:(":until" <(Fact)*>)?> ")" => Command::RunSchedule(Schedule::Repeat(limit, Box::new(Schedule::Run(RunConfig { ruleset : "".into(), until })))),
+    "(" "run" <ruleset: Ident> <limit:UNum> <until:(":until" <(Fact)*>)?> ")" => Command::RunSchedule(Schedule::Repeat(limit, Box::new(Schedule::Run(RunConfig { ruleset, until })))),
+    "(" "simplify"  <schedule:Schedule> <expr:Expr> ")" 
+        => Command::Simplify { expr, schedule },
     "(" "add-ruleset" <name:Ident> ")" => Command::AddRuleset(name),
     "(" "calc" "(" <idents:IdentSort*> ")" <exprs:Expr+> ")" => Command::Calc(idents, exprs),
     "(" "extract" <variants:(":variants" <UNum>)?> <e:Expr> ")" => Command::Extract { e, variants: variants.unwrap_or(0) },
@@ -83,9 +83,10 @@ Schedule: Schedule = {
     "(" "saturate" <Schedule*> ")" => Schedule::Saturate(Box::new(Schedule::Sequence(<>))),
     "(" "seq" <Schedule*> ")" => Schedule::Sequence(<>),
     "(" "repeat" <limit:UNum> <scheds:Schedule*> ")" => Schedule::Repeat(limit, Box::new(Schedule::Sequence(scheds))),
-    "(" "run" <limit:UNum> <until:(":until" <(Fact)*>)?> ")" => Schedule::Run(RunConfig { ruleset: "".into(), limit, until }),
-    "(" "run" <ruleset: Ident> <limit:UNum>  <until:(":until" <(Fact)*>)?> ")" => Schedule::Run(RunConfig { ruleset, limit, until }),
-    <ident:Ident> => Schedule::Run(RunConfig { ruleset: ident, limit: 1, until: None }),
+    "(" "run" <until:(":until" <(Fact)*>)?> ")" => 
+    Schedule::Run(RunConfig { ruleset: "".into(), until }),
+    "(" "run" <ruleset: Ident> <until:(":until" <(Fact)*>)?> ")" => Schedule::Run(RunConfig { ruleset, until }),
+    <ident:Ident> => Schedule::Run(RunConfig { ruleset: ident, until: None }),
 }
 
 Cost: Option<usize> = {

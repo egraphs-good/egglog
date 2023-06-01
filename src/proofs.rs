@@ -216,12 +216,10 @@ impl ProofState {
             Schedule::Saturate(Box::new(Schedule::Run(RunConfig {
                 ruleset: "parent__".into(),
                 until: None,
-                limit: 1,
             }))),
             Schedule::Saturate(Box::new(Schedule::Run(RunConfig {
                 ruleset: "rebuilding__".into(),
                 until: None,
-                limit: 1,
             }))),
         ])))
     }
@@ -232,7 +230,6 @@ impl ProofState {
                 self.rebuild(),
                 Schedule::Run(RunConfig {
                     ruleset: run_config.ruleset,
-                    limit: run_config.limit,
                     until: run_config
                         .until
                         .as_ref()

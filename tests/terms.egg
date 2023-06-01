@@ -54,7 +54,7 @@
 (set (Parent (Const 1)) (Const 1))
 (set (Parent (Const 2)) (Const 2))
 (run-schedule
- (repeat 10 (saturate parent) (saturate rebuilding) (saturate (run 1))))
+ (repeat 10 (saturate parent) (saturate rebuilding) (saturate (run))))
 (run-schedule (saturate parent))
 (run-schedule (saturate rebuilding))
 (let b (Add (Const 2) (Const 1)))
