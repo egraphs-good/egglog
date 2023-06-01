@@ -1165,6 +1165,7 @@ impl EGraph {
             self.test_proofs,
             self.seminaive,
         )?;
+        //eprintln!("desugared: {}", ListDisplay(&program_desugared, "\n"));
 
         let type_info_before = self.proof_state.type_info.clone();
         self.proof_state

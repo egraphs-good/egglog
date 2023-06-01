@@ -142,7 +142,9 @@ fn flatten_equalities(equalities: Vec<(Symbol, Expr)>, desugar: &mut Desugar) ->
     let mut constraints: Vec<(Symbol, Symbol)> = Default::default();
 
     for (lhs, rhs) in equalities {
-        if desugar.global_variables.contains(&lhs) || bound_variables.contains(&lhs) {
+        if desugar.global_variables.contains(&lhs)
+            || bound_variables.contains(&lhs) && !rhs.is_var()
+        {
             let fresh = desugar.get_fresh();
             expr_to_ssa(
                 fresh,
