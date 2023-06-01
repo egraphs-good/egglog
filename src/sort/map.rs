@@ -62,8 +62,7 @@ impl Sort for MapSort {
         self.key.is_eq_sort() || self.value.is_eq_sort()
     }
 
-
-    fn inner_values(&self, value: &Value) -> Vec<(&ArcSort, Value)>   {
+    fn inner_values(&self, value: &Value) -> Vec<(&ArcSort, Value)> {
         let maps = self.maps.lock().unwrap();
         let map = maps.get_index(value.bits as usize).unwrap();
         let mut result = Vec::new();
@@ -73,7 +72,6 @@ impl Sort for MapSort {
         }
         result
     }
-
 
     fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
         let maps = self.maps.lock().unwrap();

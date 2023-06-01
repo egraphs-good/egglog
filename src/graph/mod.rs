@@ -24,7 +24,7 @@ pub(crate) struct ExportedValueWithSort(ExportedValue, String);
 #[derive(Debug, Hash, Clone, PartialEq, Eq)]
 pub(crate) enum ExportedValue {
     /// A primitive value, i.e. int, float, String
-    Prim (String),
+    Prim(String),
     /// A container sort, i.e. Vec, Map, Set
     Container {
         name: String,

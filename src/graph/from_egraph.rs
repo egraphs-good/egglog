@@ -1,5 +1,5 @@
 use super::*;
-use crate::{ast::Id, function::table::hash_values, EGraph, Value, ArcSort};
+use crate::{ast::Id, function::table::hash_values, ArcSort, EGraph, Value};
 
 pub(crate) fn graph_from_egraph(egraph: &EGraph) -> ExportedGraph {
     let mut calls = ExportedGraph::default();
