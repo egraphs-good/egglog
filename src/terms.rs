@@ -302,6 +302,10 @@ impl ProofState {
                 NCommand::RunSchedule(schedule) => {
                     res.push(Command::RunSchedule(self.instrument_schedule(schedule)));
                 }
+                NCommand::Extract { variants, var } => {
+                    //res.extend(self.desugar_extract(variants, expr));
+                    res.push(command.to_command());
+                }
                 _ => {
                     res.push(command.to_command());
                 }
@@ -309,6 +313,32 @@ impl ProofState {
         }
 
         res
+    }
+
+    fn desugar_extract(&mut self, variants: usize, expr: Expr) -> Vec<Command> {
+        // TODO handle variants
+        let mut res = vec![Command::Push(1)];
+        let lhs = self.get_fresh();
+        res.push(Command::Action(Action::Let(lhs, expr)));
+
+        /*for (sort, _) in self.type_info.sorts {
+          res.push(format!("(function {} ({sort}) {sort}"
+        }*/
+
+        res.push(Command::Pop(1));
+        res
+    }
+
+    fn best_of_name(&self, sort: Symbol) -> String {
+        format!(
+            "{}_BestOf{}",
+            sort,
+            "_".repeat(self.desugar.number_underscores)
+        )
+    }
+
+    fn get_fresh(&mut self) -> Symbol {
+        self.desugar.get_fresh()
     }
 
     fn parent_ruleset_name(&self) -> Symbol {
