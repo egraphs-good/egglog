@@ -12,9 +12,14 @@ use graphviz_rust::{
     },
 };
 
-/// Implement conversion of Graph to graphviz Graph
-/// Places all equivalent nodes in the same cluster
-/// For e-nodes these are are all in the same e-class
+/// Creates a graphviz graph from an exported graph
+///
+/// Each function call is a node, and each edge is an argument to the function
+/// e-classes are grouped in clusters
+/// values are also nodes, and are grouped together in a cluster with functions that return that value.
+/// (except for unit values which are not shown as nodes and each exist in their own cluster)
+///
+/// Each cluster is also labeled with the sort of the values it contains and colored by the sort
 pub(crate) fn to_graphviz(g: ExportedGraph) -> Graph {
     GraphExporter::new(g).into_graphviz()
 }
@@ -56,6 +61,7 @@ impl GraphExporter {
             ],
             ..Self::default()
         };
+        // Store what nodes are in each e-class, so we can create edges to them
         for call in g.iter() {
             if let ExportedValue::EClass(id) = call.output.0 {
                 let node_id = format!("{}_{}", call.fn_name, call.input_hash);
@@ -82,7 +88,7 @@ impl GraphExporter {
             exporter.add_value(&output);
             // Add edges from function node to input nodes
             for (i, input) in inputs.into_iter().enumerate() {
-                exporter.add_edge(fn_id.clone(), i, &input.0);
+                exporter.add_edge(fn_id.clone(), i, &input);
                 exporter.add_value(&input);
             }
         }
@@ -104,7 +110,7 @@ impl GraphExporter {
                     self.add_node(&value, value_id.clone(), name.to_string(), inner.len());
                     for (i, inner_value) in inner.iter().enumerate() {
                         self.add_value(inner_value);
-                        self.add_edge(value_id.clone(), i, &inner_value.0);
+                        self.add_edge(value_id.clone(), i, inner_value);
                     }
                 }
             }
@@ -154,7 +160,8 @@ impl GraphExporter {
     }
 
     fn add_value(&mut self, value: &ExportedValueWithSort) {
-        if !self.added_value.contains(value) {
+        // Don't add nodes for unit values, since they only show up in return types and is redundant with sort
+        if !self.added_value.contains(value) && value.1 != "Unit" {
             self.values_to_add.push_back(value.clone());
             self.added_value.insert(value.clone());
             self.sorts.insert(value.1.clone());
@@ -170,7 +177,7 @@ impl GraphExporter {
     ) {
         let entry = self
             .subgraph_to_node_to_label
-            .entry(subgraph_id(&subgraph_value_and_sort.0))
+            .entry(subgraph_id(subgraph_value_and_sort, node_id.clone()))
             .or_default();
         entry.0 = subgraph_value_and_sort.1.to_string();
         self.sorts.insert(entry.0.to_string());
@@ -193,25 +200,32 @@ impl GraphExporter {
         &mut self,
         source_node_id: String,
         source_index: usize,
-        target_value: &ExportedValue,
+        target_value: &ExportedValueWithSort,
     ) {
-        let source = node_id!(quote(source_node_id), port!(id!(port_id(source_index))));
-        let target = node_id!(quote(self.gen_value_id(target_value)));
-        let target_subgraph_id = subgraph_id(target_value);
+        let source = node_id!(quote(source_node_id.clone()), port!(id!(port_id(source_index))));
+        let target = node_id!(quote(self.gen_value_id(&target_value.0)));
+        let target_subgraph_id = subgraph_id(
+            target_value,
+            format!("from_{}_{}", source_node_id, source_index),
+        );
         let edge = edge!(source => target; EdgeAttributes::lhead(target_subgraph_id));
         self.statements.push(stmt!(edge));
     }
 }
 
-fn subgraph_id(exported_value: &ExportedValue) -> String {
-    quote(match exported_value {
-        ExportedValue::EClass(eclass_id) => format!("cluster_eclass_{}", eclass_id),
-        ExportedValue::Prim(p) => format!("cluster_prim_{}", p),
-        ExportedValue::Container {
-            name,
-            inner: _,
-            inner_hash,
-        } => format!("cluster_container_{}_{}", name, inner_hash),
+fn subgraph_id(exported_value: &ExportedValueWithSort, path: String) -> String {
+    quote(if exported_value.1 == "Unit" {
+        format!("cluster_{}", path)
+    } else {
+        match &exported_value.0 {
+            ExportedValue::EClass(eclass_id) => format!("cluster_eclass_{}", eclass_id),
+            ExportedValue::Prim(p) => format!("cluster_prim_{}", p),
+            ExportedValue::Container {
+                name,
+                inner: _,
+                inner_hash,
+            } => format!("cluster_container_{}_{}", name, inner_hash),
+        }
     })
 }
 
