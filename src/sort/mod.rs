@@ -62,7 +62,7 @@ pub trait Sort: Any + Send + Sync + Debug {
     /// Only eq_container_sort need to implement this method,
     fn inner_values(&self, value: &Value) -> Vec<(&ArcSort, Value)> {
         let _ = value;
-        unreachable!();
+        vec![]
     }
 
     fn register_primitives(self: Arc<Self>, info: &mut TypeInfo) {

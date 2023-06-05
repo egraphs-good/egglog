@@ -23,14 +23,8 @@ pub(crate) struct ExportedValueWithSort(ExportedValue, String);
 /// An argument is either a primitive value or a reference to a eclass
 #[derive(Debug, Hash, Clone, PartialEq, Eq)]
 pub(crate) enum ExportedValue {
-    /// A primitive value, i.e. int, float, String
-    Prim(String),
-    /// A container sort, i.e. Vec, Map, Set
-    Container {
-        name: String,
-        inner: Vec<ExportedValueWithSort>,
-        inner_hash: Hash,
-    },
+    /// A primitive value,, i.e. int, float, String, Vec, Map, Set
+    Prim(String, Vec<ExportedValueWithSort>, Hash),
     /// A reference to an eclass
     EClass(EClassID),
 }

@@ -45,23 +45,25 @@ fn export_value(egraph: &EGraph, value: Value, sort: &ArcSort) -> ExportedValue 
         let id = value.bits as usize;
         let canonical: usize = egraph.unionfind.find(Id::from(id)).into();
         ExportedValue::EClass(canonical)
-    } else if sort.is_container_sort() {
-        let inner: Vec<Value> = sort
+    } else {
+        let inner_values: Vec<Value> = sort
             .inner_values(&value)
             .into_iter()
             .map(|(_, v)| v)
             .collect();
 
-        ExportedValue::Container {
-            name: sort.name().to_string(),
-            inner: inner
-                .iter()
-                .map(|v| export_value_with_sort(egraph, *v))
-                .collect(),
-            inner_hash: hash_values(&inner),
-        }
-    } else {
-        let expr = sort.make_expr(egraph, value);
-        ExportedValue::Prim(expr.to_string())
+        // If this is a container sort, we just need to print the name
+        // Otherwise, we need to print the value
+        let str = if sort.is_container_sort() {
+            sort.name().to_string()
+        } else {
+            sort.make_expr(egraph, value).to_string()
+        };
+        let inner_hash = hash_values(&inner_values);
+        let inner_with_sorts = inner_values
+            .into_iter()
+            .map(|v| export_value_with_sort(egraph, v))
+            .collect();
+        ExportedValue::Prim(str, inner_with_sorts, inner_hash)
     }
 }

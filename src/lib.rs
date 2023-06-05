@@ -1225,7 +1225,7 @@ impl EGraph {
 
     /// Exports the egraph as a Graphviz dot string
     pub fn to_graphviz_string(&self) -> String {
-        to_graphviz(graph_from_egraph(self))
+        to_graphviz(&graph_from_egraph(self))
             .print(&mut graphviz_rust::printer::PrinterContext::default())
     }
 
