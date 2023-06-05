@@ -172,7 +172,8 @@ fn build_graph(nodes: Nodes, edges: Edges, sort_colors: &SortColors) -> Graph {
         let quoted_subgraph_id = quote(&subgraph_id);
         let subgraph_stmts = nodes.into_iter().map(|s| stmt!(s)).collect();
         let s = stmt!(subgraph!(quoted_subgraph_id;
-            NodeAttributes::label(subgraph_html_label(&sort)),
+            // Disable label for now, to reduce size
+            // NodeAttributes::label(subgraph_html_label(&sort)),
             attr!("fillcolor", color),
             GA::Graph(vec![GraphAttributes::style(quote(subgraph_style))]),
             subgraph!("", subgraph_stmts)
@@ -235,9 +236,9 @@ fn html_label(label: &str, n_args: usize) -> String {
         })
     )
 }
-fn subgraph_html_label(label: &str) -> String {
-    format!("<<TABLE CELLBORDER=\"0\" CELLSPACING=\"0\" CELLPADDING=\"0\" border=\"0\"><tr><td><i>{}</i></td></tr></TABLE>>", Escape(label))
-}
+// fn subgraph_html_label(label: &str) -> String {
+//     format!("<<TABLE CELLBORDER=\"0\" CELLSPACING=\"0\" CELLPADDING=\"0\" border=\"0\"><tr><td><i>{}</i></td></tr></TABLE>>", Escape(label))
+// }
 
 fn port_id(i: usize) -> String {
     format!("i{}", i)
