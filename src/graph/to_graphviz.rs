@@ -94,7 +94,10 @@ impl SubgraphBuilder {
             ExportedValue::Prim(name, inner, _) => {
                 let subgraph_id = format!("cluster_{}", function_node_id);
                 let value_node_id = format!("{}_value", function_node_id);
-                nodes.push(self.add_node(&value_node_id, name, inner));
+                // Add the function return value, unless it's a unit sort
+                if sort != "Unit" {
+                    nodes.push(self.add_node(&value_node_id, name, inner));
+                }
                 self.add_value_subgraph(&subgraph_id, sort, nodes);
             }
         };
@@ -129,7 +132,7 @@ impl SubgraphBuilder {
             };
             let target = node_id!(quote(&child_node_id));
             self.edges
-                .push(edge!(source => target; EdgeAttributes::lhead(child_subgraph_id)));
+                .push(edge!(source => target; EdgeAttributes::lhead(quote(&child_subgraph_id))));
         }
         node!(quoted_node_id;NodeAttributes::label(html_label))
     }
