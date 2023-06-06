@@ -73,6 +73,24 @@ impl Sort for MapSort {
         result
     }
 
+    fn foreach_tracked_values<'a>(&'a self, value: &'a Value, mut f: Box<dyn FnMut(Value) + 'a>) {
+        // TODO: Potential duplication of code
+        let maps = self.maps.lock().unwrap();
+        let map = maps.get_index(value.bits as usize).unwrap();
+
+        if self.key.is_eq_sort() {
+            for key in map.keys() {
+                f(*key)
+            }
+        }
+
+        if self.value.is_eq_sort() {
+            for value in map.values() {
+                f(*value)
+            }
+        }
+    }
+
     fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
         let maps = self.maps.lock().unwrap();
         let map = maps.get_index(value.bits as usize).unwrap();
