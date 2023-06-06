@@ -33,10 +33,10 @@ ${DIST_WASM}: ${RUST_SRC}
 	wasm-pack build web-demo --target no-modules --no-typescript --out-dir ${WWW}
 	rm -f ${WWW}/{.gitignore,package.json}
 
-graphs: $(patsubst %.egg,%.svg,$(filter-out tests//fail-typecheck/% tests//cykjson.egg, ${TESTS}))
+graphs: $(patsubst %.egg,%.svg,$(shell find tests -type f -name '*.egg' -not -name '*cykjson*' -not -name '*unbound.egg'))
 
 %.svg: %.egg
-	cargo run -- --save-dot --save-svg  $^
+	cargo run --release -- --save-dot --save-svg  $^
 
 rm-graphs:
 	rm -f tests/*.dot tests/*.svg

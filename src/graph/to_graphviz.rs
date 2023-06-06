@@ -109,9 +109,9 @@ impl SubgraphBuilder {
 
     /// Adds a node with some children
     fn add_node(&mut self, node_id: &str, label: &str, children: &[ExportedValueWithSort]) -> Node {
-        let html_label = html_label(label, children.len());
         let quoted_node_id = quote(node_id);
-        for (i, value) in children.iter().enumerate() {
+        let mut i = 0;
+        for value in children {
             let source = node_id!(quote(node_id), port!(id!(port_id(i))));
             self.sorts.insert(value.1.clone());
             let (child_node_id, child_subgraph_id) = match &value.0 {
@@ -120,7 +120,12 @@ impl SubgraphBuilder {
                 ExportedValue::EClass(e_class_id) => {
                     let node_ids = self.eclasses.entry(*e_class_id).or_default();
                     // Lookup the first node id for this eclass id
-                    let node_id = node_ids.front().unwrap().clone();
+                    let node_id = match node_ids.front() {
+                        Some(node_id) => node_id.to_string(),
+                        // If this node id doesn't exist, this is because we have not included all calls in the graph
+                        // so skip adding this edge
+                        None => continue,
+                    };
                     // Rotate the node ids so that we can point to different ones each time for better graph layout
                     node_ids.rotate_left(1);
                     (node_id, format!("cluster_{}", e_class_id))
@@ -137,7 +142,9 @@ impl SubgraphBuilder {
             let target = node_id!(quote(&child_node_id));
             self.edges
                 .push(edge!(source => target; EdgeAttributes::lhead(quote(&child_subgraph_id))));
+            i += 1;
         }
+        let html_label = html_label(label, i);
         node!(quoted_node_id;NodeAttributes::label(html_label))
     }
 
@@ -219,7 +226,6 @@ fn configuration_statements() -> Vec<Stmt> {
         ])),
         // Draw edges first, so that they are behind nodes
         stmt!(GraphAttributes::outputorder(outputorder::edgesfirst)),
-        stmt!(GraphAttributes::concentrate(true)),
     ]
 }
 

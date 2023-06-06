@@ -1,21 +1,29 @@
 use super::*;
 use crate::{ast::Id, function::table::hash_values, ArcSort, EGraph, Value};
 
+// Limit the number of functions and calls to avoid blowing up the size of the graph
+
+const MAX_FUNCTIONS: usize = 40;
+const MAX_CALLS_PER_FUNCTION: usize = 40;
+
 pub(crate) fn graph_from_egraph(egraph: &EGraph) -> ExportedGraph {
     let mut calls = ExportedGraph::default();
-    for (_id, function) in egraph.functions.iter() {
-        let name = function.decl.name.to_string();
-        // Skip temporary names
-        if is_temp_name(name.clone()) {
-            continue;
-        }
-        for (input, output) in function.nodes.vals.iter() {
-            if !input.live() {
-                continue;
-            }
+    for function in egraph
+        .functions
+        .values()
+        .filter(|f| !is_temp_name(f.decl.name.to_string()))
+        .take(MAX_FUNCTIONS)
+    {
+        for (input, output) in function
+            .nodes
+            .vals
+            .iter()
+            .filter(|(i, _)| i.live())
+            .take(MAX_CALLS_PER_FUNCTION)
+        {
             let input_values = input.data();
             let fn_call = ExportedCall {
-                fn_name: name.clone(),
+                fn_name: function.decl.name.to_string(),
                 inputs: input_values
                     .iter()
                     .map(|v| export_value_with_sort(egraph, *v))
