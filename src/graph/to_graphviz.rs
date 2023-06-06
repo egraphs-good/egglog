@@ -14,8 +14,8 @@ use graphviz_rust::{
 
 /// Mapping from e-class id to the ID of the node representing particular function call
 type EClasses = HashMap<EClassID, VecDeque<String>>;
-/// Mapping from subgraph id to the sort, whether it's an e-class, and the nodes in the subgraph
-type Nodes = HashMap<String, (String, bool, Vec<Node>)>;
+/// Mapping from whether it's an e-class -> sort -> subgraph id -> the nodes in the subgraph
+type Nodes = HashMap<bool, HashMap<String, HashMap<String, Vec<Node>>>>;
 type Edges = Vec<Edge>;
 
 /// Set of all sorts
@@ -86,10 +86,14 @@ impl SubgraphBuilder {
         match &call.output.0 {
             ExportedValue::EClass(eclass_id) => {
                 let subgraph_id = format!("cluster_{}", eclass_id);
-                let subgraph_entry = self.nodes.entry(subgraph_id).or_default();
-                subgraph_entry.1 = true;
-                subgraph_entry.0 = sort.to_string();
-                subgraph_entry.2.extend(nodes);
+                self.nodes
+                    .entry(true)
+                    .or_default()
+                    .entry(sort.to_string())
+                    .or_default()
+                    .entry(subgraph_id)
+                    .or_default()
+                    .extend(nodes);
             }
             ExportedValue::Prim(name, inner, _) => {
                 let subgraph_id = format!("cluster_{}", function_node_id);
@@ -139,14 +143,17 @@ impl SubgraphBuilder {
 
     /// Adds a new subgraph, panics if it already exists. Used for values
     fn add_value_subgraph(&mut self, subgraph_id: &str, sort: &str, nodes: Vec<Node>) {
-        let is_eclass = false;
-        if self.nodes.contains_key(subgraph_id) {
-            panic!("Subgraph already exists")
+        let subgraphs = self
+            .nodes
+            .entry(false)
+            .or_default()
+            .entry(sort.to_string())
+            .or_default();
+
+        if subgraphs.contains_key(subgraph_id) {
+            panic!("Subgraph already exists");
         }
-        self.nodes.insert(
-            subgraph_id.to_string(),
-            (sort.to_string(), is_eclass, nodes),
-        );
+        subgraphs.insert(subgraph_id.to_string(), nodes);
     }
 }
 
@@ -160,25 +167,34 @@ fn build_colors(sorts: &Sorts) -> SortColors {
 
 fn build_graph(nodes: Nodes, edges: Edges, sort_colors: &SortColors) -> Graph {
     let mut stmts = configuration_statements();
-    for (subgraph_id, (sort, is_eclass, nodes)) in nodes {
+    // Iterate through the hierarchy of nodes.
+    // In graphviz, config applies to any later nodes, so we can add the config for styling eclasses/prims and different
+    // sorts only once before outputing all the cluster
+    for (is_eclass, sorts_to_subgraphs) in nodes {
         let subgraph_style = if is_eclass {
             "dashed,rounded,filled"
         } else {
             "dotted,rounded,filled"
         };
-        let color = sort_colors[&sort];
-        // Nest in empty sub-graph so that we can use rank=same
-        // https://stackoverflow.com/a/55562026/907060
-        let quoted_subgraph_id = quote(&subgraph_id);
-        let subgraph_stmts = nodes.into_iter().map(|s| stmt!(s)).collect();
-        let s = stmt!(subgraph!(quoted_subgraph_id;
-            // Disable label for now, to reduce size
-            // NodeAttributes::label(subgraph_html_label(&sort)),
-            attr!("fillcolor", color),
-            GA::Graph(vec![GraphAttributes::style(quote(subgraph_style))]),
-            subgraph!("", subgraph_stmts)
-        ));
-        stmts.push(s);
+        stmts.push(stmt!(GA::Graph(vec![GraphAttributes::style(quote(
+            subgraph_style
+        ))])));
+        for (sort, subgraphs) in sorts_to_subgraphs {
+            let color = sort_colors[&sort];
+            stmts.push(stmt!(attr!("fillcolor", color)));
+            for (subgraph_id, nodes) in subgraphs {
+                // Nest in empty sub-graph so that we can use rank=same
+                // https://stackoverflow.com/a/55562026/907060
+                let quoted_subgraph_id = quote(&subgraph_id);
+                let subgraph_stmts = nodes.into_iter().map(|s| stmt!(s)).collect();
+                let s = stmt!(subgraph!(quoted_subgraph_id;
+                    // Disable label for now, to reduce size
+                    // NodeAttributes::label(subgraph_html_label(&sort)),
+                    subgraph!("", subgraph_stmts)
+                ));
+                stmts.push(s);
+            }
+        }
     }
     stmts.extend(edges.into_iter().map(|s| stmt!(s)));
     graph!(di id!(), stmts)
