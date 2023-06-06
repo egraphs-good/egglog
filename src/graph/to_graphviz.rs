@@ -214,7 +214,8 @@ fn configuration_statements() -> Vec<Stmt> {
         stmt!(GA::Edge(vec![EdgeAttributes::arrowsize(0.5)])),
         stmt!(GA::Node(vec![
             NodeAttributes::shape(shape::none),
-            NodeAttributes::margin(0.0)
+            NodeAttributes::margin(0.0),
+            NodeAttributes::fontname("helvetica".to_string())
         ])),
         // Draw edges first, so that they are behind nodes
         stmt!(GraphAttributes::outputorder(outputorder::edgesfirst)),
