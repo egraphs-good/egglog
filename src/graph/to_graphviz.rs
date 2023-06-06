@@ -218,6 +218,7 @@ fn configuration_statements() -> Vec<Stmt> {
         ])),
         // Draw edges first, so that they are behind nodes
         stmt!(GraphAttributes::outputorder(outputorder::edgesfirst)),
+        stmt!(GraphAttributes::concentrate(true)),
     ]
 }
 
