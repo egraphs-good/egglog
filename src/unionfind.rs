@@ -12,7 +12,7 @@ use std::mem;
 #[derive(Debug, Clone, Default)]
 #[cfg_attr(feature = "serde-1", derive(serde::Serialize, serde::Deserialize))]
 pub struct UnionFind {
-    pub(crate) parents: Vec<Cell<Id>>,
+    parents: Vec<Cell<Id>>,
     n_unions: usize,
     recent_ids: HashMap<Symbol, Vec<Id>>,
     staged_ids: HashMap<Symbol, Vec<Id>>,

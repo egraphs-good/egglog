@@ -160,7 +160,7 @@ pub struct EGraph {
     pub(crate) proof_state: ProofState,
     functions: HashMap<Symbol, Function>,
     rulesets: HashMap<Symbol, HashMap<Symbol, Rule>>,
-    pub(crate) proofs_enabled: bool,
+    proofs_enabled: bool,
     timestamp: u32,
     pub test_proofs: bool,
     pub match_limit: usize,
