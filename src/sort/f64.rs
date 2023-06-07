@@ -42,6 +42,7 @@ impl Sort for F64Sort {
 
         add_primitives!(eg, "min" = |a: f64, b: f64| -> f64 { a.min(b) }); 
         add_primitives!(eg, "max" = |a: f64, b: f64| -> f64 { a.max(b) });
+        add_primitives!(eg, "abs" = |a: f64| -> f64 { a.abs() });
     }
 
     fn make_expr(&self, _egraph: &EGraph, value: Value) -> Expr {
