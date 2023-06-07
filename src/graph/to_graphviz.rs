@@ -110,8 +110,7 @@ impl SubgraphBuilder {
     /// Adds a node with some children
     fn add_node(&mut self, node_id: &str, label: &str, children: &[ExportedValueWithSort]) -> Node {
         let quoted_node_id = quote(node_id);
-        let mut i = 0;
-        for value in children {
+        for (i, value) in children.iter().enumerate() {
             let source = node_id!(quote(node_id), port!(id!(port_id(i))));
             self.sorts.insert(value.1.clone());
             let (child_node_id, child_subgraph_id) = match &value.0 {
@@ -142,9 +141,8 @@ impl SubgraphBuilder {
             let target = node_id!(quote(&child_node_id));
             self.edges
                 .push(edge!(source => target; EdgeAttributes::lhead(quote(&child_subgraph_id))));
-            i += 1;
         }
-        let html_label = html_label(label, i);
+        let html_label = html_label(label, children.len());
         node!(quoted_node_id;NodeAttributes::label(html_label))
     }
 
