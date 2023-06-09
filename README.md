@@ -6,7 +6,8 @@
     <img alt="Main Branch Documentation" src="https://img.shields.io/badge/docs-main-blue"></a>
 
 This is repo for the `egglog` tool accompanying the paper
-  ["Better Together: Unifying Datalog and Equality Saturation"](https://arxiv.org/abs/2304.04332).
+  "Better Together: Unifying Datalog and Equality Saturation"
+  ([ACM DL](https://dl.acm.org/doi/10.1145/3591239), [arXiv](https://arxiv.org/abs/2304.04332)).
 
 If you use this work, please use [this citation](./CITATION.bib). 
 
