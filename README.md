@@ -11,18 +11,6 @@ This is repo for the `egglog` tool accompanying the paper
 
 If you use this work, please use [this citation](./CITATION.bib). 
 
-## Background
-
-See this presentation for background information:
-
-https://youtu.be/dbgZJyw3hnk?t=3983
-
-with this paper to go along:
-
-https://effect.systems/doc/pldi-2022-egraphs/abstract.pdf
-
-Also see papers about egglog.
-
 See also the Python binding, which provides a bit more documentation:
 https://egglog-python.readthedocs.io/en/latest/
 
