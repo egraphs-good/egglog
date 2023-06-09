@@ -1,4 +1,4 @@
-.PHONY: all web test serve
+.PHONY: all web test nits serve
 
 RUST_SRC=$(shell find -type f -wholename '*/src/*.rs' -or -name 'Cargo.toml')
 TESTS=$(shell find tests/ -type f -name '*.egg' -not -name '*repro-*')
@@ -10,10 +10,12 @@ WEB_SRC=$(wildcard web-demo/static/*)
 WASM=web_demo.js web_demo_bg.wasm
 DIST_WASM=$(addprefix ${WWW}, ${WASM})
 
-all: test web
+all: test nits web
 
 test:
 	cargo test --release -- -Zunstable-options --report-time
+
+nits:
 	@rustup component add clippy
 	cargo clippy --tests -- -D warnings
 	@rustup component add rustfmt
@@ -22,6 +24,7 @@ test:
 web: ${DIST_WASM} ${WEB_SRC} ${WWW}/examples.json
 	mkdir -p ${WWW}
 	cp ${WEB_SRC} ${WWW}
+	find target -name .gitignore -delete  # ignored files are wonky to deploy
 
 serve: 
 	cargo watch --shell "make web && python3 -m http.server 8080 -d ${WWW}"
