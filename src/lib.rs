@@ -334,6 +334,7 @@ impl EGraph {
             MergeFn::Expr(e) => Some(e.clone()),
             MergeFn::AssertEq | MergeFn::Union => None,
         };
+
         for (inputs, old, new) in merges {
             if let Some(prog) = function.merge.on_merge.clone() {
                 self.run_actions(&mut stack, &[*old, *new], &prog, true)

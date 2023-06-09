@@ -79,8 +79,8 @@ impl CompositeColumnIndex {
     }
 
     pub(crate) fn add(&mut self, v: Value, i: usize) {
-        if let Some(i) = self.0.iter().position(|index| index.sort() == v.tag) {
-            (self.0)[i].add(v, i);
+        if let Some(index) = self.0.iter().position(|index| index.sort() == v.tag) {
+            (self.0)[index].add(v, i);
         } else {
             let mut index = ColumnIndex::new(v.tag);
             index.add(v, i);
