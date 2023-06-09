@@ -1,4 +1,4 @@
-name: Deploy Web Demo
+name: Deploy Web Demo and Docs
 
 on: [push, pull_request]
 
