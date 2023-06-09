@@ -1,6 +1,9 @@
 # egglog
 
-Try the [web demo](https://egraphs-good.github.io/egglog)!
+<a href="https://egraphs-good.github.io/egglog/docs/egg_smol">
+    <img alt="Web Demo" src="https://img.shields.io/badge/-web demo-blue"></a>
+<a href="https://egraphs-good.github.io/egglog/docs/egg_smol">
+    <img alt="Main Branch Documentation" src="https://img.shields.io/badge/docs-main-blue"></a>
 
 This is repo for the `egglog` tool accompanying the paper
   ["Better Together: Unifying Datalog and Equality Saturation"](https://arxiv.org/abs/2304.04332).
