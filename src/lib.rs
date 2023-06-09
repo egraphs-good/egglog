@@ -794,7 +794,7 @@ impl EGraph {
                 pre_rebuild.elapsed().as_millis()
             );
         }
-        Ok(match command {
+        let res = Ok(match command {
             NCommand::SetOption { name, value } => {
                 let str = format!("Set option {} to {}", name, value);
                 self.set_option(name.into(), value);
@@ -878,7 +878,7 @@ impl EGraph {
                             self.eval_actions(std::slice::from_ref(&action.to_action()))?;
                         }
                     }
-                    format!("Run {action}.")
+                    "".to_string()
                 } else {
                     format!("Skipping running {action}.")
                 }
@@ -981,7 +981,9 @@ impl EGraph {
 
                 format!("Output to '{filename:?}'.")
             }
-        })
+        });
+        log::logger().flush();
+        res
     }
 
     pub fn clear(&mut self) {
@@ -1177,7 +1179,9 @@ impl EGraph {
             // because push and pop create new scopes
             for processed in self.process_command(command)? {
                 let msg = self.run_command(processed.command, should_run)?;
-                log::info!("{}", msg);
+                if !msg.is_empty() {
+                    log::info!("{}", msg);
+                }
                 msgs.push(msg);
             }
         }
