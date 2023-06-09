@@ -6,11 +6,11 @@ const { exec } = require('node:child_process');
 * @param {vscode.ExtensionContext} context
 */
 function activate(context) {
-	eggsmolChannel = vscode.window.createOutputChannel("Eggsmol output");
-	eggsmolChannel.show(true);
-	context.subscriptions.push(vscode.commands.registerCommand('eggsmol.Eggsmol_run', async function () {
-		eggsmolChannel.clear();
-		eggsmolChannel.show(true);
+	egglogChannel = vscode.window.createOutputChannel("egglog output");
+	egglogChannel.show(true);
+	context.subscriptions.push(vscode.commands.registerCommand('egglog.egglog_run', async function () {
+		egglogChannel.clear();
+		egglogChannel.show(true);
 		const document = vscode.window.activeTextEditor.document;
 		document.save().then(() => {
 			var folder;
@@ -20,17 +20,17 @@ function activate(context) {
 				folder = ".";
 			}
 			const relativeFile = document.uri.fsPath;
-			eggsmolChannel.appendLine("Running '" + `cargo run ${relativeFile}` + "' in " + folder);
-			exec(`cargo run ${relativeFile}`, {cwd: folder}, (err, stdout, stderr) => {
-				eggsmolChannel.show(true);
+			egglogChannel.appendLine("Running '" + `cargo run ${relativeFile}` + "' in " + folder);
+			exec(`cargo run ${relativeFile}`, { cwd: folder }, (err, stdout, stderr) => {
+				egglogChannel.show(true);
 				if (err) {
-					eggsmolChannel.append(err);
+					egglogChannel.append(err);
 				}
 				if (stdout != "") {
-					eggsmolChannel.append(stdout);
+					egglogChannel.append(stdout);
 				}
 				if (stderr != "") {
-					eggsmolChannel.append(stderr);
+					egglogChannel.append(stderr);
 				}
 			});
 		});
@@ -39,7 +39,7 @@ function activate(context) {
 }
 
 // This method is called when your extension is deactivated
-function deactivate() {}
+function deactivate() { }
 
 module.exports = {
 	activate,
