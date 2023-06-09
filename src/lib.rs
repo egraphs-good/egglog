@@ -1186,6 +1186,8 @@ impl EGraph {
             }
         }
 
+        // remove consecutive empty lines
+        msgs.dedup_by(|a, b| a.is_empty() && b.is_empty());
         Ok(msgs)
     }
 
