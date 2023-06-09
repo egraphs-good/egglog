@@ -1,5 +1,5 @@
 use clap::Parser;
-use egg_smol::EGraph;
+use egglog::EGraph;
 use std::io::{self, BufRead, BufReader};
 use std::path::PathBuf;
 

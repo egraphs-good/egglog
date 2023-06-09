@@ -1,8 +1,8 @@
 # egglog
 
-<a href="https://egraphs-good.github.io/egglog/docs/egg_smol">
+<a href="https://egraphs-good.github.io/egglog/docs/egglog">
     <img alt="Web Demo" src="https://img.shields.io/badge/-web demo-blue"></a>
-<a href="https://egraphs-good.github.io/egglog/docs/egg_smol">
+<a href="https://egraphs-good.github.io/egglog/docs/egglog">
     <img alt="Main Branch Documentation" src="https://img.shields.io/badge/docs-main-blue"></a>
 
 This is repo for the `egglog` tool accompanying the paper
@@ -23,11 +23,11 @@ https://effect.systems/doc/pldi-2022-egraphs/abstract.pdf
 Also see papers about egglog.
 
 See also the Python binding, which provides a bit more documentation:
-https://egg-smol-python.readthedocs.io/en/latest/
+https://egglog-python.readthedocs.io/en/latest/
 
 ## Chat
 
-There is a Zulip chat about egg-smol here:
+There is a Zulip chat about egglog here:
 https://egraphs.zulipchat.com/#narrow/stream/328979-Implementation/topic/Eggsmol
 
 ## Prerequisites & compilation
@@ -323,7 +323,7 @@ where sorts are:
 
 ### Union
 
-The underlying data structure maintained by egg-smol is an e-graph. That means that specific values can be unified to be equivalent. To extract a value, use `extract` and it will extract the cheapest option according to the costs.
+The underlying data structure maintained by egglog is an e-graph. That means that specific values can be unified to be equivalent. To extract a value, use `extract` and it will extract the cheapest option according to the costs.
 
 ```
 (datatype Math (Num i64))
@@ -347,7 +347,7 @@ Union only works on variants, not sorts.
     <Expr>
 ```
 
-These are conditions used in check and other commands. There is no boolean type in egg-smol. Instead, boolean are modelled morally as `Option<Unit>`, so if something is true, it is `Some<()>`. If something is false, it does not match and is `None`.
+These are conditions used in check and other commands. There is no boolean type in egglog. Instead, boolean are modelled morally as `Option<Unit>`, so if something is true, it is `Some<()>`. If something is false, it does not match and is `None`.
 
 ### Expressions
 

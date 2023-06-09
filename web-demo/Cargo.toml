@@ -6,7 +6,7 @@ version = "0.1.0"
 [lib]
 crate-type = ["cdylib"]
 
-[dependencies.egg-smol]
+[dependencies.egglog]
 default-features = false
 features = ["wasm-bindgen"]
 path = ".."

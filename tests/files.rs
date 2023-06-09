@@ -1,4 +1,4 @@
-use egg_smol::{
+use egglog::{
     ast::{Command, Expr, Literal},
     *,
 };

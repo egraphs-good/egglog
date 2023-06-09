@@ -1,5 +1,5 @@
 ; Binary Decision Diagrams are if-then-else trees/ compressed tries that hash cons their leaves
-; This is easily expressible in the facilities provided. Everything in egg-smol is automatcally shared
+; This is easily expressible in the facilities provided. Everything in egglog is automatcally shared
 ; and Compression is easily expressible as a rule.
 
 ; They are a notion of first class set useful for certain classes of uniformly describable sets.
