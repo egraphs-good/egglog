@@ -209,6 +209,10 @@ impl Default for EGraph {
 pub struct NotFoundError(Expr);
 
 impl EGraph {
+    pub fn is_interactive_mode(&self) -> bool {
+        self.interactive_mode
+    }
+
     pub fn push(&mut self) {
         self.egraphs.push(self.clone());
     }
@@ -1194,9 +1198,7 @@ impl EGraph {
                 msgs.push(msg);
             }
         }
-        if self.interactive_mode {
-            eprintln!("(done)");
-        }
+        log::logger().flush();
 
         // remove consecutive empty lines
         msgs.dedup_by(|a, b| a.is_empty() && b.is_empty());

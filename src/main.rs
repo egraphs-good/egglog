@@ -47,6 +47,10 @@ fn main() {
                     std::process::exit(1)
                 }
             }
+            log::logger().flush();
+            if egraph.is_interactive_mode() {
+                eprintln!("(done)");
+            }
         }
 
         std::process::exit(1)
