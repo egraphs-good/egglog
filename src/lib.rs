@@ -157,6 +157,7 @@ pub struct EGraph {
     functions: HashMap<Symbol, Function>,
     rulesets: HashMap<Symbol, HashMap<Symbol, Rule>>,
     proofs_enabled: bool,
+    interactive_mode: bool,
     timestamp: u32,
     pub test_proofs: bool,
     pub match_limit: usize,
@@ -191,6 +192,7 @@ impl Default for EGraph {
             node_limit: usize::MAX,
             timestamp: 0,
             proofs_enabled: false,
+            interactive_mode: false,
             test_proofs: false,
             fact_directory: None,
             seminaive: true,
@@ -741,6 +743,13 @@ impl EGraph {
             "enable_proofs" => {
                 panic!("enable_proofs must be set as the first line of the file");
             }
+            "interactive_mode" => {
+                if let Expr::Lit(Literal::Int(i)) = value {
+                    self.interactive_mode = i != 0;
+                } else {
+                    panic!("interactive_mode must be an integer");
+                }
+            }
             "match_limit" => {
                 if let Expr::Lit(Literal::Int(i)) = value {
                     self.match_limit = i as usize;
@@ -982,6 +991,10 @@ impl EGraph {
                 format!("Output to '{filename:?}'.")
             }
         });
+        if self.interactive_mode {
+            eprintln!("(done)");
+        }
+
         log::logger().flush();
         res
     }
