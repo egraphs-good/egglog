@@ -991,11 +991,7 @@ impl EGraph {
                 format!("Output to '{filename:?}'.")
             }
         });
-        if self.interactive_mode {
-            eprintln!("(done)");
-        }
 
-        log::logger().flush();
         res
     }
 
@@ -1197,6 +1193,9 @@ impl EGraph {
                 }
                 msgs.push(msg);
             }
+        }
+        if self.interactive_mode {
+            eprintln!("(done)");
         }
 
         // remove consecutive empty lines
