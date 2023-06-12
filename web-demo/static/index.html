@@ -79,6 +79,7 @@
     <script src="//unpkg.com/codemirror@5.65.2/lib/codemirror.js"></script>
     <script src="https://unpkg.com/@hpcc-js/wasm/dist/graphviz.umd.js" type="javascript/worker"></script>
     <script type="module">
+        import { compressUrlSafe, decompressUrlSafe } from './lzma-url.mjs';
         import * as d3 from 'https://cdn.skypack.dev/pin/d3@v7.8.4-U7lzM69QcKPxzv4xSvs7/mode=imports,min/optimized/d3.js';
         import 'https://cdn.skypack.dev/pin/d3-graphviz@v5.0.2-ZoIcpbOADQcAxREohmOW/mode=imports,min/optimized/d3-graphviz.js';
 
