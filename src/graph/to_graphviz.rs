@@ -242,8 +242,8 @@ fn quote(s: &str) -> String {
 /// Returns an html label for the node with the function name and ports for each argumetn
 fn html_label(label: &str, n_args: usize) -> String {
     format!(
-        "<<TABLE BGCOLOR=\"white\" CELLBORDER=\"0\" CELLSPACING=\"0\" CELLPADDING=\"0\" style=\"rounded\"><tr><td CELLPADDING=\"4\" WIDTH=\"30\" HEIGHT=\"30\" colspan=\"{}\">{}</td></tr>{}</TABLE>>",
-        n_args,
+        "<<TABLE BGCOLOR=\"white\" CELLBORDER=\"0\" CELLSPACING=\"0\" CELLPADDING=\"0\" style=\"rounded\"><tr><td CELLPADDING=\"4\" WIDTH=\"30\" HEIGHT=\"30\"{}>{}</td></tr>{}</TABLE>>",
+        (if n_args  == 0 {"".to_string()} else {format!(" colspan=\"{}\"", n_args)}),
         Escape(label),
         (if n_args == 0 {
             "".to_string()
