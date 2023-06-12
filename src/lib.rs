@@ -273,6 +273,7 @@ impl EGraph {
                     .iter()
                     .chain(once(&function.schema.output)),
             ) {
+                assert!(sort.is_eq_container_sort() == rix.is_some());
                 if sort.is_eq_container_sort() {
                     let rix = rix.as_ref().unwrap();
                     for ix in rix.iter() {
