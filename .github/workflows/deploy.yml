@@ -18,7 +18,7 @@ jobs:
       run: make web
 
     - name: Upload web artifact
-      uses: actions/upload-artifact@v2
+      uses: actions/upload-artifact@v3
       with:
         name: www
         path: target/www
