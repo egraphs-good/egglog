@@ -2,39 +2,43 @@ use super::*;
 use crate::{ast::Id, function::table::hash_values, ArcSort, EGraph, Value};
 
 // Limit the number of functions and calls to avoid blowing up the size of the graph
-
 const MAX_FUNCTIONS: usize = 40;
 const MAX_CALLS_PER_FUNCTION: usize = 40;
 
 pub(crate) fn graph_from_egraph(egraph: &EGraph) -> ExportedGraph {
-    let mut calls = ExportedGraph::default();
-    for function in egraph
+    egraph
         .functions
         .values()
+        // Only include functions with a non temporary name
         .filter(|f| !is_temp_name(f.decl.name.to_string()))
+        // Map each function to its calls
+        .map(|function| {
+            function
+                .nodes
+                .vals
+                .iter()
+                .filter(|(i, _)| i.live())
+                .take(MAX_CALLS_PER_FUNCTION)
+                .map(|(input, output)| {
+                    let input_values = input.data();
+                    ExportedCall {
+                        fn_name: function.decl.name.to_string(),
+                        inputs: input_values
+                            .iter()
+                            .map(|v| export_value_with_sort(egraph, *v))
+                            .collect(),
+                        output: export_value_with_sort(egraph, output.value),
+                        input_hash: hash_values(input_values),
+                    }
+                })
+                .collect::<Vec<_>>()
+        })
+        // Filter out functions with no calls
+        .filter(|f| !f.is_empty())
         .take(MAX_FUNCTIONS)
-    {
-        for (input, output) in function
-            .nodes
-            .vals
-            .iter()
-            .filter(|(i, _)| i.live())
-            .take(MAX_CALLS_PER_FUNCTION)
-        {
-            let input_values = input.data();
-            let fn_call = ExportedCall {
-                fn_name: function.decl.name.to_string(),
-                inputs: input_values
-                    .iter()
-                    .map(|v| export_value_with_sort(egraph, *v))
-                    .collect(),
-                output: export_value_with_sort(egraph, output.value),
-                input_hash: hash_values(input_values),
-            };
-            calls.push(fn_call);
-        }
-    }
-    calls
+        .flatten()
+        .collect()
+
 }
 
 /// Returns true if the name is in the form v{digits}___
