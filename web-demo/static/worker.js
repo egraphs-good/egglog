@@ -9,7 +9,7 @@ async function work() {
     self.onmessage = async event => {
         try {
             let result = run_program(event.data);
-            console.log("Got result from worker");
+            console.log("Got result from worker", result);
             // Can't send the result directly, since it contains a reference to the
             // wasm memory. Instead, we send the dot and text separately.
             self.postMessage({dot: result.dot, text: result.text});
