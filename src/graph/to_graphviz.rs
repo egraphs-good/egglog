@@ -111,7 +111,7 @@ impl SubgraphBuilder {
     fn add_node(&mut self, node_id: &str, label: &str, children: &[ExportedValueWithSort]) -> Node {
         let quoted_node_id = quote(node_id);
         for (i, value) in children.iter().enumerate() {
-            let source = node_id!(quote(node_id), port!(id!(port_id(i))));
+            let source = node_id!(quote(node_id), port!(id!(port_id(i)), "s"));
             self.sorts.insert(value.1.clone());
             let (child_node_id, child_subgraph_id) = match &value.0 {
                 // Functions should point to one of the function nodes of the e-class.
