@@ -221,15 +221,6 @@ impl Table {
         true
     }
 
-    /// Remove the entry at the given offset from the table.
-    pub(crate) fn remove_index(&mut self, i: usize, ts: u32) {
-        let (inp, _) = &mut self.vals[i];
-        if inp.live() {
-            inp.stale_at = ts;
-            self.n_stale += 1;
-        }
-    }
-
     /// Returns the entries at the given index if the entry is live and the index in bounds.
     pub(crate) fn get_index(&self, i: usize) -> Option<(&[Value], &TupleOutput)> {
         let (inp, out) = self.vals.get(i)?;

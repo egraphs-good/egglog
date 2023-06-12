@@ -161,6 +161,7 @@ pub struct EGraph {
     functions: HashMap<Symbol, Function>,
     rulesets: HashMap<Symbol, HashMap<Symbol, Rule>>,
     proofs_enabled: bool,
+    interactive_mode: bool,
     timestamp: u32,
     pub test_proofs: bool,
     pub match_limit: usize,
@@ -195,6 +196,7 @@ impl Default for EGraph {
             node_limit: usize::MAX,
             timestamp: 0,
             proofs_enabled: false,
+            interactive_mode: false,
             test_proofs: false,
             fact_directory: None,
             seminaive: true,
@@ -211,6 +213,10 @@ impl Default for EGraph {
 pub struct NotFoundError(Expr);
 
 impl EGraph {
+    pub fn is_interactive_mode(&self) -> bool {
+        self.interactive_mode
+    }
+
     pub fn push(&mut self) {
         self.egraphs.push(self.clone());
     }
@@ -337,6 +343,7 @@ impl EGraph {
             MergeFn::Expr(e) => Some(e.clone()),
             MergeFn::AssertEq | MergeFn::Union => None,
         };
+
         for (inputs, old, new) in merges {
             if let Some(prog) = function.merge.on_merge.clone() {
                 self.run_actions(&mut stack, &[*old, *new], &prog, true)
@@ -743,6 +750,13 @@ impl EGraph {
             "enable_proofs" => {
                 panic!("enable_proofs must be set as the first line of the file");
             }
+            "interactive_mode" => {
+                if let Expr::Lit(Literal::Int(i)) = value {
+                    self.interactive_mode = i != 0;
+                } else {
+                    panic!("interactive_mode must be an integer");
+                }
+            }
             "match_limit" => {
                 if let Expr::Lit(Literal::Int(i)) = value {
                     self.match_limit = i as usize;
@@ -796,7 +810,7 @@ impl EGraph {
                 pre_rebuild.elapsed().as_millis()
             );
         }
-        Ok(match command {
+        let res = Ok(match command {
             NCommand::SetOption { name, value } => {
                 let str = format!("Set option {} to {}", name, value);
                 self.set_option(name.into(), value);
@@ -880,7 +894,7 @@ impl EGraph {
                             self.eval_actions(std::slice::from_ref(&action.to_action()))?;
                         }
                     }
-                    format!("Run {action}.")
+                    "".to_string()
                 } else {
                     format!("Skipping running {action}.")
                 }
@@ -983,7 +997,9 @@ impl EGraph {
 
                 format!("Output to '{filename:?}'.")
             }
-        })
+        });
+
+        res
     }
 
     pub fn clear(&mut self) {
@@ -1179,10 +1195,16 @@ impl EGraph {
             // because push and pop create new scopes
             for processed in self.process_command(command)? {
                 let msg = self.run_command(processed.command, should_run)?;
-                log::info!("{}", msg);
+                if !msg.is_empty() {
+                    log::info!("{}", msg);
+                }
                 msgs.push(msg);
             }
         }
+        log::logger().flush();
+
+        // remove consecutive empty lines
+        msgs.dedup_by(|a, b| a.is_empty() && b.is_empty());
         Ok(msgs)
     }
 

@@ -1,30 +1,22 @@
 # egglog
 
-Try the [web demo](https://egraphs-good.github.io/egglog)!
+<a href="https://egraphs-good.github.io/egglog/docs/egglog">
+    <img alt="Web Demo" src="https://img.shields.io/badge/-web demo-blue"></a>
+<a href="https://egraphs-good.github.io/egglog/docs/egglog">
+    <img alt="Main Branch Documentation" src="https://img.shields.io/badge/docs-main-blue"></a>
 
 This is repo for the `egglog` tool accompanying the paper
-  ["Better Together: Unifying Datalog and Equality Saturation"](https://arxiv.org/abs/2304.04332).
+  "Better Together: Unifying Datalog and Equality Saturation"
+  ([ACM DL](https://dl.acm.org/doi/10.1145/3591239), [arXiv](https://arxiv.org/abs/2304.04332)).
 
 If you use this work, please use [this citation](./CITATION.bib).
 
-## Background
-
-See this presentation for background information:
-
-https://youtu.be/dbgZJyw3hnk?t=3983
-
-with this paper to go along:
-
-https://effect.systems/doc/pldi-2022-egraphs/abstract.pdf
-
-Also see papers about egglog.
-
 See also the Python binding, which provides a bit more documentation:
-https://egg-smol-python.readthedocs.io/en/latest/
+https://egglog-python.readthedocs.io/en/latest/
 
 ## Chat
 
-There is a Zulip chat about egg-smol here:
+There is a Zulip chat about egglog here:
 https://egraphs.zulipchat.com/#narrow/stream/328979-Implementation/topic/Eggsmol
 
 ## Prerequisites & compilation
@@ -55,16 +47,16 @@ for the REPL.
 
 ## VS Code plugin
 
-There is a VS Code extension in the vscode folder. Install using 'Install from VSIX...' in the three-dot menu of the extensions tab and pick `vscode/vscode/eggsmol.vsix`.
+There is a VS Code extension in the vscode folder. Install using 'Install from VSIX...' in the three-dot menu of the extensions tab and pick `vscode/vscode/egglog.vsix`.
 
 ### Enhancing the VS code extension
 
-If you want to hack on the VS Code extension, install nodejs, and make your changes in the files in the `vscode/eggsmol-1.0.0` folder.
+If you want to hack on the VS Code extension, install nodejs, and make your changes in the files in the `vscode/egglog-1.0.0` folder.
 
 Then run
 
 ```
-code vscode/eggsmol-1.0.0
+code vscode/egglog-1.0.0
 ```
 
 and use F5 to run the extension in a new window. When satisfied, then install VSCE if you do not already have it:
@@ -73,7 +65,7 @@ and use F5 to run the extension in a new window. When satisfied, then install VS
 npm install -g @vscode/vsce
 ```
 
-Run `vsce package` in the `vscode/eggsmol-1.0.0` folder to reconstruct the .vsix file and install it manually.
+Run `vsce package` in the `vscode/egglog-1.0.0` folder to reconstruct the .vsix file and install it manually.
 
 # Syntax
 
@@ -324,7 +316,7 @@ where sorts are:
 
 ### Union
 
-The underlying data structure maintained by egg-smol is an e-graph. That means that specific values can be unified to be equivalent. To extract a value, use `extract` and it will extract the cheapest option according to the costs.
+The underlying data structure maintained by egglog is an e-graph. That means that specific values can be unified to be equivalent. To extract a value, use `extract` and it will extract the cheapest option according to the costs.
 
 ```
 (datatype Math (Num i64))
@@ -348,7 +340,7 @@ Union only works on variants, not sorts.
     <Expr>
 ```
 
-These are conditions used in check and other commands. There is no boolean type in egg-smol. Instead, boolean are modelled morally as `Option<Unit>`, so if something is true, it is `Some<()>`. If something is false, it does not match and is `None`.
+These are conditions used in check and other commands. There is no boolean type in egglog. Instead, boolean are modelled morally as `Option<Unit>`, so if something is true, it is `Some<()>`. If something is false, it does not match and is `None`.
 
 ### Expressions
 

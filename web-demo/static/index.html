@@ -3,6 +3,8 @@
 
 <head>
     <meta charset="utf-8" />
+    <title>egglog demo</title>
+    <link rel="icon" type="image/svg+xml" href="https://egraphs-good.github.io/assets/egg.svg">
     <style>
         body {
             margin: 0;
@@ -31,11 +33,17 @@
         }
 
         #toolbar {
+            margin-top: -5px;
             padding: 10px;
         }
 
-        #toolbar button {
+        #toolbar button,
+        #toolbar .badge,
+        #toolbar select {
             margin-right: 5px;
+            margin-top: 5px;
+            display: inline-block;
+            vertical-align: middle;
         }
 
         #output {
@@ -45,6 +53,10 @@
             overflow-y: scroll;
             resize: vertical;
             height: 60%;
+        }
+
+        .right {
+            float: right;
         }
 
         #graph {
@@ -213,6 +225,13 @@
             <select name="examples" id="examples">
                 <option value=""> Load an example </option>
             </select>
+            <div class="right">
+                <a class="badge" href="https://github.com/egraphs-good/egglog">
+                    <img alt="GitHub Repo"
+                        src="https://img.shields.io/github/stars/egraphs-good/egglog?label=GitHub&style=social"></a>
+                <a class="badge" href="docs/egglog">
+                    <img alt="Main Branch Documentation" src="https://img.shields.io/badge/docs-main-blue"></a>
+            </div>
         </div>
         <div id="output">Click "Run" to run code</div>
         <div id="graph">

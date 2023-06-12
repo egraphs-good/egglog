@@ -12,7 +12,7 @@ pub struct Result {
 
 #[wasm_bindgen]
 pub fn run_program(input: &str) -> Result {
-    let mut egraph = egg_smol::EGraph::default();
+    let mut egraph = egglog::EGraph::default();
     match egraph.parse_and_run_program(input) {
         Ok(outputs) => {
             log::info!("egg ok, {} outputs", outputs.len());

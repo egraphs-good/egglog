@@ -1,6 +1,6 @@
 {
-	"name": "eggsmol",
-	"displayName": "Eggsmol",
+	"name": "egglog",
+	"displayName": "egglog",
 	"description": "",
 	"version": "1.0.0",
 	"engines": {
@@ -8,37 +8,44 @@
 	},
 	"categories": [
 		"Programming Languages"
-	],"activationEvents": [
-		"onLanguage:eggsmol"
+	],
+	"activationEvents": [
+		"onLanguage:egglog"
 	],
 	"main": "./extension.js",
 	"contributes": {
-		"languages": [{
-			"id": "eggsmol",
-			"aliases": ["Eggsmol", "eggsmol"],
-			"extensions": [".egg"],
-			"configuration": "./language-configuration.json"
-		}],
-		"grammars": [{
-			"language": "eggsmol",
-			"scopeName": "source.eggsmol",
-			"path": "./syntaxes/eggsmol.tmLanguage.json"
-		}], 
+		"languages": [
+			{
+				"id": "egglog",
+				"aliases": [
+					"egglog",
+					"egglog"
+				],
+				"extensions": [
+					".egg"
+				],
+				"configuration": "./language-configuration.json"
+			}
+		],
+		"grammars": [
+			{
+				"language": "egglog",
+				"scopeName": "source.egglog",
+				"path": "./syntaxes/egglog.tmLanguage.json"
+			}
+		],
 		"commands": [
 			{
-				"title": "Eggsmol run",
-				"command": "eggsmol.Eggsmol_run"
+				"title": "egglog run",
+				"command": "egglog.egglog_run"
 			}
-
 		],
 		"keybindings": [
 			{
-				"command": "eggsmol.Eggsmol_run",
+				"command": "egglog.egglog_run",
 				"key": "F7",
-				"when" : "editorLangId == 'eggsmol'"
+				"when": "editorLangId == 'egglog'"
 			}
-
 		]
-
 	}
 }

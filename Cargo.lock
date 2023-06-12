@@ -238,7 +238,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "545da7d6df7f8fd0de7106669a7d0bfa3dbcfa24d81da46906ad658188b2ff7c"
 
 [[package]]
-name = "egg-smol"
+name = "egglog"
 version = "0.1.0"
 dependencies = [
  "clap",
@@ -1187,7 +1187,7 @@ name = "web-demo"
 version = "0.1.0"
 dependencies = [
  "console_error_panic_hook",
- "egg-smol",
+ "egglog",
  "js-sys",
  "log",
  "wasm-bindgen",
