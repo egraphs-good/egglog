@@ -202,6 +202,9 @@ fn build_graph(nodes: Nodes, edges: Edges, sort_colors: &SortColors) -> Graph {
         }
     }
     stmts.extend(edges.into_iter().map(|s| stmt!(s)));
+    // Set margin to 0 at the end again, so that total graph margin is 0, but all the clusters
+    // defined above have some margins
+    stmts.push(stmt!(GraphAttributes::margin(0.0)));
     graph!(di id!(), stmts)
 }
 
