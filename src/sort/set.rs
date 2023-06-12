@@ -70,18 +70,6 @@ impl Sort for SetSort {
         result
     }
 
-    fn foreach_tracked_values<'a>(&'a self, value: &'a Value, mut f: Box<dyn FnMut(Value) + 'a>) {
-        // TODO: Potential duplication of code
-        let sets = self.sets.lock().unwrap();
-        let set = sets.get_index(value.bits as usize).unwrap();
-
-        if self.element.is_eq_sort() {
-            for e in set.iter() {
-                f(*e)
-            }
-        }
-    }
-
     fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
         let sets = self.sets.lock().unwrap();
         let set = sets.get_index(value.bits as usize).unwrap();

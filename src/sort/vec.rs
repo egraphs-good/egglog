@@ -57,6 +57,7 @@ impl Sort for VecSort {
     fn is_eq_container_sort(&self) -> bool {
         self.element.is_eq_sort()
     }
+
     fn inner_values(&self, value: &Value) -> Vec<(&ArcSort, Value)> {
         // TODO: Potential duplication of code
         let vecs = self.vecs.lock().unwrap();
@@ -66,18 +67,6 @@ impl Sort for VecSort {
             result.push((&self.element, *e));
         }
         result
-    }
-
-    fn foreach_tracked_values<'a>(&'a self, value: &'a Value, mut f: Box<dyn FnMut(Value) + 'a>) {
-        // TODO: Potential duplication of code
-        let vecs = self.vecs.lock().unwrap();
-        let vec = vecs.get_index(value.bits as usize).unwrap();
-
-        if self.element.is_eq_sort() {
-            for e in vec.iter() {
-                f(*e)
-            }
-        }
     }
 
     fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
