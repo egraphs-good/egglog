@@ -38,7 +38,6 @@ pub(crate) fn graph_from_egraph(egraph: &EGraph) -> ExportedGraph {
         .take(MAX_FUNCTIONS)
         .flatten()
         .collect()
-
 }
 
 /// Returns true if the name is in the form v{digits}___
