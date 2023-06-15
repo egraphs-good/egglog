@@ -14,3 +14,9 @@
 
 ; Test vec-contains
 (check (vec-contains (vec-of 1 2 3) 2))
+
+; Test length
+(check (= (vec-length (vec-of 1 2 3)) 3))
+
+; Test vec-get
+(check (= (vec-get (vec-of 1 2 3) 1) 2))
