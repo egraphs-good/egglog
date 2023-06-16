@@ -1,0 +1,2 @@
+; Tests for the string sort
+(check (= (+ "a" "bc" "de") "abcde"))
