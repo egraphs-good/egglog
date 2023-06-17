@@ -142,43 +142,43 @@ impl ProofState {
     }
 
     fn instrument_action(&mut self, action: &NormAction) -> Vec<Action> {
-        [
-            vec![action.to_action()],
-            match action {
-                NormAction::Delete(_) => {
-                    // TODO what to do about delete?
-                    vec![]
+        match action {
+            NormAction::Delete(_) => {
+                // TODO what to do about delete?
+                vec![action.to_action()]
+            }
+            NormAction::Let(lhs, _expr) => {
+                let lhs_type = self.type_info.lookup(self.current_ctx, *lhs).unwrap();
+                if let Some(lhs_wrapped) = self.wrap_parent(lhs.to_string(), lhs_type) {
+                    vec![action.to_action()]
+                        .into_iter()
+                        .chain(self.parse_actions(vec![format!("(set {lhs_wrapped} {lhs})",)]))
+                        .collect()
+                } else {
+                    vec![action.to_action()]
                 }
-                NormAction::Let(lhs, _expr) => {
-                    let lhs_type = self.type_info.lookup(self.current_ctx, *lhs).unwrap();
-                    if let Some(lhs_wrapped) = self.wrap_parent(lhs.to_string(), lhs_type) {
-                        self.parse_actions(vec![format!("(set {lhs_wrapped} {lhs})",)])
-                    } else {
-                        vec![]
-                    }
-                }
-                NormAction::LetLit(..) => vec![],
-                NormAction::LetIteration(..) => vec![],
-                NormAction::LetVar(..) => vec![],
-                NormAction::Panic(..) => vec![],
-                // handled by merge action
-                NormAction::Set(_expr, _rhs) => vec![],
-                NormAction::Union(lhs, rhs) => {
-                    let lhs_type = self.type_info.lookup(self.current_ctx, *lhs).unwrap();
-                    let rhs_type = self.type_info.lookup(self.current_ctx, *rhs).unwrap();
-                    assert_eq!(lhs_type.name(), rhs_type.name());
-                    assert!(lhs_type.is_eq_sort());
+            }
+            NormAction::LetLit(..)
+            | NormAction::LetIteration(..)
+            | NormAction::LetVar(..)
+            | NormAction::Panic(..) => vec![action.to_action()],
 
-                    let lhs_parent = self.wrap_parent(lhs.to_string(), lhs_type).unwrap();
-                    let rhs_parent = self.wrap_parent(rhs.to_string(), rhs_type).unwrap();
-                    self.parse_actions(vec![
-                        format!("(set {} {})", lhs_parent, rhs_parent),
-                        format!("(set {} {})", rhs_parent, lhs_parent),
-                    ])
-                }
-            },
-        ]
-        .concat()
+            // handled by merge action
+            NormAction::Set(_expr, _rhs) => vec![action.to_action()],
+            NormAction::Union(lhs, rhs) => {
+                let lhs_type = self.type_info.lookup(self.current_ctx, *lhs).unwrap();
+                let rhs_type = self.type_info.lookup(self.current_ctx, *rhs).unwrap();
+                assert_eq!(lhs_type.name(), rhs_type.name());
+                assert!(lhs_type.is_eq_sort());
+
+                let lhs_parent = self.wrap_parent(lhs.to_string(), lhs_type).unwrap();
+                let rhs_parent = self.wrap_parent(rhs.to_string(), rhs_type).unwrap();
+                self.parse_actions(vec![
+                    format!("(set {} {})", lhs_parent, rhs_parent),
+                    format!("(set {} {})", rhs_parent, lhs_parent),
+                ])
+            }
+        }
     }
 
     fn instrument_actions(&mut self, actions: &[NormAction]) -> Vec<Action> {

@@ -530,7 +530,6 @@ impl EGraph {
 
     // returns whether the egraph was updated
     pub fn run_schedule(&mut self, sched: &NormSchedule) -> RunReport {
-        log::info!("Running {}", sched);
         match sched {
             NormSchedule::Run(config) => self.run_rules(config),
             NormSchedule::Repeat(limit, sched) => {
