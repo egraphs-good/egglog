@@ -190,7 +190,9 @@ fn build_graph(nodes: Nodes, edges: Edges, sort_colors: &SortColors) -> Graph {
             for (subgraph_id, nodes) in subgraphs {
                 let quoted_subgraph_id = quote(&subgraph_id);
                 let subgraph_stmts = nodes.into_iter().map(|s| stmt!(s)).collect();
-                let s = stmt!(subgraph!("";
+                // Outer subgraph cluster must have name, otherwise we get "Two clusters named" error
+                let outer_subgraph_id = quote(&format!("outer_{}", subgraph_id));
+                let s = stmt!(subgraph!(outer_subgraph_id;
                     // Disable label for now, to reduce size
                     // NodeAttributes::label(subgraph_html_label(&sort)),
 
@@ -223,7 +225,7 @@ fn configuration_statements() -> Vec<Stmt> {
         stmt!(GraphAttributes::fontname("helvetica".to_string())),
         stmt!(GraphAttributes::fontsize(9.0)),
         stmt!(GraphAttributes::margin(3.0)),
-        stmt!(GraphAttributes::nodesep(0.0)),
+        stmt!(GraphAttributes::nodesep(0.05)),
         stmt!(GraphAttributes::ranksep(0.6)),
         stmt!(GraphAttributes::colorscheme("set312".to_string())),
         stmt!(GA::Edge(vec![EdgeAttributes::arrowsize(0.5)])),
