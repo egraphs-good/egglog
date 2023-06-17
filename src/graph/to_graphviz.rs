@@ -188,14 +188,20 @@ fn build_graph(nodes: Nodes, edges: Edges, sort_colors: &SortColors) -> Graph {
             let color = sort_colors[&sort];
             stmts.push(stmt!(attr!("fillcolor", color)));
             for (subgraph_id, nodes) in subgraphs {
-                // Nest in empty sub-graph so that we can use rank=same
-                // https://stackoverflow.com/a/55562026/907060
                 let quoted_subgraph_id = quote(&subgraph_id);
                 let subgraph_stmts = nodes.into_iter().map(|s| stmt!(s)).collect();
-                let s = stmt!(subgraph!(quoted_subgraph_id;
+                let s = stmt!(subgraph!("";
                     // Disable label for now, to reduce size
                     // NodeAttributes::label(subgraph_html_label(&sort)),
-                    subgraph!("", subgraph_stmts)
+
+                    // Nest in empty sub-graph so that we can use rank=same
+                    // https://stackoverflow.com/a/55562026/907060
+                    subgraph!(quoted_subgraph_id; subgraph!("", subgraph_stmts)),
+
+                    // Make outer subgraph a cluster but make it invisible, so just used for padding
+                    // https://forum.graphviz.org/t/how-to-add-space-between-clusters/1209/3
+                    SubgraphAttributes::style(quote("invis")),
+                    attr!("cluster", "true")
                 ));
                 stmts.push(s);
             }
@@ -217,7 +223,8 @@ fn configuration_statements() -> Vec<Stmt> {
         stmt!(GraphAttributes::fontname("helvetica".to_string())),
         stmt!(GraphAttributes::fontsize(9.0)),
         stmt!(GraphAttributes::margin(3.0)),
-        stmt!(GraphAttributes::nodesep(0.05)),
+        stmt!(GraphAttributes::nodesep(0.0)),
+        stmt!(GraphAttributes::ranksep(0.6)),
         stmt!(GraphAttributes::colorscheme("set312".to_string())),
         stmt!(GA::Edge(vec![EdgeAttributes::arrowsize(0.5)])),
         stmt!(GA::Node(vec![
