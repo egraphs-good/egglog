@@ -1,6 +1,6 @@
 use clap::Parser;
-use egg_smol::{CompilerPassStop, EGraph};
-use std::io::{self, Read};
+use egglog::{CompilerPassStop, EGraph};
+use std::io::{self, BufRead, BufReader};
 use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
@@ -50,15 +50,23 @@ fn main() {
                 .parse_and_run_program("(set-option enable_proofs 1)")
                 .unwrap();
         }
-        let mut program = String::new();
-        stdin
-            .lock()
-            .read_to_string(&mut program)
-            .unwrap_or_else(|_| panic!("Failed to read program from stdin"));
-        match egraph.parse_and_run_program(&program) {
-            Ok(_msgs) => {}
-            Err(err) => {
-                log::error!("{}", err);
+
+        for line in BufReader::new(stdin).lines() {
+            match line {
+                Ok(line_str) => match egraph.parse_and_run_program(&line_str) {
+                    Ok(_msgs) => {}
+                    Err(err) => {
+                        log::error!("{}", err);
+                    }
+                },
+                Err(err) => {
+                    log::error!("{}", err);
+                    std::process::exit(1)
+                }
+            }
+            log::logger().flush();
+            if egraph.is_interactive_mode() {
+                eprintln!("(done)");
             }
         }
 

@@ -19,8 +19,19 @@ match {
 
 pub Program: Vec<Command> = { (Command)* => <> }
 
+
+
+LParen: () = {
+    "(" => (),
+    "[" => (), 
+};
+RParen: () = {
+    ")" => (),
+    "]" => (),
+};
+
 List<T>: Vec<T> = { 
-    "(" <T*> ")" => <>,
+    LParen <T*> RParen => <>,
 }
 
 Comma<T>: Vec<T> = {
@@ -34,58 +45,58 @@ Comma<T>: Vec<T> = {
 };
 
 Command: Command = {
-    "(" "set-option" <name:Ident> <value:Expr> ")" => Command::SetOption { name, value },
-    "(" "datatype" <name:Ident> <variants:(Variant)*> ")" => Command::Datatype { <> },
-    "(" "sort" <name:Ident> "(" <head:Ident> <tail:(Expr)*> ")" ")" => Command::Sort (name, Some((head, tail))),
-    "(" "sort" <name:Ident> ")" => Command::Sort (name, None),
-    "(" "function" <name:Ident> <schema:Schema> <cost:Cost>
+    LParen "set-option" <name:Ident> <value:Expr> RParen => Command::SetOption { name, value },
+    LParen "datatype" <name:Ident> <variants:(Variant)*> RParen => Command::Datatype { <> },
+    LParen "sort" <name:Ident> LParen <head:Ident> <tail:(Expr)*> RParen RParen => Command::Sort (name, Some((head, tail))),
+    LParen "sort" <name:Ident> RParen => Command::Sort (name, None),
+    LParen "function" <name:Ident> <schema:Schema> <cost:Cost>
         <unextractable:(":unextractable")?>
         <merge_action:(":on_merge" <List<Action>>)?>
-        <merge:(":merge" <Expr>)?> <default:(":default" <Expr>)?> ")" => {
+        <merge:(":merge" <Expr>)?> <default:(":default" <Expr>)?> RParen => {
         Command::Function(FunctionDecl { name, schema, merge, merge_action: merge_action.unwrap_or_default(), default, cost, unextractable: unextractable.is_some() })
     },
-    "(" "declare" <name:Ident> <sort:Ident> ")" => Command::Declare{name, sort},
-    "(" "relation" <name:Ident> <types:List<Type>> ")" => Command::Function(FunctionDecl::relation(name, types)),
-    "(" "ruleset" <name:Ident> ")" => Command::AddRuleset(name),
-    "(" "rule" <body:List<Fact>> <head:List<Action>> <ruleset:(":ruleset" <Ident>)?> <name:(":name" <String>)?> ")" => Command::Rule{ruleset: ruleset.unwrap_or("".into()), name: name.unwrap_or("".to_string()).into(), rule: Rule { head, body }},
-    "(" "rewrite" <lhs:Expr> <rhs:Expr>
+    LParen "declare" <name:Ident> <sort:Ident> RParen => Command::Declare{name, sort},
+    LParen "relation" <name:Ident> <types:List<Type>> RParen => Command::Function(FunctionDecl::relation(name, types)),
+    LParen "ruleset" <name:Ident> RParen => Command::AddRuleset(name),
+    LParen "rule" <body:List<Fact>> <head:List<Action>> <ruleset:(":ruleset" <Ident>)?> <name:(":name" <String>)?> RParen => Command::Rule{ruleset: ruleset.unwrap_or("".into()), name: name.unwrap_or("".to_string()).into(), rule: Rule { head, body }},
+    LParen "rewrite" <lhs:Expr> <rhs:Expr>
         <conditions:(":when" <List<Fact>>)?>
         <ruleset:(":ruleset" <Ident>)?>
-    ")" => Command::Rewrite(ruleset.unwrap_or("".into()), Rewrite { lhs, rhs, conditions: conditions.unwrap_or_default() }),
-    "(" "birewrite" <lhs:Expr> <rhs:Expr>
+    RParen => Command::Rewrite(ruleset.unwrap_or("".into()), Rewrite { lhs, rhs, conditions: conditions.unwrap_or_default() }),
+    LParen "birewrite" <lhs:Expr> <rhs:Expr>
         <conditions:(":when" <List<Fact>>)?>
         <ruleset:(":ruleset" <Ident>)?>
-    ")" => Command::BiRewrite(ruleset.unwrap_or("".into()), Rewrite { lhs, rhs, conditions: conditions.unwrap_or_default() }),
-    "(" "define" <name:Ident> <expr:Expr> <cost:Cost> ")" => Command::Define { name, expr, cost },
-    "(" "let" <name:Ident> <expr:Expr> ")" => Command::Action(Action::Let(name, expr)),
+    RParen => Command::BiRewrite(ruleset.unwrap_or("".into()), Rewrite { lhs, rhs, conditions: conditions.unwrap_or_default() }),
+    LParen "define" <name:Ident> <expr:Expr> <cost:Cost> RParen => Command::Define { name, expr, cost },
+    LParen "let" <name:Ident> <expr:Expr> RParen => Command::Action(Action::Let(name, expr)),
     <NonLetAction> => Command::Action(<>),
-    "(" "run" <limit:UNum>  <until:(":until" <(Fact)*>)?> ")" => Command::RunSchedule(Schedule::Repeat(limit, Box::new(Schedule::Run(RunConfig { ruleset : "".into(), until })))),
-    "(" "run" <ruleset: Ident> <limit:UNum> <until:(":until" <(Fact)*>)?> ")" => Command::RunSchedule(Schedule::Repeat(limit, Box::new(Schedule::Run(RunConfig { ruleset, until })))),
-    "(" "simplify"  <schedule:Schedule> <expr:Expr> ")" 
+    LParen "run" <limit:UNum>  <until:(":until" <(Fact)*>)?> RParen => Command::RunSchedule(Schedule::Repeat(limit, Box::new(Schedule::Run(RunConfig { ruleset : "".into(), until })))),
+    LParen "run" <ruleset: Ident> <limit:UNum> <until:(":until" <(Fact)*>)?> RParen => Command::RunSchedule(Schedule::Repeat(limit, Box::new(Schedule::Run(RunConfig { ruleset, until })))),
+    LParen "simplify"  <schedule:Schedule> <expr:Expr> RParen 
         => Command::Simplify { expr, schedule },
-    "(" "add-ruleset" <name:Ident> ")" => Command::AddRuleset(name),
-    "(" "calc" "(" <idents:IdentSort*> ")" <exprs:Expr+> ")" => Command::Calc(idents, exprs),
-    "(" "extract" <variants:(":variants" <UNum>)?> <e:Expr> ")" => Command::Extract { e, variants: variants.unwrap_or(0) },
-    "(" "check" <(Fact)*> ")" => Command::Check(<>),
-    "(" "check-proof" ")" => Command::CheckProof,
-    "(" "run-schedule" <Schedule*> ")" => Command::RunSchedule(Schedule::Sequence(<>)),
-    "(" "push" <UNum?> ")" => Command::Push(<>.unwrap_or(1)),
-    "(" "pop" <UNum?> ")" => Command::Pop(<>.unwrap_or(1)),
-    "(" "print" <sym:Ident> <n:UNum?> ")" => Command::Print(sym, n.unwrap_or(10)),
-    "(" "print-size" <sym:Ident> ")" => Command::PrintSize(sym),
-    "(" "input" <name:Ident> <file:String> ")" => Command::Input { name, file },
-    "(" "output" <file:String> <exprs:Expr+> ")" => Command::Output { file, exprs },
-    "(" "fail" <Command> ")" => Command::Fail(Box::new(<>)),
-    "(" "include" <file:String> ")" => Command::Include(file),
+    LParen "add-ruleset" <name:Ident> RParen => Command::AddRuleset(name),
+    LParen "calc" LParen <idents:IdentSort*> RParen <exprs:Expr+> RParen => Command::Calc(idents, exprs),
+    LParen "extract" <variants:(":variants" <UNum>)?> <e:Expr> RParen => Command::Extract { e, variants: variants.unwrap_or(0) },
+    LParen "check" <(Fact)*> RParen => Command::Check(<>),
+    LParen "check-proof" RParen => Command::CheckProof,
+    LParen "run-schedule" <Schedule*> RParen => Command::RunSchedule(Schedule::Sequence(<>)),
+    LParen "push" <UNum?> RParen => Command::Push(<>.unwrap_or(1)),
+    LParen "pop" <UNum?> RParen => Command::Pop(<>.unwrap_or(1)),
+    LParen "print" <sym:Ident> <n:UNum?> RParen => Command::Print(sym, n.unwrap_or(10)),
+    LParen "print-size" <sym:Ident> RParen => Command::PrintSize(sym),
+    LParen "input" <name:Ident> <file:String> RParen => Command::Input { name, file },
+    LParen "output" <file:String> <exprs:Expr+> RParen => Command::Output { file, exprs },
+    LParen "fail" <Command> RParen => Command::Fail(Box::new(<>)),
+    LParen "include" <file:String> RParen => Command::Include(file),
 }
 
 Schedule: Schedule = {
-    "(" "saturate" <Schedule*> ")" => Schedule::Saturate(Box::new(Schedule::Sequence(<>))),
-    "(" "seq" <Schedule*> ")" => Schedule::Sequence(<>),
-    "(" "repeat" <limit:UNum> <scheds:Schedule*> ")" => Schedule::Repeat(limit, Box::new(Schedule::Sequence(scheds))),
-    "(" "run" <until:(":until" <(Fact)*>)?> ")" => 
+    LParen "saturate" <Schedule*> RParen => Schedule::Saturate(Box::new(Schedule::Sequence(<>))),
+    LParen "seq" <Schedule*> RParen => Schedule::Sequence(<>),
+    LParen "repeat" <limit:UNum> <scheds:Schedule*> RParen => Schedule::Repeat(limit, Box::new(Schedule::Sequence(scheds))),
+    LParen "run" <until:(":until" <(Fact)*>)?> RParen => 
     Schedule::Run(RunConfig { ruleset: "".into(), until }),
-    "(" "run" <ruleset: Ident> <until:(":until" <(Fact)*>)?> ")" => Schedule::Run(RunConfig { ruleset, until }),
+    LParen "run" <ruleset: Ident> <until:(":until" <(Fact)*>)?> RParen => Schedule::Run(RunConfig { ruleset, until }),
     <ident:Ident> => Schedule::Run(RunConfig { ruleset: ident, until: None }),
 }
 
@@ -95,23 +106,23 @@ Cost: Option<usize> = {
 }
 
 NonLetAction: Action = {
-    "(" "set" "(" <f: Ident> <args:Expr*> ")" <v:Expr> ")" => Action::Set ( f, args, v ),
-    "(" "set-no-track" "(" <f: Ident> <args:Expr*> ")" <v:Expr> ")" => Action::SetNoTrack ( f, args, v ),
-    "(" "delete" "(" <f: Ident> <args:Expr*> ")" ")" => Action::Delete ( f, args),
-    "(" "union" <e1:Expr> <e2:Expr> ")" => Action::Union(<>),
-    "(" "panic" <msg:String> ")" => Action::Panic(msg),
+    LParen "set" LParen <f: Ident> <args:Expr*> RParen <v:Expr> RParen => Action::Set ( f, args, v ),
+    LParen "set-no-track" LParen <f: Ident> <args:Expr*> RParen <v:Expr> RParen => Action::SetNoTrack ( f, args, v ),
+    LParen "delete" LParen <f: Ident> <args:Expr*> RParen RParen => Action::Delete ( f, args),
+    LParen "union" <e1:Expr> <e2:Expr> RParen => Action::Union(<>),
+    LParen "panic" <msg:String> RParen => Action::Panic(msg),
     <e:CallExpr> => Action::Expr(e),
 }
 
 pub Action: Action = {
-    "(" "let" <name:Ident> <expr:Expr> ")" => Action::Let(name, expr),
+    LParen "let" <name:Ident> <expr:Expr> RParen => Action::Let(name, expr),
     <NonLetAction> => <>,
 }
 
 Name: Symbol = { "[" <Ident> "]" => <> }
 
 pub Fact: Fact = {
-    "(" "=" <mut es:Expr+> <e:Expr> ")" => {
+    LParen "=" <mut es:Expr+> <e:Expr> RParen => {
         es.push(e);
         Fact::Eq(es)
     },
@@ -136,24 +147,30 @@ Literal: Literal = {
 }
 
 CallExpr: Expr = {
-    "(" <head:Ident> <tail:(Expr)*> ")" => Expr::Call(head, tail),
+    LParen <head:Ident> <tail:(Expr)*> RParen => Expr::Call(head, tail),
 }
 
-ExprList: Vec<Expr> = { "(" <sexps:(Expr)*> ")" => sexps }
+ExprList: Vec<Expr> = { LParen <sexps:(Expr)*> RParen => sexps }
 
 Variant: Variant = {
-    "(" <name:Ident> <types:(Type)*> <cost:Cost> ")" => Variant { <> },
+    LParen <name:Ident> <types:(Type)*> <cost:Cost> RParen => Variant { <> },
 }
 
 Type: Symbol = <Ident>;
 
-IdentSort: IdentSort = "(" <ident:Ident> <sort:Type> ")" => IdentSort { ident, sort };
+IdentSort: IdentSort = LParen <ident:Ident> <sort:Type> RParen => IdentSort { ident, sort };
 Num: i64 = <s:r"(-)?[0-9]+"> => s.parse().unwrap();
 UNum: usize = {
     <Num> => <>.try_into().unwrap(),
 }
-F64: OrderedFloat<f64> = <s:r"(-)?[0-9]+\.[0-9]+(e(-)?[0-9]+)?"> => OrderedFloat::<f64>(s.parse().unwrap());
-Ident: Symbol = <s:r"(([[:alpha:]][\w-]*)|([-+*/!=<>&|^/%_]))+"> => s.parse().unwrap();
+
+F64: OrderedFloat<f64> = {
+    "NaN" => OrderedFloat::<f64>(f64::NAN),
+    <s:r"(-)?[0-9]+\.[0-9]+(e(\+)?(-)?[0-9]+)?"> => OrderedFloat::<f64>(s.parse().unwrap()),
+    "inf" => OrderedFloat::<f64>(f64::INFINITY),
+    "-inf" => OrderedFloat::<f64>(f64::NEG_INFINITY),
+}
+Ident: Symbol = <s:r"(([[:alpha:]][\w-]*)|([-+*/?!=<>&|^/%_]))+"> => s.parse().unwrap();
 SymString: Symbol = <String> => Symbol::from(<>);
 
 String: String = <r#"("[^"]*")+"#> => {

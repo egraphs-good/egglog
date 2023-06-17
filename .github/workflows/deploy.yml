@@ -1,4 +1,4 @@
-name: Deploy Web Demo
+name: Deploy Web Demo and Docs
 
 on: [push, pull_request]
 
@@ -16,11 +16,6 @@ jobs:
 
     - name: Build
       run: make web
-      
-    - name: Prepare for Deployment
-      run: |
-        tree target/www
-        find -name .gitignore -delete  # ignored files are wonky to deploy
 
     - name: Deploy
       uses: peaceiris/actions-gh-pages@v3
