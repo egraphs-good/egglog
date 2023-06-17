@@ -223,7 +223,7 @@ fn configuration_statements() -> Vec<Stmt> {
         stmt!(GraphAttributes::fontname("helvetica".to_string())),
         stmt!(GraphAttributes::fontsize(9.0)),
         stmt!(GraphAttributes::margin(3.0)),
-        stmt!(GraphAttributes::nodesep(0.05)),
+        stmt!(GraphAttributes::nodesep(0.0)),
         stmt!(GraphAttributes::ranksep(0.6)),
         stmt!(GraphAttributes::colorscheme("set312".to_string())),
         stmt!(GA::Edge(vec![EdgeAttributes::arrowsize(0.5)])),
