@@ -135,7 +135,7 @@ impl Sort for VecSort {
         let mut expr = Expr::call("vec-empty", []);
         for e in vec.iter().rev() {
             let e = egraph.extract(*e, &self.element).1;
-            expr = Expr::call("vec-insert", [expr, e])
+            expr = Expr::call("vec-push", [expr, e])
         }
         expr
     }
