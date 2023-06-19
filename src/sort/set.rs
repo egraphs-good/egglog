@@ -178,7 +178,7 @@ impl PrimitiveLike for SetOf {
         }
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _unionfind: Option<&mut UnionFind>) -> Option<Value> {
         let set = ValueSet::from_iter(values.iter().copied());
         set.store(&self.set)
     }
@@ -201,7 +201,7 @@ impl PrimitiveLike for Ctor {
         }
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _unionfind: Option<&mut UnionFind>) -> Option<Value> {
         assert!(values.is_empty());
         ValueSet::default().store(&self.set)
     }
@@ -226,7 +226,7 @@ impl PrimitiveLike for Insert {
         }
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _unionfind: Option<&mut UnionFind>) -> Option<Value> {
         let mut set = ValueSet::load(&self.set, &values[0]);
         set.insert(values[1]);
         set.store(&self.set)
@@ -255,7 +255,7 @@ impl PrimitiveLike for NotContains {
         }
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _unionfind: Option<&mut UnionFind>) -> Option<Value> {
         let set = ValueSet::load(&self.set, &values[0]);
         if set.contains(&values[1]) {
             None
@@ -285,7 +285,7 @@ impl PrimitiveLike for Contains {
         }
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _unionfind: Option<&mut UnionFind>) -> Option<Value> {
         let set = ValueSet::load(&self.set, &values[0]);
         if set.contains(&values[1]) {
             Some(Value::unit())
@@ -314,7 +314,7 @@ impl PrimitiveLike for Union {
         }
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _unionfind: Option<&mut UnionFind>) -> Option<Value> {
         let mut set1 = ValueSet::load(&self.set, &values[0]);
         let set2 = ValueSet::load(&self.set, &values[1]);
         set1.extend(set2.iter());
@@ -341,7 +341,7 @@ impl PrimitiveLike for Intersect {
         }
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _unionfind: Option<&mut UnionFind>) -> Option<Value> {
         let mut set1 = ValueSet::load(&self.set, &values[0]);
         let set2 = ValueSet::load(&self.set, &values[1]);
         set1.retain(|k| set2.contains(k));
@@ -369,7 +369,7 @@ impl PrimitiveLike for Remove {
         }
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _unionfind: Option<&mut UnionFind>) -> Option<Value> {
         let mut set = ValueSet::load(&self.set, &values[0]);
         set.remove(&values[1]);
         set.store(&self.set)
@@ -395,7 +395,7 @@ impl PrimitiveLike for Diff {
         }
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _unionfind: Option<&mut UnionFind>) -> Option<Value> {
         let mut set1 = ValueSet::load(&self.set, &values[0]);
         let set2 = ValueSet::load(&self.set, &values[1]);
         set1.retain(|k| !set2.contains(k));

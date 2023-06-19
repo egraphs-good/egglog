@@ -1,0 +1,21 @@
+(datatype Math
+  (Num i64)
+  (Var String)
+  (Add Math Math)
+  (Mul Math Math))
+
+(sort MathFn (Lambda Math Math))
+
+(define one-thunk (lambda (var "x") (Num 1)))
+
+(define one (apply one-thunk (Var "____")))
+
+(run 10)
+(check (= one (Num 1)))
+
+(define double (lambda (var "x") (Mul (var "x") (var "x"))))
+
+; TODO: Define replacement
+(define two (apply double one))
+
+(check (= two (Num 2)))

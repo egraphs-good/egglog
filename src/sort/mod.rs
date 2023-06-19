@@ -19,6 +19,8 @@ mod set;
 pub use set::*;
 mod vec;
 pub use vec::*;
+mod lambda;
+pub use lambda::*;
 
 use crate::*;
 

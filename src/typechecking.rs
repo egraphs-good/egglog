@@ -47,6 +47,7 @@ impl Default for TypeInfo {
         res.presorts.insert("Map".into(), MapSort::make_sort);
         res.presorts.insert("Set".into(), SetSort::make_sort);
         res.presorts.insert("Vec".into(), VecSort::make_sort);
+        res.presorts.insert("Lambda".into(), LambdaSort::make_sort);
         res
     }
 }
@@ -539,7 +540,7 @@ pub enum TypeError {
     #[error("Arity mismatch, expected {expected} args: {expr}")]
     Arity { expr: Expr, expected: usize },
     #[error(
-        "Type mismatch: expr = {expr}, expected = {}, actual = {}, reason: {reason}", 
+        "Type mismatch: expr = {expr}, expected = {}, actual = {}, reason: {reason}",
         .expected.name(), .actual.name(),
     )]
     Mismatch {
