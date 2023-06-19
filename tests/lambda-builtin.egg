@@ -13,7 +13,7 @@
 (run 10)
 (check (= one (Num 1)))
 
-(define double (lambda (var "x") (Mul (var "x") (var "x"))))
+(define double (lambda (var "y") (Mul (var "y") (var "y"))))
 
 ; TODO: Define replacement
 (define two (apply double one))
