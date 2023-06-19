@@ -51,7 +51,7 @@ pub type Subst = IndexMap<Symbol, Value>;
 pub trait PrimitiveLike {
     fn name(&self) -> Symbol;
     fn accept(&self, types: &[ArcSort]) -> Option<ArcSort>;
-    fn apply(&self, values: &[Value], unionfind: Option<&mut UnionFind>) -> Option<Value>;
+    fn apply(&self, values: &[Value], egraph: Option<&mut EGraph>) -> Option<Value>;
 }
 
 #[derive(Debug, Clone, Default)]
@@ -144,7 +144,7 @@ impl PrimitiveLike for SimplePrimitive {
             .all(|(a, b)| a.name() == b.name())
             .then(|| self.output.clone())
     }
-    fn apply(&self, values: &[Value], _unionfind: Option<&mut UnionFind>) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         (self.f)(values)
     }
 }
@@ -152,9 +152,9 @@ impl PrimitiveLike for SimplePrimitive {
 #[derive(Clone)]
 pub struct EGraph {
     egraphs: Vec<Self>,
-    unionfind: UnionFind,
+    pub(crate) unionfind: UnionFind,
     pub(crate) proof_state: ProofState,
-    functions: HashMap<Symbol, Function>,
+    pub(crate) functions: HashMap<Symbol, Function>,
     rulesets: HashMap<Symbol, HashMap<Symbol, Rule>>,
     proofs_enabled: bool,
     interactive_mode: bool,

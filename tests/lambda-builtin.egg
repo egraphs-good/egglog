@@ -4,18 +4,23 @@
   (Add Math Math)
   (Mul Math Math))
 
+
+(rewrite (Mul (Num x) (Num y)) (Num (* x y)))
+
 (sort MathFn (Lambda Math Math))
 
 (define one-thunk (lambda (var "x") (Num 1)))
 
-(define one (apply one-thunk (Var "____")))
+(define one (apply one-thunk (Var "doesnt matter")))
 
 (run 10)
 (check (= one (Num 1)))
 
-(define double (lambda (var "y") (Mul (var "y") (var "y"))))
+(define double (lambda (var "y") (Mul (var "y") (Num 2))))
+(run 10)
 
-; TODO: Define replacement
 (define two (apply double one))
+(run 10)
 
-; (check (= two (Num 2)))
+(extract two)
+(check (= two (Num 2)))

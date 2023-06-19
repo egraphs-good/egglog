@@ -693,7 +693,7 @@ impl EGraph {
                 Instruction::CallPrimitive(p, arity) => {
                     let new_len = stack.len() - arity;
                     let values = &stack[new_len..];
-                    if let Some(value) = p.apply(values, Some(&mut self.unionfind)) {
+                    if let Some(value) = p.apply(values, Some(self)) {
                         stack.truncate(new_len);
                         stack.push(value);
                     } else {

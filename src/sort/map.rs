@@ -176,7 +176,7 @@ impl PrimitiveLike for Ctor {
         }
     }
 
-    fn apply(&self, values: &[Value], _unionfind: Option<&mut UnionFind>) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         assert!(values.is_empty());
         ValueMap::default().store(&self.map)
     }
@@ -204,7 +204,7 @@ impl PrimitiveLike for Insert {
         }
     }
 
-    fn apply(&self, values: &[Value], _unionfind: Option<&mut UnionFind>) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let mut map = ValueMap::load(&self.map, &values[0]);
         map.insert(values[1], values[2]);
         map.store(&self.map)
@@ -230,7 +230,7 @@ impl PrimitiveLike for Get {
         }
     }
 
-    fn apply(&self, values: &[Value], _unionfind: Option<&mut UnionFind>) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let map = ValueMap::load(&self.map, &values[0]);
         map.get(&values[1]).copied()
     }
@@ -256,7 +256,7 @@ impl PrimitiveLike for NotContains {
         }
     }
 
-    fn apply(&self, values: &[Value], _unionfind: Option<&mut UnionFind>) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let map = ValueMap::load(&self.map, &values[0]);
         if map.contains_key(&values[1]) {
             None
@@ -286,7 +286,7 @@ impl PrimitiveLike for Contains {
         }
     }
 
-    fn apply(&self, values: &[Value], _unionfind: Option<&mut UnionFind>) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let map = ValueMap::load(&self.map, &values[0]);
         if map.contains_key(&values[1]) {
             Some(Value::unit())
@@ -315,7 +315,7 @@ impl PrimitiveLike for Remove {
         }
     }
 
-    fn apply(&self, values: &[Value], _unionfind: Option<&mut UnionFind>) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let mut map = ValueMap::load(&self.map, &values[0]);
         map.remove(&values[1]);
         map.store(&self.map)

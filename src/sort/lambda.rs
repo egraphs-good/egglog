@@ -36,6 +36,11 @@ impl LambdaSort {
                 .get(output)
                 .ok_or(TypeError::UndefinedSort(*output))?;
 
+            if !input.is_eq_sort() {
+                return Err(TypeError::UndefinedSort(
+                    "Lambdas must take EqSorts as input".into(),
+                ));
+            }
             if output.is_eq_container_sort() {
                 return Err(TypeError::UndefinedSort(
                     "Lambdasreturning other EqSort containers are not allowed".into(),
@@ -84,7 +89,6 @@ impl Sort for LambdaSort {
     }
 
     fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
-        println!("Canonicalizing lambda");
         let lambdas = self.lambdas.lock().unwrap();
         let lambda = lambdas.get_index(value.bits as usize).unwrap();
         let mut body = lambda.body;
@@ -168,7 +172,7 @@ impl PrimitiveLike for Var {
         None
     }
 
-    fn apply(&self, values: &[Value], unionfind: Option<&mut UnionFind>) -> Option<Value> {
+    fn apply(&self, values: &[Value], egraph: Option<&mut EGraph>) -> Option<Value> {
         let var = Symbol::load(&self.string, &values[0]);
         let mut var_to_id = self.lambda.symbol_to_id.lock().unwrap();
         let id = match var_to_id.entry(var) {
@@ -176,8 +180,8 @@ impl PrimitiveLike for Var {
             std::collections::btree_map::Entry::Occupied(o) => *o.get(),
             // Otherwise, if we have the unionfind, make an ID and return it
             // If we don't the unionfind, we are in type checking and return a dummy ID
-            std::collections::btree_map::Entry::Vacant(v) => unionfind.map_or(Id::from(0), |u| {
-                let id = u.make_set();
+            std::collections::btree_map::Entry::Vacant(v) => egraph.map_or(Id::from(0), |e| {
+                let id = e.unionfind.make_set();
                 v.insert(id);
                 self.lambda.id_to_symbol.lock().unwrap().insert(id, var);
                 id
@@ -208,7 +212,7 @@ impl PrimitiveLike for Lambda {
         None
     }
 
-    fn apply(&self, values: &[Value], _unionfind: Option<&mut UnionFind>) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         ValueLambda {
             var_id: Id::from(values[0].bits as usize),
             body: values[1],
@@ -238,14 +242,97 @@ impl PrimitiveLike for Apply {
         None
     }
 
-    fn apply(&self, values: &[Value], _unionfind: Option<&mut UnionFind>) -> Option<Value> {
+    fn apply(&self, values: &[Value], egraph: Option<&mut EGraph>) -> Option<Value> {
         let lambda = ValueLambda::load(&self.lambda, &values[0]);
         let var_value = Value::from_id(self.lambda.input.name(), lambda.var_id);
         let body = lambda.body;
         let input_value = values[1];
-        // In body replace all instances of var_value with input_value
-        Some(body)
-
-
+        // If we don't have an e-graph, just return the body, we are just type checking
+        match egraph {
+            None => return Some(body),
+            Some(e) => {
+                // If we do have an e-graph, we need to substitute the var with the input
+                // In body replace all instances of var_value with input_value
+                Some(
+                    substitute(e, &body, &var_value, &input_value)
+                        .or(Some(body))
+                        .unwrap(),
+                )
+            }
+        }
     }
+}
+
+/// Substitutues instance of var_value in body with input_value
+/// Returns a new value if any substitutions were made
+fn substitute(
+    egraph: &mut EGraph,
+    body_value: &Value,
+    var_value: &Value,
+    input_value: &Value,
+) -> Option<Value> {
+    if body_value == var_value {
+        return Some(input_value.clone());
+    }
+    let body_sort = egraph.get_sort(body_value).unwrap().clone();
+    if body_sort.is_container_sort() {
+        panic!("Container support not implemented")
+    }
+    // If the body is not an eq sort, we don't need to recurse, just return
+    if !body_sort.is_eq_sort() {
+        return None;
+    }
+
+    // If the body is an eq sort, we need to recurse
+
+    let body_id = Id::from(body_value.bits as usize);
+    let canonical_body_id = egraph.unionfind.find(body_id);
+
+    let new_body_id = egraph.unionfind.make_set();
+    let new_body_value = Value::from_id(body_sort.name(), new_body_id);
+
+    let mut made_changes = false;
+    // Then, we want to iterate through all functions whose return sort is the body sort
+    for name in egraph.functions.keys().cloned().collect::<Vec<_>>() {
+        let function = egraph.functions.get(&name).unwrap().clone();
+        if function.schema.output.name() != body_sort.name() {
+            continue;
+        }
+        // For each function, we want to iterate through all of its e-nodes
+        for (input, output) in function.nodes.iter() {
+            // If the canonical ID of the output is not the same as the canonical ID of the body, skip it
+            if egraph.unionfind.find(Id::from(output.value.bits as usize)) != canonical_body_id {
+                continue;
+            }
+            // Now build up new inputs based on substituting the old inputs
+            let mut any_new_inputs = false;
+            let mut new_input = vec![];
+            for i in input {
+                let new_input_value = substitute(egraph, i, var_value, input_value);
+                new_input.push(match new_input_value {
+                    Some(_) => {
+                        any_new_inputs = true;
+                        new_input_value.unwrap()
+                    }
+                    None => *i
+                })
+            }
+            if !any_new_inputs {
+                continue;
+            }
+            made_changes = true;
+            let res = egraph.functions.get_mut(&name).unwrap().nodes.insert(
+                &new_input[..],
+                new_body_value,
+                egraph.timestamp,
+            );
+            if res.is_some() && res != Some(new_body_value) {
+                panic!("Don't support when inserting returns different node currently for lambda subst {:?}", res)
+            }
+        }
+    }
+    if !made_changes {
+        return None;
+    }
+    Some(new_body_value)
 }
