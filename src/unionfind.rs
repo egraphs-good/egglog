@@ -92,25 +92,14 @@ impl UnionFind {
     /// This method assumes that the given values belong to the same, "eq-able",
     /// sort. Its behavior is unspecified on other values.
     pub fn union_values(&mut self, val1: Value, val2: Value, sort: Symbol) -> Value {
-        debug_assert_eq!(val1.tag, val2.tag);
-        let id1 = Id::from(val1.bits as usize);
-        let id2 = Id::from(val2.bits as usize);
-        let res = self.union(id1, id2, sort);
-        Value {
-            bits: usize::from(res) as u64,
-            tag: val1.tag,
-        }
+        panic!("We should never call union_values due to term encoding");
     }
 
     /// Like [`union_values`], but operating on raw [`Id`]s.
     ///
     /// [`union_values`]: UnionFind::union_values
     pub fn union(&mut self, id1: Id, id2: Id, sort: Symbol) -> Id {
-        let (res, reparented) = self.do_union(id1, id2);
-        if let Some(id) = reparented {
-            self.staged_ids.entry(sort).or_default().push(id)
-        }
-        res
+        panic!("We should never call union due to term encoding");
     }
 
     /// Merge the underlying equivalence classes for the two ids.

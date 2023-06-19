@@ -587,10 +587,6 @@ impl EGraph {
         log::debug!("Made {updates} updates)");
         report.rebuild_time += rebuild_start.elapsed();
         self.timestamp += 1;
-        if !subreport.updated {
-            log::info!("Breaking early!");
-            return;
-        }
 
         if self.num_tuples() > self.node_limit {
             log::warn!("Node limit reached, {} nodes. Stopping!", self.num_tuples());

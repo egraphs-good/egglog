@@ -9,10 +9,20 @@ impl ProofState {
         ))
     }
 
+    fn union(&self, type_name: Symbol, lhs: &str, rhs: &str) -> String {
+        let pname = self.parent_name(type_name);
+        format!(
+            "(set ({pname} ({pname} {lhs})) ({pname} {rhs}))
+             (set ({pname} ({pname} {rhs})) ({pname} {lhs}))",
+        )
+    }
+
     fn make_rebuilding(&self, name: Symbol) -> Vec<Command> {
         let pname = self.parent_name(name);
         vec![
-            format!("(function {pname} ({name}) {name} :merge (ordering-less old new))"),
+            format!(
+                "(function {pname} ({name}) {name} :unextractable :merge (ordering-less old new))"
+            ),
             format!(
                 "(rule ((= ({pname} a) b)
                         (= ({pname} b) c))
@@ -60,9 +70,9 @@ impl ProofState {
             "(rule ((= e ({op} {children})))
                    ((let lhs ({op} {children_updated}))
                     (let rhs ({pname} e))
-                    (set ({pname} lhs) rhs)
-                    (set ({pname} rhs) lhs))
+                    {})
                     :ruleset {})",
+            self.union(fdecl.schema.output, "lhs", "rhs"),
             self.rebuilding_ruleset_name()
         )]
         .into_iter()
@@ -171,12 +181,12 @@ impl ProofState {
                 assert_eq!(lhs_type.name(), rhs_type.name());
                 assert!(lhs_type.is_eq_sort());
 
-                let lhs_parent = self.wrap_parent(lhs.to_string(), lhs_type).unwrap();
-                let rhs_parent = self.wrap_parent(rhs.to_string(), rhs_type).unwrap();
-                self.parse_actions(vec![
-                    format!("(set {} {})", lhs_parent, rhs_parent),
-                    format!("(set {} {})", rhs_parent, lhs_parent),
-                ])
+                self.parse_actions(
+                    self.union(lhs_type.name(), &lhs.to_string(), &rhs.to_string())
+                        .split('\n')
+                        .map(|s| s.to_string())
+                        .collect(),
+                )
             }
         }
     }
