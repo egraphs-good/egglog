@@ -221,9 +221,9 @@ impl PrimitiveLike for Lambda {
     }
 }
 
-struct Apply {
-    name: Symbol,
-    lambda: Arc<LambdaSort>,
+pub(crate) struct Apply {
+    pub(crate) name: Symbol,
+    pub(crate) lambda: Arc<LambdaSort>,
 }
 
 impl PrimitiveLike for Apply {
@@ -249,14 +249,13 @@ impl PrimitiveLike for Apply {
         let input_value = values[1];
         // If we don't have an e-graph, just return the body, we are just type checking
         match egraph {
-            None => return Some(body),
+            None => Some(body),
             Some(e) => {
                 // If we do have an e-graph, we need to substitute the var with the input
                 // In body replace all instances of var_value with input_value
                 Some(
                     substitute(e, &body, &var_value, &input_value)
-                        .or(Some(body))
-                        .unwrap(),
+                        .unwrap_or(body),
                 )
             }
         }
@@ -270,9 +269,21 @@ fn substitute(
     body_value: &Value,
     var_value: &Value,
     input_value: &Value,
+    // Mapping of values to their substituted values, so we don't end up in loops for cyclic graphs
+    subtituted: &mut HashMap<Value, Value>,
 ) -> Option<Value> {
+    println!("{:?}[{:?} -> {:?}]", body_value, var_value, input_value);
     if body_value == var_value {
-        return Some(input_value.clone());
+        println!("Found var");
+        return Some(*input_value);
+    }
+    if body_value == input_value {
+        println!("Found input");
+        return None;
+    }
+    if subtituted.contains_key(body_value) {
+        println!("Found already substituted");
+        return Some(*subtituted.get(body_value).unwrap());
     }
     let body_sort = egraph.get_sort(body_value).unwrap().clone();
     if body_sort.is_container_sort() {
@@ -292,6 +303,7 @@ fn substitute(
     let new_body_value = Value::from_id(body_sort.name(), new_body_id);
 
     let mut made_changes = false;
+
     // Then, we want to iterate through all functions whose return sort is the body sort
     for name in egraph.functions.keys().cloned().collect::<Vec<_>>() {
         let function = egraph.functions.get(&name).unwrap().clone();
@@ -308,7 +320,7 @@ fn substitute(
             let mut any_new_inputs = false;
             let mut new_input = vec![];
             for i in input {
-                let new_input_value = substitute(egraph, i, var_value, input_value);
+                let new_input_value = substitute(egraph, i, var_value, input_value, subtituted);
                 new_input.push(match new_input_value {
                     Some(_) => {
                         any_new_inputs = true;

@@ -22,5 +22,20 @@
 (define two (apply double one))
 (run 10)
 
-(extract two)
 (check (= two (Num 2)))
+
+(define four (apply double two))
+(run 10)
+
+(check (= four (Num 4)))
+
+; Vec tests
+
+(sort MathVec (Vec Math))
+(define my-vec (vec-of (Num 1) ));(Num 2) (Var "3")))
+
+; (define doubled-vec (vec-map my-vec double))
+
+; (run 20)
+
+; (check (= doubled-vec (vec-of (Num 2) (Num 4) (Mul (Var "3") (Num 2)))))

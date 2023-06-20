@@ -125,9 +125,14 @@ impl Sort for VecSort {
         });
         typeinfo.add_primitive(Get {
             name: "vec-get".into(),
-            vec: self,
+            vec: self.clone(),
             i64: typeinfo.get_sort(),
-        })
+        });
+        typeinfo.add_primitive(Map {
+            name: "vec-map".into(),
+            vec: self,
+            lambda: typeinfo.get_sort(),
+        });
     }
 
     fn make_expr(&self, egraph: &EGraph, value: Value) -> Expr {
@@ -392,5 +397,49 @@ impl PrimitiveLike for Get {
         let vec = ValueVec::load(&self.vec, &values[0]);
         let index = i64::load(&self.i64, &values[1]);
         vec.get(index as usize).copied()
+    }
+}
+
+///Implement a map operator, which takes a vec and a lambda function and returns a new vec
+
+struct Map {
+    name: Symbol,
+    vec: Arc<VecSort>,
+    lambda: Arc<LambdaSort>,
+}
+
+impl PrimitiveLike for Map {
+    fn name(&self) -> Symbol {
+        self.name
+    }
+
+    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
+        match types {
+            [vec, lambda] if (vec.name(), lambda.name()) == (self.vec.name, self.lambda.name()) => {
+                Some(self.vec.clone())
+            }
+            _ => None,
+        }
+    }
+
+    fn apply(&self, values: &[Value], egraph: Option<&mut EGraph>) -> Option<Value> {
+        let vec = ValueVec::load(&self.vec, &values[0]);
+
+        // If we have no egraph, just return the input, since we are in type checking
+        let real_egraph = match egraph {
+            None => {return Some(values[0]) },
+            Some(e) => e,
+        };
+        let lambda = values[1];
+        let mut new_vec = ValueVec::default();
+        for value in vec.iter() {
+            let apply_prim = Apply {
+                name: "apply".into(),
+                lambda: self.lambda.clone(),
+            };
+            let new_value = apply_prim.apply(&[lambda, *value], Some(real_egraph))?;
+            new_vec.push(new_value);
+        }
+        new_vec.store(&self.vec)
     }
 }
