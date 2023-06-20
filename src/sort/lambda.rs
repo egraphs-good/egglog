@@ -82,10 +82,7 @@ impl Sort for LambdaSort {
         // TODO: Potential duplication of code
         let lambdas = self.lambdas.lock().unwrap();
         let lambda = lambdas.get_index(value.bits as usize).unwrap();
-
-        if self.output.is_eq_sort() {
-            f(lambda.body)
-        }
+        f(lambda.body)
     }
 
     fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
@@ -253,8 +250,9 @@ impl PrimitiveLike for Apply {
             Some(e) => {
                 // If we do have an e-graph, we need to substitute the var with the input
                 // In body replace all instances of var_value with input_value
+
                 Some(
-                    substitute(e, &body, &var_value, &input_value)
+                    substitute(e, &body, &var_value, &input_value, &mut HashMap::default())
                         .unwrap_or(body),
                 )
             }
@@ -326,7 +324,7 @@ fn substitute(
                         any_new_inputs = true;
                         new_input_value.unwrap()
                     }
-                    None => *i
+                    None => *i,
                 })
             }
             if !any_new_inputs {
