@@ -1,23 +1,25 @@
 use std::{collections::BTreeMap, sync::Mutex};
 
+use crate::typechecking::FuncType;
+
 use super::*;
 
-#[derive(Debug, Hash, Eq, PartialEq, Copy, Clone)]
-struct ValueLambda {
-    var_id: Id,
-    body: Value,
-}
+// #[derive(Debug, Hash, Eq, PartialEq, Copy, Clone)]
+// struct ValueLambda {
+//     var: Value,
+//     body: Value,
+// }
 
 #[derive(Debug)]
 pub struct LambdaSort {
     name: Symbol,
     input: ArcSort,
     output: ArcSort,
-    lambdas: Mutex<IndexSet<ValueLambda>>,
+    // lambdas: Mutex<IndexSet<ValueLambda>>,
     // Map from vars to their ID
-    symbol_to_id: Mutex<BTreeMap<Symbol, Id>>,
+    // symbol_to_id: Mutex<BTreeMap<Symbol, Id>>,
     // Inverse map
-    id_to_symbol: Mutex<BTreeMap<Id, Symbol>>,
+    // id_to_symbol: Mutex<BTreeMap<Id, Symbol>>,
 }
 
 impl LambdaSort {
@@ -27,6 +29,7 @@ impl LambdaSort {
         args: &[Expr],
     ) -> Result<ArcSort, TypeError> {
         if let [Expr::Var(input), Expr::Var(output)] = args {
+            // Ok(Arc::new(EqSort { name }))
             let input = typeinfo
                 .sorts
                 .get(input)
@@ -43,7 +46,7 @@ impl LambdaSort {
             }
             if output.is_eq_container_sort() {
                 return Err(TypeError::UndefinedSort(
-                    "Lambdasreturning other EqSort containers are not allowed".into(),
+                    "Lambdas returning other EqSort containers are not allowed".into(),
                 ));
             }
 
@@ -51,9 +54,9 @@ impl LambdaSort {
                 name,
                 input: input.clone(),
                 output: output.clone(),
-                lambdas: Default::default(),
-                symbol_to_id: Default::default(),
-                id_to_symbol: Default::default(),
+                // lambdas: Default::default(),
+                // symbol_to_id: Default::default(),
+                // id_to_symbol: Default::default(),
             }))
         } else {
             panic!()
@@ -70,45 +73,46 @@ impl Sort for LambdaSort {
         self
     }
 
-    fn is_container_sort(&self) -> bool {
+    // Use this as an eqsort with more type info and a registration function
+    fn is_eq_sort(&self) -> bool {
         true
     }
 
-    fn is_eq_container_sort(&self) -> bool {
-        self.output.is_eq_sort()
-    }
-
-    fn foreach_tracked_values<'a>(&'a self, value: &'a Value, mut f: Box<dyn FnMut(Value) + 'a>) {
-        // TODO: Potential duplication of code
-        let lambdas = self.lambdas.lock().unwrap();
-        let lambda = lambdas.get_index(value.bits as usize).unwrap();
-        f(lambda.body)
-    }
-
     fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
-        let lambdas = self.lambdas.lock().unwrap();
-        let lambda = lambdas.get_index(value.bits as usize).unwrap();
-        let mut body = lambda.body;
-        let changed = self.output.canonicalize(&mut body, unionfind);
-        let new_lambda = ValueLambda {
-            var_id: lambda.var_id,
-            body,
-        };
-        // drop(lambda);
-        *value = new_lambda.store(self).unwrap();
-        changed
+        EqSort { name: self.name }.canonicalize(value, unionfind)
     }
 
     fn register_primitives(self: Arc<Self>, typeinfo: &mut TypeInfo) {
-        typeinfo.add_primitive(Lambda {
-            name: "lambda".into(),
-            lambda: self.clone(),
-        });
-        typeinfo.add_primitive(Var {
-            name: "var".into(),
-            lambda: self.clone(),
-            string: typeinfo.get_sort(),
-        });
+        // typeinfo.add_primitive(Lambda {
+        //     name: "lambda".into(),
+        //     lambda: self.clone(),
+        // });
+        // typeinfo.func_types.insert(
+        //     "lambda".into(),
+        //     FuncType::new(
+        //         vec![self.input.clone(), self.output.clone()],
+        //         self.clone(),
+        //         false,
+        //     ),
+        // );
+        let string_sort: Arc<StringSort> = typeinfo.get_sort();
+        typeinfo.func_types.insert(
+            "var".into(),
+            FuncType::new(vec![string_sort], self.input.clone(), false),
+        );
+        typeinfo.func_types.insert(
+            "lambda".into(),
+            FuncType::new(
+                vec![self.input.clone(), self.output.clone()],
+                self.clone(),
+                false,
+            ),
+        );
+        // typeinfo.add_primitive(Var {
+        //     name: "var".into(),
+        //     lambda: self.clone(),
+        //     string: typeinfo.get_sort(),
+        // });
         typeinfo.add_primitive(Apply {
             name: "apply".into(),
             lambda: self,
@@ -116,107 +120,128 @@ impl Sort for LambdaSort {
     }
 
     fn make_expr(&self, egraph: &EGraph, value: Value) -> Expr {
-        let lambda = ValueLambda::load(self, &value);
-        let var_string = self.id_to_symbol.lock().unwrap()[&lambda.var_id];
-        // Generate (lambda (var vv) body)
-        Expr::call(
-            "lambda",
-            [
-                Expr::call("var", [Expr::Lit(Literal::String(var_string))]),
-                egraph.extract(lambda.body, &self.output).1,
-            ],
-        )
+        unimplemented!("No make_expr for EqSort {}", self.name)
+    }
+
+    fn register_egraph(self: Arc<Self>, egraph: &mut EGraph) {
+        let string_sort: Arc<StringSort> = egraph.proof_state.type_info.get_sort();
+        egraph
+            .declare_function(
+                &FunctionDecl {
+                    name: "var".into(),
+                    schema: Schema::new(vec![string_sort.name()], self.output.name()),
+                    default: None,
+                    merge: None,
+                    merge_action: vec![],
+                    cost: None,
+                },
+                false,
+            )
+            .expect("declaring var");
+        egraph
+            .declare_function(
+                &FunctionDecl {
+                    name: "lambda".into(),
+                    schema: Schema::new(vec![self.input.name(), self.output.name()], self.name()),
+                    default: None,
+                    merge: None,
+                    merge_action: vec![],
+                    cost: None,
+                },
+                false,
+            )
+            .expect("declaring lambda");
     }
 }
 
-impl IntoSort for ValueLambda {
-    type Sort = LambdaSort;
-    fn store(self, sort: &Self::Sort) -> Option<Value> {
-        let mut lambdas = sort.lambdas.lock().unwrap();
-        let (i, _) = lambdas.insert_full(self);
-        Some(Value {
-            tag: sort.name,
-            bits: i as u64,
-        })
-    }
-}
+// impl IntoSort for ValueLambda {
+//     type Sort = LambdaSort;
+//     fn store(self, sort: &Self::Sort) -> Option<Value> {
+//         let mut lambdas = sort.lambdas.lock().unwrap();
+//         let (i, _) = lambdas.insert_full(self);
+//         Some(Value {
+//             tag: sort.name,
+//             bits: i as u64,
+//         })
+//     }
+// }
 
-impl FromSort for ValueLambda {
-    type Sort = LambdaSort;
-    fn load(sort: &Self::Sort, value: &Value) -> Self {
-        let lambdas = sort.lambdas.lock().unwrap();
-        *lambdas.get_index(value.bits as usize).unwrap()
-    }
-}
+// impl FromSort for ValueLambda {
+//     type Sort = LambdaSort;
+//     fn load(sort: &Self::Sort, value: &Value) -> Self {
+//         let lambdas = sort.lambdas.lock().unwrap();
+//         *lambdas.get_index(value.bits as usize).unwrap()
+//     }
+// }
 
-struct Var {
-    name: Symbol,
-    lambda: Arc<LambdaSort>,
-    string: Arc<StringSort>,
-}
+// struct Var {
+//     name: Symbol,
+//     lambda: Arc<LambdaSort>,
+//     string: Arc<StringSort>,
+// }
 
-impl PrimitiveLike for Var {
-    fn name(&self) -> Symbol {
-        self.name
-    }
+// impl PrimitiveLike for Var {
+//     fn name(&self) -> Symbol {
+//         self.name
+//     }
 
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-        if let [sort] = types {
-            if sort.name() == self.string.name() {
-                return Some(self.lambda.input.clone());
-            }
-        }
-        None
-    }
+//     fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
+//         if let [sort] = types {
+//             if sort.name() == self.string.name() {
+//                 return Some(self.lambda.input.clone());
+//             }
+//         }
+//         None
+//     }
 
-    fn apply(&self, values: &[Value], egraph: Option<&mut EGraph>) -> Option<Value> {
-        let var = Symbol::load(&self.string, &values[0]);
-        let mut var_to_id = self.lambda.symbol_to_id.lock().unwrap();
-        let id = match var_to_id.entry(var) {
-            // If we have already saved a var for this ID used it
-            std::collections::btree_map::Entry::Occupied(o) => *o.get(),
-            // Otherwise, if we have the unionfind, make an ID and return it
-            // If we don't the unionfind, we are in type checking and return a dummy ID
-            std::collections::btree_map::Entry::Vacant(v) => egraph.map_or(Id::from(0), |e| {
-                let id = e.unionfind.make_set();
-                v.insert(id);
-                self.lambda.id_to_symbol.lock().unwrap().insert(id, var);
-                id
-            }),
-        };
-        Some(Value::from_id(self.lambda.input.name(), id))
-    }
-}
+//     fn apply(&self, values: &[Value], egraph: &mut EGraph) -> Option<Value> {
+//         let var = Symbol::load(&self.string, &values[0]);
+//         let mut var_to_id = self.lambda.symbol_to_id.lock().unwrap();
+//         let id = match var_to_id.entry(var) {
+//             // If we have already saved a var for this ID used it
+//             std::collections::btree_map::Entry::Occupied(o) => *o.get(),
+//             // Otherwise, if we have the unionfind, make an ID and return it
+//             // If we don't the unionfind, we are in type checking and return a dummy ID
+//             std::collections::btree_map::Entry::Vacant(v) => egraph.map_or(Id::from(0), |e| {
+//                 let id = e.unionfind.make_set();
+//                 v.insert(id);
+//                 self.lambda.id_to_symbol.lock().unwrap().insert(id, var);
+//                 id
+//             }),
+//         };
+//         Some(Value::from_id(self.lambda.input.name(), id))
+//     }
+// }
 
-struct Lambda {
-    name: Symbol,
-    lambda: Arc<LambdaSort>,
-}
+// struct Lambda {
+//     name: Symbol,
+//     lambda: Arc<LambdaSort>,
+// }
 
-impl PrimitiveLike for Lambda {
-    fn name(&self) -> Symbol {
-        self.name
-    }
+// impl PrimitiveLike for Lambda {
+//     fn name(&self) -> Symbol {
+//         self.name
+//     }
 
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-        if let [var_tp, body_tp] = types {
-            if var_tp.name() == self.lambda.input.name()
-                && body_tp.name() == self.lambda.output.name()
-            {
-                return Some(self.lambda.clone());
-            }
-        }
-        None
-    }
+//     fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
+//         if let [var_tp, body_tp] = types {
+//             if var_tp.name() == self.lambda.input.name()
+//                 && body_tp.name() == self.lambda.output.name()
+//             {
+//                 return Some(self.lambda.clone());
+//             }
+//         }
+//         None
+//     }
 
-    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
-        ValueLambda {
-            var_id: Id::from(values[0].bits as usize),
-            body: values[1],
-        }
-        .store(&self.lambda)
-    }
-}
+//     fn apply(&self, values: &[Value], _egraph: &mut EGraph) -> Option<Value> {
+//         ValueLambda {
+//             var: values[0],
+//             body: values[1],
+//         }
+//         .store(&self.lambda)
+//     }
+// }
 
 pub(crate) struct Apply {
     pub(crate) name: Symbol,
@@ -239,24 +264,51 @@ impl PrimitiveLike for Apply {
         None
     }
 
-    fn apply(&self, values: &[Value], egraph: Option<&mut EGraph>) -> Option<Value> {
-        let lambda = ValueLambda::load(&self.lambda, &values[0]);
-        let var_value = Value::from_id(self.lambda.input.name(), lambda.var_id);
-        let body = lambda.body;
-        let input_value = values[1];
-        // If we don't have an e-graph, just return the body, we are just type checking
-        match egraph {
-            None => Some(body),
-            Some(e) => {
-                // If we do have an e-graph, we need to substitute the var with the input
-                // In body replace all instances of var_value with input_value
-
-                Some(
-                    substitute(e, &body, &var_value, &input_value, &mut HashMap::default())
-                        .unwrap_or(body),
-                )
+    fn apply(&self, values: &[Value], maybe_egraph: Option<&mut EGraph>) -> Option<Value> {
+        let egraph = match maybe_egraph {
+            Some(egraph) => egraph,
+            None => {
+                panic!("Cant use apply when creating a query")
             }
-        }
+        };
+        // let lambda = ValueLambda::load(&self.lambda, &values[0]);
+        let lambda_value = values[0];
+        let input_value = values[1];
+        let lambda_name: Symbol = "lambda".into();
+        let lambda_fn = egraph
+            .functions
+            .get_mut(&lambda_name)
+            .expect("getting lambda fn");
+        // Find lambda inputs which return this lambda value
+        let (lambda_input, _) = lambda_fn
+            .nodes
+            .iter()
+            .find(|(input, output)| output.value == lambda_value)
+            .expect("finding lambda fn call");
+        let var_value = lambda_input[0];
+        let body_value = lambda_input[1];
+        Some(
+            substitute(
+                egraph,
+                &body_value,
+                &var_value,
+                &input_value,
+                &mut HashMap::default(),
+            )
+            .unwrap_or(body_value),
+        )
+        // match egraph {
+        //     None => Some(body),
+        //     Some(e) => {
+        //         // If we do have an e-graph, we need to substitute the var with the input
+        //         // In body replace all instances of var_value with input_value
+
+        //         Some(
+        //             substitute(e, &body, &var_value, &input_value, &mut HashMap::default())
+        //                 .unwrap_or(body),
+        //         )
+        //     }
+        // }
     }
 }
 
@@ -299,6 +351,7 @@ fn substitute(
 
     let new_body_id = egraph.unionfind.make_set();
     let new_body_value = Value::from_id(body_sort.name(), new_body_id);
+    subtituted.insert(*body_value, new_body_value);
 
     let mut made_changes = false;
 
@@ -327,22 +380,28 @@ fn substitute(
                     None => *i,
                 })
             }
-            if !any_new_inputs {
-                continue;
-            }
+            // if !any_new_inputs {
+            //     continue;
+            // }
             made_changes = true;
             let res = egraph.functions.get_mut(&name).unwrap().nodes.insert(
                 &new_input[..],
                 new_body_value,
                 egraph.timestamp,
             );
-            if res.is_some() && res != Some(new_body_value) {
-                panic!("Don't support when inserting returns different node currently for lambda subst {:?}", res)
+            match res {
+                Some(new_value) => {
+                    egraph.union(body_id, Id::from(new_value.bits as usize), body_sort.name());
+                }
+                None => {}
             }
+            // if res.is_some() && res != Some(new_body_value) {
+            //     panic!("Don't support when inserting returns different node currently for lambda subst {:?}", res)
+            // }
         }
     }
-    if !made_changes {
-        return None;
-    }
+    // if !made_changes {
+    //     return None;
+    // }
     Some(new_body_value)
 }

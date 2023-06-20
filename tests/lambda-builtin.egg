@@ -31,8 +31,8 @@
 
 ; Vec tests
 
-(sort MathVec (Vec Math))
-(define my-vec (vec-of (Num 1) ));(Num 2) (Var "3")))
+; (sort MathVec (Vec Math))
+; (define my-vec (vec-of (Num 1) ));(Num 2) (Var "3")))
 
 ; (define doubled-vec (vec-map my-vec double))
 

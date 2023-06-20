@@ -62,6 +62,11 @@ pub trait Sort: Any + Send + Sync + Debug {
         let _ = info;
     }
 
+    /// Do any registration needed on the e-graph, like adding non primitive functions
+    fn register_egraph(self: Arc<Self>, egraph: &mut EGraph) {
+        let _ = egraph;
+    }
+
     fn make_expr(&self, egraph: &EGraph, value: Value) -> Expr;
 }
 

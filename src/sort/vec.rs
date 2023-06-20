@@ -427,7 +427,9 @@ impl PrimitiveLike for Map {
 
         // If we have no egraph, just return the input, since we are in type checking
         let real_egraph = match egraph {
-            None => {return Some(values[0]) },
+            None => {
+                panic!("Cant use map in matching")
+            }
             Some(e) => e,
         };
         let lambda = values[1];
