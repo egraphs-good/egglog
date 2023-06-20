@@ -1025,7 +1025,13 @@ impl EGraph {
         let exprs = match variants {
             0 => vec![],
             1 => vec![expr.clone()],
-            _ => self.extract_variants(value, variants),
+            _ => {
+                if Option::map_or(self.get_sort(&value), false, |sort| sort.is_eq_sort()) {
+                    self.extract_variants(value, variants)
+                } else {
+                    vec![expr.clone()]
+                }
+            }
         };
         Ok(ExtractReport {
             cost,
