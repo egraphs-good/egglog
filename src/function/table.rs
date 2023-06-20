@@ -182,13 +182,18 @@ impl Table {
     }
 
     /// One more than the maximum (potentially) valid offset into the table.
-    pub(crate) fn len(&self) -> usize {
+    pub(crate) fn num_offsets(&self) -> usize {
         self.vals.len()
+    }
+
+    /// One more than the maximum (potentially) valid offset into the table.
+    pub(crate) fn len(&self) -> usize {
+        self.vals.len() - self.n_stale
     }
 
     /// Whether the table is completely empty, including stale entries.
     pub(crate) fn is_empty(&self) -> bool {
-        self.len() == 0
+        self.num_offsets() == 0
     }
 
     /// The minimum timestamp stored by the table, if there is one.
@@ -232,7 +237,7 @@ impl Table {
 
     /// Iterate over the live entries in the table, in insertion order.
     pub(crate) fn iter(&self) -> impl Iterator<Item = (&[Value], &TupleOutput)> + '_ {
-        self.iter_range(0..self.len()).map(|(_, y, z)| (y, z))
+        self.iter_range(0..self.num_offsets()).map(|(_, y, z)| (y, z))
     }
 
     /// Iterate over the live entries in the offset range, passing back the
@@ -285,7 +290,7 @@ impl Table {
             if let Some(end) = binary_search_table_by_key(self, range.end) {
                 start..end
             } else {
-                start..self.len()
+                start..self.num_offsets()
             }
         } else {
             0..0
