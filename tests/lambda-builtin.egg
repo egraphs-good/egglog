@@ -1,3 +1,4 @@
+; Tests for the builtin lambda function
 (datatype Math
   (Num i64)
   (Var String)
@@ -6,36 +7,36 @@
 
 
 (rewrite (Mul (Num x) (Num y)) (Num (* x y)))
+; (rewrite (Mul x y) (Mul y x))
 
+; We define a function from math -> Math
 (sort MathFn (Lambda Math Math))
 
+; Test a function that doesn't use its args
+(push)
 (define one-thunk (lambda (var "x") (Num 1)))
-
 (define one (apply one-thunk (Var "doesnt matter")))
-
-(run 10)
 (check (= one (Num 1)))
+(pop)
 
-(define double (lambda (var "y") (Mul (var "y") (Num 2))))
-(run 10)
-(Num 1)
-(apply double (Num 1))
+; Test a function which doubles its arguments
+(define double (lambda (var "x") (Mul (var "x") (Num 2))))
+
+(push)
 (define two (apply double (Num 1)))
-(run 10)
-
+(run 1)
 (check (= two (Num 2)))
-
 (define four (apply double two))
-(run 10)
-
+(run 1)
 (check (= four (Num 4)))
+(pop)
 
-; Vec tests
+
+
+; Test apply the double function to a vec
 
 (sort MathVec (Vec Math))
-(define my-vec (vec-of (Num 1)  (Var "3")))
-
-(define doubled-vec (vec-map my-vec double))
-
-(run 20)
+(define vec (vec-of (Num 1) (Var "3")))
+(define doubled-vec (vec-map vec double))
+(run 1)
 (check (= doubled-vec (vec-of (Num 2) (Mul (Var "3") (Num 2)))))
