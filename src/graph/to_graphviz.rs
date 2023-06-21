@@ -78,12 +78,27 @@ impl SubgraphBuilder {
 
     fn add_call(&mut self, call: &ExportedCall) {
         let sort: &str = &call.output.1;
+        let value = &call.output.0;
         self.sorts.insert(sort.to_string());
 
         let function_node_id = call.function_node_id();
 
-        let mut nodes = vec![self.add_node(&function_node_id, &call.fn_name, &call.inputs)];
-        match &call.output.0 {
+        let mut nodes = vec![self.add_node(
+            &function_node_id,
+            &call.fn_name,
+            &call.inputs,
+            // Set the tooltip for a function to the e-class ID, if it returns an e-class
+            format!(
+                "{}: {}",
+                sort,
+                match value {
+                    ExportedValue::EClass(eclass_id) => eclass_id.to_string(),
+                    ExportedValue::Prim(_, _, _) => function_node_id.clone(),
+                }
+            )
+            .as_str(),
+        )];
+        match value {
             ExportedValue::EClass(eclass_id) => {
                 let subgraph_id = format!("cluster_{}", eclass_id);
                 self.nodes
@@ -100,7 +115,12 @@ impl SubgraphBuilder {
                 let value_node_id = format!("{}_value", function_node_id);
                 // Add the function return value, unless it's a unit sort
                 if sort != "Unit" {
-                    nodes.push(self.add_node(&value_node_id, name, inner));
+                    nodes.push(self.add_node(
+                        &value_node_id,
+                        name,
+                        inner,
+                        format!("{}: {}", sort, name).as_str(),
+                    ));
                 }
                 self.add_value_subgraph(&subgraph_id, sort, nodes);
             }
@@ -108,7 +128,13 @@ impl SubgraphBuilder {
     }
 
     /// Adds a node with some children
-    fn add_node(&mut self, node_id: &str, label: &str, children: &[ExportedValueWithSort]) -> Node {
+    fn add_node(
+        &mut self,
+        node_id: &str,
+        label: &str,
+        children: &[ExportedValueWithSort],
+        tooltip: &str,
+    ) -> Node {
         let quoted_node_id = quote(node_id);
         for (i, value) in children.iter().enumerate() {
             let source = node_id!(quote(node_id), port!(id!(port_id(i)), "s"));
@@ -133,7 +159,12 @@ impl SubgraphBuilder {
                 ExportedValue::Prim(name, inner, _) => {
                     let child_node_id = format!("{}_{}", node_id, i);
                     let child_subgraph_id = format!("cluster_{}", child_node_id);
-                    let subgraph_node = self.add_node(&child_node_id, name, inner);
+                    let subgraph_node = self.add_node(
+                        &child_node_id,
+                        name,
+                        inner,
+                        format!("{}: {}", value.1, name).as_str(),
+                    );
                     self.add_value_subgraph(&child_subgraph_id, &value.1, vec![subgraph_node]);
                     (child_node_id, child_subgraph_id)
                 }
@@ -143,7 +174,8 @@ impl SubgraphBuilder {
                 .push(edge!(source => target; EdgeAttributes::lhead(quote(&child_subgraph_id))));
         }
         let html_label = html_label(label, children.len());
-        node!(quoted_node_id;NodeAttributes::label(html_label))
+        let quoted_tooltip = quote(tooltip);
+        node!(quoted_node_id;NodeAttributes::label(html_label), NodeAttributes::tooltip(quoted_tooltip))
     }
 
     /// Adds a new subgraph, panics if it already exists. Used for values
