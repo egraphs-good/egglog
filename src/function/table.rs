@@ -186,7 +186,7 @@ impl Table {
         self.vals.len()
     }
 
-    /// One more than the maximum (potentially) valid offset into the table.
+    /// One more than the actual valid offset (not including stale) into the table.
     pub(crate) fn len(&self) -> usize {
         self.vals.len() - self.n_stale
     }
