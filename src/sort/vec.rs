@@ -432,7 +432,9 @@ impl PrimitiveLike for Map {
                 name: "apply".into(),
                 lambda: self.lambda.clone(),
             };
-            let res = apply_prim.apply(&[lambda, *value], Some(egraph)).expect("result");
+            let res = apply_prim
+                .apply(&[lambda, *value], Some(egraph))
+                .expect("result");
             new_vec.push(res);
         }
         let mut new_value = new_vec.store(&self.vec).expect("new_value");

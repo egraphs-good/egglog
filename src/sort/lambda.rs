@@ -1,7 +1,6 @@
 /// A sort for lambdas
 ///
 /// They pretend to be an e-sort, but just with more type info and registration functions provided.
-
 use crate::typechecking::FuncType;
 
 use super::*;
@@ -44,7 +43,7 @@ impl LambdaSort {
             Ok(Arc::new(Self {
                 name,
                 input: input.clone(),
-                output: output.clone()
+                output: output.clone(),
             }))
         } else {
             panic!()

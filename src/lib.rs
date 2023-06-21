@@ -817,7 +817,8 @@ impl EGraph {
             NCommand::Sort(name, _presort_and_args) => {
                 let arcsort = self.proof_state.type_info.sorts.get(&name).unwrap().clone();
                 arcsort.register_egraph(self);
-                format!("Declared sort {}.", name)},
+                format!("Declared sort {}.", name)
+            }
             NCommand::Function(fdecl) => {
                 self.declare_function(&fdecl, false)?;
                 format!("Declared function {}.", fdecl.name)
