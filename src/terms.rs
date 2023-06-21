@@ -241,16 +241,19 @@ impl ProofState {
         let mut res = fdecl.clone();
         let types = self.type_info.func_types.get(&fdecl.name).unwrap().clone();
 
+        if res.merge.is_none() {
+            res.merge = Some(Expr::Var("new".into()));
+        }
+
         if types.output.is_eq_sort() && !types.has_merge {
-            if let (Some(lhs_wrapped), Some(rhs_wrapped)) = (
-                self.wrap_parent("old".to_string(), types.output.clone()),
-                self.wrap_parent("new".to_string(), types.output),
-            ) {
-                res.merge_action.extend(self.parse_actions(vec![
-                    format!("(set {lhs_wrapped} {rhs_wrapped})",),
-                    format!("(set {rhs_wrapped} {lhs_wrapped})",),
-                ]));
-            }
+            res.merge_action.extend(
+                self.parse_actions(
+                    self.union(types.output.name(), "old", "new")
+                        .split('\n')
+                        .map(|s| s.to_string())
+                        .collect(),
+                ),
+            );
 
             res
         } else {
