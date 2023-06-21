@@ -18,8 +18,9 @@
 
 (define double (lambda (var "y") (Mul (var "y") (Num 2))))
 (run 10)
-
-(define two (apply double one))
+(Num 1)
+(apply double (Num 1))
+(define two (apply double (Num 1)))
 (run 10)
 
 (check (= two (Num 2)))
@@ -31,11 +32,10 @@
 
 ; Vec tests
 
-; (sort MathVec (Vec Math))
-; (define my-vec (vec-of (Num 1) ));(Num 2) (Var "3")))
+(sort MathVec (Vec Math))
+(define my-vec (vec-of (Num 1)  (Var "3")))
 
-; (define doubled-vec (vec-map my-vec double))
+(define doubled-vec (vec-map my-vec double))
 
-; (run 20)
-
-; (check (= doubled-vec (vec-of (Num 2) (Num 4) (Mul (Var "3") (Num 2)))))
+(run 20)
+(check (= doubled-vec (vec-of (Num 2) (Mul (Var "3") (Num 2)))))

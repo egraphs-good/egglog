@@ -424,14 +424,7 @@ impl PrimitiveLike for Map {
 
     fn apply(&self, values: &[Value], egraph: Option<&mut EGraph>) -> Option<Value> {
         let vec = ValueVec::load(&self.vec, &values[0]);
-
-        // If we have no egraph, just return the input, since we are in type checking
-        let real_egraph = match egraph {
-            None => {
-                panic!("Cant use map in matching")
-            }
-            Some(e) => e,
-        };
+        let egraph = egraph.expect("Applying maps are not supporting in rules");
         let lambda = values[1];
         let mut new_vec = ValueVec::default();
         for value in vec.iter() {
@@ -439,9 +432,13 @@ impl PrimitiveLike for Map {
                 name: "apply".into(),
                 lambda: self.lambda.clone(),
             };
-            let new_value = apply_prim.apply(&[lambda, *value], Some(real_egraph))?;
-            new_vec.push(new_value);
+            new_vec.push(apply_prim.apply(&[lambda, *value], Some(egraph))?);
+            // Must re-build between calls or else we get infinite recursion
+            egraph.rebuild_nofail();
         }
-        new_vec.store(&self.vec)
+        let mut new_value = new_vec.store(&self.vec).expect("new_value");
+        // Must canonicalize to get the correct eclass
+        self.vec.canonicalize(&mut new_value, &egraph.unionfind);
+        Some(new_value)
     }
 }
