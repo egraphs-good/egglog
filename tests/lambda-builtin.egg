@@ -36,7 +36,7 @@
 ; Test apply the double function to a vec
 
 (sort MathVec (Vec Math))
-(define vec (vec-of (Num 1) (Var "3")))
+(define vec (vec-of (Num 1) (Num 2) (Var "3")))
 (define doubled-vec (vec-map vec double))
 (run 1)
-(check (= doubled-vec (vec-of (Num 2) (Mul (Var "3") (Num 2)))))
+(check (= doubled-vec (vec-of (Num 2) (Num 4) (Mul (Var "3") (Num 2)))))

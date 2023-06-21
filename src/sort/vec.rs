@@ -433,10 +433,7 @@ impl PrimitiveLike for Map {
                 lambda: self.lambda.clone(),
             };
             let res = apply_prim.apply(&[lambda, *value], Some(egraph)).expect("result");
-            // self.vec.element.canonicalize(&mut res, &egraph.unionfind);
             new_vec.push(res);
-            // Must re-build between calls or else we get infinite recursion
-            egraph.rebuild_nofail();
         }
         let mut new_value = new_vec.store(&self.vec).expect("new_value");
         // Must canonicalize to get the correct eclass
