@@ -188,34 +188,17 @@ fn substitute(
     input_value: &Value,
     // Mapping of e-class IDs to their substituted values, so we don't end up in loops for cyclic graphs
     substituted: &mut HashMap<Id, Id>,
-    // prefix: &str,
 ) -> Value {
     // If the body is not an eq sort, we don't need to recurse, just return the primitive
     let body_sort = egraph.get_sort(body_value).unwrap().clone();
     if !body_sort.is_eq_sort() {
         return *body_value;
     }
-    // println!(
-    //     "{}{:?}[{:?}/{:?}]",
-    //     prefix, body_value.bits, var_value.bits, input_value.bits
-    // );
-    // let print_unionfind = |e: &EGraph| {
-    //     println!(
-    //         " {}{:?}",
-    //         prefix,
-    //         e.unionfind
-    //             .parents
-    //             .iter()
-    //             .enumerate()
-    //             .map(|(i, p)| { (i, p.clone().into_inner().0) })
-    //             .collect::<Vec<_>>()
-    //     );
-    // };
-    // print_unionfind(egraph);
-
+    // If the body is equal to the var, then we can just return the input
     if body_value == var_value {
         return *input_value;
     }
+    // If the body is equal to the input, we can also just return the input
     if body_value == input_value {
         return *input_value;
     }
@@ -226,24 +209,18 @@ fn substitute(
 
     let body_id = Id::from(body_value.bits as usize);
     if let Some(replaced_id) = substituted.get(&body_id) {
-        // println!(
-        //     "{} Found already substituted {}->{}",
-        //     prefix, body_id.0, replaced_id.0
-        // );
         return Value::from_id(body_sort.name(), *replaced_id);
     }
 
     // Create a new e-class to store all the new bodies
     let mut new_body_id = egraph.unionfind.make_set();
-    // println!(" -> {}", new_body_id);
+
     // Store that we are replacing the old body with the new body
     substituted.insert(body_id, new_body_id);
     // Build up a list of all the functions and their inputs which return this body
     // All of this will need to have their args substituted and unioned to make a new body
     let canonical_body_id = egraph.unionfind.find(body_id);
     let fn_calls = find_all_call(egraph, body_sort.name(), canonical_body_id);
-    // println!("{} found {} cals", prefix, fn_calls.len());
-    // println!("  {:?}", body_value);
     // For every function calls, create a new function call with the substituted args
     for (f_name, inputs) in fn_calls {
         // println!("{} {} {:?}", prefix, f_name, inputs);
@@ -260,38 +237,21 @@ fn substitute(
                 )
             })
             .collect::<Vec<_>>();
-        // let mut new_fn_id = egraph.unionfind.make_set();
-        // println!("{} ->{}", prefix, new_fn_id.0);
-        // println!("{} -> {:?}", prefix, new_inputs);
         let new_res = egraph.functions.get_mut(&f_name).unwrap().insert(
             &new_inputs,
             Value::from_id(body_sort.name(), new_body_id),
             egraph.timestamp,
         );
-        // if let Some(id) = new_body_id {
-        //     let res = egraph.union(id, new_fn_id, body_sort.name());
-        //     println!("{} {}∪{}->{}", prefix, new_fn_id.0, id.0, res.0);
-        //     new_fn_id = res;
-        // }
-        // new_body_id = Some(new_fn_id);
         if let Some(new_res) = new_res {
-            //     // println!(" fr -> {}", res_value.bits as usize);
             let res_id = new_res.bits as usize;
-            let new_res = Some(egraph.union(new_body_id, Id::from(res_id), body_sort.name()));
-            // println!("{} {}∪{}->{}", prefix, new_fn_id.0, res_id, new_res.unwrap().0);
-            if let Some(new_res) = new_res {
-                new_body_id = new_res;
-            }
+            new_body_id = egraph.union(new_body_id, Id::from(res_id), body_sort.name());
         }
     }
-    // println!("{} ->> {}", prefix, new_body_id.0);
-    // print_unionfind(egraph);
     Value::from_id(body_sort.name(), new_body_id)
 }
 
 /// Returns all the function calls in the egraph which return the e-class of the given sort
 fn find_all_call(egraph: &EGraph, sort_name: Symbol, id: Id) -> Vec<(Symbol, Vec<Value>)> {
-    // vec![]
     egraph
         .functions
         .iter()
