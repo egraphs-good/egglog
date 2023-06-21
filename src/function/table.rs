@@ -237,7 +237,8 @@ impl Table {
 
     /// Iterate over the live entries in the table, in insertion order.
     pub(crate) fn iter(&self) -> impl Iterator<Item = (&[Value], &TupleOutput)> + '_ {
-        self.iter_range(0..self.num_offsets()).map(|(_, y, z)| (y, z))
+        self.iter_range(0..self.num_offsets())
+            .map(|(_, y, z)| (y, z))
     }
 
     /// Iterate over the live entries in the offset range, passing back the
