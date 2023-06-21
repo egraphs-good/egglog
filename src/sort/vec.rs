@@ -128,11 +128,15 @@ impl Sort for VecSort {
             vec: self.clone(),
             i64: typeinfo.get_sort(),
         });
-        typeinfo.add_primitive(Map {
-            name: "vec-map".into(),
-            vec: self,
-            lambda: typeinfo.get_sort(),
-        });
+        // Only add vec-map if we have already registred a lambda
+        let lambda_option: Option<Arc<LambdaSort>> = typeinfo.get_sort_safe();
+        if let Some(lambda) = lambda_option {
+            typeinfo.add_primitive(Map {
+                name: "vec-map".into(),
+                vec: self,
+                lambda,
+            });
+        }
     }
 
     fn make_expr(&self, egraph: &EGraph, value: Value) -> Expr {
