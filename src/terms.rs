@@ -36,7 +36,7 @@ impl ProofState {
         .collect()
     }
 
-    fn make_rebuilding_func(&mut self, fdecl: &FunctionDecl) -> Vec<Command> {
+    fn make_canonicalize_func(&mut self, fdecl: &FunctionDecl) -> Vec<Command> {
         let types = self.type_info.func_types.get(&fdecl.name).unwrap().clone();
         if !types.output.is_eq_sort() {
             return vec![];
@@ -67,9 +67,8 @@ impl ProofState {
             )
         );
         vec![format!(
-            "(rule ((= e ({op} {children})))
-                   ((let lhs ({op} {children_updated}))
-                    (let rhs ({pname} e))
+            "(rule ((= lhs ({op} {children})))
+                   ((let rhs ({op} {children_updated}))
                     {})
                     :ruleset {})",
             self.union(fdecl.schema.output, "lhs", "rhs"),
@@ -314,7 +313,7 @@ impl ProofState {
                 }
                 NCommand::Function(fdecl) => {
                     res.push(Command::Function(self.instrument_fdecl(fdecl)));
-                    res.extend(self.make_rebuilding_func(fdecl));
+                    res.extend(self.make_canonicalize_func(fdecl));
                 }
                 NCommand::NormRule {
                     ruleset,
