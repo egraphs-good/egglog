@@ -857,6 +857,7 @@ impl EGraph {
     }
 
     fn run_command(&mut self, command: NCommand, should_run: bool) -> Result<String, Error> {
+        eprintln!("Running {}", command);
         let pre_rebuild = Instant::now();
         self.extract_report = None;
         self.run_report = None;

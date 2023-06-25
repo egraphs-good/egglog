@@ -120,7 +120,28 @@ impl ProofState {
                     ListDisplay(children_parents, " ")
                 )])
             }
-            _ => vec![fact.to_fact()],
+            NormFact::Assign(_lhs, NormExpr::Call(_head, body)) => {
+                vec![fact.to_fact()]
+                    .into_iter()
+                    .chain({
+                        let facts = body
+                            .iter()
+                            .filter_map(|child| {
+                                let child_t =
+                                    self.type_info.lookup(self.current_ctx, *child).unwrap();
+                                self.wrap_parent(child.to_string(), child_t)
+                                    .map(|child_wrapped| format!("(= {} {})", child_wrapped, child))
+                            })
+                            .collect();
+                        // optimization: only match on
+                        // canonical enodes
+                        self.parse_facts(facts)
+                    })
+                    .collect()
+            }
+            NormFact::AssignLit(..) => {
+                vec![fact.to_fact()]
+            }
         }
     }
 

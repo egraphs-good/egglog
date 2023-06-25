@@ -301,6 +301,8 @@ impl<'a> Context<'a> {
                 }
                 let ty = if let Some(ty) = self.types.get(sym) {
                     Some(ty.clone())
+                } else if let Some(ty) = self.egraph.global_bindings.get(sym) {
+                    Some(ty.0.clone())
                 } else {
                     self.errors.push(TypeError::Unbound(*sym));
                     None
