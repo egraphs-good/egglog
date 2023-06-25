@@ -216,6 +216,7 @@ pub struct EGraph {
     pub node_limit: usize,
     pub fact_directory: Option<PathBuf>,
     pub seminaive: bool,
+    pub global_bindings: HashMap<Symbol, (ArcSort, Value)>,
     extract_report: Option<ExtractReport>,
     run_report: Option<RunReport>,
 }
@@ -241,6 +242,7 @@ impl Default for EGraph {
             rulesets: Default::default(),
             ruleset_iteration: Default::default(),
             proof_state: ProofState::default(),
+            global_bindings: Default::default(),
             iteration: 0,
             match_limit: usize::MAX,
             node_limit: usize::MAX,
@@ -414,8 +416,8 @@ impl EGraph {
         self.unionfind.n_unions() - n_unions + function.clear_updates()
     }
 
-    pub fn declare_function(&mut self, decl: &FunctionDecl, is_var: bool) -> Result<(), Error> {
-        let function = Function::new(self, decl, is_var)?;
+    pub fn declare_function(&mut self, decl: &FunctionDecl) -> Result<(), Error> {
+        let function = Function::new(self, decl)?;
         let old = self.functions.insert(decl.name, function);
         if old.is_some() {
             panic!(
@@ -434,21 +436,18 @@ impl EGraph {
     ) -> Result<(), Error> {
         let name = variant.name;
         let sort = sort.into();
-        self.declare_function(
-            &FunctionDecl {
-                name,
-                schema: Schema {
-                    input: variant.types,
-                    output: sort,
-                },
-                merge: None,
-                merge_action: vec![],
-                default: None,
-                cost: variant.cost,
-                unextractable: false,
+        self.declare_function(&FunctionDecl {
+            name,
+            schema: Schema {
+                input: variant.types,
+                output: sort,
             },
-            false,
-        )?;
+            merge: None,
+            merge_action: vec![],
+            default: None,
+            cost: variant.cost,
+            unextractable: false,
+        })?;
         // if let Some(ctors) = self.sorts.get_mut(&sort) {
         //     ctors.push(name);
         // }
@@ -877,7 +876,7 @@ impl EGraph {
             // Sorts are already declared during typechecking
             NCommand::Sort(name, _presort_and_args) => format!("Declared sort {}.", name),
             NCommand::Function(fdecl) => {
-                self.declare_function(&fdecl, false)?;
+                self.declare_function(&fdecl)?;
                 format!("Declared function {}.", fdecl.name)
             }
             NCommand::AddRuleset(name) => {
@@ -942,14 +941,27 @@ impl EGraph {
                 if should_run {
                     match &action {
                         NormAction::Let(name, contents) => {
-                            // define with high cost
-                            self.define(*name, &contents.to_expr(), Some(HIGH_COST))?;
+                            let (etype, value) = self.eval_expr(&contents.to_expr(), None, true)?;
+                            let present = self.global_bindings.insert(*name, (etype, value));
+                            if present.is_some() {
+                                panic!("Variable {name} was already present in global bindings");
+                            }
                         }
                         NormAction::LetVar(var1, var2) => {
-                            self.define(*var1, &Expr::Var(*var2), Some(HIGH_COST))?;
+                            let value = self.global_bindings.get(var2).unwrap();
+                            let present = self.global_bindings.insert(*var1, value.clone());
+                            if present.is_some() {
+                                panic!("Variable {var1} was already present in global bindings");
+                            }
                         }
                         NormAction::LetLit(var, lit) => {
-                            self.define(*var, &Expr::Lit(lit.clone()), Some(HIGH_COST))?;
+                            let value = self.eval_lit(lit);
+                            let etype = self.proof_state.type_info.infer_literal(lit);
+                            let present = self.global_bindings.insert(*var, (etype, value));
+
+                            if present.is_some() {
+                                panic!("Variable {var} was already present in global bindings");
+                            }
                         }
                         _ => {
                             self.eval_actions(std::slice::from_ref(&action.to_action()))?;
@@ -1089,57 +1101,6 @@ impl EGraph {
         })
     }
 
-    pub fn declare_const(&mut self, name: Symbol, sort: &ArcSort) -> Result<(), Error> {
-        assert!(sort.is_eq_sort());
-        self.declare_function(
-            &FunctionDecl {
-                name,
-                schema: Schema {
-                    input: vec![],
-                    output: sort.name(),
-                },
-                default: None,
-                merge: None,
-                merge_action: vec![],
-                cost: None,
-                unextractable: false,
-            },
-            true,
-        )?;
-        let f = self.functions.get_mut(&name).unwrap();
-        let id = self.unionfind.make_set();
-        let value = Value::from_id(sort.name(), id);
-        f.insert(&[], value, self.timestamp);
-        Ok(())
-    }
-    pub fn define(
-        &mut self,
-        name: Symbol,
-        expr: &Expr,
-        cost: Option<usize>,
-    ) -> Result<ArcSort, Error> {
-        let (sort, value) = self.eval_expr(expr, None, true)?;
-        self.declare_function(
-            &FunctionDecl {
-                name,
-                schema: Schema {
-                    input: vec![],
-                    output: value.tag,
-                },
-                default: None,
-                merge: None,
-                merge_action: vec![],
-                cost,
-                unextractable: false,
-            },
-            true,
-        )?;
-        let f = self.functions.get_mut(&name).unwrap();
-        f.insert(&[], value, self.timestamp);
-        Ok(sort)
-    }
-
-    // process the commands but don't run them
     pub fn process_commands(
         &mut self,
         program: Vec<Command>,

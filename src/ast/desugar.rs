@@ -825,7 +825,7 @@ impl Desugar {
                 merge: None,
                 merge_action: vec![],
                 cost: None,
-                unextractable: true,
+                unextractable: false,
             }),
             NCommand::NormAction(NormAction::Let(name, NormExpr::Call(fresh, vec![]))),
         ]

@@ -9,7 +9,7 @@ impl ProofState {
         ))
     }
 
-    fn union(&self, type_name: Symbol, lhs: &str, rhs: &str) -> String {
+    pub(crate) fn union(&self, type_name: Symbol, lhs: &str, rhs: &str) -> String {
         let pname = self.parent_name(type_name);
         format!(
             "(set ({pname} ({pname} {lhs})) ({pname} {rhs}))
