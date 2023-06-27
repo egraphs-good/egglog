@@ -325,9 +325,7 @@ fn variable_folding(rule: Rule) -> Rule {
 
             match (lhs, rhs) {
                 (Expr::Var(v1), Expr::Var(v2)) => {
-                    if bind_var.contains(v1) && bind_var.contains(v2) {
-                        // what to do here
-                    } else if bind_var.contains(v1) {
+                    if bind_var.contains(v1) {
                         subst_rule(&mut rule_copy, v2, v1)
                     } else if bind_var.contains(v2) {
                         subst_rule(&mut rule_copy, v1, v2)
