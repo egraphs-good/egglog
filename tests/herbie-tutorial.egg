@@ -14,7 +14,7 @@
 (rewrite (Add (Num r1) (Num r2))
          (Num (+ r1 r2)))
 
-(define one-two (Add one two))
+(let one-two (Add one two))
 
 (push)
 (run 1)

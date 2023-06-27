@@ -14,8 +14,8 @@
 (rewrite (Add a (Add b c))
       (Add (Add a b) c))
 
-(define two (rational 2 1))
-(define start1 (Add (Var "x") (Const two)))
+(let two (rational 2 1))
+(let start1 (Add (Var "x") (Const two)))
 ;; add original proofs
 
 (run 3)

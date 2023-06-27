@@ -34,13 +34,13 @@
     (ITE n (and a1 b1) (and a2 b2))
 )
 
-(define b0 (ITE 0 True False))
-(define b1 (ITE 1 True False))
-(define b2 (ITE 2 True False))
+(let b0 (ITE 0 True False))
+(let b1 (ITE 1 True False))
+(let b2 (ITE 2 True False))
 
-(define b123 (and b2 (and b0 b1)))
-(define b11 (and b1 b1))
-(define b12 (and b1 b2))
+(let b123 (and b2 (and b0 b1)))
+(let b11 (and b1 b1))
+(let b12 (and b1 b2))
 (run 5)
 (extract b11)
 (extract b12)
@@ -67,7 +67,7 @@
     (ITE n (or a1 b1) (or a2 b2))
 )
 
-(define or121 (or b1 (or b2 b1)))
+(let or121 (or b1 (or b2 b1)))
 (run 5)
 (extract or121)
 

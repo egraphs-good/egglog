@@ -2,7 +2,7 @@
   (S Nat))
 (declare Zero Nat)
 
-(define two (S (S Zero)))
+(let two (S (S Zero)))
 
 (union two (S (S (S Zero))))
 (check (= two (S (S (S Zero)))))

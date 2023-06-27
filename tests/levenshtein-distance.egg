@@ -49,14 +49,14 @@
 (rule ((= x (Num n))) ((set (Unwrap (Num n)) n)))
 
 ; Tests
-(define HorseStr (Cons "h" (Cons "o" (Cons "r" (Cons "s" (Cons "e" Empty))))))
-(define RosStr (Cons "r" (Cons "o" (Cons "s" Empty))))
-(define IntentionStr (Cons "i" (Cons "n" (Cons "t" (Cons "e" (Cons "n" (Cons "t" (Cons "i" (Cons "o" (Cons "n" Empty))))))))))
-(define ExecutionStr (Cons "e" (Cons "x" (Cons "e" (Cons "c" (Cons "u" (Cons "t" (Cons "i" (Cons "o" (Cons "n" Empty))))))))))
+(let HorseStr (Cons "h" (Cons "o" (Cons "r" (Cons "s" (Cons "e" Empty))))))
+(let RosStr (Cons "r" (Cons "o" (Cons "s" Empty))))
+(let IntentionStr (Cons "i" (Cons "n" (Cons "t" (Cons "e" (Cons "n" (Cons "t" (Cons "i" (Cons "o" (Cons "n" Empty))))))))))
+(let ExecutionStr (Cons "e" (Cons "x" (Cons "e" (Cons "c" (Cons "u" (Cons "t" (Cons "i" (Cons "o" (Cons "n" Empty))))))))))
 
-(define Test1 (EditDist HorseStr RosStr))
-(define Test2 (EditDist IntentionStr ExecutionStr))
-(define Test3 (EditDist HorseStr Empty))
+(let Test1 (EditDist HorseStr RosStr))
+(let Test2 (EditDist IntentionStr ExecutionStr))
+(let Test3 (EditDist HorseStr Empty))
 
 (run 100)
 

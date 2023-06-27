@@ -14,17 +14,17 @@
     (set (intersect f1 f2) (f x3))
 ))
 
-(define a1 (Var "a1")) (define a2 (Var "a2")) (define a3 (Var "a3"))
-(define b1 (Var "b1")) (define b2 (Var "b2")) (define b3 (Var "b3"))
+(let a1 (Var "a1")) (let a2 (Var "a2")) (let a3 (Var "a3"))
+(let b1 (Var "b1")) (let b2 (Var "b2")) (let b3 (Var "b3"))
 
 ;; e-graph 1: f(a) = f(b), f(f(a))
-(define t1 (f (f a1)))
-(define fb1 (f b1))
+(let t1 (f (f a1)))
+(let fb1 (f b1))
 (union (f a1) fb1)
 
 ;; e-graph 2: f(f(a)) = f(f(b))
-(define t2  (f (f a2)))
-(define t2p (f (f b2)))
+(let t2  (f (f a2)))
+(let t2p (f (f b2)))
 (union t2 t2p)
 
 (set (intersect a1 a2) a3)
@@ -32,7 +32,7 @@
 
 (run 100)
 
-(define t3 (f (f a3)))
+(let t3 (f (f a3)))
 (extract :variants 5 t3)
 
 ;; f(f(a)) = f(f(b)) is preserved

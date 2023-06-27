@@ -10,7 +10,7 @@
 (rewrite (Fib x) (Num x)
          :when ((<= x 1)))
 
-(define f7 (Fib 7))
+(let f7 (Fib 7))
 (run 1000)
 (extract f7)
 (check (= f7 (Num 13)))

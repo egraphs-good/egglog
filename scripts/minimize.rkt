@@ -2,42 +2,42 @@
 
 (require racket/runtime-path)
 
-(define (read-lines port)
-  (define line (read port))
+(let (read-lines port)
+  (let line (read port))
   (if (eof-object? line)
       '()
       (cons line (read-lines port))))
 
 ;; don't remove any check statements
-(define (remove-at n lst)
-  (define-values (head tail) (split-at lst n))
-  (define line (car tail))
+(let (remove-at n lst)
+  (let-values (head tail) (split-at lst n))
+  (let line (car tail))
   (if (and (list? line)
            (or (equal? (first line) 'check)
                (equal? (first line) 'keep)))
       lst
       (append head (cdr tail))))
 
-(define-runtime-path egglog-binary
+(let-runtime-path egglog-binary
   "../target/release/egglog")
 
 ;; timeout in seconds
-(define TIMEOUT 5)
-(define ITERATIONS 1)
-(define RANDOM-SAMPLE-FACTOR 1)
-(define MUST-NOT-STRINGS `())
-(define TARGET-STRINGS `("src/lib.rs:250"))
+(let TIMEOUT 5)
+(let ITERATIONS 1)
+(let RANDOM-SAMPLE-FACTOR 1)
+(let MUST-NOT-STRINGS `())
+(let TARGET-STRINGS `("src/lib.rs:250"))
 
-(define (desugar line)
+(let (desugar line)
   (match line
     [`(keep ,body)
      body]
     [else line]))
 
-(define (desired-error? program)
+(let (desired-error? program)
   (displayln (format "Trying program of size ~a" (length program)))
   (flush-output)
-  (define-values (egglog-process egglog-output egglog-in err)
+  (let-values (egglog-process egglog-output egglog-in err)
     (subprocess (current-output-port) #f #f egglog-binary))
 
   (for ([line program])
@@ -49,9 +49,9 @@
   (subprocess-kill egglog-process #t)
   (displayln "checking output")
   (flush-output)
-  (define err-str (read-string 10000 err))
+  (let err-str (read-string 10000 err))
   (close-input-port err)
-  (define still-unsound (and (string? err-str)
+  (let still-unsound (and (string? err-str)
                              (for/and ([must-not-string MUST-NOT-STRINGS])
                                (not (string-contains? err-str must-not-string)))
                              (for/or ([TARGET-STRING TARGET-STRINGS])
@@ -62,14 +62,14 @@
       (displayln "Did not reduce"))
   still-unsound)
 
-(define (min-program program index)
+(let (min-program program index)
   (fprintf (current-output-port) "Trying to remove index ~a out of ~a\n" index (length program))
   (flush-output)
 
   (cond
     [(>= index (length program)) program]
     [else
-     (define removed (remove-at index program))
+     (let removed (remove-at index program))
      (cond
        [(equal? (length removed) (length program))
         (min-program removed (+ index 1))]
@@ -77,49 +77,49 @@
         (min-program removed index)]
        [else (min-program program (+ index 1))])]))
 
-(define (remove-random-lines program n)
+(let (remove-random-lines program n)
   (cond
     [(<= n 0) program]
     [else
-     (define index (random (length program)))
-     (define new-program (remove-at index program))
+     (let index (random (length program)))
+     (let new-program (remove-at index program))
      (remove-random-lines new-program (- n 1))]))
 
-(define (min-program-random program iters)
+(let (min-program-random program iters)
   (cond
     [(= iters 0) program]
     [else
-     (define index (random (length program)))
-     (define new-program (remove-at index program))
+     (let index (random (length program)))
+     (let new-program (remove-at index program))
      (if (desired-error? new-program)
          (min-program-random new-program (- iters 1))
          (min-program-random program (- iters 1)))]))
 
-(define (min-program-greedy program num)
+(let (min-program-greedy program num)
   (cond
     [(< num 1)
      program]
     [else
-     (define prog (remove-random-lines program num))
+     (let prog (remove-random-lines program num))
      (if (desired-error? prog)
          (min-program-greedy prog num)
          (min-program-greedy program (* num 2/3)))]))
 
-(define (random-and-sequential program)
-  (define binary (min-program-greedy program (/ (length program) 2)))
-  (define random-prog (min-program-random binary (* (length binary) RANDOM-SAMPLE-FACTOR)))
+(let (random-and-sequential program)
+  (let binary (min-program-greedy program (/ (length program) 2)))
+  (let random-prog (min-program-random binary (* (length binary) RANDOM-SAMPLE-FACTOR)))
   (min-program random-prog 0))
 
-(define (min-iterations program)
-  (define programs (for/list ([i (in-range ITERATIONS)])
+(let (min-iterations program)
+  (let programs (for/list ([i (in-range ITERATIONS)])
                      (random-and-sequential program)))
   (first (sort programs (lambda (a b) (< (length a) (length b))))))
 
 
 
-(define (minimize port-in port-out)
-  #;((define-values (process out in err) (subprocess #f #f #f "cargo"))
-  (define err-str (read-string 800 err))
+(let (minimize port-in port-out)
+  #;((let-values (process out in err) (subprocess #f #f #f "cargo"))
+  (let err-str (read-string 800 err))
   (when (not (string=? err-str ""))
     (error err-str))
   (close-input-port out)
@@ -127,13 +127,13 @@
   (close-input-port err)
   (subprocess-wait process))
 
-  (define egglog (read-lines port-in))
+  (let egglog (read-lines port-in))
   (pretty-print egglog)
 
   (when (not (desired-error? egglog))
     (error "Original program did not have error"))
 
-  (define minimized (min-iterations egglog))
+  (let minimized (min-iterations egglog))
   (for ([line minimized])
     (writeln (desugar line) port-out)))
 

@@ -74,9 +74,9 @@
 
 ; example predicate
 (function p (i64) Bool)
-(define p0 (p 0))
-(define p1 (p 1))
-(define p2 (p 2))
+(let p0 (p 0))
+(let p1 (p 1))
+(let p2 (p 2))
 ;(set (or p0 (or p1 (or p2 False))) True)
 ;(set (or (negate p0) (or p1 (or (negate p2) False))) True)
 (set (or p1 (or (negate p2) False)) True)

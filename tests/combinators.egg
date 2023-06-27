@@ -17,7 +17,7 @@
 
 
 ; (\x. (if x then 0 else 1) + 2) false
-(define test
+(let test
     (App 
         (Abs "x" (Add (If (Var "x") (N 0) (N 1)) (N 2))) F))
 
@@ -77,12 +77,12 @@
 ; May be needed for multiple nested variables
 (rewrite (CAbs v (CApp K (CVar v))) K)
 
-;;;; Primitive Evaluation rules (defined on "surface syntax")
+;;;; Primitive Evaluation rules (letd on "surface syntax")
 (rewrite (If T t f) t)
 (rewrite (If F t f) f)
 (rewrite (Add (N n) (N m)) (N (+ n m)))
 
-;;;; Substitution Rules (defined on the combinator representation)
+;;;; Substitution Rules (letd on the combinator representation)
 (rewrite (CApp I cx) cx)
 (rewrite (CApp (CApp K cx) cy) cx)
 ; Without demand, this can cause an explosion in DB size.

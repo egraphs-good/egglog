@@ -176,9 +176,9 @@ defines a named value. This is the same as a 0-arity function with a given, sing
 
 Example:
 ```
-(define one 1)
-(define two 2)
-(define three (+ one two))
+(let one 1)
+(let two 2)
+(let three (+ one two))
 (extract three); extracts 3 as a i64
 ```
 

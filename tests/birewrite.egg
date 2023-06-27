@@ -2,16 +2,16 @@
 
 (birewrite (Add (Add x y) z) (Add x (Add y z)))
 
-(define a (Lit 1))
-(define b (Lit 2))
-(define c (Lit 3))
+(let a (Lit 1))
+(let b (Lit 2))
+(let c (Lit 3))
 
-(define d (Lit 4))
-(define e (Lit 5))
-(define f (Lit 6))
+(let d (Lit 4))
+(let e (Lit 5))
+(let f (Lit 6))
 
-(define ex1 (Add (Add a b) c))
-(define ex2 (Add d (Add e f)))
+(let ex1 (Add (Add a b) c))
+(let ex2 (Add d (Add e f)))
 
 (run 10)
 (check (= ex1 (Add a (Add b c))))

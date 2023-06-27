@@ -695,6 +695,10 @@ impl Fact {
             Fact::Fact(expr) => Fact::Fact(f(expr)),
         }
     }
+
+    pub fn subst(&self, subst: &HashMap<Symbol, Expr>) -> Fact {
+        self.map_exprs(&mut |e| e.subst(subst))
+    }
 }
 
 impl Display for NormFact {
@@ -879,10 +883,9 @@ impl NormRule {
         }
     }
 
-    pub fn resugar(&self) -> Rule {
-        let mut head = Vec::<Action>::default();
-        let mut subst = HashMap::<Symbol, Expr>::default();
+    pub fn resugar_actions(&self, subst: &mut HashMap<Symbol, Expr>) -> Vec<Action> {
         let mut used = HashSet::<Symbol>::default();
+        let mut head = Vec::<Action>::default();
         for a in &self.head {
             match a {
                 NormAction::Let(symbol, expr) => {
@@ -962,18 +965,25 @@ impl NormRule {
         // to the action, since they have the side-effect
         // of adding to the database
         for (var, expr) in subst {
-            if !used.contains(&var) {
+            if !used.contains(var) {
                 match expr {
                     Expr::Var(..) => (),
                     Expr::Lit(..) => (),
-                    Expr::Call(..) => head.push(Action::Expr(expr)),
+                    Expr::Call(..) => head.push(Action::Expr(expr.clone())),
                 };
             }
         }
+        head
+    }
+
+    pub fn resugar(&self) -> Rule {
+        let mut subst = HashMap::<Symbol, Expr>::default();
+
+        let facts_resugared = self.body.iter().map(|f| f.to_fact()).collect();
 
         Rule {
-            head,
-            body: self.body.iter().map(|f| f.to_fact()).collect(),
+            head: self.resugar_actions(&mut subst),
+            body: facts_resugared,
         }
     }
 

@@ -265,15 +265,15 @@
 
 
 
-(define two (rational 2 1))
-(define start1 (Add (Var "x") (Const two)))
+(let two (rational 2 1))
+(let start1 (Add (Var "x") (Const two)))
 ;; add original proofs
 (set (VarRep "x")
      (MakeTrmPrf (AstVar "x") (Original (AstVar "x"))))
 (set (ConstRep two)
      (MakeTrmPrf (AstConst two) (Original (AstConst two))))
-(define addx2 (AstAdd (AstVar "x") (AstConst two)))
-(define add2x (AstAdd (AstConst two) (AstVar "x")))
+(let addx2 (AstAdd (AstVar "x") (AstConst two)))
+(let add2x (AstAdd (AstConst two) (AstVar "x")))
 (set (AddRep (Var "x") (Const two))
      (MakeTrmPrf
        addx2
@@ -287,9 +287,9 @@
 (run 1)
 (run proof-rules 1000)
 
-(define zero (AstConst (rational 0 1)))
-(define addzero (AstAdd addx2 zero))
-(define addzerofront (AstAdd (AstAdd zero (AstVar "x")) (AstConst two)))
+(let zero (AstConst (rational 0 1)))
+(let addzero (AstAdd addx2 zero))
+(let addzerofront (AstAdd (AstAdd zero (AstVar "x")) (AstConst two)))
 
 (DemandEq addx2 add2x)
 (DemandEq addx2 addzerofront)

@@ -4,10 +4,10 @@
 (datatype N (Node i64))
 (function distance (N N) i64 :merge (min old new))
 
-(define a (Node 0))
-(define b (Node 1))
-(define x (Node 2))
-(define y (Node 3))
+(let a (Node 0))
+(let b (Node 1))
+(let x (Node 2))
+(let y (Node 3))
 (set (distance x y) 1)
 (set (distance a b) 2)
 

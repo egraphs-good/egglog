@@ -129,7 +129,7 @@
               (Integral (Mul (Diff x a) (Integral b x)) x)))
 
 
-(define start-expr2 (Add (Const (rational 1 1))
+(let start-expr2 (Add (Const (rational 1 1))
                         (Sub (Var "a") 
                              (Mul (Sub (Const (rational 2 1)) 
                                        (Const (rational 1 1))) 
@@ -137,7 +137,7 @@
 
 (run 6)
 
-(define end-expr2 (Const (rational 1 1)))
+(let end-expr2 (Const (rational 1 1)))
 
 (check (= start-expr2 end-expr2))
 

@@ -1,8 +1,8 @@
 (datatype Expr
   (Num i64 :cost 5))
 
-(define x (Num 1) :cost 10)
-(define y (Num 2) :cost 1)
+(let x (Num 1) :cost 10)
+(let y (Num 2) :cost 1)
 
 (extract x) ;; (Num 1)
 (extract y) ;; (y)

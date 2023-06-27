@@ -7,7 +7,7 @@
 
 (relation true ())
 (true)
-(define infinity 99999999)  ; close enough
+(let infinity 99999999)  ; close enough
 
 ; ==== PROBLEM INSTANCES ====
 

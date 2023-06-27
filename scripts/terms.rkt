@@ -1,8 +1,8 @@
 #lang racket
 
-(define binary `(Add Sub Mul Div))
+(let binary `(Add Sub Mul Div))
 
-(define program
+(let program
   `((datatype Math
       (Add Math Math)
       (Sub Math Math)

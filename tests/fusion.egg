@@ -131,14 +131,14 @@
 (set (freer (sum)) (set-empty))
 (set (freer (mapf)) (set-empty))
 
-(define expr (App (sum) (App (mapf) (TVar (V "expr")))))
+(let expr (App (sum) (App (mapf) (TVar (V "expr")))))
 
 (run 100)
 
 (extract (freer expr))
 
 
-(define my-output
+(let my-output
     (CaseSplit (TVar (V "expr")) (Num 0) 
            (Lam (V "x") (Lam (V "xs'") 
                 (Add (Add (TVar (V "x")) (Num 1)) 

@@ -67,8 +67,10 @@ impl ProofState {
             )
         );
         vec![format!(
-            "(rule ((= lhs ({op} {children})))
+            "(rule ((= lhs ({op} {children}))
+                    {children_updated})
                    ((let rhs ({op} {children_updated}))
+                    (set ({pname} rhs) rhs)
                     {})
                     :ruleset {})",
             self.union(fdecl.schema.output, "lhs", "rhs"),

@@ -56,7 +56,7 @@
 (End (NonTerm "DET") "a")
 
 
-(define test1 (B 7 1 (NonTerm "S")):cost 1000)
+(let test1 (B 7 1 (NonTerm "S")):cost 1000)
 
 (run 100)
 
@@ -91,7 +91,7 @@
 (run 100)
 (check (P 5 1 (NonTerm "S")))
 (fail (check (P 5 1 (NonTerm "B"))))
-(define test2 (B 5 1 (NonTerm "S")):cost 1000)
+(let test2 (B 5 1 (NonTerm "S")):cost 1000)
 (extract:variants 10  test2)
 (print test2)
 
@@ -111,7 +111,7 @@
 (fail (check (P 5 1 (NonTerm "B"))))
 (fail (check (P 5 1 (NonTerm ""))))
 (fail (check (P 5 1 (NonTerm "unrelated"))))
-(define test3 (B 5 1 (NonTerm "S")):cost 1000)
+(let test3 (B 5 1 (NonTerm "S")):cost 1000)
 (extract:variants 10 test3)
 (print test3) 
 
