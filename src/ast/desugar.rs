@@ -231,96 +231,122 @@ fn give_unique_names(desugar: &mut Desugar, facts: Vec<NormFact>) -> Vec<NormFac
 }
 
 fn flatten_rule(rule: Rule, desugar: &mut Desugar) -> NormRule {
-    let flat_facts = flatten_facts(&rule.body, desugar);
+    let new_rule = variable_folding(rule);
+
+    let flat_facts = flatten_facts(&new_rule.body, desugar);
     let with_unique_names = give_unique_names(desugar, flat_facts);
 
     NormRule {
-        head: flatten_actions(&rule.head, desugar),
+        head: flatten_actions(&new_rule.head, desugar),
         body: with_unique_names,
     }
 }
 
-fn subst(expr: &Expr, from: &Symbol, to: &Symbol) -> Expr {
+fn subst(expr: &mut Expr, from: &Symbol, to: &Symbol) {
     match expr {
         Expr::Var(s) => {
             if s.as_str().eq(from.as_str()) {
-                return Expr::Var(to.clone());
+                *expr = Expr::Var(to.clone());
             }
-            expr.clone()
         }
 
-        Expr::Call(f, params) => {
-            let mut new_params = vec![];
+        Expr::Call(_, params) => {
             for p in params {
-                new_params.push(subst(p, from, to))
+                subst(p, from, to)
             }
-            Expr::Call(f.clone(), new_params)
         }
-        _ => expr.clone(),
+        _ => (),
     }
 }
 
-fn subst_action(action: &Action, from: &Symbol, to: &Symbol) -> Action {
+fn subst_action(action: &mut Action, from: &Symbol, to: &Symbol) {
     match action {
-        Action::Let(symbol, expr) => Action::Let(symbol.clone(), subst(expr, from, to)),
-        Action::Set(symbol, exprs, rhs) => Action::Set(
-            symbol.clone(),
-            exprs.iter().map(|e| subst(e, from, to)).collect(),
-            subst(rhs, from, to),
-        ),
-        Action::SetNoTrack(symbol, exprs, rhs) => Action::SetNoTrack(
-            symbol.clone(),
-            exprs.iter().map(|e| subst(e, from, to)).collect(),
-            subst(rhs, from, to),
-        ),
-        Action::Delete(symbol, exprs) => Action::Delete(
-            symbol.clone(),
-            exprs.iter().map(|e| subst(e, from, to)).collect(),
-        ),
-        Action::Union(lhs, rhs) => Action::Union(subst(lhs, from, to), subst(rhs, from, to)),
-        Action::Expr(expr) => Action::Expr(subst(expr, from, to)),
-        _ => action.clone(),
+        Action::Let(_, expr) => subst(expr, from, to),
+        Action::Set(_, exprs, rhs) => {
+            for expr in exprs.iter_mut() {
+                subst(expr, from, to)
+            }
+
+            subst(rhs, from, to);
+        }
+
+        Action::SetNoTrack(_, exprs, rhs) => {
+            for expr in exprs.iter_mut() {
+                subst(expr, from, to)
+            }
+            subst(rhs, from, to)
+        }
+
+        Action::Delete(_, exprs) => {
+            for expr in exprs.iter_mut() {
+                subst(expr, from, to)
+            }
+        }
+
+        Action::Union(lhs, rhs) => {
+            subst(lhs, from, to);
+            subst(rhs, from, to)
+        }
+
+        Action::Expr(expr) => subst(expr, from, to),
+        _ => (),
     }
 }
 
-fn subst_fact(fact: &Fact, from: &Symbol, to: &Symbol) -> Fact {
+fn subst_fact(fact: &mut Fact, from: &Symbol, to: &Symbol) {
     match fact {
-        Fact::Eq(exprs) => Fact::Eq(vec![subst(&exprs[0], from, to), subst(&exprs[2], from, to)]),
-        Fact::Fact(expr) => Fact::Fact(subst(expr, from, to)),
+        Fact::Eq(exprs) => {
+            for expr in exprs.iter_mut() {
+                subst(expr, from, to)
+            }
+        }
+        Fact::Fact(expr) => subst(expr, from, to),
+    }
+}
+
+fn subst_rule(rule: &mut Rule, from: &Symbol, to: &Symbol) {
+    for fact in rule.body.iter_mut() {
+        subst_fact(fact, from, to)
+    }
+
+    for action in rule.head.iter_mut() {
+        subst_action(action, from, to)
     }
 }
 
 fn variable_folding(rule: Rule) -> Rule {
-    let mut body: Vec<Fact> = vec![];
-    let mut head: Vec<Action> = vec![];
-    let mut binded_var: HashSet<Symbol> = Default::default();
-    let mut changes = true;
+    let mut rule_copy = rule.clone();
+    let mut bind_var: HashSet<Symbol> = Default::default();
 
-    while changes {
-        changes = false;
-        for fact in &rule.body {
-            if let Fact::Eq(args) = fact {
-                let lhs = &args[0];
-                let rhs = &args[1];
-                if let Expr::Var(v1) = lhs {
-                    if let Expr::Var(v2) = rhs {
-                        //equiv_var.insert(*v1, *v2);
-                        changes = true;
-                        break;
+    for fact in &rule.body {
+        if let Fact::Eq(args) = fact {
+            let lhs = &args[0];
+            let rhs = &args[1];
+
+            match (lhs, rhs) {
+                (Expr::Var(v1), Expr::Var(v2)) => {
+                    if bind_var.contains(v1) && bind_var.contains(v2) {
+                        // what to do here
+                    } else if bind_var.contains(v1) {
+                        subst_rule(&mut rule_copy, v2, v1)
+                    } else if bind_var.contains(v2) {
+                        subst_rule(&mut rule_copy, v1, v2)
                     }
                 }
+
+                (Expr::Var(v), _) => {
+                    bind_var.insert(v.clone());
+                }
+
+                (_, Expr::Var(v)) => {
+                    bind_var.insert(v.clone());
+                }
+                (_, _) => (),
             }
-
-            body.push(fact.clone());
         }
-
-        if changes {}
     }
 
-    Rule {
-        head: head,
-        body: body,
-    }
+    rule_copy
 }
 
 fn desugar_schedule(desugar: &mut Desugar, schedule: &Schedule) -> NormSchedule {
