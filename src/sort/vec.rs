@@ -127,9 +127,19 @@ impl Sort for VecSort {
         });
         typeinfo.add_primitive(Contains {
             name: "vec-contains".into(),
-            vec: self,
+            vec: self.clone(),
             unit: typeinfo.get_sort(),
         });
+        typeinfo.add_primitive(Length {
+            name: "vec-length".into(),
+            vec: self.clone(),
+            i64: typeinfo.get_sort(),
+        });
+        typeinfo.add_primitive(Get {
+            name: "vec-get".into(),
+            vec: self,
+            i64: typeinfo.get_sort(),
+        })
     }
 
     fn make_expr(&self, egraph: &EGraph, value: Value) -> Expr {
@@ -138,7 +148,7 @@ impl Sort for VecSort {
         let mut termdag = TermDag::default();
         for e in vec.iter().rev() {
             let e = egraph.extract(*e, &mut termdag, &self.element).1;
-            expr = Expr::call("vec-insert", [expr, termdag.term_to_expr(&e)])
+            expr = Expr::call("vec-push", [expr, termdag.term_to_expr(&e)])
         }
         expr
     }
@@ -344,5 +354,56 @@ impl PrimitiveLike for Contains {
         } else {
             None
         }
+    }
+}
+
+struct Length {
+    name: Symbol,
+    vec: Arc<VecSort>,
+    i64: Arc<I64Sort>,
+}
+
+impl PrimitiveLike for Length {
+    fn name(&self) -> Symbol {
+        self.name
+    }
+
+    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
+        match types {
+            [vec] if vec.name() == self.vec.name => Some(self.i64.clone()),
+            _ => None,
+        }
+    }
+
+    fn apply(&self, values: &[Value]) -> Option<Value> {
+        let vec = ValueVec::load(&self.vec, &values[0]);
+        Some(Value::from(vec.len() as i64))
+    }
+}
+
+struct Get {
+    name: Symbol,
+    vec: Arc<VecSort>,
+    i64: Arc<I64Sort>,
+}
+
+impl PrimitiveLike for Get {
+    fn name(&self) -> Symbol {
+        self.name
+    }
+
+    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
+        match types {
+            [vec, index] if (vec.name(), index.name()) == (self.vec.name, "i64".into()) => {
+                Some(self.vec.element.clone())
+            }
+            _ => None,
+        }
+    }
+
+    fn apply(&self, values: &[Value]) -> Option<Value> {
+        let vec = ValueVec::load(&self.vec, &values[0]);
+        let index = i64::load(&self.i64, &values[1]);
+        vec.get(index as usize).copied()
     }
 }

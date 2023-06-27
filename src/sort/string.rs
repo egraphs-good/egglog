@@ -29,6 +29,13 @@ impl Sort for StringSort {
         let sym = Symbol::from(NonZeroU32::new(value.bits as _).unwrap());
         Expr::Lit(Literal::String(sym))
     }
+
+    fn register_primitives(self: Arc<Self>, typeinfo: &mut TypeInfo) {
+        typeinfo.add_primitive(Add {
+            name: "+".into(),
+            string: self,
+        });
+    }
 }
 
 // TODO could use a local symbol table
@@ -47,5 +54,34 @@ impl FromSort for Symbol {
     type Sort = StringSort;
     fn load(_sort: &Self::Sort, value: &Value) -> Self {
         NonZeroU32::new(value.bits as u32).unwrap().into()
+    }
+}
+
+struct Add {
+    name: Symbol,
+    string: Arc<StringSort>,
+}
+
+impl PrimitiveLike for Add {
+    fn name(&self) -> Symbol {
+        self.name
+    }
+
+    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
+        if types.iter().all(|t| t.name() == self.string.name) {
+            Some(self.string.clone())
+        } else {
+            None
+        }
+    }
+
+    fn apply(&self, values: &[Value]) -> Option<Value> {
+        let mut res_string: String = "".to_owned();
+        for value in values {
+            let sym = Symbol::load(&self.string, value);
+            res_string.push_str(sym.as_str());
+        }
+        let res_symbol: Symbol = res_string.into();
+        Some(Value::from(res_symbol))
     }
 }
