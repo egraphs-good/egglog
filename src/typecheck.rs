@@ -81,6 +81,30 @@ impl<T> Atom<T> {
     }
 }
 
+pub(crate) struct ValueEq {}
+
+impl PrimitiveLike for ValueEq {
+    fn name(&self) -> Symbol {
+        "value-eq".into()
+    }
+
+    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
+        match types {
+            [a, b] if a.name() == b.name() => Some(a.clone()),
+            _ => None,
+        }
+    }
+
+    fn apply(&self, values: &[Value]) -> Option<Value> {
+        assert_eq!(values.len(), 2);
+        if values[0] == values[1] {
+            Some(values[0])
+        } else {
+            None
+        }
+    }
+}
+
 impl<'a> Context<'a> {
     pub fn new(egraph: &'a EGraph) -> Self {
         Self {
@@ -173,6 +197,21 @@ impl<'a> Context<'a> {
                     });
                 }
                 _ => {}
+            }
+        }
+
+        // filter for global variables
+        for node in &self.nodes {
+            if let ENode::Var(var) = node.0 {
+                if let Some((_sort, value)) = self.egraph.global_bindings.get(var) {
+                    let canon = get_leaf(node.1);
+                    query.filters.push(Atom {
+                        head: Primitive(Arc::new(ValueEq {})),
+                        // TODO X: uh what the heck why do we need
+                        // 3 arguments here
+                        args: vec![canon.clone(), canon, AtomTerm::Value(*value)],
+                    })
+                }
             }
         }
 
