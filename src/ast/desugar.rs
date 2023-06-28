@@ -259,6 +259,31 @@ fn subst(expr: &mut Expr, from: &Symbol, to: &Symbol) {
     }
 }
 
+fn subst_norm_expr(expr: &mut NormExpr, from: &Symbol, to: &Symbol) {
+    match expr {
+        NormExpr::Call(_, vec) => {
+            for symbol in vec.iter_mut() {
+                if symbol.as_str().eq(from.as_str()) {
+                    *symbol = to.clone()
+                }
+            }
+        }
+    }
+}
+
+fn subst_norm_action(action: &mut NormAction, from: &Symbol, to: &Symbol) {
+    match action {
+        NormAction::Let(_, expr) => subst_norm_expr(expr, from, to),
+        // NormAction::LetVar(Symbol, Symbol) => {}
+        // NormAction::LetLit(Symbol, Literal) => {}
+        NormAction::Set(expr, _) => subst_norm_expr(expr, from, to),
+        NormAction::Delete(expr) => subst_norm_expr(expr, from, to),
+        // NormAction::Union(Symbol, Symbol) => {}
+        // NormAction::Panic(String) => {}
+        _ => (),
+    }
+}
+
 fn subst_action(action: &mut Action, from: &Symbol, to: &Symbol) {
     match action {
         Action::Let(_, expr) => subst(expr, from, to),
@@ -269,27 +294,49 @@ fn subst_action(action: &mut Action, from: &Symbol, to: &Symbol) {
 
             subst(rhs, from, to);
         }
-
         Action::SetNoTrack(_, exprs, rhs) => {
             for expr in exprs.iter_mut() {
                 subst(expr, from, to)
             }
             subst(rhs, from, to)
         }
-
         Action::Delete(_, exprs) => {
             for expr in exprs.iter_mut() {
                 subst(expr, from, to)
             }
         }
-
         Action::Union(lhs, rhs) => {
             subst(lhs, from, to);
             subst(rhs, from, to)
         }
-
         Action::Expr(expr) => subst(expr, from, to),
         _ => (),
+    }
+}
+
+fn subst_norm_fact(fact: &mut NormFact, from: &Symbol, to: &Symbol) {
+    match fact {
+        NormFact::Assign(s, expr) => {
+            if s.clone().eq(from) {
+                *s = to.clone()
+            }
+
+            subst_norm_expr(expr, from, to)
+        }
+        NormFact::AssignLit(s, _) => {
+            if s.clone().eq(from) {
+                *s = to.clone()
+            }
+        }
+        NormFact::ConstrainEq(s1, s2) => {
+            if s1.clone().eq(from) {
+                *s1 = to.clone()
+            }
+
+            if s2.clone().eq(from) {
+                *s2 = to.clone()
+            }
+        }
     }
 }
 
@@ -301,6 +348,16 @@ fn subst_fact(fact: &mut Fact, from: &Symbol, to: &Symbol) {
             }
         }
         Fact::Fact(expr) => subst(expr, from, to),
+    }
+}
+
+fn subst_norm_rule(rule: &mut NormRule, from: &Symbol, to: &Symbol) {
+    for fact in rule.body.iter_mut() {
+        subst_norm_fact(fact, from, to)
+    }
+
+    for action in rule.head.iter_mut() {
+        subst_norm_action(action, from, to)
     }
 }
 
@@ -321,35 +378,18 @@ fn variable_folding(rule: Rule) -> Rule {
 
     while change {
         change = false;
-        let mut bind_var: HashSet<Symbol> = Default::default();
         for fact in &rule_copy1.body {
             if let Fact::Eq(args) = fact {
                 let lhs = &args[0];
                 let rhs = &args[1];
-    
+
                 match (lhs, rhs) {
                     (Expr::Var(v1), Expr::Var(v2)) => {
-
                         if !v1.eq(v2) {
-                            if bind_var.contains(v1) {
-                                subst_rule(&mut rule_copy2, v2, v1);
-                                change = true;
-                                break;
-                            } else if bind_var.contains(v2) {
-                                subst_rule(&mut rule_copy2, v1, v2);
-                                change = true;
-                                break;
-                            }
+                            subst_rule(&mut rule_copy2, v1, v2);
+                            change = true;
+                            break;
                         }
-                        
-                    }
-    
-                    (Expr::Var(v), _) => {
-                        bind_var.insert(v.clone());
-                    }
-    
-                    (_, Expr::Var(v)) => {
-                        bind_var.insert(v.clone());
                     }
                     (_, _) => (),
                 }
@@ -360,7 +400,7 @@ fn variable_folding(rule: Rule) -> Rule {
             rule_copy1 = rule_copy2.clone();
         }
     }
-    
+
     rule_copy1
 }
 
