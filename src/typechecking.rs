@@ -1,5 +1,3 @@
-use std::alloc::System;
-
 use crate::{proofs::RULE_PROOF_KEYWORD, *};
 
 #[derive(Clone, Debug)]

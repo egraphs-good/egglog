@@ -315,36 +315,53 @@ fn subst_rule(rule: &mut Rule, from: &Symbol, to: &Symbol) {
 }
 
 fn variable_folding(rule: Rule) -> Rule {
-    let mut rule_copy = rule.clone();
-    let mut bind_var: HashSet<Symbol> = Default::default();
+    let mut rule_copy1 = rule.clone();
+    let mut rule_copy2 = rule.clone();
+    let mut change = true;
 
-    for fact in &rule.body {
-        if let Fact::Eq(args) = fact {
-            let lhs = &args[0];
-            let rhs = &args[1];
+    while change {
+        change = false;
+        let mut bind_var: HashSet<Symbol> = Default::default();
+        for fact in &rule_copy1.body {
+            if let Fact::Eq(args) = fact {
+                let lhs = &args[0];
+                let rhs = &args[1];
+    
+                match (lhs, rhs) {
+                    (Expr::Var(v1), Expr::Var(v2)) => {
 
-            match (lhs, rhs) {
-                (Expr::Var(v1), Expr::Var(v2)) => {
-                    if bind_var.contains(v1) {
-                        subst_rule(&mut rule_copy, v2, v1)
-                    } else if bind_var.contains(v2) {
-                        subst_rule(&mut rule_copy, v1, v2)
+                        if !v1.eq(v2) {
+                            if bind_var.contains(v1) {
+                                subst_rule(&mut rule_copy2, v2, v1);
+                                change = true;
+                                break;
+                            } else if bind_var.contains(v2) {
+                                subst_rule(&mut rule_copy2, v1, v2);
+                                change = true;
+                                break;
+                            }
+                        }
+                        
                     }
+    
+                    (Expr::Var(v), _) => {
+                        bind_var.insert(v.clone());
+                    }
+    
+                    (_, Expr::Var(v)) => {
+                        bind_var.insert(v.clone());
+                    }
+                    (_, _) => (),
                 }
-
-                (Expr::Var(v), _) => {
-                    bind_var.insert(v.clone());
-                }
-
-                (_, Expr::Var(v)) => {
-                    bind_var.insert(v.clone());
-                }
-                (_, _) => (),
             }
         }
-    }
 
-    rule_copy
+        if change {
+            rule_copy1 = rule_copy2.clone();
+        }
+    }
+    
+    rule_copy1
 }
 
 fn desugar_schedule(desugar: &mut Desugar, schedule: &Schedule) -> NormSchedule {
