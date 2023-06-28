@@ -5,4 +5,5 @@
 (let two (S (S Zero)))
 
 (union two (S (S (S Zero))))
+(print Nat_Parent___ 1000)
 (check (= two (S (S (S Zero)))))

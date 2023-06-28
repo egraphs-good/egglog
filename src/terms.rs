@@ -1,7 +1,7 @@
 use crate::*;
 
 impl ProofState {
-    fn parent_name(&self, sort: Symbol) -> Symbol {
+    pub fn parent_name(&self, sort: Symbol) -> Symbol {
         Symbol::from(format!(
             "{}_Parent{}",
             sort,
@@ -166,7 +166,7 @@ impl ProofState {
             .collect()
     }
 
-    fn parse_actions(&self, actions: Vec<String>) -> Vec<Action> {
+    pub fn parse_actions(&self, actions: Vec<String>) -> Vec<Action> {
         actions
             .into_iter()
             .map(|s| self.desugar.action_parser.parse(&s).unwrap())

@@ -301,8 +301,6 @@ impl<'a> Context<'a> {
                 }
                 let ty = if let Some(ty) = self.types.get(sym) {
                     Some(ty.clone())
-                } else if let Some(ty) = self.egraph.global_bindings.get(sym) {
-                    Some(ty.0.clone())
                 } else {
                     self.errors.push(TypeError::Unbound(*sym));
                     None
@@ -436,9 +434,6 @@ impl<'a> ExprChecker<'a> for ActionChecker<'a> {
                     .reserved_type("iteration".into())
                     .unwrap(),
             ))
-        } else if let Some((sort, v)) = self.egraph().global_bindings.get(&sym) {
-            self.instructions.push(Instruction::Value(v.clone()));
-            Ok(((), sort.clone()))
         } else if let Some((i, _, ty)) = self.locals.get_full(&sym) {
             self.instructions.push(Instruction::Load(Load::Stack(i)));
             Ok(((), ty.clone()))
@@ -482,9 +477,17 @@ trait ExprChecker<'a> {
         }
     }
 
+    fn variable_function(&self, var: Symbol) -> bool {
+        if let Some(func) = self.egraph().functions.get(&var) {
+            func.is_variable
+        } else {
+            false
+        }
+    }
+
     fn check_expr(&mut self, expr: &Expr, ty: ArcSort) -> Result<Self::T, TypeError> {
         match expr {
-            Expr::Var(v) if !self.is_variable(*v) => self.check_var(*v, ty),
+            Expr::Var(v) if !self.variable_function(*v) => self.check_var(*v, ty),
             _ => {
                 let (t, actual) = self.infer_expr(expr)?;
                 if actual.name() != ty.name() {
@@ -501,17 +504,18 @@ trait ExprChecker<'a> {
         }
     }
 
-    fn is_variable(&self, sym: Symbol) -> bool {
-        self.egraph().global_bindings.contains_key(&sym)
-    }
-
     fn infer_expr(&mut self, expr: &Expr) -> Result<(Self::T, ArcSort), TypeError> {
         match expr {
             Expr::Lit(lit) => {
                 let t = self.do_lit(lit);
                 Ok((t, self.egraph().proof_state.type_info.infer_literal(lit)))
             }
-            Expr::Var(sym) => self.infer_var(*sym),
+            Expr::Var(sym) => {
+                if self.variable_function(*sym) {
+                    return self.infer_expr(&Expr::call(*sym, []));
+                }
+                self.infer_var(*sym)
+            }
             Expr::Call(sym, args) => {
                 if let Some(f) = self.egraph().functions.get(sym) {
                     if f.schema.input.len() != args.len() {
@@ -568,7 +572,6 @@ enum Instruction {
     Iteration,
     Literal(Literal),
     Load(Load),
-    Value(Value),
     CallFunction(Symbol),
     CallPrimitive(Primitive, usize),
     DeleteRow(Symbol),
@@ -643,7 +646,6 @@ impl EGraph {
         for instr in &program.0 {
             match instr {
                 Instruction::Iteration => stack.push(self.iteration.into()),
-                Instruction::Value(v) => stack.push(v.clone()),
                 Instruction::Load(load) => match load {
                     Load::Stack(idx) => stack.push(stack[*idx]),
                     Load::Subst(idx) => stack.push(subst[*idx]),

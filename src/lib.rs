@@ -216,7 +216,6 @@ pub struct EGraph {
     pub node_limit: usize,
     pub fact_directory: Option<PathBuf>,
     pub seminaive: bool,
-    pub global_bindings: HashMap<Symbol, (ArcSort, Value)>,
     extract_report: Option<ExtractReport>,
     run_report: Option<RunReport>,
 }
@@ -242,7 +241,6 @@ impl Default for EGraph {
             rulesets: Default::default(),
             ruleset_iteration: Default::default(),
             proof_state: ProofState::default(),
-            global_bindings: Default::default(),
             iteration: 0,
             match_limit: usize::MAX,
             node_limit: usize::MAX,
@@ -416,8 +414,12 @@ impl EGraph {
         self.unionfind.n_unions() - n_unions + function.clear_updates()
     }
 
-    pub fn declare_function(&mut self, decl: &FunctionDecl) -> Result<(), Error> {
-        let function = Function::new(self, decl)?;
+    pub fn declare_function(
+        &mut self,
+        decl: &FunctionDecl,
+        is_variable: bool,
+    ) -> Result<(), Error> {
+        let function = Function::new(self, decl, is_variable)?;
         let old = self.functions.insert(decl.name, function);
         if old.is_some() {
             panic!(
@@ -436,18 +438,21 @@ impl EGraph {
     ) -> Result<(), Error> {
         let name = variant.name;
         let sort = sort.into();
-        self.declare_function(&FunctionDecl {
-            name,
-            schema: Schema {
-                input: variant.types,
-                output: sort,
+        self.declare_function(
+            &FunctionDecl {
+                name,
+                schema: Schema {
+                    input: variant.types,
+                    output: sort,
+                },
+                merge: None,
+                merge_action: vec![],
+                default: None,
+                cost: variant.cost,
+                unextractable: false,
             },
-            merge: None,
-            merge_action: vec![],
-            default: None,
-            cost: variant.cost,
-            unextractable: false,
-        })?;
+            false,
+        )?;
         // if let Some(ctors) = self.sorts.get_mut(&sort) {
         //     ctors.push(name);
         // }
@@ -567,6 +572,8 @@ impl EGraph {
     pub fn run_rules_once(&mut self, config: &NormRunConfig, report: &mut RunReport) {
         let NormRunConfig { ruleset, until } = config;
 
+        // defensive rebuild
+        // shouldn't need- we rebuild before each command
         self.rebuild_nofail();
         if let Some(facts) = until {
             if self.check_facts(facts).is_ok() {
@@ -857,6 +864,54 @@ impl EGraph {
         }
     }
 
+    // define is a hacky way to implement global bindings
+    // in egglog.
+    // It declares a new function and unions it with
+    // the expression
+    pub fn define(&mut self, name: Symbol, expr: &Expr) -> Result<ArcSort, Error> {
+        let (sort, value) = self.eval_expr(expr, None, true)?;
+        self.declare_function(
+            &FunctionDecl {
+                name,
+                schema: Schema {
+                    input: vec![],
+                    output: value.tag,
+                },
+                default: None,
+                merge: None,
+                merge_action: vec![],
+                cost: None,
+                // TODO make unextractable
+                unextractable: false,
+            },
+            true,
+        )?;
+        if sort.is_eq_sort() {
+            self.do_union(&Expr::Var(name), expr)?;
+        } else {
+            let f = self.functions.get_mut(&name).unwrap();
+            f.insert(&[], value, self.timestamp);
+        }
+
+        Ok(sort)
+    }
+
+    fn do_union(&mut self, expr1: &Expr, expr2: &Expr) -> Result<(), Error> {
+        let (sort, _value) = self.eval_expr(expr1, None, true)?;
+        let union_actions = self.proof_state.parse_actions(
+            self.proof_state
+                .union(sort.name(), &expr1.to_string(), &expr2.to_string())
+                .split('\n')
+                .map(|s| s.to_string())
+                .collect(),
+        );
+        for action in union_actions {
+            //self.rebuild()?;
+            self.eval_actions(&[action])?;
+        }
+        Ok(())
+    }
+
     fn run_command(&mut self, command: NCommand, should_run: bool) -> Result<String, Error> {
         eprintln!("Running {}", command);
         let pre_rebuild = Instant::now();
@@ -878,7 +933,7 @@ impl EGraph {
             // Sorts are already declared during typechecking
             NCommand::Sort(name, _presort_and_args) => format!("Declared sort {}.", name),
             NCommand::Function(fdecl) => {
-                self.declare_function(&fdecl)?;
+                self.declare_function(&fdecl, false)?;
                 format!("Declared function {}.", fdecl.name)
             }
             NCommand::AddRuleset(name) => {
@@ -943,27 +998,13 @@ impl EGraph {
                 if should_run {
                     match &action {
                         NormAction::Let(name, contents) => {
-                            let (etype, value) = self.eval_expr(&contents.to_expr(), None, true)?;
-                            let present = self.global_bindings.insert(*name, (etype, value));
-                            if present.is_some() {
-                                panic!("Variable {name} was already present in global bindings");
-                            }
+                            self.define(*name, &contents.to_expr())?;
                         }
                         NormAction::LetVar(var1, var2) => {
-                            let value = self.global_bindings.get(var2).unwrap();
-                            let present = self.global_bindings.insert(*var1, value.clone());
-                            if present.is_some() {
-                                panic!("Variable {var1} was already present in global bindings");
-                            }
+                            self.define(*var1, &Expr::Var(*var2))?;
                         }
                         NormAction::LetLit(var, lit) => {
-                            let value = self.eval_lit(lit);
-                            let etype = self.proof_state.type_info.infer_literal(lit);
-                            let present = self.global_bindings.insert(*var, (etype, value));
-
-                            if present.is_some() {
-                                panic!("Variable {var} was already present in global bindings");
-                            }
+                            self.define(*var, &Expr::Lit(lit.clone()))?;
                         }
                         _ => {
                             self.eval_actions(std::slice::from_ref(&action.to_action()))?;
