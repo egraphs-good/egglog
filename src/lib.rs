@@ -1235,14 +1235,8 @@ impl EGraph {
         Ok(msgs)
     }
 
-    // this is bad because we shouldn't inspect values like this, we should use type information
-    #[cfg(debug_assertions)]
     fn bad_find_value(&self, value: Value) -> Value {
-        if let Some((tag, id)) = self.value_to_id(value) {
-            Value::from_id(tag, self.find(id))
-        } else {
-            value
-        }
+        value
     }
 
     pub fn parse_program(&self, input: &str) -> Result<Vec<Command>, Error> {
