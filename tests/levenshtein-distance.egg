@@ -60,11 +60,11 @@
 
 (run 100)
 
-(extract (Unwrap Test1))
+(query-extract (Unwrap Test1))
 (check (= Test1 (Num 3)))
 
-(extract (Unwrap Test2))
+(query-extract (Unwrap Test2))
 (check (= Test2 (Num 5)))
 
-(extract (Unwrap Test3))
+(query-extract (Unwrap Test3))
 (check (= Test3 (Num 5)))

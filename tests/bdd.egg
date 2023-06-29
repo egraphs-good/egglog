@@ -42,9 +42,9 @@
 (let b11 (and b1 b1))
 (let b12 (and b1 b2))
 (run 5)
-(extract b11)
-(extract b12)
-(extract b123)
+(query-extract b11)
+(query-extract b12)
+(query-extract b123)
 (check (= (and (ITE 1 True False) (ITE 2 True False))
        (ITE 1 (ITE 2 True False) False))
 )
@@ -69,7 +69,7 @@
 
 (let or121 (or b1 (or b2 b1)))
 (run 5)
-(extract or121)
+(query-extract or121)
 
 (function not (BDD) BDD)
 (rewrite (not True) False)

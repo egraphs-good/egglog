@@ -26,5 +26,5 @@
 ; Would prefer being able to check
 ;(check (path 1 2 _))
 ; or extract
-;(extract (path 1 4 ?p))
+;(query-extract (path 1 4 ?p))
 (print path)

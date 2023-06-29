@@ -912,7 +912,7 @@ impl EGraph {
                     "Skipping schedule.".to_string()
                 }
             }
-            NCommand::Extract { var, variants } => {
+            /*NCommand::Extract { var, variants } => {
                 let expr = Expr::Var(var);
                 if should_run {
                     // TODO typecheck
@@ -937,7 +937,7 @@ impl EGraph {
                 } else {
                     "Skipping extraction.".into()
                 }
-            }
+            }*/
             NCommand::Check(facts) => {
                 if should_run {
                     self.check_facts(&facts)?;

@@ -75,7 +75,7 @@ Command: Command = {
         => Command::Simplify { expr, schedule },
     LParen "add-ruleset" <name:Ident> RParen => Command::AddRuleset(name),
     LParen "calc" LParen <idents:IdentSort*> RParen <exprs:Expr+> RParen => Command::Calc(idents, exprs),
-    LParen "extract" <variants:(":variants" <UNum>)?> <e:Expr> RParen => Command::Extract { e, variants: variants.unwrap_or(0) },
+    LParen "query-extract" <variants:(":variants" <UNum>)?> <fact:Fact> RParen => Command::Extract { fact, variants: variants.unwrap_or(0) },
     LParen "check" <(Fact)*> RParen => Command::Check(<>),
     LParen "check-proof" RParen => Command::CheckProof,
     LParen "run-schedule" <Schedule*> RParen => Command::RunSchedule(Schedule::Sequence(<>)),
@@ -110,6 +110,7 @@ NonLetAction: Action = {
     LParen "delete" LParen <f: Ident> <args:Expr*> RParen RParen => Action::Delete ( f, args),
     LParen "union" <e1:Expr> <e2:Expr> RParen => Action::Union(<>),
     LParen "panic" <msg:String> RParen => Action::Panic(msg),
+    LParen "extract" <expr:Expr> RParen => Action::Extract(expr),
     <e:CallExpr> => Action::Expr(e),
 }
 

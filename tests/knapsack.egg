@@ -41,14 +41,14 @@
 
 (run 100)
 
-(extract (Unwrap test1))
+(query-extract (Unwrap test1))
 (check (= test1 (Num 13)))
 
-(extract (Unwrap test2))
+(query-extract (Unwrap test2))
 (check (= test2 (Num 0)))
 
-(extract (Unwrap test3))
+(query-extract (Unwrap test3))
 (check (= test3 (Num 3)))
 
-(extract (Unwrap test4))
+(query-extract (Unwrap test4))
 (check (= test4 (Num 150)))

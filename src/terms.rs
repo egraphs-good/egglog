@@ -193,7 +193,8 @@ impl ProofState {
             NormAction::LetLit(..)
             | NormAction::LetIteration(..)
             | NormAction::LetVar(..)
-            | NormAction::Panic(..) => vec![action.to_action()],
+            | NormAction::Panic(..)
+            | NormAction::Extract(..) => vec![action.to_action()],
 
             // handled by merge action
             NormAction::Set(_expr, _rhs) => vec![action.to_action()],
@@ -336,10 +337,6 @@ impl ProofState {
                 }
                 NCommand::RunSchedule(schedule) => {
                     res.push(Command::RunSchedule(self.instrument_schedule(schedule)));
-                }
-                NCommand::Extract { variants, var } => {
-                    //res.extend(self.desugar_extract(variants, expr));
-                    res.push(command.to_command());
                 }
                 _ => {
                     res.push(command.to_command());

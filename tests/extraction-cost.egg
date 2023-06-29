@@ -4,5 +4,5 @@
 (let x (Num 1) :cost 10)
 (let y (Num 2) :cost 1)
 
-(extract x) ;; (Num 1)
-(extract y) ;; (y)
+(query-extract x) ;; (Num 1)
+(query-extract y) ;; (y)

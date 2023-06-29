@@ -64,7 +64,7 @@
 (fail (check (P 7 1 (NonTerm "VP"))))
 (fail (check (P 7 1 (NonTerm ""))))
 
-(extract test1)
+(query-extract test1)
 (print test1)
 
 (pop)
@@ -92,7 +92,7 @@
 (check (P 5 1 (NonTerm "S")))
 (fail (check (P 5 1 (NonTerm "B"))))
 (let test2 (B 5 1 (NonTerm "S")):cost 1000)
-(extract:variants 10  test2)
+(query-extract:variants 10  test2)
 (print test2)
 
 (pop)
@@ -112,7 +112,7 @@
 (fail (check (P 5 1 (NonTerm ""))))
 (fail (check (P 5 1 (NonTerm "unrelated"))))
 (let test3 (B 5 1 (NonTerm "S")):cost 1000)
-(extract:variants 10 test3)
+(query-extract:variants 10 test3)
 (print test3) 
 
 (pop)

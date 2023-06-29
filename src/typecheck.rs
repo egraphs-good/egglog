@@ -423,6 +423,12 @@ impl<'a> ActionChecker<'a> {
                 self.instructions.push(Instruction::Set(*f));
                 Ok(())
             }
+            Action::Extract(variable) => {
+                let (_, ty) = self.infer_expr(variable)?;
+                self.check_expr(variable, ty)?;
+                self.instructions.push(Instruction::Extract);
+                Ok(())
+            }
             Action::Delete(f, args) => {
                 let fake_call = Expr::Call(*f, args.clone());
                 let (_, _ty) = self.infer_expr(&fake_call)?;
@@ -612,6 +618,7 @@ enum Instruction {
     CallPrimitive(Primitive, usize),
     DeleteRow(Symbol),
     Set(Symbol),
+    Extract,
     Union(usize),
     Panic(String),
     Pop,
@@ -807,6 +814,18 @@ impl EGraph {
                         self.unionfind.union(a, b, sort)
                     });
                     stack.truncate(new_len);
+                }
+                Instruction::Extract => {
+                    let value = stack.last().unwrap();
+                    let mut termdag = TermDag::default();
+                    let sort = value.tag;
+                    let (cost, expr) = self.extract(
+                        *value,
+                        &mut termdag,
+                        self.proof_state.type_info.sorts.get(&sort).unwrap(),
+                    );
+                    log::info!("extracted with cost {cost}: {}", termdag.to_string(&expr));
+                    stack.pop().unwrap();
                 }
                 Instruction::Panic(msg) => panic!("Panic: {}", msg),
                 Instruction::Literal(lit) => match lit {

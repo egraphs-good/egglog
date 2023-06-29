@@ -85,15 +85,15 @@
 
 (run 15)
 
-(extract t-id)
+(query-extract t-id)
 (check (= t-id (TArr TUnit TUnit)))
 
-(extract t-app)
+(query-extract t-app)
 (check (= t-app TUnit))
 
-(extract t-free-1)
+(query-extract t-free-1)
 (check (= t-free-1 (TArr TUnit TUnit)))
-(extract t-free-2)
+(query-extract t-free-2)
 (check (= t-free-2 (TArr TUnit (TArr (TArr TUnit TUnit) TUnit))))
 ; this will err
-; (extract t-free-ill)
+; (query-extract t-free-ill)

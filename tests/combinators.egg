@@ -89,5 +89,5 @@
 (rewrite (CApp (CApp (CApp S cx) cy) cz) (CApp (CApp cx cz) (CApp cy cz)))
 
 (run 11)
-(extract (Comb test))
+(query-extract (Comb test))
 (check (= test (N 3)))

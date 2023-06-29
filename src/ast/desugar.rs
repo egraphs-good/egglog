@@ -230,6 +230,10 @@ fn flatten_actions(actions: &Vec<Action>, desugar: &mut Desugar) -> Vec<NormActi
                 );
                 res.push(set);
             }
+            Action::Extract(expr) => {
+                let added = add_expr(expr.clone(), &mut res);
+                res.push(NormAction::Extract(added));
+            }
             Action::Delete(symbol, exprs) => {
                 let del = NormAction::Delete(NormExpr::Call(
                     *symbol,
@@ -418,10 +422,20 @@ pub(crate) fn desugar_simplify(
             .map(NCommand::NormAction),
     );
     res.push(NCommand::RunSchedule(desugar_schedule(desugar, schedule)));
-    res.push(NCommand::Extract {
-        var: lhs,
-        variants: 0,
-    });
+    res.extend(
+        desugar_command(
+            Command::Extract {
+                variants: 0,
+                fact: Fact::Fact(Expr::Var(lhs)),
+            },
+            desugar,
+            false,
+            false,
+        )
+        .unwrap()
+        .into_iter()
+        .map(|c| c.command),
+    );
 
     res.push(NCommand::Pop(1));
     res
@@ -576,18 +590,25 @@ pub(crate) fn desugar_command(
         Command::RunSchedule(sched) => {
             vec![NCommand::RunSchedule(desugar_schedule(desugar, &sched))]
         }
-        Command::Extract { variants, e } => {
+        Command::Extract { variants, fact } => {
             let fresh = desugar.get_fresh();
-            flatten_actions(&vec![Action::Let(fresh, e)], desugar)
+            let fresh_ruleset = desugar.get_fresh();
+            let desugaring = format!(
+                "(check {fact})
+                 (ruleset {fresh_ruleset})
+                 (rule ((= {fresh} {fact}))
+                       ((extract {fresh})))
+                 (run {fresh_ruleset} 1)"
+            );
+
+            desugar
+                .desugar_program(
+                    desugar.parse_program(&desugaring).unwrap(),
+                    get_all_proofs,
+                    seminaive_transform,
+                )?
                 .into_iter()
-                .map(NCommand::NormAction)
-                .chain(
-                    vec![NCommand::Extract {
-                        variants,
-                        var: fresh,
-                    }]
-                    .into_iter(),
-                )
+                .map(|cmd| cmd.command)
                 .collect()
         }
         Command::Check(facts) => {

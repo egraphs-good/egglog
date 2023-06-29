@@ -354,6 +354,9 @@ impl TypeInfo {
                     });
                     assert_bound(var, let_bound);
                 }
+                NormAction::Extract(var) => {
+                    assert_bound(var, let_bound);
+                }
                 NormAction::Union(v1, v2) => {
                     assert_bound(v1, let_bound);
                     assert_bound(v2, let_bound);
@@ -423,6 +426,7 @@ impl TypeInfo {
                     return Err(TypeError::TypeMismatch(var1_type, var2_type));
                 }
             }
+            NormAction::Extract(_var) => {}
             NormAction::LetVar(var1, var2) => {
                 let var2_type = self.lookup(ctx, *var2)?;
                 self.introduce_binding(ctx, *var1, var2_type, is_global)?;

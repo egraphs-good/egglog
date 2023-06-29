@@ -97,10 +97,6 @@ pub enum NCommand {
     },
     NormAction(NormAction),
     RunSchedule(NormSchedule),
-    Extract {
-        variants: usize,
-        var: Symbol,
-    },
     Check(Vec<NormFact>),
     CheckProof,
     Print(Symbol, usize),
@@ -146,10 +142,6 @@ impl NCommand {
             },
             NCommand::RunSchedule(schedule) => Command::RunSchedule(schedule.to_schedule()),
             NCommand::NormAction(action) => Command::Action(action.to_action()),
-            NCommand::Extract { variants, var } => Command::Extract {
-                variants: *variants,
-                e: Expr::Var(*var),
-            },
             NCommand::Check(facts) => {
                 Command::Check(facts.iter().map(|fact| fact.to_fact()).collect())
             }
@@ -191,10 +183,6 @@ impl NCommand {
                 rule: rule.map_exprs(f),
             },
             NCommand::NormAction(action) => NCommand::NormAction(action.map_exprs(f)),
-            NCommand::Extract { variants, var } => NCommand::Extract {
-                variants: *variants,
-                var: *var,
-            },
             NCommand::Check(facts) => {
                 NCommand::Check(facts.iter().map(|fact| fact.map_exprs(f)).collect())
             }
@@ -367,7 +355,7 @@ pub enum Command {
     Calc(Vec<IdentSort>, Vec<Expr>),
     Extract {
         variants: usize,
-        e: Expr,
+        fact: Fact,
     },
     // TODO: this could just become an empty query
     Check(Vec<Fact>),
@@ -413,7 +401,7 @@ impl ToSexp for Command {
             },
             Command::RunSchedule(sched) => list!("run-schedule", sched),
             Command::Calc(args, exprs) => list!("calc", list!(++ args), ++ exprs),
-            Command::Extract { variants, e } => list!("extract", ":variants", variants, e),
+            Command::Extract { variants, fact } => list!("extract", ":variants", variants, fact),
             Command::Check(facts) => list!("check", ++ facts),
             Command::CheckProof => list!("check-proof"),
             Command::Push(n) => list!("push", n),
@@ -720,6 +708,7 @@ pub enum Action {
     SetNoTrack(Symbol, Vec<Expr>, Expr),
     Delete(Symbol, Vec<Expr>),
     Union(Expr, Expr),
+    Extract(Expr),
     Panic(String),
     Expr(Expr),
     // If(Expr, Action, Action),
@@ -731,6 +720,7 @@ pub enum NormAction {
     LetVar(Symbol, Symbol),
     LetLit(Symbol, Literal),
     LetIteration(Symbol),
+    Extract(Symbol),
     Set(NormExpr, Symbol),
     Delete(NormExpr),
     Union(Symbol, Symbol),
@@ -749,6 +739,7 @@ impl NormAction {
                 body.iter().map(|s| Expr::Var(*s)).collect(),
                 Expr::Var(*other),
             ),
+            NormAction::Extract(symbol) => Action::Extract(Expr::Var(*symbol)),
             NormAction::Delete(NormExpr::Call(symbol, args)) => {
                 Action::Delete(*symbol, args.iter().map(|s| Expr::Var(*s)).collect())
             }
@@ -764,6 +755,7 @@ impl NormAction {
             NormAction::LetLit(symbol, lit) => NormAction::LetLit(*symbol, lit.clone()),
             NormAction::LetIteration(symbol) => NormAction::LetIteration(*symbol),
             NormAction::Set(expr, other) => NormAction::Set(f(expr), *other),
+            NormAction::Extract(var) => NormAction::Extract(*var),
             NormAction::Delete(expr) => NormAction::Delete(f(expr)),
             NormAction::Union(lhs, rhs) => NormAction::Union(*lhs, *rhs),
             NormAction::Panic(msg) => NormAction::Panic(msg.clone()),
@@ -784,6 +776,7 @@ impl NormAction {
             NormAction::Set(expr, other) => {
                 NormAction::Set(expr.map_def_use(fvar, false), fvar(*other, false))
             }
+            NormAction::Extract(var) => NormAction::Extract(fvar(*var, false)),
             NormAction::Delete(expr) => NormAction::Delete(expr.map_def_use(fvar, false)),
             NormAction::Union(lhs, rhs) => NormAction::Union(fvar(*lhs, false), fvar(*rhs, false)),
             NormAction::Panic(msg) => NormAction::Panic(msg.clone()),
@@ -801,6 +794,7 @@ impl ToSexp for Action {
             }
             Action::Union(lhs, rhs) => list!("union", lhs, rhs),
             Action::Delete(lhs, args) => list!("delete", list!(lhs, ++ args)),
+            Action::Extract(expr) => list!("extract", expr),
             Action::Panic(msg) => list!("panic", format!("\"{}\"", msg.clone())),
             Action::Expr(e) => e.to_sexp(),
         }
@@ -821,6 +815,7 @@ impl Action {
             }
             Action::Delete(lhs, args) => Action::Delete(*lhs, args.iter().map(f).collect()),
             Action::Union(lhs, rhs) => Action::Union(f(lhs), f(rhs)),
+            Action::Extract(expr) => Action::Extract(f(expr)),
             Action::Panic(msg) => Action::Panic(msg.clone()),
             Action::Expr(e) => Action::Expr(f(e)),
         }
@@ -843,6 +838,7 @@ impl Action {
                 Action::Delete(*lhs, args.iter().map(|e| e.subst(canon)).collect())
             }
             Action::Union(lhs, rhs) => Action::Union(lhs.subst(canon), rhs.subst(canon)),
+            Action::Extract(expr) => Action::Extract(expr.subst(canon)),
             Action::Panic(msg) => Action::Panic(msg.clone()),
             Action::Expr(e) => Action::Expr(e.subst(canon)),
         }
@@ -908,6 +904,11 @@ impl NormRule {
                     let new_expr = subst.get(other).unwrap_or(&Expr::Var(*other)).clone();
                     used.insert(*other);
                     subst.insert(*symbol, new_expr);
+                }
+                NormAction::Extract(symbol) => {
+                    let new_expr = subst.get(symbol).cloned().unwrap_or(Expr::Var(*symbol));
+                    used.insert(*symbol);
+                    head.push(Action::Extract(new_expr));
                 }
                 NormAction::LetLit(symbol, lit) => {
                     subst.insert(*symbol, Expr::Lit(lit.clone()));

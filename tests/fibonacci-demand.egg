@@ -12,7 +12,7 @@
 
 (let f7 (Fib 7))
 (run 1000)
-(extract f7)
+(query-extract f7)
 (check (= f7 (Num 13)))
        
  
