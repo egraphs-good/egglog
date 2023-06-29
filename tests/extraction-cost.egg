@@ -1,8 +1,0 @@
-(datatype Expr
-  (Num i64 :cost 5))
-
-(let x (Num 1) :cost 10)
-(let y (Num 2) :cost 1)
-
-(query-extract x) ;; (Num 1)
-(query-extract y) ;; (y)
