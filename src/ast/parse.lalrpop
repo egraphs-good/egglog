@@ -81,7 +81,7 @@ Command: Command = {
     LParen "run-schedule" <Schedule*> RParen => Command::RunSchedule(Schedule::Sequence(<>)),
     LParen "push" <UNum?> RParen => Command::Push(<>.unwrap_or(1)),
     LParen "pop" <UNum?> RParen => Command::Pop(<>.unwrap_or(1)),
-    LParen "print" <sym:Ident> <n:UNum?> RParen => Command::Print(sym, n.unwrap_or(10)),
+    LParen "print-table" <sym:Ident> <n:UNum?> RParen => Command::PrintTable(sym, n.unwrap_or(10)),
     LParen "print-size" <sym:Ident> RParen => Command::PrintSize(sym),
     LParen "input" <name:Ident> <file:String> RParen => Command::Input { name, file },
     LParen "output" <file:String> <exprs:Expr+> RParen => Command::Output { file, exprs },
@@ -106,7 +106,6 @@ Cost: Option<usize> = {
 
 NonLetAction: Action = {
     LParen "set" LParen <f: Ident> <args:Expr*> RParen <v:Expr> RParen => Action::Set ( f, args, v ),
-    LParen "set-no-track" LParen <f: Ident> <args:Expr*> RParen <v:Expr> RParen => Action::SetNoTrack ( f, args, v ),
     LParen "delete" LParen <f: Ident> <args:Expr*> RParen RParen => Action::Delete ( f, args),
     LParen "union" <e1:Expr> <e2:Expr> RParen => Action::Union(<>),
     LParen "panic" <msg:String> RParen => Action::Panic(msg),

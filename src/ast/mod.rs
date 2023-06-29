@@ -99,7 +99,7 @@ pub enum NCommand {
     RunSchedule(NormSchedule),
     Check(Vec<NormFact>),
     CheckProof,
-    Print(Symbol, usize),
+    PrintTable(Symbol, usize),
     PrintSize(Symbol),
     Output {
         file: String,
@@ -146,7 +146,7 @@ impl NCommand {
                 Command::Check(facts.iter().map(|fact| fact.to_fact()).collect())
             }
             NCommand::CheckProof => Command::CheckProof,
-            NCommand::Print(name, n) => Command::Print(*name, *n),
+            NCommand::PrintTable(name, n) => Command::PrintTable(*name, *n),
             NCommand::PrintSize(name) => Command::PrintSize(*name),
             NCommand::Output { file, exprs } => Command::Output {
                 file: file.to_string(),
@@ -187,7 +187,7 @@ impl NCommand {
                 NCommand::Check(facts.iter().map(|fact| fact.map_exprs(f)).collect())
             }
             NCommand::CheckProof => NCommand::CheckProof,
-            NCommand::Print(name, n) => NCommand::Print(*name, *n),
+            NCommand::PrintTable(name, n) => NCommand::PrintTable(*name, *n),
             NCommand::PrintSize(name) => NCommand::PrintSize(*name),
             NCommand::Output { file, exprs } => NCommand::Output {
                 file: file.to_string(),
@@ -360,7 +360,7 @@ pub enum Command {
     // TODO: this could just become an empty query
     Check(Vec<Fact>),
     CheckProof,
-    Print(Symbol, usize),
+    PrintTable(Symbol, usize),
     PrintSize(Symbol),
     Input {
         name: Symbol,
@@ -406,7 +406,7 @@ impl ToSexp for Command {
             Command::CheckProof => list!("check-proof"),
             Command::Push(n) => list!("push", n),
             Command::Pop(n) => list!("pop", n),
-            Command::Print(name, n) => list!("print", name, n),
+            Command::PrintTable(name, n) => list!("print", name, n),
             Command::PrintSize(name) => list!("print-size", name),
             Command::Input { name, file } => list!("input", name, format!("\"{}\"", file)),
             Command::Output { file, exprs } => list!("output", format!("\"{}\"", file), ++ exprs),
@@ -705,7 +705,6 @@ impl Display for Fact {
 pub enum Action {
     Let(Symbol, Expr),
     Set(Symbol, Vec<Expr>, Expr),
-    SetNoTrack(Symbol, Vec<Expr>, Expr),
     Delete(Symbol, Vec<Expr>),
     Union(Expr, Expr),
     Extract(Expr),
@@ -734,7 +733,7 @@ impl NormAction {
             NormAction::LetVar(symbol, other) => Action::Let(*symbol, Expr::Var(*other)),
             NormAction::LetLit(symbol, lit) => Action::Let(*symbol, Expr::Lit(lit.clone())),
             NormAction::LetIteration(symbol) => Action::Let(*symbol, Expr::Var("iteration".into())),
-            NormAction::Set(NormExpr::Call(head, body), other) => Action::SetNoTrack(
+            NormAction::Set(NormExpr::Call(head, body), other) => Action::Set(
                 *head,
                 body.iter().map(|s| Expr::Var(*s)).collect(),
                 Expr::Var(*other),
@@ -789,9 +788,6 @@ impl ToSexp for Action {
         match self {
             Action::Let(lhs, rhs) => list!("let", lhs, rhs),
             Action::Set(lhs, args, rhs) => list!("set", list!(lhs, ++ args), rhs),
-            Action::SetNoTrack(lhs, args, rhs) => {
-                list!("set-no-track", list!(lhs, ++ args), rhs)
-            }
             Action::Union(lhs, rhs) => list!("union", lhs, rhs),
             Action::Delete(lhs, args) => list!("delete", list!(lhs, ++ args)),
             Action::Extract(expr) => list!("extract", expr),
@@ -809,10 +805,6 @@ impl Action {
                 let right = f(rhs);
                 Action::Set(*lhs, args.iter().map(f).collect(), right)
             }
-            Action::SetNoTrack(lhs, args, rhs) => {
-                let right = f(rhs);
-                Action::SetNoTrack(*lhs, args.iter().map(f).collect(), right)
-            }
             Action::Delete(lhs, args) => Action::Delete(*lhs, args.iter().map(f).collect()),
             Action::Union(lhs, rhs) => Action::Union(f(lhs), f(rhs)),
             Action::Extract(expr) => Action::Extract(f(expr)),
@@ -825,11 +817,6 @@ impl Action {
         match self {
             Action::Let(lhs, rhs) => Action::Let(*lhs, rhs.subst(canon)),
             Action::Set(lhs, args, rhs) => Action::Set(
-                *lhs,
-                args.iter().map(|e| e.subst(canon)).collect(),
-                rhs.subst(canon),
-            ),
-            Action::SetNoTrack(lhs, args, rhs) => Action::SetNoTrack(
                 *lhs,
                 args.iter().map(|e| e.subst(canon)).collect(),
                 rhs.subst(canon),

@@ -20,9 +20,7 @@ impl ProofState {
     fn make_rebuilding(&self, name: Symbol) -> Vec<Command> {
         let pname = self.parent_name(name);
         vec![
-            format!(
-                "(function {pname} ({name}) {name} :unextractable :merge (ordering-less old new))"
-            ),
+            format!("(function {pname} ({name}) {name} :merge (ordering-less old new))"),
             format!(
                 "(rule ((= ({pname} a) b)
                         (= ({pname} b) c))
@@ -195,9 +193,21 @@ impl ProofState {
             | NormAction::LetVar(..)
             | NormAction::Panic(..)
             | NormAction::Extract(..) => vec![action.to_action()],
-
-            // handled by merge action
-            NormAction::Set(_expr, _rhs) => vec![action.to_action()],
+            NormAction::Set(expr, var) => {
+                let NormExpr::Call(head, _args) = expr;
+                let func_type = self.type_info.func_types.get(head).unwrap();
+                // desugar set to union when the merge
+                // function is union
+                if func_type.output.is_eq_sort() && !func_type.has_merge {
+                    let fresh = self.get_fresh();
+                    self.instrument_actions(&[
+                        NormAction::Let(fresh, expr.clone()),
+                        NormAction::Union(fresh, *var),
+                    ])
+                } else {
+                    vec![action.to_action()]
+                }
+            }
             NormAction::Union(lhs, rhs) => {
                 let lhs_type = self.type_info.lookup(self.current_ctx, *lhs).unwrap();
                 let rhs_type = self.type_info.lookup(self.current_ctx, *rhs).unwrap();
@@ -262,26 +272,13 @@ impl ProofState {
 
     fn instrument_fdecl(&mut self, fdecl: &FunctionDecl) -> FunctionDecl {
         let mut res = fdecl.clone();
-        let types = self.type_info.func_types.get(&fdecl.name).unwrap().clone();
+        //let types = self.type_info.func_types.get(&fdecl.name).unwrap().clone();
 
         if res.merge.is_none() {
             res.merge = Some(Expr::Var("new".into()));
         }
 
-        if types.output.is_eq_sort() && !types.has_merge {
-            res.merge_action.extend(
-                self.parse_actions(
-                    self.union(types.output.name(), "old", "new")
-                        .split('\n')
-                        .map(|s| s.to_string())
-                        .collect(),
-                ),
-            );
-
-            res
-        } else {
-            res
-        }
+        res
     }
 
     // TODO we need to also instrument merge actions and merge because they can add new terms that need representatives

@@ -414,7 +414,7 @@ impl<'a> ActionChecker<'a> {
                 self.locals.insert(*v, ty);
                 Ok(())
             }
-            Action::Set(f, args, val) | Action::SetNoTrack(f, args, val) => {
+            Action::Set(f, args, val) => {
                 let fake_call = Expr::Call(*f, args.clone());
                 let (_, ty) = self.infer_expr(&fake_call)?;
                 let fake_instr = self.instructions.pop().unwrap();
@@ -759,6 +759,9 @@ impl EGraph {
                 Instruction::Set(f) => {
                     assert!(make_defaults);
                     let function = self.functions.get_mut(f).unwrap();
+                    // desugaring should have desugared
+                    // set to union
+                    // except for setting the parent relation
                     let new_value = stack.pop().unwrap();
                     let new_len = stack.len() - function.schema.input.len();
                     let args = &stack[new_len..];
@@ -783,7 +786,7 @@ impl EGraph {
                                     return Err(Error::MergeError(*f, new_value, old_value));
                                 }
                                 MergeFn::Union => {
-                                    self.unionfind.union_values(old_value, new_value, tag)
+                                    panic!("There should be no union merge functions after term encoding");
                                 }
                                 MergeFn::Expr(merge_prog) => {
                                     let values = [old_value, new_value];
@@ -805,15 +808,7 @@ impl EGraph {
                     stack.truncate(new_len)
                 }
                 Instruction::Union(arity) => {
-                    let new_len = stack.len() - arity;
-                    let values = &stack[new_len..];
-                    let sort = values[0].tag;
-                    let first = self.unionfind.find(Id::from(values[0].bits as usize));
-                    values[1..].iter().fold(first, |a, b| {
-                        let b = self.unionfind.find(Id::from(b.bits as usize));
-                        self.unionfind.union(a, b, sort)
-                    });
-                    stack.truncate(new_len);
+                    panic!("term encoding gets rid of union");
                 }
                 Instruction::Extract => {
                     let value = stack.last().unwrap();

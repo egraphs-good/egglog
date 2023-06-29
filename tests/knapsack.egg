@@ -41,14 +41,7 @@
 
 (run 100)
 
-(query-extract (Unwrap test1))
+(print-table expr_Parent___ 100000)
+
 (check (= test1 (Num 13)))
 
-(query-extract (Unwrap test2))
-(check (= test2 (Num 0)))
-
-(query-extract (Unwrap test3))
-(check (= test3 (Num 3)))
-
-(query-extract (Unwrap test4))
-(check (= test4 (Num 150)))

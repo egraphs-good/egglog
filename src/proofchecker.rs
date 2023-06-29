@@ -18,7 +18,7 @@ const EQ_GRAPH_NAME: &str = "EqGraph__";
 
 pub fn check_proof(egraph: &mut EGraph) {
     let (mut to_check, termdag) = egraph
-        .extract_function(EQ_GRAPH_NAME.into(), usize::MAX)
+        .function_to_dag(EQ_GRAPH_NAME.into(), usize::MAX)
         .unwrap();
 
     let mut proven_equal = UnionFind::default();

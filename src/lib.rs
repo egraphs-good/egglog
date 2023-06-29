@@ -391,6 +391,8 @@ impl EGraph {
             if !merges.is_empty() {
                 deferred_merges.push((function.decl.name, merges));
             }
+            // new term encoding, never union
+            assert!(unions == 0);
             new_unions += unions;
         }
         for (func, merges) in deferred_merges {
@@ -475,7 +477,7 @@ impl EGraph {
         }
     }
 
-    pub fn extract_function(
+    pub fn function_to_dag(
         &mut self,
         sym: Symbol,
         n: usize,
@@ -490,7 +492,7 @@ impl EGraph {
             .collect::<Vec<_>>();
 
         let mut termdag = TermDag::default();
-        let extractor = Extractor::new(self, &mut termdag);
+        let extractor = Extractor::new(self, &mut termdag, false);
         let mut terms = Vec::new();
         for (ins, out) in nodes {
             let mut children = Vec::new();
@@ -517,7 +519,7 @@ impl EGraph {
     }
 
     pub fn print_function(&mut self, sym: Symbol, n: usize) -> Result<String, Error> {
-        let (terms_with_outputs, termdag) = self.extract_function(sym, n)?;
+        let (terms_with_outputs, termdag) = self.function_to_dag(sym, n)?;
         let f = self.functions.get(&sym).ok_or(TypeError::Unbound(sym))?;
         let out_is_unit = f.schema.output.name() == UNIT_SYM.into();
 
@@ -995,7 +997,7 @@ impl EGraph {
                 }
                 format!("Popped {n} levels.")
             }
-            NCommand::Print(f, n) => {
+            NCommand::PrintTable(f, n) => {
                 let msg = self.print_function(f, n)?;
                 println!("{}", msg);
                 msg

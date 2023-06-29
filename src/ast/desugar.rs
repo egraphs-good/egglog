@@ -216,7 +216,7 @@ fn flatten_actions(actions: &Vec<Action>, desugar: &mut Desugar) -> Vec<NormActi
                 assert_ne!(*symbol, added);
                 res.push(NormAction::LetVar(*symbol, added));
             }
-            Action::Set(symbol, exprs, rhs) | Action::SetNoTrack(symbol, exprs, rhs) => {
+            Action::Set(symbol, exprs, rhs) => {
                 let set = NormAction::Set(
                     NormExpr::Call(
                         *symbol,
@@ -683,7 +683,7 @@ pub(crate) fn desugar_command(
             res
         }
         Command::CheckProof => vec![NCommand::CheckProof],
-        Command::Print(symbol, size) => vec![NCommand::Print(symbol, size)],
+        Command::PrintTable(symbol, size) => vec![NCommand::PrintTable(symbol, size)],
         Command::PrintSize(symbol) => vec![NCommand::PrintSize(symbol)],
         Command::Output { file, exprs } => vec![NCommand::Output { file, exprs }],
         Command::Push(num) => {

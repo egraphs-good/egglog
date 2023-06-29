@@ -91,7 +91,7 @@ impl UnionFind {
     ///
     /// This method assumes that the given values belong to the same, "eq-able",
     /// sort. Its behavior is unspecified on other values.
-    pub fn union_values(&mut self, val1: Value, val2: Value, sort: Symbol) -> Value {
+    pub fn union_values(&mut self, _val1: Value, _val2: Value, _sort: Symbol) -> Value {
         panic!("We should never call union_values due to term encoding");
     }
 

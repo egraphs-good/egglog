@@ -17,6 +17,7 @@ pub(crate) struct Extractor<'a> {
     costs: HashMap<Id, (Cost, Term)>,
     ctors: Vec<Symbol>,
     egraph: &'a EGraph,
+    use_eq_relation: bool,
 }
 
 impl EGraph {
@@ -30,7 +31,7 @@ impl EGraph {
     }
 
     pub fn extract(&self, value: Value, termdag: &mut TermDag, arcsort: &ArcSort) -> (Cost, Term) {
-        Extractor::new(self, termdag).find_best(value, termdag, arcsort)
+        Extractor::new(self, termdag, true).find_best(value, termdag, arcsort)
     }
 
     pub fn extract_variants(
@@ -41,7 +42,7 @@ impl EGraph {
     ) -> Vec<Term> {
         let (tag, id) = self.value_to_id(value).unwrap();
         let output_value = &Value::from_id(tag, id);
-        let ext = &Extractor::new(self, termdag);
+        let ext = &Extractor::new(self, termdag, true);
         ext.ctors
             .iter()
             .flat_map(|&sym| {
@@ -66,11 +67,12 @@ impl EGraph {
 }
 
 impl<'a> Extractor<'a> {
-    pub fn new(egraph: &'a EGraph, termdag: &mut TermDag) -> Self {
+    pub fn new(egraph: &'a EGraph, termdag: &mut TermDag, use_eq_relation: bool) -> Self {
         let mut extractor = Extractor {
             costs: HashMap::default(),
             egraph,
             ctors: vec![],
+            use_eq_relation,
         };
 
         // only consider "extractable" functions
@@ -96,9 +98,17 @@ impl<'a> Extractor<'a> {
         termdag.make(node.sym, children)
     }
 
+    fn find(&self, value: Value) -> Id {
+        if self.use_eq_relation {
+            self.egraph.find(value)
+        } else {
+            Id::from(value.bits as usize)
+        }
+    }
+
     pub fn find_best(&self, value: Value, termdag: &mut TermDag, sort: &ArcSort) -> (Cost, Term) {
         if sort.is_eq_sort() {
-            let id = self.egraph.find(value);
+            let id = self.find(value);
             let (cost, node) = self
                 .costs
                 .get(&id)
@@ -109,6 +119,13 @@ impl<'a> Extractor<'a> {
                             if output.value == value {
                                 eprintln!("Found unextractable function: {:?}", func.decl.name);
                                 eprintln!("Inputs: {:?}", inputs);
+                                eprintln!(
+                                    "{:?}",
+                                    inputs
+                                        .iter()
+                                        .map(|input| self.costs.get(&self.find(*input)))
+                                        .collect::<Vec<_>>()
+                                );
                             }
                         }
                     }
@@ -133,7 +150,7 @@ impl<'a> Extractor<'a> {
         let mut terms: Vec<Term> = vec![];
         for (ty, value) in types.iter().zip(children) {
             cost = cost.saturating_add(if ty.is_eq_sort() {
-                let id = self.egraph.find(*value);
+                let id = self.find(*value);
                 // TODO costs should probably map values?
                 let (cost, term) = self.costs.get(&id)?;
                 terms.push(term.clone());
@@ -161,7 +178,7 @@ impl<'a> Extractor<'a> {
                         {
                             let make_new_pair = || (new_cost, termdag.make(sym, term_inputs));
 
-                            let id = self.egraph.find(output.value);
+                            let id = self.find(output.value);
                             match self.costs.entry(id) {
                                 Entry::Vacant(e) => {
                                     did_something = true;
