@@ -199,11 +199,12 @@ impl ProofState {
                 // desugar set to union when the merge
                 // function is union
                 if func_type.output.is_eq_sort() && !func_type.has_merge {
-                    let fresh = self.get_fresh();
-                    self.instrument_actions(&[
-                        NormAction::Let(fresh, expr.clone()),
-                        NormAction::Union(fresh, *var),
-                    ])
+                    self.parse_actions(
+                        self.union(func_type.output.name(), &expr.to_string(), &var.to_string())
+                            .split('\n')
+                            .map(|s| s.to_string())
+                            .collect(),
+                    )
                 } else {
                     vec![action.to_action()]
                 }
@@ -271,14 +272,7 @@ impl ProofState {
     }
 
     fn instrument_fdecl(&mut self, fdecl: &FunctionDecl) -> FunctionDecl {
-        let mut res = fdecl.clone();
-        //let types = self.type_info.func_types.get(&fdecl.name).unwrap().clone();
-
-        if res.merge.is_none() {
-            res.merge = Some(Expr::Var("new".into()));
-        }
-
-        res
+        fdecl.clone()
     }
 
     // TODO we need to also instrument merge actions and merge because they can add new terms that need representatives

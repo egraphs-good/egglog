@@ -41,7 +41,5 @@
 
 (run 100)
 
-(print-table expr_Parent___ 100000)
-
 (check (= test1 (Num 13)))
 
