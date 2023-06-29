@@ -342,8 +342,20 @@ impl EGraph {
         }
     }
 
-    pub fn find(&self, id: Id) -> Id {
-        self.unionfind.find(id)
+    // find the leader term for this term
+    // in the corresponding table
+    pub fn find(&self, value: Value) -> Id {
+        // HACK using value tag for parent table name
+        let parent_name = self.proof_state.parent_name(value.tag);
+        if let Some(func) = self.functions.get(&parent_name) {
+            Id::from(
+                func.get(&[value])
+                    .unwrap_or_else(|| panic!("No value {:?} in {parent_name}", value))
+                    .bits as usize,
+            )
+        } else {
+            panic!("No parent table called {parent_name}");
+        }
     }
 
     pub fn rebuild_nofail(&mut self) -> usize {

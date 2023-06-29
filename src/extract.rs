@@ -23,8 +23,7 @@ impl EGraph {
     pub fn value_to_id(&self, value: Value) -> Option<(Symbol, Id)> {
         if let Some(sort) = self.get_sort(&value) {
             if sort.is_eq_sort() {
-                let id = Id::from(value.bits as usize);
-                return Some((sort.name(), self.find(id)));
+                return Some((sort.name(), self.find(value)));
             }
         }
         None
@@ -74,8 +73,7 @@ impl<'a> Extractor<'a> {
             ctors: vec![],
         };
 
-        // HACK
-        // just consider all functions constructors for now...
+        // only consider "extractable" functions
         extractor.ctors.extend(
             egraph
                 .functions
@@ -100,7 +98,7 @@ impl<'a> Extractor<'a> {
 
     pub fn find_best(&self, value: Value, termdag: &mut TermDag, sort: &ArcSort) -> (Cost, Term) {
         if sort.is_eq_sort() {
-            let id = self.egraph.find(Id::from(value.bits as usize));
+            let id = self.egraph.find(value);
             let (cost, node) = self
                 .costs
                 .get(&id)
@@ -135,7 +133,7 @@ impl<'a> Extractor<'a> {
         let mut terms: Vec<Term> = vec![];
         for (ty, value) in types.iter().zip(children) {
             cost = cost.saturating_add(if ty.is_eq_sort() {
-                let id = self.egraph.find(Id::from(value.bits as usize));
+                let id = self.egraph.find(*value);
                 // TODO costs should probably map values?
                 let (cost, term) = self.costs.get(&id)?;
                 terms.push(term.clone());
@@ -163,7 +161,7 @@ impl<'a> Extractor<'a> {
                         {
                             let make_new_pair = || (new_cost, termdag.make(sym, term_inputs));
 
-                            let id = self.egraph.find(Id::from(output.value.bits as usize));
+                            let id = self.egraph.find(output.value);
                             match self.costs.entry(id) {
                                 Entry::Vacant(e) => {
                                     did_something = true;

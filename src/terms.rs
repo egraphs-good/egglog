@@ -1,7 +1,7 @@
 use crate::*;
 
 impl ProofState {
-    fn parent_name(&self, sort: Symbol) -> Symbol {
+    pub(crate) fn parent_name(&self, sort: Symbol) -> Symbol {
         Symbol::from(format!(
             "{}_Parent{}",
             sort,
