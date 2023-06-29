@@ -757,7 +757,7 @@ impl EGraph {
                     let args = &stack[new_len..];
 
                     // We should only have canonical values here: omit the canonicalization step
-                    let old_value = function.insert(args, new_value, self.timestamp);
+                    let old_value = function.get(args);
 
                     if let Some(old_value) = old_value {
                         if new_value != old_value {
@@ -792,6 +792,8 @@ impl EGraph {
                             let function = self.functions.get_mut(f).unwrap();
                             function.insert(args, merged, self.timestamp);
                         }
+                    } else {
+                        function.insert(args, new_value, self.timestamp);
                     }
                     stack.truncate(new_len)
                 }
