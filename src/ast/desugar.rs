@@ -142,19 +142,21 @@ fn flatten_equalities(equalities: Vec<(Symbol, Expr)>, desugar: &mut Desugar) ->
     let mut constraints: Vec<(Symbol, Symbol)> = Default::default();
 
     for (lhs, rhs) in equalities {
-        if desugar.global_variables.contains(&lhs)
-            || bound_variables.contains(&lhs) && !rhs.is_var()
-        {
-            let fresh = desugar.get_fresh();
-            expr_to_ssa(
-                fresh,
-                &rhs,
-                desugar,
-                &mut res,
-                &mut constraints,
-                &mut bound_variables,
-            );
-            constraints.push((fresh, lhs));
+        if desugar.global_variables.contains(&lhs) || bound_variables.contains(&lhs) {
+            if let Expr::Var(rhs_v) = rhs {
+                constraints.push((lhs, rhs_v));
+            } else {
+                let fresh = desugar.get_fresh();
+                expr_to_ssa(
+                    fresh,
+                    &rhs,
+                    desugar,
+                    &mut res,
+                    &mut constraints,
+                    &mut bound_variables,
+                );
+                constraints.push((fresh, lhs));
+            }
         } else {
             expr_to_ssa(
                 lhs,
@@ -175,6 +177,7 @@ fn flatten_equalities(equalities: Vec<(Symbol, Expr)>, desugar: &mut Desugar) ->
 }
 
 fn flatten_facts(facts: &Vec<Fact>, desugar: &mut Desugar) -> Vec<NormFact> {
+    eprintln!("flattening {:?}", facts);
     let mut equalities = vec![];
     for fact in facts {
         match fact {
@@ -193,7 +196,12 @@ fn flatten_facts(facts: &Vec<Fact>, desugar: &mut Desugar) -> Vec<NormFact> {
                 }
             }
             Fact::Fact(expr) => {
-                equalities.push((desugar.get_fresh(), expr.clone()));
+                // we can drop facts that are
+                // just a variable
+                if let Expr::Var(_v) = expr {
+                } else {
+                    equalities.push((desugar.get_fresh(), expr.clone()));
+                }
             }
         }
     }
@@ -590,16 +598,24 @@ pub(crate) fn desugar_command(
         Command::RunSchedule(sched) => {
             vec![NCommand::RunSchedule(desugar_schedule(desugar, &sched))]
         }
-        Command::Extract { variants, fact } => {
+        // TODO add variants to extract action
+        Command::Extract {
+            variants: _variants,
+            fact,
+        } => {
             let fresh = desugar.get_fresh();
             let fresh_ruleset = desugar.get_fresh();
-            let desugaring = format!(
-                "(check {fact})
-                 (ruleset {fresh_ruleset})
-                 (rule ((= {fresh} {fact}))
-                       ((extract {fresh})))
-                 (run {fresh_ruleset} 1)"
-            );
+            let desugaring = if let Fact::Fact(Expr::Var(v)) = fact {
+                format!("(extract {v})")
+            } else {
+                format!(
+                    "(check {fact})
+                    (ruleset {fresh_ruleset})
+                    (rule ((= {fresh} {fact}))
+                        ((extract {fresh})))
+                    (run {fresh_ruleset} 1)"
+                )
+            };
 
             desugar
                 .desugar_program(

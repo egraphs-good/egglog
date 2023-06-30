@@ -1163,6 +1163,7 @@ impl EGraph {
 
         let type_info_before = self.proof_state.type_info.clone();
 
+        eprintln!("desugared: {}", ListDisplay(&program, "\n"));
         self.proof_state.type_info.typecheck_program(&program)?;
         if stop == CompilerPassStop::TypecheckDesugared {
             return Ok(program);
@@ -1179,6 +1180,7 @@ impl EGraph {
 
         // reset type info
         self.proof_state.type_info = type_info_before;
+        eprintln!("sexp: {}", ListDisplay(&program, "\n"));
         self.proof_state.type_info.typecheck_program(&program)?;
         if stop == CompilerPassStop::TypecheckTermEncoding {
             return Ok(program);

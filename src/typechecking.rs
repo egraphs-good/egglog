@@ -438,17 +438,26 @@ impl TypeInfo {
 
     fn typecheck_fact(&mut self, ctx: CommandId, fact: &NormFact) -> Result<(), TypeError> {
         match fact {
-            NormFact::Assign(var, expr) | NormFact::Compute(var, expr) => {
-                let expr_type = self.typecheck_expr(ctx, expr, false)?;
-                if let Some(existing) = self
+            NormFact::Compute(var, expr) => {
+                let expr_type = self.typecheck_expr(ctx, expr, true)?;
+                if let Some(_existing) = self
                     .local_types
                     .get_mut(&ctx)
                     .unwrap()
                     .insert(*var, expr_type.output.clone())
                 {
-                    if expr_type.output.name() != existing.name() {
-                        return Err(TypeError::TypeMismatch(expr_type.output, existing));
-                    }
+                    return Err(TypeError::AlreadyDefined(*var));
+                }
+            }
+            NormFact::Assign(var, expr) => {
+                let expr_type = self.typecheck_expr(ctx, expr, false)?;
+                if let Some(_existing) = self
+                    .local_types
+                    .get_mut(&ctx)
+                    .unwrap()
+                    .insert(*var, expr_type.output.clone())
+                {
+                    return Err(TypeError::AlreadyDefined(*var));
                 }
             }
             NormFact::AssignLit(var, lit) => {
@@ -514,6 +523,7 @@ impl TypeInfo {
                 if let Some(found) = self.local_types.get(&ctx).unwrap().get(&sym) {
                     Ok(found.clone())
                 } else {
+                    panic!("unbound {}", sym);
                     Err(TypeError::Unbound(sym))
                 }
             })
