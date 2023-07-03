@@ -138,6 +138,9 @@ impl ProofState {
                     })
                     .collect()
             }
+            NormFact::AssignVar(_lhs, _rhs) => {
+                vec![fact.to_fact()]
+            }
             NormFact::AssignLit(..) => {
                 vec![fact.to_fact()]
             }

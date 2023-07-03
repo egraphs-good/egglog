@@ -11,7 +11,7 @@ pub struct Context<'a> {
     nodes: HashMap<ENode, Id>,
 }
 
-#[derive(Hash, Eq, PartialEq)]
+#[derive(Hash, Eq, PartialEq, Clone)]
 enum ENode {
     Func(Symbol, Vec<Id>),
     Prim(Primitive, Vec<Id>),
@@ -150,6 +150,25 @@ impl<'a> Context<'a> {
                 _ => continue,
             }
         }
+        // Globally bound variables first
+        for (node, &id) in &self.nodes {
+            match node {
+                ENode::Var(var) => {
+                    if self.egraph.global_bindings.get(var).is_some() {
+                        match leaves.entry(id) {
+                            Entry::Occupied(existing) => {
+                                canon.insert(*var, existing.get().clone());
+                            }
+                            Entry::Vacant(v) => {
+                                v.insert(Expr::Var(*var));
+                            }
+                        }
+                    }
+                }
+                _ => continue,
+            }
+        }
+
         // Now do variables
         for (node, &id) in &self.nodes {
             debug_assert_eq!(id, self.unionfind.find(id));
@@ -168,7 +187,9 @@ impl<'a> Context<'a> {
 
         // replace canonical things in the actions
         let res_actions = actions.iter().map(|a| a.replace_canon(&canon)).collect();
-        for (var, _expr) in canon {
+        for (var, expr) in canon {
+            eprintln!("removing {} with leader {}", var, expr);
+
             self.types.remove(&var);
         }
 
@@ -182,15 +203,22 @@ impl<'a> Context<'a> {
         };
 
         let mut query = Query::default();
+        let mut query_eclasses = HashSet::<Id>::default();
         // Now we can fill in the nodes with the canonical leaves
         for (node, id) in &self.nodes {
             match node {
                 ENode::Func(f, ids) => {
                     let args = ids.iter().chain([id]).map(get_leaf).collect();
+                    for id in ids {
+                        query_eclasses.insert(*id);
+                    }
                     query.atoms.push(Atom { head: *f, args });
                 }
                 ENode::Prim(p, ids) => {
                     let args = ids.iter().chain([id]).map(get_leaf).collect();
+                    for id in ids {
+                        query_eclasses.insert(*id);
+                    }
                     query.filters.push(Atom {
                         head: p.clone(),
                         args,
@@ -200,19 +228,32 @@ impl<'a> Context<'a> {
             }
         }
 
+        eprintln!("query so far: {:?}", query);
+
         // filter for global variables
         for node in &self.nodes {
             if let ENode::Var(var) = node.0 {
                 if let Some((_sort, value)) = self.egraph.global_bindings.get(var) {
-                    let canon = get_leaf(node.1);
-                    query.filters.push(Atom {
-                        head: Primitive(Arc::new(ValueEq {})),
-                        // TODO X: uh what the heck why do we need
-                        // 3 arguments here
-                        args: vec![canon.clone(), canon, AtomTerm::Value(*value)],
-                    })
+                    // if the query didn't use this global
+                    // variable, no need to filter
+                    if query_eclasses.contains(node.1) {
+                        let canon = get_leaf(node.1);
+                        eprintln!("canon is {}", canon);
+                        query.filters.push(Atom {
+                            head: Primitive(Arc::new(ValueEq {})),
+                            // TODO X: uh what the heck why do we need
+                            // 3 arguments here
+                            args: vec![canon.clone(), AtomTerm::Value(*value), canon],
+                        })
+                    }
                 }
             }
+        }
+
+        if query.atoms.is_empty() {
+            assert!(query.filters.is_empty());
+            eprintln!("types: {:?}", self.types);
+            assert!(self.types.is_empty());
         }
 
         if self.errors.is_empty() {
@@ -237,7 +278,7 @@ impl<'a> Context<'a> {
                 }
 
                 // reinsert and handle hit
-                if let Some(old) = self.nodes.insert(node, id) {
+                if let Some(old) = self.nodes.insert(node.clone(), id) {
                     keep_going = true;
                     self.unionfind.union_raw(old, id);
                 }
@@ -248,6 +289,7 @@ impl<'a> Context<'a> {
     fn typecheck_fact(&mut self, fact: &Fact) {
         match fact {
             Fact::Eq(exprs) => {
+                assert!(exprs.len() == 2);
                 let mut later = vec![];
                 let mut ty: Option<ArcSort> = None;
                 let mut ids = Vec::with_capacity(exprs.len());
@@ -260,7 +302,7 @@ impl<'a> Context<'a> {
                         // so we'll try again later when we can check its type
                         (Expr::Var(v), None)
                             if !self.types.contains_key(v)
-                                && !self.egraph.functions.contains_key(v) =>
+                                && !self.egraph.global_bindings.contains_key(v) =>
                         {
                             later.push(expr)
                         }
@@ -295,7 +337,7 @@ impl<'a> Context<'a> {
 
     fn check_query_expr(&mut self, expr: &Expr, expected: ArcSort) -> Id {
         match expr {
-            Expr::Var(sym) if !self.egraph.functions.contains_key(sym) => {
+            Expr::Var(sym) => {
                 match self.types.entry(*sym) {
                     IEntry::Occupied(ty) => {
                         // TODO name comparison??
@@ -335,12 +377,15 @@ impl<'a> Context<'a> {
     fn infer_query_expr(&mut self, expr: &Expr) -> (Id, Option<ArcSort>) {
         match expr {
             Expr::Var(sym) => {
+                eprintln!("looking for {}", sym);
                 if self.egraph.functions.contains_key(sym) {
                     return self.infer_query_expr(&Expr::call(*sym, []));
                 }
+
                 let ty = if let Some(ty) = self.types.get(sym) {
                     Some(ty.clone())
                 } else if let Some(ty) = self.egraph.global_bindings.get(sym) {
+                    eprintln!("found {} for {}", ty.0.name(), sym);
                     Some(ty.0.clone())
                 } else {
                     self.errors.push(TypeError::Unbound(*sym));

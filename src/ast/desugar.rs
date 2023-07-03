@@ -77,7 +77,7 @@ fn expr_to_ssa(
     bound: &mut HashSet<Symbol>,
 ) {
     if let Expr::Var(v) = expr {
-        res.push(NormFact::ConstrainEq(lhs_in, *v));
+        res.push(NormFact::AssignVar(lhs_in, *v));
         return;
     }
 

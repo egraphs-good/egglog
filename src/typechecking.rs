@@ -292,6 +292,10 @@ impl TypeInfo {
                         }
                     });
                 }
+                NormFact::AssignVar(lhs, _rhs) => {
+                    assert!(!self.global_types.contains_key(lhs));
+                    assert!(let_bound.insert(*lhs));
+                }
                 NormFact::AssignLit(var, _lit) => {
                     assert!(let_bound.insert(*var));
                 }
@@ -458,6 +462,17 @@ impl TypeInfo {
                     .insert(*var, expr_type.output.clone())
                 {
                     return Err(TypeError::AlreadyDefined(*var));
+                }
+            }
+            NormFact::AssignVar(lhs, rhs) => {
+                let rhs_type = self.lookup(ctx, *rhs)?;
+                if let Some(_existing) = self
+                    .local_types
+                    .get_mut(&ctx)
+                    .unwrap()
+                    .insert(*lhs, rhs_type.clone())
+                {
+                    return Err(TypeError::AlreadyDefined(*lhs));
                 }
             }
             NormFact::AssignLit(var, lit) => {
