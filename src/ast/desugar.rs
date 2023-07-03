@@ -177,7 +177,6 @@ fn flatten_equalities(equalities: Vec<(Symbol, Expr)>, desugar: &mut Desugar) ->
 }
 
 fn flatten_facts(facts: &Vec<Fact>, desugar: &mut Desugar) -> Vec<NormFact> {
-    eprintln!("flattening {:?}", facts);
     let mut equalities = vec![];
     for fact in facts {
         match fact {
