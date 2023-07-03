@@ -214,17 +214,18 @@ impl<'a> Context<'a> {
                 }
                 ENode::Prim(p, ids) => {
                     let mut args = vec![];
-                    for id in ids {
-                        let leaf = get_leaf(id);
+                    for child in ids {
+                        let leaf = get_leaf(child);
                         if let AtomTerm::Var(v) = leaf {
                             if self.egraph.global_bindings.contains_key(&v) {
                                 args.push(AtomTerm::Value(self.egraph.global_bindings[&v].1));
                                 continue;
                             }
                         }
-                        args.push(get_leaf(id));
-                        query_eclasses.insert(*id);
+                        args.push(get_leaf(child));
+                        query_eclasses.insert(*child);
                     }
+                    args.push(get_leaf(id));
                     query.filters.push(Atom {
                         head: p.clone(),
                         args,
