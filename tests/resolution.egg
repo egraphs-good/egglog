@@ -85,10 +85,8 @@
 (union p1 False)
 (set (or (negate p0) (or p1 (or p2 False))) True)
 (run 10)
-(print or)
-(print p)
-(print True)
-(print False)
+
+
 (check (!= True False))
 (check (= p0 False))
 (check (= p2 False))

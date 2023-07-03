@@ -110,7 +110,7 @@
 
 ; === PRINT RESULTS ===
 
-; (print edge-in-mst) ; this is not very helpful
+; (print-table edge-in-mst) ; this is not very helpful
 
 ; Just copy canonical edges to solution
 (relation solution (i64 i64 i64))
@@ -121,4 +121,4 @@
       :ruleset finalize)
 (run-schedule (saturate finalize))
 
-(print solution) ; this is better
+(print-table solution) ; this is better

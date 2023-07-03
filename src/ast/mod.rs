@@ -504,6 +504,7 @@ pub struct FunctionDecl {
     pub name: Symbol,
     pub schema: Schema,
     pub default: Option<Expr>,
+    // TODO we should desugar merge and merge action
     pub merge: Option<Expr>,
     pub merge_action: Vec<Action>,
     pub cost: Option<usize>,
