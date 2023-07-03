@@ -125,6 +125,8 @@
 
 (run 1)
 
+;; set a default
+(best-error target)
 ;; error is bad, constant folding hasn't fired enough
 (query-extract (best-error target))
 

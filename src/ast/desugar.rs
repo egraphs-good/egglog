@@ -115,7 +115,11 @@ fn expr_to_ssa(
             for child in children {
                 match child {
                     Expr::Var(v) => {
-                        if bound.insert(*v) {
+                        if desugar.global_variables.contains(v) {
+                            let fresh = desugar.get_fresh();
+                            new_children.push(fresh);
+                            constraints.push((fresh, *v));
+                        } else if bound.insert(*v) {
                             new_children.push(*v);
                         } else {
                             let new = desugar.get_fresh();

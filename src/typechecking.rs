@@ -168,6 +168,8 @@ impl TypeInfo {
             }
             NCommand::Check(facts) => {
                 self.typecheck_facts(id, facts)?;
+                eprintln!("facts: {:?}", facts);
+                self.verify_normal_form_facts(facts);
             }
             NCommand::Fail(cmd) => {
                 self.typecheck_ncommand(cmd, id)?;
@@ -270,7 +272,6 @@ impl TypeInfo {
 
     fn verify_normal_form_facts(&self, facts: &Vec<NormFact>) -> HashSet<Symbol> {
         let mut let_bound: HashSet<Symbol> = Default::default();
-        let mut bound_in_constraint: HashSet<Symbol> = Default::default();
 
         for fact in facts {
             match fact {
@@ -279,7 +280,7 @@ impl TypeInfo {
                     assert!(let_bound.insert(*var));
                     body.iter().for_each(|bvar| {
                         if !self.global_types.contains_key(bvar) {
-                            assert!(let_bound.contains(bvar) || bound_in_constraint.contains(bvar));
+                            assert!(let_bound.contains(bvar));
                         }
                     });
                 }
@@ -287,9 +288,8 @@ impl TypeInfo {
                     assert!(!self.global_types.contains_key(var));
                     assert!(let_bound.insert(*var));
                     body.iter().for_each(|bvar| {
-                        if !self.global_types.contains_key(bvar) {
-                            assert!(let_bound.insert(*bvar), "{bvar} was already bound!");
-                        }
+                        assert!(!self.global_types.contains_key(bvar));
+                        assert!(let_bound.insert(*bvar));
                     });
                 }
                 NormFact::AssignVar(lhs, _rhs) => {
@@ -307,12 +307,9 @@ impl TypeInfo {
                     {
                         panic!("ConstrainEq on unbound variables");
                     }
-                    bound_in_constraint.insert(*var1);
-                    bound_in_constraint.insert(*var2);
                 }
             }
         }
-        let_bound.extend(bound_in_constraint);
         let_bound
     }
 
@@ -322,6 +319,7 @@ impl TypeInfo {
         let_bound: &mut HashSet<Symbol>,
     ) {
         let assert_bound = |var, let_bound: &HashSet<Symbol>| {
+            eprintln!("asserting bound: {:?}", var);
             assert!(
                 let_bound.contains(var)
                     || self.global_types.contains_key(var)

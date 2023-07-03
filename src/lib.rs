@@ -1165,6 +1165,7 @@ impl EGraph {
         }
 
         let type_info_before = self.proof_state.type_info.clone();
+        eprintln!("desugared: {}", ListDisplay(&program, "\n"));
 
         self.proof_state.type_info.typecheck_program(&program)?;
         if stop == CompilerPassStop::TypecheckDesugared {

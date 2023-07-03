@@ -323,7 +323,6 @@ impl EGraph {
         Vec<Symbol>,        /* variable ordering */
         Vec<Option<usize>>, /* the first column accessed per-atom */
     )> {
-        eprintln!("compile_program for query: {}", query.query);
         #[derive(Default, Debug)]
         struct VarInfo2 {
             occurences: Vec<usize>,
