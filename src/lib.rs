@@ -520,7 +520,10 @@ impl EGraph {
 
     pub fn print_function(&mut self, sym: Symbol, n: usize) -> Result<String, Error> {
         let (terms_with_outputs, termdag) = self.function_to_dag(sym, n)?;
-        let f = self.functions.get(&sym).ok_or(TypeError::Unbound(sym))?;
+        let f = self
+            .functions
+            .get(&sym)
+            .ok_or(TypeError::UnboundFunction(sym))?;
         let out_is_unit = f.schema.output.name() == UNIT_SYM.into();
 
         let mut buf = String::new();

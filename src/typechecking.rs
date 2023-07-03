@@ -625,6 +625,8 @@ pub enum TypeError {
     Unbound(Symbol),
     #[error("Undefined sort {0}")]
     UndefinedSort(Symbol),
+    #[error("Unbound function {0}")]
+    UnboundFunction(Symbol),
     #[error("Function already bound {0}")]
     FunctionAlreadyBound(Symbol),
     #[error("Function declarations are not allowed after a push.")]

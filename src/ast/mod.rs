@@ -406,7 +406,7 @@ impl ToSexp for Command {
             Command::CheckProof => list!("check-proof"),
             Command::Push(n) => list!("push", n),
             Command::Pop(n) => list!("pop", n),
-            Command::PrintTable(name, n) => list!("print", name, n),
+            Command::PrintTable(name, n) => list!("print-table", name, n),
             Command::PrintSize(name) => list!("print-size", name),
             Command::Input { name, file } => list!("input", name, format!("\"{}\"", file)),
             Command::Output { file, exprs } => list!("output", format!("\"{}\"", file), ++ exprs),
