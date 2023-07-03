@@ -55,6 +55,7 @@ macro_rules! add_primitives {
                 }
 
                 fn apply(&self, values: &[Value]) -> Option<Value> {
+                    eprintln!("apply: {:?}", values);
                     if let [$($param),*] = values {
                         $(let $param: $param_t = <$param_t as FromSort>::load(&self.$param, $param);)*
                         // print!("{}( ", $name);
@@ -63,7 +64,7 @@ macro_rules! add_primitives {
                         // println!(") = {result:?}");
                         result.store(&self.__out)
                     } else {
-                        panic!()
+                        panic!("wrong number of arguments")
                     }
                 }
             }

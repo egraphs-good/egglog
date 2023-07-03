@@ -248,7 +248,6 @@ impl EGraph {
         query: Query,
         types: &IndexMap<Symbol, ArcSort>,
     ) -> CompiledQuery {
-        eprintln!("gj compile {:?}", query);
         // NOTE: this vars order only used for ordering the tuple,
         // It is not the GJ variable order.
         let mut vars: IndexMap<Symbol, VarInfo> = Default::default();
@@ -324,7 +323,7 @@ impl EGraph {
         Vec<Symbol>,        /* variable ordering */
         Vec<Option<usize>>, /* the first column accessed per-atom */
     )> {
-        eprintln!("compiling {:?}", query);
+        eprintln!("compile_program for query: {}", query.query);
         #[derive(Default, Debug)]
         struct VarInfo2 {
             occurences: Vec<usize>,
@@ -443,8 +442,6 @@ impl EGraph {
         // now we can try to add primitives
         // TODO this is very inefficient, since primitives all at the end
         let mut extra = query.query.filters.clone();
-        eprintln!("extra: {:?}", extra);
-        eprintln!("vars: {:?}", vars);
         while !extra.is_empty() {
             let next = extra.iter().position(|p| {
                 assert!(!p.args.is_empty());
@@ -453,7 +450,6 @@ impl EGraph {
                     AtomTerm::Value(_) => true,
                 })
             });
-            eprintln!("next {:?}", next);
 
             if let Some(i) = next {
                 let p = extra.remove(i);

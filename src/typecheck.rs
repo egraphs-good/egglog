@@ -188,8 +188,6 @@ impl<'a> Context<'a> {
         // replace canonical things in the actions
         let res_actions = actions.iter().map(|a| a.replace_canon(&canon)).collect();
         for (var, expr) in canon {
-            eprintln!("removing {} with leader {}", var, expr);
-
             self.types.remove(&var);
         }
 
@@ -215,8 +213,16 @@ impl<'a> Context<'a> {
                     query.atoms.push(Atom { head: *f, args });
                 }
                 ENode::Prim(p, ids) => {
-                    let args = ids.iter().chain([id]).map(get_leaf).collect();
+                    let mut args = vec![];
                     for id in ids {
+                        let leaf = get_leaf(id);
+                        if let AtomTerm::Var(v) = leaf {
+                            if self.egraph.global_bindings.contains_key(&v) {
+                                args.push(AtomTerm::Value(self.egraph.global_bindings[&v].1));
+                                continue;
+                            }
+                        }
+                        args.push(get_leaf(id));
                         query_eclasses.insert(*id);
                     }
                     query.filters.push(Atom {
@@ -228,8 +234,6 @@ impl<'a> Context<'a> {
             }
         }
 
-        eprintln!("query so far: {:?}", query);
-
         // filter for global variables
         for node in &self.nodes {
             if let ENode::Var(var) = node.0 {
@@ -238,7 +242,6 @@ impl<'a> Context<'a> {
                     // variable, no need to filter
                     if query_eclasses.contains(node.1) {
                         let canon = get_leaf(node.1);
-                        eprintln!("canon is {}", canon);
                         query.filters.push(Atom {
                             head: Primitive(Arc::new(ValueEq {})),
                             // TODO X: uh what the heck why do we need
@@ -248,12 +251,6 @@ impl<'a> Context<'a> {
                     }
                 }
             }
-        }
-
-        if query.atoms.is_empty() {
-            assert!(query.filters.is_empty());
-            eprintln!("types: {:?}", self.types);
-            assert!(self.types.is_empty());
         }
 
         if self.errors.is_empty() {
@@ -377,7 +374,6 @@ impl<'a> Context<'a> {
     fn infer_query_expr(&mut self, expr: &Expr) -> (Id, Option<ArcSort>) {
         match expr {
             Expr::Var(sym) => {
-                eprintln!("looking for {}", sym);
                 if self.egraph.functions.contains_key(sym) {
                     return self.infer_query_expr(&Expr::call(*sym, []));
                 }
@@ -385,7 +381,6 @@ impl<'a> Context<'a> {
                 let ty = if let Some(ty) = self.types.get(sym) {
                     Some(ty.clone())
                 } else if let Some(ty) = self.egraph.global_bindings.get(sym) {
-                    eprintln!("found {} for {}", ty.0.name(), sym);
                     Some(ty.0.clone())
                 } else {
                     self.errors.push(TypeError::Unbound(*sym));
