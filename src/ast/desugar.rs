@@ -457,48 +457,41 @@ pub(crate) fn desugar_calc(
     idents: Vec<IdentSort>,
     exprs: Vec<Expr>,
     seminaive_transform: bool,
-) -> Vec<NCommand> {
+) -> Result<Vec<NCommand>, Error> {
     let mut res = vec![];
 
     // first, push all the idents
     for IdentSort { ident, sort } in idents {
-        res.extend(desugar.declare(ident, sort));
+        res.push(Command::Declare { name: ident, sort });
     }
 
     // now, for every pair of exprs we need to prove them equal
     for expr1and2 in exprs.windows(2) {
         let expr1 = &expr1and2[0];
         let expr2 = &expr1and2[1];
-        res.push(NCommand::Push(1));
-        let mut new_memo = Default::default();
+        res.push(Command::Push(1));
 
         // add the two exprs
-        let mut actions = vec![];
-        let v1 = desugar.expr_to_flat_actions(expr1, &mut actions, &mut new_memo);
-        let v2 = desugar.expr_to_flat_actions(expr2, &mut actions, &mut new_memo);
-        res.extend(actions.into_iter().map(NCommand::NormAction));
+        res.push(Command::Action(Action::Expr(expr1.clone())));
+        res.push(Command::Action(Action::Expr(expr2.clone())));
 
-        res.extend(
-            desugar_command(
-                Command::RunSchedule(Schedule::Saturate(Box::new(Schedule::Run(RunConfig {
-                    ruleset: "".into(),
-                    until: Some(vec![Fact::Eq(vec![expr1.clone(), expr2.clone()])]),
-                })))),
-                desugar,
-                false,
-                seminaive_transform,
-            )
-            .unwrap()
-            .into_iter()
-            .map(|c| c.command),
-        );
+        res.push(Command::RunSchedule(Schedule::Saturate(Box::new(
+            Schedule::Run(RunConfig {
+                ruleset: "".into(),
+                until: Some(vec![Fact::Eq(vec![expr1.clone(), expr2.clone()])]),
+            }),
+        ))));
 
-        res.push(NCommand::Check(vec![NormFact::ConstrainEq(v1, v2)]));
+        res.push(Command::Check(vec![Fact::Eq(vec![
+            expr1.clone(),
+            expr2.clone(),
+        ])]));
 
-        res.push(NCommand::Pop(1));
+        res.push(Command::Pop(1));
     }
 
-    res
+    desugar_commands(res, desugar, false, seminaive_transform)
+        .map(|cmds| cmds.into_iter().map(|cmd| cmd.command).collect())
 }
 
 pub(crate) fn rewrite_name(rewrite: &Rewrite) -> String {
@@ -518,10 +511,7 @@ pub(crate) fn desugar_command(
         Command::Function(fdecl) => {
             vec![NCommand::Function(fdecl)]
         }
-        Command::Declare { name, sort } => {
-            desugar.global_variables.insert(name);
-            desugar.declare(name, sort)
-        }
+        Command::Declare { name, sort } => desugar.declare(name, sort),
         Command::Datatype { name, variants } => desugar_datatype(name, variants),
         Command::Rewrite(ruleset, rewrite) => {
             desugar_rewrite(ruleset, rewrite_name(&rewrite).into(), &rewrite, desugar)
@@ -569,35 +559,13 @@ pub(crate) fn desugar_command(
         }
         Command::Sort(sort, option) => vec![NCommand::Sort(sort, option)],
         // TODO ignoring cost for now
-        Command::Define {
-            name,
-            expr,
-            cost: _cost,
-        } => {
-            desugar.global_variables.insert(name);
-            let mut commands = vec![];
-
-            let mut actions = vec![];
-            let mut temp = Default::default();
-            let fresh = desugar.expr_to_flat_actions(&expr, &mut actions, &mut temp);
-            actions.push(NormAction::LetVar(name, fresh));
-            for action in actions {
-                commands.push(NCommand::NormAction(action));
-            }
-            commands
-        }
         Command::AddRuleset(name) => vec![NCommand::AddRuleset(name)],
-        Command::Action(action) => {
-            if let Action::Let(name, _) = action {
-                desugar.global_variables.insert(name);
-            }
-            flatten_actions(&vec![action], desugar)
-                .into_iter()
-                .map(NCommand::NormAction)
-                .collect()
-        }
+        Command::Action(action) => flatten_actions(&vec![action], desugar)
+            .into_iter()
+            .map(NCommand::NormAction)
+            .collect(),
         Command::Simplify { expr, schedule } => desugar_simplify(desugar, &expr, &schedule),
-        Command::Calc(idents, exprs) => desugar_calc(desugar, idents, exprs, seminaive_transform),
+        Command::Calc(idents, exprs) => desugar_calc(desugar, idents, exprs, seminaive_transform)?,
         Command::RunSchedule(sched) => {
             vec![NCommand::RunSchedule(desugar_schedule(desugar, &sched))]
         }
@@ -725,6 +693,17 @@ pub(crate) fn desugar_command(
             vec![NCommand::Input { name, file }]
         }
     };
+
+    for cmd in &res {
+        if let NCommand::NormAction(action) = cmd {
+            action.map_def_use(&mut |var, is_def| {
+                if is_def {
+                    desugar.global_variables.insert(var);
+                }
+                var
+            });
+        }
+    }
 
     Ok(res
         .into_iter()

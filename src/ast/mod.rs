@@ -333,11 +333,6 @@ pub enum Command {
     },
     Sort(Symbol, Option<(Symbol, Vec<Expr>)>),
     Function(FunctionDecl),
-    Define {
-        name: Symbol,
-        expr: Expr,
-        cost: Option<usize>,
-    },
     AddRuleset(Symbol),
     Rule {
         name: Symbol,
@@ -395,10 +390,6 @@ impl ToSexp for Command {
                 ruleset,
                 rule,
             } => rule.to_sexp(*ruleset, *name),
-            Command::Define { name, expr, cost } => match cost {
-                None => list!("define", name, expr),
-                Some(cost) => list!("define", name, expr, ":cost", cost),
-            },
             Command::RunSchedule(sched) => list!("run-schedule", sched),
             Command::Calc(args, exprs) => list!("calc", list!(++ args), ++ exprs),
             Command::Extract { variants, fact } => list!("extract", ":variants", variants, fact),
