@@ -1236,7 +1236,6 @@ impl EGraph {
         self.proof_state.type_info.add_arcsort(arcsort)
     }
 
-
     // Gets the last extract report and returns it, if the last command saved it.
     pub fn get_extract_report(&self) -> &Option<ExtractReport> {
         &self.extract_report
