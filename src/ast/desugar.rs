@@ -68,7 +68,7 @@ fn desugar_birewrite(
         .collect()
 }
 
-fn expr_to_ssa(
+fn normalize_expr(
     lhs_in: Symbol,
     expr: &Expr,
     desugar: &mut Desugar,
@@ -76,11 +76,7 @@ fn expr_to_ssa(
     constraints: &mut Vec<(Symbol, Symbol)>,
     bound: &mut HashSet<Symbol>,
 ) {
-    if let Expr::Var(v) = expr {
-        res.push(NormFact::AssignVar(lhs_in, *v));
-        return;
-    }
-
+    eprintln!("normalize expr: {:?} {:?}", lhs_in, expr);
     let lhs = if bound.insert(lhs_in) {
         lhs_in
     } else {
@@ -88,6 +84,11 @@ fn expr_to_ssa(
         constraints.push((fresh, lhs_in));
         fresh
     };
+
+    if let Expr::Var(v) = expr {
+        res.push(NormFact::AssignVar(lhs, *v));
+        return;
+    }
 
     match expr {
         Expr::Lit(l) => res.push(NormFact::AssignLit(lhs, l.clone())),
@@ -100,9 +101,14 @@ fn expr_to_ssa(
                     Expr::Var(v) => {
                         new_children.push(*v);
                     }
+                    Expr::Lit(l) => {
+                        let fresh = desugar.get_fresh();
+                        res.push(NormFact::AssignLit(fresh, l.clone()));
+                        new_children.push(fresh);
+                    }
                     _ => {
                         let fresh = desugar.get_fresh();
-                        expr_to_ssa(fresh, child, desugar, res, constraints, bound);
+                        normalize_expr(fresh, child, desugar, res, constraints, bound);
                         new_children.push(fresh);
                     }
                 }
@@ -130,7 +136,7 @@ fn expr_to_ssa(
                     _ => {
                         let fresh = desugar.get_fresh();
                         bound.insert(fresh);
-                        expr_to_ssa(fresh, child, desugar, res, constraints, bound);
+                        normalize_expr(fresh, child, desugar, res, constraints, bound);
                         new_children.push(fresh);
                     }
                 }
@@ -151,7 +157,7 @@ fn flatten_equalities(equalities: Vec<(Symbol, Expr)>, desugar: &mut Desugar) ->
                 constraints.push((lhs, rhs_v));
             } else {
                 let fresh = desugar.get_fresh();
-                expr_to_ssa(
+                normalize_expr(
                     fresh,
                     &rhs,
                     desugar,
@@ -162,7 +168,7 @@ fn flatten_equalities(equalities: Vec<(Symbol, Expr)>, desugar: &mut Desugar) ->
                 constraints.push((fresh, lhs));
             }
         } else {
-            expr_to_ssa(
+            normalize_expr(
                 lhs,
                 &rhs,
                 desugar,

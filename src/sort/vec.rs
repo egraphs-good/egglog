@@ -25,6 +25,8 @@ impl VecSort {
             "vec-pop".into(),
             "vec-not-contains".into(),
             "vec-contains".into(),
+            "vec-length".into(),
+            "vec-get".into(),
         ]
     }
 

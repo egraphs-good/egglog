@@ -49,6 +49,7 @@ impl Default for TypeInfo {
 
         res.presort_names.extend(MapSort::presort_names());
         res.presort_names.extend(SetSort::presort_names());
+        res.presort_names.extend(VecSort::presort_names());
 
         res.presorts.insert("Map".into(), MapSort::make_sort);
         res.presorts.insert("Set".into(), SetSort::make_sort);
@@ -168,7 +169,6 @@ impl TypeInfo {
             }
             NCommand::Check(facts) => {
                 self.typecheck_facts(id, facts)?;
-                eprintln!("facts: {:?}", facts);
                 self.verify_normal_form_facts(facts);
             }
             NCommand::Fail(cmd) => {
@@ -562,7 +562,9 @@ impl TypeInfo {
     }
 
     pub(crate) fn is_primitive(&self, sym: Symbol) -> bool {
-        self.primitives.contains_key(&sym) || self.presort_names.contains(&sym)
+        let res = self.primitives.contains_key(&sym) || self.presort_names.contains(&sym);
+        eprintln!("is_primitive: {} = {}", sym, res);
+        res
     }
 
     fn lookup_func(
