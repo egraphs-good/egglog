@@ -719,7 +719,7 @@ impl EGraph {
         Ok(())
     }
 
-    fn eval_expr(
+    pub fn eval_expr(
         &mut self,
         expr: &Expr,
         expected_type: Option<ArcSort>,
@@ -1232,9 +1232,10 @@ impl EGraph {
         self.proof_state.type_info.sorts.get(&value.tag)
     }
 
-    pub fn add_sort<S: Sort + 'static>(&mut self, sort: S) {
-        self.proof_state.type_info.add_sort(sort);
+    pub fn add_arcsort(&mut self, arcsort: ArcSort) -> Result<(), TypeError> {
+        self.proof_state.type_info.add_arcsort(arcsort)
     }
+
 
     // Gets the last extract report and returns it, if the last command saved it.
     pub fn get_extract_report(&self) -> &Option<ExtractReport> {
