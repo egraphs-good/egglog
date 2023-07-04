@@ -75,7 +75,16 @@ fn normalize_expr(
     res: &mut Vec<NormFact>,
     constraints: &mut Vec<(Symbol, Symbol)>,
     bound: &mut HashSet<Symbol>,
+    cache: &mut HashMap<Expr, Symbol>,
 ) {
+    if let Some(var) = cache.get(expr) {
+        if bound.insert(lhs_in) {
+            res.push(NormFact::AssignVar(lhs_in, *var));
+        } else {
+            constraints.push((lhs_in, *var));
+        }
+        return;
+    }
     let lhs = if bound.insert(lhs_in) {
         lhs_in
     } else {
@@ -107,7 +116,7 @@ fn normalize_expr(
                     }
                     _ => {
                         let fresh = desugar.get_fresh();
-                        normalize_expr(fresh, child, desugar, res, constraints, bound);
+                        normalize_expr(fresh, child, desugar, res, constraints, bound, cache);
                         new_children.push(fresh);
                     }
                 }
@@ -135,20 +144,22 @@ fn normalize_expr(
                     _ => {
                         let fresh = desugar.get_fresh();
                         bound.insert(fresh);
-                        normalize_expr(fresh, child, desugar, res, constraints, bound);
+                        normalize_expr(fresh, child, desugar, res, constraints, bound, cache);
                         new_children.push(fresh);
                     }
                 }
             }
             res.push(NormFact::Assign(lhs, NormExpr::Call(*f, new_children)))
         }
-    }
+    };
+    cache.insert(expr.clone(), lhs);
 }
 
 fn flatten_equalities(equalities: Vec<(Symbol, Expr)>, desugar: &mut Desugar) -> Vec<NormFact> {
     let mut res = vec![];
     let mut bound_variables: HashSet<Symbol> = Default::default();
     let mut constraints: Vec<(Symbol, Symbol)> = Default::default();
+    let mut cache = Default::default();
 
     for (lhs, rhs) in equalities {
         if desugar.global_variables.contains(&lhs) || bound_variables.contains(&lhs) {
@@ -163,6 +174,7 @@ fn flatten_equalities(equalities: Vec<(Symbol, Expr)>, desugar: &mut Desugar) ->
                     &mut res,
                     &mut constraints,
                     &mut bound_variables,
+                    &mut cache,
                 );
                 constraints.push((fresh, lhs));
             }
@@ -174,6 +186,7 @@ fn flatten_equalities(equalities: Vec<(Symbol, Expr)>, desugar: &mut Desugar) ->
                 &mut res,
                 &mut constraints,
                 &mut bound_variables,
+                &mut cache,
             );
         }
     }
