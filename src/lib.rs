@@ -367,6 +367,10 @@ impl EGraph {
         }
     }
 
+    // Rebuild currently handles merge functions
+    // and custom container sorts
+    // TODO desugar merge functions
+    // TODO support terms and proofs for custom container sorts
     pub fn rebuild(&mut self) -> Result<usize, Error> {
         self.unionfind.clear_recent_ids();
         let mut updates = 0;
@@ -546,6 +550,7 @@ impl EGraph {
 
     // returns whether the egraph was updated
     pub fn run_schedule(&mut self, sched: &NormSchedule) -> RunReport {
+        eprintln!("running schedule: {}", sched);
         match sched {
             NormSchedule::Run(config) => self.run_rules(config),
             NormSchedule::Repeat(limit, sched) => {
@@ -1155,7 +1160,6 @@ impl EGraph {
         command: Command,
         stop: CompilerPassStop,
     ) -> Result<Vec<NormCommand>, Error> {
-        //eprintln!("bindings: {:?}", self.global_bindings);
         let mut program = self.proof_state.desugar.desugar_program(
             vec![command],
             self.test_proofs,

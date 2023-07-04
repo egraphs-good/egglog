@@ -288,7 +288,6 @@ impl TypeInfo {
                     assert!(!self.global_types.contains_key(var));
                     assert!(let_bound.insert(*var));
                     body.iter().for_each(|bvar| {
-                        eprintln!("bvar: {:?}", bvar);
                         assert!(!self.global_types.contains_key(bvar));
                         assert!(let_bound.insert(*bvar));
                     });

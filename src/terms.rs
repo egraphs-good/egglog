@@ -36,9 +36,7 @@ impl ProofState {
 
     fn make_canonicalize_func(&mut self, fdecl: &FunctionDecl) -> Vec<Command> {
         let types = self.type_info.func_types.get(&fdecl.name).unwrap().clone();
-        if !types.output.is_eq_sort() {
-            return vec![];
-        }
+
         let op = fdecl.name;
         let pname = self.parent_name(fdecl.schema.output);
         let child = |i| format!("c{i}_");
@@ -64,19 +62,24 @@ impl ProofState {
                 " "
             )
         );
-        vec![format!(
+        let rule = format!(
             "(rule ((= lhs ({op} {children}))
                     {children_updated})
-                   ((let rhs ({op} {children_updated}))
-                    (set ({pname} rhs) rhs)
-                    {})
+                   ({})
                     :ruleset {})",
-            self.union(fdecl.schema.output, "lhs", "rhs"),
+            if types.output.is_eq_sort() {
+                format!(
+                    "(let rhs ({op} {children_updated}))
+                         (set ({pname} rhs) rhs)
+                         {}",
+                    self.union(fdecl.schema.output, "lhs", "rhs")
+                )
+            } else {
+                format!("(set ({op} {children_updated}) lhs)")
+            },
             self.rebuilding_ruleset_name()
-        )]
-        .into_iter()
-        .flat_map(|s| self.desugar.parser.parse(&s).unwrap())
-        .collect()
+        );
+        self.desugar.parser.parse(&rule).unwrap()
     }
 
     fn instrument_fact(&mut self, fact: &NormFact) -> Vec<Fact> {

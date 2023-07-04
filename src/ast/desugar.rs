@@ -76,7 +76,6 @@ fn normalize_expr(
     constraints: &mut Vec<(Symbol, Symbol)>,
     bound: &mut HashSet<Symbol>,
 ) {
-    eprintln!("normalize expr: {:?} {:?}", lhs_in, expr);
     let lhs = if bound.insert(lhs_in) {
         lhs_in
     } else {
@@ -751,6 +750,13 @@ impl Clone for Desugar {
 }
 
 impl Desugar {
+    pub fn merge_ruleset_name(&self) -> Symbol {
+        Symbol::from(format!(
+            "merge_ruleset{}",
+            "_".repeat(self.number_underscores)
+        ))
+    }
+
     pub fn get_fresh(&mut self) -> Symbol {
         self.next_fresh += 1;
         format!(
