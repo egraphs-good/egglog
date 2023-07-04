@@ -187,7 +187,7 @@ impl<'a> Context<'a> {
 
         // replace canonical things in the actions
         let res_actions = actions.iter().map(|a| a.replace_canon(&canon)).collect();
-        for (var, expr) in canon {
+        for (var, _expr) in canon {
             self.types.remove(&var);
         }
 
@@ -239,15 +239,21 @@ impl<'a> Context<'a> {
         for node in &self.nodes {
             if let ENode::Var(var) = node.0 {
                 if let Some((_sort, value)) = self.egraph.global_bindings.get(var) {
-                    // if the query didn't use this global
-                    // variable, no need to filter
-                    if query_eclasses.contains(node.1) {
-                        let canon = get_leaf(node.1);
+                    let canon = get_leaf(node.1);
+                    // canon is either a global variable or a literal
+                    let canon_value = match canon {
+                        AtomTerm::Var(v) => self.egraph.global_bindings[&v].1,
+                        AtomTerm::Value(v) => v,
+                    };
+                    // we actually know the query won't fire
+                    if canon_value != *value {
                         query.filters.push(Atom {
                             head: Primitive(Arc::new(ValueEq {})),
-                            // TODO X: uh what the heck why do we need
-                            // 3 arguments here
-                            args: vec![canon.clone(), AtomTerm::Value(*value), canon],
+                            args: vec![
+                                AtomTerm::Value(canon_value),
+                                AtomTerm::Value(*value),
+                                AtomTerm::Value(*value),
+                            ],
                         })
                     }
                 }

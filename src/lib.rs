@@ -1155,6 +1155,7 @@ impl EGraph {
         command: Command,
         stop: CompilerPassStop,
     ) -> Result<Vec<NormCommand>, Error> {
+        //eprintln!("bindings: {:?}", self.global_bindings);
         let mut program = self.proof_state.desugar.desugar_program(
             vec![command],
             self.test_proofs,
@@ -1165,7 +1166,7 @@ impl EGraph {
         }
 
         let type_info_before = self.proof_state.type_info.clone();
-        eprintln!("desugared: {}", ListDisplay(&program, "\n"));
+        eprintln!("desugared: {:?}", program);
 
         self.proof_state.type_info.typecheck_program(&program)?;
         if stop == CompilerPassStop::TypecheckDesugared {
