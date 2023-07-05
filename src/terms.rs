@@ -28,7 +28,9 @@ impl ProofState {
     fn make_parent_table(&self, name: Symbol) -> Vec<Command> {
         let pname = self.parent_name(name);
         vec![
-            format!("(function {pname} ({name}) {name} :merge (ordering-less old new))"),
+            format!(
+                "(function {pname} ({name}) {name} :unextractable :merge (ordering-less old new))"
+            ),
             format!(
                 "(rule ((= ({pname} a) b)
                         (= ({pname} b) c))

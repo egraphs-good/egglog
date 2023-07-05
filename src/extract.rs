@@ -42,7 +42,7 @@ impl EGraph {
     ) -> Vec<Term> {
         eprintln!("Extracting variants for {:?}", value);
         let (tag, id) = self.value_to_id(value).unwrap();
-        let output_value = &Value::from_id(tag, id);
+        let leader = self.find(Value::from_id(tag, id));
         let ext = &Extractor::new(self, termdag, true);
         ext.ctors
             .iter()
@@ -55,7 +55,12 @@ impl EGraph {
                 func.nodes
                     .iter()
                     .filter_map(|(inputs, output)| {
-                        (&output.value == output_value).then(|| {
+                        (self.find(output.value) == leader
+                            && inputs
+                                .iter()
+                                .map(|input| *input == self.find(*input))
+                                .all(|x| x))
+                        .then(|| {
                             let node = Node { sym, inputs };
                             ext.expr_from_node(&node, termdag)
                         })

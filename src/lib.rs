@@ -351,7 +351,7 @@ impl EGraph {
             func.get(&[value])
                 .unwrap_or_else(|| panic!("No value {:?} in {parent_name}", value))
         } else {
-            panic!("No parent table called {parent_name}");
+            value
         }
     }
 
