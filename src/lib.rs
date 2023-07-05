@@ -664,8 +664,6 @@ impl EGraph {
         let search_start = Instant::now();
         let mut searched = vec![];
         for (name, rule) in copy_rules.iter() {
-            eprintln!("searching {}", name);
-            eprintln!("query: {:?}", rule.query);
             let mut all_values = vec![];
             if rule.banned_until <= iteration {
                 let mut fuel = safe_shl(self.match_limit, rule.times_banned);
@@ -698,7 +696,6 @@ impl EGraph {
 
         let apply_start = Instant::now();
         for (name, all_values, time) in searched {
-            eprintln!("applying {}", name);
             let rule = rules.get_mut(name).unwrap();
             rule.search_time += time;
             let num_vars = rule.query.vars.len();
