@@ -599,9 +599,18 @@ impl TypeInfo {
                 let child_types = if let Some(found) = self.func_types.get(head) {
                     found.input.clone()
                 } else {
-                    body.iter()
+                    let types = body
+                        .iter()
                         .map(|var| self.lookup(ctx, *var))
-                        .collect::<Result<Vec<_>, _>>()?
+                        .collect::<Result<Vec<_>, _>>();
+                    if let Ok(types) = types {
+                        types
+                    } else if expect_lookup {
+                        // return the error
+                        types?
+                    } else {
+                        return Err(TypeError::UnboundFunction(*head));
+                    }
                 };
                 for (child_type, var) in child_types.iter().zip(body.iter()) {
                     if expect_lookup {

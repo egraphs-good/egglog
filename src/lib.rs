@@ -664,6 +664,7 @@ impl EGraph {
         let search_start = Instant::now();
         let mut searched = vec![];
         for (name, rule) in copy_rules.iter() {
+            eprintln!("searching rule {}", name);
             let mut all_values = vec![];
             if rule.banned_until <= iteration {
                 let mut fuel = safe_shl(self.match_limit, rule.times_banned);
@@ -1167,12 +1168,13 @@ impl EGraph {
         }
 
         let type_info_before = self.proof_state.type_info.clone();
-        eprintln!("desugared: {:?}", program);
+        eprintln!("desugared: {}", ListDisplay(&program, "\n"));
 
         self.proof_state.type_info.typecheck_program(&program)?;
         if stop == CompilerPassStop::TypecheckDesugared {
             return Ok(program);
         }
+        eprintln!("typechecked: {}", ListDisplay(&program, "\n"));
 
         let program_terms = self.proof_state.add_term_encoding(program);
         program = self
