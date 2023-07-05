@@ -319,7 +319,6 @@ impl TypeInfo {
         let_bound: &mut HashSet<Symbol>,
     ) {
         let assert_bound = |var, let_bound: &HashSet<Symbol>| {
-            eprintln!("asserting bound: {:?}", var);
             assert!(
                 let_bound.contains(var)
                     || self.global_types.contains_key(var)
@@ -562,7 +561,6 @@ impl TypeInfo {
 
     pub(crate) fn is_primitive(&self, sym: Symbol) -> bool {
         let res = self.primitives.contains_key(&sym) || self.presort_names.contains(&sym);
-        eprintln!("is_primitive: {} = {}", sym, res);
         res
     }
 

@@ -51,7 +51,7 @@ impl ProofState {
         let child_parent = |i| {
             #[allow(clippy::iter_nth)]
             let child_t: ArcSort = types.input.iter().nth(i).unwrap().clone();
-            self.wrap_parent(child(i), child_t)
+            self.wrap_parent_or_rebuild(child(i), child_t)
                 .unwrap_or_else(|| child(i))
         };
         let children = format!(
@@ -158,10 +158,16 @@ impl ProofState {
         }
     }
 
-    fn wrap_parent(&mut self, var: String, sort: ArcSort) -> Option<String> {
+    fn wrap_parent_or_rebuild(&mut self, var: String, sort: ArcSort) -> Option<String> {
         if sort.is_container_sort() {
             Some(format!("(rebuild {})", var))
-        } else if sort.is_eq_sort() {
+        } else {
+            self.wrap_parent(var, sort)
+        }
+    }
+
+    fn wrap_parent(&mut self, var: String, sort: ArcSort) -> Option<String> {
+        if sort.is_eq_sort() {
             let parent = self.parent_name(sort.name());
             Some(format!("({parent} {var})"))
         } else {

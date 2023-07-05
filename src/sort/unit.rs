@@ -55,7 +55,7 @@ impl PrimitiveLike for NotEqualPrimitive {
         }
     }
 
-    fn apply(&self, values: &[Value], egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         (values[0] != values[1]).then(Value::unit)
     }
 }

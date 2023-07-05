@@ -194,13 +194,12 @@ impl PrimitiveLike for VecRebuild {
         let new_set: ValueVec = vec
             .iter()
             .map(|e| {
-                let mut e = *e;
-                let updated = egraph.find(e);
-                changed |= updated != e;
+                let updated = egraph.find(*e);
+                changed |= updated != *e;
                 updated
             })
             .collect();
-        vec.store(&self.vec)
+        new_set.store(&self.vec)
     }
 }
 
