@@ -40,6 +40,7 @@ impl EGraph {
         limit: usize,
         termdag: &mut TermDag,
     ) -> Vec<Term> {
+        eprintln!("Extracting variants for {:?}", value);
         let (tag, id) = self.value_to_id(value).unwrap();
         let output_value = &Value::from_id(tag, id);
         let ext = &Extractor::new(self, termdag, true);

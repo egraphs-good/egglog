@@ -470,10 +470,10 @@ impl<'a> ActionChecker<'a> {
                 self.instructions.push(Instruction::Set(*f));
                 Ok(())
             }
-            Action::Extract(variable) => {
-                let (_, ty) = self.infer_expr(variable)?;
-                self.check_expr(variable, ty)?;
-                self.instructions.push(Instruction::Extract);
+            Action::Extract(variable, variants) => {
+                let (_, _ty) = self.infer_expr(variable)?;
+                let (_, _ty2) = self.infer_expr(variants)?;
+                self.instructions.push(Instruction::Extract(2));
                 Ok(())
             }
             Action::Delete(f, args) => {
@@ -665,8 +665,8 @@ enum Instruction {
     CallPrimitive(Primitive, usize),
     DeleteRow(Symbol),
     Set(Symbol),
-    Extract,
     Union(usize),
+    Extract(usize),
     Panic(String),
     Pop,
 }
@@ -857,20 +857,43 @@ impl EGraph {
                     }
                     stack.truncate(new_len)
                 }
-                Instruction::Union(arity) => {
+                Instruction::Union(_arity) => {
                     panic!("term encoding gets rid of union");
                 }
-                Instruction::Extract => {
-                    let value = stack.last().unwrap();
+                Instruction::Extract(arity) => {
+                    let new_len = stack.len() - arity;
+                    let values = &stack[new_len..];
+                    eprintln!("extracting {:?}", values);
+                    let new_len = stack.len() - arity;
                     let mut termdag = TermDag::default();
-                    let sort = value.tag;
-                    let (cost, expr) = self.extract(
-                        *value,
-                        &mut termdag,
-                        self.proof_state.type_info.sorts.get(&sort).unwrap(),
-                    );
-                    log::info!("extracted with cost {cost}: {}", termdag.to_string(&expr));
-                    stack.pop().unwrap();
+                    let num_sort = values[1].tag;
+                    assert!(num_sort.to_string() == "i64");
+
+                    let variants = values[1].bits as i64;
+                    if variants == 0 {
+                        let (cost, expr) = self.extract(
+                            values[0],
+                            &mut termdag,
+                            self.proof_state
+                                .type_info
+                                .sorts
+                                .get(&values[0].tag)
+                                .unwrap(),
+                        );
+                        log::info!("extracted with cost {cost}: {}", termdag.to_string(&expr));
+                    } else {
+                        if variants < 0 {
+                            panic!("Cannot extract negative number of variants");
+                        }
+                        let extracted =
+                            self.extract_variants(values[0], variants as usize, &mut termdag);
+                        log::info!("extracted variants:");
+                        for expr in extracted {
+                            log::info!("   {}", termdag.to_string(&expr));
+                        }
+                    }
+
+                    stack.truncate(new_len);
                 }
                 Instruction::Panic(msg) => panic!("Panic: {}", msg),
                 Instruction::Literal(lit) => match lit {

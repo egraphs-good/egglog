@@ -259,9 +259,10 @@ fn flatten_actions(actions: &Vec<Action>, desugar: &mut Desugar) -> Vec<NormActi
                 );
                 res.push(set);
             }
-            Action::Extract(expr) => {
+            Action::Extract(expr, variants) => {
                 let added = add_expr(expr.clone(), &mut res);
-                res.push(NormAction::Extract(added));
+                let added_variants = add_expr(variants.clone(), &mut res);
+                res.push(NormAction::Extract(added, added_variants));
             }
             Action::Delete(symbol, exprs) => {
                 let del = NormAction::Delete(NormExpr::Call(

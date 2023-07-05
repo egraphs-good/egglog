@@ -109,7 +109,8 @@ NonLetAction: Action = {
     LParen "delete" LParen <f: Ident> <args:Expr*> RParen RParen => Action::Delete ( f, args),
     LParen "union" <e1:Expr> <e2:Expr> RParen => Action::Union(<>),
     LParen "panic" <msg:String> RParen => Action::Panic(msg),
-    LParen "extract" <expr:Expr> RParen => Action::Extract(expr),
+    LParen "extract" <expr:Expr> RParen => Action::Extract(expr, Expr::Lit(Literal::Int(0))),
+    LParen "extract" <expr:Expr> <variants:Expr> RParen => Action::Extract(expr, variants),
     <e:CallExpr> => Action::Expr(e),
 }
 

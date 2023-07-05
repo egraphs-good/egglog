@@ -705,7 +705,7 @@ pub enum Action {
     Set(Symbol, Vec<Expr>, Expr),
     Delete(Symbol, Vec<Expr>),
     Union(Expr, Expr),
-    Extract(Expr),
+    Extract(Expr, Expr),
     Panic(String),
     Expr(Expr),
     // If(Expr, Action, Action),
@@ -717,7 +717,7 @@ pub enum NormAction {
     LetVar(Symbol, Symbol),
     LetLit(Symbol, Literal),
     LetIteration(Symbol),
-    Extract(Symbol),
+    Extract(Symbol, Symbol),
     Set(NormExpr, Symbol),
     Delete(NormExpr),
     Union(Symbol, Symbol),
@@ -736,7 +736,9 @@ impl NormAction {
                 body.iter().map(|s| Expr::Var(*s)).collect(),
                 Expr::Var(*other),
             ),
-            NormAction::Extract(symbol) => Action::Extract(Expr::Var(*symbol)),
+            NormAction::Extract(symbol, variants) => {
+                Action::Extract(Expr::Var(*symbol), Expr::Var(*variants))
+            }
             NormAction::Delete(NormExpr::Call(symbol, args)) => {
                 Action::Delete(*symbol, args.iter().map(|s| Expr::Var(*s)).collect())
             }
@@ -752,7 +754,7 @@ impl NormAction {
             NormAction::LetLit(symbol, lit) => NormAction::LetLit(*symbol, lit.clone()),
             NormAction::LetIteration(symbol) => NormAction::LetIteration(*symbol),
             NormAction::Set(expr, other) => NormAction::Set(f(expr), *other),
-            NormAction::Extract(var) => NormAction::Extract(*var),
+            NormAction::Extract(var, variants) => NormAction::Extract(*var, *variants),
             NormAction::Delete(expr) => NormAction::Delete(f(expr)),
             NormAction::Union(lhs, rhs) => NormAction::Union(*lhs, *rhs),
             NormAction::Panic(msg) => NormAction::Panic(msg.clone()),
@@ -773,7 +775,9 @@ impl NormAction {
             NormAction::Set(expr, other) => {
                 NormAction::Set(expr.map_def_use(fvar, false), fvar(*other, false))
             }
-            NormAction::Extract(var) => NormAction::Extract(fvar(*var, false)),
+            NormAction::Extract(var, variants) => {
+                NormAction::Extract(fvar(*var, false), fvar(*variants, false))
+            }
             NormAction::Delete(expr) => NormAction::Delete(expr.map_def_use(fvar, false)),
             NormAction::Union(lhs, rhs) => NormAction::Union(fvar(*lhs, false), fvar(*rhs, false)),
             NormAction::Panic(msg) => NormAction::Panic(msg.clone()),
@@ -788,7 +792,7 @@ impl ToSexp for Action {
             Action::Set(lhs, args, rhs) => list!("set", list!(lhs, ++ args), rhs),
             Action::Union(lhs, rhs) => list!("union", lhs, rhs),
             Action::Delete(lhs, args) => list!("delete", list!(lhs, ++ args)),
-            Action::Extract(expr) => list!("extract", expr),
+            Action::Extract(expr, variants) => list!("extract", expr, variants),
             Action::Panic(msg) => list!("panic", format!("\"{}\"", msg.clone())),
             Action::Expr(e) => e.to_sexp(),
         }
@@ -805,7 +809,7 @@ impl Action {
             }
             Action::Delete(lhs, args) => Action::Delete(*lhs, args.iter().map(f).collect()),
             Action::Union(lhs, rhs) => Action::Union(f(lhs), f(rhs)),
-            Action::Extract(expr) => Action::Extract(f(expr)),
+            Action::Extract(expr, variants) => Action::Extract(f(expr), f(variants)),
             Action::Panic(msg) => Action::Panic(msg.clone()),
             Action::Expr(e) => Action::Expr(f(e)),
         }
@@ -823,7 +827,9 @@ impl Action {
                 Action::Delete(*lhs, args.iter().map(|e| e.subst(canon)).collect())
             }
             Action::Union(lhs, rhs) => Action::Union(lhs.subst(canon), rhs.subst(canon)),
-            Action::Extract(expr) => Action::Extract(expr.subst(canon)),
+            Action::Extract(expr, variants) => {
+                Action::Extract(expr.subst(canon), variants.subst(canon))
+            }
             Action::Panic(msg) => Action::Panic(msg.clone()),
             Action::Expr(e) => Action::Expr(e.subst(canon)),
         }
@@ -890,10 +896,12 @@ impl NormRule {
                     used.insert(*other);
                     subst.insert(*symbol, new_expr);
                 }
-                NormAction::Extract(symbol) => {
+                NormAction::Extract(symbol, variants) => {
                     let new_expr = subst.get(symbol).cloned().unwrap_or(Expr::Var(*symbol));
                     used.insert(*symbol);
-                    head.push(Action::Extract(new_expr));
+                    let new_expr2 = subst.get(variants).cloned().unwrap_or(Expr::Var(*variants));
+                    used.insert(*variants);
+                    head.push(Action::Extract(new_expr, new_expr2));
                 }
                 NormAction::LetLit(symbol, lit) => {
                     subst.insert(*symbol, Expr::Lit(lit.clone()));
