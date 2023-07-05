@@ -58,7 +58,7 @@ pub type Subst = IndexMap<Symbol, Value>;
 pub trait PrimitiveLike {
     fn name(&self) -> Symbol;
     fn accept(&self, types: &[ArcSort]) -> Option<ArcSort>;
-    fn apply(&self, values: &[Value]) -> Option<Value>;
+    fn apply(&self, values: &[Value], egraph: &EGraph) -> Option<Value>;
 }
 
 #[derive(Debug, Clone, Default)]
@@ -152,7 +152,7 @@ impl PrimitiveLike for SimplePrimitive {
             .all(|(a, b)| a.name() == b.name())
             .then(|| self.output.clone())
     }
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         (self.f)(values)
     }
 }
@@ -344,15 +344,12 @@ impl EGraph {
 
     // find the leader term for this term
     // in the corresponding table
-    pub fn find(&self, value: Value) -> Id {
+    pub fn find(&self, value: Value) -> Value {
         // HACK using value tag for parent table name
         let parent_name = self.proof_state.parent_name(value.tag);
         if let Some(func) = self.functions.get(&parent_name) {
-            Id::from(
-                func.get(&[value])
-                    .unwrap_or_else(|| panic!("No value {:?} in {parent_name}", value))
-                    .bits as usize,
-            )
+            func.get(&[value])
+                .unwrap_or_else(|| panic!("No value {:?} in {parent_name}", value))
         } else {
             panic!("No parent table called {parent_name}");
         }

@@ -9,5 +9,6 @@
 
 (let v2 (vec-of (Num 2) (Num 2)))
 
+(union (Num 1) (Num 2))
 
 (check (= v1 v2))

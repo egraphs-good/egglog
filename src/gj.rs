@@ -68,6 +68,7 @@ struct Context<'b> {
     query: &'b CompiledQuery,
     tuple: Vec<Value>,
     matches: usize,
+    egraph: &'b EGraph,
 }
 
 impl<'b> Context<'b> {
@@ -76,13 +77,14 @@ impl<'b> Context<'b> {
         cq: &'b CompiledQuery,
         timestamp_ranges: &[Range<u32>],
     ) -> Option<(Self, Program<'b>, Vec<Option<usize>>)> {
+        let (program, _vars, intersections) = egraph.compile_program(cq, timestamp_ranges)?;
+
         let ctx = Context {
             query: cq,
             tuple: vec![Value::fake(); cq.vars.len()],
             matches: 0,
+            egraph,
         };
-
-        let (program, _vars, intersections) = egraph.compile_program(cq, timestamp_ranges)?;
 
         Some((ctx, program, intersections))
     }
@@ -183,7 +185,7 @@ impl<'b> Context<'b> {
                     })
                 }
 
-                if let Some(res) = prim.apply(&values) {
+                if let Some(res) = prim.apply(&values, self.egraph) {
                     match out {
                         AtomTerm::Var(v) => {
                             let i = self.query.vars.get_index_of(v).unwrap();

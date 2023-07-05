@@ -1,6 +1,14 @@
 use crate::*;
 
 impl ProofState {
+    fn presort_table_name(&self, name: Symbol) -> Symbol {
+        Symbol::from(format!(
+            "{}_PresortTable{}",
+            name,
+            "_".repeat(self.desugar.number_underscores)
+        ))
+    }
+
     pub(crate) fn parent_name(&self, sort: Symbol) -> Symbol {
         Symbol::from(format!(
             "{}_Parent{}",
@@ -17,7 +25,7 @@ impl ProofState {
         )
     }
 
-    fn make_rebuilding(&self, name: Symbol) -> Vec<Command> {
+    fn make_parent_table(&self, name: Symbol) -> Vec<Command> {
         let pname = self.parent_name(name);
         vec![
             format!("(function {pname} ({name}) {name} :merge (ordering-less old new))"),
@@ -151,7 +159,9 @@ impl ProofState {
     }
 
     fn wrap_parent(&mut self, var: String, sort: ArcSort) -> Option<String> {
-        if sort.is_eq_sort() {
+        if sort.is_container_sort() {
+            Some(format!("(rebuild {})", var))
+        } else if sort.is_eq_sort() {
             let parent = self.parent_name(sort.name());
             Some(format!("({parent} {var})"))
         } else {
@@ -185,14 +195,18 @@ impl ProofState {
             }
             NormAction::Let(lhs, _expr) => {
                 let lhs_type = self.type_info.lookup(self.current_ctx, *lhs).unwrap();
-                if let Some(lhs_wrapped) = self.wrap_parent(lhs.to_string(), lhs_type) {
-                    vec![action.to_action()]
-                        .into_iter()
-                        .chain(self.parse_actions(vec![format!("(set {lhs_wrapped} {lhs})",)]))
-                        .collect()
-                } else {
-                    vec![action.to_action()]
+                let mut res = vec![action.to_action()];
+
+                if let Some(lhs_wrapped) = self.wrap_parent(lhs.to_string(), lhs_type.clone()) {
+                    res.extend(self.parse_actions(vec![format!("(set {lhs_wrapped} {lhs})",)]))
                 }
+
+                if lhs_type.is_eq_container_sort() {
+                    let presort_table_name = self.presort_table_name(lhs_type.name());
+                    res.extend(self.parse_actions(vec![format!("({presort_table_name} {lhs})",)]));
+                }
+
+                res
             }
             NormAction::LetLit(..)
             | NormAction::LetIteration(..)
@@ -307,9 +321,12 @@ impl ProofState {
                 NCommand::Push(_num) => {
                     res.push(command.to_command());
                 }
-                NCommand::Sort(name, _presort_and_args) => {
+                NCommand::Sort(name, presort_and_args) => {
                     res.push(command.to_command());
-                    res.extend(self.make_rebuilding(*name));
+                    res.extend(self.make_parent_table(*name));
+                    if presort_and_args.is_some() {
+                        res.extend(self.make_presort_table(*name));
+                    }
                 }
                 NCommand::Function(fdecl) => {
                     res.push(Command::Function(self.instrument_fdecl(fdecl)));
@@ -342,6 +359,18 @@ impl ProofState {
         }
 
         res
+    }
+
+    fn make_presort_table(&self, name: Symbol) -> Vec<Command> {
+        let table_name = self.presort_table_name(name);
+        let rebuilding_ruleset_name = self.rebuilding_ruleset_name();
+        self.parse_program(&format!(
+            "(relation {table_name} ({name}))
+             (rule (({table_name} value))
+                   ((rebuild value))
+                   :ruleset {rebuilding_ruleset_name})"
+        ))
+        .unwrap()
     }
 
     fn desugar_extract(&mut self, variants: usize, expr: Expr) -> Vec<Command> {

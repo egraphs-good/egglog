@@ -24,7 +24,7 @@ impl EGraph {
     pub fn value_to_id(&self, value: Value) -> Option<(Symbol, Id)> {
         if let Some(sort) = self.get_sort(&value) {
             if sort.is_eq_sort() {
-                return Some((sort.name(), self.find(value)));
+                return Some((sort.name(), Id::from(self.find(value).bits as usize)));
             }
         }
         None
@@ -100,7 +100,7 @@ impl<'a> Extractor<'a> {
 
     fn find(&self, value: Value) -> Id {
         if self.use_eq_relation {
-            self.egraph.find(value)
+            Id::from(self.egraph.find(value).bits as usize)
         } else {
             Id::from(value.bits as usize)
         }
