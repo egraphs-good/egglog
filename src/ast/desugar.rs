@@ -601,7 +601,8 @@ pub(crate) fn desugar_command(
                     "(check {fact})
                     (ruleset {fresh_ruleset})
                     (rule ((= {fresh} {fact}))
-                        ((extract {fresh})))
+                          ((extract {fresh}))
+                          :ruleset {fresh_ruleset})
                     (run {fresh_ruleset} 1)"
                 )
             };
