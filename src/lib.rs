@@ -347,13 +347,6 @@ impl EGraph {
     pub fn find(&self, value: Value) -> Value {
         // HACK using value tag for parent table name
         let parent_name = self.proof_state.parent_name(value.tag);
-        if value.bits == 1640 || value.bits == 348 {
-            eprintln!("parent name: {:?}", parent_name);
-            eprintln!(
-                "func: {:?}",
-                self.functions.get(&parent_name).unwrap().schema
-            );
-        }
         if let Some(func) = self.functions.get(&parent_name) {
             func.get(&[value])
                 .unwrap_or_else(|| panic!("No value {:?} in {parent_name}", value))
@@ -1180,7 +1173,6 @@ impl EGraph {
         }
 
         let program_terms = self.proof_state.add_term_encoding(program);
-        eprintln!("encoded: {}", ListDisplay(&program_terms, "\n"));
         program = self
             .proof_state
             .desugar

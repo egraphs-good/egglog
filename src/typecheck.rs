@@ -875,7 +875,6 @@ impl EGraph {
                 Instruction::Extract(arity) => {
                     let new_len = stack.len() - arity;
                     let values = &stack[new_len..];
-                    eprintln!("extracting {:?}", values);
                     let new_len = stack.len() - arity;
                     let mut termdag = TermDag::default();
                     let num_sort = values[1].tag;
