@@ -347,6 +347,13 @@ impl EGraph {
     pub fn find(&self, value: Value) -> Value {
         // HACK using value tag for parent table name
         let parent_name = self.proof_state.parent_name(value.tag);
+        if value.bits == 1640 || value.bits == 348 {
+            eprintln!("parent name: {:?}", parent_name);
+            eprintln!(
+                "func: {:?}",
+                self.functions.get(&parent_name).unwrap().schema
+            );
+        }
         if let Some(func) = self.functions.get(&parent_name) {
             func.get(&[value])
                 .unwrap_or_else(|| panic!("No value {:?} in {parent_name}", value))
@@ -547,7 +554,6 @@ impl EGraph {
 
     // returns whether the egraph was updated
     pub fn run_schedule(&mut self, sched: &NormSchedule) -> RunReport {
-        eprintln!("running schedule: {}", sched);
         match sched {
             NormSchedule::Run(config) => self.run_rules(config),
             NormSchedule::Repeat(limit, sched) => {
@@ -664,7 +670,6 @@ impl EGraph {
         let search_start = Instant::now();
         let mut searched = vec![];
         for (name, rule) in copy_rules.iter() {
-            eprintln!("searching rule {}", name);
             let mut all_values = vec![];
             if rule.banned_until <= iteration {
                 let mut fuel = safe_shl(self.match_limit, rule.times_banned);
@@ -1168,15 +1173,14 @@ impl EGraph {
         }
 
         let type_info_before = self.proof_state.type_info.clone();
-        eprintln!("desugared: {}", ListDisplay(&program, "\n"));
 
         self.proof_state.type_info.typecheck_program(&program)?;
         if stop == CompilerPassStop::TypecheckDesugared {
             return Ok(program);
         }
-        eprintln!("typechecked: {}", ListDisplay(&program, "\n"));
 
         let program_terms = self.proof_state.add_term_encoding(program);
+        eprintln!("encoded: {}", ListDisplay(&program_terms, "\n"));
         program = self
             .proof_state
             .desugar

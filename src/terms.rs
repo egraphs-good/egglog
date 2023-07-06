@@ -17,6 +17,10 @@ impl ProofState {
         ))
     }
 
+    pub(crate) fn init(&self, type_name: Symbol, expr: &str) -> String {
+        let pname = self.parent_name(type_name);
+        format!("(set ({pname} {expr}) {expr})",)
+    }
     pub(crate) fn union(&self, type_name: Symbol, lhs: &str, rhs: &str) -> String {
         let pname = self.parent_name(type_name);
         format!(
@@ -28,9 +32,7 @@ impl ProofState {
     fn make_parent_table(&self, name: Symbol) -> Vec<Command> {
         let pname = self.parent_name(name);
         vec![
-            format!(
-                "(function {pname} ({name}) {name} :unextractable :merge (ordering-less old new))"
-            ),
+            format!("(function {pname} ({name}) {name} :merge (ordering-less old new))"),
             format!(
                 "(rule ((= ({pname} a) b)
                         (= ({pname} b) c))
@@ -228,9 +230,17 @@ impl ProofState {
                 // function is union
                 if func_type.output.is_eq_sort() && !func_type.has_merge {
                     self.parse_actions(
-                        self.union(func_type.output.name(), &expr.to_string(), &var.to_string())
-                            .split('\n')
-                            .map(|s| s.to_string())
+                        vec![self.init(func_type.output.name(), &expr.to_string())]
+                            .into_iter()
+                            .chain(
+                                self.union(
+                                    func_type.output.name(),
+                                    &expr.to_string(),
+                                    &var.to_string(),
+                                )
+                                .split('\n')
+                                .map(|s| s.to_string()),
+                            )
                             .collect(),
                     )
                 } else {

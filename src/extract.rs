@@ -55,6 +55,8 @@ impl EGraph {
                 func.nodes
                     .iter()
                     .filter_map(|(inputs, output)| {
+                        // only extract canonical nodes,
+                        // assuming rebuilding fired
                         (self.find(output.value) == leader
                             && inputs
                                 .iter()
@@ -101,7 +103,18 @@ impl<'a> Extractor<'a> {
             let arcsort = self.egraph.get_sort(value).unwrap();
             children.push(self.find_best(*value, termdag, arcsort).1)
         }
-        termdag.make(node.sym, children)
+        let res = termdag.make(node.sym, children);
+        let res_str = termdag.to_string(&res);
+        eprintln!("Extracted: {}", res_str);
+        eprintln!("node inputs: {:?}", node.inputs);
+        eprintln!(
+            "leaders: {:?}",
+            node.inputs
+                .iter()
+                .map(|v| self.find(*v))
+                .collect::<Vec<_>>()
+        );
+        res
     }
 
     fn find(&self, value: Value) -> Id {

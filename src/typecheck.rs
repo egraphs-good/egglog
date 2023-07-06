@@ -543,7 +543,17 @@ impl<'a> ExprChecker<'a> for ActionChecker<'a> {
     }
 
     fn do_function(&mut self, f: Symbol, _args: Vec<Self::T>) -> Self::T {
-        self.instructions.push(Instruction::CallFunction(f));
+        self.instructions.push(Instruction::CallFunction(
+            f,
+            !self
+                .egraph
+                .proof_state
+                .type_info
+                .func_types
+                .get(&f)
+                .unwrap()
+                .has_merge,
+        ));
     }
 
     fn do_prim(&mut self, prim: Primitive, args: Vec<Self::T>) -> Self::T {
@@ -661,7 +671,8 @@ enum Instruction {
     Literal(Literal),
     Load(Load),
     Value(Value),
-    CallFunction(Symbol),
+    // function to call, and whether to make defaults
+    CallFunction(Symbol, bool),
     CallPrimitive(Primitive, usize),
     DeleteRow(Symbol),
     Set(Symbol),
@@ -741,7 +752,8 @@ impl EGraph {
                     Load::Stack(idx) => stack.push(stack[*idx]),
                     Load::Subst(idx) => stack.push(subst[*idx]),
                 },
-                Instruction::CallFunction(f) => {
+                Instruction::CallFunction(f, make_defaults_func) => {
+                    let make_defaults = make_defaults && *make_defaults_func;
                     let function = self.functions.get_mut(f).unwrap();
                     let output_tag = function.schema.output.name();
                     let new_len = stack.len() - function.schema.input.len();
@@ -782,13 +794,13 @@ impl EGraph {
                             }
                             _ => {
                                 return Err(Error::NotFoundError(NotFoundError(Expr::Var(
-                                    format!("fake expression {f} {:?}", values).into(),
+                                    format!("No value found for {f} {:?}", values).into(),
                                 ))))
                             }
                         }
                     } else {
                         return Err(Error::NotFoundError(NotFoundError(Expr::Var(
-                            format!("fake expression {f} {:?}", values).into(),
+                            format!("No value found for {f} {:?}", values).into(),
                         ))));
                     };
 
