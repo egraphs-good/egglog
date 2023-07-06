@@ -543,16 +543,16 @@ impl<'a> ExprChecker<'a> for ActionChecker<'a> {
     }
 
     fn do_function(&mut self, f: Symbol, _args: Vec<Self::T>) -> Self::T {
+        let func_type = self
+            .egraph
+            .proof_state
+            .type_info
+            .func_types
+            .get(&f)
+            .unwrap();
         self.instructions.push(Instruction::CallFunction(
             f,
-            !self
-                .egraph
-                .proof_state
-                .type_info
-                .func_types
-                .get(&f)
-                .unwrap()
-                .has_merge,
+            func_type.has_default || !func_type.has_merge,
         ));
     }
 

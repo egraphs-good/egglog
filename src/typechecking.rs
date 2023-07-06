@@ -5,14 +5,16 @@ pub struct FuncType {
     pub input: Vec<ArcSort>,
     pub output: ArcSort,
     pub has_merge: bool,
+    pub has_default: bool,
 }
 
 impl FuncType {
-    pub fn new(input: Vec<ArcSort>, output: ArcSort, has_merge: bool) -> Self {
+    pub fn new(input: Vec<ArcSort>, output: ArcSort, has_merge: bool, has_default: bool) -> Self {
         Self {
             input,
             output,
             has_merge,
+            has_default,
         }
     }
 }
@@ -137,7 +139,12 @@ impl TypeInfo {
         } else {
             Err(TypeError::Unbound(func.schema.output))
         }?;
-        Ok(FuncType::new(input, output, func.merge.is_some()))
+        Ok(FuncType::new(
+            input,
+            output,
+            func.merge.is_some(),
+            func.default.is_some(),
+        ))
     }
 
     fn typecheck_ncommand(&mut self, command: &NCommand, id: CommandId) -> Result<(), TypeError> {
@@ -577,7 +584,7 @@ impl TypeInfo {
             if let Some(prims) = self.primitives.get(&sym) {
                 for prim in prims {
                     if let Some(return_type) = prim.accept(&input_types) {
-                        return Ok(FuncType::new(input_types, return_type, false));
+                        return Ok(FuncType::new(input_types, return_type, false, true));
                     }
                 }
             }
