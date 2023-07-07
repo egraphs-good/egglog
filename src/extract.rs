@@ -105,15 +105,6 @@ impl<'a> Extractor<'a> {
         }
         let res = termdag.make(node.sym, children);
         let res_str = termdag.to_string(&res);
-        eprintln!("Extracted: {}", res_str);
-        eprintln!("node inputs: {:?}", node.inputs);
-        eprintln!(
-            "leaders: {:?}",
-            node.inputs
-                .iter()
-                .map(|v| self.find(*v))
-                .collect::<Vec<_>>()
-        );
         res
     }
 
