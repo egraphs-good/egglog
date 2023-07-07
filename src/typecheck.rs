@@ -194,7 +194,13 @@ impl<'a> Context<'a> {
         let get_leaf = |id: &Id| -> AtomTerm {
             let mk = || AtomTerm::Var(Symbol::from(format!("?__{}", id)));
             match leaves.get(id) {
-                Some(Expr::Var(v)) => AtomTerm::Var(*v),
+                Some(Expr::Var(v)) => {
+                    if let Some((_ty, value)) = self.egraph.global_bindings.get(v) {
+                        AtomTerm::Value(*value)
+                    } else {
+                        AtomTerm::Var(*v)
+                    }
+                }
                 Some(Expr::Lit(l)) => AtomTerm::Value(self.egraph.eval_lit(l)),
                 _ => mk(),
             }
@@ -240,6 +246,7 @@ impl<'a> Context<'a> {
             if let ENode::Var(var) = node.0 {
                 if let Some((_sort, value)) = self.egraph.global_bindings.get(var) {
                     let canon = get_leaf(node.1);
+
                     // canon is either a global variable or a literal
                     let canon_value = match canon {
                         AtomTerm::Var(v) => self.egraph.global_bindings[&v].1,
