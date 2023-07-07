@@ -569,6 +569,8 @@ pub enum TypeError {
     GlobalAlreadyBound(Symbol),
     #[error("Local already bound {0} with type {}. Got: {}", .1.name(), .2.name())]
     LocalAlreadyBound(Symbol, ArcSort, ArcSort),
+    #[error("Local already bound {0}")]
+    SimpleLocalAlreadyBound(Symbol),
     #[error("Sort {0} already declared.")]
     SortAlreadyBound(Symbol),
     #[error("Primitive {0} already declared.")]

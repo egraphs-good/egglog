@@ -231,13 +231,11 @@ fn give_unique_names(desugar: &mut Desugar, facts: Vec<NormFact>) -> Vec<NormFac
 }
 
 fn flatten_rule(rule: Rule, desugar: &mut Desugar) -> NormRule {
-    let new_rule = variable_folding(rule);
-
-    let flat_facts = flatten_facts(&new_rule.body, desugar);
+    let flat_facts = flatten_facts(&rule.body, desugar);
     let with_unique_names = give_unique_names(desugar, flat_facts);
 
     NormRule {
-        head: flatten_actions(&new_rule.head, desugar),
+        head: flatten_actions(&rule.head, desugar),
         body: with_unique_names,
     }
 }
@@ -259,34 +257,14 @@ fn subst(expr: &mut Expr, from: &Symbol, to: &Symbol) {
     }
 }
 
-fn subst_norm_expr(expr: &mut NormExpr, from: &Symbol, to: &Symbol) {
-    match expr {
-        NormExpr::Call(_, vec) => {
-            for symbol in vec.iter_mut() {
-                if symbol.as_str().eq(from.as_str()) {
-                    *symbol = to.clone()
-                }
+fn subst_action(action: &mut Action, from: &Symbol, to: &Symbol) -> Result<(), TypeError>{
+    match action {
+        Action::Let(var, expr) => {
+            if var.clone().eq(from) {
+                return Err(TypeError::SimpleLocalAlreadyBound(*var))
             }
+            subst(expr, from, to)
         }
-    }
-}
-
-fn subst_norm_action(action: &mut NormAction, from: &Symbol, to: &Symbol) {
-    match action {
-        NormAction::Let(_, expr) => subst_norm_expr(expr, from, to),
-        // NormAction::LetVar(Symbol, Symbol) => {}
-        // NormAction::LetLit(Symbol, Literal) => {}
-        NormAction::Set(expr, _) => subst_norm_expr(expr, from, to),
-        NormAction::Delete(expr) => subst_norm_expr(expr, from, to),
-        // NormAction::Union(Symbol, Symbol) => {}
-        // NormAction::Panic(String) => {}
-        _ => (),
-    }
-}
-
-fn subst_action(action: &mut Action, from: &Symbol, to: &Symbol) {
-    match action {
-        Action::Let(_, expr) => subst(expr, from, to),
         Action::Set(_, exprs, rhs) => {
             for expr in exprs.iter_mut() {
                 subst(expr, from, to)
@@ -312,33 +290,10 @@ fn subst_action(action: &mut Action, from: &Symbol, to: &Symbol) {
         Action::Expr(expr) => subst(expr, from, to),
         _ => (),
     }
+
+    Ok(())
 }
 
-fn subst_norm_fact(fact: &mut NormFact, from: &Symbol, to: &Symbol) {
-    match fact {
-        NormFact::Assign(s, expr) => {
-            if s.clone().eq(from) {
-                *s = to.clone()
-            }
-
-            subst_norm_expr(expr, from, to)
-        }
-        NormFact::AssignLit(s, _) => {
-            if s.clone().eq(from) {
-                *s = to.clone()
-            }
-        }
-        NormFact::ConstrainEq(s1, s2) => {
-            if s1.clone().eq(from) {
-                *s1 = to.clone()
-            }
-
-            if s2.clone().eq(from) {
-                *s2 = to.clone()
-            }
-        }
-    }
-}
 
 fn subst_fact(fact: &mut Fact, from: &Symbol, to: &Symbol) {
     match fact {
@@ -351,27 +306,19 @@ fn subst_fact(fact: &mut Fact, from: &Symbol, to: &Symbol) {
     }
 }
 
-fn subst_norm_rule(rule: &mut NormRule, from: &Symbol, to: &Symbol) {
-    for fact in rule.body.iter_mut() {
-        subst_norm_fact(fact, from, to)
-    }
-
-    for action in rule.head.iter_mut() {
-        subst_norm_action(action, from, to)
-    }
-}
-
-fn subst_rule(rule: &mut Rule, from: &Symbol, to: &Symbol) {
+fn subst_rule(rule: &mut Rule, from: &Symbol, to: &Symbol) -> Result<(), TypeError>{
     for fact in rule.body.iter_mut() {
         subst_fact(fact, from, to)
     }
 
     for action in rule.head.iter_mut() {
-        subst_action(action, from, to)
+        subst_action(action, from, to)?
     }
+
+    return Ok(());
 }
 
-fn variable_folding(rule: Rule) -> Rule {
+fn variable_folding(rule: Rule) -> Result<Rule, TypeError> {
     let mut rule_copy1 = rule.clone();
     let mut rule_copy2 = rule.clone();
     let mut change = true;
@@ -386,7 +333,7 @@ fn variable_folding(rule: Rule) -> Rule {
                 match (lhs, rhs) {
                     (Expr::Var(v1), Expr::Var(v2)) => {
                         if !v1.eq(v2) {
-                            subst_rule(&mut rule_copy2, v1, v2);
+                            subst_rule(&mut rule_copy2, v1, v2)?;
                             change = true;
                             break;
                         }
@@ -401,7 +348,7 @@ fn variable_folding(rule: Rule) -> Rule {
         }
     }
 
-    rule_copy1
+    Ok(rule_copy1)
 }
 
 fn desugar_schedule(desugar: &mut Desugar, schedule: &Schedule) -> NormSchedule {
@@ -598,14 +545,16 @@ pub(crate) fn desugar_command(
             if name == "".into() {
                 name = rule.to_string().replace('\"', "'").into();
             }
+
+            let folded_rule = variable_folding(rule)?;
             let mut result = vec![NCommand::NormRule {
                 ruleset,
                 name,
-                rule: flatten_rule(rule.clone(), desugar),
+                rule: flatten_rule(folded_rule.clone(), desugar),
             }];
 
             if seminaive {
-                if let Some(new_rule) = add_semi_naive_rule(desugar, rule) {
+                if let Some(new_rule) = add_semi_naive_rule(desugar, folded_rule) {
                     result.push(NCommand::NormRule {
                         ruleset,
                         name,

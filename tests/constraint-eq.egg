@@ -1,0 +1,15 @@
+(rule ((= x 1) (= y x)) ())
+(rule ((= x 1) (= y x) (= z y)) ())
+
+(function f (i64) i64)
+
+(set (f 0) 0)
+
+;; a funky id rule
+(rule ((f x) (= x y) (= z y)) ((let a (f z)) (set (f (+ z 1)) (+ a 1))))
+
+(run 100)
+
+(print f)
+
+(check (= (f 10) 10))
