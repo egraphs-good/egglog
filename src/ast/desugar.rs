@@ -162,6 +162,14 @@ fn flatten_equalities(equalities: Vec<(Symbol, Expr)>, desugar: &mut Desugar) ->
     let mut cache = Default::default();
 
     for (lhs, rhs) in equalities {
+        if let Expr::Var(v2) = rhs {
+            if !desugar.global_variables.contains(&v2) && !bound_variables.contains(&v2) {
+                res.push(NormFact::AssignVar(v2, lhs));
+                continue;
+            }
+        }
+
+        // lhs is already bound
         if desugar.global_variables.contains(&lhs) || bound_variables.contains(&lhs) {
             if let Expr::Var(rhs_v) = rhs {
                 constraints.push((lhs, rhs_v));
@@ -330,6 +338,7 @@ fn give_unique_names(desugar: &mut Desugar, facts: Vec<NormFact>) -> Vec<NormFac
 }
 
 fn flatten_rule(rule: Rule, desugar: &mut Desugar) -> NormRule {
+    eprintln!("Flattening rule: {}", rule);
     let flat_facts = flatten_facts(&rule.body, desugar);
     let with_unique_names = give_unique_names(desugar, flat_facts);
 
