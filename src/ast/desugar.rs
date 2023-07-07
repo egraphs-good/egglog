@@ -338,7 +338,6 @@ fn give_unique_names(desugar: &mut Desugar, facts: Vec<NormFact>) -> Vec<NormFac
 }
 
 fn flatten_rule(rule: Rule, desugar: &mut Desugar) -> NormRule {
-    eprintln!("Flattening rule: {}", rule);
     let flat_facts = flatten_facts(&rule.body, desugar);
     let with_unique_names = give_unique_names(desugar, flat_facts);
 

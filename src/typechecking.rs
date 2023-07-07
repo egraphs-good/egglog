@@ -251,8 +251,6 @@ impl TypeInfo {
     }
 
     fn typecheck_rule(&mut self, ctx: CommandId, rule: &NormRule) -> Result<(), TypeError> {
-        eprintln!("Typechecking rule: {}", rule);
-        eprintln!("{:?}", rule);
         // also check the validity of the ssa
         self.typecheck_facts(ctx, &rule.body)?;
         self.typecheck_actions(ctx, &rule.head)?;
