@@ -1012,10 +1012,13 @@ impl EGraph {
                 msg
             }
             NCommand::Fail(c) => {
-                if self.run_command(*c, should_run).is_ok() {
+                let result = self.run_command(*c, should_run);
+                if let Err(e) = result {
+                    eprintln!("Expect failure: {}", e);
+                    "Command failed as expected".into()
+                } else {
                     return Err(Error::ExpectFail);
                 }
-                "Command failed as expected.".into()
             }
             NCommand::Input { name, file } => {
                 let func = self.functions.get_mut(&name).unwrap();

@@ -336,9 +336,6 @@ impl ProofState {
             }
 
             match &command.command {
-                NCommand::Push(_num) => {
-                    res.push(command.to_command());
-                }
                 NCommand::Sort(name, presort_and_args) => {
                     res.push(command.to_command());
                     res.extend(self.make_parent_table(*name));
@@ -370,7 +367,24 @@ impl ProofState {
                 NCommand::RunSchedule(schedule) => {
                     res.push(Command::RunSchedule(self.instrument_schedule(schedule)));
                 }
-                _ => {
+                NCommand::Fail(cmd) => {
+                    let mut with_term_encoding = self.add_term_encoding(vec![NormCommand {
+                        command: *cmd.clone(),
+                        metadata: command.metadata.clone(),
+                    }]);
+                    let last = with_term_encoding.pop().unwrap();
+                    res.extend(with_term_encoding);
+                    res.push(Command::Fail(Box::new(last)));
+                }
+                NCommand::SetOption { .. }
+                | NCommand::Pop(..)
+                | NCommand::Push(..)
+                | NCommand::AddRuleset(..)
+                | NCommand::PrintSize(..)
+                | NCommand::PrintTable(..)
+                | NCommand::Output { .. }
+                | NCommand::Input { .. }
+                | NCommand::CheckProof => {
                     res.push(command.to_command());
                 }
             }
