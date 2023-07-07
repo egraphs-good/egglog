@@ -870,6 +870,86 @@ impl NormRule {
         }
     }
 
+    pub fn globals_used_in_matcher(&self) -> HashSet<Symbol> {
+        let mut bound_vars = HashSet::<Symbol>::default();
+        for fact in &self.body {
+            fact.map_def_use(&mut |var, def| {
+                if def {
+                    bound_vars.insert(var);
+                }
+                var
+            });
+        }
+
+        let mut unbound_vars = HashSet::<Symbol>::default();
+        for fact in &self.body {
+            fact.map_def_use(&mut |var, def| {
+                if !def && !bound_vars.contains(&var) {
+                    unbound_vars.insert(var);
+                }
+                var
+            });
+        }
+        unbound_vars
+    }
+
+    // just get rid of all the equality constraints for now
+    pub fn resugar_facts(&self, subst: &mut HashMap<Symbol, Expr>) -> Vec<Fact> {
+        let unbound = self.globals_used_in_matcher();
+        let mut unionfind = UnionFind::default();
+        let mut var_to_id = HashMap::<Symbol, Id>::default();
+        let mut id_to_var = HashMap::<Id, Symbol>::default();
+        let mut get_id = |var: Symbol, uf: &mut UnionFind| -> Id {
+            if let Some(id) = var_to_id.get(&var) {
+                *id
+            } else {
+                let id = uf.make_set();
+                var_to_id.insert(var, id);
+                id_to_var.insert(id, var);
+                id
+            }
+        };
+        for norm_fact in &self.body {
+            if let NormFact::ConstrainEq(v1, v2) = norm_fact {
+                let id1 = get_id(*v1, &mut unionfind);
+                let id2 = get_id(*v2, &mut unionfind);
+                unionfind.union_raw(id1, id2);
+            } else if let NormFact::AssignVar(v1, v2) = norm_fact {
+                let id1 = get_id(*v1, &mut unionfind);
+                let id2 = get_id(*v2, &mut unionfind);
+                unionfind.union_raw(id1, id2);
+            }
+        }
+
+        for (var, id) in &var_to_id {
+            let leader = id_to_var.get(&unionfind.find(*id)).unwrap();
+            if leader != var {
+                subst.insert(*var, Expr::Var(*leader));
+            }
+        }
+
+        let mut res = vec![];
+        for fact in &self.body {
+            match fact {
+                NormFact::ConstrainEq(..) => (),
+                NormFact::AssignVar(..) => (),
+                _ => res.push(fact.to_fact().subst(subst)),
+            }
+        }
+
+        // add back contraints on unbound variables
+        for var in unbound {
+            if let Some(id) = var_to_id.get(&var) {
+                let leader = id_to_var.get(&unionfind.find(*id)).unwrap();
+                if leader != &var {
+                    res.push(Fact::Eq(vec![Expr::Var(var), Expr::Var(*leader)]));
+                }
+            }
+        }
+
+        res
+    }
+
     pub fn resugar_actions(&self, subst: &mut HashMap<Symbol, Expr>) -> Vec<Action> {
         let mut used = HashSet::<Symbol>::default();
         let mut head = Vec::<Action>::default();
@@ -973,7 +1053,7 @@ impl NormRule {
     pub fn resugar(&self) -> Rule {
         let mut subst = HashMap::<Symbol, Expr>::default();
 
-        let facts_resugared = self.body.iter().map(|f| f.to_fact()).collect();
+        let facts_resugared = self.resugar_facts(&mut subst);
 
         Rule {
             head: self.resugar_actions(&mut subst),
