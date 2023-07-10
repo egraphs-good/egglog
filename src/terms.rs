@@ -55,7 +55,7 @@ impl ProofState {
         let child_parent = |i| {
             #[allow(clippy::iter_nth)]
             let child_t: ArcSort = types.input.iter().nth(i).unwrap().clone();
-            self.wrap_parent(child(i), child_t)
+            self.wrap_parent_or_rebuild(child(i), child_t)
                 .unwrap_or_else(|| child(i))
         };
         let children = format!(
@@ -79,11 +79,11 @@ impl ProofState {
                     {children_updated})
                    ({})
                     :ruleset {})",
-            if types.output.is_eq_sort() || types.output.is_container_sort() {
+            if types.output.is_eq_sort() {
                 format!(
                     "(let rhs ({op} {children_updated}))
-                         (set ({pname} rhs) rhs)
-                         {}",
+                     (set ({pname} rhs) rhs)
+                     {}",
                     self.union(fdecl.schema.output, "lhs", "rhs")
                 )
             } else {
@@ -162,9 +162,17 @@ impl ProofState {
         }
     }
 
+    fn wrap_parent_or_rebuild(&mut self, var: String, sort: ArcSort) -> Option<String> {
+        if sort.is_container_sort() {
+            Some(format!("(rebuild {})", var))
+        } else {
+            self.wrap_parent(var, sort)
+        }
+    }
+
     fn wrap_parent(&mut self, var: String, sort: ArcSort) -> Option<String> {
         // TODO make all containers also eq sort
-        if sort.is_eq_sort() || sort.is_container_sort() {
+        if sort.is_eq_sort() {
             let parent = self.parent_name(sort.name());
             Some(format!("({parent} {var})"))
         } else {
@@ -221,9 +229,7 @@ impl ProofState {
                 let func_type = self.type_info.func_types.get(head).unwrap();
                 // desugar set to union when the merge
                 // function is union
-                if (func_type.output.is_eq_sort() || func_type.output.is_container_sort())
-                    && !func_type.has_merge
-                {
+                if (func_type.output.is_eq_sort()) && !func_type.has_merge {
                     self.parse_actions(
                         vec![self.init(func_type.output.name(), &expr.to_string())]
                             .into_iter()
@@ -246,7 +252,7 @@ impl ProofState {
                 let lhs_type = self.type_info.lookup(self.current_ctx, *lhs).unwrap();
                 let rhs_type = self.type_info.lookup(self.current_ctx, *rhs).unwrap();
                 assert_eq!(lhs_type.name(), rhs_type.name());
-                assert!(lhs_type.is_eq_sort() || lhs_type.is_container_sort());
+                assert!(lhs_type.is_eq_sort());
 
                 self.parse_actions(
                     self.union(lhs_type.name(), &lhs.to_string(), &rhs.to_string())
@@ -394,12 +400,8 @@ impl ProofState {
         self.parse_program(&format!(
             "(relation {table_name} ({name}))
              (rule (({table_name} value))
-                   ((let rebuilt (rebuild value))
-                    {}
-                    {})
+                   ((let rebuilt (rebuild value)))
                    :ruleset {rebuilding_ruleset_name})",
-            self.init(name, "rebuilt"),
-            self.union(name, "value", "rebuilt"),
         ))
         .unwrap()
     }

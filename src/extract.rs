@@ -8,7 +8,7 @@ use crate::{ArcSort, EGraph, Function, Id, Value};
 type Cost = usize;
 
 #[derive(Debug)]
-struct Node<'a> {
+pub(crate) struct Node<'a> {
     sym: Symbol,
     inputs: &'a [Value],
 }
@@ -76,6 +76,7 @@ impl EGraph {
 
 impl<'a> Extractor<'a> {
     pub fn new(egraph: &'a EGraph, termdag: &mut TermDag, use_eq_relation: bool) -> Self {
+        eprintln!("new extractor");
         let mut extractor = Extractor {
             costs: HashMap::default(),
             egraph,
@@ -93,6 +94,7 @@ impl<'a> Extractor<'a> {
         );
 
         log::debug!("Extracting from ctors: {:?}", extractor.ctors);
+        eprintln!("finding costs");
         extractor.find_costs(termdag);
         extractor
     }

@@ -13,7 +13,7 @@ mod unionfind;
 pub mod util;
 mod value;
 
-use extract::Extractor;
+use extract::{Extractor, Node};
 use hashbrown::hash_map::Entry;
 use index::ColumnIndex;
 use instant::{Duration, Instant};
