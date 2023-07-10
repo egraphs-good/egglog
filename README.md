@@ -357,7 +357,7 @@ Signed 64-bit integers supporting these primitives:
 + - * / %           ; arithmetic
 & | ^ << >> not-i64 ; bit-wise operations
 < > <= >=           ; comparisons
-min max
+min max log2
 ```
 
 ### Sort: f64
