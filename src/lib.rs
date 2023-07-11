@@ -21,7 +21,7 @@ use proofs::ProofState;
 use symbolic_expressions::Sexp;
 
 use ast::*;
-use typechecking::{TypeInfo, UNIT_SYM};
+pub use typechecking::{TypeInfo, UNIT_SYM};
 
 use std::fmt::{Formatter, Write};
 use std::fs::File;
@@ -35,7 +35,7 @@ use std::rc::Rc;
 use std::{fmt::Debug, sync::Arc};
 use typecheck::Program;
 
-type ArcSort = Arc<dyn Sort>;
+pub type ArcSort = Arc<dyn Sort>;
 
 pub use value::*;
 
@@ -719,7 +719,7 @@ impl EGraph {
         Ok(())
     }
 
-    fn eval_expr(
+    pub fn eval_expr(
         &mut self,
         expr: &Expr,
         expected_type: Option<ArcSort>,
@@ -1236,6 +1236,10 @@ impl EGraph {
 
     pub(crate) fn get_sort(&self, value: &Value) -> Option<&ArcSort> {
         self.proof_state.type_info.sorts.get(&value.tag)
+    }
+
+    pub fn add_arcsort(&mut self, arcsort: ArcSort) -> Result<(), TypeError> {
+        self.proof_state.type_info.add_arcsort(arcsort)
     }
 
     // Gets the last extract report and returns it, if the last command saved it.
