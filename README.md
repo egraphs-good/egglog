@@ -12,7 +12,7 @@ This is repo for the `egglog` tool accompanying the paper
 If you use this work, please use [this citation](./CITATION.bib).
 
 See also the Python binding, which provides a bit more documentation:
-https://egglog-python.readthedocs.io/en/latest/
+https://egg-smol-python.readthedocs.io/en/latest/
 
 ## Chat
 
@@ -361,7 +361,7 @@ Signed 64-bit integers supporting these primitives:
 + - * / %           ; arithmetic
 & | ^ << >> not-i64 ; bit-wise operations
 < > <= >=           ; comparisons
-min max
+min max log2
 ```
 
 ### Sort: f64
