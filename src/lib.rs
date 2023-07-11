@@ -1168,7 +1168,7 @@ impl EGraph {
         Ok(program)
     }
 
-    fn enable_proofs(&mut self) {
+    pub fn enable_proofs(&mut self) {
         let proofs_already_enabled = self.proofs_enabled;
         self.proofs_enabled = true;
         if !proofs_already_enabled && self.proofs_enabled {
