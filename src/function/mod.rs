@@ -146,6 +146,10 @@ impl Function {
         })
     }
 
+    pub fn get(&self, inputs: &[Value]) -> Option<Value> {
+        self.nodes.get(inputs).map(|output| output.value)
+    }
+
     pub fn insert(&mut self, inputs: &[Value], value: Value, timestamp: u32) -> Option<Value> {
         self.insert_internal(inputs, value, timestamp, true)
     }
