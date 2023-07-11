@@ -10,6 +10,8 @@ struct Args {
     #[clap(long)]
     naive: bool,
     inputs: Vec<PathBuf>,
+    #[clap(long)]
+    proofs: bool,
 }
 
 fn main() {
@@ -26,6 +28,9 @@ fn main() {
         let mut egraph = EGraph::default();
         egraph.fact_directory = args.fact_directory.clone();
         egraph.seminaive = !args.naive;
+        if args.proofs {
+            egraph.enable_proofs();
+        }
         egraph
     };
 
