@@ -256,7 +256,7 @@ impl EGraph {
                 for (_, offs) in ix.iter() {
                     for off in offs {
                         assert!(
-                            (*off as usize) < function.nodes.len(),
+                            (*off as usize) < function.nodes.num_offsets(),
                             "index contains offset {off:?}, which is out of range for function {name}"
                         );
                     }
@@ -276,7 +276,7 @@ impl EGraph {
                         for (_, offs) in ix.iter() {
                             for off in offs {
                                 assert!(
-                                (*off as usize) < function.nodes.len(),
+                                (*off as usize) < function.nodes.num_offsets(),
                                 "index contains offset {off:?}, which is out of range for function {name}"
                             );
                             }
@@ -1025,7 +1025,13 @@ impl EGraph {
         let exprs = match variants {
             0 => vec![],
             1 => vec![expr.clone()],
-            _ => self.extract_variants(value, variants),
+            _ => {
+                if self.get_sort(&value).is_some_and(|sort| sort.is_eq_sort()) {
+                    self.extract_variants(value, variants)
+                } else {
+                    vec![expr.clone()]
+                }
+            }
         };
         Ok(ExtractReport {
             cost,

@@ -15,7 +15,7 @@ pub(crate) fn binary_search_table_by_key(data: &Table, target: u32) -> Option<us
         return Some(0);
     }
     // adapted from std::slice::binary_search_by
-    let mut size = data.len();
+    let mut size = data.num_offsets();
     let mut left = 0;
     let mut right = size;
     while left < right {
