@@ -160,32 +160,37 @@ fn flatten_equalities(equalities: Vec<(Symbol, Expr)>, desugar: &mut Desugar) ->
     let mut bound_variables: HashSet<Symbol> = Default::default();
     let mut constraints: Vec<(Symbol, Symbol)> = Default::default();
     let mut cache = Default::default();
+    let bound = |var, desugar: &Desugar, bound_variables: &HashSet<Symbol>| {
+        desugar.global_variables.contains(&var) || bound_variables.contains(&var)
+    };
 
     for (lhs, rhs) in equalities {
-        if let Expr::Var(v2) = rhs {
-            if !desugar.global_variables.contains(&v2) && !bound_variables.contains(&v2) {
-                res.push(NormFact::AssignVar(v2, lhs));
-                continue;
+        if let Expr::Var(rhs_v) = rhs {
+            if bound(rhs_v, desugar, &bound_variables) && bound(lhs, desugar, &bound_variables) {
+                constraints.push((lhs, rhs_v));
+            } else if bound(lhs, desugar, &bound_variables) {
+                res.push(NormFact::AssignVar(rhs_v, lhs));
+                bound_variables.insert(rhs_v);
+            } else if bound(rhs_v, desugar, &bound_variables) {
+                res.push(NormFact::AssignVar(lhs, rhs_v));
+                bound_variables.insert(lhs);
+            } else {
+                constraints.push((lhs, rhs_v));
             }
         }
-
         // lhs is already bound
-        if desugar.global_variables.contains(&lhs) || bound_variables.contains(&lhs) {
-            if let Expr::Var(rhs_v) = rhs {
-                constraints.push((lhs, rhs_v));
-            } else {
-                let fresh = desugar.get_fresh();
-                normalize_expr(
-                    fresh,
-                    &rhs,
-                    desugar,
-                    &mut res,
-                    &mut constraints,
-                    &mut bound_variables,
-                    &mut cache,
-                );
-                constraints.push((fresh, lhs));
-            }
+        else if bound(lhs, desugar, &bound_variables) {
+            let fresh = desugar.get_fresh();
+            normalize_expr(
+                fresh,
+                &rhs,
+                desugar,
+                &mut res,
+                &mut constraints,
+                &mut bound_variables,
+                &mut cache,
+            );
+            constraints.push((fresh, lhs));
         } else {
             normalize_expr(
                 lhs,
