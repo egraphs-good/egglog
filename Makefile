@@ -1,7 +1,7 @@
 .PHONY: all web test nits docs serve
 
-RUST_SRC=$(shell find -type f -wholename '*/src/*.rs' -or -name 'Cargo.toml')
-TESTS=$(shell find tests/ -type f -name '*.egg' -not -name '*repro-*')
+RUST_SRC=$(shell find . -type f -wholename '*/src/*.rs' -or -name 'Cargo.toml')
+TESTS=$(shell find . tests/ -type f -name '*.egg' -not -name '*repro-*')
 
 WWW=${PWD}/target/www/
 
