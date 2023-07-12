@@ -1,18 +1,38 @@
-@misc{egglog,
+@article{egglog,
   author = {
-    Yihong Zhang and
-    Yisu Remy Wang and
-    Oliver Flatt and
-    David Cao and
-    Philip Zucker and
-    Eli Rosenthal and
-    Zachary Tatlock and
-    Max Willsey
+    Zhang, Yihong and
+    Wang, Yisu Remy and
+    Flatt, Oliver and
+    Cao, David and
+    Zucker, Philip and
+    Rosenthal, Eli and
+    Tatlock, Zachary and
+    Willsey, Max
   },
   title = {Better Together: Unifying Datalog and Equality Saturation},
   year = {2023},
-  eprint={2304.04332},
-  archivePrefix={arXiv},
-  primaryClass={cs.PL},
-  url={https://arxiv.org/abs/2304.04332},
+  issue_date = {June 2023},
+  publisher = {Association for Computing Machinery},
+  address = {New York, NY, USA},
+  volume = {7},
+  number = {PLDI},
+  url = {https://doi.org/10.1145/3591239},
+  doi = {10.1145/3591239},
+  abstract = {
+    We present egglog, a fixpoint reasoning system that unifies Datalog and equality saturation (EqSat). 
+    Like Datalog, egglog supports efficient incremental execution, cooperating analyses, and lattice-based reasoning. 
+    Like EqSat, egglog supports term rewriting, efficient congruence closure, and extraction of optimized terms. 
+    We identify two recent applications -- a unification-based pointer analysis in Datalog and an EqSat-based floating-point term rewriter -- 
+    that have been hampered by features missing from Datalog but found in EqSat or vice-versa. 
+    We evaluate our system by reimplementing those projects in egglog. 
+    The resulting systems in egglog are faster, simpler, and fix bugs found in the original systems.
+  },
+  journal = {Proc. ACM Program. Lang.},
+  month = {jun},
+  articleno = {125},
+  numpages = {25},
+  keywords = {Equality saturation, Program optimization, Datalog, Rewrite systems}
 }
+
+  
+

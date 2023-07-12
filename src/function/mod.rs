@@ -146,6 +146,10 @@ impl Function {
         })
     }
 
+    pub fn get(&self, inputs: &[Value]) -> Option<Value> {
+        self.nodes.get(inputs).map(|output| output.value)
+    }
+
     pub fn insert(&mut self, inputs: &[Value], value: Value, timestamp: u32) -> Option<Value> {
         self.insert_internal(inputs, value, timestamp, true)
     }
@@ -200,7 +204,7 @@ impl Function {
         }
         let size = range.end.saturating_sub(range.start);
         // If this represents >12.5% overhead, don't use the index
-        if (self.nodes.len() - size) > (size / 8) {
+        if (self.nodes.num_offsets() - size) > (size / 8) {
             return None;
         }
         let target = &self.indexes[col];
@@ -276,7 +280,10 @@ impl Function {
         }
         self.nodes.rehash();
         self.index_updated_through = 0;
-        self.update_indexes(self.nodes.len());
+        if self.nodes.is_empty() {
+            return;
+        }
+        self.update_indexes(self.nodes.num_offsets());
     }
 
     pub(crate) fn iter_timestamp_range(
@@ -292,21 +299,23 @@ impl Function {
         timestamp: u32,
     ) -> Result<(usize, Vec<DeferredMerge>), Error> {
         // Make sure indexes are up to date.
-        self.update_indexes(self.nodes.len());
+        self.update_indexes(self.nodes.num_offsets());
         if self.schema.input.iter().all(|s| !s.is_eq_sort()) && !self.schema.output.is_eq_sort() {
             return Ok((std::mem::take(&mut self.updates), Default::default()));
         }
         let mut deferred_merges = Vec::new();
         let mut scratch = ValueVec::new();
         let n_unions = uf.n_unions();
-        if uf.new_ids(|sort| self.sorts.contains(&sort)) > (self.nodes.len() / 2) {
+
+        if uf.new_ids(|sort| self.sorts.contains(&sort)) > (self.nodes.num_offsets() / 2) {
             // basic heuristic: if we displaced a large number of ids relative
             // to the size of the table, then just rebuild everything.
-            for i in 0..self.nodes.len() {
+            for i in 0..self.nodes.num_offsets() {
                 self.rebuild_at(i, timestamp, uf, &mut scratch, &mut deferred_merges)?;
             }
         } else {
             let mut to_canon = mem::take(&mut self.scratch);
+
             to_canon.clear();
 
             for (i, (ridx, idx)) in self
@@ -359,6 +368,7 @@ impl Function {
             // Entry is stale
             return result;
         };
+
         let mut out_val = out.value;
         scratch.clear();
         scratch.extend(args.iter().copied());
@@ -372,9 +382,10 @@ impl Function {
         if !modified {
             return result;
         }
-        self.nodes.remove_index(i, timestamp);
+        let out_ty = &self.schema.output;
         self.nodes.insert_and_merge(scratch, timestamp, |prev| {
-            if let Some(prev) = prev {
+            if let Some(mut prev) = prev {
+                out_ty.canonicalize(&mut prev, uf);
                 let mut appended = false;
                 if self.merge.on_merge.is_some() && prev != out_val {
                     deferred_merges.push((scratch.clone(), prev, out_val));
@@ -402,6 +413,14 @@ impl Function {
                 out_val
             }
         });
+        if let Some((inputs, _)) = self.nodes.get_index(i) {
+            if inputs != &scratch[..] {
+                scratch.clear();
+                scratch.extend_from_slice(inputs);
+                self.nodes.remove(scratch, timestamp);
+                scratch.clear();
+            }
+        }
         result
     }
 

@@ -1,10 +1,11 @@
-use egg_smol::{
-    ast::{Command, Expr, Literal},
-    *,
-};
+use std::path::PathBuf;
 
+use egglog::*;
+use libtest_mimic::Trial;
+
+#[derive(Clone)]
 struct Run {
-    path: &'static str,
+    path: PathBuf,
     test_proofs: bool,
     should_fail: bool,
 }
@@ -12,7 +13,7 @@ struct Run {
 impl Run {
     fn run(&self) {
         let _ = env_logger::builder().is_test(true).try_init();
-        let program = std::fs::read_to_string(self.path).unwrap();
+        let program = std::fs::read_to_string(&self.path).unwrap();
         self.test_program(&program, "Top level error");
 
         if !self.should_fail {
@@ -43,12 +44,7 @@ impl Run {
         let mut egraph = EGraph::default();
         egraph.set_underscores_for_desugaring(5);
         if self.test_proofs {
-            egraph
-                .run_program(vec![Command::SetOption {
-                    name: "enable_proofs".into(),
-                    value: Expr::Lit(Literal::Int(1)),
-                }])
-                .unwrap();
+            egraph.enable_proofs();
             egraph.test_proofs = true;
         }
         match egraph.parse_and_run_program(program) {
@@ -73,11 +69,60 @@ impl Run {
     }
 }
 
-// include the tests generated from the build script
-include!(concat!(std::env!("OUT_DIR"), "/files.rs"));
+fn generate_tests(glob: &str) -> Vec<Trial> {
+    let mut trials = vec![];
+    let mut mk_trial = |name: String, run: Run| {
+        trials.push(Trial::test(name, move || {
+            run.run();
+            Ok(())
+        }))
+    };
 
-#[test]
-#[allow(clippy::assertions_on_constants)]
-fn test_number_of_tests() {
-    assert!(N_TEST_FILES > 30);
+    for entry in glob::glob(glob).unwrap() {
+        let f = entry.unwrap();
+        let name = f
+            .file_stem()
+            .unwrap()
+            .to_string_lossy()
+            .replace(['.', '-', ' '], "_");
+
+        let should_fail = f.to_string_lossy().contains("fail-typecheck");
+
+        mk_trial(
+            name.clone(),
+            Run {
+                path: f.clone(),
+                should_fail,
+                test_proofs: false,
+            },
+        );
+
+        // make a test with proofs enabled
+        // TODO: re-enable herbie, unsound, and eqsolve when proof extraction is faster
+        let banned = [
+            "herbie",
+            "repro_unsound",
+            "eqsolve",
+            "before_proofs",
+            "lambda",
+        ];
+        if !banned.contains(&name.as_str()) {
+            mk_trial(
+                format!("{name}_with_proofs"),
+                Run {
+                    path: f.clone(),
+                    should_fail,
+                    test_proofs: true,
+                },
+            );
+        }
+    }
+
+    trials
+}
+
+fn main() {
+    let args = libtest_mimic::Arguments::from_args();
+    let tests = generate_tests("tests/**/*.egg");
+    libtest_mimic::run(&args, tests).exit();
 }

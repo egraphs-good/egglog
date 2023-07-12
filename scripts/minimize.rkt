@@ -19,7 +19,7 @@
       (append head (cdr tail))))
 
 (define-runtime-path egglog-binary
-  "../target/release/egg-smol")
+  "../target/release/egglog")
 
 ;; timeout in seconds
 (define TIMEOUT 5)
