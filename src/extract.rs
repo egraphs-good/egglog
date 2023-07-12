@@ -40,7 +40,6 @@ impl EGraph {
         limit: usize,
         termdag: &mut TermDag,
     ) -> Vec<Term> {
-        eprintln!("Extracting variants for {:?}", value);
         let (tag, id) = self.value_to_id(value).unwrap();
         let leader = self.find(Value::from_id(tag, id));
         let ext = &Extractor::new(self, termdag, true);
@@ -76,7 +75,6 @@ impl EGraph {
 
 impl<'a> Extractor<'a> {
     pub fn new(egraph: &'a EGraph, termdag: &mut TermDag, use_eq_relation: bool) -> Self {
-        eprintln!("new extractor");
         let mut extractor = Extractor {
             costs: HashMap::default(),
             egraph,
@@ -94,7 +92,6 @@ impl<'a> Extractor<'a> {
         );
 
         log::debug!("Extracting from ctors: {:?}", extractor.ctors);
-        eprintln!("finding costs");
         extractor.find_costs(termdag);
         extractor
     }

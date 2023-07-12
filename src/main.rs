@@ -38,6 +38,11 @@ fn main() {
         egraph.set_underscores_for_desugaring(args.num_underscores);
         egraph.fact_directory = args.fact_directory.clone();
         egraph.seminaive = !args.naive;
+        if args.proofs {
+            egraph
+                .parse_and_run_program("(set-option enable_proofs 1)")
+                .unwrap();
+        }
         egraph
     };
 
@@ -45,11 +50,6 @@ fn main() {
         let stdin = io::stdin();
         log::info!("Welcome to Egglog!");
         let mut egraph = mk_egraph();
-        if args.proofs {
-            egraph
-                .parse_and_run_program("(set-option enable_proofs 1)")
-                .unwrap();
-        }
 
         for line in BufReader::new(stdin).lines() {
             match line {
