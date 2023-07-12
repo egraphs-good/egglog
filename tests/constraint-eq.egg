@@ -1,3 +1,4 @@
+;; To test on issue #143
 (rule ((= x 1) (= y x)) ())
 (rule ((= x 1) (= y x) (= z y)) ())
 
@@ -11,5 +12,30 @@
 (run 100)
 
 (print f)
-
 (check (= (f 10) 10))
+
+
+(datatype Value (Num i64))
+(function fib (Value) Value)
+
+;; a funky fibonacci that test on more complex case and user defined datatype
+(rule ((= (Num a) (fib (Num x))) 
+		(= (Num b) (fib (Num y)))
+		(= x x1)
+		(= y y1)
+		(= a a1)
+		(= b b1)
+		(= x2 x1)
+		(= y2 y1)
+		(= a2 a1)
+		(= b2 b1)
+		(= 1 (- x2 y2)))
+	((let n (+ x2 1)) (let sum (+ a2 b2)) (set (fib (Num n)) (Num sum))))
+
+(set (fib (Num 1)) (Num 1))
+(set (fib (Num 2)) (Num 1))
+
+(run 20)
+
+(print fib)
+(check (= (fib (Num 10)) (Num 55)))

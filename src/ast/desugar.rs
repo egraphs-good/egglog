@@ -112,16 +112,11 @@ fn flatten_facts(facts: &Vec<Fact>, desugar: &mut Desugar) -> Vec<NormFact> {
                 assert!(args.len() == 2);
                 let lhs = &args[0];
                 let rhs = &args[1];
-                println!("lhs: {}", lhs);
-                println!("rhs: {}", rhs);
                 if let Expr::Var(v) = lhs {
-                    println!("lhs match {}", v);
                     equalities.push((*v, rhs.clone()));
                 } else if let Expr::Var(v) = rhs {
-                    println!("rhs match {}", v);
                     equalities.push((*v, lhs.clone()));
                 } else {
-                    println!("not matching");
                     let fresh = desugar.get_fresh();
                     equalities.push((fresh, lhs.clone()));
                     equalities.push((fresh, rhs.clone()));
@@ -257,11 +252,11 @@ fn subst(expr: &mut Expr, from: &Symbol, to: &Symbol) {
     }
 }
 
-fn subst_action(action: &mut Action, from: &Symbol, to: &Symbol) -> Result<(), TypeError>{
+fn subst_action(action: &mut Action, from: &Symbol, to: &Symbol) -> Result<(), TypeError> {
     match action {
         Action::Let(var, expr) => {
             if var.clone().eq(from) {
-                return Err(TypeError::SimpleLocalAlreadyBound(*var))
+                return Err(TypeError::SimpleLocalAlreadyBound(*var));
             }
             subst(expr, from, to)
         }
@@ -294,7 +289,6 @@ fn subst_action(action: &mut Action, from: &Symbol, to: &Symbol) -> Result<(), T
     Ok(())
 }
 
-
 fn subst_fact(fact: &mut Fact, from: &Symbol, to: &Symbol) {
     match fact {
         Fact::Eq(exprs) => {
@@ -306,13 +300,19 @@ fn subst_fact(fact: &mut Fact, from: &Symbol, to: &Symbol) {
     }
 }
 
-fn subst_rule(rule: &mut Rule, from: &Symbol, to: &Symbol) -> Result<(), TypeError>{
+fn subst_rule(rule: &mut Rule, from: &Symbol, to: &Symbol) -> Result<(), TypeError> {
+    let old_rule = rule.clone();
     for fact in rule.body.iter_mut() {
         subst_fact(fact, from, to)
     }
 
     for action in rule.head.iter_mut() {
         subst_action(action, from, to)?
+    }
+
+    // is there better way to compare two rule?
+    if old_rule.to_string().eq(&rule.to_string()) {
+        log::debug!("Rule transformed to:\n{}", rule);
     }
 
     return Ok(());

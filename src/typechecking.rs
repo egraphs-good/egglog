@@ -151,7 +151,6 @@ impl TypeInfo {
                 ruleset: _,
                 name: _,
             } => {
-                println!("{}", rule);
                 self.typecheck_rule(id, rule)?;
             }
             NCommand::Sort(sort, presort_and_args) => {
@@ -206,7 +205,6 @@ impl TypeInfo {
 
     fn typecheck_rule(&mut self, ctx: CommandId, rule: &NormRule) -> Result<(), TypeError> {
         // also check the validity of the ssa
-        println!("here {}", rule);
         self.typecheck_facts(ctx, &rule.body)?;
         self.typecheck_actions(ctx, &rule.head)?;
         let mut bindings = self.verify_normal_form_facts(&rule.body);
@@ -250,9 +248,6 @@ impl TypeInfo {
                     assert!(let_bound.insert(*var));
                 }
                 NormFact::ConstrainEq(var1, var2) => {
-                    println!("{}", var1);
-                    println!("{}", var2);
-                    println!();
                     if !let_bound.contains(var1)
                         && !let_bound.contains(var2)
                         && !self.global_types.contains_key(var1)
