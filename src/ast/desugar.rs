@@ -311,7 +311,7 @@ fn subst_rule(rule: &mut Rule, from: &Symbol, to: &Symbol) -> Result<(), TypeErr
     }
 
     // is there better way to compare two rule?
-    if old_rule.to_string().eq(&rule.to_string()) {
+    if !old_rule.to_string().eq(&rule.to_string()) {
         log::debug!("Rule transformed to:\n{}", rule);
     }
 

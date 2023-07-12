@@ -9,11 +9,10 @@
 ;; a funky id rule
 (rule ((f x) (= x y) (= z y)) ((let a (f z)) (set (f (+ z 1)) (+ a 1))))
 
-(run 100)
+(run 20)
 
 (print f)
 (check (= (f 10) 10))
-
 
 (datatype Value (Num i64))
 (function fib (Value) Value)
@@ -21,16 +20,16 @@
 ;; a funky fibonacci that test on more complex case and user defined datatype
 (rule ((= (Num a) (fib (Num x))) 
 		(= (Num b) (fib (Num y)))
-		(= x x1)
-		(= y y1)
-		(= a a1)
-		(= b b1)
-		(= x2 x1)
-		(= y2 y1)
-		(= a2 a1)
-		(= b2 b1)
+		(= x1 x)
+		(= y1 y)
+		(= a1 a)
+		(= b1 b)
+		(= x1 x2)
+		(= y1 y2)
+		(= a1 a2)
+		(= b1 b2)
 		(= 1 (- x2 y2)))
-	((let n (+ x2 1)) (let sum (+ a2 b2)) (set (fib (Num n)) (Num sum))))
+	((let n (+ x 1)) (let sum (+ a1 b2)) (set (fib (Num n)) (Num sum))))
 
 (set (fib (Num 1)) (Num 1))
 (set (fib (Num 2)) (Num 1))
@@ -39,3 +38,5 @@
 
 (print fib)
 (check (= (fib (Num 10)) (Num 55)))
+
+
