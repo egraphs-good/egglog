@@ -239,7 +239,7 @@ fn subst(expr: &mut Expr, from: &Symbol, to: &Symbol) {
     match expr {
         Expr::Var(s) => {
             if s.as_str().eq(from.as_str()) {
-                *expr = Expr::Var(to.clone());
+                *expr = Expr::Var(*to);
             }
         }
 
@@ -315,12 +315,12 @@ fn subst_rule(rule: &mut Rule, from: &Symbol, to: &Symbol) -> Result<(), TypeErr
         log::debug!("Rule transformed to:\n{}", rule);
     }
 
-    return Ok(());
+    Ok(())
 }
 
 fn variable_folding(rule: Rule) -> Result<Rule, TypeError> {
     let mut rule_copy1 = rule.clone();
-    let mut rule_copy2 = rule.clone();
+    let mut rule_copy2 = rule;
     let mut change = true;
 
     while change {
@@ -330,15 +330,12 @@ fn variable_folding(rule: Rule) -> Result<Rule, TypeError> {
                 let lhs = &args[0];
                 let rhs = &args[1];
 
-                match (lhs, rhs) {
-                    (Expr::Var(v1), Expr::Var(v2)) => {
-                        if !v1.eq(v2) {
-                            subst_rule(&mut rule_copy2, v1, v2)?;
-                            change = true;
-                            break;
-                        }
+                if let (Expr::Var(v1), Expr::Var(v2)) = (lhs, rhs) {
+                    if !v1.eq(v2) {
+                        subst_rule(&mut rule_copy2, v1, v2)?;
+                        change = true;
+                        break;
                     }
-                    (_, _) => (),
                 }
             }
         }
