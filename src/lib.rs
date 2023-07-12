@@ -21,7 +21,7 @@ use proofs::ProofState;
 use symbolic_expressions::Sexp;
 
 use ast::*;
-use typechecking::{TypeInfo, UNIT_SYM};
+pub use typechecking::{TypeInfo, UNIT_SYM};
 
 use std::fmt::{Formatter, Write};
 use std::fs::File;
@@ -35,7 +35,7 @@ use std::rc::Rc;
 use std::{fmt::Debug, sync::Arc};
 use typecheck::Program;
 
-type ArcSort = Arc<dyn Sort>;
+pub type ArcSort = Arc<dyn Sort>;
 
 pub use value::*;
 
@@ -256,7 +256,7 @@ impl EGraph {
                 for (_, offs) in ix.iter() {
                     for off in offs {
                         assert!(
-                            (*off as usize) < function.nodes.len(),
+                            (*off as usize) < function.nodes.num_offsets(),
                             "index contains offset {off:?}, which is out of range for function {name}"
                         );
                     }
@@ -276,7 +276,7 @@ impl EGraph {
                         for (_, offs) in ix.iter() {
                             for off in offs {
                                 assert!(
-                                (*off as usize) < function.nodes.len(),
+                                (*off as usize) < function.nodes.num_offsets(),
                                 "index contains offset {off:?}, which is out of range for function {name}"
                             );
                             }
@@ -719,7 +719,7 @@ impl EGraph {
         Ok(())
     }
 
-    fn eval_expr(
+    pub fn eval_expr(
         &mut self,
         expr: &Expr,
         expected_type: Option<ArcSort>,
@@ -1025,7 +1025,13 @@ impl EGraph {
         let exprs = match variants {
             0 => vec![],
             1 => vec![expr.clone()],
-            _ => self.extract_variants(value, variants),
+            _ => {
+                if self.get_sort(&value).is_some_and(|sort| sort.is_eq_sort()) {
+                    self.extract_variants(value, variants)
+                } else {
+                    vec![expr.clone()]
+                }
+            }
         };
         Ok(ExtractReport {
             cost,
@@ -1162,7 +1168,7 @@ impl EGraph {
         Ok(program)
     }
 
-    fn enable_proofs(&mut self) {
+    pub fn enable_proofs(&mut self) {
         let proofs_already_enabled = self.proofs_enabled;
         self.proofs_enabled = true;
         if !proofs_already_enabled && self.proofs_enabled {
@@ -1230,6 +1236,10 @@ impl EGraph {
 
     pub(crate) fn get_sort(&self, value: &Value) -> Option<&ArcSort> {
         self.proof_state.type_info.sorts.get(&value.tag)
+    }
+
+    pub fn add_arcsort(&mut self, arcsort: ArcSort) -> Result<(), TypeError> {
+        self.proof_state.type_info.add_arcsort(arcsort)
     }
 
     // Gets the last extract report and returns it, if the last command saved it.
