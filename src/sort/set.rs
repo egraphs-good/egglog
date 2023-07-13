@@ -188,7 +188,7 @@ impl PrimitiveLike for SetOf {
 
     fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         let set = ValueSet::from_iter(values.iter().copied());
-        set.store(&self.set)
+        Some(set.store(&self.set).unwrap())
     }
 }
 

@@ -199,7 +199,7 @@ impl PrimitiveLike for VecRebuild {
                 updated
             })
             .collect();
-        new_set.store(&self.vec)
+        Some(new_set.store(&self.vec).unwrap())
     }
 }
 

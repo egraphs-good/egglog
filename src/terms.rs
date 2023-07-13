@@ -1,14 +1,6 @@
 use crate::*;
 
 impl ProofState {
-    fn presort_table_name(&self, name: Symbol) -> Symbol {
-        Symbol::from(format!(
-            "{}_PresortTable{}",
-            name,
-            "_".repeat(self.desugar.number_underscores)
-        ))
-    }
-
     pub(crate) fn parent_name(&self, sort: Symbol) -> Symbol {
         Symbol::from(format!(
             "{}_Parent{}",
@@ -212,11 +204,6 @@ impl ProofState {
                     res.extend(self.parse_actions(vec![format!("(set {lhs_wrapped} {lhs})",)]))
                 }
 
-                if lhs_type.is_container_sort() {
-                    let presort_table_name = self.presort_table_name(lhs_type.name());
-                    res.extend(self.parse_actions(vec![format!("({presort_table_name} {lhs})",)]));
-                }
-
                 res
             }
             NormAction::LetLit(..)
@@ -337,12 +324,9 @@ impl ProofState {
             }
 
             match &command.command {
-                NCommand::Sort(name, presort_and_args) => {
+                NCommand::Sort(name, _presort_and_args) => {
                     res.push(command.to_command());
                     res.extend(self.make_parent_table(*name));
-                    if presort_and_args.is_some() {
-                        res.extend(self.make_presort_table(*name));
-                    }
                 }
                 NCommand::Function(fdecl) => {
                     res.push(Command::Function(self.instrument_fdecl(fdecl)));
@@ -392,18 +376,6 @@ impl ProofState {
         }
 
         res
-    }
-
-    fn make_presort_table(&self, name: Symbol) -> Vec<Command> {
-        let table_name = self.presort_table_name(name);
-        let rebuilding_ruleset_name = self.rebuilding_ruleset_name();
-        self.parse_program(&format!(
-            "(relation {table_name} ({name}))
-             (rule (({table_name} value))
-                   ((let rebuilt (rebuild value)))
-                   :ruleset {rebuilding_ruleset_name})",
-        ))
-        .unwrap()
     }
 
     fn parent_ruleset_name(&self) -> Symbol {
