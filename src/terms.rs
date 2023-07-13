@@ -86,16 +86,21 @@ impl ProofState {
         self.desugar.parser.parse(&rule).unwrap()
     }
 
-    fn instrument_fact(&mut self, fact: &NormFact) -> Vec<Fact> {
+    fn instrument_fact(&mut self, fact: &NormFact, canon_vars: &mut HashSet<Symbol>) -> Vec<Fact> {
+        let mut maybe_wrap_parent = |var: Symbol, canon_vars: &HashSet<Symbol>| {
+            if canon_vars.contains(&var) {
+                Some(var.to_string())
+            } else {
+                let var_t = self.type_info.lookup(self.current_ctx, var).unwrap();
+                self.wrap_parent(var.to_string(), var_t)
+            }
+        };
+
         match fact {
             NormFact::ConstrainEq(lhs, rhs) => {
-                let lhs_t = self.type_info.lookup(self.current_ctx, *lhs).unwrap();
-                let rhs_t = self.type_info.lookup(self.current_ctx, *rhs).unwrap();
-                assert!(lhs_t.name() == rhs_t.name());
-
                 if let (Some(lhs_wrapped), Some(rhs_wrapped)) = (
-                    self.wrap_parent(lhs.to_string(), lhs_t),
-                    self.wrap_parent(rhs.to_string(), rhs_t),
+                    maybe_wrap_parent(*lhs, canon_vars),
+                    maybe_wrap_parent(*rhs, canon_vars),
                 ) {
                     vec![
                         format!("(= {} {})", lhs_wrapped, rhs_wrapped),
@@ -113,11 +118,7 @@ impl ProofState {
                 let children_parents = children
                     .iter()
                     .map(|child| {
-                        self.wrap_parent(
-                            child.to_string(),
-                            self.type_info.lookup(self.current_ctx, *child).unwrap(),
-                        )
-                        .unwrap_or_else(|| child.to_string())
+                        maybe_wrap_parent(*child, canon_vars).unwrap_or_else(|| child.to_string())
                     })
                     .collect::<Vec<String>>();
 
@@ -130,15 +131,17 @@ impl ProofState {
                 vec![fact.to_fact()]
                     .into_iter()
                     .chain({
-                        let facts = body
-                            .iter()
-                            .filter_map(|child| {
-                                let child_t =
-                                    self.type_info.lookup(self.current_ctx, *child).unwrap();
-                                self.wrap_parent(child.to_string(), child_t)
-                                    .map(|child_wrapped| format!("(= {} {})", child_wrapped, child))
-                            })
-                            .collect();
+                        let facts =
+                            body.iter()
+                                .filter_map(|child| {
+                                    let wrapped = maybe_wrap_parent(*child, canon_vars).map(
+                                        |child_wrapped| format!("(= {} {})", child_wrapped, child),
+                                    );
+
+                                    canon_vars.insert(*child);
+                                    wrapped
+                                })
+                                .collect();
                         // optimization: only match on
                         // canonical enodes
                         self.parse_facts(facts)
@@ -173,7 +176,11 @@ impl ProofState {
     }
 
     fn instrument_facts(&mut self, facts: &[NormFact]) -> Vec<Fact> {
-        facts.iter().flat_map(|f| self.instrument_fact(f)).collect()
+        let mut canon_vars = HashSet::<Symbol>::default();
+        facts
+            .iter()
+            .flat_map(|f| self.instrument_fact(f, &mut canon_vars))
+            .collect()
     }
 
     fn parse_facts(&self, facts: Vec<String>) -> Vec<Fact> {
