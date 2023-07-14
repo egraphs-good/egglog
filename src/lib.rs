@@ -418,6 +418,7 @@ impl EGraph {
                 function = self.functions.get_mut(&func).unwrap();
                 stack.clear();
             }
+
             if let Some(prog) = &merge_prog {
                 // TODO: error handling?
                 self.run_actions(&mut stack, &[*old, *new], prog, true)

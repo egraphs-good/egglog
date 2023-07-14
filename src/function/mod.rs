@@ -64,7 +64,8 @@ impl ResolvedSchema {
 pub(crate) type DeferredMerge = (ValueVec, Value, Value);
 
 impl Function {
-    pub fn new(egraph: &EGraph, decl: &FunctionDecl) -> Result<Self, Error> {
+    pub fn new(egraph: &mut EGraph, decl: &FunctionDecl) -> Result<Self, Error> {
+        assert!(!egraph.functions.contains_key(&decl.name));
         let mut input = Vec::with_capacity(decl.schema.input.len());
         for s in &decl.schema.input {
             input.push(match egraph.proof_state.type_info.sorts.get(s) {
@@ -358,6 +359,7 @@ impl Function {
         scratch: &mut ValueVec,
         deferred_merges: &mut Vec<(ValueVec, Value, Value)>,
     ) -> Result<(), Error> {
+        eprintln!("rebuild at ");
         let mut result: Result<(), Error> = Ok(());
         let mut modified = false;
         let (args, out) = if let Some(x) = self.nodes.get_index(i) {
