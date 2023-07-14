@@ -76,6 +76,9 @@ impl NormCommand {
                 ruleset: *ruleset,
                 rule: rule.resugar(),
             },
+            NCommand::Check(facts) => {
+                Command::Check(NormRule::resugar_facts(facts, &mut Default::default()))
+            }
             _ => self.command.to_command(),
         }
     }
@@ -428,6 +431,9 @@ impl Display for Command {
                 name,
                 rule,
             } => rule.fmt_with_ruleset(f, *ruleset, *name),
+            Command::Check(facts) => {
+                write!(f, "(check {})", ListDisplay(facts, "\n"))
+            }
             _ => write!(f, "{}", self.to_sexp()),
         }
     }
@@ -870,9 +876,9 @@ impl NormRule {
         }
     }
 
-    pub fn globals_used_in_matcher(&self) -> HashSet<Symbol> {
+    pub fn globals_used_in_matcher(facts: &Vec<NormFact>) -> HashSet<Symbol> {
         let mut bound_vars = HashSet::<Symbol>::default();
-        for fact in &self.body {
+        for fact in facts {
             fact.map_def_use(&mut |var, def| {
                 if def {
                     bound_vars.insert(var);
@@ -882,7 +888,7 @@ impl NormRule {
         }
 
         let mut unbound_vars = HashSet::<Symbol>::default();
-        for fact in &self.body {
+        for fact in facts {
             fact.map_def_use(&mut |var, def| {
                 if !def && !bound_vars.contains(&var) {
                     unbound_vars.insert(var);
@@ -894,8 +900,8 @@ impl NormRule {
     }
 
     // just get rid of all the equality constraints for now
-    pub fn resugar_facts(&self, subst: &mut HashMap<Symbol, Expr>) -> Vec<Fact> {
-        let unbound = self.globals_used_in_matcher();
+    pub fn resugar_facts(facts: &Vec<NormFact>, subst: &mut HashMap<Symbol, Expr>) -> Vec<Fact> {
+        let unbound = NormRule::globals_used_in_matcher(facts);
         let mut unionfind = UnionFind::default();
         let mut var_to_id = HashMap::<Symbol, Id>::default();
         let mut id_to_var = HashMap::<Id, Symbol>::default();
@@ -909,7 +915,7 @@ impl NormRule {
                 id
             }
         };
-        for norm_fact in &self.body {
+        for norm_fact in facts {
             if let NormFact::ConstrainEq(v1, v2) = norm_fact {
                 let id1 = get_id(*v1, &mut unionfind);
                 let id2 = get_id(*v2, &mut unionfind);
@@ -929,7 +935,7 @@ impl NormRule {
         }
 
         let mut res = vec![];
-        for fact in &self.body {
+        for fact in facts {
             match fact {
                 NormFact::ConstrainEq(..) => (),
                 NormFact::AssignVar(..) => (),
@@ -1053,7 +1059,7 @@ impl NormRule {
     pub fn resugar(&self) -> Rule {
         let mut subst = HashMap::<Symbol, Expr>::default();
 
-        let facts_resugared = self.resugar_facts(&mut subst);
+        let facts_resugared = NormRule::resugar_facts(&self.body, &mut subst);
 
         Rule {
             head: self.resugar_actions(&mut subst),
