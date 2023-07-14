@@ -1,5 +1,6 @@
 use hashbrown::hash_map::Entry as HEntry;
 use indexmap::map::Entry;
+use log::log_enabled;
 use smallvec::SmallVec;
 
 use crate::{
@@ -28,6 +29,29 @@ enum Instr<'a> {
         args: Vec<AtomTerm>,
         check: bool, // check or assign to output variable
     },
+}
+
+struct InputSizes<'a> {
+    cur_stage: usize,
+    // Each stage we're intersecting {set_k}_k
+    // O(max_k(|set_k|))
+    stage_sizes: &'a mut HashMap<usize, Vec<usize>>,
+}
+
+impl<'a> InputSizes<'a> {
+    fn add_measurement(&mut self, max_size: usize) {
+        self.stage_sizes
+            .entry(self.cur_stage)
+            .or_default()
+            .push(max_size);
+    }
+
+    fn next(&mut self) -> InputSizes {
+        InputSizes {
+            cur_stage: self.cur_stage + 1,
+            stage_sizes: self.stage_sizes,
+        }
+    }
 }
 
 type Result = std::result::Result<(), ()>;
@@ -89,7 +113,13 @@ impl<'b> Context<'b> {
         Some((ctx, program, intersections))
     }
 
-    fn eval<F>(&mut self, tries: &mut [&LazyTrie], program: &[Instr], f: &mut F) -> Result
+    fn eval<F>(
+        &mut self,
+        tries: &mut [&LazyTrie],
+        program: &[Instr],
+        mut stage: InputSizes,
+        f: &mut F,
+    ) -> Result
     where
         F: FnMut(&[Value]) -> Result,
     {
@@ -110,7 +140,7 @@ impl<'b> Context<'b> {
                 if let Some(next) = tries[*index].get(trie_access, *val) {
                     let old = tries[*index];
                     tries[*index] = next;
-                    self.eval(tries, program, f)?;
+                    self.eval(tries, program, stage.next(), f)?;
                     tries[*index] = old;
                 }
                 Ok(())
@@ -119,11 +149,18 @@ impl<'b> Context<'b> {
                 value_idx,
                 trie_accesses,
             } => {
+                if let Some(x) = trie_accesses
+                    .iter()
+                    .map(|(atom, _)| tries[*atom].len())
+                    .max()
+                {
+                    stage.add_measurement(x);
+                }
                 match trie_accesses.as_slice() {
                     [(j, access)] => tries[*j].for_each(access, |value, trie| {
                         let old_trie = std::mem::replace(&mut tries[*j], trie);
                         self.tuple[*value_idx] = value;
-                        self.eval(tries, program, f)?;
+                        self.eval(tries, program, stage.next(), f)?;
                         tries[*j] = old_trie;
                         Ok(())
                     }),
@@ -138,7 +175,7 @@ impl<'b> Context<'b> {
                                 let old_ta = std::mem::replace(&mut tries[a.0], ta);
                                 let old_tb = std::mem::replace(&mut tries[b.0], tb);
                                 self.tuple[*value_idx] = value;
-                                self.eval(tries, program, f)?;
+                                self.eval(tries, program, stage.next(), f)?;
                                 tries[a.0] = old_ta;
                                 tries[b.0] = old_tb;
                             }
@@ -167,7 +204,7 @@ impl<'b> Context<'b> {
 
                             // at this point, new_tries is ready to go
                             self.tuple[*value_idx] = value;
-                            self.eval(&mut new_tries, program, f)
+                            self.eval(&mut new_tries, program, stage.next(), f)
                         })
                     }
                 }
@@ -201,7 +238,7 @@ impl<'b> Context<'b> {
                             }
                         }
                     }
-                    self.eval(tries, program, f)?;
+                    self.eval(tries, program, stage.next(), f)?;
                 }
 
                 Ok(())
@@ -528,7 +565,23 @@ impl EGraph {
                         }
                     }
                     let mut trie_refs = tries.iter().collect::<Vec<_>>();
-                    ctx.eval(&mut trie_refs, &program.0, &mut f).unwrap_or(());
+                    let mut meausrements = HashMap::<usize, Vec<usize>>::default();
+                    let stages = InputSizes {
+                        stage_sizes: &mut meausrements,
+                        cur_stage: 0,
+                    };
+                    ctx.eval(&mut trie_refs, &program.0, stages, &mut f)
+                        .unwrap_or(());
+                    let sums = Vec::from_iter(
+                        meausrements
+                            .iter()
+                            .map(|(x, y)| (*x, y.iter().copied().sum::<usize>())),
+                    );
+                    if log_enabled!(log::Level::Debug) {
+                        for (i, sum) in sums {
+                            log::debug!("stage {i} total cost {sum}");
+                        }
+                    }
                     log::debug!(
                         "Matched {} times (took {:?})",
                         ctx.matches,
@@ -545,9 +598,15 @@ impl EGraph {
                 timestamp_ranges[atom_i] = 0..timestamp;
             }
         } else if let Some((mut ctx, program, _)) = Context::new(self, cq, &[]) {
+            let mut meausrements = HashMap::<usize, Vec<usize>>::default();
+            let stages = InputSizes {
+                stage_sizes: &mut meausrements,
+                cur_stage: 0,
+            };
             let tries = LazyTrie::make_initial_vec(cq.query.atoms.len());
             let mut trie_refs = tries.iter().collect::<Vec<_>>();
-            ctx.eval(&mut trie_refs, &program.0, &mut f).unwrap_or(());
+            ctx.eval(&mut trie_refs, &program.0, stages, &mut f)
+                .unwrap_or(());
         }
     }
 }
