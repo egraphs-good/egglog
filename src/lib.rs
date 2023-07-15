@@ -412,6 +412,7 @@ impl EGraph {
         };
 
         for (inputs, old, new) in merges {
+            panic!("rebuilding merge");
             if let Some(prog) = function.merge.on_merge.clone() {
                 self.run_actions(&mut stack, &[*old, *new], &prog, true)
                     .unwrap();

@@ -27,7 +27,9 @@ impl Sort for I64Sort {
     // cf https://github.com/rust-lang/rust-clippy/issues/9422
     #[allow(clippy::unnecessary_lazy_evaluations)]
     fn register_primitives(self: Arc<Self>, typeinfo: &mut TypeInfo) {
-        typeinfo.add_primitive(TermOrdering {
+        typeinfo.add_primitive(TermOrderingMin {
+           });
+        typeinfo.add_primitive(TermOrderingMax {
            });
 
         type Opt<T=()> = Option<T>;

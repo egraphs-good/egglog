@@ -16,8 +16,9 @@ impl ProofState {
     pub(crate) fn union(&self, type_name: Symbol, lhs: &str, rhs: &str) -> String {
         let pname = self.parent_name(type_name);
         format!(
-            "(set ({pname} {lhs}) {rhs})
-             (set ({pname} {rhs}) {lhs})",
+            "(set ({pname}
+                   (ordering-max {lhs} {rhs}))
+                  (ordering-min {lhs} {rhs}))",
         )
     }
 
@@ -27,7 +28,7 @@ impl ProofState {
         self.parse_program(&format!(
             "(function {pname} ({name}) {name} 
                         :on_merge ({union_old_new})
-                        :merge (ordering-less old new)
+                        :merge (ordering-min old new)
                         )
             (rule ((= ({pname} a) b)
                    (= ({pname} b) c))
@@ -227,15 +228,11 @@ impl ProofState {
                     self.parse_actions(
                         vec![self.init(func_type.output.name(), &expr.to_string())]
                             .into_iter()
-                            .chain(
-                                self.union(
-                                    func_type.output.name(),
-                                    &expr.to_string(),
-                                    &var.to_string(),
-                                )
-                                .split('\n')
-                                .map(|s| s.to_string()),
-                            )
+                            .chain(vec![self.union(
+                                func_type.output.name(),
+                                &expr.to_string(),
+                                &var.to_string(),
+                            )])
                             .collect(),
                     )
                 } else {
@@ -248,12 +245,11 @@ impl ProofState {
                 assert_eq!(lhs_type.name(), rhs_type.name());
                 assert!(lhs_type.is_eq_sort());
 
-                self.parse_actions(
-                    self.union(lhs_type.name(), &lhs.to_string(), &rhs.to_string())
-                        .split('\n')
-                        .map(|s| s.to_string())
-                        .collect(),
-                )
+                self.parse_actions(vec![self.union(
+                    lhs_type.name(),
+                    &lhs.to_string(),
+                    &rhs.to_string(),
+                )])
             }
         }
     }

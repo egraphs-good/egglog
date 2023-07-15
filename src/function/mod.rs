@@ -359,7 +359,6 @@ impl Function {
         scratch: &mut ValueVec,
         deferred_merges: &mut Vec<(ValueVec, Value, Value)>,
     ) -> Result<(), Error> {
-        eprintln!("rebuild at ");
         let mut result: Result<(), Error> = Ok(());
         let mut modified = false;
         let (args, out) = if let Some(x) = self.nodes.get_index(i) {

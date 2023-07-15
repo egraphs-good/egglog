@@ -207,11 +207,11 @@ struct Ctor {
     map: Arc<MapSort>,
 }
 
-pub(crate) struct TermOrdering {}
+pub(crate) struct TermOrderingMin {}
 
-impl PrimitiveLike for TermOrdering {
+impl PrimitiveLike for TermOrderingMin {
     fn name(&self) -> Symbol {
-        "ordering-less".into()
+        "ordering-min".into()
     }
 
     fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
@@ -224,6 +224,30 @@ impl PrimitiveLike for TermOrdering {
     fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         assert_eq!(values.len(), 2);
         if values[0] < values[1] {
+            Some(values[0])
+        } else {
+            Some(values[1])
+        }
+    }
+}
+
+pub(crate) struct TermOrderingMax {}
+
+impl PrimitiveLike for TermOrderingMax {
+    fn name(&self) -> Symbol {
+        "ordering-max".into()
+    }
+
+    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
+        match types {
+            [a, b] if a.name() == b.name() => Some(a.clone()),
+            _ => None,
+        }
+    }
+
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+        assert_eq!(values.len(), 2);
+        if values[0] > values[1] {
             Some(values[0])
         } else {
             Some(values[1])

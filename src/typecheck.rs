@@ -856,7 +856,7 @@ impl EGraph {
                             let function = self.functions.get_mut(f).unwrap();
                             function.insert(args, merged, self.timestamp);
 
-                            if merged != old_value {
+                            if new_value != old_value {
                                 // re-borrow
                                 let function = self.functions.get_mut(f).unwrap();
                                 if let Some(prog) = function.merge.on_merge.clone() {
