@@ -556,10 +556,6 @@ impl EGraph {
                     check,
                 });
             } else {
-                eprintln!(
-                    "original facts: {}",
-                    ListDisplay(&query.query.original_facts, "\n")
-                );
                 panic!(
                     "unable to ground primitive computations!
                 query: {:?}",
@@ -629,7 +625,7 @@ impl EGraph {
                 if let Some((mut ctx, program, cols)) = Context::new(self, cq, &timestamp_ranges) {
                     let start = Instant::now();
                     log::debug!(
-                        "Query: {}\nNew atom: {}\nVars: {}\nProgram\n{}",
+                        "Query:\n{}\nNew atom: {}\nVars: {}\nProgram\n{}",
                         cq.query,
                         atom,
                         ListDisplay(cq.vars.keys(), " "),
@@ -663,12 +659,13 @@ impl EGraph {
                     };
                     ctx.eval(&mut trie_refs, &program.0, stages, &mut f)
                         .unwrap_or(());
-                    let sums = Vec::from_iter(
-                        meausrements
-                            .iter()
-                            .map(|(x, y)| (*x, y.iter().copied().sum::<usize>())),
-                    );
                     if log_enabled!(log::Level::Debug) {
+                        let mut sums = Vec::from_iter(
+                            meausrements
+                                .iter()
+                                .map(|(x, y)| (*x, y.iter().copied().sum::<usize>())),
+                        );
+                        sums.sort_by_key(|(x, _)| *x);
                         for (i, sum) in sums {
                             log::debug!("stage {i} total cost {sum}");
                         }

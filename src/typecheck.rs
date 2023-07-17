@@ -58,17 +58,20 @@ pub struct Query {
 impl std::fmt::Display for Query {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for atom in &self.atoms {
-            write!(f, "{atom}")?;
+            writeln!(f, "{atom}")?;
         }
-        if !self.filters.is_empty() {
-            write!(f, "where ")?;
+        if !self.filters.is_empty() && !self.function_filters.is_empty() {
+            writeln!(f, "where ")?;
             for filter in &self.filters {
-                write!(
+                writeln!(
                     f,
-                    "({} {}) ",
+                    "({} {})",
                     filter.head.name(),
                     ListDisplay(&filter.args, " ")
                 )?;
+            }
+            for filter in &self.function_filters {
+                writeln!(f, "({} {})", filter.head, ListDisplay(&filter.args, " "))?;
             }
         }
         Ok(())
@@ -130,7 +133,6 @@ impl<'a> Context<'a> {
         facts: &'a [Fact],
         actions: &'a [Action],
     ) -> Result<(Query, Vec<Action>), Vec<TypeError>> {
-        eprintln!("typechecking query: {}", ListDisplay(facts, " "));
         for fact in facts {
             self.typecheck_fact(fact);
         }
@@ -283,12 +285,6 @@ impl<'a> Context<'a> {
                 }
             }
         }
-
-        eprintln!(
-            "output filters: 
-            {}",
-            ListDisplay(&query.function_filters, "\n")
-        );
 
         if self.errors.is_empty() {
             Ok((query, res_actions))
