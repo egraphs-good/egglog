@@ -367,7 +367,7 @@ min max log2
 ```
 + - * / %           ; arithmetic
 < > <= >=           ; comparisons
-min max
+min max neg
 ```
 
 ### Sort: map
