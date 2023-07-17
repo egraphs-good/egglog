@@ -961,7 +961,8 @@ impl EGraph {
                 if should_run {
                     match &action {
                         NormAction::Let(name, contents) => {
-                            let (etype, value) = self.eval_expr(&contents.to_expr(), None, true)?;
+                            let (etype, value) =
+                                self.eval_expr(&contents.to_expr(false), None, true)?;
                             let present = self.global_bindings.insert(*name, (etype, value));
                             if present.is_some() {
                                 panic!("Variable {name} was already present in global bindings");
@@ -1187,7 +1188,6 @@ impl EGraph {
             .proof_state
             .desugar
             .desugar_program(program_terms, false, false)?;
-        eprintln!("term desugared {}", ListDisplay(&program, "\n"));
 
         if stop == CompilerPassStop::TermEncoding {
             return Ok(program);

@@ -556,7 +556,15 @@ impl EGraph {
                     check,
                 });
             } else {
-                panic!("unable to ground primitive computations")
+                eprintln!(
+                    "original facts: {}",
+                    ListDisplay(&query.query.original_facts, "\n")
+                );
+                panic!(
+                    "unable to ground primitive computations!
+                query: {:?}",
+                    query.query
+                )
             }
         }
 

@@ -630,8 +630,11 @@ pub enum NormFact {
 impl NormFact {
     pub fn to_fact(&self) -> Fact {
         match self {
-            NormFact::Assign(symbol, expr) | NormFact::Compute(symbol, expr) => {
-                Fact::Eq(vec![Expr::Var(*symbol), expr.to_expr()])
+            NormFact::Assign(symbol, expr) => {
+                Fact::Eq(vec![Expr::Var(*symbol), expr.to_expr(false)])
+            }
+            NormFact::Compute(symbol, expr) => {
+                Fact::Eq(vec![Expr::Var(*symbol), expr.to_expr(true)])
             }
             NormFact::AssignVar(lhs, rhs) => Fact::Eq(vec![Expr::Var(*lhs), Expr::Var(*rhs)]),
             NormFact::ConstrainEq(lhs, rhs) => Fact::Eq(vec![Expr::Var(*lhs), Expr::Var(*rhs)]),
@@ -735,7 +738,7 @@ pub enum NormAction {
 impl NormAction {
     pub fn to_action(&self) -> Action {
         match self {
-            NormAction::Let(symbol, expr) => Action::Let(*symbol, expr.to_expr()),
+            NormAction::Let(symbol, expr) => Action::Let(*symbol, expr.to_expr(false)),
             NormAction::LetVar(symbol, other) => Action::Let(*symbol, Expr::Var(*other)),
             NormAction::LetLit(symbol, lit) => Action::Let(*symbol, Expr::Lit(lit.clone())),
             NormAction::LetIteration(symbol) => Action::Let(*symbol, Expr::Var("iteration".into())),
@@ -964,7 +967,7 @@ impl NormRule {
         for a in &self.head {
             match a {
                 NormAction::Let(symbol, expr) => {
-                    let new_expr = expr.to_expr();
+                    let new_expr = expr.to_expr(false);
                     new_expr.map(&mut |subexpr| {
                         if let Expr::Var(v) = subexpr {
                             used.insert(*v);
@@ -998,7 +1001,7 @@ impl NormRule {
                     subst.insert(*symbol, Expr::Var("iteration".into()));
                 }
                 NormAction::Set(expr, other) => {
-                    let new_expr = expr.to_expr();
+                    let new_expr = expr.to_expr(false);
                     new_expr.map(&mut |subexpr| {
                         if let Expr::Var(v) = subexpr {
                             used.insert(*v);
@@ -1016,7 +1019,7 @@ impl NormRule {
                     }
                 }
                 NormAction::Delete(expr) => {
-                    let new_expr = expr.to_expr();
+                    let new_expr = expr.to_expr(false);
                     new_expr.map(&mut |subexpr| {
                         if let Expr::Var(v) = subexpr {
                             used.insert(*v);

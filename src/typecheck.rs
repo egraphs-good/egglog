@@ -11,7 +11,7 @@ pub struct Context<'a> {
     nodes: HashMap<ENode, Id>,
 }
 
-#[derive(Hash, Eq, PartialEq, Clone)]
+#[derive(Hash, Eq, PartialEq, Clone, Debug)]
 enum ENode {
     Func(Symbol, Vec<Id>),
     Prim(Primitive, Vec<Id>),
@@ -52,6 +52,7 @@ pub struct Query {
     pub atoms: Vec<Atom<Symbol>>,
     pub filters: Vec<Atom<Primitive>>,
     pub function_filters: Vec<Atom<Symbol>>,
+    pub original_facts: Vec<Fact>,
 }
 
 impl std::fmt::Display for Query {
@@ -129,6 +130,7 @@ impl<'a> Context<'a> {
         facts: &'a [Fact],
         actions: &'a [Action],
     ) -> Result<(Query, Vec<Action>), Vec<TypeError>> {
+        eprintln!("typechecking query: {}", ListDisplay(facts, " "));
         for fact in facts {
             self.typecheck_fact(fact);
         }
@@ -194,6 +196,7 @@ impl<'a> Context<'a> {
         }
 
         let get_leaf = |id: &Id| -> AtomTerm {
+            assert!(*id == self.unionfind.find(*id));
             let mk = || AtomTerm::Var(Symbol::from(format!("?__{}", id)));
             match leaves.get(id) {
                 Some(Expr::Var(v)) => {
@@ -208,7 +211,12 @@ impl<'a> Context<'a> {
             }
         };
 
-        let mut query = Query::default();
+        let mut query = Query {
+            original_facts: facts.iter().cloned().collect(),
+            atoms: vec![],
+            filters: vec![],
+            function_filters: vec![],
+        };
         let mut query_eclasses = HashSet::<Id>::default();
         // Now we can fill in the nodes with the canonical leaves
         for (node, id) in &self.nodes {
@@ -276,6 +284,12 @@ impl<'a> Context<'a> {
             }
         }
 
+        eprintln!(
+            "output filters: 
+            {}",
+            ListDisplay(&query.function_filters, "\n")
+        );
+
         if self.errors.is_empty() {
             Ok((query, res_actions))
         } else {
@@ -291,10 +305,15 @@ impl<'a> Context<'a> {
             for (mut node, id) in nodes {
                 // canonicalize
                 let id = self.unionfind.find(id);
-                if let ENode::Func(_, children) | ENode::Prim(_, children) = &mut node {
-                    for child in children {
-                        *child = self.unionfind.find(*child);
+                match &mut node {
+                    ENode::Func(_, children)
+                    | ENode::Prim(_, children)
+                    | ENode::ComputeFunc(_, children) => {
+                        for child in children {
+                            *child = self.unionfind.find(*child);
+                        }
                     }
+                    ENode::Var(_) | ENode::Literal(_) => {}
                 }
 
                 // reinsert and handle hit
@@ -472,7 +491,7 @@ impl<'a> Context<'a> {
                     let t = f.schema.output.clone();
                     (self.add_node(ENode::Func(*sym, ids)), Some(t))
                 } else if let Some(_prims) = self.egraph.proof_state.type_info.primitives.get(sym) {
-                    panic!("should have been desugared to compute");
+                    panic!("{sym} should have been desugared to compute");
                 } else {
                     self.errors.push(TypeError::Unbound(*sym));
                     (self.unionfind.make_set(), None)

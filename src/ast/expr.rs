@@ -68,11 +68,12 @@ pub enum NormExpr {
 }
 
 impl NormExpr {
-    pub fn to_expr(&self) -> Expr {
-        match self {
-            NormExpr::Call(op, args) => {
-                Expr::Call(*op, args.iter().map(|a| Expr::Var(*a)).collect())
-            }
+    pub fn to_expr(&self, is_compute: bool) -> Expr {
+        let NormExpr::Call(op, args) = self;
+        if is_compute {
+            Expr::Compute(*op, args.iter().map(|a| Expr::Var(*a)).collect())
+        } else {
+            Expr::Call(*op, args.iter().map(|a| Expr::Var(*a)).collect())
         }
     }
 
@@ -190,7 +191,7 @@ impl Expr {
 
 impl Display for NormExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.to_expr())
+        write!(f, "{}", self.to_expr(false))
     }
 }
 

@@ -151,11 +151,7 @@ fn normalize_expr(
                         }
                     }
                 }
-                if let Expr::Compute(..) = expr {
-                    res.push(NormFact::Compute(lhs, NormExpr::Call(*f, new_children)));
-                } else {
-                    res.push(NormFact::Assign(lhs, NormExpr::Call(*f, new_children)));
-                }
+                res.push(NormFact::Assign(lhs, NormExpr::Call(*f, new_children)));
             }
         }
     };
@@ -843,6 +839,7 @@ impl Desugar {
                 }
             }
             Expr::Call(f, children) | Expr::Compute(f, children) => {
+                let is_compute = matches!(expr, Expr::Compute(..));
                 let assign = self.get_fresh();
                 let mut new_children = vec![];
                 for child in children {
@@ -857,7 +854,7 @@ impl Desugar {
                     }
                 }
                 let result = NormExpr::Call(*f, new_children);
-                let result_expr = result.to_expr();
+                let result_expr = result.to_expr(is_compute);
                 if let Some(existing) = memo.get(&result_expr) {
                     *existing
                 } else {
