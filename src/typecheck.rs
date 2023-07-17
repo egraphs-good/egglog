@@ -214,36 +214,20 @@ impl<'a> Context<'a> {
         };
 
         let mut query = Query {
-            original_facts: facts.iter().cloned().collect(),
+            original_facts: facts.to_vec(),
             atoms: vec![],
             filters: vec![],
             function_filters: vec![],
         };
-        let mut query_eclasses = HashSet::<Id>::default();
         // Now we can fill in the nodes with the canonical leaves
         for (node, id) in &self.nodes {
             match node {
                 ENode::Func(f, ids) => {
                     let args = ids.iter().chain([id]).map(get_leaf).collect();
-                    for id in ids {
-                        query_eclasses.insert(*id);
-                    }
                     query.atoms.push(Atom { head: *f, args });
                 }
                 ENode::Prim(p, ids) => {
-                    let mut args = vec![];
-                    for child in ids {
-                        let leaf = get_leaf(child);
-                        if let AtomTerm::Var(v) = leaf {
-                            if self.egraph.global_bindings.contains_key(&v) {
-                                args.push(AtomTerm::Value(self.egraph.global_bindings[&v].1));
-                                continue;
-                            }
-                        }
-                        args.push(get_leaf(child));
-                        query_eclasses.insert(*child);
-                    }
-                    args.push(get_leaf(id));
+                    let args = ids.iter().chain([id]).map(get_leaf).collect();
                     query.filters.push(Atom {
                         head: p.clone(),
                         args,
@@ -251,27 +235,26 @@ impl<'a> Context<'a> {
                 }
                 ENode::ComputeFunc(f, ids) => {
                     let args = ids.iter().chain([id]).map(get_leaf).collect();
-                    for id in ids {
-                        query_eclasses.insert(*id);
-                    }
                     query.function_filters.push(Atom { head: *f, args });
                 }
-                _ => {}
+                ENode::Var(..) | ENode::Literal(..) => {}
             }
         }
 
-        // filter for global variables
+        // what if non-equal two global variables
+        // are in the same class?
         for node in &self.nodes {
             if let ENode::Var(var) = node.0 {
                 if let Some((_sort, value)) = self.egraph.global_bindings.get(var) {
                     let canon = get_leaf(node.1);
 
-                    // canon is either a global variable or a literal
+                    // canon is either a global variable
+                    // or a literal
                     let canon_value = match canon {
                         AtomTerm::Var(v) => self.egraph.global_bindings[&v].1,
                         AtomTerm::Value(v) => v,
                     };
-                    // we actually know the query won't fire
+                    // query should never fire
                     if canon_value != *value {
                         query.filters.push(Atom {
                             head: Primitive(Arc::new(ValueEq {})),
@@ -451,20 +434,23 @@ impl<'a> Context<'a> {
 
                     (self.unionfind.make_set(), None)
                 } else if let Some(f) = self.egraph.functions.get(sym) {
-                    if f.schema.input.len() != args.len() {
-                        self.errors.push(TypeError::Arity {
-                            expr: expr.clone(),
-                            expected: f.schema.input.len(),
-                        });
-                    }
+                    let (ids, arg_tys): (Vec<Id>, Vec<Option<ArcSort>>) =
+                        args.iter().map(|arg| self.infer_query_expr(arg)).unzip();
 
-                    let ids: Vec<Id> = args
-                        .iter()
-                        .zip(&f.schema.input)
-                        .map(|(arg, ty)| self.check_query_expr(arg, ty.clone()))
-                        .collect();
-                    let t = f.schema.output.clone();
-                    (self.add_node(ENode::ComputeFunc(*sym, ids)), Some(t))
+                    if let Some(arg_tys) = arg_tys.iter().cloned().collect::<Option<Vec<ArcSort>>>()
+                    {
+                        assert!(arg_tys.len() == f.schema.input.len());
+                        assert!(arg_tys
+                            .iter()
+                            .zip(&f.schema.input)
+                            .all(|(a, b)| { a.name() == b.name() }));
+                        (
+                            self.add_node(ENode::ComputeFunc(*sym, ids)),
+                            Some(f.schema.output.clone()),
+                        )
+                    } else {
+                        (self.unionfind.make_set(), None)
+                    }
                 } else {
                     self.errors.push(TypeError::Unbound(*sym));
                     (self.unionfind.make_set(), None)
@@ -702,7 +688,6 @@ trait ExprChecker<'a> {
                     })
                 } else {
                     panic!("Unbound function {}", sym);
-                    Err(TypeError::Unbound(*sym))
                 }
             }
         }

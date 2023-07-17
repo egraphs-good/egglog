@@ -164,9 +164,10 @@ impl Expr {
                     .collect(),
             ),
             Expr::Compute(op, children) => Sexp::List(
-                vec![Sexp::String(format!("{}!", op))]
+                vec![Sexp::String(format!("{}", op))]
                     .into_iter()
                     .chain(children.iter().map(|c| c.to_sexp()))
+                    .chain(vec![Sexp::String(":computed".to_string())])
                     .collect(),
             ),
         };
