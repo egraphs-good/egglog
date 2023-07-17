@@ -568,8 +568,7 @@ impl TypeInfo {
     }
 
     pub(crate) fn is_primitive(&self, sym: Symbol) -> bool {
-        let res = self.primitives.contains_key(&sym) || self.presort_names.contains(&sym);
-        res
+        self.primitives.contains_key(&sym) || self.presort_names.contains(&sym)
     }
 
     fn lookup_func(

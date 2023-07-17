@@ -536,7 +536,7 @@ impl<'a> ExprChecker<'a> for ActionChecker<'a> {
                     .unwrap(),
             ))
         } else if let Some((sort, v)) = self.egraph().global_bindings.get(&sym) {
-            self.instructions.push(Instruction::Value(v.clone()));
+            self.instructions.push(Instruction::Value(*v));
             Ok(((), sort.clone()))
         } else if let Some((i, _, ty)) = self.locals.get_full(&sym) {
             self.instructions.push(Instruction::Load(Load::Stack(i)));
@@ -655,7 +655,6 @@ trait ExprChecker<'a> {
                     })
                 } else {
                     panic!("Unbound function {}", sym);
-                    Err(TypeError::Unbound(*sym))
                 }
             }
         }
@@ -750,7 +749,7 @@ impl EGraph {
         for instr in &program.0 {
             match instr {
                 Instruction::Iteration => stack.push(self.iteration.into()),
-                Instruction::Value(v) => stack.push(v.clone()),
+                Instruction::Value(v) => stack.push(*v),
                 Instruction::Load(load) => match load {
                     Load::Stack(idx) => stack.push(stack[*idx]),
                     Load::Subst(idx) => stack.push(subst[*idx]),

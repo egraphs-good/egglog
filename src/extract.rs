@@ -102,9 +102,8 @@ impl<'a> Extractor<'a> {
             let arcsort = self.egraph.get_sort(value).unwrap();
             children.push(self.find_best(*value, termdag, arcsort).1)
         }
-        let res = termdag.make(node.sym, children);
-        let res_str = termdag.to_string(&res);
-        res
+
+        termdag.make(node.sym, children)
     }
 
     fn find(&self, value: Value) -> Id {

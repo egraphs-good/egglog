@@ -14,12 +14,9 @@ pub struct Function {
     pub schema: ResolvedSchema,
     pub merge: MergeAction,
     pub(crate) nodes: table::Table,
-    sorts: HashSet<Symbol>,
     pub(crate) indexes: Vec<Rc<ColumnIndex>>,
     pub(crate) rebuild_indexes: Vec<Option<CompositeColumnIndex>>,
     index_updated_through: usize,
-    updates: usize,
-    scratch: IndexSet<usize>,
 }
 
 #[derive(Clone)]
@@ -48,20 +45,6 @@ pub struct ResolvedSchema {
     pub input: Vec<ArcSort>,
     pub output: ArcSort,
 }
-
-impl ResolvedSchema {
-    pub fn get_by_pos(&self, index: usize) -> Option<&ArcSort> {
-        if self.input.len() == index {
-            Some(&self.output)
-        } else {
-            self.input.get(index)
-        }
-    }
-}
-
-/// A non-Union merge discovered during rebuilding that has to be applied before
-/// resuming execution.
-pub(crate) type DeferredMerge = (ValueVec, Value, Value);
 
 impl Function {
     pub fn new(egraph: &mut EGraph, decl: &FunctionDecl) -> Result<Self, Error> {
@@ -120,23 +103,14 @@ impl Function {
             }
         }));
 
-        let sorts: HashSet<Symbol> = input
-            .iter()
-            .map(|x| x.name())
-            .chain(once(output.name()))
-            .collect();
-
         Ok(Function {
             decl: decl.clone(),
             schema: ResolvedSchema { input, output },
             nodes: Default::default(),
-            scratch: Default::default(),
-            sorts,
             // TODO: build indexes for primitive sorts lazily
             indexes,
             rebuild_indexes,
             index_updated_through: 0,
-            updates: 0,
             merge: MergeAction {
                 on_merge,
                 merge_vals,
@@ -216,10 +190,6 @@ impl Function {
         res
     }
 
-    pub(crate) fn clear_updates(&mut self) -> usize {
-        mem::take(&mut self.updates)
-    }
-
     fn build_indexes(&mut self, offsets: Range<usize>) {
         for (col, (index, rebuild_index)) in self
             .indexes
@@ -290,137 +260,6 @@ impl Function {
         timestamps: &Range<u32>,
     ) -> impl Iterator<Item = (usize, &[Value], &TupleOutput)> {
         self.nodes.iter_timestamp_range(timestamps)
-    }
-
-    pub fn rebuild(
-        &mut self,
-        uf: &mut UnionFind,
-        timestamp: u32,
-    ) -> Result<(usize, Vec<DeferredMerge>), Error> {
-        // Make sure indexes are up to date.
-        self.update_indexes(self.nodes.num_offsets());
-        if self.schema.input.iter().all(|s| !s.is_eq_sort()) && !self.schema.output.is_eq_sort() {
-            return Ok((std::mem::take(&mut self.updates), Default::default()));
-        }
-        let mut deferred_merges = Vec::new();
-        let mut scratch = ValueVec::new();
-        let n_unions = uf.n_unions();
-
-        if uf.new_ids(|sort| self.sorts.contains(&sort)) > (self.nodes.num_offsets() / 2) {
-            // basic heuristic: if we displaced a large number of ids relative
-            // to the size of the table, then just rebuild everything.
-            for i in 0..self.nodes.num_offsets() {
-                self.rebuild_at(i, timestamp, uf, &mut scratch, &mut deferred_merges)?;
-            }
-        } else {
-            let mut to_canon = mem::take(&mut self.scratch);
-
-            to_canon.clear();
-
-            for (i, (ridx, idx)) in self
-                .rebuild_indexes
-                .iter()
-                .zip(self.indexes.iter())
-                .enumerate()
-            {
-                let sort = self.schema.get_by_pos(i).unwrap();
-                if !sort.is_eq_container_sort() && !sort.is_eq_sort() {
-                    // No need to canonicalize in this case
-                    continue;
-                }
-
-                // attempt to use the rebuilding index if it exists
-                if let Some(ridx) = ridx {
-                    debug_assert!(sort.is_eq_container_sort());
-                    to_canon.extend(ridx.iter().flat_map(|idx| idx.to_canonicalize(uf)))
-                } else {
-                    debug_assert!(sort.is_eq_sort());
-                    to_canon.extend(idx.to_canonicalize(uf))
-                }
-            }
-
-            for i in to_canon.iter().copied() {
-                self.rebuild_at(i, timestamp, uf, &mut scratch, &mut deferred_merges)?;
-            }
-            self.scratch = to_canon;
-        }
-        self.maybe_rehash();
-        Ok((
-            uf.n_unions() - n_unions + std::mem::take(&mut self.updates),
-            deferred_merges,
-        ))
-    }
-
-    fn rebuild_at(
-        &mut self,
-        i: usize,
-        timestamp: u32,
-        uf: &mut UnionFind,
-        scratch: &mut ValueVec,
-        deferred_merges: &mut Vec<(ValueVec, Value, Value)>,
-    ) -> Result<(), Error> {
-        let mut result: Result<(), Error> = Ok(());
-        let mut modified = false;
-        let (args, out) = if let Some(x) = self.nodes.get_index(i) {
-            x
-        } else {
-            // Entry is stale
-            return result;
-        };
-
-        let mut out_val = out.value;
-        scratch.clear();
-        scratch.extend(args.iter().copied());
-
-        for (val, ty) in scratch.iter_mut().zip(&self.schema.input) {
-            modified |= ty.canonicalize(val, uf);
-        }
-
-        modified |= self.schema.output.canonicalize(&mut out_val, uf);
-
-        if !modified {
-            return result;
-        }
-        let out_ty = &self.schema.output;
-        self.nodes.insert_and_merge(scratch, timestamp, |prev| {
-            if let Some(mut prev) = prev {
-                out_ty.canonicalize(&mut prev, uf);
-                let mut appended = false;
-                if self.merge.on_merge.is_some() && prev != out_val {
-                    deferred_merges.push((scratch.clone(), prev, out_val));
-                    appended = true;
-                }
-                match &self.merge.merge_vals {
-                    MergeFn::Union => {
-                        debug_assert!(self.schema.output.is_eq_sort());
-                        uf.union_values(prev, out_val, self.schema.output.name())
-                    }
-                    MergeFn::AssertEq => {
-                        if prev != out_val {
-                            result = Err(Error::MergeError(self.decl.name, prev, out_val));
-                        }
-                        prev
-                    }
-                    MergeFn::Expr(_) => {
-                        if !appended {
-                            deferred_merges.push((scratch.clone(), prev, out_val));
-                        }
-                        prev
-                    }
-                }
-            } else {
-                out_val
-            }
-        });
-        if let Some((inputs, _)) = self.nodes.get_index(i) {
-            if inputs != &scratch[..] {
-                scratch.clear();
-                scratch.extend_from_slice(inputs);
-                self.nodes.remove(scratch, timestamp);
-                scratch.clear();
-            }
-        }
-        result
     }
 
     pub(crate) fn get_size(&self, range: &Range<u32>) -> usize {

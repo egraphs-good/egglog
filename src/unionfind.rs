@@ -3,7 +3,7 @@
 //!
 //! This implementation uses interior mutability for `find`.
 use crate::util::HashMap;
-use crate::{Id, Symbol, Value};
+use crate::{Id, Symbol};
 
 use std::cell::Cell;
 use std::fmt::Debug;
@@ -85,21 +85,6 @@ impl UnionFind {
             cur.set(grand.get());
             cur = grand;
         }
-    }
-
-    /// Merge the equivalence classes associated with the two values.
-    ///
-    /// This method assumes that the given values belong to the same, "eq-able",
-    /// sort. Its behavior is unspecified on other values.
-    pub fn union_values(&mut self, _val1: Value, _val2: Value, _sort: Symbol) -> Value {
-        panic!("We should never call union_values due to term encoding");
-    }
-
-    /// Like [`union_values`], but operating on raw [`Id`]s.
-    ///
-    /// [`union_values`]: UnionFind::union_values
-    pub fn union(&mut self, id1: Id, id2: Id, sort: Symbol) -> Id {
-        panic!("We should never call union due to term encoding");
     }
 
     /// Merge the underlying equivalence classes for the two ids.

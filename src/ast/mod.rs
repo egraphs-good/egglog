@@ -969,7 +969,7 @@ impl NormRule {
                         }
                         subexpr.clone()
                     });
-                    let substituted = new_expr.subst(&subst);
+                    let substituted = new_expr.subst(subst);
 
                     if substituted.ast_size() > 3 {
                         head.push(Action::Let(*symbol, substituted));
@@ -1005,7 +1005,7 @@ impl NormRule {
                     });
                     let other_expr = subst.get(other).unwrap_or(&Expr::Var(*other)).clone();
                     used.insert(*other);
-                    let substituted = new_expr.subst(&subst);
+                    let substituted = new_expr.subst(subst);
                     match substituted {
                         Expr::Call(op, children) => {
                             head.push(Action::Set(op, children, other_expr));
@@ -1021,7 +1021,7 @@ impl NormRule {
                         }
                         subexpr.clone()
                     });
-                    match new_expr.subst(&subst) {
+                    match new_expr.subst(subst) {
                         Expr::Call(op, children) => {
                             head.push(Action::Delete(op, children));
                         }

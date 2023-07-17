@@ -2,7 +2,7 @@
 use smallvec::SmallVec;
 use symbol_table::GlobalSymbol;
 
-use crate::{unionfind::UnionFind, util::HashMap, Value};
+use crate::{util::HashMap, Value};
 
 pub(crate) type Offset = u32;
 
@@ -56,19 +56,6 @@ impl ColumnIndex {
             )
         })
     }
-
-    pub(crate) fn to_canonicalize<'a>(
-        &'a self,
-        uf: &'a UnionFind,
-    ) -> impl Iterator<Item = usize> + '_ {
-        uf.dirty_ids(self.sort).flat_map(|x| {
-            self.get_indexes_for_bits(usize::from(x) as u64)
-                .unwrap_or(&[])
-                .iter()
-                .copied()
-                .map(|x| x as usize)
-        })
-    }
 }
 #[derive(Clone, Debug)]
 pub(crate) struct CompositeColumnIndex(SmallVec<[ColumnIndex; 2]>);
@@ -94,6 +81,7 @@ impl CompositeColumnIndex {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn iter(&self) -> impl Iterator<Item = &ColumnIndex> {
         self.0.iter()
     }
