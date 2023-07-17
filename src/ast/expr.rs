@@ -58,8 +58,8 @@ impl Display for Literal {
 pub enum Expr {
     Lit(Literal),
     Var(Symbol),
+    // TODO make this its own type
     Call(Symbol, Vec<Self>),
-    Compute(Symbol, Vec<Self>),
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
@@ -68,12 +68,11 @@ pub enum NormExpr {
 }
 
 impl NormExpr {
-    pub fn to_expr(&self, is_compute: bool) -> Expr {
-        let NormExpr::Call(op, args) = self;
-        if is_compute {
-            Expr::Compute(*op, args.iter().map(|a| Expr::Var(*a)).collect())
-        } else {
-            Expr::Call(*op, args.iter().map(|a| Expr::Var(*a)).collect())
+    pub fn to_expr(&self) -> Expr {
+        match self {
+            NormExpr::Call(op, args) => {
+                Expr::Call(*op, args.iter().map(|a| Expr::Var(*a)).collect())
+            }
         }
     }
 
@@ -115,7 +114,6 @@ impl Expr {
         match self {
             Expr::Var(_) | Expr::Lit(_) => &[],
             Expr::Call(_, children) => children,
-            Expr::Compute(_, children) => children,
         }
     }
 
@@ -146,10 +144,6 @@ impl Expr {
                 let children = children.iter().map(|c| c.map(f)).collect();
                 f(&Expr::Call(*op, children))
             }
-            Expr::Compute(op, children) => {
-                let children = children.iter().map(|c| c.map(f)).collect();
-                f(&Expr::Compute(*op, children))
-            }
         }
     }
 
@@ -161,13 +155,6 @@ impl Expr {
                 vec![Sexp::String(op.to_string())]
                     .into_iter()
                     .chain(children.iter().map(|c| c.to_sexp()))
-                    .collect(),
-            ),
-            Expr::Compute(op, children) => Sexp::List(
-                vec![Sexp::String(format!("{}", op))]
-                    .into_iter()
-                    .chain(children.iter().map(|c| c.to_sexp()))
-                    .chain(vec![Sexp::String(":computed".to_string())])
                     .collect(),
             ),
         };
@@ -182,17 +169,13 @@ impl Expr {
                 let children = children.iter().map(|c| c.subst(canon)).collect();
                 Expr::Call(*op, children)
             }
-            Expr::Compute(op, children) => {
-                let children = children.iter().map(|c| c.subst(canon)).collect();
-                Expr::Compute(*op, children)
-            }
         }
     }
 }
 
 impl Display for NormExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.to_expr(false))
+        write!(f, "{}", self.to_expr())
     }
 }
 

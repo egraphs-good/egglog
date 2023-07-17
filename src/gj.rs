@@ -29,11 +29,6 @@ enum Instr<'a> {
         args: Vec<AtomTerm>,
         check: bool, // check or assign to output variable
     },
-    CallFunc {
-        name: Symbol,
-        args: Vec<AtomTerm>,
-        check: bool,
-    },
 }
 
 struct InputSizes<'a> {
@@ -83,9 +78,6 @@ impl<'a> std::fmt::Display for Program<'a> {
                     trie_access,
                 } => {
                     writeln!(f, " ConstrainConstant {index} {trie_access} = {val:?}")?;
-                }
-                Instr::CallFunc { name, args, check } => {
-                    writeln!(f, " CallFunc {:?} {:?} {:?}", name, args, check)?;
                 }
                 Instr::Call { prim, args, check } => {
                     writeln!(f, " Call {:?} {:?} {:?}", prim, args, check)?;
@@ -251,42 +243,6 @@ impl<'b> Context<'b> {
 
                 Ok(())
             }
-            Instr::CallFunc { name, args, check } => {
-                let (out, args) = args.split_last().unwrap();
-                let mut values: Vec<Value> = vec![];
-                for arg in args {
-                    values.push(match arg {
-                        AtomTerm::Var(v) => {
-                            let i = self.query.vars.get_index_of(v).unwrap();
-                            self.tuple[i]
-                        }
-                        AtomTerm::Value(val) => *val,
-                    })
-                }
-
-                if let Some(res_tuple) = self.egraph.functions.get(name).unwrap().nodes.get(&values)
-                {
-                    let res = res_tuple.value;
-                    match out {
-                        AtomTerm::Var(v) => {
-                            let i = self.query.vars.get_index_of(v).unwrap();
-                            if *check && self.tuple[i] != res {
-                                return Ok(());
-                            }
-                            self.tuple[i] = res;
-                        }
-                        AtomTerm::Value(val) => {
-                            assert!(check);
-                            if val != &res {
-                                return Ok(());
-                            }
-                        }
-                    }
-                    self.eval(tries, program, stage.next(), f)?;
-                }
-
-                Ok(())
-            }
         }
     }
 }
@@ -348,12 +304,6 @@ impl EGraph {
 
         for prim in &query.filters {
             for v in prim.vars() {
-                vars.entry(v).or_default();
-            }
-        }
-
-        for atom in &query.function_filters {
-            for v in atom.vars() {
                 vars.entry(v).or_default();
             }
         }
@@ -527,43 +477,6 @@ impl EGraph {
         });
         program.extend(var_instrs);
 
-        // try to add function calls
-        let mut extra_funcs = query.query.function_filters.clone();
-        while !extra_funcs.is_empty() {
-            let next = extra_funcs.iter().position(|p| {
-                assert!(!p.args.is_empty());
-                p.args[..p.args.len() - 1].iter().all(|a| match a {
-                    AtomTerm::Var(v) => vars.contains_key(v),
-                    AtomTerm::Value(_) => true,
-                })
-            });
-
-            if let Some(i) = next {
-                let p = extra_funcs.remove(i);
-                let check = match p.args.last().unwrap() {
-                    AtomTerm::Var(v) => match vars.entry(*v) {
-                        Entry::Occupied(_) => true,
-                        Entry::Vacant(e) => {
-                            e.insert(Default::default());
-                            false
-                        }
-                    },
-                    AtomTerm::Value(_) => true,
-                };
-                program.push(Instr::CallFunc {
-                    name: p.head,
-                    args: p.args.clone(),
-                    check,
-                });
-            } else {
-                panic!(
-                    "unable to ground primitive computations!
-                query: {:?}",
-                    query.query
-                )
-            }
-        }
-
         // now we can try to add primitives
         // TODO this is very inefficient, since primitives all at the end
         let mut extra = query.query.filters.clone();
@@ -594,7 +507,7 @@ impl EGraph {
                     check,
                 });
             } else {
-                panic!("unable to ground primitive computations")
+                panic!("cycle")
             }
         }
 
@@ -625,7 +538,7 @@ impl EGraph {
                 if let Some((mut ctx, program, cols)) = Context::new(self, cq, &timestamp_ranges) {
                     let start = Instant::now();
                     log::debug!(
-                        "Query:\n{}\nNew atom: {}\nVars: {}\nProgram\n{}",
+                        "Query: {}\nNew atom: {}\nVars: {}\nProgram\n{}",
                         cq.query,
                         atom,
                         ListDisplay(cq.vars.keys(), " "),
@@ -659,13 +572,12 @@ impl EGraph {
                     };
                     ctx.eval(&mut trie_refs, &program.0, stages, &mut f)
                         .unwrap_or(());
+                    let sums = Vec::from_iter(
+                        meausrements
+                            .iter()
+                            .map(|(x, y)| (*x, y.iter().copied().sum::<usize>())),
+                    );
                     if log_enabled!(log::Level::Debug) {
-                        let mut sums = Vec::from_iter(
-                            meausrements
-                                .iter()
-                                .map(|(x, y)| (*x, y.iter().copied().sum::<usize>())),
-                        );
-                        sums.sort_by_key(|(x, _)| *x);
                         for (i, sum) in sums {
                             log::debug!("stage {i} total cost {sum}");
                         }

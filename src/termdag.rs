@@ -75,7 +75,7 @@ impl TermDag {
         let res = match expr {
             Expr::Lit(lit) => Term::Lit(lit.clone()),
             Expr::Var(v) => Term::Var(*v),
-            Expr::Call(op, args) | Expr::Compute(op, args) => {
+            Expr::Call(op, args) => {
                 let args = args
                     .iter()
                     .map(|a| {

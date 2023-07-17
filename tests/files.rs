@@ -41,7 +41,10 @@ impl Run {
 
             self.test_program(
                 &desugared_str,
-                &format!("ERROR after parse, to_string, and parse again.",),
+                &format!(
+                    "Program:\n{}\n ERROR after parse, to_string, and parse again.",
+                    desugared_str
+                ),
             );
         }
     }

@@ -102,57 +102,54 @@ fn normalize_expr(
         Expr::Lit(l) => res.push(NormFact::AssignLit(lhs, l.clone())),
         Expr::Var(_v) => panic!("Should have been handled above"),
 
-        Expr::Compute(f, children) | Expr::Call(f, children) => {
-            let is_computation = matches!(expr, Expr::Compute(..))
-                || (matches!(expr, Expr::Call(..)) && TypeInfo::default().is_primitive(*f));
-            if is_computation {
-                let mut new_children = vec![];
-                for child in children {
-                    match child {
-                        Expr::Var(v) => {
-                            new_children.push(*v);
-                        }
-                        Expr::Lit(l) => {
-                            let fresh = desugar.get_fresh();
-                            res.push(NormFact::AssignLit(fresh, l.clone()));
-                            new_children.push(fresh);
-                        }
-                        _ => {
-                            let fresh = desugar.get_fresh();
-                            normalize_expr(fresh, child, desugar, res, constraints, bound, cache);
-                            new_children.push(fresh);
-                        }
+        Expr::Call(f, children) if TypeInfo::default().is_primitive(*f) => {
+            let mut new_children = vec![];
+            for child in children {
+                match child {
+                    Expr::Var(v) => {
+                        new_children.push(*v);
+                    }
+                    Expr::Lit(l) => {
+                        let fresh = desugar.get_fresh();
+                        res.push(NormFact::AssignLit(fresh, l.clone()));
+                        new_children.push(fresh);
+                    }
+                    _ => {
+                        let fresh = desugar.get_fresh();
+                        normalize_expr(fresh, child, desugar, res, constraints, bound, cache);
+                        new_children.push(fresh);
                     }
                 }
-
-                res.push(NormFact::Compute(lhs, NormExpr::Call(*f, new_children)))
-            } else {
-                let mut new_children = vec![];
-                for child in children {
-                    match child {
-                        Expr::Var(v) => {
-                            if desugar.global_variables.contains(v) {
-                                let fresh = desugar.get_fresh();
-                                new_children.push(fresh);
-                                constraints.push((fresh, *v));
-                            } else if bound.insert(*v) {
-                                new_children.push(*v);
-                            } else {
-                                let new = desugar.get_fresh();
-                                new_children.push(new);
-                                constraints.push((new, *v));
-                            }
-                        }
-                        _ => {
-                            let fresh = desugar.get_fresh();
-                            bound.insert(fresh);
-                            normalize_expr(fresh, child, desugar, res, constraints, bound, cache);
-                            new_children.push(fresh);
-                        }
-                    }
-                }
-                res.push(NormFact::Assign(lhs, NormExpr::Call(*f, new_children)));
             }
+
+            res.push(NormFact::Compute(lhs, NormExpr::Call(*f, new_children)))
+        }
+        Expr::Call(f, children) => {
+            let mut new_children = vec![];
+            for child in children {
+                match child {
+                    Expr::Var(v) => {
+                        if desugar.global_variables.contains(v) {
+                            let fresh = desugar.get_fresh();
+                            new_children.push(fresh);
+                            constraints.push((fresh, *v));
+                        } else if bound.insert(*v) {
+                            new_children.push(*v);
+                        } else {
+                            let new = desugar.get_fresh();
+                            new_children.push(new);
+                            constraints.push((new, *v));
+                        }
+                    }
+                    _ => {
+                        let fresh = desugar.get_fresh();
+                        bound.insert(fresh);
+                        normalize_expr(fresh, child, desugar, res, constraints, bound, cache);
+                        new_children.push(fresh);
+                    }
+                }
+            }
+            res.push(NormFact::Assign(lhs, NormExpr::Call(*f, new_children)))
         }
     };
     cache.insert(expr.clone(), lhs);
@@ -838,8 +835,7 @@ impl Desugar {
                     *v
                 }
             }
-            Expr::Call(f, children) | Expr::Compute(f, children) => {
-                let is_compute = matches!(expr, Expr::Compute(..));
+            Expr::Call(f, children) => {
                 let assign = self.get_fresh();
                 let mut new_children = vec![];
                 for child in children {
@@ -854,7 +850,7 @@ impl Desugar {
                     }
                 }
                 let result = NormExpr::Call(*f, new_children);
-                let result_expr = result.to_expr(is_compute);
+                let result_expr = result.to_expr();
                 if let Some(existing) = memo.get(&result_expr) {
                     *existing
                 } else {

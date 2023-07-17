@@ -13,7 +13,7 @@ mod unionfind;
 pub mod util;
 mod value;
 
-use extract::Extractor;
+use extract::{Extractor, Node};
 use hashbrown::hash_map::Entry;
 use index::ColumnIndex;
 use instant::{Duration, Instant};
@@ -961,8 +961,7 @@ impl EGraph {
                 if should_run {
                     match &action {
                         NormAction::Let(name, contents) => {
-                            let (etype, value) =
-                                self.eval_expr(&contents.to_expr(false), None, true)?;
+                            let (etype, value) = self.eval_expr(&contents.to_expr(), None, true)?;
                             let present = self.global_bindings.insert(*name, (etype, value));
                             if present.is_some() {
                                 panic!("Variable {name} was already present in global bindings");
@@ -1188,7 +1187,6 @@ impl EGraph {
             .proof_state
             .desugar
             .desugar_program(program_terms, false, false)?;
-
         if stop == CompilerPassStop::TermEncoding {
             return Ok(program);
         }
