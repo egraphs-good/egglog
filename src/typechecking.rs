@@ -47,6 +47,7 @@ impl Default for TypeInfo {
         res.presorts.insert("Map".into(), MapSort::make_sort);
         res.presorts.insert("Set".into(), SetSort::make_sort);
         res.presorts.insert("Vec".into(), VecSort::make_sort);
+        res.presorts.insert("Lambda".into(), LambdaSort::make_sort);
         res
     }
 }
@@ -83,16 +84,23 @@ impl TypeInfo {
     }
 
     pub fn get_sort<S: Sort + Send + Sync>(&self) -> Arc<S> {
+        match self.get_sort_safe::<S>() {
+            Some(sort) => sort,
+            // TODO handle if multiple match?
+            // could handle by type id??
+            None => panic!("Failed to lookup sort: {}", std::any::type_name::<S>()),
+        }
+    }
+
+    pub fn get_sort_safe<S: Sort + Send + Sync>(&self) -> Option<Arc<S>> {
         for sort in self.sorts.values() {
             let sort = sort.clone().as_arc_any();
             if let Ok(sort) = Arc::downcast(sort) {
-                return sort;
+                return Some(sort);
             }
         }
 
-        // TODO handle if multiple match?
-        // could handle by type id??
-        panic!("Failed to lookup sort: {}", std::any::type_name::<S>());
+        None
     }
 
     pub fn add_primitive(&mut self, prim: impl Into<Primitive>) {
@@ -539,7 +547,7 @@ pub enum TypeError {
     #[error("Arity mismatch, expected {expected} args: {expr}")]
     Arity { expr: Expr, expected: usize },
     #[error(
-        "Type mismatch: expr = {expr}, expected = {}, actual = {}, reason: {reason}", 
+        "Type mismatch: expr = {expr}, expected = {}, actual = {}, reason: {reason}",
         .expected.name(), .actual.name(),
     )]
     Mismatch {

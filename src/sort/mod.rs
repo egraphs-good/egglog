@@ -19,6 +19,8 @@ mod set;
 pub use set::*;
 mod vec;
 pub use vec::*;
+mod lambda;
+pub use lambda::*;
 
 use crate::*;
 
@@ -58,6 +60,11 @@ pub trait Sort: Any + Send + Sync + Debug {
 
     fn register_primitives(self: Arc<Self>, info: &mut TypeInfo) {
         let _ = info;
+    }
+
+    /// Do any registration needed on the e-graph, like adding non primitive functions
+    fn register_egraph(self: Arc<Self>, egraph: &mut EGraph) {
+        let _ = egraph;
     }
 
     fn make_expr(&self, egraph: &EGraph, value: Value) -> Expr;
