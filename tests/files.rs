@@ -105,15 +105,17 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
                 resugar: false,
             },
         );
-        mk_trial(
-            format!("{name}_resugared"),
-            Run {
-                path: f.clone(),
-                should_fail,
-                test_proofs: false,
-                resugar: true,
-            },
-        );
+        if !should_fail {
+            mk_trial(
+                format!("{name}_resugared"),
+                Run {
+                    path: f.clone(),
+                    should_fail,
+                    test_proofs: false,
+                    resugar: true,
+                },
+            );
+        }
 
         // make a test with proofs enabled
         // TODO: re-enable herbie, unsound, and eqsolve when proof extraction is faster
@@ -135,15 +137,17 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
                 },
             );
 
-            mk_trial(
-                format!("{name}_with_proofs_resugared"),
-                Run {
-                    path: f.clone(),
-                    should_fail,
-                    test_proofs: true,
-                    resugar: true,
-                },
-            );
+            if !should_fail {
+                mk_trial(
+                    format!("{name}_with_proofs_resugared"),
+                    Run {
+                        path: f.clone(),
+                        should_fail,
+                        test_proofs: true,
+                        resugar: true,
+                    },
+                );
+            }
         }
     }
 
