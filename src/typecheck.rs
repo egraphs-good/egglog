@@ -15,6 +15,7 @@ pub struct Context<'a> {
 enum ENode {
     Func(Symbol, Vec<Id>),
     Prim(Primitive, Vec<Id>),
+    ComputeFunc(Symbol, Vec<Id>),
     Literal(Literal),
     Var(Symbol),
 }
@@ -50,6 +51,7 @@ impl<T: std::fmt::Display> std::fmt::Display for Atom<T> {
 pub struct Query {
     pub atoms: Vec<Atom<Symbol>>,
     pub filters: Vec<Atom<Primitive>>,
+    pub function_filters: Vec<Atom<Symbol>>,
 }
 
 impl std::fmt::Display for Query {
@@ -150,7 +152,7 @@ impl<'a> Context<'a> {
                 _ => continue,
             }
         }
-        // Globally bound variables first
+        // Globally bound variables next
         for (node, &id) in &self.nodes {
             match node {
                 ENode::Var(var) => {
@@ -236,6 +238,13 @@ impl<'a> Context<'a> {
                         head: p.clone(),
                         args,
                     });
+                }
+                ENode::ComputeFunc(f, ids) => {
+                    let args = ids.iter().chain([id]).map(get_leaf).collect();
+                    for id in ids {
+                        query_eclasses.insert(*id);
+                    }
+                    query.function_filters.push(Atom { head: *f, args });
                 }
                 _ => {}
             }
@@ -406,23 +415,8 @@ impl<'a> Context<'a> {
                 let t = self.egraph.proof_state.type_info.infer_literal(lit);
                 (self.add_node(ENode::Literal(lit.clone())), Some(t))
             }
-            Expr::Call(sym, args) => {
-                if let Some(f) = self.egraph.functions.get(sym) {
-                    if f.schema.input.len() != args.len() {
-                        self.errors.push(TypeError::Arity {
-                            expr: expr.clone(),
-                            expected: f.schema.input.len(),
-                        });
-                    }
-
-                    let ids: Vec<Id> = args
-                        .iter()
-                        .zip(&f.schema.input)
-                        .map(|(arg, ty)| self.check_query_expr(arg, ty.clone()))
-                        .collect();
-                    let t = f.schema.output.clone();
-                    (self.add_node(ENode::Func(*sym, ids)), Some(t))
-                } else if let Some(prims) = self.egraph.proof_state.type_info.primitives.get(sym) {
+            Expr::Compute(sym, args) => {
+                if let Some(prims) = self.egraph.proof_state.type_info.primitives.get(sym) {
                     let (ids, arg_tys): (Vec<Id>, Vec<Option<ArcSort>>) =
                         args.iter().map(|arg| self.infer_query_expr(arg)).unzip();
 
@@ -441,6 +435,44 @@ impl<'a> Context<'a> {
                     }
 
                     (self.unionfind.make_set(), None)
+                } else if let Some(f) = self.egraph.functions.get(sym) {
+                    if f.schema.input.len() != args.len() {
+                        self.errors.push(TypeError::Arity {
+                            expr: expr.clone(),
+                            expected: f.schema.input.len(),
+                        });
+                    }
+
+                    let ids: Vec<Id> = args
+                        .iter()
+                        .zip(&f.schema.input)
+                        .map(|(arg, ty)| self.check_query_expr(arg, ty.clone()))
+                        .collect();
+                    let t = f.schema.output.clone();
+                    (self.add_node(ENode::ComputeFunc(*sym, ids)), Some(t))
+                } else {
+                    self.errors.push(TypeError::Unbound(*sym));
+                    (self.unionfind.make_set(), None)
+                }
+            }
+            Expr::Call(sym, args) => {
+                if let Some(f) = self.egraph.functions.get(sym) {
+                    if f.schema.input.len() != args.len() {
+                        self.errors.push(TypeError::Arity {
+                            expr: expr.clone(),
+                            expected: f.schema.input.len(),
+                        });
+                    }
+
+                    let ids: Vec<Id> = args
+                        .iter()
+                        .zip(&f.schema.input)
+                        .map(|(arg, ty)| self.check_query_expr(arg, ty.clone()))
+                        .collect();
+                    let t = f.schema.output.clone();
+                    (self.add_node(ENode::Func(*sym, ids)), Some(t))
+                } else if let Some(_prims) = self.egraph.proof_state.type_info.primitives.get(sym) {
+                    panic!("should have been desugared to compute");
                 } else {
                     self.errors.push(TypeError::Unbound(*sym));
                     (self.unionfind.make_set(), None)
@@ -621,7 +653,7 @@ trait ExprChecker<'a> {
                 Ok((t, self.egraph().proof_state.type_info.infer_literal(lit)))
             }
             Expr::Var(sym) => self.infer_var(*sym),
-            Expr::Call(sym, args) => {
+            Expr::Call(sym, args) | Expr::Compute(sym, args) => {
                 if let Some(functype) = self.egraph().proof_state.type_info.func_types.get(sym) {
                     assert!(functype.input.len() == args.len());
 

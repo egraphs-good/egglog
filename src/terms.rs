@@ -93,7 +93,7 @@ impl ProofState {
                 Some(var.to_string())
             } else {
                 let var_t = self.type_info.lookup(self.current_ctx, var).unwrap();
-                self.wrap_parent(var.to_string(), var_t)
+                self.wrap_parent(var.to_string(), var_t, true)
             }
         };
 
@@ -162,15 +162,18 @@ impl ProofState {
         if sort.is_container_sort() {
             Some(format!("(rebuild {})", var))
         } else {
-            self.wrap_parent(var, sort)
+            self.wrap_parent(var, sort, true)
         }
     }
 
-    fn wrap_parent(&mut self, var: String, sort: ArcSort) -> Option<String> {
+    fn wrap_parent(&mut self, var: String, sort: ArcSort, computed: bool) -> Option<String> {
         // TODO make all containers also eq sort
         if sort.is_eq_sort() {
             let parent = self.parent_name(sort.name());
-            Some(format!("({parent} {var})"))
+            Some(format!(
+                "({parent} {var}{})",
+                if computed { " :computed" } else { "" }
+            ))
         } else {
             None
         }
@@ -208,7 +211,9 @@ impl ProofState {
                 let lhs_type = self.type_info.lookup(self.current_ctx, *lhs).unwrap();
                 let mut res = vec![action.to_action()];
 
-                if let Some(lhs_wrapped) = self.wrap_parent(lhs.to_string(), lhs_type.clone()) {
+                if let Some(lhs_wrapped) =
+                    self.wrap_parent(lhs.to_string(), lhs_type.clone(), false)
+                {
                     res.extend(self.parse_actions(vec![format!("(set {lhs_wrapped} {lhs})",)]))
                 }
 

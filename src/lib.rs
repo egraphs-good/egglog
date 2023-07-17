@@ -13,7 +13,7 @@ mod unionfind;
 pub mod util;
 mod value;
 
-use extract::{Extractor, Node};
+use extract::Extractor;
 use hashbrown::hash_map::Entry;
 use index::ColumnIndex;
 use instant::{Duration, Instant};
@@ -1187,6 +1187,8 @@ impl EGraph {
             .proof_state
             .desugar
             .desugar_program(program_terms, false, false)?;
+        eprintln!("term desugared {}", ListDisplay(&program, "\n"));
+
         if stop == CompilerPassStop::TermEncoding {
             return Ok(program);
         }

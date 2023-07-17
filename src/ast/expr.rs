@@ -58,8 +58,8 @@ impl Display for Literal {
 pub enum Expr {
     Lit(Literal),
     Var(Symbol),
-    // TODO make this its own type
     Call(Symbol, Vec<Self>),
+    Compute(Symbol, Vec<Self>),
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
@@ -114,6 +114,7 @@ impl Expr {
         match self {
             Expr::Var(_) | Expr::Lit(_) => &[],
             Expr::Call(_, children) => children,
+            Expr::Compute(_, children) => children,
         }
     }
 
@@ -144,6 +145,10 @@ impl Expr {
                 let children = children.iter().map(|c| c.map(f)).collect();
                 f(&Expr::Call(*op, children))
             }
+            Expr::Compute(op, children) => {
+                let children = children.iter().map(|c| c.map(f)).collect();
+                f(&Expr::Compute(*op, children))
+            }
         }
     }
 
@@ -153,6 +158,12 @@ impl Expr {
             Expr::Var(v) => Sexp::String(v.to_string()),
             Expr::Call(op, children) => Sexp::List(
                 vec![Sexp::String(op.to_string())]
+                    .into_iter()
+                    .chain(children.iter().map(|c| c.to_sexp()))
+                    .collect(),
+            ),
+            Expr::Compute(op, children) => Sexp::List(
+                vec![Sexp::String(format!("{}!", op))]
                     .into_iter()
                     .chain(children.iter().map(|c| c.to_sexp()))
                     .collect(),
@@ -168,6 +179,10 @@ impl Expr {
             Expr::Call(op, children) => {
                 let children = children.iter().map(|c| c.subst(canon)).collect();
                 Expr::Call(*op, children)
+            }
+            Expr::Compute(op, children) => {
+                let children = children.iter().map(|c| c.subst(canon)).collect();
+                Expr::Compute(*op, children)
             }
         }
     }

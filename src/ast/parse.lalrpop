@@ -23,7 +23,7 @@ pub Program: Vec<Command> = { (Command)* => <> }
 
 LParen: () = {
     "(" => (),
-    "[" => (), 
+    "[" => (),
 };
 RParen: () = {
     ")" => (),
@@ -148,7 +148,9 @@ Literal: Literal = {
 
 CallExpr: Expr = {
     LParen <head:Ident> <tail:(Expr)*> RParen => Expr::Call(head, tail),
+    LParen <head:Ident> <tail:(Expr)*> ":computed" RParen => Expr::Compute(head, tail),
 }
+
 
 ExprList: Vec<Expr> = { LParen <sexps:(Expr)*> RParen => sexps }
 

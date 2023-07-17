@@ -620,7 +620,9 @@ pub enum Fact {
 pub enum NormFact {
     Assign(Symbol, NormExpr), // assign symbol to a tuple
     AssignVar(Symbol, Symbol),
-    Compute(Symbol, NormExpr), // compute a primative
+    // compute a primitive or
+    // a function call
+    Compute(Symbol, NormExpr),
     AssignLit(Symbol, Literal),
     ConstrainEq(Symbol, Symbol),
 }
@@ -1050,6 +1052,7 @@ impl NormRule {
                     Expr::Var(..) => (),
                     Expr::Lit(..) => (),
                     Expr::Call(..) => head.push(Action::Expr(expr.clone())),
+                    Expr::Compute(..) => head.push(Action::Expr(expr.clone())),
                 };
             }
         }
