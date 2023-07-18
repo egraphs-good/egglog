@@ -9,7 +9,7 @@ This is repo for the `egglog` tool accompanying the paper
   "Better Together: Unifying Datalog and Equality Saturation"
   ([ACM DL](https://dl.acm.org/doi/10.1145/3591239), [arXiv](https://arxiv.org/abs/2304.04332)).
 
-If you use this work, please use [this citation](./CITATION.bib). 
+If you use this work, please use [this citation](./CITATION.bib).
 
 See also the Python binding, which provides a bit more documentation:
 https://egg-smol-python.readthedocs.io/en/latest/
@@ -30,7 +30,7 @@ make all
 ## Usage
 
 ```
-cargo run [-f fact-path] [-naive] <files.egg>
+cargo run [-f fact-path] [-naive] [--to-json] <files.egg>
 ```
 
 or just
@@ -138,7 +138,7 @@ If you define a `:merge` expression, you can update specific values in the funct
 (set (KeepMax 1) 1)
 (set (KeepMax 1) 2)   ; we redefine 1 to be 2
 (set (KeepMax 1) 0)   ; this does not change since we use max
-(extract (KeepMax 1)) ; this is 2  
+(extract (KeepMax 1)) ; this is 2
 ```
 
 ### `relation` command
@@ -240,7 +240,7 @@ Example:
          (Add b a))
 ```
 
-declares a rule that a `Add` variant is commutative. 
+declares a rule that a `Add` variant is commutative.
 
 ```
 (birewrite (* (* a b) c) (* a (* b c)))
@@ -326,7 +326,7 @@ Union only works on variants, not sorts.
 ### Name
 
 ```
-    [ <Ident> ] 
+    [ <Ident> ]
 ```
 
 ### Facts

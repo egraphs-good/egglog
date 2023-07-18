@@ -16,6 +16,7 @@ use index::ColumnIndex;
 use instant::{Duration, Instant};
 use sort::*;
 use thiserror::Error;
+pub use serialize::SerializeConfig;
 
 use proofs::ProofState;
 
