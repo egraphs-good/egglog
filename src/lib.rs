@@ -9,6 +9,7 @@ mod typechecking;
 mod unionfind;
 pub mod util;
 mod value;
+mod serialize;
 
 use hashbrown::hash_map::Entry;
 use index::ColumnIndex;

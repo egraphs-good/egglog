@@ -249,6 +249,7 @@ name = "egglog"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "egraph-serialize",
  "env_logger",
  "glob",
  "hashbrown 0.14.0",
@@ -269,6 +270,16 @@ dependencies = [
  "symbol_table",
  "symbolic_expressions",
  "thiserror",
+]
+
+[[package]]
+name = "egraph-serialize"
+version = "0.1.0"
+source = "git+https://github.com/egraphs-good/egraph-serialize?rev=54b1a4f1e2f2135846b084edcb495cd159839540#54b1a4f1e2f2135846b084edcb495cd159839540"
+dependencies = [
+ "indexmap 2.0.0",
+ "once_cell",
+ "ordered-float",
 ]
 
 [[package]]
