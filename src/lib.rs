@@ -3,20 +3,20 @@ mod extract;
 mod function;
 mod gj;
 mod proofs;
+mod serialize;
 pub mod sort;
 mod typecheck;
 mod typechecking;
 mod unionfind;
 pub mod util;
 mod value;
-mod serialize;
 
 use hashbrown::hash_map::Entry;
 use index::ColumnIndex;
 use instant::{Duration, Instant};
+pub use serialize::SerializeConfig;
 use sort::*;
 use thiserror::Error;
-pub use serialize::SerializeConfig;
 
 use proofs::ProofState;
 

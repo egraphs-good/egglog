@@ -109,7 +109,7 @@ impl EGraph {
             let children: Vec<_> = input
                 .iter()
                 // Filter out children which don't have an ID, meaning that we skipped emitting them due to size constraints
-                .filter_map(|v| self.serialize_value(&mut egraph, &mut  node_ids, v).1)
+                .filter_map(|v| self.serialize_value(&mut egraph, &mut node_ids, v).1)
                 .collect();
             egraph.nodes.insert(
                 node_id,

@@ -13,7 +13,7 @@ struct Args {
     #[clap(long)]
     proofs: bool,
     #[clap(long)]
-    to_json: bool
+    to_json: bool,
 }
 
 fn main() {

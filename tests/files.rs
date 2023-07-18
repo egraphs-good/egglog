@@ -16,7 +16,12 @@ impl Run {
     fn run(&self) {
         let _ = env_logger::builder().is_test(true).try_init();
         let program = std::fs::read_to_string(&self.path).unwrap();
-        self.test_program(&program, "Top level error", self.test_serialize, self.name.clone());
+        self.test_program(
+            &program,
+            "Top level error",
+            self.test_serialize,
+            self.name.clone(),
+        );
         if !self.should_fail {
             let mut egraph = EGraph::default();
             egraph.set_underscores_for_desugaring(4);
@@ -38,7 +43,7 @@ impl Run {
                     desugared_str
                 ),
                 false,
-                self.name.clone()
+                self.name.clone(),
             );
         }
     }
@@ -69,7 +74,7 @@ impl Run {
                 }
             }
         };
-        let serialized = egraph.serialize(SerializeConfig  {
+        let serialized = egraph.serialize(SerializeConfig {
             max_functions: Some(10),
             max_calls_per_function: Some(10),
             include_temporary_functions: false,
@@ -99,7 +104,7 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
             .replace(['.', '-', ' '], "_");
 
         let should_fail = f.to_string_lossy().contains("fail-typecheck");
-        let test_serialize = serialize_tests.iter().any(|&e| e== name);
+        let test_serialize = serialize_tests.iter().any(|&e| e == name);
         mk_trial(
             name.clone(),
             Run {
@@ -121,7 +126,7 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
             "lambda",
         ];
         if !banned.contains(&name.as_str()) {
-            let test_serialize = serialize_proof_tests.iter().any(|&e| e== name);
+            let test_serialize = serialize_proof_tests.iter().any(|&e| e == name);
             let name = format!("{}_with_proofs", name);
             mk_trial(
                 name.clone(),
