@@ -1,8 +1,0 @@
----
-source: tests/files.rs
-expression: serialized
----
-nodes: {}
-root_eclasses: []
-class_data: {}
-
