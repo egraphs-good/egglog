@@ -3,6 +3,7 @@ mod extract;
 mod function;
 mod gj;
 mod proofs;
+mod serialize;
 pub mod sort;
 mod typecheck;
 mod typechecking;
@@ -13,6 +14,7 @@ mod value;
 use hashbrown::hash_map::Entry;
 use index::ColumnIndex;
 use instant::{Duration, Instant};
+pub use serialize::SerializeConfig;
 use sort::*;
 use thiserror::Error;
 
