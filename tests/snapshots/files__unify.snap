@@ -1,0 +1,58 @@
+---
+source: tests/files.rs
+expression: serialized
+---
+nodes:
+  String-17627030480522586708:
+    op: "\"a\""
+    children: []
+    eclass: String-17627030480522586708
+    cost: 0
+  Var-17627030480522586708:
+    op: Var
+    children:
+      - String-17627030480522586708
+    eclass: "0"
+    cost: 1
+  i64-5871781006564002453:
+    op: "1"
+    children: []
+    eclass: i64-5871781006564002453
+    cost: 0
+  Lit-5871781006564002453:
+    op: Lit
+    children:
+      - i64-5871781006564002453
+    eclass: "0"
+    cost: 1
+  i64-11743562013128004906:
+    op: "2"
+    children: []
+    eclass: i64-11743562013128004906
+    cost: 0
+  Lit-11743562013128004906:
+    op: Lit
+    children:
+      - i64-11743562013128004906
+    eclass: "0"
+    cost: 1
+  Mul-0:
+    op: Mul
+    children:
+      - Lit-5871781006564002453
+      - Lit-11743562013128004906
+    eclass: "3"
+    cost: 1
+root_eclasses: []
+class_data:
+  "0":
+    type: Expr
+  String-17627030480522586708:
+    type: String
+  i64-5871781006564002453:
+    type: i64
+  i64-11743562013128004906:
+    type: i64
+  "3":
+    type: Expr
+

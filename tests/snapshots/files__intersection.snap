@@ -1,0 +1,185 @@
+---
+source: tests/files.rs
+expression: serialized
+---
+nodes:
+  intersect-5871781006564002453:
+    op: intersect
+    children:
+      - a1-0
+      - a2-0
+    eclass: "2"
+    cost: 1
+  intersect-16275225025205966978:
+    op: intersect
+    children:
+      - Var-7415288725214994367
+      - Var-16095210222702174143
+    eclass: "5"
+    cost: 1
+  intersect-10674154503749820004:
+    op: intersect
+    children: []
+    eclass: "13"
+    cost: 1
+  intersect-3970972443168273294:
+    op: intersect
+    children: []
+    eclass: "14"
+    cost: 1
+  intersect-4043884728723827569:
+    op: intersect
+    children:
+      - t1-0
+      - t2-0
+    eclass: "15"
+    cost: 1
+  b1-0:
+    op: b1
+    children: []
+    eclass: "3"
+    cost: 9223372036854776000
+  b2-0:
+    op: b2
+    children: []
+    eclass: "4"
+    cost: 9223372036854776000
+  t1-0:
+    op: t1
+    children: []
+    eclass: "7"
+    cost: 9223372036854776000
+  String-1133650922057509460:
+    op: "\"a1\""
+    children: []
+    eclass: String-1133650922057509460
+    cost: 0
+  Var-1133650922057509460:
+    op: Var
+    children:
+      - String-1133650922057509460
+    eclass: "0"
+    cost: 1
+  String-17627030480522586708:
+    op: "\"a2\""
+    children: []
+    eclass: String-17627030480522586708
+    cost: 0
+  Var-17627030480522586708:
+    op: Var
+    children:
+      - String-17627030480522586708
+    eclass: "1"
+    cost: 1
+  String-5052067413377037545:
+    op: "\"a3\""
+    children: []
+    eclass: String-5052067413377037545
+    cost: 0
+  Var-5052067413377037545:
+    op: Var
+    children:
+      - String-5052067413377037545
+    eclass: "2"
+    cost: 1
+  String-7415288725214994367:
+    op: "\"b1\""
+    children: []
+    eclass: String-7415288725214994367
+    cost: 0
+  Var-7415288725214994367:
+    op: Var
+    children:
+      - String-7415288725214994367
+    eclass: "3"
+    cost: 1
+  String-16095210222702174143:
+    op: "\"b2\""
+    children: []
+    eclass: String-16095210222702174143
+    cost: 0
+  Var-16095210222702174143:
+    op: Var
+    children:
+      - String-16095210222702174143
+    eclass: "4"
+    cost: 1
+  String-13287069731778996820:
+    op: "\"b3\""
+    children: []
+    eclass: String-13287069731778996820
+    cost: 0
+  Var-13287069731778996820:
+    op: Var
+    children:
+      - String-13287069731778996820
+    eclass: "5"
+    cost: 1
+  t2-0:
+    op: t2
+    children: []
+    eclass: "10"
+    cost: 9223372036854776000
+  a1-0:
+    op: a1
+    children: []
+    eclass: "0"
+    cost: 9223372036854776000
+  a2-0:
+    op: a2
+    children: []
+    eclass: "1"
+    cost: 9223372036854776000
+  b3-0:
+    op: b3
+    children: []
+    eclass: "5"
+    cost: 9223372036854776000
+  t3-0:
+    op: t3
+    children: []
+    eclass: "15"
+    cost: 9223372036854776000
+root_eclasses: []
+class_data:
+  "2":
+    type: Expr
+  "0":
+    type: Expr
+  "1":
+    type: Expr
+  "5":
+    type: Expr
+  "3":
+    type: Expr
+  "4":
+    type: Expr
+  "13":
+    type: Expr
+  "6":
+    type: Expr
+  "9":
+    type: Expr
+  "14":
+    type: Expr
+  "11":
+    type: Expr
+  "15":
+    type: Expr
+  "7":
+    type: Expr
+  "10":
+    type: Expr
+  String-1133650922057509460:
+    type: String
+  String-17627030480522586708:
+    type: String
+  String-5052067413377037545:
+    type: String
+  String-7415288725214994367:
+    type: String
+  String-16095210222702174143:
+    type: String
+  String-13287069731778996820:
+    type: String
+

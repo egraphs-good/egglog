@@ -1,0 +1,155 @@
+---
+source: tests/files.rs
+expression: serialized
+---
+nodes:
+  I-0:
+    op: I
+    children: []
+    eclass: "5"
+    cost: 9223372036854776000
+  A4-0:
+    op: A4
+    children: []
+    eclass: "5"
+    cost: 9223372036854776000
+  A-0:
+    op: A
+    children: []
+    eclass: "20"
+    cost: 9223372036854776000
+  B-0:
+    op: B
+    children: []
+    eclass: "2"
+    cost: 9223372036854776000
+  A2-0:
+    op: A2
+    children: []
+    eclass: "11"
+    cost: 9223372036854776000
+  A8-0:
+    op: A8
+    children: []
+    eclass: "5"
+    cost: 9223372036854776000
+  Unit-0:
+    op: ()
+    children: []
+    eclass: Unit-0
+    cost: 0
+  allgs-16783941965674463102:
+    op: allgs
+    children: []
+    eclass: Unit-0
+    cost: 1
+  allgs-14289738803621830331:
+    op: allgs
+    children:
+      - g*-8615755996610129082
+    eclass: Unit-0
+    cost: 1
+  allgs-2598150418935018079:
+    op: allgs
+    children:
+      - g*-6121552834557496311
+    eclass: Unit-0
+    cost: 1
+  allgs-6755155689022739364:
+    op: allgs
+    children:
+      - A-0
+    eclass: Unit-0
+    cost: 1
+  g*-8615755996610129082:
+    op: g*
+    children:
+      - B-0
+    eclass: "15"
+    cost: 1
+  g*-6121552834557496311:
+    op: g*
+    children:
+      - B-0
+      - g*-8615755996610129082
+    eclass: "35"
+    cost: 1
+  g*-13656135949156587278:
+    op: g*
+    children:
+      - B-0
+      - B-0
+    eclass: "53"
+    cost: 1
+  g*-6511314066021357913:
+    op: g*
+    children:
+      - g*-6511314066021357913
+      - g*-13721544008651016946
+    eclass: "33"
+    cost: 1
+  g*-4848511957986269399:
+    op: g*
+    children:
+      - g*-6914414691187084928
+      - g*-4472185157575644811
+    eclass: "20"
+    cost: 1
+  g*-17371501396690625908:
+    op: g*
+    children:
+      - g*-6511314066021357913
+      - A-0
+    eclass: "5"
+    cost: 1
+  g*-16488126714231888997:
+    op: g*
+    children:
+      - g*-6914414691187084928
+      - g*-6511314066021357913
+    eclass: "11"
+    cost: 1
+  g*-4472185157575644811:
+    op: g*
+    children:
+      - g*-4848511957986269399
+      - A-0
+    eclass: "11"
+    cost: 1
+  g*-6914414691187084928:
+    op: g*
+    children:
+      - g*-4848511957986269399
+      - g*-4472185157575644811
+    eclass: "33"
+    cost: 1
+  g*-13721544008651016946:
+    op: g*
+    children:
+      - A-0
+      - g*-6511314066021357913
+    eclass: "5"
+    cost: 1
+root_eclasses: []
+class_data:
+  "5":
+    type: G
+  "20":
+    type: G
+  "2":
+    type: G
+  "11":
+    type: G
+  Unit-0:
+    type: Unit
+  "6":
+    type: G
+  "15":
+    type: G
+  "35":
+    type: G
+  "53":
+    type: G
+  "33":
+    type: G
+

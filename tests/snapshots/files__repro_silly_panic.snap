@@ -1,0 +1,27 @@
+---
+source: tests/files.rs
+expression: serialized
+---
+nodes:
+  q-0:
+    op: q
+    children: []
+    eclass: "1"
+    cost: 9223372036854776000
+  A-0:
+    op: A
+    children: []
+    eclass: "1"
+    cost: 9223372036854776000
+  par-6828067974578293639:
+    op: par
+    children:
+      - A-0
+      - par-6828067974578293639
+    eclass: "1"
+    cost: 1
+root_eclasses: []
+class_data:
+  "1":
+    type: KAT
+

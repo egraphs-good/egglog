@@ -1,0 +1,528 @@
+---
+source: tests/files.rs
+expression: serialized
+---
+nodes:
+  String-18060262198777227860:
+    op: "\"xs\""
+    children: []
+    eclass: String-18060262198777227860
+    cost: 0
+  V-18060262198777227860:
+    op: V
+    children:
+      - String-18060262198777227860
+    eclass: "2"
+    cost: 1
+  String-13720301450033637972:
+    op: "\"x\""
+    children: []
+    eclass: String-13720301450033637972
+    cost: 0
+  V-13720301450033637972:
+    op: V
+    children:
+      - String-13720301450033637972
+    eclass: "5"
+    cost: 1
+  String-7005431928621511913:
+    op: "\"xs'\""
+    children: []
+    eclass: String-7005431928621511913
+    cost: 0
+  V-7005431928621511913:
+    op: V
+    children:
+      - String-7005431928621511913
+    eclass: "6"
+    cost: 1
+  String-3810809562766010834:
+    op: "\"expr\""
+    children: []
+    eclass: String-3810809562766010834
+    cost: 0
+  V-3810809562766010834:
+    op: V
+    children:
+      - String-3810809562766010834
+    eclass: "24"
+    cost: 1
+  Nil-0:
+    op: Nil
+    children: []
+    eclass: "101"
+    cost: 9223372036854776000
+  TVar-11743562013128004906:
+    op: TVar
+    children:
+      - V-18060262198777227860
+    eclass: "3"
+    cost: 1
+  TVar-10912160959110460649:
+    op: TVar
+    children:
+      - V-13720301450033637972
+    eclass: "7"
+    cost: 1
+  TVar-16783941965674463102:
+    op: TVar
+    children:
+      - V-7005431928621511913
+    eclass: "49"
+    cost: 1
+  TVar-11795535641569197560:
+    op: TVar
+    children:
+      - V-3810809562766010834
+    eclass: "61"
+    cost: 1
+  expr-0:
+    op: expr
+    children: []
+    eclass: "27"
+    cost: 9223372036854776000
+  CaseSplit-8174635090940519406:
+    op: CaseSplit
+    children:
+      - TVar-11743562013128004906
+      - Nil-0
+      - Lam-4677487583189070622
+    eclass: "22"
+    cost: 1
+  CaseSplit-9181409863044170873:
+    op: CaseSplit
+    children:
+      - TVar-11795535641569197560
+      - Nil-0
+      - Lam-4677487583189070622
+    eclass: "57"
+    cost: 1
+  CaseSplit-2624649561418607192:
+    op: CaseSplit
+    children:
+      - TVar-16783941965674463102
+      - Add-8776779094546230048
+    eclass: "38"
+    cost: 1
+  CaseSplit-17566480396286232489:
+    op: CaseSplit
+    children:
+      - TVar-11743562013128004906
+      - Add-8776779094546230048
+    eclass: "73"
+    cost: 1
+  CaseSplit-17590509516134278934:
+    op: CaseSplit
+    children:
+      - CaseSplit-8060042155302638058
+    eclass: "95"
+    cost: 1
+  CaseSplit-8060042155302638058:
+    op: CaseSplit
+    children:
+      - Nil-0
+      - CaseSplit-8060042155302638058
+    eclass: "125"
+    cost: 1
+  CaseSplit-7586085145431835331:
+    op: CaseSplit
+    children:
+      - Cons-14648560101110232501
+      - CaseSplit-8060042155302638058
+    eclass: "38"
+    cost: 1
+  CaseSplit-10272543124075594023:
+    op: CaseSplit
+    children:
+      - CaseSplit-9181409863044170873
+      - CaseSplit-8060042155302638058
+    eclass: "27"
+    cost: 1
+  CaseSplit-17596592337882102518:
+    op: CaseSplit
+    children:
+      - TVar-11743562013128004906
+      - CaseSplit-8060042155302638058
+    eclass: "13"
+    cost: 1
+  CaseSplit-1587023052056676120:
+    op: CaseSplit
+    children:
+      - TVar-16783941965674463102
+      - CaseSplit-8060042155302638058
+    eclass: "86"
+    cost: 1
+  App-8056734486120824105:
+    op: App
+    children:
+      - Lam-6900980260133847914
+      - TVar-11795535641569197560
+    eclass: "57"
+    cost: 1
+  App-5232342984458018594:
+    op: App
+    children:
+      - Lam-5238178152098759400
+      - TVar-11795535641569197560
+    eclass: "27"
+    cost: 1
+  App-12081349616150673854:
+    op: App
+    children:
+      - TVar-11795535641569197560
+    eclass: "27"
+    cost: 1
+  App-8721467349264269792:
+    op: App
+    children:
+      - Lam-11006011901780376545
+      - TVar-16783941965674463102
+    eclass: "38"
+    cost: 1
+  App-5431905279782075200:
+    op: App
+    children:
+      - Lam-12824734895139043021
+      - CaseSplit-9181409863044170873
+    eclass: "27"
+    cost: 1
+  App-12031140083481236602:
+    op: App
+    children:
+      - Lam-12824734895139043021
+      - Cons-14648560101110232501
+    eclass: "38"
+    cost: 1
+  App-15512665184874991592:
+    op: App
+    children:
+      - Lam-12824734895139043021
+      - TVar-16783941965674463102
+    eclass: "86"
+    cost: 1
+  App-14062669728514453496:
+    op: App
+    children:
+      - Lam-11349634672443786299
+      - Cons-14648560101110232501
+    eclass: "78"
+    cost: 1
+  App-191963031911560398:
+    op: App
+    children:
+      - Lam-5238178152098759400
+      - TVar-16783941965674463102
+    eclass: "95"
+    cost: 1
+  App-17121729568697132050:
+    op: App
+    children:
+      - TVar-16783941965674463102
+    eclass: "95"
+    cost: 1
+  Lam-9842753449732275747:
+    op: Lam
+    children:
+      - V-7005431928621511913
+      - Add-2225161735365161093
+    eclass: "11"
+    cost: 1
+  Lam-6900980260133847914:
+    op: Lam
+    children:
+      - V-18060262198777227860
+      - CaseSplit-8174635090940519406
+    eclass: "15"
+    cost: 1
+  Lam-5238178152098759400:
+    op: Lam
+    children:
+      - V-18060262198777227860
+    eclass: "29"
+    cost: 1
+  Lam-18312684875231296279:
+    op: Lam
+    children:
+      - V-7005431928621511913
+      - CaseSplit-2624649561418607192
+    eclass: "39"
+    cost: 1
+  Lam-4677487583189070622:
+    op: Lam
+    children:
+      - V-13720301450033637972
+      - Lam-541420970215710958
+    eclass: "66"
+    cost: 1
+  Lam-11006011901780376545:
+    op: Lam
+    children:
+      - V-18060262198777227860
+      - CaseSplit-17566480396286232489
+    eclass: "74"
+    cost: 1
+  Lam-16390014624990244495:
+    op: Lam
+    children:
+      - V-7005431928621511913
+      - App-14062669728514453496
+    eclass: "79"
+    cost: 1
+  Lam-11349634672443786299:
+    op: Lam
+    children:
+      - V-7005431928621511913
+      - Add-14596586472669039847
+    eclass: "71"
+    cost: 1
+  Lam-12824734895139043021:
+    op: Lam
+    children:
+      - V-18060262198777227860
+      - CaseSplit-17596592337882102518
+    eclass: "103"
+    cost: 1
+  Lam-541420970215710958:
+    op: Lam
+    children:
+      - V-7005431928621511913
+      - Cons-14648560101110232501
+    eclass: "20"
+    cost: 1
+  Add-2225161735365161093:
+    op: Add
+    children:
+      - TVar-10912160959110460649
+      - App-15512665184874991592
+    eclass: "10"
+    cost: 1
+  Add-17090789634721672618:
+    op: Add
+    children:
+      - Add-7421462573235197251
+      - App-191963031911560398
+    eclass: "38"
+    cost: 1
+  Add-14596586472669039847:
+    op: Add
+    children:
+      - Add-7421462573235197251
+      - CaseSplit-1587023052056676120
+    eclass: "82"
+    cost: 1
+  Add-7421462573235197251:
+    op: Add
+    children:
+      - TVar-10912160959110460649
+    eclass: "94"
+    cost: 1
+  Add-8153272554293456407:
+    op: Add
+    children:
+      - Add-7421462573235197251
+      - App-8721467349264269792
+    eclass: "78"
+    cost: 1
+  Add-8776779094546230048:
+    op: Add
+    children:
+      - Add-7421462573235197251
+      - CaseSplit-8060042155302638058
+    eclass: "119"
+    cost: 1
+  Cons-14648560101110232501:
+    op: Cons
+    children:
+      - Add-7421462573235197251
+    eclass: "107"
+    cost: 1
+  StringSet-0:
+    op: StringSet
+    children: []
+    eclass: StringSet-0
+    cost: 0
+  freer-14289738803621830331:
+    op: freer
+    children:
+      - Lam-6900980260133847914
+    eclass: StringSet-0
+    cost: 1
+  freer-1714775736476281168:
+    op: freer
+    children: []
+    eclass: StringSet-0
+    cost: 1
+  StringSet-11743562013128004906:
+    op: StringSet
+    children:
+      - V-18060262198777227860
+    eclass: StringSet-11743562013128004906
+    cost: 0
+  freer-17615343019692007359:
+    op: freer
+    children:
+      - TVar-11743562013128004906
+    eclass: StringSet-11743562013128004906
+    cost: 1
+  StringSet-5040379952546458196:
+    op: StringSet
+    children:
+      - V-13720301450033637972
+    eclass: StringSet-5040379952546458196
+    cost: 0
+  freer-4208978898528913939:
+    op: freer
+    children:
+      - TVar-10912160959110460649
+    eclass: StringSet-5040379952546458196
+    cost: 1
+  StringSet-5871781006564002453:
+    op: StringSet
+    children:
+      - V-3810809562766010834
+    eclass: StringSet-5871781006564002453
+    cost: 0
+  freer-10964134587551653303:
+    op: freer
+    children:
+      - CaseSplit-10272543124075594023
+    eclass: StringSet-5871781006564002453
+    cost: 1
+  StringSet-10912160959110460649:
+    op: StringSet
+    children:
+      - V-13720301450033637972
+      - V-7005431928621511913
+    eclass: StringSet-10912160959110460649
+    cost: 0
+  freer-3377577844511369682:
+    op: freer
+    children:
+      - Add-2225161735365161093
+    eclass: StringSet-10912160959110460649
+    cost: 1
+  freer-1766749364917473822:
+    op: freer
+    children:
+      - App-12031140083481236602
+    eclass: StringSet-10912160959110460649
+    cost: 1
+  freer-6755155689022739364:
+    op: freer
+    children:
+      - Lam-541420970215710958
+    eclass: StringSet-5040379952546458196
+    cost: 1
+  freer-9249358851075372135:
+    op: freer
+    children:
+      - Lam-9842753449732275747
+    eclass: StringSet-5040379952546458196
+    cost: 1
+  freer-7638530371481476275:
+    op: freer
+    children:
+      - Lam-18312684875231296279
+    eclass: StringSet-5040379952546458196
+    cost: 1
+root_eclasses: []
+class_data:
+  "2":
+    type: Var
+  String-18060262198777227860:
+    type: String
+  "5":
+    type: Var
+  String-13720301450033637972:
+    type: String
+  "6":
+    type: Var
+  String-7005431928621511913:
+    type: String
+  "24":
+    type: Var
+  String-3810809562766010834:
+    type: String
+  "101":
+    type: Term
+  "3":
+    type: Term
+  "7":
+    type: Term
+  "49":
+    type: Term
+  "61":
+    type: Term
+  "27":
+    type: Term
+  "22":
+    type: Term
+  "66":
+    type: Term
+  "57":
+    type: Term
+  "38":
+    type: Term
+  "119":
+    type: Term
+  "120":
+    type: Term
+  "73":
+    type: Term
+  "95":
+    type: Term
+  "124":
+    type: Term
+  "125":
+    type: Term
+  "126":
+    type: Term
+  "107":
+    type: Term
+  "13":
+    type: Term
+  "86":
+    type: Term
+  "15":
+    type: Term
+  "29":
+    type: Term
+  "31":
+    type: Term
+  "74":
+    type: Term
+  "103":
+    type: Term
+  "78":
+    type: Term
+  "71":
+    type: Term
+  "11":
+    type: Term
+  "10":
+    type: Term
+  "28":
+    type: Term
+  "39":
+    type: Term
+  "20":
+    type: Term
+  "79":
+    type: Term
+  "82":
+    type: Term
+  "94":
+    type: Term
+  "16":
+    type: Term
+  StringSet-0:
+    type: StringSet
+  StringSet-11743562013128004906:
+    type: StringSet
+  StringSet-5040379952546458196:
+    type: StringSet
+  StringSet-5871781006564002453:
+    type: StringSet
+  StringSet-10912160959110460649:
+    type: StringSet
+

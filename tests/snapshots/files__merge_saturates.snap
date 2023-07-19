@@ -1,0 +1,155 @@
+---
+source: tests/files.rs
+expression: serialized
+---
+nodes:
+  i64-0:
+    op: "0"
+    children: []
+    eclass: i64-0
+    cost: 0
+  bar-0:
+    op: bar
+    children: []
+    eclass: i64-0
+    cost: 1
+  foo-0:
+    op: foo
+    children: []
+    eclass: i64-0
+    cost: 1
+  i64-11743562013128004906:
+    op: "2"
+    children: []
+    eclass: i64-11743562013128004906
+    cost: 0
+  baz-11743562013128004906:
+    op: baz
+    children:
+      - i64-11743562013128004906
+    eclass: i64-0
+    cost: 1
+  i64-17615343019692007359:
+    op: "3"
+    children: []
+    eclass: i64-17615343019692007359
+    cost: 0
+  baz-17615343019692007359:
+    op: baz
+    children:
+      - i64-17615343019692007359
+    eclass: i64-0
+    cost: 1
+  i64-5040379952546458196:
+    op: "4"
+    children: []
+    eclass: i64-5040379952546458196
+    cost: 0
+  baz-5040379952546458196:
+    op: baz
+    children:
+      - i64-5040379952546458196
+    eclass: i64-0
+    cost: 1
+  i64-10912160959110460649:
+    op: "5"
+    children: []
+    eclass: i64-10912160959110460649
+    cost: 0
+  baz-10912160959110460649:
+    op: baz
+    children:
+      - i64-10912160959110460649
+    eclass: i64-0
+    cost: 1
+  i64-16783941965674463102:
+    op: "6"
+    children: []
+    eclass: i64-16783941965674463102
+    cost: 0
+  baz-16783941965674463102:
+    op: baz
+    children:
+      - i64-16783941965674463102
+    eclass: i64-0
+    cost: 1
+  i64-4208978898528913939:
+    op: "7"
+    children: []
+    eclass: i64-4208978898528913939
+    cost: 0
+  baz-4208978898528913939:
+    op: baz
+    children:
+      - i64-4208978898528913939
+    eclass: i64-0
+    cost: 1
+  i64-10080759905092916392:
+    op: "8"
+    children: []
+    eclass: i64-10080759905092916392
+    cost: 0
+  baz-10080759905092916392:
+    op: baz
+    children:
+      - i64-10080759905092916392
+    eclass: i64-0
+    cost: 1
+  i64-15952540911656918845:
+    op: "9"
+    children: []
+    eclass: i64-15952540911656918845
+    cost: 0
+  baz-15952540911656918845:
+    op: baz
+    children:
+      - i64-15952540911656918845
+    eclass: i64-0
+    cost: 1
+  i64-3377577844511369682:
+    op: "10"
+    children: []
+    eclass: i64-3377577844511369682
+    cost: 0
+  baz-3377577844511369682:
+    op: baz
+    children:
+      - i64-3377577844511369682
+    eclass: i64-0
+    cost: 1
+  i64-9249358851075372135:
+    op: "11"
+    children: []
+    eclass: i64-9249358851075372135
+    cost: 0
+  baz-9249358851075372135:
+    op: baz
+    children:
+      - i64-9249358851075372135
+    eclass: i64-0
+    cost: 1
+root_eclasses: []
+class_data:
+  i64-0:
+    type: i64
+  i64-11743562013128004906:
+    type: i64
+  i64-17615343019692007359:
+    type: i64
+  i64-5040379952546458196:
+    type: i64
+  i64-10912160959110460649:
+    type: i64
+  i64-16783941965674463102:
+    type: i64
+  i64-4208978898528913939:
+    type: i64
+  i64-10080759905092916392:
+    type: i64
+  i64-15952540911656918845:
+    type: i64
+  i64-3377577844511369682:
+    type: i64
+  i64-9249358851075372135:
+    type: i64
+

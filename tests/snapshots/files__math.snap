@@ -1,0 +1,89 @@
+---
+source: tests/files.rs
+expression: serialized
+---
+nodes:
+  String-5052067413377037545:
+    op: "\"a\""
+    children: []
+    eclass: String-5052067413377037545
+    cost: 0
+  Var-5052067413377037545:
+    op: Var
+    children:
+      - String-5052067413377037545
+    eclass: "1"
+    cost: 1
+  Add-10912160959110460649:
+    op: Add
+    children:
+      - Const-0
+      - Sub-5996666920560749382
+    eclass: "6"
+    cost: 1
+  Mul-8740641910606876011:
+    op: Mul
+    children:
+      - Sub-1912573936028582372
+      - Var-5052067413377037545
+    eclass: "4"
+    cost: 1
+  Rational-0:
+    op: (rational 1 1)
+    children: []
+    eclass: Rational-0
+    cost: 0
+  Const-0:
+    op: Const
+    children:
+      - Rational-0
+    eclass: "0"
+    cost: 1
+  Rational-5871781006564002453:
+    op: (rational 2 1)
+    children: []
+    eclass: Rational-5871781006564002453
+    cost: 0
+  Const-5871781006564002453:
+    op: Const
+    children:
+      - Rational-5871781006564002453
+    eclass: "2"
+    cost: 1
+  Sub-1912573936028582372:
+    op: Sub
+    children:
+      - Const-5871781006564002453
+      - Const-0
+    eclass: "3"
+    cost: 1
+  Sub-5996666920560749382:
+    op: Sub
+    children:
+      - Var-5052067413377037545
+      - Mul-8740641910606876011
+    eclass: "5"
+    cost: 1
+root_eclasses: []
+class_data:
+  "1":
+    type: Math
+  String-5052067413377037545:
+    type: String
+  "6":
+    type: Math
+  "0":
+    type: Math
+  "5":
+    type: Math
+  "4":
+    type: Math
+  "3":
+    type: Math
+  Rational-0:
+    type: Rational
+  "2":
+    type: Math
+  Rational-5871781006564002453:
+    type: Rational
+

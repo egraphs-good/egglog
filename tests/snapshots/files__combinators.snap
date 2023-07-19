@@ -1,0 +1,241 @@
+---
+source: tests/files.rs
+expression: serialized
+---
+nodes:
+  App-791192798209204816:
+    op: App
+    children:
+      - F-0
+    eclass: "98"
+    cost: 1
+  If-8845426729208589303:
+    op: If
+    children:
+      - Var-7848520443469635519
+      - N-0
+      - N-5871781006564002453
+    eclass: "34"
+    cost: 1
+  If-13839844697570753058:
+    op: If
+    children:
+      - F-0
+      - N-0
+      - N-5871781006564002453
+    eclass: "173"
+    cost: 1
+  F-0:
+    op: F
+    children: []
+    eclass: "1"
+    cost: 9223372036854776000
+  String-7848520443469635519:
+    op: "\"x\""
+    children: []
+    eclass: String-7848520443469635519
+    cost: 0
+  Var-7848520443469635519:
+    op: Var
+    children:
+      - String-7848520443469635519
+    eclass: "33"
+    cost: 100
+  CVar-7848520443469635519:
+    op: CVar
+    children:
+      - String-7848520443469635519
+    eclass: "50"
+    cost: 10000
+  i64-0:
+    op: "0"
+    children: []
+    eclass: i64-0
+    cost: 0
+  N-0:
+    op: N
+    children:
+      - i64-0
+    eclass: "3"
+    cost: 1
+  i64-11743562013128004906:
+    op: "2"
+    children: []
+    eclass: i64-11743562013128004906
+    cost: 0
+  N-11743562013128004906:
+    op: N
+    children:
+      - i64-11743562013128004906
+    eclass: "6"
+    cost: 1
+  i64-5871781006564002453:
+    op: "1"
+    children: []
+    eclass: i64-5871781006564002453
+    cost: 0
+  N-5871781006564002453:
+    op: N
+    children:
+      - i64-5871781006564002453
+    eclass: "173"
+    cost: 1
+  i64-17615343019692007359:
+    op: "3"
+    children: []
+    eclass: i64-17615343019692007359
+    cost: 0
+  N-17615343019692007359:
+    op: N
+    children:
+      - i64-17615343019692007359
+    eclass: "98"
+    cost: 1
+  CIf-0:
+    op: CIf
+    children: []
+    eclass: "104"
+    cost: 9223372036854776000
+  T-0:
+    op: T
+    children: []
+    eclass: "0"
+    cost: 9223372036854776000
+  test-0:
+    op: test
+    children: []
+    eclass: "98"
+    cost: 9223372036854776000
+  CAbs-16019926084039146707:
+    op: CAbs
+    children:
+      - String-7848520443469635519
+    eclass: "21"
+    cost: 10000
+  CAbs-4276364070911141801:
+    op: CAbs
+    children:
+      - String-7848520443469635519
+    eclass: "48"
+    cost: 10000
+  CAbs-16851327138056690964:
+    op: CAbs
+    children:
+      - String-7848520443469635519
+    eclass: "35"
+    cost: 10000
+  CAbs-11031519759933881165:
+    op: CAbs
+    children:
+      - String-7848520443469635519
+    eclass: "59"
+    cost: 10000
+  CAbs-17682728192074235221:
+    op: CAbs
+    children:
+      - String-7848520443469635519
+    eclass: "37"
+    cost: 10000
+  CAbs-3496936645334790198:
+    op: CAbs
+    children:
+      - String-7848520443469635519
+    eclass: "66"
+    cost: 10000
+  CAbs-3444963016893597544:
+    op: CAbs
+    children:
+      - String-7848520443469635519
+      - CAbs-17682728192074235221
+    eclass: "70"
+    cost: 10000
+  CAbs-16903300766497883618:
+    op: CAbs
+    children:
+      - String-7848520443469635519
+    eclass: "46"
+    cost: 10000
+  CAbs-9368717651898792651:
+    op: CAbs
+    children:
+      - String-7848520443469635519
+      - CVar-7848520443469635519
+    eclass: "84"
+    cost: 10000
+  CAbs-8537316597881248394:
+    op: CAbs
+    children:
+      - String-7848520443469635519
+    eclass: "86"
+    cost: 10000
+root_eclasses: []
+class_data:
+  "98":
+    type: Expr
+  "8":
+    type: Expr
+  "1":
+    type: Expr
+  "34":
+    type: Expr
+  "33":
+    type: Expr
+  "3":
+    type: Expr
+  "173":
+    type: Expr
+  String-7848520443469635519:
+    type: String
+  "50":
+    type: CExpr
+  i64-0:
+    type: i64
+  "6":
+    type: Expr
+  i64-11743562013128004906:
+    type: i64
+  i64-5871781006564002453:
+    type: i64
+  i64-17615343019692007359:
+    type: i64
+  "104":
+    type: CExpr
+  "0":
+    type: Expr
+  "21":
+    type: CExpr
+  "42":
+    type: CExpr
+  "48":
+    type: CExpr
+  "40":
+    type: CExpr
+  "35":
+    type: CExpr
+  "41":
+    type: CExpr
+  "59":
+    type: CExpr
+  "52":
+    type: CExpr
+  "37":
+    type: CExpr
+  "44":
+    type: CExpr
+  "66":
+    type: CExpr
+  "51":
+    type: CExpr
+  "70":
+    type: CExpr
+  "46":
+    type: CExpr
+  "55":
+    type: CExpr
+  "84":
+    type: CExpr
+  "86":
+    type: CExpr
+  "15":
+    type: CExpr
+

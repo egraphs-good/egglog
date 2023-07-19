@@ -1,0 +1,297 @@
+---
+source: tests/files.rs
+expression: serialized
+---
+nodes:
+  zero-0:
+    op: zero
+    children: []
+    eclass: "0"
+    cost: 9223372036854776000
+  String-7848520443469635519:
+    op: "\"x\""
+    children: []
+    eclass: String-7848520443469635519
+    cost: 0
+  Var-7848520443469635519:
+    op: Var
+    children:
+      - String-7848520443469635519
+    eclass: "4"
+    cost: 1
+  one-two-0:
+    op: one-two
+    children: []
+    eclass: "3"
+    cost: 9223372036854776000
+  x-0:
+    op: x
+    children: []
+    eclass: "4"
+    cost: 9223372036854776000
+  Add-7659469028595837896:
+    op: Add
+    children:
+      - Num-5871781006564002453
+      - Num-11743562013128004906
+    eclass: "3"
+    cost: 1
+  Add-6267377405668604861:
+    op: Add
+    children:
+      - x-0
+      - Num-5871781006564002453
+    eclass: "5"
+    cost: 1
+  Add-5996666920560749382:
+    op: Add
+    children:
+      - Num-5871781006564002453
+      - Var-7848520443469635519
+    eclass: "5"
+    cost: 1
+  Add-7784354942592584825:
+    op: Add
+    children:
+      - Num-11743562013128004906
+      - Num-5871781006564002453
+    eclass: "3"
+    cost: 1
+  Rational-0:
+    op: (rational 0 1)
+    children: []
+    eclass: Rational-0
+    cost: 0
+  Num-0:
+    op: Num
+    children:
+      - Rational-0
+    eclass: "0"
+    cost: 1
+  Rational-5871781006564002453:
+    op: (rational 1 1)
+    children: []
+    eclass: Rational-5871781006564002453
+    cost: 0
+  Num-5871781006564002453:
+    op: Num
+    children:
+      - Rational-5871781006564002453
+    eclass: "1"
+    cost: 1
+  Rational-11743562013128004906:
+    op: (rational 2 1)
+    children: []
+    eclass: Rational-11743562013128004906
+    cost: 0
+  Num-11743562013128004906:
+    op: Num
+    children:
+      - Rational-11743562013128004906
+    eclass: "2"
+    cost: 1
+  Rational-17615343019692007359:
+    op: (rational 3 1)
+    children: []
+    eclass: Rational-17615343019692007359
+    cost: 0
+  Num-17615343019692007359:
+    op: Num
+    children:
+      - Rational-17615343019692007359
+    eclass: "3"
+    cost: 1
+  Rational-5040379952546458196:
+    op: (rational 200 201)
+    children: []
+    eclass: Rational-5040379952546458196
+    cost: 0
+  lower-bound-5040379952546458196:
+    op: lower-bound
+    children:
+      - x-0
+    eclass: Rational-5040379952546458196
+    cost: 1
+  lower-bound-5871781006564002453:
+    op: lower-bound
+    children:
+      - Num-5871781006564002453
+    eclass: Rational-5871781006564002453
+    cost: 1
+  lower-bound-0:
+    op: lower-bound
+    children:
+      - Num-0
+    eclass: Rational-0
+    cost: 1
+  lower-bound-11743562013128004906:
+    op: lower-bound
+    children:
+      - Num-11743562013128004906
+    eclass: Rational-11743562013128004906
+    cost: 1
+  Rational-10912160959110460649:
+    op: (rational 401 201)
+    children: []
+    eclass: Rational-10912160959110460649
+    cost: 0
+  lower-bound-10912160959110460649:
+    op: lower-bound
+    children:
+      - Add-6267377405668604861
+    eclass: Rational-10912160959110460649
+    cost: 1
+  lower-bound-17615343019692007359:
+    op: lower-bound
+    children:
+      - Add-7659469028595837896
+    eclass: Rational-17615343019692007359
+    cost: 1
+  upper-bound-5040379952546458196:
+    op: upper-bound
+    children:
+      - Var-7848520443469635519
+    eclass: Rational-5040379952546458196
+    cost: 1
+  upper-bound-5871781006564002453:
+    op: upper-bound
+    children:
+      - Num-5871781006564002453
+    eclass: Rational-5871781006564002453
+    cost: 1
+  upper-bound-0:
+    op: upper-bound
+    children:
+      - zero-0
+    eclass: Rational-0
+    cost: 1
+  upper-bound-11743562013128004906:
+    op: upper-bound
+    children:
+      - Num-11743562013128004906
+    eclass: Rational-11743562013128004906
+    cost: 1
+  upper-bound-10912160959110460649:
+    op: upper-bound
+    children:
+      - Add-5996666920560749382
+    eclass: Rational-10912160959110460649
+    cost: 1
+  upper-bound-17615343019692007359:
+    op: upper-bound
+    children:
+      - Add-7784354942592584825
+    eclass: Rational-17615343019692007359
+    cost: 1
+  x1-0:
+    op: x1
+    children: []
+    eclass: "5"
+    cost: 9223372036854776000
+  f64-10858178701590265856:
+    op: "1.0"
+    children: []
+    eclass: f64-10858178701590265856
+    cost: 0
+  true-value-5871781006564002453:
+    op: true-value
+    children:
+      - Num-5871781006564002453
+    eclass: f64-10858178701590265856
+    cost: 1
+  f64-7253992486310880885:
+    op: "0.9950248756218906"
+    children: []
+    eclass: f64-7253992486310880885
+    cost: 0
+  true-value-5040379952546458196:
+    op: true-value
+    children:
+      - x-0
+    eclass: f64-7253992486310880885
+    cost: 1
+  f64-10711811713700724736:
+    op: "3.0"
+    children: []
+    eclass: f64-10711811713700724736
+    cost: 0
+  true-value-17615343019692007359:
+    op: true-value
+    children:
+      - Num-17615343019692007359
+    eclass: f64-10711811713700724736
+    cost: 1
+  f64-9097074444360470000:
+    op: "1.9950248756218905"
+    children: []
+    eclass: f64-9097074444360470000
+    cost: 0
+  true-value-10912160959110460649:
+    op: true-value
+    children:
+      - Add-6267377405668604861
+    eclass: f64-9097074444360470000
+    cost: 1
+  f64-0:
+    op: "0.0"
+    children: []
+    eclass: f64-0
+    cost: 0
+  true-value-0:
+    op: true-value
+    children:
+      - Num-0
+    eclass: f64-0
+    cost: 1
+  f64-4611686018427387904:
+    op: "2.0"
+    children: []
+    eclass: f64-4611686018427387904
+    cost: 0
+  true-value-11743562013128004906:
+    op: true-value
+    children:
+      - Num-11743562013128004906
+    eclass: f64-4611686018427387904
+    cost: 1
+root_eclasses: []
+class_data:
+  "0":
+    type: Math
+  "4":
+    type: Math
+  String-7848520443469635519:
+    type: String
+  "3":
+    type: Math
+  "1":
+    type: Math
+  "2":
+    type: Math
+  "5":
+    type: Math
+  Rational-0:
+    type: Rational
+  Rational-5871781006564002453:
+    type: Rational
+  Rational-11743562013128004906:
+    type: Rational
+  Rational-17615343019692007359:
+    type: Rational
+  Rational-5040379952546458196:
+    type: Rational
+  Rational-10912160959110460649:
+    type: Rational
+  f64-10858178701590265856:
+    type: f64
+  f64-7253992486310880885:
+    type: f64
+  f64-10711811713700724736:
+    type: f64
+  f64-9097074444360470000:
+    type: f64
+  f64-0:
+    type: f64
+  f64-4611686018427387904:
+    type: f64
+

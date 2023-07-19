@@ -3,6 +3,9 @@ use std::path::PathBuf;
 use egglog::*;
 use libtest_mimic::Trial;
 
+// Global override to enable all serialization tests.
+const ENABLE_ALL_SERIALIZATION_TESTS: bool = true;
+
 #[derive(Clone)]
 struct Run {
     name: String,
@@ -104,7 +107,8 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
             .replace(['.', '-', ' '], "_");
 
         let should_fail = f.to_string_lossy().contains("fail-typecheck");
-        let test_serialize = serialize_tests.iter().any(|&e| e == name);
+        let test_serialize =
+            ENABLE_ALL_SERIALIZATION_TESTS || serialize_tests.iter().any(|&e| e == name);
         mk_trial(
             name.clone(),
             Run {

@@ -1,0 +1,48 @@
+---
+source: tests/files.rs
+expression: serialized
+---
+nodes:
+  y-0:
+    op: y
+    children: []
+    eclass: "1"
+    cost: 9223372036854776000
+  i64-5871781006564002453:
+    op: "1"
+    children: []
+    eclass: i64-5871781006564002453
+    cost: 0
+  Num-5871781006564002453:
+    op: Num
+    children:
+      - i64-5871781006564002453
+    eclass: "0"
+    cost: 5
+  i64-11743562013128004906:
+    op: "2"
+    children: []
+    eclass: i64-11743562013128004906
+    cost: 0
+  Num-11743562013128004906:
+    op: Num
+    children:
+      - i64-11743562013128004906
+    eclass: "1"
+    cost: 5
+  x-0:
+    op: x
+    children: []
+    eclass: "0"
+    cost: 9223372036854776000
+root_eclasses: []
+class_data:
+  "1":
+    type: Expr
+  "0":
+    type: Expr
+  i64-5871781006564002453:
+    type: i64
+  i64-11743562013128004906:
+    type: i64
+

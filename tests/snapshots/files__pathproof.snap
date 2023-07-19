@@ -1,0 +1,210 @@
+---
+source: tests/files.rs
+expression: serialized
+---
+nodes:
+  i64-11743562013128004906:
+    op: "2"
+    children: []
+    eclass: i64-11743562013128004906
+    cost: 0
+  i64-5871781006564002453:
+    op: "1"
+    children: []
+    eclass: i64-5871781006564002453
+    cost: 0
+  Edge-7784354942592584825:
+    op: Edge
+    children:
+      - i64-11743562013128004906
+      - i64-5871781006564002453
+    eclass: "0"
+    cost: 1
+  i64-17615343019692007359:
+    op: "3"
+    children: []
+    eclass: i64-17615343019692007359
+    cost: 0
+  Edge-9572042964624420268:
+    op: Edge
+    children:
+      - i64-17615343019692007359
+      - i64-11743562013128004906
+    eclass: "1"
+    cost: 1
+  Edge-13531250035159840349:
+    op: Edge
+    children:
+      - i64-5871781006564002453
+      - i64-17615343019692007359
+    eclass: "2"
+    cost: 1
+  Unit-0:
+    op: ()
+    children: []
+    eclass: Unit-0
+    cost: 0
+  path-10179312976275314481:
+    op: path
+    children:
+      - i64-11743562013128004906
+      - i64-5871781006564002453
+      - Edge-7784354942592584825
+    eclass: Unit-0
+    cost: 1
+  path-9064035015742740325:
+    op: path
+    children:
+      - i64-17615343019692007359
+      - i64-11743562013128004906
+      - Edge-9572042964624420268
+    eclass: Unit-0
+    cost: 1
+  path-1628697029513552473:
+    op: path
+    children:
+      - i64-5871781006564002453
+      - i64-17615343019692007359
+      - Edge-13531250035159840349
+    eclass: Unit-0
+    cost: 1
+  path-14534116445915336970:
+    op: path
+    children:
+      - i64-11743562013128004906
+      - i64-17615343019692007359
+      - Trans-13656135949156587278
+    eclass: Unit-0
+    cost: 1
+  path-3462964494286593351:
+    op: path
+    children:
+      - i64-17615343019692007359
+      - i64-5871781006564002453
+      - Trans-2868860904042873558
+    eclass: Unit-0
+    cost: 1
+  path-1503811115516805544:
+    op: path
+    children:
+      - i64-5871781006564002453
+      - i64-11743562013128004906
+      - Trans-6828067974578293639
+    eclass: Unit-0
+    cost: 1
+  path-12798402052324694181:
+    op: path
+    children:
+      - i64-11743562013128004906
+      - i64-11743562013128004906
+      - Trans-2743974990046126629
+    eclass: Unit-0
+    cost: 1
+  path-3317139923175484801:
+    op: path
+    children:
+      - i64-17615343019692007359
+      - i64-17615343019692007359
+      - Trans-15443823971188422721
+    eclass: Unit-0
+    cost: 1
+  path-1774521600624661023:
+    op: path
+    children:
+      - i64-5871781006564002453
+      - i64-5871781006564002453
+      - Trans-5996666920560749382
+    eclass: Unit-0
+    cost: 1
+  Trans-13656135949156587278:
+    op: Trans
+    children:
+      - i64-11743562013128004906
+      - Edge-13531250035159840349
+    eclass: "3"
+    cost: 1
+  Trans-2868860904042873558:
+    op: Trans
+    children:
+      - i64-17615343019692007359
+      - Edge-7784354942592584825
+    eclass: "4"
+    cost: 1
+  Trans-6828067974578293639:
+    op: Trans
+    children:
+      - i64-5871781006564002453
+      - Edge-9572042964624420268
+    eclass: "5"
+    cost: 1
+  Trans-2743974990046126629:
+    op: Trans
+    children:
+      - i64-11743562013128004906
+      - Trans-6828067974578293639
+    eclass: "6"
+    cost: 1
+  Trans-15443823971188422721:
+    op: Trans
+    children:
+      - i64-17615343019692007359
+      - Trans-13656135949156587278
+    eclass: "7"
+    cost: 1
+  Trans-5996666920560749382:
+    op: Trans
+    children:
+      - i64-5871781006564002453
+      - Trans-2868860904042873558
+    eclass: "8"
+    cost: 1
+  edge-7784354942592584825:
+    op: edge
+    children:
+      - i64-11743562013128004906
+      - i64-5871781006564002453
+    eclass: Unit-0
+    cost: 1
+  edge-9572042964624420268:
+    op: edge
+    children:
+      - i64-17615343019692007359
+      - i64-11743562013128004906
+    eclass: Unit-0
+    cost: 1
+  edge-13531250035159840349:
+    op: edge
+    children:
+      - i64-5871781006564002453
+      - i64-17615343019692007359
+    eclass: Unit-0
+    cost: 1
+root_eclasses: []
+class_data:
+  "0":
+    type: Proof
+  i64-11743562013128004906:
+    type: i64
+  i64-5871781006564002453:
+    type: i64
+  "1":
+    type: Proof
+  i64-17615343019692007359:
+    type: i64
+  "2":
+    type: Proof
+  Unit-0:
+    type: Unit
+  "3":
+    type: Proof
+  "4":
+    type: Proof
+  "5":
+    type: Proof
+  "6":
+    type: Proof
+  "7":
+    type: Proof
+  "8":
+    type: Proof
+

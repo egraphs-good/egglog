@@ -1,0 +1,109 @@
+---
+source: tests/files.rs
+expression: serialized
+---
+nodes:
+  negate-14445659688945408293:
+    op: negate
+    children:
+      - or-5282742591830199048
+    eclass: "41"
+    cost: 1
+  negate-935348310899929565:
+    op: negate
+    children:
+      - or-1534673114548945584
+    eclass: "81"
+    cost: 1
+  or-5282742591830199048:
+    op: or
+    children:
+      - p-5871781006564002453
+      - p-11743562013128004906
+    eclass: "81"
+    cost: 1
+  or-5074848078065428432:
+    op: or
+    children:
+      - False-0
+      - negate-14445659688945408293
+    eclass: "41"
+    cost: 1
+  or-1534673114548945584:
+    op: or
+    children:
+      - or-1534673114548945584
+      - p0-0
+    eclass: "41"
+    cost: 1
+  p1-0:
+    op: p1
+    children: []
+    eclass: "81"
+    cost: 9223372036854776000
+  i64-0:
+    op: "0"
+    children: []
+    eclass: i64-0
+    cost: 0
+  p-0:
+    op: p
+    children:
+      - i64-0
+    eclass: "81"
+    cost: 1
+  i64-5871781006564002453:
+    op: "1"
+    children: []
+    eclass: i64-5871781006564002453
+    cost: 0
+  p-5871781006564002453:
+    op: p
+    children:
+      - i64-5871781006564002453
+    eclass: "81"
+    cost: 1
+  i64-11743562013128004906:
+    op: "2"
+    children: []
+    eclass: i64-11743562013128004906
+    cost: 0
+  p-11743562013128004906:
+    op: p
+    children:
+      - i64-11743562013128004906
+    eclass: "81"
+    cost: 1
+  False-0:
+    op: "False"
+    children: []
+    eclass: "81"
+    cost: 9223372036854776000
+  p0-0:
+    op: p0
+    children: []
+    eclass: "81"
+    cost: 9223372036854776000
+  p2-0:
+    op: p2
+    children: []
+    eclass: "81"
+    cost: 9223372036854776000
+  True-0:
+    op: "True"
+    children: []
+    eclass: "41"
+    cost: 9223372036854776000
+root_eclasses: []
+class_data:
+  "41":
+    type: Bool
+  "81":
+    type: Bool
+  i64-0:
+    type: i64
+  i64-5871781006564002453:
+    type: i64
+  i64-11743562013128004906:
+    type: i64
+

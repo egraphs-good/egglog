@@ -1,0 +1,151 @@
+---
+source: tests/files.rs
+expression: serialized
+---
+nodes:
+  B-0:
+    op: B
+    children: []
+    eclass: "1"
+    cost: 9223372036854776000
+  Unit-0:
+    op: ()
+    children: []
+    eclass: Unit-0
+    cost: 0
+  String-5485299131631678697:
+    op: "\"o1\""
+    children: []
+    eclass: String-5485299131631678697
+    cost: 0
+  VarPointsTo-9932527350538244829:
+    op: VarPointsTo
+    children:
+      - String-5485299131631678697
+    eclass: Unit-0
+    cost: 1
+  String-3508559694726045631:
+    op: "\"o2\""
+    children: []
+    eclass: String-3508559694726045631
+    cost: 0
+  VarPointsTo-17420663949869469555:
+    op: VarPointsTo
+    children:
+      - String-3508559694726045631
+      - B-0
+    eclass: Unit-0
+    cost: 1
+  String-14830577450429988734:
+    op: "\"o3\""
+    children: []
+    eclass: String-14830577450429988734
+    cost: 0
+  VarPointsTo-12836711084403263672:
+    op: VarPointsTo
+    children:
+      - String-14830577450429988734
+      - B-0
+    eclass: Unit-0
+    cost: 1
+  String-5052067413377037545:
+    op: "\"r\""
+    children: []
+    eclass: String-5052067413377037545
+    cost: 0
+  VarPointsTo-7787579480638031944:
+    op: VarPointsTo
+    children:
+      - String-5052067413377037545
+    eclass: Unit-0
+    cost: 1
+  l2-0:
+    op: l2
+    children: []
+    eclass: "4"
+    cost: 9223372036854776000
+  l3-0:
+    op: l3
+    children: []
+    eclass: "5"
+    cost: 9223372036854776000
+  Store-1535405235853233058:
+    op: Store
+    children:
+      - String-3508559694726045631
+      - Field-15673665965278112340
+      - String-5485299131631678697
+    eclass: "6"
+    cost: 1
+  Assign-1793568275078127074:
+    op: Assign
+    children:
+      - String-14830577450429988734
+      - String-3508559694726045631
+    eclass: "5"
+    cost: 1
+  l4-0:
+    op: l4
+    children: []
+    eclass: "6"
+    cost: 9223372036854776000
+  String-15673665965278112340:
+    op: "\"f\""
+    children: []
+    eclass: String-15673665965278112340
+    cost: 0
+  Field-15673665965278112340:
+    op: Field
+    children:
+      - String-15673665965278112340
+    eclass: "2"
+    cost: 1
+  New-9932527350538244829:
+    op: New
+    children:
+      - String-5485299131631678697
+    eclass: "3"
+    cost: 1
+  New-17420663949869469555:
+    op: New
+    children:
+      - String-3508559694726045631
+      - B-0
+    eclass: "4"
+    cost: 1
+  HeapPointsTo-12415972074627266193:
+    op: HeapPointsTo
+    children:
+      - B-0
+      - Field-15673665965278112340
+    eclass: Unit-0
+    cost: 1
+root_eclasses: []
+class_data:
+  "1":
+    type: ClassT
+  Unit-0:
+    type: Unit
+  String-5485299131631678697:
+    type: String
+  "0":
+    type: ClassT
+  String-3508559694726045631:
+    type: String
+  String-14830577450429988734:
+    type: String
+  String-5052067413377037545:
+    type: String
+  "4":
+    type: Stmt
+  "5":
+    type: Stmt
+  "6":
+    type: Stmt
+  "2":
+    type: FieldT
+  String-15673665965278112340:
+    type: String
+  "3":
+    type: Stmt
+

@@ -1,0 +1,20 @@
+---
+source: tests/files.rs
+expression: serialized
+---
+nodes:
+  i64-5871781006564002453:
+    op: "1"
+    children: []
+    eclass: i64-5871781006564002453
+    cost: 0
+  MyMap-0:
+    op: MyMap
+    children: []
+    eclass: i64-5871781006564002453
+    cost: 1
+root_eclasses: []
+class_data:
+  i64-5871781006564002453:
+    type: i64
+

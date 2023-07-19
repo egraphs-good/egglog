@@ -1,0 +1,320 @@
+---
+source: tests/files.rs
+expression: serialized
+---
+nodes:
+  Unit-0:
+    op: ()
+    children: []
+    eclass: Unit-0
+    cost: 0
+  Bool-11743562013128004906:
+    op: Bool
+    children:
+      - False-0
+    eclass: Unit-0
+    cost: 1
+  Bool-11899482898451582868:
+    op: Bool
+    children:
+      - True-0
+    eclass: Unit-0
+    cost: 1
+  String-10502304162516978195:
+    op: "\"b\""
+    children: []
+    eclass: String-10502304162516978195
+    cost: 0
+  V-10502304162516978195:
+    op: V
+    children:
+      - String-10502304162516978195
+    eclass: "6"
+    cost: 1
+  String-15952540911656918845:
+    op: "\"ten\""
+    children: []
+    eclass: String-15952540911656918845
+    cost: 0
+  V-15952540911656918845:
+    op: V
+    children:
+      - String-15952540911656918845
+    eclass: "11"
+    cost: 1
+  String-14853952372091147432:
+    op: "\"one\""
+    children: []
+    eclass: String-14853952372091147432
+    cost: 0
+  V-14853952372091147432:
+    op: V
+    children:
+      - String-14853952372091147432
+    eclass: "17"
+    cost: 1
+  String-12455668677761452563:
+    op: "\"zero\""
+    children: []
+    eclass: String-12455668677761452563
+    cost: 0
+  V-12455668677761452563:
+    op: V
+    children:
+      - String-12455668677761452563
+    eclass: "23"
+    cost: 1
+  String-1976739436905633066:
+    op: "\"x\""
+    children: []
+    eclass: String-1976739436905633066
+    cost: 0
+  V-1976739436905633066:
+    op: V
+    children:
+      - String-1976739436905633066
+    eclass: "29"
+    cost: 1
+  String-16374085169080980648:
+    op: "\"cond\""
+    children: []
+    eclass: String-16374085169080980648
+    cost: 0
+  V-16374085169080980648:
+    op: V
+    children:
+      - String-16374085169080980648
+    eclass: "37"
+    cost: 1
+  String-3377577844511369682:
+    op: "\"DoSomething\""
+    children: []
+    eclass: String-3377577844511369682
+    cost: 0
+  V-3377577844511369682:
+    op: V
+    children:
+      - String-3377577844511369682
+    eclass: "46"
+    cost: 1
+  String-11345392677365101801:
+    op: "\"DoSomethingElse\""
+    children: []
+    eclass: String-11345392677365101801
+    cost: 0
+  V-11345392677365101801:
+    op: V
+    children:
+      - String-11345392677365101801
+    eclass: "53"
+    cost: 1
+  String-17627030480522586708:
+    op: "\"y\""
+    children: []
+    eclass: String-17627030480522586708
+    cost: 0
+  V-17627030480522586708:
+    op: V
+    children:
+      - String-17627030480522586708
+    eclass: "62"
+    cost: 1
+  Eq-243936660352753052:
+    op: Eq
+    children:
+      - V-1976739436905633066
+      - V-15952540911656918845
+    eclass: "38"
+    cost: 1
+  False-0:
+    op: "False"
+    children: []
+    eclass: "2"
+    cost: 9223372036854776000
+  Top-0:
+    op: Top
+    children: []
+    eclass: "0"
+    cost: 9223372036854776000
+  True-0:
+    op: "True"
+    children: []
+    eclass: "68"
+    cost: 9223372036854776000
+  add-val-4116892051630753445:
+    op: add-val
+    children:
+      - add-val-4116892051630753445
+    eclass: "70"
+    cost: 1
+  Prog-5040379952546458196:
+    op: Prog
+    children: []
+    eclass: "5"
+    cost: 1
+  Prog-15952540911656918845:
+    op: Prog
+    children: []
+    eclass: "10"
+    cost: 1
+  Prog-14289738803621830331:
+    op: Prog
+    children: []
+    eclass: "16"
+    cost: 1
+  Prog-12626936695586741817:
+    op: Prog
+    children: []
+    eclass: "22"
+    cost: 1
+  Prog-10964134587551653303:
+    op: Prog
+    children: []
+    eclass: "28"
+    cost: 1
+  Prog-16004514540098111499:
+    op: Prog
+    children: []
+    eclass: "32"
+    cost: 1
+  Prog-9301332479516564789:
+    op: Prog
+    children: []
+    eclass: "36"
+    cost: 1
+  Prog-13510311378045478728:
+    op: Prog
+    children: []
+    eclass: "41"
+    cost: 1
+  Prog-6807129317463932018:
+    op: Prog
+    children: []
+    eclass: "45"
+    cost: 1
+  Prog-5144327209428843504:
+    op: Prog
+    children: []
+    eclass: "49"
+    cost: 1
+  Goto-16887889222556848410:
+    op: Goto
+    children: []
+    eclass: "49"
+    cost: 1
+  Goto-16004514540098111499:
+    op: Goto
+    children: []
+    eclass: "59"
+    cost: 1
+  Goto-6807129317463932018:
+    op: Goto
+    children: []
+    eclass: "76"
+    cost: 1
+  End-0:
+    op: End
+    children: []
+    eclass: "66"
+    cost: 9223372036854776000
+root_eclasses: []
+class_data:
+  Unit-0:
+    type: Unit
+  "2":
+    type: Val
+  "68":
+    type: Val
+  "6":
+    type: VarT
+  String-10502304162516978195:
+    type: String
+  "11":
+    type: VarT
+  String-15952540911656918845:
+    type: String
+  "17":
+    type: VarT
+  String-14853952372091147432:
+    type: String
+  "23":
+    type: VarT
+  String-12455668677761452563:
+    type: String
+  "29":
+    type: VarT
+  String-1976739436905633066:
+    type: String
+  "37":
+    type: VarT
+  String-16374085169080980648:
+    type: String
+  "46":
+    type: VarT
+  String-3377577844511369682:
+    type: String
+  "53":
+    type: VarT
+  String-11345392677365101801:
+    type: String
+  "62":
+    type: VarT
+  String-17627030480522586708:
+    type: String
+  "38":
+    type: Exp
+  "0":
+    type: Val
+  "70":
+    type: Val
+  "24":
+    type: Val
+  "5":
+    type: ProgStmt
+  "4":
+    type: Loc
+  "10":
+    type: ProgStmt
+  "9":
+    type: Loc
+  "16":
+    type: ProgStmt
+  "15":
+    type: Loc
+  "22":
+    type: ProgStmt
+  "21":
+    type: Loc
+  "28":
+    type: ProgStmt
+  "27":
+    type: Loc
+  "32":
+    type: ProgStmt
+  "31":
+    type: Loc
+  "36":
+    type: ProgStmt
+  "33":
+    type: Loc
+  "41":
+    type: ProgStmt
+  "40":
+    type: Loc
+  "45":
+    type: ProgStmt
+  "42":
+    type: Loc
+  "49":
+    type: ProgStmt
+  "48":
+    type: Loc
+  "50":
+    type: Loc
+  "59":
+    type: ProgStmt
+  "76":
+    type: ProgStmt
+  "66":
+    type: ProgStmt
+

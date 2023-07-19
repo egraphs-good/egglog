@@ -1,0 +1,85 @@
+---
+source: tests/files.rs
+expression: serialized
+---
+nodes:
+  I-0:
+    op: I
+    children: []
+    eclass: "0"
+    cost: 9223372036854776000
+  A4-0:
+    op: A4
+    children: []
+    eclass: "4"
+    cost: 9223372036854776000
+  b-0:
+    op: b
+    children: []
+    eclass: "7"
+    cost: 9223372036854776000
+  A2-0:
+    op: A2
+    children: []
+    eclass: "3"
+    cost: 9223372036854776000
+  A-0:
+    op: A
+    children: []
+    eclass: "1"
+    cost: 9223372036854776000
+  B-0:
+    op: B
+    children: []
+    eclass: "2"
+    cost: 9223372036854776000
+  A8-0:
+    op: A8
+    children: []
+    eclass: "5"
+    cost: 9223372036854776000
+  a-0:
+    op: a
+    children: []
+    eclass: "6"
+    cost: 9223372036854776000
+  g*-6828067974578293639:
+    op: g*
+    children:
+      - A-0
+      - A-0
+    eclass: "3"
+    cost: 1
+  g*-15443823971188422721:
+    op: g*
+    children:
+      - g*-6828067974578293639
+      - A2-0
+    eclass: "4"
+    cost: 1
+  g*-5435976351651060604:
+    op: g*
+    children:
+      - g*-15443823971188422721
+      - A4-0
+    eclass: "5"
+    cost: 1
+root_eclasses: []
+class_data:
+  "0":
+    type: G
+  "4":
+    type: G
+  "7":
+    type: G
+  "3":
+    type: G
+  "1":
+    type: G
+  "2":
+    type: G
+  "5":
+    type: G
+  "6":
+    type: G
+

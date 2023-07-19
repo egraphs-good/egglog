@@ -1,0 +1,213 @@
+---
+source: tests/files.rs
+expression: serialized
+---
+nodes:
+  Add-16545935510313822457:
+    op: Add
+    children:
+      - Var-5040379952546458196
+      - App-4208978898528913939
+    eclass: "9"
+    cost: 1
+  Var-5871781006564002453:
+    op: Var
+    children:
+      - V-18060262198777227860
+    eclass: "2"
+    cost: 1
+  Var-5040379952546458196:
+    op: Var
+    children:
+      - V-7848520443469635519
+    eclass: "6"
+    cost: 1
+  Var-10912160959110460649:
+    op: Var
+    children:
+      - V-12877212935185514366
+    eclass: "7"
+    cost: 1
+  App-4208978898528913939:
+    op: App
+    children:
+      - sum-0
+      - Var-10912160959110460649
+    eclass: "8"
+    cost: 1
+  Lam-17304424278775812439:
+    op: Lam
+    children:
+      - V-12877212935185514366
+      - Add-16545935510313822457
+    eclass: "10"
+    cost: 1
+  Lam-2058398507139690922:
+    op: Lam
+    children:
+      - V-7848520443469635519
+      - Lam-17304424278775812439
+    eclass: "11"
+    cost: 1
+  Lam-14362651089177384606:
+    op: Lam
+    children:
+      - V-18060262198777227860
+      - CaseSplit-6168132277298701746
+    eclass: "0"
+    cost: 1
+  CaseSplit-6168132277298701746:
+    op: CaseSplit
+    children:
+      - Var-5871781006564002453
+      - Num-0
+      - Lam-2058398507139690922
+    eclass: "12"
+    cost: 1
+  StringSet-0:
+    op: StringSet
+    children: []
+    eclass: StringSet-0
+    cost: 0
+  freer-0:
+    op: freer
+    children:
+      - sum-0
+    eclass: StringSet-0
+    cost: 1
+  StringSet-5871781006564002453:
+    op: StringSet
+    children:
+      - V-7848520443469635519
+    eclass: StringSet-5871781006564002453
+    cost: 0
+  freer-16783941965674463102:
+    op: freer
+    children:
+      - Var-5040379952546458196
+    eclass: StringSet-5871781006564002453
+    cost: 1
+  StringSet-11743562013128004906:
+    op: StringSet
+    children:
+      - V-12877212935185514366
+    eclass: StringSet-11743562013128004906
+    cost: 0
+  freer-4208978898528913939:
+    op: freer
+    children:
+      - Var-10912160959110460649
+    eclass: StringSet-11743562013128004906
+    cost: 1
+  StringSet-17615343019692007359:
+    op: StringSet
+    children:
+      - V-18060262198777227860
+    eclass: StringSet-17615343019692007359
+    cost: 0
+  freer-11743562013128004906:
+    op: freer
+    children:
+      - Var-5871781006564002453
+    eclass: StringSet-17615343019692007359
+    cost: 1
+  freer-10080759905092916392:
+    op: freer
+    children:
+      - App-4208978898528913939
+    eclass: StringSet-11743562013128004906
+    cost: 1
+  i64-0:
+    op: "0"
+    children: []
+    eclass: i64-0
+    cost: 0
+  Num-0:
+    op: Num
+    children:
+      - i64-0
+    eclass: "3"
+    cost: 1
+  String-18060262198777227860:
+    op: "\"xs\""
+    children: []
+    eclass: String-18060262198777227860
+    cost: 0
+  V-18060262198777227860:
+    op: V
+    children:
+      - String-18060262198777227860
+    eclass: "1"
+    cost: 1
+  String-7848520443469635519:
+    op: "\"x\""
+    children: []
+    eclass: String-7848520443469635519
+    cost: 0
+  V-7848520443469635519:
+    op: V
+    children:
+      - String-7848520443469635519
+    eclass: "4"
+    cost: 1
+  String-12877212935185514366:
+    op: "\"xs'\""
+    children: []
+    eclass: String-12877212935185514366
+    cost: 0
+  V-12877212935185514366:
+    op: V
+    children:
+      - String-12877212935185514366
+    eclass: "5"
+    cost: 1
+  sum-0:
+    op: sum
+    children: []
+    eclass: "0"
+    cost: 1000
+root_eclasses: []
+class_data:
+  "9":
+    type: Term
+  "6":
+    type: Term
+  "8":
+    type: Term
+  "2":
+    type: Term
+  "1":
+    type: VarT
+  "4":
+    type: VarT
+  "7":
+    type: Term
+  "5":
+    type: VarT
+  "0":
+    type: Term
+  "10":
+    type: Term
+  "11":
+    type: Term
+  "12":
+    type: Term
+  "3":
+    type: Term
+  StringSet-0:
+    type: StringSet
+  StringSet-5871781006564002453:
+    type: StringSet
+  StringSet-11743562013128004906:
+    type: StringSet
+  StringSet-17615343019692007359:
+    type: StringSet
+  i64-0:
+    type: i64
+  String-18060262198777227860:
+    type: String
+  String-7848520443469635519:
+    type: String
+  String-12877212935185514366:
+    type: String
+

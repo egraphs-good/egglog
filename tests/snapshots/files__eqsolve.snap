@@ -1,0 +1,431 @@
+---
+source: tests/files.rs
+expression: serialized
+---
+nodes:
+  Add-5408770150503750205:
+    op: Add
+    children: []
+    eclass: "4837"
+    cost: 1
+  Add-5848835951988420660:
+    op: Add
+    children: []
+    eclass: "6153"
+    cost: 1
+  Add-4125571296366769009:
+    op: Add
+    children:
+      - Num-14237765175180637677
+    eclass: "7836"
+    cost: 1
+  Add-12127209062770441034:
+    op: Add
+    children:
+      - Mul-7410091823103675689
+      - Num-9249358851075372135
+    eclass: "7481"
+    cost: 1
+  Add-4177190922724885249:
+    op: Add
+    children:
+      - Neg-2653310066123898459
+    eclass: "7836"
+    cost: 1
+  Add-4335058819505383488:
+    op: Add
+    children:
+      - Num-14237765175180637677
+      - Mul-7410091823103675689
+    eclass: "7505"
+    cost: 1
+  Add-11215936905698579351:
+    op: Add
+    children:
+      - Add-7214972461234265960
+      - Neg-8058213421924858061
+    eclass: "7878"
+    cost: 1
+  Add-18388063568799919121:
+    op: Add
+    children:
+      - Mul-11049130819194852504
+      - Mul-7723703604166213683
+    eclass: "7836"
+    cost: 1
+  Add-8877774569269354474:
+    op: Add
+    children:
+      - Add-11215936905698579351
+    eclass: "8025"
+    cost: 1
+  Add-7214972461234265960:
+    op: Add
+    children:
+      - Num-6703182060581546710
+    eclass: "7836"
+    cost: 1
+  Neg-7898929516812054166:
+    op: Neg
+    children: []
+    eclass: "8171"
+    cost: 1
+  Neg-13718736894934863965:
+    op: Neg
+    children: []
+    eclass: "8276"
+    cost: 1
+  Neg-8058213421924858061:
+    op: Neg
+    children:
+      - Num-9249358851075372135
+    eclass: "8179"
+    cost: 1
+  Neg-3849234523395944122:
+    op: Neg
+    children:
+      - Mul-189120489567122716
+    eclass: "8238"
+    cost: 1
+  Neg-6237543417109271308:
+    op: Neg
+    children:
+      - Mul-5279350058056315082
+    eclass: "8260"
+    cost: 1
+  Neg-4472564062607179556:
+    op: Neg
+    children:
+      - Mul-18012535024065438898
+    eclass: "8262"
+    cost: 1
+  Neg-6809253329962390502:
+    op: Neg
+    children:
+      - Num-2494203162052632771
+    eclass: "8374"
+    cost: 1
+  Neg-14916785364705368112:
+    op: Neg
+    children:
+      - Mul-9437948337517880230
+    eclass: "7024"
+    cost: 1
+  Neg-15850363665189915607:
+    op: Neg
+    children:
+      - Neg-2653310066123898459
+    eclass: "6447"
+    cost: 1
+  Neg-2653310066123898459:
+    op: Neg
+    children:
+      - Mul-14998241575517803173
+    eclass: "3515"
+    cost: 1
+  i64-9249358851075372135:
+    op: "11"
+    children: []
+    eclass: i64-9249358851075372135
+    cost: 0
+  Num-9249358851075372135:
+    op: Num
+    children:
+      - i64-9249358851075372135
+    eclass: "8025"
+    cost: 1
+  i64-14237765175180637677:
+    op: "-7"
+    children: []
+    eclass: i64-14237765175180637677
+    cost: 0
+  Num-14237765175180637677:
+    op: Num
+    children:
+      - i64-14237765175180637677
+    eclass: "3515"
+    cost: 1
+  i64-15952540911656918845:
+    op: "9"
+    children: []
+    eclass: i64-15952540911656918845
+    cost: 0
+  Num-15952540911656918845:
+    op: Num
+    children:
+      - i64-15952540911656918845
+    eclass: "7836"
+    cost: 1
+  i64-6703182060581546710:
+    op: "-2"
+    children: []
+    eclass: i64-6703182060581546710
+    cost: 0
+  Num-6703182060581546710:
+    op: Num
+    children:
+      - i64-6703182060581546710
+    eclass: "7878"
+    cost: 1
+  i64-15069166229198181934:
+    op: "-10"
+    children: []
+    eclass: i64-15069166229198181934
+    cost: 0
+  Num-15069166229198181934:
+    op: Num
+    children:
+      - i64-15069166229198181934
+    eclass: "7572"
+    cost: 1
+  i64-5871781006564002453:
+    op: "1"
+    children: []
+    eclass: i64-5871781006564002453
+    cost: 0
+  Num-5871781006564002453:
+    op: Num
+    children:
+      - i64-5871781006564002453
+    eclass: "6459"
+    cost: 1
+  i64-4208978898528913939:
+    op: "7"
+    children: []
+    eclass: i64-4208978898528913939
+    cost: 0
+  Num-4208978898528913939:
+    op: Num
+    children:
+      - i64-4208978898528913939
+    eclass: "6447"
+    cost: 1
+  i64-0:
+    op: "0"
+    children: []
+    eclass: i64-0
+    cost: 0
+  Num-0:
+    op: Num
+    children:
+      - i64-0
+    eclass: "7024"
+    cost: 1
+  i64-2494203162052632771:
+    op: "-9"
+    children: []
+    eclass: i64-2494203162052632771
+    cost: 0
+  Num-2494203162052632771:
+    op: Num
+    children:
+      - i64-2494203162052632771
+    eclass: "4302"
+    cost: 1
+  i64-1662802108035088514:
+    op: "-6"
+    children: []
+    eclass: i64-1662802108035088514
+    cost: 0
+  Num-1662802108035088514:
+    op: Num
+    children:
+      - i64-1662802108035088514
+    eclass: "4220"
+    cost: 1
+  Mul-18323845791587980201:
+    op: Mul
+    children:
+      - Mul-18323845791587980201
+      - Num-5871781006564002453
+    eclass: "6459"
+    cost: 1
+  Mul-189120489567122716:
+    op: Mul
+    children:
+      - Mul-18323845791587980201
+      - Mul-189120489567122716
+    eclass: "8018"
+    cost: 1
+  Mul-7723703604166213683:
+    op: Mul
+    children:
+      - Num-5871781006564002453
+      - Num-9249358851075372135
+    eclass: "8025"
+    cost: 1
+  Mul-5279350058056315082:
+    op: Mul
+    children:
+      - Mul-18323845791587980201
+      - Mul-5279350058056315082
+    eclass: "4060"
+    cost: 1
+  Mul-18012535024065438898:
+    op: Mul
+    children:
+      - Num-5871781006564002453
+      - Num-15069166229198181934
+    eclass: "7572"
+    cost: 1
+  Mul-14998241575517803173:
+    op: Mul
+    children:
+      - Mul-18323845791587980201
+      - Num-4208978898528913939
+    eclass: "6447"
+    cost: 1
+  Mul-16045610397009127243:
+    op: Mul
+    children:
+      - Mul-16045610397009127243
+      - Num-5871781006564002453
+    eclass: "6447"
+    cost: 1
+  Mul-9437948337517880230:
+    op: Mul
+    children:
+      - Mul-18323845791587980201
+      - Mul-9437948337517880230
+    eclass: "7024"
+    cost: 1
+  Mul-11049130819194852504:
+    op: Mul
+    children:
+      - Num-5871781006564002453
+      - Num-6703182060581546710
+    eclass: "7878"
+    cost: 1
+  Mul-7410091823103675689:
+    op: Mul
+    children:
+      - Mul-18323845791587980201
+      - Num-14237765175180637677
+    eclass: "3515"
+    cost: 1
+  String-17627030480522586708:
+    op: "\"y\""
+    children: []
+    eclass: String-17627030480522586708
+    cost: 0
+  Var-17627030480522586708:
+    op: Var
+    children:
+      - String-17627030480522586708
+    eclass: "7925"
+    cost: 1
+  String-1133650922057509460:
+    op: "\"z\""
+    children: []
+    eclass: String-1133650922057509460
+    cost: 0
+  Var-1133650922057509460:
+    op: Var
+    children:
+      - String-1133650922057509460
+    eclass: "6094"
+    cost: 1
+  String-1976739436905633066:
+    op: "\"x\""
+    children: []
+    eclass: String-1976739436905633066
+    cost: 0
+  Var-1976739436905633066:
+    op: Var
+    children:
+      - String-1976739436905633066
+    eclass: "5922"
+    cost: 1
+root_eclasses: []
+class_data:
+  "4837":
+    type: Expr
+  "1193":
+    type: Expr
+  "1214":
+    type: Expr
+  "6153":
+    type: Expr
+  "7836":
+    type: Expr
+  "3515":
+    type: Expr
+  "4246":
+    type: Expr
+  "7481":
+    type: Expr
+  "8025":
+    type: Expr
+  "7494":
+    type: Expr
+  "7505":
+    type: Expr
+  "7878":
+    type: Expr
+  "8179":
+    type: Expr
+  "2070":
+    type: Expr
+  "2076":
+    type: Expr
+  "8171":
+    type: Expr
+  "8276":
+    type: Expr
+  "8238":
+    type: Expr
+  "8018":
+    type: Expr
+  "8260":
+    type: Expr
+  "4060":
+    type: Expr
+  "8262":
+    type: Expr
+  "7572":
+    type: Expr
+  "8374":
+    type: Expr
+  "4302":
+    type: Expr
+  "7024":
+    type: Expr
+  "6447":
+    type: Expr
+  i64-9249358851075372135:
+    type: i64
+  i64-14237765175180637677:
+    type: i64
+  i64-15952540911656918845:
+    type: i64
+  i64-6703182060581546710:
+    type: i64
+  i64-15069166229198181934:
+    type: i64
+  "6459":
+    type: Expr
+  i64-5871781006564002453:
+    type: i64
+  i64-4208978898528913939:
+    type: i64
+  i64-0:
+    type: i64
+  i64-2494203162052632771:
+    type: i64
+  "4220":
+    type: Expr
+  i64-1662802108035088514:
+    type: i64
+  "7925":
+    type: Expr
+  String-17627030480522586708:
+    type: String
+  "6094":
+    type: Expr
+  String-1133650922057509460:
+    type: String
+  "5922":
+    type: Expr
+  String-1976739436905633066:
+    type: String
+

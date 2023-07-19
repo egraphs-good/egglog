@@ -1,0 +1,440 @@
+---
+source: tests/files.rs
+expression: serialized
+---
+nodes:
+  Unit-0:
+    op: ()
+    children: []
+    eclass: Unit-0
+    cost: 0
+  store-17573655612157286265:
+    op: store
+    children:
+      - Stmt-7729226054085538919
+    eclass: Unit-0
+    cost: 1
+  store-1865224333147811465:
+    op: store
+    children:
+      - Stmt-17217173683929104254
+    eclass: Unit-0
+    cost: 1
+  store-12184852386770839161:
+    op: store
+    children: []
+    eclass: Unit-0
+    cost: 1
+  store-956205528749505380:
+    op: store
+    children: []
+    eclass: Unit-0
+    cost: 1
+  store-18235602976133918585:
+    op: store
+    children: []
+    eclass: Unit-0
+    cost: 1
+  String-9380340701290048084:
+    op: "\"int **xp = &(r->x)\""
+    children: []
+    eclass: String-9380340701290048084
+    cost: 0
+  Stmt-9380340701290048084:
+    op: Stmt
+    children:
+      - String-9380340701290048084
+    eclass: "4"
+    cost: 1
+  String-15252121707854050537:
+    op: "\"int **yp = &(r->y)\""
+    children: []
+    eclass: String-15252121707854050537
+    cost: 0
+  Stmt-15252121707854050537:
+    op: Stmt
+    children:
+      - String-15252121707854050537
+    eclass: "5"
+    cost: 1
+  String-723794125464027006:
+    op: "\"int *z = *xp\""
+    children: []
+    eclass: String-723794125464027006
+    cost: 0
+  Stmt-723794125464027006:
+    op: Stmt
+    children:
+      - String-723794125464027006
+    eclass: "6"
+    cost: 1
+  String-11345392677365101801:
+    op: "\"int *w = *yp\""
+    children: []
+    eclass: String-11345392677365101801
+    cost: 0
+  Stmt-11345392677365101801:
+    op: Stmt
+    children:
+      - String-11345392677365101801
+    eclass: "7"
+    cost: 1
+  String-7729226054085538919:
+    op: "\"*xp = a\""
+    children: []
+    eclass: String-7729226054085538919
+    cost: 0
+  Stmt-7729226054085538919:
+    op: Stmt
+    children:
+      - String-7729226054085538919
+    eclass: "8"
+    cost: 1
+  String-17217173683929104254:
+    op: "\"*yp = b\""
+    children: []
+    eclass: String-17217173683929104254
+    cost: 0
+  Stmt-17217173683929104254:
+    op: Stmt
+    children:
+      - String-17217173683929104254
+    eclass: "9"
+    cost: 1
+  String-10092447365923495741:
+    op: "\"int **yp = &(r->x)\""
+    children: []
+    eclass: String-10092447365923495741
+    cost: 0
+  Stmt-10092447365923495741:
+    op: Stmt
+    children:
+      - String-10092447365923495741
+    eclass: "13"
+    cost: 1
+  String-15673665965278112340:
+    op: "\"int *a = *xp\""
+    children: []
+    eclass: String-15673665965278112340
+    cost: 0
+  Stmt-15673665965278112340:
+    op: Stmt
+    children:
+      - String-15673665965278112340
+    eclass: "16"
+    cost: 1
+  String-14420720653836506280:
+    op: "\"int *b = *yp\""
+    children: []
+    eclass: String-14420720653836506280
+    cost: 0
+  Stmt-14420720653836506280:
+    op: Stmt
+    children:
+      - String-14420720653836506280
+    eclass: "20"
+    cost: 1
+  String-1145338382888088809:
+    op: "\"struct s *sp = malloc(sizeof(struct s))\""
+    children: []
+    eclass: String-1145338382888088809
+    cost: 0
+  Stmt-1145338382888088809:
+    op: Stmt
+    children:
+      - String-1145338382888088809
+    eclass: "28"
+    cost: 1
+  String-7848520443469635519:
+    op: "\"x\""
+    children: []
+    eclass: String-7848520443469635519
+    cost: 0
+  Field-7848520443469635519:
+    op: Field
+    children:
+      - String-7848520443469635519
+    eclass: "23"
+    cost: 1
+  String-3389265305341949031:
+    op: "\"y\""
+    children: []
+    eclass: String-3389265305341949031
+    cost: 0
+  Field-3389265305341949031:
+    op: Field
+    children:
+      - String-3389265305341949031
+    eclass: "24"
+    cost: 1
+  expr-816392601895295043:
+    op: expr
+    children: []
+    eclass: Unit-0
+    cost: 1
+  malloc-3852016734163638772:
+    op: malloc
+    children: []
+    eclass: Unit-0
+    cost: 1
+  malloc-10701023365856294032:
+    op: malloc
+    children: []
+    eclass: Unit-0
+    cost: 1
+  return-2593984309714661074:
+    op: return
+    children: []
+    eclass: Unit-0
+    cost: 1
+  AllocVar-7638530371481476275:
+    op: AllocVar
+    children: []
+    eclass: "58"
+    cost: 1
+  AllocVar-935348310899929565:
+    op: AllocVar
+    children: []
+    eclass: "66"
+    cost: 1
+  AllocVar-12678910324027934471:
+    op: AllocVar
+    children: []
+    eclass: "66"
+    cost: 1
+  assign-18222003660328102155:
+    op: assign
+    children:
+      - Stmt-9380340701290048084
+    eclass: Unit-0
+    cost: 1
+  assign-10140282458269866008:
+    op: assign
+    children:
+      - Stmt-10092447365923495741
+    eclass: Unit-0
+    cost: 1
+  assign-2467654679282165353:
+    op: assign
+    children:
+      - Stmt-15673665965278112340
+    eclass: Unit-0
+    cost: 1
+  assign-12422841196411474953:
+    op: assign
+    children:
+      - Stmt-14420720653836506280
+    eclass: Unit-0
+    cost: 1
+  assign-4623924613765959467:
+    op: assign
+    children:
+      - Stmt-1145338382888088809
+    eclass: Unit-0
+    cost: 1
+  assign-353931293295122599:
+    op: assign
+    children: []
+    eclass: Unit-0
+    cost: 1
+  assign-18347501392879653187:
+    op: assign
+    children: []
+    eclass: Unit-0
+    cost: 1
+  assign-16916369917496940299:
+    op: assign
+    children: []
+    eclass: Unit-0
+    cost: 1
+  assign-4909578286815501508:
+    op: assign
+    children: []
+    eclass: Unit-0
+    cost: 1
+  call-18039799676888087707:
+    op: call
+    children: []
+    eclass: Unit-0
+    cost: 1
+  expr-points-to-5871781006564002453:
+    op: expr-points-to
+    children: []
+    eclass: "58"
+    cost: 1
+  expr-points-to-7638530371481476275:
+    op: expr-points-to
+    children: []
+    eclass: "58"
+    cost: 1
+  expr-points-to-8417957797057827878:
+    op: expr-points-to
+    children: []
+    eclass: "66"
+    cost: 1
+  expr-points-to-17719290276574392667:
+    op: expr-points-to
+    children: []
+    eclass: "66"
+    cost: 1
+  expr-points-to-103947256882385308:
+    op: expr-points-to
+    children: []
+    eclass: "66"
+    cost: 1
+  expr-points-to-935348310899929565:
+    op: expr-points-to
+    children: []
+    eclass: "66"
+    cost: 1
+  expr-points-to-12678910324027934471:
+    op: expr-points-to
+    children: []
+    eclass: "66"
+    cost: 1
+  expr-points-to-14289738803621830331:
+    op: expr-points-to
+    children: []
+    eclass: "66"
+    cost: 1
+  expr-points-to-15121139857639374588:
+    op: expr-points-to
+    children: []
+    eclass: "66"
+    cost: 1
+  expr-points-to-9249358851075372135:
+    op: expr-points-to
+    children: []
+    eclass: "66"
+    cost: 1
+root_eclasses: []
+class_data:
+  Unit-0:
+    type: Unit
+  "8":
+    type: StmtT
+  "11":
+    type: ExprT
+  "18":
+    type: ExprT
+  "9":
+    type: StmtT
+  "14":
+    type: ExprT
+  "21":
+    type: ExprT
+  "31":
+    type: StmtT
+  "41":
+    type: ExprT
+  "26":
+    type: ExprT
+  "32":
+    type: StmtT
+  "43":
+    type: ExprT
+  "33":
+    type: StmtT
+  "39":
+    type: ExprT
+  "44":
+    type: ExprT
+  "4":
+    type: StmtT
+  String-9380340701290048084:
+    type: String
+  "5":
+    type: StmtT
+  String-15252121707854050537:
+    type: String
+  "6":
+    type: StmtT
+  String-723794125464027006:
+    type: String
+  "7":
+    type: StmtT
+  String-11345392677365101801:
+    type: String
+  String-7729226054085538919:
+    type: String
+  String-17217173683929104254:
+    type: String
+  "13":
+    type: StmtT
+  String-10092447365923495741:
+    type: String
+  "16":
+    type: StmtT
+  String-15673665965278112340:
+    type: String
+  "20":
+    type: StmtT
+  String-14420720653836506280:
+    type: String
+  "28":
+    type: StmtT
+  String-1145338382888088809:
+    type: String
+  "23":
+    type: FieldT
+  String-7848520443469635519:
+    type: String
+  "24":
+    type: FieldT
+  String-3389265305341949031:
+    type: String
+  "34":
+    type: StmtT
+  "45":
+    type: ExprT
+  "40":
+    type: ExprT
+  "51":
+    type: TypeT
+  "42":
+    type: ExprT
+  "27":
+    type: TypeT
+  "37":
+    type: StmtT
+  "50":
+    type: ExprT
+  "58":
+    type: AllocT
+  "66":
+    type: AllocT
+  "10":
+    type: TypeT
+  "12":
+    type: ExprT
+  "15":
+    type: ExprT
+  "17":
+    type: TypeT
+  "19":
+    type: ExprT
+  "22":
+    type: ExprT
+  "38":
+    type: TypeT
+  "29":
+    type: StmtT
+  "30":
+    type: StmtT
+  "35":
+    type: StmtT
+  "46":
+    type: ExprT
+  "47":
+    type: ExprT
+  "36":
+    type: StmtT
+  "48":
+    type: ExprT
+  "49":
+    type: ExprT
+  "0":
+    type: FuncT
+  "1":
+    type: ExprT
+

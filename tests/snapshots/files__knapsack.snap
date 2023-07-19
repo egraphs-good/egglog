@@ -1,0 +1,602 @@
+---
+source: tests/files.rs
+expression: serialized
+---
+nodes:
+  Max-12767849128788070565:
+    op: Max
+    children:
+      - Add-12767849128788070565
+      - test2-0
+    eclass: "34"
+    cost: 1
+  Max-4257709447480710592:
+    op: Max
+    children:
+      - Add-4257709447480710592
+      - Num-0
+    eclass: "42"
+    cost: 1
+  Max-7689025016205028330:
+    op: Max
+    children:
+      - Add-7689025016205028330
+      - test2-0
+    eclass: "114"
+    cost: 1
+  Max-17858451687665171008:
+    op: Max
+    children:
+      - Add-17858451687665171008
+      - Num-0
+    eclass: "86"
+    cost: 1
+  Max-16090861256706902788:
+    op: Max
+    children:
+      - Num-10080759905092916392
+      - Num-15121139857639374588
+    eclass: "21"
+    cost: 1
+  Max-15155512945806973223:
+    op: Max
+    children:
+      - Max-15155512945806973223
+      - Knap-8055065427700440304
+    eclass: "19"
+    cost: 1
+  Max-17068086881835555595:
+    op: Max
+    children:
+      - Knap-9625685651485996723
+      - Max-4257709447480710592
+    eclass: "21"
+    cost: 1
+  Max-12964724298609410765:
+    op: Max
+    children:
+      - Add-6688173608459297496
+      - Knap-8761580567721237632
+    eclass: "31"
+    cost: 1
+  Max-5881049328396882462:
+    op: Max
+    children:
+      - Add-2191806714279895063
+      - Max-17858451687665171008
+    eclass: "55"
+    cost: 1
+  Max-11431069251142797786:
+    op: Max
+    children:
+      - Add-5881049328396882462
+      - Num-3377577844511369682
+    eclass: "57"
+    cost: 1
+  Nil-0:
+    op: Nil
+    children: []
+    eclass: "0"
+    cost: 9223372036854776000
+  test4-0:
+    op: test4
+    children: []
+    eclass: "17"
+    cost: 9223372036854776000
+  i64-5871781006564002453:
+    op: "1"
+    children: []
+    eclass: i64-5871781006564002453
+    cost: 0
+  Num-5871781006564002453:
+    op: Num
+    children:
+      - i64-5871781006564002453
+    eclass: "34"
+    cost: 1
+  i64-0:
+    op: "0"
+    children: []
+    eclass: i64-0
+    cost: 0
+  Num-0:
+    op: Num
+    children:
+      - i64-0
+    eclass: "139"
+    cost: 1
+  i64-10912160959110460649:
+    op: "5"
+    children: []
+    eclass: i64-10912160959110460649
+    cost: 0
+  Num-10912160959110460649:
+    op: Num
+    children:
+      - i64-10912160959110460649
+    eclass: "42"
+    cost: 1
+  i64-15329034371404145204:
+    op: "100"
+    children: []
+    eclass: i64-15329034371404145204
+    cost: 0
+  Num-15329034371404145204:
+    op: Num
+    children:
+      - i64-15329034371404145204
+    eclass: "114"
+    cost: 1
+  i64-3377577844511369682:
+    op: "10"
+    children: []
+    eclass: i64-3377577844511369682
+    cost: 0
+  Num-3377577844511369682:
+    op: Num
+    children:
+      - i64-3377577844511369682
+    eclass: "86"
+    cost: 1
+  i64-10080759905092916392:
+    op: "8"
+    children: []
+    eclass: i64-10080759905092916392
+    cost: 0
+  Num-10080759905092916392:
+    op: Num
+    children:
+      - i64-10080759905092916392
+    eclass: "19"
+    cost: 1
+  i64-15121139857639374588:
+    op: "12"
+    children: []
+    eclass: i64-15121139857639374588
+    cost: 0
+  Num-15121139857639374588:
+    op: Num
+    children:
+      - i64-15121139857639374588
+    eclass: "21"
+    cost: 1
+  i64-11743562013128004906:
+    op: "2"
+    children: []
+    eclass: i64-11743562013128004906
+    cost: 0
+  Num-11743562013128004906:
+    op: Num
+    children:
+      - i64-11743562013128004906
+    eclass: "31"
+    cost: 1
+  i64-6755155689022739364:
+    op: "20"
+    children: []
+    eclass: i64-6755155689022739364
+    cost: 0
+  Num-6755155689022739364:
+    op: Num
+    children:
+      - i64-6755155689022739364
+    eclass: "55"
+    cost: 1
+  i64-10132733533534109046:
+    op: "30"
+    children: []
+    eclass: i64-10132733533534109046
+    cost: 0
+  Num-10132733533534109046:
+    op: Num
+    children:
+      - i64-10132733533534109046
+    eclass: "57"
+    cost: 1
+  Add-12767849128788070565:
+    op: Add
+    children:
+      - Add-12767849128788070565
+      - Num-0
+    eclass: "34"
+    cost: 1
+  Add-4257709447480710592:
+    op: Add
+    children:
+      - Knap-8055065427700440304
+      - test2-0
+    eclass: "42"
+    cost: 1
+  Add-7689025016205028330:
+    op: Add
+    children:
+      - Add-7689025016205028330
+      - Num-0
+    eclass: "114"
+    cost: 1
+  Add-17858451687665171008:
+    op: Add
+    children:
+      - Num-3377577844511369682
+      - test2-0
+    eclass: "86"
+    cost: 1
+  Add-9897319166324813206:
+    op: Add
+    children:
+      - Num-15121139857639374588
+      - Num-0
+    eclass: "21"
+    cost: 1
+  Add-2191806714279895063:
+    op: Add
+    children:
+      - Add-2191806714279895063
+      - test2-0
+    eclass: "55"
+    cost: 1
+  Add-6688173608459297496:
+    op: Add
+    children:
+      - Knap-8761580567721237632
+      - Max-12767849128788070565
+    eclass: "31"
+    cost: 1
+  Add-5881049328396882462:
+    op: Add
+    children:
+      - Max-5881049328396882462
+      - Add-17858451687665171008
+    eclass: "57"
+    cost: 1
+  Add-8920934607236954797:
+    op: Add
+    children:
+      - Max-17858451687665171008
+      - Max-7689025016205028330
+    eclass: "78"
+    cost: 1
+  Add-12350391042838145532:
+    op: Add
+    children:
+      - Knap-322684113549048133
+      - Knap-322684113549048133
+    eclass: "25"
+    cost: 1
+  Cons-10904137648156522009:
+    op: Cons
+    children:
+      - i64-10912160959110460649
+      - i64-10912160959110460649
+      - Nil-0
+    eclass: "1"
+    cost: 1
+  Cons-17586302948671646652:
+    op: Cons
+    children:
+      - i64-15121139857639374588
+      - i64-15121139857639374588
+      - Cons-10904137648156522009
+    eclass: "2"
+    cost: 1
+  i64-17615343019692007359:
+    op: "3"
+    children: []
+    eclass: i64-17615343019692007359
+    cost: 0
+  Cons-10851723037774575768:
+    op: Cons
+    children:
+      - i64-17615343019692007359
+      - i64-17615343019692007359
+      - Cons-17586302948671646652
+    eclass: "3"
+    cost: 1
+  Cons-16775918654720524462:
+    op: Cons
+    children:
+      - i64-10912160959110460649
+      - i64-10912160959110460649
+      - Cons-10851723037774575768
+    eclass: "4"
+    cost: 1
+  i64-16783941965674463102:
+    op: "6"
+    children: []
+    eclass: i64-16783941965674463102
+    cost: 0
+  Cons-17052732317115183341:
+    op: Cons
+    children:
+      - i64-16783941965674463102
+      - i64-16783941965674463102
+      - Nil-0
+    eclass: "6"
+    cost: 1
+  Cons-11855281505717577415:
+    op: Cons
+    children:
+      - i64-5871781006564002453
+      - i64-5871781006564002453
+      - Nil-0
+    eclass: "8"
+    cost: 1
+  Cons-1774521600624661023:
+    op: Cons
+    children:
+      - i64-5871781006564002453
+      - i64-5871781006564002453
+      - Cons-11855281505717577415
+    eclass: "9"
+    cost: 1
+  Cons-14349484667770210186:
+    op: Cons
+    children:
+      - i64-5871781006564002453
+      - i64-5871781006564002453
+      - Cons-1774521600624661023
+    eclass: "10"
+    cost: 1
+  i64-5040379952546458196:
+    op: "4"
+    children: []
+    eclass: i64-5040379952546458196
+    cost: 0
+  Cons-13999161699983863607:
+    op: Cons
+    children:
+      - i64-5040379952546458196
+      - i64-15329034371404145204
+      - Nil-0
+    eclass: "12"
+    cost: 1
+  Cons-16717132857405712227:
+    op: Cons
+    children:
+      - i64-5871781006564002453
+      - i64-3377577844511369682
+      - Cons-13999161699983863607
+    eclass: "13"
+    cost: 1
+  test2-0:
+    op: test2
+    children: []
+    eclass: "139"
+    cost: 9223372036854776000
+  test3-0:
+    op: test3
+    children: []
+    eclass: "11"
+    cost: 9223372036854776000
+  i64-2546176790493825425:
+    op: "13"
+    children: []
+    eclass: i64-2546176790493825425
+    cost: 0
+  Knap-5416706752957082784:
+    op: Knap
+    children:
+      - i64-2546176790493825425
+      - Cons-16775918654720524462
+    eclass: "5"
+    cost: 1
+  Knap-18135825332793356696:
+    op: Knap
+    children:
+      - i64-10912160959110460649
+      - Cons-14349484667770210186
+    eclass: "11"
+    cost: 1
+  i64-14289738803621830331:
+    op: "15"
+    children: []
+    eclass: i64-14289738803621830331
+    cost: 0
+  Knap-10654884905055842184:
+    op: Knap
+    children:
+      - i64-14289738803621830331
+    eclass: "17"
+    cost: 1
+  Knap-12534754811337209722:
+    op: Knap
+    children:
+      - i64-10080759905092916392
+      - Cons-10851723037774575768
+    eclass: "19"
+    cost: 1
+  Knap-9625685651485996723:
+    op: Knap
+    children:
+      - i64-2546176790493825425
+      - Cons-10851723037774575768
+    eclass: "21"
+    cost: 1
+  Knap-322684113549048133:
+    op: Knap
+    children:
+      - i64-17615343019692007359
+    eclass: "24"
+    cost: 1
+  Knap-17304424278775812439:
+    op: Knap
+    children:
+      - i64-10912160959110460649
+      - Cons-1774521600624661023
+    eclass: "31"
+    cost: 1
+  Knap-8761580567721237632:
+    op: Knap
+    children:
+      - i64-5040379952546458196
+      - Cons-11855281505717577415
+    eclass: "34"
+    cost: 1
+  Knap-8055065427700440304:
+    op: Knap
+    children:
+      - i64-10912160959110460649
+      - Cons-17586302948671646652
+    eclass: "42"
+    cost: 1
+  Knap-626098628404118446:
+    op: Knap
+    children:
+      - i64-14289738803621830331
+    eclass: "53"
+    cost: 1
+  Unwrap-6807129317463932018:
+    op: Unwrap
+    children:
+      - Num-10912160959110460649
+    eclass: i64-10912160959110460649
+    cost: 1
+  Unwrap-15173113486080567242:
+    op: Unwrap
+    children:
+      - Add-12767849128788070565
+    eclass: i64-5871781006564002453
+    cost: 1
+  Unwrap-4520820669176069863:
+    op: Unwrap
+    children:
+      - test2-0
+    eclass: i64-0
+    cost: 1
+  Unwrap-6911076574346317326:
+    op: Unwrap
+    children:
+      - Num-3377577844511369682
+    eclass: i64-3377577844511369682
+    cost: 1
+  Unwrap-5300248094752421466:
+    op: Unwrap
+    children:
+      - Num-15329034371404145204
+    eclass: i64-15329034371404145204
+    cost: 1
+  Unwrap-883374682458736911:
+    op: Unwrap
+    children:
+      - Max-15155512945806973223
+    eclass: i64-10080759905092916392
+    cost: 1
+  Unwrap-12626936695586741817:
+    op: Unwrap
+    children:
+      - Knap-9625685651485996723
+    eclass: i64-15121139857639374588
+    cost: 1
+  Unwrap-16004514540098111499:
+    op: Unwrap
+    children:
+      - Add-6688173608459297496
+    eclass: i64-11743562013128004906
+    cost: 1
+  Unwrap-9353306107957757443:
+    op: Unwrap
+    children:
+      - Num-6755155689022739364
+    eclass: i64-6755155689022739364
+    cost: 1
+  Unwrap-2650124047376210733:
+    op: Unwrap
+    children:
+      - Add-5881049328396882462
+    eclass: i64-10132733533534109046
+    cost: 1
+root_eclasses: []
+class_data:
+  "34":
+    type: expr
+  "139":
+    type: expr
+  "42":
+    type: expr
+  "114":
+    type: expr
+  "86":
+    type: expr
+  "21":
+    type: expr
+  "19":
+    type: expr
+  "31":
+    type: expr
+  "55":
+    type: expr
+  "57":
+    type: expr
+  "0":
+    type: objects
+  "17":
+    type: expr
+  i64-5871781006564002453:
+    type: i64
+  i64-0:
+    type: i64
+  i64-10912160959110460649:
+    type: i64
+  i64-15329034371404145204:
+    type: i64
+  i64-3377577844511369682:
+    type: i64
+  i64-10080759905092916392:
+    type: i64
+  i64-15121139857639374588:
+    type: i64
+  i64-11743562013128004906:
+    type: i64
+  i64-6755155689022739364:
+    type: i64
+  i64-10132733533534109046:
+    type: i64
+  "78":
+    type: expr
+  "25":
+    type: expr
+  "24":
+    type: expr
+  "1":
+    type: objects
+  "2":
+    type: objects
+  "3":
+    type: objects
+  i64-17615343019692007359:
+    type: i64
+  "4":
+    type: objects
+  "6":
+    type: objects
+  i64-16783941965674463102:
+    type: i64
+  "8":
+    type: objects
+  "9":
+    type: objects
+  "10":
+    type: objects
+  "12":
+    type: objects
+  i64-5040379952546458196:
+    type: i64
+  "13":
+    type: objects
+  "11":
+    type: expr
+  "5":
+    type: expr
+  i64-2546176790493825425:
+    type: i64
+  i64-14289738803621830331:
+    type: i64
+  "16":
+    type: objects
+  "15":
+    type: objects
+  "53":
+    type: expr
+  "14":
+    type: objects
+

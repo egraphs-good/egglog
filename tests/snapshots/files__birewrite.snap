@@ -1,0 +1,206 @@
+---
+source: tests/files.rs
+expression: serialized
+---
+nodes:
+  c-0:
+    op: c
+    children: []
+    eclass: "2"
+    cost: 9223372036854776000
+  d-0:
+    op: d
+    children: []
+    eclass: "3"
+    cost: 9223372036854776000
+  e-0:
+    op: e
+    children: []
+    eclass: "4"
+    cost: 9223372036854776000
+  i64-5871781006564002453:
+    op: "1"
+    children: []
+    eclass: i64-5871781006564002453
+    cost: 0
+  Lit-5871781006564002453:
+    op: Lit
+    children:
+      - i64-5871781006564002453
+    eclass: "0"
+    cost: 1
+  i64-11743562013128004906:
+    op: "2"
+    children: []
+    eclass: i64-11743562013128004906
+    cost: 0
+  Lit-11743562013128004906:
+    op: Lit
+    children:
+      - i64-11743562013128004906
+    eclass: "1"
+    cost: 1
+  i64-17615343019692007359:
+    op: "3"
+    children: []
+    eclass: i64-17615343019692007359
+    cost: 0
+  Lit-17615343019692007359:
+    op: Lit
+    children:
+      - i64-17615343019692007359
+    eclass: "2"
+    cost: 1
+  i64-5040379952546458196:
+    op: "4"
+    children: []
+    eclass: i64-5040379952546458196
+    cost: 0
+  Lit-5040379952546458196:
+    op: Lit
+    children:
+      - i64-5040379952546458196
+    eclass: "3"
+    cost: 1
+  i64-10912160959110460649:
+    op: "5"
+    children: []
+    eclass: i64-10912160959110460649
+    cost: 0
+  Lit-10912160959110460649:
+    op: Lit
+    children:
+      - i64-10912160959110460649
+    eclass: "4"
+    cost: 1
+  i64-16783941965674463102:
+    op: "6"
+    children: []
+    eclass: i64-16783941965674463102
+    cost: 0
+  Lit-16783941965674463102:
+    op: Lit
+    children:
+      - i64-16783941965674463102
+    eclass: "5"
+    cost: 1
+  a-0:
+    op: a
+    children: []
+    eclass: "0"
+    cost: 9223372036854776000
+  f-0:
+    op: f
+    children: []
+    eclass: "5"
+    cost: 9223372036854776000
+  ex1-0:
+    op: ex1
+    children: []
+    eclass: "7"
+    cost: 9223372036854776000
+  ex2-0:
+    op: ex2
+    children: []
+    eclass: "9"
+    cost: 9223372036854776000
+  b-0:
+    op: b
+    children: []
+    eclass: "1"
+    cost: 9223372036854776000
+  Add-5871781006564002453:
+    op: Add
+    children:
+      - a-0
+      - b-0
+    eclass: "6"
+    cost: 1
+  Add-1476769281115640523:
+    op: Add
+    children:
+      - Add-5871781006564002453
+      - Lit-17615343019692007359
+    eclass: "7"
+    cost: 1
+  Add-11307757358215063057:
+    op: Add
+    children:
+      - Lit-10912160959110460649
+      - f-0
+    eclass: "8"
+    cost: 1
+  Add-11234845072659508782:
+    op: Add
+    children:
+      - Lit-5040379952546458196
+      - Add-11307757358215063057
+    eclass: "9"
+    cost: 1
+  Add-7659469028595837896:
+    op: Add
+    children:
+      - Lit-11743562013128004906
+      - c-0
+    eclass: "10"
+    cost: 1
+  Add-16275225025205966978:
+    op: Add
+    children:
+      - d-0
+      - e-0
+    eclass: "12"
+    cost: 1
+  Add-3377577844511369682:
+    op: Add
+    children:
+      - Lit-5871781006564002453
+      - Add-7659469028595837896
+    eclass: "7"
+    cost: 1
+  Add-5395768095842721163:
+    op: Add
+    children:
+      - Add-16275225025205966978
+      - Lit-16783941965674463102
+    eclass: "9"
+    cost: 1
+root_eclasses: []
+class_data:
+  "2":
+    type: Math
+  "3":
+    type: Math
+  "4":
+    type: Math
+  "0":
+    type: Math
+  i64-5871781006564002453:
+    type: i64
+  "1":
+    type: Math
+  i64-11743562013128004906:
+    type: i64
+  i64-17615343019692007359:
+    type: i64
+  i64-5040379952546458196:
+    type: i64
+  i64-10912160959110460649:
+    type: i64
+  "5":
+    type: Math
+  i64-16783941965674463102:
+    type: i64
+  "7":
+    type: Math
+  "9":
+    type: Math
+  "6":
+    type: Math
+  "8":
+    type: Math
+  "10":
+    type: Math
+  "12":
+    type: Math
+
