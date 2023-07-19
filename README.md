@@ -63,6 +63,14 @@ npm install -g @vscode/vsce
 
 Run `vsce package` in the `vscode/egglog-1.0.0` folder to reconstruct the .vsix file and install it manually.
 
+## Development
+
+To run the tests use `make test`.
+
+We use [`insta`](https://insta.rs/) for snapshot testing. For output stability, these tests must always be run using `make test`.
+
+If you make a change that intentionally changes the output format, you can update all snapshots with `env INSTA_UPDATE=1 make test`.
+
 # Syntax
 
 The syntax of the .egg files is defined in `src/ast/parse.lalrpop`.
