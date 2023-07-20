@@ -215,7 +215,6 @@ impl ProofState {
                 res
             }
             NormAction::LetLit(..)
-            | NormAction::LetIteration(..)
             | NormAction::LetVar(..)
             | NormAction::Panic(..)
             | NormAction::Extract(..) => vec![action.to_action()],

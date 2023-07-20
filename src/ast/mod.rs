@@ -722,7 +722,6 @@ pub enum NormAction {
     Let(Symbol, NormExpr),
     LetVar(Symbol, Symbol),
     LetLit(Symbol, Literal),
-    LetIteration(Symbol),
     Extract(Symbol, Symbol),
     Set(NormExpr, Symbol),
     Delete(NormExpr),
@@ -736,7 +735,6 @@ impl NormAction {
             NormAction::Let(symbol, expr) => Action::Let(*symbol, expr.to_expr()),
             NormAction::LetVar(symbol, other) => Action::Let(*symbol, Expr::Var(*other)),
             NormAction::LetLit(symbol, lit) => Action::Let(*symbol, Expr::Lit(lit.clone())),
-            NormAction::LetIteration(symbol) => Action::Let(*symbol, Expr::Var("iteration".into())),
             NormAction::Set(NormExpr::Call(head, body), other) => Action::Set(
                 *head,
                 body.iter().map(|s| Expr::Var(*s)).collect(),
@@ -758,7 +756,6 @@ impl NormAction {
             NormAction::Let(symbol, expr) => NormAction::Let(*symbol, f(expr)),
             NormAction::LetVar(symbol, other) => NormAction::LetVar(*symbol, *other),
             NormAction::LetLit(symbol, lit) => NormAction::LetLit(*symbol, lit.clone()),
-            NormAction::LetIteration(symbol) => NormAction::LetIteration(*symbol),
             NormAction::Set(expr, other) => NormAction::Set(f(expr), *other),
             NormAction::Extract(var, variants) => NormAction::Extract(*var, *variants),
             NormAction::Delete(expr) => NormAction::Delete(f(expr)),
@@ -777,7 +774,6 @@ impl NormAction {
                 NormAction::LetVar(fvar(*symbol, true), fvar(*other, false))
             }
             NormAction::LetLit(symbol, lit) => NormAction::LetLit(fvar(*symbol, true), lit.clone()),
-            NormAction::LetIteration(symbol) => NormAction::LetIteration(fvar(*symbol, true)),
             NormAction::Set(expr, other) => {
                 NormAction::Set(expr.map_def_use(fvar, false), fvar(*other, false))
             }
@@ -991,9 +987,6 @@ impl NormRule {
                 }
                 NormAction::LetLit(symbol, lit) => {
                     subst.insert(*symbol, Expr::Lit(lit.clone()));
-                }
-                NormAction::LetIteration(symbol) => {
-                    subst.insert(*symbol, Expr::Var("iteration".into()));
                 }
                 NormAction::Set(expr, other) => {
                     let new_expr = expr.to_expr();

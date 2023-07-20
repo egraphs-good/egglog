@@ -826,15 +826,7 @@ impl Desugar {
                 res.push(NormAction::LetLit(assign, l.clone()));
                 assign
             }
-            Expr::Var(v) => {
-                if v.to_string() == "iteration" {
-                    let assign = self.get_fresh();
-                    res.push(NormAction::LetIteration(assign));
-                    assign
-                } else {
-                    *v
-                }
-            }
+            Expr::Var(v) => *v,
             Expr::Call(f, children) => {
                 let assign = self.get_fresh();
                 let mut new_children = vec![];

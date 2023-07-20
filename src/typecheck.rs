@@ -525,17 +525,7 @@ impl<'a> ExprChecker<'a> for ActionChecker<'a> {
     }
 
     fn infer_var(&mut self, sym: Symbol) -> Result<(Self::T, ArcSort), TypeError> {
-        if sym.to_string() == "iteration" {
-            self.instructions.push(Instruction::Iteration);
-            Ok((
-                (),
-                self.egraph
-                    .proof_state
-                    .type_info
-                    .reserved_type("iteration".into())
-                    .unwrap(),
-            ))
-        } else if let Some((sort, v)) = self.egraph().global_bindings.get(&sym) {
+        if let Some((sort, v)) = self.egraph().global_bindings.get(&sym) {
             self.instructions.push(Instruction::Value(*v));
             Ok(((), sort.clone()))
         } else if let Some((i, _, ty)) = self.locals.get_full(&sym) {
@@ -669,7 +659,6 @@ enum Load {
 
 #[derive(Clone, Debug)]
 enum Instruction {
-    Iteration,
     Literal(Literal),
     Load(Load),
     Value(Value),
@@ -748,7 +737,6 @@ impl EGraph {
     ) -> Result<(), Error> {
         for instr in &program.0 {
             match instr {
-                Instruction::Iteration => stack.push(self.iteration.into()),
                 Instruction::Value(v) => stack.push(*v),
                 Instruction::Load(load) => match load {
                     Load::Stack(idx) => stack.push(stack[*idx]),
