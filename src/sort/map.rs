@@ -76,22 +76,15 @@ impl Sort for MapSort {
         self.key.is_eq_sort() || self.value.is_eq_sort()
     }
 
-    fn foreach_tracked_values<'a>(&'a self, value: &'a Value, mut f: Box<dyn FnMut(Value) + 'a>) {
-        // TODO: Potential duplication of code
+    fn inner_values(&self, value: &Value) -> Vec<(&ArcSort, Value)> {
         let maps = self.maps.lock().unwrap();
         let map = maps.get_index(value.bits as usize).unwrap();
-
-        if self.key.is_eq_sort() {
-            for key in map.keys() {
-                f(*key)
-            }
+        let mut result = Vec::new();
+        for (k, v) in map.iter() {
+            result.push((&self.key, *k));
+            result.push((&self.value, *v));
         }
-
-        if self.value.is_eq_sort() {
-            for value in map.values() {
-                f(*value)
-            }
-        }
+        result
     }
 
     fn canonicalize(&self, _value: &mut Value, _unionfind: &UnionFind) -> bool {
