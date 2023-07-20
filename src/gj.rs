@@ -17,6 +17,8 @@ use std::{
 enum Instr<'a> {
     Intersect {
         value_idx: usize,
+        variable_name: Symbol,
+        info: VarInfo2,
         trie_accesses: Vec<(usize, TrieAccess<'a>)>,
     },
     ConstrainConstant {
@@ -29,6 +31,14 @@ enum Instr<'a> {
         args: Vec<AtomTerm>,
         check: bool, // check or assign to output variable
     },
+}
+
+// FIXME @mwillsey awful name, bad bad bad
+#[derive(Default, Debug, Clone)]
+struct VarInfo2 {
+    occurences: Vec<usize>,
+    intersected_on: usize,
+    size_guess: usize,
 }
 
 struct InputSizes<'a> {
@@ -65,8 +75,14 @@ impl<'a> std::fmt::Display for Program<'a> {
                 Instr::Intersect {
                     value_idx,
                     trie_accesses,
+                    variable_name,
+                    info,
                 } => {
-                    write!(f, " Intersect @ {} ", value_idx)?;
+                    write!(
+                        f,
+                        " Intersect @ {value_idx} sg={sg:6} {variable_name:15}",
+                        sg = info.size_guess
+                    )?;
                     for (trie_idx, a) in trie_accesses {
                         write!(f, "  {}: {}", trie_idx, a)?;
                     }
@@ -148,6 +164,7 @@ impl<'b> Context<'b> {
             Instr::Intersect {
                 value_idx,
                 trie_accesses,
+                ..
             } => {
                 if let Some(x) = trie_accesses
                     .iter()
@@ -362,13 +379,6 @@ impl EGraph {
         Vec<Symbol>,        /* variable ordering */
         Vec<Option<usize>>, /* the first column accessed per-atom */
     )> {
-        #[derive(Default, Debug)]
-        struct VarInfo2 {
-            occurences: Vec<usize>,
-            intersected_on: usize,
-            size_guess: usize,
-        }
-
         let atoms = &query.query.atoms;
         let mut vars: IndexMap<Symbol, VarInfo2> = Default::default();
         let mut constants =
@@ -411,6 +421,7 @@ impl EGraph {
             // info.size_guess >>= info.occurences.len() - 1;
         }
 
+        // here we are picking the variable ordering
         let mut ordered_vars = IndexMap::default();
         while !vars.is_empty() {
             let (&var, _info) = vars
@@ -459,6 +470,8 @@ impl EGraph {
             });
             Instr::Intersect {
                 value_idx,
+                variable_name: v,
+                info: info.clone(),
                 trie_accesses: info
                     .occurences
                     .iter()
@@ -583,11 +596,12 @@ impl EGraph {
                             log::debug!("stage {i} total cost {sum}");
                         }
                     }
-                    log::debug!(
-                        "Matched {} times (took {:?})",
-                        ctx.matches,
-                        Instant::now().duration_since(start)
-                    );
+                    let duration = start.elapsed();
+                    log::debug!("Matched {} times (took {:?})", ctx.matches, duration,);
+                    if duration.as_millis() > 500 {
+                        log::warn!("Query took a long time: {:?}", duration);
+                        // panic!()
+                    }
                 }
 
                 if !do_seminaive {
