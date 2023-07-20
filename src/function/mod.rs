@@ -4,7 +4,7 @@ use smallvec::SmallVec;
 
 mod binary_search;
 pub mod index;
-mod table;
+pub(crate) mod table;
 
 pub type ValueVec = SmallVec<[Value; 3]>;
 

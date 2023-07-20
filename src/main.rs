@@ -1,5 +1,5 @@
 use clap::Parser;
-use egglog::EGraph;
+use egglog::{EGraph, SerializeConfig};
 use std::io::{self, BufRead, BufReader};
 use std::path::PathBuf;
 
@@ -12,6 +12,8 @@ struct Args {
     inputs: Vec<PathBuf>,
     #[clap(long)]
     proofs: bool,
+    #[clap(long)]
+    to_json: bool,
 }
 
 fn main() {
@@ -73,6 +75,12 @@ fn main() {
                 log::error!("{}", err);
                 std::process::exit(1)
             }
+        }
+
+        if args.to_json {
+            let json_path = input.with_extension("json");
+            let serialized = egraph.serialize(SerializeConfig::default());
+            serialized.to_json_file(json_path).unwrap();
         }
 
         // no need to drop the egraph if we are going to exit
