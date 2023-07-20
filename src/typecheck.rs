@@ -55,14 +55,14 @@ pub struct Query {
 impl std::fmt::Display for Query {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for atom in &self.atoms {
-            write!(f, "{atom}")?;
+            writeln!(f, "{atom}")?;
         }
         if !self.filters.is_empty() {
-            write!(f, "where ")?;
+            writeln!(f, "where ")?;
             for filter in &self.filters {
-                write!(
+                writeln!(
                     f,
-                    "({} {}) ",
+                    "({} {})",
                     filter.head.name(),
                     ListDisplay(&filter.args, " ")
                 )?;
