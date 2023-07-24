@@ -5,7 +5,7 @@ use smallvec::SmallVec;
 
 use crate::{
     function::index::Offset,
-    typecheck::{Atom, AtomTerm, Query},
+    typecheck::{Atom, AtomTerm, Filter, Query},
     *,
 };
 use std::{
@@ -14,12 +14,14 @@ use std::{
     ops::Range,
 };
 
+#[derive(Clone)]
 enum Instr<'a> {
     Intersect {
         value_idx: usize,
         variable_name: Symbol,
         info: VarInfo2,
         trie_accesses: Vec<(usize, TrieAccess<'a>)>,
+        check: bool, // check or assign to output variable
     },
     ConstrainConstant {
         index: usize,
@@ -27,7 +29,7 @@ enum Instr<'a> {
         trie_access: TrieAccess<'a>,
     },
     Call {
-        prim: Primitive,
+        prim: Filter,
         args: Vec<AtomTerm>,
         check: bool, // check or assign to output variable
     },
@@ -68,37 +70,46 @@ type Result = std::result::Result<(), ()>;
 
 struct Program<'a>(Vec<Instr<'a>>);
 
+impl<'a> std::fmt::Display for Instr<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Instr::Intersect {
+                value_idx,
+                trie_accesses,
+                variable_name,
+                info,
+                check,
+            } => {
+                let name = if *check { "Check    " } else { "Intersect" };
+                write!(
+                    f,
+                    " {name} @ {value_idx} sg={sg:6} {variable_name:15}",
+                    sg = info.size_guess
+                )?;
+                for (trie_idx, a) in trie_accesses {
+                    write!(f, "  {}: {}", trie_idx, a)?;
+                }
+                writeln!(f)?
+            }
+            Instr::ConstrainConstant {
+                index,
+                val,
+                trie_access,
+            } => {
+                writeln!(f, " ConstrainConstant {index} {trie_access} = {val:?}")?;
+            }
+            Instr::Call { prim, args, check } => {
+                writeln!(f, " Call {:?} {:?} {:?}", prim, args, check)?;
+            }
+        }
+        Ok(())
+    }
+}
+
 impl<'a> std::fmt::Display for Program<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for instr in &self.0 {
-            match instr {
-                Instr::Intersect {
-                    value_idx,
-                    trie_accesses,
-                    variable_name,
-                    info,
-                } => {
-                    write!(
-                        f,
-                        " Intersect @ {value_idx} sg={sg:6} {variable_name:15}",
-                        sg = info.size_guess
-                    )?;
-                    for (trie_idx, a) in trie_accesses {
-                        write!(f, "  {}: {}", trie_idx, a)?;
-                    }
-                    writeln!(f)?
-                }
-                Instr::ConstrainConstant {
-                    index,
-                    val,
-                    trie_access,
-                } => {
-                    writeln!(f, " ConstrainConstant {index} {trie_access} = {val:?}")?;
-                }
-                Instr::Call { prim, args, check } => {
-                    writeln!(f, " Call {:?} {:?} {:?}", prim, args, check)?;
-                }
-            }
+            write!(f, "{}", instr)?;
         }
         Ok(())
     }
@@ -164,6 +175,7 @@ impl<'b> Context<'b> {
             Instr::Intersect {
                 value_idx,
                 trie_accesses,
+                check,
                 ..
             } => {
                 if let Some(x) = trie_accesses
@@ -173,6 +185,20 @@ impl<'b> Context<'b> {
                 {
                     stage.add_measurement(x);
                 }
+
+                if *check {
+                    let mut new_tries = tries.to_vec();
+                    let value = self.tuple[*value_idx];
+                    for (j, access) in trie_accesses {
+                        let Some(t) = tries[*j].get(access, value) else {
+                            return Ok(());
+                        };
+                        new_tries[*j] = t;
+                    }
+                    return self.eval(&mut new_tries, program, stage.next(), f);
+                }
+
+                assert!(!*check);
                 match trie_accesses.as_slice() {
                     [(j, access)] => tries[*j].for_each(access, |value, trie| {
                         let old_trie = std::mem::replace(&mut tries[*j], trie);
@@ -239,13 +265,27 @@ impl<'b> Context<'b> {
                     })
                 }
 
-                if let Some(res) = prim.apply(&values, self.egraph) {
+                let result = match prim {
+                    Filter::Primitive(p) => p.apply(&values, self.egraph),
+                    Filter::Function(f) => {
+                        let func_table = self.egraph.functions.get(f).unwrap();
+                        // TODO check the timestamp
+                        func_table.nodes.get(&values).map(|output| output.value)
+                    }
+                };
+
+                if let Some(res) = result {
                     match out {
                         AtomTerm::Var(v) => {
                             let i = self.query.vars.get_index_of(v).unwrap();
-                            if *check && self.tuple[i] != res {
-                                return Ok(());
+
+                            if *check {
+                                assert_ne!(self.tuple[i], Value::fake());
+                                if self.tuple[i] != res {
+                                    return Ok(());
+                                }
                             }
+
                             self.tuple[i] = res;
                         }
                         AtomTerm::Value(val) => {
@@ -264,6 +304,7 @@ impl<'b> Context<'b> {
     }
 }
 
+#[derive(Clone)]
 enum Constraint {
     Eq(usize, usize),
     Const(usize, Value),
@@ -312,15 +353,27 @@ impl EGraph {
             vars.entry(*var).or_default();
         }
 
+        let mut atom_filters = vec![];
         for (i, atom) in query.atoms.iter().enumerate() {
-            for v in atom.vars() {
-                // only count grounded occurrences
-                vars.entry(v).or_default().occurences.push(i)
+            if atom.head.as_str().contains("_Parent_") {
+                atom_filters.push(atom.clone());
+            } else {
+                for v in atom.vars() {
+                    // only count grounded occurrences
+                    vars.entry(v).or_default().occurences.push(i)
+                }
             }
         }
 
+        // make sure everyone has an entry in the vars table
         for prim in &query.filters {
             for v in prim.vars() {
+                vars.entry(v).or_default();
+            }
+        }
+
+        for atom_filter in atom_filters {
+            for v in atom_filter.vars() {
                 vars.entry(v).or_default();
             }
         }
@@ -486,12 +539,13 @@ impl EGraph {
                         (atom_idx, access)
                     })
                     .collect(),
+                check: false,
             }
         });
         program.extend(var_instrs);
 
         // now we can try to add primitives
-        // TODO this is very inefficient, since primitives all at the end
+        let mut calls = vec![];
         let mut extra = query.query.filters.clone();
         while !extra.is_empty() {
             let next = extra.iter().position(|p| {
@@ -514,15 +568,105 @@ impl EGraph {
                     },
                     AtomTerm::Value(_) => true,
                 };
-                program.push(Instr::Call {
+                calls.push(Instr::Call {
                     prim: p.head.clone(),
                     args: p.args.clone(),
                     check,
                 });
             } else {
-                panic!("cycle")
+                panic!("cycle {:#?}", query)
             }
         }
+
+        if true {
+            // now we have to actually place them in the program, as high as they can go.
+            // note, the calls should be topo sorted already at this point
+            'call_loop: for mut call in calls {
+                let mut bound_symbols: HashSet<Symbol> = Default::default();
+                let arg_symbols: HashSet<Symbol>;
+                let last_arg: Option<Symbol>;
+                let Instr::Call {
+                    args,
+                    check,
+                    ..
+                } = &mut call else {
+                    panic!("Should be a call at this point");
+                };
+
+                if let Some((last, args)) = args.split_last() {
+                    arg_symbols = args
+                        .iter()
+                        .filter_map(|a| match a {
+                            AtomTerm::Var(v) => Some(*v),
+                            AtomTerm::Value(_) => None,
+                        })
+                        .collect();
+                    if let AtomTerm::Var(v) = last {
+                        last_arg = Some(*v);
+                    } else {
+                        last_arg = None
+                    }
+                } else {
+                    panic!("Zero-arg primitive not supported");
+                }
+
+                for (position, instr) in program.iter().enumerate() {
+                    match instr {
+                        Instr::Intersect { variable_name, .. } => {
+                            bound_symbols.insert(*variable_name);
+                        }
+                        Instr::Call { args, .. } => {
+                            if let Some(AtomTerm::Var(v)) = args.last() {
+                                bound_symbols.insert(*v);
+                            }
+                        }
+                        _ => (),
+                    }
+                    if arg_symbols.is_subset(&bound_symbols) {
+                        *check = if let Some(last_var) = last_arg {
+                            bound_symbols.contains(&last_var)
+                        } else {
+                            true
+                        };
+                        program.insert(position + 1, call);
+                        continue 'call_loop;
+                    }
+                }
+                *check = if let Some(last_var) = last_arg {
+                    bound_symbols.contains(&last_var)
+                } else {
+                    true
+                };
+                program.push(call);
+            }
+        } else {
+            program.extend(calls);
+        }
+
+        // now some intersections might already have been bound
+        // we need to replace these with constrain constant
+        let mut bound_symbols = HashSet::default();
+        for instr in &mut program {
+            match instr {
+                Instr::Intersect {
+                    variable_name,
+                    check,
+                    ..
+                } => {
+                    if !bound_symbols.insert(*variable_name) {
+                        *check = true
+                    }
+                }
+                Instr::Call { args, .. } => {
+                    if let Some(AtomTerm::Var(v)) = args.last() {
+                        bound_symbols.insert(*v);
+                    }
+                }
+                _ => (),
+            }
+        }
+
+        println!("Program:\n{}", Program(program.clone()));
 
         Some((
             Program(program),
@@ -538,7 +682,7 @@ impl EGraph {
         let has_atoms = !cq.query.atoms.is_empty();
 
         if has_atoms {
-            let do_seminaive = self.seminaive;
+            let do_seminaive = false;
             // for the later atoms, we consider everything
             let mut timestamp_ranges = vec![0..u32::MAX; cq.query.atoms.len()];
             for (atom_i, atom) in cq.query.atoms.iter().enumerate() {
@@ -741,6 +885,7 @@ impl LazyTrie {
     }
 }
 
+#[derive(Clone)]
 struct TrieAccess<'a> {
     function: &'a Function,
     timestamp_range: Range<u32>,

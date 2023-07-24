@@ -633,7 +633,6 @@ impl EGraph {
                 let _ = self.run_actions(stack, &[], &rule.program, true);
             } else {
                 for values in all_values.chunks(num_vars) {
-                    eprintln!("running actions for rule {} with values {:?}", name, values);
                     rule.matches += 1;
                     // we can ignore results here
                     stack.clear();
@@ -647,7 +646,6 @@ impl EGraph {
         let apply_elapsed = apply_start.elapsed();
         report.apply_time += apply_elapsed;
         report.updated |= self.did_change();
-        eprintln!("updated: {}", report.updated);
 
         report
     }

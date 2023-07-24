@@ -49,7 +49,13 @@ impl<T: std::fmt::Display> std::fmt::Display for Atom<T> {
 #[derive(Default, Debug, Clone)]
 pub struct Query {
     pub atoms: Vec<Atom<Symbol>>,
-    pub filters: Vec<Atom<Primitive>>,
+    pub filters: Vec<Atom<Filter>>,
+}
+
+#[derive(Debug, Clone)]
+pub enum Filter {
+    Primitive(Primitive),
+    Function(Symbol),
 }
 
 impl std::fmt::Display for Query {
@@ -60,12 +66,14 @@ impl std::fmt::Display for Query {
         if !self.filters.is_empty() {
             writeln!(f, "where ")?;
             for filter in &self.filters {
-                writeln!(
-                    f,
-                    "({} {})",
-                    filter.head.name(),
-                    ListDisplay(&filter.args, " ")
-                )?;
+                match &filter.head {
+                    Filter::Primitive(p) => {
+                        writeln!(f, "({} {})", p.name(), ListDisplay(&filter.args, " "))?;
+                    }
+                    Filter::Function(fun) => {
+                        writeln!(f, "({fun} {})", ListDisplay(&filter.args, " "))?;
+                    }
+                }
             }
         }
         Ok(())
@@ -211,6 +219,25 @@ impl<'a> Context<'a> {
         // Now we can fill in the nodes with the canonical leaves
         for (node, id) in &self.nodes {
             match node {
+                // ENode::Func(f, ids) if f.as_str().contains("_Parent_") => {
+                //     let mut args = vec![];
+                //     for child in ids {
+                //         let leaf = get_leaf(child);
+                //         if let AtomTerm::Var(v) = leaf {
+                //             if self.egraph.global_bindings.contains_key(&v) {
+                //                 args.push(AtomTerm::Value(self.egraph.global_bindings[&v].1));
+                //                 continue;
+                //             }
+                //         }
+                //         args.push(get_leaf(child));
+                //         query_eclasses.insert(*child);
+                //     }
+                //     args.push(get_leaf(id));
+                //     query.filters.push(Atom {
+                //         head: Filter::Function(*f),
+                //         args,
+                //     });
+                // }
                 ENode::Func(f, ids) => {
                     let args = ids.iter().chain([id]).map(get_leaf).collect();
                     for id in ids {
@@ -233,7 +260,7 @@ impl<'a> Context<'a> {
                     }
                     args.push(get_leaf(id));
                     query.filters.push(Atom {
-                        head: p.clone(),
+                        head: Filter::Primitive(p.clone()),
                         args,
                     });
                 }
@@ -255,7 +282,7 @@ impl<'a> Context<'a> {
                     // we actually know the query won't fire
                     if canon_value != *value {
                         query.filters.push(Atom {
-                            head: Primitive(Arc::new(ValueEq {})),
+                            head: Filter::Primitive(Primitive(Arc::new(ValueEq {}))),
                             args: vec![
                                 AtomTerm::Value(canon_value),
                                 AtomTerm::Value(*value),
@@ -265,6 +292,22 @@ impl<'a> Context<'a> {
                     }
                 }
             }
+        }
+
+        if query.atoms.len() > 2 {
+            // move the parent "atoms" to the filters
+            query.atoms.retain(|atom| {
+                let f = atom.head;
+                if f.as_str().contains("_Parent_") {
+                    query.filters.push(Atom {
+                        head: Filter::Function(f),
+                        args: atom.args.clone(),
+                    });
+                    false
+                } else {
+                    true
+                }
+            });
         }
 
         if self.errors.is_empty() {
@@ -822,7 +865,6 @@ impl EGraph {
                     let old_value = function.get(args);
 
                     if let Some(old_value) = old_value {
-                        eprintln!("old value: {:?}, new value: {:?}", old_value, new_value);
                         if new_value != old_value {
                             let merged: Value = match function.merge.merge_vals.clone() {
                                 MergeFn::AssertEq => {
@@ -841,20 +883,20 @@ impl EGraph {
                                 }
                             };
                             if merged != old_value {
-                            let args = &stack[new_len..];
-                            let function = self.functions.get_mut(f).unwrap();
-                            function.insert(args, merged, self.timestamp);
-                            }
-                                // re-borrow
+                                let args = &stack[new_len..];
                                 let function = self.functions.get_mut(f).unwrap();
-                                if let Some(prog) = function.merge.on_merge.clone() {
-                                    let values = [old_value, new_value];
-                                    // XXX: we get an error if we pass the current
-                                    // stack and then truncate it to the old length.
-                                    // Why?
-                                    self.run_actions(&mut Vec::new(), &values, &prog, true)?;
-                                }
+                                function.insert(args, merged, self.timestamp);
                             }
+                            // re-borrow
+                            let function = self.functions.get_mut(f).unwrap();
+                            if let Some(prog) = function.merge.on_merge.clone() {
+                                let values = [old_value, new_value];
+                                // XXX: we get an error if we pass the current
+                                // stack and then truncate it to the old length.
+                                // Why?
+                                self.run_actions(&mut Vec::new(), &values, &prog, true)?;
+                            }
+                        }
                     } else {
                         function.insert(args, new_value, self.timestamp);
                     }
