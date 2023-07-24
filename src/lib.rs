@@ -593,10 +593,7 @@ impl EGraph {
                     rule_search_time.as_secs_f64(),
                     all_values.len()
                 );
-                report.updated |= !all_values.is_empty();
                 searched.push((name, all_values, rule_search_time));
-            } else {
-                report.updated = true;
             }
         }
 
@@ -636,6 +633,7 @@ impl EGraph {
                 let _ = self.run_actions(stack, &[], &rule.program, true);
             } else {
                 for values in all_values.chunks(num_vars) {
+                    eprintln!("running actions for rule {} with values {:?}", name, values);
                     rule.matches += 1;
                     // we can ignore results here
                     stack.clear();
@@ -648,7 +646,20 @@ impl EGraph {
         self.rulesets.insert(ruleset, rules);
         let apply_elapsed = apply_start.elapsed();
         report.apply_time += apply_elapsed;
+        report.updated |= self.did_change();
+        eprintln!("updated: {}", report.updated);
+
         report
+    }
+
+    fn did_change(&self) -> bool {
+        for (_name, function) in &self.functions {
+            if function.nodes.max_ts() >= self.timestamp {
+                return true;
+            }
+        }
+
+        false
     }
 
     fn add_rule_with_name(

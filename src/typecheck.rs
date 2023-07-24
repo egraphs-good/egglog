@@ -822,6 +822,7 @@ impl EGraph {
                     let old_value = function.get(args);
 
                     if let Some(old_value) = old_value {
+                        eprintln!("old value: {:?}, new value: {:?}", old_value, new_value);
                         if new_value != old_value {
                             let merged: Value = match function.merge.merge_vals.clone() {
                                 MergeFn::AssertEq => {
@@ -839,11 +840,11 @@ impl EGraph {
                                     result
                                 }
                             };
+                            if merged != old_value {
                             let args = &stack[new_len..];
                             let function = self.functions.get_mut(f).unwrap();
                             function.insert(args, merged, self.timestamp);
-
-                            if new_value != old_value {
+                            }
                                 // re-borrow
                                 let function = self.functions.get_mut(f).unwrap();
                                 if let Some(prog) = function.merge.on_merge.clone() {
@@ -854,7 +855,6 @@ impl EGraph {
                                     self.run_actions(&mut Vec::new(), &values, &prog, true)?;
                                 }
                             }
-                        }
                     } else {
                         function.insert(args, new_value, self.timestamp);
                     }
