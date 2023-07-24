@@ -623,11 +623,6 @@ impl EGraph {
                         _ => (),
                     }
                     if arg_symbols.is_subset(&bound_symbols) {
-                        *check = if let Some(last_var) = last_arg {
-                            bound_symbols.contains(&last_var)
-                        } else {
-                            true
-                        };
                         program.insert(position + 1, call);
                         continue 'call_loop;
                     }
@@ -653,20 +648,59 @@ impl EGraph {
                     check,
                     ..
                 } => {
-                    if !bound_symbols.insert(*variable_name) {
-                        *check = true
-                    }
+                    *check = !bound_symbols.insert(*variable_name);
                 }
-                Instr::Call { args, .. } => {
-                    if let Some(AtomTerm::Var(v)) = args.last() {
-                        bound_symbols.insert(*v);
+                Instr::Call { args, check, .. } => {
+                    if let Some(AtomTerm::Var(variable_name)) = args.last() {
+                        *check = !bound_symbols.insert(*variable_name);
+                    } else {
+                        *check = true
                     }
                 }
                 _ => (),
             }
         }
 
-        println!("Program:\n{}", Program(program.clone()));
+        // sanity check the program
+        let mut tuple_valid = vec![false; query.vars.len()];
+        for instr in &program {
+            match instr {
+                Instr::Intersect {
+                    value_idx, check, ..
+                } => {
+                    assert_eq!(*check, tuple_valid[*value_idx]);
+                    if !*check {
+                        tuple_valid[*value_idx] = true;
+                    }
+                }
+                Instr::ConstrainConstant { .. } => {}
+                Instr::Call { check, args, .. } => {
+                    let Some((last, args)) = args.split_last() else {
+                        continue
+                    };
+
+                    for a in args {
+                        if let AtomTerm::Var(v) = a {
+                            let i = query.vars.get_index_of(v).unwrap();
+                            assert!(tuple_valid[i]);
+                        }
+                    }
+
+                    match last {
+                        AtomTerm::Var(v) => {
+                            let i = query.vars.get_index_of(v).unwrap();
+                            assert_eq!(*check, tuple_valid[i], "{instr}");
+                            if !*check {
+                                tuple_valid[i] = true;
+                            }
+                        }
+                        AtomTerm::Value(_) => {
+                            assert!(*check);
+                        }
+                    }
+                }
+            }
+        }
 
         Some((
             Program(program),

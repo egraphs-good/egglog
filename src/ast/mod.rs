@@ -953,7 +953,8 @@ impl NormRule {
     }
 
     pub fn resugar_actions(&self, subst: &mut HashMap<Symbol, Expr>) -> Vec<Action> {
-        let mut used = HashSet::<Symbol>::default();
+        // TODO doesn't work because re-ordering actions can be bad
+        /*let mut used = HashSet::<Symbol>::default();
         let mut head = Vec::<Action>::default();
         for a in &self.head {
             match a {
@@ -1045,8 +1046,8 @@ impl NormRule {
                     Expr::Call(..) => head.push(Action::Expr(expr.clone())),
                 };
             }
-        }
-        head
+        }*/
+        self.head.iter().map(|a| a.to_action()).collect()
     }
 
     pub fn resugar(&self) -> Rule {
