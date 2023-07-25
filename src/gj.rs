@@ -39,6 +39,8 @@ enum Instr<'a> {
 #[derive(Default, Debug, Clone)]
 struct VarInfo2 {
     occurences: Vec<usize>,
+    filter_occurences: Vec<usize>,
+    is_input: bool,
     intersected_on: usize,
     size_guess: usize,
 }
@@ -108,8 +110,8 @@ impl<'a> std::fmt::Display for Instr<'a> {
 
 impl<'a> std::fmt::Display for Program<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for instr in &self.0 {
-            write!(f, "{}", instr)?;
+        for (i, instr) in self.0.iter().enumerate() {
+            write!(f, "{i:2}. {}", instr)?;
         }
         Ok(())
     }
@@ -117,6 +119,7 @@ impl<'a> std::fmt::Display for Program<'a> {
 
 struct Context<'b> {
     query: &'b CompiledQuery,
+    join_var_ordering: Vec<Symbol>,
     tuple: Vec<Value>,
     matches: usize,
     egraph: &'b EGraph,
@@ -128,11 +131,13 @@ impl<'b> Context<'b> {
         cq: &'b CompiledQuery,
         timestamp_ranges: &[Range<u32>],
     ) -> Option<(Self, Program<'b>, Vec<Option<usize>>)> {
-        let (program, _vars, intersections) = egraph.compile_program(cq, timestamp_ranges)?;
+        let (program, join_var_ordering, intersections) =
+            egraph.compile_program(cq, timestamp_ranges)?;
 
         let ctx = Context {
             query: cq,
             tuple: vec![Value::fake(); cq.vars.len()],
+            join_var_ordering,
             matches: 0,
             egraph,
         };
@@ -336,6 +341,8 @@ pub struct VarInfo {
 #[derive(Debug, Clone)]
 pub struct CompiledQuery {
     query: Query,
+    // Ordering is used for the tuple
+    // The GJ variable ordering is stored in the context
     pub vars: IndexMap<Symbol, VarInfo>,
 }
 
@@ -345,7 +352,7 @@ impl EGraph {
         query: Query,
         types: &IndexMap<Symbol, ArcSort>,
     ) -> CompiledQuery {
-        // NOTE: this vars order only used for ordering the tuple,
+        // NOTE: this vars order only used for ordering the tuple storing the resulting match
         // It is not the GJ variable order.
         let mut vars: IndexMap<Symbol, VarInfo> = Default::default();
 
@@ -446,11 +453,35 @@ impl EGraph {
                     }
                 }
             }
+            if let Some((_out, input_args)) = atom.args.split_last() {
+                for arg in input_args.iter() {
+                    if let AtomTerm::Var(v) = arg {
+                        vars.entry(*v).or_default().is_input = true;
+                    }
+                }
+            }
+        }
+
+        for (i, filter) in query.query.filters.iter().enumerate() {
+            if let Some((out, input_args)) = filter.args.split_last() {
+                for (_col, arg) in input_args.iter().enumerate() {
+                    if arg != out {
+                        match arg {
+                            AtomTerm::Var(var) => {
+                                vars.entry(*var).or_default().filter_occurences.push(i)
+                            }
+                            AtomTerm::Value(_) => (),
+                        }
+                    }
+                }
+            }
         }
 
         for info in vars.values_mut() {
             info.occurences.sort_unstable();
             info.occurences.dedup();
+            info.filter_occurences.sort_unstable();
+            info.filter_occurences.dedup();
         }
 
         let relation_sizes: Vec<usize> = atoms
@@ -464,13 +495,12 @@ impl EGraph {
         }
 
         for (_v, info) in &mut vars {
-            assert!(!info.occurences.is_empty());
             info.size_guess = info
                 .occurences
                 .iter()
                 .map(|&i| relation_sizes[i])
                 .min()
-                .unwrap();
+                .unwrap_or(0);
             // info.size_guess >>= info.occurences.len() - 1;
         }
 
@@ -481,7 +511,15 @@ impl EGraph {
                 .iter()
                 .max_by_key(|(_v, info)| {
                     let size = info.size_guess as isize;
-                    (info.occurences.len(), info.intersected_on, -size)
+                    // let total_occs = info.occurences.len() + info.filter_occurences.len();
+                    // (total_occs, info.intersected_on, -size)
+                    (
+                        info.occurences.len(),
+                        info.is_input as usize,
+                        info.intersected_on,
+                        info.filter_occurences.len(),
+                        -size,
+                    )
                 })
                 .unwrap();
 
@@ -661,6 +699,43 @@ impl EGraph {
             }
         }
 
+        // hoist the checks far up the program
+        let (checks, mut program) = program
+            .into_iter()
+            .partition::<Vec<_>, _>(|instr| matches!(instr, Instr::Intersect { check: true, .. }));
+        'outer: for check_instr in checks {
+            let mut bound_symbols = HashSet::default();
+            for (position, instr) in program.iter().enumerate() {
+                match instr {
+                    Instr::Intersect {
+                        variable_name,
+                        check: false,
+                        ..
+                    } => {
+                        bound_symbols.insert(*variable_name);
+                    }
+                    Instr::Call {
+                        args, check: false, ..
+                    } => {
+                        if let Some(AtomTerm::Var(variable_name)) = args.last() {
+                            bound_symbols.insert(*variable_name);
+                        };
+                    }
+                    _ => (),
+                }
+                let Instr::Intersect { variable_name, check: true, .. } = &check_instr else {
+                    panic!("This must be a check")
+                };
+
+                if bound_symbols.contains(variable_name) {
+                    program.insert(position + 1, check_instr);
+                    continue 'outer;
+                }
+            }
+
+            program.push(check_instr);
+        }
+
         // sanity check the program
         let mut tuple_valid = vec![false; query.vars.len()];
         for instr in &program {
@@ -729,11 +804,10 @@ impl EGraph {
                 if let Some((mut ctx, program, cols)) = Context::new(self, cq, &timestamp_ranges) {
                     let start = Instant::now();
                     log::debug!(
-                        "Query:\n{}\nNew atom: {}\nVars: {}\nProgram\n{}",
-                        cq.query,
-                        atom,
-                        ListDisplay(cq.vars.keys(), " "),
-                        program
+                        "Query:\n{q}\nNew atom: {atom}\nTuple: {tuple}\nJoin order: {order}\nProgram\n{program}",
+                        q = cq.query,
+                        order = ListDisplay(&ctx.join_var_ordering, " "),
+                        tuple = ListDisplay(cq.vars.keys(), " "),
                     );
                     let mut tries = Vec::with_capacity(cq.query.atoms.len());
                     for ((atom, ts), col) in cq
