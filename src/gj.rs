@@ -10,6 +10,7 @@ use crate::{
 };
 use std::{
     cell::UnsafeCell,
+    cmp::max,
     fmt::{self, Debug},
     ops::Range,
 };
@@ -40,6 +41,7 @@ struct VarInfo2 {
     occurences: Vec<usize>,
     intersected_on: usize,
     size_guess: usize,
+    is_nonparent_input: bool,
 }
 
 struct InputSizes<'a> {
@@ -416,6 +418,18 @@ impl EGraph {
             }
         }
 
+        for (i, atom) in atoms.iter().enumerate() {
+            if !atom.head.as_str().contains("_Parent_") {
+                if let Some((_last, args)) = atom.args.split_last() {
+                    for arg in args {
+                        if let AtomTerm::Var(var) = arg {
+                            vars.entry(*var).or_default().is_nonparent_input = true;
+                        }
+                    }
+                }
+            }
+        }
+
         for info in vars.values_mut() {
             info.occurences.sort_unstable();
             info.occurences.dedup();
@@ -449,9 +463,42 @@ impl EGraph {
             let mut var_occurs_not_done = HashMap::<Symbol, usize>::default();
             for atom in atoms {
                 if !atom.vars().all(|v| !vars.contains_key(&v)) {
-                    for var in atom.vars() {
-                        if vars.contains_key(&var) {
-                            *var_occurs_not_done.entry(var).or_default() += 1;
+                    if let Some((_last, args)) = atom.args.split_last() {
+                        for arg in args {
+                            if let AtomTerm::Var(var) = arg {
+                                *var_occurs_not_done.entry(*var).or_default() += 1;
+                            }
+                        }
+                    }
+                }
+            }
+
+            let mut var_is_lookup = HashMap::<Symbol, usize>::default();
+            for atom in atoms {
+                let (todo, _): (Vec<Symbol>, Vec<Symbol>) =
+                    atom.vars().partition(|var| vars.contains_key(var));
+                if todo.len() == 1 {
+                    let desirable = if Some(&AtomTerm::Var(todo[0])) == atom.args.last() {
+                        2
+                    } else {
+                        1
+                    };
+
+                    var_is_lookup.insert(
+                        todo[0],
+                        max(*var_is_lookup.get(&todo[0]).unwrap_or(&0), desirable),
+                    );
+                }
+            }
+
+            let mut occurences_nonparent = HashMap::<Symbol, usize>::default();
+            for atom in atoms {
+                if let Some((last, args)) = atom.args.split_last() {
+                    for arg in args {
+                        if let AtomTerm::Var(var) = arg {
+                            if !atom.head.as_str().contains("_Parent_") {
+                                *occurences_nonparent.entry(*var).or_default() += 1;
+                            }
                         }
                     }
                 }
@@ -461,14 +508,16 @@ impl EGraph {
                 .iter()
                 .max_by_key(|(v, info)| {
                     let size = info.size_guess as isize;
-                    let occurs_not_done =
-                        var_occurs_not_done.get(*v).copied().unwrap_or(0) as isize;
-                    (
+
+                    let cost = (
+                        var_is_lookup.get(*v).unwrap_or(&0),
                         info.intersected_on,
-                        -occurs_not_done,
-                        info.occurences.len(),
+                        //info.is_nonparent_input as usize,
+                        (*occurences_nonparent.get(*v).unwrap_or(&0) as i64),
                         -size,
-                    )
+                    );
+                    eprintln!("{}: {:?}", v, cost);
+                    cost
                 })
                 .unwrap();
 
@@ -481,6 +530,7 @@ impl EGraph {
                 }
             }
 
+            eprintln!("picked {}", var);
             ordered_vars.insert(var, info);
         }
         vars = ordered_vars;
@@ -674,7 +724,7 @@ impl EGraph {
                     }
                     let duration = start.elapsed();
                     log::debug!("Matched {} times (took {:?})", ctx.matches, duration,);
-                    if duration.as_millis() > 500 {
+                    if duration.as_millis() > 10 {
                         log::warn!("Query took a long time: {:?}", duration);
                         panic!()
                     }
