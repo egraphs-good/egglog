@@ -1,4 +1,3 @@
-(set-option match_limit 1000)
 (datatype Math
     (Diff Math Math)
     (Integral Math Math)
@@ -65,4 +64,6 @@
                             (Div (Sub (Const (rational 1 1))
                                     (Sqrt (Var "five")))
                                 (Const (rational 2 1)))))
-(run 30)
+(run 10)
+(print-size Add)
+(print-size Mul)
