@@ -445,11 +445,30 @@ impl EGraph {
         // here we are picking the variable ordering
         let mut ordered_vars = IndexMap::default();
         while !vars.is_empty() {
+            // compute which variables are at the top level
+            let mut var_occurs_not_done = HashMap::<Symbol, usize>::default();
+            for atom in atoms {
+                if !atom.vars().all(|v| !vars.contains_key(&v)) {
+                    for var in atom.vars() {
+                        if vars.contains_key(&var) {
+                            *var_occurs_not_done.entry(var).or_default() += 1;
+                        }
+                    }
+                }
+            }
+
             let (&var, _info) = vars
                 .iter()
-                .max_by_key(|(_v, info)| {
+                .max_by_key(|(v, info)| {
                     let size = info.size_guess as isize;
-                    (info.occurences.len(), info.intersected_on, -size)
+                    let occurs_not_done =
+                        var_occurs_not_done.get(*v).copied().unwrap_or(0) as isize;
+                    (
+                        info.intersected_on,
+                        -occurs_not_done,
+                        info.occurences.len(),
+                        -size,
+                    )
                 })
                 .unwrap();
 
@@ -657,7 +676,7 @@ impl EGraph {
                     log::debug!("Matched {} times (took {:?})", ctx.matches, duration,);
                     if duration.as_millis() > 500 {
                         log::warn!("Query took a long time: {:?}", duration);
-                        // panic!()
+                        panic!()
                     }
                 }
 
