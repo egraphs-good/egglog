@@ -508,15 +508,21 @@ impl EGraph {
                 .iter()
                 .max_by_key(|(v, info)| {
                     let size = info.size_guess as isize;
-
                     let cost = (
+                        info.intersected_on,
+                        var_is_lookup.get(*v).unwrap_or(&0),
+                        info.occurences.len(),
+                        occurences_nonparent.get(*v).unwrap_or(&0),
+                        -size,
+                    );
+                    /*let cost = (
                         var_is_lookup.get(*v).unwrap_or(&0),
                         info.intersected_on,
                         //info.is_nonparent_input as usize,
                         (*occurences_nonparent.get(*v).unwrap_or(&0) as i64),
                         -size,
-                    );
-                    eprintln!("{}: {:?}", v, cost);
+                    );*/
+                    //eprintln!("{}: {:?}", v, cost);
                     cost
                 })
                 .unwrap();
@@ -530,7 +536,7 @@ impl EGraph {
                 }
             }
 
-            eprintln!("picked {}", var);
+            //eprintln!("picked {}", var);
             ordered_vars.insert(var, info);
         }
         vars = ordered_vars;
@@ -724,9 +730,16 @@ impl EGraph {
                     }
                     let duration = start.elapsed();
                     log::debug!("Matched {} times (took {:?})", ctx.matches, duration,);
+                    let iteration = self
+                        .ruleset_iteration
+                        .get::<Symbol>(&"".into())
+                        .unwrap_or(&0);
                     if duration.as_millis() > 10 {
-                        log::warn!("Query took a long time: {:?}", duration);
-                        panic!()
+                        log::warn!(
+                            "Query took a long time at iter {iteration} : {:?}",
+                            duration
+                        );
+                        //panic!()
                     }
                 }
 
