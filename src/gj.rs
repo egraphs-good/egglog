@@ -512,7 +512,7 @@ impl EGraph {
                         info.intersected_on,
                         var_is_lookup.get(*v).unwrap_or(&0),
                         info.occurences.len(),
-                        occurences_nonparent.get(*v).unwrap_or(&0),
+                        //occurences_nonparent.get(*v).unwrap_or(&0),
                         -size,
                     );
                     /*let cost = (
@@ -739,7 +739,7 @@ impl EGraph {
                             "Query took a long time at iter {iteration} : {:?}",
                             duration
                         );
-                        //panic!()
+                        panic!()
                     }
                 }
 
