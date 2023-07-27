@@ -49,13 +49,7 @@ impl<T: std::fmt::Display> std::fmt::Display for Atom<T> {
 #[derive(Default, Debug, Clone)]
 pub struct Query {
     pub atoms: Vec<Atom<Symbol>>,
-    pub filters: Vec<Atom<Filter>>,
-}
-
-#[derive(Debug, Clone)]
-pub enum Filter {
-    Primitive(Primitive),
-    Function(Symbol),
+    pub filters: Vec<Atom<Primitive>>,
 }
 
 impl std::fmt::Display for Query {
@@ -66,14 +60,12 @@ impl std::fmt::Display for Query {
         if !self.filters.is_empty() {
             writeln!(f, "where ")?;
             for filter in &self.filters {
-                match &filter.head {
-                    Filter::Primitive(p) => {
-                        writeln!(f, "({} {})", p.name(), ListDisplay(&filter.args, " "))?;
-                    }
-                    Filter::Function(fun) => {
-                        writeln!(f, "({fun} {})", ListDisplay(&filter.args, " "))?;
-                    }
-                }
+                writeln!(
+                    f,
+                    "({} {})",
+                    filter.head.name(),
+                    ListDisplay(&filter.args, " ")
+                )?;
             }
         }
         Ok(())
@@ -241,7 +233,7 @@ impl<'a> Context<'a> {
                     }
                     args.push(get_leaf(id));
                     query.filters.push(Atom {
-                        head: Filter::Primitive(p.clone()),
+                        head: p.clone(),
                         args,
                     });
                 }
@@ -263,7 +255,7 @@ impl<'a> Context<'a> {
                     // we actually know the query won't fire
                     if canon_value != *value {
                         query.filters.push(Atom {
-                            head: Filter::Primitive(Primitive(Arc::new(ValueEq {}))),
+                            head: Primitive(Arc::new(ValueEq {})),
                             args: vec![
                                 AtomTerm::Value(canon_value),
                                 AtomTerm::Value(*value),
@@ -274,22 +266,6 @@ impl<'a> Context<'a> {
                 }
             }
         }
-
-        /*if query.atoms.len() > 2 {
-            // move the parent "atoms" to the filters
-            query.atoms.retain(|atom| {
-                let f = atom.head;
-                if f.as_str().contains("_Parent_") {
-                    query.filters.push(Atom {
-                        head: Filter::Function(f),
-                        args: atom.args.clone(),
-                    });
-                    false
-                } else {
-                    true
-                }
-            });
-        }*/
 
         if self.errors.is_empty() {
             Ok((query, res_actions))
