@@ -21,7 +21,6 @@ enum Instr<'a> {
         variable_name: Symbol,
         info: VarInfo2,
         trie_accesses: Vec<(usize, TrieAccess<'a>)>,
-        check: bool, // check or assign to output variable
     },
     ConstrainConstant {
         index: usize,
@@ -40,7 +39,6 @@ enum Instr<'a> {
 struct VarInfo2 {
     occurences: Vec<usize>,
     filter_occurences: Vec<usize>,
-    is_input: bool,
     intersected_on: usize,
     size_guess: usize,
 }
@@ -80,12 +78,10 @@ impl<'a> std::fmt::Display for Instr<'a> {
                 trie_accesses,
                 variable_name,
                 info,
-                check,
             } => {
-                let name = if *check { "Check    " } else { "Intersect" };
                 write!(
                     f,
-                    " {name} @ {value_idx} sg={sg:6} {variable_name:15}",
+                    " Intersect @ {value_idx} sg={sg:6} {variable_name:15}",
                     sg = info.size_guess
                 )?;
                 for (trie_idx, a) in trie_accesses {
@@ -180,7 +176,6 @@ impl<'b> Context<'b> {
             Instr::Intersect {
                 value_idx,
                 trie_accesses,
-                check,
                 ..
             } => {
                 if let Some(x) = trie_accesses
@@ -191,19 +186,6 @@ impl<'b> Context<'b> {
                     stage.add_measurement(x);
                 }
 
-                if *check {
-                    let mut new_tries = tries.to_vec();
-                    let value = self.tuple[*value_idx];
-                    for (j, access) in trie_accesses {
-                        let Some(t) = tries[*j].get(access, value) else {
-                            return Ok(());
-                        };
-                        new_tries[*j] = t;
-                    }
-                    return self.eval(&mut new_tries, program, stage.next(), f);
-                }
-
-                assert!(!*check);
                 match trie_accesses.as_slice() {
                     [(j, access)] => tries[*j].for_each(access, |value, trie| {
                         let old_trie = std::mem::replace(&mut tries[*j], trie);
@@ -360,27 +342,16 @@ impl EGraph {
             vars.entry(*var).or_default();
         }
 
-        let mut atom_filters = vec![];
         for (i, atom) in query.atoms.iter().enumerate() {
-            if atom.head.as_str().contains("_Parent_") {
-                atom_filters.push(atom.clone());
-            } else {
-                for v in atom.vars() {
-                    // only count grounded occurrences
-                    vars.entry(v).or_default().occurences.push(i)
-                }
+            for v in atom.vars() {
+                // only count grounded occurrences
+                vars.entry(v).or_default().occurences.push(i)
             }
         }
 
         // make sure everyone has an entry in the vars table
         for prim in &query.filters {
             for v in prim.vars() {
-                vars.entry(v).or_default();
-            }
-        }
-
-        for atom_filter in atom_filters {
-            for v in atom_filter.vars() {
                 vars.entry(v).or_default();
             }
         }
@@ -453,13 +424,6 @@ impl EGraph {
                     }
                 }
             }
-            if let Some((_out, input_args)) = atom.args.split_last() {
-                for arg in input_args.iter() {
-                    if let AtomTerm::Var(v) = arg {
-                        vars.entry(*v).or_default().is_input = true;
-                    }
-                }
-            }
         }
 
         for (i, filter) in query.query.filters.iter().enumerate() {
@@ -513,13 +477,7 @@ impl EGraph {
                     let size = info.size_guess as isize;
                     // let total_occs = info.occurences.len() + info.filter_occurences.len();
                     // (total_occs, info.intersected_on, -size)
-                    (
-                        info.occurences.len(),
-                        info.is_input as usize,
-                        info.intersected_on,
-                        info.filter_occurences.len(),
-                        -size,
-                    )
+                    (info.occurences.len(), info.intersected_on, -size)
                 })
                 .unwrap();
 
@@ -577,7 +535,6 @@ impl EGraph {
                         (atom_idx, access)
                     })
                     .collect(),
-                check: false,
             }
         });
         program.extend(var_instrs);
@@ -616,7 +573,7 @@ impl EGraph {
             }
         }
 
-        if true {
+        if false {
             // now we have to actually place them in the program, as high as they can go.
             // note, the calls should be topo sorted already at this point
             'call_loop: for mut call in calls {
@@ -678,7 +635,7 @@ impl EGraph {
 
         // now some intersections might already have been bound
         // we need to replace these with constrain constant
-        let mut bound_symbols = HashSet::default();
+        /*let mut bound_symbols = HashSet::default();
         for instr in &mut program {
             match instr {
                 Instr::Intersect {
@@ -697,10 +654,10 @@ impl EGraph {
                 }
                 _ => (),
             }
-        }
+        }*/
 
         // hoist the checks far up the program
-        let (checks, mut program) = program
+        /*let (checks, mut program) = program
             .into_iter()
             .partition::<Vec<_>, _>(|instr| matches!(instr, Instr::Intersect { check: true, .. }));
         'outer: for check_instr in checks {
@@ -734,19 +691,15 @@ impl EGraph {
             }
 
             program.push(check_instr);
-        }
+        }*/
 
         // sanity check the program
         let mut tuple_valid = vec![false; query.vars.len()];
         for instr in &program {
             match instr {
-                Instr::Intersect {
-                    value_idx, check, ..
-                } => {
-                    assert_eq!(*check, tuple_valid[*value_idx]);
-                    if !*check {
-                        tuple_valid[*value_idx] = true;
-                    }
+                Instr::Intersect { value_idx, .. } => {
+                    assert!(!tuple_valid[*value_idx]);
+                    tuple_valid[*value_idx] = true;
                 }
                 Instr::ConstrainConstant { .. } => {}
                 Instr::Call { check, args, .. } => {

@@ -219,25 +219,6 @@ impl<'a> Context<'a> {
         // Now we can fill in the nodes with the canonical leaves
         for (node, id) in &self.nodes {
             match node {
-                // ENode::Func(f, ids) if f.as_str().contains("_Parent_") => {
-                //     let mut args = vec![];
-                //     for child in ids {
-                //         let leaf = get_leaf(child);
-                //         if let AtomTerm::Var(v) = leaf {
-                //             if self.egraph.global_bindings.contains_key(&v) {
-                //                 args.push(AtomTerm::Value(self.egraph.global_bindings[&v].1));
-                //                 continue;
-                //             }
-                //         }
-                //         args.push(get_leaf(child));
-                //         query_eclasses.insert(*child);
-                //     }
-                //     args.push(get_leaf(id));
-                //     query.filters.push(Atom {
-                //         head: Filter::Function(*f),
-                //         args,
-                //     });
-                // }
                 ENode::Func(f, ids) => {
                     let args = ids.iter().chain([id]).map(get_leaf).collect();
                     for id in ids {
@@ -294,7 +275,7 @@ impl<'a> Context<'a> {
             }
         }
 
-        if query.atoms.len() > 2 {
+        /*if query.atoms.len() > 2 {
             // move the parent "atoms" to the filters
             query.atoms.retain(|atom| {
                 let f = atom.head;
@@ -308,7 +289,7 @@ impl<'a> Context<'a> {
                     true
                 }
             });
-        }
+        }*/
 
         if self.errors.is_empty() {
             Ok((query, res_actions))
