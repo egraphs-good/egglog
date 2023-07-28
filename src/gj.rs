@@ -744,7 +744,6 @@ impl EGraph {
                             "Query took a long time at iter {iteration} : {:?}",
                             duration
                         );
-                        panic!()
                     }
                 }
 
