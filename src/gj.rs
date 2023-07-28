@@ -10,7 +10,7 @@ use crate::{
 };
 use std::{
     cell::UnsafeCell,
-    cmp::max,
+    cmp::{max, min},
     fmt::{self, Debug},
     ops::Range,
 };
@@ -445,63 +445,70 @@ impl EGraph {
             return None;
         }
 
-        for (_v, info) in &mut vars {
-            assert!(!info.occurences.is_empty());
-            info.size_guess = info
-                .occurences
-                .iter()
-                .map(|&i| relation_sizes[i])
-                .min()
-                .unwrap();
-            // info.size_guess >>= info.occurences.len() - 1;
-        }
-
         // here we are picking the variable ordering
         let mut ordered_vars = IndexMap::default();
         while !vars.is_empty() {
-            // compute which variables are at the top level
-            let mut var_occurs_not_done = HashMap::<Symbol, usize>::default();
+            let mut unionfind = UnionFind::default();
+            let mut lookup = HashMap::<Symbol, Id>::default();
             for atom in atoms {
-                if !atom.vars().all(|v| !vars.contains_key(&v)) {
-                    if let Some((_last, args)) = atom.args.split_last() {
-                        for arg in args {
-                            if let AtomTerm::Var(var) = arg {
-                                *var_occurs_not_done.entry(*var).or_default() += 1;
-                            }
+                for var in atom.vars() {
+                    if !lookup.contains_key(&var) {
+                        let id = unionfind.make_set();
+                        lookup.insert(var, id);
+                    }
+                }
+            }
+
+            for atom in atoms {
+                if atom.head.as_str().contains("_Parent_") {
+                    let first_var = atom.vars().next().unwrap();
+                    for var in atom.vars() {
+                        unionfind.union_raw(lookup[&first_var], lookup[&var]);
+                    }
+                }
+            }
+
+            let mut var_count_nonparent = HashMap::<Id, usize>::default();
+            for atom in atoms {
+                if !atom.head.as_str().contains("_Parent_") {
+                    let mut already_counted = HashSet::default();
+                    for var in atom.vars() {
+                        let id = unionfind.find(lookup[&var]);
+                        if already_counted.insert(id) {
+                            *var_count_nonparent.entry(id).or_default() += 1;
                         }
                     }
                 }
             }
 
-            let mut var_is_lookup = HashMap::<Symbol, usize>::default();
+            let mut var_is_parent_lookup = HashMap::<Symbol, usize>::default();
             for atom in atoms {
-                let (todo, _): (Vec<Symbol>, Vec<Symbol>) =
-                    atom.vars().partition(|var| vars.contains_key(var));
-                if todo.len() == 1 {
-                    let desirable = if Some(&AtomTerm::Var(todo[0])) == atom.args.last() {
-                        2
-                    } else {
-                        1
-                    };
-
-                    var_is_lookup.insert(
-                        todo[0],
-                        max(*var_is_lookup.get(&todo[0]).unwrap_or(&0), desirable),
-                    );
+                if atom.head.as_str().contains("_Parent_") {
+                    let (todo, _others): (Vec<Symbol>, Vec<Symbol>) =
+                        atom.vars().partition(|v| vars.contains_key(v));
+                    if todo.len() == 1 {
+                        let var = todo[0];
+                        *var_is_parent_lookup.entry(var).or_default() += 1;
+                    }
                 }
             }
 
-            let mut occurences_nonparent = HashMap::<Symbol, usize>::default();
-            for atom in atoms {
-                if let Some((last, args)) = atom.args.split_last() {
-                    for arg in args {
-                        if let AtomTerm::Var(var) = arg {
-                            if !atom.head.as_str().contains("_Parent_") {
-                                *occurences_nonparent.entry(*var).or_default() += 1;
-                            }
-                        }
+            let mut class_vars = HashMap::<Id, Vec<Symbol>>::default();
+            for (var, id) in &lookup {
+                class_vars
+                    .entry(unionfind.find(*id))
+                    .or_default()
+                    .push(*var);
+            }
+            let all_vars = vars.keys().cloned().collect::<Vec<Symbol>>();
+            for v in all_vars {
+                for var in &class_vars[&unionfind.find(lookup[&v])] {
+                    if vars.contains_key(var) && vars.contains_key(&v) {
+                        let new_guess = min(vars[&v].size_guess, vars[var].size_guess);
+                        vars[&v].size_guess = new_guess;
                     }
                 }
+                // info.size_guess >>= info.occurences.len() - 1;
             }
 
             let (&var, _info) = vars
@@ -509,34 +516,32 @@ impl EGraph {
                 .max_by_key(|(v, info)| {
                     let size = info.size_guess as isize;
                     let cost = (
+                        var_is_parent_lookup.get(*v).unwrap_or(&0),
+                        var_count_nonparent
+                            .get(&unionfind.find(lookup[*v]))
+                            .unwrap_or(&0),
                         info.intersected_on,
-                        var_is_lookup.get(*v).unwrap_or(&0),
-                        info.occurences.len(),
                         //occurences_nonparent.get(*v).unwrap_or(&0),
                         -size,
                     );
-                    /*let cost = (
-                        var_is_lookup.get(*v).unwrap_or(&0),
-                        info.intersected_on,
-                        //info.is_nonparent_input as usize,
-                        (*occurences_nonparent.get(*v).unwrap_or(&0) as i64),
-                        -size,
-                    );*/
-                    //eprintln!("{}: {:?}", v, cost);
+                    eprintln!("{}: {:?}", v, cost);
                     cost
                 })
                 .unwrap();
 
             let info = vars.remove(&var).unwrap();
             for &i in &info.occurences {
+                let (last, _rest) = atoms[i].args.split_last().unwrap();
                 for v in atoms[i].vars() {
-                    if let Some(info) = vars.get_mut(&v) {
-                        info.intersected_on += 1;
+                    if last != &AtomTerm::Var(v) {
+                        if let Some(info) = vars.get_mut(&v) {
+                            info.intersected_on += 1;
+                        }
                     }
                 }
             }
 
-            //eprintln!("picked {}", var);
+            eprintln!("picked {}", var);
             ordered_vars.insert(var, info);
         }
         vars = ordered_vars;
