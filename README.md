@@ -362,6 +362,7 @@ Signed 64-bit integers supporting these primitives:
 & | ^ << >> not-i64 ; bit-wise operations
 < > <= >=           ; comparisons
 min max log2
+to-f64
 ```
 
 ### Sort: f64
@@ -372,6 +373,7 @@ min max log2
 + - * / %           ; arithmetic
 < > <= >=           ; comparisons
 min max neg
+to-i64
 ```
 
 ### Sort: map
