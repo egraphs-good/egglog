@@ -438,11 +438,28 @@ impl EGraph {
         let relation_sizes: Vec<usize> = atoms
             .iter()
             .zip(timestamp_ranges)
-            .map(|(atom, range)| self.functions[&atom.head].get_size(range))
+            .map(|(atom, range)| {
+                if atom.head.as_str().contains("_Parent_") {
+                    usize::MAX
+                } else {
+                    self.functions[&atom.head].get_size(range)
+                }
+            })
             .collect();
 
         if relation_sizes.iter().any(|&s| s == 0) {
             return None;
+        }
+
+        for (_v, info) in &mut vars {
+            assert!(!info.occurences.is_empty());
+            info.size_guess = info
+                .occurences
+                .iter()
+                .map(|&i| relation_sizes[i])
+                .min()
+                .unwrap();
+            // info.size_guess >>= info.occurences.len() - 1;
         }
 
         // here we are picking the variable ordering
@@ -511,24 +528,28 @@ impl EGraph {
                 // info.size_guess >>= info.occurences.len() - 1;
             }
 
-            let (&var, _info) = vars
+            let mut var_cost = vars
                 .iter()
-                .max_by_key(|(v, info)| {
+                .map(|(v, info)| {
                     let size = info.size_guess as isize;
                     let cost = (
-                        var_is_parent_lookup.get(*v).unwrap_or(&0),
+                        var_is_parent_lookup.get(v).unwrap_or(&0),
                         var_count_nonparent
-                            .get(&unionfind.find(lookup[*v]))
+                            .get(&unionfind.find(lookup[v]))
                             .unwrap_or(&0),
                         info.intersected_on,
                         //occurences_nonparent.get(*v).unwrap_or(&0),
                         -size,
                     );
-                    eprintln!("{}: {:?}", v, cost);
-                    cost
+                    (cost, v)
                 })
-                .unwrap();
+                .collect::<Vec<_>>();
+            var_cost.sort();
+            var_cost.reverse();
 
+            log::debug!("Variable costs: {:?}", ListDebug(&var_cost, "\n"));
+
+            let var = *var_cost[0].1;
             let info = vars.remove(&var).unwrap();
             for &i in &info.occurences {
                 let (last, _rest) = atoms[i].args.split_last().unwrap();
@@ -541,7 +562,6 @@ impl EGraph {
                 }
             }
 
-            eprintln!("picked {}", var);
             ordered_vars.insert(var, info);
         }
         vars = ordered_vars;
