@@ -113,7 +113,6 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
             resugar: false,
         };
         let should_fail = run.should_fail();
-        let name = run.name().to_string();
 
         push_trial(run.clone());
         if !should_fail {
