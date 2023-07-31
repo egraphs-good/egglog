@@ -859,8 +859,16 @@ impl EGraph {
                     }
                     stack.truncate(new_len)
                 }
-                Instruction::Union(_arity) => {
-                    panic!("term encoding gets rid of union");
+                Instruction::Union(arity) => {
+                    let new_len = stack.len() - arity;
+                    let values = &stack[new_len..];
+                    let sort = values[0].tag;
+                    let first = self.unionfind.find(Id::from(values[0].bits as usize));
+                    values[1..].iter().fold(first, |a, b| {
+                        let b = self.unionfind.find(Id::from(b.bits as usize));
+                        self.unionfind.union(a, b, sort)
+                    });
+                    stack.truncate(new_len);
                 }
                 Instruction::Extract(arity) => {
                     let new_len = stack.len() - arity;

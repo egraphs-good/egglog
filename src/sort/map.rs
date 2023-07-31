@@ -92,10 +92,6 @@ impl Sort for MapSort {
     }
 
     fn register_primitives(self: Arc<Self>, typeinfo: &mut TypeInfo) {
-        typeinfo.add_primitive(MapRebuild {
-            name: "rebuild".into(),
-            map: self.clone(),
-        });
         typeinfo.add_primitive(Ctor {
             name: "map-empty".into(),
             map: self.clone(),
@@ -157,41 +153,6 @@ impl FromSort for ValueMap {
     fn load(sort: &Self::Sort, value: &Value) -> Self {
         let maps = sort.maps.lock().unwrap();
         maps.get_index(value.bits as usize).unwrap().clone()
-    }
-}
-
-struct MapRebuild {
-    name: Symbol,
-    map: Arc<MapSort>,
-}
-
-impl PrimitiveLike for MapRebuild {
-    fn name(&self) -> Symbol {
-        self.name
-    }
-
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-        match types {
-            [map] if map.name() == self.map.name => Some(self.map.clone()),
-            _ => None,
-        }
-    }
-
-    fn apply(&self, values: &[Value], egraph: &EGraph) -> Option<Value> {
-        let maps = self.map.maps.lock().unwrap();
-        let map = maps.get_index(values[0].bits as usize).unwrap();
-        let mut changed = false;
-        let new_map: ValueMap = map
-            .iter()
-            .map(|(k, v)| {
-                let (k, v) = (*k, *v);
-                let updated_k = egraph.find(k);
-                let updated_v = egraph.find(v);
-                changed |= updated_k != k || updated_v != v;
-                (updated_k, updated_v)
-            })
-            .collect();
-        Some(new_map.store(&self.map).unwrap())
     }
 }
 

@@ -89,10 +89,6 @@ impl Sort for VecSort {
     }
 
     fn register_primitives(self: Arc<Self>, typeinfo: &mut TypeInfo) {
-        typeinfo.add_primitive(VecRebuild {
-            name: "rebuild".into(),
-            vec: self.clone(),
-        });
         typeinfo.add_primitive(VecOf {
             name: "vec-of".into(),
             vec: self.clone(),
@@ -164,41 +160,6 @@ impl FromSort for ValueVec {
     fn load(sort: &Self::Sort, value: &Value) -> Self {
         let vecs = sort.vecs.lock().unwrap();
         vecs.get_index(value.bits as usize).unwrap().clone()
-    }
-}
-
-struct VecRebuild {
-    name: Symbol,
-    vec: Arc<VecSort>,
-}
-
-impl PrimitiveLike for VecRebuild {
-    fn name(&self) -> Symbol {
-        self.name
-    }
-
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-        if let [vec] = types {
-            if vec.name() == self.vec.name() {
-                return Some(self.vec.clone());
-            }
-        }
-        None
-    }
-
-    fn apply(&self, values: &[Value], egraph: &EGraph) -> Option<Value> {
-        let vec = ValueVec::load(&self.vec, &values[0]);
-
-        let mut changed = false;
-        let new_set: ValueVec = vec
-            .iter()
-            .map(|e| {
-                let updated = egraph.find(*e);
-                changed |= updated != *e;
-                updated
-            })
-            .collect();
-        Some(new_set.store(&self.vec).unwrap())
     }
 }
 

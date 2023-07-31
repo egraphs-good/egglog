@@ -3,7 +3,7 @@
 //!
 //! This implementation uses interior mutability for `find`.
 use crate::util::HashMap;
-use crate::{Id, Symbol};
+use crate::{Id, Symbol, Value};
 
 use std::cell::Cell;
 use std::fmt::Debug;
@@ -30,10 +30,6 @@ impl UnionFind {
         let res = Id::from(self.parents.len());
         self.parents.push(Cell::new(res));
         res
-    }
-
-    pub fn num_ids(&self) -> usize {
-        self.parents.len()
     }
 
     /// The number of ids that recently stopped being canonical.
@@ -85,6 +81,32 @@ impl UnionFind {
             cur.set(grand.get());
             cur = grand;
         }
+    }
+
+    /// Merge the equivalence classes associated with the two values.
+    ///
+    /// This method assumes that the given values belong to the same, "eq-able",
+    /// sort. Its behavior is unspecified on other values.
+    pub fn union_values(&mut self, val1: Value, val2: Value, sort: Symbol) -> Value {
+        debug_assert_eq!(val1.tag, val2.tag);
+        let id1 = Id::from(val1.bits as usize);
+        let id2 = Id::from(val2.bits as usize);
+        let res = self.union(id1, id2, sort);
+        Value {
+            bits: usize::from(res) as u64,
+            tag: val1.tag,
+        }
+    }
+
+    /// Like [`union_values`], but operating on raw [`Id`]s.
+    ///
+    /// [`union_values`]: UnionFind::union_values
+    pub fn union(&mut self, id1: Id, id2: Id, sort: Symbol) -> Id {
+        let (res, reparented) = self.do_union(id1, id2);
+        if let Some(id) = reparented {
+            self.staged_ids.entry(sort).or_default().push(id)
+        }
+        res
     }
 
     /// Merge the underlying equivalence classes for the two ids.

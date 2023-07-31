@@ -24,7 +24,8 @@ impl EGraph {
     pub fn value_to_id(&self, value: Value) -> Option<(Symbol, Id)> {
         if let Some(sort) = self.get_sort(&value) {
             if sort.is_eq_sort() {
-                return Some((sort.name(), Id::from(self.find(value).bits as usize)));
+                let id = Id::from(value.bits as usize);
+                return Some((sort.name(), self.find(id)));
             }
         }
         None
@@ -41,7 +42,7 @@ impl EGraph {
         termdag: &mut TermDag,
     ) -> Vec<Term> {
         let (tag, id) = self.value_to_id(value).unwrap();
-        let leader = self.find(Value::from_id(tag, id));
+        let output_value = &Value::from_id(tag, id);
         let ext = &Extractor::new(self, termdag, true);
         ext.ctors
             .iter()
@@ -51,17 +52,11 @@ impl EGraph {
                     return vec![];
                 }
                 assert!(func.schema.output.is_eq_sort());
+
                 func.nodes
                     .iter()
                     .filter_map(|(inputs, output)| {
-                        // only extract canonical nodes,
-                        // assuming rebuilding fired
-                        (self.find(output.value) == leader
-                            && inputs
-                                .iter()
-                                .map(|input| *input == self.find(*input))
-                                .all(|x| x))
-                        .then(|| {
+                        (&output.value == output_value).then(|| {
                             let node = Node { sym, inputs };
                             ext.expr_from_node(&node, termdag)
                         })
@@ -106,17 +101,9 @@ impl<'a> Extractor<'a> {
         termdag.make(node.sym, children)
     }
 
-    fn find(&self, value: Value) -> Id {
-        if self.use_eq_relation {
-            Id::from(self.egraph.find(value).bits as usize)
-        } else {
-            Id::from(value.bits as usize)
-        }
-    }
-
     pub fn find_best(&self, value: Value, termdag: &mut TermDag, sort: &ArcSort) -> (Cost, Term) {
         if sort.is_eq_sort() {
-            let id = self.find(value);
+            let id = self.find(&value);
             let (cost, node) = self
                 .costs
                 .get(&id)
@@ -131,7 +118,7 @@ impl<'a> Extractor<'a> {
                                     "{:?}",
                                     inputs
                                         .iter()
-                                        .map(|input| self.costs.get(&self.find(*input)))
+                                        .map(|input| self.costs.get(&self.find(input)))
                                         .collect::<Vec<_>>()
                                 );
                             }
@@ -158,7 +145,7 @@ impl<'a> Extractor<'a> {
         let mut terms: Vec<Term> = vec![];
         for (ty, value) in types.iter().zip(children) {
             cost = cost.saturating_add(if ty.is_eq_sort() {
-                let id = self.find(*value);
+                let id = self.egraph.find(Id::from(value.bits as usize));
                 // TODO costs should probably map values?
                 let (cost, term) = self.costs.get(&id)?;
                 terms.push(term.clone());
@@ -170,6 +157,10 @@ impl<'a> Extractor<'a> {
             });
         }
         Some((terms, cost))
+    }
+
+    fn find(&self, value: &Value) -> Id {
+        self.egraph.find(Id::from(value.bits as usize))
     }
 
     fn find_costs(&mut self, termdag: &mut TermDag) {
@@ -186,7 +177,7 @@ impl<'a> Extractor<'a> {
                         {
                             let make_new_pair = || (new_cost, termdag.make(sym, term_inputs));
 
-                            let id = self.find(output.value);
+                            let id = self.find(&output.value);
                             match self.costs.entry(id) {
                                 Entry::Vacant(e) => {
                                     did_something = true;
