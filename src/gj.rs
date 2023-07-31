@@ -10,7 +10,7 @@ use crate::{
 };
 use std::{
     cell::UnsafeCell,
-    cmp::{max, min},
+    cmp::min,
     fmt::{self, Debug},
     ops::Range,
 };
@@ -462,42 +462,62 @@ impl EGraph {
             // info.size_guess >>= info.occurences.len() - 1;
         }
 
+        let mut unionfind = UnionFind::default();
+        let mut lookup = HashMap::<Symbol, Id>::default();
+        for atom in atoms {
+            for var in atom.vars() {
+                if !lookup.contains_key(&var) {
+                    let id = unionfind.make_set();
+                    lookup.insert(var, id);
+                }
+            }
+        }
+
+        for atom in atoms {
+            if atom.head.as_str().contains("_Parent_") {
+                let first_var = atom.vars().next().unwrap();
+                for var in atom.vars() {
+                    unionfind.union_raw(lookup[&first_var], lookup[&var]);
+                }
+            }
+        }
+
+        let mut var_count_nonparent = HashMap::<Id, usize>::default();
+        for atom in atoms {
+            if !atom.head.as_str().contains("_Parent_") {
+                let mut already_counted = HashSet::default();
+                for var in atom.vars() {
+                    let id = unionfind.find(lookup[&var]);
+                    if already_counted.insert(id) {
+                        *var_count_nonparent.entry(id).or_default() += 1;
+                    }
+                }
+            }
+        }
+
+        let mut class_vars = HashMap::<Id, Vec<Symbol>>::default();
+        for (var, id) in &lookup {
+            class_vars
+                .entry(unionfind.find(*id))
+                .or_default()
+                .push(*var);
+        }
+        let all_vars = vars.keys().cloned().collect::<Vec<Symbol>>();
+        // the size guess for variables is the minimum across
+        // all variables in the same class
+        for v in all_vars {
+            for var in &class_vars[&unionfind.find(lookup[&v])] {
+                if vars.contains_key(var) && vars.contains_key(&v) {
+                    let new_guess = min(vars[&v].size_guess, vars[var].size_guess);
+                    vars[&v].size_guess = new_guess;
+                }
+            }
+            // info.size_guess >>= info.occurences.len() - 1;
+        }
+
         // here we are picking the variable ordering
         let mut ordered_vars = IndexMap::default();
         while !vars.is_empty() {
-            let mut unionfind = UnionFind::default();
-            let mut lookup = HashMap::<Symbol, Id>::default();
-            for atom in atoms {
-                for var in atom.vars() {
-                    if !lookup.contains_key(&var) {
-                        let id = unionfind.make_set();
-                        lookup.insert(var, id);
-                    }
-                }
-            }
-
-            for atom in atoms {
-                if atom.head.as_str().contains("_Parent_") {
-                    let first_var = atom.vars().next().unwrap();
-                    for var in atom.vars() {
-                        unionfind.union_raw(lookup[&first_var], lookup[&var]);
-                    }
-                }
-            }
-
-            let mut var_count_nonparent = HashMap::<Id, usize>::default();
-            for atom in atoms {
-                if !atom.head.as_str().contains("_Parent_") {
-                    let mut already_counted = HashSet::default();
-                    for var in atom.vars() {
-                        let id = unionfind.find(lookup[&var]);
-                        if already_counted.insert(id) {
-                            *var_count_nonparent.entry(id).or_default() += 1;
-                        }
-                    }
-                }
-            }
-
             let mut var_is_parent_lookup = HashMap::<Symbol, usize>::default();
             for atom in atoms {
                 if atom.head.as_str().contains("_Parent_") {
@@ -508,24 +528,6 @@ impl EGraph {
                         *var_is_parent_lookup.entry(var).or_default() += 1;
                     }
                 }
-            }
-
-            let mut class_vars = HashMap::<Id, Vec<Symbol>>::default();
-            for (var, id) in &lookup {
-                class_vars
-                    .entry(unionfind.find(*id))
-                    .or_default()
-                    .push(*var);
-            }
-            let all_vars = vars.keys().cloned().collect::<Vec<Symbol>>();
-            for v in all_vars {
-                for var in &class_vars[&unionfind.find(lookup[&v])] {
-                    if vars.contains_key(var) && vars.contains_key(&v) {
-                        let new_guess = min(vars[&v].size_guess, vars[var].size_guess);
-                        vars[&v].size_guess = new_guess;
-                    }
-                }
-                // info.size_guess >>= info.occurences.len() - 1;
             }
 
             let mut var_cost = vars
@@ -764,6 +766,7 @@ impl EGraph {
                             "Query took a long time at iter {iteration} : {:?}",
                             duration
                         );
+                        panic!();
                     }
                 }
 
