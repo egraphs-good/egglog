@@ -58,7 +58,7 @@ impl EGraph {
             .functions
             .values()
             .filter(|f| {
-                config.include_temporary_functions || !is_temp_name(f.decl.name.to_string())
+                config.include_temporary_functions || !self.is_temp_name(f.decl.name.to_string())
             })
             .map(|function| {
                 function
@@ -178,14 +178,20 @@ impl EGraph {
         );
         (class_id, node_id)
     }
-}
 
-/// Returns true if the name is in the form v{digits}___
-/// like v78___
-fn is_temp_name(name: String) -> bool {
-    name.starts_with('v')
-        && name.ends_with("_____")
-        && name[1..name.len() - 5].parse::<u32>().is_ok()
+    /// Returns true if the name is in the form v{digits}__
+    /// like v78___
+    ///
+    /// Checks for pattern created by Desugar.get_fresh
+    fn is_temp_name(&self, name: String) -> bool {
+        let number_underscores = self.proof_state.desugar.number_underscores;
+        let res = name.starts_with('v')
+            && name.ends_with("_".repeat(number_underscores).as_str())
+            && name[1..name.len() - number_underscores]
+                .parse::<u32>()
+                .is_ok();
+        res
+    }
 }
 
 type NodeIDs = HashMap<egraph_serialize::ClassId, VecDeque<egraph_serialize::NodeId>>;

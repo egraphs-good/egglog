@@ -5,3 +5,5 @@
 (check (>= 9.2 1.5))
 (fail (check (< 9.2 1.5)))
 (fail (check (= (+ 1.5 9.2) 10.6)))
+(check (= (to-f64 1) 1.0))
+(check (= (to-i64 1.0) 1))
