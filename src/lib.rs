@@ -643,6 +643,7 @@ impl EGraph {
     }
 
     fn step_rules(&mut self, ruleset: Symbol) -> RunReport {
+        let n_unions_before = self.unionfind.n_unions();
         // don't ban parent or rebuilding
         let match_limit =
             if ruleset.as_str().contains("parent_") || ruleset.as_str().contains("rebuilding_") {
@@ -738,12 +739,12 @@ impl EGraph {
         self.rulesets.insert(ruleset, rules);
         let apply_elapsed = apply_start.elapsed();
         report.apply_time += apply_elapsed;
-        report.updated |= self.did_change();
+        report.updated |= self.did_change_tables() || n_unions_before != self.unionfind.n_unions();
 
         report
     }
 
-    fn did_change(&self) -> bool {
+    fn did_change_tables(&self) -> bool {
         for (_name, function) in &self.functions {
             if function.nodes.max_ts() >= self.timestamp {
                 return true;
