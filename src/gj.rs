@@ -418,7 +418,7 @@ impl EGraph {
             }
         }
 
-        for (i, atom) in atoms.iter().enumerate() {
+        for (_i, atom) in atoms.iter().enumerate() {
             if !atom.head.as_str().contains("_Parent_") {
                 if let Some((_last, args)) = atom.args.split_last() {
                     for arg in args {
@@ -761,12 +761,11 @@ impl EGraph {
                         .ruleset_iteration
                         .get::<Symbol>(&"".into())
                         .unwrap_or(&0);
-                    if duration.as_millis() > 10 {
+                    if duration.as_millis() > 1000 {
                         log::warn!(
                             "Query took a long time at iter {iteration} : {:?}",
                             duration
                         );
-                        panic!();
                     }
                 }
 
