@@ -276,7 +276,7 @@ impl<'b> Context<'b> {
                         }
                         AtomTerm::Global(g) => {
                             assert!(check);
-                            let (sort, val) = self.egraph.global_bindings.get(g).unwrap();
+                            let (sort, val, _ts) = self.egraph.global_bindings.get(g).unwrap();
                             assert!(sort.name() == res.tag);
                             if val.bits != res.bits {
                                 return Ok(());

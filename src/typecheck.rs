@@ -198,7 +198,7 @@ impl<'a> Context<'a> {
             let mk = || AtomTerm::Var(Symbol::from(format!("?__{}", id)));
             match leaves.get(id) {
                 Some(Expr::Var(v)) => {
-                    if let Some((_ty, _value)) = self.egraph.global_bindings.get(v) {
+                    if let Some((_ty, _value, _ts)) = self.egraph.global_bindings.get(v) {
                         AtomTerm::Global(*v)
                     } else {
                         AtomTerm::Var(*v)
@@ -518,7 +518,7 @@ impl<'a> ExprChecker<'a> for ActionChecker<'a> {
     }
 
     fn infer_var(&mut self, sym: Symbol) -> Result<(Self::T, ArcSort), TypeError> {
-        if let Some((sort, _v)) = self.egraph().global_bindings.get(&sym) {
+        if let Some((sort, _v, _ts)) = self.egraph().global_bindings.get(&sym) {
             self.instructions.push(Instruction::Global(sym));
             Ok(((), sort.clone()))
         } else if let Some((i, _, ty)) = self.locals.get_full(&sym) {
@@ -731,7 +731,7 @@ impl EGraph {
         for instr in &program.0 {
             match instr {
                 Instruction::Global(sym) => {
-                    let (_ty, value) = self.global_bindings.get(sym).unwrap();
+                    let (_ty, value, _ts) = self.global_bindings.get(sym).unwrap();
                     stack.push(*value);
                 }
                 Instruction::Load(load) => match load {

@@ -213,7 +213,8 @@ pub struct EGraph {
     pub node_limit: usize,
     pub fact_directory: Option<PathBuf>,
     pub seminaive: bool,
-    pub global_bindings: HashMap<Symbol, (ArcSort, Value)>,
+    // sort, value, and timestamp
+    pub global_bindings: HashMap<Symbol, (ArcSort, Value, u32)>,
     extract_report: Option<ExtractReport>,
     run_report: Option<RunReport>,
 }
@@ -369,8 +370,9 @@ impl EGraph {
 
         // now update global bindings
         let mut new_global_bindings = self.global_bindings.clone();
-        for (_sym, (_sort, value)) in new_global_bindings.iter_mut() {
+        for (_sym, (_sort, value, ts)) in new_global_bindings.iter_mut() {
             *value = self.bad_find_value(*value);
+            *ts = self.timestamp;
         }
         self.global_bindings = new_global_bindings;
 
@@ -974,7 +976,9 @@ impl EGraph {
                     match &action {
                         NormAction::Let(name, contents) => {
                             let (etype, value) = self.eval_expr(&contents.to_expr(), None, true)?;
-                            let present = self.global_bindings.insert(*name, (etype, value));
+                            let present = self
+                                .global_bindings
+                                .insert(*name, (etype, value, self.timestamp));
                             if present.is_some() {
                                 panic!("Variable {name} was already present in global bindings");
                             }
@@ -989,7 +993,9 @@ impl EGraph {
                         NormAction::LetLit(var, lit) => {
                             let value = self.eval_lit(lit);
                             let etype = self.proof_state.type_info.infer_literal(lit);
-                            let present = self.global_bindings.insert(*var, (etype, value));
+                            let present = self
+                                .global_bindings
+                                .insert(*var, (etype, value, self.timestamp));
 
                             if present.is_some() {
                                 panic!("Variable {var} was already present in global bindings");
