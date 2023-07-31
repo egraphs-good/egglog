@@ -88,9 +88,6 @@ impl Run {
                 let stem = self.0.path.file_stem().unwrap();
                 let stem_str = stem.to_string_lossy().replace(['.', '-', ' '], "_");
                 write!(f, "{stem_str}")?;
-                if self.0.test_proofs {
-                    write!(f, "_with_proofs")?;
-                }
                 if self.0.resugar {
                     write!(f, "_resugar")?;
                 }
@@ -124,30 +121,6 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
                 resugar: true,
                 ..run.clone()
             });
-        }
-
-        // make a test with proofs enabled
-        // TODO: re-enable herbie, unsound, and eqsolve when proof extraction is faster
-        let banned = [
-            "herbie",
-            "repro_unsound",
-            "eqsolve",
-            "before_proofs",
-            "lambda",
-        ];
-        if !banned.contains(&name.as_str()) {
-            push_trial(Run {
-                test_proofs: true,
-                ..run.clone()
-            });
-
-            if !should_fail {
-                push_trial(Run {
-                    test_proofs: true,
-                    resugar: true,
-                    ..run
-                });
-            }
         }
     }
 

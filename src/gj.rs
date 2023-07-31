@@ -250,6 +250,7 @@ impl<'b> Context<'b> {
                             self.tuple[i]
                         }
                         AtomTerm::Value(val) => *val,
+                        AtomTerm::Global(g) => self.egraph.global_bindings.get(g).unwrap().1,
                     })
                 }
 
@@ -270,6 +271,14 @@ impl<'b> Context<'b> {
                         AtomTerm::Value(val) => {
                             assert!(check);
                             if val != &res {
+                                return Ok(());
+                            }
+                        }
+                        AtomTerm::Global(g) => {
+                            assert!(check);
+                            let (sort, val) = self.egraph.global_bindings.get(g).unwrap();
+                            assert!(sort.name() == res.tag);
+                            if val.bits != res.bits {
                                 return Ok(());
                             }
                         }
@@ -363,6 +372,9 @@ impl EGraph {
         for (i, t) in atom.args.iter().enumerate() {
             match t {
                 AtomTerm::Value(val) => constraints.push(Constraint::Const(i, *val)),
+                AtomTerm::Global(g) => {
+                    constraints.push(Constraint::Const(i, self.global_bindings.get(g).unwrap().1))
+                }
                 AtomTerm::Var(_v) => {
                     if let Some(j) = atom.args[..i].iter().position(|t2| t == t2) {
                         constraints.push(Constraint::Eq(j, i));
@@ -413,6 +425,10 @@ impl EGraph {
                     AtomTerm::Var(var) => vars.entry(*var).or_default().occurences.push(i),
                     AtomTerm::Value(val) => {
                         constants.entry(i).or_default().push((col, *val));
+                    }
+                    AtomTerm::Global(g) => {
+                        let val = self.global_bindings.get(g).unwrap().1;
+                        constants.entry(i).or_default().push((col, val));
                     }
                 }
             }
@@ -621,6 +637,7 @@ impl EGraph {
                 p.args[..p.args.len() - 1].iter().all(|a| match a {
                     AtomTerm::Var(v) => vars.contains_key(v),
                     AtomTerm::Value(_) => true,
+                    AtomTerm::Global(_) => true,
                 })
             });
 
@@ -635,6 +652,7 @@ impl EGraph {
                         }
                     },
                     AtomTerm::Value(_) => true,
+                    AtomTerm::Global(_) => true,
                 };
                 program.push(Instr::Call {
                     prim: p.head.clone(),
@@ -678,6 +696,9 @@ impl EGraph {
                         AtomTerm::Value(_) => {
                             assert!(*check);
                         }
+                        AtomTerm::Global(_) => {
+                            assert!(*check);
+                        }
                     }
                 }
             }
@@ -697,7 +718,7 @@ impl EGraph {
         let has_atoms = !cq.query.atoms.is_empty();
 
         if has_atoms {
-            let do_seminaive = self.seminaive;
+            let do_seminaive = false;
             // for the later atoms, we consider everything
             let mut timestamp_ranges = vec![0..u32::MAX; cq.query.atoms.len()];
             for (atom_i, atom) in cq.query.atoms.iter().enumerate() {

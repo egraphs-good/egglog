@@ -366,6 +366,14 @@ impl EGraph {
                 break;
             }
         }
+
+        // now update global bindings
+        let mut new_global_bindings = self.global_bindings.clone();
+        for (_sym, (_sort, value)) in new_global_bindings.iter_mut() {
+            *value = self.bad_find_value(*value);
+        }
+        self.global_bindings = new_global_bindings;
+
         self.debug_assert_invariants();
         Ok(updates)
     }
@@ -383,6 +391,7 @@ impl EGraph {
         for (func, merges) in deferred_merges {
             new_unions += self.apply_merges(func, &merges);
         }
+
         Ok(new_unions)
     }
 
@@ -477,7 +486,7 @@ impl EGraph {
             .collect::<Vec<_>>();
 
         let mut termdag = TermDag::default();
-        let extractor = Extractor::new(self, &mut termdag, false);
+        let extractor = Extractor::new(self, &mut termdag);
         let mut terms = Vec::new();
         for (ins, out) in nodes {
             let mut children = Vec::new();
@@ -1244,9 +1253,13 @@ impl EGraph {
         Ok(msgs)
     }
 
-    #[allow(dead_code)]
+    // this is bad because we shouldn't inspect values like this, we should use type information
     fn bad_find_value(&self, value: Value) -> Value {
-        value
+        if let Some((tag, id)) = self.value_to_id(value) {
+            Value::from_id(tag, self.find(id))
+        } else {
+            value
+        }
     }
 
     pub fn parse_program(&self, input: &str) -> Result<Vec<Command>, Error> {

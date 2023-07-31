@@ -17,7 +17,6 @@ pub(crate) struct Extractor<'a> {
     costs: HashMap<Id, (Cost, Term)>,
     ctors: Vec<Symbol>,
     egraph: &'a EGraph,
-    use_eq_relation: bool,
 }
 
 impl EGraph {
@@ -32,7 +31,7 @@ impl EGraph {
     }
 
     pub fn extract(&self, value: Value, termdag: &mut TermDag, arcsort: &ArcSort) -> (Cost, Term) {
-        Extractor::new(self, termdag, true).find_best(value, termdag, arcsort)
+        Extractor::new(self, termdag).find_best(value, termdag, arcsort)
     }
 
     pub fn extract_variants(
@@ -43,7 +42,7 @@ impl EGraph {
     ) -> Vec<Term> {
         let (tag, id) = self.value_to_id(value).unwrap();
         let output_value = &Value::from_id(tag, id);
-        let ext = &Extractor::new(self, termdag, true);
+        let ext = &Extractor::new(self, termdag);
         ext.ctors
             .iter()
             .flat_map(|&sym| {
@@ -69,12 +68,11 @@ impl EGraph {
 }
 
 impl<'a> Extractor<'a> {
-    pub fn new(egraph: &'a EGraph, termdag: &mut TermDag, use_eq_relation: bool) -> Self {
+    pub fn new(egraph: &'a EGraph, termdag: &mut TermDag) -> Self {
         let mut extractor = Extractor {
             costs: HashMap::default(),
             egraph,
             ctors: vec![],
-            use_eq_relation,
         };
 
         // only consider "extractable" functions

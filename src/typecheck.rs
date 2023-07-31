@@ -23,6 +23,7 @@ enum ENode {
 pub enum AtomTerm {
     Var(Symbol),
     Value(Value),
+    Global(Symbol),
 }
 
 impl std::fmt::Display for AtomTerm {
@@ -30,6 +31,7 @@ impl std::fmt::Display for AtomTerm {
         match self {
             AtomTerm::Var(v) => write!(f, "{}", v),
             AtomTerm::Value(_) => write!(f, "<value>"),
+            AtomTerm::Global(g) => write!(f, "{}", g),
         }
     }
 }
@@ -77,6 +79,7 @@ impl<T> Atom<T> {
         self.args.iter().filter_map(|t| match t {
             AtomTerm::Var(v) => Some(*v),
             AtomTerm::Value(_) => None,
+            AtomTerm::Global(_) => None,
         })
     }
 }
@@ -195,8 +198,8 @@ impl<'a> Context<'a> {
             let mk = || AtomTerm::Var(Symbol::from(format!("?__{}", id)));
             match leaves.get(id) {
                 Some(Expr::Var(v)) => {
-                    if let Some((_ty, value)) = self.egraph.global_bindings.get(v) {
-                        AtomTerm::Value(*value)
+                    if let Some((_ty, _value)) = self.egraph.global_bindings.get(v) {
+                        AtomTerm::Global(*v)
                     } else {
                         AtomTerm::Var(*v)
                     }
@@ -244,24 +247,14 @@ impl<'a> Context<'a> {
         // filter for global variables
         for node in &self.nodes {
             if let ENode::Var(var) = node.0 {
-                if let Some((_sort, value)) = self.egraph.global_bindings.get(var) {
+                if self.egraph.global_bindings.contains_key(var) {
                     let canon = get_leaf(node.1);
-
-                    // canon is either a global variable or a literal
-                    let canon_value = match canon {
-                        AtomTerm::Var(v) => self.egraph.global_bindings[&v].1,
-                        AtomTerm::Value(v) => v,
-                    };
-                    // we actually know the query won't fire
-                    if canon_value != *value {
+                    if canon != AtomTerm::Global(*var) {
+                        // compare global to canon
                         query.filters.push(Atom {
                             head: Primitive(Arc::new(ValueEq {})),
-                            args: vec![
-                                AtomTerm::Value(canon_value),
-                                AtomTerm::Value(*value),
-                                AtomTerm::Value(*value),
-                            ],
-                        })
+                            args: vec![canon.clone(), AtomTerm::Global(*var), canon],
+                        });
                     }
                 }
             }
@@ -525,8 +518,8 @@ impl<'a> ExprChecker<'a> for ActionChecker<'a> {
     }
 
     fn infer_var(&mut self, sym: Symbol) -> Result<(Self::T, ArcSort), TypeError> {
-        if let Some((sort, v)) = self.egraph().global_bindings.get(&sym) {
-            self.instructions.push(Instruction::Value(*v));
+        if let Some((sort, _v)) = self.egraph().global_bindings.get(&sym) {
+            self.instructions.push(Instruction::Global(sym));
             Ok(((), sort.clone()))
         } else if let Some((i, _, ty)) = self.locals.get_full(&sym) {
             self.instructions.push(Instruction::Load(Load::Stack(i)));
@@ -661,7 +654,7 @@ enum Load {
 enum Instruction {
     Literal(Literal),
     Load(Load),
-    Value(Value),
+    Global(Symbol),
     // function to call, and whether to make defaults
     CallFunction(Symbol, bool),
     CallPrimitive(Primitive, usize),
@@ -737,7 +730,10 @@ impl EGraph {
     ) -> Result<(), Error> {
         for instr in &program.0 {
             match instr {
-                Instruction::Value(v) => stack.push(*v),
+                Instruction::Global(sym) => {
+                    let (_ty, value) = self.global_bindings.get(sym).unwrap();
+                    stack.push(*value);
+                }
                 Instruction::Load(load) => match load {
                     Load::Stack(idx) => stack.push(stack[*idx]),
                     Load::Subst(idx) => stack.push(subst[*idx]),
@@ -828,7 +824,8 @@ impl EGraph {
                                     return Err(Error::MergeError(*f, new_value, old_value));
                                 }
                                 MergeFn::Union => {
-                                    panic!("There should be no union merge functions after term encoding");
+                                    self.unionfind
+                                        .union_values(old_value, new_value, old_value.tag)
                                 }
                                 MergeFn::Expr(merge_prog) => {
                                     let values = [old_value, new_value];

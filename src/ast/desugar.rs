@@ -430,8 +430,6 @@ pub struct Desugar {
     next_fresh: usize,
     next_command_id: usize,
     pub(crate) parser: ast::parse::ProgramParser,
-    pub(crate) action_parser: ast::parse::ActionParser,
-    pub(crate) fact_parser: ast::parse::FactParser,
     // TODO fix getting fresh names using modules
     pub(crate) number_underscores: usize,
     pub(crate) global_variables: HashSet<Symbol>,
@@ -444,8 +442,6 @@ impl Default for Desugar {
             next_command_id: Default::default(),
             // these come from lalrpop and don't have default impls
             parser: ast::parse::ProgramParser::new(),
-            action_parser: ast::parse::ActionParser::new(),
-            fact_parser: ast::parse::FactParser::new(),
             number_underscores: 3,
             global_variables: Default::default(),
         }
@@ -769,8 +765,6 @@ impl Clone for Desugar {
             next_fresh: self.next_fresh,
             next_command_id: self.next_command_id,
             parser: ast::parse::ProgramParser::new(),
-            action_parser: ast::parse::ActionParser::new(),
-            fact_parser: ast::parse::FactParser::new(),
             number_underscores: self.number_underscores,
             global_variables: self.global_variables.clone(),
         }
