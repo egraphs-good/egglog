@@ -18,7 +18,6 @@ impl VecSort {
 
     pub fn presort_names() -> Vec<Symbol> {
         vec![
-            "rebuild".into(),
             "vec-of".into(),
             "vec-append".into(),
             "vec-empty".into(),

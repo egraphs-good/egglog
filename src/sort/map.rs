@@ -48,7 +48,6 @@ impl MapSort {
 impl MapSort {
     pub fn presort_names() -> Vec<Symbol> {
         vec![
-            "rebuild".into(),
             "map-empty".into(),
             "map-insert".into(),
             "map-get".into(),
