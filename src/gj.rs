@@ -440,13 +440,7 @@ impl EGraph {
         let relation_sizes: Vec<usize> = atoms
             .iter()
             .zip(timestamp_ranges)
-            .map(|(atom, range)| {
-                if atom.head.as_str().contains("_Parent_") {
-                    usize::MAX
-                } else {
-                    self.functions[&atom.head].get_size(range)
-                }
-            })
+            .map(|(atom, range)| self.functions[&atom.head].get_size(range))
             .collect();
 
         if relation_sizes.iter().any(|&s| s == 0) {
@@ -483,12 +477,9 @@ impl EGraph {
             let var = *var_cost[0].1;
             let info = vars.remove(&var).unwrap();
             for &i in &info.occurences {
-                let (last, _rest) = atoms[i].args.split_last().unwrap();
                 for v in atoms[i].vars() {
-                    if last != &AtomTerm::Var(v) {
-                        if let Some(info) = vars.get_mut(&v) {
-                            info.intersected_on += 1;
-                        }
+                    if let Some(info) = vars.get_mut(&v) {
+                        info.intersected_on += 1;
                     }
                 }
             }
@@ -577,9 +568,20 @@ impl EGraph {
             }
         }
 
+        let resulting_program = Program(program);
+        self.sanity_check_program(&resulting_program, query);
+
+        Some((
+            resulting_program,
+            vars.into_keys().collect(),
+            initial_columns,
+        ))
+    }
+
+    fn sanity_check_program(&self, program: &Program, query: &CompiledQuery) {
         // sanity check the program
         let mut tuple_valid = vec![false; query.vars.len()];
-        for instr in &program {
+        for instr in &program.0 {
             match instr {
                 Instr::Intersect { value_idx, .. } => {
                     assert!(!tuple_valid[*value_idx]);
@@ -616,12 +618,6 @@ impl EGraph {
                 }
             }
         }
-
-        Some((
-            Program(program),
-            vars.into_keys().collect(),
-            initial_columns,
-        ))
     }
 
     pub(crate) fn run_query<F>(&self, cq: &CompiledQuery, timestamp: u32, mut f: F)
