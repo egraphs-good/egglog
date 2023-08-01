@@ -296,7 +296,7 @@ impl TypeInfo {
                     assert!(let_bound.insert(*var));
                     body.iter().for_each(|bvar| {
                         assert!(!self.global_types.contains_key(bvar));
-                        assert!(let_bound.insert(*bvar));
+                        assert!(let_bound.insert(*bvar), "Expected {} to be bound", bvar);
                     });
                 }
                 NormFact::AssignVar(lhs, _rhs) => {
@@ -329,7 +329,8 @@ impl TypeInfo {
             assert!(
                 let_bound.contains(var)
                     || self.global_types.contains_key(var)
-                    || self.reserved_type(*var).is_some()
+                    || self.reserved_type(*var).is_some(),
+                "Expected {var} to be let bound in body of rule",
             )
         };
 

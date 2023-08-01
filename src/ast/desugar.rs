@@ -77,15 +77,41 @@ fn normalize_expr(
     bound: &mut HashSet<Symbol>,
     cache: &mut HashMap<Expr, Symbol>,
 ) {
+    let is_bound = |var, desugar: &Desugar, bound_variables: &HashSet<Symbol>| {
+        desugar.global_variables.contains(&var) || bound_variables.contains(&var)
+    };
     if let Some(var) = cache.get(expr) {
-        if bound.insert(lhs_in) {
-            res.push(NormFact::AssignVar(lhs_in, *var));
-        } else {
+        if is_bound(lhs_in, desugar, bound) {
             constraints.push((lhs_in, *var));
+        } else {
+            bound.insert(lhs_in);
+            res.push(NormFact::AssignVar(lhs_in, *var));
         }
         return;
     }
-    let lhs = if bound.insert(lhs_in) {
+
+    if let Expr::Var(v) = expr {
+        if *v == lhs_in {
+            return;
+        }
+        if is_bound(lhs_in, desugar, bound) && is_bound(*v, desugar, bound) {
+            constraints.push((lhs_in, *v));
+        } else if is_bound(lhs_in, desugar, bound) {
+            bound.insert(*v);
+            res.push(NormFact::AssignVar(*v, lhs_in));
+        } else if is_bound(*v, desugar, bound) {
+            bound.insert(lhs_in);
+            res.push(NormFact::AssignVar(lhs_in, *v));
+        } else {
+            // TODO give proper error message and handle
+            // a wider variety of queries
+            panic!("Unbound variable {v}");
+        }
+        return;
+    }
+
+    let lhs = if !is_bound(lhs_in, desugar, bound) {
+        bound.insert(lhs_in);
         lhs_in
     } else {
         let fresh = desugar.get_fresh();
@@ -93,63 +119,47 @@ fn normalize_expr(
         fresh
     };
 
-    if let Expr::Var(v) = expr {
-        res.push(NormFact::AssignVar(lhs, *v));
-        return;
-    }
-
     match expr {
         Expr::Lit(l) => res.push(NormFact::AssignLit(lhs, l.clone())),
-        Expr::Var(_v) => panic!("Should have been handled above"),
-
-        Expr::Call(f, children) if TypeInfo::default().is_primitive(*f) => {
-            let mut new_children = vec![];
-            for child in children {
-                match child {
-                    Expr::Var(v) => {
-                        new_children.push(*v);
-                    }
-                    Expr::Lit(l) => {
-                        let fresh = desugar.get_fresh();
-                        res.push(NormFact::AssignLit(fresh, l.clone()));
-                        new_children.push(fresh);
-                    }
-                    _ => {
-                        let fresh = desugar.get_fresh();
-                        normalize_expr(fresh, child, desugar, res, constraints, bound, cache);
-                        new_children.push(fresh);
-                    }
-                }
-            }
-
-            res.push(NormFact::Compute(lhs, NormExpr::Call(*f, new_children)))
+        Expr::Var(_v) => {
+            panic!("handled above");
         }
         Expr::Call(f, children) => {
+            let is_compute = TypeInfo::default().is_primitive(*f);
             let mut new_children = vec![];
             for child in children {
                 match child {
                     Expr::Var(v) => {
-                        if desugar.global_variables.contains(v) {
+                        if is_compute {
+                            if !is_bound(*v, desugar, bound) {
+                                panic!("Unbound variable {v} in primitive computation");
+                            }
+                            new_children.push(*v);
+                        } else if is_bound(*v, desugar, bound) {
                             let fresh = desugar.get_fresh();
                             new_children.push(fresh);
                             constraints.push((fresh, *v));
-                        } else if bound.insert(*v) {
-                            new_children.push(*v);
                         } else {
-                            let new = desugar.get_fresh();
-                            new_children.push(new);
-                            constraints.push((new, *v));
+                            bound.insert(*v);
+                            new_children.push(*v);
                         }
                     }
                     _ => {
                         let fresh = desugar.get_fresh();
-                        bound.insert(fresh);
+                        if !is_compute {
+                            bound.insert(fresh);
+                        }
                         normalize_expr(fresh, child, desugar, res, constraints, bound, cache);
                         new_children.push(fresh);
                     }
                 }
             }
-            res.push(NormFact::Assign(lhs, NormExpr::Call(*f, new_children)))
+
+            if is_compute {
+                res.push(NormFact::Compute(lhs, NormExpr::Call(*f, new_children)));
+            } else {
+                res.push(NormFact::Assign(lhs, NormExpr::Call(*f, new_children)));
+            }
         }
     };
     cache.insert(expr.clone(), lhs);
@@ -160,48 +170,17 @@ fn flatten_equalities(equalities: Vec<(Symbol, Expr)>, desugar: &mut Desugar) ->
     let mut bound_variables: HashSet<Symbol> = Default::default();
     let mut constraints: Vec<(Symbol, Symbol)> = Default::default();
     let mut cache = Default::default();
-    let bound = |var, desugar: &Desugar, bound_variables: &HashSet<Symbol>| {
-        desugar.global_variables.contains(&var) || bound_variables.contains(&var)
-    };
 
     for (lhs, rhs) in equalities {
-        if let Expr::Var(rhs_v) = rhs {
-            if bound(rhs_v, desugar, &bound_variables) && bound(lhs, desugar, &bound_variables) {
-                constraints.push((lhs, rhs_v));
-            } else if bound(lhs, desugar, &bound_variables) {
-                res.push(NormFact::AssignVar(rhs_v, lhs));
-                bound_variables.insert(rhs_v);
-            } else if bound(rhs_v, desugar, &bound_variables) {
-                res.push(NormFact::AssignVar(lhs, rhs_v));
-                bound_variables.insert(lhs);
-            } else {
-                constraints.push((lhs, rhs_v));
-            }
-        }
-        // lhs is already bound
-        else if bound(lhs, desugar, &bound_variables) {
-            let fresh = desugar.get_fresh();
-            normalize_expr(
-                fresh,
-                &rhs,
-                desugar,
-                &mut res,
-                &mut constraints,
-                &mut bound_variables,
-                &mut cache,
-            );
-            constraints.push((fresh, lhs));
-        } else {
-            normalize_expr(
-                lhs,
-                &rhs,
-                desugar,
-                &mut res,
-                &mut constraints,
-                &mut bound_variables,
-                &mut cache,
-            );
-        }
+        normalize_expr(
+            lhs,
+            &rhs,
+            desugar,
+            &mut res,
+            &mut constraints,
+            &mut bound_variables,
+            &mut cache,
+        );
     }
 
     for (lhs, rhs) in constraints {
