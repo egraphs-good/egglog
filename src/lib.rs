@@ -56,7 +56,7 @@ pub type Subst = IndexMap<Symbol, Value>;
 pub trait PrimitiveLike {
     fn name(&self) -> Symbol;
     fn accept(&self, types: &[ArcSort]) -> Option<ArcSort>;
-    fn apply(&self, values: &[Value], egraph: &EGraph) -> Option<Value>;
+    fn apply(&self, values: &[Value]) -> Option<Value>;
 }
 
 #[derive(Debug, Clone, Default)]
@@ -150,7 +150,7 @@ impl PrimitiveLike for SimplePrimitive {
             .all(|(a, b)| a.name() == b.name())
             .then(|| self.output.clone())
     }
-    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value]) -> Option<Value> {
         (self.f)(values)
     }
 }

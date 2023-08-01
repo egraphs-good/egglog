@@ -193,7 +193,7 @@ impl PrimitiveLike for VecOf {
         }
     }
 
-    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value]) -> Option<Value> {
         let vec = ValueVec::from_iter(values.iter().copied());
         vec.store(&self.vec)
     }
@@ -217,7 +217,7 @@ impl PrimitiveLike for Append {
         }
     }
 
-    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value]) -> Option<Value> {
         let vec = ValueVec::from_iter(values.iter().flat_map(|v| ValueVec::load(&self.vec, v)));
         vec.store(&self.vec)
     }
@@ -240,7 +240,7 @@ impl PrimitiveLike for Ctor {
         }
     }
 
-    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value]) -> Option<Value> {
         assert!(values.is_empty());
         ValueVec::default().store(&self.vec)
     }
@@ -265,7 +265,7 @@ impl PrimitiveLike for Push {
         }
     }
 
-    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value]) -> Option<Value> {
         let mut vec = ValueVec::load(&self.vec, &values[0]);
         vec.push(values[1]);
         vec.store(&self.vec)
@@ -289,7 +289,7 @@ impl PrimitiveLike for Pop {
         }
     }
 
-    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value]) -> Option<Value> {
         let mut vec = ValueVec::load(&self.vec, &values[0]);
         vec.pop();
         vec.store(&self.vec)
@@ -318,7 +318,7 @@ impl PrimitiveLike for NotContains {
         }
     }
 
-    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value]) -> Option<Value> {
         let vec = ValueVec::load(&self.vec, &values[0]);
         if vec.contains(&values[1]) {
             None
@@ -348,7 +348,7 @@ impl PrimitiveLike for Contains {
         }
     }
 
-    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value]) -> Option<Value> {
         let vec = ValueVec::load(&self.vec, &values[0]);
         if vec.contains(&values[1]) {
             Some(Value::unit())
@@ -376,7 +376,7 @@ impl PrimitiveLike for Length {
         }
     }
 
-    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value]) -> Option<Value> {
         let vec = ValueVec::load(&self.vec, &values[0]);
         Some(Value::from(vec.len() as i64))
     }
@@ -402,7 +402,7 @@ impl PrimitiveLike for Get {
         }
     }
 
-    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value]) -> Option<Value> {
         let vec = ValueVec::load(&self.vec, &values[0]);
         let index = i64::load(&self.i64, &values[1]);
         vec.get(index as usize).copied()

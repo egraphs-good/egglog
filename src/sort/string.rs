@@ -75,7 +75,7 @@ impl PrimitiveLike for Add {
         }
     }
 
-    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value]) -> Option<Value> {
         let mut res_string: String = "".to_owned();
         for value in values {
             let sym = Symbol::load(&self.string, value);
