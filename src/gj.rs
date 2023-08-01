@@ -10,7 +10,6 @@ use crate::{
 };
 use std::{
     cell::UnsafeCell,
-    cmp::min,
     fmt::{self, Debug},
     ops::Range,
 };
@@ -41,7 +40,6 @@ struct VarInfo2 {
     occurences: Vec<usize>,
     intersected_on: usize,
     size_guess: usize,
-    is_nonparent_input: bool,
 }
 
 struct InputSizes<'a> {
@@ -434,18 +432,6 @@ impl EGraph {
             }
         }
 
-        for (_i, atom) in atoms.iter().enumerate() {
-            if !atom.head.as_str().contains("_Parent_") {
-                if let Some((_last, args)) = atom.args.split_last() {
-                    for arg in args {
-                        if let AtomTerm::Var(var) = arg {
-                            vars.entry(*var).or_default().is_nonparent_input = true;
-                        }
-                    }
-                }
-            }
-        }
-
         for info in vars.values_mut() {
             info.occurences.sort_unstable();
             info.occurences.dedup();
@@ -478,87 +464,14 @@ impl EGraph {
             // info.size_guess >>= info.occurences.len() - 1;
         }
 
-        let mut unionfind = UnionFind::default();
-        let mut lookup = HashMap::<Symbol, Id>::default();
-        for atom in atoms {
-            for var in atom.vars() {
-                if !lookup.contains_key(&var) {
-                    let id = unionfind.make_set();
-                    lookup.insert(var, id);
-                }
-            }
-        }
-
-        for atom in atoms {
-            if atom.head.as_str().contains("_Parent_") {
-                let first_var = atom.vars().next().unwrap();
-                for var in atom.vars() {
-                    unionfind.union_raw(lookup[&first_var], lookup[&var]);
-                }
-            }
-        }
-
-        let mut var_count_nonparent = HashMap::<Id, usize>::default();
-        for atom in atoms {
-            if !atom.head.as_str().contains("_Parent_") {
-                let mut already_counted = HashSet::default();
-                for var in atom.vars() {
-                    let id = unionfind.find(lookup[&var]);
-                    if already_counted.insert(id) {
-                        *var_count_nonparent.entry(id).or_default() += 1;
-                    }
-                }
-            }
-        }
-
-        let mut class_vars = HashMap::<Id, Vec<Symbol>>::default();
-        for (var, id) in &lookup {
-            class_vars
-                .entry(unionfind.find(*id))
-                .or_default()
-                .push(*var);
-        }
-        let all_vars = vars.keys().cloned().collect::<Vec<Symbol>>();
-        // the size guess for variables is the minimum across
-        // all variables in the same class
-        for v in all_vars {
-            for var in &class_vars[&unionfind.find(lookup[&v])] {
-                if vars.contains_key(var) && vars.contains_key(&v) {
-                    let new_guess = min(vars[&v].size_guess, vars[var].size_guess);
-                    vars[&v].size_guess = new_guess;
-                }
-            }
-            // info.size_guess >>= info.occurences.len() - 1;
-        }
-
         // here we are picking the variable ordering
         let mut ordered_vars = IndexMap::default();
         while !vars.is_empty() {
-            let mut var_is_parent_lookup = HashMap::<Symbol, usize>::default();
-            for atom in atoms {
-                if atom.head.as_str().contains("_Parent_") {
-                    let (todo, _others): (Vec<Symbol>, Vec<Symbol>) =
-                        atom.vars().partition(|v| vars.contains_key(v));
-                    if todo.len() == 1 {
-                        let var = todo[0];
-                        *var_is_parent_lookup.entry(var).or_default() += 1;
-                    }
-                }
-            }
-
             let mut var_cost = vars
                 .iter()
                 .map(|(v, info)| {
                     let size = info.size_guess as isize;
-                    let cost = (
-                        var_is_parent_lookup.get(v).unwrap_or(&0),
-                        var_count_nonparent
-                            .get(&unionfind.find(lookup[v]))
-                            .unwrap_or(&0),
-                        info.intersected_on,
-                        //occurences_nonparent.get(*v).unwrap_or(&0),
-                        -size,
-                    );
+                    let cost = (info.occurences.len(), info.intersected_on, -size);
                     (cost, v)
                 })
                 .collect::<Vec<_>>();

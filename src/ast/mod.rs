@@ -1083,13 +1083,6 @@ impl Display for NormRule {
 }
 
 impl Rule {
-    // TODO fix
-    // nasty function that detects if proofs have been
-    // added
-    pub fn is_proof_instrumented(&self) -> bool {
-        self.to_string().contains("currentAge__")
-    }
-
     pub(crate) fn to_sexp(&self, ruleset: Symbol, name: Symbol) -> Sexp {
         let mut res = vec![
             Sexp::String("rule".into()),
