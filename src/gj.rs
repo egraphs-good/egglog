@@ -46,8 +46,8 @@ struct VarInfo2 {
 
 struct InputSizes<'a> {
     cur_stage: usize,
-    // Each stage we're intersecting {set_k}_k
-    // O(max_k(|set_k|))
+    // a map from from stage to vector of costs for each stage,
+    // where 'cost' is the largest relation being intersected
     stage_sizes: &'a mut HashMap<usize, Vec<usize>>,
 }
 

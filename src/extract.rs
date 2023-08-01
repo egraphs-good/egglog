@@ -106,13 +106,13 @@ impl<'a> Extractor<'a> {
                 .costs
                 .get(&id)
                 .unwrap_or_else(|| {
-                    eprintln!("No cost for {:?}", value);
+                    log::error!("No cost for {:?}", value);
                     for func in self.egraph.functions.values() {
                         for (inputs, output) in func.nodes.iter() {
                             if output.value == value {
-                                eprintln!("Found unextractable function: {:?}", func.decl.name);
-                                eprintln!("Inputs: {:?}", inputs);
-                                eprintln!(
+                                log::error!("Found unextractable function: {:?}", func.decl.name);
+                                log::error!("Inputs: {:?}", inputs);
+                                log::error!(
                                     "{:?}",
                                     inputs
                                         .iter()

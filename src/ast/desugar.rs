@@ -631,69 +631,7 @@ pub(crate) fn desugar_command(
             let res = vec![NCommand::Check(flatten_facts(&facts, desugar))];
 
             if get_all_proofs {
-                /*res.push(NCommand::RunSchedule(NormSchedule::Saturate(Box::new(
-                    NormSchedule::Run(NormRunConfig {
-                        ruleset: "proofrules__".into(),
-                        limit: 1,
-                        until: None,
-                    }),
-                ))));*/
-
-                // check that all the proofs in the egraph are valid
-                // TODO reenable
-                //res.push(NCommand::CheckProof);
-
-                /*let proofvar = desugar.get_fresh();
-                // declare a variable for the resulting proof
-                // TODO using constant high cost
-                res.extend(desugar.declare(proofvar, "Proof__".into()));
-
-                // make a dummy rule so that we get a proof for this check
-                let dummyrule = Rule {
-                    body: facts.clone(),
-                    head: vec![Action::Union(
-                        Expr::Var(proofvar),
-                        Expr::Var(RULE_PROOF_KEYWORD.into()),
-                    )],
-                };
-                let ruleset = desugar.get_fresh();
-                res.push(NCommand::AddRuleset(ruleset));
-                res.extend(
-                    desugar_command(
-                        Command::Rule {
-                            ruleset,
-                            name: "".into(),
-                            rule: dummyrule,
-                        },
-                        desugar,
-                        get_all_proofs,
-                        seminaive_transform,
-                    )?
-                    .into_iter()
-                    .map(|cmd| cmd.command),
-                );
-
-                // now run the dummy rule and get the proof
-                res.push(NCommand::RunSchedule(NormSchedule::Run(NormRunConfig {
-                    ruleset,
-                    limit: 1,
-                    until: None,
-                })));
-
-                // we need to run proof extraction rules again
-                res.push(NCommand::RunSchedule(NormSchedule::Saturate(Box::new(
-                    NormSchedule::Run(NormRunConfig {
-                        ruleset: "proof-extract__".into(),
-                        limit: 1,
-                        until: None,
-                    }),
-                ))));
-
-                // extract the proof
-                res.push(NCommand::Extract {
-                    variants: 0,
-                    var: proofvar,
-                });*/
+                // TODO check proofs
             }
 
             res

@@ -936,32 +936,6 @@ impl EGraph {
                     "Skipping schedule.".to_string()
                 }
             }
-            /*NCommand::Extract { var, variants } => {
-                let expr = Expr::Var(var);
-                if should_run {
-                    // TODO typecheck
-                    let extract_result = self.extract_expr(expr.clone(), variants)?;
-                    let mut msg = format!(
-                        "Extracted with cost {}: {}",
-                        extract_result.cost,
-                        extract_result.termdag.to_string(&extract_result.expr)
-                    );
-                    if variants > 0 {
-                        let line = "\n    ";
-                        let strings = extract_result
-                            .variants
-                            .iter()
-                            .map(|e| extract_result.termdag.to_string(e))
-                            .collect::<Vec<_>>();
-                        let v_exprs = ListDisplay(&strings, line);
-                        write!(msg, "\nVariants of {expr}:{line}{v_exprs}").unwrap();
-                    }
-                    self.extract_report = Some(extract_result);
-                    msg
-                } else {
-                    "Skipping extraction.".into()
-                }
-            }*/
             NCommand::Check(facts) => {
                 if should_run {
                     self.check_facts(&facts)?;
@@ -1206,34 +1180,6 @@ impl EGraph {
         if stop == CompilerPassStop::TypecheckTermEncoding {
             return Ok(program);
         }
-
-        // TODO add proofs
-        /*{
-            // proofs require type info, so
-            // we need to pass in the desugar
-            let proofs = self.proof_state.add_proofs(program);
-            eprintln!("Proofs: {}", ListDisplay(&proofs, "\n"));
-
-            let final_desugared = self
-                .proof_state
-                .desugar
-                .desugar_program(proofs, false, false)?;
-
-            if stop == CompilerPassStop::Proofs {
-                return Ok(final_desugared);
-            }
-
-            // revert the type information again
-            self.proof_state.type_info = type_info_before;
-            self.proof_state
-                .type_info
-                .typecheck_program(&final_desugared)?;
-            program = final_desugared;
-
-            if stop == CompilerPassStop::TypecheckProofs {
-                return Ok(program);
-            }
-        };*/
 
         Ok(program)
     }

@@ -83,8 +83,21 @@ impl Sort for VecSort {
         result
     }
 
-    fn canonicalize(&self, _value: &mut Value, _unionfind: &UnionFind) -> bool {
-        false
+    fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
+        let vecs = self.vecs.lock().unwrap();
+        let vec = vecs.get_index(value.bits as usize).unwrap();
+        let mut changed = false;
+        let new_set: ValueVec = vec
+            .iter()
+            .map(|e| {
+                let mut e = *e;
+                changed |= self.element.canonicalize(&mut e, unionfind);
+                e
+            })
+            .collect();
+        drop(vecs);
+        *value = new_set.store(self).unwrap();
+        changed
     }
 
     fn register_primitives(self: Arc<Self>, typeinfo: &mut TypeInfo) {
