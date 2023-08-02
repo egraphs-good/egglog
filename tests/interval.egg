@@ -11,8 +11,8 @@
           (min (min (* (lo a) (lo b)) (* (lo a) (hi b)))
                (min (* (hi a) (lo b)) (* (hi a) (hi b)))))))
 
-(define x (Var "x"))
-(define e (Mul x x))
+(let x (Var "x"))
+(let e (Mul x x))
 
 (set (lo x) (rational -10 1))
 (set (hi x) (rational 10 1))
@@ -28,4 +28,4 @@
 (check (= (lo e) (rational 100 1)))
 
 ;; testing extraction of rationals
-(extract (lo e))
+(query-extract (lo e))

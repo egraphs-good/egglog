@@ -29,9 +29,9 @@
 (set (Add (Var "z") (Var "z")) (Var "y"))
 
 (run 5)
-(extract (Var "x"))
-(extract (Var "y"))
-(extract (Var "z"))
+(query-extract (Var "x"))
+(query-extract (Var "y"))
+(query-extract (Var "z"))
 (check (= (Var "z") (Add (Num 6) (Neg (Var "y")))))
 (check (= (Var "y") (Add (Add (Num 6) (Neg (Var "y"))) (Add (Num 6) (Neg (Var "y"))))))
 (check (= (Var "y") (Add (Add (Num 12) (Neg (Var "y"))) (Neg (Var "y")))))

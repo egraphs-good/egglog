@@ -13,9 +13,9 @@
 ; A is cyclic of period 4
 (rewrite (g* A (g* A (g* A A))) I)
 
-(define A2 (g* A A))
-(define A4 (g* A2 A2))
-(define A8 (g* A4 A4))
+(let A2 (g* A A))
+(let A4 (g* A2 A2))
+(let A8 (g* A4 A4))
 
 ; non terminating rule
 (relation allgs (G))

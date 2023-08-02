@@ -1,19 +1,20 @@
 use hashbrown::hash_map::Entry;
 
 use crate::ast::Symbol;
+use crate::termdag::{Term, TermDag};
 use crate::util::HashMap;
-use crate::{ArcSort, EGraph, Expr, Function, Id, Value};
+use crate::{ArcSort, EGraph, Function, Id, Value};
 
 type Cost = usize;
 
 #[derive(Debug)]
-struct Node<'a> {
+pub(crate) struct Node<'a> {
     sym: Symbol,
     inputs: &'a [Value],
 }
 
-struct Extractor<'a> {
-    costs: HashMap<Id, (Cost, Node<'a>)>,
+pub(crate) struct Extractor<'a> {
+    costs: HashMap<Id, (Cost, Term)>,
     ctors: Vec<Symbol>,
     egraph: &'a EGraph,
 }
@@ -29,14 +30,19 @@ impl EGraph {
         None
     }
 
-    pub fn extract(&self, value: Value, arcsort: &ArcSort) -> (Cost, Expr) {
-        Extractor::new(self).find_best(value, arcsort)
+    pub fn extract(&self, value: Value, termdag: &mut TermDag, arcsort: &ArcSort) -> (Cost, Term) {
+        Extractor::new(self, termdag).find_best(value, termdag, arcsort)
     }
 
-    pub fn extract_variants(&mut self, value: Value, limit: usize) -> Vec<Expr> {
+    pub fn extract_variants(
+        &mut self,
+        value: Value,
+        limit: usize,
+        termdag: &mut TermDag,
+    ) -> Vec<Term> {
         let (tag, id) = self.value_to_id(value).unwrap();
         let output_value = &Value::from_id(tag, id);
-        let ext = &Extractor::new(self);
+        let ext = &Extractor::new(self, termdag);
         ext.ctors
             .iter()
             .flat_map(|&sym| {
@@ -45,12 +51,13 @@ impl EGraph {
                     return vec![];
                 }
                 assert!(func.schema.output.is_eq_sort());
+
                 func.nodes
                     .iter()
-                    .filter_map(move |(inputs, output)| {
+                    .filter_map(|(inputs, output)| {
                         (&output.value == output_value).then(|| {
                             let node = Node { sym, inputs };
-                            ext.expr_from_node(&node)
+                            ext.expr_from_node(&node, termdag)
                         })
                     })
                     .collect()
@@ -61,71 +68,114 @@ impl EGraph {
 }
 
 impl<'a> Extractor<'a> {
-    fn new(egraph: &'a EGraph) -> Self {
+    pub fn new(egraph: &'a EGraph, termdag: &mut TermDag) -> Self {
         let mut extractor = Extractor {
             costs: HashMap::default(),
             egraph,
             ctors: vec![],
         };
 
-        // HACK
-        // just consider all functions constructors for now...
-        extractor.ctors.extend(egraph.functions.keys().cloned());
+        // only consider "extractable" functions
+        extractor.ctors.extend(
+            egraph
+                .functions
+                .keys()
+                .filter(|func| !egraph.functions.get(*func).unwrap().decl.unextractable)
+                .cloned(),
+        );
 
         log::debug!("Extracting from ctors: {:?}", extractor.ctors);
-        extractor.find_costs();
+        extractor.find_costs(termdag);
         extractor
     }
 
-    fn expr_from_node(&self, node: &Node) -> Expr {
-        let children = node.inputs.iter().map(|&value| {
-            let arcsort = self.egraph.get_sort(&value).unwrap();
-            self.find_best(value, arcsort).1
-        });
-        Expr::call(node.sym, children)
+    fn expr_from_node(&self, node: &Node, termdag: &mut TermDag) -> Term {
+        let mut children = vec![];
+        for value in node.inputs {
+            let arcsort = self.egraph.get_sort(value).unwrap();
+            children.push(self.find_best(*value, termdag, arcsort).1)
+        }
+
+        termdag.make(node.sym, children)
     }
 
-    fn find_best(&self, value: Value, sort: &ArcSort) -> (Cost, Expr) {
+    pub fn find_best(&self, value: Value, termdag: &mut TermDag, sort: &ArcSort) -> (Cost, Term) {
         if sort.is_eq_sort() {
-            let id = self.egraph.find(Id::from(value.bits as usize));
-            let (cost, node) = &self
+            let id = self.find(&value);
+            let (cost, node) = self
                 .costs
                 .get(&id)
-                .unwrap_or_else(|| panic!("No cost for {:?}", value));
-            (*cost, self.expr_from_node(node))
+                .unwrap_or_else(|| {
+                    log::error!("No cost for {:?}", value);
+                    for func in self.egraph.functions.values() {
+                        for (inputs, output) in func.nodes.iter() {
+                            if output.value == value {
+                                log::error!("Found unextractable function: {:?}", func.decl.name);
+                                log::error!("Inputs: {:?}", inputs);
+                                log::error!(
+                                    "{:?}",
+                                    inputs
+                                        .iter()
+                                        .map(|input| self.costs.get(&self.find(input)))
+                                        .collect::<Vec<_>>()
+                                );
+                            }
+                        }
+                    }
+
+                    panic!("No cost for {:?}", value)
+                })
+                .clone();
+            (cost, node)
         } else {
-            (0, sort.make_expr(self.egraph, value))
+            (0, termdag.expr_to_term(&sort.make_expr(self.egraph, value)))
         }
     }
 
-    fn node_total_cost(&self, function: &Function, children: &[Value]) -> Option<Cost> {
+    fn node_total_cost(
+        &mut self,
+        function: &Function,
+        children: &[Value],
+        termdag: &mut TermDag,
+    ) -> Option<(Vec<Term>, Cost)> {
         let mut cost = function.decl.cost.unwrap_or(1);
         let types = &function.schema.input;
+        let mut terms: Vec<Term> = vec![];
         for (ty, value) in types.iter().zip(children) {
             cost = cost.saturating_add(if ty.is_eq_sort() {
                 let id = self.egraph.find(Id::from(value.bits as usize));
                 // TODO costs should probably map values?
-                self.costs.get(&id)?.0
+                let (cost, term) = self.costs.get(&id)?;
+                terms.push(term.clone());
+                *cost
             } else {
+                let term = termdag.expr_to_term(&ty.make_expr(self.egraph, *value));
+                terms.push(term);
                 1
             });
         }
-        Some(cost)
+        Some((terms, cost))
     }
 
-    fn find_costs(&mut self) {
+    fn find(&self, value: &Value) -> Id {
+        self.egraph.find(Id::from(value.bits as usize))
+    }
+
+    fn find_costs(&mut self, termdag: &mut TermDag) {
         let mut did_something = true;
         while did_something {
             did_something = false;
 
-            for &sym in &self.ctors {
+            for sym in self.ctors.clone() {
                 let func = &self.egraph.functions[&sym];
                 if func.schema.output.is_eq_sort() {
                     for (inputs, output) in func.nodes.iter() {
-                        if let Some(new_cost) = self.node_total_cost(func, inputs) {
-                            let make_new_pair = || (new_cost, Node { sym, inputs });
+                        if let Some((term_inputs, new_cost)) =
+                            self.node_total_cost(func, inputs, termdag)
+                        {
+                            let make_new_pair = || (new_cost, termdag.make(sym, term_inputs));
 
-                            let id = self.egraph.find(Id::from(output.value.bits as usize));
+                            let id = self.find(&output.value);
                             match self.costs.entry(id) {
                                 Entry::Vacant(e) => {
                                     did_something = true;

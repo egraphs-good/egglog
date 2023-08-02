@@ -68,13 +68,13 @@
 )
 
 
-(define n (NamedDim "n"))
-(define m (NamedDim "m"))
-(define p (NamedDim "p"))
+(let n (NamedDim "n"))
+(let m (NamedDim "m"))
+(let p (NamedDim "p"))
 
-(define A (NamedMat "A"))
-(define B (NamedMat "B"))
-(define C (NamedMat "C"))
+(let A (NamedMat "A"))
+(let B (NamedMat "B"))
+(let C (NamedMat "C"))
 
 (set (nrows A) n)
 (set (ncols A) n)
@@ -82,17 +82,17 @@
 (set (ncols B) m)
 (set (nrows C) p)
 (set (ncols C) p)
-(define ex1 (MMul (Kron (Id n) B) (Kron A (Id m))))
-(define rows1 (nrows ex1))
-(define cols1 (ncols ex1))
+(let ex1 (MMul (Kron (Id n) B) (Kron A (Id m))))
+(let rows1 (nrows ex1))
+(let cols1 (ncols ex1))
 
 (run 20)
 
 (check (= (nrows B) m))
 (check (= (nrows (Kron (Id n) B)) (Times n m)))
-(define simple_ex1 (Kron A B))
+(let simple_ex1 (Kron A B))
 (check (= ex1 simple_ex1))
 
-(define ex2 (MMul (Kron (Id p) C) (Kron A (Id m))))
+(let ex2 (MMul (Kron (Id p) C) (Kron A (Id m))))
 (run 10)
 (fail (check (= ex2 (Kron A C))))

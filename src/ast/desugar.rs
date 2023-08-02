@@ -1,4 +1,4 @@
-use crate::{proofs::RULE_PROOF_KEYWORD, *};
+use crate::*;
 
 fn desugar_datatype(name: Symbol, variants: Vec<Variant>) -> Vec<NCommand> {
     vec![NCommand::Sort(name, None)]
@@ -14,6 +14,7 @@ fn desugar_datatype(name: Symbol, variants: Vec<Variant>) -> Vec<NCommand> {
                 merge_action: vec![],
                 default: None,
                 cost: variant.cost,
+                unextractable: false,
             })
         }))
         .collect()
@@ -67,38 +68,123 @@ fn desugar_birewrite(
         .collect()
 }
 
-fn expr_to_ssa(lhs: Symbol, expr: &Expr, desugar: &mut Desugar, res: &mut Vec<NormFact>) {
-    match expr {
-        Expr::Lit(l) => {
-            res.push(NormFact::AssignLit(lhs, l.clone()));
+fn normalize_expr(
+    lhs_in: Symbol,
+    expr: &Expr,
+    desugar: &mut Desugar,
+    res: &mut Vec<NormFact>,
+    constraints: &mut Vec<(Symbol, Symbol)>,
+    bound: &mut HashSet<Symbol>,
+    cache: &mut HashMap<Expr, Symbol>,
+) {
+    let is_bound = |var, desugar: &Desugar, bound_variables: &HashSet<Symbol>| {
+        desugar.global_variables.contains(&var) || bound_variables.contains(&var)
+    };
+    if let Some(var) = cache.get(expr) {
+        if is_bound(lhs_in, desugar, bound) {
+            constraints.push((lhs_in, *var));
+        } else {
+            bound.insert(lhs_in);
+            res.push(NormFact::AssignVar(lhs_in, *var));
         }
-        Expr::Var(v) => {
-            res.push(NormFact::ConstrainEq(lhs, *v));
+        return;
+    }
+
+    if let Expr::Var(v) = expr {
+        if *v == lhs_in {
+            return;
+        }
+        if is_bound(lhs_in, desugar, bound) && is_bound(*v, desugar, bound) {
+            constraints.push((lhs_in, *v));
+        } else if is_bound(lhs_in, desugar, bound) {
+            bound.insert(*v);
+            res.push(NormFact::AssignVar(*v, lhs_in));
+        } else if is_bound(*v, desugar, bound) {
+            bound.insert(lhs_in);
+            res.push(NormFact::AssignVar(lhs_in, *v));
+        } else {
+            // TODO give proper error message and handle
+            // a wider variety of queries
+            panic!("Unbound variable {v}");
+        }
+        return;
+    }
+
+    let lhs = if !is_bound(lhs_in, desugar, bound) {
+        bound.insert(lhs_in);
+        lhs_in
+    } else {
+        let fresh = desugar.get_fresh();
+        constraints.push((fresh, lhs_in));
+        fresh
+    };
+
+    match expr {
+        Expr::Lit(l) => res.push(NormFact::AssignLit(lhs, l.clone())),
+        Expr::Var(_v) => {
+            panic!("handled above");
         }
         Expr::Call(f, children) => {
+            let is_compute = TypeInfo::default().is_primitive(*f);
             let mut new_children = vec![];
             for child in children {
                 match child {
                     Expr::Var(v) => {
-                        new_children.push(*v);
+                        if is_compute {
+                            if !is_bound(*v, desugar, bound) {
+                                panic!("Unbound variable {v} in primitive computation");
+                            }
+                            new_children.push(*v);
+                        } else if is_bound(*v, desugar, bound) {
+                            let fresh = desugar.get_fresh();
+                            new_children.push(fresh);
+                            constraints.push((fresh, *v));
+                        } else {
+                            bound.insert(*v);
+                            new_children.push(*v);
+                        }
                     }
                     _ => {
                         let fresh = desugar.get_fresh();
-                        expr_to_ssa(fresh, child, desugar, res);
+                        if !is_compute {
+                            bound.insert(fresh);
+                        }
+                        normalize_expr(fresh, child, desugar, res, constraints, bound, cache);
                         new_children.push(fresh);
                     }
                 }
             }
-            res.push(NormFact::Assign(lhs, NormExpr::Call(*f, new_children)));
+
+            if is_compute {
+                res.push(NormFact::Compute(lhs, NormExpr::Call(*f, new_children)));
+            } else {
+                res.push(NormFact::Assign(lhs, NormExpr::Call(*f, new_children)));
+            }
         }
-    }
+    };
+    cache.insert(expr.clone(), lhs);
 }
 
 fn flatten_equalities(equalities: Vec<(Symbol, Expr)>, desugar: &mut Desugar) -> Vec<NormFact> {
     let mut res = vec![];
+    let mut bound_variables: HashSet<Symbol> = Default::default();
+    let mut constraints: Vec<(Symbol, Symbol)> = Default::default();
+    let mut cache = Default::default();
 
     for (lhs, rhs) in equalities {
-        expr_to_ssa(lhs, &rhs, desugar, &mut res);
+        normalize_expr(
+            lhs,
+            &rhs,
+            desugar,
+            &mut res,
+            &mut constraints,
+            &mut bound_variables,
+            &mut cache,
+        );
+    }
+
+    for (lhs, rhs) in constraints {
+        res.push(NormFact::ConstrainEq(lhs, rhs));
     }
 
     res
@@ -123,7 +209,12 @@ fn flatten_facts(facts: &Vec<Fact>, desugar: &mut Desugar) -> Vec<NormFact> {
                 }
             }
             Fact::Fact(expr) => {
-                equalities.push((desugar.get_fresh(), expr.clone()));
+                // we can drop facts that are
+                // just a variable
+                if let Expr::Var(_v) = expr {
+                } else {
+                    equalities.push((desugar.get_fresh(), expr.clone()));
+                }
             }
         }
     }
@@ -146,7 +237,7 @@ fn flatten_actions(actions: &Vec<Action>, desugar: &mut Desugar) -> Vec<NormActi
                 assert_ne!(*symbol, added);
                 res.push(NormAction::LetVar(*symbol, added));
             }
-            Action::Set(symbol, exprs, rhs) | Action::SetNoTrack(symbol, exprs, rhs) => {
+            Action::Set(symbol, exprs, rhs) => {
                 let set = NormAction::Set(
                     NormExpr::Call(
                         *symbol,
@@ -159,6 +250,11 @@ fn flatten_actions(actions: &Vec<Action>, desugar: &mut Desugar) -> Vec<NormActi
                     add_expr(rhs.clone(), &mut res),
                 );
                 res.push(set);
+            }
+            Action::Extract(expr, variants) => {
+                let added = add_expr(expr.clone(), &mut res);
+                let added_variants = add_expr(variants.clone(), &mut res);
+                res.push(NormAction::Extract(added, added_variants));
             }
             Action::Delete(symbol, exprs) => {
                 let del = NormAction::Delete(NormExpr::Call(
@@ -260,14 +356,9 @@ fn desugar_schedule(desugar: &mut Desugar, schedule: &Schedule) -> NormSchedule 
 }
 
 fn desugar_run_config(desugar: &mut Desugar, run_config: &RunConfig) -> NormRunConfig {
-    let RunConfig {
-        ruleset,
-        limit,
-        until,
-    } = run_config;
+    let RunConfig { ruleset, until } = run_config;
     NormRunConfig {
         ruleset: *ruleset,
-        limit: *limit,
         until: until.clone().map(|facts| flatten_facts(&facts, desugar)),
     }
 }
@@ -318,9 +409,9 @@ pub struct Desugar {
     next_fresh: usize,
     next_command_id: usize,
     pub(crate) parser: ast::parse::ProgramParser,
-    pub(crate) action_parser: ast::parse::ActionParser,
     // TODO fix getting fresh names using modules
     pub(crate) number_underscores: usize,
+    pub(crate) global_variables: HashSet<Symbol>,
 }
 
 impl Default for Desugar {
@@ -330,60 +421,84 @@ impl Default for Desugar {
             next_command_id: Default::default(),
             // these come from lalrpop and don't have default impls
             parser: ast::parse::ProgramParser::new(),
-            action_parser: ast::parse::ActionParser::new(),
             number_underscores: 3,
+            global_variables: Default::default(),
         }
     }
+}
+
+pub(crate) fn desugar_simplify(
+    desugar: &mut Desugar,
+    expr: &Expr,
+    schedule: &Schedule,
+) -> Vec<NCommand> {
+    let mut res = vec![NCommand::Push(1)];
+    let lhs = desugar.get_fresh();
+    res.extend(
+        flatten_actions(&vec![Action::Let(lhs, expr.clone())], desugar)
+            .into_iter()
+            .map(NCommand::NormAction),
+    );
+    res.push(NCommand::RunSchedule(desugar_schedule(desugar, schedule)));
+    res.extend(
+        desugar_command(
+            Command::Extract {
+                variants: 0,
+                fact: Fact::Fact(Expr::Var(lhs)),
+            },
+            desugar,
+            false,
+            false,
+        )
+        .unwrap()
+        .into_iter()
+        .map(|c| c.command),
+    );
+
+    res.push(NCommand::Pop(1));
+    res
 }
 
 pub(crate) fn desugar_calc(
     desugar: &mut Desugar,
     idents: Vec<IdentSort>,
     exprs: Vec<Expr>,
-    seminaive: bool,
-) -> Vec<NCommand> {
+    seminaive_transform: bool,
+) -> Result<Vec<NCommand>, Error> {
     let mut res = vec![];
 
     // first, push all the idents
     for IdentSort { ident, sort } in idents {
-        res.extend(desugar.declare(ident, sort));
+        res.push(Command::Declare { name: ident, sort });
     }
 
     // now, for every pair of exprs we need to prove them equal
     for expr1and2 in exprs.windows(2) {
         let expr1 = &expr1and2[0];
         let expr2 = &expr1and2[1];
-        res.push(NCommand::Push(1));
-        let mut new_memo = Default::default();
+        res.push(Command::Push(1));
 
         // add the two exprs
-        let mut actions = vec![];
-        let v1 = desugar.expr_to_flat_actions(expr1, &mut actions, &mut new_memo);
-        let v2 = desugar.expr_to_flat_actions(expr2, &mut actions, &mut new_memo);
-        res.extend(actions.into_iter().map(NCommand::NormAction));
+        res.push(Command::Action(Action::Expr(expr1.clone())));
+        res.push(Command::Action(Action::Expr(expr2.clone())));
 
-        res.extend(
-            desugar_command(
-                Command::Run(RunConfig {
-                    ruleset: "".into(),
-                    limit: 1000000,
-                    until: Some(vec![Fact::Eq(vec![expr1.clone(), expr2.clone()])]),
-                }),
-                desugar,
-                false,
-                seminaive,
-            )
-            .unwrap()
-            .into_iter()
-            .map(|c| c.command),
-        );
+        res.push(Command::RunSchedule(Schedule::Saturate(Box::new(
+            Schedule::Run(RunConfig {
+                ruleset: "".into(),
+                until: Some(vec![Fact::Eq(vec![expr1.clone(), expr2.clone()])]),
+            }),
+        ))));
 
-        res.push(NCommand::Check(vec![NormFact::ConstrainEq(v1, v2)]));
+        res.push(Command::Check(vec![Fact::Eq(vec![
+            expr1.clone(),
+            expr2.clone(),
+        ])]));
 
-        res.push(NCommand::Pop(1));
+        res.push(Command::Pop(1));
     }
 
-    res
+    desugar_commands(res, desugar, false, seminaive_transform)
+        .map(|cmds| cmds.into_iter().map(|cmd| cmd.command).collect())
 }
 
 pub(crate) fn rewrite_name(rewrite: &Rewrite) -> String {
@@ -394,7 +509,7 @@ pub(crate) fn desugar_command(
     command: Command,
     desugar: &mut Desugar,
     get_all_proofs: bool,
-    seminaive: bool,
+    seminaive_transform: bool,
 ) -> Result<Vec<NormCommand>, Error> {
     let res = match command {
         Command::SetOption { name, value } => {
@@ -418,7 +533,7 @@ pub(crate) fn desugar_command(
                 desugar.parse_program(&s)?,
                 desugar,
                 get_all_proofs,
-                seminaive,
+                seminaive_transform,
             );
         }
         Command::Rule {
@@ -429,13 +544,14 @@ pub(crate) fn desugar_command(
             if name == "".into() {
                 name = rule.to_string().replace('\"', "'").into();
             }
+
             let mut result = vec![NCommand::NormRule {
                 ruleset,
                 name,
                 rule: flatten_rule(rule.clone(), desugar),
             }];
 
-            if seminaive {
+            if seminaive_transform {
                 if let Some(new_rule) = add_semi_naive_rule(desugar, rule) {
                     result.push(NCommand::NormRule {
                         ruleset,
@@ -449,124 +565,57 @@ pub(crate) fn desugar_command(
         }
         Command::Sort(sort, option) => vec![NCommand::Sort(sort, option)],
         // TODO ignoring cost for now
-        Command::Define {
-            name,
-            expr,
-            cost: _cost,
-        } => {
-            let mut commands = vec![];
-
-            let mut actions = vec![];
-            let mut temp = Default::default();
-            let fresh = desugar.expr_to_flat_actions(&expr, &mut actions, &mut temp);
-            actions.push(NormAction::LetVar(name, fresh));
-            for action in actions {
-                commands.push(NCommand::NormAction(action));
-            }
-            commands
-        }
         Command::AddRuleset(name) => vec![NCommand::AddRuleset(name)],
         Command::Action(action) => flatten_actions(&vec![action], desugar)
             .into_iter()
             .map(NCommand::NormAction)
             .collect(),
-        Command::Run(config) => {
-            vec![NCommand::RunSchedule(NormSchedule::Run(
-                desugar_run_config(desugar, &config),
-            ))]
-        }
-        Command::Simplify { expr, config } => {
-            let fresh = desugar.get_fresh();
-            flatten_actions(&vec![Action::Let(fresh, expr)], desugar)
-                .into_iter()
-                .map(NCommand::NormAction)
-                .chain(
-                    vec![NCommand::Simplify {
-                        var: fresh,
-                        config: desugar_run_config(desugar, &config),
-                    }]
-                    .into_iter(),
-                )
-                .collect()
-        }
-        Command::Calc(idents, exprs) => desugar_calc(desugar, idents, exprs, seminaive),
+        Command::Simplify { expr, schedule } => desugar_simplify(desugar, &expr, &schedule),
+        Command::Calc(idents, exprs) => desugar_calc(desugar, idents, exprs, seminaive_transform)?,
         Command::RunSchedule(sched) => {
             vec![NCommand::RunSchedule(desugar_schedule(desugar, &sched))]
         }
-        Command::Extract { variants, e } => {
+        // TODO add variants to extract action
+        Command::Extract {
+            variants: _variants,
+            fact,
+        } => {
             let fresh = desugar.get_fresh();
-            flatten_actions(&vec![Action::Let(fresh, e)], desugar)
-                .into_iter()
-                .map(NCommand::NormAction)
-                .chain(
-                    vec![NCommand::Extract {
-                        variants,
-                        var: fresh,
-                    }]
-                    .into_iter(),
+            let fresh_ruleset = desugar.get_fresh();
+            let desugaring = if let Fact::Fact(Expr::Var(v)) = fact {
+                format!("(extract {v})")
+            } else {
+                format!(
+                    "(check {fact})
+                    (ruleset {fresh_ruleset})
+                    (rule ((= {fresh} {fact}))
+                          ((extract {fresh}))
+                          :ruleset {fresh_ruleset})
+                    (run {fresh_ruleset} 1)"
                 )
+            };
+
+            desugar
+                .desugar_program(
+                    desugar.parse_program(&desugaring).unwrap(),
+                    get_all_proofs,
+                    seminaive_transform,
+                )?
+                .into_iter()
+                .map(|cmd| cmd.command)
                 .collect()
         }
         Command::Check(facts) => {
-            let mut res = vec![NCommand::Check(flatten_facts(&facts, desugar))];
+            let res = vec![NCommand::Check(flatten_facts(&facts, desugar))];
 
             if get_all_proofs {
-                let proofvar = desugar.get_fresh();
-                // declare a variable for the resulting proof
-                // TODO using constant high cost
-                res.extend(desugar.declare(proofvar, "Proof__".into()));
-
-                // make a dummy rule so that we get a proof for this check
-                let dummyrule = Rule {
-                    body: facts.clone(),
-                    head: vec![Action::Union(
-                        Expr::Var(proofvar),
-                        Expr::Var(RULE_PROOF_KEYWORD.into()),
-                    )],
-                };
-                let ruleset = desugar.get_fresh();
-                res.push(NCommand::AddRuleset(ruleset));
-                res.extend(
-                    desugar_command(
-                        Command::Rule {
-                            ruleset,
-                            name: "".into(),
-                            rule: dummyrule,
-                        },
-                        desugar,
-                        get_all_proofs,
-                        seminaive,
-                    )?
-                    .into_iter()
-                    .map(|cmd| cmd.command),
-                );
-
-                // now run the dummy rule and get the proof
-                res.push(NCommand::RunSchedule(NormSchedule::Run(NormRunConfig {
-                    ruleset,
-                    limit: 1,
-                    until: None,
-                })));
-
-                // we need to run proof extraction rules again
-                res.push(NCommand::RunSchedule(NormSchedule::Saturate(Box::new(
-                    NormSchedule::Run(NormRunConfig {
-                        ruleset: "proof-extract__".into(),
-                        limit: 1,
-                        until: None,
-                    }),
-                ))));
-
-                // extract the proof
-                res.push(NCommand::Extract {
-                    variants: 0,
-                    var: proofvar,
-                });
+                // TODO check proofs
             }
 
             res
         }
-        Command::Print(symbol, size) => vec![NCommand::Print(symbol, size)],
+        Command::CheckProof => vec![NCommand::CheckProof],
+        Command::PrintTable(symbol, size) => vec![NCommand::PrintTable(symbol, size)],
         Command::PrintSize(symbol) => vec![NCommand::PrintSize(symbol)],
         Command::Output { file, exprs } => vec![NCommand::Output { file, exprs }],
         Command::Push(num) => {
@@ -576,7 +625,7 @@ pub(crate) fn desugar_command(
             vec![NCommand::Pop(num)]
         }
         Command::Fail(cmd) => {
-            let mut desugared = desugar_command(*cmd, desugar, false, seminaive)?;
+            let mut desugared = desugar_command(*cmd, desugar, false, seminaive_transform)?;
 
             let last = desugared.pop().unwrap();
             desugared.push(NormCommand {
@@ -589,6 +638,17 @@ pub(crate) fn desugar_command(
             vec![NCommand::Input { name, file }]
         }
     };
+
+    for cmd in &res {
+        if let NCommand::NormAction(action) = cmd {
+            action.map_def_use(&mut |var, is_def| {
+                if is_def {
+                    desugar.global_variables.insert(var);
+                }
+                var
+            });
+        }
+    }
 
     Ok(res
         .into_iter()
@@ -605,11 +665,11 @@ pub(crate) fn desugar_commands(
     program: Vec<Command>,
     desugar: &mut Desugar,
     get_all_proofs: bool,
-    seminaive: bool,
+    seminaive_transform: bool,
 ) -> Result<Vec<NormCommand>, Error> {
     let mut res = vec![];
     for command in program {
-        let desugared = desugar_command(command, desugar, get_all_proofs, seminaive)?;
+        let desugared = desugar_command(command, desugar, get_all_proofs, seminaive_transform)?;
         res.extend(desugared);
     }
     Ok(res)
@@ -621,13 +681,20 @@ impl Clone for Desugar {
             next_fresh: self.next_fresh,
             next_command_id: self.next_command_id,
             parser: ast::parse::ProgramParser::new(),
-            action_parser: ast::parse::ActionParser::new(),
             number_underscores: self.number_underscores,
+            global_variables: self.global_variables.clone(),
         }
     }
 }
 
 impl Desugar {
+    pub fn merge_ruleset_name(&self) -> Symbol {
+        Symbol::from(format!(
+            "merge_ruleset{}",
+            "_".repeat(self.number_underscores)
+        ))
+    }
+
     pub fn get_fresh(&mut self) -> Symbol {
         self.next_fresh += 1;
         format!(
@@ -648,9 +715,9 @@ impl Desugar {
         &mut self,
         program: Vec<Command>,
         get_all_proofs: bool,
-        seminaive: bool,
+        seminaive_transform: bool,
     ) -> Result<Vec<NormCommand>, Error> {
-        let res = desugar_commands(program, self, get_all_proofs, seminaive)?;
+        let res = desugar_commands(program, self, get_all_proofs, seminaive_transform)?;
         Ok(res)
     }
 
@@ -684,8 +751,15 @@ impl Desugar {
                         }
                     }
                 }
-                res.push(NormAction::Let(assign, NormExpr::Call(*f, new_children)));
-                assign
+                let result = NormExpr::Call(*f, new_children);
+                let result_expr = result.to_expr();
+                if let Some(existing) = memo.get(&result_expr) {
+                    *existing
+                } else {
+                    memo.insert(result_expr.clone(), assign);
+                    res.push(NormAction::Let(assign, result));
+                    assign
+                }
             }
         };
         memo.insert(expr.clone(), res);
@@ -711,7 +785,8 @@ impl Desugar {
                 default: None,
                 merge: None,
                 merge_action: vec![],
-                cost: Some(HIGH_COST),
+                cost: None,
+                unextractable: false,
             }),
             NCommand::NormAction(NormAction::Let(name, NormExpr::Call(fresh, vec![]))),
         ]

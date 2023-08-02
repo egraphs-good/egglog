@@ -11,7 +11,7 @@ pub struct Context<'a> {
     nodes: HashMap<ENode, Id>,
 }
 
-#[derive(Hash, Eq, PartialEq)]
+#[derive(Hash, Eq, PartialEq, Clone)]
 enum ENode {
     Func(Symbol, Vec<Id>),
     Prim(Primitive, Vec<Id>),
@@ -23,6 +23,7 @@ enum ENode {
 pub enum AtomTerm {
     Var(Symbol),
     Value(Value),
+    Global(Symbol),
 }
 
 impl std::fmt::Display for AtomTerm {
@@ -30,6 +31,7 @@ impl std::fmt::Display for AtomTerm {
         match self {
             AtomTerm::Var(v) => write!(f, "{}", v),
             AtomTerm::Value(_) => write!(f, "<value>"),
+            AtomTerm::Global(g) => write!(f, "{}", g),
         }
     }
 }
@@ -55,14 +57,14 @@ pub struct Query {
 impl std::fmt::Display for Query {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for atom in &self.atoms {
-            write!(f, "{atom}")?;
+            writeln!(f, "{atom}")?;
         }
         if !self.filters.is_empty() {
-            write!(f, "where ")?;
+            writeln!(f, "where ")?;
             for filter in &self.filters {
-                write!(
+                writeln!(
                     f,
-                    "({} {}) ",
+                    "({} {})",
                     filter.head.name(),
                     ListDisplay(&filter.args, " ")
                 )?;
@@ -77,7 +79,32 @@ impl<T> Atom<T> {
         self.args.iter().filter_map(|t| match t {
             AtomTerm::Var(v) => Some(*v),
             AtomTerm::Value(_) => None,
+            AtomTerm::Global(_) => None,
         })
+    }
+}
+
+pub(crate) struct ValueEq {}
+
+impl PrimitiveLike for ValueEq {
+    fn name(&self) -> Symbol {
+        "value-eq".into()
+    }
+
+    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
+        match types {
+            [a, b] if a.name() == b.name() => Some(a.clone()),
+            _ => None,
+        }
+    }
+
+    fn apply(&self, values: &[Value]) -> Option<Value> {
+        assert_eq!(values.len(), 2);
+        if values[0] == values[1] {
+            Some(values[0])
+        } else {
+            None
+        }
     }
 }
 
@@ -126,6 +153,25 @@ impl<'a> Context<'a> {
                 _ => continue,
             }
         }
+        // Globally bound variables first
+        for (node, &id) in &self.nodes {
+            match node {
+                ENode::Var(var) => {
+                    if self.egraph.global_bindings.get(var).is_some() {
+                        match leaves.entry(id) {
+                            Entry::Occupied(existing) => {
+                                canon.insert(*var, existing.get().clone());
+                            }
+                            Entry::Vacant(v) => {
+                                v.insert(Expr::Var(*var));
+                            }
+                        }
+                    }
+                }
+                _ => continue,
+            }
+        }
+
         // Now do variables
         for (node, &id) in &self.nodes {
             debug_assert_eq!(id, self.unionfind.find(id));
@@ -151,28 +197,66 @@ impl<'a> Context<'a> {
         let get_leaf = |id: &Id| -> AtomTerm {
             let mk = || AtomTerm::Var(Symbol::from(format!("?__{}", id)));
             match leaves.get(id) {
-                Some(Expr::Var(v)) => AtomTerm::Var(*v),
+                Some(Expr::Var(v)) => {
+                    if let Some((_ty, _value, _ts)) = self.egraph.global_bindings.get(v) {
+                        AtomTerm::Global(*v)
+                    } else {
+                        AtomTerm::Var(*v)
+                    }
+                }
                 Some(Expr::Lit(l)) => AtomTerm::Value(self.egraph.eval_lit(l)),
                 _ => mk(),
             }
         };
 
         let mut query = Query::default();
+        let mut query_eclasses = HashSet::<Id>::default();
         // Now we can fill in the nodes with the canonical leaves
         for (node, id) in &self.nodes {
             match node {
                 ENode::Func(f, ids) => {
                     let args = ids.iter().chain([id]).map(get_leaf).collect();
+                    for id in ids {
+                        query_eclasses.insert(*id);
+                    }
                     query.atoms.push(Atom { head: *f, args });
                 }
                 ENode::Prim(p, ids) => {
-                    let args = ids.iter().chain([id]).map(get_leaf).collect();
+                    let mut args = vec![];
+                    for child in ids {
+                        let leaf = get_leaf(child);
+                        if let AtomTerm::Var(v) = leaf {
+                            if self.egraph.global_bindings.contains_key(&v) {
+                                args.push(AtomTerm::Value(self.egraph.global_bindings[&v].1));
+                                continue;
+                            }
+                        }
+                        args.push(get_leaf(child));
+                        query_eclasses.insert(*child);
+                    }
+                    args.push(get_leaf(id));
                     query.filters.push(Atom {
                         head: p.clone(),
                         args,
                     });
                 }
                 _ => {}
+            }
+        }
+
+        // filter for global variables
+        for node in &self.nodes {
+            if let ENode::Var(var) = node.0 {
+                if self.egraph.global_bindings.contains_key(var) {
+                    let canon = get_leaf(node.1);
+                    if canon != AtomTerm::Global(*var) {
+                        // compare global to canon
+                        query.filters.push(Atom {
+                            head: Primitive(Arc::new(ValueEq {})),
+                            args: vec![canon.clone(), AtomTerm::Global(*var), canon],
+                        });
+                    }
+                }
             }
         }
 
@@ -198,7 +282,7 @@ impl<'a> Context<'a> {
                 }
 
                 // reinsert and handle hit
-                if let Some(old) = self.nodes.insert(node, id) {
+                if let Some(old) = self.nodes.insert(node.clone(), id) {
                     keep_going = true;
                     self.unionfind.union_raw(old, id);
                 }
@@ -209,6 +293,7 @@ impl<'a> Context<'a> {
     fn typecheck_fact(&mut self, fact: &Fact) {
         match fact {
             Fact::Eq(exprs) => {
+                assert!(exprs.len() == 2);
                 let mut later = vec![];
                 let mut ty: Option<ArcSort> = None;
                 let mut ids = Vec::with_capacity(exprs.len());
@@ -221,7 +306,7 @@ impl<'a> Context<'a> {
                         // so we'll try again later when we can check its type
                         (Expr::Var(v), None)
                             if !self.types.contains_key(v)
-                                && !self.egraph.functions.contains_key(v) =>
+                                && !self.egraph.global_bindings.contains_key(v) =>
                         {
                             later.push(expr)
                         }
@@ -256,7 +341,7 @@ impl<'a> Context<'a> {
 
     fn check_query_expr(&mut self, expr: &Expr, expected: ArcSort) -> Id {
         match expr {
-            Expr::Var(sym) if !self.egraph.functions.contains_key(sym) => {
+            Expr::Var(sym) => {
                 match self.types.entry(*sym) {
                     IEntry::Occupied(ty) => {
                         // TODO name comparison??
@@ -299,8 +384,11 @@ impl<'a> Context<'a> {
                 if self.egraph.functions.contains_key(sym) {
                     return self.infer_query_expr(&Expr::call(*sym, []));
                 }
+
                 let ty = if let Some(ty) = self.types.get(sym) {
                     Some(ty.clone())
+                } else if let Some(ty) = self.egraph.global_bindings.get(sym) {
+                    Some(ty.0.clone())
                 } else {
                     self.errors.push(TypeError::Unbound(*sym));
                     None
@@ -373,13 +461,19 @@ impl<'a> ActionChecker<'a> {
                 self.locals.insert(*v, ty);
                 Ok(())
             }
-            Action::Set(f, args, val) | Action::SetNoTrack(f, args, val) => {
+            Action::Set(f, args, val) => {
                 let fake_call = Expr::Call(*f, args.clone());
                 let (_, ty) = self.infer_expr(&fake_call)?;
                 let fake_instr = self.instructions.pop().unwrap();
                 assert!(matches!(fake_instr, Instruction::CallFunction(..)));
                 self.check_expr(val, ty)?;
                 self.instructions.push(Instruction::Set(*f));
+                Ok(())
+            }
+            Action::Extract(variable, variants) => {
+                let (_, _ty) = self.infer_expr(variable)?;
+                let (_, _ty2) = self.infer_expr(variants)?;
+                self.instructions.push(Instruction::Extract(2));
                 Ok(())
             }
             Action::Delete(f, args) => {
@@ -424,7 +518,10 @@ impl<'a> ExprChecker<'a> for ActionChecker<'a> {
     }
 
     fn infer_var(&mut self, sym: Symbol) -> Result<(Self::T, ArcSort), TypeError> {
-        if let Some((i, _, ty)) = self.locals.get_full(&sym) {
+        if let Some((sort, _v, _ts)) = self.egraph().global_bindings.get(&sym) {
+            self.instructions.push(Instruction::Global(sym));
+            Ok(((), sort.clone()))
+        } else if let Some((i, _, ty)) = self.locals.get_full(&sym) {
             self.instructions.push(Instruction::Load(Load::Stack(i)));
             Ok(((), ty.clone()))
         } else if let Some((i, _, ty)) = self.types.get_full(&sym) {
@@ -436,7 +533,17 @@ impl<'a> ExprChecker<'a> for ActionChecker<'a> {
     }
 
     fn do_function(&mut self, f: Symbol, _args: Vec<Self::T>) -> Self::T {
-        self.instructions.push(Instruction::CallFunction(f));
+        let func_type = self
+            .egraph
+            .proof_state
+            .type_info
+            .func_types
+            .get(&f)
+            .unwrap();
+        self.instructions.push(Instruction::CallFunction(
+            f,
+            func_type.has_default || !func_type.has_merge,
+        ));
     }
 
     fn do_prim(&mut self, prim: Primitive, args: Vec<Self::T>) -> Self::T {
@@ -467,17 +574,9 @@ trait ExprChecker<'a> {
         }
     }
 
-    fn variable_function(&self, var: Symbol) -> bool {
-        if let Some(func) = self.egraph().functions.get(&var) {
-            func.is_variable
-        } else {
-            false
-        }
-    }
-
     fn check_expr(&mut self, expr: &Expr, ty: ArcSort) -> Result<Self::T, TypeError> {
         match expr {
-            Expr::Var(v) if !self.variable_function(*v) => self.check_var(*v, ty),
+            Expr::Var(v) if !self.is_variable(*v) => self.check_var(*v, ty),
             _ => {
                 let (t, actual) = self.infer_expr(expr)?;
                 if actual.name() != ty.name() {
@@ -494,34 +593,28 @@ trait ExprChecker<'a> {
         }
     }
 
+    fn is_variable(&self, sym: Symbol) -> bool {
+        self.egraph().global_bindings.contains_key(&sym)
+    }
+
     fn infer_expr(&mut self, expr: &Expr) -> Result<(Self::T, ArcSort), TypeError> {
         match expr {
             Expr::Lit(lit) => {
                 let t = self.do_lit(lit);
                 Ok((t, self.egraph().proof_state.type_info.infer_literal(lit)))
             }
-            Expr::Var(sym) => {
-                if self.variable_function(*sym) {
-                    return self.infer_expr(&Expr::call(*sym, []));
-                }
-                self.infer_var(*sym)
-            }
+            Expr::Var(sym) => self.infer_var(*sym),
             Expr::Call(sym, args) => {
-                if let Some(f) = self.egraph().functions.get(sym) {
-                    if f.schema.input.len() != args.len() {
-                        return Err(TypeError::Arity {
-                            expr: expr.clone(),
-                            expected: f.schema.input.len(),
-                        });
-                    }
+                if let Some(functype) = self.egraph().proof_state.type_info.func_types.get(sym) {
+                    assert!(functype.input.len() == args.len());
 
                     let mut ts = vec![];
-                    for (expected, arg) in f.schema.input.iter().zip(args) {
+                    for (expected, arg) in functype.input.iter().zip(args) {
                         ts.push(self.check_expr(arg, expected.clone())?);
                     }
 
                     let t = self.do_function(*sym, ts);
-                    Ok((t, f.schema.output.clone()))
+                    Ok((t, functype.output.clone()))
                 } else if let Some(prims) = self.egraph().proof_state.type_info.primitives.get(sym)
                 {
                     let mut ts = Vec::with_capacity(args.len());
@@ -544,7 +637,7 @@ trait ExprChecker<'a> {
                         inputs: tys.into_iter().map(|t| t.name()).collect(),
                     })
                 } else {
-                    Err(TypeError::Unbound(*sym))
+                    panic!("Unbound function {}", sym);
                 }
             }
         }
@@ -561,11 +654,14 @@ enum Load {
 enum Instruction {
     Literal(Literal),
     Load(Load),
-    CallFunction(Symbol),
+    Global(Symbol),
+    // function to call, and whether to make defaults
+    CallFunction(Symbol, bool),
     CallPrimitive(Primitive, usize),
     DeleteRow(Symbol),
     Set(Symbol),
     Union(usize),
+    Extract(usize),
     Panic(String),
     Pop,
 }
@@ -634,11 +730,16 @@ impl EGraph {
     ) -> Result<(), Error> {
         for instr in &program.0 {
             match instr {
+                Instruction::Global(sym) => {
+                    let (_ty, value, _ts) = self.global_bindings.get(sym).unwrap();
+                    stack.push(*value);
+                }
                 Instruction::Load(load) => match load {
                     Load::Stack(idx) => stack.push(stack[*idx]),
                     Load::Subst(idx) => stack.push(subst[*idx]),
                 },
-                Instruction::CallFunction(f) => {
+                Instruction::CallFunction(f, make_defaults_func) => {
+                    let make_defaults = make_defaults && *make_defaults_func;
                     let function = self.functions.get_mut(f).unwrap();
                     let output_tag = function.schema.output.name();
                     let new_len = stack.len() - function.schema.input.len();
@@ -653,6 +754,9 @@ impl EGraph {
                     let value = if let Some(out) = function.nodes.get(values) {
                         out.value
                     } else if make_defaults {
+                        if function.merge.on_merge.is_some() {
+                            panic!("No value found for function {} with values {:?}", f, values);
+                        }
                         let ts = self.timestamp;
                         let out = &function.schema.output;
                         match function.decl.default.as_ref() {
@@ -676,13 +780,13 @@ impl EGraph {
                             }
                             _ => {
                                 return Err(Error::NotFoundError(NotFoundError(Expr::Var(
-                                    format!("fake expression {f} {:?}", values).into(),
+                                    format!("No value found for {f} {:?}", values).into(),
                                 ))))
                             }
                         }
                     } else {
                         return Err(Error::NotFoundError(NotFoundError(Expr::Var(
-                            format!("fake expression {f} {:?}", values).into(),
+                            format!("No value found for {f} {:?}", values).into(),
                         ))));
                     };
 
@@ -703,6 +807,9 @@ impl EGraph {
                 Instruction::Set(f) => {
                     assert!(make_defaults);
                     let function = self.functions.get_mut(f).unwrap();
+                    // desugaring should have desugared
+                    // set to union
+                    // except for setting the parent relation
                     let new_value = stack.pop().unwrap();
                     let new_len = stack.len() - function.schema.input.len();
                     let args = &stack[new_len..];
@@ -712,22 +819,13 @@ impl EGraph {
 
                     if let Some(old_value) = old_value {
                         if new_value != old_value {
-                            let tag = old_value.tag;
-                            if let Some(prog) = function.merge.on_merge.clone() {
-                                let values = [old_value, new_value];
-                                // XXX: we get an error if we pass the current
-                                // stack and then truncate it to the old length.
-                                // Why?
-                                self.run_actions(&mut Vec::new(), &values, &prog, true)?;
-                            }
-                            // re-borrow
-                            let function = self.functions.get_mut(f).unwrap();
                             let merged: Value = match function.merge.merge_vals.clone() {
                                 MergeFn::AssertEq => {
                                     return Err(Error::MergeError(*f, new_value, old_value));
                                 }
                                 MergeFn::Union => {
-                                    self.unionfind.union_values(old_value, new_value, tag)
+                                    self.unionfind
+                                        .union_values(old_value, new_value, old_value.tag)
                                 }
                                 MergeFn::Expr(merge_prog) => {
                                     let values = [old_value, new_value];
@@ -738,10 +836,20 @@ impl EGraph {
                                     result
                                 }
                             };
+                            if merged != old_value {
+                                let args = &stack[new_len..];
+                                let function = self.functions.get_mut(f).unwrap();
+                                function.insert(args, merged, self.timestamp);
+                            }
                             // re-borrow
-                            let args = &stack[new_len..];
                             let function = self.functions.get_mut(f).unwrap();
-                            function.insert(args, merged, self.timestamp);
+                            if let Some(prog) = function.merge.on_merge.clone() {
+                                let values = [old_value, new_value];
+                                // XXX: we get an error if we pass the current
+                                // stack and then truncate it to the old length.
+                                // Why?
+                                self.run_actions(&mut Vec::new(), &values, &prog, true)?;
+                            }
                         }
                     } else {
                         function.insert(args, new_value, self.timestamp);
@@ -757,6 +865,40 @@ impl EGraph {
                         let b = self.unionfind.find(Id::from(b.bits as usize));
                         self.unionfind.union(a, b, sort)
                     });
+                    stack.truncate(new_len);
+                }
+                Instruction::Extract(arity) => {
+                    let new_len = stack.len() - arity;
+                    let values = &stack[new_len..];
+                    let new_len = stack.len() - arity;
+                    let mut termdag = TermDag::default();
+                    let num_sort = values[1].tag;
+                    assert!(num_sort.to_string() == "i64");
+
+                    let variants = values[1].bits as i64;
+                    if variants == 0 {
+                        let (cost, expr) = self.extract(
+                            values[0],
+                            &mut termdag,
+                            self.proof_state
+                                .type_info
+                                .sorts
+                                .get(&values[0].tag)
+                                .unwrap(),
+                        );
+                        log::info!("extracted with cost {cost}: {}", termdag.to_string(&expr));
+                    } else {
+                        if variants < 0 {
+                            panic!("Cannot extract negative number of variants");
+                        }
+                        let extracted =
+                            self.extract_variants(values[0], variants as usize, &mut termdag);
+                        log::info!("extracted variants:");
+                        for expr in extracted {
+                            log::info!("   {}", termdag.to_string(&expr));
+                        }
+                    }
+
                     stack.truncate(new_len);
                 }
                 Instruction::Panic(msg) => panic!("Panic: {}", msg),

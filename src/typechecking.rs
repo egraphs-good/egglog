@@ -5,14 +5,16 @@ pub struct FuncType {
     pub input: Vec<ArcSort>,
     pub output: ArcSort,
     pub has_merge: bool,
+    pub has_default: bool,
 }
 
 impl FuncType {
-    pub fn new(input: Vec<ArcSort>, output: ArcSort, has_merge: bool) -> Self {
+    pub fn new(input: Vec<ArcSort>, output: ArcSort, has_merge: bool, has_default: bool) -> Self {
         Self {
             input,
             output,
             has_merge,
+            has_default,
         }
     }
 }
@@ -21,6 +23,7 @@ impl FuncType {
 pub struct TypeInfo {
     // get the sort from the sorts name()
     pub presorts: HashMap<Symbol, PreSort>,
+    pub presort_names: HashSet<Symbol>,
     pub sorts: HashMap<Symbol, Arc<dyn Sort>>,
     pub primitives: HashMap<Symbol, Vec<Primitive>>,
     pub func_types: HashMap<Symbol, FuncType>,
@@ -32,6 +35,7 @@ impl Default for TypeInfo {
     fn default() -> Self {
         let mut res = Self {
             presorts: Default::default(),
+            presort_names: Default::default(),
             sorts: Default::default(),
             primitives: Default::default(),
             func_types: Default::default(),
@@ -44,9 +48,15 @@ impl Default for TypeInfo {
         res.add_sort(I64Sort::new("i64".into()));
         res.add_sort(F64Sort::new("f64".into()));
         res.add_sort(RationalSort::new("Rational".into()));
+
+        res.presort_names.extend(MapSort::presort_names());
+        res.presort_names.extend(SetSort::presort_names());
+        res.presort_names.extend(VecSort::presort_names());
+
         res.presorts.insert("Map".into(), MapSort::make_sort);
         res.presorts.insert("Set".into(), SetSort::make_sort);
         res.presorts.insert("Vec".into(), VecSort::make_sort);
+
         res
     }
 }
@@ -129,7 +139,12 @@ impl TypeInfo {
         } else {
             Err(TypeError::Unbound(func.schema.output))
         }?;
-        Ok(FuncType::new(input, output, func.merge.is_some()))
+        Ok(FuncType::new(
+            input,
+            output,
+            func.merge.is_some(),
+            func.default.is_some(),
+        ))
     }
 
     fn typecheck_ncommand(&mut self, command: &NCommand, id: CommandId) -> Result<(), TypeError> {
@@ -138,7 +153,7 @@ impl TypeInfo {
                 if self.sorts.contains_key(&fdecl.name) {
                     return Err(TypeError::SortAlreadyBound(fdecl.name));
                 }
-                if self.primitives.contains_key(&fdecl.name) {
+                if self.is_primitive(fdecl.name) {
                     return Err(TypeError::PrimitiveAlreadyBound(fdecl.name));
                 }
                 let ftype = self.function_to_functype(fdecl)?;
@@ -161,15 +176,47 @@ impl TypeInfo {
             }
             NCommand::Check(facts) => {
                 self.typecheck_facts(id, facts)?;
+                self.verify_normal_form_facts(facts);
             }
             NCommand::Fail(cmd) => {
                 self.typecheck_ncommand(cmd, id)?;
+            }
+            NCommand::RunSchedule(schedule) => {
+                self.typecheck_schedule(id, schedule)?;
             }
 
             // TODO cover all cases in typechecking
             _ => (),
         }
         Ok(())
+    }
+
+    fn typecheck_schedule(
+        &mut self,
+        ctx: CommandId,
+        schedule: &NormSchedule,
+    ) -> Result<(), TypeError> {
+        match schedule {
+            NormSchedule::Repeat(_times, schedule) => {
+                self.typecheck_schedule(ctx, schedule)?;
+            }
+            NormSchedule::Sequence(schedules) => {
+                for schedule in schedules {
+                    self.typecheck_schedule(ctx, schedule)?;
+                }
+            }
+            NormSchedule::Saturate(schedule) => {
+                self.typecheck_schedule(ctx, schedule)?;
+            }
+            NormSchedule::Run(run_config) => {
+                if let Some(facts) = &run_config.until {
+                    self.typecheck_facts(ctx, facts)?;
+                    self.verify_normal_form_facts(facts);
+                }
+            }
+        }
+
+        Result::Ok(())
     }
 
     pub(crate) fn typecheck_command(&mut self, command: &NormCommand) -> Result<(), TypeError> {
@@ -232,17 +279,29 @@ impl TypeInfo {
 
     fn verify_normal_form_facts(&self, facts: &Vec<NormFact>) -> HashSet<Symbol> {
         let mut let_bound: HashSet<Symbol> = Default::default();
-        let mut bound_in_constraint = vec![];
 
         for fact in facts {
             match fact {
-                NormFact::Assign(var, NormExpr::Call(_head, body)) => {
+                NormFact::Compute(var, NormExpr::Call(_head, body)) => {
+                    assert!(!self.global_types.contains_key(var));
                     assert!(let_bound.insert(*var));
                     body.iter().for_each(|bvar| {
                         if !self.global_types.contains_key(bvar) {
-                            assert!(let_bound.insert(*bvar));
+                            assert!(let_bound.contains(bvar));
                         }
                     });
+                }
+                NormFact::Assign(var, NormExpr::Call(_head, body)) => {
+                    assert!(!self.global_types.contains_key(var));
+                    assert!(let_bound.insert(*var));
+                    body.iter().for_each(|bvar| {
+                        assert!(!self.global_types.contains_key(bvar));
+                        assert!(let_bound.insert(*bvar), "Expected {} to be bound", bvar);
+                    });
+                }
+                NormFact::AssignVar(lhs, _rhs) => {
+                    assert!(!self.global_types.contains_key(lhs));
+                    assert!(let_bound.insert(*lhs));
                 }
                 NormFact::AssignLit(var, _lit) => {
                     assert!(let_bound.insert(*var));
@@ -255,12 +314,9 @@ impl TypeInfo {
                     {
                         panic!("ConstrainEq on unbound variables");
                     }
-                    bound_in_constraint.push(*var1);
-                    bound_in_constraint.push(*var2);
                 }
             }
         }
-        let_bound.extend(bound_in_constraint);
         let_bound
     }
 
@@ -273,7 +329,8 @@ impl TypeInfo {
             assert!(
                 let_bound.contains(var)
                     || self.global_types.contains_key(var)
-                    || self.reserved_type(*var).is_some()
+                    || self.reserved_type(*var).is_some(),
+                "Expected {var} to be let bound in body of rule",
             )
         };
 
@@ -302,6 +359,10 @@ impl TypeInfo {
                         assert_bound(bvar, let_bound);
                     });
                     assert_bound(var, let_bound);
+                }
+                NormAction::Extract(var, variants) => {
+                    assert_bound(var, let_bound);
+                    assert_bound(variants, let_bound);
                 }
                 NormAction::Union(v1, v2) => {
                     assert_bound(v1, let_bound);
@@ -368,6 +429,7 @@ impl TypeInfo {
                     return Err(TypeError::TypeMismatch(var1_type, var2_type));
                 }
             }
+            NormAction::Extract(_var, _variants) => {}
             NormAction::LetVar(var1, var2) => {
                 let var2_type = self.lookup(ctx, *var2)?;
                 self.introduce_binding(ctx, *var1, var2_type, is_global)?;
@@ -379,17 +441,37 @@ impl TypeInfo {
 
     fn typecheck_fact(&mut self, ctx: CommandId, fact: &NormFact) -> Result<(), TypeError> {
         match fact {
-            NormFact::Assign(var, expr) => {
-                let expr_type = self.typecheck_expr(ctx, expr, false)?;
-                if let Some(existing) = self
+            NormFact::Compute(var, expr) => {
+                let expr_type = self.typecheck_expr(ctx, expr, true)?;
+                if let Some(_existing) = self
                     .local_types
                     .get_mut(&ctx)
                     .unwrap()
                     .insert(*var, expr_type.output.clone())
                 {
-                    if expr_type.output.name() != existing.name() {
-                        return Err(TypeError::TypeMismatch(expr_type.output, existing));
-                    }
+                    return Err(TypeError::AlreadyDefined(*var));
+                }
+            }
+            NormFact::Assign(var, expr) => {
+                let expr_type = self.typecheck_expr(ctx, expr, false)?;
+                if let Some(_existing) = self
+                    .local_types
+                    .get_mut(&ctx)
+                    .unwrap()
+                    .insert(*var, expr_type.output.clone())
+                {
+                    return Err(TypeError::AlreadyDefined(*var));
+                }
+            }
+            NormFact::AssignVar(lhs, rhs) => {
+                let rhs_type = self.lookup(ctx, *rhs)?;
+                if let Some(_existing) = self
+                    .local_types
+                    .get_mut(&ctx)
+                    .unwrap()
+                    .insert(*lhs, rhs_type.clone())
+                {
+                    return Err(TypeError::AlreadyDefined(*lhs));
                 }
             }
             NormFact::AssignLit(var, lit) => {
@@ -478,7 +560,7 @@ impl TypeInfo {
     }
 
     pub(crate) fn is_primitive(&self, sym: Symbol) -> bool {
-        self.primitives.contains_key(&sym)
+        self.primitives.contains_key(&sym) || self.presort_names.contains(&sym)
     }
 
     fn lookup_func(
@@ -493,7 +575,7 @@ impl TypeInfo {
             if let Some(prims) = self.primitives.get(&sym) {
                 for prim in prims {
                     if let Some(return_type) = prim.accept(&input_types) {
-                        return Ok(FuncType::new(input_types, return_type, false));
+                        return Ok(FuncType::new(input_types, return_type, false, true));
                     }
                 }
             }
@@ -516,9 +598,18 @@ impl TypeInfo {
                 let child_types = if let Some(found) = self.func_types.get(head) {
                     found.input.clone()
                 } else {
-                    body.iter()
+                    let types = body
+                        .iter()
                         .map(|var| self.lookup(ctx, *var))
-                        .collect::<Result<Vec<_>, _>>()?
+                        .collect::<Result<Vec<_>, _>>();
+                    if let Ok(types) = types {
+                        types
+                    } else if expect_lookup {
+                        // return the error
+                        types?
+                    } else {
+                        return Err(TypeError::UnboundFunction(*head));
+                    }
                 };
                 for (child_type, var) in child_types.iter().zip(body.iter()) {
                     if expect_lookup {
@@ -554,6 +645,8 @@ pub enum TypeError {
     Unbound(Symbol),
     #[error("Undefined sort {0}")]
     UndefinedSort(Symbol),
+    #[error("Unbound function {0}")]
+    UnboundFunction(Symbol),
     #[error("Function already bound {0}")]
     FunctionAlreadyBound(Symbol),
     #[error("Function declarations are not allowed after a push.")]

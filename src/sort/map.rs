@@ -45,6 +45,19 @@ impl MapSort {
     }
 }
 
+impl MapSort {
+    pub fn presort_names() -> Vec<Symbol> {
+        vec![
+            "map-empty".into(),
+            "map-insert".into(),
+            "map-get".into(),
+            "map-not-contains".into(),
+            "map-contains".into(),
+            "map-remove".into(),
+        ]
+    }
+}
+
 impl Sort for MapSort {
     fn name(&self) -> Symbol {
         self.name
@@ -73,22 +86,8 @@ impl Sort for MapSort {
         result
     }
 
-    fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
-        let maps = self.maps.lock().unwrap();
-        let map = maps.get_index(value.bits as usize).unwrap();
-        let mut changed = false;
-        let new_map: ValueMap = map
-            .iter()
-            .map(|(k, v)| {
-                let (mut k, mut v) = (*k, *v);
-                changed |= self.key.canonicalize(&mut k, unionfind);
-                changed |= self.value.canonicalize(&mut v, unionfind);
-                (k, v)
-            })
-            .collect();
-        drop(maps);
-        *value = new_map.store(self).unwrap();
-        changed
+    fn canonicalize(&self, _value: &mut Value, _unionfind: &UnionFind) -> bool {
+        false
     }
 
     fn register_primitives(self: Arc<Self>, typeinfo: &mut TypeInfo) {
@@ -123,10 +122,14 @@ impl Sort for MapSort {
     fn make_expr(&self, egraph: &EGraph, value: Value) -> Expr {
         let map = ValueMap::load(self, &value);
         let mut expr = Expr::call("map-empty", []);
+        let mut termdag = TermDag::default();
         for (k, v) in map.iter().rev() {
-            let k = egraph.extract(*k, &self.key).1;
-            let v = egraph.extract(*v, &self.value).1;
-            expr = Expr::call("map-insert", [expr, k, v])
+            let k = egraph.extract(*k, &mut termdag, &self.key).1;
+            let v = egraph.extract(*v, &mut termdag, &self.value).1;
+            expr = Expr::call(
+                "map-insert",
+                [expr, termdag.term_to_expr(&k), termdag.term_to_expr(&v)],
+            )
         }
         expr
     }
@@ -155,6 +158,54 @@ impl FromSort for ValueMap {
 struct Ctor {
     name: Symbol,
     map: Arc<MapSort>,
+}
+
+pub(crate) struct TermOrderingMin {}
+
+impl PrimitiveLike for TermOrderingMin {
+    fn name(&self) -> Symbol {
+        "ordering-min".into()
+    }
+
+    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
+        match types {
+            [a, b] if a.name() == b.name() => Some(a.clone()),
+            _ => None,
+        }
+    }
+
+    fn apply(&self, values: &[Value]) -> Option<Value> {
+        assert_eq!(values.len(), 2);
+        if values[0] < values[1] {
+            Some(values[0])
+        } else {
+            Some(values[1])
+        }
+    }
+}
+
+pub(crate) struct TermOrderingMax {}
+
+impl PrimitiveLike for TermOrderingMax {
+    fn name(&self) -> Symbol {
+        "ordering-max".into()
+    }
+
+    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
+        match types {
+            [a, b] if a.name() == b.name() => Some(a.clone()),
+            _ => None,
+        }
+    }
+
+    fn apply(&self, values: &[Value]) -> Option<Value> {
+        assert_eq!(values.len(), 2);
+        if values[0] > values[1] {
+            Some(values[0])
+        } else {
+            Some(values[1])
+        }
+    }
 }
 
 impl PrimitiveLike for Ctor {

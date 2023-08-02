@@ -7,5 +7,5 @@
 (rule ((= r (par q r)) (= q (par q r))) ((union r q)))
 
 ; tests
-(define q (par A A))
+(let q (par A A))
 (run 10)

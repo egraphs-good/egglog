@@ -1,7 +1,7 @@
 (sort MyMap (Map i64 String))
 
-(define my_map1 (map-insert (map-empty) 1 "one"))
-(define my_map2 (map-insert my_map1 2 "two"))
+(let my_map1 (map-insert (map-empty) 1 "one"))
+(let my_map2 (map-insert my_map1 2 "two"))
 
 (check (= "one" (map-get my_map1 1)))
-(extract my_map2)
+(query-extract my_map2)

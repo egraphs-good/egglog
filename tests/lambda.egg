@@ -132,7 +132,7 @@
 
 ;; lambda_under
 (push)
-(define e 
+(let e 
         (Lam (V "x") 
              (Add (Val (Num 4))
                   (App (Lam (V "y") (Var (V "y"))) (Val (Num 4))))))
@@ -142,7 +142,7 @@
 
 ;; lambda_if_elim
 (push)
-(define e2 (If (Eq (Var (V "a")) (Var (V "b")))
+(let e2 (If (Eq (Var (V "a")) (Var (V "b")))
               (Add (Var (V "a")) (Var (V "a")))
               (Add (Var (V "a")) (Var (V "b")))))
 (run 10)
@@ -151,7 +151,7 @@
 
 ;; lambda_let_simple
 (push)
-(define e3 (Let (V "x") (Val (Num 0))
+(let e3 (Let (V "x") (Val (Num 0))
           (Let (V "y") (Val (Num 1))
           (Add (Var (V "x")) (Var (V "y"))))))
 (run 10)
@@ -160,7 +160,7 @@
 
 ;; lambda_capture
 (push)
-(define e4 (Let (V "x") (Val (Num 1)) 
+(let e4 (Let (V "x") (Val (Num 1)) 
           (Lam (V "x") (Var (V "x")))))
 (run 10)
 (fail (check (= e4 (Lam (V "x") (Val (Num 1))))))
@@ -168,7 +168,7 @@
 
 ;; lambda_capture_free
 (push)
-(define e5  (Let (V "y") (Add (Var (V "x")) (Var (V "x"))) 
+(let e5  (Let (V "y") (Add (Var (V "x")) (Var (V "x"))) 
            (Lam (V "x") (Var (V "y")))))
 (run 10)
 (check (set-contains (freer (Lam (V "x") (Var (V "y")))) (V "y")))
@@ -177,7 +177,7 @@
 
 ;; lambda_closure_not_seven
 (push)
-(define e6
+(let e6
      (Let (V "five") (Val (Num 5))
      (Let (V "add-five") (Lam (V "x") (Add (Var (V "x")) (Var (V "five"))))
      (Let (V "five") (Val (Num 6))
@@ -190,7 +190,7 @@
 
 ;; lambda_compose
 (push)
-(define e7
+(let e7
     (Let (V "compose") (Lam (V "f") 
                        (Lam (V "g") 
                        (Lam (V "x") (App (Var (V "f"))
@@ -214,14 +214,14 @@
 
 ;; lambda_if_simple
 (push)
-(define e10 (If (Eq (Val (Num 1)) (Val (Num 1))) (Val (Num 7)) (Val (Num 9))))
+(let e10 (If (Eq (Val (Num 1)) (Val (Num 1))) (Val (Num 7)) (Val (Num 9))))
 (run 4)
 (check (= e10 (Val (Num 7))))
 (pop)
 
 ;; lambda_compose_many
 (push)
-(define e11
+(let e11
     (Let (V "compose") (Lam (V "f") (Lam (V "g") (Lam (V "x") (App (Var (V "f"))
                                                               (App (Var (V "g")) (Var (V "x")))))))
     (Let (V "add1") (Lam (V "y") (Add (Var (V "y")) (Val (Num 1))))
@@ -245,7 +245,7 @@
 
 ;; lambda_if
 (push)
-(define e8
+(let e8
     (Let (V "zeroone") (Lam (V "x")
          (If (Eq (Var (V "x")) (Val (Num 0)))
              (Val (Num 0))

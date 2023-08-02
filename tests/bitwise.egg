@@ -28,10 +28,10 @@
 ;(function bs-diff (i64 i64) i64)
 ;(rewrite (bs-diff a b) (^ a (bs-inter a b))
 
-;(define bs-empty 0)
+;(let bs-empty 0)
 
-;(define bs-subset (i64 i64) bool)
+;(let bs-subset (i64 i64) bool)
 ;(rewrite (bs-subset x y) (is-zero (bs-diff x y)))
 
-;(define bs-is-elem (i64 i64) bool)
+;(let bs-is-elem (i64 i64) bool)
 ;(rewrite (bs-is-elem s x) (not (is-zero (bs-inter s (sing x)))))
