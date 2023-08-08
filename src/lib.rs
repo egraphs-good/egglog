@@ -2,7 +2,6 @@ pub mod ast;
 mod extract;
 mod function;
 mod gj;
-pub mod graph;
 mod proofs;
 mod serialize;
 pub mod sort;
@@ -1247,34 +1246,32 @@ impl EGraph {
         &self.run_report
     }
 
+    fn serialize_for_graphviz(&self) -> egraph_serialize::EGraph {
+        let mut serialized = self.serialize(SerializeConfig::default());
+        serialized.inline_leaves();
+        serialized
+    }
+
     /// Exports the egraph as a Graphviz dot string
     pub fn to_graphviz_string(&self) -> String {
-        to_graphviz(&graph_from_egraph(self))
-            .print(&mut graphviz_rust::printer::PrinterContext::default())
+        self.serialize_for_graphviz().to_dot()
     }
 
     /// Saves the egraph as a DOT file at the given path
-    pub fn save_graph_as_dot<P: AsRef<Path>>(&self, path: P) -> Result<(), Error> {
-        let dot = self.to_graphviz_string();
-        let mut file =
-            File::create(&path).map_err(|e| Error::IoError(path.as_ref().to_path_buf(), e))?;
-        std::io::Write::write_all(&mut file, dot.as_bytes())
-            .map_err(|e| Error::IoError(path.as_ref().to_path_buf(), e))?;
-        Ok(())
+    pub fn save_graph_as_dot<P: AsRef<Path> + Copy>(
+        &self,
+        path: P,
+    ) -> Result<(), Error> {
+        self.serialize_for_graphviz()
+            .to_dot_file(path)
+            .map_err(|e| Error::IoError(path.as_ref().to_path_buf(), e))
     }
 
     /// Saves the egraph as an SVG file at the given path
-    pub fn save_graph_as_svg<P: AsRef<Path>>(&self, path: P) -> Result<(), Error> {
-        let dot = self.to_graphviz_string();
-        graphviz_rust::exec_dot(
-            dot,
-            vec![
-                graphviz_rust::cmd::Format::Svg.into(),
-                graphviz_rust::cmd::CommandArg::Output(path.as_ref().to_str().unwrap().to_string()),
-            ],
-        )
-        .map_err(|e| Error::IoError(path.as_ref().to_path_buf(), e))?;
-        Ok(())
+    pub fn save_graph_as_svg<P: AsRef<Path> + Copy>(&self, path: P) -> Result<(), Error> {
+        self.serialize_for_graphviz()
+            .to_svg_file(path)
+            .map_err(|e| Error::IoError(path.as_ref().to_path_buf(), e))
     }
 }
 
