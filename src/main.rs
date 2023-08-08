@@ -24,9 +24,9 @@ struct Args {
     #[clap(long)]
     to_json: bool,
     #[clap(long)]
-    save_dot: bool,
+    to_dot: bool,
     #[clap(long)]
-    save_svg: bool,
+    to_svg: bool,
 }
 
 fn main() {
@@ -125,13 +125,13 @@ fn main() {
         }
 
 
-        if args.save_dot || args.save_svg {
+        if args.to_dot || args.to_svg {
             let serialized = egraph.serialize_for_graphviz();
-            if args.save_dot {
+            if args.to_dot {
                 let dot_path = input.with_extension("dot");
                 serialized.to_dot_file(dot_path).unwrap()
             }
-            if args.save_svg {
+            if args.to_svg {
                 let svg_path = input.with_extension("svg");
                 serialized.to_svg_file(svg_path).unwrap()
             }

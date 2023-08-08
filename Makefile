@@ -47,7 +47,7 @@ ${DIST_WASM}: ${RUST_SRC}
 graphs: $(patsubst %.egg,%.svg,$(filter-out $(wildcard tests/repro-*.egg),$(wildcard tests/*.egg)))
 
 %.svg: %.egg
-	cargo run --release -- --save-dot --save-svg  $^
+	cargo run --release -- --to-dot --to-svg  $^
 
 rm-graphs:
 	rm -f tests/*.dot tests/*.svg

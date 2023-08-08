@@ -30,7 +30,7 @@ make all
 ## Usage
 
 ```
-cargo run [-f fact-path] [-naive] [--to-json] [--save-dot] [--save-svg] <files.egg>
+cargo run [-f fact-path] [-naive] [--to-json] [--to-dot] [--to-svg] <files.egg>
 ```
 
 or just
@@ -41,8 +41,8 @@ cargo run
 
 for the REPL.
 
-* The `--save-dot` command will save a graphviz dot file at the end of the program, replacing the `.egg` extension with `.dot`.
-* The `--save-svg`, which requires [Graphviz to be installed](https://graphviz.org/download/), will save a graphviz svg file at the end of the program, replacing the `.egg` extension with `.svg`.
+* The `--to-dot` command will save a graphviz dot file at the end of the program, replacing the `.egg` extension with `.dot`.
+* The `--to-svg`, which requires [Graphviz to be installed](https://graphviz.org/download/), will save a graphviz svg file at the end of the program, replacing the `.egg` extension with `.svg`.
 
 
 ## VS Code plugin
