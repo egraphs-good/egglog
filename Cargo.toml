@@ -13,7 +13,7 @@ name = "files"
 [features]
 default = ["bin"]
 
-bin = ["dep:clap", "dep:env_logger"]
+bin = ["dep:clap", "dep:env_logger", "egraph-serialize/serde", "dep:serde_json"]
 wasm-bindgen = ["instant/wasm-bindgen"]
 
 [dependencies]
@@ -32,6 +32,9 @@ num-rational = "0.4.1"
 num-traits = "0.2.15"
 smallvec = "1.11"
 symbolic_expressions = {git = "https://github.com/oflatt/symbolic-expressions", rev = "4c0ea5ca008f972450b2af72387e64d2c1c6a791"}
+
+egraph-serialize = {git = "https://github.com/egraphs-good/egraph-serialize", rev = "54b1a4f1e2f2135846b084edcb495cd159839540", default-features = false}
+serde_json ={optional=true, version = "1.0.100", features = ["preserve_order"]}
 
 lalrpop-util = {version = "0.20", features = ["lexer"]}
 regex = "1"

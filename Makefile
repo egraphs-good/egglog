@@ -1,6 +1,6 @@
 .PHONY: all web test nits docs serve graphs rm-graphs
 
-RUST_SRC=$(shell find -type f -wholename '*/src/*.rs' -or -name 'Cargo.toml')
+RUST_SRC=$(shell find . -type f -wholename '*/src/*.rs' -or -name 'Cargo.toml')
 TESTS=$(shell find tests/ -type f -name '*.egg' -not -name '*repro-*')
 
 WWW=${PWD}/target/www/

@@ -30,14 +30,14 @@
   (Round Math)
   (Log Math))
 
-(define r-zero (rational 0 1))
-(define r-one  (rational 1 1))
-(define r-two  (rational 2 1))
-(define zero (Num r-zero))
-(define one  (Num r-one))
-(define two  (Num r-two))
-(define three (Num (rational 3 1)))
-(define neg-one (Neg one))
+(let r-zero (rational 0 1))
+(let r-one  (rational 1 1))
+(let r-two  (rational 2 1))
+(let zero (Num r-zero))
+(let one  (Num r-one))
+(let two  (Num r-two))
+(let three (Num (rational 3 1)))
+(let neg-one (Neg one))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;
@@ -471,64 +471,64 @@
 ;; (src/core/simplify.rkt)
 
 (push)
-(define e (Add one zero))
+(let e (Add one zero))
 (run 1)
 (check (= e one))
 (pop)
 
 (push)
-(define five (Num (rational 5 1)))
-(define six (Num (rational 6 1)))
-(define e2 (Add one five))
+(let five (Num (rational 5 1)))
+(let six (Num (rational 6 1)))
+(let e2 (Add one five))
 (run 1)
 (check (= e2 six))
 (pop)
 
-(define x (Var "x"))
+(let x (Var "x"))
 
 (push)
-(define e3 (Add x zero))
+(let e3 (Add x zero))
 (run 1)
 (check (= e3 x))
 (pop)
 
 (push)
-(define e4 (Sub x zero))
+(let e4 (Sub x zero))
 (run 1)
 (check (= e4 x))
 (pop)
 
 (push)
 
-(define e5 (Mul x one))
+(let e5 (Mul x one))
 (run 1)
 (check (= e5 x))
 (pop)
 
 (push)
 
-(define e6 (Div x one))
+(let e6 (Div x one))
 (run 1)
 (check (= e6 x))
 (pop)
 
 (push)
 
-(define e7 (Sub (Mul one x) (Mul (Add x one) one)))
+(let e7 (Sub (Mul one x) (Mul (Add x one) one)))
 (run 3)
 (check (= e7 (Num (rational -1 1))))
 (pop)
 
 (push)
 
-(define e8 (Sub (Add x one) x))
+(let e8 (Sub (Add x one) x))
 (run 4)
 (check (= e8 one))
 (pop)
 
 (push)
 
-(define e9 (Sub (Add x one) one))
+(let e9 (Sub (Add x one) one))
 (run 4)
 (check (= e9 x))
 (pop)
@@ -536,35 +536,35 @@
 (push)
 
 (set (lo x) r-one)
-(define e10 (Div (Mul x three) x))
+(let e10 (Div (Mul x three) x))
 (run 3)
 (check (= e10 three))
 (pop)
 
 (push)
 
-(define e11 (Sub (Mul (Sqrt (Add x one)) (Sqrt (Add x one))) (Mul (Sqrt x) (Sqrt x))))
+(let e11 (Sub (Mul (Sqrt (Add x one)) (Sqrt (Add x one))) (Mul (Sqrt x) (Sqrt x))))
 (run 5)
 (check (= one e11))
 (pop)
 
 (push)
-(define e12 (Add (Num (rational 1 5)) (Num (rational 3 10))))
+(let e12 (Add (Num (rational 1 5)) (Num (rational 3 10))))
 (run 1)
 (check (= e12 (Num (rational 1 2))))
 (pop)
 
 (push)
-(define e13 (Unary "cos" (Const "PI")))
+(let e13 (Unary "cos" (Const "PI")))
 (run 1)
 (check (= e13 (Num (rational -1 1))))
 (pop)
 
 (push)
-(define sqrt5 (Sqrt (Num (rational 5 1))))
-(define e14
+(let sqrt5 (Sqrt (Num (rational 5 1))))
+(let e14
   (Div one (Sub (Div (Add one sqrt5) two) (Div (Sub one sqrt5) two))))
-(define tgt (Div one sqrt5))
+(let tgt (Div one sqrt5))
 (run 6)
 (check (= e14 tgt))
 (pop)

@@ -63,7 +63,7 @@ macro_rules! add_primitives {
                         // println!(") = {result:?}");
                         result.store(&self.__out)
                     } else {
-                        panic!()
+                        panic!("wrong number of arguments")
                     }
                 }
             }

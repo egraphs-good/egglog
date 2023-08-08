@@ -50,9 +50,10 @@ Command: Command = {
     LParen "sort" <name:Ident> LParen <head:Ident> <tail:(Expr)*> RParen RParen => Command::Sort (name, Some((head, tail))),
     LParen "sort" <name:Ident> RParen => Command::Sort (name, None),
     LParen "function" <name:Ident> <schema:Schema> <cost:Cost>
+        <unextractable:(":unextractable")?>
         <merge_action:(":on_merge" <List<Action>>)?>
         <merge:(":merge" <Expr>)?> <default:(":default" <Expr>)?> RParen => {
-        Command::Function(FunctionDecl { name, schema, merge, merge_action: merge_action.unwrap_or_default(), default, cost })
+        Command::Function(FunctionDecl { name, schema, merge, merge_action: merge_action.unwrap_or_default(), default, cost, unextractable: unextractable.is_some() })
     },
     LParen "declare" <name:Ident> <sort:Ident> RParen => Command::Declare{name, sort},
     LParen "relation" <name:Ident> <types:List<Type>> RParen => Command::Function(FunctionDecl::relation(name, types)),
@@ -66,21 +67,21 @@ Command: Command = {
         <conditions:(":when" <List<Fact>>)?>
         <ruleset:(":ruleset" <Ident>)?>
     RParen => Command::BiRewrite(ruleset.unwrap_or("".into()), Rewrite { lhs, rhs, conditions: conditions.unwrap_or_default() }),
-    LParen "define" <name:Ident> <expr:Expr> <cost:Cost> RParen => Command::Define { name, expr, cost },
     LParen "let" <name:Ident> <expr:Expr> RParen => Command::Action(Action::Let(name, expr)),
     <NonLetAction> => Command::Action(<>),
-    LParen "run" <limit:UNum>  <until:(":until" <(Fact)*>)?> RParen => Command::Run(RunConfig { ruleset: "".into(), limit, until }),
-    LParen "run" <ruleset: Ident> <limit:UNum> <until:(":until" <(Fact)*>)?> RParen => Command::Run(RunConfig { ruleset, limit, until }),
-    LParen "simplify"  <limit:UNum> <expr:Expr> <until:(":until" <(Fact)*>)?> RParen 
-        => Command::Simplify { expr, config : RunConfig { ruleset: "".into(), limit, until } },
+    LParen "run" <limit:UNum>  <until:(":until" <(Fact)*>)?> RParen => Command::RunSchedule(Schedule::Repeat(limit, Box::new(Schedule::Run(RunConfig { ruleset : "".into(), until })))),
+    LParen "run" <ruleset: Ident> <limit:UNum> <until:(":until" <(Fact)*>)?> RParen => Command::RunSchedule(Schedule::Repeat(limit, Box::new(Schedule::Run(RunConfig { ruleset, until })))),
+    LParen "simplify"  <schedule:Schedule> <expr:Expr> RParen 
+        => Command::Simplify { expr, schedule },
     LParen "add-ruleset" <name:Ident> RParen => Command::AddRuleset(name),
     LParen "calc" LParen <idents:IdentSort*> RParen <exprs:Expr+> RParen => Command::Calc(idents, exprs),
-    LParen "extract" <variants:(":variants" <UNum>)?> <e:Expr> RParen => Command::Extract { e, variants: variants.unwrap_or(0) },
+    LParen "query-extract" <variants:(":variants" <UNum>)?> <fact:Fact> RParen => Command::Extract { fact, variants: variants.unwrap_or(0) },
     LParen "check" <(Fact)*> RParen => Command::Check(<>),
+    LParen "check-proof" RParen => Command::CheckProof,
     LParen "run-schedule" <Schedule*> RParen => Command::RunSchedule(Schedule::Sequence(<>)),
     LParen "push" <UNum?> RParen => Command::Push(<>.unwrap_or(1)),
     LParen "pop" <UNum?> RParen => Command::Pop(<>.unwrap_or(1)),
-    LParen "print" <sym:Ident> <n:UNum?> RParen => Command::Print(sym, n.unwrap_or(10)),
+    LParen "print-table" <sym:Ident> <n:UNum?> RParen => Command::PrintTable(sym, n.unwrap_or(10)),
     LParen "print-size" <sym:Ident> RParen => Command::PrintSize(sym),
     LParen "input" <name:Ident> <file:String> RParen => Command::Input { name, file },
     LParen "output" <file:String> <exprs:Expr+> RParen => Command::Output { file, exprs },
@@ -92,9 +93,10 @@ Schedule: Schedule = {
     LParen "saturate" <Schedule*> RParen => Schedule::Saturate(Box::new(Schedule::Sequence(<>))),
     LParen "seq" <Schedule*> RParen => Schedule::Sequence(<>),
     LParen "repeat" <limit:UNum> <scheds:Schedule*> RParen => Schedule::Repeat(limit, Box::new(Schedule::Sequence(scheds))),
-    LParen "run" <limit:UNum> <until:(":until" <(Fact)*>)?> RParen => Schedule::Run(RunConfig { ruleset: "".into(), limit, until }),
-    LParen "run" <ruleset: Ident> <limit:UNum>  <until:(":until" <(Fact)*>)?> RParen => Schedule::Run(RunConfig { ruleset, limit, until }),
-    <ident:Ident> => Schedule::Run(RunConfig { ruleset: ident, limit: 1, until: None }),
+    LParen "run" <until:(":until" <(Fact)*>)?> RParen => 
+    Schedule::Run(RunConfig { ruleset: "".into(), until }),
+    LParen "run" <ruleset: Ident> <until:(":until" <(Fact)*>)?> RParen => Schedule::Run(RunConfig { ruleset, until }),
+    <ident:Ident> => Schedule::Run(RunConfig { ruleset: ident, until: None }),
 }
 
 Cost: Option<usize> = {
@@ -104,10 +106,11 @@ Cost: Option<usize> = {
 
 NonLetAction: Action = {
     LParen "set" LParen <f: Ident> <args:Expr*> RParen <v:Expr> RParen => Action::Set ( f, args, v ),
-    LParen "set-no-track" LParen <f: Ident> <args:Expr*> RParen <v:Expr> RParen => Action::SetNoTrack ( f, args, v ),
     LParen "delete" LParen <f: Ident> <args:Expr*> RParen RParen => Action::Delete ( f, args),
     LParen "union" <e1:Expr> <e2:Expr> RParen => Action::Union(<>),
     LParen "panic" <msg:String> RParen => Action::Panic(msg),
+    LParen "extract" <expr:Expr> RParen => Action::Extract(expr, Expr::Lit(Literal::Int(0))),
+    LParen "extract" <expr:Expr> <variants:Expr> RParen => Action::Extract(expr, variants),
     <e:CallExpr> => Action::Expr(e),
 }
 
@@ -118,7 +121,7 @@ pub Action: Action = {
 
 Name: Symbol = { "[" <Ident> "]" => <> }
 
-Fact: Fact = {
+pub Fact: Fact = {
     LParen "=" <mut es:Expr+> <e:Expr> RParen => {
         es.push(e);
         Fact::Eq(es)

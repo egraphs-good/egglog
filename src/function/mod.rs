@@ -1,3 +1,5 @@
+use std::mem;
+
 use crate::*;
 use index::*;
 use smallvec::SmallVec;
@@ -12,7 +14,6 @@ pub type ValueVec = SmallVec<[Value; 3]>;
 pub struct Function {
     pub decl: FunctionDecl,
     pub schema: ResolvedSchema,
-    pub(crate) is_variable: bool,
     pub merge: MergeAction,
     pub(crate) nodes: table::Table,
     sorts: HashSet<Symbol>,
@@ -65,7 +66,7 @@ impl ResolvedSchema {
 pub(crate) type DeferredMerge = (ValueVec, Value, Value);
 
 impl Function {
-    pub fn new(egraph: &EGraph, decl: &FunctionDecl, is_variable: bool) -> Result<Self, Error> {
+    pub fn new(egraph: &EGraph, decl: &FunctionDecl) -> Result<Self, Error> {
         let mut input = Vec::with_capacity(decl.schema.input.len());
         for s in &decl.schema.input {
             input.push(match egraph.proof_state.type_info.sorts.get(s) {
@@ -129,7 +130,6 @@ impl Function {
         Ok(Function {
             decl: decl.clone(),
             schema: ResolvedSchema { input, output },
-            is_variable,
             nodes: Default::default(),
             scratch: Default::default(),
             sorts,
@@ -144,6 +144,10 @@ impl Function {
             },
             // TODO figure out merge and default here
         })
+    }
+
+    pub fn get(&self, inputs: &[Value]) -> Option<Value> {
+        self.nodes.get(inputs).map(|output| output.value)
     }
 
     pub fn insert(&mut self, inputs: &[Value], value: Value, timestamp: u32) -> Option<Value> {
@@ -200,7 +204,7 @@ impl Function {
         }
         let size = range.end.saturating_sub(range.start);
         // If this represents >12.5% overhead, don't use the index
-        if (self.nodes.len() - size) > (size / 8) {
+        if (self.nodes.num_offsets() - size) > (size / 8) {
             return None;
         }
         let target = &self.indexes[col];
@@ -279,7 +283,7 @@ impl Function {
         if self.nodes.is_empty() {
             return;
         }
-        self.update_indexes(self.nodes.len());
+        self.update_indexes(self.nodes.num_offsets());
     }
 
     pub(crate) fn iter_timestamp_range(
@@ -295,7 +299,7 @@ impl Function {
         timestamp: u32,
     ) -> Result<(usize, Vec<DeferredMerge>), Error> {
         // Make sure indexes are up to date.
-        self.update_indexes(self.nodes.len());
+        self.update_indexes(self.nodes.num_offsets());
         if self.schema.input.iter().all(|s| !s.is_eq_sort()) && !self.schema.output.is_eq_sort() {
             return Ok((std::mem::take(&mut self.updates), Default::default()));
         }
@@ -303,10 +307,10 @@ impl Function {
         let mut scratch = ValueVec::new();
         let n_unions = uf.n_unions();
 
-        if uf.new_ids(|sort| self.sorts.contains(&sort)) > (self.nodes.len() / 2) {
+        if uf.new_ids(|sort| self.sorts.contains(&sort)) > (self.nodes.num_offsets() / 2) {
             // basic heuristic: if we displaced a large number of ids relative
             // to the size of the table, then just rebuild everything.
-            for i in 0..self.nodes.len() {
+            for i in 0..self.nodes.num_offsets() {
                 self.rebuild_at(i, timestamp, uf, &mut scratch, &mut deferred_merges)?;
             }
         } else {

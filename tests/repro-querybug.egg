@@ -11,6 +11,6 @@
 (rule ((= x (Cons x1 rest1)) (= y (Cons x2 rest2)) (= x1 x2) (eq rest1 rest2))
       ((eq (Cons x1 rest1) (Cons x2 rest2))))
 
-(define mylist (Cons 1 Empty))
+(let mylist (Cons 1 Empty))
 
 (run 100)

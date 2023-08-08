@@ -30,7 +30,7 @@ make all
 ## Usage
 
 ```
-cargo run [-f fact-path] [-naive] [--save-dot] [--save-svg] <files.egg>
+cargo run [-f fact-path] [-naive] [--to-json] [--save-dot] [--save-svg] <files.egg>
 ```
 
 or just
@@ -66,6 +66,10 @@ npm install -g @vscode/vsce
 ```
 
 Run `vsce package` in the `vscode/egglog-1.0.0` folder to reconstruct the .vsix file and install it manually.
+
+## Development
+
+To run the tests use `make test`.
 
 # Syntax
 
@@ -180,9 +184,9 @@ defines a named value. This is the same as a 0-arity function with a given, sing
 
 Example:
 ```
-(define one 1)
-(define two 2)
-(define three (+ one two))
+(let one 1)
+(let two 2)
+(let three (+ one two))
 (extract three); extracts 3 as a i64
 ```
 
@@ -362,6 +366,7 @@ Signed 64-bit integers supporting these primitives:
 & | ^ << >> not-i64 ; bit-wise operations
 < > <= >=           ; comparisons
 min max log2
+to-f64
 ```
 
 ### Sort: f64
@@ -371,7 +376,8 @@ min max log2
 ```
 + - * / %           ; arithmetic
 < > <= >=           ; comparisons
-min max
+min max neg
+to-i64
 ```
 
 ### Sort: map

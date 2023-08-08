@@ -91,6 +91,10 @@ impl NormExpr {
 }
 
 impl Expr {
+    pub fn is_var(&self) -> bool {
+        matches!(self, Expr::Var(_))
+    }
+
     pub fn call(op: impl Into<Symbol>, children: impl IntoIterator<Item = Self>) -> Self {
         Self::Call(op.into(), children.into_iter().collect())
     }
@@ -111,6 +115,12 @@ impl Expr {
             Expr::Var(_) | Expr::Lit(_) => &[],
             Expr::Call(_, children) => children,
         }
+    }
+
+    pub fn ast_size(&self) -> usize {
+        let mut size = 0;
+        self.walk(&mut |_e| size += 1, &mut |_| {});
+        size
     }
 
     pub fn walk(&self, pre: &mut impl FnMut(&Self), post: &mut impl FnMut(&Self)) {
@@ -151,12 +161,12 @@ impl Expr {
         res
     }
 
-    pub fn replace_canon(&self, canon: &HashMap<Symbol, Expr>) -> Self {
+    pub fn subst(&self, canon: &HashMap<Symbol, Expr>) -> Self {
         match self {
             Expr::Lit(_lit) => self.clone(),
             Expr::Var(v) => canon.get(v).cloned().unwrap_or_else(|| self.clone()),
             Expr::Call(op, children) => {
-                let children = children.iter().map(|c| c.replace_canon(canon)).collect();
+                let children = children.iter().map(|c| c.subst(canon)).collect();
                 Expr::Call(*op, children)
             }
         }

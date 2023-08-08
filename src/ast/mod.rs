@@ -64,6 +64,24 @@ impl NormCommand {
             })
             .collect()
     }
+
+    pub fn resugar(&self) -> Command {
+        match &self.command {
+            NCommand::NormRule {
+                name,
+                ruleset,
+                rule,
+            } => Command::Rule {
+                name: *name,
+                ruleset: *ruleset,
+                rule: rule.resugar(),
+            },
+            NCommand::Check(facts) => {
+                Command::Check(NormRule::resugar_facts(facts, &mut Default::default()))
+            }
+            _ => self.command.to_command(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
@@ -82,16 +100,9 @@ pub enum NCommand {
     },
     NormAction(NormAction),
     RunSchedule(NormSchedule),
-    Simplify {
-        var: Symbol,
-        config: NormRunConfig,
-    },
-    Extract {
-        variants: usize,
-        var: Symbol,
-    },
     Check(Vec<NormFact>),
-    Print(Symbol, usize),
+    CheckProof,
+    PrintTable(Symbol, usize),
     PrintSize(Symbol),
     Output {
         file: String,
@@ -134,18 +145,11 @@ impl NCommand {
             },
             NCommand::RunSchedule(schedule) => Command::RunSchedule(schedule.to_schedule()),
             NCommand::NormAction(action) => Command::Action(action.to_action()),
-            NCommand::Simplify { var, config } => Command::Simplify {
-                expr: Expr::Var(*var),
-                config: config.to_run_config(),
-            },
-            NCommand::Extract { variants, var } => Command::Extract {
-                variants: *variants,
-                e: Expr::Var(*var),
-            },
             NCommand::Check(facts) => {
                 Command::Check(facts.iter().map(|fact| fact.to_fact()).collect())
             }
-            NCommand::Print(name, n) => Command::Print(*name, *n),
+            NCommand::CheckProof => Command::CheckProof,
+            NCommand::PrintTable(name, n) => Command::PrintTable(*name, *n),
             NCommand::PrintSize(name) => Command::PrintSize(*name),
             NCommand::Output { file, exprs } => Command::Output {
                 file: file.to_string(),
@@ -182,15 +186,11 @@ impl NCommand {
                 rule: rule.map_exprs(f),
             },
             NCommand::NormAction(action) => NCommand::NormAction(action.map_exprs(f)),
-            NCommand::Simplify { .. } => self.clone(),
-            NCommand::Extract { variants, var } => NCommand::Extract {
-                variants: *variants,
-                var: *var,
-            },
             NCommand::Check(facts) => {
                 NCommand::Check(facts.iter().map(|fact| fact.map_exprs(f)).collect())
             }
-            NCommand::Print(name, n) => NCommand::Print(*name, *n),
+            NCommand::CheckProof => NCommand::CheckProof,
+            NCommand::PrintTable(name, n) => NCommand::PrintTable(*name, *n),
             NCommand::PrintSize(name) => NCommand::PrintSize(*name),
             NCommand::Output { file, exprs } => NCommand::Output {
                 file: file.to_string(),
@@ -234,6 +234,24 @@ impl NormSchedule {
             NormSchedule::Sequence(scheds) => {
                 Schedule::Sequence(scheds.iter().map(|sched| sched.to_schedule()).collect())
             }
+        }
+    }
+
+    pub fn map_run_commands(&self, f: &mut impl FnMut(&NormRunConfig) -> Schedule) -> Schedule {
+        match self {
+            NormSchedule::Run(config) => f(config),
+            NormSchedule::Saturate(sched) => {
+                Schedule::Saturate(Box::new(sched.map_run_commands(f)))
+            }
+            NormSchedule::Repeat(size, sched) => {
+                Schedule::Repeat(*size, Box::new(sched.map_run_commands(f)))
+            }
+            NormSchedule::Sequence(scheds) => Schedule::Sequence(
+                scheds
+                    .iter()
+                    .map(|sched| sched.map_run_commands(f))
+                    .collect(),
+            ),
         }
     }
 }
@@ -318,11 +336,6 @@ pub enum Command {
     },
     Sort(Symbol, Option<(Symbol, Vec<Expr>)>),
     Function(FunctionDecl),
-    Define {
-        name: Symbol,
-        expr: Expr,
-        cost: Option<usize>,
-    },
     AddRuleset(Symbol),
     Rule {
         name: Symbol,
@@ -332,20 +345,20 @@ pub enum Command {
     Rewrite(Symbol, Rewrite),
     BiRewrite(Symbol, Rewrite),
     Action(Action),
-    Run(RunConfig),
     RunSchedule(Schedule),
     Simplify {
         expr: Expr,
-        config: RunConfig,
+        schedule: Schedule,
     },
     Calc(Vec<IdentSort>, Vec<Expr>),
     Extract {
         variants: usize,
-        e: Expr,
+        fact: Fact,
     },
     // TODO: this could just become an empty query
     Check(Vec<Fact>),
-    Print(Symbol, usize),
+    CheckProof,
+    PrintTable(Symbol, usize),
     PrintSize(Symbol),
     Input {
         name: Symbol,
@@ -380,27 +393,20 @@ impl ToSexp for Command {
                 ruleset,
                 rule,
             } => rule.to_sexp(*ruleset, *name),
-            Command::Define { name, expr, cost } => match cost {
-                None => list!("define", name, expr),
-                Some(cost) => list!("define", name, expr, ":cost", cost),
-            },
-            Command::Run(config) => config.to_sexp(),
             Command::RunSchedule(sched) => list!("run-schedule", sched),
             Command::Calc(args, exprs) => list!("calc", list!(++ args), ++ exprs),
-            Command::Extract { variants, e } => list!("extract", ":variants", variants, e),
+            Command::Extract { variants, fact } => list!("extract", ":variants", variants, fact),
             Command::Check(facts) => list!("check", ++ facts),
+            Command::CheckProof => list!("check-proof"),
             Command::Push(n) => list!("push", n),
             Command::Pop(n) => list!("pop", n),
-            Command::Print(name, n) => list!("print", name, n),
+            Command::PrintTable(name, n) => list!("print-table", name, n),
             Command::PrintSize(name) => list!("print-size", name),
             Command::Input { name, file } => list!("input", name, format!("\"{}\"", file)),
             Command::Output { file, exprs } => list!("output", format!("\"{}\"", file), ++ exprs),
             Command::Fail(cmd) => list!("fail", cmd),
             Command::Include(file) => list!("include", format!("\"{}\"", file)),
-            Command::Simplify { expr, config } => match &config.until {
-                Some(until) => list!("simplify", config.limit, expr, ":until", ++ until),
-                None => list!("simplify", config.limit, expr),
-            },
+            Command::Simplify { expr, schedule } => list!("simplify", schedule, expr),
         }
     }
 }
@@ -425,6 +431,9 @@ impl Display for Command {
                 name,
                 rule,
             } => rule.fmt_with_ruleset(f, *ruleset, *name),
+            Command::Check(facts) => {
+                write!(f, "(check {})", ListDisplay(facts, "\n"))
+            }
             _ => write!(f, "{}", self.to_sexp()),
         }
     }
@@ -451,7 +460,6 @@ impl Display for IdentSort {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct RunConfig {
     pub ruleset: Symbol,
-    pub limit: usize,
     pub until: Option<Vec<Fact>>,
 }
 
@@ -461,7 +469,6 @@ impl ToSexp for RunConfig {
         if self.ruleset != "".into() {
             res.push(Sexp::String(self.ruleset.to_string()));
         }
-        res.push(Sexp::String(self.limit.to_string()));
         if let Some(until) = &self.until {
             res.push(Sexp::String(":until".into()));
             res.extend(until.iter().map(|fact| fact.to_sexp()));
@@ -471,11 +478,9 @@ impl ToSexp for RunConfig {
     }
 }
 
-// TODO get rid of limit, just use Repeat
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct NormRunConfig {
     pub ruleset: Symbol,
-    pub limit: usize,
     pub until: Option<Vec<NormFact>>,
 }
 
@@ -483,7 +488,6 @@ impl NormRunConfig {
     pub fn to_run_config(&self) -> RunConfig {
         RunConfig {
             ruleset: self.ruleset,
-            limit: self.limit,
             until: self
                 .until
                 .as_ref()
@@ -497,9 +501,11 @@ pub struct FunctionDecl {
     pub name: Symbol,
     pub schema: Schema,
     pub default: Option<Expr>,
+    // TODO we should desugar merge and merge action
     pub merge: Option<Expr>,
     pub merge_action: Vec<Action>,
     pub cost: Option<usize>,
+    pub unextractable: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -553,6 +559,7 @@ impl FunctionDecl {
             merge_action: vec![],
             default: None,
             cost: None,
+            unextractable: false,
         }
     }
 }
@@ -575,6 +582,10 @@ impl ToSexp for FunctionDecl {
                 Sexp::String(":cost".into()),
                 Sexp::String(cost.to_string()),
             ]);
+        }
+
+        if self.unextractable {
+            res.push(Sexp::String(":unextractable".into()));
         }
 
         if !self.merge_action.is_empty() {
@@ -608,6 +619,8 @@ pub enum Fact {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum NormFact {
     Assign(Symbol, NormExpr), // assign symbol to a tuple
+    AssignVar(Symbol, Symbol),
+    Compute(Symbol, NormExpr), // compute a primative
     AssignLit(Symbol, Literal),
     ConstrainEq(Symbol, Symbol),
 }
@@ -615,7 +628,10 @@ pub enum NormFact {
 impl NormFact {
     pub fn to_fact(&self) -> Fact {
         match self {
-            NormFact::Assign(symbol, expr) => Fact::Eq(vec![Expr::Var(*symbol), expr.to_expr()]),
+            NormFact::Assign(symbol, expr) | NormFact::Compute(symbol, expr) => {
+                Fact::Eq(vec![Expr::Var(*symbol), expr.to_expr()])
+            }
+            NormFact::AssignVar(lhs, rhs) => Fact::Eq(vec![Expr::Var(*lhs), Expr::Var(*rhs)]),
             NormFact::ConstrainEq(lhs, rhs) => Fact::Eq(vec![Expr::Var(*lhs), Expr::Var(*rhs)]),
             NormFact::AssignLit(symbol, lit) => {
                 Fact::Eq(vec![Expr::Var(*symbol), Expr::Lit(lit.clone())])
@@ -625,7 +641,10 @@ impl NormFact {
 
     pub fn map_exprs(&self, f: &mut impl FnMut(&NormExpr) -> NormExpr) -> NormFact {
         match self {
-            NormFact::Assign(symbol, expr) => NormFact::Assign(*symbol, f(expr)),
+            NormFact::Assign(symbol, expr) | NormFact::Compute(symbol, expr) => {
+                NormFact::Assign(*symbol, f(expr))
+            }
+            NormFact::AssignVar(lhs, rhs) => NormFact::AssignVar(*lhs, *rhs),
             NormFact::ConstrainEq(lhs, rhs) => NormFact::ConstrainEq(*lhs, *rhs),
             NormFact::AssignLit(symbol, lit) => NormFact::AssignLit(*symbol, lit.clone()),
         }
@@ -635,6 +654,12 @@ impl NormFact {
         match self {
             NormFact::Assign(symbol, expr) => {
                 NormFact::Assign(fvar(*symbol, true), expr.map_def_use(fvar, true))
+            }
+            NormFact::AssignVar(lhs, rhs) => {
+                NormFact::AssignVar(fvar(*lhs, true), fvar(*rhs, false))
+            }
+            NormFact::Compute(symbol, expr) => {
+                NormFact::Compute(fvar(*symbol, true), expr.map_def_use(fvar, false))
             }
             NormFact::AssignLit(symbol, lit) => {
                 NormFact::AssignLit(fvar(*symbol, true), lit.clone())
@@ -662,6 +687,10 @@ impl Fact {
             Fact::Fact(expr) => Fact::Fact(f(expr)),
         }
     }
+
+    pub fn subst(&self, subst: &HashMap<Symbol, Expr>) -> Fact {
+        self.map_exprs(&mut |e| e.subst(subst))
+    }
 }
 
 impl Display for NormFact {
@@ -680,9 +709,9 @@ impl Display for Fact {
 pub enum Action {
     Let(Symbol, Expr),
     Set(Symbol, Vec<Expr>, Expr),
-    SetNoTrack(Symbol, Vec<Expr>, Expr),
     Delete(Symbol, Vec<Expr>),
     Union(Expr, Expr),
+    Extract(Expr, Expr),
     Panic(String),
     Expr(Expr),
     // If(Expr, Action, Action),
@@ -693,6 +722,7 @@ pub enum NormAction {
     Let(Symbol, NormExpr),
     LetVar(Symbol, Symbol),
     LetLit(Symbol, Literal),
+    Extract(Symbol, Symbol),
     Set(NormExpr, Symbol),
     Delete(NormExpr),
     Union(Symbol, Symbol),
@@ -705,11 +735,14 @@ impl NormAction {
             NormAction::Let(symbol, expr) => Action::Let(*symbol, expr.to_expr()),
             NormAction::LetVar(symbol, other) => Action::Let(*symbol, Expr::Var(*other)),
             NormAction::LetLit(symbol, lit) => Action::Let(*symbol, Expr::Lit(lit.clone())),
-            NormAction::Set(NormExpr::Call(head, body), other) => Action::SetNoTrack(
+            NormAction::Set(NormExpr::Call(head, body), other) => Action::Set(
                 *head,
                 body.iter().map(|s| Expr::Var(*s)).collect(),
                 Expr::Var(*other),
             ),
+            NormAction::Extract(symbol, variants) => {
+                Action::Extract(Expr::Var(*symbol), Expr::Var(*variants))
+            }
             NormAction::Delete(NormExpr::Call(symbol, args)) => {
                 Action::Delete(*symbol, args.iter().map(|s| Expr::Var(*s)).collect())
             }
@@ -724,6 +757,7 @@ impl NormAction {
             NormAction::LetVar(symbol, other) => NormAction::LetVar(*symbol, *other),
             NormAction::LetLit(symbol, lit) => NormAction::LetLit(*symbol, lit.clone()),
             NormAction::Set(expr, other) => NormAction::Set(f(expr), *other),
+            NormAction::Extract(var, variants) => NormAction::Extract(*var, *variants),
             NormAction::Delete(expr) => NormAction::Delete(f(expr)),
             NormAction::Union(lhs, rhs) => NormAction::Union(*lhs, *rhs),
             NormAction::Panic(msg) => NormAction::Panic(msg.clone()),
@@ -743,6 +777,9 @@ impl NormAction {
             NormAction::Set(expr, other) => {
                 NormAction::Set(expr.map_def_use(fvar, false), fvar(*other, false))
             }
+            NormAction::Extract(var, variants) => {
+                NormAction::Extract(fvar(*var, false), fvar(*variants, false))
+            }
             NormAction::Delete(expr) => NormAction::Delete(expr.map_def_use(fvar, false)),
             NormAction::Union(lhs, rhs) => NormAction::Union(fvar(*lhs, false), fvar(*rhs, false)),
             NormAction::Panic(msg) => NormAction::Panic(msg.clone()),
@@ -755,11 +792,9 @@ impl ToSexp for Action {
         match self {
             Action::Let(lhs, rhs) => list!("let", lhs, rhs),
             Action::Set(lhs, args, rhs) => list!("set", list!(lhs, ++ args), rhs),
-            Action::SetNoTrack(lhs, args, rhs) => {
-                list!("set-no-track", list!(lhs, ++ args), rhs)
-            }
             Action::Union(lhs, rhs) => list!("union", lhs, rhs),
             Action::Delete(lhs, args) => list!("delete", list!(lhs, ++ args)),
+            Action::Extract(expr, variants) => list!("extract", expr, variants),
             Action::Panic(msg) => list!("panic", format!("\"{}\"", msg.clone())),
             Action::Expr(e) => e.to_sexp(),
         }
@@ -774,12 +809,9 @@ impl Action {
                 let right = f(rhs);
                 Action::Set(*lhs, args.iter().map(f).collect(), right)
             }
-            Action::SetNoTrack(lhs, args, rhs) => {
-                let right = f(rhs);
-                Action::SetNoTrack(*lhs, args.iter().map(f).collect(), right)
-            }
             Action::Delete(lhs, args) => Action::Delete(*lhs, args.iter().map(f).collect()),
             Action::Union(lhs, rhs) => Action::Union(f(lhs), f(rhs)),
+            Action::Extract(expr, variants) => Action::Extract(f(expr), f(variants)),
             Action::Panic(msg) => Action::Panic(msg.clone()),
             Action::Expr(e) => Action::Expr(f(e)),
         }
@@ -787,25 +819,21 @@ impl Action {
 
     pub fn replace_canon(&self, canon: &HashMap<Symbol, Expr>) -> Self {
         match self {
-            Action::Let(lhs, rhs) => Action::Let(*lhs, rhs.replace_canon(canon)),
+            Action::Let(lhs, rhs) => Action::Let(*lhs, rhs.subst(canon)),
             Action::Set(lhs, args, rhs) => Action::Set(
                 *lhs,
-                args.iter().map(|e| e.replace_canon(canon)).collect(),
-                rhs.replace_canon(canon),
-            ),
-            Action::SetNoTrack(lhs, args, rhs) => Action::SetNoTrack(
-                *lhs,
-                args.iter().map(|e| e.replace_canon(canon)).collect(),
-                rhs.replace_canon(canon),
+                args.iter().map(|e| e.subst(canon)).collect(),
+                rhs.subst(canon),
             ),
             Action::Delete(lhs, args) => {
-                Action::Delete(*lhs, args.iter().map(|e| e.replace_canon(canon)).collect())
+                Action::Delete(*lhs, args.iter().map(|e| e.subst(canon)).collect())
             }
-            Action::Union(lhs, rhs) => {
-                Action::Union(lhs.replace_canon(canon), rhs.replace_canon(canon))
+            Action::Union(lhs, rhs) => Action::Union(lhs.subst(canon), rhs.subst(canon)),
+            Action::Extract(expr, variants) => {
+                Action::Extract(expr.subst(canon), variants.subst(canon))
             }
             Action::Panic(msg) => Action::Panic(msg.clone()),
-            Action::Expr(e) => Action::Expr(e.replace_canon(canon)),
+            Action::Expr(e) => Action::Expr(e.subst(canon)),
         }
     }
 }
@@ -841,6 +869,195 @@ impl NormRule {
         Rule {
             head: self.head.iter().map(|a| a.to_action()).collect(),
             body: self.body.iter().map(|f| f.to_fact()).collect(),
+        }
+    }
+
+    pub fn globals_used_in_matcher(facts: &Vec<NormFact>) -> HashSet<Symbol> {
+        let mut bound_vars = HashSet::<Symbol>::default();
+        for fact in facts {
+            fact.map_def_use(&mut |var, def| {
+                if def {
+                    bound_vars.insert(var);
+                }
+                var
+            });
+        }
+
+        let mut unbound_vars = HashSet::<Symbol>::default();
+        for fact in facts {
+            fact.map_def_use(&mut |var, def| {
+                if !def && !bound_vars.contains(&var) {
+                    unbound_vars.insert(var);
+                }
+                var
+            });
+        }
+        unbound_vars
+    }
+
+    // just get rid of all the equality constraints for now
+    pub fn resugar_facts(facts: &Vec<NormFact>, subst: &mut HashMap<Symbol, Expr>) -> Vec<Fact> {
+        let unbound = NormRule::globals_used_in_matcher(facts);
+        let mut unionfind = UnionFind::default();
+        let mut var_to_id = HashMap::<Symbol, Id>::default();
+        let mut id_to_var = HashMap::<Id, Symbol>::default();
+        let mut get_id = |var: Symbol, uf: &mut UnionFind| -> Id {
+            if let Some(id) = var_to_id.get(&var) {
+                *id
+            } else {
+                let id = uf.make_set();
+                var_to_id.insert(var, id);
+                id_to_var.insert(id, var);
+                id
+            }
+        };
+        for norm_fact in facts {
+            if let NormFact::ConstrainEq(v1, v2) = norm_fact {
+                let id1 = get_id(*v1, &mut unionfind);
+                let id2 = get_id(*v2, &mut unionfind);
+                unionfind.union_raw(id1, id2);
+            } else if let NormFact::AssignVar(v1, v2) = norm_fact {
+                let id1 = get_id(*v1, &mut unionfind);
+                let id2 = get_id(*v2, &mut unionfind);
+                unionfind.union_raw(id1, id2);
+            }
+        }
+
+        for (var, id) in &var_to_id {
+            let leader = id_to_var.get(&unionfind.find(*id)).unwrap();
+            if leader != var {
+                subst.insert(*var, Expr::Var(*leader));
+            }
+        }
+
+        let mut res = vec![];
+        for fact in facts {
+            match fact {
+                NormFact::ConstrainEq(..) => (),
+                NormFact::AssignVar(..) => (),
+                _ => res.push(fact.to_fact().subst(subst)),
+            }
+        }
+
+        // add back contraints on unbound variables
+        for var in unbound {
+            if let Some(id) = var_to_id.get(&var) {
+                let leader = id_to_var.get(&unionfind.find(*id)).unwrap();
+                if leader != &var {
+                    res.push(Fact::Eq(vec![Expr::Var(var), Expr::Var(*leader)]));
+                }
+            }
+        }
+
+        res
+    }
+
+    pub fn resugar_actions(&self, subst: &mut HashMap<Symbol, Expr>) -> Vec<Action> {
+        let mut used = HashSet::<Symbol>::default();
+        let mut head = Vec::<Action>::default();
+        for a in &self.head {
+            match a {
+                NormAction::Let(symbol, expr) => {
+                    let new_expr = expr.to_expr();
+                    new_expr.map(&mut |subexpr| {
+                        if let Expr::Var(v) = subexpr {
+                            used.insert(*v);
+                        }
+                        subexpr.clone()
+                    });
+                    let substituted = new_expr.subst(subst);
+
+                    // TODO sometimes re-arranging actions is bad
+                    if substituted.ast_size() > 1 {
+                        head.push(Action::Let(*symbol, substituted));
+                    } else {
+                        subst.insert(*symbol, substituted);
+                    }
+                }
+                NormAction::LetVar(symbol, other) => {
+                    let new_expr = subst.get(other).unwrap_or(&Expr::Var(*other)).clone();
+                    used.insert(*other);
+                    subst.insert(*symbol, new_expr);
+                }
+                NormAction::Extract(symbol, variants) => {
+                    let new_expr = subst.get(symbol).cloned().unwrap_or(Expr::Var(*symbol));
+                    used.insert(*symbol);
+                    let new_expr2 = subst.get(variants).cloned().unwrap_or(Expr::Var(*variants));
+                    used.insert(*variants);
+                    head.push(Action::Extract(new_expr, new_expr2));
+                }
+                NormAction::LetLit(symbol, lit) => {
+                    subst.insert(*symbol, Expr::Lit(lit.clone()));
+                }
+                NormAction::Set(expr, other) => {
+                    let new_expr = expr.to_expr();
+                    new_expr.map(&mut |subexpr| {
+                        if let Expr::Var(v) = subexpr {
+                            used.insert(*v);
+                        }
+                        subexpr.clone()
+                    });
+                    let other_expr = subst.get(other).unwrap_or(&Expr::Var(*other)).clone();
+                    used.insert(*other);
+                    let substituted = new_expr.subst(subst);
+                    match substituted {
+                        Expr::Call(op, children) => {
+                            head.push(Action::Set(op, children, other_expr));
+                        }
+                        _ => panic!("Expected call in set"),
+                    }
+                }
+                NormAction::Delete(expr) => {
+                    let new_expr = expr.to_expr();
+                    new_expr.map(&mut |subexpr| {
+                        if let Expr::Var(v) = subexpr {
+                            used.insert(*v);
+                        }
+                        subexpr.clone()
+                    });
+                    match new_expr.subst(subst) {
+                        Expr::Call(op, children) => {
+                            head.push(Action::Delete(op, children));
+                        }
+                        _ => panic!("Expected call in delete"),
+                    }
+                }
+                NormAction::Union(lhs, rhs) => {
+                    let new_lhs = subst.get(lhs).unwrap_or(&Expr::Var(*lhs)).clone();
+                    let new_rhs = subst.get(rhs).unwrap_or(&Expr::Var(*rhs)).clone();
+                    used.insert(*lhs);
+                    used.insert(*rhs);
+                    head.push(Action::Union(new_lhs, new_rhs));
+                }
+                NormAction::Panic(msg) => {
+                    head.push(Action::Panic(msg.clone()));
+                }
+            }
+        }
+
+        // unused substitutions need to be added
+        // to the action, since they have the side-effect
+        // of adding to the database
+        for (var, expr) in subst {
+            if !used.contains(var) {
+                match expr {
+                    Expr::Var(..) => (),
+                    Expr::Lit(..) => (),
+                    Expr::Call(..) => head.push(Action::Expr(expr.clone())),
+                };
+            }
+        }
+        head
+    }
+
+    pub fn resugar(&self) -> Rule {
+        let mut subst = HashMap::<Symbol, Expr>::default();
+
+        let facts_resugared = NormRule::resugar_facts(&self.body, &mut subst);
+
+        Rule {
+            head: self.resugar_actions(&mut subst),
+            body: facts_resugared,
         }
     }
 

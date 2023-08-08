@@ -26,7 +26,7 @@
 (define ITERATIONS 1)
 (define RANDOM-SAMPLE-FACTOR 1)
 (define MUST-NOT-STRINGS `())
-(define TARGET-STRINGS `("invalid default for"))
+(define TARGET-STRINGS `("src/lib.rs:250"))
 
 (define (desugar line)
   (match line
@@ -40,10 +40,8 @@
   (define-values (egglog-process egglog-output egglog-in err)
     (subprocess (current-output-port) #f #f egglog-binary))
 
-  (displayln "(" egglog-in)
   (for ([line program])
     (writeln (desugar line) egglog-in))
-  (displayln ")" egglog-in)
   (close-output-port egglog-in)
 
   (when (not (sync/timeout TIMEOUT egglog-process))
@@ -51,7 +49,7 @@
   (subprocess-kill egglog-process #t)
   (displayln "checking output")
   (flush-output)
-  (define err-str (read-string 800 err))
+  (define err-str (read-string 10000 err))
   (close-input-port err)
   (define still-unsound (and (string? err-str)
                              (for/and ([must-not-string MUST-NOT-STRINGS])
@@ -117,7 +115,18 @@
                      (random-and-sequential program)))
   (first (sort programs (lambda (a b) (< (length a) (length b))))))
 
+
+
 (define (minimize port-in port-out)
+  #;((define-values (process out in err) (subprocess #f #f #f "cargo"))
+  (define err-str (read-string 800 err))
+  (when (not (string=? err-str ""))
+    (error err-str))
+  (close-input-port out)
+  (close-output-port in)
+  (close-input-port err)
+  (subprocess-wait process))
+
   (define egglog (read-lines port-in))
   (pretty-print egglog)
 

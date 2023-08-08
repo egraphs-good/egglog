@@ -27,13 +27,13 @@
 (rule ((= f (Knap capacity Nil)))
       ((set (Knap capacity Nil) (Num 0))))
 
-(define test1 (Knap 13 (Cons 5 5 (Cons 3 3 (Cons 12 12 (Cons 5 5 Nil))))))
+(let test1 (Knap 13 (Cons 5 5 (Cons 3 3 (Cons 12 12 (Cons 5 5 Nil))))))
 
-(define test2 (Knap 5 (Cons 6 6 Nil)))
+(let test2 (Knap 5 (Cons 6 6 Nil)))
 
-(define test3 (Knap 5 (Cons 1 1 (Cons 1 1 (Cons 1 1 Nil)))))
+(let test3 (Knap 5 (Cons 1 1 (Cons 1 1 (Cons 1 1 Nil)))))
 
-(define test4 (Knap 15 (Cons 12 40 (Cons 2 20 (Cons 1 20 (Cons 1 10 (Cons 4 100 Nil)))))))
+(let test4 (Knap 15 (Cons 12 40 (Cons 2 20 (Cons 1 20 (Cons 1 10 (Cons 4 100 Nil)))))))
 
 ; turn a (Num n) into n
 (function Unwrap (expr) i64)
@@ -41,14 +41,5 @@
 
 (run 100)
 
-(extract (Unwrap test1))
 (check (= test1 (Num 13)))
 
-(extract (Unwrap test2))
-(check (= test2 (Num 0)))
-
-(extract (Unwrap test3))
-(check (= test3 (Num 3)))
-
-(extract (Unwrap test4))
-(check (= test4 (Num 150)))

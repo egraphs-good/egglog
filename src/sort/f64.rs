@@ -29,20 +29,26 @@ impl Sort for F64Sort {
     fn register_primitives(self: Arc<Self>, eg: &mut TypeInfo) {
         type Opt<T=()> = Option<T>;
 
+        add_primitives!(eg, "neg" = |a: f64| -> f64 { -a });
+
         add_primitives!(eg, "+" = |a: f64, b: f64| -> f64 { a + b });
         add_primitives!(eg, "-" = |a: f64, b: f64| -> f64 { a - b });
         add_primitives!(eg, "*" = |a: f64, b: f64| -> f64 { a * b });
         add_primitives!(eg, "/" = |a: f64, b: f64| -> Opt<f64> { (b != 0.0).then(|| a / b) });
         add_primitives!(eg, "%" = |a: f64, b: f64| -> Opt<f64> { (b != 0.0).then(|| a % b) });
 
-        add_primitives!(eg, "<" = |a: f64, b: f64| -> Opt { (a < b).then(|| ()) }); 
-        add_primitives!(eg, ">" = |a: f64, b: f64| -> Opt { (a > b).then(|| ()) }); 
-        add_primitives!(eg, "<=" = |a: f64, b: f64| -> Opt { (a <= b).then(|| ()) }); 
-        add_primitives!(eg, ">=" = |a: f64, b: f64| -> Opt { (a >= b).then(|| ()) }); 
+        add_primitives!(eg, "<" = |a: f64, b: f64| -> Opt { (a < b).then(|| ()) });
+        add_primitives!(eg, ">" = |a: f64, b: f64| -> Opt { (a > b).then(|| ()) });
+        add_primitives!(eg, "<=" = |a: f64, b: f64| -> Opt { (a <= b).then(|| ()) });
+        add_primitives!(eg, ">=" = |a: f64, b: f64| -> Opt { (a >= b).then(|| ()) });
 
-        add_primitives!(eg, "min" = |a: f64, b: f64| -> f64 { a.min(b) }); 
+        add_primitives!(eg, "min" = |a: f64, b: f64| -> f64 { a.min(b) });
         add_primitives!(eg, "max" = |a: f64, b: f64| -> f64 { a.max(b) });
         add_primitives!(eg, "abs" = |a: f64| -> f64 { a.abs() });
+
+        add_primitives!(eg, "to-f64" = |a: i64| -> f64 { a as f64 });
+        add_primitives!(eg, "to-i64" = |a: f64| -> i64 { a as i64 });
+
     }
 
     fn make_expr(&self, _egraph: &EGraph, value: Value) -> Expr {
