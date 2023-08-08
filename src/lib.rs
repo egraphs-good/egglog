@@ -1246,17 +1246,12 @@ impl EGraph {
         &self.run_report
     }
 
+    /// Serializes the egraph for export to graphviz.
     pub fn serialize_for_graphviz(&self) -> egraph_serialize::EGraph {
         let mut serialized = self.serialize(SerializeConfig::default());
         serialized.inline_leaves();
         serialized
     }
-
-    /// Exports the egraph as a Graphviz dot string
-    pub fn to_graphviz_string(&self) -> String {
-        self.serialize_for_graphviz().to_dot()
-    }
-
 }
 
 #[derive(Debug, Error)]
