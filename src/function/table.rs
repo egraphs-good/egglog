@@ -324,7 +324,7 @@ impl Input {
         }
     }
 
-    pub(crate) fn data(&self) -> &[Value] {
+    fn data(&self) -> &[Value] {
         self.data.as_slice()
     }
 
