@@ -34,7 +34,7 @@ use std::hash::Hash;
 use std::io::Read;
 use std::iter::once;
 use std::ops::{Deref, Range};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::str::FromStr;
 use std::{fmt::Debug, sync::Arc};
@@ -1246,7 +1246,7 @@ impl EGraph {
         &self.run_report
     }
 
-    fn serialize_for_graphviz(&self) -> egraph_serialize::EGraph {
+    pub fn serialize_for_graphviz(&self) -> egraph_serialize::EGraph {
         let mut serialized = self.serialize(SerializeConfig::default());
         serialized.inline_leaves();
         serialized
@@ -1257,22 +1257,6 @@ impl EGraph {
         self.serialize_for_graphviz().to_dot()
     }
 
-    /// Saves the egraph as a DOT file at the given path
-    pub fn save_graph_as_dot<P: AsRef<Path> + Copy>(
-        &self,
-        path: P,
-    ) -> Result<(), Error> {
-        self.serialize_for_graphviz()
-            .to_dot_file(path)
-            .map_err(|e| Error::IoError(path.as_ref().to_path_buf(), e))
-    }
-
-    /// Saves the egraph as an SVG file at the given path
-    pub fn save_graph_as_svg<P: AsRef<Path> + Copy>(&self, path: P) -> Result<(), Error> {
-        self.serialize_for_graphviz()
-            .to_svg_file(path)
-            .map_err(|e| Error::IoError(path.as_ref().to_path_buf(), e))
-    }
 }
 
 #[derive(Debug, Error)]

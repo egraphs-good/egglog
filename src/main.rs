@@ -125,24 +125,17 @@ fn main() {
         }
 
 
-        // Save the graph as a DOT file if the `save_dot` flag is set
-        if args.save_dot {
-            let dot_path = input.with_extension("dot");
-            match egraph.save_graph_as_dot(&dot_path) {
-                Ok(()) => log::info!("Saved graph as DOT file: {}", dot_path.display()),
-                Err(err) => log::error!("Failed to save graph as DOT file: {}", err),
+        if args.save_dot || args.save_svg {
+            let serialized = egraph.serialize_for_graphviz();
+            if args.save_dot {
+                let dot_path = input.with_extension("dot");
+                serialized.to_dot_file(dot_path).unwrap()
+            }
+            if args.save_svg {
+                let svg_path = input.with_extension("svg");
+                serialized.to_svg_file(svg_path).unwrap()
             }
         }
-
-        // Save the graph as an SVG file if the `save_svg` flag is set
-        if args.save_svg {
-            let svg_path = input.with_extension("svg");
-            match egraph.save_graph_as_svg(&svg_path) {
-                Ok(()) => log::info!("Saved graph as SVG file: {}", svg_path.display()),
-                Err(err) => log::error!("Failed to save graph as SVG file: {}", err),
-            }
-        }
-
         // no need to drop the egraph if we are going to exit
         if idx == args.inputs.len() - 1 {
             std::mem::forget(egraph)
