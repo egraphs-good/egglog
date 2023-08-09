@@ -185,7 +185,6 @@ Desugars to:
 (function path (i64 i64) Unit)
 (function edge (i64 i64) Unit)
 ```
-```
 
 Define a `path` and an `edge` relation between two `i64`s.
 
