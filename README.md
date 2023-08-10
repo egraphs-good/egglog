@@ -196,10 +196,10 @@ Define a `path` and an `edge` relation between two `i64`s.
 
 inserts two edges into the store for the `edge` function. If your function is relation between the inputs, use `relation` and the above syntax to define the relations, since there is no syntax to define a unit value using `set`.
 
-### `define` command
+### `let` command
 
 ```
-    ( define <name:Ident> <expr:Expr> <cost:Cost> )
+    ( let <name:Ident> <expr:Expr> )
 ```
 
 defines a named value. This is the same as a 0-arity function with a given, singular value.
