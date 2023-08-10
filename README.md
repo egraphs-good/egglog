@@ -23,6 +23,7 @@ https://egraphs.zulipchat.com/#narrow/stream/328979-Implementation/topic/Eggsmol
 
 ```
 apt-get install make cargo
+cargo install cargo-nextest
 make all
 ```
 
