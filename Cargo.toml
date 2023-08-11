@@ -33,7 +33,7 @@ num-traits = "0.2.15"
 smallvec = "1.11"
 symbolic_expressions = {git = "https://github.com/oflatt/symbolic-expressions", rev = "4c0ea5ca008f972450b2af72387e64d2c1c6a791"}
 
-egraph-serialize = {git = "https://github.com/egraphs-good/egraph-serialize", rev = "e2f8bb001068ae5e8a42888dc71855e3f630fea1", features = ["serde", "graphviz"]}
+egraph-serialize = {git = "https://github.com/egraphs-good/egraph-serialize", rev = "e406ffcec8c6e841089fd3e4f9b76c35ce448950", features = ["serde", "graphviz"]}
 serde_json ={optional=true, version = "1.0.100", features = ["preserve_order"]}
 
 lalrpop-util = {version = "0.20", features = ["lexer"]}
