@@ -63,7 +63,8 @@ impl Run {
                     for msg in msgs {
                         log::info!("  {}", msg);
                     }
-                    egraph.to_graphviz_string();
+                    // Test graphviz dot generation
+                    egraph.serialize_for_graphviz().to_dot();
                 }
             }
             Err(err) => {
