@@ -895,7 +895,7 @@ impl EGraph {
         let rebuild_num = self.rebuild()?;
         if rebuild_num > 0 {
             log::info!(
-                "Rebuild before command: {:10.6}s",
+                "Rebuild before command: {:10}ms",
                 pre_rebuild.elapsed().as_millis()
             );
         }
