@@ -16,9 +16,10 @@ pub fn run_program(input: &str) -> Result {
     match egraph.parse_and_run_program(input) {
         Ok(outputs) => {
             log::info!("egg ok, {} outputs", outputs.len());
+            let serialized = egraph.serialize_for_graphviz();
             Result {
                 text: outputs.join("<br>"),
-                dot: egraph.to_graphviz_string(),
+                dot: serialized.to_dot(),
             }
         }
         Err(e) => {
