@@ -124,7 +124,6 @@ fn main() {
             serialized.to_json_file(json_path).unwrap();
         }
 
-
         if args.to_dot || args.to_svg {
             let serialized = egraph.serialize_for_graphviz();
             if args.to_dot {
