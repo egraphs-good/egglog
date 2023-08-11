@@ -625,7 +625,7 @@ impl EGraph {
             for (name, rule) in vec.iter().rev().take(5) {
                 write!(
                     msg,
-                    "{name}\n  Search: {:.3}s\n  Apply: {:.3}\n",
+                    "{name}\n  Search: {:.3}s\n  Apply: {:.3}s\n",
                     rule.search_time.as_secs_f64(),
                     rule.apply_time.as_secs_f64()
                 )
@@ -685,7 +685,7 @@ impl EGraph {
                 });
                 let rule_search_time = rule_search_start.elapsed();
                 log::trace!(
-                    "Searched for {name} in {:.3} ({} results)",
+                    "Searched for {name} in {:.3}s ({} results)",
                     rule_search_time.as_secs_f64(),
                     all_values.len()
                 );
