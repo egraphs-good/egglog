@@ -7,3 +7,5 @@
 (fail (check (= (+ 1.5 9.2) 10.6)))
 (check (= (to-f64 1) 1.0))
 (check (= (to-i64 1.0) 1))
+(check (= (to-string 1.2) "1.2"))
+(check (= (to-string 1.0) "1.0"))
