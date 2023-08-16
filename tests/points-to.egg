@@ -43,15 +43,15 @@
 ; l4: o2.f = o1;
 ; l5: Object r = o3.f;
 
-(define A (Class "A"))
-(define B (Class "B"))
-(define f (Field "f"))
+(let A (Class "A"))
+(let B (Class "B"))
+(let f (Field "f"))
 
-(define l1 (New "o1" A))
-(define l2 (New "o2" B))
-(define l3 (Assign "o3" "o2"))
-(define l4 (Store "o2" f "o1"))
-(define l5 (Load "r" "o3" f))
+(let l1 (New "o1" A))
+(let l2 (New "o2" B))
+(let l3 (Assign "o3" "o2"))
+(let l4 (Store "o2" f "o1"))
+(let l5 (Load "r" "o3" f))
 
 (run 3)
 

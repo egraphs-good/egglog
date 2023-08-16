@@ -23,6 +23,7 @@ https://egraphs.zulipchat.com/#narrow/stream/328979-Implementation/topic/Eggsmol
 
 ```
 apt-get install make cargo
+cargo install cargo-nextest
 make all
 ```
 
@@ -145,9 +146,28 @@ If you define a `:merge` expression, you can update specific values in the funct
 (extract (KeepMax 1)) ; this is 2
 ```
 
+
+### `declare` command
+
+`declare` is syntactic sugar allowing for the declaration of constants.
+For example, the following program:
+```
+(sort Bool)
+(declare True Bool)
+```
+Desugars to:
+```
+(sort Bool)
+(function True_table () Bool)
+(let True (True_table))
+```
+
+Note that declare inserts the constant into the database,
+so rules can use the constant directly as a variable.
+
 ### `relation` command
 
-The `relation` command defines a named function which returns the `Unit` type.
+The `relation` is syntactic sugar for a named function which returns the `Unit` type.
 
 ```
     ( relation <name:Ident> <types:List<Type>> )
@@ -161,7 +181,13 @@ Example:
 (relation edge (i64 i64))
 ```
 
-defines a `path` and an `edge` relation between two `i64`s.
+Desugars to:
+```
+(function path (i64 i64) Unit)
+(function edge (i64 i64) Unit)
+```
+
+Define a `path` and an `edge` relation between two `i64`s.
 
 ```
 (edge 1 2)
@@ -170,19 +196,19 @@ defines a `path` and an `edge` relation between two `i64`s.
 
 inserts two edges into the store for the `edge` function. If your function is relation between the inputs, use `relation` and the above syntax to define the relations, since there is no syntax to define a unit value using `set`.
 
-### `define` command
+### `let` command
 
 ```
-    ( define <name:Ident> <expr:Expr> <cost:Cost> )
+    ( let <name:Ident> <expr:Expr> )
 ```
 
 defines a named value. This is the same as a 0-arity function with a given, singular value.
 
 Example:
 ```
-(define one 1)
-(define two 2)
-(define three (+ one two))
+(let one 1)
+(let two 2)
+(let three (+ one two))
 (extract three); extracts 3 as a i64
 ```
 
@@ -205,6 +231,23 @@ Example:
 
 These rules maintains path relations for a graph: If there is an edge from `x` to `y`, there is also a path from `x` to `y`. Transitivity is handled by the second rule: If there is a path from `x` to `y` *and* there is an edge from `y` to `z`, there is also a path from `x` and `z`.
 
+
+### `ruleset` command
+
+Ruleset allows users to define a ruleset- a set of rules
+that can be run using the `run` command.
+
+Example:
+```
+(ruleset myrules)
+
+(rule ((edge x y))
+      ((path x y))
+      :ruleset myrules)
+
+(run myrules 2)
+```
+
 ### `extract` command
 
 ```
@@ -220,6 +263,9 @@ where variants are:
 The `extract` queries the store to find the cheapest values matching the expression.
 
 ### `rewrite` and `birewrite` commands
+
+`rewrite` is syntactic sugar for a specific form of `rule`
+which simply unions the left and right hand sides.
 
 ```
     ( rewrite <lhs:Expr> <rhs:Expr>
@@ -278,31 +324,18 @@ prints
 [INFO ] Command failed as expected.
 ```
 
-### Other commands
+### `set-option`
 
-```
-    ( sort <name:Ident> ( <head:Ident> <tail:(Expr)*> ) )
-    ( run <limit:UNum>  <until:(:until <Fact>)?> )  ; evaluate rules N steps or until a condition is met
-    ( clear-rules )                         ; clear out all rules and rewrites
-    ( clear )                               ; clear data from the functions, not the function tables themselves
-    ( query <List<Fact>> )
-    ( push <UNum?> )                        ; saves the state of the database on the stack
-    ( pop <UNum?> )                         ; restores the state of the database on the stack
-    ( print <sym:Ident> <n:UNum?> )         ; print the value of an id
-    ( print-size <sym:Ident> )
-    ( input <name:Ident> <file:String> )
-    ( output <file:String> <exprs:Expr+> )  ; Appends the expression to a file
-    ( include <file:String> )
-    ( add-ruleset <id:String> )             ; Saves all rules as a ruleset with a given name (EXPERIMENTAL)
-    ( load-ruleset <id:String> )            ; Add the rules from a ruleset previously added (EXPERIMENTAL)
-    ( calc ( <idents:IdentSort*> ) <exprs:Expr+> )
-```
+Egglog supports several *experimental* options
+that can be set using the `set-option` command.
 
-where sorts are:
+For example, `(set-option node_limit 1000)` sets a hard limit on the number of "nodes" or rows in the database.
+Once this limit is reached, no egglog stops running rules.
 
-```
-    ( <ident:Ident> <sort:Type> )
-```
+Other options supported include:
+- "interactive_mode" (default: false): when enabled, egglog prints "(done)" after each command, allowing an external
+tool to know when each command has finished running.
+
 
 ### Actions
 
@@ -362,6 +395,7 @@ Signed 64-bit integers supporting these primitives:
 & | ^ << >> not-i64 ; bit-wise operations
 < > <= >=           ; comparisons
 min max log2
+to-f64
 ```
 
 ### Sort: f64
@@ -372,6 +406,7 @@ min max log2
 + - * / %           ; arithmetic
 < > <= >=           ; comparisons
 min max neg
+to-i64
 ```
 
 ### Sort: map
