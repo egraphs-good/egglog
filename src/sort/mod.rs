@@ -20,6 +20,7 @@ pub use set::*;
 mod vec;
 pub use vec::*;
 
+use crate::extract::{Cost, Extractor};
 use crate::*;
 
 pub trait Sort: Any + Send + Sync + Debug {
@@ -69,7 +70,20 @@ pub trait Sort: Any + Send + Sync + Debug {
         let _ = info;
     }
 
-    fn make_expr(&self, egraph: &EGraph, value: Value) -> Expr;
+    /// Extracting an expression (with smallest cost) out of a primitive value
+    fn make_expr(&self, egraph: &EGraph, value: Value) -> (Cost, Expr);
+
+    /// For values like EqSort containers, to make an expression from it
+    /// requires an extractor.
+    /// The default behavior is to call make_expr
+    fn make_expr_with_extractor(
+        &self,
+        egraph: &EGraph,
+        value: Value,
+        extractor: &Extractor,
+    ) -> (Cost, Expr) {
+        self.make_expr(egraph, value)
+    }
 }
 
 #[derive(Debug)]
@@ -101,7 +115,7 @@ impl Sort for EqSort {
         }
     }
 
-    fn make_expr(&self, _egraph: &EGraph, _value: Value) -> Expr {
+    fn make_expr(&self, _egraph: &EGraph, _value: Value) -> (Cost, Expr) {
         unimplemented!("No make_expr for EqSort {}", self.name)
     }
 }

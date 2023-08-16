@@ -47,9 +47,12 @@ impl Sort for F64Sort {
         add_primitives!(eg, "abs" = |a: f64| -> f64 { a.abs() });
     }
 
-    fn make_expr(&self, _egraph: &EGraph, value: Value) -> Expr {
+    fn make_expr(&self, _egraph: &EGraph, value: Value) -> (Cost, Expr) {
         assert!(value.tag == self.name());
-        Expr::Lit(Literal::F64(OrderedFloat(f64::from_bits(value.bits))))
+        (
+            1,
+            Expr::Lit(Literal::F64(OrderedFloat(f64::from_bits(value.bits)))),
+        )
     }
 }
 

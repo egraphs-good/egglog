@@ -4,7 +4,7 @@ use crate::ast::Symbol;
 use crate::util::HashMap;
 use crate::{ArcSort, EGraph, Expr, Function, Id, Value};
 
-type Cost = usize;
+pub type Cost = usize;
 
 #[derive(Debug)]
 struct Node<'a> {
@@ -12,7 +12,7 @@ struct Node<'a> {
     inputs: &'a [Value],
 }
 
-struct Extractor<'a> {
+pub struct Extractor<'a> {
     costs: HashMap<Id, (Cost, Node<'a>)>,
     ctors: Vec<Symbol>,
     egraph: &'a EGraph,
@@ -61,7 +61,7 @@ impl EGraph {
 }
 
 impl<'a> Extractor<'a> {
-    fn new(egraph: &'a EGraph) -> Self {
+    pub fn new(egraph: &'a EGraph) -> Self {
         let mut extractor = Extractor {
             costs: HashMap::default(),
             egraph,
@@ -85,7 +85,7 @@ impl<'a> Extractor<'a> {
         Expr::call(node.sym, children)
     }
 
-    fn find_best(&self, value: Value, sort: &ArcSort) -> (Cost, Expr) {
+    pub fn find_best(&self, value: Value, sort: &ArcSort) -> (Cost, Expr) {
         if sort.is_eq_sort() {
             let id = self.egraph.find(Id::from(value.bits as usize));
             let (cost, node) = &self
@@ -94,7 +94,7 @@ impl<'a> Extractor<'a> {
                 .unwrap_or_else(|| panic!("No cost for {:?}", value));
             (*cost, self.expr_from_node(node))
         } else {
-            (0, sort.make_expr(self.egraph, value))
+            sort.make_expr(self.egraph, value)
         }
     }
 
@@ -102,13 +102,7 @@ impl<'a> Extractor<'a> {
         let mut cost = function.decl.cost.unwrap_or(1);
         let types = &function.schema.input;
         for (ty, value) in types.iter().zip(children) {
-            cost = cost.saturating_add(if ty.is_eq_sort() {
-                let id = self.egraph.find(Id::from(value.bits as usize));
-                // TODO costs should probably map values?
-                self.costs.get(&id)?.0
-            } else {
-                1
-            });
+            cost = cost.saturating_add(self.value_cost(ty, value)?);
         }
         Some(cost)
     }
@@ -142,6 +136,16 @@ impl<'a> Extractor<'a> {
                     }
                 }
             }
+        }
+    }
+
+    fn value_cost(&self, ty: &ArcSort, value: &Value) -> Option<usize> {
+        if ty.is_eq_sort() {
+            let id = self.egraph.find(Id::from(value.bits as usize));
+            // TODO costs should probably map values?
+            Some(self.costs.get(&id)?.0)
+        } else {
+            Some(ty.make_expr_with_extractor(self.egraph, *value, self).0)
         }
     }
 }
