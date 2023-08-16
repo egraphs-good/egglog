@@ -122,25 +122,26 @@ impl Sort for MapSort {
 
     fn make_expr(&self, egraph: &EGraph, value: Value) -> (Cost, Expr) {
         let extractor = Extractor::new(egraph);
-        self.make_expr_with_extractor(egraph, value, &extractor)
+        self.extract_expr(egraph, value, &extractor)
+            .expect("Extraction should be successful since extractor has been fully initialized")
     }
 
-    fn make_expr_with_extractor(
+    fn extract_expr(
         &self,
         _egraph: &EGraph,
         value: Value,
         extractor: &Extractor,
-    ) -> (Cost, Expr) {
+    ) -> Option<(Cost, Expr)> {
         let map = ValueMap::load(self, &value);
         let mut expr = Expr::call("map-empty", []);
         let mut cost = 0;
         for (k, v) in map.iter().rev() {
-            let k = extractor.find_best(*k, &self.key);
-            let v = extractor.find_best(*v, &self.value);
+            let k = extractor.find_best(*k, &self.key)?;
+            let v = extractor.find_best(*v, &self.value)?;
             cost += k.0 + v.0;
             expr = Expr::call("map-insert", [expr, k.1, v.1])
         }
-        (cost, expr)
+        Some((cost, expr))
     }
 }
 

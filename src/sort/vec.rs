@@ -131,24 +131,25 @@ impl Sort for VecSort {
 
     fn make_expr(&self, egraph: &EGraph, value: Value) -> (Cost, Expr) {
         let extractor = Extractor::new(egraph);
-        self.make_expr_with_extractor(egraph, value, &extractor)
+        self.extract_expr(egraph, value, &extractor)
+            .expect("Extraction should be successful since extractor has been fully initialized")
     }
 
-    fn make_expr_with_extractor(
+    fn extract_expr(
         &self,
-        egraph: &EGraph,
+        _egraph: &EGraph,
         value: Value,
         extractor: &Extractor,
-    ) -> (Cost, Expr) {
+    ) -> Option<(Cost, Expr)> {
         let vec = ValueVec::load(self, &value);
         let mut expr = Expr::call("vec-empty", []);
         let mut cost = 0;
         for e in vec.iter().rev() {
-            let e = extractor.find_best(*e, &self.element);
+            let e = extractor.find_best(*e, &self.element)?;
             cost += e.0;
             expr = Expr::call("vec-push", [expr, e.1])
         }
-        (cost, expr)
+        Some((cost, expr))
     }
 }
 

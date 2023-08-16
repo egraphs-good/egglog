@@ -30,7 +30,9 @@ impl EGraph {
     }
 
     pub fn extract(&self, value: Value, arcsort: &ArcSort) -> (Cost, Expr) {
-        Extractor::new(self).find_best(value, arcsort)
+        Extractor::new(self)
+            .find_best(value, arcsort)
+            .unwrap_or_else(|| panic!("No cost for {:?}", value))
     }
 
     pub fn extract_variants(&mut self, value: Value, limit: usize) -> Vec<Expr> {
@@ -50,7 +52,9 @@ impl EGraph {
                     .filter_map(move |(inputs, output)| {
                         (&output.value == output_value).then(|| {
                             let node = Node { sym, inputs };
-                            ext.expr_from_node(&node)
+                            ext.expr_from_node(&node).expect(
+                                "extract_variants should be called after extractor initialization",
+                            )
                         })
                     })
                     .collect()
@@ -77,24 +81,27 @@ impl<'a> Extractor<'a> {
         extractor
     }
 
-    fn expr_from_node(&self, node: &Node) -> Expr {
-        let children = node.inputs.iter().map(|&value| {
-            let arcsort = self.egraph.get_sort(&value).unwrap();
-            self.find_best(value, arcsort).1
-        });
-        Expr::call(node.sym, children)
+    fn expr_from_node(&self, node: &Node) -> Option<Expr> {
+        let children = node
+            .inputs
+            .iter()
+            .map(|&value| {
+                let arcsort = self.egraph.get_sort(&value).unwrap();
+                self.find_best(value, arcsort)
+            })
+            .collect::<Option<Vec<_>>>()?
+            .into_iter()
+            .map(|(_, e)| e);
+        Some(Expr::call(node.sym, children))
     }
 
-    pub fn find_best(&self, value: Value, sort: &ArcSort) -> (Cost, Expr) {
+    pub fn find_best(&self, value: Value, sort: &ArcSort) -> Option<(Cost, Expr)> {
         if sort.is_eq_sort() {
             let id = self.egraph.find(Id::from(value.bits as usize));
-            let (cost, node) = &self
-                .costs
-                .get(&id)
-                .unwrap_or_else(|| panic!("No cost for {:?}", value));
-            (*cost, self.expr_from_node(node))
+            let (cost, node) = &self.costs.get(&id)?;
+            Some((*cost, self.expr_from_node(node)?))
         } else {
-            sort.make_expr(self.egraph, value)
+            sort.extract_expr(self.egraph, value, self)
         }
     }
 
@@ -139,13 +146,13 @@ impl<'a> Extractor<'a> {
         }
     }
 
-    fn value_cost(&self, ty: &ArcSort, value: &Value) -> Option<usize> {
-        if ty.is_eq_sort() {
+    pub(crate) fn value_cost(&self, sort: &ArcSort, value: &Value) -> Option<usize> {
+        if sort.is_eq_sort() {
             let id = self.egraph.find(Id::from(value.bits as usize));
-            // TODO costs should probably map values?
-            Some(self.costs.get(&id)?.0)
+            let (cost, _node) = &self.costs.get(&id)?;
+            Some(*cost)
         } else {
-            Some(ty.make_expr_with_extractor(self.egraph, *value, self).0)
+            Some(sort.extract_expr(self.egraph, *value, self)?.0)
         }
     }
 }

@@ -73,16 +73,18 @@ pub trait Sort: Any + Send + Sync + Debug {
     /// Extracting an expression (with smallest cost) out of a primitive value
     fn make_expr(&self, egraph: &EGraph, value: Value) -> (Cost, Expr);
 
-    /// For values like EqSort containers, to make an expression from it
-    /// requires an extractor.
+    /// For values like EqSort containers, to make/extract an expression from it
+    /// requires an extractor. Moreover, the extraction may be unsuccessful if
+    /// the extractor is not fully initialized.
+    ///
     /// The default behavior is to call make_expr
-    fn make_expr_with_extractor(
+    fn extract_expr(
         &self,
         egraph: &EGraph,
         value: Value,
-        extractor: &Extractor,
-    ) -> (Cost, Expr) {
-        self.make_expr(egraph, value)
+        _extractor: &Extractor,
+    ) -> Option<(Cost, Expr)> {
+        Some(self.make_expr(egraph, value))
     }
 }
 
