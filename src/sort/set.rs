@@ -147,10 +147,10 @@ impl Sort for SetSort {
     ) -> Option<(Cost, Expr)> {
         let set = ValueSet::load(self, &value);
         let mut expr = Expr::call("set-empty", []);
-        let mut cost = 0;
+        let mut cost = 0usize;
         for e in set.iter().rev() {
             let e = extractor.find_best(*e, termdag, &self.element)?;
-            cost += e.0;
+            cost = cost.saturating_add(e.0);
             expr = Expr::call("set-insert", [expr, termdag.term_to_expr(&e.1)])
         }
         Some((cost, expr))

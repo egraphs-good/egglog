@@ -193,21 +193,4 @@ impl<'a> Extractor<'a> {
             }
         }
     }
-
-    pub(crate) fn value_cost(
-        &self,
-        sort: &ArcSort,
-        value: &Value,
-        termdag: &mut TermDag, // it does not make a lot sense to pass termdag since
-                               // we are not returning any term. But to get the cost of
-                               // we have to construct the term first.
-    ) -> Option<usize> {
-        if sort.is_eq_sort() {
-            let id = self.egraph.find(Id::from(value.bits as usize));
-            let (cost, _node) = &self.costs.get(&id)?;
-            Some(*cost)
-        } else {
-            Some(sort.extract_expr(self.egraph, *value, self, termdag)?.0)
-        }
-    }
 }
