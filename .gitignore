@@ -13,6 +13,9 @@ profile.json
 _scratch.egg
 /*.egg
 *.log
+*.dot
+*.svg
+*.DS_Store
 
 # racket
 scripts/compiled

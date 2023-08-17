@@ -16,6 +16,20 @@ impl VecSort {
         self.element.name()
     }
 
+    pub fn presort_names() -> Vec<Symbol> {
+        vec![
+            "vec-of".into(),
+            "vec-append".into(),
+            "vec-empty".into(),
+            "vec-push".into(),
+            "vec-pop".into(),
+            "vec-not-contains".into(),
+            "vec-contains".into(),
+            "vec-length".into(),
+            "vec-get".into(),
+        ]
+    }
+
     pub fn make_sort(
         typeinfo: &mut TypeInfo,
         name: Symbol,
@@ -36,7 +50,7 @@ impl VecSort {
                 vecs: Default::default(),
             }))
         } else {
-            panic!()
+            panic!("Vec sort must have sort as argument. Got {:?}", args)
         }
     }
 }
@@ -130,8 +144,9 @@ impl Sort for VecSort {
     }
 
     fn make_expr(&self, egraph: &EGraph, value: Value) -> (Cost, Expr) {
-        let extractor = Extractor::new(egraph);
-        self.extract_expr(egraph, value, &extractor)
+        let mut termdag = TermDag::default();
+        let extractor = Extractor::new(egraph, &mut termdag);
+        self.extract_expr(egraph, value, &extractor, &mut termdag)
             .expect("Extraction should be successful since extractor has been fully initialized")
     }
 
@@ -140,14 +155,15 @@ impl Sort for VecSort {
         _egraph: &EGraph,
         value: Value,
         extractor: &Extractor,
+        termdag: &mut TermDag,
     ) -> Option<(Cost, Expr)> {
         let vec = ValueVec::load(self, &value);
         let mut expr = Expr::call("vec-empty", []);
-        let mut cost = 0;
+        let mut cost = 0usize;
         for e in vec.iter().rev() {
-            let e = extractor.find_best(*e, &self.element)?;
-            cost += e.0;
-            expr = Expr::call("vec-push", [expr, e.1])
+            let e = extractor.find_best(*e, termdag, &self.element)?;
+            cost = cost.saturating_add(e.0);
+            expr = Expr::call("vec-push", [expr, termdag.term_to_expr(&e.1)])
         }
         Some((cost, expr))
     }

@@ -45,6 +45,12 @@ impl Sort for F64Sort {
         add_primitives!(eg, "min" = |a: f64, b: f64| -> f64 { a.min(b) });
         add_primitives!(eg, "max" = |a: f64, b: f64| -> f64 { a.max(b) });
         add_primitives!(eg, "abs" = |a: f64| -> f64 { a.abs() });
+
+        add_primitives!(eg, "to-f64" = |a: i64| -> f64 { a as f64 });
+        add_primitives!(eg, "to-i64" = |a: f64| -> i64 { a as i64 });
+        // Use debug instead of to_string so that decimal place is always printed
+        add_primitives!(eg, "to-string" = |a: f64| -> Symbol { format!("{:?}", a).into() });
+
     }
 
     fn make_expr(&self, _egraph: &EGraph, value: Value) -> (Cost, Expr) {

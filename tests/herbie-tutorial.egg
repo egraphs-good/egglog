@@ -14,7 +14,7 @@
 (rewrite (Add (Num r1) (Num r2))
          (Num (+ r1 r2)))
 
-(define one-two (Add one two))
+(let one-two (Add one two))
 
 (push)
 (run 1)
@@ -72,8 +72,8 @@
 
 (run 3)
 
-(extract (lower-bound x1))
-(extract (upper-bound x1))
+(query-extract (lower-bound x1))
+(query-extract (upper-bound x1))
 (check (= one (Div x1 x1)))
 
 (pop)
@@ -85,8 +85,8 @@
 
 (run 3)
 
-(extract (lower-bound x1))
-(extract (upper-bound x1))
+(query-extract (lower-bound x1))
+(query-extract (upper-bound x1))
 
 (function true-value (Math) f64)
 
@@ -96,7 +96,7 @@
             (to-f64 (lower-bound e)))))
 
 (run 1)
-(extract (true-value x1))
+(query-extract (true-value x1))
 
 (function best-error (Math) f64 :merge new :default (to-f64 (rational 10000 1)))
 
@@ -125,13 +125,15 @@
 
 (run 1)
 
+;; set a default
+(best-error target)
 ;; error is bad, constant folding hasn't fired enough
-(extract (best-error target))
+(query-extract (best-error target))
 
 (run 1)
 
 ;; error is good, constant folding has fired enough
-(extract (best-error target))
+(query-extract (best-error target))
 
 
 (pop)

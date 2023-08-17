@@ -1,3 +1,6 @@
+;; SKIP_PROOFS
+;; doesn't work with proofs because of the side effect in
+;; the merge function
 (function foo () i64 :merge (min old new))
 
 (set (foo) 0)

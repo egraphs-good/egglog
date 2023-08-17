@@ -1,5 +1,6 @@
 use hashbrown::hash_map::Entry as HEntry;
 use indexmap::map::Entry;
+use log::log_enabled;
 use smallvec::SmallVec;
 
 use crate::{
@@ -13,9 +14,12 @@ use std::{
     ops::Range,
 };
 
+#[derive(Clone)]
 enum Instr<'a> {
     Intersect {
         value_idx: usize,
+        variable_name: Symbol,
+        info: VarInfo2,
         trie_accesses: Vec<(usize, TrieAccess<'a>)>,
     },
     ConstrainConstant {
@@ -30,35 +34,79 @@ enum Instr<'a> {
     },
 }
 
+// FIXME @mwillsey awful name, bad bad bad
+#[derive(Default, Debug, Clone)]
+struct VarInfo2 {
+    occurences: Vec<usize>,
+    intersected_on: usize,
+    size_guess: usize,
+}
+
+struct InputSizes<'a> {
+    cur_stage: usize,
+    // a map from from stage to vector of costs for each stage,
+    // where 'cost' is the largest relation being intersected
+    stage_sizes: &'a mut HashMap<usize, Vec<usize>>,
+}
+
+impl<'a> InputSizes<'a> {
+    fn add_measurement(&mut self, max_size: usize) {
+        self.stage_sizes
+            .entry(self.cur_stage)
+            .or_default()
+            .push(max_size);
+    }
+
+    fn next(&mut self) -> InputSizes {
+        InputSizes {
+            cur_stage: self.cur_stage + 1,
+            stage_sizes: self.stage_sizes,
+        }
+    }
+}
+
 type Result = std::result::Result<(), ()>;
 
 struct Program<'a>(Vec<Instr<'a>>);
 
+impl<'a> std::fmt::Display for Instr<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Instr::Intersect {
+                value_idx,
+                trie_accesses,
+                variable_name,
+                info,
+            } => {
+                write!(
+                    f,
+                    " Intersect @ {value_idx} sg={sg:6} {variable_name:15}",
+                    sg = info.size_guess
+                )?;
+                for (trie_idx, a) in trie_accesses {
+                    write!(f, "  {}: {}", trie_idx, a)?;
+                }
+                writeln!(f)?
+            }
+            Instr::ConstrainConstant {
+                index,
+                val,
+                trie_access,
+            } => {
+                writeln!(f, " ConstrainConstant {index} {trie_access} = {val:?}")?;
+            }
+            Instr::Call { prim, args, check } => {
+                writeln!(f, " Call {:?} {:?} {:?}", prim, args, check)?;
+            }
+        }
+        Ok(())
+    }
+}
+
 impl<'a> std::fmt::Display for Program<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for instr in &self.0 {
-            match instr {
-                Instr::Intersect {
-                    value_idx,
-                    trie_accesses,
-                } => {
-                    write!(f, " Intersect @ {} ", value_idx)?;
-                    for (trie_idx, a) in trie_accesses {
-                        write!(f, "  {}: {}", trie_idx, a)?;
-                    }
-                    writeln!(f)?
-                }
-                Instr::ConstrainConstant {
-                    index,
-                    val,
-                    trie_access,
-                } => {
-                    writeln!(f, " ConstrainConstant {index} {trie_access} = {val:?}")?;
-                }
-                Instr::Call { prim, args, check } => {
-                    writeln!(f, " Call {:?} {:?} {:?}", prim, args, check)?;
-                }
-            }
+        for (i, instr) in self.0.iter().enumerate() {
+            write!(f, "{i:2}. {}", instr)?;
         }
         Ok(())
     }
@@ -66,8 +114,10 @@ impl<'a> std::fmt::Display for Program<'a> {
 
 struct Context<'b> {
     query: &'b CompiledQuery,
+    join_var_ordering: Vec<Symbol>,
     tuple: Vec<Value>,
     matches: usize,
+    egraph: &'b EGraph,
 }
 
 impl<'b> Context<'b> {
@@ -76,18 +126,27 @@ impl<'b> Context<'b> {
         cq: &'b CompiledQuery,
         timestamp_ranges: &[Range<u32>],
     ) -> Option<(Self, Program<'b>, Vec<Option<usize>>)> {
+        let (program, join_var_ordering, intersections) =
+            egraph.compile_program(cq, timestamp_ranges)?;
+
         let ctx = Context {
             query: cq,
             tuple: vec![Value::fake(); cq.vars.len()],
+            join_var_ordering,
             matches: 0,
+            egraph,
         };
-
-        let (program, _vars, intersections) = egraph.compile_program(cq, timestamp_ranges)?;
 
         Some((ctx, program, intersections))
     }
 
-    fn eval<F>(&mut self, tries: &mut [&LazyTrie], program: &[Instr], f: &mut F) -> Result
+    fn eval<F>(
+        &mut self,
+        tries: &mut [&LazyTrie],
+        program: &[Instr],
+        mut stage: InputSizes,
+        f: &mut F,
+    ) -> Result
     where
         F: FnMut(&[Value]) -> Result,
     {
@@ -108,7 +167,7 @@ impl<'b> Context<'b> {
                 if let Some(next) = tries[*index].get(trie_access, *val) {
                     let old = tries[*index];
                     tries[*index] = next;
-                    self.eval(tries, program, f)?;
+                    self.eval(tries, program, stage.next(), f)?;
                     tries[*index] = old;
                 }
                 Ok(())
@@ -116,12 +175,21 @@ impl<'b> Context<'b> {
             Instr::Intersect {
                 value_idx,
                 trie_accesses,
+                ..
             } => {
+                if let Some(x) = trie_accesses
+                    .iter()
+                    .map(|(atom, _)| tries[*atom].len())
+                    .max()
+                {
+                    stage.add_measurement(x);
+                }
+
                 match trie_accesses.as_slice() {
                     [(j, access)] => tries[*j].for_each(access, |value, trie| {
                         let old_trie = std::mem::replace(&mut tries[*j], trie);
                         self.tuple[*value_idx] = value;
-                        self.eval(tries, program, f)?;
+                        self.eval(tries, program, stage.next(), f)?;
                         tries[*j] = old_trie;
                         Ok(())
                     }),
@@ -136,7 +204,7 @@ impl<'b> Context<'b> {
                                 let old_ta = std::mem::replace(&mut tries[a.0], ta);
                                 let old_tb = std::mem::replace(&mut tries[b.0], tb);
                                 self.tuple[*value_idx] = value;
-                                self.eval(tries, program, f)?;
+                                self.eval(tries, program, stage.next(), f)?;
                                 tries[a.0] = old_ta;
                                 tries[b.0] = old_tb;
                             }
@@ -165,7 +233,7 @@ impl<'b> Context<'b> {
 
                             // at this point, new_tries is ready to go
                             self.tuple[*value_idx] = value;
-                            self.eval(&mut new_tries, program, f)
+                            self.eval(&mut new_tries, program, stage.next(), f)
                         })
                     }
                 }
@@ -180,6 +248,7 @@ impl<'b> Context<'b> {
                             self.tuple[i]
                         }
                         AtomTerm::Value(val) => *val,
+                        AtomTerm::Global(g) => self.egraph.global_bindings.get(g).unwrap().1,
                     })
                 }
 
@@ -187,9 +256,14 @@ impl<'b> Context<'b> {
                     match out {
                         AtomTerm::Var(v) => {
                             let i = self.query.vars.get_index_of(v).unwrap();
-                            if *check && self.tuple[i] != res {
-                                return Ok(());
+
+                            if *check {
+                                assert_ne!(self.tuple[i], Value::fake());
+                                if self.tuple[i] != res {
+                                    return Ok(());
+                                }
                             }
+
                             self.tuple[i] = res;
                         }
                         AtomTerm::Value(val) => {
@@ -198,8 +272,16 @@ impl<'b> Context<'b> {
                                 return Ok(());
                             }
                         }
+                        AtomTerm::Global(g) => {
+                            assert!(check);
+                            let (sort, val, _ts) = self.egraph.global_bindings.get(g).unwrap();
+                            assert!(sort.name() == res.tag);
+                            if val.bits != res.bits {
+                                return Ok(());
+                            }
+                        }
                     }
-                    self.eval(tries, program, f)?;
+                    self.eval(tries, program, stage.next(), f)?;
                 }
 
                 Ok(())
@@ -208,6 +290,7 @@ impl<'b> Context<'b> {
     }
 }
 
+#[derive(Clone)]
 enum Constraint {
     Eq(usize, usize),
     Const(usize, Value),
@@ -239,6 +322,8 @@ pub struct VarInfo {
 #[derive(Debug, Clone)]
 pub struct CompiledQuery {
     query: Query,
+    // Ordering is used for the tuple
+    // The GJ variable ordering is stored in the context
     pub vars: IndexMap<Symbol, VarInfo>,
 }
 
@@ -248,7 +333,7 @@ impl EGraph {
         query: Query,
         types: &IndexMap<Symbol, ArcSort>,
     ) -> CompiledQuery {
-        // NOTE: this vars order only used for ordering the tuple,
+        // NOTE: this vars order only used for ordering the tuple storing the resulting match
         // It is not the GJ variable order.
         let mut vars: IndexMap<Symbol, VarInfo> = Default::default();
 
@@ -263,6 +348,7 @@ impl EGraph {
             }
         }
 
+        // make sure everyone has an entry in the vars table
         for prim in &query.filters {
             for v in prim.vars() {
                 vars.entry(v).or_default();
@@ -284,6 +370,9 @@ impl EGraph {
         for (i, t) in atom.args.iter().enumerate() {
             match t {
                 AtomTerm::Value(val) => constraints.push(Constraint::Const(i, *val)),
+                AtomTerm::Global(g) => {
+                    constraints.push(Constraint::Const(i, self.global_bindings.get(g).unwrap().1))
+                }
                 AtomTerm::Var(_v) => {
                     if let Some(j) = atom.args[..i].iter().position(|t2| t == t2) {
                         constraints.push(Constraint::Eq(j, i));
@@ -323,13 +412,6 @@ impl EGraph {
         Vec<Symbol>,        /* variable ordering */
         Vec<Option<usize>>, /* the first column accessed per-atom */
     )> {
-        #[derive(Default)]
-        struct VarInfo2 {
-            occurences: Vec<usize>,
-            intersected_on: usize,
-            size_guess: usize,
-        }
-
         let atoms = &query.query.atoms;
         let mut vars: IndexMap<Symbol, VarInfo2> = Default::default();
         let mut constants =
@@ -341,6 +423,10 @@ impl EGraph {
                     AtomTerm::Var(var) => vars.entry(*var).or_default().occurences.push(i),
                     AtomTerm::Value(val) => {
                         constants.entry(i).or_default().push((col, *val));
+                    }
+                    AtomTerm::Global(g) => {
+                        let val = self.global_bindings.get(g).unwrap().1;
+                        constants.entry(i).or_default().push((col, val));
                     }
                 }
             }
@@ -372,16 +458,23 @@ impl EGraph {
             // info.size_guess >>= info.occurences.len() - 1;
         }
 
+        // here we are picking the variable ordering
         let mut ordered_vars = IndexMap::default();
         while !vars.is_empty() {
-            let (&var, _info) = vars
+            let mut var_cost = vars
                 .iter()
-                .max_by_key(|(_v, info)| {
+                .map(|(v, info)| {
                     let size = info.size_guess as isize;
-                    (info.occurences.len(), info.intersected_on, -size)
+                    let cost = (info.occurences.len(), info.intersected_on, -size);
+                    (cost, v)
                 })
-                .unwrap();
+                .collect::<Vec<_>>();
+            var_cost.sort();
+            var_cost.reverse();
 
+            log::debug!("Variable costs: {:?}", ListDebug(&var_cost, "\n"));
+
+            let var = *var_cost[0].1;
             let info = vars.remove(&var).unwrap();
             for &i in &info.occurences {
                 for v in atoms[i].vars() {
@@ -420,6 +513,8 @@ impl EGraph {
             });
             Instr::Intersect {
                 value_idx,
+                variable_name: v,
+                info: info.clone(),
                 trie_accesses: info
                     .occurences
                     .iter()
@@ -439,7 +534,6 @@ impl EGraph {
         program.extend(var_instrs);
 
         // now we can try to add primitives
-        // TODO this is very inefficient, since primitives all at the end
         let mut extra = query.query.filters.clone();
         while !extra.is_empty() {
             let next = extra.iter().position(|p| {
@@ -447,6 +541,7 @@ impl EGraph {
                 p.args[..p.args.len() - 1].iter().all(|a| match a {
                     AtomTerm::Var(v) => vars.contains_key(v),
                     AtomTerm::Value(_) => true,
+                    AtomTerm::Global(_) => true,
                 })
             });
 
@@ -461,6 +556,7 @@ impl EGraph {
                         }
                     },
                     AtomTerm::Value(_) => true,
+                    AtomTerm::Global(_) => true,
                 };
                 program.push(Instr::Call {
                     prim: p.head.clone(),
@@ -468,15 +564,60 @@ impl EGraph {
                     check,
                 });
             } else {
-                panic!("cycle")
+                panic!("cycle {:#?}", query)
             }
         }
 
+        let resulting_program = Program(program);
+        self.sanity_check_program(&resulting_program, query);
+
         Some((
-            Program(program),
+            resulting_program,
             vars.into_keys().collect(),
             initial_columns,
         ))
+    }
+
+    fn sanity_check_program(&self, program: &Program, query: &CompiledQuery) {
+        // sanity check the program
+        let mut tuple_valid = vec![false; query.vars.len()];
+        for instr in &program.0 {
+            match instr {
+                Instr::Intersect { value_idx, .. } => {
+                    assert!(!tuple_valid[*value_idx]);
+                    tuple_valid[*value_idx] = true;
+                }
+                Instr::ConstrainConstant { .. } => {}
+                Instr::Call { check, args, .. } => {
+                    let Some((last, args)) = args.split_last() else {
+                        continue
+                    };
+
+                    for a in args {
+                        if let AtomTerm::Var(v) = a {
+                            let i = query.vars.get_index_of(v).unwrap();
+                            assert!(tuple_valid[i]);
+                        }
+                    }
+
+                    match last {
+                        AtomTerm::Var(v) => {
+                            let i = query.vars.get_index_of(v).unwrap();
+                            assert_eq!(*check, tuple_valid[i], "{instr}");
+                            if !*check {
+                                tuple_valid[i] = true;
+                            }
+                        }
+                        AtomTerm::Value(_) => {
+                            assert!(*check);
+                        }
+                        AtomTerm::Global(_) => {
+                            assert!(*check);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     pub(crate) fn run_query<F>(&self, cq: &CompiledQuery, timestamp: u32, mut f: F)
@@ -486,7 +627,19 @@ impl EGraph {
         let has_atoms = !cq.query.atoms.is_empty();
 
         if has_atoms {
-            let do_seminaive = self.seminaive;
+            // check if any globals updated
+            let mut global_updated = false;
+            for atom in &cq.query.atoms {
+                for arg in &atom.args {
+                    if let AtomTerm::Global(g) = arg {
+                        if self.global_bindings.get(g).unwrap().2 > timestamp {
+                            global_updated = true;
+                        }
+                    }
+                }
+            }
+
+            let do_seminaive = self.seminaive && !global_updated;
             // for the later atoms, we consider everything
             let mut timestamp_ranges = vec![0..u32::MAX; cq.query.atoms.len()];
             for (atom_i, atom) in cq.query.atoms.iter().enumerate() {
@@ -496,14 +649,14 @@ impl EGraph {
                 }
 
                 // do the gj
+
                 if let Some((mut ctx, program, cols)) = Context::new(self, cq, &timestamp_ranges) {
                     let start = Instant::now();
                     log::debug!(
-                        "Query: {}\nNew atom: {}\nVars: {}\nProgram\n{}",
-                        cq.query,
-                        atom,
-                        ListDisplay(cq.vars.keys(), " "),
-                        program
+                        "Query:\n{q}\nNew atom: {atom}\nTuple: {tuple}\nJoin order: {order}\nProgram\n{program}",
+                        q = cq.query,
+                        order = ListDisplay(&ctx.join_var_ordering, " "),
+                        tuple = ListDisplay(cq.vars.keys(), " "),
                     );
                     let mut tries = Vec::with_capacity(cq.query.atoms.len());
                     for ((atom, ts), col) in cq
@@ -526,12 +679,36 @@ impl EGraph {
                         }
                     }
                     let mut trie_refs = tries.iter().collect::<Vec<_>>();
-                    ctx.eval(&mut trie_refs, &program.0, &mut f).unwrap_or(());
-                    log::debug!(
-                        "Matched {} times (took {:?})",
-                        ctx.matches,
-                        Instant::now().duration_since(start)
+                    let mut meausrements = HashMap::<usize, Vec<usize>>::default();
+                    let stages = InputSizes {
+                        stage_sizes: &mut meausrements,
+                        cur_stage: 0,
+                    };
+                    ctx.eval(&mut trie_refs, &program.0, stages, &mut f)
+                        .unwrap_or(());
+                    let mut sums = Vec::from_iter(
+                        meausrements
+                            .iter()
+                            .map(|(x, y)| (*x, y.iter().copied().sum::<usize>())),
                     );
+                    sums.sort_by_key(|(i, _sum)| *i);
+                    if log_enabled!(log::Level::Debug) {
+                        for (i, sum) in sums {
+                            log::debug!("stage {i} total cost {sum}");
+                        }
+                    }
+                    let duration = start.elapsed();
+                    log::debug!("Matched {} times (took {:?})", ctx.matches, duration,);
+                    let iteration = self
+                        .ruleset_iteration
+                        .get::<Symbol>(&"".into())
+                        .unwrap_or(&0);
+                    if duration.as_millis() > 1000 {
+                        log::warn!(
+                            "Query took a long time at iter {iteration} : {:?}",
+                            duration
+                        );
+                    }
                 }
 
                 if !do_seminaive {
@@ -543,9 +720,15 @@ impl EGraph {
                 timestamp_ranges[atom_i] = 0..timestamp;
             }
         } else if let Some((mut ctx, program, _)) = Context::new(self, cq, &[]) {
+            let mut meausrements = HashMap::<usize, Vec<usize>>::default();
+            let stages = InputSizes {
+                stage_sizes: &mut meausrements,
+                cur_stage: 0,
+            };
             let tries = LazyTrie::make_initial_vec(cq.query.atoms.len());
             let mut trie_refs = tries.iter().collect::<Vec<_>>();
-            ctx.eval(&mut trie_refs, &program.0, &mut f).unwrap_or(());
+            ctx.eval(&mut trie_refs, &program.0, stages, &mut f)
+                .unwrap_or(());
         }
     }
 }
@@ -665,6 +848,7 @@ impl LazyTrie {
     }
 }
 
+#[derive(Clone)]
 struct TrieAccess<'a> {
     function: &'a Function,
     timestamp_range: Range<u32>,

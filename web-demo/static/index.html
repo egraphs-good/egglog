@@ -25,7 +25,6 @@
         }
 
         #panel {
-            padding: 10px;
             flex: 1 1 0;
             border-left: 2px solid gray;
 
@@ -35,6 +34,7 @@
 
         #toolbar {
             margin-top: -5px;
+            padding: 10px;
         }
 
         #toolbar button,
@@ -47,31 +47,68 @@
         }
 
         #output {
+            padding-left: 10px;
             font-family: monospace;
-            margin-top: 10px;
-            flex-grow: 1;
             white-space: pre-wrap;
             overflow-y: scroll;
+            resize: vertical;
+            height: 60%;
         }
 
         .right {
             float: right;
         }
+
+        #graph {
+            border-top: 2px solid gray;
+            flex-grow: 1;
+            position: relative;
+            overflow: auto;
+        }
+        /* Don't let graph expand https://stackoverflow.com/a/38852981/907060 */
+        #graph-inner {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
     </style>
 
     <link rel="stylesheet" href="//unpkg.com/codemirror@5.65.2/lib/codemirror.css">
     <script src="//unpkg.com/codemirror@5.65.2/lib/codemirror.js"></script>
-
+    <script src="https://unpkg.com/@hpcc-js/wasm@2.13.1/dist/graphviz.umd.js" type="javascript/worker"></script>
     <script type="module">
-        import { compressUrlSafe, decompressUrlSafe } from './lzma-url.mjs'
+        import { compressUrlSafe, decompressUrlSafe } from './lzma-url.mjs';
+        import * as d3 from 'https://cdn.skypack.dev/pin/d3@v7.8.5-eC7TKxlFLay7fmsv0gvu/dist=es2020,mode=imports,min/optimized/d3.js';
+        import 'https://cdn.skypack.dev/-/d3-graphviz@v5.1.0-TcGnvMu4khUzCpL7Wr2k/dist=es2020,mode=imports,min/optimized/d3-graphviz.js';
 
         let editor, output, examples;
-
         console.log("Main script is running");
         let worker = new Worker("worker.js");
         worker.onmessage = function (message) {
             console.log("got message", message);
-            output.innerHTML = message.data;
+            output.innerHTML = message.data.text;
+            const graphContainer = d3.select("#graph-inner")
+            const width = graphContainer.node().clientWidth;
+            const height = graphContainer.node().clientHeight;
+            const graphviz = graphContainer.graphviz({
+                // Fit graph to that size, so that all is visible
+                fit: true,
+                // Set to be as big as container
+                width,
+                height,
+                // Don't animate transitions between shapes for performance
+                tweenPaths: false,
+                tweenShapes: false,
+            })
+                .transition(d3.transition().duration(2000))
+                .dot(message.data.dot).render();
+            // If we have made a zoom selection, reset that before transitioning
+            // TODO: figure out how to transition BOTH zoom and dot at once
+            if (graphviz._zoomSelection) {
+                graphviz.resetZoom();
+            }
         }
 
         window.onpopstate = function (event) {
@@ -190,6 +227,9 @@
             </div>
         </div>
         <div id="output">Click "Run" to run code</div>
+        <div id="graph">
+            <div id="graph-inner"></div>
+        </div>
     </div>
 </body>
 

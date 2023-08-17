@@ -42,6 +42,22 @@ impl SetSort {
     }
 }
 
+impl SetSort {
+    pub fn presort_names() -> Vec<Symbol> {
+        vec![
+            "set-of".into(),
+            "set-empty".into(),
+            "set-insert".into(),
+            "set-not-contains".into(),
+            "set-contains".into(),
+            "set-remove".into(),
+            "set-union".into(),
+            "set-diff".into(),
+            "set-intersect".into(),
+        ]
+    }
+}
+
 impl Sort for SetSort {
     fn name(&self) -> Symbol {
         self.name
@@ -70,21 +86,8 @@ impl Sort for SetSort {
         result
     }
 
-    fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
-        let sets = self.sets.lock().unwrap();
-        let set = sets.get_index(value.bits as usize).unwrap();
-        let mut changed = false;
-        let new_set: ValueSet = set
-            .iter()
-            .map(|e| {
-                let mut e = *e;
-                changed |= self.element.canonicalize(&mut e, unionfind);
-                e
-            })
-            .collect();
-        drop(sets);
-        *value = new_set.store(self).unwrap();
-        changed
+    fn canonicalize(&self, _value: &mut Value, _unionfind: &UnionFind) -> bool {
+        false
     }
 
     fn register_primitives(self: Arc<Self>, typeinfo: &mut TypeInfo) {
@@ -129,8 +132,9 @@ impl Sort for SetSort {
     }
 
     fn make_expr(&self, egraph: &EGraph, value: Value) -> (Cost, Expr) {
-        let extractor = Extractor::new(egraph);
-        self.extract_expr(egraph, value, &extractor)
+        let mut termdag = TermDag::default();
+        let extractor = Extractor::new(egraph, &mut termdag);
+        self.extract_expr(egraph, value, &extractor, &mut termdag)
             .expect("Extraction should be successful since extractor has been fully initialized")
     }
 
@@ -139,14 +143,15 @@ impl Sort for SetSort {
         _egraph: &EGraph,
         value: Value,
         extractor: &Extractor,
+        termdag: &mut TermDag,
     ) -> Option<(Cost, Expr)> {
         let set = ValueSet::load(self, &value);
         let mut expr = Expr::call("set-empty", []);
         let mut cost = 0;
         for e in set.iter().rev() {
-            let e = extractor.find_best(*e, &self.element)?;
+            let e = extractor.find_best(*e, termdag, &self.element)?;
             cost += e.0;
-            expr = Expr::call("set-insert", [expr, e.1])
+            expr = Expr::call("set-insert", [expr, termdag.term_to_expr(&e.1)])
         }
         Some((cost, expr))
     }
@@ -192,7 +197,7 @@ impl PrimitiveLike for SetOf {
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
         let set = ValueSet::from_iter(values.iter().copied());
-        set.store(&self.set)
+        Some(set.store(&self.set).unwrap())
     }
 }
 

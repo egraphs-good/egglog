@@ -83,6 +83,7 @@ pub trait Sort: Any + Send + Sync + Debug {
         egraph: &EGraph,
         value: Value,
         _extractor: &Extractor,
+        _termdag: &mut TermDag,
     ) -> Option<(Cost, Expr)> {
         Some(self.make_expr(egraph, value))
     }

@@ -7,45 +7,51 @@ use libtest_mimic::Trial;
 struct Run {
     path: PathBuf,
     test_proofs: bool,
+    resugar: bool,
 }
 
 impl Run {
     fn run(&self) {
         let _ = env_logger::builder().is_test(true).try_init();
-        let program = std::fs::read_to_string(&self.path)
+        let program_read = std::fs::read_to_string(&self.path)
             .unwrap_or_else(|err| panic!("Couldn't read {:?}: {:?}", self.path, err));
-        self.test_program(&program, "Top level error");
-        if !self.should_fail() {
+        let already_enables = program_read.starts_with("(set-option enable_proofs 1)");
+        let program = if self.test_proofs && !already_enables {
+            format!("(set-option enable_proofs 1)\n{}", program_read)
+        } else {
+            program_read
+        };
+
+        if !self.resugar {
+            self.test_program(&program, "Top level error");
+        } else if self.resugar {
             let mut egraph = EGraph::default();
-            egraph.set_underscores_for_desugaring(4);
+            egraph.set_underscores_for_desugaring(3);
             let parsed = egraph.parse_program(&program).unwrap();
+            // TODO can we test after term encoding instead?
+            // last time I tried it spun out becuase
+            // it adds term encoding to term encoding
             let desugared_str = egraph
-                .process_commands(parsed)
+                .process_commands(parsed, CompilerPassStop::TypecheckDesugared)
                 .unwrap()
                 .into_iter()
-                .map(|x| x.to_string())
+                .map(|x| x.resugar().to_string())
                 .collect::<Vec<String>>()
                 .join("\n");
 
-            println!("{}", desugared_str);
-
             self.test_program(
                 &desugared_str,
-                &format!(
-                    "Program:\n{}\n ERROR after parse, to_string, and parse again.",
-                    desugared_str
-                ),
+                "ERROR after parse, to_string, and parse again.",
             );
         }
     }
 
     fn test_program(&self, program: &str, message: &str) {
         let mut egraph = EGraph::default();
-        egraph.set_underscores_for_desugaring(5);
         if self.test_proofs {
-            egraph.enable_proofs();
             egraph.test_proofs = true;
         }
+        egraph.set_underscores_for_desugaring(5);
         match egraph.parse_and_run_program(program) {
             Ok(msgs) => {
                 if self.should_fail() {
@@ -57,6 +63,8 @@ impl Run {
                     for msg in msgs {
                         log::info!("  {}", msg);
                     }
+                    // Test graphviz dot generation
+                    egraph.serialize_for_graphviz().to_dot();
                 }
             }
             Err(err) => {
@@ -82,8 +90,8 @@ impl Run {
                 let stem = self.0.path.file_stem().unwrap();
                 let stem_str = stem.to_string_lossy().replace(['.', '-', ' '], "_");
                 write!(f, "{stem_str}")?;
-                if self.0.test_proofs {
-                    write!(f, "_with_proofs")?;
+                if self.0.resugar {
+                    write!(f, "_resugar")?;
                 }
                 Ok(())
             }
@@ -104,24 +112,15 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
         let run = Run {
             path: entry.unwrap().clone(),
             test_proofs: false,
+            resugar: false,
         };
-        let name = run.name().to_string();
+        let should_fail = run.should_fail();
 
         push_trial(run.clone());
-
-        // make a test with proofs enabled
-        // TODO: re-enable herbie, unsound, and eqsolve when proof extraction is faster
-        let banned = [
-            "herbie",
-            "repro_unsound",
-            "eqsolve",
-            "before_proofs",
-            "lambda",
-        ];
-        if !banned.contains(&name.as_str()) {
+        if !should_fail {
             push_trial(Run {
-                test_proofs: true,
-                ..run
+                resugar: true,
+                ..run.clone()
             });
         }
     }
