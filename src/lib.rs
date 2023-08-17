@@ -18,7 +18,7 @@ use index::ColumnIndex;
 use instant::{Duration, Instant};
 pub use serialize::SerializeConfig;
 use sort::*;
-use termdag::{Term, TermDag};
+pub use termdag::{Term, TermDag};
 use thiserror::Error;
 
 use proofs::ProofState;
