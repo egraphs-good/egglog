@@ -23,6 +23,10 @@ struct Args {
     inputs: Vec<PathBuf>,
     #[clap(long)]
     to_json: bool,
+    #[clap(long)]
+    to_dot: bool,
+    #[clap(long)]
+    to_svg: bool,
 }
 
 fn main() {
@@ -120,6 +124,17 @@ fn main() {
             serialized.to_json_file(json_path).unwrap();
         }
 
+        if args.to_dot || args.to_svg {
+            let serialized = egraph.serialize_for_graphviz();
+            if args.to_dot {
+                let dot_path = input.with_extension("dot");
+                serialized.to_dot_file(dot_path).unwrap()
+            }
+            if args.to_svg {
+                let svg_path = input.with_extension("svg");
+                serialized.to_svg_file(svg_path).unwrap()
+            }
+        }
         // no need to drop the egraph if we are going to exit
         if idx == args.inputs.len() - 1 {
             std::mem::forget(egraph)

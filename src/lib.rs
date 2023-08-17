@@ -18,7 +18,7 @@ use index::ColumnIndex;
 use instant::{Duration, Instant};
 pub use serialize::SerializeConfig;
 use sort::*;
-use termdag::{Term, TermDag};
+pub use termdag::{Term, TermDag};
 use thiserror::Error;
 
 use proofs::ProofState;
@@ -1236,14 +1236,21 @@ impl EGraph {
         self.proof_state.type_info.add_arcsort(arcsort)
     }
 
-    // Gets the last extract report and returns it, if the last command saved it.
+    /// Gets the last extract report and returns it, if the last command saved it.
     pub fn get_extract_report(&self) -> &Option<ExtractReport> {
         &self.extract_report
     }
 
-    // Gets the last run report and returns it, if the last command saved it.
+    /// Gets the last run report and returns it, if the last command saved it.
     pub fn get_run_report(&self) -> &Option<RunReport> {
         &self.run_report
+    }
+
+    /// Serializes the egraph for export to graphviz.
+    pub fn serialize_for_graphviz(&self) -> egraph_serialize::EGraph {
+        let mut serialized = self.serialize(SerializeConfig::default());
+        serialized.inline_leaves();
+        serialized
     }
 }
 

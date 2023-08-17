@@ -51,7 +51,7 @@ impl EGraph {
     /// - Functions which return primitive values will be added to the e-class of that value.
     /// - Nodes will have consistant IDs throughout execution of e-graph (used for animating changes in the visualization)
     /// - Edges in the visualization will be well distributed (used for animating changes in the visualization)
-    ///   (Note that this will be changed in https://github.com/egraphs-good/egglog/pull/158 so that edges point to exact nodes instead of looking up the e-class)
+    ///   (Note that this will be changed in `<https://github.com/egraphs-good/egglog/pull/158>` so that edges point to exact nodes instead of looking up the e-class)
     pub fn serialize(&self, config: SerializeConfig) -> egraph_serialize::EGraph {
         // First collect a list of all the calls we want to serialize, into the function decl, the inputs, and the output, and if its an eq sort
         let all_calls: Vec<(&FunctionDecl, &ValueVec, &Value, egraph_serialize::NodeId)> = self

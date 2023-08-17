@@ -5,7 +5,7 @@
   (Mul Math Math))
 
 ;; expr1 = 2 * (x + 3)
-(let expr1 (Mul (Num 2) (Add (Var "x") (Num 3)))) 
+(let expr1 (Mul (Num 2) (Add (Var "x") (Num 3))))
 ;; expr2 = 6 + 2 * x
 (let expr2 (Add (Num 6) (Mul (Num 2) (Var "x"))))
 
@@ -16,7 +16,7 @@
          (Add b a))
 (rewrite (Mul a (Add b c))
          (Add (Mul a b) (Mul a c)))
-(rewrite (Add (Num a) (Num b)) 
+(rewrite (Add (Num a) (Num b))
          (Num (+ a b)))
 (rewrite (Mul (Num a) (Num b))
          (Num (* a b)))

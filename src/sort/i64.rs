@@ -56,6 +56,9 @@ impl Sort for I64Sort {
 
         add_primitives!(typeinfo, "min" = |a: i64, b: i64| -> i64 { a.min(b) });
         add_primitives!(typeinfo, "max" = |a: i64, b: i64| -> i64 { a.max(b) });
+
+        add_primitives!(typeinfo, "to-string" = |a: i64| -> Symbol { a.to_string().into() });
+
     }
 
     fn make_expr(&self, _egraph: &EGraph, value: Value) -> Expr {

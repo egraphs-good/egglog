@@ -17,6 +17,20 @@ jobs:
     - name: Build
       run: make web
 
+    # Upload the built website as an artifact, so that runs which are not deployed
+    # (i.e. other branches and PRs) to Github Pages can be be downloaded
+    # (https://docs.github.com/en/actions/managing-workflow-runs/downloading-workflow-artifacts)
+    # and viewed locally.
+    #
+    # When Github adds support for PR Github Pages previews
+    # (https://github.com/orgs/community/discussions/7730)
+    # this can be removed.
+    - name: Upload web artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: www
+        path: target/www
+
     - name: Deploy
       uses: peaceiris/actions-gh-pages@v3
       # only actually deploy if pushed to main branch
