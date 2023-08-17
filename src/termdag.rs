@@ -8,12 +8,14 @@ use crate::{
 pub enum Term {
     Lit(Literal),
     Var(Symbol),
+    /// usize is the index of the child in the nodes vec
     App(Symbol, Vec<usize>),
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct TermDag {
     pub nodes: Vec<Term>,
+    /// maps a term to its index in the nodes vec, for fast lookup
     pub hashcons: HashMap<Term, usize>,
 }
 
@@ -71,7 +73,7 @@ impl TermDag {
         }
     }
 
-    pub fn expr_to_term(&mut self, expr: &Expr) -> Term {
+    pub fn expr_to_term(&self, expr: &Expr) -> Term {
         let res = match expr {
             Expr::Lit(lit) => Term::Lit(lit.clone()),
             Expr::Var(v) => Term::Var(*v),
@@ -90,7 +92,7 @@ impl TermDag {
         res
     }
 
-    pub fn term_to_expr(&mut self, term: &Term) -> Expr {
+    pub fn term_to_expr(&self, term: &Term) -> Expr {
         match term {
             Term::Lit(lit) => Expr::Lit(lit.clone()),
             Term::Var(v) => Expr::Var(*v),
