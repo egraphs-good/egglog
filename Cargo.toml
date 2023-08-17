@@ -14,7 +14,7 @@ name = "files"
 default = ["bin"]
 
 bin = ["dep:clap", "dep:env_logger", "egraph-serialize/serde", "dep:serde_json"]
-wasm-bindgen = ["instant/wasm-bindgen"]
+wasm-bindgen = ["instant/wasm-bindgen", "dep:getrandom"]
 
 [dependencies]
 hashbrown = {version = "0.14", features = ["raw"]}
@@ -33,7 +33,7 @@ num-traits = "0.2.15"
 smallvec = "1.11"
 symbolic_expressions = {git = "https://github.com/oflatt/symbolic-expressions", rev = "4c0ea5ca008f972450b2af72387e64d2c1c6a791"}
 
-egraph-serialize = {git = "https://github.com/egraphs-good/egraph-serialize", rev = "54b1a4f1e2f2135846b084edcb495cd159839540", default-features = false}
+egraph-serialize = {git = "https://github.com/egraphs-good/egraph-serialize", rev = "e406ffcec8c6e841089fd3e4f9b76c35ce448950", features = ["serde", "graphviz"]}
 serde_json ={optional=true, version = "1.0.100", features = ["preserve_order"]}
 
 lalrpop-util = {version = "0.20", features = ["lexer"]}
@@ -44,6 +44,9 @@ clap = {version = "4", features = ["derive"], optional = true}
 env_logger = {version = "0.10", optional = true}
 
 ordered-float = {version = "3.7"}
+
+# Need to add "js" feature for "graphviz-rust" to work in wasm
+getrandom = {version="*", features = ["js"], optional = true}
 
 [build-dependencies]
 lalrpop = "0.20"
