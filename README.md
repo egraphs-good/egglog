@@ -400,6 +400,7 @@ Signed 64-bit integers supporting these primitives:
 < > <= >=           ; comparisons
 min max log2
 to-f64
+to-string
 ```
 
 ### Sort: f64
@@ -411,6 +412,7 @@ to-f64
 < > <= >=           ; comparisons
 min max neg
 to-i64
+to-string
 ```
 
 ### Sort: map
