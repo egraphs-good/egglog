@@ -13,8 +13,8 @@ pub enum Term {
 
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct TermDag {
-    nodes: Vec<Term>,
-    hashcons: HashMap<Term, usize>,
+    pub nodes: Vec<Term>,
+    pub hashcons: HashMap<Term, usize>,
 }
 
 #[macro_export]
