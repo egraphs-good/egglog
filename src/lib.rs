@@ -369,10 +369,11 @@ impl EGraph {
         }
 
         // now update global bindings
-        let mut new_global_bindings = self.global_bindings.clone();
-        for (_sym, (_sort, value, ts)) in new_global_bindings.iter_mut() {
-            *value = self.bad_find_value(*value);
-            *ts = self.timestamp;
+        let mut new_global_bindings = std::mem::take(&mut self.global_bindings);
+        for (_sym, (sort, value, ts)) in new_global_bindings.iter_mut() {
+            if sort.canonicalize(value, &self.unionfind) {
+                *ts = self.timestamp;
+            }
         }
         self.global_bindings = new_global_bindings;
 
