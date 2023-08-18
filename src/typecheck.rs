@@ -888,7 +888,7 @@ impl EGraph {
                         );
                         let extracted = termdag.to_string(&expr);
                         log::info!("extracted with cost {cost}: {}", extracted);
-                        println!("{}", extracted);
+                        self.print_msg(extracted);
                     } else {
                         if variants < 0 {
                             panic!("Cannot extract negative number of variants");
@@ -896,13 +896,15 @@ impl EGraph {
                         let extracted =
                             self.extract_variants(values[0], variants as usize, &mut termdag);
                         log::info!("extracted variants:");
-                        println!("(");
+                        let mut msg = String::default();
+                        msg += "(";
                         for expr in extracted {
                             let str = termdag.to_string(&expr);
                             log::info!("   {}", str);
-                            println!("   {}", str);
+                            msg += &format!("   {}", str);
                         }
-                        println!(")");
+                        msg += ")";
+                        self.print_msg(msg);
                     }
 
                     stack.truncate(new_len);

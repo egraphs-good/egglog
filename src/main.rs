@@ -72,7 +72,7 @@ fn main() {
             }
             log::logger().flush();
             if egraph.is_interactive_mode() {
-                eprintln!("(done)");
+                println!("(done)");
             }
         }
 

@@ -217,6 +217,7 @@ pub struct EGraph {
     pub global_bindings: HashMap<Symbol, (ArcSort, Value, u32)>,
     extract_report: Option<ExtractReport>,
     run_report: Option<RunReport>,
+    msgs: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -251,6 +252,7 @@ impl Default for EGraph {
             seminaive: true,
             extract_report: None,
             run_report: None,
+            msgs: Default::default(),
         };
         egraph.rulesets.insert("".into(), Default::default());
         egraph
@@ -996,18 +998,18 @@ impl EGraph {
             }
             NCommand::PrintTable(f, n) => {
                 let msg = self.print_function(f, n)?;
-                println!("{}", msg);
+                log::info!("Printing up to {n} tuples of table {f}");
                 msg
             }
             NCommand::PrintSize(f) => {
                 let msg = self.print_size(f)?;
-                println!("{}", msg);
+                log::info!("Printing size of table {f}");
                 msg
             }
             NCommand::Fail(c) => {
                 let result = self.run_command(*c, should_run);
                 if let Err(e) = result {
-                    eprintln!("Expect failure: {}", e);
+                    log::info!("Expect failure: {}", e);
                     "Command failed as expected".into()
                 } else {
                     return Err(Error::ExpectFail);
@@ -1185,7 +1187,6 @@ impl EGraph {
     }
 
     pub fn run_program(&mut self, program: Vec<Command>) -> Result<Vec<String>, Error> {
-        let mut msgs = vec![];
         let should_run = true;
 
         for command in program {
@@ -1193,17 +1194,13 @@ impl EGraph {
             // because push and pop create new scopes
             for processed in self.process_command(command, CompilerPassStop::All)? {
                 let msg = self.run_command(processed.command, should_run)?;
-                if !msg.is_empty() {
-                    log::info!("{}", msg);
-                }
-                msgs.push(msg);
+                self.print_msg(msg);
             }
         }
         log::logger().flush();
 
         // remove consecutive empty lines
-        msgs.dedup_by(|a, b| a.is_empty() && b.is_empty());
-        Ok(msgs)
+        Ok(self.flush_msgs())
     }
 
     // this is bad because we shouldn't inspect values like this, we should use type information
@@ -1251,6 +1248,15 @@ impl EGraph {
         let mut serialized = self.serialize(SerializeConfig::default());
         serialized.inline_leaves();
         serialized
+    }
+
+    pub(crate) fn print_msg(&mut self, msg: String) {
+        self.msgs.push(msg);
+    }
+
+    fn flush_msgs(&mut self) -> Vec<String> {
+        self.msgs.dedup_by(|a, b| a.is_empty() && b.is_empty());
+        std::mem::take(&mut self.msgs)
     }
 }
 
