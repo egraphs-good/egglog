@@ -897,11 +897,12 @@ impl EGraph {
                             self.extract_variants(values[0], variants as usize, &mut termdag);
                         log::info!("extracted variants:");
                         let mut msg = String::default();
-                        msg += "(";
+                        msg += "(\n";
+                        assert!(!extracted.is_empty());
                         for expr in extracted {
                             let str = termdag.to_string(&expr);
                             log::info!("   {}", str);
-                            msg += &format!("   {}", str);
+                            msg += &format!("   {}\n", str);
                         }
                         msg += ")";
                         self.print_msg(msg);

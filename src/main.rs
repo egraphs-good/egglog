@@ -60,7 +60,11 @@ fn main() {
         for line in BufReader::new(stdin).lines() {
             match line {
                 Ok(line_str) => match egraph.parse_and_run_program(&line_str) {
-                    Ok(_msgs) => {}
+                    Ok(msgs) => {
+                        for msg in msgs {
+                            println!("{msg}");
+                        }
+                    }
                     Err(err) => {
                         log::error!("{}", err);
                     }
@@ -110,7 +114,11 @@ fn main() {
             println!("{}", desugared_str);
         } else {
             match egraph.parse_and_run_program(&program) {
-                Ok(_msgs) => {}
+                Ok(msgs) => {
+                    for msg in msgs {
+                        println!("{msg}");
+                    }
+                }
                 Err(err) => {
                     log::error!("{}", err);
                     std::process::exit(1)

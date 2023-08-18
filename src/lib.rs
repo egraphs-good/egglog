@@ -516,7 +516,8 @@ impl EGraph {
         Ok((terms, termdag))
     }
 
-    pub fn print_function(&mut self, sym: Symbol, n: usize) -> Result<String, Error> {
+    pub fn print_function(&mut self, sym: Symbol, n: usize) -> Result<(), Error> {
+        log::info!("Printing up to {n} tuples of table {sym}: ");
         let (terms_with_outputs, termdag) = self.function_to_dag(sym, n)?;
         let f = self
             .functions
@@ -526,20 +527,34 @@ impl EGraph {
 
         let mut buf = String::new();
         let s = &mut buf;
+        s.push_str("(\n");
+        if terms_with_outputs.is_empty() {
+            log::info!("   (none)");
+        }
         for (term, output) in terms_with_outputs {
-            write!(s, "{}", termdag.to_string(&term)).unwrap();
-            if !out_is_unit {
-                write!(s, " -> {}", termdag.to_string(&output)).unwrap();
-            }
+            let tuple_str = format!(
+                "   {}{}",
+                termdag.to_string(&term),
+                if !out_is_unit {
+                    termdag.to_string(&output)
+                } else {
+                    "".into()
+                },
+            );
+            log::info!("{}", tuple_str);
+            s.push_str(&tuple_str);
             s.push('\n');
         }
-
-        Ok(buf)
+        s.push_str(")\n");
+        self.print_msg(buf);
+        Ok(())
     }
 
-    pub fn print_size(&self, sym: Symbol) -> Result<String, Error> {
+    pub fn print_size(&mut self, sym: Symbol) -> Result<(), Error> {
         let f = self.functions.get(&sym).ok_or(TypeError::Unbound(sym))?;
-        Ok(format!("Function {} has size {}", sym, f.nodes.len()))
+        log::info!("Function {} has size {}", sym, f.nodes.len());
+        self.print_msg(f.nodes.len().to_string());
+        Ok(())
     }
 
     // returns whether the egraph was updated
@@ -890,7 +905,7 @@ impl EGraph {
         }
     }
 
-    fn run_command(&mut self, command: NCommand, should_run: bool) -> Result<String, Error> {
+    fn run_command(&mut self, command: NCommand, should_run: bool) -> Result<(), Error> {
         let pre_rebuild = Instant::now();
         self.extract_report = None;
         self.run_report = None;
@@ -906,21 +921,21 @@ impl EGraph {
 
         self.extract_report = None;
         self.run_report = None;
-        let res = Ok(match command {
+        match command {
             NCommand::SetOption { name, value } => {
                 let str = format!("Set option {} to {}", name, value);
                 self.set_option(name.into(), value);
-                str
+                log::info!("{}", str)
             }
             // Sorts are already declared during typechecking
-            NCommand::Sort(name, _presort_and_args) => format!("Declared sort {}.", name),
+            NCommand::Sort(name, _presort_and_args) => log::info!("Declared sort {}.", name),
             NCommand::Function(fdecl) => {
                 self.declare_function(&fdecl)?;
-                format!("Declared function {}.", fdecl.name)
+                log::info!("Declared function {}.", fdecl.name)
             }
             NCommand::AddRuleset(name) => {
                 self.add_ruleset(name);
-                format!("Declared ruleset {name}.")
+                log::info!("Declared ruleset {name}.");
             }
             NCommand::NormRule {
                 ruleset,
@@ -928,25 +943,25 @@ impl EGraph {
                 name,
             } => {
                 self.add_rule(rule.to_rule(), ruleset)?;
-                format!("Declared rule {name}.")
+                log::info!("Declared rule {name}.")
             }
             NCommand::RunSchedule(sched) => {
                 if should_run {
                     self.run_report = Some(self.run_schedule(&sched));
-                    format!("Ran schedule {}.", sched)
+                    log::info!("Ran schedule {}.", sched)
                 } else {
-                    "Skipping schedule.".to_string()
+                    log::warn!("Skipping schedule.")
                 }
             }
             NCommand::Check(facts) => {
                 if should_run {
                     self.check_facts(&facts)?;
-                    "Checked.".into()
+                    log::info!("Checked fact {:?}.", facts);
                 } else {
-                    "Skipping check.".into()
+                    log::warn!("Skipping check.")
                 }
             }
-            NCommand::CheckProof => "TODO implement proofs".into(),
+            NCommand::CheckProof => log::error!("TODO implement proofs"),
             NCommand::NormAction(action) => {
                 if should_run {
                     match &action {
@@ -981,36 +996,30 @@ impl EGraph {
                             self.eval_actions(std::slice::from_ref(&action.to_action()))?;
                         }
                     }
-                    "".to_string()
                 } else {
-                    format!("Skipping running {action}.")
+                    log::warn!("Skipping running {action}.")
                 }
             }
             NCommand::Push(n) => {
                 (0..n).for_each(|_| self.push());
-                format!("Pushed {n} levels.")
+                log::info!("Pushed {n} levels.")
             }
             NCommand::Pop(n) => {
                 for _ in 0..n {
                     self.pop()?;
                 }
-                format!("Popped {n} levels.")
+                log::info!("Popped {n} levels.")
             }
             NCommand::PrintTable(f, n) => {
-                let msg = self.print_function(f, n)?;
-                log::info!("Printing up to {n} tuples of table {f}");
-                msg
+                self.print_function(f, n)?;
             }
             NCommand::PrintSize(f) => {
-                let msg = self.print_size(f)?;
-                log::info!("Printing size of table {f}");
-                msg
+                self.print_size(f)?;
             }
             NCommand::Fail(c) => {
                 let result = self.run_command(*c, should_run);
                 if let Err(e) = result {
-                    log::info!("Expect failure: {}", e);
-                    "Command failed as expected".into()
+                    log::info!("Command failed as expected: {}", e);
                 } else {
                     return Err(Error::ExpectFail);
                 }
@@ -1066,7 +1075,7 @@ impl EGraph {
                     });
                 }
                 self.eval_actions(&actions)?;
-                format!("Read {} facts into {name} from '{file}'.", actions.len())
+                log::info!("Read {} facts into {name} from '{file}'.", actions.len())
             }
             NCommand::Output { file, exprs } => {
                 let mut filename = self.fact_directory.clone().unwrap_or_default();
@@ -1086,11 +1095,10 @@ impl EGraph {
                         .map_err(|e| Error::IoError(filename.clone(), e))?;
                 }
 
-                format!("Output to '{filename:?}'.")
+                log::info!("Output to '{filename:?}'.")
             }
-        });
-
-        res
+        };
+        Ok(())
     }
 
     pub fn clear(&mut self) {
@@ -1193,8 +1201,7 @@ impl EGraph {
             // Important to process each command individually
             // because push and pop create new scopes
             for processed in self.process_command(command, CompilerPassStop::All)? {
-                let msg = self.run_command(processed.command, should_run)?;
-                self.print_msg(msg);
+                self.run_command(processed.command, should_run)?;
             }
         }
         log::logger().flush();
