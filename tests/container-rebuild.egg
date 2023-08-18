@@ -55,3 +55,26 @@
 ;; rebuilding creates (MyVec v2)
 (check (= (MyVec v1) (MyVec v2)))
 (pop)
+
+(push)
+(datatype Math
+  (Add i64 i64)
+  (Expensive :cost 100))
+
+(sort MathVec (Vec Math))
+
+(let myvec (vec-of (Expensive)))
+(let cheapvec (vec-of (Add 1 2)))
+
+(function VecContainer (MathVec) Math)
+
+(let myvecontainer (VecContainer cheapvec))
+
+
+(union myvecontainer (Expensive))
+
+;; (vec-push (vec-empty) (VecContainer (vec-push (vec-empty) (Add 1 2))))
+;; should have cost 4
+(extract myvec 0)
+
+(pop)
