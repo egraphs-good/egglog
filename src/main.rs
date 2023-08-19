@@ -29,6 +29,7 @@ struct Args {
     to_svg: bool,
 }
 
+#[allow(clippy::disallowed_macros)]
 fn main() {
     env_logger::Builder::new()
         .filter_level(log::LevelFilter::Info)
@@ -60,7 +61,11 @@ fn main() {
         for line in BufReader::new(stdin).lines() {
             match line {
                 Ok(line_str) => match egraph.parse_and_run_program(&line_str) {
-                    Ok(_msgs) => {}
+                    Ok(msgs) => {
+                        for msg in msgs {
+                            println!("{msg}");
+                        }
+                    }
                     Err(err) => {
                         log::error!("{}", err);
                     }
@@ -72,7 +77,7 @@ fn main() {
             }
             log::logger().flush();
             if egraph.is_interactive_mode() {
-                eprintln!("(done)");
+                println!("(done)");
             }
         }
 
@@ -110,7 +115,11 @@ fn main() {
             println!("{}", desugared_str);
         } else {
             match egraph.parse_and_run_program(&program) {
-                Ok(_msgs) => {}
+                Ok(msgs) => {
+                    for msg in msgs {
+                        println!("{msg}");
+                    }
+                }
                 Err(err) => {
                     log::error!("{}", err);
                     std::process::exit(1)
