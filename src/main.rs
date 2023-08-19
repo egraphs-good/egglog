@@ -29,6 +29,7 @@ struct Args {
     to_svg: bool,
 }
 
+#[allow(clippy::disallowed_macros)]
 fn main() {
     env_logger::Builder::new()
         .filter_level(log::LevelFilter::Info)

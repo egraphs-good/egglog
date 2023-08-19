@@ -5,3 +5,12 @@ disallowed-types = [
     # prefer instant crate, it works on wasm
     "std::time::Instant",
 ]
+
+disallowed-macros = [
+    # only allowed in main.rs
+    "std::print",
+    "std::println",
+    # use log crate instead
+    "std::eprint",
+    "std::eprintln",
+]
