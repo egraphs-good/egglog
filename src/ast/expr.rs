@@ -171,6 +171,15 @@ impl Expr {
             }
         }
     }
+
+    pub fn vars(&self) -> impl Iterator<Item = Symbol> + '_ {
+        let iterator: Box<dyn Iterator<Item = Symbol>> = match self {
+            Expr::Lit(_) => Box::new(std::iter::empty()),
+            Expr::Var(v) => Box::new(std::iter::once(*v)),
+            Expr::Call(_, exprs) => Box::new(exprs.iter().flat_map(|e| e.vars())),
+        };
+        iterator
+    }
 }
 
 impl Display for NormExpr {
