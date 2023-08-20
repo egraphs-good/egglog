@@ -375,9 +375,9 @@ fn add_semi_naive_rule(desugar: &mut Desugar, rule: Rule) -> Option<Rule> {
     for head_slice in new_rule.head.iter_mut().rev() {
         match head_slice {
             Action::Set(_, _, expr) => {
+                var_set.extend(expr.vars());
                 if let Expr::Call(_, _) = expr {
                     add_new_rule = true;
-                    var_set.extend(expr.vars());
 
                     let fresh_symbol = desugar.get_fresh();
                     let fresh_var = Expr::Var(fresh_symbol);
@@ -386,9 +386,9 @@ fn add_semi_naive_rule(desugar: &mut Desugar, rule: Rule) -> Option<Rule> {
                 };
             }
             Action::Let(symbol, expr) if var_set.contains(symbol) => {
+                var_set.extend(expr.vars());
                 if let Expr::Call(_, _) = expr {
                     add_new_rule = true;
-                    var_set.extend(expr.vars());
 
                     let var = Expr::Var(*symbol);
                     new_head_atoms.push(Fact::Eq(vec![var, expr.clone()]));
