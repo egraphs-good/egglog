@@ -113,9 +113,7 @@ impl TermDag {
         let id = self.lookup(term);
         // use a stack to avoid stack overflow
         let mut stack = vec![id];
-        while !stack.is_empty() {
-            let next = stack.pop().unwrap();
-
+        while let Some(next) = stack.pop() {
             match self.nodes[next].clone() {
                 Term::App(name, children) => {
                     if seen.contains(&next) {
