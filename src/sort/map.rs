@@ -119,19 +119,33 @@ impl Sort for MapSort {
         });
     }
 
-    fn make_expr(&self, egraph: &EGraph, value: Value) -> Expr {
+    fn make_expr(&self, egraph: &EGraph, value: Value) -> (Cost, Expr) {
+        let mut termdag = TermDag::default();
+        let extractor = Extractor::new(egraph, &mut termdag);
+        self.extract_expr(egraph, value, &extractor, &mut termdag)
+            .expect("Extraction should be successful since extractor has been fully initialized")
+    }
+
+    fn extract_expr(
+        &self,
+        _egraph: &EGraph,
+        value: Value,
+        extractor: &Extractor,
+        termdag: &mut TermDag,
+    ) -> Option<(Cost, Expr)> {
         let map = ValueMap::load(self, &value);
         let mut expr = Expr::call("map-empty", []);
-        let mut termdag = TermDag::default();
+        let mut cost = 0usize;
         for (k, v) in map.iter().rev() {
-            let k = egraph.extract(*k, &mut termdag, &self.key).1;
-            let v = egraph.extract(*v, &mut termdag, &self.value).1;
+            let k = extractor.find_best(*k, termdag, &self.key)?;
+            let v = extractor.find_best(*v, termdag, &self.value)?;
+            cost = cost.saturating_add(k.0).saturating_add(v.0);
             expr = Expr::call(
                 "map-insert",
-                [expr, termdag.term_to_expr(&k), termdag.term_to_expr(&v)],
+                [expr, termdag.term_to_expr(&k.1), termdag.term_to_expr(&v.1)],
             )
         }
-        expr
+        Some((cost, expr))
     }
 }
 

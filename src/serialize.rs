@@ -156,7 +156,7 @@ impl EGraph {
                         log::warn!("{} is a container sort", sort.name());
                         sort.name().to_string()
                     } else {
-                        sort.make_expr(self, *value).to_string()
+                        sort.make_expr(self, *value).1.to_string()
                     };
                     egraph.nodes.insert(
                         node_id.clone(),

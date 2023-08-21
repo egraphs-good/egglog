@@ -371,10 +371,11 @@ impl EGraph {
         }
 
         // now update global bindings
-        let mut new_global_bindings = self.global_bindings.clone();
-        for (_sym, (_sort, value, ts)) in new_global_bindings.iter_mut() {
-            *value = self.bad_find_value(*value);
-            *ts = self.timestamp;
+        let mut new_global_bindings = std::mem::take(&mut self.global_bindings);
+        for (_sym, (sort, value, ts)) in new_global_bindings.iter_mut() {
+            if sort.canonicalize(value, &self.unionfind) {
+                *ts = self.timestamp;
+            }
         }
         self.global_bindings = new_global_bindings;
 
@@ -496,18 +497,19 @@ impl EGraph {
             let mut children = Vec::new();
             for (a, a_type) in ins.iter().copied().zip(&schema.input) {
                 if a_type.is_eq_sort() {
-                    children.push(extractor.find_best(a, &mut termdag, a_type).1);
+                    children.push(extractor.find_best(a, &mut termdag, a_type).unwrap().1);
                 } else {
-                    children.push(termdag.expr_to_term(&a_type.make_expr(self, a)));
+                    children.push(termdag.expr_to_term(&a_type.make_expr(self, a).1));
                 };
             }
 
             let out = if schema.output.is_eq_sort() {
                 extractor
                     .find_best(out.value, &mut termdag, &schema.output)
+                    .unwrap()
                     .1
             } else {
-                termdag.expr_to_term(&schema.output.make_expr(self, out.value))
+                termdag.expr_to_term(&schema.output.make_expr(self, out.value).1)
             };
             terms.push((termdag.make(sym, children), out));
         }

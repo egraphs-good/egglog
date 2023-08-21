@@ -300,7 +300,14 @@ impl Function {
     ) -> Result<(usize, Vec<DeferredMerge>), Error> {
         // Make sure indexes are up to date.
         self.update_indexes(self.nodes.num_offsets());
-        if self.schema.input.iter().all(|s| !s.is_eq_sort()) && !self.schema.output.is_eq_sort() {
+        if self
+            .schema
+            .input
+            .iter()
+            .all(|s| !s.is_eq_sort() && !s.is_eq_container_sort())
+            && !self.schema.output.is_eq_sort()
+            && !self.schema.output.is_eq_container_sort()
+        {
             return Ok((std::mem::take(&mut self.updates), Default::default()));
         }
         let mut deferred_merges = Vec::new();

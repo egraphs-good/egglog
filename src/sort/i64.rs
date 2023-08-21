@@ -61,9 +61,9 @@ impl Sort for I64Sort {
 
     }
 
-    fn make_expr(&self, _egraph: &EGraph, value: Value) -> Expr {
+    fn make_expr(&self, _egraph: &EGraph, value: Value) -> (Cost, Expr) {
         assert!(value.tag == self.name());
-        Expr::Lit(Literal::Int(value.bits as _))
+        (1, Expr::Lit(Literal::Int(value.bits as _)))
     }
 }
 
