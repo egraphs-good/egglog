@@ -4,6 +4,9 @@ use crate::{
     Symbol,
 };
 
+/// Like [`Expr`]s but with sharing and deduplication.
+///
+/// Terms refer to their children indirectly as indexes into an ambient [`TermDag`].
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Term {
     Lit(Literal),
@@ -11,8 +14,15 @@ pub enum Term {
     App(Symbol, Vec<usize>),
 }
 
+/// A hashconsing arena for [`Term`]s.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct TermDag {
+    // think of nodes as a map from indices to Terms.
+    // invariant: the nodes map and the hashcons map are inverses.
+    // note that this implies:
+    // - no duplicates in nodes
+    // - every element of node is a key in hashcons
+    // - every key of hashcons is in nodes
     pub nodes: Vec<Term>,
     pub hashcons: HashMap<Term, usize>,
 }
@@ -41,20 +51,28 @@ macro_rules! match_term_app {
 }
 
 impl TermDag {
+    /// Returns the number of nodes in this DAG.
     pub fn size(&self) -> usize {
         self.nodes.len()
     }
 
-    // users can't construct a termnode, so just
-    // look it up
+    /// Convert the given term to its index.
+    ///
+    /// Panics if the term does not already exist in this [TermDag].
     pub fn lookup(&self, node: &Term) -> usize {
         *self.hashcons.get(node).unwrap()
     }
 
+    /// Convert the given index to the corresponding term.
+    ///
+    /// Panics if the index is not valid.
     pub fn get(&self, idx: usize) -> Term {
         self.nodes[idx].clone()
     }
 
+    /// Creates a [`Term::App`] in this DAG with the given head symbol and children.
+    ///
+    /// Panics if any of the children are not already in the DAG.
     pub fn make(&mut self, sym: Symbol, children: Vec<Term>) -> Term {
         let node = Term::App(sym, children.iter().map(|c| self.lookup(c)).collect());
 
@@ -71,6 +89,11 @@ impl TermDag {
         }
     }
 
+    /// Recursively converts the given expression to a term.
+    ///
+    /// This involves inserting every subexpression into this DAG. Because
+    /// TermDags are hashconsed, the resulting term is guarantee to maximally
+    /// share subterms.
     pub fn expr_to_term(&mut self, expr: &Expr) -> Term {
         let res = match expr {
             Expr::Lit(lit) => Term::Lit(lit.clone()),
@@ -90,7 +113,10 @@ impl TermDag {
         res
     }
 
-    pub fn term_to_expr(&mut self, term: &Term) -> Expr {
+    /// Recursively converts the given term to an expression.
+    ///
+    /// Panics if the term contains subterms that are not in the DAG.
+    pub fn term_to_expr(&self, term: &Term) -> Expr {
         match term {
             Term::Lit(lit) => Expr::Lit(lit.clone()),
             Term::Var(v) => Expr::Var(*v),
@@ -107,6 +133,9 @@ impl TermDag {
         }
     }
 
+    /// Converts the given term to a string.
+    ///
+    /// Panics if the term or any of its subterms are not in the DAG.
     pub fn to_string(&self, term: &Term) -> String {
         let mut stored = HashMap::<usize, String>::default();
         let mut seen = HashSet::<usize>::default();
