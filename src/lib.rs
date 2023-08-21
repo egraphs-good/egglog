@@ -536,7 +536,7 @@ impl EGraph {
                 "   {}{}",
                 termdag.to_string(&term),
                 if !out_is_unit {
-                    termdag.to_string(&output)
+                    format!(" -> {}", termdag.to_string(&output))
                 } else {
                     "".into()
                 },
