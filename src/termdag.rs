@@ -4,14 +4,18 @@ use crate::{
     Symbol,
 };
 
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct TermId(usize);
+
 /// Like [`Expr`]s but with sharing and deduplication.
 ///
-/// Terms refer to their children indirectly as indexes into an ambient [`TermDag`].
+/// Terms refer to their children indirectly via opaque [TermId]s (internally
+/// these are just `usize`s) that map into an ambient [`TermDag`].
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Term {
     Lit(Literal),
     Var(Symbol),
-    App(Symbol, Vec<usize>),
+    App(Symbol, Vec<TermId>),
 }
 
 /// A hashconsing arena for [`Term`]s.
@@ -24,7 +28,7 @@ pub struct TermDag {
     // - every element of node is a key in hashcons
     // - every key of hashcons is in nodes
     pub nodes: Vec<Term>,
-    pub hashcons: HashMap<Term, usize>,
+    pub hashcons: HashMap<Term, TermId>,
 }
 
 #[macro_export]
@@ -56,18 +60,18 @@ impl TermDag {
         self.nodes.len()
     }
 
-    /// Convert the given term to its index.
+    /// Convert the given term to its id.
     ///
     /// Panics if the term does not already exist in this [TermDag].
-    pub fn lookup(&self, node: &Term) -> usize {
+    pub fn lookup(&self, node: &Term) -> TermId {
         *self.hashcons.get(node).unwrap()
     }
 
-    /// Convert the given index to the corresponding term.
+    /// Convert the given id to the corresponding term.
     ///
-    /// Panics if the index is not valid.
-    pub fn get(&self, idx: usize) -> Term {
-        self.nodes[idx].clone()
+    /// Panics if the id is not valid.
+    pub fn get(&self, id: TermId) -> Term {
+        self.nodes[id.0].clone()
     }
 
     /// Make and return a [`Term::App`] with the given head symbol and children,
@@ -82,11 +86,31 @@ impl TermDag {
         node
     }
 
+    /// Make and return a [`Term::Lit`] with the given literal, and insert into
+    /// the DAG if it is not already present.
+    pub fn lit(&mut self, lit: Literal) -> Term {
+        let node = Term::Lit(lit);
+
+        self.add_node(&node);
+
+        node
+    }
+
+    /// Make and return a [`Term::Var`] with the given symbol, and insert into
+    /// the DAG if it is not already present.
+    pub fn var(&mut self, sym: Symbol) -> Term {
+        let node = Term::Var(sym);
+
+        self.add_node(&node);
+
+        node
+    }
+
     fn add_node(&mut self, node: &Term) {
         if self.hashcons.get(node).is_none() {
             let idx = self.nodes.len();
             self.nodes.push(node.clone());
-            self.hashcons.insert(node.clone(), idx);
+            self.hashcons.insert(node.clone(), TermId(idx));
         }
     }
 
@@ -138,13 +162,13 @@ impl TermDag {
     ///
     /// Panics if the term or any of its subterms are not in the DAG.
     pub fn to_string(&self, term: &Term) -> String {
-        let mut stored = HashMap::<usize, String>::default();
-        let mut seen = HashSet::<usize>::default();
+        let mut stored = HashMap::<TermId, String>::default();
+        let mut seen = HashSet::<TermId>::default();
         let id = self.lookup(term);
         // use a stack to avoid stack overflow
         let mut stack = vec![id];
         while let Some(next) = stack.pop() {
-            match self.nodes[next].clone() {
+            match self.nodes[next.0].clone() {
                 Term::App(name, children) => {
                     if seen.contains(&next) {
                         let mut str = String::new();
