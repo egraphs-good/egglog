@@ -127,7 +127,7 @@ fn main() {
                             .map_location(|byte_offset| {
                                 let byte_offset = byte_offset - program_offset;
                                 let (line_num, sum_offset) = std::iter::once(0)
-                                    .chain(program.split_inclusive('\n').scan(
+                                    .chain(program[program_offset..].split_inclusive('\n').scan(
                                         0,
                                         |sum_offset, l| {
                                             *sum_offset += l.len();
