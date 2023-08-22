@@ -70,7 +70,8 @@ impl TermDag {
         self.nodes[idx].clone()
     }
 
-    /// Creates a [`Term::App`] in this DAG with the given head symbol and children.
+    /// Make and return a [`Term::App`] with the given head symbol and children,
+    /// and insert into the DAG if it is not already present.
     ///
     /// Panics if any of the children are not already in the DAG.
     pub fn make(&mut self, sym: Symbol, children: Vec<Term>) -> Term {
