@@ -74,7 +74,7 @@ impl TermDag {
     /// and insert into the DAG if it is not already present.
     ///
     /// Panics if any of the children are not already in the DAG.
-    pub fn make(&mut self, sym: Symbol, children: Vec<Term>) -> Term {
+    pub fn app(&mut self, sym: Symbol, children: Vec<Term>) -> Term {
         let node = Term::App(sym, children.iter().map(|c| self.lookup(c)).collect());
 
         self.add_node(&node);

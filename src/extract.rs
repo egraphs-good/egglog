@@ -120,7 +120,7 @@ impl<'a> Extractor<'a> {
             children.push(self.find_best(*value, termdag, arcsort)?.1)
         }
 
-        Some(termdag.make(node.sym, children))
+        Some(termdag.app(node.sym, children))
     }
 
     pub fn find_best(
@@ -172,7 +172,7 @@ impl<'a> Extractor<'a> {
                         if let Some((term_inputs, new_cost)) =
                             self.node_total_cost(func, inputs, termdag)
                         {
-                            let make_new_pair = || (new_cost, termdag.make(sym, term_inputs));
+                            let make_new_pair = || (new_cost, termdag.app(sym, term_inputs));
 
                             let id = self.find(&output.value);
                             match self.costs.entry(id) {
