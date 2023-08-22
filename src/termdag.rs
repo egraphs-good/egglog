@@ -97,7 +97,7 @@ impl TermDag {
     /// This involves inserting every subexpression into this DAG. Because
     /// TermDags are hashconsed, the resulting term is guaranteed to maximally
     /// share subterms.
-    pub fn expr_to_term(&self, expr: &Expr) -> Term {
+    pub fn expr_to_term(&mut self, expr: &Expr) -> Term {
         let res = match expr {
             Expr::Lit(lit) => Term::Lit(lit.clone()),
             Expr::Var(v) => Term::Var(*v),
