@@ -193,3 +193,24 @@ impl Display for Expr {
         write!(f, "{}", self.to_sexp())
     }
 }
+
+// currently only used for testing, but no reason it couldn't be used elsewhere later
+#[cfg(test)]
+pub(crate) fn parse_expr(s: &str) -> Result<Expr, lalrpop_util::ParseError<usize, String, String>> {
+    let parser = ast::parse::ExprParser::new();
+    parser
+        .parse(s)
+        .map_err(|e| e.map_token(|tok| tok.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parser_display_roundtrip() {
+        let s = r#"(f (g a 3) 4.0 (H "hello"))"#;
+        let e = parse_expr(s).unwrap();
+        assert_eq!(format!("{}", e), s);
+    }
+}

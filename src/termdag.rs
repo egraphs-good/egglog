@@ -198,3 +198,81 @@ impl TermDag {
         stored.get(&id).unwrap().clone()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::ast;
+
+    use super::*;
+
+    fn parse_term(s: &str) -> (TermDag, Term) {
+        let e = crate::ast::parse_expr(s).unwrap();
+        let mut td = TermDag::default();
+        let t = td.expr_to_term(&e);
+        (td, t)
+    }
+
+    #[test]
+    fn test_to_from_expr() {
+        let s = r#"(f (g x y) x y (g x y))"#;
+        let e = crate::ast::parse_expr(s).unwrap();
+        let mut td = TermDag::default();
+        assert_eq!(td.size(), 0);
+        let t = td.expr_to_term(&e);
+        assert_eq!(td.size(), 4);
+        // the expression above has 4 distinct subterms.
+        // in left-to-right, depth-first order, they are:
+        //     x, y, (g x y), and the root call to f
+        // so we can compute expected answer by hand:
+        assert_eq!(
+            td.nodes,
+            vec![
+                Term::Var("x".into()),
+                Term::Var("y".into()),
+                Term::App("g".into(), vec![0, 1].into_iter().map(TermId).collect()),
+                Term::App(
+                    "f".into(),
+                    vec![2, 0, 1, 2].into_iter().map(TermId).collect()
+                ),
+            ]
+        );
+        let e2 = td.term_to_expr(&t);
+        assert_eq!(e, e2); // roundtrip
+    }
+
+    #[test]
+    fn test_match_term_app() {
+        let s = r#"(f (g x y) x y (g x y))"#;
+        let (td, t) = parse_term(s);
+        match_term_app!(t; {
+            ("f", [_, x, _, _]) =>
+                assert_eq!(td.term_to_expr(&td.get(*x)), ast::Expr::Var(Symbol::new("x")))
+        })
+    }
+
+    #[test]
+    fn test_to_string() {
+        let s = r#"(f (g x y) x y (g x y))"#;
+        let (td, t) = parse_term(s);
+        assert_eq!(td.to_string(&t), s);
+    }
+
+    #[test]
+    fn test_lookup() {
+        let s = r#"(f (g x y) x y (g x y))"#;
+        let (td, t) = parse_term(s);
+        assert_eq!(td.lookup(&t).0, td.size() - 1);
+    }
+
+    #[test]
+    fn test_app_var_lit() {
+        let s = r#"(f (g x y) x 7 (g x y))"#;
+        let (mut td, t) = parse_term(s);
+        let x = td.var("x".into());
+        let y = td.var("y".into());
+        let seven = td.lit(7.into());
+        let g = td.app("g".into(), vec![x.clone(), y.clone()]);
+        let t2 = td.app("f".into(), vec![g.clone(), x, seven, g]);
+        assert_eq!(t, t2);
+    }
+}
