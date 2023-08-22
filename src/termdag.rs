@@ -93,7 +93,7 @@ impl TermDag {
     /// Recursively converts the given expression to a term.
     ///
     /// This involves inserting every subexpression into this DAG. Because
-    /// TermDags are hashconsed, the resulting term is guarantee to maximally
+    /// TermDags are hashconsed, the resulting term is guaranteed to maximally
     /// share subterms.
     pub fn expr_to_term(&mut self, expr: &Expr) -> Term {
         let res = match expr {
