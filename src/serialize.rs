@@ -153,10 +153,10 @@ impl EGraph {
                         .collect();
                     // If this is a container sort, use the name, otherwise use the value
                     let op: String = if sort.is_container_sort() {
-                        println!("{} is a container sort", sort.name());
+                        log::warn!("{} is a container sort", sort.name());
                         sort.name().to_string()
                     } else {
-                        sort.make_expr(self, *value).to_string()
+                        sort.make_expr(self, *value).1.to_string()
                     };
                     egraph.nodes.insert(
                         node_id.clone(),

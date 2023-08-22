@@ -1,5 +1,5 @@
 use clap::Parser;
-use egglog::{CompilerPassStop, EGraph, SerializeConfig};
+use egglog::{CompilerPassStop, EGraph, Error, SerializeConfig};
 use std::io::{self, BufRead, BufReader};
 use std::path::PathBuf;
 
@@ -29,6 +29,7 @@ struct Args {
     to_svg: bool,
 }
 
+#[allow(clippy::disallowed_macros)]
 fn main() {
     env_logger::Builder::new()
         .filter_level(log::LevelFilter::Info)
@@ -60,7 +61,11 @@ fn main() {
         for line in BufReader::new(stdin).lines() {
             match line {
                 Ok(line_str) => match egraph.parse_and_run_program(&line_str) {
-                    Ok(_msgs) => {}
+                    Ok(msgs) => {
+                        for msg in msgs {
+                            println!("{msg}");
+                        }
+                    }
                     Err(err) => {
                         log::error!("{}", err);
                     }
@@ -72,7 +77,7 @@ fn main() {
             }
             log::logger().flush();
             if egraph.is_interactive_mode() {
-                eprintln!("(done)");
+                println!("(done)");
             }
         }
 
@@ -86,10 +91,11 @@ fn main() {
         });
         let mut egraph = mk_egraph();
         let already_enables = program_read.starts_with("(set-option enable_proofs 1)");
-        let program = if args.proofs && !already_enables {
-            format!("(set-option enable_proofs 1)\n{}", program_read)
+        let (program, program_offset) = if args.proofs && !already_enables {
+            let expr = "(set-option enable_proofs 1)\n";
+            (format!("{}{}", expr, program_read), expr.len())
         } else {
-            program_read
+            (program_read, 0)
         };
 
         if args.desugar || args.resugar {
@@ -110,8 +116,46 @@ fn main() {
             println!("{}", desugared_str);
         } else {
             match egraph.parse_and_run_program(&program) {
-                Ok(_msgs) => {}
+                Ok(msgs) => {
+                    for msg in msgs {
+                        println!("{msg}");
+                    }
+                }
                 Err(err) => {
+                    let err = match err {
+                        Error::ParseError(err) => err
+                            .map_location(|byte_offset| {
+                                let byte_offset = byte_offset - program_offset;
+                                let (line_num, sum_offset) = std::iter::once(0)
+                                    .chain(program[program_offset..].split_inclusive('\n').scan(
+                                        0,
+                                        |sum_offset, l| {
+                                            *sum_offset += l.len();
+
+                                            if *sum_offset > byte_offset {
+                                                None
+                                            } else {
+                                                Some(*sum_offset)
+                                            }
+                                        },
+                                    ))
+                                    .enumerate()
+                                    .last()
+                                    // No panic because of the initial 0
+                                    .unwrap();
+                                {
+                                    format!(
+                                        "{}:{}:{}",
+                                        input.display(),
+                                        line_num + 1,
+                                        // TODO: Show utf8 aware character count
+                                        byte_offset - sum_offset + 1
+                                    )
+                                }
+                            })
+                            .to_string(),
+                        err => err.to_string(),
+                    };
                     log::error!("{}", err);
                     std::process::exit(1)
                 }

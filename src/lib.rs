@@ -217,6 +217,7 @@ pub struct EGraph {
     pub global_bindings: HashMap<Symbol, (ArcSort, Value, u32)>,
     extract_report: Option<ExtractReport>,
     run_report: Option<RunReport>,
+    msgs: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -251,6 +252,7 @@ impl Default for EGraph {
             seminaive: true,
             extract_report: None,
             run_report: None,
+            msgs: Default::default(),
         };
         egraph.rulesets.insert("".into(), Default::default());
         egraph
@@ -369,10 +371,11 @@ impl EGraph {
         }
 
         // now update global bindings
-        let mut new_global_bindings = self.global_bindings.clone();
-        for (_sym, (_sort, value, ts)) in new_global_bindings.iter_mut() {
-            *value = self.bad_find_value(*value);
-            *ts = self.timestamp;
+        let mut new_global_bindings = std::mem::take(&mut self.global_bindings);
+        for (_sym, (sort, value, ts)) in new_global_bindings.iter_mut() {
+            if sort.canonicalize(value, &self.unionfind) {
+                *ts = self.timestamp;
+            }
         }
         self.global_bindings = new_global_bindings;
 
@@ -494,18 +497,19 @@ impl EGraph {
             let mut children = Vec::new();
             for (a, a_type) in ins.iter().copied().zip(&schema.input) {
                 if a_type.is_eq_sort() {
-                    children.push(extractor.find_best(a, &mut termdag, a_type).1);
+                    children.push(extractor.find_best(a, &mut termdag, a_type).unwrap().1);
                 } else {
-                    children.push(termdag.expr_to_term(&a_type.make_expr(self, a)));
+                    children.push(termdag.expr_to_term(&a_type.make_expr(self, a).1));
                 };
             }
 
             let out = if schema.output.is_eq_sort() {
                 extractor
                     .find_best(out.value, &mut termdag, &schema.output)
+                    .unwrap()
                     .1
             } else {
-                termdag.expr_to_term(&schema.output.make_expr(self, out.value))
+                termdag.expr_to_term(&schema.output.make_expr(self, out.value).1)
             };
             terms.push((termdag.make(sym, children), out));
         }
@@ -514,7 +518,8 @@ impl EGraph {
         Ok((terms, termdag))
     }
 
-    pub fn print_function(&mut self, sym: Symbol, n: usize) -> Result<String, Error> {
+    pub fn print_function(&mut self, sym: Symbol, n: usize) -> Result<(), Error> {
+        log::info!("Printing up to {n} tuples of table {sym}: ");
         let (terms_with_outputs, termdag) = self.function_to_dag(sym, n)?;
         let f = self
             .functions
@@ -524,20 +529,34 @@ impl EGraph {
 
         let mut buf = String::new();
         let s = &mut buf;
+        s.push_str("(\n");
+        if terms_with_outputs.is_empty() {
+            log::info!("   (none)");
+        }
         for (term, output) in terms_with_outputs {
-            write!(s, "{}", termdag.to_string(&term)).unwrap();
-            if !out_is_unit {
-                write!(s, " -> {}", termdag.to_string(&output)).unwrap();
-            }
+            let tuple_str = format!(
+                "   {}{}",
+                termdag.to_string(&term),
+                if !out_is_unit {
+                    format!(" -> {}", termdag.to_string(&output))
+                } else {
+                    "".into()
+                },
+            );
+            log::info!("{}", tuple_str);
+            s.push_str(&tuple_str);
             s.push('\n');
         }
-
-        Ok(buf)
+        s.push_str(")\n");
+        self.print_msg(buf);
+        Ok(())
     }
 
-    pub fn print_size(&self, sym: Symbol) -> Result<String, Error> {
+    pub fn print_size(&mut self, sym: Symbol) -> Result<(), Error> {
         let f = self.functions.get(&sym).ok_or(TypeError::Unbound(sym))?;
-        Ok(format!("Function {} has size {}", sym, f.nodes.len()))
+        log::info!("Function {} has size {}", sym, f.nodes.len());
+        self.print_msg(f.nodes.len().to_string());
+        Ok(())
     }
 
     // returns whether the egraph was updated
@@ -888,7 +907,7 @@ impl EGraph {
         }
     }
 
-    fn run_command(&mut self, command: NCommand, should_run: bool) -> Result<String, Error> {
+    fn run_command(&mut self, command: NCommand, should_run: bool) -> Result<(), Error> {
         let pre_rebuild = Instant::now();
         self.extract_report = None;
         self.run_report = None;
@@ -904,21 +923,21 @@ impl EGraph {
 
         self.extract_report = None;
         self.run_report = None;
-        let res = Ok(match command {
+        match command {
             NCommand::SetOption { name, value } => {
                 let str = format!("Set option {} to {}", name, value);
                 self.set_option(name.into(), value);
-                str
+                log::info!("{}", str)
             }
             // Sorts are already declared during typechecking
-            NCommand::Sort(name, _presort_and_args) => format!("Declared sort {}.", name),
+            NCommand::Sort(name, _presort_and_args) => log::info!("Declared sort {}.", name),
             NCommand::Function(fdecl) => {
                 self.declare_function(&fdecl)?;
-                format!("Declared function {}.", fdecl.name)
+                log::info!("Declared function {}.", fdecl.name)
             }
             NCommand::AddRuleset(name) => {
                 self.add_ruleset(name);
-                format!("Declared ruleset {name}.")
+                log::info!("Declared ruleset {name}.");
             }
             NCommand::NormRule {
                 ruleset,
@@ -926,25 +945,25 @@ impl EGraph {
                 name,
             } => {
                 self.add_rule(rule.to_rule(), ruleset)?;
-                format!("Declared rule {name}.")
+                log::info!("Declared rule {name}.")
             }
             NCommand::RunSchedule(sched) => {
                 if should_run {
                     self.run_report = Some(self.run_schedule(&sched));
-                    format!("Ran schedule {}.", sched)
+                    log::info!("Ran schedule {}.", sched)
                 } else {
-                    "Skipping schedule.".to_string()
+                    log::warn!("Skipping schedule.")
                 }
             }
             NCommand::Check(facts) => {
                 if should_run {
                     self.check_facts(&facts)?;
-                    "Checked.".into()
+                    log::info!("Checked fact {:?}.", facts);
                 } else {
-                    "Skipping check.".into()
+                    log::warn!("Skipping check.")
                 }
             }
-            NCommand::CheckProof => "TODO implement proofs".into(),
+            NCommand::CheckProof => log::error!("TODO implement proofs"),
             NCommand::NormAction(action) => {
                 if should_run {
                     match &action {
@@ -979,36 +998,30 @@ impl EGraph {
                             self.eval_actions(std::slice::from_ref(&action.to_action()))?;
                         }
                     }
-                    "".to_string()
                 } else {
-                    format!("Skipping running {action}.")
+                    log::warn!("Skipping running {action}.")
                 }
             }
             NCommand::Push(n) => {
                 (0..n).for_each(|_| self.push());
-                format!("Pushed {n} levels.")
+                log::info!("Pushed {n} levels.")
             }
             NCommand::Pop(n) => {
                 for _ in 0..n {
                     self.pop()?;
                 }
-                format!("Popped {n} levels.")
+                log::info!("Popped {n} levels.")
             }
             NCommand::PrintTable(f, n) => {
-                let msg = self.print_function(f, n)?;
-                println!("{}", msg);
-                msg
+                self.print_function(f, n)?;
             }
             NCommand::PrintSize(f) => {
-                let msg = self.print_size(f)?;
-                println!("{}", msg);
-                msg
+                self.print_size(f)?;
             }
             NCommand::Fail(c) => {
                 let result = self.run_command(*c, should_run);
                 if let Err(e) = result {
-                    eprintln!("Expect failure: {}", e);
-                    "Command failed as expected".into()
+                    log::info!("Command failed as expected: {}", e);
                 } else {
                     return Err(Error::ExpectFail);
                 }
@@ -1064,7 +1077,7 @@ impl EGraph {
                     });
                 }
                 self.eval_actions(&actions)?;
-                format!("Read {} facts into {name} from '{file}'.", actions.len())
+                log::info!("Read {} facts into {name} from '{file}'.", actions.len())
             }
             NCommand::Output { file, exprs } => {
                 let mut filename = self.fact_directory.clone().unwrap_or_default();
@@ -1084,11 +1097,10 @@ impl EGraph {
                         .map_err(|e| Error::IoError(filename.clone(), e))?;
                 }
 
-                format!("Output to '{filename:?}'.")
+                log::info!("Output to '{filename:?}'.")
             }
-        });
-
-        res
+        };
+        Ok(())
     }
 
     pub fn clear(&mut self) {
@@ -1185,25 +1197,19 @@ impl EGraph {
     }
 
     pub fn run_program(&mut self, program: Vec<Command>) -> Result<Vec<String>, Error> {
-        let mut msgs = vec![];
         let should_run = true;
 
         for command in program {
             // Important to process each command individually
             // because push and pop create new scopes
             for processed in self.process_command(command, CompilerPassStop::All)? {
-                let msg = self.run_command(processed.command, should_run)?;
-                if !msg.is_empty() {
-                    log::info!("{}", msg);
-                }
-                msgs.push(msg);
+                self.run_command(processed.command, should_run)?;
             }
         }
         log::logger().flush();
 
         // remove consecutive empty lines
-        msgs.dedup_by(|a, b| a.is_empty() && b.is_empty());
-        Ok(msgs)
+        Ok(self.flush_msgs())
     }
 
     // this is bad because we shouldn't inspect values like this, we should use type information
@@ -1251,6 +1257,15 @@ impl EGraph {
         let mut serialized = self.serialize(SerializeConfig::default());
         serialized.inline_leaves();
         serialized
+    }
+
+    pub(crate) fn print_msg(&mut self, msg: String) {
+        self.msgs.push(msg);
+    }
+
+    fn flush_msgs(&mut self) -> Vec<String> {
+        self.msgs.dedup_by(|a, b| a.is_empty() && b.is_empty());
+        std::mem::take(&mut self.msgs)
     }
 }
 
