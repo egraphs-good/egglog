@@ -926,8 +926,6 @@ impl EGraph {
 
     fn run_command(&mut self, command: NCommand, should_run: bool) -> Result<(), Error> {
         let pre_rebuild = Instant::now();
-        self.extract_report = None;
-        self.run_report = None;
         let rebuild_num = self.rebuild()?;
         if rebuild_num > 0 {
             log::info!(
@@ -938,8 +936,6 @@ impl EGraph {
 
         self.debug_assert_invariants();
 
-        self.extract_report = None;
-        self.run_report = None;
         match command {
             NCommand::SetOption { name, value } => {
                 let str = format!("Set option {} to {}", name, value);
