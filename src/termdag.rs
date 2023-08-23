@@ -34,19 +34,13 @@ pub struct TermDag {
 #[macro_export]
 macro_rules! match_term_app {
     ($e:expr; { $(
-        ($head:expr, $args:pat) => $body:expr $(,)?
+        $p:pat => $body:expr $(,)?
     ),*}) => {
         match $e {
             Term::App(head, args) => {
-                $(
-                    if head.as_str() == $head {
-                        match args.as_slice() {
-                            $args => $body,
-                            _ => panic!("arg mismatch"),
-                        }
-                    } else
-                )* {
-                    panic!("Failed to match any of the heads of the patterns. Got: {}", head);
+                match (head.as_str(), args.as_slice()) {
+                    $($p => $body,)*
+                    _ => { panic!("Failed to match any of the heads of the patterns. Got: {}", head); }
                 }
             }
             _ => panic!("not an app")
