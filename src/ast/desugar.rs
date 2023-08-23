@@ -581,7 +581,6 @@ pub(crate) fn desugar_command(
         Command::RunSchedule(sched) => {
             vec![NCommand::RunSchedule(desugar_schedule(desugar, &sched))]
         }
-        // TODO add variants to extract action
         Command::Extract { variants, fact } => {
             let fresh = desugar.get_fresh();
             let fresh_ruleset = desugar.get_fresh();
