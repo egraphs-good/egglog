@@ -5,7 +5,7 @@ use crate::{
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct TermId(usize);
+pub struct TermId(pub usize);
 
 /// Like [`Expr`]s but with sharing and deduplication.
 ///
