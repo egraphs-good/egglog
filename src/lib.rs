@@ -281,9 +281,10 @@ impl EGraph {
     pub fn pop(&mut self) -> Result<(), Error> {
         match self.egraphs.pop() {
             Some(e) => {
-                // Copy the reports from the popped egraph
+                // Copy the reports and messages from the popped egraph
                 let extract_report = self.extract_report.clone();
                 let run_report = self.run_report.clone();
+                let messages = self.msgs.clone();
                 *self = e;
                 if let Some(report) = extract_report {
                     self.extract_report = Some(report);
@@ -291,6 +292,7 @@ impl EGraph {
                 if let Some(report) = run_report {
                     self.run_report = Some(report);
                 }
+                self.msgs.extend(messages);
                 Ok(())
             }
             None => Err(Error::Pop),
