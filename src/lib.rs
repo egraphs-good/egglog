@@ -511,7 +511,7 @@ impl EGraph {
             } else {
                 termdag.expr_to_term(&schema.output.make_expr(self, out.value).1)
             };
-            terms.push((termdag.make(sym, children), out));
+            terms.push((termdag.app(sym, children), out));
         }
         drop(extractor);
 

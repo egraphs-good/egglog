@@ -133,7 +133,7 @@ Schema: Schema = {
     <types:List<Type>> <output:Type> => Schema { input: types, output }
 }
 
-Expr: Expr = {
+pub Expr: Expr = {
     <Literal> => Expr::Lit(<>),
     <Ident> => Expr::Var(<>),
     <CallExpr> => <>,
