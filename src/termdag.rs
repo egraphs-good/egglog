@@ -33,15 +33,11 @@ pub struct TermDag {
 
 #[macro_export]
 macro_rules! match_term_app {
-    ($e:expr; { $(
-        $p:pat => $body:expr $(,)?
-    ),*}) => {
+    ($e:expr; $body:tt) => {
         match $e {
             Term::App(head, args) => {
-                match (head.as_str(), args.as_slice()) {
-                    $($p => $body,)*
-                    _ => { panic!("Failed to match any of the heads of the patterns. Got: {}", head); }
-                }
+                match (head.as_str(), args.as_slice())
+                    $body
             }
             _ => panic!("not an app")
         }
