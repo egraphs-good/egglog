@@ -1,4 +1,6 @@
-use crate::{proofs::RULE_PROOF_KEYWORD, *};
+use crate::*;
+
+pub const RULE_PROOF_KEYWORD: &str = "rule-proof";
 
 #[derive(Clone, Debug)]
 pub struct FuncType {
@@ -630,7 +632,7 @@ pub enum TypeError {
     #[error("Arity mismatch, expected {expected} args: {expr}")]
     Arity { expr: Expr, expected: usize },
     #[error(
-        "Type mismatch: expr = {expr}, expected = {}, actual = {}, reason: {reason}", 
+        "Type mismatch: expr = {expr}, expected = {}, actual = {}, reason: {reason}",
         .expected.name(), .actual.name(),
     )]
     Mismatch {
