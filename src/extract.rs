@@ -5,7 +5,7 @@ use crate::termdag::{Term, TermDag};
 use crate::util::HashMap;
 use crate::{ArcSort, EGraph, Function, Id, Value};
 
-type Cost = usize;
+pub type Cost = usize;
 
 #[derive(Debug)]
 pub(crate) struct Node<'a> {
@@ -13,8 +13,8 @@ pub(crate) struct Node<'a> {
     inputs: &'a [Value],
 }
 
-pub(crate) struct Extractor<'a> {
-    costs: HashMap<Id, (Cost, Term)>,
+pub struct Extractor<'a> {
+    pub costs: HashMap<Id, (Cost, Term)>,
     ctors: Vec<Symbol>,
     egraph: &'a EGraph,
 }
@@ -31,7 +31,29 @@ impl EGraph {
     }
 
     pub fn extract(&self, value: Value, termdag: &mut TermDag, arcsort: &ArcSort) -> (Cost, Term) {
-        Extractor::new(self, termdag).find_best(value, termdag, arcsort)
+        let extractor = Extractor::new(self, termdag);
+        extractor
+            .find_best(value, termdag, arcsort)
+            .unwrap_or_else(|| {
+                log::error!("No cost for {:?}", value);
+                for func in self.functions.values() {
+                    for (inputs, output) in func.nodes.iter() {
+                        if output.value == value {
+                            log::error!("Found unextractable function: {:?}", func.decl.name);
+                            log::error!("Inputs: {:?}", inputs);
+                            log::error!(
+                                "{:?}",
+                                inputs
+                                    .iter()
+                                    .map(|input| extractor.costs.get(&extractor.find(input)))
+                                    .collect::<Vec<_>>()
+                            );
+                        }
+                    }
+                }
+
+                panic!("No cost for {:?}", value)
+            })
     }
 
     pub fn extract_variants(
@@ -57,7 +79,9 @@ impl EGraph {
                     .filter_map(|(inputs, output)| {
                         (&output.value == output_value).then(|| {
                             let node = Node { sym, inputs };
-                            ext.expr_from_node(&node, termdag)
+                            ext.expr_from_node(&node, termdag).expect(
+                                "extract_variants should be called after extractor initialization",
+                            )
                         })
                     })
                     .collect()
@@ -89,46 +113,29 @@ impl<'a> Extractor<'a> {
         extractor
     }
 
-    fn expr_from_node(&self, node: &Node, termdag: &mut TermDag) -> Term {
+    fn expr_from_node(&self, node: &Node, termdag: &mut TermDag) -> Option<Term> {
         let mut children = vec![];
         for value in node.inputs {
             let arcsort = self.egraph.get_sort(value).unwrap();
-            children.push(self.find_best(*value, termdag, arcsort).1)
+            children.push(self.find_best(*value, termdag, arcsort)?.1)
         }
 
-        termdag.make(node.sym, children)
+        Some(termdag.app(node.sym, children))
     }
 
-    pub fn find_best(&self, value: Value, termdag: &mut TermDag, sort: &ArcSort) -> (Cost, Term) {
+    pub fn find_best(
+        &self,
+        value: Value,
+        termdag: &mut TermDag,
+        sort: &ArcSort,
+    ) -> Option<(Cost, Term)> {
         if sort.is_eq_sort() {
             let id = self.find(&value);
-            let (cost, node) = self
-                .costs
-                .get(&id)
-                .unwrap_or_else(|| {
-                    log::error!("No cost for {:?}", value);
-                    for func in self.egraph.functions.values() {
-                        for (inputs, output) in func.nodes.iter() {
-                            if output.value == value {
-                                log::error!("Found unextractable function: {:?}", func.decl.name);
-                                log::error!("Inputs: {:?}", inputs);
-                                log::error!(
-                                    "{:?}",
-                                    inputs
-                                        .iter()
-                                        .map(|input| self.costs.get(&self.find(input)))
-                                        .collect::<Vec<_>>()
-                                );
-                            }
-                        }
-                    }
-
-                    panic!("No cost for {:?}", value)
-                })
-                .clone();
-            (cost, node)
+            let (cost, node) = self.costs.get(&id)?.clone();
+            Some((cost, node))
         } else {
-            (0, termdag.expr_to_term(&sort.make_expr(self.egraph, value)))
+            let (cost, node) = sort.extract_expr(self.egraph, value, self, termdag)?;
+            Some((cost, termdag.expr_to_term(&node)))
         }
     }
 
@@ -142,17 +149,9 @@ impl<'a> Extractor<'a> {
         let types = &function.schema.input;
         let mut terms: Vec<Term> = vec![];
         for (ty, value) in types.iter().zip(children) {
-            cost = cost.saturating_add(if ty.is_eq_sort() {
-                let id = self.egraph.find(Id::from(value.bits as usize));
-                // TODO costs should probably map values?
-                let (cost, term) = self.costs.get(&id)?;
-                terms.push(term.clone());
-                *cost
-            } else {
-                let term = termdag.expr_to_term(&ty.make_expr(self.egraph, *value));
-                terms.push(term);
-                1
-            });
+            let (term_cost, term) = self.find_best(*value, termdag, ty)?;
+            terms.push(term.clone());
+            cost = cost.saturating_add(term_cost);
         }
         Some((terms, cost))
     }
@@ -173,7 +172,7 @@ impl<'a> Extractor<'a> {
                         if let Some((term_inputs, new_cost)) =
                             self.node_total_cost(func, inputs, termdag)
                         {
-                            let make_new_pair = || (new_cost, termdag.make(sym, term_inputs));
+                            let make_new_pair = || (new_cost, termdag.app(sym, term_inputs));
 
                             let id = self.find(&output.value);
                             match self.costs.entry(id) {

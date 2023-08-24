@@ -365,39 +365,45 @@ fn desugar_run_config(desugar: &mut Desugar, run_config: &RunConfig) -> NormRunC
 
 fn add_semi_naive_rule(desugar: &mut Desugar, rule: Rule) -> Option<Rule> {
     let mut new_rule = rule;
-    // only add new rule when there is Call in body to avoid adding same rule.
+    // Whenever an Let(_, expr@Call(...)) or Set(_, expr@Call(...)) is present in action,
+    // an additional seminaive rule should be created.
+    // Moreover, for each such expr, expr and all variable definitions that it relies on should be moved to trigger.
+    let mut new_head_atoms = vec![];
     let mut add_new_rule = false;
 
-    for head_slice in new_rule.head.iter_mut() {
+    let mut var_set = HashSet::default();
+    for head_slice in new_rule.head.iter_mut().rev() {
         match head_slice {
-            Action::Set(_, _, value) => {
-                // if the right hand side is a function call,
-                // move it to body so seminaive fires
-                if let Expr::Call(_, _) = value {
+            Action::Set(_, _, expr) => {
+                var_set.extend(expr.vars());
+                if let Expr::Call(_, _) = expr {
                     add_new_rule = true;
-                    let mut eq_vec: Vec<Expr> = Vec::new();
+
                     let fresh_symbol = desugar.get_fresh();
-                    eq_vec.push(Expr::Var(fresh_symbol));
-                    eq_vec.push(value.clone());
-                    new_rule.body.push(Fact::Eq(eq_vec));
-                    *value = Expr::Var(fresh_symbol);
+                    let fresh_var = Expr::Var(fresh_symbol);
+                    let expr = std::mem::replace(expr, fresh_var.clone());
+                    new_head_atoms.push(Fact::Eq(vec![fresh_var, expr]));
                 };
             }
+            Action::Let(symbol, expr) if var_set.contains(symbol) => {
+                var_set.extend(expr.vars());
+                if let Expr::Call(_, _) = expr {
+                    add_new_rule = true;
 
-            // move let binding to body.
-            Action::Let(symbol, expr) => {
-                let eq_vec: Vec<Expr> = vec![Expr::Var(*symbol), expr.clone()];
-                new_rule.body.push(Fact::Eq(eq_vec));
+                    let var = Expr::Var(*symbol);
+                    new_head_atoms.push(Fact::Eq(vec![var, expr.clone()]));
+                }
             }
             _ => (),
         }
     }
 
     if add_new_rule {
+        new_rule.body.extend(new_head_atoms.into_iter().rev());
         // remove all let action
         new_rule
             .head
-            .retain_mut(|action| !matches!(action, Action::Let(_, _)));
+            .retain_mut(|action| !matches!(action, Action::Let(var, _) if var_set.contains(var)));
         log::debug!("Added a semi-naive desugared rule:\n{}", new_rule);
         Some(new_rule)
     } else {

@@ -143,15 +143,29 @@ impl Sort for VecSort {
         })
     }
 
-    fn make_expr(&self, egraph: &EGraph, value: Value) -> Expr {
+    fn make_expr(&self, egraph: &EGraph, value: Value) -> (Cost, Expr) {
+        let mut termdag = TermDag::default();
+        let extractor = Extractor::new(egraph, &mut termdag);
+        self.extract_expr(egraph, value, &extractor, &mut termdag)
+            .expect("Extraction should be successful since extractor has been fully initialized")
+    }
+
+    fn extract_expr(
+        &self,
+        _egraph: &EGraph,
+        value: Value,
+        extractor: &Extractor,
+        termdag: &mut TermDag,
+    ) -> Option<(Cost, Expr)> {
         let vec = ValueVec::load(self, &value);
         let mut expr = Expr::call("vec-empty", []);
-        let mut termdag = TermDag::default();
+        let mut cost = 0usize;
         for e in vec.iter().rev() {
-            let e = egraph.extract(*e, &mut termdag, &self.element).1;
-            expr = Expr::call("vec-push", [expr, termdag.term_to_expr(&e)])
+            let e = extractor.find_best(*e, termdag, &self.element)?;
+            cost = cost.saturating_add(e.0);
+            expr = Expr::call("vec-push", [expr, termdag.term_to_expr(&e.1)])
         }
-        expr
+        Some((cost, expr))
     }
 }
 
