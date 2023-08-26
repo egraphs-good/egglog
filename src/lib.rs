@@ -467,10 +467,10 @@ impl EGraph {
 
     pub fn eval_lit(&self, lit: &Literal) -> Value {
         match lit {
-            Literal::Int(i) => i.store(&self.desugar.type_info.get_sort()).unwrap(),
-            Literal::F64(f) => f.store(&self.desugar.type_info.get_sort()).unwrap(),
-            Literal::String(s) => s.store(&self.desugar.type_info.get_sort()).unwrap(),
-            Literal::Unit => ().store(&self.desugar.type_info.get_sort()).unwrap(),
+            Literal::Int(i) => i.store(&self.type_info().get_sort()).unwrap(),
+            Literal::F64(f) => f.store(&self.type_info().get_sort()).unwrap(),
+            Literal::String(s) => s.store(&self.type_info().get_sort()).unwrap(),
+            Literal::Unit => ().store(&self.type_info().get_sort()).unwrap(),
         }
     }
 
@@ -983,7 +983,7 @@ impl EGraph {
                         }
                         NormAction::LetLit(var, lit) => {
                             let value = self.eval_lit(lit);
-                            let etype = self.desugar.type_info.infer_literal(lit);
+                            let etype = self.type_info().infer_literal(lit);
                             let present = self
                                 .global_bindings
                                 .insert(*var, (etype, value, self.timestamp));
@@ -1175,7 +1175,7 @@ impl EGraph {
             return Ok(program);
         }
 
-        let type_info_before = self.desugar.type_info.clone();
+        let type_info_before = self.type_info().clone();
 
         self.desugar.type_info.typecheck_program(&program)?;
         if stop == CompilerPassStop::TypecheckDesugared {
@@ -1231,7 +1231,7 @@ impl EGraph {
     }
 
     pub(crate) fn get_sort(&self, value: &Value) -> Option<&ArcSort> {
-        self.desugar.type_info.sorts.get(&value.tag)
+        self.type_info().sorts.get(&value.tag)
     }
 
     pub fn add_arcsort(&mut self, arcsort: ArcSort) -> Result<(), TypeError> {
@@ -1262,6 +1262,10 @@ impl EGraph {
     fn flush_msgs(&mut self) -> Vec<String> {
         self.msgs.dedup_by(|a, b| a.is_empty() && b.is_empty());
         std::mem::take(&mut self.msgs)
+    }
+
+    pub(crate) fn type_info(&self) -> &TypeInfo {
+        &self.desugar.type_info
     }
 }
 
