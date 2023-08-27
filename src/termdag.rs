@@ -7,6 +7,8 @@ use crate::{
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct TermId(usize);
 
+
+#[allow(rustdoc::private_intra_doc_links)]
 /// Like [`Expr`]s but with sharing and deduplication.
 ///
 /// Terms refer to their children indirectly via opaque [TermId]s (internally
@@ -236,7 +238,8 @@ mod tests {
         let (td, t) = parse_term(s);
         match_term_app!(t; {
             ("f", [_, x, _, _]) =>
-                assert_eq!(td.term_to_expr(&td.get(*x)), ast::Expr::Var(Symbol::new("x")))
+                assert_eq!(td.term_to_expr(&td.get(*x)), ast::Expr::Var(Symbol::new("x"))),
+            (head, _) => panic!("unexpected head {}, in {}:{}:{}", head, file!(), line!(), column!())
         })
     }
 
