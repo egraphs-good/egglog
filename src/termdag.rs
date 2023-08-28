@@ -4,8 +4,7 @@ use crate::{
     Symbol,
 };
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct TermId(usize);
+pub type TermId = usize;
 
 /// Like [`Expr`]s but with sharing and deduplication.
 ///
@@ -71,7 +70,7 @@ impl TermDag {
     ///
     /// Panics if the id is not valid.
     pub fn get(&self, id: TermId) -> Term {
-        self.nodes[id.0].clone()
+        self.nodes[id].clone()
     }
 
     /// Make and return a [`Term::App`] with the given head symbol and children,
@@ -110,7 +109,7 @@ impl TermDag {
         if self.hashcons.get(node).is_none() {
             let idx = self.nodes.len();
             self.nodes.push(node.clone());
-            self.hashcons.insert(node.clone(), TermId(idx));
+            self.hashcons.insert(node.clone(), idx);
         }
     }
 
@@ -168,7 +167,7 @@ impl TermDag {
         // use a stack to avoid stack overflow
         let mut stack = vec![id];
         while let Some(next) = stack.pop() {
-            match self.nodes[next.0].clone() {
+            match self.nodes[next].clone() {
                 Term::App(name, children) => {
                     if seen.contains(&next) {
                         let mut str = String::new();
@@ -229,11 +228,8 @@ mod tests {
             vec![
                 Term::Var("x".into()),
                 Term::Var("y".into()),
-                Term::App("g".into(), vec![0, 1].into_iter().map(TermId).collect()),
-                Term::App(
-                    "f".into(),
-                    vec![2, 0, 1, 2].into_iter().map(TermId).collect()
-                ),
+                Term::App("g".into(), vec![0, 1]),
+                Term::App("f".into(), vec![2, 0, 1, 2]),
             ]
         );
         let e2 = td.term_to_expr(&t);
@@ -261,7 +257,7 @@ mod tests {
     fn test_lookup() {
         let s = r#"(f (g x y) x y (g x y))"#;
         let (td, t) = parse_term(s);
-        assert_eq!(td.lookup(&t).0, td.size() - 1);
+        assert_eq!(td.lookup(&t), td.size() - 1);
     }
 
     #[test]
