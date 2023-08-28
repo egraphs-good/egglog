@@ -125,7 +125,7 @@ fn normalize_expr(
             panic!("handled above");
         }
         Expr::Call(f, children) => {
-            let is_compute = TypeInfo::default().is_primitive(*f);
+            let is_compute = desugar.type_info.is_primitive(*f);
             let mut new_children = vec![];
             for child in children {
                 match child {
@@ -418,6 +418,7 @@ pub struct Desugar {
     // TODO fix getting fresh names using modules
     pub(crate) number_underscores: usize,
     pub(crate) global_variables: HashSet<Symbol>,
+    pub(crate) type_info: TypeInfo,
 }
 
 impl Default for Desugar {
@@ -429,6 +430,7 @@ impl Default for Desugar {
             parser: ast::parse::ProgramParser::new(),
             number_underscores: 3,
             global_variables: Default::default(),
+            type_info: TypeInfo::default(),
         }
     }
 }
@@ -689,6 +691,7 @@ impl Clone for Desugar {
             parser: ast::parse::ProgramParser::new(),
             number_underscores: self.number_underscores,
             global_variables: self.global_variables.clone(),
+            type_info: self.type_info.clone(),
         }
     }
 }
