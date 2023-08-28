@@ -70,7 +70,7 @@ pub struct RunReport {
 #[derive(Debug, Clone)]
 pub struct ExtractReport {
     pub cost: usize,
-    pub expr: Term,
+    pub term: Term,
     pub variants: Vec<Term>,
     pub termdag: TermDag,
 }
@@ -1093,7 +1093,7 @@ impl EGraph {
                 for expr in exprs {
                     use std::io::Write;
                     let res = self.extract_expr(expr, 1)?;
-                    writeln!(f, "{}", res.termdag.to_string(&res.expr))
+                    writeln!(f, "{}", res.termdag.to_string(&res.term))
                         .map_err(|e| Error::IoError(filename.clone(), e))?;
                 }
 
@@ -1128,7 +1128,7 @@ impl EGraph {
         };
         Ok(ExtractReport {
             cost,
-            expr,
+            term: expr,
             variants,
             termdag,
         })
