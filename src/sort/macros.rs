@@ -40,18 +40,12 @@ macro_rules! add_primitives {
                     $name.into()
                 }
 
-                fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-                    let mut types = types.iter();
-                    $(
-                        if self.$param.name() != types.next()?.name() {
-                            return None;
-                        }
-                    )*
-                    if types.next().is_some() {
-                        None
-                    } else {
-                        Some(self.__out.clone())
-                    }
+                fn get_constraints(
+                    &self,
+                    arguments: &[AtomTerm],
+                ) -> Vec<Constraint<AtomTerm, ArcSort>> {
+                    let sorts = [$(self.$param.clone(),)* self.__out.clone() as ArcSort];
+                    simple_constraints(self.name(), arguments, &sorts)
                 }
 
                 fn apply(&self, values: &[Value]) -> Option<Value> {

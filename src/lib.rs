@@ -38,7 +38,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::str::FromStr;
 use std::{fmt::Debug, sync::Arc};
-use typecheck::Program;
+use typecheck::{simple_constraints, AtomTerm, Constraint, Program};
 
 pub type ArcSort = Arc<dyn Sort>;
 
@@ -49,13 +49,15 @@ use gj::*;
 use unionfind::*;
 use util::*;
 
+use crate::typecheck::Problem;
 use crate::typechecking::TypeError;
 
 pub type Subst = IndexMap<Symbol, Value>;
 
 pub trait PrimitiveLike {
     fn name(&self) -> Symbol;
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort>;
+    // TODO: use an opaque type instead of AtomTerm as arguments
+    fn get_constraints(&self, arguments: &[AtomTerm]) -> Vec<Constraint<AtomTerm, ArcSort>>;
     fn apply(&self, values: &[Value]) -> Option<Value>;
 }
 
@@ -90,6 +92,24 @@ pub const HIGH_COST: usize = i64::MAX as usize;
 
 #[derive(Clone)]
 pub struct Primitive(Arc<dyn PrimitiveLike>);
+impl Primitive {
+    // TODO: this is temporary and should be removed once refactoring is done
+    fn accept(&self, tys: &[Arc<dyn Sort>]) -> Option<Arc<dyn Sort>> {
+        let mut constraints = vec![];
+        // + 1 to account for the output type
+        let lits: Vec<_> = (0..tys.len() + 1)
+            .map(|i| AtomTerm::Literal(Literal::Int(i as i64)))
+            .collect();
+        for (lit, ty) in lits.iter().zip(tys.iter()) {
+            constraints.push(Constraint::Assign(lit.clone(), ty.clone()))
+        }
+        constraints.extend(self.get_constraints(&lits).into_iter());
+        let problem = Problem { constraints };
+        let output_type = AtomTerm::Literal(Literal::Int(tys.len() as i64));
+        let assignment = problem.solve(once(&output_type), |sort| sort.name()).ok()?;
+        Some(assignment.get(&output_type).unwrap().clone())
+    }
+}
 
 impl Deref for Primitive {
     type Target = dyn PrimitiveLike;
@@ -139,16 +159,15 @@ impl PrimitiveLike for SimplePrimitive {
     fn name(&self) -> Symbol {
         self.name
     }
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-        if self.input.len() != types.len() {
-            return None;
-        }
-        // TODO can we use a better notion of equality than just names?
-        self.input
+
+    fn get_constraints(&self, arguments: &[AtomTerm]) -> Vec<Constraint<AtomTerm, ArcSort>> {
+        let sorts: Vec<_> = self
+            .input
             .iter()
-            .zip(types)
-            .all(|(a, b)| a.name() == b.name())
-            .then(|| self.output.clone())
+            .chain(once(&self.output as &ArcSort))
+            .cloned()
+            .collect();
+        simple_constraints(self.name(), arguments, &sorts)
     }
     fn apply(&self, values: &[Value]) -> Option<Value> {
         (self.f)(values)
@@ -783,16 +802,22 @@ impl EGraph {
     ) -> Result<Symbol, Error> {
         let name = Symbol::from(name);
         let mut ctx = typecheck::Context::new(self);
-        let (query0, action0) = ctx
+        let core_rule = ctx
             .typecheck_query(&rule.body, &rule.head)
             .map_err(Error::TypeErrors)?;
-        let query = self.compile_gj_query(query0, &ctx.types);
+        let (query0, action0) = (core_rule.body, core_rule.head);
+
+        // TODO: We should refactor compile_actions later as well
+        let action0: Vec<Action> = action0.0.iter().map(|a| a.to_action()).collect();
+
+        let types = &ctx.types;
+        let query = self.compile_gj_query(query0, types);
         let program = self
-            .compile_actions(&ctx.types, &action0)
+            .compile_actions(types, &action0)
             .map_err(Error::TypeErrors)?;
         // println!(
         //     "Compiled rule {rule:?}\n{subst:?}to {program:#?}",
-        //     subst = &ctx.types
+        //     subst = types
         // );
         let compiled_rule = Rule {
             query,
@@ -887,10 +912,12 @@ impl EGraph {
         let mut ctx = typecheck::Context::new(self);
         let converted_facts = facts.iter().map(|f| f.to_fact()).collect::<Vec<Fact>>();
         let empty_actions = vec![];
-        let (query0, _) = ctx
+        let rule = ctx
             .typecheck_query(&converted_facts, &empty_actions)
             .map_err(Error::TypeErrors)?;
-        let query = self.compile_gj_query(query0, &ctx.types);
+        let query0 = rule.body;
+        let types = &ctx.types;
+        let query = self.compile_gj_query(query0, types);
 
         let mut matched = false;
         // TODO what timestamp to use?

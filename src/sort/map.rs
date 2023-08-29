@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 
+use crate::typecheck::all_equal_constraints;
+
 use super::*;
 
 type ValueMap = BTreeMap<Value, Value>;
@@ -14,6 +16,14 @@ pub struct MapSort {
 }
 
 impl MapSort {
+    fn key(&self) -> ArcSort {
+        self.key.clone()
+    }
+
+    fn value(&self) -> ArcSort {
+        self.value.clone()
+    }
+
     fn kv_names(&self) -> (Symbol, Symbol) {
         (self.key.name(), self.value.name())
     }
@@ -174,6 +184,7 @@ struct Ctor {
     map: Arc<MapSort>,
 }
 
+// TODO: move term ordering min/max to its own mod
 pub(crate) struct TermOrderingMin {}
 
 impl PrimitiveLike for TermOrderingMin {
@@ -181,11 +192,8 @@ impl PrimitiveLike for TermOrderingMin {
         "ordering-min".into()
     }
 
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-        match types {
-            [a, b] if a.name() == b.name() => Some(a.clone()),
-            _ => None,
-        }
+    fn get_constraints(&self, arguments: &[AtomTerm]) -> Vec<Constraint<AtomTerm, ArcSort>> {
+        all_equal_constraints(self.name(), arguments, None, Some(3), None)
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
@@ -205,11 +213,8 @@ impl PrimitiveLike for TermOrderingMax {
         "ordering-max".into()
     }
 
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-        match types {
-            [a, b] if a.name() == b.name() => Some(a.clone()),
-            _ => None,
-        }
+    fn get_constraints(&self, arguments: &[AtomTerm]) -> Vec<Constraint<AtomTerm, ArcSort>> {
+        all_equal_constraints(self.name(), arguments, None, Some(3), None)
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
@@ -227,11 +232,8 @@ impl PrimitiveLike for Ctor {
         self.name
     }
 
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-        match types {
-            [] => Some(self.map.clone()),
-            _ => None,
-        }
+    fn get_constraints(&self, arguments: &[AtomTerm]) -> Vec<Constraint<AtomTerm, ArcSort>> {
+        simple_constraints(self.name(), arguments, &[self.map.clone()])
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
@@ -250,16 +252,17 @@ impl PrimitiveLike for Insert {
         self.name
     }
 
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-        match types {
-            [map, key, value]
-                if (map.name(), (key.name(), value.name()))
-                    == (self.map.name, self.map.kv_names()) =>
-            {
-                Some(self.map.clone())
-            }
-            _ => None,
-        }
+    fn get_constraints(&self, arguments: &[AtomTerm]) -> Vec<Constraint<AtomTerm, ArcSort>> {
+        simple_constraints(
+            self.name(),
+            arguments,
+            &[
+                self.map.clone(),
+                self.map.key(),
+                self.map.value(),
+                self.map.clone(),
+            ],
+        )
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
@@ -279,13 +282,12 @@ impl PrimitiveLike for Get {
         self.name
     }
 
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-        match types {
-            [map, key] if (map.name(), key.name()) == (self.map.name, self.map.key.name()) => {
-                Some(self.map.value.clone())
-            }
-            _ => None,
-        }
+    fn get_constraints(&self, arguments: &[AtomTerm]) -> Vec<Constraint<AtomTerm, ArcSort>> {
+        simple_constraints(
+            self.name(),
+            arguments,
+            &[self.map.clone(), self.map.key(), self.map.value()],
+        )
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
@@ -305,13 +307,12 @@ impl PrimitiveLike for NotContains {
         self.name
     }
 
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-        match types {
-            [map, key] if (map.name(), key.name()) == (self.map.name, self.map.key.name()) => {
-                Some(self.unit.clone())
-            }
-            _ => None,
-        }
+    fn get_constraints(&self, arguments: &[AtomTerm]) -> Vec<Constraint<AtomTerm, ArcSort>> {
+        simple_constraints(
+            self.name(),
+            arguments,
+            &[self.map.clone(), self.map.key(), self.unit.clone()],
+        )
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
@@ -335,13 +336,12 @@ impl PrimitiveLike for Contains {
         self.name
     }
 
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-        match types {
-            [map, key] if (map.name(), key.name()) == (self.map.name, self.map.key.name()) => {
-                Some(self.unit.clone())
-            }
-            _ => None,
-        }
+    fn get_constraints(&self, arguments: &[AtomTerm]) -> Vec<Constraint<AtomTerm, ArcSort>> {
+        simple_constraints(
+            self.name(),
+            arguments,
+            &[self.map.clone(), self.map.key(), self.unit.clone()],
+        )
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
@@ -364,13 +364,12 @@ impl PrimitiveLike for Remove {
         self.name
     }
 
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-        match types {
-            [map, key] if (map.name(), key.name()) == (self.map.name, self.map.key.name()) => {
-                Some(self.map.clone())
-            }
-            _ => None,
-        }
+    fn get_constraints(&self, arguments: &[AtomTerm]) -> Vec<Constraint<AtomTerm, ArcSort>> {
+        simple_constraints(
+            self.name(),
+            arguments,
+            &[self.map.clone(), self.map.key(), self.map.clone()],
+        )
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {

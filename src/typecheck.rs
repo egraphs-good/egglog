@@ -1,45 +1,444 @@
-use crate::*;
-use indexmap::map::Entry as IEntry;
+use std::{mem::swap, ops::AddAssign};
+
+use crate::{ast::desugar::flatten_actions, *};
+use hashbrown::HashMap;
 use typechecking::TypeError;
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Actions(pub(crate) Vec<NormAction>);
+impl Actions {
+    fn subst(&mut self, subst: &HashMap<Symbol, AtomTerm>) {
+        let actions = subst.iter().map(|(symbol, atom_term)| match atom_term {
+            AtomTerm::Var(v) => NormAction::LetVar(*symbol, *v),
+            AtomTerm::Literal(lit) => NormAction::LetLit(*symbol, lit.clone()),
+            AtomTerm::Global(v) => NormAction::LetVar(*symbol, *v),
+        });
+        let existing_actions = std::mem::take(&mut self.0);
+        self.0 = actions.chain(existing_actions).collect();
+    }
+}
+
+// TODO: implement custom debug
+#[derive(Debug, Clone)]
+pub struct CoreRule {
+    pub body: Query,
+    pub head: Actions,
+}
+
+impl CoreRule {
+    pub fn subst(&mut self, subst: &HashMap<Symbol, AtomTerm>) {
+        for atom in &mut self.body.atoms {
+            atom.subst(subst);
+        }
+        for atom in &mut self.body.filters {
+            atom.subst(subst);
+        }
+        self.head.subst(subst);
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum ImpossibleConstraint {
+    ArgSizeMismatch {
+        atom: Atom<Symbol>,
+        expected: usize,
+        actual: usize,
+    },
+}
+
+pub enum Constraint<Var, Value> {
+    Eq(Var, Var),
+    Assign(Var, Value),
+    // Exactly one of the constraints holds
+    // and all others are false
+    Xor(Vec<Constraint<Var, Value>>),
+    Impossible(ImpossibleConstraint),
+}
+
+pub enum ConstraintError<Var, Value> {
+    InconsistentConstraint(Var, Value, Value),
+    UnconstrainedVar(Var),
+    NoConstraintSatisfied(Vec<ConstraintError<Var, Value>>),
+    ImpossibleCaseIdentified(ImpossibleConstraint),
+}
+
+impl ConstraintError<AtomTerm, ArcSort> {
+    fn to_type_error(&self) -> TypeError {
+        match &self {
+            ConstraintError::InconsistentConstraint(x, v1, v2) => TypeError::Mismatch {
+                expr: x.to_expr(),
+                expected: v1.clone(),
+                actual: v2.clone(),
+                reason: "mismatch".into(),
+            },
+            ConstraintError::UnconstrainedVar(v) => TypeError::InferenceFailure(v.to_expr()),
+            ConstraintError::NoConstraintSatisfied(constraints) => todo!(),
+            ConstraintError::ImpossibleCaseIdentified(ImpossibleConstraint::ArgSizeMismatch {
+                atom,
+                expected,
+                actual,
+            }) => {
+                assert_eq!(actual, &atom.args.len());
+                TypeError::Arity {
+                    expr: atom.to_expr(),
+                    expected: *expected,
+                }
+            }
+        }
+    }
+}
+
+impl<Var, Value> Constraint<Var, Value>
+where
+    Var: Eq + PartialEq + Hash + Clone,
+    Value: Clone,
+{
+    /// Takes a partial assignment and update it based on the constraint.
+    /// If there's a conflict, returns the conflicting variable, the assigned conflicting types.
+    /// Otherwise, return whether the assignment is updated.
+    fn update<K: Eq>(
+        &self,
+        assignment: &mut Assignment<Var, Value>,
+        key: impl Fn(&Value) -> K + Copy,
+    ) -> Result<bool, ConstraintError<Var, Value>> {
+        match self {
+            Constraint::Eq(x, y) => match (assignment.0.get(x), assignment.0.get(y)) {
+                (Some(value), None) => {
+                    assignment.insert(y.clone(), value.clone());
+                    Ok(true)
+                }
+                (None, Some(value)) => {
+                    assignment.insert(x.clone(), value.clone());
+                    Ok(true)
+                }
+                (Some(v1), Some(v2)) => {
+                    if key(v1) == key(v2) {
+                        Ok(false)
+                    } else {
+                        Err(ConstraintError::InconsistentConstraint(
+                            x.clone(),
+                            v1.clone(),
+                            v2.clone(),
+                        ))
+                    }
+                }
+                (None, None) => Ok(false),
+            },
+            Constraint::Assign(x, v) => match assignment.0.get(x) {
+                None => {
+                    assignment.insert(x.clone(), v.clone());
+                    Ok(true)
+                }
+                Some(value) => {
+                    if key(value) == key(v) {
+                        Ok(false)
+                    } else {
+                        Err(ConstraintError::InconsistentConstraint(
+                            x.clone(),
+                            v.clone(),
+                            value.clone(),
+                        ))
+                    }
+                }
+            },
+            Constraint::Xor(cs) => {
+                let mut success_count = 0;
+                let mut updated_assignment = assignment.clone();
+                let mut assignment_updated = false;
+                let mut errors = vec![];
+                for c in cs {
+                    let result = c.update(assignment, key);
+                    match result {
+                        Ok(updated) => {
+                            success_count += 1;
+                            if success_count > 1 {
+                                break;
+                            }
+
+                            if updated {
+                                swap(&mut updated_assignment, assignment);
+                            }
+                            assignment_updated = updated;
+                        }
+                        Err(error) => errors.push(error),
+                    }
+                }
+                // If update is successful for only one sub constraint, then we have nailed down the only true constraint.
+                // If update is successful for more than one constraint, then Xor succeeds with no updates.
+                // If update fails for every constraint, then Xor fails
+                if success_count == 1 {
+                    Ok(assignment_updated)
+                } else if success_count > 1 {
+                    Ok(false)
+                } else {
+                    Err(ConstraintError::NoConstraintSatisfied(errors))
+                }
+            }
+            Constraint::Impossible(constraint) => Err(ConstraintError::ImpossibleCaseIdentified(
+                constraint.clone(),
+            )),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Assignment<Var, Value>(HashMap<Var, Value>);
+
+impl<Var, Value> Assignment<Var, Value>
+where
+    Var: Hash + Eq + PartialEq,
+{
+    pub fn insert(&mut self, var: Var, value: Value) -> Option<Value> {
+        self.0.insert(var, value)
+    }
+
+    pub fn get(&self, var: &Var) -> Option<&Value> {
+        self.0.get(var)
+    }
+}
+
+#[derive(Default)]
+pub struct Problem<Var, Value> {
+    pub constraints: Vec<Constraint<Var, Value>>,
+}
+
+impl<Var, Value> Problem<Var, Value>
+where
+    Var: Eq + PartialEq + Hash + Clone,
+    Value: Clone,
+{
+    pub fn solve<'a, K: Eq>(
+        &'a self,
+        range: impl Iterator<Item = &'a Var>,
+        key: impl Fn(&Value) -> K + Copy,
+    ) -> Result<Assignment<Var, Value>, ConstraintError<Var, Value>> {
+        let mut assignment = Assignment(HashMap::default());
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for constraint in self.constraints.iter() {
+                changed |= constraint.update(&mut assignment, key)?;
+            }
+        }
+
+        for v in range {
+            if !assignment.0.contains_key(v) {
+                return Err(ConstraintError::UnconstrainedVar(v.clone()));
+            }
+        }
+        Ok(assignment)
+    }
+}
+
 pub struct Context<'a> {
-    pub egraph: &'a EGraph,
+    pub egraph: &'a mut EGraph,
     pub types: IndexMap<Symbol, ArcSort>,
     unit: ArcSort,
     errors: Vec<TypeError>,
     unionfind: UnionFind,
-    nodes: HashMap<ENode, Id>,
 }
 
-#[derive(Hash, Eq, PartialEq, Clone)]
-enum ENode {
-    Func(Symbol, Vec<Id>),
-    Prim(Primitive, Vec<Id>),
-    Literal(Literal),
-    Var(Symbol),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AtomTerm {
     Var(Symbol),
-    Value(Value),
+    Literal(Literal),
     Global(Symbol),
+}
+impl AtomTerm {
+    fn to_expr(&self) -> Expr {
+        match self {
+            AtomTerm::Var(v) => Expr::Var(*v),
+            AtomTerm::Literal(l) => Expr::Lit(l.clone()),
+            AtomTerm::Global(v) => Expr::Var(*v),
+        }
+    }
 }
 
 impl std::fmt::Display for AtomTerm {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             AtomTerm::Var(v) => write!(f, "{}", v),
-            AtomTerm::Value(_) => write!(f, "<value>"),
+            AtomTerm::Literal(lit) => write!(f, "{}", lit),
             AtomTerm::Global(g) => write!(f, "{}", g),
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Atom<T> {
     pub head: T,
     pub args: Vec<AtomTerm>,
+}
+
+impl Atom<Symbol> {
+    pub fn get_constraints(
+        &self,
+        type_info: &TypeInfo,
+    ) -> Result<Vec<Constraint<AtomTerm, ArcSort>>, TypeError> {
+        let mut constraints: Vec<Constraint<AtomTerm, ArcSort>> = vec![];
+
+        // query function constraint
+        match type_info.func_types.get(&self.head) {
+            None => return Err(TypeError::UnboundFunction(self.head)),
+            Some(typ) => {
+                // arity mismatch
+                if typ.input.len() + 1 != self.args.len() {
+                    return Err(TypeError::Arity {
+                        expr: Expr::Call(
+                            self.head,
+                            self.args.iter().map(|arg| arg.to_expr()).collect(),
+                        ),
+                        expected: typ.input.len() + 1,
+                    });
+                }
+
+                for (arg_typ, arg) in typ
+                    .input
+                    .iter()
+                    .cloned()
+                    .chain(once(typ.output.clone()))
+                    .zip(self.args.iter().cloned())
+                {
+                    constraints.push(Constraint::Assign(arg, arg_typ));
+                }
+            }
+        }
+
+        // literal and global variable constraints
+        constraints.extend(get_literal_and_global_constraints(&self.args, type_info));
+        Ok(constraints)
+    }
+
+    fn to_expr(&self) -> Expr {
+        Expr::Call(
+            self.head,
+            self.args.iter().map(|arg| arg.to_expr()).collect(),
+        )
+    }
+}
+
+fn get_literal_and_global_constraints<'a>(
+    args: &'a [AtomTerm],
+    type_info: &'a TypeInfo,
+) -> impl Iterator<Item = Constraint<AtomTerm, ArcSort>> + 'a {
+    args.iter().filter_map(|arg| {
+        match arg {
+            AtomTerm::Var(_) => None,
+            // Literal to type constraint
+            AtomTerm::Literal(lit) => {
+                let typ = type_info.infer_literal(lit);
+                Some(Constraint::Assign(arg.clone(), typ.clone()))
+            }
+            AtomTerm::Global(v) => {
+                if let Some(typ) = type_info.global_types.get(v) {
+                    Some(Constraint::Assign(arg.clone(), typ.clone()))
+                } else {
+                    panic!("All global variables should be bound before type checking")
+                }
+            }
+        }
+    })
+}
+
+/// Construct a set of `Assign` constraints that fully constrain the type of arguments
+pub fn simple_constraints(
+    name: Symbol,
+    arguments: &[AtomTerm],
+    sorts: &[ArcSort],
+) -> Vec<Constraint<AtomTerm, ArcSort>> {
+    if arguments.len() != sorts.len() {
+        vec![Constraint::Impossible(
+            ImpossibleConstraint::ArgSizeMismatch {
+                atom: Atom {
+                    head: name,
+                    args: arguments.to_vec(),
+                },
+                expected: sorts.len(),
+                actual: arguments.len(),
+            },
+        )]
+    } else {
+        arguments
+            .iter()
+            .cloned()
+            .zip(sorts.iter().cloned())
+            .map(|(arg, sort)| Constraint::Assign(arg, sort))
+            .collect()
+    }
+}
+
+/// Construct a set of `Eq` constraints for the given arguments.
+/// If a sort is given, all arguments should also be equivalent to that sort.
+/// If a length is given, the arguments should have the exact length.
+/// If an output is given, the last element of arguments should have this output.
+/// useful for polymorphic and var-arg functions.
+/// Requires arguments.len() > 0
+pub fn all_equal_constraints(
+    name: Symbol,
+    mut arguments: &[AtomTerm],
+    sort: Option<ArcSort>,
+    exact_length: Option<usize>,
+    output: Option<ArcSort>,
+) -> Vec<Constraint<AtomTerm, ArcSort>> {
+    if arguments.len() == 0 {
+        panic!("all arguments should have length > 0")
+    }
+
+    match exact_length {
+        Some(exact_length) if exact_length != arguments.len() => {
+            return vec![Constraint::Impossible(
+                ImpossibleConstraint::ArgSizeMismatch {
+                    atom: Atom {
+                        head: name,
+                        args: arguments.to_vec(),
+                    },
+                    expected: exact_length,
+                    actual: arguments.len(),
+                },
+            )]
+        }
+        _ => (),
+    }
+
+    let mut constraints = vec![];
+    if let Some(output) = output {
+        let (out, inputs) = arguments.split_last().unwrap();
+        constraints.push(Constraint::Assign(out.clone(), output));
+        arguments = inputs;
+    }
+
+    if let Some(sort) = sort {
+        constraints.extend(
+            arguments
+                .iter()
+                .cloned()
+                .map(|arg| Constraint::Assign(arg, sort.clone())),
+        )
+    } else {
+        if let Some((first, rest)) = arguments.split_first() {
+            constraints.extend(
+                rest.iter()
+                    .cloned()
+                    .map(|arg| Constraint::Eq(arg, first.clone())),
+            );
+        }
+    }
+    constraints
+}
+
+impl Atom<Primitive> {
+    pub fn get_constraints(
+        &self,
+        type_info: &TypeInfo,
+    ) -> Result<Vec<Constraint<AtomTerm, ArcSort>>, TypeError> {
+        // TODO: watch out here
+        // query function constraint
+        let mut constraints = self.head.get_constraints(&self.args);
+
+        // literal and global variable constraints
+        constraints.extend(get_literal_and_global_constraints(&self.args, type_info));
+        Ok(constraints)
+    }
 }
 
 impl<T: std::fmt::Display> std::fmt::Display for Atom<T> {
@@ -52,6 +451,41 @@ impl<T: std::fmt::Display> std::fmt::Display for Atom<T> {
 pub struct Query {
     pub atoms: Vec<Atom<Symbol>>,
     pub filters: Vec<Atom<Primitive>>,
+}
+
+impl Query {
+    pub fn get_constraints(
+        &self,
+        type_info: &TypeInfo,
+    ) -> Result<Vec<Constraint<AtomTerm, ArcSort>>, TypeError> {
+        let mut constraints = vec![];
+        for atom in self.atoms.iter() {
+            constraints.extend(atom.get_constraints(type_info)?.into_iter());
+        }
+        for atom in self.filters.iter() {
+            constraints.extend(atom.get_constraints(type_info)?.into_iter());
+        }
+        Ok(constraints)
+    }
+
+    fn atom_terms(&self) -> HashSet<AtomTerm> {
+        self.atoms
+            .iter()
+            .flat_map(|atom| atom.args.iter().cloned())
+            .chain(
+                self.filters
+                    .iter()
+                    .flat_map(|atom| atom.args.iter().cloned()),
+            )
+            .collect()
+    }
+}
+
+impl AddAssign for Query {
+    fn add_assign(&mut self, rhs: Self) {
+        self.atoms.extend(rhs.atoms.into_iter());
+        self.filters.extend(rhs.filters.into_iter());
+    }
 }
 
 impl std::fmt::Display for Query {
@@ -78,9 +512,23 @@ impl<T> Atom<T> {
     pub fn vars(&self) -> impl Iterator<Item = Symbol> + '_ {
         self.args.iter().filter_map(|t| match t {
             AtomTerm::Var(v) => Some(*v),
-            AtomTerm::Value(_) => None,
+            AtomTerm::Literal(_) => None,
             AtomTerm::Global(_) => None,
         })
+    }
+
+    fn subst(&mut self, subst: &HashMap<Symbol, AtomTerm>) {
+        for arg in self.args.iter_mut() {
+            match arg {
+                AtomTerm::Var(v) => {
+                    if let Some(at) = subst.get(v) {
+                        *arg = at.clone();
+                    }
+                }
+                AtomTerm::Literal(_) => (),
+                AtomTerm::Global(_) => (),
+            }
+        }
     }
 }
 
@@ -91,11 +539,10 @@ impl PrimitiveLike for ValueEq {
         "value-eq".into()
     }
 
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-        match types {
-            [a, b] if a.name() == b.name() => Some(a.clone()),
-            _ => None,
-        }
+    fn get_constraints(&self, arguments: &[AtomTerm]) -> Vec<Constraint<AtomTerm, ArcSort>> {
+        // TODO: egglog requires value-eq to return
+        // the value of the first argument upon success which is weird
+        all_equal_constraints(self.name(), arguments, None, Some(3), None)
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
@@ -109,337 +556,203 @@ impl PrimitiveLike for ValueEq {
 }
 
 impl<'a> Context<'a> {
-    pub fn new(egraph: &'a EGraph) -> Self {
+    pub fn new(egraph: &'a mut EGraph) -> Self {
+        let unit = egraph.proof_state.type_info.sorts[&Symbol::from(UNIT_SYM)].clone();
         Self {
             egraph,
-            unit: egraph.proof_state.type_info.sorts[&Symbol::from(UNIT_SYM)].clone(),
+            unit: unit,
             types: Default::default(),
             errors: Vec::default(),
             unionfind: UnionFind::default(),
-            nodes: HashMap::default(),
         }
     }
 
-    fn add_node(&mut self, node: ENode) -> Id {
-        let entry = self.nodes.entry(node);
-        *entry.or_insert_with(|| self.unionfind.make_set())
+    // figure 8 of the relational e-matching paper
+    fn flatten_expr(&mut self, expr: &Expr) -> (AtomTerm, Vec<Atom<Symbol>>) {
+        match expr {
+            Expr::Var(var) => {
+                let var = if self.egraph.global_bindings.get(var).is_some() {
+                    AtomTerm::Global(*var)
+                } else {
+                    AtomTerm::Var(*var)
+                };
+                (var, vec![])
+            }
+            Expr::Lit(lit) => (AtomTerm::Literal(lit.clone()), vec![]),
+            Expr::Call(f, args) => {
+                let children: Vec<_> = args.iter().map(|arg| self.flatten_expr(arg)).collect();
+                let id = self.unionfind.make_set();
+                let var = AtomTerm::Var(Symbol::from(format!("$v{}", id)));
+                let ats: Vec<_> = children
+                    .iter()
+                    .map(|c| c.0.clone())
+                    .chain(once(var.clone()))
+                    .collect();
+
+                let mut atoms: Vec<_> = children.into_iter().flat_map(|c| c.1).collect();
+                atoms.push(Atom {
+                    head: *f,
+                    args: ats,
+                });
+                (var, atoms)
+            }
+        }
+    }
+
+    fn flatten_fact(&mut self, fact: &Fact) -> Query {
+        match fact {
+            Fact::Eq(exprs) => {
+                // TODO: currently we require exprs.len() to be 2 and Eq atom has the form (= e1 e2)
+                // which isn't necessary and can be loosened.
+                assert!(exprs.len() > 0);
+                let var_atoms: Vec<_> = exprs.iter().map(|expr| self.flatten_expr(expr)).collect();
+                let filters = var_atoms
+                    .iter()
+                    .skip(1)
+                    .map(|va| Atom {
+                        head: Primitive(Arc::new(ValueEq {})),
+                        args: vec![var_atoms[0].0.clone(), va.0.clone()],
+                    })
+                    .collect();
+
+                let atoms = var_atoms.into_iter().flat_map(|va| va.1).collect();
+                Query { atoms, filters }
+            }
+            Fact::Fact(expr) => {
+                let atoms = self.flatten_expr(expr).1;
+                Query {
+                    atoms,
+                    filters: vec![],
+                }
+            }
+        }
+    }
+
+    pub fn lower(&mut self, rule: &Rule) -> Result<CoreRule, Vec<TypeError>> {
+        let facts = &rule.body;
+        let actions = &rule.head;
+        let mut query = Query::default();
+        for fact in facts {
+            query += self.flatten_fact(fact);
+        }
+        // let desugar = ;
+        Ok(CoreRule {
+            body: query,
+            head: Actions(flatten_actions(
+                actions,
+                &mut self.egraph.proof_state.desugar,
+            )),
+        })
+    }
+
+    pub fn canonicalize(&self, rule: CoreRule) -> CoreRule {
+        let mut result_rule = rule;
+        loop {
+            let mut to_subst = None;
+            for atom in result_rule.body.filters.iter() {
+                if atom.head.name() == "value-eq".into() && atom.args[0] != atom.args[1] {
+                    match &atom.args[..] {
+                        [AtomTerm::Var(x), y] | [y, AtomTerm::Var(x)] => {
+                            to_subst = Some((x, y));
+                            break;
+                        }
+                        _ => (),
+                    }
+                }
+            }
+            if let Some((x, y)) = to_subst {
+                result_rule.subst(&[(*x, y.clone())].into());
+            } else {
+                break;
+            }
+        }
+        result_rule.body.filters.retain(|atom| {
+            !(atom.head.name() == "value-eq".into() && atom.args[0] == atom.args[1])
+        });
+        result_rule
+    }
+
+    pub fn discover_primitives(&self, rule: CoreRule) -> Result<CoreRule, Vec<TypeError>> {
+        let type_info = &self.egraph.proof_state.type_info;
+        let mut result_rule = rule;
+        let mut errors = vec![];
+        result_rule.body.atoms.retain_mut(|atom| {
+            let symbol = atom.head;
+            match (
+                type_info.func_types.get(&symbol),
+                type_info.primitives.get(&symbol),
+            ) {
+                (Some(_), None) => true,
+                (None, Some(primitives)) => {
+                    // TODO: this is bad-- we want to test each primitives
+                    let atom = Atom {
+                        head: primitives[0].clone(),
+                        args: std::mem::take(&mut atom.args),
+                    };
+                    result_rule.body.filters.push(atom);
+                    false
+                }
+                (Some(_), Some(_)) => {
+                    errors.push(TypeError::DefinedAsBothFunctionAndPrimitive(symbol));
+                    true
+                }
+                (None, None) => {
+                    errors.push(TypeError::Unbound(symbol));
+                    true
+                }
+            }
+        });
+        if errors.is_empty() {
+            Ok(result_rule)
+        } else {
+            Err(errors)
+        }
+    }
+
+    pub fn typecheck(
+        &mut self,
+        rule: &CoreRule,
+    ) -> Result<Assignment<AtomTerm, ArcSort>, TypeError> {
+        let constraints = rule
+            .body
+            .get_constraints(&self.egraph.proof_state.type_info)?;
+        let problem = Problem { constraints };
+        let range = rule.body.atom_terms();
+        let result = problem.solve::<Symbol>(range.iter(), |sort: &ArcSort| sort.name());
+        result.map_err(|e| e.to_type_error())
     }
 
     pub fn typecheck_query(
         &mut self,
         facts: &'a [Fact],
         actions: &'a [Action],
-    ) -> Result<(Query, Vec<Action>), Vec<TypeError>> {
-        for fact in facts {
-            self.typecheck_fact(fact);
-        }
-
-        // congruence isn't strictly necessary, but it can eliminate some redundant atoms
-        self.rebuild();
-
-        // First find the canoncial version of each leaf
-        let mut leaves = HashMap::<Id, Expr>::default();
-        let mut canon = HashMap::<Symbol, Expr>::default();
-
-        // Do literals first
-        for (node, &id) in &self.nodes {
-            match node {
-                ENode::Literal(lit) => {
-                    let old = leaves.insert(id, Expr::Lit(lit.clone()));
-                    if let Some(Expr::Lit(old_lit)) = old {
-                        panic!("Duplicate literal: {:?} {:?}", old_lit, lit);
-                    }
-                }
-                _ => continue,
-            }
-        }
-        // Globally bound variables first
-        for (node, &id) in &self.nodes {
-            match node {
-                ENode::Var(var) => {
-                    if self.egraph.global_bindings.get(var).is_some() {
-                        match leaves.entry(id) {
-                            Entry::Occupied(existing) => {
-                                canon.insert(*var, existing.get().clone());
-                            }
-                            Entry::Vacant(v) => {
-                                v.insert(Expr::Var(*var));
-                            }
-                        }
-                    }
-                }
-                _ => continue,
-            }
-        }
-
-        // Now do variables
-        for (node, &id) in &self.nodes {
-            debug_assert_eq!(id, self.unionfind.find(id));
-            match node {
-                ENode::Var(var) => match leaves.entry(id) {
-                    Entry::Occupied(existing) => {
-                        canon.insert(*var, existing.get().clone());
-                    }
-                    Entry::Vacant(v) => {
-                        v.insert(Expr::Var(*var));
-                    }
-                },
-                _ => continue,
-            }
-        }
-
-        // replace canonical things in the actions
-        let res_actions = actions.iter().map(|a| a.replace_canon(&canon)).collect();
-        for (var, _expr) in canon {
-            self.types.remove(&var);
-        }
-
-        let get_leaf = |id: &Id| -> AtomTerm {
-            let mk = || AtomTerm::Var(Symbol::from(format!("?__{}", id)));
-            match leaves.get(id) {
-                Some(Expr::Var(v)) => {
-                    if let Some((_ty, _value, _ts)) = self.egraph.global_bindings.get(v) {
-                        AtomTerm::Global(*v)
-                    } else {
-                        AtomTerm::Var(*v)
-                    }
-                }
-                Some(Expr::Lit(l)) => AtomTerm::Value(self.egraph.eval_lit(l)),
-                _ => mk(),
-            }
+    ) -> Result<CoreRule, Vec<TypeError>> {
+        let rule = Rule {
+            head: actions.to_vec(),
+            body: facts.to_vec(),
         };
-
-        let mut query = Query::default();
-        let mut query_eclasses = HashSet::<Id>::default();
-        // Now we can fill in the nodes with the canonical leaves
-        for (node, id) in &self.nodes {
-            match node {
-                ENode::Func(f, ids) => {
-                    let args = ids.iter().chain([id]).map(get_leaf).collect();
-                    for id in ids {
-                        query_eclasses.insert(*id);
-                    }
-                    query.atoms.push(Atom { head: *f, args });
-                }
-                ENode::Prim(p, ids) => {
-                    let mut args = vec![];
-                    for child in ids {
-                        let leaf = get_leaf(child);
-                        if let AtomTerm::Var(v) = leaf {
-                            if self.egraph.global_bindings.contains_key(&v) {
-                                args.push(AtomTerm::Value(self.egraph.global_bindings[&v].1));
-                                continue;
-                            }
-                        }
-                        args.push(get_leaf(child));
-                        query_eclasses.insert(*child);
-                    }
-                    args.push(get_leaf(id));
-                    query.filters.push(Atom {
-                        head: p.clone(),
-                        args,
-                    });
-                }
-                _ => {}
-            }
-        }
-
-        // filter for global variables
-        for node in &self.nodes {
-            if let ENode::Var(var) = node.0 {
-                if self.egraph.global_bindings.contains_key(var) {
-                    let canon = get_leaf(node.1);
-                    if canon != AtomTerm::Global(*var) {
-                        // compare global to canon
-                        query.filters.push(Atom {
-                            head: Primitive(Arc::new(ValueEq {})),
-                            args: vec![canon.clone(), AtomTerm::Global(*var), canon],
-                        });
-                    }
-                }
-            }
-        }
-
-        if self.errors.is_empty() {
-            Ok((query, res_actions))
-        } else {
-            Err(self.errors.clone())
-        }
-    }
-
-    fn rebuild(&mut self) {
-        let mut keep_going = true;
-        while keep_going {
-            keep_going = false;
-            let nodes = std::mem::take(&mut self.nodes);
-            for (mut node, id) in nodes {
-                // canonicalize
-                let id = self.unionfind.find(id);
-                if let ENode::Func(_, children) | ENode::Prim(_, children) = &mut node {
-                    for child in children {
-                        *child = self.unionfind.find(*child);
-                    }
-                }
-
-                // reinsert and handle hit
-                if let Some(old) = self.nodes.insert(node.clone(), id) {
-                    keep_going = true;
-                    self.unionfind.union_raw(old, id);
-                }
-            }
-        }
-    }
-
-    fn typecheck_fact(&mut self, fact: &Fact) {
-        match fact {
-            Fact::Eq(exprs) => {
-                assert!(exprs.len() == 2);
-                let mut later = vec![];
-                let mut ty: Option<ArcSort> = None;
-                let mut ids = Vec::with_capacity(exprs.len());
-                for expr in exprs {
-                    match (expr, &ty) {
-                        (_, Some(expected)) => {
-                            ids.push(self.check_query_expr(expr, expected.clone()))
-                        }
-                        // This is a variable the we couldn't infer the type of,
-                        // so we'll try again later when we can check its type
-                        (Expr::Var(v), None)
-                            if !self.types.contains_key(v)
-                                && !self.egraph.global_bindings.contains_key(v) =>
-                        {
-                            later.push(expr)
-                        }
-                        (_, None) => match self.infer_query_expr(expr) {
-                            (_, None) => (),
-                            (id, Some(t)) => {
-                                ty = Some(t);
-                                ids.push(id);
-                            }
-                        },
-                    }
-                }
-
-                if let Some(ty) = ty {
-                    for e in later {
-                        ids.push(self.check_query_expr(e, ty.clone()));
-                    }
+        eprintln!("{:?}", rule);
+        let rule = self.lower(&rule)?;
+        eprintln!("{:?}", rule);
+        let rule = self.discover_primitives(rule)?;
+        eprintln!("{:?}", rule);
+        let rule = self.canonicalize(rule);
+        eprintln!("{:?}", rule);
+        let assignment = self.typecheck(&rule).map_err(|e| vec![e])?;
+        self.types = assignment
+            .0
+            .into_iter()
+            .filter_map(|(atom_term, typ)| {
+                if let AtomTerm::Var(v) = atom_term {
+                    Some((v, typ))
                 } else {
-                    for e in later {
-                        self.errors.push(TypeError::InferenceFailure(e.clone()));
-                    }
-                }
-
-                ids.into_iter()
-                    .reduce(|a, b| self.unionfind.union_raw(a, b));
-            }
-            Fact::Fact(e) => {
-                self.check_query_expr(e, self.unit.clone());
-            }
-        }
-    }
-
-    fn check_query_expr(&mut self, expr: &Expr, expected: ArcSort) -> Id {
-        match expr {
-            Expr::Var(sym) => {
-                match self.types.entry(*sym) {
-                    IEntry::Occupied(ty) => {
-                        // TODO name comparison??
-                        if ty.get().name() != expected.name() {
-                            self.errors.push(TypeError::Mismatch {
-                                expr: expr.clone(),
-                                expected,
-                                actual: ty.get().clone(),
-                                reason: "mismatch".into(),
-                            })
-                        }
-                    }
-                    // we can actually bind the variable here
-                    IEntry::Vacant(entry) => {
-                        entry.insert(expected);
-                    }
-                }
-                self.add_node(ENode::Var(*sym))
-            }
-            _ => {
-                let (id, actual) = self.infer_query_expr(expr);
-                if let Some(actual) = actual {
-                    if actual.name() != expected.name() {
-                        self.errors.push(TypeError::Mismatch {
-                            expr: expr.clone(),
-                            expected,
-                            actual,
-                            reason: "mismatch".into(),
-                        })
-                    }
-                }
-                id
-            }
-        }
-    }
-
-    fn infer_query_expr(&mut self, expr: &Expr) -> (Id, Option<ArcSort>) {
-        match expr {
-            Expr::Var(sym) => {
-                if self.egraph.functions.contains_key(sym) {
-                    return self.infer_query_expr(&Expr::call(*sym, []));
-                }
-
-                let ty = if let Some(ty) = self.types.get(sym) {
-                    Some(ty.clone())
-                } else if let Some(ty) = self.egraph.global_bindings.get(sym) {
-                    Some(ty.0.clone())
-                } else {
-                    self.errors.push(TypeError::Unbound(*sym));
                     None
-                };
-                (self.add_node(ENode::Var(*sym)), ty)
-            }
-            Expr::Lit(lit) => {
-                let t = self.egraph.proof_state.type_info.infer_literal(lit);
-                (self.add_node(ENode::Literal(lit.clone())), Some(t))
-            }
-            Expr::Call(sym, args) => {
-                if let Some(f) = self.egraph.functions.get(sym) {
-                    if f.schema.input.len() != args.len() {
-                        self.errors.push(TypeError::Arity {
-                            expr: expr.clone(),
-                            expected: f.schema.input.len(),
-                        });
-                    }
-
-                    let ids: Vec<Id> = args
-                        .iter()
-                        .zip(&f.schema.input)
-                        .map(|(arg, ty)| self.check_query_expr(arg, ty.clone()))
-                        .collect();
-                    let t = f.schema.output.clone();
-                    (self.add_node(ENode::Func(*sym, ids)), Some(t))
-                } else if let Some(prims) = self.egraph.proof_state.type_info.primitives.get(sym) {
-                    let (ids, arg_tys): (Vec<Id>, Vec<Option<ArcSort>>) =
-                        args.iter().map(|arg| self.infer_query_expr(arg)).unzip();
-
-                    if let Some(arg_tys) = arg_tys.iter().cloned().collect::<Option<Vec<ArcSort>>>()
-                    {
-                        for prim in prims {
-                            if let Some(output_type) = prim.accept(&arg_tys) {
-                                let id = self.add_node(ENode::Prim(prim.clone(), ids));
-                                return (id, Some(output_type));
-                            }
-                        }
-                        self.errors.push(TypeError::NoMatchingPrimitive {
-                            op: *sym,
-                            inputs: arg_tys.iter().map(|t| t.name()).collect(),
-                        });
-                    }
-
-                    (self.unionfind.make_set(), None)
-                } else {
-                    self.errors.push(TypeError::Unbound(*sym));
-                    (self.unionfind.make_set(), None)
                 }
-            }
-        }
+            })
+            .collect();
+        // eprintln!("result: {:?}", result);
+        // let rule = self.congruence(&rule);
+        Ok(rule)
     }
 }
 
@@ -930,5 +1243,35 @@ impl EGraph {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        ast::{Action, Expr, Fact, Literal},
+        EGraph,
+    };
+
+    use super::Context;
+
+    #[test]
+    fn test() {
+        let mut egraph = EGraph::default();
+        let mut ctx = Context::new(&mut egraph);
+        let facts = vec![
+            // Fact::Eq(vec![Expr::Var("x".into()), Expr::Var("y".into())]),
+            // Fact::Eq(vec![Expr::Var("y".into()), Expr::Var("z".into())]),
+            Fact::Eq(vec![Expr::Var("z".into()), Expr::Lit(Literal::Int(1))]),
+        ];
+        let result = ctx.typecheck_query(
+            &facts,
+            &[Action::Extract(
+                Expr::Var("z".into()),
+                Expr::Lit(Literal::Int(1)),
+            )],
+        );
+        eprintln!("{:?}", result);
+        assert!(result.is_ok())
     }
 }

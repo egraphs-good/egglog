@@ -1,6 +1,8 @@
 use std::collections::BTreeSet;
 use std::sync::Mutex;
 
+use crate::typecheck::all_equal_constraints;
+
 use super::*;
 
 type ValueSet = BTreeSet<Value>;
@@ -13,6 +15,10 @@ pub struct SetSort {
 }
 
 impl SetSort {
+    pub fn element(&self) -> ArcSort {
+        self.element.clone()
+    }
+
     pub fn element_name(&self) -> Symbol {
         self.element.name()
     }
@@ -187,12 +193,14 @@ impl PrimitiveLike for SetOf {
         self.name
     }
 
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-        if types.iter().all(|t| t.name() == self.set.element_name()) {
-            Some(self.set.clone())
-        } else {
-            None
-        }
+    fn get_constraints(&self, arguments: &[AtomTerm]) -> Vec<Constraint<AtomTerm, ArcSort>> {
+        all_equal_constraints(
+            self.name(),
+            arguments,
+            Some(self.set.element()),
+            None,
+            Some(self.set.clone()),
+        )
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
@@ -211,11 +219,8 @@ impl PrimitiveLike for Ctor {
         self.name
     }
 
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-        match types {
-            [] => Some(self.set.clone()),
-            _ => None,
-        }
+    fn get_constraints(&self, arguments: &[AtomTerm]) -> Vec<Constraint<AtomTerm, ArcSort>> {
+        simple_constraints(self.name(), arguments, &[self.set.clone()])
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
@@ -234,13 +239,12 @@ impl PrimitiveLike for Insert {
         self.name
     }
 
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-        match types {
-            [set, key] if (set.name(), key.name()) == (self.set.name, self.set.element_name()) => {
-                Some(self.set.clone())
-            }
-            _ => None,
-        }
+    fn get_constraints(&self, arguments: &[AtomTerm]) -> Vec<Constraint<AtomTerm, ArcSort>> {
+        simple_constraints(
+            self.name(),
+            arguments,
+            &[self.set.clone(), self.set.element(), self.set.clone()],
+        )
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
@@ -261,15 +265,12 @@ impl PrimitiveLike for NotContains {
         self.name
     }
 
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-        match types {
-            [set, element]
-                if (set.name(), element.name()) == (self.set.name, self.set.element_name()) =>
-            {
-                Some(self.unit.clone())
-            }
-            _ => None,
-        }
+    fn get_constraints(&self, arguments: &[AtomTerm]) -> Vec<Constraint<AtomTerm, ArcSort>> {
+        simple_constraints(
+            self.name(),
+            arguments,
+            &[self.set.clone(), self.set.element(), self.unit.clone()],
+        )
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
@@ -293,13 +294,12 @@ impl PrimitiveLike for Contains {
         self.name
     }
 
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-        match types {
-            [set, key] if (set.name(), key.name()) == (self.set.name, self.set.element_name()) => {
-                Some(self.unit.clone())
-            }
-            _ => None,
-        }
+    fn get_constraints(&self, arguments: &[AtomTerm]) -> Vec<Constraint<AtomTerm, ArcSort>> {
+        simple_constraints(
+            self.name(),
+            arguments,
+            &[self.set.clone(), self.set.element(), self.unit.clone()],
+        )
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
@@ -322,13 +322,12 @@ impl PrimitiveLike for Union {
         self.name
     }
 
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-        match types {
-            [set1, set2] if set1.name() == self.set.name() && set2.name() == self.set.name() => {
-                Some(self.set.clone())
-            }
-            _ => None,
-        }
+    fn get_constraints(&self, arguments: &[AtomTerm]) -> Vec<Constraint<AtomTerm, ArcSort>> {
+        simple_constraints(
+            self.name(),
+            arguments,
+            &[self.set.clone(), self.set.clone(), self.set.clone()],
+        )
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
@@ -349,13 +348,12 @@ impl PrimitiveLike for Intersect {
         self.name
     }
 
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-        match types {
-            [set1, set2] if set1.name() == self.set.name && set2.name() == self.set.name() => {
-                Some(self.set.clone())
-            }
-            _ => None,
-        }
+    fn get_constraints(&self, arguments: &[AtomTerm]) -> Vec<Constraint<AtomTerm, ArcSort>> {
+        simple_constraints(
+            self.name(),
+            arguments,
+            &[self.set.clone(), self.set.clone(), self.set.clone()],
+        )
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
@@ -377,13 +375,12 @@ impl PrimitiveLike for Remove {
         self.name
     }
 
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-        match types {
-            [set, key] if (set.name(), key.name()) == (self.set.name, self.set.element_name()) => {
-                Some(self.set.clone())
-            }
-            _ => None,
-        }
+    fn get_constraints(&self, arguments: &[AtomTerm]) -> Vec<Constraint<AtomTerm, ArcSort>> {
+        simple_constraints(
+            self.name(),
+            arguments,
+            &[self.set.clone(), self.set.element(), self.set.clone()],
+        )
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
@@ -403,13 +400,12 @@ impl PrimitiveLike for Diff {
         self.name
     }
 
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-        match types {
-            [set1, set2] if set1.name() == self.set.name && set2.name() == self.set.name() => {
-                Some(self.set.clone())
-            }
-            _ => None,
-        }
+    fn get_constraints(&self, arguments: &[AtomTerm]) -> Vec<Constraint<AtomTerm, ArcSort>> {
+        simple_constraints(
+            self.name(),
+            arguments,
+            &[self.set.clone(), self.set.clone(), self.set.clone()],
+        )
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {

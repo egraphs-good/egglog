@@ -1,6 +1,6 @@
 use std::num::NonZeroU32;
 
-use crate::ast::Literal;
+use crate::{ast::Literal, typecheck::all_equal_constraints};
 
 use super::*;
 
@@ -67,12 +67,14 @@ impl PrimitiveLike for Add {
         self.name
     }
 
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-        if types.iter().all(|t| t.name() == self.string.name) {
-            Some(self.string.clone())
-        } else {
-            None
-        }
+    fn get_constraints(&self, arguments: &[AtomTerm]) -> Vec<Constraint<AtomTerm, ArcSort>> {
+        all_equal_constraints(
+            self.name(),
+            arguments,
+            Some(self.string.clone()),
+            None,
+            None,
+        )
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {

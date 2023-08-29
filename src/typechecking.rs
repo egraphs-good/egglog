@@ -673,4 +673,6 @@ pub enum TypeError {
     NoMatchingPrimitive { op: Symbol, inputs: Vec<Symbol> },
     #[error("Variable {0} was already defined")]
     AlreadyDefined(Symbol),
+    #[error("Symbol {0} is defined both as a function and a primitive")]
+    DefinedAsBothFunctionAndPrimitive(Symbol),
 }

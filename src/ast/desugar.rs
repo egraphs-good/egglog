@@ -222,7 +222,7 @@ fn flatten_facts(facts: &Vec<Fact>, desugar: &mut Desugar) -> Vec<NormFact> {
     flatten_equalities(equalities, desugar)
 }
 
-fn flatten_actions(actions: &Vec<Action>, desugar: &mut Desugar) -> Vec<NormAction> {
+pub(crate) fn flatten_actions(actions: &Vec<Action>, desugar: &mut Desugar) -> Vec<NormAction> {
     let mut memo = Default::default();
     let mut add_expr = |expr: Expr, res: &mut Vec<NormAction>| -> Symbol {
         desugar.expr_to_flat_actions(&expr, res, &mut memo)

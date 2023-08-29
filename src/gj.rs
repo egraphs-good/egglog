@@ -247,7 +247,7 @@ impl<'b> Context<'b> {
                             let i = self.query.vars.get_index_of(v).unwrap();
                             self.tuple[i]
                         }
-                        AtomTerm::Value(val) => *val,
+                        AtomTerm::Literal(lit) => self.egraph.eval_lit(lit),
                         AtomTerm::Global(g) => self.egraph.global_bindings.get(g).unwrap().1,
                     })
                 }
@@ -266,8 +266,9 @@ impl<'b> Context<'b> {
 
                             self.tuple[i] = res;
                         }
-                        AtomTerm::Value(val) => {
+                        AtomTerm::Literal(lit) => {
                             assert!(check);
+                            let val = &self.egraph.eval_lit(lit);
                             if val != &res {
                                 return Ok(());
                             }
@@ -369,7 +370,10 @@ impl EGraph {
         let mut constraints = vec![];
         for (i, t) in atom.args.iter().enumerate() {
             match t {
-                AtomTerm::Value(val) => constraints.push(Constraint::Const(i, *val)),
+                AtomTerm::Literal(lit) => {
+                    let val = self.eval_lit(lit);
+                    constraints.push(Constraint::Const(i, val))
+                }
                 AtomTerm::Global(g) => {
                     constraints.push(Constraint::Const(i, self.global_bindings.get(g).unwrap().1))
                 }
@@ -421,8 +425,9 @@ impl EGraph {
             for (col, arg) in atom.args.iter().enumerate() {
                 match arg {
                     AtomTerm::Var(var) => vars.entry(*var).or_default().occurences.push(i),
-                    AtomTerm::Value(val) => {
-                        constants.entry(i).or_default().push((col, *val));
+                    AtomTerm::Literal(lit) => {
+                        let val = self.eval_lit(lit);
+                        constants.entry(i).or_default().push((col, val));
                     }
                     AtomTerm::Global(g) => {
                         let val = self.global_bindings.get(g).unwrap().1;
@@ -540,7 +545,7 @@ impl EGraph {
                 assert!(!p.args.is_empty());
                 p.args[..p.args.len() - 1].iter().all(|a| match a {
                     AtomTerm::Var(v) => vars.contains_key(v),
-                    AtomTerm::Value(_) => true,
+                    AtomTerm::Literal(_) => true,
                     AtomTerm::Global(_) => true,
                 })
             });
@@ -555,7 +560,7 @@ impl EGraph {
                             false
                         }
                     },
-                    AtomTerm::Value(_) => true,
+                    AtomTerm::Literal(_) => true,
                     AtomTerm::Global(_) => true,
                 };
                 program.push(Instr::Call {
@@ -608,7 +613,7 @@ impl EGraph {
                                 tuple_valid[i] = true;
                             }
                         }
-                        AtomTerm::Value(_) => {
+                        AtomTerm::Literal(_) => {
                             assert!(*check);
                         }
                         AtomTerm::Global(_) => {
