@@ -7,7 +7,6 @@ use crate::{
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct TermId(usize);
 
-
 #[allow(rustdoc::private_intra_doc_links)]
 /// Like [`Expr`]s but with sharing and deduplication.
 ///
