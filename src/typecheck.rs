@@ -870,31 +870,37 @@ impl EGraph {
 
                     let variants = values[1].bits as i64;
                     if variants == 0 {
-                        let (cost, expr) = self.extract(
+                        let (cost, term) = self.extract(
                             values[0],
                             &mut termdag,
                             self.type_info().sorts.get(&values[0].tag).unwrap(),
                         );
-                        let extracted = termdag.to_string(&expr);
+                        let extracted = termdag.to_string(&term);
                         log::info!("extracted with cost {cost}: {}", extracted);
                         self.print_msg(extracted);
+                        self.extract_report = Some(ExtractReport::Best {
+                            termdag,
+                            cost,
+                            term,
+                        });
                     } else {
                         if variants < 0 {
                             panic!("Cannot extract negative number of variants");
                         }
-                        let extracted =
+                        let terms =
                             self.extract_variants(values[0], variants as usize, &mut termdag);
                         log::info!("extracted variants:");
                         let mut msg = String::default();
                         msg += "(\n";
-                        assert!(!extracted.is_empty());
-                        for expr in extracted {
-                            let str = termdag.to_string(&expr);
+                        assert!(!terms.is_empty());
+                        for expr in &terms {
+                            let str = termdag.to_string(expr);
                             log::info!("   {}", str);
                             msg += &format!("   {}\n", str);
                         }
                         msg += ")";
                         self.print_msg(msg);
+                        self.extract_report = Some(ExtractReport::Variants { termdag, terms });
                     }
 
                     stack.truncate(new_len);
