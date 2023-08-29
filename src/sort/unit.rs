@@ -1,8 +1,6 @@
 use super::*;
 use crate::{
-    ast::Literal,
-    typecheck::{Atom, ImpossibleConstraint},
-    ArcSort, PrimitiveLike,
+    ast::Literal, constraint::ImpossibleConstraint, typecheck::Atom, ArcSort, PrimitiveLike,
 };
 
 #[derive(Debug)]

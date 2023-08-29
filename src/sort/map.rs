@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 
-use crate::typecheck::all_equal_constraints;
+use crate::constraint::all_equal_constraints;
 
 use super::*;
 

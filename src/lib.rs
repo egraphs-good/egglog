@@ -1,4 +1,5 @@
 pub mod ast;
+pub mod constraint;
 mod extract;
 mod function;
 mod gj;
@@ -28,6 +29,7 @@ use symbolic_expressions::Sexp;
 use ast::*;
 pub use typechecking::{TypeInfo, UNIT_SYM};
 
+use constraint::{simple_constraints, Constraint};
 use std::fmt::{Display, Formatter, Write};
 use std::fs::File;
 use std::hash::Hash;
@@ -38,7 +40,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::str::FromStr;
 use std::{fmt::Debug, sync::Arc};
-use typecheck::{simple_constraints, AtomTerm, Constraint, Program};
+use typecheck::{AtomTerm, Program};
 
 pub type ArcSort = Arc<dyn Sort>;
 
@@ -49,7 +51,7 @@ use gj::*;
 use unionfind::*;
 use util::*;
 
-use crate::typecheck::Problem;
+use crate::constraint::Problem;
 use crate::typechecking::TypeError;
 
 pub type Subst = IndexMap<Symbol, Value>;

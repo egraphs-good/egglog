@@ -1,6 +1,6 @@
 use std::num::NonZeroU32;
 
-use crate::{ast::Literal, typecheck::all_equal_constraints};
+use crate::{ast::Literal, constraint::all_equal_constraints};
 
 use super::*;
 
