@@ -6,9 +6,9 @@
 (rewrite (Times (Lit i) (Lit j)) (Lit (* i j)))
 (rewrite (Times a b) (Times b a))
 
-(datatype MExpr 
-    (MMul MExpr MExpr) 
-    (Kron MExpr MExpr) 
+(datatype MExpr
+    (MMul MExpr MExpr)
+    (Kron MExpr MExpr)
     (NamedMat String)
     (Id Dim)
     ; DSum
@@ -17,7 +17,7 @@
     ; Transpose
     ; Inverse
     ; Zero Math Math
-    ; ScalarMul 
+    ; ScalarMul
 )
 
 ; alternative encoding (type A) = (Matrix n m) may be more useful for "large story example"
@@ -45,26 +45,26 @@
 (rewrite (Kron (MMul A C) (MMul B D))  (MMul (Kron A B) (Kron C D)))
 
 
-(rewrite (MMul (Kron A B) (Kron C D)) 
+(rewrite (MMul (Kron A B) (Kron C D))
     (Kron (MMul A C) (MMul B D))
-    :when  
+    :when
         ((= (ncols A) (nrows C))
         (= (ncols B) (nrows D)))
 )
 
 ; demand
 (rule ((= e (MMul A B)))
-((let demand1 (ncols A))
-(let demand2 (nrows A))
-(let demand3 (ncols B))
-(let demand4 (nrows B)))
+((ncols A)
+(nrows A)
+(ncols B)
+(nrows B))
 )
 
 (rule ((= e (Kron A B)))
-((let demand1 (ncols A))
-(let demand2 (nrows A))
-(let demand3 (ncols B))
-(let demand4 (nrows B)))
+((ncols A)
+(nrows A)
+(ncols B)
+(nrows B))
 )
 
 

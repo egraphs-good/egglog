@@ -2,7 +2,6 @@ pub mod ast;
 mod extract;
 mod function;
 mod gj;
-mod proofs;
 mod serialize;
 pub mod sort;
 mod termdag;
@@ -12,16 +11,15 @@ mod unionfind;
 pub mod util;
 mod value;
 
+use ast::desugar::Desugar;
 use extract::Extractor;
 use hashbrown::hash_map::Entry;
 use index::ColumnIndex;
 use instant::{Duration, Instant};
 pub use serialize::SerializeConfig;
 use sort::*;
-pub use termdag::{Term, TermDag};
+pub use termdag::{Term, TermDag, TermId};
 use thiserror::Error;
-
-use proofs::ProofState;
 
 use symbolic_expressions::Sexp;
 
@@ -73,11 +71,11 @@ pub enum ExtractReport {
     Best {
         termdag: TermDag,
         cost: usize,
-        expr: Term,
+        term: Term,
     },
     Variants {
         termdag: TermDag,
-        variants: Vec<Term>,
+        terms: Vec<Term>,
     },
 }
 
@@ -207,7 +205,7 @@ impl FromStr for CompilerPassStop {
 pub struct EGraph {
     egraphs: Vec<Self>,
     unionfind: UnionFind,
-    pub(crate) proof_state: ProofState,
+    pub(crate) desugar: Desugar,
     functions: HashMap<Symbol, Function>,
     rulesets: HashMap<Symbol, HashMap<Symbol, Rule>>,
     ruleset_iteration: HashMap<Symbol, usize>,
@@ -246,7 +244,7 @@ impl Default for EGraph {
             functions: Default::default(),
             rulesets: Default::default(),
             ruleset_iteration: Default::default(),
-            proof_state: ProofState::default(),
+            desugar: Desugar::default(),
             global_bindings: Default::default(),
             match_limit: usize::MAX,
             node_limit: usize::MAX,
@@ -486,10 +484,10 @@ impl EGraph {
 
     pub fn eval_lit(&self, lit: &Literal) -> Value {
         match lit {
-            Literal::Int(i) => i.store(&self.proof_state.type_info.get_sort()).unwrap(),
-            Literal::F64(f) => f.store(&self.proof_state.type_info.get_sort()).unwrap(),
-            Literal::String(s) => s.store(&self.proof_state.type_info.get_sort()).unwrap(),
-            Literal::Unit => ().store(&self.proof_state.type_info.get_sort()).unwrap(),
+            Literal::Int(i) => i.store(&self.type_info().get_sort()).unwrap(),
+            Literal::F64(f) => f.store(&self.type_info().get_sort()).unwrap(),
+            Literal::String(s) => s.store(&self.type_info().get_sort()).unwrap(),
+            Literal::Unit => ().store(&self.type_info().get_sort()).unwrap(),
         }
     }
 
@@ -528,7 +526,7 @@ impl EGraph {
             } else {
                 termdag.expr_to_term(&schema.output.make_expr(self, out.value).1)
             };
-            terms.push((termdag.make(sym, children), out));
+            terms.push((termdag.app(sym, children), out));
         }
         drop(extractor);
 
@@ -998,7 +996,7 @@ impl EGraph {
                         }
                         NormAction::LetLit(var, lit) => {
                             let value = self.eval_lit(lit);
-                            let etype = self.proof_state.type_info.infer_literal(lit);
+                            let etype = self.type_info().infer_literal(lit);
                             let present = self
                                 .global_bindings
                                 .insert(*var, (etype, value, self.timestamp));
@@ -1105,9 +1103,9 @@ impl EGraph {
                 let mut termdag = TermDag::default();
                 for expr in exprs {
                     let (t, value) = self.eval_expr(&expr, None, true)?;
-                    let expr = self.extract(value, &mut termdag, &t).1;
+                    let term = self.extract(value, &mut termdag, &t).1;
                     use std::io::Write;
-                    writeln!(f, "{}", termdag.to_string(&expr))
+                    writeln!(f, "{}", termdag.to_string(&term))
                         .map_err(|e| Error::IoError(filename.clone(), e))?;
                 }
 
@@ -1151,7 +1149,7 @@ impl EGraph {
     }
 
     pub fn set_underscores_for_desugaring(&mut self, underscores: usize) {
-        self.proof_state.desugar.number_underscores = underscores;
+        self.desugar.number_underscores = underscores;
     }
 
     fn process_command(
@@ -1159,25 +1157,23 @@ impl EGraph {
         command: Command,
         stop: CompilerPassStop,
     ) -> Result<Vec<NormCommand>, Error> {
-        let program = self.proof_state.desugar.desugar_program(
-            vec![command],
-            self.test_proofs,
-            self.seminaive,
-        )?;
+        let program =
+            self.desugar
+                .desugar_program(vec![command], self.test_proofs, self.seminaive)?;
         if stop == CompilerPassStop::Desugar {
             return Ok(program);
         }
 
-        let type_info_before = self.proof_state.type_info.clone();
+        let type_info_before = self.type_info().clone();
 
-        self.proof_state.type_info.typecheck_program(&program)?;
+        self.desugar.type_info.typecheck_program(&program)?;
         if stop == CompilerPassStop::TypecheckDesugared {
             return Ok(program);
         }
 
         // reset type info
-        self.proof_state.type_info = type_info_before;
-        self.proof_state.type_info.typecheck_program(&program)?;
+        self.desugar.type_info = type_info_before;
+        self.desugar.type_info.typecheck_program(&program)?;
         if stop == CompilerPassStop::TypecheckTermEncoding {
             return Ok(program);
         }
@@ -1211,11 +1207,11 @@ impl EGraph {
     }
 
     pub fn parse_program(&self, input: &str) -> Result<Vec<Command>, Error> {
-        self.proof_state.desugar.parse_program(input)
+        self.desugar.parse_program(input)
     }
 
     pub fn parse_and_run_program(&mut self, input: &str) -> Result<Vec<String>, Error> {
-        let parsed = self.proof_state.desugar.parse_program(input)?;
+        let parsed = self.desugar.parse_program(input)?;
         self.run_program(parsed)
     }
 
@@ -1224,11 +1220,11 @@ impl EGraph {
     }
 
     pub(crate) fn get_sort(&self, value: &Value) -> Option<&ArcSort> {
-        self.proof_state.type_info.sorts.get(&value.tag)
+        self.type_info().sorts.get(&value.tag)
     }
 
     pub fn add_arcsort(&mut self, arcsort: ArcSort) -> Result<(), TypeError> {
-        self.proof_state.type_info.add_arcsort(arcsort)
+        self.desugar.type_info.add_arcsort(arcsort)
     }
 
     /// Gets the last extract report and returns it, if the last command saved it.
@@ -1255,6 +1251,10 @@ impl EGraph {
     fn flush_msgs(&mut self) -> Vec<String> {
         self.msgs.dedup_by(|a, b| a.is_empty() && b.is_empty());
         std::mem::take(&mut self.msgs)
+    }
+
+    pub(crate) fn type_info(&self) -> &TypeInfo {
+        &self.desugar.type_info
     }
 }
 

@@ -112,7 +112,7 @@ impl<'a> Context<'a> {
     pub fn new(egraph: &'a EGraph) -> Self {
         Self {
             egraph,
-            unit: egraph.proof_state.type_info.sorts[&Symbol::from(UNIT_SYM)].clone(),
+            unit: egraph.type_info().sorts[&Symbol::from(UNIT_SYM)].clone(),
             types: Default::default(),
             errors: Vec::default(),
             unionfind: UnionFind::default(),
@@ -396,7 +396,7 @@ impl<'a> Context<'a> {
                 (self.add_node(ENode::Var(*sym)), ty)
             }
             Expr::Lit(lit) => {
-                let t = self.egraph.proof_state.type_info.infer_literal(lit);
+                let t = self.egraph.type_info().infer_literal(lit);
                 (self.add_node(ENode::Literal(lit.clone())), Some(t))
             }
             Expr::Call(sym, args) => {
@@ -415,7 +415,7 @@ impl<'a> Context<'a> {
                         .collect();
                     let t = f.schema.output.clone();
                     (self.add_node(ENode::Func(*sym, ids)), Some(t))
-                } else if let Some(prims) = self.egraph.proof_state.type_info.primitives.get(sym) {
+                } else if let Some(prims) = self.egraph.type_info().primitives.get(sym) {
                     let (ids, arg_tys): (Vec<Id>, Vec<Option<ArcSort>>) =
                         args.iter().map(|arg| self.infer_query_expr(arg)).unzip();
 
@@ -533,13 +533,7 @@ impl<'a> ExprChecker<'a> for ActionChecker<'a> {
     }
 
     fn do_function(&mut self, f: Symbol, _args: Vec<Self::T>) -> Self::T {
-        let func_type = self
-            .egraph
-            .proof_state
-            .type_info
-            .func_types
-            .get(&f)
-            .unwrap();
+        let func_type = self.egraph.type_info().func_types.get(&f).unwrap();
         self.instructions.push(Instruction::CallFunction(
             f,
             func_type.has_default || !func_type.has_merge,
@@ -601,11 +595,11 @@ trait ExprChecker<'a> {
         match expr {
             Expr::Lit(lit) => {
                 let t = self.do_lit(lit);
-                Ok((t, self.egraph().proof_state.type_info.infer_literal(lit)))
+                Ok((t, self.egraph().type_info().infer_literal(lit)))
             }
             Expr::Var(sym) => self.infer_var(*sym),
             Expr::Call(sym, args) => {
-                if let Some(functype) = self.egraph().proof_state.type_info.func_types.get(sym) {
+                if let Some(functype) = self.egraph().type_info().func_types.get(sym) {
                     assert!(functype.input.len() == args.len());
 
                     let mut ts = vec![];
@@ -615,8 +609,7 @@ trait ExprChecker<'a> {
 
                     let t = self.do_function(*sym, ts);
                     Ok((t, functype.output.clone()))
-                } else if let Some(prims) = self.egraph().proof_state.type_info.primitives.get(sym)
-                {
+                } else if let Some(prims) = self.egraph().type_info().primitives.get(sym) {
                     let mut ts = Vec::with_capacity(args.len());
                     let mut tys = Vec::with_capacity(args.len());
                     for arg in args {
@@ -877,44 +870,37 @@ impl EGraph {
 
                     let variants = values[1].bits as i64;
                     if variants == 0 {
-                        let (cost, expr) = self.extract(
+                        let (cost, term) = self.extract(
                             values[0],
                             &mut termdag,
-                            self.proof_state
-                                .type_info
-                                .sorts
-                                .get(&values[0].tag)
-                                .unwrap(),
+                            self.type_info().sorts.get(&values[0].tag).unwrap(),
                         );
-                        let extracted = termdag.to_string(&expr);
+                        let extracted = termdag.to_string(&term);
                         log::info!("extracted with cost {cost}: {}", extracted);
                         self.print_msg(extracted);
                         self.extract_report = Some(ExtractReport::Best {
                             termdag,
                             cost,
-                            expr,
+                            term,
                         });
                     } else {
                         if variants < 0 {
                             panic!("Cannot extract negative number of variants");
                         }
-                        let extracted =
+                        let terms =
                             self.extract_variants(values[0], variants as usize, &mut termdag);
                         log::info!("extracted variants:");
                         let mut msg = String::default();
                         msg += "(\n";
-                        assert!(!extracted.is_empty());
-                        for expr in &extracted {
+                        assert!(!terms.is_empty());
+                        for expr in &terms {
                             let str = termdag.to_string(expr);
                             log::info!("   {}", str);
                             msg += &format!("   {}\n", str);
                         }
                         msg += ")";
                         self.print_msg(msg);
-                        self.extract_report = Some(ExtractReport::Variants {
-                            termdag,
-                            variants: extracted,
-                        });
+                        self.extract_report = Some(ExtractReport::Variants { termdag, terms });
                     }
 
                     stack.truncate(new_len);

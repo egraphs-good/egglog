@@ -184,7 +184,7 @@ impl EGraph {
     ///
     /// Checks for pattern created by Desugar.get_fresh
     fn is_temp_name(&self, name: String) -> bool {
-        let number_underscores = self.proof_state.desugar.number_underscores;
+        let number_underscores = self.desugar.number_underscores;
         let res = name.starts_with('v')
             && name.ends_with("_".repeat(number_underscores).as_str())
             && name[1..name.len() - number_underscores]

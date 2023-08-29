@@ -395,7 +395,9 @@ impl ToSexp for Command {
             } => rule.to_sexp(*ruleset, *name),
             Command::RunSchedule(sched) => list!("run-schedule", sched),
             Command::Calc(args, exprs) => list!("calc", list!(++ args), ++ exprs),
-            Command::Extract { variants, fact } => list!("extract", ":variants", variants, fact),
+            Command::Extract { variants, fact } => {
+                list!("query-extract", ":variants", variants, fact)
+            }
             Command::Check(facts) => list!("check", ++ facts),
             Command::CheckProof => list!("check-proof"),
             Command::Push(n) => list!("push", n),
