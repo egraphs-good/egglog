@@ -17,7 +17,7 @@ https://egg-smol-python.readthedocs.io/en/latest/
 ## Chat
 
 There is a Zulip chat about egglog here:
-https://egraphs.zulipchat.com/#narrow/stream/328979-Implementation/topic/Eggsmol
+https://egraphs.zulipchat.com/#narrow/stream/375765-egglog
 
 ## Prerequisites & compilation
 
