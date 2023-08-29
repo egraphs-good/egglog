@@ -284,12 +284,8 @@ impl EGraph {
                 let run_report = self.run_report.clone();
                 let messages = self.msgs.clone();
                 *self = e;
-                if let Some(report) = extract_report {
-                    self.extract_report = Some(report);
-                }
-                if let Some(report) = run_report {
-                    self.run_report = Some(report);
-                }
+                self.extract_report = extract_report.or(self.extract_report.clone());
+                self.run_report = run_report.or(self.run_report.clone());
                 self.msgs.extend(messages);
                 Ok(())
             }
