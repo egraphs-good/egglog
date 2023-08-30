@@ -125,7 +125,7 @@ fn normalize_expr(
             panic!("handled above");
         }
         Expr::Call(f, children) => {
-            let is_compute = TypeInfo::default().is_primitive(*f);
+            let is_compute = desugar.type_info.is_primitive(*f);
             let mut new_children = vec![];
             for child in children {
                 match child {
@@ -418,6 +418,7 @@ pub struct Desugar {
     // TODO fix getting fresh names using modules
     pub(crate) number_underscores: usize,
     pub(crate) global_variables: HashSet<Symbol>,
+    pub(crate) type_info: TypeInfo,
 }
 
 impl Default for Desugar {
@@ -429,6 +430,7 @@ impl Default for Desugar {
             parser: ast::parse::ProgramParser::new(),
             number_underscores: 3,
             global_variables: Default::default(),
+            type_info: TypeInfo::default(),
         }
     }
 }
@@ -581,21 +583,17 @@ pub(crate) fn desugar_command(
         Command::RunSchedule(sched) => {
             vec![NCommand::RunSchedule(desugar_schedule(desugar, &sched))]
         }
-        // TODO add variants to extract action
-        Command::Extract {
-            variants: _variants,
-            fact,
-        } => {
+        Command::Extract { variants, fact } => {
             let fresh = desugar.get_fresh();
             let fresh_ruleset = desugar.get_fresh();
             let desugaring = if let Fact::Fact(Expr::Var(v)) = fact {
-                format!("(extract {v})")
+                format!("(extract {v} {variants})")
             } else {
                 format!(
                     "(check {fact})
                     (ruleset {fresh_ruleset})
                     (rule ((= {fresh} {fact}))
-                          ((extract {fresh}))
+                          ((extract {fresh} {variants}))
                           :ruleset {fresh_ruleset})
                     (run {fresh_ruleset} 1)"
                 )
@@ -689,6 +687,7 @@ impl Clone for Desugar {
             parser: ast::parse::ProgramParser::new(),
             number_underscores: self.number_underscores,
             global_variables: self.global_variables.clone(),
+            type_info: self.type_info.clone(),
         }
     }
 }

@@ -1,6 +1,6 @@
 # egglog
 
-<a href="https://egraphs-good.github.io/egglog/docs/egglog">
+<a href="https://egraphs-good.github.io/egglog/">
     <img alt="Web Demo" src="https://img.shields.io/badge/-web demo-blue"></a>
 <a href="https://egraphs-good.github.io/egglog/docs/egglog">
     <img alt="Main Branch Documentation" src="https://img.shields.io/badge/docs-main-blue"></a>
@@ -17,7 +17,7 @@ https://egg-smol-python.readthedocs.io/en/latest/
 ## Chat
 
 There is a Zulip chat about egglog here:
-https://egraphs.zulipchat.com/#narrow/stream/328979-Implementation/topic/Eggsmol
+https://egraphs.zulipchat.com/#narrow/stream/375765-egglog
 
 ## Prerequisites & compilation
 
