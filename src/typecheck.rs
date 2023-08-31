@@ -42,7 +42,7 @@ pub enum ResolvedSymbol {
 }
 
 impl Query<ResolvedSymbol> {
-    pub fn filters<'a>(&'a self) -> impl Iterator<Item = Atom<Primitive>> + 'a {
+    pub fn filters(&self) -> impl Iterator<Item = Atom<Primitive>> + '_ {
         self.atoms.iter().filter_map(|atom| match &atom.head {
             ResolvedSymbol::Func(_) => None,
             ResolvedSymbol::Primitive(head) => Some(Atom {
@@ -52,7 +52,7 @@ impl Query<ResolvedSymbol> {
         })
     }
 
-    pub fn funcs<'a>(&'a self) -> impl Iterator<Item = Atom<Symbol>> + 'a {
+    pub fn funcs(&self) -> impl Iterator<Item = Atom<Symbol>> + '_ {
         self.atoms.iter().filter_map(|atom| match atom.head {
             ResolvedSymbol::Func(head) => Some(Atom {
                 head,
@@ -74,8 +74,6 @@ impl UnresolvedCoreRule {
 pub struct Context<'a> {
     pub egraph: &'a mut EGraph,
     pub types: IndexMap<Symbol, ArcSort>,
-    unit: ArcSort,
-    errors: Vec<TypeError>,
     unionfind: UnionFind,
 }
 
@@ -236,12 +234,9 @@ impl PrimitiveLike for ValueEq {
 
 impl<'a> Context<'a> {
     pub fn new(egraph: &'a mut EGraph) -> Self {
-        let unit = egraph.type_info().sorts[&Symbol::from(UNIT_SYM)].clone();
         Self {
             egraph,
-            unit: unit,
             types: Default::default(),
-            errors: Vec::default(),
             unionfind: UnionFind::default(),
         }
     }
@@ -283,7 +278,7 @@ impl<'a> Context<'a> {
             Fact::Eq(exprs) => {
                 // TODO: currently we require exprs.len() to be 2 and Eq atom has the form (= e1 e2)
                 // which isn't necessary and can be loosened.
-                assert!(exprs.len() > 0);
+                assert!(!exprs.is_empty());
                 let var_atoms: Vec<_> = exprs.iter().map(|expr| self.flatten_expr(expr)).collect();
                 let mut equality_checks = var_atoms
                     .iter()
@@ -469,7 +464,7 @@ impl<'a> Context<'a> {
             .collect::<Result<Vec<_>, TypeError>>()?;
         let body = Query { atoms: body_atoms };
 
-        let mut result_rule = ResolvedCoreRule {
+        let result_rule = ResolvedCoreRule {
             body,
             head: rule.head,
         };
@@ -1022,7 +1017,6 @@ mod tests {
                 Expr::Lit(Literal::Int(1)),
             )],
         );
-        eprintln!("{:?}", result);
         assert!(result.is_ok())
     }
 }

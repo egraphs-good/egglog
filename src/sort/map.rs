@@ -24,10 +24,6 @@ impl MapSort {
         self.value.clone()
     }
 
-    fn kv_names(&self) -> (Symbol, Symbol) {
-        (self.key.name(), self.value.name())
-    }
-
     pub fn make_sort(
         typeinfo: &mut TypeInfo,
         name: Symbol,

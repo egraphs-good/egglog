@@ -3,7 +3,7 @@ use crate::{
     typecheck::{Atom, AtomTerm},
     typechecking::TypeError,
     util::HashMap,
-    ArcSort, Primitive, Symbol, TypeInfo,
+    ArcSort, Symbol, TypeInfo,
 };
 use core::hash::Hash;
 use std::{fmt::Debug, iter::once, mem::swap};
@@ -142,14 +142,16 @@ where
                 // If update is successful for only one sub constraint, then we have nailed down the only true constraint.
                 // If update is successful for more than one constraint, then Xor succeeds with no updates.
                 // If update fails for every constraint, then Xor fails
-                if success_count == 1 {
-                    *assignment = result_assignment;
-                    Ok(assignment_updated)
-                } else if success_count > 1 {
-                    *assignment = orig_assignment;
-                    Ok(false)
-                } else {
-                    Err(ConstraintError::NoConstraintSatisfied(errors))
+                match success_count.cmp(&1) {
+                    std::cmp::Ordering::Equal => {
+                        *assignment = result_assignment;
+                        Ok(assignment_updated)
+                    }
+                    std::cmp::Ordering::Greater => {
+                        *assignment = orig_assignment;
+                        Ok(false)
+                    }
+                    std::cmp::Ordering::Less => Err(ConstraintError::NoConstraintSatisfied(errors)),
                 }
             }
             Constraint::Impossible(constraint) => Err(ConstraintError::ImpossibleCaseIdentified(
@@ -269,7 +271,7 @@ impl Atom<Symbol> {
         let literal_constraints = get_literal_and_global_constraints(&self.args, type_info);
 
         match xor_constraints.len() {
-            0 => return Err(TypeError::UnboundFunction(self.head)),
+            0 => Err(TypeError::UnboundFunction(self.head)),
             1 => Ok(literal_constraints
                 .chain(xor_constraints.pop().unwrap().into_iter())
                 .collect()),
@@ -352,7 +354,7 @@ pub fn all_equal_constraints(
     exact_length: Option<usize>,
     output: Option<ArcSort>,
 ) -> Vec<Constraint<AtomTerm, ArcSort>> {
-    if arguments.len() == 0 {
+    if arguments.is_empty() {
         panic!("all arguments should have length > 0")
     }
 
@@ -386,14 +388,12 @@ pub fn all_equal_constraints(
                 .cloned()
                 .map(|arg| Constraint::Assign(arg, sort.clone())),
         )
-    } else {
-        if let Some((first, rest)) = arguments.split_first() {
-            constraints.extend(
-                rest.iter()
-                    .cloned()
-                    .map(|arg| Constraint::Eq(arg, first.clone())),
-            );
-        }
+    } else if let Some((first, rest)) = arguments.split_first() {
+        constraints.extend(
+            rest.iter()
+                .cloned()
+                .map(|arg| Constraint::Eq(arg, first.clone())),
+        );
     }
     constraints
 }
