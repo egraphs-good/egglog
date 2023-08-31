@@ -61,7 +61,7 @@ impl PrimitiveLike for NotEqualPrimitive {
             }
             _ => {
                 vec![Constraint::Impossible(
-                    ImpossibleConstraint::ArgSizeMismatch {
+                    ImpossibleConstraint::ArityMismatch {
                         atom: Atom {
                             head: self.name(),
                             args: arguments.to_vec(),

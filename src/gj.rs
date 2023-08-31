@@ -5,7 +5,7 @@ use smallvec::SmallVec;
 
 use crate::{
     function::index::Offset,
-    typecheck::{Atom, AtomTerm, Query},
+    typecheck::{Atom, AtomTerm, ResolvedSymbol},
     *,
 };
 use std::{
@@ -13,6 +13,8 @@ use std::{
     fmt::{self, Debug},
     ops::Range,
 };
+
+type Query = crate::typecheck::Query<ResolvedSymbol>;
 
 #[derive(Clone)]
 enum Instr<'a> {
@@ -342,7 +344,7 @@ impl EGraph {
             vars.entry(*var).or_default();
         }
 
-        for (i, atom) in query.atoms.iter().enumerate() {
+        for (i, atom) in query.funcs().enumerate() {
             for v in atom.vars() {
                 // only count grounded occurrences
                 vars.entry(v).or_default().occurences.push(i)
@@ -350,7 +352,7 @@ impl EGraph {
         }
 
         // make sure everyone has an entry in the vars table
-        for prim in &query.filters {
+        for prim in query.filters() {
             for v in prim.vars() {
                 vars.entry(v).or_default();
             }
@@ -416,7 +418,7 @@ impl EGraph {
         Vec<Symbol>,        /* variable ordering */
         Vec<Option<usize>>, /* the first column accessed per-atom */
     )> {
-        let atoms = &query.query.atoms;
+        let atoms: &Vec<_> = &query.query.funcs().collect();
         let mut vars: IndexMap<Symbol, VarInfo2> = Default::default();
         let mut constants =
             IndexMap::<usize /* atom */, Vec<(usize /* column */, Value)>>::default();
@@ -539,7 +541,7 @@ impl EGraph {
         program.extend(var_instrs);
 
         // now we can try to add primitives
-        let mut extra = query.query.filters.clone();
+        let mut extra: Vec<_> = query.query.filters().collect();
         while !extra.is_empty() {
             let next = extra.iter().position(|p| {
                 assert!(!p.args.is_empty());
@@ -629,12 +631,12 @@ impl EGraph {
     where
         F: FnMut(&[Value]) -> Result,
     {
-        let has_atoms = !cq.query.atoms.is_empty();
+        let has_atoms = !cq.query.funcs().collect::<Vec<_>>().is_empty();
 
         if has_atoms {
             // check if any globals updated
             let mut global_updated = false;
-            for atom in &cq.query.atoms {
+            for atom in cq.query.funcs() {
                 for arg in &atom.args {
                     if let AtomTerm::Global(g) = arg {
                         if self.global_bindings.get(g).unwrap().2 > timestamp {
@@ -646,8 +648,9 @@ impl EGraph {
 
             let do_seminaive = self.seminaive && !global_updated;
             // for the later atoms, we consider everything
-            let mut timestamp_ranges = vec![0..u32::MAX; cq.query.atoms.len()];
-            for (atom_i, atom) in cq.query.atoms.iter().enumerate() {
+            let mut timestamp_ranges =
+                vec![0..u32::MAX; cq.query.funcs().collect::<Vec<_>>().len()]; // TODO: bad use of collect here.
+            for (atom_i, atom) in cq.query.funcs().enumerate() {
                 // this time, we only consider "new stuff" for this atom
                 if do_seminaive {
                     timestamp_ranges[atom_i] = timestamp..u32::MAX;
@@ -663,11 +666,10 @@ impl EGraph {
                         order = ListDisplay(&ctx.join_var_ordering, " "),
                         tuple = ListDisplay(cq.vars.keys(), " "),
                     );
-                    let mut tries = Vec::with_capacity(cq.query.atoms.len());
+                    let mut tries = Vec::with_capacity(cq.query.funcs().collect::<Vec<_>>().len()); // TODO: bad collect
                     for ((atom, ts), col) in cq
                         .query
-                        .atoms
-                        .iter()
+                        .funcs()
                         .zip(timestamp_ranges.iter())
                         .zip(cols.iter())
                     {
@@ -730,7 +732,7 @@ impl EGraph {
                 stage_sizes: &mut meausrements,
                 cur_stage: 0,
             };
-            let tries = LazyTrie::make_initial_vec(cq.query.atoms.len());
+            let tries = LazyTrie::make_initial_vec(cq.query.funcs().collect::<Vec<_>>().len()); // TODO: bad use of collect here
             let mut trie_refs = tries.iter().collect::<Vec<_>>();
             ctx.eval(&mut trie_refs, &program.0, stages, &mut f)
                 .unwrap_or(());

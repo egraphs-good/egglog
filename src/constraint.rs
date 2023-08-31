@@ -6,20 +6,22 @@ use crate::{
     ArcSort, Primitive, Symbol, TypeInfo,
 };
 use core::hash::Hash;
-use std::{iter::once, mem::swap};
+use std::{fmt::Debug, iter::once, mem::swap};
 
 #[derive(Clone, Debug)]
 pub enum ImpossibleConstraint {
-    ArgSizeMismatch {
+    ArityMismatch {
         atom: Atom<Symbol>,
         expected: usize,
         actual: usize,
     },
 }
 
+#[derive(Debug)]
 pub enum Constraint<Var, Value> {
     Eq(Var, Var),
     Assign(Var, Value),
+    And(Vec<Constraint<Var, Value>>),
     // Exactly one of the constraints holds
     // and all others are false
     Xor(Vec<Constraint<Var, Value>>),
@@ -43,8 +45,10 @@ impl ConstraintError<AtomTerm, ArcSort> {
                 reason: "mismatch".into(),
             },
             ConstraintError::UnconstrainedVar(v) => TypeError::InferenceFailure(v.to_expr()),
-            ConstraintError::NoConstraintSatisfied(constraints) => todo!(),
-            ConstraintError::ImpossibleCaseIdentified(ImpossibleConstraint::ArgSizeMismatch {
+            ConstraintError::NoConstraintSatisfied(constraints) => TypeError::AllAlternativeFailed(
+                constraints.iter().map(|c| c.to_type_error()).collect(),
+            ),
+            ConstraintError::ImpossibleCaseIdentified(ImpossibleConstraint::ArityMismatch {
                 atom,
                 expected,
                 actual,
@@ -114,7 +118,8 @@ where
             },
             Constraint::Xor(cs) => {
                 let mut success_count = 0;
-                let mut updated_assignment = assignment.clone();
+                let orig_assignment = assignment.clone();
+                let mut result_assignment = assignment.clone();
                 let mut assignment_updated = false;
                 let mut errors = vec![];
                 for c in cs {
@@ -127,7 +132,7 @@ where
                             }
 
                             if updated {
-                                swap(&mut updated_assignment, assignment);
+                                swap(&mut result_assignment, assignment);
                             }
                             assignment_updated = updated;
                         }
@@ -138,8 +143,10 @@ where
                 // If update is successful for more than one constraint, then Xor succeeds with no updates.
                 // If update fails for every constraint, then Xor fails
                 if success_count == 1 {
+                    *assignment = result_assignment;
                     Ok(assignment_updated)
                 } else if success_count > 1 {
+                    *assignment = orig_assignment;
                     Ok(false)
                 } else {
                     Err(ConstraintError::NoConstraintSatisfied(errors))
@@ -148,11 +155,18 @@ where
             Constraint::Impossible(constraint) => Err(ConstraintError::ImpossibleCaseIdentified(
                 constraint.clone(),
             )),
+            Constraint::And(cs) => {
+                let mut updated = false;
+                for c in cs {
+                    updated |= c.update(assignment, key)?;
+                }
+                Ok(updated)
+            }
         }
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct Problem<Var, Value> {
     pub constraints: Vec<Constraint<Var, Value>>,
 }
@@ -175,10 +189,10 @@ where
 
 impl<Var, Value> Problem<Var, Value>
 where
-    Var: Eq + PartialEq + Hash + Clone,
+    Var: Eq + PartialEq + Hash + Clone + Debug,
     Value: Clone,
 {
-    pub(crate) fn solve<'a, K: Eq>(
+    pub(crate) fn solve<'a, K: Eq + Debug>(
         &'a self,
         range: impl Iterator<Item = &'a Var>,
         key: impl Fn(&Value) -> K + Copy,
@@ -186,6 +200,14 @@ where
         let mut assignment = Assignment(HashMap::default());
         let mut changed = true;
         while changed {
+            // println!(
+            //     "{:?}",
+            //     assignment
+            //         .0
+            //         .iter()
+            //         .map(|(k, v)| (k, key(v)))
+            //         .collect::<Vec<_>>()
+            // );
             changed = false;
             for constraint in self.constraints.iter() {
                 changed |= constraint.update(&mut assignment, key)?;
@@ -206,23 +228,21 @@ impl Atom<Symbol> {
         &self,
         type_info: &TypeInfo,
     ) -> Result<Vec<Constraint<AtomTerm, ArcSort>>, TypeError> {
-        let mut constraints: Vec<Constraint<AtomTerm, ArcSort>> = vec![];
+        let mut xor_constraints: Vec<Vec<Constraint<AtomTerm, ArcSort>>> = vec![];
 
-        // query function constraint
-        match type_info.func_types.get(&self.head) {
-            None => return Err(TypeError::UnboundFunction(self.head)),
-            Some(typ) => {
-                // arity mismatch
-                if typ.input.len() + 1 != self.args.len() {
-                    return Err(TypeError::Arity {
-                        expr: Expr::Call(
-                            self.head,
-                            self.args.iter().map(|arg| arg.to_expr()).collect(),
-                        ),
-                        expected: typ.input.len() + 1,
-                    });
-                }
-
+        // function atom constraints
+        if let Some(typ) = type_info.func_types.get(&self.head) {
+            let mut constraints = vec![];
+            // arity mismatch
+            if typ.input.len() + 1 != self.args.len() {
+                constraints.push(Constraint::Impossible(
+                    ImpossibleConstraint::ArityMismatch {
+                        atom: self.clone(),
+                        expected: typ.input.len(),
+                        actual: self.args.len() - 1,
+                    },
+                ));
+            } else {
                 for (arg_typ, arg) in typ
                     .input
                     .iter()
@@ -233,11 +253,32 @@ impl Atom<Symbol> {
                     constraints.push(Constraint::Assign(arg, arg_typ));
                 }
             }
+            xor_constraints.push(constraints);
         }
 
-        // literal and global variable constraints
-        constraints.extend(get_literal_and_global_constraints(&self.args, type_info));
-        Ok(constraints)
+        // primitive atom constraints
+        if let Some(primitives) = type_info.primitives.get(&self.head) {
+            for p in primitives {
+                let constraints = p.get_constraints(&self.args);
+                xor_constraints.push(constraints);
+            }
+        }
+
+        // do literal and global variable constraints first
+        // as they are the most "informative"
+        let literal_constraints = get_literal_and_global_constraints(&self.args, type_info);
+
+        match xor_constraints.len() {
+            0 => return Err(TypeError::UnboundFunction(self.head)),
+            1 => Ok(literal_constraints
+                .chain(xor_constraints.pop().unwrap().into_iter())
+                .collect()),
+            _ => Ok(literal_constraints
+                .chain(once(Constraint::Xor(
+                    xor_constraints.into_iter().map(Constraint::And).collect(),
+                )))
+                .collect()),
+        }
     }
 
     fn to_expr(&self) -> Expr {
@@ -279,7 +320,7 @@ pub fn simple_constraints(
 ) -> Vec<Constraint<AtomTerm, ArcSort>> {
     if arguments.len() != sorts.len() {
         vec![Constraint::Impossible(
-            ImpossibleConstraint::ArgSizeMismatch {
+            ImpossibleConstraint::ArityMismatch {
                 atom: Atom {
                     head: name,
                     args: arguments.to_vec(),
@@ -318,7 +359,7 @@ pub fn all_equal_constraints(
     match exact_length {
         Some(exact_length) if exact_length != arguments.len() => {
             return vec![Constraint::Impossible(
-                ImpossibleConstraint::ArgSizeMismatch {
+                ImpossibleConstraint::ArityMismatch {
                     atom: Atom {
                         head: name,
                         args: arguments.to_vec(),
@@ -355,19 +396,4 @@ pub fn all_equal_constraints(
         }
     }
     constraints
-}
-
-impl Atom<Primitive> {
-    pub fn get_constraints(
-        &self,
-        type_info: &TypeInfo,
-    ) -> Result<Vec<Constraint<AtomTerm, ArcSort>>, TypeError> {
-        // TODO: watch out here
-        // query function constraint
-        let mut constraints = self.head.get_constraints(&self.args);
-
-        // literal and global variable constraints
-        constraints.extend(get_literal_and_global_constraints(&self.args, type_info));
-        Ok(constraints)
-    }
 }

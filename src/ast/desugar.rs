@@ -1,4 +1,4 @@
-use crate::*;
+use crate::{typecheck::ValueEq, *};
 
 fn desugar_datatype(name: Symbol, variants: Vec<Variant>) -> Vec<NCommand> {
     vec![NCommand::Sort(name, None)]
@@ -423,6 +423,8 @@ pub struct Desugar {
 
 impl Default for Desugar {
     fn default() -> Self {
+        let mut type_info = TypeInfo::default();
+        type_info.add_primitive(ValueEq {});
         Self {
             next_fresh: Default::default(),
             next_command_id: Default::default(),
@@ -430,7 +432,7 @@ impl Default for Desugar {
             parser: ast::parse::ProgramParser::new(),
             number_underscores: 3,
             global_variables: Default::default(),
-            type_info: TypeInfo::default(),
+            type_info,
         }
     }
 }

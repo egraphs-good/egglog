@@ -677,4 +677,6 @@ pub enum TypeError {
     AlreadyDefined(Symbol),
     #[error("Symbol {0} is defined both as a function and a primitive")]
     DefinedAsBothFunctionAndPrimitive(Symbol),
+    #[error("All alternative definitions considered failed\n{}", .0.iter().map(|e| format!("  {e}\n")).collect::<Vec<_>>().join(""))]
+    AllAlternativeFailed(Vec<TypeError>),
 }

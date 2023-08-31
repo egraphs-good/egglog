@@ -8,7 +8,7 @@ use crate::{
 use hashbrown::HashMap;
 use typechecking::TypeError;
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Default)]
 pub struct Actions(pub(crate) Vec<NormAction>);
 impl Actions {
     fn subst(&mut self, subst: &HashMap<Symbol, AtomTerm>) {
@@ -24,17 +24,48 @@ impl Actions {
 
 // TODO: implement custom debug
 #[derive(Debug, Clone)]
-pub struct CoreRule {
-    pub body: Query,
+pub struct UnresolvedCoreRule {
+    pub body: Query<Symbol>,
     pub head: Actions,
 }
 
-impl CoreRule {
+#[derive(Debug, Clone, Default)]
+pub struct ResolvedCoreRule {
+    pub body: Query<ResolvedSymbol>,
+    pub head: Actions,
+}
+
+#[derive(Debug, Clone)]
+pub enum ResolvedSymbol {
+    Func(Symbol),
+    Primitive(Primitive),
+}
+
+impl Query<ResolvedSymbol> {
+    pub fn filters<'a>(&'a self) -> impl Iterator<Item = Atom<Primitive>> + 'a {
+        self.atoms.iter().filter_map(|atom| match &atom.head {
+            ResolvedSymbol::Func(_) => None,
+            ResolvedSymbol::Primitive(head) => Some(Atom {
+                head: head.clone(),
+                args: atom.args.clone(),
+            }),
+        })
+    }
+
+    pub fn funcs<'a>(&'a self) -> impl Iterator<Item = Atom<Symbol>> + 'a {
+        self.atoms.iter().filter_map(|atom| match atom.head {
+            ResolvedSymbol::Func(head) => Some(Atom {
+                head,
+                args: atom.args.clone(),
+            }),
+            ResolvedSymbol::Primitive(_) => None,
+        })
+    }
+}
+
+impl UnresolvedCoreRule {
     pub fn subst(&mut self, subst: &HashMap<Symbol, AtomTerm>) {
         for atom in &mut self.body.atoms {
-            atom.subst(subst);
-        }
-        for atom in &mut self.body.filters {
             atom.subst(subst);
         }
         self.head.subst(subst);
@@ -86,22 +117,27 @@ impl<T: std::fmt::Display> std::fmt::Display for Atom<T> {
     }
 }
 
-#[derive(Default, Debug, Clone)]
-pub struct Query {
-    pub atoms: Vec<Atom<Symbol>>,
-    pub filters: Vec<Atom<Primitive>>,
+#[derive(Debug, Clone)]
+pub struct Query<T> {
+    pub atoms: Vec<Atom<T>>,
 }
 
-impl Query {
+impl<T> Default for Query<T> {
+    fn default() -> Self {
+        Self {
+            atoms: Default::default(),
+        }
+    }
+}
+
+impl Query<Symbol> {
     pub fn get_constraints(
         &self,
         type_info: &TypeInfo,
     ) -> Result<Vec<Constraint<AtomTerm, ArcSort>>, TypeError> {
         let mut constraints = vec![];
         for atom in self.atoms.iter() {
-            constraints.extend(atom.get_constraints(type_info)?.into_iter());
-        }
-        for atom in self.filters.iter() {
+            // TODO: discover primitives
             constraints.extend(atom.get_constraints(type_info)?.into_iter());
         }
         Ok(constraints)
@@ -111,30 +147,34 @@ impl Query {
         self.atoms
             .iter()
             .flat_map(|atom| atom.args.iter().cloned())
-            .chain(
-                self.filters
-                    .iter()
-                    .flat_map(|atom| atom.args.iter().cloned()),
-            )
             .collect()
     }
 }
 
-impl AddAssign for Query {
+impl<T> AddAssign for Query<T> {
     fn add_assign(&mut self, rhs: Self) {
         self.atoms.extend(rhs.atoms.into_iter());
-        self.filters.extend(rhs.filters.into_iter());
     }
 }
 
-impl std::fmt::Display for Query {
+impl std::fmt::Display for Query<Symbol> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for atom in &self.atoms {
             writeln!(f, "{atom}")?;
         }
-        if !self.filters.is_empty() {
+        Ok(())
+    }
+}
+
+impl std::fmt::Display for Query<ResolvedSymbol> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for atom in self.funcs() {
+            writeln!(f, "{atom}")?;
+        }
+        let filters: Vec<_> = self.filters().collect();
+        if !filters.is_empty() {
             writeln!(f, "where ")?;
-            for filter in &self.filters {
+            for filter in &filters {
                 writeln!(
                     f,
                     "({} {})",
@@ -238,36 +278,42 @@ impl<'a> Context<'a> {
         }
     }
 
-    fn flatten_fact(&mut self, fact: &Fact) -> Query {
+    fn flatten_fact(&mut self, fact: &Fact) -> Query<Symbol> {
         match fact {
             Fact::Eq(exprs) => {
                 // TODO: currently we require exprs.len() to be 2 and Eq atom has the form (= e1 e2)
                 // which isn't necessary and can be loosened.
                 assert!(exprs.len() > 0);
                 let var_atoms: Vec<_> = exprs.iter().map(|expr| self.flatten_expr(expr)).collect();
-                let filters = var_atoms
+                let mut equality_checks = var_atoms
                     .iter()
                     .skip(1)
                     .map(|va| Atom {
-                        head: Primitive(Arc::new(ValueEq {})),
-                        args: vec![var_atoms[0].0.clone(), va.0.clone()],
+                        head: "value-eq".into(),
+                        args: vec![
+                            var_atoms[0].0.clone(),
+                            va.0.clone(),
+                            // TODO: format this
+                            AtomTerm::Var(Symbol::from(format!("$v{}", self.unionfind.make_set()))),
+                        ],
                     })
                     .collect();
 
-                let atoms = var_atoms.into_iter().flat_map(|va| va.1).collect();
-                Query { atoms, filters }
+                let mut atoms = var_atoms
+                    .into_iter()
+                    .flat_map(|va| va.1)
+                    .collect::<Vec<_>>();
+                atoms.append(&mut equality_checks);
+                Query { atoms }
             }
             Fact::Fact(expr) => {
                 let atoms = self.flatten_expr(expr).1;
-                Query {
-                    atoms,
-                    filters: vec![],
-                }
+                Query { atoms }
             }
         }
     }
 
-    pub fn lower(&mut self, rule: &Rule) -> Result<CoreRule, Vec<TypeError>> {
+    pub fn lower(&mut self, rule: &Rule) -> Result<UnresolvedCoreRule, Vec<TypeError>> {
         let facts = &rule.body;
         let actions = &rule.head;
         let mut query = Query::default();
@@ -275,20 +321,21 @@ impl<'a> Context<'a> {
             query += self.flatten_fact(fact);
         }
         // let desugar = ;
-        Ok(CoreRule {
+        Ok(UnresolvedCoreRule {
             body: query,
             head: Actions(flatten_actions(actions, &mut self.egraph.desugar)),
         })
     }
 
-    pub fn canonicalize(&self, rule: CoreRule) -> CoreRule {
+    // TODO: should this be in ResolvedCoreRule
+    pub fn canonicalize(&self, rule: UnresolvedCoreRule) -> UnresolvedCoreRule {
         let mut result_rule = rule;
         loop {
             let mut to_subst = None;
-            for atom in result_rule.body.filters.iter() {
-                if atom.head.name() == "value-eq".into() && atom.args[0] != atom.args[1] {
+            for atom in result_rule.body.atoms.iter() {
+                if atom.head == "value-eq".into() && atom.args[0] != atom.args[1] {
                     match &atom.args[..] {
-                        [AtomTerm::Var(x), y] | [y, AtomTerm::Var(x)] => {
+                        [AtomTerm::Var(x), y, _] | [y, AtomTerm::Var(x), _] => {
                             to_subst = Some((x, y));
                             break;
                         }
@@ -302,78 +349,152 @@ impl<'a> Context<'a> {
                 break;
             }
         }
-        result_rule.body.filters.retain(|atom| {
-            !(atom.head.name() == "value-eq".into() && atom.args[0] == atom.args[1])
-        });
+        result_rule
+            .body
+            .atoms
+            .retain(|atom| !(atom.head == "value-eq".into() && atom.args[0] == atom.args[1]));
         result_rule
     }
 
-    pub fn discover_primitives(&self, rule: CoreRule) -> Result<CoreRule, Vec<TypeError>> {
-        let type_info = self.egraph.type_info();
-        let mut result_rule = rule;
-        let mut errors = vec![];
-        result_rule.body.atoms.retain_mut(|atom| {
-            let symbol = atom.head;
-            match (
-                type_info.func_types.get(&symbol),
-                type_info.primitives.get(&symbol),
-            ) {
-                (Some(_), None) => true,
-                (None, Some(primitives)) => {
-                    // TODO: this is bad-- we want to test each primitives
-                    let atom = Atom {
-                        head: primitives[0].clone(),
-                        args: std::mem::take(&mut atom.args),
-                    };
-                    result_rule.body.filters.push(atom);
-                    false
-                }
-                (Some(_), Some(_)) => {
-                    errors.push(TypeError::DefinedAsBothFunctionAndPrimitive(symbol));
-                    true
-                }
-                (None, None) => {
-                    errors.push(TypeError::Unbound(symbol));
-                    true
-                }
-            }
-        });
-        if errors.is_empty() {
-            Ok(result_rule)
-        } else {
-            Err(errors)
-        }
-    }
+    // TODO: commenting out discover_primitives for now
+    // True resolution requires type inference
+    // pub fn discover_primitives(
+    //     &self,
+    //     rule: UnresolvedCoreRule,
+    // ) -> Result<ResolvedCoreRule, Vec<TypeError>> {
+    //     let type_info = self.egraph.type_info();
+    // //     // let mut result_rule = rule;
+    //     let mut errors = vec![];
+    //     let body = rule.body.atoms.into_iter().map(|atom| {
+    //         let symbol = atom.head;
+    //         match (
+    //             type_info.func_types.get(&symbol),
+    //             type_info.primitives.get(&symbol),
+    //         ) {
+    //             (Some(_), None) => true,
+    //             (None, Some(primitives)) => {
+    //                 // TODO: this is bad-- we want to test each primitives
+    //                 let atom = Atom {
+    //                     head: primitives[0].clone(),
+    //                     args: std::mem::take(&mut atom.args),
+    //                 };
+    //                 result_rule.body.filters.push(atom);
+    //                 false
+    //             }
+    //             (Some(_), Some(_)) => {
+    //                 errors.push(TypeError::DefinedAsBothFunctionAndPrimitive(symbol));
+    //                 true
+    //             }
+    //             (None, None) => {
+    //                 errors.push(TypeError::Unbound(symbol));
+    //                 true
+    //             }
+    //         }
+    //     });
+
+    //     if errors.is_empty() {
+    //         let mut result_rule = ResolvedCoreRule {
+    //             body,
+    //             head: rule.head,
+    //         };
+    //         Ok(result_rule)
+    //     } else {
+    //         Err(errors)
+    //     }
+    // }
 
     pub(crate) fn typecheck(
         &mut self,
-        rule: &CoreRule,
+        rule: &UnresolvedCoreRule,
     ) -> Result<Assignment<AtomTerm, ArcSort>, TypeError> {
         let constraints = rule.body.get_constraints(self.egraph.type_info())?;
         let problem = Problem { constraints };
         let range = rule.body.atom_terms();
-        let result = problem.solve::<Symbol>(range.iter(), |sort: &ArcSort| sort.name());
-        result.map_err(|e| e.to_type_error())
+        let assignment = problem
+            .solve(range.iter(), |sort: &ArcSort| sort.name())
+            .map_err(|e| e.to_type_error())?;
+        Ok(assignment)
+    }
+
+    pub(crate) fn resolve_rule(
+        &self,
+        rule: UnresolvedCoreRule,
+        assignment: Assignment<AtomTerm, ArcSort>,
+    ) -> Result<ResolvedCoreRule, TypeError> {
+        let type_info = self.egraph.type_info();
+        let body_atoms: Vec<Atom<ResolvedSymbol>> = rule
+            .body
+            .atoms
+            .into_iter()
+            .map(|mut atom| {
+                let symbol = atom.head;
+                match (
+                    type_info.func_types.get(&symbol),
+                    type_info.primitives.get(&symbol),
+                ) {
+                    (Some(_), None) => Ok(Atom {
+                        head: ResolvedSymbol::Func(symbol),
+                        args: std::mem::take(&mut atom.args),
+                    }),
+                    (None, Some(primitives)) => {
+                        if primitives.len() == 1 {
+                            Ok(Atom {
+                                head: ResolvedSymbol::Primitive(primitives[0].clone()),
+                                args: std::mem::take(&mut atom.args),
+                            })
+                        } else {
+                            let tys: Vec<_> = atom
+                                .args
+                                // remove the output type since accept() only takes the input types
+                                .split_last().unwrap().1
+                                .iter()
+                                .map(|arg| assignment.get(arg).unwrap().clone())
+                                .collect();
+                            for primitive in primitives.iter() {
+                                if primitive.accept(&tys).is_some() {
+                                    return Ok(Atom {
+                                        head: ResolvedSymbol::Primitive(primitive.clone()),
+                                        args: std::mem::take(&mut atom.args),
+                                    });
+                                }
+                            }
+                            panic!("Impossible: there should be exactly one primitive that satisfy the type assignment")
+                        }
+                    }
+                    // TODO: get rid of this
+                    (Some(_), Some(_)) => Err(TypeError::DefinedAsBothFunctionAndPrimitive(symbol)),
+                    (None, None) => Err(TypeError::Unbound(symbol)),
+                }
+            })
+            .collect::<Result<Vec<_>, TypeError>>()?;
+        let body = Query { atoms: body_atoms };
+
+        let mut result_rule = ResolvedCoreRule {
+            body,
+            head: rule.head,
+        };
+        Ok(result_rule)
     }
 
     pub fn typecheck_query(
         &mut self,
         facts: &'a [Fact],
         actions: &'a [Action],
-    ) -> Result<CoreRule, Vec<TypeError>> {
+    ) -> Result<ResolvedCoreRule, Vec<TypeError>> {
         let rule = Rule {
             head: actions.to_vec(),
             body: facts.to_vec(),
         };
-        eprintln!("{:?}", rule);
+        // dbg!(&rule);
         let rule = self.lower(&rule)?;
-        eprintln!("{:?}", rule);
-        let rule = self.discover_primitives(rule)?;
-        eprintln!("{:?}", rule);
+        // dbg!(&rule);
+        // let rule = self.discover_primitives(rule)?;
+        // dbg!(&rule);
         let rule = self.canonicalize(rule);
-        eprintln!("{:?}", rule);
+        // dbg!(&rule);
         let assignment = self.typecheck(&rule).map_err(|e| vec![e])?;
         self.types = assignment
+            .clone()
             .0
             .into_iter()
             .filter_map(|(atom_term, typ)| {
@@ -384,7 +505,8 @@ impl<'a> Context<'a> {
                 }
             })
             .collect();
-        // eprintln!("result: {:?}", result);
+        let rule = self.resolve_rule(rule, assignment).map_err(|e| vec![e])?;
+        // dbg!(&rule);
         // let rule = self.congruence(&rule);
         Ok(rule)
     }
