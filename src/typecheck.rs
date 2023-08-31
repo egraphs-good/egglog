@@ -135,7 +135,6 @@ impl Query<Symbol> {
     ) -> Result<Vec<Constraint<AtomTerm, ArcSort>>, TypeError> {
         let mut constraints = vec![];
         for atom in self.atoms.iter() {
-            // TODO: discover primitives
             constraints.extend(atom.get_constraints(type_info)?.into_iter());
         }
         Ok(constraints)
@@ -351,53 +350,6 @@ impl<'a> Context<'a> {
         result_rule
     }
 
-    // TODO: commenting out discover_primitives for now
-    // True resolution requires type inference
-    // pub fn discover_primitives(
-    //     &self,
-    //     rule: UnresolvedCoreRule,
-    // ) -> Result<ResolvedCoreRule, Vec<TypeError>> {
-    //     let type_info = self.egraph.type_info();
-    // //     // let mut result_rule = rule;
-    //     let mut errors = vec![];
-    //     let body = rule.body.atoms.into_iter().map(|atom| {
-    //         let symbol = atom.head;
-    //         match (
-    //             type_info.func_types.get(&symbol),
-    //             type_info.primitives.get(&symbol),
-    //         ) {
-    //             (Some(_), None) => true,
-    //             (None, Some(primitives)) => {
-    //                 // TODO: this is bad-- we want to test each primitives
-    //                 let atom = Atom {
-    //                     head: primitives[0].clone(),
-    //                     args: std::mem::take(&mut atom.args),
-    //                 };
-    //                 result_rule.body.filters.push(atom);
-    //                 false
-    //             }
-    //             (Some(_), Some(_)) => {
-    //                 errors.push(TypeError::DefinedAsBothFunctionAndPrimitive(symbol));
-    //                 true
-    //             }
-    //             (None, None) => {
-    //                 errors.push(TypeError::Unbound(symbol));
-    //                 true
-    //             }
-    //         }
-    //     });
-
-    //     if errors.is_empty() {
-    //         let mut result_rule = ResolvedCoreRule {
-    //             body,
-    //             head: rule.head,
-    //         };
-    //         Ok(result_rule)
-    //     } else {
-    //         Err(errors)
-    //     }
-    // }
-
     pub(crate) fn typecheck(
         &mut self,
         rule: &UnresolvedCoreRule,
@@ -423,45 +375,49 @@ impl<'a> Context<'a> {
             .into_iter()
             .map(|mut atom| {
                 let symbol = atom.head;
-                match (
-                    type_info.func_types.get(&symbol),
-                    type_info.primitives.get(&symbol),
-                ) {
-                    (Some(_), None) => Ok(Atom {
-                        head: ResolvedSymbol::Func(symbol),
-                        args: std::mem::take(&mut atom.args),
-                    }),
-                    (None, Some(primitives)) => {
-                        if primitives.len() == 1 {
-                            Ok(Atom {
-                                head: ResolvedSymbol::Primitive(primitives[0].clone()),
-                                args: std::mem::take(&mut atom.args),
-                            })
-                        } else {
-                            let tys: Vec<_> = atom
-                                .args
-                                // remove the output type since accept() only takes the input types
-                                .split_last().unwrap().1
-                                .iter()
-                                .map(|arg| assignment.get(arg).unwrap().clone())
-                                .collect();
-                            for primitive in primitives.iter() {
-                                if primitive.accept(&tys).is_some() {
-                                    return Ok(Atom {
-                                        head: ResolvedSymbol::Primitive(primitive.clone()),
-                                        args: std::mem::take(&mut atom.args),
-                                    });
-                                }
-                            }
-                            panic!("Impossible: there should be exactly one primitive that satisfy the type assignment")
-                        }
+                if let Some(ty) = type_info.func_types.get(&symbol) {
+                    let expected = ty.input.iter().chain(once(&ty.output));
+                    let expected = expected.map(|s| s.name());
+                    let actual = atom.args.iter().map(|arg| assignment.get(arg).unwrap());
+                    let actual = actual.map(|s| s.name());
+                    if expected.eq(actual) {
+                        return Atom {
+                            head: ResolvedSymbol::Func(symbol),
+                            args: std::mem::take(&mut atom.args),
+                        };
                     }
-                    // TODO: get rid of this
-                    (Some(_), Some(_)) => Err(TypeError::DefinedAsBothFunctionAndPrimitive(symbol)),
-                    (None, None) => Err(TypeError::Unbound(symbol)),
+                }
+                if let Some(primitives) = type_info.primitives.get(&symbol) {
+                    if primitives.len() == 1 {
+                        Atom {
+                            head: ResolvedSymbol::Primitive(primitives[0].clone()),
+                            args: std::mem::take(&mut atom.args),
+                        }
+                    } else {
+                        let tys: Vec<_> = atom
+                            .args
+                            // remove the output type since accept() only takes the input types
+                            .split_last()
+                            .unwrap()
+                            .1
+                            .iter()
+                            .map(|arg| assignment.get(arg).unwrap().clone())
+                            .collect();
+                        for primitive in primitives.iter() {
+                            if primitive.accept(&tys).is_some() {
+                                return Atom {
+                                    head: ResolvedSymbol::Primitive(primitive.clone()),
+                                    args: std::mem::take(&mut atom.args),
+                                };
+                            }
+                        }
+                        panic!("Impossible: there should be exactly one primitive that satisfy the type assignment")
+                    }
+                } else {
+                    panic!("Impossible: atom symbols not bound anywhere")
                 }
             })
-            .collect::<Result<Vec<_>, TypeError>>()?;
+            .collect();
         let body = Query { atoms: body_atoms };
 
         let result_rule = ResolvedCoreRule {
