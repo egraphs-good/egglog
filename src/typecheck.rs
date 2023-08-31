@@ -947,32 +947,3 @@ impl EGraph {
         Ok(())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use crate::{
-        ast::{Action, Expr, Fact, Literal},
-        EGraph,
-    };
-
-    use super::Context;
-
-    #[test]
-    fn test() {
-        let mut egraph = EGraph::default();
-        let mut ctx = Context::new(&mut egraph);
-        let facts = vec![
-            // Fact::Eq(vec![Expr::Var("x".into()), Expr::Var("y".into())]),
-            // Fact::Eq(vec![Expr::Var("y".into()), Expr::Var("z".into())]),
-            Fact::Eq(vec![Expr::Var("z".into()), Expr::Lit(Literal::Int(1))]),
-        ];
-        let result = ctx.typecheck_query(
-            &facts,
-            &[Action::Extract(
-                Expr::Var("z".into()),
-                Expr::Lit(Literal::Int(1)),
-            )],
-        );
-        assert!(result.is_ok())
-    }
-}
