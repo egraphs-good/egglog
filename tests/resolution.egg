@@ -34,8 +34,8 @@
 
 ; clauses are assumed in the normal form (or a (or b (or c False)))
 
-(set (negate False) True)
-(set (negate True) False)
+(union (negate False) True)
+(union (negate True) False)
 
 ; "Solving" negation equations
 (rule ((= (negate p) True)) ((union p False)))
@@ -70,20 +70,20 @@
 ; resolution
 ; This counts on commutativity to bubble everything possible up to the front of the clause.
 (rule ((= True (or a as)) (= True (or (negate a) bs)))
-      ((set (or as bs) True)))
+      ((union (or as bs) True)))
 
 ; example predicate
 (function p (i64) Bool)
 (let p0 (p 0))
 (let p1 (p 1))
 (let p2 (p 2))
-;(set (or p0 (or p1 (or p2 False))) True)
-;(set (or (negate p0) (or p1 (or (negate p2) False))) True)
-(set (or p1 (or (negate p2) False)) True)
-(set (or p2 (or (negate p0) False)) True)
-(set (or p0 (or (negate p1) False)) True)
+;(union (or p0 (or p1 (or p2 False))) True)
+;(union (or (negate p0) (or p1 (or (negate p2) False))) True)
+(union (or p1 (or (negate p2) False)) True)
+(union (or p2 (or (negate p0) False)) True)
+(union (or p0 (or (negate p1) False)) True)
 (union p1 False)
-(set (or (negate p0) (or p1 (or p2 False))) True)
+(union (or (negate p0) (or p1 (or p2 False))) True)
 (run 10)
 
 

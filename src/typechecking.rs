@@ -4,6 +4,7 @@ pub const RULE_PROOF_KEYWORD: &str = "rule-proof";
 
 #[derive(Clone, Debug)]
 pub struct FuncType {
+    pub name: Symbol,
     pub input: Vec<ArcSort>,
     pub output: ArcSort,
     pub is_datatype: bool,
@@ -137,6 +138,7 @@ impl TypeInfo {
         }?;
 
         Ok(FuncType {
+            name: func.name,
             input,
             output: output.clone(),
             is_datatype: output.is_eq_sort() && func.merge.is_none(),
@@ -413,10 +415,13 @@ impl TypeInfo {
                 self.typecheck_expr(ctx, expr, true)?;
             }
             NormAction::Set(expr, other) => {
-                let func_type = self.typecheck_expr(ctx, expr, true)?.output;
+                let func_type = self.typecheck_expr(ctx, expr, true)?;
                 let other_type = self.lookup(ctx, *other)?;
-                if func_type.name() != other_type.name() {
-                    return Err(TypeError::TypeMismatch(func_type, other_type));
+                if func_type.output.name() != other_type.name() {
+                    return Err(TypeError::TypeMismatch(func_type.output, other_type));
+                }
+                if func_type.is_datatype {
+                    return Err(TypeError::SetDatatype(func_type));
                 }
             }
             NormAction::Union(var1, var2) => {
@@ -573,6 +578,7 @@ impl TypeInfo {
                 for prim in prims {
                     if let Some(return_type) = prim.accept(&input_types) {
                         return Ok(FuncType {
+                            name: sym,
                             input: input_types,
                             output: return_type,
                             is_datatype: false,
@@ -653,6 +659,8 @@ pub enum TypeError {
     FunctionAlreadyBound(Symbol),
     #[error("Function declarations are not allowed after a push.")]
     FunctionAfterPush(Symbol),
+    #[error("Cannot set the datatype {} to a value. Did you mean to use union?", .0.name)]
+    SetDatatype(FuncType),
     #[error("Sort declarations are not allowed after a push.")]
     SortAfterPush(Symbol),
     #[error("Global already bound {0}")]
