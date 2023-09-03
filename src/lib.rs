@@ -1009,22 +1009,30 @@ impl EGraph {
                 }
             }
             NCommand::Input { name, file } => {
+                let function_type = self
+                    .type_info()
+                    .func_types
+                    .get(&name)
+                    .unwrap_or_else(|| panic!("Unrecognzed function name {}", name))
+                    .clone();
                 let func = self.functions.get_mut(&name).unwrap();
-                let is_unit = func.schema.output.name().as_str() == "Unit";
 
                 let mut filename = self.fact_directory.clone().unwrap_or_default();
                 filename.push(file.as_str());
 
                 // check that the function uses supported types
+
                 for t in &func.schema.input {
                     match t.name().as_str() {
                         "i64" | "String" => {}
                         s => panic!("Unsupported type {} for input", s),
                     }
                 }
-                match func.schema.output.name().as_str() {
-                    "i64" | "String" | "Unit" => {}
-                    s => panic!("Unsupported type {} for input", s),
+                if !function_type.is_datatype {
+                    match func.schema.output.name().as_str() {
+                        "i64" | "String" | "Unit" => {}
+                        s => panic!("Unsupported type {} for input", s),
+                    }
                 }
 
                 log::info!("Opening file '{:?}'...", filename);
@@ -1051,7 +1059,7 @@ impl EGraph {
 
                     let mut exprs: Vec<Expr> = str_buf.iter().map(|&s| parse(s)).collect();
 
-                    actions.push(if is_unit {
+                    actions.push(if function_type.is_datatype {
                         Action::Expr(Expr::Call(name, exprs))
                     } else {
                         let out = exprs.pop().unwrap();

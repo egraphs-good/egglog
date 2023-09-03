@@ -10,6 +10,8 @@ pub struct FuncType {
     pub has_default: bool,
 }
 
+/// Stores resolved typechecking information.
+/// TODO make these not public, use accessor methods
 #[derive(Clone)]
 pub struct TypeInfo {
     // get the sort from the sorts name()
@@ -34,6 +36,7 @@ impl Default for TypeInfo {
             local_types: Default::default(),
         };
 
+        res.add_sort(UnitSort::new(UNIT_SYM.into()));
         res.add_sort(StringSort::new("String".into()));
         res.add_sort(I64Sort::new("i64".into()));
         res.add_sort(F64Sort::new("f64".into()));

@@ -25,13 +25,9 @@ impl Sort for UnitSort {
         type_info.add_primitive(NotEqualPrimitive { unit: self })
     }
 
-    fn make_expr(&self, egraph: &EGraph, value: Value, termdag: &mut TermDag) -> Term {
+    fn make_expr(&self, _egraph: &EGraph, value: Value) -> (Cost, Expr) {
         assert_eq!(value.tag, self.name);
-        termdag.make_lit(Literal::Unit, Some(egraph))
-    }
-
-    fn load_prim(&self, _value: Value) -> Option<Literal> {
-        Some(Literal::Unit)
+        (1, Expr::Lit(Literal::Unit))
     }
 }
 

@@ -801,7 +801,7 @@ impl Desugar {
     pub fn desugar_function(&mut self, fdecl: &FunctionDecl) -> Vec<NCommand> {
         let mut res = vec![];
         let schema = if fdecl.schema.output.as_str() == UNIT_SYM {
-            let fresh_sort = self.fresh();
+            let fresh_sort = self.get_fresh();
             res.push(NCommand::Sort(fresh_sort, None));
             Schema {
                 input: fdecl.schema.input.clone(),
