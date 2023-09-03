@@ -411,10 +411,21 @@ fn add_semi_naive_rule(desugar: &mut Desugar, rule: Rule) -> Option<Rule> {
     }
 }
 
+/// The Desugar struct stores all the state needed
+/// during desugaring a program.
+/// While desugaring doesn't need type information, it
+/// needs to know what global variables exist.
+/// It also needs to know what functions are primitives
+/// (it uses the [`TypeInfo`] for that.
+/// After desugaring, typechecking happens and the
+/// type_info field is used for that.
 pub struct Desugar {
     next_fresh: usize,
     next_command_id: usize,
+    // Store the parser because it takes some time
+    // on startup for some reason
     pub(crate) parser: ast::parse::ProgramParser,
+    pub(crate) fact_parser: ast::parse::FactParser,
     // TODO fix getting fresh names using modules
     pub(crate) number_underscores: usize,
     pub(crate) global_variables: HashSet<Symbol>,
@@ -428,6 +439,7 @@ impl Default for Desugar {
             next_command_id: Default::default(),
             // these come from lalrpop and don't have default impls
             parser: ast::parse::ProgramParser::new(),
+            fact_parser: ast::parse::FactParser::new(),
             number_underscores: 3,
             global_variables: Default::default(),
             type_info: TypeInfo::default(),
@@ -690,6 +702,7 @@ impl Clone for Desugar {
             next_fresh: self.next_fresh,
             next_command_id: self.next_command_id,
             parser: ast::parse::ProgramParser::new(),
+            fact_parser: ast::parse::FactParser::new(),
             number_underscores: self.number_underscores,
             global_variables: self.global_variables.clone(),
             type_info: self.type_info.clone(),
