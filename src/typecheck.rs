@@ -600,7 +600,12 @@ trait ExprChecker<'a> {
             Expr::Var(sym) => self.infer_var(*sym),
             Expr::Call(sym, args) => {
                 if let Some(functype) = self.egraph().type_info().func_types.get(sym) {
-                    assert!(functype.input.len() == args.len());
+                    assert_eq!(
+                        functype.input.len(),
+                        args.len(),
+                        "Got wrong number of arguments for function {}",
+                        functype.name
+                    );
 
                     let mut ts = vec![];
                     for (expected, arg) in functype.input.iter().zip(args) {

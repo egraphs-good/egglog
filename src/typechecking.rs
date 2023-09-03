@@ -141,7 +141,7 @@ impl TypeInfo {
             name: func.name,
             input,
             output: output.clone(),
-            is_datatype: output.is_eq_sort() && func.merge.is_none(),
+            is_datatype: output.is_eq_sort() && func.merge.is_none() && func.default.is_none(),
             has_default: func.default.is_some(),
         })
     }

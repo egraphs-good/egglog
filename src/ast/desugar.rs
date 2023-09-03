@@ -527,6 +527,10 @@ pub(crate) fn desugar_command(
             vec![NCommand::SetOption { name, value }]
         }
         Command::Function(fdecl) => desugar.desugar_function(&fdecl),
+        Command::Relation {
+            constructor,
+            inputs,
+        } => desugar.desugar_function(&FunctionDecl::relation(constructor, inputs)),
         Command::Declare { name, sort } => desugar.declare(name, sort),
         Command::Datatype { name, variants } => desugar_datatype(name, variants),
         Command::Rewrite(ruleset, rewrite) => {
@@ -799,26 +803,14 @@ impl Desugar {
     }
 
     pub fn desugar_function(&mut self, fdecl: &FunctionDecl) -> Vec<NCommand> {
-        let mut res = vec![];
-        let schema = if fdecl.schema.output.as_str() == UNIT_SYM {
-            let fresh_sort = self.get_fresh();
-            res.push(NCommand::Sort(fresh_sort, None));
-            Schema {
-                input: fdecl.schema.input.clone(),
-                output: fresh_sort,
-            }
-        } else {
-            fdecl.schema.clone()
-        };
-        res.push(NCommand::Function(NormFunctionDecl {
+        vec![NCommand::Function(NormFunctionDecl {
             name: fdecl.name,
-            schema,
+            schema: fdecl.schema.clone(),
             default: fdecl.default.clone(),
             merge: fdecl.merge.clone(),
             merge_action: flatten_actions(&fdecl.merge_action, self),
             cost: fdecl.cost,
             unextractable: fdecl.unextractable,
-        }));
-        res
+        })]
     }
 }
