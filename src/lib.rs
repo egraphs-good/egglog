@@ -5,6 +5,7 @@ mod gj;
 mod serialize;
 pub mod sort;
 mod termdag;
+mod terms;
 mod typecheck;
 mod typechecking;
 mod unionfind;
@@ -206,6 +207,7 @@ pub struct EGraph {
     egraphs: Vec<Self>,
     unionfind: UnionFind,
     pub(crate) desugar: Desugar,
+    pub(crate) term_header_added: bool,
     functions: HashMap<Symbol, Function>,
     rulesets: HashMap<Symbol, HashMap<Symbol, Rule>>,
     ruleset_iteration: HashMap<Symbol, usize>,
@@ -1155,6 +1157,17 @@ impl EGraph {
 
         self.desugar.type_info.typecheck_program(&program)?;
         if stop == CompilerPassStop::TypecheckDesugared {
+            return Ok(program);
+        }
+
+        // now add term encoding
+        let program_terms = self.proof_state.add_term_encoding(program);
+        program = self
+            .proof_state()
+            .desugar
+            .desugar_program(program_terms, false, false)?;
+
+        if stop == CompilerPassStop::TermEncoding {
             return Ok(program);
         }
 
