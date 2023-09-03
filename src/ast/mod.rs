@@ -741,8 +741,15 @@ impl Display for Fact {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Action {
     Let(Symbol, Expr),
+    /// `set` a table to a particular result.
+    /// `set` should not be used on datatypes-
+    /// instead, use `union`.
     Set(Symbol, Vec<Expr>, Expr),
     Delete(Symbol, Vec<Expr>),
+    /// `union` two datatypes, making them equal
+    /// in the implicit, global equality relation
+    /// of egglog.
+    /// All rules match modulo this equality relation.
     Union(Expr, Expr),
     Extract(Expr, Expr),
     Panic(String),
