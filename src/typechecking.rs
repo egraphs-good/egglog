@@ -34,7 +34,6 @@ impl Default for TypeInfo {
             local_types: Default::default(),
         };
 
-        res.add_sort(UnitSort::new(UNIT_SYM.into()));
         res.add_sort(StringSort::new("String".into()));
         res.add_sort(I64Sort::new("i64".into()));
         res.add_sort(F64Sort::new("f64".into()));
