@@ -6,19 +6,8 @@ pub const RULE_PROOF_KEYWORD: &str = "rule-proof";
 pub struct FuncType {
     pub input: Vec<ArcSort>,
     pub output: ArcSort,
-    pub has_merge: bool,
+    pub is_datatype: bool,
     pub has_default: bool,
-}
-
-impl FuncType {
-    pub fn new(input: Vec<ArcSort>, output: ArcSort, has_merge: bool, has_default: bool) -> Self {
-        Self {
-            input,
-            output,
-            has_merge,
-            has_default,
-        }
-    }
 }
 
 #[derive(Clone)]
@@ -141,12 +130,13 @@ impl TypeInfo {
         } else {
             Err(TypeError::Unbound(func.schema.output))
         }?;
-        Ok(FuncType::new(
+
+        Ok(FuncType {
             input,
-            output,
-            func.merge.is_some(),
-            func.default.is_some(),
-        ))
+            output: output.clone(),
+            is_datatype: output.is_eq_sort() && func.merge.is_none(),
+            has_default: func.default.is_some(),
+        })
     }
 
     fn typecheck_ncommand(&mut self, command: &NCommand, id: CommandId) -> Result<(), TypeError> {
@@ -577,7 +567,12 @@ impl TypeInfo {
             if let Some(prims) = self.primitives.get(&sym) {
                 for prim in prims {
                     if let Some(return_type) = prim.accept(&input_types) {
-                        return Ok(FuncType::new(input_types, return_type, false, true));
+                        return Ok(FuncType {
+                            input: input_types,
+                            output: return_type,
+                            is_datatype: false,
+                            has_default: true,
+                        });
                     }
                 }
             }
