@@ -401,25 +401,25 @@ impl EGraph {
     pub fn rebuild(&mut self) -> Result<usize, Error> {
         self.unionfind.clear_recent_ids();
         let mut updates = 0;
-        loop {
-            let new = self.rebuild_one()?;
-            log::debug!("{new} rebuilds?");
-            self.unionfind.clear_recent_ids();
-            updates += new;
-            if new == 0 {
-                break;
+
+        if !self.terms_enabled {
+            loop {
+                let new = self.rebuild_one()?;
+                log::debug!("{new} rebuilds?");
+                self.unionfind.clear_recent_ids();
+                updates += new;
+                if new == 0 {
+                    break;
+                }
             }
         }
 
         // now update global bindings
         let mut new_global_bindings = std::mem::take(&mut self.global_bindings);
         for (_sym, (sort, value, ts)) in new_global_bindings.iter_mut() {
-            if sort.canonicalize(value, &self.unionfind) {
-                *ts = self.timestamp;
-            }
-
             // HACK in terms mode we still need to rebuild
-            // the global bindings
+            // the global bindings because of containers
+            // being bound to globals
             if self.terms_enabled {
                 if let Ok((rebuild_func, _ret_type)) = self
                     .type_info()
@@ -431,6 +431,8 @@ impl EGraph {
                         *ts = self.timestamp;
                     }
                 }
+            } else if sort.canonicalize(value, &self.unionfind) {
+                *ts = self.timestamp;
             }
         }
         self.global_bindings = new_global_bindings;
