@@ -385,7 +385,7 @@ impl EGraph {
                     };
                 }
             }
-            return value;
+            value
         }
     }
 
