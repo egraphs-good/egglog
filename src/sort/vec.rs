@@ -101,6 +101,10 @@ impl Sort for VecSort {
     }
 
     fn register_primitives(self: Arc<Self>, typeinfo: &mut TypeInfo) {
+        typeinfo.add_primitive(VecRebuild {
+            name: "rebuild".into(),
+            vec: self.clone(),
+        });
         typeinfo.add_primitive(VecOf {
             name: "vec-of".into(),
             vec: self.clone(),
@@ -189,6 +193,40 @@ impl FromSort for ValueVec {
     }
 }
 
+struct VecRebuild {
+    name: Symbol,
+    vec: Arc<VecSort>,
+}
+
+impl PrimitiveLike for VecRebuild {
+    fn name(&self) -> Symbol {
+        self.name
+    }
+
+    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
+        if let [vec] = types {
+            if vec.name() == self.vec.name() {
+                return Some(self.vec.clone());
+            }
+        }
+        None
+    }
+
+    fn apply(&self, values: &[Value], egraph: &EGraph) -> Option<Value> {
+        let vec = ValueVec::load(&self.vec, &values[0]);
+
+        let mut changed = false;
+        let new_set: ValueVec = vec
+            .iter()
+            .map(|e| {
+                let updated = egraph.find(*e);
+                changed |= updated != *e;
+                updated
+            })
+            .collect();
+        Some(new_set.store(&self.vec).unwrap())
+    }
+}
 struct VecOf {
     name: Symbol,
     vec: Arc<VecSort>,
@@ -207,7 +245,7 @@ impl PrimitiveLike for VecOf {
         }
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         let vec = ValueVec::from_iter(values.iter().copied());
         vec.store(&self.vec)
     }
@@ -231,7 +269,7 @@ impl PrimitiveLike for Append {
         }
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         let vec = ValueVec::from_iter(values.iter().flat_map(|v| ValueVec::load(&self.vec, v)));
         vec.store(&self.vec)
     }
@@ -254,7 +292,7 @@ impl PrimitiveLike for Ctor {
         }
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         assert!(values.is_empty());
         ValueVec::default().store(&self.vec)
     }
@@ -279,7 +317,7 @@ impl PrimitiveLike for Push {
         }
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         let mut vec = ValueVec::load(&self.vec, &values[0]);
         vec.push(values[1]);
         vec.store(&self.vec)
@@ -303,7 +341,7 @@ impl PrimitiveLike for Pop {
         }
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         let mut vec = ValueVec::load(&self.vec, &values[0]);
         vec.pop();
         vec.store(&self.vec)
@@ -332,7 +370,7 @@ impl PrimitiveLike for NotContains {
         }
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         let vec = ValueVec::load(&self.vec, &values[0]);
         if vec.contains(&values[1]) {
             None
@@ -362,7 +400,7 @@ impl PrimitiveLike for Contains {
         }
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         let vec = ValueVec::load(&self.vec, &values[0]);
         if vec.contains(&values[1]) {
             Some(Value::unit())
@@ -390,7 +428,7 @@ impl PrimitiveLike for Length {
         }
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         let vec = ValueVec::load(&self.vec, &values[0]);
         Some(Value::from(vec.len() as i64))
     }
@@ -416,7 +454,7 @@ impl PrimitiveLike for Get {
         }
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         let vec = ValueVec::load(&self.vec, &values[0]);
         let index = i64::load(&self.i64, &values[1]);
         vec.get(index as usize).copied()

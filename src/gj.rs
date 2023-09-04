@@ -252,7 +252,7 @@ impl<'b> Context<'b> {
                     })
                 }
 
-                if let Some(res) = prim.apply(&values) {
+                if let Some(res) = prim.apply(&values, self.egraph) {
                     match out {
                         AtomTerm::Var(v) => {
                             let i = self.query.vars.get_index_of(v).unwrap();

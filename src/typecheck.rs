@@ -98,7 +98,7 @@ impl PrimitiveLike for ValueEq {
         }
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         assert_eq!(values.len(), 2);
         if values[0] == values[1] {
             Some(values[0])
@@ -792,7 +792,7 @@ impl EGraph {
                 Instruction::CallPrimitive(p, arity) => {
                     let new_len = stack.len() - arity;
                     let values = &stack[new_len..];
-                    if let Some(value) = p.apply(values) {
+                    if let Some(value) = p.apply(values, self) {
                         stack.truncate(new_len);
                         stack.push(value);
                     } else {

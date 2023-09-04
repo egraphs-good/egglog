@@ -20,6 +20,7 @@ use instant::{Duration, Instant};
 pub use serialize::SerializeConfig;
 use sort::*;
 pub use termdag::{Term, TermDag, TermId};
+use terms::TermState;
 use thiserror::Error;
 
 use symbolic_expressions::Sexp;
@@ -55,7 +56,7 @@ pub type Subst = IndexMap<Symbol, Value>;
 pub trait PrimitiveLike {
     fn name(&self) -> Symbol;
     fn accept(&self, types: &[ArcSort]) -> Option<ArcSort>;
-    fn apply(&self, values: &[Value]) -> Option<Value>;
+    fn apply(&self, values: &[Value], egraph: &EGraph) -> Option<Value>;
 }
 
 #[derive(Debug, Clone, Default)]
@@ -155,7 +156,7 @@ impl PrimitiveLike for SimplePrimitive {
             .all(|(a, b)| a.name() == b.name())
             .then(|| self.output.clone())
     }
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         (self.f)(values)
     }
 }
@@ -207,13 +208,14 @@ pub struct EGraph {
     egraphs: Vec<Self>,
     unionfind: UnionFind,
     pub(crate) desugar: Desugar,
-    pub(crate) term_header_added: bool,
     functions: HashMap<Symbol, Function>,
     rulesets: HashMap<Symbol, HashMap<Symbol, Rule>>,
     ruleset_iteration: HashMap<Symbol, usize>,
     proofs_enabled: bool,
+    terms_enabled: bool,
     interactive_mode: bool,
     timestamp: u32,
+    pub(crate) term_header_added: bool,
     pub test_proofs: bool,
     pub match_limit: usize,
     pub node_limit: usize,
@@ -252,6 +254,8 @@ impl Default for EGraph {
             node_limit: usize::MAX,
             timestamp: 0,
             proofs_enabled: false,
+            terms_enabled: true,
+            term_header_added: false,
             interactive_mode: false,
             test_proofs: false,
             fact_directory: None,
@@ -301,6 +305,11 @@ impl EGraph {
 
     #[track_caller]
     fn debug_assert_invariants(&self) {
+        // TODO cannot find until added to parent table
+        // so these are not correct when terms are enabled.
+        if self.terms_enabled {
+            return;
+        }
         #[cfg(debug_assertions)]
         for (name, function) in self.functions.iter() {
             function.nodes.assert_sorted();
@@ -308,14 +317,14 @@ impl EGraph {
                 for input in inputs {
                     assert_eq!(
                         input,
-                        &self.bad_find_value(*input),
+                        &self.find(*input),
                         "[{i}] {name}({inputs:?}) = {output:?}\n{:?}",
                         function.schema,
                     )
                 }
                 assert_eq!(
                     output.value,
-                    self.bad_find_value(output.value),
+                    self.find(output.value),
                     "[{i}] {name}({inputs:?}) = {output:?}\n{:?}",
                     function.schema,
                 )
@@ -355,10 +364,29 @@ impl EGraph {
         }
     }
 
-    // find the leader term for this term
-    // in the corresponding table
-    pub fn find(&self, id: Id) -> Id {
-        self.unionfind.find(id)
+    /// find the leader value for a particular eclass
+    pub fn find(&self, value: Value) -> Value {
+        if self.terms_enabled {
+            // HACK using value tag for parent table name
+            let parent_name = self.desugar.parent_name(value.tag);
+            if let Some(func) = self.functions.get(&parent_name) {
+                func.get(&[value])
+                    .unwrap_or_else(|| panic!("No value {:?} in {parent_name}.", value,))
+            } else {
+                value
+            }
+        } else {
+            if let Some(sort) = self.get_sort(&value) {
+                if sort.is_eq_sort() {
+                    return Value {
+                        tag: value.tag,
+                        bits: usize::from(self.unionfind.find(Id::from(value.bits as usize)))
+                            as u64,
+                    };
+                }
+            }
+            return value;
+        }
     }
 
     pub fn rebuild_nofail(&mut self) -> usize {
@@ -388,6 +416,21 @@ impl EGraph {
         for (_sym, (sort, value, ts)) in new_global_bindings.iter_mut() {
             if sort.canonicalize(value, &self.unionfind) {
                 *ts = self.timestamp;
+            }
+
+            // HACK in terms mode we still need to rebuild
+            // the global bindings
+            if self.terms_enabled {
+                if let Ok((rebuild_func, _ret_type)) = self
+                    .type_info()
+                    .lookup_prim("rebuild".into(), vec![sort.clone()])
+                {
+                    let result = rebuild_func.apply(&[*value], self).unwrap();
+                    if result != *value {
+                        *value = result;
+                        *ts = self.timestamp;
+                    }
+                }
             }
         }
         self.global_bindings = new_global_bindings;
@@ -581,6 +624,23 @@ impl EGraph {
                 report
             }
         }
+    }
+
+    /// Extract a value to a [`TermDag`] and [`Term`]
+    /// in the [`TermDag`].
+    /// See also extract_value_to_string for convenience.
+    pub fn extract_value(&self, value: Value) -> (TermDag, Term) {
+        let mut termdag = TermDag::default();
+        let sort = self.type_info().sorts.get(&value.tag).unwrap();
+        let term = self.extract(value, &mut termdag, sort).1;
+        (termdag, term)
+    }
+
+    /// Extract a value to a string for printing.
+    /// See also extract_value for more control.
+    pub fn extract_value_to_string(&self, value: Value) -> String {
+        let (termdag, term) = self.extract_value(value);
+        termdag.to_string(&term)
     }
 
     pub fn run_rules_once(&mut self, config: &NormRunConfig, report: &mut RunReport) {
@@ -1146,7 +1206,7 @@ impl EGraph {
         command: Command,
         stop: CompilerPassStop,
     ) -> Result<Vec<NormCommand>, Error> {
-        let program =
+        let mut program =
             self.desugar
                 .desugar_program(vec![command], self.test_proofs, self.seminaive)?;
         if stop == CompilerPassStop::Desugar {
@@ -1161,11 +1221,8 @@ impl EGraph {
         }
 
         // now add term encoding
-        let program_terms = self.proof_state.add_term_encoding(program);
-        program = self
-            .proof_state()
-            .desugar
-            .desugar_program(program_terms, false, false)?;
+        let program_terms = TermState::add_term_encoding(self, program);
+        program = self.desugar.desugar_program(program_terms, false, false)?;
 
         if stop == CompilerPassStop::TermEncoding {
             return Ok(program);
@@ -1195,16 +1252,6 @@ impl EGraph {
 
         // remove consecutive empty lines
         Ok(self.flush_msgs())
-    }
-
-    // this is bad because we shouldn't inspect values like this, we should use type information
-    #[allow(dead_code)]
-    fn bad_find_value(&self, value: Value) -> Value {
-        if let Some((tag, id)) = self.value_to_id(value) {
-            Value::from_id(tag, self.find(id))
-        } else {
-            value
-        }
     }
 
     pub fn parse_program(&self, input: &str) -> Result<Vec<Command>, Error> {

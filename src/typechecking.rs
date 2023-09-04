@@ -565,27 +565,42 @@ impl TypeInfo {
         self.primitives.contains_key(&sym) || self.presort_names.contains(&sym)
     }
 
-    fn lookup_func(
+    /// Lookup a primitive that matches the input types.
+    /// Returns the primitive and output type.
+    pub(crate) fn lookup_prim(
         &self,
-        _ctx: CommandId,
+        sym: Symbol,
+        input_types: Vec<ArcSort>,
+    ) -> Result<(Primitive, ArcSort), TypeError> {
+        if let Some(prims) = self.primitives.get(&sym) {
+            for prim in prims {
+                if let Some(return_type) = prim.accept(&input_types) {
+                    return Ok((prim.clone(), return_type));
+                }
+            }
+        }
+        Err(TypeError::NoMatchingPrimitive {
+            op: sym,
+            inputs: input_types.iter().map(|s| s.name()).collect(),
+        })
+    }
+
+    pub(crate) fn lookup_func(
+        &self,
         sym: Symbol,
         input_types: Vec<ArcSort>,
     ) -> Result<FuncType, TypeError> {
         if let Some(found) = self.func_types.get(&sym) {
             Ok(found.clone())
         } else {
-            if let Some(prims) = self.primitives.get(&sym) {
-                for prim in prims {
-                    if let Some(return_type) = prim.accept(&input_types) {
-                        return Ok(FuncType {
-                            name: sym,
-                            input: input_types,
-                            output: return_type,
-                            is_datatype: false,
-                            has_default: true,
-                        });
-                    }
-                }
+            if let Ok((_prim, output)) = self.lookup_prim(sym, input_types.clone()) {
+                return Ok(FuncType {
+                    name: sym,
+                    input: input_types,
+                    output,
+                    is_datatype: false,
+                    has_default: true,
+                });
             }
 
             Err(TypeError::NoMatchingPrimitive {
@@ -627,7 +642,7 @@ impl TypeInfo {
                     }
                 }
 
-                self.lookup_func(ctx, *head, child_types)
+                self.lookup_func(*head, child_types)
             }
         }
     }

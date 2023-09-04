@@ -426,6 +426,7 @@ pub struct Desugar {
     // on startup for some reason
     pub(crate) parser: ast::parse::ProgramParser,
     pub(crate) fact_parser: ast::parse::FactParser,
+    pub(crate) action_parser: ast::parse::ActionParser,
     // TODO fix getting fresh names using modules
     pub(crate) number_underscores: usize,
     pub(crate) global_variables: HashSet<Symbol>,
@@ -440,6 +441,7 @@ impl Default for Desugar {
             // these come from lalrpop and don't have default impls
             parser: ast::parse::ProgramParser::new(),
             fact_parser: ast::parse::FactParser::new(),
+            action_parser: ast::parse::ActionParser::new(),
             number_underscores: 3,
             global_variables: Default::default(),
             type_info: TypeInfo::default(),
@@ -703,6 +705,7 @@ impl Clone for Desugar {
             next_command_id: self.next_command_id,
             parser: ast::parse::ProgramParser::new(),
             fact_parser: ast::parse::FactParser::new(),
+            action_parser: ast::parse::ActionParser::new(),
             number_underscores: self.number_underscores,
             global_variables: self.global_variables.clone(),
             type_info: self.type_info.clone(),
@@ -825,5 +828,15 @@ impl Desugar {
             cost: fdecl.cost,
             unextractable: fdecl.unextractable,
         })]
+    }
+
+    /// Get the name of the parent table for a sort
+    /// for the term encoding (not related to desugaring)
+    pub(crate) fn parent_name(&self, sort: Symbol) -> Symbol {
+        Symbol::from(format!(
+            "{}_Parent{}",
+            sort,
+            "_".repeat(self.number_underscores)
+        ))
     }
 }

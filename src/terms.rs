@@ -6,6 +6,18 @@ pub(crate) struct TermState<'a> {
 }
 
 impl<'a> TermState<'a> {
+    pub(crate) fn add_term_encoding(
+        egraph: &'a mut EGraph,
+        program: Vec<NormCommand>,
+    ) -> Vec<Command> {
+        Self {
+            // default id is overwritten when we call add_term_encoding
+            current_ctx: CommandId::default(),
+            egraph,
+        }
+        .add_term_encoding_helper(program)
+    }
+
     fn desugar(&self) -> &Desugar {
         &self.egraph.desugar
     }
@@ -15,11 +27,7 @@ impl<'a> TermState<'a> {
     }
 
     pub(crate) fn parent_name(&self, sort: Symbol) -> Symbol {
-        Symbol::from(format!(
-            "{}_Parent{}",
-            sort,
-            "_".repeat(self.desugar().number_underscores)
-        ))
+        self.desugar().parent_name(sort)
     }
 
     pub(crate) fn init(&self, type_name: Symbol, expr: &str) -> String {
@@ -318,12 +326,12 @@ impl<'a> TermState<'a> {
 
     // TODO we need to also instrument merge actions and merge because they can add new terms that need representatives
     // the egraph is the initial egraph with only default sorts
-    pub(crate) fn add_term_encoding(&mut self, program: Vec<NormCommand>) -> Vec<Command> {
+    pub(crate) fn add_term_encoding_helper(&mut self, program: Vec<NormCommand>) -> Vec<Command> {
         let mut res = vec![];
 
-        if !self.term_header_added {
+        if !self.egraph.term_header_added {
             res.extend(self.term_header());
-            self.term_header_added = true;
+            self.egraph.term_header_added = true;
         }
         //eprintln!("program: {}", ListDisplay(&program, "\n"));
 
@@ -368,7 +376,7 @@ impl<'a> TermState<'a> {
                     res.push(Command::RunSchedule(self.instrument_schedule(schedule)));
                 }
                 NCommand::Fail(cmd) => {
-                    let mut with_term_encoding = self.add_term_encoding(vec![NormCommand {
+                    let mut with_term_encoding = self.add_term_encoding_helper(vec![NormCommand {
                         command: *cmd.clone(),
                         metadata: command.metadata.clone(),
                     }]);
