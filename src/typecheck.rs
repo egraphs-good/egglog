@@ -533,7 +533,7 @@ impl<'a> ExprChecker<'a> for ActionChecker<'a> {
     }
 
     fn do_function(&mut self, f: Symbol, _args: Vec<Self::T>) -> Self::T {
-        let func_type = self.egraph.type_info().func_types.get(&f).unwrap();
+        let func_type = self.egraph.type_info().lookup_user_func(f).unwrap();
         self.instructions.push(Instruction::CallFunction(
             f,
             func_type.has_default || func_type.is_datatype,
@@ -599,7 +599,7 @@ trait ExprChecker<'a> {
             }
             Expr::Var(sym) => self.infer_var(*sym),
             Expr::Call(sym, args) => {
-                if let Some(functype) = self.egraph().type_info().func_types.get(sym) {
+                if let Some(functype) = self.egraph().type_info().lookup_user_func(*sym) {
                     assert_eq!(
                         functype.input.len(),
                         args.len(),

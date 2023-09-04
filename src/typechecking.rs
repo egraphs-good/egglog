@@ -20,7 +20,7 @@ pub struct TypeInfo {
     pub presort_names: HashSet<Symbol>,
     pub sorts: HashMap<Symbol, Arc<dyn Sort>>,
     pub primitives: HashMap<Symbol, Vec<Primitive>>,
-    pub func_types: HashMap<Symbol, FuncType>,
+    func_types: HashMap<Symbol, FuncType>,
     pub global_types: HashMap<Symbol, ArcSort>,
     pub local_types: HashMap<CommandId, HashMap<Symbol, ArcSort>>,
 }
@@ -583,6 +583,10 @@ impl TypeInfo {
             op: sym,
             inputs: input_types.iter().map(|s| s.name()).collect(),
         })
+    }
+
+    pub(crate) fn lookup_user_func(&self, sym: Symbol) -> Option<FuncType> {
+        self.func_types.get(&sym).cloned()
     }
 
     pub(crate) fn lookup_func(

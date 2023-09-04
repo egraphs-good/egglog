@@ -60,13 +60,31 @@ impl<'a> TermState<'a> {
         .unwrap()
     }
 
+    fn view_name(&self, name: Symbol) -> Symbol {
+        Symbol::from(format!("{}View{}", name, self.desugar().number_underscores))
+    }
+
+    fn make_term_view(&self, fdecl: &NormFunctionDecl) -> Vec<Command> {
+        let types = self.type_info().lookup_user_func(fdecl.name).unwrap();
+        if !types.is_datatype {
+            vec![]
+        } else {
+            let view_name = self.view_name(fdecl.name);
+            let sort = types.output.name();
+            let union_old_new = self.union(sort, "old", "new");
+            self.desugar()
+                .parser
+                .parse(&format!(
+                    "(function {view_name} ({sort} {sort}) {sort} 
+                    :on_merge ({union_old_new})
+                    :merge (ordering-min old new))"
+                ))
+                .unwrap()
+        }
+    }
+
     fn make_canonicalize_func(&mut self, fdecl: &NormFunctionDecl) -> Vec<Command> {
-        let types = self
-            .type_info()
-            .func_types
-            .get(&fdecl.name)
-            .unwrap()
-            .clone();
+        let types = self.type_info().lookup_user_func(fdecl.name).unwrap();
 
         let op = fdecl.name;
         let pname = self.parent_name(fdecl.schema.output);
@@ -242,7 +260,7 @@ impl<'a> TermState<'a> {
             }
             NormAction::Set(expr, var) => {
                 let NormExpr::Call(head, _args) = expr;
-                let func_type = self.type_info().func_types.get(head).unwrap();
+                let func_type = self.type_info().lookup_user_func(*head).unwrap();
                 // desugar set to union when the merge
                 // function is union
                 if func_type.is_datatype {
@@ -353,6 +371,7 @@ impl<'a> TermState<'a> {
                 }
                 NCommand::Function(fdecl) => {
                     res.push(command.to_command());
+                    res.extend(self.make_term_view(fdecl));
                     res.extend(self.make_canonicalize_func(fdecl));
                 }
                 NCommand::NormRule {

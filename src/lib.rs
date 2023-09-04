@@ -1100,14 +1100,12 @@ impl EGraph {
         Ok(())
     }
 
-    fn input_file(&mut self, name: Symbol, file: String) -> Result<(), Error> {
+    fn input_file(&mut self, func_name: Symbol, file: String) -> Result<(), Error> {
         let function_type = self
             .type_info()
-            .func_types
-            .get(&name)
-            .unwrap_or_else(|| panic!("Unrecognzed function name {}", name))
-            .clone();
-        let func = self.functions.get_mut(&name).unwrap();
+            .lookup_user_func(func_name)
+            .unwrap_or_else(|| panic!("Unrecognzed function name {}", func_name));
+        let func = self.functions.get_mut(&func_name).unwrap();
 
         let mut filename = self.fact_directory.clone().unwrap_or_default();
         filename.push(file.as_str());
@@ -1154,15 +1152,18 @@ impl EGraph {
 
             actions.push(
                 if function_type.is_datatype || function_type.output.name() == UNIT_SYM.into() {
-                    Action::Expr(Expr::Call(name, exprs))
+                    Action::Expr(Expr::Call(func_name, exprs))
                 } else {
                     let out = exprs.pop().unwrap();
-                    Action::Set(name, exprs, out)
+                    Action::Set(func_name, exprs, out)
                 },
             );
         }
         self.eval_actions(&actions)?;
-        log::info!("Read {} facts into {name} from '{file}'.", actions.len());
+        log::info!(
+            "Read {} facts into {func_name} from '{file}'.",
+            actions.len()
+        );
         Ok(())
     }
 
