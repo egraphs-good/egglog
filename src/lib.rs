@@ -274,6 +274,14 @@ impl Default for EGraph {
 pub struct NotFoundError(Expr);
 
 impl EGraph {
+    /// Use the rust backend implimentation of eqsat,
+    /// including a rust implementation of the union-find
+    /// data structure and the rust implementation of
+    /// the rebuilding algorithm (maintains congruence closure).
+    pub fn enable_rust_eqsat(&mut self) {
+        self.terms_enabled = false;
+    }
+
     pub fn is_interactive_mode(&self) -> bool {
         self.interactive_mode
     }
@@ -1211,8 +1219,10 @@ impl EGraph {
         }
 
         // now add term encoding
-        let program_terms = TermState::add_term_encoding(self, program);
-        program = self.desugar.desugar_program(program_terms, false, false)?;
+        if self.terms_enabled {
+            let program_terms = TermState::add_term_encoding(self, program);
+            program = self.desugar.desugar_program(program_terms, false, false)?;
+        }
 
         if stop == CompilerPassStop::TermEncoding {
             return Ok(program);
