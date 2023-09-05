@@ -34,6 +34,7 @@ impl<'a> TermState<'a> {
         let pname = self.parent_name(type_name);
         format!("(set ({pname} {expr}) {expr})",)
     }
+
     pub(crate) fn union(&self, type_name: Symbol, lhs: &str, rhs: &str) -> String {
         let pname = self.parent_name(type_name);
         format!(
@@ -71,11 +72,12 @@ impl<'a> TermState<'a> {
         } else {
             let view_name = self.view_name(fdecl.name);
             let sort = types.output.name();
+            let child_sorts = ListDisplay(types.input.iter().map(|s| s.name()), " ");
             let union_old_new = self.union(sort, "old", "new");
             self.desugar()
                 .parser
                 .parse(&format!(
-                    "(function {view_name} ({sort} {sort}) {sort} 
+                    "(function {view_name} ({child_sorts}) {sort} 
                     :on_merge ({union_old_new})
                     :merge (ordering-min old new))"
                 ))
@@ -86,8 +88,11 @@ impl<'a> TermState<'a> {
     fn make_canonicalize_func(&mut self, fdecl: &NormFunctionDecl) -> Vec<Command> {
         let types = self.type_info().lookup_user_func(fdecl.name).unwrap();
 
-        let op = fdecl.name;
-        let pname = self.parent_name(fdecl.schema.output);
+        let view_name = if types.is_datatype {
+            self.view_name(fdecl.name)
+        } else {
+            fdecl.name
+        };
         let child = |i| format!("c{i}_");
         let child_parent = |i| {
             #[allow(clippy::iter_nth)]
@@ -111,95 +116,47 @@ impl<'a> TermState<'a> {
                 " "
             )
         );
+        let lhs_updated = self
+            .wrap_parent_or_rebuild("lhs".to_string(), types.output.clone())
+            .unwrap_or_else(|| "lhs".to_string());
         let rule = format!(
-            "(rule ((= lhs ({op} {children}))
+            "(rule ((= lhs ({view_name} {children}))
                     {children_updated})
-                   ({})
+                   ((set ({view_name} {children_updated}) {lhs_updated}))
                     :ruleset {})",
-            if types.is_datatype {
-                format!(
-                    "(let rhs ({op} {children_updated}))
-                     (set ({pname} rhs) rhs)
-                     {}",
-                    self.union(fdecl.schema.output, "lhs", "rhs")
-                )
-            } else {
-                format!("(set ({op} {children_updated}) lhs)")
-            },
             self.rebuilding_ruleset_name()
         );
         self.desugar().parser.parse(&rule).unwrap()
     }
 
-    fn instrument_fact(&mut self, fact: &NormFact, canon_vars: &mut HashSet<Symbol>) -> Vec<Fact> {
-        let mut maybe_wrap_parent = |var: Symbol, canon_vars: &HashSet<Symbol>| {
-            if canon_vars.contains(&var) {
-                Some(var.to_string())
-            } else {
-                let var_t = self.type_info().lookup(self.current_ctx, var).unwrap();
-                self.wrap_parent(var.to_string(), var_t)
-            }
-        };
-
+    /// Instrument fact replaces terms with looking up
+    /// canonical versions in the view.
+    /// It also needs to look up references to globals.
+    fn instrument_fact(&mut self, fact: &NormFact) -> Fact {
         match fact {
-            NormFact::ConstrainEq(lhs, rhs) => {
-                if let (Some(lhs_wrapped), Some(rhs_wrapped)) = (
-                    maybe_wrap_parent(*lhs, canon_vars),
-                    maybe_wrap_parent(*rhs, canon_vars),
-                ) {
-                    vec![
-                        format!("(= {} {})", lhs_wrapped, rhs_wrapped),
-                        format!("(= {} {})", rhs_wrapped, lhs_wrapped),
-                    ]
-                    .into_iter()
-                    .map(|s| self.desugar().fact_parser.parse(&s).unwrap())
-                    .collect::<Vec<Fact>>()
+            NormFact::Assign(lhs, NormExpr::Call(head, body)) => {
+                let func_type = self
+                    .type_info()
+                    .lookup_expr(self.current_ctx, &NormExpr::Call(*head, body.clone()))
+                    .unwrap();
+                if func_type.is_datatype {
+                    let view_name = self.view_name(*head);
+                    NormFact::Assign(*lhs, NormExpr::Call(view_name, body.clone()))
                 } else {
-                    vec![fact.to_fact()]
+                    fact.clone()
                 }
             }
-            NormFact::Compute(lhs, expr) => {
-                let NormExpr::Call(head, children) = expr;
-                let children_parents = children
-                    .iter()
-                    .map(|child| {
-                        maybe_wrap_parent(*child, canon_vars).unwrap_or_else(|| child.to_string())
-                    })
-                    .collect::<Vec<String>>();
-
-                self.parse_facts(vec![format!(
-                    "(= {lhs} ({head} {}))",
-                    ListDisplay(children_parents, " ")
-                )])
-            }
-            NormFact::Assign(_lhs, NormExpr::Call(_head, body)) => {
-                vec![fact.to_fact()]
-                    .into_iter()
-                    .chain({
-                        let facts =
-                            body.iter()
-                                .filter_map(|child| {
-                                    let wrapped = maybe_wrap_parent(*child, canon_vars).map(
-                                        |child_wrapped| format!("(= {} {})", child_wrapped, child),
-                                    );
-
-                                    canon_vars.insert(*child);
-                                    wrapped
-                                })
-                                .collect();
-                        // optimization: only match on
-                        // canonical enodes
-                        self.parse_facts(facts)
-                    })
-                    .collect()
-            }
-            NormFact::AssignVar(_lhs, _rhs) => {
-                vec![fact.to_fact()]
-            }
-            NormFact::AssignLit(..) => {
-                vec![fact.to_fact()]
-            }
+            _ => fact.clone(),
         }
+        .map_use(&mut |var| {
+            let vtype = self.type_info().lookup(self.current_ctx, var).unwrap();
+            if self.type_info().is_global(var) && vtype.is_eq_sort() {
+                let parent = self.parent_name(vtype.name());
+                Expr::Call(parent, vec![Expr::Var(var)])
+            } else {
+                Expr::Var(var)
+            }
+        })
     }
 
     fn wrap_parent_or_rebuild(&mut self, var: String, sort: ArcSort) -> Option<String> {
@@ -221,18 +178,7 @@ impl<'a> TermState<'a> {
     }
 
     fn instrument_facts(&mut self, facts: &[NormFact]) -> Vec<Fact> {
-        let mut canon_vars = HashSet::<Symbol>::default();
-        facts
-            .iter()
-            .flat_map(|f| self.instrument_fact(f, &mut canon_vars))
-            .collect()
-    }
-
-    fn parse_facts(&self, facts: Vec<String>) -> Vec<Fact> {
-        facts
-            .into_iter()
-            .map(|s| self.desugar().fact_parser.parse(&s).unwrap())
-            .collect()
+        facts.iter().map(|f| self.instrument_fact(f)).collect()
     }
 
     pub(crate) fn parse_actions(&self, actions: Vec<String>) -> Vec<Action> {
@@ -245,39 +191,36 @@ impl<'a> TermState<'a> {
     fn instrument_action(&mut self, action: &NormAction) -> Vec<Action> {
         match action {
             NormAction::Delete(_) => {
-                // TODO what to do about delete?
+                // delete from view instead of from terms
                 vec![action.to_action()]
             }
-            NormAction::Let(lhs, _expr) => {
-                let lhs_type = self.type_info().lookup(self.current_ctx, *lhs).unwrap();
+            NormAction::Let(lhs, NormExpr::Call(op, body)) => {
+                let func_type = self
+                    .type_info()
+                    .lookup_expr(self.current_ctx, &NormExpr::Call(*op, body.clone()))
+                    .unwrap();
+                let lhs_type = func_type.output;
                 let mut res = vec![action.to_action()];
 
+                // add the new term to the union-find
                 if let Some(lhs_wrapped) = self.wrap_parent(lhs.to_string(), lhs_type.clone()) {
                     res.extend(self.parse_actions(vec![format!("(set {lhs_wrapped} {lhs})",)]))
                 }
 
+                // add the new term to the view
+                if func_type.is_datatype {
+                    let view_name = self.view_name(*op);
+                    res.extend(self.parse_actions(vec![format!(
+                        "(set ({view_name} {}) {lhs})",
+                        ListDisplay(body, " ")
+                    )]));
+                }
+
                 res
             }
-            NormAction::Set(expr, var) => {
-                let NormExpr::Call(head, _args) = expr;
-                let func_type = self.type_info().lookup_user_func(*head).unwrap();
-                // desugar set to union when the merge
-                // function is union
-                if func_type.is_datatype {
-                    assert!(func_type.output.is_eq_sort(), "{:?}", func_type);
-                    self.parse_actions(
-                        vec![self.init(func_type.output.name(), &expr.to_string())]
-                            .into_iter()
-                            .chain(vec![self.union(
-                                func_type.output.name(),
-                                &expr.to_string(),
-                                &var.to_string(),
-                            )])
-                            .collect(),
-                    )
-                } else {
-                    vec![action.to_action()]
-                }
+            // Set doesn't touch terms, only tables
+            NormAction::Set(..) => {
+                vec![action.to_action()]
             }
             NormAction::Union(lhs, rhs) => {
                 let lhs_type = self.type_info().lookup(self.current_ctx, *lhs).unwrap();

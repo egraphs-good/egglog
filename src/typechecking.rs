@@ -21,7 +21,7 @@ pub struct TypeInfo {
     pub sorts: HashMap<Symbol, Arc<dyn Sort>>,
     pub primitives: HashMap<Symbol, Vec<Primitive>>,
     func_types: HashMap<Symbol, FuncType>,
-    pub global_types: HashMap<Symbol, ArcSort>,
+    global_types: HashMap<Symbol, ArcSort>,
     pub local_types: HashMap<CommandId, HashMap<Symbol, ArcSort>>,
 }
 
@@ -614,41 +614,55 @@ impl TypeInfo {
         }
     }
 
-    pub(crate) fn typecheck_expr(
+    pub(crate) fn lookup_expr(
+        &self,
+        ctx: CommandId,
+        expr: &NormExpr,
+    ) -> Result<FuncType, TypeError> {
+        let NormExpr::Call(head, body) = expr;
+        let child_types = body
+            .iter()
+            .map(|var| self.lookup(ctx, *var))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.lookup_func(*head, child_types)
+    }
+
+    pub(crate) fn is_global(&self, sym: Symbol) -> bool {
+        self.global_types.contains_key(&sym)
+    }
+
+    fn typecheck_expr(
         &mut self,
         ctx: CommandId,
         expr: &NormExpr,
         expect_lookup: bool,
     ) -> Result<FuncType, TypeError> {
-        match expr {
-            NormExpr::Call(head, body) => {
-                let child_types = if let Some(found) = self.func_types.get(head) {
-                    found.input.clone()
-                } else {
-                    let types = body
-                        .iter()
-                        .map(|var| self.lookup(ctx, *var))
-                        .collect::<Result<Vec<_>, _>>();
-                    if let Ok(types) = types {
-                        types
-                    } else if expect_lookup {
-                        // return the error
-                        types?
-                    } else {
-                        return Err(TypeError::UnboundFunction(*head));
-                    }
-                };
-                for (child_type, var) in child_types.iter().zip(body.iter()) {
-                    if expect_lookup {
-                        self.lookup(ctx, *var)?;
-                    } else {
-                        self.set_local_type(ctx, *var, child_type.clone())?;
-                    }
-                }
-
-                self.lookup_func(*head, child_types)
+        let NormExpr::Call(head, body) = expr;
+        let child_types = if let Some(found) = self.func_types.get(head) {
+            found.input.clone()
+        } else {
+            let types = body
+                .iter()
+                .map(|var| self.lookup(ctx, *var))
+                .collect::<Result<Vec<_>, _>>();
+            if let Ok(types) = types {
+                types
+            } else if expect_lookup {
+                // return the error
+                types?
+            } else {
+                return Err(TypeError::UnboundFunction(*head));
+            }
+        };
+        for (child_type, var) in child_types.iter().zip(body.iter()) {
+            if expect_lookup {
+                self.lookup(ctx, *var)?;
+            } else {
+                self.set_local_type(ctx, *var, child_type.clone())?;
             }
         }
+
+        self.lookup_func(*head, child_types)
     }
 }
 

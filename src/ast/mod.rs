@@ -709,6 +709,18 @@ impl NormFact {
         }
     }
 
+    pub(crate) fn map_use(&self, fvar: &mut impl FnMut(Symbol) -> Expr) -> Fact {
+        match self {
+            NormFact::AssignVar(lhs, rhs) => Fact::Eq(vec![Expr::Var(*lhs), fvar(*rhs)]),
+            NormFact::ConstrainEq(lhs, rhs) => Fact::Eq(vec![fvar(*lhs), fvar(*rhs)]),
+            NormFact::Compute(lhs, NormExpr::Call(op, children)) => Fact::Eq(vec![
+                fvar(*lhs),
+                Expr::Call(*op, children.iter().cloned().map(fvar).collect()),
+            ]),
+            NormFact::AssignLit(..) | NormFact::Assign(..) => self.to_fact(),
+        }
+    }
+
     pub(crate) fn map_def_use(&self, fvar: &mut impl FnMut(Symbol, bool) -> Symbol) -> NormFact {
         match self {
             NormFact::Assign(symbol, expr) => {
