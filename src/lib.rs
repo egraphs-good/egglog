@@ -440,8 +440,8 @@ impl EGraph {
         self.unionfind.n_unions() - n_unions + function.clear_updates()
     }
 
-    pub fn declare_function(&mut self, decl: &FunctionDecl) -> Result<(), Error> {
-        let function = Function::new(self, decl)?;
+    pub fn declare_function(&mut self, decl: &NormFunctionDecl) -> Result<(), Error> {
+        let function = Function::new(self, &decl.to_fdecl())?;
         let old = self.functions.insert(decl.name, function);
         if old.is_some() {
             panic!(
@@ -450,31 +450,6 @@ impl EGraph {
             );
         }
 
-        Ok(())
-    }
-
-    pub fn declare_constructor(
-        &mut self,
-        variant: Variant,
-        sort: impl Into<Symbol>,
-    ) -> Result<(), Error> {
-        let name = variant.name;
-        let sort = sort.into();
-        self.declare_function(&FunctionDecl {
-            name,
-            schema: Schema {
-                input: variant.types,
-                output: sort,
-            },
-            merge: None,
-            merge_action: vec![],
-            default: None,
-            cost: variant.cost,
-            unextractable: false,
-        })?;
-        // if let Some(ctors) = self.sorts.get_mut(&sort) {
-        //     ctors.push(name);
-        // }
         Ok(())
     }
 

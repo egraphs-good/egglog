@@ -123,7 +123,10 @@ impl TypeInfo {
         Ok(())
     }
 
-    pub(crate) fn function_to_functype(&self, func: &FunctionDecl) -> Result<FuncType, TypeError> {
+    pub(crate) fn function_to_functype(
+        &self,
+        func: &NormFunctionDecl,
+    ) -> Result<FuncType, TypeError> {
         let input = func
             .schema
             .input

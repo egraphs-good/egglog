@@ -91,7 +91,7 @@ pub enum NCommand {
         value: Expr,
     },
     Sort(Symbol, Option<(Symbol, Vec<Expr>)>),
-    Function(FunctionDecl),
+    Function(NormFunctionDecl),
     AddRuleset(Symbol),
     NormRule {
         name: Symbol,
@@ -132,7 +132,7 @@ impl NCommand {
                 value: value.clone(),
             },
             NCommand::Sort(name, params) => Command::Sort(*name, params.clone()),
-            NCommand::Function(f) => Command::Function(f.clone()),
+            NCommand::Function(f) => Command::Function(f.to_fdecl()),
             NCommand::AddRuleset(name) => Command::AddRuleset(*name),
             NCommand::NormRule {
                 name,
@@ -498,12 +498,43 @@ impl NormRunConfig {
     }
 }
 
+/// A normalized function declaration- the desugared
+/// version of a [`FunctionDecl`].
+/// TODO so far only the merge action is normalized,
+/// not the default value or merge expression.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct NormFunctionDecl {
+    pub name: Symbol,
+    pub schema: Schema,
+    // todo desugar default, merge
+    pub default: Option<Expr>,
+    pub merge: Option<Expr>,
+    pub merge_action: Vec<NormAction>,
+    pub cost: Option<usize>,
+    pub unextractable: bool,
+}
+
+impl NormFunctionDecl {
+    pub fn to_fdecl(&self) -> FunctionDecl {
+        FunctionDecl {
+            name: self.name,
+            schema: self.schema.clone(),
+            default: self.default.clone(),
+            merge: self.merge.clone(),
+            merge_action: self.merge_action.iter().map(|a| a.to_action()).collect(),
+            cost: self.cost,
+            unextractable: self.unextractable,
+        }
+    }
+}
+
+/// Represents the declaration of a function
+/// directly parsed from source syntax.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct FunctionDecl {
     pub name: Symbol,
     pub schema: Schema,
     pub default: Option<Expr>,
-    // TODO we should desugar merge and merge action
     pub merge: Option<Expr>,
     pub merge_action: Vec<Action>,
     pub cost: Option<usize>,
