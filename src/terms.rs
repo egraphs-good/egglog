@@ -30,11 +30,6 @@ impl<'a> TermState<'a> {
         self.desugar().parent_name(sort)
     }
 
-    pub(crate) fn init(&self, type_name: Symbol, expr: &str) -> String {
-        let pname = self.parent_name(type_name);
-        format!("(set ({pname} {expr}) {expr})",)
-    }
-
     pub(crate) fn union(&self, type_name: Symbol, lhs: &str, rhs: &str) -> String {
         let pname = self.parent_name(type_name);
         format!(
@@ -62,7 +57,11 @@ impl<'a> TermState<'a> {
     }
 
     fn view_name(&self, name: Symbol) -> Symbol {
-        Symbol::from(format!("{}View{}", name, self.desugar().number_underscores))
+        Symbol::from(format!(
+            "{}View{}",
+            name,
+            "_".repeat(self.desugar().number_underscores)
+        ))
     }
 
     fn make_term_view(&self, fdecl: &NormFunctionDecl) -> Vec<Command> {
@@ -75,8 +74,7 @@ impl<'a> TermState<'a> {
             let child_sorts = ListDisplay(types.input.iter().map(|s| s.name()), " ");
             let union_old_new = self.union(sort, "old", "new");
             self.desugar()
-                .parser
-                .parse(&format!(
+                .parse_program(&format!(
                     "(function {view_name} ({child_sorts}) {sort} 
                     :on_merge ({union_old_new})
                     :merge (ordering-min old new))"
@@ -85,8 +83,13 @@ impl<'a> TermState<'a> {
         }
     }
 
-    fn make_canonicalize_func(&mut self, fdecl: &NormFunctionDecl) -> Vec<Command> {
+    fn canonicalize_rules(&mut self, fdecl: &NormFunctionDecl) -> Vec<Command> {
         let types = self.type_info().lookup_user_func(fdecl.name).unwrap();
+        let has_eq_type = types.output.is_eq_sort() || types.input.iter().any(|s| s.is_eq_sort());
+
+        if !has_eq_type {
+            return vec![];
+        }
 
         let view_name = if types.is_datatype {
             self.view_name(fdecl.name)
@@ -94,10 +97,11 @@ impl<'a> TermState<'a> {
             fdecl.name
         };
         let child = |i| format!("c{i}_");
-        let child_parent = |i| {
+        let child_parent = |myself: &Self, i| {
             #[allow(clippy::iter_nth)]
             let child_t: ArcSort = types.input.iter().nth(i).unwrap().clone();
-            self.wrap_parent_or_rebuild(child(i), child_t)
+            myself
+                .wrap_parent_or_rebuild(child(i), child_t)
                 .unwrap_or_else(|| child(i))
         };
         let children = format!(
@@ -111,7 +115,7 @@ impl<'a> TermState<'a> {
             "{}",
             ListDisplay(
                 (0..fdecl.schema.input.len())
-                    .map(child_parent)
+                    .map(|v| child_parent(self, v))
                     .collect::<Vec<_>>(),
                 " "
             )
@@ -119,14 +123,50 @@ impl<'a> TermState<'a> {
         let lhs_updated = self
             .wrap_parent_or_rebuild("lhs".to_string(), types.output.clone())
             .unwrap_or_else(|| "lhs".to_string());
-        let rule = format!(
-            "(rule ((= lhs ({view_name} {children}))
-                    {children_updated})
-                   ((set ({view_name} {children_updated}) {lhs_updated}))
-                    :ruleset {})",
-            self.rebuilding_ruleset_name()
-        );
-        self.desugar().parser.parse(&rule).unwrap()
+
+        let mut res = vec![];
+        // This rule updates each row of the table,
+        // doing canonicalization
+        // (and through the view merge function, rebuilding)
+
+        // Actually, we need one rule per column, since
+        // we need to clean up old value in the view
+        for i in 0..(fdecl.schema.input.len() + 1) {
+            let var_type = if i == fdecl.schema.input.len() {
+                types.output.clone()
+            } else {
+                types.input[i].clone()
+            };
+            let current = if i == fdecl.schema.input.len() {
+                "lhs".to_string()
+            } else {
+                child(i)
+            };
+            let current_updated = if i == fdecl.schema.input.len() {
+                lhs_updated.clone()
+            } else {
+                child_parent(self, i)
+            };
+            if var_type.is_eq_sort() {
+                let rule = format!(
+                    "(rule ((= lhs ({view_name} {children}))
+                            (!= {current} {current_updated}))
+                       (
+                        ;; delete the old row
+                        ;; XXXX why is deleting after doing the setting bad!??
+                        (delete ({view_name} {children}))
+                        ;; update the view
+                        (set ({view_name} {children_updated}) {lhs_updated})
+                        
+                       )
+                        :ruleset {})",
+                    self.rebuilding_ruleset_name()
+                );
+                res.extend(self.desugar().parse_program(&rule).unwrap());
+            }
+        }
+
+        res
     }
 
     /// Instrument fact replaces terms with looking up
@@ -150,16 +190,17 @@ impl<'a> TermState<'a> {
         }
         .map_use(&mut |var| {
             let vtype = self.type_info().lookup(self.current_ctx, var).unwrap();
-            if self.type_info().is_global(var) && vtype.is_eq_sort() {
-                let parent = self.parent_name(vtype.name());
-                Expr::Call(parent, vec![Expr::Var(var)])
+            if !self.type_info().is_global(var) {
+                Expr::Var(var)
+            } else if let Some(wrapped) = self.wrap_parent_or_rebuild(var.to_string(), vtype) {
+                self.desugar().expr_parser.parse(&wrapped).unwrap()
             } else {
                 Expr::Var(var)
             }
         })
     }
 
-    fn wrap_parent_or_rebuild(&mut self, var: String, sort: ArcSort) -> Option<String> {
+    fn wrap_parent_or_rebuild(&self, var: String, sort: ArcSort) -> Option<String> {
         if sort.is_container_sort() {
             Some(format!("(rebuild {})", var))
         } else {
@@ -167,7 +208,7 @@ impl<'a> TermState<'a> {
         }
     }
 
-    fn wrap_parent(&mut self, var: String, sort: ArcSort) -> Option<String> {
+    fn wrap_parent(&self, var: String, sort: ArcSort) -> Option<String> {
         // TODO make all containers also eq sort
         if sort.is_eq_sort() {
             let parent = self.parent_name(sort.name());
@@ -188,19 +229,78 @@ impl<'a> TermState<'a> {
             .collect()
     }
 
+    fn fresh_var(&mut self) -> Symbol {
+        self.egraph.desugar.get_fresh()
+    }
+
+    fn look_up_globals(&mut self, action: &NormAction, res: &mut Vec<Action>) -> NormAction {
+        action.map_def_use(&mut |var, is_def| {
+            let vtype = self.type_info().lookup(self.current_ctx, var).unwrap();
+
+            if is_def || !self.type_info().is_global(var) {
+                var
+            } else if let Some(wrapped) = self.wrap_parent_or_rebuild(var.to_string(), vtype) {
+                let fresh_var = self.fresh_var();
+                res.extend(
+                    self.desugar()
+                        .action_parser
+                        .parse(&format!("(let {fresh_var} {wrapped})")),
+                );
+                fresh_var
+            } else {
+                var
+            }
+        })
+    }
+
+    // Actions need to be instrumented to add to the view
+    // as well as to the terms tables.
+    // In addition, we need to look up canonical versions
+    // of globals.
     fn instrument_action(&mut self, action: &NormAction) -> Vec<Action> {
-        match action {
-            NormAction::Delete(_) => {
+        let mut res = vec![];
+
+        // compute the func type before we mess with
+        // the action
+        let func_type = match action {
+            NormAction::Delete(expr) => Some(
+                self.type_info()
+                    .lookup_expr(self.current_ctx, expr)
+                    .unwrap(),
+            ),
+            NormAction::Let(_lhs, expr) => Some(
+                self.type_info()
+                    .lookup_expr(self.current_ctx, expr)
+                    .unwrap(),
+            ),
+            _ => None,
+        };
+        let union_type = if let NormAction::Union(lhs, _rhs) = action {
+            Some(self.type_info().lookup(self.current_ctx, *lhs).unwrap())
+        } else {
+            None
+        };
+
+        let globals_replaced = self.look_up_globals(action, &mut res);
+
+        res.extend(match &globals_replaced {
+            NormAction::Delete(NormExpr::Call(op, body)) => {
                 // delete from view instead of from terms
-                vec![action.to_action()]
+                let func_type = func_type.unwrap();
+                if func_type.is_datatype {
+                    let view_name = self.view_name(*op);
+                    vec![Action::Delete(
+                        view_name,
+                        body.iter().cloned().map(Expr::Var).collect(),
+                    )]
+                } else {
+                    vec![globals_replaced.to_action()]
+                }
             }
             NormAction::Let(lhs, NormExpr::Call(op, body)) => {
-                let func_type = self
-                    .type_info()
-                    .lookup_expr(self.current_ctx, &NormExpr::Call(*op, body.clone()))
-                    .unwrap();
+                let func_type = func_type.unwrap();
                 let lhs_type = func_type.output;
-                let mut res = vec![action.to_action()];
+                let mut res = vec![globals_replaced.to_action()];
 
                 // add the new term to the union-find
                 if let Some(lhs_wrapped) = self.wrap_parent(lhs.to_string(), lhs_type.clone()) {
@@ -218,15 +318,9 @@ impl<'a> TermState<'a> {
 
                 res
             }
-            // Set doesn't touch terms, only tables
-            NormAction::Set(..) => {
-                vec![action.to_action()]
-            }
+
             NormAction::Union(lhs, rhs) => {
-                let lhs_type = self.type_info().lookup(self.current_ctx, *lhs).unwrap();
-                let rhs_type = self.type_info().lookup(self.current_ctx, *rhs).unwrap();
-                assert_eq!(lhs_type.name(), rhs_type.name());
-                assert!(lhs_type.is_eq_sort());
+                let lhs_type = union_type.unwrap();
 
                 self.parse_actions(vec![self.union(
                     lhs_type.name(),
@@ -234,8 +328,10 @@ impl<'a> TermState<'a> {
                     &rhs.to_string(),
                 )])
             }
-            _ => vec![action.to_action()],
-        }
+            // Set doesn't touch terms, only tables
+            _ => vec![globals_replaced.to_action()],
+        });
+        res
     }
 
     fn instrument_actions(&mut self, actions: &[NormAction]) -> Vec<Action> {
@@ -315,7 +411,7 @@ impl<'a> TermState<'a> {
                 NCommand::Function(fdecl) => {
                     res.push(command.to_command());
                     res.extend(self.make_term_view(fdecl));
-                    res.extend(self.make_canonicalize_func(fdecl));
+                    res.extend(self.canonicalize_rules(fdecl));
                 }
                 NCommand::NormRule {
                     ruleset,
