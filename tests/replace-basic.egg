@@ -1,0 +1,26 @@
+
+
+(function Add (i64 i64) i64)
+
+
+(set (Add 1 1) 2)
+
+(replace (Add 1 1) (Add 1 1) 3)
+
+(fail (check (= (Add 1 1) 2)))
+
+(check (= (Add 1 1) 3))
+
+
+
+(function Sub (i64 i64) i64)
+
+(set (Add 2 2) 3)
+
+(set (Sub 2 2) 1)
+
+(replace (Add 2 2) (Sub 3 3) 4)
+
+(fail (check (= (Add 2 2) 3)))
+(check (= (Sub 2 2) 1))
+(check (= (Sub 3 3) 4))
