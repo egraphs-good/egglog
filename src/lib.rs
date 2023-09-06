@@ -60,9 +60,11 @@ pub trait PrimitiveLike {
 #[derive(Debug, Clone, Default)]
 pub struct RunReport {
     pub updated: bool,
-    pub search_time: Duration,
-    pub apply_time: Duration,
-    pub rebuild_time: Duration,
+    pub search_time_per_rule: HashMap<Symbol, Duration>,
+    pub apply_time_per_rule: HashMap<Symbol, Duration>,
+    pub search_time_per_ruleset: HashMap<Symbol, Duration>,
+    pub apply_time_per_ruleset: HashMap<Symbol, Duration>,
+    pub rebuild_time_per_ruleset: HashMap<Symbol, Duration>,
 }
 
 /// A report of the results of an extract action.
@@ -80,12 +82,41 @@ pub enum ExtractReport {
 }
 
 impl RunReport {
+    fn union_times(
+        times: &HashMap<Symbol, Duration>,
+        other_times: &HashMap<Symbol, Duration>,
+    ) -> HashMap<Symbol, Duration> {
+        let mut new_times = times.clone();
+        for (k, v) in other_times {
+            let entry = new_times.entry(*k).or_default();
+            *entry += *v;
+        }
+        new_times
+    }
+
     pub fn union(&self, other: &Self) -> Self {
         Self {
             updated: self.updated || other.updated,
-            search_time: self.search_time + other.search_time,
-            apply_time: self.apply_time + other.apply_time,
-            rebuild_time: self.rebuild_time + other.rebuild_time,
+            search_time_per_rule: Self::union_times(
+                &self.search_time_per_rule,
+                &other.search_time_per_rule,
+            ),
+            apply_time_per_rule: Self::union_times(
+                &self.apply_time_per_rule,
+                &other.apply_time_per_rule,
+            ),
+            search_time_per_ruleset: Self::union_times(
+                &self.search_time_per_ruleset,
+                &other.search_time_per_ruleset,
+            ),
+            apply_time_per_ruleset: Self::union_times(
+                &self.apply_time_per_ruleset,
+                &other.apply_time_per_ruleset,
+            ),
+            rebuild_time_per_ruleset: Self::union_times(
+                &self.rebuild_time_per_ruleset,
+                &other.rebuild_time_per_ruleset,
+            ),
         }
     }
 }
@@ -232,8 +263,6 @@ struct Rule {
     times_banned: usize,
     banned_until: usize,
     todo_timestamp: u32,
-    search_time: Duration,
-    apply_time: Duration,
 }
 
 impl Default for EGraph {
@@ -581,13 +610,19 @@ impl EGraph {
         }
     }
 
-    pub fn run_rules_once(&mut self, config: &NormRunConfig, report: &mut RunReport) {
+    pub fn run_rules(&mut self, config: &NormRunConfig) -> RunReport {
+        let mut report: RunReport = Default::default();
+
         // first rebuild
         let rebuild_start = Instant::now();
         let updates = self.rebuild_nofail();
         log::debug!("database size: {}", self.num_tuples());
         log::debug!("Made {updates} updates");
-        report.rebuild_time += rebuild_start.elapsed();
+        // add to the rebuild time for this ruleset
+        *report
+            .rebuild_time_per_ruleset
+            .entry(config.ruleset)
+            .or_insert(Duration::default()) += rebuild_start.elapsed();
         self.timestamp += 1;
 
         let NormRunConfig { ruleset, until } = config;
@@ -598,12 +633,12 @@ impl EGraph {
                     "Breaking early because of facts:\n {}!",
                     ListDisplay(facts, "\n")
                 );
-                return;
+                return report;
             }
         }
 
         let subreport = self.step_rules(*ruleset);
-        *report = report.union(&subreport);
+        report = report.union(&subreport);
 
         log::debug!("database size: {}", self.num_tuples());
         self.timestamp += 1;
@@ -611,41 +646,7 @@ impl EGraph {
         if self.num_tuples() > self.node_limit {
             log::warn!("Node limit reached, {} nodes. Stopping!", self.num_tuples());
         }
-    }
 
-    pub fn run_rules(&mut self, config: &NormRunConfig) -> RunReport {
-        let mut report: RunReport = Default::default();
-
-        self.run_rules_once(config, &mut report);
-
-        // Report the worst offenders
-        log::debug!("Slowest rules:\n{}", {
-            let mut msg = String::new();
-            let mut vec = self
-                .rulesets
-                .iter()
-                .flat_map(|(_name, rules)| rules)
-                .collect::<Vec<_>>();
-            vec.sort_by_key(|(_, r)| r.search_time + r.apply_time);
-            for (name, rule) in vec.iter().rev().take(5) {
-                write!(
-                    msg,
-                    "{name}\n  Search: {:.3}s\n  Apply: {:.3}s\n",
-                    rule.search_time.as_secs_f64(),
-                    rule.apply_time.as_secs_f64()
-                )
-                .unwrap();
-            }
-            msg
-        });
-
-        // // TODO detect functions
-        // for (name, r) in &self.functions {
-        //     log::debug!("{name}:");
-        //     for (args, val) in &r.nodes {
-        //         log::debug!("  {args:?} = {val:?}");
-        //     }
-        // }
         report
     }
 
@@ -699,12 +700,20 @@ impl EGraph {
         }
 
         let search_elapsed = search_start.elapsed();
-        report.search_time += search_elapsed;
+        // add to the ruleset searched time
+        *report
+            .search_time_per_ruleset
+            .entry(ruleset)
+            .or_insert(Duration::default()) += search_elapsed;
 
         let apply_start = Instant::now();
-        for (name, all_values, time) in searched {
+        for (name, all_values, search_time) in searched {
             let rule = rules.get_mut(name).unwrap();
-            rule.search_time += time;
+            // add to the rule's search time
+            *report
+                .search_time_per_rule
+                .entry(*name)
+                .or_insert(Duration::default()) += search_time;
             let num_vars = rule.query.vars.len();
 
             // the query doesn't require matches
@@ -741,11 +750,19 @@ impl EGraph {
                 }
             }
 
-            rule.apply_time += rule_apply_start.elapsed();
+            // add to the rule's apply time
+            *report
+                .apply_time_per_rule
+                .entry(*name)
+                .or_insert(Duration::default()) += rule_apply_start.elapsed();
         }
         self.rulesets.insert(ruleset, rules);
         let apply_elapsed = apply_start.elapsed();
-        report.apply_time += apply_elapsed;
+        // add to the apply time for the ruleset
+        *report
+            .apply_time_per_ruleset
+            .entry(ruleset)
+            .or_insert(Duration::default()) += apply_elapsed;
         report.updated |= self.did_change_tables() || n_unions_before != self.unionfind.n_unions();
 
         report
@@ -787,8 +804,6 @@ impl EGraph {
             banned_until: 0,
             todo_timestamp: 0,
             program,
-            search_time: Duration::default(),
-            apply_time: Duration::default(),
         };
         if let Some(rules) = self.rulesets.get_mut(&ruleset) {
             match rules.entry(name) {
