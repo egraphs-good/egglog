@@ -67,3 +67,5 @@
 (run 10)
 (print-size Add)
 (print-size Mul)
+
+(print-stats)

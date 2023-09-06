@@ -26,7 +26,7 @@ use symbolic_expressions::Sexp;
 use ast::*;
 pub use typechecking::{TypeInfo, UNIT_SYM};
 
-use std::fmt::{Display, Formatter, Write};
+use std::fmt::{Display, Formatter};
 use std::fs::File;
 use std::hash::Hash;
 use std::io::Read;
@@ -57,14 +57,103 @@ pub trait PrimitiveLike {
     fn apply(&self, values: &[Value]) -> Option<Value>;
 }
 
+/// Running a schedule produces a report of the results.
+/// This includes rough timing information and whether
+/// the database was updated.
+/// Calling `union` on two run reports adds the timing
+/// information together.
 #[derive(Debug, Clone, Default)]
 pub struct RunReport {
+    /// If any changes were made to the database, this is
+    /// true.
     pub updated: bool,
+    /// The time it took to run the query, for each rule.
     pub search_time_per_rule: HashMap<Symbol, Duration>,
     pub apply_time_per_rule: HashMap<Symbol, Duration>,
     pub search_time_per_ruleset: HashMap<Symbol, Duration>,
     pub apply_time_per_ruleset: HashMap<Symbol, Duration>,
     pub rebuild_time_per_ruleset: HashMap<Symbol, Duration>,
+}
+
+impl RunReport {
+    /// add a ... and a maximum size to the name
+    /// for printing, since they may be the rule itself
+    fn truncate_rule_name(sym: Symbol) -> String {
+        let mut s = sym.to_string();
+        // replace newlines in s with a space
+        s = s.replace('\n', " ");
+        if s.len() > 20 {
+            s.truncate(20);
+            s.push_str("...");
+        }
+        s
+    }
+}
+
+impl Display for RunReport {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let all_rules = self
+            .search_time_per_rule
+            .keys()
+            .chain(self.apply_time_per_rule.keys())
+            .collect::<HashSet<_>>();
+
+        for rule in all_rules {
+            let truncated = Self::truncate_rule_name(*rule);
+            // print out the search and apply time for rule
+            let search_time = self
+                .search_time_per_rule
+                .get(rule)
+                .cloned()
+                .unwrap_or(Duration::default())
+                .as_secs_f64();
+            let apply_time = self
+                .apply_time_per_rule
+                .get(rule)
+                .cloned()
+                .unwrap_or(Duration::default())
+                .as_secs_f64();
+            writeln!(
+                f,
+                "Rule {truncated}: search {search_time:.3}s, apply {apply_time:.3}s",
+            )?;
+        }
+
+        let rulesets = self
+            .search_time_per_ruleset
+            .keys()
+            .chain(self.apply_time_per_ruleset.keys())
+            .chain(self.rebuild_time_per_ruleset.keys())
+            .collect::<HashSet<_>>();
+
+        for ruleset in rulesets {
+            // print out the search and apply time for rule
+            let search_time = self
+                .search_time_per_ruleset
+                .get(ruleset)
+                .cloned()
+                .unwrap_or(Duration::default())
+                .as_secs_f64();
+            let apply_time = self
+                .apply_time_per_ruleset
+                .get(ruleset)
+                .cloned()
+                .unwrap_or(Duration::default())
+                .as_secs_f64();
+            let rebuild_time = self
+                .rebuild_time_per_ruleset
+                .get(ruleset)
+                .cloned()
+                .unwrap_or(Duration::default())
+                .as_secs_f64();
+            writeln!(
+                f,
+                "Ruleset {ruleset}: search {search_time:.3}s, apply {apply_time:.3}s, rebuild {rebuild_time:.3}s",
+            )?;
+        }
+
+        Ok(())
+    }
 }
 
 /// A report of the results of an extract action.
@@ -251,7 +340,10 @@ pub struct EGraph {
     // sort, value, and timestamp
     pub global_bindings: HashMap<Symbol, (ArcSort, Value, u32)>,
     extract_report: Option<ExtractReport>,
-    run_report: Option<RunReport>,
+    /// The run report for the most recent run of a schedule.
+    recent_run_report: Option<RunReport>,
+    /// The run report unioned over all runs so far.
+    overall_run_report: RunReport,
     msgs: Vec<String>,
 }
 
@@ -284,7 +376,8 @@ impl Default for EGraph {
             fact_directory: None,
             seminaive: true,
             extract_report: None,
-            run_report: None,
+            recent_run_report: None,
+            overall_run_report: Default::default(),
             msgs: Default::default(),
         };
         egraph.rulesets.insert("".into(), Default::default());
@@ -305,16 +398,25 @@ impl EGraph {
         self.egraphs.push(self.clone());
     }
 
+    /// Pop the current egraph off the stack, replacing
+    /// it with the previously pushed egraph.
+    /// It preserves the run report and messages from the popped
+    /// egraph.
     pub fn pop(&mut self) -> Result<(), Error> {
         match self.egraphs.pop() {
             Some(e) => {
                 // Copy the reports and messages from the popped egraph
                 let extract_report = self.extract_report.clone();
-                let run_report = self.run_report.clone();
+                let recent_run_report = self.recent_run_report.clone();
+                let overall_run_report = self.overall_run_report.clone();
                 let messages = self.msgs.clone();
                 *self = e;
                 self.extract_report = extract_report.or(self.extract_report.clone());
-                self.run_report = run_report.or(self.run_report.clone());
+                // We union the run reports, meaning
+                // that statistics are shared across
+                // push/pop
+                self.recent_run_report = recent_run_report.or(self.recent_run_report.clone());
+                self.overall_run_report = self.overall_run_report.union(&overall_run_report);
                 self.msgs.extend(messages);
                 Ok(())
             }
@@ -946,11 +1048,18 @@ impl EGraph {
             }
             NCommand::RunSchedule(sched) => {
                 if should_run {
-                    self.run_report = Some(self.run_schedule(&sched));
-                    log::info!("Ran schedule {}.", sched)
+                    let report = self.run_schedule(&sched);
+                    log::info!("Ran schedule {}.", sched);
+                    log::info!("Report: {}", report);
+                    self.overall_run_report = self.overall_run_report.union(&report);
+                    self.recent_run_report = Some(report);
                 } else {
                     log::warn!("Skipping schedule.")
                 }
+            }
+            NCommand::PrintOverallStatistics => {
+                log::info!("Overall statistics:\n{}", self.overall_run_report);
+                self.print_msg(format!("Overall statistics:\n{}", self.overall_run_report));
             }
             NCommand::Check(facts) => {
                 if should_run {
@@ -1221,7 +1330,12 @@ impl EGraph {
 
     /// Gets the last run report and returns it, if the last command saved it.
     pub fn get_run_report(&self) -> &Option<RunReport> {
-        &self.run_report
+        &self.recent_run_report
+    }
+
+    /// Gets the overall run report and returns it.
+    pub fn get_overall_run_report(&self) -> &RunReport {
+        &self.overall_run_report
     }
 
     /// Serializes the egraph for export to graphviz.
