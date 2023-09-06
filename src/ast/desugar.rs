@@ -252,21 +252,22 @@ fn flatten_actions(actions: &Vec<Action>, desugar: &mut Desugar) -> Vec<NormActi
                 res.push(set);
             }
             Action::Replace {
-                constructor,
+                old_constructor: constructor,
+                new_constructor: other_constructor,
                 old_args,
                 new_args,
                 new_output,
             } => {
                 let replace = NormAction::Replace(
                     NormExpr::Call(
-                        constructor,
+                        *constructor,
                         old_args
                             .iter()
                             .map(|ex| add_expr(ex.clone(), &mut res))
                             .collect(),
                     ),
                     NormExpr::Call(
-                        constructor,
+                        *other_constructor,
                         new_args
                             .iter()
                             .map(|ex| add_expr(ex.clone(), &mut res))

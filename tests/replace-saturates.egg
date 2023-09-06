@@ -1,0 +1,14 @@
+
+
+(function Add (i64 i64) i64)
+
+
+(set (Add 1 1) 2)
+
+
+(rule ((Add a b))
+      ((replace (Add a b)
+       (Add a b) 2)))
+
+       
+(run-schedule (saturate (run)))

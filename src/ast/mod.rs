@@ -748,11 +748,15 @@ pub enum Action {
     /// except that it is aware when the new row is
     /// the same as the old and can therefore saturate
     /// in this case.
+    ///
+    /// If the constructors are different, simply deletes
+    /// from one table and adds to another.
     Replace {
-        constructor: Symbol,
+        old_constructor: Symbol,
+        new_constructor: Symbol,
         old_args: Vec<Expr>,
         new_args: Vec<Expr>,
-        new_output: Symbol,
+        new_output: Expr,
     },
     Union(Expr, Expr),
     Extract(Expr, Expr),
@@ -791,16 +795,17 @@ impl NormAction {
             NormAction::Delete(NormExpr::Call(symbol, args)) => {
                 Action::Delete(*symbol, args.iter().map(|s| Expr::Var(*s)).collect())
             }
-            NormAction::Replace(NormExpr(head, body), NormExpr(head2, body2), output) => {
-                assert!(head == head2);
-                assert!(body.len() == body2.len());
-                Action::Replace(
-                    *head,
-                    body.iter().map(|s| Expr::Var(*s)).collect(),
-                    body2.iter().map(|s| Expr::Var(*s)).collect(),
-                    Expr::Var(*output),
-                )
-            }
+            NormAction::Replace(
+                NormExpr::Call(head, body),
+                NormExpr::Call(head2, body2),
+                output,
+            ) => Action::Replace {
+                old_constructor: *head,
+                new_constructor: *head2,
+                old_args: body.iter().map(|s| Expr::Var(*s)).collect(),
+                new_args: body2.iter().map(|s| Expr::Var(*s)).collect(),
+                new_output: Expr::Var(*output),
+            },
             NormAction::Union(lhs, rhs) => Action::Union(Expr::Var(*lhs), Expr::Var(*rhs)),
             NormAction::Panic(msg) => Action::Panic(msg.clone()),
         }
@@ -855,14 +860,18 @@ impl ToSexp for Action {
         match self {
             Action::Let(lhs, rhs) => list!("let", lhs, rhs),
             Action::Set(lhs, args, rhs) => list!("set", list!(lhs, ++ args), rhs),
-            Action::Replace(NormExpr(head, body), NormExpr(head2, body2), output) => {
-                assert!(head == head2);
-                assert!(body.len() == body2.len());
+            Action::Replace {
+                old_constructor: constructor,
+                new_constructor: other_constructor,
+                old_args,
+                new_args,
+                new_output,
+            } => {
                 list!(
                     "replace",
-                    list!(head, ++ body),
-                    list!(head2, ++ body2),
-                    output
+                    list!(constructor, ++ old_args),
+                    list!(other_constructor, ++ new_args),
+                    new_output
                 )
             }
             Action::Union(lhs, rhs) => list!("union", lhs, rhs),
@@ -882,7 +891,27 @@ impl Action {
                 let right = f(rhs);
                 Action::Set(*lhs, args.iter().map(f).collect(), right)
             }
-            Action::Replace(lhs, rhs, output) => Action::Replace(f(lhs), f(rhs), *output),
+            Action::Replace {
+                old_constructor: constructor,
+                new_constructor: other_constructor,
+                old_args,
+                new_args,
+                new_output,
+            } => {
+                // use for loop because of borrow error
+                // with passing f to map
+                let mut mapped_old_args: Vec<Expr> = vec![];
+                for entry in old_args {
+                    mapped_old_args.push(f(entry));
+                }
+                Action::Replace {
+                    old_constructor: *constructor,
+                    new_constructor: *other_constructor,
+                    old_args: mapped_old_args,
+                    new_output: f(new_output),
+                    new_args: new_args.iter().map(f).collect(),
+                }
+            }
             Action::Delete(lhs, args) => Action::Delete(*lhs, args.iter().map(f).collect()),
             Action::Union(lhs, rhs) => Action::Union(f(lhs), f(rhs)),
             Action::Extract(expr, variants) => Action::Extract(f(expr), f(variants)),
@@ -900,12 +929,14 @@ impl Action {
                 rhs.subst(canon),
             ),
             Action::Replace {
-                constructor,
+                old_constructor: constructor,
+                new_constructor: other_constructor,
                 old_args,
                 new_args,
                 new_output,
             } => Action::Replace {
-                constructor: *constructor,
+                old_constructor: *constructor,
+                new_constructor: *other_constructor,
                 old_args: old_args.iter().map(|e| e.subst(canon)).collect(),
                 new_args: new_args.iter().map(|e| e.subst(canon)).collect(),
                 new_output: new_output.subst(canon),
@@ -1041,8 +1072,6 @@ impl NormRule {
     // because actions can fail halfway-through.
     // If we fix that bug, we can run this.
     pub fn resugar_actions(&self, subst: &mut HashMap<Symbol, Expr>) -> Vec<Action> {
-        return self.head.iter().map(|a| a.to_action()).collect();
-        #[allow(dead_code)]
         let mut used = HashSet::<Symbol>::default();
         let mut head = Vec::<Action>::default();
         for a in &self.head {
@@ -1114,7 +1143,7 @@ impl NormRule {
                         }
                         subexpr.clone()
                     });
-                    let output_expr = subst
+                    let new_output = subst
                         .get(output_var)
                         .unwrap_or(&Expr::Var(*output_var))
                         .clone();
@@ -1122,9 +1151,18 @@ impl NormRule {
                     let substituted1 = new_expr1.subst(subst);
                     let substituted2 = new_expr2.subst(subst);
                     match (substituted1, substituted2) {
-                        (Expr::Call(op1, children1), Expr::Call(op2, children2)) => {
-                            assert!(op1 == op2);
-                            head.push(Action::Replace(op1, children1, children2, output_expr));
+                        (
+                            Expr::Call(constructor, old_args),
+                            Expr::Call(other_constructor, new_args),
+                        ) => {
+                            assert!(constructor == other_constructor);
+                            head.push(Action::Replace {
+                                old_constructor: constructor,
+                                new_constructor: other_constructor,
+                                old_args,
+                                new_args,
+                                new_output,
+                            });
                         }
                         _ => panic!("Expected call in replace"),
                     }
