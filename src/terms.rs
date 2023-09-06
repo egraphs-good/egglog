@@ -450,7 +450,8 @@ impl<'a> TermState<'a> {
                 | NCommand::PrintTable(..)
                 | NCommand::Output { .. }
                 | NCommand::Input { .. }
-                | NCommand::CheckProof => {
+                | NCommand::CheckProof
+                | NCommand::PrintOverallStatistics => {
                     res.push(command.to_command());
                 }
             }
