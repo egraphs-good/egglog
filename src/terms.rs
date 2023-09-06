@@ -359,10 +359,10 @@ impl<'a> TermState<'a> {
                 ruleset: self.parent_ruleset_name(),
                 until: None,
             }))),
-            Schedule::Saturate(Box::new(Schedule::Run(RunConfig {
+            Schedule::Run(RunConfig {
                 ruleset: self.rebuilding_ruleset_name(),
                 until: None,
-            }))),
+            }),
         ])))
     }
 
