@@ -107,6 +107,8 @@ Cost: Option<usize> = {
 NonLetAction: Action = {
     LParen "set" LParen <f: Ident> <args:Expr*> RParen <v:Expr> RParen => Action::Set ( f, args, v ),
     LParen "delete" LParen <f: Ident> <args:Expr*> RParen RParen => Action::Delete ( f, args),
+    LParen "replace" LParen <constructor: Ident> <old_args:Expr*> RParen 
+    LParen <constructor: Ident> <new_args:Expr*> RParen <new_output:Expr> RParen => Action::Replace { constructor, old_args, new_args, new_output},
     LParen "union" <e1:Expr> <e2:Expr> RParen => Action::Union(<>),
     LParen "panic" <msg:String> RParen => Action::Panic(msg),
     LParen "extract" <expr:Expr> RParen => Action::Extract(expr, Expr::Lit(Literal::Int(0))),

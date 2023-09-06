@@ -743,6 +743,17 @@ pub enum Action {
     Let(Symbol, Expr),
     Set(Symbol, Vec<Expr>, Expr),
     Delete(Symbol, Vec<Expr>),
+    /// Replace a row in a table with another row.
+    /// Equivalent to `delete` followed by `set`,
+    /// except that it is aware when the new row is
+    /// the same as the old and can therefore saturate
+    /// in this case.
+    Replace {
+        constructor: Symbol,
+        old_args: Vec<Expr>,
+        new_args: Vec<Expr>,
+        new_output: Symbol,
+    },
     Union(Expr, Expr),
     Extract(Expr, Expr),
     Panic(String),
@@ -758,6 +769,7 @@ pub enum NormAction {
     Extract(Symbol, Symbol),
     Set(NormExpr, Symbol),
     Delete(NormExpr),
+    Replace(NormExpr, NormExpr, Symbol),
     Union(Symbol, Symbol),
     Panic(String),
 }
@@ -779,6 +791,16 @@ impl NormAction {
             NormAction::Delete(NormExpr::Call(symbol, args)) => {
                 Action::Delete(*symbol, args.iter().map(|s| Expr::Var(*s)).collect())
             }
+            NormAction::Replace(NormExpr(head, body), NormExpr(head2, body2), output) => {
+                assert!(head == head2);
+                assert!(body.len() == body2.len());
+                Action::Replace(
+                    *head,
+                    body.iter().map(|s| Expr::Var(*s)).collect(),
+                    body2.iter().map(|s| Expr::Var(*s)).collect(),
+                    Expr::Var(*output),
+                )
+            }
             NormAction::Union(lhs, rhs) => Action::Union(Expr::Var(*lhs), Expr::Var(*rhs)),
             NormAction::Panic(msg) => Action::Panic(msg.clone()),
         }
@@ -790,6 +812,9 @@ impl NormAction {
             NormAction::LetVar(symbol, other) => NormAction::LetVar(*symbol, *other),
             NormAction::LetLit(symbol, lit) => NormAction::LetLit(*symbol, lit.clone()),
             NormAction::Set(expr, other) => NormAction::Set(f(expr), *other),
+            NormAction::Replace(expr1, expr2, other) => {
+                NormAction::Replace(f(expr1), f(expr2), *other)
+            }
             NormAction::Extract(var, variants) => NormAction::Extract(*var, *variants),
             NormAction::Delete(expr) => NormAction::Delete(f(expr)),
             NormAction::Union(lhs, rhs) => NormAction::Union(*lhs, *rhs),
@@ -810,6 +835,11 @@ impl NormAction {
             NormAction::Set(expr, other) => {
                 NormAction::Set(expr.map_def_use(fvar, false), fvar(*other, false))
             }
+            NormAction::Replace(expr1, expr2, other) => NormAction::Replace(
+                expr1.map_def_use(fvar, false),
+                expr2.map_def_use(fvar, false),
+                fvar(*other, false),
+            ),
             NormAction::Extract(var, variants) => {
                 NormAction::Extract(fvar(*var, false), fvar(*variants, false))
             }
@@ -825,6 +855,16 @@ impl ToSexp for Action {
         match self {
             Action::Let(lhs, rhs) => list!("let", lhs, rhs),
             Action::Set(lhs, args, rhs) => list!("set", list!(lhs, ++ args), rhs),
+            Action::Replace(NormExpr(head, body), NormExpr(head2, body2), output) => {
+                assert!(head == head2);
+                assert!(body.len() == body2.len());
+                list!(
+                    "replace",
+                    list!(head, ++ body),
+                    list!(head2, ++ body2),
+                    output
+                )
+            }
             Action::Union(lhs, rhs) => list!("union", lhs, rhs),
             Action::Delete(lhs, args) => list!("delete", list!(lhs, ++ args)),
             Action::Extract(expr, variants) => list!("extract", expr, variants),
@@ -842,6 +882,7 @@ impl Action {
                 let right = f(rhs);
                 Action::Set(*lhs, args.iter().map(f).collect(), right)
             }
+            Action::Replace(lhs, rhs, output) => Action::Replace(f(lhs), f(rhs), *output),
             Action::Delete(lhs, args) => Action::Delete(*lhs, args.iter().map(f).collect()),
             Action::Union(lhs, rhs) => Action::Union(f(lhs), f(rhs)),
             Action::Extract(expr, variants) => Action::Extract(f(expr), f(variants)),
@@ -858,6 +899,17 @@ impl Action {
                 args.iter().map(|e| e.subst(canon)).collect(),
                 rhs.subst(canon),
             ),
+            Action::Replace {
+                constructor,
+                old_args,
+                new_args,
+                new_output,
+            } => Action::Replace {
+                constructor: *constructor,
+                old_args: old_args.iter().map(|e| e.subst(canon)).collect(),
+                new_args: new_args.iter().map(|e| e.subst(canon)).collect(),
+                new_output: new_output.subst(canon),
+            },
             Action::Delete(lhs, args) => {
                 Action::Delete(*lhs, args.iter().map(|e| e.subst(canon)).collect())
             }
@@ -985,7 +1037,12 @@ impl NormRule {
         res
     }
 
+    // TODO this function isn't actually correct right now
+    // because actions can fail halfway-through.
+    // If we fix that bug, we can run this.
     pub fn resugar_actions(&self, subst: &mut HashMap<Symbol, Expr>) -> Vec<Action> {
+        return self.head.iter().map(|a| a.to_action()).collect();
+        #[allow(dead_code)]
         let mut used = HashSet::<Symbol>::default();
         let mut head = Vec::<Action>::default();
         for a in &self.head {
@@ -1001,6 +1058,8 @@ impl NormRule {
                     let substituted = new_expr.subst(subst);
 
                     // TODO sometimes re-arranging actions is bad
+                    // this is because actions can fail
+                    // halfway through in the current semantics
                     if substituted.ast_size() > 1 {
                         head.push(Action::Let(*symbol, substituted));
                     } else {
@@ -1038,6 +1097,36 @@ impl NormRule {
                             head.push(Action::Set(op, children, other_expr));
                         }
                         _ => panic!("Expected call in set"),
+                    }
+                }
+                NormAction::Replace(expr1, expr2, output_var) => {
+                    let new_expr1 = expr1.to_expr();
+                    new_expr1.map(&mut |subexpr| {
+                        if let Expr::Var(v) = subexpr {
+                            used.insert(*v);
+                        }
+                        subexpr.clone()
+                    });
+                    let new_expr2 = expr2.to_expr();
+                    new_expr2.map(&mut |subexpr| {
+                        if let Expr::Var(v) = subexpr {
+                            used.insert(*v);
+                        }
+                        subexpr.clone()
+                    });
+                    let output_expr = subst
+                        .get(output_var)
+                        .unwrap_or(&Expr::Var(*output_var))
+                        .clone();
+                    used.insert(*output_var);
+                    let substituted1 = new_expr1.subst(subst);
+                    let substituted2 = new_expr2.subst(subst);
+                    match (substituted1, substituted2) {
+                        (Expr::Call(op1, children1), Expr::Call(op2, children2)) => {
+                            assert!(op1 == op2);
+                            head.push(Action::Replace(op1, children1, children2, output_expr));
+                        }
+                        _ => panic!("Expected call in replace"),
                     }
                 }
                 NormAction::Delete(expr) => {
