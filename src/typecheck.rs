@@ -470,6 +470,28 @@ impl<'a> ActionChecker<'a> {
                 self.instructions.push(Instruction::Set(*f));
                 Ok(())
             }
+            Action::Replace {
+                old_constructor,
+                new_constructor,
+                old_args,
+                new_args,
+                new_output,
+            } => {
+                let fake_call_old = Expr::Call(*old_constructor, old_args.clone());
+                let (_, _ty) = self.infer_expr(&fake_call_old)?;
+                let fake_instr_old = self.instructions.pop().unwrap();
+                assert!(matches!(fake_instr_old, Instruction::CallFunction(..)));
+                let fake_call_new = Expr::Call(*new_constructor, new_args.clone());
+                let (_, ty2) = self.infer_expr(&fake_call_new)?;
+                let fake_instr_new = self.instructions.pop().unwrap();
+                assert!(matches!(fake_instr_new, Instruction::CallFunction(..)));
+                self.check_expr(new_output, ty2)?;
+                self.instructions.push(Instruction::Replace {
+                    old_constructor: *old_constructor,
+                    new_constructor: *new_constructor,
+                });
+                Ok(())
+            }
             Action::Extract(variable, variants) => {
                 let (_, _ty) = self.infer_expr(variable)?;
                 let (_, _ty2) = self.infer_expr(variants)?;
@@ -658,6 +680,10 @@ enum Instruction {
     CallPrimitive(Primitive, usize),
     DeleteRow(Symbol),
     Set(Symbol),
+    Replace {
+        old_constructor: Symbol,
+        new_constructor: Symbol,
+    },
     Union(usize),
     Extract(usize),
     Panic(String),
@@ -717,6 +743,56 @@ impl EGraph {
         };
 
         Ok((t, Program(checker.instructions)))
+    }
+
+    fn perform_set(
+        &mut self,
+        table: Symbol,
+        args: &[Value],
+        new_value: Value,
+        stack: &mut Vec<Value>,
+    ) -> Result<(), Error> {
+        let function = self.functions.get_mut(&table).unwrap();
+        // We should only have canonical values here: omit the canonicalization step
+        let old_value = function.get(args);
+
+        if let Some(old_value) = old_value {
+            if new_value != old_value {
+                let merged: Value = match function.merge.merge_vals.clone() {
+                    MergeFn::AssertEq => {
+                        return Err(Error::MergeError(table, new_value, old_value));
+                    }
+                    MergeFn::Union => {
+                        self.unionfind
+                            .union_values(old_value, new_value, old_value.tag)
+                    }
+                    MergeFn::Expr(merge_prog) => {
+                        let values = [old_value, new_value];
+                        let old_len = stack.len();
+                        self.run_actions(stack, &values, &merge_prog, true)?;
+                        let result = stack.pop().unwrap();
+                        stack.truncate(old_len);
+                        result
+                    }
+                };
+                if merged != old_value {
+                    let function = self.functions.get_mut(&table).unwrap();
+                    function.insert(args, merged, self.timestamp);
+                }
+                // re-borrow
+                let function = self.functions.get_mut(&table).unwrap();
+                if let Some(prog) = function.merge.on_merge.clone() {
+                    let values = [old_value, new_value];
+                    // XXX: we get an error if we pass the current
+                    // stack and then truncate it to the old length.
+                    // Why?
+                    self.run_actions(&mut Vec::new(), &values, &prog, true)?;
+                }
+            }
+        } else {
+            function.insert(args, new_value, self.timestamp);
+        }
+        Ok(())
     }
 
     pub fn run_actions(
@@ -799,6 +875,42 @@ impl EGraph {
                         return Err(Error::PrimitiveError(p.clone(), values.to_vec()));
                     }
                 }
+                Instruction::Replace {
+                    old_constructor,
+                    new_constructor,
+                } => {
+                    let new_value = stack.pop().unwrap();
+
+                    let new_function = self.functions.get_mut(new_constructor).unwrap();
+                    let new_len = stack.len() - new_function.schema.input.len();
+                    let new_args = stack[new_len..].to_vec();
+
+                    let old_function = self.functions.get(old_constructor).unwrap();
+
+                    let old_len = new_len - old_function.schema.input.len();
+                    let old_args = stack[old_len..new_len].to_vec();
+
+                    if old_constructor != new_constructor {
+                        let old_function = self.functions.get_mut(old_constructor).unwrap();
+                        // just do a delete and a set
+                        old_function.remove(&old_args, self.timestamp);
+
+                        self.perform_set(*new_constructor, &new_args, new_value, stack)?;
+                    } else if let Some(old_val) = old_function.get(&old_args) {
+                        if old_val != new_value || old_args != new_args {
+                            let new_function = self.functions.get_mut(new_constructor).unwrap();
+                            new_function.remove(&old_args, self.timestamp);
+
+                            self.perform_set(*new_constructor, &new_args, new_value, stack)?;
+                        } else {
+                            // do nothing when they are the same
+                        }
+                    } else {
+                        // just set the new one, old doesn't exist
+                        self.perform_set(*new_constructor, &new_args, new_value, stack)?;
+                    }
+                    stack.truncate(old_len);
+                }
                 Instruction::Set(f) => {
                     assert!(make_defaults);
                     let function = self.functions.get_mut(f).unwrap();
@@ -807,48 +919,10 @@ impl EGraph {
                     // except for setting the parent relation
                     let new_value = stack.pop().unwrap();
                     let new_len = stack.len() - function.schema.input.len();
-                    let args = &stack[new_len..];
+                    // TODO would be nice to use slice here
+                    let args = stack[new_len..].to_vec();
 
-                    // We should only have canonical values here: omit the canonicalization step
-                    let old_value = function.get(args);
-
-                    if let Some(old_value) = old_value {
-                        if new_value != old_value {
-                            let merged: Value = match function.merge.merge_vals.clone() {
-                                MergeFn::AssertEq => {
-                                    return Err(Error::MergeError(*f, new_value, old_value));
-                                }
-                                MergeFn::Union => {
-                                    self.unionfind
-                                        .union_values(old_value, new_value, old_value.tag)
-                                }
-                                MergeFn::Expr(merge_prog) => {
-                                    let values = [old_value, new_value];
-                                    let old_len = stack.len();
-                                    self.run_actions(stack, &values, &merge_prog, true)?;
-                                    let result = stack.pop().unwrap();
-                                    stack.truncate(old_len);
-                                    result
-                                }
-                            };
-                            if merged != old_value {
-                                let args = &stack[new_len..];
-                                let function = self.functions.get_mut(f).unwrap();
-                                function.insert(args, merged, self.timestamp);
-                            }
-                            // re-borrow
-                            let function = self.functions.get_mut(f).unwrap();
-                            if let Some(prog) = function.merge.on_merge.clone() {
-                                let values = [old_value, new_value];
-                                // XXX: we get an error if we pass the current
-                                // stack and then truncate it to the old length.
-                                // Why?
-                                self.run_actions(&mut Vec::new(), &values, &prog, true)?;
-                            }
-                        }
-                    } else {
-                        function.insert(args, new_value, self.timestamp);
-                    }
+                    self.perform_set(*f, &args, new_value, stack)?;
                     stack.truncate(new_len)
                 }
                 Instruction::Union(arity) => {

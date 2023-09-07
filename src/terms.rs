@@ -123,48 +123,25 @@ impl<'a> TermState<'a> {
         let lhs_updated = self
             .wrap_parent_or_rebuild("lhs".to_string(), types.output.clone())
             .unwrap_or_else(|| "lhs".to_string());
+        let fresh = self.fresh_var();
 
         let mut res = vec![];
         // This rule updates each row of the table,
         // doing canonicalization
         // (and through the view merge function, rebuilding)
-
-        // Actually, we need one rule per column, since
-        // we need to clean up old value in the view
-        for i in 0..(fdecl.schema.input.len() + 1) {
-            let var_type = if i == fdecl.schema.input.len() {
-                types.output.clone()
-            } else {
-                types.input[i].clone()
-            };
-            let current = if i == fdecl.schema.input.len() {
-                "lhs".to_string()
-            } else {
-                child(i)
-            };
-            let current_updated = if i == fdecl.schema.input.len() {
-                lhs_updated.clone()
-            } else {
-                child_parent(self, i)
-            };
-            if var_type.is_eq_sort() {
-                let rule = format!(
-                    "(rule ((= lhs ({view_name} {children}))
-                            (!= {current} {current_updated}))
+        let rule = format!(
+            "(rule ((= lhs ({view_name} {children}))
+                           {children_updated}
+                           (= {fresh} {lhs_updated}))
                        (
-                        ;; delete the old row
-                        ;; XXXX why is deleting after doing the setting bad!??
-                        (delete ({view_name} {children}))
-                        ;; update the view
-                        (set ({view_name} {children_updated}) {lhs_updated})
-                        
+                        (replace ({view_name} {children})
+                                 ({view_name} {children_updated})
+                                 {lhs_updated})
                        )
                         :ruleset {})",
-                    self.rebuilding_ruleset_name()
-                );
-                res.extend(self.desugar().parse_program(&rule).unwrap());
-            }
-        }
+            self.rebuilding_ruleset_name()
+        );
+        res.extend(self.desugar().parse_program(&rule).unwrap());
 
         res
     }
@@ -354,16 +331,18 @@ impl<'a> TermState<'a> {
     }
 
     fn rebuild(&self) -> Schedule {
-        Schedule::Saturate(Box::new(Schedule::Sequence(vec![
-            Schedule::Saturate(Box::new(Schedule::Run(RunConfig {
+        Schedule::Sequence(vec![
+            Schedule::Run(RunConfig {
                 ruleset: self.parent_ruleset_name(),
                 until: None,
-            }))),
+            })
+            .saturate(),
             Schedule::Run(RunConfig {
                 ruleset: self.rebuilding_ruleset_name(),
                 until: None,
             }),
-        ])))
+        ])
+        .saturate()
     }
 
     fn instrument_schedule(&mut self, schedule: &NormSchedule) -> Schedule {
