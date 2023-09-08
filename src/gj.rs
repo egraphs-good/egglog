@@ -639,6 +639,11 @@ impl EGraph {
                 }
             }
 
+            let has_parent = cq
+                .query
+                .atoms
+                .iter()
+                .any(|a| format!("{:?}", a).contains("Parent_"));
             let do_seminaive = self.seminaive && !global_updated;
             // for the later atoms, we consider everything
             let mut timestamp_ranges = vec![0..u32::MAX; cq.query.atoms.len()];
@@ -648,8 +653,21 @@ impl EGraph {
                     timestamp_ranges[atom_i] = timestamp..u32::MAX;
                 }
 
-                // do the gj
+                // BIG HACK
+                // For rebuilding, we have the invariant
+                // that new atoms are up-to-date w.r.t.
+                // old unionfind entries.
+                // So do the join for new unionfind entries
+                // and all the other atoms.
+                let atom_has_parent = format!("{:?}", atom).contains("Parent_");
+                if has_parent && !atom_has_parent {
+                    continue;
+                } else if has_parent {
+                    timestamp_ranges = vec![0..u32::MAX; cq.query.atoms.len()];
+                    timestamp_ranges[atom_i] = timestamp..u32::MAX;
+                }
 
+                // do the gj
                 if let Some((mut ctx, program, cols)) = Context::new(self, cq, &timestamp_ranges) {
                     let start = Instant::now();
                     log::debug!(
@@ -679,15 +697,15 @@ impl EGraph {
                         }
                     }
                     let mut trie_refs = tries.iter().collect::<Vec<_>>();
-                    let mut meausrements = HashMap::<usize, Vec<usize>>::default();
+                    let mut measurements = HashMap::<usize, Vec<usize>>::default();
                     let stages = InputSizes {
-                        stage_sizes: &mut meausrements,
+                        stage_sizes: &mut measurements,
                         cur_stage: 0,
                     };
                     ctx.eval(&mut trie_refs, &program.0, stages, &mut f)
                         .unwrap_or(());
                     let mut sums = Vec::from_iter(
-                        meausrements
+                        measurements
                             .iter()
                             .map(|(x, y)| (*x, y.iter().copied().sum::<usize>())),
                     );
@@ -703,7 +721,7 @@ impl EGraph {
                         .ruleset_iteration
                         .get::<Symbol>(&"".into())
                         .unwrap_or(&0);
-                    if duration.as_millis() > 1000 {
+                    if duration.as_millis() > 30 {
                         log::warn!(
                             "Query took a long time at iter {iteration} : {:?}",
                             duration
