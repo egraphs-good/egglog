@@ -100,6 +100,7 @@ pub enum NCommand {
     },
     NormAction(NormAction),
     RunSchedule(NormSchedule),
+    PrintOverallStatistics,
     Check(Vec<NormFact>),
     CheckProof,
     PrintTable(Symbol, usize),
@@ -144,6 +145,7 @@ impl NCommand {
                 rule: rule.to_rule(),
             },
             NCommand::RunSchedule(schedule) => Command::RunSchedule(schedule.to_schedule()),
+            NCommand::PrintOverallStatistics => Command::PrintOverallStatistics,
             NCommand::NormAction(action) => Command::Action(action.to_action()),
             NCommand::Check(facts) => {
                 Command::Check(facts.iter().map(|fact| fact.to_fact()).collect())
@@ -176,6 +178,7 @@ impl NCommand {
             NCommand::Function(f) => NCommand::Function(f.clone()),
             NCommand::AddRuleset(name) => NCommand::AddRuleset(*name),
             NCommand::RunSchedule(schedule) => NCommand::RunSchedule(schedule.clone()),
+            NCommand::PrintOverallStatistics => NCommand::PrintOverallStatistics,
             NCommand::NormRule {
                 name,
                 ruleset,
@@ -346,6 +349,9 @@ pub enum Command {
     BiRewrite(Symbol, Rewrite),
     Action(Action),
     RunSchedule(Schedule),
+    /// Print runtime statistics about rules
+    /// and rulesets so far.
+    PrintOverallStatistics,
     Simplify {
         expr: Expr,
         schedule: Schedule,
@@ -394,6 +400,7 @@ impl ToSexp for Command {
                 rule,
             } => rule.to_sexp(*ruleset, *name),
             Command::RunSchedule(sched) => list!("run-schedule", sched),
+            Command::PrintOverallStatistics => list!("print-stats"),
             Command::Calc(args, exprs) => list!("calc", list!(++ args), ++ exprs),
             Command::Extract { variants, fact } => {
                 list!("query-extract", ":variants", variants, fact)
