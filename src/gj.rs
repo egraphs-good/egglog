@@ -403,6 +403,8 @@ impl EGraph {
         self.make_trie_access_for_column(atom, column, timestamp_range)
     }
 
+    // Returns `None` when no program is needed,
+    // for example when there is nothing in one of the tables.
     fn compile_program(
         &self,
         query: &CompiledQuery,
@@ -622,23 +624,29 @@ impl EGraph {
 
     fn gj_for_atom<F>(
         &self,
-        atom_i: usize,
+        // for debugging, the atom seminaive is focusing on
+        atom_i: Option<usize>,
         timestamp_ranges: &[Range<u32>],
         cq: &CompiledQuery,
         mut f: F,
     ) where
         F: FnMut(&[Value]) -> Result,
     {
-        let atom = &cq.query.atoms[atom_i];
         // do the gj
         if let Some((mut ctx, program, cols)) = Context::new(self, cq, timestamp_ranges) {
             let start = Instant::now();
+            let atom_info = if let Some(atom_i) = atom_i {
+                let atom = &cq.query.atoms[atom_i];
+                format!("New atom: {atom}")
+            } else {
+                "Seminaive disabled".to_string()
+            };
             log::debug!(
-                        "Query:\n{q}\nNew atom: {atom}\nTuple: {tuple}\nJoin order: {order}\nProgram\n{program}",
-                        q = cq.query,
-                        order = ListDisplay(&ctx.join_var_ordering, " "),
-                        tuple = ListDisplay(cq.vars.keys(), " "),
-                    );
+                "Query:\n{q}\n{atom_info}\nTuple: {tuple}\nJoin order: {order}\nProgram\n{program}",
+                q = cq.query,
+                order = ListDisplay(&ctx.join_var_ordering, " "),
+                tuple = ListDisplay(cq.vars.keys(), " "),
+            );
             let mut tries = Vec::with_capacity(cq.query.atoms.len());
             for ((atom, ts), col) in cq
                 .query
@@ -717,14 +725,13 @@ impl EGraph {
             if do_seminaive {
                 for (atom_i, _atom) in cq.query.atoms.iter().enumerate() {
                     timestamp_ranges[atom_i] = timestamp..u32::MAX;
-                    self.gj_for_atom(atom_i, &timestamp_ranges, cq, &mut f);
+                    self.gj_for_atom(Some(atom_i), &timestamp_ranges, cq, &mut f);
                     // now we can fix this atom to be "old stuff" only
                     // range is half-open; timestamp is excluded
                     timestamp_ranges[atom_i] = 0..timestamp;
                 }
             } else {
-                let atom_i = 0;
-                self.gj_for_atom(atom_i, &timestamp_ranges, cq, &mut f);
+                self.gj_for_atom(None, &timestamp_ranges, cq, &mut f);
             }
         } else if let Some((mut ctx, program, _)) = Context::new(self, cq, &[]) {
             let mut meausrements = HashMap::<usize, Vec<usize>>::default();
