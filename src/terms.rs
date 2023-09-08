@@ -263,6 +263,7 @@ impl<'a> TermState<'a> {
         res.extend(match &globals_replaced {
             NormAction::Delete(NormExpr::Call(op, body)) => {
                 // delete from view instead of from terms
+                // TODO does this do the right thing? What if it misses because of canonicalization?
                 let func_type = func_type.unwrap();
                 if func_type.is_datatype {
                     let view_name = self.view_name(*op);
@@ -284,12 +285,25 @@ impl<'a> TermState<'a> {
                     res.extend(self.parse_actions(vec![format!("(set {lhs_wrapped} {lhs})",)]))
                 }
 
+                let lhs_wrapped = self
+                    .wrap_parent_or_rebuild(lhs.to_string(), lhs_type.clone())
+                    .unwrap_or(lhs.to_string());
+
+                let body_wrapped = body
+                    .iter()
+                    .zip(func_type.input.iter())
+                    .map(|(v, vtype)| {
+                        self.wrap_parent_or_rebuild(v.to_string(), vtype.clone())
+                            .unwrap_or(v.to_string())
+                    })
+                    .collect::<Vec<_>>();
+
                 // add the new term to the view
                 if func_type.is_datatype {
                     let view_name = self.view_name(*op);
                     res.extend(self.parse_actions(vec![format!(
-                        "(set ({view_name} {}) {lhs})",
-                        ListDisplay(body, " ")
+                        "(set ({view_name} {}) {lhs_wrapped})",
+                        ListDisplay(body_wrapped, " ")
                     )]));
                 }
 
