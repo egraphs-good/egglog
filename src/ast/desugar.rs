@@ -411,6 +411,17 @@ fn add_semi_naive_rule(desugar: &mut Desugar, rule: Rule) -> Option<Rule> {
                     new_head_atoms.push(Fact::Eq(vec![fresh_var, expr]));
                 };
             }
+            Action::Replace { new_output, .. } => {
+                var_set.extend(new_output.vars());
+                if let Expr::Call(_, _) = new_output {
+                    add_new_rule = true;
+
+                    let fresh_symbol = desugar.get_fresh();
+                    let fresh_var = Expr::Var(fresh_symbol);
+                    let new_output = std::mem::replace(new_output, fresh_var.clone());
+                    new_head_atoms.push(Fact::Eq(vec![fresh_var, new_output]));
+                };
+            }
             Action::Let(symbol, expr) if var_set.contains(symbol) => {
                 var_set.extend(expr.vars());
                 if let Expr::Call(_, _) = expr {
