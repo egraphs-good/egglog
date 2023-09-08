@@ -623,7 +623,7 @@ impl EGraph {
     fn gj_for_atom<F>(
         &self,
         atom_i: usize,
-        timestamp_ranges: &Vec<Range<u32>>,
+        timestamp_ranges: &[Range<u32>],
         cq: &CompiledQuery,
         mut f: F,
     ) where
