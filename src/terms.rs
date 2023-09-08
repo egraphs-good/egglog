@@ -129,19 +129,39 @@ impl<'a> TermState<'a> {
         // This rule updates each row of the table,
         // doing canonicalization
         // (and through the view merge function, rebuilding)
-        let rule = format!(
-            "(rule ((= lhs ({view_name} {children}))
-                           {children_updated}
-                           (= {fresh} {lhs_updated}))
-                       (
-                        (replace ({view_name} {children})
-                                 ({view_name} {children_updated})
-                                 {lhs_updated})
-                       )
-                        :ruleset {})",
-            self.rebuilding_ruleset_name()
-        );
-        res.extend(self.desugar().parse_program(&rule).unwrap());
+
+        // Actually, we do one rule per column for
+        // efficiency- joining on one column at a time
+        // is more efficient
+        for i in 0..(fdecl.schema.input.len() + 1) {
+            let var_type = if i == fdecl.schema.input.len() {
+                types.output.clone()
+            } else {
+                types.input[i].clone()
+            };
+            let current = if i == fdecl.schema.input.len() {
+                "lhs".to_string()
+            } else {
+                child(i)
+            };
+            let current_updated = if i == fdecl.schema.input.len() {
+                lhs_updated.clone()
+            } else {
+                child_parent(self, i)
+            };
+            if var_type.is_eq_sort() {
+                let rule = format!(
+                    "(rule ((= lhs ({view_name} {children}))
+                            (!= {current} {current_updated}))
+                     (
+                      (replace ({view_name} {children}) ({view_name} {children_updated}) {lhs_updated})
+                     )
+                      :ruleset {})",
+                    self.rebuilding_ruleset_name()
+                );
+                res.extend(self.desugar().parse_program(&rule).unwrap());
+            }
+        }
 
         res
     }
