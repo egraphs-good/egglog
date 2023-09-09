@@ -91,8 +91,10 @@ impl<'a> TermState<'a> {
             return vec![];
         }
 
+        let op_name = fdecl.name;
+
         let view_name = if types.is_datatype {
-            self.view_name(fdecl.name)
+            self.view_name(op_name)
         } else {
             fdecl.name
         };
@@ -123,7 +125,6 @@ impl<'a> TermState<'a> {
         let lhs_updated = self
             .wrap_parent_or_rebuild("lhs".to_string(), types.output.clone())
             .unwrap_or_else(|| "lhs".to_string());
-        let fresh = self.fresh_var();
 
         let mut res = vec![];
         // This rule updates each row of the table,
@@ -149,11 +150,26 @@ impl<'a> TermState<'a> {
             } else {
                 child_parent(self, i)
             };
+            let new_lhs = self.fresh_var();
+            let new_term_for_view = if types.output.is_eq_sort() {
+                format!(
+                    "(let {new_lhs} ({op_name} {children_updated}))
+                         {}",
+                    self.union(
+                        types.output.name(),
+                        &new_lhs.to_string(),
+                        lhs_updated.as_str(),
+                    )
+                )
+            } else {
+                "".to_string()
+            };
             if var_type.is_eq_sort() {
                 let rule = format!(
                     "(rule ((= lhs ({view_name} {children}))
                             (!= {current} {current_updated}))
                      (
+                      {new_term_for_view}
                       (replace ({view_name} {children}) ({view_name} {children_updated}) {lhs_updated})
                      )
                       :ruleset {})",
