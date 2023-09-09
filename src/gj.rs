@@ -659,13 +659,14 @@ impl EGraph {
                 // old unionfind entries.
                 // So do the join for new unionfind entries
                 // and all the other atoms.
-                let atom_has_parent = format!("{:?}", atom).contains("Parent_");
+                // TODO why doesn't it work?
+                /*let atom_has_parent = format!("{:?}", atom).contains("Parent_");
                 if has_parent && !atom_has_parent {
                     continue;
                 } else if has_parent {
                     timestamp_ranges = vec![0..u32::MAX; cq.query.atoms.len()];
                     timestamp_ranges[atom_i] = timestamp..u32::MAX;
-                }
+                }*/
 
                 // do the gj
                 if let Some((mut ctx, program, cols)) = Context::new(self, cq, &timestamp_ranges) {
