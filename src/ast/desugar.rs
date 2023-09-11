@@ -1,4 +1,5 @@
 use crate::*;
+use super::Rule;
 
 fn desugar_datatype(name: Symbol, variants: Vec<Variant>) -> Vec<NCommand> {
     vec![NCommand::Sort(name, None)]
