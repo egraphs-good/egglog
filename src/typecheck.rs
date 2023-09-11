@@ -48,10 +48,12 @@ impl<T: std::fmt::Display> std::fmt::Display for Atom<T> {
     }
 }
 
-#[derive(Default, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct Query {
     pub atoms: Vec<Atom<Symbol>>,
     pub filters: Vec<Atom<Primitive>>,
+    // store the ruleset for hack on rebuilding
+    pub(crate) ruleset: Symbol,
 }
 
 impl std::fmt::Display for Query {
@@ -129,6 +131,7 @@ impl<'a> Context<'a> {
         &mut self,
         facts: &'a [Fact],
         actions: &'a [Action],
+        ruleset: Symbol,
     ) -> Result<(Query, Vec<Action>), Vec<TypeError>> {
         for fact in facts {
             self.typecheck_fact(fact);
@@ -209,7 +212,11 @@ impl<'a> Context<'a> {
             }
         };
 
-        let mut query = Query::default();
+        let mut query = Query {
+            atoms: Default::default(),
+            filters: Default::default(),
+            ruleset,
+        };
         let mut query_eclasses = HashSet::<Id>::default();
         // Now we can fill in the nodes with the canonical leaves
         for (node, id) in &self.nodes {

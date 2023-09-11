@@ -948,7 +948,7 @@ impl EGraph {
         let name = Symbol::from(name);
         let mut ctx = typecheck::Context::new(self);
         let (query0, action0) = ctx
-            .typecheck_query(&rule.body, &rule.head)
+            .typecheck_query(&rule.body, &rule.head, ruleset)
             .map_err(Error::TypeErrors)?;
         let query = self.compile_gj_query(query0, &ctx.types);
         let program = self
@@ -1050,7 +1050,7 @@ impl EGraph {
         let converted_facts = facts.iter().map(|f| f.to_fact()).collect::<Vec<Fact>>();
         let empty_actions = vec![];
         let (query0, _) = ctx
-            .typecheck_query(&converted_facts, &empty_actions)
+            .typecheck_query(&converted_facts, &empty_actions, Symbol::from(""))
             .map_err(Error::TypeErrors)?;
         let query = self.compile_gj_query(query0, &ctx.types);
 

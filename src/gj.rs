@@ -639,11 +639,7 @@ impl EGraph {
                 }
             }
 
-            let has_parent = cq
-                .query
-                .atoms
-                .iter()
-                .any(|a| format!("{:?}", a).contains("Parent_"));
+            let is_rebuilding = cq.query.ruleset.to_string().contains("rebuilding_");
             let do_seminaive = self.seminaive && !global_updated;
             // for the later atoms, we consider everything
             let mut timestamp_ranges = vec![0..u32::MAX; cq.query.atoms.len()];
@@ -660,13 +656,17 @@ impl EGraph {
                 // So do the join for new unionfind entries
                 // and all the other atoms.
                 // TODO why doesn't it work?
-                /*let atom_has_parent = format!("{:?}", atom).contains("Parent_");
-                if has_parent && !atom_has_parent {
-                    continue;
-                } else if has_parent {
-                    timestamp_ranges = vec![0..u32::MAX; cq.query.atoms.len()];
-                    timestamp_ranges[atom_i] = timestamp..u32::MAX;
-                }*/
+                let rebuilding_hack = false;
+                if rebuilding_hack {
+                    let atom_has_parent = format!("{:?}", atom).contains("Parent_");
+                    if is_rebuilding && !atom_has_parent {
+                        continue;
+                    } else if is_rebuilding {
+                        assert_eq!(cq.query.atoms.len(), 2);
+                        timestamp_ranges = vec![0..u32::MAX; cq.query.atoms.len()];
+                        timestamp_ranges[atom_i] = timestamp..u32::MAX;
+                    }
+                }
 
                 // do the gj
                 if let Some((mut ctx, program, cols)) = Context::new(self, cq, &timestamp_ranges) {

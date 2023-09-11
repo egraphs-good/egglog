@@ -246,11 +246,15 @@ impl<'a> TermState<'a> {
         self.egraph.desugar.get_fresh()
     }
 
-    fn look_up_globals(&mut self, action: &NormAction, res: &mut Vec<Action>) -> NormAction {
+    fn canonicalize_everything(
+        &mut self,
+        action: &NormAction,
+        res: &mut Vec<Action>,
+    ) -> NormAction {
         action.map_def_use(&mut |var, is_def| {
             let vtype = self.type_info().lookup(self.current_ctx, var).unwrap();
 
-            if is_def || !self.type_info().is_global(var) {
+            if is_def {
                 var
             } else if let Some(wrapped) = self.wrap_parent_or_rebuild(var.to_string(), vtype) {
                 let fresh_var = self.fresh_var();
@@ -294,52 +298,43 @@ impl<'a> TermState<'a> {
             None
         };
 
-        let globals_replaced = self.look_up_globals(action, &mut res);
+        let vars_looked_up = self.canonicalize_everything(action, &mut res);
 
-        res.extend(match &globals_replaced {
-            NormAction::Delete(NormExpr::Call(op, body)) => {
-                // delete from view instead of from terms
-                // TODO does this do the right thing? What if it misses because of canonicalization?
+        res.extend(match &vars_looked_up {
+            NormAction::Delete(NormExpr::Call(_op, _body)) => {
+                // TODO this might not do the right thing for terms!
                 let func_type = func_type.unwrap();
                 if func_type.is_datatype {
-                    let view_name = self.view_name(*op);
+                    panic!("Cannot delete from datatype in term mode yet");
+                    /*let view_name = self.view_name(*op);
                     vec![Action::Delete(
                         view_name,
                         body.iter().cloned().map(Expr::Var).collect(),
-                    )]
+                    )]*/
                 } else {
-                    vec![globals_replaced.to_action()]
+                    vec![vars_looked_up.to_action()]
                 }
             }
             NormAction::Let(lhs, NormExpr::Call(op, body)) => {
                 let func_type = func_type.unwrap();
                 let lhs_type = func_type.output;
-                let mut res = vec![globals_replaced.to_action()];
+                let mut res = vec![vars_looked_up.to_action()];
 
                 // add the new term to the union-find
                 if let Some(lhs_wrapped) = self.wrap_parent(lhs.to_string(), lhs_type.clone()) {
                     res.extend(self.parse_actions(vec![format!("(set {lhs_wrapped} {lhs})",)]))
                 }
 
-                let lhs_wrapped = self
+                let lhs_looked_up = self
                     .wrap_parent_or_rebuild(lhs.to_string(), lhs_type.clone())
                     .unwrap_or(lhs.to_string());
-
-                let body_wrapped = body
-                    .iter()
-                    .zip(func_type.input.iter())
-                    .map(|(v, vtype)| {
-                        self.wrap_parent_or_rebuild(v.to_string(), vtype.clone())
-                            .unwrap_or(v.to_string())
-                    })
-                    .collect::<Vec<_>>();
 
                 // add the new term to the view
                 if func_type.is_datatype {
                     let view_name = self.view_name(*op);
                     res.extend(self.parse_actions(vec![format!(
-                        "(set ({view_name} {}) {lhs_wrapped})",
-                        ListDisplay(body_wrapped, " ")
+                        "(set ({view_name} {}) {lhs_looked_up})",
+                        ListDisplay(body, " "),
                     )]));
                 }
 
@@ -356,7 +351,7 @@ impl<'a> TermState<'a> {
                 )])
             }
             // Set doesn't touch terms, only tables
-            _ => vec![globals_replaced.to_action()],
+            _ => vec![vars_looked_up.to_action()],
         });
         res
     }
@@ -390,7 +385,8 @@ impl<'a> TermState<'a> {
             Schedule::Run(RunConfig {
                 ruleset: self.rebuilding_ruleset_name(),
                 until: None,
-            }),
+            })
+            .saturate(),
         ])
         .saturate()
     }
