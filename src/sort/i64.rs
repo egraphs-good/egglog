@@ -59,6 +59,13 @@ impl Sort for I64Sort {
 
         add_primitives!(typeinfo, "to-string" = |a: i64| -> Symbol { a.to_string().into() });
 
+        // Must be in the i64 sort register function because the string sort is registered before the i64 sort.
+        typeinfo.add_primitive(CountMatches {
+            name: "count-matches".into(),
+            string: typeinfo.get_sort(),
+            int: self.clone(),
+        });
+
     }
 
     fn make_expr(&self, _egraph: &EGraph, value: Value) -> (Cost, Expr) {
@@ -81,5 +88,34 @@ impl FromSort for i64 {
     type Sort = I64Sort;
     fn load(_sort: &Self::Sort, value: &Value) -> Self {
         value.bits as Self
+    }
+}
+
+struct CountMatches {
+    name: Symbol,
+    string: Arc<StringSort>,
+    int: Arc<I64Sort>,
+}
+
+impl PrimitiveLike for CountMatches {
+    fn name(&self) -> Symbol {
+        self.name
+    }
+
+    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
+        if types.len() == 2
+            && types[0].name() == self.string.name
+            && types[1].name() == self.string.name
+        {
+            Some(self.int.clone())
+        } else {
+            None
+        }
+    }
+
+    fn apply(&self, values: &[Value]) -> Option<Value> {
+        let string1 = Symbol::load(&self.string, &values[0]).to_string();
+        let string2 = Symbol::load(&self.string, &values[1]).to_string();
+        Some(Value::from(string1.matches(&string2).count() as i64))
     }
 }
