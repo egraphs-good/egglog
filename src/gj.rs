@@ -727,13 +727,13 @@ impl EGraph {
                 for (atom_i, atom) in cq.query.atoms.iter().enumerate() {
                     timestamp_ranges[atom_i] = timestamp..u32::MAX;
 
-                    // BIG HACK
                     // For rebuilding, we have the invariant
                     // that new atoms are up-to-date w.r.t.
                     // old unionfind entries.
                     // So do the join for new unionfind entries
                     // and all the other atoms.
-                    // TODO why doesn't it work?
+                    // TODO this hack fails on one benchmark, not sure why
+                    // it is turned off for now
                     let rebuilding_hack = false;
                     if rebuilding_hack {
                         let atom_has_parent = format!("{:?}", atom).contains("Parent_");

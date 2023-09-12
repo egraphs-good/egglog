@@ -8,6 +8,7 @@ struct Run {
     path: PathBuf,
     test_proofs: bool,
     resugar: bool,
+    test_rust_eqsat: bool,
 }
 
 impl Run {
@@ -51,6 +52,9 @@ impl Run {
         if self.test_proofs {
             egraph.test_proofs = true;
         }
+        if self.test_rust_eqsat {
+            egraph.enable_rust_eqsat();
+        }
         egraph.set_underscores_for_desugaring(5);
         match egraph.parse_and_run_program(program) {
             Ok(msgs) => {
@@ -93,6 +97,9 @@ impl Run {
                 if self.0.resugar {
                     write!(f, "_resugar")?;
                 }
+                if self.0.test_rust_eqsat {
+                    write!(f, "_rust_eqsat")?;
+                }
                 Ok(())
             }
         }
@@ -113,10 +120,15 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
             path: entry.unwrap().clone(),
             test_proofs: false,
             resugar: false,
+            test_rust_eqsat: false,
         };
         let should_fail = run.should_fail();
 
         push_trial(run.clone());
+        push_trial(Run {
+            test_rust_eqsat: true,
+            ..run.clone()
+        });
         if !should_fail {
             push_trial(Run {
                 resugar: true,
