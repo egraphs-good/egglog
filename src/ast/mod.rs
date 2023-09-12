@@ -1051,9 +1051,6 @@ impl NormRule {
         res
     }
 
-    // TODO this function isn't actually correct right now
-    // because actions can fail halfway-through.
-    // If we fix that bug, we can run this.
     pub fn resugar_actions(&self, subst: &mut HashMap<Symbol, Expr>) -> Vec<Action> {
         let mut used = HashSet::<Symbol>::default();
         let mut head = Vec::<Action>::default();

@@ -733,7 +733,6 @@ impl EGraph {
                     // So do the join for new unionfind entries
                     // and all the other atoms.
                     // TODO this hack fails on one benchmark, not sure why
-                    // it is turned off for now
                     let rebuilding_hack = false;
                     if rebuilding_hack {
                         let atom_has_parent = format!("{:?}", atom).contains("Parent_");
