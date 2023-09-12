@@ -248,6 +248,8 @@ impl PrimitiveLike for SetRebuild {
     fn apply(&self, values: &[Value], egraph: &EGraph) -> Option<Value> {
         let set = ValueSet::load(&self.set, &values[0]);
         let new_set: ValueSet = set.iter().map(|e| egraph.find(*e)).collect();
+        // drop set to make sure we lose lock
+        drop(set);
         new_set.store(&self.set)
     }
 }

@@ -224,6 +224,7 @@ impl PrimitiveLike for VecRebuild {
                 updated
             })
             .collect();
+        drop(vec);
         Some(new_set.store(&self.vec).unwrap())
     }
 }
