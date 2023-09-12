@@ -33,6 +33,9 @@ impl<'a> TermState<'a> {
         self.desugar().parent_name(sort)
     }
 
+    /// Add to the union-find table, making the smaller
+    /// term the leader. We need an ordering on terms, so
+    /// we re-use the term's [`Value`].
     pub(crate) fn union(&self, type_name: Symbol, lhs: &str, rhs: &str) -> String {
         let pname = self.parent_name(type_name);
         format!(
@@ -42,6 +45,10 @@ impl<'a> TermState<'a> {
         )
     }
 
+    /// The parent table is the database representation of a union-find datastructure.
+    /// When one term has two parents, those parents are unioned in the merge action.
+    /// Also, we have a rule that maintains the invariant that each term points to its
+    /// canonical representative.
     fn make_parent_table(&self, name: Symbol) -> Vec<Command> {
         let pname = self.parent_name(name);
         let union_old_new = self.union(name, "old", "new");
@@ -67,6 +74,10 @@ impl<'a> TermState<'a> {
         ))
     }
 
+    /// Each datatype gets a view for that datatype, with each column
+    /// (including the output) is canonical.
+    /// This invariant is maintained during rebuilding, and non-canonical rows
+    /// can be deleted.
     fn make_term_view(&self, fdecl: &NormFunctionDecl) -> Vec<Command> {
         let types = self.type_info().lookup_user_func(fdecl.name).unwrap();
         if !types.is_datatype {
@@ -419,7 +430,6 @@ impl<'a> TermState<'a> {
             res.extend(self.term_header());
             self.egraph.term_header_added = true;
         }
-        //eprintln!("program: {}", ListDisplay(&program, "\n"));
 
         for command in program {
             self.current_ctx = command.metadata.id;
