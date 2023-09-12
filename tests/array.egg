@@ -40,12 +40,12 @@
 (rewrite (select (store mem i e) i) e)
 ; select passes through wrong index
 (rule ((= (select (store mem i1 e) i2) e1) (neq i1 i2))
-      ((set (select mem i2) e1)))
+      ((union (select mem i2) e1)))
 ; aliasing writes destroy old value
 (rewrite (store (store mem i e1) i e2) (store mem i e2))
 ; non-aliasing writes commutes
 (rule ((= (store (store mem i2 e2) i1 e1) mem1) (neq i1 i2))
-      ((set (store (store mem i1 e1) i2 e2) mem1)))
+      ((union (store (store mem i1 e1) i2 e2) mem1)))
 
 ; typical math rules
 (rewrite (add x y) (add y x))

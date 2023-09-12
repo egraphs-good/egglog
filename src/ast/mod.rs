@@ -338,7 +338,29 @@ pub enum Command {
         sort: Symbol,
     },
     Sort(Symbol, Option<(Symbol, Vec<Expr>)>),
+    /// Declare an egglog function.
+    /// The function is a datatype when:
+    /// - The output is not a primitive
+    /// - No merge function is provided
+    /// - No default is provided
     Function(FunctionDecl),
+    /// Declare an egglog relation, which is simply sugar
+    /// for a function returning the `Unit` type.
+    /// Example:
+    /// ```lisp
+    /// (relation path (i64 i64))
+    /// (relation edge (i64 i64))
+    /// ```
+
+    /// Desugars to:
+    /// ```lisp
+    /// (function path (i64 i64) Unit :default ())
+    /// (function edge (i64 i64) Unit :default ())
+    /// ```
+    Relation {
+        constructor: Symbol,
+        inputs: Vec<Symbol>,
+    },
     AddRuleset(Symbol),
     Rule {
         name: Symbol,
@@ -393,6 +415,10 @@ impl ToSexp for Command {
             Command::Sort(name, None) => list!("sort", name),
             Command::Sort(name, Some((name2, args))) => list!("sort", name, list!( name2, ++ args)),
             Command::Function(f) => f.to_sexp(),
+            Command::Relation {
+                constructor,
+                inputs,
+            } => list!("relation", constructor, list!(++ inputs)),
             Command::AddRuleset(name) => list!("ruleset", name),
             Command::Rule {
                 name,
@@ -597,7 +623,7 @@ impl FunctionDecl {
             },
             merge: None,
             merge_action: vec![],
-            default: None,
+            default: Some(Expr::Lit(Literal::Unit)),
             cost: None,
             unextractable: false,
         }
@@ -748,8 +774,15 @@ impl Display for Fact {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Action {
     Let(Symbol, Expr),
+    /// `set` a table to a particular result.
+    /// `set` should not be used on datatypes-
+    /// instead, use `union`.
     Set(Symbol, Vec<Expr>, Expr),
     Delete(Symbol, Vec<Expr>),
+    /// `union` two datatypes, making them equal
+    /// in the implicit, global equality relation
+    /// of egglog.
+    /// All rules match modulo this equality relation.
     Union(Expr, Expr),
     Extract(Expr, Expr),
     Panic(String),

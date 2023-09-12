@@ -15,17 +15,17 @@
 (function Knap (i64 objects) expr)
 
 (rule ((= f (Knap capacity (Cons weight val rest))) (<= weight capacity))
-      ((set (Knap capacity (Cons weight val rest))
+      ((union (Knap capacity (Cons weight val rest))
             (Max
                 (Add (Num val) (Knap (- capacity weight) rest))
                 (Knap capacity rest)))))
 
 (rule ((= f (Knap capacity (Cons weight val rest))) (> weight capacity))
-      ((set (Knap capacity (Cons weight val rest))
+      ((union (Knap capacity (Cons weight val rest))
             (Knap capacity rest))))
 
 (rule ((= f (Knap capacity Nil)))
-      ((set (Knap capacity Nil) (Num 0))))
+      ((union (Knap capacity Nil) (Num 0))))
 
 (let test1 (Knap 13 (Cons 5 5 (Cons 3 3 (Cons 12 12 (Cons 5 5 Nil))))))
 

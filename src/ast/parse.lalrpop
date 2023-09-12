@@ -56,7 +56,7 @@ Command: Command = {
         Command::Function(FunctionDecl { name, schema, merge, merge_action: merge_action.unwrap_or_default(), default, cost, unextractable: unextractable.is_some() })
     },
     LParen "declare" <name:Ident> <sort:Ident> RParen => Command::Declare{name, sort},
-    LParen "relation" <name:Ident> <types:List<Type>> RParen => Command::Function(FunctionDecl::relation(name, types)),
+    LParen "relation" <constructor:Ident> <inputs:List<Type>> RParen => Command::Relation{constructor, inputs},
     LParen "ruleset" <name:Ident> RParen => Command::AddRuleset(name),
     LParen "rule" <body:List<Fact>> <head:List<Action>> <ruleset:(":ruleset" <Ident>)?> <name:(":name" <String>)?> RParen => Command::Rule{ruleset: ruleset.unwrap_or("".into()), name: name.unwrap_or("".to_string()).into(), rule: Rule { head, body }},
     LParen "rewrite" <lhs:Expr> <rhs:Expr>
@@ -141,7 +141,7 @@ pub Expr: Expr = {
 };
 
 Literal: Literal = {
-    // "(" ")" => Literal::Unit, // shouldn't need unit literals for now
+    "(" ")" => Literal::Unit,
     <Num> => Literal::Int(<>),
     <F64> => Literal::F64(<>),
     <SymString> => Literal::String(<>),

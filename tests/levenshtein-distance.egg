@@ -17,27 +17,27 @@
 (function Length (str) expr)
 
 (rule ((= f (Length Empty)))
-      ((set (Length Empty) (Num 0))))
+      ((union (Length Empty) (Num 0))))
 
 (rule ((= f (Length (Cons c cs))))
-      ((set (Length (Cons c cs)) (Add (Num 1) (Length cs)))))
+      ((union (Length (Cons c cs)) (Add (Num 1) (Length cs)))))
 
 ; EditDist function
 
 (function EditDist (str str) expr)
 
 (rule ((= f (EditDist Empty s)))
-      ((set (EditDist Empty s) (Length s))))
+      ((union (EditDist Empty s) (Length s))))
 
 (rule ((= f (EditDist s Empty)))
-      ((set (EditDist s Empty) (Length s))))
+      ((union (EditDist s Empty) (Length s))))
 
 (rule ((= f (EditDist (Cons head rest1) (Cons head rest2))))
-      ((set (EditDist (Cons head rest1) (Cons head rest2))
+      ((union (EditDist (Cons head rest1) (Cons head rest2))
             (EditDist rest1 rest2))))
 
 (rule ((= f (EditDist (Cons head1 rest1) (Cons head2 rest2))) (!= head1 head2))
-      ((set (EditDist (Cons head1 rest1) (Cons head2 rest2))
+      ((union (EditDist (Cons head1 rest1) (Cons head2 rest2))
             (Add (Num 1)
                  (Min (EditDist rest1 rest2)
                       (EditDist (Cons head1 rest1) rest2)

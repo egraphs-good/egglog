@@ -16,7 +16,7 @@
 (rule ((End (NonTerm a) s)
        (= s (getString pos)))
       ((P 1 pos (NonTerm a))
-       (set (B 1 pos (NonTerm a)) (T a s)))) 
+       (union (B 1 pos (NonTerm a)) (T a s)))) 
 
 (rule ((Prod (NonTerm a) (NonTerm b) (NonTerm c)) ;; a -> bc
        (P p1 s (NonTerm b))
@@ -27,7 +27,7 @@
 (rule ((Prod (NonTerm a) (NonTerm b) (NonTerm c))
        (= f1 (B p1 s (NonTerm b)))
        (= f2 (B p2 (+ s p1) (NonTerm c))))
-      ((set (B (+ p1 p2) s (NonTerm a)) 
+      ((union (B (+ p1 p2) s (NonTerm a)) 
        (NT a f1 f2))))
 
 (push)
