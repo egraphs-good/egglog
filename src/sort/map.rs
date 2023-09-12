@@ -205,7 +205,11 @@ impl PrimitiveLike for MapRebuild {
                 (updated_k, updated_v)
             })
             .collect();
-        Some(new_map.store(&self.map).unwrap())
+
+        drop(maps);
+
+        let res = new_map.store(&self.map).unwrap();
+        Some(res)
     }
 }
 
