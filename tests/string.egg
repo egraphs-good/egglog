@@ -5,4 +5,4 @@
 ; Counting the number of substring occurances
 (check (= (count-matches "ab ab" "ab") 2))
 ; replacing a substring
-(check (= (str-replace "ab ab" "ab" "cd") "cd cd"))
+(check (= (replace "ab ab" "ab" "cd") "cd cd"))

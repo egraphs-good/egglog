@@ -797,21 +797,6 @@ pub enum Action {
     /// instead, use `union`.
     Set(Symbol, Vec<Expr>, Expr),
     Delete(Symbol, Vec<Expr>),
-    /// Replace a row in a table with another row.
-    /// Equivalent to `delete` followed by `set`,
-    /// except that it is aware when the new row is
-    /// the same as the old and can therefore saturate
-    /// in this case.
-    ///
-    /// If the constructors are different, simply deletes
-    /// from one table and adds to another.
-    Replace {
-        old_constructor: Symbol,
-        new_constructor: Symbol,
-        old_args: Vec<Expr>,
-        new_args: Vec<Expr>,
-        new_output: Expr,
-    },
     /// `union` two datatypes, making them equal
     /// in the implicit, global equality relation
     /// of egglog.
@@ -839,7 +824,6 @@ pub enum NormAction {
     Extract(Symbol, Symbol),
     Set(NormExpr, Symbol),
     Delete(NormExpr),
-    Replace(NormExpr, NormExpr, Symbol),
     Union(Symbol, Symbol),
     Panic(String),
 }
@@ -861,17 +845,6 @@ impl NormAction {
             NormAction::Delete(NormExpr::Call(symbol, args)) => {
                 Action::Delete(*symbol, args.iter().map(|s| Expr::Var(*s)).collect())
             }
-            NormAction::Replace(
-                NormExpr::Call(head, body),
-                NormExpr::Call(head2, body2),
-                output,
-            ) => Action::Replace {
-                old_constructor: *head,
-                new_constructor: *head2,
-                old_args: body.iter().map(|s| Expr::Var(*s)).collect(),
-                new_args: body2.iter().map(|s| Expr::Var(*s)).collect(),
-                new_output: Expr::Var(*output),
-            },
             NormAction::Union(lhs, rhs) => Action::Union(Expr::Var(*lhs), Expr::Var(*rhs)),
             NormAction::Panic(msg) => Action::Panic(msg.clone()),
         }
@@ -883,9 +856,6 @@ impl NormAction {
             NormAction::LetVar(symbol, other) => NormAction::LetVar(*symbol, *other),
             NormAction::LetLit(symbol, lit) => NormAction::LetLit(*symbol, lit.clone()),
             NormAction::Set(expr, other) => NormAction::Set(f(expr), *other),
-            NormAction::Replace(expr1, expr2, other) => {
-                NormAction::Replace(f(expr1), f(expr2), *other)
-            }
             NormAction::Extract(var, variants) => NormAction::Extract(*var, *variants),
             NormAction::Delete(expr) => NormAction::Delete(f(expr)),
             NormAction::Union(lhs, rhs) => NormAction::Union(*lhs, *rhs),
@@ -906,11 +876,6 @@ impl NormAction {
             NormAction::Set(expr, other) => {
                 NormAction::Set(expr.map_def_use(fvar, false), fvar(*other, false))
             }
-            NormAction::Replace(expr1, expr2, other) => NormAction::Replace(
-                expr1.map_def_use(fvar, false),
-                expr2.map_def_use(fvar, false),
-                fvar(*other, false),
-            ),
             NormAction::Extract(var, variants) => {
                 NormAction::Extract(fvar(*var, false), fvar(*variants, false))
             }
@@ -926,20 +891,6 @@ impl ToSexp for Action {
         match self {
             Action::Let(lhs, rhs) => list!("let", lhs, rhs),
             Action::Set(lhs, args, rhs) => list!("set", list!(lhs, ++ args), rhs),
-            Action::Replace {
-                old_constructor: constructor,
-                new_constructor: other_constructor,
-                old_args,
-                new_args,
-                new_output,
-            } => {
-                list!(
-                    "replace",
-                    list!(constructor, ++ old_args),
-                    list!(other_constructor, ++ new_args),
-                    new_output
-                )
-            }
             Action::Union(lhs, rhs) => list!("union", lhs, rhs),
             Action::Delete(lhs, args) => list!("delete", list!(lhs, ++ args)),
             Action::Extract(expr, variants) => list!("extract", expr, variants),
@@ -957,27 +908,6 @@ impl Action {
                 let right = f(rhs);
                 Action::Set(*lhs, args.iter().map(f).collect(), right)
             }
-            Action::Replace {
-                old_constructor: constructor,
-                new_constructor: other_constructor,
-                old_args,
-                new_args,
-                new_output,
-            } => {
-                // use for loop because of borrow error
-                // with passing f to map
-                let mut mapped_old_args: Vec<Expr> = vec![];
-                for entry in old_args {
-                    mapped_old_args.push(f(entry));
-                }
-                Action::Replace {
-                    old_constructor: *constructor,
-                    new_constructor: *other_constructor,
-                    old_args: mapped_old_args,
-                    new_output: f(new_output),
-                    new_args: new_args.iter().map(f).collect(),
-                }
-            }
             Action::Delete(lhs, args) => Action::Delete(*lhs, args.iter().map(f).collect()),
             Action::Union(lhs, rhs) => Action::Union(f(lhs), f(rhs)),
             Action::Extract(expr, variants) => Action::Extract(f(expr), f(variants)),
@@ -994,19 +924,6 @@ impl Action {
                 args.iter().map(|e| e.subst(canon)).collect(),
                 rhs.subst(canon),
             ),
-            Action::Replace {
-                old_constructor: constructor,
-                new_constructor: other_constructor,
-                old_args,
-                new_args,
-                new_output,
-            } => Action::Replace {
-                old_constructor: *constructor,
-                new_constructor: *other_constructor,
-                old_args: old_args.iter().map(|e| e.subst(canon)).collect(),
-                new_args: new_args.iter().map(|e| e.subst(canon)).collect(),
-                new_output: new_output.subst(canon),
-            },
             Action::Delete(lhs, args) => {
                 Action::Delete(*lhs, args.iter().map(|e| e.subst(canon)).collect())
             }
@@ -1192,45 +1109,6 @@ impl NormRule {
                             head.push(Action::Set(op, children, other_expr));
                         }
                         _ => panic!("Expected call in set"),
-                    }
-                }
-                NormAction::Replace(expr1, expr2, output_var) => {
-                    let new_expr1 = expr1.to_expr();
-                    new_expr1.map(&mut |subexpr| {
-                        if let Expr::Var(v) = subexpr {
-                            used.insert(*v);
-                        }
-                        subexpr.clone()
-                    });
-                    let new_expr2 = expr2.to_expr();
-                    new_expr2.map(&mut |subexpr| {
-                        if let Expr::Var(v) = subexpr {
-                            used.insert(*v);
-                        }
-                        subexpr.clone()
-                    });
-                    let new_output = subst
-                        .get(output_var)
-                        .unwrap_or(&Expr::Var(*output_var))
-                        .clone();
-                    used.insert(*output_var);
-                    let substituted1 = new_expr1.subst(subst);
-                    let substituted2 = new_expr2.subst(subst);
-                    match (substituted1, substituted2) {
-                        (
-                            Expr::Call(constructor, old_args),
-                            Expr::Call(other_constructor, new_args),
-                        ) => {
-                            assert!(constructor == other_constructor);
-                            head.push(Action::Replace {
-                                old_constructor: constructor,
-                                new_constructor: other_constructor,
-                                old_args,
-                                new_args,
-                                new_output,
-                            });
-                        }
-                        _ => panic!("Expected call in replace"),
                     }
                 }
                 NormAction::Delete(expr) => {

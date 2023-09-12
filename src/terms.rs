@@ -1,11 +1,14 @@
 use crate::*;
 
+/// The state of the term encoding is simply a current context
+/// so that it can look up type information.
 pub(crate) struct TermState<'a> {
     pub(crate) current_ctx: CommandId,
     pub(crate) egraph: &'a mut EGraph,
 }
 
 impl<'a> TermState<'a> {
+    /// Make a term state and use it to instrument the code.
     pub(crate) fn add_term_encoding(
         egraph: &'a mut EGraph,
         program: Vec<NormCommand>,
@@ -170,7 +173,8 @@ impl<'a> TermState<'a> {
                             (!= {current} {current_updated}))
                      (
                       {new_term_for_view}
-                      (replace ({view_name} {children}) ({view_name} {children_updated}) {lhs_updated})
+                      (delete ({view_name} {children}))
+                      (set ({view_name} {children_updated}) {lhs_updated})
                      )
                       :ruleset {})",
                     self.rebuilding_ruleset_name()

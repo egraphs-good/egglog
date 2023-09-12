@@ -359,19 +359,6 @@ impl TypeInfo {
                     });
                     assert_bound(var, let_bound);
                 }
-                NormAction::Replace(
-                    NormExpr::Call(_old_constructor, old_args),
-                    NormExpr::Call(_new_constructor, new_args),
-                    new_value,
-                ) => {
-                    old_args.iter().for_each(|bvar| {
-                        assert_bound(bvar, let_bound);
-                    });
-                    new_args.iter().for_each(|bvar| {
-                        assert_bound(bvar, let_bound);
-                    });
-                    assert_bound(new_value, let_bound);
-                }
                 NormAction::Extract(var, variants) => {
                     assert_bound(var, let_bound);
                     assert_bound(variants, let_bound);
@@ -435,14 +422,6 @@ impl TypeInfo {
                 }
                 if func_type.is_datatype {
                     return Err(TypeError::SetDatatype(func_type));
-                }
-            }
-            NormAction::Replace(expr1, expr2, new_value) => {
-                let func_type1 = self.typecheck_expr(ctx, expr1, true)?.output;
-                let func_type2 = self.typecheck_expr(ctx, expr2, true)?.output;
-                let new_value_type = self.lookup(ctx, *new_value)?;
-                if func_type2.name() != new_value_type.name() {
-                    return Err(TypeError::TypeMismatch(func_type1, new_value_type));
                 }
             }
             NormAction::Union(var1, var2) => {

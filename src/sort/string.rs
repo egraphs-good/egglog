@@ -36,7 +36,7 @@ impl Sort for StringSort {
             string: self.clone(),
         });
         typeinfo.add_primitive(Replace {
-            name: "str-replace".into(),
+            name: "replace".into(),
             string: self,
         });
     }
