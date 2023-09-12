@@ -6,7 +6,7 @@ use super::*;
 
 #[derive(Debug)]
 pub struct StringSort {
-    name: Symbol,
+    pub name: Symbol,
 }
 
 impl StringSort {
@@ -33,6 +33,10 @@ impl Sort for StringSort {
     fn register_primitives(self: Arc<Self>, typeinfo: &mut TypeInfo) {
         typeinfo.add_primitive(Add {
             name: "+".into(),
+            string: self.clone(),
+        });
+        typeinfo.add_primitive(Replace {
+            name: "str-replace".into(),
             string: self,
         });
     }
@@ -83,5 +87,36 @@ impl PrimitiveLike for Add {
         }
         let res_symbol: Symbol = res_string.into();
         Some(Value::from(res_symbol))
+    }
+}
+
+struct Replace {
+    name: Symbol,
+    string: Arc<StringSort>,
+}
+
+impl PrimitiveLike for Replace {
+    fn name(&self) -> Symbol {
+        self.name
+    }
+
+    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
+        if types.len() == 3
+            && types[0].name() == self.string.name
+            && types[1].name() == self.string.name
+            && types[2].name() == self.string.name
+        {
+            Some(self.string.clone())
+        } else {
+            None
+        }
+    }
+
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+        let string1 = Symbol::load(&self.string, &values[0]).to_string();
+        let string2 = Symbol::load(&self.string, &values[1]).to_string();
+        let string3 = Symbol::load(&self.string, &values[2]).to_string();
+        let res: Symbol = string1.replace(&string2, &string3).into();
+        Some(Value::from(res))
     }
 }

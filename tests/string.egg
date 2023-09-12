@@ -1,2 +1,8 @@
 ; Tests for the string sort
+
+; Concatenation
 (check (= (+ "a" "bc" "de") "abcde"))
+; Counting the number of substring occurances
+(check (= (count-matches "ab ab" "ab") 2))
+; replacing a substring
+(check (= (str-replace "ab ab" "ab" "cd") "cd cd"))
