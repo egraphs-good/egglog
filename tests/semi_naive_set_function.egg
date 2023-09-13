@@ -96,7 +96,7 @@
 (function g (i64) i64 :merge (max old new))
 (set (g 0) 0)
 (set (g 1) 1)
-(rule ((= x (g x))) ((set (g (+ x 1)) (+ (g (- x 1)) 2))))
+(rule ((= x (g x)) (= y (g (- x 1)))) ((set (g (+ x 1)) (+ y 2))))
 
 (run 100)
 (print-table g) 
