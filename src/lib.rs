@@ -842,13 +842,14 @@ impl EGraph {
                 rule.matches += 1;
                 // we can ignore results here
                 stack.clear();
-                let _ = self.run_actions(stack, &[], &rule.program, true);
+                self.run_actions(stack, &[], &rule.program, true).unwrap();
             } else {
                 for values in all_values.chunks(num_vars) {
                     rule.matches += 1;
                     // we can ignore results here
                     stack.clear();
-                    let _ = self.run_actions(stack, values, &rule.program, true);
+                    self.run_actions(stack, values, &rule.program, true)
+                        .unwrap();
                 }
             }
 
