@@ -840,15 +840,15 @@ impl EGraph {
             // run one iteration when n == 0
             if num_vars == 0 {
                 rule.matches += 1;
-                // we can ignore results here
                 stack.clear();
-                let _ = self.run_actions(stack, &[], &rule.program, true);
+                self.run_actions(stack, &[], &rule.program, true)
+                    .unwrap_or_else(|e| panic!("error while running actions for {name}: {e}"));
             } else {
                 for values in all_values.chunks(num_vars) {
                     rule.matches += 1;
-                    // we can ignore results here
                     stack.clear();
-                    let _ = self.run_actions(stack, values, &rule.program, true);
+                    self.run_actions(stack, values, &rule.program, true)
+                        .unwrap_or_else(|e| panic!("error while running actions for {name}: {e}"));
                 }
             }
 
