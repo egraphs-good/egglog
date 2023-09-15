@@ -556,7 +556,7 @@ impl<'a> ExprChecker<'a> for ActionChecker<'a> {
         let func_type = self.egraph.type_info().func_types.get(&f).unwrap();
         self.instructions.push(Instruction::CallFunction(
             f,
-            func_type.has_default || !func_type.has_merge,
+            func_type.has_default || func_type.is_datatype,
         ));
     }
 
@@ -620,7 +620,12 @@ trait ExprChecker<'a> {
             Expr::Var(sym) => self.infer_var(*sym),
             Expr::Call(sym, args) => {
                 if let Some(functype) = self.egraph().type_info().func_types.get(sym) {
-                    assert!(functype.input.len() == args.len());
+                    assert_eq!(
+                        functype.input.len(),
+                        args.len(),
+                        "Got wrong number of arguments for function {}",
+                        functype.name
+                    );
 
                     let mut ts = vec![];
                     for (expected, arg) in functype.input.iter().zip(args) {
@@ -767,9 +772,6 @@ impl EGraph {
                     let value = if let Some(out) = function.nodes.get(values) {
                         out.value
                     } else if make_defaults {
-                        if function.merge.on_merge.is_some() {
-                            panic!("No value found for function {} with values {:?}", f, values);
-                        }
                         let ts = self.timestamp;
                         let out = &function.schema.output;
                         match function.decl.default.as_ref() {

@@ -23,10 +23,10 @@
       ((union y (Num (/ z x)))))
 
 ; system 1: x + 2 = 7
-(set (Add (Var "x") (Num 2)) (Num 7))
+(union (Add (Var "x") (Num 2)) (Num 7))
 ; system 2: z + y = 6, 2z = y
-(set (Add (Var "z") (Var "y")) (Num 6))
-(set (Add (Var "z") (Var "z")) (Var "y"))
+(union (Add (Var "z") (Var "y")) (Num 6))
+(union (Add (Var "z") (Var "z")) (Var "y"))
 
 (run 5)
 (query-extract (Var "x"))

@@ -4,23 +4,15 @@ pub const RULE_PROOF_KEYWORD: &str = "rule-proof";
 
 #[derive(Clone, Debug)]
 pub struct FuncType {
+    pub name: Symbol,
     pub input: Vec<ArcSort>,
     pub output: ArcSort,
-    pub has_merge: bool,
+    pub is_datatype: bool,
     pub has_default: bool,
 }
 
-impl FuncType {
-    pub fn new(input: Vec<ArcSort>, output: ArcSort, has_merge: bool, has_default: bool) -> Self {
-        Self {
-            input,
-            output,
-            has_merge,
-            has_default,
-        }
-    }
-}
-
+/// Stores resolved typechecking information.
+/// TODO make these not public, use accessor methods
 #[derive(Clone)]
 pub struct TypeInfo {
     // get the sort from the sorts name()
@@ -123,7 +115,10 @@ impl TypeInfo {
         Ok(())
     }
 
-    pub(crate) fn function_to_functype(&self, func: &FunctionDecl) -> Result<FuncType, TypeError> {
+    pub(crate) fn function_to_functype(
+        &self,
+        func: &NormFunctionDecl,
+    ) -> Result<FuncType, TypeError> {
         let input = func
             .schema
             .input
@@ -141,12 +136,14 @@ impl TypeInfo {
         } else {
             Err(TypeError::Unbound(func.schema.output))
         }?;
-        Ok(FuncType::new(
+
+        Ok(FuncType {
+            name: func.name,
             input,
-            output,
-            func.merge.is_some(),
-            func.default.is_some(),
-        ))
+            output: output.clone(),
+            is_datatype: output.is_eq_sort() && func.merge.is_none() && func.default.is_none(),
+            has_default: func.default.is_some(),
+        })
     }
 
     fn typecheck_ncommand(&mut self, command: &NCommand, id: CommandId) -> Result<(), TypeError> {
@@ -418,10 +415,13 @@ impl TypeInfo {
                 self.typecheck_expr(ctx, expr, true)?;
             }
             NormAction::Set(expr, other) => {
-                let func_type = self.typecheck_expr(ctx, expr, true)?.output;
+                let func_type = self.typecheck_expr(ctx, expr, true)?;
                 let other_type = self.lookup(ctx, *other)?;
-                if func_type.name() != other_type.name() {
-                    return Err(TypeError::TypeMismatch(func_type, other_type));
+                if func_type.output.name() != other_type.name() {
+                    return Err(TypeError::TypeMismatch(func_type.output, other_type));
+                }
+                if func_type.is_datatype {
+                    return Err(TypeError::SetDatatype(func_type));
                 }
             }
             NormAction::Union(var1, var2) => {
@@ -577,7 +577,13 @@ impl TypeInfo {
             if let Some(prims) = self.primitives.get(&sym) {
                 for prim in prims {
                     if let Some(return_type) = prim.accept(&input_types) {
-                        return Ok(FuncType::new(input_types, return_type, false, true));
+                        return Ok(FuncType {
+                            name: sym,
+                            input: input_types,
+                            output: return_type,
+                            is_datatype: false,
+                            has_default: true,
+                        });
                     }
                 }
             }
@@ -653,6 +659,8 @@ pub enum TypeError {
     FunctionAlreadyBound(Symbol),
     #[error("Function declarations are not allowed after a push.")]
     FunctionAfterPush(Symbol),
+    #[error("Cannot set the datatype {} to a value. Did you mean to use union?", .0.name)]
+    SetDatatype(FuncType),
     #[error("Sort declarations are not allowed after a push.")]
     SortAfterPush(Symbol),
     #[error("Global already bound {0}")]

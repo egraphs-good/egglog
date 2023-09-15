@@ -91,7 +91,7 @@ pub enum NCommand {
         value: Expr,
     },
     Sort(Symbol, Option<(Symbol, Vec<Expr>)>),
-    Function(FunctionDecl),
+    Function(NormFunctionDecl),
     AddRuleset(Symbol),
     NormRule {
         name: Symbol,
@@ -100,6 +100,7 @@ pub enum NCommand {
     },
     NormAction(NormAction),
     RunSchedule(NormSchedule),
+    PrintOverallStatistics,
     Check(Vec<NormFact>),
     CheckProof,
     PrintTable(Symbol, usize),
@@ -132,7 +133,7 @@ impl NCommand {
                 value: value.clone(),
             },
             NCommand::Sort(name, params) => Command::Sort(*name, params.clone()),
-            NCommand::Function(f) => Command::Function(f.clone()),
+            NCommand::Function(f) => Command::Function(f.to_fdecl()),
             NCommand::AddRuleset(name) => Command::AddRuleset(*name),
             NCommand::NormRule {
                 name,
@@ -144,6 +145,7 @@ impl NCommand {
                 rule: rule.to_rule(),
             },
             NCommand::RunSchedule(schedule) => Command::RunSchedule(schedule.to_schedule()),
+            NCommand::PrintOverallStatistics => Command::PrintOverallStatistics,
             NCommand::NormAction(action) => Command::Action(action.to_action()),
             NCommand::Check(facts) => {
                 Command::Check(facts.iter().map(|fact| fact.to_fact()).collect())
@@ -176,6 +178,7 @@ impl NCommand {
             NCommand::Function(f) => NCommand::Function(f.clone()),
             NCommand::AddRuleset(name) => NCommand::AddRuleset(*name),
             NCommand::RunSchedule(schedule) => NCommand::RunSchedule(schedule.clone()),
+            NCommand::PrintOverallStatistics => NCommand::PrintOverallStatistics,
             NCommand::NormRule {
                 name,
                 ruleset,
@@ -335,7 +338,29 @@ pub enum Command {
         sort: Symbol,
     },
     Sort(Symbol, Option<(Symbol, Vec<Expr>)>),
+    /// Declare an egglog function.
+    /// The function is a datatype when:
+    /// - The output is not a primitive
+    /// - No merge function is provided
+    /// - No default is provided
     Function(FunctionDecl),
+    /// Declare an egglog relation, which is simply sugar
+    /// for a function returning the `Unit` type.
+    /// Example:
+    /// ```lisp
+    /// (relation path (i64 i64))
+    /// (relation edge (i64 i64))
+    /// ```
+
+    /// Desugars to:
+    /// ```lisp
+    /// (function path (i64 i64) Unit :default ())
+    /// (function edge (i64 i64) Unit :default ())
+    /// ```
+    Relation {
+        constructor: Symbol,
+        inputs: Vec<Symbol>,
+    },
     AddRuleset(Symbol),
     Rule {
         name: Symbol,
@@ -346,6 +371,9 @@ pub enum Command {
     BiRewrite(Symbol, Rewrite),
     Action(Action),
     RunSchedule(Schedule),
+    /// Print runtime statistics about rules
+    /// and rulesets so far.
+    PrintOverallStatistics,
     Simplify {
         expr: Expr,
         schedule: Schedule,
@@ -387,6 +415,10 @@ impl ToSexp for Command {
             Command::Sort(name, None) => list!("sort", name),
             Command::Sort(name, Some((name2, args))) => list!("sort", name, list!( name2, ++ args)),
             Command::Function(f) => f.to_sexp(),
+            Command::Relation {
+                constructor,
+                inputs,
+            } => list!("relation", constructor, list!(++ inputs)),
             Command::AddRuleset(name) => list!("ruleset", name),
             Command::Rule {
                 name,
@@ -394,6 +426,7 @@ impl ToSexp for Command {
                 rule,
             } => rule.to_sexp(*ruleset, *name),
             Command::RunSchedule(sched) => list!("run-schedule", sched),
+            Command::PrintOverallStatistics => list!("print-stats"),
             Command::Calc(args, exprs) => list!("calc", list!(++ args), ++ exprs),
             Command::Extract { variants, fact } => {
                 list!("query-extract", ":variants", variants, fact)
@@ -498,12 +531,43 @@ impl NormRunConfig {
     }
 }
 
+/// A normalized function declaration- the desugared
+/// version of a [`FunctionDecl`].
+/// TODO so far only the merge action is normalized,
+/// not the default value or merge expression.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct NormFunctionDecl {
+    pub name: Symbol,
+    pub schema: Schema,
+    // todo desugar default, merge
+    pub default: Option<Expr>,
+    pub merge: Option<Expr>,
+    pub merge_action: Vec<NormAction>,
+    pub cost: Option<usize>,
+    pub unextractable: bool,
+}
+
+impl NormFunctionDecl {
+    pub fn to_fdecl(&self) -> FunctionDecl {
+        FunctionDecl {
+            name: self.name,
+            schema: self.schema.clone(),
+            default: self.default.clone(),
+            merge: self.merge.clone(),
+            merge_action: self.merge_action.iter().map(|a| a.to_action()).collect(),
+            cost: self.cost,
+            unextractable: self.unextractable,
+        }
+    }
+}
+
+/// Represents the declaration of a function
+/// directly parsed from source syntax.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct FunctionDecl {
     pub name: Symbol,
     pub schema: Schema,
     pub default: Option<Expr>,
-    // TODO we should desugar merge and merge action
     pub merge: Option<Expr>,
     pub merge_action: Vec<Action>,
     pub cost: Option<usize>,
@@ -559,7 +623,7 @@ impl FunctionDecl {
             },
             merge: None,
             merge_action: vec![],
-            default: None,
+            default: Some(Expr::Lit(Literal::Unit)),
             cost: None,
             unextractable: false,
         }
@@ -710,8 +774,15 @@ impl Display for Fact {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Action {
     Let(Symbol, Expr),
+    /// `set` a table to a particular result.
+    /// `set` should not be used on datatypes-
+    /// instead, use `union`.
     Set(Symbol, Vec<Expr>, Expr),
     Delete(Symbol, Vec<Expr>),
+    /// `union` two datatypes, making them equal
+    /// in the implicit, global equality relation
+    /// of egglog.
+    /// All rules match modulo this equality relation.
     Union(Expr, Expr),
     Extract(Expr, Expr),
     Panic(String),

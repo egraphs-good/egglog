@@ -1,10 +1,11 @@
+use super::Rule;
 use crate::{typecheck::ValueEq, *};
 
 fn desugar_datatype(name: Symbol, variants: Vec<Variant>) -> Vec<NCommand> {
     vec![NCommand::Sort(name, None)]
         .into_iter()
         .chain(variants.into_iter().map(|variant| {
-            NCommand::Function(FunctionDecl {
+            NCommand::Function(NormFunctionDecl {
                 name: variant.name,
                 schema: Schema {
                     input: variant.types,
@@ -515,6 +516,9 @@ pub(crate) fn rewrite_name(rewrite: &Rewrite) -> String {
     rewrite.to_string().replace('\"', "'")
 }
 
+/// Desugars a single command into the normalized form.
+/// Gets rid of a bunch of syntactic sugar, but also
+/// makes rules into a SSA-like format (see [`NormFact`]).
 pub(crate) fn desugar_command(
     command: Command,
     desugar: &mut Desugar,
@@ -525,9 +529,11 @@ pub(crate) fn desugar_command(
         Command::SetOption { name, value } => {
             vec![NCommand::SetOption { name, value }]
         }
-        Command::Function(fdecl) => {
-            vec![NCommand::Function(fdecl)]
-        }
+        Command::Function(fdecl) => desugar.desugar_function(&fdecl),
+        Command::Relation {
+            constructor,
+            inputs,
+        } => desugar.desugar_function(&FunctionDecl::relation(constructor, inputs)),
         Command::Declare { name, sort } => desugar.declare(name, sort),
         Command::Datatype { name, variants } => desugar_datatype(name, variants),
         Command::Rewrite(ruleset, rewrite) => {
@@ -584,6 +590,9 @@ pub(crate) fn desugar_command(
         Command::Calc(idents, exprs) => desugar_calc(desugar, idents, exprs, seminaive_transform)?,
         Command::RunSchedule(sched) => {
             vec![NCommand::RunSchedule(desugar_schedule(desugar, &sched))]
+        }
+        Command::PrintOverallStatistics => {
+            vec![NCommand::PrintOverallStatistics]
         }
         Command::Extract { variants, fact } => {
             let fresh = desugar.get_fresh();
@@ -783,7 +792,7 @@ impl Desugar {
     pub fn declare(&mut self, name: Symbol, sort: Symbol) -> Vec<NCommand> {
         let fresh = self.get_fresh();
         vec![
-            NCommand::Function(FunctionDecl {
+            NCommand::Function(NormFunctionDecl {
                 name: fresh,
                 schema: Schema {
                     input: vec![],
@@ -797,5 +806,17 @@ impl Desugar {
             }),
             NCommand::NormAction(NormAction::Let(name, NormExpr::Call(fresh, vec![]))),
         ]
+    }
+
+    pub fn desugar_function(&mut self, fdecl: &FunctionDecl) -> Vec<NCommand> {
+        vec![NCommand::Function(NormFunctionDecl {
+            name: fdecl.name,
+            schema: fdecl.schema.clone(),
+            default: fdecl.default.clone(),
+            merge: fdecl.merge.clone(),
+            merge_action: flatten_actions(&fdecl.merge_action, self),
+            cost: fdecl.cost,
+            unextractable: fdecl.unextractable,
+        })]
     }
 }

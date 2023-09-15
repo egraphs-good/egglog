@@ -28,7 +28,7 @@ use ast::*;
 pub use typechecking::{TypeInfo, UNIT_SYM};
 
 use constraint::{simple_constraints, Constraint};
-use std::fmt::{Display, Formatter, Write};
+use std::fmt::{Display, Formatter};
 use std::fs::File;
 use std::hash::Hash;
 use std::io::Read;
@@ -61,12 +61,103 @@ pub trait PrimitiveLike {
     fn apply(&self, values: &[Value]) -> Option<Value>;
 }
 
+/// Running a schedule produces a report of the results.
+/// This includes rough timing information and whether
+/// the database was updated.
+/// Calling `union` on two run reports adds the timing
+/// information together.
 #[derive(Debug, Clone, Default)]
 pub struct RunReport {
+    /// If any changes were made to the database, this is
+    /// true.
     pub updated: bool,
-    pub search_time: Duration,
-    pub apply_time: Duration,
-    pub rebuild_time: Duration,
+    /// The time it took to run the query, for each rule.
+    pub search_time_per_rule: HashMap<Symbol, Duration>,
+    pub apply_time_per_rule: HashMap<Symbol, Duration>,
+    pub search_time_per_ruleset: HashMap<Symbol, Duration>,
+    pub apply_time_per_ruleset: HashMap<Symbol, Duration>,
+    pub rebuild_time_per_ruleset: HashMap<Symbol, Duration>,
+}
+
+impl RunReport {
+    /// add a ... and a maximum size to the name
+    /// for printing, since they may be the rule itself
+    fn truncate_rule_name(sym: Symbol) -> String {
+        let mut s = sym.to_string();
+        // replace newlines in s with a space
+        s = s.replace('\n', " ");
+        if s.len() > 20 {
+            s.truncate(20);
+            s.push_str("...");
+        }
+        s
+    }
+}
+
+impl Display for RunReport {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let all_rules = self
+            .search_time_per_rule
+            .keys()
+            .chain(self.apply_time_per_rule.keys())
+            .collect::<HashSet<_>>();
+
+        for rule in all_rules {
+            let truncated = Self::truncate_rule_name(*rule);
+            // print out the search and apply time for rule
+            let search_time = self
+                .search_time_per_rule
+                .get(rule)
+                .cloned()
+                .unwrap_or(Duration::default())
+                .as_secs_f64();
+            let apply_time = self
+                .apply_time_per_rule
+                .get(rule)
+                .cloned()
+                .unwrap_or(Duration::default())
+                .as_secs_f64();
+            writeln!(
+                f,
+                "Rule {truncated}: search {search_time:.3}s, apply {apply_time:.3}s",
+            )?;
+        }
+
+        let rulesets = self
+            .search_time_per_ruleset
+            .keys()
+            .chain(self.apply_time_per_ruleset.keys())
+            .chain(self.rebuild_time_per_ruleset.keys())
+            .collect::<HashSet<_>>();
+
+        for ruleset in rulesets {
+            // print out the search and apply time for rule
+            let search_time = self
+                .search_time_per_ruleset
+                .get(ruleset)
+                .cloned()
+                .unwrap_or(Duration::default())
+                .as_secs_f64();
+            let apply_time = self
+                .apply_time_per_ruleset
+                .get(ruleset)
+                .cloned()
+                .unwrap_or(Duration::default())
+                .as_secs_f64();
+            let rebuild_time = self
+                .rebuild_time_per_ruleset
+                .get(ruleset)
+                .cloned()
+                .unwrap_or(Duration::default())
+                .as_secs_f64();
+            writeln!(
+                f,
+                "Ruleset {ruleset}: search {search_time:.3}s, apply {apply_time:.3}s, rebuild {rebuild_time:.3}s",
+            )?;
+        }
+
+        Ok(())
+    }
 }
 
 /// A report of the results of an extract action.
@@ -84,12 +175,41 @@ pub enum ExtractReport {
 }
 
 impl RunReport {
+    fn union_times(
+        times: &HashMap<Symbol, Duration>,
+        other_times: &HashMap<Symbol, Duration>,
+    ) -> HashMap<Symbol, Duration> {
+        let mut new_times = times.clone();
+        for (k, v) in other_times {
+            let entry = new_times.entry(*k).or_default();
+            *entry += *v;
+        }
+        new_times
+    }
+
     pub fn union(&self, other: &Self) -> Self {
         Self {
             updated: self.updated || other.updated,
-            search_time: self.search_time + other.search_time,
-            apply_time: self.apply_time + other.apply_time,
-            rebuild_time: self.rebuild_time + other.rebuild_time,
+            search_time_per_rule: Self::union_times(
+                &self.search_time_per_rule,
+                &other.search_time_per_rule,
+            ),
+            apply_time_per_rule: Self::union_times(
+                &self.apply_time_per_rule,
+                &other.apply_time_per_rule,
+            ),
+            search_time_per_ruleset: Self::union_times(
+                &self.search_time_per_ruleset,
+                &other.search_time_per_ruleset,
+            ),
+            apply_time_per_ruleset: Self::union_times(
+                &self.apply_time_per_ruleset,
+                &other.apply_time_per_ruleset,
+            ),
+            rebuild_time_per_ruleset: Self::union_times(
+                &self.rebuild_time_per_ruleset,
+                &other.rebuild_time_per_ruleset,
+            ),
         }
     }
 }
@@ -241,7 +361,10 @@ pub struct EGraph {
     // sort, value, and timestamp
     pub global_bindings: HashMap<Symbol, (ArcSort, Value, u32)>,
     extract_report: Option<ExtractReport>,
-    run_report: Option<RunReport>,
+    /// The run report for the most recent run of a schedule.
+    recent_run_report: Option<RunReport>,
+    /// The run report unioned over all runs so far.
+    overall_run_report: RunReport,
     msgs: Vec<String>,
 }
 
@@ -253,8 +376,6 @@ struct Rule {
     times_banned: usize,
     banned_until: usize,
     todo_timestamp: u32,
-    search_time: Duration,
-    apply_time: Duration,
 }
 
 impl Default for EGraph {
@@ -276,7 +397,8 @@ impl Default for EGraph {
             fact_directory: None,
             seminaive: true,
             extract_report: None,
-            run_report: None,
+            recent_run_report: None,
+            overall_run_report: Default::default(),
             msgs: Default::default(),
         };
         egraph.rulesets.insert("".into(), Default::default());
@@ -297,16 +419,25 @@ impl EGraph {
         self.egraphs.push(self.clone());
     }
 
+    /// Pop the current egraph off the stack, replacing
+    /// it with the previously pushed egraph.
+    /// It preserves the run report and messages from the popped
+    /// egraph.
     pub fn pop(&mut self) -> Result<(), Error> {
         match self.egraphs.pop() {
             Some(e) => {
                 // Copy the reports and messages from the popped egraph
                 let extract_report = self.extract_report.clone();
-                let run_report = self.run_report.clone();
+                let recent_run_report = self.recent_run_report.clone();
+                let overall_run_report = self.overall_run_report.clone();
                 let messages = self.msgs.clone();
                 *self = e;
                 self.extract_report = extract_report.or(self.extract_report.clone());
-                self.run_report = run_report.or(self.run_report.clone());
+                // We union the run reports, meaning
+                // that statistics are shared across
+                // push/pop
+                self.recent_run_report = recent_run_report.or(self.recent_run_report.clone());
+                self.overall_run_report = self.overall_run_report.union(&overall_run_report);
                 self.msgs.extend(messages);
                 Ok(())
             }
@@ -461,8 +592,8 @@ impl EGraph {
         self.unionfind.n_unions() - n_unions + function.clear_updates()
     }
 
-    pub fn declare_function(&mut self, decl: &FunctionDecl) -> Result<(), Error> {
-        let function = Function::new(self, decl)?;
+    pub fn declare_function(&mut self, decl: &NormFunctionDecl) -> Result<(), Error> {
+        let function = Function::new(self, &decl.to_fdecl())?;
         let old = self.functions.insert(decl.name, function);
         if old.is_some() {
             panic!(
@@ -471,31 +602,6 @@ impl EGraph {
             );
         }
 
-        Ok(())
-    }
-
-    pub fn declare_constructor(
-        &mut self,
-        variant: Variant,
-        sort: impl Into<Symbol>,
-    ) -> Result<(), Error> {
-        let name = variant.name;
-        let sort = sort.into();
-        self.declare_function(&FunctionDecl {
-            name,
-            schema: Schema {
-                input: variant.types,
-                output: sort,
-            },
-            merge: None,
-            merge_action: vec![],
-            default: None,
-            cost: variant.cost,
-            unextractable: false,
-        })?;
-        // if let Some(ctors) = self.sorts.get_mut(&sort) {
-        //     ctors.push(name);
-        // }
         Ok(())
     }
 
@@ -627,13 +733,19 @@ impl EGraph {
         }
     }
 
-    pub fn run_rules_once(&mut self, config: &NormRunConfig, report: &mut RunReport) {
+    pub fn run_rules(&mut self, config: &NormRunConfig) -> RunReport {
+        let mut report: RunReport = Default::default();
+
         // first rebuild
         let rebuild_start = Instant::now();
         let updates = self.rebuild_nofail();
         log::debug!("database size: {}", self.num_tuples());
         log::debug!("Made {updates} updates");
-        report.rebuild_time += rebuild_start.elapsed();
+        // add to the rebuild time for this ruleset
+        *report
+            .rebuild_time_per_ruleset
+            .entry(config.ruleset)
+            .or_insert(Duration::default()) += rebuild_start.elapsed();
         self.timestamp += 1;
 
         let NormRunConfig { ruleset, until } = config;
@@ -644,12 +756,12 @@ impl EGraph {
                     "Breaking early because of facts:\n {}!",
                     ListDisplay(facts, "\n")
                 );
-                return;
+                return report;
             }
         }
 
         let subreport = self.step_rules(*ruleset);
-        *report = report.union(&subreport);
+        report = report.union(&subreport);
 
         log::debug!("database size: {}", self.num_tuples());
         self.timestamp += 1;
@@ -657,41 +769,7 @@ impl EGraph {
         if self.num_tuples() > self.node_limit {
             log::warn!("Node limit reached, {} nodes. Stopping!", self.num_tuples());
         }
-    }
 
-    pub fn run_rules(&mut self, config: &NormRunConfig) -> RunReport {
-        let mut report: RunReport = Default::default();
-
-        self.run_rules_once(config, &mut report);
-
-        // Report the worst offenders
-        log::debug!("Slowest rules:\n{}", {
-            let mut msg = String::new();
-            let mut vec = self
-                .rulesets
-                .iter()
-                .flat_map(|(_name, rules)| rules)
-                .collect::<Vec<_>>();
-            vec.sort_by_key(|(_, r)| r.search_time + r.apply_time);
-            for (name, rule) in vec.iter().rev().take(5) {
-                write!(
-                    msg,
-                    "{name}\n  Search: {:.3}s\n  Apply: {:.3}s\n",
-                    rule.search_time.as_secs_f64(),
-                    rule.apply_time.as_secs_f64()
-                )
-                .unwrap();
-            }
-            msg
-        });
-
-        // // TODO detect functions
-        // for (name, r) in &self.functions {
-        //     log::debug!("{name}:");
-        //     for (args, val) in &r.nodes {
-        //         log::debug!("  {args:?} = {val:?}");
-        //     }
-        // }
         report
     }
 
@@ -745,12 +823,20 @@ impl EGraph {
         }
 
         let search_elapsed = search_start.elapsed();
-        report.search_time += search_elapsed;
+        // add to the ruleset searched time
+        *report
+            .search_time_per_ruleset
+            .entry(ruleset)
+            .or_insert(Duration::default()) += search_elapsed;
 
         let apply_start = Instant::now();
-        for (name, all_values, time) in searched {
+        for (name, all_values, search_time) in searched {
             let rule = rules.get_mut(name).unwrap();
-            rule.search_time += time;
+            // add to the rule's search time
+            *report
+                .search_time_per_rule
+                .entry(*name)
+                .or_insert(Duration::default()) += search_time;
             let num_vars = rule.query.vars.len();
 
             // the query doesn't require matches
@@ -775,23 +861,31 @@ impl EGraph {
             // run one iteration when n == 0
             if num_vars == 0 {
                 rule.matches += 1;
-                // we can ignore results here
                 stack.clear();
-                let _ = self.run_actions(stack, &[], &rule.program, true);
+                self.run_actions(stack, &[], &rule.program, true)
+                    .unwrap_or_else(|e| panic!("error while running actions for {name}: {e}"));
             } else {
                 for values in all_values.chunks(num_vars) {
                     rule.matches += 1;
-                    // we can ignore results here
                     stack.clear();
-                    let _ = self.run_actions(stack, values, &rule.program, true);
+                    self.run_actions(stack, values, &rule.program, true)
+                        .unwrap_or_else(|e| panic!("error while running actions for {name}: {e}"));
                 }
             }
 
-            rule.apply_time += rule_apply_start.elapsed();
+            // add to the rule's apply time
+            *report
+                .apply_time_per_rule
+                .entry(*name)
+                .or_insert(Duration::default()) += rule_apply_start.elapsed();
         }
         self.rulesets.insert(ruleset, rules);
         let apply_elapsed = apply_start.elapsed();
-        report.apply_time += apply_elapsed;
+        // add to the apply time for the ruleset
+        *report
+            .apply_time_per_ruleset
+            .entry(ruleset)
+            .or_insert(Duration::default()) += apply_elapsed;
         report.updated |= self.did_change_tables() || n_unions_before != self.unionfind.n_unions();
 
         report
@@ -839,8 +933,6 @@ impl EGraph {
             banned_until: 0,
             todo_timestamp: 0,
             program,
-            search_time: Duration::default(),
-            apply_time: Duration::default(),
         };
         if let Some(rules) = self.rulesets.get_mut(&ruleset) {
             match rules.entry(name) {
@@ -985,11 +1077,18 @@ impl EGraph {
             }
             NCommand::RunSchedule(sched) => {
                 if should_run {
-                    self.run_report = Some(self.run_schedule(&sched));
-                    log::info!("Ran schedule {}.", sched)
+                    let report = self.run_schedule(&sched);
+                    log::info!("Ran schedule {}.", sched);
+                    log::info!("Report: {}", report);
+                    self.overall_run_report = self.overall_run_report.union(&report);
+                    self.recent_run_report = Some(report);
                 } else {
                     log::warn!("Skipping schedule.")
                 }
+            }
+            NCommand::PrintOverallStatistics => {
+                log::info!("Overall statistics:\n{}", self.overall_run_report);
+                self.print_msg(format!("Overall statistics:\n{}", self.overall_run_report));
             }
             NCommand::Check(facts) => {
                 if should_run {
@@ -1063,57 +1162,7 @@ impl EGraph {
                 }
             }
             NCommand::Input { name, file } => {
-                let func = self.functions.get_mut(&name).unwrap();
-                let is_unit = func.schema.output.name().as_str() == "Unit";
-
-                let mut filename = self.fact_directory.clone().unwrap_or_default();
-                filename.push(file.as_str());
-
-                // check that the function uses supported types
-                for t in &func.schema.input {
-                    match t.name().as_str() {
-                        "i64" | "String" => {}
-                        s => panic!("Unsupported type {} for input", s),
-                    }
-                }
-                match func.schema.output.name().as_str() {
-                    "i64" | "String" | "Unit" => {}
-                    s => panic!("Unsupported type {} for input", s),
-                }
-
-                log::info!("Opening file '{:?}'...", filename);
-                let mut f = File::open(filename).unwrap();
-                let mut contents = String::new();
-                f.read_to_string(&mut contents).unwrap();
-
-                let mut actions: Vec<Action> = vec![];
-                let mut str_buf: Vec<&str> = vec![];
-                for line in contents.lines() {
-                    str_buf.clear();
-                    str_buf.extend(line.split('\t').map(|s| s.trim()));
-                    if str_buf.is_empty() {
-                        continue;
-                    }
-
-                    let parse = |s: &str| -> Expr {
-                        if let Ok(i) = s.parse() {
-                            Expr::Lit(Literal::Int(i))
-                        } else {
-                            Expr::Lit(Literal::String(s.into()))
-                        }
-                    };
-
-                    let mut exprs: Vec<Expr> = str_buf.iter().map(|&s| parse(s)).collect();
-
-                    actions.push(if is_unit {
-                        Action::Expr(Expr::Call(name, exprs))
-                    } else {
-                        let out = exprs.pop().unwrap();
-                        Action::Set(name, exprs, out)
-                    });
-                }
-                self.eval_actions(&actions)?;
-                log::info!("Read {} facts into {name} from '{file}'.", actions.len())
+                self.input_file(name, file)?;
             }
             NCommand::Output { file, exprs } => {
                 let mut filename = self.fact_directory.clone().unwrap_or_default();
@@ -1137,6 +1186,72 @@ impl EGraph {
                 log::info!("Output to '{filename:?}'.")
             }
         };
+        Ok(())
+    }
+
+    fn input_file(&mut self, name: Symbol, file: String) -> Result<(), Error> {
+        let function_type = self
+            .type_info()
+            .func_types
+            .get(&name)
+            .unwrap_or_else(|| panic!("Unrecognzed function name {}", name))
+            .clone();
+        let func = self.functions.get_mut(&name).unwrap();
+
+        let mut filename = self.fact_directory.clone().unwrap_or_default();
+        filename.push(file.as_str());
+
+        // check that the function uses supported types
+
+        for t in &func.schema.input {
+            match t.name().as_str() {
+                "i64" | "String" => {}
+                s => panic!("Unsupported type {} for input", s),
+            }
+        }
+
+        if !function_type.is_datatype {
+            match func.schema.output.name().as_str() {
+                "i64" | "String" | "Unit" => {}
+                s => panic!("Unsupported type {} for input", s),
+            }
+        }
+
+        log::info!("Opening file '{:?}'...", filename);
+        let mut f = File::open(filename).unwrap();
+        let mut contents = String::new();
+        f.read_to_string(&mut contents).unwrap();
+
+        let mut actions: Vec<Action> = vec![];
+        let mut str_buf: Vec<&str> = vec![];
+        for line in contents.lines() {
+            str_buf.clear();
+            str_buf.extend(line.split('\t').map(|s| s.trim()));
+            if str_buf.is_empty() {
+                continue;
+            }
+
+            let parse = |s: &str| -> Expr {
+                if let Ok(i) = s.parse() {
+                    Expr::Lit(Literal::Int(i))
+                } else {
+                    Expr::Lit(Literal::String(s.into()))
+                }
+            };
+
+            let mut exprs: Vec<Expr> = str_buf.iter().map(|&s| parse(s)).collect();
+
+            actions.push(
+                if function_type.is_datatype || function_type.output.name() == UNIT_SYM.into() {
+                    Action::Expr(Expr::Call(name, exprs))
+                } else {
+                    let out = exprs.pop().unwrap();
+                    Action::Set(name, exprs, out)
+                },
+            );
+        }
+        self.eval_actions(&actions)?;
+        log::info!("Read {} facts into {name} from '{file}'.", actions.len());
         Ok(())
     }
 
@@ -1260,7 +1375,12 @@ impl EGraph {
 
     /// Gets the last run report and returns it, if the last command saved it.
     pub fn get_run_report(&self) -> &Option<RunReport> {
-        &self.run_report
+        &self.recent_run_report
+    }
+
+    /// Gets the overall run report and returns it.
+    pub fn get_overall_run_report(&self) -> &RunReport {
+        &self.overall_run_report
     }
 
     /// Serializes the egraph for export to graphviz.

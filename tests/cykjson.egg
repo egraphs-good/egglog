@@ -13,7 +13,7 @@
 (rule ((End a s)
        (= s (getString pos)))
       ((P 1 pos a)
-       (set (B 1 pos a) (T a s)))) 
+       (union (B 1 pos a) (T a s)))) 
 
 (rule ((Prod a b c) ;; a -> bc
        (P p1 s b)
@@ -24,7 +24,7 @@
 (rule ((Prod a b c)
        (= f1 (B p1 s b))
        (= f2 (B p2 (+ s p1) c)))
-      ((set (B (+ p1 p2) s a) 
+      ((union (B (+ p1 p2) s a) 
        (NT a f1 f2))))
 
 
