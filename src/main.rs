@@ -20,7 +20,7 @@ struct Args {
     /// data structure and the rust implementation of
     /// the rebuilding algorithm (maintains congruence closure).
     #[clap(long)]
-    rust_eqsat: bool,
+    terms_encoding: bool,
     #[clap(long, default_value_t = CompilerPassStop::All)]
     stop: CompilerPassStop,
     // TODO remove this evil hack
@@ -51,8 +51,8 @@ fn main() {
         egraph.set_underscores_for_desugaring(args.num_underscores);
         egraph.fact_directory = args.fact_directory.clone();
         egraph.seminaive = !args.naive;
-        if args.rust_eqsat {
-            egraph.enable_rust_eqsat();
+        if args.terms_encoding {
+            egraph.enable_terms_encoding();
         }
         if args.proofs {
             egraph

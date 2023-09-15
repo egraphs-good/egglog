@@ -375,7 +375,7 @@ impl Default for EGraph {
             node_limit: usize::MAX,
             timestamp: 0,
             proofs_enabled: false,
-            terms_enabled: true,
+            terms_enabled: false,
             term_header_added: false,
             interactive_mode: false,
             test_proofs: false,
@@ -400,8 +400,8 @@ impl EGraph {
     /// including a rust implementation of the union-find
     /// data structure and the rust implementation of
     /// the rebuilding algorithm (maintains congruence closure).
-    pub fn enable_rust_eqsat(&mut self) {
-        self.terms_enabled = false;
+    pub fn enable_terms_encoding(&mut self) {
+        self.terms_enabled = true;
     }
 
     pub fn is_interactive_mode(&self) -> bool {
@@ -444,8 +444,9 @@ impl EGraph {
 
     #[track_caller]
     fn debug_assert_invariants(&self) {
-        // TODO cannot find until added to parent table
-        // so these are not correct when terms are enabled.
+        // we can't use find before something
+        // is added to the parent table, so this
+        // is disabled in terms mode
         if self.terms_enabled {
             return;
         }
