@@ -1,0 +1,8 @@
+(relation f (i64))
+
+(rule ((= x 1)
+       (= x 2))
+      ((f x)))
+      
+(run 1)
+(print-table f)
