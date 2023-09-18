@@ -63,9 +63,11 @@ pub enum Expr {
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
-pub enum NormExpr {
-    Call(Symbol, Vec<Symbol>),
+pub enum CoreExpr<F> {
+    Call(F, Vec<Symbol>),
 }
+
+pub type NormExpr = CoreExpr<Symbol>;
 
 impl NormExpr {
     pub fn to_expr(&self) -> Expr {

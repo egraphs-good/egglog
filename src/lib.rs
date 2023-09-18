@@ -914,7 +914,6 @@ impl EGraph {
             .map_err(Error::TypeErrors)?;
         let (query0, action0) = (core_rule.body, core_rule.head);
 
-        // TODO: We should refactor compile_actions later as well
         let action0: Vec<Action> = action0.0.iter().map(|a| a.to_action()).collect();
 
         let types = &ctx.types;

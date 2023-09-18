@@ -17,7 +17,6 @@ pub enum ImpossibleConstraint {
     },
 }
 
-#[derive(Debug)]
 pub enum Constraint<Var, Value> {
     Eq(Var, Var),
     Assign(Var, Value),
@@ -26,8 +25,29 @@ pub enum Constraint<Var, Value> {
     // and all others are false
     Xor(Vec<Constraint<Var, Value>>),
     Impossible(ImpossibleConstraint),
+    PredOver(
+        String,
+        Var,
+        Box<dyn Fn(&Value) -> Result<(), ConstraintError<Var, Value>>>,
+    ),
 }
 
+impl<Var: Debug, Value: Debug> Debug for Constraint<Var, Value> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Eq(arg0, arg1) => f.debug_tuple("Eq").field(arg0).field(arg1).finish(),
+            Self::Assign(arg0, arg1) => f.debug_tuple("Assign").field(arg0).field(arg1).finish(),
+            Self::And(arg0) => f.debug_tuple("And").field(arg0).finish(),
+            Self::Xor(arg0) => f.debug_tuple("Xor").field(arg0).finish(),
+            Self::Impossible(arg0) => f.debug_tuple("Impossible").field(arg0).finish(),
+            Self::PredOver(arg0, arg1, arg2) => {
+                f.debug_tuple("PredOver").field(arg0).field(arg1).finish()
+            }
+        }
+    }
+}
+
+// TODO: refactor error generation
 pub enum ConstraintError<Var, Value> {
     InconsistentConstraint(Var, Value, Value),
     UnconstrainedVar(Var),
@@ -163,6 +183,12 @@ where
                     updated |= c.update(assignment, key)?;
                 }
                 Ok(updated)
+            }
+            Constraint::PredOver(name, var, pred) => {
+                if let Some(value) = assignment.0.get(var) {
+                    pred(value)?;
+                }
+                Ok(false)
             }
         }
     }

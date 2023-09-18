@@ -9,31 +9,43 @@ use hashbrown::HashMap;
 use typechecking::TypeError;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Default)]
-pub struct Actions(pub(crate) Vec<NormAction>);
-impl Actions {
+pub struct Actions<F>(pub(crate) Vec<CoreAction<F>>);
+
+impl<F: Clone> Actions<F> {
     fn subst(&mut self, subst: &HashMap<Symbol, AtomTerm>) {
         let actions = subst.iter().map(|(symbol, atom_term)| match atom_term {
-            AtomTerm::Var(v) => NormAction::LetVar(*symbol, *v),
-            AtomTerm::Literal(lit) => NormAction::LetLit(*symbol, lit.clone()),
-            AtomTerm::Global(v) => NormAction::LetVar(*symbol, *v),
+            AtomTerm::Var(v) => CoreAction::LetVar(symbol.clone(), *v),
+            AtomTerm::Literal(lit) => CoreAction::LetLit(symbol.clone(), lit.clone()),
+            AtomTerm::Global(v) => CoreAction::LetVar(symbol.clone(), *v),
         });
         let existing_actions = std::mem::take(&mut self.0);
         self.0 = actions.chain(existing_actions).collect();
     }
 }
 
-// TODO: implement custom debug
-#[derive(Debug, Clone)]
-pub struct UnresolvedCoreRule {
-    pub body: Query<Symbol>,
-    pub head: Actions,
+impl Actions<Symbol> {
+    fn get_constraints(
+        &self,
+        type_info: &TypeInfo,
+    ) -> Result<Vec<Constraint<AtomTerm, ArcSort>>, TypeError> {
+        // TODO: a renaming pass before this to make sure every identifier in action is uniquely named
+        let mut constraints = vec![];
+        for action in self.0 {
+            constraints.extend(action.get_constraints(type_info)?.into_iter());
+        }
+        Ok(constraints)
+    }
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct ResolvedCoreRule {
-    pub body: Query<ResolvedSymbol>,
-    pub head: Actions,
+// TODO: implement custom debug
+#[derive(Debug, Clone)]
+pub struct CoreRule<F> {
+    pub body: Query<F>,
+    pub head: Actions<F>,
 }
+
+pub type UnresolvedCoreRule = CoreRule<Symbol>;
+pub type ResolvedCoreRule = CoreRule<ResolvedSymbol>;
 
 #[derive(Debug, Clone)]
 pub enum ResolvedSymbol {
@@ -354,7 +366,9 @@ impl<'a> Context<'a> {
         &mut self,
         rule: &UnresolvedCoreRule,
     ) -> Result<Assignment<AtomTerm, ArcSort>, TypeError> {
-        let constraints = rule.body.get_constraints(self.egraph.type_info())?;
+        let mut constraints: Vec<Constraint<_, _>> = vec![];
+        constraints.extend(rule.body.get_constraints(self.egraph.type_info())?);
+        constraints.extend(rule.head.get_constraints(self.egraph.type_info())?);
         let problem = Problem { constraints };
         let range = rule.body.atom_terms();
         let assignment = problem

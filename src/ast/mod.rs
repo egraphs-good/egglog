@@ -13,7 +13,11 @@ lalrpop_mod!(
     "/ast/parse.rs"
 );
 
-use crate::*;
+use crate::{
+    constraint::{ConstraintError, ImpossibleConstraint},
+    typecheck::Atom,
+    *,
+};
 
 mod expr;
 pub use expr::*;
@@ -791,16 +795,18 @@ pub enum Action {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum NormAction {
-    Let(Symbol, NormExpr),
+pub enum CoreAction<F> {
+    Let(Symbol, CoreExpr<F>),
     LetVar(Symbol, Symbol),
     LetLit(Symbol, Literal),
     Extract(Symbol, Symbol),
-    Set(NormExpr, Symbol),
-    Delete(NormExpr),
+    Set(CoreExpr<F>, Symbol),
+    Delete(CoreExpr<F>),
     Union(Symbol, Symbol),
     Panic(String),
 }
+
+pub type NormAction = CoreAction<Symbol>;
 
 impl NormAction {
     pub fn to_action(&self) -> Action {
@@ -857,6 +863,115 @@ impl NormAction {
             NormAction::Union(lhs, rhs) => NormAction::Union(fvar(*lhs, false), fvar(*rhs, false)),
             NormAction::Panic(msg) => NormAction::Panic(msg.clone()),
         }
+    }
+
+    pub(crate) fn get_constraints(
+        &self,
+        type_info: &TypeInfo,
+    ) -> Result<Vec<Constraint<AtomTerm, ArcSort>>, TypeError> {
+        let go = |head: &Symbol, args: Vec<AtomTerm>| {
+            let mut xor_constraints = vec![];
+            if let Some(f) = type_info.func_types.get(head) {
+                let mut and_constraints = vec![];
+                if f.input.len() + 1 == args.len() {
+                    for (inp_type, var) in f.input.iter().chain(once(&f.output)).zip(args.iter()) {
+                        and_constraints.push(Constraint::Assign(var.clone(), inp_type.clone()));
+                    }
+                } else {
+                    and_constraints.push(Constraint::Impossible(
+                        ImpossibleConstraint::ArityMismatch {
+                            // TODO: we need to refactor the error type
+                            // Action is not really an atom
+                            atom: Atom {
+                                head: head.clone(),
+                                args: args.clone(),
+                            },
+                            expected: f.input.len() + 1,
+                            actual: args.len(),
+                        },
+                    ))
+                }
+
+                xor_constraints.push(Constraint::And(and_constraints));
+            }
+
+            if let Some(prims) = type_info.primitives.get(head) {
+                for prim in prims {
+                    let constraint = Constraint::And(prim.get_constraints(&args));
+                    xor_constraints.push(constraint);
+                }
+            }
+            vec![Constraint::Xor(xor_constraints)]
+        };
+
+        let constraints: Vec<Constraint<AtomTerm, ArcSort>> = match self {
+            CoreAction::Let(v, CoreExpr::Call(head, args)) => {
+                // TODO: Is will be easier and more consistent
+                // if type declaration of NormAction disambiguates between
+                // locally bound symbols and globally bound symbols.
+                let args = args
+                    .iter()
+                    .map(|var| {
+                        if type_info.global_types.contains_key(var) {
+                            AtomTerm::Global(var.clone())
+                        } else {
+                            AtomTerm::Var(var.clone())
+                        }
+                    })
+                    // different from `CoreAction::Set`, v is guaranteed to be locally bound
+                    // TODO: enforce this with a renaming pass
+                    .chain(once(AtomTerm::Var(v.clone())))
+                    .collect::<Vec<_>>();
+                go(head, args)
+            }
+            CoreAction::LetVar(v1, v2) => {
+                vec![Constraint::Eq(
+                    AtomTerm::Var(v1.clone()),
+                    AtomTerm::Var(v2.clone()),
+                )]
+            }
+            CoreAction::LetLit(v, l) => {
+                let sort = type_info.infer_literal(l);
+                vec![Constraint::Assign(AtomTerm::Var(v.clone()), sort)]
+            }
+            CoreAction::Extract(..) => {
+                vec![]
+            }
+            CoreAction::Set(CoreExpr::Call(head, args), v) => {
+                let args = args
+                    .iter()
+                    .chain(once(v))
+                    .map(|var| {
+                        if type_info.global_types.contains_key(var) {
+                            AtomTerm::Global(var.clone())
+                        } else {
+                            AtomTerm::Var(var.clone())
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                go(head, args)
+            }
+            CoreAction::Delete(CoreExpr::Call(head, args)) => todo!(),
+            CoreAction::Union(v1, v2) => {
+                let v1 = AtomTerm::Var(v1.clone());
+                let v2 = AtomTerm::Var(v2.clone());
+                let eq = Constraint::Eq(v1, v2);
+                let check = Constraint::PredOver(
+                    "union can only be performed over EqSort".to_string(),
+                    v1,
+                    Box::new(|ty: &ArcSort| {
+                        if ty.is_eq_sort() {
+                            Ok(())
+                        } else {
+                            Err(ConstraintError::ImpossibleCaseIdentified(todo!()))
+                        }
+                    }),
+                );
+                vec![eq, check]
+            }
+            CoreAction::Panic(s) => vec![],
+        };
+        Ok(constraints)
     }
 }
 
