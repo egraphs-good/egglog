@@ -86,8 +86,21 @@ impl Sort for SetSort {
         result
     }
 
-    fn canonicalize(&self, _value: &mut Value, _unionfind: &UnionFind) -> bool {
-        false
+    fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
+        let sets = self.sets.lock().unwrap();
+        let set = sets.get_index(value.bits as usize).unwrap();
+        let mut changed = false;
+        let new_set: ValueSet = set
+            .iter()
+            .map(|e| {
+                let mut e = *e;
+                changed |= self.element.canonicalize(&mut e, unionfind);
+                e
+            })
+            .collect();
+        drop(sets);
+        *value = new_set.store(self).unwrap();
+        changed
     }
 
     fn register_primitives(self: Arc<Self>, typeinfo: &mut TypeInfo) {

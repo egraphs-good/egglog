@@ -719,31 +719,12 @@ impl EGraph {
                 }
             }
 
-            let is_rebuilding = cq.query.ruleset.to_string().contains("rebuilding_");
             let do_seminaive = self.seminaive && !global_updated;
             // for the later atoms, we consider everything
             let mut timestamp_ranges = vec![0..u32::MAX; cq.query.atoms.len()];
             if do_seminaive {
-                for (atom_i, atom) in cq.query.atoms.iter().enumerate() {
+                for (atom_i, _atom) in cq.query.atoms.iter().enumerate() {
                     timestamp_ranges[atom_i] = timestamp..u32::MAX;
-
-                    // For rebuilding, we have the invariant
-                    // that new atoms are up-to-date w.r.t.
-                    // old unionfind entries.
-                    // So do the join for new unionfind entries
-                    // and all the other atoms.
-                    // TODO this hack fails on one benchmark, not sure why
-                    let rebuilding_hack = false;
-                    if rebuilding_hack {
-                        let atom_has_parent = format!("{:?}", atom).contains("Parent_");
-                        if is_rebuilding && !atom_has_parent {
-                            continue;
-                        } else if is_rebuilding {
-                            assert_eq!(cq.query.atoms.len(), 2);
-                            timestamp_ranges = vec![0..u32::MAX; cq.query.atoms.len()];
-                            timestamp_ranges[atom_i] = timestamp..u32::MAX;
-                        }
-                    }
 
                     self.gj_for_atom(Some(atom_i), &timestamp_ranges, cq, &mut f);
                     // now we can fix this atom to be "old stuff" only

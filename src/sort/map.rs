@@ -87,8 +87,22 @@ impl Sort for MapSort {
         result
     }
 
-    fn canonicalize(&self, _value: &mut Value, _unionfind: &UnionFind) -> bool {
-        false
+    fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
+        let maps = self.maps.lock().unwrap();
+        let map = maps.get_index(value.bits as usize).unwrap();
+        let mut changed = false;
+        let new_map: ValueMap = map
+            .iter()
+            .map(|(k, v)| {
+                let (mut k, mut v) = (*k, *v);
+                changed |= self.key.canonicalize(&mut k, unionfind);
+                changed |= self.value.canonicalize(&mut v, unionfind);
+                (k, v)
+            })
+            .collect();
+        drop(maps);
+        *value = new_map.store(self).unwrap();
+        changed
     }
 
     fn register_primitives(self: Arc<Self>, typeinfo: &mut TypeInfo) {
@@ -194,16 +208,9 @@ impl PrimitiveLike for MapRebuild {
     fn apply(&self, values: &[Value], egraph: &EGraph) -> Option<Value> {
         let maps = self.map.maps.lock().unwrap();
         let map = maps.get_index(values[0].bits as usize).unwrap();
-        let mut changed = false;
         let new_map: ValueMap = map
             .iter()
-            .map(|(k, v)| {
-                let (k, v) = (*k, *v);
-                let updated_k = egraph.find(k);
-                let updated_v = egraph.find(v);
-                changed |= updated_k != k || updated_v != v;
-                (updated_k, updated_v)
-            })
+            .map(|(k, v)| (egraph.find(*k), egraph.find(*v)))
             .collect();
 
         drop(maps);

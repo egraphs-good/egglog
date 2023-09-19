@@ -52,8 +52,6 @@ impl<T: std::fmt::Display> std::fmt::Display for Atom<T> {
 pub struct Query {
     pub atoms: Vec<Atom<Symbol>>,
     pub filters: Vec<Atom<Primitive>>,
-    // store the ruleset for hack on rebuilding
-    pub(crate) ruleset: Symbol,
 }
 
 impl std::fmt::Display for Query {
@@ -131,7 +129,6 @@ impl<'a> Context<'a> {
         &mut self,
         facts: &'a [Fact],
         actions: &'a [Action],
-        ruleset: Symbol,
     ) -> Result<(Query, Vec<Action>), Vec<TypeError>> {
         for fact in facts {
             self.typecheck_fact(fact);
@@ -215,7 +212,6 @@ impl<'a> Context<'a> {
         let mut query = Query {
             atoms: Default::default(),
             filters: Default::default(),
-            ruleset,
         };
         let mut query_eclasses = HashSet::<Id>::default();
         // Now we can fill in the nodes with the canonical leaves
@@ -729,11 +725,15 @@ impl EGraph {
     fn perform_set(
         &mut self,
         table: Symbol,
-        args: &[Value],
         new_value: Value,
         stack: &mut Vec<Value>,
     ) -> Result<(), Error> {
         let function = self.functions.get_mut(&table).unwrap();
+
+        let new_len = stack.len() - function.schema.input.len();
+        // TODO would be nice to use slice here
+        let args = &stack[new_len..];
+
         // We should only have canonical values here: omit the canonicalization step
         let old_value = function.get(args);
 
@@ -757,6 +757,7 @@ impl EGraph {
                     }
                 };
                 if merged != old_value {
+                    let args = &stack[new_len..];
                     let function = self.functions.get_mut(&table).unwrap();
                     function.insert(args, merged, self.timestamp);
                 }
@@ -864,10 +865,8 @@ impl EGraph {
                     // except for setting the parent relation
                     let new_value = stack.pop().unwrap();
                     let new_len = stack.len() - function.schema.input.len();
-                    // TODO would be nice to use slice here
-                    let args = stack[new_len..].to_vec();
 
-                    self.perform_set(*f, &args, new_value, stack)?;
+                    self.perform_set(*f, new_value, stack)?;
                     stack.truncate(new_len)
                 }
                 Instruction::Union(arity) => {

@@ -87,7 +87,7 @@ impl Sort for VecSort {
         let vecs = self.vecs.lock().unwrap();
         let vec = vecs.get_index(value.bits as usize).unwrap();
         let mut changed = false;
-        let new_set: ValueVec = vec
+        let new_vec: ValueVec = vec
             .iter()
             .map(|e| {
                 let mut e = *e;
@@ -96,7 +96,7 @@ impl Sort for VecSort {
             })
             .collect();
         drop(vecs);
-        *value = new_set.store(self).unwrap();
+        *value = new_vec.store(self).unwrap();
         changed
     }
 
@@ -215,17 +215,9 @@ impl PrimitiveLike for VecRebuild {
     fn apply(&self, values: &[Value], egraph: &EGraph) -> Option<Value> {
         let vec = ValueVec::load(&self.vec, &values[0]);
 
-        let mut changed = false;
-        let new_set: ValueVec = vec
-            .iter()
-            .map(|e| {
-                let updated = egraph.find(*e);
-                changed |= updated != *e;
-                updated
-            })
-            .collect();
+        let new_vec: ValueVec = vec.iter().map(|e| egraph.find(*e)).collect();
         drop(vec);
-        Some(new_set.store(&self.vec).unwrap())
+        Some(new_vec.store(&self.vec).unwrap())
     }
 }
 struct VecOf {

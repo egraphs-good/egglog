@@ -20,7 +20,7 @@ pub struct TypeInfo {
     pub presort_names: HashSet<Symbol>,
     pub sorts: HashMap<Symbol, Arc<dyn Sort>>,
     pub primitives: HashMap<Symbol, Vec<Primitive>>,
-    func_types: HashMap<Symbol, FuncType>,
+    pub func_types: HashMap<Symbol, FuncType>,
     global_types: HashMap<Symbol, ArcSort>,
     pub local_types: HashMap<CommandId, HashMap<Symbol, ArcSort>>,
 }
