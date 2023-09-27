@@ -1,10 +1,6 @@
 use std::ops::AddAssign;
 
-use crate::{
-    ast::desugar::flatten_actions,
-    constraint::{all_equal_constraints, Assignment},
-    *,
-};
+use crate::{constraint::all_equal_constraints, *};
 use hashbrown::HashMap;
 use typechecking::TypeError;
 
@@ -185,8 +181,6 @@ impl NormRule {
 
 pub struct Context<'a> {
     pub egraph: &'a mut EGraph,
-    pub types: IndexMap<Symbol, ArcSort>,
-    unionfind: UnionFind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -351,90 +345,7 @@ impl PrimitiveLike for ValueEq {
 
 impl<'a> Context<'a> {
     pub fn new(egraph: &'a mut EGraph) -> Self {
-        Self {
-            egraph,
-            types: Default::default(),
-            unionfind: UnionFind::default(),
-        }
-    }
-
-    // figure 8 of the relational e-matching paper
-    fn flatten_expr(&mut self, expr: &Expr) -> (AtomTerm, Vec<Atom<Symbol>>) {
-        match expr {
-            Expr::Var(var) => {
-                let var = if self.egraph.global_bindings.get(var).is_some() {
-                    AtomTerm::Global(*var)
-                } else {
-                    AtomTerm::Var(*var)
-                };
-                (var, vec![])
-            }
-            Expr::Lit(lit) => (AtomTerm::Literal(lit.clone()), vec![]),
-            Expr::Call(f, args) => {
-                let children: Vec<_> = args.iter().map(|arg| self.flatten_expr(arg)).collect();
-                let id = self.unionfind.make_set();
-                let var = AtomTerm::Var(Symbol::from(format!("$v{}", id)));
-                let ats: Vec<_> = children
-                    .iter()
-                    .map(|c| c.0.clone())
-                    .chain(once(var.clone()))
-                    .collect();
-
-                let mut atoms: Vec<_> = children.into_iter().flat_map(|c| c.1).collect();
-                atoms.push(Atom {
-                    head: *f,
-                    args: ats,
-                });
-                (var, atoms)
-            }
-        }
-    }
-
-    fn flatten_fact(&mut self, fact: &Fact) -> Query<Symbol> {
-        match fact {
-            Fact::Eq(exprs) => {
-                // TODO: currently we require exprs.len() to be 2 and Eq atom has the form (= e1 e2)
-                // which isn't necessary and can be loosened.
-                assert!(!exprs.is_empty());
-                let var_atoms: Vec<_> = exprs.iter().map(|expr| self.flatten_expr(expr)).collect();
-                let mut equality_checks = var_atoms
-                    .iter()
-                    .skip(1)
-                    .map(|va| Atom {
-                        head: "value-eq".into(),
-                        args: vec![
-                            var_atoms[0].0.clone(),
-                            va.0.clone(),
-                            AtomTerm::Literal(Literal::Unit),
-                        ],
-                    })
-                    .collect();
-
-                let mut atoms = var_atoms
-                    .into_iter()
-                    .flat_map(|va| va.1)
-                    .collect::<Vec<_>>();
-                atoms.append(&mut equality_checks);
-                Query { atoms }
-            }
-            Fact::Fact(expr) => {
-                let atoms = self.flatten_expr(expr).1;
-                Query { atoms }
-            }
-        }
-    }
-
-    pub fn lower(&mut self, rule: &Rule) -> Result<UnresolvedCoreRule, Vec<TypeError>> {
-        let facts = &rule.body;
-        let actions = &rule.head;
-        let mut query = Query::default();
-        for fact in facts {
-            query += self.flatten_fact(fact);
-        }
-        Ok(UnresolvedCoreRule {
-            body: query,
-            head: Actions(flatten_actions(actions, &mut self.egraph.desugar)),
-        })
+        Self { egraph }
     }
 
     // TODO: should this be in ResolvedCoreRule
@@ -466,25 +377,19 @@ impl<'a> Context<'a> {
         result_rule
     }
 
-    pub(crate) fn typecheck(
-        &mut self,
-        rule: &UnresolvedCoreRule,
-    ) -> Result<Assignment<AtomTerm, ArcSort>, TypeError> {
-        let constraints = rule.body.get_constraints(self.egraph.type_info())?;
-        let problem = Problem { constraints };
-        let range = rule.body.atom_terms();
-        let assignment = problem
-            .solve(range.iter(), |sort: &ArcSort| sort.name())
-            .map_err(|e| e.to_type_error())?;
-        Ok(assignment)
-    }
-
     pub(crate) fn resolve_rule(
         &self,
+        ctx: CommandId,
         rule: UnresolvedCoreRule,
-        assignment: Assignment<AtomTerm, ArcSort>,
     ) -> Result<ResolvedCoreRule, TypeError> {
         let type_info = self.egraph.type_info();
+        let local_types = type_info.local_types.get(&ctx).unwrap();
+        let global_types = &type_info.global_types;
+        let get_type = |arg: &AtomTerm| match arg {
+            AtomTerm::Global(v) => global_types.get(v).unwrap().clone(),
+            AtomTerm::Var(v) => local_types.get(v).unwrap().clone(),
+            AtomTerm::Literal(lit) => type_info.infer_literal(lit),
+        };
         let body_atoms: Vec<Atom<ResolvedSymbol>> = rule
             .body
             .atoms
@@ -494,7 +399,7 @@ impl<'a> Context<'a> {
                 if let Some(ty) = type_info.func_types.get(&symbol) {
                     let expected = ty.input.iter().chain(once(&ty.output));
                     let expected = expected.map(|s| s.name());
-                    let actual = atom.args.iter().map(|arg| assignment.get(arg).unwrap());
+                    let actual = atom.args.iter().map(get_type);
                     let actual = actual.map(|s| s.name());
                     if expected.eq(actual) {
                         return Atom {
@@ -517,7 +422,7 @@ impl<'a> Context<'a> {
                             .unwrap()
                             .1
                             .iter()
-                            .map(|arg| assignment.get(arg).unwrap().clone())
+                            .map(get_type)
                             .collect();
                         for primitive in primitives.iter() {
                             if primitive.accept(&tys).is_some() {
@@ -543,31 +448,14 @@ impl<'a> Context<'a> {
         Ok(result_rule)
     }
 
-    pub fn typecheck_query(
+    pub(crate) fn compile_norm_rule(
         &mut self,
-        facts: &'a [Fact],
-        actions: &'a [Action],
+        ctx: CommandId,
+        rule: &'a NormRule,
     ) -> Result<ResolvedCoreRule, Vec<TypeError>> {
-        let rule = Rule {
-            head: actions.to_vec(),
-            body: facts.to_vec(),
-        };
-        let rule = self.lower(&rule)?;
+        let rule = rule.to_core_rule(self.egraph.type_info());
         let rule = self.canonicalize(rule);
-        let assignment = self.typecheck(&rule).map_err(|e| vec![e])?;
-        self.types = assignment
-            .clone()
-            .0
-            .into_iter()
-            .filter_map(|(atom_term, typ)| {
-                if let AtomTerm::Var(v) = atom_term {
-                    Some((v, typ))
-                } else {
-                    None
-                }
-            })
-            .collect();
-        let rule = self.resolve_rule(rule, assignment).map_err(|e| vec![e])?;
+        let rule = self.resolve_rule(ctx, rule).map_err(|e| vec![e])?;
         Ok(rule)
     }
 }
@@ -580,12 +468,10 @@ struct ActionChecker<'a> {
 }
 
 impl<'a> ActionChecker<'a> {
+    // TODO: refactor this to get rid of "the type part" of the action checker
     fn check_action(&mut self, action: &Action) -> Result<(), TypeError> {
         match action {
             Action::Let(v, e) => {
-                if self.types.contains_key(v) || self.locals.contains_key(v) {
-                    return Err(TypeError::AlreadyDefined(*v));
-                }
                 let (_, ty) = self.infer_expr(e)?;
                 self.locals.insert(*v, ty);
                 Ok(())

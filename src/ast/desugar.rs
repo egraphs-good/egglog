@@ -359,6 +359,7 @@ fn desugar_schedule(desugar: &mut Desugar, schedule: &Schedule) -> NormSchedule 
 fn desugar_run_config(desugar: &mut Desugar, run_config: &RunConfig) -> NormRunConfig {
     let RunConfig { ruleset, until } = run_config;
     NormRunConfig {
+        ctx: desugar.get_new_id(),
         ruleset: *ruleset,
         until: until.clone().map(|facts| flatten_facts(&facts, desugar)),
     }

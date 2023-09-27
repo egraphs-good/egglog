@@ -748,10 +748,14 @@ impl EGraph {
             .or_insert(Duration::default()) += rebuild_start.elapsed();
         self.timestamp += 1;
 
-        let NormRunConfig { ruleset, until } = config;
+        let NormRunConfig {
+            ruleset,
+            until,
+            ctx,
+        } = config;
 
         if let Some(facts) = until {
-            if self.check_facts(facts).is_ok() {
+            if self.check_facts(*ctx, facts).is_ok() {
                 log::info!(
                     "Breaking early because of facts:\n {}!",
                     ListDisplay(facts, "\n")
@@ -903,29 +907,34 @@ impl EGraph {
 
     fn add_rule_with_name(
         &mut self,
+        ctx: CommandId,
         name: String,
-        rule: ast::Rule,
+        rule: NormRule,
         ruleset: Symbol,
     ) -> Result<Symbol, Error> {
         let name = Symbol::from(name);
-        let mut ctx = typecheck::Context::new(self);
-        let core_rule = ctx
-            .typecheck_query(&rule.body, &rule.head)
+        let mut compiler = typecheck::Context::new(self);
+        let core_rule = compiler
+            .compile_norm_rule(ctx, &rule)
             .map_err(Error::TypeErrors)?;
         let (query0, action0) = (core_rule.body, core_rule.head);
 
         // TODO: We should refactor compile_actions later as well
         let action0: Vec<Action> = action0.0.iter().map(|a| a.to_action()).collect();
 
-        let types = &ctx.types;
-        let query = self.compile_gj_query(query0, types);
+        // types being an IndexMap is very important as it assigns each variable a stable index
+        let types: IndexMap<_, _> = self
+            .type_info()
+            .local_types
+            .get(&ctx)
+            .unwrap()
+            .iter()
+            .map(|(v, s)| (*v, s.clone()))
+            .collect();
+        let query = self.compile_gj_query(query0, &types);
         let program = self
-            .compile_actions(types, &action0)
+            .compile_actions(&types, &action0)
             .map_err(Error::TypeErrors)?;
-        // println!(
-        //     "Compiled rule {rule:?}\n{subst:?}to {program:#?}",
-        //     subst = types
-        // );
         let compiled_rule = Rule {
             query,
             matches: 0,
@@ -945,9 +954,14 @@ impl EGraph {
         Ok(name)
     }
 
-    pub fn add_rule(&mut self, rule: ast::Rule, ruleset: Symbol) -> Result<Symbol, Error> {
+    pub(crate) fn add_rule(
+        &mut self,
+        ctx: CommandId,
+        rule: NormRule,
+        ruleset: Symbol,
+    ) -> Result<Symbol, Error> {
         let name = format!("{}", rule);
-        self.add_rule_with_name(name, rule, ruleset)
+        self.add_rule_with_name(ctx, name, rule, ruleset)
     }
 
     pub fn eval_actions(&mut self, actions: &[Action]) -> Result<(), Error> {
@@ -1013,16 +1027,25 @@ impl EGraph {
         }
     }
 
-    fn check_facts(&mut self, facts: &[NormFact]) -> Result<(), Error> {
-        let mut ctx = typecheck::Context::new(self);
-        let converted_facts = facts.iter().map(|f| f.to_fact()).collect::<Vec<Fact>>();
-        let empty_actions = vec![];
-        let rule = ctx
-            .typecheck_query(&converted_facts, &empty_actions)
+    fn check_facts(&mut self, ctx: CommandId, facts: &[NormFact]) -> Result<(), Error> {
+        let mut compiler = typecheck::Context::new(self);
+        let rule = NormRule {
+            head: vec![],
+            body: facts.to_vec(),
+        };
+        let rule = compiler
+            .compile_norm_rule(ctx, &rule)
             .map_err(Error::TypeErrors)?;
         let query0 = rule.body;
-        let types = &ctx.types;
-        let query = self.compile_gj_query(query0, types);
+        let types: IndexMap<_, _> = self
+            .type_info()
+            .local_types
+            .get(&ctx)
+            .unwrap()
+            .iter()
+            .map(|(v, s)| (*v, s.clone()))
+            .collect();
+        let query = self.compile_gj_query(query0, &types);
 
         let mut matched = false;
         // TODO what timestamp to use?
@@ -1039,7 +1062,8 @@ impl EGraph {
         }
     }
 
-    fn run_command(&mut self, command: NCommand, should_run: bool) -> Result<(), Error> {
+    fn run_command(&mut self, command: NormCommand, should_run: bool) -> Result<(), Error> {
+        let NormCommand { metadata, command } = command;
         let pre_rebuild = Instant::now();
         let rebuild_num = self.rebuild()?;
         if rebuild_num > 0 {
@@ -1072,7 +1096,7 @@ impl EGraph {
                 rule,
                 name,
             } => {
-                self.add_rule(rule.to_rule(), ruleset)?;
+                self.add_rule(metadata.id, rule, ruleset)?;
                 log::info!("Declared rule {name}.")
             }
             NCommand::RunSchedule(sched) => {
@@ -1092,7 +1116,7 @@ impl EGraph {
             }
             NCommand::Check(facts) => {
                 if should_run {
-                    self.check_facts(&facts)?;
+                    self.check_facts(metadata.id, &facts)?;
                     log::info!("Checked fact {:?}.", facts);
                 } else {
                     log::warn!("Skipping check.")
@@ -1154,7 +1178,13 @@ impl EGraph {
                 self.print_size(f)?;
             }
             NCommand::Fail(c) => {
-                let result = self.run_command(*c, should_run);
+                let result = self.run_command(
+                    NormCommand {
+                        metadata,
+                        command: *c,
+                    },
+                    should_run,
+                );
                 if let Err(e) = result {
                     log::info!("Command failed as expected: {}", e);
                 } else {
@@ -1328,7 +1358,7 @@ impl EGraph {
             // Important to process each command individually
             // because push and pop create new scopes
             for processed in self.process_command(command, CompilerPassStop::All)? {
-                self.run_command(processed.command, should_run)?;
+                self.run_command(processed, should_run)?;
             }
         }
         log::logger().flush();

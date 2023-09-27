@@ -515,6 +515,7 @@ impl ToSexp for RunConfig {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct NormRunConfig {
+    pub ctx: CommandId,
     pub ruleset: Symbol,
     pub until: Option<Vec<NormFact>>,
 }

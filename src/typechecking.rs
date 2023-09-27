@@ -188,7 +188,7 @@ impl TypeInfo {
                 self.typecheck_ncommand(cmd, id)?;
             }
             NCommand::RunSchedule(schedule) => {
-                self.typecheck_schedule(id, schedule)?;
+                self.typecheck_schedule(schedule)?;
             }
 
             // TODO cover all cases in typechecking
@@ -197,26 +197,26 @@ impl TypeInfo {
         Ok(())
     }
 
-    fn typecheck_schedule(
-        &mut self,
-        ctx: CommandId,
-        schedule: &NormSchedule,
-    ) -> Result<(), TypeError> {
+    fn typecheck_schedule(&mut self, schedule: &NormSchedule) -> Result<(), TypeError> {
         match schedule {
             NormSchedule::Repeat(_times, schedule) => {
-                self.typecheck_schedule(ctx, schedule)?;
+                self.typecheck_schedule(schedule)?;
             }
             NormSchedule::Sequence(schedules) => {
                 for schedule in schedules {
-                    self.typecheck_schedule(ctx, schedule)?;
+                    self.typecheck_schedule(schedule)?;
                 }
             }
             NormSchedule::Saturate(schedule) => {
-                self.typecheck_schedule(ctx, schedule)?;
+                self.typecheck_schedule(schedule)?;
             }
             NormSchedule::Run(run_config) => {
                 if let Some(facts) = &run_config.until {
-                    self.typecheck_facts(ctx, facts)?;
+                    assert!(self
+                        .local_types
+                        .insert(run_config.ctx, Default::default())
+                        .is_none());
+                    self.typecheck_facts(run_config.ctx, facts)?;
                     self.verify_normal_form_facts(facts);
                 }
             }
