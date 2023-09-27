@@ -71,6 +71,118 @@ impl UnresolvedCoreRule {
         self.head.subst(subst);
     }
 }
+
+impl UnresolvedCoreRule {
+    // keep it here while it's untested
+    #![allow(unused)]
+    pub(crate) fn to_norm_rule(&self, egraph: &EGraph) -> NormRule {
+        fn to_fact(body: &Query<Symbol>, egraph: &EGraph) -> Vec<NormFact> {
+            let mut facts = vec![];
+            for fact in body.atoms.iter() {
+                let Atom { args, head } = fact;
+
+                let args: Vec<_> = args
+                    .iter()
+                    .map(|arg| match arg {
+                        AtomTerm::Var(v) => v.clone(),
+                        AtomTerm::Literal(lit) => {
+                            let symbol = format!("lit{}", lit).into();
+                            facts.push(NormFact::AssignLit(symbol, lit.clone()));
+                            symbol
+                        }
+                        AtomTerm::Global(v) => v.clone(),
+                    })
+                    .collect();
+
+                // TODO: this assumes that a name can refer to a function xor a primitive
+                // but this does not necessarily need to be true (e.g., we can overload the definition of "+" to work over Exprs)
+                facts.push(if head == &"value-eq".into() {
+                    assert!(args.len() == 2);
+                    NormFact::ConstrainEq(args[0], args[1])
+                } else {
+                    let (out, args) = args.split_last().unwrap();
+                    if egraph.functions.contains_key(head) {
+                        NormFact::Compute(out.clone(), NormExpr::Call(head.clone(), args.to_vec()))
+                    } else {
+                        NormFact::Assign(out.clone(), NormExpr::Call(head.clone(), args.to_vec()))
+                    }
+                });
+            }
+            facts
+        }
+
+        let UnresolvedCoreRule { head, body } = self;
+        let Actions(head) = head.clone();
+        NormRule {
+            head,
+            body: to_fact(body, egraph),
+        }
+    }
+}
+
+pub(crate) fn facts_to_query(body: &Vec<NormFact>, typeinfo: &TypeInfo) -> Query<Symbol> {
+    fn to_atom_term(s: Symbol, typeinfo: &TypeInfo) -> AtomTerm {
+        if typeinfo.global_types.contains_key(&s) {
+            AtomTerm::Global(s)
+        } else {
+            AtomTerm::Var(s)
+        }
+    }
+    let mut atoms = vec![];
+    for fact in body {
+        match fact {
+            NormFact::Assign(symbol, NormExpr::Call(head, args))
+            | NormFact::Compute(symbol, NormExpr::Call(head, args)) => {
+                let args = args
+                    .iter()
+                    .chain(once(symbol))
+                    .cloned()
+                    .map(|s| to_atom_term(s, typeinfo))
+                    .collect();
+                let head = head.clone();
+                atoms.push(Atom { head, args });
+            }
+            NormFact::AssignVar(lhs, rhs) => atoms.push(Atom {
+                head: "value-eq".into(),
+                args: vec![
+                    to_atom_term(lhs.clone(), typeinfo),
+                    to_atom_term(rhs.clone(), typeinfo),
+                    AtomTerm::Literal(Literal::Unit),
+                ],
+            }),
+            NormFact::ConstrainEq(lhs, rhs) => atoms.push(Atom {
+                head: "value-eq".into(),
+                args: vec![
+                    to_atom_term(lhs.clone(), typeinfo),
+                    to_atom_term(rhs.clone(), typeinfo),
+                    AtomTerm::Literal(Literal::Unit),
+                ],
+            }),
+            NormFact::AssignLit(symbol, lit) => atoms.push(Atom {
+                head: "value-eq".into(),
+                args: vec![
+                    to_atom_term(symbol.clone(), typeinfo),
+                    AtomTerm::Literal(lit.clone()),
+                    AtomTerm::Literal(Literal::Unit),
+                ],
+            }),
+        }
+    }
+    Query { atoms }
+}
+
+impl NormRule {
+    // keep it here while it's untested
+    #![allow(unused)]
+    pub(crate) fn to_core_rule(&self, typeinfo: &TypeInfo) -> UnresolvedCoreRule {
+        let NormRule { head, body } = self;
+        UnresolvedCoreRule {
+            body: facts_to_query(body, typeinfo),
+            head: Actions(head.clone()),
+        }
+    }
+}
+
 pub struct Context<'a> {
     pub egraph: &'a mut EGraph,
     pub types: IndexMap<Symbol, ArcSort>,
@@ -140,7 +252,7 @@ impl Query<Symbol> {
         Ok(constraints)
     }
 
-    fn atom_terms(&self) -> HashSet<AtomTerm> {
+    pub(crate) fn atom_terms(&self) -> HashSet<AtomTerm> {
         self.atoms
             .iter()
             .flat_map(|atom| atom.args.iter().cloned())
@@ -208,7 +320,9 @@ impl<T> Atom<T> {
     }
 }
 
-pub(crate) struct ValueEq {}
+pub(crate) struct ValueEq {
+    pub unit: Arc<UnitSort>,
+}
 
 impl PrimitiveLike for ValueEq {
     fn name(&self) -> Symbol {
@@ -216,15 +330,19 @@ impl PrimitiveLike for ValueEq {
     }
 
     fn get_constraints(&self, arguments: &[AtomTerm]) -> Vec<Constraint<AtomTerm, ArcSort>> {
-        // TODO: egglog requires value-eq to return
-        // the value of the first argument upon success which is weird
-        all_equal_constraints(self.name(), arguments, None, Some(3), None)
+        all_equal_constraints(
+            self.name(),
+            arguments,
+            None,
+            Some(3),
+            Some(self.unit.clone()),
+        )
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
         assert_eq!(values.len(), 2);
         if values[0] == values[1] {
-            Some(values[0])
+            Some(Value::unit())
         } else {
             None
         }
@@ -287,8 +405,7 @@ impl<'a> Context<'a> {
                         args: vec![
                             var_atoms[0].0.clone(),
                             va.0.clone(),
-                            // TODO: format this
-                            AtomTerm::Var(Symbol::from(format!("$v{}", self.unionfind.make_set()))),
+                            AtomTerm::Literal(Literal::Unit),
                         ],
                     })
                     .collect();
@@ -314,7 +431,6 @@ impl<'a> Context<'a> {
         for fact in facts {
             query += self.flatten_fact(fact);
         }
-        // let desugar = ;
         Ok(UnresolvedCoreRule {
             body: query,
             head: Actions(flatten_actions(actions, &mut self.egraph.desugar)),
@@ -436,13 +552,8 @@ impl<'a> Context<'a> {
             head: actions.to_vec(),
             body: facts.to_vec(),
         };
-        // dbg!(&rule);
         let rule = self.lower(&rule)?;
-        // dbg!(&rule);
-        // let rule = self.discover_primitives(rule)?;
-        // dbg!(&rule);
         let rule = self.canonicalize(rule);
-        // dbg!(&rule);
         let assignment = self.typecheck(&rule).map_err(|e| vec![e])?;
         self.types = assignment
             .clone()
@@ -457,8 +568,6 @@ impl<'a> Context<'a> {
             })
             .collect();
         let rule = self.resolve_rule(rule, assignment).map_err(|e| vec![e])?;
-        // dbg!(&rule);
-        // let rule = self.congruence(&rule);
         Ok(rule)
     }
 }

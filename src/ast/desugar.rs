@@ -1,5 +1,5 @@
 use super::Rule;
-use crate::{typecheck::ValueEq, *};
+use crate::*;
 
 fn desugar_datatype(name: Symbol, variants: Vec<Variant>) -> Vec<NCommand> {
     vec![NCommand::Sort(name, None)]
@@ -424,8 +424,7 @@ pub struct Desugar {
 
 impl Default for Desugar {
     fn default() -> Self {
-        let mut type_info = TypeInfo::default();
-        type_info.add_primitive(ValueEq {});
+        let type_info = TypeInfo::default();
         Self {
             next_fresh: Default::default(),
             next_command_id: Default::default(),

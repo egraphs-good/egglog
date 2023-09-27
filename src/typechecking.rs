@@ -1,4 +1,7 @@
-use crate::*;
+use crate::{
+    typecheck::{facts_to_query, ValueEq},
+    *,
+};
 
 pub const RULE_PROOF_KEYWORD: &str = "rule-proof";
 
@@ -50,6 +53,10 @@ impl Default for TypeInfo {
         res.presorts.insert("Map".into(), MapSort::make_sort);
         res.presorts.insert("Set".into(), SetSort::make_sort);
         res.presorts.insert("Vec".into(), VecSort::make_sort);
+
+        res.add_primitive(ValueEq {
+            unit: res.get_sort(),
+        });
 
         res
     }
@@ -259,8 +266,25 @@ impl TypeInfo {
     }
 
     fn typecheck_facts(&mut self, ctx: CommandId, facts: &Vec<NormFact>) -> Result<(), TypeError> {
-        for fact in facts {
-            self.typecheck_fact(ctx, fact)?;
+        // ROUND TRIP TO CORE RULE AND BACK
+        let query = facts_to_query(facts, self);
+        let constraints = query.get_constraints(self)?;
+        let problem = Problem { constraints };
+        let range = query.atom_terms();
+        let assignment = problem
+            .solve(range.iter(), |sort: &ArcSort| sort.name())
+            .map_err(|e| e.to_type_error())?;
+
+        for (at, ty) in assignment.0.iter() {
+            match at {
+                AtomTerm::Var(v) => {
+                    self.introduce_binding(ctx, *v, ty.clone(), false)?;
+                }
+                // All the globals should have been introduced
+                AtomTerm::Global(_) => {}
+                // No need to bind literals as well
+                AtomTerm::Literal(_) => {}
+            }
         }
         Ok(())
     }
@@ -437,81 +461,6 @@ impl TypeInfo {
                 self.introduce_binding(ctx, *var1, var2_type, is_global)?;
             }
             NormAction::Panic(..) => (),
-        }
-        Ok(())
-    }
-
-    fn typecheck_fact(&mut self, ctx: CommandId, fact: &NormFact) -> Result<(), TypeError> {
-        match fact {
-            NormFact::Compute(var, expr) => {
-                let expr_type = self.typecheck_expr(ctx, expr, true)?;
-                if let Some(_existing) = self
-                    .local_types
-                    .get_mut(&ctx)
-                    .unwrap()
-                    .insert(*var, expr_type.output.clone())
-                {
-                    return Err(TypeError::AlreadyDefined(*var));
-                }
-            }
-            NormFact::Assign(var, expr) => {
-                let expr_type = self.typecheck_expr(ctx, expr, false)?;
-                if let Some(_existing) = self
-                    .local_types
-                    .get_mut(&ctx)
-                    .unwrap()
-                    .insert(*var, expr_type.output.clone())
-                {
-                    return Err(TypeError::AlreadyDefined(*var));
-                }
-            }
-            NormFact::AssignVar(lhs, rhs) => {
-                let rhs_type = self.lookup(ctx, *rhs)?;
-                if let Some(_existing) = self
-                    .local_types
-                    .get_mut(&ctx)
-                    .unwrap()
-                    .insert(*lhs, rhs_type.clone())
-                {
-                    return Err(TypeError::AlreadyDefined(*lhs));
-                }
-            }
-            NormFact::AssignLit(var, lit) => {
-                let lit_type = self.infer_literal(lit);
-                if let Some(existing) = self
-                    .local_types
-                    .get_mut(&ctx)
-                    .unwrap()
-                    .insert(*var, lit_type.clone())
-                {
-                    if lit_type.name() != existing.name() {
-                        return Err(TypeError::TypeMismatch(lit_type, existing));
-                    }
-                }
-            }
-            NormFact::ConstrainEq(var1, var2) => {
-                let l1 = self.lookup(ctx, *var1);
-                let l2 = self.lookup(ctx, *var2);
-                if let Ok(v1type) = l1 {
-                    if let Ok(v2type) = l2 {
-                        if v1type.name() != v2type.name() {
-                            return Err(TypeError::TypeMismatch(v1type, v2type));
-                        }
-                    } else {
-                        self.local_types
-                            .get_mut(&ctx)
-                            .unwrap()
-                            .insert(*var2, v1type);
-                    }
-                } else if let Ok(v2type) = l2 {
-                    self.local_types
-                        .get_mut(&ctx)
-                        .unwrap()
-                        .insert(*var1, v2type);
-                } else {
-                    return Err(TypeError::Unbound(*var1));
-                }
-            }
         }
         Ok(())
     }
