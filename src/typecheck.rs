@@ -84,13 +84,13 @@ impl UnresolvedCoreRule {
                 let args: Vec<_> = args
                     .iter()
                     .map(|arg| match arg {
-                        AtomTerm::Var(v) => v.clone(),
+                        AtomTerm::Var(v) => *v,
                         AtomTerm::Literal(lit) => {
                             let symbol = format!("lit{}", lit).into();
                             facts.push(NormFact::AssignLit(symbol, lit.clone()));
                             symbol
                         }
-                        AtomTerm::Global(v) => v.clone(),
+                        AtomTerm::Global(v) => *v,
                     })
                     .collect();
 
@@ -102,9 +102,9 @@ impl UnresolvedCoreRule {
                 } else {
                     let (out, args) = args.split_last().unwrap();
                     if egraph.functions.contains_key(head) {
-                        NormFact::Compute(out.clone(), NormExpr::Call(head.clone(), args.to_vec()))
+                        NormFact::Compute(*out, NormExpr::Call(*head, args.to_vec()))
                     } else {
-                        NormFact::Assign(out.clone(), NormExpr::Call(head.clone(), args.to_vec()))
+                        NormFact::Assign(*out, NormExpr::Call(*head, args.to_vec()))
                     }
                 });
             }
@@ -139,29 +139,29 @@ pub(crate) fn facts_to_query(body: &Vec<NormFact>, typeinfo: &TypeInfo) -> Query
                     .cloned()
                     .map(|s| to_atom_term(s, typeinfo))
                     .collect();
-                let head = head.clone();
+                let head = *head;
                 atoms.push(Atom { head, args });
             }
             NormFact::AssignVar(lhs, rhs) => atoms.push(Atom {
                 head: "value-eq".into(),
                 args: vec![
-                    to_atom_term(lhs.clone(), typeinfo),
-                    to_atom_term(rhs.clone(), typeinfo),
+                    to_atom_term(*lhs, typeinfo),
+                    to_atom_term(*rhs, typeinfo),
                     AtomTerm::Literal(Literal::Unit),
                 ],
             }),
             NormFact::ConstrainEq(lhs, rhs) => atoms.push(Atom {
                 head: "value-eq".into(),
                 args: vec![
-                    to_atom_term(lhs.clone(), typeinfo),
-                    to_atom_term(rhs.clone(), typeinfo),
+                    to_atom_term(*lhs, typeinfo),
+                    to_atom_term(*rhs, typeinfo),
                     AtomTerm::Literal(Literal::Unit),
                 ],
             }),
             NormFact::AssignLit(symbol, lit) => atoms.push(Atom {
                 head: "value-eq".into(),
                 args: vec![
-                    to_atom_term(symbol.clone(), typeinfo),
+                    to_atom_term(*symbol, typeinfo),
                     AtomTerm::Literal(lit.clone()),
                     AtomTerm::Literal(Literal::Unit),
                 ],
