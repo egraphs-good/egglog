@@ -52,7 +52,7 @@ impl PrimitiveLike for NotEqualPrimitive {
         AllEqualTypeConstraint::new(self.name())
             .with_exact_length(3)
             .with_output_sort(self.unit.clone())
-            .to_box()
+            .into_box()
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {

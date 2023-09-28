@@ -104,10 +104,10 @@ impl PrimitiveLike for CountMatches {
 
     fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
         AllEqualTypeConstraint::new(self.name())
-            .with_sort(self.string.clone())
+            .with_all_arguments_sort(self.string.clone())
             .with_exact_length(3)
             .with_output_sort(self.int.clone())
-            .to_box()
+            .into_box()
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {

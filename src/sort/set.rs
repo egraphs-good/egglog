@@ -195,9 +195,9 @@ impl PrimitiveLike for SetOf {
 
     fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
         AllEqualTypeConstraint::new(self.name())
-            .with_sort(self.set.element())
+            .with_all_arguments_sort(self.set.element())
             .with_output_sort(self.set.clone())
-            .to_box()
+            .into_box()
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
@@ -217,7 +217,7 @@ impl PrimitiveLike for Ctor {
     }
 
     fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(self.name(), vec![self.set.clone()]).to_box()
+        SimpleTypeConstraint::new(self.name(), vec![self.set.clone()]).into_box()
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
@@ -241,7 +241,7 @@ impl PrimitiveLike for Insert {
             self.name(),
             vec![self.set.clone(), self.set.element(), self.set.clone()],
         )
-        .to_box()
+        .into_box()
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
@@ -267,7 +267,7 @@ impl PrimitiveLike for NotContains {
             self.name(),
             vec![self.set.clone(), self.set.element(), self.unit.clone()],
         )
-        .to_box()
+        .into_box()
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
@@ -296,7 +296,7 @@ impl PrimitiveLike for Contains {
             self.name(),
             vec![self.set.clone(), self.set.element(), self.unit.clone()],
         )
-        .to_box()
+        .into_box()
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
@@ -324,7 +324,7 @@ impl PrimitiveLike for Union {
             self.name(),
             vec![self.set.clone(), self.set.clone(), self.set.clone()],
         )
-        .to_box()
+        .into_box()
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
@@ -350,7 +350,7 @@ impl PrimitiveLike for Intersect {
             self.name(),
             vec![self.set.clone(), self.set.clone(), self.set.clone()],
         )
-        .to_box()
+        .into_box()
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
@@ -377,7 +377,7 @@ impl PrimitiveLike for Remove {
             self.name(),
             vec![self.set.clone(), self.set.element(), self.set.clone()],
         )
-        .to_box()
+        .into_box()
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
@@ -402,7 +402,7 @@ impl PrimitiveLike for Diff {
             self.name(),
             vec![self.set.clone(), self.set.clone(), self.set.clone()],
         )
-        .to_box()
+        .into_box()
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {

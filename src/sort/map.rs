@@ -191,7 +191,7 @@ impl PrimitiveLike for TermOrderingMin {
     fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
         AllEqualTypeConstraint::new(self.name())
             .with_exact_length(3)
-            .to_box()
+            .into_box()
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
@@ -214,7 +214,7 @@ impl PrimitiveLike for TermOrderingMax {
     fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
         AllEqualTypeConstraint::new(self.name())
             .with_exact_length(3)
-            .to_box()
+            .into_box()
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
@@ -233,7 +233,7 @@ impl PrimitiveLike for Ctor {
     }
 
     fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(self.name(), vec![self.map.clone()]).to_box()
+        SimpleTypeConstraint::new(self.name(), vec![self.map.clone()]).into_box()
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
@@ -262,7 +262,7 @@ impl PrimitiveLike for Insert {
                 self.map.clone(),
             ],
         )
-        .to_box()
+        .into_box()
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
@@ -287,7 +287,7 @@ impl PrimitiveLike for Get {
             self.name(),
             vec![self.map.clone(), self.map.key(), self.map.value()],
         )
-        .to_box()
+        .into_box()
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
@@ -312,7 +312,7 @@ impl PrimitiveLike for NotContains {
             self.name(),
             vec![self.map.clone(), self.map.key(), self.unit.clone()],
         )
-        .to_box()
+        .into_box()
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
@@ -341,7 +341,7 @@ impl PrimitiveLike for Contains {
             self.name(),
             vec![self.map.clone(), self.map.key(), self.unit.clone()],
         )
-        .to_box()
+        .into_box()
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
@@ -369,7 +369,7 @@ impl PrimitiveLike for Remove {
             self.name(),
             vec![self.map.clone(), self.map.key(), self.map.clone()],
         )
-        .to_box()
+        .into_box()
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {

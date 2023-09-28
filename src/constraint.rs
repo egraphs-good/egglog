@@ -321,7 +321,7 @@ impl SimpleTypeConstraint {
         SimpleTypeConstraint { name, sorts }
     }
 
-    pub(crate) fn to_box(self) -> Box<dyn TypeConstraint> {
+    pub(crate) fn into_box(self) -> Box<dyn TypeConstraint> {
         Box::new(self)
     }
 }
@@ -368,14 +368,14 @@ impl AllEqualTypeConstraint {
         }
     }
 
-    pub fn to_box(self) -> Box<dyn TypeConstraint> {
+    pub fn into_box(self) -> Box<dyn TypeConstraint> {
         Box::new(self)
     }
 
     /// Requires all arguments to have the given sort.
     /// If `with_output_sort` is not specified, this requirement
     /// also applies to the output argument.
-    pub fn with_sort(mut self, sort: ArcSort) -> Self {
+    pub fn with_all_arguments_sort(mut self, sort: ArcSort) -> Self {
         self.sort = Some(sort);
         self
     }

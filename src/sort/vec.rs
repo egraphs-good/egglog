@@ -207,9 +207,9 @@ impl PrimitiveLike for VecOf {
 
     fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
         AllEqualTypeConstraint::new(self.name())
-            .with_sort(self.vec.element())
+            .with_all_arguments_sort(self.vec.element())
             .with_output_sort(self.vec.clone())
-            .to_box()
+            .into_box()
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
@@ -230,8 +230,8 @@ impl PrimitiveLike for Append {
 
     fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
         AllEqualTypeConstraint::new(self.name())
-            .with_sort(self.vec.clone())
-            .to_box()
+            .with_all_arguments_sort(self.vec.clone())
+            .into_box()
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
@@ -251,7 +251,7 @@ impl PrimitiveLike for Ctor {
     }
 
     fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(self.name(), vec![self.vec.clone()]).to_box()
+        SimpleTypeConstraint::new(self.name(), vec![self.vec.clone()]).into_box()
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
@@ -275,7 +275,7 @@ impl PrimitiveLike for Push {
             self.name(),
             vec![self.vec.clone(), self.vec.element(), self.vec.clone()],
         )
-        .to_box()
+        .into_box()
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
@@ -296,7 +296,7 @@ impl PrimitiveLike for Pop {
     }
 
     fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(self.name(), vec![self.vec.clone(), self.vec.clone()]).to_box()
+        SimpleTypeConstraint::new(self.name(), vec![self.vec.clone(), self.vec.clone()]).into_box()
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
@@ -322,7 +322,7 @@ impl PrimitiveLike for NotContains {
             self.name(),
             vec![self.vec.clone(), self.vec.element(), self.unit.clone()],
         )
-        .to_box()
+        .into_box()
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
@@ -351,7 +351,7 @@ impl PrimitiveLike for Contains {
             self.name(),
             vec![self.vec.clone(), self.vec.element(), self.unit.clone()],
         )
-        .to_box()
+        .into_box()
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
@@ -376,7 +376,7 @@ impl PrimitiveLike for Length {
     }
 
     fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(self.name(), vec![self.vec.clone(), self.i64.clone()]).to_box()
+        SimpleTypeConstraint::new(self.name(), vec![self.vec.clone(), self.i64.clone()]).into_box()
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
@@ -401,7 +401,7 @@ impl PrimitiveLike for Get {
             self.name(),
             vec![self.vec.clone(), self.i64.clone(), self.vec.element()],
         )
-        .to_box()
+        .into_box()
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {

@@ -292,7 +292,7 @@ impl PrimitiveLike for SimplePrimitive {
             .chain(once(&self.output as &ArcSort))
             .cloned()
             .collect();
-        SimpleTypeConstraint::new(self.name(), sorts).to_box()
+        SimpleTypeConstraint::new(self.name(), sorts).into_box()
     }
     fn apply(&self, values: &[Value]) -> Option<Value> {
         (self.f)(values)
