@@ -202,14 +202,6 @@ where
         let mut assignment = Assignment(HashMap::default());
         let mut changed = true;
         while changed {
-            // println!(
-            //     "{:?}",
-            //     assignment
-            //         .0
-            //         .iter()
-            //         .map(|(k, v)| (k, key(v)))
-            //         .collect::<Vec<_>>()
-            // );
             changed = false;
             for constraint in self.constraints.iter() {
                 changed |= constraint.update(&mut assignment, key)?;
@@ -261,7 +253,7 @@ impl Atom<Symbol> {
         // primitive atom constraints
         if let Some(primitives) = type_info.primitives.get(&self.head) {
             for p in primitives {
-                let constraints = p.get_constraints(&self.args);
+                let constraints = p.get_type_constraints().get(&self.args);
                 xor_constraints.push(constraints);
             }
         }
@@ -314,86 +306,137 @@ fn get_literal_and_global_constraints<'a>(
     })
 }
 
+pub trait TypeConstraint {
+    fn get(&self, arguments: &[AtomTerm]) -> Vec<Constraint<AtomTerm, ArcSort>>;
+}
+
 /// Construct a set of `Assign` constraints that fully constrain the type of arguments
-pub fn simple_constraints(
+pub struct SimpleTypeConstraint {
     name: Symbol,
-    arguments: &[AtomTerm],
-    sorts: &[ArcSort],
-) -> Vec<Constraint<AtomTerm, ArcSort>> {
-    if arguments.len() != sorts.len() {
-        vec![Constraint::Impossible(
-            ImpossibleConstraint::ArityMismatch {
-                atom: Atom {
-                    head: name,
-                    args: arguments.to_vec(),
-                },
-                expected: sorts.len(),
-                actual: arguments.len(),
-            },
-        )]
-    } else {
-        arguments
-            .iter()
-            .cloned()
-            .zip(sorts.iter().cloned())
-            .map(|(arg, sort)| Constraint::Assign(arg, sort))
-            .collect()
+    sorts: Vec<ArcSort>,
+}
+
+impl SimpleTypeConstraint {
+    pub fn new(name: Symbol, sorts: Vec<ArcSort>) -> SimpleTypeConstraint {
+        SimpleTypeConstraint { name, sorts }
+    }
+
+    pub(crate) fn to_box(self) -> Box<dyn TypeConstraint> {
+        Box::new(self)
     }
 }
 
-/// Construct a set of `Eq` constraints for the given arguments.
-/// If a sort is given, all arguments should also be equivalent to that sort.
-/// If a length is given, the arguments should have the exact length.
-/// If an output is given, the last element of arguments should have this output.
-/// useful for polymorphic and var-arg functions.
-/// Requires arguments.len() > 0
-pub fn all_equal_constraints(
-    name: Symbol,
-    mut arguments: &[AtomTerm],
-    sort: Option<ArcSort>,
-    exact_length: Option<usize>,
-    output: Option<ArcSort>,
-) -> Vec<Constraint<AtomTerm, ArcSort>> {
-    if arguments.is_empty() {
-        panic!("all arguments should have length > 0")
-    }
-
-    match exact_length {
-        Some(exact_length) if exact_length != arguments.len() => {
-            return vec![Constraint::Impossible(
+impl TypeConstraint for SimpleTypeConstraint {
+    fn get(&self, arguments: &[AtomTerm]) -> Vec<Constraint<AtomTerm, ArcSort>> {
+        if arguments.len() != self.sorts.len() {
+            vec![Constraint::Impossible(
                 ImpossibleConstraint::ArityMismatch {
                     atom: Atom {
-                        head: name,
+                        head: self.name,
                         args: arguments.to_vec(),
                     },
-                    expected: exact_length,
+                    expected: self.sorts.len(),
                     actual: arguments.len(),
                 },
             )]
-        }
-        _ => (),
-    }
-
-    let mut constraints = vec![];
-    if let Some(output) = output {
-        let (out, inputs) = arguments.split_last().unwrap();
-        constraints.push(Constraint::Assign(out.clone(), output));
-        arguments = inputs;
-    }
-
-    if let Some(sort) = sort {
-        constraints.extend(
+        } else {
             arguments
                 .iter()
                 .cloned()
-                .map(|arg| Constraint::Assign(arg, sort.clone())),
-        )
-    } else if let Some((first, rest)) = arguments.split_first() {
-        constraints.extend(
-            rest.iter()
-                .cloned()
-                .map(|arg| Constraint::Eq(arg, first.clone())),
-        );
+                .zip(self.sorts.iter().cloned())
+                .map(|(arg, sort)| Constraint::Assign(arg, sort))
+                .collect()
+        }
     }
-    constraints
+}
+
+/// This constraint requires all types to be equivalent to each other
+pub struct AllEqualTypeConstraint {
+    name: Symbol,
+    sort: Option<ArcSort>,
+    exact_length: Option<usize>,
+    output: Option<ArcSort>,
+}
+
+impl AllEqualTypeConstraint {
+    pub fn new(name: Symbol) -> AllEqualTypeConstraint {
+        AllEqualTypeConstraint {
+            name,
+            sort: None,
+            exact_length: None,
+            output: None,
+        }
+    }
+
+    pub fn to_box(self) -> Box<dyn TypeConstraint> {
+        Box::new(self)
+    }
+
+    /// Requires all arguments to have the given sort.
+    /// If `with_output_sort` is not specified, this requirement
+    /// also applies to the output argument.
+    pub fn with_sort(mut self, sort: ArcSort) -> Self {
+        self.sort = Some(sort);
+        self
+    }
+
+    /// Requires the length of arguments to be `exact_length`.
+    /// Note this includes both input arguments and output argument.
+    pub fn with_exact_length(mut self, exact_length: usize) -> Self {
+        self.exact_length = Some(exact_length);
+        self
+    }
+
+    /// Requires the output argument to have the given sort.
+    pub fn with_output_sort(mut self, output_sort: ArcSort) -> Self {
+        self.output = Some(output_sort);
+        self
+    }
+}
+
+impl TypeConstraint for AllEqualTypeConstraint {
+    fn get(&self, mut arguments: &[AtomTerm]) -> Vec<Constraint<AtomTerm, ArcSort>> {
+        if arguments.is_empty() {
+            panic!("all arguments should have length > 0")
+        }
+
+        match self.exact_length {
+            Some(exact_length) if exact_length != arguments.len() => {
+                return vec![Constraint::Impossible(
+                    ImpossibleConstraint::ArityMismatch {
+                        atom: Atom {
+                            head: self.name,
+                            args: arguments.to_vec(),
+                        },
+                        expected: exact_length,
+                        actual: arguments.len(),
+                    },
+                )]
+            }
+            _ => (),
+        }
+
+        let mut constraints = vec![];
+        if let Some(output) = self.output.clone() {
+            let (out, inputs) = arguments.split_last().unwrap();
+            constraints.push(Constraint::Assign(out.clone(), output));
+            arguments = inputs;
+        }
+
+        if let Some(sort) = self.sort.clone() {
+            constraints.extend(
+                arguments
+                    .iter()
+                    .cloned()
+                    .map(|arg| Constraint::Assign(arg, sort.clone())),
+            )
+        } else if let Some((first, rest)) = arguments.split_first() {
+            constraints.extend(
+                rest.iter()
+                    .cloned()
+                    .map(|arg| Constraint::Eq(arg, first.clone())),
+            );
+        }
+        constraints
+    }
 }

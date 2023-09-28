@@ -1,7 +1,5 @@
 use super::*;
-use crate::{
-    ast::Literal, constraint::ImpossibleConstraint, typecheck::Atom, ArcSort, PrimitiveLike,
-};
+use crate::{ast::Literal, constraint::AllEqualTypeConstraint, ArcSort, PrimitiveLike};
 
 #[derive(Debug)]
 pub struct UnitSort {
@@ -50,28 +48,11 @@ impl PrimitiveLike for NotEqualPrimitive {
         "!=".into()
     }
 
-    fn get_constraints(&self, arguments: &[AtomTerm]) -> Vec<Constraint<AtomTerm, ArcSort>> {
-        match arguments {
-            [a, b, unit] => {
-                let constraints = vec![
-                    Constraint::Eq(a.clone(), b.clone()),
-                    Constraint::Assign(unit.clone(), self.unit.clone()),
-                ];
-                constraints
-            }
-            _ => {
-                vec![Constraint::Impossible(
-                    ImpossibleConstraint::ArityMismatch {
-                        atom: Atom {
-                            head: self.name(),
-                            args: arguments.to_vec(),
-                        },
-                        expected: 3,
-                        actual: arguments.len(),
-                    },
-                )]
-            }
-        }
+    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+        AllEqualTypeConstraint::new(self.name())
+            .with_exact_length(3)
+            .with_output_sort(self.unit.clone())
+            .to_box()
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {

@@ -1,6 +1,6 @@
 use std::sync::Mutex;
 
-use crate::constraint::all_equal_constraints;
+use crate::constraint::AllEqualTypeConstraint;
 
 use super::*;
 
@@ -205,14 +205,11 @@ impl PrimitiveLike for VecOf {
         self.name
     }
 
-    fn get_constraints(&self, arguments: &[AtomTerm]) -> Vec<Constraint<AtomTerm, ArcSort>> {
-        all_equal_constraints(
-            self.name(),
-            arguments,
-            Some(self.vec.element()),
-            None,
-            Some(self.vec.clone()),
-        )
+    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+        AllEqualTypeConstraint::new(self.name())
+            .with_sort(self.vec.element())
+            .with_output_sort(self.vec.clone())
+            .to_box()
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
@@ -231,8 +228,10 @@ impl PrimitiveLike for Append {
         self.name
     }
 
-    fn get_constraints(&self, arguments: &[AtomTerm]) -> Vec<Constraint<AtomTerm, ArcSort>> {
-        all_equal_constraints(self.name(), arguments, Some(self.vec.clone()), None, None)
+    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+        AllEqualTypeConstraint::new(self.name())
+            .with_sort(self.vec.clone())
+            .to_box()
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
@@ -251,8 +250,8 @@ impl PrimitiveLike for Ctor {
         self.name
     }
 
-    fn get_constraints(&self, arguments: &[AtomTerm]) -> Vec<Constraint<AtomTerm, ArcSort>> {
-        simple_constraints(self.name(), arguments, &[self.vec.clone()])
+    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(self.name(), vec![self.vec.clone()]).to_box()
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
@@ -271,12 +270,12 @@ impl PrimitiveLike for Push {
         self.name
     }
 
-    fn get_constraints(&self, arguments: &[AtomTerm]) -> Vec<Constraint<AtomTerm, ArcSort>> {
-        simple_constraints(
+    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
             self.name(),
-            arguments,
-            &[self.vec.clone(), self.vec.element(), self.vec.clone()],
+            vec![self.vec.clone(), self.vec.element(), self.vec.clone()],
         )
+        .to_box()
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
@@ -296,12 +295,8 @@ impl PrimitiveLike for Pop {
         self.name
     }
 
-    fn get_constraints(&self, arguments: &[AtomTerm]) -> Vec<Constraint<AtomTerm, ArcSort>> {
-        simple_constraints(
-            self.name(),
-            arguments,
-            &[self.vec.clone(), self.vec.clone()],
-        )
+    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(self.name(), vec![self.vec.clone(), self.vec.clone()]).to_box()
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
@@ -322,12 +317,12 @@ impl PrimitiveLike for NotContains {
         self.name
     }
 
-    fn get_constraints(&self, arguments: &[AtomTerm]) -> Vec<Constraint<AtomTerm, ArcSort>> {
-        simple_constraints(
+    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
             self.name(),
-            arguments,
-            &[self.vec.clone(), self.vec.element(), self.unit.clone()],
+            vec![self.vec.clone(), self.vec.element(), self.unit.clone()],
         )
+        .to_box()
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
@@ -351,12 +346,12 @@ impl PrimitiveLike for Contains {
         self.name
     }
 
-    fn get_constraints(&self, arguments: &[AtomTerm]) -> Vec<Constraint<AtomTerm, ArcSort>> {
-        simple_constraints(
+    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
             self.name(),
-            arguments,
-            &[self.vec.clone(), self.vec.element(), self.unit.clone()],
+            vec![self.vec.clone(), self.vec.element(), self.unit.clone()],
         )
+        .to_box()
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
@@ -380,12 +375,8 @@ impl PrimitiveLike for Length {
         self.name
     }
 
-    fn get_constraints(&self, arguments: &[AtomTerm]) -> Vec<Constraint<AtomTerm, ArcSort>> {
-        simple_constraints(
-            self.name(),
-            arguments,
-            &[self.vec.clone(), self.i64.clone()],
-        )
+    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(self.name(), vec![self.vec.clone(), self.i64.clone()]).to_box()
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {
@@ -405,12 +396,12 @@ impl PrimitiveLike for Get {
         self.name
     }
 
-    fn get_constraints(&self, arguments: &[AtomTerm]) -> Vec<Constraint<AtomTerm, ArcSort>> {
-        simple_constraints(
+    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
             self.name(),
-            arguments,
-            &[self.vec.clone(), self.i64.clone(), self.vec.element()],
+            vec![self.vec.clone(), self.i64.clone(), self.vec.element()],
         )
+        .to_box()
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {

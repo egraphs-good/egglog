@@ -27,7 +27,7 @@ use symbolic_expressions::Sexp;
 use ast::*;
 pub use typechecking::{TypeInfo, UNIT_SYM};
 
-use constraint::{simple_constraints, Constraint};
+use constraint::{Constraint, SimpleTypeConstraint, TypeConstraint};
 use std::fmt::{Display, Formatter};
 use std::fs::File;
 use std::hash::Hash;
@@ -56,8 +56,7 @@ pub type Subst = IndexMap<Symbol, Value>;
 
 pub trait PrimitiveLike {
     fn name(&self) -> Symbol;
-    // TODO: use an opaque type instead of AtomTerm as arguments
-    fn get_constraints(&self, arguments: &[AtomTerm]) -> Vec<Constraint<AtomTerm, ArcSort>>;
+    fn get_type_constraints(&self) -> Box<dyn TypeConstraint>;
     fn apply(&self, values: &[Value]) -> Option<Value>;
 }
 
@@ -229,7 +228,7 @@ impl Primitive {
         for (lit, ty) in lits.iter().zip(tys.iter()) {
             constraints.push(Constraint::Assign(lit.clone(), ty.clone()))
         }
-        constraints.extend(self.get_constraints(&lits).into_iter());
+        constraints.extend(self.get_type_constraints().get(&lits).into_iter());
         let problem = Problem { constraints };
         let output_type = AtomTerm::Literal(Literal::Int(tys.len() as i64));
         let assignment = problem.solve(once(&output_type), |sort| sort.name()).ok()?;
@@ -286,14 +285,14 @@ impl PrimitiveLike for SimplePrimitive {
         self.name
     }
 
-    fn get_constraints(&self, arguments: &[AtomTerm]) -> Vec<Constraint<AtomTerm, ArcSort>> {
+    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
         let sorts: Vec<_> = self
             .input
             .iter()
             .chain(once(&self.output as &ArcSort))
             .cloned()
             .collect();
-        simple_constraints(self.name(), arguments, &sorts)
+        SimpleTypeConstraint::new(self.name(), sorts).to_box()
     }
     fn apply(&self, values: &[Value]) -> Option<Value> {
         (self.f)(values)
@@ -917,10 +916,10 @@ impl EGraph {
         let core_rule = compiler
             .compile_norm_rule(ctx, &rule)
             .map_err(Error::TypeErrors)?;
-        let (query0, action0) = (core_rule.body, core_rule.head);
+        let (query, action) = (core_rule.body, core_rule.head);
 
         // TODO: We should refactor compile_actions later as well
-        let action0: Vec<Action> = action0.0.iter().map(|a| a.to_action()).collect();
+        let action: Vec<Action> = action.0.iter().map(|a| a.to_action()).collect();
 
         // types being an IndexMap is very important as it assigns each variable a stable index
         let types: IndexMap<_, _> = self
@@ -931,9 +930,9 @@ impl EGraph {
             .iter()
             .map(|(v, s)| (*v, s.clone()))
             .collect();
-        let query = self.compile_gj_query(query0, &types);
+        let query = self.compile_gj_query(query, &types);
         let program = self
-            .compile_actions(&types, &action0)
+            .compile_actions(&types, &action)
             .map_err(Error::TypeErrors)?;
         let compiled_rule = Rule {
             query,

@@ -1,4 +1,4 @@
-use crate::{ast::Literal, constraint::all_equal_constraints};
+use crate::{ast::Literal, constraint::AllEqualTypeConstraint};
 
 use super::*;
 
@@ -102,14 +102,12 @@ impl PrimitiveLike for CountMatches {
         self.name
     }
 
-    fn get_constraints(&self, arguments: &[AtomTerm]) -> Vec<Constraint<AtomTerm, ArcSort>> {
-        all_equal_constraints(
-            self.name(),
-            arguments,
-            Some(self.string.clone()),
-            Some(3),
-            Some(self.int.clone()),
-        )
+    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+        AllEqualTypeConstraint::new(self.name())
+            .with_sort(self.string.clone())
+            .with_exact_length(3)
+            .with_output_sort(self.int.clone())
+            .to_box()
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {

@@ -1,6 +1,6 @@
 use std::ops::AddAssign;
 
-use crate::{constraint::all_equal_constraints, *};
+use crate::{constraint::AllEqualTypeConstraint, *};
 use hashbrown::HashMap;
 use typechecking::TypeError;
 
@@ -323,14 +323,11 @@ impl PrimitiveLike for ValueEq {
         "value-eq".into()
     }
 
-    fn get_constraints(&self, arguments: &[AtomTerm]) -> Vec<Constraint<AtomTerm, ArcSort>> {
-        all_equal_constraints(
-            self.name(),
-            arguments,
-            None,
-            Some(3),
-            Some(self.unit.clone()),
-        )
+    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+        AllEqualTypeConstraint::new(self.name())
+            .with_exact_length(3)
+            .with_output_sort(self.unit.clone())
+            .to_box()
     }
 
     fn apply(&self, values: &[Value]) -> Option<Value> {

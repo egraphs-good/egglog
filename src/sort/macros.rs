@@ -27,7 +27,7 @@ macro_rules! add_primitives {
         let type_info: &mut _ = $type_info;
         #[allow(unused_imports, non_snake_case)]
         {
-            use $crate::{*, sort::*};
+            use $crate::{*, sort::*, constraint::*};
 
             struct MyPrim {$(
                 $param: Arc<<$param_t as FromSort>::Sort>,
@@ -40,12 +40,11 @@ macro_rules! add_primitives {
                     $name.into()
                 }
 
-                fn get_constraints(
+                fn get_type_constraints(
                     &self,
-                    arguments: &[AtomTerm],
-                ) -> Vec<Constraint<AtomTerm, ArcSort>> {
-                    let sorts = [$(self.$param.clone(),)* self.__out.clone() as ArcSort];
-                    simple_constraints(self.name(), arguments, &sorts)
+                ) -> Box<dyn TypeConstraint> {
+                    let sorts = vec![$(self.$param.clone(),)* self.__out.clone() as ArcSort];
+                    SimpleTypeConstraint::new(self.name(), sorts).to_box()
                 }
 
                 fn apply(&self, values: &[Value]) -> Option<Value> {
