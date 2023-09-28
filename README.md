@@ -150,6 +150,8 @@ If you define a `:merge` expression, you can update specific values in the funct
 (extract (KeepMax 1)) ; this is 2
 ```
 
+Note that the `:merge` expression must be monotonic, meaning that if you merge any number of values, the ordering in which the merges are applied should not affect the final result.
+
 
 ### `declare` command
 
