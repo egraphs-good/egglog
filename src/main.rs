@@ -164,7 +164,7 @@ fn main() {
             }
         }
         // if we are splitting primitive outputs, add `-split` to the end of the file name
-        let serialiaze_filename = if args.serialize_split_primitive_outputs {
+        let serialize_filename = if args.serialize_split_primitive_outputs {
             input.with_file_name(format!(
                 "{}-split",
                 input.file_stem().unwrap().to_str().unwrap()
@@ -173,7 +173,7 @@ fn main() {
             input.clone()
         };
         if args.to_json {
-            let json_path = serialiaze_filename.with_extension("json");
+            let json_path = serialize_filename.with_extension("json");
             let config = SerializeConfig {
                 split_primitive_outputs: args.serialize_split_primitive_outputs,
                 ..SerializeConfig::default()
@@ -185,11 +185,11 @@ fn main() {
         if args.to_dot || args.to_svg {
             let serialized = egraph.serialize_for_graphviz(args.serialize_split_primitive_outputs);
             if args.to_dot {
-                let dot_path = serialiaze_filename.with_extension("dot");
+                let dot_path = serialize_filename.with_extension("dot");
                 serialized.to_dot_file(dot_path).unwrap()
             }
             if args.to_svg {
-                let svg_path = serialiaze_filename.with_extension("svg");
+                let svg_path = serialize_filename.with_extension("svg");
                 serialized.to_svg_file(svg_path).unwrap()
             }
         }
