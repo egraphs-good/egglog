@@ -150,7 +150,7 @@ If you define a `:merge` expression, you can update specific values in the funct
 (extract (KeepMax 1)) ; this is 2
 ```
 
-Note that the `:merge` expression must be monotonic, meaning that if you merge any number of values, the ordering in which the merges are applied should not affect the final result.
+Note that the `:merge` expression must be monotonic, meaning that if you merge any number of values, the ordering in which the merges are applied should not affect the final result, and similarily if you apply the same merge multiple times it should be consistant. If the merge expression is not monotonic, the behavior is undefined, it might be applied more than once during an application.
 
 
 ### `declare` command
