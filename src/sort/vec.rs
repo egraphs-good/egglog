@@ -164,14 +164,22 @@ impl Sort for VecSort {
         termdag: &mut TermDag,
     ) -> Option<(Cost, Expr)> {
         let vec = ValueVec::load(self, &value);
-        let mut expr = Expr::call("vec-empty", []);
         let mut cost = 0usize;
-        for e in vec.iter().rev() {
-            let e = extractor.find_best(*e, termdag, &self.element)?;
-            cost = cost.saturating_add(e.0);
-            expr = Expr::call("vec-push", [expr, termdag.term_to_expr(&e.1)])
+
+        if vec.is_empty() {
+            Some((cost, Expr::call("vec-empty", [])))
+        } else {
+            let elems = vec
+                .into_iter()
+                .map(|e| {
+                    let e = extractor.find_best(e, termdag, &self.element)?;
+                    cost = cost.saturating_add(e.0);
+                    Some(termdag.term_to_expr(&e.1))
+                })
+                .collect::<Option<Vec<_>>>()?;
+
+            Some((cost, Expr::call("vec-of", elems)))
         }
-        Some((cost, expr))
     }
 }
 
