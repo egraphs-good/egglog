@@ -1355,8 +1355,15 @@ impl EGraph {
     }
 
     /// Serializes the egraph for export to graphviz.
-    pub fn serialize_for_graphviz(&self) -> egraph_serialize::EGraph {
-        let mut serialized = self.serialize(SerializeConfig::default());
+    pub fn serialize_for_graphviz(
+        &self,
+        split_primitive_outputs: bool,
+    ) -> egraph_serialize::EGraph {
+        let config = SerializeConfig {
+            split_primitive_outputs,
+            ..Default::default()
+        };
+        let mut serialized = self.serialize(config);
         serialized.inline_leaves();
         serialized
     }
