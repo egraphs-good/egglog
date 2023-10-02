@@ -410,13 +410,14 @@ impl EGraph {
                 let recent_run_report = self.recent_run_report.clone();
                 let overall_run_report = self.overall_run_report.clone();
                 let messages = self.msgs.clone();
+
                 *self = e;
                 self.extract_report = extract_report.or(self.extract_report.clone());
                 // We union the run reports, meaning
                 // that statistics are shared across
                 // push/pop
                 self.recent_run_report = recent_run_report.or(self.recent_run_report.clone());
-                self.overall_run_report = self.overall_run_report.union(&overall_run_report);
+                self.overall_run_report = overall_run_report;
                 self.msgs.extend(messages);
                 Ok(())
             }
