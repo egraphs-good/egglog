@@ -381,7 +381,7 @@ pub enum Command {
     Calc(Vec<IdentSort>, Vec<Expr>),
     Extract {
         variants: usize,
-        fact: Fact,
+        expr: Expr,
     },
     // TODO: this could just become an empty query
     Check(Vec<Fact>),
@@ -428,8 +428,8 @@ impl ToSexp for Command {
             Command::RunSchedule(sched) => list!("run-schedule", sched),
             Command::PrintOverallStatistics => list!("print-stats"),
             Command::Calc(args, exprs) => list!("calc", list!(++ args), ++ exprs),
-            Command::Extract { variants, fact } => {
-                list!("query-extract", ":variants", variants, fact)
+            Command::Extract { variants, expr } => {
+                list!("query-extract", ":variants", variants, expr)
             }
             Command::Check(facts) => list!("check", ++ facts),
             Command::CheckProof => list!("check-proof"),

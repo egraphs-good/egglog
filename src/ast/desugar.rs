@@ -453,7 +453,7 @@ pub(crate) fn desugar_simplify(
         desugar_command(
             Command::Extract {
                 variants: 0,
-                fact: Fact::Fact(Expr::Var(lhs)),
+                expr: Expr::Var(lhs),
             },
             desugar,
             false,
@@ -592,16 +592,16 @@ pub(crate) fn desugar_command(
         Command::PrintOverallStatistics => {
             vec![NCommand::PrintOverallStatistics]
         }
-        Command::Extract { variants, fact } => {
+        Command::Extract { variants, expr } => {
             let fresh = desugar.get_fresh();
             let fresh_ruleset = desugar.get_fresh();
-            let desugaring = if let Fact::Fact(Expr::Var(v)) = fact {
+            let desugaring = if let Expr::Var(v) = expr {
                 format!("(extract {v} {variants})")
             } else {
                 format!(
-                    "(check {fact})
+                    "(check {expr})
                     (ruleset {fresh_ruleset})
-                    (rule ((= {fresh} {fact}))
+                    (rule ((= {fresh} {expr}))
                           ((extract {fresh} {variants}))
                           :ruleset {fresh_ruleset})
                     (run {fresh_ruleset} 1)"
