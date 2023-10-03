@@ -468,3 +468,35 @@ impl PrimitiveLike for Set {
         vec.store(&self.vec)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_vec_make_expr() {
+        let mut egraph = EGraph::default();
+        let outputs = egraph
+            .parse_and_run_program(
+                r#"
+            (sort IVec (Vec i64))
+            (let v0 (vec-empty))
+            (let v1 (vec-of 1 2 3 4))
+            (extract v0)
+            (extract v1)
+            "#,
+            )
+            .unwrap();
+
+        // Check extracted expr is parsed as an original expr
+        egraph
+            .parse_and_run_program(&format!(
+                r#"
+                (check (= v0 {}))
+                (check (= v1 {}))
+                "#,
+                outputs[0], outputs[1],
+            ))
+            .unwrap();
+    }
+}
