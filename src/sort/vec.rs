@@ -164,14 +164,22 @@ impl Sort for VecSort {
         termdag: &mut TermDag,
     ) -> Option<(Cost, Expr)> {
         let vec = ValueVec::load(self, &value);
-        let mut expr = Expr::call("vec-empty", []);
         let mut cost = 0usize;
-        for e in vec.iter().rev() {
-            let e = extractor.find_best(*e, termdag, &self.element)?;
-            cost = cost.saturating_add(e.0);
-            expr = Expr::call("vec-push", [expr, termdag.term_to_expr(&e.1)])
+
+        if vec.is_empty() {
+            Some((cost, Expr::call("vec-empty", [])))
+        } else {
+            let elems = vec
+                .into_iter()
+                .map(|e| {
+                    let e = extractor.find_best(e, termdag, &self.element)?;
+                    cost = cost.saturating_add(e.0);
+                    Some(termdag.term_to_expr(&e.1))
+                })
+                .collect::<Option<Vec<_>>>()?;
+
+            Some((cost, Expr::call("vec-of", elems)))
         }
-        Some((cost, expr))
     }
 }
 
@@ -458,5 +466,37 @@ impl PrimitiveLike for Set {
         let index = i64::load(&self.i64, &values[1]);
         vec[index as usize] = values[2];
         vec.store(&self.vec)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_vec_make_expr() {
+        let mut egraph = EGraph::default();
+        let outputs = egraph
+            .parse_and_run_program(
+                r#"
+            (sort IVec (Vec i64))
+            (let v0 (vec-empty))
+            (let v1 (vec-of 1 2 3 4))
+            (extract v0)
+            (extract v1)
+            "#,
+            )
+            .unwrap();
+
+        // Check extracted expr is parsed as an original expr
+        egraph
+            .parse_and_run_program(&format!(
+                r#"
+                (check (= v0 {}))
+                (check (= v1 {}))
+                "#,
+                outputs[0], outputs[1],
+            ))
+            .unwrap();
     }
 }
