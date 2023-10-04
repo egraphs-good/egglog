@@ -2,7 +2,7 @@ use ordered_float::NotNan;
 use std::collections::VecDeque;
 
 use crate::{
-    ast::{FunctionDecl, Id},
+    ast::{Expr, FunctionDecl, Id},
     function::{table::hash_values, ValueVec},
     util::HashMap,
     EGraph, Value,
@@ -52,7 +52,8 @@ impl EGraph {
     ///
     /// This is to achieve the following properties:
     /// - Equivalent primitive values will show up once in the e-graph.
-    /// - Functions which return primitive values will be added to the e-class of that value.
+    /// - Functions which return primitive values will be added to the e-class of that value (if `split_primitive_returns` is false, otherwise they will have a separate e-class)
+    ///   - If the value is equal to its default, it will not be added to the e-graph
     /// - Nodes will have consistant IDs throughout execution of e-graph (used for animating changes in the visualization)
     /// - Edges in the visualization will be well distributed (used for animating changes in the visualization)
     ///   (Note that this will be changed in `<https://github.com/egraphs-good/egglog/pull/158>` so that edges point to exact nodes instead of looking up the e-class)
@@ -118,12 +119,21 @@ impl EGraph {
                 None
             };
             let eclass = self
-                .serialize_value(&mut egraph, &mut node_ids, output, prim_node_id)
+                .serialize_value(
+                    &mut egraph,
+                    &mut node_ids,
+                    output,
+                    prim_node_id,
+                    decl.default.as_ref(),
+                )
                 .0;
             let children: Vec<_> = input
                 .iter()
                 // Filter out children which don't have an ID, meaning that we skipped emitting them due to size constraints
-                .filter_map(|v| self.serialize_value(&mut egraph, &mut node_ids, v, None).1)
+                .filter_map(|v| {
+                    self.serialize_value(&mut egraph, &mut node_ids, v, None, None)
+                        .1
+                })
                 .collect();
             egraph.nodes.insert(
                 node_id,
@@ -150,6 +160,7 @@ impl EGraph {
         // The node ID to use for a primitve value, if this is None, use the hash of the value and the sort name
         // Set iff `split_primitive_outputs` is set and this is an output of a function.
         prim_node_id: Option<String>,
+        default: Option<&Expr>,
     ) -> (egraph_serialize::ClassId, Option<egraph_serialize::NodeId>) {
         let sort = self.get_sort(value).unwrap();
         let (class_id, node_id): (egraph_serialize::ClassId, Option<egraph_serialize::NodeId>) =
@@ -169,18 +180,25 @@ impl EGraph {
                         (node_id_str.clone().into(), node_id_str.into())
                     };
                 // Add node for value
-                {
+                'add_node: {
+                    let expr = sort.make_expr(self, *value).1;
+                    // If this is the default value, don't add a node for it.
+                    if default.map_or(false, |d| d == &expr) {
+                        break 'add_node;
+                    }
                     let children: Vec<egraph_serialize::NodeId> = sort
                         .inner_values(value)
                         .into_iter()
-                        .filter_map(|(_, v)| self.serialize_value(egraph, node_ids, &v, None).1)
+                        .filter_map(|(_, v)| {
+                            self.serialize_value(egraph, node_ids, &v, None, None).1
+                        })
                         .collect();
                     // If this is a container sort, use the name, otherwise use the value
-                    let op: String = if sort.is_container_sort() {
+                    let op = if sort.is_container_sort() {
                         log::warn!("{} is a container sort", sort.name());
                         sort.name().to_string()
                     } else {
-                        sort.make_expr(self, *value).1.to_string()
+                        expr.to_string()
                     };
                     egraph.nodes.insert(
                         node_id.clone(),
