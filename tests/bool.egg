@@ -1,0 +1,23 @@
+
+(check (= (and true true) true))
+(check (= (and true false) false))
+(check (= (or true false) true))
+(check (!= (or true false) false))
+
+(check (= (bool-< 1 2) true))
+(check (= (bool-< 2 1) false))
+(check (= (bool-< 1 1) false))
+
+(check (= (bool-<= 1 2) true))
+(check (= (bool-<= 2 1) false))
+(check (= (bool-<= 1 1) true))
+
+(check (= (bool-> 1 2) false))
+(check (= (bool-> 2 1) true))
+(check (= (bool-> 1 1) false))
+
+(check (= (bool->= 1 2) false))
+(check (= (bool->= 2 1) true))
+(check (= (bool->= 1 1) true))
+
+
