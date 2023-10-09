@@ -8,6 +8,7 @@ pub enum Literal {
     Int(i64),
     F64(OrderedFloat<f64>),
     String(Symbol),
+    Bool(bool),
     Unit,
 }
 
@@ -48,6 +49,7 @@ impl Display for Literal {
                     write!(f, "{}", str)
                 }
             }
+            Literal::Bool(b) => Display::fmt(b, f),
             Literal::String(s) => write!(f, "\"{}\"", s),
             Literal::Unit => write!(f, "()"),
         }

@@ -591,6 +591,7 @@ impl EGraph {
             Literal::F64(f) => f.store(&self.type_info().get_sort()).unwrap(),
             Literal::String(s) => s.store(&self.type_info().get_sort()).unwrap(),
             Literal::Unit => ().store(&self.type_info().get_sort()).unwrap(),
+            Literal::Bool(b) => b.store(&self.type_info().get_sort()).unwrap(),
         }
     }
 

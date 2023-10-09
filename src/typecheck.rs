@@ -912,6 +912,7 @@ impl EGraph {
                     Literal::Int(i) => stack.push(Value::from(*i)),
                     Literal::F64(f) => stack.push(Value::from(*f)),
                     Literal::String(s) => stack.push(Value::from(*s)),
+                    Literal::Bool(b) => stack.push(Value::from(*b)),
                     Literal::Unit => stack.push(Value::unit()),
                 },
                 Instruction::Pop => {

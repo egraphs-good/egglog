@@ -144,7 +144,13 @@ Literal: Literal = {
     "(" ")" => Literal::Unit,
     <Num> => Literal::Int(<>),
     <F64> => Literal::F64(<>),
+    <Bool> => Literal::Bool(<>),
     <SymString> => Literal::String(<>),
+}
+
+Bool: bool = {
+    "true" => true,
+    "false" => false,
 }
 
 CallExpr: Expr = {
