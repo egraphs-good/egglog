@@ -1,3 +1,16 @@
+//! # egglog
+//! egglog is a language specialized for writing equality saturation
+//! applications. It is the successor to the rust library [egg](https://github.com/egraphs-good/egg).
+//! egglog is faster and more general than egg.
+//!
+//! # Documentation
+//! Documentation for the egglog language can be found
+//! here: [`Command`]
+//!
+//! # Tutorial
+//! [Here](https://www.youtube.com/watch?v=N2RDQGRBrSY) is the video tutorial on what egglog is and how to use it.
+//! We plan to have a text tutorial here soon, PRs welcome!
+//!
 pub mod ast;
 mod extract;
 mod function;
