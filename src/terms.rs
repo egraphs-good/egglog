@@ -99,7 +99,12 @@ impl<'a> TermState<'a> {
 
     fn canonicalize_rules(&mut self, fdecl: &NormFunctionDecl) -> Vec<Command> {
         let types = self.type_info().lookup_user_func(fdecl.name).unwrap();
-        let has_eq_type = types.output.is_eq_sort() || types.input.iter().any(|s| s.is_eq_sort());
+        let has_eq_type = types.output.is_eq_sort()
+            || types.output.is_eq_container_sort()
+            || types
+                .input
+                .iter()
+                .any(|s| s.is_eq_sort() || s.is_eq_container_sort());
 
         if !has_eq_type {
             return vec![];
@@ -114,10 +119,12 @@ impl<'a> TermState<'a> {
         };
         let child = |i| format!("c{i}_");
         let child_parent = |myself: &Self, i| {
+            // TODO weird hack but we get type
+            // error without it
             #[allow(clippy::iter_nth)]
             let child_t: ArcSort = types.input.iter().nth(i).unwrap().clone();
             myself
-                .wrap_parent_or_rebuild(child(i), child_t)
+                .get_canonical_expr_of(child(i), child_t)
                 .unwrap_or_else(|| child(i))
         };
         let children = format!(
@@ -137,7 +144,7 @@ impl<'a> TermState<'a> {
             )
         );
         let lhs_updated = self
-            .wrap_parent_or_rebuild("lhs".to_string(), types.output.clone())
+            .get_canonical_expr_of("lhs".to_string(), types.output.clone())
             .unwrap_or_else(|| "lhs".to_string());
 
         let mut res = vec![];
@@ -165,10 +172,10 @@ impl<'a> TermState<'a> {
                 child_parent(self, i)
             };
             let new_lhs = self.fresh_var();
-            let new_term_for_view = if types.output.is_eq_sort() {
+            let new_term_for_view = if types.is_datatype {
                 format!(
                     "(let {new_lhs} ({op_name} {children_updated}))
-                         {}",
+                     {}",
                     self.union(
                         types.output.name(),
                         &new_lhs.to_string(),
@@ -178,7 +185,8 @@ impl<'a> TermState<'a> {
             } else {
                 "".to_string()
             };
-            if var_type.is_eq_sort() {
+
+            if var_type.is_eq_sort() || var_type.is_eq_container_sort() {
                 let rule = format!(
                     "(rule ((= lhs ({view_name} {children}))
                             (!= {current} {current_updated}))
@@ -220,7 +228,7 @@ impl<'a> TermState<'a> {
             let vtype = self.type_info().lookup(self.current_ctx, var).unwrap();
             if !self.type_info().is_global(var) {
                 Expr::Var(var)
-            } else if let Some(wrapped) = self.wrap_parent_or_rebuild(var.to_string(), vtype) {
+            } else if let Some(wrapped) = self.get_canonical_expr_of(var.to_string(), vtype) {
                 self.desugar().expr_parser.parse(&wrapped).unwrap()
             } else {
                 Expr::Var(var)
@@ -228,8 +236,8 @@ impl<'a> TermState<'a> {
         })
     }
 
-    fn wrap_parent_or_rebuild(&self, var: String, sort: ArcSort) -> Option<String> {
-        if sort.is_container_sort() {
+    fn get_canonical_expr_of(&self, var: String, sort: ArcSort) -> Option<String> {
+        if sort.is_eq_container_sort() {
             Some(format!("(rebuild {})", var))
         } else {
             self.wrap_parent(var, sort)
@@ -271,7 +279,7 @@ impl<'a> TermState<'a> {
 
             if is_def {
                 var
-            } else if let Some(wrapped) = self.wrap_parent_or_rebuild(var.to_string(), vtype) {
+            } else if let Some(wrapped) = self.get_canonical_expr_of(var.to_string(), vtype) {
                 let fresh_var = self.fresh_var();
                 res.extend(
                     self.desugar()
@@ -341,7 +349,7 @@ impl<'a> TermState<'a> {
                 }
 
                 let lhs_looked_up = self
-                    .wrap_parent_or_rebuild(lhs.to_string(), lhs_type.clone())
+                    .get_canonical_expr_of(lhs.to_string(), lhs_type.clone())
                     .unwrap_or(lhs.to_string());
 
                 // add the new term to the view
