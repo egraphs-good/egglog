@@ -29,7 +29,7 @@
 (datatype Bool)
 (declare True Bool)
 (declare False Bool)
-(function or (Bool Bool) Bool)
+(function myor (Bool Bool) Bool)
 (function negate (Bool) Bool)
 
 ; clauses are assumed in the normal form (or a (or b (or c False)))
@@ -43,19 +43,19 @@
 
 ; canonicalize associtivity. "append" for clauses
 ; terminate with false
-(rewrite (or (or a  b) c) (or a (or b c)))
+(rewrite (myor (myor a  b) c) (myor a (myor b c)))
 ; commutativity
-(rewrite (or a (or b c)) (or b (or a c)))
+(rewrite (myor a (myor b c)) (myor b (myor a c)))
 
 ;absoprtion
-(rewrite (or a (or a b)) (or a b))
-(rewrite (or a (or (negate a) b)) True)
+(rewrite (myor a (myor a b)) (myor a b))
+(rewrite (myor a (myor (negate a) b)) True)
 
 ; simplification
-(rewrite (or False a) a)
-(rewrite (or a False) a)
-(rewrite (or True a) True)
-(rewrite (or a True) True)
+(rewrite (myor False a) a)
+(rewrite (myor a False) a)
+(rewrite (myor True a) True)
+(rewrite (myor a True) True)
 
 ; unit propagation
 ; This is kind of interesting actually.
@@ -65,12 +65,12 @@
 ;(rewrite p True    
 ;    :when ((= True (or p False))))
 
-(rule ((= True (or p False))) ((union p True)))
+(rule ((= True (myor p False))) ((union p True)))
 
 ; resolution
 ; This counts on commutativity to bubble everything possible up to the front of the clause.
-(rule ((= True (or a as)) (= True (or (negate a) bs)))
-      ((union (or as bs) True)))
+(rule ((= True (myor a as)) (= True (myor (negate a) bs)))
+      ((union (myor as bs) True)))
 
 ; example predicate
 (function p (i64) Bool)
@@ -79,11 +79,11 @@
 (let p2 (p 2))
 ;(union (or p0 (or p1 (or p2 False))) True)
 ;(union (or (negate p0) (or p1 (or (negate p2) False))) True)
-(union (or p1 (or (negate p2) False)) True)
-(union (or p2 (or (negate p0) False)) True)
-(union (or p0 (or (negate p1) False)) True)
+(union (myor p1 (myor (negate p2) False)) True)
+(union (myor p2 (myor (negate p0) False)) True)
+(union (myor p0 (myor (negate p1) False)) True)
 (union p1 False)
-(union (or (negate p0) (or p1 (or p2 False))) True)
+(union (myor (negate p0) (myor p1 (myor p2 False))) True)
 (run 10)
 
 
