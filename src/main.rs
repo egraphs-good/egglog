@@ -33,6 +33,8 @@ struct Args {
     to_dot: bool,
     #[clap(long)]
     to_svg: bool,
+    #[clap(long)]
+    serialize_split_primitive_outputs: bool,
 }
 
 #[allow(clippy::disallowed_macros)]
@@ -170,21 +172,33 @@ fn main() {
                 }
             }
         }
-
+        // if we are splitting primitive outputs, add `-split` to the end of the file name
+        let serialize_filename = if args.serialize_split_primitive_outputs {
+            input.with_file_name(format!(
+                "{}-split",
+                input.file_stem().unwrap().to_str().unwrap()
+            ))
+        } else {
+            input.clone()
+        };
         if args.to_json {
-            let json_path = input.with_extension("json");
-            let serialized = egraph.serialize(SerializeConfig::default());
+            let json_path = serialize_filename.with_extension("json");
+            let config = SerializeConfig {
+                split_primitive_outputs: args.serialize_split_primitive_outputs,
+                ..SerializeConfig::default()
+            };
+            let serialized = egraph.serialize(config);
             serialized.to_json_file(json_path).unwrap();
         }
 
         if args.to_dot || args.to_svg {
-            let serialized = egraph.serialize_for_graphviz();
+            let serialized = egraph.serialize_for_graphviz(args.serialize_split_primitive_outputs);
             if args.to_dot {
-                let dot_path = input.with_extension("dot");
+                let dot_path = serialize_filename.with_extension("dot");
                 serialized.to_dot_file(dot_path).unwrap()
             }
             if args.to_svg {
-                let svg_path = input.with_extension("svg");
+                let svg_path = serialize_filename.with_extension("svg");
                 serialized.to_svg_file(svg_path).unwrap()
             }
         }

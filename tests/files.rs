@@ -68,7 +68,9 @@ impl Run {
                         log::info!("  {}", msg);
                     }
                     // Test graphviz dot generation
-                    egraph.serialize_for_graphviz().to_dot();
+                    egraph.serialize_for_graphviz(false).to_dot();
+                    // Also try splitting
+                    egraph.serialize_for_graphviz(true).to_dot();
                 }
             }
             Err(err) => {
