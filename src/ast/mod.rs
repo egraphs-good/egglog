@@ -637,7 +637,7 @@ pub enum Command {
     /// Print out rows a given function, extracting each of the elements of the function.
     /// Example:
     /// ```text
-    /// (print Add 20)
+    /// (print-function Add 20)
     /// ```
     /// prints the first 20 rows of the `Add` function.
     ///
