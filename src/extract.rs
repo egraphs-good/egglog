@@ -30,6 +30,22 @@ impl EGraph {
         None
     }
 
+    /// ```
+    /// use egglog::{EGraph, TermDag};
+    /// let mut egraph = EGraph::default();
+    /// egraph
+    ///     .parse_and_run_program(
+    ///         "(datatype Op (Add i64 i64))
+    ///          (let expr (Add 1 1))",
+    ///     )
+    ///     .unwrap();
+    /// let mut termdag = TermDag::default();
+    /// let (sort, value) = egraph
+    ///     .eval_expr(&egglog::ast::Expr::Var("expr".into()), None, true)
+    ///     .unwrap();
+    /// let (_, extracted) = egraph.extract(value, &mut termdag, &sort);
+    /// assert_eq!(termdag.to_string(&extracted), "(Add 1 1)");
+    /// ```
     pub fn extract(&self, value: Value, termdag: &mut TermDag, arcsort: &ArcSort) -> (Cost, Term) {
         let extractor = Extractor::new(self, termdag);
         extractor
