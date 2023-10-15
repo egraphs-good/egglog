@@ -20,4 +20,15 @@
 (check (= (bool->= 2 1) true))
 (check (= (bool->= 1 1) true))
 
+; Test bool's tag
+(relation R (i64))
+(function F (i64) bool)
 
+(rule
+    ((R i))
+    ((set (F i) true))
+)
+
+(R 0)
+
+(run 3)
