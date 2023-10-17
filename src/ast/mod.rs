@@ -104,7 +104,7 @@ pub enum NCommand {
     Check(Vec<NormFact>),
     CheckProof,
     PrintTable(Symbol, usize),
-    PrintSize(Symbol),
+    PrintSize(Option<Symbol>),
     Output {
         file: String,
         exprs: Vec<Expr>,
@@ -642,8 +642,8 @@ pub enum Command {
     /// prints the first 20 rows of the `Add` function.
     ///
     PrintFunction(Symbol, usize),
-    /// Print out the number of rows in a function.
-    PrintSize(Symbol),
+    /// Print out the number of rows in a function or all functions.
+    PrintSize(Option<Symbol>),
     /// Input a CSV file directly into a function.
     Input {
         name: Symbol,
@@ -699,7 +699,7 @@ impl ToSexp for Command {
             Command::Push(n) => list!("push", n),
             Command::Pop(n) => list!("pop", n),
             Command::PrintFunction(name, n) => list!("print-function", name, n),
-            Command::PrintSize(name) => list!("print-size", name),
+            Command::PrintSize(name) => list!("print-size", ++ name),
             Command::Input { name, file } => list!("input", name, format!("\"{}\"", file)),
             Command::Output { file, exprs } => list!("output", format!("\"{}\"", file), ++ exprs),
             Command::Fail(cmd) => list!("fail", cmd),
