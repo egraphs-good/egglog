@@ -68,4 +68,6 @@
 (print-size Add)
 (print-size Mul)
 
+(print-size)
+
 (print-stats)
