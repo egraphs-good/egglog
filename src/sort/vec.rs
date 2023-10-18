@@ -27,6 +27,7 @@ impl VecSort {
             "vec-contains".into(),
             "vec-length".into(),
             "vec-get".into(),
+            "vec-set".into(),
         ]
     }
 
@@ -138,7 +139,12 @@ impl Sort for VecSort {
         });
         typeinfo.add_primitive(Get {
             name: "vec-get".into(),
-            vec: self,
+            vec: self.clone(),
+            i64: typeinfo.get_sort(),
+        });
+        typeinfo.add_primitive(Set {
+            name: "vec-set".into(),
+            vec: self.clone(),
             i64: typeinfo.get_sort(),
         })
     }
@@ -158,14 +164,22 @@ impl Sort for VecSort {
         termdag: &mut TermDag,
     ) -> Option<(Cost, Expr)> {
         let vec = ValueVec::load(self, &value);
-        let mut expr = Expr::call("vec-empty", []);
         let mut cost = 0usize;
-        for e in vec.iter().rev() {
-            let e = extractor.find_best(*e, termdag, &self.element)?;
-            cost = cost.saturating_add(e.0);
-            expr = Expr::call("vec-push", [expr, termdag.term_to_expr(&e.1)])
+
+        if vec.is_empty() {
+            Some((cost, Expr::call("vec-empty", [])))
+        } else {
+            let elems = vec
+                .into_iter()
+                .map(|e| {
+                    let e = extractor.find_best(e, termdag, &self.element)?;
+                    cost = cost.saturating_add(e.0);
+                    Some(termdag.term_to_expr(&e.1))
+                })
+                .collect::<Option<Vec<_>>>()?;
+
+            Some((cost, Expr::call("vec-of", elems)))
         }
-        Some((cost, expr))
     }
 }
 
@@ -420,5 +434,69 @@ impl PrimitiveLike for Get {
         let vec = ValueVec::load(&self.vec, &values[0]);
         let index = i64::load(&self.i64, &values[1]);
         vec.get(index as usize).copied()
+    }
+}
+
+struct Set {
+    name: Symbol,
+    vec: Arc<VecSort>,
+    i64: Arc<I64Sort>,
+}
+
+impl PrimitiveLike for Set {
+    fn name(&self) -> Symbol {
+        self.name
+    }
+
+    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
+        match types {
+            [vec, index, el]
+                if vec.name() == self.vec.name
+                    && index.name() == "i64".into()
+                    && el.name() == self.vec.element_name() =>
+            {
+                Some(self.vec.clone())
+            }
+            _ => None,
+        }
+    }
+
+    fn apply(&self, values: &[Value]) -> Option<Value> {
+        let mut vec = ValueVec::load(&self.vec, &values[0]);
+        let index = i64::load(&self.i64, &values[1]);
+        vec[index as usize] = values[2];
+        vec.store(&self.vec)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_vec_make_expr() {
+        let mut egraph = EGraph::default();
+        let outputs = egraph
+            .parse_and_run_program(
+                r#"
+            (sort IVec (Vec i64))
+            (let v0 (vec-empty))
+            (let v1 (vec-of 1 2 3 4))
+            (extract v0)
+            (extract v1)
+            "#,
+            )
+            .unwrap();
+
+        // Check extracted expr is parsed as an original expr
+        egraph
+            .parse_and_run_program(&format!(
+                r#"
+                (check (= v0 {}))
+                (check (= v1 {}))
+                "#,
+                outputs[0], outputs[1],
+            ))
+            .unwrap();
     }
 }

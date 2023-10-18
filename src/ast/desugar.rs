@@ -451,9 +451,9 @@ pub(crate) fn desugar_simplify(
     res.push(NCommand::RunSchedule(desugar_schedule(desugar, schedule)));
     res.extend(
         desugar_command(
-            Command::Extract {
+            Command::QueryExtract {
                 variants: 0,
-                fact: Fact::Fact(Expr::Var(lhs)),
+                expr: Expr::Var(lhs),
             },
             desugar,
             false,
@@ -592,16 +592,16 @@ pub(crate) fn desugar_command(
         Command::PrintOverallStatistics => {
             vec![NCommand::PrintOverallStatistics]
         }
-        Command::Extract { variants, fact } => {
+        Command::QueryExtract { variants, expr } => {
             let fresh = desugar.get_fresh();
             let fresh_ruleset = desugar.get_fresh();
-            let desugaring = if let Fact::Fact(Expr::Var(v)) = fact {
+            let desugaring = if let Expr::Var(v) = expr {
                 format!("(extract {v} {variants})")
             } else {
                 format!(
-                    "(check {fact})
+                    "(check {expr})
                     (ruleset {fresh_ruleset})
-                    (rule ((= {fresh} {fact}))
+                    (rule ((= {fresh} {expr}))
                           ((extract {fresh} {variants}))
                           :ruleset {fresh_ruleset})
                     (run {fresh_ruleset} 1)"
@@ -628,7 +628,7 @@ pub(crate) fn desugar_command(
             res
         }
         Command::CheckProof => vec![NCommand::CheckProof],
-        Command::PrintTable(symbol, size) => vec![NCommand::PrintTable(symbol, size)],
+        Command::PrintFunction(symbol, size) => vec![NCommand::PrintTable(symbol, size)],
         Command::PrintSize(symbol) => vec![NCommand::PrintSize(symbol)],
         Command::Output { file, exprs } => vec![NCommand::Output { file, exprs }],
         Command::Push(num) => {

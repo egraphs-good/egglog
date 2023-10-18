@@ -39,6 +39,7 @@ impl Default for TypeInfo {
 
         res.add_sort(UnitSort::new(UNIT_SYM.into()));
         res.add_sort(StringSort::new("String".into()));
+        res.add_sort(BoolSort::new("bool".into()));
         res.add_sort(I64Sort::new("i64".into()));
         res.add_sort(F64Sort::new("f64".into()));
         res.add_sort(RationalSort::new("Rational".into()));
@@ -63,6 +64,7 @@ impl TypeInfo {
             Literal::Int(_) => self.sorts.get(&Symbol::from("i64")),
             Literal::F64(_) => self.sorts.get(&Symbol::from("f64")),
             Literal::String(_) => self.sorts.get(&Symbol::from("String")),
+            Literal::Bool(_) => self.sorts.get(&Symbol::from("bool")),
             Literal::Unit => self.sorts.get(&Symbol::from("Unit")),
         }
         .unwrap()

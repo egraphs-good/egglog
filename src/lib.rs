@@ -1,3 +1,16 @@
+//! # egglog
+//! egglog is a language specialized for writing equality saturation
+//! applications. It is the successor to the rust library [egg](https://github.com/egraphs-good/egg).
+//! egglog is faster and more general than egg.
+//!
+//! # Documentation
+//! Documentation for the egglog language can be found
+//! here: [`Command`]
+//!
+//! # Tutorial
+//! [Here](https://www.youtube.com/watch?v=N2RDQGRBrSY) is the video tutorial on what egglog is and how to use it.
+//! We plan to have a text tutorial here soon, PRs welcome!
+//!
 pub mod ast;
 mod extract;
 mod function;
@@ -410,13 +423,14 @@ impl EGraph {
                 let recent_run_report = self.recent_run_report.clone();
                 let overall_run_report = self.overall_run_report.clone();
                 let messages = self.msgs.clone();
+
                 *self = e;
                 self.extract_report = extract_report.or(self.extract_report.clone());
                 // We union the run reports, meaning
                 // that statistics are shared across
                 // push/pop
                 self.recent_run_report = recent_run_report.or(self.recent_run_report.clone());
-                self.overall_run_report = self.overall_run_report.union(&overall_run_report);
+                self.overall_run_report = overall_run_report;
                 self.msgs.extend(messages);
                 Ok(())
             }
@@ -590,6 +604,7 @@ impl EGraph {
             Literal::F64(f) => f.store(&self.type_info().get_sort()).unwrap(),
             Literal::String(s) => s.store(&self.type_info().get_sort()).unwrap(),
             Literal::Unit => ().store(&self.type_info().get_sort()).unwrap(),
+            Literal::Bool(b) => b.store(&self.type_info().get_sort()).unwrap(),
         }
     }
 
@@ -1355,8 +1370,15 @@ impl EGraph {
     }
 
     /// Serializes the egraph for export to graphviz.
-    pub fn serialize_for_graphviz(&self) -> egraph_serialize::EGraph {
-        let mut serialized = self.serialize(SerializeConfig::default());
+    pub fn serialize_for_graphviz(
+        &self,
+        split_primitive_outputs: bool,
+    ) -> egraph_serialize::EGraph {
+        let config = SerializeConfig {
+            split_primitive_outputs,
+            ..Default::default()
+        };
+        let mut serialized = self.serialize(config);
         serialized.inline_leaves();
         serialized
     }
