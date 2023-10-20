@@ -15,6 +15,12 @@ struct Args {
     resugar: bool,
     #[clap(long)]
     proofs: bool,
+    /// Use the rust backend implimentation of eqsat,
+    /// including a rust implementation of the union-find
+    /// data structure and the rust implementation of
+    /// the rebuilding algorithm (maintains congruence closure).
+    #[clap(long)]
+    terms_encoding: bool,
     #[clap(long, default_value_t = CompilerPassStop::All)]
     stop: CompilerPassStop,
     // TODO remove this evil hack
@@ -47,6 +53,9 @@ fn main() {
         egraph.set_underscores_for_desugaring(args.num_underscores);
         egraph.fact_directory = args.fact_directory.clone();
         egraph.seminaive = !args.naive;
+        if args.terms_encoding {
+            egraph.enable_terms_encoding();
+        }
         if args.proofs {
             egraph
                 .parse_and_run_program("(set-option enable_proofs 1)")

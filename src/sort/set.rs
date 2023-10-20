@@ -86,11 +86,28 @@ impl Sort for SetSort {
         result
     }
 
-    fn canonicalize(&self, _value: &mut Value, _unionfind: &UnionFind) -> bool {
-        false
+    fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
+        let sets = self.sets.lock().unwrap();
+        let set = sets.get_index(value.bits as usize).unwrap();
+        let mut changed = false;
+        let new_set: ValueSet = set
+            .iter()
+            .map(|e| {
+                let mut e = *e;
+                changed |= self.element.canonicalize(&mut e, unionfind);
+                e
+            })
+            .collect();
+        drop(sets);
+        *value = new_set.store(self).unwrap();
+        changed
     }
 
     fn register_primitives(self: Arc<Self>, typeinfo: &mut TypeInfo) {
+        typeinfo.add_primitive(SetRebuild {
+            name: "rebuild".into(),
+            set: self.clone(),
+        });
         typeinfo.add_primitive(SetOf {
             name: "set-of".into(),
             set: self.clone(),
@@ -195,7 +212,7 @@ impl PrimitiveLike for SetOf {
         }
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         let set = ValueSet::from_iter(values.iter().copied());
         Some(set.store(&self.set).unwrap())
     }
@@ -218,9 +235,35 @@ impl PrimitiveLike for Ctor {
         }
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         assert!(values.is_empty());
         ValueSet::default().store(&self.set)
+    }
+}
+
+struct SetRebuild {
+    name: Symbol,
+    set: Arc<SetSort>,
+}
+
+impl PrimitiveLike for SetRebuild {
+    fn name(&self) -> Symbol {
+        self.name
+    }
+
+    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
+        match types {
+            [set] if set.name() == self.set.name => Some(self.set.clone()),
+            _ => None,
+        }
+    }
+
+    fn apply(&self, values: &[Value], egraph: &EGraph) -> Option<Value> {
+        let set = ValueSet::load(&self.set, &values[0]);
+        let new_set: ValueSet = set.iter().map(|e| egraph.find(*e)).collect();
+        // drop set to make sure we lose lock
+        drop(set);
+        new_set.store(&self.set)
     }
 }
 
@@ -243,7 +286,7 @@ impl PrimitiveLike for Insert {
         }
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         let mut set = ValueSet::load(&self.set, &values[0]);
         set.insert(values[1]);
         set.store(&self.set)
@@ -272,7 +315,7 @@ impl PrimitiveLike for NotContains {
         }
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         let set = ValueSet::load(&self.set, &values[0]);
         if set.contains(&values[1]) {
             None
@@ -302,7 +345,7 @@ impl PrimitiveLike for Contains {
         }
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         let set = ValueSet::load(&self.set, &values[0]);
         if set.contains(&values[1]) {
             Some(Value::unit())
@@ -331,7 +374,7 @@ impl PrimitiveLike for Union {
         }
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         let mut set1 = ValueSet::load(&self.set, &values[0]);
         let set2 = ValueSet::load(&self.set, &values[1]);
         set1.extend(set2.iter());
@@ -358,7 +401,7 @@ impl PrimitiveLike for Intersect {
         }
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         let mut set1 = ValueSet::load(&self.set, &values[0]);
         let set2 = ValueSet::load(&self.set, &values[1]);
         set1.retain(|k| set2.contains(k));
@@ -386,7 +429,7 @@ impl PrimitiveLike for Remove {
         }
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         let mut set = ValueSet::load(&self.set, &values[0]);
         set.remove(&values[1]);
         set.store(&self.set)
@@ -412,7 +455,7 @@ impl PrimitiveLike for Diff {
         }
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         let mut set1 = ValueSet::load(&self.set, &values[0]);
         let set2 = ValueSet::load(&self.set, &values[1]);
         set1.retain(|k| !set2.contains(k));

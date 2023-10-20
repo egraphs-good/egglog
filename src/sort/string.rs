@@ -79,7 +79,7 @@ impl PrimitiveLike for Add {
         }
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         let mut res_string: String = "".to_owned();
         for value in values {
             let sym = Symbol::load(&self.string, value);
@@ -112,7 +112,7 @@ impl PrimitiveLike for Replace {
         }
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         let string1 = Symbol::load(&self.string, &values[0]).to_string();
         let string2 = Symbol::load(&self.string, &values[1]).to_string();
         let string3 = Symbol::load(&self.string, &values[2]).to_string();

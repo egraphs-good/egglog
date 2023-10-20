@@ -18,6 +18,7 @@ mod gj;
 mod serialize;
 pub mod sort;
 mod termdag;
+mod terms;
 mod typecheck;
 mod typechecking;
 mod unionfind;
@@ -32,6 +33,7 @@ use instant::{Duration, Instant};
 pub use serialize::SerializeConfig;
 use sort::*;
 pub use termdag::{Term, TermDag, TermId};
+use terms::TermState;
 use thiserror::Error;
 
 use symbolic_expressions::Sexp;
@@ -67,7 +69,7 @@ pub type Subst = IndexMap<Symbol, Value>;
 pub trait PrimitiveLike {
     fn name(&self) -> Symbol;
     fn accept(&self, types: &[ArcSort]) -> Option<ArcSort>;
-    fn apply(&self, values: &[Value]) -> Option<Value>;
+    fn apply(&self, values: &[Value], egraph: &EGraph) -> Option<Value>;
 }
 
 /// Running a schedule produces a report of the results.
@@ -287,7 +289,7 @@ impl PrimitiveLike for SimplePrimitive {
             .all(|(a, b)| a.name() == b.name())
             .then(|| self.output.clone())
     }
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         (self.f)(values)
     }
 }
@@ -343,8 +345,10 @@ pub struct EGraph {
     rulesets: HashMap<Symbol, HashMap<Symbol, Rule>>,
     ruleset_iteration: HashMap<Symbol, usize>,
     proofs_enabled: bool,
+    terms_enabled: bool,
     interactive_mode: bool,
     timestamp: u32,
+    pub(crate) term_header_added: bool,
     pub test_proofs: bool,
     pub match_limit: usize,
     pub node_limit: usize,
@@ -384,6 +388,8 @@ impl Default for EGraph {
             node_limit: usize::MAX,
             timestamp: 0,
             proofs_enabled: false,
+            terms_enabled: false,
+            term_header_added: false,
             interactive_mode: false,
             test_proofs: false,
             fact_directory: None,
@@ -403,6 +409,14 @@ impl Default for EGraph {
 pub struct NotFoundError(Expr);
 
 impl EGraph {
+    /// Use the rust backend implimentation of eqsat,
+    /// including a rust implementation of the union-find
+    /// data structure and the rust implementation of
+    /// the rebuilding algorithm (maintains congruence closure).
+    pub fn enable_terms_encoding(&mut self) {
+        self.terms_enabled = true;
+    }
+
     pub fn is_interactive_mode(&self) -> bool {
         self.interactive_mode
     }
@@ -444,6 +458,12 @@ impl EGraph {
 
     #[track_caller]
     fn debug_assert_invariants(&self) {
+        // we can't use find before something
+        // is added to the parent table, so this
+        // is disabled in terms mode
+        if self.terms_enabled {
+            return;
+        }
         #[cfg(debug_assertions)]
         for (name, function) in self.functions.iter() {
             function.nodes.assert_sorted();
@@ -451,14 +471,14 @@ impl EGraph {
                 for input in inputs {
                     assert_eq!(
                         input,
-                        &self.bad_find_value(*input),
+                        &self.find(*input),
                         "[{i}] {name}({inputs:?}) = {output:?}\n{:?}",
                         function.schema,
                     )
                 }
                 assert_eq!(
                     output.value,
-                    self.bad_find_value(output.value),
+                    self.find(output.value),
                     "[{i}] {name}({inputs:?}) = {output:?}\n{:?}",
                     function.schema,
                 )
@@ -498,10 +518,29 @@ impl EGraph {
         }
     }
 
-    // find the leader term for this term
-    // in the corresponding table
-    pub fn find(&self, id: Id) -> Id {
-        self.unionfind.find(id)
+    /// find the leader value for a particular eclass
+    pub fn find(&self, value: Value) -> Value {
+        if self.terms_enabled {
+            // HACK using value tag for parent table name
+            let parent_name = self.desugar.parent_name(value.tag);
+            if let Some(func) = self.functions.get(&parent_name) {
+                func.get(&[value])
+                    .unwrap_or_else(|| panic!("No value {:?} in {parent_name}.", value,))
+            } else {
+                value
+            }
+        } else {
+            if let Some(sort) = self.get_sort(&value) {
+                if sort.is_eq_sort() {
+                    return Value {
+                        tag: value.tag,
+                        bits: usize::from(self.unionfind.find(Id::from(value.bits as usize)))
+                            as u64,
+                    };
+                }
+            }
+            value
+        }
     }
 
     pub fn rebuild_nofail(&mut self) -> usize {
@@ -515,6 +554,7 @@ impl EGraph {
 
     pub fn rebuild(&mut self) -> Result<usize, Error> {
         self.unionfind.clear_recent_ids();
+
         let mut updates = 0;
         loop {
             let new = self.rebuild_one()?;
@@ -750,6 +790,23 @@ impl EGraph {
                 report
             }
         }
+    }
+
+    /// Extract a value to a [`TermDag`] and [`Term`]
+    /// in the [`TermDag`].
+    /// See also extract_value_to_string for convenience.
+    pub fn extract_value(&self, value: Value) -> (TermDag, Term) {
+        let mut termdag = TermDag::default();
+        let sort = self.type_info().sorts.get(&value.tag).unwrap();
+        let term = self.extract(value, &mut termdag, sort).1;
+        (termdag, term)
+    }
+
+    /// Extract a value to a string for printing.
+    /// See also extract_value for more control.
+    pub fn extract_value_to_string(&self, value: Value) -> String {
+        let (termdag, term) = self.extract_value(value);
+        termdag.to_string(&term)
     }
 
     pub fn run_rules(&mut self, config: &NormRunConfig) -> RunReport {
@@ -1200,14 +1257,12 @@ impl EGraph {
         Ok(())
     }
 
-    fn input_file(&mut self, name: Symbol, file: String) -> Result<(), Error> {
+    fn input_file(&mut self, func_name: Symbol, file: String) -> Result<(), Error> {
         let function_type = self
             .type_info()
-            .func_types
-            .get(&name)
-            .unwrap_or_else(|| panic!("Unrecognzed function name {}", name))
-            .clone();
-        let func = self.functions.get_mut(&name).unwrap();
+            .lookup_user_func(func_name)
+            .unwrap_or_else(|| panic!("Unrecognized function name {}", func_name));
+        let func = self.functions.get_mut(&func_name).unwrap();
 
         let mut filename = self.fact_directory.clone().unwrap_or_default();
         filename.push(file.as_str());
@@ -1254,15 +1309,18 @@ impl EGraph {
 
             actions.push(
                 if function_type.is_datatype || function_type.output.name() == UNIT_SYM.into() {
-                    Action::Expr(Expr::Call(name, exprs))
+                    Action::Expr(Expr::Call(func_name, exprs))
                 } else {
                     let out = exprs.pop().unwrap();
-                    Action::Set(name, exprs, out)
+                    Action::Set(func_name, exprs, out)
                 },
             );
         }
         self.eval_actions(&actions)?;
-        log::info!("Read {} facts into {name} from '{file}'.", actions.len());
+        log::info!(
+            "Read {} facts into {func_name} from '{file}'.",
+            actions.len()
+        );
         Ok(())
     }
 
@@ -1308,7 +1366,7 @@ impl EGraph {
         command: Command,
         stop: CompilerPassStop,
     ) -> Result<Vec<NormCommand>, Error> {
-        let program =
+        let mut program =
             self.desugar
                 .desugar_program(vec![command], self.test_proofs, self.seminaive)?;
         if stop == CompilerPassStop::Desugar {
@@ -1319,6 +1377,16 @@ impl EGraph {
 
         self.desugar.type_info.typecheck_program(&program)?;
         if stop == CompilerPassStop::TypecheckDesugared {
+            return Ok(program);
+        }
+
+        // now add term encoding
+        if self.terms_enabled {
+            let program_terms = TermState::add_term_encoding(self, program);
+            program = self.desugar.desugar_program(program_terms, false, false)?;
+        }
+
+        if stop == CompilerPassStop::TermEncoding {
             return Ok(program);
         }
 
@@ -1346,16 +1414,6 @@ impl EGraph {
 
         // remove consecutive empty lines
         Ok(self.flush_msgs())
-    }
-
-    // this is bad because we shouldn't inspect values like this, we should use type information
-    #[allow(dead_code)]
-    fn bad_find_value(&self, value: Value) -> Value {
-        if let Some((tag, id)) = self.value_to_id(value) {
-            Value::from_id(tag, self.find(id))
-        } else {
-            value
-        }
     }
 
     pub fn parse_program(&self, input: &str) -> Result<Vec<Command>, Error> {

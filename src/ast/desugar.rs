@@ -412,10 +412,22 @@ fn add_semi_naive_rule(desugar: &mut Desugar, rule: Rule) -> Option<Rule> {
     }
 }
 
+/// The Desugar struct stores all the state needed
+/// during desugaring a program.
+/// While desugaring doesn't need type information, it
+/// needs to know what global variables exist.
+/// It also needs to know what functions are primitives
+/// (it uses the [`TypeInfo`] for that.
+/// After desugaring, typechecking happens and the
+/// type_info field is used for that.
 pub struct Desugar {
     next_fresh: usize,
     next_command_id: usize,
-    pub(crate) parser: ast::parse::ProgramParser,
+    // Store the parser because it takes some time
+    // on startup for some reason
+    parser: ast::parse::ProgramParser,
+    pub(crate) expr_parser: ast::parse::ExprParser,
+    pub(crate) action_parser: ast::parse::ActionParser,
     // TODO fix getting fresh names using modules
     pub(crate) number_underscores: usize,
     pub(crate) global_variables: HashSet<Symbol>,
@@ -429,6 +441,8 @@ impl Default for Desugar {
             next_command_id: Default::default(),
             // these come from lalrpop and don't have default impls
             parser: ast::parse::ProgramParser::new(),
+            expr_parser: ast::parse::ExprParser::new(),
+            action_parser: ast::parse::ActionParser::new(),
             number_underscores: 3,
             global_variables: Default::default(),
             type_info: TypeInfo::default(),
@@ -694,6 +708,8 @@ impl Clone for Desugar {
             next_fresh: self.next_fresh,
             next_command_id: self.next_command_id,
             parser: ast::parse::ProgramParser::new(),
+            expr_parser: ast::parse::ExprParser::new(),
+            action_parser: ast::parse::ActionParser::new(),
             number_underscores: self.number_underscores,
             global_variables: self.global_variables.clone(),
             type_info: self.type_info.clone(),
@@ -816,5 +832,15 @@ impl Desugar {
             cost: fdecl.cost,
             unextractable: fdecl.unextractable,
         })]
+    }
+
+    /// Get the name of the parent table for a sort
+    /// for the term encoding (not related to desugaring)
+    pub(crate) fn parent_name(&self, sort: Symbol) -> Symbol {
+        Symbol::from(format!(
+            "{}_Parent{}",
+            sort,
+            "_".repeat(self.number_underscores)
+        ))
     }
 }

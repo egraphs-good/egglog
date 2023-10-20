@@ -218,6 +218,12 @@ pub enum Schedule {
     Sequence(Vec<Schedule>),
 }
 
+impl Schedule {
+    pub fn saturate(self) -> Self {
+        Schedule::Saturate(Box::new(self))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum NormSchedule {
     Saturate(Box<NormSchedule>),
@@ -989,6 +995,18 @@ impl NormFact {
         }
     }
 
+    pub(crate) fn map_use(&self, fvar: &mut impl FnMut(Symbol) -> Expr) -> Fact {
+        match self {
+            NormFact::AssignVar(lhs, rhs) => Fact::Eq(vec![Expr::Var(*lhs), fvar(*rhs)]),
+            NormFact::ConstrainEq(lhs, rhs) => Fact::Eq(vec![fvar(*lhs), fvar(*rhs)]),
+            NormFact::Compute(lhs, NormExpr::Call(op, children)) => Fact::Eq(vec![
+                fvar(*lhs),
+                Expr::Call(*op, children.iter().cloned().map(fvar).collect()),
+            ]),
+            NormFact::AssignLit(..) | NormFact::Assign(..) => self.to_fact(),
+        }
+    }
+
     pub(crate) fn map_def_use(&self, fvar: &mut impl FnMut(Symbol, bool) -> Symbol) -> NormFact {
         match self {
             NormFact::Assign(symbol, expr) => {
@@ -1071,11 +1089,14 @@ pub enum Action {
     /// (extract (Num 2)); Extracts Num 1
     /// ```
     Union(Expr, Expr),
-    /// `extract` the lowest-cost term equal to the one given.
-    /// Also, extract `n` variants of the term by selecting different
-    /// terms with unique constructors and children.
-    /// When `n` is zero, just extract the lowest-cost term.
-    /// See [`Command::QueryExtract`] for more details.
+    /// `extract` a datatype from the egraph, choosing
+    /// the smallest representative.
+    /// By default, each constructor costs 1 to extract
+    /// (common subexpressions are not shared in the cost
+    /// model).
+    /// The second argument is the number of variants to
+    /// extract, picking different terms in the
+    /// same equivalence class.
     Extract(Expr, Expr),
     Panic(String),
     Expr(Expr),
@@ -1333,6 +1354,8 @@ impl NormRule {
                     let substituted = new_expr.subst(subst);
 
                     // TODO sometimes re-arranging actions is bad
+                    // this is because actions can fail
+                    // halfway through in the current semantics
                     if substituted.ast_size() > 1 {
                         head.push(Action::Let(*symbol, substituted));
                     } else {
