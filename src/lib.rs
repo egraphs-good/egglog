@@ -684,11 +684,36 @@ impl EGraph {
         Ok(())
     }
 
-    pub fn print_size(&mut self, sym: Symbol) -> Result<(), Error> {
-        let f = self.functions.get(&sym).ok_or(TypeError::Unbound(sym))?;
-        log::info!("Function {} has size {}", sym, f.nodes.len());
-        self.print_msg(f.nodes.len().to_string());
-        Ok(())
+    pub fn print_size(&mut self, sym: Option<Symbol>) -> Result<(), Error> {
+        if let Some(sym) = sym {
+            let f = self.functions.get(&sym).ok_or(TypeError::Unbound(sym))?;
+            log::info!("Function {} has size {}", sym, f.nodes.len());
+            self.print_msg(f.nodes.len().to_string());
+            Ok(())
+        } else {
+            // Print size of all functions
+            let mut lens = self
+                .functions
+                .iter()
+                .map(|(sym, f)| (*sym, f.nodes.len()))
+                .collect::<Vec<_>>();
+
+            // Function name's alphabetical order
+            lens.sort_by_key(|(name, _)| name.as_str());
+
+            for (sym, len) in &lens {
+                log::info!("Function {} has size {}", sym, len);
+            }
+
+            self.print_msg(
+                lens.into_iter()
+                    .map(|(name, len)| format!("{}: {}", name, len))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            );
+
+            Ok(())
+        }
     }
 
     // returns whether the egraph was updated
