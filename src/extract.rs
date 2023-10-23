@@ -20,16 +20,6 @@ pub struct Extractor<'a> {
 }
 
 impl EGraph {
-    pub fn value_to_id(&self, value: Value) -> Option<(Symbol, Id)> {
-        if let Some(sort) = self.get_sort(&value) {
-            if sort.is_eq_sort() {
-                let id = Id::from(value.bits as usize);
-                return Some((sort.name(), self.find(id)));
-            }
-        }
-        None
-    }
-
     /// This example uses [`extract`] to extract a term. The example is trivial,
     /// as there is only a single variant of the expression in the egraph.
     /// ```
