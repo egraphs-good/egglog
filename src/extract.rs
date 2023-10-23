@@ -30,6 +30,8 @@ impl EGraph {
         None
     }
 
+    /// This example uses [`extract`] to extract a term. The example is trivial,
+    /// as there is only a single variant of the expression in the egraph.
     /// ```
     /// use egglog::{EGraph, TermDag};
     /// let mut egraph = EGraph::default();
