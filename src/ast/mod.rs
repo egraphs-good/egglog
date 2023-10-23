@@ -613,7 +613,7 @@ pub enum Command {
     ///     (Num 1)
     ///     (Num 1))
     /// ```
-    /// 
+    ///
     /// Under the hood, this command is implemented with the [`EGraph::extract`]
     /// function.
     QueryExtract {
