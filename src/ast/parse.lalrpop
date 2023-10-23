@@ -56,7 +56,7 @@ Command: Command = {
         Command::Function(FunctionDecl { name, schema, merge, merge_action: merge_action.unwrap_or_default(), default, cost, unextractable: unextractable.is_some() })
     },
     LParen "declare" <name:Ident> <sort:Ident> RParen => Command::Declare{name, sort},
-    LParen "relation" <name:Ident> <types:List<Type>> RParen => Command::Function(FunctionDecl::relation(name, types)),
+    LParen "relation" <constructor:Ident> <inputs:List<Type>> RParen => Command::Relation{constructor, inputs},
     LParen "ruleset" <name:Ident> RParen => Command::AddRuleset(name),
     LParen "rule" <body:List<Fact>> <head:List<Action>> <ruleset:(":ruleset" <Ident>)?> <name:(":name" <String>)?> RParen => Command::Rule{ruleset: ruleset.unwrap_or("".into()), name: name.unwrap_or("".to_string()).into(), rule: Rule { head, body }},
     LParen "rewrite" <lhs:Expr> <rhs:Expr>
@@ -73,16 +73,16 @@ Command: Command = {
     LParen "run" <ruleset: Ident> <limit:UNum> <until:(":until" <(Fact)*>)?> RParen => Command::RunSchedule(Schedule::Repeat(limit, Box::new(Schedule::Run(RunConfig { ruleset, until })))),
     LParen "simplify"  <schedule:Schedule> <expr:Expr> RParen 
         => Command::Simplify { expr, schedule },
-    LParen "add-ruleset" <name:Ident> RParen => Command::AddRuleset(name),
     LParen "calc" LParen <idents:IdentSort*> RParen <exprs:Expr+> RParen => Command::Calc(idents, exprs),
-    LParen "query-extract" <variants:(":variants" <UNum>)?> <fact:Fact> RParen => Command::Extract { fact, variants: variants.unwrap_or(0) },
+    LParen "query-extract" <variants:(":variants" <UNum>)?> <expr:Expr> RParen => Command::QueryExtract { expr, variants: variants.unwrap_or(0) },
     LParen "check" <(Fact)*> RParen => Command::Check(<>),
     LParen "check-proof" RParen => Command::CheckProof,
     LParen "run-schedule" <Schedule*> RParen => Command::RunSchedule(Schedule::Sequence(<>)),
+    LParen "print-stats" RParen => Command::PrintOverallStatistics,
     LParen "push" <UNum?> RParen => Command::Push(<>.unwrap_or(1)),
     LParen "pop" <UNum?> RParen => Command::Pop(<>.unwrap_or(1)),
-    LParen "print-table" <sym:Ident> <n:UNum?> RParen => Command::PrintTable(sym, n.unwrap_or(10)),
-    LParen "print-size" <sym:Ident> RParen => Command::PrintSize(sym),
+    LParen "print-function" <sym:Ident> <n:UNum> RParen => Command::PrintFunction(sym, n),
+    LParen "print-size" <sym:Ident?> RParen => Command::PrintSize(sym),
     LParen "input" <name:Ident> <file:String> RParen => Command::Input { name, file },
     LParen "output" <file:String> <exprs:Expr+> RParen => Command::Output { file, exprs },
     LParen "fail" <Command> RParen => Command::Fail(Box::new(<>)),
@@ -126,7 +126,7 @@ pub Fact: Fact = {
         es.push(e);
         Fact::Eq(es)
     },
-    <Expr> => Fact::Fact(<>),
+    <CallExpr> => Fact::Fact(<>),
 }
 
 Schema: Schema = {
@@ -140,10 +140,16 @@ pub Expr: Expr = {
 };
 
 Literal: Literal = {
-    // "(" ")" => Literal::Unit, // shouldn't need unit literals for now
+    "(" ")" => Literal::Unit,
     <Num> => Literal::Int(<>),
     <F64> => Literal::F64(<>),
+    <Bool> => Literal::Bool(<>),
     <SymString> => Literal::String(<>),
+}
+
+Bool: bool = {
+    "true" => true,
+    "false" => false,
 }
 
 CallExpr: Expr = {

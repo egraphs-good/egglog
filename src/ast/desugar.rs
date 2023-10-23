@@ -1,10 +1,11 @@
+use super::Rule;
 use crate::*;
 
 fn desugar_datatype(name: Symbol, variants: Vec<Variant>) -> Vec<NCommand> {
     vec![NCommand::Sort(name, None)]
         .into_iter()
         .chain(variants.into_iter().map(|variant| {
-            NCommand::Function(FunctionDecl {
+            NCommand::Function(NormFunctionDecl {
                 name: variant.name,
                 schema: Schema {
                     input: variant.types,
@@ -125,7 +126,7 @@ fn normalize_expr(
             panic!("handled above");
         }
         Expr::Call(f, children) => {
-            let is_compute = TypeInfo::default().is_primitive(*f);
+            let is_compute = desugar.type_info.is_primitive(*f);
             let mut new_children = vec![];
             for child in children {
                 match child {
@@ -411,13 +412,26 @@ fn add_semi_naive_rule(desugar: &mut Desugar, rule: Rule) -> Option<Rule> {
     }
 }
 
+/// The Desugar struct stores all the state needed
+/// during desugaring a program.
+/// While desugaring doesn't need type information, it
+/// needs to know what global variables exist.
+/// It also needs to know what functions are primitives
+/// (it uses the [`TypeInfo`] for that.
+/// After desugaring, typechecking happens and the
+/// type_info field is used for that.
 pub struct Desugar {
     next_fresh: usize,
     next_command_id: usize,
-    pub(crate) parser: ast::parse::ProgramParser,
+    // Store the parser because it takes some time
+    // on startup for some reason
+    parser: ast::parse::ProgramParser,
+    pub(crate) expr_parser: ast::parse::ExprParser,
+    pub(crate) action_parser: ast::parse::ActionParser,
     // TODO fix getting fresh names using modules
     pub(crate) number_underscores: usize,
     pub(crate) global_variables: HashSet<Symbol>,
+    pub(crate) type_info: TypeInfo,
 }
 
 impl Default for Desugar {
@@ -427,8 +441,11 @@ impl Default for Desugar {
             next_command_id: Default::default(),
             // these come from lalrpop and don't have default impls
             parser: ast::parse::ProgramParser::new(),
+            expr_parser: ast::parse::ExprParser::new(),
+            action_parser: ast::parse::ActionParser::new(),
             number_underscores: 3,
             global_variables: Default::default(),
+            type_info: TypeInfo::default(),
         }
     }
 }
@@ -448,9 +465,9 @@ pub(crate) fn desugar_simplify(
     res.push(NCommand::RunSchedule(desugar_schedule(desugar, schedule)));
     res.extend(
         desugar_command(
-            Command::Extract {
+            Command::QueryExtract {
                 variants: 0,
-                fact: Fact::Fact(Expr::Var(lhs)),
+                expr: Expr::Var(lhs),
             },
             desugar,
             false,
@@ -511,6 +528,9 @@ pub(crate) fn rewrite_name(rewrite: &Rewrite) -> String {
     rewrite.to_string().replace('\"', "'")
 }
 
+/// Desugars a single command into the normalized form.
+/// Gets rid of a bunch of syntactic sugar, but also
+/// makes rules into a SSA-like format (see [`NormFact`]).
 pub(crate) fn desugar_command(
     command: Command,
     desugar: &mut Desugar,
@@ -521,9 +541,11 @@ pub(crate) fn desugar_command(
         Command::SetOption { name, value } => {
             vec![NCommand::SetOption { name, value }]
         }
-        Command::Function(fdecl) => {
-            vec![NCommand::Function(fdecl)]
-        }
+        Command::Function(fdecl) => desugar.desugar_function(&fdecl),
+        Command::Relation {
+            constructor,
+            inputs,
+        } => desugar.desugar_function(&FunctionDecl::relation(constructor, inputs)),
         Command::Declare { name, sort } => desugar.declare(name, sort),
         Command::Datatype { name, variants } => desugar_datatype(name, variants),
         Command::Rewrite(ruleset, rewrite) => {
@@ -581,21 +603,20 @@ pub(crate) fn desugar_command(
         Command::RunSchedule(sched) => {
             vec![NCommand::RunSchedule(desugar_schedule(desugar, &sched))]
         }
-        // TODO add variants to extract action
-        Command::Extract {
-            variants: _variants,
-            fact,
-        } => {
+        Command::PrintOverallStatistics => {
+            vec![NCommand::PrintOverallStatistics]
+        }
+        Command::QueryExtract { variants, expr } => {
             let fresh = desugar.get_fresh();
             let fresh_ruleset = desugar.get_fresh();
-            let desugaring = if let Fact::Fact(Expr::Var(v)) = fact {
-                format!("(extract {v})")
+            let desugaring = if let Expr::Var(v) = expr {
+                format!("(extract {v} {variants})")
             } else {
                 format!(
-                    "(check {fact})
+                    "(check {expr})
                     (ruleset {fresh_ruleset})
-                    (rule ((= {fresh} {fact}))
-                          ((extract {fresh}))
+                    (rule ((= {fresh} {expr}))
+                          ((extract {fresh} {variants}))
                           :ruleset {fresh_ruleset})
                     (run {fresh_ruleset} 1)"
                 )
@@ -621,7 +642,7 @@ pub(crate) fn desugar_command(
             res
         }
         Command::CheckProof => vec![NCommand::CheckProof],
-        Command::PrintTable(symbol, size) => vec![NCommand::PrintTable(symbol, size)],
+        Command::PrintFunction(symbol, size) => vec![NCommand::PrintTable(symbol, size)],
         Command::PrintSize(symbol) => vec![NCommand::PrintSize(symbol)],
         Command::Output { file, exprs } => vec![NCommand::Output { file, exprs }],
         Command::Push(num) => {
@@ -687,8 +708,11 @@ impl Clone for Desugar {
             next_fresh: self.next_fresh,
             next_command_id: self.next_command_id,
             parser: ast::parse::ProgramParser::new(),
+            expr_parser: ast::parse::ExprParser::new(),
+            action_parser: ast::parse::ActionParser::new(),
             number_underscores: self.number_underscores,
             global_variables: self.global_variables.clone(),
+            type_info: self.type_info.clone(),
         }
     }
 }
@@ -782,7 +806,7 @@ impl Desugar {
     pub fn declare(&mut self, name: Symbol, sort: Symbol) -> Vec<NCommand> {
         let fresh = self.get_fresh();
         vec![
-            NCommand::Function(FunctionDecl {
+            NCommand::Function(NormFunctionDecl {
                 name: fresh,
                 schema: Schema {
                     input: vec![],
@@ -796,5 +820,27 @@ impl Desugar {
             }),
             NCommand::NormAction(NormAction::Let(name, NormExpr::Call(fresh, vec![]))),
         ]
+    }
+
+    pub fn desugar_function(&mut self, fdecl: &FunctionDecl) -> Vec<NCommand> {
+        vec![NCommand::Function(NormFunctionDecl {
+            name: fdecl.name,
+            schema: fdecl.schema.clone(),
+            default: fdecl.default.clone(),
+            merge: fdecl.merge.clone(),
+            merge_action: flatten_actions(&fdecl.merge_action, self),
+            cost: fdecl.cost,
+            unextractable: fdecl.unextractable,
+        })]
+    }
+
+    /// Get the name of the parent table for a sort
+    /// for the term encoding (not related to desugaring)
+    pub(crate) fn parent_name(&self, sort: Symbol) -> Symbol {
+        Symbol::from(format!(
+            "{}_Parent{}",
+            sort,
+            "_".repeat(self.number_underscores)
+        ))
     }
 }

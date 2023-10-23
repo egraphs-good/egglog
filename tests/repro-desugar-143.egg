@@ -11,7 +11,7 @@
 
 (run 20)
 
-(print-table f)
+(print-function f 100)
 (check (= (f 10) 10))
 
 (datatype Value (Num i64))
@@ -29,12 +29,12 @@
 		(= a1 a2)
 		(= b1 b2)
 		(= 1 (- x2 y2)))
-	((let n (+ x 1)) (let sum (+ a1 b2)) (set (fib (Num n)) (Num sum))))
+	((let n (+ x 1)) (let sum (+ a1 b2)) (union (fib (Num n)) (Num sum))))
 
-(set (fib (Num 1)) (Num 1))
-(set (fib (Num 2)) (Num 1))
+(union (fib (Num 1)) (Num 1))
+(union (fib (Num 2)) (Num 1))
 
 (run 20)
 
-(print-table fib)
+(print-function fib 100)
 (check (= (fib (Num 10)) (Num 55)))

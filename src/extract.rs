@@ -63,7 +63,7 @@ impl EGraph {
                                 "{:?}",
                                 inputs
                                     .iter()
-                                    .map(|input| extractor.costs.get(&extractor.find(input)))
+                                    .map(|input| extractor.costs.get(&extractor.find_id(*input)))
                                     .collect::<Vec<_>>()
                             );
                         }
@@ -80,8 +80,7 @@ impl EGraph {
         limit: usize,
         termdag: &mut TermDag,
     ) -> Vec<Term> {
-        let (tag, id) = self.value_to_id(value).unwrap();
-        let output_value = &Value::from_id(tag, id);
+        let output_value = self.find(value);
         let ext = &Extractor::new(self, termdag);
         ext.ctors
             .iter()
@@ -95,7 +94,7 @@ impl EGraph {
                 func.nodes
                     .iter()
                     .filter_map(|(inputs, output)| {
-                        (&output.value == output_value).then(|| {
+                        (output.value == output_value).then(|| {
                             let node = Node { sym, inputs };
                             ext.expr_from_node(&node, termdag).expect(
                                 "extract_variants should be called after extractor initialization",
@@ -148,7 +147,7 @@ impl<'a> Extractor<'a> {
         sort: &ArcSort,
     ) -> Option<(Cost, Term)> {
         if sort.is_eq_sort() {
-            let id = self.find(&value);
+            let id = self.find_id(value);
             let (cost, node) = self.costs.get(&id)?.clone();
             Some((cost, node))
         } else {
@@ -174,8 +173,12 @@ impl<'a> Extractor<'a> {
         Some((terms, cost))
     }
 
-    fn find(&self, value: &Value) -> Id {
-        self.egraph.find(Id::from(value.bits as usize))
+    fn find(&self, value: Value) -> Value {
+        self.egraph.find(value)
+    }
+
+    fn find_id(&self, value: Value) -> Id {
+        Id::from(self.find(value).bits as usize)
     }
 
     fn find_costs(&mut self, termdag: &mut TermDag) {
@@ -192,7 +195,7 @@ impl<'a> Extractor<'a> {
                         {
                             let make_new_pair = || (new_cost, termdag.app(sym, term_inputs));
 
-                            let id = self.find(&output.value);
+                            let id = self.find_id(output.value);
                             match self.costs.entry(id) {
                                 Entry::Vacant(e) => {
                                     did_something = true;

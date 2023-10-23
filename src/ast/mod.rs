@@ -91,7 +91,7 @@ pub enum NCommand {
         value: Expr,
     },
     Sort(Symbol, Option<(Symbol, Vec<Expr>)>),
-    Function(FunctionDecl),
+    Function(NormFunctionDecl),
     AddRuleset(Symbol),
     NormRule {
         name: Symbol,
@@ -100,10 +100,11 @@ pub enum NCommand {
     },
     NormAction(NormAction),
     RunSchedule(NormSchedule),
+    PrintOverallStatistics,
     Check(Vec<NormFact>),
     CheckProof,
     PrintTable(Symbol, usize),
-    PrintSize(Symbol),
+    PrintSize(Option<Symbol>),
     Output {
         file: String,
         exprs: Vec<Expr>,
@@ -132,7 +133,7 @@ impl NCommand {
                 value: value.clone(),
             },
             NCommand::Sort(name, params) => Command::Sort(*name, params.clone()),
-            NCommand::Function(f) => Command::Function(f.clone()),
+            NCommand::Function(f) => Command::Function(f.to_fdecl()),
             NCommand::AddRuleset(name) => Command::AddRuleset(*name),
             NCommand::NormRule {
                 name,
@@ -144,12 +145,13 @@ impl NCommand {
                 rule: rule.to_rule(),
             },
             NCommand::RunSchedule(schedule) => Command::RunSchedule(schedule.to_schedule()),
+            NCommand::PrintOverallStatistics => Command::PrintOverallStatistics,
             NCommand::NormAction(action) => Command::Action(action.to_action()),
             NCommand::Check(facts) => {
                 Command::Check(facts.iter().map(|fact| fact.to_fact()).collect())
             }
             NCommand::CheckProof => Command::CheckProof,
-            NCommand::PrintTable(name, n) => Command::PrintTable(*name, *n),
+            NCommand::PrintTable(name, n) => Command::PrintFunction(*name, *n),
             NCommand::PrintSize(name) => Command::PrintSize(*name),
             NCommand::Output { file, exprs } => Command::Output {
                 file: file.to_string(),
@@ -176,6 +178,7 @@ impl NCommand {
             NCommand::Function(f) => NCommand::Function(f.clone()),
             NCommand::AddRuleset(name) => NCommand::AddRuleset(*name),
             NCommand::RunSchedule(schedule) => NCommand::RunSchedule(schedule.clone()),
+            NCommand::PrintOverallStatistics => NCommand::PrintOverallStatistics,
             NCommand::NormRule {
                 name,
                 ruleset,
@@ -213,6 +216,12 @@ pub enum Schedule {
     Repeat(usize, Box<Schedule>),
     Run(RunConfig),
     Sequence(Vec<Schedule>),
+}
+
+impl Schedule {
+    pub fn saturate(self) -> Self {
+        Schedule::Saturate(Box::new(self))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -320,58 +329,346 @@ impl Display for NormSchedule {
 }
 
 // TODO command before and after desugaring should be different
+/// A [`Command`] is the top-level construct in egglog.
+/// It includes defining rules, declaring functions,
+/// adding to tables, and running rules (via a [`Schedule`]).
 #[derive(Debug, Clone)]
 pub enum Command {
+    /// Egglog supports several *experimental* options
+    /// that can be set using the `set-option` command.
+    ///
+    /// For example, `(set-option node_limit 1000)` sets a hard limit on the number of "nodes" or rows in the database.
+    /// Once this limit is reached, no egglog stops running rules.
+    ///
+    /// Other options supported include:
+    /// - "interactive_mode" (default: false): when enabled, egglog prints "(done)" after each command, allowing an external
+    /// tool to know when each command has finished running.
     SetOption {
         name: Symbol,
         value: Expr,
     },
+    /// Declare a user-defined datatype.
+    /// Datatypes can be unioned with [`Action::Union`] either
+    /// at the top level or in the actions of a rule.
+    /// This makes them equal in the implicit, global equality relation.
+
+    /// Example:
+    /// ```text
+    /// (datatype Math
+    ///   (Num i64)
+    ///   (Var String)
+    ///   (Add Math Math)
+    ///   (Mul Math Math))
+    /// ```
+
+    /// defines a simple `Math` datatype with variants for numbers, named variables, addition and multiplication.
+    ///
+    /// Datatypes desugar directly to a [`Command::Sort`] and a [`Command::Function`] for each constructor.
+    /// The code above becomes:
+    /// ```text
+    /// (sort Math)
+    /// (function Num (i64) Math)
+    /// (function Var (String) Math)
+    /// (function Add (Math Math) Math)
+    /// (function Mul (Math Math) Math)
+
+    /// Datatypes are also known as algebraic data types, tagged unions and sum types.
     Datatype {
         name: Symbol,
         variants: Vec<Variant>,
     },
+    /// `declare` is syntactic sugar allowing for the declaration of constants.
+    /// For example, the following program:
+    /// ```text
+    /// (sort Bool)
+    /// (declare True Bool)
+    /// ```
+    /// Desugars to:
+    /// ```text
+    /// (sort Bool)
+    /// (function True_table () Bool)
+    /// (let True (True_table))
+    /// ```
+
+    /// Note that declare inserts the constant into the database,
+    /// so rules can use the constant directly as a variable.
     Declare {
         name: Symbol,
         sort: Symbol,
     },
+    /// Create a new user-defined sort, which can then
+    /// be used in new [`Command::Function`] declarations.
+    /// The [`Command::Datatype`] command desugars directly to this command, with one [`Command::Function`]
+    /// per constructor.
+    /// The main use of this command (as opposed to using [`Command::Datatype`]) is for forward-declaring a sort for mutually-recursive datatypes.
+    ///
+    /// It can also be used to create
+    /// a container sort.
+    /// For example, here's how to make a sort for vectors
+    /// of some user-defined sort `Math`:
+    /// ```text
+    /// (sort MathVec (Vec Math))
+    /// ```
+    ///
+    /// Now `MathVec` can be used as an input or output sort.
     Sort(Symbol, Option<(Symbol, Vec<Expr>)>),
+    /// Declare an egglog function, which is a database table with a
+    /// a functional dependency (also called a primary key) on its inputs to one output.
+    ///
+    /// ```text
+    /// (function <name:Ident> <schema:Schema> <cost:Cost>
+    ///        (:on_merge <List<Action>>)?
+    ///        (:merge <Expr>)?
+    ///        (:default <Expr>)?)
+    ///```
+    /// A function can have a `cost` for extraction.
+    /// It can also have a `default` value, which is used when calling the function.
+    ///
+    /// Finally, it can have a `merge` and `on_merge`, which are triggered when
+    /// the function dependency is violated.
+    /// In this case, the merge expression determines which of the two outputs
+    /// for the same input is used.
+    /// The `on_merge` actions are run after the merge expression is evaluated.
+    ///
+    /// Note that the `:merge` expression must be monotonic
+    /// for the behavior of the egglog program to be consistent and defined.
+    /// In other words, the merge function must define a lattice on the output of the function.
+    /// If values are merged in different orders, they should still result in the same output.
+    /// If the merge expression is not monotonic, the behavior can vary as
+    /// actions may be applied more than once with different results.
+    ///
+    /// The function is a datatype when:
+    /// - The output is not a primitive
+    /// - No merge function is provided
+    /// - No default is provided
+    ///
+    /// For example, the following is a datatype:
+    /// ```text
+    /// (function Add (i64 i64) Math)
+    /// ```
+    ///
+    /// However, this function is not:
+    /// ```text
+    /// (function LowerBound (Math) i64 :merge (max old new))
+    /// ```
+    ///
+    /// A datatype can be unioned with [`Action::Union`]
+    /// with another datatype of the same `sort`.
+    ///
+    /// Functions that are not a datatype can be `set`
+    /// with [`Action::Set`].
     Function(FunctionDecl),
+    /// The `relation` is syntactic sugar for a named function which returns the `Unit` type.
+    /// Example:
+    /// ```text
+    /// (relation path (i64 i64))
+    /// (relation edge (i64 i64))
+    /// ```
+
+    /// Desugars to:
+    /// ```text
+    /// (function path (i64 i64) Unit :default ())
+    /// (function edge (i64 i64) Unit :default ())
+    /// ```
+    Relation {
+        constructor: Symbol,
+        inputs: Vec<Symbol>,
+    },
+    /// Using the `ruleset` command, defines a new
+    /// ruleset that can be added to in [`Command::Rule`]s.
+    /// Rulesets are used to group rules together
+    /// so that they can be run together in a [`Schedule`].
+    ///
+    /// Example:
+    /// Ruleset allows users to define a ruleset- a set of rules
+
+    /// ```text
+    /// (ruleset myrules)
+    /// (rule ((edge x y))
+    ///       ((path x y))
+    ///       :ruleset myrules)
+    /// (run myrules 2)
+    /// ```
     AddRuleset(Symbol),
+    /// ```text
+    /// (rule <body:List<Fact>> <head:List<Action>>)
+    /// ```
+
+    /// defines an egglog rule.
+    /// The rule matches a list of facts with respect to
+    /// the global database, and runs the list of actions
+    /// for each match.
+    /// The matches are done *modulo equality*, meaning
+    /// equal datatypes in the database are considered
+    /// equal.
+
+    /// Example:
+    /// ```text
+    /// (rule ((edge x y))
+    ///       ((path x y)))
+
+    /// (rule ((path x y) (edge y z))
+    ///       ((path x z)))
+    /// ```
     Rule {
         name: Symbol,
         ruleset: Symbol,
         rule: Rule,
     },
+    /// `rewrite` is syntactic sugar for a specific form of `rule`
+    /// which simply unions the left and right hand sides.
+    ///
+    /// Example:
+    /// ```text
+    /// (rewrite (Add a b)
+    ///          (Add b a))
+    /// ```
+    ///
+    /// Desugars to:
+    /// ```text
+    /// (rule ((= lhs (Add a b)))
+    ///       ((union lhs (Add b a))))
+    /// ```
+    ///
+    /// Additionally, additional facts can be specified
+    /// using a `:when` clause.
+    /// For example, the same rule can be run only
+    /// when `a` is zero:
+    ///
+    /// ```text
+    /// (rewrite (Add a b)
+    ///          (Add b a)
+    ///          :when ((= a (Num 0)))
+    /// ```
+    ///
     Rewrite(Symbol, Rewrite),
+    /// Similar to [`Command::Rewrite`], but
+    /// generates two rules, one for each direction.
+    ///
+    /// Example:
+    /// ```text
+    /// (bi-rewrite (Mul (Var x) (Num 0))
+    ///             (Var x))
+    /// ```
+    ///
+    /// Becomes:
+    /// ```text
+    /// (rule ((= lhs (Mul (Var x) (Num 0))))
+    ///       ((union lhs (Var x))))
+    /// (rule ((= lhs (Var x)))
+    ///       ((union lhs (Mul (Var x) (Num 0)))))
+    /// ```
     BiRewrite(Symbol, Rewrite),
+    /// Perform an [`Action`] on the global database
+    /// (see documentation for [`Action`] for more details).
+    /// Example:
+    /// ```text
+    /// (let xplusone (Add (Var "x") (Num 1)))
+    /// ```
     Action(Action),
+    /// Runs a [`Schedule`], which specifies
+    /// rulesets and the number of times to run them.
+    ///
+    /// Example:
+    /// ```text
+    /// (run-schedule
+    ///     (saturate my-ruleset-1)
+    ///     (run my-ruleset-2 4))
+    /// ```
+    ///
+    /// Runs `my-ruleset-1` until saturation,
+    /// then runs `my-ruleset-2` four times.
+    ///
+    /// See [`Schedule`] for more details.
     RunSchedule(Schedule),
+    /// Print runtime statistics about rules
+    /// and rulesets so far.
+    PrintOverallStatistics,
+    // TODO provide simplify docs
     Simplify {
         expr: Expr,
         schedule: Schedule,
     },
+    // TODO provide calc docs
     Calc(Vec<IdentSort>, Vec<Expr>),
-    Extract {
+    /// The `query-extract` command runs a query,
+    /// extracting the result for each match that it finds.
+    /// For a simpler extraction command, use [`Action::Extract`] instead.
+    ///
+    /// Example:
+    /// ```text
+    /// (query-extract (Add a b))
+    /// ```
+    ///
+    /// Extracts every `Add` term in the database, once
+    /// for each class of equivalent `a` and `b`.
+    ///
+    /// The resulting datatype is chosen from the egraph
+    /// as the smallest term by size (taking into account
+    /// the `:cost` annotations for each constructor).
+    /// This cost does *not* take into account common sub-expressions.
+    /// For example, the following term has cost 5:
+    /// ```text
+    /// (Add
+    ///     (Num 1)
+    ///     (Num 1))
+    /// ```
+    QueryExtract {
         variants: usize,
-        fact: Fact,
+        expr: Expr,
     },
-    // TODO: this could just become an empty query
+    /// The `check` command checks that the given facts
+    /// match at least once in the current database.
+    /// The list of facts is matched in the same way a [`Command::Rule`] is matched.
+    ///
+    /// Example:
+
+    /// ```text
+    /// (check (= (+ 1 2) 3))
+    /// (check (<= 0 3) (>= 3 0))
+    /// (fail (check (= 1 2)))
+    /// ```
+
+    /// prints
+
+    /// ```text
+    /// [INFO ] Checked.
+    /// [INFO ] Checked.
+    /// [ERROR] Check failed
+    /// [INFO ] Command failed as expected.
+    /// ```
     Check(Vec<Fact>),
+    /// Currently unused, this command will check proofs when they are implemented.
     CheckProof,
-    PrintTable(Symbol, usize),
-    PrintSize(Symbol),
+    /// Print out rows a given function, extracting each of the elements of the function.
+    /// Example:
+    /// ```text
+    /// (print-function Add 20)
+    /// ```
+    /// prints the first 20 rows of the `Add` function.
+    ///
+    PrintFunction(Symbol, usize),
+    /// Print out the number of rows in a function or all functions.
+    PrintSize(Option<Symbol>),
+    /// Input a CSV file directly into a function.
     Input {
         name: Symbol,
         file: String,
     },
+    /// Extract and output a set of expressions to a file.
     Output {
         file: String,
         exprs: Vec<Expr>,
     },
+    /// `push` the current egraph `n` times so that it is saved.
+    /// Later, the current database and rules can be restored using `pop`.
     Push(usize),
+    /// `pop` the current egraph, restoring the previous one.
+    /// The argument specifies how many egraphs to pop.
     Pop(usize),
+    /// Assert that a command fails with an error.
     Fail(Box<Command>),
-    // TODO desugar include
+    /// Include another egglog file directly as text and run it.
     Include(String),
 }
 
@@ -387,6 +684,10 @@ impl ToSexp for Command {
             Command::Sort(name, None) => list!("sort", name),
             Command::Sort(name, Some((name2, args))) => list!("sort", name, list!( name2, ++ args)),
             Command::Function(f) => f.to_sexp(),
+            Command::Relation {
+                constructor,
+                inputs,
+            } => list!("relation", constructor, list!(++ inputs)),
             Command::AddRuleset(name) => list!("ruleset", name),
             Command::Rule {
                 name,
@@ -394,14 +695,17 @@ impl ToSexp for Command {
                 rule,
             } => rule.to_sexp(*ruleset, *name),
             Command::RunSchedule(sched) => list!("run-schedule", sched),
+            Command::PrintOverallStatistics => list!("print-stats"),
             Command::Calc(args, exprs) => list!("calc", list!(++ args), ++ exprs),
-            Command::Extract { variants, fact } => list!("extract", ":variants", variants, fact),
+            Command::QueryExtract { variants, expr } => {
+                list!("query-extract", ":variants", variants, expr)
+            }
             Command::Check(facts) => list!("check", ++ facts),
             Command::CheckProof => list!("check-proof"),
             Command::Push(n) => list!("push", n),
             Command::Pop(n) => list!("pop", n),
-            Command::PrintTable(name, n) => list!("print-table", name, n),
-            Command::PrintSize(name) => list!("print-size", name),
+            Command::PrintFunction(name, n) => list!("print-function", name, n),
+            Command::PrintSize(name) => list!("print-size", ++ name),
             Command::Input { name, file } => list!("input", name, format!("\"{}\"", file)),
             Command::Output { file, exprs } => list!("output", format!("\"{}\"", file), ++ exprs),
             Command::Fail(cmd) => list!("fail", cmd),
@@ -496,12 +800,43 @@ impl NormRunConfig {
     }
 }
 
+/// A normalized function declaration- the desugared
+/// version of a [`FunctionDecl`].
+/// TODO so far only the merge action is normalized,
+/// not the default value or merge expression.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct NormFunctionDecl {
+    pub name: Symbol,
+    pub schema: Schema,
+    // todo desugar default, merge
+    pub default: Option<Expr>,
+    pub merge: Option<Expr>,
+    pub merge_action: Vec<NormAction>,
+    pub cost: Option<usize>,
+    pub unextractable: bool,
+}
+
+impl NormFunctionDecl {
+    pub fn to_fdecl(&self) -> FunctionDecl {
+        FunctionDecl {
+            name: self.name,
+            schema: self.schema.clone(),
+            default: self.default.clone(),
+            merge: self.merge.clone(),
+            merge_action: self.merge_action.iter().map(|a| a.to_action()).collect(),
+            cost: self.cost,
+            unextractable: self.unextractable,
+        }
+    }
+}
+
+/// Represents the declaration of a function
+/// directly parsed from source syntax.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct FunctionDecl {
     pub name: Symbol,
     pub schema: Schema,
     pub default: Option<Expr>,
-    // TODO we should desugar merge and merge action
     pub merge: Option<Expr>,
     pub merge_action: Vec<Action>,
     pub cost: Option<usize>,
@@ -557,7 +892,7 @@ impl FunctionDecl {
             },
             merge: None,
             merge_action: vec![],
-            default: None,
+            default: Some(Expr::Lit(Literal::Unit)),
             cost: None,
             unextractable: false,
         }
@@ -609,6 +944,16 @@ impl ToSexp for FunctionDecl {
     }
 }
 
+/// Facts are the left-hand side of a [`Command::Rule`].
+/// They represent a part of a database query.
+/// Facts can be expressions or equality constraints between expressions.
+///
+/// Note that primitives such as  `!=` are partial.
+/// When two things are equal, it returns nothing and the query does not match.
+/// For example, the following egglog code runs:
+/// ```text
+/// (fail (check (!= 1 1)))
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Fact {
     /// Must be at least two things in an eq fact
@@ -647,6 +992,18 @@ impl NormFact {
             NormFact::AssignVar(lhs, rhs) => NormFact::AssignVar(*lhs, *rhs),
             NormFact::ConstrainEq(lhs, rhs) => NormFact::ConstrainEq(*lhs, *rhs),
             NormFact::AssignLit(symbol, lit) => NormFact::AssignLit(*symbol, lit.clone()),
+        }
+    }
+
+    pub(crate) fn map_use(&self, fvar: &mut impl FnMut(Symbol) -> Expr) -> Fact {
+        match self {
+            NormFact::AssignVar(lhs, rhs) => Fact::Eq(vec![Expr::Var(*lhs), fvar(*rhs)]),
+            NormFact::ConstrainEq(lhs, rhs) => Fact::Eq(vec![fvar(*lhs), fvar(*rhs)]),
+            NormFact::Compute(lhs, NormExpr::Call(op, children)) => Fact::Eq(vec![
+                fvar(*lhs),
+                Expr::Call(*op, children.iter().cloned().map(fvar).collect()),
+            ]),
+            NormFact::AssignLit(..) | NormFact::Assign(..) => self.to_fact(),
         }
     }
 
@@ -707,10 +1064,39 @@ impl Display for Fact {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Action {
+    /// Bind a variable to a particular datatype or primitive.
+    /// At the top level (in a [`Command::Action`]), this defines a global variable.
+    /// In a [`Command::Rule`], this defines a local variable in the actions.
     Let(Symbol, Expr),
+    /// `set` a function to a particular result.
+    /// `set` should not be used on datatypes-
+    /// instead, use `union`.
     Set(Symbol, Vec<Expr>, Expr),
+    /// `delete` an entry from a function.
+    /// Be wary! Only delete entries that are subsumed in some way or
+    /// guaranteed to be not useful.
     Delete(Symbol, Vec<Expr>),
+    /// `union` two datatypes, making them equal
+    /// in the implicit, global equality relation
+    /// of egglog.
+    /// All rules match modulo this equality relation.
+    ///
+    /// Example:
+    /// ```text
+    /// (datatype Math (Num i64))
+    /// (union (Num 1) (Num 2)); Define that Num 1 and Num 2 are equivalent
+    /// (extract (Num 1)); Extracts Num 1
+    /// (extract (Num 2)); Extracts Num 1
+    /// ```
     Union(Expr, Expr),
+    /// `extract` a datatype from the egraph, choosing
+    /// the smallest representative.
+    /// By default, each constructor costs 1 to extract
+    /// (common subexpressions are not shared in the cost
+    /// model).
+    /// The second argument is the number of variants to
+    /// extract, picking different terms in the
+    /// same equivalence class.
     Extract(Expr, Expr),
     Panic(String),
     Expr(Expr),
@@ -968,6 +1354,8 @@ impl NormRule {
                     let substituted = new_expr.subst(subst);
 
                     // TODO sometimes re-arranging actions is bad
+                    // this is because actions can fail
+                    // halfway through in the current semantics
                     if substituted.ast_size() > 1 {
                         head.push(Action::Let(*symbol, substituted));
                     } else {

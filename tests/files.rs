@@ -8,6 +8,7 @@ struct Run {
     path: PathBuf,
     test_proofs: bool,
     resugar: bool,
+    test_terms_encoding: bool,
 }
 
 impl Run {
@@ -51,6 +52,9 @@ impl Run {
         if self.test_proofs {
             egraph.test_proofs = true;
         }
+        if self.test_terms_encoding {
+            egraph.enable_terms_encoding();
+        }
         egraph.set_underscores_for_desugaring(5);
         match egraph.parse_and_run_program(program) {
             Ok(msgs) => {
@@ -64,7 +68,9 @@ impl Run {
                         log::info!("  {}", msg);
                     }
                     // Test graphviz dot generation
-                    egraph.serialize_for_graphviz().to_dot();
+                    egraph.serialize_for_graphviz(false).to_dot();
+                    // Also try splitting
+                    egraph.serialize_for_graphviz(true).to_dot();
                 }
             }
             Err(err) => {
@@ -93,6 +99,9 @@ impl Run {
                 if self.0.resugar {
                     write!(f, "_resugar")?;
                 }
+                if self.0.test_terms_encoding {
+                    write!(f, "_term_encoding")?;
+                }
                 Ok(())
             }
         }
@@ -113,13 +122,23 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
             path: entry.unwrap().clone(),
             test_proofs: false,
             resugar: false,
+            test_terms_encoding: false,
         };
         let should_fail = run.should_fail();
 
         push_trial(run.clone());
+        push_trial(Run {
+            test_terms_encoding: true,
+            ..run.clone()
+        });
         if !should_fail {
             push_trial(Run {
                 resugar: true,
+                ..run.clone()
+            });
+            push_trial(Run {
+                resugar: true,
+                test_terms_encoding: true,
                 ..run.clone()
             });
         }

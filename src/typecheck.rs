@@ -48,7 +48,7 @@ impl<T: std::fmt::Display> std::fmt::Display for Atom<T> {
     }
 }
 
-#[derive(Default, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct Query {
     pub atoms: Vec<Atom<Symbol>>,
     pub filters: Vec<Atom<Primitive>>,
@@ -98,7 +98,7 @@ impl PrimitiveLike for ValueEq {
         }
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         assert_eq!(values.len(), 2);
         if values[0] == values[1] {
             Some(values[0])
@@ -112,7 +112,7 @@ impl<'a> Context<'a> {
     pub fn new(egraph: &'a EGraph) -> Self {
         Self {
             egraph,
-            unit: egraph.proof_state.type_info.sorts[&Symbol::from(UNIT_SYM)].clone(),
+            unit: egraph.type_info().sorts[&Symbol::from(UNIT_SYM)].clone(),
             types: Default::default(),
             errors: Vec::default(),
             unionfind: UnionFind::default(),
@@ -209,7 +209,10 @@ impl<'a> Context<'a> {
             }
         };
 
-        let mut query = Query::default();
+        let mut query = Query {
+            atoms: Default::default(),
+            filters: Default::default(),
+        };
         let mut query_eclasses = HashSet::<Id>::default();
         // Now we can fill in the nodes with the canonical leaves
         for (node, id) in &self.nodes {
@@ -396,7 +399,7 @@ impl<'a> Context<'a> {
                 (self.add_node(ENode::Var(*sym)), ty)
             }
             Expr::Lit(lit) => {
-                let t = self.egraph.proof_state.type_info.infer_literal(lit);
+                let t = self.egraph.type_info().infer_literal(lit);
                 (self.add_node(ENode::Literal(lit.clone())), Some(t))
             }
             Expr::Call(sym, args) => {
@@ -415,7 +418,7 @@ impl<'a> Context<'a> {
                         .collect();
                     let t = f.schema.output.clone();
                     (self.add_node(ENode::Func(*sym, ids)), Some(t))
-                } else if let Some(prims) = self.egraph.proof_state.type_info.primitives.get(sym) {
+                } else if let Some(prims) = self.egraph.type_info().primitives.get(sym) {
                     let (ids, arg_tys): (Vec<Id>, Vec<Option<ArcSort>>) =
                         args.iter().map(|arg| self.infer_query_expr(arg)).unzip();
 
@@ -533,16 +536,10 @@ impl<'a> ExprChecker<'a> for ActionChecker<'a> {
     }
 
     fn do_function(&mut self, f: Symbol, _args: Vec<Self::T>) -> Self::T {
-        let func_type = self
-            .egraph
-            .proof_state
-            .type_info
-            .func_types
-            .get(&f)
-            .unwrap();
+        let func_type = self.egraph.type_info().lookup_user_func(f).unwrap();
         self.instructions.push(Instruction::CallFunction(
             f,
-            func_type.has_default || !func_type.has_merge,
+            func_type.has_default || func_type.is_datatype,
         ));
     }
 
@@ -601,12 +598,17 @@ trait ExprChecker<'a> {
         match expr {
             Expr::Lit(lit) => {
                 let t = self.do_lit(lit);
-                Ok((t, self.egraph().proof_state.type_info.infer_literal(lit)))
+                Ok((t, self.egraph().type_info().infer_literal(lit)))
             }
             Expr::Var(sym) => self.infer_var(*sym),
             Expr::Call(sym, args) => {
-                if let Some(functype) = self.egraph().proof_state.type_info.func_types.get(sym) {
-                    assert!(functype.input.len() == args.len());
+                if let Some(functype) = self.egraph().type_info().lookup_user_func(*sym) {
+                    assert_eq!(
+                        functype.input.len(),
+                        args.len(),
+                        "Got wrong number of arguments for function {}",
+                        functype.name
+                    );
 
                     let mut ts = vec![];
                     for (expected, arg) in functype.input.iter().zip(args) {
@@ -615,8 +617,7 @@ trait ExprChecker<'a> {
 
                     let t = self.do_function(*sym, ts);
                     Ok((t, functype.output.clone()))
-                } else if let Some(prims) = self.egraph().proof_state.type_info.primitives.get(sym)
-                {
+                } else if let Some(prims) = self.egraph().type_info().primitives.get(sym) {
                     let mut ts = Vec::with_capacity(args.len());
                     let mut tys = Vec::with_capacity(args.len());
                     for arg in args {
@@ -721,6 +722,61 @@ impl EGraph {
         Ok((t, Program(checker.instructions)))
     }
 
+    fn perform_set(
+        &mut self,
+        table: Symbol,
+        new_value: Value,
+        stack: &mut Vec<Value>,
+    ) -> Result<(), Error> {
+        let function = self.functions.get_mut(&table).unwrap();
+
+        let new_len = stack.len() - function.schema.input.len();
+        // TODO would be nice to use slice here
+        let args = &stack[new_len..];
+
+        // We should only have canonical values here: omit the canonicalization step
+        let old_value = function.get(args);
+
+        if let Some(old_value) = old_value {
+            if new_value != old_value {
+                let merged: Value = match function.merge.merge_vals.clone() {
+                    MergeFn::AssertEq => {
+                        return Err(Error::MergeError(table, new_value, old_value));
+                    }
+                    MergeFn::Union => {
+                        self.unionfind
+                            .union_values(old_value, new_value, old_value.tag)
+                    }
+                    MergeFn::Expr(merge_prog) => {
+                        let values = [old_value, new_value];
+                        let old_len = stack.len();
+                        self.run_actions(stack, &values, &merge_prog, true)?;
+                        let result = stack.pop().unwrap();
+                        stack.truncate(old_len);
+                        result
+                    }
+                };
+                if merged != old_value {
+                    let args = &stack[new_len..];
+                    let function = self.functions.get_mut(&table).unwrap();
+                    function.insert(args, merged, self.timestamp);
+                }
+                // re-borrow
+                let function = self.functions.get_mut(&table).unwrap();
+                if let Some(prog) = function.merge.on_merge.clone() {
+                    let values = [old_value, new_value];
+                    // XXX: we get an error if we pass the current
+                    // stack and then truncate it to the old length.
+                    // Why?
+                    self.run_actions(&mut Vec::new(), &values, &prog, true)?;
+                }
+            }
+        } else {
+            function.insert(args, new_value, self.timestamp);
+        }
+        Ok(())
+    }
+
     pub fn run_actions(
         &mut self,
         stack: &mut Vec<Value>,
@@ -754,9 +810,6 @@ impl EGraph {
                     let value = if let Some(out) = function.nodes.get(values) {
                         out.value
                     } else if make_defaults {
-                        if function.merge.on_merge.is_some() {
-                            panic!("No value found for function {} with values {:?}", f, values);
-                        }
                         let ts = self.timestamp;
                         let out = &function.schema.output;
                         match function.decl.default.as_ref() {
@@ -797,7 +850,7 @@ impl EGraph {
                 Instruction::CallPrimitive(p, arity) => {
                     let new_len = stack.len() - arity;
                     let values = &stack[new_len..];
-                    if let Some(value) = p.apply(values) {
+                    if let Some(value) = p.apply(values, self) {
                         stack.truncate(new_len);
                         stack.push(value);
                     } else {
@@ -812,48 +865,8 @@ impl EGraph {
                     // except for setting the parent relation
                     let new_value = stack.pop().unwrap();
                     let new_len = stack.len() - function.schema.input.len();
-                    let args = &stack[new_len..];
 
-                    // We should only have canonical values here: omit the canonicalization step
-                    let old_value = function.get(args);
-
-                    if let Some(old_value) = old_value {
-                        if new_value != old_value {
-                            let merged: Value = match function.merge.merge_vals.clone() {
-                                MergeFn::AssertEq => {
-                                    return Err(Error::MergeError(*f, new_value, old_value));
-                                }
-                                MergeFn::Union => {
-                                    self.unionfind
-                                        .union_values(old_value, new_value, old_value.tag)
-                                }
-                                MergeFn::Expr(merge_prog) => {
-                                    let values = [old_value, new_value];
-                                    let old_len = stack.len();
-                                    self.run_actions(stack, &values, &merge_prog, true)?;
-                                    let result = stack.pop().unwrap();
-                                    stack.truncate(old_len);
-                                    result
-                                }
-                            };
-                            if merged != old_value {
-                                let args = &stack[new_len..];
-                                let function = self.functions.get_mut(f).unwrap();
-                                function.insert(args, merged, self.timestamp);
-                            }
-                            // re-borrow
-                            let function = self.functions.get_mut(f).unwrap();
-                            if let Some(prog) = function.merge.on_merge.clone() {
-                                let values = [old_value, new_value];
-                                // XXX: we get an error if we pass the current
-                                // stack and then truncate it to the old length.
-                                // Why?
-                                self.run_actions(&mut Vec::new(), &values, &prog, true)?;
-                            }
-                        }
-                    } else {
-                        function.insert(args, new_value, self.timestamp);
-                    }
+                    self.perform_set(*f, new_value, stack)?;
                     stack.truncate(new_len)
                 }
                 Instruction::Union(arity) => {
@@ -877,35 +890,37 @@ impl EGraph {
 
                     let variants = values[1].bits as i64;
                     if variants == 0 {
-                        let (cost, expr) = self.extract(
+                        let (cost, term) = self.extract(
                             values[0],
                             &mut termdag,
-                            self.proof_state
-                                .type_info
-                                .sorts
-                                .get(&values[0].tag)
-                                .unwrap(),
+                            self.type_info().sorts.get(&values[0].tag).unwrap(),
                         );
-                        let extracted = termdag.to_string(&expr);
+                        let extracted = termdag.to_string(&term);
                         log::info!("extracted with cost {cost}: {}", extracted);
                         self.print_msg(extracted);
+                        self.extract_report = Some(ExtractReport::Best {
+                            termdag,
+                            cost,
+                            term,
+                        });
                     } else {
                         if variants < 0 {
                             panic!("Cannot extract negative number of variants");
                         }
-                        let extracted =
+                        let terms =
                             self.extract_variants(values[0], variants as usize, &mut termdag);
                         log::info!("extracted variants:");
                         let mut msg = String::default();
                         msg += "(\n";
-                        assert!(!extracted.is_empty());
-                        for expr in extracted {
-                            let str = termdag.to_string(&expr);
+                        assert!(!terms.is_empty());
+                        for expr in &terms {
+                            let str = termdag.to_string(expr);
                             log::info!("   {}", str);
                             msg += &format!("   {}\n", str);
                         }
                         msg += ")";
                         self.print_msg(msg);
+                        self.extract_report = Some(ExtractReport::Variants { termdag, terms });
                     }
 
                     stack.truncate(new_len);
@@ -915,6 +930,7 @@ impl EGraph {
                     Literal::Int(i) => stack.push(Value::from(*i)),
                     Literal::F64(f) => stack.push(Value::from(*f)),
                     Literal::String(s) => stack.push(Value::from(*s)),
+                    Literal::Bool(b) => stack.push(Value::from(*b)),
                     Literal::Unit => stack.push(Value::unit()),
                 },
                 Instruction::Pop => {

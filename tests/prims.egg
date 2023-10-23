@@ -5,8 +5,8 @@
 (datatype edge (Edge i64 i64 i64))
 (relation edge-exists (edge))
 
-(relation true ())
-(true)
+(relation mytrue ())
+(mytrue)
 (let infinity 99999999)  ; close enough
 
 ; ==== PROBLEM INSTANCES ====
@@ -18,7 +18,7 @@
 ;        \ |
 ; (3)--3--(4)
 (ruleset graph1)
-(rule ((true))
+(rule ((mytrue))
       ((edge-exists (Edge 1 2 2))
        (edge-exists (Edge 1 4 1))
        (edge-exists (Edge 2 4 2))
@@ -33,7 +33,7 @@
 ;  | / \ |/    |
 ; (4)-4-(5)-7-(6)
 (ruleset graph2)
-(rule ((true))
+(rule ((mytrue))
       ((edge-exists (Edge 1 2 1))
        (edge-exists (Edge 1 4 5))
        (edge-exists (Edge 1 5 3))
@@ -69,7 +69,7 @@
 (function iteration-to-best-edge (i64) edge :merge new)
 (function iteration-to-best-edge-weight (i64) i64 :merge new)
 
-(rule ((true))
+(rule ((mytrue))
       ((set (vertex-included 1) 1)  ; Initially just include vertex 1
        (set (current-iteration) 0)
        (set (iteration-to-best-edge-weight 0) infinity))
@@ -110,7 +110,7 @@
 
 ; === PRINT RESULTS ===
 
-; (print-table edge-in-mst) ; this is not very helpful
+; (print-function edge-in-mst) ; this is not very helpful
 
 ; Just copy canonical edges to solution
 (relation solution (i64 i64 i64))
@@ -121,4 +121,4 @@
       :ruleset finalize)
 (run-schedule (saturate finalize))
 
-(print-table solution) ; this is better
+(print-function solution 100) ; this is better

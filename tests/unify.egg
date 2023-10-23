@@ -16,7 +16,7 @@
 (rule ((= (Lit i) (Mul a b)))
       ((panic "Literal cannot be equal to a product")))
 
-(set (Mul (Var "a") (Var "a")) 
+(union (Mul (Var "a") (Var "a")) 
      (Mul (Lit 1) (Lit 2)))
 
 

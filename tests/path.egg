@@ -14,6 +14,6 @@
 (fail (check (path 1 2)))
 (run 3)
 
-(print-table path)
+(print-function path 100)
 (check (path 1 4))
 (fail (check (path 4 1)))

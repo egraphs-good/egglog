@@ -1,24 +1,18 @@
-use crate::{proofs::RULE_PROOF_KEYWORD, *};
+use crate::*;
+
+pub const RULE_PROOF_KEYWORD: &str = "rule-proof";
 
 #[derive(Clone, Debug)]
 pub struct FuncType {
+    pub name: Symbol,
     pub input: Vec<ArcSort>,
     pub output: ArcSort,
-    pub has_merge: bool,
+    pub is_datatype: bool,
     pub has_default: bool,
 }
 
-impl FuncType {
-    pub fn new(input: Vec<ArcSort>, output: ArcSort, has_merge: bool, has_default: bool) -> Self {
-        Self {
-            input,
-            output,
-            has_merge,
-            has_default,
-        }
-    }
-}
-
+/// Stores resolved typechecking information.
+/// TODO make these not public, use accessor methods
 #[derive(Clone)]
 pub struct TypeInfo {
     // get the sort from the sorts name()
@@ -27,7 +21,7 @@ pub struct TypeInfo {
     pub sorts: HashMap<Symbol, Arc<dyn Sort>>,
     pub primitives: HashMap<Symbol, Vec<Primitive>>,
     pub func_types: HashMap<Symbol, FuncType>,
-    pub global_types: HashMap<Symbol, ArcSort>,
+    global_types: HashMap<Symbol, ArcSort>,
     pub local_types: HashMap<CommandId, HashMap<Symbol, ArcSort>>,
 }
 
@@ -45,6 +39,7 @@ impl Default for TypeInfo {
 
         res.add_sort(UnitSort::new(UNIT_SYM.into()));
         res.add_sort(StringSort::new("String".into()));
+        res.add_sort(BoolSort::new("bool".into()));
         res.add_sort(I64Sort::new("i64".into()));
         res.add_sort(F64Sort::new("f64".into()));
         res.add_sort(RationalSort::new("Rational".into()));
@@ -69,6 +64,7 @@ impl TypeInfo {
             Literal::Int(_) => self.sorts.get(&Symbol::from("i64")),
             Literal::F64(_) => self.sorts.get(&Symbol::from("f64")),
             Literal::String(_) => self.sorts.get(&Symbol::from("String")),
+            Literal::Bool(_) => self.sorts.get(&Symbol::from("bool")),
             Literal::Unit => self.sorts.get(&Symbol::from("Unit")),
         }
         .unwrap()
@@ -121,7 +117,10 @@ impl TypeInfo {
         Ok(())
     }
 
-    pub(crate) fn function_to_functype(&self, func: &FunctionDecl) -> Result<FuncType, TypeError> {
+    pub(crate) fn function_to_functype(
+        &self,
+        func: &NormFunctionDecl,
+    ) -> Result<FuncType, TypeError> {
         let input = func
             .schema
             .input
@@ -139,12 +138,14 @@ impl TypeInfo {
         } else {
             Err(TypeError::Unbound(func.schema.output))
         }?;
-        Ok(FuncType::new(
+
+        Ok(FuncType {
+            name: func.name,
             input,
-            output,
-            func.merge.is_some(),
-            func.default.is_some(),
-        ))
+            output: output.clone(),
+            is_datatype: output.is_eq_sort() && func.merge.is_none() && func.default.is_none(),
+            has_default: func.default.is_some(),
+        })
     }
 
     fn typecheck_ncommand(&mut self, command: &NCommand, id: CommandId) -> Result<(), TypeError> {
@@ -416,10 +417,13 @@ impl TypeInfo {
                 self.typecheck_expr(ctx, expr, true)?;
             }
             NormAction::Set(expr, other) => {
-                let func_type = self.typecheck_expr(ctx, expr, true)?.output;
+                let func_type = self.typecheck_expr(ctx, expr, true)?;
                 let other_type = self.lookup(ctx, *other)?;
-                if func_type.name() != other_type.name() {
-                    return Err(TypeError::TypeMismatch(func_type, other_type));
+                if func_type.output.name() != other_type.name() {
+                    return Err(TypeError::TypeMismatch(func_type.output, other_type));
+                }
+                if func_type.is_datatype {
+                    return Err(TypeError::SetDatatype(func_type));
                 }
             }
             NormAction::Union(var1, var2) => {
@@ -563,21 +567,46 @@ impl TypeInfo {
         self.primitives.contains_key(&sym) || self.presort_names.contains(&sym)
     }
 
-    fn lookup_func(
+    /// Lookup a primitive that matches the input types.
+    /// Returns the primitive and output type.
+    pub(crate) fn lookup_prim(
         &self,
-        _ctx: CommandId,
+        sym: Symbol,
+        input_types: Vec<ArcSort>,
+    ) -> Result<(Primitive, ArcSort), TypeError> {
+        if let Some(prims) = self.primitives.get(&sym) {
+            for prim in prims {
+                if let Some(return_type) = prim.accept(&input_types) {
+                    return Ok((prim.clone(), return_type));
+                }
+            }
+        }
+        Err(TypeError::NoMatchingPrimitive {
+            op: sym,
+            inputs: input_types.iter().map(|s| s.name()).collect(),
+        })
+    }
+
+    pub(crate) fn lookup_user_func(&self, sym: Symbol) -> Option<FuncType> {
+        self.func_types.get(&sym).cloned()
+    }
+
+    pub(crate) fn lookup_func(
+        &self,
         sym: Symbol,
         input_types: Vec<ArcSort>,
     ) -> Result<FuncType, TypeError> {
         if let Some(found) = self.func_types.get(&sym) {
             Ok(found.clone())
         } else {
-            if let Some(prims) = self.primitives.get(&sym) {
-                for prim in prims {
-                    if let Some(return_type) = prim.accept(&input_types) {
-                        return Ok(FuncType::new(input_types, return_type, false, true));
-                    }
-                }
+            if let Ok((_prim, output)) = self.lookup_prim(sym, input_types.clone()) {
+                return Ok(FuncType {
+                    name: sym,
+                    input: input_types,
+                    output,
+                    is_datatype: false,
+                    has_default: true,
+                });
             }
 
             Err(TypeError::NoMatchingPrimitive {
@@ -587,41 +616,55 @@ impl TypeInfo {
         }
     }
 
-    pub(crate) fn typecheck_expr(
+    pub(crate) fn lookup_expr(
+        &self,
+        ctx: CommandId,
+        expr: &NormExpr,
+    ) -> Result<FuncType, TypeError> {
+        let NormExpr::Call(head, body) = expr;
+        let child_types = body
+            .iter()
+            .map(|var| self.lookup(ctx, *var))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.lookup_func(*head, child_types)
+    }
+
+    pub(crate) fn is_global(&self, sym: Symbol) -> bool {
+        self.global_types.contains_key(&sym)
+    }
+
+    fn typecheck_expr(
         &mut self,
         ctx: CommandId,
         expr: &NormExpr,
         expect_lookup: bool,
     ) -> Result<FuncType, TypeError> {
-        match expr {
-            NormExpr::Call(head, body) => {
-                let child_types = if let Some(found) = self.func_types.get(head) {
-                    found.input.clone()
-                } else {
-                    let types = body
-                        .iter()
-                        .map(|var| self.lookup(ctx, *var))
-                        .collect::<Result<Vec<_>, _>>();
-                    if let Ok(types) = types {
-                        types
-                    } else if expect_lookup {
-                        // return the error
-                        types?
-                    } else {
-                        return Err(TypeError::UnboundFunction(*head));
-                    }
-                };
-                for (child_type, var) in child_types.iter().zip(body.iter()) {
-                    if expect_lookup {
-                        self.lookup(ctx, *var)?;
-                    } else {
-                        self.set_local_type(ctx, *var, child_type.clone())?;
-                    }
-                }
-
-                self.lookup_func(ctx, *head, child_types)
+        let NormExpr::Call(head, body) = expr;
+        let child_types = if let Some(found) = self.func_types.get(head) {
+            found.input.clone()
+        } else {
+            let types = body
+                .iter()
+                .map(|var| self.lookup(ctx, *var))
+                .collect::<Result<Vec<_>, _>>();
+            if let Ok(types) = types {
+                types
+            } else if expect_lookup {
+                // return the error
+                types?
+            } else {
+                return Err(TypeError::UnboundFunction(*head));
+            }
+        };
+        for (child_type, var) in child_types.iter().zip(body.iter()) {
+            if expect_lookup {
+                self.lookup(ctx, *var)?;
+            } else {
+                self.set_local_type(ctx, *var, child_type.clone())?;
             }
         }
+
+        self.lookup_func(*head, child_types)
     }
 }
 
@@ -630,7 +673,7 @@ pub enum TypeError {
     #[error("Arity mismatch, expected {expected} args: {expr}")]
     Arity { expr: Expr, expected: usize },
     #[error(
-        "Type mismatch: expr = {expr}, expected = {}, actual = {}, reason: {reason}", 
+        "Type mismatch: expr = {expr}, expected = {}, actual = {}, reason: {reason}",
         .expected.name(), .actual.name(),
     )]
     Mismatch {
@@ -651,6 +694,8 @@ pub enum TypeError {
     FunctionAlreadyBound(Symbol),
     #[error("Function declarations are not allowed after a push.")]
     FunctionAfterPush(Symbol),
+    #[error("Cannot set the datatype {} to a value. Did you mean to use union?", .0.name)]
+    SetDatatype(FuncType),
     #[error("Sort declarations are not allowed after a push.")]
     SortAfterPush(Symbol),
     #[error("Global already bound {0}")]

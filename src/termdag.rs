@@ -4,9 +4,9 @@ use crate::{
     Symbol,
 };
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct TermId(usize);
+pub type TermId = usize;
 
+#[allow(rustdoc::private_intra_doc_links)]
 /// Like [`Expr`]s but with sharing and deduplication.
 ///
 /// Terms refer to their children indirectly via opaque [TermId]s (internally
@@ -33,21 +33,11 @@ pub struct TermDag {
 
 #[macro_export]
 macro_rules! match_term_app {
-    ($e:expr; { $(
-        ($head:expr, $args:pat) => $body:expr $(,)?
-    ),*}) => {
+    ($e:expr; $body:tt) => {
         match $e {
             Term::App(head, args) => {
-                $(
-                    if head.as_str() == $head {
-                        match args.as_slice() {
-                            $args => $body,
-                            _ => panic!("arg mismatch"),
-                        }
-                    } else
-                )* {
-                    panic!("Failed to match any of the heads of the patterns. Got: {}", head);
-                }
+                match (head.as_str(), args.as_slice())
+                    $body
             }
             _ => panic!("not an app")
         }
@@ -71,7 +61,7 @@ impl TermDag {
     ///
     /// Panics if the id is not valid.
     pub fn get(&self, id: TermId) -> Term {
-        self.nodes[id.0].clone()
+        self.nodes[id].clone()
     }
 
     /// Make and return a [`Term::App`] with the given head symbol and children,
@@ -110,7 +100,7 @@ impl TermDag {
         if self.hashcons.get(node).is_none() {
             let idx = self.nodes.len();
             self.nodes.push(node.clone());
-            self.hashcons.insert(node.clone(), TermId(idx));
+            self.hashcons.insert(node.clone(), idx);
         }
     }
 
@@ -168,7 +158,7 @@ impl TermDag {
         // use a stack to avoid stack overflow
         let mut stack = vec![id];
         while let Some(next) = stack.pop() {
-            match self.nodes[next.0].clone() {
+            match self.nodes[next].clone() {
                 Term::App(name, children) => {
                     if seen.contains(&next) {
                         let mut str = String::new();
@@ -229,11 +219,8 @@ mod tests {
             vec![
                 Term::Var("x".into()),
                 Term::Var("y".into()),
-                Term::App("g".into(), vec![0, 1].into_iter().map(TermId).collect()),
-                Term::App(
-                    "f".into(),
-                    vec![2, 0, 1, 2].into_iter().map(TermId).collect()
-                ),
+                Term::App("g".into(), vec![0, 1]),
+                Term::App("f".into(), vec![2, 0, 1, 2]),
             ]
         );
         let e2 = td.term_to_expr(&t);
@@ -246,7 +233,8 @@ mod tests {
         let (td, t) = parse_term(s);
         match_term_app!(t; {
             ("f", [_, x, _, _]) =>
-                assert_eq!(td.term_to_expr(&td.get(*x)), ast::Expr::Var(Symbol::new("x")))
+                assert_eq!(td.term_to_expr(&td.get(*x)), ast::Expr::Var(Symbol::new("x"))),
+            (head, _) => panic!("unexpected head {}, in {}:{}:{}", head, file!(), line!(), column!())
         })
     }
 
@@ -261,7 +249,7 @@ mod tests {
     fn test_lookup() {
         let s = r#"(f (g x y) x y (g x y))"#;
         let (td, t) = parse_term(s);
-        assert_eq!(td.lookup(&t).0, td.size() - 1);
+        assert_eq!(td.lookup(&t), td.size() - 1);
     }
 
     #[test]
