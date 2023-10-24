@@ -54,7 +54,7 @@ macro_rules! add_primitives {
                     }
                 }
 
-                fn apply(&self, values: &[Value]) -> Option<Value> {
+                fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
                     if let [$($param),*] = values {
                         $(let $param: $param_t = <$param_t as FromSort>::load(&self.$param, $param);)*
                         // print!("{}( ", $name);
