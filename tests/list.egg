@@ -1,0 +1,97 @@
+(datatype List
+	(Nil)
+	(Cons i64 List))
+
+(ruleset list)
+
+(function list-length (List) i64)
+(relation list-length-demand (List))
+(rule
+	((list-length-demand (Nil)))
+	((set (list-length (Nil)) 0))
+	:ruleset list)
+(rule
+	((list-length-demand (Cons head tail)))
+	((set (list-length-demand tail) ()))
+	:ruleset list)
+(rule
+	(	(list-length-demand (Cons head tail))
+		(= (list-length tail) tail-length))
+	((set (list-length (Cons head tail)) (+ tail-length 1)))
+	:ruleset list)
+
+(function list-get (List i64) i64)
+(relation list-get-demand (List i64))
+(rule
+	(	(list-get-demand list 0)
+		(= list (Cons head tail)))
+	((set (list-get list 0) head))
+	:ruleset list)
+(rule
+	(	(list-get-demand list n) (!= n 0)
+		(= list (Cons head tail)))
+	((list-get-demand tail (- n 1)))
+	:ruleset list)
+(rule
+	(	(list-get-demand list n)
+		(= list (Cons head tail))
+		(= item (list-get tail (- n 1))))
+	((set (list-get list n) item))
+	:ruleset list)
+
+(function list-append (List List) List)
+(relation list-append-demand (List List))
+(rule 
+	((list-append-demand (Nil) list))
+	((union (list-append (Nil) list) list))
+	:ruleset list)
+(rule 
+	((list-append-demand (Cons head tail) list))
+	((list-append-demand tail list))
+	:ruleset list)
+(rule 
+	((list-append-demand (Cons head tail) list)
+	 (= (list-append tail list) appended))
+	((union (list-append (Cons head tail) list) (Cons head appended)))
+	:ruleset list)
+
+; list-contains Nil _ => false
+; list-contains (Cons item tail) item => true
+; list-contains (Cons head tail) item => assert(head != item); (list-contains tail item)
+; list-contains needs inequality
+
+(function list-set (List i64 i64) List)
+(relation list-set-demand (List i64 i64))
+(rule
+	((list-set-demand (Cons head tail) 0 item))
+	((union (list-set (Cons head tail) 0 item) (Cons item tail)))
+	:ruleset list)
+(rule
+	((list-set-demand (Cons head tail) n item) (!= n 0))
+	((list-set-demand tail (- n 1) item))
+	:ruleset list)
+(rule
+	((list-set-demand (Cons head tail) n item) (!= n 0)
+	 (= (list-set tail (- n 1) item) setted))
+	((union (list-set (Cons head tail) n item) (Cons head setted)))
+	:ruleset list)
+
+; Tests
+(let a (Cons 1 (Cons 2 (Nil))))
+(let b (Cons 3 (Nil)))
+(let c (Cons 1 (Cons 2 (Cons 3 (Nil)))))
+(let d (Cons 1 (Cons 4 (Nil))))
+
+(list-append-demand a b)
+(list-length-demand c)
+(list-get-demand b 0)
+(list-get-demand a 1)
+(list-set-demand a 1 4)
+
+(run-schedule (saturate (run list)))
+
+(check (= (list-append a b) c))
+(check (= (list-length c) 3))
+(check (= (list-get b 0) 3))
+(check (= (list-get a 1) 2))
+(check (= (list-set a 1 4) d))
