@@ -17,12 +17,14 @@ bin = ["dep:clap", "dep:env_logger", "egraph-serialize/serde", "dep:serde_json"]
 wasm-bindgen = ["instant/wasm-bindgen", "dep:getrandom"]
 
 [dependencies]
-hashbrown = {version = "0.14", features = ["raw"]}
+hashbrown = { version = "0.14", features = ["raw"] }
 indexmap = "2.0"
 instant = "0.1"
 log = "0.4"
 rustc-hash = "1.1"
-symbol_table = {git = "https://github.com/mwillsey/symbol_table", rev = "acddcf8938d1b4ed2fce048c9d83c30203d404b9", features = ["global"]}
+symbol_table = { git = "https://github.com/mwillsey/symbol_table", rev = "acddcf8938d1b4ed2fce048c9d83c30203d404b9", features = [
+  "global",
+] }
 thiserror = "1"
 # symbol_table = { version = "0.2", features = ["global"] }
 # symbol_table = { path = "../symbol_table", features = ["global"] }
@@ -31,22 +33,27 @@ num-integer = "0.1.45"
 num-rational = "0.4.1"
 num-traits = "0.2.15"
 smallvec = "1.11"
-symbolic_expressions = {git = "https://github.com/oflatt/symbolic-expressions", rev = "4c0ea5ca008f972450b2af72387e64d2c1c6a791"}
+symbolic_expressions = { git = "https://github.com/oflatt/symbolic-expressions", rev = "4c0ea5ca008f972450b2af72387e64d2c1c6a791" }
 
-egraph-serialize = {git = "https://github.com/egraphs-good/egraph-serialize", rev = "e406ffcec8c6e841089fd3e4f9b76c35ce448950", features = ["serde", "graphviz"]}
-serde_json ={optional=true, version = "1.0.100", features = ["preserve_order"]}
+egraph-serialize = { git = "https://github.com/egraphs-good/egraph-serialize", rev = "e406ffcec8c6e841089fd3e4f9b76c35ce448950", features = [
+  "serde",
+  "graphviz",
+] }
+serde_json = { optional = true, version = "1.0.100", features = [
+  "preserve_order",
+] }
 
-lalrpop-util = {version = "0.20", features = ["lexer"]}
+lalrpop-util = { version = "0.20", features = ["lexer"] }
 regex = "1"
 
 # binary dependencies
-clap = {version = "4", features = ["derive"], optional = true}
-env_logger = {version = "0.10", optional = true}
+clap = { version = "4", features = ["derive"], optional = true }
+env_logger = { version = "0.10", optional = true }
 
-ordered-float = {version = "3.7"}
+ordered-float = { version = "3.7" }
 
 # Need to add "js" feature for "graphviz-rust" to work in wasm
-getrandom = {version="*", features = ["js"], optional = true}
+getrandom = { version = "*", features = ["js"], optional = true }
 
 [build-dependencies]
 lalrpop = "0.20"
