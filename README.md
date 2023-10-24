@@ -128,6 +128,7 @@ Rational numbers (fractions) with 64-bit precision for numerator and denominator
 + - * /         ; arithmetic
 min max neg abs floor ceil round
 rational        ; construct from a numerator and denominator
+numer denom     ; get numerator and denominator
 pow log sqrt
 < > <= >=       ; comparisons
 ```
