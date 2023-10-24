@@ -15,4 +15,4 @@ As of yet, the rust interface is not documented or well supported. We reccomend 
 [0.1.0]: https://github.com/egraphs-good/egglog/tree/v0.1.0
 
 
-See [release instructions](release-instructions.md) for more information on how to do a release.
+See release-instructions.md for more information on how to do a release.
