@@ -13,3 +13,6 @@ As of yet, the rust interface is not documented or well supported. We reccomend 
 
 [Unreleased]: https://github.com/egraphs-good/egg/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/egraphs-good/egg/tree/v0.1.0
+
+
+See [release instructions](release-instructions.md) for more information on how to do a release.
