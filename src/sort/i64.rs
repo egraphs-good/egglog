@@ -54,6 +54,11 @@ impl Sort for I64Sort {
         add_primitives!(typeinfo, "<=" = |a: i64, b: i64| -> Opt { (a <= b).then(|| ()) });
         add_primitives!(typeinfo, ">=" = |a: i64, b: i64| -> Opt { (a >= b).then(|| ()) });
 
+        add_primitives!(typeinfo, "bool-<" = |a: i64, b: i64| -> bool { a < b });
+        add_primitives!(typeinfo, "bool->" = |a: i64, b: i64| -> bool { a > b });
+        add_primitives!(typeinfo, "bool-<=" = |a: i64, b: i64| -> bool { a <= b });
+        add_primitives!(typeinfo, "bool->=" = |a: i64, b: i64| -> bool { a >= b });
+
         add_primitives!(typeinfo, "min" = |a: i64, b: i64| -> i64 { a.min(b) });
         add_primitives!(typeinfo, "max" = |a: i64, b: i64| -> i64 { a.max(b) });
 
@@ -110,7 +115,7 @@ impl PrimitiveLike for CountMatches {
             .into_box()
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         let string1 = Symbol::load(&self.string, &values[0]).to_string();
         let string2 = Symbol::load(&self.string, &values[1]).to_string();
         Some(Value::from(string1.matches(&string2).count() as i64))

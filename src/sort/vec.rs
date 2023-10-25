@@ -33,6 +33,7 @@ impl VecSort {
             "vec-contains".into(),
             "vec-length".into(),
             "vec-get".into(),
+            "vec-set".into(),
         ]
     }
 
@@ -93,7 +94,7 @@ impl Sort for VecSort {
         let vecs = self.vecs.lock().unwrap();
         let vec = vecs.get_index(value.bits as usize).unwrap();
         let mut changed = false;
-        let new_set: ValueVec = vec
+        let new_vec: ValueVec = vec
             .iter()
             .map(|e| {
                 let mut e = *e;
@@ -102,11 +103,15 @@ impl Sort for VecSort {
             })
             .collect();
         drop(vecs);
-        *value = new_set.store(self).unwrap();
+        *value = new_vec.store(self).unwrap();
         changed
     }
 
     fn register_primitives(self: Arc<Self>, typeinfo: &mut TypeInfo) {
+        typeinfo.add_primitive(VecRebuild {
+            name: "rebuild".into(),
+            vec: self.clone(),
+        });
         typeinfo.add_primitive(VecOf {
             name: "vec-of".into(),
             vec: self.clone(),
@@ -144,7 +149,12 @@ impl Sort for VecSort {
         });
         typeinfo.add_primitive(Get {
             name: "vec-get".into(),
-            vec: self,
+            vec: self.clone(),
+            i64: typeinfo.get_sort(),
+        });
+        typeinfo.add_primitive(Set {
+            name: "vec-set".into(),
+            vec: self.clone(),
             i64: typeinfo.get_sort(),
         })
     }
@@ -164,14 +174,22 @@ impl Sort for VecSort {
         termdag: &mut TermDag,
     ) -> Option<(Cost, Expr)> {
         let vec = ValueVec::load(self, &value);
-        let mut expr = Expr::call("vec-empty", []);
         let mut cost = 0usize;
-        for e in vec.iter().rev() {
-            let e = extractor.find_best(*e, termdag, &self.element)?;
-            cost = cost.saturating_add(e.0);
-            expr = Expr::call("vec-push", [expr, termdag.term_to_expr(&e.1)])
+
+        if vec.is_empty() {
+            Some((cost, Expr::call("vec-empty", [])))
+        } else {
+            let elems = vec
+                .into_iter()
+                .map(|e| {
+                    let e = extractor.find_best(e, termdag, &self.element)?;
+                    cost = cost.saturating_add(e.0);
+                    Some(termdag.term_to_expr(&e.1))
+                })
+                .collect::<Option<Vec<_>>>()?;
+
+            Some((cost, Expr::call("vec-of", elems)))
         }
-        Some((cost, expr))
     }
 }
 
@@ -195,6 +213,28 @@ impl FromSort for ValueVec {
     }
 }
 
+struct VecRebuild {
+    name: Symbol,
+    vec: Arc<VecSort>,
+}
+
+impl PrimitiveLike for VecRebuild {
+    fn name(&self) -> Symbol {
+        self.name
+    }
+
+    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(self.name(), vec![self.vec.clone(), self.vec.clone()]).into_box()
+    }
+
+    fn apply(&self, values: &[Value], egraph: &EGraph) -> Option<Value> {
+        let vec = ValueVec::load(&self.vec, &values[0]);
+
+        let new_vec: ValueVec = vec.iter().map(|e| egraph.find(*e)).collect();
+        drop(vec);
+        Some(new_vec.store(&self.vec).unwrap())
+    }
+}
 struct VecOf {
     name: Symbol,
     vec: Arc<VecSort>,
@@ -212,7 +252,7 @@ impl PrimitiveLike for VecOf {
             .into_box()
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         let vec = ValueVec::from_iter(values.iter().copied());
         vec.store(&self.vec)
     }
@@ -234,7 +274,7 @@ impl PrimitiveLike for Append {
             .into_box()
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         let vec = ValueVec::from_iter(values.iter().flat_map(|v| ValueVec::load(&self.vec, v)));
         vec.store(&self.vec)
     }
@@ -254,7 +294,7 @@ impl PrimitiveLike for Ctor {
         SimpleTypeConstraint::new(self.name(), vec![self.vec.clone()]).into_box()
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         assert!(values.is_empty());
         ValueVec::default().store(&self.vec)
     }
@@ -278,7 +318,7 @@ impl PrimitiveLike for Push {
         .into_box()
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         let mut vec = ValueVec::load(&self.vec, &values[0]);
         vec.push(values[1]);
         vec.store(&self.vec)
@@ -299,7 +339,7 @@ impl PrimitiveLike for Pop {
         SimpleTypeConstraint::new(self.name(), vec![self.vec.clone(), self.vec.clone()]).into_box()
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         let mut vec = ValueVec::load(&self.vec, &values[0]);
         vec.pop();
         vec.store(&self.vec)
@@ -325,7 +365,7 @@ impl PrimitiveLike for NotContains {
         .into_box()
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         let vec = ValueVec::load(&self.vec, &values[0]);
         if vec.contains(&values[1]) {
             None
@@ -354,7 +394,7 @@ impl PrimitiveLike for Contains {
         .into_box()
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         let vec = ValueVec::load(&self.vec, &values[0]);
         if vec.contains(&values[1]) {
             Some(Value::unit())
@@ -379,7 +419,7 @@ impl PrimitiveLike for Length {
         SimpleTypeConstraint::new(self.name(), vec![self.vec.clone(), self.i64.clone()]).into_box()
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         let vec = ValueVec::load(&self.vec, &values[0]);
         Some(Value::from(vec.len() as i64))
     }
@@ -404,9 +444,73 @@ impl PrimitiveLike for Get {
         .into_box()
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         let vec = ValueVec::load(&self.vec, &values[0]);
         let index = i64::load(&self.i64, &values[1]);
         vec.get(index as usize).copied()
+    }
+}
+
+struct Set {
+    name: Symbol,
+    vec: Arc<VecSort>,
+    i64: Arc<I64Sort>,
+}
+
+impl PrimitiveLike for Set {
+    fn name(&self) -> Symbol {
+        self.name
+    }
+
+    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![
+                self.vec.clone(),
+                self.i64.clone(),
+                self.vec.element.clone(),
+                self.vec.clone(),
+            ],
+        )
+        .into_box()
+    }
+
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+        let mut vec = ValueVec::load(&self.vec, &values[0]);
+        let index = i64::load(&self.i64, &values[1]);
+        vec[index as usize] = values[2];
+        vec.store(&self.vec)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_vec_make_expr() {
+        let mut egraph = EGraph::default();
+        let outputs = egraph
+            .parse_and_run_program(
+                r#"
+            (sort IVec (Vec i64))
+            (let v0 (vec-empty))
+            (let v1 (vec-of 1 2 3 4))
+            (extract v0)
+            (extract v1)
+            "#,
+            )
+            .unwrap();
+
+        // Check extracted expr is parsed as an original expr
+        egraph
+            .parse_and_run_program(&format!(
+                r#"
+                (check (= v0 {}))
+                (check (= v1 {}))
+                "#,
+                outputs[0], outputs[1],
+            ))
+            .unwrap();
     }
 }

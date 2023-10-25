@@ -54,6 +54,7 @@ impl MapSort {
 impl MapSort {
     pub fn presort_names() -> Vec<Symbol> {
         vec![
+            "rebuild".into(),
             "map-empty".into(),
             "map-insert".into(),
             "map-get".into(),
@@ -92,11 +93,29 @@ impl Sort for MapSort {
         result
     }
 
-    fn canonicalize(&self, _value: &mut Value, _unionfind: &UnionFind) -> bool {
-        false
+    fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
+        let maps = self.maps.lock().unwrap();
+        let map = maps.get_index(value.bits as usize).unwrap();
+        let mut changed = false;
+        let new_map: ValueMap = map
+            .iter()
+            .map(|(k, v)| {
+                let (mut k, mut v) = (*k, *v);
+                changed |= self.key.canonicalize(&mut k, unionfind);
+                changed |= self.value.canonicalize(&mut v, unionfind);
+                (k, v)
+            })
+            .collect();
+        drop(maps);
+        *value = new_map.store(self).unwrap();
+        changed
     }
 
     fn register_primitives(self: Arc<Self>, typeinfo: &mut TypeInfo) {
+        typeinfo.add_primitive(MapRebuild {
+            name: "rebuild".into(),
+            map: self.clone(),
+        });
         typeinfo.add_primitive(Ctor {
             name: "map-empty".into(),
             map: self.clone(),
@@ -175,6 +194,35 @@ impl FromSort for ValueMap {
     }
 }
 
+struct MapRebuild {
+    name: Symbol,
+    map: Arc<MapSort>,
+}
+
+impl PrimitiveLike for MapRebuild {
+    fn name(&self) -> Symbol {
+        self.name
+    }
+
+    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(self.name(), vec![self.map.clone(), self.map.clone()]).into_box()
+    }
+
+    fn apply(&self, values: &[Value], egraph: &EGraph) -> Option<Value> {
+        let maps = self.map.maps.lock().unwrap();
+        let map = maps.get_index(values[0].bits as usize).unwrap();
+        let new_map: ValueMap = map
+            .iter()
+            .map(|(k, v)| (egraph.find(*k), egraph.find(*v)))
+            .collect();
+
+        drop(maps);
+
+        let res = new_map.store(&self.map).unwrap();
+        Some(res)
+    }
+}
+
 struct Ctor {
     name: Symbol,
     map: Arc<MapSort>,
@@ -194,7 +242,7 @@ impl PrimitiveLike for TermOrderingMin {
             .into_box()
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         assert_eq!(values.len(), 2);
         if values[0] < values[1] {
             Some(values[0])
@@ -217,7 +265,7 @@ impl PrimitiveLike for TermOrderingMax {
             .into_box()
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         assert_eq!(values.len(), 2);
         if values[0] > values[1] {
             Some(values[0])
@@ -236,7 +284,7 @@ impl PrimitiveLike for Ctor {
         SimpleTypeConstraint::new(self.name(), vec![self.map.clone()]).into_box()
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         assert!(values.is_empty());
         ValueMap::default().store(&self.map)
     }
@@ -265,7 +313,7 @@ impl PrimitiveLike for Insert {
         .into_box()
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         let mut map = ValueMap::load(&self.map, &values[0]);
         map.insert(values[1], values[2]);
         map.store(&self.map)
@@ -290,7 +338,7 @@ impl PrimitiveLike for Get {
         .into_box()
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         let map = ValueMap::load(&self.map, &values[0]);
         map.get(&values[1]).copied()
     }
@@ -315,7 +363,7 @@ impl PrimitiveLike for NotContains {
         .into_box()
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         let map = ValueMap::load(&self.map, &values[0]);
         if map.contains_key(&values[1]) {
             None
@@ -344,7 +392,7 @@ impl PrimitiveLike for Contains {
         .into_box()
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         let map = ValueMap::load(&self.map, &values[0]);
         if map.contains_key(&values[1]) {
             Some(Value::unit())
@@ -372,7 +420,7 @@ impl PrimitiveLike for Remove {
         .into_box()
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         let mut map = ValueMap::load(&self.map, &values[0]);
         map.remove(&values[1]);
         map.store(&self.map)

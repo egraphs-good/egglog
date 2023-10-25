@@ -50,6 +50,9 @@ impl Sort for RationalSort {
         add_primitives!(eg, "ceil" = |a: R| -> R { a.ceil() });
         add_primitives!(eg, "round" = |a: R| -> R { a.round() });
         add_primitives!(eg, "rational" = |a: i64, b: i64| -> R { R::new(a, b) });
+        add_primitives!(eg, "numer" = |a: R| -> i64 { *a.numer() });
+        add_primitives!(eg, "denom" = |a: R| -> i64 { *a.denom() });
+
         add_primitives!(eg, "to-f64" = |a: R| -> f64 { a.to_f64().unwrap() });
 
         add_primitives!(eg, "pow" = |a: R, b: R| -> Option<R> {
@@ -101,10 +104,10 @@ impl Sort for RationalSort {
             }
         });
 
-        add_primitives!(eg, "<" = |a: R, b: R| -> Opt { if a < b {Some(())} else {None} }); 
-        add_primitives!(eg, ">" = |a: R, b: R| -> Opt { if a > b {Some(())} else {None} }); 
-        add_primitives!(eg, "<=" = |a: R, b: R| -> Opt { if a <= b {Some(())} else {None} }); 
-        add_primitives!(eg, ">=" = |a: R, b: R| -> Opt { if a >= b {Some(())} else {None} }); 
+        add_primitives!(eg, "<" = |a: R, b: R| -> Opt { if a < b {Some(())} else {None} });
+        add_primitives!(eg, ">" = |a: R, b: R| -> Opt { if a > b {Some(())} else {None} });
+        add_primitives!(eg, "<=" = |a: R, b: R| -> Opt { if a <= b {Some(())} else {None} });
+        add_primitives!(eg, ">=" = |a: R, b: R| -> Opt { if a >= b {Some(())} else {None} });
    }
     fn make_expr(&self, _egraph: &EGraph, value: Value) -> (Cost, Expr) {
         assert!(value.tag == self.name());

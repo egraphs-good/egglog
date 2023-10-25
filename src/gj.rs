@@ -254,7 +254,7 @@ impl<'b> Context<'b> {
                     })
                 }
 
-                if let Some(res) = prim.apply(&values) {
+                if let Some(res) = prim.apply(&values, self.egraph) {
                     match out {
                         AtomTerm::Var(v) => {
                             let i = self.query.vars.get_index_of(v).unwrap();
@@ -732,6 +732,7 @@ impl EGraph {
             if do_seminaive {
                 for (atom_i, _atom) in cq.query.funcs().enumerate() {
                     timestamp_ranges[atom_i] = timestamp..u32::MAX;
+
                     self.gj_for_atom(Some(atom_i), &timestamp_ranges, cq, &mut f);
                     // now we can fix this atom to be "old stuff" only
                     // range is half-open; timestamp is excluded

@@ -3,6 +3,8 @@ mod macros;
 use std::fmt::Debug;
 use std::{any::Any, sync::Arc};
 
+mod bool;
+pub use self::bool::*;
 mod rational;
 pub use rational::*;
 mod string;

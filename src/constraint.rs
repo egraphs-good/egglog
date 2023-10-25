@@ -296,7 +296,7 @@ fn get_literal_and_global_constraints<'a>(
                 Some(Constraint::Assign(arg.clone(), typ.clone()))
             }
             AtomTerm::Global(v) => {
-                if let Some(typ) = type_info.global_types.get(v) {
+                if let Some(typ) = type_info.lookup_global(v) {
                     Some(Constraint::Assign(arg.clone(), typ.clone()))
                 } else {
                     panic!("All global variables should be bound before type checking")

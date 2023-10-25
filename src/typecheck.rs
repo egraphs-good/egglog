@@ -118,7 +118,7 @@ impl UnresolvedCoreRule {
 
 pub(crate) fn facts_to_query(body: &Vec<NormFact>, typeinfo: &TypeInfo) -> Query<Symbol> {
     fn to_atom_term(s: Symbol, typeinfo: &TypeInfo) -> AtomTerm {
-        if typeinfo.global_types.contains_key(&s) {
+        if typeinfo.is_global(s) {
             AtomTerm::Global(s)
         } else {
             AtomTerm::Var(s)
@@ -330,7 +330,7 @@ impl PrimitiveLike for ValueEq {
             .into_box()
     }
 
-    fn apply(&self, values: &[Value]) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         assert_eq!(values.len(), 2);
         if values[0] == values[1] {
             Some(Value::unit())
@@ -381,9 +381,8 @@ impl<'a> Context<'a> {
     ) -> Result<ResolvedCoreRule, TypeError> {
         let type_info = self.egraph.type_info();
         let local_types = type_info.local_types.get(&ctx).unwrap();
-        let global_types = &type_info.global_types;
         let get_type = |arg: &AtomTerm| match arg {
-            AtomTerm::Global(v) => global_types.get(v).unwrap().clone(),
+            AtomTerm::Global(v) => type_info.lookup_global(v).unwrap().clone(),
             AtomTerm::Var(v) => local_types.get(v).unwrap().clone(),
             AtomTerm::Literal(lit) => type_info.infer_literal(lit),
         };
@@ -545,7 +544,7 @@ impl<'a> ExprChecker<'a> for ActionChecker<'a> {
     }
 
     fn do_function(&mut self, f: Symbol, _args: Vec<Self::T>) -> Self::T {
-        let func_type = self.egraph.type_info().func_types.get(&f).unwrap();
+        let func_type = self.egraph.type_info().lookup_user_func(f).unwrap();
         self.instructions.push(Instruction::CallFunction(
             f,
             func_type.has_default || func_type.is_datatype,
@@ -611,7 +610,7 @@ trait ExprChecker<'a> {
             }
             Expr::Var(sym) => self.infer_var(*sym),
             Expr::Call(sym, args) => {
-                if let Some(functype) = self.egraph().type_info().func_types.get(sym) {
+                if let Some(functype) = self.egraph().type_info().lookup_user_func(*sym) {
                     assert_eq!(
                         functype.input.len(),
                         args.len(),
@@ -731,6 +730,61 @@ impl EGraph {
         Ok((t, Program(checker.instructions)))
     }
 
+    fn perform_set(
+        &mut self,
+        table: Symbol,
+        new_value: Value,
+        stack: &mut Vec<Value>,
+    ) -> Result<(), Error> {
+        let function = self.functions.get_mut(&table).unwrap();
+
+        let new_len = stack.len() - function.schema.input.len();
+        // TODO would be nice to use slice here
+        let args = &stack[new_len..];
+
+        // We should only have canonical values here: omit the canonicalization step
+        let old_value = function.get(args);
+
+        if let Some(old_value) = old_value {
+            if new_value != old_value {
+                let merged: Value = match function.merge.merge_vals.clone() {
+                    MergeFn::AssertEq => {
+                        return Err(Error::MergeError(table, new_value, old_value));
+                    }
+                    MergeFn::Union => {
+                        self.unionfind
+                            .union_values(old_value, new_value, old_value.tag)
+                    }
+                    MergeFn::Expr(merge_prog) => {
+                        let values = [old_value, new_value];
+                        let old_len = stack.len();
+                        self.run_actions(stack, &values, &merge_prog, true)?;
+                        let result = stack.pop().unwrap();
+                        stack.truncate(old_len);
+                        result
+                    }
+                };
+                if merged != old_value {
+                    let args = &stack[new_len..];
+                    let function = self.functions.get_mut(&table).unwrap();
+                    function.insert(args, merged, self.timestamp);
+                }
+                // re-borrow
+                let function = self.functions.get_mut(&table).unwrap();
+                if let Some(prog) = function.merge.on_merge.clone() {
+                    let values = [old_value, new_value];
+                    // XXX: we get an error if we pass the current
+                    // stack and then truncate it to the old length.
+                    // Why?
+                    self.run_actions(&mut Vec::new(), &values, &prog, true)?;
+                }
+            }
+        } else {
+            function.insert(args, new_value, self.timestamp);
+        }
+        Ok(())
+    }
+
     pub fn run_actions(
         &mut self,
         stack: &mut Vec<Value>,
@@ -804,7 +858,7 @@ impl EGraph {
                 Instruction::CallPrimitive(p, arity) => {
                     let new_len = stack.len() - arity;
                     let values = &stack[new_len..];
-                    if let Some(value) = p.apply(values) {
+                    if let Some(value) = p.apply(values, self) {
                         stack.truncate(new_len);
                         stack.push(value);
                     } else {
@@ -819,48 +873,8 @@ impl EGraph {
                     // except for setting the parent relation
                     let new_value = stack.pop().unwrap();
                     let new_len = stack.len() - function.schema.input.len();
-                    let args = &stack[new_len..];
 
-                    // We should only have canonical values here: omit the canonicalization step
-                    let old_value = function.get(args);
-
-                    if let Some(old_value) = old_value {
-                        if new_value != old_value {
-                            let merged: Value = match function.merge.merge_vals.clone() {
-                                MergeFn::AssertEq => {
-                                    return Err(Error::MergeError(*f, new_value, old_value));
-                                }
-                                MergeFn::Union => {
-                                    self.unionfind
-                                        .union_values(old_value, new_value, old_value.tag)
-                                }
-                                MergeFn::Expr(merge_prog) => {
-                                    let values = [old_value, new_value];
-                                    let old_len = stack.len();
-                                    self.run_actions(stack, &values, &merge_prog, true)?;
-                                    let result = stack.pop().unwrap();
-                                    stack.truncate(old_len);
-                                    result
-                                }
-                            };
-                            if merged != old_value {
-                                let args = &stack[new_len..];
-                                let function = self.functions.get_mut(f).unwrap();
-                                function.insert(args, merged, self.timestamp);
-                            }
-                            // re-borrow
-                            let function = self.functions.get_mut(f).unwrap();
-                            if let Some(prog) = function.merge.on_merge.clone() {
-                                let values = [old_value, new_value];
-                                // XXX: we get an error if we pass the current
-                                // stack and then truncate it to the old length.
-                                // Why?
-                                self.run_actions(&mut Vec::new(), &values, &prog, true)?;
-                            }
-                        }
-                    } else {
-                        function.insert(args, new_value, self.timestamp);
-                    }
+                    self.perform_set(*f, new_value, stack)?;
                     stack.truncate(new_len)
                 }
                 Instruction::Union(arity) => {
@@ -924,6 +938,7 @@ impl EGraph {
                     Literal::Int(i) => stack.push(Value::from(*i)),
                     Literal::F64(f) => stack.push(Value::from(*f)),
                     Literal::String(s) => stack.push(Value::from(*s)),
+                    Literal::Bool(b) => stack.push(Value::from(*b)),
                     Literal::Unit => stack.push(Value::unit()),
                 },
                 Instruction::Pop => {
