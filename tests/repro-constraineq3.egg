@@ -5,4 +5,4 @@
       ((f x)))
       
 (run 1)
-(print-table f)
+(print-function f 10)
