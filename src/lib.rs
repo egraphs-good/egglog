@@ -12,6 +12,7 @@
 //! We plan to have a text tutorial here soon, PRs welcome!
 //!
 pub mod ast;
+pub mod constraint;
 mod extract;
 mod function;
 mod gj;
@@ -41,6 +42,7 @@ use symbolic_expressions::Sexp;
 use ast::*;
 pub use typechecking::{TypeInfo, UNIT_SYM};
 
+use constraint::{Constraint, SimpleTypeConstraint, TypeConstraint};
 use std::fmt::{Display, Formatter};
 use std::fs::File;
 use std::hash::Hash;
@@ -51,7 +53,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::str::FromStr;
 use std::{fmt::Debug, sync::Arc};
-use typecheck::Program;
+use typecheck::{AtomTerm, Program};
 
 pub type ArcSort = Arc<dyn Sort>;
 
@@ -62,13 +64,14 @@ use gj::*;
 use unionfind::*;
 use util::*;
 
+use crate::constraint::Problem;
 use crate::typechecking::TypeError;
 
 pub type Subst = IndexMap<Symbol, Value>;
 
 pub trait PrimitiveLike {
     fn name(&self) -> Symbol;
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort>;
+    fn get_type_constraints(&self) -> Box<dyn TypeConstraint>;
     fn apply(&self, values: &[Value], egraph: &EGraph) -> Option<Value>;
 }
 
@@ -229,6 +232,24 @@ pub const HIGH_COST: usize = i64::MAX as usize;
 
 #[derive(Clone)]
 pub struct Primitive(Arc<dyn PrimitiveLike>);
+impl Primitive {
+    // TODO: this is temporary and should be removed once refactoring is done
+    fn accept(&self, tys: &[Arc<dyn Sort>]) -> Option<Arc<dyn Sort>> {
+        let mut constraints = vec![];
+        // + 1 to account for the output type
+        let lits: Vec<_> = (0..tys.len() + 1)
+            .map(|i| AtomTerm::Literal(Literal::Int(i as i64)))
+            .collect();
+        for (lit, ty) in lits.iter().zip(tys.iter()) {
+            constraints.push(Constraint::Assign(lit.clone(), ty.clone()))
+        }
+        constraints.extend(self.get_type_constraints().get(&lits).into_iter());
+        let problem = Problem { constraints };
+        let output_type = AtomTerm::Literal(Literal::Int(tys.len() as i64));
+        let assignment = problem.solve(once(&output_type), |sort| sort.name()).ok()?;
+        Some(assignment.get(&output_type).unwrap().clone())
+    }
+}
 
 impl Deref for Primitive {
     type Target = dyn PrimitiveLike;
@@ -278,16 +299,15 @@ impl PrimitiveLike for SimplePrimitive {
     fn name(&self) -> Symbol {
         self.name
     }
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-        if self.input.len() != types.len() {
-            return None;
-        }
-        // TODO can we use a better notion of equality than just names?
-        self.input
+
+    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+        let sorts: Vec<_> = self
+            .input
             .iter()
-            .zip(types)
-            .all(|(a, b)| a.name() == b.name())
-            .then(|| self.output.clone())
+            .chain(once(&self.output as &ArcSort))
+            .cloned()
+            .collect();
+        SimpleTypeConstraint::new(self.name(), sorts).into_box()
     }
     fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         (self.f)(values)
@@ -824,10 +844,14 @@ impl EGraph {
             .or_insert(Duration::default()) += rebuild_start.elapsed();
         self.timestamp += 1;
 
-        let NormRunConfig { ruleset, until } = config;
+        let NormRunConfig {
+            ruleset,
+            until,
+            ctx,
+        } = config;
 
         if let Some(facts) = until {
-            if self.check_facts(facts).is_ok() {
+            if self.check_facts(*ctx, facts).is_ok() {
                 log::info!(
                     "Breaking early because of facts:\n {}!",
                     ListDisplay(facts, "\n")
@@ -979,23 +1003,34 @@ impl EGraph {
 
     fn add_rule_with_name(
         &mut self,
+        ctx: CommandId,
         name: String,
-        rule: ast::Rule,
+        rule: NormRule,
         ruleset: Symbol,
     ) -> Result<Symbol, Error> {
         let name = Symbol::from(name);
-        let mut ctx = typecheck::Context::new(self);
-        let (query0, action0) = ctx
-            .typecheck_query(&rule.body, &rule.head)
+        let mut compiler = typecheck::Context::new(self);
+        let core_rule = compiler
+            .compile_norm_rule(ctx, &rule)
             .map_err(Error::TypeErrors)?;
-        let query = self.compile_gj_query(query0, &ctx.types);
+        let (query, action) = (core_rule.body, core_rule.head);
+
+        // TODO: We should refactor compile_actions later as well
+        let action: Vec<Action> = action.0.iter().map(|a| a.to_action()).collect();
+
+        // types being an IndexMap is very important as it assigns each variable a stable index
+        let types: IndexMap<_, _> = self
+            .type_info()
+            .local_types
+            .get(&ctx)
+            .unwrap()
+            .iter()
+            .map(|(v, s)| (*v, s.clone()))
+            .collect();
+        let query = self.compile_gj_query(query, &types);
         let program = self
-            .compile_actions(&ctx.types, &action0)
+            .compile_actions(&types, &action)
             .map_err(Error::TypeErrors)?;
-        // println!(
-        //     "Compiled rule {rule:?}\n{subst:?}to {program:#?}",
-        //     subst = &ctx.types
-        // );
         let compiled_rule = Rule {
             query,
             matches: 0,
@@ -1015,9 +1050,14 @@ impl EGraph {
         Ok(name)
     }
 
-    pub fn add_rule(&mut self, rule: ast::Rule, ruleset: Symbol) -> Result<Symbol, Error> {
+    pub(crate) fn add_rule(
+        &mut self,
+        ctx: CommandId,
+        rule: NormRule,
+        ruleset: Symbol,
+    ) -> Result<Symbol, Error> {
         let name = format!("{}", rule);
-        self.add_rule_with_name(name, rule, ruleset)
+        self.add_rule_with_name(ctx, name, rule, ruleset)
     }
 
     pub fn eval_actions(&mut self, actions: &[Action]) -> Result<(), Error> {
@@ -1083,14 +1123,25 @@ impl EGraph {
         }
     }
 
-    fn check_facts(&mut self, facts: &[NormFact]) -> Result<(), Error> {
-        let mut ctx = typecheck::Context::new(self);
-        let converted_facts = facts.iter().map(|f| f.to_fact()).collect::<Vec<Fact>>();
-        let empty_actions = vec![];
-        let (query0, _) = ctx
-            .typecheck_query(&converted_facts, &empty_actions)
+    fn check_facts(&mut self, ctx: CommandId, facts: &[NormFact]) -> Result<(), Error> {
+        let mut compiler = typecheck::Context::new(self);
+        let rule = NormRule {
+            head: vec![],
+            body: facts.to_vec(),
+        };
+        let rule = compiler
+            .compile_norm_rule(ctx, &rule)
             .map_err(Error::TypeErrors)?;
-        let query = self.compile_gj_query(query0, &ctx.types);
+        let query0 = rule.body;
+        let types: IndexMap<_, _> = self
+            .type_info()
+            .local_types
+            .get(&ctx)
+            .unwrap()
+            .iter()
+            .map(|(v, s)| (*v, s.clone()))
+            .collect();
+        let query = self.compile_gj_query(query0, &types);
 
         let mut matched = false;
         // TODO what timestamp to use?
@@ -1107,7 +1158,8 @@ impl EGraph {
         }
     }
 
-    fn run_command(&mut self, command: NCommand, should_run: bool) -> Result<(), Error> {
+    fn run_command(&mut self, command: NormCommand, should_run: bool) -> Result<(), Error> {
+        let NormCommand { metadata, command } = command;
         let pre_rebuild = Instant::now();
         let rebuild_num = self.rebuild()?;
         if rebuild_num > 0 {
@@ -1140,7 +1192,7 @@ impl EGraph {
                 rule,
                 name,
             } => {
-                self.add_rule(rule.to_rule(), ruleset)?;
+                self.add_rule(metadata.id, rule, ruleset)?;
                 log::info!("Declared rule {name}.")
             }
             NCommand::RunSchedule(sched) => {
@@ -1160,7 +1212,7 @@ impl EGraph {
             }
             NCommand::Check(facts) => {
                 if should_run {
-                    self.check_facts(&facts)?;
+                    self.check_facts(metadata.id, &facts)?;
                     log::info!("Checked fact {:?}.", facts);
                 } else {
                     log::warn!("Skipping check.")
@@ -1222,7 +1274,13 @@ impl EGraph {
                 self.print_size(f)?;
             }
             NCommand::Fail(c) => {
-                let result = self.run_command(*c, should_run);
+                let result = self.run_command(
+                    NormCommand {
+                        metadata,
+                        command: *c,
+                    },
+                    should_run,
+                );
                 if let Err(e) = result {
                     log::info!("Command failed as expected: {}", e);
                 } else {
@@ -1407,7 +1465,7 @@ impl EGraph {
             // Important to process each command individually
             // because push and pop create new scopes
             for processed in self.process_command(command, CompilerPassStop::All)? {
-                self.run_command(processed.command, should_run)?;
+                self.run_command(processed, should_run)?;
             }
         }
         log::logger().flush();

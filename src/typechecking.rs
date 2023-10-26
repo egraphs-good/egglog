@@ -1,4 +1,7 @@
-use crate::*;
+use crate::{
+    typecheck::{facts_to_query, ValueEq},
+    *,
+};
 
 pub const RULE_PROOF_KEYWORD: &str = "rule-proof";
 
@@ -51,6 +54,10 @@ impl Default for TypeInfo {
         res.presorts.insert("Map".into(), MapSort::make_sort);
         res.presorts.insert("Set".into(), SetSort::make_sort);
         res.presorts.insert("Vec".into(), VecSort::make_sort);
+
+        res.add_primitive(ValueEq {
+            unit: res.get_sort(),
+        });
 
         res
     }
@@ -183,7 +190,7 @@ impl TypeInfo {
                 self.typecheck_ncommand(cmd, id)?;
             }
             NCommand::RunSchedule(schedule) => {
-                self.typecheck_schedule(id, schedule)?;
+                self.typecheck_schedule(schedule)?;
             }
 
             // TODO cover all cases in typechecking
@@ -192,26 +199,26 @@ impl TypeInfo {
         Ok(())
     }
 
-    fn typecheck_schedule(
-        &mut self,
-        ctx: CommandId,
-        schedule: &NormSchedule,
-    ) -> Result<(), TypeError> {
+    fn typecheck_schedule(&mut self, schedule: &NormSchedule) -> Result<(), TypeError> {
         match schedule {
             NormSchedule::Repeat(_times, schedule) => {
-                self.typecheck_schedule(ctx, schedule)?;
+                self.typecheck_schedule(schedule)?;
             }
             NormSchedule::Sequence(schedules) => {
                 for schedule in schedules {
-                    self.typecheck_schedule(ctx, schedule)?;
+                    self.typecheck_schedule(schedule)?;
                 }
             }
             NormSchedule::Saturate(schedule) => {
-                self.typecheck_schedule(ctx, schedule)?;
+                self.typecheck_schedule(schedule)?;
             }
             NormSchedule::Run(run_config) => {
                 if let Some(facts) = &run_config.until {
-                    self.typecheck_facts(ctx, facts)?;
+                    assert!(self
+                        .local_types
+                        .insert(run_config.ctx, Default::default())
+                        .is_none());
+                    self.typecheck_facts(run_config.ctx, facts)?;
                     self.verify_normal_form_facts(facts);
                 }
             }
@@ -261,8 +268,26 @@ impl TypeInfo {
     }
 
     fn typecheck_facts(&mut self, ctx: CommandId, facts: &Vec<NormFact>) -> Result<(), TypeError> {
-        for fact in facts {
-            self.typecheck_fact(ctx, fact)?;
+        // ROUND TRIP TO CORE RULE AND BACK
+        // TODO: in long term, we don't want this round trip to CoreRule query and back just for the type information.
+        let query = facts_to_query(facts, self);
+        let constraints = query.get_constraints(self)?;
+        let problem = Problem { constraints };
+        let range = query.atom_terms();
+        let assignment = problem
+            .solve(range.iter(), |sort: &ArcSort| sort.name())
+            .map_err(|e| e.to_type_error())?;
+
+        for (at, ty) in assignment.0.iter() {
+            match at {
+                AtomTerm::Var(v) => {
+                    self.introduce_binding(ctx, *v, ty.clone(), false)?;
+                }
+                // All the globals should have been introduced
+                AtomTerm::Global(_) => {}
+                // No need to bind literals as well
+                AtomTerm::Literal(_) => {}
+            }
         }
         Ok(())
     }
@@ -443,87 +468,16 @@ impl TypeInfo {
         Ok(())
     }
 
-    fn typecheck_fact(&mut self, ctx: CommandId, fact: &NormFact) -> Result<(), TypeError> {
-        match fact {
-            NormFact::Compute(var, expr) => {
-                let expr_type = self.typecheck_expr(ctx, expr, true)?;
-                if let Some(_existing) = self
-                    .local_types
-                    .get_mut(&ctx)
-                    .unwrap()
-                    .insert(*var, expr_type.output.clone())
-                {
-                    return Err(TypeError::AlreadyDefined(*var));
-                }
-            }
-            NormFact::Assign(var, expr) => {
-                let expr_type = self.typecheck_expr(ctx, expr, false)?;
-                if let Some(_existing) = self
-                    .local_types
-                    .get_mut(&ctx)
-                    .unwrap()
-                    .insert(*var, expr_type.output.clone())
-                {
-                    return Err(TypeError::AlreadyDefined(*var));
-                }
-            }
-            NormFact::AssignVar(lhs, rhs) => {
-                let rhs_type = self.lookup(ctx, *rhs)?;
-                if let Some(_existing) = self
-                    .local_types
-                    .get_mut(&ctx)
-                    .unwrap()
-                    .insert(*lhs, rhs_type.clone())
-                {
-                    return Err(TypeError::AlreadyDefined(*lhs));
-                }
-            }
-            NormFact::AssignLit(var, lit) => {
-                let lit_type = self.infer_literal(lit);
-                if let Some(existing) = self
-                    .local_types
-                    .get_mut(&ctx)
-                    .unwrap()
-                    .insert(*var, lit_type.clone())
-                {
-                    if lit_type.name() != existing.name() {
-                        return Err(TypeError::TypeMismatch(lit_type, existing));
-                    }
-                }
-            }
-            NormFact::ConstrainEq(var1, var2) => {
-                let l1 = self.lookup(ctx, *var1);
-                let l2 = self.lookup(ctx, *var2);
-                if let Ok(v1type) = l1 {
-                    if let Ok(v2type) = l2 {
-                        if v1type.name() != v2type.name() {
-                            return Err(TypeError::TypeMismatch(v1type, v2type));
-                        }
-                    } else {
-                        self.local_types
-                            .get_mut(&ctx)
-                            .unwrap()
-                            .insert(*var2, v1type);
-                    }
-                } else if let Ok(v2type) = l2 {
-                    self.local_types
-                        .get_mut(&ctx)
-                        .unwrap()
-                        .insert(*var1, v2type);
-                } else {
-                    return Err(TypeError::Unbound(*var1));
-                }
-            }
-        }
-        Ok(())
-    }
-
     pub fn reserved_type(&self, sym: Symbol) -> Option<ArcSort> {
         if sym == RULE_PROOF_KEYWORD.into() {
             Some(self.sorts.get::<Symbol>(&"Proof__".into()).unwrap().clone())
         } else {
             None
         }
+    }
+
+    pub fn lookup_global(&self, sym: &Symbol) -> Option<ArcSort> {
+        self.global_types.get(sym).cloned()
     }
 
     pub fn lookup(&self, ctx: CommandId, sym: Symbol) -> Result<ArcSort, TypeError> {
@@ -718,4 +672,6 @@ pub enum TypeError {
     NoMatchingPrimitive { op: Symbol, inputs: Vec<Symbol> },
     #[error("Variable {0} was already defined")]
     AlreadyDefined(Symbol),
+    #[error("All alternative definitions considered failed\n{}", .0.iter().map(|e| format!("  {e}\n")).collect::<Vec<_>>().join(""))]
+    AllAlternativeFailed(Vec<TypeError>),
 }

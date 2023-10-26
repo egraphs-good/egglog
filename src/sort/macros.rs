@@ -27,7 +27,7 @@ macro_rules! add_primitives {
         let type_info: &mut _ = $type_info;
         #[allow(unused_imports, non_snake_case)]
         {
-            use $crate::{*, sort::*};
+            use $crate::{*, sort::*, constraint::*};
 
             struct MyPrim {$(
                 $param: Arc<<$param_t as FromSort>::Sort>,
@@ -40,18 +40,11 @@ macro_rules! add_primitives {
                     $name.into()
                 }
 
-                fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-                    let mut types = types.iter();
-                    $(
-                        if self.$param.name() != types.next()?.name() {
-                            return None;
-                        }
-                    )*
-                    if types.next().is_some() {
-                        None
-                    } else {
-                        Some(self.__out.clone())
-                    }
+                fn get_type_constraints(
+                    &self,
+                ) -> Box<dyn TypeConstraint> {
+                    let sorts = vec![$(self.$param.clone(),)* self.__out.clone() as ArcSort];
+                    SimpleTypeConstraint::new(self.name(), sorts).into_box()
                 }
 
                 fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {

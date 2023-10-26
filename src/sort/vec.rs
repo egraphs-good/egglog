@@ -1,5 +1,7 @@
 use std::sync::Mutex;
 
+use crate::constraint::AllEqualTypeConstraint;
+
 use super::*;
 
 type ValueVec = Vec<Value>;
@@ -12,6 +14,10 @@ pub struct VecSort {
 }
 
 impl VecSort {
+    pub fn element(&self) -> ArcSort {
+        self.element.clone()
+    }
+
     pub fn element_name(&self) -> Symbol {
         self.element.name()
     }
@@ -217,13 +223,8 @@ impl PrimitiveLike for VecRebuild {
         self.name
     }
 
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-        if let [vec] = types {
-            if vec.name() == self.vec.name() {
-                return Some(self.vec.clone());
-            }
-        }
-        None
+    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(self.name(), vec![self.vec.clone(), self.vec.clone()]).into_box()
     }
 
     fn apply(&self, values: &[Value], egraph: &EGraph) -> Option<Value> {
@@ -244,12 +245,11 @@ impl PrimitiveLike for VecOf {
         self.name
     }
 
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-        if types.iter().all(|t| t.name() == self.vec.element_name()) {
-            Some(self.vec.clone())
-        } else {
-            None
-        }
+    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+        AllEqualTypeConstraint::new(self.name())
+            .with_all_arguments_sort(self.vec.element())
+            .with_output_sort(self.vec.clone())
+            .into_box()
     }
 
     fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
@@ -268,12 +268,10 @@ impl PrimitiveLike for Append {
         self.name
     }
 
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-        if types.iter().all(|t| t.name() == self.vec.name()) {
-            Some(self.vec.clone())
-        } else {
-            None
-        }
+    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+        AllEqualTypeConstraint::new(self.name())
+            .with_all_arguments_sort(self.vec.clone())
+            .into_box()
     }
 
     fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
@@ -292,11 +290,8 @@ impl PrimitiveLike for Ctor {
         self.name
     }
 
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-        match types {
-            [] => Some(self.vec.clone()),
-            _ => None,
-        }
+    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(self.name(), vec![self.vec.clone()]).into_box()
     }
 
     fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
@@ -315,13 +310,12 @@ impl PrimitiveLike for Push {
         self.name
     }
 
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-        match types {
-            [vec, key] if (vec.name(), key.name()) == (self.vec.name, self.vec.element_name()) => {
-                Some(self.vec.clone())
-            }
-            _ => None,
-        }
+    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![self.vec.clone(), self.vec.element(), self.vec.clone()],
+        )
+        .into_box()
     }
 
     fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
@@ -341,11 +335,8 @@ impl PrimitiveLike for Pop {
         self.name
     }
 
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-        match types {
-            [vec] if vec.name() == self.vec.name => Some(self.vec.clone()),
-            _ => None,
-        }
+    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(self.name(), vec![self.vec.clone(), self.vec.clone()]).into_box()
     }
 
     fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
@@ -366,15 +357,12 @@ impl PrimitiveLike for NotContains {
         self.name
     }
 
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-        match types {
-            [vec, element]
-                if (vec.name(), element.name()) == (self.vec.name, self.vec.element_name()) =>
-            {
-                Some(self.unit.clone())
-            }
-            _ => None,
-        }
+    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![self.vec.clone(), self.vec.element(), self.unit.clone()],
+        )
+        .into_box()
     }
 
     fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
@@ -398,13 +386,12 @@ impl PrimitiveLike for Contains {
         self.name
     }
 
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-        match types {
-            [vec, key] if (vec.name(), key.name()) == (self.vec.name, self.vec.element_name()) => {
-                Some(self.unit.clone())
-            }
-            _ => None,
-        }
+    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![self.vec.clone(), self.vec.element(), self.unit.clone()],
+        )
+        .into_box()
     }
 
     fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
@@ -428,11 +415,8 @@ impl PrimitiveLike for Length {
         self.name
     }
 
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-        match types {
-            [vec] if vec.name() == self.vec.name => Some(self.i64.clone()),
-            _ => None,
-        }
+    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(self.name(), vec![self.vec.clone(), self.i64.clone()]).into_box()
     }
 
     fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
@@ -452,13 +436,12 @@ impl PrimitiveLike for Get {
         self.name
     }
 
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-        match types {
-            [vec, index] if (vec.name(), index.name()) == (self.vec.name, "i64".into()) => {
-                Some(self.vec.element.clone())
-            }
-            _ => None,
-        }
+    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![self.vec.clone(), self.i64.clone(), self.vec.element()],
+        )
+        .into_box()
     }
 
     fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
@@ -479,17 +462,17 @@ impl PrimitiveLike for Set {
         self.name
     }
 
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-        match types {
-            [vec, index, el]
-                if vec.name() == self.vec.name
-                    && index.name() == "i64".into()
-                    && el.name() == self.vec.element_name() =>
-            {
-                Some(self.vec.clone())
-            }
-            _ => None,
-        }
+    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![
+                self.vec.clone(),
+                self.i64.clone(),
+                self.vec.element.clone(),
+                self.vec.clone(),
+            ],
+        )
+        .into_box()
     }
 
     fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {

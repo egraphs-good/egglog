@@ -359,6 +359,7 @@ fn desugar_schedule(desugar: &mut Desugar, schedule: &Schedule) -> NormSchedule 
 fn desugar_run_config(desugar: &mut Desugar, run_config: &RunConfig) -> NormRunConfig {
     let RunConfig { ruleset, until } = run_config;
     NormRunConfig {
+        ctx: desugar.get_new_id(),
         ruleset: *ruleset,
         until: until.clone().map(|facts| flatten_facts(&facts, desugar)),
     }
@@ -436,6 +437,7 @@ pub struct Desugar {
 
 impl Default for Desugar {
     fn default() -> Self {
+        let type_info = TypeInfo::default();
         Self {
             next_fresh: Default::default(),
             next_command_id: Default::default(),
@@ -445,7 +447,7 @@ impl Default for Desugar {
             action_parser: ast::parse::ActionParser::new(),
             number_underscores: 3,
             global_variables: Default::default(),
-            type_info: TypeInfo::default(),
+            type_info,
         }
     }
 }

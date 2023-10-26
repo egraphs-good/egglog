@@ -1,4 +1,4 @@
-use crate::ast::Literal;
+use crate::{ast::Literal, constraint::AllEqualTypeConstraint};
 
 use super::*;
 
@@ -107,15 +107,12 @@ impl PrimitiveLike for CountMatches {
         self.name
     }
 
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-        if types.len() == 2
-            && types[0].name() == self.string.name
-            && types[1].name() == self.string.name
-        {
-            Some(self.int.clone())
-        } else {
-            None
-        }
+    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+        AllEqualTypeConstraint::new(self.name())
+            .with_all_arguments_sort(self.string.clone())
+            .with_exact_length(3)
+            .with_output_sort(self.int.clone())
+            .into_box()
     }
 
     fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {

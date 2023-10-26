@@ -1,42 +1,187 @@
-use crate::*;
-use indexmap::map::Entry as IEntry;
+use std::ops::AddAssign;
+
+use crate::{constraint::AllEqualTypeConstraint, *};
+use hashbrown::HashMap;
 use typechecking::TypeError;
 
-pub struct Context<'a> {
-    pub egraph: &'a EGraph,
-    pub types: IndexMap<Symbol, ArcSort>,
-    unit: ArcSort,
-    errors: Vec<TypeError>,
-    unionfind: UnionFind,
-    nodes: HashMap<ENode, Id>,
-}
-
-#[derive(Hash, Eq, PartialEq, Clone)]
-enum ENode {
-    Func(Symbol, Vec<Id>),
-    Prim(Primitive, Vec<Id>),
-    Literal(Literal),
-    Var(Symbol),
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Default)]
+pub struct Actions(pub(crate) Vec<NormAction>);
+impl Actions {
+    fn subst(&mut self, subst: &HashMap<Symbol, AtomTerm>) {
+        let actions = subst.iter().map(|(symbol, atom_term)| match atom_term {
+            AtomTerm::Var(v) => NormAction::LetVar(*symbol, *v),
+            AtomTerm::Literal(lit) => NormAction::LetLit(*symbol, lit.clone()),
+            AtomTerm::Global(v) => NormAction::LetVar(*symbol, *v),
+        });
+        let existing_actions = std::mem::take(&mut self.0);
+        self.0 = actions.chain(existing_actions).collect();
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SymbolOrEq {
+    Symbol(Symbol),
+    Eq,
+}
+
+impl From<Symbol> for SymbolOrEq {
+    fn from(value: Symbol) -> Self {
+        SymbolOrEq::Symbol(value)
+    }
+}
+
+impl SymbolOrEq {
+    pub fn is_eq(&self) -> bool {
+        matches!(self, SymbolOrEq::Eq)
+    }
+
+    pub fn get_symbol(&self) -> Option<&Symbol> {
+        if let SymbolOrEq::Symbol(symbol) = self {
+            Some(symbol)
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct UnresolvedCoreRule {
+    pub body: Query<SymbolOrEq>,
+    pub head: Actions,
+}
+
+#[derive(Debug, Clone)]
+pub struct CanonicalizedCoreRule {
+    pub body: Query<Symbol>,
+    pub head: Actions,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ResolvedCoreRule {
+    pub body: Query<ResolvedCall>,
+    pub head: Actions,
+}
+
+#[derive(Debug, Clone)]
+pub enum ResolvedCall {
+    Func(Symbol),
+    Primitive(Primitive),
+}
+
+impl Query<ResolvedCall> {
+    pub fn filters(&self) -> impl Iterator<Item = Atom<Primitive>> + '_ {
+        self.atoms.iter().filter_map(|atom| match &atom.head {
+            ResolvedCall::Func(_) => None,
+            ResolvedCall::Primitive(head) => Some(Atom {
+                head: head.clone(),
+                args: atom.args.clone(),
+            }),
+        })
+    }
+
+    pub fn funcs(&self) -> impl Iterator<Item = Atom<Symbol>> + '_ {
+        self.atoms.iter().filter_map(|atom| match atom.head {
+            ResolvedCall::Func(head) => Some(Atom {
+                head,
+                args: atom.args.clone(),
+            }),
+            ResolvedCall::Primitive(_) => None,
+        })
+    }
+}
+
+impl UnresolvedCoreRule {
+    pub fn subst(&mut self, subst: &HashMap<Symbol, AtomTerm>) {
+        for atom in &mut self.body.atoms {
+            atom.subst(subst);
+        }
+        self.head.subst(subst);
+    }
+}
+
+pub(crate) fn facts_to_query(body: &Vec<NormFact>, typeinfo: &TypeInfo) -> Query<SymbolOrEq> {
+    fn to_atom_term(s: Symbol, typeinfo: &TypeInfo) -> AtomTerm {
+        if typeinfo.is_global(s) {
+            AtomTerm::Global(s)
+        } else {
+            AtomTerm::Var(s)
+        }
+    }
+    let mut atoms = vec![];
+    for fact in body {
+        match fact {
+            NormFact::Assign(symbol, NormExpr::Call(head, args))
+            | NormFact::Compute(symbol, NormExpr::Call(head, args)) => {
+                let args = args
+                    .iter()
+                    .chain(once(symbol))
+                    .cloned()
+                    .map(|s| to_atom_term(s, typeinfo))
+                    .collect();
+                let head = SymbolOrEq::Symbol(*head);
+                atoms.push(Atom { head, args });
+            }
+            NormFact::AssignVar(lhs, rhs) => atoms.push(Atom {
+                head: SymbolOrEq::Eq,
+                args: vec![to_atom_term(*lhs, typeinfo), to_atom_term(*rhs, typeinfo)],
+            }),
+            NormFact::ConstrainEq(lhs, rhs) => atoms.push(Atom {
+                head: SymbolOrEq::Eq,
+                args: vec![to_atom_term(*lhs, typeinfo), to_atom_term(*rhs, typeinfo)],
+            }),
+            NormFact::AssignLit(symbol, lit) => atoms.push(Atom {
+                head: SymbolOrEq::Eq,
+                args: vec![
+                    to_atom_term(*symbol, typeinfo),
+                    AtomTerm::Literal(lit.clone()),
+                ],
+            }),
+        }
+    }
+    Query { atoms }
+}
+
+impl NormRule {
+    pub(crate) fn to_core_rule(&self, typeinfo: &TypeInfo) -> UnresolvedCoreRule {
+        let NormRule { head, body } = self;
+        UnresolvedCoreRule {
+            body: facts_to_query(body, typeinfo),
+            head: Actions(head.clone()),
+        }
+    }
+}
+
+pub struct Context<'a> {
+    pub egraph: &'a mut EGraph,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AtomTerm {
     Var(Symbol),
-    Value(Value),
+    Literal(Literal),
     Global(Symbol),
+}
+impl AtomTerm {
+    pub fn to_expr(&self) -> Expr {
+        match self {
+            AtomTerm::Var(v) => Expr::Var(*v),
+            AtomTerm::Literal(l) => Expr::Lit(l.clone()),
+            AtomTerm::Global(v) => Expr::Var(*v),
+        }
+    }
 }
 
 impl std::fmt::Display for AtomTerm {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             AtomTerm::Var(v) => write!(f, "{}", v),
-            AtomTerm::Value(_) => write!(f, "<value>"),
+            AtomTerm::Literal(lit) => write!(f, "{}", lit),
             AtomTerm::Global(g) => write!(f, "{}", g),
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Atom<T> {
     pub head: T,
     pub args: Vec<AtomTerm>,
@@ -49,19 +194,62 @@ impl<T: std::fmt::Display> std::fmt::Display for Atom<T> {
 }
 
 #[derive(Debug, Clone)]
-pub struct Query {
-    pub atoms: Vec<Atom<Symbol>>,
-    pub filters: Vec<Atom<Primitive>>,
+pub struct Query<T> {
+    pub atoms: Vec<Atom<T>>,
 }
 
-impl std::fmt::Display for Query {
+impl<T> Default for Query<T> {
+    fn default() -> Self {
+        Self {
+            atoms: Default::default(),
+        }
+    }
+}
+
+impl Query<SymbolOrEq> {
+    pub fn get_constraints(
+        &self,
+        type_info: &TypeInfo,
+    ) -> Result<Vec<Constraint<AtomTerm, ArcSort>>, TypeError> {
+        let mut constraints = vec![];
+        for atom in self.atoms.iter() {
+            constraints.extend(atom.get_constraints(type_info)?.into_iter());
+        }
+        Ok(constraints)
+    }
+
+    pub(crate) fn atom_terms(&self) -> HashSet<AtomTerm> {
+        self.atoms
+            .iter()
+            .flat_map(|atom| atom.args.iter().cloned())
+            .collect()
+    }
+}
+
+impl<T> AddAssign for Query<T> {
+    fn add_assign(&mut self, rhs: Self) {
+        self.atoms.extend(rhs.atoms.into_iter());
+    }
+}
+
+impl std::fmt::Display for Query<Symbol> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for atom in &self.atoms {
             writeln!(f, "{atom}")?;
         }
-        if !self.filters.is_empty() {
+        Ok(())
+    }
+}
+
+impl std::fmt::Display for Query<ResolvedCall> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for atom in self.funcs() {
+            writeln!(f, "{atom}")?;
+        }
+        let filters: Vec<_> = self.filters().collect();
+        if !filters.is_empty() {
             writeln!(f, "where ")?;
-            for filter in &self.filters {
+            for filter in &filters {
                 writeln!(
                     f,
                     "({} {})",
@@ -78,30 +266,54 @@ impl<T> Atom<T> {
     pub fn vars(&self) -> impl Iterator<Item = Symbol> + '_ {
         self.args.iter().filter_map(|t| match t {
             AtomTerm::Var(v) => Some(*v),
-            AtomTerm::Value(_) => None,
+            AtomTerm::Literal(_) => None,
             AtomTerm::Global(_) => None,
         })
     }
+
+    fn subst(&mut self, subst: &HashMap<Symbol, AtomTerm>) {
+        for arg in self.args.iter_mut() {
+            match arg {
+                AtomTerm::Var(v) => {
+                    if let Some(at) = subst.get(v) {
+                        *arg = at.clone();
+                    }
+                }
+                AtomTerm::Literal(_) => (),
+                AtomTerm::Global(_) => (),
+            }
+        }
+    }
+}
+impl Atom<Symbol> {
+    pub(crate) fn to_expr(&self) -> Expr {
+        Expr::Call(
+            self.head,
+            self.args.iter().map(|arg| arg.to_expr()).collect(),
+        )
+    }
 }
 
-pub(crate) struct ValueEq {}
+pub(crate) struct ValueEq {
+    pub unit: Arc<UnitSort>,
+}
 
 impl PrimitiveLike for ValueEq {
     fn name(&self) -> Symbol {
         "value-eq".into()
     }
 
-    fn accept(&self, types: &[ArcSort]) -> Option<ArcSort> {
-        match types {
-            [a, b] if a.name() == b.name() => Some(a.clone()),
-            _ => None,
-        }
+    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+        AllEqualTypeConstraint::new(self.name())
+            .with_exact_length(3)
+            .with_output_sort(self.unit.clone())
+            .into_box()
     }
 
     fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
         assert_eq!(values.len(), 2);
         if values[0] == values[1] {
-            Some(values[0])
+            Some(Value::unit())
         } else {
             None
         }
@@ -109,340 +321,158 @@ impl PrimitiveLike for ValueEq {
 }
 
 impl<'a> Context<'a> {
-    pub fn new(egraph: &'a EGraph) -> Self {
-        Self {
-            egraph,
-            unit: egraph.type_info().sorts[&Symbol::from(UNIT_SYM)].clone(),
-            types: Default::default(),
-            errors: Vec::default(),
-            unionfind: UnionFind::default(),
-            nodes: HashMap::default(),
-        }
+    pub fn new(egraph: &'a mut EGraph) -> Self {
+        Self { egraph }
     }
 
-    fn add_node(&mut self, node: ENode) -> Id {
-        let entry = self.nodes.entry(node);
-        *entry.or_insert_with(|| self.unionfind.make_set())
-    }
-
-    pub fn typecheck_query(
-        &mut self,
-        facts: &'a [Fact],
-        actions: &'a [Action],
-    ) -> Result<(Query, Vec<Action>), Vec<TypeError>> {
-        for fact in facts {
-            self.typecheck_fact(fact);
-        }
-
-        // congruence isn't strictly necessary, but it can eliminate some redundant atoms
-        self.rebuild();
-
-        // First find the canoncial version of each leaf
-        let mut leaves = HashMap::<Id, Expr>::default();
-        let mut canon = HashMap::<Symbol, Expr>::default();
-
-        // Do literals first
-        for (node, &id) in &self.nodes {
-            match node {
-                ENode::Literal(lit) => {
-                    let old = leaves.insert(id, Expr::Lit(lit.clone()));
-                    if let Some(Expr::Lit(old_lit)) = old {
-                        panic!("Duplicate literal: {:?} {:?}", old_lit, lit);
-                    }
-                }
-                _ => continue,
-            }
-        }
-        // Globally bound variables first
-        for (node, &id) in &self.nodes {
-            match node {
-                ENode::Var(var) => {
-                    if self.egraph.global_bindings.get(var).is_some() {
-                        match leaves.entry(id) {
-                            Entry::Occupied(existing) => {
-                                canon.insert(*var, existing.get().clone());
-                            }
-                            Entry::Vacant(v) => {
-                                v.insert(Expr::Var(*var));
-                            }
+    /// Transformed a UnresolvedCoreRule into a CanonicalizedCoreRule.
+    /// In particular, it removes equality checks between variables and
+    /// other arguments, and turns equality checks between non-variable arguments
+    /// into a primitive equality check `value-eq`.
+    pub fn canonicalize(&self, rule: UnresolvedCoreRule) -> CanonicalizedCoreRule {
+        let mut result_rule = rule;
+        loop {
+            let mut to_subst = None;
+            for atom in result_rule.body.atoms.iter() {
+                if atom.head.is_eq() && atom.args[0] != atom.args[1] {
+                    match &atom.args[..] {
+                        [AtomTerm::Var(x), y] | [y, AtomTerm::Var(x)] => {
+                            to_subst = Some((x, y));
+                            break;
                         }
+                        _ => (),
                     }
                 }
-                _ => continue,
+            }
+            if let Some((x, y)) = to_subst {
+                result_rule.subst(&[(*x, y.clone())].into());
+            } else {
+                break;
             }
         }
 
-        // Now do variables
-        for (node, &id) in &self.nodes {
-            debug_assert_eq!(id, self.unionfind.find(id));
-            match node {
-                ENode::Var(var) => match leaves.entry(id) {
-                    Entry::Occupied(existing) => {
-                        canon.insert(*var, existing.get().clone());
-                    }
-                    Entry::Vacant(v) => {
-                        v.insert(Expr::Var(*var));
-                    }
-                },
-                _ => continue,
-            }
-        }
-
-        // replace canonical things in the actions
-        let res_actions = actions.iter().map(|a| a.replace_canon(&canon)).collect();
-        for (var, _expr) in canon {
-            self.types.remove(&var);
-        }
-
-        let get_leaf = |id: &Id| -> AtomTerm {
-            let mk = || AtomTerm::Var(Symbol::from(format!("?__{}", id)));
-            match leaves.get(id) {
-                Some(Expr::Var(v)) => {
-                    if let Some((_ty, _value, _ts)) = self.egraph.global_bindings.get(v) {
-                        AtomTerm::Global(*v)
-                    } else {
-                        AtomTerm::Var(*v)
-                    }
-                }
-                Some(Expr::Lit(l)) => AtomTerm::Value(self.egraph.eval_lit(l)),
-                _ => mk(),
-            }
-        };
-
-        let mut query = Query {
-            atoms: Default::default(),
-            filters: Default::default(),
-        };
-        let mut query_eclasses = HashSet::<Id>::default();
-        // Now we can fill in the nodes with the canonical leaves
-        for (node, id) in &self.nodes {
-            match node {
-                ENode::Func(f, ids) => {
-                    let args = ids.iter().chain([id]).map(get_leaf).collect();
-                    for id in ids {
-                        query_eclasses.insert(*id);
-                    }
-                    query.atoms.push(Atom { head: *f, args });
-                }
-                ENode::Prim(p, ids) => {
-                    let mut args = vec![];
-                    for child in ids {
-                        let leaf = get_leaf(child);
-                        if let AtomTerm::Var(v) = leaf {
-                            if self.egraph.global_bindings.contains_key(&v) {
-                                args.push(AtomTerm::Value(self.egraph.global_bindings[&v].1));
-                                continue;
-                            }
+        let atoms = result_rule
+            .body
+            .atoms
+            .into_iter()
+            .filter_map(|atom| match atom.head {
+                SymbolOrEq::Eq => {
+                    assert_eq!(atom.args.len(), 2);
+                    match (&atom.args[0], &atom.args[1]) {
+                        (AtomTerm::Var(v1), AtomTerm::Var(v2)) => {
+                            assert_eq!(v1, v2);
+                            None
                         }
-                        args.push(get_leaf(child));
-                        query_eclasses.insert(*child);
-                    }
-                    args.push(get_leaf(id));
-                    query.filters.push(Atom {
-                        head: p.clone(),
-                        args,
-                    });
-                }
-                _ => {}
-            }
-        }
-
-        // filter for global variables
-        for node in &self.nodes {
-            if let ENode::Var(var) = node.0 {
-                if self.egraph.global_bindings.contains_key(var) {
-                    let canon = get_leaf(node.1);
-                    if canon != AtomTerm::Global(*var) {
-                        // compare global to canon
-                        query.filters.push(Atom {
-                            head: Primitive(Arc::new(ValueEq {})),
-                            args: vec![canon.clone(), AtomTerm::Global(*var), canon],
-                        });
-                    }
-                }
-            }
-        }
-
-        if self.errors.is_empty() {
-            Ok((query, res_actions))
-        } else {
-            Err(self.errors.clone())
-        }
-    }
-
-    fn rebuild(&mut self) {
-        let mut keep_going = true;
-        while keep_going {
-            keep_going = false;
-            let nodes = std::mem::take(&mut self.nodes);
-            for (mut node, id) in nodes {
-                // canonicalize
-                let id = self.unionfind.find(id);
-                if let ENode::Func(_, children) | ENode::Prim(_, children) = &mut node {
-                    for child in children {
-                        *child = self.unionfind.find(*child);
-                    }
-                }
-
-                // reinsert and handle hit
-                if let Some(old) = self.nodes.insert(node.clone(), id) {
-                    keep_going = true;
-                    self.unionfind.union_raw(old, id);
-                }
-            }
-        }
-    }
-
-    fn typecheck_fact(&mut self, fact: &Fact) {
-        match fact {
-            Fact::Eq(exprs) => {
-                assert!(exprs.len() == 2);
-                let mut later = vec![];
-                let mut ty: Option<ArcSort> = None;
-                let mut ids = Vec::with_capacity(exprs.len());
-                for expr in exprs {
-                    match (expr, &ty) {
-                        (_, Some(expected)) => {
-                            ids.push(self.check_query_expr(expr, expected.clone()))
+                        (AtomTerm::Var(_), _) | (_, AtomTerm::Var(_)) => {
+                            panic!("equalities between variable and non-variable arguments should have been canonicalized")
                         }
-                        // This is a variable the we couldn't infer the type of,
-                        // so we'll try again later when we can check its type
-                        (Expr::Var(v), None)
-                            if !self.types.contains_key(v)
-                                && !self.egraph.global_bindings.contains_key(v) =>
-                        {
-                            later.push(expr)
-                        }
-                        (_, None) => match self.infer_query_expr(expr) {
-                            (_, None) => (),
-                            (id, Some(t)) => {
-                                ty = Some(t);
-                                ids.push(id);
+                        (at1, at2) => {
+                            if at1 == at2 {
+                                None
+                            } else {
+                                Some(Atom {
+                                    head: "value-eq".into(),
+                                    args: vec![
+                                        atom.args[0].clone(),
+                                        atom.args[1].clone(),
+                                        AtomTerm::Literal(Literal::Unit),
+                                    ],
+                                })
                             }
                         },
                     }
                 }
-
-                if let Some(ty) = ty {
-                    for e in later {
-                        ids.push(self.check_query_expr(e, ty.clone()));
-                    }
-                } else {
-                    for e in later {
-                        self.errors.push(TypeError::InferenceFailure(e.clone()));
-                    }
-                }
-
-                ids.into_iter()
-                    .reduce(|a, b| self.unionfind.union_raw(a, b));
-            }
-            Fact::Fact(e) => {
-                self.check_query_expr(e, self.unit.clone());
-            }
+                SymbolOrEq::Symbol(symbol) => Some(Atom {
+                    head: symbol,
+                    args: atom.args,
+                }),
+            })
+            .collect();
+        CanonicalizedCoreRule {
+            body: Query { atoms },
+            head: result_rule.head,
         }
     }
 
-    fn check_query_expr(&mut self, expr: &Expr, expected: ArcSort) -> Id {
-        match expr {
-            Expr::Var(sym) => {
-                match self.types.entry(*sym) {
-                    IEntry::Occupied(ty) => {
-                        // TODO name comparison??
-                        if ty.get().name() != expected.name() {
-                            self.errors.push(TypeError::Mismatch {
-                                expr: expr.clone(),
-                                expected,
-                                actual: ty.get().clone(),
-                                reason: "mismatch".into(),
-                            })
+    pub(crate) fn resolve_rule(
+        &self,
+        ctx: CommandId,
+        rule: CanonicalizedCoreRule,
+    ) -> Result<ResolvedCoreRule, TypeError> {
+        let type_info = self.egraph.type_info();
+        let local_types = type_info.local_types.get(&ctx).unwrap();
+        let get_type = |arg: &AtomTerm| match arg {
+            AtomTerm::Global(v) => type_info.lookup_global(v).unwrap().clone(),
+            AtomTerm::Var(v) => local_types.get(v).unwrap().clone(),
+            AtomTerm::Literal(lit) => type_info.infer_literal(lit),
+        };
+        let body_atoms: Vec<Atom<ResolvedCall>> = rule
+            .body
+            .atoms
+            .into_iter()
+            .map(|mut atom| {
+                let symbol = atom.head;
+                if let Some(ty) = type_info.func_types.get(&symbol) {
+                    let expected = ty.input.iter().chain(once(&ty.output));
+                    let expected = expected.map(|s| s.name());
+                    let actual = atom.args.iter().map(get_type);
+                    let actual = actual.map(|s| s.name());
+                    if expected.eq(actual) {
+                        return Atom {
+                            head: ResolvedCall::Func(symbol),
+                            args: std::mem::take(&mut atom.args),
+                        };
+                    }
+                }
+                if let Some(primitives) = type_info.primitives.get(&symbol) {
+                    if primitives.len() == 1 {
+                        Atom {
+                            head: ResolvedCall::Primitive(primitives[0].clone()),
+                            args: std::mem::take(&mut atom.args),
                         }
-                    }
-                    // we can actually bind the variable here
-                    IEntry::Vacant(entry) => {
-                        entry.insert(expected);
-                    }
-                }
-                self.add_node(ENode::Var(*sym))
-            }
-            _ => {
-                let (id, actual) = self.infer_query_expr(expr);
-                if let Some(actual) = actual {
-                    if actual.name() != expected.name() {
-                        self.errors.push(TypeError::Mismatch {
-                            expr: expr.clone(),
-                            expected,
-                            actual,
-                            reason: "mismatch".into(),
-                        })
-                    }
-                }
-                id
-            }
-        }
-    }
-
-    fn infer_query_expr(&mut self, expr: &Expr) -> (Id, Option<ArcSort>) {
-        match expr {
-            Expr::Var(sym) => {
-                if self.egraph.functions.contains_key(sym) {
-                    return self.infer_query_expr(&Expr::call(*sym, []));
-                }
-
-                let ty = if let Some(ty) = self.types.get(sym) {
-                    Some(ty.clone())
-                } else if let Some(ty) = self.egraph.global_bindings.get(sym) {
-                    Some(ty.0.clone())
-                } else {
-                    self.errors.push(TypeError::Unbound(*sym));
-                    None
-                };
-                (self.add_node(ENode::Var(*sym)), ty)
-            }
-            Expr::Lit(lit) => {
-                let t = self.egraph.type_info().infer_literal(lit);
-                (self.add_node(ENode::Literal(lit.clone())), Some(t))
-            }
-            Expr::Call(sym, args) => {
-                if let Some(f) = self.egraph.functions.get(sym) {
-                    if f.schema.input.len() != args.len() {
-                        self.errors.push(TypeError::Arity {
-                            expr: expr.clone(),
-                            expected: f.schema.input.len(),
-                        });
-                    }
-
-                    let ids: Vec<Id> = args
-                        .iter()
-                        .zip(&f.schema.input)
-                        .map(|(arg, ty)| self.check_query_expr(arg, ty.clone()))
-                        .collect();
-                    let t = f.schema.output.clone();
-                    (self.add_node(ENode::Func(*sym, ids)), Some(t))
-                } else if let Some(prims) = self.egraph.type_info().primitives.get(sym) {
-                    let (ids, arg_tys): (Vec<Id>, Vec<Option<ArcSort>>) =
-                        args.iter().map(|arg| self.infer_query_expr(arg)).unzip();
-
-                    if let Some(arg_tys) = arg_tys.iter().cloned().collect::<Option<Vec<ArcSort>>>()
-                    {
-                        for prim in prims {
-                            if let Some(output_type) = prim.accept(&arg_tys) {
-                                let id = self.add_node(ENode::Prim(prim.clone(), ids));
-                                return (id, Some(output_type));
+                    } else {
+                        let tys: Vec<_> = atom
+                            .args
+                            // remove the output type since accept() only takes the input types
+                            .split_last()
+                            .unwrap()
+                            .1
+                            .iter()
+                            .map(get_type)
+                            .collect();
+                        for primitive in primitives.iter() {
+                            if primitive.accept(&tys).is_some() {
+                                return Atom {
+                                    head: ResolvedCall::Primitive(primitive.clone()),
+                                    args: std::mem::take(&mut atom.args),
+                                };
                             }
                         }
-                        self.errors.push(TypeError::NoMatchingPrimitive {
-                            op: *sym,
-                            inputs: arg_tys.iter().map(|t| t.name()).collect(),
-                        });
+                        panic!("Impossible: there should be exactly one primitive that satisfy the type assignment")
                     }
-
-                    (self.unionfind.make_set(), None)
                 } else {
-                    self.errors.push(TypeError::Unbound(*sym));
-                    (self.unionfind.make_set(), None)
+                    panic!("Impossible: atom symbols not bound anywhere")
                 }
-            }
-        }
+            })
+            .collect();
+        let body = Query { atoms: body_atoms };
+
+        let result_rule = ResolvedCoreRule {
+            body,
+            head: rule.head,
+        };
+        Ok(result_rule)
+    }
+
+    pub(crate) fn compile_norm_rule(
+        &mut self,
+        ctx: CommandId,
+        rule: &'a NormRule,
+    ) -> Result<ResolvedCoreRule, Vec<TypeError>> {
+        let rule = rule.to_core_rule(self.egraph.type_info());
+        let rule = self.canonicalize(rule);
+        let rule = self.resolve_rule(ctx, rule).map_err(|e| vec![e])?;
+        Ok(rule)
     }
 }
 
@@ -454,12 +484,10 @@ struct ActionChecker<'a> {
 }
 
 impl<'a> ActionChecker<'a> {
+    // TODO: refactor this to get rid of "the type part" of the action checker
     fn check_action(&mut self, action: &Action) -> Result<(), TypeError> {
         match action {
             Action::Let(v, e) => {
-                if self.types.contains_key(v) || self.locals.contains_key(v) {
-                    return Err(TypeError::AlreadyDefined(*v));
-                }
                 let (_, ty) = self.infer_expr(e)?;
                 self.locals.insert(*v, ty);
                 Ok(())

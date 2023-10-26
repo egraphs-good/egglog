@@ -420,10 +420,10 @@ impl<'a> TermState<'a> {
                 self.rebuild(),
                 Schedule::Run(RunConfig {
                     ruleset: run_config.ruleset,
-                    until: run_config
-                        .until
-                        .as_ref()
-                        .map(|facts| self.instrument_facts(facts)),
+                    until: run_config.until.as_ref().map(|facts| {
+                        self.current_ctx = run_config.ctx;
+                        self.instrument_facts(facts)
+                    }),
                 }),
             ])
         })

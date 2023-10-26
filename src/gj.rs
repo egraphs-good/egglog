@@ -5,7 +5,7 @@ use smallvec::SmallVec;
 
 use crate::{
     function::index::Offset,
-    typecheck::{Atom, AtomTerm, Query},
+    typecheck::{Atom, AtomTerm, ResolvedCall},
     *,
 };
 use std::{
@@ -13,6 +13,8 @@ use std::{
     fmt::{self, Debug},
     ops::Range,
 };
+
+type Query = crate::typecheck::Query<ResolvedCall>;
 
 #[derive(Clone)]
 enum Instr<'a> {
@@ -247,7 +249,7 @@ impl<'b> Context<'b> {
                             let i = self.query.vars.get_index_of(v).unwrap();
                             self.tuple[i]
                         }
-                        AtomTerm::Value(val) => *val,
+                        AtomTerm::Literal(lit) => self.egraph.eval_lit(lit),
                         AtomTerm::Global(g) => self.egraph.global_bindings.get(g).unwrap().1,
                     })
                 }
@@ -266,8 +268,9 @@ impl<'b> Context<'b> {
 
                             self.tuple[i] = res;
                         }
-                        AtomTerm::Value(val) => {
+                        AtomTerm::Literal(lit) => {
                             assert!(check);
+                            let val = &self.egraph.eval_lit(lit);
                             if val != &res {
                                 return Ok(());
                             }
@@ -341,7 +344,7 @@ impl EGraph {
             vars.entry(*var).or_default();
         }
 
-        for (i, atom) in query.atoms.iter().enumerate() {
+        for (i, atom) in query.funcs().enumerate() {
             for v in atom.vars() {
                 // only count grounded occurrences
                 vars.entry(v).or_default().occurences.push(i)
@@ -349,7 +352,7 @@ impl EGraph {
         }
 
         // make sure everyone has an entry in the vars table
-        for prim in &query.filters {
+        for prim in query.filters() {
             for v in prim.vars() {
                 vars.entry(v).or_default();
             }
@@ -369,7 +372,10 @@ impl EGraph {
         let mut constraints = vec![];
         for (i, t) in atom.args.iter().enumerate() {
             match t {
-                AtomTerm::Value(val) => constraints.push(Constraint::Const(i, *val)),
+                AtomTerm::Literal(lit) => {
+                    let val = self.eval_lit(lit);
+                    constraints.push(Constraint::Const(i, val))
+                }
                 AtomTerm::Global(g) => {
                     constraints.push(Constraint::Const(i, self.global_bindings.get(g).unwrap().1))
                 }
@@ -414,7 +420,7 @@ impl EGraph {
         Vec<Symbol>,        /* variable ordering */
         Vec<Option<usize>>, /* the first column accessed per-atom */
     )> {
-        let atoms = &query.query.atoms;
+        let atoms: &Vec<_> = &query.query.funcs().collect();
         let mut vars: IndexMap<Symbol, VarInfo2> = Default::default();
         let mut constants =
             IndexMap::<usize /* atom */, Vec<(usize /* column */, Value)>>::default();
@@ -423,8 +429,9 @@ impl EGraph {
             for (col, arg) in atom.args.iter().enumerate() {
                 match arg {
                     AtomTerm::Var(var) => vars.entry(*var).or_default().occurences.push(i),
-                    AtomTerm::Value(val) => {
-                        constants.entry(i).or_default().push((col, *val));
+                    AtomTerm::Literal(lit) => {
+                        let val = self.eval_lit(lit);
+                        constants.entry(i).or_default().push((col, val));
                     }
                     AtomTerm::Global(g) => {
                         let val = self.global_bindings.get(g).unwrap().1;
@@ -536,13 +543,13 @@ impl EGraph {
         program.extend(var_instrs);
 
         // now we can try to add primitives
-        let mut extra = query.query.filters.clone();
+        let mut extra: Vec<_> = query.query.filters().collect();
         while !extra.is_empty() {
             let next = extra.iter().position(|p| {
                 assert!(!p.args.is_empty());
                 p.args[..p.args.len() - 1].iter().all(|a| match a {
                     AtomTerm::Var(v) => vars.contains_key(v),
-                    AtomTerm::Value(_) => true,
+                    AtomTerm::Literal(_) => true,
                     AtomTerm::Global(_) => true,
                 })
             });
@@ -557,7 +564,7 @@ impl EGraph {
                             false
                         }
                     },
-                    AtomTerm::Value(_) => true,
+                    AtomTerm::Literal(_) => true,
                     AtomTerm::Global(_) => true,
                 };
                 program.push(Instr::Call {
@@ -610,7 +617,7 @@ impl EGraph {
                                 tuple_valid[i] = true;
                             }
                         }
-                        AtomTerm::Value(_) => {
+                        AtomTerm::Literal(_) => {
                             assert!(*check);
                         }
                         AtomTerm::Global(_) => {
@@ -636,7 +643,7 @@ impl EGraph {
         if let Some((mut ctx, program, cols)) = Context::new(self, cq, timestamp_ranges) {
             let start = Instant::now();
             let atom_info = if let Some(atom_i) = atom_i {
-                let atom = &cq.query.atoms[atom_i];
+                let atom = &cq.query.funcs().collect::<Vec<_>>()[atom_i];
                 format!("New atom: {atom}")
             } else {
                 "Seminaive disabled".to_string()
@@ -647,11 +654,10 @@ impl EGraph {
                 order = ListDisplay(&ctx.join_var_ordering, " "),
                 tuple = ListDisplay(cq.vars.keys(), " "),
             );
-            let mut tries = Vec::with_capacity(cq.query.atoms.len());
+            let mut tries = Vec::with_capacity(cq.query.funcs().collect::<Vec<_>>().len());
             for ((atom, ts), col) in cq
                 .query
-                .atoms
-                .iter()
+                .funcs()
                 .zip(timestamp_ranges.iter())
                 .zip(cols.iter())
             {
@@ -704,12 +710,12 @@ impl EGraph {
     where
         F: FnMut(&[Value]) -> Result,
     {
-        let has_atoms = !cq.query.atoms.is_empty();
+        let has_atoms = !cq.query.funcs().collect::<Vec<_>>().is_empty();
 
         if has_atoms {
             // check if any globals updated
             let mut global_updated = false;
-            for atom in &cq.query.atoms {
+            for atom in cq.query.funcs() {
                 for arg in &atom.args {
                     if let AtomTerm::Global(g) = arg {
                         if self.global_bindings.get(g).unwrap().2 > timestamp {
@@ -721,9 +727,10 @@ impl EGraph {
 
             let do_seminaive = self.seminaive && !global_updated;
             // for the later atoms, we consider everything
-            let mut timestamp_ranges = vec![0..u32::MAX; cq.query.atoms.len()];
+            let mut timestamp_ranges =
+                vec![0..u32::MAX; cq.query.funcs().collect::<Vec<_>>().len()];
             if do_seminaive {
-                for (atom_i, _atom) in cq.query.atoms.iter().enumerate() {
+                for (atom_i, _atom) in cq.query.funcs().enumerate() {
                     timestamp_ranges[atom_i] = timestamp..u32::MAX;
 
                     self.gj_for_atom(Some(atom_i), &timestamp_ranges, cq, &mut f);
@@ -740,7 +747,7 @@ impl EGraph {
                 stage_sizes: &mut meausrements,
                 cur_stage: 0,
             };
-            let tries = LazyTrie::make_initial_vec(cq.query.atoms.len());
+            let tries = LazyTrie::make_initial_vec(cq.query.funcs().collect::<Vec<_>>().len()); // TODO: bad use of collect here
             let mut trie_refs = tries.iter().collect::<Vec<_>>();
             ctx.eval(&mut trie_refs, &program.0, stages, &mut f)
                 .unwrap_or(());
