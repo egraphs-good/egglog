@@ -1,6 +1,5 @@
 use crate::{
-    ast::Expr,
-    typecheck::{Atom, AtomTerm},
+    typecheck::{Atom, AtomTerm, SymbolOrEq},
     typechecking::TypeError,
     util::HashMap,
     ArcSort, Symbol, TypeInfo,
@@ -217,69 +216,84 @@ where
     }
 }
 
-impl Atom<Symbol> {
+impl Atom<SymbolOrEq> {
     pub fn get_constraints(
         &self,
         type_info: &TypeInfo,
     ) -> Result<Vec<Constraint<AtomTerm, ArcSort>>, TypeError> {
-        let mut xor_constraints: Vec<Vec<Constraint<AtomTerm, ArcSort>>> = vec![];
+        let literal_constraints = get_literal_and_global_constraints(&self.args, type_info);
+        match &self.head {
+            SymbolOrEq::Eq => {
+                assert_eq!(self.args.len(), 2);
+                let constraints = literal_constraints
+                    .chain(once(Constraint::Eq(
+                        self.args[0].clone(),
+                        self.args[1].clone(),
+                    )))
+                    .collect();
+                Ok(constraints)
+            }
+            SymbolOrEq::Symbol(head) => {
+                // An atom can have potentially different semantics due to polymorphism
+                // e.g. (set-empty) can mean any empty set with some element type.
+                // To handle this, we collect each possible instantiations of an atom
+                // (where each instantiation is a vec of constraints, thus vec of vec)
+                // into `xor_constraints`.
+                // `Constraint::Xor` means one and only one of the instantiation can hold.
+                let mut xor_constraints: Vec<Vec<Constraint<AtomTerm, ArcSort>>> = vec![];
 
-        // function atom constraints
-        if let Some(typ) = type_info.func_types.get(&self.head) {
-            let mut constraints = vec![];
-            // arity mismatch
-            if typ.input.len() + 1 != self.args.len() {
-                constraints.push(Constraint::Impossible(
-                    ImpossibleConstraint::ArityMismatch {
-                        atom: self.clone(),
-                        expected: typ.input.len(),
-                        actual: self.args.len() - 1,
-                    },
-                ));
-            } else {
-                for (arg_typ, arg) in typ
-                    .input
-                    .iter()
-                    .cloned()
-                    .chain(once(typ.output.clone()))
-                    .zip(self.args.iter().cloned())
-                {
-                    constraints.push(Constraint::Assign(arg, arg_typ));
+                // function atom constraints
+                if let Some(typ) = type_info.func_types.get(head) {
+                    let mut constraints = vec![];
+                    // arity mismatch
+                    if typ.input.len() + 1 != self.args.len() {
+                        constraints.push(Constraint::Impossible(
+                            ImpossibleConstraint::ArityMismatch {
+                                atom: Atom {
+                                    head: *head,
+                                    args: self.args.clone(),
+                                },
+                                expected: typ.input.len(),
+                                actual: self.args.len() - 1,
+                            },
+                        ));
+                    } else {
+                        for (arg_typ, arg) in typ
+                            .input
+                            .iter()
+                            .cloned()
+                            .chain(once(typ.output.clone()))
+                            .zip(self.args.iter().cloned())
+                        {
+                            constraints.push(Constraint::Assign(arg, arg_typ));
+                        }
+                    }
+                    xor_constraints.push(constraints);
+                }
+
+                // primitive atom constraints
+                if let Some(primitives) = type_info.primitives.get(head) {
+                    for p in primitives {
+                        let constraints = p.get_type_constraints().get(&self.args);
+                        xor_constraints.push(constraints);
+                    }
+                }
+
+                // do literal and global variable constraints first
+                // as they are the most "informative"
+                match xor_constraints.len() {
+                    0 => Err(TypeError::UnboundFunction(*head)),
+                    1 => Ok(literal_constraints
+                        .chain(xor_constraints.pop().unwrap().into_iter())
+                        .collect()),
+                    _ => Ok(literal_constraints
+                        .chain(once(Constraint::Xor(
+                            xor_constraints.into_iter().map(Constraint::And).collect(),
+                        )))
+                        .collect()),
                 }
             }
-            xor_constraints.push(constraints);
         }
-
-        // primitive atom constraints
-        if let Some(primitives) = type_info.primitives.get(&self.head) {
-            for p in primitives {
-                let constraints = p.get_type_constraints().get(&self.args);
-                xor_constraints.push(constraints);
-            }
-        }
-
-        // do literal and global variable constraints first
-        // as they are the most "informative"
-        let literal_constraints = get_literal_and_global_constraints(&self.args, type_info);
-
-        match xor_constraints.len() {
-            0 => Err(TypeError::UnboundFunction(self.head)),
-            1 => Ok(literal_constraints
-                .chain(xor_constraints.pop().unwrap().into_iter())
-                .collect()),
-            _ => Ok(literal_constraints
-                .chain(once(Constraint::Xor(
-                    xor_constraints.into_iter().map(Constraint::And).collect(),
-                )))
-                .collect()),
-        }
-    }
-
-    fn to_expr(&self) -> Expr {
-        Expr::Call(
-            self.head,
-            self.args.iter().map(|arg| arg.to_expr()).collect(),
-        )
     }
 }
 

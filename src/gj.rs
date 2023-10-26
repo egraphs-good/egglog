@@ -5,7 +5,7 @@ use smallvec::SmallVec;
 
 use crate::{
     function::index::Offset,
-    typecheck::{Atom, AtomTerm, ResolvedSymbol},
+    typecheck::{Atom, AtomTerm, ResolvedCall},
     *,
 };
 use std::{
@@ -14,7 +14,7 @@ use std::{
     ops::Range,
 };
 
-type Query = crate::typecheck::Query<ResolvedSymbol>;
+type Query = crate::typecheck::Query<ResolvedCall>;
 
 #[derive(Clone)]
 enum Instr<'a> {

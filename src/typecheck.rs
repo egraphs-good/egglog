@@ -18,30 +18,61 @@ impl Actions {
     }
 }
 
-// TODO: implement custom debug
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SymbolOrEq {
+    Symbol(Symbol),
+    Eq,
+}
+
+impl From<Symbol> for SymbolOrEq {
+    fn from(value: Symbol) -> Self {
+        SymbolOrEq::Symbol(value)
+    }
+}
+
+impl SymbolOrEq {
+    pub fn is_eq(&self) -> bool {
+        matches!(self, SymbolOrEq::Eq)
+    }
+
+    pub fn get_symbol(&self) -> Option<&Symbol> {
+        if let SymbolOrEq::Symbol(symbol) = self {
+            Some(symbol)
+        } else {
+            None
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct UnresolvedCoreRule {
+    pub body: Query<SymbolOrEq>,
+    pub head: Actions,
+}
+
+#[derive(Debug, Clone)]
+pub struct CanonicalizedCoreRule {
     pub body: Query<Symbol>,
     pub head: Actions,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct ResolvedCoreRule {
-    pub body: Query<ResolvedSymbol>,
+    pub body: Query<ResolvedCall>,
     pub head: Actions,
 }
 
 #[derive(Debug, Clone)]
-pub enum ResolvedSymbol {
+pub enum ResolvedCall {
     Func(Symbol),
     Primitive(Primitive),
 }
 
-impl Query<ResolvedSymbol> {
+impl Query<ResolvedCall> {
     pub fn filters(&self) -> impl Iterator<Item = Atom<Primitive>> + '_ {
         self.atoms.iter().filter_map(|atom| match &atom.head {
-            ResolvedSymbol::Func(_) => None,
-            ResolvedSymbol::Primitive(head) => Some(Atom {
+            ResolvedCall::Func(_) => None,
+            ResolvedCall::Primitive(head) => Some(Atom {
                 head: head.clone(),
                 args: atom.args.clone(),
             }),
@@ -50,11 +81,11 @@ impl Query<ResolvedSymbol> {
 
     pub fn funcs(&self) -> impl Iterator<Item = Atom<Symbol>> + '_ {
         self.atoms.iter().filter_map(|atom| match atom.head {
-            ResolvedSymbol::Func(head) => Some(Atom {
+            ResolvedCall::Func(head) => Some(Atom {
                 head,
                 args: atom.args.clone(),
             }),
-            ResolvedSymbol::Primitive(_) => None,
+            ResolvedCall::Primitive(_) => None,
         })
     }
 }
@@ -68,55 +99,7 @@ impl UnresolvedCoreRule {
     }
 }
 
-impl UnresolvedCoreRule {
-    // keep it here while it's untested
-    #![allow(unused)]
-    pub(crate) fn to_norm_rule(&self, egraph: &EGraph) -> NormRule {
-        fn to_fact(body: &Query<Symbol>, egraph: &EGraph) -> Vec<NormFact> {
-            let mut facts = vec![];
-            for fact in body.atoms.iter() {
-                let Atom { args, head } = fact;
-
-                let args: Vec<_> = args
-                    .iter()
-                    .map(|arg| match arg {
-                        AtomTerm::Var(v) => *v,
-                        AtomTerm::Literal(lit) => {
-                            let symbol = format!("lit{}", lit).into();
-                            facts.push(NormFact::AssignLit(symbol, lit.clone()));
-                            symbol
-                        }
-                        AtomTerm::Global(v) => *v,
-                    })
-                    .collect();
-
-                // TODO: this assumes that a name can refer to a function xor a primitive
-                // but this does not necessarily need to be true (e.g., we can overload the definition of "+" to work over Exprs)
-                facts.push(if head == &"value-eq".into() {
-                    assert!(args.len() == 2);
-                    NormFact::ConstrainEq(args[0], args[1])
-                } else {
-                    let (out, args) = args.split_last().unwrap();
-                    if egraph.functions.contains_key(head) {
-                        NormFact::Compute(*out, NormExpr::Call(*head, args.to_vec()))
-                    } else {
-                        NormFact::Assign(*out, NormExpr::Call(*head, args.to_vec()))
-                    }
-                });
-            }
-            facts
-        }
-
-        let UnresolvedCoreRule { head, body } = self;
-        let Actions(head) = head.clone();
-        NormRule {
-            head,
-            body: to_fact(body, egraph),
-        }
-    }
-}
-
-pub(crate) fn facts_to_query(body: &Vec<NormFact>, typeinfo: &TypeInfo) -> Query<Symbol> {
+pub(crate) fn facts_to_query(body: &Vec<NormFact>, typeinfo: &TypeInfo) -> Query<SymbolOrEq> {
     fn to_atom_term(s: Symbol, typeinfo: &TypeInfo) -> AtomTerm {
         if typeinfo.is_global(s) {
             AtomTerm::Global(s)
@@ -135,31 +118,22 @@ pub(crate) fn facts_to_query(body: &Vec<NormFact>, typeinfo: &TypeInfo) -> Query
                     .cloned()
                     .map(|s| to_atom_term(s, typeinfo))
                     .collect();
-                let head = *head;
+                let head = SymbolOrEq::Symbol(*head);
                 atoms.push(Atom { head, args });
             }
             NormFact::AssignVar(lhs, rhs) => atoms.push(Atom {
-                head: "value-eq".into(),
-                args: vec![
-                    to_atom_term(*lhs, typeinfo),
-                    to_atom_term(*rhs, typeinfo),
-                    AtomTerm::Literal(Literal::Unit),
-                ],
+                head: SymbolOrEq::Eq,
+                args: vec![to_atom_term(*lhs, typeinfo), to_atom_term(*rhs, typeinfo)],
             }),
             NormFact::ConstrainEq(lhs, rhs) => atoms.push(Atom {
-                head: "value-eq".into(),
-                args: vec![
-                    to_atom_term(*lhs, typeinfo),
-                    to_atom_term(*rhs, typeinfo),
-                    AtomTerm::Literal(Literal::Unit),
-                ],
+                head: SymbolOrEq::Eq,
+                args: vec![to_atom_term(*lhs, typeinfo), to_atom_term(*rhs, typeinfo)],
             }),
             NormFact::AssignLit(symbol, lit) => atoms.push(Atom {
-                head: "value-eq".into(),
+                head: SymbolOrEq::Eq,
                 args: vec![
                     to_atom_term(*symbol, typeinfo),
                     AtomTerm::Literal(lit.clone()),
-                    AtomTerm::Literal(Literal::Unit),
                 ],
             }),
         }
@@ -168,8 +142,6 @@ pub(crate) fn facts_to_query(body: &Vec<NormFact>, typeinfo: &TypeInfo) -> Query
 }
 
 impl NormRule {
-    // keep it here while it's untested
-    #![allow(unused)]
     pub(crate) fn to_core_rule(&self, typeinfo: &TypeInfo) -> UnresolvedCoreRule {
         let NormRule { head, body } = self;
         UnresolvedCoreRule {
@@ -234,7 +206,7 @@ impl<T> Default for Query<T> {
     }
 }
 
-impl Query<Symbol> {
+impl Query<SymbolOrEq> {
     pub fn get_constraints(
         &self,
         type_info: &TypeInfo,
@@ -269,7 +241,7 @@ impl std::fmt::Display for Query<Symbol> {
     }
 }
 
-impl std::fmt::Display for Query<ResolvedSymbol> {
+impl std::fmt::Display for Query<ResolvedCall> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for atom in self.funcs() {
             writeln!(f, "{atom}")?;
@@ -313,6 +285,14 @@ impl<T> Atom<T> {
         }
     }
 }
+impl Atom<Symbol> {
+    pub(crate) fn to_expr(&self) -> Expr {
+        Expr::Call(
+            self.head,
+            self.args.iter().map(|arg| arg.to_expr()).collect(),
+        )
+    }
+}
 
 pub(crate) struct ValueEq {
     pub unit: Arc<UnitSort>,
@@ -345,15 +325,18 @@ impl<'a> Context<'a> {
         Self { egraph }
     }
 
-    // TODO: should this be in ResolvedCoreRule
-    pub fn canonicalize(&self, rule: UnresolvedCoreRule) -> UnresolvedCoreRule {
+    /// Transformed a UnresolvedCoreRule into a CanonicalizedCoreRule.
+    /// In particular, it removes equality checks between variables and
+    /// other arguments, and turns equality checks between non-variable arguments
+    /// into a primitive equality check `value-eq`.
+    pub fn canonicalize(&self, rule: UnresolvedCoreRule) -> CanonicalizedCoreRule {
         let mut result_rule = rule;
         loop {
             let mut to_subst = None;
             for atom in result_rule.body.atoms.iter() {
-                if atom.head == "value-eq".into() && atom.args[0] != atom.args[1] {
+                if atom.head.is_eq() && atom.args[0] != atom.args[1] {
                     match &atom.args[..] {
-                        [AtomTerm::Var(x), y, _] | [y, AtomTerm::Var(x), _] => {
+                        [AtomTerm::Var(x), y] | [y, AtomTerm::Var(x)] => {
                             to_subst = Some((x, y));
                             break;
                         }
@@ -367,17 +350,54 @@ impl<'a> Context<'a> {
                 break;
             }
         }
-        result_rule
+
+        let atoms = result_rule
             .body
             .atoms
-            .retain(|atom| !(atom.head == "value-eq".into() && atom.args[0] == atom.args[1]));
-        result_rule
+            .into_iter()
+            .filter_map(|atom| match atom.head {
+                SymbolOrEq::Eq => {
+                    assert_eq!(atom.args.len(), 2);
+                    match (&atom.args[0], &atom.args[1]) {
+                        (AtomTerm::Var(v1), AtomTerm::Var(v2)) => {
+                            assert_eq!(v1, v2);
+                            None
+                        }
+                        (AtomTerm::Var(_), _) | (_, AtomTerm::Var(_)) => {
+                            panic!("equalities between variable and non-variable arguments should have been canonicalized")
+                        }
+                        (at1, at2) => {
+                            if at1 == at2 {
+                                None
+                            } else {
+                                Some(Atom {
+                                    head: "value-eq".into(),
+                                    args: vec![
+                                        atom.args[0].clone(),
+                                        atom.args[1].clone(),
+                                        AtomTerm::Literal(Literal::Unit),
+                                    ],
+                                })
+                            }
+                        },
+                    }
+                }
+                SymbolOrEq::Symbol(symbol) => Some(Atom {
+                    head: symbol,
+                    args: atom.args,
+                }),
+            })
+            .collect();
+        CanonicalizedCoreRule {
+            body: Query { atoms },
+            head: result_rule.head,
+        }
     }
 
     pub(crate) fn resolve_rule(
         &self,
         ctx: CommandId,
-        rule: UnresolvedCoreRule,
+        rule: CanonicalizedCoreRule,
     ) -> Result<ResolvedCoreRule, TypeError> {
         let type_info = self.egraph.type_info();
         let local_types = type_info.local_types.get(&ctx).unwrap();
@@ -386,7 +406,7 @@ impl<'a> Context<'a> {
             AtomTerm::Var(v) => local_types.get(v).unwrap().clone(),
             AtomTerm::Literal(lit) => type_info.infer_literal(lit),
         };
-        let body_atoms: Vec<Atom<ResolvedSymbol>> = rule
+        let body_atoms: Vec<Atom<ResolvedCall>> = rule
             .body
             .atoms
             .into_iter()
@@ -399,7 +419,7 @@ impl<'a> Context<'a> {
                     let actual = actual.map(|s| s.name());
                     if expected.eq(actual) {
                         return Atom {
-                            head: ResolvedSymbol::Func(symbol),
+                            head: ResolvedCall::Func(symbol),
                             args: std::mem::take(&mut atom.args),
                         };
                     }
@@ -407,7 +427,7 @@ impl<'a> Context<'a> {
                 if let Some(primitives) = type_info.primitives.get(&symbol) {
                     if primitives.len() == 1 {
                         Atom {
-                            head: ResolvedSymbol::Primitive(primitives[0].clone()),
+                            head: ResolvedCall::Primitive(primitives[0].clone()),
                             args: std::mem::take(&mut atom.args),
                         }
                     } else {
@@ -423,7 +443,7 @@ impl<'a> Context<'a> {
                         for primitive in primitives.iter() {
                             if primitive.accept(&tys).is_some() {
                                 return Atom {
-                                    head: ResolvedSymbol::Primitive(primitive.clone()),
+                                    head: ResolvedCall::Primitive(primitive.clone()),
                                     args: std::mem::take(&mut atom.args),
                                 };
                             }

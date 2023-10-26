@@ -269,6 +269,7 @@ impl TypeInfo {
 
     fn typecheck_facts(&mut self, ctx: CommandId, facts: &Vec<NormFact>) -> Result<(), TypeError> {
         // ROUND TRIP TO CORE RULE AND BACK
+        // TODO: in long term, we don't want this round trip to CoreRule query and back just for the type information.
         let query = facts_to_query(facts, self);
         let constraints = query.get_constraints(self)?;
         let problem = Problem { constraints };
