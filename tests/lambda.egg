@@ -199,17 +199,7 @@
     (Let (V "add1") (Lam (V "y") (Add (Var (V "y")) (Val (Num 1))))
     (App (App (Var (V "compose")) (Var (V "add1"))) (Var (V "add1"))))))
 (run 20)
-
-(rule (
-    (= goal1 (Lam x (Add (Val (Num 1))
-                         (App (Lam y (Add (Val (Num 1)) (Var y)))
-                              (Var x)))))
-    (= goal2 (Lam x (Add (Var x) (Val (Num 2)))))
-)(
-    (result)
-))
-(run 1)
-(check (result))
+(check (= e7 (Lam x (Add (Var x) (Val (Num 2))))))
 (pop)
 
 ;; lambda_if_simple
@@ -234,13 +224,7 @@
                                   (Var (V "add1")))))))))))
 
 (run 30)
-(rule (
-    (= e11 (Lam x (Add (Var x) (Val (Num 7)))))
-)(
-    (result)
-))
-(run 1)
-(check (result))
+(check (= e11 (Lam x (Add (Var x) (Val (Num 7))))))
 (pop)
 
 ;; lambda_if
