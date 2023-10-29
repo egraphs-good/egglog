@@ -128,8 +128,6 @@
        (set-contains fvs v2))
       ((union expr (Lam (From expr) (Let v1 e (Let v2 (Var (From expr)) body))))))
 
-(relation result ())
-
 ;; lambda_under
 (push)
 (let e 
