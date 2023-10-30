@@ -37,7 +37,7 @@ pub use termdag::{Term, TermDag, TermId};
 use terms::TermState;
 use thiserror::Error;
 
-use symbolic_expressions::Sexp;
+use generic_symbolic_expressions::Sexp;
 
 use ast::*;
 pub use typechecking::{TypeInfo, UNIT_SYM};
