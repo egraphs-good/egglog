@@ -304,6 +304,7 @@ dependencies = [
  "clap",
  "egraph-serialize",
  "env_logger",
+ "generic_symbolic_expressions",
  "getrandom",
  "glob",
  "hashbrown 0.14.0",
@@ -323,7 +324,6 @@ dependencies = [
  "serde_json",
  "smallvec",
  "symbol_table",
- "symbolic_expressions",
  "thiserror",
 ]
 
@@ -417,6 +417,12 @@ dependencies = [
  "typenum",
  "version_check",
 ]
+
+[[package]]
+name = "generic_symbolic_expressions"
+version = "5.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "162a00312f17b08b3835f3e133e80881bde602081271dd205e5ebeb15a8e30f4"
 
 [[package]]
 name = "getrandom"
@@ -1075,11 +1081,6 @@ dependencies = [
  "ahash 0.7.6",
  "hashbrown 0.12.3",
 ]
-
-[[package]]
-name = "symbolic_expressions"
-version = "5.0.3"
-source = "git+https://github.com/oflatt/symbolic-expressions?rev=4c0ea5ca008f972450b2af72387e64d2c1c6a791#4c0ea5ca008f972450b2af72387e64d2c1c6a791"
 
 [[package]]
 name = "syn"

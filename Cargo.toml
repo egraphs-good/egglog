@@ -22,7 +22,7 @@ indexmap = "2.0"
 instant = "0.1"
 log = "0.4"
 rustc-hash = "1.1"
-symbol_table = { version = "0.3.0", git = "https://github.com/mwillsey/symbol_table", rev = "acddcf8938d1b4ed2fce048c9d83c30203d404b9", features = [
+symbol_table = { version = "0.2.0", git = "https://github.com/mwillsey/symbol_table", rev = "acddcf8938d1b4ed2fce048c9d83c30203d404b9", features = [
   "global",
 ] }
 thiserror = "1"
@@ -33,7 +33,7 @@ num-integer = "0.1.45"
 num-rational = "0.4.1"
 num-traits = "0.2.15"
 smallvec = "1.11"
-symbolic_expressions = { git = "https://github.com/oflatt/symbolic-expressions", rev = "4c0ea5ca008f972450b2af72387e64d2c1c6a791" }
+generic_symbolic_expressions = "5.0.3"
 
 egraph-serialize = { version = "0.1.0", features = ["serde", "graphviz"] }
 serde_json = { optional = true, version = "1.0.100", features = [
