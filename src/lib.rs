@@ -243,7 +243,7 @@ impl Primitive {
         for (lit, ty) in lits.iter().zip(tys.iter()) {
             constraints.push(Constraint::Assign(lit.clone(), ty.clone()))
         }
-        constraints.extend(self.get_type_constraints().get(&lits).into_iter());
+        constraints.extend(self.get_type_constraints().get(&lits));
         let problem = Problem { constraints };
         let output_type = AtomTerm::Literal(Literal::Int(tys.len() as i64));
         let assignment = problem.solve(once(&output_type), |sort| sort.name()).ok()?;
@@ -841,7 +841,7 @@ impl EGraph {
         *report
             .rebuild_time_per_ruleset
             .entry(config.ruleset)
-            .or_insert(Duration::default()) += rebuild_start.elapsed();
+            .or_default() += rebuild_start.elapsed();
         self.timestamp += 1;
 
         let NormRunConfig {

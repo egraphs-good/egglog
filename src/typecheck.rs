@@ -228,7 +228,7 @@ impl Query<SymbolOrEq> {
 
 impl<T> AddAssign for Query<T> {
     fn add_assign(&mut self, rhs: Self) {
-        self.atoms.extend(rhs.atoms.into_iter());
+        self.atoms.extend(rhs.atoms);
     }
 }
 

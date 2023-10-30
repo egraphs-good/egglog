@@ -599,7 +599,7 @@ impl EGraph {
                 Instr::ConstrainConstant { .. } => {}
                 Instr::Call { check, args, .. } => {
                     let Some((last, args)) = args.split_last() else {
-                        continue
+                        continue;
                     };
 
                     for a in args {
