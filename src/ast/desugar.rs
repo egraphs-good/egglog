@@ -31,19 +31,22 @@ fn desugar_rewrite(
     // make two rules- one to insert the rhs, and one to union
     // this way, the union rule can only be fired once,
     // which helps proofs not add too much info
+    let rule = flatten_rule(
+        Rule {
+            body: rewrite
+                .conditions
+                .clone()
+                .into_iter()
+                .chain(once(Fact::Eq(vec![Expr::Var(var), rewrite.lhs.clone()])))
+                .collect(),
+            head: vec![Action::Union(Expr::Var(var), rewrite.rhs.clone())],
+        },
+        desugar,
+    );
     vec![NCommand::NormRule {
         ruleset,
         name,
-        rule: flatten_rule(
-            Rule {
-                body: [Fact::Eq(vec![Expr::Var(var), rewrite.lhs.clone()])]
-                    .into_iter()
-                    .chain(rewrite.conditions.clone())
-                    .collect(),
-                head: vec![Action::Union(Expr::Var(var), rewrite.rhs.clone())],
-            },
-            desugar,
-        ),
+        rule,
     }]
 }
 
