@@ -46,7 +46,7 @@
 (rule ((= e (Let var e1 e2))
        (= (freer e1) fv1)
        (= (freer e2) fv2))
-      ((set (freer e) (set-union (set-remove fv1 var) fv2))))
+      ((set (freer e) (set-union fv1 (set-remove fv2 var)))))
 (rule ((= e (Fix var body))
        (= (freer body) fv))
       ((set (freer e) (set-remove fv var))))
