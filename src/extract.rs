@@ -84,13 +84,12 @@ impl EGraph {
 
                 func.nodes
                     .iter()
-                    .filter_map(|(inputs, output)| {
-                        (output.value == output_value).then(|| {
-                            let node = Node { sym, inputs };
-                            ext.expr_from_node(&node, termdag).expect(
-                                "extract_variants should be called after extractor initialization",
-                            )
-                        })
+                    .filter(|&(_inputs, output)| (output.value == output_value))
+                    .map(|(inputs, _output)| {
+                        let node = Node { sym, inputs };
+                        ext.expr_from_node(&node, termdag).expect(
+                            "extract_variants should be called after extractor initialization",
+                        )
                     })
                     .collect()
             })

@@ -284,7 +284,7 @@ impl Atom<SymbolOrEq> {
                 match xor_constraints.len() {
                     0 => Err(TypeError::UnboundFunction(*head)),
                     1 => Ok(literal_constraints
-                        .chain(xor_constraints.pop().unwrap().into_iter())
+                        .chain(xor_constraints.pop().unwrap())
                         .collect()),
                     _ => Ok(literal_constraints
                         .chain(once(Constraint::Xor(
