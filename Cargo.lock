@@ -1054,8 +1054,9 @@ checksum = "73473c0e59e6d5812c5dfe2a064a6444949f089e20eec9a2e5506596494e4623"
 
 [[package]]
 name = "symbol_table"
-version = "0.2.0"
-source = "git+https://github.com/mwillsey/symbol_table?rev=acddcf8938d1b4ed2fce048c9d83c30203d404b9#acddcf8938d1b4ed2fce048c9d83c30203d404b9"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "828f672b631c220bf6ea8a1d3b82c7d0fc998e5ba8373383d8604bc1e2a6245a"
 dependencies = [
  "ahash 0.7.7",
  "hashbrown 0.12.3",

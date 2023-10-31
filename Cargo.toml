@@ -22,9 +22,7 @@ indexmap = "2.0"
 instant = "0.1"
 log = "0.4"
 rustc-hash = "1.1"
-symbol_table = { version = "0.2.0", git = "https://github.com/mwillsey/symbol_table", rev = "acddcf8938d1b4ed2fce048c9d83c30203d404b9", features = [
-  "global",
-] }
+symbol_table = { version = "0.3.0", features = ["global"] }
 thiserror = "1"
 # symbol_table = { version = "0.2", features = ["global"] }
 # symbol_table = { path = "../symbol_table", features = ["global"] }
