@@ -403,8 +403,7 @@ dependencies = [
 [[package]]
 name = "generic_symbolic_expressions"
 version = "5.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "162a00312f17b08b3835f3e133e80881bde602081271dd205e5ebeb15a8e30f4"
+source = "git+https://github.com/oflatt/symbolic-expressions?rev=655b6a4c06b4b3d3b2300e17779860b4abe440f0#655b6a4c06b4b3d3b2300e17779860b4abe440f0"
 
 [[package]]
 name = "getrandom"

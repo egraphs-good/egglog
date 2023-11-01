@@ -151,10 +151,10 @@ impl Expr {
 
     pub(crate) fn to_sexp(&self) -> Sexp {
         let res = match self {
-            Expr::Lit(lit) => Sexp::String(lit.to_string()),
-            Expr::Var(v) => Sexp::String(v.to_string()),
+            Expr::Lit(lit) => Sexp::Symbol(lit.to_string()),
+            Expr::Var(v) => Sexp::Symbol(v.to_string()),
             Expr::Call(op, children) => Sexp::List(
-                vec![Sexp::String(op.to_string())]
+                vec![Sexp::Symbol(op.to_string())]
                     .into_iter()
                     .chain(children.iter().map(|c| c.to_sexp()))
                     .collect(),
