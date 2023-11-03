@@ -1491,7 +1491,7 @@ impl EGraph {
         self.type_info().sorts.get(&value.tag)
     }
 
-    // Get a sort by its type
+    /// Get a sort by its type
     pub fn get_sort<S: Sort + Send + Sync>(&self) -> Option<Arc<S>> {
         self.type_info().get_sort()
     }
