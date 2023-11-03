@@ -675,3 +675,24 @@ pub enum TypeError {
     #[error("All alternative definitions considered failed\n{}", .0.iter().map(|e| format!("  {e}\n")).collect::<Vec<_>>().join(""))]
     AllAlternativeFailed(Vec<TypeError>),
 }
+
+#[cfg(test)]
+mod test {
+    use crate::{typechecking::TypeError, EGraph, Error};
+
+    #[test]
+    fn test_arity_mismatch() {
+        let mut egraph = EGraph::default();
+
+        let res = egraph.parse_and_run_program(
+            "
+            (relation f (i64 i64))
+            (rule ((f a b c)) ())
+       ",
+        );
+        assert!(matches!(
+            res,
+            Err(Error::TypeError(TypeError::Arity { expected: 2, .. }))
+        ));
+    }
+}

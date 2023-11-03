@@ -287,9 +287,13 @@ impl<T> Atom<T> {
 }
 impl Atom<Symbol> {
     pub(crate) fn to_expr(&self) -> Expr {
+        let n = self.args.len();
         Expr::Call(
             self.head,
-            self.args.iter().map(|arg| arg.to_expr()).collect(),
+            self.args[0..n - 1]
+                .iter()
+                .map(|arg| arg.to_expr())
+                .collect(),
         )
     }
 }
