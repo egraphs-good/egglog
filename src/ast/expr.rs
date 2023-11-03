@@ -149,7 +149,10 @@ impl Expr {
         }
     }
 
-    pub(crate) fn to_sexp(&self) -> Sexp {
+    /// Converts this expression into a
+    /// s-expression (symbolic expression).
+    /// Example: `(Add (Add 2 3) 4)`
+    pub fn to_sexp(&self) -> Sexp {
         let res = match self {
             Expr::Lit(lit) => Sexp::Symbol(lit.to_string()),
             Expr::Var(v) => Sexp::Symbol(v.to_string()),
