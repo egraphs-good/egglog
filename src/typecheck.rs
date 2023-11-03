@@ -290,7 +290,10 @@ impl Atom<Symbol> {
         let n = self.args.len();
         Expr::Call(
             self.head,
-            self.args[0..n-1].iter().map(|arg| arg.to_expr()).collect(),
+            self.args[0..n - 1]
+                .iter()
+                .map(|arg| arg.to_expr())
+                .collect(),
         )
     }
 }
