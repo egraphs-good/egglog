@@ -52,7 +52,7 @@ impl ConstraintError<AtomTerm, ArcSort> {
                 expected,
                 actual,
             }) => {
-                assert_eq!(actual, &atom.args.len());
+                assert_eq!(*actual, atom.args.len() - 1);
                 TypeError::Arity {
                     expr: atom.to_expr(),
                     expected: *expected,
