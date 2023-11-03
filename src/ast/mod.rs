@@ -1475,7 +1475,8 @@ impl Display for NormRule {
 }
 
 impl Rule {
-    pub(crate) fn to_sexp(&self, ruleset: Symbol, name: Symbol) -> Sexp {
+    /// Converts this rule into an s-expression.
+    pub fn to_sexp(&self, ruleset: Symbol, name: Symbol) -> Sexp {
         let mut res = vec![
             Sexp::Symbol("rule".into()),
             Sexp::List(self.body.iter().map(|f| f.to_sexp()).collect()),
@@ -1557,7 +1558,8 @@ pub struct Rewrite {
 }
 
 impl Rewrite {
-    pub(crate) fn to_sexp(&self, ruleset: Symbol, is_bidirectional: bool) -> Sexp {
+    /// Converts the rewrite into an s-expression.
+    pub fn to_sexp(&self, ruleset: Symbol, is_bidirectional: bool) -> Sexp {
         let mut res = vec![
             Sexp::Symbol(if is_bidirectional {
                 "birewrite".into()
