@@ -94,7 +94,7 @@ impl EGraph {
         let mut node_ids: NodeIDs = all_calls
             .iter()
             .filter_map(|(_decl, _input, output, node_id)| {
-                if self.get_sort(output).unwrap().is_eq_sort() {
+                if self.get_sort_from_value(output).unwrap().is_eq_sort() {
                     let id = output.bits as usize;
                     let canonical: usize = self.unionfind.find(Id::from(id)).into();
                     let canonical_id: egraph_serialize::ClassId = canonical.to_string().into();
@@ -151,7 +151,7 @@ impl EGraph {
         // Set iff `split_primitive_outputs` is set and this is an output of a function.
         prim_node_id: Option<String>,
     ) -> (egraph_serialize::ClassId, Option<egraph_serialize::NodeId>) {
-        let sort = self.get_sort(value).unwrap();
+        let sort = self.get_sort_from_value(value).unwrap();
         let (class_id, node_id): (egraph_serialize::ClassId, Option<egraph_serialize::NodeId>) =
             if sort.is_eq_sort() {
                 let id: usize = value.bits as usize;

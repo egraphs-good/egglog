@@ -550,7 +550,7 @@ impl EGraph {
                 value
             }
         } else {
-            if let Some(sort) = self.get_sort(&value) {
+            if let Some(sort) = self.get_sort_from_value(&value) {
                 if sort.is_eq_sort() {
                     return Value {
                         tag: value.tag,
@@ -660,11 +660,11 @@ impl EGraph {
 
     pub fn eval_lit(&self, lit: &Literal) -> Value {
         match lit {
-            Literal::Int(i) => i.store(&self.type_info().get_sort()).unwrap(),
-            Literal::F64(f) => f.store(&self.type_info().get_sort()).unwrap(),
-            Literal::String(s) => s.store(&self.type_info().get_sort()).unwrap(),
-            Literal::Unit => ().store(&self.type_info().get_sort()).unwrap(),
-            Literal::Bool(b) => b.store(&self.type_info().get_sort()).unwrap(),
+            Literal::Int(i) => i.store(&self.type_info().get_sort_nofail()).unwrap(),
+            Literal::F64(f) => f.store(&self.type_info().get_sort_nofail()).unwrap(),
+            Literal::String(s) => s.store(&self.type_info().get_sort_nofail()).unwrap(),
+            Literal::Unit => ().store(&self.type_info().get_sort_nofail()).unwrap(),
+            Literal::Bool(b) => b.store(&self.type_info().get_sort_nofail()).unwrap(),
         }
     }
 
@@ -1487,12 +1487,23 @@ impl EGraph {
         self.functions.values().map(|f| f.nodes.len()).sum()
     }
 
-    pub(crate) fn get_sort(&self, value: &Value) -> Option<&ArcSort> {
+    pub(crate) fn get_sort_from_value(&self, value: &Value) -> Option<&ArcSort> {
         self.type_info().sorts.get(&value.tag)
     }
 
+    // Get a sort by its type
+    pub fn get_sort<S: Sort + Send + Sync>(&self) -> Option<Arc<S>> {
+        self.type_info().get_sort()
+    }
+
+    /// Add a user-defined sort
     pub fn add_arcsort(&mut self, arcsort: ArcSort) -> Result<(), TypeError> {
         self.desugar.type_info.add_arcsort(arcsort)
+    }
+
+    /// Add a user-defined primitive
+    pub fn add_primitive(&mut self, prim: impl Into<Primitive>) {
+        self.desugar.type_info.add_primitive(prim)
     }
 
     /// Gets the last extract report and returns it, if the last command saved it.

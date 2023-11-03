@@ -61,8 +61,8 @@ macro_rules! add_primitives {
                 }
             }
             type_info.add_primitive($crate::Primitive::from(MyPrim {
-                $( $param: type_info.get_sort::<<$param_t as IntoSort>::Sort>(), )*
-                __out: type_info.get_sort::<<$ret as IntoSort>::Sort>(),
+                $( $param: type_info.get_sort_nofail::<<$param_t as IntoSort>::Sort>(), )*
+                __out: type_info.get_sort_nofail::<<$ret as IntoSort>::Sort>(),
             }))
         }
     }};

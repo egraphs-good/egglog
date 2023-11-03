@@ -131,12 +131,12 @@ impl Sort for MapSort {
         typeinfo.add_primitive(NotContains {
             name: "map-not-contains".into(),
             map: self.clone(),
-            unit: typeinfo.get_sort(),
+            unit: typeinfo.get_sort_nofail(),
         });
         typeinfo.add_primitive(Contains {
             name: "map-contains".into(),
             map: self.clone(),
-            unit: typeinfo.get_sort(),
+            unit: typeinfo.get_sort_nofail(),
         });
         typeinfo.add_primitive(Remove {
             name: "map-remove".into(),
