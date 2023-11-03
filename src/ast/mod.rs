@@ -271,19 +271,19 @@ trait ToSexp {
 
 impl ToSexp for str {
     fn to_sexp(&self) -> Sexp {
-        Sexp::String(String::from(self))
+        Sexp::Symbol(String::from(self))
     }
 }
 
 impl ToSexp for Symbol {
     fn to_sexp(&self) -> Sexp {
-        Sexp::String(self.to_string())
+        Sexp::Symbol(self.to_string())
     }
 }
 
 impl ToSexp for usize {
     fn to_sexp(&self) -> Sexp {
-        Sexp::String(self.to_string())
+        Sexp::Symbol(self.to_string())
     }
 }
 
@@ -772,12 +772,12 @@ pub struct RunConfig {
 
 impl ToSexp for RunConfig {
     fn to_sexp(&self) -> Sexp {
-        let mut res = vec![Sexp::String("run".into())];
+        let mut res = vec![Sexp::Symbol("run".into())];
         if self.ruleset != "".into() {
-            res.push(Sexp::String(self.ruleset.to_string()));
+            res.push(Sexp::Symbol(self.ruleset.to_string()));
         }
         if let Some(until) = &self.until {
-            res.push(Sexp::String(":until".into()));
+            res.push(Sexp::Symbol(":until".into()));
             res.extend(until.iter().map(|fact| fact.to_sexp()));
         }
 
@@ -856,13 +856,13 @@ pub struct Variant {
 
 impl ToSexp for Variant {
     fn to_sexp(&self) -> Sexp {
-        let mut res = vec![Sexp::String(self.name.to_string())];
+        let mut res = vec![Sexp::Symbol(self.name.to_string())];
         if !self.types.is_empty() {
-            res.extend(self.types.iter().map(|s| Sexp::String(s.to_string())));
+            res.extend(self.types.iter().map(|s| Sexp::Symbol(s.to_string())));
         }
         if let Some(cost) = self.cost {
-            res.push(Sexp::String(":cost".into()));
-            res.push(Sexp::String(cost.to_string()));
+            res.push(Sexp::Symbol(":cost".into()));
+            res.push(Sexp::Symbol(cost.to_string()));
         }
         Sexp::List(res)
     }
@@ -906,8 +906,8 @@ impl FunctionDecl {
 impl ToSexp for FunctionDecl {
     fn to_sexp(&self) -> Sexp {
         let mut res = vec![
-            Sexp::String("function".into()),
-            Sexp::String(self.name.to_string()),
+            Sexp::Symbol("function".into()),
+            Sexp::Symbol(self.name.to_string()),
         ];
 
         if let Sexp::List(contents) = self.schema.to_sexp() {
@@ -918,29 +918,29 @@ impl ToSexp for FunctionDecl {
 
         if let Some(cost) = self.cost {
             res.extend(vec![
-                Sexp::String(":cost".into()),
-                Sexp::String(cost.to_string()),
+                Sexp::Symbol(":cost".into()),
+                Sexp::Symbol(cost.to_string()),
             ]);
         }
 
         if self.unextractable {
-            res.push(Sexp::String(":unextractable".into()));
+            res.push(Sexp::Symbol(":unextractable".into()));
         }
 
         if !self.merge_action.is_empty() {
-            res.push(Sexp::String(":on_merge".into()));
+            res.push(Sexp::Symbol(":on_merge".into()));
             res.push(Sexp::List(
                 self.merge_action.iter().map(|a| a.to_sexp()).collect(),
             ));
         }
 
         if let Some(merge) = &self.merge {
-            res.push(Sexp::String(":merge".into()));
+            res.push(Sexp::Symbol(":merge".into()));
             res.push(merge.to_sexp());
         }
 
         if let Some(default) = &self.default {
-            res.push(Sexp::String(":default".into()));
+            res.push(Sexp::Symbol(":default".into()));
             res.push(default.to_sexp());
         }
 
@@ -1477,17 +1477,17 @@ impl Display for NormRule {
 impl Rule {
     pub(crate) fn to_sexp(&self, ruleset: Symbol, name: Symbol) -> Sexp {
         let mut res = vec![
-            Sexp::String("rule".into()),
+            Sexp::Symbol("rule".into()),
             Sexp::List(self.body.iter().map(|f| f.to_sexp()).collect()),
             Sexp::List(self.head.iter().map(|a| a.to_sexp()).collect()),
         ];
         if ruleset != "".into() {
-            res.push(Sexp::String(":ruleset".into()));
-            res.push(Sexp::String(ruleset.to_string()));
+            res.push(Sexp::Symbol(":ruleset".into()));
+            res.push(Sexp::Symbol(ruleset.to_string()));
         }
         if name != "".into() {
-            res.push(Sexp::String(":name".into()));
-            res.push(Sexp::String(format!("\"{}\"", name)));
+            res.push(Sexp::Symbol(":name".into()));
+            res.push(Sexp::Symbol(format!("\"{}\"", name)));
         }
         Sexp::List(res)
     }
@@ -1559,7 +1559,7 @@ pub struct Rewrite {
 impl Rewrite {
     pub(crate) fn to_sexp(&self, ruleset: Symbol, is_bidirectional: bool) -> Sexp {
         let mut res = vec![
-            Sexp::String(if is_bidirectional {
+            Sexp::Symbol(if is_bidirectional {
                 "birewrite".into()
             } else {
                 "rewrite".into()
@@ -1569,15 +1569,15 @@ impl Rewrite {
         ];
 
         if !self.conditions.is_empty() {
-            res.push(Sexp::String(":when".into()));
+            res.push(Sexp::Symbol(":when".into()));
             res.push(Sexp::List(
                 self.conditions.iter().map(|f| f.to_sexp()).collect(),
             ));
         }
 
         if ruleset != "".into() {
-            res.push(Sexp::String(":ruleset".into()));
-            res.push(Sexp::String(ruleset.to_string()));
+            res.push(Sexp::Symbol(":ruleset".into()));
+            res.push(Sexp::Symbol(ruleset.to_string()));
         }
         Sexp::List(res)
     }
