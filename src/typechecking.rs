@@ -95,18 +95,20 @@ impl TypeInfo {
         }
     }
 
-    pub fn get_sort<S: Sort + Send + Sync>(&self) -> Option<Arc<S>> {
+    pub fn get_sort_by<S: Sort + Send + Sync>(&self, pred: impl Fn(&Arc<S>) -> bool) -> Option<Arc<S>> {
         for sort in self.sorts.values() {
             let sort = sort.clone().as_arc_any();
             if let Ok(sort) = Arc::downcast(sort) {
-                return Some(sort);
+                if pred(&sort) {
+                    return Some(sort);
+                }
             }
         }
         None
     }
 
     pub fn get_sort_nofail<S: Sort + Send + Sync>(&self) -> Arc<S> {
-        match self.get_sort() {
+        match self.get_sort_by(|s| true) {
             Some(sort) => sort,
             None => panic!("Failed to lookup sort: {}", std::any::type_name::<S>()),
         }
