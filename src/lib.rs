@@ -1502,7 +1502,7 @@ impl EGraph {
 
     /// Returns a sort based on the type
     pub fn get_sort<S: Sort + Send + Sync>(&self) -> Option<Arc<S>> {
-        self.type_info().get_sort_by(|s| true)
+        self.type_info().get_sort_by(|_| true)
     }
 
     /// Add a user-defined sort
@@ -1592,8 +1592,8 @@ mod tests {
 
     use crate::{
         constraint::SimpleTypeConstraint,
-        sort::{FromSort, I64Sort, IntoSort, SetSort, Sort, VecSort},
-        EGraph, Primitive, PrimitiveLike, Value,
+        sort::{FromSort, I64Sort, IntoSort, Sort, VecSort},
+        EGraph, PrimitiveLike, Value,
     };
 
     struct InnerProduct {
@@ -1614,7 +1614,7 @@ mod tests {
             .into_box()
         }
 
-        fn apply(&self, values: &[crate::Value], egraph: &EGraph) -> Option<crate::Value> {
+        fn apply(&self, values: &[crate::Value], _egraph: &EGraph) -> Option<crate::Value> {
             let mut sum = 0;
             let vec1 = Vec::<Value>::load(&self.vec, &values[0]);
             let vec2 = Vec::<Value>::load(&self.vec, &values[1]);
@@ -1633,7 +1633,7 @@ mod tests {
         let mut egraph = EGraph::default();
         egraph
             .parse_and_run_program(
-                &"
+                "
                 (sort IntVec (Vec i64))
             ",
             )
@@ -1646,15 +1646,14 @@ mod tests {
             ele: i64_sort,
             vec: int_vec_sort,
         });
-        println!("{:?}", egraph
+        egraph
             .parse_and_run_program(
-                &"
+                "
                 (let a (vec-of 1 2 3 4 5 6))
                 (let b (vec-of 6 5 4 3 2 1))
-                ;; (extract (inner-product a b))
                 (check (= (inner-product a b) 56))
             ",
             )
-            .unwrap());
+            .unwrap();
     }
 }
