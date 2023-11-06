@@ -150,11 +150,7 @@ where
                         *assignment = orig_assignment;
                         Ok(false)
                     }
-                    std::cmp::Ordering::Less => {
-                        dbg!(&orig_assignment);
-                        dbg!(&cs);
-                        Err(ConstraintError::NoConstraintSatisfied(errors))
-                    },
+                    std::cmp::Ordering::Less => Err(ConstraintError::NoConstraintSatisfied(errors)),
                 }
             }
             Constraint::Impossible(constraint) => Err(ConstraintError::ImpossibleCaseIdentified(
@@ -167,7 +163,7 @@ where
                     match c.update(assignment, key) {
                         Ok(upd) => updated |= upd,
                         Err(error) => {
-                            // In the case of failure, 
+                            // In the case of failure,
                             // we need to restore the assignment
                             *assignment = orig_assignment;
                             return Err(error);
