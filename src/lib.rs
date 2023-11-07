@@ -89,6 +89,7 @@ pub struct RunReport {
     pub search_time_per_rule: HashMap<Symbol, Duration>,
     pub apply_time_per_rule: HashMap<Symbol, Duration>,
     pub search_time_per_ruleset: HashMap<Symbol, Duration>,
+    pub num_matches_per_rule: HashMap<Symbol, usize>,
     pub apply_time_per_ruleset: HashMap<Symbol, Duration>,
     pub rebuild_time_per_ruleset: HashMap<Symbol, Duration>,
 }
@@ -100,8 +101,8 @@ impl RunReport {
         let mut s = sym.to_string();
         // replace newlines in s with a space
         s = s.replace('\n', " ");
-        if s.len() > 20 {
-            s.truncate(20);
+        if s.len() > 80 {
+            s.truncate(80);
             s.push_str("...");
         }
         s
@@ -115,8 +116,25 @@ impl Display for RunReport {
             .keys()
             .chain(self.apply_time_per_rule.keys())
             .collect::<HashSet<_>>();
+        let mut all_rules_vec = all_rules.iter().cloned().collect::<Vec<_>>();
+        // sort rules by search and apply time
+        all_rules_vec.sort_by_key(|rule| {
+            let search_time = self
+                .search_time_per_rule
+                .get(*rule)
+                .cloned()
+                .unwrap_or(Duration::default())
+                .as_millis();
+            let apply_time = self
+                .apply_time_per_rule
+                .get(*rule)
+                .cloned()
+                .unwrap_or(Duration::default())
+                .as_millis();
+            search_time + apply_time
+        });
 
-        for rule in all_rules {
+        for rule in all_rules_vec {
             let truncated = Self::truncate_rule_name(*rule);
             // print out the search and apply time for rule
             let search_time = self
@@ -131,9 +149,10 @@ impl Display for RunReport {
                 .cloned()
                 .unwrap_or(Duration::default())
                 .as_secs_f64();
+            let num_matches = self.num_matches_per_rule.get(rule).cloned().unwrap_or(0);
             writeln!(
                 f,
-                "Rule {truncated}: search {search_time:.3}s, apply {apply_time:.3}s",
+                "Rule {truncated}: search {search_time:.3}s, apply {apply_time:.3}s, num matches {num_matches}",
             )?;
         }
 
@@ -201,6 +220,18 @@ impl RunReport {
         new_times
     }
 
+    fn union_counts(
+        counts: &HashMap<Symbol, usize>,
+        other_counts: &HashMap<Symbol, usize>,
+    ) -> HashMap<Symbol, usize> {
+        let mut new_counts = counts.clone();
+        for (k, v) in other_counts {
+            let entry = new_counts.entry(*k).or_default();
+            *entry += *v;
+        }
+        new_counts
+    }
+
     pub fn union(&self, other: &Self) -> Self {
         Self {
             updated: self.updated || other.updated,
@@ -211,6 +242,10 @@ impl RunReport {
             apply_time_per_rule: Self::union_times(
                 &self.apply_time_per_rule,
                 &other.apply_time_per_rule,
+            ),
+            num_matches_per_rule: Self::union_counts(
+                &self.num_matches_per_rule,
+                &other.num_matches_per_rule,
             ),
             search_time_per_ruleset: Self::union_times(
                 &self.search_time_per_ruleset,
@@ -939,8 +974,11 @@ impl EGraph {
                 .or_insert(Duration::default()) += search_time;
             let num_vars = rule.query.vars.len();
 
-            // the query doesn't require matches
+            // make sure the query requires matches
             if num_vars != 0 {
+                *report.num_matches_per_rule.entry(*name).or_insert(0) +=
+                    all_values.len() / num_vars;
+
                 // backoff logic
                 let len = all_values.len() / num_vars;
                 let threshold = safe_shl(match_limit, rule.times_banned);
