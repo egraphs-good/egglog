@@ -410,7 +410,7 @@ impl Function {
                         prev
                     }
                     MergeFn::Expr(_) => {
-                        if !appended {
+                        if !appended && prev != out_val {
                             deferred_merges.push((scratch.clone(), prev, out_val));
                         }
                         prev
