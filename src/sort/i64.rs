@@ -53,7 +53,7 @@ impl Sort for I64Sort {
         add_primitives!(typeinfo, ">" = |a: i64, b: i64| -> Opt { (a > b).then(|| ()) });
         add_primitives!(typeinfo, "<=" = |a: i64, b: i64| -> Opt { (a <= b).then(|| ()) });
         add_primitives!(typeinfo, ">=" = |a: i64, b: i64| -> Opt { (a >= b).then(|| ()) });
-        
+
         add_primitives!(typeinfo, "bool-=" = |a: i64, b: i64| -> bool { a == b });
         add_primitives!(typeinfo, "bool-<" = |a: i64, b: i64| -> bool { a < b });
         add_primitives!(typeinfo, "bool->" = |a: i64, b: i64| -> bool { a > b });
