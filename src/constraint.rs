@@ -64,8 +64,8 @@ impl ConstraintError<AtomTerm, ArcSort> {
 
 impl<Var, Value> Constraint<Var, Value>
 where
-    Var: Eq + PartialEq + Hash + Clone,
-    Value: Clone,
+    Var: Eq + PartialEq + Hash + Clone + Debug,
+    Value: Clone + Debug,
 {
     /// Takes a partial assignment and update it based on the constraint.
     /// If there's a conflict, returns the conflicting variable, the assigned conflicting types.
@@ -157,9 +157,18 @@ where
                 constraint.clone(),
             )),
             Constraint::And(cs) => {
+                let orig_assignment = assignment.clone();
                 let mut updated = false;
                 for c in cs {
-                    updated |= c.update(assignment, key)?;
+                    match c.update(assignment, key) {
+                        Ok(upd) => updated |= upd,
+                        Err(error) => {
+                            // In the case of failure,
+                            // we need to restore the assignment
+                            *assignment = orig_assignment;
+                            return Err(error);
+                        }
+                    }
                 }
                 Ok(updated)
             }
@@ -191,7 +200,7 @@ where
 impl<Var, Value> Problem<Var, Value>
 where
     Var: Eq + PartialEq + Hash + Clone + Debug,
-    Value: Clone,
+    Value: Clone + Debug,
 {
     pub(crate) fn solve<'a, K: Eq + Debug>(
         &'a self,
