@@ -68,7 +68,7 @@ impl Sort for I64Sort {
         // Must be in the i64 sort register function because the string sort is registered before the i64 sort.
         typeinfo.add_primitive(CountMatches {
             name: "count-matches".into(),
-            string: typeinfo.get_sort(),
+            string: typeinfo.get_sort_nofail(),
             int: self.clone(),
         });
 

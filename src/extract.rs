@@ -123,7 +123,7 @@ impl<'a> Extractor<'a> {
     fn expr_from_node(&self, node: &Node, termdag: &mut TermDag) -> Option<Term> {
         let mut children = vec![];
         for value in node.inputs {
-            let arcsort = self.egraph.get_sort(value).unwrap();
+            let arcsort = self.egraph.get_sort_from_value(value).unwrap();
             children.push(self.find_best(*value, termdag, arcsort)?.1)
         }
 

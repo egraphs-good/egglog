@@ -585,7 +585,7 @@ impl EGraph {
                 value
             }
         } else {
-            if let Some(sort) = self.get_sort(&value) {
+            if let Some(sort) = self.get_sort_from_value(&value) {
                 if sort.is_eq_sort() {
                     return Value {
                         tag: value.tag,
@@ -695,11 +695,11 @@ impl EGraph {
 
     pub fn eval_lit(&self, lit: &Literal) -> Value {
         match lit {
-            Literal::Int(i) => i.store(&self.type_info().get_sort()).unwrap(),
-            Literal::F64(f) => f.store(&self.type_info().get_sort()).unwrap(),
-            Literal::String(s) => s.store(&self.type_info().get_sort()).unwrap(),
-            Literal::Unit => ().store(&self.type_info().get_sort()).unwrap(),
-            Literal::Bool(b) => b.store(&self.type_info().get_sort()).unwrap(),
+            Literal::Int(i) => i.store(&self.type_info().get_sort_nofail()).unwrap(),
+            Literal::F64(f) => f.store(&self.type_info().get_sort_nofail()).unwrap(),
+            Literal::String(s) => s.store(&self.type_info().get_sort_nofail()).unwrap(),
+            Literal::Unit => ().store(&self.type_info().get_sort_nofail()).unwrap(),
+            Literal::Bool(b) => b.store(&self.type_info().get_sort_nofail()).unwrap(),
         }
     }
 
@@ -1525,12 +1525,32 @@ impl EGraph {
         self.functions.values().map(|f| f.nodes.len()).sum()
     }
 
-    pub(crate) fn get_sort(&self, value: &Value) -> Option<&ArcSort> {
+    pub(crate) fn get_sort_from_value(&self, value: &Value) -> Option<&ArcSort> {
         self.type_info().sorts.get(&value.tag)
     }
 
+    /// Returns the first sort that satisfies the type and predicate if there's one.
+    /// Otherwise returns none.
+    pub fn get_sort_by<S: Sort + Send + Sync>(
+        &self,
+        pred: impl Fn(&Arc<S>) -> bool,
+    ) -> Option<Arc<S>> {
+        self.type_info().get_sort_by(pred)
+    }
+
+    /// Returns a sort based on the type
+    pub fn get_sort<S: Sort + Send + Sync>(&self) -> Option<Arc<S>> {
+        self.type_info().get_sort_by(|_| true)
+    }
+
+    /// Add a user-defined sort
     pub fn add_arcsort(&mut self, arcsort: ArcSort) -> Result<(), TypeError> {
         self.desugar.type_info.add_arcsort(arcsort)
+    }
+
+    /// Add a user-defined primitive
+    pub fn add_primitive(&mut self, prim: impl Into<Primitive>) {
+        self.desugar.type_info.add_primitive(prim)
     }
 
     /// Gets the last extract report and returns it, if the last command saved it.
@@ -1602,4 +1622,76 @@ pub enum Error {
 
 fn safe_shl(a: usize, b: usize) -> usize {
     a.checked_shl(b.try_into().unwrap()).unwrap_or(usize::MAX)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use crate::{
+        constraint::SimpleTypeConstraint,
+        sort::{FromSort, I64Sort, IntoSort, Sort, VecSort},
+        EGraph, PrimitiveLike, Value,
+    };
+
+    struct InnerProduct {
+        ele: Arc<I64Sort>,
+        vec: Arc<VecSort>,
+    }
+
+    impl PrimitiveLike for InnerProduct {
+        fn name(&self) -> symbol_table::GlobalSymbol {
+            "inner-product".into()
+        }
+
+        fn get_type_constraints(&self) -> Box<dyn crate::constraint::TypeConstraint> {
+            SimpleTypeConstraint::new(
+                self.name(),
+                vec![self.vec.clone(), self.vec.clone(), self.ele.clone()],
+            )
+            .into_box()
+        }
+
+        fn apply(&self, values: &[crate::Value], _egraph: &EGraph) -> Option<crate::Value> {
+            let mut sum = 0;
+            let vec1 = Vec::<Value>::load(&self.vec, &values[0]);
+            let vec2 = Vec::<Value>::load(&self.vec, &values[1]);
+            assert_eq!(vec1.len(), vec2.len());
+            for (a, b) in vec1.iter().zip(vec2.iter()) {
+                let a = i64::load(&self.ele, a);
+                let b = i64::load(&self.ele, b);
+                sum += a * b;
+            }
+            sum.store(&self.ele)
+        }
+    }
+
+    #[test]
+    fn test_user_defined_primitive() {
+        let mut egraph = EGraph::default();
+        egraph
+            .parse_and_run_program(
+                "
+                (sort IntVec (Vec i64))
+            ",
+            )
+            .unwrap();
+        let i64_sort: Arc<I64Sort> = egraph.get_sort().unwrap();
+        let int_vec_sort: Arc<VecSort> = egraph
+            .get_sort_by(|s: &Arc<VecSort>| s.element_name() == i64_sort.name())
+            .unwrap();
+        egraph.add_primitive(InnerProduct {
+            ele: i64_sort,
+            vec: int_vec_sort,
+        });
+        egraph
+            .parse_and_run_program(
+                "
+                (let a (vec-of 1 2 3 4 5 6))
+                (let b (vec-of 6 5 4 3 2 1))
+                (check (= (inner-product a b) 56))
+            ",
+            )
+            .unwrap();
+    }
 }

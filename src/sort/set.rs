@@ -129,12 +129,12 @@ impl Sort for SetSort {
         typeinfo.add_primitive(NotContains {
             name: "set-not-contains".into(),
             set: self.clone(),
-            unit: typeinfo.get_sort(),
+            unit: typeinfo.get_sort_nofail(),
         });
         typeinfo.add_primitive(Contains {
             name: "set-contains".into(),
             set: self.clone(),
-            unit: typeinfo.get_sort(),
+            unit: typeinfo.get_sort_nofail(),
         });
         typeinfo.add_primitive(Remove {
             name: "set-remove".into(),

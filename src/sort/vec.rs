@@ -135,27 +135,27 @@ impl Sort for VecSort {
         typeinfo.add_primitive(NotContains {
             name: "vec-not-contains".into(),
             vec: self.clone(),
-            unit: typeinfo.get_sort(),
+            unit: typeinfo.get_sort_nofail(),
         });
         typeinfo.add_primitive(Contains {
             name: "vec-contains".into(),
             vec: self.clone(),
-            unit: typeinfo.get_sort(),
+            unit: typeinfo.get_sort_nofail(),
         });
         typeinfo.add_primitive(Length {
             name: "vec-length".into(),
             vec: self.clone(),
-            i64: typeinfo.get_sort(),
+            i64: typeinfo.get_sort_nofail(),
         });
         typeinfo.add_primitive(Get {
             name: "vec-get".into(),
             vec: self.clone(),
-            i64: typeinfo.get_sort(),
+            i64: typeinfo.get_sort_nofail(),
         });
         typeinfo.add_primitive(Set {
             name: "vec-set".into(),
             vec: self.clone(),
-            i64: typeinfo.get_sort(),
+            i64: typeinfo.get_sort_nofail(),
         })
     }
 

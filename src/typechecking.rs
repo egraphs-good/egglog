@@ -56,7 +56,7 @@ impl Default for TypeInfo {
         res.presorts.insert("Vec".into(), VecSort::make_sort);
 
         res.add_primitive(ValueEq {
-            unit: res.get_sort(),
+            unit: res.get_sort_nofail(),
         });
 
         res
@@ -95,17 +95,26 @@ impl TypeInfo {
         }
     }
 
-    pub fn get_sort<S: Sort + Send + Sync>(&self) -> Arc<S> {
+    pub fn get_sort_by<S: Sort + Send + Sync>(
+        &self,
+        pred: impl Fn(&Arc<S>) -> bool,
+    ) -> Option<Arc<S>> {
         for sort in self.sorts.values() {
             let sort = sort.clone().as_arc_any();
             if let Ok(sort) = Arc::downcast(sort) {
-                return sort;
+                if pred(&sort) {
+                    return Some(sort);
+                }
             }
         }
+        None
+    }
 
-        // TODO handle if multiple match?
-        // could handle by type id??
-        panic!("Failed to lookup sort: {}", std::any::type_name::<S>());
+    pub fn get_sort_nofail<S: Sort + Send + Sync>(&self) -> Arc<S> {
+        match self.get_sort_by(|_| true) {
+            Some(sort) => sort,
+            None => panic!("Failed to lookup sort: {}", std::any::type_name::<S>()),
+        }
     }
 
     pub fn add_primitive(&mut self, prim: impl Into<Primitive>) {
