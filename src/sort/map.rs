@@ -61,6 +61,7 @@ impl MapSort {
             "map-not-contains".into(),
             "map-contains".into(),
             "map-remove".into(),
+            "map-length".into()
         ]
     }
 }
@@ -140,6 +141,11 @@ impl Sort for MapSort {
         });
         typeinfo.add_primitive(Remove {
             name: "map-remove".into(),
+            map: self.clone(),
+        });
+        typeinfo.add_primitive(Length {
+            name: "map-length".into(),
+            i64: typeinfo.get_sort_nofail(),
             map: self,
         });
     }
@@ -424,5 +430,26 @@ impl PrimitiveLike for Remove {
         let mut map = ValueMap::load(&self.map, &values[0]);
         map.remove(&values[1]);
         map.store(&self.map)
+    }
+}
+
+struct Length {
+    name: Symbol,
+    map: Arc<MapSort>,
+    i64: Arc<I64Sort>,
+}
+
+impl PrimitiveLike for Length {
+    fn name(&self) -> Symbol {
+        self.name
+    }
+
+    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(self.name(), vec![self.map.clone(), self.i64.clone()]).into_box()
+    }
+
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+        let map = ValueMap::load(&self.map, &values[0]);
+        Some(Value::from(map.len() as i64))
     }
 }
