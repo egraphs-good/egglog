@@ -1,0 +1,1709 @@
+
+(datatype Literal)
+(datatype Expr)
+(datatype Operand)
+(datatype Body)
+
+(sort VecOperandBase (Vec Operand))
+(datatype VecOperand (VO VecOperandBase))
+
+(sort VecVecOperandBase (Vec VecOperand))
+(datatype VecVecOperand (VVO VecVecOperandBase))
+
+;; Type
+(datatype Type
+    (IntT)
+    (BoolT)
+    (FloatT)
+    (CharT)
+    (PointerT Type))
+(datatype EffectType
+    (Bril Type)
+    (PrintState))
+(sort FuncSigs (Vec EffectType))
+(datatype OptionType
+    (SomeType Type)
+    (NoneType))
+;; Literal
+(function Num (i64) Literal)
+(function Float (f64) Literal)
+(function Char (String) Literal)
+(function Bool (bool) Literal)
+
+;; Expr
+(datatype ConstOps (const))
+(function Const (Type ConstOps Literal) Expr)
+;; Call may return multiple values but at most one of them
+;; is a value type, which is stored in OptionType.
+;; The last fields denotes how many return values it have
+;; Finally, we assume if call ever returns a value, 
+;; it has to be the first one.
+(function Call (OptionType String VecOperand i64) Expr :cost 1000) ; TODO: fix cost model
+(function badd (Type Operand Operand) Expr)
+(function bsub (Type Operand Operand) Expr)
+(function bmul (Type Operand Operand) Expr)
+(function bfmul (Type Operand Operand) Expr)
+(function bdiv (Type Operand Operand) Expr)
+(function beq (Type Operand Operand) Expr)
+(function blt (Type Operand Operand) Expr)
+(function bgt (Type Operand Operand) Expr)
+(function ble (Type Operand Operand) Expr)
+(function bge (Type Operand Operand) Expr)
+(function bnot (Type Operand Operand) Expr)
+(function band (Type Operand Operand) Expr)
+(function bor (Type Operand Operand) Expr)
+(function PRINT (Operand Operand) Expr)
+
+;; Operand
+(function Arg (i64) Operand)
+(function Node (Body) Operand)
+(function Project (i64 Body) Operand)
+
+;; Body
+(function PureOp (Expr) Body)
+;; branching
+;; predicate (outside switch), inputs (outside switch),
+;; and for each branch a vector of outputs
+(function Gamma (Operand VecOperand VecVecOperand) Body)
+;; loops
+;; predicate (inside loop), inputs (outside loop), outputs (inside loop)
+(function Theta (Operand VecOperand VecOperand) Body)
+;; A body can also just be a VecOperand for convenience
+;; This has no corresponding node in rust, it can be
+;; removed during translation
+(function OperandGroup (VecOperand) Body)
+
+(datatype Function
+    ;;    name   input types    output types    body
+    (Func String FuncSigs       FuncSigs        VecOperand))
+
+
+;; procedure f(n):
+;;   i = 0
+;;   ans = 0
+;;   do:
+;;     ans += i*5;
+;;     i += 1
+;;   while(i < n);
+;;   return ansm
+
+;; ;; inputs: [n]
+; (Project 0
+;     (Theta
+;        ;     i       n
+;         (lt (Arg 1) (Arg 2)) ;; pred
+;         (vec-of ;; inputs
+;             (Node (PureOp (Const 0))) ;; accumulator
+;             (Node (PureOp (Const 0))) ;; loop var
+;             (Arg 0) ;; n
+;             )
+;         (vec-of ;; outputs
+;             (Node (PureOp (add (Arg 0) ;; ans
+;                 (Node (PureOp (mul 
+;                     (Arg 1) ;; i
+;                     (Node (PureOp (Const 5))))))))) ;; ans = i*5
+;             (Node (PureOp (add (Arg 1) (Node (PureOp (Const 1)))))) ;; i += 1
+;             (Arg 2) ;; n
+;         ))
+; )
+
+
+
+(ruleset fast-analyses)
+
+          (function VecOperand-get (VecOperand i64) Operand)
+          (rule ((VO x) (> (vec-length x) 0))
+                ((union (VecOperand-get (VO x) 0) (vec-get x 0)))
+                :ruleset fast-analyses)
+          (rule ((VecOperand-get (VO x) j)
+                 (= i (+ j 1)) (< i (vec-length x)))
+                ((union (VecOperand-get (VO x) i) (vec-get x i)))
+                :ruleset fast-analyses)
+
+            (function VecOperand-length (VecOperand) i64)
+            (rule ((VO x))
+                  ((set (VecOperand-length (VO x)) (vec-length x)))
+                  :ruleset fast-analyses)
+        
+
+          (function VecVecOperand-get (VecVecOperand i64) VecOperand)
+          (rule ((VVO x) (> (vec-length x) 0))
+                ((union (VecVecOperand-get (VVO x) 0) (vec-get x 0)))
+                :ruleset fast-analyses)
+          (rule ((VecVecOperand-get (VVO x) j)
+                 (= i (+ j 1)) (< i (vec-length x)))
+                ((union (VecVecOperand-get (VVO x) i) (vec-get x i)))
+                :ruleset fast-analyses)
+
+            (function VecVecOperand-length (VecVecOperand) i64)
+            (rule ((VVO x))
+                  ((set (VecVecOperand-length (VVO x)) (vec-length x)))
+                  :ruleset fast-analyses)
+        
+
+        (relation Expr-is-pure (Expr))
+        (relation Operand-is-pure (Operand))
+        (relation Body-is-pure (Body))
+        (relation VecOperand-is-pure (VecOperand))
+        (function VecOperand-pure-prefix (VecOperand) i64 :merge (max old new))
+        (relation VecVecOperand-is-pure (VecVecOperand))
+        (function VecVecOperand-pure-prefix (VecVecOperand) i64 :merge (max old new))
+        (relation Function-is-pure (Function))
+    
+
+        (rule ((= f (Const ty ops lit)))
+              ((Expr-is-pure f))
+              :ruleset fast-analyses)
+
+        (rule ((= f (Call ty name args n-outs))
+               (Function-is-pure (Func name input-types output-types body)))
+              ((Expr-is-pure f))
+              :ruleset fast-analyses)
+    
+
+                (rule ((= f (badd type e1 e2))
+                       (Operand-is-pure e1)
+                       (Operand-is-pure e2))
+                      ((Expr-is-pure f))
+                      :ruleset fast-analyses)
+                
+
+                (rule ((= f (bsub type e1 e2))
+                       (Operand-is-pure e1)
+                       (Operand-is-pure e2))
+                      ((Expr-is-pure f))
+                      :ruleset fast-analyses)
+                
+
+                (rule ((= f (bmul type e1 e2))
+                       (Operand-is-pure e1)
+                       (Operand-is-pure e2))
+                      ((Expr-is-pure f))
+                      :ruleset fast-analyses)
+                
+
+                (rule ((= f (bdiv type e1 e2))
+                       (Operand-is-pure e1)
+                       (Operand-is-pure e2))
+                      ((Expr-is-pure f))
+                      :ruleset fast-analyses)
+                
+
+                (rule ((= f (blt type e1 e2))
+                       (Operand-is-pure e1)
+                       (Operand-is-pure e2))
+                      ((Expr-is-pure f))
+                      :ruleset fast-analyses)
+                
+
+        (rule ((= f (Arg x)))
+              ((Operand-is-pure f))
+              :ruleset fast-analyses)
+        (rule ((= f (Node body))
+               (Body-is-pure body))
+              ((Operand-is-pure f))
+              :ruleset fast-analyses)
+        (rule ((= f (Project i body))
+               (Body-is-pure body))
+              ((Operand-is-pure f))
+              :ruleset fast-analyses)
+    
+
+        (rule ((= f (PureOp e))
+               (Expr-is-pure e))
+              ((Body-is-pure f))
+              :ruleset fast-analyses)
+        (rule ((= f (Gamma pred inputs outputs))
+               (Operand-is-pure pred)
+               (VecOperand-is-pure inputs)
+               (VecVecOperand-is-pure outputs))
+              ((Body-is-pure f))
+              :ruleset fast-analyses)
+        (rule ((= f (Theta pred inputs outputs))
+               (Operand-is-pure pred)
+               (VecOperand-is-pure inputs)
+               (VecOperand-is-pure outputs))
+              ((Body-is-pure f))
+              :ruleset fast-analyses)
+        (rule ((= f (OperandGroup vec))
+               (VecOperand-is-pure vec))
+              ((Body-is-pure f))
+              :ruleset fast-analyses)
+    
+
+            (rule ((= f (VO vec)))
+                  ((set (VecOperand-pure-prefix f) 0))
+                  :ruleset fast-analyses)
+            (rule ((= i (VecOperand-pure-prefix f))
+                   (< i (VecOperand-length f))
+                   (Operand-is-pure (VecOperand-get f i)))
+                  ((set (VecOperand-pure-prefix f) (+ i 1)))
+                  :ruleset fast-analyses)
+            (rule ((= (VecOperand-length f) (VecOperand-pure-prefix f)))
+                  ((VecOperand-is-pure f))
+                  :ruleset fast-analyses)
+        
+
+            (rule ((= f (VVO vec)))
+                  ((set (VecVecOperand-pure-prefix f) 0))
+                  :ruleset fast-analyses)
+            (rule ((= i (VecVecOperand-pure-prefix f))
+                   (< i (VecVecOperand-length f))
+                   (VecOperand-is-pure (VecVecOperand-get f i)))
+                  ((set (VecVecOperand-pure-prefix f) (+ i 1)))
+                  :ruleset fast-analyses)
+            (rule ((= (VecVecOperand-length f) (VecVecOperand-pure-prefix f)))
+                  ((VecVecOperand-is-pure f))
+                  :ruleset fast-analyses)
+        
+
+        (rule ((= f (Func name input-types output-types body))
+               (VecOperand-is-pure body))
+              ((Function-is-pure f))
+              :ruleset fast-analyses)
+    
+
+        (relation Body-contains-Expr (Body i64 Expr))
+        (relation Body-contains-Operand (Body i64 Operand))
+        (relation Body-contains-Body (Body i64 Body))
+    
+
+        (rule ((= f (PureOp e)))
+              ((Body-contains-Expr f 0 e))
+              :ruleset fast-analyses)
+        ; A Gamma only contains its outputs
+        (rule ((= f (Gamma pred inputs outputs))
+               (= outputs-i (VecVecOperand-get outputs i))
+               (= x (VecOperand-get outputs-i j)))
+              ((Body-contains-Operand f i x))
+              :ruleset fast-analyses)
+        ; A Theta contains its pred and outputs
+        (rule ((= f (Theta pred inputs outputs)))
+              ((Body-contains-Operand f -1 pred))
+              :ruleset fast-analyses)
+        (rule ((= f (Theta pred inputs outputs))
+               (= x (VecOperand-get outputs i)))
+              ((Body-contains-Operand f i x))
+              :ruleset fast-analyses)
+        (rule ((= f (OperandGroup vec))
+               (= x (VecOperand-get vec i)))
+              ((Body-contains-Operand f i x))
+              :ruleset fast-analyses)
+    
+
+        (rule ((Body-contains-Body f i (PureOp e)))
+              ((Body-contains-Expr f i e))
+              :ruleset fast-analyses)
+        ; A Gamma's pred and inputs are in the outer context
+        (rule ((Body-contains-Body f i (Gamma pred inputs outputs)))
+              ((Body-contains-Operand f i pred))
+              :ruleset fast-analyses)
+        (rule ((Body-contains-Body f i (Gamma pred inputs outputs))
+               (= x (VecOperand-get inputs any)))
+              ((Body-contains-Operand f i x))
+              :ruleset fast-analyses)
+        ; A Theta's inputs are in the outer context
+        (rule ((Body-contains-Body f i (Theta pred inputs outputs))
+                (= x (VecOperand-get inputs any)))
+              ((Body-contains-Operand f i x))
+              :ruleset fast-analyses)
+        (rule ((Body-contains-Body f i (OperandGroup vec))
+               (= x (VecOperand-get vec any)))
+              ((Body-contains-Operand f i x))
+              :ruleset fast-analyses)
+    
+
+        (rule ((Body-contains-Expr f i (Call ty name args n-outs))
+               (= x (VecOperand-get args any)))
+              ((Body-contains-Operand f i x))
+              :ruleset fast-analyses)
+        (rule ((Body-contains-Expr f i (PRINT e1 e2)))
+              ((Body-contains-Operand f i e1)
+               (Body-contains-Operand f i e2))
+              :ruleset fast-analyses)
+    
+
+                (rule ((Body-contains-Expr f i (badd type e1 e2)))
+                      ((Body-contains-Operand f i e1)
+                       (Body-contains-Operand f i e2))
+                      :ruleset fast-analyses)
+                
+
+                (rule ((Body-contains-Expr f i (bsub type e1 e2)))
+                      ((Body-contains-Operand f i e1)
+                       (Body-contains-Operand f i e2))
+                      :ruleset fast-analyses)
+                
+
+                (rule ((Body-contains-Expr f i (bmul type e1 e2)))
+                      ((Body-contains-Operand f i e1)
+                       (Body-contains-Operand f i e2))
+                      :ruleset fast-analyses)
+                
+
+                (rule ((Body-contains-Expr f i (bdiv type e1 e2)))
+                      ((Body-contains-Operand f i e1)
+                       (Body-contains-Operand f i e2))
+                      :ruleset fast-analyses)
+                
+
+                (rule ((Body-contains-Expr f i (blt type e1 e2)))
+                      ((Body-contains-Operand f i e1)
+                       (Body-contains-Operand f i e2))
+                      :ruleset fast-analyses)
+                
+
+        (rule ((Body-contains-Operand f i (Node body)))
+              ((Body-contains-Body f i body))
+              :ruleset fast-analyses)
+        (rule ((Body-contains-Operand f i (Project i body)))
+              ((Body-contains-Body f i body))
+              :ruleset fast-analyses)
+    
+(ruleset subst) (ruleset shift)
+
+        (relation can-subst-Expr-beneath (Body Expr Expr))
+        (relation can-subst-Operand-beneath (Body Operand Operand))
+        (relation can-subst-Body-beneath (Body Body Body))
+        (relation can-subst-VecVecOperand-beneath (Body VecVecOperand VecVecOperand))
+        (relation can-subst-VecOperand-beneath (Body VecOperand VecOperand))
+
+        ;; Base case 'do the substitution' rules
+        (rule ((can-subst-Operand-beneath above from to)
+               (= above     (Theta from inputs outputs)))
+              ((union above (Theta to   inputs outputs)))
+              :ruleset subst)
+        (rule ((can-subst-VecOperand-beneath above from to)
+               (= above     (Theta pred inputs from)))
+              ((union above (Theta pred inputs to)))
+              :ruleset subst)
+        (rule ((can-subst-Operand-beneath above pred-from pred-to)
+               (can-subst-VecOperand-beneath above outputs-from outputs-to)
+               (= above     (Theta pred-from inputs outputs-from)))
+              ((union above (Theta pred-from inputs outputs-to)))
+              :ruleset subst)
+        (rule ((can-subst-VecVecOperand-beneath above from to)
+               (= above     (Gamma pred inputs from)))
+              ((union above (Gamma pred inputs to)))
+              :ruleset subst)
+        (rule ((can-subst-VecOperand-beneath above from to)
+               (= above     (OperandGroup from)))
+              ((union above (OperandGroup to)))
+              :ruleset subst)
+
+        ;; Learn can-subst-Operand-beneath
+        (rule ((can-subst-Body-beneath above from to)
+               (= new-from (Node from)))
+              ((can-subst-Operand-beneath above new-from (Node to)))
+              :ruleset subst)
+        (rule ((can-subst-Body-beneath above from to)
+               (= new-from (Project i from)))
+              ((can-subst-Operand-beneath above new-from (Project i to)))
+              :ruleset subst)
+
+        ;; Learn can-subst-body-beneath
+        (rule ((can-subst-Expr-beneath above from to)
+               (= new-from (PureOp from)))
+              ((can-subst-Body-beneath above new-from (PureOp to)))
+              :ruleset subst)
+        ;; Propagates up same context (Gamma: pred & inputs, Theta: inputs)
+        ;; rtjoa: Is it sound to propagate up outputs if we renumber args?
+        (rule ((can-subst-Operand-beneath above from to)
+               (= new-from (Gamma from inputs outputs)))
+              ((can-subst-Body-beneath above new-from (Gamma to inputs outputs)))
+              :ruleset subst)
+        (rule ((can-subst-VecOperand-beneath above from to)
+               (= new-from (Gamma pred from outputs)))
+              ((can-subst-Body-beneath above new-from (Gamma pred to outputs)))
+              :ruleset subst)
+        (rule ((can-subst-VecOperand-beneath above from to)
+               (= new-from (Theta pred from outputs)))
+              ((can-subst-Body-beneath above new-from (Theta pred to outputs)))
+              :ruleset subst)
+        (rule ((can-subst-VecOperand-beneath above from to)
+               (= new-from (OperandGroup from)))
+              ((can-subst-Body-beneath above new-from (OperandGroup to)))
+              :ruleset subst)
+        
+
+      (rule ((can-subst-VecOperand-beneath above from to)
+              (= new-from (Call ty f from n-outs)))
+             ((can-subst-Expr-beneath above new-from (Call ty f to n-outs)))
+            :ruleset subst)
+
+              (rule ((can-subst-Operand-beneath above from to)
+                      (= new-from (badd type from e2)))
+                     ((can-subst-Expr-beneath above new-from (badd type to e2)))
+                    :ruleset subst)
+              (rule ((can-subst-Operand-beneath above from to)
+                      (= new-from (badd type e1 from)))
+                     ((can-subst-Expr-beneath above new-from (badd type e1 to)))
+                    :ruleset subst)
+                     
+
+              (rule ((can-subst-Operand-beneath above from to)
+                      (= new-from (bsub type from e2)))
+                     ((can-subst-Expr-beneath above new-from (bsub type to e2)))
+                    :ruleset subst)
+              (rule ((can-subst-Operand-beneath above from to)
+                      (= new-from (bsub type e1 from)))
+                     ((can-subst-Expr-beneath above new-from (bsub type e1 to)))
+                    :ruleset subst)
+                     
+
+              (rule ((can-subst-Operand-beneath above from to)
+                      (= new-from (bmul type from e2)))
+                     ((can-subst-Expr-beneath above new-from (bmul type to e2)))
+                    :ruleset subst)
+              (rule ((can-subst-Operand-beneath above from to)
+                      (= new-from (bmul type e1 from)))
+                     ((can-subst-Expr-beneath above new-from (bmul type e1 to)))
+                    :ruleset subst)
+                     
+
+              (rule ((can-subst-Operand-beneath above from to)
+                      (= new-from (bdiv type from e2)))
+                     ((can-subst-Expr-beneath above new-from (bdiv type to e2)))
+                    :ruleset subst)
+              (rule ((can-subst-Operand-beneath above from to)
+                      (= new-from (bdiv type e1 from)))
+                     ((can-subst-Expr-beneath above new-from (bdiv type e1 to)))
+                    :ruleset subst)
+                     
+
+              (rule ((can-subst-Operand-beneath above from to)
+                      (= new-from (blt type from e2)))
+                     ((can-subst-Expr-beneath above new-from (blt type to e2)))
+                    :ruleset subst)
+              (rule ((can-subst-Operand-beneath above from to)
+                      (= new-from (blt type e1 from)))
+                     ((can-subst-Expr-beneath above new-from (blt type e1 to)))
+                    :ruleset subst)
+                     
+
+          (rule ((can-subst-Operand-beneath above from to)
+                 (= from (VecOperand-get (VO vec) i)))
+                ((can-subst-VecOperand-beneath
+                    above
+                    (VO vec)
+                    (VO (vec-set vec i to))))
+                :ruleset subst)
+
+          (rule ((can-subst-VecOperand-beneath above from to)
+                 (= from (VecVecOperand-get (VVO vec) i)))
+                ((can-subst-VecVecOperand-beneath
+                    above
+                    (VVO vec)
+                    (VVO (vec-set vec i to))))
+                :ruleset subst)
+(function SubstExpr (Expr i64 Operand) Expr :unextractable)
+(function SubstOperand (Operand i64 Operand) Operand :unextractable)
+(function SubstBody (Body i64 Operand) Body :unextractable)
+(function SubstVecOperand (VecOperand i64 Operand) VecOperand :unextractable)
+(function SubstVecVecOperand (VecVecOperand i64 Operand) VecVecOperand :unextractable)
+
+                (rewrite
+                    (SubstExpr (badd ty a b) x0 x1)
+                    (badd
+                        ty
+                        (SubstOperand a x0 x1)
+                        (SubstOperand b x0 x1))
+                    :ruleset subst)
+                     
+
+                (rewrite
+                    (SubstExpr (bsub ty a b) x0 x1)
+                    (bsub
+                        ty
+                        (SubstOperand a x0 x1)
+                        (SubstOperand b x0 x1))
+                    :ruleset subst)
+                     
+
+                (rewrite
+                    (SubstExpr (bmul ty a b) x0 x1)
+                    (bmul
+                        ty
+                        (SubstOperand a x0 x1)
+                        (SubstOperand b x0 x1))
+                    :ruleset subst)
+                     
+
+                (rewrite
+                    (SubstExpr (bdiv ty a b) x0 x1)
+                    (bdiv
+                        ty
+                        (SubstOperand a x0 x1)
+                        (SubstOperand b x0 x1))
+                    :ruleset subst)
+                     
+
+                (rewrite
+                    (SubstExpr (blt ty a b) x0 x1)
+                    (blt
+                        ty
+                        (SubstOperand a x0 x1)
+                        (SubstOperand b x0 x1))
+                    :ruleset subst)
+                     
+
+        (rewrite
+            (SubstExpr (Const ty ops lit) x0 x1)
+            (Const ty ops lit)
+            :ruleset subst)
+        (rewrite
+            (SubstExpr (Call ty f args n-outs) x0 x1)
+            (Call ty f (SubstVecOperand args x0 x1) n-outs)
+            :ruleset subst)
+        (rewrite
+            (SubstExpr (PRINT a b) x0 x1)
+            (PRINT (SubstOperand a x0 x1) (SubstOperand b x0 x1))
+            :ruleset subst)
+
+        (rewrite (SubstOperand (Arg x) x v) v :ruleset subst)
+        (rule ((= f (SubstOperand (Arg y) x v)) (!= y x))
+              ((union f (Arg y))) :ruleset subst)
+
+        (rewrite
+            (SubstOperand (Node b) x0 x1)
+            (Node (SubstBody b x0 x1))
+            :ruleset subst)
+        (rewrite
+            (SubstOperand (Project i b) x0 x1)
+            (Project i (SubstBody b x0 x1))
+            :ruleset subst)
+
+        (rewrite
+            (SubstBody (PureOp e) x0 x1)
+            (PureOp (SubstExpr e x0 x1))
+            :ruleset subst)
+        ;; Don't cross regions, so so we shift into the inputs but not outputs
+        ;; A Gamma's pred is on the outside, so it's affected, but not a Theta's
+        (rewrite
+            (SubstBody (Gamma pred inputs outputs) x0 x1)
+            (Gamma
+                (SubstOperand pred x0 x1)
+                (SubstVecOperand inputs x0 x1)
+                outputs)
+            :ruleset subst)
+        (rewrite
+            (SubstBody (Theta pred inputs outputs) x0 x1)
+            (Theta pred (SubstVecOperand inputs x0 x1) outputs)
+            :ruleset subst)
+
+            (function SubstVecOperand-helper (VecOperand i64 Operand i64) VecOperand)
+            (rewrite
+                (SubstVecOperand vec x0 x1)
+                (SubstVecOperand-helper vec x0 x1 0)
+                :ruleset subst)
+            (rule
+                ((= f (SubstVecOperand-helper (VO vec) x0 x1 i))
+                 (< i (vec-length vec)))
+                ((union
+                    (SubstVecOperand-helper (VO vec) x0 x1 i)
+                    (SubstVecOperand-helper
+                        (VO (vec-set vec i (SubstOperand (vec-get vec i) x0 x1)))
+                        x0 x1 (+ i 1))))
+                :ruleset subst)
+            (rule
+                ((= f (SubstVecOperand-helper (VO vec) x0 x1 i))
+                 (= i (vec-length vec)))
+                ((union
+                    (SubstVecOperand-helper (VO vec) x0 x1 i)
+                    (VO vec)))
+                :ruleset subst)
+
+            (function SubstVecVecOperand-helper (VecVecOperand i64 Operand i64) VecVecOperand)
+            (rewrite
+                (SubstVecVecOperand vec x0 x1)
+                (SubstVecVecOperand-helper vec x0 x1 0)
+                :ruleset subst)
+            (rule
+                ((= f (SubstVecVecOperand-helper (VVO vec) x0 x1 i))
+                 (< i (vec-length vec)))
+                ((union
+                    (SubstVecVecOperand-helper (VVO vec) x0 x1 i)
+                    (SubstVecVecOperand-helper
+                        (VVO (vec-set vec i (SubstVecOperand (vec-get vec i) x0 x1)))
+                        x0 x1 (+ i 1))))
+                :ruleset subst)
+            (rule
+                ((= f (SubstVecVecOperand-helper (VVO vec) x0 x1 i))
+                 (= i (vec-length vec)))
+                ((union
+                    (SubstVecVecOperand-helper (VVO vec) x0 x1 i)
+                    (VVO vec)))
+                :ruleset subst)
+(function SubstExprAll (Expr VecOperand) Expr :unextractable)
+(function SubstOperandAll (Operand VecOperand) Operand :unextractable)
+(function SubstBodyAll (Body VecOperand) Body :unextractable)
+(function SubstVecOperandAll (VecOperand VecOperand) VecOperand :unextractable)
+(function SubstVecVecOperandAll (VecVecOperand VecOperand) VecVecOperand :unextractable)
+
+                (rewrite
+                    (SubstExprAll (badd ty a b) x0)
+                    (badd
+                        ty
+                        (SubstOperandAll a x0)
+                        (SubstOperandAll b x0))
+                    :ruleset subst)
+                     
+
+                (rewrite
+                    (SubstExprAll (bsub ty a b) x0)
+                    (bsub
+                        ty
+                        (SubstOperandAll a x0)
+                        (SubstOperandAll b x0))
+                    :ruleset subst)
+                     
+
+                (rewrite
+                    (SubstExprAll (bmul ty a b) x0)
+                    (bmul
+                        ty
+                        (SubstOperandAll a x0)
+                        (SubstOperandAll b x0))
+                    :ruleset subst)
+                     
+
+                (rewrite
+                    (SubstExprAll (bdiv ty a b) x0)
+                    (bdiv
+                        ty
+                        (SubstOperandAll a x0)
+                        (SubstOperandAll b x0))
+                    :ruleset subst)
+                     
+
+                (rewrite
+                    (SubstExprAll (blt ty a b) x0)
+                    (blt
+                        ty
+                        (SubstOperandAll a x0)
+                        (SubstOperandAll b x0))
+                    :ruleset subst)
+                     
+
+        (rewrite
+            (SubstExprAll (Const ty ops lit) x0)
+            (Const ty ops lit)
+            :ruleset subst)
+        (rewrite
+            (SubstExprAll (Call ty f args n-outs) x0)
+            (Call ty f (SubstVecOperandAll args x0) n-outs)
+            :ruleset subst)
+        (rewrite
+            (SubstExprAll (PRINT a b) x0)
+            (PRINT (SubstOperandAll a x0) (SubstOperandAll b x0))
+            :ruleset subst)
+
+        (rule ((= f (SubstOperandAll (Arg x) (VO ops)))
+               (< x (vec-length ops)))
+              ((union f (vec-get ops x))) :ruleset subst)
+
+        (rewrite
+            (SubstOperandAll (Node b) x0)
+            (Node (SubstBodyAll b x0))
+            :ruleset subst)
+        (rewrite
+            (SubstOperandAll (Project i b) x0)
+            (Project i (SubstBodyAll b x0))
+            :ruleset subst)
+
+        (rewrite
+            (SubstBodyAll (PureOp e) x0)
+            (PureOp (SubstExprAll e x0))
+            :ruleset subst)
+        ;; Don't cross regions, so so we shift into the inputs but not outputs
+        ;; A Gamma's pred is on the outside, so it's affected, but not a Theta's
+        (rewrite
+            (SubstBodyAll (Gamma pred inputs outputs) x0)
+            (Gamma
+                (SubstOperandAll pred x0)
+                (SubstVecOperandAll inputs x0)
+                outputs)
+            :ruleset subst)
+        (rewrite
+            (SubstBodyAll (Theta pred inputs outputs) x0)
+            (Theta pred (SubstVecOperandAll inputs x0) outputs)
+            :ruleset subst)
+
+            (function SubstVecOperandAll-helper (VecOperand VecOperand i64) VecOperand)
+            (rewrite
+                (SubstVecOperandAll vec x0)
+                (SubstVecOperandAll-helper vec x0 0)
+                :ruleset subst)
+            (rule
+                ((= f (SubstVecOperandAll-helper (VO vec) x0 i))
+                 (< i (vec-length vec)))
+                ((union
+                    (SubstVecOperandAll-helper (VO vec) x0 i)
+                    (SubstVecOperandAll-helper
+                        (VO (vec-set vec i (SubstOperandAll (vec-get vec i) x0)))
+                        x0 (+ i 1))))
+                :ruleset subst)
+            (rule
+                ((= f (SubstVecOperandAll-helper (VO vec) x0 i))
+                 (= i (vec-length vec)))
+                ((union
+                    (SubstVecOperandAll-helper (VO vec) x0 i)
+                    (VO vec)))
+                :ruleset subst)
+
+            (function SubstVecVecOperandAll-helper (VecVecOperand VecOperand i64) VecVecOperand)
+            (rewrite
+                (SubstVecVecOperandAll vec x0)
+                (SubstVecVecOperandAll-helper vec x0 0)
+                :ruleset subst)
+            (rule
+                ((= f (SubstVecVecOperandAll-helper (VVO vec) x0 i))
+                 (< i (vec-length vec)))
+                ((union
+                    (SubstVecVecOperandAll-helper (VVO vec) x0 i)
+                    (SubstVecVecOperandAll-helper
+                        (VVO (vec-set vec i (SubstVecOperandAll (vec-get vec i) x0)))
+                        x0 (+ i 1))))
+                :ruleset subst)
+            (rule
+                ((= f (SubstVecVecOperandAll-helper (VVO vec) x0 i))
+                 (= i (vec-length vec)))
+                ((union
+                    (SubstVecVecOperandAll-helper (VVO vec) x0 i)
+                    (VVO vec)))
+                :ruleset subst)
+(function ShiftExpr (Expr i64 i64) Expr :unextractable)
+(function ShiftOperand (Operand i64 i64) Operand :unextractable)
+(function ShiftBody (Body i64 i64) Body :unextractable)
+(function ShiftVecOperand (VecOperand i64 i64) VecOperand :unextractable)
+(function ShiftVecVecOperand (VecVecOperand i64 i64) VecVecOperand :unextractable)
+
+                (rewrite
+                    (ShiftExpr (badd ty a b) x0 x1)
+                    (badd
+                        ty
+                        (ShiftOperand a x0 x1)
+                        (ShiftOperand b x0 x1))
+                    :ruleset shift)
+                     
+
+                (rewrite
+                    (ShiftExpr (bsub ty a b) x0 x1)
+                    (bsub
+                        ty
+                        (ShiftOperand a x0 x1)
+                        (ShiftOperand b x0 x1))
+                    :ruleset shift)
+                     
+
+                (rewrite
+                    (ShiftExpr (bmul ty a b) x0 x1)
+                    (bmul
+                        ty
+                        (ShiftOperand a x0 x1)
+                        (ShiftOperand b x0 x1))
+                    :ruleset shift)
+                     
+
+                (rewrite
+                    (ShiftExpr (bdiv ty a b) x0 x1)
+                    (bdiv
+                        ty
+                        (ShiftOperand a x0 x1)
+                        (ShiftOperand b x0 x1))
+                    :ruleset shift)
+                     
+
+                (rewrite
+                    (ShiftExpr (blt ty a b) x0 x1)
+                    (blt
+                        ty
+                        (ShiftOperand a x0 x1)
+                        (ShiftOperand b x0 x1))
+                    :ruleset shift)
+                     
+
+        (rewrite
+            (ShiftExpr (Const ty ops lit) x0 x1)
+            (Const ty ops lit)
+            :ruleset shift)
+        (rewrite
+            (ShiftExpr (Call ty f args n-outs) x0 x1)
+            (Call ty f (ShiftVecOperand args x0 x1) n-outs)
+            :ruleset shift)
+        (rewrite
+            (ShiftExpr (PRINT a b) x0 x1)
+            (PRINT (ShiftOperand a x0 x1) (ShiftOperand b x0 x1))
+            :ruleset shift)
+
+        (rule ((= f (ShiftOperand (Arg x) last-unshifted amt)) (<= x last-unshifted))
+              ((union f (Arg x))) :ruleset shift)
+        (rule ((= f (ShiftOperand (Arg x) last-unshifted amt)) (> x last-unshifted))
+              ((union f (Arg (+ x amt)))) :ruleset shift)
+
+        (rewrite
+            (ShiftOperand (Node b) x0 x1)
+            (Node (ShiftBody b x0 x1))
+            :ruleset shift)
+        (rewrite
+            (ShiftOperand (Project i b) x0 x1)
+            (Project i (ShiftBody b x0 x1))
+            :ruleset shift)
+
+        (rewrite
+            (ShiftBody (PureOp e) x0 x1)
+            (PureOp (ShiftExpr e x0 x1))
+            :ruleset shift)
+        ;; Don't cross regions, so so we shift into the inputs but not outputs
+        ;; A Gamma's pred is on the outside, so it's affected, but not a Theta's
+        (rewrite
+            (ShiftBody (Gamma pred inputs outputs) x0 x1)
+            (Gamma
+                (ShiftOperand pred x0 x1)
+                (ShiftVecOperand inputs x0 x1)
+                outputs)
+            :ruleset shift)
+        (rewrite
+            (ShiftBody (Theta pred inputs outputs) x0 x1)
+            (Theta pred (ShiftVecOperand inputs x0 x1) outputs)
+            :ruleset shift)
+
+            (function ShiftVecOperand-helper (VecOperand i64 i64 i64) VecOperand)
+            (rewrite
+                (ShiftVecOperand vec x0 x1)
+                (ShiftVecOperand-helper vec x0 x1 0)
+                :ruleset shift)
+            (rule
+                ((= f (ShiftVecOperand-helper (VO vec) x0 x1 i))
+                 (< i (vec-length vec)))
+                ((union
+                    (ShiftVecOperand-helper (VO vec) x0 x1 i)
+                    (ShiftVecOperand-helper
+                        (VO (vec-set vec i (ShiftOperand (vec-get vec i) x0 x1)))
+                        x0 x1 (+ i 1))))
+                :ruleset shift)
+            (rule
+                ((= f (ShiftVecOperand-helper (VO vec) x0 x1 i))
+                 (= i (vec-length vec)))
+                ((union
+                    (ShiftVecOperand-helper (VO vec) x0 x1 i)
+                    (VO vec)))
+                :ruleset shift)
+
+            (function ShiftVecVecOperand-helper (VecVecOperand i64 i64 i64) VecVecOperand)
+            (rewrite
+                (ShiftVecVecOperand vec x0 x1)
+                (ShiftVecVecOperand-helper vec x0 x1 0)
+                :ruleset shift)
+            (rule
+                ((= f (ShiftVecVecOperand-helper (VVO vec) x0 x1 i))
+                 (< i (vec-length vec)))
+                ((union
+                    (ShiftVecVecOperand-helper (VVO vec) x0 x1 i)
+                    (ShiftVecVecOperand-helper
+                        (VVO (vec-set vec i (ShiftVecOperand (vec-get vec i) x0 x1)))
+                        x0 x1 (+ i 1))))
+                :ruleset shift)
+            (rule
+                ((= f (ShiftVecVecOperand-helper (VVO vec) x0 x1 i))
+                 (= i (vec-length vec)))
+                ((union
+                    (ShiftVecVecOperand-helper (VVO vec) x0 x1 i)
+                    (VVO vec)))
+                :ruleset shift)
+;; ####################################
+;; implementation of PassThroughArguments
+;; Creates a vec of arguments
+;; (vec-of (Arg 0) (Arg 1) ...) with length i
+(function PassThroughArguments (i64) VecOperand :unextractable)
+
+
+
+;; (how many arguments to generate, vector so far)
+(function PassThroughArgumentsHelper (i64 VecOperand) VecOperand :unextractable)
+
+(rewrite (PassThroughArguments i)
+  (PassThroughArgumentsHelper i (VO (vec-of)))
+  :ruleset subst)
+
+(rule ((= lhs (PassThroughArgumentsHelper i (VO rest)))
+       (< (vec-length rest) i))
+      ((union lhs
+        (PassThroughArgumentsHelper i
+            (VO (vec-push rest (Arg (vec-length rest)))))))
+      :ruleset subst)
+
+(rule ((= lhs (PassThroughArgumentsHelper i (VO rest)))
+       (= (vec-length rest) i))
+      ((union lhs (VO rest)))
+      :ruleset subst)
+
+
+
+;; Project each argument out of a body
+(function BodyToVecOperand (i64 Body) VecOperand :unextractable)
+;; current index, body length, body, and vector so far
+(function BodyToVecOperandHelper (i64 i64 Body VecOperandBase) VecOperand :unextractable)
+
+(rewrite (BodyToVecOperand body-len body)
+         (BodyToVecOperandHelper 0 body-len body (vec-of)))
+(rule
+  ((= helper (BodyToVecOperandHelper index body-len body so-far))
+   (< index body-len))
+  ((union helper
+          (BodyToVecOperandHelper (+ index 1) body-len body
+                                  (vec-push so-far 
+                                   (Project index body)))))
+  :ruleset subst)
+
+(rule
+  ((= helper (BodyToVecOperandHelper index body-len body so-far))
+   (= index body-len))
+  ((union helper (VO so-far)))
+  :ruleset subst)
+
+
+
+;; constant_fold.rs adds most constant folding operations
+;; this file is for special cases
+
+
+;; eliminate gamma nodes for true and false cases
+(rule ((= gamma
+          ;; gamma predicate is true
+          (Gamma (Node (PureOp (Const (BoolT) (const) (Bool true))))
+                 inputs
+                 (VVO outputs))))
+      (
+        ;; replace use of the gamma with
+        ;; the true case
+        (union
+          gamma
+          (OperandGroup
+              (SubstVecOperandAll
+                (vec-get outputs 1)
+                inputs)))))
+
+
+
+(rule ((= gamma
+          ;; gamma predicate is false
+          (Gamma (Node (PureOp (Const (BoolT) (const) (Bool false))))
+                 inputs
+                 (VVO outputs))))
+      (
+        ;; replace use of the gamma with
+        ;; the false case
+        (union
+          gamma
+          (OperandGroup
+              (SubstVecOperandAll (vec-get outputs 0) inputs)))))
+
+;; Eliminate theta
+;; Unroll one layer and get rid of loop
+(rule ((= theta
+          ;; gamma predicate is false
+          (Theta (Node (PureOp (Const (BoolT) (const) (Bool false))))
+                 (VO inputs)
+                 (VO outputs))))
+      ((let after-one-iter (SubstVecOperandAll (VO outputs) (VO inputs)))
+       (union theta
+          (OperandGroup after-one-iter))))
+
+
+
+
+
+(rewrite (badd output_type
+                    (Node (PureOp (Const ty2 (const) (Num n1))))
+                    (Node (PureOp (Const ty3 (const) (Num n2)))))
+                  (Const output_type (const) (Num (+ n1 n2))))
+(rewrite (bsub output_type
+                    (Node (PureOp (Const ty2 (const) (Num n1))))
+                    (Node (PureOp (Const ty3 (const) (Num n2)))))
+                  (Const output_type (const) (Num (- n1 n2))))
+(rewrite (bmul output_type
+                    (Node (PureOp (Const ty2 (const) (Num n1))))
+                    (Node (PureOp (Const ty3 (const) (Num n2)))))
+                  (Const output_type (const) (Num (* n1 n2))))
+(rewrite (bdiv output_type
+                    (Node (PureOp (Const ty2 (const) (Num n1))))
+                    (Node (PureOp (Const ty3 (const) (Num n2)))))
+                  (Const output_type (const) (Num (/ n1 n2))))
+(rewrite (blt output_type
+                  (Node (PureOp (Const ty2 (const) (Num n1))))
+                  (Node (PureOp (Const ty3 (const) (Num n2)))))
+                (Const output_type (const) (Bool (bool-< n1 n2))))
+(sort TermAndCost)
+(function Smaller (TermAndCost TermAndCost) TermAndCost)
+
+;; manual, bottom-up extraction of terms using this function
+(function ExtractedExpr (Expr) TermAndCost
+            :merge (Smaller old new))
+;; Store a term and its cost for this type
+(function ExprAndCost (Expr i64) TermAndCost)
+
+;; Perform smaller using the next two rules
+(rule ((= lhs (Smaller (ExprAndCost t1 cost1)
+                       (ExprAndCost t2 cost2)))
+       (<= cost1 cost2))
+      ((union lhs (ExprAndCost t1 cost1)))
+       :ruleset fast-analyses)
+  
+(rule ((= lhs (Smaller (ExprAndCost t1 cost1)
+                       (ExprAndCost t2 cost2)))
+       (> cost1 cost2))
+      ((union lhs (ExprAndCost t2 cost2)))
+       :ruleset fast-analyses)
+
+
+;; manual, bottom-up extraction of terms using this function
+(function ExtractedOperand (Operand) TermAndCost
+            :merge (Smaller old new))
+;; Store a term and its cost for this type
+(function OperandAndCost (Operand i64) TermAndCost)
+
+;; Perform smaller using the next two rules
+(rule ((= lhs (Smaller (OperandAndCost t1 cost1)
+                       (OperandAndCost t2 cost2)))
+       (<= cost1 cost2))
+      ((union lhs (OperandAndCost t1 cost1)))
+       :ruleset fast-analyses)
+  
+(rule ((= lhs (Smaller (OperandAndCost t1 cost1)
+                       (OperandAndCost t2 cost2)))
+       (> cost1 cost2))
+      ((union lhs (OperandAndCost t2 cost2)))
+       :ruleset fast-analyses)
+
+
+;; manual, bottom-up extraction of terms using this function
+(function ExtractedBody (Body) TermAndCost
+            :merge (Smaller old new))
+;; Store a term and its cost for this type
+(function BodyAndCost (Body i64) TermAndCost)
+
+;; Perform smaller using the next two rules
+(rule ((= lhs (Smaller (BodyAndCost t1 cost1)
+                       (BodyAndCost t2 cost2)))
+       (<= cost1 cost2))
+      ((union lhs (BodyAndCost t1 cost1)))
+       :ruleset fast-analyses)
+  
+(rule ((= lhs (Smaller (BodyAndCost t1 cost1)
+                       (BodyAndCost t2 cost2)))
+       (> cost1 cost2))
+      ((union lhs (BodyAndCost t2 cost2)))
+       :ruleset fast-analyses)
+
+
+;; manual, bottom-up extraction of terms using this function
+(function ExtractedVecOperand (VecOperand) TermAndCost
+            :merge (Smaller old new))
+;; Store a term and its cost for this type
+(function VecOperandAndCost (VecOperand i64) TermAndCost)
+
+;; Perform smaller using the next two rules
+(rule ((= lhs (Smaller (VecOperandAndCost t1 cost1)
+                       (VecOperandAndCost t2 cost2)))
+       (<= cost1 cost2))
+      ((union lhs (VecOperandAndCost t1 cost1)))
+       :ruleset fast-analyses)
+  
+(rule ((= lhs (Smaller (VecOperandAndCost t1 cost1)
+                       (VecOperandAndCost t2 cost2)))
+       (> cost1 cost2))
+      ((union lhs (VecOperandAndCost t2 cost2)))
+       :ruleset fast-analyses)
+
+
+;; manual, bottom-up extraction of terms using this function
+(function ExtractedVecVecOperand (VecVecOperand) TermAndCost
+            :merge (Smaller old new))
+;; Store a term and its cost for this type
+(function VecVecOperandAndCost (VecVecOperand i64) TermAndCost)
+
+;; Perform smaller using the next two rules
+(rule ((= lhs (Smaller (VecVecOperandAndCost t1 cost1)
+                       (VecVecOperandAndCost t2 cost2)))
+       (<= cost1 cost2))
+      ((union lhs (VecVecOperandAndCost t1 cost1)))
+       :ruleset fast-analyses)
+  
+(rule ((= lhs (Smaller (VecVecOperandAndCost t1 cost1)
+                       (VecVecOperandAndCost t2 cost2)))
+       (> cost1 cost2))
+      ((union lhs (VecVecOperandAndCost t2 cost2)))
+       :ruleset fast-analyses)
+
+
+(rule ((= lhs (badd ty a b))
+       (= (OperandAndCost expr1 cost1) (ExtractedOperand a))
+       (= (OperandAndCost expr2 cost2) (ExtractedOperand b)))
+      ((set (ExtractedExpr lhs)
+            (ExprAndCost (badd ty expr1 expr2)
+                         (+ 1 (+ cost1 cost2)))))
+        :ruleset fast-analyses)
+
+
+(rule ((= lhs (bsub ty a b))
+       (= (OperandAndCost expr1 cost1) (ExtractedOperand a))
+       (= (OperandAndCost expr2 cost2) (ExtractedOperand b)))
+      ((set (ExtractedExpr lhs)
+            (ExprAndCost (bsub ty expr1 expr2)
+                         (+ 1 (+ cost1 cost2)))))
+        :ruleset fast-analyses)
+
+
+(rule ((= lhs (bmul ty a b))
+       (= (OperandAndCost expr1 cost1) (ExtractedOperand a))
+       (= (OperandAndCost expr2 cost2) (ExtractedOperand b)))
+      ((set (ExtractedExpr lhs)
+            (ExprAndCost (bmul ty expr1 expr2)
+                         (+ 1 (+ cost1 cost2)))))
+        :ruleset fast-analyses)
+
+
+(rule ((= lhs (bdiv ty a b))
+       (= (OperandAndCost expr1 cost1) (ExtractedOperand a))
+       (= (OperandAndCost expr2 cost2) (ExtractedOperand b)))
+      ((set (ExtractedExpr lhs)
+            (ExprAndCost (bdiv ty expr1 expr2)
+                         (+ 1 (+ cost1 cost2)))))
+        :ruleset fast-analyses)
+
+
+(rule ((= lhs (blt ty a b))
+       (= (OperandAndCost expr1 cost1) (ExtractedOperand a))
+       (= (OperandAndCost expr2 cost2) (ExtractedOperand b)))
+      ((set (ExtractedExpr lhs)
+            (ExprAndCost (blt ty expr1 expr2)
+                         (+ 1 (+ cost1 cost2)))))
+        :ruleset fast-analyses)
+
+
+(rule ((= lhs (PRINT a b))
+        (= (OperandAndCost expr1 cost1) (ExtractedOperand a))
+        (= (OperandAndCost expr2 cost2) (ExtractedOperand b)))
+      ((set (ExtractedExpr lhs)
+            (ExprAndCost (PRINT expr1 expr2)
+                         (+ 1 (+ cost1 cost2)))))
+      :ruleset fast-analyses)
+
+;; TODO fix this HACK
+;; this is how we get an empty vector of vectors in egglog because of
+;; typechecking bug in egglog https://github.com/egraphs-good/egglog/issues/113
+(let empty-vvo 
+  (vec-pop (vec-of (VO (vec-of)))))
+
+
+(function ExtractedVecOperandHelper (VecOperand i64) TermAndCost :merge (Smaller old new))
+
+;; base case: extract nothing
+(rule
+   ((VO vec))
+   ((set (ExtractedVecOperandHelper (VO vec) 0)
+         (VecOperandAndCost (VO (vec-of)) 0)))
+    :ruleset fast-analyses)
+
+;; extract one more thing
+(rule
+   ((= (VecOperandAndCost (VO current) current-cost)
+       (ExtractedVecOperandHelper (VO vec) index))
+    (< index (vec-length vec))
+    (= (ExtractedOperand (VecOperand-get (VO vec) index)) (OperandAndCost expr expr-cost)))
+   ((set (ExtractedVecOperandHelper (VO vec) (+ index 1))
+         (VecOperandAndCost
+             (VO (vec-push current expr))
+             (+ current-cost expr-cost))))
+    :ruleset fast-analyses)
+    
+
+            
+;; finished extracting, create result
+(rule
+  ((= result
+      (ExtractedVecOperandHelper (VO vec) index))
+   ;; at the end
+   (= index (vec-length vec)))
+  ((set (ExtractedVecOperand (VO vec))
+        result))
+  :ruleset fast-analyses)
+      
+
+(function ExtractedVecVecOperandHelper (VecVecOperand i64) TermAndCost :merge (Smaller old new))
+
+;; base case: extract nothing
+(rule
+   ((VVO vec))
+   ((set (ExtractedVecVecOperandHelper (VVO vec) 0)
+         (VecVecOperandAndCost (VVO empty-vvo) 0)))
+    :ruleset fast-analyses)
+
+;; extract one more thing
+(rule
+   ((= (VecVecOperandAndCost (VVO current) current-cost)
+       (ExtractedVecVecOperandHelper (VVO vec) index))
+    (< index (vec-length vec))
+    (= (ExtractedVecOperand (VecVecOperand-get (VVO vec) index)) (VecOperandAndCost expr expr-cost)))
+   ((set (ExtractedVecVecOperandHelper (VVO vec) (+ index 1))
+         (VecVecOperandAndCost
+             (VVO (vec-push current expr))
+             (+ current-cost expr-cost))))
+    :ruleset fast-analyses)
+    
+
+            
+;; finished extracting, create result
+(rule
+  ((= result
+      (ExtractedVecVecOperandHelper (VVO vec) index))
+   ;; at the end
+   (= index (vec-length vec)))
+  ((set (ExtractedVecVecOperand (VVO vec))
+        result))
+  :ruleset fast-analyses)
+      
+
+;; Constant gets cost of 1
+(rule
+  ((= lhs (Const ty ops lit)))
+  ((set (ExtractedExpr lhs) (ExprAndCost lhs 1)))
+  :ruleset fast-analyses)
+
+;; arg gets cost of 1
+(rule
+  ((= lhs (Arg index)))
+  ((set (ExtractedOperand lhs) (OperandAndCost lhs 1)))
+  :ruleset fast-analyses)
+
+
+;; PureOp doesn't add cost
+(rule
+  ((= lhs (PureOp expr))
+   (= (ExprAndCost expr-extracted expr-cost)
+      (ExtractedExpr expr)))
+   ((set (ExtractedBody lhs) (BodyAndCost (PureOp expr-extracted) expr-cost)))
+    :ruleset fast-analyses)
+
+;; Nor does Node
+(rule
+  ((= lhs (Node body))
+   (= (BodyAndCost body-extracted body-cost)
+      (ExtractedBody body)))
+   ((set (ExtractedOperand lhs) (OperandAndCost (Node body-extracted) body-cost)))
+    :ruleset fast-analyses)
+
+;; Theta gets a cost of 1 for now
+(rule
+  ((= lhs (Theta pred inputs outputs))
+   (= (OperandAndCost pred-extracted pred-cost)
+      (ExtractedOperand pred))
+   (= (VecOperandAndCost inputs-extracted inputs-cost)
+      (ExtractedVecOperand inputs))
+   (= (VecOperandAndCost outputs-extracted outputs-cost)
+      (ExtractedVecOperand outputs)))
+   ((set (ExtractedBody lhs)
+         (BodyAndCost
+            (Theta pred-extracted inputs-extracted outputs-extracted)
+            (+ 1 (+ pred-cost (+ inputs-cost outputs-cost))))))
+    :ruleset fast-analyses)
+
+;; Gamma gets a cost of 1 for now
+(rule
+  ((= lhs (Gamma pred inputs outputs))
+   (= (OperandAndCost pred-extracted pred-cost)
+      (ExtractedOperand pred))
+   (= (VecOperandAndCost inputs-extracted inputs-cost)
+      (ExtractedVecOperand inputs))
+   (= (VecVecOperandAndCost outputs-extracted outputs-cost)
+      (ExtractedVecVecOperand outputs)))
+  ((set (ExtractedBody lhs)
+        (BodyAndCost
+          (Gamma pred-extracted inputs-extracted outputs-extracted)
+          (+ 1 (+ pred-cost (+ inputs-cost outputs-cost))))))
+    :ruleset fast-analyses)
+
+
+;; Project is also free
+(rule ((= lhs (Project index body))
+       (= (BodyAndCost body-extracted body-cost)
+          (ExtractedBody body)))
+      ((set (ExtractedOperand lhs)
+            (OperandAndCost (Project index body-extracted) body-cost)))
+      :ruleset fast-analyses)
+        
+
+
+;; If a theta passes along argument,
+;; can extract the input instead.
+(rule ((= lhs (Project index loop))
+        (= loop (Theta pred inputs outputs))
+        (= (VecOperand-get outputs index) (Arg index))
+        (= passedthrough (ExtractedOperand (VecOperand-get inputs index)))
+      )
+      ((set (ExtractedOperand lhs) passedthrough))
+      :ruleset fast-analyses)
+
+;; If a gamma passes along an argument in both branches,
+;; extract the input instead.
+(rule ((= lhs (Project index loop))
+       (= loop (Gamma pred inputs outputs))
+       (= outputs (VVO outputs-inner))
+       (= 2 (vec-length outputs-inner))
+       (= outputs0 (VecVecOperand-get outputs 0))
+       (= outputs1 (VecVecOperand-get outputs 1))
+       (= (VecOperand-get outputs0 index) (Arg index))
+       (= (VecOperand-get outputs1 index) (Arg index))
+       (= passedthrough (ExtractedOperand (VecOperand-get inputs index))))
+      ((set (ExtractedOperand lhs) passedthrough))
+      :ruleset fast-analyses)
+
+
+;; if we reach a new context, union
+(rule ((= theta (Theta pred inputs outputs))
+       (= (BodyAndCost extracted cost)
+          (ExtractedBody theta)))
+      ((union theta extracted))
+      :ruleset fast-analyses)
+(rule ((= gamma (Gamma pred inputs outputs))
+       (= (BodyAndCost extracted cost)
+          (ExtractedBody gamma)))
+      ((union gamma extracted))
+      :ruleset fast-analyses)
+
+
+;; if we reach the function at the top level, union
+(rule ((= func (Func name intypes outtypes body))
+       (= (VecOperandAndCost extracted cost)
+          (ExtractedVecOperand body)))
+      ((union func
+              (Func name intypes outtypes extracted)))
+      :ruleset fast-analyses)
+        
+;;	if a && b:
+;;		A
+;;	else:
+;;		B
+;; ----------
+;;	if a:
+;;		if b:
+;;			A
+;;		else:
+;;			B
+;;	else:
+;;		B
+(rule ((= gamma (Gamma (Node (PureOp (band BoolT a b))) (VO inputs) (VVO outputs)))
+       (= (vec-length outputs) 2)
+       (= (vec-get outputs 1) (VO A))
+       (= (vec-get outputs 0) (VO B))
+       (= args (vec-length inputs))
+       (= rets (vec-length B)))
+      ((let inner (Gamma (Arg args) ; we pass b as an extra argument to the outer gamma
+                         (PassThroughArguments args)
+                         (VVO (vec-of (VO B)
+                                      (VO A)))))
+       (union gamma (Gamma a
+                           (VO (vec-push inputs b)) ; pass b as an extra argument
+                           (VVO (vec-of (VO B)
+                                        (BodyToVecOperand rets inner)))))))
+
+;;	if a || b:
+;;		A
+;;	else:
+;;		B
+;; -----------
+;;	if a:
+;;		A
+;;	else:
+;;		if b:
+;;			A
+;;		else:
+;;			B
+(rule ((= gamma (Gamma (Node (PureOp (bor BoolT a b))) (VO inputs) (VVO outputs)))
+       (= (vec-length outputs) 2)
+       (= (vec-get outputs 1) (VO A))
+       (= (vec-get outputs 0) (VO B))
+       (= args (vec-length inputs))
+       (= rets (vec-length B)))
+      ((let inner (Gamma (Arg args) ; we pass b as an extra argument to the outer gamma
+                         (PassThroughArguments args)
+                         (VVO (vec-of (VO B)
+                                      (VO A)))))
+       (union gamma (Gamma a
+                           (VO (vec-push inputs b)) ; pass b as an extra argument
+                           (VVO (vec-of (BodyToVecOperand rets inner)
+                                        (VO A)))))))
+
+;;	if a:
+;;		A
+;;	else:
+;;		A
+;; ------
+;;	A
+(rule ((= gamma (Gamma condition inputs (VVO outputs)))
+       (= (vec-length outputs) 2)
+       (= (vec-get outputs 0) (vec-get outputs 1)))
+      ((union gamma (OperandGroup (SubstVecOperandAll (vec-get outputs 0) inputs)))))
+
+
+;; unroll loops
+(rule ((= theta (Theta pred (VO inputs) (VO outputs))))
+                          ;;            arguments body
+      ((let after-one-iter
+         (SubstVecOperandAll (VO outputs) (VO inputs)))
+       ;; (vec-of (Arg 0) (Arg 1) ...)
+       (let pass-through (PassThroughArguments (vec-length outputs)))
+       (union theta
+          (Gamma
+            (SubstOperandAll pred after-one-iter)
+            after-one-iter
+            (VVO
+              (vec-of
+                ;; in the false case, we are done
+                pass-through
+                ;; otherwise do the rest of the loop
+                (BodyToVecOperand
+                (vec-length outputs)
+                (Theta pred pass-through
+                            (VO outputs)))))))))
+
+
+
+(datatype Interval
+  (BoolI bool bool)
+  (IntI i64 i64)
+  (interval-intersect Interval Interval)
+  (interval-union Interval Interval))
+
+
+(rewrite (interval-intersect (IntI la ha) (IntI lb hb))
+      (IntI (max la lb) (min ha hb)))
+(rewrite (interval-union (IntI la ha) (IntI lb hb))
+      (IntI (min la lb) (max ha hb)))
+
+(rewrite (interval-intersect (BoolI la ha) (BoolI lb hb))
+      (BoolI (or la lb) (and ha hb)))
+(rewrite (interval-union (BoolI la ha) (BoolI lb hb))
+      (BoolI (and la lb) (or ha hb)))
+
+(function ival (Operand) Interval
+  :merge (interval-intersect old new))
+
+; context-specific intervals (because Args need to have interval analysis but are not globally unique)
+(function context-ival (Operand Body) Interval
+  :merge (interval-intersect old new))
+
+(rule ((= lhs (Node (PureOp (Const (BoolT) (const) (Bool b))))))
+      ((set (ival lhs) (BoolI b b))))
+
+(rule ((= lhs (Node (PureOp (Const (IntT) (const) (Num n))))))
+      ((set (ival lhs) (IntI n n))))
+
+
+; < a b interval (< ha lb) (< la hb)
+(rule ((= lhs (Node (PureOp (blt (BoolT) a b))))
+       (= (IntI la ha) (ival a))
+       (= (IntI lb hb) (ival b)))
+      ((set (ival lhs) (BoolI (bool-< ha lb) (bool-< la hb)))))
+
+; Rule that unions intervals for a gamma
+(rule (
+        (= lhs (Project i (Gamma pred ins (VVO outs))))
+        (= (VO thens) (vec-get outs 1))
+        (= (VO elses) (vec-get outs 0))
+        (= thenival (ival (vec-get thens i)))
+        (= elseival (ival (vec-get elses i)))
+      )
+      (
+        (set (ival lhs) (interval-union thenival elseival))
+      )
+)
+
+; Eliminate gamma with interval analysis
+(rule (
+        (= gamma (Gamma pred inputs (VVO outputs)))
+        (= (BoolI true true) (ival pred))
+      )
+      (
+        (union gamma (OperandGroup (SubstVecOperandAll (vec-get outputs 1) inputs)))
+      )
+)
+(rule (
+        (= gamma (Gamma pred inputs (VVO outputs)))
+        (= (BoolI false false) (ival pred))
+      )
+      (
+        (union gamma (OperandGroup (SubstVecOperandAll (vec-get outputs 0) inputs)))
+      )
+)
+
+(rule  
+    (
+        ; Match on PureOp because all exprs are converted to bodies
+        ; Will refactor Call in the future
+        (= return (PureOp (Call ty name args num)) )
+        (Func name input-types output-types body)
+    )
+    ((
+        union 
+        return
+        (OperandGroup (SubstVecOperandAll body args))
+    ))
+)
+
+     (rule
+      ((= num (Node (PureOp (Const (IntT) (const) (Num n1)))))
+       (= lhs (badd (IntT) other num)))
+      ((union lhs (badd (IntT) num other))))
+
+     (rule
+      ((= num (Node (PureOp (Const (IntT) (const) (Num n1)))))
+       (= lhs (bmul (IntT) other num)))
+      ((union lhs (bmul (IntT) num other))))
+
+      (rule
+        ((= lhs (badd (IntT)
+                      (Node (PureOp (badd (IntT) a b)))
+                      c)))
+        ((union lhs
+                (badd (IntT)
+                      a
+                      (Node (PureOp (badd (IntT) b c)))))))
+      
+
+        (rule
+          ((= lhs (badd (IntT)
+                        a
+                        (Node (PureOp (badd (IntT) b c)))))
+           (= b (Node (PureOp (Const (IntT) (const) (Num n1)))))            
+          )
+          ((union lhs
+             (badd (IntT)
+                   b
+                   (Node (PureOp (badd (IntT) a c))))))               
+        )
+      
+
+      (rule
+        ((= lhs (badd (IntT)
+                      a
+                      (Node (PureOp (badd (IntT) b c)))))
+         (= a (Node (PureOp (Const (IntT) (const) (Num n1)))))
+         (= b (Node (PureOp (Const (IntT) (const) (Num n2))))))
+
+        ((union lhs
+          (badd (IntT)
+            (Node (PureOp (Const (IntT) (const) (Num (+ n1 n2)))))
+            c))))      
+
+
+(let v0 "main")
+(let v1 (IntT))
+(let v2 (Bril v1))
+(let v3 (PrintState))
+(let v4 (vec-of v2 v2 v3))
+(let v5 (vec-of v3))
+(let v6 1)
+(let v7 2)
+(let v8 (BoolT))
+(let v9 (Arg v6))
+(let v10 4)
+(let v11 (Arg v10))
+(let v12 (blt v8 v9 v11))
+(let v13 (PureOp v12))
+(let v14 (Node v13))
+(let v15 0)
+(let v16 (Arg v15))
+(let v17 (Arg v7))
+(let v18 3)
+(let v19 (Arg v18))
+(let v20 (vec-of v16 v9 v17 v19 v11))
+(let v21 (VO v20))
+(let v22 (const))
+(let v23 (Num v15))
+(let v24 (Const v1 v22 v23))
+(let v25 (PureOp v24))
+(let v26 (Node v25))
+(let v27 (vec-of v16 v9 v26 v17 v19 v11))
+(let v28 (VO v27))
+(let v29 (blt v8 v19 v11))
+(let v30 (PureOp v29))
+(let v31 (Node v30))
+(let v32 5)
+(let v33 (Arg v32))
+(let v34 (vec-of v16 v9 v17 v19 v11 v33))
+(let v35 (VO v34))
+(let v36 (vec-of v16 v9 v17 v26 v19 v11 v33))
+(let v37 (VO v36))
+(let v38 (bmul v1 v9 v11))
+(let v39 (PureOp v38))
+(let v40 (Node v39))
+(let v41 (badd v1 v40 v19))
+(let v42 (PureOp v41))
+(let v43 (Node v42))
+(let v44 (PRINT v43 v16))
+(let v45 (PureOp v44))
+(let v46 (Node v45))
+(let v47 (Num v6))
+(let v48 (Const v1 v22 v47))
+(let v49 (PureOp v48))
+(let v50 (Node v49))
+(let v51 (badd v1 v19 v17))
+(let v52 (PureOp v51))
+(let v53 (Node v52))
+(let v54 (vec-of v46 v9 v17 v50 v53 v11 v33))
+(let v55 (VO v54))
+(let v56 (vec-of v37 v55))
+(let v57 (VVO v56))
+(let v58 (Gamma v31 v35 v57))
+(let v59 (Project v18 v58))
+(let v60 (vec-of v16 v9 v17 v26 v19 v11))
+(let v61 (VO v60))
+(let v62 (Project v15 v58))
+(let v63 (Project v6 v58))
+(let v64 (Project v7 v58))
+(let v65 (Project v10 v58))
+(let v66 (Project v32 v58))
+(let v67 6)
+(let v68 (Project v67 v58))
+(let v69 (vec-of v62 v63 v64 v65 v66 v68))
+(let v70 (VO v69))
+(let v71 (Theta v59 v61 v70))
+(let v72 (Project v15 v71))
+(let v73 (Project v6 v71))
+(let v74 (Project v7 v71))
+(let v75 (badd v1 v73 v74))
+(let v76 (PureOp v75))
+(let v77 (Node v76))
+(let v78 (Project v10 v71))
+(let v79 (Project v32 v71))
+(let v80 (vec-of v72 v77 v50 v74 v78 v79))
+(let v81 (VO v80))
+(let v82 (vec-of v28 v81))
+(let v83 (VVO v82))
+(let v84 (Gamma v14 v21 v83))
+(let v85 (Project v7 v84))
+(let v86 (vec-of v17 v26 v50 v9 v16))
+(let v87 (VO v86))
+(let v88 (Project v15 v84))
+(let v89 (Project v6 v84))
+(let v90 (Project v18 v84))
+(let v91 (Project v10 v84))
+(let v92 (Project v32 v84))
+(let v93 (vec-of v88 v89 v90 v91 v92))
+(let v94 (VO v93))
+(let v95 (Theta v85 v87 v94))
+(let v96 (Project v6 v95))
+(let v97 (Project v15 v95))
+(let v98 (PRINT v96 v97))
+(let v99 (PureOp v98))
+(let v100 (Node v99))
+(let v101 (vec-of v100))
+(let v102 (VO v101))
+(let v103 (Func v0 v4 v5 v102))
+
+(run-schedule
+        (repeat 5 (saturate fast-analyses)
+                  (run)
+                  (saturate subst)))
