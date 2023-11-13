@@ -61,7 +61,7 @@ impl MapSort {
             "map-not-contains".into(),
             "map-contains".into(),
             "map-remove".into(),
-            "map-length".into()
+            "map-length".into(),
         ]
     }
 }
