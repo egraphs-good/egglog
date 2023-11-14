@@ -172,11 +172,21 @@ impl<'a> Extractor<'a> {
         }
         let cost = function.decl.cost.unwrap_or(1);
         costs.insert(value, cost);
+        let total = costs.values().sum::<Cost>();
 
-        Some(CostSet {
-            total: costs.values().sum::<Cost>(),
-            costs,
-            term: termdag.app(function.decl.name, new_children),
+        Some(if function.decl.is_context_wrapper {
+            let single_hashset = vec![(value, total)].into_iter().collect();
+            CostSet {
+                total,
+                costs: single_hashset,
+                term: termdag.app(function.decl.name, new_children),
+            }
+        } else {
+            CostSet {
+                total,
+                costs,
+                term: termdag.app(function.decl.name, new_children),
+            }
         })
     }
 

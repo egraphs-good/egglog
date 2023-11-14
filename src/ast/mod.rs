@@ -417,12 +417,19 @@ pub enum Command {
     ///
     /// ```text
     /// (function <name:Ident> <schema:Schema> <cost:Cost>
+    ///        (:context-wrapper)?
+    ///        (:unextractable)?
     ///        (:on_merge <List<Action>>)?
     ///        (:merge <Expr>)?
     ///        (:default <Expr>)?)
     ///```
     /// A function can have a `cost` for extraction.
     /// It can also have a `default` value, which is used when calling the function.
+    /// The `unextractable` tag prevents extraction from considering this function at all.
+    /// The `context-wrapper` tag tells extraction not to share common sub-expressions underneath
+    /// this function.
+    /// That means that a value like `(Add 1 2)` outside this function will be counted again, even if
+    /// it appears in this function.
     ///
     /// Finally, it can have a `merge` and `on_merge`, which are triggered when
     /// the function dependency is violated.
@@ -818,6 +825,7 @@ pub struct NormFunctionDecl {
     pub merge_action: Vec<NormAction>,
     pub cost: Option<usize>,
     pub unextractable: bool,
+    pub is_context_wrapper: bool,
 }
 
 impl NormFunctionDecl {
@@ -830,6 +838,7 @@ impl NormFunctionDecl {
             merge_action: self.merge_action.iter().map(|a| a.to_action()).collect(),
             cost: self.cost,
             unextractable: self.unextractable,
+            is_context_wrapper: self.is_context_wrapper,
         }
     }
 }
@@ -845,6 +854,7 @@ pub struct FunctionDecl {
     pub merge_action: Vec<Action>,
     pub cost: Option<usize>,
     pub unextractable: bool,
+    pub is_context_wrapper: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -899,6 +909,7 @@ impl FunctionDecl {
             default: Some(Expr::Lit(Literal::Unit)),
             cost: None,
             unextractable: false,
+            is_context_wrapper: false,
         }
     }
 }

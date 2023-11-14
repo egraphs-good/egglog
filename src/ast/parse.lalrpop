@@ -50,10 +50,11 @@ Command: Command = {
     LParen "sort" <name:Ident> LParen <head:Ident> <tail:(Expr)*> RParen RParen => Command::Sort (name, Some((head, tail))),
     LParen "sort" <name:Ident> RParen => Command::Sort (name, None),
     LParen "function" <name:Ident> <schema:Schema> <cost:Cost>
+        <context_wrapper:(":context-wrapper"?)>
         <unextractable:(":unextractable")?>
         <merge_action:(":on_merge" <List<Action>>)?>
         <merge:(":merge" <Expr>)?> <default:(":default" <Expr>)?> RParen => {
-        Command::Function(FunctionDecl { name, schema, merge, merge_action: merge_action.unwrap_or_default(), default, cost, unextractable: unextractable.is_some() })
+        Command::Function(FunctionDecl { name, schema, merge, merge_action: merge_action.unwrap_or_default(), default, cost, unextractable: unextractable.is_some(), is_context_wrapper: context_wrapper.is_some() })
     },
     LParen "declare" <name:Ident> <sort:Ident> RParen => Command::Declare{name, sort},
     LParen "relation" <constructor:Ident> <inputs:List<Type>> RParen => Command::Relation{constructor, inputs},
