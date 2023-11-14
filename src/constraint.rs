@@ -344,7 +344,7 @@ impl SimpleTypeConstraint {
         SimpleTypeConstraint { name, sorts }
     }
 
-    pub(crate) fn into_box(self) -> Box<dyn TypeConstraint> {
+    pub fn into_box(self) -> Box<dyn TypeConstraint> {
         Box::new(self)
     }
 }
