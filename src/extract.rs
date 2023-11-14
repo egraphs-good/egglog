@@ -13,8 +13,18 @@ pub(crate) struct Node<'a> {
     inputs: &'a [Value],
 }
 
+#[derive(Debug, Clone)]
+pub struct CostSet {
+    pub total: Cost,
+    // TODO this would be more efficient as a
+    // persistent data structure
+    pub costs: HashMap<Value, Cost>,
+    pub term: Term,
+}
+
 pub struct Extractor<'a> {
-    pub costs: HashMap<Id, (Cost, Term)>,
+    // TODO why is this public?
+    pub costs: HashMap<Id, CostSet>,
     ctors: Vec<Symbol>,
     egraph: &'a EGraph,
 }
@@ -36,10 +46,10 @@ impl EGraph {
     /// let (sort, value) = egraph
     ///     .eval_expr(&egglog::ast::Expr::Var("expr".into()), None, true)
     ///     .unwrap();
-    /// let (_, extracted) = egraph.extract(value, &mut termdag, &sort);
-    /// assert_eq!(termdag.to_string(&extracted), "(Add 1 1)");
+    /// let costset = egraph.extract(value, &mut termdag, &sort);
+    /// assert_eq!(termdag.to_string(&costset.term), "(Add 1 1)");
     /// ```
-    pub fn extract(&self, value: Value, termdag: &mut TermDag, arcsort: &ArcSort) -> (Cost, Term) {
+    pub fn extract(&self, value: Value, termdag: &mut TermDag, arcsort: &ArcSort) -> CostSet {
         let extractor = Extractor::new(self, termdag);
         extractor
             .find_best(value, termdag, arcsort)
@@ -124,7 +134,7 @@ impl<'a> Extractor<'a> {
         let mut children = vec![];
         for value in node.inputs {
             let arcsort = self.egraph.get_sort_from_value(value).unwrap();
-            children.push(self.find_best(*value, termdag, arcsort)?.1)
+            children.push(self.find_best(*value, termdag, arcsort)?.term)
         }
 
         Some(termdag.app(node.sym, children))
@@ -135,14 +145,12 @@ impl<'a> Extractor<'a> {
         value: Value,
         termdag: &mut TermDag,
         sort: &ArcSort,
-    ) -> Option<(Cost, Term)> {
+    ) -> Option<CostSet> {
         if sort.is_eq_sort() {
             let id = self.find_id(value);
-            let (cost, node) = self.costs.get(&id)?.clone();
-            Some((cost, node))
+            Some(self.costs.get(&id)?.clone())
         } else {
-            let (cost, node) = sort.extract_expr(self.egraph, value, self, termdag)?;
-            Some((cost, termdag.expr_to_term(&node)))
+            sort.extract_expr(self.egraph, value, self, termdag)
         }
     }
 
@@ -150,17 +158,26 @@ impl<'a> Extractor<'a> {
         &mut self,
         function: &Function,
         children: &[Value],
+        value: Value,
         termdag: &mut TermDag,
-    ) -> Option<(Vec<Term>, Cost)> {
-        let mut cost = function.decl.cost.unwrap_or(1);
+    ) -> Option<CostSet> {
         let types = &function.schema.input;
-        let mut terms: Vec<Term> = vec![];
+
+        let mut costs = HashMap::default();
+        let mut new_children: Vec<Term> = vec![];
         for (ty, value) in types.iter().zip(children) {
-            let (term_cost, term) = self.find_best(*value, termdag, ty)?;
-            terms.push(term.clone());
-            cost = cost.saturating_add(term_cost);
+            let child_res = self.find_best(*value, termdag, ty)?;
+            costs.extend(child_res.costs.clone());
+            new_children.push(child_res.term.clone());
         }
-        Some((terms, cost))
+        let cost = function.decl.cost.unwrap_or(1);
+        costs.insert(value, cost);
+
+        Some(CostSet {
+            total: costs.values().sum::<Cost>(),
+            costs,
+            term: termdag.app(function.decl.name, new_children),
+        })
     }
 
     fn find(&self, value: Value) -> Value {
@@ -180,21 +197,19 @@ impl<'a> Extractor<'a> {
                 let func = &self.egraph.functions[&sym];
                 if func.schema.output.is_eq_sort() {
                     for (inputs, output) in func.nodes.iter() {
-                        if let Some((term_inputs, new_cost)) =
-                            self.node_total_cost(func, inputs, termdag)
+                        if let Some(costset) =
+                            self.node_total_cost(func, inputs, output.value, termdag)
                         {
-                            let make_new_pair = || (new_cost, termdag.app(sym, term_inputs));
-
                             let id = self.find_id(output.value);
                             match self.costs.entry(id) {
                                 Entry::Vacant(e) => {
                                     did_something = true;
-                                    e.insert(make_new_pair());
+                                    e.insert(costset);
                                 }
                                 Entry::Occupied(mut e) => {
-                                    if new_cost < e.get().0 {
+                                    if costset.total < e.get().total {
                                         did_something = true;
-                                        e.insert(make_new_pair());
+                                        e.insert(costset);
                                     }
                                 }
                             }

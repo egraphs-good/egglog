@@ -724,9 +724,9 @@ impl EGraph {
             let mut children = Vec::new();
             for (a, a_type) in ins.iter().copied().zip(&schema.input) {
                 if a_type.is_eq_sort() {
-                    children.push(extractor.find_best(a, &mut termdag, a_type).unwrap().1);
+                    children.push(extractor.find_best(a, &mut termdag, a_type).unwrap().term);
                 } else {
-                    children.push(termdag.expr_to_term(&a_type.make_expr(self, a).1));
+                    children.push(a_type.make_expr(self, &mut termdag, a).term);
                 };
             }
 
@@ -734,9 +734,9 @@ impl EGraph {
                 extractor
                     .find_best(out.value, &mut termdag, &schema.output)
                     .unwrap()
-                    .1
+                    .term
             } else {
-                termdag.expr_to_term(&schema.output.make_expr(self, out.value).1)
+                schema.output.make_expr(self, &mut termdag, out.value).term
             };
             terms.push((termdag.app(sym, children), out));
         }
@@ -853,7 +853,7 @@ impl EGraph {
     pub fn extract_value(&self, value: Value) -> (TermDag, Term) {
         let mut termdag = TermDag::default();
         let sort = self.type_info().sorts.get(&value.tag).unwrap();
-        let term = self.extract(value, &mut termdag, sort).1;
+        let term = self.extract(value, &mut termdag, sort).term;
         (termdag, term)
     }
 
@@ -1341,7 +1341,7 @@ impl EGraph {
                 let mut termdag = TermDag::default();
                 for expr in exprs {
                     let (t, value) = self.eval_expr(&expr, None, true)?;
-                    let term = self.extract(value, &mut termdag, &t).1;
+                    let term = self.extract(value, &mut termdag, &t).term;
                     use std::io::Write;
                     writeln!(f, "{}", termdag.to_string(&term))
                         .map_err(|e| Error::IoError(filename.clone(), e))?;

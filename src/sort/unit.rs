@@ -25,9 +25,15 @@ impl Sort for UnitSort {
         type_info.add_primitive(NotEqualPrimitive { unit: self })
     }
 
-    fn make_expr(&self, _egraph: &EGraph, value: Value) -> (Cost, Expr) {
+    fn make_expr(&self, _egraph: &EGraph, termdag: &mut TermDag, value: Value) -> CostSet {
         assert_eq!(value.tag, self.name);
-        (1, Expr::Lit(Literal::Unit))
+        let term = termdag.lit(Literal::Unit);
+        let costs = vec![(value, 1)].into_iter().collect();
+        CostSet {
+            total: 1,
+            costs,
+            term,
+        }
     }
 }
 

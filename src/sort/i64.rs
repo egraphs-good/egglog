@@ -74,9 +74,15 @@ impl Sort for I64Sort {
 
     }
 
-    fn make_expr(&self, _egraph: &EGraph, value: Value) -> (Cost, Expr) {
+    fn make_expr(&self, _egraph: &EGraph, termdag: &mut TermDag, value: Value) -> CostSet {
         assert!(value.tag == self.name());
-        (1, Expr::Lit(Literal::Int(value.bits as _)))
+        let term = termdag.lit(Literal::Int(value.bits as i64));
+        let costs = vec![(value, 1)].into_iter().collect();
+        CostSet {
+            total: 1,
+            costs,
+            term,
+        }
     }
 }
 

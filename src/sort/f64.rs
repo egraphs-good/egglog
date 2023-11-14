@@ -53,12 +53,15 @@ impl Sort for F64Sort {
 
     }
 
-    fn make_expr(&self, _egraph: &EGraph, value: Value) -> (Cost, Expr) {
+    fn make_expr(&self, _egraph: &EGraph, termdag: &mut TermDag, value: Value) -> CostSet {
         assert!(value.tag == self.name());
-        (
-            1,
-            Expr::Lit(Literal::F64(OrderedFloat(f64::from_bits(value.bits)))),
-        )
+        let term = termdag.lit(Literal::F64(OrderedFloat(f64::from_bits(value.bits))));
+        let costs = vec![(value, 1)].into_iter().collect();
+        CostSet {
+            total: 1,
+            costs,
+            term,
+        }
     }
 }
 

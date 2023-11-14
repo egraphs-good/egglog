@@ -165,10 +165,9 @@ impl Sort for VecSort {
         })
     }
 
-    fn make_expr(&self, egraph: &EGraph, value: Value) -> (Cost, Expr) {
-        let mut termdag = TermDag::default();
-        let extractor = Extractor::new(egraph, &mut termdag);
-        self.extract_expr(egraph, value, &extractor, &mut termdag)
+    fn make_expr(&self, egraph: &EGraph, termdag: &mut TermDag, value: Value) -> CostSet {
+        let extractor = Extractor::new(egraph, termdag);
+        self.extract_expr(egraph, value, &extractor, termdag)
             .expect("Extraction should be successful since extractor has been fully initialized")
     }
 
@@ -178,23 +177,31 @@ impl Sort for VecSort {
         value: Value,
         extractor: &Extractor,
         termdag: &mut TermDag,
-    ) -> Option<(Cost, Expr)> {
+    ) -> Option<CostSet> {
         let vec = ValueVec::load(self, &value);
-        let mut cost = 0usize;
-
         if vec.is_empty() {
-            Some((cost, Expr::call("vec-empty", [])))
+            let term = termdag.app("vec-empty".into(), vec![]);
+            let costs = vec![(value, 1)].into_iter().collect();
+            Some(CostSet {
+                total: 1,
+                costs,
+                term,
+            })
         } else {
-            let elems = vec
-                .into_iter()
-                .map(|e| {
-                    let e = extractor.find_best(e, termdag, &self.element)?;
-                    cost = cost.saturating_add(e.0);
-                    Some(termdag.term_to_expr(&e.1))
-                })
-                .collect::<Option<Vec<_>>>()?;
+            let mut elems = vec![];
+            let mut costs = HashMap::default();
+            for child in vec {
+                let child_set = extractor.find_best(child, termdag, &self.element)?;
+                costs.extend(child_set.costs.clone());
+                elems.push(child_set.term);
+            }
+            costs.insert(value, 1);
 
-            Some((cost, Expr::call("vec-of", elems)))
+            Some(CostSet {
+                total: costs.values().sum::<Cost>(),
+                costs,
+                term: termdag.app("vec-of".into(), elems),
+            })
         }
     }
 }

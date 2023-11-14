@@ -150,10 +150,9 @@ impl Sort for MapSort {
         });
     }
 
-    fn make_expr(&self, egraph: &EGraph, value: Value) -> (Cost, Expr) {
-        let mut termdag = TermDag::default();
-        let extractor = Extractor::new(egraph, &mut termdag);
-        self.extract_expr(egraph, value, &extractor, &mut termdag)
+    fn make_expr(&self, egraph: &EGraph, termdag: &mut TermDag, value: Value) -> CostSet {
+        let extractor = Extractor::new(egraph, termdag);
+        self.extract_expr(egraph, value, &extractor, termdag)
             .expect("Extraction should be successful since extractor has been fully initialized")
     }
 
@@ -163,20 +162,25 @@ impl Sort for MapSort {
         value: Value,
         extractor: &Extractor,
         termdag: &mut TermDag,
-    ) -> Option<(Cost, Expr)> {
+    ) -> Option<CostSet> {
         let map = ValueMap::load(self, &value);
-        let mut expr = Expr::call("map-empty", []);
-        let mut cost = 0usize;
+        let mut term = termdag.app("map-empty".into(), vec![]);
+        let mut costs = HashMap::default();
         for (k, v) in map.iter().rev() {
             let k = extractor.find_best(*k, termdag, &self.key)?;
             let v = extractor.find_best(*v, termdag, &self.value)?;
-            cost = cost.saturating_add(k.0).saturating_add(v.0);
-            expr = Expr::call(
-                "map-insert",
-                [expr, termdag.term_to_expr(&k.1), termdag.term_to_expr(&v.1)],
-            )
+            costs.extend(k.costs);
+            costs.extend(v.costs);
+
+            term = termdag.app("map-insert".into(), vec![term, k.term, v.term])
         }
-        Some((cost, expr))
+
+        costs.insert(value, 1);
+        Some(CostSet {
+            total: costs.values().sum::<Cost>(),
+            costs,
+            term,
+        })
     }
 }
 

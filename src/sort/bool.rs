@@ -31,9 +31,15 @@ impl Sort for BoolSort {
         add_primitives!(eg, "=>" = |a: bool, b: bool| -> bool { !a || b });
     }
 
-    fn make_expr(&self, _egraph: &EGraph, value: Value) -> (Cost, Expr) {
+    fn make_expr(&self, _egraph: &EGraph, termdag: &mut TermDag, value: Value) -> CostSet {
         assert!(value.tag == self.name());
-        (1, Expr::Lit(Literal::Bool(value.bits > 0)))
+        let term = termdag.lit(Literal::Bool(value.bits > 0));
+        let costs = vec![(value, 1)].into_iter().collect();
+        CostSet {
+            total: 1,
+            costs,
+            term,
+        }
     }
 }
 

@@ -5,7 +5,7 @@ use crate::{
     ast::{FunctionDecl, Id},
     function::{table::hash_values, ValueVec},
     util::HashMap,
-    EGraph, Value,
+    EGraph, TermDag, Value,
 };
 
 pub struct SerializeConfig {
@@ -151,6 +151,7 @@ impl EGraph {
         // Set iff `split_primitive_outputs` is set and this is an output of a function.
         prim_node_id: Option<String>,
     ) -> (egraph_serialize::ClassId, Option<egraph_serialize::NodeId>) {
+        let mut termdag = TermDag::default();
         let sort = self.get_sort_from_value(value).unwrap();
         let (class_id, node_id): (egraph_serialize::ClassId, Option<egraph_serialize::NodeId>) =
             if sort.is_eq_sort() {
@@ -180,7 +181,8 @@ impl EGraph {
                         log::warn!("{} is a container sort", sort.name());
                         sort.name().to_string()
                     } else {
-                        sort.make_expr(self, *value).1.to_string()
+                        let term = &sort.make_expr(self, &mut termdag, *value).term;
+                        termdag.to_string(term)
                     };
                     egraph.nodes.insert(
                         node_id.clone(),

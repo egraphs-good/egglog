@@ -922,18 +922,18 @@ impl EGraph {
 
                     let variants = values[1].bits as i64;
                     if variants == 0 {
-                        let (cost, term) = self.extract(
+                        let costset = self.extract(
                             values[0],
                             &mut termdag,
                             self.type_info().sorts.get(&values[0].tag).unwrap(),
                         );
-                        let extracted = termdag.to_string(&term);
-                        log::info!("extracted with cost {cost}: {}", extracted);
+                        let extracted = termdag.to_string(&costset.term);
+                        log::info!("extracted with cost {}: {}", costset.total, extracted);
                         self.print_msg(extracted);
                         self.extract_report = Some(ExtractReport::Best {
                             termdag,
-                            cost,
-                            term,
+                            cost: costset.total,
+                            term: costset.term,
                         });
                     } else {
                         if variants < 0 {

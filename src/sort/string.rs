@@ -24,10 +24,16 @@ impl Sort for StringSort {
         self
     }
 
-    fn make_expr(&self, _egraph: &EGraph, value: Value) -> (Cost, Expr) {
+    fn make_expr(&self, _egraph: &EGraph, termdag: &mut TermDag, value: Value) -> CostSet {
         assert!(value.tag == self.name);
         let sym = Symbol::from(NonZeroU32::new(value.bits as _).unwrap());
-        (1, Expr::Lit(Literal::String(sym)))
+        let term = termdag.lit(Literal::String(sym));
+        let costs = vec![(value, 1)].into_iter().collect();
+        CostSet {
+            total: 1,
+            costs,
+            term,
+        }
     }
 
     fn register_primitives(self: Arc<Self>, typeinfo: &mut TypeInfo) {
