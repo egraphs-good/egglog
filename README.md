@@ -52,7 +52,7 @@ There is a VS Code extension in the vscode folder. Install using 'Install from V
 
 ### Enhancing the VS code extension
 
-If you want to hack on the VS Code extension, install nodejs, and make your changes in the files in the `vscode/egglog-1.0.0` folder.
+If you want to hack on the VS Code extension, install nodejs, and make your changes in the files in the `vscode/eggsmol-1.0.0` folder.
 
 Then run
 
