@@ -17,8 +17,11 @@ pub struct SerializeConfig {
     pub include_temporary_functions: bool,
     // Whether to split primitive output values into their own e-classes with the function
     pub split_primitive_outputs: bool,
+    // Root eclasses to include in the output
+    pub root_eclasses: Vec<Value>,
 }
 
+/// Default is used for visualizations and limits number of functions and calls
 impl Default for SerializeConfig {
     fn default() -> Self {
         SerializeConfig {
@@ -26,6 +29,7 @@ impl Default for SerializeConfig {
             max_calls_per_function: Some(40),
             include_temporary_functions: false,
             split_primitive_outputs: false,
+            root_eclasses: vec![],
         }
     }
 }
@@ -135,6 +139,14 @@ impl EGraph {
                 },
             );
         }
+
+        let roots = config
+            .root_eclasses
+            .iter()
+            .map(|v| self.serialize_value(&mut egraph, &mut node_ids, v, None).0)
+            .collect();
+        egraph.root_eclasses = roots;
+
         egraph
     }
 
