@@ -48,7 +48,7 @@ for the REPL.
 
 ## VS Code plugin
 
-There is a VS Code extension in the vscode folder. Install using 'Install from VSIX...' in the three-dot menu of the extensions tab and pick `vscode/vscode/egglog.vsix`.
+There is a VS Code extension in the vscode folder. Install using 'Install from VSIX...' in the three-dot menu of the extensions tab and pick `vscode/eggsmol-1.0.0/eggsmol-1.0.0.vsix`.
 
 ### Enhancing the VS code extension
 
@@ -57,7 +57,7 @@ If you want to hack on the VS Code extension, install nodejs, and make your chan
 Then run
 
 ```
-code vscode/egglog-1.0.0
+code vscode/eggsmol-1.0.0
 ```
 
 and use F5 to run the extension in a new window. When satisfied, then install VSCE if you do not already have it:
@@ -66,7 +66,7 @@ and use F5 to run the extension in a new window. When satisfied, then install VS
 npm install -g @vscode/vsce
 ```
 
-Run `vsce package` in the `vscode/egglog-1.0.0` folder to reconstruct the .vsix file and install it manually.
+Run `vsce package` in the `vscode/eggsmol-1.0.0` folder to reconstruct the .vsix file and install it manually.
 
 ## Development
 
