@@ -1,3 +1,5 @@
+use std::sync::Mutex;
+
 use crate::{ast::Literal, constraint::AllEqualTypeConstraint};
 
 use super::*;
@@ -72,6 +74,11 @@ impl Sort for I64Sort {
             int: self.clone(),
         });
 
+        typeinfo.add_primitive(I64Fresh {
+            current: Mutex::new(0),
+            name: "i64-fresh!".into(),
+            int: self.clone(),
+        });
     }
 
     fn make_expr(&self, _egraph: &EGraph, value: Value) -> (Cost, Expr) {
@@ -120,5 +127,32 @@ impl PrimitiveLike for CountMatches {
         let string1 = Symbol::load(&self.string, &values[0]).to_string();
         let string2 = Symbol::load(&self.string, &values[1]).to_string();
         Some(Value::from(string1.matches(&string2).count() as i64))
+    }
+}
+
+pub struct I64Fresh {
+    current: Mutex<i64>,
+    name: Symbol,
+    int: Arc<I64Sort>,
+}
+
+impl PrimitiveLike for I64Fresh {
+    fn name(&self) -> Symbol {
+        self.name
+    }
+
+    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+        AllEqualTypeConstraint::new(self.name())
+            .with_exact_length(1)
+            .with_output_sort(self.int.clone())
+            .into_box()
+    }
+
+    fn apply(&self, _values: &[Value], _egraph: &EGraph) -> Option<Value> {
+        let mut current = self.current.lock().unwrap();
+        let res = *current;
+        assert!(res < i64::MAX);
+        *current += 1;
+        Some(Value::from(res))
     }
 }

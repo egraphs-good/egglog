@@ -1,0 +1,9 @@
+;; the i64-fresh! primitive gives a fresh integer each time it is called
+;; use with caution!
+
+(let fresha (i64-fresh!))
+(let freshb (i64-fresh!))
+
+;; fresha and freshb are different
+(check (!= fresha freshb))
+
