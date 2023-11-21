@@ -1,6 +1,6 @@
 use std::ops::AddAssign;
 
-use crate::{constraint::AllEqualTypeConstraint, *, ast::desugar::flatten_actions};
+use crate::{constraint::AllEqualTypeConstraint, *, ast::desugar::flatten_actions, typechecking::FuncType};
 use hashbrown::HashMap;
 use typechecking::TypeError;
 
@@ -62,10 +62,16 @@ pub struct ResolvedCoreRule {
     pub head: Actions,
 }
 
+pub struct SpecializedPrimitive {
+    pub primitive: Primitive,
+    input: Vec<ArcSort>,
+    output: ArcSort,
+}
+
 #[derive(Debug, Clone)]
 pub enum ResolvedCall {
-    Func(Symbol),
-    Primitive(Primitive),
+    Func(FuncType),
+    Primitive(SpecializedPrimitive),
 }
 
 impl Query<ResolvedCall> {
@@ -476,7 +482,6 @@ impl<'a> Context<'a> {
 
     pub(crate) fn compile_rule(
         &mut self,
-        ctx: CommandId,
         rule: &'a Rule,
     ) -> Result<ResolvedCoreRule, Vec<TypeError>> {
         let rule = rule.to_core_rule(self.egraph.type_info());

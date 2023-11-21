@@ -461,7 +461,7 @@ impl Default for EGraph {
 
 #[derive(Debug, Error)]
 #[error("Not found: {0}")]
-pub struct NotFoundError(Expr);
+pub struct NotFoundError(UnresolvedExpr);
 
 impl EGraph {
     /// Use the rust backend implimentation of eqsat,
@@ -680,7 +680,7 @@ impl EGraph {
         self.unionfind.n_unions() - n_unions + function.clear_updates()
     }
 
-    pub fn declare_function(&mut self, decl: &NormFunctionDecl) -> Result<(), Error> {
+    pub fn declare_function(&mut self, decl: &UnresolvedFunctionDecl) -> Result<(), Error> {
         let function = Function::new(self, &decl.to_fdecl())?;
         let old = self.functions.insert(decl.name, function);
         if old.is_some() {
@@ -812,10 +812,10 @@ impl EGraph {
     }
 
     // returns whether the egraph was updated
-    pub fn run_schedule(&mut self, sched: &NormSchedule) -> RunReport {
+    pub fn run_schedule(&mut self, sched: &UnresolvedSchedule) -> RunReport {
         match sched {
-            NormSchedule::Run(config) => self.run_rules(config),
-            NormSchedule::Repeat(limit, sched) => {
+            Schedule::Run(config) => self.run_rules(config),
+            Schedule::Repeat(limit, sched) => {
                 let mut report = RunReport::default();
                 for _i in 0..*limit {
                     let rec = self.run_schedule(sched);
@@ -826,7 +826,7 @@ impl EGraph {
                 }
                 report
             }
-            NormSchedule::Saturate(sched) => {
+            Schedule::Saturate(sched) => {
                 let mut report = RunReport::default();
                 loop {
                     let rec = self.run_schedule(sched);
@@ -837,7 +837,7 @@ impl EGraph {
                 }
                 report
             }
-            NormSchedule::Sequence(scheds) => {
+            Schedule::Sequence(scheds) => {
                 let mut report = RunReport::default();
                 for sched in scheds {
                     report = report.union(&self.run_schedule(sched));
@@ -864,7 +864,7 @@ impl EGraph {
         termdag.to_string(&term)
     }
 
-    pub fn run_rules(&mut self, config: &NormRunConfig) -> RunReport {
+    pub fn run_rules(&mut self, config: &UnresolvedRunConfig) -> RunReport {
         let mut report: RunReport = Default::default();
 
         // first rebuild
@@ -879,14 +879,13 @@ impl EGraph {
             .or_default() += rebuild_start.elapsed();
         self.timestamp += 1;
 
-        let NormRunConfig {
+        let RunConfig {
             ruleset,
             until,
-            ctx,
         } = config;
 
         if let Some(facts) = until {
-            if self.check_facts(*ctx, facts).is_ok() {
+            if self.check_facts(facts).is_ok() {
                 log::info!(
                     "Breaking early because of facts:\n {}!",
                     ListDisplay(facts, "\n")
@@ -1041,33 +1040,23 @@ impl EGraph {
 
     fn add_rule_with_name(
         &mut self,
-        ctx: CommandId,
         name: String,
-        rule: ast::Rule,
+        rule: ast::ResolvedRule,
         ruleset: Symbol,
     ) -> Result<Symbol, Error> {
         let name = Symbol::from(name);
         let mut compiler = typecheck::Context::new(self);
         let core_rule = compiler
-            .compile_rule(ctx, &rule)
+            .compile_rule(&rule)
             .map_err(Error::TypeErrors)?;
         let (query, action) = (core_rule.body, core_rule.head);
 
         // TODO: We should refactor compile_actions later as well
         let action: Vec<Action> = action.0.iter().map(|a| a.to_action()).collect();
 
-        // types being an IndexMap is very important as it assigns each variable a stable index
-        let types: IndexMap<_, _> = self
-            .type_info()
-            .local_types
-            .get(&ctx)
-            .unwrap()
-            .iter()
-            .map(|(v, s)| (*v, s.clone()))
-            .collect();
-        let query = self.compile_gj_query(query, &types);
+        let query = self.compile_gj_query(query);
         let program = self
-            .compile_actions(&types, &action)
+            .compile_actions(&action)
             .map_err(Error::TypeErrors)?;
         let compiled_rule = Rule {
             query,
@@ -1090,15 +1079,14 @@ impl EGraph {
 
     pub(crate) fn add_rule(
         &mut self,
-        ctx: CommandId,
-        rule: ast::Rule,
+        rule: ast::UnresolvedRule,
         ruleset: Symbol,
     ) -> Result<Symbol, Error> {
         let name = format!("{}", rule);
-        self.add_rule_with_name(ctx, name, rule, ruleset)
+        self.add_rule_with_name(name, rule, ruleset)
     }
 
-    pub fn eval_actions(&mut self, actions: &[Action]) -> Result<(), Error> {
+    pub fn eval_actions(&mut self, actions: &[UnresolvedAction]) -> Result<(), Error> {
         let types = Default::default();
         let program = self
             .compile_actions(&types, actions)
@@ -1110,7 +1098,7 @@ impl EGraph {
 
     pub fn eval_expr(
         &mut self,
-        expr: &Expr,
+        expr: &UnresolvedExpr,
         expected_type: Option<ArcSort>,
         make_defaults: bool,
     ) -> Result<(ArcSort, Value), Error> {
@@ -1131,27 +1119,27 @@ impl EGraph {
         };
     }
 
-    pub fn set_option(&mut self, name: &str, value: Expr) {
+    pub fn set_option(&mut self, name: &str, value: UnresolvedExpr) {
         match name {
             "enable_proofs" => {
                 self.proofs_enabled = true;
             }
             "interactive_mode" => {
-                if let Expr::Lit(Literal::Int(i)) = value {
+                if let Expr::Lit(_ann, Literal::Int(i)) = value {
                     self.interactive_mode = i != 0;
                 } else {
                     panic!("interactive_mode must be an integer");
                 }
             }
             "match_limit" => {
-                if let Expr::Lit(Literal::Int(i)) = value {
+                if let Expr::Lit(_ann, Literal::Int(i)) = value {
                     self.match_limit = i as usize;
                 } else {
                     panic!("match_limit must be an integer");
                 }
             }
             "node_limit" => {
-                if let Expr::Lit(Literal::Int(i)) = value {
+                if let Expr::Lit(_ann, Literal::Int(i)) = value {
                     self.node_limit = i as usize;
                 } else {
                     panic!("node_limit must be an integer");
@@ -1161,25 +1149,17 @@ impl EGraph {
         }
     }
 
-    fn check_facts(&mut self, ctx: CommandId, facts: &[Fact]) -> Result<(), Error> {
+    fn check_facts(&mut self, facts: &[ResolvedFact]) -> Result<(), Error> {
         let mut compiler = typecheck::Context::new(self);
-        let rule = ast::Rule {
+        let rule = ast::UnresolvedRule {
             head: vec![],
             body: facts.to_vec(),
         };
         let rule = compiler
-            .compile_rule(ctx, &rule)
+            .compile_rule(&rule)
             .map_err(Error::TypeErrors)?;
         let query0 = rule.body;
-        let types: IndexMap<_, _> = self
-            .type_info()
-            .local_types
-            .get(&ctx)
-            .unwrap()
-            .iter()
-            .map(|(v, s)| (*v, s.clone()))
-            .collect();
-        let query = self.compile_gj_query(query0, &types);
+        let query = self.compile_gj_query(query0);
 
         let mut matched = false;
         // TODO what timestamp to use?
@@ -1196,8 +1176,7 @@ impl EGraph {
         }
     }
 
-    fn run_command(&mut self, command: NormCommand, should_run: bool) -> Result<(), Error> {
-        let NormCommand { metadata, command } = command;
+    fn run_command(&mut self, command: ResolvedNCommand, should_run: bool) -> Result<(), Error> {
         let pre_rebuild = Instant::now();
         let rebuild_num = self.rebuild()?;
         if rebuild_num > 0 {
@@ -1230,7 +1209,7 @@ impl EGraph {
                 rule,
                 name,
             } => {
-                self.add_rule(metadata.id, rule, ruleset)?;
+                self.add_rule(rule, ruleset)?;
                 log::info!("Declared rule {name}.")
             }
             NCommand::RunSchedule(sched) => {
@@ -1250,7 +1229,7 @@ impl EGraph {
             }
             NCommand::Check(facts) => {
                 if should_run {
-                    self.check_facts(metadata.id, &facts)?;
+                    self.check_facts(&facts)?;
                     log::info!("Checked fact {:?}.", facts);
                 } else {
                     log::warn!("Skipping check.")
@@ -1295,10 +1274,7 @@ impl EGraph {
             }
             NCommand::Fail(c) => {
                 let result = self.run_command(
-                    NormCommand {
-                        metadata,
-                        command: *c,
-                    },
+                        c,
                     should_run,
                 );
                 if let Err(e) = result {
@@ -1410,9 +1386,9 @@ impl EGraph {
 
     pub fn process_commands(
         &mut self,
-        program: Vec<Command>,
+        program: Vec<UnresolvedCommand>,
         stop: CompilerPassStop,
-    ) -> Result<Vec<NormCommand>, Error> {
+    ) -> Result<Vec<ResolvedNCommand>, Error> {
         let mut result = vec![];
 
         for command in program {
@@ -1441,9 +1417,9 @@ impl EGraph {
 
     fn process_command(
         &mut self,
-        command: Command,
+        command: UnresolvedCommand,
         stop: CompilerPassStop,
-    ) -> Result<Vec<NormCommand>, Error> {
+    ) -> Result<Vec<ResolvedNCommand>, Error> {
         let mut program =
             self.desugar
                 .desugar_program(vec![command], self.test_proofs, self.seminaive)?;
@@ -1453,13 +1429,13 @@ impl EGraph {
 
         let type_info_before = self.type_info().clone();
 
+        // typecheck_program: Program -> (Program<(Type, Var)>, CoreProgram)
         self.desugar.type_info.typecheck_program(&program)?;
         if stop == CompilerPassStop::TypecheckDesugared {
             return Ok(program);
         }
 
         // now add term encoding
-        todo!("commented out for now");
         // if self.terms_enabled {
         //     let program_terms = TermState::add_term_encoding(self, program);
         //     program = self.desugar.desugar_program(program_terms, false, false)?;
@@ -1479,7 +1455,7 @@ impl EGraph {
         Ok(program)
     }
 
-    pub fn run_program(&mut self, program: Vec<Command>) -> Result<Vec<String>, Error> {
+    pub fn run_program(&mut self, program: Vec<UnresolvedCommand>) -> Result<Vec<String>, Error> {
         let should_run = true;
 
         for command in program {
@@ -1495,7 +1471,7 @@ impl EGraph {
         Ok(self.flush_msgs())
     }
 
-    pub fn parse_program(&self, input: &str) -> Result<Vec<Command>, Error> {
+    pub fn parse_program(&self, input: &str) -> Result<Vec<UnresolvedCommand>, Error> {
         self.desugar.parse_program(input)
     }
 

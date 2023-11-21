@@ -1,4 +1,4 @@
-use crate::*;
+use crate::{*, typecheck::ResolvedCall};
 use ordered_float::OrderedFloat;
 
 use std::fmt::Display;
@@ -56,66 +56,70 @@ impl Display for Literal {
     }
 }
 
+
+// TODO rename to Expr
+pub type UnresolvedExpr = Expr<Symbol, Symbol, ()>;
+pub type ResolvedExpr = Expr<ResolvedCall, (Symbol, ArcSort), ()>;
+
+
+// TODO rename to generic expr
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
-pub enum Expr {
-    Lit(Literal),
-    Var(Symbol),
+pub enum Expr<Head, Leaf, Ann> {
+    Lit(Ann, Literal),
+    Var(Ann, Leaf),
     // TODO make this its own type
-    Call(Symbol, Vec<Self>),
+    Call(Ann, Head, Vec<Self>),
 }
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
-pub enum NormExpr {
-    Call(Symbol, Vec<Symbol>),
-}
 
-impl NormExpr {
-    pub fn to_expr(&self) -> Expr {
-        match self {
-            NormExpr::Call(op, args) => {
-                Expr::Call(*op, args.iter().map(|a| Expr::Var(*a)).collect())
-            }
-        }
-    }
+// impl NormExpr {
+//     pub fn to_expr(&self) -> Expr<Symbol, ()> {
+//         match self {
+//             NormExpr::Call(op, args) => {
+//                 Expr::Call(*op, args.iter().map(|a| Expr::Var(*a)).collect())
+//             }
+//         }
+//     }
 
-    pub(crate) fn map_def_use(
-        &self,
-        fvar: &mut impl FnMut(Symbol, bool) -> Symbol,
-        is_def: bool,
-    ) -> NormExpr {
-        match self {
-            NormExpr::Call(op, args) => {
-                let args = args.iter().map(|a| fvar(*a, is_def)).collect();
-                NormExpr::Call(*op, args)
-            }
-        }
-    }
-}
+//     pub(crate) fn map_def_use(
+//         &self,
+//         fvar: &mut impl FnMut(Symbol, bool) -> Symbol,
+//         is_def: bool,
+//     ) -> NormExpr {
+//         match self {
+//             NormExpr::Call(op, args) => {
+//                 let args = args.iter().map(|a| fvar(*a, is_def)).collect();
+//                 NormExpr::Call(*op, args)
+//             }
+//         }
+//     }
+// }
 
-impl Expr {
+impl<Head, Leaf, Ann> Expr<Head, Leaf, Ann> {
     pub fn is_var(&self) -> bool {
-        matches!(self, Expr::Var(_))
+        matches!(self, Expr::Var(_, _))
     }
 
-    pub fn call(op: impl Into<Symbol>, children: impl IntoIterator<Item = Self>) -> Self {
-        Self::Call(op.into(), children.into_iter().collect())
-    }
+    // TODO fix for specific types
+    // pub fn call(op: impl Into<Symbol>, children: impl IntoIterator<Item = Self>) -> Self {
+    //     Self::Call(op.into(), children.into_iter().collect())
+    // }
 
-    pub fn lit(lit: impl Into<Literal>) -> Self {
-        Self::Lit(lit.into())
-    }
+    // pub fn lit(lit: impl Into<Literal>) -> Self {
+    //     Self::Lit(lit.into())
+    // }
 
-    pub fn get_var(&self) -> Option<Symbol> {
+    pub fn get_var(&self) -> Option<Leaf> {
         match self {
-            Expr::Var(v) => Some(*v),
+            Expr::Var(ann, v) => Some(v.clone()),
             _ => None,
         }
     }
 
     fn children(&self) -> &[Self] {
         match self {
-            Expr::Var(_) | Expr::Lit(_) => &[],
-            Expr::Call(_, children) => children,
+            Expr::Var(_, _) | Expr::Lit(_, _) => &[],
+            Expr::Call(_, _, children) => children,
         }
     }
 
@@ -140,11 +144,11 @@ impl Expr {
 
     pub fn map(&self, f: &mut impl FnMut(&Self) -> Self) -> Self {
         match self {
-            Expr::Lit(_) => f(self),
-            Expr::Var(_) => f(self),
-            Expr::Call(op, children) => {
+            Expr::Lit(..) => f(self),
+            Expr::Var(..) => f(self),
+            Expr::Call(ann, op, children) => {
                 let children = children.iter().map(|c| c.map(f)).collect();
-                f(&Expr::Call(*op, children))
+                f(&Expr::Call(ann, *op, children))
             }
         }
     }
@@ -154,9 +158,9 @@ impl Expr {
     /// Example: `(Add (Add 2 3) 4)`
     pub fn to_sexp(&self) -> Sexp {
         let res = match self {
-            Expr::Lit(lit) => Sexp::Symbol(lit.to_string()),
-            Expr::Var(v) => Sexp::Symbol(v.to_string()),
-            Expr::Call(op, children) => Sexp::List(
+            Expr::Lit(ann, lit) => Sexp::Symbol(lit.to_string()),
+            Expr::Var(ann, v) => Sexp::Symbol(v.to_string()),
+            Expr::Call(ann, op, children) => Sexp::List(
                 vec![Sexp::Symbol(op.to_string())]
                     .into_iter()
                     .chain(children.iter().map(|c| c.to_sexp()))
@@ -166,48 +170,48 @@ impl Expr {
         res
     }
 
-    pub fn subst(&self, canon: &HashMap<Symbol, Expr>) -> Self {
+    pub fn subst(&self, canon: &HashMap<Symbol, Self>) -> Self {
         match self {
-            Expr::Lit(_lit) => self.clone(),
-            Expr::Var(v) => canon.get(v).cloned().unwrap_or_else(|| self.clone()),
-            Expr::Call(op, children) => {
+            Expr::Lit(ann, _lit) => self.clone(),
+            Expr::Var(ann, v) => canon.get(v).cloned().unwrap_or_else(|| self.clone()),
+            Expr::Call(ann, op, children) => {
                 let children = children.iter().map(|c| c.subst(canon)).collect();
-                Expr::Call(*op, children)
+                Expr::Call(ann, *op, children)
             }
         }
     }
 
     pub fn vars(&self) -> impl Iterator<Item = Symbol> + '_ {
         let iterator: Box<dyn Iterator<Item = Symbol>> = match self {
-            Expr::Lit(_) => Box::new(std::iter::empty()),
-            Expr::Var(v) => Box::new(std::iter::once(*v)),
-            Expr::Call(_, exprs) => Box::new(exprs.iter().flat_map(|e| e.vars())),
+            Expr::Lit(_ann, _l) => Box::new(std::iter::empty()),
+            Expr::Var(_ann, v) => Box::new(std::iter::once(*v)),
+            Expr::Call(_ann, _head, exprs) => Box::new(exprs.iter().flat_map(|e| e.vars())),
         };
         iterator
     }
     
     pub(crate) fn map_def_use(
         &self,
-        fvar: &mut impl FnMut(Symbol) -> Symbol
+        fvar: &mut impl FnMut(Leaf) -> Leaf
     ) -> Self {
         match self {
-            Expr::Lit(_) => self.clone(),
-            Expr::Var(v) => Expr::Var(fvar(*v)),
-            Expr::Call(op, args) => {
+            Expr::Lit(ann, _) => self.clone(),
+            Expr::Var(ann, v) => Expr::Var(ann, fvar(*v)),
+            Expr::Call(ann, op, args) => {
                 let args = args.iter().map(|a| a.map_def_use(fvar)).collect();
-                Expr::Call(*op, args)
+                Expr::Call(ann, *op, args)
             }
         }
     }
 }
 
-impl Display for NormExpr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.to_expr())
-    }
-}
+// impl Display for NormExpr {
+//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+//         write!(f, "{}", self.to_expr())
+//     }
+// }
 
-impl Display for Expr {
+impl<Annon, Leaf> Display for Expr<Symbol, Leaf, Annon> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.to_sexp())
     }
@@ -215,7 +219,7 @@ impl Display for Expr {
 
 // currently only used for testing, but no reason it couldn't be used elsewhere later
 #[cfg(test)]
-pub(crate) fn parse_expr(s: &str) -> Result<Expr, lalrpop_util::ParseError<usize, String, String>> {
+pub(crate) fn parse_expr(s: &str) -> Result<UnresolvedExpr, lalrpop_util::ParseError<usize, String, String>> {
     let parser = ast::parse::ExprParser::new();
     parser
         .parse(s)

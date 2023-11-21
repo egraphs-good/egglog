@@ -13,7 +13,7 @@ lalrpop_mod!(
     "/ast/parse.rs"
 );
 
-use crate::*;
+use crate::{*, typecheck::ResolvedCall};
 
 mod expr;
 pub use expr::*;
@@ -40,64 +40,37 @@ impl Display for Id {
     }
 }
 
-pub type CommandId = usize;
-
-// TODO put line numbers in metadata
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
-pub struct Metadata {
-    pub id: CommandId,
-}
+pub type UnresolvedNCommand = NCommand<Symbol, Symbol, ()>;
+pub type ResolvedNCommand = NCommand<ResolvedCall, (Symbol, ArcSort), ()>;
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
-pub struct NormCommand {
-    pub metadata: Metadata,
-    pub command: NCommand,
-}
-
-impl NormCommand {
-    pub fn transforms_to(&self, others: Vec<NCommand>) -> Vec<NormCommand> {
-        others
-            .into_iter()
-            .map(|c| NormCommand {
-                metadata: self.metadata.clone(),
-                command: c,
-            })
-            .collect()
-    }
-
-    pub fn resugar(&self) -> Command {
-        self.command.to_command()
-    }
-}
-
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
-pub enum NCommand {
+pub enum NCommand<Head, Leaf, Ann> {
     SetOption {
         name: Symbol,
-        value: Expr,
+        value: Expr<Head, Leaf, Ann>,
     },
-    Sort(Symbol, Option<(Symbol, Vec<Expr>)>),
-    Function(NormFunctionDecl),
+    Sort(Symbol, Option<(Symbol, Vec<Expr<Head, Leaf, Ann>>)>),
+    Function(FunctionDecl<Head, Leaf, Ann>),
     AddRuleset(Symbol),
     NormRule {
         name: Symbol,
         ruleset: Symbol,
-        rule: Rule,
+    rule: Rule<Head, Leaf, Ann>,
     },
-    NormAction(Action),
-    RunSchedule(NormSchedule),
+    NormAction(Action<Head, Leaf, Ann>),
+    RunSchedule(Schedule<Head, Leaf, Ann>),
     PrintOverallStatistics,
-    Check(Vec<Fact>),
+    Check(Vec<Fact<Head, Leaf, Ann>>),
     CheckProof,
     PrintTable(Symbol, usize),
     PrintSize(Option<Symbol>),
     Output {
         file: String,
-        exprs: Vec<Expr>,
+        exprs: Vec<Expr<Head, Leaf, Ann>>,
     },
     Push(usize),
     Pop(usize),
-    Fail(Box<NCommand>),
+    Fail(Box<NCommand<Head, Leaf, Ann>>),
     // TODO desugar
     Input {
         name: Symbol,
@@ -105,14 +78,8 @@ pub enum NCommand {
     },
 }
 
-impl NormCommand {
-    pub fn to_command(&self) -> Command {
-        self.command.to_command()
-    }
-}
-
-impl NCommand {
-    pub fn to_command(&self) -> Command {
+impl<Head, Leaf, Ann> NCommand<Head, Leaf, Ann> {
+    pub fn to_command(&self) -> Command<Head, Leaf> {
         match self {
             NCommand::SetOption { name, value } => Command::SetOption {
                 name: *name,
@@ -194,52 +161,35 @@ impl NCommand {
     // }
 }
 
+pub type UnresolvedSchedule = Schedule<Symbol, Symbol, ()>;
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Schedule {
-    Saturate(Box<Schedule>),
-    Repeat(usize, Box<Schedule>),
-    Run(RunConfig),
-    Sequence(Vec<Schedule>),
+pub enum Schedule<Head, Leaf, Ann> {
+    Saturate(Box<Schedule<Head, Leaf, Ann>>),
+    Repeat(usize, Box<Schedule<Head, Leaf, Ann>>),
+    Run(RunConfig<Head, Leaf, Ann>),
+    Sequence(Vec<Schedule<Head, Leaf, Ann>>),
 }
 
-impl Schedule {
+impl<Head, Leaf, Ann> Schedule<Head, Leaf, Ann> {
     pub fn saturate(self) -> Self {
         Schedule::Saturate(Box::new(self))
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum NormSchedule {
-    Saturate(Box<NormSchedule>),
-    Repeat(usize, Box<NormSchedule>),
-    Run(NormRunConfig),
-    Sequence(Vec<NormSchedule>),
-}
 
-impl NormSchedule {
-    fn to_schedule(&self) -> Schedule {
-        match self {
-            NormSchedule::Saturate(sched) => Schedule::Saturate(Box::new(sched.to_schedule())),
-            NormSchedule::Repeat(size, sched) => {
-                Schedule::Repeat(*size, Box::new(sched.to_schedule()))
-            }
-            NormSchedule::Run(config) => Schedule::Run(config.to_run_config()),
-            NormSchedule::Sequence(scheds) => {
-                Schedule::Sequence(scheds.iter().map(|sched| sched.to_schedule()).collect())
-            }
-        }
-    }
+impl UnresolvedSchedule {
 
-    pub fn map_run_commands(&self, f: &mut impl FnMut(&NormRunConfig) -> Schedule) -> Schedule {
+    pub fn map_run_commands(&self, f: &mut impl FnMut(&UnresolvedRunConfig) -> UnresolvedSchedule) -> UnresolvedSchedule {
         match self {
-            NormSchedule::Run(config) => f(config),
-            NormSchedule::Saturate(sched) => {
+            Schedule::Run(config) => f(config),
+            Schedule::Saturate(sched) => {
                 Schedule::Saturate(Box::new(sched.map_run_commands(f)))
             }
-            NormSchedule::Repeat(size, sched) => {
+            Schedule::Repeat(size, sched) => {
                 Schedule::Repeat(*size, Box::new(sched.map_run_commands(f)))
             }
-            NormSchedule::Sequence(scheds) => Schedule::Sequence(
+            Schedule::Sequence(scheds) => Schedule::Sequence(
                 scheds
                     .iter()
                     .map(|sched| sched.map_run_commands(f))
@@ -289,7 +239,7 @@ macro_rules! list {
     }};
 }
 
-impl ToSexp for Schedule {
+impl<Head, Leaf, Ann> ToSexp for Schedule<Head, Leaf, Ann> {
     fn to_sexp(&self) -> Sexp {
         match self {
             Schedule::Saturate(sched) => list!("saturate", sched),
@@ -300,24 +250,20 @@ impl ToSexp for Schedule {
     }
 }
 
-impl Display for Schedule {
+impl<Head, Leaf, Ann> Display for Schedule<Head, Leaf, Ann> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.to_sexp())
     }
 }
 
-impl Display for NormSchedule {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.to_schedule())
-    }
-}
+pub type UnresolvedCommand = Command<Symbol, Symbol>;
 
 // TODO command before and after desugaring should be different
 /// A [`Command`] is the top-level construct in egglog.
 /// It includes defining rules, declaring functions,
 /// adding to tables, and running rules (via a [`Schedule`]).
 #[derive(Debug, Clone)]
-pub enum Command {
+pub enum Command<Head, Leaf> {
     /// Egglog supports several *experimental* options
     /// that can be set using the `set-option` command.
     ///
@@ -329,7 +275,7 @@ pub enum Command {
     /// tool to know when each command has finished running.
     SetOption {
         name: Symbol,
-        value: Expr,
+        value: Expr<Head, Leaf, ()>
     },
     /// Declare a user-defined datatype.
     /// Datatypes can be unioned with [`Action::Union`] either
@@ -395,7 +341,7 @@ pub enum Command {
     /// ```
     ///
     /// Now `MathVec` can be used as an input or output sort.
-    Sort(Symbol, Option<(Symbol, Vec<Expr>)>),
+    Sort(Symbol, Option<(Symbol, Vec<Expr<Head, Leaf, ()>>)>),
     /// Declare an egglog function, which is a database table with a
     /// a functional dependency (also called a primary key) on its inputs to one output.
     ///
@@ -441,7 +387,7 @@ pub enum Command {
     ///
     /// Functions that are not a datatype can be `set`
     /// with [`Action::Set`].
-    Function(FunctionDecl),
+    Function(FunctionDecl<Head, Leaf, ()>),
     /// The `relation` is syntactic sugar for a named function which returns the `Unit` type.
     /// Example:
     /// ```text
@@ -497,7 +443,7 @@ pub enum Command {
     Rule {
         name: Symbol,
         ruleset: Symbol,
-        rule: Rule,
+        rule: Rule<Head, Leaf, ()>,
     },
     /// `rewrite` is syntactic sugar for a specific form of `rule`
     /// which simply unions the left and right hand sides.
@@ -525,7 +471,7 @@ pub enum Command {
     ///          :when ((= a (Num 0)))
     /// ```
     ///
-    Rewrite(Symbol, Rewrite),
+    Rewrite(Symbol, Rewrite<Head, Leaf, ()>),
     /// Similar to [`Command::Rewrite`], but
     /// generates two rules, one for each direction.
     ///
@@ -542,14 +488,14 @@ pub enum Command {
     /// (rule ((= lhs (Var x)))
     ///       ((union lhs (Mul (Var x) (Num 0)))))
     /// ```
-    BiRewrite(Symbol, Rewrite),
+    BiRewrite(Symbol, Rewrite<Head, Leaf, ()>),
     /// Perform an [`Action`] on the global database
     /// (see documentation for [`Action`] for more details).
     /// Example:
     /// ```text
     /// (let xplusone (Add (Var "x") (Num 1)))
     /// ```
-    Action(Action),
+    Action(Action<Head, Leaf, ()>),
     /// Runs a [`Schedule`], which specifies
     /// rulesets and the number of times to run them.
     ///
@@ -564,17 +510,17 @@ pub enum Command {
     /// then runs `my-ruleset-2` four times.
     ///
     /// See [`Schedule`] for more details.
-    RunSchedule(Schedule),
+    RunSchedule(Schedule<Head, Leaf, ()>),
     /// Print runtime statistics about rules
     /// and rulesets so far.
     PrintOverallStatistics,
     // TODO provide simplify docs
     Simplify {
-        expr: Expr,
-        schedule: Schedule,
+        expr: Expr<Head, Leaf, ()>,
+        schedule: Schedule<Head, Leaf, ()>,
     },
     // TODO provide calc docs
-    Calc(Vec<IdentSort>, Vec<Expr>),
+    Calc(Vec<IdentSort>, Vec<Expr<Head, Leaf, ()>>),
     /// The `query-extract` command runs a query,
     /// extracting the result for each match that it finds.
     /// For a simpler extraction command, use [`Action::Extract`] instead.
@@ -602,7 +548,7 @@ pub enum Command {
     /// function.
     QueryExtract {
         variants: usize,
-        expr: Expr,
+        expr: Expr<Head, Leaf, ()>,
     },
     /// The `check` command checks that the given facts
     /// match at least once in the current database.
@@ -624,7 +570,7 @@ pub enum Command {
     /// [ERROR] Check failed
     /// [INFO ] Command failed as expected.
     /// ```
-    Check(Vec<Fact>),
+    Check(Vec<Fact<Head, Leaf, ()>>),
     /// Currently unused, this command will check proofs when they are implemented.
     CheckProof,
     /// Print out rows a given function, extracting each of the elements of the function.
@@ -645,7 +591,7 @@ pub enum Command {
     /// Extract and output a set of expressions to a file.
     Output {
         file: String,
-        exprs: Vec<Expr>,
+        exprs: Vec<Expr<Head, Leaf, ()>>,
     },
     /// `push` the current egraph `n` times so that it is saved.
     /// Later, the current database and rules can be restored using `pop`.
@@ -654,12 +600,12 @@ pub enum Command {
     /// The argument specifies how many egraphs to pop.
     Pop(usize),
     /// Assert that a command fails with an error.
-    Fail(Box<Command>),
+    Fail(Box<Command<Head, Leaf>>),
     /// Include another egglog file directly as text and run it.
     Include(String),
 }
 
-impl ToSexp for Command {
+impl<Head, Leaf> ToSexp for Command<Head, Leaf> {
     fn to_sexp(&self) -> Sexp {
         match self {
             Command::SetOption { name, value } => list!("set-option", name, value),
@@ -702,19 +648,13 @@ impl ToSexp for Command {
     }
 }
 
-impl Display for NormCommand {
+impl<Head, Leaf, Ann> Display for NCommand<Head, Leaf, Ann> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.to_command())
     }
 }
 
-impl Display for NCommand {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.to_command())
-    }
-}
-
-impl Display for Command {
+impl<Head, Leaf> Display for Command<Head, Leaf> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Command::Rule {
@@ -748,13 +688,16 @@ impl Display for IdentSort {
     }
 }
 
+pub type UnresolvedRunConfig = RunConfig<Symbol, Symbol, ()>;
+pub type ResolvedRunConfig = RunConfig<ResolvedCall, (Symbol, ArcSort), ()>;
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct RunConfig {
+pub struct RunConfig<Head, Leaf, Ann> {
     pub ruleset: Symbol,
-    pub until: Option<Vec<Fact>>,
+    pub until: Option<Vec<Fact<Head, Leaf, Ann>>>,
 }
 
-impl ToSexp for RunConfig {
+impl<Head, Leaf, Ann> ToSexp for RunConfig<Head, Leaf, Ann> {
     fn to_sexp(&self) -> Sexp {
         let mut res = vec![Sexp::Symbol("run".into())];
         if self.ruleset != "".into() {
@@ -769,62 +712,18 @@ impl ToSexp for RunConfig {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct NormRunConfig {
-    pub ctx: CommandId,
-    pub ruleset: Symbol,
-    pub until: Option<Vec<Fact>>,
-}
-
-impl NormRunConfig {
-    pub fn to_run_config(&self) -> RunConfig {
-        RunConfig {
-            ruleset: self.ruleset,
-            until: self.until.clone(),
-        }
-    }
-}
-
-/// A normalized function declaration- the desugared
-/// version of a [`FunctionDecl`].
-/// TODO so far only the merge action is normalized,
-/// not the default value or merge expression.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct NormFunctionDecl {
-    pub name: Symbol,
-    pub schema: Schema,
-    // todo desugar default, merge
-    pub default: Option<Expr>,
-    pub merge: Option<Expr>,
-    // This should later desugared to a CoreAction
-    pub merge_action: Vec<Action>,
-    pub cost: Option<usize>,
-    pub unextractable: bool,
-}
-
-impl NormFunctionDecl {
-    pub fn to_fdecl(&self) -> FunctionDecl {
-        FunctionDecl {
-            name: self.name,
-            schema: self.schema.clone(),
-            default: self.default.clone(),
-            merge: self.merge.clone(),
-            merge_action: self.merge_action.iter().map(|a| a.clone()).collect(),
-            cost: self.cost,
-            unextractable: self.unextractable,
-        }
-    }
-}
+pub type UnresolvedFunctionDecl = FunctionDecl<Symbol, Symbol, ()>;
+pub type ResolvedFunctionDecl = FunctionDecl<ResolvedCall, (Symbol, ArcSort), ()>;
 
 /// Represents the declaration of a function
 /// directly parsed from source syntax.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct FunctionDecl {
+pub struct FunctionDecl<Head, Leaf, Ann> {
     pub name: Symbol,
     pub schema: Schema,
-    pub default: Option<Expr>,
-    pub merge: Option<Expr>,
-    pub merge_action: Vec<Action>,
+    pub default: Option<Expr<Head, Leaf, Ann>>,
+    pub merge: Option<Expr<Head, Leaf, Ann>>,
+    pub merge_action: Vec<Action<Head, Leaf, Ann>>,
     pub cost: Option<usize>,
     pub unextractable: bool,
 }
@@ -868,7 +767,7 @@ impl Schema {
     }
 }
 
-impl FunctionDecl {
+impl<Head, Leaf, Ann> FunctionDecl<Head, Leaf, Ann> {
     pub fn relation(name: Symbol, input: Vec<Symbol>) -> Self {
         Self {
             name,
@@ -885,7 +784,7 @@ impl FunctionDecl {
     }
 }
 
-impl ToSexp for FunctionDecl {
+impl<Head, Leaf, Ann> ToSexp for FunctionDecl<Head, Leaf, Ann> {
     fn to_sexp(&self) -> Sexp {
         let mut res = vec![
             Sexp::Symbol("function".into()),
@@ -930,6 +829,9 @@ impl ToSexp for FunctionDecl {
     }
 }
 
+pub type UnresolvedFact = Fact<Symbol, Symbol, ()>;
+pub type ResolvedFact = Fact<ResolvedCall, (Symbol, ArcSort), ()>;
+
 /// Facts are the left-hand side of a [`Command::Rule`].
 /// They represent a part of a database query.
 /// Facts can be expressions or equality constraints between expressions.
@@ -941,13 +843,13 @@ impl ToSexp for FunctionDecl {
 /// (fail (check (!= 1 1)))
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum Fact {
+pub enum Fact<Head, Leaf, Ann> {
     /// Must be at least two things in an eq fact
-    Eq(Vec<Expr>),
-    Fact(Expr),
+    Eq(Vec<Expr<Head, Leaf, Ann>>),
+    Fact(Expr<Head, Leaf, Ann>),
 }
 
-impl ToSexp for Fact {
+impl<Head, Leaf, Ann> ToSexp for Fact<Head, Leaf, Ann> {
     fn to_sexp(&self) -> Sexp {
         match self {
             Fact::Eq(exprs) => list!("=", ++ exprs),
@@ -956,39 +858,41 @@ impl ToSexp for Fact {
     }
 }
 
-impl Fact {
-    pub fn map_exprs(&self, f: &mut impl FnMut(&Expr) -> Expr) -> Fact {
+impl<Head, Leaf, Ann> Fact<Head, Leaf, Ann> {
+    pub fn map_exprs(&self, f: &mut impl FnMut(&Expr<Head, Leaf, Ann>) -> Expr<Head, Leaf, Ann>) -> Self {
         match self {
             Fact::Eq(exprs) => Fact::Eq(exprs.iter().map(f).collect()),
             Fact::Fact(expr) => Fact::Fact(f(expr)),
         }
     }
 
-    pub fn subst(&self, subst: &HashMap<Symbol, Expr>) -> Fact {
+    pub fn subst(&self, subst: &HashMap<Symbol, Expr<Head, Leaf, Ann>>) -> Self {
         self.map_exprs(&mut |e| e.subst(subst))
     }
 }
 
-impl Display for Fact {
+impl<Head, Leaf, Ann> Display for Fact<Head, Leaf, Ann> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.to_sexp())
     }
 }
 
+pub type UnresolvedAction = Action<Symbol, Symbol, ()>;
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum Action {
+pub enum Action<Head, Leaf, Ann> {
     /// Bind a variable to a particular datatype or primitive.
     /// At the top level (in a [`Command::Action`]), this defines a global variable.
     /// In a [`Command::Rule`], this defines a local variable in the actions.
-    Let(Symbol, Expr),
+    Let(Ann, Symbol, Expr<Head, Leaf, Ann>),
     /// `set` a function to a particular result.
     /// `set` should not be used on datatypes-
     /// instead, use `union`.
-    Set(Symbol, Vec<Expr>, Expr),
+    Set(Ann, Symbol, Vec<Expr<Head, Leaf, Ann>>, Expr<Head, Leaf, Ann>),
     /// `delete` an entry from a function.
     /// Be wary! Only delete entries that are subsumed in some way or
     /// guaranteed to be not useful.
-    Delete(Symbol, Vec<Expr>),
+    Delete(Ann, Symbol, Vec<Expr<Head, Leaf, Ann>>),
     /// `union` two datatypes, making them equal
     /// in the implicit, global equality relation
     /// of egglog.
@@ -1001,7 +905,7 @@ pub enum Action {
     /// (extract (Num 1)); Extracts Num 1
     /// (extract (Num 2)); Extracts Num 1
     /// ```
-    Union(Expr, Expr),
+    Union(Ann, Expr<Head, Leaf, Ann>, Expr<Head, Leaf, Ann>),
     /// `extract` a datatype from the egraph, choosing
     /// the smallest representative.
     /// By default, each constructor costs 1 to extract
@@ -1010,83 +914,83 @@ pub enum Action {
     /// The second argument is the number of variants to
     /// extract, picking different terms in the
     /// same equivalence class.
-    Extract(Expr, Expr),
-    Panic(String),
-    Expr(Expr),
+    Extract(Ann, Expr<Head, Leaf, Ann>, Expr<Head, Leaf, Ann>),
+    Panic(Ann, String),
+    Expr(Ann, Expr<Head, Leaf, Ann>),
     // If(Expr, Action, Action),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum NormAction {
-    Let(Symbol, NormExpr),
-    LetVar(Symbol, Symbol),
-    LetLit(Symbol, Literal),
-    Extract(Symbol, Symbol),
-    Set(NormExpr, Symbol),
-    Delete(NormExpr),
-    Union(Symbol, Symbol),
-    Panic(String),
-}
+// #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+// pub enum NormAction {
+//     Let(Symbol, NormExpr),
+//     LetVar(Symbol, Symbol),
+//     LetLit(Symbol, Literal),
+//     Extract(Symbol, Symbol),
+//     Set(NormExpr, Symbol),
+//     Delete(NormExpr),
+//     Union(Symbol, Symbol),
+//     Panic(String),
+// }
 
-impl NormAction {
-    pub fn to_action(&self) -> Action {
-        match self {
-            NormAction::Let(symbol, expr) => Action::Let(*symbol, expr.to_expr()),
-            NormAction::LetVar(symbol, other) => Action::Let(*symbol, Expr::Var(*other)),
-            NormAction::LetLit(symbol, lit) => Action::Let(*symbol, Expr::Lit(lit.clone())),
-            NormAction::Set(NormExpr::Call(head, body), other) => Action::Set(
-                *head,
-                body.iter().map(|s| Expr::Var(*s)).collect(),
-                Expr::Var(*other),
-            ),
-            NormAction::Extract(symbol, variants) => {
-                Action::Extract(Expr::Var(*symbol), Expr::Var(*variants))
-            }
-            NormAction::Delete(NormExpr::Call(symbol, args)) => {
-                Action::Delete(*symbol, args.iter().map(|s| Expr::Var(*s)).collect())
-            }
-            NormAction::Union(lhs, rhs) => Action::Union(Expr::Var(*lhs), Expr::Var(*rhs)),
-            NormAction::Panic(msg) => Action::Panic(msg.clone()),
-        }
-    }
+// impl NormAction {
+//     pub fn to_action(&self) -> Action {
+//         match self {
+//             NormAction::Let(symbol, expr) => Action::Let(*symbol, expr.to_expr()),
+//             NormAction::LetVar(symbol, other) => Action::Let(*symbol, Expr::Var(*other)),
+//             NormAction::LetLit(symbol, lit) => Action::Let(*symbol, Expr::Lit(lit.clone())),
+//             NormAction::Set(NormExpr::Call(head, body), other) => Action::Set(
+//                 *head,
+//                 body.iter().map(|s| Expr::Var(*s)).collect(),
+//                 Expr::Var(*other),
+//             ),
+//             NormAction::Extract(symbol, variants) => {
+//                 Action::Extract(Expr::Var(*symbol), Expr::Var(*variants))
+//             }
+//             NormAction::Delete(NormExpr::Call(symbol, args)) => {
+//                 Action::Delete(*symbol, args.iter().map(|s| Expr::Var(*s)).collect())
+//             }
+//             NormAction::Union(lhs, rhs) => Action::Union(Expr::Var(*lhs), Expr::Var(*rhs)),
+//             NormAction::Panic(msg) => Action::Panic(msg.clone()),
+//         }
+//     }
 
-    pub fn map_exprs(&self, f: &mut impl FnMut(&NormExpr) -> NormExpr) -> NormAction {
-        match self {
-            NormAction::Let(symbol, expr) => NormAction::Let(*symbol, f(expr)),
-            NormAction::LetVar(symbol, other) => NormAction::LetVar(*symbol, *other),
-            NormAction::LetLit(symbol, lit) => NormAction::LetLit(*symbol, lit.clone()),
-            NormAction::Set(expr, other) => NormAction::Set(f(expr), *other),
-            NormAction::Extract(var, variants) => NormAction::Extract(*var, *variants),
-            NormAction::Delete(expr) => NormAction::Delete(f(expr)),
-            NormAction::Union(lhs, rhs) => NormAction::Union(*lhs, *rhs),
-            NormAction::Panic(msg) => NormAction::Panic(msg.clone()),
-        }
-    }
+//     pub fn map_exprs(&self, f: &mut impl FnMut(&NormExpr) -> NormExpr) -> NormAction {
+//         match self {
+//             NormAction::Let(symbol, expr) => NormAction::Let(*symbol, f(expr)),
+//             NormAction::LetVar(symbol, other) => NormAction::LetVar(*symbol, *other),
+//             NormAction::LetLit(symbol, lit) => NormAction::LetLit(*symbol, lit.clone()),
+//             NormAction::Set(expr, other) => NormAction::Set(f(expr), *other),
+//             NormAction::Extract(var, variants) => NormAction::Extract(*var, *variants),
+//             NormAction::Delete(expr) => NormAction::Delete(f(expr)),
+//             NormAction::Union(lhs, rhs) => NormAction::Union(*lhs, *rhs),
+//             NormAction::Panic(msg) => NormAction::Panic(msg.clone()),
+//         }
+//     }
 
-    // fvar accepts a variable and if it is being defined (true) or used (false)
-    pub(crate) fn map_def_use(&self, fvar: &mut impl FnMut(Symbol, bool) -> Symbol) -> NormAction {
-        match self {
-            NormAction::Let(symbol, expr) => {
-                NormAction::Let(fvar(*symbol, true), expr.map_def_use(fvar, false))
-            }
-            NormAction::LetVar(symbol, other) => {
-                NormAction::LetVar(fvar(*symbol, true), fvar(*other, false))
-            }
-            NormAction::LetLit(symbol, lit) => NormAction::LetLit(fvar(*symbol, true), lit.clone()),
-            NormAction::Set(expr, other) => {
-                NormAction::Set(expr.map_def_use(fvar, false), fvar(*other, false))
-            }
-            NormAction::Extract(var, variants) => {
-                NormAction::Extract(fvar(*var, false), fvar(*variants, false))
-            }
-            NormAction::Delete(expr) => NormAction::Delete(expr.map_def_use(fvar, false)),
-            NormAction::Union(lhs, rhs) => NormAction::Union(fvar(*lhs, false), fvar(*rhs, false)),
-            NormAction::Panic(msg) => NormAction::Panic(msg.clone()),
-        }
-    }
-}
+//     // fvar accepts a variable and if it is being defined (true) or used (false)
+//     pub(crate) fn map_def_use(&self, fvar: &mut impl FnMut(Symbol, bool) -> Symbol) -> NormAction {
+//         match self {
+//             NormAction::Let(symbol, expr) => {
+//                 NormAction::Let(fvar(*symbol, true), expr.map_def_use(fvar, false))
+//             }
+//             NormAction::LetVar(symbol, other) => {
+//                 NormAction::LetVar(fvar(*symbol, true), fvar(*other, false))
+//             }
+//             NormAction::LetLit(symbol, lit) => NormAction::LetLit(fvar(*symbol, true), lit.clone()),
+//             NormAction::Set(expr, other) => {
+//                 NormAction::Set(expr.map_def_use(fvar, false), fvar(*other, false))
+//             }
+//             NormAction::Extract(var, variants) => {
+//                 NormAction::Extract(fvar(*var, false), fvar(*variants, false))
+//             }
+//             NormAction::Delete(expr) => NormAction::Delete(expr.map_def_use(fvar, false)),
+//             NormAction::Union(lhs, rhs) => NormAction::Union(fvar(*lhs, false), fvar(*rhs, false)),
+//             NormAction::Panic(msg) => NormAction::Panic(msg.clone()),
+//         }
+//     }
+// }
 
-impl ToSexp for Action {
+impl<Head, Leaf, Ann> ToSexp for Action<Head, Leaf, Ann> {
     fn to_sexp(&self) -> Sexp {
         match self {
             Action::Let(lhs, rhs) => list!("let", lhs, rhs),
@@ -1100,8 +1004,8 @@ impl ToSexp for Action {
     }
 }
 
-impl Action {
-    pub fn map_exprs(&self, f: &mut impl FnMut(&Expr) -> Expr) -> Self {
+impl<Head, Leaf, Ann> Action<Head, Leaf, Ann> {
+    pub fn map_exprs(&self, f: &mut impl FnMut(&Expr<Head, Leaf, Ann>) -> Expr<Head, Leaf, Ann>) -> Self {
         match self {
             Action::Let(lhs, rhs) => Action::Let(*lhs, f(rhs)),
             Action::Set(lhs, args, rhs) => {
@@ -1116,7 +1020,7 @@ impl Action {
         }
     }
 
-    pub fn replace_canon(&self, canon: &HashMap<Symbol, Expr>) -> Self {
+    pub fn replace_canon(&self, canon: &HashMap<Symbol, Expr<Head, Leaf, Ann>>) -> Self {
         match self {
             Action::Let(lhs, rhs) => Action::Let(*lhs, rhs.subst(canon)),
             Action::Set(lhs, args, rhs) => Action::Set(
@@ -1174,25 +1078,23 @@ impl Action {
     }
 }
 
-impl Display for NormAction {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.to_action())
-    }
-}
-
-impl Display for Action {
+impl Display for UnresolvedAction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.to_sexp())
     }
 }
 
+
+pub type UnresolvedRule = Rule<Symbol, Symbol, ()>;
+pub type ResolvedRule = Rule<ResolvedCall, (Symbol, ArcSort), ()>;
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Rule {
-    pub head: Vec<Action>,
-    pub body: Vec<Fact>,
+pub struct Rule<Head, Leaf, Ann> {
+    pub head: Vec<Action<Head, Leaf, Ann>>,
+    pub body: Vec<Fact<Head, Leaf, Ann>>,
 }
 
-impl Rule {
+impl UnresolvedRule {
     /// Converts this rule into an s-expression.
     pub fn to_sexp(&self, ruleset: Symbol, name: Symbol) -> Sexp {
         let mut res = vec![
@@ -1211,7 +1113,7 @@ impl Rule {
         Sexp::List(res)
     }
 
-    pub fn map_exprs(&self, f: &mut impl FnMut(&Expr) -> Expr) -> Self {
+    pub fn map_exprs(&self, f: &mut impl FnMut(&UnresolvedExpr) -> UnresolvedExpr) -> Self {
         Rule {
             head: self.head.iter().map(|a| a.map_exprs(f)).collect(),
             body: self.body.iter().map(|fact| fact.map_exprs(f)).collect(),
@@ -1262,20 +1164,20 @@ impl Rule {
     }
 }
 
-impl Display for Rule {
+impl<Head, Leaf, Ann> Display for Rule<Head, Leaf, Ann> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.fmt_with_ruleset(f, "".into(), "".into())
     }
 }
 
 #[derive(Clone, Debug)]
-pub struct Rewrite {
-    pub lhs: Expr,
-    pub rhs: Expr,
-    pub conditions: Vec<Fact>,
+pub struct Rewrite<Head, Leaf, Ann> {
+    pub lhs: Expr<Head, Leaf, Ann>,
+    pub rhs: Expr<Head, Leaf, Ann>,
+    pub conditions: Vec<Fact<Head, Leaf, Ann>>,
 }
 
-impl Rewrite {
+impl<Head, Leaf, Ann> Rewrite<Head, Leaf, Ann> {
     /// Converts the rewrite into an s-expression.
     pub fn to_sexp(&self, ruleset: Symbol, is_bidirectional: bool) -> Sexp {
         let mut res = vec![
@@ -1303,7 +1205,7 @@ impl Rewrite {
     }
 }
 
-impl Display for Rewrite {
+impl<Head, Leaf, Ann> Display for Rewrite<Head, Leaf, Ann> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.to_sexp("".into(), false))
     }

@@ -14,6 +14,8 @@ pub struct FuncType {
     pub has_default: bool,
 }
 
+
+
 /// Stores resolved typechecking information.
 /// TODO make these not public, use accessor methods
 #[derive(Clone)]
