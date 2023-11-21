@@ -1,6 +1,6 @@
 use std::ops::AddAssign;
 
-use crate::{constraint::AllEqualTypeConstraint, *};
+use crate::{constraint::AllEqualTypeConstraint, *, ast::desugar::flatten_actions};
 use hashbrown::HashMap;
 use typechecking::TypeError;
 
@@ -99,7 +99,7 @@ impl UnresolvedCoreRule {
     }
 }
 
-pub(crate) fn facts_to_query(body: &Vec<NormFact>, typeinfo: &TypeInfo) -> Query<SymbolOrEq> {
+pub(crate) fn facts_to_query(body: &Vec<Fact>, typeinfo: &TypeInfo) -> Query<SymbolOrEq> {
     fn to_atom_term(s: Symbol, typeinfo: &TypeInfo) -> AtomTerm {
         if typeinfo.is_global(s) {
             AtomTerm::Global(s)
@@ -109,44 +109,50 @@ pub(crate) fn facts_to_query(body: &Vec<NormFact>, typeinfo: &TypeInfo) -> Query
     }
     let mut atoms = vec![];
     for fact in body {
-        match fact {
-            NormFact::Assign(symbol, NormExpr::Call(head, args))
-            | NormFact::Compute(symbol, NormExpr::Call(head, args)) => {
-                let args = args
-                    .iter()
-                    .chain(once(symbol))
-                    .cloned()
-                    .map(|s| to_atom_term(s, typeinfo))
-                    .collect();
-                let head = SymbolOrEq::Symbol(*head);
-                atoms.push(Atom { head, args });
-            }
-            NormFact::AssignVar(lhs, rhs) => atoms.push(Atom {
-                head: SymbolOrEq::Eq,
-                args: vec![to_atom_term(*lhs, typeinfo), to_atom_term(*rhs, typeinfo)],
-            }),
-            NormFact::ConstrainEq(lhs, rhs) => atoms.push(Atom {
-                head: SymbolOrEq::Eq,
-                args: vec![to_atom_term(*lhs, typeinfo), to_atom_term(*rhs, typeinfo)],
-            }),
-            NormFact::AssignLit(symbol, lit) => atoms.push(Atom {
-                head: SymbolOrEq::Eq,
-                args: vec![
-                    to_atom_term(*symbol, typeinfo),
-                    AtomTerm::Literal(lit.clone()),
-                ],
-            }),
-        }
+        // match fact {
+        //     NormFact::Assign(symbol, NormExpr::Call(head, args))
+        //     | NormFact::Compute(symbol, NormExpr::Call(head, args)) => {
+        //         let args = args
+        //             .iter()
+        //             .chain(once(symbol))
+        //             .cloned()
+        //             .map(|s| to_atom_term(s, typeinfo))
+        //             .collect();
+        //         let head = SymbolOrEq::Symbol(*head);
+        //         atoms.push(Atom { head, args });
+        //     }
+        //     NormFact::AssignVar(lhs, rhs) => atoms.push(Atom {
+        //         head: SymbolOrEq::Eq,
+        //         args: vec![to_atom_term(*lhs, typeinfo), to_atom_term(*rhs, typeinfo)],
+        //     }),
+        //     NormFact::ConstrainEq(lhs, rhs) => atoms.push(Atom {
+        //         head: SymbolOrEq::Eq,
+        //         args: vec![to_atom_term(*lhs, typeinfo), to_atom_term(*rhs, typeinfo)],
+        //     }),
+        //     NormFact::AssignLit(symbol, lit) => atoms.push(Atom {
+        //         head: SymbolOrEq::Eq,
+        //         args: vec![
+        //             to_atom_term(*symbol, typeinfo),
+        //             AtomTerm::Literal(lit.clone()),
+        //         ],
+        //     }),
+        // }
+        todo!("refactor")
     }
     Query { atoms }
 }
 
-impl NormRule {
+pub(crate) fn actions_to_core_actions(actions: &[Action]) -> Vec<NormAction> {
+    let mut desugar = Desugar::default();
+    flatten_actions(actions, &mut desugar)
+}
+
+impl Rule {
     pub(crate) fn to_core_rule(&self, typeinfo: &TypeInfo) -> UnresolvedCoreRule {
-        let NormRule { head, body } = self;
+        let Rule { head, body } = self;
         UnresolvedCoreRule {
             body: facts_to_query(body, typeinfo),
-            head: Actions(head.clone()),
+            head: Actions(actions_to_core_actions(head)),
         }
     }
 }
@@ -468,10 +474,10 @@ impl<'a> Context<'a> {
         Ok(result_rule)
     }
 
-    pub(crate) fn compile_norm_rule(
+    pub(crate) fn compile_rule(
         &mut self,
         ctx: CommandId,
-        rule: &'a NormRule,
+        rule: &'a Rule,
     ) -> Result<ResolvedCoreRule, Vec<TypeError>> {
         let rule = rule.to_core_rule(self.egraph.type_info());
         let rule = self.canonicalize(rule);

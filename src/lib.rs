@@ -19,7 +19,7 @@ mod gj;
 mod serialize;
 pub mod sort;
 mod termdag;
-mod terms;
+// mod terms;
 mod typecheck;
 mod typechecking;
 mod unionfind;
@@ -34,7 +34,7 @@ use instant::{Duration, Instant};
 pub use serialize::SerializeConfig;
 use sort::*;
 pub use termdag::{Term, TermDag, TermId};
-use terms::TermState;
+// use terms::TermState;
 use thiserror::Error;
 
 use generic_symbolic_expressions::Sexp;
@@ -1043,13 +1043,13 @@ impl EGraph {
         &mut self,
         ctx: CommandId,
         name: String,
-        rule: NormRule,
+        rule: ast::Rule,
         ruleset: Symbol,
     ) -> Result<Symbol, Error> {
         let name = Symbol::from(name);
         let mut compiler = typecheck::Context::new(self);
         let core_rule = compiler
-            .compile_norm_rule(ctx, &rule)
+            .compile_rule(ctx, &rule)
             .map_err(Error::TypeErrors)?;
         let (query, action) = (core_rule.body, core_rule.head);
 
@@ -1091,7 +1091,7 @@ impl EGraph {
     pub(crate) fn add_rule(
         &mut self,
         ctx: CommandId,
-        rule: NormRule,
+        rule: ast::Rule,
         ruleset: Symbol,
     ) -> Result<Symbol, Error> {
         let name = format!("{}", rule);
@@ -1161,14 +1161,14 @@ impl EGraph {
         }
     }
 
-    fn check_facts(&mut self, ctx: CommandId, facts: &[NormFact]) -> Result<(), Error> {
+    fn check_facts(&mut self, ctx: CommandId, facts: &[Fact]) -> Result<(), Error> {
         let mut compiler = typecheck::Context::new(self);
-        let rule = NormRule {
+        let rule = ast::Rule {
             head: vec![],
             body: facts.to_vec(),
         };
         let rule = compiler
-            .compile_norm_rule(ctx, &rule)
+            .compile_rule(ctx, &rule)
             .map_err(Error::TypeErrors)?;
         let query0 = rule.body;
         let types: IndexMap<_, _> = self
@@ -1260,8 +1260,8 @@ impl EGraph {
             NCommand::NormAction(action) => {
                 if should_run {
                     match &action {
-                        NormAction::Let(name, contents) => {
-                            let (etype, value) = self.eval_expr(&contents.to_expr(), None, true)?;
+                        Action::Let(name, contents) => {
+                            let (etype, value) = self.eval_expr(&contents, None, true)?;
                             let present = self
                                 .global_bindings
                                 .insert(*name, (etype, value, self.timestamp));
@@ -1269,26 +1269,8 @@ impl EGraph {
                                 panic!("Variable {name} was already present in global bindings");
                             }
                         }
-                        NormAction::LetVar(var1, var2) => {
-                            let value = self.global_bindings.get(var2).unwrap();
-                            let present = self.global_bindings.insert(*var1, value.clone());
-                            if present.is_some() {
-                                panic!("Variable {var1} was already present in global bindings");
-                            }
-                        }
-                        NormAction::LetLit(var, lit) => {
-                            let value = self.eval_lit(lit);
-                            let etype = self.type_info().infer_literal(lit);
-                            let present = self
-                                .global_bindings
-                                .insert(*var, (etype, value, self.timestamp));
-
-                            if present.is_some() {
-                                panic!("Variable {var} was already present in global bindings");
-                            }
-                        }
                         _ => {
-                            self.eval_actions(std::slice::from_ref(&action.to_action()))?;
+                            self.eval_actions(std::slice::from_ref(&action))?;
                         }
                     }
                 } else {
@@ -1477,10 +1459,11 @@ impl EGraph {
         }
 
         // now add term encoding
-        if self.terms_enabled {
-            let program_terms = TermState::add_term_encoding(self, program);
-            program = self.desugar.desugar_program(program_terms, false, false)?;
-        }
+        todo!("commented out for now");
+        // if self.terms_enabled {
+        //     let program_terms = TermState::add_term_encoding(self, program);
+        //     program = self.desugar.desugar_program(program_terms, false, false)?;
+        // }
 
         if stop == CompilerPassStop::TermEncoding {
             return Ok(program);
@@ -1607,7 +1590,7 @@ pub enum Error {
     #[error("Errors:\n{}", ListDisplay(.0, "\n"))]
     TypeErrors(Vec<TypeError>),
     #[error("Check failed: \n{}", ListDisplay(.0, "\n"))]
-    CheckError(Vec<NormFact>),
+    CheckError(Vec<Fact>),
     #[error("Evaluating primitive {0:?} failed. ({0:?} {:?})", ListDebug(.1, " "))]
     PrimitiveError(Primitive, Vec<Value>),
     #[error("Illegal merge attempted for function {0}, {1:?} != {2:?}")]

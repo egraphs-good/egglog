@@ -1,4 +1,4 @@
-use super::Rule;
+use super::{expr, Rule};
 use crate::*;
 
 fn desugar_datatype(name: Symbol, variants: Vec<Variant>) -> Vec<NCommand> {
@@ -34,16 +34,13 @@ fn desugar_rewrite(
     vec![NCommand::NormRule {
         ruleset,
         name,
-        rule: flatten_rule(
-            Rule {
-                body: [Fact::Eq(vec![Expr::Var(var), rewrite.lhs.clone()])]
-                    .into_iter()
-                    .chain(rewrite.conditions.clone())
-                    .collect(),
-                head: vec![Action::Union(Expr::Var(var), rewrite.rhs.clone())],
-            },
-            desugar,
-        ),
+        rule: Rule {
+            body: [Fact::Eq(vec![Expr::Var(var), rewrite.lhs.clone()])]
+                .into_iter()
+                .chain(rewrite.conditions.clone())
+                .collect(),
+            head: vec![Action::Union(Expr::Var(var), rewrite.rhs.clone())],
+        },
     }]
 }
 
@@ -69,161 +66,161 @@ fn desugar_birewrite(
         .collect()
 }
 
-fn normalize_expr(
-    lhs_in: Symbol,
-    expr: &Expr,
-    desugar: &mut Desugar,
-    res: &mut Vec<NormFact>,
-    constraints: &mut Vec<(Symbol, Symbol)>,
-    bound: &mut HashSet<Symbol>,
-    cache: &mut HashMap<Expr, Symbol>,
-) {
-    let is_bound = |var, desugar: &Desugar, bound_variables: &HashSet<Symbol>| {
-        desugar.global_variables.contains(&var) || bound_variables.contains(&var)
-    };
-    if let Some(var) = cache.get(expr) {
-        if is_bound(lhs_in, desugar, bound) {
-            constraints.push((lhs_in, *var));
-        } else {
-            bound.insert(lhs_in);
-            res.push(NormFact::AssignVar(lhs_in, *var));
-        }
-        return;
-    }
+// fn normalize_expr(
+//     lhs_in: Symbol,
+//     expr: &Expr,
+//     desugar: &mut Desugar,
+//     res: &mut Vec<NormFact>,
+//     constraints: &mut Vec<(Symbol, Symbol)>,
+//     bound: &mut HashSet<Symbol>,
+//     cache: &mut HashMap<Expr, Symbol>,
+// ) {
+//     let is_bound = |var, desugar: &Desugar, bound_variables: &HashSet<Symbol>| {
+//         desugar.global_variables.contains(&var) || bound_variables.contains(&var)
+//     };
+//     if let Some(var) = cache.get(expr) {
+//         if is_bound(lhs_in, desugar, bound) {
+//             constraints.push((lhs_in, *var));
+//         } else {
+//             bound.insert(lhs_in);
+//             res.push(NormFact::AssignVar(lhs_in, *var));
+//         }
+//         return;
+//     }
 
-    if let Expr::Var(v) = expr {
-        if *v == lhs_in {
-            return;
-        }
-        if is_bound(lhs_in, desugar, bound) && is_bound(*v, desugar, bound) {
-            constraints.push((lhs_in, *v));
-        } else if is_bound(lhs_in, desugar, bound) {
-            bound.insert(*v);
-            res.push(NormFact::AssignVar(*v, lhs_in));
-        } else if is_bound(*v, desugar, bound) {
-            bound.insert(lhs_in);
-            res.push(NormFact::AssignVar(lhs_in, *v));
-        } else {
-            // TODO give proper error message and handle
-            // a wider variety of queries
-            panic!("Unbound variable {v}");
-        }
-        return;
-    }
+//     if let Expr::Var(v) = expr {
+//         if *v == lhs_in {
+//             return;
+//         }
+//         if is_bound(lhs_in, desugar, bound) && is_bound(*v, desugar, bound) {
+//             constraints.push((lhs_in, *v));
+//         } else if is_bound(lhs_in, desugar, bound) {
+//             bound.insert(*v);
+//             res.push(NormFact::AssignVar(*v, lhs_in));
+//         } else if is_bound(*v, desugar, bound) {
+//             bound.insert(lhs_in);
+//             res.push(NormFact::AssignVar(lhs_in, *v));
+//         } else {
+//             // TODO give proper error message and handle
+//             // a wider variety of queries
+//             panic!("Unbound variable {v}");
+//         }
+//         return;
+//     }
 
-    let lhs = if !is_bound(lhs_in, desugar, bound) {
-        bound.insert(lhs_in);
-        lhs_in
-    } else {
-        let fresh = desugar.get_fresh();
-        constraints.push((fresh, lhs_in));
-        fresh
-    };
+//     let lhs = if !is_bound(lhs_in, desugar, bound) {
+//         bound.insert(lhs_in);
+//         lhs_in
+//     } else {
+//         let fresh = desugar.get_fresh();
+//         constraints.push((fresh, lhs_in));
+//         fresh
+//     };
 
-    match expr {
-        Expr::Lit(l) => res.push(NormFact::AssignLit(lhs, l.clone())),
-        Expr::Var(_v) => {
-            panic!("handled above");
-        }
-        Expr::Call(f, children) => {
-            let is_compute = desugar.type_info.is_primitive(*f);
-            let mut new_children = vec![];
-            for child in children {
-                match child {
-                    Expr::Var(v) => {
-                        if is_compute {
-                            if !is_bound(*v, desugar, bound) {
-                                panic!("Unbound variable {v} in primitive computation");
-                            }
-                            new_children.push(*v);
-                        } else if is_bound(*v, desugar, bound) {
-                            let fresh = desugar.get_fresh();
-                            new_children.push(fresh);
-                            constraints.push((fresh, *v));
-                        } else {
-                            bound.insert(*v);
-                            new_children.push(*v);
-                        }
-                    }
-                    _ => {
-                        let fresh = desugar.get_fresh();
-                        if !is_compute {
-                            bound.insert(fresh);
-                        }
-                        normalize_expr(fresh, child, desugar, res, constraints, bound, cache);
-                        new_children.push(fresh);
-                    }
-                }
-            }
+//     match expr {
+//         Expr::Lit(l) => res.push(NormFact::AssignLit(lhs, l.clone())),
+//         Expr::Var(_v) => {
+//             panic!("handled above");
+//         }
+//         Expr::Call(f, children) => {
+//             let is_compute = desugar.type_info.is_primitive(*f);
+//             let mut new_children = vec![];
+//             for child in children {
+//                 match child {
+//                     Expr::Var(v) => {
+//                         if is_compute {
+//                             if !is_bound(*v, desugar, bound) {
+//                                 panic!("Unbound variable {v} in primitive computation");
+//                             }
+//                             new_children.push(*v);
+//                         } else if is_bound(*v, desugar, bound) {
+//                             let fresh = desugar.get_fresh();
+//                             new_children.push(fresh);
+//                             constraints.push((fresh, *v));
+//                         } else {
+//                             bound.insert(*v);
+//                             new_children.push(*v);
+//                         }
+//                     }
+//                     _ => {
+//                         let fresh = desugar.get_fresh();
+//                         if !is_compute {
+//                             bound.insert(fresh);
+//                         }
+//                         normalize_expr(fresh, child, desugar, res, constraints, bound, cache);
+//                         new_children.push(fresh);
+//                     }
+//                 }
+//             }
 
-            if is_compute {
-                res.push(NormFact::Compute(lhs, NormExpr::Call(*f, new_children)));
-            } else {
-                res.push(NormFact::Assign(lhs, NormExpr::Call(*f, new_children)));
-            }
-        }
-    };
-    cache.insert(expr.clone(), lhs);
-}
+//             if is_compute {
+//                 res.push(NormFact::Compute(lhs, NormExpr::Call(*f, new_children)));
+//             } else {
+//                 res.push(NormFact::Assign(lhs, NormExpr::Call(*f, new_children)));
+//             }
+//         }
+//     };
+//     cache.insert(expr.clone(), lhs);
+// }
 
-fn flatten_equalities(equalities: Vec<(Symbol, Expr)>, desugar: &mut Desugar) -> Vec<NormFact> {
-    let mut res = vec![];
-    let mut bound_variables: HashSet<Symbol> = Default::default();
-    let mut constraints: Vec<(Symbol, Symbol)> = Default::default();
-    let mut cache = Default::default();
+// fn flatten_equalities(equalities: Vec<(Symbol, Expr)>, desugar: &mut Desugar) -> Vec<NormFact> {
+//     let mut res = vec![];
+//     let mut bound_variables: HashSet<Symbol> = Default::default();
+//     let mut constraints: Vec<(Symbol, Symbol)> = Default::default();
+//     let mut cache = Default::default();
 
-    for (lhs, rhs) in equalities {
-        normalize_expr(
-            lhs,
-            &rhs,
-            desugar,
-            &mut res,
-            &mut constraints,
-            &mut bound_variables,
-            &mut cache,
-        );
-    }
+//     for (lhs, rhs) in equalities {
+//         normalize_expr(
+//             lhs,
+//             &rhs,
+//             desugar,
+//             &mut res,
+//             &mut constraints,
+//             &mut bound_variables,
+//             &mut cache,
+//         );
+//     }
 
-    for (lhs, rhs) in constraints {
-        res.push(NormFact::ConstrainEq(lhs, rhs));
-    }
+//     for (lhs, rhs) in constraints {
+//         res.push(NormFact::ConstrainEq(lhs, rhs));
+//     }
 
-    res
-}
+//     res
+// }
 
-fn flatten_facts(facts: &Vec<Fact>, desugar: &mut Desugar) -> Vec<NormFact> {
-    let mut equalities = vec![];
-    for fact in facts {
-        match fact {
-            Fact::Eq(args) => {
-                assert!(args.len() == 2);
-                let lhs = &args[0];
-                let rhs = &args[1];
-                if let Expr::Var(v) = lhs {
-                    equalities.push((*v, rhs.clone()));
-                } else if let Expr::Var(v) = rhs {
-                    equalities.push((*v, lhs.clone()));
-                } else {
-                    let fresh = desugar.get_fresh();
-                    equalities.push((fresh, lhs.clone()));
-                    equalities.push((fresh, rhs.clone()));
-                }
-            }
-            Fact::Fact(expr) => {
-                // we can drop facts that are
-                // just a variable
-                if let Expr::Var(_v) = expr {
-                } else {
-                    equalities.push((desugar.get_fresh(), expr.clone()));
-                }
-            }
-        }
-    }
+// fn flatten_facts(facts: &Vec<Fact>, desugar: &mut Desugar) -> Vec<NormFact> {
+//     let mut equalities = vec![];
+//     for fact in facts {
+//         match fact {
+//             Fact::Eq(args) => {
+//                 assert!(args.len() == 2);
+//                 let lhs = &args[0];
+//                 let rhs = &args[1];
+//                 if let Expr::Var(v) = lhs {
+//                     equalities.push((*v, rhs.clone()));
+//                 } else if let Expr::Var(v) = rhs {
+//                     equalities.push((*v, lhs.clone()));
+//                 } else {
+//                     let fresh = desugar.get_fresh();
+//                     equalities.push((fresh, lhs.clone()));
+//                     equalities.push((fresh, rhs.clone()));
+//                 }
+//             }
+//             Fact::Fact(expr) => {
+//                 // we can drop facts that are
+//                 // just a variable
+//                 if let Expr::Var(_v) = expr {
+//                 } else {
+//                     equalities.push((desugar.get_fresh(), expr.clone()));
+//                 }
+//             }
+//         }
+//     }
 
-    flatten_equalities(equalities, desugar)
-}
+//     flatten_equalities(equalities, desugar)
+// }
 
-fn flatten_actions(actions: &Vec<Action>, desugar: &mut Desugar) -> Vec<NormAction> {
+pub(crate) fn flatten_actions(actions: &[Action], desugar: &mut Desugar) -> Vec<NormAction> {
     let mut memo = Default::default();
     let mut add_expr = |expr: Expr, res: &mut Vec<NormAction>| -> Symbol {
         desugar.expr_to_flat_actions(&expr, res, &mut memo)
@@ -287,50 +284,50 @@ fn flatten_actions(actions: &Vec<Action>, desugar: &mut Desugar) -> Vec<NormActi
     res
 }
 
-fn give_unique_names(desugar: &mut Desugar, facts: Vec<NormFact>) -> Vec<NormFact> {
-    let mut name_used: HashSet<Symbol> = Default::default();
-    let mut constraints: Vec<NormFact> = Default::default();
-    let mut res = vec![];
-    for fact in facts {
-        let mut name_used_immediately: HashSet<Symbol> = Default::default();
-        let mut constraints_before = vec![];
-        let new_fact = fact.map_def_use(&mut |var, is_def| {
-            if is_def {
-                if name_used.insert(var) {
-                    name_used_immediately.insert(var);
-                    var
-                } else {
-                    let fresh = desugar.get_fresh();
-                    // typechecking BS- for primitives
-                    // we need to define variables before they are used
-                    if name_used_immediately.contains(&var) {
-                        constraints.push(NormFact::ConstrainEq(fresh, var));
-                    } else {
-                        constraints_before.push(NormFact::ConstrainEq(fresh, var));
-                    }
-                    fresh
-                }
-            } else {
-                var
-            }
-        });
-        res.extend(constraints_before);
-        res.push(new_fact);
-    }
+// fn give_unique_names(desugar: &mut Desugar, facts: Vec<NormFact>) -> Vec<NormFact> {
+//     let mut name_used: HashSet<Symbol> = Default::default();
+//     let mut constraints: Vec<NormFact> = Default::default();
+//     let mut res = vec![];
+//     for fact in facts {
+//         let mut name_used_immediately: HashSet<Symbol> = Default::default();
+//         let mut constraints_before = vec![];
+//         let new_fact = fact.map_def_use(&mut |var, is_def| {
+//             if is_def {
+//                 if name_used.insert(var) {
+//                     name_used_immediately.insert(var);
+//                     var
+//                 } else {
+//                     let fresh = desugar.get_fresh();
+//                     // typechecking BS- for primitives
+//                     // we need to define variables before they are used
+//                     if name_used_immediately.contains(&var) {
+//                         constraints.push(NormFact::ConstrainEq(fresh, var));
+//                     } else {
+//                         constraints_before.push(NormFact::ConstrainEq(fresh, var));
+//                     }
+//                     fresh
+//                 }
+//             } else {
+//                 var
+//             }
+//         });
+//         res.extend(constraints_before);
+//         res.push(new_fact);
+//     }
 
-    res.extend(constraints);
-    res
-}
+//     res.extend(constraints);
+//     res
+// }
 
-fn flatten_rule(rule: Rule, desugar: &mut Desugar) -> NormRule {
-    let flat_facts = flatten_facts(&rule.body, desugar);
-    let with_unique_names = give_unique_names(desugar, flat_facts);
+// fn flatten_rule(rule: Rule, desugar: &mut Desugar) -> NormRule {
+//     let flat_facts = flatten_facts(&rule.body, desugar);
+//     let with_unique_names = give_unique_names(desugar, flat_facts);
 
-    NormRule {
-        head: flatten_actions(&rule.head, desugar),
-        body: with_unique_names,
-    }
-}
+//     NormRule {
+//         head: flatten_actions(&rule.head, desugar),
+//         body: with_unique_names,
+//     }
+// }
 
 fn desugar_schedule(desugar: &mut Desugar, schedule: &Schedule) -> NormSchedule {
     match schedule {
@@ -361,7 +358,7 @@ fn desugar_run_config(desugar: &mut Desugar, run_config: &RunConfig) -> NormRunC
     NormRunConfig {
         ctx: desugar.get_new_id(),
         ruleset: *ruleset,
-        until: until.clone().map(|facts| flatten_facts(&facts, desugar)),
+        until: until.clone(),
     }
 }
 
@@ -452,18 +449,10 @@ impl Default for Desugar {
     }
 }
 
-pub(crate) fn desugar_simplify(
-    desugar: &mut Desugar,
-    expr: &Expr,
-    schedule: &Schedule,
-) -> Vec<NCommand> {
+fn desugar_simplify(desugar: &mut Desugar, expr: &Expr, schedule: &Schedule) -> Vec<NCommand> {
     let mut res = vec![NCommand::Push(1)];
     let lhs = desugar.get_fresh();
-    res.extend(
-        flatten_actions(&vec![Action::Let(lhs, expr.clone())], desugar)
-            .into_iter()
-            .map(NCommand::NormAction),
-    );
+    res.push(NCommand::NormAction(Action::Let(lhs, expr.clone())));
     res.push(NCommand::RunSchedule(desugar_schedule(desugar, schedule)));
     res.extend(
         desugar_command(
@@ -578,28 +567,25 @@ pub(crate) fn desugar_command(
             let mut result = vec![NCommand::NormRule {
                 ruleset,
                 name,
-                rule: flatten_rule(rule.clone(), desugar),
+                rule: rule.clone(),
             }];
 
-            if seminaive_transform {
-                if let Some(new_rule) = add_semi_naive_rule(desugar, rule) {
-                    result.push(NCommand::NormRule {
-                        ruleset,
-                        name,
-                        rule: flatten_rule(new_rule, desugar),
-                    });
-                }
-            }
+            // if seminaive_transform {
+            //     if let Some(new_rule) = add_semi_naive_rule(desugar, rule) {
+            //         result.push(NCommand::NormRule {
+            //             ruleset,
+            //             name,
+            //             rule: flatten_rule(new_rule, desugar),
+            //         });
+            //     }
+            // }
 
             result
         }
         Command::Sort(sort, option) => vec![NCommand::Sort(sort, option)],
         // TODO ignoring cost for now
         Command::AddRuleset(name) => vec![NCommand::AddRuleset(name)],
-        Command::Action(action) => flatten_actions(&vec![action], desugar)
-            .into_iter()
-            .map(NCommand::NormAction)
-            .collect(),
+        Command::Action(action) => vec![NCommand::NormAction(action)],
         Command::Simplify { expr, schedule } => desugar_simplify(desugar, &expr, &schedule),
         Command::Calc(idents, exprs) => desugar_calc(desugar, idents, exprs, seminaive_transform)?,
         Command::RunSchedule(sched) => {
@@ -635,7 +621,7 @@ pub(crate) fn desugar_command(
                 .collect()
         }
         Command::Check(facts) => {
-            let res = vec![NCommand::Check(flatten_facts(&facts, desugar))];
+            let res = vec![NCommand::Check(facts)];
 
             if get_all_proofs {
                 // TODO check proofs
@@ -669,13 +655,8 @@ pub(crate) fn desugar_command(
     };
 
     for cmd in &res {
-        if let NCommand::NormAction(action) = cmd {
-            action.map_def_use(&mut |var, is_def| {
-                if is_def {
-                    desugar.global_variables.insert(var);
-                }
-                var
-            });
+        if let NCommand::NormAction(Action::Let(lhs, expr)) = cmd {
+            desugar.global_variables.insert(*lhs);
         }
     }
 
@@ -820,7 +801,7 @@ impl Desugar {
                 cost: None,
                 unextractable: false,
             }),
-            NCommand::NormAction(NormAction::Let(name, NormExpr::Call(fresh, vec![]))),
+            NCommand::NormAction(Action::Let(name, Expr::Call(fresh, vec![]))),
         ]
     }
 
@@ -830,7 +811,7 @@ impl Desugar {
             schema: fdecl.schema.clone(),
             default: fdecl.default.clone(),
             merge: fdecl.merge.clone(),
-            merge_action: flatten_actions(&fdecl.merge_action, self),
+            merge_action: fdecl.merge_action.clone(),
             cost: fdecl.cost,
             unextractable: fdecl.unextractable,
         })]

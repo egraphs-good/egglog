@@ -185,6 +185,20 @@ impl Expr {
         };
         iterator
     }
+    
+    pub(crate) fn map_def_use(
+        &self,
+        fvar: &mut impl FnMut(Symbol) -> Symbol
+    ) -> Self {
+        match self {
+            Expr::Lit(_) => self.clone(),
+            Expr::Var(v) => Expr::Var(fvar(*v)),
+            Expr::Call(op, args) => {
+                let args = args.iter().map(|a| a.map_def_use(fvar)).collect();
+                Expr::Call(*op, args)
+            }
+        }
+    }
 }
 
 impl Display for NormExpr {

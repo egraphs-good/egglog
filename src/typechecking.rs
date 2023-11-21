@@ -165,47 +165,48 @@ impl TypeInfo {
     }
 
     fn typecheck_ncommand(&mut self, command: &NCommand, id: CommandId) -> Result<(), TypeError> {
-        match command {
-            NCommand::Function(fdecl) => {
-                if self.sorts.contains_key(&fdecl.name) {
-                    return Err(TypeError::SortAlreadyBound(fdecl.name));
-                }
-                if self.is_primitive(fdecl.name) {
-                    return Err(TypeError::PrimitiveAlreadyBound(fdecl.name));
-                }
-                let ftype = self.function_to_functype(fdecl)?;
-                if self.func_types.insert(fdecl.name, ftype).is_some() {
-                    return Err(TypeError::FunctionAlreadyBound(fdecl.name));
-                }
-            }
-            NCommand::NormRule {
-                rule,
-                ruleset: _,
-                name: _,
-            } => {
-                self.typecheck_rule(id, rule)?;
-            }
-            NCommand::Sort(sort, presort_and_args) => {
-                self.declare_sort(*sort, presort_and_args)?;
-            }
-            NCommand::NormAction(action) => {
-                self.typecheck_action(id, action, true)?;
-            }
-            NCommand::Check(facts) => {
-                self.typecheck_facts(id, facts)?;
-                self.verify_normal_form_facts(facts);
-            }
-            NCommand::Fail(cmd) => {
-                self.typecheck_ncommand(cmd, id)?;
-            }
-            NCommand::RunSchedule(schedule) => {
-                self.typecheck_schedule(schedule)?;
-            }
+        todo!("type check should yield a type-annotated AST")
+        // match command {
+        //     NCommand::Function(fdecl) => {
+        //         if self.sorts.contains_key(&fdecl.name) {
+        //             return Err(TypeError::SortAlreadyBound(fdecl.name));
+        //         }
+        //         if self.is_primitive(fdecl.name) {
+        //             return Err(TypeError::PrimitiveAlreadyBound(fdecl.name));
+        //         }
+        //         let ftype = self.function_to_functype(fdecl)?;
+        //         if self.func_types.insert(fdecl.name, ftype).is_some() {
+        //             return Err(TypeError::FunctionAlreadyBound(fdecl.name));
+        //         }
+        //     }
+        //     NCommand::NormRule {
+        //         rule,
+        //         ruleset: _,
+        //         name: _,
+        //     } => {
+        //         self.typecheck_rule(id, rule)?;
+        //     }
+        //     NCommand::Sort(sort, presort_and_args) => {
+        //         self.declare_sort(*sort, presort_and_args)?;
+        //     }
+        //     NCommand::NormAction(action) => {
+        //         self.typecheck_action(id, action, true)?;
+        //     }
+        //     NCommand::Check(facts) => {
+        //         self.typecheck_facts(id, facts)?;
+        //         self.verify_normal_form_facts(facts);
+        //     }
+        //     NCommand::Fail(cmd) => {
+        //         self.typecheck_ncommand(cmd, id)?;
+        //     }
+        //     NCommand::RunSchedule(schedule) => {
+        //         self.typecheck_schedule(schedule)?;
+        //     }
 
-            // TODO cover all cases in typechecking
-            _ => (),
-        }
-        Ok(())
+        //     // TODO cover all cases in typechecking
+        //     _ => (),
+        // }
+        // Ok(())
     }
 
     fn typecheck_schedule(&mut self, schedule: &NormSchedule) -> Result<(), TypeError> {
@@ -267,16 +268,17 @@ impl TypeInfo {
         self.add_arcsort(sort)
     }
 
-    fn typecheck_rule(&mut self, ctx: CommandId, rule: &NormRule) -> Result<(), TypeError> {
+    fn typecheck_rule(&mut self, ctx: CommandId, rule: &Rule) -> Result<(), TypeError> {
         // also check the validity of the ssa
         self.typecheck_facts(ctx, &rule.body)?;
         self.typecheck_actions(ctx, &rule.head)?;
-        let mut bindings = self.verify_normal_form_facts(&rule.body);
-        self.verify_normal_form_actions(&rule.head, &mut bindings);
+        todo!("do we need to verify normal form?");
+        // let mut bindings = self.verify_normal_form_facts(&rule.body);
+        // self.verify_normal_form_actions(&rule.head, &mut bindings);
         Ok(())
     }
 
-    fn typecheck_facts(&mut self, ctx: CommandId, facts: &Vec<NormFact>) -> Result<(), TypeError> {
+    fn typecheck_facts(&mut self, ctx: CommandId, facts: &Vec<Fact>) -> Result<(), TypeError> {
         // ROUND TRIP TO CORE RULE AND BACK
         // TODO: in long term, we don't want this round trip to CoreRule query and back just for the type information.
         let query = facts_to_query(facts, self);
@@ -304,7 +306,7 @@ impl TypeInfo {
     fn typecheck_actions(
         &mut self,
         ctx: CommandId,
-        actions: &Vec<NormAction>,
+        actions: &Vec<Action>,
     ) -> Result<(), TypeError> {
         for action in actions {
             self.typecheck_action(ctx, action, false)?;
@@ -312,47 +314,48 @@ impl TypeInfo {
         Ok(())
     }
 
-    fn verify_normal_form_facts(&self, facts: &Vec<NormFact>) -> HashSet<Symbol> {
-        let mut let_bound: HashSet<Symbol> = Default::default();
+    fn verify_normal_form_facts(&self, facts: &Vec<Fact>) -> HashSet<Symbol> {
+        todo!("should we delete this function?")
+        // let mut let_bound: HashSet<Symbol> = Default::default();
 
-        for fact in facts {
-            match fact {
-                NormFact::Compute(var, NormExpr::Call(_head, body)) => {
-                    assert!(!self.global_types.contains_key(var));
-                    assert!(let_bound.insert(*var));
-                    body.iter().for_each(|bvar| {
-                        if !self.global_types.contains_key(bvar) {
-                            assert!(let_bound.contains(bvar));
-                        }
-                    });
-                }
-                NormFact::Assign(var, NormExpr::Call(_head, body)) => {
-                    assert!(!self.global_types.contains_key(var));
-                    assert!(let_bound.insert(*var));
-                    body.iter().for_each(|bvar| {
-                        assert!(!self.global_types.contains_key(bvar));
-                        assert!(let_bound.insert(*bvar), "Expected {} to be bound", bvar);
-                    });
-                }
-                NormFact::AssignVar(lhs, _rhs) => {
-                    assert!(!self.global_types.contains_key(lhs));
-                    assert!(let_bound.insert(*lhs));
-                }
-                NormFact::AssignLit(var, _lit) => {
-                    assert!(let_bound.insert(*var));
-                }
-                NormFact::ConstrainEq(var1, var2) => {
-                    if !let_bound.contains(var1)
-                        && !let_bound.contains(var2)
-                        && !self.global_types.contains_key(var1)
-                        && !self.global_types.contains_key(var2)
-                    {
-                        panic!("ConstrainEq on unbound variables");
-                    }
-                }
-            }
-        }
-        let_bound
+        // for fact in facts {
+        //     match fact {
+        //         NormFact::Compute(var, NormExpr::Call(_head, body)) => {
+        //             assert!(!self.global_types.contains_key(var));
+        //             assert!(let_bound.insert(*var));
+        //             body.iter().for_each(|bvar| {
+        //                 if !self.global_types.contains_key(bvar) {
+        //                     assert!(let_bound.contains(bvar));
+        //                 }
+        //             });
+        //         }
+        //         NormFact::Assign(var, NormExpr::Call(_head, body)) => {
+        //             assert!(!self.global_types.contains_key(var));
+        //             assert!(let_bound.insert(*var));
+        //             body.iter().for_each(|bvar| {
+        //                 assert!(!self.global_types.contains_key(bvar));
+        //                 assert!(let_bound.insert(*bvar), "Expected {} to be bound", bvar);
+        //             });
+        //         }
+        //         NormFact::AssignVar(lhs, _rhs) => {
+        //             assert!(!self.global_types.contains_key(lhs));
+        //             assert!(let_bound.insert(*lhs));
+        //         }
+        //         NormFact::AssignLit(var, _lit) => {
+        //             assert!(let_bound.insert(*var));
+        //         }
+        //         NormFact::ConstrainEq(var1, var2) => {
+        //             if !let_bound.contains(var1)
+        //                 && !let_bound.contains(var2)
+        //                 && !self.global_types.contains_key(var1)
+        //                 && !self.global_types.contains_key(var2)
+        //             {
+        //                 panic!("ConstrainEq on unbound variables");
+        //             }
+        //         }
+        //     }
+        // }
+        // let_bound
     }
 
     fn verify_normal_form_actions(
@@ -434,47 +437,48 @@ impl TypeInfo {
     fn typecheck_action(
         &mut self,
         ctx: CommandId,
-        action: &NormAction,
+        action: &Action,
         is_global: bool,
     ) -> Result<(), TypeError> {
-        match action {
-            NormAction::Let(var, expr) => {
-                let expr_type = self.typecheck_expr(ctx, expr, true)?.output;
+        todo!("type check actions should use the constraint-based type checker and yield a type-annotated AST")
+        // match action {
+        //     NormAction::Let(var, expr) => {
+        //         let expr_type = self.typecheck_expr(ctx, expr, true)?.output;
 
-                self.introduce_binding(ctx, *var, expr_type, is_global)?;
-            }
-            NormAction::LetLit(var, lit) => {
-                let lit_type = self.infer_literal(lit);
-                self.introduce_binding(ctx, *var, lit_type, is_global)?;
-            }
-            NormAction::Delete(expr) => {
-                self.typecheck_expr(ctx, expr, true)?;
-            }
-            NormAction::Set(expr, other) => {
-                let func_type = self.typecheck_expr(ctx, expr, true)?;
-                let other_type = self.lookup(ctx, *other)?;
-                if func_type.output.name() != other_type.name() {
-                    return Err(TypeError::TypeMismatch(func_type.output, other_type));
-                }
-                if func_type.is_datatype {
-                    return Err(TypeError::SetDatatype(func_type));
-                }
-            }
-            NormAction::Union(var1, var2) => {
-                let var1_type = self.lookup(ctx, *var1)?;
-                let var2_type = self.lookup(ctx, *var2)?;
-                if var1_type.name() != var2_type.name() {
-                    return Err(TypeError::TypeMismatch(var1_type, var2_type));
-                }
-            }
-            NormAction::Extract(_var, _variants) => {}
-            NormAction::LetVar(var1, var2) => {
-                let var2_type = self.lookup(ctx, *var2)?;
-                self.introduce_binding(ctx, *var1, var2_type, is_global)?;
-            }
-            NormAction::Panic(..) => (),
-        }
-        Ok(())
+        //         self.introduce_binding(ctx, *var, expr_type, is_global)?;
+        //     }
+        //     NormAction::LetLit(var, lit) => {
+        //         let lit_type = self.infer_literal(lit);
+        //         self.introduce_binding(ctx, *var, lit_type, is_global)?;
+        //     }
+        //     NormAction::Delete(expr) => {
+        //         self.typecheck_expr(ctx, expr, true)?;
+        //     }
+        //     NormAction::Set(expr, other) => {
+        //         let func_type = self.typecheck_expr(ctx, expr, true)?;
+        //         let other_type = self.lookup(ctx, *other)?;
+        //         if func_type.output.name() != other_type.name() {
+        //             return Err(TypeError::TypeMismatch(func_type.output, other_type));
+        //         }
+        //         if func_type.is_datatype {
+        //             return Err(TypeError::SetDatatype(func_type));
+        //         }
+        //     }
+        //     NormAction::Union(var1, var2) => {
+        //         let var1_type = self.lookup(ctx, *var1)?;
+        //         let var2_type = self.lookup(ctx, *var2)?;
+        //         if var1_type.name() != var2_type.name() {
+        //             return Err(TypeError::TypeMismatch(var1_type, var2_type));
+        //         }
+        //     }
+        //     NormAction::Extract(_var, _variants) => {}
+        //     NormAction::LetVar(var1, var2) => {
+        //         let var2_type = self.lookup(ctx, *var2)?;
+        //         self.introduce_binding(ctx, *var1, var2_type, is_global)?;
+        //     }
+        //     NormAction::Panic(..) => (),
+        // }
+        // Ok(())
     }
 
     pub fn reserved_type(&self, sym: Symbol) -> Option<ArcSort> {
