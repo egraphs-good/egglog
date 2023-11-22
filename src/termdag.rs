@@ -1,5 +1,5 @@
 use crate::{
-    ast::{Expr, Literal},
+    ast::{Expr, Literal, UnresolvedExpr},
     util::{HashMap, HashSet},
     Symbol,
 };
@@ -109,11 +109,11 @@ impl TermDag {
     /// This involves inserting every subexpression into this DAG. Because
     /// TermDags are hashconsed, the resulting term is guaranteed to maximally
     /// share subterms.
-    pub fn expr_to_term(&mut self, expr: &Expr) -> Term {
+    pub fn expr_to_term(&mut self, expr: &UnresolvedExpr) -> Term {
         let res = match expr {
-            Expr::Lit(lit) => Term::Lit(lit.clone()),
-            Expr::Var(v) => Term::Var(*v),
-            Expr::Call(op, args) => {
+            Expr::Lit((), lit) => Term::Lit(lit.clone()),
+            Expr::Var((), v) => Term::Var(*v),
+            Expr::Call((), op, args) => {
                 let args = args
                     .iter()
                     .map(|a| {
@@ -131,10 +131,10 @@ impl TermDag {
     /// Recursively converts the given term to an expression.
     ///
     /// Panics if the term contains subterms that are not in the DAG.
-    pub fn term_to_expr(&self, term: &Term) -> Expr {
+    pub fn term_to_expr(&self, term: &Term) -> UnresolvedExpr {
         match term {
-            Term::Lit(lit) => Expr::Lit(lit.clone()),
-            Term::Var(v) => Expr::Var(*v),
+            Term::Lit(lit) => Expr::Lit((), lit.clone()),
+            Term::Var(v) => Expr::Var((), *v),
             Term::App(op, args) => {
                 let args = args
                     .iter()
@@ -143,7 +143,7 @@ impl TermDag {
                         self.term_to_expr(&term)
                     })
                     .collect();
-                Expr::Call(*op, args)
+                Expr::Call((), *op, args)
             }
         }
     }
@@ -233,7 +233,7 @@ mod tests {
         let (td, t) = parse_term(s);
         match_term_app!(t; {
             ("f", [_, x, _, _]) =>
-                assert_eq!(td.term_to_expr(&td.get(*x)), ast::Expr::Var(Symbol::new("x"))),
+                assert_eq!(td.term_to_expr(&td.get(*x)), ast::Expr::Var((), Symbol::new("x"))),
             (head, _) => panic!("unexpected head {}, in {}:{}:{}", head, file!(), line!(), column!())
         })
     }

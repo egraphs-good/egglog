@@ -227,11 +227,11 @@ impl<'a> TermState<'a> {
         .map_use(&mut |var| {
             let vtype = self.type_info().lookup(self.current_ctx, var).unwrap();
             if !self.type_info().is_global(var) {
-                Expr::Var(var)
+                Expr::Var((), var)
             } else if let Some(wrapped) = self.get_canonical_expr_of(var.to_string(), vtype) {
                 self.desugar().expr_parser.parse(&wrapped).unwrap()
             } else {
-                Expr::Var(var)
+                Expr::Var((), var)
             }
         })
     }

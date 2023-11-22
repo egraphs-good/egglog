@@ -41,9 +41,9 @@ impl VecSort {
     pub fn make_sort(
         typeinfo: &mut TypeInfo,
         name: Symbol,
-        args: &[Expr],
+        args: &[UnresolvedExpr],
     ) -> Result<ArcSort, TypeError> {
-        if let [Expr::Var(e)] = args {
+        if let [Expr::Var((), e)] = args {
             let e = typeinfo.sorts.get(e).ok_or(TypeError::UndefinedSort(*e))?;
 
             if e.is_eq_container_sort() {
@@ -165,7 +165,7 @@ impl Sort for VecSort {
         })
     }
 
-    fn make_expr(&self, egraph: &EGraph, value: Value) -> (Cost, Expr) {
+    fn make_expr(&self, egraph: &EGraph, value: Value) -> (Cost, UnresolvedExpr) {
         let mut termdag = TermDag::default();
         let extractor = Extractor::new(egraph, &mut termdag);
         self.extract_expr(egraph, value, &extractor, &mut termdag)
@@ -178,7 +178,7 @@ impl Sort for VecSort {
         value: Value,
         extractor: &Extractor,
         termdag: &mut TermDag,
-    ) -> Option<(Cost, Expr)> {
+    ) -> Option<(Cost, UnresolvedExpr)> {
         let vec = ValueVec::load(self, &value);
         let mut cost = 0usize;
 

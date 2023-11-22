@@ -27,9 +27,9 @@ impl MapSort {
     pub fn make_sort(
         typeinfo: &mut TypeInfo,
         name: Symbol,
-        args: &[Expr],
+        args: &[UnresolvedExpr],
     ) -> Result<ArcSort, TypeError> {
-        if let [Expr::Var(k), Expr::Var(v)] = args {
+        if let [Expr::Var((), k), Expr::Var((), v)] = args {
             let k = typeinfo.sorts.get(k).ok_or(TypeError::UndefinedSort(*k))?;
             let v = typeinfo.sorts.get(v).ok_or(TypeError::UndefinedSort(*v))?;
 
@@ -150,7 +150,7 @@ impl Sort for MapSort {
         });
     }
 
-    fn make_expr(&self, egraph: &EGraph, value: Value) -> (Cost, Expr) {
+    fn make_expr(&self, egraph: &EGraph, value: Value) -> (Cost, UnresolvedExpr) {
         let mut termdag = TermDag::default();
         let extractor = Extractor::new(egraph, &mut termdag);
         self.extract_expr(egraph, value, &extractor, &mut termdag)
@@ -163,7 +163,7 @@ impl Sort for MapSort {
         value: Value,
         extractor: &Extractor,
         termdag: &mut TermDag,
-    ) -> Option<(Cost, Expr)> {
+    ) -> Option<(Cost, UnresolvedExpr)> {
         let map = ValueMap::load(self, &value);
         let mut expr = Expr::call("map-empty", []);
         let mut cost = 0usize;

@@ -12,7 +12,7 @@ pub type ValueVec = SmallVec<[Value; 3]>;
 
 #[derive(Clone)]
 pub struct Function {
-    pub decl: FunctionDecl,
+    pub decl: ResolvedFunctionDecl,
     pub schema: ResolvedSchema,
     pub merge: MergeAction,
     pub(crate) nodes: table::Table,
@@ -66,7 +66,7 @@ impl ResolvedSchema {
 pub(crate) type DeferredMerge = (ValueVec, Value, Value);
 
 impl Function {
-    pub fn new(egraph: &EGraph, decl: &FunctionDecl) -> Result<Self, Error> {
+    pub fn new(egraph: &EGraph, decl: &ResolvedFunctionDecl) -> Result<Self, Error> {
         let mut input = Vec::with_capacity(decl.schema.input.len());
         for s in &decl.schema.input {
             input.push(match egraph.type_info().sorts.get(s) {
@@ -101,7 +101,7 @@ impl Function {
             types.insert("old".into(), output.clone());
             types.insert("new".into(), output.clone());
             let program = egraph
-                .compile_actions(&types, &decl.merge_action)
+                .compile_actions(&types, todo!("need to also have a lowered definition of decl {:?}", &decl.merge_action))
                 .map_err(Error::TypeErrors)?;
             Some(Rc::new(program))
         };

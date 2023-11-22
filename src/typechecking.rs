@@ -1,5 +1,5 @@
 use crate::{
-    typecheck::{facts_to_query, ValueEq},
+    typecheck::{facts_to_query, ValueEq, ResolvedCoreRule},
     *,
 };
 
@@ -27,7 +27,7 @@ pub struct TypeInfo {
     pub primitives: HashMap<Symbol, Vec<Primitive>>,
     pub func_types: HashMap<Symbol, FuncType>,
     global_types: HashMap<Symbol, ArcSort>,
-    pub local_types: HashMap<CommandId, HashMap<Symbol, ArcSort>>,
+    // pub local_types: HashMap<CommandId, HashMap<Symbol, ArcSort>>,
 }
 
 impl Default for TypeInfo {
@@ -39,7 +39,7 @@ impl Default for TypeInfo {
             primitives: Default::default(),
             func_types: Default::default(),
             global_types: Default::default(),
-            local_types: Default::default(),
+            // local_types: Default::default(),
         };
 
         res.add_sort(UnitSort::new(UNIT_SYM.into()));
@@ -126,18 +126,18 @@ impl TypeInfo {
 
     pub(crate) fn typecheck_program(
         &mut self,
-        program: &Vec<NormCommand>,
-    ) -> Result<(), TypeError> {
+        program: &Vec<UnresolvedNCommand>,
+    ) -> Result<Vec<ResolvedNCommand>, TypeError> {
         for command in program {
             self.typecheck_command(command)?;
         }
 
-        Ok(())
+        Ok(todo!("produce a resolved NCommand"))
     }
 
     pub(crate) fn function_to_functype(
         &self,
-        func: &NormFunctionDecl,
+        func: &UnresolvedFunctionDecl,
     ) -> Result<FuncType, TypeError> {
         let input = func
             .schema
@@ -166,7 +166,7 @@ impl TypeInfo {
         })
     }
 
-    fn typecheck_ncommand(&mut self, command: &NCommand, id: CommandId) -> Result<(), TypeError> {
+    fn typecheck_command(&mut self, command: &UnresolvedNCommand) -> Result<(), TypeError> {
         todo!("type check should yield a type-annotated AST")
         // match command {
         //     NCommand::Function(fdecl) => {
@@ -211,26 +211,22 @@ impl TypeInfo {
         // Ok(())
     }
 
-    fn typecheck_schedule(&mut self, schedule: &NormSchedule) -> Result<(), TypeError> {
+    fn typecheck_schedule(&mut self, schedule: &UnresolvedSchedule) -> Result<(), TypeError> {
         match schedule {
-            NormSchedule::Repeat(_times, schedule) => {
+            Schedule::Repeat(_times, schedule) => {
                 self.typecheck_schedule(schedule)?;
             }
-            NormSchedule::Sequence(schedules) => {
+            Schedule::Sequence(schedules) => {
                 for schedule in schedules {
                     self.typecheck_schedule(schedule)?;
                 }
             }
-            NormSchedule::Saturate(schedule) => {
+            Schedule::Saturate(schedule) => {
                 self.typecheck_schedule(schedule)?;
             }
-            NormSchedule::Run(run_config) => {
+            Schedule::Run(run_config) => {
                 if let Some(facts) = &run_config.until {
-                    assert!(self
-                        .local_types
-                        .insert(run_config.ctx, Default::default())
-                        .is_none());
-                    self.typecheck_facts(run_config.ctx, facts)?;
+                    self.typecheck_facts(facts)?;
                     self.verify_normal_form_facts(facts);
                 }
             }
@@ -239,18 +235,10 @@ impl TypeInfo {
         Result::Ok(())
     }
 
-    pub(crate) fn typecheck_command(&mut self, command: &NormCommand) -> Result<(), TypeError> {
-        assert!(self
-            .local_types
-            .insert(command.metadata.id, Default::default())
-            .is_none());
-        self.typecheck_ncommand(&command.command, command.metadata.id)
-    }
-
     pub fn declare_sort(
         &mut self,
         name: impl Into<Symbol>,
-        presort_and_args: &Option<(Symbol, Vec<Expr>)>,
+        presort_and_args: &Option<(Symbol, Vec<UnresolvedExpr>)>,
     ) -> Result<(), TypeError> {
         let name = name.into();
         if self.func_types.contains_key(&name) {
@@ -270,17 +258,17 @@ impl TypeInfo {
         self.add_arcsort(sort)
     }
 
-    fn typecheck_rule(&mut self, ctx: CommandId, rule: &Rule) -> Result<(), TypeError> {
+    fn typecheck_rule(&mut self, rule: &UnresolvedRule) -> Result<(), TypeError> {
         // also check the validity of the ssa
-        self.typecheck_facts(ctx, &rule.body)?;
-        self.typecheck_actions(ctx, &rule.head)?;
+        self.typecheck_facts(&rule.body)?;
+        self.typecheck_actions(&rule.head)?;
         todo!("do we need to verify normal form?");
         // let mut bindings = self.verify_normal_form_facts(&rule.body);
         // self.verify_normal_form_actions(&rule.head, &mut bindings);
         Ok(())
     }
 
-    fn typecheck_facts(&mut self, ctx: CommandId, facts: &Vec<Fact>) -> Result<(), TypeError> {
+    fn typecheck_facts(&mut self, facts: &Vec<UnresolvedFact>) -> Result<(), TypeError> {
         // ROUND TRIP TO CORE RULE AND BACK
         // TODO: in long term, we don't want this round trip to CoreRule query and back just for the type information.
         let query = facts_to_query(facts, self);
@@ -294,7 +282,8 @@ impl TypeInfo {
         for (at, ty) in assignment.0.iter() {
             match at {
                 AtomTerm::Var(v) => {
-                    self.introduce_binding(ctx, *v, ty.clone(), false)?;
+                    todo!("figure out how to introduce a binding without using contexts");
+                    // self.introduce_binding(*v, ty.clone(), false)?;
                 }
                 // All the globals should have been introduced
                 AtomTerm::Global(_) => {}
@@ -307,16 +296,15 @@ impl TypeInfo {
 
     fn typecheck_actions(
         &mut self,
-        ctx: CommandId,
-        actions: &Vec<Action>,
+        actions: &Vec<UnresolvedAction>,
     ) -> Result<(), TypeError> {
         for action in actions {
-            self.typecheck_action(ctx, action, false)?;
+            self.typecheck_action(action, false)?;
         }
         Ok(())
     }
 
-    fn verify_normal_form_facts(&self, facts: &Vec<Fact>) -> HashSet<Symbol> {
+    fn verify_normal_form_facts(&self, facts: &Vec<UnresolvedFact>) -> HashSet<Symbol> {
         todo!("should we delete this function?")
         // let mut let_bound: HashSet<Symbol> = Default::default();
 
@@ -365,84 +353,84 @@ impl TypeInfo {
         actions: &Vec<NormAction>,
         let_bound: &mut HashSet<Symbol>,
     ) {
-        let assert_bound = |var, let_bound: &HashSet<Symbol>| {
-            assert!(
-                let_bound.contains(var)
-                    || self.global_types.contains_key(var)
-                    || self.reserved_type(*var).is_some(),
-                "Expected {var} to be let bound in body of rule",
-            )
-        };
+        // let assert_bound = |var, let_bound: &HashSet<Symbol>| {
+        //     assert!(
+        //         let_bound.contains(var)
+        //             || self.global_types.contains_key(var)
+        //             || self.reserved_type(*var).is_some(),
+        //         "Expected {var} to be let bound in body of rule",
+        //     )
+        // };
 
-        for action in actions {
-            match action {
-                NormAction::Let(var, NormExpr::Call(_head, body)) => {
-                    assert!(let_bound.insert(*var));
-                    body.iter().for_each(|bvar| {
-                        assert_bound(bvar, let_bound);
-                    });
-                }
-                NormAction::LetVar(v1, v2) => {
-                    assert_bound(v2, let_bound);
-                    assert!(let_bound.insert(*v1));
-                }
-                NormAction::LetLit(v1, _lit) => {
-                    assert!(let_bound.insert(*v1));
-                }
-                NormAction::Delete(NormExpr::Call(_head, body)) => {
-                    body.iter().for_each(|bvar| {
-                        assert_bound(bvar, let_bound);
-                    });
-                }
-                NormAction::Set(NormExpr::Call(_head, body), var) => {
-                    body.iter().for_each(|bvar| {
-                        assert_bound(bvar, let_bound);
-                    });
-                    assert_bound(var, let_bound);
-                }
-                NormAction::Extract(var, variants) => {
-                    assert_bound(var, let_bound);
-                    assert_bound(variants, let_bound);
-                }
-                NormAction::Union(v1, v2) => {
-                    assert_bound(v1, let_bound);
-                    assert_bound(v2, let_bound);
-                }
-                NormAction::Panic(..) => (),
-            }
-        }
+        // for action in actions {
+        //     match action {
+        //         NormAction::Let(var, NormExpr::Call(_head, body)) => {
+        //             assert!(let_bound.insert(*var));
+        //             body.iter().for_each(|bvar| {
+        //                 assert_bound(bvar, let_bound);
+        //             });
+        //         }
+        //         NormAction::LetVar(v1, v2) => {
+        //             assert_bound(v2, let_bound);
+        //             assert!(let_bound.insert(*v1));
+        //         }
+        //         NormAction::LetLit(v1, _lit) => {
+        //             assert!(let_bound.insert(*v1));
+        //         }
+        //         NormAction::Delete(NormExpr::Call(_head, body)) => {
+        //             body.iter().for_each(|bvar| {
+        //                 assert_bound(bvar, let_bound);
+        //             });
+        //         }
+        //         NormAction::Set(NormExpr::Call(_head, body), var) => {
+        //             body.iter().for_each(|bvar| {
+        //                 assert_bound(bvar, let_bound);
+        //             });
+        //             assert_bound(var, let_bound);
+        //         }
+        //         NormAction::Extract(var, variants) => {
+        //             assert_bound(var, let_bound);
+        //             assert_bound(variants, let_bound);
+        //         }
+        //         NormAction::Union(v1, v2) => {
+        //             assert_bound(v1, let_bound);
+        //             assert_bound(v2, let_bound);
+        //         }
+        //         NormAction::Panic(..) => (),
+        //     }
+        // }
     }
 
-    fn introduce_binding(
-        &mut self,
-        ctx: CommandId,
-        var: Symbol,
-        sort: Arc<dyn Sort>,
-        is_global: bool,
-    ) -> Result<(), TypeError> {
-        if is_global {
-            if let Some(_existing) = self.global_types.insert(var, sort) {
-                return Err(TypeError::GlobalAlreadyBound(var));
-            }
-        } else if let Some(existing) = self
-            .local_types
-            .get_mut(&ctx)
-            .unwrap()
-            .insert(var, sort.clone())
-        {
-            return Err(TypeError::LocalAlreadyBound(var, existing, sort));
-        }
+    // fn introduce_binding(
+    //     &mut self,
+    //     ctx: CommandId,
+    //     var: Symbol,
+    //     sort: Arc<dyn Sort>,
+    //     is_global: bool,
+    // ) -> Result<(), TypeError> {
+    //     if is_global {
+    //         if let Some(_existing) = self.global_types.insert(var, sort) {
+    //             return Err(TypeError::GlobalAlreadyBound(var));
+    //         }
+    //     } else if let Some(existing) = self
+    //         .local_types
+    //         .get_mut(&ctx)
+    //         .unwrap()
+    //         .insert(var, sort.clone())
+    //     {
+    //         return Err(TypeError::LocalAlreadyBound(var, existing, sort));
+    //     }
 
-        Ok(())
-    }
+    //     Ok(())
+    // }
 
     fn typecheck_action(
         &mut self,
-        ctx: CommandId,
-        action: &Action,
+        action: &UnresolvedAction,
         is_global: bool,
     ) -> Result<(), TypeError> {
-        todo!("type check actions should use the constraint-based type checker and yield a type-annotated AST")
+        todo!("type check actions should use the constraint-based type checker and yield a type-annotated AST");
+        todo!("just generate constraints here and leave it to typecheck_rule to assemble the resolved form")
         // match action {
         //     NormAction::Let(var, expr) => {
         //         let expr_type = self.typecheck_expr(ctx, expr, true)?.output;
@@ -495,40 +483,41 @@ impl TypeInfo {
         self.global_types.get(sym).cloned()
     }
 
-    pub fn lookup(&self, ctx: CommandId, sym: Symbol) -> Result<ArcSort, TypeError> {
-        // special logic for reserved keywords
-        if let Some(t) = self.reserved_type(sym) {
-            return Ok(t);
-        }
+    pub fn lookup(&self, sym: Symbol) -> Result<ArcSort, TypeError> {
+        todo!("should probably delete")
+        // // special logic for reserved keywords
+        // if let Some(t) = self.reserved_type(sym) {
+        //     return Ok(t);
+        // }
 
-        self.global_types
-            .get(&sym)
-            .map(|x| Ok(x.clone()))
-            .unwrap_or_else(|| {
-                if let Some(found) = self.local_types.get(&ctx).unwrap().get(&sym) {
-                    Ok(found.clone())
-                } else {
-                    Err(TypeError::Unbound(sym))
-                }
-            })
+        // self.global_types
+        //     .get(&sym)
+        //     .map(|x| Ok(x.clone()))
+        //     .unwrap_or_else(|| {
+        //         if let Some(found) = self.local_types.get(&ctx).unwrap().get(&sym) {
+        //             Ok(found.clone())
+        //         } else {
+        //             Err(TypeError::Unbound(sym))
+        //         }
+        //     })
     }
 
     fn set_local_type(
         &mut self,
-        ctx: CommandId,
         sym: Symbol,
         sym_type: ArcSort,
     ) -> Result<(), TypeError> {
-        if let Some(existing) = self
-            .local_types
-            .get_mut(&ctx)
-            .unwrap()
-            .insert(sym, sym_type.clone())
-        {
-            if existing.name() != sym_type.name() {
-                return Err(TypeError::LocalAlreadyBound(sym, existing, sym_type));
-            }
-        }
+        todo!("figure out");
+        // if let Some(existing) = self
+        //     .local_types
+        //     .get_mut(&ctx)
+        //     .unwrap()
+        //     .insert(sym, sym_type.clone())
+        // {
+        //     if existing.name() != sym_type.name() {
+        //         return Err(TypeError::LocalAlreadyBound(sym, existing, sym_type));
+        //     }
+        // }
         Ok(())
     }
 
@@ -585,68 +574,68 @@ impl TypeInfo {
         }
     }
 
-    pub(crate) fn lookup_expr(
-        &self,
-        ctx: CommandId,
-        expr: &NormExpr,
-    ) -> Result<FuncType, TypeError> {
-        let NormExpr::Call(head, body) = expr;
-        let child_types = body
-            .iter()
-            .map(|var| self.lookup(ctx, *var))
-            .collect::<Result<Vec<_>, _>>()?;
-        self.lookup_func(*head, child_types)
-    }
+    // pub(crate) fn lookup_expr(
+    //     &self,
+    //     ctx: CommandId,
+    //     expr: &NormExpr,
+    // ) -> Result<FuncType, TypeError> {
+    //     let NormExpr::Call(head, body) = expr;
+    //     let child_types = body
+    //         .iter()
+    //         .map(|var| self.lookup(ctx, *var))
+    //         .collect::<Result<Vec<_>, _>>()?;
+    //     self.lookup_func(*head, child_types)
+    // }
 
     pub(crate) fn is_global(&self, sym: Symbol) -> bool {
         self.global_types.contains_key(&sym)
     }
 
-    fn typecheck_expr(
-        &mut self,
-        ctx: CommandId,
-        expr: &NormExpr,
-        expect_lookup: bool,
-    ) -> Result<FuncType, TypeError> {
-        let NormExpr::Call(head, body) = expr;
-        let child_types = if let Some(found) = self.func_types.get(head) {
-            found.input.clone()
-        } else {
-            let types = body
-                .iter()
-                .map(|var| self.lookup(ctx, *var))
-                .collect::<Result<Vec<_>, _>>();
-            if let Ok(types) = types {
-                types
-            } else if expect_lookup {
-                // return the error
-                types?
-            } else {
-                return Err(TypeError::UnboundFunction(*head));
-            }
-        };
-        for (child_type, var) in child_types.iter().zip(body.iter()) {
-            if expect_lookup {
-                self.lookup(ctx, *var)?;
-            } else {
-                self.set_local_type(ctx, *var, child_type.clone())?;
-            }
-        }
+    // fn typecheck_expr(
+    //     &mut self,
+    //     ctx: CommandId,
+    //     expr: &NormExpr,
+    //     expect_lookup: bool,
+    // ) -> Result<FuncType, TypeError> {
+    //     let NormExpr::Call(head, body) = expr;
+    //     let child_types = if let Some(found) = self.func_types.get(head) {
+    //         found.input.clone()
+    //     } else {
+    //         let types = body
+    //             .iter()
+    //             .map(|var| self.lookup(ctx, *var))
+    //             .collect::<Result<Vec<_>, _>>();
+    //         if let Ok(types) = types {
+    //             types
+    //         } else if expect_lookup {
+    //             // return the error
+    //             types?
+    //         } else {
+    //             return Err(TypeError::UnboundFunction(*head));
+    //         }
+    //     };
+    //     for (child_type, var) in child_types.iter().zip(body.iter()) {
+    //         if expect_lookup {
+    //             self.lookup(ctx, *var)?;
+    //         } else {
+    //             self.set_local_type(ctx, *var, child_type.clone())?;
+    //         }
+    //     }
 
-        self.lookup_func(*head, child_types)
-    }
+    //     self.lookup_func(*head, child_types)
+    // }
 }
 
 #[derive(Debug, Clone, Error)]
 pub enum TypeError {
     #[error("Arity mismatch, expected {expected} args: {expr}")]
-    Arity { expr: Expr, expected: usize },
+    Arity { expr: UnresolvedExpr, expected: usize },
     #[error(
         "Type mismatch: expr = {expr}, expected = {}, actual = {}, reason: {reason}",
         .expected.name(), .actual.name(),
     )]
     Mismatch {
-        expr: Expr,
+        expr: UnresolvedExpr,
         expected: ArcSort,
         actual: ArcSort,
         reason: String,
@@ -682,7 +671,7 @@ pub enum TypeError {
     #[error("Cannot type a variable as unit: {0}")]
     UnitVar(Symbol),
     #[error("Failed to infer a type for: {0}")]
-    InferenceFailure(Expr),
+    InferenceFailure(UnresolvedExpr),
     #[error("No matching primitive for: ({op} {})", ListDisplay(.inputs, " "))]
     NoMatchingPrimitive { op: Symbol, inputs: Vec<Symbol> },
     #[error("Variable {0} was already defined")]

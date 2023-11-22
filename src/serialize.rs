@@ -2,7 +2,7 @@ use ordered_float::NotNan;
 use std::collections::VecDeque;
 
 use crate::{
-    ast::{FunctionDecl, Id},
+    ast::{Id, ResolvedFunctionDecl},
     function::{table::hash_values, ValueVec},
     util::HashMap,
     EGraph, Value,
@@ -58,7 +58,12 @@ impl EGraph {
     ///   (Note that this will be changed in `<https://github.com/egraphs-good/egglog/pull/158>` so that edges point to exact nodes instead of looking up the e-class)
     pub fn serialize(&self, config: SerializeConfig) -> egraph_serialize::EGraph {
         // First collect a list of all the calls we want to serialize as (function decl, inputs, the output, the node id)
-        let all_calls: Vec<(&FunctionDecl, &ValueVec, &Value, egraph_serialize::NodeId)> = self
+        let all_calls: Vec<(
+            &ResolvedFunctionDecl,
+            &ValueVec,
+            &Value,
+            egraph_serialize::NodeId,
+        )> = self
             .functions
             .values()
             .filter(|f| {

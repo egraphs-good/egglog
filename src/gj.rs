@@ -334,31 +334,32 @@ impl EGraph {
     pub(crate) fn compile_gj_query(
         &self,
         query: Query,
-        types: &IndexMap<Symbol, ArcSort>,
+        // types: &IndexMap<Symbol, ArcSort>,
     ) -> CompiledQuery {
-        // NOTE: this vars order only used for ordering the tuple storing the resulting match
-        // It is not the GJ variable order.
-        let mut vars: IndexMap<Symbol, VarInfo> = Default::default();
+        todo!("compile should no longer takes types")
+        // // NOTE: this vars order only used for ordering the tuple storing the resulting match
+        // // It is not the GJ variable order.
+        // let mut vars: IndexMap<Symbol, VarInfo> = Default::default();
 
-        for var in types.keys() {
-            vars.entry(*var).or_default();
-        }
+        // for var in types.keys() {
+        //     vars.entry(*var).or_default();
+        // }
 
-        for (i, atom) in query.funcs().enumerate() {
-            for v in atom.vars() {
-                // only count grounded occurrences
-                vars.entry(v).or_default().occurences.push(i)
-            }
-        }
+        // for (i, atom) in query.funcs().enumerate() {
+        //     for v in atom.vars() {
+        //         // only count grounded occurrences
+        //         vars.entry(v).or_default().occurences.push(i)
+        //     }
+        // }
 
-        // make sure everyone has an entry in the vars table
-        for prim in query.filters() {
-            for v in prim.vars() {
-                vars.entry(v).or_default();
-            }
-        }
+        // // make sure everyone has an entry in the vars table
+        // for prim in query.filters() {
+        //     for v in prim.vars() {
+        //         vars.entry(v).or_default();
+        //     }
+        // }
 
-        CompiledQuery { query, vars }
+        // CompiledQuery { query, vars }
     }
 
     fn make_trie_access_for_column(

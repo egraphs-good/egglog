@@ -1,7 +1,9 @@
-use crate::{*, typecheck::ResolvedCall};
+use crate::{typecheck::ResolvedCall, *};
 use ordered_float::OrderedFloat;
 
 use std::fmt::Display;
+
+use super::ToSexp;
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
 pub enum Literal {
@@ -56,11 +58,27 @@ impl Display for Literal {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct ResolvedVar {
+    pub name: Symbol,
+    pub sort: ArcSort,
+}
+
+impl Display for ResolvedVar {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.name)
+    }
+}
+
+impl ToSexp for ResolvedVar {
+    fn to_sexp(&self) -> Sexp {
+        Sexp::Symbol(self.name.to_string())
+    }
+}
 
 // TODO rename to Expr
 pub type UnresolvedExpr = Expr<Symbol, Symbol, ()>;
-pub type ResolvedExpr = Expr<ResolvedCall, (Symbol, ArcSort), ()>;
-
+pub type ResolvedExpr = Expr<ResolvedCall, ResolvedVar, ()>;
 
 // TODO rename to generic expr
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
@@ -70,7 +88,6 @@ pub enum Expr<Head, Leaf, Ann> {
     // TODO make this its own type
     Call(Ann, Head, Vec<Self>),
 }
-
 
 // impl NormExpr {
 //     pub fn to_expr(&self) -> Expr<Symbol, ()> {
@@ -95,19 +112,20 @@ pub enum Expr<Head, Leaf, Ann> {
 //     }
 // }
 
-impl<Head, Leaf, Ann> Expr<Head, Leaf, Ann> {
+impl UnresolvedExpr {
+    pub fn call(op: impl Into<Symbol>, children: impl IntoIterator<Item = Self>) -> Self {
+        Self::Call((), op.into(), children.into_iter().collect())
+    }
+
+    pub fn lit(lit: impl Into<Literal>) -> Self {
+        Self::Lit((), lit.into())
+    }
+}
+
+impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq, Ann: Clone> Expr<Head, Leaf, Ann> {
     pub fn is_var(&self) -> bool {
         matches!(self, Expr::Var(_, _))
     }
-
-    // TODO fix for specific types
-    // pub fn call(op: impl Into<Symbol>, children: impl IntoIterator<Item = Self>) -> Self {
-    //     Self::Call(op.into(), children.into_iter().collect())
-    // }
-
-    // pub fn lit(lit: impl Into<Literal>) -> Self {
-    //     Self::Lit(lit.into())
-    // }
 
     pub fn get_var(&self) -> Option<Leaf> {
         match self {
@@ -148,11 +166,45 @@ impl<Head, Leaf, Ann> Expr<Head, Leaf, Ann> {
             Expr::Var(..) => f(self),
             Expr::Call(ann, op, children) => {
                 let children = children.iter().map(|c| c.map(f)).collect();
-                f(&Expr::Call(ann, *op, children))
+                f(&Expr::Call(ann.clone(), *op, children))
             }
         }
     }
 
+    // TODO: refactor subst to take a canonicalizing function rather than hash map.
+    pub fn subst(&self, canon: &HashMap<Leaf, Self>) -> Self {
+        match self {
+            Expr::Lit(ann, _lit) => self.clone(),
+            Expr::Var(ann, v) => canon.get(v).cloned().unwrap_or_else(|| self.clone()),
+            Expr::Call(ann, op, children) => {
+                let children = children.iter().map(|c| c.subst(canon)).collect();
+                Expr::Call(ann.clone(), *op, children)
+            }
+        }
+    }
+
+    pub fn vars(&self) -> impl Iterator<Item = Leaf> + '_ {
+        let iterator: Box<dyn Iterator<Item = Leaf>> = match self {
+            Expr::Lit(_ann, _l) => Box::new(std::iter::empty()),
+            Expr::Var(_ann, v) => Box::new(std::iter::once(v.clone())),
+            Expr::Call(_ann, _head, exprs) => Box::new(exprs.iter().flat_map(|e| e.vars())),
+        };
+        iterator
+    }
+
+    pub(crate) fn map_def_use(&self, fvar: &mut impl FnMut(Leaf) -> Leaf) -> Self {
+        match self {
+            Expr::Lit(ann, _) => self.clone(),
+            Expr::Var(ann, v) => Expr::Var(ann.clone(), fvar(*v)),
+            Expr::Call(ann, op, args) => {
+                let args = args.iter().map(|a| a.map_def_use(fvar)).collect();
+                Expr::Call(ann.clone(), *op, args)
+            }
+        }
+    }
+}
+
+impl<Head: Display, Leaf: Display, Ann> Expr<Head, Leaf, Ann> {
     /// Converts this expression into a
     /// s-expression (symbolic expression).
     /// Example: `(Add (Add 2 3) 4)`
@@ -169,40 +221,6 @@ impl<Head, Leaf, Ann> Expr<Head, Leaf, Ann> {
         };
         res
     }
-
-    pub fn subst(&self, canon: &HashMap<Symbol, Self>) -> Self {
-        match self {
-            Expr::Lit(ann, _lit) => self.clone(),
-            Expr::Var(ann, v) => canon.get(v).cloned().unwrap_or_else(|| self.clone()),
-            Expr::Call(ann, op, children) => {
-                let children = children.iter().map(|c| c.subst(canon)).collect();
-                Expr::Call(ann, *op, children)
-            }
-        }
-    }
-
-    pub fn vars(&self) -> impl Iterator<Item = Symbol> + '_ {
-        let iterator: Box<dyn Iterator<Item = Symbol>> = match self {
-            Expr::Lit(_ann, _l) => Box::new(std::iter::empty()),
-            Expr::Var(_ann, v) => Box::new(std::iter::once(*v)),
-            Expr::Call(_ann, _head, exprs) => Box::new(exprs.iter().flat_map(|e| e.vars())),
-        };
-        iterator
-    }
-    
-    pub(crate) fn map_def_use(
-        &self,
-        fvar: &mut impl FnMut(Leaf) -> Leaf
-    ) -> Self {
-        match self {
-            Expr::Lit(ann, _) => self.clone(),
-            Expr::Var(ann, v) => Expr::Var(ann, fvar(*v)),
-            Expr::Call(ann, op, args) => {
-                let args = args.iter().map(|a| a.map_def_use(fvar)).collect();
-                Expr::Call(ann, *op, args)
-            }
-        }
-    }
 }
 
 // impl Display for NormExpr {
@@ -211,7 +229,11 @@ impl<Head, Leaf, Ann> Expr<Head, Leaf, Ann> {
 //     }
 // }
 
-impl<Annon, Leaf> Display for Expr<Symbol, Leaf, Annon> {
+impl<Head, Leaf, Ann> Display for Expr<Head, Leaf, Ann>
+where
+    Head: Display,
+    Leaf: Display,
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.to_sexp())
     }
@@ -219,7 +241,9 @@ impl<Annon, Leaf> Display for Expr<Symbol, Leaf, Annon> {
 
 // currently only used for testing, but no reason it couldn't be used elsewhere later
 #[cfg(test)]
-pub(crate) fn parse_expr(s: &str) -> Result<UnresolvedExpr, lalrpop_util::ParseError<usize, String, String>> {
+pub(crate) fn parse_expr(
+    s: &str,
+) -> Result<UnresolvedExpr, lalrpop_util::ParseError<usize, String, String>> {
     let parser = ast::parse::ExprParser::new();
     parser
         .parse(s)

@@ -53,7 +53,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::str::FromStr;
 use std::{fmt::Debug, sync::Arc};
-use typecheck::{AtomTerm, Program};
+use typecheck::{AtomTerm, Program, ResolvedCoreRule};
 
 pub type ArcSort = Arc<dyn Sort>;
 
@@ -680,8 +680,8 @@ impl EGraph {
         self.unionfind.n_unions() - n_unions + function.clear_updates()
     }
 
-    pub fn declare_function(&mut self, decl: &UnresolvedFunctionDecl) -> Result<(), Error> {
-        let function = Function::new(self, &decl.to_fdecl())?;
+    pub fn declare_function(&mut self, decl: &ResolvedFunctionDecl) -> Result<(), Error> {
+        let function = Function::new(self, decl)?;
         let old = self.functions.insert(decl.name, function);
         if old.is_some() {
             panic!(
@@ -812,7 +812,7 @@ impl EGraph {
     }
 
     // returns whether the egraph was updated
-    pub fn run_schedule(&mut self, sched: &UnresolvedSchedule) -> RunReport {
+    pub fn run_schedule(&mut self, sched: &ResolvedSchedule) -> RunReport {
         match sched {
             Schedule::Run(config) => self.run_rules(config),
             Schedule::Repeat(limit, sched) => {
@@ -864,7 +864,7 @@ impl EGraph {
         termdag.to_string(&term)
     }
 
-    pub fn run_rules(&mut self, config: &UnresolvedRunConfig) -> RunReport {
+    pub fn run_rules(&mut self, config: &ResolvedRunConfig) -> RunReport {
         let mut report: RunReport = Default::default();
 
         // first rebuild
@@ -879,10 +879,7 @@ impl EGraph {
             .or_default() += rebuild_start.elapsed();
         self.timestamp += 1;
 
-        let RunConfig {
-            ruleset,
-            until,
-        } = config;
+        let RunConfig { ruleset, until } = config;
 
         if let Some(facts) = until {
             if self.check_facts(facts).is_ok() {
@@ -1041,22 +1038,23 @@ impl EGraph {
     fn add_rule_with_name(
         &mut self,
         name: String,
+        // TODO: should probably use ResolvedRule here
         rule: ast::ResolvedRule,
         ruleset: Symbol,
     ) -> Result<Symbol, Error> {
         let name = Symbol::from(name);
         let mut compiler = typecheck::Context::new(self);
-        let core_rule = compiler
-            .compile_rule(&rule)
-            .map_err(Error::TypeErrors)?;
+        // let core_rule = compiler.compile_rule(&rule).map_err(Error::TypeErrors)?;
+        let core_rule: ResolvedCoreRule = todo!("get the resolved core rule");
         let (query, action) = (core_rule.body, core_rule.head);
 
         // TODO: We should refactor compile_actions later as well
-        let action: Vec<Action> = action.0.iter().map(|a| a.to_action()).collect();
+        let action: Vec<NormAction> = action.0.clone();
+        let types = todo!("get types from type inference");
 
         let query = self.compile_gj_query(query);
         let program = self
-            .compile_actions(&action)
+            .compile_actions(types, &action)
             .map_err(Error::TypeErrors)?;
         let compiled_rule = Rule {
             query,
@@ -1079,17 +1077,19 @@ impl EGraph {
 
     pub(crate) fn add_rule(
         &mut self,
-        rule: ast::UnresolvedRule,
+        rule: ast::ResolvedRule,
         ruleset: Symbol,
     ) -> Result<Symbol, Error> {
         let name = format!("{}", rule);
         self.add_rule_with_name(name, rule, ruleset)
     }
 
-    pub fn eval_actions(&mut self, actions: &[UnresolvedAction]) -> Result<(), Error> {
+    pub fn eval_actions(&mut self, actions: &[ResolvedAction]) -> Result<(), Error> {
         let types = Default::default();
+        let actions: Vec<NormAction> =
+            todo!("need to first lower to norm action before compilation");
         let program = self
-            .compile_actions(&types, actions)
+            .compile_actions(&types, &actions)
             .map_err(Error::TypeErrors)?;
         let mut stack = vec![];
         self.run_actions(&mut stack, &[], &program, true)?;
@@ -1098,7 +1098,7 @@ impl EGraph {
 
     pub fn eval_expr(
         &mut self,
-        expr: &UnresolvedExpr,
+        expr: &ResolvedExpr,
         expected_type: Option<ArcSort>,
         make_defaults: bool,
     ) -> Result<(ArcSort, Value), Error> {
@@ -1119,7 +1119,7 @@ impl EGraph {
         };
     }
 
-    pub fn set_option(&mut self, name: &str, value: UnresolvedExpr) {
+    pub fn set_option(&mut self, name: &str, value: ResolvedExpr) {
         match name {
             "enable_proofs" => {
                 self.proofs_enabled = true;
@@ -1151,13 +1151,12 @@ impl EGraph {
 
     fn check_facts(&mut self, facts: &[ResolvedFact]) -> Result<(), Error> {
         let mut compiler = typecheck::Context::new(self);
-        let rule = ast::UnresolvedRule {
+        let rule = ast::ResolvedRule {
             head: vec![],
             body: facts.to_vec(),
         };
-        let rule = compiler
-            .compile_rule(&rule)
-            .map_err(Error::TypeErrors)?;
+        // let rule = compiler.compile_rule(&rule).map_err(Error::TypeErrors)?;
+        let rule: ResolvedCoreRule = todo!("compile rule");
         let query0 = rule.body;
         let query = self.compile_gj_query(query0);
 
@@ -1170,7 +1169,7 @@ impl EGraph {
         });
         if !matched {
             // TODO add useful info here
-            Err(Error::CheckError(facts.to_vec()))
+            Err(Error::CheckError(facts.iter().map(|f| f.to_unresolved()).collect()))
         } else {
             Ok(())
         }
@@ -1239,11 +1238,11 @@ impl EGraph {
             NCommand::NormAction(action) => {
                 if should_run {
                     match &action {
-                        Action::Let(name, contents) => {
+                        Action::Let((), name, contents) => {
                             let (etype, value) = self.eval_expr(&contents, None, true)?;
                             let present = self
                                 .global_bindings
-                                .insert(*name, (etype, value, self.timestamp));
+                                .insert(name.name.clone(), (etype, value, self.timestamp));
                             if present.is_some() {
                                 panic!("Variable {name} was already present in global bindings");
                             }
@@ -1273,10 +1272,7 @@ impl EGraph {
                 self.print_size(f)?;
             }
             NCommand::Fail(c) => {
-                let result = self.run_command(
-                        c,
-                    should_run,
-                );
+                let result = self.run_command(*c, should_run);
                 if let Err(e) = result {
                     log::info!("Command failed as expected: {}", e);
                 } else {
@@ -1342,7 +1338,7 @@ impl EGraph {
         let mut contents = String::new();
         f.read_to_string(&mut contents).unwrap();
 
-        let mut actions: Vec<Action> = vec![];
+        let mut actions: Vec<UnresolvedAction> = vec![];
         let mut str_buf: Vec<&str> = vec![];
         for line in contents.lines() {
             str_buf.clear();
@@ -1351,25 +1347,26 @@ impl EGraph {
                 continue;
             }
 
-            let parse = |s: &str| -> Expr {
+            let parse = |s: &str| -> UnresolvedExpr {
                 if let Ok(i) = s.parse() {
-                    Expr::Lit(Literal::Int(i))
+                    Expr::Lit((), Literal::Int(i))
                 } else {
-                    Expr::Lit(Literal::String(s.into()))
+                    Expr::Lit((), Literal::String(s.into()))
                 }
             };
 
-            let mut exprs: Vec<Expr> = str_buf.iter().map(|&s| parse(s)).collect();
+            let mut exprs: Vec<UnresolvedExpr> = str_buf.iter().map(|&s| parse(s)).collect();
 
             actions.push(
                 if function_type.is_datatype || function_type.output.name() == UNIT_SYM.into() {
-                    Action::Expr(Expr::Call(func_name, exprs))
+                    Action::Expr((), Expr::Call((), func_name, exprs))
                 } else {
                     let out = exprs.pop().unwrap();
-                    Action::Set(func_name, exprs, out)
+                    Action::Set((), func_name, exprs, out)
                 },
             );
         }
+        let actions: Vec<ResolvedAction> = todo!("action resolution needed {:?}", actions);
         self.eval_actions(&actions)?;
         log::info!(
             "Read {} facts into {func_name} from '{file}'.",
@@ -1423,17 +1420,17 @@ impl EGraph {
         let mut program =
             self.desugar
                 .desugar_program(vec![command], self.test_proofs, self.seminaive)?;
-        if stop == CompilerPassStop::Desugar {
-            return Ok(program);
-        }
+        // TODO: a desugared program is not resolved yet
+        // if stop == CompilerPassStop::Desugar {
+        //     return Ok(program);
+        // }
 
-        let type_info_before = self.type_info().clone();
+        // let type_info_before = self.type_info().clone();
 
-        // typecheck_program: Program -> (Program<(Type, Var)>, CoreProgram)
-        self.desugar.type_info.typecheck_program(&program)?;
-        if stop == CompilerPassStop::TypecheckDesugared {
-            return Ok(program);
-        }
+        let program = self.desugar.type_info.typecheck_program(&program)?;
+        // if stop == CompilerPassStop::TypecheckDesugared {
+        //     return Ok(program);
+        // }
 
         // now add term encoding
         // if self.terms_enabled {
@@ -1441,16 +1438,18 @@ impl EGraph {
         //     program = self.desugar.desugar_program(program_terms, false, false)?;
         // }
 
-        if stop == CompilerPassStop::TermEncoding {
-            return Ok(program);
-        }
+        // TODO: a term-encoded program is not resolved yet
+        // if stop == CompilerPassStop::TermEncoding {
+        //     return Ok(program);
+        // }
 
         // reset type info
-        self.desugar.type_info = type_info_before;
-        self.desugar.type_info.typecheck_program(&program)?;
-        if stop == CompilerPassStop::TypecheckTermEncoding {
-            return Ok(program);
-        }
+        // We don't need this anymore as type_info is pure
+        // self.desugar.type_info = type_info_before;
+        // let program = self.desugar.type_info.typecheck_program(&program)?;
+        // if stop == CompilerPassStop::TypecheckTermEncoding {
+        //     return Ok(program);
+        // }
 
         Ok(program)
     }
@@ -1566,7 +1565,7 @@ pub enum Error {
     #[error("Errors:\n{}", ListDisplay(.0, "\n"))]
     TypeErrors(Vec<TypeError>),
     #[error("Check failed: \n{}", ListDisplay(.0, "\n"))]
-    CheckError(Vec<Fact>),
+    CheckError(Vec<UnresolvedFact>),
     #[error("Evaluating primitive {0:?} failed. ({0:?} {:?})", ListDebug(.1, " "))]
     PrimitiveError(Primitive, Vec<Value>),
     #[error("Illegal merge attempted for function {0}, {1:?} != {2:?}")]

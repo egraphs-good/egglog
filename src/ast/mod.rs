@@ -13,7 +13,7 @@ lalrpop_mod!(
     "/ast/parse.rs"
 );
 
-use crate::{*, typecheck::ResolvedCall};
+use crate::{typecheck::ResolvedCall, *};
 
 mod expr;
 pub use expr::*;
@@ -41,7 +41,7 @@ impl Display for Id {
 }
 
 pub type UnresolvedNCommand = NCommand<Symbol, Symbol, ()>;
-pub type ResolvedNCommand = NCommand<ResolvedCall, (Symbol, ArcSort), ()>;
+pub type ResolvedNCommand = NCommand<ResolvedCall, ResolvedVar, ()>;
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum NCommand<Head, Leaf, Ann> {
@@ -55,7 +55,7 @@ pub enum NCommand<Head, Leaf, Ann> {
     NormRule {
         name: Symbol,
         ruleset: Symbol,
-    rule: Rule<Head, Leaf, Ann>,
+        rule: Rule<Head, Leaf, Ann>,
     },
     NormAction(Action<Head, Leaf, Ann>),
     RunSchedule(Schedule<Head, Leaf, Ann>),
@@ -78,7 +78,11 @@ pub enum NCommand<Head, Leaf, Ann> {
     },
 }
 
-impl<Head, Leaf, Ann> NCommand<Head, Leaf, Ann> {
+impl<Head, Leaf> NCommand<Head, Leaf, ()>
+where
+    Head: Clone,
+    Leaf: Clone,
+{
     pub fn to_command(&self) -> Command<Head, Leaf> {
         match self {
             NCommand::SetOption { name, value } => Command::SetOption {
@@ -86,7 +90,7 @@ impl<Head, Leaf, Ann> NCommand<Head, Leaf, Ann> {
                 value: value.clone(),
             },
             NCommand::Sort(name, params) => Command::Sort(*name, params.clone()),
-            NCommand::Function(f) => Command::Function(f.to_fdecl()),
+            NCommand::Function(f) => Command::Function(f.clone()),
             NCommand::AddRuleset(name) => Command::AddRuleset(*name),
             NCommand::NormRule {
                 name,
@@ -97,7 +101,7 @@ impl<Head, Leaf, Ann> NCommand<Head, Leaf, Ann> {
                 ruleset: *ruleset,
                 rule: rule.clone(),
             },
-            NCommand::RunSchedule(schedule) => Command::RunSchedule(schedule.to_schedule()),
+            NCommand::RunSchedule(schedule) => Command::RunSchedule(schedule.clone()),
             NCommand::PrintOverallStatistics => Command::PrintOverallStatistics,
             NCommand::NormAction(action) => Command::Action(action.clone()),
             NCommand::Check(facts) => Command::Check(facts.clone()),
@@ -162,6 +166,7 @@ impl<Head, Leaf, Ann> NCommand<Head, Leaf, Ann> {
 }
 
 pub type UnresolvedSchedule = Schedule<Symbol, Symbol, ()>;
+pub type ResolvedSchedule = Schedule<ResolvedCall, ResolvedVar, ()>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Schedule<Head, Leaf, Ann> {
@@ -177,15 +182,14 @@ impl<Head, Leaf, Ann> Schedule<Head, Leaf, Ann> {
     }
 }
 
-
 impl UnresolvedSchedule {
-
-    pub fn map_run_commands(&self, f: &mut impl FnMut(&UnresolvedRunConfig) -> UnresolvedSchedule) -> UnresolvedSchedule {
+    pub fn map_run_commands(
+        &self,
+        f: &mut impl FnMut(&UnresolvedRunConfig) -> UnresolvedSchedule,
+    ) -> UnresolvedSchedule {
         match self {
             Schedule::Run(config) => f(config),
-            Schedule::Saturate(sched) => {
-                Schedule::Saturate(Box::new(sched.map_run_commands(f)))
-            }
+            Schedule::Saturate(sched) => Schedule::Saturate(Box::new(sched.map_run_commands(f))),
             Schedule::Repeat(size, sched) => {
                 Schedule::Repeat(*size, Box::new(sched.map_run_commands(f)))
             }
@@ -239,7 +243,7 @@ macro_rules! list {
     }};
 }
 
-impl<Head, Leaf, Ann> ToSexp for Schedule<Head, Leaf, Ann> {
+impl<Head: Display, Leaf: Display, Ann> ToSexp for Schedule<Head, Leaf, Ann> {
     fn to_sexp(&self) -> Sexp {
         match self {
             Schedule::Saturate(sched) => list!("saturate", sched),
@@ -250,7 +254,7 @@ impl<Head, Leaf, Ann> ToSexp for Schedule<Head, Leaf, Ann> {
     }
 }
 
-impl<Head, Leaf, Ann> Display for Schedule<Head, Leaf, Ann> {
+impl<Head: Display, Leaf: Display, Ann> Display for Schedule<Head, Leaf, Ann> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.to_sexp())
     }
@@ -275,7 +279,7 @@ pub enum Command<Head, Leaf> {
     /// tool to know when each command has finished running.
     SetOption {
         name: Symbol,
-        value: Expr<Head, Leaf, ()>
+        value: Expr<Head, Leaf, ()>,
     },
     /// Declare a user-defined datatype.
     /// Datatypes can be unioned with [`Action::Union`] either
@@ -605,7 +609,7 @@ pub enum Command<Head, Leaf> {
     Include(String),
 }
 
-impl<Head, Leaf> ToSexp for Command<Head, Leaf> {
+impl<Head: Display, Leaf: Display + ToSexp> ToSexp for Command<Head, Leaf> {
     fn to_sexp(&self) -> Sexp {
         match self {
             Command::SetOption { name, value } => list!("set-option", name, value),
@@ -648,13 +652,13 @@ impl<Head, Leaf> ToSexp for Command<Head, Leaf> {
     }
 }
 
-impl<Head, Leaf, Ann> Display for NCommand<Head, Leaf, Ann> {
+impl<Head: Display + Clone, Leaf: Display + ToSexp + Clone> Display for NCommand<Head, Leaf, ()> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.to_command())
     }
 }
 
-impl<Head, Leaf> Display for Command<Head, Leaf> {
+impl<Head: Display, Leaf: Display + ToSexp> Display for Command<Head, Leaf> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Command::Rule {
@@ -689,7 +693,7 @@ impl Display for IdentSort {
 }
 
 pub type UnresolvedRunConfig = RunConfig<Symbol, Symbol, ()>;
-pub type ResolvedRunConfig = RunConfig<ResolvedCall, (Symbol, ArcSort), ()>;
+pub type ResolvedRunConfig = RunConfig<ResolvedCall, ResolvedVar, ()>;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct RunConfig<Head, Leaf, Ann> {
@@ -697,7 +701,11 @@ pub struct RunConfig<Head, Leaf, Ann> {
     pub until: Option<Vec<Fact<Head, Leaf, Ann>>>,
 }
 
-impl<Head, Leaf, Ann> ToSexp for RunConfig<Head, Leaf, Ann> {
+impl<Head: Display, Leaf: Display, Ann> ToSexp for RunConfig<Head, Leaf, Ann>
+where
+    Head: Display,
+    Leaf: Display,
+{
     fn to_sexp(&self) -> Sexp {
         let mut res = vec![Sexp::Symbol("run".into())];
         if self.ruleset != "".into() {
@@ -713,7 +721,7 @@ impl<Head, Leaf, Ann> ToSexp for RunConfig<Head, Leaf, Ann> {
 }
 
 pub type UnresolvedFunctionDecl = FunctionDecl<Symbol, Symbol, ()>;
-pub type ResolvedFunctionDecl = FunctionDecl<ResolvedCall, (Symbol, ArcSort), ()>;
+pub type ResolvedFunctionDecl = FunctionDecl<ResolvedCall, ResolvedVar, ()>;
 
 /// Represents the declaration of a function
 /// directly parsed from source syntax.
@@ -767,7 +775,7 @@ impl Schema {
     }
 }
 
-impl<Head, Leaf, Ann> FunctionDecl<Head, Leaf, Ann> {
+impl UnresolvedFunctionDecl {
     pub fn relation(name: Symbol, input: Vec<Symbol>) -> Self {
         Self {
             name,
@@ -777,14 +785,14 @@ impl<Head, Leaf, Ann> FunctionDecl<Head, Leaf, Ann> {
             },
             merge: None,
             merge_action: vec![],
-            default: Some(Expr::Lit(Literal::Unit)),
+            default: Some(Expr::Lit((), Literal::Unit)),
             cost: None,
             unextractable: false,
         }
     }
 }
 
-impl<Head, Leaf, Ann> ToSexp for FunctionDecl<Head, Leaf, Ann> {
+impl<Head: Display, Leaf: Display + ToSexp, Ann> ToSexp for FunctionDecl<Head, Leaf, Ann> {
     fn to_sexp(&self) -> Sexp {
         let mut res = vec![
             Sexp::Symbol("function".into()),
@@ -830,7 +838,7 @@ impl<Head, Leaf, Ann> ToSexp for FunctionDecl<Head, Leaf, Ann> {
 }
 
 pub type UnresolvedFact = Fact<Symbol, Symbol, ()>;
-pub type ResolvedFact = Fact<ResolvedCall, (Symbol, ArcSort), ()>;
+pub type ResolvedFact = Fact<ResolvedCall, ResolvedVar, ()>;
 
 /// Facts are the left-hand side of a [`Command::Rule`].
 /// They represent a part of a database query.
@@ -849,7 +857,11 @@ pub enum Fact<Head, Leaf, Ann> {
     Fact(Expr<Head, Leaf, Ann>),
 }
 
-impl<Head, Leaf, Ann> ToSexp for Fact<Head, Leaf, Ann> {
+impl<Head: Display, Leaf: Display, Ann> ToSexp for Fact<Head, Leaf, Ann>
+where
+    Head: Display,
+    Leaf: Display,
+{
     fn to_sexp(&self) -> Sexp {
         match self {
             Fact::Eq(exprs) => list!("=", ++ exprs),
@@ -858,41 +870,60 @@ impl<Head, Leaf, Ann> ToSexp for Fact<Head, Leaf, Ann> {
     }
 }
 
-impl<Head, Leaf, Ann> Fact<Head, Leaf, Ann> {
-    pub fn map_exprs(&self, f: &mut impl FnMut(&Expr<Head, Leaf, Ann>) -> Expr<Head, Leaf, Ann>) -> Self {
+impl ResolvedFact {
+    pub fn to_unresolved(&self) -> UnresolvedFact {
+        todo!()
+    }
+}
+
+impl<Head, Leaf, Ann> Fact<Head, Leaf, Ann>
+where
+    Ann: Clone,
+    Head: Clone + Display,
+    Leaf: Clone + PartialEq + Eq + Display + Hash,
+{
+    pub fn map_exprs(
+        &self,
+        f: &mut impl FnMut(&Expr<Head, Leaf, Ann>) -> Expr<Head, Leaf, Ann>,
+    ) -> Self {
         match self {
             Fact::Eq(exprs) => Fact::Eq(exprs.iter().map(f).collect()),
             Fact::Fact(expr) => Fact::Fact(f(expr)),
         }
     }
 
-    pub fn subst(&self, subst: &HashMap<Symbol, Expr<Head, Leaf, Ann>>) -> Self {
+    pub fn subst(&self, subst: &HashMap<Leaf, Expr<Head, Leaf, Ann>>) -> Self {
         self.map_exprs(&mut |e| e.subst(subst))
     }
 }
 
-impl<Head, Leaf, Ann> Display for Fact<Head, Leaf, Ann> {
+impl<Head, Leaf, Ann> Display for Fact<Head, Leaf, Ann>
+where
+    Head: Display,
+    Leaf: Display,
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.to_sexp())
     }
 }
 
 pub type UnresolvedAction = Action<Symbol, Symbol, ()>;
+pub type ResolvedAction = Action<ResolvedCall, ResolvedVar, ()>;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Action<Head, Leaf, Ann> {
     /// Bind a variable to a particular datatype or primitive.
     /// At the top level (in a [`Command::Action`]), this defines a global variable.
     /// In a [`Command::Rule`], this defines a local variable in the actions.
-    Let(Ann, Symbol, Expr<Head, Leaf, Ann>),
+    Let(Ann, Leaf, Expr<Head, Leaf, Ann>),
     /// `set` a function to a particular result.
     /// `set` should not be used on datatypes-
     /// instead, use `union`.
-    Set(Ann, Symbol, Vec<Expr<Head, Leaf, Ann>>, Expr<Head, Leaf, Ann>),
+    Set(Ann, Leaf, Vec<Expr<Head, Leaf, Ann>>, Expr<Head, Leaf, Ann>),
     /// `delete` an entry from a function.
     /// Be wary! Only delete entries that are subsumed in some way or
     /// guaranteed to be not useful.
-    Delete(Ann, Symbol, Vec<Expr<Head, Leaf, Ann>>),
+    Delete(Ann, Leaf, Vec<Expr<Head, Leaf, Ann>>),
     /// `union` two datatypes, making them equal
     /// in the implicit, global equality relation
     /// of egglog.
@@ -920,17 +951,17 @@ pub enum Action<Head, Leaf, Ann> {
     // If(Expr, Action, Action),
 }
 
-// #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-// pub enum NormAction {
-//     Let(Symbol, NormExpr),
-//     LetVar(Symbol, Symbol),
-//     LetLit(Symbol, Literal),
-//     Extract(Symbol, Symbol),
-//     Set(NormExpr, Symbol),
-//     Delete(NormExpr),
-//     Union(Symbol, Symbol),
-//     Panic(String),
-// }
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum NormAction {
+    Let(Symbol /* var */, Symbol /* head */, Vec<AtomTerm>),
+    LetVar(Symbol, Symbol),
+    LetLit(Symbol, Literal),
+    Extract(Symbol, Symbol),
+    Set(Symbol /* head */, Vec<AtomTerm>, Symbol),
+    Delete(Symbol, Vec<AtomTerm>),
+    Union(Symbol, Symbol),
+    Panic(String),
+}
 
 // impl NormAction {
 //     pub fn to_action(&self) -> Action {
@@ -990,103 +1021,121 @@ pub enum Action<Head, Leaf, Ann> {
 //     }
 // }
 
-impl<Head, Leaf, Ann> ToSexp for Action<Head, Leaf, Ann> {
+impl<Head: Display, Leaf: Display + ToSexp, Ann> ToSexp for Action<Head, Leaf, Ann> {
     fn to_sexp(&self) -> Sexp {
         match self {
-            Action::Let(lhs, rhs) => list!("let", lhs, rhs),
-            Action::Set(lhs, args, rhs) => list!("set", list!(lhs, ++ args), rhs),
-            Action::Union(lhs, rhs) => list!("union", lhs, rhs),
-            Action::Delete(lhs, args) => list!("delete", list!(lhs, ++ args)),
-            Action::Extract(expr, variants) => list!("extract", expr, variants),
-            Action::Panic(msg) => list!("panic", format!("\"{}\"", msg.clone())),
-            Action::Expr(e) => e.to_sexp(),
+            Action::Let(_ann, lhs, rhs) => list!("let", lhs, rhs),
+            Action::Set(_ann, lhs, args, rhs) => list!("set", list!(lhs, ++ args), rhs),
+            Action::Union(_ann, lhs, rhs) => list!("union", lhs, rhs),
+            Action::Delete(_ann, lhs, args) => list!("delete", list!(lhs, ++ args)),
+            Action::Extract(_ann, expr, variants) => list!("extract", expr, variants),
+            Action::Panic(_ann, msg) => list!("panic", format!("\"{}\"", msg.clone())),
+            Action::Expr(_ann, e) => e.to_sexp(),
         }
     }
 }
 
-impl<Head, Leaf, Ann> Action<Head, Leaf, Ann> {
-    pub fn map_exprs(&self, f: &mut impl FnMut(&Expr<Head, Leaf, Ann>) -> Expr<Head, Leaf, Ann>) -> Self {
+impl<Head, Leaf, Ann> Action<Head, Leaf, Ann>
+where
+    Head: Clone + Display,
+    Leaf: Clone + Eq + Display + Hash,
+    Ann: Clone,
+{
+    pub fn map_exprs(
+        &self,
+        f: &mut impl FnMut(&Expr<Head, Leaf, Ann>) -> Expr<Head, Leaf, Ann>,
+    ) -> Self {
         match self {
-            Action::Let(lhs, rhs) => Action::Let(*lhs, f(rhs)),
-            Action::Set(lhs, args, rhs) => {
+            Action::Let(ann, lhs, rhs) => Action::Let(ann.clone(), *lhs, f(rhs)),
+            Action::Set(ann, lhs, args, rhs) => {
                 let right = f(rhs);
-                Action::Set(*lhs, args.iter().map(f).collect(), right)
+                Action::Set(ann.clone(), *lhs, args.iter().map(f).collect(), right)
             }
-            Action::Delete(lhs, args) => Action::Delete(*lhs, args.iter().map(f).collect()),
-            Action::Union(lhs, rhs) => Action::Union(f(lhs), f(rhs)),
-            Action::Extract(expr, variants) => Action::Extract(f(expr), f(variants)),
-            Action::Panic(msg) => Action::Panic(msg.clone()),
-            Action::Expr(e) => Action::Expr(f(e)),
+            Action::Delete(ann, lhs, args) => {
+                Action::Delete(ann.clone(), *lhs, args.iter().map(f).collect())
+            }
+            Action::Union(ann, lhs, rhs) => Action::Union(ann.clone(), f(lhs), f(rhs)),
+            Action::Extract(ann, expr, variants) => {
+                Action::Extract(ann.clone(), f(expr), f(variants))
+            }
+            Action::Panic(ann, msg) => Action::Panic(ann.clone(), msg.clone()),
+            Action::Expr(ann, e) => Action::Expr(ann.clone(), f(e)),
         }
     }
 
-    pub fn replace_canon(&self, canon: &HashMap<Symbol, Expr<Head, Leaf, Ann>>) -> Self {
+    pub fn replace_canon(&self, canon: &HashMap<Leaf, Expr<Head, Leaf, Ann>>) -> Self {
         match self {
-            Action::Let(lhs, rhs) => Action::Let(*lhs, rhs.subst(canon)),
-            Action::Set(lhs, args, rhs) => Action::Set(
+            Action::Let(ann, lhs, rhs) => Action::Let(ann.clone(), *lhs, rhs.subst(canon)),
+            Action::Set(ann, lhs, args, rhs) => Action::Set(
+                ann.clone(),
                 *lhs,
                 args.iter().map(|e| e.subst(canon)).collect(),
                 rhs.subst(canon),
             ),
-            Action::Delete(lhs, args) => {
-                Action::Delete(*lhs, args.iter().map(|e| e.subst(canon)).collect())
+            Action::Delete(ann, lhs, args) => Action::Delete(
+                ann.clone(),
+                *lhs,
+                args.iter().map(|e| e.subst(canon)).collect(),
+            ),
+            Action::Union(ann, lhs, rhs) => {
+                Action::Union(ann.clone(), lhs.subst(canon), rhs.subst(canon))
             }
-            Action::Union(lhs, rhs) => Action::Union(lhs.subst(canon), rhs.subst(canon)),
-            Action::Extract(expr, variants) => {
-                Action::Extract(expr.subst(canon), variants.subst(canon))
+            Action::Extract(ann, expr, variants) => {
+                Action::Extract(ann.clone(), expr.subst(canon), variants.subst(canon))
             }
-            Action::Panic(msg) => Action::Panic(msg.clone()),
-            Action::Expr(e) => Action::Expr(e.subst(canon)),
+            Action::Panic(ann, msg) => Action::Panic(ann.clone(), msg.clone()),
+            Action::Expr(ann, e) => Action::Expr(ann.clone(), e.subst(canon)),
         }
     }
 
-    fn map_def_use(&self, mut fvar: impl FnMut(Symbol, bool) -> Symbol) -> Self {
+    fn map_def_use(&self, mut fvar: impl FnMut(Leaf, bool) -> Leaf) -> Self {
         match self {
-            Action::Let(lhs, rhs) => {
+            Action::Let(ann, lhs, rhs) => {
                 let lhs = fvar(*lhs, true);
                 let rhs = rhs.map_def_use(&mut |s| fvar(s, false));
-                Action::Let(lhs, rhs)
+                Action::Let(ann.clone(), lhs, rhs)
             }
-            Action::Set(lhs, args, rhs) => {
+            Action::Set(ann, lhs, args, rhs) => {
                 let args = args
                     .iter()
                     .map(|e| e.map_def_use(&mut |s| fvar(s, false)))
                     .collect();
                 let rhs = rhs.map_def_use(&mut |s| fvar(s, false));
-                Action::Set(lhs.clone(), args, rhs)
+                Action::Set(ann.clone(), lhs.clone(), args, rhs)
             }
-            Action::Delete(lhs, args) => {
+            Action::Delete(ann, lhs, args) => {
                 let args = args
                     .iter()
                     .map(|e| e.map_def_use(&mut |s| fvar(s, false)))
                     .collect();
-                Action::Delete(lhs.clone(), args)
+                Action::Delete(ann.clone(), lhs.clone(), args)
             }
-            Action::Union(lhs, rhs) => {
+            Action::Union(ann, lhs, rhs) => {
                 let lhs = lhs.map_def_use(&mut |s| fvar(s, false));
                 let rhs = rhs.map_def_use(&mut |s| fvar(s, false));
-                Action::Union(lhs, rhs)
+                Action::Union(ann.clone(), lhs, rhs)
             }
-            Action::Extract(expr, variants) => {
+            Action::Extract(ann, expr, variants) => {
                 let expr = expr.map_def_use(&mut |s| fvar(s, false));
                 let variants = variants.map_def_use(&mut |s| fvar(s, false));
-                Action::Extract(expr, variants)
+                Action::Extract(ann.clone(), expr, variants)
             }
-            Action::Panic(msg) => Action::Panic(msg.clone()),
-            Action::Expr(e) => Action::Expr(e.map_def_use(&mut |s| fvar(s, false))),
+            Action::Panic(ann, msg) => Action::Panic(ann.clone(), msg.clone()),
+            Action::Expr(ann, e) => {
+                Action::Expr(ann.clone(), e.map_def_use(&mut |s| fvar(s, false)))
+            }
         }
     }
 }
 
-impl Display for UnresolvedAction {
+impl<Head: Display, Leaf: Display + ToSexp, Ann> Display for Action<Head, Leaf, Ann> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.to_sexp())
     }
 }
 
-
 pub type UnresolvedRule = Rule<Symbol, Symbol, ()>;
-pub type ResolvedRule = Rule<ResolvedCall, (Symbol, ArcSort), ()>;
+pub type ResolvedRule = Rule<ResolvedCall, ResolvedVar, ()>;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Rule<Head, Leaf, Ann> {
@@ -1094,32 +1143,7 @@ pub struct Rule<Head, Leaf, Ann> {
     pub body: Vec<Fact<Head, Leaf, Ann>>,
 }
 
-impl UnresolvedRule {
-    /// Converts this rule into an s-expression.
-    pub fn to_sexp(&self, ruleset: Symbol, name: Symbol) -> Sexp {
-        let mut res = vec![
-            Sexp::Symbol("rule".into()),
-            Sexp::List(self.body.iter().map(|f| f.to_sexp()).collect()),
-            Sexp::List(self.head.iter().map(|a| a.to_sexp()).collect()),
-        ];
-        if ruleset != "".into() {
-            res.push(Sexp::Symbol(":ruleset".into()));
-            res.push(Sexp::Symbol(ruleset.to_string()));
-        }
-        if name != "".into() {
-            res.push(Sexp::Symbol(":name".into()));
-            res.push(Sexp::Symbol(format!("\"{}\"", name)));
-        }
-        Sexp::List(res)
-    }
-
-    pub fn map_exprs(&self, f: &mut impl FnMut(&UnresolvedExpr) -> UnresolvedExpr) -> Self {
-        Rule {
-            head: self.head.iter().map(|a| a.map_exprs(f)).collect(),
-            body: self.body.iter().map(|fact| fact.map_exprs(f)).collect(),
-        }
-    }
-
+impl<Head: Display, Leaf: Display + ToSexp, Ann> Rule<Head, Leaf, Ann> {
     pub(crate) fn fmt_with_ruleset(
         &self,
         f: &mut std::fmt::Formatter<'_>,
@@ -1164,11 +1188,41 @@ impl UnresolvedRule {
     }
 }
 
-impl<Head, Leaf, Ann> Display for Rule<Head, Leaf, Ann> {
+impl<Head: Display, Leaf: Display + ToSexp, Ann> Rule<Head, Leaf, Ann> {
+    /// Converts this rule into an s-expression.
+    pub fn to_sexp(&self, ruleset: Symbol, name: Symbol) -> Sexp {
+        let mut res = vec![
+            Sexp::Symbol("rule".into()),
+            Sexp::List(self.body.iter().map(|f| f.to_sexp()).collect()),
+            Sexp::List(self.head.iter().map(|a| a.to_sexp()).collect()),
+        ];
+        if ruleset != "".into() {
+            res.push(Sexp::Symbol(":ruleset".into()));
+            res.push(Sexp::Symbol(ruleset.to_string()));
+        }
+        if name != "".into() {
+            res.push(Sexp::Symbol(":name".into()));
+            res.push(Sexp::Symbol(format!("\"{}\"", name)));
+        }
+        Sexp::List(res)
+    }
+}
+impl UnresolvedRule {
+    pub fn map_exprs(&self, f: &mut impl FnMut(&UnresolvedExpr) -> UnresolvedExpr) -> Self {
+        Rule {
+            head: self.head.iter().map(|a| a.map_exprs(f)).collect(),
+            body: self.body.iter().map(|fact| fact.map_exprs(f)).collect(),
+        }
+    }
+}
+
+impl<Head: Display, Leaf: Display + ToSexp, Ann> Display for Rule<Head, Leaf, Ann> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.fmt_with_ruleset(f, "".into(), "".into())
     }
 }
+
+type UnresolvedRewrite = Rewrite<Symbol, Symbol, ()>;
 
 #[derive(Clone, Debug)]
 pub struct Rewrite<Head, Leaf, Ann> {
@@ -1177,7 +1231,7 @@ pub struct Rewrite<Head, Leaf, Ann> {
     pub conditions: Vec<Fact<Head, Leaf, Ann>>,
 }
 
-impl<Head, Leaf, Ann> Rewrite<Head, Leaf, Ann> {
+impl<Head: Display, Leaf: Display, Ann> Rewrite<Head, Leaf, Ann> {
     /// Converts the rewrite into an s-expression.
     pub fn to_sexp(&self, ruleset: Symbol, is_bidirectional: bool) -> Sexp {
         let mut res = vec![
@@ -1205,7 +1259,7 @@ impl<Head, Leaf, Ann> Rewrite<Head, Leaf, Ann> {
     }
 }
 
-impl<Head, Leaf, Ann> Display for Rewrite<Head, Leaf, Ann> {
+impl<Head: Display, Leaf: Display, Ann> Display for Rewrite<Head, Leaf, Ann> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.to_sexp("".into(), false))
     }
