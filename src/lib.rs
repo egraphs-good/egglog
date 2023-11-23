@@ -680,7 +680,7 @@ impl EGraph {
         self.unionfind.n_unions() - n_unions + function.clear_updates()
     }
 
-    pub fn declare_function(&mut self, decl: &ResolvedFunctionDecl) -> Result<(), Error> {
+    fn declare_function(&mut self, decl: &ResolvedFunctionDecl) -> Result<(), Error> {
         let function = Function::new(self, decl)?;
         let old = self.functions.insert(decl.name, function);
         if old.is_some() {
@@ -812,7 +812,7 @@ impl EGraph {
     }
 
     // returns whether the egraph was updated
-    pub fn run_schedule(&mut self, sched: &ResolvedSchedule) -> RunReport {
+    fn run_schedule(&mut self, sched: &ResolvedSchedule) -> RunReport {
         match sched {
             Schedule::Run(config) => self.run_rules(config),
             Schedule::Repeat(limit, sched) => {
@@ -864,7 +864,7 @@ impl EGraph {
         termdag.to_string(&term)
     }
 
-    pub fn run_rules(&mut self, config: &ResolvedRunConfig) -> RunReport {
+    fn run_rules(&mut self, config: &ResolvedRunConfig) -> RunReport {
         let mut report: RunReport = Default::default();
 
         // first rebuild
@@ -1084,7 +1084,7 @@ impl EGraph {
         self.add_rule_with_name(name, rule, ruleset)
     }
 
-    pub fn eval_actions(&mut self, actions: &[ResolvedAction]) -> Result<(), Error> {
+    fn eval_actions(&mut self, actions: &[ResolvedAction]) -> Result<(), Error> {
         let types = Default::default();
         let actions: Vec<NormAction> =
             todo!("need to first lower to norm action before compilation");
@@ -1096,7 +1096,9 @@ impl EGraph {
         Ok(())
     }
 
-    pub fn eval_expr(
+    // TODO make a public version of eval_expr that makes a command,
+    // then returns the value at the end.
+    fn eval_expr(
         &mut self,
         expr: &ResolvedExpr,
         expected_type: Option<ArcSort>,
@@ -1119,7 +1121,7 @@ impl EGraph {
         };
     }
 
-    pub fn set_option(&mut self, name: &str, value: ResolvedExpr) {
+    fn set_option(&mut self, name: &str, value: ResolvedExpr) {
         match name {
             "enable_proofs" => {
                 self.proofs_enabled = true;
@@ -1381,7 +1383,7 @@ impl EGraph {
         }
     }
 
-    pub fn process_commands(
+    pub(crate) fn process_commands(
         &mut self,
         program: Vec<UnresolvedCommand>,
         stop: CompilerPassStop,

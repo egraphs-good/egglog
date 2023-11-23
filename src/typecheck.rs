@@ -1,6 +1,6 @@
 use std::ops::AddAssign;
 
-use crate::{constraint::AllEqualTypeConstraint, *, typechecking::FuncType};
+use crate::{constraint::AllEqualTypeConstraint, typechecking::FuncType, *};
 use hashbrown::HashMap;
 use typechecking::TypeError;
 
@@ -19,10 +19,12 @@ impl Actions {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SymbolOrEq {
-    Symbol(Symbol),
+pub(crate) enum HeadOrEq<Head> {
+    Symbol(Head),
     Eq,
 }
+
+pub(crate) type SymbolOrEq = HeadOrEq<Symbol>;
 
 impl From<Symbol> for SymbolOrEq {
     fn from(value: Symbol) -> Self {
@@ -45,20 +47,20 @@ impl SymbolOrEq {
 }
 
 #[derive(Debug, Clone)]
-pub struct UnresolvedCoreRule {
-    pub body: Query<SymbolOrEq>,
+pub(crate) struct UnresolvedCoreRule {
+    pub body: Query<SymbolOrEq, Symbol>,
     pub head: Actions,
 }
 
 #[derive(Debug, Clone)]
-pub struct CanonicalizedCoreRule {
-    pub body: Query<Symbol>,
+pub(crate) struct CanonicalizedCoreRule {
+    pub body: Query<Symbol, Symbol>,
     pub head: Actions,
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct ResolvedCoreRule {
-    pub body: Query<ResolvedCall>,
+pub(crate) struct ResolvedCoreRule {
+    pub body: Query<ResolvedCall, ResolvedVar>,
     pub head: Actions,
 }
 
@@ -84,7 +86,7 @@ impl Display for ResolvedCall {
     }
 }
 
-impl Query<ResolvedCall> {
+impl Query<ResolvedCall, Symbol> {
     pub fn filters(&self) -> impl Iterator<Item = Atom<Primitive>> + '_ {
         self.atoms.iter().filter_map(|atom| match &atom.head {
             ResolvedCall::Func(_) => None,
@@ -115,49 +117,6 @@ impl UnresolvedCoreRule {
     }
 }
 
-pub(crate) fn facts_to_query(body: &Vec<UnresolvedFact>, typeinfo: &TypeInfo) -> Query<SymbolOrEq> {
-    fn to_atom_term(s: Symbol, typeinfo: &TypeInfo) -> AtomTerm {
-        if typeinfo.is_global(s) {
-            AtomTerm::Global(s)
-        } else {
-            AtomTerm::Var(s)
-        }
-    }
-    let mut atoms = vec![];
-    for fact in body {
-        // match fact {
-        //     NormFact::Assign(symbol, NormExpr::Call(head, args))
-        //     | NormFact::Compute(symbol, NormExpr::Call(head, args)) => {
-        //         let args = args
-        //             .iter()
-        //             .chain(once(symbol))
-        //             .cloned()
-        //             .map(|s| to_atom_term(s, typeinfo))
-        //             .collect();
-        //         let head = SymbolOrEq::Symbol(*head);
-        //         atoms.push(Atom { head, args });
-        //     }
-        //     NormFact::AssignVar(lhs, rhs) => atoms.push(Atom {
-        //         head: SymbolOrEq::Eq,
-        //         args: vec![to_atom_term(*lhs, typeinfo), to_atom_term(*rhs, typeinfo)],
-        //     }),
-        //     NormFact::ConstrainEq(lhs, rhs) => atoms.push(Atom {
-        //         head: SymbolOrEq::Eq,
-        //         args: vec![to_atom_term(*lhs, typeinfo), to_atom_term(*rhs, typeinfo)],
-        //     }),
-        //     NormFact::AssignLit(symbol, lit) => atoms.push(Atom {
-        //         head: SymbolOrEq::Eq,
-        //         args: vec![
-        //             to_atom_term(*symbol, typeinfo),
-        //             AtomTerm::Literal(lit.clone()),
-        //         ],
-        //     }),
-        // }
-        todo!("refactor")
-    }
-    Query { atoms }
-}
-
 pub(crate) fn actions_to_core_actions(actions: &[UnresolvedAction]) -> Vec<NormAction> {
     let mut desugar = Desugar::default();
     todo!("flatten actions")
@@ -167,8 +126,9 @@ pub(crate) fn actions_to_core_actions(actions: &[UnresolvedAction]) -> Vec<NormA
 impl UnresolvedRule {
     pub(crate) fn to_core_rule(&self, typeinfo: &TypeInfo) -> UnresolvedCoreRule {
         let Rule { head, body } = self;
+        let (body, _correspondence) = Expr::facts_to_query(body, typeinfo, todo!("get_fresh_var"));
         UnresolvedCoreRule {
-            body: facts_to_query(body, typeinfo),
+            body,
             head: Actions(actions_to_core_actions(head)),
         }
     }
@@ -179,11 +139,14 @@ pub struct Context<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum AtomTerm {
-    Var(Symbol),
+pub enum GenericAtomTerm<Leaf> {
+    Var(Leaf),
     Literal(Literal),
     Global(Symbol),
 }
+
+pub type AtomTerm = GenericAtomTerm<Symbol>;
+
 impl AtomTerm {
     pub fn to_expr(&self) -> UnresolvedExpr {
         match self {
@@ -205,10 +168,12 @@ impl std::fmt::Display for AtomTerm {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Atom<T> {
-    pub head: T,
-    pub args: Vec<AtomTerm>,
+pub struct GenericAtom<Head, Leaf> {
+    pub head: Head,
+    pub args: Vec<GenericAtomTerm<Leaf>>,
 }
+
+pub type Atom<T> = GenericAtom<T, Symbol>;
 
 impl<T: std::fmt::Display> std::fmt::Display for Atom<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -217,11 +182,11 @@ impl<T: std::fmt::Display> std::fmt::Display for Atom<T> {
 }
 
 #[derive(Debug, Clone)]
-pub struct Query<T> {
-    pub atoms: Vec<Atom<T>>,
+pub struct Query<Head, Leaf> {
+    pub atoms: Vec<GenericAtom<Head, Leaf>>,
 }
 
-impl<T> Default for Query<T> {
+impl<Head, Leaf> Default for Query<Head, Leaf> {
     fn default() -> Self {
         Self {
             atoms: Default::default(),
@@ -229,7 +194,7 @@ impl<T> Default for Query<T> {
     }
 }
 
-impl Query<SymbolOrEq> {
+impl Query<SymbolOrEq, Symbol> {
     pub fn get_constraints(
         &self,
         type_info: &TypeInfo,
@@ -249,13 +214,13 @@ impl Query<SymbolOrEq> {
     }
 }
 
-impl<T> AddAssign for Query<T> {
+impl<Head, Leaf> AddAssign for Query<Head, Leaf> {
     fn add_assign(&mut self, rhs: Self) {
         self.atoms.extend(rhs.atoms);
     }
 }
 
-impl std::fmt::Display for Query<Symbol> {
+impl std::fmt::Display for Query<Symbol, Symbol> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for atom in &self.atoms {
             writeln!(f, "{atom}")?;
@@ -264,7 +229,7 @@ impl std::fmt::Display for Query<Symbol> {
     }
 }
 
-impl std::fmt::Display for Query<ResolvedCall> {
+impl std::fmt::Display for Query<ResolvedCall, Symbol> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for atom in self.funcs() {
             writeln!(f, "{atom}")?;
@@ -285,7 +250,7 @@ impl std::fmt::Display for Query<ResolvedCall> {
     }
 }
 
-impl<T> Atom<T> {
+impl<Head> GenericAtom<Head, Symbol> {
     pub fn vars(&self) -> impl Iterator<Item = Symbol> + '_ {
         self.args.iter().filter_map(|t| match t {
             AtomTerm::Var(v) => Some(*v),
@@ -349,7 +314,7 @@ impl PrimitiveLike for ValueEq {
 }
 
 impl<'a> Context<'a> {
-    pub fn new(egraph: &'a mut EGraph) -> Self {
+    pub(crate) fn new(egraph: &'a mut EGraph) -> Self {
         Self { egraph }
     }
 
@@ -357,7 +322,7 @@ impl<'a> Context<'a> {
     /// In particular, it removes equality checks between variables and
     /// other arguments, and turns equality checks between non-variable arguments
     /// into a primitive equality check `value-eq`.
-    pub fn canonicalize(&self, rule: UnresolvedCoreRule) -> CanonicalizedCoreRule {
+    pub(crate) fn canonicalize(&self, rule: UnresolvedCoreRule) -> CanonicalizedCoreRule {
         let mut result_rule = rule;
         loop {
             let mut to_subst = None;
@@ -753,7 +718,7 @@ impl EGraph {
         todo!("compile actions")
     }
 
-    pub fn compile_expr(
+    pub(crate) fn compile_expr(
         &self,
         types: &IndexMap<Symbol, ArcSort>,
         expr: &ResolvedExpr,
@@ -834,7 +799,7 @@ impl EGraph {
         Ok(())
     }
 
-    pub fn run_actions(
+    pub(crate) fn run_actions(
         &mut self,
         stack: &mut Vec<Value>,
         subst: &[Value],

@@ -11,7 +11,7 @@ pub(crate) mod table;
 pub type ValueVec = SmallVec<[Value; 3]>;
 
 #[derive(Clone)]
-pub struct Function {
+pub(crate) struct Function {
     pub decl: ResolvedFunctionDecl,
     pub schema: ResolvedSchema,
     pub merge: MergeAction,

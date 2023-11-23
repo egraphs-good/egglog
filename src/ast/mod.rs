@@ -13,7 +13,10 @@ lalrpop_mod!(
     "/ast/parse.rs"
 );
 
-use crate::{typecheck::ResolvedCall, *};
+use crate::{
+    typecheck::{GenericAtom, HeadOrEq, Query, ResolvedCall},
+    *,
+};
 
 mod expr;
 pub use expr::*;
@@ -41,7 +44,7 @@ impl Display for Id {
 }
 
 pub type UnresolvedNCommand = NCommand<Symbol, Symbol, ()>;
-pub type ResolvedNCommand = NCommand<ResolvedCall, ResolvedVar, ()>;
+pub(crate) type ResolvedNCommand = NCommand<ResolvedCall, ResolvedVar, ()>;
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum NCommand<Head, Leaf, Ann> {
@@ -166,7 +169,7 @@ where
 }
 
 pub type UnresolvedSchedule = Schedule<Symbol, Symbol, ()>;
-pub type ResolvedSchedule = Schedule<ResolvedCall, ResolvedVar, ()>;
+pub(crate) type ResolvedSchedule = Schedule<ResolvedCall, ResolvedVar, ()>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Schedule<Head, Leaf, Ann> {
@@ -203,7 +206,7 @@ impl UnresolvedSchedule {
     }
 }
 
-trait ToSexp {
+pub trait ToSexp {
     fn to_sexp(&self) -> Sexp;
 }
 
@@ -693,7 +696,7 @@ impl Display for IdentSort {
 }
 
 pub type UnresolvedRunConfig = RunConfig<Symbol, Symbol, ()>;
-pub type ResolvedRunConfig = RunConfig<ResolvedCall, ResolvedVar, ()>;
+pub(crate) type ResolvedRunConfig = RunConfig<ResolvedCall, ResolvedVar, ()>;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct RunConfig<Head, Leaf, Ann> {
@@ -721,7 +724,7 @@ where
 }
 
 pub type UnresolvedFunctionDecl = FunctionDecl<Symbol, Symbol, ()>;
-pub type ResolvedFunctionDecl = FunctionDecl<ResolvedCall, ResolvedVar, ()>;
+pub(crate) type ResolvedFunctionDecl = FunctionDecl<ResolvedCall, ResolvedVar, ()>;
 
 /// Represents the declaration of a function
 /// directly parsed from source syntax.
@@ -838,7 +841,7 @@ impl<Head: Display, Leaf: Display + ToSexp, Ann> ToSexp for FunctionDecl<Head, L
 }
 
 pub type UnresolvedFact = Fact<Symbol, Symbol, ()>;
-pub type ResolvedFact = Fact<ResolvedCall, ResolvedVar, ()>;
+pub(crate) type ResolvedFact = Fact<ResolvedCall, ResolvedVar, ()>;
 
 /// Facts are the left-hand side of a [`Command::Rule`].
 /// They represent a part of a database query.
@@ -908,7 +911,7 @@ where
 }
 
 pub type UnresolvedAction = Action<Symbol, Symbol, ()>;
-pub type ResolvedAction = Action<ResolvedCall, ResolvedVar, ()>;
+pub(crate) type ResolvedAction = Action<ResolvedCall, ResolvedVar, ()>;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Action<Head, Leaf, Ann> {
@@ -1046,13 +1049,18 @@ where
         f: &mut impl FnMut(&Expr<Head, Leaf, Ann>) -> Expr<Head, Leaf, Ann>,
     ) -> Self {
         match self {
-            Action::Let(ann, lhs, rhs) => Action::Let(ann.clone(), *lhs, f(rhs)),
+            Action::Let(ann, lhs, rhs) => Action::Let(ann.clone(), lhs.clone(), f(rhs)),
             Action::Set(ann, lhs, args, rhs) => {
                 let right = f(rhs);
-                Action::Set(ann.clone(), *lhs, args.iter().map(f).collect(), right)
+                Action::Set(
+                    ann.clone(),
+                    lhs.clone(),
+                    args.iter().map(f).collect(),
+                    right,
+                )
             }
             Action::Delete(ann, lhs, args) => {
-                Action::Delete(ann.clone(), *lhs, args.iter().map(f).collect())
+                Action::Delete(ann.clone(), lhs.clone(), args.iter().map(f).collect())
             }
             Action::Union(ann, lhs, rhs) => Action::Union(ann.clone(), f(lhs), f(rhs)),
             Action::Extract(ann, expr, variants) => {
@@ -1065,16 +1073,16 @@ where
 
     pub fn replace_canon(&self, canon: &HashMap<Leaf, Expr<Head, Leaf, Ann>>) -> Self {
         match self {
-            Action::Let(ann, lhs, rhs) => Action::Let(ann.clone(), *lhs, rhs.subst(canon)),
+            Action::Let(ann, lhs, rhs) => Action::Let(ann.clone(), lhs.clone(), rhs.subst(canon)),
             Action::Set(ann, lhs, args, rhs) => Action::Set(
                 ann.clone(),
-                *lhs,
+                lhs.clone(),
                 args.iter().map(|e| e.subst(canon)).collect(),
                 rhs.subst(canon),
             ),
             Action::Delete(ann, lhs, args) => Action::Delete(
                 ann.clone(),
-                *lhs,
+                lhs.clone(),
                 args.iter().map(|e| e.subst(canon)).collect(),
             ),
             Action::Union(ann, lhs, rhs) => {
@@ -1091,7 +1099,7 @@ where
     fn map_def_use(&self, mut fvar: impl FnMut(Leaf, bool) -> Leaf) -> Self {
         match self {
             Action::Let(ann, lhs, rhs) => {
-                let lhs = fvar(*lhs, true);
+                let lhs = fvar(lhs.clone(), true);
                 let rhs = rhs.map_def_use(&mut |s| fvar(s, false));
                 Action::Let(ann.clone(), lhs, rhs)
             }
@@ -1135,7 +1143,7 @@ impl<Head: Display, Leaf: Display + ToSexp, Ann> Display for Action<Head, Leaf, 
 }
 
 pub type UnresolvedRule = Rule<Symbol, Symbol, ()>;
-pub type ResolvedRule = Rule<ResolvedCall, ResolvedVar, ()>;
+pub(crate) type ResolvedRule = Rule<ResolvedCall, ResolvedVar, ()>;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Rule<Head, Leaf, Ann> {
@@ -1262,5 +1270,106 @@ impl<Head: Display, Leaf: Display, Ann> Rewrite<Head, Leaf, Ann> {
 impl<Head: Display, Leaf: Display, Ann> Display for Rewrite<Head, Leaf, Ann> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.to_sexp("".into(), false))
+    }
+}
+
+impl<Head, Leaf, Ann> Expr<(Head, Leaf), Leaf, Ann> {
+    fn get_corresponding_var_or_lit(&self) -> AtomTerm {
+        match self {
+            Expr::Var(_ann, v) => AtomTerm::Var(v),
+            Expr::Lit(_ann, lit) => AtomTerm::Literal(lit),
+            Expr::Call(_ann, head, _) => AtomTerm::Var(head.1),
+        }
+    }
+}
+
+impl<Head, Leaf, Ann> Expr<Head, Leaf, Ann> {
+    fn to_query(
+        &self,
+        get_fresh: &mut impl FnMut(Head) -> Leaf,
+    ) -> (
+        Vec<GenericAtom<HeadOrEq<Head>, Leaf>>,
+        Expr<(Head, Leaf), Leaf, Ann>,
+    ) {
+        match self {
+            Expr::Lit(ann, lit) => (vec![], Expr::Lit(ann, lit.clone())),
+            Expr::Var(ann, v) => (vec![], Expr::Var(ann, v.clone())),
+            Expr::Call(ann, f, children) => {
+                let fresh = get_fresh(f);
+                let mut new_children = vec![];
+                let mut atoms = vec![];
+                for child in children {
+                    let (child_atoms, child_expr) = child.to_quer(get_fresh);
+                    // TODO: how about globals?
+                    let child_atomterm = TypeInfo::get_corresponding_var_or_lit(&child_expr);
+                    new_children.push(child_atomterm);
+                    atoms.extend(new_children);
+                }
+                let args = {
+                    new_children.push(AtomTerm::Var(fresh));
+                    new_children
+                };
+                atoms.push(GenericAtom {
+                    head: HeadOrEq::Symbol(f.clone()),
+                    args,
+                });
+                (atoms, Expr::Call(ann, (f.clone(), fresh), new_children))
+            }
+        }
+    }
+
+    //TODO: move this to where it should belong
+
+    /// Flattens a list of facts into a Query.
+    /// For typechecking, we need the correspondence between the original ast
+    /// and the flattened one, so that we can annotate the original with types.
+    /// That's why this function produces a corresponding list of facts, annotated with
+    /// the variable names in the flattened Query.
+    /// (Typechecking preserves the original AST this way,
+    /// and allows terms and proof instrumentation to do the same).
+    pub(crate) fn facts_to_query(
+        body: &Vec<Fact<Head, Leaf, Ann>>,
+        typeinfo: &TypeInfo,
+        get_fresh: &mut impl FnMut(Head) -> Symbol,
+    ) -> (
+        Query<HeadOrEq<Head>, Leaf>,
+        Vec<Fact<(Head, Leaf), Leaf, Ann>>,
+    ) {
+        let to_atom_term = |s: Symbol, typeinfo: &TypeInfo| -> AtomTerm {
+            if typeinfo.is_global(s) {
+                AtomTerm::Global(s)
+            } else {
+                AtomTerm::Var(s)
+            }
+        };
+
+        let mut atoms = vec![];
+        let new_body = vec![];
+
+        for fact in body {
+            match fact {
+                Fact::Eq(exprs) => {
+                    let mut new_exprs = vec![];
+                    let mut to_equate = vec![];
+                    for expr in exprs {
+                        let (atoms, expr) = expr.to_query(get_fresh);
+                        atoms.extend(atoms);
+                        to_equate.push(TypeInfo::get_corresponding_var_or_lit(&expr));
+                        new_exprs.push(expr);
+                    }
+                    atoms.push(GenericAtom {
+                        head: HeadOrEq::Eq,
+                        args: to_equate,
+                    });
+                    new_body.push(Fact::Eq(new_exprs));
+                }
+                Fact::Fact(expr) => {
+                    let (atoms, expr) = expr.to_query(get_fresh);
+                    atoms.extend(atoms);
+                    new_body.push(Fact::Fact(expr));
+                }
+            }
+        }
+        (Query { atoms }, new_body)
     }
 }

@@ -14,7 +14,8 @@ use std::{
     ops::Range,
 };
 
-type Query = crate::typecheck::Query<ResolvedCall>;
+// TODO: Leaf should be a ResolvedVar
+type Query = crate::typecheck::Query<ResolvedCall, Symbol>;
 
 #[derive(Clone)]
 enum Instr<'a> {

@@ -78,7 +78,7 @@ impl ToSexp for ResolvedVar {
 
 // TODO rename to Expr
 pub type UnresolvedExpr = Expr<Symbol, Symbol, ()>;
-pub type ResolvedExpr = Expr<ResolvedCall, ResolvedVar, ()>;
+pub(crate) type ResolvedExpr = Expr<ResolvedCall, ResolvedVar, ()>;
 
 // TODO rename to generic expr
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
@@ -166,19 +166,20 @@ impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq, Ann: Clone> Expr<
             Expr::Var(..) => f(self),
             Expr::Call(ann, op, children) => {
                 let children = children.iter().map(|c| c.map(f)).collect();
-                f(&Expr::Call(ann.clone(), *op, children))
+                f(&Expr::Call(ann.clone(), op.clone(), children))
             }
         }
     }
 
     // TODO: refactor subst to take a canonicalizing function rather than hash map.
+    // TODO: cannon function may want to take the annotation of variables
     pub fn subst(&self, canon: &HashMap<Leaf, Self>) -> Self {
         match self {
-            Expr::Lit(ann, _lit) => self.clone(),
-            Expr::Var(ann, v) => canon.get(v).cloned().unwrap_or_else(|| self.clone()),
+            Expr::Lit(_ann, _lit) => self.clone(),
+            Expr::Var(_ann, v) => canon.get(v).cloned().unwrap_or_else(|| self.clone()),
             Expr::Call(ann, op, children) => {
                 let children = children.iter().map(|c| c.subst(canon)).collect();
-                Expr::Call(ann.clone(), *op, children)
+                Expr::Call(ann.clone(), op.clone(), children)
             }
         }
     }
@@ -194,11 +195,11 @@ impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq, Ann: Clone> Expr<
 
     pub(crate) fn map_def_use(&self, fvar: &mut impl FnMut(Leaf) -> Leaf) -> Self {
         match self {
-            Expr::Lit(ann, _) => self.clone(),
-            Expr::Var(ann, v) => Expr::Var(ann.clone(), fvar(*v)),
+            Expr::Lit(_ann, _) => self.clone(),
+            Expr::Var(ann, v) => Expr::Var(ann.clone(), fvar(v.clone())),
             Expr::Call(ann, op, args) => {
                 let args = args.iter().map(|a| a.map_def_use(fvar)).collect();
-                Expr::Call(ann.clone(), *op, args)
+                Expr::Call(ann.clone(), op.clone(), args)
             }
         }
     }
@@ -210,9 +211,9 @@ impl<Head: Display, Leaf: Display, Ann> Expr<Head, Leaf, Ann> {
     /// Example: `(Add (Add 2 3) 4)`
     pub fn to_sexp(&self) -> Sexp {
         let res = match self {
-            Expr::Lit(ann, lit) => Sexp::Symbol(lit.to_string()),
-            Expr::Var(ann, v) => Sexp::Symbol(v.to_string()),
-            Expr::Call(ann, op, children) => Sexp::List(
+            Expr::Lit(_ann, lit) => Sexp::Symbol(lit.to_string()),
+            Expr::Var(_ann, v) => Sexp::Symbol(v.to_string()),
+            Expr::Call(_ann, op, children) => Sexp::List(
                 vec![Sexp::Symbol(op.to_string())]
                     .into_iter()
                     .chain(children.iter().map(|c| c.to_sexp()))

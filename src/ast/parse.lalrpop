@@ -68,7 +68,7 @@ Command: UnresolvedCommand = {
         <conditions:(":when" <List<Fact>>)?>
         <ruleset:(":ruleset" <Ident>)?>
     RParen => Command::BiRewrite(ruleset.unwrap_or("".into()), Rewrite { lhs, rhs, conditions: conditions.unwrap_or_default() }),
-    LParen "let" <name:Ident> <expr:Expr> RParen => Command::Action(Action::Let(name, expr)),
+    LParen "let" <name:Ident> <expr:Expr> RParen => Command::Action(Action::Let((), name, expr)),
     <NonLetAction> => Command::Action(<>),
     LParen "run" <limit:UNum>  <until:(":until" <(Fact)*>)?> RParen => Command::RunSchedule(Schedule::Repeat(limit, Box::new(Schedule::Run(RunConfig { ruleset : "".into(), until })))),
     LParen "run" <ruleset: Ident> <limit:UNum> <until:(":until" <(Fact)*>)?> RParen => Command::RunSchedule(Schedule::Repeat(limit, Box::new(Schedule::Run(RunConfig { ruleset, until })))),
@@ -106,17 +106,17 @@ Cost: Option<usize> = {
 }
 
 NonLetAction: UnresolvedAction = {
-    LParen "set" LParen <f: Ident> <args:Expr*> RParen <v:Expr> RParen => Action::Set ( f, args, v ),
-    LParen "delete" LParen <f: Ident> <args:Expr*> RParen RParen => Action::Delete ( f, args),
-    LParen "union" <e1:Expr> <e2:Expr> RParen => Action::Union(<>),
-    LParen "panic" <msg:String> RParen => Action::Panic(msg),
-    LParen "extract" <expr:Expr> RParen => Action::Extract(expr, Expr::Lit((), Literal::Int(0))),
-    LParen "extract" <expr:Expr> <variants:Expr> RParen => Action::Extract(expr, variants),
-    <e:CallExpr> => Action::Expr(e),
+    LParen "set" LParen <f: Ident> <args:Expr*> RParen <v:Expr> RParen => Action::Set ( (), f, args, v ),
+    LParen "delete" LParen <f: Ident> <args:Expr*> RParen RParen => Action::Delete ( (), f, args),
+    LParen "union" <e1:Expr> <e2:Expr> RParen => Action::Union((), <>),
+    LParen "panic" <msg:String> RParen => Action::Panic((), msg),
+    LParen "extract" <expr:Expr> RParen => Action::Extract((), expr, Expr::Lit((), Literal::Int(0))),
+    LParen "extract" <expr:Expr> <variants:Expr> RParen => Action::Extract((), expr, variants),
+    <e:CallExpr> => Action::Expr((), e),
 }
 
 pub Action: UnresolvedAction = {
-    LParen "let" <name:Ident> <expr:Expr> RParen => Action::Let(name, expr),
+    LParen "let" <name:Ident> <expr:Expr> RParen => Action::Let((), name, expr),
     <NonLetAction> => <>,
 }
 
