@@ -279,9 +279,12 @@ impl Primitive {
             constraints.push(Constraint::Assign(lit.clone(), ty.clone()))
         }
         constraints.extend(self.get_type_constraints().get(&lits));
-        let problem = Problem { constraints };
         let output_type = AtomTerm::Literal(Literal::Int(tys.len() as i64));
-        let assignment = problem.solve(once(&output_type), |sort| sort.name()).ok()?;
+        let problem = Problem {
+            constraints,
+            range: HashSet::from_iter([output_type.clone()]),
+        };
+        let assignment = problem.solve(|sort| sort.name()).ok()?;
         Some(assignment.get(&output_type).unwrap().clone())
     }
 }

@@ -1,7 +1,8 @@
 use crate::{
-    typecheck::{Atom, AtomTerm, SymbolOrEq},
+    ast::{NormAction, UnresolvedRule},
+    typecheck::{Actions, Atom, AtomTerm, HeadOrEq, Query, SymbolOrEq, UnresolvedCoreRule},
     typechecking::TypeError,
-    util::HashMap,
+    util::{HashMap, HashSet},
     ArcSort, Symbol, TypeInfo,
 };
 use core::hash::Hash;
@@ -176,9 +177,19 @@ where
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub struct Problem<Var, Value> {
     pub constraints: Vec<Constraint<Var, Value>>,
+    pub range: HashSet<Var>,
+}
+
+impl Default for Problem<AtomTerm, ArcSort> {
+    fn default() -> Self {
+        Problem {
+            constraints: vec![],
+            range: HashSet::default(),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -204,7 +215,6 @@ where
 {
     pub(crate) fn solve<'a, K: Eq + Debug>(
         &'a self,
-        range: impl Iterator<Item = &'a Var>,
         key: impl Fn(&Value) -> K + Copy,
     ) -> Result<Assignment<Var, Value>, ConstraintError<Var, Value>> {
         let mut assignment = Assignment(HashMap::default());
@@ -216,12 +226,53 @@ where
             }
         }
 
-        for v in range {
+        for v in self.range.iter() {
             if !assignment.0.contains_key(v) {
                 return Err(ConstraintError::UnconstrainedVar(v.clone()));
             }
         }
         Ok(assignment)
+    }
+}
+
+impl Problem<AtomTerm, ArcSort> {
+    pub(crate) fn add_query(
+        &mut self,
+        query: &Query<SymbolOrEq, Symbol>,
+        typeinfo: &TypeInfo,
+    ) -> Result<(), TypeError> {
+        self.constraints.extend(query.get_constraints(typeinfo)?);
+        self.range.extend(query.atom_terms());
+        Ok(())
+    }
+
+    pub fn add_actions(&mut self, actions: &Actions, typeinfo: &TypeInfo) -> Result<(), TypeError> {
+        for action in actions.0.iter() {
+            self.add_action(action, typeinfo)?;
+        }
+        Ok(())
+    }
+
+    pub fn add_action(
+        &mut self,
+        action: &NormAction,
+        typeinfo: &TypeInfo,
+    ) -> Result<(), TypeError> {
+        // TODO: should have a dedicated type for Vec<NormAction>
+        // self.constraints.extend(action.get_constraints(typeinfo)?);
+        // self.range.extend(action.atom_terms());
+        Ok(())
+    }
+
+    pub(crate) fn add_rule(
+        &mut self,
+        rule: &UnresolvedCoreRule,
+        typeinfo: &TypeInfo,
+    ) -> Result<(), TypeError> {
+        let UnresolvedCoreRule { head, body } = rule;
+        self.add_query(body, typeinfo)?;
+        self.add_actions(head, typeinfo)?;
+        Ok(())
     }
 }
 

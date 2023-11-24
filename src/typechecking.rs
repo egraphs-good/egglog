@@ -1,4 +1,7 @@
-use crate::{typecheck::ValueEq, *};
+use crate::{
+    typecheck::{Actions, UnresolvedCoreRule, ValueEq},
+    *,
+};
 
 pub const RULE_PROOF_KEYWORD: &str = "rule-proof";
 
@@ -275,10 +278,6 @@ impl TypeInfo {
                 Schedule::Saturate(Box::new(self.typecheck_schedule(schedule)?))
             }
             Schedule::Run(RunConfig { ruleset, until }) => {
-                // if let Some(facts) = &run_config.until {
-                //     self.typecheck_facts(facts)?;
-                //     self.verify_normal_form_facts(facts);
-                // }
                 let until = until
                     .as_ref()
                     .map(|facts| self.typecheck_facts(facts))
@@ -329,14 +328,17 @@ impl TypeInfo {
         // TODO: implement actions.get_constraints
         // constraints.push(actions.get_constraints(self)?);
 
-        let problem = Problem { constraints };
-        let range = HashSet::default();
-        range.extend(query.atom_terms());
-        // TODO: implement actions.atom_terms;
-        // range.extend(actions.atom_terms());
+        let problem = Problem::default();
+        problem.add_rule(
+            &UnresolvedCoreRule {
+                body: query,
+                head: Actions(actions),
+            },
+            self,
+        );
 
         let assignment = problem
-            .solve(range.iter(), |sort: &ArcSort| sort.name())
+            .solve(|sort: &ArcSort| sort.name())
             .map_err(|e| e.to_type_error())?;
 
         // TODO: the general version of subst
@@ -363,12 +365,11 @@ impl TypeInfo {
     ) -> Result<Vec<ResolvedFact>, TypeError> {
         // ROUND TRIP TO CORE RULE AND BACK
         // TODO: in long term, we don't want this round trip to CoreRule query and back just for the type information.
-        let (query, correspondence) = Expr::facts_to_query(facts, self, &mut |head| todo!("leaf"));
-        let constraints = query.get_constraints(self)?;
-        let problem = Problem { constraints };
-        let range = query.atom_terms();
+        let (query, _correspondence) = Expr::facts_to_query(facts, self, &mut |head| todo!("leaf"));
+        let mut problem = Problem::default();
+        problem.add_query(&query, self)?;
         let assignment = problem
-            .solve(range.iter(), |sort: &ArcSort| sort.name())
+            .solve(|sort: &ArcSort| sort.name())
             .map_err(|e| e.to_type_error())?;
 
         for (at, ty) in assignment.0.iter() {
