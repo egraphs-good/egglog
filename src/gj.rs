@@ -14,7 +14,6 @@ use std::{
     ops::Range,
 };
 
-// TODO: Leaf should be a ResolvedVar
 type Query = crate::typecheck::Query<ResolvedCall, Symbol>;
 
 #[derive(Clone)]

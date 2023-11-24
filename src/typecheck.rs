@@ -126,7 +126,8 @@ pub(crate) fn actions_to_core_actions(actions: &[UnresolvedAction]) -> Vec<NormA
 impl UnresolvedRule {
     pub(crate) fn to_core_rule(&self, typeinfo: &TypeInfo) -> UnresolvedCoreRule {
         let Rule { head, body } = self;
-        let (body, _correspondence) = Expr::facts_to_query(body, typeinfo, todo!("get_fresh_var"));
+        let (body, _correspondence) =
+            Expr::facts_to_query(body, typeinfo, &mut |head| todo!("leaf"));
         UnresolvedCoreRule {
             body,
             head: Actions(actions_to_core_actions(head)),
@@ -142,7 +143,7 @@ pub struct Context<'a> {
 pub enum GenericAtomTerm<Leaf> {
     Var(Leaf),
     Literal(Literal),
-    Global(Symbol),
+    Global(Leaf),
 }
 
 pub type AtomTerm = GenericAtomTerm<Symbol>;

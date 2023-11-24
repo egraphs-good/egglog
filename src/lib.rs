@@ -53,7 +53,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::str::FromStr;
 use std::{fmt::Debug, sync::Arc};
-use typecheck::{AtomTerm, Program, ResolvedCoreRule};
+use typecheck::{AtomTerm, Program, Query, ResolvedCall, ResolvedCoreRule};
 
 pub type ArcSort = Arc<dyn Sort>;
 
@@ -1047,6 +1047,7 @@ impl EGraph {
         // let core_rule = compiler.compile_rule(&rule).map_err(Error::TypeErrors)?;
         let core_rule: ResolvedCoreRule = todo!("get the resolved core rule");
         let (query, action) = (core_rule.body, core_rule.head);
+        let query = todo!("unresolve variables {:?}", query);
 
         // TODO: We should refactor compile_actions later as well
         let action: Vec<NormAction> = action.0.clone();
@@ -1160,6 +1161,8 @@ impl EGraph {
         // let rule = compiler.compile_rule(&rule).map_err(Error::TypeErrors)?;
         let rule: ResolvedCoreRule = todo!("compile rule");
         let query0 = rule.body;
+        let query0: Query<ResolvedCall, Symbol> =
+            todo!("strip away the annotation on symbols {:?}", query0);
         let query = self.compile_gj_query(query0);
 
         let mut matched = false;
@@ -1171,7 +1174,9 @@ impl EGraph {
         });
         if !matched {
             // TODO add useful info here
-            Err(Error::CheckError(facts.iter().map(|f| f.to_unresolved()).collect()))
+            Err(Error::CheckError(
+                facts.iter().map(|f| f.to_unresolved()).collect(),
+            ))
         } else {
             Ok(())
         }

@@ -191,17 +191,40 @@ impl TypeInfo {
             },
             NCommand::Sort(sort, presort_and_args) => {
                 self.declare_sort(*sort, presort_and_args)?;
-                NCommand::Sort(sort, presort_and_args)
+                let presort_and_args = todo!("typecheck presort and args");
+                NCommand::Sort(*sort, presort_and_args)
             }
-            NCommand::NormAction(action) => {
-                NCommand::NormAction(self.typecheck_action(action, true)?)
-            }
+            NCommand::NormAction(action) => NCommand::NormAction(self.typecheck_action(action)?),
             NCommand::Check(facts) => NCommand::Check(self.typecheck_facts(facts)?),
             NCommand::Fail(cmd) => NCommand::Fail(Box::new(self.typecheck_command(cmd)?)),
             NCommand::RunSchedule(schedule) => {
                 NCommand::RunSchedule(self.typecheck_schedule(schedule)?)
             }
-            NCommand::SetOption(_) | NCommand::Pop(_) | NCommand::Push(_) => command.clone(),
+            NCommand::Pop(n) => NCommand::Pop(*n),
+            NCommand::Push(n) => NCommand::Push(*n),
+            NCommand::SetOption { name, value } => todo!(),
+            NCommand::AddRuleset(_) => todo!(),
+            NCommand::PrintOverallStatistics => todo!(),
+            NCommand::CheckProof => todo!(),
+            NCommand::PrintTable(_, _) => todo!(),
+            NCommand::PrintSize(n) => {
+                // Should probably also resolve the function symbol here
+                NCommand::PrintSize(n.clone())
+            }
+            NCommand::Output { file, exprs } => {
+                let exprs = exprs
+                    .iter()
+                    .map(|expr| self.typecheck_expr(expr))
+                    .collect::<Result<Vec<_>, _>>()?;
+                NCommand::Output {
+                    file: file.clone(),
+                    exprs,
+                }
+            }
+            NCommand::Input { name, file } => NCommand::Input {
+                name: *name,
+                file: file.clone(),
+            },
         };
         Ok(command)
     }
@@ -210,19 +233,24 @@ impl TypeInfo {
         &mut self,
         fdecl: &UnresolvedFunctionDecl,
     ) -> Result<ResolvedFunctionDecl, TypeError> {
-        let bound_vars = HashMap::new();
-        bound_vars.insert("old".into(), fdecl.schema.output.clone());
-        bound_vars.insert("new".into(), fdecl.schema.output.clone());
+        // TODO: propose a new interface for incorporating arbitrary constraints
+        // let bound_vars = HashMap::default()();
+        // bound_vars.insert("old".into(), fdecl.schema.output.clone());
+        // bound_vars.insert("new".into(), fdecl.schema.output.clone());
 
         Ok(ResolvedFunctionDecl {
             name: fdecl.name,
             schema: fdecl.schema.clone(),
-            merge: match fdecl.merge {
-                Some(merge) => Some(self.typecheck_expr(&merge, &bound_vars)?),
+            merge: match &fdecl.merge {
+                Some(merge) => Some(self.typecheck_expr(merge)?),
                 None => None,
             },
-            default: fdecl.default.clone(),
-            merge_action: self.typecheck_actions(&fdecl.merge_action, &bound_vars)?,
+            default: fdecl
+                .default
+                .as_ref()
+                .map(|default| self.typecheck_expr(default))
+                .transpose()?,
+            merge_action: self.typecheck_actions(&fdecl.merge_action)?,
             cost: fdecl.cost.clone(),
             unextractable: fdecl.unextractable,
         })
@@ -290,11 +318,41 @@ impl TypeInfo {
     }
 
     fn typecheck_rule(&mut self, rule: &UnresolvedRule) -> Result<ResolvedRule, TypeError> {
-        // also check the validity of the ssa
-        let facts = self.typecheck_facts(&rule.body)?;
-        let actions = self.typecheck_actions(&rule.head, &Default::default())?;
+        let UnresolvedRule { head, body } = rule;
+        let mut constraints = vec![];
+
+        let (query, mapped_query) = Expr::facts_to_query(body, self, &mut |head| todo!("leaf"));
+        constraints.extend(query.get_constraints(self)?);
+
+        let (actions, mapped_action): (Vec<NormAction>, Vec<Action<(Symbol, Symbol), Symbol, ()>>) =
+            todo!("action to lowered actions");
+        // TODO: implement actions.get_constraints
+        // constraints.push(actions.get_constraints(self)?);
+
+        let problem = Problem { constraints };
+        let range = HashSet::default();
+        range.extend(query.atom_terms());
+        // TODO: implement actions.atom_terms;
+        // range.extend(actions.atom_terms());
+
+        let assignment = problem
+            .solve(range.iter(), |sort: &ArcSort| sort.name())
+            .map_err(|e| e.to_type_error())?;
+
+        // TODO: the general version of subst
+        // let body = mapped_query.subst(
+        //     |(head, mapped_var)| (head, assignment.get(mapped_var)),
+        //     |leaf| (leaf, assignment.get(leaf)),
+        // );
+        let body: Vec<ResolvedFact> = todo!("subst");
+        // let head = mapped_action.subst(
+        //     |(head, mapped_var)| (head, assignment.get(mapped_var)),
+        //     |leaf| (leaf, assignment.get(leaf)),
+        // );
+        let actions: Vec<ResolvedAction> = todo!("subst");
+
         Ok(ResolvedRule {
-            body: facts,
+            body,
             head: actions,
         })
     }
@@ -305,7 +363,7 @@ impl TypeInfo {
     ) -> Result<Vec<ResolvedFact>, TypeError> {
         // ROUND TRIP TO CORE RULE AND BACK
         // TODO: in long term, we don't want this round trip to CoreRule query and back just for the type information.
-        let (query, correspondence) = Expr::facts_to_query(facts, self, todo!("get_fresh"));
+        let (query, correspondence) = Expr::facts_to_query(facts, self, &mut |head| todo!("leaf"));
         let constraints = query.get_constraints(self)?;
         let problem = Problem { constraints };
         let range = query.atom_terms();
@@ -331,19 +389,15 @@ impl TypeInfo {
     fn typecheck_actions(
         &mut self,
         actions: &Vec<UnresolvedAction>,
-        bound_vars: &HashMap<Symbol, ArcSort>,
-    ) -> Result<(), TypeError> {
+    ) -> Result<Vec<ResolvedAction>, TypeError> {
+        // Right now this is not how type checking actions is done
         for action in actions {
-            self.typecheck_action(action, bound_vars)?;
+            self.typecheck_action(action)?;
         }
-        Ok(())
+        Ok(todo!())
     }
 
-    fn typecheck_action(
-        &mut self,
-        action: &UnresolvedAction,
-        bound_vars: &HashMap<Symbol, ArcSort>,
-    ) -> Result<ResolvedAction, TypeError> {
+    fn typecheck_action(&mut self, action: &UnresolvedAction) -> Result<ResolvedAction, TypeError> {
         todo!("type check actions should use the constraint-based type checker and yield a type-annotated AST");
         todo!("just generate constraints here and leave it to typecheck_rule to assemble the resolved form");
         todo!("should we keep is_global flag??")
@@ -469,11 +523,7 @@ impl TypeInfo {
         self.global_types.contains_key(&sym)
     }
 
-    fn typecheck_expr(
-        &mut self,
-        expr: &UnresolvedExpr,
-        bound_vars: &HashMap<Symbol, ArcSort>,
-    ) -> Result<ResolvedExpr, TypeError> {
+    fn typecheck_expr(&mut self, expr: &UnresolvedExpr) -> Result<ResolvedExpr, TypeError> {
         todo!();
     }
 }

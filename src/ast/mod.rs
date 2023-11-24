@@ -14,7 +14,7 @@ lalrpop_mod!(
 );
 
 use crate::{
-    typecheck::{GenericAtom, HeadOrEq, Query, ResolvedCall},
+    typecheck::{GenericAtom, GenericAtomTerm, HeadOrEq, Query, ResolvedCall},
     *,
 };
 
@@ -1273,47 +1273,52 @@ impl<Head: Display, Leaf: Display, Ann> Display for Rewrite<Head, Leaf, Ann> {
     }
 }
 
-impl<Head, Leaf, Ann> Expr<(Head, Leaf), Leaf, Ann> {
-    fn get_corresponding_var_or_lit(&self) -> AtomTerm {
+impl<Head, Leaf: Clone, Ann> Expr<(Head, Leaf), Leaf, Ann> {
+    fn get_corresponding_var_or_lit(&self) -> GenericAtomTerm<Leaf> {
         match self {
-            Expr::Var(_ann, v) => AtomTerm::Var(v),
-            Expr::Lit(_ann, lit) => AtomTerm::Literal(lit),
-            Expr::Call(_ann, head, _) => AtomTerm::Var(head.1),
+            Expr::Var(_ann, v) => GenericAtomTerm::Var(v.clone()),
+            Expr::Lit(_ann, lit) => GenericAtomTerm::Literal(lit.clone()),
+            Expr::Call(_ann, head, _) => GenericAtomTerm::Var(head.1.clone()),
         }
     }
 }
 
-impl<Head, Leaf, Ann> Expr<Head, Leaf, Ann> {
+impl<Head: Clone, Leaf: Clone, Ann: Clone> Expr<Head, Leaf, Ann> {
     fn to_query(
         &self,
-        get_fresh: &mut impl FnMut(Head) -> Leaf,
+        get_fresh: &mut impl FnMut(&Head) -> Leaf,
     ) -> (
         Vec<GenericAtom<HeadOrEq<Head>, Leaf>>,
         Expr<(Head, Leaf), Leaf, Ann>,
     ) {
         match self {
-            Expr::Lit(ann, lit) => (vec![], Expr::Lit(ann, lit.clone())),
-            Expr::Var(ann, v) => (vec![], Expr::Var(ann, v.clone())),
+            Expr::Lit(ann, lit) => (vec![], Expr::Lit(ann.clone(), lit.clone())),
+            Expr::Var(ann, v) => (vec![], Expr::Var(ann.clone(), v.clone())),
             Expr::Call(ann, f, children) => {
                 let fresh = get_fresh(f);
                 let mut new_children = vec![];
                 let mut atoms = vec![];
+                let mut child_exprs = vec![];
                 for child in children {
-                    let (child_atoms, child_expr) = child.to_quer(get_fresh);
+                    let (child_atoms, child_expr) = child.to_query(get_fresh);
                     // TODO: how about globals?
-                    let child_atomterm = TypeInfo::get_corresponding_var_or_lit(&child_expr);
+                    let child_atomterm = child_expr.get_corresponding_var_or_lit();
                     new_children.push(child_atomterm);
-                    atoms.extend(new_children);
+                    atoms.extend(child_atoms);
+                    child_exprs.push(child_expr);
                 }
                 let args = {
-                    new_children.push(AtomTerm::Var(fresh));
+                    new_children.push(GenericAtomTerm::Var(fresh.clone()));
                     new_children
                 };
                 atoms.push(GenericAtom {
                     head: HeadOrEq::Symbol(f.clone()),
                     args,
                 });
-                (atoms, Expr::Call(ann, (f.clone(), fresh), new_children))
+                (
+                    atoms,
+                    Expr::Call(ann.clone(), (f.clone(), fresh), child_exprs),
+                )
             }
         }
     }
@@ -1330,7 +1335,7 @@ impl<Head, Leaf, Ann> Expr<Head, Leaf, Ann> {
     pub(crate) fn facts_to_query(
         body: &Vec<Fact<Head, Leaf, Ann>>,
         typeinfo: &TypeInfo,
-        get_fresh: &mut impl FnMut(Head) -> Symbol,
+        get_fresh: &mut impl FnMut(&Head) -> Leaf,
     ) -> (
         Query<HeadOrEq<Head>, Leaf>,
         Vec<Fact<(Head, Leaf), Leaf, Ann>>,
@@ -1344,7 +1349,7 @@ impl<Head, Leaf, Ann> Expr<Head, Leaf, Ann> {
         };
 
         let mut atoms = vec![];
-        let new_body = vec![];
+        let mut new_body = vec![];
 
         for fact in body {
             match fact {
@@ -1352,9 +1357,9 @@ impl<Head, Leaf, Ann> Expr<Head, Leaf, Ann> {
                     let mut new_exprs = vec![];
                     let mut to_equate = vec![];
                     for expr in exprs {
-                        let (atoms, expr) = expr.to_query(get_fresh);
-                        atoms.extend(atoms);
-                        to_equate.push(TypeInfo::get_corresponding_var_or_lit(&expr));
+                        let (child_atoms, expr) = expr.to_query(get_fresh);
+                        atoms.extend(child_atoms);
+                        to_equate.push(expr.get_corresponding_var_or_lit());
                         new_exprs.push(expr);
                     }
                     atoms.push(GenericAtom {
@@ -1364,8 +1369,8 @@ impl<Head, Leaf, Ann> Expr<Head, Leaf, Ann> {
                     new_body.push(Fact::Eq(new_exprs));
                 }
                 Fact::Fact(expr) => {
-                    let (atoms, expr) = expr.to_query(get_fresh);
-                    atoms.extend(atoms);
+                    let (child_atoms, expr) = expr.to_query(get_fresh);
+                    atoms.extend(child_atoms);
                     new_body.push(Fact::Fact(expr));
                 }
             }

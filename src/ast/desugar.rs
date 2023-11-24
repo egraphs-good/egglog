@@ -1,4 +1,4 @@
-use super::{expr, Rule, UnresolvedRewrite};
+use super::{Rule, UnresolvedRewrite};
 use crate::*;
 
 fn desugar_datatype(name: Symbol, variants: Vec<Variant>) -> Vec<UnresolvedNCommand> {
@@ -124,7 +124,6 @@ fn add_semi_naive_rule(desugar: &mut Desugar, rule: UnresolvedRule) -> Option<Un
 /// type_info field is used for that.
 pub struct Desugar {
     next_fresh: usize,
-    next_command_id: usize,
     // Store the parser because it takes some time
     // on startup for some reason
     parser: ast::parse::ProgramParser,
@@ -141,7 +140,6 @@ impl Default for Desugar {
         let type_info = TypeInfo::default();
         Self {
             next_fresh: Default::default(),
-            next_command_id: Default::default(),
             // these come from lalrpop and don't have default impls
             parser: ast::parse::ProgramParser::new(),
             expr_parser: ast::parse::ExprParser::new(),
@@ -276,10 +274,10 @@ pub(crate) fn desugar_command(
             }];
 
             if seminaive_transform {
-               if let Some(new_rule) = add_semi_naive_rule(desugar, rule) {
-                   result.push(NCommand::NormRule {
-                       ruleset,
-                       name,
+                if let Some(new_rule) = add_semi_naive_rule(desugar, rule) {
+                    result.push(NCommand::NormRule {
+                        ruleset,
+                        name,
                         rule: new_rule,
                     });
                 }
@@ -315,12 +313,11 @@ pub(crate) fn desugar_command(
                 )
             };
 
-            desugar
-                .desugar_program(
-                    desugar.parse_program(&desugaring).unwrap(),
-                    get_all_proofs,
-                    seminaive_transform,
-                )?
+            desugar.desugar_program(
+                desugar.parse_program(&desugaring).unwrap(),
+                get_all_proofs,
+                seminaive_transform,
+            )?
         }
         Command::Check(facts) => {
             let res = vec![NCommand::Check(facts)];
@@ -380,7 +377,6 @@ impl Clone for Desugar {
     fn clone(&self) -> Self {
         Self {
             next_fresh: self.next_fresh,
-            next_command_id: self.next_command_id,
             parser: ast::parse::ProgramParser::new(),
             expr_parser: ast::parse::ExprParser::new(),
             action_parser: ast::parse::ActionParser::new(),
@@ -418,51 +414,6 @@ impl Desugar {
         let res = desugar_commands(program, self, get_all_proofs, seminaive_transform)?;
         Ok(res)
     }
-
-    // fn expr_to_flat_actions(
-    //     &mut self,
-    //     expr: &UnresolvedExpr,
-    //     res: &mut Vec<NormAction>,
-    //     memo: &mut HashMap<UnresolvedExpr, Symbol>,
-    // ) -> Symbol {
-    //     if let Some(existing) = memo.get(expr) {
-    //         return *existing;
-    //     }
-    //     let res = match expr {
-    //         Expr::Lit(_ann, l) => {
-    //             let assign = self.get_fresh();
-    //             res.push(NormAction::LetLit(assign, l.clone()));
-    //             assign
-    //         }
-    //         Expr::Var(_ann, v) => *v,
-    //         Expr::Call(_ann, f, children) => {
-    //             let assign = self.get_fresh();
-    //             let mut new_children = vec![];
-    //             for child in children {
-    //                 match child {
-    //                     Expr::Var(_ann, v) => {
-    //                         new_children.push(*v);
-    //                     }
-    //                     _ => {
-    //                         let child = self.expr_to_flat_actions(child, res, memo);
-    //                         new_children.push(child);
-    //                     }
-    //                 }
-    //             }
-    //             let result = Expr::Call((), *f, new_children);
-    //             let result_expr = result.to_expr();
-    //             if let Some(existing) = memo.get(&result_expr) {
-    //                 *existing
-    //             } else {
-    //                 memo.insert(result_expr.clone(), assign);
-    //                 res.push(NormAction::Let(assign, result));
-    //                 assign
-    //             }
-    //         }
-    //     };
-    //     memo.insert(expr.clone(), res);
-    //     res
-    // }
 
     pub fn parse_program(&self, input: &str) -> Result<Vec<UnresolvedCommand>, Error> {
         Ok(self
