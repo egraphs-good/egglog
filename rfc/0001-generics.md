@@ -12,7 +12,7 @@ User defined container types are helpful to implement, compared to the primitive
 
 For example, much of the Python [array API module](https://github.com/egraphs-good/egglog-python/blob/main/python/egglog/exp/array_api.py) is devoted to repeated implementations of things like `TupleInt`, `TupleNDArray`, and `OptionalInt`, `OptionalBool`, etc.
 
-Allowing user defined generic types and functions would instead allow these to be only implemented once. Furthermore, in the Python library, these generic user defined types could be packages together into a standard module for any user to access, reducing the boilerplate and chance for mistakes.
+Allowing user defined generic types and functions would instead allow these to be only implemented once. Furthermore, in the Python library, these generic user defined types could be packaged together into a standard module for any user to access, reducing the boilerplate and chance for mistakes.
 
 When [trying to adapt `egglog` for use within PyTensor](https://egglog-python.readthedocs.io/en/latest/explanation/2023_11_17_pytensor.html), the lack of standard user defined container classes was one of the main points of confusion.
 
@@ -40,7 +40,7 @@ Rewrites could be defined on generic types as well:
 ```
 
 
-This is how you could make a const list:
+This is how you could make a cons list:
 
 ```lisp
 (datatype Tuple [T]
@@ -73,19 +73,21 @@ Another common definition would be a nullable type:
    (optional-some T))
 ```
 
-
-
 ## Specification
 
 The implementation of this proposal has not been investigated yet.
 
-Generally it would require these changes
+Generally, it would require these changes:
 
 1. Change the syntax to allow type parameters in square brackets when declaring datatypes as well as optionally when declaring functions.
 2. Change the syntax to allow type parameters to be s-exp’s themselves, to allow parameterized types as arguments.
 3. Add generic type information to each function declaration structure.
 4. Modify the type checker to use generic function information when inferring expression types. 
-5. Change the rule matcher to match generic rules on any expressions which can be substituted safely in those generic rules.
+5. Change the rule matcher to match generic rules on any expressions that can be substituted safely in those generic rules.
+
+We would **only allow other user defined type as parameters** for user defined generic types. Otherwise, the rewrite definitions wouldn’t be valid, because only user defined types can be union-ed, not primitives.
+
+ 
 
 ## Open Questions
 
@@ -95,7 +97,7 @@ One of the current issues with generic builtin sorts is that if the return type 
 
 If the type inference would be an issue for implementation of this proposal, it could be changed to allow more explicit type annotations. 
 
-One option could be to allow using the type names as functions, to explicitly annotate a certain term. For example, then the first zip rewrite would look like:
+One option could be to allow using the type names as functions, to explicitly annotate a certain term. For example, the first zip rewrite would look like:
 
 ```lisp
 (rewrite (zip ((Tuple (Pair T V)) (tuple-nil)))
@@ -109,22 +111,22 @@ Another option could be to allow type parameters to be passed explicitly to func
          (pair (tuple-nil [T]) (tuple-nil [V])))
 ```
 
-In this case, for functions that were defined in the `datatype` constructor, the parameters would be substituted based on that constructor list. For functions not defined in the `datatype` constructor, they could be replaced just from first instance to last, or we could allow also allowing for explicit specification of type parameters in functions, like this:
+In this case, for functions that were defined in the `datatype` constructor, the parameters would be substituted based on that constructor list. For functions not defined in the `datatype` constructor, they could be replaced just from first instance to last, or we could allow for explicit specification of type parameters in functions, like this:
 
 ```lisp
 (function tuple-nil [T] () (Tuple T))
 ```
 
-Note that the Python bindings require explicit type information to be provided for all variables and so does a bottom up type inference, so has access to all the type information for any way that is needed by `egglog`.
+Note that the Python bindings require explicit type information to be provided for all variables and so does a bottom up type inference, so has access to all the type information that is needed by `egglog`.
 
-## Syntax
+### Syntax
 
-This proposal currently uses the square brackets `[]` to specify the generic arguments for types and functions. This was to reduce ambiguity when parsing, compared to `()` and also corresponds closely to Python’s generic typing.
+This proposal currently uses the square brackets `[]` to specify the generic arguments for types and functions. This was to reduce ambiguity when parsing, compared to `()`, and also corresponds closely to Python’s generic typing.
 
 Any alternate syntax suggestions are welcome. 
 
 ## Deferred
 
-### Higher order functions
+### Higher-order functions
 
 User defined types would also benefit greatly from the ability to define higher order functions, i.e. a `tuple-map` or `tuple-reduce` function which in turn take generic functions. This proposal leaves that for future work, since there are different possibly ways of implementing higher order functions, and even without them, user defined generic would add a lot of value.
