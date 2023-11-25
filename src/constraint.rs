@@ -1,6 +1,8 @@
 use crate::{
-    ast::{NormAction, UnresolvedRule},
-    typecheck::{Actions, Atom, AtomTerm, HeadOrEq, Query, SymbolOrEq, UnresolvedCoreRule},
+    ast::{Fact, NormAction, ResolvedAction, UnresolvedAction, UnresolvedRule},
+    typecheck::{
+        Actions, Atom, AtomTerm, HeadOrEq, Query, ResolvedCall, SymbolOrEq, UnresolvedCoreRule,
+    },
     typechecking::TypeError,
     util::{HashMap, HashSet},
     ArcSort, Symbol, TypeInfo,
@@ -208,11 +210,31 @@ where
     }
 }
 
+impl Assignment<AtomTerm, ArcSort> {
+    pub(crate) fn annotate_facts(
+        &self,
+        mapped_facts: &Vec<Fact<(Symbol, Symbol), Symbol, ()>>,
+    ) -> Vec<Fact<ResolvedCall, crate::ast::ResolvedVar, ()>> {
+        todo!()
+    }
+
+    pub(crate) fn annotate_actions(
+        &self,
+        mapped_actions: &Vec<Action<(Symbol, Symbol), Symbol, ()>,
+    ) -> Vec<ResolvedAction> {
+        todo!()
+    }
+}
+
 impl<Var, Value> Problem<Var, Value>
 where
     Var: Eq + PartialEq + Hash + Clone + Debug,
     Value: Clone + Debug,
 {
+    // Actually, the typechecking logic of actions is different,
+    // because orders of actions matter A LOT.
+    // pub(crate) fn introduce_binding()
+
     pub(crate) fn solve<'a, K: Eq + Debug>(
         &'a self,
         key: impl Fn(&Value) -> K + Copy,

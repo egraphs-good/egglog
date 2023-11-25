@@ -240,6 +240,7 @@ impl TypeInfo {
         // let bound_vars = HashMap::default()();
         // bound_vars.insert("old".into(), fdecl.schema.output.clone());
         // bound_vars.insert("new".into(), fdecl.schema.output.clone());
+        let mut merge_action_problem = Problem::default();
 
         Ok(ResolvedFunctionDecl {
             name: fdecl.name,
@@ -325,8 +326,6 @@ impl TypeInfo {
 
         let (actions, mapped_action): (Vec<NormAction>, Vec<Action<(Symbol, Symbol), Symbol, ()>>) =
             todo!("action to lowered actions");
-        // TODO: implement actions.get_constraints
-        // constraints.push(actions.get_constraints(self)?);
 
         let problem = Problem::default();
         problem.add_rule(
@@ -346,12 +345,12 @@ impl TypeInfo {
         //     |(head, mapped_var)| (head, assignment.get(mapped_var)),
         //     |leaf| (leaf, assignment.get(leaf)),
         // );
-        let body: Vec<ResolvedFact> = todo!("subst");
+        let body: Vec<ResolvedFact> = assignment.annotate_facts(&mapped_query);
         // let head = mapped_action.subst(
         //     |(head, mapped_var)| (head, assignment.get(mapped_var)),
         //     |leaf| (leaf, assignment.get(leaf)),
         // );
-        let actions: Vec<ResolvedAction> = todo!("subst");
+        let actions: Vec<ResolvedAction> = assignment.annotate_actions(&mapped_action);
 
         Ok(ResolvedRule {
             body,
@@ -365,81 +364,39 @@ impl TypeInfo {
     ) -> Result<Vec<ResolvedFact>, TypeError> {
         // ROUND TRIP TO CORE RULE AND BACK
         // TODO: in long term, we don't want this round trip to CoreRule query and back just for the type information.
-        let (query, _correspondence) = Expr::facts_to_query(facts, self, &mut |head| todo!("leaf"));
+        let (query, mapped_facts) = Expr::facts_to_query(facts, self, &mut |head| todo!("leaf"));
         let mut problem = Problem::default();
         problem.add_query(&query, self)?;
         let assignment = problem
             .solve(|sort: &ArcSort| sort.name())
             .map_err(|e| e.to_type_error())?;
-
-        for (at, ty) in assignment.0.iter() {
-            match at {
-                AtomTerm::Var(v) => {
-                    todo!("figure out how to introduce a binding without using contexts");
-                    // self.introduce_binding(*v, ty.clone(), false)?;
-                }
-                // All the globals should have been introduced
-                AtomTerm::Global(_) => {}
-                // No need to bind literals as well
-                AtomTerm::Literal(_) => {}
-            }
-        }
-        Ok(todo!("return resolved facts"))
+        let annotated_facts = assignment.annotate_facts(&mapped_facts);
+        Ok(annotated_facts)
     }
 
     fn typecheck_actions(
         &mut self,
         actions: &Vec<UnresolvedAction>,
+        problem: Problem<AtomTerm, ArcSort>,
     ) -> Result<Vec<ResolvedAction>, TypeError> {
-        // Right now this is not how type checking actions is done
-        for action in actions {
-            self.typecheck_action(action)?;
-        }
-        Ok(todo!())
+        let (actions, mapped_action): (Vec<NormAction>, Vec<Action<(Symbol, Symbol), Symbol, ()>>) =
+            todo!("action to lowered actions");
+        let mut problem = Problem::default();
+        problem.add_actions(&Actions(actions), self);
+
+        let assignment = problem
+            .solve(|sort: &ArcSort| sort.name())
+            .map_err(|e| e.to_type_error())?;
+
+        let annotated_actions = assignment.annotate_actions(&mapped_action);
+        Ok(annotated_actions)
     }
 
     fn typecheck_action(&mut self, action: &UnresolvedAction) -> Result<ResolvedAction, TypeError> {
-        todo!("type check actions should use the constraint-based type checker and yield a type-annotated AST");
-        todo!("just generate constraints here and leave it to typecheck_rule to assemble the resolved form");
-        todo!("should we keep is_global flag??")
-        // match action {
-        //     NormAction::Let(var, expr) => {
-        //         let expr_type = self.typecheck_expr(ctx, expr, true)?.output;
-
-        //         self.introduce_binding(ctx, *var, expr_type, is_global)?;
-        //     }
-        //     NormAction::LetLit(var, lit) => {
-        //         let lit_type = self.infer_literal(lit);
-        //         self.introduce_binding(ctx, *var, lit_type, is_global)?;
-        //     }
-        //     NormAction::Delete(expr) => {
-        //         self.typecheck_expr(ctx, expr, true)?;
-        //     }
-        //     NormAction::Set(expr, other) => {
-        //         let func_type = self.typecheck_expr(ctx, expr, true)?;
-        //         let other_type = self.lookup(ctx, *other)?;
-        //         if func_type.output.name() != other_type.name() {
-        //             return Err(TypeError::TypeMismatch(func_type.output, other_type));
-        //         }
-        //         if func_type.is_datatype {
-        //             return Err(TypeError::SetDatatype(func_type));
-        //         }
-        //     }
-        //     NormAction::Union(var1, var2) => {
-        //         let var1_type = self.lookup(ctx, *var1)?;
-        //         let var2_type = self.lookup(ctx, *var2)?;
-        //         if var1_type.name() != var2_type.name() {
-        //             return Err(TypeError::TypeMismatch(var1_type, var2_type));
-        //         }
-        //     }
-        //     NormAction::Extract(_var, _variants) => {}
-        //     NormAction::LetVar(var1, var2) => {
-        //         let var2_type = self.lookup(ctx, *var2)?;
-        //         self.introduce_binding(ctx, *var1, var2_type, is_global)?;
-        //     }
-        //     NormAction::Panic(..) => (),
-        // }
-        // Ok(())
+        self.typecheck_actions(&vec![action.clone()]).map(|mut v| {
+            assert_eq!(v.len(), 1);
+            v.pop().unwrap()
+        })
     }
 
     pub fn reserved_type(&self, sym: Symbol) -> Option<ArcSort> {
