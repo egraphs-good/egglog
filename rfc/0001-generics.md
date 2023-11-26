@@ -93,8 +93,8 @@ Rule matching:
 
 Value/Function representation:
 
-1. Add an optional `Value.type` arg which is a recursive enum of either a string type or a string and a number of type args, so that we can represent generic instantiated types for each value. Note that there won't be values for any values with type variables, since they only show up in rules as variables, not as a real value.
-2.  There will be one function table per generic function, i.e. like `zip`. All instances of that function, regardless of type, will be in that table.
+1.  There will be one function table per generic function, i.e. like `zip`. All instances of that function, regardless of type, will be in that table.
+2.  Since each intput/output pair in the table might be of different types, we could store this additional type information somewhere if need be, either in the `Value` struct or in another mapping from `EqSort` IDs to types.
 
 We would **only allow other user defined type as parameters** for user defined generic types. Otherwise, the rewrite definitions wouldn’t be valid, because only user defined types can be union-ed, not primitives.
 
