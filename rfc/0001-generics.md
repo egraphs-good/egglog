@@ -75,15 +75,26 @@ Another common definition would be a nullable type:
 
 ## Specification
 
-The implementation of this proposal has not been investigated yet.
+The implementation of this proposal has not been investigated thoroughly yet.
 
-Generally, it would require these changes:
+AST:
 
 1. Change the syntax to allow type parameters in square brackets when declaring datatypes as well as optionally when declaring functions.
 2. Change the syntax to allow type parameters to be s-exp’s themselves, to allow parameterized types as arguments.
-3. Add generic type information to each function declaration structure.
-4. Modify the type checker to use generic function information when inferring expression types. 
-5. Change the rule matcher to match generic rules on any expressions that can be substituted safely in those generic rules.
+
+Type checking:
+
+1. Add generic type information to each function declaration structure.
+2. Modify the type checker to use generic function information when inferring expression types. 
+
+Rule matching:
+
+1. Change the rule matcher to match generic rules on any expressions that can be substituted safely in those generic rules.
+
+Value/Function representation:
+
+1. Change the `Value.tag` to be a `Value.type` which is a recursive enum of either a string type or a string and a number of type args, so that we can represent generic instantiated types for each value. Note that there won't be values for any values with type variables, since they only show up in rules as variables, not as a real value.
+2.  There will be one function table per generic function, i.e. like `zip`. All instances of that function, regardless of type, will be in that table.
 
 We would **only allow other user defined type as parameters** for user defined generic types. Otherwise, the rewrite definitions wouldn’t be valid, because only user defined types can be union-ed, not primitives.
 
