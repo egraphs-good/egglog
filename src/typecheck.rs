@@ -519,6 +519,14 @@ impl<'a> ActionChecker<'a> {
                 self.instructions.push(Instruction::DeleteRow(*f));
                 Ok(())
             }
+            Action::Unextractable(f, args) => {
+                let fake_call = Expr::Call(*f, args.clone());
+                let (_, _ty) = self.infer_expr(&fake_call)?;
+                let fake_instr = self.instructions.pop().unwrap();
+                assert!(matches!(fake_instr, Instruction::CallFunction(..)));
+                self.instructions.push(Instruction::UnextractableRow(*f));
+                Ok(())
+            }
             Action::Union(a, b) => {
                 let (_, ty) = self.infer_expr(a)?;
                 if !ty.is_eq_sort() {
@@ -692,6 +700,7 @@ enum Instruction {
     CallFunction(Symbol, bool),
     CallPrimitive(Primitive, usize),
     DeleteRow(Symbol),
+    UnextractableRow(Symbol),
     Set(Symbol),
     Union(usize),
     Extract(usize),
@@ -973,6 +982,13 @@ impl EGraph {
                     let new_len = stack.len() - function.schema.input.len();
                     let args = &stack[new_len..];
                     function.remove(args, self.timestamp);
+                    stack.truncate(new_len);
+                }
+                Instruction::UnextractableRow(f) => {
+                    let function = self.functions.get_mut(f).unwrap();
+                    let new_len = stack.len() - function.schema.input.len();
+                    let args = &stack[new_len..];
+                    function.mark_unextractable(args);
                     stack.truncate(new_len);
                 }
             }

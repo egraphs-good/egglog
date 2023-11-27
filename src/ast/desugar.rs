@@ -268,6 +268,17 @@ fn flatten_actions(actions: &Vec<Action>, desugar: &mut Desugar) -> Vec<NormActi
                 ));
                 res.push(del);
             }
+            Action::Unextractable(symbol, exprs) => {
+                let unex = NormAction::Unextractable(NormExpr::Call(
+                    *symbol,
+                    exprs
+                        .clone()
+                        .into_iter()
+                        .map(|ex| add_expr(ex, &mut res))
+                        .collect(),
+                ));
+                res.push(unex);
+            }
             Action::Union(lhs, rhs) => {
                 let un = NormAction::Union(
                     add_expr(lhs.clone(), &mut res),

@@ -1628,10 +1628,12 @@ fn safe_shl(a: usize, b: usize) -> usize {
 mod tests {
     use std::sync::Arc;
 
+    use symbol_table::GlobalSymbol;
+
     use crate::{
         constraint::SimpleTypeConstraint,
         sort::{FromSort, I64Sort, IntoSort, Sort, VecSort},
-        EGraph, PrimitiveLike, Value,
+        EGraph, PrimitiveLike, Term, Value,
     };
 
     struct InnerProduct {
@@ -1640,7 +1642,7 @@ mod tests {
     }
 
     impl PrimitiveLike for InnerProduct {
-        fn name(&self) -> symbol_table::GlobalSymbol {
+        fn name(&self) -> GlobalSymbol {
             "inner-product".into()
         }
 
@@ -1693,5 +1695,84 @@ mod tests {
             ",
             )
             .unwrap();
+    }
+    #[test]
+    fn test_unextractable_extract() {
+        // Test when an expression is set as unextractble, it isn't extracted, even if its the cheapest
+        let mut egraph = EGraph::default();
+
+        egraph
+            .parse_and_run_program(
+                r#"
+                (datatype Math)
+                (function exp () Math :cost 100)
+                (function cheap () Math :cost 1)
+                (union (exp) (cheap))
+                (query-extract (exp))
+                "#,
+            )
+            .unwrap();
+        // Originally should give back numeric term
+        assert!(matches!(
+            egraph.get_extract_report(),
+            Some(crate::ExtractReport::Best {
+                term: Term::App(s, ..),
+                ..
+            }) if s == &GlobalSymbol::from("cheap")
+        ));
+        // Then if we make one unextractable, it should give back the variable term
+        egraph
+            .parse_and_run_program(
+                r#"
+                (unextractable (cheap))
+                (query-extract (exp))
+                "#,
+            )
+            .unwrap();
+        assert!(matches!(
+            egraph.get_extract_report(),
+            Some(crate::ExtractReport::Best {
+                term: Term::App(s, ..),
+                ..
+            }) if s == &GlobalSymbol::from("exp")
+        ));
+    }
+
+    #[test]
+    fn test_unextractable_extract_multiple() {
+        // Test when an expression is set as unextractble, it isn't extracted, like with
+        // extract multiple
+        let mut egraph = EGraph::default();
+
+        egraph
+            .parse_and_run_program(
+                "
+                (datatype Math (Num i64))
+                (Num 1)
+                (union (Num 1) (Num 2))
+                (query-extract :variants 2 (Num 1))
+                ",
+            )
+            .unwrap();
+        // Originally should give back two terms when extracted
+        let report = egraph.get_extract_report();
+        assert!(matches!(
+            report,
+            Some(crate::ExtractReport::Variants { terms, .. }) if terms.len() == 2
+        ));
+        // Then if we make one unextractable, it should only give back one term
+        egraph
+            .parse_and_run_program(
+                "
+                (unextractable (Num 2))
+                (query-extract :variants 2 (Num 1))
+                ",
+            )
+            .unwrap();
+        let report = egraph.get_extract_report();
+        assert!(matches!(
+            report,
+            Some(crate::ExtractReport::Variants { terms, .. }) if terms.len() == 1
+        ));
     }
 }

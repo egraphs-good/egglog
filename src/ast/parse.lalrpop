@@ -23,14 +23,14 @@ pub Program: Vec<Command> = { (Command)* => <> }
 
 LParen: () = {
     "(" => (),
-    "[" => (), 
+    "[" => (),
 };
 RParen: () = {
     ")" => (),
     "]" => (),
 };
 
-List<T>: Vec<T> = { 
+List<T>: Vec<T> = {
     LParen <T*> RParen => <>,
 }
 
@@ -71,7 +71,7 @@ Command: Command = {
     <NonLetAction> => Command::Action(<>),
     LParen "run" <limit:UNum>  <until:(":until" <(Fact)*>)?> RParen => Command::RunSchedule(Schedule::Repeat(limit, Box::new(Schedule::Run(RunConfig { ruleset : "".into(), until })))),
     LParen "run" <ruleset: Ident> <limit:UNum> <until:(":until" <(Fact)*>)?> RParen => Command::RunSchedule(Schedule::Repeat(limit, Box::new(Schedule::Run(RunConfig { ruleset, until })))),
-    LParen "simplify"  <schedule:Schedule> <expr:Expr> RParen 
+    LParen "simplify"  <schedule:Schedule> <expr:Expr> RParen
         => Command::Simplify { expr, schedule },
     LParen "calc" LParen <idents:IdentSort*> RParen <exprs:Expr+> RParen => Command::Calc(idents, exprs),
     LParen "query-extract" <variants:(":variants" <UNum>)?> <expr:Expr> RParen => Command::QueryExtract { expr, variants: variants.unwrap_or(0) },
@@ -93,7 +93,7 @@ Schedule: Schedule = {
     LParen "saturate" <Schedule*> RParen => Schedule::Saturate(Box::new(Schedule::Sequence(<>))),
     LParen "seq" <Schedule*> RParen => Schedule::Sequence(<>),
     LParen "repeat" <limit:UNum> <scheds:Schedule*> RParen => Schedule::Repeat(limit, Box::new(Schedule::Sequence(scheds))),
-    LParen "run" <until:(":until" <(Fact)*>)?> RParen => 
+    LParen "run" <until:(":until" <(Fact)*>)?> RParen =>
     Schedule::Run(RunConfig { ruleset: "".into(), until }),
     LParen "run" <ruleset: Ident> <until:(":until" <(Fact)*>)?> RParen => Schedule::Run(RunConfig { ruleset, until }),
     <ident:Ident> => Schedule::Run(RunConfig { ruleset: ident, until: None }),
@@ -107,6 +107,7 @@ Cost: Option<usize> = {
 NonLetAction: Action = {
     LParen "set" LParen <f: Ident> <args:Expr*> RParen <v:Expr> RParen => Action::Set ( f, args, v ),
     LParen "delete" LParen <f: Ident> <args:Expr*> RParen RParen => Action::Delete ( f, args),
+    LParen "unextractable" LParen <f: Ident> <args:Expr*> RParen RParen => Action::Unextractable ( f, args),
     LParen "union" <e1:Expr> <e2:Expr> RParen => Action::Union(<>),
     LParen "panic" <msg:String> RParen => Action::Panic(msg),
     LParen "extract" <expr:Expr> RParen => Action::Extract(expr, Expr::Lit(Literal::Int(0))),

@@ -389,6 +389,11 @@ impl TypeInfo {
                         assert_bound(bvar, let_bound);
                     });
                 }
+                NormAction::Unextractable(NormExpr::Call(_head, body)) => {
+                    body.iter().for_each(|bvar| {
+                        assert_bound(bvar, let_bound);
+                    });
+                }
                 NormAction::Set(NormExpr::Call(_head, body), var) => {
                     body.iter().for_each(|bvar| {
                         assert_bound(bvar, let_bound);
@@ -448,6 +453,9 @@ impl TypeInfo {
                 self.introduce_binding(ctx, *var, lit_type, is_global)?;
             }
             NormAction::Delete(expr) => {
+                self.typecheck_expr(ctx, expr, true)?;
+            }
+            NormAction::Unextractable(expr) => {
                 self.typecheck_expr(ctx, expr, true)?;
             }
             NormAction::Set(expr, other) => {

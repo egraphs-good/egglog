@@ -84,7 +84,9 @@ impl EGraph {
 
                 func.nodes
                     .iter()
-                    .filter(|&(_inputs, output)| (output.value == output_value))
+                    .filter(|&(_inputs, output)| {
+                        (output.value == output_value) & (!func.check_unextractable(_inputs))
+                    })
                     .map(|(inputs, _output)| {
                         let node = Node { sym, inputs };
                         ext.expr_from_node(&node, termdag).expect(
@@ -180,6 +182,9 @@ impl<'a> Extractor<'a> {
                 let func = &self.egraph.functions[&sym];
                 if func.schema.output.is_eq_sort() {
                     for (inputs, output) in func.nodes.iter() {
+                        if func.check_unextractable(inputs) {
+                            continue;
+                        }
                         if let Some((term_inputs, new_cost)) =
                             self.node_total_cost(func, inputs, termdag)
                         {

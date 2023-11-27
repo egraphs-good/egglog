@@ -22,6 +22,7 @@ pub struct Function {
     index_updated_through: usize,
     updates: usize,
     scratch: IndexSet<usize>,
+    unextractable: HashSet<Vec<Value>>,
 }
 
 #[derive(Clone)]
@@ -142,6 +143,7 @@ impl Function {
                 on_merge,
                 merge_vals,
             },
+            unextractable: Default::default(),
             // TODO figure out merge and default here
         })
     }
@@ -188,6 +190,19 @@ impl Function {
             self.maybe_rehash();
         }
         res
+    }
+
+    /// Mark the given inputs as unextractable.
+    pub fn mark_unextractable(&mut self, inputs: &[Value]) {
+        if !self.schema.output.is_eq_sort() {
+            panic!("Only eq sorts can be marked unextractable")
+        }
+        self.unextractable.insert(inputs.to_vec());
+    }
+
+    /// Check if the given inputs are unextractable.
+    pub fn check_unextractable(&self, inputs: &[Value]) -> bool {
+        self.unextractable.contains(inputs)
     }
 
     /// Return a column index that contains (a superset of) the offsets for the
