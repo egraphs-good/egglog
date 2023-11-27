@@ -1697,7 +1697,7 @@ mod tests {
             .unwrap();
     }
     #[test]
-    fn test_unextractable_extract() {
+    fn test_unextractable_action_extract() {
         // Test when an expression is set as unextractble, it isn't extracted, even if its the cheapest
         let mut egraph = EGraph::default();
 
@@ -1739,7 +1739,7 @@ mod tests {
     }
 
     #[test]
-    fn test_unextractable_extract_multiple() {
+    fn test_unextractable_action_extract_multiple() {
         // Test when an expression is set as unextractble, it isn't extracted, like with
         // extract multiple
         let mut egraph = EGraph::default();
@@ -1773,6 +1773,35 @@ mod tests {
         assert!(matches!(
             report,
             Some(crate::ExtractReport::Variants { terms, .. }) if terms.len() == 1
+        ));
+    }
+
+    #[test]
+    fn test_unextractable_rewrite() {
+        // When a rewrite is marked as unextractable, the lhs should not be extracted
+
+        let mut egraph = EGraph::default();
+
+        egraph
+            .parse_and_run_program(
+                r#"
+                (datatype Math)
+                (function exp () Math :cost 100)
+                (function cheap () Math :cost 1)
+                (rewrite (cheap) :unextractable (exp))
+                (cheap)
+                (run 1)
+                (query-extract (cheap))
+                "#,
+            )
+            .unwrap();
+        // Should give back expenive term, because cheap is unextractable
+        assert!(matches!(
+            egraph.get_extract_report(),
+            Some(crate::ExtractReport::Best {
+                term: Term::App(s, ..),
+                ..
+            }) if s == &GlobalSymbol::from("exp")
         ));
     }
 }

@@ -25,12 +25,24 @@ fn desugar_rewrite(
     ruleset: Symbol,
     name: Symbol,
     rewrite: &Rewrite,
+    unextractable: bool,
     desugar: &mut Desugar,
 ) -> Vec<NCommand> {
     let var = Symbol::from("rewrite_var__");
     // make two rules- one to insert the rhs, and one to union
     // this way, the union rule can only be fired once,
     // which helps proofs not add too much info
+    let mut head = vec![Action::Union(Expr::Var(var), rewrite.rhs.clone())];
+    if unextractable {
+        match &rewrite.lhs {
+            Expr::Call(f, args) => {
+                head.push(Action::Unextractable(*f, args.to_vec()));
+            }
+            _ => {
+                panic!("Unextractable rewrite must have a function call on the lhs");
+            }
+        }
+    }
     vec![NCommand::NormRule {
         ruleset,
         name,
@@ -40,7 +52,7 @@ fn desugar_rewrite(
                     .into_iter()
                     .chain(rewrite.conditions.clone())
                     .collect(),
-                head: vec![Action::Union(Expr::Var(var), rewrite.rhs.clone())],
+                head,
             },
             desugar,
         ),
@@ -58,15 +70,22 @@ fn desugar_birewrite(
         rhs: rewrite.lhs.clone(),
         conditions: rewrite.conditions.clone(),
     };
-    desugar_rewrite(ruleset, format!("{}=>", name).into(), rewrite, desugar)
-        .into_iter()
-        .chain(desugar_rewrite(
-            ruleset,
-            format!("{}<=", name).into(),
-            &rw2,
-            desugar,
-        ))
-        .collect()
+    desugar_rewrite(
+        ruleset,
+        format!("{}=>", name).into(),
+        rewrite,
+        false,
+        desugar,
+    )
+    .into_iter()
+    .chain(desugar_rewrite(
+        ruleset,
+        format!("{}<=", name).into(),
+        &rw2,
+        false,
+        desugar,
+    ))
+    .collect()
 }
 
 fn normalize_expr(
@@ -561,9 +580,13 @@ pub(crate) fn desugar_command(
         } => desugar.desugar_function(&FunctionDecl::relation(constructor, inputs)),
         Command::Declare { name, sort } => desugar.declare(name, sort),
         Command::Datatype { name, variants } => desugar_datatype(name, variants),
-        Command::Rewrite(ruleset, rewrite) => {
-            desugar_rewrite(ruleset, rewrite_name(&rewrite).into(), &rewrite, desugar)
-        }
+        Command::Rewrite(ruleset, rewrite, unextractable) => desugar_rewrite(
+            ruleset,
+            rewrite_name(&rewrite).into(),
+            &rewrite,
+            unextractable,
+            desugar,
+        ),
         Command::BiRewrite(ruleset, rewrite) => {
             desugar_birewrite(ruleset, rewrite_name(&rewrite).into(), &rewrite, desugar)
         }
