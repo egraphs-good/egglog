@@ -163,7 +163,6 @@
             let content = editor.getValue();
             let currentIndex = 0;
             let contentBySexp = [];
-            console.log("content", content);
             // loop through all the s-expressions
             while (true) {
                 let start = content.indexOf("(", currentIndex);
@@ -173,7 +172,7 @@
                 // find matching parenthesis
                 let end = start;
                 let depth = 1;
-                while (depth > 0) {
+                while (depth > 0 && end < content.length) {
                     end++;
                     if (content[end] == "(") {
                         depth++;
