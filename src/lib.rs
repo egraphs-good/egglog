@@ -1740,63 +1740,6 @@ mod tests {
     }
 
     #[test]
-    fn test_unextractable_seperate_values() {
-        // Tests that a term which was previously normalized as the same value is moved to a seperate value
-        // so that it can be marked as extractable.
-        let mut egraph = EGraph::default();
-
-        egraph
-            .parse_and_run_program(
-                r#"
-                (datatype Math)
-                (function container (Math) Math)
-                (function exp () Math :cost 100)
-                (function cheap () Math :cost 1)
-                (let res (container (cheap)))
-                (union (exp) (cheap))
-                "#,
-            )
-            .unwrap();
-        egraph.rebuild_nofail();
-        let exp_value = egraph
-            .functions
-            .get(&GlobalSymbol::from("exp"))
-            .unwrap()
-            .get(&vec![])
-            .unwrap();
-        let cheap_value = egraph
-            .functions
-            .get(&GlobalSymbol::from("cheap"))
-            .unwrap()
-            .get(&vec![])
-            .unwrap();
-        // Verify that after unioning and rebuilding they are the same value
-        assert_eq!(exp_value, cheap_value);
-
-        // Now after making them extractable, they need to become different values
-        egraph
-            .parse_and_run_program(
-                r#"
-                (unextractable (container (cheap)))
-                (query-extract res)
-                "#,
-            )
-            .unwrap();
-        let report = egraph.get_extract_report().clone().unwrap();
-        let ExtractReport::Best { term, termdag, .. } = report else {
-            panic!();
-        };
-        let expr = termdag.term_to_expr(&term);
-        assert_eq!(
-            expr,
-            Expr::Call(
-                GlobalSymbol::from("container"),
-                vec![Expr::Call(GlobalSymbol::from("exp"), vec![])]
-            )
-        );
-    }
-
-    #[test]
     fn test_unextractable_rebuild() {
         // Tests that a term stays unextractable even after a rebuild after a union would collapse the values.
         let mut egraph = EGraph::default();
@@ -1807,10 +1750,48 @@ mod tests {
                 (datatype Math)
                 (function container (Math) Math)
                 (function exp () Math :cost 100)
-                (function cheap () Math :cost 1)
+                (function cheap () Math)
+                (function cheap-1 () Math)
+                ; we make the container cheap so that it will be extracted if possible, but then we mark it as unextractable
+                ; so the (exp) expr should be extracted instead
                 (let res (container (cheap)))
+                (union res (exp))
+                (cheap)
+                (cheap-1)
                 (unextractable (container (cheap)))
-                (union (exp) (cheap))
+                "#,
+            ).unwrap();
+        // At this point (cheap) and (cheap-1) should have different values, because they aren't unioned
+        let get_value = |egraph: &EGraph, name: &str| {
+            egraph
+                .functions
+                .get(&GlobalSymbol::from(name))
+                .unwrap()
+                .get(&[])
+                .unwrap()
+        };
+        let orig_cheap_value = get_value(&egraph, "cheap");
+        let orig_cheap_1_value = get_value(&egraph, "cheap-1");
+        assert_ne!(orig_cheap_value, orig_cheap_1_value);
+        // Then we can union them
+        egraph
+            .parse_and_run_program(
+                r#"
+                (union (cheap-1) (cheap))
+                "#,
+            )
+            .unwrap();
+        egraph.rebuild_nofail();
+        // And verify that their values are now the same and different from the original (cheap) value.
+        let new_cheap_value = get_value(&egraph, "cheap");
+        let new_cheap_1_value = get_value(&egraph, "cheap-1");
+        assert_eq!(new_cheap_value, new_cheap_1_value);
+        assert_ne!(new_cheap_value, orig_cheap_value);
+
+        // Now verify that if we extract, it still respects the unextractable, even though it's a different values now
+        egraph
+            .parse_and_run_program(
+                r#"
                 (query-extract res)
                 "#,
             )
@@ -1820,13 +1801,7 @@ mod tests {
             panic!();
         };
         let expr = termdag.term_to_expr(&term);
-        assert_eq!(
-            expr,
-            Expr::Call(
-                GlobalSymbol::from("container"),
-                vec![Expr::Call(GlobalSymbol::from("exp"), vec![])]
-            )
-        );
+        assert_eq!(expr, Expr::Call(GlobalSymbol::from("exp"), vec![]));
     }
 
     #[test]
