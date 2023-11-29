@@ -328,7 +328,7 @@ impl Display for NormSchedule {
     }
 }
 
-pub type Unextractable = bool;
+pub type Replace = bool;
 
 // TODO command before and after desugaring should be different
 /// A [`Command`] is the top-level construct in egglog.
@@ -543,15 +543,13 @@ pub enum Command {
     ///          :when ((= a (Num 0)))
     /// ```
     ///
-    /// To make the left hand side of the rewrite unextractable after applying it,
-    /// use the `:unextractable` keyword after the left hand side.
+    /// To make the left hand side unextractable and unmatchable (subsumsed) use the `:replace ` clause
     ///
     /// ```text
-    /// (rewrite (Mul a 2) :unextractable
-    ///          (bitshift-left a 1))
+    /// (rewrite (Mul a 2) (bitshift-left a 1) :replace)
     /// ```
     ///
-    Rewrite(Symbol, Rewrite, Unextractable),
+    Rewrite(Symbol, Rewrite, Replace),
     /// Similar to [`Command::Rewrite`], but
     /// generates two rules, one for each direction.
     ///

@@ -1893,8 +1893,8 @@ mod tests {
     }
 
     #[test]
-    fn test_unextractable_rewrite() {
-        // When a rewrite is marked as unextractable, the lhs should not be extracted
+    fn test_replace_rewrite() {
+        // When a rewrite is marked as a replacement, the lhs should not be extracted
 
         let mut egraph = EGraph::default();
 
@@ -1904,7 +1904,7 @@ mod tests {
                 (datatype Math)
                 (function exp () Math :cost 100)
                 (function cheap () Math :cost 1)
-                (rewrite (cheap) :unextractable (exp))
+                (rewrite (cheap) (exp) :replace)
                 (cheap)
                 (run 1)
                 (query-extract (cheap))
@@ -1912,6 +1912,25 @@ mod tests {
             )
             .unwrap();
         // Should give back expenive term, because cheap is unextractable
+        assert!(matches!(
+            egraph.get_extract_report(),
+            Some(crate::ExtractReport::Best {
+                term: Term::App(s, ..),
+                ..
+            }) if s == &GlobalSymbol::from("exp")
+        ));
+
+        // Also then the left hand side should also be subsumed
+        egraph
+            .parse_and_run_program(
+                r#"
+                (function cheap-1 () Math :cost 1)
+                (rewrite (cheap) (cheap-1))
+                (run 1)
+                (query-extract (cheap))
+                "#,
+            )
+            .unwrap();
         assert!(matches!(
             egraph.get_extract_report(),
             Some(crate::ExtractReport::Best {
