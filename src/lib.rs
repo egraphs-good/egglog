@@ -1739,9 +1739,20 @@ mod tests {
         ));
     }
 
+    fn get_function(egraph: &EGraph, name: &str) -> crate::function::Function {
+        egraph
+            .functions
+            .get(&GlobalSymbol::from(name))
+            .unwrap()
+            .clone()
+    }
+    fn get_value(egraph: &EGraph, name: &str) -> crate::Value {
+        get_function(egraph, name).get(&[]).unwrap()
+    }
+
     #[test]
-    fn test_unextractable_rebuild() {
-        // Tests that a term stays unextractable even after a rebuild after a union would collapse the values.
+    fn test_unextractable_rebuild_arg() {
+        // Tests that a term stays unextractable even after a rebuild after a union would change the value of one of its args
         let mut egraph = EGraph::default();
 
         egraph
@@ -1762,14 +1773,6 @@ mod tests {
                 "#,
             ).unwrap();
         // At this point (cheap) and (cheap-1) should have different values, because they aren't unioned
-        let get_value = |egraph: &EGraph, name: &str| {
-            egraph
-                .functions
-                .get(&GlobalSymbol::from(name))
-                .unwrap()
-                .get(&[])
-                .unwrap()
-        };
         let orig_cheap_value = get_value(&egraph, "cheap");
         let orig_cheap_1_value = get_value(&egraph, "cheap-1");
         assert_ne!(orig_cheap_value, orig_cheap_1_value);
@@ -1787,12 +1790,59 @@ mod tests {
         let new_cheap_1_value = get_value(&egraph, "cheap-1");
         assert_eq!(new_cheap_value, new_cheap_1_value);
         assert_ne!(new_cheap_value, orig_cheap_value);
-
         // Now verify that if we extract, it still respects the unextractable, even though it's a different values now
         egraph
             .parse_and_run_program(
                 r#"
                 (query-extract res)
+                "#,
+            )
+            .unwrap();
+        let report = egraph.get_extract_report().clone().unwrap();
+        let ExtractReport::Best { term, termdag, .. } = report else {
+            panic!();
+        };
+        let expr = termdag.term_to_expr(&term);
+        assert_eq!(expr, Expr::Call(GlobalSymbol::from("exp"), vec![]));
+    }
+
+    #[test]
+    fn test_unextractable_rebuild_self() {
+        // Tests that a term stays unextractable even after a rebuild after a union change its output value.
+        let mut egraph = EGraph::default();
+
+        egraph
+            .parse_and_run_program(
+                r#"
+                (datatype Math)
+                (function container (Math) Math)
+                (function exp () Math :cost 100)
+                (function cheap () Math)
+                (cheap)
+                (unextractable (cheap))
+                "#,
+            )
+            .unwrap();
+
+        let orig_cheap_value = get_value(&egraph, "cheap");
+        // Then we can union them
+        egraph
+            .parse_and_run_program(
+                r#"
+                (union (exp) (cheap))
+                "#,
+            )
+            .unwrap();
+        egraph.rebuild_nofail();
+        // And verify that the cheap value is now different
+        let new_cheap_value = get_value(&egraph, "cheap");
+        assert_ne!(new_cheap_value, orig_cheap_value);
+
+        // Now verify that if we extract, it still respects the unextractable, even though it's a different values now
+        egraph
+            .parse_and_run_program(
+                r#"
+                (query-extract (cheap))
                 "#,
             )
             .unwrap();
