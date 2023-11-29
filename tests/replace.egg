@@ -1,4 +1,4 @@
-;; Example for using the :unextractable rewrite argument to do one-way rewriting
+;; Example for using the :replace rewrite argument to do one-way rewriting
 
 ;; Let's pretend that we are optimizing mathematical expressions, but for some reason on our compiler
 ;; multiplying by three is very expensive. So we want to rewrite those forms to three additions instead, and always
@@ -11,7 +11,7 @@
   (Mul Math Math))
 
 
-(rewrite (Mul (Num 3) x) :unextractable (Add x (Add x x)))
+(rewrite (Mul (Num 3) x) (Add x (Add x x))  :replace)
 
 (let x (Mul (Num 2) (Mul (Num 3) (Var "x"))))
 
