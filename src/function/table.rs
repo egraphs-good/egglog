@@ -26,6 +26,7 @@
 //! It's likely that we will have to store these "on the side" or use some sort
 //! of persistent data-structure for the entire table.
 use std::{
+    fmt::{Debug, Formatter},
     hash::{BuildHasher, Hash, Hasher},
     mem,
     ops::Range,
@@ -46,12 +47,29 @@ struct TableOffset {
     off: Offset,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct Row {
+    pub(crate) input: Input,
+    pub(crate) output: TupleOutput,
+    pub(crate) unextractable: bool,
+}
+
+impl Row {
+    fn new(input: Input, output: TupleOutput, unextractable: bool) -> Row {
+        Row {
+            input,
+            output,
+            unextractable,
+        }
+    }
+}
+
 #[derive(Default, Clone)]
 pub(crate) struct Table {
     max_ts: u32,
     n_stale: usize,
     table: RawTable<TableOffset>,
-    pub(crate) vals: Vec<(Input, TupleOutput)>,
+    pub(crate) vals: Vec<Row>,
 }
 
 /// Used for the RawTable probe sequence.
@@ -64,10 +82,20 @@ macro_rules! search_for {
             }
             // If the hash matches, the value should not be stale, and the data
             // should match.
-            let inp = &$slf.vals[to.off as usize].0;
+            let inp = &$slf.vals[to.off as usize].input;
             inp.live() && inp.data() == $inp
         }
     };
+}
+
+impl Debug for Table {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Table")
+            .field("max_ts", &self.max_ts)
+            .field("n_stale", &self.n_stale)
+            .field("vals", &self.vals)
+            .finish()
+    }
 }
 
 impl Table {
@@ -89,7 +117,7 @@ impl Table {
         let mut src = 0usize;
         let mut dst = 0usize;
         self.table.clear();
-        self.vals.retain(|(inp, _)| {
+        self.vals.retain(|Row { input: inp, .. }| {
             if inp.live() {
                 let hash = hash_values(inp.data());
                 self.table
@@ -108,20 +136,38 @@ impl Table {
     /// Get the entry in the table for the given values, if they are in the
     /// table.
     pub(crate) fn get(&self, inputs: &[Value]) -> Option<&TupleOutput> {
+        self.get_row(inputs).map(|row| &row.output)
+    }
+
+    pub(crate) fn get_row(&self, inputs: &[Value]) -> Option<&Row> {
         let hash = hash_values(inputs);
         let TableOffset { off, .. } = self.table.get(hash, search_for!(self, hash, inputs))?;
-        debug_assert!(self.vals[*off].0.live());
-        Some(&self.vals[*off].1)
+        debug_assert!(self.vals[*off].input.live());
+        Some(&self.vals[*off])
+    }
+
+    pub(crate) fn mark_unextractable(&mut self, inputs: &[Value]) {
+        let hash = hash_values(inputs);
+        let TableOffset { off, .. } = self
+            .table
+            .get(hash, search_for!(self, hash, inputs))
+            .unwrap();
+        self.vals[*off].unextractable = true;
     }
 
     /// Insert the given data into the table at the given timestamp. Return the
     /// previous value, if there was one.
     pub(crate) fn insert(&mut self, inputs: &[Value], out: Value, ts: u32) -> Option<Value> {
         let mut res = None;
-        self.insert_and_merge(inputs, ts, |prev| {
-            res = prev;
-            out
-        });
+        self.insert_and_merge(
+            inputs,
+            ts,
+            |prev| {
+                res = prev;
+                out
+            },
+            false,
+        );
         res
     }
 
@@ -137,6 +183,7 @@ impl Table {
         inputs: &[Value],
         ts: u32,
         on_merge: impl FnOnce(Option<Value>) -> Value,
+        unextractable: bool,
     ) {
         assert!(ts >= self.max_ts);
         self.max_ts = ts;
@@ -144,7 +191,11 @@ impl Table {
         if let Some(TableOffset { off, .. }) =
             self.table.get_mut(hash, search_for!(self, hash, inputs))
         {
-            let (inp, prev) = &mut self.vals[*off];
+            let Row {
+                input: inp,
+                output: prev,
+                ..
+            } = &mut self.vals[*off];
             let next = on_merge(Some(prev.value));
             if next == prev.value {
                 return;
@@ -153,23 +204,25 @@ impl Table {
             self.n_stale += 1;
             let k = mem::take(&mut inp.data);
             let new_offset = self.vals.len();
-            self.vals.push((
+            self.vals.push(Row::new(
                 Input::new(k),
                 TupleOutput {
                     value: next,
                     timestamp: ts,
                 },
+                unextractable,
             ));
             *off = new_offset;
             return;
         }
         let new_offset = self.vals.len();
-        self.vals.push((
+        self.vals.push(Row::new(
             Input::new(inputs.into()),
             TupleOutput {
                 value: on_merge(None),
                 timestamp: ts,
             },
+            unextractable,
         ));
         self.table.insert(
             hash,
@@ -198,7 +251,7 @@ impl Table {
 
     /// The minimum timestamp stored by the table, if there is one.
     pub(crate) fn min_ts(&self) -> Option<u32> {
-        Some(self.vals.first()?.1.timestamp)
+        Some(self.vals.first()?.output.timestamp)
     }
 
     /// An upper bound for all timestamps stored in the table.
@@ -208,7 +261,7 @@ impl Table {
 
     /// Get the timestamp for the entry at index `i`.
     pub(crate) fn get_timestamp(&self, i: usize) -> Option<u32> {
-        Some(self.vals.get(i)?.1.timestamp)
+        Some(self.vals.get(i)?.output.timestamp)
     }
 
     /// Remove the given mapping from the table, returns whether an entry was
@@ -221,18 +274,26 @@ impl Table {
         } else {
             return false;
         };
-        self.vals[entry.off].0.stale_at = ts;
+        self.vals[entry.off].input.stale_at = ts;
         self.n_stale += 1;
         true
     }
 
     /// Returns the entries at the given index if the entry is live and the index in bounds.
     pub(crate) fn get_index(&self, i: usize) -> Option<(&[Value], &TupleOutput)> {
-        let (inp, out) = self.vals.get(i)?;
+        let Row {
+            input: inp,
+            output: out,
+            ..
+        } = self.get_index_row(i)?;
         if !inp.live() {
             return None;
         }
         Some((inp.data(), out))
+    }
+
+    pub(crate) fn get_index_row(&self, i: usize) -> Option<&Row> {
+        self.vals.get(i)
     }
 
     /// Iterate over the live entries in the table, in insertion order.
@@ -247,16 +308,22 @@ impl Table {
         &self,
         range: Range<usize>,
     ) -> impl Iterator<Item = (usize, &[Value], &TupleOutput)> + '_ {
-        self.vals[range.clone()]
-            .iter()
-            .zip(range)
-            .filter_map(|((inp, out), i)| {
+        self.vals[range.clone()].iter().zip(range).filter_map(
+            |(
+                Row {
+                    input: inp,
+                    output: out,
+                    ..
+                },
+                i,
+            )| {
                 if inp.live() {
                     Some((i, inp.data(), out))
                 } else {
                     None
                 }
-            })
+            },
+        )
     }
 
     #[cfg(debug_assertions)]
@@ -264,7 +331,7 @@ impl Table {
         assert!(self
             .vals
             .windows(2)
-            .all(|xs| xs[0].1.timestamp <= xs[1].1.timestamp))
+            .all(|xs| xs[0].output.timestamp <= xs[1].output.timestamp))
     }
 
     /// Iterate over the live entries in the timestamp range, passing back their

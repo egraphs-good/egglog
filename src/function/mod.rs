@@ -22,7 +22,6 @@ pub struct Function {
     index_updated_through: usize,
     updates: usize,
     scratch: IndexSet<usize>,
-    unextractable: HashSet<Vec<Value>>,
 }
 
 #[derive(Clone)]
@@ -59,6 +58,21 @@ impl ResolvedSchema {
         } else {
             self.input.get(index)
         }
+    }
+}
+
+impl Debug for Function {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Function")
+            .field("decl", &self.decl)
+            .field("schema", &self.schema)
+            .field("nodes", &self.nodes)
+            .field("indexes", &self.indexes)
+            .field("rebuild_indexes", &self.rebuild_indexes)
+            .field("index_updated_through", &self.index_updated_through)
+            .field("updates", &self.updates)
+            .field("scratch", &self.scratch)
+            .finish()
     }
 }
 
@@ -143,7 +157,6 @@ impl Function {
                 on_merge,
                 merge_vals,
             },
-            unextractable: Default::default(),
             // TODO figure out merge and default here
         })
     }
@@ -197,12 +210,12 @@ impl Function {
         if !self.schema.output.is_eq_sort() {
             panic!("Only eq sorts can be marked unextractable")
         }
-        self.unextractable.insert(inputs.to_vec());
+        self.nodes.mark_unextractable(inputs);
     }
 
     /// Check if the given inputs are unextractable.
     pub fn check_unextractable(&self, inputs: &[Value]) -> bool {
-        self.unextractable.contains(inputs)
+        self.nodes.get_row(inputs).unwrap().unextractable
     }
 
     /// Return a column index that contains (a superset of) the offsets for the
@@ -390,6 +403,7 @@ impl Function {
             // Entry is stale
             return result;
         };
+        let unextractable = self.nodes.get_row(args).unwrap().unextractable;
 
         let mut out_val = out.value;
         scratch.clear();
@@ -405,36 +419,41 @@ impl Function {
             return result;
         }
         let out_ty = &self.schema.output;
-        self.nodes.insert_and_merge(scratch, timestamp, |prev| {
-            if let Some(mut prev) = prev {
-                out_ty.canonicalize(&mut prev, uf);
-                let mut appended = false;
-                if self.merge.on_merge.is_some() && prev != out_val {
-                    deferred_merges.push((scratch.clone(), prev, out_val));
-                    appended = true;
-                }
-                match &self.merge.merge_vals {
-                    MergeFn::Union => {
-                        debug_assert!(self.schema.output.is_eq_sort());
-                        uf.union_values(prev, out_val, self.schema.output.name())
+        self.nodes.insert_and_merge(
+            scratch,
+            timestamp,
+            |prev| {
+                if let Some(mut prev) = prev {
+                    out_ty.canonicalize(&mut prev, uf);
+                    let mut appended = false;
+                    if self.merge.on_merge.is_some() && prev != out_val {
+                        deferred_merges.push((scratch.clone(), prev, out_val));
+                        appended = true;
                     }
-                    MergeFn::AssertEq => {
-                        if prev != out_val {
-                            result = Err(Error::MergeError(self.decl.name, prev, out_val));
+                    match &self.merge.merge_vals {
+                        MergeFn::Union => {
+                            debug_assert!(self.schema.output.is_eq_sort());
+                            uf.union_values(prev, out_val, self.schema.output.name())
                         }
-                        prev
-                    }
-                    MergeFn::Expr(_) => {
-                        if !appended && prev != out_val {
-                            deferred_merges.push((scratch.clone(), prev, out_val));
+                        MergeFn::AssertEq => {
+                            if prev != out_val {
+                                result = Err(Error::MergeError(self.decl.name, prev, out_val));
+                            }
+                            prev
                         }
-                        prev
+                        MergeFn::Expr(_) => {
+                            if !appended && prev != out_val {
+                                deferred_merges.push((scratch.clone(), prev, out_val));
+                            }
+                            prev
+                        }
                     }
+                } else {
+                    out_val
                 }
-            } else {
-                out_val
-            }
-        });
+            },
+            unextractable,
+        );
         if let Some((inputs, _)) = self.nodes.get_index(i) {
             if inputs != &scratch[..] {
                 scratch.clear();

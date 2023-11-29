@@ -3,7 +3,10 @@ use std::collections::VecDeque;
 
 use crate::{
     ast::{FunctionDecl, Id},
-    function::{table::hash_values, ValueVec},
+    function::{
+        table::{hash_values, Row},
+        ValueVec,
+    },
     util::HashMap,
     EGraph, Value,
 };
@@ -73,9 +76,9 @@ impl EGraph {
                     .nodes
                     .vals
                     .iter()
-                    .filter(|(i, _)| i.live())
+                    .filter(|Row { input, .. }| input.live())
                     .take(config.max_calls_per_function.unwrap_or(usize::MAX))
-                    .map(|(input, output)| {
+                    .map(|Row { input, output, .. }| {
                         (
                             &function.decl,
                             &input.data,
