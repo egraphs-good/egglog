@@ -110,6 +110,8 @@ impl Run {
 
     fn should_fail(&self) -> bool {
         self.path.to_string_lossy().contains("fail-typecheck")
+            // Marking as subsumed and non extractable is not supported for eqsat values with the term encoding
+            || (self.path.to_string_lossy().contains("replace") & self.test_terms_encoding)
     }
 }
 
