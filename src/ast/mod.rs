@@ -1092,10 +1092,12 @@ pub enum Action {
     /// Be wary! Only delete entries that are subsumed in some way or
     /// guaranteed to be not useful.
     Delete(Symbol, Vec<Expr>),
-    /// Set an expression to be `unextractable`
+    /// Set an entry to be `unextractable`
     /// so that it cannot be extracted.
     /// Note that this cannot be an expr but has to be a symbol and args, because we need to refer to a specific row
     Unextractable(Symbol, Vec<Expr>),
+    /// `subsume` an an entry so that it cannot be queries for during rules or rewrites.
+    Subsume(Symbol, Vec<Expr>),
     /// `union` two datatypes, making them equal
     /// in the implicit, global equality relation
     /// of egglog.
@@ -1123,6 +1125,23 @@ pub enum Action {
     // If(Expr, Action, Action),
 }
 
+#[derive(Clone, Debug, Copy, PartialEq, Eq, Hash)]
+pub enum ChangeRow {
+    Delete,
+    Subsume,
+    Unextractable,
+}
+
+impl ChangeRow {
+    pub fn to_action(&self, op: Symbol, args: Vec<Expr>) -> Action {
+        match self {
+            ChangeRow::Delete => Action::Delete(op, args),
+            ChangeRow::Subsume => Action::Subsume(op, args),
+            ChangeRow::Unextractable => Action::Unextractable(op, args),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum NormAction {
     Let(Symbol, NormExpr),
@@ -1130,8 +1149,7 @@ pub enum NormAction {
     LetLit(Symbol, Literal),
     Extract(Symbol, Symbol),
     Set(NormExpr, Symbol),
-    Delete(NormExpr),
-    Unextractable(NormExpr),
+    ChangeRow(ChangeRow, NormExpr),
     Union(Symbol, Symbol),
     Panic(String),
 }
@@ -1150,11 +1168,8 @@ impl NormAction {
             NormAction::Extract(symbol, variants) => {
                 Action::Extract(Expr::Var(*symbol), Expr::Var(*variants))
             }
-            NormAction::Delete(NormExpr::Call(symbol, args)) => {
-                Action::Delete(*symbol, args.iter().map(|s| Expr::Var(*s)).collect())
-            }
-            NormAction::Unextractable(NormExpr::Call(symbol, args)) => {
-                Action::Unextractable(*symbol, args.iter().map(|s| Expr::Var(*s)).collect())
+            NormAction::ChangeRow(change, NormExpr::Call(symbol, args)) => {
+                change.to_action(*symbol, args.iter().map(|s| Expr::Var(*s)).collect())
             }
             NormAction::Union(lhs, rhs) => Action::Union(Expr::Var(*lhs), Expr::Var(*rhs)),
             NormAction::Panic(msg) => Action::Panic(msg.clone()),
@@ -1168,8 +1183,7 @@ impl NormAction {
             NormAction::LetLit(symbol, lit) => NormAction::LetLit(*symbol, lit.clone()),
             NormAction::Set(expr, other) => NormAction::Set(f(expr), *other),
             NormAction::Extract(var, variants) => NormAction::Extract(*var, *variants),
-            NormAction::Delete(expr) => NormAction::Delete(f(expr)),
-            NormAction::Unextractable(expr) => NormAction::Unextractable(f(expr)),
+            NormAction::ChangeRow(change, expr) => NormAction::ChangeRow(*change, f(expr)),
             NormAction::Union(lhs, rhs) => NormAction::Union(*lhs, *rhs),
             NormAction::Panic(msg) => NormAction::Panic(msg.clone()),
         }
@@ -1191,9 +1205,8 @@ impl NormAction {
             NormAction::Extract(var, variants) => {
                 NormAction::Extract(fvar(*var, false), fvar(*variants, false))
             }
-            NormAction::Delete(expr) => NormAction::Delete(expr.map_def_use(fvar, false)),
-            NormAction::Unextractable(expr) => {
-                NormAction::Unextractable(expr.map_def_use(fvar, false))
+            NormAction::ChangeRow(change, expr) => {
+                NormAction::ChangeRow(*change, expr.map_def_use(fvar, false))
             }
             NormAction::Union(lhs, rhs) => NormAction::Union(fvar(*lhs, false), fvar(*rhs, false)),
             NormAction::Panic(msg) => NormAction::Panic(msg.clone()),
@@ -1209,6 +1222,7 @@ impl ToSexp for Action {
             Action::Union(lhs, rhs) => list!("union", lhs, rhs),
             Action::Delete(lhs, args) => list!("delete", list!(lhs, ++ args)),
             Action::Unextractable(lhs, args) => list!("unextractable", list!(lhs, ++ args)),
+            Action::Subsume(lhs, args) => list!("subsume", list!(lhs, ++ args)),
             Action::Extract(expr, variants) => list!("extract", expr, variants),
             Action::Panic(msg) => list!("panic", format!("\"{}\"", msg.clone())),
             Action::Expr(e) => e.to_sexp(),
@@ -1228,6 +1242,7 @@ impl Action {
             Action::Unextractable(lhs, args) => {
                 Action::Unextractable(*lhs, args.iter().map(f).collect())
             }
+            Action::Subsume(lhs, args) => Action::Subsume(*lhs, args.iter().map(f).collect()),
             Action::Union(lhs, rhs) => Action::Union(f(lhs), f(rhs)),
             Action::Extract(expr, variants) => Action::Extract(f(expr), f(variants)),
             Action::Panic(msg) => Action::Panic(msg.clone()),
@@ -1248,6 +1263,9 @@ impl Action {
             }
             Action::Unextractable(lhs, args) => {
                 Action::Unextractable(*lhs, args.iter().map(|e| e.subst(canon)).collect())
+            }
+            Action::Subsume(lhs, args) => {
+                Action::Subsume(*lhs, args.iter().map(|e| e.subst(canon)).collect())
             }
             Action::Union(lhs, rhs) => Action::Union(lhs.subst(canon), rhs.subst(canon)),
             Action::Extract(expr, variants) => {
@@ -1430,7 +1448,7 @@ impl NormRule {
                         _ => panic!("Expected call in set"),
                     }
                 }
-                NormAction::Delete(expr) => {
+                NormAction::ChangeRow(change, expr) => {
                     let new_expr = expr.to_expr();
                     new_expr.map(&mut |subexpr| {
                         if let Expr::Var(v) = subexpr {
@@ -1440,26 +1458,12 @@ impl NormRule {
                     });
                     match new_expr.subst(subst) {
                         Expr::Call(op, children) => {
-                            head.push(Action::Delete(op, children));
+                            head.push(change.to_action(op, children));
                         }
-                        _ => panic!("Expected call in delete"),
+                        _ => panic!("Expected call"),
                     }
                 }
-                NormAction::Unextractable(expr) => {
-                    let new_expr = expr.to_expr();
-                    new_expr.map(&mut |subexpr| {
-                        if let Expr::Var(v) = subexpr {
-                            used.insert(*v);
-                        }
-                        subexpr.clone()
-                    });
-                    match new_expr.subst(subst) {
-                        Expr::Call(op, children) => {
-                            head.push(Action::Unextractable(op, children));
-                        }
-                        _ => panic!("Expected call in unextractable"),
-                    }
-                }
+
                 NormAction::Union(lhs, rhs) => {
                     let new_lhs = subst.get(lhs).unwrap_or(&Expr::Var(*lhs)).clone();
                     let new_rhs = subst.get(rhs).unwrap_or(&Expr::Var(*rhs)).clone();

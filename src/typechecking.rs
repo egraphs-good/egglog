@@ -384,12 +384,7 @@ impl TypeInfo {
                 NormAction::LetLit(v1, _lit) => {
                     assert!(let_bound.insert(*v1));
                 }
-                NormAction::Delete(NormExpr::Call(_head, body)) => {
-                    body.iter().for_each(|bvar| {
-                        assert_bound(bvar, let_bound);
-                    });
-                }
-                NormAction::Unextractable(NormExpr::Call(_head, body)) => {
+                NormAction::ChangeRow(_, NormExpr::Call(_head, body)) => {
                     body.iter().for_each(|bvar| {
                         assert_bound(bvar, let_bound);
                     });
@@ -452,10 +447,7 @@ impl TypeInfo {
                 let lit_type = self.infer_literal(lit);
                 self.introduce_binding(ctx, *var, lit_type, is_global)?;
             }
-            NormAction::Delete(expr) => {
-                self.typecheck_expr(ctx, expr, true)?;
-            }
-            NormAction::Unextractable(expr) => {
+            NormAction::ChangeRow(_, expr) => {
                 self.typecheck_expr(ctx, expr, true)?;
             }
             NormAction::Set(expr, other) => {

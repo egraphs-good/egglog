@@ -53,7 +53,7 @@ impl<'a> TermState<'a> {
         let pname = self.parent_name(name);
         let union_old_new = self.union(name, "old", "new");
         self.parse_program(&format!(
-            "(function {pname} ({name}) {name} 
+            "(function {pname} ({name}) {name}
                         :on_merge ({union_old_new})
                         :merge (ordering-min old new)
                         )
@@ -89,7 +89,7 @@ impl<'a> TermState<'a> {
             let union_old_new = self.union(sort, "old", "new");
             self.desugar()
                 .parse_program(&format!(
-                    "(function {view_name} ({child_sorts}) {sort} 
+                    "(function {view_name} ({child_sorts}) {sort}
                     :on_merge ({union_old_new})
                     :merge (ordering-min old new))"
                 ))
@@ -303,7 +303,7 @@ impl<'a> TermState<'a> {
         // compute the func type before we mess with
         // the action
         let func_type = match action {
-            NormAction::Delete(expr) => Some(
+            NormAction::ChangeRow(_, expr) => Some(
                 self.type_info()
                     .lookup_expr(self.current_ctx, expr)
                     .unwrap(),
@@ -324,11 +324,11 @@ impl<'a> TermState<'a> {
         let vars_looked_up = self.canonicalize_everything(action, &mut res);
 
         res.extend(match &vars_looked_up {
-            NormAction::Delete(NormExpr::Call(_op, _body)) => {
+            NormAction::ChangeRow(_, NormExpr::Call(_op, _body)) => {
                 // TODO this might not do the right thing for terms!
                 let func_type = func_type.unwrap();
                 if func_type.is_datatype {
-                    panic!("Cannot delete from datatype in term mode yet");
+                    panic!("Cannot change row from datatype in term mode yet");
                     /*let view_name = self.view_name(*op);
                     vec![Action::Delete(
                         view_name,

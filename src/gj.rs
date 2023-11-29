@@ -926,13 +926,14 @@ impl<'a> TrieAccess<'a> {
         };
 
         if idxs.is_empty() {
+            let rows = self.function.iter_timestamp_range(&self.timestamp_range);
             if self.column < arity {
-                for (i, tup, out) in self.function.iter_timestamp_range(&self.timestamp_range) {
+                for (i, tup, out) in rows {
                     insert(i, tup, out, tup[self.column])
                 }
             } else {
                 assert_eq!(self.column, arity);
-                for (i, tup, out) in self.function.iter_timestamp_range(&self.timestamp_range) {
+                for (i, tup, out) in rows {
                     insert(i, tup, out, out.value);
                 }
             };

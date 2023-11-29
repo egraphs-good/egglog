@@ -52,14 +52,16 @@ pub(crate) struct Row {
     pub(crate) input: Input,
     pub(crate) output: TupleOutput,
     pub(crate) unextractable: bool,
+    pub(crate) subsumed: bool,
 }
 
 impl Row {
-    fn new(input: Input, output: TupleOutput, unextractable: bool) -> Row {
+    fn new(input: Input, output: TupleOutput, unextractable: bool, subsumed: bool) -> Row {
         Row {
             input,
             output,
             unextractable,
+            subsumed,
         }
     }
 }
@@ -155,6 +157,15 @@ impl Table {
         self.vals[*off].unextractable = true;
     }
 
+    pub(crate) fn mark_subsumed(&mut self, inputs: &[Value]) {
+        let hash = hash_values(inputs);
+        let TableOffset { off, .. } = self
+            .table
+            .get(hash, search_for!(self, hash, inputs))
+            .unwrap();
+        self.vals[*off].subsumed = true;
+    }
+
     /// Insert the given data into the table at the given timestamp. Return the
     /// previous value, if there was one.
     pub(crate) fn insert(&mut self, inputs: &[Value], out: Value, ts: u32) -> Option<Value> {
@@ -166,6 +177,7 @@ impl Table {
                 res = prev;
                 out
             },
+            false,
             false,
         );
         res
@@ -184,6 +196,7 @@ impl Table {
         ts: u32,
         on_merge: impl FnOnce(Option<Value>) -> Value,
         unextractable: bool,
+        subsumed: bool,
     ) {
         assert!(ts >= self.max_ts);
         self.max_ts = ts;
@@ -211,6 +224,7 @@ impl Table {
                     timestamp: ts,
                 },
                 unextractable,
+                subsumed,
             ));
             *off = new_offset;
             return;
@@ -223,6 +237,7 @@ impl Table {
                 timestamp: ts,
             },
             unextractable,
+            subsumed,
         ));
         self.table.insert(
             hash,
@@ -302,7 +317,7 @@ impl Table {
             .map(|(_, y, z)| (y, z))
     }
 
-    /// Iterate over the live entries in the offset range, passing back the
+    /// Iterate over the live and not subsumed entries in the offset range, passing back the
     /// offset corresponding to each entry.
     pub(crate) fn iter_range(
         &self,
@@ -313,11 +328,12 @@ impl Table {
                 Row {
                     input: inp,
                     output: out,
+                    subsumed,
                     ..
                 },
                 i,
             )| {
-                if inp.live() {
+                if inp.live() & !subsumed {
                     Some((i, inp.data(), out))
                 } else {
                     None

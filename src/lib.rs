@@ -1920,4 +1920,44 @@ mod tests {
             }) if s == &GlobalSymbol::from("exp")
         ));
     }
+
+    #[test]
+    fn test_subsume() {
+        // Test that if we mark a term as subsumed than no rewrites will be applied to it, but it can still be extracted
+        // We can test this by adding a commutative additon property, and verifying it isn't applied on one of the terms
+        // but is on the other
+        let mut egraph = EGraph::default();
+        egraph
+            .parse_and_run_program(
+                r#"
+            (datatype Math
+              (Add Math Math)
+              (Num i64))
+
+            (rewrite (Add a b) (Add b a))
+            (let x (Add (Num 1) (Num 2)))
+            (let y (Add (Num 3) (Num 4)))
+            (subsume (Add (Num 1) (Num 2)))
+            (run 1)
+            (query-extract :variants 10 y)
+            "#,
+            )
+            .unwrap();
+        assert!(matches!(
+            egraph.get_extract_report(),
+            Some(crate::ExtractReport::Variants { terms, .. }) if terms.len() == 2
+        ));
+
+        egraph
+            .parse_and_run_program(
+                r#"
+            (query-extract :variants 10 x)
+            "#,
+            )
+            .unwrap();
+        assert!(matches!(
+            egraph.get_extract_report(),
+            Some(crate::ExtractReport::Variants { terms, .. }) if terms.len() == 1
+        ));
+    }
 }

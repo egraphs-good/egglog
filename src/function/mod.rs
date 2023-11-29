@@ -4,6 +4,8 @@ use crate::*;
 use index::*;
 use smallvec::SmallVec;
 
+use self::table::Row;
+
 mod binary_search;
 pub mod index;
 pub(crate) mod table;
@@ -205,6 +207,10 @@ impl Function {
         res
     }
 
+    pub fn subsume(&mut self, inputs: &[Value]) {
+        self.nodes.mark_subsumed(inputs);
+    }
+
     /// Mark the given inputs as unextractable.
     pub fn mark_unextractable(&mut self, inputs: &[Value]) {
         if !self.schema.output.is_eq_sort() {
@@ -403,7 +409,11 @@ impl Function {
             // Entry is stale
             return result;
         };
-        let unextractable = self.nodes.get_row(args).unwrap().unextractable;
+        let Row {
+            unextractable,
+            subsumed,
+            ..
+        } = self.nodes.get_row(args).unwrap();
 
         let mut out_val = out.value;
         scratch.clear();
@@ -452,7 +462,8 @@ impl Function {
                     out_val
                 }
             },
-            unextractable,
+            *unextractable,
+            *subsumed,
         );
         if let Some((inputs, _)) = self.nodes.get_index(i) {
             if inputs != &scratch[..] {

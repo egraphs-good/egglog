@@ -516,7 +516,8 @@ impl<'a> ActionChecker<'a> {
                 let (_, _ty) = self.infer_expr(&fake_call)?;
                 let fake_instr = self.instructions.pop().unwrap();
                 assert!(matches!(fake_instr, Instruction::CallFunction(..)));
-                self.instructions.push(Instruction::DeleteRow(*f));
+                self.instructions
+                    .push(Instruction::ChangeRow(ChangeRow::Delete, *f));
                 Ok(())
             }
             Action::Unextractable(f, args) => {
@@ -524,7 +525,17 @@ impl<'a> ActionChecker<'a> {
                 let (_, _ty) = self.infer_expr(&fake_call)?;
                 let fake_instr = self.instructions.pop().unwrap();
                 assert!(matches!(fake_instr, Instruction::CallFunction(..)));
-                self.instructions.push(Instruction::UnextractableRow(*f));
+                self.instructions
+                    .push(Instruction::ChangeRow(ChangeRow::Unextractable, *f));
+                Ok(())
+            }
+            Action::Subsume(f, args) => {
+                let fake_call = Expr::Call(*f, args.clone());
+                let (_, _ty) = self.infer_expr(&fake_call)?;
+                let fake_instr = self.instructions.pop().unwrap();
+                assert!(matches!(fake_instr, Instruction::CallFunction(..)));
+                self.instructions
+                    .push(Instruction::ChangeRow(ChangeRow::Subsume, *f));
                 Ok(())
             }
             Action::Union(a, b) => {
@@ -699,8 +710,7 @@ enum Instruction {
     // function to call, and whether to make defaults
     CallFunction(Symbol, bool),
     CallPrimitive(Primitive, usize),
-    DeleteRow(Symbol),
-    UnextractableRow(Symbol),
+    ChangeRow(ChangeRow, Symbol),
     Set(Symbol),
     Union(usize),
     Extract(usize),
@@ -977,18 +987,17 @@ impl EGraph {
                 Instruction::Pop => {
                     stack.pop().unwrap();
                 }
-                Instruction::DeleteRow(f) => {
+                Instruction::ChangeRow(change, f) => {
                     let function = self.functions.get_mut(f).unwrap();
                     let new_len = stack.len() - function.schema.input.len();
                     let args = &stack[new_len..];
-                    function.remove(args, self.timestamp);
-                    stack.truncate(new_len);
-                }
-                Instruction::UnextractableRow(f) => {
-                    let function = self.functions.get_mut(f).unwrap();
-                    let new_len = stack.len() - function.schema.input.len();
-                    let args = &stack[new_len..];
-                    function.mark_unextractable(args);
+                    match change {
+                        ChangeRow::Delete => {
+                            function.remove(args, self.timestamp);
+                        }
+                        ChangeRow::Subsume => function.subsume(args),
+                        ChangeRow::Unextractable => function.mark_unextractable(args),
+                    };
                     stack.truncate(new_len);
                 }
             }
