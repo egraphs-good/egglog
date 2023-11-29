@@ -110,8 +110,6 @@ impl Run {
 
     fn should_fail(&self) -> bool {
         self.path.to_string_lossy().contains("fail-typecheck")
-            // Marking as subsumed and non extractable is not supported for eqsat values with the term encoding
-            || (self.path.to_string_lossy().contains("replace") & self.test_terms_encoding)
     }
 }
 
@@ -127,22 +125,28 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
             test_terms_encoding: false,
         };
         let should_fail = run.should_fail();
+        // Marking as subsumed and non extractable is not supported for eqsat values with the term encoding
+        let works_with_term_encoding = !run.path.to_string_lossy().contains("replace");
 
         push_trial(run.clone());
-        push_trial(Run {
-            test_terms_encoding: true,
-            ..run.clone()
-        });
+        if works_with_term_encoding {
+            push_trial(Run {
+                test_terms_encoding: true,
+                ..run.clone()
+            });
+        }
         if !should_fail {
             push_trial(Run {
                 resugar: true,
                 ..run.clone()
             });
-            push_trial(Run {
-                resugar: true,
-                test_terms_encoding: true,
-                ..run.clone()
-            });
+            if works_with_term_encoding {
+                push_trial(Run {
+                    resugar: true,
+                    test_terms_encoding: true,
+                    ..run.clone()
+                });
+            }
         }
     }
 
