@@ -317,7 +317,7 @@ impl Table {
             .map(|(_, y, z)| (y, z))
     }
 
-    /// Iterate over the live and not subsumed entries in the offset range, passing back the
+    /// Iterate over the live entries in the offset range, passing back the
     /// offset corresponding to each entry.
     pub(crate) fn iter_range(
         &self,
@@ -328,12 +328,11 @@ impl Table {
                 Row {
                     input: inp,
                     output: out,
-                    subsumed,
                     ..
                 },
                 i,
             )| {
-                if inp.live() & !subsumed {
+                if inp.live() {
                     Some((i, inp.data(), out))
                 } else {
                     None

@@ -937,7 +937,7 @@ impl EGraph {
             if rule.banned_until <= iteration {
                 let mut fuel = safe_shl(match_limit, rule.times_banned);
                 let rule_search_start = Instant::now();
-                self.run_query(&rule.query, rule.todo_timestamp, |values| {
+                self.run_query(&rule.query, rule.todo_timestamp, false, |values| {
                     assert_eq!(values.len(), rule.query.vars.len());
                     all_values.extend_from_slice(values);
                     if fuel > 0 {
@@ -1183,7 +1183,7 @@ impl EGraph {
 
         let mut matched = false;
         // TODO what timestamp to use?
-        self.run_query(&query, 0, |values| {
+        self.run_query(&query, 0, true, |values| {
             assert_eq!(values.len(), query.vars.len());
             matched = true;
             Err(())
@@ -1492,7 +1492,6 @@ impl EGraph {
         if stop == CompilerPassStop::TypecheckTermEncoding {
             return Ok(program);
         }
-
         Ok(program)
     }
 
@@ -1907,7 +1906,8 @@ mod tests {
                 (rewrite (cheap) (exp) :replace)
                 (cheap)
                 (run 1)
-                (query-extract (cheap))
+                ; Must use extract instead of query-extract because can't query for (cheap) now
+                (extract (cheap))
                 "#,
             )
             .unwrap();
@@ -1919,15 +1919,14 @@ mod tests {
                 ..
             }) if s == &GlobalSymbol::from("exp")
         ));
-
-        // Also then the left hand side should also be subsumed
+        // If we rerite cheap to another term, that rewrite shouldnt trigger since its been subsumed.
         egraph
             .parse_and_run_program(
                 r#"
                 (function cheap-1 () Math :cost 1)
                 (rewrite (cheap) (cheap-1))
                 (run 1)
-                (query-extract (cheap))
+                (extract (cheap))
                 "#,
             )
             .unwrap();
@@ -1958,7 +1957,7 @@ mod tests {
             (let y (Add (Num 3) (Num 4)))
             (subsume (Add (Num 1) (Num 2)))
             (run 1)
-            (query-extract :variants 10 y)
+            (extract y 10)
             "#,
             )
             .unwrap();
@@ -1970,7 +1969,7 @@ mod tests {
         egraph
             .parse_and_run_program(
                 r#"
-            (query-extract :variants 10 x)
+            (extract x 10)
             "#,
             )
             .unwrap();
