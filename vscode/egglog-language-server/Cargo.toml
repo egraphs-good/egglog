@@ -8,7 +8,7 @@ edition = "2021"
 [dependencies]
 tokio = { version = "1.32.0", features = ["full"] }
 tower-lsp = "0.20.0"
-tree-sitter-egglog = { git = "https://github.com/hatoo/tree-sitter-egglog.git" }
+tree-sitter-egglog = { path = "tree-sitter-egglog" }
 tree-sitter = "~0.20.10"
 tree-sitter-traversal = "0.1.2"
 tree-sitter-highlight = "0.20.1"
