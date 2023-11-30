@@ -1,0 +1,61 @@
+{
+	"$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+	"name": "egglog",
+	"patterns": [
+		{
+			"include": "#command"
+		},
+		{
+			"include": "#ident"
+		},
+		{
+			"include": "#num"
+		},
+		{
+			"include": "#string"
+		},
+		{
+			"include": "#linecomment"
+		}
+	],
+	"repository": {
+		"command": {
+			"patterns": [
+				{
+					"name": "keyword.control",
+					"match": "\\b(birewrite|calc|check|clear|clear-rules|datatype|declare|define|delete|extract|fail|function|include|input|let|panic|pop|print-stats|print-size|print-table|print|push|query|relation|repeat|rewrite|rule|run-schedule|run|set|sort|union)\\b"
+				}
+			]
+		},
+		"ident": {
+			"patterns": [
+				{
+					"name": "variable.parameter",
+					"match": "[a-zA-Z][a-zA-Z0-9_]*"
+				}
+			]
+		},
+		"num": {
+			"patterns": [
+				{
+					"name": "constant.numeric",
+					"match": "\\-?[0-9]+(\\.[0-9]*)?"
+				}
+			]
+		},
+		"string": {
+			"name": "string.quoted.double",
+			"begin": "\"",
+			"end": "\""
+		},
+		"linecomment": {
+			"patterns": [
+				{
+					"name": "comment.line",
+					"match": ";.*$\n?"
+				}
+			]
+		}
+	},
+	"scopeName": "source.egglog"
+}

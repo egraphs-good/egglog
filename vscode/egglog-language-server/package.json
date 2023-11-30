@@ -1,0 +1,74 @@
+{
+    "name": "egglog-language",
+    "version": "0.0.20",
+    "author": "hatoo",
+    "publisher": "hatookov",
+    "license": "MIT",
+    "categories": [
+        "Programming Languages"
+    ],
+    "keywords": [
+        "egglog"
+    ],
+    "description": "egglog language support for VSCode",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/hatoo/egglog-language-server.git"
+    },
+    "engines": {
+        "vscode": "^1.75.0"
+    },
+    "main": "./extension.js",
+    "contributes": {
+        "languages": [
+            {
+                "id": "egglog",
+                "extensions": [
+                    ".egg"
+                ],
+                "configuration": "./language-configuration.json"
+            }
+        ],
+        "grammars": [
+            {
+                "language": "egglog",
+                "scopeName": "source.egglog",
+                "path": "./syntaxes/eggsmol.tmLanguage.json"
+            }
+        ],
+        "commands": [
+            {
+                "title": "egglog run",
+                "command": "egglog.egglog_run"
+            },
+            {
+                "title": "egglog desugar",
+                "command": "egglog.egglog_desugar"
+            },
+            {
+                "title": "egglog dot preview",
+                "command": "egglog.egglog_dot_preview"
+            }
+        ],
+        "keybindings": [
+            {
+                "command": "egglog.egglog_run",
+                "key": "F7",
+                "when": "editorLangId == 'egglog'"
+            },
+            {
+                "command": "egglog.egglog_desugar",
+                "key": "F8",
+                "when": "editorLangId == 'egglog'"
+            },
+            {
+                "command": "egglog.egglog_dot_preview",
+                "key": "F9",
+                "when": "editorLangId == 'egglog'"
+            }
+        ]
+    },
+    "dependencies": {
+        "vscode-languageclient": "^8.1.0"
+    }
+}
