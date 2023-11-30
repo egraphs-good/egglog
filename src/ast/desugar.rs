@@ -602,11 +602,11 @@ pub(crate) fn desugar_command(
         } => desugar.desugar_function(&FunctionDecl::relation(constructor, inputs)),
         Command::Declare { name, sort } => desugar.declare(name, sort),
         Command::Datatype { name, variants } => desugar_datatype(name, variants),
-        Command::Rewrite(ruleset, rewrite, replace) => desugar_rewrite(
+        Command::Rewrite(ruleset, rewrite, is_replace) => desugar_rewrite(
             ruleset,
             rewrite_name(&rewrite).into(),
             &rewrite,
-            replace,
+            is_replace,
             desugar,
         ),
         Command::BiRewrite(ruleset, rewrite) => {

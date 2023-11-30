@@ -1090,11 +1090,9 @@ pub enum Action {
     /// Be wary! Only delete entries that are subsumed in some way or
     /// guaranteed to be not useful.
     Delete(Symbol, Vec<Expr>),
-    /// Set an entry to be `unextractable`
-    /// so that it cannot be extracted.
-    /// Note that this cannot be an expr but has to be a symbol and args, because we need to refer to a specific row
+    /// Set a function and all args equivalent to these as `unextractable`
     Unextractable(Symbol, Vec<Expr>),
-    /// `subsume` an an entry so that it cannot be queries for during rules or rewrites.
+    /// Mark this function and all euivalent args as `subsume`d so that it cannot be queried for during rules or rewrites.
     Subsume(Symbol, Vec<Expr>),
     /// `union` two datatypes, making them equal
     /// in the implicit, global equality relation

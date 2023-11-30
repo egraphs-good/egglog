@@ -147,23 +147,10 @@ impl Table {
         debug_assert!(self.vals[*off].input.live());
         Some(&self.vals[*off])
     }
-
-    pub(crate) fn mark_unextractable(&mut self, inputs: &[Value]) {
+    pub(crate) fn get_row_mut(&mut self, inputs: &[Value]) -> Option<&mut Row> {
         let hash = hash_values(inputs);
-        let TableOffset { off, .. } = self
-            .table
-            .get(hash, search_for!(self, hash, inputs))
-            .unwrap();
-        self.vals[*off].unextractable = true;
-    }
-
-    pub(crate) fn mark_subsumed(&mut self, inputs: &[Value]) {
-        let hash = hash_values(inputs);
-        let TableOffset { off, .. } = self
-            .table
-            .get(hash, search_for!(self, hash, inputs))
-            .unwrap();
-        self.vals[*off].subsumed = true;
+        let TableOffset { off, .. } = self.table.get(hash, search_for!(self, hash, inputs))?;
+        Some(&mut self.vals[*off])
     }
 
     /// Insert the given data into the table at the given timestamp. Return the

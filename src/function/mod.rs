@@ -208,7 +208,7 @@ impl Function {
     }
 
     pub fn subsume(&mut self, inputs: &[Value]) {
-        self.nodes.mark_subsumed(inputs);
+        self.nodes.get_row_mut(inputs).unwrap().subsumed = true;
     }
 
     /// Mark the given inputs as unextractable.
@@ -216,7 +216,7 @@ impl Function {
         if !self.schema.output.is_eq_sort() {
             panic!("Only eq sorts can be marked unextractable")
         }
-        self.nodes.mark_unextractable(inputs);
+        self.nodes.get_row_mut(inputs).unwrap().unextractable = true;
     }
 
     /// Check if the given inputs are unextractable.

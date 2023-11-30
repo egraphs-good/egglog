@@ -84,8 +84,8 @@ impl EGraph {
 
                 func.nodes
                     .iter()
-                    .filter(|&(_inputs, output)| {
-                        (output.value == output_value) & (!func.check_unextractable(_inputs))
+                    .filter(|&(inputs, output)| {
+                        (output.value == output_value) & (!func.check_unextractable(inputs))
                     })
                     .map(|(inputs, _output)| {
                         let node = Node { sym, inputs };
