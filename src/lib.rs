@@ -1854,6 +1854,38 @@ mod tests {
     }
 
     #[test]
+    fn test_unextractable_insert_and_merge() {
+        // Example adapted from https://github.com/egraphs-good/egglog/pull/301#pullrequestreview-1756826062
+        let mut egraph = EGraph::default();
+
+        egraph
+            .parse_and_run_program(
+                r#"
+                (datatype Expr
+                    (f Expr)
+                    (Num i64))
+                (function exp () Expr :cost 100)
+
+                  (f (Num 1))
+                  (unextractable (f (Num 1)))
+                  (f (Num 2))
+
+                  (union (Num 2) (Num 1))
+                  (union (f (Num 2)) (exp))
+                  (extract (f (Num 2)))
+                "#,
+            )
+            .unwrap();
+        assert!(matches!(
+            egraph.get_extract_report(),
+            Some(crate::ExtractReport::Best {
+                term: Term::App(s, ..),
+                ..
+            }) if s == &GlobalSymbol::from("exp")
+        ));
+    }
+
+    #[test]
     fn test_unextractable_action_extract_multiple() {
         // Test when an expression is set as unextractble, it isn't extracted, like with
         // extract multiple
