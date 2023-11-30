@@ -13,7 +13,7 @@ DIST_WASM=$(addprefix ${WWW}, ${WASM})
 all: test nits web docs
 
 test:
-	cargo nextest run --release
+	cargo nextest run --release --workspace
 	# nextest doesn't run doctests, so do it here
 	cargo test --doc --release
 
