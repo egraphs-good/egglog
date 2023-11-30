@@ -896,6 +896,9 @@ struct TrieAccess<'a> {
     timestamp_range: Range<u32>,
     column: usize,
     constraints: Vec<Constraint>,
+    // If we are querying to run a rule, we should not include subsumed expressions
+    // but if we are querying to run a check we can include them.
+    // So we have a flag to control this behavior and pass it down to here.
     include_subsumed: bool,
 }
 
@@ -909,13 +912,9 @@ impl<'a> TrieAccess<'a> {
     fn filter_live<'b: 'a>(&'b self, ixs: &'b [Offset]) -> impl Iterator<Item = usize> + 'a {
         ixs.iter().copied().filter_map(move |ix| {
             let ix = ix as usize;
-            let (inp, out) = self.function.nodes.get_index(ix)?;
+            let (inp, out) = self.function.nodes.get_index(ix, self.include_subsumed)?;
             if self.timestamp_range.contains(&out.timestamp)
                 && self.constraints.iter().all(|c| c.check(inp, out))
-                // If we are querying to run a rule, we should not include subsumed expressions
-                // but if we are querying to run a check we can include them.
-                // So we have a flag to control this behavior and pass it down to here.
-                && (self.include_subsumed || !self.function.nodes.get_index_row(ix).unwrap().subsumed)
             {
                 Some(ix)
             } else {
@@ -965,7 +964,7 @@ impl<'a> TrieAccess<'a> {
         } else if self.column < arity {
             for idx in idxs {
                 let i = *idx as usize;
-                if let Some((tup, out)) = self.function.nodes.get_index(i) {
+                if let Some((tup, out)) = self.function.nodes.get_index(i, self.include_subsumed) {
                     insert(i, tup, out, tup[self.column])
                 }
             }
@@ -973,7 +972,7 @@ impl<'a> TrieAccess<'a> {
             assert_eq!(self.column, arity);
             for idx in idxs {
                 let i = *idx as usize;
-                if let Some((tup, out)) = self.function.nodes.get_index(i) {
+                if let Some((tup, out)) = self.function.nodes.get_index(i, self.include_subsumed) {
                     insert(i, tup, out, out.value)
                 }
             }

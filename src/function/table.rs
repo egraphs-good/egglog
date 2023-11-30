@@ -299,14 +299,19 @@ impl Table {
         true
     }
 
-    /// Returns the entries at the given index if the entry is live and the index in bounds.
-    pub(crate) fn get_index(&self, i: usize) -> Option<(&[Value], &TupleOutput)> {
+    /// Returns the entries at the given index if the entry is live (and possibly not subsumed) and the index in bounds.
+    pub(crate) fn get_index(
+        &self,
+        i: usize,
+        include_subsumed: bool,
+    ) -> Option<(&[Value], &TupleOutput)> {
         let Row {
             input: inp,
             output: out,
+            subsumed,
             ..
         } = self.get_index_row(i)?;
-        if !inp.live() {
+        if !inp.live() || (!include_subsumed && *subsumed) {
             return None;
         }
         Some((inp.data(), out))

@@ -403,7 +403,7 @@ impl Function {
     ) -> Result<(), Error> {
         let mut result: Result<(), Error> = Ok(());
         let mut modified = false;
-        let (args, out) = if let Some(x) = self.nodes.get_index(i) {
+        let (args, out) = if let Some(x) = self.nodes.get_index(i, true) {
             x
         } else {
             // Entry is stale
@@ -465,7 +465,7 @@ impl Function {
             *unextractable,
             *subsumed,
         );
-        if let Some((inputs, _)) = self.nodes.get_index(i) {
+        if let Some((inputs, _)) = self.nodes.get_index(i, true) {
             if inputs != &scratch[..] {
                 scratch.clear();
                 scratch.extend_from_slice(inputs);
