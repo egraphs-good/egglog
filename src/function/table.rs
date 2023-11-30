@@ -207,10 +207,13 @@ impl Table {
             let Row {
                 input: inp,
                 output: prev,
-                ..
+                unextractable: old_unextractable,
+                subsumed: old_subsumed,
             } = &mut self.vals[*off];
+            let (old_unextractable, old_subsumed) = (*old_unextractable, *old_subsumed);
             let next = on_merge(Some(prev.value));
-            if next == prev.value {
+            if next == prev.value && old_unextractable == unextractable && old_subsumed == subsumed
+            {
                 return;
             }
             inp.stale_at = ts;
@@ -223,8 +226,10 @@ impl Table {
                     value: next,
                     timestamp: ts,
                 },
-                unextractable,
-                subsumed,
+                // Take lattice join of old and new status's
+                // https://github.com/egraphs-good/egglog/pull/301#discussion_r1410286714
+                unextractable || old_unextractable,
+                subsumed || old_subsumed,
             ));
             *off = new_offset;
             return;
