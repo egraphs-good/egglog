@@ -1,6 +1,5 @@
 target/
 notes.md
-.vscode
 node_modules
 dist/
 pkg/

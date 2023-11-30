@@ -9,7 +9,7 @@ license = "MIT"
 readme = "README.md"
 
 [workspace]
-members = [".", "web-demo"]
+members = [".", "web-demo", "vscode/egglog-language-server"]
 
 [[test]]
 harness = false
