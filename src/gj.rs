@@ -127,9 +127,10 @@ impl<'b> Context<'b> {
         egraph: &'b EGraph,
         cq: &'b CompiledQuery,
         timestamp_ranges: &[Range<u32>],
+        include_subsumed: bool,
     ) -> Option<(Self, Program<'b>, Vec<Option<usize>>)> {
         let (program, join_var_ordering, intersections) =
-            egraph.compile_program(cq, timestamp_ranges)?;
+            egraph.compile_program(cq, timestamp_ranges, include_subsumed)?;
 
         let ctx = Context {
             query: cq,
@@ -366,6 +367,7 @@ impl EGraph {
         atom: &Atom<Symbol>,
         column: usize,
         timestamp_range: Range<u32>,
+        include_subsumed: bool,
     ) -> TrieAccess {
         let function = &self.functions[&atom.head];
 
@@ -392,6 +394,7 @@ impl EGraph {
             timestamp_range,
             column,
             constraints,
+            include_subsumed,
         }
     }
 
@@ -400,13 +403,14 @@ impl EGraph {
         var: Symbol,
         atom: &Atom<Symbol>,
         timestamp_range: Range<u32>,
+        include_subsumed: bool,
     ) -> TrieAccess {
         let column = atom
             .args
             .iter()
             .position(|arg| arg == &AtomTerm::Var(var))
             .unwrap();
-        self.make_trie_access_for_column(atom, column, timestamp_range)
+        self.make_trie_access_for_column(atom, column, timestamp_range, include_subsumed)
     }
 
     // Returns `None` when no program is needed,
@@ -415,6 +419,7 @@ impl EGraph {
         &self,
         query: &CompiledQuery,
         timestamp_ranges: &[Range<u32>],
+        include_subsumed: bool,
     ) -> Option<(
         Program,
         Vec<Symbol>,        /* variable ordering */
@@ -505,7 +510,8 @@ impl EGraph {
             }
             consts.iter().map(|(col, val)| {
                 let range = timestamp_ranges[*atom].clone();
-                let trie_access = self.make_trie_access_for_column(&atoms[*atom], *col, range);
+                let trie_access =
+                    self.make_trie_access_for_column(&atoms[*atom], *col, range, include_subsumed);
 
                 Instr::ConstrainConstant {
                     index: *atom,
@@ -530,7 +536,7 @@ impl EGraph {
                     .map(|&atom_idx| {
                         let atom = &atoms[atom_idx];
                         let range = timestamp_ranges[atom_idx].clone();
-                        let access = self.make_trie_access(v, atom, range);
+                        let access = self.make_trie_access(v, atom, range, include_subsumed);
                         let initial_col = &mut initial_columns[atom_idx];
                         if initial_col.is_none() {
                             *initial_col = Some(access.column);
@@ -641,7 +647,9 @@ impl EGraph {
         F: FnMut(&[Value]) -> Result,
     {
         // do the gj
-        if let Some((mut ctx, program, cols)) = Context::new(self, cq, timestamp_ranges) {
+        if let Some((mut ctx, program, cols)) =
+            Context::new(self, cq, timestamp_ranges, include_subsumed)
+        {
             let start = Instant::now();
             let atom_info = if let Some(atom_i) = atom_i {
                 let atom = &cq.query.funcs().collect::<Vec<_>>()[atom_i];
@@ -665,12 +673,12 @@ impl EGraph {
                 // tries.push(LazyTrie::default());
                 if let Some(target) = col {
                     if let Some(col) = self.functions[&atom.head].column_index(*target, ts) {
-                        tries.push(LazyTrie::from_column_index(col, include_subsumed))
+                        tries.push(LazyTrie::from_column_index(col))
                     } else {
-                        tries.push(LazyTrie::new(include_subsumed));
+                        tries.push(LazyTrie::default());
                     }
                 } else {
-                    tries.push(LazyTrie::new(include_subsumed));
+                    tries.push(LazyTrie::default());
                 }
             }
             let mut trie_refs = tries.iter().collect::<Vec<_>>();
@@ -753,16 +761,13 @@ impl EGraph {
             } else {
                 self.gj_for_atom(None, &timestamp_ranges, cq, include_subsumed, &mut f);
             }
-        } else if let Some((mut ctx, program, _)) = Context::new(self, cq, &[]) {
+        } else if let Some((mut ctx, program, _)) = Context::new(self, cq, &[], include_subsumed) {
             let mut meausrements = HashMap::<usize, Vec<usize>>::default();
             let stages = InputSizes {
                 stage_sizes: &mut meausrements,
                 cur_stage: 0,
             };
-            let tries = LazyTrie::make_initial_vec(
-                cq.query.funcs().collect::<Vec<_>>().len(),
-                include_subsumed,
-            ); // TODO: bad use of collect here
+            let tries = LazyTrie::make_initial_vec(cq.query.funcs().collect::<Vec<_>>().len()); // TODO: bad use of collect here
             let mut trie_refs = tries.iter().collect::<Vec<_>>();
             ctx.eval(&mut trie_refs, &program.0, stages, &mut f)
                 .unwrap_or(());
@@ -770,8 +775,7 @@ impl EGraph {
     }
 }
 
-type IncludeSubsumed = bool;
-struct LazyTrie(UnsafeCell<LazyTrieInner>, IncludeSubsumed);
+struct LazyTrie(UnsafeCell<LazyTrieInner>);
 
 impl Debug for LazyTrie {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -792,15 +796,15 @@ enum LazyTrieInner {
     Sparse(SparseMap),
 }
 
-impl LazyTrie {
-    fn new(include_subsumed: bool) -> LazyTrie {
-        LazyTrie(
-            UnsafeCell::new(LazyTrieInner::Delayed(Default::default())),
-            include_subsumed,
-        )
+impl Default for LazyTrie {
+    fn default() -> Self {
+        LazyTrie(UnsafeCell::new(LazyTrieInner::Delayed(Default::default())))
     }
-    fn make_initial_vec(n: usize, include_subsumed: bool) -> Vec<Self> {
-        (0..n).map(|_| LazyTrie::new(include_subsumed)).collect()
+}
+
+impl LazyTrie {
+    fn make_initial_vec(n: usize) -> Vec<Self> {
+        (0..n).map(|_| LazyTrie::default()).collect()
     }
 
     fn len(&self) -> usize {
@@ -810,31 +814,25 @@ impl LazyTrie {
             LazyTrieInner::Borrowed { index, .. } => index.len(),
         }
     }
-    fn from_column_index(index: Rc<ColumnIndex>, include_subsumed: bool) -> LazyTrie {
-        LazyTrie(
-            UnsafeCell::new(LazyTrieInner::Borrowed {
-                index,
-                map: Default::default(),
-            }),
-            include_subsumed,
-        )
+    fn from_column_index(index: Rc<ColumnIndex>) -> LazyTrie {
+        LazyTrie(UnsafeCell::new(LazyTrieInner::Borrowed {
+            index,
+            map: Default::default(),
+        }))
     }
-    fn from_indexes(ixs: impl Iterator<Item = usize>, include_subsumed: bool) -> Option<LazyTrie> {
+    fn from_indexes(ixs: impl Iterator<Item = usize>) -> Option<LazyTrie> {
         let data = SmallVec::from_iter(ixs.map(|x| x as RowIdx));
         if data.is_empty() {
             return None;
         }
 
-        Some(LazyTrie(
-            UnsafeCell::new(LazyTrieInner::Delayed(data)),
-            include_subsumed,
-        ))
+        Some(LazyTrie(UnsafeCell::new(LazyTrieInner::Delayed(data))))
     }
 
     unsafe fn force_mut(&self, access: &TrieAccess) -> *mut LazyTrieInner {
         let this = &mut *self.0.get();
         if let LazyTrieInner::Delayed(idxs) = this {
-            *this = access.make_trie_inner(idxs, self.1);
+            *this = access.make_trie_inner(idxs);
         }
         self.0.get()
     }
@@ -845,13 +843,12 @@ impl LazyTrie {
             LazyTrieInner::Borrowed { index, .. } => {
                 let mut map = SparseMap::with_capacity_and_hasher(index.len(), Default::default());
                 map.extend(index.iter().filter_map(|(v, ixs)| {
-                    LazyTrie::from_indexes(access.filter_live(ixs, self.1), self.1)
-                        .map(|trie| (v, trie))
+                    LazyTrie::from_indexes(access.filter_live(ixs)).map(|trie| (v, trie))
                 }));
                 *this = LazyTrieInner::Sparse(map);
             }
             LazyTrieInner::Delayed(idxs) => {
-                *this = access.make_trie_inner(idxs, self.1);
+                *this = access.make_trie_inner(idxs);
             }
             LazyTrieInner::Sparse(_) => {}
         }
@@ -883,10 +880,9 @@ impl LazyTrie {
                 let ixs = index.get(&value)?;
                 match map.entry(value) {
                     HEntry::Occupied(o) => Some(o.into_mut()),
-                    HEntry::Vacant(v) => Some(v.insert(LazyTrie::from_indexes(
-                        access.filter_live(ixs, self.1),
-                        self.1,
-                    )?)),
+                    HEntry::Vacant(v) => {
+                        Some(v.insert(LazyTrie::from_indexes(access.filter_live(ixs))?))
+                    }
                 }
             }
             LazyTrieInner::Delayed(_) => unreachable!(),
@@ -900,6 +896,7 @@ struct TrieAccess<'a> {
     timestamp_range: Range<u32>,
     column: usize,
     constraints: Vec<Constraint>,
+    include_subsumed: bool,
 }
 
 impl<'a> std::fmt::Display for TrieAccess<'a> {
@@ -909,11 +906,7 @@ impl<'a> std::fmt::Display for TrieAccess<'a> {
 }
 
 impl<'a> TrieAccess<'a> {
-    fn filter_live<'b: 'a>(
-        &'b self,
-        ixs: &'b [Offset],
-        include_subsumed: bool,
-    ) -> impl Iterator<Item = usize> + 'a {
+    fn filter_live<'b: 'a>(&'b self, ixs: &'b [Offset]) -> impl Iterator<Item = usize> + 'a {
         ixs.iter().copied().filter_map(move |ix| {
             let ix = ix as usize;
             let (inp, out) = self.function.nodes.get_index(ix)?;
@@ -922,7 +915,7 @@ impl<'a> TrieAccess<'a> {
                 // If we are querying to run a rule, we should not include subsumed expressions
                 // but if we are querying to run a check we can include them.
                 // So we have a flag to control this behavior and pass it down to here.
-                && (include_subsumed || !self.function.nodes.get_index_row(ix).unwrap().subsumed)
+                && (self.include_subsumed || !self.function.nodes.get_index_row(ix).unwrap().subsumed)
             {
                 Some(ix)
             } else {
@@ -932,7 +925,7 @@ impl<'a> TrieAccess<'a> {
     }
 
     #[cold]
-    fn make_trie_inner(&self, idxs: &[RowIdx], include_subsumed: bool) -> LazyTrieInner {
+    fn make_trie_inner(&self, idxs: &[RowIdx]) -> LazyTrieInner {
         let arity = self.function.schema.input.len();
         let mut map = SparseMap::default();
         let mut insert = |i: usize, tup: &[Value], out: &TupleOutput, val: Value| {
@@ -949,12 +942,9 @@ impl<'a> TrieAccess<'a> {
                         }
                     }
                     Entry::Vacant(e) => {
-                        e.insert(LazyTrie(
-                            UnsafeCell::new(LazyTrieInner::Delayed(smallvec::smallvec![
-                                i as RowIdx,
-                            ])),
-                            include_subsumed,
-                        ));
+                        e.insert(LazyTrie(UnsafeCell::new(LazyTrieInner::Delayed(
+                            smallvec::smallvec![i as RowIdx,],
+                        ))));
                     }
                 }
             }
