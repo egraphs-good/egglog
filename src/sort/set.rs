@@ -60,6 +60,8 @@ impl SetSort {
             "set-union".into(),
             "set-diff".into(),
             "set-intersect".into(),
+            "set-get".into(),
+            "set-length".into(),
         ]
     }
 }
@@ -139,6 +141,16 @@ impl Sort for SetSort {
         typeinfo.add_primitive(Remove {
             name: "set-remove".into(),
             set: self.clone(),
+        });
+        typeinfo.add_primitive(Get {
+            name: "set-get".into(),
+            set: self.clone(),
+            i64: typeinfo.get_sort_nofail(),
+        });
+        typeinfo.add_primitive(Length {
+            name: "set-length".into(),
+            set: self.clone(),
+            i64: typeinfo.get_sort_nofail(),
         });
         typeinfo.add_primitive(Union {
             name: "set-union".into(),
@@ -399,6 +411,52 @@ impl PrimitiveLike for Intersect {
         set1.retain(|k| set2.contains(k));
         // set.insert(values[1], values[2]);
         set1.store(&self.set)
+    }
+}
+
+struct Length {
+    name: Symbol,
+    set: Arc<SetSort>,
+    i64: Arc<I64Sort>,
+}
+
+impl PrimitiveLike for Length {
+    fn name(&self) -> Symbol {
+        self.name
+    }
+
+    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(self.name(), vec![self.set.clone(), self.i64.clone()]).into_box()
+    }
+
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+        let set = ValueSet::load(&self.set, &values[0]);
+        Some(Value::from(set.len() as i64))
+    }
+}
+struct Get {
+    name: Symbol,
+    set: Arc<SetSort>,
+    i64: Arc<I64Sort>,
+}
+
+impl PrimitiveLike for Get {
+    fn name(&self) -> Symbol {
+        self.name
+    }
+
+    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![self.set.clone(), self.i64.clone(), self.set.element()],
+        )
+        .into_box()
+    }
+
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+        let set = ValueSet::load(&self.set, &values[0]);
+        let index = i64::load(&self.i64, &values[1]);
+        set.iter().nth(index as usize).copied()
     }
 }
 
