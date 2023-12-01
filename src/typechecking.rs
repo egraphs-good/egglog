@@ -355,8 +355,8 @@ impl TypeInfo {
             .solve(|sort: &ArcSort| sort.name())
             .map_err(|e| e.to_type_error())?;
 
-        let body: Vec<ResolvedFact> = assignment.annotate_facts(&mapped_query);
-        let actions: Vec<ResolvedAction> = assignment.annotate_actions(&mapped_action);
+        let body: Vec<ResolvedFact> = assignment.annotate_facts(&mapped_query, self);
+        let actions: Vec<ResolvedAction> = assignment.annotate_actions(&mapped_action, self)?;
 
         Ok(ResolvedRule {
             body,
@@ -375,7 +375,7 @@ impl TypeInfo {
         let assignment = problem
             .solve(|sort: &ArcSort| sort.name())
             .map_err(|e| e.to_type_error())?;
-        let annotated_facts = assignment.annotate_facts(&mapped_facts);
+        let annotated_facts = assignment.annotate_facts(&mapped_facts, self);
         Ok(annotated_facts)
     }
 
@@ -402,7 +402,7 @@ impl TypeInfo {
             .solve(|sort: &ArcSort| sort.name())
             .map_err(|e| e.to_type_error())?;
 
-        let annotated_actions = assignment.annotate_actions(&mapped_action);
+        let annotated_actions = assignment.annotate_actions(&mapped_action, self)?;
         Ok(annotated_actions)
     }
 

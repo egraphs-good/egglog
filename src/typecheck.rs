@@ -84,6 +84,57 @@ impl ResolvedCall {
             ResolvedCall::Primitive(prim) => &prim.output,
         }
     }
+
+    // Different from `from_resolution`, this function only considers function types and not primitives.
+    // As a result, it only requires input argument types, so types.len() == func.input.len(),
+    // while for `from_resolution`, types.len() == func.input.len() + 1 to account for the output type
+    pub fn from_resolution_func_types(
+        head: &Symbol,
+        types: &[ArcSort],
+        typeinfo: &TypeInfo,
+    ) -> Option<ResolvedCall> {
+        if let Some(ty) = typeinfo.func_types.get(head) {
+            // As long as input types match, a result is returned.
+            let expected = ty.input.iter().map(|s| s.name());
+            let actual = types.iter().map(|s| s.name());
+            if expected.eq(actual) {
+                return Some(ResolvedCall::Func(ty.clone()));
+            }
+        }
+        None
+    }
+
+    pub fn from_resolution(head: &Symbol, types: &[ArcSort], typeinfo: &TypeInfo) -> ResolvedCall {
+        let mut resolved_call = Vec::with_capacity(1);
+        if let Some(ty) = typeinfo.func_types.get(head) {
+            let expected = ty.input.iter().chain(once(&ty.output)).map(|s| s.name());
+            let actual = types.iter().map(|s| s.name());
+            if expected.eq(actual) {
+                resolved_call.push(ResolvedCall::Func(ty.clone()));
+            }
+        }
+
+        if let Some(primitives) = typeinfo.primitives.get(head) {
+            let tys: Vec<_> = types
+                // remove the output type since accept() only takes the input types
+                .split_last()
+                .unwrap()
+                .1
+                .to_vec();
+            for primitive in primitives {
+                if let Some(output_type) = primitive.accept(&tys) {
+                    resolved_call.push(ResolvedCall::Primitive(SpecializedPrimitive {
+                        primitive: primitive.clone(),
+                        input: tys,
+                        output: output_type,
+                    }));
+                }
+            }
+        }
+
+        assert!(resolved_call.len() == 1);
+        resolved_call.pop().unwrap()
+    }
 }
 
 impl Display for ResolvedCall {

@@ -1,12 +1,12 @@
 use crate::{
     ast::{
         Action, Expr, Fact, NormAction, ResolvedAction, ResolvedExpr, ResolvedFact, ResolvedVar,
-        UnresolvedAction, UnresolvedRule,
+        UnresolvedAction, UnresolvedExpr, UnresolvedRule,
     },
     sort::I64Sort,
     typecheck::{
-        Actions, Atom, AtomTerm, GenericAtomTerm, HeadOrEq, Query, ResolvedCall, SymbolOrEq,
-        UnresolvedCoreRule,
+        Actions, Atom, AtomTerm, GenericAtomTerm, HeadOrEq, Query, ResolvedCall,
+        SpecializedPrimitive, SymbolOrEq, UnresolvedCoreRule,
     },
     typechecking::TypeError,
     util::{FreshGen, HashMap, HashSet, SymbolGen},
@@ -215,12 +215,16 @@ where
     }
 }
 
-impl Expr<(Symbol, Symbol), Symbol, ()> {
-    pub(crate) fn annotate_expr(&self, assignment: &Assignment<AtomTerm, ArcSort>) -> ResolvedExpr {
-        match self {
+impl Assignment<AtomTerm, ArcSort> {
+    pub(crate) fn annotate_expr(
+        &self,
+        expr: &Expr<(Symbol, Symbol), Symbol, ()>,
+        typeinfo: &TypeInfo,
+    ) -> ResolvedExpr {
+        match &expr {
             Expr::Lit(ann, literal) => Expr::Lit(*ann, literal.clone()),
             Expr::Var(ann, var) => {
-                let ty = assignment
+                let ty = self
                     .get(&GenericAtomTerm::Var(*var))
                     .expect("All variables should be assigned before annotation");
                 Expr::Var(
@@ -231,92 +235,132 @@ impl Expr<(Symbol, Symbol), Symbol, ()> {
                     },
                 )
             }
-            Expr::Call(ann, (_op, corresponding_var), call) => {
+            Expr::Call(ann, (head, corresponding_var), args) => {
                 // get the resolved call using resolve_rule
-                todo!()
+                let args: Vec<_> = args
+                    .iter()
+                    .map(|arg| self.annotate_expr(arg, typeinfo))
+                    .collect();
+                let types: Vec<_> = args
+                    .iter()
+                    .map(|arg| arg.output_type(typeinfo))
+                    .chain(once(
+                        self.get(&GenericAtomTerm::Var(*corresponding_var))
+                            .unwrap()
+                            .clone(),
+                    ))
+                    .collect();
+                let resolved_call = ResolvedCall::from_resolution(head, &types, typeinfo);
+                Expr::Call(*ann, resolved_call, args)
             }
         }
     }
-}
 
-impl Fact<(Symbol, Symbol), Symbol, ()> {
-    pub(crate) fn annotate_facts(
+    pub(crate) fn annotate_fact(
         &self,
-        assignment: &Assignment<AtomTerm, ArcSort>,
+        facts: &Fact<(Symbol, Symbol), Symbol, ()>,
+        typeinfo: &TypeInfo,
     ) -> ResolvedFact {
-        match self {
+        match facts {
             Fact::Eq(facts) => Fact::Eq(
                 facts
                     .iter()
-                    .map(|expr| expr.annotate_expr(assignment))
+                    .map(|expr| self.annotate_expr(expr, typeinfo))
                     .collect(),
             ),
-            Fact::Fact(expr) => Fact::Fact(expr.annotate_expr(assignment)),
+            Fact::Fact(expr) => Fact::Fact(self.annotate_expr(expr, typeinfo)),
         }
     }
-}
 
-impl Action<(Symbol, Symbol), Symbol, ()> {
-    pub(crate) fn annotate_actions(
+    pub(crate) fn annotate_facts(
         &self,
-        assignment: &Assignment<AtomTerm, ArcSort>,
-    ) -> ResolvedAction {
-        match self {
+        mapped_facts: &[Fact<(Symbol, Symbol), Symbol, ()>],
+        typeinfo: &TypeInfo,
+    ) -> Vec<ResolvedFact> {
+        mapped_facts
+            .iter()
+            .map(|fact| self.annotate_fact(fact, typeinfo))
+            .collect()
+    }
+
+    pub(crate) fn annotate_action(
+        &self,
+        action: &Action<(Symbol, Symbol), Symbol, ()>,
+        typeinfo: &TypeInfo,
+    ) -> Result<ResolvedAction, TypeError> {
+        match action {
             Action::Let(ann, var, expr) => {
-                let ty = assignment
+                let ty = self
                     .get(&GenericAtomTerm::Var(*var))
                     .expect("All variables should be assigned before annotation");
-                Action::Let(
+                Ok(Action::Let(
                     *ann,
                     ResolvedVar {
                         name: *var,
                         sort: ty.clone(),
                     },
-                    expr.annotate_expr(assignment),
-                )
+                    self.annotate_expr(expr, typeinfo),
+                ))
             }
-            Action::Set(ann, head, children, rhs) => {
-                // TODO get resolved call using resolve_rule
-                todo!()
+            // Note mapped_var for set is a dummy variable that does not mean anything
+            Action::Set(ann, (head, _mapped_var), children, rhs) => {
+                let children: Vec<_> = children
+                    .iter()
+                    .map(|child| self.annotate_expr(child, typeinfo))
+                    .collect();
+                let rhs = self.annotate_expr(rhs, typeinfo);
+                let types: Vec<_> = children
+                    .iter()
+                    .map(|child| child.output_type(typeinfo))
+                    .chain(once(rhs.output_type(typeinfo)))
+                    .collect();
+                let resolved_call = ResolvedCall::from_resolution(head, &types, typeinfo);
+                if !matches!(resolved_call, ResolvedCall::Func(_)) {
+                    return Err(TypeError::UnboundFunction(*head));
+                }
+                Ok(Action::Set(*ann, resolved_call, children, rhs))
             }
-            Action::Delete(ann, head, children) => {
-                // TODO get resolved call using resolve_rule
-                todo!()
+            // Note mapped_var for delete is a dummy variable that does not mean anything
+            Action::Delete(ann, (head, _mapped_var), children) => {
+                let children: Vec<_> = children
+                    .iter()
+                    .map(|child| self.annotate_expr(child, typeinfo))
+                    .collect();
+                let types: Vec<_> = children
+                    .iter()
+                    .map(|child| child.output_type(typeinfo))
+                    .collect();
+                let resolved_call =
+                    ResolvedCall::from_resolution_func_types(head, &types, typeinfo)
+                        .ok_or_else(|| TypeError::UnboundFunction(*head))?;
+                Ok(Action::Delete(*ann, resolved_call, children.clone()))
             }
-            Action::Union(ann, lhs, rhs) => Action::Union(
+            Action::Union(ann, lhs, rhs) => Ok(Action::Union(
                 *ann,
-                lhs.annotate_expr(assignment),
-                rhs.annotate_expr(assignment),
-            ),
-            Action::Extract(ann, lhs, rhs) => Action::Extract(
+                self.annotate_expr(lhs, typeinfo),
+                self.annotate_expr(rhs, typeinfo),
+            )),
+            Action::Extract(ann, lhs, rhs) => Ok(Action::Extract(
                 *ann,
-                lhs.annotate_expr(assignment),
-                rhs.annotate_expr(assignment),
-            ),
-            Action::Panic(ann, msg) => Action::Panic(*ann, msg.clone()),
-            Action::Expr(ann, expr) => Action::Expr(ann.clone(), expr.annotate_expr(assignment)),
+                self.annotate_expr(lhs, typeinfo),
+                self.annotate_expr(rhs, typeinfo),
+            )),
+            Action::Panic(ann, msg) => Ok(Action::Panic(*ann, msg.clone())),
+            Action::Expr(ann, expr) => Ok(Action::Expr(
+                ann.clone(),
+                self.annotate_expr(expr, typeinfo),
+            )),
         }
-    }
-}
-
-impl Assignment<AtomTerm, ArcSort> {
-    pub(crate) fn annotate_facts(
-        &self,
-        mapped_facts: &Vec<Fact<(Symbol, Symbol), Symbol, ()>>,
-    ) -> Vec<ResolvedFact> {
-        mapped_facts
-            .iter()
-            .map(|fact| fact.annotate_facts(self))
-            .collect()
     }
 
     pub(crate) fn annotate_actions(
         &self,
         mapped_actions: &Vec<Action<(Symbol, Symbol), Symbol, ()>>,
-    ) -> Vec<ResolvedAction> {
+        typeinfo: &TypeInfo,
+    ) -> Result<Vec<ResolvedAction>, TypeError> {
         mapped_actions
             .iter()
-            .map(|action| action.annotate_actions(self))
+            .map(|action| self.annotate_action(action, typeinfo))
             .collect()
     }
 }
@@ -326,10 +370,6 @@ where
     Var: Eq + PartialEq + Hash + Clone + Debug,
     Value: Clone + Debug,
 {
-    // Actually, the typechecking logic of actions is different,
-    // because orders of actions matter A LOT.
-    // pub(crate) fn introduce_binding()
-
     pub(crate) fn solve<'a, K: Eq + Debug>(
         &'a self,
         key: impl Fn(&Value) -> K + Copy,
