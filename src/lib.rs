@@ -2029,4 +2029,19 @@ mod tests {
             Err(crate::Error::TypeError(TypeError::UnextractablePrimitive))
         ));
     }
+
+    #[test]
+    fn test_subsume_primitive() {
+        // Test that we can subsume a primitive
+
+        let mut egraph = EGraph::default();
+        let res = egraph.parse_and_run_program(
+            r#"
+            (function one () i64)
+            (set (one) 1)
+            (subsume (one))
+            "#,
+        );
+        assert!(res.is_ok());
+    }
 }
