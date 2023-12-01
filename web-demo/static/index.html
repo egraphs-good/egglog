@@ -164,29 +164,36 @@
             let currentIndex = 0;
             let contentBySexp = [];
             // loop through all the s-expressions
-            while (true) {
-                let start = content.indexOf("(", currentIndex);
-                if (start == -1) {
-                    break;
+            while (currentIndex < content.length) {
+                let start = currentIndex;
+                // find next open parenthesis which isn't inside a comment
+                let inComment = false;
+                while (currentIndex < content.length) {
+                    if (content[currentIndex] == ";") {
+                        inComment = true;
+                    } else if (content[currentIndex] == "\n") {
+                        inComment = false;
+                    } else if (content[currentIndex] == "(" && !inComment) {
+                        break;
+                    }
+                    currentIndex++;
                 }
+
                 // find matching parenthesis
-                let end = start;
                 let depth = 1;
-                while (depth > 0 && end < content.length) {
-                    end++;
-                    if (content[end] == "(") {
+                while (depth > 0 && currentIndex < content.length) {
+                    currentIndex++;
+                    if (content[currentIndex] == "(") {
                         depth++;
-                    } else if (content[end] == ")") {
+                    } else if (content[currentIndex] == ")") {
                         depth--;
                     }
                 }
 
-                let sexp = content.substring(currentIndex, end + 1);
-                // trim off any whitspace lines
-                sexp = sexp.replace(/^\s*\n/gm, "");
+                let sexp = content.substring(start, currentIndex + 1);
 
                 contentBySexp.push(sexp);
-                currentIndex = end + 1;
+                currentIndex = currentIndex + 1;
             }
 
             state.contentBySexp = contentBySexp;
@@ -218,7 +225,7 @@
                 slideNumber.innerHTML = `${state.slideIndex + 1}`;
 
                 // content is all the sexps up to slidenum
-                let content = state.contentBySexp.slice(0, state.slideIndex + 1).join("\n\n") + "\n\n";
+                let content = state.contentBySexp.slice(0, state.slideIndex + 1).join("");
                 setProgram(content);
             }
             editor.scrollTo(0, editor.getScrollInfo().height);
