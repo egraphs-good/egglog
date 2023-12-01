@@ -776,8 +776,7 @@ impl EGraph {
                         return Err(Error::MergeError(table, new_value, old_value));
                     }
                     MergeFn::Union => {
-                        self.unionfind
-                            .union_values(old_value, new_value, old_value.tag)
+                        panic!("Set should not be called on eqsat values without a merge function")
                     }
                     MergeFn::Expr(merge_prog) => {
                         let values = [old_value, new_value];
