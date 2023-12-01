@@ -4,8 +4,6 @@ use crate::*;
 use index::*;
 use smallvec::SmallVec;
 
-use self::table::Row;
-
 mod binary_search;
 pub mod index;
 pub(crate) mod table;
@@ -41,10 +39,13 @@ pub enum MergeFn {
     Expr(Rc<Program>),
 }
 
+/// All information we know determined by the input.
 #[derive(Debug, Clone)]
 pub struct TupleOutput {
     pub value: Value,
     pub timestamp: u32,
+    pub unextractable: bool,
+    pub subsumed: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -208,7 +209,7 @@ impl Function {
     }
 
     pub fn subsume(&mut self, inputs: &[Value]) {
-        self.nodes.get_row_mut(inputs).unwrap().subsumed = true;
+        self.nodes.get_mut(inputs).unwrap().subsumed = true;
     }
 
     /// Mark the given inputs as unextractable.
@@ -216,12 +217,12 @@ impl Function {
         if !self.schema.output.is_eq_sort() {
             panic!("Only eq sorts can be marked unextractable")
         }
-        self.nodes.get_row_mut(inputs).unwrap().unextractable = true;
+        self.nodes.get_mut(inputs).unwrap().unextractable = true;
     }
 
     /// Check if the given inputs are unextractable.
     pub fn check_unextractable(&self, inputs: &[Value]) -> bool {
-        self.nodes.get_row(inputs).unwrap().unextractable
+        self.nodes.get(inputs).unwrap().unextractable
     }
 
     /// Return a column index that contains (a superset of) the offsets for the
@@ -409,11 +410,6 @@ impl Function {
             // Entry is stale
             return result;
         };
-        let Row {
-            unextractable,
-            subsumed,
-            ..
-        } = self.nodes.get_row(args).unwrap();
 
         let mut out_val = out.value;
         scratch.clear();
@@ -462,8 +458,8 @@ impl Function {
                     out_val
                 }
             },
-            *unextractable,
-            *subsumed,
+            out.unextractable,
+            out.subsumed,
         );
         if let Some((inputs, _)) = self.nodes.get_index(i, true) {
             if inputs != &scratch[..] {
