@@ -1633,6 +1633,7 @@ mod tests {
         ast::Expr,
         constraint::SimpleTypeConstraint,
         sort::{FromSort, I64Sort, IntoSort, Sort, VecSort},
+        typechecking::TypeError,
         EGraph, ExtractReport, PrimitiveLike, Term, Value,
     };
 
@@ -2008,6 +2009,24 @@ mod tests {
         assert!(matches!(
             egraph.get_extract_report(),
             Some(crate::ExtractReport::Variants { terms, .. }) if terms.len() == 1
+        ));
+    }
+
+    #[test]
+    fn test_unextractable_primitive_type_error() {
+        // Test trying to mark a function that returns a primitive as a type error.
+
+        let mut egraph = EGraph::default();
+        let res = egraph.parse_and_run_program(
+            r#"
+            (function one () i64)
+            (set (one) 1)
+            (unextractable (one))
+            "#,
+        );
+        assert!(matches!(
+            res,
+            Err(crate::Error::TypeError(TypeError::UnextractablePrimitive))
         ));
     }
 }

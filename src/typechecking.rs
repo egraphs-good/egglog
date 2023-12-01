@@ -447,8 +447,13 @@ impl TypeInfo {
                 let lit_type = self.infer_literal(lit);
                 self.introduce_binding(ctx, *var, lit_type, is_global)?;
             }
-            NormAction::ChangeRow(_, expr) => {
-                self.typecheck_expr(ctx, expr, true)?;
+            NormAction::ChangeRow(change, expr) => {
+                let function_type = self.typecheck_expr(ctx, expr, true)?;
+                if let ChangeRow::Unextractable = change {
+                    if !function_type.output.is_eq_sort() {
+                        return Err(TypeError::UnextractablePrimitive);
+                    }
+                }
             }
             NormAction::Set(expr, other) => {
                 let func_type = self.typecheck_expr(ctx, expr, true)?;
@@ -683,6 +688,8 @@ pub enum TypeError {
     AlreadyDefined(Symbol),
     #[error("All alternative definitions considered failed\n{}", .0.iter().map(|e| format!("  {e}\n")).collect::<Vec<_>>().join(""))]
     AllAlternativeFailed(Vec<TypeError>),
+    #[error("Cannot mark primitives as unextractable")]
+    UnextractablePrimitive,
 }
 
 #[cfg(test)]
