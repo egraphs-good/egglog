@@ -328,7 +328,8 @@ impl Display for NormSchedule {
     }
 }
 
-pub type Replace = bool;
+pub type Unextractable = bool;
+pub type Subsume = bool;
 
 // TODO command before and after desugaring should be different
 /// A [`Command`] is the top-level construct in egglog.
@@ -543,13 +544,13 @@ pub enum Command {
     ///          :when ((= a (Num 0)))
     /// ```
     ///
-    /// To make the left hand side unextractable and unmatchable (subsumsed) use the `:replace ` clause
+    /// Add the `:unextractable` or `:subsume` flags to apply those to the left hand side on a rewrite
     ///
     /// ```text
-    /// (rewrite (Mul a 2) (bitshift-left a 1) :replace)
-    /// ```
+    /// (rewrite (Mul a 2) (bitshift-left a 1) :unextractable :subsume)
+    /// ```https://github.com/egraphs-good/egglog/pull/301#discussion_r1410308591
     ///
-    Rewrite(Symbol, Rewrite, Replace),
+    Rewrite(Symbol, Rewrite, Unextractable, Subsume),
     /// Similar to [`Command::Rewrite`], but
     /// generates two rules, one for each direction.
     ///
@@ -687,10 +688,10 @@ impl ToSexp for Command {
     fn to_sexp(&self) -> Sexp {
         match self {
             Command::SetOption { name, value } => list!("set-option", name, value),
-            Command::Rewrite(name, rewrite, unextractable) => {
-                rewrite.to_sexp(*name, false, *unextractable)
+            Command::Rewrite(name, rewrite, unextractable, subsume) => {
+                rewrite.to_sexp(*name, false, *unextractable, *subsume)
             }
-            Command::BiRewrite(name, rewrite) => rewrite.to_sexp(*name, true, false),
+            Command::BiRewrite(name, rewrite) => rewrite.to_sexp(*name, true, false, false),
             Command::Datatype { name, variants } => list!("datatype", name, ++ variants),
             Command::Declare { name, sort } => list!("declare", name, sort),
             Command::Action(a) => a.to_sexp(),
@@ -1605,7 +1606,13 @@ pub struct Rewrite {
 
 impl Rewrite {
     /// Converts the rewrite into an s-expression.
-    pub fn to_sexp(&self, ruleset: Symbol, is_bidirectional: bool, unextractable: bool) -> Sexp {
+    pub fn to_sexp(
+        &self,
+        ruleset: Symbol,
+        is_bidirectional: bool,
+        unextractable: bool,
+        subsume: bool,
+    ) -> Sexp {
         let mut res = vec![
             Sexp::Symbol(if is_bidirectional {
                 "birewrite".into()
@@ -1616,7 +1623,10 @@ impl Rewrite {
             self.rhs.to_sexp(),
         ];
         if unextractable {
-            res.insert(1, Sexp::Symbol(":unextractable".into()));
+            res.push(Sexp::Symbol(":unextractable".into()));
+        }
+        if subsume {
+            res.push(Sexp::Symbol(":subsume".into()));
         }
 
         if !self.conditions.is_empty() {
@@ -1636,6 +1646,6 @@ impl Rewrite {
 
 impl Display for Rewrite {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.to_sexp("".into(), false, false))
+        write!(f, "{}", self.to_sexp("".into(), false, false, false))
     }
 }

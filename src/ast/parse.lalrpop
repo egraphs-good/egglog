@@ -60,10 +60,11 @@ Command: Command = {
     LParen "ruleset" <name:Ident> RParen => Command::AddRuleset(name),
     LParen "rule" <body:List<Fact>> <head:List<Action>> <ruleset:(":ruleset" <Ident>)?> <name:(":name" <String>)?> RParen => Command::Rule{ruleset: ruleset.unwrap_or("".into()), name: name.unwrap_or("".to_string()).into(), rule: Rule { head, body }},
     LParen "rewrite" <lhs:Expr> <rhs:Expr>
-        <replace:(":replace")?>
+        <unextractable:(":unextractable")?>
+        <subsume:(":subsume")?>
         <conditions:(":when" <List<Fact>>)?>
         <ruleset:(":ruleset" <Ident>)?>
-    RParen => Command::Rewrite(ruleset.unwrap_or("".into()), Rewrite { lhs, rhs, conditions: conditions.unwrap_or_default() }, replace.is_some()),
+    RParen => Command::Rewrite(ruleset.unwrap_or("".into()), Rewrite { lhs, rhs, conditions: conditions.unwrap_or_default() }, unextractable.is_some(), subsume.is_some()),
     LParen "birewrite" <lhs:Expr> <rhs:Expr>
         <conditions:(":when" <List<Fact>>)?>
         <ruleset:(":ruleset" <Ident>)?>

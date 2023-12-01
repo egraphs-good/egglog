@@ -1925,8 +1925,8 @@ mod tests {
     }
 
     #[test]
-    fn test_replace_rewrite() {
-        // When a rewrite is marked as a replacement, the lhs should not be extracted
+    fn test_rewrite_unextractable() {
+        // When a rewrite is marked as a unextractable, the lhs should not be extracted
 
         let mut egraph = EGraph::default();
 
@@ -1936,10 +1936,9 @@ mod tests {
                 (datatype Math)
                 (function exp () Math :cost 100)
                 (function cheap () Math :cost 1)
-                (rewrite (cheap) (exp) :replace)
+                (rewrite (cheap) (exp) :unextractable)
                 (cheap)
                 (run 1)
-                ; Must use extract instead of query-extract because can't query for (cheap) now
                 (extract (cheap))
                 "#,
             )
@@ -1952,14 +1951,27 @@ mod tests {
                 ..
             }) if s == &GlobalSymbol::from("exp")
         ));
-        // If we rerite cheap to another term, that rewrite shouldnt trigger since its been subsumed.
+    }
+    #[test]
+    fn test_rewrite_subsumed() {
+        // When a rewrite is marked as a subsumed, the lhs should not be extracted
+
+        let mut egraph = EGraph::default();
+
+        // If we rerite most-exp to another term, that rewrite shouldnt trigger since its been subsumed.
         egraph
             .parse_and_run_program(
                 r#"
-                (function cheap-1 () Math :cost 1)
-                (rewrite (cheap) (cheap-1))
+                (datatype Math)
+                (function exp () Math :cost 100)
+                (function most-exp () Math :cost 1000)
+                (rewrite (most-exp) (exp) :subsume)
+                (most-exp)
                 (run 1)
-                (extract (cheap))
+                (function cheap () Math :cost 1)
+                (rewrite (most-exp) (cheap))
+                (run 1)
+                (extract (most-exp))
                 "#,
             )
             .unwrap();
