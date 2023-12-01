@@ -350,7 +350,7 @@ where
         Ok(assignment)
     }
 
-    pub(crate) fn add_binding(&self, var: Var, clone: Value) {
+    pub(crate) fn add_binding(&mut self, var: Var, clone: Value) {
         self.constraints.push(Constraint::Assign(var, clone));
     }
 }
