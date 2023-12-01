@@ -197,7 +197,9 @@ impl TypeInfo {
                 let presort_and_args = todo!("typecheck presort and args");
                 NCommand::Sort(*sort, presort_and_args)
             }
-            NCommand::NormAction(action) => NCommand::NormAction(self.typecheck_action(action)?),
+            NCommand::NormAction(action) => {
+                NCommand::NormAction(self.typecheck_action(action, &HashMap::default())?)
+            }
             NCommand::Check(facts) => NCommand::Check(self.typecheck_facts(facts)?),
             NCommand::Fail(cmd) => NCommand::Fail(Box::new(self.typecheck_command(cmd)?)),
             NCommand::RunSchedule(schedule) => {
@@ -217,7 +219,7 @@ impl TypeInfo {
             NCommand::Output { file, exprs } => {
                 let exprs = exprs
                     .iter()
-                    .map(|expr| self.typecheck_expr(expr))
+                    .map(|expr| self.typecheck_expr(expr, &HashMap::default()))
                     .collect::<Result<Vec<_>, _>>()?;
                 NCommand::Output {
                     file: file.clone(),
@@ -237,24 +239,24 @@ impl TypeInfo {
         fdecl: &UnresolvedFunctionDecl,
     ) -> Result<ResolvedFunctionDecl, TypeError> {
         // TODO: propose a new interface for incorporating arbitrary constraints
-        // let bound_vars = HashMap::default()();
-        // bound_vars.insert("old".into(), fdecl.schema.output.clone());
-        // bound_vars.insert("new".into(), fdecl.schema.output.clone());
-        let mut merge_action_problem = Problem::default();
+        let mut bound_vars = HashMap::default();
+        let output_type = self.sorts.get(&fdecl.schema.output).unwrap();
+        bound_vars.insert("old".into(), output_type.clone());
+        bound_vars.insert("new".into(), output_type.clone());
 
         Ok(ResolvedFunctionDecl {
             name: fdecl.name,
             schema: fdecl.schema.clone(),
             merge: match &fdecl.merge {
-                Some(merge) => Some(self.typecheck_expr(merge)?),
+                Some(merge) => Some(self.typecheck_expr(merge, &bound_vars)?),
                 None => None,
             },
             default: fdecl
                 .default
                 .as_ref()
-                .map(|default| self.typecheck_expr(default))
+                .map(|default| self.typecheck_expr(default, &HashMap::default()))
                 .transpose()?,
-            merge_action: self.typecheck_actions(&fdecl.merge_action)?,
+            merge_action: self.typecheck_actions(&fdecl.merge_action, &bound_vars)?,
             cost: fdecl.cost.clone(),
             unextractable: fdecl.unextractable,
         })
@@ -318,16 +320,29 @@ impl TypeInfo {
     }
 
     fn typecheck_rule(&mut self, rule: &UnresolvedRule) -> Result<ResolvedRule, TypeError> {
+        let mut fresh_gen = SymbolGen::new();
         let UnresolvedRule { head, body } = rule;
         let mut constraints = vec![];
 
-        let (query, mapped_query) = Expr::facts_to_query(body, self, &mut |head| todo!("leaf"));
+        let mut fresh_gen = SymbolGen::new();
+        let (query, mapped_query) = Expr::facts_to_query(body, self, &mut fresh_gen);
         constraints.extend(query.get_constraints(self)?);
 
+        let mut binding = query
+            .atom_terms()
+            .into_iter()
+            .filter_map(|at| {
+                if let AtomTerm::Var(v) = at {
+                    Some(v)
+                } else {
+                    None
+                }
+            })
+            .collect::<HashSet<_>>();
         let (actions, mapped_action): (Vec<NormAction>, Vec<Action<(Symbol, Symbol), Symbol, ()>>) =
-            todo!("action to lowered actions");
+            actions_to_norm_actions(head, self, &mut binding, &mut fresh_gen)?;
 
-        let problem = Problem::default();
+        let mut problem = Problem::default();
         problem.add_rule(
             &UnresolvedCoreRule {
                 body: query,
@@ -340,16 +355,7 @@ impl TypeInfo {
             .solve(|sort: &ArcSort| sort.name())
             .map_err(|e| e.to_type_error())?;
 
-        // TODO: the general version of subst
-        // let body = mapped_query.subst(
-        //     |(head, mapped_var)| (head, assignment.get(mapped_var)),
-        //     |leaf| (leaf, assignment.get(leaf)),
-        // );
         let body: Vec<ResolvedFact> = assignment.annotate_facts(&mapped_query);
-        // let head = mapped_action.subst(
-        //     |(head, mapped_var)| (head, assignment.get(mapped_var)),
-        //     |leaf| (leaf, assignment.get(leaf)),
-        // );
         let actions: Vec<ResolvedAction> = assignment.annotate_actions(&mapped_action);
 
         Ok(ResolvedRule {
@@ -362,9 +368,8 @@ impl TypeInfo {
         &mut self,
         facts: &Vec<UnresolvedFact>,
     ) -> Result<Vec<ResolvedFact>, TypeError> {
-        // ROUND TRIP TO CORE RULE AND BACK
-        // TODO: in long term, we don't want this round trip to CoreRule query and back just for the type information.
-        let (query, mapped_facts) = Expr::facts_to_query(facts, self, &mut |head| todo!("leaf"));
+        let mut fresh_gen = SymbolGen::new();
+        let (query, mapped_facts) = Expr::facts_to_query(facts, self, &mut fresh_gen);
         let mut problem = Problem::default();
         problem.add_query(&query, self)?;
         let assignment = problem
@@ -377,12 +382,21 @@ impl TypeInfo {
     fn typecheck_actions(
         &mut self,
         actions: &Vec<UnresolvedAction>,
-        problem: Problem<AtomTerm, ArcSort>,
+        binding: &HashMap<Symbol, ArcSort>,
     ) -> Result<Vec<ResolvedAction>, TypeError> {
+        let mut binding_set = binding.keys().cloned().collect::<HashSet<_>>();
+        let mut fresh_gen = SymbolGen::new();
         let (actions, mapped_action): (Vec<NormAction>, Vec<Action<(Symbol, Symbol), Symbol, ()>>) =
-            todo!("action to lowered actions");
+            actions_to_norm_actions(actions, self, &mut binding_set, &mut fresh_gen)?;
         let mut problem = Problem::default();
+
+        // add actions to problem
         problem.add_actions(&Actions(actions), self);
+
+        // add bindings from the context
+        for (var, sort) in binding {
+            problem.assign_local_var_type(*var, sort.clone());
+        }
 
         let assignment = problem
             .solve(|sort: &ArcSort| sort.name())
@@ -392,11 +406,29 @@ impl TypeInfo {
         Ok(annotated_actions)
     }
 
-    fn typecheck_action(&mut self, action: &UnresolvedAction) -> Result<ResolvedAction, TypeError> {
-        self.typecheck_actions(&vec![action.clone()]).map(|mut v| {
-            assert_eq!(v.len(), 1);
-            v.pop().unwrap()
-        })
+    fn typecheck_expr(
+        &mut self,
+        expr: &UnresolvedExpr,
+        binding: &HashMap<Symbol, ArcSort>,
+    ) -> Result<ResolvedExpr, TypeError> {
+        let action = Action::Let((), "$$result".into(), expr.clone());
+        let typechecked_action = self.typecheck_action(&action, binding)?;
+        match typechecked_action {
+            ResolvedAction::Let(_, var, expr) => Ok(expr),
+            _ => unreachable!(),
+        }
+    }
+
+    fn typecheck_action(
+        &mut self,
+        action: &UnresolvedAction,
+        binding: &HashMap<Symbol, ArcSort>,
+    ) -> Result<ResolvedAction, TypeError> {
+        self.typecheck_actions(&vec![action.clone()], &mut HashMap::default())
+            .map(|mut v| {
+                assert_eq!(v.len(), 1);
+                v.pop().unwrap()
+            })
     }
 
     pub fn reserved_type(&self, sym: Symbol) -> Option<ArcSort> {
@@ -479,10 +511,6 @@ impl TypeInfo {
 
     pub(crate) fn is_global(&self, sym: Symbol) -> bool {
         self.global_types.contains_key(&sym)
-    }
-
-    fn typecheck_expr(&mut self, expr: &UnresolvedExpr) -> Result<ResolvedExpr, TypeError> {
-        todo!();
     }
 }
 

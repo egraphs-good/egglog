@@ -86,6 +86,12 @@ impl Display for ResolvedCall {
     }
 }
 
+impl ToSexp for ResolvedCall {
+    fn to_sexp(&self) -> Sexp {
+        Sexp::Symbol(self.to_string())
+    }
+}
+
 impl Query<ResolvedCall, Symbol> {
     pub fn filters(&self) -> impl Iterator<Item = Atom<Primitive>> + '_ {
         self.atoms.iter().filter_map(|atom| match &atom.head {
@@ -124,10 +130,13 @@ pub(crate) fn actions_to_core_actions(actions: &[UnresolvedAction]) -> Vec<NormA
 }
 
 impl UnresolvedRule {
-    pub(crate) fn to_core_rule(&self, typeinfo: &TypeInfo) -> UnresolvedCoreRule {
+    pub(crate) fn to_core_rule(
+        &self,
+        typeinfo: &TypeInfo,
+        fresh_gen: &mut SymbolGen,
+    ) -> UnresolvedCoreRule {
         let Rule { head, body } = self;
-        let (body, _correspondence) =
-            Expr::facts_to_query(body, typeinfo, &mut |head| todo!("leaf"));
+        let (body, _correspondence) = Expr::facts_to_query(body, typeinfo, &mut SymbolGen::new());
         UnresolvedCoreRule {
             body,
             head: Actions(actions_to_core_actions(head)),

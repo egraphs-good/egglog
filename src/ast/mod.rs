@@ -612,7 +612,7 @@ pub enum Command<Head, Leaf> {
     Include(String),
 }
 
-impl<Head: Display, Leaf: Display + ToSexp> ToSexp for Command<Head, Leaf> {
+impl<Head: Display + ToSexp, Leaf: Display + ToSexp> ToSexp for Command<Head, Leaf> {
     fn to_sexp(&self) -> Sexp {
         match self {
             Command::SetOption { name, value } => list!("set-option", name, value),
@@ -655,13 +655,15 @@ impl<Head: Display, Leaf: Display + ToSexp> ToSexp for Command<Head, Leaf> {
     }
 }
 
-impl<Head: Display + Clone, Leaf: Display + ToSexp + Clone> Display for NCommand<Head, Leaf, ()> {
+impl<Head: Display + Clone + ToSexp, Leaf: Display + ToSexp + Clone> Display
+    for NCommand<Head, Leaf, ()>
+{
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.to_command())
     }
 }
 
-impl<Head: Display, Leaf: Display + ToSexp> Display for Command<Head, Leaf> {
+impl<Head: Display + ToSexp, Leaf: Display + ToSexp> Display for Command<Head, Leaf> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Command::Rule {
@@ -795,7 +797,7 @@ impl UnresolvedFunctionDecl {
     }
 }
 
-impl<Head: Display, Leaf: Display + ToSexp, Ann> ToSexp for FunctionDecl<Head, Leaf, Ann> {
+impl<Head: Display + ToSexp, Leaf: Display + ToSexp, Ann> ToSexp for FunctionDecl<Head, Leaf, Ann> {
     fn to_sexp(&self) -> Sexp {
         let mut res = vec![
             Sexp::Symbol("function".into()),
@@ -922,11 +924,11 @@ pub enum Action<Head, Leaf, Ann> {
     /// `set` a function to a particular result.
     /// `set` should not be used on datatypes-
     /// instead, use `union`.
-    Set(Ann, Leaf, Vec<Expr<Head, Leaf, Ann>>, Expr<Head, Leaf, Ann>),
+    Set(Ann, Head, Vec<Expr<Head, Leaf, Ann>>, Expr<Head, Leaf, Ann>),
     /// `delete` an entry from a function.
     /// Be wary! Only delete entries that are subsumed in some way or
     /// guaranteed to be not useful.
-    Delete(Ann, Leaf, Vec<Expr<Head, Leaf, Ann>>),
+    Delete(Ann, Head, Vec<Expr<Head, Leaf, Ann>>),
     /// `union` two datatypes, making them equal
     /// in the implicit, global equality relation
     /// of egglog.
@@ -959,10 +961,12 @@ pub enum NormAction {
     Let(Symbol /* var */, Symbol /* head */, Vec<AtomTerm>),
     LetVar(Symbol, Symbol),
     LetLit(Symbol, Literal),
-    Extract(Symbol, Symbol),
-    Set(Symbol /* head */, Vec<AtomTerm>, Symbol),
+    // TODO: This will replace LetVar and LetLit once the refactoring is done.
+    LetAtomTerm(Symbol, AtomTerm),
+    Extract(AtomTerm, AtomTerm),
+    Set(Symbol /* head */, Vec<AtomTerm>, AtomTerm),
     Delete(Symbol, Vec<AtomTerm>),
-    Union(Symbol, Symbol),
+    Union(AtomTerm, AtomTerm),
     Panic(String),
 }
 
@@ -1024,7 +1028,7 @@ pub enum NormAction {
 //     }
 // }
 
-impl<Head: Display, Leaf: Display + ToSexp, Ann> ToSexp for Action<Head, Leaf, Ann> {
+impl<Head: Display + ToSexp, Leaf: Display + ToSexp, Ann> ToSexp for Action<Head, Leaf, Ann> {
     fn to_sexp(&self) -> Sexp {
         match self {
             Action::Let(_ann, lhs, rhs) => list!("let", lhs, rhs),
@@ -1136,7 +1140,7 @@ where
     }
 }
 
-impl<Head: Display, Leaf: Display + ToSexp, Ann> Display for Action<Head, Leaf, Ann> {
+impl<Head: Display + ToSexp, Leaf: Display + ToSexp, Ann> Display for Action<Head, Leaf, Ann> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.to_sexp())
     }
@@ -1151,7 +1155,7 @@ pub struct Rule<Head, Leaf, Ann> {
     pub body: Vec<Fact<Head, Leaf, Ann>>,
 }
 
-impl<Head: Display, Leaf: Display + ToSexp, Ann> Rule<Head, Leaf, Ann> {
+impl<Head: Display + ToSexp, Leaf: Display + ToSexp, Ann> Rule<Head, Leaf, Ann> {
     pub(crate) fn fmt_with_ruleset(
         &self,
         f: &mut std::fmt::Formatter<'_>,
@@ -1196,7 +1200,7 @@ impl<Head: Display, Leaf: Display + ToSexp, Ann> Rule<Head, Leaf, Ann> {
     }
 }
 
-impl<Head: Display, Leaf: Display + ToSexp, Ann> Rule<Head, Leaf, Ann> {
+impl<Head: Display + ToSexp, Leaf: Display + ToSexp, Ann> Rule<Head, Leaf, Ann> {
     /// Converts this rule into an s-expression.
     pub fn to_sexp(&self, ruleset: Symbol, name: Symbol) -> Sexp {
         let mut res = vec![
@@ -1224,7 +1228,7 @@ impl UnresolvedRule {
     }
 }
 
-impl<Head: Display, Leaf: Display + ToSexp, Ann> Display for Rule<Head, Leaf, Ann> {
+impl<Head: Display + ToSexp, Leaf: Display + ToSexp, Ann> Display for Rule<Head, Leaf, Ann> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.fmt_with_ruleset(f, "".into(), "".into())
     }
@@ -1286,7 +1290,7 @@ impl<Head, Leaf: Clone, Ann> Expr<(Head, Leaf), Leaf, Ann> {
 impl<Head: Clone, Leaf: Clone, Ann: Clone> Expr<Head, Leaf, Ann> {
     fn to_query(
         &self,
-        get_fresh: &mut impl FnMut(&Head) -> Leaf,
+        fresh_gen: &mut impl FreshGen<Head, Leaf>,
     ) -> (
         Vec<GenericAtom<HeadOrEq<Head>, Leaf>>,
         Expr<(Head, Leaf), Leaf, Ann>,
@@ -1295,12 +1299,12 @@ impl<Head: Clone, Leaf: Clone, Ann: Clone> Expr<Head, Leaf, Ann> {
             Expr::Lit(ann, lit) => (vec![], Expr::Lit(ann.clone(), lit.clone())),
             Expr::Var(ann, v) => (vec![], Expr::Var(ann.clone(), v.clone())),
             Expr::Call(ann, f, children) => {
-                let fresh = get_fresh(f);
+                let fresh = fresh_gen.fresh(f);
                 let mut new_children = vec![];
                 let mut atoms = vec![];
                 let mut child_exprs = vec![];
                 for child in children {
-                    let (child_atoms, child_expr) = child.to_query(get_fresh);
+                    let (child_atoms, child_expr) = child.to_query(fresh_gen);
                     // TODO: how about globals?
                     let child_atomterm = child_expr.get_corresponding_var_or_lit();
                     new_children.push(child_atomterm);
@@ -1334,8 +1338,9 @@ impl<Head: Clone, Leaf: Clone, Ann: Clone> Expr<Head, Leaf, Ann> {
     /// and allows terms and proof instrumentation to do the same).
     pub(crate) fn facts_to_query(
         body: &Vec<Fact<Head, Leaf, Ann>>,
+        // TODO: needs to generalize type info to work for ResolvedFact as well
         typeinfo: &TypeInfo,
-        get_fresh: &mut impl FnMut(&Head) -> Leaf,
+        fresh_gen: &mut impl FreshGen<Head, Leaf>,
     ) -> (
         Query<HeadOrEq<Head>, Leaf>,
         Vec<Fact<(Head, Leaf), Leaf, Ann>>,
@@ -1357,7 +1362,7 @@ impl<Head: Clone, Leaf: Clone, Ann: Clone> Expr<Head, Leaf, Ann> {
                     let mut new_exprs = vec![];
                     let mut to_equate = vec![];
                     for expr in exprs {
-                        let (child_atoms, expr) = expr.to_query(get_fresh);
+                        let (child_atoms, expr) = expr.to_query(fresh_gen);
                         atoms.extend(child_atoms);
                         to_equate.push(expr.get_corresponding_var_or_lit());
                         new_exprs.push(expr);
@@ -1369,7 +1374,7 @@ impl<Head: Clone, Leaf: Clone, Ann: Clone> Expr<Head, Leaf, Ann> {
                     new_body.push(Fact::Eq(new_exprs));
                 }
                 Fact::Fact(expr) => {
-                    let (child_atoms, expr) = expr.to_query(get_fresh);
+                    let (child_atoms, expr) = expr.to_query(fresh_gen);
                     atoms.extend(child_atoms);
                     new_body.push(Fact::Fact(expr));
                 }
@@ -1377,4 +1382,143 @@ impl<Head: Clone, Leaf: Clone, Ann: Clone> Expr<Head, Leaf, Ann> {
         }
         (Query { atoms }, new_body)
     }
+}
+
+pub(crate) fn expr_to_norm_actions(
+    expr: &UnresolvedExpr,
+    typeinfo: &mut TypeInfo,
+    binding: &mut HashSet<Symbol>,
+    fresh_gen: &mut SymbolGen,
+) -> Result<(Vec<NormAction>, Expr<(Symbol, Symbol), Symbol, ()>), TypeError> {
+    match expr {
+        Expr::Lit(_ann, lit) => Ok((vec![], Expr::Lit((), lit.clone()))),
+        Expr::Var(_ann, v) => {
+            if binding.contains(v) || typeinfo.is_global(v.clone()) {
+                Ok((vec![], Expr::Var((), v.clone())))
+            } else {
+                Err(TypeError::Unbound(v.clone()))
+            }
+        }
+        Expr::Call(_ann, f, args) => {
+            let mut norm_actions = vec![];
+            let mut norm_args = vec![];
+            let mut mapped_args = vec![];
+            for arg in args {
+                let (actions, mapped_arg) =
+                    expr_to_norm_actions(arg, typeinfo, binding, fresh_gen)?;
+                norm_actions.extend(actions);
+                norm_args.push(mapped_arg.get_corresponding_var_or_lit());
+                mapped_args.push(mapped_arg);
+            }
+
+            let var = fresh_gen.fresh(f);
+            binding.insert(var);
+
+            norm_actions.push(NormAction::Let(var, *f, norm_args));
+            Ok((norm_actions, Expr::Call((), (*f, var), mapped_args)))
+        }
+    }
+}
+
+pub(crate) fn actions_to_norm_actions(
+    actions: &[Action<Symbol, Symbol, ()>],
+    typeinfo: &mut TypeInfo,
+    binding: &mut HashSet<Symbol>,
+    fresh_gen: &mut SymbolGen,
+) -> Result<(Vec<NormAction>, Vec<Action<(Symbol, Symbol), Symbol, ()>>), TypeError> {
+    let mut norm_actions = vec![];
+    let mut mapped_actions = vec![];
+    for action in actions {
+        match action {
+            Action::Let(_ann, var, expr) => {
+                let (actions, mapped_expr) =
+                    expr_to_norm_actions(expr, typeinfo, binding, fresh_gen)?;
+                norm_actions.extend(actions);
+                norm_actions.push(NormAction::LetAtomTerm(
+                    *var,
+                    mapped_expr.get_corresponding_var_or_lit(),
+                ));
+                mapped_actions.push(Action::Let(*_ann, var.clone(), mapped_expr));
+                binding.insert(var.clone());
+            }
+            Action::Set(_ann, head, args, expr) => {
+                let mut mapped_args = vec![];
+                for arg in args {
+                    let (actions, mapped_arg) =
+                        expr_to_norm_actions(arg, typeinfo, binding, fresh_gen)?;
+                    norm_actions.extend(actions);
+                    mapped_args.push(mapped_arg);
+                }
+                let (actions, mapped_expr) =
+                    expr_to_norm_actions(expr, typeinfo, binding, fresh_gen)?;
+                norm_actions.extend(actions);
+                norm_actions.push(NormAction::Set(
+                    head.clone(),
+                    mapped_args
+                        .iter()
+                        .map(|e| e.get_corresponding_var_or_lit())
+                        .collect(),
+                    mapped_expr.get_corresponding_var_or_lit(),
+                ));
+                let v = fresh_gen.fresh(head);
+                mapped_actions.push(Action::Set(
+                    *_ann,
+                    (head.clone(), v),
+                    mapped_args,
+                    mapped_expr,
+                ));
+            }
+            Action::Delete(_ann, head, args) => {
+                let mut mapped_args = vec![];
+                for arg in args {
+                    let (actions, mapped_arg) =
+                        expr_to_norm_actions(arg, typeinfo, binding, fresh_gen)?;
+                    norm_actions.extend(actions);
+                    mapped_args.push(mapped_arg);
+                }
+                norm_actions.push(NormAction::Delete(
+                    head.clone(),
+                    mapped_args
+                        .iter()
+                        .map(|e| e.get_corresponding_var_or_lit())
+                        .collect(),
+                ));
+                let v = fresh_gen.fresh(head);
+                mapped_actions.push(Action::Delete(*_ann, (head.clone(), v), mapped_args));
+            }
+            Action::Union(_ann, e1, e2) => {
+                let (actions1, mapped_e1) = expr_to_norm_actions(e1, typeinfo, binding, fresh_gen)?;
+                norm_actions.extend(actions1);
+                let (actions2, mapped_e2) = expr_to_norm_actions(e2, typeinfo, binding, fresh_gen)?;
+                norm_actions.extend(actions2);
+                norm_actions.push(NormAction::Union(
+                    mapped_e1.get_corresponding_var_or_lit(),
+                    mapped_e2.get_corresponding_var_or_lit(),
+                ));
+                mapped_actions.push(Action::Union(*_ann, mapped_e1, mapped_e2));
+            }
+            Action::Extract(_ann, e, n) => {
+                let (actions, mapped_e) = expr_to_norm_actions(e, typeinfo, binding, fresh_gen)?;
+                norm_actions.extend(actions);
+                let (actions, mapped_n) = expr_to_norm_actions(n, typeinfo, binding, fresh_gen)?;
+                norm_actions.extend(actions);
+                norm_actions.push(NormAction::Extract(
+                    mapped_e.get_corresponding_var_or_lit(),
+                    mapped_n.get_corresponding_var_or_lit(),
+                ));
+                mapped_actions.push(Action::Extract(*_ann, mapped_e, mapped_n));
+            }
+            Action::Panic(_ann, string) => {
+                norm_actions.push(NormAction::Panic(string.clone()));
+                mapped_actions.push(Action::Panic(*_ann, string.clone()));
+            }
+            Action::Expr(_ann, expr) => {
+                let (actions, mapped_expr) =
+                    expr_to_norm_actions(expr, typeinfo, binding, fresh_gen)?;
+                norm_actions.extend(actions);
+                mapped_actions.push(Action::Expr(*_ann, mapped_expr));
+            }
+        }
+    }
+    Ok((norm_actions, mapped_actions))
 }

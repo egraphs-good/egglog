@@ -59,3 +59,28 @@ where
         Ok(())
     }
 }
+
+/// Generates fresh symbols for internal use during typechecking and flattening.
+/// These are guaranteed not to collide with the
+/// user's symbols because they use $.
+pub(crate) trait FreshGen<Head, Leaf> {
+    fn fresh(&mut self, name_hint: &Head) -> Leaf;
+}
+
+pub(crate) struct SymbolGen {
+    gen: usize,
+}
+
+impl SymbolGen {
+    pub(crate) fn new() -> Self {
+        Self { gen: 0 }
+    }
+}
+
+impl FreshGen<Symbol, Symbol> for SymbolGen {
+    fn fresh(&mut self, name_hint: &Symbol) -> Symbol {
+        let s = format!("${}{}", name_hint, self.gen);
+        self.gen += 1;
+        Symbol::from(s)
+    }
+}
