@@ -1057,9 +1057,7 @@ impl EGraph {
         let types = todo!("get types from type inference");
 
         let query = self.compile_gj_query(query);
-        let program = self
-            .compile_actions(types, &action)
-            .map_err(Error::TypeErrors)?;
+        let program = self.compile_actions(&action).map_err(Error::TypeErrors)?;
         let compiled_rule = Rule {
             query,
             matches: 0,
@@ -1089,12 +1087,7 @@ impl EGraph {
     }
 
     fn eval_actions(&mut self, actions: &[ResolvedAction]) -> Result<(), Error> {
-        let types = Default::default();
-        let actions: Vec<NormAction> =
-            todo!("need to first lower to norm action before compilation");
-        let program = self
-            .compile_actions(&types, &actions)
-            .map_err(Error::TypeErrors)?;
+        let program = self.compile_actions(&actions).map_err(Error::TypeErrors)?;
         let mut stack = vec![];
         self.run_actions(&mut stack, &[], &program, true)?;
         Ok(())
@@ -1102,20 +1095,12 @@ impl EGraph {
 
     // TODO make a public version of eval_expr that makes a command,
     // then returns the value at the end.
-    fn eval_expr(
-        &mut self,
-        expr: &ResolvedExpr,
-        expected_type: Option<ArcSort>,
-        make_defaults: bool,
-    ) -> Result<(ArcSort, Value), Error> {
-        let types = Default::default();
-        let (t, program) = self
-            .compile_expr(&types, expr, expected_type)
-            .map_err(Error::TypeErrors)?;
+    fn eval_expr(&mut self, expr: &ResolvedExpr, make_defaults: bool) -> Result<Value, Error> {
+        let program = self.compile_expr(expr);
         let mut stack = vec![];
         self.run_actions(&mut stack, &[], &program, make_defaults)?;
         assert_eq!(stack.len(), 1);
-        Ok((t, stack.pop().unwrap()))
+        Ok(stack.pop().unwrap())
     }
 
     fn add_ruleset(&mut self, name: Symbol) {
@@ -1249,10 +1234,15 @@ impl EGraph {
                 if should_run {
                     match &action {
                         Action::Let((), name, contents) => {
-                            let (etype, value) = self.eval_expr(&contents, None, true)?;
-                            let present = self
-                                .global_bindings
-                                .insert(name.name.clone(), (etype, value, self.timestamp));
+                            let value = self.eval_expr(&contents, true)?;
+                            let present = self.global_bindings.insert(
+                                name.name.clone(),
+                                (
+                                    contents.output_type(self.type_info()),
+                                    value,
+                                    self.timestamp,
+                                ),
+                            );
                             if present.is_some() {
                                 panic!("Variable {name} was already present in global bindings");
                             }
@@ -1304,8 +1294,9 @@ impl EGraph {
                     .map_err(|e| Error::IoError(filename.clone(), e))?;
                 let mut termdag = TermDag::default();
                 for expr in exprs {
-                    let (t, value) = self.eval_expr(&expr, None, true)?;
-                    let term = self.extract(value, &mut termdag, &t).1;
+                    let value = self.eval_expr(&expr, true)?;
+                    let expr_type = expr.output_type(self.type_info());
+                    let term = self.extract(value, &mut termdag, &expr_type).1;
                     use std::io::Write;
                     writeln!(f, "{}", termdag.to_string(&term))
                         .map_err(|e| Error::IoError(filename.clone(), e))?;

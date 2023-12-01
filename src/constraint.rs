@@ -3,16 +3,17 @@ use crate::{
         Action, Expr, Fact, NormAction, ResolvedAction, ResolvedExpr, ResolvedFact, ResolvedVar,
         UnresolvedAction, UnresolvedRule,
     },
+    sort::I64Sort,
     typecheck::{
         Actions, Atom, AtomTerm, GenericAtomTerm, HeadOrEq, Query, ResolvedCall, SymbolOrEq,
         UnresolvedCoreRule,
     },
     typechecking::TypeError,
-    util::{HashMap, HashSet},
+    util::{FreshGen, HashMap, HashSet, SymbolGen},
     ArcSort, Symbol, TypeInfo,
 };
-use core::hash::Hash;
-use std::{fmt::Debug, iter::once, mem::swap};
+use core::{hash::Hash, prelude::v1};
+use std::{fmt::Debug, iter::once, mem::swap, sync::Arc};
 
 #[derive(Clone, Debug)]
 pub enum ImpossibleConstraint {
@@ -367,20 +368,28 @@ impl Problem<AtomTerm, ArcSort> {
     }
 
     pub fn add_actions(&mut self, actions: &Actions, typeinfo: &TypeInfo) -> Result<(), TypeError> {
+        let mut symbol_gen = SymbolGen::new();
         for action in actions.0.iter() {
-            self.add_action(action, typeinfo)?;
-        }
-        Ok(())
-    }
+            self.constraints
+                .extend(action.get_constraints(typeinfo, &mut symbol_gen)?);
 
-    pub fn add_action(
-        &mut self,
-        action: &NormAction,
-        typeinfo: &TypeInfo,
-    ) -> Result<(), TypeError> {
-        // TODO: should have a dedicated type for Vec<NormAction>
-        // self.constraints.extend(action.get_constraints(typeinfo)?);
-        // self.range.extend(action.atom_terms());
+            // bound vars are added to range
+            match action {
+                NormAction::Let(var, _, _) => {
+                    self.range.insert(AtomTerm::Var(*var));
+                }
+                NormAction::LetLit(v, l) => {
+                    self.range.insert(AtomTerm::Var(*v));
+                }
+                NormAction::LetAtomTerm(v, _) => {
+                    self.range.insert(AtomTerm::Var(*v));
+                }
+                NormAction::LetVar(v, _) => {
+                    self.range.insert(AtomTerm::Var(*v));
+                }
+                _ => (),
+            }
+        }
         Ok(())
     }
 
@@ -406,6 +415,70 @@ impl Problem<AtomTerm, ArcSort> {
     }
 }
 
+impl NormAction {
+    pub(crate) fn get_constraints(
+        &self,
+        typeinfo: &TypeInfo,
+        symbol_gen: &mut SymbolGen,
+    ) -> Result<Vec<Constraint<AtomTerm, ArcSort>>, TypeError> {
+        match self {
+            NormAction::Let(symbol, f, args) => {
+                let mut args = args.clone();
+                args.push(AtomTerm::Var(*symbol));
+
+                Ok(get_literal_and_global_constraints(&args, typeinfo)
+                    .chain(get_atom_application_constraints(f, &args, typeinfo)?)
+                    .collect())
+            }
+            NormAction::Set(head, args, rhs) => {
+                let mut args = args.clone();
+                args.push(*rhs);
+
+                Ok(get_literal_and_global_constraints(&args, typeinfo)
+                    .chain(get_atom_application_constraints(head, &args, typeinfo)?)
+                    .collect())
+            }
+            NormAction::Delete(head, args) => {
+                let mut args = args.clone();
+                // Add a dummy last output argument
+                let var = symbol_gen.fresh(&Symbol::from(format!("constraint${}", head)));
+                args.push(AtomTerm::Var(var));
+
+                Ok(get_literal_and_global_constraints(&args, typeinfo)
+                    .chain(get_atom_application_constraints(head, &args, typeinfo)?)
+                    .collect())
+            }
+            NormAction::Union(lhs, rhs) => {
+                Ok(get_literal_and_global_constraints(&[*lhs, *rhs], typeinfo)
+                    .chain(once(Constraint::Eq(*lhs, *rhs)))
+                    .collect())
+            }
+            NormAction::Extract(e, n) => {
+                // e can be anything
+                Ok(get_literal_and_global_constraints(&[*e, *n], typeinfo)
+                    .chain(once(Constraint::Assign(
+                        *n,
+                        typeinfo.get_sort_nofail::<I64Sort>() as ArcSort,
+                    )))
+                    .collect())
+            }
+            NormAction::Panic(_) => Ok(vec![]),
+            NormAction::LetVar(v1, v2) => {
+                Ok(vec![Constraint::Eq(AtomTerm::Var(*v1), AtomTerm::Var(*v2))])
+            }
+            NormAction::LetLit(v, l) => Ok(vec![Constraint::Assign(
+                AtomTerm::Var(*v),
+                typeinfo.infer_literal(l),
+            )]),
+            NormAction::LetAtomTerm(v, at) => {
+                Ok(get_literal_and_global_constraints(&[*at], typeinfo)
+                    .chain(once(Constraint::Eq(AtomTerm::Var(*v), *at)))
+                    .collect())
+            }
+        }
+    }
+}
+
 impl Atom<SymbolOrEq> {
     pub fn get_constraints(
         &self,
@@ -423,67 +496,73 @@ impl Atom<SymbolOrEq> {
                     .collect();
                 Ok(constraints)
             }
-            SymbolOrEq::Symbol(head) => {
-                // An atom can have potentially different semantics due to polymorphism
-                // e.g. (set-empty) can mean any empty set with some element type.
-                // To handle this, we collect each possible instantiations of an atom
-                // (where each instantiation is a vec of constraints, thus vec of vec)
-                // into `xor_constraints`.
-                // `Constraint::Xor` means one and only one of the instantiation can hold.
-                let mut xor_constraints: Vec<Vec<Constraint<AtomTerm, ArcSort>>> = vec![];
+            SymbolOrEq::Symbol(head) => Ok(literal_constraints
+                .into_iter()
+                .chain(get_atom_application_constraints(head, &self.args, type_info)?.into_iter())
+                .collect()),
+        }
+    }
+}
 
-                // function atom constraints
-                if let Some(typ) = type_info.func_types.get(head) {
-                    let mut constraints = vec![];
-                    // arity mismatch
-                    if typ.input.len() + 1 != self.args.len() {
-                        constraints.push(Constraint::Impossible(
-                            ImpossibleConstraint::ArityMismatch {
-                                atom: Atom {
-                                    head: *head,
-                                    args: self.args.clone(),
-                                },
-                                expected: typ.input.len(),
-                                actual: self.args.len() - 1,
-                            },
-                        ));
-                    } else {
-                        for (arg_typ, arg) in typ
-                            .input
-                            .iter()
-                            .cloned()
-                            .chain(once(typ.output.clone()))
-                            .zip(self.args.iter().cloned())
-                        {
-                            constraints.push(Constraint::Assign(arg, arg_typ));
-                        }
-                    }
-                    xor_constraints.push(constraints);
-                }
+fn get_atom_application_constraints(
+    head: &Symbol,
+    args: &[AtomTerm],
+    type_info: &TypeInfo,
+    // ignore_output: bool,
+) -> Result<Vec<Constraint<AtomTerm, ArcSort>>, TypeError> {
+    // An atom can have potentially different semantics due to polymorphism
+    // e.g. (set-empty) can mean any empty set with some element type.
+    // To handle this, we collect each possible instantiations of an atom
+    // (where each instantiation is a vec of constraints, thus vec of vec)
+    // into `xor_constraints`.
+    // `Constraint::Xor` means one and only one of the instantiation can hold.
+    let mut xor_constraints: Vec<Vec<Constraint<AtomTerm, ArcSort>>> = vec![];
 
-                // primitive atom constraints
-                if let Some(primitives) = type_info.primitives.get(head) {
-                    for p in primitives {
-                        let constraints = p.get_type_constraints().get(&self.args);
-                        xor_constraints.push(constraints);
-                    }
-                }
-
-                // do literal and global variable constraints first
-                // as they are the most "informative"
-                match xor_constraints.len() {
-                    0 => Err(TypeError::UnboundFunction(*head)),
-                    1 => Ok(literal_constraints
-                        .chain(xor_constraints.pop().unwrap())
-                        .collect()),
-                    _ => Ok(literal_constraints
-                        .chain(once(Constraint::Xor(
-                            xor_constraints.into_iter().map(Constraint::And).collect(),
-                        )))
-                        .collect()),
-                }
+    // function atom constraints
+    if let Some(typ) = type_info.func_types.get(head) {
+        let mut constraints = vec![];
+        // arity mismatch
+        if typ.input.len() + 1 != args.len() {
+            constraints.push(Constraint::Impossible(
+                ImpossibleConstraint::ArityMismatch {
+                    atom: Atom {
+                        head: *head,
+                        args: args.to_vec(),
+                    },
+                    expected: typ.input.len(),
+                    actual: args.len() - 1,
+                },
+            ));
+        } else {
+            for (arg_typ, arg) in typ
+                .input
+                .iter()
+                .cloned()
+                .chain(once(typ.output.clone()))
+                .zip(args.iter().cloned())
+            {
+                constraints.push(Constraint::Assign(arg, arg_typ));
             }
         }
+        xor_constraints.push(constraints);
+    }
+
+    // primitive atom constraints
+    if let Some(primitives) = type_info.primitives.get(head) {
+        for p in primitives {
+            let constraints = p.get_type_constraints().get(args);
+            xor_constraints.push(constraints);
+        }
+    }
+
+    // do literal and global variable constraints first
+    // as they are the most "informative"
+    match xor_constraints.len() {
+        0 => Err(TypeError::UnboundFunction(*head)),
+        1 => Ok(xor_constraints.pop().unwrap()),
+        _ => Ok(vec![Constraint::Xor(
+            xor_constraints.into_iter().map(Constraint::And).collect(),
+        )]),
     }
 }
 

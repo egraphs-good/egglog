@@ -1,6 +1,6 @@
 use std::ops::AddAssign;
 
-use crate::{constraint::AllEqualTypeConstraint, typechecking::FuncType, *};
+use crate::{constraint::AllEqualTypeConstraint, *};
 use hashbrown::HashMap;
 use typechecking::TypeError;
 
@@ -19,12 +19,10 @@ impl Actions {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum HeadOrEq<Head> {
-    Symbol(Head),
+pub enum SymbolOrEq {
+    Symbol(Symbol),
     Eq,
 }
-
-pub(crate) type SymbolOrEq = HeadOrEq<Symbol>;
 
 impl From<Symbol> for SymbolOrEq {
     fn from(value: Symbol) -> Self {
@@ -47,75 +45,44 @@ impl SymbolOrEq {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct UnresolvedCoreRule {
-    pub body: Query<SymbolOrEq, Symbol>,
+pub struct UnresolvedCoreRule {
+    pub body: Query<SymbolOrEq>,
     pub head: Actions,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct CanonicalizedCoreRule {
-    pub body: Query<Symbol, Symbol>,
+pub struct CanonicalizedCoreRule {
+    pub body: Query<Symbol>,
     pub head: Actions,
 }
 
 #[derive(Debug, Clone, Default)]
-pub(crate) struct ResolvedCoreRule {
-    pub body: Query<ResolvedCall, ResolvedVar>,
+pub struct ResolvedCoreRule {
+    pub body: Query<ResolvedCall>,
     pub head: Actions,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct SpecializedPrimitive {
-    pub(crate) primitive: Primitive,
-    pub(crate) input: Vec<ArcSort>,
-    pub(crate) output: ArcSort,
+pub enum ResolvedCall {
+    Func(Symbol),
+    Primitive(Primitive),
 }
 
-#[derive(Debug, Clone)]
-pub(crate) enum ResolvedCall {
-    Func(FuncType),
-    Primitive(SpecializedPrimitive),
-}
-
-impl ResolvedCall {
-    pub fn output(&self) -> &ArcSort {
-        match self {
-            ResolvedCall::Func(func) => &func.output,
-            ResolvedCall::Primitive(prim) => &prim.output,
-        }
-    }
-}
-
-impl Display for ResolvedCall {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ResolvedCall::Func(func) => write!(f, "{}", func.name),
-            ResolvedCall::Primitive(prim) => write!(f, "{}", prim.primitive.0.name()),
-        }
-    }
-}
-
-impl ToSexp for ResolvedCall {
-    fn to_sexp(&self) -> Sexp {
-        Sexp::Symbol(self.to_string())
-    }
-}
-
-impl Query<ResolvedCall, Symbol> {
+impl Query<ResolvedCall> {
     pub fn filters(&self) -> impl Iterator<Item = Atom<Primitive>> + '_ {
         self.atoms.iter().filter_map(|atom| match &atom.head {
             ResolvedCall::Func(_) => None,
             ResolvedCall::Primitive(head) => Some(Atom {
-                head: head.primitive.clone(),
+                head: head.clone(),
                 args: atom.args.clone(),
             }),
         })
     }
 
     pub fn funcs(&self) -> impl Iterator<Item = Atom<Symbol>> + '_ {
-        self.atoms.iter().filter_map(|atom| match &atom.head {
+        self.atoms.iter().filter_map(|atom| match atom.head {
             ResolvedCall::Func(head) => Some(Atom {
-                head: head.name,
+                head,
                 args: atom.args.clone(),
             }),
             ResolvedCall::Primitive(_) => None,
@@ -132,23 +99,54 @@ impl UnresolvedCoreRule {
     }
 }
 
-pub(crate) fn actions_to_core_actions(actions: &[UnresolvedAction]) -> Vec<NormAction> {
-    let mut desugar = Desugar::default();
-    todo!("flatten actions")
-    // flatten_actions(actions, &mut desugar)
+pub(crate) fn facts_to_query(body: &Vec<NormFact>, typeinfo: &TypeInfo) -> Query<SymbolOrEq> {
+    fn to_atom_term(s: Symbol, typeinfo: &TypeInfo) -> AtomTerm {
+        if typeinfo.is_global(s) {
+            AtomTerm::Global(s)
+        } else {
+            AtomTerm::Var(s)
+        }
+    }
+    let mut atoms = vec![];
+    for fact in body {
+        match fact {
+            NormFact::Assign(symbol, NormExpr::Call(head, args))
+            | NormFact::Compute(symbol, NormExpr::Call(head, args)) => {
+                let args = args
+                    .iter()
+                    .chain(once(symbol))
+                    .cloned()
+                    .map(|s| to_atom_term(s, typeinfo))
+                    .collect();
+                let head = SymbolOrEq::Symbol(*head);
+                atoms.push(Atom { head, args });
+            }
+            NormFact::AssignVar(lhs, rhs) => atoms.push(Atom {
+                head: SymbolOrEq::Eq,
+                args: vec![to_atom_term(*lhs, typeinfo), to_atom_term(*rhs, typeinfo)],
+            }),
+            NormFact::ConstrainEq(lhs, rhs) => atoms.push(Atom {
+                head: SymbolOrEq::Eq,
+                args: vec![to_atom_term(*lhs, typeinfo), to_atom_term(*rhs, typeinfo)],
+            }),
+            NormFact::AssignLit(symbol, lit) => atoms.push(Atom {
+                head: SymbolOrEq::Eq,
+                args: vec![
+                    to_atom_term(*symbol, typeinfo),
+                    AtomTerm::Literal(lit.clone()),
+                ],
+            }),
+        }
+    }
+    Query { atoms }
 }
 
-impl UnresolvedRule {
-    pub(crate) fn to_core_rule(
-        &self,
-        typeinfo: &TypeInfo,
-        fresh_gen: &mut SymbolGen,
-    ) -> UnresolvedCoreRule {
-        let Rule { head, body } = self;
-        let (body, _correspondence) = Expr::facts_to_query(body, typeinfo, &mut SymbolGen::new());
+impl NormRule {
+    pub(crate) fn to_core_rule(&self, typeinfo: &TypeInfo) -> UnresolvedCoreRule {
+        let NormRule { head, body } = self;
         UnresolvedCoreRule {
-            body,
-            head: Actions(actions_to_core_actions(head)),
+            body: facts_to_query(body, typeinfo),
+            head: Actions(head.clone()),
         }
     }
 }
@@ -158,20 +156,17 @@ pub struct Context<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum GenericAtomTerm<Leaf> {
-    Var(Leaf),
+pub enum AtomTerm {
+    Var(Symbol),
     Literal(Literal),
-    Global(Leaf),
+    Global(Symbol),
 }
-
-pub type AtomTerm = GenericAtomTerm<Symbol>;
-
 impl AtomTerm {
-    pub fn to_expr(&self) -> UnresolvedExpr {
+    pub fn to_expr(&self) -> Expr {
         match self {
-            AtomTerm::Var(v) => Expr::Var((), *v),
-            AtomTerm::Literal(l) => Expr::Lit((), l.clone()),
-            AtomTerm::Global(v) => Expr::Var((), *v),
+            AtomTerm::Var(v) => Expr::Var(*v),
+            AtomTerm::Literal(l) => Expr::Lit(l.clone()),
+            AtomTerm::Global(v) => Expr::Var(*v),
         }
     }
 }
@@ -187,12 +182,10 @@ impl std::fmt::Display for AtomTerm {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct GenericAtom<Head, Leaf> {
-    pub head: Head,
-    pub args: Vec<GenericAtomTerm<Leaf>>,
+pub struct Atom<T> {
+    pub head: T,
+    pub args: Vec<AtomTerm>,
 }
-
-pub type Atom<T> = GenericAtom<T, Symbol>;
 
 impl<T: std::fmt::Display> std::fmt::Display for Atom<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -201,11 +194,11 @@ impl<T: std::fmt::Display> std::fmt::Display for Atom<T> {
 }
 
 #[derive(Debug, Clone)]
-pub struct Query<Head, Leaf> {
-    pub atoms: Vec<GenericAtom<Head, Leaf>>,
+pub struct Query<T> {
+    pub atoms: Vec<Atom<T>>,
 }
 
-impl<Head, Leaf> Default for Query<Head, Leaf> {
+impl<T> Default for Query<T> {
     fn default() -> Self {
         Self {
             atoms: Default::default(),
@@ -213,7 +206,7 @@ impl<Head, Leaf> Default for Query<Head, Leaf> {
     }
 }
 
-impl Query<SymbolOrEq, Symbol> {
+impl Query<SymbolOrEq> {
     pub fn get_constraints(
         &self,
         type_info: &TypeInfo,
@@ -233,13 +226,13 @@ impl Query<SymbolOrEq, Symbol> {
     }
 }
 
-impl<Head, Leaf> AddAssign for Query<Head, Leaf> {
+impl<T> AddAssign for Query<T> {
     fn add_assign(&mut self, rhs: Self) {
         self.atoms.extend(rhs.atoms);
     }
 }
 
-impl std::fmt::Display for Query<Symbol, Symbol> {
+impl std::fmt::Display for Query<Symbol> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for atom in &self.atoms {
             writeln!(f, "{atom}")?;
@@ -248,7 +241,7 @@ impl std::fmt::Display for Query<Symbol, Symbol> {
     }
 }
 
-impl std::fmt::Display for Query<ResolvedCall, Symbol> {
+impl std::fmt::Display for Query<ResolvedCall> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for atom in self.funcs() {
             writeln!(f, "{atom}")?;
@@ -269,7 +262,7 @@ impl std::fmt::Display for Query<ResolvedCall, Symbol> {
     }
 }
 
-impl<Head> GenericAtom<Head, Symbol> {
+impl<T> Atom<T> {
     pub fn vars(&self) -> impl Iterator<Item = Symbol> + '_ {
         self.args.iter().filter_map(|t| match t {
             AtomTerm::Var(v) => Some(*v),
@@ -293,10 +286,9 @@ impl<Head> GenericAtom<Head, Symbol> {
     }
 }
 impl Atom<Symbol> {
-    pub(crate) fn to_expr(&self) -> UnresolvedExpr {
+    pub(crate) fn to_expr(&self) -> Expr {
         let n = self.args.len();
         Expr::Call(
-            (),
             self.head,
             self.args[0..n - 1]
                 .iter()
@@ -333,7 +325,7 @@ impl PrimitiveLike for ValueEq {
 }
 
 impl<'a> Context<'a> {
-    pub(crate) fn new(egraph: &'a mut EGraph) -> Self {
+    pub fn new(egraph: &'a mut EGraph) -> Self {
         Self { egraph }
     }
 
@@ -341,7 +333,7 @@ impl<'a> Context<'a> {
     /// In particular, it removes equality checks between variables and
     /// other arguments, and turns equality checks between non-variable arguments
     /// into a primitive equality check `value-eq`.
-    pub(crate) fn canonicalize(&self, rule: UnresolvedCoreRule) -> CanonicalizedCoreRule {
+    pub fn canonicalize(&self, rule: UnresolvedCoreRule) -> CanonicalizedCoreRule {
         let mut result_rule = rule;
         loop {
             let mut to_subst = None;
@@ -408,187 +400,241 @@ impl<'a> Context<'a> {
 
     pub(crate) fn resolve_rule(
         &self,
+        ctx: CommandId,
         rule: CanonicalizedCoreRule,
     ) -> Result<ResolvedCoreRule, TypeError> {
-        // let type_info = self.egraph.type_info();
-        // let local_types = type_info.local_types.get(&ctx).unwrap();
-        // let get_type = |arg: &AtomTerm| match arg {
-        //     AtomTerm::Global(v) => type_info.lookup_global(v).unwrap().clone(),
-        //     AtomTerm::Var(v) => local_types.get(v).unwrap().clone(),
-        //     AtomTerm::Literal(lit) => type_info.infer_literal(lit),
-        // };
-        // let body_atoms: Vec<Atom<ResolvedCall>> = rule
-        //     .body
-        //     .atoms
-        //     .into_iter()
-        //     .map(|mut atom| {
-        //         let symbol = atom.head;
-        //         if let Some(ty) = type_info.func_types.get(&symbol) {
-        //             let expected = ty.input.iter().chain(once(&ty.output));
-        //             let expected = expected.map(|s| s.name());
-        //             let actual = atom.args.iter().map(get_type);
-        //             let actual = actual.map(|s| s.name());
-        //             if expected.eq(actual) {
-        //                 return Atom {
-        //                     head: ResolvedCall::Func(symbol),
-        //                     args: std::mem::take(&mut atom.args),
-        //                 };
-        //             }
-        //         }
-        //         if let Some(primitives) = type_info.primitives.get(&symbol) {
-        //             if primitives.len() == 1 {
-        //                 Atom {
-        //                     head: ResolvedCall::Primitive(primitives[0].clone()),
-        //                     args: std::mem::take(&mut atom.args),
-        //                 }
-        //             } else {
-        //                 let tys: Vec<_> = atom
-        //                     .args
-        //                     // remove the output type since accept() only takes the input types
-        //                     .split_last()
-        //                     .unwrap()
-        //                     .1
-        //                     .iter()
-        //                     .map(get_type)
-        //                     .collect();
-        //                 for primitive in primitives.iter() {
-        //                     if primitive.accept(&tys).is_some() {
-        //                         return Atom {
-        //                             head: ResolvedCall::Primitive(primitive.clone()),
-        //                             args: std::mem::take(&mut atom.args),
-        //                         };
-        //                     }
-        //                 }
-        //                 panic!("Impossible: there should be exactly one primitive that satisfy the type assignment")
-        //             }
-        //         } else {
-        //             panic!("Impossible: atom symbols not bound anywhere")
-        //         }
-        //     })
-        //     .collect();
-        // let body = Query { atoms: body_atoms };
+        let type_info = self.egraph.type_info();
+        let local_types = type_info.local_types.get(&ctx).unwrap();
+        let get_type = |arg: &AtomTerm| match arg {
+            AtomTerm::Global(v) => type_info.lookup_global(v).unwrap().clone(),
+            AtomTerm::Var(v) => local_types.get(v).unwrap().clone(),
+            AtomTerm::Literal(lit) => type_info.infer_literal(lit),
+        };
+        let body_atoms: Vec<Atom<ResolvedCall>> = rule
+            .body
+            .atoms
+            .into_iter()
+            .map(|mut atom| {
+                let symbol = atom.head;
+                if let Some(ty) = type_info.func_types.get(&symbol) {
+                    let expected = ty.input.iter().chain(once(&ty.output));
+                    let expected = expected.map(|s| s.name());
+                    let actual = atom.args.iter().map(get_type);
+                    let actual = actual.map(|s| s.name());
+                    if expected.eq(actual) {
+                        return Atom {
+                            head: ResolvedCall::Func(symbol),
+                            args: std::mem::take(&mut atom.args),
+                        };
+                    }
+                }
+                if let Some(primitives) = type_info.primitives.get(&symbol) {
+                    if primitives.len() == 1 {
+                        Atom {
+                            head: ResolvedCall::Primitive(primitives[0].clone()),
+                            args: std::mem::take(&mut atom.args),
+                        }
+                    } else {
+                        let tys: Vec<_> = atom
+                            .args
+                            // remove the output type since accept() only takes the input types
+                            .split_last()
+                            .unwrap()
+                            .1
+                            .iter()
+                            .map(get_type)
+                            .collect();
+                        for primitive in primitives.iter() {
+                            if primitive.accept(&tys).is_some() {
+                                return Atom {
+                                    head: ResolvedCall::Primitive(primitive.clone()),
+                                    args: std::mem::take(&mut atom.args),
+                                };
+                            }
+                        }
+                        panic!("Impossible: there should be exactly one primitive that satisfy the type assignment")
+                    }
+                } else {
+                    panic!("Impossible: atom symbols not bound anywhere")
+                }
+            })
+            .collect();
+        let body = Query { atoms: body_atoms };
 
-        // let result_rule = ResolvedCoreRule {
-        //     body,
-        //     head: rule.head,
-        // };
-        // Ok(result_rule)
-        todo!("resolve")
+        let result_rule = ResolvedCoreRule {
+            body,
+            head: rule.head,
+        };
+        Ok(result_rule)
     }
 
-    // pub(crate) fn compile_rule(
-    //     &mut self,
-    //     rule: &'a ResolvedCoreRule,
-    // ) -> Result<ResolvedCoreRule, Vec<TypeError>> {
-    //     let rule = rule.to_core_rule(self.egraph.type_info());
-    //     let rule = self.canonicalize(rule);
-    //     let rule = self.resolve_rule(rule).map_err(|e| vec![e])?;
-    //     Ok(rule)
-    // }
+    pub(crate) fn compile_norm_rule(
+        &mut self,
+        ctx: CommandId,
+        rule: &'a NormRule,
+    ) -> Result<ResolvedCoreRule, Vec<TypeError>> {
+        let rule = rule.to_core_rule(self.egraph.type_info());
+        let rule = self.canonicalize(rule);
+        let rule = self.resolve_rule(ctx, rule).map_err(|e| vec![e])?;
+        Ok(rule)
+    }
 }
 
-struct ActionCompiler<'a> {
+struct ActionChecker<'a> {
     egraph: &'a EGraph,
-    locals: IndexSet<Symbol>,
+    types: &'a IndexMap<Symbol, ArcSort>,
+    locals: IndexMap<Symbol, ArcSort>,
     instructions: Vec<Instruction>,
 }
 
-impl<'a> ActionCompiler<'a> {
+impl<'a> ActionChecker<'a> {
     // TODO: refactor this to get rid of "the type part" of the action checker
-    fn check_action(&mut self, action: &ResolvedAction) {
+    fn check_action(&mut self, action: &Action) -> Result<(), TypeError> {
         match action {
-            Action::Let((), v, e) => {
-                self.compile_expr(e);
-                self.locals.insert(v.name);
+            Action::Let(v, e) => {
+                let (_, ty) = self.infer_expr(e)?;
+                self.locals.insert(*v, ty);
+                Ok(())
             }
-            Action::Set((), f, args, val) => {
-                let ResolvedCall::Func(func) = f else {
-                    panic!("Cannot set primitive- should have been caught by typechecking!!!")
-                };
-
-                let fake_call = Expr::Call((), *f, args.clone());
-                self.compile_expr(&fake_call);
+            Action::Set(f, args, val) => {
+                let fake_call = Expr::Call(*f, args.clone());
+                let (_, ty) = self.infer_expr(&fake_call)?;
                 let fake_instr = self.instructions.pop().unwrap();
                 assert!(matches!(fake_instr, Instruction::CallFunction(..)));
-                self.compile_expr(val);
-                self.instructions.push(Instruction::Set(func.name));
+                self.check_expr(val, ty)?;
+                self.instructions.push(Instruction::Set(*f));
+                Ok(())
             }
-            Action::Extract((), variable, variants) => {
-                self.compile_expr(variable);
-                self.compile_expr(variants);
+            Action::Extract(variable, variants) => {
+                let (_, _ty) = self.infer_expr(variable)?;
+                let (_, _ty2) = self.infer_expr(variants)?;
                 self.instructions.push(Instruction::Extract(2));
+                Ok(())
             }
-            Action::Delete((), f, args) => {
-                let ResolvedCall::Func(func) = f else {
-                    panic!("Cannot delete primitive- should have been caught by typechecking!!!")
-                };
-                let fake_call = Expr::Call((), *f, args.clone());
-                self.compile_expr(&fake_call);
+            Action::Delete(f, args) => {
+                let fake_call = Expr::Call(*f, args.clone());
+                let (_, _ty) = self.infer_expr(&fake_call)?;
                 let fake_instr = self.instructions.pop().unwrap();
                 assert!(matches!(fake_instr, Instruction::CallFunction(..)));
-                self.instructions.push(Instruction::DeleteRow(func.name));
+                self.instructions.push(Instruction::DeleteRow(*f));
+                Ok(())
             }
-            Action::Union((), a, b) => {
-                self.compile_expr(a);
-                self.compile_expr(b);
+            Action::Union(a, b) => {
+                let (_, ty) = self.infer_expr(a)?;
+                if !ty.is_eq_sort() {
+                    panic!("Base types cannot be unioned")
+                }
+                self.check_expr(b, ty)?;
                 self.instructions.push(Instruction::Union(2));
+                Ok(())
             }
-            Action::Panic((), msg) => {
+            Action::Panic(msg) => {
                 self.instructions.push(Instruction::Panic(msg.clone()));
+                Ok(())
             }
-            Action::Expr((), expr) => {
-                self.compile_expr(expr);
+            Action::Expr(expr) => {
+                self.infer_expr(expr)?;
                 self.instructions.push(Instruction::Pop);
+                Ok(())
             }
         }
     }
+}
+
+impl<'a> ExprChecker<'a> for ActionChecker<'a> {
+    type T = ();
 
     fn egraph(&self) -> &'a EGraph {
         self.egraph
     }
 
-    fn do_lit(&mut self, lit: &Literal) {
+    fn do_lit(&mut self, lit: &Literal) -> Self::T {
         self.instructions.push(Instruction::Literal(lit.clone()));
     }
 
-    fn compile_var(&mut self, var: ResolvedVar) {
-        if let Some((sort, _v, _ts)) = self.egraph().global_bindings.get(&var.name) {
-            self.instructions.push(Instruction::Global(var.name));
-        } else if let Some((i, _)) = self.locals.get_full(&var.name) {
+    fn infer_var(&mut self, sym: Symbol) -> Result<(Self::T, ArcSort), TypeError> {
+        if let Some((sort, _v, _ts)) = self.egraph().global_bindings.get(&sym) {
+            self.instructions.push(Instruction::Global(sym));
+            Ok(((), sort.clone()))
+        } else if let Some((i, _, ty)) = self.locals.get_full(&sym) {
             self.instructions.push(Instruction::Load(Load::Stack(i)));
+            Ok(((), ty.clone()))
+        } else if let Some((i, _, ty)) = self.types.get_full(&sym) {
+            self.instructions.push(Instruction::Load(Load::Subst(i)));
+            Ok(((), ty.clone()))
         } else {
-            // TODO need to know the index of the variable
-            // in the substitution.
-            // Used to use index in types
-            //self.instructions.push(Instruction::Load(Load::Subst(i)));
-            todo!("need variable ordering")
+            Err(TypeError::Unbound(sym))
         }
     }
 
-    fn do_function(&mut self, func_type: &FuncType) {
+    fn do_function(&mut self, f: Symbol, _args: Vec<Self::T>) -> Self::T {
+        let func_type = self.egraph.type_info().lookup_user_func(f).unwrap();
         self.instructions.push(Instruction::CallFunction(
-            func_type.name,
+            f,
             func_type.has_default || func_type.is_datatype,
         ));
     }
 
-    fn compile_prim(&mut self, prim: SpecializedPrimitive) {
+    fn do_prim(&mut self, prim: Primitive, args: Vec<Self::T>) -> Self::T {
         self.instructions
-            .push(Instruction::CallPrimitive(prim.primitive, prim.input.len()));
+            .push(Instruction::CallPrimitive(prim, args.len()));
+    }
+}
+
+trait ExprChecker<'a> {
+    type T;
+    fn egraph(&self) -> &'a EGraph;
+    fn do_lit(&mut self, lit: &Literal) -> Self::T;
+    fn do_function(&mut self, f: Symbol, args: Vec<Self::T>) -> Self::T;
+    fn do_prim(&mut self, prim: Primitive, args: Vec<Self::T>) -> Self::T;
+
+    fn infer_var(&mut self, var: Symbol) -> Result<(Self::T, ArcSort), TypeError>;
+    fn check_var(&mut self, var: Symbol, ty: ArcSort) -> Result<Self::T, TypeError> {
+        let (t, actual) = self.infer_var(var)?;
+        if actual.name() != ty.name() {
+            Err(TypeError::Mismatch {
+                expr: Expr::Var(var),
+                expected: ty,
+                actual,
+                reason: "mismatch".into(),
+            })
+        } else {
+            Ok(t)
+        }
+    }
+
+    fn check_expr(&mut self, expr: &Expr, ty: ArcSort) -> Result<Self::T, TypeError> {
+        match expr {
+            Expr::Var(v) if !self.is_variable(*v) => self.check_var(*v, ty),
+            _ => {
+                let (t, actual) = self.infer_expr(expr)?;
+                if actual.name() != ty.name() {
+                    Err(TypeError::Mismatch {
+                        expr: expr.clone(),
+                        expected: ty,
+                        actual,
+                        reason: "mismatch".into(),
+                    })
+                } else {
+                    Ok(t)
+                }
+            }
+        }
     }
 
     fn is_variable(&self, sym: Symbol) -> bool {
         self.egraph().global_bindings.contains_key(&sym)
     }
 
-    fn compile_expr(&mut self, expr: &ResolvedExpr) {
+    fn infer_expr(&mut self, expr: &Expr) -> Result<(Self::T, ArcSort), TypeError> {
         match expr {
-            Expr::Lit(_ann, lit) => {
+            Expr::Lit(lit) => {
                 let t = self.do_lit(lit);
+                Ok((t, self.egraph().type_info().infer_literal(lit)))
             }
-            Expr::Var(_ann, sym) => (),
-            Expr::Call(_ann, calltype, args) => match calltype {
-                ResolvedCall::Func(functype) => {
+            Expr::Var(sym) => self.infer_var(*sym),
+            Expr::Call(sym, args) => {
+                if let Some(functype) = self.egraph().type_info().lookup_user_func(*sym) {
                     assert_eq!(
                         functype.input.len(),
                         args.len(),
@@ -596,15 +642,37 @@ impl<'a> ActionCompiler<'a> {
                         functype.name
                     );
 
-                    self.do_function(&functype);
-                }
-                ResolvedCall::Primitive(prim) => {
-                    for arg in args {
-                        self.compile_expr(arg);
+                    let mut ts = vec![];
+                    for (expected, arg) in functype.input.iter().zip(args) {
+                        ts.push(self.check_expr(arg, expected.clone())?);
                     }
-                    self.compile_prim(prim.clone());
+
+                    let t = self.do_function(*sym, ts);
+                    Ok((t, functype.output.clone()))
+                } else if let Some(prims) = self.egraph().type_info().primitives.get(sym) {
+                    let mut ts = Vec::with_capacity(args.len());
+                    let mut tys = Vec::with_capacity(args.len());
+                    for arg in args {
+                        let (t, ty) = self.infer_expr(arg)?;
+                        ts.push(t);
+                        tys.push(ty);
+                    }
+
+                    for prim in prims {
+                        if let Some(output_type) = prim.accept(&tys) {
+                            let t = self.do_prim(prim.clone(), ts);
+                            return Ok((t, output_type));
+                        }
+                    }
+
+                    Err(TypeError::NoMatchingPrimitive {
+                        op: *sym,
+                        inputs: tys.into_iter().map(|t| t.name()).collect(),
+                    })
+                } else {
+                    panic!("Unbound function {}", sym);
                 }
-            },
+            }
         }
     }
 }
@@ -635,36 +703,55 @@ enum Instruction {
 pub struct Program(Vec<Instruction>);
 
 impl EGraph {
-    pub fn compile_actions(&self, actions: &[ResolvedAction]) -> Result<Program, Vec<TypeError>> {
-        let mut checker = ActionCompiler {
+    pub fn compile_actions(
+        &self,
+        types: &IndexMap<Symbol, ArcSort>,
+        actions: &[Action],
+    ) -> Result<Program, Vec<TypeError>> {
+        let mut checker = ActionChecker {
             egraph: self,
-            locals: IndexSet::default(),
+            types,
+            locals: IndexMap::default(),
             instructions: Vec::new(),
         };
 
-        // let mut errors = vec![];
-        // for a in actions {
-        //     if let Err(err) = checker.check_action(a) {
-        //         errors.push(err);
-        //     }
-        // }
+        let mut errors = vec![];
+        for a in actions {
+            if let Err(err) = checker.check_action(a) {
+                errors.push(err);
+            }
+        }
 
-        // if errors.is_empty() {
-        //     Ok(Program(checker.instructions))
-        // } else {
-        //     Err(errors)
-        // }
-        todo!("compile flatten and compile actions")
+        if errors.is_empty() {
+            Ok(Program(checker.instructions))
+        } else {
+            Err(errors)
+        }
     }
 
-    pub(crate) fn compile_expr(&self, expr: &ResolvedExpr) -> Program {
-        let mut compiler = ActionCompiler {
+    pub fn compile_expr(
+        &self,
+        types: &IndexMap<Symbol, ArcSort>,
+        expr: &Expr,
+        expected_type: Option<ArcSort>,
+    ) -> Result<(ArcSort, Program), Vec<TypeError>> {
+        let mut checker = ActionChecker {
             egraph: self,
-            locals: IndexSet::default(),
+            types,
+            locals: IndexMap::default(),
             instructions: Vec::new(),
         };
-        compiler.compile_expr(expr);
-        Program(compiler.instructions)
+
+        let t: ArcSort = if let Some(expected) = expected_type {
+            checker
+                .check_expr(expr, expected.clone())
+                .map_err(|err| vec![err])?;
+            expected
+        } else {
+            checker.infer_expr(expr).map_err(|err| vec![err])?.1
+        };
+
+        Ok((t, Program(checker.instructions)))
     }
 
     fn perform_set(
@@ -722,7 +809,7 @@ impl EGraph {
         Ok(())
     }
 
-    pub(crate) fn run_actions(
+    pub fn run_actions(
         &mut self,
         stack: &mut Vec<Value>,
         subst: &[Value],
@@ -772,20 +859,18 @@ impl EGraph {
                                 // TODO: this is not efficient due to cloning
                                 let out = out.clone();
                                 let default = default.clone();
-                                let value = self.eval_expr(&default, true)?;
+                                let (_, value) = self.eval_expr(&default, Some(out), true)?;
                                 self.functions.get_mut(f).unwrap().insert(values, value, ts);
                                 value
                             }
                             _ => {
                                 return Err(Error::NotFoundError(NotFoundError(Expr::Var(
-                                    (),
                                     format!("No value found for {f} {:?}", values).into(),
                                 ))))
                             }
                         }
                     } else {
                         return Err(Error::NotFoundError(NotFoundError(Expr::Var(
-                            (),
                             format!("No value found for {f} {:?}", values).into(),
                         ))));
                     };

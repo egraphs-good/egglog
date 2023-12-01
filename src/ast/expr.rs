@@ -89,6 +89,16 @@ pub enum Expr<Head, Leaf, Ann> {
     Call(Ann, Head, Vec<Self>),
 }
 
+impl ResolvedExpr {
+    pub fn output_type(&self, type_info: &TypeInfo) -> ArcSort {
+        match self {
+            Expr::Lit(_, lit) => type_info.infer_literal(lit),
+            Expr::Var(_, resolved_var) => resolved_var.sort.clone(),
+            Expr::Call(_, resolved_call, _) => resolved_call.output().clone(),
+        }
+    }
+}
+
 // impl NormExpr {
 //     pub fn to_expr(&self) -> Expr<Symbol, ()> {
 //         match self {

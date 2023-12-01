@@ -1428,9 +1428,16 @@ pub(crate) fn actions_to_norm_actions(
 ) -> Result<(Vec<NormAction>, Vec<Action<(Symbol, Symbol), Symbol, ()>>), TypeError> {
     let mut norm_actions = vec![];
     let mut mapped_actions = vec![];
+
+    // During the lowering, there are two important guaratees:
+    //   Every used variable should be bound.
+    //   Every introduced variable should be unbound before.
     for action in actions {
         match action {
             Action::Let(_ann, var, expr) => {
+                if binding.contains(var) {
+                    return Err(TypeError::AlreadyDefined(var.clone()));
+                }
                 let (actions, mapped_expr) =
                     expr_to_norm_actions(expr, typeinfo, binding, fresh_gen)?;
                 norm_actions.extend(actions);

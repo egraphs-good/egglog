@@ -81,11 +81,8 @@ impl Function {
         };
 
         let merge_vals = if let Some(merge_expr) = &decl.merge {
-            let mut types = IndexMap::<Symbol, ArcSort>::default();
-            types.insert("old".into(), output.clone());
-            types.insert("new".into(), output.clone());
             let (_, program) = egraph
-                .compile_expr(&types, merge_expr, Some(output.clone()))
+                .compile_expr(merge_expr, Some(output.clone()))
                 .map_err(Error::TypeErrors)?;
             MergeFn::Expr(Rc::new(program))
         } else if output.is_eq_sort() {
@@ -97,11 +94,8 @@ impl Function {
         let on_merge = if decl.merge_action.is_empty() {
             None
         } else {
-            let mut types = IndexMap::<Symbol, ArcSort>::default();
-            types.insert("old".into(), output.clone());
-            types.insert("new".into(), output.clone());
             let program = egraph
-                .compile_actions(&types, todo!("need to also have a lowered definition of decl {:?}", &decl.merge_action))
+                .compile_actions(decl.merge_action)
                 .map_err(Error::TypeErrors)?;
             Some(Rc::new(program))
         };
