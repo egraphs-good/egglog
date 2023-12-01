@@ -511,31 +511,18 @@ impl<'a> ActionChecker<'a> {
                 self.instructions.push(Instruction::Extract(2));
                 Ok(())
             }
-            Action::Delete(f, args) => {
+            Action::Delete(f, args) | Action::Unextractable(f, args) | Action::Subsume(f, args) => {
                 let fake_call = Expr::Call(*f, args.clone());
                 let (_, _ty) = self.infer_expr(&fake_call)?;
                 let fake_instr = self.instructions.pop().unwrap();
                 assert!(matches!(fake_instr, Instruction::CallFunction(..)));
-                self.instructions
-                    .push(Instruction::ChangeRow(ChangeRow::Delete, *f));
-                Ok(())
-            }
-            Action::Unextractable(f, args) => {
-                let fake_call = Expr::Call(*f, args.clone());
-                let (_, _ty) = self.infer_expr(&fake_call)?;
-                let fake_instr = self.instructions.pop().unwrap();
-                assert!(matches!(fake_instr, Instruction::CallFunction(..)));
-                self.instructions
-                    .push(Instruction::ChangeRow(ChangeRow::Unextractable, *f));
-                Ok(())
-            }
-            Action::Subsume(f, args) => {
-                let fake_call = Expr::Call(*f, args.clone());
-                let (_, _ty) = self.infer_expr(&fake_call)?;
-                let fake_instr = self.instructions.pop().unwrap();
-                assert!(matches!(fake_instr, Instruction::CallFunction(..)));
-                self.instructions
-                    .push(Instruction::ChangeRow(ChangeRow::Subsume, *f));
+                let change = match action {
+                    Action::Delete(..) => ChangeRow::Delete,
+                    Action::Unextractable(..) => ChangeRow::Unextractable,
+                    Action::Subsume(..) => ChangeRow::Subsume,
+                    _ => unreachable!(),
+                };
+                self.instructions.push(Instruction::ChangeRow(change, *f));
                 Ok(())
             }
             Action::Union(a, b) => {

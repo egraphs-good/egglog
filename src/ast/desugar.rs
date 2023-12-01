@@ -289,38 +289,17 @@ fn flatten_actions(actions: &Vec<Action>, desugar: &mut Desugar) -> Vec<NormActi
                 let added_variants = add_expr(variants.clone(), &mut res);
                 res.push(NormAction::Extract(added, added_variants));
             }
-            // TODO: Reduce duplication in these three cases
-            Action::Delete(symbol, exprs) => {
+            Action::Delete(symbol, exprs)
+            | Action::Unextractable(symbol, exprs)
+            | Action::Subsume(symbol, exprs) => {
+                let change = match action {
+                    Action::Delete(_, _) => ChangeRow::Delete,
+                    Action::Unextractable(_, _) => ChangeRow::Unextractable,
+                    Action::Subsume(_, _) => ChangeRow::Subsume,
+                    _ => unreachable!(),
+                };
                 let unex = NormAction::ChangeRow(
-                    ChangeRow::Delete,
-                    NormExpr::Call(
-                        *symbol,
-                        exprs
-                            .clone()
-                            .into_iter()
-                            .map(|ex| add_expr(ex, &mut res))
-                            .collect(),
-                    ),
-                );
-                res.push(unex);
-            }
-            Action::Unextractable(symbol, exprs) => {
-                let unex = NormAction::ChangeRow(
-                    ChangeRow::Unextractable,
-                    NormExpr::Call(
-                        *symbol,
-                        exprs
-                            .clone()
-                            .into_iter()
-                            .map(|ex| add_expr(ex, &mut res))
-                            .collect(),
-                    ),
-                );
-                res.push(unex);
-            }
-            Action::Subsume(symbol, exprs) => {
-                let unex = NormAction::ChangeRow(
-                    ChangeRow::Subsume,
+                    change,
                     NormExpr::Call(
                         *symbol,
                         exprs
