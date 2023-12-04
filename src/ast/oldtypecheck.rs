@@ -5,8 +5,8 @@ use hashbrown::HashMap;
 use typechecking::TypeError;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Default)]
-pub struct Actions(pub(crate) Vec<NormAction>);
-impl Actions {
+pub struct CoreActions(pub(crate) Vec<NormAction>);
+impl CoreActions {
     fn subst(&mut self, subst: &HashMap<Symbol, AtomTerm>) {
         let actions = subst.iter().map(|(symbol, atom_term)| match atom_term {
             AtomTerm::Var(v) => NormAction::LetVar(*symbol, *v),
@@ -47,19 +47,19 @@ impl SymbolOrEq {
 #[derive(Debug, Clone)]
 pub struct UnresolvedCoreRule {
     pub body: Query<SymbolOrEq>,
-    pub head: Actions,
+    pub head: CoreActions,
 }
 
 #[derive(Debug, Clone)]
 pub struct CanonicalizedCoreRule {
     pub body: Query<Symbol>,
-    pub head: Actions,
+    pub head: CoreActions,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct ResolvedCoreRule {
     pub body: Query<ResolvedCall>,
-    pub head: Actions,
+    pub head: CoreActions,
 }
 
 #[derive(Debug, Clone)]
@@ -146,7 +146,7 @@ impl NormRule {
         let NormRule { head, body } = self;
         UnresolvedCoreRule {
             body: facts_to_query(body, typeinfo),
-            head: Actions(head.clone()),
+            head: CoreActions(head.clone()),
         }
     }
 }

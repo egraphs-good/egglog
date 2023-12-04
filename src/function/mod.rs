@@ -81,9 +81,7 @@ impl Function {
         };
 
         let merge_vals = if let Some(merge_expr) = &decl.merge {
-            let (_, program) = egraph
-                .compile_expr(merge_expr, Some(output.clone()))
-                .map_err(Error::TypeErrors)?;
+            let program = egraph.compile_expr(merge_expr);
             MergeFn::Expr(Rc::new(program))
         } else if output.is_eq_sort() {
             MergeFn::Union
@@ -95,7 +93,7 @@ impl Function {
             None
         } else {
             let program = egraph
-                .compile_actions(decl.merge_action)
+                .compile_actions(&decl.merge_action)
                 .map_err(Error::TypeErrors)?;
             Some(Rc::new(program))
         };

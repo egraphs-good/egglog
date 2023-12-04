@@ -293,7 +293,7 @@ impl<'a> TermState<'a> {
         })
     }
 
-    // Actions need to be instrumented to add to the view
+    // CoreActions need to be instrumented to add to the view
     // as well as to the terms tables.
     // In addition, we need to look up canonical versions
     // of globals.

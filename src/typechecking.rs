@@ -1,5 +1,6 @@
 use crate::{
-    typecheck::{Actions, UnresolvedCoreRule, ValueEq},
+    ast::CoreActions,
+    typecheck::{UnresolvedCoreRule, ValueEq},
     *,
 };
 
@@ -325,7 +326,7 @@ impl TypeInfo {
         let mut constraints = vec![];
 
         let mut fresh_gen = SymbolGen::new();
-        let (query, mapped_query) = Expr::facts_to_query(body, self, &mut fresh_gen);
+        let (query, mapped_query) = Facts(body.clone()).to_query(self, &mut fresh_gen);
         constraints.extend(query.get_constraints(self)?);
 
         let mut binding = query
@@ -340,13 +341,14 @@ impl TypeInfo {
             })
             .collect::<HashSet<_>>();
         let (actions, mapped_action): (Vec<NormAction>, Vec<Action<(Symbol, Symbol), Symbol, ()>>) =
-            actions_to_norm_actions(head, self, &mut binding, &mut fresh_gen)?;
+            // TODO: get rid of this clone by using Actions in the first place
+            Actions(head.clone()).to_norm_actions(self, &mut binding, &mut fresh_gen)?;
 
         let mut problem = Problem::default();
         problem.add_rule(
             &UnresolvedCoreRule {
                 body: query,
-                head: Actions(actions),
+                head: CoreActions(actions),
             },
             self,
         );
@@ -369,7 +371,7 @@ impl TypeInfo {
         facts: &Vec<UnresolvedFact>,
     ) -> Result<Vec<ResolvedFact>, TypeError> {
         let mut fresh_gen = SymbolGen::new();
-        let (query, mapped_facts) = Expr::facts_to_query(facts, self, &mut fresh_gen);
+        let (query, mapped_facts) = Facts(facts.clone()).to_query(self, &mut fresh_gen);
         let mut problem = Problem::default();
         problem.add_query(&query, self)?;
         let assignment = problem
@@ -387,11 +389,11 @@ impl TypeInfo {
         let mut binding_set = binding.keys().cloned().collect::<HashSet<_>>();
         let mut fresh_gen = SymbolGen::new();
         let (actions, mapped_action): (Vec<NormAction>, Vec<Action<(Symbol, Symbol), Symbol, ()>>) =
-            actions_to_norm_actions(actions, self, &mut binding_set, &mut fresh_gen)?;
+            Actions(actions.clone()).to_norm_actions(self, &mut binding_set, &mut fresh_gen)?;
         let mut problem = Problem::default();
 
         // add actions to problem
-        problem.add_actions(&Actions(actions), self);
+        problem.add_actions(&CoreActions(actions), self);
 
         // add bindings from the context
         for (var, sort) in binding {

@@ -1,12 +1,12 @@
 use crate::{
     ast::{
-        Action, Expr, Fact, NormAction, ResolvedAction, ResolvedExpr, ResolvedFact, ResolvedVar,
-        UnresolvedAction, UnresolvedExpr, UnresolvedRule,
+        Action, CoreActions, Expr, Fact, NormAction, ResolvedAction, ResolvedExpr, ResolvedFact,
+        ResolvedVar, UnresolvedAction, UnresolvedExpr, UnresolvedRule,
     },
     sort::I64Sort,
     typecheck::{
-        Actions, Atom, AtomTerm, GenericAtomTerm, HeadOrEq, Query, ResolvedCall,
-        SpecializedPrimitive, SymbolOrEq, UnresolvedCoreRule,
+        Atom, AtomTerm, GenericAtomTerm, HeadOrEq, Query, ResolvedCall, SpecializedPrimitive,
+        SymbolOrEq, UnresolvedCoreRule,
     },
     typechecking::TypeError,
     util::{FreshGen, HashMap, HashSet, SymbolGen},
@@ -224,6 +224,7 @@ impl Assignment<AtomTerm, ArcSort> {
         match &expr {
             Expr::Lit(ann, literal) => Expr::Lit(*ann, literal.clone()),
             Expr::Var(ann, var) => {
+                // TODO: How about globals?
                 let ty = self
                     .get(&GenericAtomTerm::Var(*var))
                     .expect("All variables should be assigned before annotation");
@@ -407,7 +408,11 @@ impl Problem<AtomTerm, ArcSort> {
         Ok(())
     }
 
-    pub fn add_actions(&mut self, actions: &Actions, typeinfo: &TypeInfo) -> Result<(), TypeError> {
+    pub fn add_actions(
+        &mut self,
+        actions: &CoreActions,
+        typeinfo: &TypeInfo,
+    ) -> Result<(), TypeError> {
         let mut symbol_gen = SymbolGen::new();
         for action in actions.0.iter() {
             self.constraints
@@ -472,7 +477,7 @@ impl NormAction {
             }
             NormAction::Set(head, args, rhs) => {
                 let mut args = args.clone();
-                args.push(*rhs);
+                args.push(rhs.clone());
 
                 Ok(get_literal_and_global_constraints(&args, typeinfo)
                     .chain(get_atom_application_constraints(head, &args, typeinfo)?)
@@ -488,19 +493,22 @@ impl NormAction {
                     .chain(get_atom_application_constraints(head, &args, typeinfo)?)
                     .collect())
             }
-            NormAction::Union(lhs, rhs) => {
-                Ok(get_literal_and_global_constraints(&[*lhs, *rhs], typeinfo)
-                    .chain(once(Constraint::Eq(*lhs, *rhs)))
-                    .collect())
-            }
+            NormAction::Union(lhs, rhs) => Ok(get_literal_and_global_constraints(
+                &[lhs.clone(), rhs.clone()],
+                typeinfo,
+            )
+            .chain(once(Constraint::Eq(lhs.clone(), rhs.clone())))
+            .collect()),
             NormAction::Extract(e, n) => {
                 // e can be anything
-                Ok(get_literal_and_global_constraints(&[*e, *n], typeinfo)
-                    .chain(once(Constraint::Assign(
-                        *n,
-                        typeinfo.get_sort_nofail::<I64Sort>() as ArcSort,
-                    )))
-                    .collect())
+                Ok(
+                    get_literal_and_global_constraints(&[e.clone(), n.clone()], typeinfo)
+                        .chain(once(Constraint::Assign(
+                            n.clone(),
+                            typeinfo.get_sort_nofail::<I64Sort>() as ArcSort,
+                        )))
+                        .collect(),
+                )
             }
             NormAction::Panic(_) => Ok(vec![]),
             NormAction::LetVar(v1, v2) => {
@@ -511,8 +519,8 @@ impl NormAction {
                 typeinfo.infer_literal(l),
             )]),
             NormAction::LetAtomTerm(v, at) => {
-                Ok(get_literal_and_global_constraints(&[*at], typeinfo)
-                    .chain(once(Constraint::Eq(AtomTerm::Var(*v), *at)))
+                Ok(get_literal_and_global_constraints(&[at.clone()], typeinfo)
+                    .chain(once(Constraint::Eq(AtomTerm::Var(*v), at.clone())))
                     .collect())
             }
         }

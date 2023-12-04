@@ -1,22 +1,8 @@
 use std::ops::AddAssign;
 
+use crate::HashMap;
 use crate::{constraint::AllEqualTypeConstraint, typechecking::FuncType, *};
-use hashbrown::HashMap;
 use typechecking::TypeError;
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Default)]
-pub struct Actions(pub(crate) Vec<NormAction>);
-impl Actions {
-    fn subst(&mut self, subst: &HashMap<Symbol, AtomTerm>) {
-        let actions = subst.iter().map(|(symbol, atom_term)| match atom_term {
-            AtomTerm::Var(v) => NormAction::LetVar(*symbol, *v),
-            AtomTerm::Literal(lit) => NormAction::LetLit(*symbol, lit.clone()),
-            AtomTerm::Global(v) => NormAction::LetVar(*symbol, *v),
-        });
-        let existing_actions = std::mem::take(&mut self.0);
-        self.0 = actions.chain(existing_actions).collect();
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum HeadOrEq<Head> {
@@ -49,19 +35,19 @@ impl SymbolOrEq {
 #[derive(Debug, Clone)]
 pub(crate) struct UnresolvedCoreRule {
     pub body: Query<SymbolOrEq, Symbol>,
-    pub head: Actions,
+    pub head: CoreActions,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct CanonicalizedCoreRule {
     pub body: Query<Symbol, Symbol>,
-    pub head: Actions,
+    pub head: CoreActions,
 }
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ResolvedCoreRule {
     pub body: Query<ResolvedCall, ResolvedVar>,
-    pub head: Actions,
+    pub head: CoreActions,
 }
 
 #[derive(Debug, Clone)]
@@ -125,7 +111,7 @@ impl ResolvedCall {
                 if let Some(output_type) = primitive.accept(&tys) {
                     resolved_call.push(ResolvedCall::Primitive(SpecializedPrimitive {
                         primitive: primitive.clone(),
-                        input: tys,
+                        input: tys.clone(),
                         output: output_type,
                     }));
                 }
@@ -194,13 +180,17 @@ impl UnresolvedRule {
         &self,
         typeinfo: &TypeInfo,
         fresh_gen: &mut SymbolGen,
-    ) -> UnresolvedCoreRule {
+    ) -> Result<UnresolvedCoreRule, TypeError> {
+        let mut symbol_gen = SymbolGen::new();
         let Rule { head, body } = self;
-        let (body, _correspondence) = Expr::facts_to_query(body, typeinfo, &mut SymbolGen::new());
-        UnresolvedCoreRule {
+        let (body, _correspondence) = Facts(body.clone()).to_query(typeinfo, &mut symbol_gen);
+
+        let (head, _correspondence) =
+            Actions(head.clone()).to_norm_actions(typeinfo, todo!(), &mut symbol_gen)?;
+        Ok(UnresolvedCoreRule {
             body,
-            head: Actions(actions_to_core_actions(head)),
-        }
+            head: CoreActions(head),
+        })
     }
 }
 
@@ -408,7 +398,8 @@ impl<'a> Context<'a> {
                 }
             }
             if let Some((x, y)) = to_subst {
-                result_rule.subst(&[(*x, y.clone())].into());
+                let subst = HashMap::from_iter(vec![(*x, y.clone())]);
+                result_rule.subst(&subst);
             } else {
                 break;
             }
@@ -557,7 +548,7 @@ impl<'a> ActionCompiler<'a> {
                     panic!("Cannot set primitive- should have been caught by typechecking!!!")
                 };
 
-                let fake_call = Expr::Call((), *f, args.clone());
+                let fake_call = Expr::Call((), f.clone(), args.clone());
                 self.compile_expr(&fake_call);
                 let fake_instr = self.instructions.pop().unwrap();
                 assert!(matches!(fake_instr, Instruction::CallFunction(..)));
@@ -573,7 +564,7 @@ impl<'a> ActionCompiler<'a> {
                 let ResolvedCall::Func(func) = f else {
                     panic!("Cannot delete primitive- should have been caught by typechecking!!!")
                 };
-                let fake_call = Expr::Call((), *f, args.clone());
+                let fake_call = Expr::Call((), f.clone(), args.clone());
                 self.compile_expr(&fake_call);
                 let fake_instr = self.instructions.pop().unwrap();
                 assert!(matches!(fake_instr, Instruction::CallFunction(..)));
@@ -686,7 +677,10 @@ enum Instruction {
 pub struct Program(Vec<Instruction>);
 
 impl EGraph {
-    pub fn compile_actions(&self, actions: &[ResolvedAction]) -> Result<Program, Vec<TypeError>> {
+    pub(crate) fn compile_actions(
+        &self,
+        actions: &[ResolvedAction],
+    ) -> Result<Program, Vec<TypeError>> {
         let mut checker = ActionCompiler {
             egraph: self,
             locals: IndexSet::default(),
