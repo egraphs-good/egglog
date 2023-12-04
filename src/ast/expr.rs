@@ -1,7 +1,7 @@
 use crate::{typecheck::ResolvedCall, *};
 use ordered_float::OrderedFloat;
 
-use std::fmt::Display;
+use std::{fmt::Display, hash::Hasher};
 
 use super::ToSexp;
 
@@ -62,6 +62,27 @@ impl Display for Literal {
 pub struct ResolvedVar {
     pub name: Symbol,
     pub sort: ArcSort,
+}
+
+impl PartialEq for ResolvedVar {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name && self.sort.name() == other.sort.name()
+    }
+}
+
+impl Eq for ResolvedVar {}
+
+impl Hash for ResolvedVar {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
+        self.sort.name().hash(state);
+    }
+}
+
+impl Into<Symbol> for ResolvedVar {
+    fn into(self) -> Symbol {
+        self.name
+    }
 }
 
 impl Display for ResolvedVar {

@@ -1047,19 +1047,20 @@ impl EGraph {
     ) -> Result<Symbol, Error> {
         let name = Symbol::from(name);
         let mut compiler = typecheck::Context::new(self);
-        // let core_rule = rule.to_core_rule();
-        // let core_rule = compiler.compile_rule(&rule).map_err(Error::TypeErrors)?;
-        let core_rule: ResolvedCoreRule = todo!("get the resolved core rule");
+        let core_rule = rule.to_core_rule(self.type_info(), ResolvedGen::new())?;
         let (query, action) = (core_rule.body, core_rule.head);
         let query = todo!("unresolve variables {:?}", query);
 
         // TODO: We should refactor compile_actions later as well
-        let action: Vec<NormAction> = action.0.clone();
+        let action: Vec<_> = action.0.clone();
         let types = todo!("get types from type inference");
 
         let query = self.compile_gj_query(query);
         let program = self
-            .compile_actions(todo!("{:?}", action))
+            .compile_actions(todo!(
+                "compile_actions take an Action, but lowering gives us a CoreAction, {:?}",
+                &action
+            ))
             .map_err(Error::TypeErrors)?;
         let compiled_rule = Rule {
             query,

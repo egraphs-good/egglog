@@ -33,22 +33,16 @@ impl SymbolOrEq {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct UnresolvedCoreRule {
-    pub body: Query<SymbolOrEq, Symbol>,
-    pub head: CoreActions,
+pub struct GenericCoreRule<BodyF, HeadF, Leaf> {
+    pub body: Query<BodyF, Leaf>,
+    pub head: CoreActions<HeadF, Leaf>,
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct CanonicalizedCoreRule {
-    pub body: Query<Symbol, Symbol>,
-    pub head: CoreActions,
-}
+pub type CoreRule<Head, Leaf> = GenericCoreRule<Head, Head, Leaf>;
 
-#[derive(Debug, Clone, Default)]
-pub(crate) struct ResolvedCoreRule {
-    pub body: Query<ResolvedCall, ResolvedVar>,
-    pub head: CoreActions,
-}
+pub(crate) type UnresolvedCoreRule = GenericCoreRule<SymbolOrEq, Symbol, Symbol>;
+pub(crate) type CanonicalizedCoreRule = CoreRule<Symbol, Symbol>;
+pub(crate) type ResolvedCoreRule = CoreRule<ResolvedCall, ResolvedVar>;
 
 #[derive(Debug, Clone)]
 pub(crate) struct SpecializedPrimitive {
@@ -169,25 +163,23 @@ impl UnresolvedCoreRule {
     }
 }
 
-pub(crate) fn actions_to_core_actions(actions: &[UnresolvedAction]) -> Vec<NormAction> {
-    let mut desugar = Desugar::default();
-    todo!("flatten actions")
-    // flatten_actions(actions, &mut desugar)
-}
-
-impl UnresolvedRule {
+impl<Head, Leaf> Rule<Head, Leaf, ()>
+where
+    Leaf: Into<Symbol> + Clone + Eq + Hash,
+    Head: Clone,
+{
     pub(crate) fn to_core_rule(
         &self,
         typeinfo: &TypeInfo,
-        fresh_gen: &mut SymbolGen,
-    ) -> Result<UnresolvedCoreRule, TypeError> {
-        let mut symbol_gen = SymbolGen::new();
+        mut fresh_gen: impl FreshGen<Head, Leaf>,
+    ) -> Result<GenericCoreRule<HeadOrEq<Head>, Head, Leaf>, TypeError> {
         let Rule { head, body } = self;
-        let (body, _correspondence) = Facts(body.clone()).to_query(typeinfo, &mut symbol_gen);
 
+        let (body, _correspondence) = Facts(body.clone()).to_query(typeinfo, &mut fresh_gen);
+        let mut binding = body.get_vars();
         let (head, _correspondence) =
-            Actions(head.clone()).to_norm_actions(typeinfo, todo!(), &mut symbol_gen)?;
-        Ok(UnresolvedCoreRule {
+            Actions(head.clone()).to_norm_actions(typeinfo, &mut binding, &mut fresh_gen)?;
+        Ok(GenericCoreRule {
             body,
             head: CoreActions(head),
         })
@@ -274,6 +266,19 @@ impl Query<SymbolOrEq, Symbol> {
     }
 }
 
+impl<Head, Leaf> Query<Head, Leaf>
+where
+    Leaf: Eq + Clone + Hash,
+    Head: Clone,
+{
+    pub(crate) fn get_vars(&self) -> HashSet<Leaf> {
+        self.atoms
+            .iter()
+            .flat_map(|atom| atom.vars())
+            .collect::<HashSet<_>>()
+    }
+}
+
 impl<Head, Leaf> AddAssign for Query<Head, Leaf> {
     fn add_assign(&mut self, rhs: Self) {
         self.atoms.extend(rhs.atoms);
@@ -310,25 +315,29 @@ impl std::fmt::Display for Query<ResolvedCall, Symbol> {
     }
 }
 
-impl<Head> GenericAtom<Head, Symbol> {
-    pub fn vars(&self) -> impl Iterator<Item = Symbol> + '_ {
+impl<Head, Leaf> GenericAtom<Head, Leaf>
+where
+    Leaf: Clone + Eq + Hash,
+    Head: Clone,
+{
+    pub fn vars(&self) -> impl Iterator<Item = Leaf> + '_ {
         self.args.iter().filter_map(|t| match t {
-            AtomTerm::Var(v) => Some(*v),
-            AtomTerm::Literal(_) => None,
-            AtomTerm::Global(_) => None,
+            GenericAtomTerm::Var(v) => Some(v.clone()),
+            GenericAtomTerm::Literal(_) => None,
+            GenericAtomTerm::Global(_) => None,
         })
     }
 
-    fn subst(&mut self, subst: &HashMap<Symbol, AtomTerm>) {
+    fn subst(&mut self, subst: &HashMap<Leaf, GenericAtomTerm<Leaf>>) {
         for arg in self.args.iter_mut() {
             match arg {
-                AtomTerm::Var(v) => {
+                GenericAtomTerm::Var(v) => {
                     if let Some(at) = subst.get(v) {
                         *arg = at.clone();
                     }
                 }
-                AtomTerm::Literal(_) => (),
-                AtomTerm::Global(_) => (),
+                GenericAtomTerm::Literal(_) => (),
+                GenericAtomTerm::Global(_) => (),
             }
         }
     }

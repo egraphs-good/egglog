@@ -2,6 +2,7 @@
 
 use std::fmt::Display;
 
+use crate::typecheck::SpecializedPrimitive;
 #[allow(unused_imports)]
 use crate::*;
 
@@ -82,5 +83,30 @@ impl FreshGen<Symbol, Symbol> for SymbolGen {
         let s = format!("${}{}", name_hint, self.gen);
         self.gen += 1;
         Symbol::from(s)
+    }
+}
+
+pub(crate) struct ResolvedGen {
+    gen: usize,
+}
+
+impl ResolvedGen {
+    pub(crate) fn new() -> Self {
+        Self { gen: 0 }
+    }
+}
+
+impl FreshGen<ResolvedCall, ResolvedVar> for ResolvedGen {
+    fn fresh(&mut self, name_hint: &ResolvedCall) -> ResolvedVar {
+        let s = format!("${}{}", name_hint, self.gen);
+        self.gen += 1;
+        let sort = match name_hint {
+            ResolvedCall::Func(f) => f.output.clone(),
+            ResolvedCall::Primitive(SpecializedPrimitive { output, .. }) => output.clone(),
+        };
+        ResolvedVar {
+            name: s.into(),
+            sort,
+        }
     }
 }

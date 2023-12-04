@@ -410,7 +410,7 @@ impl Problem<AtomTerm, ArcSort> {
 
     pub fn add_actions(
         &mut self,
-        actions: &CoreActions,
+        actions: &CoreActions<Symbol, Symbol>,
         typeinfo: &TypeInfo,
     ) -> Result<(), TypeError> {
         let mut symbol_gen = SymbolGen::new();

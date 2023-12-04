@@ -239,7 +239,6 @@ impl TypeInfo {
         &mut self,
         fdecl: &UnresolvedFunctionDecl,
     ) -> Result<ResolvedFunctionDecl, TypeError> {
-        // TODO: propose a new interface for incorporating arbitrary constraints
         let mut bound_vars = HashMap::default();
         let output_type = self.sorts.get(&fdecl.schema.output).unwrap();
         bound_vars.insert("old".into(), output_type.clone());
@@ -301,7 +300,6 @@ impl TypeInfo {
         name: impl Into<Symbol>,
         presort_and_args: &Option<(Symbol, Vec<UnresolvedExpr>)>,
     ) -> Result<(), TypeError> {
-        // TODO make typechecking pure- we should add the sort to the typechecking state after doing the checking
         let name = name.into();
         if self.func_types.contains_key(&name) {
             return Err(TypeError::FunctionAlreadyBound(name));
@@ -321,7 +319,6 @@ impl TypeInfo {
     }
 
     fn typecheck_rule(&mut self, rule: &UnresolvedRule) -> Result<ResolvedRule, TypeError> {
-        let mut fresh_gen = SymbolGen::new();
         let UnresolvedRule { head, body } = rule;
         let mut constraints = vec![];
 
@@ -351,7 +348,7 @@ impl TypeInfo {
                 head: CoreActions(actions),
             },
             self,
-        );
+        )?;
 
         let assignment = problem
             .solve(|sort: &ArcSort| sort.name())
@@ -393,11 +390,11 @@ impl TypeInfo {
         let mut problem = Problem::default();
 
         // add actions to problem
-        problem.add_actions(&CoreActions(actions), self);
+        problem.add_actions(&CoreActions(actions), self)?;
 
         // add bindings from the context
         for (var, sort) in binding {
-            problem.assign_local_var_type(*var, sort.clone());
+            problem.assign_local_var_type(*var, sort.clone())?;
         }
 
         let assignment = problem
@@ -426,7 +423,7 @@ impl TypeInfo {
         action: &UnresolvedAction,
         binding: &HashMap<Symbol, ArcSort>,
     ) -> Result<ResolvedAction, TypeError> {
-        self.typecheck_actions(&vec![action.clone()], &mut HashMap::default())
+        self.typecheck_actions(&vec![action.clone()], binding)
             .map(|mut v| {
                 assert_eq!(v.len(), 1);
                 v.pop().unwrap()
@@ -449,67 +446,9 @@ impl TypeInfo {
         self.primitives.contains_key(&sym) || self.presort_names.contains(&sym)
     }
 
-    /// Lookup a primitive that matches the input types.
-    /// Returns the primitive and output type.
-    pub(crate) fn lookup_prim(
-        &self,
-        sym: Symbol,
-        input_types: Vec<ArcSort>,
-    ) -> Result<(Primitive, ArcSort), TypeError> {
-        if let Some(prims) = self.primitives.get(&sym) {
-            for prim in prims {
-                if let Some(return_type) = prim.accept(&input_types) {
-                    return Ok((prim.clone(), return_type));
-                }
-            }
-        }
-        Err(TypeError::NoMatchingPrimitive {
-            op: sym,
-            inputs: input_types.iter().map(|s| s.name()).collect(),
-        })
-    }
-
     pub(crate) fn lookup_user_func(&self, sym: Symbol) -> Option<FuncType> {
         self.func_types.get(&sym).cloned()
     }
-
-    pub(crate) fn lookup_func(
-        &self,
-        sym: Symbol,
-        input_types: Vec<ArcSort>,
-    ) -> Result<FuncType, TypeError> {
-        if let Some(found) = self.func_types.get(&sym) {
-            Ok(found.clone())
-        } else {
-            if let Ok((_prim, output)) = self.lookup_prim(sym, input_types.clone()) {
-                return Ok(FuncType {
-                    name: sym,
-                    input: input_types,
-                    output,
-                    is_datatype: false,
-                    has_default: true,
-                });
-            }
-
-            Err(TypeError::NoMatchingPrimitive {
-                op: sym,
-                inputs: input_types.iter().map(|s| s.name()).collect(),
-            })
-        }
-    }
-
-    // pub(crate) fn lookup_expr(
-    //     &self,
-    //     ctx: CommandId,
-    //     expr: &NormExpr,
-    // ) -> Result<FuncType, TypeError> {
-    //     let NormExpr::Call(head, body) = expr;
-    //     let child_types = body
-    //         .iter()
-    //         .map(|var| self.lookup(ctx, *var))
-    //         .collect::<Result<Vec<_>, _>>()?;
-    //     self.lookup_func(*head, child_types)
-    // }
 
     pub(crate) fn is_global(&self, sym: Symbol) -> bool {
         self.global_types.contains_key(&sym)

@@ -880,20 +880,13 @@ where
     pub(crate) fn to_query(
         &self,
         // TODO: needs to generalize type info to work for ResolvedFact as well
+        // This is not used, which is not correct: We need to use it to distinguish globals.
         typeinfo: &TypeInfo,
         fresh_gen: &mut impl FreshGen<Head, Leaf>,
     ) -> (
         Query<HeadOrEq<Head>, Leaf>,
         Vec<Fact<(Head, Leaf), Leaf, Ann>>,
     ) {
-        let to_atom_term = |s: Symbol, typeinfo: &TypeInfo| -> AtomTerm {
-            if typeinfo.is_global(s) {
-                AtomTerm::Global(s)
-            } else {
-                AtomTerm::Var(s)
-            }
-        };
-
         let mut atoms = vec![];
         let mut new_body = vec![];
 
@@ -950,7 +943,7 @@ where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
-    pub fn map_exprs(
+    pub(crate) fn map_exprs(
         &self,
         f: &mut impl FnMut(&Expr<Head, Leaf, Ann>) -> Expr<Head, Leaf, Ann>,
     ) -> Self {
@@ -960,7 +953,7 @@ where
         }
     }
 
-    pub fn subst(&self, subst: &HashMap<Leaf, Expr<Head, Leaf, Ann>>) -> Self {
+    pub(crate) fn subst(&self, subst: &HashMap<Leaf, Expr<Head, Leaf, Ann>>) -> Self {
         self.map_exprs(&mut |e| e.subst(subst))
     }
 }
@@ -1164,8 +1157,8 @@ pub enum CoreAction<Head, Leaf> {
 pub type NormAction = CoreAction<Symbol, Symbol>;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Default)]
-pub struct CoreActions(pub(crate) Vec<NormAction>);
-impl CoreActions {
+pub struct CoreActions<Head, Leaf>(pub(crate) Vec<CoreAction<Head, Leaf>>);
+impl CoreActions<Symbol, Symbol> {
     pub(crate) fn subst(&mut self, subst: &HashMap<Symbol, AtomTerm>) {
         let actions = subst.iter().map(|(symbol, atom_term)| match atom_term {
             AtomTerm::Var(v) => NormAction::LetVar(*symbol, *v),
@@ -1176,64 +1169,6 @@ impl CoreActions {
         self.0 = actions.chain(existing_actions).collect();
     }
 }
-
-// impl NormAction {
-//     pub fn to_action(&self) -> Action {
-//         match self {
-//             NormAction::Let(symbol, expr) => Action::Let(*symbol, expr.to_expr()),
-//             NormAction::LetVar(symbol, other) => Action::Let(*symbol, Expr::Var(*other)),
-//             NormAction::LetLit(symbol, lit) => Action::Let(*symbol, Expr::Lit(lit.clone())),
-//             NormAction::Set(NormExpr::Call(head, body), other) => Action::Set(
-//                 *head,
-//                 body.iter().map(|s| Expr::Var(*s)).collect(),
-//                 Expr::Var(*other),
-//             ),
-//             NormAction::Extract(symbol, variants) => {
-//                 Action::Extract(Expr::Var(*symbol), Expr::Var(*variants))
-//             }
-//             NormAction::Delete(NormExpr::Call(symbol, args)) => {
-//                 Action::Delete(*symbol, args.iter().map(|s| Expr::Var(*s)).collect())
-//             }
-//             NormAction::Union(lhs, rhs) => Action::Union(Expr::Var(*lhs), Expr::Var(*rhs)),
-//             NormAction::Panic(msg) => Action::Panic(msg.clone()),
-//         }
-//     }
-
-//     pub fn map_exprs(&self, f: &mut impl FnMut(&NormExpr) -> NormExpr) -> NormAction {
-//         match self {
-//             NormAction::Let(symbol, expr) => NormAction::Let(*symbol, f(expr)),
-//             NormAction::LetVar(symbol, other) => NormAction::LetVar(*symbol, *other),
-//             NormAction::LetLit(symbol, lit) => NormAction::LetLit(*symbol, lit.clone()),
-//             NormAction::Set(expr, other) => NormAction::Set(f(expr), *other),
-//             NormAction::Extract(var, variants) => NormAction::Extract(*var, *variants),
-//             NormAction::Delete(expr) => NormAction::Delete(f(expr)),
-//             NormAction::Union(lhs, rhs) => NormAction::Union(*lhs, *rhs),
-//             NormAction::Panic(msg) => NormAction::Panic(msg.clone()),
-//         }
-//     }
-
-//     // fvar accepts a variable and if it is being defined (true) or used (false)
-//     pub(crate) fn map_def_use(&self, fvar: &mut impl FnMut(Symbol, bool) -> Symbol) -> NormAction {
-//         match self {
-//             NormAction::Let(symbol, expr) => {
-//                 NormAction::Let(fvar(*symbol, true), expr.map_def_use(fvar, false))
-//             }
-//             NormAction::LetVar(symbol, other) => {
-//                 NormAction::LetVar(fvar(*symbol, true), fvar(*other, false))
-//             }
-//             NormAction::LetLit(symbol, lit) => NormAction::LetLit(fvar(*symbol, true), lit.clone()),
-//             NormAction::Set(expr, other) => {
-//                 NormAction::Set(expr.map_def_use(fvar, false), fvar(*other, false))
-//             }
-//             NormAction::Extract(var, variants) => {
-//                 NormAction::Extract(fvar(*var, false), fvar(*variants, false))
-//             }
-//             NormAction::Delete(expr) => NormAction::Delete(expr.map_def_use(fvar, false)),
-//             NormAction::Union(lhs, rhs) => NormAction::Union(fvar(*lhs, false), fvar(*rhs, false)),
-//             NormAction::Panic(msg) => NormAction::Panic(msg.clone()),
-//         }
-//     }
-// }
 
 impl<Head: Display + ToSexp, Leaf: Display + ToSexp, Ann> ToSexp for Action<Head, Leaf, Ann> {
     fn to_sexp(&self) -> Sexp {
@@ -1427,7 +1362,7 @@ impl<Head: Display + ToSexp, Leaf: Display + ToSexp, Ann> Rule<Head, Leaf, Ann> 
     }
 }
 impl UnresolvedRule {
-    pub fn map_exprs(&self, f: &mut impl FnMut(&UnresolvedExpr) -> UnresolvedExpr) -> Self {
+    pub(crate) fn map_exprs(&self, f: &mut impl FnMut(&UnresolvedExpr) -> UnresolvedExpr) -> Self {
         Rule {
             head: self.head.iter().map(|a| a.map_exprs(f)).collect(),
             body: self.body.iter().map(|fact| fact.map_exprs(f)).collect(),
