@@ -34,6 +34,7 @@ impl VecSort {
             "vec-length".into(),
             "vec-get".into(),
             "vec-set".into(),
+            "vec-remove".into(),
         ]
     }
 
@@ -155,6 +156,11 @@ impl Sort for VecSort {
         typeinfo.add_primitive(Set {
             name: "vec-set".into(),
             vec: self.clone(),
+            i64: typeinfo.get_sort_nofail(),
+        });
+        typeinfo.add_primitive(Remove {
+            name: "vec-remove".into(),
+            vec: self,
             i64: typeinfo.get_sort_nofail(),
         })
     }
@@ -479,6 +485,33 @@ impl PrimitiveLike for Set {
         let mut vec = ValueVec::load(&self.vec, &values[0]);
         let index = i64::load(&self.i64, &values[1]);
         vec[index as usize] = values[2];
+        vec.store(&self.vec)
+    }
+}
+
+struct Remove {
+    name: Symbol,
+    vec: Arc<VecSort>,
+    i64: Arc<I64Sort>,
+}
+
+impl PrimitiveLike for Remove {
+    fn name(&self) -> Symbol {
+        self.name
+    }
+
+    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![self.vec.clone(), self.i64.clone(), self.vec.clone()],
+        )
+        .into_box()
+    }
+
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+        let mut vec = ValueVec::load(&self.vec, &values[0]);
+        let i = i64::load(&self.i64, &values[1]);
+        vec.remove(i.try_into().unwrap());
         vec.store(&self.vec)
     }
 }
