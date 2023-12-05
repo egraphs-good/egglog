@@ -18,13 +18,13 @@ impl From<Symbol> for SymbolOrEq {
     }
 }
 
-impl SymbolOrEq {
+impl<Head> HeadOrEq<Head> {
     pub fn is_eq(&self) -> bool {
-        matches!(self, SymbolOrEq::Eq)
+        matches!(self, HeadOrEq::Eq)
     }
 
-    pub fn get_symbol(&self) -> Option<&Symbol> {
-        if let SymbolOrEq::Symbol(symbol) = self {
+    pub fn get_symbol(&self) -> Option<&Head> {
+        if let HeadOrEq::Symbol(symbol) = self {
             Some(symbol)
         } else {
             None
@@ -132,20 +132,20 @@ impl ToSexp for ResolvedCall {
     }
 }
 
-impl Query<ResolvedCall, Symbol> {
-    pub fn filters(&self) -> impl Iterator<Item = Atom<Primitive>> + '_ {
+impl<Leaf: Clone> Query<ResolvedCall, Leaf> {
+    pub fn filters(&self) -> impl Iterator<Item = GenericAtom<Primitive, Leaf>> + '_ {
         self.atoms.iter().filter_map(|atom| match &atom.head {
             ResolvedCall::Func(_) => None,
-            ResolvedCall::Primitive(head) => Some(Atom {
+            ResolvedCall::Primitive(head) => Some(GenericAtom {
                 head: head.primitive.clone(),
                 args: atom.args.clone(),
             }),
         })
     }
 
-    pub fn funcs(&self) -> impl Iterator<Item = Atom<Symbol>> + '_ {
+    pub fn funcs(&self) -> impl Iterator<Item = GenericAtom<Symbol, Leaf>> + '_ {
         self.atoms.iter().filter_map(|atom| match &atom.head {
-            ResolvedCall::Func(head) => Some(Atom {
+            ResolvedCall::Func(head) => Some(GenericAtom {
                 head: head.name,
                 args: atom.args.clone(),
             }),
@@ -154,8 +154,13 @@ impl Query<ResolvedCall, Symbol> {
     }
 }
 
-impl UnresolvedCoreRule {
-    pub fn subst(&mut self, subst: &HashMap<Symbol, AtomTerm>) {
+impl<Head1, Head2, Leaf> GenericCoreRule<Head1, Head2, Leaf>
+where
+    Head1: Clone,
+    Head2: Clone,
+    Leaf: Clone + Eq + Hash,
+{
+    pub fn subst(&mut self, subst: &HashMap<Leaf, GenericAtomTerm<Leaf>>) {
         for atom in &mut self.body.atoms {
             atom.subst(subst);
         }
@@ -165,7 +170,7 @@ impl UnresolvedCoreRule {
 
 impl<Head, Leaf> Rule<Head, Leaf, ()>
 where
-    Leaf: Into<Symbol> + Clone + Eq + Hash,
+    Leaf: Into<Symbol> + Clone + Eq + Hash + Debug,
     Head: Clone,
 {
     pub(crate) fn to_core_rule(
@@ -183,6 +188,16 @@ where
             body,
             head: CoreActions(head),
         })
+    }
+
+    pub(crate) fn to_canonicalized_core_rule(
+        &self,
+        typeinfo: &TypeInfo,
+        mut fresh_gen: impl FreshGen<Head, Leaf>,
+    ) -> Result<CoreRule<Head, Leaf>, TypeError> {
+        let mut rule = self.to_core_rule(typeinfo, fresh_gen)?;
+        let rule = rule.canonicalize(todo!("get value-eq implementation"));
+        Ok(rule)
     }
 }
 
@@ -382,23 +397,27 @@ impl PrimitiveLike for ValueEq {
     }
 }
 
-impl<'a> Context<'a> {
-    pub(crate) fn new(egraph: &'a mut EGraph) -> Self {
-        Self { egraph }
-    }
-
+impl<Head, Leaf> GenericCoreRule<HeadOrEq<Head>, Head, Leaf>
+where
+    Leaf: Eq + Clone + Hash + Debug,
+    Head: Clone,
+{
     /// Transformed a UnresolvedCoreRule into a CanonicalizedCoreRule.
     /// In particular, it removes equality checks between variables and
     /// other arguments, and turns equality checks between non-variable arguments
     /// into a primitive equality check `value-eq`.
-    pub(crate) fn canonicalize(&self, rule: UnresolvedCoreRule) -> CanonicalizedCoreRule {
-        let mut result_rule = rule;
+    pub(crate) fn canonicalize(
+        self,
+        // Users need to pass in a substitute for equality constraints.
+        value_eq: &Head,
+    ) -> CoreRule<Head, Leaf> {
+        let mut result_rule = self;
         loop {
             let mut to_subst = None;
             for atom in result_rule.body.atoms.iter() {
                 if atom.head.is_eq() && atom.args[0] != atom.args[1] {
                     match &atom.args[..] {
-                        [AtomTerm::Var(x), y] | [y, AtomTerm::Var(x)] => {
+                        [GenericAtomTerm::Var(x), y] | [y, GenericAtomTerm::Var(x)] => {
                             to_subst = Some((x, y));
                             break;
                         }
@@ -407,7 +426,7 @@ impl<'a> Context<'a> {
                 }
             }
             if let Some((x, y)) = to_subst {
-                let subst = HashMap::from_iter(vec![(*x, y.clone())]);
+                let subst = HashMap::from_iter(vec![(x.clone(), y.clone())]);
                 result_rule.subst(&subst);
             } else {
                 break;
@@ -419,123 +438,43 @@ impl<'a> Context<'a> {
             .atoms
             .into_iter()
             .filter_map(|atom| match atom.head {
-                SymbolOrEq::Eq => {
+                HeadOrEq::Eq => {
                     assert_eq!(atom.args.len(), 2);
                     match (&atom.args[0], &atom.args[1]) {
-                        (AtomTerm::Var(v1), AtomTerm::Var(v2)) => {
+                        (GenericAtomTerm::Var(v1), GenericAtomTerm::Var(v2)) => {
                             assert_eq!(v1, v2);
                             None
                         }
-                        (AtomTerm::Var(_), _) | (_, AtomTerm::Var(_)) => {
+                        (GenericAtomTerm::Var(_), _) | (_, GenericAtomTerm::Var(_)) => {
                             panic!("equalities between variable and non-variable arguments should have been canonicalized")
                         }
                         (at1, at2) => {
                             if at1 == at2 {
                                 None
                             } else {
-                                Some(Atom {
-                                    head: "value-eq".into(),
+                                Some(GenericAtom {
+                                    head: value_eq.clone(),
                                     args: vec![
                                         atom.args[0].clone(),
                                         atom.args[1].clone(),
-                                        AtomTerm::Literal(Literal::Unit),
+                                        GenericAtomTerm::Literal(Literal::Unit),
                                     ],
                                 })
                             }
                         },
                     }
                 }
-                SymbolOrEq::Symbol(symbol) => Some(Atom {
+                HeadOrEq::Symbol(symbol) => Some(GenericAtom {
                     head: symbol,
                     args: atom.args,
                 }),
             })
             .collect();
-        CanonicalizedCoreRule {
+        GenericCoreRule {
             body: Query { atoms },
             head: result_rule.head,
         }
     }
-
-    pub(crate) fn resolve_rule(
-        &self,
-        rule: CanonicalizedCoreRule,
-    ) -> Result<ResolvedCoreRule, TypeError> {
-        // let type_info = self.egraph.type_info();
-        // let local_types = type_info.local_types.get(&ctx).unwrap();
-        // let get_type = |arg: &AtomTerm| match arg {
-        //     AtomTerm::Global(v) => type_info.lookup_global(v).unwrap().clone(),
-        //     AtomTerm::Var(v) => local_types.get(v).unwrap().clone(),
-        //     AtomTerm::Literal(lit) => type_info.infer_literal(lit),
-        // };
-        // let body_atoms: Vec<Atom<ResolvedCall>> = rule
-        //     .body
-        //     .atoms
-        //     .into_iter()
-        //     .map(|mut atom| {
-        //         let symbol = atom.head;
-        //         if let Some(ty) = type_info.func_types.get(&symbol) {
-        //             let expected = ty.input.iter().chain(once(&ty.output));
-        //             let expected = expected.map(|s| s.name());
-        //             let actual = atom.args.iter().map(get_type);
-        //             let actual = actual.map(|s| s.name());
-        //             if expected.eq(actual) {
-        //                 return Atom {
-        //                     head: ResolvedCall::Func(symbol),
-        //                     args: std::mem::take(&mut atom.args),
-        //                 };
-        //             }
-        //         }
-        //         if let Some(primitives) = type_info.primitives.get(&symbol) {
-        //             if primitives.len() == 1 {
-        //                 Atom {
-        //                     head: ResolvedCall::Primitive(primitives[0].clone()),
-        //                     args: std::mem::take(&mut atom.args),
-        //                 }
-        //             } else {
-        //                 let tys: Vec<_> = atom
-        //                     .args
-        //                     // remove the output type since accept() only takes the input types
-        //                     .split_last()
-        //                     .unwrap()
-        //                     .1
-        //                     .iter()
-        //                     .map(get_type)
-        //                     .collect();
-        //                 for primitive in primitives.iter() {
-        //                     if primitive.accept(&tys).is_some() {
-        //                         return Atom {
-        //                             head: ResolvedCall::Primitive(primitive.clone()),
-        //                             args: std::mem::take(&mut atom.args),
-        //                         };
-        //                     }
-        //                 }
-        //                 panic!("Impossible: there should be exactly one primitive that satisfy the type assignment")
-        //             }
-        //         } else {
-        //             panic!("Impossible: atom symbols not bound anywhere")
-        //         }
-        //     })
-        //     .collect();
-        // let body = Query { atoms: body_atoms };
-
-        // let result_rule = ResolvedCoreRule {
-        //     body,
-        //     head: rule.head,
-        // };
-        // Ok(result_rule)
-        todo!("resolve")
-    }
-
-    // pub(crate) fn compile_rule(
-    //     &mut self,
-    //     rule: &'a ResolvedCoreRule,
-    // ) -> Result<ResolvedCoreRule, Vec<TypeError>> {
-    //     let rule = rule.to_core_rule(self.egraph.type_info());
-    //     let rule = self.canonicalize(rule);
-    //     let rule = self.resolve_rule(rule).map_err(|e| vec![e])?;
-    //     Ok(rule)
-    // }
 }
 
 struct ActionCompiler<'a> {

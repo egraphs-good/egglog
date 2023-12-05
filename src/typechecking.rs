@@ -195,8 +195,7 @@ impl TypeInfo {
             },
             NCommand::Sort(sort, presort_and_args) => {
                 self.declare_sort(*sort, presort_and_args)?;
-                let presort_and_args = todo!("typecheck presort and args");
-                NCommand::Sort(*sort, presort_and_args)
+                NCommand::Sort(*sort, presort_and_args.clone())
             }
             NCommand::NormAction(action) => {
                 NCommand::NormAction(self.typecheck_action(action, &HashMap::default())?)
@@ -208,11 +207,17 @@ impl TypeInfo {
             }
             NCommand::Pop(n) => NCommand::Pop(*n),
             NCommand::Push(n) => NCommand::Push(*n),
-            NCommand::SetOption { name, value } => todo!(),
-            NCommand::AddRuleset(_) => todo!(),
-            NCommand::PrintOverallStatistics => todo!(),
-            NCommand::CheckProof => todo!(),
-            NCommand::PrintTable(_, _) => todo!(),
+            NCommand::SetOption { name, value } => {
+                let value = self.typecheck_expr(value, &HashMap::default())?;
+                NCommand::SetOption {
+                    name: *name,
+                    value: value.clone(),
+                }
+            }
+            NCommand::AddRuleset(ruleset) => NCommand::AddRuleset(*ruleset),
+            NCommand::PrintOverallStatistics => NCommand::PrintOverallStatistics,
+            NCommand::CheckProof => NCommand::CheckProof,
+            NCommand::PrintTable(table, size) => NCommand::PrintTable(*table, *size),
             NCommand::PrintSize(n) => {
                 // Should probably also resolve the function symbol here
                 NCommand::PrintSize(n.clone())

@@ -53,7 +53,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::str::FromStr;
 use std::{fmt::Debug, sync::Arc};
-use typecheck::{AtomTerm, Program, Query, ResolvedCall, ResolvedCoreRule};
+use typecheck::{AtomTerm, CoreRule, Program, Query, ResolvedCall, ResolvedCoreRule};
 
 pub type ArcSort = Arc<dyn Sort>;
 
@@ -1046,14 +1046,11 @@ impl EGraph {
         ruleset: Symbol,
     ) -> Result<Symbol, Error> {
         let name = Symbol::from(name);
-        let mut compiler = typecheck::Context::new(self);
-        let core_rule = rule.to_core_rule(self.type_info(), ResolvedGen::new())?;
+        let core_rule = rule.to_canonicalized_core_rule(self.type_info(), ResolvedGen::new())?;
         let (query, action) = (core_rule.body, core_rule.head);
-        let query = todo!("unresolve variables {:?}", query);
 
         // TODO: We should refactor compile_actions later as well
         let action: Vec<_> = action.0.clone();
-        let types = todo!("get types from type inference");
 
         let query = self.compile_gj_query(query);
         let program = self
@@ -1145,20 +1142,15 @@ impl EGraph {
     }
 
     fn check_facts(&mut self, facts: &[ResolvedFact]) -> Result<(), Error> {
-        let mut compiler = typecheck::Context::new(self);
         let rule = ast::ResolvedRule {
             head: vec![],
             body: facts.to_vec(),
         };
-        // let rule = compiler.compile_rule(&rule).map_err(Error::TypeErrors)?;
-        let rule: ResolvedCoreRule = todo!("compile rule");
-        let query0 = rule.body;
-        let query0: Query<ResolvedCall, Symbol> =
-            todo!("strip away the annotation on symbols {:?}", query0);
+        let core_rule = rule.to_canonicalized_core_rule(self.type_info(), ResolvedGen::new())?;
+        let query0 = core_rule.body;
         let query = self.compile_gj_query(query0);
 
         let mut matched = false;
-        // TODO what timestamp to use?
         self.run_query(&query, 0, |values| {
             assert_eq!(values.len(), query.vars.len());
             matched = true;

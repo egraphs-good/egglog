@@ -52,7 +52,7 @@ pub enum NCommand<Head, Leaf, Ann> {
         name: Symbol,
         value: Expr<Head, Leaf, Ann>,
     },
-    Sort(Symbol, Option<(Symbol, Vec<Expr<Head, Leaf, Ann>>)>),
+    Sort(Symbol, Option<(Symbol, Vec<Expr<Symbol, Symbol, Ann>>)>),
     Function(FunctionDecl<Head, Leaf, Ann>),
     AddRuleset(Symbol),
     NormRule {
@@ -348,7 +348,7 @@ pub enum Command<Head, Leaf> {
     /// ```
     ///
     /// Now `MathVec` can be used as an input or output sort.
-    Sort(Symbol, Option<(Symbol, Vec<Expr<Head, Leaf, ()>>)>),
+    Sort(Symbol, Option<(Symbol, Vec<Expr<Symbol, Symbol, ()>>)>),
     /// Declare an egglog function, which is a database table with a
     /// a functional dependency (also called a primary key) on its inputs to one output.
     ///
@@ -931,12 +931,6 @@ where
     }
 }
 
-impl ResolvedFact {
-    pub fn to_unresolved(&self) -> UnresolvedFact {
-        todo!()
-    }
-}
-
 impl<Head, Leaf, Ann> Fact<Head, Leaf, Ann>
 where
     Ann: Clone,
@@ -955,6 +949,12 @@ where
 
     pub(crate) fn subst(&self, subst: &HashMap<Leaf, Expr<Head, Leaf, Ann>>) -> Self {
         self.map_exprs(&mut |e| e.subst(subst))
+    }
+}
+
+impl<Head, Leaf, Ann> Fact<Head, Leaf, Ann> {
+    pub(crate) fn to_unresolved(&self) -> Fact<Symbol, Symbol, ()> {
+        todo!()
     }
 }
 
@@ -1158,12 +1158,15 @@ pub type NormAction = CoreAction<Symbol, Symbol>;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Default)]
 pub struct CoreActions<Head, Leaf>(pub(crate) Vec<CoreAction<Head, Leaf>>);
-impl CoreActions<Symbol, Symbol> {
-    pub(crate) fn subst(&mut self, subst: &HashMap<Symbol, AtomTerm>) {
+impl<Head, Leaf> CoreActions<Head, Leaf>
+where
+    Leaf: Clone,
+{
+    pub(crate) fn subst(&mut self, subst: &HashMap<Leaf, GenericAtomTerm<Leaf>>) {
         let actions = subst.iter().map(|(symbol, atom_term)| match atom_term {
-            AtomTerm::Var(v) => NormAction::LetVar(*symbol, *v),
-            AtomTerm::Literal(lit) => NormAction::LetLit(*symbol, lit.clone()),
-            AtomTerm::Global(v) => NormAction::LetVar(*symbol, *v),
+            GenericAtomTerm::Var(v) => CoreAction::LetVar(symbol.clone(), v.clone()),
+            GenericAtomTerm::Literal(lit) => CoreAction::LetLit(symbol.clone(), lit.clone()),
+            GenericAtomTerm::Global(v) => CoreAction::LetVar(symbol.clone(), v.clone()),
         });
         let existing_actions = std::mem::take(&mut self.0);
         self.0 = actions.chain(existing_actions).collect();

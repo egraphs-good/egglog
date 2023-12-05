@@ -5,7 +5,7 @@ use smallvec::SmallVec;
 
 use crate::{
     function::index::Offset,
-    typecheck::{Atom, AtomTerm, ResolvedCall},
+    typecheck::{Atom, AtomTerm, GenericAtomTerm, ResolvedCall},
     *,
 };
 use std::{
@@ -333,33 +333,50 @@ pub struct CompiledQuery {
 impl EGraph {
     pub(crate) fn compile_gj_query(
         &self,
-        query: Query,
-        // types: &IndexMap<Symbol, ArcSort>,
+        // TODO: The legacy code uses Query<ResolvedCall, Symbol>
+        // instead of Query<ResolvedCall, ResolvedVar>.
+        // This needs to be fixed in the future.
+        query: typecheck::Query<ResolvedCall, ResolvedVar>,
     ) -> CompiledQuery {
-        todo!("compile should no longer takes types")
-        // // NOTE: this vars order only used for ordering the tuple storing the resulting match
-        // // It is not the GJ variable order.
-        // let mut vars: IndexMap<Symbol, VarInfo> = Default::default();
+        // NOTE: this vars order only used for ordering the tuple storing the resulting match
+        // It is not the GJ variable order.
+        let mut vars: IndexMap<Symbol, VarInfo> = Default::default();
+        for var in query.get_vars() {
+            vars.entry(var.name).or_default();
+        }
 
-        // for var in types.keys() {
-        //     vars.entry(*var).or_default();
-        // }
+        for (i, atom) in query.funcs().enumerate() {
+            for v in atom.vars() {
+                // only count grounded occurrences
+                vars.entry(v.into()).or_default().occurences.push(i)
+            }
+        }
 
-        // for (i, atom) in query.funcs().enumerate() {
-        //     for v in atom.vars() {
-        //         // only count grounded occurrences
-        //         vars.entry(v).or_default().occurences.push(i)
-        //     }
-        // }
+        // make sure everyone has an entry in the vars table
+        for prim in query.filters() {
+            for v in prim.vars() {
+                vars.entry(v.into()).or_default();
+            }
+        }
 
-        // // make sure everyone has an entry in the vars table
-        // for prim in query.filters() {
-        //     for v in prim.vars() {
-        //         vars.entry(v).or_default();
-        //     }
-        // }
+        let atoms = query
+            .atoms
+            .into_iter()
+            .map(|atom| {
+                let args = atom.args.into_iter().map(|arg| match arg {
+                    GenericAtomTerm::Var(v) => AtomTerm::Var(v.name),
+                    GenericAtomTerm::Literal(lit) => AtomTerm::Literal(lit),
+                    GenericAtomTerm::Global(g) => AtomTerm::Global(g.name),
+                });
+                Atom {
+                    head: atom.head,
+                    args: args.collect(),
+                }
+            })
+            .collect();
+        let query = Query { atoms };
 
-        // CompiledQuery { query, vars }
+        CompiledQuery { query, vars }
     }
 
     fn make_trie_access_for_column(
