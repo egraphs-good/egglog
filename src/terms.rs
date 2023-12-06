@@ -1,4 +1,12 @@
-use crate::*;
+use crate::{
+    ast::{
+        desugar::Desugar, Action, Command, CommandId, Expr, Fact, NCommand, NormAction,
+        NormCommand, NormExpr, NormFact, NormFunctionDecl, NormRule, NormSchedule, Rule, RunConfig,
+        Schedule,
+    },
+    util::ListDisplay,
+    ArcSort, EGraph, Error, Symbol, TypeInfo,
+};
 
 /// The state of the term encoding is simply a current context
 /// so that it can look up type information.
