@@ -25,7 +25,6 @@ fn desugar_rewrite(
     ruleset: Symbol,
     name: Symbol,
     rewrite: &UnresolvedRewrite,
-    desugar: &mut Desugar,
 ) -> Vec<UnresolvedNCommand> {
     let var = Symbol::from("rewrite_var__");
     // make two rules- one to insert the rhs, and one to union
@@ -48,21 +47,15 @@ fn desugar_birewrite(
     ruleset: Symbol,
     name: Symbol,
     rewrite: &UnresolvedRewrite,
-    desugar: &mut Desugar,
 ) -> Vec<UnresolvedNCommand> {
     let rw2 = Rewrite {
         lhs: rewrite.rhs.clone(),
         rhs: rewrite.lhs.clone(),
         conditions: rewrite.conditions.clone(),
     };
-    desugar_rewrite(ruleset, format!("{}=>", name).into(), rewrite, desugar)
+    desugar_rewrite(ruleset, format!("{}=>", name).into(), rewrite)
         .into_iter()
-        .chain(desugar_rewrite(
-            ruleset,
-            format!("{}<=", name).into(),
-            &rw2,
-            desugar,
-        ))
+        .chain(desugar_rewrite(ruleset, format!("{}<=", name).into(), &rw2))
         .collect()
 }
 
@@ -127,11 +120,11 @@ pub struct Desugar {
     // Store the parser because it takes some time
     // on startup for some reason
     parser: ast::parse::ProgramParser,
-    pub(crate) expr_parser: ast::parse::ExprParser,
-    pub(crate) action_parser: ast::parse::ActionParser,
+    // yz (dec 5): Comment out since they are only used in terms.rs which are deleted
+    // pub(crate) expr_parser: ast::parse::ExprParser,
+    // pub(crate) action_parser: ast::parse::ActionParser,
     // TODO fix getting fresh names using modules
     pub(crate) number_underscores: usize,
-    pub(crate) global_variables: HashSet<Symbol>,
     pub(crate) type_info: TypeInfo,
 }
 
@@ -142,10 +135,9 @@ impl Default for Desugar {
             next_fresh: Default::default(),
             // these come from lalrpop and don't have default impls
             parser: ast::parse::ProgramParser::new(),
-            expr_parser: ast::parse::ExprParser::new(),
-            action_parser: ast::parse::ActionParser::new(),
+            // expr_parser: ast::parse::ExprParser::new(),
+            // action_parser: ast::parse::ActionParser::new(),
             number_underscores: 3,
-            global_variables: Default::default(),
             type_info,
         }
     }
@@ -243,10 +235,10 @@ pub(crate) fn desugar_command(
         Command::Declare { name, sort } => desugar.declare(name, sort),
         Command::Datatype { name, variants } => desugar_datatype(name, variants),
         Command::Rewrite(ruleset, rewrite) => {
-            desugar_rewrite(ruleset, rewrite_name(&rewrite).into(), &rewrite, desugar)
+            desugar_rewrite(ruleset, rewrite_name(&rewrite).into(), &rewrite)
         }
         Command::BiRewrite(ruleset, rewrite) => {
-            desugar_birewrite(ruleset, rewrite_name(&rewrite).into(), &rewrite, desugar)
+            desugar_birewrite(ruleset, rewrite_name(&rewrite).into(), &rewrite)
         }
         Command::Include(file) => {
             let s = std::fs::read_to_string(&file)
@@ -350,12 +342,6 @@ pub(crate) fn desugar_command(
         }
     };
 
-    for cmd in &res {
-        if let NCommand::NormAction(Action::Let((), lhs, expr)) = cmd {
-            desugar.global_variables.insert(*lhs);
-        }
-    }
-
     Ok(res)
 }
 
@@ -378,10 +364,9 @@ impl Clone for Desugar {
         Self {
             next_fresh: self.next_fresh,
             parser: ast::parse::ProgramParser::new(),
-            expr_parser: ast::parse::ExprParser::new(),
-            action_parser: ast::parse::ActionParser::new(),
+            // expr_parser: ast::parse::ExprParser::new(),
+            // action_parser: ast::parse::ActionParser::new(),
             number_underscores: self.number_underscores,
-            global_variables: self.global_variables.clone(),
             type_info: self.type_info.clone(),
         }
     }

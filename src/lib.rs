@@ -1041,23 +1041,19 @@ impl EGraph {
     fn add_rule_with_name(
         &mut self,
         name: String,
-        // TODO: should probably use ResolvedRule here
         rule: ast::ResolvedRule,
         ruleset: Symbol,
     ) -> Result<Symbol, Error> {
         let name = Symbol::from(name);
-        let core_rule = rule.to_canonicalized_core_rule(self.type_info(), ResolvedGen::new())?;
+        let core_rule = rule.to_canonicalized_core_rule(self.type_info())?;
         let (query, action) = (core_rule.body, core_rule.head);
 
-        // TODO: We should refactor compile_actions later as well
-        let action: Vec<_> = action.0.clone();
-
+        let vars = query.get_vars();
         let query = self.compile_gj_query(query);
+
+        let actions: Vec<_> = action.0.clone();
         let program = self
-            .compile_actions(todo!(
-                "compile_actions take an Action, but lowering gives us a CoreAction, {:?}",
-                &action
-            ))
+            .compile_actions(&vars, &actions)
             .map_err(Error::TypeErrors)?;
         let compiled_rule = Rule {
             query,
@@ -1088,7 +1084,14 @@ impl EGraph {
     }
 
     fn eval_actions(&mut self, actions: &[ResolvedAction]) -> Result<(), Error> {
-        let program = self.compile_actions(&actions).map_err(Error::TypeErrors)?;
+        let (actions, _) = Actions(actions.to_vec()).to_norm_actions(
+            self.type_info(),
+            &mut Default::default(),
+            &mut ResolvedGen::new(),
+        )?;
+        let program = self
+            .compile_actions(&Default::default(), &actions)
+            .map_err(Error::TypeErrors)?;
         let mut stack = vec![];
         self.run_actions(&mut stack, &[], &program, true)?;
         Ok(())
@@ -1097,7 +1100,7 @@ impl EGraph {
     // TODO make a public version of eval_expr that makes a command,
     // then returns the value at the end.
     fn eval_expr(&mut self, expr: &ResolvedExpr, make_defaults: bool) -> Result<Value, Error> {
-        let program = self.compile_expr(expr);
+        let program = self.compile_expr(&Default::default(), expr);
         let mut stack = vec![];
         self.run_actions(&mut stack, &[], &program, make_defaults)?;
         assert_eq!(stack.len(), 1);
@@ -1146,7 +1149,7 @@ impl EGraph {
             head: vec![],
             body: facts.to_vec(),
         };
-        let core_rule = rule.to_canonicalized_core_rule(self.type_info(), ResolvedGen::new())?;
+        let core_rule = rule.to_canonicalized_core_rule(self.type_info())?;
         let query0 = core_rule.body;
         let query = self.compile_gj_query(query0);
 

@@ -190,19 +190,35 @@ where
         })
     }
 
-    pub(crate) fn to_canonicalized_core_rule(
+    fn to_canonicalized_core_rule_impl(
         &self,
         typeinfo: &TypeInfo,
-        mut fresh_gen: impl FreshGen<Head, Leaf>,
+        fresh_gen: impl FreshGen<Head, Leaf>,
+        value_eq: impl Fn(&GenericAtomTerm<Leaf>, &GenericAtomTerm<Leaf>) -> Head,
     ) -> Result<CoreRule<Head, Leaf>, TypeError> {
-        let mut rule = self.to_core_rule(typeinfo, fresh_gen)?;
-        let rule = rule.canonicalize(todo!("get value-eq implementation"));
+        let rule = self.to_core_rule(typeinfo, fresh_gen)?;
+        let rule = rule.canonicalize(value_eq);
         Ok(rule)
     }
 }
 
-pub struct Context<'a> {
-    pub egraph: &'a mut EGraph,
+impl ResolvedRule {
+    pub(crate) fn to_canonicalized_core_rule(
+        &self,
+        typeinfo: &TypeInfo,
+    ) -> Result<ResolvedCoreRule, TypeError> {
+        let value_eq = &typeinfo.primitives.get(&Symbol::from("value-eq")).unwrap()[0];
+        let unit = typeinfo.get_sort_nofail::<UnitSort>();
+        let rule =
+            self.to_canonicalized_core_rule_impl(typeinfo, ResolvedGen::new(), |at1, at2| {
+                ResolvedCall::Primitive(SpecializedPrimitive {
+                    primitive: value_eq.clone(),
+                    input: vec![at1.output(typeinfo), at2.output(typeinfo)],
+                    output: unit.clone(),
+                })
+            });
+        rule
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -220,6 +236,16 @@ impl AtomTerm {
             AtomTerm::Var(v) => Expr::Var((), *v),
             AtomTerm::Literal(l) => Expr::Lit((), l.clone()),
             AtomTerm::Global(v) => Expr::Var((), *v),
+        }
+    }
+}
+
+impl GenericAtomTerm<ResolvedVar> {
+    pub fn output(&self, typeinfo: &TypeInfo) -> ArcSort {
+        match self {
+            GenericAtomTerm::Var(v) => v.sort.clone(),
+            GenericAtomTerm::Literal(l) => typeinfo.infer_literal(l),
+            GenericAtomTerm::Global(v) => v.sort.clone(),
         }
     }
 }
@@ -409,7 +435,7 @@ where
     pub(crate) fn canonicalize(
         self,
         // Users need to pass in a substitute for equality constraints.
-        value_eq: &Head,
+        value_eq: impl Fn(&GenericAtomTerm<Leaf>, &GenericAtomTerm<Leaf>) -> Head,
     ) -> CoreRule<Head, Leaf> {
         let mut result_rule = self;
         loop {
@@ -453,7 +479,7 @@ where
                                 None
                             } else {
                                 Some(GenericAtom {
-                                    head: value_eq.clone(),
+                                    head: value_eq(&atom.args[0], &atom.args[1]),
                                     args: vec![
                                         atom.args[0].clone(),
                                         atom.args[1].clone(),
@@ -479,56 +505,53 @@ where
 
 struct ActionCompiler<'a> {
     egraph: &'a EGraph,
+    types: &'a IndexMap<Symbol, ArcSort>,
     locals: IndexSet<Symbol>,
     instructions: Vec<Instruction>,
 }
 
 impl<'a> ActionCompiler<'a> {
-    // TODO: refactor this to get rid of "the type part" of the action checker
-    fn check_action(&mut self, action: &ResolvedAction) {
+    fn check_action(&mut self, action: &CoreAction<ResolvedCall, ResolvedVar>) {
         match action {
-            Action::Let((), v, e) => {
-                self.compile_expr(e);
+            CoreAction::Let(v, f, args) => {
+                self.do_call(f, args);
                 self.locals.insert(v.name);
             }
-            Action::Set((), f, args, val) => {
+            CoreAction::LetAtomTerm(v, at) => {
+                self.do_atom_term(at);
+                self.locals.insert(v.name);
+            }
+            CoreAction::Extract(e, b) => {
+                self.do_atom_term(e);
+                self.do_atom_term(b);
+                self.instructions.push(Instruction::Extract(2));
+            }
+            CoreAction::Set(f, args, e) => {
                 let ResolvedCall::Func(func) = f else {
                     panic!("Cannot set primitive- should have been caught by typechecking!!!")
                 };
-
-                let fake_call = Expr::Call((), f.clone(), args.clone());
-                self.compile_expr(&fake_call);
-                let fake_instr = self.instructions.pop().unwrap();
-                assert!(matches!(fake_instr, Instruction::CallFunction(..)));
-                self.compile_expr(val);
+                for arg in args {
+                    self.do_atom_term(arg);
+                }
+                self.do_atom_term(e);
                 self.instructions.push(Instruction::Set(func.name));
             }
-            Action::Extract((), variable, variants) => {
-                self.compile_expr(variable);
-                self.compile_expr(variants);
-                self.instructions.push(Instruction::Extract(2));
-            }
-            Action::Delete((), f, args) => {
+            CoreAction::Delete(f, args) => {
                 let ResolvedCall::Func(func) = f else {
                     panic!("Cannot delete primitive- should have been caught by typechecking!!!")
                 };
-                let fake_call = Expr::Call((), f.clone(), args.clone());
-                self.compile_expr(&fake_call);
-                let fake_instr = self.instructions.pop().unwrap();
-                assert!(matches!(fake_instr, Instruction::CallFunction(..)));
+                for arg in args {
+                    self.do_atom_term(arg);
+                }
                 self.instructions.push(Instruction::DeleteRow(func.name));
             }
-            Action::Union((), a, b) => {
-                self.compile_expr(a);
-                self.compile_expr(b);
+            CoreAction::Union(arg1, arg2) => {
+                self.do_atom_term(arg1);
+                self.do_atom_term(arg2);
                 self.instructions.push(Instruction::Union(2));
             }
-            Action::Panic((), msg) => {
+            CoreAction::Panic(msg) => {
                 self.instructions.push(Instruction::Panic(msg.clone()));
-            }
-            Action::Expr((), expr) => {
-                self.compile_expr(expr);
-                self.instructions.push(Instruction::Pop);
             }
         }
     }
@@ -537,21 +560,33 @@ impl<'a> ActionCompiler<'a> {
         self.egraph
     }
 
-    fn do_lit(&mut self, lit: &Literal) {
-        self.instructions.push(Instruction::Literal(lit.clone()));
+    fn do_call(&mut self, f: &ResolvedCall, args: &[GenericAtomTerm<ResolvedVar>]) {
+        for arg in args {
+            self.do_atom_term(arg);
+        }
+        match f {
+            ResolvedCall::Func(f) => self.do_function(&f),
+            ResolvedCall::Primitive(p) => self.do_prim(p),
+        }
     }
 
-    fn compile_var(&mut self, var: ResolvedVar) {
-        if let Some((sort, _v, _ts)) = self.egraph().global_bindings.get(&var.name) {
-            self.instructions.push(Instruction::Global(var.name));
-        } else if let Some((i, _)) = self.locals.get_full(&var.name) {
-            self.instructions.push(Instruction::Load(Load::Stack(i)));
-        } else {
-            // TODO need to know the index of the variable
-            // in the substitution.
-            // Used to use index in types
-            //self.instructions.push(Instruction::Load(Load::Subst(i)));
-            todo!("need variable ordering")
+    fn do_atom_term(&mut self, at: &GenericAtomTerm<ResolvedVar>) {
+        match at {
+            GenericAtomTerm::Var(var) => {
+                if let Some((i, ty)) = self.locals.get_full(&var.name) {
+                    self.instructions.push(Instruction::Load(Load::Stack(i)));
+                } else {
+                    let (i, _, ty) = self.types.get_full(&var.name).unwrap();
+                    self.instructions.push(Instruction::Load(Load::Subst(i)));
+                }
+            }
+            GenericAtomTerm::Literal(lit) => {
+                self.instructions.push(Instruction::Literal(lit.clone()));
+            }
+            GenericAtomTerm::Global(var) => {
+                let (sort, _v, _ts) = self.egraph().global_bindings.get(&var.name).unwrap();
+                self.instructions.push(Instruction::Global(var.name));
+            }
         }
     }
 
@@ -562,40 +597,11 @@ impl<'a> ActionCompiler<'a> {
         ));
     }
 
-    fn compile_prim(&mut self, prim: SpecializedPrimitive) {
-        self.instructions
-            .push(Instruction::CallPrimitive(prim.primitive, prim.input.len()));
-    }
-
-    fn is_variable(&self, sym: Symbol) -> bool {
-        self.egraph().global_bindings.contains_key(&sym)
-    }
-
-    fn compile_expr(&mut self, expr: &ResolvedExpr) {
-        match expr {
-            Expr::Lit(_ann, lit) => {
-                let t = self.do_lit(lit);
-            }
-            Expr::Var(_ann, sym) => (),
-            Expr::Call(_ann, calltype, args) => match calltype {
-                ResolvedCall::Func(functype) => {
-                    assert_eq!(
-                        functype.input.len(),
-                        args.len(),
-                        "Got wrong number of arguments for function {}",
-                        functype.name
-                    );
-
-                    self.do_function(&functype);
-                }
-                ResolvedCall::Primitive(prim) => {
-                    for arg in args {
-                        self.compile_expr(arg);
-                    }
-                    self.compile_prim(prim.clone());
-                }
-            },
-        }
+    fn do_prim(&mut self, prim: &SpecializedPrimitive) {
+        self.instructions.push(Instruction::CallPrimitive(
+            prim.primitive.clone(),
+            prim.input.len(),
+        ));
     }
 }
 
@@ -627,36 +633,44 @@ pub struct Program(Vec<Instruction>);
 impl EGraph {
     pub(crate) fn compile_actions(
         &self,
-        actions: &[ResolvedAction],
+        binding: &HashSet<ResolvedVar>,
+        actions: &[CoreAction<ResolvedCall, ResolvedVar>],
     ) -> Result<Program, Vec<TypeError>> {
+        let mut types = IndexMap::default();
+        for var in binding {
+            types.insert(var.name, var.sort.clone());
+        }
         let mut checker = ActionCompiler {
             egraph: self,
+            types: &types,
             locals: IndexSet::default(),
             instructions: Vec::new(),
         };
 
-        // let mut errors = vec![];
-        // for a in actions {
-        //     if let Err(err) = checker.check_action(a) {
-        //         errors.push(err);
-        //     }
-        // }
+        for a in actions {
+            checker.check_action(a);
+        }
 
-        // if errors.is_empty() {
-        //     Ok(Program(checker.instructions))
-        // } else {
-        //     Err(errors)
-        // }
-        todo!("compile flatten and compile actions")
+        Ok(Program(checker.instructions))
     }
 
-    pub(crate) fn compile_expr(&self, expr: &ResolvedExpr) -> Program {
+    pub(crate) fn compile_expr(
+        &self,
+        binding: &HashSet<ResolvedVar>,
+        expr: &ResolvedExpr,
+    ) -> Program {
+        let mut types = IndexMap::default();
+        for var in binding {
+            types.insert(var.name, var.sort.clone());
+        }
         let mut compiler = ActionCompiler {
             egraph: self,
+            types: &types,
             locals: IndexSet::default(),
             instructions: Vec::new(),
         };
-        compiler.compile_expr(expr);
+        todo!();
+        // compiler.compile_expr(expr);
         Program(compiler.instructions)
     }
 

@@ -1143,9 +1143,6 @@ where
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum CoreAction<Head, Leaf> {
     Let(Leaf, Head, Vec<GenericAtomTerm<Leaf>>),
-    LetVar(Leaf, Leaf),
-    LetLit(Leaf, Literal),
-    // TODO: This will replace LetVar and LetLit once the refactoring is done.
     LetAtomTerm(Leaf, GenericAtomTerm<Leaf>),
     Extract(GenericAtomTerm<Leaf>, GenericAtomTerm<Leaf>),
     Set(Head, Vec<GenericAtomTerm<Leaf>>, GenericAtomTerm<Leaf>),
@@ -1163,11 +1160,9 @@ where
     Leaf: Clone,
 {
     pub(crate) fn subst(&mut self, subst: &HashMap<Leaf, GenericAtomTerm<Leaf>>) {
-        let actions = subst.iter().map(|(symbol, atom_term)| match atom_term {
-            GenericAtomTerm::Var(v) => CoreAction::LetVar(symbol.clone(), v.clone()),
-            GenericAtomTerm::Literal(lit) => CoreAction::LetLit(symbol.clone(), lit.clone()),
-            GenericAtomTerm::Global(v) => CoreAction::LetVar(symbol.clone(), v.clone()),
-        });
+        let actions = subst
+            .iter()
+            .map(|(symbol, atom_term)| CoreAction::LetAtomTerm(symbol.clone(), atom_term.clone()));
         let existing_actions = std::mem::take(&mut self.0);
         self.0 = actions.chain(existing_actions).collect();
     }

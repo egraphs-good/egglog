@@ -423,13 +423,7 @@ impl Problem<AtomTerm, ArcSort> {
                 NormAction::Let(var, _, _) => {
                     self.range.insert(AtomTerm::Var(*var));
                 }
-                NormAction::LetLit(v, l) => {
-                    self.range.insert(AtomTerm::Var(*v));
-                }
                 NormAction::LetAtomTerm(v, _) => {
-                    self.range.insert(AtomTerm::Var(*v));
-                }
-                NormAction::LetVar(v, _) => {
                     self.range.insert(AtomTerm::Var(*v));
                 }
                 _ => (),
@@ -511,13 +505,6 @@ impl NormAction {
                 )
             }
             NormAction::Panic(_) => Ok(vec![]),
-            NormAction::LetVar(v1, v2) => {
-                Ok(vec![Constraint::Eq(AtomTerm::Var(*v1), AtomTerm::Var(*v2))])
-            }
-            NormAction::LetLit(v, l) => Ok(vec![Constraint::Assign(
-                AtomTerm::Var(*v),
-                typeinfo.infer_literal(l),
-            )]),
             NormAction::LetAtomTerm(v, at) => {
                 Ok(get_literal_and_global_constraints(&[at.clone()], typeinfo)
                     .chain(once(Constraint::Eq(AtomTerm::Var(*v), at.clone())))

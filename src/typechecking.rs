@@ -331,17 +331,7 @@ impl TypeInfo {
         let (query, mapped_query) = Facts(body.clone()).to_query(self, &mut fresh_gen);
         constraints.extend(query.get_constraints(self)?);
 
-        let mut binding = query
-            .atom_terms()
-            .into_iter()
-            .filter_map(|at| {
-                if let AtomTerm::Var(v) = at {
-                    Some(v)
-                } else {
-                    None
-                }
-            })
-            .collect::<HashSet<_>>();
+        let mut binding = query.get_vars();
         let (actions, mapped_action): (Vec<NormAction>, Vec<Action<(Symbol, Symbol), Symbol, ()>>) =
             // TODO: get rid of this clone by using Actions in the first place
             Actions(head.clone()).to_norm_actions(self, &mut binding, &mut fresh_gen)?;

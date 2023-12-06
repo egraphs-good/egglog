@@ -80,8 +80,19 @@ impl Function {
             None => return Err(Error::TypeError(TypeError::Unbound(decl.schema.output))),
         };
 
+        let binding = HashSet::from_iter([
+            ResolvedVar {
+                name: Symbol::from("old"),
+                sort: output.clone(),
+            },
+            ResolvedVar {
+                name: Symbol::from("new"),
+                sort: output.clone(),
+            },
+        ]);
+
         let merge_vals = if let Some(merge_expr) = &decl.merge {
-            let program = egraph.compile_expr(merge_expr);
+            let program = egraph.compile_expr(&binding, merge_expr);
             MergeFn::Expr(Rc::new(program))
         } else if output.is_eq_sort() {
             MergeFn::Union
@@ -92,8 +103,13 @@ impl Function {
         let on_merge = if decl.merge_action.is_empty() {
             None
         } else {
+            let (merge_action, _) = Actions(decl.merge_action.clone()).to_norm_actions(
+                egraph.type_info(),
+                &mut binding.clone(),
+                &mut ResolvedGen::new(),
+            )?;
             let program = egraph
-                .compile_actions(&decl.merge_action)
+                .compile_actions(&binding, &merge_action)
                 .map_err(Error::TypeErrors)?;
             Some(Rc::new(program))
         };
