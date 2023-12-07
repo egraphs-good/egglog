@@ -1100,10 +1100,16 @@ impl EGraph {
     // TODO make a public version of eval_expr that makes a command,
     // then returns the value at the end.
     fn eval_expr(&mut self, expr: &ResolvedExpr, make_defaults: bool) -> Result<Value, Error> {
-        let program = self.compile_expr(&Default::default(), expr);
+        let (actions, _) = Actions(vec![Action::Expr((), expr.clone())]).to_norm_actions(
+            self.type_info(),
+            &mut Default::default(),
+            &mut ResolvedGen::new(),
+        )?;
+        let program = self
+            .compile_actions(&Default::default(), &actions)
+            .map_err(Error::TypeErrors)?;
         let mut stack = vec![];
         self.run_actions(&mut stack, &[], &program, make_defaults)?;
-        assert_eq!(stack.len(), 1);
         Ok(stack.pop().unwrap())
     }
 
@@ -1366,12 +1372,16 @@ impl EGraph {
                 },
             );
         }
-        let actions: Vec<ResolvedAction> = todo!("action resolution needed {:?}", actions);
-        self.eval_actions(&actions)?;
-        log::info!(
-            "Read {} facts into {func_name} from '{file}'.",
-            actions.len()
-        );
+        let num_facts = actions.len();
+        let commands = actions
+            .into_iter()
+            .map(NCommand::NormAction)
+            .collect::<Vec<_>>();
+        let commands: Vec<_> = self.type_info_mut().typecheck_program(&commands)?;
+        for command in commands {
+            self.run_command(command, true)?;
+        }
+        log::info!("Read {} facts into {func_name} from '{file}'.", num_facts);
         Ok(())
     }
 
@@ -1551,6 +1561,10 @@ impl EGraph {
 
     pub(crate) fn type_info(&self) -> &TypeInfo {
         &self.desugar.type_info
+    }
+
+    pub(crate) fn type_info_mut(&mut self) -> &mut TypeInfo {
+        &mut self.desugar.type_info
     }
 }
 

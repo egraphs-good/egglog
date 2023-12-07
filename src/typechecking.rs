@@ -170,20 +170,7 @@ impl TypeInfo {
         command: &UnresolvedNCommand,
     ) -> Result<ResolvedNCommand, TypeError> {
         let command: ResolvedNCommand = match command {
-            NCommand::Function(fdecl) => {
-                if self.sorts.contains_key(&fdecl.name) {
-                    return Err(TypeError::SortAlreadyBound(fdecl.name));
-                }
-                if self.is_primitive(fdecl.name) {
-                    return Err(TypeError::PrimitiveAlreadyBound(fdecl.name));
-                }
-                let ftype = self.function_to_functype(fdecl)?;
-                if self.func_types.insert(fdecl.name, ftype).is_some() {
-                    return Err(TypeError::FunctionAlreadyBound(fdecl.name));
-                }
-
-                NCommand::Function(self.typecheck_function(fdecl)?)
-            }
+            NCommand::Function(fdecl) => NCommand::Function(self.typecheck_function(fdecl)?),
             NCommand::NormRule {
                 rule,
                 ruleset,
@@ -194,6 +181,8 @@ impl TypeInfo {
                 name: *name,
             },
             NCommand::Sort(sort, presort_and_args) => {
+                // Note this is bad since typechecking should be pure and idempotent
+                // Otherwise typechecking the same program twice will fail
                 self.declare_sort(*sort, presort_and_args)?;
                 NCommand::Sort(*sort, presort_and_args.clone())
             }
@@ -209,10 +198,7 @@ impl TypeInfo {
             NCommand::Push(n) => NCommand::Push(*n),
             NCommand::SetOption { name, value } => {
                 let value = self.typecheck_expr(value, &HashMap::default())?;
-                NCommand::SetOption {
-                    name: *name,
-                    value: value.clone(),
-                }
+                NCommand::SetOption { name: *name, value }
             }
             NCommand::AddRuleset(ruleset) => NCommand::AddRuleset(*ruleset),
             NCommand::PrintOverallStatistics => NCommand::PrintOverallStatistics,
@@ -244,6 +230,16 @@ impl TypeInfo {
         &mut self,
         fdecl: &UnresolvedFunctionDecl,
     ) -> Result<ResolvedFunctionDecl, TypeError> {
+        if self.sorts.contains_key(&fdecl.name) {
+            return Err(TypeError::SortAlreadyBound(fdecl.name));
+        }
+        if self.is_primitive(fdecl.name) {
+            return Err(TypeError::PrimitiveAlreadyBound(fdecl.name));
+        }
+        let ftype = self.function_to_functype(fdecl)?;
+        if self.func_types.insert(fdecl.name, ftype).is_some() {
+            return Err(TypeError::FunctionAlreadyBound(fdecl.name));
+        }
         let mut bound_vars = HashMap::default();
         let output_type = self.sorts.get(&fdecl.schema.output).unwrap();
         bound_vars.insert("old".into(), output_type.clone());
@@ -268,7 +264,7 @@ impl TypeInfo {
     }
 
     fn typecheck_schedule(
-        &mut self,
+        &self,
         schedule: &UnresolvedSchedule,
     ) -> Result<ResolvedSchedule, TypeError> {
         let schedule = match schedule {
@@ -323,7 +319,7 @@ impl TypeInfo {
         self.add_arcsort(sort)
     }
 
-    fn typecheck_rule(&mut self, rule: &UnresolvedRule) -> Result<ResolvedRule, TypeError> {
+    fn typecheck_rule(&self, rule: &UnresolvedRule) -> Result<ResolvedRule, TypeError> {
         let UnresolvedRule { head, body } = rule;
         let mut constraints = vec![];
 
@@ -358,10 +354,7 @@ impl TypeInfo {
         })
     }
 
-    fn typecheck_facts(
-        &mut self,
-        facts: &Vec<UnresolvedFact>,
-    ) -> Result<Vec<ResolvedFact>, TypeError> {
+    fn typecheck_facts(&self, facts: &Vec<UnresolvedFact>) -> Result<Vec<ResolvedFact>, TypeError> {
         let mut fresh_gen = SymbolGen::new();
         let (query, mapped_facts) = Facts(facts.clone()).to_query(self, &mut fresh_gen);
         let mut problem = Problem::default();
@@ -374,7 +367,7 @@ impl TypeInfo {
     }
 
     fn typecheck_actions(
-        &mut self,
+        &self,
         actions: &Vec<UnresolvedAction>,
         binding: &HashMap<Symbol, ArcSort>,
     ) -> Result<Vec<ResolvedAction>, TypeError> {
@@ -401,7 +394,7 @@ impl TypeInfo {
     }
 
     fn typecheck_expr(
-        &mut self,
+        &self,
         expr: &UnresolvedExpr,
         binding: &HashMap<Symbol, ArcSort>,
     ) -> Result<ResolvedExpr, TypeError> {
@@ -414,7 +407,7 @@ impl TypeInfo {
     }
 
     fn typecheck_action(
-        &mut self,
+        &self,
         action: &UnresolvedAction,
         binding: &HashMap<Symbol, ArcSort>,
     ) -> Result<ResolvedAction, TypeError> {

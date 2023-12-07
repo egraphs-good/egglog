@@ -92,7 +92,17 @@ impl Function {
         ]);
 
         let merge_vals = if let Some(merge_expr) = &decl.merge {
-            let program = egraph.compile_expr(&binding, merge_expr);
+            // TODO: Compiling actions to programs is reused in eval_actions.
+            // Need to extract that into a separate function.
+            let (actions, _) = Actions(vec![Action::Expr((), merge_expr.clone())])
+                .to_norm_actions(
+                    egraph.type_info(),
+                    &mut Default::default(),
+                    &mut ResolvedGen::new(),
+                )?;
+            let program = egraph
+                .compile_actions(&Default::default(), &actions)
+                .map_err(Error::TypeErrors)?;
             MergeFn::Expr(Rc::new(program))
         } else if output.is_eq_sort() {
             MergeFn::Union

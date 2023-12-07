@@ -654,26 +654,6 @@ impl EGraph {
         Ok(Program(checker.instructions))
     }
 
-    pub(crate) fn compile_expr(
-        &self,
-        binding: &HashSet<ResolvedVar>,
-        expr: &ResolvedExpr,
-    ) -> Program {
-        let mut types = IndexMap::default();
-        for var in binding {
-            types.insert(var.name, var.sort.clone());
-        }
-        let mut compiler = ActionCompiler {
-            egraph: self,
-            types: &types,
-            locals: IndexSet::default(),
-            instructions: Vec::new(),
-        };
-        todo!();
-        // compiler.compile_expr(expr);
-        Program(compiler.instructions)
-    }
-
     fn perform_set(
         &mut self,
         table: Symbol,

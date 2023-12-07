@@ -1044,7 +1044,7 @@ where
                         return Err(TypeError::AlreadyDefined(var.clone().into()));
                     }
                     let (actions, mapped_expr) =
-                        expr_to_norm_actions(expr, typeinfo, binding, fresh_gen)?;
+                        expr.to_norm_actions(typeinfo, binding, fresh_gen)?;
                     norm_actions.extend(actions);
                     norm_actions.push(CoreAction::LetAtomTerm(
                         var.clone(),
@@ -1057,12 +1057,12 @@ where
                     let mut mapped_args = vec![];
                     for arg in args {
                         let (actions, mapped_arg) =
-                            expr_to_norm_actions(arg, typeinfo, binding, fresh_gen)?;
+                            arg.to_norm_actions(typeinfo, binding, fresh_gen)?;
                         norm_actions.extend(actions);
                         mapped_args.push(mapped_arg);
                     }
                     let (actions, mapped_expr) =
-                        expr_to_norm_actions(expr, typeinfo, binding, fresh_gen)?;
+                        expr.to_norm_actions(typeinfo, binding, fresh_gen)?;
                     norm_actions.extend(actions);
                     norm_actions.push(CoreAction::Set(
                         head.clone(),
@@ -1084,7 +1084,7 @@ where
                     let mut mapped_args = vec![];
                     for arg in args {
                         let (actions, mapped_arg) =
-                            expr_to_norm_actions(arg, typeinfo, binding, fresh_gen)?;
+                            arg.to_norm_actions(typeinfo, binding, fresh_gen)?;
                         norm_actions.extend(actions);
                         mapped_args.push(mapped_arg);
                     }
@@ -1099,11 +1099,9 @@ where
                     mapped_actions.push(Action::Delete(*_ann, (head.clone(), v), mapped_args));
                 }
                 Action::Union(_ann, e1, e2) => {
-                    let (actions1, mapped_e1) =
-                        expr_to_norm_actions(e1, typeinfo, binding, fresh_gen)?;
+                    let (actions1, mapped_e1) = e1.to_norm_actions(typeinfo, binding, fresh_gen)?;
                     norm_actions.extend(actions1);
-                    let (actions2, mapped_e2) =
-                        expr_to_norm_actions(e2, typeinfo, binding, fresh_gen)?;
+                    let (actions2, mapped_e2) = e2.to_norm_actions(typeinfo, binding, fresh_gen)?;
                     norm_actions.extend(actions2);
                     norm_actions.push(CoreAction::Union(
                         mapped_e1.get_corresponding_var_or_lit(),
@@ -1112,11 +1110,9 @@ where
                     mapped_actions.push(Action::Union(*_ann, mapped_e1, mapped_e2));
                 }
                 Action::Extract(_ann, e, n) => {
-                    let (actions, mapped_e) =
-                        expr_to_norm_actions(e, typeinfo, binding, fresh_gen)?;
+                    let (actions, mapped_e) = e.to_norm_actions(typeinfo, binding, fresh_gen)?;
                     norm_actions.extend(actions);
-                    let (actions, mapped_n) =
-                        expr_to_norm_actions(n, typeinfo, binding, fresh_gen)?;
+                    let (actions, mapped_n) = n.to_norm_actions(typeinfo, binding, fresh_gen)?;
                     norm_actions.extend(actions);
                     norm_actions.push(CoreAction::Extract(
                         mapped_e.get_corresponding_var_or_lit(),
@@ -1130,7 +1126,7 @@ where
                 }
                 Action::Expr(_ann, expr) => {
                     let (actions, mapped_expr) =
-                        expr_to_norm_actions(expr, typeinfo, binding, fresh_gen)?;
+                        expr.to_norm_actions(typeinfo, binding, fresh_gen)?;
                     norm_actions.extend(actions);
                     mapped_actions.push(Action::Expr(*_ann, mapped_expr));
                 }
@@ -1466,45 +1462,45 @@ impl<Head: Clone, Leaf: Clone, Ann: Clone> Expr<Head, Leaf, Ann> {
             }
         }
     }
-}
 
-pub(crate) fn expr_to_norm_actions<Head, Leaf, Ann, FG: FreshGen<Head, Leaf>>(
-    expr: &Expr<Head, Leaf, Ann>,
-    typeinfo: &TypeInfo,
-    binding: &mut HashSet<Leaf>,
-    fresh_gen: &mut FG,
-) -> Result<(Vec<CoreAction<Head, Leaf>>, Expr<(Head, Leaf), Leaf, ()>), TypeError>
-where
-    Leaf: Clone + Hash + Eq + Clone + Into<Symbol>,
-    Head: Clone,
-{
-    match expr {
-        Expr::Lit(_ann, lit) => Ok((vec![], Expr::Lit((), lit.clone()))),
-        Expr::Var(_ann, v) => {
-            let sym = v.clone().into();
-            if binding.contains(v) || typeinfo.is_global(sym) {
-                Ok((vec![], Expr::Var((), v.clone())))
-            } else {
-                Err(TypeError::Unbound(sym))
+    pub(crate) fn to_norm_actions<FG: FreshGen<Head, Leaf>>(
+        &self,
+        typeinfo: &TypeInfo,
+        binding: &mut HashSet<Leaf>,
+        fresh_gen: &mut FG,
+    ) -> Result<(Vec<CoreAction<Head, Leaf>>, Expr<(Head, Leaf), Leaf, ()>), TypeError>
+    where
+        Leaf: Clone + Hash + Eq + Clone + Into<Symbol>,
+        Head: Clone,
+    {
+        match self {
+            Expr::Lit(_ann, lit) => Ok((vec![], Expr::Lit((), lit.clone()))),
+            Expr::Var(_ann, v) => {
+                let sym = v.clone().into();
+                if binding.contains(v) || typeinfo.is_global(sym) {
+                    Ok((vec![], Expr::Var((), v.clone())))
+                } else {
+                    Err(TypeError::Unbound(sym))
+                }
             }
-        }
-        Expr::Call(_ann, f, args) => {
-            let mut norm_actions = vec![];
-            let mut norm_args = vec![];
-            let mut mapped_args = vec![];
-            for arg in args {
-                let (actions, mapped_arg) =
-                    expr_to_norm_actions(arg, typeinfo, binding, fresh_gen)?;
-                norm_actions.extend(actions);
-                norm_args.push(mapped_arg.get_corresponding_var_or_lit());
-                mapped_args.push(mapped_arg);
+            Expr::Call(_ann, f, args) => {
+                let mut norm_actions = vec![];
+                let mut norm_args = vec![];
+                let mut mapped_args = vec![];
+                for arg in args {
+                    let (actions, mapped_arg) =
+                        arg.to_norm_actions(typeinfo, binding, fresh_gen)?;
+                    norm_actions.extend(actions);
+                    norm_args.push(mapped_arg.get_corresponding_var_or_lit());
+                    mapped_args.push(mapped_arg);
+                }
+
+                let var = fresh_gen.fresh(f);
+                binding.insert(var.clone());
+
+                norm_actions.push(CoreAction::Let(var.clone(), f.clone(), norm_args));
+                Ok((norm_actions, Expr::Call((), (f.clone(), var), mapped_args)))
             }
-
-            let var = fresh_gen.fresh(f);
-            binding.insert(var.clone());
-
-            norm_actions.push(CoreAction::Let(var.clone(), f.clone(), norm_args));
-            Ok((norm_actions, Expr::Call((), (f.clone(), var), mapped_args)))
         }
     }
 }
