@@ -1100,11 +1100,16 @@ impl EGraph {
     // TODO make a public version of eval_expr that makes a command,
     // then returns the value at the end.
     fn eval_expr(&mut self, expr: &ResolvedExpr, make_defaults: bool) -> Result<Value, Error> {
-        let (actions, _) = Actions(vec![Action::Expr((), expr.clone())]).to_norm_actions(
-            self.type_info(),
-            &mut Default::default(),
-            &mut ResolvedGen::new(),
-        )?;
+        let placeholder = ResolvedVar {
+            name: Symbol::from("$$result"),
+            sort: expr.output_type(self.type_info()),
+        };
+        let (actions, _) = Actions(vec![Action::Let((), placeholder, expr.clone())])
+            .to_norm_actions(
+                self.type_info(),
+                &mut Default::default(),
+                &mut ResolvedGen::new(),
+            )?;
         let program = self
             .compile_actions(&Default::default(), &actions)
             .map_err(Error::TypeErrors)?;

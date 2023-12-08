@@ -26,7 +26,7 @@ pub struct TypeInfo {
     pub sorts: HashMap<Symbol, Arc<dyn Sort>>,
     pub primitives: HashMap<Symbol, Vec<Primitive>>,
     pub func_types: HashMap<Symbol, FuncType>,
-    global_types: HashMap<Symbol, ArcSort>,
+    pub global_types: HashMap<Symbol, ArcSort>,
 }
 
 impl Default for TypeInfo {
@@ -185,6 +185,16 @@ impl TypeInfo {
                 // Otherwise typechecking the same program twice will fail
                 self.declare_sort(*sort, presort_and_args)?;
                 NCommand::Sort(*sort, presort_and_args.clone())
+            }
+            NCommand::NormAction(Action::Let(_, var, expr)) => {
+                let expr = self.typecheck_expr(expr, &HashMap::default())?;
+                let output_type = expr.output_type(self);
+                self.global_types.insert(*var, output_type.clone());
+                let var = ResolvedVar {
+                    name: *var,
+                    sort: output_type,
+                };
+                NCommand::NormAction(Action::Let((), var, expr))
             }
             NCommand::NormAction(action) => {
                 NCommand::NormAction(self.typecheck_action(action, &HashMap::default())?)
@@ -401,7 +411,7 @@ impl TypeInfo {
         let action = Action::Let((), "$$result".into(), expr.clone());
         let typechecked_action = self.typecheck_action(&action, binding)?;
         match typechecked_action {
-            ResolvedAction::Let(_, var, expr) => Ok(expr),
+            ResolvedAction::Let(_, _var, expr) => Ok(expr),
             _ => unreachable!(),
         }
     }

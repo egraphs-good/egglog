@@ -225,8 +225,9 @@ impl Assignment<AtomTerm, ArcSort> {
             Expr::Lit(ann, literal) => Expr::Lit(*ann, literal.clone()),
             Expr::Var(ann, var) => {
                 // TODO: How about globals?
-                let ty = self
-                    .get(&GenericAtomTerm::Var(*var))
+                let ty = typeinfo
+                    .lookup_global(var)
+                    .or_else(|| self.get(&GenericAtomTerm::Var(*var)).cloned())
                     .expect("All variables should be assigned before annotation");
                 Expr::Var(
                     *ann,

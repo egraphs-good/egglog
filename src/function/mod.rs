@@ -97,11 +97,11 @@ impl Function {
             let (actions, _) = Actions(vec![Action::Expr((), merge_expr.clone())])
                 .to_norm_actions(
                     egraph.type_info(),
-                    &mut Default::default(),
+                    &mut binding.clone(),
                     &mut ResolvedGen::new(),
                 )?;
             let program = egraph
-                .compile_actions(&Default::default(), &actions)
+                .compile_actions(&binding, &actions)
                 .map_err(Error::TypeErrors)?;
             MergeFn::Expr(Rc::new(program))
         } else if output.is_eq_sort() {

@@ -867,7 +867,7 @@ pub struct Facts<Head, Leaf, Ann>(pub Vec<Fact<Head, Leaf, Ann>>);
 impl<Head, Leaf, Ann> Facts<Head, Leaf, Ann>
 where
     Head: Clone,
-    Leaf: Clone,
+    Leaf: Clone + Into<Symbol>,
     Ann: Clone,
 {
     /// Flattens a list of facts into a Query.
@@ -879,8 +879,6 @@ where
     /// and allows terms and proof instrumentation to do the same).
     pub(crate) fn to_query(
         &self,
-        // TODO: needs to generalize type info to work for ResolvedFact as well
-        // This is not used, which is not correct: We need to use it to distinguish globals.
         typeinfo: &TypeInfo,
         fresh_gen: &mut impl FreshGen<Head, Leaf>,
     ) -> (
@@ -896,9 +894,9 @@ where
                     let mut new_exprs = vec![];
                     let mut to_equate = vec![];
                     for expr in exprs {
-                        let (child_atoms, expr) = expr.to_query(fresh_gen);
+                        let (child_atoms, expr) = expr.to_query(typeinfo, fresh_gen);
                         atoms.extend(child_atoms);
-                        to_equate.push(expr.get_corresponding_var_or_lit());
+                        to_equate.push(expr.get_corresponding_var_or_lit(typeinfo));
                         new_exprs.push(expr);
                     }
                     atoms.push(GenericAtom {
@@ -908,7 +906,7 @@ where
                     new_body.push(Fact::Eq(new_exprs));
                 }
                 Fact::Fact(expr) => {
-                    let (child_atoms, expr) = expr.to_query(fresh_gen);
+                    let (child_atoms, expr) = expr.to_query(typeinfo, fresh_gen);
                     atoms.extend(child_atoms);
                     new_body.push(Fact::Fact(expr));
                 }
@@ -1048,7 +1046,7 @@ where
                     norm_actions.extend(actions);
                     norm_actions.push(CoreAction::LetAtomTerm(
                         var.clone(),
-                        mapped_expr.get_corresponding_var_or_lit(),
+                        mapped_expr.get_corresponding_var_or_lit(typeinfo),
                     ));
                     mapped_actions.push(Action::Let(*_ann, var.clone(), mapped_expr));
                     binding.insert(var.clone());
@@ -1068,9 +1066,9 @@ where
                         head.clone(),
                         mapped_args
                             .iter()
-                            .map(|e| e.get_corresponding_var_or_lit())
+                            .map(|e| e.get_corresponding_var_or_lit(typeinfo))
                             .collect(),
-                        mapped_expr.get_corresponding_var_or_lit(),
+                        mapped_expr.get_corresponding_var_or_lit(typeinfo),
                     ));
                     let v = fresh_gen.fresh(head);
                     mapped_actions.push(Action::Set(
@@ -1092,7 +1090,7 @@ where
                         head.clone(),
                         mapped_args
                             .iter()
-                            .map(|e| e.get_corresponding_var_or_lit())
+                            .map(|e| e.get_corresponding_var_or_lit(typeinfo))
                             .collect(),
                     ));
                     let v = fresh_gen.fresh(head);
@@ -1104,8 +1102,8 @@ where
                     let (actions2, mapped_e2) = e2.to_norm_actions(typeinfo, binding, fresh_gen)?;
                     norm_actions.extend(actions2);
                     norm_actions.push(CoreAction::Union(
-                        mapped_e1.get_corresponding_var_or_lit(),
-                        mapped_e2.get_corresponding_var_or_lit(),
+                        mapped_e1.get_corresponding_var_or_lit(typeinfo),
+                        mapped_e2.get_corresponding_var_or_lit(typeinfo),
                     ));
                     mapped_actions.push(Action::Union(*_ann, mapped_e1, mapped_e2));
                 }
@@ -1115,8 +1113,8 @@ where
                     let (actions, mapped_n) = n.to_norm_actions(typeinfo, binding, fresh_gen)?;
                     norm_actions.extend(actions);
                     norm_actions.push(CoreAction::Extract(
-                        mapped_e.get_corresponding_var_or_lit(),
-                        mapped_n.get_corresponding_var_or_lit(),
+                        mapped_e.get_corresponding_var_or_lit(typeinfo),
+                        mapped_n.get_corresponding_var_or_lit(typeinfo),
                     ));
                     mapped_actions.push(Action::Extract(*_ann, mapped_e, mapped_n));
                 }
@@ -1413,19 +1411,29 @@ impl<Head: Display, Leaf: Display, Ann> Display for Rewrite<Head, Leaf, Ann> {
     }
 }
 
-impl<Head, Leaf: Clone, Ann> Expr<(Head, Leaf), Leaf, Ann> {
-    fn get_corresponding_var_or_lit(&self) -> GenericAtomTerm<Leaf> {
+impl<Head, Leaf: Clone + Into<Symbol>, Ann> Expr<(Head, Leaf), Leaf, Ann> {
+    fn get_corresponding_var_or_lit(&self, typeinfo: &TypeInfo) -> GenericAtomTerm<Leaf> {
+        // Note: need typeinfo to resolve whether a symbol is a global or not
+        // This is error-prone and the complexities can be avoided by treating globals
+        // as nullary functions.
         match self {
-            Expr::Var(_ann, v) => GenericAtomTerm::Var(v.clone()),
+            Expr::Var(_ann, v) => {
+                if typeinfo.is_global(v.clone().into()) {
+                    GenericAtomTerm::Global(v.clone())
+                } else {
+                    GenericAtomTerm::Var(v.clone())
+                }
+            }
             Expr::Lit(_ann, lit) => GenericAtomTerm::Literal(lit.clone()),
             Expr::Call(_ann, head, _) => GenericAtomTerm::Var(head.1.clone()),
         }
     }
 }
 
-impl<Head: Clone, Leaf: Clone, Ann: Clone> Expr<Head, Leaf, Ann> {
+impl<Head: Clone, Leaf: Clone + Into<Symbol>, Ann: Clone> Expr<Head, Leaf, Ann> {
     fn to_query(
         &self,
+        typeinfo: &TypeInfo,
         fresh_gen: &mut impl FreshGen<Head, Leaf>,
     ) -> (
         Vec<GenericAtom<HeadOrEq<Head>, Leaf>>,
@@ -1440,9 +1448,8 @@ impl<Head: Clone, Leaf: Clone, Ann: Clone> Expr<Head, Leaf, Ann> {
                 let mut atoms = vec![];
                 let mut child_exprs = vec![];
                 for child in children {
-                    let (child_atoms, child_expr) = child.to_query(fresh_gen);
-                    // TODO: how about globals?
-                    let child_atomterm = child_expr.get_corresponding_var_or_lit();
+                    let (child_atoms, child_expr) = child.to_query(typeinfo, fresh_gen);
+                    let child_atomterm = child_expr.get_corresponding_var_or_lit(typeinfo);
                     new_children.push(child_atomterm);
                     atoms.extend(child_atoms);
                     child_exprs.push(child_expr);
@@ -1491,7 +1498,7 @@ impl<Head: Clone, Leaf: Clone, Ann: Clone> Expr<Head, Leaf, Ann> {
                     let (actions, mapped_arg) =
                         arg.to_norm_actions(typeinfo, binding, fresh_gen)?;
                     norm_actions.extend(actions);
-                    norm_args.push(mapped_arg.get_corresponding_var_or_lit());
+                    norm_args.push(mapped_arg.get_corresponding_var_or_lit(typeinfo));
                     mapped_args.push(mapped_arg);
                 }
 
