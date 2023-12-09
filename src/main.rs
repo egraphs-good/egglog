@@ -9,7 +9,6 @@ struct Args {
     fact_directory: Option<PathBuf>,
     #[clap(long)]
     naive: bool,
-    #[clap(long)]
     desugar: bool,
     #[clap(long)]
     resugar: bool,
@@ -109,68 +108,49 @@ fn main() {
             (program_read, 0)
         };
 
-        if args.desugar || args.resugar {
-            let parsed = egraph.parse_program(&program).unwrap();
-            let desugared_str: String = todo!("revisit this- currently process_commands is private because it returns something resolved");
-            // let desugared_str = egraph
-            //     .process_commands(parsed, args.stop)
-            //     .unwrap()
-            //     .into_iter()
-            //     .map(|x| {
-            //         if args.resugar {
-            //             x.resugar().to_string()
-            //         } else {
-            //             x.to_string()
-            //         }
-            //     })
-            //     .collect::<Vec<String>>()
-            //     .join("\n");
-            println!("{}", desugared_str);
-        } else {
-            match egraph.parse_and_run_program(&program) {
-                Ok(msgs) => {
-                    for msg in msgs {
-                        println!("{msg}");
-                    }
+        match egraph.parse_and_run_program(&program) {
+            Ok(msgs) => {
+                for msg in msgs {
+                    println!("{msg}");
                 }
-                Err(err) => {
-                    let err = match err {
-                        Error::ParseError(err) => err
-                            .map_location(|byte_offset| {
-                                let byte_offset = byte_offset - program_offset;
-                                let (line_num, sum_offset) = std::iter::once(0)
-                                    .chain(program[program_offset..].split_inclusive('\n').scan(
-                                        0,
-                                        |sum_offset, l| {
-                                            *sum_offset += l.len();
+            }
+            Err(err) => {
+                let err = match err {
+                    Error::ParseError(err) => err
+                        .map_location(|byte_offset| {
+                            let byte_offset = byte_offset - program_offset;
+                            let (line_num, sum_offset) = std::iter::once(0)
+                                .chain(program[program_offset..].split_inclusive('\n').scan(
+                                    0,
+                                    |sum_offset, l| {
+                                        *sum_offset += l.len();
 
-                                            if *sum_offset > byte_offset {
-                                                None
-                                            } else {
-                                                Some(*sum_offset)
-                                            }
-                                        },
-                                    ))
-                                    .enumerate()
-                                    .last()
-                                    // No panic because of the initial 0
-                                    .unwrap();
-                                {
-                                    format!(
-                                        "{}:{}:{}",
-                                        input.display(),
-                                        line_num + 1,
-                                        // TODO: Show utf8 aware character count
-                                        byte_offset - sum_offset + 1
-                                    )
-                                }
-                            })
-                            .to_string(),
-                        err => err.to_string(),
-                    };
-                    log::error!("{}", err);
-                    std::process::exit(1)
-                }
+                                        if *sum_offset > byte_offset {
+                                            None
+                                        } else {
+                                            Some(*sum_offset)
+                                        }
+                                    },
+                                ))
+                                .enumerate()
+                                .last()
+                                // No panic because of the initial 0
+                                .unwrap();
+                            {
+                                format!(
+                                    "{}:{}:{}",
+                                    input.display(),
+                                    line_num + 1,
+                                    // TODO: Show utf8 aware character count
+                                    byte_offset - sum_offset + 1
+                                )
+                            }
+                        })
+                        .to_string(),
+                    err => err.to_string(),
+                };
+                log::error!("{}", err);
+                std::process::exit(1)
             }
         }
         // if we are splitting primitive outputs, add `-split` to the end of the file name

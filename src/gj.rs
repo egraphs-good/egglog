@@ -334,7 +334,8 @@ impl EGraph {
     pub(crate) fn compile_gj_query(
         &self,
         // TODO: The legacy code uses Query<ResolvedCall, Symbol>
-        // instead of Query<ResolvedCall, ResolvedVar>.
+        // instead of Query<ResolvedCall, ResolvedVar>, so we do
+        // the manual conversion here.
         // This needs to be fixed in the future.
         query: typecheck::Query<ResolvedCall, ResolvedVar>,
     ) -> CompiledQuery {
@@ -348,14 +349,14 @@ impl EGraph {
         for (i, atom) in query.funcs().enumerate() {
             for v in atom.vars() {
                 // only count grounded occurrences
-                vars.entry(v.into()).or_default().occurences.push(i)
+                vars.entry(v.to_symbol()).or_default().occurences.push(i)
             }
         }
 
         // make sure everyone has an entry in the vars table
         for prim in query.filters() {
             for v in prim.vars() {
-                vars.entry(v.into()).or_default();
+                vars.entry(v.to_symbol()).or_default();
             }
         }
 

@@ -53,7 +53,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::str::FromStr;
 use std::{fmt::Debug, sync::Arc};
-use typecheck::{AtomTerm, CoreRule, Program, Query, ResolvedCall, ResolvedCoreRule};
+use typecheck::{AtomTerm, Program, ResolvedCall};
 
 pub type ArcSort = Arc<dyn Sort>;
 
@@ -268,7 +268,6 @@ pub const HIGH_COST: usize = i64::MAX as usize;
 #[derive(Clone)]
 pub struct Primitive(Arc<dyn PrimitiveLike>);
 impl Primitive {
-    // TODO: this is temporary and should be removed once refactoring is done
     fn accept(&self, tys: &[Arc<dyn Sort>]) -> Option<Arc<dyn Sort>> {
         let mut constraints = vec![];
         // + 1 to account for the output type
@@ -406,7 +405,7 @@ pub struct EGraph {
     terms_enabled: bool,
     interactive_mode: bool,
     timestamp: u32,
-    pub(crate) term_header_added: bool,
+    // pub(crate) term_header_added: bool,
     pub test_proofs: bool,
     pub match_limit: usize,
     pub node_limit: usize,
@@ -447,7 +446,6 @@ impl Default for EGraph {
             timestamp: 0,
             proofs_enabled: false,
             terms_enabled: false,
-            term_header_added: false,
             interactive_mode: false,
             test_proofs: false,
             fact_directory: None,

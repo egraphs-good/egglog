@@ -79,8 +79,8 @@ impl Hash for ResolvedVar {
     }
 }
 
-impl Into<Symbol> for ResolvedVar {
-    fn into(self) -> Symbol {
+impl SymbolLike for ResolvedVar {
+    fn to_symbol(&self) -> Symbol {
         self.name
     }
 }
@@ -120,29 +120,6 @@ impl ResolvedExpr {
     }
 }
 
-// impl NormExpr {
-//     pub fn to_expr(&self) -> Expr<Symbol, ()> {
-//         match self {
-//             NormExpr::Call(op, args) => {
-//                 Expr::Call(*op, args.iter().map(|a| Expr::Var(*a)).collect())
-//             }
-//         }
-//     }
-
-//     pub(crate) fn map_def_use(
-//         &self,
-//         fvar: &mut impl FnMut(Symbol, bool) -> Symbol,
-//         is_def: bool,
-//     ) -> NormExpr {
-//         match self {
-//             NormExpr::Call(op, args) => {
-//                 let args = args.iter().map(|a| fvar(*a, is_def)).collect();
-//                 NormExpr::Call(*op, args)
-//             }
-//         }
-//     }
-// }
-
 impl UnresolvedExpr {
     pub fn call(op: impl Into<Symbol>, children: impl IntoIterator<Item = Self>) -> Self {
         Self::Call((), op.into(), children.into_iter().collect())
@@ -160,7 +137,7 @@ impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq, Ann: Clone> Expr<
 
     pub fn get_var(&self) -> Option<Leaf> {
         match self {
-            Expr::Var(ann, v) => Some(v.clone()),
+            Expr::Var(_ann, v) => Some(v.clone()),
             _ => None,
         }
     }
@@ -202,17 +179,30 @@ impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq, Ann: Clone> Expr<
         }
     }
 
-    // TODO: refactor subst to take a canonicalizing function rather than hash map.
     // TODO: cannon function may want to take the annotation of variables
-    pub fn subst(&self, canon: &HashMap<Leaf, Self>) -> Self {
+    pub fn subst<Head2, Leaf2>(
+        &self,
+        subst_leaf: &mut impl FnMut(&Leaf) -> Expr<Head2, Leaf2, Ann>,
+        subst_head: &mut impl FnMut(&Head) -> Head2,
+    ) -> Expr<Head2, Leaf2, Ann> {
         match self {
-            Expr::Lit(_ann, _lit) => self.clone(),
-            Expr::Var(_ann, v) => canon.get(v).cloned().unwrap_or_else(|| self.clone()),
+            Expr::Lit(ann, lit) => Expr::Lit(ann.clone(), lit.clone()),
+            Expr::Var(_ann, v) => subst_leaf(v),
             Expr::Call(ann, op, children) => {
-                let children = children.iter().map(|c| c.subst(canon)).collect();
-                Expr::Call(ann.clone(), op.clone(), children)
+                let children = children
+                    .iter()
+                    .map(|c| c.subst(subst_leaf, subst_head))
+                    .collect();
+                Expr::Call(ann.clone(), subst_head(op), children)
             }
         }
+    }
+
+    pub fn subst_leaf<Leaf2>(
+        &self,
+        subst: &mut impl FnMut(&Leaf) -> Expr<Head, Leaf2, Ann>,
+    ) -> Expr<Head, Leaf2, Ann> {
+        self.subst(subst, &mut |op| op.clone())
     }
 
     pub fn vars(&self) -> impl Iterator<Item = Leaf> + '_ {
@@ -222,17 +212,6 @@ impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq, Ann: Clone> Expr<
             Expr::Call(_ann, _head, exprs) => Box::new(exprs.iter().flat_map(|e| e.vars())),
         };
         iterator
-    }
-
-    pub(crate) fn map_def_use(&self, fvar: &mut impl FnMut(Leaf) -> Leaf) -> Self {
-        match self {
-            Expr::Lit(_ann, _) => self.clone(),
-            Expr::Var(ann, v) => Expr::Var(ann.clone(), fvar(v.clone())),
-            Expr::Call(ann, op, args) => {
-                let args = args.iter().map(|a| a.map_def_use(fvar)).collect();
-                Expr::Call(ann.clone(), op.clone(), args)
-            }
-        }
     }
 }
 
@@ -254,12 +233,6 @@ impl<Head: Display, Leaf: Display, Ann> Expr<Head, Leaf, Ann> {
         res
     }
 }
-
-// impl Display for NormExpr {
-//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         write!(f, "{}", self.to_expr())
-//     }
-// }
 
 impl<Head, Leaf, Ann> Display for Expr<Head, Leaf, Ann>
 where

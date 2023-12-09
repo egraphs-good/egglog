@@ -57,6 +57,15 @@ pub(crate) enum ResolvedCall {
     Primitive(SpecializedPrimitive),
 }
 
+impl SymbolLike for ResolvedCall {
+    fn to_symbol(&self) -> Symbol {
+        match self {
+            ResolvedCall::Func(f) => f.name.clone(),
+            ResolvedCall::Primitive(prim) => prim.primitive.0.name(),
+        }
+    }
+}
+
 impl ResolvedCall {
     pub fn output(&self) -> &ArcSort {
         match self {
@@ -170,14 +179,17 @@ where
 
 impl<Head, Leaf> Rule<Head, Leaf, ()>
 where
-    Leaf: Into<Symbol> + Clone + Eq + Hash + Debug,
+    Leaf: Clone + Eq + Hash + Debug,
     Head: Clone,
 {
     pub(crate) fn to_core_rule(
         &self,
         typeinfo: &TypeInfo,
         mut fresh_gen: impl FreshGen<Head, Leaf>,
-    ) -> Result<GenericCoreRule<HeadOrEq<Head>, Head, Leaf>, TypeError> {
+    ) -> Result<GenericCoreRule<HeadOrEq<Head>, Head, Leaf>, TypeError>
+    where
+        Leaf: SymbolLike,
+    {
         let Rule { head, body } = self;
 
         let (body, _correspondence) = Facts(body.clone()).to_query(typeinfo, &mut fresh_gen);
@@ -195,7 +207,10 @@ where
         typeinfo: &TypeInfo,
         fresh_gen: impl FreshGen<Head, Leaf>,
         value_eq: impl Fn(&GenericAtomTerm<Leaf>, &GenericAtomTerm<Leaf>) -> Head,
-    ) -> Result<CoreRule<Head, Leaf>, TypeError> {
+    ) -> Result<CoreRule<Head, Leaf>, TypeError>
+    where
+        Leaf: SymbolLike,
+    {
         let rule = self.to_core_rule(typeinfo, fresh_gen)?;
         let rule = rule.canonicalize(value_eq);
         Ok(rule)
@@ -573,10 +588,10 @@ impl<'a> ActionCompiler<'a> {
     fn do_atom_term(&mut self, at: &GenericAtomTerm<ResolvedVar>) {
         match at {
             GenericAtomTerm::Var(var) => {
-                if let Some((i, ty)) = self.locals.get_full(&var.name) {
+                if let Some((i, _ty)) = self.locals.get_full(&var.name) {
                     self.instructions.push(Instruction::Load(Load::Stack(i)));
                 } else {
-                    let (i, _, ty) = self.types.get_full(&var.name).unwrap();
+                    let (i, _, _ty) = self.types.get_full(&var.name).unwrap();
                     self.instructions.push(Instruction::Load(Load::Subst(i)));
                 }
             }
@@ -584,7 +599,7 @@ impl<'a> ActionCompiler<'a> {
                 self.instructions.push(Instruction::Literal(lit.clone()));
             }
             GenericAtomTerm::Global(var) => {
-                let (sort, _v, _ts) = self.egraph().global_bindings.get(&var.name).unwrap();
+                assert!(self.egraph().global_bindings.contains_key(&var.name));
                 self.instructions.push(Instruction::Global(var.name));
             }
         }
@@ -756,8 +771,6 @@ impl EGraph {
                                 value
                             }
                             Some(default) => {
-                                // TODO: this is not efficient due to cloning
-                                let out = out.clone();
                                 let default = default.clone();
                                 let value = self.eval_expr(&default, true)?;
                                 self.functions.get_mut(f).unwrap().insert(values, value, ts);

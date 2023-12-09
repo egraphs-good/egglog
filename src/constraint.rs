@@ -1,18 +1,17 @@
 use crate::{
     ast::{
         Action, CoreActions, Expr, Fact, NormAction, ResolvedAction, ResolvedExpr, ResolvedFact,
-        ResolvedVar, UnresolvedAction, UnresolvedExpr, UnresolvedRule,
+        ResolvedVar,
     },
     sort::I64Sort,
     typecheck::{
-        Atom, AtomTerm, GenericAtomTerm, HeadOrEq, Query, ResolvedCall, SpecializedPrimitive,
-        SymbolOrEq, UnresolvedCoreRule,
+        Atom, AtomTerm, GenericAtomTerm, Query, ResolvedCall, SymbolOrEq, UnresolvedCoreRule,
     },
     typechecking::TypeError,
     util::{FreshGen, HashMap, HashSet, SymbolGen},
     ArcSort, Symbol, TypeInfo,
 };
-use core::{hash::Hash, prelude::v1};
+use core::hash::Hash;
 use std::{fmt::Debug, iter::once, mem::swap, sync::Arc};
 
 #[derive(Clone, Debug)]
@@ -224,7 +223,6 @@ impl Assignment<AtomTerm, ArcSort> {
         match &expr {
             Expr::Lit(ann, literal) => Expr::Lit(*ann, literal.clone()),
             Expr::Var(ann, var) => {
-                // TODO: How about globals?
                 let ty = typeinfo
                     .lookup_global(var)
                     .or_else(|| self.get(&GenericAtomTerm::Var(*var)).cloned())

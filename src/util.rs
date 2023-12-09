@@ -110,3 +110,14 @@ impl FreshGen<ResolvedCall, ResolvedVar> for ResolvedGen {
         }
     }
 }
+
+// This is a convenient for `for<'a> impl Into<Symbol> for &'a T`
+pub(crate) trait SymbolLike {
+    fn to_symbol(&self) -> Symbol;
+}
+
+impl SymbolLike for Symbol {
+    fn to_symbol(&self) -> Symbol {
+        self.clone()
+    }
+}

@@ -124,48 +124,6 @@ where
             },
         }
     }
-
-    // pub fn map_exprs(&self, f: &mut impl FnMut(&NormExpr) -> NormExpr) -> NCommand {
-    //     match self {
-    //         // Don't map over setoption
-    //         NCommand::SetOption { name, value } => NCommand::SetOption {
-    //             name: *name,
-    //             value: value.clone(),
-    //         },
-    //         NCommand::Sort(name, params) => NCommand::Sort(*name, params.clone()),
-    //         NCommand::Function(f) => NCommand::Function(f.clone()),
-    //         NCommand::AddRuleset(name) => NCommand::AddRuleset(*name),
-    //         NCommand::RunSchedule(schedule) => NCommand::RunSchedule(schedule.clone()),
-    //         NCommand::PrintOverallStatistics => NCommand::PrintOverallStatistics,
-    //         NCommand::NormRule {
-    //             name,
-    //             ruleset,
-    //             rule,
-    //         } => NCommand::NormRule {
-    //             name: *name,
-    //             ruleset: *ruleset,
-    //             rule: rule.clone(),
-    //         },
-    //         NCommand::NormAction(action) => NCommand::NormAction(action.clone()),
-    //         NCommand::Check(facts) => {
-    //             NCommand::Check(facts.clone())
-    //         }
-    //         NCommand::CheckProof => NCommand::CheckProof,
-    //         NCommand::PrintTable(name, n) => NCommand::PrintTable(*name, *n),
-    //         NCommand::PrintSize(name) => NCommand::PrintSize(*name),
-    //         NCommand::Output { file, exprs } => NCommand::Output {
-    //             file: file.to_string(),
-    //             exprs: exprs.clone(),
-    //         },
-    //         NCommand::Push(n) => NCommand::Push(*n),
-    //         NCommand::Pop(n) => NCommand::Pop(*n),
-    //         NCommand::Fail(cmd) => NCommand::Fail(Box::new(cmd.map_exprs(f))),
-    //         NCommand::Input { name, file } => NCommand::Input {
-    //             name: *name,
-    //             file: file.clone(),
-    //         },
-    //     }
-    // }
 }
 
 pub type UnresolvedSchedule = Schedule<Symbol, Symbol, ()>;
@@ -867,7 +825,7 @@ pub struct Facts<Head, Leaf, Ann>(pub Vec<Fact<Head, Leaf, Ann>>);
 impl<Head, Leaf, Ann> Facts<Head, Leaf, Ann>
 where
     Head: Clone,
-    Leaf: Clone + Into<Symbol>,
+    Leaf: Clone,
     Ann: Clone,
 {
     /// Flattens a list of facts into a Query.
@@ -884,7 +842,10 @@ where
     ) -> (
         Query<HeadOrEq<Head>, Leaf>,
         Vec<Fact<(Head, Leaf), Leaf, Ann>>,
-    ) {
+    )
+    where
+        Leaf: SymbolLike,
+    {
         let mut atoms = vec![];
         let mut new_body = vec![];
 
@@ -935,24 +896,38 @@ where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
-    pub(crate) fn map_exprs(
+    pub(crate) fn map_exprs<Head2, Leaf2>(
         &self,
-        f: &mut impl FnMut(&Expr<Head, Leaf, Ann>) -> Expr<Head, Leaf, Ann>,
-    ) -> Self {
+        f: &mut impl FnMut(&Expr<Head, Leaf, Ann>) -> Expr<Head2, Leaf2, Ann>,
+    ) -> Fact<Head2, Leaf2, Ann> {
         match self {
             Fact::Eq(exprs) => Fact::Eq(exprs.iter().map(f).collect()),
             Fact::Fact(expr) => Fact::Fact(f(expr)),
         }
     }
 
-    pub(crate) fn subst(&self, subst: &HashMap<Leaf, Expr<Head, Leaf, Ann>>) -> Self {
-        self.map_exprs(&mut |e| e.subst(subst))
+    pub(crate) fn subst<Leaf2, Head2>(
+        &self,
+        subst_leaf: &mut impl FnMut(&Leaf) -> Expr<Head2, Leaf2, Ann>,
+        subst_head: &mut impl FnMut(&Head) -> Head2,
+    ) -> Fact<Head2, Leaf2, Ann> {
+        self.map_exprs(&mut |e| e.subst(subst_leaf, subst_head))
     }
 }
 
-impl<Head, Leaf, Ann> Fact<Head, Leaf, Ann> {
-    pub(crate) fn to_unresolved(&self) -> Fact<Symbol, Symbol, ()> {
-        todo!()
+impl<Head, Leaf> Fact<Head, Leaf, ()>
+where
+    Leaf: Clone + PartialEq + Eq + Display + Hash,
+    Head: Clone + Display,
+{
+    pub(crate) fn to_unresolved(&self) -> Fact<Symbol, Symbol, ()>
+    where
+        Leaf: SymbolLike,
+        Head: SymbolLike,
+    {
+        self.subst(&mut |v| Expr::Var((), v.to_symbol()), &mut |h| {
+            h.to_symbol()
+        })
     }
 }
 
@@ -1015,7 +990,7 @@ pub struct Actions<Head, Leaf>(pub Vec<Action<Head, Leaf, ()>>);
 impl<Head, Leaf> Actions<Head, Leaf>
 where
     Head: Clone,
-    Leaf: Clone + Hash + Eq + Clone + Into<Symbol>,
+    Leaf: Clone + Hash + Eq + Clone,
 {
     pub(crate) fn to_norm_actions<FG: FreshGen<Head, Leaf>>(
         &self,
@@ -1028,7 +1003,10 @@ where
             Vec<Action<(Head, Leaf), Leaf, ()>>,
         ),
         TypeError,
-    > {
+    >
+    where
+        Leaf: SymbolLike,
+    {
         let mut norm_actions = vec![];
         let mut mapped_actions = vec![];
 
@@ -1039,7 +1017,7 @@ where
             match action {
                 Action::Let(_ann, var, expr) => {
                     if binding.contains(var) {
-                        return Err(TypeError::AlreadyDefined(var.clone().into()));
+                        return Err(TypeError::AlreadyDefined(var.to_symbol()));
                     }
                     let (actions, mapped_expr) =
                         expr.to_norm_actions(typeinfo, binding, fresh_gen)?;
@@ -1176,15 +1154,14 @@ impl<Head: Display + ToSexp, Leaf: Display + ToSexp, Ann> ToSexp for Action<Head
     }
 }
 
-impl<Head, Leaf, Ann> Action<Head, Leaf, Ann>
+impl<Head, Leaf> Action<Head, Leaf, ()>
 where
     Head: Clone + Display,
     Leaf: Clone + Eq + Display + Hash,
-    Ann: Clone,
 {
     pub fn map_exprs(
         &self,
-        f: &mut impl FnMut(&Expr<Head, Leaf, Ann>) -> Expr<Head, Leaf, Ann>,
+        f: &mut impl FnMut(&Expr<Head, Leaf, ()>) -> Expr<Head, Leaf, ()>,
     ) -> Self {
         match self {
             Action::Let(ann, lhs, rhs) => Action::Let(ann.clone(), lhs.clone(), f(rhs)),
@@ -1209,67 +1186,49 @@ where
         }
     }
 
-    pub fn replace_canon(&self, canon: &HashMap<Leaf, Expr<Head, Leaf, Ann>>) -> Self {
-        match self {
-            Action::Let(ann, lhs, rhs) => Action::Let(ann.clone(), lhs.clone(), rhs.subst(canon)),
-            Action::Set(ann, lhs, args, rhs) => Action::Set(
-                ann.clone(),
-                lhs.clone(),
-                args.iter().map(|e| e.subst(canon)).collect(),
-                rhs.subst(canon),
-            ),
-            Action::Delete(ann, lhs, args) => Action::Delete(
-                ann.clone(),
-                lhs.clone(),
-                args.iter().map(|e| e.subst(canon)).collect(),
-            ),
-            Action::Union(ann, lhs, rhs) => {
-                Action::Union(ann.clone(), lhs.subst(canon), rhs.subst(canon))
-            }
-            Action::Extract(ann, expr, variants) => {
-                Action::Extract(ann.clone(), expr.subst(canon), variants.subst(canon))
-            }
-            Action::Panic(ann, msg) => Action::Panic(ann.clone(), msg.clone()),
-            Action::Expr(ann, e) => Action::Expr(ann.clone(), e.subst(canon)),
-        }
+    pub fn subst(&self, subst: &mut impl FnMut(&Leaf) -> Expr<Head, Leaf, ()>) -> Self {
+        self.map_exprs(&mut |e| e.subst_leaf(subst))
     }
 
-    fn map_def_use(&self, mut fvar: impl FnMut(Leaf, bool) -> Leaf) -> Self {
+    pub fn map_def_use(&self, fvar: &mut impl FnMut(&Leaf, bool) -> Leaf) -> Self {
+        macro_rules! fvar_expr {
+            () => {
+                |s: &_| Expr::Var((), fvar(s, false))
+            };
+        }
         match self {
             Action::Let(ann, lhs, rhs) => {
-                let lhs = fvar(lhs.clone(), true);
-                let rhs = rhs.map_def_use(&mut |s| fvar(s, false));
+                let lhs = fvar(lhs, true);
+                let rhs = rhs.subst_leaf(&mut fvar_expr!());
                 Action::Let(ann.clone(), lhs, rhs)
             }
             Action::Set(ann, lhs, args, rhs) => {
                 let args = args
                     .iter()
-                    .map(|e| e.map_def_use(&mut |s| fvar(s, false)))
+                    .map(|e| e.subst_leaf(&mut fvar_expr!()))
                     .collect();
-                let rhs = rhs.map_def_use(&mut |s| fvar(s, false));
+                let rhs = rhs.subst_leaf(&mut fvar_expr!());
                 Action::Set(ann.clone(), lhs.clone(), args, rhs)
             }
             Action::Delete(ann, lhs, args) => {
                 let args = args
                     .iter()
-                    .map(|e| e.map_def_use(&mut |s| fvar(s, false)))
+                    .map(|e| e.subst_leaf(&mut fvar_expr!()))
                     .collect();
                 Action::Delete(ann.clone(), lhs.clone(), args)
             }
             Action::Union(ann, lhs, rhs) => {
-                let lhs = lhs.map_def_use(&mut |s| fvar(s, false));
-                let rhs = rhs.map_def_use(&mut |s| fvar(s, false));
+                let lhs = lhs.subst_leaf(&mut fvar_expr!());
+                let rhs = rhs.subst_leaf(&mut fvar_expr!());
                 Action::Union(ann.clone(), lhs, rhs)
             }
             Action::Extract(ann, expr, variants) => {
-                let expr = expr.map_def_use(&mut |s| fvar(s, false));
-                let variants = variants.map_def_use(&mut |s| fvar(s, false));
+                let expr = expr.subst_leaf(&mut fvar_expr!());
+                let variants = variants.subst_leaf(&mut fvar_expr!());
                 Action::Extract(ann.clone(), expr, variants)
             }
             Action::Panic(ann, msg) => Action::Panic(ann.clone(), msg.clone()),
-            Action::Expr(ann, e) => {
-                Action::Expr(ann.clone(), e.map_def_use(&mut |s| fvar(s, false)))
-            }
+            Action::Expr(ann, e) => Action::Expr(ann.clone(), e.subst_leaf(&mut fvar_expr!())),
         }
     }
 }
@@ -1411,14 +1370,17 @@ impl<Head: Display, Leaf: Display, Ann> Display for Rewrite<Head, Leaf, Ann> {
     }
 }
 
-impl<Head, Leaf: Clone + Into<Symbol>, Ann> Expr<(Head, Leaf), Leaf, Ann> {
-    fn get_corresponding_var_or_lit(&self, typeinfo: &TypeInfo) -> GenericAtomTerm<Leaf> {
+impl<Head, Leaf: Clone, Ann> Expr<(Head, Leaf), Leaf, Ann> {
+    fn get_corresponding_var_or_lit(&self, typeinfo: &TypeInfo) -> GenericAtomTerm<Leaf>
+    where
+        Leaf: SymbolLike,
+    {
         // Note: need typeinfo to resolve whether a symbol is a global or not
         // This is error-prone and the complexities can be avoided by treating globals
         // as nullary functions.
         match self {
             Expr::Var(_ann, v) => {
-                if typeinfo.is_global(v.clone().into()) {
+                if typeinfo.is_global(v.to_symbol()) {
                     GenericAtomTerm::Global(v.clone())
                 } else {
                     GenericAtomTerm::Var(v.clone())
@@ -1430,7 +1392,7 @@ impl<Head, Leaf: Clone + Into<Symbol>, Ann> Expr<(Head, Leaf), Leaf, Ann> {
     }
 }
 
-impl<Head: Clone, Leaf: Clone + Into<Symbol>, Ann: Clone> Expr<Head, Leaf, Ann> {
+impl<Head: Clone, Leaf: Clone, Ann: Clone> Expr<Head, Leaf, Ann> {
     fn to_query(
         &self,
         typeinfo: &TypeInfo,
@@ -1438,7 +1400,10 @@ impl<Head: Clone, Leaf: Clone + Into<Symbol>, Ann: Clone> Expr<Head, Leaf, Ann> 
     ) -> (
         Vec<GenericAtom<HeadOrEq<Head>, Leaf>>,
         Expr<(Head, Leaf), Leaf, Ann>,
-    ) {
+    )
+    where
+        Leaf: SymbolLike,
+    {
         match self {
             Expr::Lit(ann, lit) => (vec![], Expr::Lit(ann.clone(), lit.clone())),
             Expr::Var(ann, v) => (vec![], Expr::Var(ann.clone(), v.clone())),
@@ -1477,13 +1442,12 @@ impl<Head: Clone, Leaf: Clone + Into<Symbol>, Ann: Clone> Expr<Head, Leaf, Ann> 
         fresh_gen: &mut FG,
     ) -> Result<(Vec<CoreAction<Head, Leaf>>, Expr<(Head, Leaf), Leaf, ()>), TypeError>
     where
-        Leaf: Clone + Hash + Eq + Clone + Into<Symbol>,
-        Head: Clone,
+        Leaf: Hash + Eq + SymbolLike,
     {
         match self {
             Expr::Lit(_ann, lit) => Ok((vec![], Expr::Lit((), lit.clone()))),
             Expr::Var(_ann, v) => {
-                let sym = v.clone().into();
+                let sym = v.to_symbol();
                 if binding.contains(v) || typeinfo.is_global(sym) {
                     Ok((vec![], Expr::Var((), v.clone())))
                 } else {
