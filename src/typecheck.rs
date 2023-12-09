@@ -22,14 +22,6 @@ impl<Head> HeadOrEq<Head> {
     pub fn is_eq(&self) -> bool {
         matches!(self, HeadOrEq::Eq)
     }
-
-    pub fn get_symbol(&self) -> Option<&Head> {
-        if let HeadOrEq::Symbol(symbol) = self {
-            Some(symbol)
-        } else {
-            None
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -41,7 +33,6 @@ pub struct GenericCoreRule<BodyF, HeadF, Leaf> {
 pub type CoreRule<Head, Leaf> = GenericCoreRule<Head, Head, Leaf>;
 
 pub(crate) type UnresolvedCoreRule = GenericCoreRule<SymbolOrEq, Symbol, Symbol>;
-pub(crate) type CanonicalizedCoreRule = CoreRule<Symbol, Symbol>;
 pub(crate) type ResolvedCoreRule = CoreRule<ResolvedCall, ResolvedVar>;
 
 #[derive(Debug, Clone)]
@@ -639,7 +630,6 @@ enum Instruction {
     Union(usize),
     Extract(usize),
     Panic(String),
-    Pop,
 }
 
 #[derive(Clone, Debug)]
@@ -880,9 +870,6 @@ impl EGraph {
                     Literal::Bool(b) => stack.push(Value::from(*b)),
                     Literal::Unit => stack.push(Value::unit()),
                 },
-                Instruction::Pop => {
-                    stack.pop().unwrap();
-                }
                 Instruction::DeleteRow(f) => {
                     let function = self.functions.get_mut(f).unwrap();
                     let new_len = stack.len() - function.schema.input.len();

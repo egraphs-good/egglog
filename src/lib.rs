@@ -1394,32 +1394,32 @@ impl EGraph {
         }
     }
 
-    pub(crate) fn process_commands(
-        &mut self,
-        program: Vec<UnresolvedCommand>,
-        stop: CompilerPassStop,
-    ) -> Result<Vec<ResolvedNCommand>, Error> {
-        let mut result = vec![];
+    // pub(crate) fn process_commands(
+    //     &mut self,
+    //     program: Vec<UnresolvedCommand>,
+    //     stop: CompilerPassStop,
+    // ) -> Result<Vec<ResolvedNCommand>, Error> {
+    //     let mut result = vec![];
 
-        for command in program {
-            match command {
-                Command::Push(num) => {
-                    for _ in 0..num {
-                        self.push();
-                    }
-                }
-                Command::Pop(num) => {
-                    for _ in 0..num {
-                        self.pop()
-                            .expect("Failed to desugar, popped too many times");
-                    }
-                }
-                _ => {}
-            }
-            result.extend(self.process_command(command, stop)?);
-        }
-        Ok(result)
-    }
+    //     for command in program {
+    //         match command {
+    //             Command::Push(num) => {
+    //                 for _ in 0..num {
+    //                     self.push();
+    //                 }
+    //             }
+    //             Command::Pop(num) => {
+    //                 for _ in 0..num {
+    //                     self.pop()
+    //                         .expect("Failed to desugar, popped too many times");
+    //                 }
+    //             }
+    //             _ => {}
+    //         }
+    //         result.extend(self.process_command(command, stop)?);
+    //     }
+    //     Ok(result)
+    // }
 
     pub fn set_underscores_for_desugaring(&mut self, underscores: usize) {
         self.desugar.number_underscores = underscores;
@@ -1428,12 +1428,14 @@ impl EGraph {
     fn process_command(
         &mut self,
         command: UnresolvedCommand,
-        stop: CompilerPassStop,
+        _stop: CompilerPassStop,
     ) -> Result<Vec<ResolvedNCommand>, Error> {
-        let mut program =
+        let program =
             self.desugar
                 .desugar_program(vec![command], self.test_proofs, self.seminaive)?;
         // TODO: a desugared program is not resolved yet
+        // so commenting out the desugar feature for now
+
         // if stop == CompilerPassStop::Desugar {
         //     return Ok(program);
         // }

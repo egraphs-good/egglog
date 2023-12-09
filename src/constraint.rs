@@ -12,7 +12,7 @@ use crate::{
     ArcSort, Symbol, TypeInfo,
 };
 use core::hash::Hash;
-use std::{fmt::Debug, iter::once, mem::swap, sync::Arc};
+use std::{fmt::Debug, iter::once, mem::swap};
 
 #[derive(Clone, Debug)]
 pub enum ImpossibleConstraint {

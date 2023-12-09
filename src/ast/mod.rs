@@ -1312,14 +1312,6 @@ impl<Head: Display + ToSexp, Leaf: Display + ToSexp, Ann> Rule<Head, Leaf, Ann> 
         Sexp::List(res)
     }
 }
-impl UnresolvedRule {
-    pub(crate) fn map_exprs(&self, f: &mut impl FnMut(&UnresolvedExpr) -> UnresolvedExpr) -> Self {
-        Rule {
-            head: self.head.iter().map(|a| a.map_exprs(f)).collect(),
-            body: self.body.iter().map(|fact| fact.map_exprs(f)).collect(),
-        }
-    }
-}
 
 impl<Head: Display + ToSexp, Leaf: Display + ToSexp, Ann> Display for Rule<Head, Leaf, Ann> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
