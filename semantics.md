@@ -44,13 +44,13 @@ This declares a function `LowerBound` with one argument of sort `Math`
 and one result of sort `Bound`.
 
 Functions contain terms built using constructors.
-They also enforce a functional dependency between their arguments and result.
+Egglog enforces a functional dependency between their arguments and result.
 The `:merge` keyword specifies the merge function, which is used to enforce this dependency.
 When the functional dependency is violated, the merge function resolves this conflict by returning a new term, created using the merge function.
 
 ## Queries
 
-Queries are have the following grammar:
+Queries have the following grammar:
 ```
 query ::= (<constraint> ...)
 
@@ -117,17 +117,20 @@ x is a variable, x in S
 binds(B, S, x, S[x]) ;; variables are looked up in the substitution
 
 
-binds(B, S, e1, t1), ..., binds(B, S, eN, tN) ;; bindings for every child
 B = (T, D, C, E, F) ;; B is a database
 c in F ;; c is a constructor with N arguments
-(c t1' ... tN') in T ;; there's a term in the database that is congruent to (c t1 ... tN)
-t1 = t1' in C, ..., tN = tN' in C ;; all children are equal in C
+binds(B, S, e1, t1), ..., binds(B, S, eN, tN) ;; bindings for every child
+(c t1 ... tN) in T ;; the term is in the database
 ----------------------------------------
 binds(B, S, (c e1 ... eN), (c t1 ... tN))
 
 
-(f, e1, ..., eN) where f is a function
-TODO
+B = (T, D, C, E, F) ;; B is a database
+f in F ;; f is a function with N arguments
+binds(B, S, e1, t1), ..., binds(B, S, eN, tN) ;; bindings for every child
+(f t1 ... tN o) in D ;; tuple with output o in the database
+----------------------------------------
+binds(B, S, (f e1 ... eN), o)
 ```
 
 Let `A` be the set of every substitution `S` such that `valid((T, D, C, E, F), S, query)`.
