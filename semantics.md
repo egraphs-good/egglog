@@ -1,16 +1,22 @@
 # Egglog semantics document
 
-This (in-progress) document describes the semantics of the Egglog language. Any edits to semantics should update this document.
-Edits to syntax should also fix the examples in this document.
+This (in-progress) document describes the semantics of the Egglog language in a fairly  operational way.
+PRs are required to keep this in sync with the implementation.
+
+Things to do:
+- Add typechecking
+- Add something about lattices and why egglog is well-behaved in some way
+- Add rebuilding
+- Add seminaiive
 
 ## Global State
 
-Egglog maintains a global state $(T, D, C, E)$.
-- $T$ is a set of terms, constructed using *constructors*.
+Egglog maintains a global state $(T, D, C, E, F)$.
+- $T$ is a set of terms, constructed using *constructors*. $T$ can be inifinite (but is represented in a finite way in egglog's implementation).
 - $D$ is a set of tuples containing terms, constructed by `set`-ing *functions*.
 - $C$ is a set of equalities between terms. It is also a congruence closure, maintained by egglog's core.
-- $E$ is an environment: a mapping from variables to terms.
-- $F$ is a set of functions and constructors
+- $E$ is an environment: a mapping from global variables to terms.
+- $F$ is a set of functions and constructors.
 
 ## Terms
 
@@ -21,7 +27,7 @@ term ::= <primitive>
         | (<constructor> <term1> ...)
 ```
 
-Egglog enforces these terms are well-typed.
+Egglog ensures these terms are well-typed.
 
 ## Constructors
 
@@ -71,9 +77,9 @@ Rules have the following syntax:
 
 When executing a query, egglog returns a set of substitutions.
 Each substutition `S` is mapping from variables to terms.
-Egglog returns every possible substitution `S` for database `B` such that `valid(B, S, query)`.
+Let `valid(B, S, query)` denode that substitution `S` is valid for database `B` and query `query`.
+We define validity below.
 Validity ensures that each constraint enforced by the query is met.
-
 We use a helper `binds(B, S, e, t)` to denote that `e` is bound to `t` with substitution `S` in database `B`.
 
 Example: expression `(Add a b)` with substitution `{a: 1, b: 2}` is bound to term `(Add 1 2)`.
@@ -124,13 +130,15 @@ binds(B, S, (c e1 ... eN), (c t1 ... tN))
 TODO
 ```
 
-Example:
-```
+Let `A` be the set of every substitution `S` such that `valid((T, D, C, E, F), S, query)`.
+When running `query`, egglog returns a set of substitutions $R \subseteq A$ such that:
+- For all $S$ in $A$:
+- Exists $S'$ in $R$ such that:
+- For all assignments $(v, t) \in S$:
+- Exists $(v, t') \in S$ such that $t = t' in C$.
 
-```
-
-
-
+Intuitively, egglog returns all substitutions that are valid for the query
+modulo equality in the congruence closure.
 
 ## Running Rules
 
@@ -146,13 +154,6 @@ Actions
 
 
 
-
-## Functions
-
-Functions are written this way:
-`(function LowerBound (Math) Bound :merge (Max old new))`
-
-Functions are required to specify a *merge function*. The merge function enforces a functional dependency between the function's arguments and result.
 
 
 
