@@ -187,7 +187,7 @@ impl TypeInfo {
                 NCommand::Sort(*sort, presort_and_args.clone())
             }
             NCommand::NormAction(Action::Let(_, var, expr)) => {
-                let expr = self.typecheck_expr(expr, &HashMap::default())?;
+                let expr = self.typecheck_expr(expr, &Default::default())?;
                 let output_type = expr.output_type(self);
                 self.global_types.insert(*var, output_type.clone());
                 let var = ResolvedVar {
@@ -197,7 +197,7 @@ impl TypeInfo {
                 NCommand::NormAction(Action::Let((), var, expr))
             }
             NCommand::NormAction(action) => {
-                NCommand::NormAction(self.typecheck_action(action, &HashMap::default())?)
+                NCommand::NormAction(self.typecheck_action(action, &Default::default())?)
             }
             NCommand::Check(facts) => NCommand::Check(self.typecheck_facts(facts)?),
             NCommand::Fail(cmd) => NCommand::Fail(Box::new(self.typecheck_command(cmd)?)),
@@ -207,7 +207,7 @@ impl TypeInfo {
             NCommand::Pop(n) => NCommand::Pop(*n),
             NCommand::Push(n) => NCommand::Push(*n),
             NCommand::SetOption { name, value } => {
-                let value = self.typecheck_expr(value, &HashMap::default())?;
+                let value = self.typecheck_expr(value, &Default::default())?;
                 NCommand::SetOption { name: *name, value }
             }
             NCommand::AddRuleset(ruleset) => NCommand::AddRuleset(*ruleset),
@@ -216,12 +216,12 @@ impl TypeInfo {
             NCommand::PrintTable(table, size) => NCommand::PrintTable(*table, *size),
             NCommand::PrintSize(n) => {
                 // Should probably also resolve the function symbol here
-                NCommand::PrintSize(n.clone())
+                NCommand::PrintSize(*n)
             }
             NCommand::Output { file, exprs } => {
                 let exprs = exprs
                     .iter()
-                    .map(|expr| self.typecheck_expr(expr, &HashMap::default()))
+                    .map(|expr| self.typecheck_expr(expr, &Default::default()))
                     .collect::<Result<Vec<_>, _>>()?;
                 NCommand::Output {
                     file: file.clone(),
@@ -250,7 +250,7 @@ impl TypeInfo {
         if self.func_types.insert(fdecl.name, ftype).is_some() {
             return Err(TypeError::FunctionAlreadyBound(fdecl.name));
         }
-        let mut bound_vars = HashMap::default();
+        let mut bound_vars = IndexMap::default();
         let output_type = self.sorts.get(&fdecl.schema.output).unwrap();
         bound_vars.insert("old".into(), output_type.clone());
         bound_vars.insert("new".into(), output_type.clone());
@@ -265,10 +265,10 @@ impl TypeInfo {
             default: fdecl
                 .default
                 .as_ref()
-                .map(|default| self.typecheck_expr(default, &HashMap::default()))
+                .map(|default| self.typecheck_expr(default, &Default::default()))
                 .transpose()?,
             merge_action: self.typecheck_actions(&fdecl.merge_action, &bound_vars)?,
-            cost: fdecl.cost.clone(),
+            cost: fdecl.cost,
             unextractable: fdecl.unextractable,
         })
     }
@@ -364,9 +364,9 @@ impl TypeInfo {
         })
     }
 
-    fn typecheck_facts(&self, facts: &Vec<UnresolvedFact>) -> Result<Vec<ResolvedFact>, TypeError> {
+    fn typecheck_facts(&self, facts: &[UnresolvedFact]) -> Result<Vec<ResolvedFact>, TypeError> {
         let mut fresh_gen = SymbolGen::new();
-        let (query, mapped_facts) = Facts(facts.clone()).to_query(self, &mut fresh_gen);
+        let (query, mapped_facts) = Facts(facts.to_vec()).to_query(self, &mut fresh_gen);
         let mut problem = Problem::default();
         problem.add_query(&query, self)?;
         let assignment = problem
@@ -378,13 +378,13 @@ impl TypeInfo {
 
     fn typecheck_actions(
         &self,
-        actions: &Vec<UnresolvedAction>,
-        binding: &HashMap<Symbol, ArcSort>,
+        actions: &[UnresolvedAction],
+        binding: &IndexMap<Symbol, ArcSort>,
     ) -> Result<Vec<ResolvedAction>, TypeError> {
-        let mut binding_set = binding.keys().cloned().collect::<HashSet<_>>();
+        let mut binding_set = binding.keys().cloned().collect::<IndexSet<_>>();
         let mut fresh_gen = SymbolGen::new();
         let (actions, mapped_action): (Vec<NormAction>, Vec<Action<(Symbol, Symbol), Symbol, ()>>) =
-            Actions(actions.clone()).to_norm_actions(self, &mut binding_set, &mut fresh_gen)?;
+            Actions(actions.to_vec()).to_norm_actions(self, &mut binding_set, &mut fresh_gen)?;
         let mut problem = Problem::default();
 
         // add actions to problem
@@ -406,7 +406,7 @@ impl TypeInfo {
     fn typecheck_expr(
         &self,
         expr: &UnresolvedExpr,
-        binding: &HashMap<Symbol, ArcSort>,
+        binding: &IndexMap<Symbol, ArcSort>,
     ) -> Result<ResolvedExpr, TypeError> {
         let action = Action::Let((), "$$result".into(), expr.clone());
         let typechecked_action = self.typecheck_action(&action, binding)?;
@@ -419,9 +419,9 @@ impl TypeInfo {
     fn typecheck_action(
         &self,
         action: &UnresolvedAction,
-        binding: &HashMap<Symbol, ArcSort>,
+        binding: &IndexMap<Symbol, ArcSort>,
     ) -> Result<ResolvedAction, TypeError> {
-        self.typecheck_actions(&vec![action.clone()], binding)
+        self.typecheck_actions(&[action.clone()], binding)
             .map(|mut v| {
                 assert_eq!(v.len(), 1);
                 v.pop().unwrap()

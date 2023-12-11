@@ -118,6 +118,6 @@ pub(crate) trait SymbolLike {
 
 impl SymbolLike for Symbol {
     fn to_symbol(&self) -> Symbol {
-        self.clone()
+        *self
     }
 }

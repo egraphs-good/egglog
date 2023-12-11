@@ -268,23 +268,22 @@ pub const HIGH_COST: usize = i64::MAX as usize;
 #[derive(Clone)]
 pub struct Primitive(Arc<dyn PrimitiveLike>);
 impl Primitive {
-    fn accept(&self, tys: &[Arc<dyn Sort>]) -> Option<Arc<dyn Sort>> {
+    // Takes the full signature of a primitive (including input and output types)
+    // Returns whether the primitive is compatible with this signature
+    fn accept(&self, tys: &[Arc<dyn Sort>]) -> bool {
         let mut constraints = vec![];
-        // + 1 to account for the output type
-        let lits: Vec<_> = (0..tys.len() + 1)
+        let lits: Vec<_> = (0..tys.len())
             .map(|i| AtomTerm::Literal(Literal::Int(i as i64)))
             .collect();
         for (lit, ty) in lits.iter().zip(tys.iter()) {
             constraints.push(Constraint::Assign(lit.clone(), ty.clone()))
         }
         constraints.extend(self.get_type_constraints().get(&lits));
-        let output_type = AtomTerm::Literal(Literal::Int(tys.len() as i64));
         let problem = Problem {
             constraints,
-            range: HashSet::from_iter([output_type.clone()]),
+            range: HashSet::default(),
         };
-        let assignment = problem.solve(|sort| sort.name()).ok()?;
-        Some(assignment.get(&output_type).unwrap().clone())
+        problem.solve(|sort| sort.name()).is_ok()
     }
 }
 
@@ -1047,7 +1046,7 @@ impl EGraph {
         let (query, action) = (core_rule.body, core_rule.head);
 
         let vars = query.get_vars();
-        let query = self.compile_gj_query(query);
+        let query = self.compile_gj_query(query, &vars);
 
         let actions: Vec<_> = action.0.clone();
         let program = self
@@ -1098,18 +1097,14 @@ impl EGraph {
     // TODO make a public version of eval_expr that makes a command,
     // then returns the value at the end.
     fn eval_expr(&mut self, expr: &ResolvedExpr, make_defaults: bool) -> Result<Value, Error> {
-        let placeholder = ResolvedVar {
-            name: Symbol::from("$$result"),
-            sort: expr.output_type(self.type_info()),
-        };
-        let (actions, _) = Actions(vec![Action::Let((), placeholder, expr.clone())])
-            .to_norm_actions(
-                self.type_info(),
-                &mut Default::default(),
-                &mut ResolvedGen::new(),
-            )?;
+        let (actions, mapped_expr) = expr.to_norm_actions(
+            self.type_info(),
+            &mut Default::default(),
+            &mut ResolvedGen::new(),
+        )?;
+        let target = mapped_expr.get_corresponding_var_or_lit(&self.type_info());
         let program = self
-            .compile_actions(&Default::default(), &actions)
+            .compile_expr(&Default::default(), &actions, &target)
             .map_err(Error::TypeErrors)?;
         let mut stack = vec![];
         self.run_actions(&mut stack, &[], &program, make_defaults)?;
@@ -1159,8 +1154,9 @@ impl EGraph {
             body: facts.to_vec(),
         };
         let core_rule = rule.to_canonicalized_core_rule(self.type_info())?;
-        let query0 = core_rule.body;
-        let query = self.compile_gj_query(query0);
+        let query = core_rule.body;
+        let ordering = &query.get_vars();
+        let query = self.compile_gj_query(query, ordering);
 
         let mut matched = false;
         self.run_query(&query, 0, |values| {
@@ -1242,9 +1238,9 @@ impl EGraph {
                 if should_run {
                     match &action {
                         Action::Let((), name, contents) => {
-                            let value = self.eval_expr(&contents, true)?;
+                            let value = self.eval_expr(contents, true)?;
                             let present = self.global_bindings.insert(
-                                name.name.clone(),
+                                name.name,
                                 (
                                     contents.output_type(self.type_info()),
                                     value,

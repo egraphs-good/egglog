@@ -338,11 +338,12 @@ impl EGraph {
         // the manual conversion here.
         // This needs to be fixed in the future.
         query: typecheck::Query<ResolvedCall, ResolvedVar>,
+        ordering: &IndexSet<ResolvedVar>,
     ) -> CompiledQuery {
         // NOTE: this vars order only used for ordering the tuple storing the resulting match
         // It is not the GJ variable order.
         let mut vars: IndexMap<Symbol, VarInfo> = Default::default();
-        for var in query.get_vars() {
+        for var in ordering.iter() {
             vars.entry(var.name).or_default();
         }
 

@@ -9,6 +9,7 @@ struct Args {
     fact_directory: Option<PathBuf>,
     #[clap(long)]
     naive: bool,
+    #[clap(long)]
     desugar: bool,
     #[clap(long)]
     resugar: bool,

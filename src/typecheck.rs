@@ -51,7 +51,7 @@ pub(crate) enum ResolvedCall {
 impl SymbolLike for ResolvedCall {
     fn to_symbol(&self) -> Symbol {
         match self {
-            ResolvedCall::Func(f) => f.name.clone(),
+            ResolvedCall::Func(f) => f.name,
             ResolvedCall::Primitive(prim) => prim.primitive.0.name(),
         }
     }
@@ -95,18 +95,13 @@ impl ResolvedCall {
         }
 
         if let Some(primitives) = typeinfo.primitives.get(head) {
-            let tys: Vec<_> = types
-                // remove the output type since accept() only takes the input types
-                .split_last()
-                .unwrap()
-                .1
-                .to_vec();
             for primitive in primitives {
-                if let Some(output_type) = primitive.accept(&tys) {
+                if primitive.accept(types) {
+                    let (out, inp) = types.split_last().unwrap();
                     resolved_call.push(ResolvedCall::Primitive(SpecializedPrimitive {
                         primitive: primitive.clone(),
-                        input: tys.clone(),
-                        output: output_type,
+                        input: inp.to_vec(),
+                        output: out.clone(),
                     }));
                 }
             }
@@ -215,15 +210,13 @@ impl ResolvedRule {
     ) -> Result<ResolvedCoreRule, TypeError> {
         let value_eq = &typeinfo.primitives.get(&Symbol::from("value-eq")).unwrap()[0];
         let unit = typeinfo.get_sort_nofail::<UnitSort>();
-        let rule =
-            self.to_canonicalized_core_rule_impl(typeinfo, ResolvedGen::new(), |at1, at2| {
-                ResolvedCall::Primitive(SpecializedPrimitive {
-                    primitive: value_eq.clone(),
-                    input: vec![at1.output(typeinfo), at2.output(typeinfo)],
-                    output: unit.clone(),
-                })
-            });
-        rule
+        self.to_canonicalized_core_rule_impl(typeinfo, ResolvedGen::new(), |at1, at2| {
+            ResolvedCall::Primitive(SpecializedPrimitive {
+                primitive: value_eq.clone(),
+                input: vec![at1.output(typeinfo), at2.output(typeinfo)],
+                output: unit.clone(),
+            })
+        })
     }
 }
 
@@ -318,11 +311,11 @@ where
     Leaf: Eq + Clone + Hash,
     Head: Clone,
 {
-    pub(crate) fn get_vars(&self) -> HashSet<Leaf> {
+    pub(crate) fn get_vars(&self) -> IndexSet<Leaf> {
         self.atoms
             .iter()
             .flat_map(|atom| atom.vars())
-            .collect::<HashSet<_>>()
+            .collect::<IndexSet<_>>()
     }
 }
 
@@ -512,7 +505,7 @@ where
 struct ActionCompiler<'a> {
     egraph: &'a EGraph,
     types: &'a IndexMap<Symbol, ArcSort>,
-    locals: IndexSet<Symbol>,
+    locals: IndexSet<ResolvedVar>,
     instructions: Vec<Instruction>,
 }
 
@@ -521,11 +514,11 @@ impl<'a> ActionCompiler<'a> {
         match action {
             CoreAction::Let(v, f, args) => {
                 self.do_call(f, args);
-                self.locals.insert(v.name);
+                self.locals.insert(v.clone());
             }
             CoreAction::LetAtomTerm(v, at) => {
                 self.do_atom_term(at);
-                self.locals.insert(v.name);
+                self.locals.insert(v.clone());
             }
             CoreAction::Extract(e, b) => {
                 self.do_atom_term(e);
@@ -571,7 +564,7 @@ impl<'a> ActionCompiler<'a> {
             self.do_atom_term(arg);
         }
         match f {
-            ResolvedCall::Func(f) => self.do_function(&f),
+            ResolvedCall::Func(f) => self.do_function(f),
             ResolvedCall::Primitive(p) => self.do_prim(p),
         }
     }
@@ -579,7 +572,7 @@ impl<'a> ActionCompiler<'a> {
     fn do_atom_term(&mut self, at: &GenericAtomTerm<ResolvedVar>) {
         match at {
             GenericAtomTerm::Var(var) => {
-                if let Some((i, _ty)) = self.locals.get_full(&var.name) {
+                if let Some((i, _ty)) = self.locals.get_full(var) {
                     self.instructions.push(Instruction::Load(Load::Stack(i)));
                 } else {
                     let (i, _, _ty) = self.types.get_full(&var.name).unwrap();
@@ -636,9 +629,13 @@ enum Instruction {
 pub struct Program(Vec<Instruction>);
 
 impl EGraph {
+    /// Takes a list of variables bound to `subst` (variables bound during matching),
+    /// whose positions are captured by indices of the IndexSet, and a list of core actions.
+    /// Returns a program compiled from core actions and a list of variables bound to `stack`
+    /// (whose positions are described by IndexSet indices as well).
     pub(crate) fn compile_actions(
         &self,
-        binding: &HashSet<ResolvedVar>,
+        binding: &IndexSet<ResolvedVar>,
         actions: &[CoreAction<ResolvedCall, ResolvedVar>],
     ) -> Result<Program, Vec<TypeError>> {
         let mut types = IndexMap::default();
@@ -655,6 +652,35 @@ impl EGraph {
         for a in actions {
             checker.check_action(a);
         }
+
+        Ok(Program(checker.instructions))
+    }
+
+    // This is the ugly part of the code. CoreActions lowered from
+    // expressions like `2` is an empty vector, because no action is taken.
+    // So to explicitly obtain the return value of an expression, compile_expr
+    // needs to also take a `target`.`
+    pub(crate) fn compile_expr(
+        &self,
+        binding: &IndexSet<ResolvedVar>,
+        actions: &[CoreAction<ResolvedCall, ResolvedVar>],
+        target: &GenericAtomTerm<ResolvedVar>,
+    ) -> Result<Program, Vec<TypeError>> {
+        let mut types = IndexMap::default();
+        for var in binding {
+            types.insert(var.name, var.sort.clone());
+        }
+        let mut checker = ActionCompiler {
+            egraph: self,
+            types: &types,
+            locals: IndexSet::default(),
+            instructions: Vec::new(),
+        };
+
+        for a in actions {
+            checker.check_action(a);
+        }
+        checker.do_atom_term(target);
 
         Ok(Program(checker.instructions))
     }
@@ -686,11 +712,9 @@ impl EGraph {
                     }
                     MergeFn::Expr(merge_prog) => {
                         let values = [old_value, new_value];
-                        let old_len = stack.len();
-                        self.run_actions(stack, &values, &merge_prog, true)?;
-                        let result = stack.pop().unwrap();
-                        stack.truncate(old_len);
-                        result
+                        let mut stack = vec![];
+                        self.run_actions(&mut stack, &values, &merge_prog, true)?;
+                        stack.pop().unwrap()
                     }
                 };
                 if merged != old_value {
@@ -702,9 +726,8 @@ impl EGraph {
                 let function = self.functions.get_mut(&table).unwrap();
                 if let Some(prog) = function.merge.on_merge.clone() {
                     let values = [old_value, new_value];
-                    // XXX: we get an error if we pass the current
-                    // stack and then truncate it to the old length.
-                    // Why?
+                    // We need to pass a new stack instead of reusing the old one
+                    // because Load(Stack(idx)) use absolute index.
                     self.run_actions(&mut Vec::new(), &values, &prog, true)?;
                 }
             }

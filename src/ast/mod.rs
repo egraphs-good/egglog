@@ -995,7 +995,7 @@ where
     pub(crate) fn to_norm_actions<FG: FreshGen<Head, Leaf>>(
         &self,
         typeinfo: &TypeInfo,
-        binding: &mut HashSet<Leaf>,
+        binding: &mut IndexSet<Leaf>,
         fresh_gen: &mut FG,
     ) -> Result<
         (
@@ -1026,7 +1026,7 @@ where
                         var.clone(),
                         mapped_expr.get_corresponding_var_or_lit(typeinfo),
                     ));
-                    mapped_actions.push(Action::Let(*_ann, var.clone(), mapped_expr));
+                    mapped_actions.push(Action::Let((), var.clone(), mapped_expr));
                     binding.insert(var.clone());
                 }
                 Action::Set(_ann, head, args, expr) => {
@@ -1050,7 +1050,7 @@ where
                     ));
                     let v = fresh_gen.fresh(head);
                     mapped_actions.push(Action::Set(
-                        *_ann,
+                        (),
                         (head.clone(), v),
                         mapped_args,
                         mapped_expr,
@@ -1072,7 +1072,7 @@ where
                             .collect(),
                     ));
                     let v = fresh_gen.fresh(head);
-                    mapped_actions.push(Action::Delete(*_ann, (head.clone(), v), mapped_args));
+                    mapped_actions.push(Action::Delete((), (head.clone(), v), mapped_args));
                 }
                 Action::Union(_ann, e1, e2) => {
                     let (actions1, mapped_e1) = e1.to_norm_actions(typeinfo, binding, fresh_gen)?;
@@ -1083,7 +1083,7 @@ where
                         mapped_e1.get_corresponding_var_or_lit(typeinfo),
                         mapped_e2.get_corresponding_var_or_lit(typeinfo),
                     ));
-                    mapped_actions.push(Action::Union(*_ann, mapped_e1, mapped_e2));
+                    mapped_actions.push(Action::Union((), mapped_e1, mapped_e2));
                 }
                 Action::Extract(_ann, e, n) => {
                     let (actions, mapped_e) = e.to_norm_actions(typeinfo, binding, fresh_gen)?;
@@ -1094,17 +1094,17 @@ where
                         mapped_e.get_corresponding_var_or_lit(typeinfo),
                         mapped_n.get_corresponding_var_or_lit(typeinfo),
                     ));
-                    mapped_actions.push(Action::Extract(*_ann, mapped_e, mapped_n));
+                    mapped_actions.push(Action::Extract((), mapped_e, mapped_n));
                 }
                 Action::Panic(_ann, string) => {
                     norm_actions.push(CoreAction::Panic(string.clone()));
-                    mapped_actions.push(Action::Panic(*_ann, string.clone()));
+                    mapped_actions.push(Action::Panic((), string.clone()));
                 }
                 Action::Expr(_ann, expr) => {
                     let (actions, mapped_expr) =
                         expr.to_norm_actions(typeinfo, binding, fresh_gen)?;
                     norm_actions.extend(actions);
-                    mapped_actions.push(Action::Expr(*_ann, mapped_expr));
+                    mapped_actions.push(Action::Expr((), mapped_expr));
                 }
             }
         }
@@ -1154,14 +1154,15 @@ impl<Head: Display + ToSexp, Leaf: Display + ToSexp, Ann> ToSexp for Action<Head
     }
 }
 
-impl<Head, Leaf> Action<Head, Leaf, ()>
+impl<Head, Leaf, Ann> Action<Head, Leaf, Ann>
 where
     Head: Clone + Display,
     Leaf: Clone + Eq + Display + Hash,
+    Ann: Clone + Default,
 {
     pub fn map_exprs(
         &self,
-        f: &mut impl FnMut(&Expr<Head, Leaf, ()>) -> Expr<Head, Leaf, ()>,
+        f: &mut impl FnMut(&Expr<Head, Leaf, Ann>) -> Expr<Head, Leaf, Ann>,
     ) -> Self {
         match self {
             Action::Let(ann, lhs, rhs) => Action::Let(ann.clone(), lhs.clone(), f(rhs)),
@@ -1186,14 +1187,14 @@ where
         }
     }
 
-    pub fn subst(&self, subst: &mut impl FnMut(&Leaf) -> Expr<Head, Leaf, ()>) -> Self {
+    pub fn subst(&self, subst: &mut impl FnMut(&Leaf) -> Expr<Head, Leaf, Ann>) -> Self {
         self.map_exprs(&mut |e| e.subst_leaf(subst))
     }
 
     pub fn map_def_use(&self, fvar: &mut impl FnMut(&Leaf, bool) -> Leaf) -> Self {
         macro_rules! fvar_expr {
             () => {
-                |s: &_| Expr::Var((), fvar(s, false))
+                |s: &_| Expr::Var(Ann::default(), fvar(s, false))
             };
         }
         match self {
@@ -1363,7 +1364,7 @@ impl<Head: Display, Leaf: Display, Ann> Display for Rewrite<Head, Leaf, Ann> {
 }
 
 impl<Head, Leaf: Clone, Ann> Expr<(Head, Leaf), Leaf, Ann> {
-    fn get_corresponding_var_or_lit(&self, typeinfo: &TypeInfo) -> GenericAtomTerm<Leaf>
+    pub(crate) fn get_corresponding_var_or_lit(&self, typeinfo: &TypeInfo) -> GenericAtomTerm<Leaf>
     where
         Leaf: SymbolLike,
     {
@@ -1430,7 +1431,7 @@ impl<Head: Clone, Leaf: Clone, Ann: Clone> Expr<Head, Leaf, Ann> {
     pub(crate) fn to_norm_actions<FG: FreshGen<Head, Leaf>>(
         &self,
         typeinfo: &TypeInfo,
-        binding: &mut HashSet<Leaf>,
+        binding: &mut IndexSet<Leaf>,
         fresh_gen: &mut FG,
     ) -> Result<(Vec<CoreAction<Head, Leaf>>, Expr<(Head, Leaf), Leaf, ()>), TypeError>
     where

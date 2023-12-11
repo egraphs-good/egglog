@@ -221,21 +221,21 @@ impl Assignment<AtomTerm, ArcSort> {
         typeinfo: &TypeInfo,
     ) -> ResolvedExpr {
         match &expr {
-            Expr::Lit(ann, literal) => Expr::Lit(*ann, literal.clone()),
-            Expr::Var(ann, var) => {
+            Expr::Lit((), literal) => Expr::Lit((), literal.clone()),
+            Expr::Var((), var) => {
                 let ty = typeinfo
                     .lookup_global(var)
                     .or_else(|| self.get(&GenericAtomTerm::Var(*var)).cloned())
                     .expect("All variables should be assigned before annotation");
                 Expr::Var(
-                    *ann,
+                    (),
                     ResolvedVar {
-                        name: var.clone(),
+                        name: *var,
                         sort: ty.clone(),
                     },
                 )
             }
-            Expr::Call(ann, (head, corresponding_var), args) => {
+            Expr::Call((), (head, corresponding_var), args) => {
                 // get the resolved call using resolve_rule
                 let args: Vec<_> = args
                     .iter()
@@ -251,7 +251,7 @@ impl Assignment<AtomTerm, ArcSort> {
                     ))
                     .collect();
                 let resolved_call = ResolvedCall::from_resolution(head, &types, typeinfo);
-                Expr::Call(*ann, resolved_call, args)
+                Expr::Call((), resolved_call, args)
             }
         }
     }
@@ -289,12 +289,12 @@ impl Assignment<AtomTerm, ArcSort> {
         typeinfo: &TypeInfo,
     ) -> Result<ResolvedAction, TypeError> {
         match action {
-            Action::Let(ann, var, expr) => {
+            Action::Let((), var, expr) => {
                 let ty = self
                     .get(&GenericAtomTerm::Var(*var))
                     .expect("All variables should be assigned before annotation");
                 Ok(Action::Let(
-                    *ann,
+                    (),
                     ResolvedVar {
                         name: *var,
                         sort: ty.clone(),
@@ -303,7 +303,7 @@ impl Assignment<AtomTerm, ArcSort> {
                 ))
             }
             // Note mapped_var for set is a dummy variable that does not mean anything
-            Action::Set(ann, (head, _mapped_var), children, rhs) => {
+            Action::Set((), (head, _mapped_var), children, rhs) => {
                 let children: Vec<_> = children
                     .iter()
                     .map(|child| self.annotate_expr(child, typeinfo))
@@ -318,10 +318,10 @@ impl Assignment<AtomTerm, ArcSort> {
                 if !matches!(resolved_call, ResolvedCall::Func(_)) {
                     return Err(TypeError::UnboundFunction(*head));
                 }
-                Ok(Action::Set(*ann, resolved_call, children, rhs))
+                Ok(Action::Set((), resolved_call, children, rhs))
             }
             // Note mapped_var for delete is a dummy variable that does not mean anything
-            Action::Delete(ann, (head, _mapped_var), children) => {
+            Action::Delete((), (head, _mapped_var), children) => {
                 let children: Vec<_> = children
                     .iter()
                     .map(|child| self.annotate_expr(child, typeinfo))
@@ -333,29 +333,26 @@ impl Assignment<AtomTerm, ArcSort> {
                 let resolved_call =
                     ResolvedCall::from_resolution_func_types(head, &types, typeinfo)
                         .ok_or_else(|| TypeError::UnboundFunction(*head))?;
-                Ok(Action::Delete(*ann, resolved_call, children.clone()))
+                Ok(Action::Delete((), resolved_call, children.clone()))
             }
-            Action::Union(ann, lhs, rhs) => Ok(Action::Union(
-                *ann,
+            Action::Union((), lhs, rhs) => Ok(Action::Union(
+                (),
                 self.annotate_expr(lhs, typeinfo),
                 self.annotate_expr(rhs, typeinfo),
             )),
-            Action::Extract(ann, lhs, rhs) => Ok(Action::Extract(
-                *ann,
+            Action::Extract((), lhs, rhs) => Ok(Action::Extract(
+                (),
                 self.annotate_expr(lhs, typeinfo),
                 self.annotate_expr(rhs, typeinfo),
             )),
-            Action::Panic(ann, msg) => Ok(Action::Panic(*ann, msg.clone())),
-            Action::Expr(ann, expr) => Ok(Action::Expr(
-                ann.clone(),
-                self.annotate_expr(expr, typeinfo),
-            )),
+            Action::Panic((), msg) => Ok(Action::Panic((), msg.clone())),
+            Action::Expr((), expr) => Ok(Action::Expr((), self.annotate_expr(expr, typeinfo))),
         }
     }
 
     pub(crate) fn annotate_actions(
         &self,
-        mapped_actions: &Vec<Action<(Symbol, Symbol), Symbol, ()>>,
+        mapped_actions: &[Action<(Symbol, Symbol), Symbol, ()>],
         typeinfo: &TypeInfo,
     ) -> Result<Vec<ResolvedAction>, TypeError> {
         mapped_actions
@@ -370,8 +367,8 @@ where
     Var: Eq + PartialEq + Hash + Clone + Debug,
     Value: Clone + Debug,
 {
-    pub(crate) fn solve<'a, K: Eq + Debug>(
-        &'a self,
+    pub(crate) fn solve<K: Eq + Debug>(
+        &self,
         key: impl Fn(&Value) -> K + Copy,
     ) -> Result<Assignment<Var, Value>, ConstraintError<Var, Value>> {
         let mut assignment = Assignment(HashMap::default());
@@ -531,8 +528,9 @@ impl Atom<SymbolOrEq> {
                 Ok(constraints)
             }
             SymbolOrEq::Symbol(head) => Ok(literal_constraints
-                .into_iter()
-                .chain(get_atom_application_constraints(head, &self.args, type_info)?.into_iter())
+                .chain(get_atom_application_constraints(
+                    head, &self.args, type_info,
+                )?)
                 .collect()),
         }
     }

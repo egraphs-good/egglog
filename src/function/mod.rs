@@ -80,7 +80,7 @@ impl Function {
             None => return Err(Error::TypeError(TypeError::Unbound(decl.schema.output))),
         };
 
-        let binding = HashSet::from_iter([
+        let binding = IndexSet::from_iter([
             ResolvedVar {
                 name: Symbol::from("old"),
                 sort: output.clone(),
@@ -91,17 +91,18 @@ impl Function {
             },
         ]);
 
+        // Invariant: the last element in the stack is the return value.
         let merge_vals = if let Some(merge_expr) = &decl.merge {
             // TODO: Compiling actions to programs is reused in eval_actions.
             // Need to extract that into a separate function.
-            let (actions, _) = Actions(vec![Action::Expr((), merge_expr.clone())])
-                .to_norm_actions(
-                    egraph.type_info(),
-                    &mut binding.clone(),
-                    &mut ResolvedGen::new(),
-                )?;
+            let (actions, mapped_expr) = merge_expr.to_norm_actions(
+                egraph.type_info(),
+                &mut binding.clone(),
+                &mut ResolvedGen::new(),
+            )?;
+            let target = mapped_expr.get_corresponding_var_or_lit(egraph.type_info());
             let program = egraph
-                .compile_actions(&binding, &actions)
+                .compile_expr(&binding, &actions, &target)
                 .map_err(Error::TypeErrors)?;
             MergeFn::Expr(Rc::new(program))
         } else if output.is_eq_sort() {
