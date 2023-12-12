@@ -61,7 +61,7 @@ pub enum NCommand<Head, Leaf, Ann> {
     NormRule {
         name: Symbol,
         ruleset: Symbol,
-        rule: Rule<Head, Leaf, Ann>,
+        rule: GenericRule<Head, Leaf, Ann>,
     },
     NormAction(Action<Head, Leaf, Ann>),
     RunSchedule(Schedule<Head, Leaf, Ann>),
@@ -414,7 +414,7 @@ pub enum Command<Head, Leaf> {
     Rule {
         name: Symbol,
         ruleset: Symbol,
-        rule: Rule<Head, Leaf, ()>,
+        rule: GenericRule<Head, Leaf, ()>,
     },
     /// `rewrite` is syntactic sugar for a specific form of `rule`
     /// which simply unions the left and right hand sides.
@@ -1259,16 +1259,16 @@ impl<Head: Display + ToSexp, Leaf: Display + ToSexp, Ann> Display for Action<Hea
     }
 }
 
-pub type UnresolvedRule = Rule<Symbol, Symbol, ()>;
-pub(crate) type ResolvedRule = Rule<ResolvedCall, ResolvedVar, ()>;
+pub type Rule = GenericRule<Symbol, Symbol, ()>;
+pub(crate) type ResolvedRule = GenericRule<ResolvedCall, ResolvedVar, ()>;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Rule<Head, Leaf, Ann> {
+pub struct GenericRule<Head, Leaf, Ann> {
     pub head: Vec<Action<Head, Leaf, Ann>>,
     pub body: Vec<Fact<Head, Leaf, Ann>>,
 }
 
-impl<Head: Display + ToSexp, Leaf: Display + ToSexp, Ann> Rule<Head, Leaf, Ann> {
+impl<Head: Display + ToSexp, Leaf: Display + ToSexp, Ann> GenericRule<Head, Leaf, Ann> {
     pub(crate) fn fmt_with_ruleset(
         &self,
         f: &mut std::fmt::Formatter<'_>,
@@ -1313,7 +1313,7 @@ impl<Head: Display + ToSexp, Leaf: Display + ToSexp, Ann> Rule<Head, Leaf, Ann> 
     }
 }
 
-impl<Head: Display + ToSexp, Leaf: Display + ToSexp, Ann> Rule<Head, Leaf, Ann> {
+impl<Head: Display + ToSexp, Leaf: Display + ToSexp, Ann> GenericRule<Head, Leaf, Ann> {
     /// Converts this rule into an s-expression.
     pub fn to_sexp(&self, ruleset: Symbol, name: Symbol) -> Sexp {
         let mut res = vec![
@@ -1333,7 +1333,7 @@ impl<Head: Display + ToSexp, Leaf: Display + ToSexp, Ann> Rule<Head, Leaf, Ann> 
     }
 }
 
-impl<Head: Display + ToSexp, Leaf: Display + ToSexp, Ann> Display for Rule<Head, Leaf, Ann> {
+impl<Head: Display + ToSexp, Leaf: Display + ToSexp, Ann> Display for GenericRule<Head, Leaf, Ann> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.fmt_with_ruleset(f, "".into(), "".into())
     }

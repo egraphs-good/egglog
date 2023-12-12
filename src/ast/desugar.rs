@@ -1,4 +1,4 @@
-use super::{Rule, UnresolvedRewrite};
+use super::{GenericRule, UnresolvedRewrite};
 use crate::*;
 
 fn desugar_datatype(name: Symbol, variants: Vec<Variant>) -> Vec<UnresolvedNCommand> {
@@ -33,7 +33,7 @@ fn desugar_rewrite(
     vec![NCommand::NormRule {
         ruleset,
         name,
-        rule: Rule {
+        rule: GenericRule {
             body: [Fact::Eq(vec![
                 GenericExpr::Var((), var),
                 rewrite.lhs.clone(),
@@ -66,7 +66,7 @@ fn desugar_birewrite(
         .collect()
 }
 
-fn add_semi_naive_rule(desugar: &mut Desugar, rule: UnresolvedRule) -> Option<UnresolvedRule> {
+fn add_semi_naive_rule(desugar: &mut Desugar, rule: Rule) -> Option<Rule> {
     let mut new_rule = rule;
     // Whenever an Let(_, expr@Call(...)) or Set(_, expr@Call(...)) is present in action,
     // an additional seminaive rule should be created.

@@ -163,7 +163,7 @@ where
     }
 }
 
-impl<Head, Leaf> Rule<Head, Leaf, ()>
+impl<Head, Leaf> GenericRule<Head, Leaf, ()>
 where
     Leaf: Clone + Eq + Hash + Debug,
     Head: Clone,
@@ -176,7 +176,7 @@ where
     where
         Leaf: SymbolLike,
     {
-        let Rule { head, body } = self;
+        let GenericRule { head, body } = self;
 
         let (body, _correspondence) = Facts(body.clone()).to_query(typeinfo, &mut fresh_gen);
         let mut binding = body.get_vars();

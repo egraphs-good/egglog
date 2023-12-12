@@ -329,8 +329,8 @@ impl TypeInfo {
         self.add_arcsort(sort)
     }
 
-    fn typecheck_rule(&self, rule: &UnresolvedRule) -> Result<ResolvedRule, TypeError> {
-        let UnresolvedRule { head, body } = rule;
+    fn typecheck_rule(&self, rule: &Rule) -> Result<ResolvedRule, TypeError> {
+        let Rule { head, body } = rule;
         let mut constraints = vec![];
 
         let mut fresh_gen = SymbolGen::new();
