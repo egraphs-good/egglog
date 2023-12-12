@@ -1213,7 +1213,7 @@ where
     pub fn map_def_use(&self, fvar: &mut impl FnMut(&Leaf, bool) -> Leaf) -> Self {
         macro_rules! fvar_expr {
             () => {
-                |s: &_| Expr::Var(Ann::default(), fvar(s, false))
+                |s: &_| GenericExpr::Var(Ann::default(), fvar(s, false))
             };
         }
         match self {

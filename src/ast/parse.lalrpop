@@ -134,7 +134,7 @@ Schema: Schema = {
     <types:List<Type>> <output:Type> => Schema { input: types, output }
 }
 
-pub Expr: UnresolvedExpr = {
+pub Expr: Expr = {
     <Literal> => Expr::Lit((), <>),
     <Ident> => Expr::Var((), <>),
     <CallExpr> => <>,
@@ -153,11 +153,11 @@ Bool: bool = {
     "false" => false,
 }
 
-CallExpr: UnresolvedExpr = {
+CallExpr: Expr = {
     LParen <head:Ident> <tail:(Expr)*> RParen => Expr::Call((), head, tail),
 }
 
-ExprList: Vec<UnresolvedExpr> = { LParen <sexps:(Expr)*> RParen => sexps }
+ExprList: Vec<Expr> = { LParen <sexps:(Expr)*> RParen => sexps }
 
 Variant: Variant = {
     LParen <name:Ident> <types:(Type)*> <cost:Cost> RParen => Variant { <> },

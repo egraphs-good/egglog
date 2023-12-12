@@ -1094,13 +1094,21 @@ impl EGraph {
         Ok(())
     }
 
-    pub fn eval_expr(&mut self, expr: &Expr) -> Result<Value, Error> {
-        let command = Command::Action(Action::Expr(expr.clone()));
+    pub fn eval_expr(&mut self, expr: &Expr) -> Result<(ArcSort, Value), Error> {
+        let fresh_name = self.desugar.get_fresh();
+        let command = Command::Action(Action::Let((), fresh_name, expr.clone()));
+        self.run_program(vec![command])?;
+        let (sort, value, _ts) = self.global_bindings.get(&fresh_name).unwrap().clone();
+        Ok((sort, value))
     }
 
     // TODO make a public version of eval_expr that makes a command,
     // then returns the value at the end.
-    fn eval_expr(&mut self, expr: &ResolvedExpr, make_defaults: bool) -> Result<Value, Error> {
+    fn eval_resolved_expr(
+        &mut self,
+        expr: &ResolvedExpr,
+        make_defaults: bool,
+    ) -> Result<Value, Error> {
         let (actions, mapped_expr) = expr.to_norm_actions(
             self.type_info(),
             &mut Default::default(),
@@ -1242,7 +1250,7 @@ impl EGraph {
                 if should_run {
                     match &action {
                         Action::Let((), name, contents) => {
-                            let value = self.eval_expr(contents, true)?;
+                            let value = self.eval_resolved_expr(contents, true)?;
                             let present = self.global_bindings.insert(
                                 name.name,
                                 (
@@ -1302,7 +1310,7 @@ impl EGraph {
                     .map_err(|e| Error::IoError(filename.clone(), e))?;
                 let mut termdag = TermDag::default();
                 for expr in exprs {
-                    let value = self.eval_expr(&expr, true)?;
+                    let value = self.eval_resolved_expr(&expr, true)?;
                     let expr_type = expr.output_type(self.type_info());
                     let term = self.extract(value, &mut termdag, &expr_type).1;
                     use std::io::Write;
@@ -1469,6 +1477,8 @@ impl EGraph {
         Ok(program)
     }
 
+    /// Run a program, represented as an AST.
+    /// Return a list of messages.
     pub fn run_program(&mut self, program: Vec<UnresolvedCommand>) -> Result<Vec<String>, Error> {
         let should_run = true;
 
