@@ -1,6 +1,6 @@
 use crate::{
     ast::CoreActions,
-    typecheck::{UnresolvedCoreRule, ValueEq},
+    typecheck::{CoreRule, ValueEq},
     *,
 };
 
@@ -339,7 +339,7 @@ impl TypeInfo {
 
         let mut problem = Problem::default();
         problem.add_rule(
-            &UnresolvedCoreRule {
+            &CoreRule {
                 body: query,
                 head: CoreActions(actions),
             },

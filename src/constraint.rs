@@ -4,9 +4,7 @@ use crate::{
         ResolvedExpr, ResolvedFact, ResolvedVar,
     },
     sort::I64Sort,
-    typecheck::{
-        Atom, AtomTerm, GenericAtomTerm, Query, ResolvedCall, SymbolOrEq, UnresolvedCoreRule,
-    },
+    typecheck::{Atom, AtomTerm, CoreRule, GenericAtomTerm, Query, ResolvedCall, SymbolOrEq},
     typechecking::TypeError,
     util::{FreshGen, HashMap, HashSet, SymbolGen},
     ArcSort, Symbol, TypeInfo,
@@ -432,10 +430,10 @@ impl Problem<AtomTerm, ArcSort> {
 
     pub(crate) fn add_rule(
         &mut self,
-        rule: &UnresolvedCoreRule,
+        rule: &CoreRule,
         typeinfo: &TypeInfo,
     ) -> Result<(), TypeError> {
-        let UnresolvedCoreRule { head, body } = rule;
+        let CoreRule { head, body } = rule;
         self.add_query(body, typeinfo)?;
         self.add_actions(head, typeinfo)?;
         Ok(())

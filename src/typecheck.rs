@@ -30,10 +30,8 @@ pub struct GenericCoreRule<BodyF, HeadF, Leaf> {
     pub head: CoreActions<HeadF, Leaf>,
 }
 
-pub type CoreRule<Head, Leaf> = GenericCoreRule<Head, Head, Leaf>;
-
-pub(crate) type UnresolvedCoreRule = GenericCoreRule<SymbolOrEq, Symbol, Symbol>;
-pub(crate) type ResolvedCoreRule = CoreRule<ResolvedCall, ResolvedVar>;
+pub(crate) type CoreRule = GenericCoreRule<SymbolOrEq, Symbol, Symbol>;
+pub(crate) type ResolvedCoreRule = GenericCoreRule<ResolvedCall, ResolvedCall, ResolvedVar>;
 
 #[derive(Debug, Clone)]
 pub(crate) struct SpecializedPrimitive {
@@ -193,7 +191,7 @@ where
         typeinfo: &TypeInfo,
         fresh_gen: impl FreshGen<Head, Leaf>,
         value_eq: impl Fn(&GenericAtomTerm<Leaf>, &GenericAtomTerm<Leaf>) -> Head,
-    ) -> Result<CoreRule<Head, Leaf>, TypeError>
+    ) -> Result<GenericCoreRule<Head, Head, Leaf>, TypeError>
     where
         Leaf: SymbolLike,
     {
@@ -435,7 +433,7 @@ where
         self,
         // Users need to pass in a substitute for equality constraints.
         value_eq: impl Fn(&GenericAtomTerm<Leaf>, &GenericAtomTerm<Leaf>) -> Head,
-    ) -> CoreRule<Head, Leaf> {
+    ) -> GenericCoreRule<Head, Head, Leaf> {
         let mut result_rule = self;
         loop {
             let mut to_subst = None;
