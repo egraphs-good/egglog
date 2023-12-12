@@ -46,6 +46,7 @@ impl Display for Id {
 pub type NCommand = GenericNCommand<Symbol, Symbol, ()>;
 pub(crate) type ResolvedNCommand = GenericNCommand<ResolvedCall, ResolvedVar, ()>;
 
+#[allow(clippy::type_complexity)]
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum GenericNCommand<Head, Leaf, Ann> {
     SetOption {
@@ -228,6 +229,7 @@ pub type Command = GenericCommand<Symbol, Symbol>;
 /// A [`Command`] is the top-level construct in egglog.
 /// It includes defining rules, declaring functions,
 /// adding to tables, and running rules (via a [`Schedule`]).
+#[allow(clippy::type_complexity)]
 #[derive(Debug, Clone)]
 pub enum GenericCommand<Head, Leaf> {
     /// Egglog supports several *experimental* options
@@ -832,6 +834,7 @@ pub enum GenericFact<Head, Leaf, Ann> {
 
 pub struct Facts<Head, Leaf, Ann>(pub Vec<GenericFact<Head, Leaf, Ann>>);
 
+#[allow(clippy::type_complexity)]
 impl<Head, Leaf, Ann> Facts<Head, Leaf, Ann>
 where
     Head: Clone,
@@ -952,6 +955,7 @@ where
 }
 
 pub type Action = GenericAction<Symbol, Symbol, ()>;
+pub(crate) type MappedAction = GenericAction<(Symbol, Symbol), Symbol, ()>;
 pub(crate) type ResolvedAction = GenericAction<ResolvedCall, ResolvedVar, ()>;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -1010,6 +1014,7 @@ pub enum GenericAction<Head, Leaf, Ann> {
 
 pub struct Actions<Head, Leaf>(pub Vec<GenericAction<Head, Leaf, ()>>);
 
+#[allow(clippy::type_complexity)]
 impl<Head, Leaf> Actions<Head, Leaf>
 where
     Head: Clone,
@@ -1418,6 +1423,7 @@ impl<Head, Leaf: Clone, Ann> GenericExpr<(Head, Leaf), Leaf, Ann> {
     }
 }
 
+#[allow(clippy::type_complexity)]
 impl<Head: Clone, Leaf: Clone, Ann: Clone> GenericExpr<Head, Leaf, Ann> {
     fn to_query(
         &self,

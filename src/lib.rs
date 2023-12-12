@@ -1114,7 +1114,7 @@ impl EGraph {
             &mut Default::default(),
             &mut ResolvedGen::new(),
         )?;
-        let target = mapped_expr.get_corresponding_var_or_lit(&self.type_info());
+        let target = mapped_expr.get_corresponding_var_or_lit(self.type_info());
         let program = self
             .compile_expr(&Default::default(), &actions, &target)
             .map_err(Error::TypeErrors)?;

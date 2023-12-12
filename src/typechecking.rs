@@ -333,7 +333,7 @@ impl TypeInfo {
         constraints.extend(query.get_constraints(self)?);
 
         let mut binding = query.get_vars();
-        let (actions, mapped_action): (Vec<NormAction>, Vec<GenericAction<(Symbol, Symbol), Symbol, ()>>) =
+        let (actions, mapped_action): (Vec<NormAction>, Vec<MappedAction>) =
             // TODO: get rid of this clone by using Actions in the first place
             Actions(head.clone()).to_norm_actions(self, &mut binding, &mut fresh_gen)?;
 
@@ -378,10 +378,8 @@ impl TypeInfo {
     ) -> Result<Vec<ResolvedAction>, TypeError> {
         let mut binding_set = binding.keys().cloned().collect::<IndexSet<_>>();
         let mut fresh_gen = SymbolGen::new();
-        let (actions, mapped_action): (
-            Vec<NormAction>,
-            Vec<GenericAction<(Symbol, Symbol), Symbol, ()>>,
-        ) = Actions(actions.to_vec()).to_norm_actions(self, &mut binding_set, &mut fresh_gen)?;
+        let (actions, mapped_action): (Vec<NormAction>, Vec<MappedAction>) =
+            Actions(actions.to_vec()).to_norm_actions(self, &mut binding_set, &mut fresh_gen)?;
         let mut problem = Problem::default();
 
         // add actions to problem
