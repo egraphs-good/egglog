@@ -5,9 +5,11 @@ PRs are required to keep this in sync with the implementation.
 
 Things to do:
 - Add typechecking
-- Add something about lattices and why egglog is well-behaved in some way
+- Running rules, schedules
 - Add rebuilding
 - Add seminaiive
+- Handle globals
+- Add something about lattices and why egglog is well-behaved when using them
 
 ## Global State
 
@@ -54,11 +56,11 @@ Queries have the following grammar:
 ```
 query ::= (<constraint> ...)
 
-fact ::= (= <expr> <expr>)
-       | <expr>
-expr ::= <primitive>
-       | (<constructor> <expr> ...)
-       | (<function> <expr> ...)
+fact ::= (= <qexpr> <qexpr>)
+       | <qexpr>
+qexpr ::= <primitive>
+       | (<constructor> <qexpr> ...)
+       | (<function> <qexpr> ...)
        | <variable>
 ```
 
@@ -101,11 +103,8 @@ t1 = t2 in C
 valid(B, S, (= e1 e2))
 
 binds(B, S, e, t)
------------------------------------------------------------
+----------------------------------------------
 valid(B, S, e) ;; the constraint e is valid
-
-
-
 
 
 e is a primitive
@@ -135,26 +134,55 @@ binds(B, S, (f e1 ... eN), o)
 
 Let `A` be the set of every substitution `S` such that `valid((T, D, C, E, F), S, query)`.
 When running `query`, egglog returns a set of substitutions $R \subseteq A$ such that:
-- For all $S$ in $A$:
-- Exists $S'$ in $R$ such that:
-- For all assignments $(v, t) \in S$:
-- Exists $(v, t') \in S$ such that $t = t' in C$.
+
+- $\forall S \in A, \exists S' \in R$ such that:
+- $\forall (v, t) \in S, \exists (v, t') \in S', (t = t') \in C$
 
 Intuitively, egglog returns all substitutions that are valid for the query
 modulo equality in the congruence closure.
+Since users of egglog can't distinguish terms
+that are equal in the congruence closure,
+$S'$ represents $S$ soundly.
 
-## Running Rules
+## Actions
 
-Rules are run using schedules.
-A schedule runs rulesets.
+Actions have the following grammar:
+```
+<action> ::= (<stmt> ...)
 
-When running a ruleset, egglog runs all queries from that ruleset first, before applying all actions the result.
+<stmt> ::= <aexpr>
+         | (let <symbol> <aexpr>)
+         | (union <aexpr> <aexpr>)
+         | (set (<function> <aexpr> ...) <aexpr>)
+
+;; importantly, aexprs do not contain
+;; functions (while qexprs do)
+aexpr ::= <primitive>
+       | (<constructor> <aexpr> ...)
+       | <variable>
+```
 
 
-## Action
+## Executing Actions
 
-Actions 
+Given a substitution `S`, an action adds new
+terms and tuples to the database.
+Let `evaluated(B, S, A)` denote that action `A`
+evaluates with substitution `S` to a new database `B`.
+We also define a helper `evaluated_expr(B, S, stmt)` to denote that statement `stmt` evaluates with substitution `S` to database `B`.
 
+
+```
+----------------------
+evaluated(B, S, ())
+
+
+
+
+
+
+
+```
 
 
 
