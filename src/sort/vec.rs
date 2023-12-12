@@ -41,9 +41,9 @@ impl VecSort {
     pub fn make_sort(
         typeinfo: &mut TypeInfo,
         name: Symbol,
-        args: &[UnresolvedExpr],
+        args: &[Expr],
     ) -> Result<ArcSort, TypeError> {
-        if let [Expr::Var((), e)] = args {
+        if let [GenericExpr::Var((), e)] = args {
             let e = typeinfo.sorts.get(e).ok_or(TypeError::UndefinedSort(*e))?;
 
             if e.is_eq_container_sort() {
@@ -165,7 +165,7 @@ impl Sort for VecSort {
         })
     }
 
-    fn make_expr(&self, egraph: &EGraph, value: Value) -> (Cost, UnresolvedExpr) {
+    fn make_expr(&self, egraph: &EGraph, value: Value) -> (Cost, Expr) {
         let mut termdag = TermDag::default();
         let extractor = Extractor::new(egraph, &mut termdag);
         self.extract_expr(egraph, value, &extractor, &mut termdag)
@@ -178,12 +178,12 @@ impl Sort for VecSort {
         value: Value,
         extractor: &Extractor,
         termdag: &mut TermDag,
-    ) -> Option<(Cost, UnresolvedExpr)> {
+    ) -> Option<(Cost, Expr)> {
         let vec = ValueVec::load(self, &value);
         let mut cost = 0usize;
 
         if vec.is_empty() {
-            Some((cost, Expr::call("vec-empty", [])))
+            Some((cost, GenericExpr::call("vec-empty", [])))
         } else {
             let elems = vec
                 .into_iter()
@@ -194,7 +194,7 @@ impl Sort for VecSort {
                 })
                 .collect::<Option<Vec<_>>>()?;
 
-            Some((cost, Expr::call("vec-of", elems)))
+            Some((cost, GenericExpr::call("vec-of", elems)))
         }
     }
 }

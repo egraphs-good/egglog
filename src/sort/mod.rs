@@ -73,7 +73,7 @@ pub trait Sort: Any + Send + Sync + Debug {
     }
 
     /// Extracting an expression (with smallest cost) out of a primitive value
-    fn make_expr(&self, egraph: &EGraph, value: Value) -> (Cost, UnresolvedExpr);
+    fn make_expr(&self, egraph: &EGraph, value: Value) -> (Cost, Expr);
 
     /// For values like EqSort containers, to make/extract an expression from it
     /// requires an extractor. Moreover, the extraction may be unsuccessful if
@@ -86,7 +86,7 @@ pub trait Sort: Any + Send + Sync + Debug {
         value: Value,
         _extractor: &Extractor,
         _termdag: &mut TermDag,
-    ) -> Option<(Cost, UnresolvedExpr)> {
+    ) -> Option<(Cost, Expr)> {
         Some(self.make_expr(egraph, value))
     }
 }
@@ -120,7 +120,7 @@ impl Sort for EqSort {
         }
     }
 
-    fn make_expr(&self, _egraph: &EGraph, _value: Value) -> (Cost, UnresolvedExpr) {
+    fn make_expr(&self, _egraph: &EGraph, _value: Value) -> (Cost, Expr) {
         unimplemented!("No make_expr for EqSort {}", self.name)
     }
 }
@@ -144,4 +144,4 @@ impl<T: IntoSort> IntoSort for Option<T> {
 }
 
 pub type PreSort =
-    fn(typeinfo: &mut TypeInfo, name: Symbol, params: &[UnresolvedExpr]) -> Result<ArcSort, TypeError>;
+    fn(typeinfo: &mut TypeInfo, name: Symbol, params: &[Expr]) -> Result<ArcSort, TypeError>;

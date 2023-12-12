@@ -309,7 +309,7 @@ impl TypeInfo {
     pub fn declare_sort(
         &mut self,
         name: impl Into<Symbol>,
-        presort_and_args: &Option<(Symbol, Vec<UnresolvedExpr>)>,
+        presort_and_args: &Option<(Symbol, Vec<Expr>)>,
     ) -> Result<(), TypeError> {
         let name = name.into();
         if self.func_types.contains_key(&name) {
@@ -405,7 +405,7 @@ impl TypeInfo {
 
     fn typecheck_expr(
         &self,
-        expr: &UnresolvedExpr,
+        expr: &Expr,
         binding: &IndexMap<Symbol, ArcSort>,
     ) -> Result<ResolvedExpr, TypeError> {
         let action = Action::Let((), "$$result".into(), expr.clone());
@@ -456,16 +456,13 @@ impl TypeInfo {
 #[derive(Debug, Clone, Error)]
 pub enum TypeError {
     #[error("Arity mismatch, expected {expected} args: {expr}")]
-    Arity {
-        expr: UnresolvedExpr,
-        expected: usize,
-    },
+    Arity { expr: Expr, expected: usize },
     #[error(
         "Type mismatch: expr = {expr}, expected = {}, actual = {}, reason: {reason}",
         .expected.name(), .actual.name(),
     )]
     Mismatch {
-        expr: UnresolvedExpr,
+        expr: Expr,
         expected: ArcSort,
         actual: ArcSort,
         reason: String,
@@ -501,7 +498,7 @@ pub enum TypeError {
     #[error("Cannot type a variable as unit: {0}")]
     UnitVar(Symbol),
     #[error("Failed to infer a type for: {0}")]
-    InferenceFailure(UnresolvedExpr),
+    InferenceFailure(Expr),
     #[error("No matching primitive for: ({op} {})", ListDisplay(.inputs, " "))]
     NoMatchingPrimitive { op: Symbol, inputs: Vec<Symbol> },
     #[error("Variable {0} was already defined")]

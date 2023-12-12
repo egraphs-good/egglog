@@ -34,11 +34,18 @@ fn desugar_rewrite(
         ruleset,
         name,
         rule: Rule {
-            body: [Fact::Eq(vec![Expr::Var((), var), rewrite.lhs.clone()])]
-                .into_iter()
-                .chain(rewrite.conditions.clone())
-                .collect(),
-            head: vec![Action::Union((), Expr::Var((), var), rewrite.rhs.clone())],
+            body: [Fact::Eq(vec![
+                GenericExpr::Var((), var),
+                rewrite.lhs.clone(),
+            ])]
+            .into_iter()
+            .chain(rewrite.conditions.clone())
+            .collect(),
+            head: vec![Action::Union(
+                (),
+                GenericExpr::Var((), var),
+                rewrite.rhs.clone(),
+            )],
         },
     }]
 }
@@ -72,21 +79,21 @@ fn add_semi_naive_rule(desugar: &mut Desugar, rule: UnresolvedRule) -> Option<Un
         match head_slice {
             Action::Set(_ann, _, _, expr) => {
                 var_set.extend(expr.vars());
-                if let Expr::Call((), _, _) = expr {
+                if let GenericExpr::Call((), _, _) = expr {
                     add_new_rule = true;
 
                     let fresh_symbol = desugar.get_fresh();
-                    let fresh_var = Expr::Var((), fresh_symbol);
+                    let fresh_var = GenericExpr::Var((), fresh_symbol);
                     let expr = std::mem::replace(expr, fresh_var.clone());
                     new_head_atoms.push(Fact::Eq(vec![fresh_var, expr]));
                 };
             }
             Action::Let(_ann, symbol, expr) if var_set.contains(symbol) => {
                 var_set.extend(expr.vars());
-                if let Expr::Call((), _, _) = expr {
+                if let GenericExpr::Call((), _, _) = expr {
                     add_new_rule = true;
 
-                    let var = Expr::Var((), *symbol);
+                    let var = GenericExpr::Var((), *symbol);
                     new_head_atoms.push(Fact::Eq(vec![var, expr.clone()]));
                 }
             }
@@ -145,7 +152,7 @@ impl Default for Desugar {
 
 fn desugar_simplify(
     desugar: &mut Desugar,
-    expr: &UnresolvedExpr,
+    expr: &Expr,
     schedule: &UnresolvedSchedule,
 ) -> Vec<UnresolvedNCommand> {
     let mut res = vec![NCommand::Push(1)];
@@ -156,7 +163,7 @@ fn desugar_simplify(
         desugar_command(
             Command::QueryExtract {
                 variants: 0,
-                expr: Expr::Var((), lhs),
+                expr: GenericExpr::Var((), lhs),
             },
             desugar,
             false,
@@ -172,7 +179,7 @@ fn desugar_simplify(
 pub(crate) fn desugar_calc(
     desugar: &mut Desugar,
     idents: Vec<IdentSort>,
-    exprs: Vec<UnresolvedExpr>,
+    exprs: Vec<Expr>,
     seminaive_transform: bool,
 ) -> Result<Vec<UnresolvedNCommand>, Error> {
     let mut res = vec![];
@@ -292,7 +299,7 @@ pub(crate) fn desugar_command(
         Command::QueryExtract { variants, expr } => {
             let fresh = desugar.get_fresh();
             let fresh_ruleset = desugar.get_fresh();
-            let desugaring = if let Expr::Var((), v) = expr {
+            let desugaring = if let GenericExpr::Var((), v) = expr {
                 format!("(extract {v} {variants})")
             } else {
                 format!(
@@ -425,7 +432,7 @@ impl Desugar {
             NCommand::NormAction(UnresolvedAction::Let(
                 (),
                 name,
-                Expr::Call((), fresh, vec![]),
+                GenericExpr::Call((), fresh, vec![]),
             )),
         ]
     }

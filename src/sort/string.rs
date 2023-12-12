@@ -24,10 +24,10 @@ impl Sort for StringSort {
         self
     }
 
-    fn make_expr(&self, _egraph: &EGraph, value: Value) -> (Cost, UnresolvedExpr) {
+    fn make_expr(&self, _egraph: &EGraph, value: Value) -> (Cost, Expr) {
         assert!(value.tag == self.name);
         let sym = Symbol::from(NonZeroU32::new(value.bits as _).unwrap());
-        (1, Expr::Lit((), Literal::String(sym)))
+        (1, GenericExpr::Lit((), Literal::String(sym)))
     }
 
     fn register_primitives(self: Arc<Self>, typeinfo: &mut TypeInfo) {

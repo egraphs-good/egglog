@@ -230,11 +230,11 @@ pub enum GenericAtomTerm<Leaf> {
 pub type AtomTerm = GenericAtomTerm<Symbol>;
 
 impl AtomTerm {
-    pub fn to_expr(&self) -> UnresolvedExpr {
+    pub fn to_expr(&self) -> Expr {
         match self {
-            AtomTerm::Var(v) => Expr::Var((), *v),
-            AtomTerm::Literal(l) => Expr::Lit((), l.clone()),
-            AtomTerm::Global(v) => Expr::Var((), *v),
+            AtomTerm::Var(v) => GenericExpr::Var((), *v),
+            AtomTerm::Literal(l) => GenericExpr::Lit((), l.clone()),
+            AtomTerm::Global(v) => GenericExpr::Var((), *v),
         }
     }
 }
@@ -383,9 +383,9 @@ where
     }
 }
 impl Atom<Symbol> {
-    pub(crate) fn to_expr(&self) -> UnresolvedExpr {
+    pub(crate) fn to_expr(&self) -> Expr {
         let n = self.args.len();
-        Expr::Call(
+        GenericExpr::Call(
             (),
             self.head,
             self.args[0..n - 1]
@@ -790,14 +790,14 @@ impl EGraph {
                                 value
                             }
                             _ => {
-                                return Err(Error::NotFoundError(NotFoundError(Expr::Var(
+                                return Err(Error::NotFoundError(NotFoundError(GenericExpr::Var(
                                     (),
                                     format!("No value found for {f} {:?}", values).into(),
                                 ))))
                             }
                         }
                     } else {
-                        return Err(Error::NotFoundError(NotFoundError(Expr::Var(
+                        return Err(Error::NotFoundError(NotFoundError(GenericExpr::Var(
                             (),
                             format!("No value found for {f} {:?}", values).into(),
                         ))));

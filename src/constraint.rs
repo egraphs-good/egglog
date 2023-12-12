@@ -1,7 +1,7 @@
 use crate::{
     ast::{
-        Action, CoreActions, Expr, Fact, NormAction, ResolvedAction, ResolvedExpr, ResolvedFact,
-        ResolvedVar,
+        Action, CoreActions, Fact, GenericExpr, NormAction, ResolvedAction, ResolvedExpr,
+        ResolvedFact, ResolvedVar,
     },
     sort::I64Sort,
     typecheck::{
@@ -217,17 +217,17 @@ where
 impl Assignment<AtomTerm, ArcSort> {
     pub(crate) fn annotate_expr(
         &self,
-        expr: &Expr<(Symbol, Symbol), Symbol, ()>,
+        expr: &GenericExpr<(Symbol, Symbol), Symbol, ()>,
         typeinfo: &TypeInfo,
     ) -> ResolvedExpr {
         match &expr {
-            Expr::Lit((), literal) => Expr::Lit((), literal.clone()),
-            Expr::Var((), var) => {
+            GenericExpr::Lit((), literal) => GenericExpr::Lit((), literal.clone()),
+            GenericExpr::Var((), var) => {
                 let ty = typeinfo
                     .lookup_global(var)
                     .or_else(|| self.get(&GenericAtomTerm::Var(*var)).cloned())
                     .expect("All variables should be assigned before annotation");
-                Expr::Var(
+                GenericExpr::Var(
                     (),
                     ResolvedVar {
                         name: *var,
@@ -235,7 +235,7 @@ impl Assignment<AtomTerm, ArcSort> {
                     },
                 )
             }
-            Expr::Call((), (head, corresponding_var), args) => {
+            GenericExpr::Call((), (head, corresponding_var), args) => {
                 // get the resolved call using resolve_rule
                 let args: Vec<_> = args
                     .iter()
@@ -251,7 +251,7 @@ impl Assignment<AtomTerm, ArcSort> {
                     ))
                     .collect();
                 let resolved_call = ResolvedCall::from_resolution(head, &types, typeinfo);
-                Expr::Call((), resolved_call, args)
+                GenericExpr::Call((), resolved_call, args)
             }
         }
     }

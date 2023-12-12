@@ -461,7 +461,7 @@ impl Default for EGraph {
 
 #[derive(Debug, Error)]
 #[error("Not found: {0}")]
-pub struct NotFoundError(UnresolvedExpr);
+pub struct NotFoundError(Expr);
 
 impl EGraph {
     /// Use the rust backend implimentation of eqsat,
@@ -1094,6 +1094,10 @@ impl EGraph {
         Ok(())
     }
 
+    pub fn eval_expr(&mut self, expr: &Expr) -> Result<Value, Error> {
+        let command = Command::Action(Action::Expr(expr.clone()));
+    }
+
     // TODO make a public version of eval_expr that makes a command,
     // then returns the value at the end.
     fn eval_expr(&mut self, expr: &ResolvedExpr, make_defaults: bool) -> Result<Value, Error> {
@@ -1124,21 +1128,21 @@ impl EGraph {
                 self.proofs_enabled = true;
             }
             "interactive_mode" => {
-                if let Expr::Lit(_ann, Literal::Int(i)) = value {
+                if let GenericExpr::Lit(_ann, Literal::Int(i)) = value {
                     self.interactive_mode = i != 0;
                 } else {
                     panic!("interactive_mode must be an integer");
                 }
             }
             "match_limit" => {
-                if let Expr::Lit(_ann, Literal::Int(i)) = value {
+                if let GenericExpr::Lit(_ann, Literal::Int(i)) = value {
                     self.match_limit = i as usize;
                 } else {
                     panic!("match_limit must be an integer");
                 }
             }
             "node_limit" => {
-                if let Expr::Lit(_ann, Literal::Int(i)) = value {
+                if let GenericExpr::Lit(_ann, Literal::Int(i)) = value {
                     self.node_limit = i as usize;
                 } else {
                     panic!("node_limit must be an integer");
@@ -1352,19 +1356,19 @@ impl EGraph {
                 continue;
             }
 
-            let parse = |s: &str| -> UnresolvedExpr {
+            let parse = |s: &str| -> Expr {
                 if let Ok(i) = s.parse() {
-                    Expr::Lit((), Literal::Int(i))
+                    GenericExpr::Lit((), Literal::Int(i))
                 } else {
-                    Expr::Lit((), Literal::String(s.into()))
+                    GenericExpr::Lit((), Literal::String(s.into()))
                 }
             };
 
-            let mut exprs: Vec<UnresolvedExpr> = str_buf.iter().map(|&s| parse(s)).collect();
+            let mut exprs: Vec<Expr> = str_buf.iter().map(|&s| parse(s)).collect();
 
             actions.push(
                 if function_type.is_datatype || function_type.output.name() == UNIT_SYM.into() {
-                    Action::Expr((), Expr::Call((), func_name, exprs))
+                    Action::Expr((), GenericExpr::Call((), func_name, exprs))
                 } else {
                     let out = exprs.pop().unwrap();
                     Action::Set((), func_name, exprs, out)

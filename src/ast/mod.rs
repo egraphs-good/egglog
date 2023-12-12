@@ -50,9 +50,12 @@ pub(crate) type ResolvedNCommand = NCommand<ResolvedCall, ResolvedVar, ()>;
 pub enum NCommand<Head, Leaf, Ann> {
     SetOption {
         name: Symbol,
-        value: Expr<Head, Leaf, Ann>,
+        value: GenericExpr<Head, Leaf, Ann>,
     },
-    Sort(Symbol, Option<(Symbol, Vec<Expr<Symbol, Symbol, Ann>>)>),
+    Sort(
+        Symbol,
+        Option<(Symbol, Vec<GenericExpr<Symbol, Symbol, Ann>>)>,
+    ),
     Function(FunctionDecl<Head, Leaf, Ann>),
     AddRuleset(Symbol),
     NormRule {
@@ -69,7 +72,7 @@ pub enum NCommand<Head, Leaf, Ann> {
     PrintSize(Option<Symbol>),
     Output {
         file: String,
-        exprs: Vec<Expr<Head, Leaf, Ann>>,
+        exprs: Vec<GenericExpr<Head, Leaf, Ann>>,
     },
     Push(usize),
     Pop(usize),
@@ -240,7 +243,7 @@ pub enum Command<Head, Leaf> {
     /// tool to know when each command has finished running.
     SetOption {
         name: Symbol,
-        value: Expr<Head, Leaf, ()>,
+        value: GenericExpr<Head, Leaf, ()>,
     },
     /// Declare a user-defined datatype.
     /// Datatypes can be unioned with [`Action::Union`] either
@@ -306,7 +309,10 @@ pub enum Command<Head, Leaf> {
     /// ```
     ///
     /// Now `MathVec` can be used as an input or output sort.
-    Sort(Symbol, Option<(Symbol, Vec<Expr<Symbol, Symbol, ()>>)>),
+    Sort(
+        Symbol,
+        Option<(Symbol, Vec<GenericExpr<Symbol, Symbol, ()>>)>,
+    ),
     /// Declare an egglog function, which is a database table with a
     /// a functional dependency (also called a primary key) on its inputs to one output.
     ///
@@ -481,11 +487,11 @@ pub enum Command<Head, Leaf> {
     PrintOverallStatistics,
     // TODO provide simplify docs
     Simplify {
-        expr: Expr<Head, Leaf, ()>,
+        expr: GenericExpr<Head, Leaf, ()>,
         schedule: Schedule<Head, Leaf, ()>,
     },
     // TODO provide calc docs
-    Calc(Vec<IdentSort>, Vec<Expr<Head, Leaf, ()>>),
+    Calc(Vec<IdentSort>, Vec<GenericExpr<Head, Leaf, ()>>),
     /// The `query-extract` command runs a query,
     /// extracting the result for each match that it finds.
     /// For a simpler extraction command, use [`Action::Extract`] instead.
@@ -513,7 +519,7 @@ pub enum Command<Head, Leaf> {
     /// function.
     QueryExtract {
         variants: usize,
-        expr: Expr<Head, Leaf, ()>,
+        expr: GenericExpr<Head, Leaf, ()>,
     },
     /// The `check` command checks that the given facts
     /// match at least once in the current database.
@@ -556,7 +562,7 @@ pub enum Command<Head, Leaf> {
     /// Extract and output a set of expressions to a file.
     Output {
         file: String,
-        exprs: Vec<Expr<Head, Leaf, ()>>,
+        exprs: Vec<GenericExpr<Head, Leaf, ()>>,
     },
     /// `push` the current egraph `n` times so that it is saved.
     /// Later, the current database and rules can be restored using `pop`.
@@ -692,8 +698,8 @@ pub(crate) type ResolvedFunctionDecl = FunctionDecl<ResolvedCall, ResolvedVar, (
 pub struct FunctionDecl<Head, Leaf, Ann> {
     pub name: Symbol,
     pub schema: Schema,
-    pub default: Option<Expr<Head, Leaf, Ann>>,
-    pub merge: Option<Expr<Head, Leaf, Ann>>,
+    pub default: Option<GenericExpr<Head, Leaf, Ann>>,
+    pub merge: Option<GenericExpr<Head, Leaf, Ann>>,
     pub merge_action: Vec<Action<Head, Leaf, Ann>>,
     pub cost: Option<usize>,
     pub unextractable: bool,
@@ -748,7 +754,7 @@ impl UnresolvedFunctionDecl {
             },
             merge: None,
             merge_action: vec![],
-            default: Some(Expr::Lit((), Literal::Unit)),
+            default: Some(GenericExpr::Lit((), Literal::Unit)),
             cost: None,
             unextractable: false,
         }
@@ -816,8 +822,8 @@ pub(crate) type ResolvedFact = Fact<ResolvedCall, ResolvedVar, ()>;
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Fact<Head, Leaf, Ann> {
     /// Must be at least two things in an eq fact
-    Eq(Vec<Expr<Head, Leaf, Ann>>),
-    Fact(Expr<Head, Leaf, Ann>),
+    Eq(Vec<GenericExpr<Head, Leaf, Ann>>),
+    Fact(GenericExpr<Head, Leaf, Ann>),
 }
 
 pub struct Facts<Head, Leaf, Ann>(pub Vec<Fact<Head, Leaf, Ann>>);
@@ -898,7 +904,7 @@ where
 {
     pub(crate) fn map_exprs<Head2, Leaf2>(
         &self,
-        f: &mut impl FnMut(&Expr<Head, Leaf, Ann>) -> Expr<Head2, Leaf2, Ann>,
+        f: &mut impl FnMut(&GenericExpr<Head, Leaf, Ann>) -> GenericExpr<Head2, Leaf2, Ann>,
     ) -> Fact<Head2, Leaf2, Ann> {
         match self {
             Fact::Eq(exprs) => Fact::Eq(exprs.iter().map(f).collect()),
@@ -908,7 +914,7 @@ where
 
     pub(crate) fn subst<Leaf2, Head2>(
         &self,
-        subst_leaf: &mut impl FnMut(&Leaf) -> Expr<Head2, Leaf2, Ann>,
+        subst_leaf: &mut impl FnMut(&Leaf) -> GenericExpr<Head2, Leaf2, Ann>,
         subst_head: &mut impl FnMut(&Head) -> Head2,
     ) -> Fact<Head2, Leaf2, Ann> {
         self.map_exprs(&mut |e| e.subst(subst_leaf, subst_head))
@@ -925,7 +931,7 @@ where
         Leaf: SymbolLike,
         Head: SymbolLike,
     {
-        self.subst(&mut |v| Expr::Var((), v.to_symbol()), &mut |h| {
+        self.subst(&mut |v| GenericExpr::Var((), v.to_symbol()), &mut |h| {
             h.to_symbol()
         })
     }
@@ -949,15 +955,20 @@ pub enum Action<Head, Leaf, Ann> {
     /// Bind a variable to a particular datatype or primitive.
     /// At the top level (in a [`Command::Action`]), this defines a global variable.
     /// In a [`Command::Rule`], this defines a local variable in the actions.
-    Let(Ann, Leaf, Expr<Head, Leaf, Ann>),
+    Let(Ann, Leaf, GenericExpr<Head, Leaf, Ann>),
     /// `set` a function to a particular result.
     /// `set` should not be used on datatypes-
     /// instead, use `union`.
-    Set(Ann, Head, Vec<Expr<Head, Leaf, Ann>>, Expr<Head, Leaf, Ann>),
+    Set(
+        Ann,
+        Head,
+        Vec<GenericExpr<Head, Leaf, Ann>>,
+        GenericExpr<Head, Leaf, Ann>,
+    ),
     /// `delete` an entry from a function.
     /// Be wary! Only delete entries that are subsumed in some way or
     /// guaranteed to be not useful.
-    Delete(Ann, Head, Vec<Expr<Head, Leaf, Ann>>),
+    Delete(Ann, Head, Vec<GenericExpr<Head, Leaf, Ann>>),
     /// `union` two datatypes, making them equal
     /// in the implicit, global equality relation
     /// of egglog.
@@ -970,7 +981,11 @@ pub enum Action<Head, Leaf, Ann> {
     /// (extract (Num 1)); Extracts Num 1
     /// (extract (Num 2)); Extracts Num 1
     /// ```
-    Union(Ann, Expr<Head, Leaf, Ann>, Expr<Head, Leaf, Ann>),
+    Union(
+        Ann,
+        GenericExpr<Head, Leaf, Ann>,
+        GenericExpr<Head, Leaf, Ann>,
+    ),
     /// `extract` a datatype from the egraph, choosing
     /// the smallest representative.
     /// By default, each constructor costs 1 to extract
@@ -979,9 +994,13 @@ pub enum Action<Head, Leaf, Ann> {
     /// The second argument is the number of variants to
     /// extract, picking different terms in the
     /// same equivalence class.
-    Extract(Ann, Expr<Head, Leaf, Ann>, Expr<Head, Leaf, Ann>),
+    Extract(
+        Ann,
+        GenericExpr<Head, Leaf, Ann>,
+        GenericExpr<Head, Leaf, Ann>,
+    ),
     Panic(Ann, String),
-    Expr(Ann, Expr<Head, Leaf, Ann>),
+    Expr(Ann, GenericExpr<Head, Leaf, Ann>),
     // If(Expr, Action, Action),
 }
 
@@ -1162,7 +1181,7 @@ where
 {
     pub fn map_exprs(
         &self,
-        f: &mut impl FnMut(&Expr<Head, Leaf, Ann>) -> Expr<Head, Leaf, Ann>,
+        f: &mut impl FnMut(&GenericExpr<Head, Leaf, Ann>) -> GenericExpr<Head, Leaf, Ann>,
     ) -> Self {
         match self {
             Action::Let(ann, lhs, rhs) => Action::Let(ann.clone(), lhs.clone(), f(rhs)),
@@ -1187,7 +1206,7 @@ where
         }
     }
 
-    pub fn subst(&self, subst: &mut impl FnMut(&Leaf) -> Expr<Head, Leaf, Ann>) -> Self {
+    pub fn subst(&self, subst: &mut impl FnMut(&Leaf) -> GenericExpr<Head, Leaf, Ann>) -> Self {
         self.map_exprs(&mut |e| e.subst_leaf(subst))
     }
 
@@ -1324,8 +1343,8 @@ type UnresolvedRewrite = Rewrite<Symbol, Symbol, ()>;
 
 #[derive(Clone, Debug)]
 pub struct Rewrite<Head, Leaf, Ann> {
-    pub lhs: Expr<Head, Leaf, Ann>,
-    pub rhs: Expr<Head, Leaf, Ann>,
+    pub lhs: GenericExpr<Head, Leaf, Ann>,
+    pub rhs: GenericExpr<Head, Leaf, Ann>,
     pub conditions: Vec<Fact<Head, Leaf, Ann>>,
 }
 
@@ -1363,7 +1382,7 @@ impl<Head: Display, Leaf: Display, Ann> Display for Rewrite<Head, Leaf, Ann> {
     }
 }
 
-impl<Head, Leaf: Clone, Ann> Expr<(Head, Leaf), Leaf, Ann> {
+impl<Head, Leaf: Clone, Ann> GenericExpr<(Head, Leaf), Leaf, Ann> {
     pub(crate) fn get_corresponding_var_or_lit(&self, typeinfo: &TypeInfo) -> GenericAtomTerm<Leaf>
     where
         Leaf: SymbolLike,
@@ -1372,35 +1391,35 @@ impl<Head, Leaf: Clone, Ann> Expr<(Head, Leaf), Leaf, Ann> {
         // This is error-prone and the complexities can be avoided by treating globals
         // as nullary functions.
         match self {
-            Expr::Var(_ann, v) => {
+            GenericExpr::Var(_ann, v) => {
                 if typeinfo.is_global(v.to_symbol()) {
                     GenericAtomTerm::Global(v.clone())
                 } else {
                     GenericAtomTerm::Var(v.clone())
                 }
             }
-            Expr::Lit(_ann, lit) => GenericAtomTerm::Literal(lit.clone()),
-            Expr::Call(_ann, head, _) => GenericAtomTerm::Var(head.1.clone()),
+            GenericExpr::Lit(_ann, lit) => GenericAtomTerm::Literal(lit.clone()),
+            GenericExpr::Call(_ann, head, _) => GenericAtomTerm::Var(head.1.clone()),
         }
     }
 }
 
-impl<Head: Clone, Leaf: Clone, Ann: Clone> Expr<Head, Leaf, Ann> {
+impl<Head: Clone, Leaf: Clone, Ann: Clone> GenericExpr<Head, Leaf, Ann> {
     fn to_query(
         &self,
         typeinfo: &TypeInfo,
         fresh_gen: &mut impl FreshGen<Head, Leaf>,
     ) -> (
         Vec<GenericAtom<HeadOrEq<Head>, Leaf>>,
-        Expr<(Head, Leaf), Leaf, Ann>,
+        GenericExpr<(Head, Leaf), Leaf, Ann>,
     )
     where
         Leaf: SymbolLike,
     {
         match self {
-            Expr::Lit(ann, lit) => (vec![], Expr::Lit(ann.clone(), lit.clone())),
-            Expr::Var(ann, v) => (vec![], Expr::Var(ann.clone(), v.clone())),
-            Expr::Call(ann, f, children) => {
+            GenericExpr::Lit(ann, lit) => (vec![], GenericExpr::Lit(ann.clone(), lit.clone())),
+            GenericExpr::Var(ann, v) => (vec![], GenericExpr::Var(ann.clone(), v.clone())),
+            GenericExpr::Call(ann, f, children) => {
                 let fresh = fresh_gen.fresh(f);
                 let mut new_children = vec![];
                 let mut atoms = vec![];
@@ -1422,7 +1441,7 @@ impl<Head: Clone, Leaf: Clone, Ann: Clone> Expr<Head, Leaf, Ann> {
                 });
                 (
                     atoms,
-                    Expr::Call(ann.clone(), (f.clone(), fresh), child_exprs),
+                    GenericExpr::Call(ann.clone(), (f.clone(), fresh), child_exprs),
                 )
             }
         }
@@ -1433,21 +1452,27 @@ impl<Head: Clone, Leaf: Clone, Ann: Clone> Expr<Head, Leaf, Ann> {
         typeinfo: &TypeInfo,
         binding: &mut IndexSet<Leaf>,
         fresh_gen: &mut FG,
-    ) -> Result<(Vec<CoreAction<Head, Leaf>>, Expr<(Head, Leaf), Leaf, ()>), TypeError>
+    ) -> Result<
+        (
+            Vec<CoreAction<Head, Leaf>>,
+            GenericExpr<(Head, Leaf), Leaf, ()>,
+        ),
+        TypeError,
+    >
     where
         Leaf: Hash + Eq + SymbolLike,
     {
         match self {
-            Expr::Lit(_ann, lit) => Ok((vec![], Expr::Lit((), lit.clone()))),
-            Expr::Var(_ann, v) => {
+            GenericExpr::Lit(_ann, lit) => Ok((vec![], GenericExpr::Lit((), lit.clone()))),
+            GenericExpr::Var(_ann, v) => {
                 let sym = v.to_symbol();
                 if binding.contains(v) || typeinfo.is_global(sym) {
-                    Ok((vec![], Expr::Var((), v.clone())))
+                    Ok((vec![], GenericExpr::Var((), v.clone())))
                 } else {
                     Err(TypeError::Unbound(sym))
                 }
             }
-            Expr::Call(_ann, f, args) => {
+            GenericExpr::Call(_ann, f, args) => {
                 let mut norm_actions = vec![];
                 let mut norm_args = vec![];
                 let mut mapped_args = vec![];
@@ -1463,7 +1488,10 @@ impl<Head: Clone, Leaf: Clone, Ann: Clone> Expr<Head, Leaf, Ann> {
                 binding.insert(var.clone());
 
                 norm_actions.push(CoreAction::Let(var.clone(), f.clone(), norm_args));
-                Ok((norm_actions, Expr::Call((), (f.clone(), var), mapped_args)))
+                Ok((
+                    norm_actions,
+                    GenericExpr::Call((), (f.clone(), var), mapped_args),
+                ))
             }
         }
     }
