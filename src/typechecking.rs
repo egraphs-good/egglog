@@ -1,6 +1,6 @@
 use crate::{
     ast::CoreActions,
-    typecheck::{UnresolvedCoreRule, ValueEq},
+    typecheck::{CoreRule, ValueEq},
     *,
 };
 
@@ -124,7 +124,7 @@ impl TypeInfo {
 
     pub(crate) fn typecheck_program(
         &mut self,
-        program: &Vec<UnresolvedNCommand>,
+        program: &Vec<NCommand>,
     ) -> Result<Vec<ResolvedNCommand>, TypeError> {
         let mut result = vec![];
         for command in program {
@@ -134,10 +134,7 @@ impl TypeInfo {
         Ok(result)
     }
 
-    pub(crate) fn function_to_functype(
-        &self,
-        func: &UnresolvedFunctionDecl,
-    ) -> Result<FuncType, TypeError> {
+    pub(crate) fn function_to_functype(&self, func: &FunctionDecl) -> Result<FuncType, TypeError> {
         let input = func
             .schema
             .input
@@ -165,28 +162,27 @@ impl TypeInfo {
         })
     }
 
-    fn typecheck_command(
-        &mut self,
-        command: &UnresolvedNCommand,
-    ) -> Result<ResolvedNCommand, TypeError> {
+    fn typecheck_command(&mut self, command: &NCommand) -> Result<ResolvedNCommand, TypeError> {
         let command: ResolvedNCommand = match command {
-            NCommand::Function(fdecl) => NCommand::Function(self.typecheck_function(fdecl)?),
-            NCommand::NormRule {
+            GenericNCommand::Function(fdecl) => {
+                GenericNCommand::Function(self.typecheck_function(fdecl)?)
+            }
+            GenericNCommand::NormRule {
                 rule,
                 ruleset,
                 name,
-            } => NCommand::NormRule {
+            } => GenericNCommand::NormRule {
                 rule: self.typecheck_rule(rule)?,
                 ruleset: *ruleset,
                 name: *name,
             },
-            NCommand::Sort(sort, presort_and_args) => {
+            GenericNCommand::Sort(sort, presort_and_args) => {
                 // Note this is bad since typechecking should be pure and idempotent
                 // Otherwise typechecking the same program twice will fail
                 self.declare_sort(*sort, presort_and_args)?;
-                NCommand::Sort(*sort, presort_and_args.clone())
+                GenericNCommand::Sort(*sort, presort_and_args.clone())
             }
-            NCommand::NormAction(Action::Let(_, var, expr)) => {
+            GenericNCommand::NormAction(GenericAction::Let(_, var, expr)) => {
                 let expr = self.typecheck_expr(expr, &Default::default())?;
                 let output_type = expr.output_type(self);
                 self.global_types.insert(*var, output_type.clone());
@@ -194,41 +190,43 @@ impl TypeInfo {
                     name: *var,
                     sort: output_type,
                 };
-                NCommand::NormAction(Action::Let((), var, expr))
+                GenericNCommand::NormAction(GenericAction::Let((), var, expr))
             }
-            NCommand::NormAction(action) => {
-                NCommand::NormAction(self.typecheck_action(action, &Default::default())?)
+            GenericNCommand::NormAction(action) => {
+                GenericNCommand::NormAction(self.typecheck_action(action, &Default::default())?)
             }
-            NCommand::Check(facts) => NCommand::Check(self.typecheck_facts(facts)?),
-            NCommand::Fail(cmd) => NCommand::Fail(Box::new(self.typecheck_command(cmd)?)),
-            NCommand::RunSchedule(schedule) => {
-                NCommand::RunSchedule(self.typecheck_schedule(schedule)?)
+            GenericNCommand::Check(facts) => GenericNCommand::Check(self.typecheck_facts(facts)?),
+            GenericNCommand::Fail(cmd) => {
+                GenericNCommand::Fail(Box::new(self.typecheck_command(cmd)?))
             }
-            NCommand::Pop(n) => NCommand::Pop(*n),
-            NCommand::Push(n) => NCommand::Push(*n),
-            NCommand::SetOption { name, value } => {
+            GenericNCommand::RunSchedule(schedule) => {
+                GenericNCommand::RunSchedule(self.typecheck_schedule(schedule)?)
+            }
+            GenericNCommand::Pop(n) => GenericNCommand::Pop(*n),
+            GenericNCommand::Push(n) => GenericNCommand::Push(*n),
+            GenericNCommand::SetOption { name, value } => {
                 let value = self.typecheck_expr(value, &Default::default())?;
-                NCommand::SetOption { name: *name, value }
+                GenericNCommand::SetOption { name: *name, value }
             }
-            NCommand::AddRuleset(ruleset) => NCommand::AddRuleset(*ruleset),
-            NCommand::PrintOverallStatistics => NCommand::PrintOverallStatistics,
-            NCommand::CheckProof => NCommand::CheckProof,
-            NCommand::PrintTable(table, size) => NCommand::PrintTable(*table, *size),
-            NCommand::PrintSize(n) => {
+            GenericNCommand::AddRuleset(ruleset) => GenericNCommand::AddRuleset(*ruleset),
+            GenericNCommand::PrintOverallStatistics => GenericNCommand::PrintOverallStatistics,
+            GenericNCommand::CheckProof => GenericNCommand::CheckProof,
+            GenericNCommand::PrintTable(table, size) => GenericNCommand::PrintTable(*table, *size),
+            GenericNCommand::PrintSize(n) => {
                 // Should probably also resolve the function symbol here
-                NCommand::PrintSize(*n)
+                GenericNCommand::PrintSize(*n)
             }
-            NCommand::Output { file, exprs } => {
+            GenericNCommand::Output { file, exprs } => {
                 let exprs = exprs
                     .iter()
                     .map(|expr| self.typecheck_expr(expr, &Default::default()))
                     .collect::<Result<Vec<_>, _>>()?;
-                NCommand::Output {
+                GenericNCommand::Output {
                     file: file.clone(),
                     exprs,
                 }
             }
-            NCommand::Input { name, file } => NCommand::Input {
+            GenericNCommand::Input { name, file } => GenericNCommand::Input {
                 name: *name,
                 file: file.clone(),
             },
@@ -238,7 +236,7 @@ impl TypeInfo {
 
     fn typecheck_function(
         &mut self,
-        fdecl: &UnresolvedFunctionDecl,
+        fdecl: &FunctionDecl,
     ) -> Result<ResolvedFunctionDecl, TypeError> {
         if self.sorts.contains_key(&fdecl.name) {
             return Err(TypeError::SortAlreadyBound(fdecl.name));
@@ -273,30 +271,27 @@ impl TypeInfo {
         })
     }
 
-    fn typecheck_schedule(
-        &self,
-        schedule: &UnresolvedSchedule,
-    ) -> Result<ResolvedSchedule, TypeError> {
+    fn typecheck_schedule(&self, schedule: &Schedule) -> Result<ResolvedSchedule, TypeError> {
         let schedule = match schedule {
-            Schedule::Repeat(times, schedule) => {
-                Schedule::Repeat(*times, Box::new(self.typecheck_schedule(schedule)?))
+            GenericSchedule::Repeat(times, schedule) => {
+                GenericSchedule::Repeat(*times, Box::new(self.typecheck_schedule(schedule)?))
             }
-            Schedule::Sequence(schedules) => {
+            GenericSchedule::Sequence(schedules) => {
                 let schedules = schedules
                     .iter()
                     .map(|schedule| self.typecheck_schedule(schedule))
                     .collect::<Result<Vec<_>, _>>()?;
-                Schedule::Sequence(schedules)
+                GenericSchedule::Sequence(schedules)
             }
-            Schedule::Saturate(schedule) => {
-                Schedule::Saturate(Box::new(self.typecheck_schedule(schedule)?))
+            GenericSchedule::Saturate(schedule) => {
+                GenericSchedule::Saturate(Box::new(self.typecheck_schedule(schedule)?))
             }
-            Schedule::Run(RunConfig { ruleset, until }) => {
+            GenericSchedule::Run(GenericRunConfig { ruleset, until }) => {
                 let until = until
                     .as_ref()
                     .map(|facts| self.typecheck_facts(facts))
                     .transpose()?;
-                Schedule::Run(RunConfig {
+                GenericSchedule::Run(GenericRunConfig {
                     ruleset: *ruleset,
                     until,
                 })
@@ -309,7 +304,7 @@ impl TypeInfo {
     pub fn declare_sort(
         &mut self,
         name: impl Into<Symbol>,
-        presort_and_args: &Option<(Symbol, Vec<UnresolvedExpr>)>,
+        presort_and_args: &Option<(Symbol, Vec<Expr>)>,
     ) -> Result<(), TypeError> {
         let name = name.into();
         if self.func_types.contains_key(&name) {
@@ -329,8 +324,8 @@ impl TypeInfo {
         self.add_arcsort(sort)
     }
 
-    fn typecheck_rule(&self, rule: &UnresolvedRule) -> Result<ResolvedRule, TypeError> {
-        let UnresolvedRule { head, body } = rule;
+    fn typecheck_rule(&self, rule: &Rule) -> Result<ResolvedRule, TypeError> {
+        let Rule { head, body } = rule;
         let mut constraints = vec![];
 
         let mut fresh_gen = SymbolGen::new();
@@ -338,13 +333,13 @@ impl TypeInfo {
         constraints.extend(query.get_constraints(self)?);
 
         let mut binding = query.get_vars();
-        let (actions, mapped_action): (Vec<NormAction>, Vec<Action<(Symbol, Symbol), Symbol, ()>>) =
+        let (actions, mapped_action): (Vec<NormAction>, Vec<MappedAction>) =
             // TODO: get rid of this clone by using Actions in the first place
             Actions(head.clone()).to_norm_actions(self, &mut binding, &mut fresh_gen)?;
 
         let mut problem = Problem::default();
         problem.add_rule(
-            &UnresolvedCoreRule {
+            &CoreRule {
                 body: query,
                 head: CoreActions(actions),
             },
@@ -364,7 +359,7 @@ impl TypeInfo {
         })
     }
 
-    fn typecheck_facts(&self, facts: &[UnresolvedFact]) -> Result<Vec<ResolvedFact>, TypeError> {
+    fn typecheck_facts(&self, facts: &[Fact]) -> Result<Vec<ResolvedFact>, TypeError> {
         let mut fresh_gen = SymbolGen::new();
         let (query, mapped_facts) = Facts(facts.to_vec()).to_query(self, &mut fresh_gen);
         let mut problem = Problem::default();
@@ -378,12 +373,12 @@ impl TypeInfo {
 
     fn typecheck_actions(
         &self,
-        actions: &[UnresolvedAction],
+        actions: &[Action],
         binding: &IndexMap<Symbol, ArcSort>,
     ) -> Result<Vec<ResolvedAction>, TypeError> {
         let mut binding_set = binding.keys().cloned().collect::<IndexSet<_>>();
         let mut fresh_gen = SymbolGen::new();
-        let (actions, mapped_action): (Vec<NormAction>, Vec<Action<(Symbol, Symbol), Symbol, ()>>) =
+        let (actions, mapped_action): (Vec<NormAction>, Vec<MappedAction>) =
             Actions(actions.to_vec()).to_norm_actions(self, &mut binding_set, &mut fresh_gen)?;
         let mut problem = Problem::default();
 
@@ -405,10 +400,10 @@ impl TypeInfo {
 
     fn typecheck_expr(
         &self,
-        expr: &UnresolvedExpr,
+        expr: &Expr,
         binding: &IndexMap<Symbol, ArcSort>,
     ) -> Result<ResolvedExpr, TypeError> {
-        let action = Action::Let((), "$$result".into(), expr.clone());
+        let action = GenericAction::Let((), "$$result".into(), expr.clone());
         let typechecked_action = self.typecheck_action(&action, binding)?;
         match typechecked_action {
             ResolvedAction::Let(_, _var, expr) => Ok(expr),
@@ -418,7 +413,7 @@ impl TypeInfo {
 
     fn typecheck_action(
         &self,
-        action: &UnresolvedAction,
+        action: &Action,
         binding: &IndexMap<Symbol, ArcSort>,
     ) -> Result<ResolvedAction, TypeError> {
         self.typecheck_actions(&[action.clone()], binding)
@@ -456,16 +451,13 @@ impl TypeInfo {
 #[derive(Debug, Clone, Error)]
 pub enum TypeError {
     #[error("Arity mismatch, expected {expected} args: {expr}")]
-    Arity {
-        expr: UnresolvedExpr,
-        expected: usize,
-    },
+    Arity { expr: Expr, expected: usize },
     #[error(
         "Type mismatch: expr = {expr}, expected = {}, actual = {}, reason: {reason}",
         .expected.name(), .actual.name(),
     )]
     Mismatch {
-        expr: UnresolvedExpr,
+        expr: Expr,
         expected: ArcSort,
         actual: ArcSort,
         reason: String,
@@ -501,7 +493,7 @@ pub enum TypeError {
     #[error("Cannot type a variable as unit: {0}")]
     UnitVar(Symbol),
     #[error("Failed to infer a type for: {0}")]
-    InferenceFailure(UnresolvedExpr),
+    InferenceFailure(Expr),
     #[error("No matching primitive for: ({op} {})", ListDisplay(.inputs, " "))]
     NoMatchingPrimitive { op: Symbol, inputs: Vec<Symbol> },
     #[error("Variable {0} was already defined")]

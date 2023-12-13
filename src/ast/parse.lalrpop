@@ -18,7 +18,7 @@ match {
 }
 
 
-pub Program: Vec<UnresolvedCommand> = { (Command)* => <> }
+pub Program: Vec<Command> = { (Command)* => <> }
 
 
 
@@ -45,7 +45,7 @@ Comma<T>: Vec<T> = {
     }
 };
 
-Command: UnresolvedCommand = {
+Command: Command = {
     LParen "set-option" <name:Ident> <value:Expr> RParen => Command::SetOption { name, value },
     LParen "datatype" <name:Ident> <variants:(Variant)*> RParen => Command::Datatype { <> },
     LParen "sort" <name:Ident> LParen <head:Ident> <tail:(Expr)*> RParen RParen => Command::Sort (name, Some((head, tail))),
@@ -90,7 +90,7 @@ Command: UnresolvedCommand = {
     LParen "include" <file:String> RParen => Command::Include(file),
 }
 
-Schedule: UnresolvedSchedule = {
+Schedule: Schedule = {
     LParen "saturate" <Schedule*> RParen => Schedule::Saturate(Box::new(Schedule::Sequence(<>))),
     LParen "seq" <Schedule*> RParen => Schedule::Sequence(<>),
     LParen "repeat" <limit:UNum> <scheds:Schedule*> RParen => Schedule::Repeat(limit, Box::new(Schedule::Sequence(scheds))),
@@ -105,7 +105,7 @@ Cost: Option<usize> = {
     => None,
 }
 
-NonLetAction: UnresolvedAction = {
+NonLetAction: Action = {
     LParen "set" LParen <f: Ident> <args:Expr*> RParen <v:Expr> RParen => Action::Set ( (), f, args, v ),
     LParen "delete" LParen <f: Ident> <args:Expr*> RParen RParen => Action::Delete ( (), f, args),
     LParen "union" <e1:Expr> <e2:Expr> RParen => Action::Union((), <>),
@@ -115,14 +115,14 @@ NonLetAction: UnresolvedAction = {
     <e:CallExpr> => Action::Expr((), e),
 }
 
-pub Action: UnresolvedAction = {
+pub Action: Action = {
     LParen "let" <name:Ident> <expr:Expr> RParen => Action::Let((), name, expr),
     <NonLetAction> => <>,
 }
 
 Name: Symbol = { "[" <Ident> "]" => <> }
 
-pub Fact: UnresolvedFact = {
+pub Fact: Fact = {
     LParen "=" <mut es:Expr+> <e:Expr> RParen => {
         es.push(e);
         Fact::Eq(es)
@@ -134,7 +134,7 @@ Schema: Schema = {
     <types:List<Type>> <output:Type> => Schema { input: types, output }
 }
 
-pub Expr: UnresolvedExpr = {
+pub Expr: Expr = {
     <Literal> => Expr::Lit((), <>),
     <Ident> => Expr::Var((), <>),
     <CallExpr> => <>,
@@ -153,11 +153,11 @@ Bool: bool = {
     "false" => false,
 }
 
-CallExpr: UnresolvedExpr = {
+CallExpr: Expr = {
     LParen <head:Ident> <tail:(Expr)*> RParen => Expr::Call((), head, tail),
 }
 
-ExprList: Vec<UnresolvedExpr> = { LParen <sexps:(Expr)*> RParen => sexps }
+ExprList: Vec<Expr> = { LParen <sexps:(Expr)*> RParen => sexps }
 
 Variant: Variant = {
     LParen <name:Ident> <types:(Type)*> <cost:Cost> RParen => Variant { <> },

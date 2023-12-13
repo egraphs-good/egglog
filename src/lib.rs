@@ -461,7 +461,7 @@ impl Default for EGraph {
 
 #[derive(Debug, Error)]
 #[error("Not found: {0}")]
-pub struct NotFoundError(UnresolvedExpr);
+pub struct NotFoundError(Expr);
 
 impl EGraph {
     /// Use the rust backend implimentation of eqsat,
@@ -814,8 +814,8 @@ impl EGraph {
     // returns whether the egraph was updated
     fn run_schedule(&mut self, sched: &ResolvedSchedule) -> RunReport {
         match sched {
-            Schedule::Run(config) => self.run_rules(config),
-            Schedule::Repeat(limit, sched) => {
+            GenericSchedule::Run(config) => self.run_rules(config),
+            GenericSchedule::Repeat(limit, sched) => {
                 let mut report = RunReport::default();
                 for _i in 0..*limit {
                     let rec = self.run_schedule(sched);
@@ -826,7 +826,7 @@ impl EGraph {
                 }
                 report
             }
-            Schedule::Saturate(sched) => {
+            GenericSchedule::Saturate(sched) => {
                 let mut report = RunReport::default();
                 loop {
                     let rec = self.run_schedule(sched);
@@ -837,7 +837,7 @@ impl EGraph {
                 }
                 report
             }
-            Schedule::Sequence(scheds) => {
+            GenericSchedule::Sequence(scheds) => {
                 let mut report = RunReport::default();
                 for sched in scheds {
                     report = report.union(&self.run_schedule(sched));
@@ -879,7 +879,7 @@ impl EGraph {
             .or_default() += rebuild_start.elapsed();
         self.timestamp += 1;
 
-        let RunConfig { ruleset, until } = config;
+        let GenericRunConfig { ruleset, until } = config;
 
         if let Some(facts) = until {
             if self.check_facts(facts).is_ok() {
@@ -1094,15 +1094,27 @@ impl EGraph {
         Ok(())
     }
 
+    pub fn eval_expr(&mut self, expr: &Expr) -> Result<(ArcSort, Value), Error> {
+        let fresh_name = self.desugar.get_fresh();
+        let command = GenericCommand::Action(GenericAction::Let((), fresh_name, expr.clone()));
+        self.run_program(vec![command])?;
+        let (sort, value, _ts) = self.global_bindings.get(&fresh_name).unwrap().clone();
+        Ok((sort, value))
+    }
+
     // TODO make a public version of eval_expr that makes a command,
     // then returns the value at the end.
-    fn eval_expr(&mut self, expr: &ResolvedExpr, make_defaults: bool) -> Result<Value, Error> {
+    fn eval_resolved_expr(
+        &mut self,
+        expr: &ResolvedExpr,
+        make_defaults: bool,
+    ) -> Result<Value, Error> {
         let (actions, mapped_expr) = expr.to_norm_actions(
             self.type_info(),
             &mut Default::default(),
             &mut ResolvedGen::new(),
         )?;
-        let target = mapped_expr.get_corresponding_var_or_lit(&self.type_info());
+        let target = mapped_expr.get_corresponding_var_or_lit(self.type_info());
         let program = self
             .compile_expr(&Default::default(), &actions, &target)
             .map_err(Error::TypeErrors)?;
@@ -1124,21 +1136,21 @@ impl EGraph {
                 self.proofs_enabled = true;
             }
             "interactive_mode" => {
-                if let Expr::Lit(_ann, Literal::Int(i)) = value {
+                if let GenericExpr::Lit(_ann, Literal::Int(i)) = value {
                     self.interactive_mode = i != 0;
                 } else {
                     panic!("interactive_mode must be an integer");
                 }
             }
             "match_limit" => {
-                if let Expr::Lit(_ann, Literal::Int(i)) = value {
+                if let GenericExpr::Lit(_ann, Literal::Int(i)) = value {
                     self.match_limit = i as usize;
                 } else {
                     panic!("match_limit must be an integer");
                 }
             }
             "node_limit" => {
-                if let Expr::Lit(_ann, Literal::Int(i)) = value {
+                if let GenericExpr::Lit(_ann, Literal::Int(i)) = value {
                     self.node_limit = i as usize;
                 } else {
                     panic!("node_limit must be an integer");
@@ -1187,22 +1199,22 @@ impl EGraph {
         self.debug_assert_invariants();
 
         match command {
-            NCommand::SetOption { name, value } => {
+            GenericNCommand::SetOption { name, value } => {
                 let str = format!("Set option {} to {}", name, value);
                 self.set_option(name.into(), value);
                 log::info!("{}", str)
             }
             // Sorts are already declared during typechecking
-            NCommand::Sort(name, _presort_and_args) => log::info!("Declared sort {}.", name),
-            NCommand::Function(fdecl) => {
+            GenericNCommand::Sort(name, _presort_and_args) => log::info!("Declared sort {}.", name),
+            GenericNCommand::Function(fdecl) => {
                 self.declare_function(&fdecl)?;
                 log::info!("Declared function {}.", fdecl.name)
             }
-            NCommand::AddRuleset(name) => {
+            GenericNCommand::AddRuleset(name) => {
                 self.add_ruleset(name);
                 log::info!("Declared ruleset {name}.");
             }
-            NCommand::NormRule {
+            GenericNCommand::NormRule {
                 ruleset,
                 rule,
                 name,
@@ -1210,7 +1222,7 @@ impl EGraph {
                 self.add_rule(rule, ruleset)?;
                 log::info!("Declared rule {name}.")
             }
-            NCommand::RunSchedule(sched) => {
+            GenericNCommand::RunSchedule(sched) => {
                 if should_run {
                     let report = self.run_schedule(&sched);
                     log::info!("Ran schedule {}.", sched);
@@ -1221,11 +1233,11 @@ impl EGraph {
                     log::warn!("Skipping schedule.")
                 }
             }
-            NCommand::PrintOverallStatistics => {
+            GenericNCommand::PrintOverallStatistics => {
                 log::info!("Overall statistics:\n{}", self.overall_run_report);
                 self.print_msg(format!("Overall statistics:\n{}", self.overall_run_report));
             }
-            NCommand::Check(facts) => {
+            GenericNCommand::Check(facts) => {
                 if should_run {
                     self.check_facts(&facts)?;
                     log::info!("Checked fact {:?}.", facts);
@@ -1233,12 +1245,12 @@ impl EGraph {
                     log::warn!("Skipping check.")
                 }
             }
-            NCommand::CheckProof => log::error!("TODO implement proofs"),
-            NCommand::NormAction(action) => {
+            GenericNCommand::CheckProof => log::error!("TODO implement proofs"),
+            GenericNCommand::NormAction(action) => {
                 if should_run {
                     match &action {
-                        Action::Let((), name, contents) => {
-                            let value = self.eval_expr(contents, true)?;
+                        GenericAction::Let((), name, contents) => {
+                            let value = self.eval_resolved_expr(contents, true)?;
                             let present = self.global_bindings.insert(
                                 name.name,
                                 (
@@ -1259,23 +1271,23 @@ impl EGraph {
                     log::warn!("Skipping running {action}.")
                 }
             }
-            NCommand::Push(n) => {
+            GenericNCommand::Push(n) => {
                 (0..n).for_each(|_| self.push());
                 log::info!("Pushed {n} levels.")
             }
-            NCommand::Pop(n) => {
+            GenericNCommand::Pop(n) => {
                 for _ in 0..n {
                     self.pop()?;
                 }
                 log::info!("Popped {n} levels.")
             }
-            NCommand::PrintTable(f, n) => {
+            GenericNCommand::PrintTable(f, n) => {
                 self.print_function(f, n)?;
             }
-            NCommand::PrintSize(f) => {
+            GenericNCommand::PrintSize(f) => {
                 self.print_size(f)?;
             }
-            NCommand::Fail(c) => {
+            GenericNCommand::Fail(c) => {
                 let result = self.run_command(*c, should_run);
                 if let Err(e) = result {
                     log::info!("Command failed as expected: {}", e);
@@ -1283,10 +1295,10 @@ impl EGraph {
                     return Err(Error::ExpectFail);
                 }
             }
-            NCommand::Input { name, file } => {
+            GenericNCommand::Input { name, file } => {
                 self.input_file(name, file)?;
             }
-            NCommand::Output { file, exprs } => {
+            GenericNCommand::Output { file, exprs } => {
                 let mut filename = self.fact_directory.clone().unwrap_or_default();
                 filename.push(file.as_str());
                 // append to file
@@ -1298,7 +1310,7 @@ impl EGraph {
                     .map_err(|e| Error::IoError(filename.clone(), e))?;
                 let mut termdag = TermDag::default();
                 for expr in exprs {
-                    let value = self.eval_expr(&expr, true)?;
+                    let value = self.eval_resolved_expr(&expr, true)?;
                     let expr_type = expr.output_type(self.type_info());
                     let term = self.extract(value, &mut termdag, &expr_type).1;
                     use std::io::Write;
@@ -1343,7 +1355,7 @@ impl EGraph {
         let mut contents = String::new();
         f.read_to_string(&mut contents).unwrap();
 
-        let mut actions: Vec<UnresolvedAction> = vec![];
+        let mut actions: Vec<Action> = vec![];
         let mut str_buf: Vec<&str> = vec![];
         for line in contents.lines() {
             str_buf.clear();
@@ -1352,29 +1364,29 @@ impl EGraph {
                 continue;
             }
 
-            let parse = |s: &str| -> UnresolvedExpr {
+            let parse = |s: &str| -> Expr {
                 if let Ok(i) = s.parse() {
-                    Expr::Lit((), Literal::Int(i))
+                    GenericExpr::Lit((), Literal::Int(i))
                 } else {
-                    Expr::Lit((), Literal::String(s.into()))
+                    GenericExpr::Lit((), Literal::String(s.into()))
                 }
             };
 
-            let mut exprs: Vec<UnresolvedExpr> = str_buf.iter().map(|&s| parse(s)).collect();
+            let mut exprs: Vec<Expr> = str_buf.iter().map(|&s| parse(s)).collect();
 
             actions.push(
                 if function_type.is_datatype || function_type.output.name() == UNIT_SYM.into() {
-                    Action::Expr((), Expr::Call((), func_name, exprs))
+                    GenericAction::Expr((), GenericExpr::Call((), func_name, exprs))
                 } else {
                     let out = exprs.pop().unwrap();
-                    Action::Set((), func_name, exprs, out)
+                    GenericAction::Set((), func_name, exprs, out)
                 },
             );
         }
         let num_facts = actions.len();
         let commands = actions
             .into_iter()
-            .map(NCommand::NormAction)
+            .map(GenericNCommand::NormAction)
             .collect::<Vec<_>>();
         let commands: Vec<_> = self.type_info_mut().typecheck_program(&commands)?;
         for command in commands {
@@ -1423,7 +1435,7 @@ impl EGraph {
 
     fn process_command(
         &mut self,
-        command: UnresolvedCommand,
+        command: Command,
         _stop: CompilerPassStop,
     ) -> Result<Vec<ResolvedNCommand>, Error> {
         let program =
@@ -1465,7 +1477,9 @@ impl EGraph {
         Ok(program)
     }
 
-    pub fn run_program(&mut self, program: Vec<UnresolvedCommand>) -> Result<Vec<String>, Error> {
+    /// Run a program, represented as an AST.
+    /// Return a list of messages.
+    pub fn run_program(&mut self, program: Vec<Command>) -> Result<Vec<String>, Error> {
         let should_run = true;
 
         for command in program {
@@ -1481,7 +1495,7 @@ impl EGraph {
         Ok(self.flush_msgs())
     }
 
-    pub fn parse_program(&self, input: &str) -> Result<Vec<UnresolvedCommand>, Error> {
+    pub fn parse_program(&self, input: &str) -> Result<Vec<Command>, Error> {
         self.desugar.parse_program(input)
     }
 
@@ -1580,7 +1594,7 @@ pub enum Error {
     #[error("Errors:\n{}", ListDisplay(.0, "\n"))]
     TypeErrors(Vec<TypeError>),
     #[error("Check failed: \n{}", ListDisplay(.0, "\n"))]
-    CheckError(Vec<UnresolvedFact>),
+    CheckError(Vec<Fact>),
     #[error("Evaluating primitive {0:?} failed. ({0:?} {:?})", ListDebug(.1, " "))]
     PrimitiveError(Primitive, Vec<Value>),
     #[error("Illegal merge attempted for function {0}, {1:?} != {2:?}")]
