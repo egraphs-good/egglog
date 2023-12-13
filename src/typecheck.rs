@@ -30,10 +30,8 @@ pub struct GenericCoreRule<BodyF, HeadF, Leaf> {
     pub head: CoreActions<HeadF, Leaf>,
 }
 
-pub type CoreRule<Head, Leaf> = GenericCoreRule<Head, Head, Leaf>;
-
-pub(crate) type UnresolvedCoreRule = GenericCoreRule<SymbolOrEq, Symbol, Symbol>;
-pub(crate) type ResolvedCoreRule = CoreRule<ResolvedCall, ResolvedVar>;
+pub(crate) type CoreRule = GenericCoreRule<SymbolOrEq, Symbol, Symbol>;
+pub(crate) type ResolvedCoreRule = GenericCoreRule<ResolvedCall, ResolvedCall, ResolvedVar>;
 
 #[derive(Debug, Clone)]
 pub(crate) struct SpecializedPrimitive {
@@ -163,7 +161,7 @@ where
     }
 }
 
-impl<Head, Leaf> Rule<Head, Leaf, ()>
+impl<Head, Leaf> GenericRule<Head, Leaf, ()>
 where
     Leaf: Clone + Eq + Hash + Debug,
     Head: Clone,
@@ -176,7 +174,7 @@ where
     where
         Leaf: SymbolLike,
     {
-        let Rule { head, body } = self;
+        let GenericRule { head, body } = self;
 
         let (body, _correspondence) = Facts(body.clone()).to_query(typeinfo, &mut fresh_gen);
         let mut binding = body.get_vars();
@@ -193,7 +191,7 @@ where
         typeinfo: &TypeInfo,
         fresh_gen: impl FreshGen<Head, Leaf>,
         value_eq: impl Fn(&GenericAtomTerm<Leaf>, &GenericAtomTerm<Leaf>) -> Head,
-    ) -> Result<CoreRule<Head, Leaf>, TypeError>
+    ) -> Result<GenericCoreRule<Head, Head, Leaf>, TypeError>
     where
         Leaf: SymbolLike,
     {
@@ -230,11 +228,11 @@ pub enum GenericAtomTerm<Leaf> {
 pub type AtomTerm = GenericAtomTerm<Symbol>;
 
 impl AtomTerm {
-    pub fn to_expr(&self) -> UnresolvedExpr {
+    pub fn to_expr(&self) -> Expr {
         match self {
-            AtomTerm::Var(v) => Expr::Var((), *v),
-            AtomTerm::Literal(l) => Expr::Lit((), l.clone()),
-            AtomTerm::Global(v) => Expr::Var((), *v),
+            AtomTerm::Var(v) => GenericExpr::Var((), *v),
+            AtomTerm::Literal(l) => GenericExpr::Lit((), l.clone()),
+            AtomTerm::Global(v) => GenericExpr::Var((), *v),
         }
     }
 }
@@ -383,9 +381,9 @@ where
     }
 }
 impl Atom<Symbol> {
-    pub(crate) fn to_expr(&self) -> UnresolvedExpr {
+    pub(crate) fn to_expr(&self) -> Expr {
         let n = self.args.len();
-        Expr::Call(
+        GenericExpr::Call(
             (),
             self.head,
             self.args[0..n - 1]
@@ -435,7 +433,7 @@ where
         self,
         // Users need to pass in a substitute for equality constraints.
         value_eq: impl Fn(&GenericAtomTerm<Leaf>, &GenericAtomTerm<Leaf>) -> Head,
-    ) -> CoreRule<Head, Leaf> {
+    ) -> GenericCoreRule<Head, Head, Leaf> {
         let mut result_rule = self;
         loop {
             let mut to_subst = None;
@@ -785,19 +783,19 @@ impl EGraph {
                             }
                             Some(default) => {
                                 let default = default.clone();
-                                let value = self.eval_expr(&default, true)?;
+                                let value = self.eval_resolved_expr(&default, true)?;
                                 self.functions.get_mut(f).unwrap().insert(values, value, ts);
                                 value
                             }
                             _ => {
-                                return Err(Error::NotFoundError(NotFoundError(Expr::Var(
+                                return Err(Error::NotFoundError(NotFoundError(GenericExpr::Var(
                                     (),
                                     format!("No value found for {f} {:?}", values).into(),
                                 ))))
                             }
                         }
                     } else {
-                        return Err(Error::NotFoundError(NotFoundError(Expr::Var(
+                        return Err(Error::NotFoundError(NotFoundError(GenericExpr::Var(
                             (),
                             format!("No value found for {f} {:?}", values).into(),
                         ))));

@@ -97,13 +97,11 @@ impl ToSexp for ResolvedVar {
     }
 }
 
-// TODO rename to Expr
-pub type UnresolvedExpr = Expr<Symbol, Symbol, ()>;
-pub(crate) type ResolvedExpr = Expr<ResolvedCall, ResolvedVar, ()>;
+pub type Expr = GenericExpr<Symbol, Symbol, ()>;
+pub(crate) type ResolvedExpr = GenericExpr<ResolvedCall, ResolvedVar, ()>;
 
-// TODO rename to generic expr
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
-pub enum Expr<Head, Leaf, Ann> {
+pub enum GenericExpr<Head, Leaf, Ann> {
     Lit(Ann, Literal),
     Var(Ann, Leaf),
     // TODO make this its own type
@@ -113,14 +111,14 @@ pub enum Expr<Head, Leaf, Ann> {
 impl ResolvedExpr {
     pub fn output_type(&self, type_info: &TypeInfo) -> ArcSort {
         match self {
-            Expr::Lit(_, lit) => type_info.infer_literal(lit),
-            Expr::Var(_, resolved_var) => resolved_var.sort.clone(),
-            Expr::Call(_, resolved_call, _) => resolved_call.output().clone(),
+            GenericExpr::Lit(_, lit) => type_info.infer_literal(lit),
+            GenericExpr::Var(_, resolved_var) => resolved_var.sort.clone(),
+            GenericExpr::Call(_, resolved_call, _) => resolved_call.output().clone(),
         }
     }
 }
 
-impl UnresolvedExpr {
+impl Expr {
     pub fn call(op: impl Into<Symbol>, children: impl IntoIterator<Item = Self>) -> Self {
         Self::Call((), op.into(), children.into_iter().collect())
     }
@@ -130,22 +128,24 @@ impl UnresolvedExpr {
     }
 }
 
-impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq, Ann: Clone> Expr<Head, Leaf, Ann> {
+impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq, Ann: Clone>
+    GenericExpr<Head, Leaf, Ann>
+{
     pub fn is_var(&self) -> bool {
-        matches!(self, Expr::Var(_, _))
+        matches!(self, GenericExpr::Var(_, _))
     }
 
     pub fn get_var(&self) -> Option<Leaf> {
         match self {
-            Expr::Var(_ann, v) => Some(v.clone()),
+            GenericExpr::Var(_ann, v) => Some(v.clone()),
             _ => None,
         }
     }
 
     fn children(&self) -> &[Self] {
         match self {
-            Expr::Var(_, _) | Expr::Lit(_, _) => &[],
-            Expr::Call(_, _, children) => children,
+            GenericExpr::Var(_, _) | GenericExpr::Lit(_, _) => &[],
+            GenericExpr::Call(_, _, children) => children,
         }
     }
 
@@ -170,11 +170,11 @@ impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq, Ann: Clone> Expr<
 
     pub fn map(&self, f: &mut impl FnMut(&Self) -> Self) -> Self {
         match self {
-            Expr::Lit(..) => f(self),
-            Expr::Var(..) => f(self),
-            Expr::Call(ann, op, children) => {
+            GenericExpr::Lit(..) => f(self),
+            GenericExpr::Var(..) => f(self),
+            GenericExpr::Call(ann, op, children) => {
                 let children = children.iter().map(|c| c.map(f)).collect();
-                f(&Expr::Call(ann.clone(), op.clone(), children))
+                f(&GenericExpr::Call(ann.clone(), op.clone(), children))
             }
         }
     }
@@ -182,48 +182,48 @@ impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq, Ann: Clone> Expr<
     // TODO: cannon function may want to take the annotation of variables
     pub fn subst<Head2, Leaf2>(
         &self,
-        subst_leaf: &mut impl FnMut(&Leaf) -> Expr<Head2, Leaf2, Ann>,
+        subst_leaf: &mut impl FnMut(&Leaf) -> GenericExpr<Head2, Leaf2, Ann>,
         subst_head: &mut impl FnMut(&Head) -> Head2,
-    ) -> Expr<Head2, Leaf2, Ann> {
+    ) -> GenericExpr<Head2, Leaf2, Ann> {
         match self {
-            Expr::Lit(ann, lit) => Expr::Lit(ann.clone(), lit.clone()),
-            Expr::Var(_ann, v) => subst_leaf(v),
-            Expr::Call(ann, op, children) => {
+            GenericExpr::Lit(ann, lit) => GenericExpr::Lit(ann.clone(), lit.clone()),
+            GenericExpr::Var(_ann, v) => subst_leaf(v),
+            GenericExpr::Call(ann, op, children) => {
                 let children = children
                     .iter()
                     .map(|c| c.subst(subst_leaf, subst_head))
                     .collect();
-                Expr::Call(ann.clone(), subst_head(op), children)
+                GenericExpr::Call(ann.clone(), subst_head(op), children)
             }
         }
     }
 
     pub fn subst_leaf<Leaf2>(
         &self,
-        subst: &mut impl FnMut(&Leaf) -> Expr<Head, Leaf2, Ann>,
-    ) -> Expr<Head, Leaf2, Ann> {
+        subst: &mut impl FnMut(&Leaf) -> GenericExpr<Head, Leaf2, Ann>,
+    ) -> GenericExpr<Head, Leaf2, Ann> {
         self.subst(subst, &mut |op| op.clone())
     }
 
     pub fn vars(&self) -> impl Iterator<Item = Leaf> + '_ {
         let iterator: Box<dyn Iterator<Item = Leaf>> = match self {
-            Expr::Lit(_ann, _l) => Box::new(std::iter::empty()),
-            Expr::Var(_ann, v) => Box::new(std::iter::once(v.clone())),
-            Expr::Call(_ann, _head, exprs) => Box::new(exprs.iter().flat_map(|e| e.vars())),
+            GenericExpr::Lit(_ann, _l) => Box::new(std::iter::empty()),
+            GenericExpr::Var(_ann, v) => Box::new(std::iter::once(v.clone())),
+            GenericExpr::Call(_ann, _head, exprs) => Box::new(exprs.iter().flat_map(|e| e.vars())),
         };
         iterator
     }
 }
 
-impl<Head: Display, Leaf: Display, Ann> Expr<Head, Leaf, Ann> {
+impl<Head: Display, Leaf: Display, Ann> GenericExpr<Head, Leaf, Ann> {
     /// Converts this expression into a
     /// s-expression (symbolic expression).
     /// Example: `(Add (Add 2 3) 4)`
     pub fn to_sexp(&self) -> Sexp {
         let res = match self {
-            Expr::Lit(_ann, lit) => Sexp::Symbol(lit.to_string()),
-            Expr::Var(_ann, v) => Sexp::Symbol(v.to_string()),
-            Expr::Call(_ann, op, children) => Sexp::List(
+            GenericExpr::Lit(_ann, lit) => Sexp::Symbol(lit.to_string()),
+            GenericExpr::Var(_ann, v) => Sexp::Symbol(v.to_string()),
+            GenericExpr::Call(_ann, op, children) => Sexp::List(
                 vec![Sexp::Symbol(op.to_string())]
                     .into_iter()
                     .chain(children.iter().map(|c| c.to_sexp()))
@@ -234,7 +234,7 @@ impl<Head: Display, Leaf: Display, Ann> Expr<Head, Leaf, Ann> {
     }
 }
 
-impl<Head, Leaf, Ann> Display for Expr<Head, Leaf, Ann>
+impl<Head, Leaf, Ann> Display for GenericExpr<Head, Leaf, Ann>
 where
     Head: Display,
     Leaf: Display,
@@ -246,9 +246,7 @@ where
 
 // currently only used for testing, but no reason it couldn't be used elsewhere later
 #[cfg(test)]
-pub(crate) fn parse_expr(
-    s: &str,
-) -> Result<UnresolvedExpr, lalrpop_util::ParseError<usize, String, String>> {
+pub(crate) fn parse_expr(s: &str) -> Result<Expr, lalrpop_util::ParseError<usize, String, String>> {
     let parser = ast::parse::ExprParser::new();
     parser
         .parse(s)
