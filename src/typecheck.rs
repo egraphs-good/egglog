@@ -663,7 +663,7 @@ impl EGraph {
         &self,
         binding: &IndexSet<ResolvedVar>,
         actions: &[CoreAction<ResolvedCall, ResolvedVar>],
-        target: &GenericAtomTerm<ResolvedVar>,
+        target: &ResolvedAtomTerm,
     ) -> Result<Program, Vec<TypeError>> {
         let mut types = IndexMap::default();
         for var in binding {

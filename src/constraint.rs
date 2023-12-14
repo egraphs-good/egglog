@@ -540,7 +540,6 @@ fn get_atom_application_constraints(
     head: &Symbol,
     args: &[AtomTerm],
     type_info: &TypeInfo,
-    // ignore_output: bool,
 ) -> Result<Vec<Constraint<AtomTerm, ArcSort>>, TypeError> {
     // An atom can have potentially different semantics due to polymorphism
     // e.g. (set-empty) can mean any empty set with some element type.

@@ -4,8 +4,6 @@ use crate::{
     *,
 };
 
-pub const RULE_PROOF_KEYWORD: &str = "rule-proof";
-
 #[derive(Clone, Debug)]
 pub struct FuncType {
     pub name: Symbol,
@@ -419,14 +417,6 @@ impl TypeInfo {
                 assert_eq!(v.len(), 1);
                 v.pop().unwrap()
             })
-    }
-
-    pub fn reserved_type(&self, sym: Symbol) -> Option<ArcSort> {
-        if sym == RULE_PROOF_KEYWORD.into() {
-            Some(self.sorts.get::<Symbol>(&"Proof__".into()).unwrap().clone())
-        } else {
-            None
-        }
     }
 
     pub fn lookup_global(&self, sym: &Symbol) -> Option<ArcSort> {

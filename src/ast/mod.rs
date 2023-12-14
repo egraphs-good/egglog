@@ -289,10 +289,7 @@ pub enum GenericCommand<Head, Leaf> {
     /// ```
     ///
     /// Now `MathVec` can be used as an input or output sort.
-    Sort(
-        Symbol,
-        Option<(Symbol, Vec<GenericExpr<Symbol, Symbol, ()>>)>,
-    ),
+    Sort(Symbol, Option<(Symbol, Vec<Expr>)>),
     /// Declare an egglog function, which is a database table with a
     /// a functional dependency (also called a primary key) on its inputs to one output.
     ///
