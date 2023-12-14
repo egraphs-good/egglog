@@ -226,23 +226,24 @@ pub enum GenericAtomTerm<Leaf> {
 }
 
 pub type AtomTerm = GenericAtomTerm<Symbol>;
+pub type ResolvedAtomTerm = GenericAtomTerm<ResolvedVar>;
 
 impl AtomTerm {
     pub fn to_expr(&self) -> Expr {
         match self {
-            AtomTerm::Var(v) => GenericExpr::Var((), *v),
-            AtomTerm::Literal(l) => GenericExpr::Lit((), l.clone()),
-            AtomTerm::Global(v) => GenericExpr::Var((), *v),
+            AtomTerm::Var(v) => Expr::Var((), *v),
+            AtomTerm::Literal(l) => Expr::Lit((), l.clone()),
+            AtomTerm::Global(v) => Expr::Var((), *v),
         }
     }
 }
 
-impl GenericAtomTerm<ResolvedVar> {
+impl ResolvedAtomTerm {
     pub fn output(&self, typeinfo: &TypeInfo) -> ArcSort {
         match self {
-            GenericAtomTerm::Var(v) => v.sort.clone(),
-            GenericAtomTerm::Literal(l) => typeinfo.infer_literal(l),
-            GenericAtomTerm::Global(v) => v.sort.clone(),
+            ResolvedAtomTerm::Var(v) => v.sort.clone(),
+            ResolvedAtomTerm::Literal(l) => typeinfo.infer_literal(l),
+            ResolvedAtomTerm::Global(v) => v.sort.clone(),
         }
     }
 }
@@ -383,7 +384,7 @@ where
 impl Atom<Symbol> {
     pub(crate) fn to_expr(&self) -> Expr {
         let n = self.args.len();
-        GenericExpr::Call(
+        Expr::Call(
             (),
             self.head,
             self.args[0..n - 1]
@@ -557,7 +558,7 @@ impl<'a> ActionCompiler<'a> {
         self.egraph
     }
 
-    fn do_call(&mut self, f: &ResolvedCall, args: &[GenericAtomTerm<ResolvedVar>]) {
+    fn do_call(&mut self, f: &ResolvedCall, args: &[ResolvedAtomTerm]) {
         for arg in args {
             self.do_atom_term(arg);
         }
@@ -567,9 +568,9 @@ impl<'a> ActionCompiler<'a> {
         }
     }
 
-    fn do_atom_term(&mut self, at: &GenericAtomTerm<ResolvedVar>) {
+    fn do_atom_term(&mut self, at: &ResolvedAtomTerm) {
         match at {
-            GenericAtomTerm::Var(var) => {
+            ResolvedAtomTerm::Var(var) => {
                 if let Some((i, _ty)) = self.locals.get_full(var) {
                     self.instructions.push(Instruction::Load(Load::Stack(i)));
                 } else {
@@ -577,10 +578,10 @@ impl<'a> ActionCompiler<'a> {
                     self.instructions.push(Instruction::Load(Load::Subst(i)));
                 }
             }
-            GenericAtomTerm::Literal(lit) => {
+            ResolvedAtomTerm::Literal(lit) => {
                 self.instructions.push(Instruction::Literal(lit.clone()));
             }
-            GenericAtomTerm::Global(var) => {
+            ResolvedAtomTerm::Global(var) => {
                 assert!(self.egraph().global_bindings.contains_key(&var.name));
                 self.instructions.push(Instruction::Global(var.name));
             }
@@ -788,14 +789,14 @@ impl EGraph {
                                 value
                             }
                             _ => {
-                                return Err(Error::NotFoundError(NotFoundError(GenericExpr::Var(
+                                return Err(Error::NotFoundError(NotFoundError(Expr::Var(
                                     (),
                                     format!("No value found for {f} {:?}", values).into(),
                                 ))))
                             }
                         }
                     } else {
-                        return Err(Error::NotFoundError(NotFoundError(GenericExpr::Var(
+                        return Err(Error::NotFoundError(NotFoundError(Expr::Var(
                             (),
                             format!("No value found for {f} {:?}", values).into(),
                         ))));

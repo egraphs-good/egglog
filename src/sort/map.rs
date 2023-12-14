@@ -29,7 +29,7 @@ impl MapSort {
         name: Symbol,
         args: &[Expr],
     ) -> Result<ArcSort, TypeError> {
-        if let [GenericExpr::Var((), k), GenericExpr::Var((), v)] = args {
+        if let [Expr::Var((), k), Expr::Var((), v)] = args {
             let k = typeinfo.sorts.get(k).ok_or(TypeError::UndefinedSort(*k))?;
             let v = typeinfo.sorts.get(v).ok_or(TypeError::UndefinedSort(*v))?;
 
@@ -165,13 +165,13 @@ impl Sort for MapSort {
         termdag: &mut TermDag,
     ) -> Option<(Cost, Expr)> {
         let map = ValueMap::load(self, &value);
-        let mut expr = GenericExpr::call("map-empty", []);
+        let mut expr = Expr::call("map-empty", []);
         let mut cost = 0usize;
         for (k, v) in map.iter().rev() {
             let k = extractor.find_best(*k, termdag, &self.key)?;
             let v = extractor.find_best(*v, termdag, &self.value)?;
             cost = cost.saturating_add(k.0).saturating_add(v.0);
-            expr = GenericExpr::call(
+            expr = Expr::call(
                 "map-insert",
                 [expr, termdag.term_to_expr(&k.1), termdag.term_to_expr(&v.1)],
             )

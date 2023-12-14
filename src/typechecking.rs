@@ -164,25 +164,25 @@ impl TypeInfo {
 
     fn typecheck_command(&mut self, command: &NCommand) -> Result<ResolvedNCommand, TypeError> {
         let command: ResolvedNCommand = match command {
-            GenericNCommand::Function(fdecl) => {
-                GenericNCommand::Function(self.typecheck_function(fdecl)?)
+            NCommand::Function(fdecl) => {
+                ResolvedNCommand::Function(self.typecheck_function(fdecl)?)
             }
-            GenericNCommand::NormRule {
+            NCommand::NormRule {
                 rule,
                 ruleset,
                 name,
-            } => GenericNCommand::NormRule {
+            } => ResolvedNCommand::NormRule {
                 rule: self.typecheck_rule(rule)?,
                 ruleset: *ruleset,
                 name: *name,
             },
-            GenericNCommand::Sort(sort, presort_and_args) => {
+            NCommand::Sort(sort, presort_and_args) => {
                 // Note this is bad since typechecking should be pure and idempotent
                 // Otherwise typechecking the same program twice will fail
                 self.declare_sort(*sort, presort_and_args)?;
-                GenericNCommand::Sort(*sort, presort_and_args.clone())
+                ResolvedNCommand::Sort(*sort, presort_and_args.clone())
             }
-            GenericNCommand::NormAction(GenericAction::Let(_, var, expr)) => {
+            NCommand::NormAction(Action::Let(_, var, expr)) => {
                 let expr = self.typecheck_expr(expr, &Default::default())?;
                 let output_type = expr.output_type(self);
                 self.global_types.insert(*var, output_type.clone());
@@ -190,43 +190,41 @@ impl TypeInfo {
                     name: *var,
                     sort: output_type,
                 };
-                GenericNCommand::NormAction(GenericAction::Let((), var, expr))
+                ResolvedNCommand::NormAction(ResolvedAction::Let((), var, expr))
             }
-            GenericNCommand::NormAction(action) => {
-                GenericNCommand::NormAction(self.typecheck_action(action, &Default::default())?)
+            NCommand::NormAction(action) => {
+                ResolvedNCommand::NormAction(self.typecheck_action(action, &Default::default())?)
             }
-            GenericNCommand::Check(facts) => GenericNCommand::Check(self.typecheck_facts(facts)?),
-            GenericNCommand::Fail(cmd) => {
-                GenericNCommand::Fail(Box::new(self.typecheck_command(cmd)?))
+            NCommand::Check(facts) => ResolvedNCommand::Check(self.typecheck_facts(facts)?),
+            NCommand::Fail(cmd) => ResolvedNCommand::Fail(Box::new(self.typecheck_command(cmd)?)),
+            NCommand::RunSchedule(schedule) => {
+                ResolvedNCommand::RunSchedule(self.typecheck_schedule(schedule)?)
             }
-            GenericNCommand::RunSchedule(schedule) => {
-                GenericNCommand::RunSchedule(self.typecheck_schedule(schedule)?)
-            }
-            GenericNCommand::Pop(n) => GenericNCommand::Pop(*n),
-            GenericNCommand::Push(n) => GenericNCommand::Push(*n),
-            GenericNCommand::SetOption { name, value } => {
+            NCommand::Pop(n) => ResolvedNCommand::Pop(*n),
+            NCommand::Push(n) => ResolvedNCommand::Push(*n),
+            NCommand::SetOption { name, value } => {
                 let value = self.typecheck_expr(value, &Default::default())?;
-                GenericNCommand::SetOption { name: *name, value }
+                ResolvedNCommand::SetOption { name: *name, value }
             }
-            GenericNCommand::AddRuleset(ruleset) => GenericNCommand::AddRuleset(*ruleset),
-            GenericNCommand::PrintOverallStatistics => GenericNCommand::PrintOverallStatistics,
-            GenericNCommand::CheckProof => GenericNCommand::CheckProof,
-            GenericNCommand::PrintTable(table, size) => GenericNCommand::PrintTable(*table, *size),
-            GenericNCommand::PrintSize(n) => {
+            NCommand::AddRuleset(ruleset) => ResolvedNCommand::AddRuleset(*ruleset),
+            NCommand::PrintOverallStatistics => ResolvedNCommand::PrintOverallStatistics,
+            NCommand::CheckProof => ResolvedNCommand::CheckProof,
+            NCommand::PrintTable(table, size) => ResolvedNCommand::PrintTable(*table, *size),
+            NCommand::PrintSize(n) => {
                 // Should probably also resolve the function symbol here
-                GenericNCommand::PrintSize(*n)
+                ResolvedNCommand::PrintSize(*n)
             }
-            GenericNCommand::Output { file, exprs } => {
+            NCommand::Output { file, exprs } => {
                 let exprs = exprs
                     .iter()
                     .map(|expr| self.typecheck_expr(expr, &Default::default()))
                     .collect::<Result<Vec<_>, _>>()?;
-                GenericNCommand::Output {
+                ResolvedNCommand::Output {
                     file: file.clone(),
                     exprs,
                 }
             }
-            GenericNCommand::Input { name, file } => GenericNCommand::Input {
+            NCommand::Input { name, file } => ResolvedNCommand::Input {
                 name: *name,
                 file: file.clone(),
             },
@@ -273,25 +271,25 @@ impl TypeInfo {
 
     fn typecheck_schedule(&self, schedule: &Schedule) -> Result<ResolvedSchedule, TypeError> {
         let schedule = match schedule {
-            GenericSchedule::Repeat(times, schedule) => {
-                GenericSchedule::Repeat(*times, Box::new(self.typecheck_schedule(schedule)?))
+            Schedule::Repeat(times, schedule) => {
+                ResolvedSchedule::Repeat(*times, Box::new(self.typecheck_schedule(schedule)?))
             }
-            GenericSchedule::Sequence(schedules) => {
+            Schedule::Sequence(schedules) => {
                 let schedules = schedules
                     .iter()
                     .map(|schedule| self.typecheck_schedule(schedule))
                     .collect::<Result<Vec<_>, _>>()?;
-                GenericSchedule::Sequence(schedules)
+                ResolvedSchedule::Sequence(schedules)
             }
-            GenericSchedule::Saturate(schedule) => {
-                GenericSchedule::Saturate(Box::new(self.typecheck_schedule(schedule)?))
+            Schedule::Saturate(schedule) => {
+                ResolvedSchedule::Saturate(Box::new(self.typecheck_schedule(schedule)?))
             }
-            GenericSchedule::Run(GenericRunConfig { ruleset, until }) => {
+            Schedule::Run(RunConfig { ruleset, until }) => {
                 let until = until
                     .as_ref()
                     .map(|facts| self.typecheck_facts(facts))
                     .transpose()?;
-                GenericSchedule::Run(GenericRunConfig {
+                ResolvedSchedule::Run(ResolvedRunConfig {
                     ruleset: *ruleset,
                     until,
                 })
@@ -403,7 +401,7 @@ impl TypeInfo {
         expr: &Expr,
         binding: &IndexMap<Symbol, ArcSort>,
     ) -> Result<ResolvedExpr, TypeError> {
-        let action = GenericAction::Let((), "$$result".into(), expr.clone());
+        let action = Action::Let((), "$$result".into(), expr.clone());
         let typechecked_action = self.typecheck_action(&action, binding)?;
         match typechecked_action {
             ResolvedAction::Let(_, _var, expr) => Ok(expr),

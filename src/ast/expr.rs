@@ -111,9 +111,9 @@ pub enum GenericExpr<Head, Leaf, Ann> {
 impl ResolvedExpr {
     pub fn output_type(&self, type_info: &TypeInfo) -> ArcSort {
         match self {
-            GenericExpr::Lit(_, lit) => type_info.infer_literal(lit),
-            GenericExpr::Var(_, resolved_var) => resolved_var.sort.clone(),
-            GenericExpr::Call(_, resolved_call, _) => resolved_call.output().clone(),
+            ResolvedExpr::Lit(_, lit) => type_info.infer_literal(lit),
+            ResolvedExpr::Var(_, resolved_var) => resolved_var.sort.clone(),
+            ResolvedExpr::Call(_, resolved_call, _) => resolved_call.output().clone(),
         }
     }
 }

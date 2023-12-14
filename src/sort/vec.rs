@@ -43,7 +43,7 @@ impl VecSort {
         name: Symbol,
         args: &[Expr],
     ) -> Result<ArcSort, TypeError> {
-        if let [GenericExpr::Var((), e)] = args {
+        if let [Expr::Var((), e)] = args {
             let e = typeinfo.sorts.get(e).ok_or(TypeError::UndefinedSort(*e))?;
 
             if e.is_eq_container_sort() {
@@ -183,7 +183,7 @@ impl Sort for VecSort {
         let mut cost = 0usize;
 
         if vec.is_empty() {
-            Some((cost, GenericExpr::call("vec-empty", [])))
+            Some((cost, Expr::call("vec-empty", [])))
         } else {
             let elems = vec
                 .into_iter()
@@ -194,7 +194,7 @@ impl Sort for VecSort {
                 })
                 .collect::<Option<Vec<_>>>()?;
 
-            Some((cost, GenericExpr::call("vec-of", elems)))
+            Some((cost, Expr::call("vec-of", elems)))
         }
     }
 }

@@ -1,5 +1,5 @@
 use crate::{
-    ast::{Expr, GenericExpr, Literal},
+    ast::{Expr, Literal},
     util::{HashMap, HashSet},
     Symbol,
 };
@@ -111,9 +111,9 @@ impl TermDag {
     /// share subterms.
     pub fn expr_to_term(&mut self, expr: &Expr) -> Term {
         let res = match expr {
-            GenericExpr::Lit((), lit) => Term::Lit(lit.clone()),
-            GenericExpr::Var((), v) => Term::Var(*v),
-            GenericExpr::Call((), op, args) => {
+            Expr::Lit((), lit) => Term::Lit(lit.clone()),
+            Expr::Var((), v) => Term::Var(*v),
+            Expr::Call((), op, args) => {
                 let args = args
                     .iter()
                     .map(|a| {
@@ -133,8 +133,8 @@ impl TermDag {
     /// Panics if the term contains subterms that are not in the DAG.
     pub fn term_to_expr(&self, term: &Term) -> Expr {
         match term {
-            Term::Lit(lit) => GenericExpr::Lit((), lit.clone()),
-            Term::Var(v) => GenericExpr::Var((), *v),
+            Term::Lit(lit) => Expr::Lit((), lit.clone()),
+            Term::Var(v) => Expr::Var((), *v),
             Term::App(op, args) => {
                 let args = args
                     .iter()
@@ -143,7 +143,7 @@ impl TermDag {
                         self.term_to_expr(&term)
                     })
                     .collect();
-                GenericExpr::Call((), *op, args)
+                Expr::Call((), *op, args)
             }
         }
     }
@@ -233,7 +233,7 @@ mod tests {
         let (td, t) = parse_term(s);
         match_term_app!(t; {
             ("f", [_, x, _, _]) =>
-                assert_eq!(td.term_to_expr(&td.get(*x)), ast::GenericExpr::Var((), Symbol::new("x"))),
+                assert_eq!(td.term_to_expr(&td.get(*x)), ast::Expr::Var((), Symbol::new("x"))),
             (head, _) => panic!("unexpected head {}, in {}:{}:{}", head, file!(), line!(), column!())
         })
     }

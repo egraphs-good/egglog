@@ -28,7 +28,7 @@ impl SetSort {
         name: Symbol,
         args: &[Expr],
     ) -> Result<ArcSort, TypeError> {
-        if let [GenericExpr::Var((), e)] = args {
+        if let [Expr::Var((), e)] = args {
             let e = typeinfo.sorts.get(e).ok_or(TypeError::UndefinedSort(*e))?;
 
             if e.is_eq_container_sort() {
@@ -169,12 +169,12 @@ impl Sort for SetSort {
         termdag: &mut TermDag,
     ) -> Option<(Cost, Expr)> {
         let set = ValueSet::load(self, &value);
-        let mut expr = GenericExpr::call("set-empty", []);
+        let mut expr = Expr::call("set-empty", []);
         let mut cost = 0usize;
         for e in set.iter().rev() {
             let e = extractor.find_best(*e, termdag, &self.element)?;
             cost = cost.saturating_add(e.0);
-            expr = GenericExpr::call("set-insert", [expr, termdag.term_to_expr(&e.1)])
+            expr = Expr::call("set-insert", [expr, termdag.term_to_expr(&e.1)])
         }
         Some((cost, expr))
     }

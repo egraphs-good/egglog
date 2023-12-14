@@ -147,26 +147,6 @@ impl<Head, Leaf, Ann> GenericSchedule<Head, Leaf, Ann> {
     }
 }
 
-impl Schedule {
-    pub fn map_run_commands(&self, f: &mut impl FnMut(&RunConfig) -> Schedule) -> Schedule {
-        match self {
-            GenericSchedule::Run(config) => f(config),
-            GenericSchedule::Saturate(sched) => {
-                GenericSchedule::Saturate(Box::new(sched.map_run_commands(f)))
-            }
-            GenericSchedule::Repeat(size, sched) => {
-                GenericSchedule::Repeat(*size, Box::new(sched.map_run_commands(f)))
-            }
-            GenericSchedule::Sequence(scheds) => GenericSchedule::Sequence(
-                scheds
-                    .iter()
-                    .map(|sched| sched.map_run_commands(f))
-                    .collect(),
-            ),
-        }
-    }
-}
-
 pub trait ToSexp {
     fn to_sexp(&self) -> Sexp;
 }
@@ -758,7 +738,7 @@ impl FunctionDecl {
             },
             merge: None,
             merge_action: vec![],
-            default: Some(GenericExpr::Lit((), Literal::Unit)),
+            default: Some(Expr::Lit((), Literal::Unit)),
             cost: None,
             unextractable: false,
         }

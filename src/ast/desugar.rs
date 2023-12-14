@@ -1,11 +1,11 @@
-use super::{GenericRule, Rewrite};
+use super::{Rewrite, Rule};
 use crate::*;
 
 fn desugar_datatype(name: Symbol, variants: Vec<Variant>) -> Vec<NCommand> {
-    vec![GenericNCommand::Sort(name, None)]
+    vec![NCommand::Sort(name, None)]
         .into_iter()
         .chain(variants.into_iter().map(|variant| {
-            GenericNCommand::Function(FunctionDecl {
+            NCommand::Function(FunctionDecl {
                 name: variant.name,
                 schema: Schema {
                     input: variant.types,
@@ -26,28 +26,21 @@ fn desugar_rewrite(ruleset: Symbol, name: Symbol, rewrite: &Rewrite) -> Vec<NCom
     // make two rules- one to insert the rhs, and one to union
     // this way, the union rule can only be fired once,
     // which helps proofs not add too much info
-    vec![GenericNCommand::NormRule {
+    vec![NCommand::NormRule {
         ruleset,
         name,
-        rule: GenericRule {
-            body: [GenericFact::Eq(vec![
-                GenericExpr::Var((), var),
-                rewrite.lhs.clone(),
-            ])]
-            .into_iter()
-            .chain(rewrite.conditions.clone())
-            .collect(),
-            head: vec![GenericAction::Union(
-                (),
-                GenericExpr::Var((), var),
-                rewrite.rhs.clone(),
-            )],
+        rule: Rule {
+            body: [Fact::Eq(vec![Expr::Var((), var), rewrite.lhs.clone()])]
+                .into_iter()
+                .chain(rewrite.conditions.clone())
+                .collect(),
+            head: vec![Action::Union((), Expr::Var((), var), rewrite.rhs.clone())],
         },
     }]
 }
 
 fn desugar_birewrite(ruleset: Symbol, name: Symbol, rewrite: &Rewrite) -> Vec<NCommand> {
-    let rw2 = GenericRewrite {
+    let rw2 = Rewrite {
         lhs: rewrite.rhs.clone(),
         rhs: rewrite.lhs.clone(),
         conditions: rewrite.conditions.clone(),
@@ -69,24 +62,24 @@ fn add_semi_naive_rule(desugar: &mut Desugar, rule: Rule) -> Option<Rule> {
     let mut var_set = HashSet::default();
     for head_slice in new_rule.head.iter_mut().rev() {
         match head_slice {
-            GenericAction::Set(_ann, _, _, expr) => {
+            Action::Set(_ann, _, _, expr) => {
                 var_set.extend(expr.vars());
-                if let GenericExpr::Call((), _, _) = expr {
+                if let Expr::Call((), _, _) = expr {
                     add_new_rule = true;
 
                     let fresh_symbol = desugar.get_fresh();
-                    let fresh_var = GenericExpr::Var((), fresh_symbol);
+                    let fresh_var = Expr::Var((), fresh_symbol);
                     let expr = std::mem::replace(expr, fresh_var.clone());
-                    new_head_atoms.push(GenericFact::Eq(vec![fresh_var, expr]));
+                    new_head_atoms.push(Fact::Eq(vec![fresh_var, expr]));
                 };
             }
-            GenericAction::Let(_ann, symbol, expr) if var_set.contains(symbol) => {
+            Action::Let(_ann, symbol, expr) if var_set.contains(symbol) => {
                 var_set.extend(expr.vars());
-                if let GenericExpr::Call((), _, _) = expr {
+                if let Expr::Call((), _, _) = expr {
                     add_new_rule = true;
 
-                    let var = GenericExpr::Var((), *symbol);
-                    new_head_atoms.push(GenericFact::Eq(vec![var, expr.clone()]));
+                    let var = Expr::Var((), *symbol);
+                    new_head_atoms.push(Fact::Eq(vec![var, expr.clone()]));
                 }
             }
             _ => (),
@@ -97,7 +90,7 @@ fn add_semi_naive_rule(desugar: &mut Desugar, rule: Rule) -> Option<Rule> {
         new_rule.body.extend(new_head_atoms.into_iter().rev());
         // remove all let action
         new_rule.head.retain_mut(
-            |action| !matches!(action, GenericAction::Let(_ann, var, _) if var_set.contains(var)),
+            |action| !matches!(action, Action::Let(_ann, var, _) if var_set.contains(var)),
         );
         log::debug!("Added a semi-naive desugared rule:\n{}", new_rule);
         Some(new_rule)
@@ -143,19 +136,15 @@ impl Default for Desugar {
 }
 
 fn desugar_simplify(desugar: &mut Desugar, expr: &Expr, schedule: &Schedule) -> Vec<NCommand> {
-    let mut res = vec![GenericNCommand::Push(1)];
+    let mut res = vec![NCommand::Push(1)];
     let lhs = desugar.get_fresh();
-    res.push(GenericNCommand::NormAction(GenericAction::Let(
-        (),
-        lhs,
-        expr.clone(),
-    )));
-    res.push(GenericNCommand::RunSchedule(schedule.clone()));
+    res.push(NCommand::NormAction(Action::Let((), lhs, expr.clone())));
+    res.push(NCommand::RunSchedule(schedule.clone()));
     res.extend(
         desugar_command(
-            GenericCommand::QueryExtract {
+            Command::QueryExtract {
                 variants: 0,
-                expr: GenericExpr::Var((), lhs),
+                expr: Expr::Var((), lhs),
             },
             desugar,
             false,
@@ -164,7 +153,7 @@ fn desugar_simplify(desugar: &mut Desugar, expr: &Expr, schedule: &Schedule) -> 
         .unwrap(),
     );
 
-    res.push(GenericNCommand::Pop(1));
+    res.push(NCommand::Pop(1));
     res
 }
 
@@ -178,38 +167,32 @@ pub(crate) fn desugar_calc(
 
     // first, push all the idents
     for IdentSort { ident, sort } in idents {
-        res.push(GenericCommand::Declare { name: ident, sort });
+        res.push(Command::Declare { name: ident, sort });
     }
 
     // now, for every pair of exprs we need to prove them equal
     for expr1and2 in exprs.windows(2) {
         let expr1 = &expr1and2[0];
         let expr2 = &expr1and2[1];
-        res.push(GenericCommand::Push(1));
+        res.push(Command::Push(1));
 
         // add the two exprs
-        res.push(GenericCommand::Action(GenericAction::Expr(
-            (),
-            expr1.clone(),
-        )));
-        res.push(GenericCommand::Action(GenericAction::Expr(
-            (),
-            expr2.clone(),
-        )));
+        res.push(Command::Action(Action::Expr((), expr1.clone())));
+        res.push(Command::Action(Action::Expr((), expr2.clone())));
 
-        res.push(GenericCommand::RunSchedule(GenericSchedule::Saturate(
-            Box::new(GenericSchedule::Run(GenericRunConfig {
+        res.push(Command::RunSchedule(Schedule::Saturate(Box::new(
+            Schedule::Run(RunConfig {
                 ruleset: "".into(),
-                until: Some(vec![GenericFact::Eq(vec![expr1.clone(), expr2.clone()])]),
-            })),
-        )));
+                until: Some(vec![Fact::Eq(vec![expr1.clone(), expr2.clone()])]),
+            }),
+        ))));
 
-        res.push(GenericCommand::Check(vec![GenericFact::Eq(vec![
+        res.push(Command::Check(vec![Fact::Eq(vec![
             expr1.clone(),
             expr2.clone(),
         ])]));
 
-        res.push(GenericCommand::Pop(1));
+        res.push(Command::Pop(1));
     }
 
     desugar_commands(res, desugar, false, seminaive_transform)
@@ -229,23 +212,23 @@ pub(crate) fn desugar_command(
     seminaive_transform: bool,
 ) -> Result<Vec<NCommand>, Error> {
     let res = match command {
-        GenericCommand::SetOption { name, value } => {
-            vec![GenericNCommand::SetOption { name, value }]
+        Command::SetOption { name, value } => {
+            vec![NCommand::SetOption { name, value }]
         }
-        GenericCommand::Function(fdecl) => desugar.desugar_function(&fdecl),
-        GenericCommand::Relation {
+        Command::Function(fdecl) => desugar.desugar_function(&fdecl),
+        Command::Relation {
             constructor,
             inputs,
-        } => desugar.desugar_function(&GenericFunctionDecl::relation(constructor, inputs)),
-        GenericCommand::Declare { name, sort } => desugar.declare(name, sort),
-        GenericCommand::Datatype { name, variants } => desugar_datatype(name, variants),
-        GenericCommand::Rewrite(ruleset, rewrite) => {
+        } => desugar.desugar_function(&FunctionDecl::relation(constructor, inputs)),
+        Command::Declare { name, sort } => desugar.declare(name, sort),
+        Command::Datatype { name, variants } => desugar_datatype(name, variants),
+        Command::Rewrite(ruleset, rewrite) => {
             desugar_rewrite(ruleset, rewrite_name(&rewrite).into(), &rewrite)
         }
-        GenericCommand::BiRewrite(ruleset, rewrite) => {
+        Command::BiRewrite(ruleset, rewrite) => {
             desugar_birewrite(ruleset, rewrite_name(&rewrite).into(), &rewrite)
         }
-        GenericCommand::Include(file) => {
+        Command::Include(file) => {
             let s = std::fs::read_to_string(&file)
                 .unwrap_or_else(|_| panic!("Failed to read file {file}"));
             return desugar_commands(
@@ -255,7 +238,7 @@ pub(crate) fn desugar_command(
                 seminaive_transform,
             );
         }
-        GenericCommand::Rule {
+        Command::Rule {
             ruleset,
             mut name,
             rule,
@@ -264,7 +247,7 @@ pub(crate) fn desugar_command(
                 name = rule.to_string().replace('\"', "'").into();
             }
 
-            let mut result = vec![GenericNCommand::NormRule {
+            let mut result = vec![NCommand::NormRule {
                 ruleset,
                 name,
                 rule: rule.clone(),
@@ -272,7 +255,7 @@ pub(crate) fn desugar_command(
 
             if seminaive_transform {
                 if let Some(new_rule) = add_semi_naive_rule(desugar, rule) {
-                    result.push(GenericNCommand::NormRule {
+                    result.push(NCommand::NormRule {
                         ruleset,
                         name,
                         rule: new_rule,
@@ -282,24 +265,22 @@ pub(crate) fn desugar_command(
 
             result
         }
-        GenericCommand::Sort(sort, option) => vec![GenericNCommand::Sort(sort, option)],
+        Command::Sort(sort, option) => vec![NCommand::Sort(sort, option)],
         // TODO ignoring cost for now
-        GenericCommand::AddRuleset(name) => vec![GenericNCommand::AddRuleset(name)],
-        GenericCommand::Action(action) => vec![GenericNCommand::NormAction(action)],
-        GenericCommand::Simplify { expr, schedule } => desugar_simplify(desugar, &expr, &schedule),
-        GenericCommand::Calc(idents, exprs) => {
-            desugar_calc(desugar, idents, exprs, seminaive_transform)?
+        Command::AddRuleset(name) => vec![NCommand::AddRuleset(name)],
+        Command::Action(action) => vec![NCommand::NormAction(action)],
+        Command::Simplify { expr, schedule } => desugar_simplify(desugar, &expr, &schedule),
+        Command::Calc(idents, exprs) => desugar_calc(desugar, idents, exprs, seminaive_transform)?,
+        Command::RunSchedule(sched) => {
+            vec![NCommand::RunSchedule(sched.clone())]
         }
-        GenericCommand::RunSchedule(sched) => {
-            vec![GenericNCommand::RunSchedule(sched.clone())]
+        Command::PrintOverallStatistics => {
+            vec![NCommand::PrintOverallStatistics]
         }
-        GenericCommand::PrintOverallStatistics => {
-            vec![GenericNCommand::PrintOverallStatistics]
-        }
-        GenericCommand::QueryExtract { variants, expr } => {
+        Command::QueryExtract { variants, expr } => {
             let fresh = desugar.get_fresh();
             let fresh_ruleset = desugar.get_fresh();
-            let desugaring = if let GenericExpr::Var((), v) = expr {
+            let desugaring = if let Expr::Var((), v) = expr {
                 format!("(extract {v} {variants})")
             } else {
                 format!(
@@ -318,8 +299,8 @@ pub(crate) fn desugar_command(
                 seminaive_transform,
             )?
         }
-        GenericCommand::Check(facts) => {
-            let res = vec![GenericNCommand::Check(facts)];
+        Command::Check(facts) => {
+            let res = vec![NCommand::Check(facts)];
 
             if get_all_proofs {
                 // TODO check proofs
@@ -327,27 +308,27 @@ pub(crate) fn desugar_command(
 
             res
         }
-        GenericCommand::CheckProof => vec![GenericNCommand::CheckProof],
-        GenericCommand::PrintFunction(symbol, size) => {
-            vec![GenericNCommand::PrintTable(symbol, size)]
+        Command::CheckProof => vec![NCommand::CheckProof],
+        Command::PrintFunction(symbol, size) => {
+            vec![NCommand::PrintTable(symbol, size)]
         }
-        GenericCommand::PrintSize(symbol) => vec![GenericNCommand::PrintSize(symbol)],
-        GenericCommand::Output { file, exprs } => vec![GenericNCommand::Output { file, exprs }],
-        GenericCommand::Push(num) => {
-            vec![GenericNCommand::Push(num)]
+        Command::PrintSize(symbol) => vec![NCommand::PrintSize(symbol)],
+        Command::Output { file, exprs } => vec![NCommand::Output { file, exprs }],
+        Command::Push(num) => {
+            vec![NCommand::Push(num)]
         }
-        GenericCommand::Pop(num) => {
-            vec![GenericNCommand::Pop(num)]
+        Command::Pop(num) => {
+            vec![NCommand::Pop(num)]
         }
-        GenericCommand::Fail(cmd) => {
+        Command::Fail(cmd) => {
             let mut desugared = desugar_command(*cmd, desugar, false, seminaive_transform)?;
 
             let last = desugared.pop().unwrap();
-            desugared.push(GenericNCommand::Fail(Box::new(last)));
+            desugared.push(NCommand::Fail(Box::new(last)));
             return Ok(desugared);
         }
-        GenericCommand::Input { name, file } => {
-            vec![GenericNCommand::Input { name, file }]
+        Command::Input { name, file } => {
+            vec![NCommand::Input { name, file }]
         }
     };
 
@@ -419,7 +400,7 @@ impl Desugar {
     pub fn declare(&mut self, name: Symbol, sort: Symbol) -> Vec<NCommand> {
         let fresh = self.get_fresh();
         vec![
-            GenericNCommand::Function(GenericFunctionDecl {
+            NCommand::Function(FunctionDecl {
                 name: fresh,
                 schema: Schema {
                     input: vec![],
@@ -431,16 +412,12 @@ impl Desugar {
                 cost: None,
                 unextractable: false,
             }),
-            GenericNCommand::NormAction(Action::Let(
-                (),
-                name,
-                GenericExpr::Call((), fresh, vec![]),
-            )),
+            NCommand::NormAction(Action::Let((), name, Expr::Call((), fresh, vec![]))),
         ]
     }
 
     pub fn desugar_function(&mut self, fdecl: &FunctionDecl) -> Vec<NCommand> {
-        vec![GenericNCommand::Function(GenericFunctionDecl {
+        vec![NCommand::Function(FunctionDecl {
             name: fdecl.name,
             schema: fdecl.schema.clone(),
             default: fdecl.default.clone(),

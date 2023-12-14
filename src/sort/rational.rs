@@ -116,11 +116,11 @@ impl Sort for RationalSort {
         let denom = *rat.denom();
         (
             1,
-            GenericExpr::call(
+            Expr::call(
                 "rational",
                 vec![
-                    GenericExpr::Lit((), Literal::Int(numer)),
-                    GenericExpr::Lit((), Literal::Int(denom)),
+                    Expr::Lit((), Literal::Int(numer)),
+                    Expr::Lit((), Literal::Int(denom)),
                 ],
             ),
         )

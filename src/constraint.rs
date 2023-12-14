@@ -4,7 +4,7 @@ use crate::{
         ResolvedExpr, ResolvedFact, ResolvedVar,
     },
     sort::I64Sort,
-    typecheck::{Atom, AtomTerm, CoreRule, GenericAtomTerm, Query, ResolvedCall, SymbolOrEq},
+    typecheck::{Atom, AtomTerm, CoreRule, Query, ResolvedCall, SymbolOrEq},
     typechecking::TypeError,
     util::{FreshGen, HashMap, HashSet, SymbolGen},
     ArcSort, Symbol, TypeInfo,
@@ -219,13 +219,13 @@ impl Assignment<AtomTerm, ArcSort> {
         typeinfo: &TypeInfo,
     ) -> ResolvedExpr {
         match &expr {
-            GenericExpr::Lit((), literal) => GenericExpr::Lit((), literal.clone()),
+            GenericExpr::Lit((), literal) => ResolvedExpr::Lit((), literal.clone()),
             GenericExpr::Var((), var) => {
                 let ty = typeinfo
                     .lookup_global(var)
-                    .or_else(|| self.get(&GenericAtomTerm::Var(*var)).cloned())
+                    .or_else(|| self.get(&AtomTerm::Var(*var)).cloned())
                     .expect("All variables should be assigned before annotation");
-                GenericExpr::Var(
+                ResolvedExpr::Var(
                     (),
                     ResolvedVar {
                         name: *var,
@@ -243,7 +243,7 @@ impl Assignment<AtomTerm, ArcSort> {
                     .iter()
                     .map(|arg| arg.output_type(typeinfo))
                     .chain(once(
-                        self.get(&GenericAtomTerm::Var(*corresponding_var))
+                        self.get(&AtomTerm::Var(*corresponding_var))
                             .unwrap()
                             .clone(),
                     ))
@@ -260,13 +260,13 @@ impl Assignment<AtomTerm, ArcSort> {
         typeinfo: &TypeInfo,
     ) -> ResolvedFact {
         match facts {
-            GenericFact::Eq(facts) => GenericFact::Eq(
+            GenericFact::Eq(facts) => ResolvedFact::Eq(
                 facts
                     .iter()
                     .map(|expr| self.annotate_expr(expr, typeinfo))
                     .collect(),
             ),
-            GenericFact::Fact(expr) => GenericFact::Fact(self.annotate_expr(expr, typeinfo)),
+            GenericFact::Fact(expr) => ResolvedFact::Fact(self.annotate_expr(expr, typeinfo)),
         }
     }
 
@@ -289,9 +289,9 @@ impl Assignment<AtomTerm, ArcSort> {
         match action {
             GenericAction::Let((), var, expr) => {
                 let ty = self
-                    .get(&GenericAtomTerm::Var(*var))
+                    .get(&AtomTerm::Var(*var))
                     .expect("All variables should be assigned before annotation");
-                Ok(GenericAction::Let(
+                Ok(ResolvedAction::Let(
                     (),
                     ResolvedVar {
                         name: *var,
@@ -316,7 +316,7 @@ impl Assignment<AtomTerm, ArcSort> {
                 if !matches!(resolved_call, ResolvedCall::Func(_)) {
                     return Err(TypeError::UnboundFunction(*head));
                 }
-                Ok(GenericAction::Set((), resolved_call, children, rhs))
+                Ok(ResolvedAction::Set((), resolved_call, children, rhs))
             }
             // Note mapped_var for delete is a dummy variable that does not mean anything
             GenericAction::Delete((), (head, _mapped_var), children) => {
@@ -331,21 +331,21 @@ impl Assignment<AtomTerm, ArcSort> {
                 let resolved_call =
                     ResolvedCall::from_resolution_func_types(head, &types, typeinfo)
                         .ok_or_else(|| TypeError::UnboundFunction(*head))?;
-                Ok(GenericAction::Delete((), resolved_call, children.clone()))
+                Ok(ResolvedAction::Delete((), resolved_call, children.clone()))
             }
-            GenericAction::Union((), lhs, rhs) => Ok(GenericAction::Union(
+            GenericAction::Union((), lhs, rhs) => Ok(ResolvedAction::Union(
                 (),
                 self.annotate_expr(lhs, typeinfo),
                 self.annotate_expr(rhs, typeinfo),
             )),
-            GenericAction::Extract((), lhs, rhs) => Ok(GenericAction::Extract(
+            GenericAction::Extract((), lhs, rhs) => Ok(ResolvedAction::Extract(
                 (),
                 self.annotate_expr(lhs, typeinfo),
                 self.annotate_expr(rhs, typeinfo),
             )),
-            GenericAction::Panic((), msg) => Ok(GenericAction::Panic((), msg.clone())),
+            GenericAction::Panic((), msg) => Ok(ResolvedAction::Panic((), msg.clone())),
             GenericAction::Expr((), expr) => {
-                Ok(GenericAction::Expr((), self.annotate_expr(expr, typeinfo)))
+                Ok(ResolvedAction::Expr((), self.annotate_expr(expr, typeinfo)))
             }
         }
     }

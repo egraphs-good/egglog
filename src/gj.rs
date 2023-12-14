@@ -5,7 +5,7 @@ use smallvec::SmallVec;
 
 use crate::{
     function::index::Offset,
-    typecheck::{Atom, AtomTerm, GenericAtomTerm, ResolvedCall},
+    typecheck::{Atom, AtomTerm, ResolvedAtomTerm, ResolvedCall},
     *,
 };
 use std::{
@@ -366,9 +366,9 @@ impl EGraph {
             .into_iter()
             .map(|atom| {
                 let args = atom.args.into_iter().map(|arg| match arg {
-                    GenericAtomTerm::Var(v) => AtomTerm::Var(v.name),
-                    GenericAtomTerm::Literal(lit) => AtomTerm::Literal(lit),
-                    GenericAtomTerm::Global(g) => AtomTerm::Global(g.name),
+                    ResolvedAtomTerm::Var(v) => AtomTerm::Var(v.name),
+                    ResolvedAtomTerm::Literal(lit) => AtomTerm::Literal(lit),
+                    ResolvedAtomTerm::Global(g) => AtomTerm::Global(g.name),
                 });
                 Atom {
                     head: atom.head,

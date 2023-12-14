@@ -33,7 +33,7 @@ impl Sort for BoolSort {
 
     fn make_expr(&self, _egraph: &EGraph, value: Value) -> (Cost, Expr) {
         assert!(value.tag == self.name());
-        (1, GenericExpr::Lit((), Literal::Bool(value.bits > 0)))
+        (1, Expr::Lit((), Literal::Bool(value.bits > 0)))
     }
 }
 
