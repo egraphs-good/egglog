@@ -104,7 +104,6 @@ pub(crate) type ResolvedExpr = GenericExpr<ResolvedCall, ResolvedVar, ()>;
 pub enum GenericExpr<Head, Leaf, Ann> {
     Lit(Ann, Literal),
     Var(Ann, Leaf),
-    // TODO make this its own type
     Call(Ann, Head, Vec<Self>),
 }
 
