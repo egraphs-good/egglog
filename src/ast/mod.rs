@@ -78,7 +78,6 @@ pub enum GenericNCommand<Head, Leaf, Ann> {
     Push(usize),
     Pop(usize),
     Fail(Box<GenericNCommand<Head, Leaf, Ann>>),
-    // TODO desugar
     Input {
         name: Symbol,
         file: String,
@@ -681,7 +680,7 @@ pub struct GenericFunctionDecl<Head, Leaf, Ann> {
     pub schema: Schema,
     pub default: Option<GenericExpr<Head, Leaf, Ann>>,
     pub merge: Option<GenericExpr<Head, Leaf, Ann>>,
-    pub merge_action: Vec<GenericAction<Head, Leaf, Ann>>,
+    pub merge_action: GenericActions<Head, Leaf, Ann>,
     pub cost: Option<usize>,
     pub unextractable: bool,
 }
@@ -734,7 +733,7 @@ impl FunctionDecl {
                 output: Symbol::from("Unit"),
             },
             merge: None,
-            merge_action: vec![],
+            merge_action: Actions::default(),
             default: Some(Expr::Lit((), Literal::Unit)),
             cost: None,
             unextractable: false,
@@ -989,14 +988,32 @@ pub enum GenericAction<Head, Leaf, Ann> {
     // If(Expr, Action, Action),
 }
 
-pub struct Actions<Head, Leaf>(pub Vec<GenericAction<Head, Leaf, ()>>);
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct GenericActions<Head, Leaf, Ann>(pub Vec<GenericAction<Head, Leaf, Ann>>);
+pub type Actions = GenericActions<Symbol, Symbol, ()>;
+pub(crate) type ResolvedActions = GenericActions<ResolvedCall, ResolvedVar, ()>;
+pub(crate) type MappedActions = GenericActions<(Symbol, Symbol), Symbol, ()>;
+
+impl<Head, Leaf, Ann> Default for GenericActions<Head, Leaf, Ann> {
+    fn default() -> Self {
+        Self(vec![])
+    }
+}
 
 #[allow(clippy::type_complexity)]
-impl<Head, Leaf> Actions<Head, Leaf>
+impl<Head, Leaf> GenericActions<Head, Leaf, ()>
 where
     Head: Clone,
     Leaf: Clone + Hash + Eq + Clone,
 {
+    pub fn new(actions: Vec<GenericAction<Head, Leaf, ()>>) -> Self {
+        Self(actions)
+    }
+
+    pub fn singleton(action: GenericAction<Head, Leaf, ()>) -> Self {
+        Self(vec![action])
+    }
+
     pub(crate) fn to_norm_actions<FG: FreshGen<Head, Leaf>>(
         &self,
         typeinfo: &TypeInfo,
@@ -1004,8 +1021,8 @@ where
         fresh_gen: &mut FG,
     ) -> Result<
         (
-            Vec<CoreAction<Head, Leaf>>,
-            Vec<GenericAction<(Head, Leaf), Leaf, ()>>,
+            CoreActions<Head, Leaf>,
+            GenericActions<(Head, Leaf), Leaf, ()>,
         ),
         TypeError,
     >
@@ -1026,7 +1043,7 @@ where
                     }
                     let (actions, mapped_expr) =
                         expr.to_norm_actions(typeinfo, binding, fresh_gen)?;
-                    norm_actions.extend(actions);
+                    norm_actions.extend(actions.0);
                     norm_actions.push(CoreAction::LetAtomTerm(
                         var.clone(),
                         mapped_expr.get_corresponding_var_or_lit(typeinfo),
@@ -1039,12 +1056,12 @@ where
                     for arg in args {
                         let (actions, mapped_arg) =
                             arg.to_norm_actions(typeinfo, binding, fresh_gen)?;
-                        norm_actions.extend(actions);
+                        norm_actions.extend(actions.0);
                         mapped_args.push(mapped_arg);
                     }
                     let (actions, mapped_expr) =
                         expr.to_norm_actions(typeinfo, binding, fresh_gen)?;
-                    norm_actions.extend(actions);
+                    norm_actions.extend(actions.0);
                     norm_actions.push(CoreAction::Set(
                         head.clone(),
                         mapped_args
@@ -1066,7 +1083,7 @@ where
                     for arg in args {
                         let (actions, mapped_arg) =
                             arg.to_norm_actions(typeinfo, binding, fresh_gen)?;
-                        norm_actions.extend(actions);
+                        norm_actions.extend(actions.0);
                         mapped_args.push(mapped_arg);
                     }
                     norm_actions.push(CoreAction::Delete(
@@ -1081,9 +1098,9 @@ where
                 }
                 GenericAction::Union(_ann, e1, e2) => {
                     let (actions1, mapped_e1) = e1.to_norm_actions(typeinfo, binding, fresh_gen)?;
-                    norm_actions.extend(actions1);
+                    norm_actions.extend(actions1.0);
                     let (actions2, mapped_e2) = e2.to_norm_actions(typeinfo, binding, fresh_gen)?;
-                    norm_actions.extend(actions2);
+                    norm_actions.extend(actions2.0);
                     norm_actions.push(CoreAction::Union(
                         mapped_e1.get_corresponding_var_or_lit(typeinfo),
                         mapped_e2.get_corresponding_var_or_lit(typeinfo),
@@ -1092,9 +1109,9 @@ where
                 }
                 GenericAction::Extract(_ann, e, n) => {
                     let (actions, mapped_e) = e.to_norm_actions(typeinfo, binding, fresh_gen)?;
-                    norm_actions.extend(actions);
+                    norm_actions.extend(actions.0);
                     let (actions, mapped_n) = n.to_norm_actions(typeinfo, binding, fresh_gen)?;
-                    norm_actions.extend(actions);
+                    norm_actions.extend(actions.0);
                     norm_actions.push(CoreAction::Extract(
                         mapped_e.get_corresponding_var_or_lit(typeinfo),
                         mapped_n.get_corresponding_var_or_lit(typeinfo),
@@ -1108,12 +1125,29 @@ where
                 GenericAction::Expr(_ann, expr) => {
                     let (actions, mapped_expr) =
                         expr.to_norm_actions(typeinfo, binding, fresh_gen)?;
-                    norm_actions.extend(actions);
+                    norm_actions.extend(actions.0);
                     mapped_actions.push(GenericAction::Expr((), mapped_expr));
                 }
             }
         }
-        Ok((norm_actions, mapped_actions))
+        Ok((
+            CoreActions::new(norm_actions),
+            GenericActions::new(mapped_actions),
+        ))
+    }
+}
+
+impl<Head, Leaf, Ann> GenericActions<Head, Leaf, Ann> {
+    pub(crate) fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &GenericAction<Head, Leaf, Ann>> {
+        self.0.iter()
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
 }
 
@@ -1130,8 +1164,17 @@ pub enum CoreAction<Head, Leaf> {
 
 pub type NormAction = CoreAction<Symbol, Symbol>;
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct CoreActions<Head, Leaf>(pub(crate) Vec<CoreAction<Head, Leaf>>);
+pub(crate) type NormActions = CoreActions<Symbol, Symbol>;
+pub(crate) type ResolvedCoreActions = CoreActions<ResolvedCall, ResolvedVar>;
+
+impl<Head, Leaf> Default for CoreActions<Head, Leaf> {
+    fn default() -> Self {
+        Self(vec![])
+    }
+}
+
 impl<Head, Leaf> CoreActions<Head, Leaf>
 where
     Leaf: Clone,
@@ -1142,6 +1185,10 @@ where
             .map(|(symbol, atom_term)| CoreAction::LetAtomTerm(symbol.clone(), atom_term.clone()));
         let existing_actions = std::mem::take(&mut self.0);
         self.0 = actions.chain(existing_actions).collect();
+    }
+
+    fn new(actions: Vec<CoreAction<Head, Leaf>>) -> CoreActions<Head, Leaf> {
+        Self(actions)
     }
 }
 
@@ -1260,7 +1307,7 @@ pub(crate) type ResolvedRule = GenericRule<ResolvedCall, ResolvedVar, ()>;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct GenericRule<Head, Leaf, Ann> {
-    pub head: Vec<GenericAction<Head, Leaf, Ann>>,
+    pub head: GenericActions<Head, Leaf, Ann>,
     pub body: Vec<GenericFact<Head, Leaf, Ann>>,
 }
 
@@ -1285,11 +1332,11 @@ impl<Head: Display + ToSexp, Leaf: Display + ToSexp, Ann> GenericRule<Head, Leaf
             }
         }
         write!(f, ")\n      (")?;
-        for (i, action) in self.head.iter().enumerate() {
+        for (i, action) in self.head.0.iter().enumerate() {
             if i > 0 {
                 write!(f, "{}", indent)?;
             }
-            if i != self.head.len() - 1 {
+            if i != self.head.0.len() - 1 {
                 writeln!(f, "{}", action)?;
             } else {
                 write!(f, "{}", action)?;
@@ -1315,7 +1362,7 @@ impl<Head: Display + ToSexp, Leaf: Display + ToSexp, Ann> GenericRule<Head, Leaf
         let mut res = vec![
             Sexp::Symbol("rule".into()),
             Sexp::List(self.body.iter().map(|f| f.to_sexp()).collect()),
-            Sexp::List(self.head.iter().map(|a| a.to_sexp()).collect()),
+            Sexp::List(self.head.0.iter().map(|a| a.to_sexp()).collect()),
         ];
         if ruleset != "".into() {
             res.push(Sexp::Symbol(":ruleset".into()));
@@ -1449,22 +1496,18 @@ impl<Head: Clone, Leaf: Clone, Ann: Clone> GenericExpr<Head, Leaf, Ann> {
         typeinfo: &TypeInfo,
         binding: &mut IndexSet<Leaf>,
         fresh_gen: &mut FG,
-    ) -> Result<
-        (
-            Vec<CoreAction<Head, Leaf>>,
-            GenericExpr<(Head, Leaf), Leaf, ()>,
-        ),
-        TypeError,
-    >
+    ) -> Result<(CoreActions<Head, Leaf>, GenericExpr<(Head, Leaf), Leaf, ()>), TypeError>
     where
         Leaf: Hash + Eq + SymbolLike,
     {
         match self {
-            GenericExpr::Lit(_ann, lit) => Ok((vec![], GenericExpr::Lit((), lit.clone()))),
+            GenericExpr::Lit(_ann, lit) => {
+                Ok((CoreActions::default(), GenericExpr::Lit((), lit.clone())))
+            }
             GenericExpr::Var(_ann, v) => {
                 let sym = v.to_symbol();
                 if binding.contains(v) || typeinfo.is_global(sym) {
-                    Ok((vec![], GenericExpr::Var((), v.clone())))
+                    Ok((CoreActions::default(), GenericExpr::Var((), v.clone())))
                 } else {
                     Err(TypeError::Unbound(sym))
                 }
@@ -1476,7 +1519,7 @@ impl<Head: Clone, Leaf: Clone, Ann: Clone> GenericExpr<Head, Leaf, Ann> {
                 for arg in args {
                     let (actions, mapped_arg) =
                         arg.to_norm_actions(typeinfo, binding, fresh_gen)?;
-                    norm_actions.extend(actions);
+                    norm_actions.extend(actions.0);
                     norm_args.push(mapped_arg.get_corresponding_var_or_lit(typeinfo));
                     mapped_args.push(mapped_arg);
                 }
@@ -1486,7 +1529,7 @@ impl<Head: Clone, Leaf: Clone, Ann: Clone> GenericExpr<Head, Leaf, Ann> {
 
                 norm_actions.push(CoreAction::Let(var.clone(), f.clone(), norm_args));
                 Ok((
-                    norm_actions,
+                    CoreActions::new(norm_actions),
                     GenericExpr::Call((), (f.clone(), var), mapped_args),
                 ))
             }

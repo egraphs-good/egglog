@@ -93,8 +93,6 @@ impl Function {
 
         // Invariant: the last element in the stack is the return value.
         let merge_vals = if let Some(merge_expr) = &decl.merge {
-            // TODO: Compiling actions to programs is reused in eval_actions.
-            // Need to extract that into a separate function.
             let (actions, mapped_expr) = merge_expr.to_norm_actions(
                 egraph.type_info(),
                 &mut binding.clone(),
@@ -114,7 +112,7 @@ impl Function {
         let on_merge = if decl.merge_action.is_empty() {
             None
         } else {
-            let (merge_action, _) = Actions(decl.merge_action.clone()).to_norm_actions(
+            let (merge_action, _) = decl.merge_action.to_norm_actions(
                 egraph.type_info(),
                 &mut binding.clone(),
                 &mut ResolvedGen::new(),

@@ -1,5 +1,4 @@
 use crate::{
-    ast::CoreActions,
     typecheck::{CoreRule, ValueEq},
     *,
 };
@@ -329,15 +328,14 @@ impl TypeInfo {
         constraints.extend(query.get_constraints(self)?);
 
         let mut binding = query.get_vars();
-        let (actions, mapped_action): (Vec<NormAction>, Vec<MappedAction>) =
-            // TODO: get rid of this clone by using Actions in the first place
-            Actions(head.clone()).to_norm_actions(self, &mut binding, &mut fresh_gen)?;
+        let (actions, mapped_action): (NormActions, MappedActions) =
+            head.to_norm_actions(self, &mut binding, &mut fresh_gen)?;
 
         let mut problem = Problem::default();
         problem.add_rule(
             &CoreRule {
                 body: query,
-                head: CoreActions(actions),
+                head: actions,
             },
             self,
         )?;
@@ -347,7 +345,7 @@ impl TypeInfo {
             .map_err(|e| e.to_type_error())?;
 
         let body: Vec<ResolvedFact> = assignment.annotate_facts(&mapped_query, self);
-        let actions: Vec<ResolvedAction> = assignment.annotate_actions(&mapped_action, self)?;
+        let actions: ResolvedActions = assignment.annotate_actions(&mapped_action, self)?;
 
         Ok(ResolvedRule {
             body,
@@ -369,17 +367,17 @@ impl TypeInfo {
 
     fn typecheck_actions(
         &self,
-        actions: &[Action],
+        actions: &Actions,
         binding: &IndexMap<Symbol, ArcSort>,
-    ) -> Result<Vec<ResolvedAction>, TypeError> {
+    ) -> Result<ResolvedActions, TypeError> {
         let mut binding_set = binding.keys().cloned().collect::<IndexSet<_>>();
         let mut fresh_gen = SymbolGen::new();
-        let (actions, mapped_action): (Vec<NormAction>, Vec<MappedAction>) =
-            Actions(actions.to_vec()).to_norm_actions(self, &mut binding_set, &mut fresh_gen)?;
+        let (actions, mapped_action): (NormActions, MappedActions) =
+            actions.to_norm_actions(self, &mut binding_set, &mut fresh_gen)?;
         let mut problem = Problem::default();
 
         // add actions to problem
-        problem.add_actions(&CoreActions(actions), self)?;
+        problem.add_actions(&actions, self)?;
 
         // add bindings from the context
         for (var, sort) in binding {
@@ -412,10 +410,10 @@ impl TypeInfo {
         action: &Action,
         binding: &IndexMap<Symbol, ArcSort>,
     ) -> Result<ResolvedAction, TypeError> {
-        self.typecheck_actions(&[action.clone()], binding)
+        self.typecheck_actions(&Actions::singleton(action.clone()), binding)
             .map(|mut v| {
                 assert_eq!(v.len(), 1);
-                v.pop().unwrap()
+                v.0.pop().unwrap()
             })
     }
 

@@ -66,9 +66,9 @@ impl EGraph {
         )> = self
             .functions
             .values()
-            .filter(|f| {
-                config.include_temporary_functions || !self.is_temp_name(f.decl.name.to_string())
-            })
+            // .filter(|f| {
+            //     config.include_temporary_functions || !self.is_temp_name(f.decl.name.to_string())
+            // })
             .map(|function| {
                 function
                     .nodes
@@ -208,19 +208,21 @@ impl EGraph {
         (class_id, node_id)
     }
 
-    /// Returns true if the name is in the form v{digits}__
-    /// like v78___
-    ///
-    /// Checks for pattern created by Desugar.get_fresh
-    fn is_temp_name(&self, name: String) -> bool {
-        let number_underscores = self.desugar.number_underscores;
-        let res = name.starts_with('v')
-            && name.ends_with("_".repeat(number_underscores).as_str())
-            && name[1..name.len() - number_underscores]
-                .parse::<u32>()
-                .is_ok();
-        res
-    }
+    // yz (Dec 2024): Commented out this since this is obsolete
+    // and I am not sure if this is still useful after refactoring
+    // /// Returns true if the name is in the form v{digits}__
+    // /// like v78___
+    // ///
+    // /// Checks for pattern created by Desugar.get_fresh
+    // fn is_temp_name(&self, name: String) -> bool {
+    //     let number_underscores = self.desugar.number_underscores;
+    //     let res = name.starts_with('v')
+    //         && name.ends_with("_".repeat(number_underscores).as_str())
+    //         && name[1..name.len() - number_underscores]
+    //             .parse::<u32>()
+    //             .is_ok();
+    //     res
+    // }
 }
 
 type NodeIDs = HashMap<egraph_serialize::ClassId, VecDeque<egraph_serialize::NodeId>>;

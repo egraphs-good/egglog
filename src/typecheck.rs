@@ -179,11 +179,8 @@ where
         let (body, _correspondence) = Facts(body.clone()).to_query(typeinfo, &mut fresh_gen);
         let mut binding = body.get_vars();
         let (head, _correspondence) =
-            Actions(head.clone()).to_norm_actions(typeinfo, &mut binding, &mut fresh_gen)?;
-        Ok(GenericCoreRule {
-            body,
-            head: CoreActions(head),
-        })
+            head.to_norm_actions(typeinfo, &mut binding, &mut fresh_gen)?;
+        Ok(GenericCoreRule { body, head })
     }
 
     fn to_canonicalized_core_rule_impl(
@@ -635,7 +632,7 @@ impl EGraph {
     pub(crate) fn compile_actions(
         &self,
         binding: &IndexSet<ResolvedVar>,
-        actions: &[CoreAction<ResolvedCall, ResolvedVar>],
+        actions: &CoreActions<ResolvedCall, ResolvedVar>,
     ) -> Result<Program, Vec<TypeError>> {
         let mut types = IndexMap::default();
         for var in binding {
@@ -648,7 +645,7 @@ impl EGraph {
             instructions: Vec::new(),
         };
 
-        for a in actions {
+        for a in actions.0.iter() {
             checker.check_action(a);
         }
 
@@ -662,7 +659,7 @@ impl EGraph {
     pub(crate) fn compile_expr(
         &self,
         binding: &IndexSet<ResolvedVar>,
-        actions: &[CoreAction<ResolvedCall, ResolvedVar>],
+        actions: &ResolvedCoreActions,
         target: &ResolvedAtomTerm,
     ) -> Result<Program, Vec<TypeError>> {
         let mut types = IndexMap::default();
@@ -676,7 +673,7 @@ impl EGraph {
             instructions: Vec::new(),
         };
 
-        for a in actions {
+        for a in actions.0.iter() {
             checker.check_action(a);
         }
         checker.do_atom_term(target);

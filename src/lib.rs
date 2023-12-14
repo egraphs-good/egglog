@@ -1043,12 +1043,11 @@ impl EGraph {
     ) -> Result<Symbol, Error> {
         let name = Symbol::from(name);
         let core_rule = rule.to_canonicalized_core_rule(self.type_info())?;
-        let (query, action) = (core_rule.body, core_rule.head);
+        let (query, actions) = (core_rule.body, core_rule.head);
 
         let vars = query.get_vars();
         let query = self.compile_gj_query(query, &vars);
 
-        let actions: Vec<_> = action.0.clone();
         let program = self
             .compile_actions(&vars, &actions)
             .map_err(Error::TypeErrors)?;
@@ -1080,8 +1079,8 @@ impl EGraph {
         self.add_rule_with_name(name, rule, ruleset)
     }
 
-    fn eval_actions(&mut self, actions: &[ResolvedAction]) -> Result<(), Error> {
-        let (actions, _) = Actions(actions.to_vec()).to_norm_actions(
+    fn eval_actions(&mut self, actions: &ResolvedActions) -> Result<(), Error> {
+        let (actions, _) = actions.to_norm_actions(
             self.type_info(),
             &mut Default::default(),
             &mut ResolvedGen::new(),
@@ -1162,7 +1161,7 @@ impl EGraph {
 
     fn check_facts(&mut self, facts: &[ResolvedFact]) -> Result<(), Error> {
         let rule = ast::ResolvedRule {
-            head: vec![],
+            head: ResolvedActions::default(),
             body: facts.to_vec(),
         };
         let core_rule = rule.to_canonicalized_core_rule(self.type_info())?;
@@ -1266,7 +1265,7 @@ impl EGraph {
                             }
                         }
                         _ => {
-                            self.eval_actions(std::slice::from_ref(&action))?;
+                            self.eval_actions(&ResolvedActions::new(vec![action.clone()]))?;
                         }
                     }
                 } else {

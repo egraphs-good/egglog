@@ -12,7 +12,7 @@ fn desugar_datatype(name: Symbol, variants: Vec<Variant>) -> Vec<NCommand> {
                     output: name,
                 },
                 merge: None,
-                merge_action: vec![],
+                merge_action: Actions::default(),
                 default: None,
                 cost: variant.cost,
                 unextractable: false,
@@ -34,7 +34,7 @@ fn desugar_rewrite(ruleset: Symbol, name: Symbol, rewrite: &Rewrite) -> Vec<NCom
                 .into_iter()
                 .chain(rewrite.conditions.clone())
                 .collect(),
-            head: vec![Action::Union((), Expr::Var((), var), rewrite.rhs.clone())],
+            head: Actions::singleton(Action::Union((), Expr::Var((), var), rewrite.rhs.clone())),
         },
     }]
 }
@@ -60,7 +60,7 @@ fn add_semi_naive_rule(desugar: &mut Desugar, rule: Rule) -> Option<Rule> {
     let mut add_new_rule = false;
 
     let mut var_set = HashSet::default();
-    for head_slice in new_rule.head.iter_mut().rev() {
+    for head_slice in new_rule.head.0.iter_mut().rev() {
         match head_slice {
             Action::Set(_ann, _, _, expr) => {
                 var_set.extend(expr.vars());
@@ -89,7 +89,7 @@ fn add_semi_naive_rule(desugar: &mut Desugar, rule: Rule) -> Option<Rule> {
     if add_new_rule {
         new_rule.body.extend(new_head_atoms.into_iter().rev());
         // remove all let action
-        new_rule.head.retain_mut(
+        new_rule.head.0.retain_mut(
             |action| !matches!(action, Action::Let(_ann, var, _) if var_set.contains(var)),
         );
         log::debug!("Added a semi-naive desugared rule:\n{}", new_rule);
@@ -408,7 +408,7 @@ impl Desugar {
                 },
                 default: None,
                 merge: None,
-                merge_action: vec![],
+                merge_action: Actions::default(),
                 cost: None,
                 unextractable: false,
             }),

@@ -1,7 +1,7 @@
 use crate::{
     ast::{
-        CoreActions, GenericAction, GenericExpr, GenericFact, NormAction, ResolvedAction,
-        ResolvedExpr, ResolvedFact, ResolvedVar,
+        CoreActions, GenericAction, GenericActions, GenericExpr, GenericFact, MappedAction,
+        NormAction, ResolvedAction, ResolvedActions, ResolvedExpr, ResolvedFact, ResolvedVar,
     },
     sort::I64Sort,
     typecheck::{Atom, AtomTerm, CoreRule, Query, ResolvedCall, SymbolOrEq},
@@ -283,7 +283,7 @@ impl Assignment<AtomTerm, ArcSort> {
 
     pub(crate) fn annotate_action(
         &self,
-        action: &GenericAction<(Symbol, Symbol), Symbol, ()>,
+        action: &MappedAction,
         typeinfo: &TypeInfo,
     ) -> Result<ResolvedAction, TypeError> {
         match action {
@@ -352,13 +352,15 @@ impl Assignment<AtomTerm, ArcSort> {
 
     pub(crate) fn annotate_actions(
         &self,
-        mapped_actions: &[GenericAction<(Symbol, Symbol), Symbol, ()>],
+        mapped_actions: &GenericActions<(Symbol, Symbol), Symbol, ()>,
         typeinfo: &TypeInfo,
-    ) -> Result<Vec<ResolvedAction>, TypeError> {
-        mapped_actions
+    ) -> Result<ResolvedActions, TypeError> {
+        let actions = mapped_actions
             .iter()
             .map(|action| self.annotate_action(action, typeinfo))
-            .collect()
+            .collect::<Result<_, _>>()?;
+
+        Ok(ResolvedActions::new(actions))
     }
 }
 
