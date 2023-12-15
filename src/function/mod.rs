@@ -93,7 +93,7 @@ impl Function {
 
         // Invariant: the last element in the stack is the return value.
         let merge_vals = if let Some(merge_expr) = &decl.merge {
-            let (actions, mapped_expr) = merge_expr.to_norm_actions(
+            let (actions, mapped_expr) = merge_expr.to_core_actions(
                 egraph.type_info(),
                 &mut binding.clone(),
                 &mut ResolvedGen::new(),
@@ -112,7 +112,7 @@ impl Function {
         let on_merge = if decl.merge_action.is_empty() {
             None
         } else {
-            let (merge_action, _) = decl.merge_action.to_norm_actions(
+            let (merge_action, _) = decl.merge_action.to_core_actions(
                 egraph.type_info(),
                 &mut binding.clone(),
                 &mut ResolvedGen::new(),
@@ -159,7 +159,6 @@ impl Function {
                 on_merge,
                 merge_vals,
             },
-            // TODO figure out merge and default here
         })
     }
 

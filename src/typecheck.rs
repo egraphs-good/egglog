@@ -179,7 +179,7 @@ where
         let (body, _correspondence) = Facts(body.clone()).to_query(typeinfo, &mut fresh_gen);
         let mut binding = body.get_vars();
         let (head, _correspondence) =
-            head.to_norm_actions(typeinfo, &mut binding, &mut fresh_gen)?;
+            head.to_core_actions(typeinfo, &mut binding, &mut fresh_gen)?;
         Ok(GenericCoreRule { body, head })
     }
 

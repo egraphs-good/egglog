@@ -329,7 +329,7 @@ impl TypeInfo {
 
         let mut binding = query.get_vars();
         let (actions, mapped_action): (NormActions, MappedActions) =
-            head.to_norm_actions(self, &mut binding, &mut fresh_gen)?;
+            head.to_core_actions(self, &mut binding, &mut fresh_gen)?;
 
         let mut problem = Problem::default();
         problem.add_rule(
@@ -373,7 +373,7 @@ impl TypeInfo {
         let mut binding_set = binding.keys().cloned().collect::<IndexSet<_>>();
         let mut fresh_gen = SymbolGen::new();
         let (actions, mapped_action): (NormActions, MappedActions) =
-            actions.to_norm_actions(self, &mut binding_set, &mut fresh_gen)?;
+            actions.to_core_actions(self, &mut binding_set, &mut fresh_gen)?;
         let mut problem = Problem::default();
 
         // add actions to problem

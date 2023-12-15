@@ -6,9 +6,7 @@ use libtest_mimic::Trial;
 #[derive(Clone)]
 struct Run {
     path: PathBuf,
-    // test_proofs: bool,
     // resugar: bool,
-    // test_terms_encoding: bool,
 }
 
 impl Run {
@@ -16,24 +14,12 @@ impl Run {
         let _ = env_logger::builder().is_test(true).try_init();
         let program = std::fs::read_to_string(&self.path)
             .unwrap_or_else(|err| panic!("Couldn't read {:?}: {:?}", self.path, err));
-        // let already_enables = program_read.starts_with("(set-option enable_proofs 1)");
-        // let program = if self.test_proofs && !already_enables {
-        //     format!("(set-option enable_proofs 1)\n{}", program_read)
-        // } else {
-        //     program_read
-        // };
 
         self.test_program(&program, "Top level error");
     }
 
     fn test_program(&self, program: &str, message: &str) {
         let mut egraph = EGraph::default();
-        // if self.test_proofs {
-        //     egraph.test_proofs = true;
-        // }
-        // if self.test_terms_encoding {
-        //     egraph.enable_terms_encoding();
-        // }
         egraph.set_underscores_for_desugaring(5);
         match egraph.parse_and_run_program(program) {
             Ok(msgs) => {
@@ -99,25 +85,14 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
     for entry in glob::glob(glob).unwrap() {
         let run = Run {
             path: entry.unwrap().clone(),
-            // test_proofs: false,
             // resugar: false,
-            // test_terms_encoding: false,
         };
         // let should_fail = run.should_fail();
 
         push_trial(run.clone());
-        // push_trial(Run {
-        //     test_terms_encoding: true,
-        //     ..run.clone()
-        // });
         // if !should_fail {
         //     push_trial(Run {
         //         resugar: true,
-        //         ..run.clone()
-        //     });
-        //     push_trial(Run {
-        //         resugar: true,
-        //         test_terms_encoding: true,
         //         ..run.clone()
         //     });
         // }

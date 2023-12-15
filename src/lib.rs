@@ -1080,7 +1080,7 @@ impl EGraph {
     }
 
     fn eval_actions(&mut self, actions: &ResolvedActions) -> Result<(), Error> {
-        let (actions, _) = actions.to_norm_actions(
+        let (actions, _) = actions.to_core_actions(
             self.type_info(),
             &mut Default::default(),
             &mut ResolvedGen::new(),
@@ -1108,7 +1108,7 @@ impl EGraph {
         expr: &ResolvedExpr,
         make_defaults: bool,
     ) -> Result<Value, Error> {
-        let (actions, mapped_expr) = expr.to_norm_actions(
+        let (actions, mapped_expr) = expr.to_core_actions(
             self.type_info(),
             &mut Default::default(),
             &mut ResolvedGen::new(),

@@ -178,7 +178,10 @@ impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq, Ann: Clone>
         }
     }
 
-    // TODO: cannon function may want to take the annotation of variables
+    // TODO: Currently, subst_leaf takes a leaf but not an annotation over the leaf,
+    // so it has to "make up" annotations for the returned GenericExpr. A better
+    // approach is for subst_leaf to also take the annotation, which we should
+    // implement after we use real non-() annotations
     pub fn subst<Head2, Leaf2>(
         &self,
         subst_leaf: &mut impl FnMut(&Leaf) -> GenericExpr<Head2, Leaf2, Ann>,
