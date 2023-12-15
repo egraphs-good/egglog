@@ -143,9 +143,8 @@ When running `query`, egglog returns a set of substitutions $R \subseteq A$ such
 
 Intuitively, egglog returns all substitutions that are valid for the query
 modulo equality in the congruence closure.
-Since users of egglog can't distinguish terms
-that are equal in the congruence closure,
-$S'$ represents $S$ soundly.
+Egglog (currently) provides no way to distinguish two terms that are equal in $C$.
+Therefore, $S'$ represents $S$ soundly.
 
 ## Actions
 
@@ -168,14 +167,11 @@ aexpr ::= <primitive>
 
 ## Executing Actions
 
-Given a substitution `S`, an action evaluates to $(T', D')$, a set of new terms
-and a set of new tuples to add to the database.
-
-terms and tuples to the database.
-Let `evaluated(B, S, A)` denote that action `A`
-evaluates with substitution `S` to a new database `B`.
-We also define a helper `evaluated_expr(B, S, stmt)` to denote that statement `stmt` evaluates with substitution `S` to database `B`.
-
+Given a substitution `S`, an action evaluates to $(T', D')$:
+a set of new terms and a set of new tuples.
+Let `evaluated(T', D', S, A)` denote that action `A`
+evaluates with substitution `S` to a new terms `T'` and `D'`.
+We also define a helper `evaluated_expr(t, S, stmt)` to denote that statement `stmt` evaluates with substitution `S` to term `t`.
 
 ```
 ----------------------
