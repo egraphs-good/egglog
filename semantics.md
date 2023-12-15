@@ -3,13 +3,16 @@
 This (in-progress) document describes the semantics of the Egglog language in a fairly  operational way.
 PRs are required to keep this in sync with the implementation.
 
-Things to do:
+TODO:
 - Add typechecking
 - Running rules, schedules
-- Add rebuilding
+- Merge functions, and on_merge
+- Give semantics to rebuilding
 - Add seminaiive
 - Handle globals
 - Add something about lattices and why egglog is well-behaved when using them
+- extraction meaning and guarantees
+- set-option variants and their meaning
 
 ## Global State
 
@@ -165,7 +168,9 @@ aexpr ::= <primitive>
 
 ## Executing Actions
 
-Given a substitution `S`, an action adds new
+Given a substitution `S`, an action evaluates to $(T', D')$, a set of new terms
+and a set of new tuples to add to the database.
+
 terms and tuples to the database.
 Let `evaluated(B, S, A)` denote that action `A`
 evaluates with substitution `S` to a new database `B`.
@@ -185,6 +190,26 @@ evaluated(B, S, ())
 ```
 
 
+## Invariant Maintenance
 
+After running an action, egglog needs to add new terms and tuples $(T', D')$
+to the database $B$.
+The resulting database must contain $T'$ and $D'$, but also maintain the
+following invariants:
 
+- $C$ is a congruence closure: it satisfies reflexivity, symmetry, transitivity, and congruence
+- $T$ is closed under $C$. This means that if a term is in $T$, all variants that are equal to it are also in $T$.
+$$\forall (c t_1 ... t_n) \in T, t_1 = t_1' \in C, ..., t_n = t_n' \in C \implies (c t_1' ... t_n') \in T$$
 
+Egglog "completes" or "closes" the database in order to maintain these 
+invariants.
+However, it is only allowed to add terms and tuples that are directly
+implied by existing ones using the axioms of the congruence closure.
+TODO make this formal.
+
+In the implementation of egglog, storing a representative $t \in T$ for
+each equivalence class is sufficient to represent $T$ and
+efficiently perform queries.
+However, the implementation must also maintain the invariant that there is one
+canonical representative per equivalence class.
+We consider this an implemtation detail.
