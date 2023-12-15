@@ -1,6 +1,6 @@
 # Egglog semantics document
 
-This (in-progress) document describes the semantics of the Egglog language in a fairly  operational way.
+This (in-progress) document describes the semantics of the Egglog language.
 PRs are required to keep this in sync with the implementation.
 
 TODO:
@@ -8,7 +8,7 @@ TODO:
 - Running rules, schedules
 - Merge functions, and on_merge
 - Give semantics to rebuilding
-- Add seminaiive
+- Add seminaive
 - Handle globals
 - Add something about lattices and why egglog is well-behaved when using them
 - extraction meaning and guarantees
@@ -17,7 +17,7 @@ TODO:
 ## Global State
 
 Egglog maintains a global state $(T, D, C, E, F)$.
-- $T$ is a set of terms, constructed using *constructors*. $T$ can be inifinite (but is represented in a finite way in egglog's implementation).
+- $T$ is a set of terms, constructed using *constructors*. $T$ can be infinite (but is represented in a finite way in egglog's implementation).
 - $D$ is a set of tuples containing terms, constructed by `set`-ing *functions*.
 - $C$ is a set of equalities between terms. It is also a congruence closure, maintained by egglog's core.
 - $E$ is an environment: a mapping from global variables to terms.
@@ -39,13 +39,13 @@ Egglog ensures these terms are well-typed.
 Example:
 `(constructor Add (Math Math) Math)`
 This declares a constructor `Add` with two arguments of sort `Math`.
-After delaring a constructor, it can be used in actions or queries
+After declaring a constructor, it can be used in actions or queries
 
 ## Functions
 
 Example:
 `(function LowerBound (Math) Bound :merge (Max old new))`
-This declares a function `LowerBound` with one argument of sort `Math`
+This declares a function `LowerBound` with one argument of sort `vMath`
 and one result of sort `Bound`.
 
 Functions contain terms built using constructors.
@@ -81,8 +81,8 @@ Rules have the following syntax:
 ## Executing Queries
 
 When executing a query, egglog returns a set of substitutions.
-Each substutition `S` is mapping from variables to terms.
-Let `valid(B, S, query)` denode that substitution `S` is valid for database `B` and query `query`.
+Each substitution `S` is mapping from variables to terms.
+Let `valid(B, S, query)` denote that substitution `S` is valid for database `B` and query `query`.
 We define validity below.
 Validity ensures that each constraint enforced by the query is met.
 We use a helper `binds(B, S, e, t)` to denote that `e` is bound to `t` with substitution `S` in database `B`.
