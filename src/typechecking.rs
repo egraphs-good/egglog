@@ -1,4 +1,7 @@
-use crate::{core::CoreRule, *};
+use crate::{
+    core::{CoreRule, NormActions},
+    *,
+};
 
 #[derive(Clone, Debug)]
 pub struct FuncType {

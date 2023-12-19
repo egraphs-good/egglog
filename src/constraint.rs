@@ -1,9 +1,9 @@
 use crate::{
     ast::{
-        CoreActions, GenericAction, GenericActions, GenericExpr, GenericFact, MappedAction,
-        NormAction, ResolvedAction, ResolvedActions, ResolvedExpr, ResolvedFact, ResolvedVar,
+        GenericAction, GenericActions, GenericExpr, GenericFact, MappedAction, ResolvedAction,
+        ResolvedActions, ResolvedExpr, ResolvedFact, ResolvedVar,
     },
-    core::{Atom, AtomTerm, CoreRule, Query, ResolvedCall, SymbolOrEq},
+    core::{Atom, AtomTerm, CoreActions, CoreRule, NormAction, Query, ResolvedCall, SymbolOrEq},
     sort::I64Sort,
     typechecking::TypeError,
     util::{FreshGen, HashMap, HashSet, SymbolGen},
