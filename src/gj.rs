@@ -4,8 +4,8 @@ use log::log_enabled;
 use smallvec::SmallVec;
 
 use crate::{
+    core::{Atom, AtomTerm, ResolvedAtomTerm, ResolvedCall},
     function::index::Offset,
-    typecheck::{Atom, AtomTerm, ResolvedAtomTerm, ResolvedCall},
     *,
 };
 use std::{
@@ -14,7 +14,7 @@ use std::{
     ops::Range,
 };
 
-type Query = crate::typecheck::Query<ResolvedCall, Symbol>;
+type Query = crate::core::Query<ResolvedCall, Symbol>;
 
 #[derive(Clone)]
 enum Instr<'a> {
@@ -337,7 +337,7 @@ impl EGraph {
         // instead of Query<ResolvedCall, ResolvedVar>, so we do
         // the manual conversion here.
         // This needs to be fixed in the future.
-        query: typecheck::Query<ResolvedCall, ResolvedVar>,
+        query: core::Query<ResolvedCall, ResolvedVar>,
         ordering: &IndexSet<ResolvedVar>,
     ) -> CompiledQuery {
         // NOTE: this vars order only used for ordering the tuple storing the resulting match

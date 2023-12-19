@@ -20,7 +20,8 @@ mod serialize;
 pub mod sort;
 mod termdag;
 // mod terms;
-mod typecheck;
+mod actions;
+mod core;
 mod typechecking;
 mod unionfind;
 pub mod util;
@@ -42,7 +43,9 @@ use generic_symbolic_expressions::Sexp;
 use ast::*;
 pub use typechecking::{TypeInfo, UNIT_SYM};
 
+use actions::Program;
 use constraint::{Constraint, SimpleTypeConstraint, TypeConstraint};
+use core::{AtomTerm, ResolvedCall};
 use std::fmt::{Display, Formatter};
 use std::fs::File;
 use std::hash::Hash;
@@ -53,7 +56,6 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::str::FromStr;
 use std::{fmt::Debug, sync::Arc};
-use typecheck::{AtomTerm, Program, ResolvedCall};
 
 pub type ArcSort = Arc<dyn Sort>;
 

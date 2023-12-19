@@ -1,7 +1,4 @@
-use crate::{
-    typecheck::{CoreRule, ValueEq},
-    *,
-};
+use crate::{core::CoreRule, *};
 
 #[derive(Clone, Debug)]
 pub struct FuncType {

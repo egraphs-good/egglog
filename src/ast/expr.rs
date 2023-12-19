@@ -1,4 +1,4 @@
-use crate::{typecheck::ResolvedCall, *};
+use crate::{core::ResolvedCall, *};
 use ordered_float::OrderedFloat;
 
 use std::{fmt::Display, hash::Hasher};

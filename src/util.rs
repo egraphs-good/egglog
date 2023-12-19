@@ -2,7 +2,7 @@
 
 use std::fmt::Display;
 
-use crate::typecheck::SpecializedPrimitive;
+use crate::core::SpecializedPrimitive;
 #[allow(unused_imports)]
 use crate::*;
 

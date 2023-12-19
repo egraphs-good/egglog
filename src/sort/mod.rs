@@ -22,6 +22,7 @@ pub use set::*;
 mod vec;
 pub use vec::*;
 
+use crate::constraint::AllEqualTypeConstraint;
 use crate::extract::{Cost, Extractor};
 use crate::*;
 
@@ -145,3 +146,29 @@ impl<T: IntoSort> IntoSort for Option<T> {
 
 pub type PreSort =
     fn(typeinfo: &mut TypeInfo, name: Symbol, params: &[Expr]) -> Result<ArcSort, TypeError>;
+
+pub(crate) struct ValueEq {
+    pub unit: Arc<UnitSort>,
+}
+
+impl PrimitiveLike for ValueEq {
+    fn name(&self) -> Symbol {
+        "value-eq".into()
+    }
+
+    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+        AllEqualTypeConstraint::new(self.name())
+            .with_exact_length(3)
+            .with_output_sort(self.unit.clone())
+            .into_box()
+    }
+
+    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+        assert_eq!(values.len(), 2);
+        if values[0] == values[1] {
+            Some(Value::unit())
+        } else {
+            None
+        }
+    }
+}
