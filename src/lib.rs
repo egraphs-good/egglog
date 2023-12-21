@@ -353,43 +353,46 @@ impl PrimitiveLike for SimplePrimitive {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
-pub enum CompilerPassStop {
-    Desugar,
-    TypecheckDesugared,
-    TermEncoding,
-    TypecheckTermEncoding,
-    Proofs,
-    TypecheckProofs,
-    All,
+pub enum RunMode {
+    Normal,
+    ShowDesugaredEgglog,
+    // TODO: supporting them needs to refactor the way NCommand is organized.
+    // There is no version of NCommand where CoreRule is used in place of Rule.
+    // As a result, we cannot just call to_lower_rule and get a NCommand with lowered CoreRule in it
+    // and print it out.
+    // A refactoring that allows NCommand to contain CoreRule can make this possible.
+    // ShowCore,
+    // ShowResugaredCore,
+}
+impl RunMode {
+    fn show_egglog(&self) -> bool {
+        matches!(self, RunMode::ShowDesugaredEgglog)
+    }
 }
 
-impl Display for CompilerPassStop {
+impl Display for RunMode {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        // A little bit unintuitive but RunMode is specified as command-line
+        // argument with flag `--show`, so `--show none` means a normal run.
         match self {
-            CompilerPassStop::Desugar => write!(f, "desugar"),
-            CompilerPassStop::TypecheckDesugared => write!(f, "typecheck_desugared"),
-            CompilerPassStop::TermEncoding => write!(f, "term_encoding"),
-            CompilerPassStop::TypecheckTermEncoding => write!(f, "typecheck_term_encoding"),
-            CompilerPassStop::Proofs => write!(f, "proofs"),
-            CompilerPassStop::TypecheckProofs => write!(f, "typecheck_proofs"),
-            CompilerPassStop::All => write!(f, "all"),
+            RunMode::Normal => write!(f, "none"),
+            RunMode::ShowDesugaredEgglog => write!(f, "desugared-egglog"),
+            // RunMode::ShowCore => write!(f, "core"),
+            // RunMode::ShowResugaredCore => write!(f, "resugared-core"),
         }
     }
 }
 
-impl FromStr for CompilerPassStop {
+impl FromStr for RunMode {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "desugar" => Ok(CompilerPassStop::Desugar),
-            "typecheck_desugared" => Ok(CompilerPassStop::TypecheckDesugared),
-            "term_encoding" => Ok(CompilerPassStop::TermEncoding),
-            "typecheck_term_encoding" => Ok(CompilerPassStop::TypecheckTermEncoding),
-            "proofs" => Ok(CompilerPassStop::Proofs),
-            "typecheck_proofs" => Ok(CompilerPassStop::TypecheckProofs),
-            "all" => Ok(CompilerPassStop::All),
-            _ => Err(format!("Unknown compiler pass stop: {}", s)),
+            "none" => Ok(RunMode::Normal),
+            "desugared-egglog" => Ok(RunMode::ShowDesugaredEgglog),
+            // "core" => Ok(RunMode::ShowCore),
+            // "resugared-core" => Ok(RunMode::ShowResugaredCore),
+            _ => Err(format!("Unknown run mode: {}", s)),
         }
     }
 }
@@ -406,6 +409,7 @@ pub struct EGraph {
     terms_enabled: bool,
     interactive_mode: bool,
     timestamp: u32,
+    pub run_mode: RunMode,
     // pub(crate) term_header_added: bool,
     pub test_proofs: bool,
     pub match_limit: usize,
@@ -445,6 +449,7 @@ impl Default for EGraph {
             match_limit: usize::MAX,
             node_limit: usize::MAX,
             timestamp: 0,
+            run_mode: RunMode::Normal,
             proofs_enabled: false,
             terms_enabled: false,
             interactive_mode: false,
@@ -502,7 +507,7 @@ impl EGraph {
                 // push/pop
                 self.recent_run_report = recent_run_report.or(self.recent_run_report.clone());
                 self.overall_run_report = overall_run_report;
-                self.msgs.extend(messages);
+                self.msgs = messages;
                 Ok(())
             }
             None => Err(Error::Pop),
@@ -1187,7 +1192,7 @@ impl EGraph {
         }
     }
 
-    fn run_command(&mut self, command: ResolvedNCommand, should_run: bool) -> Result<(), Error> {
+    fn run_command(&mut self, command: ResolvedNCommand) -> Result<(), Error> {
         let pre_rebuild = Instant::now();
         let rebuild_num = self.rebuild()?;
         if rebuild_num > 0 {
@@ -1226,54 +1231,40 @@ impl EGraph {
                 log::info!("Declared rule {name}.")
             }
             ResolvedNCommand::RunSchedule(sched) => {
-                if should_run {
-                    let report = self.run_schedule(&sched);
-                    log::info!("Ran schedule {}.", sched);
-                    log::info!("Report: {}", report);
-                    self.overall_run_report = self.overall_run_report.union(&report);
-                    self.recent_run_report = Some(report);
-                } else {
-                    log::warn!("Skipping schedule.")
-                }
+                let report = self.run_schedule(&sched);
+                log::info!("Ran schedule {}.", sched);
+                log::info!("Report: {}", report);
+                self.overall_run_report = self.overall_run_report.union(&report);
+                self.recent_run_report = Some(report);
             }
             ResolvedNCommand::PrintOverallStatistics => {
                 log::info!("Overall statistics:\n{}", self.overall_run_report);
                 self.print_msg(format!("Overall statistics:\n{}", self.overall_run_report));
             }
             ResolvedNCommand::Check(facts) => {
-                if should_run {
-                    self.check_facts(&facts)?;
-                    log::info!("Checked fact {:?}.", facts);
-                } else {
-                    log::warn!("Skipping check.")
-                }
+                self.check_facts(&facts)?;
+                log::info!("Checked fact {:?}.", facts);
             }
             ResolvedNCommand::CheckProof => log::error!("TODO implement proofs"),
-            ResolvedNCommand::NormAction(action) => {
-                if should_run {
-                    match &action {
-                        ResolvedAction::Let((), name, contents) => {
-                            let value = self.eval_resolved_expr(contents, true)?;
-                            let present = self.global_bindings.insert(
-                                name.name,
-                                (
-                                    contents.output_type(self.type_info()),
-                                    value,
-                                    self.timestamp,
-                                ),
-                            );
-                            if present.is_some() {
-                                panic!("Variable {name} was already present in global bindings");
-                            }
-                        }
-                        _ => {
-                            self.eval_actions(&ResolvedActions::new(vec![action.clone()]))?;
-                        }
+            ResolvedNCommand::NormAction(action) => match &action {
+                ResolvedAction::Let((), name, contents) => {
+                    let value = self.eval_resolved_expr(contents, true)?;
+                    let present = self.global_bindings.insert(
+                        name.name,
+                        (
+                            contents.output_type(self.type_info()),
+                            value,
+                            self.timestamp,
+                        ),
+                    );
+                    if present.is_some() {
+                        panic!("Variable {name} was already present in global bindings");
                     }
-                } else {
-                    log::warn!("Skipping running {action}.")
                 }
-            }
+                _ => {
+                    self.eval_actions(&ResolvedActions::new(vec![action.clone()]))?;
+                }
+            },
             ResolvedNCommand::Push(n) => {
                 (0..n).for_each(|_| self.push());
                 log::info!("Pushed {n} levels.")
@@ -1291,7 +1282,7 @@ impl EGraph {
                 self.print_size(f)?;
             }
             ResolvedNCommand::Fail(c) => {
-                let result = self.run_command(*c, should_run);
+                let result = self.run_command(*c);
                 if let Err(e) = result {
                     log::info!("Command failed as expected: {}", e);
                 } else {
@@ -1393,7 +1384,7 @@ impl EGraph {
             .collect::<Vec<_>>();
         let commands: Vec<_> = self.type_info_mut().typecheck_program(&commands)?;
         for command in commands {
-            self.run_command(command, true)?;
+            self.run_command(command)?;
         }
         log::info!("Read {} facts into {func_name} from '{file}'.", num_facts);
         Ok(())
@@ -1405,77 +1396,16 @@ impl EGraph {
         }
     }
 
-    // pub(crate) fn process_commands(
-    //     &mut self,
-    //     program: Vec<UnresolvedCommand>,
-    //     stop: CompilerPassStop,
-    // ) -> Result<Vec<ResolvedNCommand>, Error> {
-    //     let mut result = vec![];
-
-    //     for command in program {
-    //         match command {
-    //             Command::Push(num) => {
-    //                 for _ in 0..num {
-    //                     self.push();
-    //                 }
-    //             }
-    //             Command::Pop(num) => {
-    //                 for _ in 0..num {
-    //                     self.pop()
-    //                         .expect("Failed to desugar, popped too many times");
-    //                 }
-    //             }
-    //             _ => {}
-    //         }
-    //         result.extend(self.process_command(command, stop)?);
-    //     }
-    //     Ok(result)
-    // }
-
     pub fn set_underscores_for_desugaring(&mut self, underscores: usize) {
         self.desugar.number_underscores = underscores;
     }
 
-    fn process_command(
-        &mut self,
-        command: Command,
-        _stop: CompilerPassStop,
-    ) -> Result<Vec<ResolvedNCommand>, Error> {
+    fn process_command(&mut self, command: Command) -> Result<Vec<ResolvedNCommand>, Error> {
         let program =
             self.desugar
                 .desugar_program(vec![command], self.test_proofs, self.seminaive)?;
-        // TODO: a desugared program is not resolved yet
-        // so commenting out the desugar feature for now
-
-        // if stop == CompilerPassStop::Desugar {
-        //     return Ok(program);
-        // }
-
-        // let type_info_before = self.type_info().clone();
 
         let program = self.desugar.type_info.typecheck_program(&program)?;
-        // if stop == CompilerPassStop::TypecheckDesugared {
-        //     return Ok(program);
-        // }
-
-        // now add term encoding
-        // if self.terms_enabled {
-        //     let program_terms = TermState::add_term_encoding(self, program);
-        //     program = self.desugar.desugar_program(program_terms, false, false)?;
-        // }
-
-        // TODO: a term-encoded program is not resolved yet
-        // if stop == CompilerPassStop::TermEncoding {
-        //     return Ok(program);
-        // }
-
-        // reset type info
-        // We don't need this anymore as type_info is pure
-        // self.desugar.type_info = type_info_before;
-        // let program = self.desugar.type_info.typecheck_program(&program)?;
-        // if stop == CompilerPassStop::TypecheckTermEncoding {
-        //     return Ok(program);
-        // }
 
         Ok(program)
     }
@@ -1483,18 +1413,31 @@ impl EGraph {
     /// Run a program, represented as an AST.
     /// Return a list of messages.
     pub fn run_program(&mut self, program: Vec<Command>) -> Result<Vec<String>, Error> {
-        let should_run = true;
-
         for command in program {
             // Important to process each command individually
             // because push and pop create new scopes
-            for processed in self.process_command(command, CompilerPassStop::All)? {
-                self.run_command(processed, should_run)?;
+            for processed in self.process_command(command)? {
+                if self.run_mode.show_egglog() {
+                    // This is a hack: we have to do this because process_commands are indeed
+                    // not pure nor idempotent. When typechecking a function and some other commands,
+                    // it will add the command to the context. As a result, typechecking a function twice
+                    // can cause a conflict name error. To avoid this, we need to make sure process_commands
+                    // is pure and put everything impure at a separate place (e.g., run_command).
+                    match &processed {
+                        ResolvedNCommand::Push(..) | ResolvedNCommand::Pop(..) => {
+                            self.run_command(processed.clone())?;
+                        }
+                        _ => {}
+                    };
+                    self.print_msg(processed.to_command().to_string());
+                    continue;
+                }
+
+                self.run_command(processed)?;
             }
         }
         log::logger().flush();
 
-        // remove consecutive empty lines
         Ok(self.flush_msgs())
     }
 

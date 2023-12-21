@@ -80,7 +80,7 @@ impl SymbolGen {
 
 impl FreshGen<Symbol, Symbol> for SymbolGen {
     fn fresh(&mut self, name_hint: &Symbol) -> Symbol {
-        let s = format!("${}{}", name_hint, self.gen);
+        let s = format!("__{}{}", name_hint, self.gen);
         self.gen += 1;
         Symbol::from(s)
     }
@@ -98,7 +98,7 @@ impl ResolvedGen {
 
 impl FreshGen<ResolvedCall, ResolvedVar> for ResolvedGen {
     fn fresh(&mut self, name_hint: &ResolvedCall) -> ResolvedVar {
-        let s = format!("${}{}", name_hint, self.gen);
+        let s = format!("__{}{}", name_hint, self.gen);
         self.gen += 1;
         let sort = match name_hint {
             ResolvedCall::Func(f) => f.output.clone(),
