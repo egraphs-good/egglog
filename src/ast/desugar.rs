@@ -176,9 +176,13 @@ pub(crate) fn desugar_calc(
         let expr2 = &expr1and2[1];
         res.push(Command::Push(1));
 
-        // add the two exprs
-        res.push(Command::Action(Action::Expr((), expr1.clone())));
-        res.push(Command::Action(Action::Expr((), expr2.clone())));
+        // add the two exprs only when they are calls (consts and vars don't need to be populated).
+        if let Expr::Call(..) = expr1 {
+            res.push(Command::Action(Action::Expr((), expr1.clone())));
+        }
+        if let Expr::Call(..) = expr2 {
+            res.push(Command::Action(Action::Expr((), expr2.clone())));
+        }
 
         res.push(Command::RunSchedule(Schedule::Saturate(Box::new(
             Schedule::Run(RunConfig {

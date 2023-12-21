@@ -6,7 +6,7 @@ use libtest_mimic::Trial;
 #[derive(Clone)]
 struct Run {
     path: PathBuf,
-    // resugar: bool,
+    resugar: bool,
 }
 
 impl Run {
@@ -15,7 +15,19 @@ impl Run {
         let program = std::fs::read_to_string(&self.path)
             .unwrap_or_else(|err| panic!("Couldn't read {:?}: {:?}", self.path, err));
 
-        self.test_program(&program, "Top level error");
+        if !self.resugar {
+            self.test_program(&program, "Top level error");
+        } else {
+            let mut egraph = EGraph::default();
+            egraph.run_mode = RunMode::ShowDesugaredEgglog;
+            egraph.set_underscores_for_desugaring(3);
+            let desugared_str = egraph.parse_and_run_program(&program).unwrap().join("\n");
+
+            self.test_program(
+                &desugared_str,
+                "ERROR after parse, to_string, and parse again.",
+            );
+        }
     }
 
     fn test_program(&self, program: &str, message: &str) {
@@ -61,9 +73,9 @@ impl Run {
                 let stem = self.0.path.file_stem().unwrap();
                 let stem_str = stem.to_string_lossy().replace(['.', '-', ' '], "_");
                 write!(f, "{stem_str}")?;
-                // if self.0.resugar {
-                //     write!(f, "_resugar")?;
-                // }
+                if self.0.resugar {
+                    write!(f, "_resugar")?;
+                }
                 // if self.0.test_terms_encoding {
                 //     write!(f, "_term_encoding")?;
                 // }
@@ -85,17 +97,17 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
     for entry in glob::glob(glob).unwrap() {
         let run = Run {
             path: entry.unwrap().clone(),
-            // resugar: false,
+            resugar: false,
         };
-        // let should_fail = run.should_fail();
+        let should_fail = run.should_fail();
 
         push_trial(run.clone());
-        // if !should_fail {
-        //     push_trial(Run {
-        //         resugar: true,
-        //         ..run.clone()
-        //     });
-        // }
+        if !should_fail {
+            push_trial(Run {
+                resugar: true,
+                ..run.clone()
+            });
+        }
     }
 
     trials

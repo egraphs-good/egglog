@@ -1,5 +1,5 @@
 use clap::Parser;
-use egglog::{CompilerPassStop, EGraph, Error, SerializeConfig};
+use egglog::{EGraph, Error, RunMode, SerializeConfig};
 use std::io::{self, BufRead, BufReader};
 use std::path::PathBuf;
 
@@ -21,8 +21,8 @@ struct Args {
     /// the rebuilding algorithm (maintains congruence closure).
     #[clap(long)]
     terms_encoding: bool,
-    #[clap(long, default_value_t = CompilerPassStop::All)]
-    stop: CompilerPassStop,
+    #[clap(long, default_value_t = RunMode::Normal)]
+    show: RunMode,
     // TODO remove this evil hack
     #[clap(long, default_value_t = 3)]
     num_underscores: usize,
@@ -53,6 +53,7 @@ fn main() {
         egraph.set_underscores_for_desugaring(args.num_underscores);
         egraph.fact_directory = args.fact_directory.clone();
         egraph.seminaive = !args.naive;
+        egraph.run_mode = args.show;
         if args.terms_encoding {
             egraph.enable_terms_encoding();
         }

@@ -397,10 +397,10 @@ impl TypeInfo {
         expr: &Expr,
         binding: &IndexMap<Symbol, ArcSort>,
     ) -> Result<ResolvedExpr, TypeError> {
-        let action = Action::Let((), "$$result".into(), expr.clone());
+        let action = Action::Expr((), expr.clone());
         let typechecked_action = self.typecheck_action(&action, binding)?;
         match typechecked_action {
-            ResolvedAction::Let(_, _var, expr) => Ok(expr),
+            ResolvedAction::Expr(_, expr) => Ok(expr),
             _ => unreachable!(),
         }
     }
