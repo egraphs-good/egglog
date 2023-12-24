@@ -167,24 +167,44 @@ aexpr ::= <primitive>
 
 ## Executing Actions
 
-Given a substitution `S`, an action evaluates to $(T', D')$:
-a set of new terms and a set of new tuples.
-Let `evaluated(T', D', S, A)` denote that action `A`
-evaluates with substitution `S` to a new terms `T'` and `D'`.
-We also define a helper `evaluated_expr(t, S, stmt)` to denote that statement `stmt` evaluates with substitution `S` to term `t`.
+Given a substitution `S`, an action evaluates to $(T', D', C')$:
+a set of new terms, a set of new tuples,
+and a set of new equalities.
+We define the evaluation of an action as
+pseudocode below.
 
 ```
-----------------------
-evaluated(B, S, ())
+def eval(S, action):
+  match action:
+    () => ({}, {})
+    ((let x expr), stmts...) =>
+      let T = {subst(expr, S)}
+      ;; no aliasing allowed
+      assert(x not in keys(S))
+      let S' = S[x := (c t1 ... tN)]
+      let (T', D', C') = eval(S', (stmts...))
+      (union(T, T'), D', C')
+    (stmt, stmts...) => 
+       let (T, D, C) =
+         match stmt:
+           expr => ({subst(expr, S)}, {}, {})
+           (union expr1 expr2) =>
+             ({subst(expr1, S),
+               subst(expr2, S)},
+              {},
+              {subst(expr1, S) = subst(expr2, S)})
+           (set (f expr1 ... exprN) expr) =>
+             ({subst(expr, S)},
+              {(f subst(expr1, S) ... subst(exprN, S), subst(expr, S))},
+              {})
+           
 
-
-
-
-
-
-
+         
+       let (T, D, C) = eval(S, expr)
+       let (T', D', C') = eval(S, (stmts...))
+       (union(T, T'), union(D, D'), union(C, C'))
+    (
 ```
-
 
 ## Invariant Maintenance
 
