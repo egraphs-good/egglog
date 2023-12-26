@@ -2,6 +2,7 @@
 
 (require redex)
 (require rackunit)
+(require pict)
 
 (define-language Egglog
   (Program
@@ -66,14 +67,28 @@
   [(Eval-Expr number Env)
    (number ((number) ()))]
   [(Eval-Expr (constructor expr_s ...) Env)
-   ,(let ([results (term ((Eval-Expr expr_s Env) ...))])
-      (term
-       ((constructor ,@(map first results))
-        (Database-Union ,@(map second results)))))])
+   ((constructor Term_c ...)
+        (Database-Union
+         (((constructor Term_c ...)) ())
+         Database_c ...))
+   (where ((Term_c Database_c) ...)
+          ((Eval-Expr expr_s Env) ...))])
 
-#;(define-metafunction Egglog+Database
-    Eval-Action : action Env Database -> Database
-    [(Eval-Action (let var expr) Env Database)])
+
+(define (dump-pict pict name)
+  (send (pict->bitmap pict)
+        save-file
+        name
+        'png))
+
+
+(define-metafunction Egglog+Database
+    Eval-Action : action Env Database -> (Env Database)
+    [(Eval-Action (let var expr) Env Database)
+     ((var -> Term)
+      (Database-Union Database Database_2))
+     (where (Term Database_2)
+            (Eval-Expr expr Env))])
 
 (define Command-Reduction
   (reduction-relation
@@ -83,8 +98,6 @@
    (-->
     (action Database)
     (skip Database))))
-
-
 
 
 (define Egglog-Reduction
@@ -109,16 +122,20 @@
      Database))))
 
 
-;;(define-judgment-form
-;;  Egglog
-;;  #:contract (evals-to Database Cmds)
-;;  [-------------------------
-;;   (evals-to empty-terms empty-cmds)]
-;;  [(evals-to
-;;   -------------------------
 
 
+(define-syntax-rule (save-metafunction func ...)
+  (begin
+   (dump-pict (render-metafunction func)
+               (format "~a.png" 'func))
+   ...
+   (void)))
 
+
+(define (save-semantics)
+  (save-metafunction Eval-Expr Lookup Database-Union Eval-Action))
+
+(save-semantics)
 
 (module+ test
   (check-not-false
@@ -156,3 +173,4 @@
    (term (Eval-Expr (Add 2 3) empty-env))
    (term ((Add 2 3) (((Add 2 3) 2 3) ()))))
   )
+
