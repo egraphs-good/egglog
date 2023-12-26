@@ -24,7 +24,7 @@
   ;; a database is a list of terms
   ;; the terms list is finite, but combined with
   ;; the congruence closure it can represent an infinite set of terms
-  [Database (Terms Congr)]
+  [Database (Terms Congr Env)]
   [Congr
    (Eq ...)]
   [Eq
@@ -37,18 +37,18 @@
    (Program Database)]
   [Command+Database
    (cmd Database)]
-  [Env empty-env
-       (var -> Term Env)]
+  [Env (Assign ...)]
+  [Assign (var -> Term)]
   )
 
 ;; No rule for if the variable is not found
 ;; Therefore it fails in such cases
 (define-metafunction Egglog+Database
   Lookup : var Env -> Term
-  [(Lookup var (var -> Term Env))
+  [(Lookup var ((var -> Term) (var_s -> Term_s) ...))
    Term]
-  [(Lookup var_1 (var_2 -> Term Env))
-   (Lookup var Env)
+  [(Lookup var_1 ((var_2 -> Term) (var_s -> Term_s) ...))
+   (Lookup var ((var_s -> Term_s) ...))
    (side-condition (not (equal? (term var_1)
                                 (term var_2))))])
 
@@ -56,9 +56,9 @@
   Database-Union : Database ... -> Database
   [(Database-Union Database)
    Database]
-  [(Database-Union ((Term_s ...) (Eq_s ...)) Database_s ...)
-   ((Term_s ... Term_s2 ...) (Eq_s ... Eq_s2 ...))
-   (where ((Term_s2 ...) (Eq_s2 ...))
+  [(Database-Union ((Term_s ...) (Eq_s ...) (Assign_s ...)) Database_s ...)
+   ((Term_s ... Term_s2 ...) (Eq_s ... Eq_s2 ...) (Assign_s ... Assign_s2 ...))
+   (where ((Term_s2 ...) (Eq_s2 ...) (Assign_s2 ...))
           (Database-Union Database_s ...))])
 
 
@@ -66,11 +66,11 @@
 (define-metafunction Egglog+Database
   Eval-Expr : expr Env -> (Term Database)
   [(Eval-Expr number Env)
-   (number ((number) ()))]
+   (number ((number) () ()))]
   [(Eval-Expr (constructor expr_s ...) Env)
    ((constructor Term_c ...)
         (Database-Union
-         (((constructor Term_c ...)) ())
+         (((constructor Term_c ...)) () ())
          Database_c ...))
    (where ((Term_c Database_c) ...)
           ((Eval-Expr expr_s Env) ...))])
@@ -84,10 +84,14 @@
 
 
 (define-metafunction Egglog+Database
-    Eval-Action : action Env Database -> (Env Database)
-    [(Eval-Action (let var expr) Env Database)
+    Eval-Action : action Database -> Database
+    [(Eval-Action (let var expr) (Terms Congr Env))
      ((var -> Term)
-      (Database-Union Database Database_2))
+      (Database-Union (Terms Congr Env) Database_2))
+     (where (Term Database_2)
+            (Eval-Expr expr Env))]
+    [(Eval-Action expr (Terms Congr Env))
+     (Database-Union (Terms Congr Env) Database_2)
      (where (Term Database_2)
             (Eval-Expr expr Env))])
 
@@ -123,8 +127,6 @@
      Database))))
 
 
-
-
 (define-syntax-rule (save-metafunction func ...)
   (begin
    (dump-pict (render-metafunction func)
@@ -150,29 +152,29 @@
     Egglog+Database
     Program+Database
     (term
-     ((skip) (() ())))))
+     ((skip) (() () ())))))
 
   (check-not-false
    (redex-match
     Egglog+Database
     Command+Database
     (term
-     ((Add 2 3) (() ())))))
+     ((Add 2 3) (() () ())))))
 
 
   (check-equal?
    (apply-reduction-relation*
     Command-Reduction
     (term
-     ((Add 2 3) (() ()))))
-   (list (term (skip (() ())))))
+     ((Add 2 3) (() () ()))))
+   (list (term (skip (() () ())))))
 
   (check-equal?
-   (term (Eval-Expr 2 empty-env))
-   (term (2 ((2) ()))))
+   (term (Eval-Expr 2 ()))
+   (term (2 ((2) () ()))))
   (check-equal?
-   (term (Eval-Expr (Add 2 3) empty-env))
-   (term ((Add 2 3) (((Add 2 3) 2 3) ()))))
+   (term (Eval-Expr (Add 2 3) ()))
+   (term ((Add 2 3) (((Add 2 3) 2 3) () ()))))
   )
 
 
