@@ -275,10 +275,6 @@ impl Table {
         Some((inp.data(), out))
     }
 
-    // pub(crate) fn get_index_row(&self, i: usize) -> Option<&Row> {
-    //     self.vals.get(i)
-    // }
-
     /// Iterate over the live entries in the table, in insertion order.
     pub(crate) fn iter(&self) -> impl Iterator<Item = (&[Value], &TupleOutput)> + '_ {
         self.iter_range(0..self.num_offsets())
