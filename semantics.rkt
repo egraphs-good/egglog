@@ -4,6 +4,7 @@
 (require rackunit)
 (require pict)
 
+
 (define-language Egglog
   (Program
    (cmd ...))
@@ -173,4 +174,16 @@
    (term (Eval-Expr (Add 2 3) empty-env))
    (term ((Add 2 3) (((Add 2 3) 2 3) ()))))
   )
+
+
+;; TODO
+;; Make ast typed and add type checking?
+;;    Perhaps typed ast should be separate for simplicity
+;; Running rules, schedules
+;; Merge functions, on_merge
+;; Rebuilding semantics
+;; Seminaive evaluation- which substitutions are allowed to be returned
+;; Handle globals
+;; Extraction meaning and guarantees
+;; Set-opion
 
