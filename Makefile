@@ -1,4 +1,4 @@
-.PHONY: all web test nits docs serve graphs rm-graphs
+.PHONY: all web test nits docs serve graphs rm-graphs semantics
 
 RUST_SRC=$(shell find . -type f -wholename '*/src/*.rs' -or -name 'Cargo.toml')
 TESTS=$(shell find tests/ -type f -name '*.egg' -not -name '*repro-*')
@@ -10,7 +10,7 @@ WEB_SRC=$(wildcard web-demo/static/*)
 WASM=web_demo.js web_demo_bg.wasm
 DIST_WASM=$(addprefix ${WWW}, ${WASM})
 
-all: test nits web docs
+all: test nits web docs semantics
 
 test:
 	cargo nextest run --release
@@ -43,6 +43,10 @@ ${WWW}/examples.json: web-demo/examples.py ${TESTS}
 ${DIST_WASM}: ${RUST_SRC}
 	wasm-pack build web-demo --target no-modules --no-typescript --out-dir ${WWW}
 	rm -f ${WWW}/{.gitignore,package.json}
+
+semantics:
+  racket semantics.rkt
+	raco test semantics.rkt
 
 graphs: $(patsubst %.egg,%.svg,$(filter-out $(wildcard tests/repro-*.egg),$(wildcard tests/*.egg)))
 
