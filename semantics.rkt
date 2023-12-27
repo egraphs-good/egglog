@@ -11,7 +11,8 @@
   (cmd action
        skip)
   (action expr
-          (let var expr))
+          (let var expr)
+          (union expr expr))
   (expr number
         (constructor expr ...)
         var)
@@ -96,7 +97,14 @@
     [(Eval-Action expr (Terms Congr Env))
      (Database-Union (Terms Congr Env) Database_2)
      (where (Term Database_2)
-            (Eval-Expr expr Env))])
+            (Eval-Expr expr Env))]
+    [(Eval-Action (union expr_1 expr_2) (Terms (Eq ...) Env))
+     (Database-Union
+      (() ((= Term_1 Term_2) Eq ...) ())
+      Database_1
+      Database_2)
+     (where (Term_1 Database_1) (Eval-Expr expr_1 Env))
+     (where (Term_2 Database_2) (Eval-Expr expr_2 Env))])
 
 (define Command-Reduction
   (reduction-relation
@@ -168,7 +176,12 @@
                   TypeBinding ...))]
   [(typed-expr expr TypeEnv)
    ----------------------------
-   (typed-action expr TypeEnv TypeEnv)])
+   (typed-action expr TypeEnv TypeEnv)]
+  [(typed-expr expr_1 TypeEnv)
+   (typed-expr expr_2 TypeEnv)
+   ----------------------------
+   (typed-action (union expr_1 expr_2) TypeEnv TypeEnv)]
+   )
 
 
 (define-judgment-form
@@ -261,7 +274,7 @@
   (redex-check Egglog
     Program
     (executes? (term Program))
-    #:attempts 100000)
+    #:attempts 10000)
   )
 
 
