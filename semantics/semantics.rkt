@@ -10,6 +10,7 @@
   (Program
    (Cmd ...))
   (Cmd Action
+       Rule
        skip)
   (Rule
     (rule Query Actions))
@@ -227,7 +228,13 @@
    ;; running actions
    (-->
     (Action Database)
-    (skip (Eval-Action Action Database)))))
+    (skip (Eval-Action Action Database)))
+   (-->
+    (Rule (Terms Congr Env (Rule_i ...)))
+    (skip (Terms Congr Env (Rule Rule_i ...))))))
+
+
+
 
 (define (try-apply-reduction-relation relation term)
   (define lst (apply-reduction-relation relation term))
@@ -385,8 +392,7 @@
   [(typed (Cmd_p ...) TypeEnv)
    (typed-rule Rule TypeEnv)
    ---------------------------
-   (typed (Cmd_p ... Rule) TypeEnv)]
-   )
+   (typed (Cmd_p ... Rule) TypeEnv)])
 
 
 (define-syntax-rule (save-metafunction func ...)

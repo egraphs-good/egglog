@@ -10,6 +10,7 @@
   (judgment-holds (typed ,e TypeEnv)))
 
 (define (executes? prog)
+  (println prog)
   (cond
     [(not (types? prog))
      #t]
@@ -151,7 +152,7 @@
   (redex-check Egglog
                Program
                (executes? (term Program))
-               #:attempts 10000)
+               #:attempts 100000)
 
   (displayln (format "Executed ~a programs" num-executed))
   )
