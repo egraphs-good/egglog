@@ -21,6 +21,8 @@ mod set;
 pub use set::*;
 mod vec;
 pub use vec::*;
+mod function;
+pub use function::*;
 
 use crate::extract::{Cost, Extractor};
 use crate::*;
