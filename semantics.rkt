@@ -112,6 +112,18 @@
   [(Add-Equality Eq (Eq_i ...))
    (Eq Eq_i ...)])
 
+(define-metafunction
+  Egglog+Database
+  subset : Congr Congr -> ()
+  [(subset () ())
+   ()]
+  [(subset (Eq_1 Eq_i ...) (Eq_j ... Eq_1 Eq_k ...))
+   (subset (Eq_i ...) (Eq_j ... Eq_1 Eq_k ...))]
+  [(subset (Eq_1 Eq_i ...) (Eq_j ...))
+   #f
+   (side-condition
+    (not (member (term Eq_1) (term (Eq_j ...)))))])
+
 ;; A reduction relation that restores the congruence
 ;; relation after some equalities have been added
 ;; TODO would be much cleaner if we had sets
@@ -143,16 +155,37 @@
    (-->
     (Terms Congr Env)
     (Terms (Add-Equality (= Term_1 Term_3) Congr) Env)
-    (where (Eq_i ... (= Term_1 Term_2) Eq_j ... (= Term_2 Term_3) Eq_k ...) Congr)
+    (where
+     (Eq_i ... (= Term_1 Term_2)
+      Eq_j ... (= Term_2 Term_3)
+      Eq_k ...)
+     Congr)
     (side-condition
      (not
       (member (term (= Term_1 Term_3))
               (term Congr))))
     "transitivity"
     )
-   ;; TODO congruence
-
-   ))
+   (-->
+    (Terms Congr Env)
+    (Terms (Add-Equality
+            (= (constructor Term_i ...)
+               (constructor Term_j ...))
+            Congr) Env)
+    (where (Term_k ... (constructor Term_i ...)
+            Term_l ... (constructor Term_j ...)
+            Term_m ...)
+           Terms)
+    (where
+     (subset ((= Term_i Term_j) ...)
+             Congr)
+     ())
+    (side-condition
+     (not
+      (member (term (= (constructor Term_i ...)
+                       (constructor Term_j ...)))
+              (term Congr))))
+    )))
 
 ;; Like apply-reduction-relation*, but only
 ;; returns the first path found.
@@ -337,24 +370,33 @@
    (restore-congruence
     (term
      (()
-      ((= (Add 1 2) (Add 2 1))
-       (= (Add 2 1) (Add 0 3)))
+      ((= 1 2)
+       (= 2 3))
       ())))
-   '(()
-     ((= (Add 0 3) (Add 1 2))
-      (= (Add 2 1) (Add 2 1))
-      (= (Add 2 1) (Add 1 2))
-      (= (Add 0 3) (Add 0 3))
-      (= (Add 0 3) (Add 2 1))
-      (= (Add 1 2) (Add 0 3))
-      (= (Add 1 2) (Add 2 1))
-      (= (Add 2 1) (Add 0 3)))
-     ()))
+   '(() ((= 3 1)
+         (= 2 2)
+         (= 2 1)
+         (= 3 3)
+         (= 3 2)
+         (= 1 3)
+         (= 1 2)
+         (= 2 3)) ()))
 
   (check-equal?
    (restore-congruence
     (term ((1) () ())))
    (term ((1) ((= 1 1)) ())))
+
+  (check-equal?
+   (restore-congruence
+    (term
+     (((Num 1) (Num 2) 1 2)
+      ((= 1 2))
+      ())))
+   '(((Num 1) (Num 2) 1 2)
+     ((= 1 1) (= (Num 2) (Num 2)) (= (Num 1) (Num 1)) (= 2 2) (= 2 1) (= 1 2))
+     ()))
+
 
   (redex-check Egglog
                Program
