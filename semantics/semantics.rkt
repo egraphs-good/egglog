@@ -9,14 +9,15 @@
 (define-language Egglog
   (Program
    (Cmd ...))
-  (Cmd action
+  (Cmd Action
        skip)
   (Rule
-    (rule query (action ...)))
-  (query (pattern ...)) ;; query is a list of pattern
-  (pattern (= expr expr) ;; equality constraint
+    (rule Query Actions))
+  (Query (Pattern ...)) ;; Query is a list of Pattern
+  (Pattern (= expr expr) ;; equality constraint
            expr)
-  (action expr
+  (Actions (Action ...))
+  (Action expr
           (let var expr)
           (union expr expr))
   (expr number
@@ -106,7 +107,7 @@
 
 
 (define-metafunction Egglog+Database
-  Eval-Action : action Database -> Database
+  Eval-Action : Action Database -> Database
   [(Eval-Action (let var expr) (Terms Congr (Binding_s ...) Rules))
    (Database-Union (Terms Congr ((var -> Term) Binding_s ...) Rules) Database_2)
    (where (Term Database_2)
@@ -225,8 +226,8 @@
    #:domain Command+Database
    ;; running actions
    (-->
-    (action Database)
-    (skip (Eval-Action action Database)))))
+    (Action Database)
+    (skip (Eval-Action Action Database)))))
 
 (define (try-apply-reduction-relation relation term)
   (define lst (apply-reduction-relation relation term))
@@ -270,12 +271,42 @@
    ----------------------------
    (typed-expr (constructor expr_s ...) TypeEnv)])
 
+(define-judgment-form
+  Egglog+Database
+  #:contract (typed-query-expr expr TypeEnv TypeEnv)
+  #:mode (typed-query-expr I I O)
+  [----------------------------
+   (typed-query-expr number TypeEnv TypeEnv)]
+  ;; no need to add it, refers to global
+  ;; or previously defined
+  [(side-condition ,(member (term (var : no-type))
+                            (term TypeEnv)))
+   ----------------------------
+   (typed-query-expr var TypeEnv TypeEnv)]
+  ;; add it to environment if not bound 
+  [(side-condition ,(not
+                     (member (term
+                              (var : no-type))
+                             (term
+                              (TypeBinding ...)))))
+   ----------------------------
+   (typed-query-expr var
+                     (TypeBinding ...)
+                     ((var : no-type)
+                      TypeBinding ...))]
+  [(typed-query-expr expr_s TypeEnv (TypeBinding ...)) ...
+   ----------------------------
+   (typed-query-expr
+    (constructor expr_s ...)
+    TypeEnv
+    (TypeBinding ... ...))])
+
 
 (define-judgment-form
   Egglog+Database
-  ;; Types an action in a given environment and
+  ;; Types an Action in a given environment and
   ;; returns the resulting environment
-  #:contract (typed-action action TypeEnv TypeEnv)
+  #:contract (typed-action Action TypeEnv TypeEnv)
   #:mode (typed-action I I O)
   [(side-condition ,(not
                      (member
@@ -293,9 +324,53 @@
   [(typed-expr expr_1 TypeEnv)
    (typed-expr expr_2 TypeEnv)
    ----------------------------
-   (typed-action (union expr_1 expr_2) TypeEnv TypeEnv)]
-  )
+   (typed-action (union expr_1 expr_2) TypeEnv TypeEnv)])
 
+(define-judgment-form
+  Egglog+Database
+  #:contract (typed-pattern Pattern TypeEnv TypeEnv)
+  #:mode (typed-pattern I I O)
+  [(typed-query-expr expr TypeEnv TypeEnv_2)
+    ----------------------------
+   (typed-pattern expr TypeEnv TypeEnv_2)]
+  [(typed-query-expr expr_1 TypeEnv TypeEnv_2)
+   (typed-query-expr expr_2 TypeEnv_2 TypeEnv_3)
+   ----------------------------
+   (typed-pattern (= expr_1 expr_2)
+                  TypeEnv TypeEnv_3)])
+
+(define-judgment-form
+  Egglog+Database
+  #:contract (typed-query Query TypeEnv TypeEnv)
+  #:mode (typed-query I I O)
+  [------------------------
+   (typed-query () TypeEnv TypeEnv)]
+  [(typed-query (Pattern_i ...) TypeEnv TypeEnv_2)
+   (typed-pattern Pattern TypeEnv_2 TypeEnv_3)
+   ------------------------
+   (typed-query (Pattern_i ... Pattern) TypeEnv TypeEnv_3)])
+
+(define-judgment-form
+  Egglog+Database
+  #:contract (typed-actions Actions TypeEnv TypeEnv)
+  #:mode (typed-actions I I O)
+  [------------------------
+   (typed-actions () TypeEnv TypeEnv)]
+  [(typed-actions (Action_i ...) TypeEnv TypeEnv_2)
+   (typed-action Action TypeEnv_2 TypeEnv_3)
+   ------------------------
+   (typed-actions
+    (Action_i ... Action)
+    TypeEnv TypeEnv_3)])
+
+(define-judgment-form
+  Egglog+Database
+  #:contract (typed-rule Rule TypeEnv)
+  #:mode (typed-rule I I)
+  [(typed-query Query TypeEnv TypeEnv_2)
+   (typed-actions Actions TypeEnv_2 TypeEnv_3)
+   ----------------------------
+   (typed-rule (rule Query Actions) TypeEnv)])
 
 (define-judgment-form
   Egglog+Database
@@ -304,24 +379,14 @@
   [---------------------------
    (typed () ())]
   [(typed (Cmd_p ...) TypeEnv)
-   (typed-action action TypeEnv TypeEnv_res)
+   (typed-action Action TypeEnv TypeEnv_res)
    ---------------------------
-   (typed (Cmd_p ... action) TypeEnv_res)])
-
-(define (types? e)
-  (judgment-holds (typed ,e TypeEnv)))
-
-(define (executes? prog)
-  (cond
-    [(not (types? prog))
-     #t]
-    [else
-     (define res
-       (apply-reduction-relation* Egglog-Reduction (term (,prog (() () () ())))))
-     (match res
-       [`((() ,database))
-        #t]
-       [_ #f])]))
+   (typed (Cmd_p ... Action) TypeEnv_res)]
+  [(typed (Cmd_p ...) TypeEnv)
+   (typed-rule Rule TypeEnv)
+   ---------------------------
+   (typed (Cmd_p ... Rule) TypeEnv)]
+   )
 
 
 (define-syntax-rule (save-metafunction func ...)

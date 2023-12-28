@@ -4,6 +4,24 @@
 (require rackunit)
 (require "semantics.rkt")
 
+(define num-executed 0)
+
+(define (types? e)
+  (judgment-holds (typed ,e TypeEnv)))
+
+(define (executes? prog)
+  (cond
+    [(not (types? prog))
+     #t]
+    [else
+     (define res
+       (apply-reduction-relation* Egglog-Reduction (term (,prog (() () () ())))))
+     (match res
+       [`((() ,database))
+        (set! num-executed (+ 1 num-executed))
+        #t]
+       [_ #f])]))
+
 (module+ test
   (check-false
    (judgment-holds (typed-expr a ())))
@@ -14,6 +32,48 @@
    (judgment-holds
     (typed ((let a 2) a)
            TypeEnv)))
+
+  (check-not-false
+   (judgment-holds
+    (typed-action
+      (Add a a)
+      ((a : no-type))
+      ((a : no-type)))))
+  (check-not-false
+   (judgment-holds
+    (typed-actions ((Add a a)) ((a : no-type)) ((a : no-type)))))
+  (check-not-false
+   (judgment-holds
+    (typed-query ((= a 2)) () ((a : no-type)))))
+  (check-not-false
+    (judgment-holds
+      (typed-rule
+       (rule ((= a 2)) ((Add a a)))
+       ())))
+
+  (check-false
+    (judgment-holds
+      (typed-rule
+       (rule ((= a 2)) ((Add a b)))
+       ())))
+  (check-not-false
+   (judgment-holds
+    (typed-query-expr
+      a
+      ((b : no-type))
+      ((a : no-type) (b : no-type)))))
+  (check-not-false
+   (judgment-holds
+    (typed-query ((= a 2))
+                 ((b : no-type))
+                 TypeEnv)))
+  (check-not-false
+    (judgment-holds
+      (typed-rule
+       (rule ((= a 2)) ((Add a b)))
+       ((b : no-type)))))
+
+      
 
   (check-not-false
    (redex-match Egglog
@@ -92,4 +152,6 @@
                Program
                (executes? (term Program))
                #:attempts 10000)
+
+  (displayln (format "Executed ~a programs" num-executed))
   )
