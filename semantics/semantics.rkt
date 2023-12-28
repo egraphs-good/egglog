@@ -7,13 +7,12 @@
 (provide (all-defined-out))
 
 (define-language Egglog
-  (program
-   (cmd ...))
-  (cmd action
-       rule
+  (Program
+   (Cmd ...))
+  (Cmd action
        skip)
-  (rule
-    (query (action ...)))
+  (Rule
+    (rule query (action ...)))
   (query (pattern ...)) ;; query is a list of pattern
   (pattern (= expr expr) ;; equality constraint
            expr)
@@ -46,9 +45,9 @@
    (Term ...)]
   [Term number
         (constructor Term ...)]
-  [Rules (rule ...)]
+  [Rules (Rule ...)]
   [Command+Database
-   (cmd Database)]
+   (Cmd Database)]
   [Env (Binding ...)]
   [Binding (var -> Term)]
   [TypeEnv (TypeBinding ...)]
@@ -73,13 +72,13 @@
   [(Database-Union Database)
    Database]
   [(Database-Union
-    ((Term_i ...) (Eq_i ...) (Binding_i ...) (rule_i ...))
+    ((Term_i ...) (Eq_i ...) (Binding_i ...) (Rule_i ...))
     Database_i ...)
    ((Term_i ... Term_j ...)
     (Eq_i ... Eq_j ...)
     (Binding_i ... Binding_j ...)
-    (rule_i ... rule_j ...))
-   (where ((Term_j ...) (Eq_j ...) (Binding_j ...) (rule_j ...))
+    (Rule_i ... Rule_j ...))
+   (where ((Term_j ...) (Eq_j ...) (Binding_j ...) (Rule_j ...))
           (Database-Union Database_i ...))])
 
 
@@ -121,8 +120,8 @@
     (() ((= Term_1 Term_2) Eq ...) () ())
     Database_1
     Database_2)
-   (where (Term_1 Database_1) (Eval-Expr expr_1 Env Rules))
-   (where (Term_2 Database_2) (Eval-Expr expr_2 Env Rules))])
+   (where (Term_1 Database_1) (Eval-Expr expr_1 Env))
+   (where (Term_2 Database_2) (Eval-Expr expr_2 Env))])
 
 
 (define-metafunction Egglog+Database
@@ -239,21 +238,21 @@
 (define Egglog-Reduction
   (reduction-relation
    Egglog+Database
-   #:domain (program Database)
+   #:domain (Program Database)
    (-->
-    ((cmd_1 cmd_s ...)
+    ((Cmd_1 Cmd_s ...)
      Database)
-    ((cmd_stepped cmd_s ...)
-     ,(restore-congruence Database_2))
+    ((Cmd_stepped Cmd_s ...)
+     ,(restore-congruence (term Database_2)))
     (where
-     (cmd_stepped Database_2)
+     (Cmd_stepped Database_2)
      ,(try-apply-reduction-relation
        Command-Reduction
-       (term (cmd_1 Database)))))
+       (term (Cmd_1 Database)))))
    (-->
-    ((skip cmd_s ...)
+    ((skip Cmd_s ...)
      Database)
-    ((cmd_s ...)
+    ((Cmd_s ...)
      Database))))
 
 
@@ -300,14 +299,14 @@
 
 (define-judgment-form
   Egglog+Database
-  #:contract (typed program TypeEnv)
+  #:contract (typed Program TypeEnv)
   #:mode (typed I O)
   [---------------------------
    (typed () ())]
-  [(typed (cmd_p ...) TypeEnv)
+  [(typed (Cmd_p ...) TypeEnv)
    (typed-action action TypeEnv TypeEnv_res)
    ---------------------------
-   (typed (cmd_p ... action) TypeEnv_res)])
+   (typed (Cmd_p ... action) TypeEnv_res)])
 
 (define (types? e)
   (judgment-holds (typed ,e TypeEnv)))
