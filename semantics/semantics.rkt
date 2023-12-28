@@ -7,10 +7,16 @@
 (provide (all-defined-out))
 
 (define-language Egglog
-  (Program
+  (program
    (cmd ...))
   (cmd action
+       rule
        skip)
+  (rule
+    (query (action ...)))
+  (query (pattern ...)) ;; query is a list of pattern
+  (pattern (= expr expr) ;; equality constraint
+           expr)
   (action expr
           (let var expr)
           (union expr expr))
@@ -23,10 +29,15 @@
 (define-extended-language
   Egglog+Database
   Egglog
-  ;; a database is a list of terms
-  ;; the terms list is finite, but combined with
-  ;; the congruence closure it can represent an infinite set of terms
-  [Database (Terms Congr Env)]
+  ;; Egglog maintains a Database as global state.
+  ;; The database contains terms, a congruence
+  ;; closure over those terms,
+  ;; a set of global variable bindings,
+  ;; and a set of rules (only run by run commands).
+  ;; The environment is also used for
+  ;; local variable bindings when
+  ;; running rules.
+  [Database (Terms Congr Env Rules)]
   [Congr
    (Eq ...)]
   [Eq
@@ -35,6 +46,7 @@
    (Term ...)]
   [Term number
         (constructor Term ...)]
+  [Rules (rule ...)]
   [Command+Database
    (cmd Database)]
   [Env (Binding ...)]
@@ -60,26 +72,31 @@
   Database-Union : Database ... -> Database
   [(Database-Union Database)
    Database]
-  [(Database-Union ((Term_s ...) (Eq_s ...) (Binding_s ...)) Database_s ...)
-   ((Term_s ... Term_s2 ...) (Eq_s ... Eq_s2 ...) (Binding_s ... Binding_s2 ...))
-   (where ((Term_s2 ...) (Eq_s2 ...) (Binding_s2 ...))
-          (Database-Union Database_s ...))])
+  [(Database-Union
+    ((Term_i ...) (Eq_i ...) (Binding_i ...) (rule_i ...))
+    Database_i ...)
+   ((Term_i ... Term_j ...)
+    (Eq_i ... Eq_j ...)
+    (Binding_i ... Binding_j ...)
+    (rule_i ... rule_j ...))
+   (where ((Term_j ...) (Eq_j ...) (Binding_j ...) (rule_j ...))
+          (Database-Union Database_i ...))])
 
 
 
 (define-metafunction Egglog+Database
   Eval-Expr : expr Env -> (Term Database)
   [(Eval-Expr number Env)
-   (number ((number) () ()))]
+   (number ((number) () () ()))]
   [(Eval-Expr (constructor expr_s ...) Env)
    ((constructor Term_c ...)
     (Database-Union
-     (((constructor Term_c ...)) () ())
+     (((constructor Term_c ...)) () () ())
      Database_c ...))
    (where ((Term_c Database_c) ...)
           ((Eval-Expr expr_s Env) ...))]
   [(Eval-Expr var Env)
-   ((Lookup var Env) (((Lookup var Env)) () ()))])
+   ((Lookup var Env) (((Lookup var Env)) () () ()))])
 
 
 (define (dump-pict pict name)
@@ -91,21 +108,21 @@
 
 (define-metafunction Egglog+Database
   Eval-Action : action Database -> Database
-  [(Eval-Action (let var expr) (Terms Congr (Binding_s ...)))
-   (Database-Union (Terms Congr ((var -> Term) Binding_s ...)) Database_2)
+  [(Eval-Action (let var expr) (Terms Congr (Binding_s ...) Rules))
+   (Database-Union (Terms Congr ((var -> Term) Binding_s ...) Rules) Database_2)
    (where (Term Database_2)
           (Eval-Expr expr (Binding_s ...)))]
-  [(Eval-Action expr (Terms Congr Env))
-   (Database-Union (Terms Congr Env) Database_2)
+  [(Eval-Action expr (Terms Congr Env Rules))
+   (Database-Union (Terms Congr Env Rules) Database_2)
    (where (Term Database_2)
           (Eval-Expr expr Env))]
-  [(Eval-Action (union expr_1 expr_2) (Terms (Eq ...) Env))
+  [(Eval-Action (union expr_1 expr_2) (Terms (Eq ...) Env Rules))
    (Database-Union
-    (() ((= Term_1 Term_2) Eq ...) ())
+    (() ((= Term_1 Term_2) Eq ...) () ())
     Database_1
     Database_2)
-   (where (Term_1 Database_1) (Eval-Expr expr_1 Env))
-   (where (Term_2 Database_2) (Eval-Expr expr_2 Env))])
+   (where (Term_1 Database_1) (Eval-Expr expr_1 Env Rules))
+   (where (Term_2 Database_2) (Eval-Expr expr_2 Env Rules))])
 
 
 (define-metafunction Egglog+Database
@@ -134,18 +151,19 @@
    Egglog+Database
    #:domain Database
    (-->
-    ((Term_i ... Term_j Term_k ...) Congr Env)
+    ((Term_i ... Term_j Term_k ...) Congr Env Rules)
     ((Term_i ... Term_j Term_k ...)
      (Add-Equality (= Term_j Term_j) Congr)
-     Env)
+     Env
+     Rules)
     (side-condition
      (not
       (member (term (= Term_j Term_j))
               (term Congr))))
     "reflexivity")
    (-->
-    (Terms Congr Env)
-    (Terms (Add-Equality (= Term_2 Term_1) Congr) Env)
+    (Terms Congr Env Rules)
+    (Terms (Add-Equality (= Term_2 Term_1) Congr) Env Rules)
     (where (Eq_i ... (= Term_1 Term_2) Eq_j ...) Congr)
     (side-condition
      (not
@@ -154,8 +172,8 @@
     "symmetry"
     )
    (-->
-    (Terms Congr Env)
-    (Terms (Add-Equality (= Term_1 Term_3) Congr) Env)
+    (Terms Congr Env Rules)
+    (Terms (Add-Equality (= Term_1 Term_3) Congr) Env Rules)
     (where
      (Eq_i ... (= Term_1 Term_2)
       Eq_j ... (= Term_2 Term_3)
@@ -168,11 +186,11 @@
     "transitivity"
     )
    (-->
-    (Terms Congr Env)
+    (Terms Congr Env Rules)
     (Terms (Add-Equality
             (= (constructor Term_i ...)
                (constructor Term_j ...))
-            Congr) Env)
+            Congr) Env Rules)
     (where (Term_k ... (constructor Term_i ...)
             Term_l ... (constructor Term_j ...)
             Term_m ...)
@@ -211,7 +229,8 @@
     (action Database)
     (skip (Eval-Action action Database)))))
 
-(define (single-element-or-false lst)
+(define (try-apply-reduction-relation relation term)
+  (define lst (apply-reduction-relation relation term))
   (match lst
     [`(,x) x]
     [`() #f]
@@ -220,18 +239,17 @@
 (define Egglog-Reduction
   (reduction-relation
    Egglog+Database
-   #:domain (Program Database)
+   #:domain (program Database)
    (-->
     ((cmd_1 cmd_s ...)
      Database)
     ((cmd_stepped cmd_s ...)
-     Database_2)
+     ,(restore-congruence Database_2))
     (where
      (cmd_stepped Database_2)
-     ,(single-element-or-false
-       (apply-reduction-relation
-        Command-Reduction
-        (term (cmd_1 Database))))))
+     ,(try-apply-reduction-relation
+       Command-Reduction
+       (term (cmd_1 Database)))))
    (-->
     ((skip cmd_s ...)
      Database)
@@ -282,7 +300,7 @@
 
 (define-judgment-form
   Egglog+Database
-  #:contract (typed Program TypeEnv)
+  #:contract (typed program TypeEnv)
   #:mode (typed I O)
   [---------------------------
    (typed () ())]
@@ -300,7 +318,7 @@
      #t]
     [else
      (define res
-       (apply-reduction-relation* Egglog-Reduction (term (,prog (() () ())))))
+       (apply-reduction-relation* Egglog-Reduction (term (,prog (() () () ())))))
      (match res
        [`((() ,database))
         #t]
