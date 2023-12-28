@@ -72,9 +72,9 @@
    (number ((number) () ()))]
   [(Eval-Expr (constructor expr_s ...) Env)
    ((constructor Term_c ...)
-        (Database-Union
-         (((constructor Term_c ...)) () ())
-         Database_c ...))
+    (Database-Union
+     (((constructor Term_c ...)) () ())
+     Database_c ...))
    (where ((Term_c Database_c) ...)
           ((Eval-Expr expr_s Env) ...))]
   [(Eval-Expr var Env)
@@ -89,22 +89,84 @@
 
 
 (define-metafunction Egglog+Database
-    Eval-Action : action Database -> Database
-    [(Eval-Action (let var expr) (Terms Congr (Binding_s ...)))
-     (Database-Union (Terms Congr ((var -> Term) Binding_s ...)) Database_2)
-     (where (Term Database_2)
-            (Eval-Expr expr (Binding_s ...)))]
-    [(Eval-Action expr (Terms Congr Env))
-     (Database-Union (Terms Congr Env) Database_2)
-     (where (Term Database_2)
-            (Eval-Expr expr Env))]
-    [(Eval-Action (union expr_1 expr_2) (Terms (Eq ...) Env))
-     (Database-Union
-      (() ((= Term_1 Term_2) Eq ...) ())
-      Database_1
-      Database_2)
-     (where (Term_1 Database_1) (Eval-Expr expr_1 Env))
-     (where (Term_2 Database_2) (Eval-Expr expr_2 Env))])
+  Eval-Action : action Database -> Database
+  [(Eval-Action (let var expr) (Terms Congr (Binding_s ...)))
+   (Database-Union (Terms Congr ((var -> Term) Binding_s ...)) Database_2)
+   (where (Term Database_2)
+          (Eval-Expr expr (Binding_s ...)))]
+  [(Eval-Action expr (Terms Congr Env))
+   (Database-Union (Terms Congr Env) Database_2)
+   (where (Term Database_2)
+          (Eval-Expr expr Env))]
+  [(Eval-Action (union expr_1 expr_2) (Terms (Eq ...) Env))
+   (Database-Union
+    (() ((= Term_1 Term_2) Eq ...) ())
+    Database_1
+    Database_2)
+   (where (Term_1 Database_1) (Eval-Expr expr_1 Env))
+   (where (Term_2 Database_2) (Eval-Expr expr_2 Env))])
+
+
+(define-metafunction Egglog+Database
+  Add-Equality : Eq Congr -> Congr
+  [(Add-Equality Eq (Eq_i ...))
+   (Eq Eq_i ...)])
+
+;; A reduction relation that restores the congruence
+;; relation after some equalities have been added
+;; TODO would be much cleaner if we had sets
+;; in our terms somehow
+(define Congruence-Reduction
+  (reduction-relation
+   Egglog+Database
+   #:domain Database
+   (-->
+    ((Term_i ... Term_j Term_k ...) Congr Env)
+    ((Term_i ... Term_j Term_k ...)
+     (Add-Equality (= Term_j Term_j) Congr)
+     Env)
+    (side-condition
+     (not
+      (member (term (= Term_j Term_j))
+              (term Congr))))
+    "reflexivity")
+   (-->
+    (Terms Congr Env)
+    (Terms (Add-Equality (= Term_2 Term_1) Congr) Env)
+    (where (Eq_i ... (= Term_1 Term_2) Eq_j ...) Congr)
+    (side-condition
+     (not
+      (member (term (= Term_2 Term_1))
+              (term Congr))))
+    "symmetry"
+    )
+   (-->
+    (Terms Congr Env)
+    (Terms (Add-Equality (= Term_1 Term_3) Congr) Env)
+    (where (Eq_i ... (= Term_1 Term_2) Eq_j ... (= Term_2 Term_3) Eq_k ...) Congr)
+    (side-condition
+     (not
+      (member (term (= Term_1 Term_3))
+              (term Congr))))
+    "transitivity"
+    )
+   ;; TODO congruence
+
+   ))
+
+;; Like apply-reduction-relation*, but only
+;; returns the first path found.
+;; Instead of returning a list, it returns
+;; a single term.
+(define (apply-reduction-relation-one-path relation term)
+  (match (apply-reduction-relation relation term)
+    [`(,reduced ,others ...)
+     (apply-reduction-relation-one-path relation reduced)]
+    [`()
+     term]))
+
+(define (restore-congruence database-term)
+  (apply-reduction-relation-one-path Congruence-Reduction database-term))
 
 (define Command-Reduction
   (reduction-relation
@@ -150,7 +212,7 @@
   [----------------------------
    (typed-expr number TypeEnv)]
   [(side-condition ,(member (term (var : no-type))
-                           (term TypeEnv)))
+                            (term TypeEnv)))
    ----------------------------
    (typed-expr var TypeEnv)]
   [(typed-expr expr_s TypeEnv) ...
@@ -165,7 +227,7 @@
   #:contract (typed-action action TypeEnv TypeEnv)
   #:mode (typed-action I I O)
   [(side-condition ,(not
-                     (member 
+                     (member
                       (term (TypeBinding ...))
                       (term (TypeBinding ...)))))
    (typed-expr expr (TypeBinding ...))
@@ -181,7 +243,7 @@
    (typed-expr expr_2 TypeEnv)
    ----------------------------
    (typed-action (union expr_1 expr_2) TypeEnv TypeEnv)]
-   )
+  )
 
 
 (define-judgment-form
@@ -204,19 +266,19 @@
      #t]
     [else
      (define res
-      (apply-reduction-relation* Egglog-Reduction (term (,prog (() () ())))))
+       (apply-reduction-relation* Egglog-Reduction (term (,prog (() () ())))))
      (match res
-      [`((() ,database))
+       [`((() ,database))
         #t]
-      [_ #f])]))
+       [_ #f])]))
 
 
 (define-syntax-rule (save-metafunction func ...)
   (begin
-   (dump-pict (render-metafunction func)
+    (dump-pict (render-metafunction func)
                (format "~a.png" 'func))
-   ...
-   (void)))
+    ...
+    (void)))
 
 
 (define (save-semantics)
@@ -230,7 +292,7 @@
    (judgment-holds (typed-expr a ())))
   (check-false
    (judgment-holds
-     (typed (a) TypeEnv)))
+    (typed (a) TypeEnv)))
   (check-not-false
    (judgment-holds
     (typed ((let a 2) a)
@@ -271,10 +333,33 @@
    (term (Eval-Expr (Add 2 3) ()))
    (term ((Add 2 3) (((Add 2 3) 2 3) () ()))))
 
+  (check-equal?
+   (restore-congruence
+    (term
+     (()
+      ((= (Add 1 2) (Add 2 1))
+       (= (Add 2 1) (Add 0 3)))
+      ())))
+   '(()
+     ((= (Add 0 3) (Add 1 2))
+      (= (Add 2 1) (Add 2 1))
+      (= (Add 2 1) (Add 1 2))
+      (= (Add 0 3) (Add 0 3))
+      (= (Add 0 3) (Add 2 1))
+      (= (Add 1 2) (Add 0 3))
+      (= (Add 1 2) (Add 2 1))
+      (= (Add 2 1) (Add 0 3)))
+     ()))
+
+  (check-equal?
+   (restore-congruence
+    (term ((1) () ())))
+   (term ((1) ((= 1 1)) ())))
+
   (redex-check Egglog
-    Program
-    (executes? (term Program))
-    #:attempts 10000)
+               Program
+               (executes? (term Program))
+               #:attempts 10000)
   )
 
 
