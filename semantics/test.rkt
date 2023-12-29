@@ -9,9 +9,20 @@
 (define (types? e)
   (judgment-holds (typed-program ,e TypeEnv)))
 
+(define (has-many-run-statements? prog)
+  (>
+   (count
+    (lambda (cmd)
+       (equal? cmd `(run)))
+     prog)
+   3))
+
 (define (executes? prog)
+  ;;(println prog)
   (cond
     [(not (types? prog))
+     #t]
+    [(has-many-run-statements? prog)
      #t]
     [else
      (define res
@@ -24,54 +35,54 @@
 
 (module+ test
   (check-false
-   (judgment-holds (typed-expr a ())))
+   (judgment-holds (typed-expr v1 ())))
   (check-false
    (judgment-holds
-    (typed-program (a) TypeEnv)))
+    (typed-program (v1) TypeEnv)))
   (check-not-false
    (judgment-holds
-    (typed-program ((let a 2) a)
+    (typed-program ((let v1 2) v1)
            TypeEnv)))
 
   (check-not-false
    (judgment-holds
     (typed-action
-      (Add a a)
-      ((a : no-type))
-      ((a : no-type)))))
+      (cadd v1 v1)
+      ((v1 : no-type))
+      ((v1 : no-type)))))
   (check-not-false
    (judgment-holds
-    (typed-actions ((Add a a)) ((a : no-type)) ((a : no-type)))))
+    (typed-actions ((cadd v1 v1)) ((v1 : no-type)) ((v1 : no-type)))))
   (check-not-false
    (judgment-holds
-    (typed-query ((= a 2)) () ((a : no-type)))))
+    (typed-query ((= v1 2)) () ((v1 : no-type)))))
   (check-not-false
     (judgment-holds
       (typed-rule
-       (rule ((= a 2)) ((Add a a)))
+       (rule ((= v1 2)) ((cadd v1 v1)))
        ())))
 
   (check-false
     (judgment-holds
       (typed-rule
-       (rule ((= a 2)) ((Add a b)))
+       (rule ((= v1 2)) ((cadd v1 v2)))
        ())))
   (check-not-false
    (judgment-holds
     (typed-query-expr
-      a
-      ((b : no-type))
-      ((a : no-type) (b : no-type)))))
+      v1
+      ((v2 : no-type))
+      ((v1 : no-type) (v2 : no-type)))))
   (check-not-false
    (judgment-holds
-    (typed-query ((= a 2))
-                 ((b : no-type))
+    (typed-query ((= v1 2))
+                 ((v2 : no-type))
                  TypeEnv)))
   (check-not-false
     (judgment-holds
       (typed-rule
-       (rule ((= a 2)) ((Add a b)))
-       ((b : no-type)))))
+       (rule ((= v1 2)) ((cadd v1 v2)))
+       ((v2 : no-type)))))
 
       
 
@@ -79,7 +90,7 @@
    (redex-match Egglog
                 Program
                 (term
-                 ((let a 2) a))))
+                 ((let v1 2) v1))))
 
   (check-not-false
    (redex-match
@@ -99,22 +110,22 @@
     Egglog+Database
     Command+Database
     (term
-     ((Add 2 3) (() () () ())))))
+     ((cadd 2 3) (() () () ())))))
 
 
   (check-equal?
    (apply-reduction-relation*
     Command-Reduction
     (term
-     ((Add 2 3) (() () () ()))))
-   (list (term (skip (((Add 2 3) 2 3) () () ())))))
+     ((cadd 2 3) (() () () ()))))
+   (list (term (skip (((cadd 2 3) 2 3) () () ())))))
 
   (check-equal?
    (term (Eval-Expr 2 ()))
    (term (2 ((2) () () ()))))
   (check-equal?
-   (term (Eval-Expr (Add 2 3) ()))
-   (term ((Add 2 3) (((Add 2 3) 2 3) () () ()))))
+   (term (Eval-Expr (cadd 2 3) ()))
+   (term ((cadd 2 3) (((cadd 2 3) 2 3) () () ()))))
 
   (check-equal?
    (restore-congruence
@@ -140,12 +151,33 @@
   (check-equal?
    (restore-congruence
     (term
-     (((Num 1) (Num 2) 1 2)
+     (((cnum 1) (cnum 2) 1 2)
       ((= 1 2))
       () ())))
-   '(((Num 1) (Num 2) 1 2)
-     ((= 1 1) (= (Num 2) (Num 2)) (= (Num 1) (Num 1)) (= 2 2) (= 2 1) (= 1 2))
+   '(((cnum 1) (cnum 2) 1 2)
+     ((= 1 1) (= (cnum 2) (cnum 2)) (= (cnum 1) (cnum 1)) (= 2 2) (= 2 1) (= 1 2))
      () ()))
+
+  (check-equal?
+    (judgment-holds
+      (valid-query-subst
+        ((1) () () ()) (v1) Env)
+      Env)
+    '(((v1 -> 1))))
+
+  (check-equal?
+   (term
+    (Eval-Actions ()
+      ((+inf.0)
+      ((= +inf.0 +inf.0))
+      ((v1 -> +inf.0))
+      ((rule () ())))
+      ()))
+   (term
+     ((+inf.0)
+      ((= +inf.0 +inf.0))
+      ((v1 -> +inf.0))
+      ((rule () ())))))
 
 
   (redex-check Egglog

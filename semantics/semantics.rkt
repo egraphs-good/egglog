@@ -7,26 +7,26 @@
 (provide (all-defined-out))
 
 (define-language Egglog
-  (Program
-   (Cmd ...))
-  (Cmd Action
+  [Program
+   (Cmd ...)]
+  [Cmd Action
        Rule
        (run) ;; TODO add schedules
-       skip)
-  (Rule
-    (rule Query Actions))
-  (Query (Pattern ...)) ;; Query is a list of Pattern
-  (Pattern (= expr expr) ;; equality constraint
-           expr)
-  (Actions (Action ...))
-  (Action expr
+       skip]
+  [Rule
+    (rule Query Actions)]
+  [Query (Pattern ...)] ;; Query is a list of Pattern
+  [Pattern (= expr expr) ;; equality constraint
+           expr]
+  [Actions (Action ...)]
+  [Action expr
           (let var expr)
-          (union expr expr))
-  (expr number
+          (union expr expr)]
+  [expr number
         (constructor expr ...)
-        var)
-  (constructor variable-not-otherwise-mentioned)
-  (var variable-not-otherwise-mentioned))
+        var]
+  [constructor (variable-prefix c)]
+  [var (variable-prefix v)])
 
 (define-extended-language
   Egglog+Database
@@ -63,30 +63,27 @@
 ;; No rule for if the variable is not found
 ;; Therefore it fails in such cases
 (define-metafunction Egglog+Database
-  Lookup : var Env -> Term
+  Lookup : var Env -> Term ∨ #f
   [(Lookup var ())
    #f]
-  [(Lookup var ((var -> Term) (var_s -> Term_s) ...))
+  [(Lookup var_1 ((var_1 -> Term) (var_s -> Term_s) ...))
    Term]
   [(Lookup var_1 ((var_2 -> Term) (var_s -> Term_s) ...))
    (Lookup var ((var_s -> Term_s) ...))
    (side-condition (not (equal? (term var_1)
                                 (term var_2))))])
 
+
 (define-metafunction Egglog+Database
   Database-Union : Database ... -> Database
-  [(Database-Union Database)
-   Database]
+  [(Database-Union)
+   (() () () ())]
   [(Database-Union
-    ((Term_i ...) (Eq_i ...) (Binding_i ...) (Rule_i ...))
     Database_i ...)
-   ((Term_i ... Term_j ...)
-    (Eq_i ... Eq_j ...)
-    (Binding_i ... Binding_j ...)
-    (Rule_i ... Rule_j ...))
-   (where ((Term_j ...) (Eq_j ...) (Binding_j ...) (Rule_j ...))
-          (Database-Union Database_i ...))])
-
+   ;; Append all the elements and deduplicate
+   ,(map (compose set->list list->set)
+         (apply map append
+                (term (Database_i ...))))])
 
 
 (define-metafunction Egglog+Database
@@ -113,15 +110,15 @@
 
 (define-metafunction Egglog+Database
   Eval-Action : Action Database -> Database
-  [(Eval-Action (let var expr) (Terms Congr (Binding_s ...) Rules))
-   (Database-Union (Terms Congr ((var -> Term) Binding_s ...) Rules) Database_2)
+  [(Eval-Action (let var expr) (Terms Congr (Binding_s ...) Rules_1))
+   (Database-Union (Terms Congr ((var -> Term) Binding_s ...) Rules_1) Database_2)
    (where (Term Database_2)
           (Eval-Expr expr (Binding_s ...)))]
-  [(Eval-Action expr (Terms Congr Env Rules))
-   (Database-Union (Terms Congr Env Rules) Database_2)
+  [(Eval-Action expr (Terms Congr Env Rules_1))
+   (Database-Union (Terms Congr Env Rules_1) Database_2)
    (where (Term Database_2)
           (Eval-Expr expr Env))]
-  [(Eval-Action (union expr_1 expr_2) (Terms (Eq ...) Env Rules))
+  [(Eval-Action (union expr_1 expr_2) (Terms (Eq ...) Env Rules_1))
    (Database-Union
     (() ((= Term_1 Term_2) Eq ...) () ())
     Database_1
@@ -156,19 +153,19 @@
    Egglog+Database
    #:domain Database
    (-->
-    ((Term_i ... Term_j Term_k ...) Congr Env Rules)
+    ((Term_i ... Term_j Term_k ...) Congr Env Rules_1)
     ((Term_i ... Term_j Term_k ...)
      (Add-Equality (= Term_j Term_j) Congr)
      Env
-     Rules)
+     Rules_1)
     (side-condition
      (not
       (member (term (= Term_j Term_j))
               (term Congr))))
     "reflexivity")
    (-->
-    (Terms Congr Env Rules)
-    (Terms (Add-Equality (= Term_2 Term_1) Congr) Env Rules)
+    (Terms Congr Env Rules_1)
+    (Terms (Add-Equality (= Term_2 Term_1) Congr) Env Rules_1)
     (where (Eq_i ... (= Term_1 Term_2) Eq_j ...) Congr)
     (side-condition
      (not
@@ -177,8 +174,8 @@
     "symmetry"
     )
    (-->
-    (Terms Congr Env Rules)
-    (Terms (Add-Equality (= Term_1 Term_3) Congr) Env Rules)
+    (Terms Congr Env Rules_1)
+    (Terms (Add-Equality (= Term_1 Term_3) Congr) Env Rules_1)
     (where
      (Eq_i ... (= Term_1 Term_2)
       Eq_j ... (= Term_2 Term_3)
@@ -191,11 +188,11 @@
     "transitivity"
     )
    (-->
-    (Terms Congr Env Rules)
+    (Terms Congr Env Rules_1)
     (Terms (Add-Equality
             (= (constructor Term_i ...)
                (constructor Term_j ...))
-            Congr) Env Rules)
+            Congr) Env Rules_1)
     (where (Term_k ... (constructor Term_i ...)
             Term_l ... (constructor Term_j ...)
             Term_m ...)
@@ -227,22 +224,33 @@
 
 (define-metafunction
   Egglog+Database
-  Eval-Actions : Actions Env -> Database
-  [(Eval-Actions (Action_i ...) Env)
-   (Database-Union
-    (Eval-Action Action_i Env)
-    ...)])
+  Eval-Actions : Actions Database Env -> Database
+  [(Eval-Actions (Action_i ...)
+                 (Terms_1 Congr_1 Env_1 Rules_1)
+                 Env_local)
+   (Terms_2 Congr_2 Env_1 Rules_1)
+   (where (Terms_2 Congr_2 Env_2 Rules_2)
+          (Database-Union
+            (Terms_1 Congr_1 Env_1 Rules_1)
+            (Eval-Action
+             Action_i
+             (Terms_1 Congr_1 (Env-Union Env_1 Env_local) ()))
+            ...))
+          ])
 
 (define-metafunction
   Egglog+Database
-  Eval-Rule-Actions : Rule Envs -> Database
-  [(Eval-Rule-Actions (rule Query Actions) (Env_i ...))
+  Eval-Rule-Actions : Rule Database Envs -> Database
+  [(Eval-Rule-Actions
+    (rule Query Actions)
+    Database
+    (Env_i ...))
    (Database-Union
-    (Eval-Actions Actions Env_i)
+    (Eval-Actions Actions Database Env_i)
     ...)])
 
 (define (unbound var env)
-  (not (member (map first env) var)))
+  (not (member var (map first env))))
 
 
 
@@ -266,16 +274,16 @@
   [(Env-Union2 ((var -> Term) Binding_i ...) Env)
    ((var -> Term) Binding_r ...)
    (where (Binding_r ...)
-          (Env-Union2 Binding_i ... Env))
+          (Env-Union2 (Binding_i ...) Env))
    (side-condition
     (or (equal? (term (Lookup var Env))
-                 (term Term))
+                (term Term))
          (unbound (term var) (term Env))))]
   [(Env-Union2 ((var -> Term) Binding_i ...) Env)
    #f
    (side-condition
      (not (or (equal? (term (Lookup var Env))
-                 (term Term))
+                      (term Term))
                (unbound (term var) (term Env)))))])
 
 ;; For a database, pattern, term, and environment,
@@ -289,15 +297,15 @@
   #:mode (valid-subst I I O O)
   [(side-condition ,(unbound (term var) (term Env)))
    ----------------------------
-   (valid-subst ((Term_i ... Term Term_j ...) Congr Env Rules)
+   (valid-subst ((Term_i ... Term_1 Term_j ...) Congr Env Rules)
                 var
-                var
-                ((var -> Term)))]
+                Term_1
+                ((var -> Term_1)))]
   [-----------------------------
    (valid-subst
-    (Terms Congr (Binding_i ... (var -> Term) Binding_j ...) Rules)
+    (Terms Congr (Binding_i ... (var -> Term_1) Binding_j ...) Rules)
     var
-    var
+    Term_1
     ())]
   [-----------------------------
    (valid-subst Database number number ())]
@@ -334,7 +342,8 @@
   Egglog+Database
   Rule-Envs : Database Rule -> Envs
   [(Rule-Envs Database (rule Query Actions))
-   ()])
+   ;; Perform e-matching using redex
+   ,(judgment-holds (valid-query-subst Database Query Env) Env)])
 
 (define Command-Reduction
   (reduction-relation
@@ -348,15 +357,17 @@
     (Rule (Terms Congr Env (Rule_i ...)))
     (skip (Terms Congr Env (Rule Rule_i ...))))
    (-->
-    ((run) (Terms Congr Env (Rule ...)))
+    ((run) Database)
     (skip
       (Database-Union
        (Terms Congr Env (Rule ...))
        Database_i ...))
+    (where (Terms Congr Env (Rule ...))
+           Database)
     (where (Envs ...)
-           ((Rule-Envs Rule Env) ...))
+           ((Rule-Envs Database Rule) ...))
     (where (Database_i ...)
-           ((Eval-Rule-Actions Rule Envs) ...)))))
+           ((Eval-Rule-Actions Rule Database Envs) ...)))))
 
 
 (define (try-apply-reduction-relation relation term)
