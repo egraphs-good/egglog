@@ -64,6 +64,8 @@
 ;; Therefore it fails in such cases
 (define-metafunction Egglog+Database
   Lookup : var Env -> Term
+  [(Lookup var ())
+   #f]
   [(Lookup var ((var -> Term) (var_s -> Term_s) ...))
    Term]
   [(Lookup var_1 ((var_2 -> Term) (var_s -> Term_s) ...))
@@ -239,6 +241,101 @@
     (Eval-Actions Actions Env_i)
     ...)])
 
+(define (unbound var env)
+  (not (member (map first env) var)))
+
+
+
+;; Returns #f if the environments are 
+;; inconsistent
+(define-metafunction
+  Egglog+Database
+  Env-Union : Env ... -> Env
+  [(Env-Union)
+   ()]
+  [(Env-Union Env)
+   Env]
+  [(Env-Union Env_1 Env_2 Env_i ...)
+   (Env-Union (Env-Union2 Env_1 Env_2) Env_i ...)])
+
+(define-metafunction
+  Egglog+Database
+  Env-Union2 : Env Env -> Env
+  [(Env-Union2 () Env)
+   Env]
+  [(Env-Union2 ((var -> Term) Binding_i ...) Env)
+   ((var -> Term) Binding_r ...)
+   (where (Binding_r ...)
+          (Env-Union2 Binding_i ... Env))
+   (side-condition
+    (or (equal? (term (Lookup var Env))
+                 (term Term))
+         (unbound (term var) (term Env))))]
+  [(Env-Union2 ((var -> Term) Binding_i ...) Env)
+   #f
+   (side-condition
+     (not (or (equal? (term (Lookup var Env))
+                 (term Term))
+               (unbound (term var) (term Env)))))])
+
+;; For a database, pattern, term, and environment,
+;; valid-subst judges that the pattern e-matches
+;; the term with local substitution given by the environment.
+;; `valid-subst` defines e-matching by specifying
+;; which environments satisfy a query.
+(define-judgment-form
+  Egglog+Database
+  #:contract (valid-subst Database Pattern Term Env)
+  #:mode (valid-subst I I O O)
+  [(side-condition ,(unbound (term var) (term Env)))
+   ----------------------------
+   (valid-subst ((Term_i ... Term Term_j ...) Congr Env Rules)
+                var
+                var
+                ((var -> Term)))]
+  [-----------------------------
+   (valid-subst
+    (Terms Congr (Binding_i ... (var -> Term) Binding_j ...) Rules)
+    var
+    var
+    ())]
+  [-----------------------------
+   (valid-subst Database number number ())]
+  [(valid-subst Database Pattern_i Term_i Env_i) ...
+   (where ((Term_x ... 
+     (constructor Term_j ...)
+     Term_z ...) Congr Env Rules) Database)
+   (where () (subset ((= Term_i Term_j) ...) Congr))
+   (where Env_r (Env-Union Env_i ...))
+   -----------------------------
+   (valid-subst
+    Database
+    (constructor Pattern_i ...)
+    (constructor Term_j ...)
+    Env_r)])
+
+
+;; If a local environment is valid
+;; for a set of patterns, it is valid for
+;; the overall query.
+(define-judgment-form
+  Egglog+Database
+  #:contract (valid-query-subst Database Query Env)
+  #:mode (valid-query-subst I I O)
+  [(valid-subst Database Pattern_i Term_i Env_i) ...
+   ---------------------------
+   (valid-query-subst Database (Pattern_i ...) (Env-Union Env_i ...))])
+
+
+;; Performs the rule's query, returning a set
+;; of environments that satisfy the query
+;; TODO don't return nothing
+(define-metafunction
+  Egglog+Database
+  Rule-Envs : Database Rule -> Envs
+  [(Rule-Envs Database (rule Query Actions))
+   ()])
+
 (define Command-Reduction
   (reduction-relation
    Egglog+Database
@@ -260,8 +357,6 @@
            ((Rule-Envs Rule Env) ...))
     (where (Database_i ...)
            ((Eval-Rule-Actions Rule Envs) ...)))))
-
-
 
 
 (define (try-apply-reduction-relation relation term)
