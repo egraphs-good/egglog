@@ -11,6 +11,7 @@
    (Cmd ...))
   (Cmd Action
        Rule
+       (run) ;; TODO add schedules
        skip)
   (Rule
     (rule Query Actions))
@@ -381,18 +382,18 @@
 
 (define-judgment-form
   Egglog+Database
-  #:contract (typed Program TypeEnv)
-  #:mode (typed I O)
+  #:contract (typed-program Program TypeEnv)
+  #:mode (typed-program I O)
   [---------------------------
-   (typed () ())]
-  [(typed (Cmd_p ...) TypeEnv)
+   (typed-program () ())]
+  [(typed-program (Cmd_p ...) TypeEnv)
    (typed-action Action TypeEnv TypeEnv_res)
    ---------------------------
-   (typed (Cmd_p ... Action) TypeEnv_res)]
-  [(typed (Cmd_p ...) TypeEnv)
+   (typed-program (Cmd_p ... Action) TypeEnv_res)]
+  [(typed-program (Cmd_p ...) TypeEnv)
    (typed-rule Rule TypeEnv)
    ---------------------------
-   (typed (Cmd_p ... Rule) TypeEnv)])
+   (typed-program (Cmd_p ... Rule) TypeEnv)])
 
 
 (define-syntax-rule (save-metafunction func ...)

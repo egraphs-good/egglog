@@ -7,10 +7,9 @@
 (define num-executed 0)
 
 (define (types? e)
-  (judgment-holds (typed ,e TypeEnv)))
+  (judgment-holds (typed-program ,e TypeEnv)))
 
 (define (executes? prog)
-  (println prog)
   (cond
     [(not (types? prog))
      #t]
@@ -28,10 +27,10 @@
    (judgment-holds (typed-expr a ())))
   (check-false
    (judgment-holds
-    (typed (a) TypeEnv)))
+    (typed-program (a) TypeEnv)))
   (check-not-false
    (judgment-holds
-    (typed ((let a 2) a)
+    (typed-program ((let a 2) a)
            TypeEnv)))
 
   (check-not-false
