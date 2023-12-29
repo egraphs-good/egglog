@@ -51,6 +51,7 @@
   [Rules (Rule ...)]
   [Command+Database
    (Cmd Database)]
+  [Envs (Env ...)]
   [Env (Binding ...)]
   [Binding (var -> Term)]
   [TypeEnv (TypeBinding ...)]
@@ -222,6 +223,22 @@
 (define (restore-congruence database-term)
   (apply-reduction-relation-one-path Congruence-Reduction database-term))
 
+(define-metafunction
+  Egglog+Database
+  Eval-Actions : Actions Env -> Database
+  [(Eval-Actions (Action_i ...) Env)
+   (Database-Union
+    (Eval-Action Action_i Env)
+    ...)])
+
+(define-metafunction
+  Egglog+Database
+  Eval-Rule-Actions : Rule Envs -> Database
+  [(Eval-Rule-Actions (rule Query Actions) (Env_i ...))
+   (Database-Union
+    (Eval-Actions Actions Env_i)
+    ...)])
+
 (define Command-Reduction
   (reduction-relation
    Egglog+Database
@@ -232,7 +249,17 @@
     (skip (Eval-Action Action Database)))
    (-->
     (Rule (Terms Congr Env (Rule_i ...)))
-    (skip (Terms Congr Env (Rule Rule_i ...))))))
+    (skip (Terms Congr Env (Rule Rule_i ...))))
+   (-->
+    ((run) (Terms Congr Env (Rule ...)))
+    (skip
+      (Database-Union
+       (Terms Congr Env (Rule ...))
+       Database_i ...))
+    (where (Envs ...)
+           ((Rule-Envs Rule Env) ...))
+    (where (Database_i ...)
+           ((Eval-Rule-Actions Rule Envs) ...)))))
 
 
 
@@ -393,7 +420,10 @@
   [(typed-program (Cmd_p ...) TypeEnv)
    (typed-rule Rule TypeEnv)
    ---------------------------
-   (typed-program (Cmd_p ... Rule) TypeEnv)])
+   (typed-program (Cmd_p ... Rule) TypeEnv)]
+  [(typed-program (Cmd_p ...) TypeEnv)
+   ---------------------------
+   (typed-program (Cmd_p ... (run)) TypeEnv)])
 
 
 (define-syntax-rule (save-metafunction func ...)
