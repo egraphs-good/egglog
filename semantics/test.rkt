@@ -140,12 +140,12 @@
    (term ((cadd 2 3) (((cadd 2 3) 2 3) () () ()))))
 
   (check-equal?
-   (restore-congruence
-    (term
-     (()
-      ((= 1 2)
-       (= 2 3))
-      () ())))
+   (term
+    (restore-congruence
+      (()
+        ((= 1 2)
+        (= 2 3))
+        () ())))
    '(() ((= 3 1)
          (= 2 2)
          (= 2 1)
@@ -156,13 +156,12 @@
          (= 2 3)) () ()))
 
   (check-equal?
-   (restore-congruence
-    (term ((1) () () ())))
+   (term (restore-congruence
+    ((1) () () ())))
    (term ((1) ((= 1 1)) () ())))
 
   (check-equal?
-   (restore-congruence
-    (term
+   (term (restore-congruence
      (((cnum 1) (cnum 2) 1 2)
       ((= 1 2))
       () ())))

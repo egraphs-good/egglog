@@ -45,6 +45,7 @@ ${DIST_WASM}: ${RUST_SRC}
 	rm -f ${WWW}/{.gitignore,package.json}
 
 semantics:
+	mkdir -p ./docs
 	scribble --dest ./docs semantics/*.scrbl
 	raco test semantics/*.rkt
 
