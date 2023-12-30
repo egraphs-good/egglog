@@ -51,7 +51,7 @@
   ;; running rules.
   [Database (Terms Congr Env Rules)]
   [Congr
-   (Eq ...)]
+   (congr Eq ...)]
   [Eq
    (= Term Term)]
   [Terms
@@ -88,26 +88,26 @@
   Dedup : Database -> Database
   [(Dedup
     ((tset Term_i ...)
-     (Eq_i ...)
+     (congr Eq_i ...)
      (Binding_i ...)
      (Rule_i ...)))
    (,(cons 'tset (remove-duplicates (term (Term_i ...))))
-    ,(remove-duplicates (term (Eq_i ...)))
+    ,(cons 'congr (remove-duplicates (term (Eq_i ...))))
     ,(remove-duplicates (term (Binding_i ...)))
     ,(remove-duplicates (term (Rule_i ...))))])
 
 (define-metafunction Egglog+Database
   Database-Union : Database ... -> Database
   [(Database-Union)
-   ((tset) () () ())]
+   ((tset) (congr) () ())]
   [(Database-Union
     ((tset Term_i ...)
-     (Eq_i ...)
+     (congr Eq_i ...)
      (Binding_i ...)
      (Rule_i ...)) ...)
    (Dedup
     ((tset Term_i ... ...)
-     (Eq_i ... ...)
+     (congr Eq_i ... ...)
      (Binding_i ... ...)
      (Rule_i ... ...)))])
 
@@ -115,16 +115,16 @@
 (define-metafunction Egglog+Database
   Eval-Expr : expr Env -> (Term Database)
   [(Eval-Expr number Env)
-   (number ((tset number) () () ()))]
+   (number ((tset number) (congr) () ()))]
   [(Eval-Expr (constructor expr_s ...) Env)
    ((constructor Term_c ...)
     (Database-Union
-     ((tset (constructor Term_c ...)) () () ())
+     ((tset (constructor Term_c ...)) (congr) () ())
      Database_c ...))
    (where ((Term_c Database_c) ...)
           ((Eval-Expr expr_s Env) ...))]
   [(Eval-Expr var Env)
-   ((Lookup var Env) ((tset (Lookup var Env)) () () ()))])
+   ((Lookup var Env) ((tset (Lookup var Env)) (congr) () ()))])
 
 
 (define (dump-pict pict name)
@@ -144,9 +144,9 @@
    (Database-Union (Terms Congr Env Rules_1) Database_2)
    (where (Term Database_2)
           (Eval-Expr expr Env))]
-  [(Eval-Action (union expr_1 expr_2) (Terms (Eq ...) Env Rules_1))
+  [(Eval-Action (union expr_1 expr_2) (Terms (congr Eq ...) Env Rules_1))
    (Database-Union
-    ((tset) ((= Term_1 Term_2) Eq ...) () ())
+    ((tset) (congr (= Term_1 Term_2) Eq ...) () ())
     Database_1
     Database_2)
    (where (Term_1 Database_1) (Eval-Expr expr_1 Env))
@@ -155,17 +155,17 @@
 
 (define-metafunction Egglog+Database
   Add-Equality : Eq Congr -> Congr
-  [(Add-Equality Eq (Eq_i ...))
-   (Eq Eq_i ...)])
+  [(Add-Equality Eq (congr Eq_i ...))
+   (congr Eq Eq_i ...)])
 
 (define-metafunction
   Egglog+Database
   subset : Congr Congr -> () ∨ #f
-  [(subset () (Eq_i ...))
+  [(subset (congr) (congr Eq_i ...))
    ()]
-  [(subset (Eq_1 Eq_i ...) (Eq_j ... Eq_1 Eq_k ...))
-   (subset (Eq_i ...) (Eq_j ... Eq_1 Eq_k ...))]
-  [(subset (Eq_1 Eq_i ...) (Eq_j ...))
+  [(subset (congr Eq_1 Eq_i ...) (congr Eq_j ... Eq_1 Eq_k ...))
+   (subset (congr Eq_i ...) (congr Eq_j ... Eq_1 Eq_k ...))]
+  [(subset (congr Eq_1 Eq_i ...) (congr Eq_j ...))
    #f
    (side-condition
     (not (member (term Eq_1) (term (Eq_j ...)))))])
@@ -192,7 +192,7 @@
    (-->
     (Terms Congr Env Rules_1)
     (Terms (Add-Equality (= Term_2 Term_1) Congr) Env Rules_1)
-    (where (Eq_i ... (= Term_1 Term_2) Eq_j ...) Congr)
+    (where (congr Eq_i ... (= Term_1 Term_2) Eq_j ...) Congr)
     (side-condition
      (not
       (member (term (= Term_2 Term_1))
@@ -203,7 +203,7 @@
     (Terms Congr Env Rules_1)
     (Terms (Add-Equality (= Term_1 Term_3) Congr) Env Rules_1)
     (where
-     (Eq_i ... (= Term_1 Term_2)
+     (congr Eq_i ... (= Term_1 Term_2)
       Eq_j ... (= Term_2 Term_3)
       Eq_k ...)
      Congr)
@@ -224,7 +224,7 @@
             Term_m ...)
            Terms)
     (where
-     (subset ((= Term_i Term_j) ...)
+     (subset (congr (= Term_i Term_j) ...)
              Congr)
      ())
     (side-condition
@@ -352,7 +352,7 @@
    (where ((tset Term_x ... 
      (constructor Term_j ...)
      Term_z ...) Congr Env Rules) Database)
-   (where () (subset ((= Term_i Term_j) ...) Congr))
+   (where () (subset (congr (= Term_i Term_j) ...) Congr))
    (where Env_r (Env-Union Env_i ...))
    -----------------------------
    (valid-subst

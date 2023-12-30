@@ -23,7 +23,7 @@
      (error 'execute "Program does not type check")]
     [else
      (define res
-       (apply-reduction-relation* Egglog-Reduction (term (,prog ((tset) () () ())))))
+       (apply-reduction-relation* Egglog-Reduction (term (,prog ((tset) (congr) () ())))))
      (match res
        [`((() ,database))
         database]
@@ -38,7 +38,7 @@
      #t]
     [else
      (define res
-       (apply-reduction-relation* Egglog-Reduction (term (,prog ((tset) () () ())))))
+       (apply-reduction-relation* Egglog-Reduction (term (,prog ((tset) (congr) () ())))))
      (match res
        [`((() ,database))
         (set! num-executed (+ 1 num-executed))
@@ -107,7 +107,7 @@
   (check-not-false
    (redex-match
     Egglog+Database
-    Database (term ((tset 1 2) ((= 1 2)) () ()))))
+    Database (term ((tset 1 2) (congr (= 1 2)) () ()))))
 
 
   (check-not-false
@@ -115,38 +115,38 @@
     Egglog+Database
     (Program Database)
     (term
-     ((skip) ((tset) () () ())))))
+     ((skip) ((tset) (congr) () ())))))
 
   (check-not-false
    (redex-match
     Egglog+Database
     Command+Database
     (term
-     ((cadd 2 3) ((tset) () () ())))))
+     ((cadd 2 3) ((tset) (congr) () ())))))
 
 
   (check-equal?
    (apply-reduction-relation*
     Command-Reduction
     (term
-     ((cadd 2 3) ((tset) () () ()))))
-   (list (term (skip ((tset (cadd 2 3) 2 3) () () ())))))
+     ((cadd 2 3) ((tset) (congr) () ()))))
+   (list (term (skip ((tset (cadd 2 3) 2 3) (congr) () ())))))
 
   (check-equal?
    (term (Eval-Expr 2 ()))
-   (term (2 ((tset 2) () () ()))))
+   (term (2 ((tset 2) (congr) () ()))))
   (check-equal?
    (term (Eval-Expr (cadd 2 3) ()))
-   (term ((cadd 2 3) ((tset (cadd 2 3) 2 3) () () ()))))
+   (term ((cadd 2 3) ((tset (cadd 2 3) 2 3) (congr) () ()))))
 
   (check-equal?
    (term
     (restore-congruence
       ((tset)
-        ((= 1 2)
+        (congr (= 1 2)
         (= 2 3))
         () ())))
-   '((tset) ((= 3 1)
+   '((tset) (congr (= 3 1)
          (= 2 2)
          (= 2 1)
          (= 3 3)
@@ -157,22 +157,22 @@
 
   (check-equal?
    (term (restore-congruence
-    ((tset 1) () () ())))
-   (term ((tset 1) ((= 1 1)) () ())))
+    ((tset 1) (congr) () ())))
+   (term ((tset 1) (congr (= 1 1)) () ())))
 
   (check-equal?
    (term (restore-congruence
      ((tset (cnum 1) (cnum 2) 1 2)
-      ((= 1 2))
+      (congr (= 1 2))
       () ())))
    '((tset (cnum 1) (cnum 2) 1 2)
-     ((= 1 1) (= (cnum 2) (cnum 2)) (= (cnum 1) (cnum 1)) (= 2 2) (= 2 1) (= 1 2))
+     (congr (= 1 1) (= (cnum 2) (cnum 2)) (= (cnum 1) (cnum 1)) (= 2 2) (= 2 1) (= 1 2))
      () ()))
 
   (check-equal?
     (judgment-holds
       (valid-query-subst
-        ((tset 1) () () ()) (v1) Env)
+        ((tset 1) (congr) () ()) (v1) Env)
       Env)
     '(((v1 -> 1))))
 
@@ -180,13 +180,13 @@
    (term
     (Eval-Local-Actions ()
       ((tset +inf.0)
-      ((= +inf.0 +inf.0))
+      (congr (= +inf.0 +inf.0))
       ((v1 -> +inf.0))
       ((rule () ())))
       ()))
    (term
      ((tset +inf.0)
-      ((= +inf.0 +inf.0))
+      (congr (= +inf.0 +inf.0))
       ((v1 -> +inf.0))
       ((rule () ())))))
 
@@ -197,7 +197,7 @@
                   ((Add b a)))
             (run))))
     '((tset (Add 1 2) 1 2 (Add 2 1))
-      ((= (Add 2 1) (Add 2 1)) (= 2 2) (= 1 1) (= (Add 1 2) (Add 1 2)))
+      (congr (= (Add 2 1) (Add 2 1)) (= 2 2) (= 1 1) (= (Add 1 2) (Add 1 2)))
       ()
       ((rule ((Add a b)) ((Add b a))))))
 
@@ -209,7 +209,7 @@
                   (num w)))
            (run))))
     '((tset 16 (M) (num (M)))
-      ((= (num (M)) (num (M))) (= (M) (M)) (= 16 16))
+      (congr (= (num (M)) (num (M))) (= (M) (M)) (= 16 16))
       ()
       ((rule () ((let S 16) (let w (M)) (num w))))))
 
