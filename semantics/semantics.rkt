@@ -1,7 +1,6 @@
 #lang racket
 
 (require redex)
-(require rackunit)
 (require pict)
 
 (provide (all-defined-out))
@@ -25,8 +24,9 @@
   [expr number
         (constructor expr ...)
         var]
-  [constructor (variable-prefix c)]
-  [var (variable-prefix v)])
+  [constructor variable-not-otherwise-mentioned]
+  [var variable-not-otherwise-mentioned]
+  [ReservedSymbol -> :]) ;; variable-not-otherwise-mentioned needs to not use these since we use them in Database
 
 (define-extended-language
   Egglog+Database
@@ -66,10 +66,10 @@
   Lookup : var Env -> Term ∨ #f
   [(Lookup var ())
    #f]
-  [(Lookup var_1 ((var_1 -> Term) (var_s -> Term_s) ...))
-   Term]
-  [(Lookup var_1 ((var_2 -> Term) (var_s -> Term_s) ...))
-   (Lookup var ((var_s -> Term_s) ...))
+  [(Lookup var_1 ((var_1 -> Term_1) (var_s -> Term_s) ...))
+   Term_1]
+  [(Lookup var_1 ((var_2 -> Term_1) (var_s -> Term_s) ...))
+   (Lookup var_1 ((var_s -> Term_s) ...))
    (side-condition (not (equal? (term var_1)
                                 (term var_2))))])
 
@@ -134,8 +134,8 @@
 
 (define-metafunction
   Egglog+Database
-  subset : Congr Congr -> ()
-  [(subset () ())
+  subset : Congr Congr -> () ∨ #f
+  [(subset () (Eq_i ...))
    ()]
   [(subset (Eq_1 Eq_i ...) (Eq_j ... Eq_1 Eq_k ...))
    (subset (Eq_i ...) (Eq_j ... Eq_1 Eq_k ...))]
@@ -224,19 +224,29 @@
 
 (define-metafunction
   Egglog+Database
-  Eval-Actions : Actions Database Env -> Database
-  [(Eval-Actions (Action_i ...)
-                 (Terms_1 Congr_1 Env_1 Rules_1)
-                 Env_local)
+  Eval-Global-Actions : Actions Database -> Database
+  [(Eval-Global-Actions () Database)
+   Database]
+  [(Eval-Global-Actions (Action_1 Action_i ...)
+                 Database_1)
+   (Eval-Global-Actions (Action_i ...)
+                 (Eval-Action Action_1 Database_1))])
+
+(define-metafunction
+  Egglog+Database
+  Eval-Local-Actions : Actions Database Env -> Database
+  [(Eval-Local-Actions Actions
+                       (Terms_1 Congr_1 Env_1 Rules_1)
+                       Env_local)
    (Terms_2 Congr_2 Env_1 Rules_1)
    (where (Terms_2 Congr_2 Env_2 Rules_2)
-          (Database-Union
-            (Terms_1 Congr_1 Env_1 Rules_1)
-            (Eval-Action
-             Action_i
-             (Terms_1 Congr_1 (Env-Union Env_1 Env_local) ()))
-            ...))
-          ])
+          (Eval-Global-Actions
+           Actions
+           (Terms_1 Congr_1
+            (Env-Union Env_1 Env_local)
+            Rules_1)))])
+                           
+  
 
 (define-metafunction
   Egglog+Database
@@ -246,7 +256,7 @@
     Database
     (Env_i ...))
    (Database-Union
-    (Eval-Actions Actions Database Env_i)
+    (Eval-Local-Actions Actions Database Env_i)
     ...)])
 
 (define (unbound var env)
@@ -549,13 +559,13 @@
 
 
 ;; TODO
-;; Make ast typed and add type checking?
-;;    Perhaps typed ast should be separate for simplicity
-;; Running rules, schedules
+;; Add type checking?
+;;   -Perhaps typed ast should be separate for simplicity
+;; Schedules
 ;; Merge functions, on_merge
-;; Rebuilding semantics
-;; Seminaive evaluation- which substitutions are allowed to be returned
-;; Handle globals
+;; Seminaive evaluation- egglog actually finds a subset of the valid substitutions
 ;; Extraction meaning and guarantees
 ;; Set-opion
+;; Containers?
+;; Subsumption
 

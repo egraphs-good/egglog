@@ -17,6 +17,18 @@
      prog)
    3))
 
+(define (execute prog)
+ (cond
+    [(not (types? prog))
+     (error 'execute "Program does not type check")]
+    [else
+     (define res
+       (apply-reduction-relation* Egglog-Reduction (term (,prog (() () () ())))))
+     (match res
+       [`((() ,database))
+        database]
+       [else (error 'execute (format "Program did not terminate. Got ~a" res))])]))
+
 (define (executes? prog)
   ;;(println prog)
   (cond
@@ -167,7 +179,7 @@
 
   (check-equal?
    (term
-    (Eval-Actions ()
+    (Eval-Local-Actions ()
       ((+inf.0)
       ((= +inf.0 +inf.0))
       ((v1 -> +inf.0))
@@ -178,6 +190,29 @@
       ((= +inf.0 +inf.0))
       ((v1 -> +inf.0))
       ((rule () ())))))
+
+  (check-equal?
+    (execute
+     (term ((Add 1 2)
+            (rule ((Add a b))
+                  ((Add b a)))
+            (run))))
+    '(((Add 1 2) (Add 2 1) 2 1)
+      ((= (Add 2 1) (Add 2 1)) (= 2 2) (= 1 1) (= (Add 1 2) (Add 1 2)))
+      ()
+      ((rule ((Add a b)) ((Add b a))))))
+
+  (check-equal?
+   (execute
+    (term ((rule ()
+                 ((let S 16)
+                  (let w (M))
+                  (num w)))
+           (run))))
+    '(((num (M)) (M) 16)
+      ((= 16 16) (= (M) (M)) (= (num (M)) (num (M))))
+      ()
+      ((rule () ((let S 16) (let w (M)) (num w))))))
 
 
   (redex-check Egglog
