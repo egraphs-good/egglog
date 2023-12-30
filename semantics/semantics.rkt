@@ -5,6 +5,16 @@
 
 (provide (all-defined-out))
 
+(default-style 'modern)
+(grammar-style 'modern)
+(label-style 'modern)
+(paren-style 'modern)
+(literal-style (cons 'bold 'modern))
+(metafunction-style 'modern)
+(non-terminal-style 'modern)
+(non-terminal-subscript-style 'modern)
+(non-terminal-superscript-style 'modern)
+
 (define-language Egglog
   [Program
    (Cmd ...)]
@@ -358,18 +368,22 @@
    ;; Perform e-matching using redex
    ,(judgment-holds (valid-query-subst Database Query Env) Env)])
 
+(define -->_Command (render-term Egglog -->_Command))
+(set-arrow-pict! '-->_Command
+ (lambda () -->_Command))
 (define Command-Reduction
   (reduction-relation
    Egglog+Database
    #:domain Command+Database
+   #:arrow -->_Command
    ;; running actions
-   (-->
+   (-->_Command
     (Action Database)
     (skip (Eval-Action Action Database)))
-   (-->
+   (-->_Command
     (Rule (Terms Congr Env (Rule_i ...)))
     (skip (Terms Congr Env (Rule Rule_i ...))))
-   (-->
+   (-->_Command
     ((run) Database)
     (skip
       (Database-Union
@@ -400,15 +414,17 @@
    #:domain (Program Database)
    #:arrow -->_Program
    (-->_Program
-    ((Cmd_1 Cmd_s ...)
-     Database)
+    ((Cmd_1 Cmd_s ...) Database)
     ((Cmd_stepped Cmd_s ...)
      (restore-congruence Database_2))
-    (where
+    (where/hidden ;; hide this from typesetting
      (Cmd_stepped Database_2)
      ,(try-apply-reduction-relation
        Command-Reduction
-       (term (Cmd_1 Database)))))
+       (term (Cmd_1 Database))))
+    (side-condition #t) ;; use this instead
+       
+       )
    (-->_Program
     ((skip Cmd_s ...)
      Database)

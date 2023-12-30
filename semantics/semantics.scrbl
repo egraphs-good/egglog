@@ -59,4 +59,15 @@ In-between each command, the congruence closure over these terms is completed.
 
 @section{Running Commands}
 
-@(render-reduction-relation Egglog-Reduction)
+@(define stepped
+  (hc-append 10
+   (render-term Egglog
+    (Cmd_1 Database_1))
+   -->_Command
+   (render-term Egglog
+    (Cmd_stepped Database_2))))
+@(with-unquote-rewriter
+  (lambda (old)
+   (struct-copy lw old
+     [e stepped]))
+  (render-reduction-relation Egglog-Reduction))
