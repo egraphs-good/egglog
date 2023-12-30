@@ -219,8 +219,11 @@
     [`()
      term]))
 
-(define (restore-congruence database-term)
-  (apply-reduction-relation-one-path Congruence-Reduction database-term))
+(define-metafunction
+  Egglog+Database
+  restore-congruence : Database -> Database
+  [(restore-congruence Database)
+   ,(apply-reduction-relation-one-path Congruence-Reduction (term Database))])
 
 (define-metafunction
   Egglog+Database
@@ -387,21 +390,26 @@
     [`() #f]
     [_ (error "Expected single element, got ~a" lst)]))
 
+
+(set-arrow-pict! '-->_Program
+ (lambda () (render-term Egglog
+   -->_Program)))
 (define Egglog-Reduction
   (reduction-relation
    Egglog+Database
    #:domain (Program Database)
-   (-->
+   #:arrow -->_Program
+   (-->_Program
     ((Cmd_1 Cmd_s ...)
      Database)
     ((Cmd_stepped Cmd_s ...)
-     ,(restore-congruence (term Database_2)))
+     (restore-congruence Database_2))
     (where
      (Cmd_stepped Database_2)
      ,(try-apply-reduction-relation
        Command-Reduction
        (term (Cmd_1 Database)))))
-   (-->
+   (-->_Program
     ((skip Cmd_s ...)
      Database)
     ((Cmd_s ...)

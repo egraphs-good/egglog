@@ -21,4 +21,4 @@ _scratch.egg
 scripts/compiled
 semantics/compiled
 semantics/*.png
-
+docs
