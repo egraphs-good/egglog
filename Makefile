@@ -45,6 +45,7 @@ ${DIST_WASM}: ${RUST_SRC}
 	rm -f ${WWW}/{.gitignore,package.json}
 
 semantics:
+	scribble --dest ./docs semantics/*.scrbl
 	raco test semantics/*.rkt
 
 graphs: $(patsubst %.egg,%.svg,$(filter-out $(wildcard tests/repro-*.egg),$(wildcard tests/*.egg)))

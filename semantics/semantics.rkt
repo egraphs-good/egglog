@@ -541,23 +541,6 @@
    ---------------------------
    (typed-program (Cmd_p ... (run)) TypeEnv)])
 
-
-(define-syntax-rule (save-metafunction func ...)
-  (begin
-    (dump-pict (render-metafunction func)
-               (format "~a.png" 'func))
-    ...
-    (void)))
-
-
-(define (save-semantics)
-  (save-metafunction Eval-Expr Lookup Database-Union Eval-Action))
-
-(save-semantics)
-
-
-
-
 ;; TODO
 ;; Add type checking?
 ;;   -Perhaps typed ast should be separate for simplicity
