@@ -66,6 +66,8 @@ In-between each command, the congruence closure over these terms is completed.
    -->_Command
    (render-term Egglog
     (Cmd_stepped Database_2))))
+
+    
 @(with-unquote-rewriter
   (lambda (old)
    (struct-copy lw old

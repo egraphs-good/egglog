@@ -55,7 +55,7 @@
   [Eq
    (= Term Term)]
   [Terms
-   (Term ...)]
+   (tset Term ...)]
   [Term number
         (constructor Term ...)]
   [Rules (Rule ...)]
@@ -85,30 +85,46 @@
 
 
 (define-metafunction Egglog+Database
+  Dedup : Database -> Database
+  [(Dedup
+    ((tset Term_i ...)
+     (Eq_i ...)
+     (Binding_i ...)
+     (Rule_i ...)))
+   (,(cons 'tset (remove-duplicates (term (Term_i ...))))
+    ,(remove-duplicates (term (Eq_i ...)))
+    ,(remove-duplicates (term (Binding_i ...)))
+    ,(remove-duplicates (term (Rule_i ...))))])
+
+(define-metafunction Egglog+Database
   Database-Union : Database ... -> Database
   [(Database-Union)
-   (() () () ())]
+   ((tset) () () ())]
   [(Database-Union
-    Database_i ...)
-   ;; Append all the elements and deduplicate
-   ,(map (compose set->list list->set)
-         (apply map append
-                (term (Database_i ...))))])
+    ((tset Term_i ...)
+     (Eq_i ...)
+     (Binding_i ...)
+     (Rule_i ...)) ...)
+   (Dedup
+    ((tset Term_i ... ...)
+     (Eq_i ... ...)
+     (Binding_i ... ...)
+     (Rule_i ... ...)))])
 
 
 (define-metafunction Egglog+Database
   Eval-Expr : expr Env -> (Term Database)
   [(Eval-Expr number Env)
-   (number ((number) () () ()))]
+   (number ((tset number) () () ()))]
   [(Eval-Expr (constructor expr_s ...) Env)
    ((constructor Term_c ...)
     (Database-Union
-     (((constructor Term_c ...)) () () ())
+     ((tset (constructor Term_c ...)) () () ())
      Database_c ...))
    (where ((Term_c Database_c) ...)
           ((Eval-Expr expr_s Env) ...))]
   [(Eval-Expr var Env)
-   ((Lookup var Env) (((Lookup var Env)) () () ()))])
+   ((Lookup var Env) ((tset (Lookup var Env)) () () ()))])
 
 
 (define (dump-pict pict name)
@@ -130,7 +146,7 @@
           (Eval-Expr expr Env))]
   [(Eval-Action (union expr_1 expr_2) (Terms (Eq ...) Env Rules_1))
    (Database-Union
-    (() ((= Term_1 Term_2) Eq ...) () ())
+    ((tset) ((= Term_1 Term_2) Eq ...) () ())
     Database_1
     Database_2)
    (where (Term_1 Database_1) (Eval-Expr expr_1 Env))
@@ -163,8 +179,8 @@
    Egglog+Database
    #:domain Database
    (-->
-    ((Term_i ... Term_j Term_k ...) Congr Env Rules_1)
-    ((Term_i ... Term_j Term_k ...)
+    ((tset Term_i ... Term_j Term_k ...) Congr Env Rules_1)
+    ((tset Term_i ... Term_j Term_k ...)
      (Add-Equality (= Term_j Term_j) Congr)
      Env
      Rules_1)
@@ -320,7 +336,7 @@
   #:mode (valid-subst I I O O)
   [(side-condition ,(unbound (term var) (term Env)))
    ----------------------------
-   (valid-subst ((Term_i ... Term_1 Term_j ...) Congr Env Rules)
+   (valid-subst ((tset Term_i ... Term_1 Term_j ...) Congr Env Rules)
                 var
                 Term_1
                 ((var -> Term_1)))]
@@ -333,7 +349,7 @@
   [-----------------------------
    (valid-subst Database number number ())]
   [(valid-subst Database Pattern_i Term_i Env_i) ...
-   (where ((Term_x ... 
+   (where ((tset Term_x ... 
      (constructor Term_j ...)
      Term_z ...) Congr Env Rules) Database)
    (where () (subset ((= Term_i Term_j) ...) Congr))
