@@ -5,7 +5,10 @@
 
 (provide (all-defined-out))
 
-(default-style 'modern)
+
+;; here's how to set the style of everything
+;; for example, modern (monospace) style:
+#;((default-style 'modern)
 (grammar-style 'modern)
 (label-style 'modern)
 (paren-style 'modern)
@@ -13,7 +16,7 @@
 (metafunction-style 'modern)
 (non-terminal-style 'modern)
 (non-terminal-subscript-style 'modern)
-(non-terminal-superscript-style 'modern)
+(non-terminal-superscript-style 'modern))
 
 (define-language Egglog
   [Program
@@ -144,13 +147,13 @@
    (Database-Union (Terms Congr Env Rules_1) Database_2)
    (where (Term Database_2)
           (Eval-Expr expr Env))]
-  [(Eval-Action (union expr_1 expr_2) (Terms (congr Eq ...) Env Rules_1))
+  [(Eval-Action (union expr_1 expr_2) (Terms (congr Eq ...) Env_1 Rules_1))
    (Database-Union
-    ((tset) (congr (= Term_1 Term_2) Eq ...) () ())
+    ((tset) (congr (= Term_1 Term_2) Eq ...) Env_1 Rules_1)
     Database_1
     Database_2)
-   (where (Term_1 Database_1) (Eval-Expr expr_1 Env))
-   (where (Term_2 Database_2) (Eval-Expr expr_2 Env))])
+   (where (Term_1 Database_1) (Eval-Expr expr_1 Env_1))
+   (where (Term_2 Database_2) (Eval-Expr expr_2 Env_1))])
 
 
 (define-metafunction Egglog+Database
@@ -401,10 +404,7 @@
     (skip (Terms Congr Env (Rule Rule_i ...))))
    (-->_Command
     ((run) Database)
-    (skip
-      (Database-Union
-       (Terms Congr Env (Rule ...))
-       Database_i ...))
+    (skip (Database-Union Database Database_i ...))
     (where (Terms Congr Env (Rule ...))
            Database)
     (where (Envs ...)
@@ -421,9 +421,9 @@
     [_ (error "Expected single element, got ~a" lst)]))
 
 
+(define -->_Program (render-term Egglog -->_Program))
 (set-arrow-pict! '-->_Program
- (lambda () (render-term Egglog
-   -->_Program)))
+ (lambda () -->_Program))
 (define Egglog-Reduction
   (reduction-relation
    Egglog+Database
@@ -431,8 +431,7 @@
    #:arrow -->_Program
    (-->_Program
     ((Cmd_1 Cmd_s ...) Database)
-    ((Cmd_stepped Cmd_s ...)
-     (restore-congruence Database_2))
+    ((Cmd_stepped Cmd_s ...) (restore-congruence Database_2))
     (where/hidden ;; hide this from typesetting
      (Cmd_stepped Database_2)
      ,(try-apply-reduction-relation
@@ -442,10 +441,8 @@
        
        )
    (-->_Program
-    ((skip Cmd_s ...)
-     Database)
-    ((Cmd_s ...)
-     Database))))
+    ((skip Cmd_s ...) Database)
+    ((Cmd_s ...) Database))))
 
 
 (define-judgment-form

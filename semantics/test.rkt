@@ -213,11 +213,20 @@
       ()
       ((rule () ((let S 16) (let w (M)) (num w))))))
 
+  (check-equal?
+   (execute
+    (term ((let v (b 1)) (union 7 7) (union v 4))))
+   (term
+    ((tset (b 1) 4)
+     (congr (= 4 4) (= 4 (b 1)) (= (b 1) 4) (= 7 7) (= 1 1) (= (b 1) (b 1)))
+     ((v -> (b 1)))
+     ())))
+
 
   (redex-check Egglog
                Program
                (executes? (term Program))
-               #:attempts 100000)
+               #:attempts 200000)
 
   (displayln (format "Executed ~a programs" num-executed))
   )

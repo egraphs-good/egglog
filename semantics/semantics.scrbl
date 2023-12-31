@@ -1,5 +1,6 @@
 #lang scribble/manual
 
+@(require racket/match)
 @(require scribble-math/dollar)
 @(require redex)
 @(require "semantics.rkt")
@@ -26,11 +27,29 @@
                   (style-properties html5-style)
                   (list css-object head-google))]))
 
+@(reduction-relation-rule-separation 10)
+
+@(define (set-notation lws)
+  (match lws
+    [`(,paren ,tset ,elements ... ,paren2)
+      (append  `("{")
+                elements
+                `("}"))]
+    [else (error "bad tset")]))
+@(define (custom-render func)
+  (with-compound-rewriters
+   (['tset set-notation]
+    ['congr set-notation]
+    )
+   (func)))
+
+
 @title[#:style  title-style]{ Egglog Semantics }
 
 @section{Egglog Grammar}
 
-@(render-language Egglog)
+@(custom-render
+  (lambda () (render-language Egglog)))
 
 An egglog @code{Program} is a sequence of top-level @code{Cmd}s.
 Egglog keeps track of a global @code{Database}
@@ -44,7 +63,8 @@ The @code{Query} is a set of patterns that must
 match terms in the database for the rule to fire.
 The @code{Actions} add to the database for every valid match.
 
-@(render-language Egglog+Database)
+@(custom-render
+  (lambda () (render-language Egglog+Database)))
 
 Egglog's global state is a @code{Database}, containing:
 @itemlist[
@@ -59,6 +79,8 @@ In-between each command, the congruence closure over these terms is completed.
 
 @section{Running Commands}
 
+Egglog's top-level reduction relation @-->_Program runs a sequence of commands.
+
 @(define stepped
   (hc-append 10
    (render-term Egglog
@@ -66,10 +88,22 @@ In-between each command, the congruence closure over these terms is completed.
    -->_Command
    (render-term Egglog
     (Cmd_stepped Database_2))))
-
     
-@(with-unquote-rewriter
-  (lambda (old)
-   (struct-copy lw old
-     [e stepped]))
-  (render-reduction-relation Egglog-Reduction))
+@(custom-render
+  (lambda ()
+   (with-unquote-rewriter
+    (lambda (old)
+      (struct-copy lw old
+        [e stepped]))
+    (render-reduction-relation Egglog-Reduction))))
+
+The @-->_Command reduction relation defines
+how each of these commands is run.
+
+@(custom-render
+  (lambda ()
+   (render-reduction-relation
+    Command-Reduction)))
+
+
+@(println Command-Reduction)
