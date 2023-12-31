@@ -36,20 +36,24 @@
                 elements
                 `("}"))]
     [else (error "bad tset")]))
-@(define (custom-render func)
+
+@(define (render redex-object)
   (with-compound-rewriters
    (['tset set-notation]
     ['congr set-notation]
     )
-   (func)))
+    (cond
+     [(reduction-relation? redex-object)
+       (render-reduction-relation redex-object)]
+     [else
+      (render-language redex-object)])))
 
 
 @title[#:style  title-style]{ Egglog Semantics }
 
 @section{Egglog Grammar}
 
-@(custom-render
-  (lambda () (render-language Egglog)))
+@(render Egglog)
 
 An egglog @code{Program} is a sequence of top-level @code{Cmd}s.
 Egglog keeps track of a global @code{Database}
@@ -63,8 +67,7 @@ The @code{Query} is a set of patterns that must
 match terms in the database for the rule to fire.
 The @code{Actions} add to the database for every valid match.
 
-@(custom-render
-  (lambda () (render-language Egglog+Database)))
+@(render Egglog+Database)
 
 Egglog's global state is a @code{Database}, containing:
 @itemlist[
@@ -89,21 +92,40 @@ Egglog's top-level reduction relation @-->_Program runs a sequence of commands.
    (render-term Egglog
     (Cmd_stepped Database_2))))
     
-@(custom-render
-  (lambda ()
-   (with-unquote-rewriter
-    (lambda (old)
-      (struct-copy lw old
-        [e stepped]))
-    (render-reduction-relation Egglog-Reduction))))
+@(with-unquote-rewriter
+  (lambda (old)
+    (struct-copy lw old
+      [e stepped]))
+  (render Egglog-Reduction))
 
 The @-->_Command reduction relation defines
 how each of these commands is run.
 
-@(custom-render
-  (lambda ()
-   (render-reduction-relation
-    Command-Reduction)))
+@(render Command-Reduction)
+
+The next two sections will cover evaluating actions (@code{Eval-Action}) and evaluating
+queries (@code{Rule-Envs}).
+
+@section{Evaluating Actions}
+
+Given an environment @code{Env}, egglog's
+actions add new terms and equalities to
+the global database.
+An action is either a let binding,
+an expression,
+or a union between two expressions.
+At the top level, let bindings add new global
+variables to the environment.
+In the actions of a rule, let bindings add
+new local variables.
+
+@(render-metafunction Eval-Action)
+
+Since actions only add terms to the set of terms
+and equalities to the congruence relation,
+the order of evaluation of these actions
+does not matter.
+Actions that bind new local variables
+could also be inlined, thus avoiding any dependency between actions.
 
 
-@(println Command-Reduction)

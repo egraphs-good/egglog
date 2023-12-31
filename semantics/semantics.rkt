@@ -136,7 +136,6 @@
         name
         'png))
 
-
 (define-metafunction Egglog+Database
   Eval-Action : Action Database -> Database
   [(Eval-Action (let var expr) (Terms Congr (Binding_s ...) Rules_1))
