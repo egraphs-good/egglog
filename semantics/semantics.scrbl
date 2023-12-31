@@ -28,6 +28,7 @@
                   (list css-object head-google))]))
 
 @(reduction-relation-rule-separation 10)
+@(metafunction-rule-gap-space 10)
 
 @(define (set-notation lws)
   (match lws

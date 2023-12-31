@@ -77,7 +77,7 @@
 ;; Therefore it fails in such cases
 (define-metafunction Egglog+Database
   Lookup : var Env -> Term ∨ #f
-  [(Lookup var ())
+  [(Lookup var_1 ())
    #f]
   [(Lookup var_1 ((var_1 -> Term_1) (var_s -> Term_s) ...))
    Term_1]
@@ -162,15 +162,22 @@
 
 (define-metafunction
   Egglog+Database
-  subset : Congr Congr -> () ∨ #f
+  subset : Congr Congr -> #t ∨ #f
   [(subset (congr) (congr Eq_i ...))
-   ()]
+   #t]
   [(subset (congr Eq_1 Eq_i ...) (congr Eq_j ... Eq_1 Eq_k ...))
    (subset (congr Eq_i ...) (congr Eq_j ... Eq_1 Eq_k ...))]
   [(subset (congr Eq_1 Eq_i ...) (congr Eq_j ...))
    #f
    (side-condition
     (not (member (term Eq_1) (term (Eq_j ...)))))])
+
+(define-metafunction
+  Egglog+Database
+  tset-subset : Terms Terms -> #t ∨ #f
+  [(tset-subset (tset Term_i ...) (tset Term_j ...))
+   ,(subset? (list->set (term (Term_i ...)))
+             (list->set (term (Term_j ...))))])
 
 ;; A reduction relation that restores the congruence
 ;; relation after some equalities have been added
@@ -290,10 +297,11 @@
     (Eval-Local-Actions Actions Database Env_i)
     ...)])
 
-(define (unbound var env)
-  (not (member var (map first env))))
-
-
+(define-metafunction Egglog+Database
+  unbound : var Env -> #t ∨ #f
+  [(unbound var_1 Env)
+   ,(not (member (term var_1)
+                 (map first (term Env))))])
 
 ;; Returns #f if the environments are 
 ;; inconsistent
@@ -319,13 +327,60 @@
    (side-condition
     (or (equal? (term (Lookup var Env))
                 (term Term))
-         (unbound (term var) (term Env))))]
+        (term (unbound var Env))))]
   [(Env-Union2 ((var -> Term) Binding_i ...) Env)
    #f
    (side-condition
      (not (or (equal? (term (Lookup var Env))
                       (term Term))
-               (unbound (term var) (term Env)))))])
+              (term (unbound var Env)))))])
+
+(define-metafunction
+  Egglog+Database
+  free-vars : expr -> (var ...)
+  [(free-vars number)
+   ()]
+  [(free-vars (constructor expr_i ...))
+   (free-vars expr_i ...)]
+  [(free-vars var)
+   (var)])
+
+
+(define-judgment-form
+  Egglog+Database
+  #:contract (valid-env (var ...) Database Env)
+  #:mode (valid-env I I O)
+  [(where #t (tset-subst (tset Term_i ...)
+                         Terms_1))
+   (where (#t ...)
+          ((unbound var_i Env) ...))
+   -------------------------------------
+   (valid-env (var_i ...)
+              (Terms_1 Congr_1 Env_1 Rules_1)
+              ((var_i -> Term_i) ...))])
+
+(define-judgment-form
+  Egglog+Database
+  #:contract (valid-subst Database Pattern Env)
+  #:mode (valid-subst I I O)
+  [(valid-env (free-vars expr) Database_1 Env_subst)
+   (where (Terms_1 Congr_1 Env_1 Rules_1)
+          Database_1)
+   (where #t
+     (subset (= Term_witness Term_res)
+             Congr_2))
+   (where #t
+    (tset-subset (tset Term_witness) Terms_1))
+   
+   (where (Term_res Database_2)
+          (Eval-Expr expr
+            (Env-Union Env_1 Env_subst)))
+   (where (Terms_2 Congr_2 Env_2 Rules_2)
+          ,(restore-congruence
+            (Database-Union Database_1 Database_2)))
+   --------------------------------------
+   (valid-subst Database expr Env)])
+
 
 ;; For a database, pattern, term, and environment,
 ;; valid-subst judges that the pattern e-matches
@@ -334,30 +389,30 @@
 ;; which environments satisfy a query.
 (define-judgment-form
   Egglog+Database
-  #:contract (valid-subst Database Pattern Term Env)
-  #:mode (valid-subst I I O O)
-  [(side-condition ,(unbound (term var) (term Env)))
+  #:contract (valid-subst-alt Database Pattern Term Env)
+  #:mode (valid-subst-alt I I O O)
+  [(where #t (unbound var Env))
    ----------------------------
-   (valid-subst ((tset Term_i ... Term_1 Term_j ...) Congr Env Rules)
+   (valid-subst-alt ((tset Term_i ... Term_1 Term_j ...) Congr Env Rules)
                 var
                 Term_1
                 ((var -> Term_1)))]
   [-----------------------------
-   (valid-subst
+   (valid-subst-alt
     (Terms Congr (Binding_i ... (var -> Term_1) Binding_j ...) Rules)
     var
     Term_1
     ())]
   [-----------------------------
-   (valid-subst Database number number ())]
-  [(valid-subst Database Pattern_i Term_i Env_i) ...
+   (valid-subst-alt Database number number ())]
+  [(valid-subst-alt Database Pattern_i Term_i Env_i) ...
    (where ((tset Term_x ... 
      (constructor Term_j ...)
      Term_z ...) Congr Env Rules) Database)
-   (where () (subset (congr (= Term_i Term_j) ...) Congr))
+   (where #t (subset (congr (= Term_i Term_j) ...) Congr))
    (where Env_r (Env-Union Env_i ...))
    -----------------------------
-   (valid-subst
+   (valid-subst-alt
     Database
     (constructor Pattern_i ...)
     (constructor Term_j ...)
@@ -371,7 +426,7 @@
   Egglog+Database
   #:contract (valid-query-subst Database Query Env)
   #:mode (valid-query-subst I I O)
-  [(valid-subst Database Pattern_i Term_i Env_i) ...
+  [(valid-subst-alt Database Pattern_i Term_i Env_i) ...
    ---------------------------
    (valid-query-subst Database (Pattern_i ...) (Env-Union Env_i ...))])
 
