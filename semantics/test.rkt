@@ -4,6 +4,7 @@
 (require rackunit)
 (require "semantics.rkt")
 
+
 (define num-executed 0)
 
 (define (types? e)
@@ -44,6 +45,18 @@
         (set! num-executed (+ 1 num-executed))
         #t]
        [_ #f])]))
+
+(define (check-equal-databases? db1 db2)
+ (match (list db1 db2)
+  [`(((tset ,terms1 ...) (congr ,congr1 ...) ,env1 ,rules1)
+     ((tset ,terms2 ...) (congr ,congr2 ...) ,env2 ,rules2))
+    (and
+      (check-equal? (list->set terms1) (list->set terms2))
+      (check-equal? (list->set congr1) (list->set congr2))
+      (check-equal? env1 env2)
+      (check-equal? rules1 rules2))]
+  [_ (check-equal? db1 db2)]))
+
 
 (module+ test
   (check-false
@@ -130,16 +143,16 @@
     Command-Reduction
     (term
      ((cadd 2 3) ((tset) (congr) () ()))))
-   (list (term (skip ((tset (cadd 2 3) 2 3) (congr) () ())))))
+   (list (term (skip ((tset (cadd 2 3)) (congr) () ())))))
 
   (check-equal?
    (term (Eval-Expr 2 ()))
-   (term (2 ((tset 2) (congr) () ()))))
+   (term 2))
   (check-equal?
    (term (Eval-Expr (cadd 2 3) ()))
-   (term ((cadd 2 3) ((tset (cadd 2 3) 2 3) (congr) () ()))))
+   (term (cadd 2 3)))
 
-  (check-equal?
+  (check-equal-databases?
    (term
     (restore-congruence
       ((tset)
@@ -190,7 +203,7 @@
       ((v1 -> +inf.0))
       ((rule () ())))))
 
-  (check-equal?
+  (check-equal-databases?
     (execute
      (term ((Add 1 2)
             (rule ((Add a b))
@@ -201,7 +214,7 @@
       ()
       ((rule ((Add a b)) ((Add b a))))))
 
-  (check-equal?
+  (check-equal-databases?
    (execute
     (term ((rule ()
                  ((let S 16)
@@ -217,10 +230,10 @@
    (execute
     (term ((let v (b 1)) (union 7 7) (union v 4))))
    (term
-    ((tset (b 1) 4)
-     (congr (= 4 4) (= 4 (b 1)) (= (b 1) 4) (= 7 7) (= 1 1) (= (b 1) (b 1)))
-     ((v -> (b 1)))
-     ())))
+    ((tset (b 1) 4 7 7 1 (b 1))
+  (congr (= 4 4) (= 4 (b 1)) (= (b 1) 4) (= 7 7) (= (b 1) (b 1)) (= 1 1))
+  ((v -> (b 1)))
+  ())))
 
 
   (redex-check Egglog

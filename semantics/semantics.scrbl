@@ -197,8 +197,10 @@ It also provides a particular witness term
 from the database that the pattern @bold{e-matches}.
 A pattern and substitution @bold{e-matches} a witness term if it is equal to that term
 modulo the congruence relation.
+In other words, evaluating the pattern with the
+substitution results in a term that is equal
+to the witness term.
 
 @(my-render-judgement valid-subst)
-
 
 
