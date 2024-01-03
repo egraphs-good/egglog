@@ -119,14 +119,22 @@
 (define-metafunction Egglog+Database
  tset-union : Terms ... -> Terms
  [(tset-union (tset Term_i ...) ...)
-  (tset Term_i ... ...)])
+  ,(cons 'tset (sort (remove-duplicates (term (Term_i ... ...)))))])
 
 (define-judgment-form Egglog+Database
   #:contract (tset-element Term Terms)
   #:mode (tset-element O I)
   [----------------------
    (tset-element Term_a (tset Term_i ... Term_a Term_j ...))])
-  
+
+(define-metafunction Egglog+Database
+  tset-subtract : Terms Terms -> Terms
+  [(tset-subtract Terms (tset))
+   Terms]
+  [(tset-subtract (tset Term_i ...) (tset Term_a Term_j ...))
+   (tset-subtract
+     ,(cons 'tset (remove (term Term_a) (term (Term_i ...))))
+     (tset Term_j ...))])
 
 (define-metafunction Egglog+Database
   Eval-Expr : expr Env -> Term
@@ -354,11 +362,17 @@
 
 (define-metafunction
   Egglog+Database
+  varset-union : (var ...) ... -> (var ...)
+  [(varset-union (var_i ...) ...)
+   ,(remove-duplicates (term (var_i ... ...)))])
+
+(define-metafunction
+  Egglog+Database
   free-vars : expr -> (var ...)
   [(free-vars number)
    ()]
   [(free-vars (constructor expr_i ...))
-   (free-vars expr_i ...)]
+   (varset-union (free-vars expr_i) ...)]
   [(free-vars var)
    (var)])
 
@@ -407,7 +421,7 @@
   Egglog+Database
   #:contract (valid-query-subst Database Query Env)
   #:mode (valid-query-subst I I O)
-  [(valid-subst Database Pattern_i Term_i Env_i) ...
+  [(valid-subst Database Pattern_i Term_witness Env_i) ...
    ---------------------------
    (valid-query-subst Database (Pattern_i ...) (Env-Union Env_i ...))])
 

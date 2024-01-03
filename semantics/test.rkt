@@ -57,7 +57,6 @@
       (check-equal? rules1 rules2))]
   [_ (check-equal? db1 db2)]))
 
-
 (module+ test
   (check-false
    (judgment-holds (typed-expr v1 ())))
@@ -182,10 +181,22 @@
      (congr (= 1 1) (= (cnum 2) (cnum 2)) (= (cnum 1) (cnum 1)) (= 2 2) (= 2 1) (= 1 2))
      () ()))
 
+  
+  (check-true
+    (judgment-holds
+      (tset-is-subset (tset 1) (tset 1))))
+  (check-equal?
+   (judgment-holds
+     (valid-env (v1)
+                ((tset 1) (congr (= 1 1)) () ())
+                Env)
+     Env)
+   `((v1 -> 1)))
+
   (check-equal?
     (judgment-holds
       (valid-query-subst
-        ((tset 1) (congr) () ()) (v1) Env)
+        ((tset 1) (congr (= 1 1)) () ()) (v1) Env)
       Env)
     '(((v1 -> 1))))
 
@@ -248,5 +259,4 @@
                (executes? (term Program))
                #:attempts 200000)
 
-  (displayln (format "Executed ~a programs" num-executed))
-  )
+  (displayln (format "Executed ~a programs" num-executed)))
