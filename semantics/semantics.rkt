@@ -18,6 +18,7 @@
 (non-terminal-subscript-style 'modern)
 (non-terminal-superscript-style 'modern))
 
+
 (define-language Egglog
   [Program
    (Cmd ...)]
@@ -610,15 +611,4 @@
   [(typed-program (Cmd_p ...) TypeEnv)
    ---------------------------
    (typed-program (Cmd_p ... (run)) TypeEnv)])
-
-;; TODO
-;; Add type checking?
-;;   -Perhaps typed ast should be separate for simplicity
-;; Schedules
-;; Merge functions, on_merge
-;; Seminaive evaluation- egglog actually finds a subset of the valid substitutions
-;; Extraction meaning and guarantees
-;; Set-opion
-;; Containers?
-;; Subsumption
 

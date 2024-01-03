@@ -29,14 +29,28 @@
 
 @(reduction-relation-rule-separation 10)
 @(metafunction-rule-gap-space 10)
+@(non-terminal-gap-space 10) 
 
 @(define (set-notation lws)
   (match lws
     [`(,paren ,tset ,elements ... ,paren2)
-      (append  `("{")
+      (append  `("" "{")
                 elements
-                `("}"))]
+                `("}" ""))]
     [else (error "bad tset")]))
+
+@(define (add-between lst element)
+   (apply append
+    (for/list ([ele lst]
+               [i (in-range (length lst))])
+      (if (zero? i)
+          (list ele)
+          (list element ele)))))
+
+@(define (set-union-notation lws)
+  (match lws
+    [`(,paren ,func-call ,elements ... ,paren2)
+      (append `("") (add-between elements "∪") `(""))]))
 
 @(define (my-render-reduction-relation reduction-relation)
   (render
@@ -63,7 +77,8 @@
                  [metafunction-fill-acceptable-width 10])
     (with-compound-rewriters
      (['tset set-notation]
-      ['congr set-notation])
+      ['congr set-notation]
+      ['tset-union set-union-notation])
      (func))))
 
 

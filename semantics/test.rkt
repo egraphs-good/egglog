@@ -235,6 +235,13 @@
   ((v -> (b 1)))
   ())))
 
+  (check-equal?
+    (execute
+     (term ((union (r) 22)
+            (rule ((r 1) 0 (= (D (q)) 6)) ())
+            (run))))
+    'a)
+
 
   (redex-check Egglog
                Program
