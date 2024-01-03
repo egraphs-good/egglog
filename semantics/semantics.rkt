@@ -187,8 +187,6 @@
 
 ;; A reduction relation that restores the congruence
 ;; relation after some equalities have been added
-;; TODO would be much cleaner if we had sets
-;; in our terms somehow
 (define Congruence-Reduction
   (reduction-relation
    Egglog+Database
@@ -257,7 +255,7 @@
      (tset-element (constructor Term_i ... Term_c Term_j ...) Terms))
     (side-condition/hidden
      (not (member (term Term_c) (term Terms))))
-    "presense of children in term set"
+    "presence of children"
      )
     ))
 
@@ -415,7 +413,6 @@
 
 ;; Performs the rule's query, returning a set
 ;; of environments that satisfy the query
-;; TODO don't return nothing
 (define-metafunction
   Egglog+Database
   Rule-Envs : Database Rule -> Envs

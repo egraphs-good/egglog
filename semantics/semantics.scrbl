@@ -126,15 +126,12 @@ queries (@code{Rule-Envs}).
 
 @section{Evaluating Actions}
 
-Evaluating expressions is straitforward-
-expressions construct a single term, looking
-up variables in the environment.
-While evaluating an expression, each intermediate
-term is also added to a resulting database.
+Given an evironment @code{Env}, egglog's
+expressions construct a single term.
 
 @(my-render-metafunction Eval-Expr)
 
-Given an environment @code{Env}, egglog's
+Egglog's
 actions add new terms and equalities to
 the global database.
 An action is either a let binding,
@@ -145,12 +142,9 @@ variables to the environment.
 In the actions of a rule, let bindings add
 new local variables.
 
-The resulting database after evaluating expressions
-contains all intermidate terms.
-These are added to the database using the
-@code{Database-Union} metafunction, which
-unions the terms, equalities, environments,
-and rules of two databases.
+The resulting database after evaluating expressions may not contain all intermediate terms.
+These are added when the congruence closure
+is restored.
 
 @(my-render-metafunction Eval-Action)
 
@@ -170,9 +164,9 @@ scope, then forget the resulting environment.
 
 @(my-render-metafunction Eval-Local-Actions)
 
-Given a set of substitutions, we can evaluate
+Given a set of substitutions from running a rule's query, we can evaluate
 a rule's actions by applying the actions 
-multiple times, once for each 
+multiple times, once for each substitution.
 
 @(my-render-metafunction Eval-Rule-Actions)
 
@@ -204,3 +198,40 @@ to the witness term.
 @(my-render-judgement valid-subst)
 
 
+
+@section{Restoring Congruence}
+
+In-between every command, egglog restores
+the congruence closure using
+the axioms of congruence closure.
+It also uses a a "presence of children" axiom to ensure
+all terms, including their children, are present
+in the congruence closure.
+
+
+@(my-render-reduction-relation Congruence-Reduction)
+
+The restore-congruence metafunction applies
+the Congruence-Reduction until a fixed point.
+
+@(my-render-metafunction restore-congruence)
+
+
+@section{To Do}
+
+This semantics is not yet complete, and does not
+cover everything egglog can do.
+
+
+@itemlist[
+ @item{Type checking: egglog enforces well-typed terms and rules, and supports
+ primitives}
+ @item{Seminaive evaluation: Egglog doesn't actually return all valid substitutions. Actully, it only returns new ones.}
+ @item{Merge functions: egglog supports merge
+ functions, which are a functional depedency from inputs to a single output.}
+ @item{Schedules: egglog supports running
+ different rulesets in a schedule}
+ @item{Extraction: egglog supports extracting
+ programs from the database}
+ @item{Containers: Egglog supports custom containers, such as vectors}
+]
