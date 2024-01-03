@@ -74,6 +74,9 @@
   ;; check there are no free variables
   [Type no-type])
 
+(define-syntax-rule (rterm term)
+  (render-term Egglog+Database term))
+
 ;; No rule for if the variable is not found
 ;; Therefore it fails in such cases
 (define-metafunction Egglog+Database
@@ -190,12 +193,12 @@
 
 (define-metafunction
   Egglog+Database
-  subset : Congr Congr -> #t ∨ #f
-  [(subset (congr) (congr Eq_i ...))
+  congr-subset : Congr Congr -> #t ∨ #f
+  [(congr-subset (congr) (congr Eq_i ...))
    #t]
-  [(subset (congr Eq_1 Eq_i ...) (congr Eq_j ... Eq_1 Eq_k ...))
-   (subset (congr Eq_i ...) (congr Eq_j ... Eq_1 Eq_k ...))]
-  [(subset (congr Eq_1 Eq_i ...) (congr Eq_j ...))
+  [(congr-subset (congr Eq_1 Eq_i ...) (congr Eq_j ... Eq_1 Eq_k ...))
+   (congr-subset (congr Eq_i ...) (congr Eq_j ... Eq_1 Eq_k ...))]
+  [(congr-subset (congr Eq_1 Eq_i ...) (congr Eq_j ...))
    #f
    (side-condition
     (not (member (term Eq_1) (term (Eq_j ...)))))])
@@ -259,7 +262,7 @@
             Term_m ...)
            Terms)
     (where
-     (subset (congr (= Term_i Term_j) ...)
+     (congr-subset (congr (= Term_i Term_j) ...)
              Congr)
      ())
     (side-condition/hidden
@@ -381,13 +384,17 @@
 
 (define-metafunction
   Egglog+Database
-  free-vars : expr -> (var ...)
-  [(free-vars number)
+  free-vars : expr Env -> (var ...)
+  [(free-vars number Env)
    ()]
-  [(free-vars (constructor expr_i ...))
-   (varset-union (free-vars expr_i) ...)]
-  [(free-vars var)
-   (var)])
+  [(free-vars (constructor expr_i ...) Env)
+   (varset-union (free-vars expr_i Env) ...)]
+  [(free-vars var Env)
+   (var)
+   (where #t (unbound var Env))]
+  [(free-vars var Env)
+   ()
+   (where #f (unbound var Env))])
 
 
 ;; Finds all subsets of a set
@@ -412,20 +419,16 @@
   Egglog+Database
   #:contract (valid-env (var ...) Database Env)
   #:mode (valid-env I I O)
-  [(tset-is-subset (tset Term_i ...)
+  [(tset-is-subset (tset Term_i ..._1)
                    Terms_1 (tset))
-   (where/hidden (#t ...)
-                 ((unbound var_i Env_1) ...))
-   (side-condition/hidden
-     (equal?
-       (length (term (var_i ...)))
-       (length (term (Term_i ...)))))
    -------------------------------------
-   (valid-env (var_i ...)
+   (valid-env (var_i ..._1)
               (Terms_1 Congr_1 Env_1 Rules_1)
               ((var_i -> Term_i) ...))])
 
 
+;; Defines e-matching in terms of matching a
+;; witness term.
 ;; A valid substitution satisfies:
 ;; - is an assignment of variables to terms that are in the database
 ;; - when the pattern is evaluated in the database, the resulting term is equal to some witness term
@@ -434,54 +437,57 @@
   Egglog+Database
   #:contract (valid-subst Database Pattern Env)
   #:mode (valid-subst I I O)
-  [(valid-env (free-vars expr) Database_1 Env_subst)
-   (where (Terms_1 Congr_1 Env_1 Rules_1)
+  [(where (Terms_1 Congr_1 Env_1 Rules_1)
           Database_1)
+   (valid-env (free-vars expr Env_1) Database_1 Env_subst)
    (tset-element Term_witness Terms_1)
-   (where (Term_res Database_2)
+   (where Term_res
           (Eval-Expr expr
             (Env-Union Env_1 Env_subst)))
    (where (Terms_2 Congr_2 Env_2 Rules_2)
           (restore-congruence
-            (Database-Union Database_1 Database_2)))
+            (Database-Union Database_1
+              ((tset Term_res) (congr) () ()))))
    (where #t
-     (subset (= Term_witness Term_res)
+     (congr-subset (congr (= Term_witness Term_res))
              Congr_2))
    --------------------------------------
-   (valid-subst Database_1 expr Env_1)])
+   (valid-subst Database_1 expr Env_subst)])
 
 
+;; Experimental alternate semantics for valid-subst
+;; that is probably much faster to run with redex
 ;; For a database, pattern, term, and environment,
-;; valid-subst-alt judges that the pattern e-matches
-;; the term with local substitution given by the environment.
-;; `valid-subst-alt` defines e-matching by specifying
+;; valid-subst-faster judges that the pattern e-matches
+;; the witness term with local substitution given by the environment.
+;; `valid-subst-faster` defines e-matching by specifying
 ;; which environments satisfy a query.
 (define-judgment-form
   Egglog+Database
-  #:contract (valid-subst-alt Database Pattern Term Env)
-  #:mode (valid-subst-alt I I O O)
+  #:contract (valid-subst-faster Database Pattern Term Env)
+  #:mode (valid-subst-faster I I O O)
   [(where #t (unbound var Env))
    ----------------------------
-   (valid-subst-alt ((tset Term_i ... Term_1 Term_j ...) Congr Env Rules)
+   (valid-subst-faster ((tset Term_i ... Term_1 Term_j ...) Congr Env Rules)
                 var
                 Term_1
                 ((var -> Term_1)))]
   [-----------------------------
-   (valid-subst-alt
+   (valid-subst-faster
     (Terms Congr (Binding_i ... (var -> Term_1) Binding_j ...) Rules)
     var
     Term_1
     ())]
   [-----------------------------
-   (valid-subst-alt Database number number ())]
-  [(valid-subst-alt Database Pattern_i Term_i Env_i) ...
+   (valid-subst-faster Database number number ())]
+  [(valid-subst-faster Database Pattern_i Term_i Env_i) ...
    (where ((tset Term_x ... 
      (constructor Term_j ...)
      Term_z ...) Congr Env Rules) Database)
-   (where #t (subset (congr (= Term_i Term_j) ...) Congr))
+   (where #t (congr-subset (congr (= Term_i Term_j) ...) Congr))
    (where Env_r (Env-Union Env_i ...))
    -----------------------------
-   (valid-subst-alt
+   (valid-subst-faster
     Database
     (constructor Pattern_i ...)
     (constructor Term_j ...)
@@ -509,7 +515,7 @@
    ;; Perform e-matching using redex
    ,(judgment-holds (valid-query-subst Database Query Env) Env)])
 
-(define -->_Command (render-term Egglog -->_Command))
+(define -->_Command (rterm -->_Command))
 (set-arrow-pict! '-->_Command
  (lambda () -->_Command))
 (define Command-Reduction
@@ -543,7 +549,7 @@
     [_ (error "Expected single element, got ~a" lst)]))
 
 
-(define -->_Program (render-term Egglog -->_Program))
+(define -->_Program (rterm -->_Program))
 (set-arrow-pict! '-->_Program
  (lambda () -->_Program))
 (define Egglog-Reduction

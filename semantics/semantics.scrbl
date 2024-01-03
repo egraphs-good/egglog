@@ -35,6 +35,9 @@
   (match lws
     [`(,paren ,tset ,elements ... ,paren2)
       (append  `("" "{")
+                (list
+                 (struct-copy lw tset
+                  [e (blank)]))
                 elements
                 `("}" ""))]
     [else (error "bad tset")]))
@@ -202,17 +205,23 @@ is valid for each pattern in the query.
 
 The @code{valid-subst} judgement defines
 when a substitution is valid for a pattern.
-It also provides a particular witness term
-from the database that the pattern @bold{e-matches}.
-A pattern and substitution @bold{e-matches} a witness term if it is equal to that term
-modulo the congruence relation.
-In other words, evaluating the pattern with the
-substitution results in a term that is equal
-to the witness term.
+It states these conditions:
+
+@itemlist[
+  @item{@(rterm Env_subst) is a valid environment mapping free variables in the pattern to grounded terms in the database}
+  @item{There exists a witness term @(rterm Term_witness) in the database}
+  @item{Evaluating the pattern with the substitution results in another term @(rterm Term_res)}
+  @item{@(rterm Term_res) is equal to @(rterm Term_witness) using the congruence closure.}
+]
+
+We say that the pattern and substitution `e-matches` the witness term.
 
 @(my-render-judgement valid-subst)
 
+Valid-env defines the set of valid environments
+mapping free variables to grounded terms.
 
+@(my-render-judgement valid-env)
 
 @section{Restoring Congruence}
 
@@ -231,6 +240,15 @@ the Congruence-Reduction until a fixed point.
 
 @(my-render-metafunction restore-congruence)
 
+
+@section{Alternate validity definition}
+
+Unfortunately, the above definition of validity
+is infeasible to execute using redex.
+Therefore, in this section we provide an alternative, equivalent
+definition which is more efficient.
+
+TODO
 
 @section{To Do}
 

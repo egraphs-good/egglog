@@ -31,7 +31,6 @@
        [else (error 'execute (format "Program did not terminate. Got ~a" res))])]))
 
 (define (executes? prog)
-  ;;(println prog)
   (cond
     [(not (types? prog))
      #t]
@@ -191,12 +190,30 @@
                 ((tset 1) (congr (= 1 1)) () ())
                 Env)
      Env)
-   `((v1 -> 1)))
+   `(((v1 -> 1))))
+
+  (check-equal?
+    (term (free-vars v1 ()))
+    (term (v1)))
+
+  (check-equal?
+    (judgment-holds (tset-element 1 (tset 1)))
+    #t)
+  
+  (check-equal?
+    (term (Eval-Expr v1 ((v1 -> 1))))
+    (term 1))
 
   (check-equal?
     (judgment-holds
-      (valid-query-subst
-        ((tset 1) (congr (= 1 1)) () ()) (v1) Env)
+      (valid-env (free-vars v1 ()) ((tset 1) (congr (= 1 1)) () ()) Env)
+      Env)
+    '(((v1 -> 1))))
+
+  (check-equal?
+    (judgment-holds
+      (valid-subst
+        ((tset 1) (congr (= 1 1)) () ()) v1 Env)
       Env)
     '(((v1 -> 1))))
 
@@ -241,7 +258,7 @@
    (execute
     (term ((let v (b 1)) (union 7 7) (union v 4))))
    (term
-    ((tset (b 1) 4 7 7 1 (b 1))
+    ((tset (b 1) 4 7 1)
   (congr (= 4 4) (= 4 (b 1)) (= (b 1) 4) (= 7 7) (= (b 1) (b 1)) (= 1 1))
   ((v -> (b 1)))
   ())))
@@ -251,7 +268,10 @@
      (term ((union (r) 22)
             (rule ((r 1) 0 (= (D (q)) 6)) ())
             (run))))
-    'a)
+    (term ((tset (r) 22)
+        (congr (= (r) (r)) (= 22 22) (= 22 (r)) (= (r) 22))
+        ()
+        ((rule ((r 1) 0 (= (D (q)) 6)) ())))))
 
 
   (redex-check Egglog
