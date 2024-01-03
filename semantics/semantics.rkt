@@ -119,7 +119,7 @@
 (define-metafunction Egglog+Database
  tset-union : Terms ... -> Terms
  [(tset-union (tset Term_i ...) ...)
-  ,(cons 'tset (sort (remove-duplicates (term (Term_i ... ...)))))])
+  ,(cons 'tset (remove-duplicates (term (Term_i ... ...))))])
 
 (define-metafunction Egglog+Database
   tset-not-in : Term Terms -> #t ∨ #f
@@ -402,9 +402,9 @@
   [------------------------------
    (tset-is-subset (tset) Terms_2 Terms_3)]
   [(tset-element Term_a Terms_2)
+   (where #t (tset-not-in Term_a Terms_3))
    (tset-is-subset Terms_1 Terms_2
                    (tset-union Terms_3 (tset Term_a)))
-   (where #t (tset-not-in Term_a Terms_3))
    ------------------------------
    (tset-is-subset (tset-union Terms_1 (tset Term_a)) Terms_2 Terms_3)])
 
@@ -414,13 +414,22 @@
   #:mode (valid-env I I O)
   [(tset-is-subset (tset Term_i ...)
                    Terms_1 (tset))
-   (where (#t ...)
-          ((unbound var_i Env_1) ...))
+   (where/hidden (#t ...)
+                 ((unbound var_i Env_1) ...))
+   (side-condition/hidden
+     (equal?
+       (length (term (var_i ...)))
+       (length (term (Term_i ...)))))
    -------------------------------------
    (valid-env (var_i ...)
               (Terms_1 Congr_1 Env_1 Rules_1)
               ((var_i -> Term_i) ...))])
 
+
+;; A valid substitution satisfies:
+;; - is an assignment of variables to terms that are in the database
+;; - when the pattern is evaluated in the database, the resulting term is equal to some witness term
+;; - the witness term is in the original database
 (define-judgment-form
   Egglog+Database
   #:contract (valid-subst Database Pattern Env)

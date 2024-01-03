@@ -184,7 +184,7 @@
   
   (check-true
     (judgment-holds
-      (tset-is-subset (tset 1) (tset 1))))
+      (tset-is-subset (tset 1) (tset 1) (tset)))) 
   (check-equal?
    (judgment-holds
      (valid-env (v1)
