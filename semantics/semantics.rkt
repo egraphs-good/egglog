@@ -459,7 +459,7 @@
    --------------------------------------
    (valid-subst Database_1 expr Env_subst)]
   [(where (Terms_1 Congr_1 Env_1 Rules_1) Database_1)
-   (valid-env (vars-union (free-vars expr_1) (free-vars expr_2)) Database_1 Env_subst)
+   (valid-env (vars-union (free-vars expr_1 Env_1) (free-vars expr_2 Env_1)) Database_1 Env_subst)
    (tset-element Term_witness Terms_1)
    (where Term_res1
           (Eval-Expr expr_1

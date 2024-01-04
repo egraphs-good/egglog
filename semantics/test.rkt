@@ -322,7 +322,19 @@
               ((success)))
         (run)
         (run))))
-    'a)
+    (term ((tset 2 1 (Add 1 2) (Wrapper (Add 1 2)) (Add 2 1) (success))
+  (congr
+   (= (success) (success))
+   (= (Add 2 1) (Add 2 1))
+   (= (Add 2 1) (Add 1 2))
+   (= (Wrapper (Add 1 2)) (Wrapper (Add 1 2)))
+   (= (Add 1 2) (Add 1 2))
+   (= 1 1)
+   (= 2 2)
+   (= (Add 1 2) (Add 2 1)))
+  ()
+  ((rule ((= (Wrapper (Add 1 2)) (Wrapper (Add 2 1)))) ((success)))
+   (rule ((Add a b)) ((union (Add a b) (Add b a))))))))
 
 
 
