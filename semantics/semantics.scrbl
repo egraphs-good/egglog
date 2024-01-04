@@ -94,7 +94,7 @@
       ['congr set-notation]
       ['vars-union set-union-notation]
       ['tset-union set-union-notation]
-      ['Env-Union set-union-notation]
+      #;['Env-Union set-union-notation]
       ['all-valid-query-subst all-valid-query-subst-notation])
      (func))))
 
@@ -203,11 +203,11 @@ multiple times, once for each substitution.
 
 @(my-render-metafunction Eval-Rule-Actions)
 
-The `U_d` function is a database-union function. It takes two databases and unions the terms, equalities, environments, and rules.
+The @(rterm U_d) function is a database-union function. It takes two databases and unions the terms, equalities, environments, and rules.
 
 @(my-render-metafunction U_d)
 
-The `Dedup` metafunction removes duplicates from sets.
+The @(rterm Dedup) metafunction removes duplicates from sets.
 
 @section{Evaluating Queries}
 
