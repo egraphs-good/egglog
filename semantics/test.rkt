@@ -170,16 +170,6 @@
    (term (restore-congruence
     ((tset 1) (congr) () ())))
    (term ((tset 1) (congr (= 1 1)) () ())))
-
-  (check-equal?
-   (term (restore-congruence
-     ((tset (cnum 1) (cnum 2) 1 2)
-      (congr (= 1 2))
-      () ())))
-   '((tset (cnum 1) (cnum 2) 1 2)
-     (congr (= 1 1) (= (cnum 2) (cnum 2)) (= (cnum 1) (cnum 1)) (= 2 2) (= 2 1) (= 1 2))
-     () ()))
-
   
   (check-true
     (judgment-holds
@@ -272,6 +262,68 @@
         (congr (= (r) (r)) (= 22 22) (= 22 (r)) (= (r) 22))
         ()
         ((rule ((r 1) 0 (= (D (q)) 6)) ())))))
+
+  
+  (check-equal?
+   (term
+    (restore-congruence 
+     ((tset 1 2 3)
+      (congr (= 1 2) (= 2 3))
+      () ())))
+   (term ((tset 1 2 3)
+          (congr
+          (= 1 1)
+          (= 3 1)
+          (= 2 2)
+          (= 2 1)
+          (= 3 3)
+          (= 3 2)
+          (= 1 3)
+          (= 1 2)
+          (= 2 3))
+          ()
+          ())))
+
+  (check-equal?
+   (term
+    (restore-congruence
+     ((tset 1 2 (wrapper 2) (wrapper 1))
+      (congr (= 1 2)) () ())))
+   (term ((tset 1 2 (wrapper 2) (wrapper 1))
+          (congr
+            (= (wrapper 2) (wrapper 2))
+            (= 1 1)
+            (= (wrapper 1) (wrapper 1))
+            (= (wrapper 1) (wrapper 2))
+            (= 2 2)
+            (= (wrapper 2) (wrapper 1))
+            (= 2 1)
+            (= 1 2))
+          ()
+          ())))
+
+  (check-equal?
+   (judgment-holds
+     (valid-subst ((tset 1 2 (wrapper 2))
+                   (congr (= 1 2) (= 2 1) (= 1 1) (= 2 2) (= (wrapper 2) (wrapper 2)))
+                   () ())
+                  (wrapper 1)
+                  Env)
+    Env)
+   '(()))
+
+  (check-equal?
+    (execute
+     (term
+       ((Wrapper (Add 1 2))
+        (rule ((Add a b)) ((union (Add a b) (Add b a))))
+        (rule ((= (Wrapper (Add 1 2))
+                  (Wrapper (Add 2 1))))
+              ((success)))
+        (run)
+        (run))))
+    'a)
+
 
 
   (redex-check Egglog

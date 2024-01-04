@@ -254,21 +254,20 @@
    (-->
     (Terms Congr Env Rules_1)
     (Terms (Add-Equality
-            (= (constructor Term_i ...)
-               (constructor Term_j ...))
+            (= (constructor_1 Term_i ...)
+               (constructor_1 Term_j ...))
             Congr) Env Rules_1)
-    (where (Term_k ... (constructor Term_i ...)
-            Term_l ... (constructor Term_j ...)
+    (where (tset Term_k ... (constructor_1 Term_i ..._1)
+            Term_l ... (constructor_1 Term_j ..._1)
             Term_m ...)
            Terms)
-    (where
+    (where #t
      (congr-subset (congr (= Term_i Term_j) ...)
-             Congr)
-     ())
+             Congr))
     (side-condition/hidden
      (not
-      (member (term (= (constructor Term_i ...)
-                       (constructor Term_j ...)))
+      (member (term (= (constructor_1 Term_i ...)
+                       (constructor_1 Term_j ...)))
               (term Congr))))
     "congruence"
     )
@@ -384,6 +383,12 @@
 
 (define-metafunction
   Egglog+Database
+  vars-union : (var ...) ... -> (var ...)
+  [(vars-union (var_i ...) ...)
+   ,(remove-duplicates (term (var_i ... ...)))])
+
+(define-metafunction
+  Egglog+Database
   free-vars : expr Env -> (var ...)
   [(free-vars number Env)
    ()]
@@ -452,7 +457,24 @@
      (congr-subset (congr (= Term_witness Term_res))
              Congr_2))
    --------------------------------------
-   (valid-subst Database_1 expr Env_subst)])
+   (valid-subst Database_1 expr Env_subst)]
+  [(where (Terms_1 Congr_1 Env_1 Rules_1) Database_1)
+   (valid-env (vars-union (free-vars expr_1) (free-vars expr_2)) Database_1 Env_subst)
+   (tset-element Term_witness Terms_1)
+   (where Term_res1
+          (Eval-Expr expr_1
+            (Env-Union Env_1 Env_subst)))
+   (where Term_res2
+          (Eval-Expr expr_2
+            (Env-Union Env_1 Env_subst)))
+   (where (Terms_2 Congr_2 Env_2 Rules_2)
+          (restore-congruence
+            (Database-Union Database_1
+              ((tset Term_res1 Term_res2) (congr) () ()))))
+   (where #t (congr-subset (congr (= Term_witness Term_res1) (= Term_res1 Term_res2)) Congr_2))
+   -------------------------------------
+   (valid-subst Database_1 (= expr_1 expr_2) Env_subst)]
+   )
 
 
 ;; Experimental alternate semantics for valid-subst
