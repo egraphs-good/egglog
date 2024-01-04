@@ -35,9 +35,11 @@
   (match lws
     [`(,paren ,tset ,elements ... ,paren2)
       (append  `("" "{")
-                (list
-                 (struct-copy lw tset
-                  [e (blank)]))
+                (if (equal? (length elements) 0)
+                    (list
+                    (struct-copy lw tset
+                      [e (blank)]))
+                    (list))
                 elements
                 `("}" ""))]
     [else (error "bad tset")]))
@@ -70,6 +72,14 @@
    (lambda ()
     (render-judgment-form judgement))))
 
+@(define (all-valid-query-subst-notation lws)
+  (match lws
+    [`(,paren ,func-call ,elements ... ,paren2)
+      (append 
+        `("" "{Env s.t. (valid-query-subst ")
+         elements
+         `(" Env)}" ""))]))
+
 @(define-syntax-rule (my-render-metafunction metafunction)
   (render
    (lambda ()
@@ -77,11 +87,15 @@
 
 @(define (render func)
   (parameterize ([rule-pict-style 'compact-vertical]
+                 [metafunction-pict-style 'left-right/vertical-side-conditions]
                  [metafunction-fill-acceptable-width 10])
     (with-compound-rewriters
      (['tset set-notation]
       ['congr set-notation]
-      ['tset-union set-union-notation])
+      ['vars-union set-union-notation]
+      ['tset-union set-union-notation]
+      ['Env-Union set-union-notation]
+      ['all-valid-query-subst all-valid-query-subst-notation])
      (func))))
 
 
@@ -119,6 +133,7 @@ In-between each command, the congruence closure over these terms is completed.
 @section{Running Commands}
 
 Egglog's top-level reduction relation @-->_Program runs a sequence of commands.
+Notice that between running commands, egglog restores the congruence relation (see section on restoring congruence TODO make this a link).
 
 @(define stepped
   (hc-append 10
@@ -188,6 +203,12 @@ multiple times, once for each substitution.
 
 @(my-render-metafunction Eval-Rule-Actions)
 
+The `U_d` function is a database-union function. It takes two databases and unions the terms, equalities, environments, and rules.
+
+@(my-render-metafunction U_d)
+
+The `Dedup` metafunction removes duplicates from sets.
+
 @section{Evaluating Queries}
 
 To evaluate a rule, egglog first finds
@@ -240,15 +261,6 @@ the Congruence-Reduction until a fixed point.
 
 @(my-render-metafunction restore-congruence)
 
-
-@section{Alternate validity definition}
-
-Unfortunately, the above definition of validity
-is infeasible to execute using redex.
-Therefore, in this section we provide an alternative, equivalent
-definition which is more efficient.
-
-TODO
 
 @section{To Do}
 

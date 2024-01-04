@@ -104,19 +104,11 @@
     ,(remove-duplicates (term (Rule_i ...))))])
 
 (define-metafunction Egglog+Database
-  Database-Union : Database ... -> Database
-  [(Database-Union)
+  U_d : Database ... -> Database
+  [(U_d)
    ((tset) (congr) () ())]
-  [(Database-Union
-    ((tset Term_i ...)
-     (congr Eq_i ...)
-     (Binding_i ...)
-     (Rule_i ...)) ...)
-   (Dedup
-    ((tset Term_i ... ...)
-     (congr Eq_i ... ...)
-     (Binding_i ... ...)
-     (Rule_i ... ...)))])
+  [(U_d ((tset Term_i ...) (congr Eq_i ...) (Binding_i ...) (Rule_i ...)) ...)
+   (Dedup ((tset Term_i ... ...) (congr Eq_i ... ...) (Binding_i ... ...) (Rule_i ... ...)))])
 
 
 (define-metafunction Egglog+Database
@@ -159,9 +151,7 @@
   [(Eval-Expr var Env)
    (Lookup var Env)]
   [(Eval-Expr (constructor expr_s ...) Env)
-   (constructor Term_c ...)
-   (where (Term_c ...)
-          ((Eval-Expr expr_s Env) ...))])
+   (constructor (Eval-Expr expr_s Env) ...)])
 
 
 (define (dump-pict pict name)
@@ -178,8 +168,7 @@
           (Eval-Expr expr (Binding_s ...)))]
   [(Eval-Action expr (Terms Congr Env Rules_1))
    ((tset-union (tset Term_res) Terms) Congr Env Rules_1)
-   (where Term_res
-          (Eval-Expr expr Env))]
+   (where Term_res (Eval-Expr expr Env))]
   [(Eval-Action (union expr_1 expr_2) (Terms_1 (congr Eq ...) Env_1 Rules_1))
    ((tset-union (tset Term_1 Term_2) Terms_1) (congr (= Term_1 Term_2) Eq ...) Env_1 Rules_1)
    (where Term_1 (Eval-Expr expr_1 Env_1))
@@ -305,37 +294,26 @@
   Eval-Global-Actions : Actions Database -> Database
   [(Eval-Global-Actions () Database)
    Database]
-  [(Eval-Global-Actions (Action_1 Action_i ...)
-                 Database_1)
-   (Eval-Global-Actions (Action_i ...)
-                 (Eval-Action Action_1 Database_1))])
+  [(Eval-Global-Actions (Action_1 Action_i ...) Database_1)
+   (Eval-Global-Actions (Action_i ...) (Eval-Action Action_1 Database_1))])
 
 (define-metafunction
   Egglog+Database
   Eval-Local-Actions : Actions Database Env -> Database
-  [(Eval-Local-Actions Actions
-                       (Terms_1 Congr_1 Env_1 Rules_1)
-                       Env_local)
+  [(Eval-Local-Actions Actions Database_1 Env_local)
    (Terms_2 Congr_2 Env_1 Rules_1)
+   (where (Terms_1 Congr_1 Env_1 Rules_1) Database_1)
    (where (Terms_2 Congr_2 Env_2 Rules_2)
-          (Eval-Global-Actions
-           Actions
-           (Terms_1 Congr_1
-            (Env-Union Env_1 Env_local)
-            Rules_1)))])
+          ;; all on the same line for typesetting
+          (Eval-Global-Actions Actions (Terms_1 Congr_1 (Env-Union Env_1 Env_local) Rules_1)))])
                            
   
 
 (define-metafunction
   Egglog+Database
   Eval-Rule-Actions : Rule Database Envs -> Database
-  [(Eval-Rule-Actions
-    (rule Query Actions)
-    Database
-    (Env_i ...))
-   (Database-Union
-    (Eval-Local-Actions Actions Database Env_i)
-    ...)])
+  [(Eval-Rule-Actions (rule Query Actions) Database (Env_i ...))
+   (U_d (Eval-Local-Actions Actions Database Env_i) ...)])
 
 (define-metafunction Egglog+Database
   unbound : var Env -> #t ∨ #f
@@ -424,12 +402,9 @@
   Egglog+Database
   #:contract (valid-env (var ...) Database Env)
   #:mode (valid-env I I O)
-  [(tset-is-subset (tset Term_i ..._1)
-                   Terms_1 (tset))
+  [(tset-is-subset (tset Term_i ..._1) Terms_1 (tset))
    -------------------------------------
-   (valid-env (var_i ..._1)
-              (Terms_1 Congr_1 Env_1 Rules_1)
-              ((var_i -> Term_i) ...))])
+   (valid-env (var_i ..._1) (Terms_1 Congr_1 Env_1 Rules_1) ((var_i -> Term_i) ...))])
 
 
 ;; Defines e-matching in terms of matching a
@@ -446,16 +421,11 @@
           Database_1)
    (valid-env (free-vars expr Env_1) Database_1 Env_subst)
    (tset-element Term_witness Terms_1)
-   (where Term_res
-          (Eval-Expr expr
-            (Env-Union Env_1 Env_subst)))
+   (where Term_res (Eval-Expr expr (Env-Union Env_1 Env_subst)))
    (where (Terms_2 Congr_2 Env_2 Rules_2)
-          (restore-congruence
-            (Database-Union Database_1
-              ((tset Term_res) (congr) () ()))))
-   (where #t
-     (congr-subset (congr (= Term_witness Term_res))
-             Congr_2))
+          (restore-congruence (U_d Database_1 ((tset Term_res) (congr) () ()))))
+   (side-condition
+     (congr-subset (congr (= Term_witness Term_res)) Congr_2))
    --------------------------------------
    (valid-subst Database_1 expr Env_subst)]
   [(where (Terms_1 Congr_1 Env_1 Rules_1) Database_1)
@@ -469,9 +439,9 @@
             (Env-Union Env_1 Env_subst)))
    (where (Terms_2 Congr_2 Env_2 Rules_2)
           (restore-congruence
-            (Database-Union Database_1
+            (U_d Database_1
               ((tset Term_res1 Term_res2) (congr) () ()))))
-   (where #t (congr-subset (congr (= Term_witness Term_res1) (= Term_res1 Term_res2)) Congr_2))
+   (side-condition (congr-subset (congr (= Term_witness Term_res1) (= Term_res1 Term_res2)) Congr_2))
    -------------------------------------
    (valid-subst Database_1 (= expr_1 expr_2) Env_subst)]
    )
@@ -528,6 +498,12 @@
    (valid-query-subst Database (Pattern_i ...) (Env-Union Env_i ...))])
 
 
+(define-metafunction
+  Egglog+Database
+  all-valid-query-subst : Database Query -> Envs
+  [(all-valid-query-subst Database Query)
+   ,(judgment-holds (valid-query-subst Database Query Env) Env)])
+
 ;; Performs the rule's query, returning a set
 ;; of environments that satisfy the query
 (define-metafunction
@@ -535,7 +511,7 @@
   Rule-Envs : Database Rule -> Envs
   [(Rule-Envs Database (rule Query Actions))
    ;; Perform e-matching using redex
-   ,(judgment-holds (valid-query-subst Database Query Env) Env)])
+   (all-valid-query-subst Database Query)])
 
 (define -->_Command (rterm -->_Command))
 (set-arrow-pict! '-->_Command
@@ -554,7 +530,7 @@
     (skip (Terms Congr Env (Rule Rule_i ...))))
    (-->_Command
     ((run) Database)
-    (skip (Database-Union Database Database_i ...))
+    (skip (U_d Database Database_i ...))
     (where (Terms Congr Env (Rule ...))
            Database)
     (where (Envs ...)
@@ -588,7 +564,6 @@
        Command-Reduction
        (term (Cmd_1 Database))))
     (side-condition #t) ;; use this instead
-       
        )
    (-->_Program
     ((skip Cmd_s ...) Database)
