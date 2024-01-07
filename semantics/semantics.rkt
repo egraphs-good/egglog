@@ -386,6 +386,14 @@
    (where #f (unbound var Env))])
 
 
+(define-judgment-form
+  Egglog+Database
+  #:contract (tset-is-subset Terms Terms)
+  #:mode (tset-is-subset O I)
+  [(tset-is-subset-helper Terms_1 Terms_2 (tset))
+   -----------------------------------------
+   (tset-is-subset Terms_1 Terms_2)])
+
 ;; Finds all subsets of a set
 ;; Uses a third set, which is initially empty
 ;; The third set prevents re-adding elements
@@ -393,22 +401,22 @@
 ;; Warning: judgement is extremely slow to execute
 (define-judgment-form
   Egglog+Database
-  #:contract (tset-is-subset Terms Terms Terms)
-  #:mode (tset-is-subset O I I)
+  #:contract (tset-is-subset-helper Terms Terms Terms)
+  #:mode (tset-is-subset-helper O I I)
   [------------------------------
-   (tset-is-subset (tset) Terms_2 Terms_3)]
+   (tset-is-subset-helper (tset) Terms_2 Terms_3)]
   [(tset-element Term_a Terms_2)
    (where #t (tset-not-in Term_a Terms_3))
-   (tset-is-subset Terms_1 Terms_2
+   (tset-is-subset-helper Terms_1 Terms_2
                    (tset-union Terms_3 (tset Term_a)))
    ------------------------------
-   (tset-is-subset (tset-union Terms_1 (tset Term_a)) Terms_2 Terms_3)])
+   (tset-is-subset-helper (tset-union Terms_1 (tset Term_a)) Terms_2 Terms_3)])
 
 (define-judgment-form
   Egglog+Database
   #:contract (valid-env (var ...) Database Env)
   #:mode (valid-env I I O)
-  [(tset-is-subset (tset Term_i ..._1) Terms_1 (tset))
+  [(tset-is-subset (tset Term_i ..._1) Terms_1)
    -------------------------------------
    (valid-env (var_i ..._1) (Terms_1 Congr_1 Env_1 Rules_1) ((var_i -> Term_i) ...))])
 
@@ -500,8 +508,9 @@
   #:contract (valid-query-subst Database Query Env)
   #:mode (valid-query-subst I I O)
   [(valid-subst Database Pattern_i Env_i) ...
+   (where Env_r (Env-Union Env_i ...))
    ---------------------------
-   (valid-query-subst Database (Pattern_i ...) (Env-Union Env_i ...))])
+   (valid-query-subst Database (Pattern_i ...) Env_r)])
 
 
 (define-metafunction

@@ -56,6 +56,16 @@
     [`(,paren ,func-call ,elements ... ,paren2)
       (append `("") (add-between elements "∪") `(""))]))
 
+@(define (set-element-notation lws)
+  (match lws
+    [`(,paren ,func-call ,element1 ,element2 ,paren2)
+      `("" ,element1 " ∈ " ,element2 "")]))
+
+@(define (set-subset-notation lws)
+  (match lws
+    [`(,paren ,func-call ,element1 ,element2 ,paren2)
+      `("" ,element1 " ⊆ " ,element2 "")]))
+
 @(define (my-render-reduction-relation reduction-relation)
   (render
    (lambda ()
@@ -93,6 +103,9 @@
       ['congr set-notation]
       ['vars-union set-union-notation]
       ['tset-union set-union-notation]
+      ['tset-element set-element-notation]
+      ['tset-is-subset set-subset-notation]
+      ['congr-subset set-subset-notation]
       ['all-valid-query-subst all-valid-query-subst-notation])
      (func))))
 
@@ -157,7 +170,7 @@ how each of these commands is run.
 
 @(my-render-reduction-relation Command-Reduction)
 
-The next two sections will cover evaluating actions (@code{Eval-Action} and @code{Eval-Actions}) and evaluating
+The next two sections will cover evaluating actions (@code{Eval-Actions}) and evaluating
 queries (@code{Rule-Envs}).
 
 @section{Evaluating Actions}
@@ -221,9 +234,12 @@ all valid substitutions for the rule's @code{Query}.
 @(my-render-metafunction Rule-Envs)
 
 The @code{valid-query-subst} judgement defines
-which substitutions are valid for a query.
-A substitution is valid for a query if it
-is valid for each pattern in the query.
+which environments (also called substitutions) are valid for a query.
+An environment @(rterm Env_r) is valid for a query if it is valid for each pattern in the query.
+The @(rterm Env-Union) metafunction ensures that the environments for each
+pattern are compatible: if they share variable
+bindings, they must be bound to the same term.
+
 
 @(my-render-judgement valid-query-subst)
 
@@ -243,10 +259,13 @@ We say that the pattern and substitution `e-matches` the witness term.
 
 @(my-render-judgement valid-subst)
 
+@(rterm free-vars) returns the set of free variables of a pattern.
 Valid-env defines the set of valid environments
 mapping free variables to grounded terms.
 
 @(my-render-judgement valid-env)
+
+
 
 @section{Restoring Congruence}
 
