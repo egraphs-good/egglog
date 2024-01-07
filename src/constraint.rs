@@ -3,7 +3,9 @@ use crate::{
         GenericAction, GenericActions, GenericExpr, GenericFact, MappedAction, ResolvedAction,
         ResolvedActions, ResolvedExpr, ResolvedFact, ResolvedVar,
     },
-    core::{Atom, AtomTerm, CoreActions, CoreRule, NormAction, Query, ResolvedCall, SymbolOrEq},
+    core::{
+        Atom, AtomTerm, CoreAction, CoreRule, GenericCoreActions, Query, ResolvedCall, SymbolOrEq,
+    },
     sort::I64Sort,
     typechecking::TypeError,
     util::{FreshGen, HashMap, HashSet, SymbolGen},
@@ -408,7 +410,7 @@ impl Problem<AtomTerm, ArcSort> {
 
     pub fn add_actions(
         &mut self,
-        actions: &CoreActions<Symbol, Symbol>,
+        actions: &GenericCoreActions<Symbol, Symbol>,
         typeinfo: &TypeInfo,
     ) -> Result<(), TypeError> {
         let mut symbol_gen = SymbolGen::new();
@@ -418,10 +420,10 @@ impl Problem<AtomTerm, ArcSort> {
 
             // bound vars are added to range
             match action {
-                NormAction::Let(var, _, _) => {
+                CoreAction::Let(var, _, _) => {
                     self.range.insert(AtomTerm::Var(*var));
                 }
-                NormAction::LetAtomTerm(v, _) => {
+                CoreAction::LetAtomTerm(v, _) => {
                     self.range.insert(AtomTerm::Var(*v));
                 }
                 _ => (),
@@ -452,14 +454,14 @@ impl Problem<AtomTerm, ArcSort> {
     }
 }
 
-impl NormAction {
+impl CoreAction {
     pub(crate) fn get_constraints(
         &self,
         typeinfo: &TypeInfo,
         symbol_gen: &mut SymbolGen,
     ) -> Result<Vec<Constraint<AtomTerm, ArcSort>>, TypeError> {
         match self {
-            NormAction::Let(symbol, f, args) => {
+            CoreAction::Let(symbol, f, args) => {
                 let mut args = args.clone();
                 args.push(AtomTerm::Var(*symbol));
 
@@ -467,7 +469,7 @@ impl NormAction {
                     .chain(get_atom_application_constraints(f, &args, typeinfo)?)
                     .collect())
             }
-            NormAction::Set(head, args, rhs) => {
+            CoreAction::Set(head, args, rhs) => {
                 let mut args = args.clone();
                 args.push(rhs.clone());
 
@@ -475,7 +477,7 @@ impl NormAction {
                     .chain(get_atom_application_constraints(head, &args, typeinfo)?)
                     .collect())
             }
-            NormAction::Delete(head, args) => {
+            CoreAction::Delete(head, args) => {
                 let mut args = args.clone();
                 // Add a dummy last output argument
                 let var = symbol_gen.fresh(&Symbol::from(format!("constraint${}", head)));
@@ -485,13 +487,13 @@ impl NormAction {
                     .chain(get_atom_application_constraints(head, &args, typeinfo)?)
                     .collect())
             }
-            NormAction::Union(lhs, rhs) => Ok(get_literal_and_global_constraints(
+            CoreAction::Union(lhs, rhs) => Ok(get_literal_and_global_constraints(
                 &[lhs.clone(), rhs.clone()],
                 typeinfo,
             )
             .chain(once(Constraint::Eq(lhs.clone(), rhs.clone())))
             .collect()),
-            NormAction::Extract(e, n) => {
+            CoreAction::Extract(e, n) => {
                 // e can be anything
                 Ok(
                     get_literal_and_global_constraints(&[e.clone(), n.clone()], typeinfo)
@@ -502,8 +504,8 @@ impl NormAction {
                         .collect(),
                 )
             }
-            NormAction::Panic(_) => Ok(vec![]),
-            NormAction::LetAtomTerm(v, at) => {
+            CoreAction::Panic(_) => Ok(vec![]),
+            CoreAction::LetAtomTerm(v, at) => {
                 Ok(get_literal_and_global_constraints(&[at.clone()], typeinfo)
                     .chain(once(Constraint::Eq(AtomTerm::Var(*v), at.clone())))
                     .collect())

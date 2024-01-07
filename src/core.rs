@@ -1,6 +1,6 @@
 /// This file implements the core IR of the language, which is called CoreRule.
 /// CoreRule uses a conjunctive query-like IR for the body (queries) and a
-/// SSA-like IR for the head (actions) based on the previous NormAction form.
+/// SSA-like IR for the head (actions) based on the previous CoreAction form.
 /// Every construct has two forms: a standard (unresolved) form and a resolved form,
 /// which differs in whether the head is a symbol or a resolved call.
 /// Currently, CoreRule has several usages:
@@ -328,7 +328,7 @@ impl<Leaf: Clone> Query<ResolvedCall, Leaf> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum CoreAction<Head, Leaf> {
+pub enum GenericCoreAction<Head, Leaf> {
     Let(Leaf, Head, Vec<GenericAtomTerm<Leaf>>),
     LetAtomTerm(Leaf, GenericAtomTerm<Leaf>),
     Extract(GenericAtomTerm<Leaf>, GenericAtomTerm<Leaf>),
@@ -338,32 +338,32 @@ pub enum CoreAction<Head, Leaf> {
     Panic(String),
 }
 
-pub type NormAction = CoreAction<Symbol, Symbol>;
+pub type CoreAction = GenericCoreAction<Symbol, Symbol>;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct CoreActions<Head, Leaf>(pub(crate) Vec<CoreAction<Head, Leaf>>);
-pub(crate) type NormActions = CoreActions<Symbol, Symbol>;
-pub(crate) type ResolvedCoreActions = CoreActions<ResolvedCall, ResolvedVar>;
+pub struct GenericCoreActions<Head, Leaf>(pub(crate) Vec<GenericCoreAction<Head, Leaf>>);
+pub(crate) type CoreActions = GenericCoreActions<Symbol, Symbol>;
+pub(crate) type ResolvedCoreActions = GenericCoreActions<ResolvedCall, ResolvedVar>;
 
-impl<Head, Leaf> Default for CoreActions<Head, Leaf> {
+impl<Head, Leaf> Default for GenericCoreActions<Head, Leaf> {
     fn default() -> Self {
         Self(vec![])
     }
 }
 
-impl<Head, Leaf> CoreActions<Head, Leaf>
+impl<Head, Leaf> GenericCoreActions<Head, Leaf>
 where
     Leaf: Clone,
 {
     pub(crate) fn subst(&mut self, subst: &HashMap<Leaf, GenericAtomTerm<Leaf>>) {
-        let actions = subst
-            .iter()
-            .map(|(symbol, atom_term)| CoreAction::LetAtomTerm(symbol.clone(), atom_term.clone()));
+        let actions = subst.iter().map(|(symbol, atom_term)| {
+            GenericCoreAction::LetAtomTerm(symbol.clone(), atom_term.clone())
+        });
         let existing_actions = std::mem::take(&mut self.0);
         self.0 = actions.chain(existing_actions).collect();
     }
 
-    fn new(actions: Vec<CoreAction<Head, Leaf>>) -> CoreActions<Head, Leaf> {
+    fn new(actions: Vec<GenericCoreAction<Head, Leaf>>) -> GenericCoreActions<Head, Leaf> {
         Self(actions)
     }
 }
@@ -381,7 +381,7 @@ where
         fresh_gen: &mut FG,
     ) -> Result<
         (
-            CoreActions<Head, Leaf>,
+            GenericCoreActions<Head, Leaf>,
             GenericActions<(Head, Leaf), Leaf, ()>,
         ),
         TypeError,
@@ -404,7 +404,7 @@ where
                     let (actions, mapped_expr) =
                         expr.to_core_actions(typeinfo, binding, fresh_gen)?;
                     norm_actions.extend(actions.0);
-                    norm_actions.push(CoreAction::LetAtomTerm(
+                    norm_actions.push(GenericCoreAction::LetAtomTerm(
                         var.clone(),
                         mapped_expr.get_corresponding_var_or_lit(typeinfo),
                     ));
@@ -422,7 +422,7 @@ where
                     let (actions, mapped_expr) =
                         expr.to_core_actions(typeinfo, binding, fresh_gen)?;
                     norm_actions.extend(actions.0);
-                    norm_actions.push(CoreAction::Set(
+                    norm_actions.push(GenericCoreAction::Set(
                         head.clone(),
                         mapped_args
                             .iter()
@@ -446,7 +446,7 @@ where
                         norm_actions.extend(actions.0);
                         mapped_args.push(mapped_arg);
                     }
-                    norm_actions.push(CoreAction::Delete(
+                    norm_actions.push(GenericCoreAction::Delete(
                         head.clone(),
                         mapped_args
                             .iter()
@@ -461,7 +461,7 @@ where
                     norm_actions.extend(actions1.0);
                     let (actions2, mapped_e2) = e2.to_core_actions(typeinfo, binding, fresh_gen)?;
                     norm_actions.extend(actions2.0);
-                    norm_actions.push(CoreAction::Union(
+                    norm_actions.push(GenericCoreAction::Union(
                         mapped_e1.get_corresponding_var_or_lit(typeinfo),
                         mapped_e2.get_corresponding_var_or_lit(typeinfo),
                     ));
@@ -472,14 +472,14 @@ where
                     norm_actions.extend(actions.0);
                     let (actions, mapped_n) = n.to_core_actions(typeinfo, binding, fresh_gen)?;
                     norm_actions.extend(actions.0);
-                    norm_actions.push(CoreAction::Extract(
+                    norm_actions.push(GenericCoreAction::Extract(
                         mapped_e.get_corresponding_var_or_lit(typeinfo),
                         mapped_n.get_corresponding_var_or_lit(typeinfo),
                     ));
                     mapped_actions.push(GenericAction::Extract((), mapped_e, mapped_n));
                 }
                 GenericAction::Panic(_ann, string) => {
-                    norm_actions.push(CoreAction::Panic(string.clone()));
+                    norm_actions.push(GenericCoreAction::Panic(string.clone()));
                     mapped_actions.push(GenericAction::Panic((), string.clone()));
                 }
                 GenericAction::Expr(_ann, expr) => {
@@ -491,7 +491,7 @@ where
             }
         }
         Ok((
-            CoreActions::new(norm_actions),
+            GenericCoreActions::new(norm_actions),
             GenericActions::new(mapped_actions),
         ))
     }
@@ -546,18 +546,28 @@ impl<Head: Clone, Leaf: Clone, Ann: Clone> GenericExpr<Head, Leaf, Ann> {
         typeinfo: &TypeInfo,
         binding: &mut IndexSet<Leaf>,
         fresh_gen: &mut FG,
-    ) -> Result<(CoreActions<Head, Leaf>, GenericExpr<(Head, Leaf), Leaf, ()>), TypeError>
+    ) -> Result<
+        (
+            GenericCoreActions<Head, Leaf>,
+            GenericExpr<(Head, Leaf), Leaf, ()>,
+        ),
+        TypeError,
+    >
     where
         Leaf: Hash + Eq + SymbolLike,
     {
         match self {
-            GenericExpr::Lit(_ann, lit) => {
-                Ok((CoreActions::default(), GenericExpr::Lit((), lit.clone())))
-            }
+            GenericExpr::Lit(_ann, lit) => Ok((
+                GenericCoreActions::default(),
+                GenericExpr::Lit((), lit.clone()),
+            )),
             GenericExpr::Var(_ann, v) => {
                 let sym = v.to_symbol();
                 if binding.contains(v) || typeinfo.is_global(sym) {
-                    Ok((CoreActions::default(), GenericExpr::Var((), v.clone())))
+                    Ok((
+                        GenericCoreActions::default(),
+                        GenericExpr::Var((), v.clone()),
+                    ))
                 } else {
                     Err(TypeError::Unbound(sym))
                 }
@@ -577,9 +587,9 @@ impl<Head: Clone, Leaf: Clone, Ann: Clone> GenericExpr<Head, Leaf, Ann> {
                 let var = fresh_gen.fresh(f);
                 binding.insert(var.clone());
 
-                norm_actions.push(CoreAction::Let(var.clone(), f.clone(), norm_args));
+                norm_actions.push(GenericCoreAction::Let(var.clone(), f.clone(), norm_args));
                 Ok((
-                    CoreActions::new(norm_actions),
+                    GenericCoreActions::new(norm_actions),
                     GenericExpr::Call((), (f.clone(), var), mapped_args),
                 ))
             }
@@ -590,7 +600,7 @@ impl<Head: Clone, Leaf: Clone, Ann: Clone> GenericExpr<Head, Leaf, Ann> {
 #[derive(Debug, Clone)]
 pub struct GenericCoreRule<BodyF, HeadF, Leaf> {
     pub body: Query<BodyF, Leaf>,
-    pub head: CoreActions<HeadF, Leaf>,
+    pub head: GenericCoreActions<HeadF, Leaf>,
 }
 
 pub(crate) type CoreRule = GenericCoreRule<SymbolOrEq, Symbol, Symbol>;

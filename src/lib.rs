@@ -1248,7 +1248,7 @@ impl EGraph {
                 log::info!("Checked fact {:?}.", facts);
             }
             ResolvedNCommand::CheckProof => log::error!("TODO implement proofs"),
-            ResolvedNCommand::NormAction(action) => match &action {
+            ResolvedNCommand::CoreAction(action) => match &action {
                 ResolvedAction::Let((), name, contents) => {
                     let value = self.eval_resolved_expr(contents, true)?;
                     let present = self.global_bindings.insert(
@@ -1382,7 +1382,7 @@ impl EGraph {
         let num_facts = actions.len();
         let commands = actions
             .into_iter()
-            .map(NCommand::NormAction)
+            .map(NCommand::CoreAction)
             .collect::<Vec<_>>();
         let commands: Vec<_> = self.type_info_mut().typecheck_program(&commands)?;
         for command in commands {

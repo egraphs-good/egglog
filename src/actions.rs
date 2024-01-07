@@ -1,5 +1,6 @@
 use crate::core::{
-    CoreAction, CoreActions, ResolvedAtomTerm, ResolvedCoreActions, SpecializedPrimitive,
+    GenericCoreAction, GenericCoreActions, ResolvedAtomTerm, ResolvedCoreActions,
+    SpecializedPrimitive,
 };
 use crate::{typechecking::FuncType, *};
 use typechecking::TypeError;
@@ -14,22 +15,22 @@ struct ActionCompiler<'a> {
 }
 
 impl<'a> ActionCompiler<'a> {
-    fn compile_action(&mut self, action: &CoreAction<ResolvedCall, ResolvedVar>) {
+    fn compile_action(&mut self, action: &GenericCoreAction<ResolvedCall, ResolvedVar>) {
         match action {
-            CoreAction::Let(v, f, args) => {
+            GenericCoreAction::Let(v, f, args) => {
                 self.do_call(f, args);
                 self.locals.insert(v.clone());
             }
-            CoreAction::LetAtomTerm(v, at) => {
+            GenericCoreAction::LetAtomTerm(v, at) => {
                 self.do_atom_term(at);
                 self.locals.insert(v.clone());
             }
-            CoreAction::Extract(e, b) => {
+            GenericCoreAction::Extract(e, b) => {
                 self.do_atom_term(e);
                 self.do_atom_term(b);
                 self.instructions.push(Instruction::Extract(2));
             }
-            CoreAction::Set(f, args, e) => {
+            GenericCoreAction::Set(f, args, e) => {
                 let ResolvedCall::Func(func) = f else {
                     panic!("Cannot set primitive- should have been caught by typechecking!!!")
                 };
@@ -39,7 +40,7 @@ impl<'a> ActionCompiler<'a> {
                 self.do_atom_term(e);
                 self.instructions.push(Instruction::Set(func.name));
             }
-            CoreAction::Delete(f, args) => {
+            GenericCoreAction::Delete(f, args) => {
                 let ResolvedCall::Func(func) = f else {
                     panic!("Cannot delete primitive- should have been caught by typechecking!!!")
                 };
@@ -48,12 +49,12 @@ impl<'a> ActionCompiler<'a> {
                 }
                 self.instructions.push(Instruction::DeleteRow(func.name));
             }
-            CoreAction::Union(arg1, arg2) => {
+            GenericCoreAction::Union(arg1, arg2) => {
                 self.do_atom_term(arg1);
                 self.do_atom_term(arg2);
                 self.instructions.push(Instruction::Union(2));
             }
-            CoreAction::Panic(msg) => {
+            GenericCoreAction::Panic(msg) => {
                 self.instructions.push(Instruction::Panic(msg.clone()));
             }
         }
@@ -140,7 +141,7 @@ impl EGraph {
     pub(crate) fn compile_actions(
         &self,
         binding: &IndexSet<ResolvedVar>,
-        actions: &CoreActions<ResolvedCall, ResolvedVar>,
+        actions: &GenericCoreActions<ResolvedCall, ResolvedVar>,
     ) -> Result<Program, Vec<TypeError>> {
         let mut types = IndexMap::default();
         for var in binding {
@@ -160,7 +161,7 @@ impl EGraph {
         Ok(Program(compiler.instructions))
     }
 
-    // This is the ugly part. CoreActions lowered from
+    // This is the ugly part. GenericCoreActions lowered from
     // expressions like `2` is an empty vector, because no action is taken.
     // So to explicitly obtain the return value of an expression, compile_expr
     // needs to also take a `target`.`

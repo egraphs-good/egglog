@@ -1,5 +1,5 @@
 use crate::{
-    core::{CoreRule, NormActions},
+    core::{CoreActions, CoreRule},
     *,
 };
 
@@ -179,7 +179,7 @@ impl TypeInfo {
                 self.declare_sort(*sort, presort_and_args)?;
                 ResolvedNCommand::Sort(*sort, presort_and_args.clone())
             }
-            NCommand::NormAction(Action::Let(_, var, expr)) => {
+            NCommand::CoreAction(Action::Let(_, var, expr)) => {
                 let expr = self.typecheck_expr(expr, &Default::default())?;
                 let output_type = expr.output_type(self);
                 self.global_types.insert(*var, output_type.clone());
@@ -187,10 +187,10 @@ impl TypeInfo {
                     name: *var,
                     sort: output_type,
                 };
-                ResolvedNCommand::NormAction(ResolvedAction::Let((), var, expr))
+                ResolvedNCommand::CoreAction(ResolvedAction::Let((), var, expr))
             }
-            NCommand::NormAction(action) => {
-                ResolvedNCommand::NormAction(self.typecheck_action(action, &Default::default())?)
+            NCommand::CoreAction(action) => {
+                ResolvedNCommand::CoreAction(self.typecheck_action(action, &Default::default())?)
             }
             NCommand::Check(facts) => ResolvedNCommand::Check(self.typecheck_facts(facts)?),
             NCommand::Fail(cmd) => ResolvedNCommand::Fail(Box::new(self.typecheck_command(cmd)?)),
@@ -328,7 +328,7 @@ impl TypeInfo {
         constraints.extend(query.get_constraints(self)?);
 
         let mut binding = query.get_vars();
-        let (actions, mapped_action): (NormActions, MappedActions) =
+        let (actions, mapped_action): (CoreActions, MappedActions) =
             head.to_core_actions(self, &mut binding, &mut fresh_gen)?;
 
         let mut problem = Problem::default();
@@ -372,7 +372,7 @@ impl TypeInfo {
     ) -> Result<ResolvedActions, TypeError> {
         let mut binding_set = binding.keys().cloned().collect::<IndexSet<_>>();
         let mut fresh_gen = SymbolGen::new();
-        let (actions, mapped_action): (NormActions, MappedActions) =
+        let (actions, mapped_action): (CoreActions, MappedActions) =
             actions.to_core_actions(self, &mut binding_set, &mut fresh_gen)?;
         let mut problem = Problem::default();
 

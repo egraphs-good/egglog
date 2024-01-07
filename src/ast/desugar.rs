@@ -127,7 +127,7 @@ impl Default for Desugar {
 fn desugar_simplify(desugar: &mut Desugar, expr: &Expr, schedule: &Schedule) -> Vec<NCommand> {
     let mut res = vec![NCommand::Push(1)];
     let lhs = desugar.get_fresh();
-    res.push(NCommand::NormAction(Action::Let((), lhs, expr.clone())));
+    res.push(NCommand::CoreAction(Action::Let((), lhs, expr.clone())));
     res.push(NCommand::RunSchedule(schedule.clone()));
     res.extend(
         desugar_command(
@@ -261,7 +261,7 @@ pub(crate) fn desugar_command(
         Command::Sort(sort, option) => vec![NCommand::Sort(sort, option)],
         // TODO ignoring cost for now
         Command::AddRuleset(name) => vec![NCommand::AddRuleset(name)],
-        Command::Action(action) => vec![NCommand::NormAction(action)],
+        Command::Action(action) => vec![NCommand::CoreAction(action)],
         Command::Simplify { expr, schedule } => desugar_simplify(desugar, &expr, &schedule),
         Command::Calc(idents, exprs) => desugar_calc(desugar, idents, exprs, seminaive_transform)?,
         Command::RunSchedule(sched) => {
@@ -404,7 +404,7 @@ impl Desugar {
                 cost: None,
                 unextractable: false,
             }),
-            NCommand::NormAction(Action::Let((), name, Expr::Call((), fresh, vec![]))),
+            NCommand::CoreAction(Action::Let((), name, Expr::Call((), fresh, vec![]))),
         ]
     }
 
