@@ -311,8 +311,8 @@
 
 (define-metafunction
   Egglog+Database
-  Eval-Rule-Actions : Rule Database Envs -> Database
-  [(Eval-Rule-Actions (rule Query Actions) Database (Env_i ...))
+  Eval-Actions : Rule Database Envs -> Database
+  [(Eval-Actions (rule Query Actions) Database (Env_i ...))
    (U_d (Eval-Local-Actions Actions Database Env_i) ...)])
 
 (define-metafunction Egglog+Database
@@ -321,21 +321,27 @@
    ,(not (member (term var_1)
                  (map first (term Env))))])
 
-;; Returns #f if the environments are 
-;; inconsistent
+;; Appends some environments, and returns
+;; #f if they are incompatible
 (define-metafunction
   Egglog+Database
-  Env-Union : Env ... -> Env
+  Env-Union : Env ... -> Env ∨ #f
   [(Env-Union)
    ()]
   [(Env-Union Env)
    Env]
   [(Env-Union Env_1 Env_2 Env_i ...)
-   (Env-Union (Env-Union2 Env_1 Env_2) Env_i ...)])
+   (Env-Union Env_r Env_i ...)
+   (where Env_r (Env-Union2 Env_1 Env_2))]
+  [(Env-Union Env_1 Env_2 Env_i ...)
+   #f
+   (where #f (Env-Union2 Env_1 Env_2))])
 
+;; Appends two environments.
+;; Returns #f if they are incompatible.
 (define-metafunction
   Egglog+Database
-  Env-Union2 : Env Env -> Env
+  Env-Union2 : Env Env -> Env ∨ #f
   [(Env-Union2 () Env)
    Env]
   [(Env-Union2 ((var -> Term) Binding_i ...) Env)
@@ -536,7 +542,7 @@
     (where (Envs ...)
            ((Rule-Envs Database Rule) ...))
     (where (Database_i ...)
-           ((Eval-Rule-Actions Rule Database Envs) ...)))))
+           ((Eval-Actions Rule Database Envs) ...)))))
 
 
 (define (try-apply-reduction-relation relation term)
@@ -557,17 +563,14 @@
    #:arrow -->_Program
    (-->_Program
     ((Cmd_1 Cmd_s ...) Database)
-    ((Cmd_stepped Cmd_s ...) (restore-congruence Database_2))
+    ((Cmd_s ...) (restore-congruence Database_2))
     (where/hidden ;; hide this from typesetting
-     (Cmd_stepped Database_2)
+     (skip Database_2)
      ,(try-apply-reduction-relation
        Command-Reduction
        (term (Cmd_1 Database))))
-    (side-condition #t) ;; use this instead
-       )
-   (-->_Program
-    ((skip Cmd_s ...) Database)
-    ((Cmd_s ...) Database))))
+    (side-condition #t) ;; use this instead)
+  )))
 
 
 (define-judgment-form

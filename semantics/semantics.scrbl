@@ -1,8 +1,7 @@
 #lang scribble/manual
 
 @(require racket/match)
-@(require scribble-math/dollar)
-@(require redex)
+@(require scribble-math/dollar redex)
 @(require "semantics.rkt")
 @(require (except-in pict table))
 @(require scribble/core
@@ -94,7 +93,6 @@
       ['congr set-notation]
       ['vars-union set-union-notation]
       ['tset-union set-union-notation]
-      #;['Env-Union set-union-notation]
       ['all-valid-query-subst all-valid-query-subst-notation])
      (func))))
 
@@ -103,7 +101,8 @@
 
 @section{Egglog Grammar}
 
-@(my-render-language Egglog)
+@(parameterize ([render-language-nts (remove 'ReservedSymbol (language-nts Egglog))])
+  (my-render-language Egglog))
 
 An egglog @code{Program} is a sequence of top-level @code{Cmd}s.
 Egglog keeps track of a global @code{Database}
@@ -117,7 +116,11 @@ The @code{Query} is a set of patterns that must
 match terms in the database for the rule to fire.
 The @code{Actions} add to the database for every valid match.
 
-@(my-render-language Egglog+Database)
+@;; don't include stuff about typechecking
+@;; since we don't do it yet
+@(parameterize ([render-language-nts
+                (remove* `(Type TypeEnv TypeBinding) (language-nts Egglog+Database))])
+  (my-render-language Egglog+Database))
 
 Egglog's global state is a @code{Database}, containing:
 @itemlist[
@@ -133,7 +136,7 @@ In-between each command, the congruence closure over these terms is completed.
 @section{Running Commands}
 
 Egglog's top-level reduction relation @-->_Program runs a sequence of commands.
-Notice that between running commands, egglog restores the congruence relation (see section on restoring congruence TODO make this a link).
+Notice that between running commands, egglog restores the congruence relation (see section on restoring congruence).
 
 @(define stepped
   (hc-append 10
@@ -154,18 +157,19 @@ how each of these commands is run.
 
 @(my-render-reduction-relation Command-Reduction)
 
-The next two sections will cover evaluating actions (@code{Eval-Action}) and evaluating
+The next two sections will cover evaluating actions (@code{Eval-Action} and @code{Eval-Actions}) and evaluating
 queries (@code{Rule-Envs}).
 
 @section{Evaluating Actions}
 
 Given an evironment @code{Env}, egglog's
 expressions construct a single term.
+The @code{Lookup} function looks up a term
+in the environment, given the variable.
 
 @(my-render-metafunction Eval-Expr)
 
-Egglog's
-actions add new terms and equalities to
+Egglog's actions add new terms and equalities to
 the global database.
 An action is either a let binding,
 an expression,
@@ -201,7 +205,7 @@ Given a set of substitutions from running a rule's query, we can evaluate
 a rule's actions by applying the actions 
 multiple times, once for each substitution.
 
-@(my-render-metafunction Eval-Rule-Actions)
+@(my-render-metafunction Eval-Actions)
 
 The @(rterm U_d) function is a database-union function. It takes two databases and unions the terms, equalities, environments, and rules.
 
