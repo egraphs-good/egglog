@@ -416,6 +416,7 @@ pub struct EGraph {
     pub node_limit: usize,
     pub fact_directory: Option<PathBuf>,
     pub seminaive: bool,
+    type_info: TypeInfo,
     // sort, value, and timestamp
     pub global_bindings: HashMap<Symbol, (ArcSort, Value, u32)>,
     extract_report: Option<ExtractReport>,
@@ -460,6 +461,7 @@ impl Default for EGraph {
             recent_run_report: None,
             overall_run_report: Default::default(),
             msgs: Default::default(),
+            type_info: Default::default(),
         };
         egraph.rulesets.insert("".into(), Default::default());
         egraph
@@ -1405,7 +1407,7 @@ impl EGraph {
             self.desugar
                 .desugar_program(vec![command], self.test_proofs, self.seminaive)?;
 
-        let program = self.desugar.type_info.typecheck_program(&program)?;
+        let program = self.type_info_mut().typecheck_program(&program)?;
 
         Ok(program)
     }
@@ -1474,12 +1476,12 @@ impl EGraph {
 
     /// Add a user-defined sort
     pub fn add_arcsort(&mut self, arcsort: ArcSort) -> Result<(), TypeError> {
-        self.desugar.type_info.add_arcsort(arcsort)
+        self.type_info_mut().add_arcsort(arcsort)
     }
 
     /// Add a user-defined primitive
     pub fn add_primitive(&mut self, prim: impl Into<Primitive>) {
-        self.desugar.type_info.add_primitive(prim)
+        self.type_info_mut().add_primitive(prim)
     }
 
     /// Gets the last extract report and returns it, if the last command saved it.
@@ -1521,11 +1523,11 @@ impl EGraph {
     }
 
     pub(crate) fn type_info(&self) -> &TypeInfo {
-        &self.desugar.type_info
+        &self.type_info
     }
 
     pub(crate) fn type_info_mut(&mut self) -> &mut TypeInfo {
-        &mut self.desugar.type_info
+        &mut self.type_info
     }
 }
 
