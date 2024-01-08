@@ -284,8 +284,6 @@ in the congruence closure.
 The restore-congruence metafunction applies
 the Congruence-Reduction until a fixed point.
 
-@(my-render-metafunction restore-congruence)
-
 
 @section{To Do}
 

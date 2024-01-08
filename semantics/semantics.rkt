@@ -225,7 +225,7 @@
    (-->
     (Terms Congr Env Rules_1)
     (Terms (congr-union (congr (= Term_2 Term_1)) Congr) Env Rules_1)
-    (where (congr Eq_i ... (= Term_1 Term_2) Eq_j ...) Congr)
+    (judgment-holds (congr-element (= Term_1 Term_2) Congr))
     (side-condition/hidden
      (not
       (member (term (= Term_2 Term_1))
@@ -258,8 +258,7 @@
     )
    (-->
     (Terms Congr Env Rules)
-    ((tset-union (tset Term_c) Terms)
-     Congr Env Rules)
+    ((tset-union (tset Term_c) Terms) Congr Env Rules)
     (judgment-holds
      (tset-element (constructor Term_i ... Term_c Term_j ...) Terms))
     (side-condition/hidden
