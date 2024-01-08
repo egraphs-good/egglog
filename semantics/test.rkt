@@ -163,6 +163,7 @@
          (= 3 3)
          (= 3 2)
          (= 1 3)
+         (= 1 1)
          (= 1 2)
          (= 2 3)) () ()))
 
@@ -244,7 +245,7 @@
       ()
       ((rule () ((let S 16) (let w (M)) (num w))))))
 
-  (check-equal?
+  (check-equal-databases?
    (execute
     (term ((let v (b 1)) (union 7 7) (union v 4))))
    (term
@@ -253,7 +254,7 @@
   ((v -> (b 1)))
   ())))
 
-  (check-equal?
+  (check-equal-databases?
     (execute
      (term ((union (r) 22)
             (rule ((r 1) 0 (= (D (q)) 6)) ())
@@ -264,7 +265,7 @@
         ((rule ((r 1) 0 (= (D (q)) 6)) ())))))
 
   
-  (check-equal?
+  (check-equal-databases?
    (term
     (restore-congruence 
      ((tset 1 2 3)
@@ -284,7 +285,7 @@
           ()
           ())))
 
-  (check-equal?
+  (check-equal-databases?
    (term
     (restore-congruence
      ((tset 1 2 (wrapper 2) (wrapper 1))
@@ -302,7 +303,7 @@
           ()
           ())))
 
-  (check-equal?
+  (check-equal-databases?
    (judgment-holds
      (valid-subst ((tset 1 2 (wrapper 2))
                    (congr (= 1 2) (= 2 1) (= 1 1) (= 2 2) (= (wrapper 2) (wrapper 2)))
@@ -312,7 +313,7 @@
     Env)
    '(()))
 
-  (check-equal?
+  (check-equal-databases?
     (execute
      (term
        ((Wrapper (Add 1 2))
