@@ -117,6 +117,11 @@
   ,(cons 'tset (remove-duplicates (term (Term_i ... ...))))])
 
 (define-metafunction Egglog+Database
+ congr-union : Congr ... -> Congr
+ [(congr-union (congr Eq_i ...) ...)
+  ,(cons 'congr (remove-duplicates (term (Eq_i ... ...))))])
+
+(define-metafunction Egglog+Database
   tset-not-in : Term Terms -> #t ∨ #f
   [(tset-not-in Term_1 (tset Term_2 ...))
    #t
@@ -134,6 +139,12 @@
   #:mode (tset-element O I)
   [----------------------
    (tset-element Term_a (tset Term_i ... Term_a Term_j ...))])
+
+(define-judgment-form Egglog+Database
+  #:contract (congr-element Eq Congr)
+  #:mode (congr-element O I)
+  [----------------------
+   (congr-element Eq_res (congr Eq_i ... Eq_res Eq_j ...))])
 
 (define-metafunction Egglog+Database
   tset-subtract : Terms Terms -> Terms
@@ -175,10 +186,7 @@
    (where Term_2 (Eval-Expr expr_2 Env_1))])
 
 
-(define-metafunction Egglog+Database
-  Add-Equality : Eq Congr -> Congr
-  [(Add-Equality Eq (congr Eq_i ...))
-   (congr Eq Eq_i ...)])
+
 
 (define-metafunction
   Egglog+Database
@@ -206,19 +214,17 @@
    Egglog+Database
    #:domain Database
    (-->
-    ((tset Term_i ... Term_j Term_k ...) Congr Env Rules_1)
-    ((tset Term_i ... Term_j Term_k ...)
-     (Add-Equality (= Term_j Term_j) Congr)
-     Env
-     Rules_1)
+    (Terms Congr Env Rules_1)
+    (Terms (congr-union (congr (= Term_i Term_i)) Congr) Env Rules_1)
+    (judgment-holds (tset-element Term_i Terms))
     (side-condition/hidden ;; side condition so redex terminates
      (not
-      (member (term (= Term_j Term_j))
+      (member (term (= Term_i Term_i))
               (term Congr))))
     "reflexivity")
    (-->
     (Terms Congr Env Rules_1)
-    (Terms (Add-Equality (= Term_2 Term_1) Congr) Env Rules_1)
+    (Terms (congr-union (congr (= Term_2 Term_1)) Congr) Env Rules_1)
     (where (congr Eq_i ... (= Term_1 Term_2) Eq_j ...) Congr)
     (side-condition/hidden
      (not
@@ -228,12 +234,9 @@
     )
    (-->
     (Terms Congr Env Rules_1)
-    (Terms (Add-Equality (= Term_1 Term_3) Congr) Env Rules_1)
-    (where
-     (congr Eq_i ... (= Term_1 Term_2)
-      Eq_j ... (= Term_2 Term_3)
-      Eq_k ...)
-     Congr)
+    (Terms (congr-union (congr (= Term_1 Term_3)) Congr) Env Rules_1)
+    (judgment-holds (congr-element (= Term_1 Term_2) Congr))
+    (judgment-holds (congr-element (= Term_2 Term_3) Congr))
     (side-condition/hidden
      (not
       (member (term (= Term_1 Term_3))
@@ -242,17 +245,10 @@
     )
    (-->
     (Terms Congr Env Rules_1)
-    (Terms (Add-Equality
-            (= (constructor_1 Term_i ...)
-               (constructor_1 Term_j ...))
-            Congr) Env Rules_1)
-    (where (tset Term_k ... (constructor_1 Term_i ..._1)
-            Term_l ... (constructor_1 Term_j ..._1)
-            Term_m ...)
-           Terms)
-    (where #t
-     (congr-subset (congr (= Term_i Term_j) ...)
-             Congr))
+    (Terms (congr-union (congr (= (constructor_1 Term_i ...) (constructor_1 Term_j ...))) Congr) Env Rules_1)
+    (judgment-holds (tset-element (constructor_1 Term_i ..._1) Terms))
+    (judgment-holds (tset-element (constructor_1 Term_j ..._1) Terms))
+    (side-condition (term (congr-subset (congr (= Term_i Term_j) ...) Congr)))
     (side-condition/hidden
      (not
       (member (term (= (constructor_1 Term_i ...)
@@ -452,9 +448,7 @@
           (Eval-Expr expr_2
             (Env-Union Env_1 Env_subst)))
    (where (Terms_2 Congr_2 Env_2 Rules_2)
-          (restore-congruence
-            (U_d Database_1
-              ((tset Term_res1 Term_res2) (congr) () ()))))
+          (restore-congruence (U_d Database_1 ((tset Term_res1 Term_res2) (congr) () ()))))
    (side-condition (congr-subset (congr (= Term_witness Term_res1) (= Term_res1 Term_res2)) Congr_2))
    -------------------------------------
    (valid-subst Database_1 (= expr_1 expr_2) Env_subst)]

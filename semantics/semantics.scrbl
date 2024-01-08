@@ -103,7 +103,9 @@
       ['congr set-notation]
       ['vars-union set-union-notation]
       ['tset-union set-union-notation]
+      ['congr-union set-union-notation]
       ['tset-element set-element-notation]
+      ['congr-element set-element-notation]
       ['tset-is-subset set-subset-notation]
       ['congr-subset set-subset-notation]
       ['all-valid-query-subst all-valid-query-subst-notation])
