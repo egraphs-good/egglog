@@ -1,0 +1,7 @@
+(datatype MySort
+  (Wrap i64))
+
+
+(rule ((Wrap 1))
+      ((let z (Wrap 2))
+       (let z (Wrap 2))))
