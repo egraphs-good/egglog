@@ -1,0 +1,4 @@
+(datatype MySort
+  (Wrap i64))
+
+(let Wrap 3)
