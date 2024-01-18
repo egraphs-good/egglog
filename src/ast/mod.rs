@@ -46,7 +46,20 @@ impl Display for Id {
 pub type NCommand = GenericNCommand<Symbol, Symbol, ()>;
 pub(crate) type ResolvedNCommand = GenericNCommand<ResolvedCall, ResolvedVar, ()>;
 
-#[allow(clippy::type_complexity)]
+/// A [`NCommand`] is a desugared [`Command`], where syntactic sugars
+/// like [`Command::Datatype`], [`Command::Declare`], and [`Command::Rewrite`]
+/// are eliminated.
+/// Most of the heavy lifting in egglog is done over [`NCommand`]s.
+///
+/// [`GenericNCommand`] is a generalization of [`NCommand`], like how [`GenericCommand`]
+/// is a generalization of [`Command`], allowing annotations over `Head` and `Leaf`.
+/// Another specialization of [`GenericNCommand`] is [`ResolvedNCommand`], which
+/// adds the type information to heads and leaves of commands.
+/// [`TypeInfo::typecheck_command`] turns an [`NCommand`] into a [`ResolvedNCommand`].
+///
+/// TODO: The name "NCommand" used to denote normalized command, but this
+/// meaning is obsolete. A future PR should rename this type to something
+/// like "DCommand".
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum GenericNCommand<Head, Leaf, Ann> {
     SetOption {
@@ -208,7 +221,6 @@ pub type Command = GenericCommand<Symbol, Symbol>;
 /// A [`Command`] is the top-level construct in egglog.
 /// It includes defining rules, declaring functions,
 /// adding to tables, and running rules (via a [`Schedule`]).
-#[allow(clippy::type_complexity)]
 #[derive(Debug, Clone)]
 pub enum GenericCommand<Head, Leaf> {
     /// Egglog supports several *experimental* options
@@ -790,6 +802,7 @@ impl<Head: Display + ToSexp, Leaf: Display + ToSexp, Ann> ToSexp
 
 pub type Fact = GenericFact<Symbol, Symbol, ()>;
 pub(crate) type ResolvedFact = GenericFact<ResolvedCall, ResolvedVar, ()>;
+pub(crate) type MappedFact<Head, Leaf, Ann> = GenericFact<(Head, Leaf), Leaf, Ann>;
 
 /// Facts are the left-hand side of a [`Command::Rule`].
 /// They represent a part of a database query.
@@ -810,7 +823,6 @@ pub enum GenericFact<Head, Leaf, Ann> {
 
 pub struct Facts<Head, Leaf, Ann>(pub Vec<GenericFact<Head, Leaf, Ann>>);
 
-#[allow(clippy::type_complexity)]
 impl<Head, Leaf, Ann> Facts<Head, Leaf, Ann>
 where
     Head: Clone,
@@ -830,7 +842,7 @@ where
         fresh_gen: &mut impl FreshGen<Head, Leaf>,
     ) -> (
         Query<HeadOrEq<Head>, Leaf>,
-        Vec<GenericFact<(Head, Leaf), Leaf, Ann>>,
+        Vec<MappedFact<Head, Leaf, Ann>>,
     )
     where
         Leaf: SymbolLike,
@@ -992,7 +1004,7 @@ pub enum GenericAction<Head, Leaf, Ann> {
 pub struct GenericActions<Head, Leaf, Ann>(pub Vec<GenericAction<Head, Leaf, Ann>>);
 pub type Actions = GenericActions<Symbol, Symbol, ()>;
 pub(crate) type ResolvedActions = GenericActions<ResolvedCall, ResolvedVar, ()>;
-pub(crate) type MappedActions = GenericActions<(Symbol, Symbol), Symbol, ()>;
+pub(crate) type MappedActions<Head, Leaf, Ann> = GenericActions<(Head, Leaf), Leaf, Ann>;
 
 impl<Head, Leaf, Ann> Default for GenericActions<Head, Leaf, Ann> {
     fn default() -> Self {
@@ -1247,7 +1259,7 @@ impl<Head: Display, Leaf: Display, Ann> Display for GenericRewrite<Head, Leaf, A
     }
 }
 
-impl<Head, Leaf: Clone, Ann> GenericExpr<(Head, Leaf), Leaf, Ann> {
+impl<Head, Leaf: Clone, Ann> MappedExpr<Head, Leaf, Ann> {
     pub(crate) fn get_corresponding_var_or_lit(&self, typeinfo: &TypeInfo) -> GenericAtomTerm<Leaf>
     where
         Leaf: SymbolLike,
@@ -1269,7 +1281,6 @@ impl<Head, Leaf: Clone, Ann> GenericExpr<(Head, Leaf), Leaf, Ann> {
     }
 }
 
-#[allow(clippy::type_complexity)]
 impl<Head, Leaf> GenericActions<Head, Leaf, ()>
 where
     Head: Clone,

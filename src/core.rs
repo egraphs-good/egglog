@@ -1,15 +1,15 @@
-/// This file implements the core IR of the language, which is called CoreRule.
-/// CoreRule uses a conjunctive query-like IR for the body (queries) and a
-/// SSA-like IR for the head (actions) based on the previous CoreAction form.
-/// Every construct has two forms: a standard (unresolved) form and a resolved form,
-/// which differs in whether the head is a symbol or a resolved call.
-/// Currently, CoreRule has several usages:
-///   Typechecking is done over CoreRule format
-///   Canonicalization is done over CoreRule format
-///   ActionCompilers further compiles core actions to programs in a small VM
-///   GJ compiler further compiler core queries to gj's CompiledQueries
-///
-/// Most compiler-time optimizations are expected to be done over CoreRule format.
+//! This file implements the core IR of the language, which is called CoreRule.
+//! CoreRule uses a conjunctive query-like IR for the body (queries) and a
+//! SSA-like IR for the head (actions) based on the previous CoreAction form.
+//! Every construct has two forms: a standard (unresolved) form and a resolved form,
+//! which differs in whether the head is a symbol or a resolved call.
+//! Currently, CoreRule has several usages:
+//!   Typechecking is done over CoreRule format
+//!   Canonicalization is done over CoreRule format
+//!   ActionCompilers further compiles core actions to programs in a small VM
+//!   GJ compiler further compiler core queries to gj's CompiledQueries
+//!
+//! Most compiler-time optimizations are expected to be done over CoreRule format.
 use std::ops::AddAssign;
 
 use crate::HashMap;
@@ -342,7 +342,6 @@ pub type CoreAction = GenericCoreAction<Symbol, Symbol>;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct GenericCoreActions<Head, Leaf>(pub(crate) Vec<GenericCoreAction<Head, Leaf>>);
-pub(crate) type CoreActions = GenericCoreActions<Symbol, Symbol>;
 pub(crate) type ResolvedCoreActions = GenericCoreActions<ResolvedCall, ResolvedVar>;
 
 impl<Head, Leaf> Default for GenericCoreActions<Head, Leaf> {
@@ -382,7 +381,7 @@ where
     ) -> Result<
         (
             GenericCoreActions<Head, Leaf>,
-            GenericActions<(Head, Leaf), Leaf, ()>,
+            MappedActions<Head, Leaf, ()>,
         ),
         TypeError,
     >
@@ -497,7 +496,6 @@ where
     }
 }
 
-#[allow(clippy::type_complexity)]
 impl<Head: Clone, Leaf: Clone, Ann: Clone> GenericExpr<Head, Leaf, Ann> {
     pub(crate) fn to_query(
         &self,
@@ -505,7 +503,7 @@ impl<Head: Clone, Leaf: Clone, Ann: Clone> GenericExpr<Head, Leaf, Ann> {
         fresh_gen: &mut impl FreshGen<Head, Leaf>,
     ) -> (
         Vec<GenericAtom<HeadOrEq<Head>, Leaf>>,
-        GenericExpr<(Head, Leaf), Leaf, Ann>,
+        MappedExpr<Head, Leaf, Ann>,
     )
     where
         Leaf: SymbolLike,
@@ -546,13 +544,7 @@ impl<Head: Clone, Leaf: Clone, Ann: Clone> GenericExpr<Head, Leaf, Ann> {
         typeinfo: &TypeInfo,
         binding: &mut IndexSet<Leaf>,
         fresh_gen: &mut FG,
-    ) -> Result<
-        (
-            GenericCoreActions<Head, Leaf>,
-            GenericExpr<(Head, Leaf), Leaf, ()>,
-        ),
-        TypeError,
-    >
+    ) -> Result<(GenericCoreActions<Head, Leaf>, MappedExpr<Head, Leaf, ()>), TypeError>
     where
         Leaf: Hash + Eq + SymbolLike,
     {
@@ -597,10 +589,17 @@ impl<Head: Clone, Leaf: Clone, Ann: Clone> GenericExpr<Head, Leaf, Ann> {
     }
 }
 
+/// A [`GenericCoreRule`] represents a generalization of lowered form of a rule.
+/// Unlike other `Generic`-prefixed types, [`GenericCoreRule`] takes two `Head`
+/// parameters instead of one. This is because the `Head` parameter of `body` and
+/// `head` can be different. In particular, early in the compilation pipeline,
+/// `body` can contain `Eq` atoms, which denotes equality constraints, so the `Head`
+/// for `body` needs to be a `HeadOrEq<Head>`, while `head` does not have equality
+/// constraints.
 #[derive(Debug, Clone)]
-pub struct GenericCoreRule<BodyF, HeadF, Leaf> {
-    pub body: Query<BodyF, Leaf>,
-    pub head: GenericCoreActions<HeadF, Leaf>,
+pub struct GenericCoreRule<HeadQ, HeadA, Leaf> {
+    pub body: Query<HeadQ, Leaf>,
+    pub head: GenericCoreActions<HeadA, Leaf>,
 }
 
 pub(crate) type CoreRule = GenericCoreRule<SymbolOrEq, Symbol, Symbol>;

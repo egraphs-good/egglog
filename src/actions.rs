@@ -115,18 +115,36 @@ enum Load {
     Subst(usize),
 }
 
+/// The instruction set for the action VM.
 #[derive(Clone, Debug)]
 enum Instruction {
+    /// Push a literal onto the stack.
     Literal(Literal),
+    /// Push a value from the stack or the substitution onto the stack.
     Load(Load),
+    /// Push a global bound value onto the stack.
     Global(Symbol),
-    // function to call, and whether to make defaults
+    /// Pop function arguments off the stack, calls the function,
+    /// and push the result onto the stack. The bool indicates
+    /// whether to make defaults.
+    /// Currently, it is always set to true
     CallFunction(Symbol, bool),
+    /// Pop primitive arguments off the stack, calls the primitive,
+    /// and push the result onto the stack.
     CallPrimitive(Primitive, usize),
+    /// Pop function arguments off the stack and delete the corresponding row
+    /// from the function.
     DeleteRow(Symbol),
+    /// Pop the value to be set and the function arguments off the stack.
+    /// Set the function at the given arguments to the new value.
     Set(Symbol),
+    /// Union the last `n` values on the stack.
     Union(usize),
+    /// Extract the best expression. `n` is always 2.
+    /// The first value on the stack is the expression to extract,
+    /// and the second value is the number of variants to extract.
     Extract(usize),
+    /// Panic with the given message.
     Panic(String),
 }
 
@@ -134,8 +152,8 @@ enum Instruction {
 pub struct Program(Vec<Instruction>);
 
 impl EGraph {
-    /// Takes a list of variables bound to `subst` (variables bound during matching),
-    /// whose positions are captured by indices of the IndexSet, and a list of core actions.
+    /// Takes `binding`, which is a set of variables bound during matching
+    /// whose positions are captured by indices of the `IndexSet``, and a list of core actions.
     /// Returns a program compiled from core actions and a list of variables bound to `stack`
     /// (whose positions are described by IndexSet indices as well).
     pub(crate) fn compile_actions(
@@ -154,7 +172,7 @@ impl EGraph {
             instructions: Vec::new(),
         };
 
-        for a in actions.0.iter() {
+        for a in &actions.0 {
             compiler.compile_action(a);
         }
 
@@ -199,7 +217,6 @@ impl EGraph {
         let function = self.functions.get_mut(&table).unwrap();
 
         let new_len = stack.len() - function.schema.input.len();
-        // TODO would be nice to use slice here
         let args = &stack[new_len..];
 
         // We should only have canonical values here: omit the canonicalization step

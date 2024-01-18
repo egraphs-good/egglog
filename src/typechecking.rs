@@ -1,7 +1,4 @@
-use crate::{
-    core::{CoreActions, CoreRule},
-    *,
-};
+use crate::{core::CoreRule, *};
 
 #[derive(Clone, Debug)]
 pub struct FuncType {
@@ -328,8 +325,7 @@ impl TypeInfo {
         constraints.extend(query.get_constraints(self)?);
 
         let mut binding = query.get_vars();
-        let (actions, mapped_action): (CoreActions, MappedActions) =
-            head.to_core_actions(self, &mut binding, &mut fresh_gen)?;
+        let (actions, mapped_action) = head.to_core_actions(self, &mut binding, &mut fresh_gen)?;
 
         let mut problem = Problem::default();
         problem.add_rule(
@@ -372,7 +368,7 @@ impl TypeInfo {
     ) -> Result<ResolvedActions, TypeError> {
         let mut binding_set = binding.keys().cloned().collect::<IndexSet<_>>();
         let mut fresh_gen = SymbolGen::new();
-        let (actions, mapped_action): (CoreActions, MappedActions) =
+        let (actions, mapped_action) =
             actions.to_core_actions(self, &mut binding_set, &mut fresh_gen)?;
         let mut problem = Problem::default();
 

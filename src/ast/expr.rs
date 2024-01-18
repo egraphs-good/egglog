@@ -99,6 +99,11 @@ impl ToSexp for ResolvedVar {
 
 pub type Expr = GenericExpr<Symbol, Symbol, ()>;
 pub(crate) type ResolvedExpr = GenericExpr<ResolvedCall, ResolvedVar, ()>;
+/// A [`MappedExpr`] arises naturally when you want a mapping between an expression
+/// and its flattened form. It records this mapping by annotating each `Head`
+/// with a `Leaf`, which it maps to in the flattened form.
+/// A useful operation on `MappedExpr`s is [`MappedExpr::get_corresponding_var_or_lit``].
+pub(crate) type MappedExpr<Head, Leaf, Ann> = GenericExpr<(Head, Leaf), Leaf, Ann>;
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
 pub enum GenericExpr<Head, Leaf, Ann> {
