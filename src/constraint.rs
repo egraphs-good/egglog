@@ -480,7 +480,7 @@ impl CoreAction {
             CoreAction::Delete(head, args) => {
                 let mut args = args.clone();
                 // Add a dummy last output argument
-                let var = symbol_gen.fresh(&Symbol::from(format!("constraint${}", head)));
+                let var = symbol_gen.fresh(&Symbol::from(format!("constraint${head}")));
                 args.push(AtomTerm::Var(var));
 
                 Ok(get_literal_and_global_constraints(&args, typeinfo)

@@ -86,7 +86,7 @@ impl<'a> std::fmt::Display for Instr<'a> {
                     sg = info.size_guess
                 )?;
                 for (trie_idx, a) in trie_accesses {
-                    write!(f, "  {}: {}", trie_idx, a)?;
+                    write!(f, "  {trie_idx}: {a}")?;
                 }
                 writeln!(f)?
             }
@@ -108,7 +108,7 @@ impl<'a> std::fmt::Display for Instr<'a> {
 impl<'a> std::fmt::Display for Program<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for (i, instr) in self.0.iter().enumerate() {
-            write!(f, "{i:2}. {}", instr)?;
+            write!(f, "{i:2}. {instr}")?;
         }
         Ok(())
     }

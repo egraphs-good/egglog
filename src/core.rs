@@ -161,9 +161,9 @@ impl ResolvedAtomTerm {
 impl std::fmt::Display for AtomTerm {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            AtomTerm::Var(v) => write!(f, "{}", v),
-            AtomTerm::Literal(lit) => write!(f, "{}", lit),
-            AtomTerm::Global(g) => write!(f, "{}", g),
+            AtomTerm::Var(v) => write!(f, "{v}"),
+            AtomTerm::Literal(lit) => write!(f, "{lit}"),
+            AtomTerm::Global(g) => write!(f, "{g}"),
         }
     }
 }
@@ -648,7 +648,7 @@ where
                 }
             }
             if let Some((x, y)) = to_subst {
-                let subst = HashMap::from_iter(vec![(x.clone(), y.clone())]);
+                let subst = HashMap::from_iter([(x.clone(), y.clone())]);
                 result_rule.subst(&subst);
             } else {
                 break;
@@ -731,8 +731,7 @@ where
         Leaf: SymbolLike,
     {
         let rule = self.to_core_rule(typeinfo, fresh_gen)?;
-        let rule = rule.canonicalize(value_eq);
-        Ok(rule)
+        Ok(rule.canonicalize(value_eq))
     }
 }
 

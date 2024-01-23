@@ -1,5 +1,6 @@
 #[macro_use]
 mod macros;
+use lazy_static::lazy_static;
 use std::fmt::Debug;
 use std::{any::Any, sync::Arc};
 
@@ -151,9 +152,13 @@ pub(crate) struct ValueEq {
     pub unit: Arc<UnitSort>,
 }
 
+lazy_static! {
+    static ref VALUE_EQ: Symbol = "value-eq".into();
+}
+
 impl PrimitiveLike for ValueEq {
     fn name(&self) -> Symbol {
-        "value-eq".into()
+        *VALUE_EQ
     }
 
     fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {

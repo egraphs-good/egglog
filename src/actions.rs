@@ -378,7 +378,7 @@ impl EGraph {
                             self.type_info().sorts.get(&values[0].tag).unwrap(),
                         );
                         let extracted = termdag.to_string(&term);
-                        log::info!("extracted with cost {cost}: {}", extracted);
+                        log::info!("extracted with cost {cost}: {extracted}");
                         self.print_msg(extracted);
                         self.extract_report = Some(ExtractReport::Best {
                             termdag,
@@ -397,8 +397,8 @@ impl EGraph {
                         assert!(!terms.is_empty());
                         for expr in &terms {
                             let str = termdag.to_string(expr);
-                            log::info!("   {}", str);
-                            msg += &format!("   {}\n", str);
+                            log::info!("   {str}");
+                            msg += &format!("   {str}\n");
                         }
                         msg += ")";
                         self.print_msg(msg);
@@ -407,7 +407,7 @@ impl EGraph {
 
                     stack.truncate(new_len);
                 }
-                Instruction::Panic(msg) => panic!("Panic: {}", msg),
+                Instruction::Panic(msg) => panic!("Panic: {msg}"),
                 Instruction::Literal(lit) => match lit {
                     Literal::Int(i) => stack.push(Value::from(*i)),
                     Literal::F64(f) => stack.push(Value::from(*f)),

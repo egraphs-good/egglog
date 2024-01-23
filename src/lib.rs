@@ -11,17 +11,16 @@
 //! [Here](https://www.youtube.com/watch?v=N2RDQGRBrSY) is the video tutorial on what egglog is and how to use it.
 //! We plan to have a text tutorial here soon, PRs welcome!
 //!
+mod actions;
 pub mod ast;
 pub mod constraint;
+mod core;
 mod extract;
 mod function;
 mod gj;
 mod serialize;
 pub mod sort;
 mod termdag;
-// mod terms;
-mod actions;
-mod core;
 mod typechecking;
 mod unionfind;
 pub mod util;
@@ -35,7 +34,6 @@ use instant::{Duration, Instant};
 pub use serialize::SerializeConfig;
 use sort::*;
 pub use termdag::{Term, TermDag, TermId};
-// use terms::TermState;
 use thiserror::Error;
 
 use generic_symbolic_expressions::Sexp;
@@ -392,7 +390,7 @@ impl FromStr for RunMode {
             "desugared-egglog" => Ok(RunMode::ShowDesugaredEgglog),
             // "core" => Ok(RunMode::ShowCore),
             // "resugared-core" => Ok(RunMode::ShowResugaredCore),
-            _ => Err(format!("Unknown run mode: {}", s)),
+            _ => Err(format!("Unknown run mode: {s}")),
         }
     }
 }
@@ -1286,7 +1284,7 @@ impl EGraph {
             ResolvedNCommand::Fail(c) => {
                 let result = self.run_command(*c);
                 if let Err(e) = result {
-                    log::info!("Command failed as expected: {}", e);
+                    log::info!("Command failed as expected: {e}");
                 } else {
                     return Err(Error::ExpectFail);
                 }
@@ -1388,7 +1386,7 @@ impl EGraph {
         for command in commands {
             self.run_command(command)?;
         }
-        log::info!("Read {} facts into {func_name} from '{file}'.", num_facts);
+        log::info!("Read {num_facts} facts into {func_name} from '{file}'.");
         Ok(())
     }
 
@@ -1420,11 +1418,8 @@ impl EGraph {
             // because push and pop create new scopes
             for processed in self.process_command(command)? {
                 if self.run_mode.show_egglog() {
-                    // This is a hack: we have to do this because process_commands are indeed
-                    // not pure nor idempotent. When typechecking a function and some other commands,
-                    // it will add the command to the context. As a result, typechecking a function twice
-                    // can cause a conflict name error. To avoid this, we need to make sure process_commands
-                    // is pure and put everything impure at a separate place (e.g., run_command).
+                    // In show_egglog mode, we still need to run scope-related commands (Push/Pop) to make
+                    // the program well-scoped.
                     match &processed {
                         ResolvedNCommand::Push(..) | ResolvedNCommand::Pop(..) => {
                             self.run_command(processed.clone())?;

@@ -79,11 +79,11 @@ fn main() {
                         }
                     }
                     Err(err) => {
-                        log::error!("{}", err);
+                        log::error!("{err}");
                     }
                 },
                 Err(err) => {
-                    log::error!("{}", err);
+                    log::error!("{err}");
                     std::process::exit(1)
                 }
             }
@@ -151,7 +151,7 @@ fn main() {
                         .to_string(),
                     err => err.to_string(),
                 };
-                log::error!("{}", err);
+                log::error!("{err}");
                 std::process::exit(1)
             }
         }

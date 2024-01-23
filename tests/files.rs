@@ -76,9 +76,6 @@ impl Run {
                 if self.0.resugar {
                     write!(f, "_resugar")?;
                 }
-                // if self.0.test_terms_encoding {
-                //     write!(f, "_term_encoding")?;
-                // }
                 Ok(())
             }
         }
