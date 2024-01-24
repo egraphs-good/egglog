@@ -161,6 +161,7 @@ impl EGraph {
         binding: &IndexSet<ResolvedVar>,
         actions: &GenericCoreActions<ResolvedCall, ResolvedVar>,
     ) -> Result<Program, Vec<TypeError>> {
+        // TODO: delete types and just keep the ordering
         let mut types = IndexMap::default();
         for var in binding {
             types.insert(var.name, var.sort.clone());
@@ -189,6 +190,7 @@ impl EGraph {
         actions: &ResolvedCoreActions,
         target: &ResolvedAtomTerm,
     ) -> Result<Program, Vec<TypeError>> {
+        // TODO: delete types and just keep the ordering
         let mut types = IndexMap::default();
         for var in binding {
             types.insert(var.name, var.sort.clone());
