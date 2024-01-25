@@ -4,8 +4,8 @@ use log::log_enabled;
 use smallvec::SmallVec;
 
 use crate::{
+    core::{Atom, AtomTerm, ResolvedAtomTerm, ResolvedCall},
     function::index::Offset,
-    typecheck::{Atom, AtomTerm, ResolvedCall},
     *,
 };
 use std::{
@@ -14,7 +14,7 @@ use std::{
     ops::Range,
 };
 
-type Query = crate::typecheck::Query<ResolvedCall>;
+type Query = crate::core::Query<ResolvedCall, Symbol>;
 
 #[derive(Clone)]
 enum Instr<'a> {
@@ -86,7 +86,7 @@ impl<'a> std::fmt::Display for Instr<'a> {
                     sg = info.size_guess
                 )?;
                 for (trie_idx, a) in trie_accesses {
-                    write!(f, "  {}: {}", trie_idx, a)?;
+                    write!(f, "  {trie_idx}: {a}")?;
                 }
                 writeln!(f)?
             }
@@ -108,7 +108,7 @@ impl<'a> std::fmt::Display for Instr<'a> {
 impl<'a> std::fmt::Display for Program<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for (i, instr) in self.0.iter().enumerate() {
-            write!(f, "{i:2}. {}", instr)?;
+            write!(f, "{i:2}. {instr}")?;
         }
         Ok(())
     }
@@ -333,30 +333,50 @@ pub struct CompiledQuery {
 impl EGraph {
     pub(crate) fn compile_gj_query(
         &self,
-        query: Query,
-        types: &IndexMap<Symbol, ArcSort>,
+        // TODO: The legacy code uses Query<ResolvedCall, Symbol>
+        // instead of Query<ResolvedCall, ResolvedVar>, so we do
+        // the manual conversion here.
+        // This needs to be fixed in the future.
+        query: core::Query<ResolvedCall, ResolvedVar>,
+        ordering: &IndexSet<ResolvedVar>,
     ) -> CompiledQuery {
         // NOTE: this vars order only used for ordering the tuple storing the resulting match
         // It is not the GJ variable order.
         let mut vars: IndexMap<Symbol, VarInfo> = Default::default();
-
-        for var in types.keys() {
-            vars.entry(*var).or_default();
+        for var in ordering.iter() {
+            vars.entry(var.name).or_default();
         }
 
         for (i, atom) in query.funcs().enumerate() {
             for v in atom.vars() {
                 // only count grounded occurrences
-                vars.entry(v).or_default().occurences.push(i)
+                vars.entry(v.to_symbol()).or_default().occurences.push(i)
             }
         }
 
         // make sure everyone has an entry in the vars table
         for prim in query.filters() {
             for v in prim.vars() {
-                vars.entry(v).or_default();
+                vars.entry(v.to_symbol()).or_default();
             }
         }
+
+        let atoms = query
+            .atoms
+            .into_iter()
+            .map(|atom| {
+                let args = atom.args.into_iter().map(|arg| match arg {
+                    ResolvedAtomTerm::Var(v) => AtomTerm::Var(v.name),
+                    ResolvedAtomTerm::Literal(lit) => AtomTerm::Literal(lit),
+                    ResolvedAtomTerm::Global(g) => AtomTerm::Global(g.name),
+                });
+                Atom {
+                    head: atom.head,
+                    args: args.collect(),
+                }
+            })
+            .collect();
+        let query = Query { atoms };
 
         CompiledQuery { query, vars }
     }

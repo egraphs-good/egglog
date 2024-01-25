@@ -29,7 +29,7 @@ impl MapSort {
         name: Symbol,
         args: &[Expr],
     ) -> Result<ArcSort, TypeError> {
-        if let [Expr::Var(k), Expr::Var(v)] = args {
+        if let [Expr::Var((), k), Expr::Var((), v)] = args {
             let k = typeinfo.sorts.get(k).ok_or(TypeError::UndefinedSort(*k))?;
             let v = typeinfo.sorts.get(v).ok_or(TypeError::UndefinedSort(*v))?;
 
