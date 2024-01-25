@@ -44,6 +44,9 @@ impl Display for Id {
 }
 
 pub type NCommand = GenericNCommand<Symbol, Symbol, ()>;
+/// [`ResolvedNCommand`] is another specialization of [`GenericNCommand`], which
+/// adds the type information to heads and leaves of commands.
+/// [`TypeInfo::typecheck_command`] turns an [`NCommand`] into a [`ResolvedNCommand`].
 pub(crate) type ResolvedNCommand = GenericNCommand<ResolvedCall, ResolvedVar, ()>;
 
 /// A [`NCommand`] is a desugared [`Command`], where syntactic sugars
@@ -53,9 +56,6 @@ pub(crate) type ResolvedNCommand = GenericNCommand<ResolvedCall, ResolvedVar, ()
 ///
 /// [`GenericNCommand`] is a generalization of [`NCommand`], like how [`GenericCommand`]
 /// is a generalization of [`Command`], allowing annotations over `Head` and `Leaf`.
-/// Another specialization of [`GenericNCommand`] is [`ResolvedNCommand`], which
-/// adds the type information to heads and leaves of commands.
-/// [`TypeInfo::typecheck_command`] turns an [`NCommand`] into a [`ResolvedNCommand`].
 ///
 /// TODO: The name "NCommand" used to denote normalized command, but this
 /// meaning is obsolete. A future PR should rename this type to something
