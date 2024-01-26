@@ -1,4 +1,5 @@
 use crate::{core::CoreRule, *};
+use ast::Rule;
 
 #[derive(Clone, Debug)]
 pub struct FuncType {
