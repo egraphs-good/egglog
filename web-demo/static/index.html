@@ -14,7 +14,7 @@
         }
 
         #editor {
-            width: 60%;
+            width: 50%;
             resize: horizontal;
             overflow: auto;
         }
@@ -39,7 +39,8 @@
 
         #toolbar button,
         #toolbar .badge,
-        #toolbar select {
+        #toolbar select
+        #toolbar p {
             margin-right: 5px;
             margin-top: 5px;
             display: inline-block;
@@ -52,7 +53,7 @@
             white-space: pre-wrap;
             overflow-y: scroll;
             resize: vertical;
-            height: 60%;
+            height: 35%;
         }
 
         .right {
@@ -77,6 +78,7 @@
 
     <link rel="stylesheet" href="//unpkg.com/codemirror@5.65.2/lib/codemirror.css">
     <script src="//unpkg.com/codemirror@5.65.2/lib/codemirror.js"></script>
+    <script src="//unpkg.com/codemirror@5.65.2/mode/scheme/scheme.js"></script>
     <script src="https://unpkg.com/@hpcc-js/wasm@2.13.1/dist/graphviz.umd.js" type="javascript/worker"></script>
     <script type="module">
         import { compressUrlSafe, decompressUrlSafe } from './lzma-url.mjs';
@@ -84,36 +86,46 @@
         import 'https://cdn.skypack.dev/-/d3-graphviz@v5.1.0-TcGnvMu4khUzCpL7Wr2k/dist=es2020,mode=imports,min/optimized/d3-graphviz.js';
 
         let editor, output, examples;
+        let nextButton, prevButton, slideNumber, docsButton, githubButton, shareButton, examplesDropDown;
         console.log("Main script is running");
         let worker = new Worker("worker.js");
+
+        var state = {
+            isSlideMode: false,
+            slideIndex: 0,
+            hasRun: true,
+            contentBySexp: [],
+        };
+
         worker.onmessage = function (message) {
             console.log("got message", message);
             output.innerHTML = message.data.text;
+            output.scrollTop = output.scrollHeight;
             const graphContainer = d3.select("#graph-inner")
             const width = graphContainer.node().clientWidth;
             const height = graphContainer.node().clientHeight;
             const graphviz = graphContainer.graphviz({
                 // Fit graph to that size, so that all is visible
                 fit: true,
-                // Set to be as big as container
-                width,
-                height,
+                width: width,
+                height: height,
                 // Don't animate transitions between shapes for performance
                 tweenPaths: false,
                 tweenShapes: false,
             })
                 .transition(d3.transition().duration(2000))
                 .dot(message.data.dot).render();
-            // If we have made a zoom selection, reset that before transitioning
-            // TODO: figure out how to transition BOTH zoom and dot at once
-            if (graphviz._zoomSelection) {
-                graphviz.resetZoom();
-            }
         }
 
         window.onpopstate = function (event) {
             console.log(event)
             loadEditor()
+        }
+
+        function setProgram(program) {
+            let cursor = editor.getCursor();
+            editor.setValue(program);
+            editor.setCursor(cursor);
         }
 
         function loadEditor() {
@@ -122,13 +134,21 @@
             let program = url.searchParams.get("program");
             if (example) {
                 if (examples[example]) {
-                    editor.setValue(examples[example]);
+                    setProgram(examples[example]);
                 } else {
                     console.warn("Bad example choice", example, "choices: ", Object.keys(examples));
                 }
             } else if (program) {
                 let decompressed = decompressUrlSafe(program);
-                editor.setValue(decompressed);
+                setProgram(decompressed);
+            }
+        }
+
+        window.onEnter = function onEnter() {
+            if (state.isSlideMode) {
+                window.next();
+            } else {
+                window.run();
             }
         }
 
@@ -136,7 +156,113 @@
             let program = editor.getValue();
             worker.postMessage(program);
             console.log("posted a message to worker!")
-            output.textContent = "running..."
+            //output.textContent = "running..."
+        }
+
+        function makeContentBySexp() {
+            let content = editor.getValue();
+            let currentIndex = 0;
+            let contentBySexp = [];
+            // loop through all the s-expressions
+            while (currentIndex < content.length) {
+                let start = currentIndex;
+                // find next open parenthesis which isn't inside a comment
+                let inComment = false;
+                while (currentIndex < content.length) {
+                    if (content[currentIndex] == ";") {
+                        inComment = true;
+                    } else if (content[currentIndex] == "\n") {
+                        inComment = false;
+                    } else if (content[currentIndex] == "(" && !inComment) {
+                        break;
+                    }
+                    currentIndex++;
+                }
+
+                // find matching parenthesis
+                let depth = 1;
+                while (depth > 0 && currentIndex < content.length) {
+                    currentIndex++;
+                    if (content[currentIndex] == "(") {
+                        depth++;
+                    } else if (content[currentIndex] == ")") {
+                        depth--;
+                    }
+                }
+
+                let sexp = content.substring(start, currentIndex + 1);
+
+                contentBySexp.push(sexp);
+                currentIndex = currentIndex + 1;
+            }
+
+            state.contentBySexp = contentBySexp;
+            console.log("contentBySexp", contentBySexp);
+        }
+
+        function updateSlideMode() {
+            if (state.hasRun) {
+                nextButton.innerHTML = "Next";
+            } else {
+                nextButton.innerHTML = "Run";
+            }
+            if(!state.isSlideMode) {
+                nextButton.style.display = "none";
+                prevButton.style.display = "none";
+                slideNumber.style.display = "none";
+                docsButton.style.display = "inline-block";
+                githubButton.style.display = "inline-block";
+                shareButton.style.display = "inline-block";
+                examplesDropDown.style.display = "inline-block";
+            } else {
+                nextButton.style.display = "inline-block";
+                prevButton.style.display = "inline-block";
+                slideNumber.style.display = "inline-block";
+                docsButton.style.display = "none";
+                githubButton.style.display = "none";
+                shareButton.style.display = "none";
+                examplesDropDown.style.display = "none";
+                slideNumber.innerHTML = `${state.slideIndex + 1}`;
+
+                // content is all the sexps up to slidenum
+                let content = state.contentBySexp.slice(0, state.slideIndex + 1).join("");
+                setProgram(content);
+            }
+            editor.scrollTo(0, editor.getScrollInfo().height);
+        }
+
+        window.slideMode = function slideMode() {
+            state.isSlideMode = !state.isSlideMode;
+            state.slideIndex = 0;
+            state.hasRun = false;
+            makeContentBySexp();
+            updateSlideMode();
+        }
+
+        window.next = function next() {
+            if (state.hasRun) {
+                state.slideIndex++;
+                if(state.slideIndex >= state.contentBySexp.length) {
+                    state.slideIndex = state.contentBySexp.length - 1;
+                }
+                state.hasRun = false;
+            } else {
+                window.run();
+                state.hasRun = true;
+            }
+            updateSlideMode();
+        }
+
+        window.prev = function prev() {
+            state.slideIndex--;
+            if(state.slideIndex < 0) {
+                state.slideIndex = 0;
+            }
+            
+            
+            updateSlideMode();
+            window.run();
+            state.hasRun = true;
         }
 
         window.pushState = function pushState() {
@@ -196,12 +322,22 @@
             output = document.getElementById("output");
             editor = CodeMirror(document.getElementById("editor"), {
                 lineNumbers: true,
+                mode: "scheme",
+                lineWrapping: true,
                 extraKeys: {
-                    "Ctrl-Enter": run,
+                    "Ctrl-Enter": onEnter,
                 }
             });
+            nextButton = document.getElementById("next");
+            prevButton = document.getElementById("prev");
+            docsButton = document.getElementById("docs");
+            shareButton = document.getElementById("share");
+            githubButton = document.getElementById("github");
+            slideNumber = document.getElementById("slideNumber");
+            examplesDropDown = document.getElementById("examples");
 
-            loadEditor()
+            loadEditor();
+            updateSlideMode();
         }
 
     </script>
@@ -212,16 +348,22 @@
     <div id="panel">
         <div id="toolbar">
             <button onclick="run()">Run</button>
-            <button onclick="pushState()">Share</button>
+            <button onclick="pushState()" id="share">Share</button>
+            <button onclick="slideMode()">Slidemode</button>
+            <button id="prev" onclick="prev()">Prev</button>
+            <button id="next" onclick="next()">Next</button>
+            <p id="slideNumber"></p>
 
             <!-- <label for="examples">Examples:</label> -->
             <select name="examples" id="examples">
                 <option value=""> Load an example </option>
             </select>
-            <div class="right">
+            <div class="right" id="github">
                 <a class="badge" href="https://github.com/egraphs-good/egglog">
                     <img alt="GitHub Repo"
                         src="https://img.shields.io/github/stars/egraphs-good/egglog?label=GitHub&style=social"></a>
+            </div>
+            <div class="right" id="docs">
                 <a class="badge" href="docs/egglog">
                     <img alt="Main Branch Documentation" src="https://img.shields.io/badge/docs-main-blue"></a>
             </div>

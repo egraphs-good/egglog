@@ -119,8 +119,8 @@ impl Sort for RationalSort {
             Expr::call(
                 "rational",
                 vec![
-                    Expr::Lit(Literal::Int(numer)),
-                    Expr::Lit(Literal::Int(denom)),
+                    Expr::Lit((), Literal::Int(numer)),
+                    Expr::Lit((), Literal::Int(denom)),
                 ],
             ),
         )

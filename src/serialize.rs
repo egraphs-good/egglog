@@ -2,7 +2,7 @@ use ordered_float::NotNan;
 use std::collections::VecDeque;
 
 use crate::{
-    ast::{FunctionDecl, Id},
+    ast::{Id, ResolvedFunctionDecl},
     function::{table::hash_values, ValueVec},
     util::HashMap,
     EGraph, Value,
@@ -62,12 +62,14 @@ impl EGraph {
     ///   (Note that this will be changed in `<https://github.com/egraphs-good/egglog/pull/158>` so that edges point to exact nodes instead of looking up the e-class)
     pub fn serialize(&self, config: SerializeConfig) -> egraph_serialize::EGraph {
         // First collect a list of all the calls we want to serialize as (function decl, inputs, the output, the node id)
-        let all_calls: Vec<(&FunctionDecl, &ValueVec, &Value, egraph_serialize::NodeId)> = self
+        let all_calls: Vec<(
+            &ResolvedFunctionDecl,
+            &ValueVec,
+            &Value,
+            egraph_serialize::NodeId,
+        )> = self
             .functions
             .values()
-            .filter(|f| {
-                config.include_temporary_functions || !self.is_temp_name(f.decl.name.to_string())
-            })
             .map(|function| {
                 function
                     .nodes
@@ -213,20 +215,6 @@ impl EGraph {
             },
         );
         (class_id, node_id)
-    }
-
-    /// Returns true if the name is in the form v{digits}__
-    /// like v78___
-    ///
-    /// Checks for pattern created by Desugar.get_fresh
-    fn is_temp_name(&self, name: String) -> bool {
-        let number_underscores = self.desugar.number_underscores;
-        let res = name.starts_with('v')
-            && name.ends_with("_".repeat(number_underscores).as_str())
-            && name[1..name.len() - number_underscores]
-                .parse::<u32>()
-                .is_ok();
-        res
     }
 }
 

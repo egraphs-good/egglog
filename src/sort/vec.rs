@@ -43,7 +43,7 @@ impl VecSort {
         name: Symbol,
         args: &[Expr],
     ) -> Result<ArcSort, TypeError> {
-        if let [Expr::Var(e)] = args {
+        if let [Expr::Var((), e)] = args {
             let e = typeinfo.sorts.get(e).ok_or(TypeError::UndefinedSort(*e))?;
 
             if e.is_eq_container_sort() {
