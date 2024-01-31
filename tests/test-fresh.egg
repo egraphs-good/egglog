@@ -7,3 +7,25 @@
 ;; fresha and freshb are different
 (check (!= fresha freshb))
 
+
+(relation nums (i64))
+(relation nums2 (i64))
+
+(rule () 
+ ((let a (i64-fresh!))
+  (let b (i64-fresh!))
+  (nums a)
+  (nums2 b)))
+
+(run 1)
+
+(ruleset docheck)
+
+(rule ((nums a)
+       (nums2 a))
+      ((panic "i64 fresh returned same number twice"))
+      :ruleset docheck)
+
+(run-schedule (run docheck))
+
+
