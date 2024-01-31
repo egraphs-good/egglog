@@ -355,13 +355,6 @@ impl Clone for Desugar {
 }
 
 impl Desugar {
-    pub fn merge_ruleset_name(&self) -> Symbol {
-        Symbol::from(format!(
-            "merge_ruleset{}",
-            "_".repeat(self.number_underscores)
-        ))
-    }
-
     pub fn get_fresh(&mut self) -> Symbol {
         self.next_fresh += 1;
         format!(

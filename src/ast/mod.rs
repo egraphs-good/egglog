@@ -21,6 +21,7 @@ use crate::{
 mod expr;
 pub use expr::*;
 pub mod desugar;
+mod remove_globals;
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct Id(usize);
