@@ -41,9 +41,9 @@ use generic_symbolic_expressions::Sexp;
 use ast::*;
 pub use typechecking::{TypeInfo, UNIT_SYM};
 
+use crate::core::{AtomTerm, ResolvedCall};
 use actions::Program;
 use constraint::{Constraint, SimpleTypeConstraint, TypeConstraint};
-use core::{AtomTerm, ResolvedCall};
 use std::fmt::{Display, Formatter};
 use std::fs::File;
 use std::hash::Hash;
