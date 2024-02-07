@@ -1133,7 +1133,10 @@ impl EGraph {
         let fresh_name = self.desugar.get_fresh();
         let command = Command::Action(Action::Let((), fresh_name, expr.clone()));
         self.run_program(vec![command])?;
-        let (sort, value, _ts) = self.global_bindings.get(&fresh_name).unwrap().clone();
+        // find the table with the same name as the fresh name
+        let func = self.functions.get(&fresh_name).unwrap();
+        let value = func.nodes.get(&[]).unwrap().value;
+        let sort = func.schema.output.clone();
         Ok((sort, value))
     }
 
