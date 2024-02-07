@@ -223,8 +223,8 @@ impl Assignment<AtomTerm, ArcSort> {
         match &expr {
             GenericExpr::Lit((), literal) => ResolvedExpr::Lit((), literal.clone()),
             GenericExpr::Var((), var) => {
-                let ty = typeinfo
-                    .lookup_global(var)
+                let global_ty = typeinfo.lookup_global(var);
+                let ty = global_ty
                     .or_else(|| self.get(&AtomTerm::Var(*var)).cloned())
                     .expect("All variables should be assigned before annotation");
                 ResolvedExpr::Var(
@@ -232,6 +232,7 @@ impl Assignment<AtomTerm, ArcSort> {
                     ResolvedVar {
                         name: *var,
                         sort: ty.clone(),
+                        is_global_ref: global_ty.is_some(),
                     },
                 )
             }
@@ -298,6 +299,7 @@ impl Assignment<AtomTerm, ArcSort> {
                     ResolvedVar {
                         name: *var,
                         sort: ty.clone(),
+                        is_global_ref: false,
                     },
                     self.annotate_expr(expr, typeinfo),
                 ))

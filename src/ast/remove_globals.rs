@@ -3,30 +3,56 @@
 //! This requires type information, so it is done after type checking.
 
 use crate::{
-    desugar::Desugar, Action, GenericAction, GenericActions, GenericExpr, GenericFunctionDecl,
-    GenericNCommand, NCommand, ResolvedActions, ResolvedFunctionDecl, ResolvedNCommand, Schema,
-    Symbol, TypeInfo,
+    core::ResolvedCall, typechecking::FuncType, GenericAction, GenericActions, GenericExpr,
+    GenericNCommand, ResolvedAction, ResolvedExpr, ResolvedFunctionDecl, ResolvedNCommand, Schema,
+    TypeInfo,
 };
-use hashbrown::HashSet;
 
-pub(crate) fn remove_globals(
-    type_info: &TypeInfo,
-    prog: &Vec<ResolvedNCommand>,
-) -> Vec<ResolvedNCommand> {
-    let mut res = Vec::new();
-    for cmd in prog {
-        res.extend(remove_globals_cmd(type_info, cmd));
-    }
-    res
-}
-
-/// Removes all globals from a command.
-/// Adds new functions for new globals
+/// Removes all globals from a program.
+/// No top level lets are allowed after this pass,
+/// nor any variable that references a global.
+/// Adds new functions for global variables
 /// and replaces references to globals with
 /// references to the new functions.
-/// Also adds the types for these functions to
-/// the type info struct.
-fn remove_globals_cmd(type_info: &TypeInfo, cmd: &ResolvedNCommand) -> Vec<ResolvedNCommand> {
+/// e.g.
+/// ```ignore
+/// (let x 3)
+/// (Add x x)
+/// ```
+/// becomes
+/// ```ignore
+/// (function x () i64)
+/// (set (x) 3)
+/// ```
+pub(crate) fn remove_globals(
+    type_info: &TypeInfo,
+    prog: Vec<ResolvedNCommand>,
+) -> Vec<ResolvedNCommand> {
+    prog.into_iter()
+        .map(|cmd| remove_globals_cmd(type_info, cmd))
+        .flatten()
+        .collect()
+}
+
+fn replace_global_var(type_info: &TypeInfo, expr: ResolvedExpr) -> ResolvedExpr {
+    match expr {
+        GenericExpr::Lit(ann, lit) => expr,
+        GenericExpr::Var(ann, var) => {
+            todo!()
+        }
+        GenericExpr::Call(ann, head, args) => expr,
+    }
+}
+
+fn remove_globals_expr(type_info: &TypeInfo, expr: ResolvedExpr) -> ResolvedExpr {
+    expr.map(&mut |expr| replace_global_var(type_info, expr))
+}
+
+fn remove_globals_action(type_info: &TypeInfo, action: ResolvedAction) -> ResolvedAction {
+    action.map_exprs(&mut |expr| replace_global_var(type_info, expr))
+}
+
+fn remove_globals_cmd(type_info: &TypeInfo, cmd: ResolvedNCommand) -> Vec<ResolvedNCommand> {
     match cmd {
         GenericNCommand::CoreAction(action) => match action {
             GenericAction::Let(ann, name, expr) => {
@@ -45,15 +71,26 @@ fn remove_globals_cmd(type_info: &TypeInfo, cmd: &ResolvedNCommand) -> Vec<Resol
                 };
                 let mut res = vec![
                     GenericNCommand::Function(func_decl),
-                    GenericNCommand::CoreAction(GenericAction::Union(
+                    GenericNCommand::CoreAction(GenericAction::Set(
                         (),
-                        GenericExpr::Call((), ResolvedCall {}, vec![]),
-                        expr,
+                        ResolvedCall::Func(FuncType {
+                            name: name.name,
+                            input: vec![],
+                            output: ty,
+                            is_datatype: false,
+                            has_default: false,
+                        }),
+                        vec![],
+                        remove_globals_expr(type_info, expr),
                     )),
                 ];
 
                 res
             }
+            _ => vec![GenericNCommand::CoreAction(remove_globals_action(
+                type_info, action,
+            ))],
         },
+        _ => vec![cmd.map_exprs(&mut |expr| remove_globals_expr(type_info, expr))],
     }
 }

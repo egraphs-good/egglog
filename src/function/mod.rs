@@ -84,10 +84,12 @@ impl Function {
             ResolvedVar {
                 name: Symbol::from("old"),
                 sort: output.clone(),
+                is_global_ref: false,
             },
             ResolvedVar {
                 name: Symbol::from("new"),
                 sort: output.clone(),
+                is_global_ref: false,
             },
         ]);
 

@@ -184,6 +184,8 @@ impl TypeInfo {
                 let var = ResolvedVar {
                     name: *var,
                     sort: output_type,
+                    // not a global reference, but a global binding
+                    is_global_ref: false,
                 };
                 ResolvedNCommand::CoreAction(ResolvedAction::Let((), var, expr))
             }

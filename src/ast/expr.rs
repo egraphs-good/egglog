@@ -62,6 +62,9 @@ impl Display for Literal {
 pub struct ResolvedVar {
     pub name: Symbol,
     pub sort: ArcSort,
+    /// Is this a reference to a global variable?
+    /// After the `remove_globals` pass, this should be `false`.
+    pub is_global_ref: bool,
 }
 
 impl PartialEq for ResolvedVar {
@@ -172,13 +175,13 @@ impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq, Ann: Clone>
         f(self, ts)
     }
 
-    pub fn map(&self, f: &mut impl FnMut(&Self) -> Self) -> Self {
+    pub fn map(self, f: &mut impl FnMut(Self) -> Self) -> Self {
         match self {
             GenericExpr::Lit(..) => f(self),
             GenericExpr::Var(..) => f(self),
             GenericExpr::Call(ann, op, children) => {
                 let children = children.iter().map(|c| c.map(f)).collect();
-                f(&GenericExpr::Call(ann.clone(), op.clone(), children))
+                f(GenericExpr::Call(ann.clone(), op.clone(), children))
             }
         }
     }
