@@ -168,10 +168,14 @@ where
                 ruleset,
                 rule: rule.map_exprs(f),
             },
-            GenericNCommand::RunSchedule(schedule) => GenericNCommand::RunSchedule(schedule),
+            GenericNCommand::RunSchedule(schedule) => {
+                GenericNCommand::RunSchedule(schedule.map_exprs(f))
+            }
             GenericNCommand::PrintOverallStatistics => GenericNCommand::PrintOverallStatistics,
             GenericNCommand::CoreAction(action) => GenericNCommand::CoreAction(action.map_exprs(f)),
-            GenericNCommand::Check(facts) => GenericNCommand::Check(facts),
+            GenericNCommand::Check(facts) => {
+                GenericNCommand::Check(facts.into_iter().map(|fact| fact.map_exprs(f)).collect())
+            }
             GenericNCommand::CheckProof => GenericNCommand::CheckProof,
             GenericNCommand::PrintTable(name, n) => GenericNCommand::PrintTable(name, n),
             GenericNCommand::PrintSize(name) => GenericNCommand::PrintSize(name),
@@ -242,6 +246,31 @@ macro_rules! list {
         let list: Vec<Sexp> = vec![ $($e.to_sexp(),)* ];
         Sexp::List(list)
     }};
+}
+
+impl<Head, Leaf, Ann> GenericSchedule<Head, Leaf, Ann>
+where
+    Ann: Clone + Default,
+    Head: Clone + Display,
+    Leaf: Clone + PartialEq + Eq + Display + Hash,
+{
+    fn map_exprs(
+        self,
+        f: &mut impl FnMut(GenericExpr<Head, Leaf, Ann>) -> GenericExpr<Head, Leaf, Ann>,
+    ) -> Self {
+        match self {
+            GenericSchedule::Saturate(sched) => {
+                GenericSchedule::Saturate(Box::new(sched.map_exprs(f)))
+            }
+            GenericSchedule::Repeat(size, sched) => {
+                GenericSchedule::Repeat(size, Box::new(sched.map_exprs(f)))
+            }
+            GenericSchedule::Run(config) => GenericSchedule::Run(config.map_exprs(f)),
+            GenericSchedule::Sequence(scheds) => {
+                GenericSchedule::Sequence(scheds.into_iter().map(|s| s.map_exprs(f)).collect())
+            }
+        }
+    }
 }
 
 impl<Head: Display, Leaf: Display, Ann> ToSexp for GenericSchedule<Head, Leaf, Ann> {
@@ -721,6 +750,25 @@ pub struct GenericRunConfig<Head, Leaf, Ann> {
     pub until: Option<Vec<GenericFact<Head, Leaf, Ann>>>,
 }
 
+impl<Head, Leaf, Ann> GenericRunConfig<Head, Leaf, Ann>
+where
+    Ann: Clone + Default,
+    Head: Clone + Display,
+    Leaf: Clone + PartialEq + Eq + Display + Hash,
+{
+    pub fn map_exprs(
+        self,
+        f: &mut impl FnMut(GenericExpr<Head, Leaf, Ann>) -> GenericExpr<Head, Leaf, Ann>,
+    ) -> Self {
+        Self {
+            ruleset: self.ruleset,
+            until: self
+                .until
+                .map(|until| until.into_iter().map(|fact| fact.map_exprs(f)).collect()),
+        }
+    }
+}
+
 impl<Head: Display, Leaf: Display, Ann> ToSexp for GenericRunConfig<Head, Leaf, Ann>
 where
     Head: Display,
@@ -991,7 +1039,9 @@ where
         f: &mut impl FnMut(GenericExpr<Head, Leaf, Ann>) -> GenericExpr<Head, Leaf, Ann>,
     ) -> GenericFact<Head, Leaf, Ann> {
         match self {
-            GenericFact::Eq(exprs) => GenericFact::Eq(exprs.into_iter().map(f).collect()),
+            GenericFact::Eq(exprs) => {
+                GenericFact::Eq(exprs.into_iter().map(|expr| expr.map(f)).collect())
+            }
             GenericFact::Fact(expr) => GenericFact::Fact(expr.map(f)),
         }
     }

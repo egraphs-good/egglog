@@ -738,6 +738,7 @@ impl EGraph {
             for atom in cq.query.funcs() {
                 for arg in &atom.args {
                     if let AtomTerm::Global(g) = arg {
+                        panic!("found global var {}", g);
                         if self.global_bindings.get(g).unwrap().2 > timestamp {
                             global_updated = true;
                         }
