@@ -29,16 +29,15 @@ pub(crate) fn remove_globals(
     prog: Vec<ResolvedNCommand>,
 ) -> Vec<ResolvedNCommand> {
     prog.into_iter()
-        .map(|cmd| remove_globals_cmd(type_info, cmd))
-        .flatten()
+        .flat_map(|cmd| remove_globals_cmd(type_info, cmd))
         .collect()
 }
 
-fn replace_global_var(type_info: &TypeInfo, expr: ResolvedExpr) -> ResolvedExpr {
+fn replace_global_var(expr: ResolvedExpr) -> ResolvedExpr {
     match expr {
         GenericExpr::Lit(ann, lit) => GenericExpr::Lit(ann, lit),
         GenericExpr::Var(ann, var) => GenericExpr::Call(
-            (),
+            ann,
             ResolvedCall::Func(FuncType {
                 name: var.name,
                 input: vec![],
@@ -52,12 +51,12 @@ fn replace_global_var(type_info: &TypeInfo, expr: ResolvedExpr) -> ResolvedExpr 
     }
 }
 
-fn remove_globals_expr(type_info: &TypeInfo, expr: ResolvedExpr) -> ResolvedExpr {
-    expr.map(&mut |expr| replace_global_var(type_info, expr))
+fn remove_globals_expr(expr: ResolvedExpr) -> ResolvedExpr {
+    expr.map(&mut replace_global_var)
 }
 
-fn remove_globals_action(type_info: &TypeInfo, action: ResolvedAction) -> ResolvedAction {
-    action.map_exprs(&mut |expr| replace_global_var(type_info, expr))
+fn remove_globals_action(action: ResolvedAction) -> ResolvedAction {
+    action.map_exprs(&mut replace_global_var)
 }
 
 fn remove_globals_cmd(type_info: &TypeInfo, cmd: ResolvedNCommand) -> Vec<ResolvedNCommand> {
@@ -89,14 +88,12 @@ fn remove_globals_cmd(type_info: &TypeInfo, cmd: ResolvedNCommand) -> Vec<Resolv
                             has_default: false,
                         }),
                         vec![],
-                        remove_globals_expr(type_info, expr),
+                        remove_globals_expr(expr),
                     )),
                 ]
             }
-            _ => vec![GenericNCommand::CoreAction(remove_globals_action(
-                type_info, action,
-            ))],
+            _ => vec![GenericNCommand::CoreAction(remove_globals_action(action))],
         },
-        _ => vec![cmd.map_exprs(&mut |expr| remove_globals_expr(type_info, expr))],
+        _ => vec![cmd.map_exprs(&mut remove_globals_expr)],
     }
 }

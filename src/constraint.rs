@@ -225,6 +225,7 @@ impl Assignment<AtomTerm, ArcSort> {
             GenericExpr::Var((), var) => {
                 let global_ty = typeinfo.lookup_global(var);
                 let ty = global_ty
+                    .clone()
                     .or_else(|| self.get(&AtomTerm::Var(*var)).cloned())
                     .expect("All variables should be assigned before annotation");
                 ResolvedExpr::Var(
