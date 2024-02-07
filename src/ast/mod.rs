@@ -986,22 +986,38 @@ where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
-    pub(crate) fn map_exprs<Head2, Leaf2>(
+    pub(crate) fn map_exprs(
         self,
-        f: &mut impl FnMut(GenericExpr<Head, Leaf, Ann>) -> GenericExpr<Head2, Leaf2, Ann>,
-    ) -> GenericFact<Head2, Leaf2, Ann> {
+        f: &mut impl FnMut(GenericExpr<Head, Leaf, Ann>) -> GenericExpr<Head, Leaf, Ann>,
+    ) -> GenericFact<Head, Leaf, Ann> {
         match self {
             GenericFact::Eq(exprs) => GenericFact::Eq(exprs.into_iter().map(f).collect()),
-            GenericFact::Fact(expr) => GenericFact::Fact(f(expr)),
+            GenericFact::Fact(expr) => GenericFact::Fact(expr.map(f)),
         }
     }
 
-    pub(crate) fn subst<Leaf2, Head2>(
+    pub(crate) fn map_leafs<Leaf2>(
         self,
-        subst_leaf: &mut impl FnMut(Leaf) -> GenericExpr<Head2, Leaf2, Ann>,
-        subst_head: &mut impl FnMut(Head) -> Head2,
-    ) -> GenericFact<Head2, Leaf2, Ann> {
-        self.map_exprs(&mut |e| e.subst(subst_leaf, subst_head))
+        f: &mut impl FnMut(Leaf) -> Leaf2,
+    ) -> GenericFact<Head, Leaf2, Ann> {
+        match self {
+            GenericFact::Eq(exprs) => {
+                GenericFact::Eq(exprs.into_iter().map(|e| e.map_leafs(f)).collect())
+            }
+            GenericFact::Fact(expr) => GenericFact::Fact(expr.map_leafs(f)),
+        }
+    }
+
+    pub(crate) fn map_heads<Head2>(
+        self,
+        f: &mut impl FnMut(Head) -> Head2,
+    ) -> GenericFact<Head2, Leaf, Ann> {
+        match self {
+            GenericFact::Eq(exprs) => {
+                GenericFact::Eq(exprs.into_iter().map(|e| e.map_heads(f)).collect())
+            }
+            GenericFact::Fact(expr) => GenericFact::Fact(expr.map_heads(f)),
+        }
     }
 }
 
@@ -1015,9 +1031,8 @@ where
         Leaf: SymbolLike,
         Head: SymbolLike,
     {
-        self.subst(&mut |v| GenericExpr::Var((), v.to_symbol()), &mut |h| {
-            h.to_symbol()
-        })
+        self.map_leafs(&mut |v| v.to_symbol())
+            .map_heads(&mut |h| h.to_symbol())
     }
 }
 

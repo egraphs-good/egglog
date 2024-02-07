@@ -188,6 +188,34 @@ impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq, Ann: Clone>
         }
     }
 
+    pub fn map_leafs<Leaf2>(
+        self,
+        f: &mut impl FnMut(Leaf) -> Leaf2,
+    ) -> GenericExpr<Head, Leaf2, Ann> {
+        match self {
+            GenericExpr::Var(ann, v) => GenericExpr::Var(ann, f(v)),
+            GenericExpr::Lit(ann, lit) => GenericExpr::Lit(ann, lit),
+            GenericExpr::Call(ann, op, children) => {
+                let children = children.into_iter().map(|c| c.map_leafs(f)).collect();
+                GenericExpr::Call(ann, op, children)
+            }
+        }
+    }
+
+    pub fn map_heads<Head2>(
+        self,
+        f: &mut impl FnMut(Head) -> Head2,
+    ) -> GenericExpr<Head2, Leaf, Ann> {
+        match self {
+            GenericExpr::Var(ann, v) => GenericExpr::Var(ann, v),
+            GenericExpr::Lit(ann, lit) => GenericExpr::Lit(ann, lit),
+            GenericExpr::Call(ann, op, children) => {
+                let children = children.into_iter().map(|c| c.map_heads(f)).collect();
+                GenericExpr::Call(ann, f(op), children)
+            }
+        }
+    }
+
     // TODO: Currently, subst_leaf takes a leaf but not an annotation over the leaf,
     // so it has to "make up" annotations for the returned GenericExpr. A better
     // approach is for subst_leaf to also take the annotation, which we should
