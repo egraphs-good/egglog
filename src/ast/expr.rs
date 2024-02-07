@@ -106,7 +106,7 @@ pub(crate) type ResolvedExpr = GenericExpr<ResolvedCall, ResolvedVar, ()>;
 /// and its flattened form. It records this mapping by annotating each `Head`
 /// with a `Leaf`, which it maps to in the flattened form.
 /// A useful operation on `MappedExpr`s is [`MappedExpr::get_corresponding_var_or_lit``].
-pub(crate) type MappedExpr<Head, Leaf, Ann> = GenericExpr<(Head, Leaf), Leaf, Ann>;
+pub(crate) type MappedExpr<Head, Leaf, Ann> = GenericExpr<CorrespondingVar<Head, Leaf>, Leaf, Ann>;
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
 pub enum GenericExpr<Head, Leaf, Ann> {
@@ -180,7 +180,7 @@ impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq, Ann: Clone>
             GenericExpr::Lit(..) => f(self),
             GenericExpr::Var(..) => f(self),
             GenericExpr::Call(ann, op, children) => {
-                let children = children.iter().map(|c| c.map(f)).collect();
+                let children = children.into_iter().map(|c| c.map(f)).collect();
                 f(GenericExpr::Call(ann.clone(), op.clone(), children))
             }
         }
@@ -191,16 +191,16 @@ impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq, Ann: Clone>
     // approach is for subst_leaf to also take the annotation, which we should
     // implement after we use real non-() annotations
     pub fn subst<Head2, Leaf2>(
-        &self,
-        subst_leaf: &mut impl FnMut(&Leaf) -> GenericExpr<Head2, Leaf2, Ann>,
-        subst_head: &mut impl FnMut(&Head) -> Head2,
+        self,
+        subst_leaf: &mut impl FnMut(Leaf) -> GenericExpr<Head2, Leaf2, Ann>,
+        subst_head: &mut impl FnMut(Head) -> Head2,
     ) -> GenericExpr<Head2, Leaf2, Ann> {
         match self {
             GenericExpr::Lit(ann, lit) => GenericExpr::Lit(ann.clone(), lit.clone()),
             GenericExpr::Var(_ann, v) => subst_leaf(v),
             GenericExpr::Call(ann, op, children) => {
                 let children = children
-                    .iter()
+                    .into_iter()
                     .map(|c| c.subst(subst_leaf, subst_head))
                     .collect();
                 GenericExpr::Call(ann.clone(), subst_head(op), children)
@@ -209,8 +209,8 @@ impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq, Ann: Clone>
     }
 
     pub fn subst_leaf<Leaf2>(
-        &self,
-        subst: &mut impl FnMut(&Leaf) -> GenericExpr<Head, Leaf2, Ann>,
+        self,
+        subst: &mut impl FnMut(Leaf) -> GenericExpr<Head, Leaf2, Ann>,
     ) -> GenericExpr<Head, Leaf2, Ann> {
         self.subst(subst, &mut |op| op.clone())
     }

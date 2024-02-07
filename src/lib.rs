@@ -27,6 +27,7 @@ pub mod util;
 mod value;
 
 use ast::desugar::Desugar;
+use ast::remove_globals::remove_globals;
 use extract::Extractor;
 use hashbrown::hash_map::Entry;
 use index::ColumnIndex;
@@ -1434,6 +1435,8 @@ impl EGraph {
                 .desugar_program(vec![command], self.test_proofs, self.seminaive)?;
 
         let program = self.type_info_mut().typecheck_program(&program)?;
+
+        let program = remove_globals(&self.type_info, program);
 
         Ok(program)
     }

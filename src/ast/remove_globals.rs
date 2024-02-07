@@ -36,11 +36,19 @@ pub(crate) fn remove_globals(
 
 fn replace_global_var(type_info: &TypeInfo, expr: ResolvedExpr) -> ResolvedExpr {
     match expr {
-        GenericExpr::Lit(ann, lit) => expr,
-        GenericExpr::Var(ann, var) => {
-            todo!()
-        }
-        GenericExpr::Call(ann, head, args) => expr,
+        GenericExpr::Lit(ann, lit) => GenericExpr::Lit(ann, lit),
+        GenericExpr::Var(ann, var) => GenericExpr::Call(
+            (),
+            ResolvedCall::Func(FuncType {
+                name: var.name,
+                input: vec![],
+                output: var.sort.clone(),
+                is_datatype: false,
+                has_default: false,
+            }),
+            vec![],
+        ),
+        GenericExpr::Call(ann, head, args) => GenericExpr::Call(ann, head, args),
     }
 }
 
@@ -69,10 +77,10 @@ fn remove_globals_cmd(type_info: &TypeInfo, cmd: ResolvedNCommand) -> Vec<Resolv
                     cost: None,
                     unextractable: true,
                 };
-                let mut res = vec![
+                vec![
                     GenericNCommand::Function(func_decl),
                     GenericNCommand::CoreAction(GenericAction::Set(
-                        (),
+                        ann,
                         ResolvedCall::Func(FuncType {
                             name: name.name,
                             input: vec![],
@@ -83,9 +91,7 @@ fn remove_globals_cmd(type_info: &TypeInfo, cmd: ResolvedNCommand) -> Vec<Resolv
                         vec![],
                         remove_globals_expr(type_info, expr),
                     )),
-                ];
-
-                res
+                ]
             }
             _ => vec![GenericNCommand::CoreAction(remove_globals_action(
                 type_info, action,
