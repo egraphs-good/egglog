@@ -175,6 +175,8 @@ impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq, Ann: Clone>
         f(self, ts)
     }
 
+    /// Applys `f` to all sub-expressions (including `self`)
+    /// bottom-up, collecting the results.
     pub fn map(self, f: &mut impl FnMut(Self) -> Self) -> Self {
         match self {
             GenericExpr::Lit(..) => f(self),

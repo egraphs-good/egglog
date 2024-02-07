@@ -4,8 +4,8 @@
 
 use crate::{
     core::ResolvedCall, typechecking::FuncType, GenericAction, GenericActions, GenericExpr,
-    GenericNCommand, ResolvedAction, ResolvedExpr, ResolvedFunctionDecl, ResolvedNCommand, Schema,
-    TypeInfo,
+    GenericNCommand, ResolvedAction, ResolvedExpr, ResolvedFunctionDecl, ResolvedNCommand,
+    ResolvedVar, Schema, TypeInfo,
 };
 
 /// Removes all globals from a program.
@@ -35,19 +35,25 @@ pub(crate) fn remove_globals(
 
 fn replace_global_var(expr: ResolvedExpr) -> ResolvedExpr {
     match expr {
-        GenericExpr::Lit(ann, lit) => GenericExpr::Lit(ann, lit),
-        GenericExpr::Var(ann, var) => GenericExpr::Call(
+        GenericExpr::Var(
+            ann,
+            ResolvedVar {
+                name,
+                sort,
+                is_global_ref: true,
+            },
+        ) => GenericExpr::Call(
             ann,
             ResolvedCall::Func(FuncType {
-                name: var.name,
+                name,
                 input: vec![],
-                output: var.sort.clone(),
+                output: sort,
                 is_datatype: false,
                 has_default: false,
             }),
             vec![],
         ),
-        GenericExpr::Call(ann, head, args) => GenericExpr::Call(ann, head, args),
+        _ => expr,
     }
 }
 

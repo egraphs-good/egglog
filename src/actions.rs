@@ -88,7 +88,11 @@ impl<'a> ActionCompiler<'a> {
                 self.instructions.push(Instruction::Literal(lit.clone()));
             }
             ResolvedAtomTerm::Global(var) => {
-                assert!(self.egraph().global_bindings.contains_key(&var.name));
+                assert!(
+                    self.egraph().global_bindings.contains_key(&var.name),
+                    "Global {} not found",
+                    var.name
+                );
                 self.instructions.push(Instruction::Global(var.name));
             }
         }

@@ -1206,28 +1206,26 @@ where
     ) -> Self {
         match self {
             GenericAction::Let(ann, lhs, rhs) => {
-                GenericAction::Let(ann.clone(), lhs.clone(), f(rhs))
+                GenericAction::Let(ann.clone(), lhs.clone(), rhs.map(f))
             }
+            // TODO should we refactor `Set` so that we can map over Expr::Call(lhs, args)?
+            // This seems more natural to oflatt
             GenericAction::Set(ann, lhs, args, rhs) => {
-                let right = f(rhs);
-                GenericAction::Set(
-                    ann.clone(),
-                    lhs.clone(),
-                    args.into_iter().map(f).collect(),
-                    right,
-                )
+                let args = args.into_iter().map(|e| e.map(f)).collect();
+                GenericAction::Set(ann.clone(), lhs.clone(), args, rhs.map(f))
             }
             GenericAction::Delete(ann, lhs, args) => {
-                GenericAction::Delete(ann.clone(), lhs.clone(), args.into_iter().map(f).collect())
+                let args = args.into_iter().map(|e| e.map(f)).collect();
+                GenericAction::Delete(ann.clone(), lhs.clone(), args)
             }
             GenericAction::Union(ann, lhs, rhs) => {
-                GenericAction::Union(ann.clone(), f(lhs), f(rhs))
+                GenericAction::Union(ann.clone(), lhs.map(f), rhs.map(f))
             }
             GenericAction::Extract(ann, expr, variants) => {
-                GenericAction::Extract(ann.clone(), f(expr), f(variants))
+                GenericAction::Extract(ann.clone(), expr.map(f), variants.map(f))
             }
             GenericAction::Panic(ann, msg) => GenericAction::Panic(ann.clone(), msg.clone()),
-            GenericAction::Expr(ann, e) => GenericAction::Expr(ann.clone(), f(e)),
+            GenericAction::Expr(ann, e) => GenericAction::Expr(ann.clone(), e.map(f)),
         }
     }
 
