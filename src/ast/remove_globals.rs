@@ -23,6 +23,7 @@ use crate::{
 /// ```ignore
 /// (function x () i64)
 /// (set (x) 3)
+/// (Add (x) (x))
 /// ```
 pub(crate) fn remove_globals(
     type_info: &TypeInfo,
