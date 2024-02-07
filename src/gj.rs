@@ -250,7 +250,7 @@ impl<'b> Context<'b> {
                             self.tuple[i]
                         }
                         AtomTerm::Literal(lit) => self.egraph.eval_lit(lit),
-                        AtomTerm::Global(g) => self.egraph.global_bindings.get(g).unwrap().1,
+                        AtomTerm::Global(_g) => panic!("Globals should have been desugared"),
                     })
                 }
 
@@ -275,13 +275,8 @@ impl<'b> Context<'b> {
                                 return Ok(());
                             }
                         }
-                        AtomTerm::Global(g) => {
-                            assert!(check);
-                            let (sort, val, _ts) = self.egraph.global_bindings.get(g).unwrap();
-                            assert!(sort.name() == res.tag);
-                            if val.bits != res.bits {
-                                return Ok(());
-                            }
+                        AtomTerm::Global(_g) => {
+                            panic!("Globals should have been desugared")
                         }
                     }
                     self.eval(tries, program, stage.next(), f)?;
@@ -396,8 +391,8 @@ impl EGraph {
                     let val = self.eval_lit(lit);
                     constraints.push(Constraint::Const(i, val))
                 }
-                AtomTerm::Global(g) => {
-                    constraints.push(Constraint::Const(i, self.global_bindings.get(g).unwrap().1))
+                AtomTerm::Global(_g) => {
+                    panic!("Globals should have been desugared")
                 }
                 AtomTerm::Var(_v) => {
                     if let Some(j) = atom.args[..i].iter().position(|t2| t == t2) {
@@ -453,9 +448,8 @@ impl EGraph {
                         let val = self.eval_lit(lit);
                         constants.entry(i).or_default().push((col, val));
                     }
-                    AtomTerm::Global(g) => {
-                        let val = self.global_bindings.get(g).unwrap().1;
-                        constants.entry(i).or_default().push((col, val));
+                    AtomTerm::Global(_g) => {
+                        panic!("Globals should have been desugared")
                     }
                 }
             }
@@ -733,20 +727,15 @@ impl EGraph {
         let has_atoms = !cq.query.funcs().collect::<Vec<_>>().is_empty();
 
         if has_atoms {
-            // check if any globals updated
-            let mut global_updated = false;
             for atom in cq.query.funcs() {
                 for arg in &atom.args {
-                    if let AtomTerm::Global(g) = arg {
-                        panic!("found global var {}", g);
-                        if self.global_bindings.get(g).unwrap().2 > timestamp {
-                            global_updated = true;
-                        }
+                    if let AtomTerm::Global(_g) = arg {
+                        panic!("Globals should have been desugared")
                     }
                 }
             }
 
-            let do_seminaive = self.seminaive && !global_updated;
+            let do_seminaive = self.seminaive;
             // for the later atoms, we consider everything
             let mut timestamp_ranges =
                 vec![0..u32::MAX; cq.query.funcs().collect::<Vec<_>>().len()];

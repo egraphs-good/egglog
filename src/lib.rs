@@ -416,8 +416,6 @@ pub struct EGraph {
     pub fact_directory: Option<PathBuf>,
     pub seminaive: bool,
     type_info: TypeInfo,
-    // sort, value, and timestamp
-    pub global_bindings: HashMap<Symbol, (ArcSort, Value, u32)>,
     extract_report: Option<ExtractReport>,
     /// The run report for the most recent run of a schedule.
     recent_run_report: Option<RunReport>,
@@ -445,7 +443,6 @@ impl Default for EGraph {
             rulesets: Default::default(),
             ruleset_iteration: Default::default(),
             desugar: Desugar::default(),
-            global_bindings: Default::default(),
             match_limit: usize::MAX,
             node_limit: usize::MAX,
             timestamp: 0,
@@ -639,15 +636,6 @@ impl EGraph {
                 break;
             }
         }
-
-        // now update global bindings
-        let mut new_global_bindings = std::mem::take(&mut self.global_bindings);
-        for (_sym, (sort, value, ts)) in new_global_bindings.iter_mut() {
-            if sort.canonicalize(value, &self.unionfind) {
-                *ts = self.timestamp;
-            }
-        }
-        self.global_bindings = new_global_bindings;
 
         self.debug_assert_invariants();
         Ok(updates)
@@ -1280,18 +1268,7 @@ impl EGraph {
             ResolvedNCommand::CheckProof => log::error!("TODO implement proofs"),
             ResolvedNCommand::CoreAction(action) => match &action {
                 ResolvedAction::Let((), name, contents) => {
-                    let value = self.eval_resolved_expr(contents, true)?;
-                    let present = self.global_bindings.insert(
-                        name.name,
-                        (
-                            contents.output_type(self.type_info()),
-                            value,
-                            self.timestamp,
-                        ),
-                    );
-                    if present.is_some() {
-                        panic!("Variable {name} was already present in global bindings");
-                    }
+                    panic!("Globals should have been desugared away: {name} = {contents}")
                 }
                 _ => {
                     self.eval_actions(&ResolvedActions::new(vec![action.clone()]))?;
