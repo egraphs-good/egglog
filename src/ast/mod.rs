@@ -1010,7 +1010,7 @@ where
     Leaf: Clone + PartialEq + Eq + Display + Hash,
     Head: Clone + Display,
 {
-    pub(crate) fn to_unresolved(self) -> Fact
+    pub(crate) fn make_unresolved(self) -> Fact
     where
         Leaf: SymbolLike,
         Head: SymbolLike,

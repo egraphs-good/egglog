@@ -1214,7 +1214,7 @@ impl EGraph {
         if !matched {
             // TODO add useful info here
             Err(Error::CheckError(
-                facts.iter().map(|f| f.clone().to_unresolved()).collect(),
+                facts.iter().map(|f| f.clone().make_unresolved()).collect(),
             ))
         } else {
             Ok(())
