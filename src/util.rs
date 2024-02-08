@@ -2,6 +2,7 @@
 
 use std::fmt::Display;
 
+use crate::core::SpecializedPrimitive;
 #[allow(unused_imports)]
 use crate::*;
 
@@ -57,5 +58,66 @@ where
             did_something = true;
         }
         Ok(())
+    }
+}
+
+/// Generates fresh symbols for internal use during typechecking and flattening.
+/// These are guaranteed not to collide with the
+/// user's symbols because they use $.
+pub(crate) trait FreshGen<Head, Leaf> {
+    fn fresh(&mut self, name_hint: &Head) -> Leaf;
+}
+
+pub(crate) struct SymbolGen {
+    gen: usize,
+}
+
+impl SymbolGen {
+    pub(crate) fn new() -> Self {
+        Self { gen: 0 }
+    }
+}
+
+impl FreshGen<Symbol, Symbol> for SymbolGen {
+    fn fresh(&mut self, name_hint: &Symbol) -> Symbol {
+        let s = format!("__{}{}", name_hint, self.gen);
+        self.gen += 1;
+        Symbol::from(s)
+    }
+}
+
+pub(crate) struct ResolvedGen {
+    gen: usize,
+}
+
+impl ResolvedGen {
+    pub(crate) fn new() -> Self {
+        Self { gen: 0 }
+    }
+}
+
+impl FreshGen<ResolvedCall, ResolvedVar> for ResolvedGen {
+    fn fresh(&mut self, name_hint: &ResolvedCall) -> ResolvedVar {
+        let s = format!("__{}{}", name_hint, self.gen);
+        self.gen += 1;
+        let sort = match name_hint {
+            ResolvedCall::Func(f) => f.output.clone(),
+            ResolvedCall::Primitive(SpecializedPrimitive { output, .. }) => output.clone(),
+        };
+        ResolvedVar {
+            name: s.into(),
+            sort,
+        }
+    }
+}
+
+// This is a convenient for `for<'a> impl Into<Symbol> for &'a T`
+pub(crate) trait SymbolLike {
+    fn to_symbol(&self) -> Symbol;
+}
+
+impl SymbolLike for Symbol {
+    fn to_symbol(&self) -> Symbol {
+        *self
     }
 }

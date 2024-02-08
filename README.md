@@ -12,7 +12,7 @@ This is repo for the `egglog` tool accompanying the paper
 If you use this work, please use [this citation](./CITATION.bib).
 
 See also the Python binding, which provides a bit more documentation:
-https://egglog-python.readthedocs.io/en/latest/
+https://egglog-python.readthedocs.io/
 
 ## Chat
 
@@ -48,25 +48,7 @@ for the REPL.
 
 ## VS Code plugin
 
-There is a VS Code extension in the vscode folder. Install using 'Install from VSIX...' in the three-dot menu of the extensions tab and pick `vscode/eggsmol-1.0.0/eggsmol-1.0.0.vsix`.
-
-### Enhancing the VS code extension
-
-If you want to hack on the VS Code extension, install nodejs, and make your changes in the files in the `vscode/egglog-1.0.0` folder.
-
-Then run
-
-```
-code vscode/eggsmol-1.0.0
-```
-
-and use F5 to run the extension in a new window. When satisfied, then install VSCE if you do not already have it:
-
-```
-npm install -g @vscode/vsce
-```
-
-Run `vsce package` in the `vscode/eggsmol-1.0.0` folder to reconstruct the .vsix file and install it manually.
+We recommend [hatoo's egglog-language extension](https://marketplace.visualstudio.com/items?itemName=hatookov.egglog-language) (just search for "egglog" in VS Code).
 
 ## Development
 

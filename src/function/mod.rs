@@ -11,8 +11,8 @@ pub(crate) mod table;
 pub type ValueVec = SmallVec<[Value; 3]>;
 
 #[derive(Clone)]
-pub struct Function {
-    pub decl: FunctionDecl,
+pub(crate) struct Function {
+    pub decl: ResolvedFunctionDecl,
     pub schema: ResolvedSchema,
     pub merge: MergeAction,
     pub(crate) nodes: table::Table,
@@ -84,7 +84,7 @@ impl Debug for Function {
 pub(crate) type DeferredMerge = (ValueVec, Value, Value);
 
 impl Function {
-    pub fn new(egraph: &EGraph, decl: &FunctionDecl) -> Result<Self, Error> {
+    pub fn new(egraph: &EGraph, decl: &ResolvedFunctionDecl) -> Result<Self, Error> {
         let mut input = Vec::with_capacity(decl.schema.input.len());
         for s in &decl.schema.input {
             input.push(match egraph.type_info().sorts.get(s) {
@@ -98,12 +98,27 @@ impl Function {
             None => return Err(Error::TypeError(TypeError::Unbound(decl.schema.output))),
         };
 
+        let binding = IndexSet::from_iter([
+            ResolvedVar {
+                name: Symbol::from("old"),
+                sort: output.clone(),
+            },
+            ResolvedVar {
+                name: Symbol::from("new"),
+                sort: output.clone(),
+            },
+        ]);
+
+        // Invariant: the last element in the stack is the return value.
         let merge_vals = if let Some(merge_expr) = &decl.merge {
-            let mut types = IndexMap::<Symbol, ArcSort>::default();
-            types.insert("old".into(), output.clone());
-            types.insert("new".into(), output.clone());
-            let (_, program) = egraph
-                .compile_expr(&types, merge_expr, Some(output.clone()))
+            let (actions, mapped_expr) = merge_expr.to_core_actions(
+                egraph.type_info(),
+                &mut binding.clone(),
+                &mut ResolvedGen::new(),
+            )?;
+            let target = mapped_expr.get_corresponding_var_or_lit(egraph.type_info());
+            let program = egraph
+                .compile_expr(&binding, &actions, &target)
                 .map_err(Error::TypeErrors)?;
             MergeFn::Expr(Rc::new(program))
         } else if output.is_eq_sort() {
@@ -115,11 +130,13 @@ impl Function {
         let on_merge = if decl.merge_action.is_empty() {
             None
         } else {
-            let mut types = IndexMap::<Symbol, ArcSort>::default();
-            types.insert("old".into(), output.clone());
-            types.insert("new".into(), output.clone());
+            let (merge_action, _) = decl.merge_action.to_core_actions(
+                egraph.type_info(),
+                &mut binding.clone(),
+                &mut ResolvedGen::new(),
+            )?;
             let program = egraph
-                .compile_actions(&types, &decl.merge_action)
+                .compile_actions(&binding, &merge_action)
                 .map_err(Error::TypeErrors)?;
             Some(Rc::new(program))
         };
@@ -160,7 +177,6 @@ impl Function {
                 on_merge,
                 merge_vals,
             },
-            // TODO figure out merge and default here
         })
     }
 

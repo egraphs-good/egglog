@@ -27,7 +27,7 @@ impl Sort for UnitSort {
 
     fn make_expr(&self, _egraph: &EGraph, value: Value) -> (Cost, Expr) {
         assert_eq!(value.tag, self.name);
-        (1, Expr::Lit(Literal::Unit))
+        (1, Expr::Lit((), Literal::Unit))
     }
 }
 

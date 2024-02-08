@@ -25,8 +25,8 @@
 (pop)
 
 (push)
-;; rule is like rewrite, but more like an arbitrary query
-;; and actions
+;; rule is like rewrite, but more general
+;; the following rule doesn't union (Num r) with the result:
 (rule ((Num r))
       ((union one (Div (Num r) (Num r)))))
 ;; uh oh, division by zero!

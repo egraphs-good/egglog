@@ -1,3 +1,4 @@
+// TODO: span tracking
 use crate::ast::*;
 use crate::Symbol;
 use crate::Schedule;
@@ -53,12 +54,12 @@ Command: Command = {
         <unextractable:(":unextractable")?>
         <merge_action:(":on_merge" <List<Action>>)?>
         <merge:(":merge" <Expr>)?> <default:(":default" <Expr>)?> RParen => {
-        Command::Function(FunctionDecl { name, schema, merge, merge_action: merge_action.unwrap_or_default(), default, cost, unextractable: unextractable.is_some() })
+        Command::Function(FunctionDecl { name, schema, merge, merge_action: Actions::new(merge_action.unwrap_or_default()), default, cost, unextractable: unextractable.is_some() })
     },
     LParen "declare" <name:Ident> <sort:Ident> RParen => Command::Declare{name, sort},
     LParen "relation" <constructor:Ident> <inputs:List<Type>> RParen => Command::Relation{constructor, inputs},
     LParen "ruleset" <name:Ident> RParen => Command::AddRuleset(name),
-    LParen "rule" <body:List<Fact>> <head:List<Action>> <ruleset:(":ruleset" <Ident>)?> <name:(":name" <String>)?> RParen => Command::Rule{ruleset: ruleset.unwrap_or("".into()), name: name.unwrap_or("".to_string()).into(), rule: Rule { head, body }},
+    LParen "rule" <body:List<Fact>> <head:List<Action>> <ruleset:(":ruleset" <Ident>)?> <name:(":name" <String>)?> RParen => Command::Rule{ruleset: ruleset.unwrap_or("".into()), name: name.unwrap_or("".to_string()).into(), rule: Rule { head: Actions::new(head), body }},
     LParen "rewrite" <lhs:Expr> <rhs:Expr>
         <unextractable:(":unextractable")?>
         <subsume:(":subsume")?>
@@ -69,7 +70,7 @@ Command: Command = {
         <conditions:(":when" <List<Fact>>)?>
         <ruleset:(":ruleset" <Ident>)?>
     RParen => Command::BiRewrite(ruleset.unwrap_or("".into()), Rewrite { lhs, rhs, conditions: conditions.unwrap_or_default() }),
-    LParen "let" <name:Ident> <expr:Expr> RParen => Command::Action(Action::Let(name, expr)),
+    LParen "let" <name:Ident> <expr:Expr> RParen => Command::Action(Action::Let((), name, expr)),
     <NonLetAction> => Command::Action(<>),
     LParen "run" <limit:UNum>  <until:(":until" <(Fact)*>)?> RParen => Command::RunSchedule(Schedule::Repeat(limit, Box::new(Schedule::Run(RunConfig { ruleset : "".into(), until })))),
     LParen "run" <ruleset: Ident> <limit:UNum> <until:(":until" <(Fact)*>)?> RParen => Command::RunSchedule(Schedule::Repeat(limit, Box::new(Schedule::Run(RunConfig { ruleset, until })))),
@@ -107,19 +108,19 @@ Cost: Option<usize> = {
 }
 
 NonLetAction: Action = {
-    LParen "set" LParen <f: Ident> <args:Expr*> RParen <v:Expr> RParen => Action::Set ( f, args, v ),
-    LParen "delete" LParen <f: Ident> <args:Expr*> RParen RParen => Action::Delete ( f, args),
-    LParen "unextractable" LParen <f: Ident> <args:Expr*> RParen RParen => Action::Unextractable ( f, args),
-    LParen "subsume" LParen <f: Ident> <args:Expr*> RParen RParen => Action::Subsume ( f, args),
-    LParen "union" <e1:Expr> <e2:Expr> RParen => Action::Union(<>),
-    LParen "panic" <msg:String> RParen => Action::Panic(msg),
-    LParen "extract" <expr:Expr> RParen => Action::Extract(expr, Expr::Lit(Literal::Int(0))),
-    LParen "extract" <expr:Expr> <variants:Expr> RParen => Action::Extract(expr, variants),
-    <e:CallExpr> => Action::Expr(e),
+    LParen "set" LParen <f: Ident> <args:Expr*> RParen <v:Expr> RParen => Action::Set ( (), f, args, v ),
+    LParen "delete" LParen <f: Ident> <args:Expr*> RParen RParen => Action::Delete ( (), f, args),
+    LParen "unextractable" LParen <f: Ident> <args:Expr*> RParen RParen => Action::Unextractable ( (), f, args),
+    LParen "subsume" LParen <f: Ident> <args:Expr*> RParen RParen => Action::Subsume ( (), f, args),
+    LParen "union" <e1:Expr> <e2:Expr> RParen => Action::Union((), <>),
+    LParen "panic" <msg:String> RParen => Action::Panic((), msg),
+    LParen "extract" <expr:Expr> RParen => Action::Extract((), expr, Expr::Lit((), Literal::Int(0))),
+    LParen "extract" <expr:Expr> <variants:Expr> RParen => Action::Extract((), expr, variants),
+    <e:CallExpr> => Action::Expr((), e),
 }
 
 pub Action: Action = {
-    LParen "let" <name:Ident> <expr:Expr> RParen => Action::Let(name, expr),
+    LParen "let" <name:Ident> <expr:Expr> RParen => Action::Let((), name, expr),
     <NonLetAction> => <>,
 }
 
@@ -138,8 +139,8 @@ Schema: Schema = {
 }
 
 pub Expr: Expr = {
-    <Literal> => Expr::Lit(<>),
-    <Ident> => Expr::Var(<>),
+    <Literal> => Expr::Lit((), <>),
+    <Ident> => Expr::Var((), <>),
     <CallExpr> => <>,
 };
 
@@ -157,7 +158,7 @@ Bool: bool = {
 }
 
 CallExpr: Expr = {
-    LParen <head:Ident> <tail:(Expr)*> RParen => Expr::Call(head, tail),
+    LParen <head:Ident> <tail:(Expr)*> RParen => Expr::Call((), head, tail),
 }
 
 ExprList: Vec<Expr> = { LParen <sexps:(Expr)*> RParen => sexps }
