@@ -1559,8 +1559,6 @@ fn safe_shl(a: usize, b: usize) -> usize {
 mod tests {
     use std::sync::Arc;
 
-    use symbol_table::GlobalSymbol;
-
     use crate::{
         constraint::SimpleTypeConstraint,
         sort::{FromSort, I64Sort, IntoSort, Sort, VecSort},
@@ -1573,7 +1571,7 @@ mod tests {
     }
 
     impl PrimitiveLike for InnerProduct {
-        fn name(&self) -> GlobalSymbol {
+        fn name(&self) -> symbol_table::GlobalSymbol {
             "inner-product".into()
         }
 

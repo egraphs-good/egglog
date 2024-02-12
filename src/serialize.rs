@@ -75,7 +75,7 @@ impl EGraph {
                     .nodes
                     .vals
                     .iter()
-                    .filter(|(input, _)| input.live())
+                    .filter(|(i, _)| i.live())
                     .take(config.max_calls_per_function.unwrap_or(usize::MAX))
                     .map(|(input, output)| {
                         (

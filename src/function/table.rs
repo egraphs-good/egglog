@@ -119,7 +119,7 @@ impl Table {
     /// Get the entry in the table for the given values, if they are in the
     /// table.
     pub(crate) fn get(&self, inputs: &[Value]) -> Option<&TupleOutput> {
-        let hash: u64 = hash_values(inputs);
+        let hash = hash_values(inputs);
         let TableOffset { off, .. } = self.table.get(hash, search_for!(self, hash, inputs))?;
         debug_assert!(self.vals[*off].0.live());
         Some(&self.vals[*off].1)
@@ -136,15 +136,10 @@ impl Table {
     /// previous value, if there was one.
     pub(crate) fn insert(&mut self, inputs: &[Value], out: Value, ts: u32) -> Option<Value> {
         let mut res = None;
-        self.insert_and_merge(
-            inputs,
-            ts,
-            |prev| {
-                res = prev;
-                out
-            },
-            false,
-        );
+        self.insert_and_merge(inputs, ts, false, |prev| {
+            res = prev;
+            out
+        });
         res
     }
 
@@ -159,8 +154,8 @@ impl Table {
         &mut self,
         inputs: &[Value],
         ts: u32,
-        on_merge: impl FnOnce(Option<Value>) -> Value,
         subsumed: bool,
+        on_merge: impl FnOnce(Option<Value>) -> Value,
     ) {
         assert!(ts >= self.max_ts);
         self.max_ts = ts;

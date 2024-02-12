@@ -433,10 +433,8 @@ impl Function {
             return result;
         }
         let out_ty = &self.schema.output;
-        self.nodes.insert_and_merge(
-            scratch,
-            timestamp,
-            |prev| {
+        self.nodes
+            .insert_and_merge(scratch, timestamp, out.subsumed, |prev| {
                 if let Some(mut prev) = prev {
                     out_ty.canonicalize(&mut prev, uf);
                     let mut appended = false;
@@ -465,9 +463,7 @@ impl Function {
                 } else {
                     out_val
                 }
-            },
-            out.subsumed,
-        );
+            });
         if let Some((inputs, _)) = self.nodes.get_index(i, true) {
             if inputs != &scratch[..] {
                 scratch.clear();

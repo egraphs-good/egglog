@@ -218,7 +218,6 @@ impl<Head: Display, Leaf: Display, Ann> Display for GenericSchedule<Head, Leaf, 
 
 pub type Command = GenericCommand<Symbol, Symbol>;
 
-pub type Unextractable = bool;
 pub type Subsume = bool;
 
 /// A [`Command`] is the top-level construct in egglog.
