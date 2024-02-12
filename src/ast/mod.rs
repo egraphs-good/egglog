@@ -981,7 +981,7 @@ pub enum GenericAction<Head, Leaf, Ann> {
         Vec<GenericExpr<Head, Leaf, Ann>>,
         GenericExpr<Head, Leaf, Ann>,
     ),
-    /// Subsume or delete an entry from a function.
+    /// Delete or subsume (mark as hidden from future rewrites and unextractable) an entry from a function.
     Change(Ann, Change, Head, Vec<GenericExpr<Head, Leaf, Ann>>),
     /// `union` two datatypes, making them equal
     /// in the implicit, global equality relation
