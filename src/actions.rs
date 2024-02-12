@@ -42,7 +42,7 @@ impl<'a> ActionCompiler<'a> {
             }
             GenericCoreAction::Change(change, f, args) => {
                 let ResolvedCall::Func(func) = f else {
-                    panic!("Cannot delete primitive- should have been caught by typechecking!!!")
+                    panic!("Cannot change primitive- should have been caught by typechecking!!!")
                 };
                 for arg in args {
                     self.do_atom_term(arg);
