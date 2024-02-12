@@ -39,8 +39,7 @@
 
         #toolbar button,
         #toolbar .badge,
-        #toolbar select
-        #toolbar p {
+        #toolbar select #toolbar p {
             margin-right: 5px;
             margin-top: 5px;
             display: inline-block;
@@ -66,6 +65,7 @@
             position: relative;
             overflow: auto;
         }
+
         /* Don't let graph expand https://stackoverflow.com/a/38852981/907060 */
         #graph-inner {
             position: absolute;
@@ -79,6 +79,8 @@
     <link rel="stylesheet" href="//unpkg.com/codemirror@5.65.2/lib/codemirror.css">
     <script src="//unpkg.com/codemirror@5.65.2/lib/codemirror.js"></script>
     <script src="//unpkg.com/codemirror@5.65.2/mode/scheme/scheme.js"></script>
+    <script src="//unpkg.com/codemirror@5.65.2/addon/edit/matchbrackets.js"></script>
+    <script src="//unpkg.com/codemirror@5.65.2/addon/edit/closebrackets.js"></script>
     <script src="https://unpkg.com/@hpcc-js/wasm@2.13.1/dist/graphviz.umd.js" type="javascript/worker"></script>
     <script type="module">
         import { compressUrlSafe, decompressUrlSafe } from './lzma-url.mjs';
@@ -206,7 +208,7 @@
             } else {
                 nextButton.innerHTML = "Run";
             }
-            if(!state.isSlideMode) {
+            if (!state.isSlideMode) {
                 nextButton.style.display = "none";
                 prevButton.style.display = "none";
                 slideNumber.style.display = "none";
@@ -242,7 +244,7 @@
         window.next = function next() {
             if (state.hasRun) {
                 state.slideIndex++;
-                if(state.slideIndex >= state.contentBySexp.length) {
+                if (state.slideIndex >= state.contentBySexp.length) {
                     state.slideIndex = state.contentBySexp.length - 1;
                 }
                 state.hasRun = false;
@@ -255,11 +257,11 @@
 
         window.prev = function prev() {
             state.slideIndex--;
-            if(state.slideIndex < 0) {
+            if (state.slideIndex < 0) {
                 state.slideIndex = 0;
             }
-            
-            
+
+
             updateSlideMode();
             window.run();
             state.hasRun = true;
@@ -326,7 +328,9 @@
                 lineWrapping: true,
                 extraKeys: {
                     "Ctrl-Enter": onEnter,
-                }
+                },
+                matchBrackets: true,
+                autoCloseBrackets: true,
             });
             nextButton = document.getElementById("next");
             prevButton = document.getElementById("prev");

@@ -235,11 +235,11 @@ impl<'a> TermState<'a> {
         .map_use(&mut |var| {
             let vtype = self.type_info().lookup(self.current_ctx, var).unwrap();
             if !self.type_info().is_global(var) {
-                Expr::Var(var)
+                Expr::Var((), var)
             } else if let Some(wrapped) = self.get_canonical_expr_of(var.to_string(), vtype) {
                 self.desugar().expr_parser.parse(&wrapped).unwrap()
             } else {
-                Expr::Var(var)
+                Expr::Var((), var)
             }
         })
     }
@@ -279,9 +279,9 @@ impl<'a> TermState<'a> {
 
     fn canonicalize_everything(
         &mut self,
-        action: &NormAction,
+        action: &CoreAction,
         res: &mut Vec<Action>,
-    ) -> NormAction {
+    ) -> CoreAction {
         action.map_def_use(&mut |var, is_def| {
             let vtype = self.type_info().lookup(self.current_ctx, var).unwrap();
 
@@ -301,29 +301,29 @@ impl<'a> TermState<'a> {
         })
     }
 
-    // Actions need to be instrumented to add to the view
+    // GenericCoreActions need to be instrumented to add to the view
     // as well as to the terms tables.
     // In addition, we need to look up canonical versions
     // of globals.
-    fn instrument_action(&mut self, action: &NormAction) -> Vec<Action> {
+    fn instrument_action(&mut self, action: &CoreAction) -> Vec<Action> {
         let mut res = vec![];
 
         // compute the func type before we mess with
         // the action
         let func_type = match action {
-            NormAction::Delete(expr) => Some(
+            CoreAction::Delete(expr) => Some(
                 self.type_info()
                     .lookup_expr(self.current_ctx, expr)
                     .unwrap(),
             ),
-            NormAction::Let(_lhs, expr) => Some(
+            CoreAction::Let(_lhs, expr) => Some(
                 self.type_info()
                     .lookup_expr(self.current_ctx, expr)
                     .unwrap(),
             ),
             _ => None,
         };
-        let union_type = if let NormAction::Union(lhs, _rhs) = action {
+        let union_type = if let CoreAction::Union(lhs, _rhs) = action {
             Some(self.type_info().lookup(self.current_ctx, *lhs).unwrap())
         } else {
             None
@@ -332,7 +332,7 @@ impl<'a> TermState<'a> {
         let vars_looked_up = self.canonicalize_everything(action, &mut res);
 
         res.extend(match &vars_looked_up {
-            NormAction::Delete(NormExpr::Call(_op, _body)) => {
+            CoreAction::Delete(NormExpr::Call(_op, _body)) => {
                 // TODO this might not do the right thing for terms!
                 let func_type = func_type.unwrap();
                 if func_type.is_datatype {
@@ -346,7 +346,7 @@ impl<'a> TermState<'a> {
                     vec![vars_looked_up.to_action()]
                 }
             }
-            NormAction::Let(lhs, NormExpr::Call(op, body)) => {
+            CoreAction::Let(lhs, NormExpr::Call(op, body)) => {
                 let func_type = func_type.unwrap();
                 let lhs_type = func_type.output;
                 let mut res = vec![vars_looked_up.to_action()];
@@ -372,7 +372,7 @@ impl<'a> TermState<'a> {
                 res
             }
 
-            NormAction::Union(lhs, rhs) => {
+            CoreAction::Union(lhs, rhs) => {
                 let lhs_type = union_type.unwrap();
 
                 self.parse_actions(vec![self.union(
@@ -387,7 +387,7 @@ impl<'a> TermState<'a> {
         res
     }
 
-    fn instrument_actions(&mut self, actions: &[NormAction]) -> Vec<Action> {
+    fn instrument_actions(&mut self, actions: &[CoreAction]) -> Vec<Action> {
         actions
             .iter()
             .flat_map(|a| self.instrument_action(a))
@@ -475,7 +475,7 @@ impl<'a> TermState<'a> {
                 } => {
                     res.extend(self.instrument_rule(*ruleset, *name, rule));
                 }
-                NCommand::NormAction(action) => {
+                NCommand::CoreAction(action) => {
                     res.extend(
                         self.instrument_action(action)
                             .into_iter()

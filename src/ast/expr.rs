@@ -1,7 +1,9 @@
-use crate::*;
+use crate::{core::ResolvedCall, *};
 use ordered_float::OrderedFloat;
 
-use std::fmt::Display;
+use std::{fmt::Display, hash::Hasher};
+
+use super::ToSexp;
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
 pub enum Literal {
@@ -56,66 +58,98 @@ impl Display for Literal {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
-pub enum Expr {
-    Lit(Literal),
-    Var(Symbol),
-    // TODO make this its own type
-    Call(Symbol, Vec<Self>),
+#[derive(Debug, Clone)]
+pub struct ResolvedVar {
+    pub name: Symbol,
+    pub sort: ArcSort,
 }
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
-pub enum NormExpr {
-    Call(Symbol, Vec<Symbol>),
-}
-
-impl NormExpr {
-    pub fn to_expr(&self) -> Expr {
-        match self {
-            NormExpr::Call(op, args) => {
-                Expr::Call(*op, args.iter().map(|a| Expr::Var(*a)).collect())
-            }
-        }
+impl PartialEq for ResolvedVar {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name && self.sort.name() == other.sort.name()
     }
+}
 
-    pub(crate) fn map_def_use(
-        &self,
-        fvar: &mut impl FnMut(Symbol, bool) -> Symbol,
-        is_def: bool,
-    ) -> NormExpr {
+impl Eq for ResolvedVar {}
+
+impl Hash for ResolvedVar {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
+        self.sort.name().hash(state);
+    }
+}
+
+impl SymbolLike for ResolvedVar {
+    fn to_symbol(&self) -> Symbol {
+        self.name
+    }
+}
+
+impl Display for ResolvedVar {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.name)
+    }
+}
+
+impl ToSexp for ResolvedVar {
+    fn to_sexp(&self) -> Sexp {
+        Sexp::Symbol(self.name.to_string())
+    }
+}
+
+pub type Expr = GenericExpr<Symbol, Symbol, ()>;
+pub(crate) type ResolvedExpr = GenericExpr<ResolvedCall, ResolvedVar, ()>;
+/// A [`MappedExpr`] arises naturally when you want a mapping between an expression
+/// and its flattened form. It records this mapping by annotating each `Head`
+/// with a `Leaf`, which it maps to in the flattened form.
+/// A useful operation on `MappedExpr`s is [`MappedExpr::get_corresponding_var_or_lit``].
+pub(crate) type MappedExpr<Head, Leaf, Ann> = GenericExpr<(Head, Leaf), Leaf, Ann>;
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
+pub enum GenericExpr<Head, Leaf, Ann> {
+    Lit(Ann, Literal),
+    Var(Ann, Leaf),
+    Call(Ann, Head, Vec<Self>),
+}
+
+impl ResolvedExpr {
+    pub fn output_type(&self, type_info: &TypeInfo) -> ArcSort {
         match self {
-            NormExpr::Call(op, args) => {
-                let args = args.iter().map(|a| fvar(*a, is_def)).collect();
-                NormExpr::Call(*op, args)
-            }
+            ResolvedExpr::Lit(_, lit) => type_info.infer_literal(lit),
+            ResolvedExpr::Var(_, resolved_var) => resolved_var.sort.clone(),
+            ResolvedExpr::Call(_, resolved_call, _) => resolved_call.output().clone(),
         }
     }
 }
 
 impl Expr {
-    pub fn is_var(&self) -> bool {
-        matches!(self, Expr::Var(_))
-    }
-
     pub fn call(op: impl Into<Symbol>, children: impl IntoIterator<Item = Self>) -> Self {
-        Self::Call(op.into(), children.into_iter().collect())
+        Self::Call((), op.into(), children.into_iter().collect())
     }
 
     pub fn lit(lit: impl Into<Literal>) -> Self {
-        Self::Lit(lit.into())
+        Self::Lit((), lit.into())
+    }
+}
+
+impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq, Ann: Clone>
+    GenericExpr<Head, Leaf, Ann>
+{
+    pub fn is_var(&self) -> bool {
+        matches!(self, GenericExpr::Var(_, _))
     }
 
-    pub fn get_var(&self) -> Option<Symbol> {
+    pub fn get_var(&self) -> Option<Leaf> {
         match self {
-            Expr::Var(v) => Some(*v),
+            GenericExpr::Var(_ann, v) => Some(v.clone()),
             _ => None,
         }
     }
 
     fn children(&self) -> &[Self] {
         match self {
-            Expr::Var(_) | Expr::Lit(_) => &[],
-            Expr::Call(_, children) => children,
+            GenericExpr::Var(_, _) | GenericExpr::Lit(_, _) => &[],
+            GenericExpr::Call(_, _, children) => children,
         }
     }
 
@@ -140,23 +174,63 @@ impl Expr {
 
     pub fn map(&self, f: &mut impl FnMut(&Self) -> Self) -> Self {
         match self {
-            Expr::Lit(_) => f(self),
-            Expr::Var(_) => f(self),
-            Expr::Call(op, children) => {
+            GenericExpr::Lit(..) => f(self),
+            GenericExpr::Var(..) => f(self),
+            GenericExpr::Call(ann, op, children) => {
                 let children = children.iter().map(|c| c.map(f)).collect();
-                f(&Expr::Call(*op, children))
+                f(&GenericExpr::Call(ann.clone(), op.clone(), children))
             }
         }
     }
 
+    // TODO: Currently, subst_leaf takes a leaf but not an annotation over the leaf,
+    // so it has to "make up" annotations for the returned GenericExpr. A better
+    // approach is for subst_leaf to also take the annotation, which we should
+    // implement after we use real non-() annotations
+    pub fn subst<Head2, Leaf2>(
+        &self,
+        subst_leaf: &mut impl FnMut(&Leaf) -> GenericExpr<Head2, Leaf2, Ann>,
+        subst_head: &mut impl FnMut(&Head) -> Head2,
+    ) -> GenericExpr<Head2, Leaf2, Ann> {
+        match self {
+            GenericExpr::Lit(ann, lit) => GenericExpr::Lit(ann.clone(), lit.clone()),
+            GenericExpr::Var(_ann, v) => subst_leaf(v),
+            GenericExpr::Call(ann, op, children) => {
+                let children = children
+                    .iter()
+                    .map(|c| c.subst(subst_leaf, subst_head))
+                    .collect();
+                GenericExpr::Call(ann.clone(), subst_head(op), children)
+            }
+        }
+    }
+
+    pub fn subst_leaf<Leaf2>(
+        &self,
+        subst: &mut impl FnMut(&Leaf) -> GenericExpr<Head, Leaf2, Ann>,
+    ) -> GenericExpr<Head, Leaf2, Ann> {
+        self.subst(subst, &mut |op| op.clone())
+    }
+
+    pub fn vars(&self) -> impl Iterator<Item = Leaf> + '_ {
+        let iterator: Box<dyn Iterator<Item = Leaf>> = match self {
+            GenericExpr::Lit(_ann, _l) => Box::new(std::iter::empty()),
+            GenericExpr::Var(_ann, v) => Box::new(std::iter::once(v.clone())),
+            GenericExpr::Call(_ann, _head, exprs) => Box::new(exprs.iter().flat_map(|e| e.vars())),
+        };
+        iterator
+    }
+}
+
+impl<Head: Display, Leaf: Display, Ann> GenericExpr<Head, Leaf, Ann> {
     /// Converts this expression into a
     /// s-expression (symbolic expression).
     /// Example: `(Add (Add 2 3) 4)`
     pub fn to_sexp(&self) -> Sexp {
         let res = match self {
-            Expr::Lit(lit) => Sexp::Symbol(lit.to_string()),
-            Expr::Var(v) => Sexp::Symbol(v.to_string()),
-            Expr::Call(op, children) => Sexp::List(
+            GenericExpr::Lit(_ann, lit) => Sexp::Symbol(lit.to_string()),
+            GenericExpr::Var(_ann, v) => Sexp::Symbol(v.to_string()),
+            GenericExpr::Call(_ann, op, children) => Sexp::List(
                 vec![Sexp::Symbol(op.to_string())]
                     .into_iter()
                     .chain(children.iter().map(|c| c.to_sexp()))
@@ -165,35 +239,13 @@ impl Expr {
         };
         res
     }
-
-    pub fn subst(&self, canon: &HashMap<Symbol, Expr>) -> Self {
-        match self {
-            Expr::Lit(_lit) => self.clone(),
-            Expr::Var(v) => canon.get(v).cloned().unwrap_or_else(|| self.clone()),
-            Expr::Call(op, children) => {
-                let children = children.iter().map(|c| c.subst(canon)).collect();
-                Expr::Call(*op, children)
-            }
-        }
-    }
-
-    pub fn vars(&self) -> impl Iterator<Item = Symbol> + '_ {
-        let iterator: Box<dyn Iterator<Item = Symbol>> = match self {
-            Expr::Lit(_) => Box::new(std::iter::empty()),
-            Expr::Var(v) => Box::new(std::iter::once(*v)),
-            Expr::Call(_, exprs) => Box::new(exprs.iter().flat_map(|e| e.vars())),
-        };
-        iterator
-    }
 }
 
-impl Display for NormExpr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.to_expr())
-    }
-}
-
-impl Display for Expr {
+impl<Head, Leaf, Ann> Display for GenericExpr<Head, Leaf, Ann>
+where
+    Head: Display,
+    Leaf: Display,
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.to_sexp())
     }
