@@ -9,7 +9,7 @@
   (Mul Math Math))
 
 
-(rewrite (Mul (Num 3) x) (Add x (Add x x)) :unextractable :subsume)
+(rewrite (Mul (Num 3) x) (Add x (Add x x)) :subsume)
 
 (let x (Mul (Num 2) (Mul (Num 3) (Var "x"))))
 
@@ -19,6 +19,9 @@
 (check (= x (Mul (Num 2) (Add (Var "x") (Add (Var "x") (Var "x"))))))
 (extract x)
 ; Will be (Mul (Num 2) (Add (Var "x") (Add (Var "x") (Var "x"))))
+
+; Even though it can't be extracted, we can still check that x equal 2 * (3 * x)
+(check (= x (Mul (Num 2) (Mul (Num 3) (Var "x")))))
 
 ; Also if we make multiplication commutative and run that run, we won't get that result either
 ; since the original expr has been subsumed when it was replaced with the addition

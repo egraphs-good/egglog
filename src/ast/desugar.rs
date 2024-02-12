@@ -25,34 +25,24 @@ fn desugar_rewrite(
     ruleset: Symbol,
     name: Symbol,
     rewrite: &Rewrite,
-    unextractable: bool,
     subsume: bool,
 ) -> Vec<NCommand> {
     let var = Symbol::from("rewrite_var__");
+    let mut head = Actions::singleton(Action::Union((), Expr::Var((), var), rewrite.rhs.clone()));
+    if subsume {
+        match &rewrite.lhs {
+            Expr::Call(_, f, args) => {
+                head.0
+                    .push(Action::Change((), Change::Subsume, *f, args.to_vec()));
+            }
+            _ => {
+                panic!("Subsumed rewrite must have a function call on the lhs");
+            }
+        }
+    }
     // make two rules- one to insert the rhs, and one to union
     // this way, the union rule can only be fired once,
     // which helps proofs not add too much info
-    let mut head = vec![Action::Union(Expr::Var(var), rewrite.rhs.clone())];
-    if unextractable {
-        match &rewrite.lhs {
-            Expr::Call(f, args) => {
-                head.push(Action::Unextractable(*f, args.to_vec()));
-            }
-            _ => {
-                panic!("Unextractable rewrite must have a function call on the lhs");
-            }
-        }
-    }
-    if subsume {
-        match &rewrite.lhs {
-            Expr::Call(f, args) => {
-                head.push(Action::Subsume(*f, args.to_vec()));
-            }
-            _ => {
-                panic!("Subsume rewrite must have a function call on the lhs");
-            }
-        }
-    }
     vec![NCommand::NormRule {
         ruleset,
         name,
@@ -61,7 +51,7 @@ fn desugar_rewrite(
                 .into_iter()
                 .chain(rewrite.conditions.clone())
                 .collect(),
-            head: Actions::singleton(Action::Union((), Expr::Var((), var), rewrite.rhs.clone())),
+            head,
         },
     }]
 }
@@ -72,9 +62,14 @@ fn desugar_birewrite(ruleset: Symbol, name: Symbol, rewrite: &Rewrite) -> Vec<NC
         rhs: rewrite.lhs.clone(),
         conditions: rewrite.conditions.clone(),
     };
-    desugar_rewrite(ruleset, format!("{}=>", name).into(), rewrite)
+    desugar_rewrite(ruleset, format!("{}=>", name).into(), rewrite, false)
         .into_iter()
-        .chain(desugar_rewrite(ruleset, format!("{}<=", name).into(), &rw2))
+        .chain(desugar_rewrite(
+            ruleset,
+            format!("{}<=", name).into(),
+            &rw2,
+            false,
+        ))
         .collect()
 }
 
@@ -242,13 +237,9 @@ pub(crate) fn desugar_command(
         } => desugar.desugar_function(&FunctionDecl::relation(constructor, inputs)),
         Command::Declare { name, sort } => desugar.declare(name, sort),
         Command::Datatype { name, variants } => desugar_datatype(name, variants),
-        Command::Rewrite(ruleset, rewrite, unextractable, subsume) => desugar_rewrite(
-            ruleset,
-            rewrite_name(&rewrite).into(),
-            &rewrite,
-            unextractable,
-            subsume,
-        ),
+        Command::Rewrite(ruleset, rewrite, subsume) => {
+            desugar_rewrite(ruleset, rewrite_name(&rewrite).into(), &rewrite, subsume)
+        }
         Command::BiRewrite(ruleset, rewrite) => {
             desugar_birewrite(ruleset, rewrite_name(&rewrite).into(), &rewrite)
         }

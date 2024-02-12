@@ -1,9 +1,9 @@
-use egglog::{ast::Expr, EGraph, ExtractReport, Function, Term, TypeError, Value};
+use egglog::{ast::Expr, EGraph, ExtractReport, Function, Term, Value};
 use symbol_table::GlobalSymbol;
 
 #[test]
-fn test_unextractable_action_extract() {
-    // Test when an expression is set as unextractble, it isn't extracted, even if its the cheapest
+fn test_subsumed_unextractable_action_extract() {
+    // Test when an expression is subsumed, it isn't extracted, even if its the cheapest
     let mut egraph = EGraph::default();
 
     egraph
@@ -25,11 +25,11 @@ fn test_unextractable_action_extract() {
             ..
         }) if s == &GlobalSymbol::from("cheap")
     ));
-    // Then if we make one unextractable, it should give back the variable term
+    // Then if we make one as subsumed, it should give back the variable term
     egraph
         .parse_and_run_program(
             r#"
-            (unextractable (cheap))
+            (subsume (cheap))
             (query-extract (exp))
             "#,
         )
@@ -55,7 +55,7 @@ fn get_value(egraph: &EGraph, name: &str) -> Value {
 }
 
 #[test]
-fn test_unextractable_rebuild_arg() {
+fn test_subsumed_unextractable_rebuild_arg() {
     // Tests that a term stays unextractable even after a rebuild after a union would change the value of one of its args
     let mut egraph = EGraph::default();
 
@@ -67,13 +67,13 @@ fn test_unextractable_rebuild_arg() {
             (function exp () Math :cost 100)
             (function cheap () Math)
             (function cheap-1 () Math)
-            ; we make the container cheap so that it will be extracted if possible, but then we mark it as unextractable
+            ; we make the container cheap so that it will be extracted if possible, but then we mark it as subsumed
             ; so the (exp) expr should be extracted instead
             (let res (container (cheap)))
             (union res (exp))
             (cheap)
             (cheap-1)
-            (unextractable (container (cheap)))
+            (subsume (container (cheap)))
             "#,
         ).unwrap();
     // At this point (cheap) and (cheap-1) should have different values, because they aren't unioned
@@ -107,11 +107,11 @@ fn test_unextractable_rebuild_arg() {
         panic!();
     };
     let expr = termdag.term_to_expr(&term);
-    assert_eq!(expr, Expr::Call(GlobalSymbol::from("exp"), vec![]));
+    assert_eq!(expr, Expr::Call((), GlobalSymbol::from("exp"), vec![]));
 }
 
 #[test]
-fn test_unextractable_rebuild_self() {
+fn test_subsumed_unextractable_rebuild_self() {
     // Tests that a term stays unextractable even after a rebuild after a union change its output value.
     let mut egraph = EGraph::default();
 
@@ -122,8 +122,8 @@ fn test_unextractable_rebuild_self() {
             (function container (Math) Math)
             (function exp () Math :cost 100)
             (function cheap () Math)
-            (cheap)
-            (unextractable (cheap))
+            (let x (cheap))
+            (subsume (cheap))
             "#,
         )
         .unwrap();
@@ -133,7 +133,7 @@ fn test_unextractable_rebuild_self() {
     egraph
         .parse_and_run_program(
             r#"
-            (union (exp) (cheap))
+            (union (exp) x)
             "#,
         )
         .unwrap();
@@ -142,11 +142,11 @@ fn test_unextractable_rebuild_self() {
     let new_cheap_value = get_value(&egraph, "cheap");
     assert_ne!(new_cheap_value, orig_cheap_value);
 
-    // Now verify that if we extract, it still respects the unextractable, even though it's a different values now
+    // Now verify that if we extract, it still respects the subsumption, even though it's a different values now
     egraph
         .parse_and_run_program(
             r#"
-            (query-extract (cheap))
+            (query-extract x)
             "#,
         )
         .unwrap();
@@ -155,11 +155,11 @@ fn test_unextractable_rebuild_self() {
         panic!();
     };
     let expr = termdag.term_to_expr(&term);
-    assert_eq!(expr, Expr::Call(GlobalSymbol::from("exp"), vec![]));
+    assert_eq!(expr, Expr::Call((), GlobalSymbol::from("exp"), vec![]));
 }
 
 #[test]
-fn test_unextractable_insert_and_merge() {
+fn test_subsume_unextractable_insert_and_merge() {
     // Example adapted from https://github.com/egraphs-good/egglog/pull/301#pullrequestreview-1756826062
     let mut egraph = EGraph::default();
 
@@ -172,7 +172,7 @@ fn test_unextractable_insert_and_merge() {
             (function exp () Expr :cost 100)
 
               (f (Num 1))
-              (unextractable (f (Num 1)))
+              (subsume (f (Num 1)))
               (f (Num 2))
 
               (union (Num 2) (Num 1))
@@ -191,8 +191,8 @@ fn test_unextractable_insert_and_merge() {
 }
 
 #[test]
-fn test_unextractable_action_extract_multiple() {
-    // Test when an expression is set as unextractble, it isn't extracted, like with
+fn test_subsume_unextractable_action_extract_multiple() {
+    // Test when an expression is set as subsumed, it isn't extracted, like with
     // extract multiple
     let mut egraph = EGraph::default();
 
@@ -216,7 +216,7 @@ fn test_unextractable_action_extract_multiple() {
     egraph
         .parse_and_run_program(
             "
-            (unextractable (Num 2))
+            (subsume (Num 2))
             (query-extract :variants 2 (Num 1))
             ",
         )
@@ -229,8 +229,8 @@ fn test_unextractable_action_extract_multiple() {
 }
 
 #[test]
-fn test_rewrite_unextractable() {
-    // When a rewrite is marked as a unextractable, the lhs should not be extracted
+fn test_rewrite_subsumed_unextractable() {
+    // When a rewrite is marked as a subsumed, the lhs should not be extracted
 
     let mut egraph = EGraph::default();
 
@@ -240,7 +240,7 @@ fn test_rewrite_unextractable() {
             (datatype Math)
             (function exp () Math :cost 100)
             (function cheap () Math :cost 1)
-            (rewrite (cheap) (exp) :unextractable)
+            (rewrite (cheap) (exp) :subsume)
             (cheap)
             (run 1)
             (extract (cheap))
@@ -290,7 +290,7 @@ fn test_rewrite_subsumed() {
 
 #[test]
 fn test_subsume() {
-    // Test that if we mark a term as subsumed than no rewrites will be applied to it, but it can still be extracted
+    // Test that if we mark a term as subsumed than no rewrites will be applied to it.
     // We can test this by adding a commutative additon property, and verifying it isn't applied on one of the terms
     // but is on the other
     let mut egraph = EGraph::default();
@@ -318,6 +318,9 @@ fn test_subsume() {
     egraph
         .parse_and_run_program(
             r#"
+        ;; add something equal to x that can be extracted:
+        (declare other Math)
+        (union x other)
         (extract x 10)
         "#,
         )
@@ -325,24 +328,6 @@ fn test_subsume() {
     assert!(matches!(
         egraph.get_extract_report(),
         Some(ExtractReport::Variants { terms, .. }) if terms.len() == 1
-    ));
-}
-
-#[test]
-fn test_unextractable_primitive_type_error() {
-    // Test trying to mark a function that returns a primitive as a type error.
-
-    let mut egraph = EGraph::default();
-    let res = egraph.parse_and_run_program(
-        r#"
-        (function one () i64)
-        (set (one) 1)
-        (unextractable (one))
-        "#,
-    );
-    assert!(matches!(
-        res,
-        Err(egglog::Error::TypeError(TypeError::UnextractablePrimitive))
     ));
 }
 
@@ -360,3 +345,5 @@ fn test_subsume_primitive() {
     );
     assert!(res.is_ok());
 }
+
+// TODO: Add test we can't subsume something with a merge function

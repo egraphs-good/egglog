@@ -97,28 +97,13 @@ fn generate_tests(glob: &str) -> Vec<Trial> {
             resugar: false,
         };
         let should_fail = run.should_fail();
-        // Marking as subsumed and non extractable is not supported for eqsat values with the term encoding
-        let works_with_term_encoding = !run.path.to_string_lossy().contains("rewrite-flags");
 
         push_trial(run.clone());
-        if works_with_term_encoding {
-            push_trial(Run {
-                test_terms_encoding: true,
-                ..run.clone()
-            });
-        }
         if !should_fail {
             push_trial(Run {
                 resugar: true,
                 ..run.clone()
             });
-            if works_with_term_encoding {
-                push_trial(Run {
-                    resugar: true,
-                    test_terms_encoding: true,
-                    ..run.clone()
-                });
-            }
         }
     }
 

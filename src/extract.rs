@@ -85,7 +85,7 @@ impl EGraph {
                 func.nodes
                     .iter()
                     .filter(|&(inputs, output)| {
-                        (output.value == output_value) & (!func.check_unextractable(inputs))
+                        (output.value == output_value) & (!func.check_subsumed(inputs))
                     })
                     .map(|(inputs, _output)| {
                         let node = Node { sym, inputs };
@@ -182,7 +182,7 @@ impl<'a> Extractor<'a> {
                 let func = &self.egraph.functions[&sym];
                 if func.schema.output.is_eq_sort() {
                     for (inputs, output) in func.nodes.iter() {
-                        if func.check_unextractable(inputs) {
+                        if func.check_subsumed(inputs) {
                             continue;
                         }
                         if let Some((term_inputs, new_cost)) =

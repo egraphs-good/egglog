@@ -11,8 +11,8 @@ pub(crate) mod table;
 pub type ValueVec = SmallVec<[Value; 3]>;
 
 #[derive(Clone)]
-pub(crate) struct Function {
-    pub decl: ResolvedFunctionDecl,
+pub struct Function {
+    pub(crate) decl: ResolvedFunctionDecl,
     pub schema: ResolvedSchema,
     pub merge: MergeAction,
     pub(crate) nodes: table::Table,
@@ -44,7 +44,6 @@ pub enum MergeFn {
 pub struct TupleOutput {
     pub value: Value,
     pub timestamp: u32,
-    pub unextractable: bool,
     pub subsumed: bool,
 }
 
@@ -84,7 +83,7 @@ impl Debug for Function {
 pub(crate) type DeferredMerge = (ValueVec, Value, Value);
 
 impl Function {
-    pub fn new(egraph: &EGraph, decl: &ResolvedFunctionDecl) -> Result<Self, Error> {
+    pub(crate) fn new(egraph: &EGraph, decl: &ResolvedFunctionDecl) -> Result<Self, Error> {
         let mut input = Vec::with_capacity(decl.schema.input.len());
         for s in &decl.schema.input {
             input.push(match egraph.type_info().sorts.get(s) {
@@ -224,21 +223,14 @@ impl Function {
         res
     }
 
+    /// Mark the given inputs as subsumed.
     pub fn subsume(&mut self, inputs: &[Value]) {
         self.nodes.get_mut(inputs).unwrap().subsumed = true;
     }
 
-    /// Mark the given inputs as unextractable.
-    pub fn mark_unextractable(&mut self, inputs: &[Value]) {
-        if !self.schema.output.is_eq_sort() {
-            panic!("Only eq sorts can be marked unextractable")
-        }
-        self.nodes.get_mut(inputs).unwrap().unextractable = true;
-    }
-
-    /// Check if the given inputs are unextractable.
-    pub fn check_unextractable(&self, inputs: &[Value]) -> bool {
-        self.nodes.get(inputs).unwrap().unextractable
+    /// Check if the given inputs are subsumed.
+    pub fn check_subsumed(&self, inputs: &[Value]) -> bool {
+        self.nodes.get(inputs).unwrap().subsumed
     }
 
     /// Return a column index that contains (a superset of) the offsets for the
@@ -474,7 +466,6 @@ impl Function {
                     out_val
                 }
             },
-            out.unextractable,
             out.subsumed,
         );
         if let Some((inputs, _)) = self.nodes.get_index(i, true) {

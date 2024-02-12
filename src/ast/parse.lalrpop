@@ -61,11 +61,10 @@ Command: Command = {
     LParen "ruleset" <name:Ident> RParen => Command::AddRuleset(name),
     LParen "rule" <body:List<Fact>> <head:List<Action>> <ruleset:(":ruleset" <Ident>)?> <name:(":name" <String>)?> RParen => Command::Rule{ruleset: ruleset.unwrap_or("".into()), name: name.unwrap_or("".to_string()).into(), rule: Rule { head: Actions::new(head), body }},
     LParen "rewrite" <lhs:Expr> <rhs:Expr>
-        <unextractable:(":unextractable")?>
         <subsume:(":subsume")?>
         <conditions:(":when" <List<Fact>>)?>
         <ruleset:(":ruleset" <Ident>)?>
-    RParen => Command::Rewrite(ruleset.unwrap_or("".into()), Rewrite { lhs, rhs, conditions: conditions.unwrap_or_default() }, unextractable.is_some(), subsume.is_some()),
+    RParen => Command::Rewrite(ruleset.unwrap_or("".into()), Rewrite { lhs, rhs, conditions: conditions.unwrap_or_default() }, subsume.is_some()),
     LParen "birewrite" <lhs:Expr> <rhs:Expr>
         <conditions:(":when" <List<Fact>>)?>
         <ruleset:(":ruleset" <Ident>)?>
@@ -109,9 +108,8 @@ Cost: Option<usize> = {
 
 NonLetAction: Action = {
     LParen "set" LParen <f: Ident> <args:Expr*> RParen <v:Expr> RParen => Action::Set ( (), f, args, v ),
-    LParen "delete" LParen <f: Ident> <args:Expr*> RParen RParen => Action::Delete ( (), f, args),
-    LParen "unextractable" LParen <f: Ident> <args:Expr*> RParen RParen => Action::Unextractable ( (), f, args),
-    LParen "subsume" LParen <f: Ident> <args:Expr*> RParen RParen => Action::Subsume ( (), f, args),
+    LParen "delete" LParen <f: Ident> <args:Expr*> RParen RParen => Action::Change ( (), Change::Delete, f, args),
+    LParen "subsume" LParen <f: Ident> <args:Expr*> RParen RParen => Action::Change ( (), Change::Subsume, f, args),
     LParen "union" <e1:Expr> <e2:Expr> RParen => Action::Union((), <>),
     LParen "panic" <msg:String> RParen => Action::Panic((), msg),
     LParen "extract" <expr:Expr> RParen => Action::Extract((), expr, Expr::Lit((), Literal::Int(0))),

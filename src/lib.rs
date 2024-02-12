@@ -1178,7 +1178,7 @@ impl EGraph {
         let query = self.compile_gj_query(query, ordering);
 
         let mut matched = false;
-        self.run_query(&query, 0, |values| {
+        self.run_query(&query, 0, true, |values| {
             assert_eq!(values.len(), query.vars.len());
             matched = true;
             Err(())

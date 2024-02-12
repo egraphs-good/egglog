@@ -144,7 +144,6 @@ impl Table {
                 out
             },
             false,
-            false,
         );
         res
     }
@@ -161,7 +160,6 @@ impl Table {
         inputs: &[Value],
         ts: u32,
         on_merge: impl FnOnce(Option<Value>) -> Value,
-        unextractable: bool,
         subsumed: bool,
     ) {
         assert!(ts >= self.max_ts);
@@ -171,12 +169,9 @@ impl Table {
             self.table.get_mut(hash, search_for!(self, hash, inputs))
         {
             let (inp, prev) = &mut self.vals[*off];
-            let (prev_unextractable, prev_subsumed) = (prev.unextractable, prev.subsumed);
+            let prev_subsumed = prev.subsumed;
             let next = on_merge(Some(prev.value));
-            if next == prev.value
-                && prev_unextractable == unextractable
-                && prev_subsumed == subsumed
-            {
+            if next == prev.value && prev_subsumed == subsumed {
                 return;
             }
             inp.stale_at = ts;
@@ -188,9 +183,6 @@ impl Table {
                 TupleOutput {
                     value: next,
                     timestamp: ts,
-                    // Take lattice join of old and new status's
-                    // https://github.com/egraphs-good/egglog/pull/301#discussion_r1410286714
-                    unextractable: unextractable || prev_unextractable,
                     subsumed: subsumed || prev_subsumed,
                 },
             ));
@@ -203,7 +195,6 @@ impl Table {
             TupleOutput {
                 value: on_merge(None),
                 timestamp: ts,
-                unextractable,
                 subsumed,
             },
         ));

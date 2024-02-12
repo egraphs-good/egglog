@@ -40,14 +40,15 @@ impl<'a> ActionCompiler<'a> {
                 self.do_atom_term(e);
                 self.instructions.push(Instruction::Set(func.name));
             }
-            GenericCoreAction::Delete(f, args) => {
+            GenericCoreAction::Change(change, f, args) => {
                 let ResolvedCall::Func(func) = f else {
                     panic!("Cannot delete primitive- should have been caught by typechecking!!!")
                 };
                 for arg in args {
                     self.do_atom_term(arg);
                 }
-                self.instructions.push(Instruction::DeleteRow(func.name));
+                self.instructions
+                    .push(Instruction::Change(*change, func.name));
             }
             GenericCoreAction::Union(arg1, arg2) => {
                 self.do_atom_term(arg1);
@@ -134,7 +135,7 @@ enum Instruction {
     CallPrimitive(Primitive, usize),
     /// Pop function arguments off the stack and delete the corresponding row
     /// from the function.
-    DeleteRow(Symbol),
+    Change(Change, Symbol),
     /// Pop the value to be set and the function arguments off the stack.
     /// Set the function at the given arguments to the new value.
     Set(Symbol),
@@ -417,11 +418,18 @@ impl EGraph {
                     Literal::Bool(b) => stack.push(Value::from(*b)),
                     Literal::Unit => stack.push(Value::unit()),
                 },
-                Instruction::DeleteRow(f) => {
+                Instruction::Change(change, f) => {
                     let function = self.functions.get_mut(f).unwrap();
                     let new_len = stack.len() - function.schema.input.len();
                     let args = &stack[new_len..];
-                    function.remove(args, self.timestamp);
+                    match change {
+                        Change::Delete => {
+                            function.remove(args, self.timestamp);
+                        }
+                        Change::Subsume => {
+                            function.subsume(args);
+                        }
+                    }
                     stack.truncate(new_len);
                 }
             }
