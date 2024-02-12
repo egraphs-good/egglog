@@ -346,4 +346,17 @@ fn test_subsume_primitive() {
     assert!(res.is_ok());
 }
 
-// TODO: Add test we can't subsume something with a merge function
+#[test]
+fn test_cant_subsume_merge() {
+    // Test that we can't subsume something with a merge function
+
+    let mut egraph = EGraph::default();
+    let res = egraph.parse_and_run_program(
+        r#"
+        (function one () i64 :merge old)
+        (set (one) 1)
+        (subsume (one))
+        "#,
+    );
+    assert!(res.is_err());
+}

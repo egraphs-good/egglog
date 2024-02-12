@@ -427,6 +427,9 @@ impl EGraph {
                             function.remove(args, self.timestamp);
                         }
                         Change::Subsume => {
+                            if function.decl.merge.is_some() {
+                                return Err(Error::SubsumeMergeError(*f));
+                            }
                             function.subsume(args);
                         }
                     }

@@ -1549,6 +1549,8 @@ pub enum Error {
     ExpectFail,
     #[error("IO error: {0}: {1}")]
     IoError(PathBuf, std::io::Error),
+    #[error("Cannot subsume function with merge: {0}")]
+    SubsumeMergeError(Symbol),
 }
 
 fn safe_shl(a: usize, b: usize) -> usize {
