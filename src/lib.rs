@@ -66,7 +66,7 @@ use unionfind::*;
 use util::*;
 
 use crate::constraint::Problem;
-pub use crate::typechecking::TypeError;
+use crate::typechecking::TypeError;
 
 pub type Subst = IndexMap<Symbol, Value>;
 
