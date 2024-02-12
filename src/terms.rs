@@ -311,7 +311,7 @@ impl<'a> TermState<'a> {
         // compute the func type before we mess with
         // the action
         let func_type = match action {
-            CoreAction::ChangeRow(expr) => Some(
+            CoreAction::Delete(expr) => Some(
                 self.type_info()
                     .lookup_expr(self.current_ctx, expr)
                     .unwrap(),
@@ -332,11 +332,11 @@ impl<'a> TermState<'a> {
         let vars_looked_up = self.canonicalize_everything(action, &mut res);
 
         res.extend(match &vars_looked_up {
-            NormAction::ChangeRow(_, NormExpr::Call(_op, _body)) => {
+            CoreAction::Delete(NormExpr::Call(_op, _body)) => {
                 // TODO this might not do the right thing for terms!
                 let func_type = func_type.unwrap();
                 if func_type.is_datatype {
-                    panic!("Cannot change row from datatype in term mode yet");
+                    panic!("Cannot delete from datatype in term mode yet");
                     /*let view_name = self.view_name(*op);
                     vec![Action::Delete(
                         view_name,
