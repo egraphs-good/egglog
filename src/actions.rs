@@ -133,8 +133,8 @@ enum Instruction {
     /// Pop primitive arguments off the stack, calls the primitive,
     /// and push the result onto the stack.
     CallPrimitive(Primitive, usize),
-    /// Pop function arguments off the stack and delete the corresponding row
-    /// from the function.
+    /// Pop function arguments off the stack and either deletes or subsumes the corresponding row
+    /// in the function.
     Change(Change, Symbol),
     /// Pop the value to be set and the function arguments off the stack.
     /// Set the function at the given arguments to the new value.
