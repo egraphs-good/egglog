@@ -91,6 +91,10 @@ impl Sort for FunctionSort {
         self.inputs.iter().any(|s| s.is_eq_sort())
     }
 
+    fn serialized_name(&self, value: &Value) -> Symbol {
+        self.get_value(value).0
+    }
+
     fn inner_values(&self, value: &Value) -> Vec<(&ArcSort, Value)> {
         let input_values = self.get_value(value).1;
         self.inputs.iter().zip(input_values).collect()
@@ -221,7 +225,7 @@ impl PrimitiveLike for Ctor {
         })
     }
 
-    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: &mut EGraph) -> Option<Value> {
         let name = Symbol::load(&self.string, &values[0]);
         (name, values[1..].to_vec()).store(&self.function)
     }
@@ -245,7 +249,7 @@ impl PrimitiveLike for FunctionCall {
         SimpleTypeConstraint::new(self.name(), sorts).into_box()
     }
 
-    fn apply(&self, values: &[Value], egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], egraph: &mut EGraph) -> Option<Value> {
         let (name, mut args) = ValueFunction::load(&self.function, &values[0]);
 
         let types: Vec<_> = args
@@ -259,19 +263,7 @@ impl PrimitiveLike for FunctionCall {
 
         args.extend_from_slice(&values[1..]);
 
-        let possible_primitives = egraph.type_info().primitives.get(&name).unwrap();
-        let possible_results: Vec<_> = possible_primitives
-            .iter()
-            .filter(|prim| prim.accept(types.as_slice()))
-            .map(|prim| prim.apply(&args, egraph).unwrap())
-            .collect();
-        if possible_results.is_empty() {
-            panic!("No possible results for function call");
-        }
-        if possible_results.len() > 1 {
-            panic!("Multiple possible results for function call");
-        }
-        Some(possible_results[0])
+        Some(call_fn(egraph, &name, types, args))
     }
 }
 
@@ -284,6 +276,8 @@ fn call_fn(egraph: &mut EGraph, name: &Symbol, types: Vec<ArcSort>, args: Vec<Va
     let resolved_call = ResolvedCall::from_resolution(name, types.as_slice(), egraph.type_info());
     let arg_vars: Vec<_> = types
         .into_iter()
+        // Skip last sort which is the output sort
+        .take(args.len())
         .enumerate()
         .map(|(i, sort)| ResolvedVar {
             name: format!("__arg_{}", i).into(),
@@ -308,6 +302,9 @@ fn call_fn(egraph: &mut EGraph, name: &Symbol, types: Vec<ArcSort>, args: Vec<Va
     let program = egraph.compile_expr(&binding, &actions, &target).unwrap();
     // Similar to how the `MergeFn::Expr` case is handled in `Egraph::perform_set`
     let mut stack = vec![];
-    egraph.run_actions(&mut stack, &[], &program, true).unwrap();
+    // Run action on cloned EGraph to avoid modifying the original
+    egraph
+        .run_actions(&mut stack, &args, &program, true)
+        .unwrap();
     stack.pop().unwrap()
 }
