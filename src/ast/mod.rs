@@ -432,12 +432,19 @@ pub enum GenericCommand<Head, Leaf> {
     ///          :when ((= a (Num 0)))
     /// ```
     ///
-    /// Add the`:subsume` flags to apply those to the left hand side on a rewrite when it's mtched.
+    /// Add the `:subsume` flag to cause the left hand side to be subsumed after matching, which means it can
+    /// no longer be matched in a rule, but can still be checked against.
     ///
     /// ```text
     /// (rewrite (Mul a 2) (bitshift-left a 1) :subsume)
     /// ```
     ///
+    /// Desugars to:
+    /// ```text
+    /// (rule ((= lhs (Mul a 2)))
+    ///       ((union lhs (bitshift-left a 1))
+    ///        (subsume (Mul a 2))))
+    /// ```
     Rewrite(Symbol, GenericRewrite<Head, Leaf, ()>, Subsume),
     /// Similar to [`Command::Rewrite`], but
     /// generates two rules, one for each direction.
