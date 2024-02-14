@@ -228,11 +228,6 @@ impl Function {
         self.nodes.get_mut(inputs).unwrap().subsumed = true;
     }
 
-    /// Check if the given inputs are subsumed.
-    pub fn check_subsumed(&self, inputs: &[Value]) -> bool {
-        self.nodes.get(inputs).unwrap().subsumed
-    }
-
     /// Return a column index that contains (a superset of) the offsets for the
     /// given column. This method can return nothing if the indexes available
     /// contain too many irrelevant offsets.
@@ -273,11 +268,11 @@ impl Function {
         {
             let as_mut = Rc::make_mut(index);
             if col == self.schema.input.len() {
-                for (slot, _, out) in self.nodes.iter_range(offsets.clone()) {
+                for (slot, _, out) in self.nodes.iter_range(offsets.clone(), true) {
                     as_mut.add(out.value, slot)
                 }
             } else {
-                for (slot, inp, _) in self.nodes.iter_range(offsets.clone()) {
+                for (slot, inp, _) in self.nodes.iter_range(offsets.clone(), true) {
                     as_mut.add(inp[col], slot)
                 }
             }
@@ -285,14 +280,14 @@ impl Function {
             // rebuild_index
             if let Some(rebuild_index) = rebuild_index {
                 if col == self.schema.input.len() {
-                    for (slot, _, out) in self.nodes.iter_range(offsets.clone()) {
+                    for (slot, _, out) in self.nodes.iter_range(offsets.clone(), true) {
                         self.schema.output.foreach_tracked_values(
                             &out.value,
                             Box::new(|value| rebuild_index.add(value, slot)),
                         )
                     }
                 } else {
-                    for (slot, inp, _) in self.nodes.iter_range(offsets.clone()) {
+                    for (slot, inp, _) in self.nodes.iter_range(offsets.clone(), true) {
                         self.schema.input[col].foreach_tracked_values(
                             &inp[col],
                             Box::new(|value| rebuild_index.add(value, slot)),
@@ -332,8 +327,10 @@ impl Function {
     pub(crate) fn iter_timestamp_range(
         &self,
         timestamps: &Range<u32>,
+        include_subsumed: bool,
     ) -> impl Iterator<Item = (usize, &[Value], &TupleOutput)> {
-        self.nodes.iter_timestamp_range(timestamps)
+        self.nodes
+            .iter_timestamp_range(timestamps, include_subsumed)
     }
 
     pub fn rebuild(

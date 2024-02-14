@@ -530,7 +530,7 @@ impl EGraph {
         #[cfg(debug_assertions)]
         for (name, function) in self.functions.iter() {
             function.nodes.assert_sorted();
-            for (i, inputs, output) in function.nodes.iter_range(0..function.nodes.len()) {
+            for (i, inputs, output) in function.nodes.iter_range(0..function.nodes.len(), true) {
                 for input in inputs {
                     assert_eq!(
                         input,
@@ -720,7 +720,7 @@ impl EGraph {
         let schema = f.schema.clone();
         let nodes = f
             .nodes
-            .iter()
+            .iter(true)
             .take(n)
             .map(|(k, v)| (ValueVec::from(k), v.clone()))
             .collect::<Vec<_>>();

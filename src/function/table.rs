@@ -255,15 +255,18 @@ impl Table {
         include_subsumed: bool,
     ) -> Option<(&[Value], &TupleOutput)> {
         let (inp, out) = self.vals.get(i)?;
-        if !inp.live() || (!include_subsumed && out.subsumed) {
+        if !valid_value(inp, out, include_subsumed) {
             return None;
         }
         Some((inp.data(), out))
     }
 
     /// Iterate over the live entries in the table, in insertion order.
-    pub(crate) fn iter(&self) -> impl Iterator<Item = (&[Value], &TupleOutput)> + '_ {
-        self.iter_range(0..self.num_offsets())
+    pub(crate) fn iter(
+        &self,
+        include_subsumed: bool,
+    ) -> impl Iterator<Item = (&[Value], &TupleOutput)> + '_ {
+        self.iter_range(0..self.num_offsets(), include_subsumed)
             .map(|(_, y, z)| (y, z))
     }
 
@@ -272,12 +275,13 @@ impl Table {
     pub(crate) fn iter_range(
         &self,
         range: Range<usize>,
+        include_subsumed: bool,
     ) -> impl Iterator<Item = (usize, &[Value], &TupleOutput)> + '_ {
         self.vals[range.clone()]
             .iter()
             .zip(range)
-            .filter_map(|((inp, out), i)| {
-                if inp.live() {
+            .filter_map(move |((inp, out), i)| {
+                if valid_value(inp, out, include_subsumed) {
                     Some((i, inp.data(), out))
                 } else {
                     None
@@ -298,9 +302,10 @@ impl Table {
     pub(crate) fn iter_timestamp_range(
         &self,
         range: &Range<u32>,
+        include_subsumed: bool,
     ) -> impl Iterator<Item = (usize, &[Value], &TupleOutput)> + '_ {
         let indexes = self.transform_range(range);
-        self.iter_range(indexes)
+        self.iter_range(indexes, include_subsumed)
     }
 
     /// Return the approximate number of entries in the table for the given
@@ -323,6 +328,14 @@ impl Table {
             0..0
         }
     }
+}
+
+/// Returns whether the given value is live and not subsume (if the include_subsumed flag is false).
+///
+/// For checks, debugging, and serialization, we do want to include subsumed values.
+/// but for matching on rules, we do not.
+fn valid_value(input: &Input, output: &TupleOutput, include_subsumed: bool) -> bool {
+    input.live() && (include_subsumed || !output.subsumed)
 }
 
 pub(crate) fn hash_values(vs: &[Value]) -> u64 {
@@ -354,7 +367,7 @@ impl Input {
         self.data.as_slice()
     }
 
-    pub(crate) fn live(&self) -> bool {
+    fn live(&self) -> bool {
         self.stale_at == u32::MAX
     }
 }

@@ -970,7 +970,9 @@ impl<'a> TrieAccess<'a> {
         };
 
         if idxs.is_empty() {
-            let rows = self.function.iter_timestamp_range(&self.timestamp_range);
+            let rows = self
+                .function
+                .iter_timestamp_range(&self.timestamp_range, true);
             if self.column < arity {
                 for (i, tup, out) in rows {
                     insert(i, tup, out, tup[self.column])

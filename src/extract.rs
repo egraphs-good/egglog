@@ -46,7 +46,7 @@ impl EGraph {
             .unwrap_or_else(|| {
                 log::error!("No cost for {:?}", value);
                 for func in self.functions.values() {
-                    for (inputs, output) in func.nodes.iter() {
+                    for (inputs, output) in func.nodes.iter(false) {
                         if output.value == value {
                             log::error!("Found unextractable function: {:?}", func.decl.name);
                             log::error!("Inputs: {:?}", inputs);
@@ -83,10 +83,8 @@ impl EGraph {
                 assert!(func.schema.output.is_eq_sort());
 
                 func.nodes
-                    .iter()
-                    .filter(|&(inputs, output)| {
-                        (output.value == output_value) & (!func.check_subsumed(inputs))
-                    })
+                    .iter(false)
+                    .filter(|&(_, output)| (output.value == output_value))
                     .map(|(inputs, _output)| {
                         let node = Node { sym, inputs };
                         ext.expr_from_node(&node, termdag).expect(
@@ -181,10 +179,7 @@ impl<'a> Extractor<'a> {
             for sym in self.ctors.clone() {
                 let func = &self.egraph.functions[&sym];
                 if func.schema.output.is_eq_sort() {
-                    for (inputs, output) in func.nodes.iter() {
-                        if func.check_subsumed(inputs) {
-                            continue;
-                        }
+                    for (inputs, output) in func.nodes.iter(false) {
                         if let Some((term_inputs, new_cost)) =
                             self.node_total_cost(func, inputs, termdag)
                         {
