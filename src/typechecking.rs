@@ -45,10 +45,12 @@ impl Default for TypeInfo {
         res.presort_names.extend(MapSort::presort_names());
         res.presort_names.extend(SetSort::presort_names());
         res.presort_names.extend(VecSort::presort_names());
+        res.presort_names.extend(FunctionSort::presort_names());
 
         res.presorts.insert("Map".into(), MapSort::make_sort);
         res.presorts.insert("Set".into(), SetSort::make_sort);
         res.presorts.insert("Vec".into(), VecSort::make_sort);
+        res.presorts.insert("Fn".into(), FunctionSort::make_sort);
 
         res.add_primitive(ValueEq {
             unit: res.get_sort_nofail(),

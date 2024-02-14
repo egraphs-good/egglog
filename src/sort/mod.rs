@@ -22,8 +22,8 @@ mod set;
 pub use set::*;
 mod vec;
 pub use vec::*;
-mod function;
-pub use function::*;
+mod r#fn;
+pub use r#fn::*;
 
 use crate::constraint::AllEqualTypeConstraint;
 use crate::extract::{Cost, Extractor};

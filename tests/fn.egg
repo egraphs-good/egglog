@@ -1,0 +1,31 @@
+(datatype Math
+  (Num i64)
+  (Var String)
+  (Add Math Math)
+  (Mul Math Math))
+
+(datatype List
+  (Nil)
+  (Cons Math List))
+
+(sort MathFn (Fn (Math) Math))
+
+(function list-map-math (List MathFn) List)
+(rewrite (list-map-math (Nil) fn) (Nil))
+(rewrite (list-map-math (Cons x xs) fn) (Cons (call fn x) (list-map-math xs fn)))
+
+
+(function square (Math) Math)
+(let square-fn (fn "square" ))
+(call square-fn (Num 3))
+(check (= (call square-fn (Num 3)) (square (Num 3))))
+
+(rewrite (square x) (Mul x x))
+
+
+(let x (Cons (Num 1) (Cons (Num 2) (Cons (Num 3) (Nil)))))
+(let squared-x (list-map-math x square-fn))
+(run 100)
+
+(check (= squared-x (Cons (Num 1) (Cons (Num 4) (Cons (Num 9) (Nil))))))
+
