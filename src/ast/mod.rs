@@ -433,7 +433,7 @@ pub enum GenericCommand<Head, Leaf> {
     /// ```
     ///
     /// Add the `:subsume` flag to cause the left hand side to be subsumed after matching, which means it can
-    /// no longer be matched in a rule, but can still be checked against.
+    /// no longer be matched in a rule, but can still be checked against (See [`Change`] for more details.)
     ///
     /// ```text
     /// (rewrite (Mul a 2) (bitshift-left a 1) :subsume)
@@ -959,6 +959,7 @@ where
     }
 }
 
+/// Change a function entry.
 #[derive(Clone, Debug, Copy, PartialEq, Eq, Hash)]
 pub enum Change {
     /// `delete` this entry from a function.
