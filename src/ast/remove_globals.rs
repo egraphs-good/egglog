@@ -59,11 +59,11 @@ fn replace_global_var(expr: ResolvedExpr) -> ResolvedExpr {
 }
 
 fn remove_globals_expr(expr: ResolvedExpr) -> ResolvedExpr {
-    expr.map(&mut replace_global_var)
+    expr.visit_exprs(&mut replace_global_var)
 }
 
 fn remove_globals_action(action: ResolvedAction) -> ResolvedAction {
-    action.map_exprs(&mut replace_global_var)
+    action.visit_exprs(&mut replace_global_var)
 }
 
 fn remove_globals_cmd(type_info: &TypeInfo, cmd: ResolvedNCommand) -> Vec<ResolvedNCommand> {
@@ -101,6 +101,6 @@ fn remove_globals_cmd(type_info: &TypeInfo, cmd: ResolvedNCommand) -> Vec<Resolv
             }
             _ => vec![GenericNCommand::CoreAction(remove_globals_action(action))],
         },
-        _ => vec![cmd.map_exprs(&mut remove_globals_expr)],
+        _ => vec![cmd.visit_exprs(&mut remove_globals_expr)],
     }
 }
