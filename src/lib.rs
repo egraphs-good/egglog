@@ -473,7 +473,7 @@ pub struct NotFoundError(Expr);
 /// For each rule, we produce a `SearchResult`
 /// storing data about that rule's matches.
 /// When a rule has no variables, it may still match- in this case
-/// the `matched` field is used.
+/// the `did_match` field is used.
 struct SearchResult {
     name: Symbol,
     all_matches: Vec<Value>,
