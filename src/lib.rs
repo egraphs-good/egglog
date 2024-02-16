@@ -470,6 +470,17 @@ impl Default for EGraph {
 #[error("Not found: {0}")]
 pub struct NotFoundError(Expr);
 
+/// For each rule, we produce a `SearchResult`
+/// storing data about that rule's matches.
+/// When a rule has no variables, it may still match- in this case
+/// the `did_match` field is used.
+struct SearchResult {
+    name: Symbol,
+    all_matches: Vec<Value>,
+    did_match: bool,
+    rule_search_time: Duration,
+}
+
 impl EGraph {
     /// Use the rust backend implimentation of eqsat,
     /// including a rust implementation of the union-find
@@ -936,13 +947,15 @@ impl EGraph {
         let search_start = Instant::now();
         let mut searched = vec![];
         for (name, rule) in copy_rules.iter() {
-            let mut all_values = vec![];
+            let mut all_matches = vec![];
             if rule.banned_until <= iteration {
                 let mut fuel = safe_shl(match_limit, rule.times_banned);
                 let rule_search_start = Instant::now();
+                let mut did_match = false;
                 self.run_query(&rule.query, rule.todo_timestamp, |values| {
+                    did_match = true;
                     assert_eq!(values.len(), rule.query.vars.len());
-                    all_values.extend_from_slice(values);
+                    all_matches.extend_from_slice(values);
                     if fuel > 0 {
                         fuel -= 1;
                         Ok(())
@@ -954,9 +967,14 @@ impl EGraph {
                 log::trace!(
                     "Searched for {name} in {:.3}s ({} results)",
                     rule_search_time.as_secs_f64(),
-                    all_values.len()
+                    all_matches.len()
                 );
-                searched.push((name, all_values, rule_search_time));
+                searched.push(SearchResult {
+                    name: *name,
+                    all_matches,
+                    rule_search_time,
+                    did_match,
+                });
             }
         }
 
@@ -968,22 +986,28 @@ impl EGraph {
             .or_insert(Duration::default()) += search_elapsed;
 
         let apply_start = Instant::now();
-        for (name, all_values, search_time) in searched {
-            let rule = rules.get_mut(name).unwrap();
+        for search_result in searched {
+            let SearchResult {
+                name,
+                all_matches,
+                rule_search_time,
+                did_match,
+            } = search_result;
+            let rule = rules.get_mut(&name).unwrap();
             // add to the rule's search time
             *report
                 .search_time_per_rule
-                .entry(*name)
-                .or_insert(Duration::default()) += search_time;
+                .entry(name)
+                .or_insert(Duration::default()) += rule_search_time;
             let num_vars = rule.query.vars.len();
 
             // make sure the query requires matches
             if num_vars != 0 {
-                *report.num_matches_per_rule.entry(*name).or_insert(0) +=
-                    all_values.len() / num_vars;
+                *report.num_matches_per_rule.entry(name).or_insert(0) +=
+                    all_matches.len() / num_vars;
 
                 // backoff logic
-                let len = all_values.len() / num_vars;
+                let len = all_matches.len() / num_vars;
                 let threshold = safe_shl(match_limit, rule.times_banned);
                 if len > threshold {
                     let ban_length = safe_shl(ban_length, rule.times_banned);
@@ -999,14 +1023,18 @@ impl EGraph {
             let rule_apply_start = Instant::now();
 
             let stack = &mut vec![];
-            // run one iteration when n == 0
+
+            // when there are no variables, a query can still fail to match
+            // here we handle that case
             if num_vars == 0 {
-                rule.matches += 1;
-                stack.clear();
-                self.run_actions(stack, &[], &rule.program, true)
-                    .unwrap_or_else(|e| panic!("error while running actions for {name}: {e}"));
+                if did_match {
+                    rule.matches += 1;
+                    stack.clear();
+                    self.run_actions(stack, &[], &rule.program, true)
+                        .unwrap_or_else(|e| panic!("error while running actions for {name}: {e}"));
+                }
             } else {
-                for values in all_values.chunks(num_vars) {
+                for values in all_matches.chunks(num_vars) {
                     rule.matches += 1;
                     stack.clear();
                     self.run_actions(stack, values, &rule.program, true)
@@ -1017,7 +1045,7 @@ impl EGraph {
             // add to the rule's apply time
             *report
                 .apply_time_per_rule
-                .entry(*name)
+                .entry(name)
                 .or_insert(Duration::default()) += rule_apply_start.elapsed();
         }
         self.rulesets.insert(ruleset, rules);
