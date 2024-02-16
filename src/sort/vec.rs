@@ -80,13 +80,13 @@ impl Sort for VecSort {
         self.element.is_eq_sort()
     }
 
-    fn inner_values(&self, value: &Value) -> Vec<(&ArcSort, Value)> {
+    fn inner_values(&self, value: &Value) -> Vec<(ArcSort, Value)> {
         // TODO: Potential duplication of code
         let vecs = self.vecs.lock().unwrap();
         let vec = vecs.get_index(value.bits as usize).unwrap();
-        let mut result: Vec<(&Arc<dyn Sort>, Value)> = Vec::new();
+        let mut result = Vec::new();
         for e in vec.iter() {
-            result.push((&self.element, *e));
+            result.push((self.element.clone(), *e));
         }
         result
     }

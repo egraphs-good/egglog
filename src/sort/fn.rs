@@ -16,7 +16,34 @@ use crate::ast::Literal;
 
 use super::*;
 
-type ValueFunction = (Symbol, Vec<Value>);
+/// A function value is a name of a function, a list of partially applied arguments (values and sort)
+/// Note that we must store the actual arcsorts so we can return them when returning inner values
+/// and when canonicalizing
+#[derive(Debug, Clone)]
+
+struct ValueFunction(Symbol, Vec<(ArcSort, Value)>);
+
+impl ValueFunction {
+    /// Remove the arcsorts to make this hashable
+    /// The arg values contain the sort name anyways
+    fn hashable(&self) -> (Symbol, Vec<&Value>) {
+        (self.0, self.1.iter().map(|(_, v)| v).collect())
+    }
+}
+
+impl Hash for ValueFunction {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.hashable().hash(state);
+    }
+}
+
+impl PartialEq for ValueFunction {
+    fn eq(&self, other: &Self) -> bool {
+        self.hashable() == other.hashable()
+    }
+}
+
+impl Eq for ValueFunction {}
 
 #[derive(Debug)]
 pub struct FunctionSort {
@@ -69,8 +96,7 @@ impl FunctionSort {
 
     fn get_value(&self, value: &Value) -> ValueFunction {
         let functions = self.functions.lock().unwrap();
-        let (name, args) = functions.get_index(value.bits as usize).unwrap();
-        (*name, args.clone())
+        functions.get_index(value.bits as usize).unwrap().clone()
     }
 }
 
@@ -95,20 +121,29 @@ impl Sort for FunctionSort {
         self.get_value(value).0
     }
 
-    fn inner_values(&self, value: &Value) -> Vec<(&ArcSort, Value)> {
-        let input_values = self.get_value(value).1;
-        self.inputs.iter().zip(input_values).collect()
+    fn inner_values(&self, value: &Value) -> Vec<(ArcSort, Value)> {
+        let functions = self.functions.lock().unwrap();
+        let input_values = functions.get_index(value.bits as usize).unwrap();
+        input_values.1.clone()
+        // let mut result: Vec<(&ArcSort, Value)> = Vec::new();
+        // for (k, v) in &input_values.1 {
+        //     // result.push((&self.key, *k));
+        //     // result.push((&self.value, *v));
+        //     result.push((self.sorts.get(&v.tag).unwrap(), *v));
+        // }
+        // result
+        // input_values.1.iter().map(|(s, v)| (s, *v)).collect()
     }
 
     fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
-        let (name, inputs) = self.get_value(value);
+        let ValueFunction(name, inputs) = self.get_value(value);
         let mut changed = false;
         let mut new_outputs = vec![];
-        for (mut v, s) in inputs.into_iter().zip(&self.inputs) {
+        for (s, mut v) in inputs.into_iter() {
             changed |= s.canonicalize(&mut v, unionfind);
-            new_outputs.push(v);
+            new_outputs.push((s, v));
         }
-        *value = (name, new_outputs).store(self).unwrap();
+        *value = ValueFunction(name, new_outputs).store(self).unwrap();
         changed
     }
 
@@ -138,11 +173,11 @@ impl Sort for FunctionSort {
         extractor: &Extractor,
         termdag: &mut TermDag,
     ) -> Option<(Cost, Expr)> {
-        let (name, inputs) = ValueFunction::load(self, &value);
-        let (cost, args) = inputs.into_iter().zip(&self.inputs).try_fold(
+        let ValueFunction(name, inputs) = ValueFunction::load(self, &value);
+        let (cost, args) = inputs.into_iter().try_fold(
             (1usize, vec![Expr::Lit((), Literal::String(name))]),
-            |(cost, mut args), (value, sort)| {
-                let (new_cost, term) = extractor.find_best(value, termdag, sort)?;
+            |(cost, mut args), (sort, value)| {
+                let (new_cost, term) = extractor.find_best(value, termdag, &sort)?;
                 args.push(termdag.term_to_expr(&term));
                 Some((cost.saturating_add(new_cost), args))
             },
@@ -224,9 +259,17 @@ impl PrimitiveLike for Ctor {
         })
     }
 
-    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(&self, values: &[Value], egraph: Option<&mut EGraph>) -> Option<Value> {
+        let egraph = egraph.expect("Cannot create function in fact only in actions");
         let name = Symbol::load(&self.string, &values[0]);
-        (name, values[1..].to_vec()).store(&self.function)
+        // self.function
+        //     .sorts
+        //     .insert(name.clone(), self.function.clone());
+        let args = values[1..]
+            .iter()
+            .map(|arg| (egraph.get_sort_from_value(arg).unwrap().clone(), *arg))
+            .collect();
+        ValueFunction(name, args).store(&self.function)
     }
 }
 
@@ -250,18 +293,21 @@ impl PrimitiveLike for FunctionCall {
 
     fn apply(&self, values: &[Value], egraph: Option<&mut EGraph>) -> Option<Value> {
         let egraph = egraph.expect("Cannot call function in fact only in actions");
-        let (name, mut args) = ValueFunction::load(&self.function, &values[0]);
+        let ValueFunction(name, args) = ValueFunction::load(&self.function, &values[0]);
         let types: Vec<_> = args
             .iter()
             // get the sorts of partially applied args
-            .map(|arg| egraph.get_sort_from_value(arg).unwrap().clone())
+            .map(|(sort, _)| sort.clone())
             // combine with the args for the function call and then the output
             .chain(self.function.inputs.clone())
             .chain(once(self.function.output.clone()))
             .collect();
-        args.extend_from_slice(&values[1..]);
-
-        Some(call_fn(egraph, &name, types, args))
+        let values = args
+            .iter()
+            .map(|(_, v)| *v)
+            .chain(values[1..].iter().copied())
+            .collect();
+        Some(call_fn(egraph, &name, types, values))
     }
 }
 

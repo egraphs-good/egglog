@@ -83,13 +83,13 @@ impl Sort for MapSort {
         self.key.is_eq_sort() || self.value.is_eq_sort()
     }
 
-    fn inner_values(&self, value: &Value) -> Vec<(&ArcSort, Value)> {
+    fn inner_values(&self, value: &Value) -> Vec<(ArcSort, Value)> {
         let maps = self.maps.lock().unwrap();
         let map = maps.get_index(value.bits as usize).unwrap();
         let mut result = Vec::new();
         for (k, v) in map.iter() {
-            result.push((&self.key, *k));
-            result.push((&self.value, *v));
+            result.push((self.key.clone(), *k));
+            result.push((self.value.clone(), *v));
         }
         result
     }

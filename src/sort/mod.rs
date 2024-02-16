@@ -74,7 +74,7 @@ pub trait Sort: Any + Send + Sync + Debug {
 
     /// Return the inner values and sorts.
     /// Only eq_container_sort need to implement this method,
-    fn inner_values(&self, value: &Value) -> Vec<(&ArcSort, Value)> {
+    fn inner_values(&self, value: &Value) -> Vec<(ArcSort, Value)> {
         let _ = value;
         vec![]
     }

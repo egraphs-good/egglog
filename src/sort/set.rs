@@ -83,13 +83,13 @@ impl Sort for SetSort {
         self.element.is_eq_sort()
     }
 
-    fn inner_values(&self, value: &Value) -> Vec<(&ArcSort, Value)> {
+    fn inner_values(&self, value: &Value) -> Vec<(ArcSort, Value)> {
         // TODO: Potential duplication of code
         let sets = self.sets.lock().unwrap();
         let set = sets.get_index(value.bits as usize).unwrap();
         let mut result = Vec::new();
         for e in set.iter() {
-            result.push((&self.element, *e));
+            result.push((self.element.clone(), *e));
         }
         result
     }

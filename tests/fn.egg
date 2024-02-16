@@ -4,6 +4,7 @@
   (Add Math Math)
   (Mul Math Math))
 
+(rewrite (Mul (Num x) (Num y)) (Num (* x y)))
 
 (datatype MathList
   (Nil)
@@ -11,27 +12,28 @@
 
 (sort MathFn (Fn (Math) Math))
 
+
+(function square (Math) Math)
+(rewrite (square x) (Mul x x))
+
+(let square-fn (fn "square" ))
+
+;; test that we can call a function
+(let squared-3 (call square-fn (Num 3)))
+(check (= squared-3 (square (Num 3))))
+
+;; test that we can apply a function to a list
+
 (function list-map-math (MathList MathFn) MathList)
 (rewrite (list-map-math (Nil) fn) (Nil))
 (rewrite (list-map-math (Cons x xs) fn) (Cons (call fn x) (list-map-math xs fn)))
 
-
-(function square (Math) Math)
-(let square-fn (fn "square" ))
-(let squared-3 (call square-fn (Num 3)))
-(check (= squared-3 (square (Num 3))))
-
-(rewrite (Mul (Num x) (Num y)) (Num (* x y)))
-(rewrite (square x) (Mul x x))
-
 (let x (Cons (Num 1) (Cons (Num 2) (Cons (Num 3) (Nil)))))
 (let squared-x (list-map-math x square-fn))
 (run 100)
-
-(extract squared-x 10)
 (check (= squared-x (Cons (Num 1) (Cons (Num 4) (Cons (Num 9) (Nil))))))
 
-;; Show that we can use partial application to have a rewrite rule that builds a function
+;; Test that we can partially apply a function in a rewrite rule
 
 (function list-multiply-by (MathList Math) MathList)
 (rewrite (list-multiply-by l i) (list-map-math l (fn "Mul" i)))
@@ -39,3 +41,14 @@
 (let doubled-x (list-multiply-by x (Num 2)))
 (run 100)
 (check (= doubled-x (Cons (Num 2) (Cons (Num 4) (Cons (Num 6) (Nil))))))
+
+;; Test we can define a higher order compose function
+
+(function composed-math (MathFn MathFn Math) Math)
+(rewrite (composed-math f g v) (call f (call g v)))
+
+(let square-of-double (fn "composed-math" square-fn (fn "Mul" (Num 2))))
+
+(let squared-doubled-x (list-map-math x square-of-double))
+(run 100)
+(check (= squared-doubled-x (Cons (Num 4) (Cons (Num 16) (Cons (Num 36) (Nil))))))
