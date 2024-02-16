@@ -3,7 +3,7 @@
 //! To declare the sort, you must specify the exact number of arguments and the sort of each, followed by the output sort:
 //! `(sort IntToString (Fn (i64) String))`
 //!
-//! To create a function value, use the `(function "name" [<partial args>])` primitive and to apply it use the `(call function arg1 arg2 ...)` primitive.
+//! To create a function value, use the `(function "name" [<partial args>])` primitive and to apply it use the `(app function arg1 arg2 ...)` primitive.
 //! The number of args must match the number of arguments in the function sort.
 //!
 //!
@@ -55,7 +55,7 @@ pub struct FunctionSort {
 
 impl FunctionSort {
     pub fn presort_names() -> Vec<Symbol> {
-        vec!["fn".into(), "call".into()]
+        vec!["fn".into(), "app".into()]
     }
     pub fn make_sort(
         typeinfo: &mut TypeInfo,
@@ -125,14 +125,6 @@ impl Sort for FunctionSort {
         let functions = self.functions.lock().unwrap();
         let input_values = functions.get_index(value.bits as usize).unwrap();
         input_values.1.clone()
-        // let mut result: Vec<(&ArcSort, Value)> = Vec::new();
-        // for (k, v) in &input_values.1 {
-        //     // result.push((&self.key, *k));
-        //     // result.push((&self.value, *v));
-        //     result.push((self.sorts.get(&v.tag).unwrap(), *v));
-        // }
-        // result
-        // input_values.1.iter().map(|(s, v)| (s, *v)).collect()
     }
 
     fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
@@ -153,8 +145,8 @@ impl Sort for FunctionSort {
             function: self.clone(),
             string: typeinfo.get_sort_nofail(),
         });
-        typeinfo.add_primitive(FunctionCall {
-            name: "call".into(),
+        typeinfo.add_primitive(Apply {
+            name: "app".into(),
             function: self.clone(),
         });
     }
@@ -273,13 +265,13 @@ impl PrimitiveLike for Ctor {
     }
 }
 
-// (call <function> [<arg1>, <arg2>, ...])
-struct FunctionCall {
+// (app <function> [<arg1>, <arg2>, ...])
+struct Apply {
     name: Symbol,
     function: Arc<FunctionSort>,
 }
 
-impl PrimitiveLike for FunctionCall {
+impl PrimitiveLike for Apply {
     fn name(&self) -> Symbol {
         self.name
     }
@@ -292,7 +284,7 @@ impl PrimitiveLike for FunctionCall {
     }
 
     fn apply(&self, values: &[Value], egraph: Option<&mut EGraph>) -> Option<Value> {
-        let egraph = egraph.expect("Cannot call function in fact only in actions");
+        let egraph = egraph.expect("Cannot apply function in fact only in actions");
         let ValueFunction(name, args) = ValueFunction::load(&self.function, &values[0]);
         let types: Vec<_> = args
             .iter()

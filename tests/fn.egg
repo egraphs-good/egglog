@@ -19,14 +19,14 @@
 (let square-fn (fn "square" ))
 
 ;; test that we can call a function
-(let squared-3 (call square-fn (Num 3)))
+(let squared-3 (app square-fn (Num 3)))
 (check (= squared-3 (square (Num 3))))
 
 ;; test that we can apply a function to a list
 
 (function list-map-math (MathList MathFn) MathList)
 (rewrite (list-map-math (Nil) fn) (Nil))
-(rewrite (list-map-math (Cons x xs) fn) (Cons (call fn x) (list-map-math xs fn)))
+(rewrite (list-map-math (Cons x xs) fn) (Cons (app fn x) (list-map-math xs fn)))
 
 (let x (Cons (Num 1) (Cons (Num 2) (Cons (Num 3) (Nil)))))
 (let squared-x (list-map-math x square-fn))
@@ -45,7 +45,7 @@
 ;; Test we can define a higher order compose function
 
 (function composed-math (MathFn MathFn Math) Math)
-(rewrite (composed-math f g v) (call f (call g v)))
+(rewrite (composed-math f g v) (app f (app g v)))
 
 (let square-of-double (fn "composed-math" square-fn (fn "Mul" (Num 2))))
 
