@@ -1523,12 +1523,16 @@ impl EGraph {
     }
 
     /// Serializes the egraph for export to graphviz.
+    ///
+    /// This will limit the total number of nodes so that visualization does not blow up.
     pub fn serialize_for_graphviz(
         &self,
         split_primitive_outputs: bool,
     ) -> egraph_serialize::EGraph {
         let config = SerializeConfig {
             split_primitive_outputs,
+            max_functions: Some(40),
+            max_calls_per_function: Some(40),
             ..Default::default()
         };
         let mut serialized = self.serialize(config);

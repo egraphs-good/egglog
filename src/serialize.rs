@@ -21,12 +21,12 @@ pub struct SerializeConfig {
     pub root_eclasses: Vec<Value>,
 }
 
-/// Default is used for visualizations and limits number of functions and calls
+/// Default is used for exporting JSON and will output all nodes.
 impl Default for SerializeConfig {
     fn default() -> Self {
         SerializeConfig {
-            max_functions: Some(40),
-            max_calls_per_function: Some(40),
+            max_functions: None,
+            max_calls_per_function: None,
             include_temporary_functions: false,
             split_primitive_outputs: false,
             root_eclasses: vec![],
