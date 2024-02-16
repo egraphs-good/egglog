@@ -102,13 +102,12 @@ impl Sort for FunctionSort {
 
     fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
         let (name, inputs) = self.get_value(value);
-        let (new_outputs, changed) = inputs.into_iter().zip(&self.inputs).fold(
-            (vec![], false),
-            |(mut outputs, changed), (mut v, s)| {
-                outputs.push(v);
-                (outputs, changed | s.canonicalize(&mut v, unionfind))
-            },
-        );
+        let mut changed = false;
+        let mut new_outputs = vec![];
+        for (mut v, s) in inputs.into_iter().zip(&self.inputs) {
+            changed |= s.canonicalize(&mut v, unionfind);
+            new_outputs.push(v);
+        }
         *value = (name, new_outputs).store(self).unwrap();
         changed
     }
@@ -250,8 +249,8 @@ impl PrimitiveLike for FunctionCall {
     }
 
     fn apply(&self, values: &[Value], egraph: Option<&mut EGraph>) -> Option<Value> {
-        let (name, mut args) = ValueFunction::load(&self.function, &values[0]);
         let egraph = egraph.expect("Cannot call function in fact only in actions");
+        let (name, mut args) = ValueFunction::load(&self.function, &values[0]);
         let types: Vec<_> = args
             .iter()
             // get the sorts of partially applied args
@@ -260,7 +259,6 @@ impl PrimitiveLike for FunctionCall {
             .chain(self.function.inputs.clone())
             .chain(once(self.function.output.clone()))
             .collect();
-
         args.extend_from_slice(&values[1..]);
 
         Some(call_fn(egraph, &name, types, args))
@@ -301,14 +299,10 @@ fn call_fn(egraph: &mut EGraph, name: &Symbol, types: Vec<ArcSort>, args: Vec<Va
     let target = mapped_expr.get_corresponding_var_or_lit(egraph.type_info());
     let program = egraph.compile_expr(&binding, &actions, &target).unwrap();
     // Similar to how the `MergeFn::Expr` case is handled in `Egraph::perform_set`
+    // egraph.rebuild().unwrap();
     let mut stack = vec![];
     egraph
         .run_actions(&mut stack, &args, &program, true)
         .unwrap();
-    let res = stack.pop().unwrap();
-    // increase timestamp like in EGraph::run_rules or else rebuilding will fail
-    // TODO: Debug rebuild... ;(
-    // egraph.timestamp += 1;
-    egraph.rebuild().unwrap();
-    res
+    stack.pop().unwrap()
 }
