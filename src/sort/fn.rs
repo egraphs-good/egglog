@@ -141,7 +141,7 @@ impl Sort for FunctionSort {
     ) -> Option<(Cost, Expr)> {
         let (name, inputs) = ValueFunction::load(self, &value);
         let (cost, args) = inputs.into_iter().zip(&self.inputs).try_fold(
-            (0usize, vec![Expr::Lit((), Literal::String(name))]),
+            (1usize, vec![Expr::Lit((), Literal::String(name))]),
             |(cost, mut args), (value, sort)| {
                 let (new_cost, term) = extractor.find_best(value, termdag, sort)?;
                 args.push(termdag.term_to_expr(&term));
@@ -225,7 +225,7 @@ impl PrimitiveLike for Ctor {
         })
     }
 
-    fn apply(&self, values: &[Value], _egraph: &mut EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let name = Symbol::load(&self.string, &values[0]);
         (name, values[1..].to_vec()).store(&self.function)
     }
@@ -249,9 +249,9 @@ impl PrimitiveLike for FunctionCall {
         SimpleTypeConstraint::new(self.name(), sorts).into_box()
     }
 
-    fn apply(&self, values: &[Value], egraph: &mut EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], egraph: Option<&mut EGraph>) -> Option<Value> {
         let (name, mut args) = ValueFunction::load(&self.function, &values[0]);
-
+        let egraph = egraph.expect("Cannot call function in fact only in actions");
         let types: Vec<_> = args
             .iter()
             // get the sorts of partially applied args
@@ -302,9 +302,13 @@ fn call_fn(egraph: &mut EGraph, name: &Symbol, types: Vec<ArcSort>, args: Vec<Va
     let program = egraph.compile_expr(&binding, &actions, &target).unwrap();
     // Similar to how the `MergeFn::Expr` case is handled in `Egraph::perform_set`
     let mut stack = vec![];
-    // Run action on cloned EGraph to avoid modifying the original
     egraph
         .run_actions(&mut stack, &args, &program, true)
         .unwrap();
-    stack.pop().unwrap()
+    let res = stack.pop().unwrap();
+    // increase timestamp like in EGraph::run_rules or else rebuilding will fail
+    // TODO: Debug rebuild... ;(
+    // egraph.timestamp += 1;
+    egraph.rebuild().unwrap();
+    res
 }

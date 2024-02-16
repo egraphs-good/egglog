@@ -229,7 +229,7 @@ impl PrimitiveLike for SetOf {
             .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: &mut EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let set = ValueSet::from_iter(values.iter().copied());
         Some(set.store(&self.set).unwrap())
     }
@@ -249,7 +249,7 @@ impl PrimitiveLike for Ctor {
         SimpleTypeConstraint::new(self.name(), vec![self.set.clone()]).into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: &mut EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         assert!(values.is_empty());
         ValueSet::default().store(&self.set)
     }
@@ -269,7 +269,8 @@ impl PrimitiveLike for SetRebuild {
         SimpleTypeConstraint::new(self.name(), vec![self.set.clone(), self.set.clone()]).into_box()
     }
 
-    fn apply(&self, values: &[Value], egraph: &mut EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], egraph: Option<&mut EGraph>) -> Option<Value> {
+        let egraph = egraph.unwrap();
         let set = ValueSet::load(&self.set, &values[0]);
         let new_set: ValueSet = set.iter().map(|e| egraph.find(*e)).collect();
         // drop set to make sure we lose lock
@@ -296,7 +297,7 @@ impl PrimitiveLike for Insert {
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: &mut EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let mut set = ValueSet::load(&self.set, &values[0]);
         set.insert(values[1]);
         set.store(&self.set)
@@ -322,7 +323,7 @@ impl PrimitiveLike for NotContains {
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: &mut EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let set = ValueSet::load(&self.set, &values[0]);
         if set.contains(&values[1]) {
             None
@@ -351,7 +352,7 @@ impl PrimitiveLike for Contains {
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: &mut EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let set = ValueSet::load(&self.set, &values[0]);
         if set.contains(&values[1]) {
             Some(Value::unit())
@@ -379,7 +380,7 @@ impl PrimitiveLike for Union {
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: &mut EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let mut set1 = ValueSet::load(&self.set, &values[0]);
         let set2 = ValueSet::load(&self.set, &values[1]);
         set1.extend(set2.iter());
@@ -405,7 +406,7 @@ impl PrimitiveLike for Intersect {
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: &mut EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let mut set1 = ValueSet::load(&self.set, &values[0]);
         let set2 = ValueSet::load(&self.set, &values[1]);
         set1.retain(|k| set2.contains(k));
@@ -429,7 +430,7 @@ impl PrimitiveLike for Length {
         SimpleTypeConstraint::new(self.name(), vec![self.set.clone(), self.i64.clone()]).into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: &mut EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let set = ValueSet::load(&self.set, &values[0]);
         Some(Value::from(set.len() as i64))
     }
@@ -453,7 +454,7 @@ impl PrimitiveLike for Get {
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: &mut EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let set = ValueSet::load(&self.set, &values[0]);
         let index = i64::load(&self.i64, &values[1]);
         set.iter().nth(index as usize).copied()
@@ -478,7 +479,7 @@ impl PrimitiveLike for Remove {
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: &mut EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let mut set = ValueSet::load(&self.set, &values[0]);
         set.remove(&values[1]);
         set.store(&self.set)
@@ -503,7 +504,7 @@ impl PrimitiveLike for Diff {
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: &mut EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let mut set1 = ValueSet::load(&self.set, &values[0]);
         let set2 = ValueSet::load(&self.set, &values[1]);
         set1.retain(|k| !set2.contains(k));

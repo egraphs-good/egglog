@@ -72,7 +72,7 @@ pub type Subst = IndexMap<Symbol, Value>;
 pub trait PrimitiveLike {
     fn name(&self) -> Symbol;
     fn get_type_constraints(&self) -> Box<dyn TypeConstraint>;
-    fn apply(&self, values: &[Value], egraph: &mut EGraph) -> Option<Value>;
+    fn apply(&self, values: &[Value], egraph: Option<&mut EGraph>) -> Option<Value>;
 }
 
 /// Running a schedule produces a report of the results.
@@ -345,7 +345,7 @@ impl PrimitiveLike for SimplePrimitive {
             .collect();
         SimpleTypeConstraint::new(self.name(), sorts).into_box()
     }
-    fn apply(&self, values: &[Value], _egraph: &mut EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         (self.f)(values)
     }
 }
@@ -1582,7 +1582,11 @@ mod tests {
             .into_box()
         }
 
-        fn apply(&self, values: &[crate::Value], _egraph: &mut EGraph) -> Option<crate::Value> {
+        fn apply(
+            &self,
+            values: &[crate::Value],
+            _egraph: Option<&mut EGraph>,
+        ) -> Option<crate::Value> {
             let mut sum = 0;
             let vec1 = Vec::<Value>::load(&self.vec, &values[0]);
             let vec2 = Vec::<Value>::load(&self.vec, &values[1]);

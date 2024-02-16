@@ -4,28 +4,38 @@
   (Add Math Math)
   (Mul Math Math))
 
-(datatype List
+
+(datatype MathList
   (Nil)
-  (Cons Math List))
+  (Cons Math MathList))
 
 (sort MathFn (Fn (Math) Math))
 
-(function list-map-math (List MathFn) List)
+(function list-map-math (MathList MathFn) MathList)
 (rewrite (list-map-math (Nil) fn) (Nil))
 (rewrite (list-map-math (Cons x xs) fn) (Cons (call fn x) (list-map-math xs fn)))
 
 
 (function square (Math) Math)
 (let square-fn (fn "square" ))
-(call square-fn (Num 3))
-(check (= (call square-fn (Num 3)) (square (Num 3))))
+(let squared-3 (call square-fn (Num 3)))
+(check (= squared-3 (square (Num 3))))
 
+(rewrite (Mul (Num x) (Num y)) (Num (* x y)))
 (rewrite (square x) (Mul x x))
-
 
 (let x (Cons (Num 1) (Cons (Num 2) (Cons (Num 3) (Nil)))))
 (let squared-x (list-map-math x square-fn))
 (run 100)
 
+(extract squared-x 10)
 (check (= squared-x (Cons (Num 1) (Cons (Num 4) (Cons (Num 9) (Nil))))))
 
+;; Show that we can use partial application to have a rewrite rule that builds a function
+
+(function list-multiply-by (MathList Math) MathList)
+(rewrite (list-multiply-by l i) (list-map-math l (fn "Mul" i)))
+
+(let doubled-x (list-multiply-by x (Num 2)))
+(run 100)
+(check (= doubled-x (Cons (Num 2) (Cons (Num 4) (Cons (Num 6) (Nil))))))

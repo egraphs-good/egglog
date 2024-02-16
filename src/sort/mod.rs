@@ -177,7 +177,7 @@ impl PrimitiveLike for ValueEq {
             .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: &mut EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         assert_eq!(values.len(), 2);
         if values[0] == values[1] {
             Some(Value::unit())
