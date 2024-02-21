@@ -82,6 +82,7 @@ fn remove_globals_cmd(type_info: &TypeInfo, cmd: ResolvedNCommand) -> Vec<Resolv
                     merge_action: GenericActions(vec![]),
                     cost: None,
                     unextractable: true,
+                    is_global: true,
                 };
                 vec![
                     GenericNCommand::Function(func_decl),

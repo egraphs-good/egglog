@@ -809,6 +809,9 @@ where
     pub merge_action: GenericActions<Head, Leaf, Ann>,
     pub cost: Option<usize>,
     pub unextractable: bool,
+    /// Globals are desugared to functions, with this flag set to true.
+    /// This is used by visualization to handle globals differently.
+    pub is_global: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -863,6 +866,7 @@ impl FunctionDecl {
             default: Some(Expr::Lit((), Literal::Unit)),
             cost: None,
             unextractable: false,
+            is_global: false,
         }
     }
 }
@@ -885,6 +889,7 @@ where
             merge_action: self.merge_action.visit_exprs(f),
             cost: self.cost,
             unextractable: self.unextractable,
+            is_global: self.is_global,
         }
     }
 }
