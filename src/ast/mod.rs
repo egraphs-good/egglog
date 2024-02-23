@@ -218,6 +218,8 @@ impl<Head: Display, Leaf: Display, Ann> Display for GenericSchedule<Head, Leaf, 
 
 pub type Command = GenericCommand<Symbol, Symbol>;
 
+pub type Subsume = bool;
+
 /// A [`Command`] is the top-level construct in egglog.
 /// It includes defining rules, declaring functions,
 /// adding to tables, and running rules (via a [`Schedule`]).
@@ -430,7 +432,20 @@ pub enum GenericCommand<Head, Leaf> {
     ///          :when ((= a (Num 0)))
     /// ```
     ///
-    Rewrite(Symbol, GenericRewrite<Head, Leaf, ()>),
+    /// Add the `:subsume` flag to cause the left hand side to be subsumed after matching, which means it can
+    /// no longer be matched in a rule, but can still be checked against (See [`Change`] for more details.)
+    ///
+    /// ```text
+    /// (rewrite (Mul a 2) (bitshift-left a 1) :subsume)
+    /// ```
+    ///
+    /// Desugars to:
+    /// ```text
+    /// (rule ((= lhs (Mul a 2)))
+    ///       ((union lhs (bitshift-left a 1))
+    ///        (subsume (Mul a 2))))
+    /// ```
+    Rewrite(Symbol, GenericRewrite<Head, Leaf, ()>, Subsume),
     /// Similar to [`Command::Rewrite`], but
     /// generates two rules, one for each direction.
     ///
@@ -568,8 +583,10 @@ impl<Head: Display + ToSexp, Leaf: Display + ToSexp> ToSexp for GenericCommand<H
     fn to_sexp(&self) -> Sexp {
         match self {
             GenericCommand::SetOption { name, value } => list!("set-option", name, value),
-            GenericCommand::Rewrite(name, rewrite) => rewrite.to_sexp(*name, false),
-            GenericCommand::BiRewrite(name, rewrite) => rewrite.to_sexp(*name, true),
+            GenericCommand::Rewrite(name, rewrite, subsume) => {
+                rewrite.to_sexp(*name, false, *subsume)
+            }
+            GenericCommand::BiRewrite(name, rewrite) => rewrite.to_sexp(*name, true, false),
             GenericCommand::Datatype { name, variants } => list!("datatype", name, ++ variants),
             GenericCommand::Declare { name, sort } => list!("declare", name, sort),
             GenericCommand::Action(a) => a.to_sexp(),
@@ -942,6 +959,17 @@ where
     }
 }
 
+/// Change a function entry.
+#[derive(Clone, Debug, Copy, PartialEq, Eq, Hash)]
+pub enum Change {
+    /// `delete` this entry from a function.
+    /// Be wary! Only delete entries that are guaranteed to be not useful.
+    Delete,
+    /// `subsume` this entry so that it cannot be queried or extracted, but still can be checked.
+    /// Note that this is currently forbidden for functions with custom merges.
+    Subsume,
+}
+
 pub type Action = GenericAction<Symbol, Symbol, ()>;
 pub(crate) type MappedAction = GenericAction<(Symbol, Symbol), Symbol, ()>;
 pub(crate) type ResolvedAction = GenericAction<ResolvedCall, ResolvedVar, ()>;
@@ -961,10 +989,8 @@ pub enum GenericAction<Head, Leaf, Ann> {
         Vec<GenericExpr<Head, Leaf, Ann>>,
         GenericExpr<Head, Leaf, Ann>,
     ),
-    /// `delete` an entry from a function.
-    /// Be wary! Only delete entries that are subsumed in some way or
-    /// guaranteed to be not useful.
-    Delete(Ann, Head, Vec<GenericExpr<Head, Leaf, Ann>>),
+    /// Delete or subsume (mark as hidden from future rewrites and unextractable) an entry from a function.
+    Change(Ann, Change, Head, Vec<GenericExpr<Head, Leaf, Ann>>),
     /// `union` two datatypes, making them equal
     /// in the implicit, global equality relation
     /// of egglog.
@@ -1034,7 +1060,15 @@ impl<Head: Display + ToSexp, Leaf: Display + ToSexp, Ann> ToSexp
             GenericAction::Let(_ann, lhs, rhs) => list!("let", lhs, rhs),
             GenericAction::Set(_ann, lhs, args, rhs) => list!("set", list!(lhs, ++ args), rhs),
             GenericAction::Union(_ann, lhs, rhs) => list!("union", lhs, rhs),
-            GenericAction::Delete(_ann, lhs, args) => list!("delete", list!(lhs, ++ args)),
+            GenericAction::Change(_ann, change, lhs, args) => {
+                list!(
+                    match change {
+                        Change::Delete => "delete",
+                        Change::Subsume => "subsume",
+                    },
+                    list!(lhs, ++ args)
+                )
+            }
             GenericAction::Extract(_ann, expr, variants) => list!("extract", expr, variants),
             GenericAction::Panic(_ann, msg) => list!("panic", format!("\"{}\"", msg.clone())),
             GenericAction::Expr(_ann, e) => e.to_sexp(),
@@ -1065,9 +1099,12 @@ where
                     right,
                 )
             }
-            GenericAction::Delete(ann, lhs, args) => {
-                GenericAction::Delete(ann.clone(), lhs.clone(), args.iter().map(f).collect())
-            }
+            GenericAction::Change(ann, change, lhs, args) => GenericAction::Change(
+                ann.clone(),
+                *change,
+                lhs.clone(),
+                args.iter().map(f).collect(),
+            ),
             GenericAction::Union(ann, lhs, rhs) => {
                 GenericAction::Union(ann.clone(), f(lhs), f(rhs))
             }
@@ -1103,12 +1140,12 @@ where
                 let rhs = rhs.subst_leaf(&mut fvar_expr!());
                 GenericAction::Set(ann.clone(), lhs.clone(), args, rhs)
             }
-            GenericAction::Delete(ann, lhs, args) => {
+            GenericAction::Change(ann, change, lhs, args) => {
                 let args = args
                     .iter()
                     .map(|e| e.subst_leaf(&mut fvar_expr!()))
                     .collect();
-                GenericAction::Delete(ann.clone(), lhs.clone(), args)
+                GenericAction::Change(ann.clone(), *change, lhs.clone(), args)
             }
             GenericAction::Union(ann, lhs, rhs) => {
                 let lhs = lhs.subst_leaf(&mut fvar_expr!());
@@ -1227,7 +1264,7 @@ pub struct GenericRewrite<Head, Leaf, Ann> {
 
 impl<Head: Display, Leaf: Display, Ann> GenericRewrite<Head, Leaf, Ann> {
     /// Converts the rewrite into an s-expression.
-    pub fn to_sexp(&self, ruleset: Symbol, is_bidirectional: bool) -> Sexp {
+    pub fn to_sexp(&self, ruleset: Symbol, is_bidirectional: bool, subsume: bool) -> Sexp {
         let mut res = vec![
             Sexp::Symbol(if is_bidirectional {
                 "birewrite".into()
@@ -1237,6 +1274,9 @@ impl<Head: Display, Leaf: Display, Ann> GenericRewrite<Head, Leaf, Ann> {
             self.lhs.to_sexp(),
             self.rhs.to_sexp(),
         ];
+        if subsume {
+            res.push(Sexp::Symbol(":subsume".into()));
+        }
 
         if !self.conditions.is_empty() {
             res.push(Sexp::Symbol(":when".into()));
@@ -1255,7 +1295,7 @@ impl<Head: Display, Leaf: Display, Ann> GenericRewrite<Head, Leaf, Ann> {
 
 impl<Head: Display, Leaf: Display, Ann> Display for GenericRewrite<Head, Leaf, Ann> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.to_sexp("".into(), false))
+        write!(f, "{}", self.to_sexp("".into(), false, false))
     }
 }
 

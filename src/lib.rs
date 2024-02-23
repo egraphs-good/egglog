@@ -59,6 +59,7 @@ pub type ArcSort = Arc<dyn Sort>;
 
 pub use value::*;
 
+pub use function::Function;
 use function::*;
 use gj::*;
 use unionfind::*;
@@ -400,7 +401,7 @@ pub struct EGraph {
     egraphs: Vec<Self>,
     unionfind: UnionFind,
     pub(crate) desugar: Desugar,
-    functions: HashMap<Symbol, Function>,
+    pub functions: HashMap<Symbol, Function>,
     rulesets: HashMap<Symbol, HashMap<Symbol, Rule>>,
     ruleset_iteration: HashMap<Symbol, usize>,
     proofs_enabled: bool,
@@ -540,7 +541,7 @@ impl EGraph {
         #[cfg(debug_assertions)]
         for (name, function) in self.functions.iter() {
             function.nodes.assert_sorted();
-            for (i, inputs, output) in function.nodes.iter_range(0..function.nodes.len()) {
+            for (i, inputs, output) in function.nodes.iter_range(0..function.nodes.len(), true) {
                 for input in inputs {
                     assert_eq!(
                         input,
@@ -730,7 +731,7 @@ impl EGraph {
         let schema = f.schema.clone();
         let nodes = f
             .nodes
-            .iter()
+            .iter(true)
             .take(n)
             .map(|(k, v)| (ValueVec::from(k), v.clone()))
             .collect::<Vec<_>>();
@@ -952,7 +953,7 @@ impl EGraph {
                 let mut fuel = safe_shl(match_limit, rule.times_banned);
                 let rule_search_start = Instant::now();
                 let mut did_match = false;
-                self.run_query(&rule.query, rule.todo_timestamp, |values| {
+                self.run_query(&rule.query, rule.todo_timestamp, false, |values| {
                     did_match = true;
                     assert_eq!(values.len(), rule.query.vars.len());
                     all_matches.extend_from_slice(values);
@@ -1205,7 +1206,7 @@ impl EGraph {
         let query = self.compile_gj_query(query, ordering);
 
         let mut matched = false;
-        self.run_query(&query, 0, |values| {
+        self.run_query(&query, 0, true, |values| {
             assert_eq!(values.len(), query.vars.len());
             matched = true;
             Err(())
@@ -1580,6 +1581,8 @@ pub enum Error {
     ExpectFail,
     #[error("IO error: {0}: {1}")]
     IoError(PathBuf, std::io::Error),
+    #[error("Cannot subsume function with merge: {0}")]
+    SubsumeMergeError(Symbol),
 }
 
 fn safe_shl(a: usize, b: usize) -> usize {

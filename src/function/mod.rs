@@ -11,8 +11,8 @@ pub(crate) mod table;
 pub type ValueVec = SmallVec<[Value; 3]>;
 
 #[derive(Clone)]
-pub(crate) struct Function {
-    pub decl: ResolvedFunctionDecl,
+pub struct Function {
+    pub(crate) decl: ResolvedFunctionDecl,
     pub schema: ResolvedSchema,
     pub merge: MergeAction,
     pub(crate) nodes: table::Table,
@@ -39,10 +39,12 @@ pub enum MergeFn {
     Expr(Rc<Program>),
 }
 
+/// All information we know determined by the input.
 #[derive(Debug, Clone)]
 pub struct TupleOutput {
     pub value: Value,
     pub timestamp: u32,
+    pub subsumed: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -61,12 +63,27 @@ impl ResolvedSchema {
     }
 }
 
+impl Debug for Function {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Function")
+            .field("decl", &self.decl)
+            .field("schema", &self.schema)
+            .field("nodes", &self.nodes)
+            .field("indexes", &self.indexes)
+            .field("rebuild_indexes", &self.rebuild_indexes)
+            .field("index_updated_through", &self.index_updated_through)
+            .field("updates", &self.updates)
+            .field("scratch", &self.scratch)
+            .finish()
+    }
+}
+
 /// A non-Union merge discovered during rebuilding that has to be applied before
 /// resuming execution.
 pub(crate) type DeferredMerge = (ValueVec, Value, Value);
 
 impl Function {
-    pub fn new(egraph: &EGraph, decl: &ResolvedFunctionDecl) -> Result<Self, Error> {
+    pub(crate) fn new(egraph: &EGraph, decl: &ResolvedFunctionDecl) -> Result<Self, Error> {
         let mut input = Vec::with_capacity(decl.schema.input.len());
         for s in &decl.schema.input {
             input.push(match egraph.type_info().sorts.get(s) {
@@ -206,6 +223,11 @@ impl Function {
         res
     }
 
+    /// Mark the given inputs as subsumed.
+    pub fn subsume(&mut self, inputs: &[Value]) {
+        self.nodes.get_mut(inputs).unwrap().subsumed = true;
+    }
+
     /// Return a column index that contains (a superset of) the offsets for the
     /// given column. This method can return nothing if the indexes available
     /// contain too many irrelevant offsets.
@@ -246,11 +268,11 @@ impl Function {
         {
             let as_mut = Rc::make_mut(index);
             if col == self.schema.input.len() {
-                for (slot, _, out) in self.nodes.iter_range(offsets.clone()) {
+                for (slot, _, out) in self.nodes.iter_range(offsets.clone(), true) {
                     as_mut.add(out.value, slot)
                 }
             } else {
-                for (slot, inp, _) in self.nodes.iter_range(offsets.clone()) {
+                for (slot, inp, _) in self.nodes.iter_range(offsets.clone(), true) {
                     as_mut.add(inp[col], slot)
                 }
             }
@@ -258,14 +280,14 @@ impl Function {
             // rebuild_index
             if let Some(rebuild_index) = rebuild_index {
                 if col == self.schema.input.len() {
-                    for (slot, _, out) in self.nodes.iter_range(offsets.clone()) {
+                    for (slot, _, out) in self.nodes.iter_range(offsets.clone(), true) {
                         self.schema.output.foreach_tracked_values(
                             &out.value,
                             Box::new(|value| rebuild_index.add(value, slot)),
                         )
                     }
                 } else {
-                    for (slot, inp, _) in self.nodes.iter_range(offsets.clone()) {
+                    for (slot, inp, _) in self.nodes.iter_range(offsets.clone(), true) {
                         self.schema.input[col].foreach_tracked_values(
                             &inp[col],
                             Box::new(|value| rebuild_index.add(value, slot)),
@@ -305,8 +327,10 @@ impl Function {
     pub(crate) fn iter_timestamp_range(
         &self,
         timestamps: &Range<u32>,
+        include_subsumed: bool,
     ) -> impl Iterator<Item = (usize, &[Value], &TupleOutput)> {
-        self.nodes.iter_timestamp_range(timestamps)
+        self.nodes
+            .iter_timestamp_range(timestamps, include_subsumed)
     }
 
     pub fn rebuild(
@@ -385,7 +409,7 @@ impl Function {
     ) -> Result<(), Error> {
         let mut result: Result<(), Error> = Ok(());
         let mut modified = false;
-        let (args, out) = if let Some(x) = self.nodes.get_index(i) {
+        let (args, out) = if let Some(x) = self.nodes.get_index(i, true) {
             x
         } else {
             // Entry is stale
@@ -406,37 +430,38 @@ impl Function {
             return result;
         }
         let out_ty = &self.schema.output;
-        self.nodes.insert_and_merge(scratch, timestamp, |prev| {
-            if let Some(mut prev) = prev {
-                out_ty.canonicalize(&mut prev, uf);
-                let mut appended = false;
-                if self.merge.on_merge.is_some() && prev != out_val {
-                    deferred_merges.push((scratch.clone(), prev, out_val));
-                    appended = true;
-                }
-                match &self.merge.merge_vals {
-                    MergeFn::Union => {
-                        debug_assert!(self.schema.output.is_eq_sort());
-                        uf.union_values(prev, out_val, self.schema.output.name())
+        self.nodes
+            .insert_and_merge(scratch, timestamp, out.subsumed, |prev| {
+                if let Some(mut prev) = prev {
+                    out_ty.canonicalize(&mut prev, uf);
+                    let mut appended = false;
+                    if self.merge.on_merge.is_some() && prev != out_val {
+                        deferred_merges.push((scratch.clone(), prev, out_val));
+                        appended = true;
                     }
-                    MergeFn::AssertEq => {
-                        if prev != out_val {
-                            result = Err(Error::MergeError(self.decl.name, prev, out_val));
+                    match &self.merge.merge_vals {
+                        MergeFn::Union => {
+                            debug_assert!(self.schema.output.is_eq_sort());
+                            uf.union_values(prev, out_val, self.schema.output.name())
                         }
-                        prev
-                    }
-                    MergeFn::Expr(_) => {
-                        if !appended && prev != out_val {
-                            deferred_merges.push((scratch.clone(), prev, out_val));
+                        MergeFn::AssertEq => {
+                            if prev != out_val {
+                                result = Err(Error::MergeError(self.decl.name, prev, out_val));
+                            }
+                            prev
                         }
-                        prev
+                        MergeFn::Expr(_) => {
+                            if !appended && prev != out_val {
+                                deferred_merges.push((scratch.clone(), prev, out_val));
+                            }
+                            prev
+                        }
                     }
+                } else {
+                    out_val
                 }
-            } else {
-                out_val
-            }
-        });
-        if let Some((inputs, _)) = self.nodes.get_index(i) {
+            });
+        if let Some((inputs, _)) = self.nodes.get_index(i, true) {
             if inputs != &scratch[..] {
                 scratch.clear();
                 scratch.extend_from_slice(inputs);
