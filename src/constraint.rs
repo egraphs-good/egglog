@@ -339,8 +339,9 @@ impl Assignment<AtomTerm, ArcSort> {
                 Ok(ResolvedAction::Set((), resolved_call, children, rhs))
             }
             // Note mapped_var for delete is a dummy variable that does not mean anything
-            GenericAction::Delete(
+            GenericAction::Change(
                 (),
+                change,
                 CorrespondingVar {
                     head,
                     to: _mapped_var,
@@ -358,7 +359,12 @@ impl Assignment<AtomTerm, ArcSort> {
                 let resolved_call =
                     ResolvedCall::from_resolution_func_types(head, &types, typeinfo)
                         .ok_or_else(|| TypeError::UnboundFunction(*head))?;
-                Ok(ResolvedAction::Delete((), resolved_call, children.clone()))
+                Ok(ResolvedAction::Change(
+                    (),
+                    *change,
+                    resolved_call,
+                    children.clone(),
+                ))
             }
             GenericAction::Union((), lhs, rhs) => Ok(ResolvedAction::Union(
                 (),
@@ -502,7 +508,7 @@ impl CoreAction {
                     .chain(get_atom_application_constraints(head, &args, typeinfo)?)
                     .collect())
             }
-            CoreAction::Delete(head, args) => {
+            CoreAction::Change(_change, head, args) => {
                 let mut args = args.clone();
                 // Add a dummy last output argument
                 let var = symbol_gen.fresh(&Symbol::from(format!("constraint${head}")));

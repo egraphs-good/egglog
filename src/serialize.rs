@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 
 use crate::{
     ast::{Id, ResolvedFunctionDecl},
-    function::{table::hash_values, ValueVec},
+    function::table::hash_values,
     util::HashMap,
     EGraph, Value,
 };
@@ -64,7 +64,7 @@ impl EGraph {
         // First collect a list of all the calls we want to serialize as (function decl, inputs, the output, the node id)
         let all_calls: Vec<(
             &ResolvedFunctionDecl,
-            &ValueVec,
+            &[Value],
             &Value,
             egraph_serialize::NodeId,
         )> = self
@@ -74,16 +74,14 @@ impl EGraph {
             .map(|function| {
                 function
                     .nodes
-                    .vals
-                    .iter()
-                    .filter(|(i, _)| i.live())
+                    .iter(true)
                     .take(config.max_calls_per_function.unwrap_or(usize::MAX))
                     .map(|(input, output)| {
                         (
                             &function.decl,
-                            &input.data,
+                            input,
                             &output.value,
-                            format!("{}-{}", function.decl.name, hash_values(&input.data)).into(),
+                            format!("{}-{}", function.decl.name, hash_values(input)).into(),
                         )
                     })
                     .collect::<Vec<_>>()

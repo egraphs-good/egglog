@@ -333,7 +333,7 @@ pub enum GenericCoreAction<Head, Leaf> {
     LetAtomTerm(Leaf, GenericAtomTerm<Leaf>),
     Extract(GenericAtomTerm<Leaf>, GenericAtomTerm<Leaf>),
     Set(Head, Vec<GenericAtomTerm<Leaf>>, GenericAtomTerm<Leaf>),
-    Delete(Head, Vec<GenericAtomTerm<Leaf>>),
+    Change(Change, Head, Vec<GenericAtomTerm<Leaf>>),
     Union(GenericAtomTerm<Leaf>, GenericAtomTerm<Leaf>),
     Panic(String),
 }
@@ -439,7 +439,7 @@ where
                         mapped_expr,
                     ));
                 }
-                GenericAction::Delete(_ann, head, args) => {
+                GenericAction::Change(_ann, change, head, args) => {
                     let mut mapped_args = vec![];
                     for arg in args {
                         let (actions, mapped_arg) =
@@ -447,7 +447,8 @@ where
                         norm_actions.extend(actions.0);
                         mapped_args.push(mapped_arg);
                     }
-                    norm_actions.push(GenericCoreAction::Delete(
+                    norm_actions.push(GenericCoreAction::Change(
+                        *change,
                         head.clone(),
                         mapped_args
                             .iter()
@@ -455,8 +456,9 @@ where
                             .collect(),
                     ));
                     let v = fresh_gen.fresh(head);
-                    mapped_actions.0.push(GenericAction::Delete(
+                    mapped_actions.0.push(GenericAction::Change(
                         (),
+                        *change,
                         CorrespondingVar::new(head.clone(), v),
                         mapped_args,
                     ));
