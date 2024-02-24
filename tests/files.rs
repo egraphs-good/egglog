@@ -20,7 +20,7 @@ impl Run {
         } else {
             let mut egraph = EGraph::default();
             egraph.run_mode = RunMode::ShowDesugaredEgglog;
-            egraph.set_underscores_for_desugaring(3);
+            egraph.set_reserved_symbol("__".into());
             let desugared_str = egraph.parse_and_run_program(&program).unwrap().join("\n");
 
             self.test_program(
@@ -32,7 +32,7 @@ impl Run {
 
     fn test_program(&self, program: &str, message: &str) {
         let mut egraph = EGraph::default();
-        egraph.set_underscores_for_desugaring(5);
+        egraph.set_reserved_symbol("___".into());
         match egraph.parse_and_run_program(program) {
             Ok(msgs) => {
                 if self.should_fail() {
