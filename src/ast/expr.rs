@@ -192,14 +192,9 @@ impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq, Ann: Clone>
         self,
         f: &mut impl FnMut(Leaf) -> Leaf2,
     ) -> GenericExpr<Head, Leaf2, Ann> {
-        match self {
-            GenericExpr::Var(ann, v) => GenericExpr::Var(ann, f(v)),
-            GenericExpr::Lit(ann, lit) => GenericExpr::Lit(ann, lit),
-            GenericExpr::Call(ann, op, children) => {
-                let children = children.into_iter().map(|c| c.map_leafs(f)).collect();
-                GenericExpr::Call(ann, op, children)
-            }
-        }
+        self.subst(&mut |v| GenericExpr::Var((), f(v.clone())), &mut |x| {
+            x.clone()
+        })
     }
 
     // TODO: Currently, subst_leaf takes a leaf but not an annotation over the leaf,

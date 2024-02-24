@@ -70,7 +70,7 @@ impl EGraph {
         )> = self
             .functions
             .values()
-            .filter(|function| !function.decl.is_global)
+            .filter(|function| !function.decl.ignore_viz)
             .map(|function| {
                 function
                     .nodes

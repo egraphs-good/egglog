@@ -16,7 +16,7 @@ fn desugar_datatype(name: Symbol, variants: Vec<Variant>) -> Vec<NCommand> {
                 default: None,
                 cost: variant.cost,
                 unextractable: false,
-                is_global: false,
+                ignore_viz: false,
             })
         }))
         .collect()
@@ -420,7 +420,7 @@ impl Desugar {
                 merge_action: Actions::default(),
                 cost: None,
                 unextractable: false,
-                is_global: false,
+                ignore_viz: false,
             }),
             NCommand::CoreAction(Action::Let((), name, Expr::Call((), fresh, vec![]))),
         ]
@@ -435,7 +435,7 @@ impl Desugar {
             merge_action: fdecl.merge_action.clone(),
             cost: fdecl.cost,
             unextractable: fdecl.unextractable,
-            is_global: fdecl.is_global,
+            ignore_viz: fdecl.ignore_viz,
         })]
     }
 

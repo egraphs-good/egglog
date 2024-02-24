@@ -54,7 +54,7 @@ Command: Command = {
         <unextractable:(":unextractable")?>
         <merge_action:(":on_merge" <List<Action>>)?>
         <merge:(":merge" <Expr>)?> <default:(":default" <Expr>)?> RParen => {
-        Command::Function(FunctionDecl { name, schema, merge, merge_action: Actions::new(merge_action.unwrap_or_default()), default, cost, unextractable: unextractable.is_some(), is_global: false })
+        Command::Function(FunctionDecl { name, schema, merge, merge_action: Actions::new(merge_action.unwrap_or_default()), default, cost, unextractable: unextractable.is_some(), ignore_viz: false })
     },
     LParen "declare" <name:Ident> <sort:Ident> RParen => Command::Declare{name, sort},
     LParen "relation" <constructor:Ident> <inputs:List<Type>> RParen => Command::Relation{constructor, inputs},

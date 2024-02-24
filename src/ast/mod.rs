@@ -659,7 +659,7 @@ where
     Include(String),
 }
 
-impl<Head: Display, Leaf: Display> ToSexp for GenericCommand<Head, Leaf>
+impl<Head, Leaf> ToSexp for GenericCommand<Head, Leaf>
 where
     Head: Clone + Display + ToSexp,
     Leaf: Clone + PartialEq + Eq + Display + Hash + ToSexp,
@@ -722,10 +722,10 @@ where
     }
 }
 
-impl<Head: Display + ToSexp, Leaf: Display + ToSexp> Display for GenericCommand<Head, Leaf>
+impl<Head, Leaf> Display for GenericCommand<Head, Leaf>
 where
-    Head: Clone + Display,
-    Leaf: Clone + PartialEq + Eq + Display + Hash,
+    Head: Clone + Display + ToSexp,
+    Leaf: Clone + PartialEq + Eq + Display + Hash + ToSexp,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -828,7 +828,7 @@ where
     pub unextractable: bool,
     /// Globals are desugared to functions, with this flag set to true.
     /// This is used by visualization to handle globals differently.
-    pub is_global: bool,
+    pub ignore_viz: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -883,7 +883,7 @@ impl FunctionDecl {
             default: Some(Expr::Lit((), Literal::Unit)),
             cost: None,
             unextractable: false,
-            is_global: false,
+            ignore_viz: false,
         }
     }
 }
@@ -906,7 +906,7 @@ where
             merge_action: self.merge_action.visit_exprs(f),
             cost: self.cost,
             unextractable: self.unextractable,
-            is_global: self.is_global,
+            ignore_viz: self.ignore_viz,
         }
     }
 }

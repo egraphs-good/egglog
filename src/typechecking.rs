@@ -263,7 +263,7 @@ impl TypeInfo {
             merge_action: self.typecheck_actions(&fdecl.merge_action, &bound_vars)?,
             cost: fdecl.cost,
             unextractable: fdecl.unextractable,
-            is_global: fdecl.is_global,
+            ignore_viz: fdecl.ignore_viz,
         })
     }
 
