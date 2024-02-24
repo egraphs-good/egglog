@@ -188,15 +188,6 @@ impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq, Ann: Clone>
         }
     }
 
-    pub fn map_leafs<Leaf2>(
-        self,
-        f: &mut impl FnMut(Leaf) -> Leaf2,
-    ) -> GenericExpr<Head, Leaf2, Ann> {
-        self.subst(&mut |v| GenericExpr::Var((), f(v.clone())), &mut |x| {
-            x.clone()
-        })
-    }
-
     // TODO: Currently, subst_leaf takes a leaf but not an annotation over the leaf,
     // so it has to "make up" annotations for the returned GenericExpr. A better
     // approach is for subst_leaf to also take the annotation, which we should
