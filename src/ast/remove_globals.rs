@@ -34,6 +34,10 @@ pub(crate) fn remove_globals(
         .collect()
 }
 
+/// TODO (yz) it would be better to implement replace_global_var
+/// as a function from ResolvedVar to ResolvedExpr
+/// and use it as an argument to `subst` instead of `visit_expr`,
+/// but we have not implemented `subst` for command.
 fn replace_global_var(expr: ResolvedExpr) -> ResolvedExpr {
     match expr {
         GenericExpr::Var(
