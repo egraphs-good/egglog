@@ -5,6 +5,10 @@ use crate::{
 
 use super::Rule;
 
+impl ResolvedExpr {
+    pub fn to_unresolved(self) -> Expr {}
+}
+
 impl ResolvedAction {
     pub fn to_unresolved(self) -> Action {
         match self {
