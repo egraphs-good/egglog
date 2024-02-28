@@ -92,6 +92,11 @@ fn remove_globals_cmd(type_info: &TypeInfo, cmd: ResolvedNCommand) -> Vec<Resolv
                             name: name.name,
                             input: vec![],
                             output: ty,
+                            // NB: Globals are desugared to non-datatype functions,
+                            // even when the output type is an EqSort.
+                            // This is nice because we don't need to touch the equivalence relation 
+                            // when setting it. 
+                            // The downside is that this is not consistent with `function_to_functype`
                             is_datatype: false,
                             has_default: false,
                         }),

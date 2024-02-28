@@ -64,6 +64,11 @@ pub struct ResolvedVar {
     pub sort: ArcSort,
     /// Is this a reference to a global variable?
     /// After the `remove_globals` pass, this should be `false`.
+    ///
+    /// NB: we distinguish between a global reference and a global binding.
+    /// The current implementation of `Eq` and `Hash` does not take this field
+    /// into consideration.
+    /// Overall, the definition of equality between two ResolvedVars is dicey.
     pub is_global_ref: bool,
 }
 

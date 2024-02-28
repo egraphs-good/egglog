@@ -1266,11 +1266,11 @@ where
     }
 }
 
-impl<Head: Display + ToSexp, Leaf: Display + ToSexp, Ann> ToSexp for GenericAction<Head, Leaf, Ann>
+impl<Head, Leaf, Ann> ToSexp for GenericAction<Head, Leaf, Ann>
 where
     Ann: Clone + Default,
-    Head: Clone + Display,
-    Leaf: Clone + PartialEq + Eq + Display + Hash,
+    Head: Clone + Display + ToSexp,
+    Leaf: Clone + PartialEq + Eq + Display + Hash + ToSexp,
 {
     fn to_sexp(&self) -> Sexp {
         match self {
@@ -1346,6 +1346,7 @@ where
             }
             // TODO should we refactor `Set` so that we can map over Expr::Call(lhs, args)?
             // This seems more natural to oflatt
+            // Currently, visit_exprs does not apply f to the first argument of Set.
             GenericAction::Set(ann, lhs, args, rhs) => {
                 let args = args.into_iter().map(|e| e.visit_exprs(f)).collect();
                 GenericAction::Set(ann.clone(), lhs.clone(), args, rhs.visit_exprs(f))
@@ -1414,11 +1415,11 @@ where
     }
 }
 
-impl<Head: Display + ToSexp, Leaf: Display + ToSexp, Ann> Display for GenericAction<Head, Leaf, Ann>
+impl<Head, Leaf, Ann> Display for GenericAction<Head, Leaf, Ann>
 where
     Ann: Clone + Default,
-    Head: Clone + Display,
-    Leaf: Clone + PartialEq + Eq + Display + Hash,
+    Head: Clone + Display + ToSexp,
+    Leaf: Clone + PartialEq + Eq + Display + Hash + ToSexp,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.to_sexp())
@@ -1460,11 +1461,11 @@ where
     }
 }
 
-impl<Head: Display + ToSexp, Leaf: Display + ToSexp, Ann> GenericRule<Head, Leaf, Ann>
+impl<Head, Leaf, Ann> GenericRule<Head, Leaf, Ann>
 where
     Ann: Clone + Default,
-    Head: Clone + Display,
-    Leaf: Clone + PartialEq + Eq + Display + Hash,
+    Head: Clone + Display + ToSexp,
+    Leaf: Clone + PartialEq + Eq + Display + Hash + ToSexp,
 {
     pub(crate) fn fmt_with_ruleset(
         &self,
@@ -1510,11 +1511,11 @@ where
     }
 }
 
-impl<Head: Display + ToSexp, Leaf: Display + ToSexp, Ann> GenericRule<Head, Leaf, Ann>
+impl<Head, Leaf, Ann> GenericRule<Head, Leaf, Ann>
 where
     Ann: Clone + Default,
-    Head: Clone + Display,
-    Leaf: Clone + PartialEq + Eq + Display + Hash,
+    Head: Clone + Display + ToSexp,
+    Leaf: Clone + PartialEq + Eq + Display + Hash + ToSexp,
 {
     /// Converts this rule into an s-expression.
     pub fn to_sexp(&self, ruleset: Symbol, name: Symbol) -> Sexp {
@@ -1535,11 +1536,11 @@ where
     }
 }
 
-impl<Head: Display + ToSexp, Leaf: Display + ToSexp, Ann> Display for GenericRule<Head, Leaf, Ann>
+impl<Head, Leaf, Ann> Display for GenericRule<Head, Leaf, Ann>
 where
     Ann: Clone + Default,
-    Head: Clone + Display,
-    Leaf: Clone + PartialEq + Eq + Display + Hash,
+    Head: Clone + Display + ToSexp,
+    Leaf: Clone + PartialEq + Eq + Display + Hash + ToSexp,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.fmt_with_ruleset(f, "".into(), "".into())
