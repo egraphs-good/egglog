@@ -4,9 +4,13 @@
 
 use crate::{
     core::ResolvedCall, typechecking::FuncType, GenericAction, GenericActions, GenericExpr,
-    GenericNCommand, ResolvedAction, ResolvedExpr, ResolvedFunctionDecl, ResolvedNCommand,
-    ResolvedVar, Schema, TypeInfo,
+    GenericNCommand, HashMap, ResolvedAction, ResolvedExpr, ResolvedFunctionDecl, ResolvedNCommand,
+    ResolvedVar, Schema, Symbol, SymbolGen, TypeInfo,
 };
+
+struct GlobalRemover {
+    fresh: SymbolGen,
+}
 
 /// Removes all globals from a program.
 /// No top level lets are allowed after this pass,
@@ -25,12 +29,19 @@ use crate::{
 /// (set (x) 3)
 /// (Add (x) (x))
 /// ```
+///
+/// Primitives and containers need to be added to the query
+/// so they can be referenced in actions.
+/// Datatypes can be referenced directly from actions.
 pub(crate) fn remove_globals(
     type_info: &TypeInfo,
     prog: Vec<ResolvedNCommand>,
 ) -> Vec<ResolvedNCommand> {
+    let mut remover = GlobalRemover {
+        fresh: SymbolGen::new(),
+    };
     prog.into_iter()
-        .flat_map(|cmd| remove_globals_cmd(type_info, cmd))
+        .flat_map(|cmd| remover.remove_globals_cmd(type_info, cmd))
         .collect()
 }
 
@@ -70,47 +81,97 @@ fn remove_globals_action(action: ResolvedAction) -> ResolvedAction {
     action.visit_exprs(&mut replace_global_var)
 }
 
-fn remove_globals_cmd(type_info: &TypeInfo, cmd: ResolvedNCommand) -> Vec<ResolvedNCommand> {
-    match cmd {
-        GenericNCommand::CoreAction(action) => match action {
-            GenericAction::Let(ann, name, expr) => {
-                let ty = expr.output_type(type_info);
-                let func_decl = ResolvedFunctionDecl {
-                    name: name.name,
-                    schema: Schema {
-                        input: vec![],
-                        output: ty.name(),
-                    },
-                    default: None,
-                    merge: None,
-                    merge_action: GenericActions(vec![]),
-                    cost: None,
-                    unextractable: true,
-                    ignore_viz: true,
-                };
-                vec![
-                    GenericNCommand::Function(func_decl),
-                    GenericNCommand::CoreAction(GenericAction::Set(
-                        ann,
-                        ResolvedCall::Func(FuncType {
+impl GlobalRemover {
+    fn remove_globals_cmd(
+        &mut self,
+        type_info: &TypeInfo,
+        cmd: ResolvedNCommand,
+    ) -> Vec<ResolvedNCommand> {
+        match cmd {
+            GenericNCommand::CoreAction(action) => match action {
+                GenericAction::Let(ann, name, expr) => {
+                    let ty = expr.output_type(type_info);
+                    if ty.is_eq_sort() {
+                        // output is eq-able, so generate a union
+                        let func_decl = ResolvedFunctionDecl {
                             name: name.name,
-                            input: vec![],
-                            output: ty,
-                            // NB: Globals are desugared to non-datatype functions,
-                            // even when the output type is an EqSort.
-                            // This is nice because we don't need to touch the equivalence relation
-                            // when setting it.
-                            // The downside is that this is not consistent with `function_to_functype`
-                            is_datatype: false,
-                            has_default: false,
-                        }),
-                        vec![],
-                        remove_globals_expr(expr),
-                    )),
-                ]
-            }
-            _ => vec![GenericNCommand::CoreAction(remove_globals_action(action))],
-        },
-        _ => vec![cmd.visit_exprs(&mut replace_global_var)],
+                            schema: Schema {
+                                input: vec![],
+                                output: ty.name(),
+                            },
+                            default: None,
+                            merge: None,
+                            merge_action: GenericActions(vec![]),
+                            cost: None,
+                            unextractable: true,
+                            ignore_viz: true,
+                        };
+                        vec![
+                            GenericNCommand::Function(func_decl),
+                            GenericNCommand::CoreAction(GenericAction::Union(
+                                ann,
+                                GenericExpr::Call(
+                                    ann,
+                                    ResolvedCall::Func(FuncType {
+                                        name: name.name,
+                                        input: vec![],
+                                        output: ty,
+                                        is_datatype: true,
+                                        has_default: false,
+                                    }),
+                                    vec![],
+                                ),
+                                remove_globals_expr(expr),
+                            )),
+                        ]
+                    } else {
+                        let func_decl = ResolvedFunctionDecl {
+                            name: name.name,
+                            schema: Schema {
+                                input: vec![],
+                                output: ty.name(),
+                            },
+                            default: None,
+                            merge: None,
+                            merge_action: GenericActions(vec![]),
+                            cost: None,
+                            unextractable: true,
+                            ignore_viz: true,
+                        };
+
+                        vec![
+                            GenericNCommand::Function(func_decl),
+                            GenericNCommand::CoreAction(GenericAction::Set(
+                                ann,
+                                ResolvedCall::Func(FuncType {
+                                    name: name.name,
+                                    input: vec![],
+                                    output: ty,
+                                    is_datatype: false,
+                                    has_default: false,
+                                }),
+                                vec![],
+                                remove_globals_expr(expr),
+                            )),
+                        ]
+                    }
+                }
+                _ => vec![GenericNCommand::CoreAction(remove_globals_action(action))],
+            },
+            /*GenericNCommand::NormRule {
+                name,
+                ruleset,
+                rule,
+            } => {
+                // rules handled specially because actions can't refer to
+                // global functions with primitive outputs
+                GenericNCommand::NormRule {
+                    name,
+                    ruleset,
+                    rule: self.remove_globals_rule(rule),
+                }
+            }*/
+            _ => vec![cmd.visit_exprs(&mut replace_global_var)],
+        }
     }
 }
