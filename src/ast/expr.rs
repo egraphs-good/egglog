@@ -128,6 +128,13 @@ impl ResolvedExpr {
             ResolvedExpr::Call(_, resolved_call, _) => resolved_call.output().clone(),
         }
     }
+
+    pub(crate) fn get_global_var(&self) -> Option<ResolvedVar> {
+        match self {
+            ResolvedExpr::Var(_, v) if v.is_global_ref => Some(v.clone()),
+            _ => None,
+        }
+    }
 }
 
 impl Expr {
@@ -143,6 +150,14 @@ impl Expr {
 impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq, Ann: Clone>
     GenericExpr<Head, Leaf, Ann>
 {
+    pub fn ann(&self) -> Ann {
+        match self {
+            GenericExpr::Lit(ann, _) => ann.clone(),
+            GenericExpr::Var(ann, _) => ann.clone(),
+            GenericExpr::Call(ann, _, _) => ann.clone(),
+        }
+    }
+
     pub fn is_var(&self) -> bool {
         matches!(self, GenericExpr::Var(_, _))
     }
