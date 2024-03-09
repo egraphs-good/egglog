@@ -67,6 +67,7 @@ impl EGraph {
             &[Value],
             &Value,
             egraph_serialize::NodeId,
+            crate::extract::Cost,
         )> = self
             .functions
             .values()
@@ -81,6 +82,7 @@ impl EGraph {
                             input,
                             &output.value,
                             format!("{}-{}", function.decl.name, hash_values(input)).into(),
+                            function.get_cost(self, input).unwrap_or(usize::MAX),
                         )
                     })
                     .collect::<Vec<_>>()
@@ -97,7 +99,7 @@ impl EGraph {
         // amoung all possible options.
         let mut node_ids: NodeIDs = all_calls
             .iter()
-            .filter_map(|(_decl, _input, output, node_id)| {
+            .filter_map(|(_decl, _input, output, node_id, _cost)| {
                 if self.get_sort_from_value(output).unwrap().is_eq_sort() {
                     let id = output.bits as usize;
                     let canonical: usize = self.unionfind.find(Id::from(id)).into();
@@ -115,7 +117,7 @@ impl EGraph {
             });
 
         let mut egraph = egraph_serialize::EGraph::default();
-        for (decl, input, output, node_id) in all_calls {
+        for (decl, input, output, node_id, cost) in all_calls {
             let prim_node_id = if config.split_primitive_outputs {
                 Some(format!("{}-value", node_id.clone()))
             } else {
@@ -134,7 +136,7 @@ impl EGraph {
                 egraph_serialize::Node {
                     op: decl.name.to_string(),
                     eclass,
-                    cost: NotNan::new(decl.cost.unwrap_or(1) as f64).unwrap(),
+                    cost: NotNan::new(cost as f64).unwrap(),
                     children,
                 },
             );

@@ -1,26 +1,6 @@
 use super::{Rewrite, Rule};
 use crate::*;
 
-fn desugar_datatype(name: Symbol, variants: Vec<Variant>) -> Vec<NCommand> {
-    vec![NCommand::Sort(name, None)]
-        .into_iter()
-        .chain(variants.into_iter().map(|variant| {
-            NCommand::Function(FunctionDecl {
-                name: variant.name,
-                schema: Schema {
-                    input: variant.types,
-                    output: name,
-                },
-                merge: None,
-                merge_action: Actions::default(),
-                default: None,
-                cost: variant.cost,
-                unextractable: false,
-            })
-        }))
-        .collect()
-}
-
 fn desugar_rewrite(
     ruleset: Symbol,
     name: Symbol,
@@ -236,7 +216,7 @@ pub(crate) fn desugar_command(
             inputs,
         } => desugar.desugar_function(&FunctionDecl::relation(constructor, inputs)),
         Command::Declare { name, sort } => desugar.declare(name, sort),
-        Command::Datatype { name, variants } => desugar_datatype(name, variants),
+        Command::Datatype { name, variants } => desugar.desugar_datatype(name, variants),
         Command::Rewrite(ruleset, rewrite, subsume) => {
             desugar_rewrite(ruleset, rewrite_name(&rewrite).into(), &rewrite, subsume)
         }
@@ -423,23 +403,67 @@ impl Desugar {
                 default: None,
                 merge: None,
                 merge_action: Actions::default(),
-                cost: None,
+                cost: CostFn::Constant(1),
                 unextractable: false,
             }),
             NCommand::CoreAction(Action::Let((), name, Expr::Call((), fresh, vec![]))),
         ]
     }
 
+    fn desugar_datatype(&mut self, name: Symbol, variants: Vec<Variant>) -> Vec<NCommand> {
+        let mut result = vec![NCommand::Sort(name, None)];
+        for variant in variants {
+            result.extend(self.desugar_function(&FunctionDecl {
+                name: variant.name,
+                schema: Schema {
+                    input: variant.types,
+                    output: name,
+                },
+                merge: None,
+                merge_action: Actions::default(),
+                default: None,
+                cost: variant.cost,
+                unextractable: false,
+            }))
+        }
+        result
+    }
+
     pub fn desugar_function(&mut self, fdecl: &FunctionDecl) -> Vec<NCommand> {
-        vec![NCommand::Function(FunctionDecl {
+        let (mut result, cost) = match &fdecl.cost {
+            CostFn::Table(false, t) => {
+                let var = |s| GenericExpr::Var((), Symbol::from(s));
+                let cf = NCommand::Function(FunctionDecl {
+                    name: *t,
+                    schema: Schema {
+                        input: fdecl.schema.input.clone(),
+                        output: Symbol::from("i64"),
+                    },
+                    default: None,
+                    merge: Some(GenericExpr::Call(
+                        (),
+                        "min".into(),
+                        vec![var("old"), var("new")],
+                    )),
+                    merge_action: Default::default(),
+                    cost: CostFn::Constant(1),
+                    unextractable: false,
+                });
+                (vec![cf], CostFn::Table(true, *t))
+            }
+            _ => (vec![], fdecl.cost.clone()),
+        };
+
+        result.push(NCommand::Function(FunctionDecl {
             name: fdecl.name,
             schema: fdecl.schema.clone(),
             default: fdecl.default.clone(),
             merge: fdecl.merge.clone(),
             merge_action: fdecl.merge_action.clone(),
-            cost: fdecl.cost,
+            cost,
             unextractable: fdecl.unextractable,
-        })]
+        }));
+        result
     }
 
     /// Get the name of the parent table for a sort

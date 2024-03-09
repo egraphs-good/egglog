@@ -183,6 +183,16 @@ impl Function {
         self.nodes.get(inputs).map(|output| output.value)
     }
 
+    pub fn get_cost(&self, egraph: &EGraph, inputs: &[Value]) -> Option<usize> {
+        match self.decl.cost {
+            CostFn::Constant(n) => Some(n),
+            CostFn::Table(_, symbol) => {
+                let f = egraph.functions.get(&symbol)?;
+                f.get(inputs).map(|output| output.bits as usize)
+            }
+        }
+    }
+
     pub fn insert(&mut self, inputs: &[Value], value: Value, timestamp: u32) -> Option<Value> {
         self.insert_internal(inputs, value, timestamp, true)
     }

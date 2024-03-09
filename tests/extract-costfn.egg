@@ -1,0 +1,14 @@
+
+(datatype E
+  (Foo String :cost FooCost))
+
+(union (Foo "x") (Foo "y"))
+(union (Foo "y") (Foo "z"))
+
+(set (FooCost "x") 17)
+(set (FooCost "y") 11)
+(set (FooCost "z") 15)
+
+(extract (Foo "y"))
+
+
