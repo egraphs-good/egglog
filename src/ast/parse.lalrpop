@@ -101,9 +101,12 @@ Schedule: Schedule = {
     <ident:Ident> => Schedule::Run(RunConfig { ruleset: ident, until: None }),
 }
 
-Cost: Option<usize> = {
-    ":cost" <UNum> => Some(<>),
-    => None,
+Cost: CostFn = {
+    ":cost" <UNum> => CostFn::Constant(<>),
+    ":cost" <Ident> => CostFn::Table(false, <>),
+    // dont use this, it's only for round-tripping desugaring
+    ":_declared_cost" <Ident> => CostFn::Table(true, <>),
+    => CostFn::Constant(1),
 }
 
 NonLetAction: Action = {

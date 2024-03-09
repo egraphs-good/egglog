@@ -701,6 +701,12 @@ where
 pub type FunctionDecl = GenericFunctionDecl<Symbol, Symbol, ()>;
 pub(crate) type ResolvedFunctionDecl = GenericFunctionDecl<ResolvedCall, ResolvedVar, ()>;
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum CostFn {
+    Table(bool, Symbol), // bool is whether table is already declared
+    Constant(usize),
+}
+
 /// Represents the declaration of a function
 /// directly parsed from source syntax.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -710,7 +716,7 @@ pub struct GenericFunctionDecl<Head, Leaf, Ann> {
     pub default: Option<GenericExpr<Head, Leaf, Ann>>,
     pub merge: Option<GenericExpr<Head, Leaf, Ann>>,
     pub merge_action: GenericActions<Head, Leaf, Ann>,
-    pub cost: Option<usize>,
+    pub cost: CostFn,
     pub unextractable: bool,
 }
 
@@ -718,7 +724,7 @@ pub struct GenericFunctionDecl<Head, Leaf, Ann> {
 pub struct Variant {
     pub name: Symbol,
     pub types: Vec<Symbol>,
-    pub cost: Option<usize>,
+    pub cost: CostFn,
 }
 
 impl ToSexp for Variant {
@@ -727,9 +733,19 @@ impl ToSexp for Variant {
         if !self.types.is_empty() {
             res.extend(self.types.iter().map(|s| Sexp::Symbol(s.to_string())));
         }
-        if let Some(cost) = self.cost {
-            res.push(Sexp::Symbol(":cost".into()));
-            res.push(Sexp::Symbol(cost.to_string()));
+        match &self.cost {
+            CostFn::Table(declared, s) => {
+                assert!(
+                    !declared,
+                    "no way a variant cost function could be pre-declared"
+                );
+                res.push(Sexp::Symbol(":cost".into()));
+                res.push(Sexp::Symbol(s.to_string()));
+            }
+            CostFn::Constant(n) => {
+                res.push(Sexp::Symbol(":cost".into()));
+                res.push(Sexp::Symbol(n.to_string()));
+            }
         }
         Sexp::List(res)
     }
@@ -764,7 +780,7 @@ impl FunctionDecl {
             merge: None,
             merge_action: Actions::default(),
             default: Some(Expr::Lit((), Literal::Unit)),
-            cost: None,
+            cost: CostFn::Constant(1),
             unextractable: false,
         }
     }
@@ -785,11 +801,20 @@ impl<Head: Display + ToSexp, Leaf: Display + ToSexp, Ann> ToSexp
             unreachable!();
         }
 
-        if let Some(cost) = self.cost {
-            res.extend(vec![
-                Sexp::Symbol(":cost".into()),
-                Sexp::Symbol(cost.to_string()),
-            ]);
+        match &self.cost {
+            CostFn::Table(declared, s) => {
+                let cost = if *declared {
+                    ":_declared_cost"
+                } else {
+                    ":cost"
+                };
+                res.push(Sexp::Symbol(cost.into()));
+                res.push(Sexp::Symbol(s.to_string()));
+            }
+            CostFn::Constant(n) => {
+                res.push(Sexp::Symbol(":cost".into()));
+                res.push(Sexp::Symbol(n.to_string()));
+            }
         }
 
         if self.unextractable {

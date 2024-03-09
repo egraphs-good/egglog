@@ -3,7 +3,7 @@ use hashbrown::hash_map::Entry;
 use crate::ast::Symbol;
 use crate::termdag::{Term, TermDag};
 use crate::util::HashMap;
-use crate::{ArcSort, EGraph, Function, Id, Value};
+use crate::{ArcSort, CostFn, EGraph, Function, Id, Value};
 
 pub type Cost = usize;
 
@@ -152,14 +152,21 @@ impl<'a> Extractor<'a> {
         children: &[Value],
         termdag: &mut TermDag,
     ) -> Option<(Vec<Term>, Cost)> {
-        let mut cost = function.decl.cost.unwrap_or(1);
+        let mut child_cost: Cost = 0;
         let types = &function.schema.input;
         let mut terms: Vec<Term> = vec![];
         for (ty, value) in types.iter().zip(children) {
             let (term_cost, term) = self.find_best(*value, termdag, ty)?;
             terms.push(term.clone());
-            cost = cost.saturating_add(term_cost);
+            child_cost = child_cost.saturating_add(term_cost);
         }
+        let cost = match function.decl.cost {
+            CostFn::Constant(c) => c + child_cost,
+            // don't use the child cost if using a cost fn
+            CostFn::Table(_, _) => function
+                .get_cost(self.egraph, children)
+                .unwrap_or(Cost::MAX),
+        };
         Some((terms, cost))
     }
 

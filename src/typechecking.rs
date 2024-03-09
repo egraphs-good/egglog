@@ -259,7 +259,7 @@ impl TypeInfo {
                 .map(|default| self.typecheck_expr(default, &Default::default()))
                 .transpose()?,
             merge_action: self.typecheck_actions(&fdecl.merge_action, &bound_vars)?,
-            cost: fdecl.cost,
+            cost: fdecl.cost.clone(),
             unextractable: fdecl.unextractable,
         })
     }
