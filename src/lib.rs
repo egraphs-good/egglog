@@ -27,6 +27,7 @@ pub mod util;
 mod value;
 
 use ast::desugar::Desugar;
+use ast::remove_globals::remove_globals;
 use extract::Extractor;
 use hashbrown::hash_map::Entry;
 use index::ColumnIndex;
@@ -416,8 +417,6 @@ pub struct EGraph {
     pub fact_directory: Option<PathBuf>,
     pub seminaive: bool,
     type_info: TypeInfo,
-    // sort, value, and timestamp
-    pub global_bindings: HashMap<Symbol, (ArcSort, Value, u32)>,
     extract_report: Option<ExtractReport>,
     /// The run report for the most recent run of a schedule.
     recent_run_report: Option<RunReport>,
@@ -445,7 +444,6 @@ impl Default for EGraph {
             rulesets: Default::default(),
             ruleset_iteration: Default::default(),
             desugar: Desugar::default(),
-            global_bindings: Default::default(),
             match_limit: usize::MAX,
             node_limit: usize::MAX,
             timestamp: 0,
@@ -639,15 +637,6 @@ impl EGraph {
                 break;
             }
         }
-
-        // now update global bindings
-        let mut new_global_bindings = std::mem::take(&mut self.global_bindings);
-        for (_sym, (sort, value, ts)) in new_global_bindings.iter_mut() {
-            if sort.canonicalize(value, &self.unionfind) {
-                *ts = self.timestamp;
-            }
-        }
-        self.global_bindings = new_global_bindings;
 
         self.debug_assert_invariants();
         Ok(updates)
@@ -1133,7 +1122,10 @@ impl EGraph {
         let fresh_name = self.desugar.get_fresh();
         let command = Command::Action(Action::Let((), fresh_name, expr.clone()));
         self.run_program(vec![command])?;
-        let (sort, value, _ts) = self.global_bindings.get(&fresh_name).unwrap().clone();
+        // find the table with the same name as the fresh name
+        let func = self.functions.get(&fresh_name).unwrap();
+        let value = func.nodes.get(&[]).unwrap().value;
+        let sort = func.schema.output.clone();
         Ok((sort, value))
     }
 
@@ -1214,7 +1206,7 @@ impl EGraph {
         if !matched {
             // TODO add useful info here
             Err(Error::CheckError(
-                facts.iter().map(|f| f.to_unresolved()).collect(),
+                facts.iter().map(|f| f.clone().make_unresolved()).collect(),
             ))
         } else {
             Ok(())
@@ -1277,18 +1269,7 @@ impl EGraph {
             ResolvedNCommand::CheckProof => log::error!("TODO implement proofs"),
             ResolvedNCommand::CoreAction(action) => match &action {
                 ResolvedAction::Let((), name, contents) => {
-                    let value = self.eval_resolved_expr(contents, true)?;
-                    let present = self.global_bindings.insert(
-                        name.name,
-                        (
-                            contents.output_type(self.type_info()),
-                            value,
-                            self.timestamp,
-                        ),
-                    );
-                    if present.is_some() {
-                        panic!("Variable {name} was already present in global bindings");
-                    }
+                    panic!("Globals should have been desugared away: {name} = {contents}")
                 }
                 _ => {
                     self.eval_actions(&ResolvedActions::new(vec![action.clone()]))?;
@@ -1435,6 +1416,8 @@ impl EGraph {
                 .desugar_program(vec![command], self.test_proofs, self.seminaive)?;
 
         let program = self.type_info_mut().typecheck_program(&program)?;
+
+        let program = remove_globals(&self.type_info, program);
 
         Ok(program)
     }

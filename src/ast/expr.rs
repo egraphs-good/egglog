@@ -62,6 +62,14 @@ impl Display for Literal {
 pub struct ResolvedVar {
     pub name: Symbol,
     pub sort: ArcSort,
+    /// Is this a reference to a global variable?
+    /// After the `remove_globals` pass, this should be `false`.
+    ///
+    /// NB: we distinguish between a global reference and a global binding.
+    /// The current implementation of `Eq` and `Hash` does not take this field
+    /// into consideration.
+    /// Overall, the definition of equality between two ResolvedVars is dicey.
+    pub is_global_ref: bool,
 }
 
 impl PartialEq for ResolvedVar {
@@ -103,7 +111,7 @@ pub(crate) type ResolvedExpr = GenericExpr<ResolvedCall, ResolvedVar, ()>;
 /// and its flattened form. It records this mapping by annotating each `Head`
 /// with a `Leaf`, which it maps to in the flattened form.
 /// A useful operation on `MappedExpr`s is [`MappedExpr::get_corresponding_var_or_lit``].
-pub(crate) type MappedExpr<Head, Leaf, Ann> = GenericExpr<(Head, Leaf), Leaf, Ann>;
+pub(crate) type MappedExpr<Head, Leaf, Ann> = GenericExpr<CorrespondingVar<Head, Leaf>, Leaf, Ann>;
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
 pub enum GenericExpr<Head, Leaf, Ann> {
@@ -118,6 +126,13 @@ impl ResolvedExpr {
             ResolvedExpr::Lit(_, lit) => type_info.infer_literal(lit),
             ResolvedExpr::Var(_, resolved_var) => resolved_var.sort.clone(),
             ResolvedExpr::Call(_, resolved_call, _) => resolved_call.output().clone(),
+        }
+    }
+
+    pub(crate) fn get_global_var(&self) -> Option<ResolvedVar> {
+        match self {
+            ResolvedExpr::Var(_, v) if v.is_global_ref => Some(v.clone()),
+            _ => None,
         }
     }
 }
@@ -135,6 +150,14 @@ impl Expr {
 impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq, Ann: Clone>
     GenericExpr<Head, Leaf, Ann>
 {
+    pub fn ann(&self) -> Ann {
+        match self {
+            GenericExpr::Lit(ann, _) => ann.clone(),
+            GenericExpr::Var(ann, _) => ann.clone(),
+            GenericExpr::Call(ann, _, _) => ann.clone(),
+        }
+    }
+
     pub fn is_var(&self) -> bool {
         matches!(self, GenericExpr::Var(_, _))
     }
@@ -172,13 +195,15 @@ impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq, Ann: Clone>
         f(self, ts)
     }
 
-    pub fn map(&self, f: &mut impl FnMut(&Self) -> Self) -> Self {
+    /// Applys `f` to all sub-expressions (including `self`)
+    /// bottom-up, collecting the results.
+    pub fn visit_exprs(self, f: &mut impl FnMut(Self) -> Self) -> Self {
         match self {
             GenericExpr::Lit(..) => f(self),
             GenericExpr::Var(..) => f(self),
             GenericExpr::Call(ann, op, children) => {
-                let children = children.iter().map(|c| c.map(f)).collect();
-                f(&GenericExpr::Call(ann.clone(), op.clone(), children))
+                let children = children.into_iter().map(|c| c.visit_exprs(f)).collect();
+                f(GenericExpr::Call(ann.clone(), op.clone(), children))
             }
         }
     }
@@ -207,9 +232,9 @@ impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq, Ann: Clone>
 
     pub fn subst_leaf<Leaf2>(
         &self,
-        subst: &mut impl FnMut(&Leaf) -> GenericExpr<Head, Leaf2, Ann>,
+        subst_leaf: &mut impl FnMut(&Leaf) -> GenericExpr<Head, Leaf2, Ann>,
     ) -> GenericExpr<Head, Leaf2, Ann> {
-        self.subst(subst, &mut |op| op.clone())
+        self.subst(subst_leaf, &mut |x| x.clone())
     }
 
     pub fn vars(&self) -> impl Iterator<Item = Leaf> + '_ {

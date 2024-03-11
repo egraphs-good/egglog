@@ -8,7 +8,6 @@ use typechecking::TypeError;
 use crate::{ast::Literal, core::ResolvedCall, ExtractReport, Value};
 
 struct ActionCompiler<'a> {
-    egraph: &'a EGraph,
     types: &'a IndexMap<Symbol, ArcSort>,
     locals: IndexSet<ResolvedVar>,
     instructions: Vec<Instruction>,
@@ -61,10 +60,6 @@ impl<'a> ActionCompiler<'a> {
         }
     }
 
-    fn egraph(&self) -> &'a EGraph {
-        self.egraph
-    }
-
     fn do_call(&mut self, f: &ResolvedCall, args: &[ResolvedAtomTerm]) {
         for arg in args {
             self.do_atom_term(arg);
@@ -88,9 +83,8 @@ impl<'a> ActionCompiler<'a> {
             ResolvedAtomTerm::Literal(lit) => {
                 self.instructions.push(Instruction::Literal(lit.clone()));
             }
-            ResolvedAtomTerm::Global(var) => {
-                assert!(self.egraph().global_bindings.contains_key(&var.name));
-                self.instructions.push(Instruction::Global(var.name));
+            ResolvedAtomTerm::Global(_var) => {
+                panic!("Global variables should have been desugared");
             }
         }
     }
@@ -123,8 +117,6 @@ enum Instruction {
     Literal(Literal),
     /// Push a value from the stack or the substitution onto the stack.
     Load(Load),
-    /// Push a global bound value onto the stack.
-    Global(Symbol),
     /// Pop function arguments off the stack, calls the function,
     /// and push the result onto the stack. The bool indicates
     /// whether to make defaults.
@@ -168,7 +160,6 @@ impl EGraph {
             types.insert(var.name, var.sort.clone());
         }
         let mut compiler = ActionCompiler {
-            egraph: self,
             types: &types,
             locals: IndexSet::default(),
             instructions: Vec::new(),
@@ -197,7 +188,6 @@ impl EGraph {
             types.insert(var.name, var.sort.clone());
         }
         let mut compiler = ActionCompiler {
-            egraph: self,
             types: &types,
             locals: IndexSet::default(),
             instructions: Vec::new(),
@@ -271,10 +261,6 @@ impl EGraph {
     ) -> Result<(), Error> {
         for instr in &program.0 {
             match instr {
-                Instruction::Global(sym) => {
-                    let (_ty, value, _ts) = self.global_bindings.get(sym).unwrap();
-                    stack.push(*value);
-                }
                 Instruction::Load(load) => match load {
                     Load::Stack(idx) => stack.push(stack[*idx]),
                     Load::Subst(idx) => stack.push(subst[*idx]),

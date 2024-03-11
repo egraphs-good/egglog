@@ -16,6 +16,7 @@ fn desugar_datatype(name: Symbol, variants: Vec<Variant>) -> Vec<NCommand> {
                 default: None,
                 cost: variant.cost,
                 unextractable: false,
+                ignore_viz: false,
             })
         }))
         .collect()
@@ -377,13 +378,6 @@ impl Clone for Desugar {
 }
 
 impl Desugar {
-    pub fn merge_ruleset_name(&self) -> Symbol {
-        Symbol::from(format!(
-            "merge_ruleset{}",
-            "_".repeat(self.number_underscores)
-        ))
-    }
-
     pub fn get_fresh(&mut self) -> Symbol {
         self.next_fresh += 1;
         format!(
@@ -411,6 +405,7 @@ impl Desugar {
             .map_err(|e| e.map_token(|tok| tok.to_string()))?)
     }
 
+    // TODO declare by creating a new global function. See issue #334
     pub fn declare(&mut self, name: Symbol, sort: Symbol) -> Vec<NCommand> {
         let fresh = self.get_fresh();
         vec![
@@ -425,6 +420,7 @@ impl Desugar {
                 merge_action: Actions::default(),
                 cost: None,
                 unextractable: false,
+                ignore_viz: false,
             }),
             NCommand::CoreAction(Action::Let((), name, Expr::Call((), fresh, vec![]))),
         ]
@@ -439,6 +435,7 @@ impl Desugar {
             merge_action: fdecl.merge_action.clone(),
             cost: fdecl.cost,
             unextractable: fdecl.unextractable,
+            ignore_viz: fdecl.ignore_viz,
         })]
     }
 

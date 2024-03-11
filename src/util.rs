@@ -107,6 +107,9 @@ impl FreshGen<ResolvedCall, ResolvedVar> for ResolvedGen {
         ResolvedVar {
             name: s.into(),
             sort,
+            // fresh variables are never global references, since globals
+            // are desugared away by `remove_globals`
+            is_global_ref: false,
         }
     }
 }

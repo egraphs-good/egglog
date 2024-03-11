@@ -9,7 +9,7 @@ use crate::{
     sort::I64Sort,
     typechecking::TypeError,
     util::{FreshGen, HashMap, HashSet, SymbolGen},
-    ArcSort, Symbol, TypeInfo,
+    ArcSort, CorrespondingVar, Symbol, TypeInfo,
 };
 use core::hash::Hash;
 use std::{fmt::Debug, iter::once, mem::swap};
@@ -217,14 +217,15 @@ where
 impl Assignment<AtomTerm, ArcSort> {
     pub(crate) fn annotate_expr(
         &self,
-        expr: &GenericExpr<(Symbol, Symbol), Symbol, ()>,
+        expr: &GenericExpr<CorrespondingVar<Symbol, Symbol>, Symbol, ()>,
         typeinfo: &TypeInfo,
     ) -> ResolvedExpr {
         match &expr {
             GenericExpr::Lit((), literal) => ResolvedExpr::Lit((), literal.clone()),
             GenericExpr::Var((), var) => {
-                let ty = typeinfo
-                    .lookup_global(var)
+                let global_ty = typeinfo.lookup_global(var);
+                let ty = global_ty
+                    .clone()
                     .or_else(|| self.get(&AtomTerm::Var(*var)).cloned())
                     .expect("All variables should be assigned before annotation");
                 ResolvedExpr::Var(
@@ -232,10 +233,18 @@ impl Assignment<AtomTerm, ArcSort> {
                     ResolvedVar {
                         name: *var,
                         sort: ty.clone(),
+                        is_global_ref: global_ty.is_some(),
                     },
                 )
             }
-            GenericExpr::Call((), (head, corresponding_var), args) => {
+            GenericExpr::Call(
+                (),
+                CorrespondingVar {
+                    head,
+                    to: corresponding_var,
+                },
+                args,
+            ) => {
                 // get the resolved call using resolve_rule
                 let args: Vec<_> = args
                     .iter()
@@ -258,7 +267,7 @@ impl Assignment<AtomTerm, ArcSort> {
 
     pub(crate) fn annotate_fact(
         &self,
-        facts: &GenericFact<(Symbol, Symbol), Symbol, ()>,
+        facts: &GenericFact<CorrespondingVar<Symbol, Symbol>, Symbol, ()>,
         typeinfo: &TypeInfo,
     ) -> ResolvedFact {
         match facts {
@@ -274,7 +283,7 @@ impl Assignment<AtomTerm, ArcSort> {
 
     pub(crate) fn annotate_facts(
         &self,
-        mapped_facts: &[GenericFact<(Symbol, Symbol), Symbol, ()>],
+        mapped_facts: &[GenericFact<CorrespondingVar<Symbol, Symbol>, Symbol, ()>],
         typeinfo: &TypeInfo,
     ) -> Vec<ResolvedFact> {
         mapped_facts
@@ -298,12 +307,21 @@ impl Assignment<AtomTerm, ArcSort> {
                     ResolvedVar {
                         name: *var,
                         sort: ty.clone(),
+                        is_global_ref: false,
                     },
                     self.annotate_expr(expr, typeinfo),
                 ))
             }
             // Note mapped_var for set is a dummy variable that does not mean anything
-            GenericAction::Set((), (head, _mapped_var), children, rhs) => {
+            GenericAction::Set(
+                (),
+                CorrespondingVar {
+                    head,
+                    to: _mapped_var,
+                },
+                children,
+                rhs,
+            ) => {
                 let children: Vec<_> = children
                     .iter()
                     .map(|child| self.annotate_expr(child, typeinfo))
@@ -321,7 +339,15 @@ impl Assignment<AtomTerm, ArcSort> {
                 Ok(ResolvedAction::Set((), resolved_call, children, rhs))
             }
             // Note mapped_var for delete is a dummy variable that does not mean anything
-            GenericAction::Change((), change, (head, _mapped_var), children) => {
+            GenericAction::Change(
+                (),
+                change,
+                CorrespondingVar {
+                    head,
+                    to: _mapped_var,
+                },
+                children,
+            ) => {
                 let children: Vec<_> = children
                     .iter()
                     .map(|child| self.annotate_expr(child, typeinfo))
@@ -359,7 +385,7 @@ impl Assignment<AtomTerm, ArcSort> {
 
     pub(crate) fn annotate_actions(
         &self,
-        mapped_actions: &GenericActions<(Symbol, Symbol), Symbol, ()>,
+        mapped_actions: &GenericActions<CorrespondingVar<Symbol, Symbol>, Symbol, ()>,
         typeinfo: &TypeInfo,
     ) -> Result<ResolvedActions, TypeError> {
         let actions = mapped_actions

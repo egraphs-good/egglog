@@ -184,6 +184,8 @@ impl TypeInfo {
                 let var = ResolvedVar {
                     name: *var,
                     sort: output_type,
+                    // not a global reference, but a global binding
+                    is_global_ref: false,
                 };
                 ResolvedNCommand::CoreAction(ResolvedAction::Let((), var, expr))
             }
@@ -261,6 +263,7 @@ impl TypeInfo {
             merge_action: self.typecheck_actions(&fdecl.merge_action, &bound_vars)?,
             cost: fdecl.cost,
             unextractable: fdecl.unextractable,
+            ignore_viz: fdecl.ignore_viz,
         })
     }
 
