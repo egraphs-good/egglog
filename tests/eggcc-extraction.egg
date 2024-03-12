@@ -1362,12 +1362,12 @@
 
 ;; if we reach a new context, union
 (rule ((= theta (Theta pred inputs outputs))
-       (= (BodyAndCost extracted cost)
+       (= (BodyAndCost extracted cost_)
           (ExtractedBody theta)))
       ((union theta extracted))
       :ruleset fast-analyses)
 (rule ((= gamma (Gamma pred inputs outputs))
-       (= (BodyAndCost extracted cost)
+       (= (BodyAndCost extracted cost_)
           (ExtractedBody gamma)))
       ((union gamma extracted))
       :ruleset fast-analyses)
@@ -1375,7 +1375,7 @@
 
 ;; if we reach the function at the top level, union
 (rule ((= func (Func name intypes outtypes body))
-       (= (VecOperandAndCost extracted cost)
+       (= (VecOperandAndCost extracted cost_)
           (ExtractedVecOperand body)))
       ((union func
               (Func name intypes outtypes extracted)))

@@ -165,6 +165,7 @@ impl Table {
         {
             let (inp, prev) = &mut self.vals[*off];
             let prev_subsumed = prev.subsumed;
+            let prev_cost = prev.cost;
             let next = on_merge(Some(prev.value));
             if next == prev.value && prev_subsumed == subsumed {
                 return;
@@ -179,6 +180,7 @@ impl Table {
                     value: next,
                     timestamp: ts,
                     subsumed: subsumed || prev_subsumed,
+                    cost: prev_cost,
                 },
             ));
             *off = new_offset;
@@ -191,6 +193,7 @@ impl Table {
                 value: on_merge(None),
                 timestamp: ts,
                 subsumed,
+                cost: None,
             },
         ));
         self.table.insert(
