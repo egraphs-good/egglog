@@ -1,6 +1,22 @@
 use super::{Rewrite, Rule};
 use crate::*;
 
+pub struct Desugar {
+    pub(crate) fresh_gen: SymbolGen,
+    // Store the parser because it takes some time
+    // on startup for some reason
+    parser: ast::parse::ProgramParser,
+}
+
+impl Default for Desugar {
+    fn default() -> Self {
+        Self {
+            fresh_gen: SymbolGen::new("_".repeat(2)),
+            parser: ast::parse::ProgramParser::new(),
+        }
+    }
+}
+
 fn desugar_datatype(name: Symbol, variants: Vec<Variant>) -> Vec<NCommand> {
     vec![NCommand::Sort(name, None)]
         .into_iter()
@@ -119,31 +135,6 @@ fn add_semi_naive_rule(desugar: &mut Desugar, rule: Rule) -> Option<Rule> {
         Some(new_rule)
     } else {
         None
-    }
-}
-
-pub struct Desugar {
-    next_fresh: usize,
-    // Store the parser because it takes some time
-    // on startup for some reason
-    parser: ast::parse::ProgramParser,
-    // yz (dec 5): Comment out since they are only used in terms.rs which are deleted
-    // pub(crate) expr_parser: ast::parse::ExprParser,
-    // pub(crate) action_parser: ast::parse::ActionParser,
-    // TODO fix getting fresh names using modules
-    pub(crate) number_underscores: usize,
-}
-
-impl Default for Desugar {
-    fn default() -> Self {
-        Self {
-            next_fresh: Default::default(),
-            // these come from lalrpop and don't have default impls
-            parser: ast::parse::ProgramParser::new(),
-            // expr_parser: ast::parse::ExprParser::new(),
-            // action_parser: ast::parse::ActionParser::new(),
-            number_underscores: 3,
-        }
     }
 }
 
@@ -368,24 +359,15 @@ pub(crate) fn desugar_commands(
 impl Clone for Desugar {
     fn clone(&self) -> Self {
         Self {
-            next_fresh: self.next_fresh,
+            fresh_gen: self.fresh_gen.clone(),
             parser: ast::parse::ProgramParser::new(),
-            // expr_parser: ast::parse::ExprParser::new(),
-            // action_parser: ast::parse::ActionParser::new(),
-            number_underscores: self.number_underscores,
         }
     }
 }
 
 impl Desugar {
     pub fn get_fresh(&mut self) -> Symbol {
-        self.next_fresh += 1;
-        format!(
-            "v{}{}",
-            self.next_fresh - 1,
-            "_".repeat(self.number_underscores)
-        )
-        .into()
+        self.fresh_gen.fresh(&"v".into())
     }
 
     pub(crate) fn desugar_program(
@@ -439,13 +421,13 @@ impl Desugar {
         })]
     }
 
-    /// Get the name of the parent table for a sort
-    /// for the term encoding (not related to desugaring)
-    pub(crate) fn parent_name(&self, sort: Symbol) -> Symbol {
-        Symbol::from(format!(
-            "{}_Parent{}",
-            sort,
-            "_".repeat(self.number_underscores)
-        ))
+    pub fn parent_name(&mut self, eqsort_name: Symbol) -> Symbol {
+        self.fresh_gen
+            .generate_special(&format!("{}Parent", eqsort_name).into())
+    }
+
+    pub fn lookup_parent_name(&self, eqsort_name: Symbol) -> Option<Symbol> {
+        self.fresh_gen
+            .lookup_special(&format!("{}Parent", eqsort_name).into())
     }
 }

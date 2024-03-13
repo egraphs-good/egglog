@@ -22,6 +22,7 @@ mod expr;
 pub use expr::*;
 pub mod desugar;
 pub(crate) mod remove_globals;
+pub(crate) mod term_encoding;
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct Id(usize);

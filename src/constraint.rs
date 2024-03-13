@@ -191,7 +191,7 @@ pub struct Problem<Var, Value> {
 
 impl Default for Problem<AtomTerm, ArcSort> {
     fn default() -> Self {
-        Problem {
+        Self {
             constraints: vec![],
             range: HashSet::default(),
         }
@@ -444,7 +444,7 @@ impl Problem<AtomTerm, ArcSort> {
         actions: &GenericCoreActions<Symbol, Symbol>,
         typeinfo: &TypeInfo,
     ) -> Result<(), TypeError> {
-        let mut symbol_gen = SymbolGen::new();
+        let mut symbol_gen = SymbolGen::new("$".to_string());
         for action in actions.0.iter() {
             self.constraints
                 .extend(action.get_constraints(typeinfo, &mut symbol_gen)?);
@@ -511,7 +511,7 @@ impl CoreAction {
             CoreAction::Change(_change, head, args) => {
                 let mut args = args.clone();
                 // Add a dummy last output argument
-                let var = symbol_gen.fresh(&Symbol::from(format!("constraint${head}")));
+                let var = symbol_gen.fresh(head);
                 args.push(AtomTerm::Var(var));
 
                 Ok(get_literal_and_global_constraints(&args, typeinfo)

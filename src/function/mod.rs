@@ -115,7 +115,7 @@ impl Function {
             let (actions, mapped_expr) = merge_expr.to_core_actions(
                 egraph.type_info(),
                 &mut binding.clone(),
-                &mut ResolvedGen::new(),
+                &mut ResolvedGen::new("$".to_string()),
             )?;
             let target = mapped_expr.get_corresponding_var_or_lit(egraph.type_info());
             let program = egraph
@@ -134,7 +134,7 @@ impl Function {
             let (merge_action, _) = decl.merge_action.to_core_actions(
                 egraph.type_info(),
                 &mut binding.clone(),
-                &mut ResolvedGen::new(),
+                &mut ResolvedGen::new("$".to_string()),
             )?;
             let program = egraph
                 .compile_actions(&binding, &merge_action)

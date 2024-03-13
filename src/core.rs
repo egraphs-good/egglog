@@ -762,12 +762,16 @@ impl ResolvedRule {
     ) -> Result<ResolvedCoreRule, TypeError> {
         let value_eq = &typeinfo.primitives.get(&Symbol::from("value-eq")).unwrap()[0];
         let unit = typeinfo.get_sort_nofail::<UnitSort>();
-        self.to_canonicalized_core_rule_impl(typeinfo, ResolvedGen::new(), |at1, at2| {
-            ResolvedCall::Primitive(SpecializedPrimitive {
-                primitive: value_eq.clone(),
-                input: vec![at1.output(typeinfo), at2.output(typeinfo)],
-                output: unit.clone(),
-            })
-        })
+        self.to_canonicalized_core_rule_impl(
+            typeinfo,
+            ResolvedGen::new("$".to_string()),
+            |at1, at2| {
+                ResolvedCall::Primitive(SpecializedPrimitive {
+                    primitive: value_eq.clone(),
+                    input: vec![at1.output(typeinfo), at2.output(typeinfo)],
+                    output: unit.clone(),
+                })
+            },
+        )
     }
 }
