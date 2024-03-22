@@ -5,7 +5,7 @@
 <a href="https://egraphs-good.github.io/egglog/docs/egglog">
     <img alt="Main Branch Documentation" src="https://img.shields.io/badge/docs-main-blue"></a>
 
-This is repo for the `egglog` tool accompanying the paper
+This is the repo for the `egglog` tool accompanying the paper
   "Better Together: Unifying Datalog and Equality Saturation"
   ([ACM DL](https://dl.acm.org/doi/10.1145/3591239), [arXiv](https://arxiv.org/abs/2304.04332)).
 
@@ -46,9 +46,10 @@ for the REPL.
 * The `--to-svg`, which requires [Graphviz to be installed](https://graphviz.org/download/), will save a graphviz svg file at the end of the program, replacing the `.egg` extension with `.svg`.
 
 
-## VS Code plugin
+## Community extensions
 
-We recommend [hatoo's egglog-language extension](https://marketplace.visualstudio.com/items?itemName=hatookov.egglog-language) (just search for "egglog" in VS Code).
+* [@hatoo](https://github.com/hatoo) maintains an [egglog-language extension](https://marketplace.visualstudio.com/items?itemName=hatookov.egglog-language) in VS Code (just search for "egglog" in VS Code).
+* [@segeljakt](https://github.com/segeljakt) maintains a [Neovim plugin](https://github.com/segeljakt/tree-sitter-egg) for egglog using tree-sitter.
 
 ## Development
 
