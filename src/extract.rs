@@ -151,8 +151,9 @@ impl<'a> Extractor<'a> {
         function: &Function,
         children: &[Value],
         termdag: &mut TermDag,
+        cost: Option<usize>,
     ) -> Option<(Vec<Term>, Cost)> {
-        let mut cost = function.decl.cost.unwrap_or(1);
+        let mut cost = cost.unwrap_or(function.decl.cost.unwrap_or(1));
         let types = &function.schema.input;
         let mut terms: Vec<Term> = vec![];
         for (ty, value) in types.iter().zip(children) {
@@ -181,7 +182,7 @@ impl<'a> Extractor<'a> {
                 if func.schema.output.is_eq_sort() {
                     for (inputs, output) in func.nodes.iter(false) {
                         if let Some((term_inputs, new_cost)) =
-                            self.node_total_cost(func, inputs, termdag)
+                            self.node_total_cost(func, inputs, termdag, output.cost)
                         {
                             let make_new_pair = || (new_cost, termdag.app(sym, term_inputs));
 

@@ -418,6 +418,7 @@ impl EGraph {
                             }
                             function.subsume(args);
                         }
+                        Change::Cost(cost) => function.update_cost(args, *cost),
                     }
                     stack.truncate(new_len);
                 }

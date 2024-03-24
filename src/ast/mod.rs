@@ -1154,6 +1154,8 @@ pub enum Change {
     /// `subsume` this entry so that it cannot be queried or extracted, but still can be checked.
     /// Note that this is currently forbidden for functions with custom merges.
     Subsume,
+    /// Overrides the `cost` for this entry.
+    Cost(usize),
 }
 
 pub type Action = GenericAction<Symbol, Symbol, ()>;
@@ -1277,15 +1279,11 @@ where
             GenericAction::Let(_ann, lhs, rhs) => list!("let", lhs, rhs),
             GenericAction::Set(_ann, lhs, args, rhs) => list!("set", list!(lhs, ++ args), rhs),
             GenericAction::Union(_ann, lhs, rhs) => list!("union", lhs, rhs),
-            GenericAction::Change(_ann, change, lhs, args) => {
-                list!(
-                    match change {
-                        Change::Delete => "delete",
-                        Change::Subsume => "subsume",
-                    },
-                    list!(lhs, ++ args)
-                )
-            }
+            GenericAction::Change(_ann, change, lhs, args) => match change {
+                Change::Delete => list!("delete", list!(lhs, ++ args)),
+                Change::Subsume => list!("subsume", list!(lhs, ++ args)),
+                Change::Cost(cost) => list!("cost", list!(lhs, ++ args), cost),
+            },
             GenericAction::Extract(_ann, expr, variants) => list!("extract", expr, variants),
             GenericAction::Panic(_ann, msg) => list!("panic", format!("\"{}\"", msg.clone())),
             GenericAction::Expr(_ann, e) => e.to_sexp(),

@@ -110,6 +110,7 @@ NonLetAction: Action = {
     LParen "set" LParen <f: Ident> <args:Expr*> RParen <v:Expr> RParen => Action::Set ( (), f, args, v ),
     LParen "delete" LParen <f: Ident> <args:Expr*> RParen RParen => Action::Change ( (), Change::Delete, f, args),
     LParen "subsume" LParen <f: Ident> <args:Expr*> RParen RParen => Action::Change ( (), Change::Subsume, f, args),
+    LParen "cost" LParen <f: Ident> <args:Expr*> RParen <cost:UNum> RParen => Action::Change ( (), Change::Cost(cost), f, args),
     LParen "union" <e1:Expr> <e2:Expr> RParen => Action::Union((), <>),
     LParen "panic" <msg:String> RParen => Action::Panic((), msg),
     LParen "extract" <expr:Expr> RParen => Action::Extract((), expr, Expr::Lit((), Literal::Int(0))),
