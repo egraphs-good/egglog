@@ -46,7 +46,7 @@ serde_json = { optional = true, version = "1.0.100", features = [
 ] }
 
 lalrpop-util = { version = "0.20", features = ["lexer"] }
-regex = "1"
+regex = "1.10"
 
 # binary dependencies
 clap = { version = "4", features = ["derive"], optional = true }

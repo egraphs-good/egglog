@@ -503,7 +503,7 @@ impl EGraph {
             log::debug!("Variable costs: {:?}", ListDebug(&var_cost, "\n"));
 
             let var = *var_cost[0].1;
-            let info = vars.remove(&var).unwrap();
+            let info = vars.swap_remove(&var).unwrap();
             for &i in &info.occurences {
                 for v in atoms[i].vars() {
                     if let Some(info) = vars.get_mut(&v) {
