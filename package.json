@@ -1,0 +1,9 @@
+{
+  "name": "web-demo",
+  "version": "0.1.0",
+  "files": [
+    "web_demo_bg.wasm",
+    "web_demo.js"
+  ],
+  "browser": "web_demo.js"
+}
