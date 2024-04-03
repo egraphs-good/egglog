@@ -1,0 +1,7 @@
+(function f () i64 :merge (max old new))
+(function g () i64 :merge (max old new))
+(set (f) 0)
+(set (g) 0)
+
+(rule () 
+      ((set (g) (+ (f) 1))))

@@ -92,6 +92,8 @@ impl<'a> ActionCompiler<'a> {
     fn do_function(&mut self, func_type: &FuncType) {
         self.instructions.push(Instruction::CallFunction(
             func_type.name,
+            // TODO: this seems redundant. everything that has default is a datatype
+            // and everything that is a datatype has a default
             func_type.has_default || func_type.is_datatype,
         ));
     }

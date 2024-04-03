@@ -17,6 +17,10 @@ impl Sort for UnitSort {
         self.name
     }
 
+    fn is_unit(&self) -> bool {
+        true
+    }
+
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
         self
     }

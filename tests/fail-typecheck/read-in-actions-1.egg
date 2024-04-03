@@ -1,0 +1,4 @@
+(function f () i64 :merge (max old new))
+(set (f) 0)
+
+(rule () ((let a (+ (f) 1))))

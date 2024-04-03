@@ -45,17 +45,21 @@
       ((set (lower-bound e) (+ x y))))
 (rule ((= e (Add a b)) (= x (upper-bound a)) (= y (upper-bound b)))
       ((set (upper-bound e) (+ x y))))
-(rule ((= e (Mul a b)))
+(rule ((= e (Mul a b))
+       (= la (lower-bound a))
+       (= ua (upper-bound a))
+       (= lb (lower-bound b))
+       (= ub (upper-bound b)))
       ((set (lower-bound e)
-            (min (* (lower-bound a) (lower-bound b))
-                 (min (* (lower-bound a) (upper-bound b))
-                 (min (* (upper-bound a) (lower-bound b))
-                      (* (upper-bound a) (upper-bound b))))))
+            (min (* la lb)
+                 (min (* la ub)
+                 (min (* ua lb)
+                      (* ua ub)))))
        (set (upper-bound e)
-            (max (* (lower-bound a) (lower-bound b))
-                 (max (* (lower-bound a) (upper-bound b))
-                 (max (* (upper-bound a) (lower-bound b))
-                      (* (upper-bound a) (upper-bound b))))))))
+            (max (* la lb)
+                 (max (* la ub)
+                 (max (* ua lb)
+                      (* ua ub)))))))
 
 (rule ((= e (Add a b))
        (> (lower-bound e) (rational 0 1)))
@@ -88,19 +92,19 @@
 
 (function true-value (Math) f64)
 
-(rule ((= (to-f64 (lower-bound e))
-          (to-f64 (upper-bound e))))
-      ((set (true-value e)
-            (to-f64 (lower-bound e)))))
+(rule ((= val-e (to-f64 (lower-bound e)))
+       (= val-e (to-f64 (upper-bound e))))
+      ((set (true-value e) val-e)))
 
 (run 1)
 (query-extract (true-value x1))
 
-(function best-error (Math) f64 :merge new :default (to-f64 (rational 10000 1)))
+(let default-error (to-f64 (rational 10000 1)))
+(function best-error (Math) f64 :merge new)
 
 (rule ((Num n))
       ((set (best-error (Num n)) (to-f64 n))))
-(rule ((Add a b)) ((best-error (Add a b))))
+(rule ((Add a b)) ((set (best-error (Add a b)) default-error)))
 
 ;; finally, the mega rule for finding more accurate programs
 (rule ((= expr (Add a b))
@@ -124,7 +128,7 @@
 (run 1)
 
 ;; set a default
-(best-error target)
+(set (best-error target) default-error)
 ;; error is bad, constant folding hasn't fired enough
 (query-extract (best-error target))
 

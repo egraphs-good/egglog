@@ -30,6 +30,10 @@ use crate::*;
 pub trait Sort: Any + Send + Sync + Debug {
     fn name(&self) -> Symbol;
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static>;
+    fn is_unit(&self) -> bool {
+        false
+    }
+
     fn is_eq_sort(&self) -> bool {
         false
     }

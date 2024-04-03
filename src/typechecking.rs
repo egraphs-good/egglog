@@ -486,6 +486,8 @@ pub enum TypeError {
     AlreadyDefined(Symbol),
     #[error("All alternative definitions considered failed\n{}", .0.iter().map(|e| format!("  {e}\n")).collect::<Vec<_>>().join(""))]
     AllAlternativeFailed(Vec<TypeError>),
+    #[error("Cannot read from non-datatype function {} in actions. Consider putting it in the query?", .0.name)]
+    ReadNonDatatype(FuncType),
 }
 
 #[cfg(test)]

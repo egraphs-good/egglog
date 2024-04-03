@@ -9,7 +9,7 @@ use crate::{
     sort::I64Sort,
     typechecking::TypeError,
     util::{FreshGen, HashMap, HashSet, SymbolGen},
-    ArcSort, CorrespondingVar, Symbol, TypeInfo,
+    ArcSort, CorrespondingVar, Symbol, TypeInfo, UNIT_SYM,
 };
 use core::hash::Hash;
 use std::{fmt::Debug, iter::once, mem::swap};
@@ -297,6 +297,30 @@ impl Assignment<AtomTerm, ArcSort> {
         action: &MappedAction,
         typeinfo: &TypeInfo,
     ) -> Result<ResolvedAction, TypeError> {
+        let annotate_expr_datatype_only = |expr: &GenericExpr<_, _, _>, typeinfo: &TypeInfo| {
+            let expr = self.annotate_expr(expr, typeinfo);
+            let mut violation = None;
+            expr.subst(
+                &mut |leaf| ResolvedExpr::Var((), leaf.clone()),
+                &mut |head| {
+                    match head {
+                        ResolvedCall::Func(functype)
+                            if !functype.is_datatype
+                                && !(functype.output.name() == UNIT_SYM.into()) =>
+                        {
+                            violation = Some(TypeError::ReadNonDatatype(functype.clone()));
+                        }
+                        _ => {}
+                    }
+                    head.clone()
+                },
+            );
+            if let Some(violation) = violation {
+                Err(violation)
+            } else {
+                Ok(expr)
+            }
+        };
         match action {
             GenericAction::Let((), var, expr) => {
                 let ty = self
@@ -309,7 +333,7 @@ impl Assignment<AtomTerm, ArcSort> {
                         sort: ty.clone(),
                         is_global_ref: false,
                     },
-                    self.annotate_expr(expr, typeinfo),
+                    annotate_expr_datatype_only(expr, typeinfo)?,
                 ))
             }
             // Note mapped_var for set is a dummy variable that does not mean anything
@@ -324,9 +348,9 @@ impl Assignment<AtomTerm, ArcSort> {
             ) => {
                 let children: Vec<_> = children
                     .iter()
-                    .map(|child| self.annotate_expr(child, typeinfo))
-                    .collect();
-                let rhs = self.annotate_expr(rhs, typeinfo);
+                    .map(|child| annotate_expr_datatype_only(child, typeinfo))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let rhs = annotate_expr_datatype_only(rhs, typeinfo)?;
                 let types: Vec<_> = children
                     .iter()
                     .map(|child| child.output_type(typeinfo))
@@ -338,7 +362,7 @@ impl Assignment<AtomTerm, ArcSort> {
                 }
                 Ok(ResolvedAction::Set((), resolved_call, children, rhs))
             }
-            // Note mapped_var for delete is a dummy variable that does not mean anything
+            // Note mapped_var for Change is a dummy variable that does not mean anything
             GenericAction::Change(
                 (),
                 change,
@@ -350,8 +374,8 @@ impl Assignment<AtomTerm, ArcSort> {
             ) => {
                 let children: Vec<_> = children
                     .iter()
-                    .map(|child| self.annotate_expr(child, typeinfo))
-                    .collect();
+                    .map(|child| annotate_expr_datatype_only(child, typeinfo))
+                    .collect::<Result<Vec<_>, _>>()?;
                 let types: Vec<_> = children
                     .iter()
                     .map(|child| child.output_type(typeinfo))
@@ -368,18 +392,19 @@ impl Assignment<AtomTerm, ArcSort> {
             }
             GenericAction::Union((), lhs, rhs) => Ok(ResolvedAction::Union(
                 (),
-                self.annotate_expr(lhs, typeinfo),
-                self.annotate_expr(rhs, typeinfo),
+                annotate_expr_datatype_only(lhs, typeinfo)?,
+                annotate_expr_datatype_only(rhs, typeinfo)?,
             )),
             GenericAction::Extract((), lhs, rhs) => Ok(ResolvedAction::Extract(
                 (),
-                self.annotate_expr(lhs, typeinfo),
-                self.annotate_expr(rhs, typeinfo),
+                annotate_expr_datatype_only(lhs, typeinfo)?,
+                annotate_expr_datatype_only(rhs, typeinfo)?,
             )),
             GenericAction::Panic((), msg) => Ok(ResolvedAction::Panic((), msg.clone())),
-            GenericAction::Expr((), expr) => {
-                Ok(ResolvedAction::Expr((), self.annotate_expr(expr, typeinfo)))
-            }
+            GenericAction::Expr((), expr) => Ok(ResolvedAction::Expr(
+                (),
+                annotate_expr_datatype_only(expr, typeinfo)?,
+            )),
         }
     }
 
