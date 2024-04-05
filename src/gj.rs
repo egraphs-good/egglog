@@ -716,13 +716,9 @@ impl EGraph {
             }
             let duration = start.elapsed();
             log::debug!("Matched {} times (took {:?})", ctx.matches, duration,);
-            let iteration = self
-                .ruleset_iteration
-                .get::<Symbol>(&"".into())
-                .unwrap_or(&0);
             if duration.as_millis() > 1000 {
                 log::warn!(
-                    "Query took a long time at iter {iteration} : {:?}",
+                    "Query took a long time: {:?}",
                     duration
                 );
             }

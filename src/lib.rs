@@ -109,6 +109,30 @@ impl RunReport {
         }
         s
     }
+
+    fn add_rule_search_time(&mut self, rule: Symbol, time: Duration) {
+        *self.search_time_per_rule.entry(rule).or_default() += time;
+    }
+
+    fn add_ruleset_search_time(&mut self, ruleset: Symbol, time: Duration) {
+        *self.search_time_per_ruleset.entry(ruleset).or_default() += time;
+    }
+
+    fn add_rule_apply_time(&mut self, rule: Symbol, time: Duration) {
+        *self.apply_time_per_rule.entry(rule).or_default() += time;
+    }
+
+    fn add_ruleset_apply_time(&mut self, ruleset: Symbol, time: Duration) {
+        *self.apply_time_per_ruleset.entry(ruleset).or_default() += time;
+    }
+
+    fn add_ruleset_rebuild_time(&mut self, ruleset: Symbol, time: Duration) {
+        *self.rebuild_time_per_ruleset.entry(ruleset).or_default() += time;
+    }
+
+    fn add_rule_num_matches(&mut self, rule: Symbol, num_matches: usize) {
+        *self.num_matches_per_rule.entry(rule).or_default() += num_matches;
+    }
 }
 
 impl Display for RunReport {
@@ -404,7 +428,7 @@ pub struct EGraph {
     pub(crate) desugar: Desugar,
     pub functions: HashMap<Symbol, Function>,
     rulesets: HashMap<Symbol, Ruleset>,
-    ruleset_iteration: HashMap<Symbol, usize>,
+    rule_last_run_timestamp: HashMap<Symbol, u32>,
     proofs_enabled: bool,
     terms_enabled: bool,
     interactive_mode: bool,
@@ -424,16 +448,6 @@ pub struct EGraph {
     msgs: Vec<String>,
 }
 
-#[derive(Clone, Debug)]
-struct Rule {
-    query: CompiledQuery,
-    program: Program,
-    matches: usize,
-    times_banned: usize,
-    banned_until: usize,
-    todo_timestamp: u32,
-}
-
 impl Default for EGraph {
     fn default() -> Self {
         let mut egraph = Self {
@@ -441,7 +455,7 @@ impl Default for EGraph {
             unionfind: Default::default(),
             functions: Default::default(),
             rulesets: Default::default(),
-            ruleset_iteration: Default::default(),
+            rule_last_run_timestamp: Default::default(),
             desugar: Desugar::default(),
             match_limit: usize::MAX,
             node_limit: usize::MAX,
@@ -475,10 +489,8 @@ pub struct NotFoundError(Expr);
 /// When a rule has no variables, it may still match- in this case
 /// the `did_match` field is used.
 struct SearchResult {
-    name: Symbol,
     all_matches: Vec<Value>,
     did_match: bool,
-    rule_search_time: Duration,
 }
 
 impl EGraph {
@@ -890,10 +902,7 @@ impl EGraph {
         log::debug!("database size: {}", self.num_tuples());
         log::debug!("Made {updates} updates");
         // add to the rebuild time for this ruleset
-        *report
-            .rebuild_time_per_ruleset
-            .entry(config.ruleset)
-            .or_default() += rebuild_start.elapsed();
+        report.add_ruleset_rebuild_time(config.ruleset, rebuild_start.elapsed());
         self.timestamp += 1;
 
         let GenericRunConfig { ruleset, until } = config;
@@ -924,199 +933,135 @@ impl EGraph {
     /// Search all the rules in a ruleset.
     /// Add the search results for a rule to search_results, a map indexed by rule name.
     fn search_rules(
-        &mut self,
+        &self,
         ruleset: Symbol,
-        run_reports: &mut HashMap<Symbol, RunReport>,
+        run_report: &mut RunReport,
         search_results: &mut HashMap<Symbol, SearchResult>,
     ) {
-        let iteration = *self.ruleset_iteration.entry(ruleset).or_default();
-        self.ruleset_iteration.insert(ruleset, iteration + 1);
         let rules = self.rulesets.get(&ruleset).unwrap();
         match rules {
-            Ruleset::Rules(name, rule_names) => {
+            Ruleset::Rules(_ruleset_name, rule_names) => {
                 let copy_rules = rule_names.clone();
                 let search_start = Instant::now();
-                let mut searched = vec![];
 
-                for (name, rule) in copy_rules.iter() {
+                for (rule_name, rule) in copy_rules.iter() {
                     let mut all_matches = vec![];
-                    if rule.banned_until <= iteration {
-                        let mut fuel = safe_shl(self.match_limit, rule.times_banned);
-                        let rule_search_start = Instant::now();
-                        let mut did_match = false;
-                        self.run_query(&rule.query, rule.todo_timestamp, false, |values| {
-                            did_match = true;
-                            assert_eq!(values.len(), rule.query.vars.len());
-                            all_matches.extend_from_slice(values);
-                            if fuel > 0 {
-                                fuel -= 1;
-                                Ok(())
-                            } else {
-                                Err(())
-                            }
-                        });
-                        let rule_search_time = rule_search_start.elapsed();
-                        log::trace!(
-                            "Searched for {name} in {:.3}s ({} results)",
-                            rule_search_time.as_secs_f64(),
-                            all_matches.len()
-                        );
-                        searched.push(SearchResult {
-                            name: *name,
+                    let rule_search_start = Instant::now();
+                    let mut did_match = false;
+                    let timestamp = self.rule_last_run_timestamp.get(rule_name).unwrap_or(&0);
+                    self.run_query(&rule.query, *timestamp, false, |values| {
+                        did_match = true;
+                        assert_eq!(values.len(), rule.query.vars.len());
+                        all_matches.extend_from_slice(values);
+                        Ok(())
+                    });
+                    let rule_search_time = rule_search_start.elapsed();
+                    log::trace!(
+                        "Searched for {rule_name} in {:.3}s ({} results)",
+                        rule_search_time.as_secs_f64(),
+                        all_matches.len()
+                    );
+                    run_report.add_rule_search_time(*rule_name, rule_search_time);
+                    search_results.insert(
+                        *rule_name,
+                        SearchResult {
                             all_matches,
-                            rule_search_time,
                             did_match,
-                        });
-                    }
+                        },
+                    );
                 }
+
+                let search_time = search_start.elapsed();
+                run_report.add_ruleset_search_time(ruleset, search_time);
             }
-            Ruleset::Combined(name, sub_rulesets) => {
+            Ruleset::Combined(_name, sub_rulesets) => {
                 let start_time = Instant::now();
                 for sub_ruleset in sub_rulesets {
-                    self.search_rules(*sub_ruleset, run_reports, search_results);
+                    self.search_rules(*sub_ruleset, run_report, search_results);
                 }
                 let search_time = start_time.elapsed();
-                *run_reports
-                    .entry(ruleset)
-                    .or_insert_with(RunReport::default)
-                    .search_time_per_ruleset
-                    .entry(*name)
-                    .or_insert(Duration::default()) += search_time;
+                run_report.add_ruleset_search_time(ruleset, search_time);
+            }
+        }
+    }
+
+    fn apply_rules(
+        &mut self,
+        ruleset: Symbol,
+        run_report: &mut RunReport,
+        search_results: &HashMap<Symbol, SearchResult>,
+    ) {
+        // TODO this clone is not efficient
+        let rules = self.rulesets.get(&ruleset).unwrap().clone();
+        match rules {
+            Ruleset::Rules(_name, compiled_rules) => {
+                let apply_start = Instant::now();
+                let rule_names = compiled_rules.keys().cloned().collect::<Vec<_>>();
+                for rule_name in rule_names {
+                    let SearchResult {
+                        all_matches,
+                        did_match,
+                    } = search_results.get(&rule_name).unwrap();
+                    let rule = compiled_rules.get(&rule_name).unwrap();
+                    let num_vars = rule.query.vars.len();
+
+                    // make sure the query requires matches
+                    if num_vars != 0 {
+                        run_report.add_rule_num_matches(rule_name, all_matches.len() / num_vars);
+                    }
+
+                    self.rule_last_run_timestamp
+                        .insert(rule_name, self.timestamp);
+                    let rule_apply_start = Instant::now();
+
+                    let stack = &mut vec![];
+
+                    // when there are no variables, a query can still fail to match
+                    // here we handle that case
+                    if num_vars == 0 {
+                        if *did_match {
+                            stack.clear();
+                            self.run_actions(stack, &[], &rule.program, true)
+                                .unwrap_or_else(|e| {
+                                    panic!("error while running actions for {rule_name}: {e}")
+                                });
+                        }
+                    } else {
+                        for values in all_matches.chunks(num_vars) {
+                            stack.clear();
+                            self.run_actions(stack, values, &rule.program, true)
+                                .unwrap_or_else(|e| {
+                                    panic!("error while running actions for {rule_name}: {e}")
+                                });
+                        }
+                    }
+
+                    // add to the rule's apply time
+                    run_report.add_rule_apply_time(rule_name, rule_apply_start.elapsed());
+                }
+                run_report.add_ruleset_apply_time(ruleset, apply_start.elapsed());
+            }
+            Ruleset::Combined(_name, sub_rulesets) => {
+                let start_time = Instant::now();
+                for sub_ruleset in sub_rulesets {
+                    self.apply_rules(sub_ruleset, run_report, search_results);
+                }
+                let apply_time = start_time.elapsed();
+                run_report.add_ruleset_apply_time(ruleset, apply_time);
             }
         }
     }
 
     fn step_rules(&mut self, ruleset: Symbol) -> RunReport {
-        let mut run_reports = HashMap::<Symbol, RunReport>::default();
-
         let n_unions_before = self.unionfind.n_unions();
-        let mut report = RunReport::default();
+        let mut run_report = Default::default();
+        let mut search_results = HashMap::<Symbol, SearchResult>::default();
+        self.search_rules(ruleset, &mut run_report, &mut search_results);
+        self.apply_rules(ruleset, &mut run_report, &search_results);
+        run_report.updated |=
+            self.did_change_tables() || n_unions_before != self.unionfind.n_unions();
 
-        let ban_length = 5;
-
-        if !self.rulesets.contains_key(&ruleset) {
-            panic!("run: No ruleset named '{ruleset}'");
-        }
-        let mut rules: HashMap<Symbol, Rule> =
-            std::mem::take(self.rulesets.get_mut(&ruleset).unwrap());
-        let iteration = *self.ruleset_iteration.entry(ruleset).or_default();
-        self.ruleset_iteration.insert(ruleset, iteration + 1);
-        // TODO why did I have to copy the rules here for the first for loop?
-        let copy_rules = rules.clone();
-        let search_start = Instant::now();
-        let mut searched = vec![];
-        for (name, rule) in copy_rules.iter() {
-            let mut all_matches = vec![];
-            if rule.banned_until <= iteration {
-                let mut fuel = safe_shl(match_limit, rule.times_banned);
-                let rule_search_start = Instant::now();
-                let mut did_match = false;
-                self.run_query(&rule.query, rule.todo_timestamp, false, |values| {
-                    did_match = true;
-                    assert_eq!(values.len(), rule.query.vars.len());
-                    all_matches.extend_from_slice(values);
-                    if fuel > 0 {
-                        fuel -= 1;
-                        Ok(())
-                    } else {
-                        Err(())
-                    }
-                });
-                let rule_search_time = rule_search_start.elapsed();
-                log::debug!(
-                    "Searched for {name} in {:.3}s ({} results)",
-                    rule_search_time.as_secs_f64(),
-                    all_matches.len()
-                );
-                searched.push(SearchResult {
-                    name: *name,
-                    all_matches,
-                    rule_search_time,
-                    did_match,
-                });
-            }
-        }
-
-        let search_elapsed = search_start.elapsed();
-        // add to the ruleset searched time
-        *report
-            .search_time_per_ruleset
-            .entry(ruleset)
-            .or_insert(Duration::default()) += search_elapsed;
-
-        let apply_start = Instant::now();
-        for search_result in searched {
-            let SearchResult {
-                name,
-                all_matches,
-                rule_search_time,
-                did_match,
-            } = search_result;
-            let rule = rules.get_mut(&name).unwrap();
-            // add to the rule's search time
-            *report
-                .search_time_per_rule
-                .entry(name)
-                .or_insert(Duration::default()) += rule_search_time;
-            let num_vars = rule.query.vars.len();
-
-            // make sure the query requires matches
-            if num_vars != 0 {
-                *report.num_matches_per_rule.entry(name).or_insert(0) +=
-                    all_matches.len() / num_vars;
-
-                // backoff logic
-                let len = all_matches.len() / num_vars;
-                let threshold = safe_shl(match_limit, rule.times_banned);
-                if len > threshold {
-                    let ban_length = safe_shl(ban_length, rule.times_banned);
-                    rule.times_banned = rule.times_banned.saturating_add(1);
-                    rule.banned_until = iteration + ban_length;
-                    log::info!("Banning rule {name} for {ban_length} iterations, matched {len} > {threshold} times");
-                    report.updated = true;
-                    continue;
-                }
-            }
-
-            rule.todo_timestamp = self.timestamp;
-            let rule_apply_start = Instant::now();
-
-            let stack = &mut vec![];
-
-            // when there are no variables, a query can still fail to match
-            // here we handle that case
-            if num_vars == 0 {
-                if did_match {
-                    rule.matches += 1;
-                    stack.clear();
-                    self.run_actions(stack, &[], &rule.program, true)
-                        .unwrap_or_else(|e| panic!("error while running actions for {name}: {e}"));
-                }
-            } else {
-                for values in all_matches.chunks(num_vars) {
-                    rule.matches += 1;
-                    stack.clear();
-                    self.run_actions(stack, values, &rule.program, true)
-                        .unwrap_or_else(|e| panic!("error while running actions for {name}: {e}"));
-                }
-            }
-
-            // add to the rule's apply time
-            *report
-                .apply_time_per_rule
-                .entry(name)
-                .or_insert(Duration::default()) += rule_apply_start.elapsed();
-        }
-        self.rulesets.insert(ruleset, rules);
-        let apply_elapsed = apply_start.elapsed();
-        // add to the apply time for the ruleset
-        *report
-            .apply_time_per_ruleset
-            .entry(ruleset)
-            .or_insert(Duration::default()) += apply_elapsed;
-        report.updated |= self.did_change_tables() || n_unions_before != self.unionfind.n_unions();
-
-        report
+        run_report
     }
 
     fn did_change_tables(&self) -> bool {
@@ -1145,19 +1090,17 @@ impl EGraph {
         let program = self
             .compile_actions(&vars, &actions)
             .map_err(Error::TypeErrors)?;
-        let compiled_rule = Rule {
-            query,
-            matches: 0,
-            times_banned: 0,
-            banned_until: 0,
-            todo_timestamp: 0,
-            program,
-        };
+        let compiled_rule = CompiledRule { query, program };
         if let Some(rules) = self.rulesets.get_mut(&ruleset) {
-            match rules.entry(name) {
-                Entry::Occupied(_) => panic!("Rule '{name}' was already present"),
-                Entry::Vacant(e) => e.insert(compiled_rule),
-            };
+            match rules {
+                Ruleset::Rules(_, rules) => {
+                    match rules.entry(name) {
+                        Entry::Occupied(_) => panic!("Rule '{name}' was already present"),
+                        Entry::Vacant(e) => e.insert(compiled_rule),
+                    };
+                }
+                _ => panic!("Attempted to add a rule to combined ruleset {ruleset}. Combined rulesets may only depend on other rulesets."),
+            }
         } else {
             panic!("No such ruleset {ruleset}");
         }
@@ -1219,10 +1162,17 @@ impl EGraph {
         Ok(stack.pop().unwrap())
     }
 
+    fn add_combined_ruleset(&mut self, name: Symbol, rulesets: Vec<Symbol>) {
+        match self.rulesets.entry(name) {
+            Entry::Occupied(_) => panic!("Ruleset '{name}' was already present"),
+            Entry::Vacant(e) => e.insert(Ruleset::Combined(name, rulesets)),
+        };
+    }
+
     fn add_ruleset(&mut self, name: Symbol) {
         match self.rulesets.entry(name) {
             Entry::Occupied(_) => panic!("Ruleset '{name}' was already present"),
-            Entry::Vacant(e) => e.insert(Default::default()),
+            Entry::Vacant(e) => e.insert(Ruleset::Rules(name, Default::default())),
         };
     }
 
@@ -1313,10 +1263,7 @@ impl EGraph {
                 log::info!("Declared ruleset {name}.");
             }
             ResolvedNCommand::CombinedRuleset(name, others) => {
-                self.add_ruleset(name);
-                for other in others {
-                    self.add_ruleset(other);
-                }
+                self.add_combined_ruleset(name, others);
                 log::info!("Declared ruleset {name}.");
             }
             ResolvedNCommand::NormRule {
@@ -1646,10 +1593,6 @@ pub enum Error {
     IoError(PathBuf, std::io::Error),
     #[error("Cannot subsume function with merge: {0}")]
     SubsumeMergeError(Symbol),
-}
-
-fn safe_shl(a: usize, b: usize) -> usize {
-    a.checked_shl(b.try_into().unwrap()).unwrap_or(usize::MAX)
 }
 
 #[cfg(test)]

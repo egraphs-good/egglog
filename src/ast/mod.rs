@@ -44,9 +44,10 @@ impl Display for Id {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Ruleset {
-    Rules(Symbol, HashMap<Symbol, Rule>),
+#[derive(Clone, Debug)]
+/// The egglog internal representation of already compiled rules
+pub(crate) enum Ruleset {
+    Rules(Symbol, HashMap<Symbol, CompiledRule>),
     Combined(Symbol, Vec<Symbol>),
 }
 
@@ -1458,6 +1459,12 @@ where
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.to_sexp())
     }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct CompiledRule {
+    pub(crate) query: CompiledQuery,
+    pub(crate) program: Program,
 }
 
 pub type Rule = GenericRule<Symbol, Symbol, ()>;
