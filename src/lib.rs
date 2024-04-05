@@ -403,7 +403,7 @@ pub struct EGraph {
     unionfind: UnionFind,
     pub(crate) desugar: Desugar,
     pub functions: HashMap<Symbol, Function>,
-    rulesets: HashMap<Symbol, HashMap<Symbol, Rule>>,
+    rulesets: HashMap<Symbol, Ruleset>,
     ruleset_iteration: HashMap<Symbol, usize>,
     proofs_enabled: bool,
     terms_enabled: bool,
@@ -459,7 +459,9 @@ impl Default for EGraph {
             msgs: Default::default(),
             type_info: Default::default(),
         };
-        egraph.rulesets.insert("".into(), Default::default());
+        egraph
+            .rulesets
+            .insert("".into(), Ruleset::Rules("".into(), Default::default()));
         egraph
     }
 }
@@ -919,15 +921,75 @@ impl EGraph {
         report
     }
 
+    /// Search all the rules in a ruleset.
+    /// Add the search results for a rule to search_results, a map indexed by rule name.
+    fn search_rules(
+        &mut self,
+        ruleset: Symbol,
+        run_reports: &mut HashMap<Symbol, RunReport>,
+        search_results: &mut HashMap<Symbol, SearchResult>,
+    ) {
+        let iteration = *self.ruleset_iteration.entry(ruleset).or_default();
+        self.ruleset_iteration.insert(ruleset, iteration + 1);
+        let rules = self.rulesets.get(&ruleset).unwrap();
+        match rules {
+            Ruleset::Rules(name, rule_names) => {
+                let copy_rules = rule_names.clone();
+                let search_start = Instant::now();
+                let mut searched = vec![];
+
+                for (name, rule) in copy_rules.iter() {
+                    let mut all_matches = vec![];
+                    if rule.banned_until <= iteration {
+                        let mut fuel = safe_shl(self.match_limit, rule.times_banned);
+                        let rule_search_start = Instant::now();
+                        let mut did_match = false;
+                        self.run_query(&rule.query, rule.todo_timestamp, false, |values| {
+                            did_match = true;
+                            assert_eq!(values.len(), rule.query.vars.len());
+                            all_matches.extend_from_slice(values);
+                            if fuel > 0 {
+                                fuel -= 1;
+                                Ok(())
+                            } else {
+                                Err(())
+                            }
+                        });
+                        let rule_search_time = rule_search_start.elapsed();
+                        log::trace!(
+                            "Searched for {name} in {:.3}s ({} results)",
+                            rule_search_time.as_secs_f64(),
+                            all_matches.len()
+                        );
+                        searched.push(SearchResult {
+                            name: *name,
+                            all_matches,
+                            rule_search_time,
+                            did_match,
+                        });
+                    }
+                }
+            }
+            Ruleset::Combined(name, sub_rulesets) => {
+                let start_time = Instant::now();
+                for sub_ruleset in sub_rulesets {
+                    self.search_rules(*sub_ruleset, run_reports, search_results);
+                }
+                let search_time = start_time.elapsed();
+                *run_reports
+                    .entry(ruleset)
+                    .or_insert_with(RunReport::default)
+                    .search_time_per_ruleset
+                    .entry(*name)
+                    .or_insert(Duration::default()) += search_time;
+            }
+        }
+    }
+
     fn step_rules(&mut self, ruleset: Symbol) -> RunReport {
+        let mut run_reports = HashMap::<Symbol, RunReport>::default();
+
         let n_unions_before = self.unionfind.n_unions();
-        // don't ban parent or rebuilding
-        let match_limit =
-            if ruleset.as_str().contains("parent_") || ruleset.as_str().contains("rebuilding_") {
-                usize::MAX
-            } else {
-                self.match_limit
-            };
         let mut report = RunReport::default();
 
         let ban_length = 5;
@@ -1248,6 +1310,13 @@ impl EGraph {
             }
             ResolvedNCommand::AddRuleset(name) => {
                 self.add_ruleset(name);
+                log::info!("Declared ruleset {name}.");
+            }
+            ResolvedNCommand::CombinedRuleset(name, others) => {
+                self.add_ruleset(name);
+                for other in others {
+                    self.add_ruleset(other);
+                }
                 log::info!("Declared ruleset {name}.");
             }
             ResolvedNCommand::NormRule {
