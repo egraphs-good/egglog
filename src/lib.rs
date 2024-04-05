@@ -1098,13 +1098,13 @@ impl EGraph {
                         Entry::Occupied(_) => panic!("Rule '{name}' was already present"),
                         Entry::Vacant(e) => e.insert(compiled_rule),
                     };
+                    Ok(name)
                 }
-                _ => panic!("Attempted to add a rule to combined ruleset {ruleset}. Combined rulesets may only depend on other rulesets."),
+                Ruleset::Combined(_, _) => Err(Error::CombinedRulesetError(ruleset)),
             }
         } else {
-            panic!("No such ruleset {ruleset}");
+            Err(Error::NoSuchRuleset(ruleset))
         }
-        Ok(name)
     }
 
     pub(crate) fn add_rule(
@@ -1581,6 +1581,10 @@ pub enum Error {
     TypeErrors(Vec<TypeError>),
     #[error("Check failed: \n{}", ListDisplay(.0, "\n"))]
     CheckError(Vec<Fact>),
+    #[error("No such ruleset: {0}")]
+    NoSuchRuleset(Symbol),
+    #[error("Attempted to add a rule to combined ruleset {0}. Combined rulesets may only depend on other rulesets.")]
+    CombinedRulesetError(Symbol),
     #[error("Evaluating primitive {0:?} failed. ({0:?} {:?})", ListDebug(.1, " "))]
     PrimitiveError(Primitive, Vec<Value>),
     #[error("Illegal merge attempted for function {0}, {1:?} != {2:?}")]
