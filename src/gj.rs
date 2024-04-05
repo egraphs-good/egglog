@@ -717,10 +717,7 @@ impl EGraph {
             let duration = start.elapsed();
             log::debug!("Matched {} times (took {:?})", ctx.matches, duration,);
             if duration.as_millis() > 1000 {
-                log::warn!(
-                    "Query took a long time: {:?}",
-                    duration
-                );
+                log::warn!("Query took a long time: {:?}", duration);
             }
         }
     }
