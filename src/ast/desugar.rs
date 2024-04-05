@@ -11,6 +11,7 @@ pub struct Desugar {
 impl Default for Desugar {
     fn default() -> Self {
         Self {
+            // the default reserved string in egglog is "_"
             fresh_gen: SymbolGen::new("_".repeat(2)),
             parser: ast::parse::ProgramParser::new(),
         }

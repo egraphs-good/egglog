@@ -1428,7 +1428,7 @@ impl EGraph {
 
         let program = self.type_info_mut().typecheck_program(&program)?;
 
-        let program = remove_globals(&self.type_info, program);
+        let program = remove_globals(&self.type_info, program, &mut self.desugar.fresh_gen);
 
         Ok(program)
     }

@@ -11,8 +11,8 @@ use crate::{
     ResolvedFact, ResolvedFunctionDecl, ResolvedNCommand, ResolvedVar, Schema, SymbolGen, TypeInfo,
 };
 
-struct GlobalRemover {
-    fresh: SymbolGen,
+struct GlobalRemover<'a> {
+    fresh: &'a mut SymbolGen,
 }
 
 /// Removes all globals from a program.
@@ -47,10 +47,9 @@ struct GlobalRemover {
 pub(crate) fn remove_globals(
     type_info: &TypeInfo,
     prog: Vec<ResolvedNCommand>,
+    fresh: &mut SymbolGen,
 ) -> Vec<ResolvedNCommand> {
-    let mut remover = GlobalRemover {
-        fresh: SymbolGen::new(),
-    };
+    let mut remover = GlobalRemover { fresh };
     prog.into_iter()
         .flat_map(|cmd| remover.remove_globals_cmd(type_info, cmd))
         .collect()
@@ -91,7 +90,7 @@ fn remove_globals_action(action: ResolvedAction) -> ResolvedAction {
     action.visit_exprs(&mut replace_global_vars)
 }
 
-impl GlobalRemover {
+impl<'a> GlobalRemover<'a> {
     fn remove_globals_cmd(
         &mut self,
         type_info: &TypeInfo,
