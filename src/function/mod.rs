@@ -477,4 +477,8 @@ impl Function {
     pub(crate) fn get_size(&self, range: &Range<u32>) -> usize {
         self.nodes.approximate_range_size(range)
     }
+
+    pub fn is_extractable(&self) -> bool {
+        !self.decl.unextractable
+    }
 }
