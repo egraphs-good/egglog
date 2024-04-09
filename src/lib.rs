@@ -410,7 +410,6 @@ pub struct EGraph {
     interactive_mode: bool,
     timestamp: u32,
     pub run_mode: RunMode,
-    // pub(crate) term_header_added: bool,
     pub test_proofs: bool,
     pub match_limit: usize,
     pub node_limit: usize,
@@ -594,7 +593,15 @@ impl EGraph {
     pub fn find(&self, value: Value) -> Value {
         if self.terms_enabled {
             // HACK using value tag for parent table name
-            let parent_name = self.desugar.parent_name(value.tag);
+            let parent_name = self
+                .desugar
+                .lookup_parent_name(value.tag)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "Term encoding should have created parent table for {}",
+                        value.tag
+                    )
+                });
             if let Some(func) = self.functions.get(&parent_name) {
                 func.get(&[value])
                     .unwrap_or_else(|| panic!("No value {:?} in {parent_name}.", value,))
@@ -1108,7 +1115,7 @@ impl EGraph {
         let (actions, _) = actions.to_core_actions(
             self.type_info(),
             &mut Default::default(),
-            &mut ResolvedGen::new(),
+            &mut ResolvedGen::new("$".to_string()),
         )?;
         let program = self
             .compile_actions(&Default::default(), &actions)
@@ -1139,7 +1146,7 @@ impl EGraph {
         let (actions, mapped_expr) = expr.to_core_actions(
             self.type_info(),
             &mut Default::default(),
-            &mut ResolvedGen::new(),
+            &mut ResolvedGen::new("$".to_string()),
         )?;
         let target = mapped_expr.get_corresponding_var_or_lit(self.type_info());
         let program = self
@@ -1406,8 +1413,12 @@ impl EGraph {
         }
     }
 
-    pub fn set_underscores_for_desugaring(&mut self, underscores: usize) {
-        self.desugar.number_underscores = underscores;
+    pub fn set_reserved_symbol(&mut self, sym: Symbol) {
+        assert!(
+            !self.desugar.fresh_gen.has_been_used(),
+            "Reserved symbol must be set before any symbols are generated"
+        );
+        self.desugar.fresh_gen = SymbolGen::new(sym.to_string());
     }
 
     fn process_command(&mut self, command: Command) -> Result<Vec<ResolvedNCommand>, Error> {
@@ -1417,7 +1428,7 @@ impl EGraph {
 
         let program = self.type_info_mut().typecheck_program(&program)?;
 
-        let program = remove_globals(&self.type_info, program);
+        let program = remove_globals(&self.type_info, program, &mut self.desugar.fresh_gen);
 
         Ok(program)
     }
