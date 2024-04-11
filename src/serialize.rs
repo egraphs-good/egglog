@@ -160,7 +160,7 @@ impl EGraph {
         egraph: &mut egraph_serialize::EGraph,
         node_ids: &mut NodeIDs,
         value: &Value,
-        // The node ID to use for a primitve value, if this is None, use the hash of the value and the sort name
+        // The node ID to use for a primitive value, if this is None, use the hash of the value and the sort name
         // Set iff `split_primitive_outputs` is set and this is an output of a function.
         prim_node_id: Option<String>,
     ) -> (egraph_serialize::ClassId, Option<egraph_serialize::NodeId>) {
