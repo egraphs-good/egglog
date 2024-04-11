@@ -1,9 +1,9 @@
 //! Sort to represent functions as values.
 //!
 //! To declare the sort, you must specify the exact number of arguments and the sort of each, followed by the output sort:
-//! `(sort IntToString (Fn (i64) String))`
+//! `(sort IntToString (UnstableFn (i64) String))`
 //!
-//! To create a function value, use the `(function "name" [<partial args>])` primitive and to apply it use the `(app function arg1 arg2 ...)` primitive.
+//! To create a function value, use the `(unstable-fn "name" [<partial args>])` primitive and to apply it use the `(unstable-app function arg1 arg2 ...)` primitive.
 //! The number of args must match the number of arguments in the function sort.
 //!
 //!
@@ -55,7 +55,7 @@ pub struct FunctionSort {
 
 impl FunctionSort {
     pub fn presort_names() -> Vec<Symbol> {
-        vec!["fn".into(), "app".into()]
+        vec!["unstable-fn".into(), "unstable-app".into()]
     }
     pub fn make_sort(
         typeinfo: &mut TypeInfo,
@@ -141,12 +141,12 @@ impl Sort for FunctionSort {
 
     fn register_primitives(self: Arc<Self>, typeinfo: &mut TypeInfo) {
         typeinfo.add_primitive(Ctor {
-            name: "fn".into(),
+            name: "unstable-fn".into(),
             function: self.clone(),
             string: typeinfo.get_sort_nofail(),
         });
         typeinfo.add_primitive(Apply {
-            name: "app".into(),
+            name: "unstable-app".into(),
             function: self.clone(),
         });
     }
@@ -175,7 +175,7 @@ impl Sort for FunctionSort {
             },
         )?;
 
-        Some((cost, Expr::call("function", args)))
+        Some((cost, Expr::call("unstable-fn", args)))
     }
 }
 
@@ -231,7 +231,7 @@ impl TypeConstraint for FunctionCTorTypeConstraint {
     }
 }
 
-// (fn "name" [<arg1>, <arg2>, ...])
+// (unstable-fn "name" [<arg1>, <arg2>, ...])
 struct Ctor {
     name: Symbol,
     function: Arc<FunctionSort>,
@@ -265,7 +265,7 @@ impl PrimitiveLike for Ctor {
     }
 }
 
-// (app <function> [<arg1>, <arg2>, ...])
+// (unstable-app <function> [<arg1>, <arg2>, ...])
 struct Apply {
     name: Symbol,
     function: Arc<FunctionSort>,

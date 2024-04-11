@@ -50,7 +50,8 @@ impl Default for TypeInfo {
         res.presorts.insert("Map".into(), MapSort::make_sort);
         res.presorts.insert("Set".into(), SetSort::make_sort);
         res.presorts.insert("Vec".into(), VecSort::make_sort);
-        res.presorts.insert("Fn".into(), FunctionSort::make_sort);
+        res.presorts
+            .insert("UnstableFn".into(), FunctionSort::make_sort);
 
         res.add_primitive(ValueEq {
             unit: res.get_sort_nofail(),
