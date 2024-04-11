@@ -8,7 +8,6 @@ use typechecking::TypeError;
 use crate::{ast::Literal, core::ResolvedCall, ExtractReport, Value};
 
 struct ActionCompiler<'a> {
-    egraph: &'a EGraph,
     types: &'a IndexMap<Symbol, ArcSort>,
     locals: IndexSet<ResolvedVar>,
     instructions: Vec<Instruction>,
@@ -40,14 +39,15 @@ impl<'a> ActionCompiler<'a> {
                 self.do_atom_term(e);
                 self.instructions.push(Instruction::Set(func.name));
             }
-            GenericCoreAction::Delete(f, args) => {
+            GenericCoreAction::Change(change, f, args) => {
                 let ResolvedCall::Func(func) = f else {
-                    panic!("Cannot delete primitive- should have been caught by typechecking!!!")
+                    panic!("Cannot change primitive- should have been caught by typechecking!!!")
                 };
                 for arg in args {
                     self.do_atom_term(arg);
                 }
-                self.instructions.push(Instruction::DeleteRow(func.name));
+                self.instructions
+                    .push(Instruction::Change(*change, func.name));
             }
             GenericCoreAction::Union(arg1, arg2) => {
                 self.do_atom_term(arg1);
@@ -58,10 +58,6 @@ impl<'a> ActionCompiler<'a> {
                 self.instructions.push(Instruction::Panic(msg.clone()));
             }
         }
-    }
-
-    fn egraph(&self) -> &'a EGraph {
-        self.egraph
     }
 
     fn do_call(&mut self, f: &ResolvedCall, args: &[ResolvedAtomTerm]) {
@@ -87,9 +83,8 @@ impl<'a> ActionCompiler<'a> {
             ResolvedAtomTerm::Literal(lit) => {
                 self.instructions.push(Instruction::Literal(lit.clone()));
             }
-            ResolvedAtomTerm::Global(var) => {
-                assert!(self.egraph().global_bindings.contains_key(&var.name));
-                self.instructions.push(Instruction::Global(var.name));
+            ResolvedAtomTerm::Global(_var) => {
+                panic!("Global variables should have been desugared");
             }
         }
     }
@@ -122,8 +117,6 @@ enum Instruction {
     Literal(Literal),
     /// Push a value from the stack or the substitution onto the stack.
     Load(Load),
-    /// Push a global bound value onto the stack.
-    Global(Symbol),
     /// Pop function arguments off the stack, calls the function,
     /// and push the result onto the stack. The bool indicates
     /// whether to make defaults.
@@ -132,9 +125,9 @@ enum Instruction {
     /// Pop primitive arguments off the stack, calls the primitive,
     /// and push the result onto the stack.
     CallPrimitive(Primitive, usize),
-    /// Pop function arguments off the stack and delete the corresponding row
-    /// from the function.
-    DeleteRow(Symbol),
+    /// Pop function arguments off the stack and either deletes or subsumes the corresponding row
+    /// in the function.
+    Change(Change, Symbol),
     /// Pop the value to be set and the function arguments off the stack.
     /// Set the function at the given arguments to the new value.
     Set(Symbol),
@@ -167,7 +160,6 @@ impl EGraph {
             types.insert(var.name, var.sort.clone());
         }
         let mut compiler = ActionCompiler {
-            egraph: self,
             types: &types,
             locals: IndexSet::default(),
             instructions: Vec::new(),
@@ -196,7 +188,6 @@ impl EGraph {
             types.insert(var.name, var.sort.clone());
         }
         let mut compiler = ActionCompiler {
-            egraph: self,
             types: &types,
             locals: IndexSet::default(),
             instructions: Vec::new(),
@@ -270,10 +261,6 @@ impl EGraph {
     ) -> Result<(), Error> {
         for instr in &program.0 {
             match instr {
-                Instruction::Global(sym) => {
-                    let (_ty, value, _ts) = self.global_bindings.get(sym).unwrap();
-                    stack.push(*value);
-                }
                 Instruction::Load(load) => match load {
                     Load::Stack(idx) => stack.push(stack[*idx]),
                     Load::Subst(idx) => stack.push(subst[*idx]),
@@ -417,11 +404,21 @@ impl EGraph {
                     Literal::Bool(b) => stack.push(Value::from(*b)),
                     Literal::Unit => stack.push(Value::unit()),
                 },
-                Instruction::DeleteRow(f) => {
+                Instruction::Change(change, f) => {
                     let function = self.functions.get_mut(f).unwrap();
                     let new_len = stack.len() - function.schema.input.len();
                     let args = &stack[new_len..];
-                    function.remove(args, self.timestamp);
+                    match change {
+                        Change::Delete => {
+                            function.remove(args, self.timestamp);
+                        }
+                        Change::Subsume => {
+                            if function.decl.merge.is_some() {
+                                return Err(Error::SubsumeMergeError(*f));
+                            }
+                            function.subsume(args);
+                        }
+                    }
                     stack.truncate(new_len);
                 }
             }

@@ -16,7 +16,7 @@ use std::{
 
 type Query = crate::core::Query<ResolvedCall, Symbol>;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 enum Instr<'a> {
     Intersect {
         value_idx: usize,
@@ -127,9 +127,10 @@ impl<'b> Context<'b> {
         egraph: &'b EGraph,
         cq: &'b CompiledQuery,
         timestamp_ranges: &[Range<u32>],
+        include_subsumed: bool,
     ) -> Option<(Self, Program<'b>, Vec<Option<usize>>)> {
         let (program, join_var_ordering, intersections) =
-            egraph.compile_program(cq, timestamp_ranges)?;
+            egraph.compile_program(cq, timestamp_ranges, include_subsumed)?;
 
         let ctx = Context {
             query: cq,
@@ -250,7 +251,7 @@ impl<'b> Context<'b> {
                             self.tuple[i]
                         }
                         AtomTerm::Literal(lit) => self.egraph.eval_lit(lit),
-                        AtomTerm::Global(g) => self.egraph.global_bindings.get(g).unwrap().1,
+                        AtomTerm::Global(_g) => panic!("Globals should have been desugared"),
                     })
                 }
 
@@ -275,13 +276,8 @@ impl<'b> Context<'b> {
                                 return Ok(());
                             }
                         }
-                        AtomTerm::Global(g) => {
-                            assert!(check);
-                            let (sort, val, _ts) = self.egraph.global_bindings.get(g).unwrap();
-                            assert!(sort.name() == res.tag);
-                            if val.bits != res.bits {
-                                return Ok(());
-                            }
+                        AtomTerm::Global(_g) => {
+                            panic!("Globals should have been desugared")
                         }
                     }
                     self.eval(tries, program, stage.next(), f)?;
@@ -293,7 +289,7 @@ impl<'b> Context<'b> {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 enum Constraint {
     Eq(usize, usize),
     Const(usize, Value),
@@ -386,6 +382,7 @@ impl EGraph {
         atom: &Atom<Symbol>,
         column: usize,
         timestamp_range: Range<u32>,
+        include_subsumed: bool,
     ) -> TrieAccess {
         let function = &self.functions[&atom.head];
 
@@ -396,8 +393,8 @@ impl EGraph {
                     let val = self.eval_lit(lit);
                     constraints.push(Constraint::Const(i, val))
                 }
-                AtomTerm::Global(g) => {
-                    constraints.push(Constraint::Const(i, self.global_bindings.get(g).unwrap().1))
+                AtomTerm::Global(_g) => {
+                    panic!("Globals should have been desugared")
                 }
                 AtomTerm::Var(_v) => {
                     if let Some(j) = atom.args[..i].iter().position(|t2| t == t2) {
@@ -412,6 +409,7 @@ impl EGraph {
             timestamp_range,
             column,
             constraints,
+            include_subsumed,
         }
     }
 
@@ -420,13 +418,14 @@ impl EGraph {
         var: Symbol,
         atom: &Atom<Symbol>,
         timestamp_range: Range<u32>,
+        include_subsumed: bool,
     ) -> TrieAccess {
         let column = atom
             .args
             .iter()
             .position(|arg| arg == &AtomTerm::Var(var))
             .unwrap();
-        self.make_trie_access_for_column(atom, column, timestamp_range)
+        self.make_trie_access_for_column(atom, column, timestamp_range, include_subsumed)
     }
 
     // Returns `None` when no program is needed,
@@ -435,6 +434,7 @@ impl EGraph {
         &self,
         query: &CompiledQuery,
         timestamp_ranges: &[Range<u32>],
+        include_subsumed: bool,
     ) -> Option<(
         Program,
         Vec<Symbol>,        /* variable ordering */
@@ -453,9 +453,8 @@ impl EGraph {
                         let val = self.eval_lit(lit);
                         constants.entry(i).or_default().push((col, val));
                     }
-                    AtomTerm::Global(g) => {
-                        let val = self.global_bindings.get(g).unwrap().1;
-                        constants.entry(i).or_default().push((col, val));
+                    AtomTerm::Global(_g) => {
+                        panic!("Globals should have been desugared")
                     }
                 }
             }
@@ -504,7 +503,7 @@ impl EGraph {
             log::debug!("Variable costs: {:?}", ListDebug(&var_cost, "\n"));
 
             let var = *var_cost[0].1;
-            let info = vars.remove(&var).unwrap();
+            let info = vars.swap_remove(&var).unwrap();
             for &i in &info.occurences {
                 for v in atoms[i].vars() {
                     if let Some(info) = vars.get_mut(&v) {
@@ -525,7 +524,8 @@ impl EGraph {
             }
             consts.iter().map(|(col, val)| {
                 let range = timestamp_ranges[*atom].clone();
-                let trie_access = self.make_trie_access_for_column(&atoms[*atom], *col, range);
+                let trie_access =
+                    self.make_trie_access_for_column(&atoms[*atom], *col, range, include_subsumed);
 
                 Instr::ConstrainConstant {
                     index: *atom,
@@ -550,7 +550,7 @@ impl EGraph {
                     .map(|&atom_idx| {
                         let atom = &atoms[atom_idx];
                         let range = timestamp_ranges[atom_idx].clone();
-                        let access = self.make_trie_access(v, atom, range);
+                        let access = self.make_trie_access(v, atom, range, include_subsumed);
                         let initial_col = &mut initial_columns[atom_idx];
                         if initial_col.is_none() {
                             *initial_col = Some(access.column);
@@ -655,12 +655,15 @@ impl EGraph {
         atom_i: Option<usize>,
         timestamp_ranges: &[Range<u32>],
         cq: &CompiledQuery,
+        include_subsumed: bool,
         mut f: F,
     ) where
         F: FnMut(&[Value]) -> Result,
     {
         // do the gj
-        if let Some((mut ctx, program, cols)) = Context::new(self, cq, timestamp_ranges) {
+        if let Some((mut ctx, program, cols)) =
+            Context::new(self, cq, timestamp_ranges, include_subsumed)
+        {
             let start = Instant::now();
             let atom_info = if let Some(atom_i) = atom_i {
                 let atom = &cq.query.funcs().collect::<Vec<_>>()[atom_i];
@@ -726,26 +729,27 @@ impl EGraph {
         }
     }
 
-    pub(crate) fn run_query<F>(&self, cq: &CompiledQuery, timestamp: u32, mut f: F)
-    where
+    pub(crate) fn run_query<F>(
+        &self,
+        cq: &CompiledQuery,
+        timestamp: u32,
+        include_subsumed: bool,
+        mut f: F,
+    ) where
         F: FnMut(&[Value]) -> Result,
     {
         let has_atoms = !cq.query.funcs().collect::<Vec<_>>().is_empty();
 
         if has_atoms {
-            // check if any globals updated
-            let mut global_updated = false;
             for atom in cq.query.funcs() {
                 for arg in &atom.args {
-                    if let AtomTerm::Global(g) = arg {
-                        if self.global_bindings.get(g).unwrap().2 > timestamp {
-                            global_updated = true;
-                        }
+                    if let AtomTerm::Global(_g) = arg {
+                        panic!("Globals should have been desugared")
                     }
                 }
             }
 
-            let do_seminaive = self.seminaive && !global_updated;
+            let do_seminaive = self.seminaive;
             // for the later atoms, we consider everything
             let mut timestamp_ranges =
                 vec![0..u32::MAX; cq.query.funcs().collect::<Vec<_>>().len()];
@@ -753,15 +757,21 @@ impl EGraph {
                 for (atom_i, _atom) in cq.query.funcs().enumerate() {
                     timestamp_ranges[atom_i] = timestamp..u32::MAX;
 
-                    self.gj_for_atom(Some(atom_i), &timestamp_ranges, cq, &mut f);
+                    self.gj_for_atom(
+                        Some(atom_i),
+                        &timestamp_ranges,
+                        cq,
+                        include_subsumed,
+                        &mut f,
+                    );
                     // now we can fix this atom to be "old stuff" only
                     // range is half-open; timestamp is excluded
                     timestamp_ranges[atom_i] = 0..timestamp;
                 }
             } else {
-                self.gj_for_atom(None, &timestamp_ranges, cq, &mut f);
+                self.gj_for_atom(None, &timestamp_ranges, cq, include_subsumed, &mut f);
             }
-        } else if let Some((mut ctx, program, _)) = Context::new(self, cq, &[]) {
+        } else if let Some((mut ctx, program, _)) = Context::new(self, cq, &[], include_subsumed) {
             let mut meausrements = HashMap::<usize, Vec<usize>>::default();
             let stages = InputSizes {
                 stage_sizes: &mut meausrements,
@@ -890,12 +900,16 @@ impl LazyTrie {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct TrieAccess<'a> {
     function: &'a Function,
     timestamp_range: Range<u32>,
     column: usize,
     constraints: Vec<Constraint>,
+    // If we are querying to run a rule, we should not include subsumed expressions
+    // but if we are querying to run a check we can include them.
+    // So we have a flag to control this behavior and pass it down to here.
+    include_subsumed: bool,
 }
 
 impl<'a> std::fmt::Display for TrieAccess<'a> {
@@ -906,9 +920,9 @@ impl<'a> std::fmt::Display for TrieAccess<'a> {
 
 impl<'a> TrieAccess<'a> {
     fn filter_live<'b: 'a>(&'b self, ixs: &'b [Offset]) -> impl Iterator<Item = usize> + 'a {
-        ixs.iter().copied().filter_map(|ix| {
+        ixs.iter().copied().filter_map(move |ix| {
             let ix = ix as usize;
-            let (inp, out) = self.function.nodes.get_index(ix)?;
+            let (inp, out) = self.function.nodes.get_index(ix, self.include_subsumed)?;
             if self.timestamp_range.contains(&out.timestamp)
                 && self.constraints.iter().all(|c| c.check(inp, out))
             {
@@ -946,20 +960,23 @@ impl<'a> TrieAccess<'a> {
         };
 
         if idxs.is_empty() {
+            let rows = self
+                .function
+                .iter_timestamp_range(&self.timestamp_range, true);
             if self.column < arity {
-                for (i, tup, out) in self.function.iter_timestamp_range(&self.timestamp_range) {
+                for (i, tup, out) in rows {
                     insert(i, tup, out, tup[self.column])
                 }
             } else {
                 assert_eq!(self.column, arity);
-                for (i, tup, out) in self.function.iter_timestamp_range(&self.timestamp_range) {
+                for (i, tup, out) in rows {
                     insert(i, tup, out, out.value);
                 }
             };
         } else if self.column < arity {
             for idx in idxs {
                 let i = *idx as usize;
-                if let Some((tup, out)) = self.function.nodes.get_index(i) {
+                if let Some((tup, out)) = self.function.nodes.get_index(i, self.include_subsumed) {
                     insert(i, tup, out, tup[self.column])
                 }
             }
@@ -967,7 +984,7 @@ impl<'a> TrieAccess<'a> {
             assert_eq!(self.column, arity);
             for idx in idxs {
                 let i = *idx as usize;
-                if let Some((tup, out)) = self.function.nodes.get_index(i) {
+                if let Some((tup, out)) = self.function.nodes.get_index(i, self.include_subsumed) {
                     insert(i, tup, out, out.value)
                 }
             }

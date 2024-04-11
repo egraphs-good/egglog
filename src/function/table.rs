@@ -26,6 +26,7 @@
 //! It's likely that we will have to store these "on the side" or use some sort
 //! of persistent data-structure for the entire table.
 use std::{
+    fmt::{Debug, Formatter},
     hash::{BuildHasher, Hash, Hasher},
     mem,
     ops::Range,
@@ -68,6 +69,16 @@ macro_rules! search_for {
             inp.live() && inp.data() == $inp
         }
     };
+}
+
+impl Debug for Table {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Table")
+            .field("max_ts", &self.max_ts)
+            .field("n_stale", &self.n_stale)
+            .field("vals", &self.vals)
+            .finish()
+    }
 }
 
 impl Table {
@@ -114,11 +125,18 @@ impl Table {
         Some(&self.vals[*off].1)
     }
 
+    pub(crate) fn get_mut(&mut self, inputs: &[Value]) -> Option<&mut TupleOutput> {
+        let hash: u64 = hash_values(inputs);
+        let TableOffset { off, .. } = self.table.get(hash, search_for!(self, hash, inputs))?;
+        debug_assert!(self.vals[*off].0.live());
+        Some(&mut self.vals[*off].1)
+    }
+
     /// Insert the given data into the table at the given timestamp. Return the
     /// previous value, if there was one.
     pub(crate) fn insert(&mut self, inputs: &[Value], out: Value, ts: u32) -> Option<Value> {
         let mut res = None;
-        self.insert_and_merge(inputs, ts, |prev| {
+        self.insert_and_merge(inputs, ts, false, |prev| {
             res = prev;
             out
         });
@@ -136,6 +154,7 @@ impl Table {
         &mut self,
         inputs: &[Value],
         ts: u32,
+        subsumed: bool,
         on_merge: impl FnOnce(Option<Value>) -> Value,
     ) {
         assert!(ts >= self.max_ts);
@@ -145,8 +164,9 @@ impl Table {
             self.table.get_mut(hash, search_for!(self, hash, inputs))
         {
             let (inp, prev) = &mut self.vals[*off];
+            let prev_subsumed = prev.subsumed;
             let next = on_merge(Some(prev.value));
-            if next == prev.value {
+            if next == prev.value && prev_subsumed == subsumed {
                 return;
             }
             inp.stale_at = ts;
@@ -158,6 +178,7 @@ impl Table {
                 TupleOutput {
                     value: next,
                     timestamp: ts,
+                    subsumed: subsumed || prev_subsumed,
                 },
             ));
             *off = new_offset;
@@ -169,6 +190,7 @@ impl Table {
             TupleOutput {
                 value: on_merge(None),
                 timestamp: ts,
+                subsumed,
             },
         ));
         self.table.insert(
@@ -226,18 +248,25 @@ impl Table {
         true
     }
 
-    /// Returns the entries at the given index if the entry is live and the index in bounds.
-    pub(crate) fn get_index(&self, i: usize) -> Option<(&[Value], &TupleOutput)> {
+    /// Returns the entries at the given index if the entry is live (and possibly not subsumed) and the index in bounds.
+    pub(crate) fn get_index(
+        &self,
+        i: usize,
+        include_subsumed: bool,
+    ) -> Option<(&[Value], &TupleOutput)> {
         let (inp, out) = self.vals.get(i)?;
-        if !inp.live() {
+        if !valid_value(inp, out, include_subsumed) {
             return None;
         }
         Some((inp.data(), out))
     }
 
     /// Iterate over the live entries in the table, in insertion order.
-    pub(crate) fn iter(&self) -> impl Iterator<Item = (&[Value], &TupleOutput)> + '_ {
-        self.iter_range(0..self.num_offsets())
+    pub(crate) fn iter(
+        &self,
+        include_subsumed: bool,
+    ) -> impl Iterator<Item = (&[Value], &TupleOutput)> + '_ {
+        self.iter_range(0..self.num_offsets(), include_subsumed)
             .map(|(_, y, z)| (y, z))
     }
 
@@ -246,12 +275,13 @@ impl Table {
     pub(crate) fn iter_range(
         &self,
         range: Range<usize>,
+        include_subsumed: bool,
     ) -> impl Iterator<Item = (usize, &[Value], &TupleOutput)> + '_ {
         self.vals[range.clone()]
             .iter()
             .zip(range)
-            .filter_map(|((inp, out), i)| {
-                if inp.live() {
+            .filter_map(move |((inp, out), i)| {
+                if valid_value(inp, out, include_subsumed) {
                     Some((i, inp.data(), out))
                 } else {
                     None
@@ -272,9 +302,10 @@ impl Table {
     pub(crate) fn iter_timestamp_range(
         &self,
         range: &Range<u32>,
+        include_subsumed: bool,
     ) -> impl Iterator<Item = (usize, &[Value], &TupleOutput)> + '_ {
         let indexes = self.transform_range(range);
-        self.iter_range(indexes)
+        self.iter_range(indexes, include_subsumed)
     }
 
     /// Return the approximate number of entries in the table for the given
@@ -297,6 +328,14 @@ impl Table {
             0..0
         }
     }
+}
+
+/// Returns whether the given value is live and not subsume (if the include_subsumed flag is false).
+///
+/// For checks, debugging, and serialization, we do want to include subsumed values.
+/// but for matching on rules, we do not.
+fn valid_value(input: &Input, output: &TupleOutput, include_subsumed: bool) -> bool {
+    input.live() && (include_subsumed || !output.subsumed)
 }
 
 pub(crate) fn hash_values(vs: &[Value]) -> u64 {
@@ -328,7 +367,7 @@ impl Input {
         self.data.as_slice()
     }
 
-    pub(crate) fn live(&self) -> bool {
+    fn live(&self) -> bool {
         self.stale_at == u32::MAX
     }
 }

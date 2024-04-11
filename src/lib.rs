@@ -27,6 +27,7 @@ pub mod util;
 mod value;
 
 use ast::desugar::Desugar;
+use ast::remove_globals::remove_globals;
 use extract::Extractor;
 use hashbrown::hash_map::Entry;
 use index::ColumnIndex;
@@ -59,6 +60,7 @@ pub type ArcSort = Arc<dyn Sort>;
 
 pub use value::*;
 
+pub use function::Function;
 use function::*;
 use gj::*;
 use unionfind::*;
@@ -400,7 +402,7 @@ pub struct EGraph {
     egraphs: Vec<Self>,
     unionfind: UnionFind,
     pub(crate) desugar: Desugar,
-    functions: HashMap<Symbol, Function>,
+    pub functions: HashMap<Symbol, Function>,
     rulesets: HashMap<Symbol, HashMap<Symbol, Rule>>,
     ruleset_iteration: HashMap<Symbol, usize>,
     proofs_enabled: bool,
@@ -408,15 +410,12 @@ pub struct EGraph {
     interactive_mode: bool,
     timestamp: u32,
     pub run_mode: RunMode,
-    // pub(crate) term_header_added: bool,
     pub test_proofs: bool,
     pub match_limit: usize,
     pub node_limit: usize,
     pub fact_directory: Option<PathBuf>,
     pub seminaive: bool,
     type_info: TypeInfo,
-    // sort, value, and timestamp
-    pub global_bindings: HashMap<Symbol, (ArcSort, Value, u32)>,
     extract_report: Option<ExtractReport>,
     /// The run report for the most recent run of a schedule.
     recent_run_report: Option<RunReport>,
@@ -444,7 +443,6 @@ impl Default for EGraph {
             rulesets: Default::default(),
             ruleset_iteration: Default::default(),
             desugar: Desugar::default(),
-            global_bindings: Default::default(),
             match_limit: usize::MAX,
             node_limit: usize::MAX,
             timestamp: 0,
@@ -469,6 +467,17 @@ impl Default for EGraph {
 #[derive(Debug, Error)]
 #[error("Not found: {0}")]
 pub struct NotFoundError(Expr);
+
+/// For each rule, we produce a `SearchResult`
+/// storing data about that rule's matches.
+/// When a rule has no variables, it may still match- in this case
+/// the `did_match` field is used.
+struct SearchResult {
+    name: Symbol,
+    all_matches: Vec<Value>,
+    did_match: bool,
+    rule_search_time: Duration,
+}
 
 impl EGraph {
     /// Use the rust backend implimentation of eqsat,
@@ -529,7 +538,7 @@ impl EGraph {
         #[cfg(debug_assertions)]
         for (name, function) in self.functions.iter() {
             function.nodes.assert_sorted();
-            for (i, inputs, output) in function.nodes.iter_range(0..function.nodes.len()) {
+            for (i, inputs, output) in function.nodes.iter_range(0..function.nodes.len(), true) {
                 for input in inputs {
                     assert_eq!(
                         input,
@@ -584,7 +593,15 @@ impl EGraph {
     pub fn find(&self, value: Value) -> Value {
         if self.terms_enabled {
             // HACK using value tag for parent table name
-            let parent_name = self.desugar.parent_name(value.tag);
+            let parent_name = self
+                .desugar
+                .lookup_parent_name(value.tag)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "Term encoding should have created parent table for {}",
+                        value.tag
+                    )
+                });
             if let Some(func) = self.functions.get(&parent_name) {
                 func.get(&[value])
                     .unwrap_or_else(|| panic!("No value {:?} in {parent_name}.", value,))
@@ -627,15 +644,6 @@ impl EGraph {
                 break;
             }
         }
-
-        // now update global bindings
-        let mut new_global_bindings = std::mem::take(&mut self.global_bindings);
-        for (_sym, (sort, value, ts)) in new_global_bindings.iter_mut() {
-            if sort.canonicalize(value, &self.unionfind) {
-                *ts = self.timestamp;
-            }
-        }
-        self.global_bindings = new_global_bindings;
 
         self.debug_assert_invariants();
         Ok(updates)
@@ -719,7 +727,7 @@ impl EGraph {
         let schema = f.schema.clone();
         let nodes = f
             .nodes
-            .iter()
+            .iter(true)
             .take(n)
             .map(|(k, v)| (ValueVec::from(k), v.clone()))
             .collect::<Vec<_>>();
@@ -936,13 +944,15 @@ impl EGraph {
         let search_start = Instant::now();
         let mut searched = vec![];
         for (name, rule) in copy_rules.iter() {
-            let mut all_values = vec![];
+            let mut all_matches = vec![];
             if rule.banned_until <= iteration {
                 let mut fuel = safe_shl(match_limit, rule.times_banned);
                 let rule_search_start = Instant::now();
-                self.run_query(&rule.query, rule.todo_timestamp, |values| {
+                let mut did_match = false;
+                self.run_query(&rule.query, rule.todo_timestamp, false, |values| {
+                    did_match = true;
                     assert_eq!(values.len(), rule.query.vars.len());
-                    all_values.extend_from_slice(values);
+                    all_matches.extend_from_slice(values);
                     if fuel > 0 {
                         fuel -= 1;
                         Ok(())
@@ -954,9 +964,14 @@ impl EGraph {
                 log::trace!(
                     "Searched for {name} in {:.3}s ({} results)",
                     rule_search_time.as_secs_f64(),
-                    all_values.len()
+                    all_matches.len()
                 );
-                searched.push((name, all_values, rule_search_time));
+                searched.push(SearchResult {
+                    name: *name,
+                    all_matches,
+                    rule_search_time,
+                    did_match,
+                });
             }
         }
 
@@ -968,22 +983,28 @@ impl EGraph {
             .or_insert(Duration::default()) += search_elapsed;
 
         let apply_start = Instant::now();
-        for (name, all_values, search_time) in searched {
-            let rule = rules.get_mut(name).unwrap();
+        for search_result in searched {
+            let SearchResult {
+                name,
+                all_matches,
+                rule_search_time,
+                did_match,
+            } = search_result;
+            let rule = rules.get_mut(&name).unwrap();
             // add to the rule's search time
             *report
                 .search_time_per_rule
-                .entry(*name)
-                .or_insert(Duration::default()) += search_time;
+                .entry(name)
+                .or_insert(Duration::default()) += rule_search_time;
             let num_vars = rule.query.vars.len();
 
             // make sure the query requires matches
             if num_vars != 0 {
-                *report.num_matches_per_rule.entry(*name).or_insert(0) +=
-                    all_values.len() / num_vars;
+                *report.num_matches_per_rule.entry(name).or_insert(0) +=
+                    all_matches.len() / num_vars;
 
                 // backoff logic
-                let len = all_values.len() / num_vars;
+                let len = all_matches.len() / num_vars;
                 let threshold = safe_shl(match_limit, rule.times_banned);
                 if len > threshold {
                     let ban_length = safe_shl(ban_length, rule.times_banned);
@@ -999,14 +1020,18 @@ impl EGraph {
             let rule_apply_start = Instant::now();
 
             let stack = &mut vec![];
-            // run one iteration when n == 0
+
+            // when there are no variables, a query can still fail to match
+            // here we handle that case
             if num_vars == 0 {
-                rule.matches += 1;
-                stack.clear();
-                self.run_actions(stack, &[], &rule.program, true)
-                    .unwrap_or_else(|e| panic!("error while running actions for {name}: {e}"));
+                if did_match {
+                    rule.matches += 1;
+                    stack.clear();
+                    self.run_actions(stack, &[], &rule.program, true)
+                        .unwrap_or_else(|e| panic!("error while running actions for {name}: {e}"));
+                }
             } else {
-                for values in all_values.chunks(num_vars) {
+                for values in all_matches.chunks(num_vars) {
                     rule.matches += 1;
                     stack.clear();
                     self.run_actions(stack, values, &rule.program, true)
@@ -1017,7 +1042,7 @@ impl EGraph {
             // add to the rule's apply time
             *report
                 .apply_time_per_rule
-                .entry(*name)
+                .entry(name)
                 .or_insert(Duration::default()) += rule_apply_start.elapsed();
         }
         self.rulesets.insert(ruleset, rules);
@@ -1090,7 +1115,7 @@ impl EGraph {
         let (actions, _) = actions.to_core_actions(
             self.type_info(),
             &mut Default::default(),
-            &mut ResolvedGen::new(),
+            &mut ResolvedGen::new("$".to_string()),
         )?;
         let program = self
             .compile_actions(&Default::default(), &actions)
@@ -1104,7 +1129,10 @@ impl EGraph {
         let fresh_name = self.desugar.get_fresh();
         let command = Command::Action(Action::Let((), fresh_name, expr.clone()));
         self.run_program(vec![command])?;
-        let (sort, value, _ts) = self.global_bindings.get(&fresh_name).unwrap().clone();
+        // find the table with the same name as the fresh name
+        let func = self.functions.get(&fresh_name).unwrap();
+        let value = func.nodes.get(&[]).unwrap().value;
+        let sort = func.schema.output.clone();
         Ok((sort, value))
     }
 
@@ -1118,7 +1146,7 @@ impl EGraph {
         let (actions, mapped_expr) = expr.to_core_actions(
             self.type_info(),
             &mut Default::default(),
-            &mut ResolvedGen::new(),
+            &mut ResolvedGen::new("$".to_string()),
         )?;
         let target = mapped_expr.get_corresponding_var_or_lit(self.type_info());
         let program = self
@@ -1177,7 +1205,7 @@ impl EGraph {
         let query = self.compile_gj_query(query, ordering);
 
         let mut matched = false;
-        self.run_query(&query, 0, |values| {
+        self.run_query(&query, 0, true, |values| {
             assert_eq!(values.len(), query.vars.len());
             matched = true;
             Err(())
@@ -1185,7 +1213,7 @@ impl EGraph {
         if !matched {
             // TODO add useful info here
             Err(Error::CheckError(
-                facts.iter().map(|f| f.to_unresolved()).collect(),
+                facts.iter().map(|f| f.clone().make_unresolved()).collect(),
             ))
         } else {
             Ok(())
@@ -1248,18 +1276,7 @@ impl EGraph {
             ResolvedNCommand::CheckProof => log::error!("TODO implement proofs"),
             ResolvedNCommand::CoreAction(action) => match &action {
                 ResolvedAction::Let((), name, contents) => {
-                    let value = self.eval_resolved_expr(contents, true)?;
-                    let present = self.global_bindings.insert(
-                        name.name,
-                        (
-                            contents.output_type(self.type_info()),
-                            value,
-                            self.timestamp,
-                        ),
-                    );
-                    if present.is_some() {
-                        panic!("Variable {name} was already present in global bindings");
-                    }
+                    panic!("Globals should have been desugared away: {name} = {contents}")
                 }
                 _ => {
                     self.eval_actions(&ResolvedActions::new(vec![action.clone()]))?;
@@ -1396,8 +1413,12 @@ impl EGraph {
         }
     }
 
-    pub fn set_underscores_for_desugaring(&mut self, underscores: usize) {
-        self.desugar.number_underscores = underscores;
+    pub fn set_reserved_symbol(&mut self, sym: Symbol) {
+        assert!(
+            !self.desugar.fresh_gen.has_been_used(),
+            "Reserved symbol must be set before any symbols are generated"
+        );
+        self.desugar.fresh_gen = SymbolGen::new(sym.to_string());
     }
 
     fn process_command(&mut self, command: Command) -> Result<Vec<ResolvedNCommand>, Error> {
@@ -1406,6 +1427,8 @@ impl EGraph {
                 .desugar_program(vec![command], self.test_proofs, self.seminaive)?;
 
         let program = self.type_info_mut().typecheck_program(&program)?;
+
+        let program = remove_globals(&self.type_info, program, &mut self.desugar.fresh_gen);
 
         Ok(program)
     }
@@ -1495,12 +1518,16 @@ impl EGraph {
     }
 
     /// Serializes the egraph for export to graphviz.
+    ///
+    /// This will limit the total number of nodes so that visualization does not blow up.
     pub fn serialize_for_graphviz(
         &self,
         split_primitive_outputs: bool,
     ) -> egraph_serialize::EGraph {
         let config = SerializeConfig {
             split_primitive_outputs,
+            max_functions: Some(40),
+            max_calls_per_function: Some(40),
             ..Default::default()
         };
         let mut serialized = self.serialize(config);
@@ -1548,6 +1575,8 @@ pub enum Error {
     ExpectFail,
     #[error("IO error: {0}: {1}")]
     IoError(PathBuf, std::io::Error),
+    #[error("Cannot subsume function with merge: {0}")]
+    SubsumeMergeError(Symbol),
 }
 
 fn safe_shl(a: usize, b: usize) -> usize {

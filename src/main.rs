@@ -24,8 +24,8 @@ struct Args {
     #[clap(long, default_value_t = RunMode::Normal)]
     show: RunMode,
     // TODO remove this evil hack
-    #[clap(long, default_value_t = 3)]
-    num_underscores: usize,
+    #[clap(long, default_value = "__")]
+    reserved_symbol: String,
     inputs: Vec<PathBuf>,
     #[clap(long)]
     to_json: bool,
@@ -50,7 +50,7 @@ fn main() {
 
     let mk_egraph = || {
         let mut egraph = EGraph::default();
-        egraph.set_underscores_for_desugaring(args.num_underscores);
+        egraph.set_reserved_symbol(args.reserved_symbol.clone().into());
         egraph.fact_directory = args.fact_directory.clone();
         egraph.seminaive = !args.naive;
         egraph.run_mode = args.show;

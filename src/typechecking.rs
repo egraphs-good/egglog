@@ -187,6 +187,8 @@ impl TypeInfo {
                 let var = ResolvedVar {
                     name: *var,
                     sort: output_type,
+                    // not a global reference, but a global binding
+                    is_global_ref: false,
                 };
                 ResolvedNCommand::CoreAction(ResolvedAction::Let((), var, expr))
             }
@@ -264,6 +266,7 @@ impl TypeInfo {
             merge_action: self.typecheck_actions(&fdecl.merge_action, &bound_vars)?,
             cost: fdecl.cost,
             unextractable: fdecl.unextractable,
+            ignore_viz: fdecl.ignore_viz,
         })
     }
 
@@ -324,7 +327,7 @@ impl TypeInfo {
         let Rule { head, body } = rule;
         let mut constraints = vec![];
 
-        let mut fresh_gen = SymbolGen::new();
+        let mut fresh_gen = SymbolGen::new("$".to_string());
         let (query, mapped_query) = Facts(body.clone()).to_query(self, &mut fresh_gen);
         constraints.extend(query.get_constraints(self)?);
 
@@ -354,7 +357,7 @@ impl TypeInfo {
     }
 
     fn typecheck_facts(&self, facts: &[Fact]) -> Result<Vec<ResolvedFact>, TypeError> {
-        let mut fresh_gen = SymbolGen::new();
+        let mut fresh_gen = SymbolGen::new("$".to_string());
         let (query, mapped_facts) = Facts(facts.to_vec()).to_query(self, &mut fresh_gen);
         let mut problem = Problem::default();
         problem.add_query(&query, self)?;
@@ -371,7 +374,7 @@ impl TypeInfo {
         binding: &IndexMap<Symbol, ArcSort>,
     ) -> Result<ResolvedActions, TypeError> {
         let mut binding_set = binding.keys().cloned().collect::<IndexSet<_>>();
-        let mut fresh_gen = SymbolGen::new();
+        let mut fresh_gen = SymbolGen::new("$".to_string());
         let (actions, mapped_action) =
             actions.to_core_actions(self, &mut binding_set, &mut fresh_gen)?;
         let mut problem = Problem::default();

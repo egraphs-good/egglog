@@ -1,6 +1,23 @@
 use super::{Rewrite, Rule};
 use crate::*;
 
+pub struct Desugar {
+    pub(crate) fresh_gen: SymbolGen,
+    // Store the parser because it takes some time
+    // on startup for some reason
+    parser: ast::parse::ProgramParser,
+}
+
+impl Default for Desugar {
+    fn default() -> Self {
+        Self {
+            // the default reserved string in egglog is "_"
+            fresh_gen: SymbolGen::new("_".repeat(2)),
+            parser: ast::parse::ProgramParser::new(),
+        }
+    }
+}
+
 fn desugar_datatype(name: Symbol, variants: Vec<Variant>) -> Vec<NCommand> {
     vec![NCommand::Sort(name, None)]
         .into_iter()
@@ -16,13 +33,31 @@ fn desugar_datatype(name: Symbol, variants: Vec<Variant>) -> Vec<NCommand> {
                 default: None,
                 cost: variant.cost,
                 unextractable: false,
+                ignore_viz: false,
             })
         }))
         .collect()
 }
 
-fn desugar_rewrite(ruleset: Symbol, name: Symbol, rewrite: &Rewrite) -> Vec<NCommand> {
+fn desugar_rewrite(
+    ruleset: Symbol,
+    name: Symbol,
+    rewrite: &Rewrite,
+    subsume: bool,
+) -> Vec<NCommand> {
     let var = Symbol::from("rewrite_var__");
+    let mut head = Actions::singleton(Action::Union((), Expr::Var((), var), rewrite.rhs.clone()));
+    if subsume {
+        match &rewrite.lhs {
+            Expr::Call(_, f, args) => {
+                head.0
+                    .push(Action::Change((), Change::Subsume, *f, args.to_vec()));
+            }
+            _ => {
+                panic!("Subsumed rewrite must have a function call on the lhs");
+            }
+        }
+    }
     // make two rules- one to insert the rhs, and one to union
     // this way, the union rule can only be fired once,
     // which helps proofs not add too much info
@@ -34,7 +69,7 @@ fn desugar_rewrite(ruleset: Symbol, name: Symbol, rewrite: &Rewrite) -> Vec<NCom
                 .into_iter()
                 .chain(rewrite.conditions.clone())
                 .collect(),
-            head: Actions::singleton(Action::Union((), Expr::Var((), var), rewrite.rhs.clone())),
+            head,
         },
     }]
 }
@@ -45,9 +80,14 @@ fn desugar_birewrite(ruleset: Symbol, name: Symbol, rewrite: &Rewrite) -> Vec<NC
         rhs: rewrite.lhs.clone(),
         conditions: rewrite.conditions.clone(),
     };
-    desugar_rewrite(ruleset, format!("{}=>", name).into(), rewrite)
+    desugar_rewrite(ruleset, format!("{}=>", name).into(), rewrite, false)
         .into_iter()
-        .chain(desugar_rewrite(ruleset, format!("{}<=", name).into(), &rw2))
+        .chain(desugar_rewrite(
+            ruleset,
+            format!("{}<=", name).into(),
+            &rw2,
+            false,
+        ))
         .collect()
 }
 
@@ -96,31 +136,6 @@ fn add_semi_naive_rule(desugar: &mut Desugar, rule: Rule) -> Option<Rule> {
         Some(new_rule)
     } else {
         None
-    }
-}
-
-pub struct Desugar {
-    next_fresh: usize,
-    // Store the parser because it takes some time
-    // on startup for some reason
-    parser: ast::parse::ProgramParser,
-    // yz (dec 5): Comment out since they are only used in terms.rs which are deleted
-    // pub(crate) expr_parser: ast::parse::ExprParser,
-    // pub(crate) action_parser: ast::parse::ActionParser,
-    // TODO fix getting fresh names using modules
-    pub(crate) number_underscores: usize,
-}
-
-impl Default for Desugar {
-    fn default() -> Self {
-        Self {
-            next_fresh: Default::default(),
-            // these come from lalrpop and don't have default impls
-            parser: ast::parse::ProgramParser::new(),
-            // expr_parser: ast::parse::ExprParser::new(),
-            // action_parser: ast::parse::ActionParser::new(),
-            number_underscores: 3,
-        }
     }
 }
 
@@ -215,8 +230,8 @@ pub(crate) fn desugar_command(
         } => desugar.desugar_function(&FunctionDecl::relation(constructor, inputs)),
         Command::Declare { name, sort } => desugar.declare(name, sort),
         Command::Datatype { name, variants } => desugar_datatype(name, variants),
-        Command::Rewrite(ruleset, rewrite) => {
-            desugar_rewrite(ruleset, rewrite_name(&rewrite).into(), &rewrite)
+        Command::Rewrite(ruleset, rewrite, subsume) => {
+            desugar_rewrite(ruleset, rewrite_name(&rewrite).into(), &rewrite, subsume)
         }
         Command::BiRewrite(ruleset, rewrite) => {
             desugar_birewrite(ruleset, rewrite_name(&rewrite).into(), &rewrite)
@@ -345,31 +360,15 @@ pub(crate) fn desugar_commands(
 impl Clone for Desugar {
     fn clone(&self) -> Self {
         Self {
-            next_fresh: self.next_fresh,
+            fresh_gen: self.fresh_gen.clone(),
             parser: ast::parse::ProgramParser::new(),
-            // expr_parser: ast::parse::ExprParser::new(),
-            // action_parser: ast::parse::ActionParser::new(),
-            number_underscores: self.number_underscores,
         }
     }
 }
 
 impl Desugar {
-    pub fn merge_ruleset_name(&self) -> Symbol {
-        Symbol::from(format!(
-            "merge_ruleset{}",
-            "_".repeat(self.number_underscores)
-        ))
-    }
-
     pub fn get_fresh(&mut self) -> Symbol {
-        self.next_fresh += 1;
-        format!(
-            "v{}{}",
-            self.next_fresh - 1,
-            "_".repeat(self.number_underscores)
-        )
-        .into()
+        self.fresh_gen.fresh(&"v".into())
     }
 
     pub(crate) fn desugar_program(
@@ -389,6 +388,7 @@ impl Desugar {
             .map_err(|e| e.map_token(|tok| tok.to_string()))?)
     }
 
+    // TODO declare by creating a new global function. See issue #334
     pub fn declare(&mut self, name: Symbol, sort: Symbol) -> Vec<NCommand> {
         let fresh = self.get_fresh();
         vec![
@@ -403,6 +403,7 @@ impl Desugar {
                 merge_action: Actions::default(),
                 cost: None,
                 unextractable: false,
+                ignore_viz: false,
             }),
             NCommand::CoreAction(Action::Let((), name, Expr::Call((), fresh, vec![]))),
         ]
@@ -417,16 +418,17 @@ impl Desugar {
             merge_action: fdecl.merge_action.clone(),
             cost: fdecl.cost,
             unextractable: fdecl.unextractable,
+            ignore_viz: fdecl.ignore_viz,
         })]
     }
 
-    /// Get the name of the parent table for a sort
-    /// for the term encoding (not related to desugaring)
-    pub(crate) fn parent_name(&self, sort: Symbol) -> Symbol {
-        Symbol::from(format!(
-            "{}_Parent{}",
-            sort,
-            "_".repeat(self.number_underscores)
-        ))
+    pub fn parent_name(&mut self, eqsort_name: Symbol) -> Symbol {
+        self.fresh_gen
+            .generate_special(&format!("{}Parent", eqsort_name).into())
+    }
+
+    pub fn lookup_parent_name(&self, eqsort_name: Symbol) -> Option<Symbol> {
+        self.fresh_gen
+            .lookup_special(&format!("{}Parent", eqsort_name).into())
     }
 }

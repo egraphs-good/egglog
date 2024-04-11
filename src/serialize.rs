@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 
 use crate::{
     ast::{Id, ResolvedFunctionDecl},
-    function::{table::hash_values, ValueVec},
+    function::table::hash_values,
     util::HashMap,
     EGraph, Value,
 };
@@ -21,12 +21,12 @@ pub struct SerializeConfig {
     pub root_eclasses: Vec<Value>,
 }
 
-/// Default is used for visualizations and limits number of functions and calls
+/// Default is used for exporting JSON and will output all nodes.
 impl Default for SerializeConfig {
     fn default() -> Self {
         SerializeConfig {
-            max_functions: Some(40),
-            max_calls_per_function: Some(40),
+            max_functions: None,
+            max_calls_per_function: None,
             include_temporary_functions: false,
             split_primitive_outputs: false,
             root_eclasses: vec![],
@@ -64,25 +64,24 @@ impl EGraph {
         // First collect a list of all the calls we want to serialize as (function decl, inputs, the output, the node id)
         let all_calls: Vec<(
             &ResolvedFunctionDecl,
-            &ValueVec,
+            &[Value],
             &Value,
             egraph_serialize::NodeId,
         )> = self
             .functions
             .values()
+            .filter(|function| !function.decl.ignore_viz)
             .map(|function| {
                 function
                     .nodes
-                    .vals
-                    .iter()
-                    .filter(|(i, _)| i.live())
+                    .iter(true)
                     .take(config.max_calls_per_function.unwrap_or(usize::MAX))
                     .map(|(input, output)| {
                         (
                             &function.decl,
-                            &input.data,
+                            input,
                             &output.value,
-                            format!("{}-{}", function.decl.name, hash_values(&input.data)).into(),
+                            format!("{}-{}", function.decl.name, hash_values(input)).into(),
                         )
                     })
                     .collect::<Vec<_>>()
@@ -161,7 +160,7 @@ impl EGraph {
         egraph: &mut egraph_serialize::EGraph,
         node_ids: &mut NodeIDs,
         value: &Value,
-        // The node ID to use for a primitve value, if this is None, use the hash of the value and the sort name
+        // The node ID to use for a primitive value, if this is None, use the hash of the value and the sort name
         // Set iff `split_primitive_outputs` is set and this is an output of a function.
         prim_node_id: Option<String>,
     ) -> (egraph_serialize::ClassId, Option<egraph_serialize::NodeId>) {
