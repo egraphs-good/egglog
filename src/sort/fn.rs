@@ -318,6 +318,7 @@ fn call_fn(egraph: &mut EGraph, name: &Symbol, types: Vec<ArcSort>, args: Vec<Va
         .map(|(i, sort)| ResolvedVar {
             name: format!("__arg_{}", i).into(),
             sort,
+            is_global_ref: false,
         })
         .collect();
     let binding = IndexSet::from_iter(arg_vars.clone());
@@ -331,7 +332,7 @@ fn call_fn(egraph: &mut EGraph, name: &Symbol, types: Vec<ArcSort>, args: Vec<Va
         .to_core_actions(
             egraph.type_info(),
             &mut binding.clone(),
-            &mut ResolvedGen::new(),
+            &mut ResolvedGen::new("$".to_string()),
         )
         .unwrap();
     let target = mapped_expr.get_corresponding_var_or_lit(egraph.type_info());
