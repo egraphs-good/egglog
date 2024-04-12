@@ -961,7 +961,7 @@ impl EGraph {
                     }
                 });
                 let rule_search_time = rule_search_start.elapsed();
-                log::trace!(
+                log::debug!(
                     "Searched for {name} in {:.3}s ({} results)",
                     rule_search_time.as_secs_f64(),
                     all_matches.len()

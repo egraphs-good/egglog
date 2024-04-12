@@ -46,15 +46,6 @@
             vertical-align: middle;
         }
 
-        #output {
-            padding-left: 10px;
-            font-family: monospace;
-            white-space: pre-wrap;
-            overflow-y: scroll;
-            resize: vertical;
-            height: 35%;
-        }
-
         .right {
             float: right;
         }
@@ -74,6 +65,41 @@
             width: 100%;
             height: 100%;
         }
+
+        /* Style the tab */
+        .tab {
+            overflow: hidden;
+            border: 1px solid #ccc;
+            background-color: #f1f1f1;
+        }
+
+        /* Style the buttons that are used to open the tab content */
+        .tab button {
+            background-color: inherit;
+            float: left;
+            border: none;
+            outline: none;
+            cursor: pointer;
+            padding: 7px 8px;
+            transition: 0.3s;
+        }
+
+        .tab button:hover {
+            background-color: #ddd;
+        }
+
+        .tab button.active {
+            background-color: #ccc;
+        }
+
+        .tabcontent {
+            padding-left: 10px;
+            padding-top: 10px;
+            height: 35%;
+            overflow-y: scroll;
+            resize: vertical;
+            font-family: monospace;
+        }
     </style>
 
     <link rel="stylesheet" href="//unpkg.com/codemirror@5.65.2/lib/codemirror.css">
@@ -87,7 +113,9 @@
         import * as d3 from 'https://cdn.skypack.dev/pin/d3@v7.8.5-eC7TKxlFLay7fmsv0gvu/dist=es2020,mode=imports,min/optimized/d3.js';
         import 'https://cdn.skypack.dev/-/d3-graphviz@v5.1.0-TcGnvMu4khUzCpL7Wr2k/dist=es2020,mode=imports,min/optimized/d3-graphviz.js';
 
-        let editor, output, examples;
+        let editor, output, examples, loginfo;
+        let fulllog = [];
+        let logLevels = ["ERROR", "WARN", "INFO", "DEBUG"];
         let nextButton, prevButton, slideNumber, docsButton, githubButton, shareButton, examplesDropDown;
         console.log("Main script is running");
         let worker = new Worker("worker.js");
@@ -103,6 +131,9 @@
             console.log("got message", message);
             output.innerHTML = message.data.text;
             output.scrollTop = output.scrollHeight;
+            fulllog = message.data.log;
+            refreshLog();
+
             const graphContainer = d3.select("#graph-inner")
             const width = graphContainer.node().clientWidth;
             const height = graphContainer.node().clientHeight;
@@ -122,6 +153,14 @@
         window.onpopstate = function (event) {
             console.log(event)
             loadEditor()
+        }
+
+        window.refreshLog = function refreshLog() {
+            let level = document.getElementById("logLevel").value;
+            let displayloglevel = logLevels.indexOf(level);
+            let log = fulllog.filter((entry) => logLevels.indexOf(entry[0]) <= displayloglevel);
+            loginfo.innerHTML = log.map((entry) => entry[1]).join("\n");
+            loginfo.scrollTop = loginfo.scrollHeight;
         }
 
         function setProgram(program) {
@@ -322,6 +361,7 @@
             };
 
             output = document.getElementById("output");
+            loginfo = document.getElementById("loginfo");
             editor = CodeMirror(document.getElementById("editor"), {
                 lineNumbers: true,
                 mode: "scheme",
@@ -344,6 +384,26 @@
             updateSlideMode();
         }
 
+        window.openTab = function openTab(evt, tabname) {
+            // Declare all variables
+            var i, tabcontent, tablinks;
+
+            // Get all elements with class="tabcontent" and hide them
+            tabcontent = document.getElementsByClassName("tabcontent");
+            for (i = 0; i < tabcontent.length; i++) {
+                tabcontent[i].style.display = "none";
+            }
+
+            // Get all elements with class="tablinks" and remove the class "active"
+            tablinks = document.getElementsByClassName("tablinks");
+            for (i = 0; i < tablinks.length; i++) {
+                tablinks[i].className = tablinks[i].className.replace(" active", "");
+            }
+
+            // Show the current tab, and add an "active" class to the button that opened the tab
+            document.getElementById(tabname).style.display = "block";
+            evt.currentTarget.className += " active";
+        }
     </script>
 </head>
 
@@ -372,7 +432,27 @@
                     <img alt="Main Branch Documentation" src="https://img.shields.io/badge/docs-main-blue"></a>
             </div>
         </div>
-        <div id="output">Click "Run" to run code</div>
+        <!-- Log panel -->
+        <div class="tab">
+            <button class="tablinks" onclick="openTab(event, 'outputtab')">Output</button>
+            <button class="tablinks" onclick="openTab(event, 'loginfotab')">Log</button>
+        </div>
+
+        <div id="outputtab" class="tabcontent">
+            <div id="output" style="display:contents; white-space: pre-wrap;">Click "Run" to run code</div>
+        </div>
+        <div id="loginfotab" class="tabcontent" style="display:none">
+            Display level: <select id="logLevel" display="margin: 3px" onchange="refreshLog()">
+                <option value="ERROR">error</option>
+                <option value="WARN">warn</option>
+                <option value="INFO" selected>info</option>
+                <option value="DEBUG">debug</option>
+            </select>
+            <br>
+            <hr>
+            <div id="loginfo" style="display:contents; white-space: pre-wrap;">Click "Run" to run code</div>
+        </div>
+
         <div id="graph">
             <div id="graph-inner"></div>
         </div>
