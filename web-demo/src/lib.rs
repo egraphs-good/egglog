@@ -1,6 +1,5 @@
-#![allow(clippy::unused_unit)]
+#![allow(clippy::unused_unit)] // weird clippy bug with wasm-bindgen
 use log::{Level, Log, Metadata, Record};
-// weird clippy bug with wasm-bindgen
 use wasm_bindgen::prelude::*;
 use web_sys::console;
 
