@@ -252,7 +252,7 @@ impl PrimitiveLike for Ctor {
     }
 
     fn apply(&self, values: &[Value], egraph: Option<&mut EGraph>) -> Option<Value> {
-        let egraph = egraph.expect("Cannot create function in fact only in actions");
+        let egraph = egraph.expect("`unstable-fn` is not supported yet in facts.");
         let name = Symbol::load(&self.string, &values[0]);
         // self.function
         //     .sorts
@@ -284,7 +284,7 @@ impl PrimitiveLike for Apply {
     }
 
     fn apply(&self, values: &[Value], egraph: Option<&mut EGraph>) -> Option<Value> {
-        let egraph = egraph.expect("Cannot apply function in fact only in actions");
+        let egraph = egraph.expect("`unstable-app` is not supported yet in facts.");
         let ValueFunction(name, args) = ValueFunction::load(&self.function, &values[0]);
         let types: Vec<_> = args
             .iter()
