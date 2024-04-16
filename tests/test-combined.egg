@@ -11,7 +11,7 @@
       ((path x z))
       :ruleset myrules2)
 
-(combined-ruleset myrules-combined
+(unstable-combined-ruleset myrules-combined
     myrules1 myrules2)
 
 

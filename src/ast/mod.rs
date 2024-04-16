@@ -717,7 +717,7 @@ where
             } => list!("relation", constructor, list!(++ inputs)),
             GenericCommand::AddRuleset(name) => list!("ruleset", name),
             GenericCommand::CombinedRuleset(name, others) => {
-                list!("combined-ruleset", name, ++ others)
+                list!("unstable-combined-ruleset", name, ++ others)
             }
             GenericCommand::Rule {
                 name,

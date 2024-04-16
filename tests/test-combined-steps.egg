@@ -21,7 +21,7 @@
       ((middle x))
       :ruleset step-middle)
 
-(combined-ruleset
+(unstable-combined-ruleset
   my-combination 
   step-left step-right 
   step-middle)

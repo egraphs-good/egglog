@@ -10,7 +10,7 @@
       ((number 2))
       :ruleset myrules2)
 
-(combined-ruleset rules1and2
+(unstable-combined-ruleset rules1and2
     myrules1 myrules2)
 
 ;; allowed to add to myrules2 and the change is reflected
@@ -35,7 +35,7 @@
       ((number 5))
       :ruleset myrules5)
 
-(combined-ruleset rules1and2and5
+(unstable-combined-ruleset rules1and2and5
      rules1and2 myrules5)
 
 (run-schedule
