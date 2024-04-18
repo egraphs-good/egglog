@@ -59,6 +59,7 @@ Command: Command = {
     LParen "declare" <name:Ident> <sort:Ident> RParen => Command::Declare{name, sort},
     LParen "relation" <constructor:Ident> <inputs:List<Type>> RParen => Command::Relation{constructor, inputs},
     LParen "ruleset" <name:Ident> RParen => Command::AddRuleset(name),
+    LParen "unstable-combined-ruleset" <name:Ident> <subrulesets:Ident*> RParen => Command::UnstableCombinedRuleset(name, subrulesets),
     LParen "rule" <body:List<Fact>> <head:List<Action>> <ruleset:(":ruleset" <Ident>)?> <name:(":name" <String>)?> RParen => Command::Rule{ruleset: ruleset.unwrap_or("".into()), name: name.unwrap_or("".to_string()).into(), rule: Rule { head: Actions::new(head), body }},
     LParen "rewrite" <lhs:Expr> <rhs:Expr>
         <subsume:(":subsume")?>

@@ -274,8 +274,10 @@ pub(crate) fn desugar_command(
             result
         }
         Command::Sort(sort, option) => vec![NCommand::Sort(sort, option)],
-        // TODO ignoring cost for now
         Command::AddRuleset(name) => vec![NCommand::AddRuleset(name)],
+        Command::UnstableCombinedRuleset(name, subrulesets) => {
+            vec![NCommand::UnstableCombinedRuleset(name, subrulesets)]
+        }
         Command::Action(action) => vec![NCommand::CoreAction(action)],
         Command::Simplify { expr, schedule } => desugar_simplify(desugar, &expr, &schedule),
         Command::Calc(idents, exprs) => desugar_calc(desugar, idents, exprs, seminaive_transform)?,

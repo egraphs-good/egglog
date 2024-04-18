@@ -44,6 +44,13 @@ impl Display for Id {
     }
 }
 
+#[derive(Clone, Debug)]
+/// The egglog internal representation of already compiled rules
+pub(crate) enum Ruleset {
+    Rules(Symbol, HashMap<Symbol, CompiledRule>),
+    Combined(Symbol, Vec<Symbol>),
+}
+
 pub type NCommand = GenericNCommand<Symbol, Symbol, ()>;
 /// [`ResolvedNCommand`] is another specialization of [`GenericNCommand`], which
 /// adds the type information to heads and leaves of commands.
@@ -78,6 +85,7 @@ where
     ),
     Function(GenericFunctionDecl<Head, Leaf, Ann>),
     AddRuleset(Symbol),
+    UnstableCombinedRuleset(Symbol, Vec<Symbol>),
     NormRule {
         name: Symbol,
         ruleset: Symbol,
@@ -117,6 +125,9 @@ where
             GenericNCommand::Sort(name, params) => GenericCommand::Sort(*name, params.clone()),
             GenericNCommand::Function(f) => GenericCommand::Function(f.clone()),
             GenericNCommand::AddRuleset(name) => GenericCommand::AddRuleset(*name),
+            GenericNCommand::UnstableCombinedRuleset(name, others) => {
+                GenericCommand::UnstableCombinedRuleset(*name, others.clone())
+            }
             GenericNCommand::NormRule {
                 name,
                 ruleset,
@@ -159,6 +170,9 @@ where
             GenericNCommand::Sort(name, params) => GenericNCommand::Sort(name, params),
             GenericNCommand::Function(func) => GenericNCommand::Function(func.visit_exprs(f)),
             GenericNCommand::AddRuleset(name) => GenericNCommand::AddRuleset(name),
+            GenericNCommand::UnstableCombinedRuleset(name, rulesets) => {
+                GenericNCommand::UnstableCombinedRuleset(name, rulesets)
+            }
             GenericNCommand::NormRule {
                 name,
                 ruleset,
@@ -461,6 +475,24 @@ where
     /// (run myrules 2)
     /// ```
     AddRuleset(Symbol),
+    /// Using the `combined-ruleset` command, construct another ruleset
+    /// which runs all the rules in the given rulesets.
+    /// This is useful for running multiple rulesets together.
+    /// The combined ruleset also inherits any rules added to the individual rulesets
+    /// after the combined ruleset is declared.
+    ///
+    /// Example:
+    /// ```text
+    /// (ruleset myrules1)
+    /// (rule ((edge x y))
+    ///       ((path x y))
+    ///      :ruleset myrules1)
+    /// (ruleset myrules2)
+    /// (rule ((path x y) (edge y z))
+    ///       ((path x z))
+    ///       :ruleset myrules2)
+    /// (combined-ruleset myrules-combined myrules1 myrules2)
+    UnstableCombinedRuleset(Symbol, Vec<Symbol>),
     /// ```text
     /// (rule <body:List<Fact>> <head:List<Action>>)
     /// ```
@@ -684,6 +716,9 @@ where
                 inputs,
             } => list!("relation", constructor, list!(++ inputs)),
             GenericCommand::AddRuleset(name) => list!("ruleset", name),
+            GenericCommand::UnstableCombinedRuleset(name, others) => {
+                list!("unstable-combined-ruleset", name, ++ others)
+            }
             GenericCommand::Rule {
                 name,
                 ruleset,
@@ -1424,6 +1459,12 @@ where
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.to_sexp())
     }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct CompiledRule {
+    pub(crate) query: CompiledQuery,
+    pub(crate) program: Program,
 }
 
 pub type Rule = GenericRule<Symbol, Symbol, ()>;
