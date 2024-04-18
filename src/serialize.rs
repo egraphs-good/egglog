@@ -191,7 +191,7 @@ impl EGraph {
                     // If this is a container sort, use the name, otherwise use the value
                     let op: String = if sort.is_container_sort() {
                         log::warn!("{} is a container sort", sort.name());
-                        sort.name().to_string()
+                        sort.serialized_name(value).to_string()
                     } else {
                         sort.make_expr(self, *value).1.to_string()
                     };

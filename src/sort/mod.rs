@@ -22,6 +22,8 @@ mod set;
 pub use set::*;
 mod vec;
 pub use vec::*;
+mod r#fn;
+pub use r#fn::*;
 
 use crate::constraint::AllEqualTypeConstraint;
 use crate::extract::{Cost, Extractor};
@@ -63,9 +65,16 @@ pub trait Sort: Any + Send + Sync + Debug {
         false
     }
 
+    /// Return the serialized name of the sort
+    ///
+    /// Only used for container sorts, which cannot be serialized with make_expr so need an explicit name
+    fn serialized_name(&self, _value: &Value) -> Symbol {
+        self.name()
+    }
+
     /// Return the inner values and sorts.
     /// Only eq_container_sort need to implement this method,
-    fn inner_values(&self, value: &Value) -> Vec<(&ArcSort, Value)> {
+    fn inner_values(&self, value: &Value) -> Vec<(ArcSort, Value)> {
         let _ = value;
         vec![]
     }
@@ -168,7 +177,7 @@ impl PrimitiveLike for ValueEq {
             .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         assert_eq!(values.len(), 2);
         if values[0] == values[1] {
             Some(Value::unit())
