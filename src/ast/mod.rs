@@ -85,7 +85,7 @@ where
     ),
     Function(GenericFunctionDecl<Head, Leaf, Ann>),
     AddRuleset(Symbol),
-    CombinedRuleset(Symbol, Vec<Symbol>),
+    UnstableCombinedRuleset(Symbol, Vec<Symbol>),
     NormRule {
         name: Symbol,
         ruleset: Symbol,
@@ -125,8 +125,8 @@ where
             GenericNCommand::Sort(name, params) => GenericCommand::Sort(*name, params.clone()),
             GenericNCommand::Function(f) => GenericCommand::Function(f.clone()),
             GenericNCommand::AddRuleset(name) => GenericCommand::AddRuleset(*name),
-            GenericNCommand::CombinedRuleset(name, others) => {
-                GenericCommand::CombinedRuleset(*name, others.clone())
+            GenericNCommand::UnstableCombinedRuleset(name, others) => {
+                GenericCommand::UnstableCombinedRuleset(*name, others.clone())
             }
             GenericNCommand::NormRule {
                 name,
@@ -170,8 +170,8 @@ where
             GenericNCommand::Sort(name, params) => GenericNCommand::Sort(name, params),
             GenericNCommand::Function(func) => GenericNCommand::Function(func.visit_exprs(f)),
             GenericNCommand::AddRuleset(name) => GenericNCommand::AddRuleset(name),
-            GenericNCommand::CombinedRuleset(name, rulesets) => {
-                GenericNCommand::CombinedRuleset(name, rulesets)
+            GenericNCommand::UnstableCombinedRuleset(name, rulesets) => {
+                GenericNCommand::UnstableCombinedRuleset(name, rulesets)
             }
             GenericNCommand::NormRule {
                 name,
@@ -492,7 +492,7 @@ where
     ///       ((path x z))
     ///       :ruleset myrules2)
     /// (combined-ruleset myrules-combined myrules1 myrules2)
-    CombinedRuleset(Symbol, Vec<Symbol>),
+    UnstableCombinedRuleset(Symbol, Vec<Symbol>),
     /// ```text
     /// (rule <body:List<Fact>> <head:List<Action>>)
     /// ```
@@ -716,7 +716,7 @@ where
                 inputs,
             } => list!("relation", constructor, list!(++ inputs)),
             GenericCommand::AddRuleset(name) => list!("ruleset", name),
-            GenericCommand::CombinedRuleset(name, others) => {
+            GenericCommand::UnstableCombinedRuleset(name, others) => {
                 list!("unstable-combined-ruleset", name, ++ others)
             }
             GenericCommand::Rule {

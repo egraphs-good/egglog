@@ -275,8 +275,8 @@ pub(crate) fn desugar_command(
         }
         Command::Sort(sort, option) => vec![NCommand::Sort(sort, option)],
         Command::AddRuleset(name) => vec![NCommand::AddRuleset(name)],
-        Command::CombinedRuleset(name, subrulesets) => {
-            vec![NCommand::CombinedRuleset(name, subrulesets)]
+        Command::UnstableCombinedRuleset(name, subrulesets) => {
+            vec![NCommand::UnstableCombinedRuleset(name, subrulesets)]
         }
         Command::Action(action) => vec![NCommand::CoreAction(action)],
         Command::Simplify { expr, schedule } => desugar_simplify(desugar, &expr, &schedule),

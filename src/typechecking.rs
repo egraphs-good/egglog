@@ -204,8 +204,8 @@ impl TypeInfo {
                 ResolvedNCommand::SetOption { name: *name, value }
             }
             NCommand::AddRuleset(ruleset) => ResolvedNCommand::AddRuleset(*ruleset),
-            NCommand::CombinedRuleset(name, sub_rulesets) => {
-                ResolvedNCommand::CombinedRuleset(*name, sub_rulesets.clone())
+            NCommand::UnstableCombinedRuleset(name, sub_rulesets) => {
+                ResolvedNCommand::UnstableCombinedRuleset(*name, sub_rulesets.clone())
             }
             NCommand::PrintOverallStatistics => ResolvedNCommand::PrintOverallStatistics,
             NCommand::CheckProof => ResolvedNCommand::CheckProof,

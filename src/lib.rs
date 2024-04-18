@@ -1262,7 +1262,7 @@ impl EGraph {
                 self.add_ruleset(name);
                 log::info!("Declared ruleset {name}.");
             }
-            ResolvedNCommand::CombinedRuleset(name, others) => {
+            ResolvedNCommand::UnstableCombinedRuleset(name, others) => {
                 self.add_combined_ruleset(name, others);
                 log::info!("Declared ruleset {name}.");
             }
