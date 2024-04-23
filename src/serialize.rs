@@ -123,15 +123,12 @@ impl EGraph {
                 None
             };
             let eclass = self
-                .serialize_value(&mut egraph, &mut node_ids, output, prim_node_id, &config)
+                .serialize_value(&mut egraph, &mut node_ids, output, prim_node_id)
                 .0;
             let children: Vec<_> = input
                 .iter()
                 // Filter out children which don't have an ID, meaning that we skipped emitting them due to size constraints
-                .filter_map(|v| {
-                    self.serialize_value(&mut egraph, &mut node_ids, v, None, &config)
-                        .1
-                })
+                .filter_map(|v| self.serialize_value(&mut egraph, &mut node_ids, v, None).1)
                 .collect();
             // only produce a node if all children were available
             if children.len() == input.len() {
@@ -150,10 +147,7 @@ impl EGraph {
         let roots = config
             .root_eclasses
             .iter()
-            .map(|v| {
-                self.serialize_value(&mut egraph, &mut node_ids, v, None, &config)
-                    .0
-            })
+            .map(|v| self.serialize_value(&mut egraph, &mut node_ids, v, None).0)
             .collect();
         egraph.root_eclasses = roots;
 
@@ -192,7 +186,6 @@ impl EGraph {
         // The node ID to use for a primitive value, if this is None, use the hash of the value and the sort name
         // Set iff `split_primitive_outputs` is set and this is an output of a function.
         prim_node_id: Option<String>,
-        config: &SerializeConfig,
     ) -> (egraph_serialize::ClassId, Option<egraph_serialize::NodeId>) {
         let sort = self.get_sort_from_value(value).unwrap();
         let (class_id, node_id): (egraph_serialize::ClassId, Option<egraph_serialize::NodeId>) =
@@ -216,9 +209,7 @@ impl EGraph {
                     let children: Vec<egraph_serialize::NodeId> = sort
                         .inner_values(value)
                         .into_iter()
-                        .filter_map(|(_, v)| {
-                            self.serialize_value(egraph, node_ids, &v, None, config).1
-                        })
+                        .filter_map(|(_, v)| self.serialize_value(egraph, node_ids, &v, None).1)
                         .collect();
                     // add node if children available
                     if children.len() == sort.inner_values(value).len() {
