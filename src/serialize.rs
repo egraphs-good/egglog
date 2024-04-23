@@ -123,30 +123,59 @@ impl EGraph {
                 None
             };
             let eclass = self
-                .serialize_value(&mut egraph, &mut node_ids, output, prim_node_id)
+                .serialize_value(&mut egraph, &mut node_ids, output, prim_node_id, &config)
                 .0;
             let children: Vec<_> = input
                 .iter()
                 // Filter out children which don't have an ID, meaning that we skipped emitting them due to size constraints
-                .filter_map(|v| self.serialize_value(&mut egraph, &mut node_ids, v, None).1)
+                .filter_map(|v| {
+                    self.serialize_value(&mut egraph, &mut node_ids, v, None, &config)
+                        .1
+                })
                 .collect();
-            egraph.nodes.insert(
-                node_id,
-                egraph_serialize::Node {
-                    op: decl.name.to_string(),
-                    eclass,
-                    cost: NotNan::new(decl.cost.unwrap_or(1) as f64).unwrap(),
-                    children,
-                },
-            );
+            // only produce a node if all children were available
+            if children.len() == input.len() {
+                egraph.nodes.insert(
+                    node_id,
+                    egraph_serialize::Node {
+                        op: decl.name.to_string(),
+                        eclass,
+                        cost: NotNan::new(decl.cost.unwrap_or(1) as f64).unwrap(),
+                        children,
+                    },
+                );
+            }
         }
 
         let roots = config
             .root_eclasses
             .iter()
-            .map(|v| self.serialize_value(&mut egraph, &mut node_ids, v, None).0)
+            .map(|v| {
+                self.serialize_value(&mut egraph, &mut node_ids, v, None, &config)
+                    .0
+            })
             .collect();
         egraph.root_eclasses = roots;
+
+        // some enodes may refer to non-existant children, for example if we skipped emitting them due to size constraints
+        // or someone used egglog's delete action.
+        // we remove them here
+        // However, removing nodes might require removing more nodes, so we do this iteratively
+        let mut did_something = true;
+        while did_something {
+            let new_nodes = egraph
+                .nodes
+                .iter()
+                .filter(|(_, node)| node.children.iter().all(|c| egraph.nodes.contains_key(c)));
+            for node in new_nodes.clone() {
+                for child in &node.1.children {
+                    assert!(egraph.nodes.contains_key(child));
+                }
+            }
+            let prev_len = egraph.nodes.len();
+            egraph.nodes = new_nodes.map(|(k, v)| (k.clone(), v.clone())).collect();
+            did_something = egraph.nodes.len() < prev_len;
+        }
 
         egraph
     }
@@ -163,6 +192,7 @@ impl EGraph {
         // The node ID to use for a primitive value, if this is None, use the hash of the value and the sort name
         // Set iff `split_primitive_outputs` is set and this is an output of a function.
         prim_node_id: Option<String>,
+        config: &SerializeConfig,
     ) -> (egraph_serialize::ClassId, Option<egraph_serialize::NodeId>) {
         let sort = self.get_sort_from_value(value).unwrap();
         let (class_id, node_id): (egraph_serialize::ClassId, Option<egraph_serialize::NodeId>) =
@@ -186,24 +216,29 @@ impl EGraph {
                     let children: Vec<egraph_serialize::NodeId> = sort
                         .inner_values(value)
                         .into_iter()
-                        .filter_map(|(_, v)| self.serialize_value(egraph, node_ids, &v, None).1)
+                        .filter_map(|(_, v)| {
+                            self.serialize_value(egraph, node_ids, &v, None, config).1
+                        })
                         .collect();
-                    // If this is a container sort, use the name, otherwise use the value
-                    let op: String = if sort.is_container_sort() {
-                        log::warn!("{} is a container sort", sort.name());
-                        sort.serialized_name(value).to_string()
-                    } else {
-                        sort.make_expr(self, *value).1.to_string()
-                    };
-                    egraph.nodes.insert(
-                        node_id.clone(),
-                        egraph_serialize::Node {
-                            op,
-                            eclass: class_id.clone(),
-                            cost: NotNan::new(0.0).unwrap(),
-                            children,
-                        },
-                    );
+                    // add node if children available
+                    if children.len() == sort.inner_values(value).len() {
+                        // If this is a container sort, use the name, otherwise use the value
+                        let op: String = if sort.is_container_sort() {
+                            log::warn!("{} is a container sort", sort.name());
+                            sort.serialized_name(value).to_string()
+                        } else {
+                            sort.make_expr(self, *value).1.to_string()
+                        };
+                        egraph.nodes.insert(
+                            node_id.clone(),
+                            egraph_serialize::Node {
+                                op,
+                                eclass: class_id.clone(),
+                                cost: NotNan::new(0.0).unwrap(),
+                                children,
+                            },
+                        );
+                    }
                 };
                 (class_id, Some(node_id))
             };
@@ -213,6 +248,7 @@ impl EGraph {
                 typ: Some(sort.name().to_string()),
             },
         );
+
         (class_id, node_id)
     }
 }
