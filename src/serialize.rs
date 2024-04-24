@@ -1,3 +1,4 @@
+use egraph_serialize::NodeId;
 use ordered_float::NotNan;
 use std::collections::VecDeque;
 
@@ -151,23 +152,54 @@ impl EGraph {
             .collect();
         egraph.root_eclasses = roots;
 
+        let original_nodes = egraph.nodes.clone();
+
         // some enodes may refer to non-existant children, for example if we skipped emitting them due to size constraints
         // or someone used egglog's delete action.
         // we remove them here
         // However, removing nodes might require removing more nodes, so we do this iteratively
         let mut did_something = true;
         while did_something {
-            let new_nodes = egraph
-                .nodes
-                .iter()
-                .filter(|(_, node)| node.children.iter().all(|c| egraph.nodes.contains_key(c)));
-            for node in new_nodes.clone() {
-                for child in &node.1.children {
-                    assert!(egraph.nodes.contains_key(child));
+            let new_nodes = egraph.nodes.iter().filter_map(|(nodeid, node)| {
+                let new_children: Vec<NodeId> = node
+                    .children
+                    .iter()
+                    .filter_map(|child| {
+                        // find the eclass
+                        let eclass = original_nodes.get(child)?.eclass.clone();
+                        // find the nodes in the eclass
+                        if let Some(eclass_nodes) = node_ids.get(&eclass) {
+                            // find a node that still exists to be the child
+                            for node in eclass_nodes {
+                                if egraph.nodes.contains_key(node) {
+                                    return Some(node.clone());
+                                }
+                            }
+                            // didn't find any nodes that still exist
+                            None
+                        } else {
+                            // generated eclass, so we don't need to check if it exists
+                            Some(child.clone())
+                        }
+                    })
+                    .collect();
+                if new_children.len() == node.children.len() {
+                    Some((
+                        nodeid.clone(),
+                        egraph_serialize::Node {
+                            op: node.op.clone(),
+                            eclass: node.eclass.clone(),
+                            cost: node.cost,
+                            children: new_children,
+                        },
+                    ))
+                } else {
+                    None
                 }
-            }
+            });
+
             let prev_len = egraph.nodes.len();
-            egraph.nodes = new_nodes.map(|(k, v)| (k.clone(), v.clone())).collect();
+            egraph.nodes = new_nodes.collect();
             did_something = egraph.nodes.len() < prev_len;
         }
 
