@@ -323,7 +323,7 @@ where
     /// that can be set using the `set-option` command.
     ///
     /// For example, `(set-option node_limit 1000)` sets a hard limit on the number of "nodes" or rows in the database.
-    /// Once this limit is reached, no egglog stops running rules.
+    /// Once this limit is reached, egglog stops running rules.
     ///
     /// Other options supported include:
     /// - "interactive_mode" (default: false): when enabled, egglog prints "(done)" after each command, allowing an external
