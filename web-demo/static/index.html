@@ -209,10 +209,12 @@
                 let start = currentIndex;
                 // find next open parenthesis which isn't inside a comment
                 let inComment = false;
+                let newlines = 0;
                 while (currentIndex < content.length) {
                     if (content[currentIndex] == ";") {
                         inComment = true;
                     } else if (content[currentIndex] == "\n") {
+                        if (!inComment) newlines++;
                         inComment = false;
                     } else if (content[currentIndex] == "(" && !inComment) {
                         break;
@@ -233,7 +235,11 @@
 
                 let sexp = content.substring(start, currentIndex + 1);
 
-                contentBySexp.push(sexp);
+                if (newlines > 1 || contentBySexp.length == 0) {
+                    contentBySexp.push(sexp);
+                } else {
+                    contentBySexp[contentBySexp.length - 1] += sexp;
+                }
                 currentIndex = currentIndex + 1;
             }
 
