@@ -1539,11 +1539,13 @@ impl EGraph {
     pub fn serialize_for_graphviz(
         &self,
         split_primitive_outputs: bool,
+        max_functions: usize,
+        max_calls_per_function: usize,
     ) -> egraph_serialize::EGraph {
         let config = SerializeConfig {
             split_primitive_outputs,
-            max_functions: Some(40),
-            max_calls_per_function: Some(40),
+            max_functions: Some(max_functions),
+            max_calls_per_function: Some(max_calls_per_function),
             ..Default::default()
         };
         let mut serialized = self.serialize(config);

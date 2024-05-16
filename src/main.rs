@@ -35,6 +35,12 @@ struct Args {
     to_svg: bool,
     #[clap(long)]
     serialize_split_primitive_outputs: bool,
+    /// Maximum number of function nodes to render in dot/svg output
+    #[clap(long, default_value = "40")]
+    max_functions: usize,
+    /// Maximum number of calls per function to render in dot/svg output
+    #[clap(long, default_value = "40")]
+    max_calls_per_function: usize,
 }
 
 #[allow(clippy::disallowed_macros)]
@@ -175,7 +181,11 @@ fn main() {
         }
 
         if args.to_dot || args.to_svg {
-            let serialized = egraph.serialize_for_graphviz(args.serialize_split_primitive_outputs);
+            let serialized = egraph.serialize_for_graphviz(
+                args.serialize_split_primitive_outputs,
+                args.max_functions,
+                args.max_calls_per_function,
+            );
             if args.to_dot {
                 let dot_path = serialize_filename.with_extension("dot");
                 serialized.to_dot_file(dot_path).unwrap()

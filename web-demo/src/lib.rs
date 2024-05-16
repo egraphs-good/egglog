@@ -17,7 +17,7 @@ pub fn run_program(input: &str) -> Result {
     let mut egraph = egglog::EGraph::default();
     match egraph.parse_and_run_program(input) {
         Ok(outputs) => {
-            let serialized = egraph.serialize_for_graphviz(false);
+            let serialized = egraph.serialize_for_graphviz(false, 40, 40);
             Result {
                 text: outputs.join("<br>"),
                 dot: serialized.to_dot(),
