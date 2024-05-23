@@ -938,7 +938,10 @@ impl EGraph {
         run_report: &mut RunReport,
         search_results: &mut HashMap<Symbol, SearchResult>,
     ) {
-        let rules = self.rulesets.get(&ruleset).unwrap();
+        let rules = self
+            .rulesets
+            .get(&ruleset)
+            .unwrap_or_else(|| panic!("ruleset does not exist: {}", &ruleset));
         match rules {
             Ruleset::Rules(_ruleset_name, rule_names) => {
                 let copy_rules = rule_names.clone();
