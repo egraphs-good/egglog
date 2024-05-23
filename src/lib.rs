@@ -1551,9 +1551,7 @@ impl EGraph {
             max_calls_per_function: Some(max_calls_per_function),
             ..Default::default()
         };
-        let mut serialized = self.serialize(config);
-        serialized.inline_leaves();
-        serialized
+        self.serialize(config)
     }
 
     pub(crate) fn print_msg(&mut self, msg: String) {
