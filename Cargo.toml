@@ -1,7 +1,7 @@
 [package]
 edition = "2021"
 name = "egglog"
-version = "0.1.0"
+version = "0.2.0"
 description = "egglog is a language that combines the benefits of equality saturation and datalog. It can be used for analysis, optimization, and synthesis of programs. It is the successor to the popular rust library egg."
 repository = "https://github.com/egraphs-good/egglog"
 keywords = ["e-graphs", "egglog", "datalog", "compiler", "equality"]
