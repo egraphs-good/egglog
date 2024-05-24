@@ -29,16 +29,13 @@ log = "0.4"
 rustc-hash = "1.1"
 symbol_table = { version = "0.3.0", features = ["global"] }
 thiserror = "1"
-# symbol_table = { version = "0.2", features = ["global"] }
-# symbol_table = { path = "../symbol_table", features = ["global"] }
 lazy_static = "1.4"
 num-integer = "0.1.45"
 num-rational = "0.4.1"
 num-traits = "0.2.15"
 smallvec = "1.11"
 
-# oliver's slightly improved symbolic expressions with pretty printing
-generic_symbolic_expressions = { git = "https://github.com/oflatt/symbolic-expressions", rev = "655b6a4c06b4b3d3b2300e17779860b4abe440f0" }
+generic_symbolic_expressions = "5.0.4"
 
 egraph-serialize = { version = "0.1.0", features = ["serde", "graphviz"] }
 serde_json = { optional = true, version = "1.0.100", features = [
