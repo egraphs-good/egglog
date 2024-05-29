@@ -1368,7 +1368,7 @@ impl EGraph {
 
         for t in &func.schema.input {
             match t.name().as_str() {
-                "i64" | "String" => {}
+                "i64" | "f64" | "String" => {}
                 s => panic!("Unsupported type {} for input", s),
             }
         }
@@ -1395,10 +1395,12 @@ impl EGraph {
             }
 
             let parse = |s: &str| -> Expr {
-                if let Ok(i) = s.parse() {
-                    Expr::Lit((), Literal::Int(i))
-                } else {
-                    Expr::Lit((), Literal::String(s.into()))
+                match s.parse::<i64>() {
+                    Ok(i) => Expr::Lit((), Literal::Int(i)),
+                    Err(_) => match s.parse::<f64>() {
+                        Ok(f) => Expr::Lit((), Literal::F64(f.into())),
+                        Err(_) => Expr::Lit((), Literal::String(s.into())),
+                    },
                 }
             };
 
