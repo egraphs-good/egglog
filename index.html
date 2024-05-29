@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8" />
+    <title>egglog demo</title>
+    <link rel="icon" type="image/svg+xml" href="https://egraphs-good.github.io/assets/egg.svg">
+    <style>
+        body {
+            margin: 0;
+            display: flex;
+            height: 100vh;
+            width: 100vw;
+        }
+
+        #editor {
+            width: 50%;
+            resize: horizontal;
+            overflow: auto;
+        }
+
+        #editor .CodeMirror {
+            width: 100%;
+            height: 100%;
+        }
+
+        #panel {
+            flex: 1 1 0;
+            border-left: 2px solid gray;
+
+            display: flex;
+            flex-flow: column;
+        }
+
+        #toolbar {
+            margin-top: -5px;
+            padding: 10px;
+        }
+
+        #toolbar button,
+        #toolbar .badge,
+        #toolbar select #toolbar p {
+            margin-right: 5px;
+            margin-top: 5px;
+            display: inline-block;
+            vertical-align: middle;
+        }
+
+        .right {
+            float: right;
+        }
+
+        #graph {
+            border-top: 2px solid gray;
+            flex-grow: 1;
+            position: relative;
+            overflow: auto;
+        }
+
+        /* Don't let graph expand https://stackoverflow.com/a/38852981/907060 */
+        #graph-inner {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+
+        /* Style the tab */
+        .tab {
+            overflow: hidden;
+            border: 1px solid #ccc;
+            background-color: #f1f1f1;
+        }
+
+        /* Style the buttons that are used to open the tab content */
+        .tab button {
+            background-color: inherit;
+            float: left;
+            border: none;
+            outline: none;
+            cursor: pointer;
+            padding: 7px 8px;
+            transition: 0.3s;
+        }
+
+        .tab button:hover {
+            background-color: #ddd;
+        }
+
+        .tab button.active {
+            background-color: #ccc;
+        }
+
+        .tabcontent {
+            padding-left: 10px;
+            padding-top: 10px;
+            height: 35%;
+            overflow-y: scroll;
+            resize: vertical;
+            font-family: monospace;
+        }
+    </style>
+
+    <link rel="stylesheet" href="//unpkg.com/codemirror@5.65.2/lib/codemirror.css">
+    <script src="//unpkg.com/codemirror@5.65.2/lib/codemirror.js"></script>
+    <script src="//unpkg.com/codemirror@5.65.2/mode/scheme/scheme.js"></script>
+    <script src="//unpkg.com/codemirror@5.65.2/addon/edit/matchbrackets.js"></script>
+    <script src="//unpkg.com/codemirror@5.65.2/addon/edit/closebrackets.js"></script>
+    <script src="https://unpkg.com/@hpcc-js/wasm@2.13.1/dist/graphviz.umd.js" type="javascript/worker"></script>
+    <script src="https://cdn.jsdelivr.net/npm/d3@7.8.5"></script>
+    <script src="./d3-graphviz.js"></script>
+    <script type="module">
+        import { compressUrlSafe, decompressUrlSafe } from './lzma-url.mjs';
+
+        let editor, output, examples, loginfo;
+        let fulllog = [];
+        let logLevels = ["ERROR", "WARN", "INFO", "DEBUG"];
+        let nextButton, prevButton, slideNumber, docsButton, githubButton, shareButton, examplesDropDown;
+        console.log("Main script is running");
+        let worker = new Worker("worker.js");
+
+        var state = {
+            isSlideMode: false,
+            slideIndex: 0,
+            hasRun: true,
+            contentBySexp: [],
+        };
+
+        worker.onmessage = function (message) {
+            console.log("got message", message);
+            output.innerHTML = message.data.text;
+            output.scrollTop = output.scrollHeight;
+            fulllog = message.data.log;
+            refreshLog();
+
+            const graphContainer = d3.select("#graph-inner")
+            const width = graphContainer.node().clientWidth;
+            const height = graphContainer.node().clientHeight;
+            const graphviz = graphContainer.graphviz({
+                // Fit graph to that size, so that all is visible
+                fit: true,
+                width: width,
+                height: height,
+                // Don't animate transitions between shapes for performance
+                tweenPaths: false,
+                tweenShapes: false,
+            })
+                .transition(d3.transition().duration(2000))
+                .dot(message.data.dot).render();
+        }
+
+        window.onpopstate = function (event) {
+            console.log(event)
+            loadEditor()
+        }
+
+        window.refreshLog = function refreshLog() {
+            let level = document.getElementById("logLevel").value;
+            let displayloglevel = logLevels.indexOf(level);
+            let log = fulllog.filter((entry) => logLevels.indexOf(entry[0]) <= displayloglevel);
+            loginfo.innerHTML = log.map((entry) => entry[1]).join("\n");
+            loginfo.scrollTop = loginfo.scrollHeight;
+        }
+
+        function setProgram(program) {
+            let cursor = editor.getCursor();
+            editor.setValue(program);
+            editor.setCursor(cursor);
+        }
+
+        function loadEditor() {
+            let url = new URL(location);
+            let example = url.searchParams.get("example");
+            let program = url.searchParams.get("program");
+            if (example) {
+                if (examples[example]) {
+                    setProgram(examples[example]);
+                } else {
+                    console.warn("Bad example choice", example, "choices: ", Object.keys(examples));
+                }
+            } else if (program) {
+                let decompressed = decompressUrlSafe(program);
+                setProgram(decompressed);
+            }
+        }
+
+        window.onEnter = function onEnter() {
+            if (state.isSlideMode) {
+                window.next();
+            } else {
+                window.run();
+            }
+        }
+
+        window.run = function run() {
+            let program = editor.getValue();
+            worker.postMessage(program);
+            console.log("posted a message to worker!")
+            //output.textContent = "running..."
+        }
+
+        function makeContentBySexp() {
+            let content = editor.getValue();
+            let currentIndex = 0;
+            let contentBySexp = [];
+            // loop through all the s-expressions
+            while (currentIndex < content.length) {
+                let start = currentIndex;
+                // find next open parenthesis which isn't inside a comment
+                let inComment = false;
+                let newlines = 0;
+                while (currentIndex < content.length) {
+                    if (content[currentIndex] == ";") {
+                        inComment = true;
+                    } else if (content[currentIndex] == "\n") {
+                        if (!inComment) newlines++;
+                        inComment = false;
+                    } else if (content[currentIndex] == "(" && !inComment) {
+                        break;
+                    }
+                    currentIndex++;
+                }
+
+                // find matching parenthesis
+                let depth = 1;
+                while (depth > 0 && currentIndex < content.length) {
+                    currentIndex++;
+                    if (content[currentIndex] == "(") {
+                        depth++;
+                    } else if (content[currentIndex] == ")") {
+                        depth--;
+                    }
+                }
+
+                let sexp = content.substring(start, currentIndex + 1);
+
+                if (newlines > 1 || contentBySexp.length == 0) {
+                    contentBySexp.push(sexp);
+                } else {
+                    contentBySexp[contentBySexp.length - 1] += sexp;
+                }
+                currentIndex = currentIndex + 1;
+            }
+
+            state.contentBySexp = contentBySexp;
+            console.log("contentBySexp", contentBySexp);
+        }
+
+        function updateSlideMode() {
+            if (state.hasRun) {
+                nextButton.innerHTML = "Next";
+            } else {
+                nextButton.innerHTML = "Run";
+            }
+            if (!state.isSlideMode) {
+                nextButton.style.display = "none";
+                prevButton.style.display = "none";
+                slideNumber.style.display = "none";
+                docsButton.style.display = "inline-block";
+                githubButton.style.display = "inline-block";
+                shareButton.style.display = "inline-block";
+                examplesDropDown.style.display = "inline-block";
+            } else {
+                nextButton.style.display = "inline-block";
+                prevButton.style.display = "inline-block";
+                slideNumber.style.display = "inline-block";
+                docsButton.style.display = "none";
+                githubButton.style.display = "none";
+                shareButton.style.display = "none";
+                examplesDropDown.style.display = "none";
+                slideNumber.innerHTML = `${state.slideIndex + 1}`;
+
+                // content is all the sexps up to slidenum
+                let content = state.contentBySexp.slice(0, state.slideIndex + 1).join("");
+                setProgram(content);
+            }
+            editor.scrollTo(0, editor.getScrollInfo().height);
+        }
+
+        window.slideMode = function slideMode() {
+            state.isSlideMode = !state.isSlideMode;
+            state.slideIndex = 0;
+            state.hasRun = false;
+            makeContentBySexp();
+            updateSlideMode();
+        }
+
+        window.next = function next() {
+            if (state.hasRun) {
+                state.slideIndex++;
+                if (state.slideIndex >= state.contentBySexp.length) {
+                    state.slideIndex = state.contentBySexp.length - 1;
+                }
+                state.hasRun = false;
+            } else {
+                window.run();
+                state.hasRun = true;
+            }
+            updateSlideMode();
+        }
+
+        window.prev = function prev() {
+            state.slideIndex--;
+            if (state.slideIndex < 0) {
+                state.slideIndex = 0;
+            }
+
+
+            updateSlideMode();
+            window.run();
+            state.hasRun = true;
+        }
+
+        window.pushState = function pushState() {
+            output.textContent = "";
+            let url = new URL(location);
+            url.searchParams.delete("program");
+            url.searchParams.delete("example");
+
+            let state;
+            let content = editor.getValue();
+            for (let ex in examples) {
+                if (content == examples[ex]) {
+                    state = ex;
+                    url.searchParams.set("example", ex);
+                    break;
+                }
+            }
+
+            if (!state) {
+                state = content;
+                let compressed = compressUrlSafe(content);
+                let length = compressed.length;
+                let limit = 2000;
+                if (length > limit) {
+                    output.textContent = `Program is too large to share: ${length} > ${limit} bytes.`;
+                } else {
+                    url.searchParams.set("program", compressed);
+                    output.textContent = `Program shared: ${length} bytes.`;
+                }
+            }
+
+            if (history.state != state) {
+                history.pushState(state, "", url)
+            }
+        }
+
+        window.onload = async function () {
+            examples = await fetch("examples.json").then(r => r.json());
+            let select = document.getElementById("examples");
+            for (name in examples) {
+                let node = document.createElement("option");
+                node.value = name;
+                node.innerHTML = name;
+                select.appendChild(node);
+            }
+
+            select.onchange = function () {
+                console.log("Loading example", select.value);
+
+                if (select.value) {
+                    editor.setValue(examples[select.value]);
+                    pushState()
+                }
+                select.value = "";
+            };
+
+            output = document.getElementById("output");
+            loginfo = document.getElementById("loginfo");
+            editor = CodeMirror(document.getElementById("editor"), {
+                lineNumbers: true,
+                mode: "scheme",
+                lineWrapping: true,
+                extraKeys: {
+                    "Ctrl-Enter": onEnter,
+                },
+                matchBrackets: true,
+                autoCloseBrackets: true,
+            });
+            nextButton = document.getElementById("next");
+            prevButton = document.getElementById("prev");
+            docsButton = document.getElementById("docs");
+            shareButton = document.getElementById("share");
+            githubButton = document.getElementById("github");
+            slideNumber = document.getElementById("slideNumber");
+            examplesDropDown = document.getElementById("examples");
+
+            loadEditor();
+            updateSlideMode();
+        }
+
+        window.openTab = function openTab(evt, tabname) {
+            // Declare all variables
+            var i, tabcontent, tablinks;
+
+            // Get all elements with class="tabcontent" and hide them
+            tabcontent = document.getElementsByClassName("tabcontent");
+            for (i = 0; i < tabcontent.length; i++) {
+                tabcontent[i].style.display = "none";
+            }
+
+            // Get all elements with class="tablinks" and remove the class "active"
+            tablinks = document.getElementsByClassName("tablinks");
+            for (i = 0; i < tablinks.length; i++) {
+                tablinks[i].className = tablinks[i].className.replace(" active", "");
+            }
+
+            // Show the current tab, and add an "active" class to the button that opened the tab
+            document.getElementById(tabname).style.display = "block";
+            evt.currentTarget.className += " active";
+        }
+    </script>
+</head>
+
+<body>
+    <div id="editor"></div>
+    <div id="panel">
+        <div id="toolbar">
+            <button onclick="run()">Run</button>
+            <button onclick="pushState()" id="share">Share</button>
+            <button onclick="slideMode()">Slidemode</button>
+            <button id="prev" onclick="prev()">Prev</button>
+            <button id="next" onclick="next()">Next</button>
+            <p id="slideNumber"></p>
+
+            <!-- <label for="examples">Examples:</label> -->
+            <select name="examples" id="examples">
+                <option value=""> Load an example </option>
+            </select>
+            <div class="right" id="github">
+                <a class="badge" href="https://github.com/egraphs-good/egglog">
+                    <img alt="GitHub Repo"
+                        src="https://img.shields.io/github/stars/egraphs-good/egglog?label=GitHub&style=social"></a>
+            </div>
+            <div class="right" id="docs">
+                <a class="badge" href="docs/egglog">
+                    <img alt="Main Branch Documentation" src="https://img.shields.io/badge/docs-main-blue"></a>
+            </div>
+        </div>
+        <!-- Log panel -->
+        <div class="tab">
+            <button class="tablinks" onclick="openTab(event, 'outputtab')">Output</button>
+            <button class="tablinks" onclick="openTab(event, 'loginfotab')">Log</button>
+        </div>
+
+        <div id="outputtab" class="tabcontent">
+            <div id="output" style="display:contents; white-space: pre-wrap;">Click "Run" to run code</div>
+        </div>
+        <div id="loginfotab" class="tabcontent" style="display:none">
+            Display level: <select id="logLevel" display="margin: 3px" onchange="refreshLog()">
+                <option value="ERROR">error</option>
+                <option value="WARN">warn</option>
+                <option value="INFO" selected>info</option>
+                <option value="DEBUG">debug</option>
+            </select>
+            <br>
+            <hr>
+            <div id="loginfo" style="display:contents; white-space: pre-wrap;">Click "Run" to run code</div>
+        </div>
+
+        <div id="graph">
+            <div id="graph-inner"></div>
+        </div>
+    </div>
+</body>
+
+</html>
