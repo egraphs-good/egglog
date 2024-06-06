@@ -62,27 +62,36 @@ impl FunctionSort {
         name: Symbol,
         args: &[Expr],
     ) -> Result<ArcSort, TypeError> {
-        if let [Expr::Call((), first, rest_args), Expr::Var((), output)] = args {
+        if let [inputs, Expr::Var((), output)] = args {
             let output_sort = typeinfo
                 .sorts
                 .get(output)
                 .ok_or(TypeError::UndefinedSort(*output))?;
-            let all_args = once(first).chain(rest_args.iter().map(|arg| {
-                if let Expr::Var((), arg) = arg {
-                    arg
-                } else {
-                    panic!("function sort must be called with list of input sorts");
+
+            let input_sorts = match inputs {
+                Expr::Call((), first, rest_args) => {
+                    let all_args = once(first).chain(rest_args.iter().map(|arg| {
+                        if let Expr::Var((), arg) = arg {
+                            arg
+                        } else {
+                            panic!("function sort must be called with list of input sorts");
+                        }
+                    }));
+                    all_args
+                        .map(|arg| {
+                            typeinfo
+                                .sorts
+                                .get(arg)
+                                .ok_or(TypeError::UndefinedSort(*arg))
+                                .map(|s| s.clone())
+                        })
+                        .collect::<Result<Vec<_>, _>>()?
                 }
-            }));
-            let input_sorts = all_args
-                .map(|arg| {
-                    typeinfo
-                        .sorts
-                        .get(arg)
-                        .ok_or(TypeError::UndefinedSort(*arg))
-                        .map(|s| s.clone())
-                })
-                .collect::<Result<Vec<_>, _>>()?;
+                // an empty list of inputs args is parsed as a unit literal
+                Expr::Lit((), Literal::Unit) => vec![],
+                _ => panic!("function sort must be called with list of input sorts"),
+            };
+
             Ok(Arc::new(Self {
                 name,
                 inputs: input_sorts,

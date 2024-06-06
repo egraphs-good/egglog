@@ -30,7 +30,7 @@
 
 (let x (Cons (Num 1) (Cons (Num 2) (Cons (Num 3) (Nil)))))
 (let squared-x (list-map-math x square-fn))
-(run 100)
+(run-schedule (saturate (run)))
 (check (= squared-x (Cons (Num 1) (Cons (Num 4) (Cons (Num 9) (Nil))))))
 
 ;; Test that we can partially apply a function in a rewrite rule
@@ -39,7 +39,7 @@
 (rewrite (list-multiply-by l i) (list-map-math l (unstable-fn "Mul" i)))
 
 (let doubled-x (list-multiply-by x (Num 2)))
-(run 100)
+(run-schedule (saturate (run)))
 (check (= doubled-x (Cons (Num 2) (Cons (Num 4) (Cons (Num 6) (Nil))))))
 
 ;; Test we can define a higher order compose function
@@ -50,7 +50,7 @@
 (let square-of-double (unstable-fn "composed-math" square-fn (unstable-fn "Mul" (Num 2))))
 
 (let squared-doubled-x (list-map-math x square-of-double))
-(run 100)
+(run-schedule (saturate (run)))
 (check (= squared-doubled-x (Cons (Num 4) (Cons (Num 16) (Cons (Num 36) (Nil))))))
 
 
@@ -61,5 +61,8 @@
 (rewrite (composed-i64-math f g v) (unstable-app f (Num (unstable-app g v))))
 
 (let res (composed-i64-math square-fn (unstable-fn "*" 2) 4))
-(run 100)
+(run-schedule (saturate (run)))
 (check (= res (Num 64)))
+
+;; Verify that function parsing works with a function with no args
+(sort TestNullaryFunction (UnstableFn () Math))
