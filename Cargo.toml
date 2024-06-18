@@ -57,6 +57,9 @@ ordered-float = { version = "3.7" }
 # Need to add "js" feature for "graphviz-rust" to work in wasm
 getrandom = { version = "0.2.10", features = ["js"], optional = true }
 
+im = "15.1.0"
+
+
 [build-dependencies]
 lalrpop = "0.20"
 
