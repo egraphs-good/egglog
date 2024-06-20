@@ -14,7 +14,7 @@ use crate::{
 use core::hash::Hash;
 // Use immutable hashmap for performance
 // cloning assignments is common and O(1) with immutable hashmap
-use im::HashMap;
+use im_rc::HashMap;
 use std::{fmt::Debug, iter::once, mem::swap};
 
 #[derive(Clone, Debug)]
