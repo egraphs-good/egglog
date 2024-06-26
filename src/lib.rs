@@ -1135,7 +1135,7 @@ impl EGraph {
 
     pub fn eval_expr(&mut self, expr: &Expr) -> Result<(ArcSort, Value), Error> {
         let fresh_name = self.desugar.get_fresh();
-        let command = Command::Action(Action::Let(Span::DUMMY, fresh_name, expr.clone()));
+        let command = Command::Action(Action::Let(*DUMMY_SPAN, fresh_name, expr.clone()));
         self.run_program(vec![command])?;
         // find the table with the same name as the fresh name
         let func = self.functions.get(&fresh_name).unwrap();
@@ -1386,7 +1386,7 @@ impl EGraph {
         let mut contents = String::new();
         f.read_to_string(&mut contents).unwrap();
 
-        let span = Span::DUMMY;
+        let span: Span = *DUMMY_SPAN;
         let mut actions: Vec<Action> = vec![];
         let mut str_buf: Vec<&str> = vec![];
         for line in contents.lines() {

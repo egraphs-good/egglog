@@ -1,3 +1,4 @@
+use lazy_static::lazy_static;
 use std::fmt::Display;
 
 pub use symbol_table::GlobalSymbol as Symbol;
@@ -58,8 +59,8 @@ pub(crate) const DUMMY_FILENAME: &str = "<internal.egg>";
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Span(pub Symbol, pub usize, pub usize);
 
-impl Span {
-    pub(crate) const DUMMY: Span = Span(Symbol::from(DUMMY_FILENAME), 0, 0);
+lazy_static! {
+    pub(crate) static ref DUMMY_SPAN: Span = Span(Symbol::from(DUMMY_FILENAME), 0, 0);
 }
 
 impl Copy for Span {}
@@ -154,7 +155,7 @@ where
             GenericNCommand::RunSchedule(schedule) => GenericCommand::RunSchedule(schedule.clone()),
             GenericNCommand::PrintOverallStatistics => GenericCommand::PrintOverallStatistics,
             GenericNCommand::CoreAction(action) => GenericCommand::Action(action.clone()),
-            GenericNCommand::Check(ann, facts) => GenericCommand::Check(*ann, facts.clone()),
+            GenericNCommand::Check(ann, facts) => GenericCommand::Check(ann.clone(), facts.clone()),
             GenericNCommand::CheckProof => GenericCommand::CheckProof,
             GenericNCommand::PrintTable(name, n) => GenericCommand::PrintFunction(*name, *n),
             GenericNCommand::PrintSize(name) => GenericCommand::PrintSize(*name),
@@ -933,7 +934,7 @@ impl FunctionDecl {
             },
             merge: None,
             merge_action: Actions::default(),
-            default: Some(Expr::Lit(Span::DUMMY, Literal::Unit)),
+            default: Some(Expr::Lit(*DUMMY_SPAN, Literal::Unit)),
             cost: None,
             unextractable: false,
             ignore_viz: false,

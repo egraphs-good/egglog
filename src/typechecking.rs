@@ -411,7 +411,7 @@ impl TypeInfo {
         expr: &Expr,
         binding: &IndexMap<Symbol, ArcSort>,
     ) -> Result<ResolvedExpr, TypeError> {
-        let action = Action::Expr(Span::DUMMY, expr.clone());
+        let action = Action::Expr(*DUMMY_SPAN, expr.clone());
         let typechecked_action = self.typecheck_action(&action, binding)?;
         match typechecked_action {
             ResolvedAction::Expr(_, expr) => Ok(expr),

@@ -106,13 +106,13 @@ fn main() {
     }
 
     for (idx, input) in args.inputs.iter().enumerate() {
-        let program_read = std::fs::read_to_string(input).unwrap_or_else(|_| {
+        let program = std::fs::read_to_string(input).unwrap_or_else(|_| {
             let arg = input.to_string_lossy();
             panic!("Failed to read file {arg}")
         });
         let mut egraph = mk_egraph();
-
-        match egraph.parse_and_run_program(Some(input.into()),&program) {
+        let program_offset = 0;
+        match egraph.parse_and_run_program(Some(input.to_str().unwrap().into()),&program) {
             Ok(msgs) => {
                 for msg in msgs {
                     println!("{msg}");

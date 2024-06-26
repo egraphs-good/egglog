@@ -222,7 +222,8 @@ mod tests {
             ]
         );
         let e2 = td.term_to_expr(&t);
-        assert_eq!(e, e2); // roundtrip
+        todo!("the following assertion fails type check")
+        // assert_eq!(e, e2); // roundtrip
     }
 
     #[test]
