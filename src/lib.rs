@@ -482,7 +482,7 @@ impl Default for EGraph {
 
 #[derive(Debug, Error)]
 #[error("Not found: {0}")]
-pub struct NotFoundError(Expr);
+pub struct NotFoundError(String);
 
 /// For each rule, we produce a `SearchResult`
 /// storing data about that rule's matches.
@@ -843,8 +843,8 @@ impl EGraph {
     // returns whether the egraph was updated
     fn run_schedule(&mut self, sched: &ResolvedSchedule) -> RunReport {
         match sched {
-            ResolvedSchedule::Run(config) => self.run_rules(config),
-            ResolvedSchedule::Repeat(limit, sched) => {
+            ResolvedSchedule::Run(span, config) => self.run_rules(span, config),
+            ResolvedSchedule::Repeat(span, limit, sched) => {
                 let mut report = RunReport::default();
                 for _i in 0..*limit {
                     let rec = self.run_schedule(sched);
@@ -855,7 +855,7 @@ impl EGraph {
                 }
                 report
             }
-            ResolvedSchedule::Saturate(sched) => {
+            ResolvedSchedule::Saturate(span, sched) => {
                 let mut report = RunReport::default();
                 loop {
                     let rec = self.run_schedule(sched);
@@ -866,7 +866,7 @@ impl EGraph {
                 }
                 report
             }
-            ResolvedSchedule::Sequence(scheds) => {
+            ResolvedSchedule::Sequence(span, scheds) => {
                 let mut report = RunReport::default();
                 for sched in scheds {
                     report = report.union(&self.run_schedule(sched));
@@ -893,7 +893,7 @@ impl EGraph {
         termdag.to_string(&term)
     }
 
-    fn run_rules(&mut self, config: &ResolvedRunConfig) -> RunReport {
+    fn run_rules(&mut self, span: &Span, config: &ResolvedRunConfig) -> RunReport {
         let mut report: RunReport = Default::default();
 
         // first rebuild
@@ -908,7 +908,7 @@ impl EGraph {
         let GenericRunConfig { ruleset, until } = config;
 
         if let Some(facts) = until {
-            if self.check_facts(facts).is_ok() {
+            if self.check_facts(span, facts).is_ok() {
                 log::info!(
                     "Breaking early because of facts:\n {}!",
                     ListDisplay(facts, "\n")
@@ -1135,7 +1135,7 @@ impl EGraph {
 
     pub fn eval_expr(&mut self, expr: &Expr) -> Result<(ArcSort, Value), Error> {
         let fresh_name = self.desugar.get_fresh();
-        let command = Command::Action(Action::Let((), fresh_name, expr.clone()));
+        let command = Command::Action(Action::Let(Span::DUMMY, fresh_name, expr.clone()));
         self.run_program(vec![command])?;
         // find the table with the same name as the fresh name
         let func = self.functions.get(&fresh_name).unwrap();
@@ -1209,8 +1209,9 @@ impl EGraph {
         }
     }
 
-    fn check_facts(&mut self, facts: &[ResolvedFact]) -> Result<(), Error> {
+    fn check_facts(&mut self, span: &Span, facts: &[ResolvedFact]) -> Result<(), Error> {
         let rule = ast::ResolvedRule {
+            ann: span.clone(),
             head: ResolvedActions::default(),
             body: facts.to_vec(),
         };
@@ -1288,13 +1289,13 @@ impl EGraph {
                 log::info!("Overall statistics:\n{}", self.overall_run_report);
                 self.print_msg(format!("Overall statistics:\n{}", self.overall_run_report));
             }
-            ResolvedNCommand::Check(facts) => {
-                self.check_facts(&facts)?;
+            ResolvedNCommand::Check(ann, facts) => {
+                self.check_facts(&ann, &facts)?;
                 log::info!("Checked fact {:?}.", facts);
             }
             ResolvedNCommand::CheckProof => log::error!("TODO implement proofs"),
             ResolvedNCommand::CoreAction(action) => match &action {
-                ResolvedAction::Let((), name, contents) => {
+                ResolvedAction::Let(_, name, contents) => {
                     panic!("Globals should have been desugared away: {name} = {contents}")
                 }
                 _ => {
@@ -1385,6 +1386,7 @@ impl EGraph {
         let mut contents = String::new();
         f.read_to_string(&mut contents).unwrap();
 
+        let span = Span::DUMMY;
         let mut actions: Vec<Action> = vec![];
         let mut str_buf: Vec<&str> = vec![];
         for line in contents.lines() {
@@ -1396,10 +1398,10 @@ impl EGraph {
 
             let parse = |s: &str| -> Expr {
                 match s.parse::<i64>() {
-                    Ok(i) => Expr::Lit((), Literal::Int(i)),
+                    Ok(i) => Expr::Lit(span, Literal::Int(i)),
                     Err(_) => match s.parse::<f64>() {
-                        Ok(f) => Expr::Lit((), Literal::F64(f.into())),
-                        Err(_) => Expr::Lit((), Literal::String(s.into())),
+                        Ok(f) => Expr::Lit(span, Literal::F64(f.into())),
+                        Err(_) => Expr::Lit(span, Literal::String(s.into())),
                     },
                 }
             };
@@ -1408,10 +1410,10 @@ impl EGraph {
 
             actions.push(
                 if function_type.is_datatype || function_type.output.name() == UNIT_SYM.into() {
-                    Action::Expr((), Expr::Call((), func_name, exprs))
+                    Action::Expr(span, Expr::Call(span, func_name, exprs))
                 } else {
                     let out = exprs.pop().unwrap();
-                    Action::Set((), func_name, exprs, out)
+                    Action::Set(span, func_name, exprs, out)
                 },
             );
         }
@@ -1482,12 +1484,12 @@ impl EGraph {
         Ok(self.flush_msgs())
     }
 
-    pub fn parse_program(&self, input: &str) -> Result<Vec<Command>, Error> {
-        self.desugar.parse_program(input)
+    pub fn parse_program(&self, filename: Option<Symbol>, input: &str) -> Result<Vec<Command>, Error> {
+        self.desugar.parse_program(filename, input)
     }
 
-    pub fn parse_and_run_program(&mut self, input: &str) -> Result<Vec<String>, Error> {
-        let parsed = self.desugar.parse_program(input)?;
+    pub fn parse_and_run_program(&mut self, filename: Option<Symbol>, input: &str) -> Result<Vec<String>, Error> {
+        let parsed = self.desugar.parse_program(filename, input)?;
         self.run_program(parsed)
     }
 
@@ -1655,6 +1657,7 @@ mod tests {
         let mut egraph = EGraph::default();
         egraph
             .parse_and_run_program(
+                None,
                 "
                 (sort IntVec (Vec i64))
             ",
@@ -1670,6 +1673,7 @@ mod tests {
         });
         egraph
             .parse_and_run_program(
+                None,
                 "
                 (let a (vec-of 1 2 3 4 5 6))
                 (let b (vec-of 6 5 4 3 2 1))

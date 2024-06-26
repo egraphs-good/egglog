@@ -180,7 +180,7 @@ impl TypeInfo {
                 self.declare_sort(*sort, presort_and_args)?;
                 ResolvedNCommand::Sort(*sort, presort_and_args.clone())
             }
-            NCommand::CoreAction(Action::Let(_, var, expr)) => {
+            NCommand::CoreAction(Action::Let(ann, var, expr)) => {
                 let expr = self.typecheck_expr(expr, &Default::default())?;
                 let output_type = expr.output_type(self);
                 self.global_types.insert(*var, output_type.clone());
@@ -190,12 +190,14 @@ impl TypeInfo {
                     // not a global reference, but a global binding
                     is_global_ref: false,
                 };
-                ResolvedNCommand::CoreAction(ResolvedAction::Let((), var, expr))
+                ResolvedNCommand::CoreAction(ResolvedAction::Let(ann.clone(), var, expr))
             }
             NCommand::CoreAction(action) => {
                 ResolvedNCommand::CoreAction(self.typecheck_action(action, &Default::default())?)
             }
-            NCommand::Check(facts) => ResolvedNCommand::Check(self.typecheck_facts(facts)?),
+            NCommand::Check(span, facts) => {
+                ResolvedNCommand::Check(*span, self.typecheck_facts(facts)?)
+            }
             NCommand::Fail(cmd) => ResolvedNCommand::Fail(Box::new(self.typecheck_command(cmd)?)),
             NCommand::RunSchedule(schedule) => {
                 ResolvedNCommand::RunSchedule(self.typecheck_schedule(schedule)?)
@@ -275,28 +277,33 @@ impl TypeInfo {
 
     fn typecheck_schedule(&self, schedule: &Schedule) -> Result<ResolvedSchedule, TypeError> {
         let schedule = match schedule {
-            Schedule::Repeat(times, schedule) => {
-                ResolvedSchedule::Repeat(*times, Box::new(self.typecheck_schedule(schedule)?))
-            }
-            Schedule::Sequence(schedules) => {
+            Schedule::Repeat(span, times, schedule) => ResolvedSchedule::Repeat(
+                *span,
+                *times,
+                Box::new(self.typecheck_schedule(schedule)?),
+            ),
+            Schedule::Sequence(span, schedules) => {
                 let schedules = schedules
                     .iter()
                     .map(|schedule| self.typecheck_schedule(schedule))
                     .collect::<Result<Vec<_>, _>>()?;
-                ResolvedSchedule::Sequence(schedules)
+                ResolvedSchedule::Sequence(*span, schedules)
             }
-            Schedule::Saturate(schedule) => {
-                ResolvedSchedule::Saturate(Box::new(self.typecheck_schedule(schedule)?))
+            Schedule::Saturate(span, schedule) => {
+                ResolvedSchedule::Saturate(*span, Box::new(self.typecheck_schedule(schedule)?))
             }
-            Schedule::Run(RunConfig { ruleset, until }) => {
+            Schedule::Run(span, RunConfig { ruleset, until }) => {
                 let until = until
                     .as_ref()
                     .map(|facts| self.typecheck_facts(facts))
                     .transpose()?;
-                ResolvedSchedule::Run(ResolvedRunConfig {
-                    ruleset: *ruleset,
-                    until,
-                })
+                ResolvedSchedule::Run(
+                    *span,
+                    ResolvedRunConfig {
+                        ruleset: *ruleset,
+                        until,
+                    },
+                )
             }
         };
 
@@ -327,7 +334,7 @@ impl TypeInfo {
     }
 
     fn typecheck_rule(&self, rule: &Rule) -> Result<ResolvedRule, TypeError> {
-        let Rule { head, body } = rule;
+        let Rule { ann, head, body } = rule;
         let mut constraints = vec![];
 
         let mut fresh_gen = SymbolGen::new("$".to_string());
@@ -354,6 +361,7 @@ impl TypeInfo {
         let actions: ResolvedActions = assignment.annotate_actions(&mapped_action, self)?;
 
         Ok(ResolvedRule {
+            ann: *ann,
             body,
             head: actions,
         })
@@ -403,7 +411,7 @@ impl TypeInfo {
         expr: &Expr,
         binding: &IndexMap<Symbol, ArcSort>,
     ) -> Result<ResolvedExpr, TypeError> {
-        let action = Action::Expr((), expr.clone());
+        let action = Action::Expr(Span::DUMMY, expr.clone());
         let typechecked_action = self.typecheck_action(&action, binding)?;
         match typechecked_action {
             ResolvedAction::Expr(_, expr) => Ok(expr),
@@ -503,6 +511,7 @@ mod test {
         let mut egraph = EGraph::default();
 
         let res = egraph.parse_and_run_program(
+            None,
             "
             (relation f (i64 i64))
             (rule ((f a b c)) ())

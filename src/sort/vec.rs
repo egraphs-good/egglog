@@ -43,7 +43,7 @@ impl VecSort {
         name: Symbol,
         args: &[Expr],
     ) -> Result<ArcSort, TypeError> {
-        if let [Expr::Var((), e)] = args {
+        if let [Expr::Var(_, e)] = args {
             let e = typeinfo.sorts.get(e).ok_or(TypeError::UndefinedSort(*e))?;
 
             if e.is_eq_container_sort() {
@@ -165,7 +165,7 @@ impl Sort for VecSort {
         })
     }
 
-    fn make_expr(&self, egraph: &EGraph, value: Value) -> (Cost, Expr) {
+    fn make_expr(&self, egraph: &EGraph, value: Value) -> (Cost, GeneratedExpr) {
         let mut termdag = TermDag::default();
         let extractor = Extractor::new(egraph, &mut termdag);
         self.extract_expr(egraph, value, &extractor, &mut termdag)
@@ -178,12 +178,12 @@ impl Sort for VecSort {
         value: Value,
         extractor: &Extractor,
         termdag: &mut TermDag,
-    ) -> Option<(Cost, Expr)> {
+    ) -> Option<(Cost, GeneratedExpr)> {
         let vec = ValueVec::load(self, &value);
         let mut cost = 0usize;
 
         if vec.is_empty() {
-            Some((cost, Expr::call("vec-empty", [])))
+            Some((cost, GeneratedExpr::call("vec-empty", [])))
         } else {
             let elems = vec
                 .into_iter()
@@ -194,7 +194,7 @@ impl Sort for VecSort {
                 })
                 .collect::<Option<Vec<_>>>()?;
 
-            Some((cost, Expr::call("vec-of", elems)))
+            Some((cost, GeneratedExpr::call("vec-of", elems)))
         }
     }
 }
@@ -525,6 +525,7 @@ mod tests {
         let mut egraph = EGraph::default();
         let outputs = egraph
             .parse_and_run_program(
+                None,
                 r#"
             (sort IVec (Vec i64))
             (let v0 (vec-empty))
@@ -537,13 +538,16 @@ mod tests {
 
         // Check extracted expr is parsed as an original expr
         egraph
-            .parse_and_run_program(&format!(
-                r#"
+            .parse_and_run_program(
+                None,
+                &format!(
+                    r#"
                 (check (= v0 {}))
                 (check (= v1 {}))
                 "#,
-                outputs[0], outputs[1],
-            ))
+                    outputs[0], outputs[1],
+                ),
+            )
             .unwrap();
     }
 }

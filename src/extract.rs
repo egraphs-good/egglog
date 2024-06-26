@@ -28,6 +28,7 @@ impl EGraph {
     /// let mut egraph = EGraph::default();
     /// egraph
     ///     .parse_and_run_program(
+    ///         None,
     ///         "(datatype Op (Add i64 i64))
     ///          (let expr (Add 1 1))",
     ///     )

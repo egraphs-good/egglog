@@ -301,17 +301,15 @@ impl EGraph {
                                 value
                             }
                             _ => {
-                                return Err(Error::NotFoundError(NotFoundError(Expr::Var(
-                                    (),
+                                return Err(Error::NotFoundError(NotFoundError(
                                     format!("No value found for {f} {:?}", values).into(),
-                                ))))
+                                )))
                             }
                         }
                     } else {
-                        return Err(Error::NotFoundError(NotFoundError(Expr::Var(
-                            (),
+                        return Err(Error::NotFoundError(NotFoundError(
                             format!("No value found for {f} {:?}", values).into(),
-                        ))));
+                        )));
                     };
 
                     debug_assert_eq!(output_tag, value.tag);

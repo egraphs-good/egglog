@@ -28,7 +28,7 @@ impl SetSort {
         name: Symbol,
         args: &[Expr],
     ) -> Result<ArcSort, TypeError> {
-        if let [Expr::Var((), e)] = args {
+        if let [Expr::Var(_, e)] = args {
             let e = typeinfo.sorts.get(e).ok_or(TypeError::UndefinedSort(*e))?;
 
             if e.is_eq_container_sort() {
@@ -166,7 +166,7 @@ impl Sort for SetSort {
         });
     }
 
-    fn make_expr(&self, egraph: &EGraph, value: Value) -> (Cost, Expr) {
+    fn make_expr(&self, egraph: &EGraph, value: Value) -> (Cost, GeneratedExpr) {
         let mut termdag = TermDag::default();
         let extractor = Extractor::new(egraph, &mut termdag);
         self.extract_expr(egraph, value, &extractor, &mut termdag)
@@ -179,14 +179,14 @@ impl Sort for SetSort {
         value: Value,
         extractor: &Extractor,
         termdag: &mut TermDag,
-    ) -> Option<(Cost, Expr)> {
+    ) -> Option<(Cost, GeneratedExpr)> {
         let set = ValueSet::load(self, &value);
-        let mut expr = Expr::call("set-empty", []);
+        let mut expr = GeneratedExpr::call("set-empty", []);
         let mut cost = 0usize;
         for e in set.iter().rev() {
             let e = extractor.find_best(*e, termdag, &self.element)?;
             cost = cost.saturating_add(e.0);
-            expr = Expr::call("set-insert", [expr, termdag.term_to_expr(&e.1)])
+            expr = GeneratedExpr::call("set-insert", [expr, termdag.term_to_expr(&e.1)])
         }
         Some((cost, expr))
     }

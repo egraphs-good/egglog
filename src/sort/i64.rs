@@ -74,9 +74,9 @@ impl Sort for I64Sort {
 
     }
 
-    fn make_expr(&self, _egraph: &EGraph, value: Value) -> (Cost, Expr) {
+    fn make_expr(&self, _egraph: &EGraph, value: Value) -> (Cost, GeneratedExpr) {
         assert!(value.tag == self.name());
-        (1, Expr::Lit((), Literal::Int(value.bits as _)))
+        (1, GeneratedExpr::Lit((), Literal::Int(value.bits as _)))
     }
 }
 

@@ -29,7 +29,7 @@ impl MapSort {
         name: Symbol,
         args: &[Expr],
     ) -> Result<ArcSort, TypeError> {
-        if let [Expr::Var((), k), Expr::Var((), v)] = args {
+        if let [Expr::Var(_, k), Expr::Var(_, v)] = args {
             let k = typeinfo.sorts.get(k).ok_or(TypeError::UndefinedSort(*k))?;
             let v = typeinfo.sorts.get(v).ok_or(TypeError::UndefinedSort(*v))?;
 
@@ -150,7 +150,7 @@ impl Sort for MapSort {
         });
     }
 
-    fn make_expr(&self, egraph: &EGraph, value: Value) -> (Cost, Expr) {
+    fn make_expr(&self, egraph: &EGraph, value: Value) -> (Cost, GeneratedExpr) {
         let mut termdag = TermDag::default();
         let extractor = Extractor::new(egraph, &mut termdag);
         self.extract_expr(egraph, value, &extractor, &mut termdag)
@@ -163,15 +163,15 @@ impl Sort for MapSort {
         value: Value,
         extractor: &Extractor,
         termdag: &mut TermDag,
-    ) -> Option<(Cost, Expr)> {
+    ) -> Option<(Cost, GeneratedExpr)> {
         let map = ValueMap::load(self, &value);
-        let mut expr = Expr::call("map-empty", []);
+        let mut expr = GeneratedExpr::call("map-empty", []);
         let mut cost = 0usize;
         for (k, v) in map.iter().rev() {
             let k = extractor.find_best(*k, termdag, &self.key)?;
             let v = extractor.find_best(*v, termdag, &self.value)?;
             cost = cost.saturating_add(k.0).saturating_add(v.0);
-            expr = Expr::call(
+            expr = GeneratedExpr::call(
                 "map-insert",
                 [expr, termdag.term_to_expr(&k.1), termdag.term_to_expr(&v.1)],
             )

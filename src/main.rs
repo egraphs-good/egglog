@@ -13,8 +13,10 @@ struct Args {
     desugar: bool,
     #[clap(long)]
     resugar: bool,
+    /// Currently unused.
     #[clap(long)]
     proofs: bool,
+    /// Currently unused.
     /// Use the rust backend implimentation of eqsat,
     /// including a rust implementation of the union-find
     /// data structure and the rust implementation of
@@ -60,12 +62,13 @@ fn main() {
         egraph.fact_directory = args.fact_directory.clone();
         egraph.seminaive = !args.naive;
         egraph.run_mode = args.show;
+        // NB: both terms_encoding and proofs are currently unused
         if args.terms_encoding {
             egraph.enable_terms_encoding();
         }
         if args.proofs {
             egraph
-                .parse_and_run_program("(set-option enable_proofs 1)")
+                .parse_and_run_program(None, "(set-option enable_proofs 1)")
                 .unwrap();
         }
         egraph
@@ -78,7 +81,7 @@ fn main() {
 
         for line in BufReader::new(stdin).lines() {
             match line {
-                Ok(line_str) => match egraph.parse_and_run_program(&line_str) {
+                Ok(line_str) => match egraph.parse_and_run_program(None, &line_str) {
                     Ok(msgs) => {
                         for msg in msgs {
                             println!("{msg}");
@@ -108,15 +111,8 @@ fn main() {
             panic!("Failed to read file {arg}")
         });
         let mut egraph = mk_egraph();
-        let already_enables = program_read.starts_with("(set-option enable_proofs 1)");
-        let (program, program_offset) = if args.proofs && !already_enables {
-            let expr = "(set-option enable_proofs 1)\n";
-            (format!("{}{}", expr, program_read), expr.len())
-        } else {
-            (program_read, 0)
-        };
 
-        match egraph.parse_and_run_program(&program) {
+        match egraph.parse_and_run_program(Some(input.into()),&program) {
             Ok(msgs) => {
                 for msg in msgs {
                     println!("{msg}");

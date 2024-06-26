@@ -2,14 +2,9 @@ use crate::{
     ast::{
         GenericAction, GenericActions, GenericExpr, GenericFact, MappedAction, ResolvedAction,
         ResolvedActions, ResolvedExpr, ResolvedFact, ResolvedVar,
-    },
-    core::{
+    }, core::{
         Atom, AtomTerm, CoreAction, CoreRule, GenericCoreActions, Query, ResolvedCall, SymbolOrEq,
-    },
-    sort::I64Sort,
-    typechecking::TypeError,
-    util::{FreshGen, HashMap, HashSet, SymbolGen},
-    ArcSort, CorrespondingVar, Symbol, TypeInfo,
+    }, sort::I64Sort, typechecking::TypeError, util::{FreshGen, HashMap, HashSet, SymbolGen}, ArcSort, CorrespondingVar, Span, Symbol, TypeInfo
 };
 use core::hash::Hash;
 use std::{fmt::Debug, iter::once, mem::swap};
@@ -217,19 +212,19 @@ where
 impl Assignment<AtomTerm, ArcSort> {
     pub(crate) fn annotate_expr(
         &self,
-        expr: &GenericExpr<CorrespondingVar<Symbol, Symbol>, Symbol, ()>,
+        expr: &GenericExpr<CorrespondingVar<Symbol, Symbol>, Symbol, Span>,
         typeinfo: &TypeInfo,
     ) -> ResolvedExpr {
         match &expr {
-            GenericExpr::Lit((), literal) => ResolvedExpr::Lit((), literal.clone()),
-            GenericExpr::Var((), var) => {
+            GenericExpr::Lit(span, literal) => ResolvedExpr::Lit(*span, literal.clone()),
+            GenericExpr::Var(span, var) => {
                 let global_ty = typeinfo.lookup_global(var);
                 let ty = global_ty
                     .clone()
                     .or_else(|| self.get(&AtomTerm::Var(*var)).cloned())
                     .expect("All variables should be assigned before annotation");
                 ResolvedExpr::Var(
-                    (),
+                    *span,
                     ResolvedVar {
                         name: *var,
                         sort: ty.clone(),
@@ -238,7 +233,7 @@ impl Assignment<AtomTerm, ArcSort> {
                 )
             }
             GenericExpr::Call(
-                (),
+                span,
                 CorrespondingVar {
                     head,
                     to: corresponding_var,
@@ -260,14 +255,14 @@ impl Assignment<AtomTerm, ArcSort> {
                     ))
                     .collect();
                 let resolved_call = ResolvedCall::from_resolution(head, &types, typeinfo);
-                GenericExpr::Call((), resolved_call, args)
+                GenericExpr::Call(*span, resolved_call, args)
             }
         }
     }
 
     pub(crate) fn annotate_fact(
         &self,
-        facts: &GenericFact<CorrespondingVar<Symbol, Symbol>, Symbol, ()>,
+        facts: &GenericFact<CorrespondingVar<Symbol, Symbol>, Symbol, Span>,
         typeinfo: &TypeInfo,
     ) -> ResolvedFact {
         match facts {
@@ -283,7 +278,7 @@ impl Assignment<AtomTerm, ArcSort> {
 
     pub(crate) fn annotate_facts(
         &self,
-        mapped_facts: &[GenericFact<CorrespondingVar<Symbol, Symbol>, Symbol, ()>],
+        mapped_facts: &[GenericFact<CorrespondingVar<Symbol, Symbol>, Symbol, Span>],
         typeinfo: &TypeInfo,
     ) -> Vec<ResolvedFact> {
         mapped_facts
@@ -298,12 +293,12 @@ impl Assignment<AtomTerm, ArcSort> {
         typeinfo: &TypeInfo,
     ) -> Result<ResolvedAction, TypeError> {
         match action {
-            GenericAction::Let((), var, expr) => {
+            GenericAction::Let(span, var, expr) => {
                 let ty = self
                     .get(&AtomTerm::Var(*var))
                     .expect("All variables should be assigned before annotation");
                 Ok(ResolvedAction::Let(
-                    (),
+                    *span,
                     ResolvedVar {
                         name: *var,
                         sort: ty.clone(),
@@ -314,7 +309,7 @@ impl Assignment<AtomTerm, ArcSort> {
             }
             // Note mapped_var for set is a dummy variable that does not mean anything
             GenericAction::Set(
-                (),
+                span,
                 CorrespondingVar {
                     head,
                     to: _mapped_var,
@@ -336,11 +331,11 @@ impl Assignment<AtomTerm, ArcSort> {
                 if !matches!(resolved_call, ResolvedCall::Func(_)) {
                     return Err(TypeError::UnboundFunction(*head));
                 }
-                Ok(ResolvedAction::Set((), resolved_call, children, rhs))
+                Ok(ResolvedAction::Set(*span, resolved_call, children, rhs))
             }
             // Note mapped_var for delete is a dummy variable that does not mean anything
             GenericAction::Change(
-                (),
+                span,
                 change,
                 CorrespondingVar {
                     head,
@@ -360,32 +355,32 @@ impl Assignment<AtomTerm, ArcSort> {
                     ResolvedCall::from_resolution_func_types(head, &types, typeinfo)
                         .ok_or_else(|| TypeError::UnboundFunction(*head))?;
                 Ok(ResolvedAction::Change(
-                    (),
+                    *span,
                     *change,
                     resolved_call,
                     children.clone(),
                 ))
             }
-            GenericAction::Union((), lhs, rhs) => Ok(ResolvedAction::Union(
-                (),
+            GenericAction::Union(span, lhs, rhs) => Ok(ResolvedAction::Union(
+                *span,
                 self.annotate_expr(lhs, typeinfo),
                 self.annotate_expr(rhs, typeinfo),
             )),
-            GenericAction::Extract((), lhs, rhs) => Ok(ResolvedAction::Extract(
-                (),
+            GenericAction::Extract(span, lhs, rhs) => Ok(ResolvedAction::Extract(
+                *span,
                 self.annotate_expr(lhs, typeinfo),
                 self.annotate_expr(rhs, typeinfo),
             )),
-            GenericAction::Panic((), msg) => Ok(ResolvedAction::Panic((), msg.clone())),
-            GenericAction::Expr((), expr) => {
-                Ok(ResolvedAction::Expr((), self.annotate_expr(expr, typeinfo)))
+            GenericAction::Panic(span, msg) => Ok(ResolvedAction::Panic(*span, msg.clone())),
+            GenericAction::Expr(span, expr) => {
+                Ok(ResolvedAction::Expr(*span, self.annotate_expr(expr, typeinfo)))
             }
         }
     }
 
     pub(crate) fn annotate_actions(
         &self,
-        mapped_actions: &GenericActions<CorrespondingVar<Symbol, Symbol>, Symbol, ()>,
+        mapped_actions: &GenericActions<CorrespondingVar<Symbol, Symbol>, Symbol, Span>,
         typeinfo: &TypeInfo,
     ) -> Result<ResolvedActions, TypeError> {
         let actions = mapped_actions
