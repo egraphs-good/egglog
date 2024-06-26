@@ -844,7 +844,7 @@ impl EGraph {
     fn run_schedule(&mut self, sched: &ResolvedSchedule) -> RunReport {
         match sched {
             ResolvedSchedule::Run(span, config) => self.run_rules(span, config),
-            ResolvedSchedule::Repeat(span, limit, sched) => {
+            ResolvedSchedule::Repeat(_span, limit, sched) => {
                 let mut report = RunReport::default();
                 for _i in 0..*limit {
                     let rec = self.run_schedule(sched);
@@ -855,7 +855,7 @@ impl EGraph {
                 }
                 report
             }
-            ResolvedSchedule::Saturate(span, sched) => {
+            ResolvedSchedule::Saturate(_span, sched) => {
                 let mut report = RunReport::default();
                 loop {
                     let rec = self.run_schedule(sched);
@@ -866,7 +866,7 @@ impl EGraph {
                 }
                 report
             }
-            ResolvedSchedule::Sequence(span, scheds) => {
+            ResolvedSchedule::Sequence(_span, scheds) => {
                 let mut report = RunReport::default();
                 for sched in scheds {
                     report = report.union(&self.run_schedule(sched));

@@ -721,7 +721,7 @@ where
             }
             GenericCommand::BiRewrite(name, rewrite) => rewrite.to_sexp(*name, true, false),
             GenericCommand::Datatype { name, variants } => list!("datatype", name, ++ variants),
-            GenericCommand::Declare { ann, name, sort } => list!("declare", name, sort),
+            GenericCommand::Declare { ann: _, name, sort } => list!("declare", name, sort),
             GenericCommand::Action(a) => a.to_sexp(),
             GenericCommand::Sort(name, None) => list!("sort", name),
             GenericCommand::Sort(name, Some((name2, args))) => {
@@ -743,11 +743,11 @@ where
             } => rule.to_sexp(*ruleset, *name),
             GenericCommand::RunSchedule(sched) => list!("run-schedule", sched),
             GenericCommand::PrintOverallStatistics => list!("print-stats"),
-            GenericCommand::Calc(ann, args, exprs) => list!("calc", list!(++ args), ++ exprs),
+            GenericCommand::Calc(_ann, args, exprs) => list!("calc", list!(++ args), ++ exprs),
             GenericCommand::QueryExtract { variants, expr } => {
                 list!("query-extract", ":variants", variants, expr)
             }
-            GenericCommand::Check(ann, facts) => list!("check", ++ facts),
+            GenericCommand::Check(_ann, facts) => list!("check", ++ facts),
             GenericCommand::CheckProof => list!("check-proof"),
             GenericCommand::Push(n) => list!("push", n),
             GenericCommand::Pop(n) => list!("pop", n),
@@ -788,7 +788,7 @@ where
                 name,
                 rule,
             } => rule.fmt_with_ruleset(f, *ruleset, *name),
-            GenericCommand::Check(ann, facts) => {
+            GenericCommand::Check(_ann, facts) => {
                 write!(f, "(check {})", ListDisplay(facts, "\n"))
             }
             _ => write!(f, "{}", self.to_sexp()),

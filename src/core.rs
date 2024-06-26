@@ -734,7 +734,7 @@ where
     where
         Leaf: SymbolLike,
     {
-        let GenericRule { ann, head, body } = self;
+        let GenericRule { ann: _, head, body } = self;
 
         let (body, _correspondence) = Facts(body.clone()).to_query(typeinfo, &mut fresh_gen);
         let mut binding = body.get_vars();

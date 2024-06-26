@@ -1,5 +1,7 @@
 use crate::{
-    ast::{Expr, Literal}, util::{HashMap, HashSet}, GeneratedExpr, GenericExpr, Symbol
+    ast::Literal,
+    util::{HashMap, HashSet},
+    GeneratedExpr, GenericExpr, Symbol,
 };
 
 pub type TermId = usize;
