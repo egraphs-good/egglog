@@ -156,7 +156,7 @@ impl<'a> GlobalRemover<'a> {
                         globals.insert(
                             resolved_var.clone(),
                             GenericExpr::Var(
-                                (),
+                                expr.ann(),
                                 ResolvedVar {
                                     name: new_name,
                                     sort: resolved_var.sort.clone(),
@@ -170,14 +170,18 @@ impl<'a> GlobalRemover<'a> {
                 let new_facts: Vec<ResolvedFact> = globals
                     .iter()
                     .map(|(old, new)| {
-                        GenericFact::Eq(vec![
-                            GenericExpr::Call((), resolved_var_to_call(old), vec![]),
-                            new.clone(),
-                        ])
+                        GenericFact::Eq(
+                            new.ann(),
+                            vec![
+                                GenericExpr::Call(new.ann(), resolved_var_to_call(old), vec![]),
+                                new.clone(),
+                            ],
+                        )
                     })
                     .collect();
 
                 let new_rule = GenericRule {
+                    ann: rule.ann,
                     // instrument the old facts and add the new facts to the end
                     body: rule
                         .body

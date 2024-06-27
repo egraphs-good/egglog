@@ -25,9 +25,9 @@ impl Sort for UnitSort {
         type_info.add_primitive(NotEqualPrimitive { unit: self })
     }
 
-    fn make_expr(&self, _egraph: &EGraph, value: Value) -> (Cost, Expr) {
+    fn make_expr(&self, _egraph: &EGraph, value: Value) -> (Cost, GeneratedExpr) {
         assert_eq!(value.tag, self.name);
-        (1, Expr::Lit((), Literal::Unit))
+        (1, GeneratedExpr::Lit((), Literal::Unit))
     }
 }
 
@@ -48,8 +48,8 @@ impl PrimitiveLike for NotEqualPrimitive {
         "!=".into()
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
-        AllEqualTypeConstraint::new(self.name())
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        AllEqualTypeConstraint::new(self.name(), *span)
             .with_exact_length(3)
             .with_output_sort(self.unit.clone())
             .into_box()

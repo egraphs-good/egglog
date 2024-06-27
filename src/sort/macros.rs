@@ -42,9 +42,10 @@ macro_rules! add_primitives {
 
                 fn get_type_constraints(
                     &self,
+                    span: &Span
                 ) -> Box<dyn TypeConstraint> {
                     let sorts = vec![$(self.$param.clone(),)* self.__out.clone() as ArcSort];
-                    SimpleTypeConstraint::new(self.name(), sorts).into_box()
+                    SimpleTypeConstraint::new(self.name(), sorts, *span).into_box()
                 }
 
                 fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {

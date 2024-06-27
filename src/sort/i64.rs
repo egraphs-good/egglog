@@ -74,9 +74,9 @@ impl Sort for I64Sort {
 
     }
 
-    fn make_expr(&self, _egraph: &EGraph, value: Value) -> (Cost, Expr) {
+    fn make_expr(&self, _egraph: &EGraph, value: Value) -> (Cost, GeneratedExpr) {
         assert!(value.tag == self.name());
-        (1, Expr::Lit((), Literal::Int(value.bits as _)))
+        (1, GeneratedExpr::Lit((), Literal::Int(value.bits as _)))
     }
 }
 
@@ -108,8 +108,8 @@ impl PrimitiveLike for CountMatches {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
-        AllEqualTypeConstraint::new(self.name())
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        AllEqualTypeConstraint::new(self.name(), *span)
             .with_all_arguments_sort(self.string.clone())
             .with_exact_length(3)
             .with_output_sort(self.int.clone())
