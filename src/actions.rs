@@ -16,20 +16,20 @@ struct ActionCompiler<'a> {
 impl<'a> ActionCompiler<'a> {
     fn compile_action(&mut self, action: &GenericCoreAction<ResolvedCall, ResolvedVar>) {
         match action {
-            GenericCoreAction::Let(v, f, args) => {
+            GenericCoreAction::Let(_ann, v, f, args) => {
                 self.do_call(f, args);
                 self.locals.insert(v.clone());
             }
-            GenericCoreAction::LetAtomTerm(v, at) => {
+            GenericCoreAction::LetAtomTerm(_ann, v, at) => {
                 self.do_atom_term(at);
                 self.locals.insert(v.clone());
             }
-            GenericCoreAction::Extract(e, b) => {
+            GenericCoreAction::Extract(_ann, e, b) => {
                 self.do_atom_term(e);
                 self.do_atom_term(b);
                 self.instructions.push(Instruction::Extract(2));
             }
-            GenericCoreAction::Set(f, args, e) => {
+            GenericCoreAction::Set(_ann, f, args, e) => {
                 let ResolvedCall::Func(func) = f else {
                     panic!("Cannot set primitive- should have been caught by typechecking!!!")
                 };
@@ -39,7 +39,7 @@ impl<'a> ActionCompiler<'a> {
                 self.do_atom_term(e);
                 self.instructions.push(Instruction::Set(func.name));
             }
-            GenericCoreAction::Change(change, f, args) => {
+            GenericCoreAction::Change(_ann, change, f, args) => {
                 let ResolvedCall::Func(func) = f else {
                     panic!("Cannot change primitive- should have been caught by typechecking!!!")
                 };
@@ -49,12 +49,12 @@ impl<'a> ActionCompiler<'a> {
                 self.instructions
                     .push(Instruction::Change(*change, func.name));
             }
-            GenericCoreAction::Union(arg1, arg2) => {
+            GenericCoreAction::Union(_ann, arg1, arg2) => {
                 self.do_atom_term(arg1);
                 self.do_atom_term(arg2);
                 self.instructions.push(Instruction::Union(2));
             }
-            GenericCoreAction::Panic(msg) => {
+            GenericCoreAction::Panic(_ann, msg) => {
                 self.instructions.push(Instruction::Panic(msg.clone()));
             }
         }
@@ -72,7 +72,7 @@ impl<'a> ActionCompiler<'a> {
 
     fn do_atom_term(&mut self, at: &ResolvedAtomTerm) {
         match at {
-            ResolvedAtomTerm::Var(var) => {
+            ResolvedAtomTerm::Var(_ann, var) => {
                 if let Some((i, _ty)) = self.locals.get_full(var) {
                     self.instructions.push(Instruction::Load(Load::Stack(i)));
                 } else {
@@ -80,10 +80,10 @@ impl<'a> ActionCompiler<'a> {
                     self.instructions.push(Instruction::Load(Load::Subst(i)));
                 }
             }
-            ResolvedAtomTerm::Literal(lit) => {
+            ResolvedAtomTerm::Literal(_ann, lit) => {
                 self.instructions.push(Instruction::Literal(lit.clone()));
             }
-            ResolvedAtomTerm::Global(_var) => {
+            ResolvedAtomTerm::Global(_ann, _var) => {
                 panic!("Global variables should have been desugared");
             }
         }

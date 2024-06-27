@@ -73,7 +73,9 @@ pub type Subst = IndexMap<Symbol, Value>;
 
 pub trait PrimitiveLike {
     fn name(&self) -> Symbol;
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint>;
+    /// Constructs a type constraint for the primitive that uses the span information
+    /// for error localization.
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint>;
     fn apply(&self, values: &[Value], egraph: Option<&mut EGraph>) -> Option<Value>;
 }
 
@@ -299,12 +301,12 @@ impl Primitive {
     fn accept(&self, tys: &[Arc<dyn Sort>]) -> bool {
         let mut constraints = vec![];
         let lits: Vec<_> = (0..tys.len())
-            .map(|i| AtomTerm::Literal(Literal::Int(i as i64)))
+            .map(|i| AtomTerm::Literal(*DUMMY_SPAN, Literal::Int(i as i64)))
             .collect();
         for (lit, ty) in lits.iter().zip(tys.iter()) {
             constraints.push(Constraint::Assign(lit.clone(), ty.clone()))
         }
-        constraints.extend(self.get_type_constraints().get(&lits));
+        constraints.extend(self.get_type_constraints(&DUMMY_SPAN).get(&lits));
         let problem = Problem {
             constraints,
             range: HashSet::default(),
@@ -362,14 +364,14 @@ impl PrimitiveLike for SimplePrimitive {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         let sorts: Vec<_> = self
             .input
             .iter()
             .chain(once(&self.output as &ArcSort))
             .cloned()
             .collect();
-        SimpleTypeConstraint::new(self.name(), sorts).into_box()
+        SimpleTypeConstraint::new(self.name(), sorts, *span).into_box()
     }
     fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         (self.f)(values)
@@ -1611,9 +1613,7 @@ mod tests {
     use std::sync::Arc;
 
     use crate::{
-        constraint::SimpleTypeConstraint,
-        sort::{FromSort, I64Sort, IntoSort, Sort, VecSort},
-        EGraph, PrimitiveLike, Value,
+        constraint::SimpleTypeConstraint, sort::{FromSort, I64Sort, IntoSort, Sort, VecSort}, EGraph, PrimitiveLike, Span, Value
     };
 
     struct InnerProduct {
@@ -1626,10 +1626,11 @@ mod tests {
             "inner-product".into()
         }
 
-        fn get_type_constraints(&self) -> Box<dyn crate::constraint::TypeConstraint> {
+        fn get_type_constraints(&self, span: &Span) -> Box<dyn crate::constraint::TypeConstraint> {
             SimpleTypeConstraint::new(
                 self.name(),
                 vec![self.vec.clone(), self.vec.clone(), self.ele.clone()],
+                *span,
             )
             .into_box()
         }

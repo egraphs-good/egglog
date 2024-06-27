@@ -150,7 +150,7 @@ impl GeneratedExpr {
     }
 }
 
-impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq, Ann: Clone>
+impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq, Ann: Annotation>
     GenericExpr<Head, Leaf, Ann>
 {
     pub fn ann(&self) -> Ann {

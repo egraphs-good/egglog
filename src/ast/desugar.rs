@@ -71,7 +71,7 @@ fn desugar_rewrite(
         name,
         rule: Rule {
             ann: span,
-            body: [Fact::Eq(vec![Expr::Var(span, var), rewrite.lhs.clone()])]
+            body: [Fact::Eq(span, vec![Expr::Var(span, var), rewrite.lhs.clone()])]
                 .into_iter()
                 .chain(rewrite.conditions.clone())
                 .collect(),
@@ -119,7 +119,7 @@ fn add_semi_naive_rule(desugar: &mut Desugar, rule: Rule) -> Option<Rule> {
                     let fresh_symbol = desugar.get_fresh();
                     let fresh_var = Expr::Var(*ann, fresh_symbol);
                     let expr = std::mem::replace(expr, fresh_var.clone());
-                    new_head_atoms.push(Fact::Eq(vec![fresh_var, expr]));
+                    new_head_atoms.push(Fact::Eq(*ann, vec![fresh_var, expr]));
                 };
             }
             Action::Let(ann, symbol, expr) if var_set.contains(symbol) => {
@@ -128,7 +128,7 @@ fn add_semi_naive_rule(desugar: &mut Desugar, rule: Rule) -> Option<Rule> {
                     add_new_rule = true;
 
                     let var = Expr::Var(*ann, *symbol);
-                    new_head_atoms.push(Fact::Eq(vec![var, expr.clone()]));
+                    new_head_atoms.push(Fact::Eq(*ann, vec![var, expr.clone()]));
                 }
             }
             _ => (),
@@ -209,14 +209,14 @@ pub(crate) fn desugar_calc(
                 span,
                 RunConfig {
                     ruleset: "".into(),
-                    until: Some(vec![Fact::Eq(vec![expr1.clone(), expr2.clone()])]),
+                    until: Some(vec![Fact::Eq(span, vec![expr1.clone(), expr2.clone()])]),
                 },
             )),
         )));
 
         res.push(Command::Check(
             span,
-            vec![Fact::Eq(vec![expr1.clone(), expr2.clone()])],
+            vec![Fact::Eq(span, vec![expr1.clone(), expr2.clone()])],
         ));
 
         res.push(Command::Pop(1));

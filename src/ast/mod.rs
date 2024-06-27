@@ -65,6 +65,22 @@ lazy_static! {
 
 impl Copy for Span {}
 
+pub(crate) trait Annotation: Clone + PartialEq + Eq + Hash + Debug {
+    fn dummy() -> Self;
+}
+
+impl Annotation for Span {
+    fn dummy() -> Self {
+        *DUMMY_SPAN
+    }
+}
+
+impl Annotation for () {
+    fn dummy() -> Self {
+        ()
+    }
+}
+
 pub type NCommand = GenericNCommand<Symbol, Symbol, Span>;
 /// [`ResolvedNCommand`] is another specialization of [`GenericNCommand`], which
 /// adds the type information to heads and leaves of commands.
@@ -85,7 +101,7 @@ pub(crate) type ResolvedNCommand = GenericNCommand<ResolvedCall, ResolvedVar, Sp
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum GenericNCommand<Head, Leaf, Ann>
 where
-    Ann: Clone,
+    Ann: Annotation,
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
@@ -129,7 +145,7 @@ impl<Head, Leaf, Ann> GenericNCommand<Head, Leaf, Ann>
 where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
-    Ann: Clone,
+    Ann: Annotation,
 {
     pub fn to_command(&self) -> GenericCommand<Head, Leaf, Ann> {
         match self {
@@ -276,7 +292,7 @@ macro_rules! list {
 
 impl<Head, Leaf, Ann> GenericSchedule<Head, Leaf, Ann>
 where
-    Ann: Clone,
+    Ann: Annotation,
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
@@ -329,7 +345,7 @@ pub enum GenericCommand<Head, Leaf, Ann>
 where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
-    Ann: Clone,
+    Ann: Annotation,
 {
     /// Egglog supports several *experimental* options
     /// that can be set using the `set-option` command.
@@ -711,7 +727,7 @@ impl<Head, Leaf, Ann> ToSexp for GenericCommand<Head, Leaf, Ann>
 where
     Head: Clone + Display + ToSexp,
     Leaf: Clone + PartialEq + Eq + Display + Hash + ToSexp,
-    Ann: Clone,
+    Ann: Annotation,
 {
     fn to_sexp(&self) -> Sexp {
         match self {
@@ -768,7 +784,7 @@ impl<Head, Leaf, Ann> Display for GenericNCommand<Head, Leaf, Ann>
 where
     Head: Clone + Display + ToSexp,
     Leaf: Clone + PartialEq + Eq + Display + Hash + ToSexp,
-    Ann: Clone,
+    Ann: Annotation,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.to_command())
@@ -779,7 +795,7 @@ impl<Head, Leaf, Ann> Display for GenericCommand<Head, Leaf, Ann>
 where
     Head: Clone + Display + ToSexp,
     Leaf: Clone + PartialEq + Eq + Display + Hash + ToSexp,
-    Ann: Clone,
+    Ann: Annotation,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -825,7 +841,7 @@ pub struct GenericRunConfig<Head, Leaf, Ann> {
 
 impl<Head, Leaf, Ann> GenericRunConfig<Head, Leaf, Ann>
 where
-    Ann: Clone,
+    Ann: Annotation,
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
@@ -869,7 +885,7 @@ pub(crate) type ResolvedFunctionDecl = GenericFunctionDecl<ResolvedCall, Resolve
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct GenericFunctionDecl<Head, Leaf, Ann>
 where
-    Ann: Clone,
+    Ann: Annotation,
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
@@ -944,7 +960,7 @@ impl FunctionDecl {
 
 impl<Head, Leaf, Ann> GenericFunctionDecl<Head, Leaf, Ann>
 where
-    Ann: Clone,
+    Ann: Annotation,
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
@@ -967,7 +983,7 @@ where
 
 impl<Head, Leaf, Ann> ToSexp for GenericFunctionDecl<Head, Leaf, Ann>
 where
-    Ann: Clone,
+    Ann: Annotation,
     Head: Clone + Display + ToSexp,
     Leaf: Clone + PartialEq + Eq + Display + Hash + ToSexp,
 {
@@ -1032,7 +1048,7 @@ pub(crate) type MappedFact<Head, Leaf, Ann> = GenericFact<CorrespondingVar<Head,
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum GenericFact<Head, Leaf, Ann> {
     /// Must be at least two things in an eq fact
-    Eq(Vec<GenericExpr<Head, Leaf, Ann>>),
+    Eq(Ann, Vec<GenericExpr<Head, Leaf, Ann>>),
     Fact(GenericExpr<Head, Leaf, Ann>),
 }
 
@@ -1040,7 +1056,7 @@ pub struct Facts<Head, Leaf, Ann>(pub Vec<GenericFact<Head, Leaf, Ann>>);
 
 impl<Head, Leaf, Ann> Facts<Head, Leaf, Ann>
 where
-    Ann: Clone,
+    Ann: Annotation,
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
@@ -1056,7 +1072,7 @@ where
         typeinfo: &TypeInfo,
         fresh_gen: &mut impl FreshGen<Head, Leaf>,
     ) -> (
-        Query<HeadOrEq<Head>, Leaf>,
+        Query<HeadOrEq<Head>, Leaf, Ann>,
         Vec<MappedFact<Head, Leaf, Ann>>,
     )
     where
@@ -1067,7 +1083,7 @@ where
 
         for fact in self.0.iter() {
             match fact {
-                GenericFact::Eq(exprs) => {
+                GenericFact::Eq(ann, exprs) => {
                     let mut new_exprs = vec![];
                     let mut to_equate = vec![];
                     for expr in exprs {
@@ -1077,10 +1093,11 @@ where
                         new_exprs.push(expr);
                     }
                     atoms.push(GenericAtom {
+                        ann: ann.clone(),
                         head: HeadOrEq::Eq,
                         args: to_equate,
                     });
-                    new_body.push(GenericFact::Eq(new_exprs));
+                    new_body.push(GenericFact::Eq(ann.clone(), new_exprs));
                 }
                 GenericFact::Fact(expr) => {
                     let (child_atoms, expr) = expr.to_query(typeinfo, fresh_gen);
@@ -1100,7 +1117,7 @@ where
 {
     fn to_sexp(&self) -> Sexp {
         match self {
-            GenericFact::Eq(exprs) => list!("=", ++ exprs),
+            GenericFact::Eq(_, exprs) => list!("=", ++ exprs),
             GenericFact::Fact(expr) => expr.to_sexp(),
         }
     }
@@ -1108,7 +1125,7 @@ where
 
 impl<Head, Leaf, Ann> GenericFact<Head, Leaf, Ann>
 where
-    Ann: Clone,
+    Ann: Annotation,
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
@@ -1117,9 +1134,10 @@ where
         f: &mut impl FnMut(GenericExpr<Head, Leaf, Ann>) -> GenericExpr<Head, Leaf, Ann>,
     ) -> GenericFact<Head, Leaf, Ann> {
         match self {
-            GenericFact::Eq(exprs) => {
-                GenericFact::Eq(exprs.into_iter().map(|expr| expr.visit_exprs(f)).collect())
-            }
+            GenericFact::Eq(ann, exprs) => GenericFact::Eq(
+                ann.clone(),
+                exprs.into_iter().map(|expr| expr.visit_exprs(f)).collect(),
+            ),
             GenericFact::Fact(expr) => GenericFact::Fact(expr.visit_exprs(f)),
         }
     }
@@ -1129,7 +1147,9 @@ where
         f: &mut impl FnMut(&GenericExpr<Head, Leaf, Ann>) -> GenericExpr<Head2, Leaf2, Ann>,
     ) -> GenericFact<Head2, Leaf2, Ann> {
         match self {
-            GenericFact::Eq(exprs) => GenericFact::Eq(exprs.iter().map(f).collect()),
+            GenericFact::Eq(ann, exprs) => {
+                GenericFact::Eq(ann.clone(), exprs.iter().map(f).collect())
+            }
             GenericFact::Fact(expr) => GenericFact::Fact(f(expr)),
         }
     }
@@ -1147,7 +1167,7 @@ impl<Head, Leaf, Ann> GenericFact<Head, Leaf, Ann>
 where
     Leaf: Clone + PartialEq + Eq + Display + Hash,
     Head: Clone + Display,
-    Ann: Clone,
+    Ann: Annotation,
 {
     pub(crate) fn make_unresolved(self) -> GenericFact<Symbol, Symbol, Ann>
     where
@@ -1219,7 +1239,7 @@ pub(crate) type ResolvedAction = GenericAction<ResolvedCall, ResolvedVar, Span>;
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum GenericAction<Head, Leaf, Ann>
 where
-    Ann: Clone,
+    Ann: Annotation,
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
@@ -1278,7 +1298,7 @@ where
 pub struct GenericActions<
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
-    Ann: Clone,
+    Ann: Annotation,
 >(pub Vec<GenericAction<Head, Leaf, Ann>>);
 pub type Actions = GenericActions<Symbol, Symbol, Span>;
 pub(crate) type ResolvedActions = GenericActions<ResolvedCall, ResolvedVar, Span>;
@@ -1287,7 +1307,7 @@ pub(crate) type MappedActions<Head, Leaf, Ann> =
 
 impl<Head, Leaf, Ann> Default for GenericActions<Head, Leaf, Ann>
 where
-    Ann: Clone,
+    Ann: Annotation,
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
@@ -1298,7 +1318,7 @@ where
 
 impl<Head, Leaf, Ann> GenericActions<Head, Leaf, Ann>
 where
-    Ann: Clone,
+    Ann: Annotation,
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
@@ -1324,7 +1344,7 @@ where
 
 impl<Head, Leaf, Ann> ToSexp for GenericAction<Head, Leaf, Ann>
 where
-    Ann: Clone,
+    Ann: Annotation,
     Head: Clone + Display + ToSexp,
     Leaf: Clone + PartialEq + Eq + Display + Hash + ToSexp,
 {
@@ -1353,7 +1373,7 @@ impl<Head, Leaf, Ann> GenericAction<Head, Leaf, Ann>
 where
     Head: Clone + Display,
     Leaf: Clone + Eq + Display + Hash,
-    Ann: Clone,
+    Ann: Annotation,
 {
     // Applys `f` to all expressions in the action.
     pub fn map_exprs(
@@ -1476,7 +1496,7 @@ where
 
 impl<Head, Leaf, Ann> Display for GenericAction<Head, Leaf, Ann>
 where
-    Ann: Clone,
+    Ann: Annotation,
     Head: Clone + Display + ToSexp,
     Leaf: Clone + PartialEq + Eq + Display + Hash + ToSexp,
 {
@@ -1497,7 +1517,7 @@ pub(crate) type ResolvedRule = GenericRule<ResolvedCall, ResolvedVar, Span>;
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct GenericRule<Head, Leaf, Ann>
 where
-    Ann: Clone,
+    Ann: Annotation,
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
@@ -1508,7 +1528,7 @@ where
 
 impl<Head, Leaf, Ann> GenericRule<Head, Leaf, Ann>
 where
-    Ann: Clone,
+    Ann: Annotation,
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
@@ -1530,7 +1550,7 @@ where
 
 impl<Head, Leaf, Ann> GenericRule<Head, Leaf, Ann>
 where
-    Ann: Clone,
+    Ann: Annotation,
     Head: Clone + Display + ToSexp,
     Leaf: Clone + PartialEq + Eq + Display + Hash + ToSexp,
 {
@@ -1580,7 +1600,7 @@ where
 
 impl<Head, Leaf, Ann> GenericRule<Head, Leaf, Ann>
 where
-    Ann: Clone,
+    Ann: Annotation,
     Head: Clone + Display + ToSexp,
     Leaf: Clone + PartialEq + Eq + Display + Hash + ToSexp,
 {
@@ -1605,7 +1625,7 @@ where
 
 impl<Head, Leaf, Ann> Display for GenericRule<Head, Leaf, Ann>
 where
-    Ann: Clone,
+    Ann: Annotation,
     Head: Clone + Display + ToSexp,
     Leaf: Clone + PartialEq + Eq + Display + Hash + ToSexp,
 {
@@ -1663,11 +1683,14 @@ impl<Head: Display, Leaf: Display, Ann> Display for GenericRewrite<Head, Leaf, A
 
 impl<Head, Leaf: Clone, Ann> MappedExpr<Head, Leaf, Ann>
 where
-    Ann: Clone,
+    Ann: Annotation,
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
-    pub(crate) fn get_corresponding_var_or_lit(&self, typeinfo: &TypeInfo) -> GenericAtomTerm<Leaf>
+    pub(crate) fn get_corresponding_var_or_lit(
+        &self,
+        typeinfo: &TypeInfo,
+    ) -> GenericAtomTerm<Leaf, Ann>
     where
         Leaf: SymbolLike,
     {
@@ -1675,15 +1698,15 @@ where
         // This is error-prone and the complexities can be avoided by treating globals
         // as nullary functions.
         match self {
-            GenericExpr::Var(_ann, v) => {
+            GenericExpr::Var(ann, v) => {
                 if typeinfo.is_global(v.to_symbol()) {
-                    GenericAtomTerm::Global(v.clone())
+                    GenericAtomTerm::Global(ann.clone(), v.clone())
                 } else {
-                    GenericAtomTerm::Var(v.clone())
+                    GenericAtomTerm::Var(ann.clone(), v.clone())
                 }
             }
-            GenericExpr::Lit(_ann, lit) => GenericAtomTerm::Literal(lit.clone()),
-            GenericExpr::Call(_ann, head, _) => GenericAtomTerm::Var(head.to.clone()),
+            GenericExpr::Lit(ann, lit) => GenericAtomTerm::Literal(ann.clone(), lit.clone()),
+            GenericExpr::Call(ann, head, _) => GenericAtomTerm::Var(ann.clone(), head.to.clone()),
         }
     }
 }

@@ -71,8 +71,8 @@ impl PrimitiveLike for Add {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
-        AllEqualTypeConstraint::new(self.name())
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        AllEqualTypeConstraint::new(self.name(), *span)
             .with_all_arguments_sort(self.string.clone())
             .into_box()
     }
@@ -98,8 +98,8 @@ impl PrimitiveLike for Replace {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
-        AllEqualTypeConstraint::new(self.name())
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        AllEqualTypeConstraint::new(self.name(), *span)
             .with_all_arguments_sort(self.string.clone())
             .with_exact_length(4)
             .into_box()

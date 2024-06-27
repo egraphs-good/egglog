@@ -203,6 +203,7 @@ struct FunctionCTorTypeConstraint {
     name: Symbol,
     function: Arc<FunctionSort>,
     string: Arc<StringSort>,
+    span: Span,
 }
 
 impl TypeConstraint for FunctionCTorTypeConstraint {
@@ -212,6 +213,7 @@ impl TypeConstraint for FunctionCTorTypeConstraint {
             vec![Constraint::Impossible(
                 constraint::ImpossibleConstraint::ArityMismatch {
                     atom: core::Atom {
+                        ann: self.span,
                         head: self.name,
                         args: arguments.to_vec(),
                     },
@@ -243,11 +245,12 @@ impl PrimitiveLike for Ctor {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         Box::new(FunctionCTorTypeConstraint {
             name: self.name,
             function: self.function.clone(),
             string: self.string.clone(),
+            span: *span,
         })
     }
 
@@ -276,11 +279,11 @@ impl PrimitiveLike for Apply {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         let mut sorts: Vec<ArcSort> = vec![self.function.clone()];
         sorts.extend(self.function.inputs.clone());
         sorts.push(self.function.output.clone());
-        SimpleTypeConstraint::new(self.name(), sorts).into_box()
+        SimpleTypeConstraint::new(self.name(), sorts, *span).into_box()
     }
 
     fn apply(&self, values: &[Value], egraph: Option<&mut EGraph>) -> Option<Value> {
@@ -324,9 +327,9 @@ fn call_fn(egraph: &mut EGraph, name: &Symbol, types: Vec<ArcSort>, args: Vec<Va
     let binding = IndexSet::from_iter(arg_vars.clone());
     let resolved_args = arg_vars
         .into_iter()
-        .map(|v| GenericExpr::Var((), v))
+        .map(|v| GenericExpr::Var(*DUMMY_SPAN, v))
         .collect();
-    let expr = GenericExpr::Call((), resolved_call, resolved_args);
+    let expr = GenericExpr::Call(*DUMMY_SPAN, resolved_call, resolved_args);
     // Similar to how the merge function is created in `Function::new`
     let (actions, mapped_expr) = expr
         .to_core_actions(

@@ -108,8 +108,8 @@ impl PrimitiveLike for CountMatches {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
-        AllEqualTypeConstraint::new(self.name())
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        AllEqualTypeConstraint::new(self.name(), *span)
             .with_all_arguments_sort(self.string.clone())
             .with_exact_length(3)
             .with_output_sort(self.int.clone())

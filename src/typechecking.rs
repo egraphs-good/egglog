@@ -253,8 +253,8 @@ impl TypeInfo {
         }
         let mut bound_vars = IndexMap::default();
         let output_type = self.sorts.get(&fdecl.schema.output).unwrap();
-        bound_vars.insert("old".into(), output_type.clone());
-        bound_vars.insert("new".into(), output_type.clone());
+        bound_vars.insert("old".into(), (*DUMMY_SPAN, output_type.clone()));
+        bound_vars.insert("new".into(), (*DUMMY_SPAN, output_type.clone()));
 
         Ok(ResolvedFunctionDecl {
             name: fdecl.name,
@@ -347,6 +347,7 @@ impl TypeInfo {
         let mut problem = Problem::default();
         problem.add_rule(
             &CoreRule {
+                ann: *ann,
                 body: query,
                 head: actions,
             },
@@ -382,7 +383,7 @@ impl TypeInfo {
     fn typecheck_actions(
         &self,
         actions: &Actions,
-        binding: &IndexMap<Symbol, ArcSort>,
+        binding: &IndexMap<Symbol, (Span, ArcSort)>,
     ) -> Result<ResolvedActions, TypeError> {
         let mut binding_set = binding.keys().cloned().collect::<IndexSet<_>>();
         let mut fresh_gen = SymbolGen::new("$".to_string());
@@ -394,8 +395,8 @@ impl TypeInfo {
         problem.add_actions(&actions, self)?;
 
         // add bindings from the context
-        for (var, sort) in binding {
-            problem.assign_local_var_type(*var, sort.clone())?;
+        for (var, (span, sort)) in binding {
+            problem.assign_local_var_type(*var, *span, sort.clone())?;
         }
 
         let assignment = problem
@@ -409,7 +410,7 @@ impl TypeInfo {
     fn typecheck_expr(
         &self,
         expr: &Expr,
-        binding: &IndexMap<Symbol, ArcSort>,
+        binding: &IndexMap<Symbol, (Span, ArcSort)>,
     ) -> Result<ResolvedExpr, TypeError> {
         let action = Action::Expr(*DUMMY_SPAN, expr.clone());
         let typechecked_action = self.typecheck_action(&action, binding)?;
@@ -422,7 +423,7 @@ impl TypeInfo {
     fn typecheck_action(
         &self,
         action: &Action,
-        binding: &IndexMap<Symbol, ArcSort>,
+        binding: &IndexMap<Symbol, (Span, ArcSort)>,
     ) -> Result<ResolvedAction, TypeError> {
         self.typecheck_actions(&Actions::singleton(action.clone()), binding)
             .map(|mut v| {

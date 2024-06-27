@@ -170,10 +170,13 @@ impl<'a> GlobalRemover<'a> {
                 let new_facts: Vec<ResolvedFact> = globals
                     .iter()
                     .map(|(old, new)| {
-                        GenericFact::Eq(vec![
-                            GenericExpr::Call(new.ann(), resolved_var_to_call(old), vec![]),
-                            new.clone(),
-                        ])
+                        GenericFact::Eq(
+                            new.ann(),
+                            vec![
+                                GenericExpr::Call(new.ann(), resolved_var_to_call(old), vec![]),
+                                new.clone(),
+                            ],
+                        )
                     })
                     .collect();
 

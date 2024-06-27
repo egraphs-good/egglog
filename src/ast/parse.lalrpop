@@ -140,9 +140,9 @@ pub Action: Action = {
 Name: Symbol = { "[" <Ident> "]" => <> }
 
 pub Fact: Fact = {
-    LParen "=" <mut es:Expr+> <e:Expr> RParen => {
+    <lo:LParen> "=" <mut es:Expr+> <e:Expr> <hi:RParen> => {
         es.push(e);
-        Fact::Eq(es)
+        Fact::Eq(Span(filename, lo, hi), es)
     },
     <CallExpr> => Fact::Fact(<>),
 }
