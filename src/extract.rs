@@ -24,7 +24,7 @@ impl EGraph {
     /// trivial, as there is only a single variant of the expression in the
     /// egraph.
     /// ```
-    /// use egglog::{EGraph, TermDag};
+    /// use egglog::{EGraph, TermDag, ast::Annotation};
     /// let mut egraph = EGraph::default();
     /// egraph
     ///     .parse_and_run_program(
@@ -35,7 +35,7 @@ impl EGraph {
     ///     .unwrap();
     /// let mut termdag = TermDag::default();
     /// let (sort, value) = egraph
-    ///     .eval_expr(&egglog::ast::Expr::Var((), "expr".into()))
+    ///     .eval_expr(&egglog::ast::Expr::Var(Annotation::dummy(), "expr".into()))
     ///     .unwrap();
     /// let (_, extracted) = egraph.extract(value, &mut termdag, &sort);
     /// assert_eq!(termdag.to_string(&extracted), "(Add 1 1)");
