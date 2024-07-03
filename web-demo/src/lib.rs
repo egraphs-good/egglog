@@ -15,7 +15,7 @@ pub struct Result {
 #[wasm_bindgen]
 pub fn run_program(input: &str) -> Result {
     let mut egraph = egglog::EGraph::default();
-    match egraph.parse_and_run_program(input) {
+    match egraph.parse_and_run_program(Some("web-demo.egg".into()), input) {
         Ok(outputs) => {
             let serialized = egraph.serialize_for_graphviz(false, 40, 40);
             Result {
