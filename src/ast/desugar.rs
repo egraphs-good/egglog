@@ -325,7 +325,7 @@ pub(crate) fn desugar_command(
             };
 
             desugar.desugar_program(
-                desugar.parse_program(todo!("our filename should be richer to better support locating desugared rule. Alternatively, we can just use the same source location"), &desugaring).unwrap(),
+                desugar.parse_program(None, &desugaring).unwrap(),
                 get_all_proofs,
                 seminaive_transform,
             )?

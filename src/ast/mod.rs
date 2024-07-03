@@ -65,7 +65,7 @@ lazy_static! {
 
 impl Copy for Span {}
 
-pub(crate) trait Annotation: Clone + PartialEq + Eq + Hash + Debug {
+pub trait Annotation: Clone + PartialEq + Eq + Hash + Debug {
     fn dummy() -> Self;
 }
 
