@@ -511,16 +511,20 @@ mod test {
     fn test_arity_mismatch() {
         let mut egraph = EGraph::default();
 
-        let res = egraph.parse_and_run_program(
-            None,
-            "
+        let prog = "
             (relation f (i64 i64))
             (rule ((f a b c)) ())
-       ",
+       ";
+        let res = egraph.parse_and_run_program(
+            None,
+            prog,
         );
-        assert!(matches!(
-            res,
-            Err(Error::TypeError(TypeError::Arity { expected: 2, .. }))
-        ));
+        match res {
+            Err(Error::TypeError(TypeError::Arity { expected: 2, expr: e })) => {
+                let span = e.ann();
+                assert_eq!(&prog[span.1..span.2], "(f a b c)");
+            },
+            _ => panic!("Expected arity mismatch, got: {:?}", res),
+        }
     }
 }
