@@ -112,7 +112,7 @@ fn main() {
         });
         let mut egraph = mk_egraph();
         let program_offset = 0;
-        match egraph.parse_and_run_program(Some(input.to_str().unwrap().into()),&program) {
+        match egraph.parse_and_run_program(Some(input.to_str().unwrap().into()), &program) {
             Ok(msgs) => {
                 for msg in msgs {
                     println!("{msg}");

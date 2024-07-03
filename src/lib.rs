@@ -1213,7 +1213,7 @@ impl EGraph {
 
     fn check_facts(&mut self, span: &Span, facts: &[ResolvedFact]) -> Result<(), Error> {
         let rule = ast::ResolvedRule {
-            ann: span.clone(),
+            ann: *span,
             head: ResolvedActions::default(),
             body: facts.to_vec(),
         };
@@ -1486,11 +1486,19 @@ impl EGraph {
         Ok(self.flush_msgs())
     }
 
-    pub fn parse_program(&self, filename: Option<Symbol>, input: &str) -> Result<Vec<Command>, Error> {
+    pub fn parse_program(
+        &self,
+        filename: Option<Symbol>,
+        input: &str,
+    ) -> Result<Vec<Command>, Error> {
         self.desugar.parse_program(filename, input)
     }
 
-    pub fn parse_and_run_program(&mut self, filename: Option<Symbol>, input: &str) -> Result<Vec<String>, Error> {
+    pub fn parse_and_run_program(
+        &mut self,
+        filename: Option<Symbol>,
+        input: &str,
+    ) -> Result<Vec<String>, Error> {
         let parsed = self.desugar.parse_program(filename, input)?;
         self.run_program(parsed)
     }
@@ -1613,7 +1621,9 @@ mod tests {
     use std::sync::Arc;
 
     use crate::{
-        constraint::SimpleTypeConstraint, sort::{FromSort, I64Sort, IntoSort, Sort, VecSort}, EGraph, PrimitiveLike, Span, Value
+        constraint::SimpleTypeConstraint,
+        sort::{FromSort, I64Sort, IntoSort, Sort, VecSort},
+        EGraph, PrimitiveLike, Span, Value,
     };
 
     struct InnerProduct {

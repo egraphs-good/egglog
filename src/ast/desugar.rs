@@ -71,10 +71,13 @@ fn desugar_rewrite(
         name,
         rule: Rule {
             ann: span,
-            body: [Fact::Eq(span, vec![Expr::Var(span, var), rewrite.lhs.clone()])]
-                .into_iter()
-                .chain(rewrite.conditions.clone())
-                .collect(),
+            body: [Fact::Eq(
+                span,
+                vec![Expr::Var(span, var), rewrite.lhs.clone()],
+            )]
+            .into_iter()
+            .chain(rewrite.conditions.clone())
+            .collect(),
             head,
         },
     }]

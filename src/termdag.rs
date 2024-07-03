@@ -1,5 +1,5 @@
 use crate::{
-    ast::{Literal, Expr},
+    ast::Literal,
     util::{HashMap, HashSet},
     GeneratedExpr, GenericExpr, Symbol,
 };
@@ -224,8 +224,8 @@ mod tests {
             ]
         );
         let e2 = td.term_to_expr(&t);
-        // This is tested using Sexp's equality because e1 and e2 have different 
-        // annotations. A better way to test this would be to implement a map_ann 
+        // This is tested using Sexp's equality because e1 and e2 have different
+        // annotations. A better way to test this would be to implement a map_ann
         // function for GenericExpr.
         assert_eq!(e.to_sexp(), e2.to_sexp()); // roundtrip
     }

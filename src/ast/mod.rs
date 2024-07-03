@@ -76,9 +76,7 @@ impl Annotation for Span {
 }
 
 impl Annotation for () {
-    fn dummy() -> Self {
-        ()
-    }
+    fn dummy() -> Self {}
 }
 
 pub type NCommand = GenericNCommand<Symbol, Symbol, Span>;

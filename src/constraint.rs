@@ -455,10 +455,10 @@ impl Problem<AtomTerm, ArcSort> {
             // bound vars are added to range
             match action {
                 CoreAction::Let(ann, var, _, _) => {
-                    self.range.insert(AtomTerm::Var(ann.clone(), *var));
+                    self.range.insert(AtomTerm::Var(*ann, *var));
                 }
                 CoreAction::LetAtomTerm(ann, v, _) => {
-                    self.range.insert(AtomTerm::Var(ann.clone(), *v));
+                    self.range.insert(AtomTerm::Var(*ann, *v));
                 }
                 _ => (),
             }
@@ -498,7 +498,7 @@ impl CoreAction {
         match self {
             CoreAction::Let(ann, symbol, f, args) => {
                 let mut args = args.clone();
-                args.push(AtomTerm::Var(ann.clone(), *symbol));
+                args.push(AtomTerm::Var(*ann, *symbol));
 
                 Ok(get_literal_and_global_constraints(&args, typeinfo)
                     .chain(get_atom_application_constraints(f, &args, ann, typeinfo)?)
@@ -526,13 +526,13 @@ impl CoreAction {
                     )?)
                     .collect())
             }
-            CoreAction::Union(ann, lhs, rhs) => Ok(get_literal_and_global_constraints(
+            CoreAction::Union(_ann, lhs, rhs) => Ok(get_literal_and_global_constraints(
                 &[lhs.clone(), rhs.clone()],
                 typeinfo,
             )
             .chain(once(Constraint::Eq(lhs.clone(), rhs.clone())))
             .collect()),
-            CoreAction::Extract(ann, e, n) => {
+            CoreAction::Extract(_ann, e, n) => {
                 // e can be anything
                 Ok(
                     get_literal_and_global_constraints(&[e.clone(), n.clone()], typeinfo)
@@ -543,7 +543,7 @@ impl CoreAction {
                         .collect(),
                 )
             }
-            CoreAction::Panic(ann, _) => Ok(vec![]),
+            CoreAction::Panic(_ann, _) => Ok(vec![]),
             CoreAction::LetAtomTerm(ann, v, at) => {
                 Ok(get_literal_and_global_constraints(&[at.clone()], typeinfo)
                     .chain(once(Constraint::Eq(AtomTerm::Var(*ann, *v), at.clone())))

@@ -183,9 +183,7 @@ impl<Leaf: Clone, Ann: Annotation> GenericAtomTerm<Leaf, Ann> {
     pub fn to_expr<Head>(&self) -> GenericExpr<Head, Leaf, Ann> {
         match self {
             GenericAtomTerm::Var(ann, v) => GenericExpr::Var(ann.clone(), v.clone()),
-            GenericAtomTerm::Literal(ann, l) => {
-                GenericExpr::Lit(ann.clone(), l.clone())
-            }
+            GenericAtomTerm::Literal(ann, l) => GenericExpr::Lit(ann.clone(), l.clone()),
             GenericAtomTerm::Global(ann, v) => GenericExpr::Var(ann.clone(), v.clone()),
         }
     }
@@ -257,7 +255,7 @@ impl Atom<Symbol> {
     pub(crate) fn to_expr(&self) -> Expr {
         let n = self.args.len();
         Expr::Call(
-            self.ann.clone(),
+            self.ann,
             self.head,
             self.args[0..n - 1]
                 .iter()

@@ -190,7 +190,7 @@ impl TypeInfo {
                     // not a global reference, but a global binding
                     is_global_ref: false,
                 };
-                ResolvedNCommand::CoreAction(ResolvedAction::Let(ann.clone(), var, expr))
+                ResolvedNCommand::CoreAction(ResolvedAction::Let(*ann, var, expr))
             }
             NCommand::CoreAction(action) => {
                 ResolvedNCommand::CoreAction(self.typecheck_action(action, &Default::default())?)
