@@ -84,7 +84,7 @@ impl EGraph {
 
                 func.nodes
                     .iter(false)
-                    .filter(|&(_, output)| (output.value == output_value))
+                    .filter(|&(_, output)| (self.find(output.value) == output_value))
                     .map(|(inputs, _output)| {
                         let node = Node { sym, inputs };
                         ext.expr_from_node(&node, termdag).expect(
