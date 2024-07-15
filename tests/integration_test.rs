@@ -1,4 +1,4 @@
-use egglog::{ast::Expr, EGraph, ExtractReport, Function, Term, Value};
+use egglog::{ast::Expr, EGraph, ExtractReport, Function, SerializeConfig, Term, Value};
 use symbol_table::GlobalSymbol;
 
 #[test]
@@ -359,4 +359,31 @@ fn test_cant_subsume_merge() {
         "#,
     );
     assert!(res.is_err());
+}
+
+#[test]
+fn test_value_to_classid() {
+    let mut egraph = EGraph::default();
+
+    egraph
+        .parse_and_run_program(
+            r#"
+            (datatype Math)
+            (function exp () Math )
+            (exp)
+            (query-extract (exp))
+            "#,
+        )
+        .unwrap();
+    let report = egraph.get_extract_report().clone().unwrap();
+    let ExtractReport::Best { term, termdag, .. } = report else {
+        panic!();
+    };
+    let expr = termdag.term_to_expr(&term);
+    let value = egraph.eval_expr(&expr).unwrap().1;
+
+    let serialized = egraph.serialize(SerializeConfig::default());
+    let class_id = egraph.value_to_class_id(&value);
+    assert!(serialized.class_data.get(&class_id).is_some());
+    assert_eq!(value, egraph.class_id_to_value(&class_id));
 }
