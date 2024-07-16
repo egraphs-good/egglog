@@ -31,9 +31,9 @@ impl Sort for BoolSort {
         add_primitives!(eg, "=>" = |a: bool, b: bool| -> bool { !a || b });
     }
 
-    fn make_expr(&self, _egraph: &EGraph, value: Value) -> (Cost, GeneratedExpr) {
+    fn make_expr(&self, _egraph: &EGraph, value: Value) -> (Cost, Expr) {
         assert!(value.tag == self.name());
-        (1, GeneratedExpr::Lit((), Literal::Bool(value.bits > 0)))
+        (1, GenericExpr::Lit(*DUMMY_SPAN, Literal::Bool(value.bits > 0)))
     }
 }
 

@@ -166,7 +166,7 @@ impl Sort for SetSort {
         });
     }
 
-    fn make_expr(&self, egraph: &EGraph, value: Value) -> (Cost, GeneratedExpr) {
+    fn make_expr(&self, egraph: &EGraph, value: Value) -> (Cost, Expr) {
         let mut termdag = TermDag::default();
         let extractor = Extractor::new(egraph, &mut termdag);
         self.extract_expr(egraph, value, &extractor, &mut termdag)
@@ -179,14 +179,14 @@ impl Sort for SetSort {
         value: Value,
         extractor: &Extractor,
         termdag: &mut TermDag,
-    ) -> Option<(Cost, GeneratedExpr)> {
+    ) -> Option<(Cost, Expr)> {
         let set = ValueSet::load(self, &value);
-        let mut expr = GeneratedExpr::call("set-empty", []);
+        let mut expr = Expr::call_no_span("set-empty", []);
         let mut cost = 0usize;
         for e in set.iter().rev() {
             let e = extractor.find_best(*e, termdag, &self.element)?;
             cost = cost.saturating_add(e.0);
-            expr = GeneratedExpr::call("set-insert", [expr, termdag.term_to_expr(&e.1)])
+            expr = Expr::call_no_span("set-insert", [expr, termdag.term_to_expr(&e.1)])
         }
         Some((cost, expr))
     }

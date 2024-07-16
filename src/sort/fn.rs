@@ -151,7 +151,7 @@ impl Sort for FunctionSort {
         });
     }
 
-    fn make_expr(&self, egraph: &EGraph, value: Value) -> (Cost, GeneratedExpr) {
+    fn make_expr(&self, egraph: &EGraph, value: Value) -> (Cost, Expr) {
         let mut termdag = TermDag::default();
         let extractor = Extractor::new(egraph, &mut termdag);
         self.extract_expr(egraph, value, &extractor, &mut termdag)
@@ -164,10 +164,10 @@ impl Sort for FunctionSort {
         value: Value,
         extractor: &Extractor,
         termdag: &mut TermDag,
-    ) -> Option<(Cost, GeneratedExpr)> {
+    ) -> Option<(Cost, Expr)> {
         let ValueFunction(name, inputs) = ValueFunction::load(self, &value);
         let (cost, args) = inputs.into_iter().try_fold(
-            (1usize, vec![GeneratedExpr::Lit((), Literal::String(name))]),
+            (1usize, vec![GenericExpr::Lit(*DUMMY_SPAN, Literal::String(name))]),
             |(cost, mut args), (sort, value)| {
                 let (new_cost, term) = extractor.find_best(value, termdag, &sort)?;
                 args.push(termdag.term_to_expr(&term));
@@ -175,7 +175,7 @@ impl Sort for FunctionSort {
             },
         )?;
 
-        Some((cost, GeneratedExpr::call("unstable-fn", args)))
+        Some((cost, Expr::call_no_span("unstable-fn", args)))
     }
 }
 

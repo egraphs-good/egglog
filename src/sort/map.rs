@@ -150,7 +150,7 @@ impl Sort for MapSort {
         });
     }
 
-    fn make_expr(&self, egraph: &EGraph, value: Value) -> (Cost, GeneratedExpr) {
+    fn make_expr(&self, egraph: &EGraph, value: Value) -> (Cost, Expr) {
         let mut termdag = TermDag::default();
         let extractor = Extractor::new(egraph, &mut termdag);
         self.extract_expr(egraph, value, &extractor, &mut termdag)
@@ -163,15 +163,15 @@ impl Sort for MapSort {
         value: Value,
         extractor: &Extractor,
         termdag: &mut TermDag,
-    ) -> Option<(Cost, GeneratedExpr)> {
+    ) -> Option<(Cost, Expr)> {
         let map = ValueMap::load(self, &value);
-        let mut expr = GeneratedExpr::call("map-empty", []);
+        let mut expr = Expr::call_no_span("map-empty", []);
         let mut cost = 0usize;
         for (k, v) in map.iter().rev() {
             let k = extractor.find_best(*k, termdag, &self.key)?;
             let v = extractor.find_best(*v, termdag, &self.value)?;
             cost = cost.saturating_add(k.0).saturating_add(v.0);
-            expr = GeneratedExpr::call(
+            expr = Expr::call_no_span(
                 "map-insert",
                 [expr, termdag.term_to_expr(&k.1), termdag.term_to_expr(&v.1)],
             )

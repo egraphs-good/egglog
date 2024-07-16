@@ -1,7 +1,5 @@
 use crate::{
-    ast::Literal,
-    util::{HashMap, HashSet},
-    GeneratedExpr, GenericExpr, Symbol,
+    ast::Literal, util::{HashMap, HashSet}, Expr, GenericExpr, Symbol, DUMMY_SPAN
 };
 
 pub type TermId = usize;
@@ -131,19 +129,19 @@ impl TermDag {
     /// Recursively converts the given term to an expression.
     ///
     /// Panics if the term contains subterms that are not in the DAG.
-    pub fn term_to_expr(&self, term: &Term) -> GeneratedExpr {
+    pub fn term_to_expr(&self, term: &Term) -> Expr {
         match term {
-            Term::Lit(lit) => GeneratedExpr::Lit((), lit.clone()),
-            Term::Var(v) => GeneratedExpr::Var((), *v),
+            Term::Lit(lit) => Expr::lit_no_span(lit.clone()),
+            Term::Var(v) => Expr::var_no_span(*v),
             Term::App(op, args) => {
-                let args = args
+                let args: Vec<_> = args
                     .iter()
                     .map(|a| {
                         let term = self.get(*a);
                         self.term_to_expr(&term)
                     })
                     .collect();
-                GeneratedExpr::Call((), *op, args)
+                Expr::call_no_span(*op, args)
             }
         }
     }
@@ -236,7 +234,7 @@ mod tests {
         let (td, t) = parse_term(s);
         match_term_app!(t; {
             ("f", [_, x, _, _]) =>
-                assert_eq!(td.term_to_expr(&td.get(*x)), ast::GeneratedExpr::Var((), Symbol::new("x"))),
+                assert_eq!(td.term_to_expr(&td.get(*x)), ast::GenericExpr::Var(*DUMMY_SPAN, Symbol::new("x"))),
             (head, _) => panic!("unexpected head {}, in {}:{}:{}", head, file!(), line!(), column!())
         })
     }
