@@ -213,7 +213,7 @@ impl TypeConstraint for FunctionCTorTypeConstraint {
             vec![Constraint::Impossible(
                 constraint::ImpossibleConstraint::ArityMismatch {
                     atom: core::Atom {
-                        ann: self.span,
+                        span: self.span,
                         head: self.name,
                         args: arguments.to_vec(),
                     },

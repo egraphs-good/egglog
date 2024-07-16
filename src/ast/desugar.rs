@@ -45,7 +45,7 @@ fn desugar_rewrite(
     rewrite: &Rewrite,
     subsume: bool,
 ) -> Vec<NCommand> {
-    let span = rewrite.ann;
+    let span = rewrite.span;
     let var = Symbol::from("rewrite_var__");
     let mut head = Actions::singleton(Action::Union(
         span,
@@ -70,7 +70,7 @@ fn desugar_rewrite(
         ruleset,
         name,
         rule: Rule {
-            ann: span,
+            span: span,
             body: [Fact::Eq(
                 span,
                 vec![Expr::Var(span, var), rewrite.lhs.clone()],
@@ -84,9 +84,9 @@ fn desugar_rewrite(
 }
 
 fn desugar_birewrite(ruleset: Symbol, name: Symbol, rewrite: &Rewrite) -> Vec<NCommand> {
-    let span = rewrite.ann;
+    let span = rewrite.span;
     let rw2 = Rewrite {
-        ann: span,
+        span: span,
         lhs: rewrite.rhs.clone(),
         rhs: rewrite.lhs.clone(),
         conditions: rewrite.conditions.clone(),
@@ -114,24 +114,24 @@ fn add_semi_naive_rule(desugar: &mut Desugar, rule: Rule) -> Option<Rule> {
     let mut var_set = HashSet::default();
     for head_slice in new_rule.head.0.iter_mut().rev() {
         match head_slice {
-            Action::Set(ann, _, _, expr) => {
+            Action::Set(span, _, _, expr) => {
                 var_set.extend(expr.vars());
                 if let Expr::Call(..) = expr {
                     add_new_rule = true;
 
                     let fresh_symbol = desugar.get_fresh();
-                    let fresh_var = Expr::Var(*ann, fresh_symbol);
+                    let fresh_var = Expr::Var(*span, fresh_symbol);
                     let expr = std::mem::replace(expr, fresh_var.clone());
-                    new_head_atoms.push(Fact::Eq(*ann, vec![fresh_var, expr]));
+                    new_head_atoms.push(Fact::Eq(*span, vec![fresh_var, expr]));
                 };
             }
-            Action::Let(ann, symbol, expr) if var_set.contains(symbol) => {
+            Action::Let(span, symbol, expr) if var_set.contains(symbol) => {
                 var_set.extend(expr.vars());
                 if let Expr::Call(..) = expr {
                     add_new_rule = true;
 
-                    let var = Expr::Var(*ann, *symbol);
-                    new_head_atoms.push(Fact::Eq(*ann, vec![var, expr.clone()]));
+                    let var = Expr::Var(*span, *symbol);
+                    new_head_atoms.push(Fact::Eq(*span, vec![var, expr.clone()]));
                 }
             }
             _ => (),
@@ -152,16 +152,16 @@ fn add_semi_naive_rule(desugar: &mut Desugar, rule: Rule) -> Option<Rule> {
 }
 
 fn desugar_simplify(desugar: &mut Desugar, expr: &Expr, schedule: &Schedule) -> Vec<NCommand> {
-    let ann = expr.ann();
+    let span = expr.span();
     let mut res = vec![NCommand::Push(1)];
     let lhs = desugar.get_fresh();
-    res.push(NCommand::CoreAction(Action::Let(ann, lhs, expr.clone())));
+    res.push(NCommand::CoreAction(Action::Let(span, lhs, expr.clone())));
     res.push(NCommand::RunSchedule(schedule.clone()));
     res.extend(
         desugar_command(
             Command::QueryExtract {
                 variants: 0,
-                expr: Expr::Var(ann, lhs),
+                expr: Expr::Var(span, lhs),
             },
             desugar,
             false,
@@ -186,7 +186,7 @@ pub(crate) fn desugar_calc(
     // first, push all the idents
     for IdentSort { ident, sort } in idents {
         res.push(Command::Declare {
-            ann: span,
+            span: span,
             name: ident,
             sort,
         });
@@ -200,10 +200,10 @@ pub(crate) fn desugar_calc(
 
         // add the two exprs only when they are calls (consts and vars don't need to be populated).
         if let Expr::Call(..) = expr1 {
-            res.push(Command::Action(Action::Expr(expr1.ann(), expr1.clone())));
+            res.push(Command::Action(Action::Expr(expr1.span(), expr1.clone())));
         }
         if let Expr::Call(..) = expr2 {
-            res.push(Command::Action(Action::Expr(expr2.ann(), expr2.clone())));
+            res.push(Command::Action(Action::Expr(expr2.span(), expr2.clone())));
         }
 
         res.push(Command::RunSchedule(Schedule::Saturate(
@@ -250,7 +250,7 @@ pub(crate) fn desugar_command(
             constructor,
             inputs,
         } => desugar.desugar_function(&FunctionDecl::relation(constructor, inputs)),
-        Command::Declare { ann, name, sort } => desugar.declare(ann, name, sort),
+        Command::Declare { span, name, sort } => desugar.declare(span, name, sort),
         Command::Datatype { name, variants } => desugar_datatype(name, variants),
         Command::Rewrite(ruleset, rewrite, subsume) => {
             desugar_rewrite(ruleset, rewrite_name(&rewrite).into(), &rewrite, subsume)

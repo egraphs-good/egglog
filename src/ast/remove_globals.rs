@@ -76,7 +76,7 @@ fn resolved_var_to_call(var: &ResolvedVar) -> ResolvedCall {
 fn replace_global_vars(expr: ResolvedExpr) -> ResolvedExpr {
     match expr.get_global_var() {
         Some(resolved_var) => {
-            GenericExpr::Call(expr.ann(), resolved_var_to_call(&resolved_var), vec![])
+            GenericExpr::Call(expr.span(), resolved_var_to_call(&resolved_var), vec![])
         }
         None => expr,
     }
@@ -98,7 +98,7 @@ impl<'a> GlobalRemover<'a> {
     ) -> Vec<ResolvedNCommand> {
         match cmd {
             GenericNCommand::CoreAction(action) => match action {
-                GenericAction::Let(ann, name, expr) => {
+                GenericAction::Let(span, name, expr) => {
                     let ty = expr.output_type(type_info);
 
                     let func_decl = ResolvedFunctionDecl {
@@ -126,13 +126,13 @@ impl<'a> GlobalRemover<'a> {
                         // output is eq-able, so generate a union
                         if ty.is_eq_sort() {
                             GenericNCommand::CoreAction(GenericAction::Union(
-                                ann,
-                                GenericExpr::Call(ann, resolved_call, vec![]),
+                                span,
+                                GenericExpr::Call(span, resolved_call, vec![]),
                                 remove_globals_expr(expr),
                             ))
                         } else {
                             GenericNCommand::CoreAction(GenericAction::Set(
-                                ann,
+                                span,
                                 resolved_call,
                                 vec![],
                                 remove_globals_expr(expr),
@@ -156,7 +156,7 @@ impl<'a> GlobalRemover<'a> {
                         globals.insert(
                             resolved_var.clone(),
                             GenericExpr::Var(
-                                expr.ann(),
+                                expr.span(),
                                 ResolvedVar {
                                     name: new_name,
                                     sort: resolved_var.sort.clone(),
@@ -171,9 +171,9 @@ impl<'a> GlobalRemover<'a> {
                     .iter()
                     .map(|(old, new)| {
                         GenericFact::Eq(
-                            new.ann(),
+                            new.span(),
                             vec![
-                                GenericExpr::Call(new.ann(), resolved_var_to_call(old), vec![]),
+                                GenericExpr::Call(new.span(), resolved_var_to_call(old), vec![]),
                                 new.clone(),
                             ],
                         )
@@ -181,7 +181,7 @@ impl<'a> GlobalRemover<'a> {
                     .collect();
 
                 let new_rule = GenericRule {
-                    ann: rule.ann,
+                    span: rule.span,
                     // instrument the old facts and add the new facts to the end
                     body: rule
                         .body

@@ -1213,7 +1213,7 @@ impl EGraph {
 
     fn check_facts(&mut self, span: &Span, facts: &[ResolvedFact]) -> Result<(), Error> {
         let rule = ast::ResolvedRule {
-            ann: *span,
+            span: *span,
             head: ResolvedActions::default(),
             body: facts.to_vec(),
         };
@@ -1291,8 +1291,8 @@ impl EGraph {
                 log::info!("Overall statistics:\n{}", self.overall_run_report);
                 self.print_msg(format!("Overall statistics:\n{}", self.overall_run_report));
             }
-            ResolvedNCommand::Check(ann, facts) => {
-                self.check_facts(&ann, &facts)?;
+            ResolvedNCommand::Check(span, facts) => {
+                self.check_facts(&span, &facts)?;
                 log::info!("Checked fact {:?}.", facts);
             }
             ResolvedNCommand::CheckProof => log::error!("TODO implement proofs"),

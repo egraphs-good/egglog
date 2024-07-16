@@ -1,5 +1,5 @@
 use crate::{
-    ast::Literal, util::{HashMap, HashSet}, Expr, GenericExpr, Symbol, DUMMY_SPAN
+    ast::Literal, util::{HashMap, HashSet}, Expr, GenericExpr, Symbol
 };
 
 pub type TermId = usize;
@@ -107,7 +107,7 @@ impl TermDag {
     /// This involves inserting every subexpression into this DAG. Because
     /// TermDags are hashconsed, the resulting term is guaranteed to maximally
     /// share subterms.
-    pub fn expr_to_term<Ann>(&mut self, expr: &GenericExpr<Symbol, Symbol, Ann>) -> Term {
+    pub fn expr_to_term(&mut self, expr: &GenericExpr<Symbol, Symbol>) -> Term {
         let res = match expr {
             GenericExpr::Lit(_, lit) => Term::Lit(lit.clone()),
             GenericExpr::Var(_, v) => Term::Var(*v),
@@ -189,7 +189,7 @@ impl TermDag {
 
 #[cfg(test)]
 mod tests {
-    use crate::ast;
+    use crate::{ast, DUMMY_SPAN};
 
     use super::*;
 

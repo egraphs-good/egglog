@@ -217,7 +217,7 @@ where
 impl Assignment<AtomTerm, ArcSort> {
     pub(crate) fn annotate_expr(
         &self,
-        expr: &GenericExpr<CorrespondingVar<Symbol, Symbol>, Symbol, Span>,
+        expr: &GenericExpr<CorrespondingVar<Symbol, Symbol>, Symbol>,
         typeinfo: &TypeInfo,
     ) -> ResolvedExpr {
         match &expr {
@@ -268,12 +268,12 @@ impl Assignment<AtomTerm, ArcSort> {
 
     pub(crate) fn annotate_fact(
         &self,
-        facts: &GenericFact<CorrespondingVar<Symbol, Symbol>, Symbol, Span>,
+        facts: &GenericFact<CorrespondingVar<Symbol, Symbol>, Symbol>,
         typeinfo: &TypeInfo,
     ) -> ResolvedFact {
         match facts {
-            GenericFact::Eq(ann, facts) => ResolvedFact::Eq(
-                *ann,
+            GenericFact::Eq(span, facts) => ResolvedFact::Eq(
+                *span,
                 facts
                     .iter()
                     .map(|expr| self.annotate_expr(expr, typeinfo))
@@ -285,7 +285,7 @@ impl Assignment<AtomTerm, ArcSort> {
 
     pub(crate) fn annotate_facts(
         &self,
-        mapped_facts: &[GenericFact<CorrespondingVar<Symbol, Symbol>, Symbol, Span>],
+        mapped_facts: &[GenericFact<CorrespondingVar<Symbol, Symbol>, Symbol>],
         typeinfo: &TypeInfo,
     ) -> Vec<ResolvedFact> {
         mapped_facts
@@ -388,7 +388,7 @@ impl Assignment<AtomTerm, ArcSort> {
 
     pub(crate) fn annotate_actions(
         &self,
-        mapped_actions: &GenericActions<CorrespondingVar<Symbol, Symbol>, Symbol, Span>,
+        mapped_actions: &GenericActions<CorrespondingVar<Symbol, Symbol>, Symbol>,
         typeinfo: &TypeInfo,
     ) -> Result<ResolvedActions, TypeError> {
         let actions = mapped_actions
@@ -454,11 +454,11 @@ impl Problem<AtomTerm, ArcSort> {
 
             // bound vars are added to range
             match action {
-                CoreAction::Let(ann, var, _, _) => {
-                    self.range.insert(AtomTerm::Var(*ann, *var));
+                CoreAction::Let(span, var, _, _) => {
+                    self.range.insert(AtomTerm::Var(*span, *var));
                 }
-                CoreAction::LetAtomTerm(ann, v, _) => {
-                    self.range.insert(AtomTerm::Var(*ann, *v));
+                CoreAction::LetAtomTerm(span, v, _) => {
+                    self.range.insert(AtomTerm::Var(*span, *v));
                 }
                 _ => (),
             }
@@ -471,7 +471,7 @@ impl Problem<AtomTerm, ArcSort> {
         rule: &CoreRule,
         typeinfo: &TypeInfo,
     ) -> Result<(), TypeError> {
-        let CoreRule { ann: _, head, body } = rule;
+        let CoreRule { span: _, head, body } = rule;
         self.add_query(body, typeinfo)?;
         self.add_actions(head, typeinfo)?;
         Ok(())
@@ -496,33 +496,33 @@ impl CoreAction {
         symbol_gen: &mut SymbolGen,
     ) -> Result<Vec<Constraint<AtomTerm, ArcSort>>, TypeError> {
         match self {
-            CoreAction::Let(ann, symbol, f, args) => {
+            CoreAction::Let(span, symbol, f, args) => {
                 let mut args = args.clone();
-                args.push(AtomTerm::Var(*ann, *symbol));
+                args.push(AtomTerm::Var(*span, *symbol));
 
                 Ok(get_literal_and_global_constraints(&args, typeinfo)
-                    .chain(get_atom_application_constraints(f, &args, ann, typeinfo)?)
+                    .chain(get_atom_application_constraints(f, &args, span, typeinfo)?)
                     .collect())
             }
-            CoreAction::Set(ann, head, args, rhs) => {
+            CoreAction::Set(span, head, args, rhs) => {
                 let mut args = args.clone();
                 args.push(rhs.clone());
 
                 Ok(get_literal_and_global_constraints(&args, typeinfo)
                     .chain(get_atom_application_constraints(
-                        head, &args, ann, typeinfo,
+                        head, &args, span, typeinfo,
                     )?)
                     .collect())
             }
-            CoreAction::Change(ann, _change, head, args) => {
+            CoreAction::Change(span, _change, head, args) => {
                 let mut args = args.clone();
                 // Add a dummy last output argument
                 let var = symbol_gen.fresh(head);
-                args.push(AtomTerm::Var(*ann, var));
+                args.push(AtomTerm::Var(*span, var));
 
                 Ok(get_literal_and_global_constraints(&args, typeinfo)
                     .chain(get_atom_application_constraints(
-                        head, &args, ann, typeinfo,
+                        head, &args, span, typeinfo,
                     )?)
                     .collect())
             }
@@ -544,9 +544,9 @@ impl CoreAction {
                 )
             }
             CoreAction::Panic(_ann, _) => Ok(vec![]),
-            CoreAction::LetAtomTerm(ann, v, at) => {
+            CoreAction::LetAtomTerm(span, v, at) => {
                 Ok(get_literal_and_global_constraints(&[at.clone()], typeinfo)
-                    .chain(once(Constraint::Eq(AtomTerm::Var(*ann, *v), at.clone())))
+                    .chain(once(Constraint::Eq(AtomTerm::Var(*span, *v), at.clone())))
                     .collect())
             }
         }
@@ -572,7 +572,7 @@ impl Atom<SymbolOrEq> {
             }
             SymbolOrEq::Symbol(head) => Ok(literal_constraints
                 .chain(get_atom_application_constraints(
-                    head, &self.args, &self.ann, type_info,
+                    head, &self.args, &self.span, type_info,
                 )?)
                 .collect()),
         }
@@ -601,7 +601,7 @@ fn get_atom_application_constraints(
             constraints.push(Constraint::Impossible(
                 ImpossibleConstraint::ArityMismatch {
                     atom: Atom {
-                        ann: *span,
+                        span: *span,
                         head: *head,
                         args: args.to_vec(),
                     },
@@ -692,7 +692,7 @@ impl TypeConstraint for SimpleTypeConstraint {
             vec![Constraint::Impossible(
                 ImpossibleConstraint::ArityMismatch {
                     atom: Atom {
-                        ann: self.span,
+                        span: self.span,
                         head: self.name,
                         args: arguments.to_vec(),
                     },
@@ -768,7 +768,7 @@ impl TypeConstraint for AllEqualTypeConstraint {
                 return vec![Constraint::Impossible(
                     ImpossibleConstraint::ArityMismatch {
                         atom: Atom {
-                            ann: self.span,
+                            span: self.span,
                             head: self.name,
                             args: arguments.to_vec(),
                         },

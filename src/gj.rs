@@ -362,12 +362,12 @@ impl EGraph {
             .into_iter()
             .map(|atom| {
                 let args = atom.args.into_iter().map(|arg| match arg {
-                    ResolvedAtomTerm::Var(ann, v) => AtomTerm::Var(ann, v.name),
-                    ResolvedAtomTerm::Literal(ann, lit) => AtomTerm::Literal(ann, lit),
-                    ResolvedAtomTerm::Global(ann, g) => AtomTerm::Global(ann, g.name),
+                    ResolvedAtomTerm::Var(span, v) => AtomTerm::Var(span, v.name),
+                    ResolvedAtomTerm::Literal(span, lit) => AtomTerm::Literal(span, lit),
+                    ResolvedAtomTerm::Global(span, g) => AtomTerm::Global(span, g.name),
                 });
                 Atom {
-                    ann: atom.ann,
+                    span: atom.span,
                     head: atom.head,
                     args: args.collect(),
                 }

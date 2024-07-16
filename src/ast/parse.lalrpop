@@ -55,23 +55,23 @@ Command: Command = {
         <merge:(":merge" <Expr>)?> <default:(":default" <Expr>)?> RParen => {
         Command::Function(FunctionDecl { name, schema, merge, merge_action: Actions::new(merge_action.unwrap_or_default()), default, cost, unextractable: unextractable.is_some(), ignore_viz: false })
     },
-    <lo:LParen> "declare" <name:Ident> <sort:Ident> <hi:RParen> => Command::Declare{ann: Span(filename, lo, hi), name, sort},
+    <lo:LParen> "declare" <name:Ident> <sort:Ident> <hi:RParen> => Command::Declare{span: Span(filename, lo, hi), name, sort},
     LParen "relation" <constructor:Ident> <inputs:List<Type>> RParen => Command::Relation{constructor, inputs},
     LParen "ruleset" <name:Ident> RParen => Command::AddRuleset(name),
     LParen "unstable-combined-ruleset" <name:Ident> <subrulesets:Ident*> RParen => Command::UnstableCombinedRuleset(name, subrulesets),
     <lo:LParen> "rule" <body:List<Fact>> <head:List<Action>> 
         <ruleset:(":ruleset" <Ident>)?> 
         <name:(":name" <String>)?> 
-    <hi:RParen> => Command::Rule{ruleset: ruleset.unwrap_or("".into()), name: name.unwrap_or("".to_string()).into(), rule: Rule { ann: Span(filename, lo, hi), head: Actions::new(head), body }},
+    <hi:RParen> => Command::Rule{ruleset: ruleset.unwrap_or("".into()), name: name.unwrap_or("".to_string()).into(), rule: Rule { span: Span(filename, lo, hi), head: Actions::new(head), body }},
     <lo:LParen> "rewrite" <lhs:Expr> <rhs:Expr>
         <subsume:(":subsume")?>
         <conditions:(":when" <List<Fact>>)?>
         <ruleset:(":ruleset" <Ident>)?>
-    <hi:RParen> => Command::Rewrite(ruleset.unwrap_or("".into()), Rewrite { ann: Span(filename, lo, hi), lhs, rhs, conditions: conditions.unwrap_or_default() }, subsume.is_some()),
+    <hi:RParen> => Command::Rewrite(ruleset.unwrap_or("".into()), Rewrite { span: Span(filename, lo, hi), lhs, rhs, conditions: conditions.unwrap_or_default() }, subsume.is_some()),
     <lo:LParen> "birewrite" <lhs:Expr> <rhs:Expr>
         <conditions:(":when" <List<Fact>>)?>
         <ruleset:(":ruleset" <Ident>)?>
-    <hi:RParen> => Command::BiRewrite(ruleset.unwrap_or("".into()), Rewrite { ann: Span(filename, lo, hi), lhs, rhs, conditions: conditions.unwrap_or_default() }),
+    <hi:RParen> => Command::BiRewrite(ruleset.unwrap_or("".into()), Rewrite { span: Span(filename, lo, hi), lhs, rhs, conditions: conditions.unwrap_or_default() }),
     <lo:LParen> "let" <name:Ident> <expr:Expr> <hi:RParen> => Command::Action(Action::Let(Span(filename, lo, hi), name, expr)),
     <NonLetAction> => Command::Action(<>),
     <lo:LParen> "run" <limit:UNum>  <until:(":until" <(Fact)*>)?> <hi:RParen> => 

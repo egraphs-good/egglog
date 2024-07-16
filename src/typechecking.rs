@@ -180,7 +180,7 @@ impl TypeInfo {
                 self.declare_sort(*sort, presort_and_args)?;
                 ResolvedNCommand::Sort(*sort, presort_and_args.clone())
             }
-            NCommand::CoreAction(Action::Let(ann, var, expr)) => {
+            NCommand::CoreAction(Action::Let(span, var, expr)) => {
                 let expr = self.typecheck_expr(expr, &Default::default())?;
                 let output_type = expr.output_type(self);
                 self.global_types.insert(*var, output_type.clone());
@@ -190,7 +190,7 @@ impl TypeInfo {
                     // not a global reference, but a global binding
                     is_global_ref: false,
                 };
-                ResolvedNCommand::CoreAction(ResolvedAction::Let(*ann, var, expr))
+                ResolvedNCommand::CoreAction(ResolvedAction::Let(*span, var, expr))
             }
             NCommand::CoreAction(action) => {
                 ResolvedNCommand::CoreAction(self.typecheck_action(action, &Default::default())?)
@@ -334,7 +334,7 @@ impl TypeInfo {
     }
 
     fn typecheck_rule(&self, rule: &Rule) -> Result<ResolvedRule, TypeError> {
-        let Rule { ann, head, body } = rule;
+        let Rule { span, head, body } = rule;
         let mut constraints = vec![];
 
         let mut fresh_gen = SymbolGen::new("$".to_string());
@@ -347,7 +347,7 @@ impl TypeInfo {
         let mut problem = Problem::default();
         problem.add_rule(
             &CoreRule {
-                ann: *ann,
+                span: *span,
                 body: query,
                 head: actions,
             },
@@ -362,7 +362,7 @@ impl TypeInfo {
         let actions: ResolvedActions = assignment.annotate_actions(&mapped_action, self)?;
 
         Ok(ResolvedRule {
-            ann: *ann,
+            span: *span,
             body,
             head: actions,
         })
@@ -521,7 +521,7 @@ mod test {
                 expected: 2,
                 expr: e,
             })) => {
-                let span = e.ann();
+                let span = e.span();
                 assert_eq!(&prog[span.1..span.2], "(f a b c)");
             }
             _ => panic!("Expected arity mismatch, got: {:?}", res),
