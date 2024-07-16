@@ -471,7 +471,11 @@ impl Problem<AtomTerm, ArcSort> {
         rule: &CoreRule,
         typeinfo: &TypeInfo,
     ) -> Result<(), TypeError> {
-        let CoreRule { span: _, head, body } = rule;
+        let CoreRule {
+            span: _,
+            head,
+            body,
+        } = rule;
         self.add_query(body, typeinfo)?;
         self.add_actions(head, typeinfo)?;
         Ok(())

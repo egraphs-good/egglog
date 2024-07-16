@@ -1,4 +1,4 @@
-use egglog::{ast::{Expr, GenericExpr}, EGraph, ExtractReport, Function, Term, Value};
+use egglog::{ast::Expr, EGraph, ExtractReport, Function, Term, Value};
 use symbol_table::GlobalSymbol;
 
 #[test]
@@ -112,10 +112,7 @@ fn test_subsumed_unextractable_rebuild_arg() {
         panic!();
     };
     let expr = termdag.term_to_expr(&term);
-    assert_eq!(
-        expr,
-        Expr::call_no_span(GlobalSymbol::from("exp"), vec![])
-    );
+    assert_eq!(expr, Expr::call_no_span(GlobalSymbol::from("exp"), vec![]));
 }
 
 #[test]
@@ -166,10 +163,7 @@ fn test_subsumed_unextractable_rebuild_self() {
         panic!();
     };
     let expr = termdag.term_to_expr(&term);
-    assert_eq!(
-        expr,
-        Expr::call_no_span(GlobalSymbol::from("exp"), vec![])
-    );
+    assert_eq!(expr, Expr::call_no_span(GlobalSymbol::from("exp"), vec![]));
 }
 
 #[test]

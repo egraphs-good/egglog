@@ -176,7 +176,10 @@ impl Sort for FunctionSort {
     ) -> Option<(Cost, Expr)> {
         let ValueFunction(name, inputs) = ValueFunction::load(self, &value);
         let (cost, args) = inputs.into_iter().try_fold(
-            (1usize, vec![GenericExpr::Lit(*DUMMY_SPAN, Literal::String(name))]),
+            (
+                1usize,
+                vec![GenericExpr::Lit(*DUMMY_SPAN, Literal::String(name))],
+            ),
             |(cost, mut args), (sort, value)| {
                 let (new_cost, term) = extractor.find_best(value, termdag, &sort)?;
                 args.push(termdag.term_to_expr(&term));

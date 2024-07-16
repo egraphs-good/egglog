@@ -70,7 +70,7 @@ fn desugar_rewrite(
         ruleset,
         name,
         rule: Rule {
-            span: span,
+            span,
             body: [Fact::Eq(
                 span,
                 vec![Expr::Var(span, var), rewrite.lhs.clone()],
@@ -86,7 +86,7 @@ fn desugar_rewrite(
 fn desugar_birewrite(ruleset: Symbol, name: Symbol, rewrite: &Rewrite) -> Vec<NCommand> {
     let span = rewrite.span;
     let rw2 = Rewrite {
-        span: span,
+        span,
         lhs: rewrite.rhs.clone(),
         rhs: rewrite.lhs.clone(),
         conditions: rewrite.conditions.clone(),
@@ -186,7 +186,7 @@ pub(crate) fn desugar_calc(
     // first, push all the idents
     for IdentSort { ident, sort } in idents {
         res.push(Command::Declare {
-            span: span,
+            span,
             name: ident,
             sort,
         });

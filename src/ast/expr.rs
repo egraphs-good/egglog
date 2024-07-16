@@ -153,14 +153,12 @@ impl Expr {
     }
 }
 
-impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq>
-    GenericExpr<Head, Leaf>
-{
+impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq> GenericExpr<Head, Leaf> {
     pub fn span(&self) -> Span {
         match self {
-            GenericExpr::Lit(span, _) => span.clone(),
-            GenericExpr::Var(span, _) => span.clone(),
-            GenericExpr::Call(span, _, _) => span.clone(),
+            GenericExpr::Lit(span, _) => *span,
+            GenericExpr::Var(span, _) => *span,
+            GenericExpr::Call(span, _, _) => *span,
         }
     }
 
@@ -209,7 +207,7 @@ impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq>
             GenericExpr::Var(..) => f(self),
             GenericExpr::Call(span, op, children) => {
                 let children = children.into_iter().map(|c| c.visit_exprs(f)).collect();
-                f(GenericExpr::Call(span.clone(), op.clone(), children))
+                f(GenericExpr::Call(span, op.clone(), children))
             }
         }
     }
@@ -221,14 +219,14 @@ impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq>
         subst_head: &mut impl FnMut(&Head) -> Head2,
     ) -> GenericExpr<Head2, Leaf2> {
         match self {
-            GenericExpr::Lit(span, lit) => GenericExpr::Lit(span.clone(), lit.clone()),
+            GenericExpr::Lit(span, lit) => GenericExpr::Lit(*span, lit.clone()),
             GenericExpr::Var(span, v) => subst_leaf(span, v),
             GenericExpr::Call(span, op, children) => {
                 let children = children
                     .iter()
                     .map(|c| c.subst(subst_leaf, subst_head))
                     .collect();
-                GenericExpr::Call(span.clone(), subst_head(op), children)
+                GenericExpr::Call(*span, subst_head(op), children)
             }
         }
     }
