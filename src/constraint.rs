@@ -8,10 +8,13 @@ use crate::{
     },
     sort::I64Sort,
     typechecking::TypeError,
-    util::{FreshGen, HashMap, HashSet, SymbolGen},
+    util::{FreshGen, HashSet, SymbolGen},
     ArcSort, CorrespondingVar, Symbol, TypeInfo,
 };
 use core::hash::Hash;
+// Use immutable hashmap for performance
+// cloning assignments is common and O(1) with immutable hashmap
+use im_rc::HashMap;
 use std::{fmt::Debug, iter::once, mem::swap};
 
 #[derive(Clone, Debug)]
@@ -198,12 +201,13 @@ impl Default for Problem<AtomTerm, ArcSort> {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(crate) struct Assignment<Var, Value>(pub HashMap<Var, Value>);
 
 impl<Var, Value> Assignment<Var, Value>
 where
-    Var: Hash + Eq + PartialEq,
+    Var: Hash + Eq + PartialEq + Clone,
+    Value: Clone,
 {
     pub fn insert(&mut self, var: Var, value: Value) -> Option<Value> {
         self.0.insert(var, value)
