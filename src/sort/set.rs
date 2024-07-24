@@ -223,7 +223,7 @@ impl PrimitiveLike for SetOf {
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        AllEqualTypeConstraint::new(self.name(), *span)
+        AllEqualTypeConstraint::new(self.name(), span.clone())
             .with_all_arguments_sort(self.set.element())
             .with_output_sort(self.set.clone())
             .into_box()
@@ -246,7 +246,7 @@ impl PrimitiveLike for Ctor {
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(self.name(), vec![self.set.clone()], *span).into_box()
+        SimpleTypeConstraint::new(self.name(), vec![self.set.clone()], span.clone()).into_box()
     }
 
     fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
@@ -266,7 +266,7 @@ impl PrimitiveLike for SetRebuild {
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(self.name(), vec![self.set.clone(), self.set.clone()], *span)
+        SimpleTypeConstraint::new(self.name(), vec![self.set.clone(), self.set.clone()], span.clone())
             .into_box()
     }
 
@@ -294,7 +294,7 @@ impl PrimitiveLike for Insert {
         SimpleTypeConstraint::new(
             self.name(),
             vec![self.set.clone(), self.set.element(), self.set.clone()],
-            *span,
+            span.clone(),
         )
         .into_box()
     }
@@ -321,7 +321,7 @@ impl PrimitiveLike for NotContains {
         SimpleTypeConstraint::new(
             self.name(),
             vec![self.set.clone(), self.set.element(), self.unit.clone()],
-            *span,
+            span.clone(),
         )
         .into_box()
     }
@@ -351,7 +351,7 @@ impl PrimitiveLike for Contains {
         SimpleTypeConstraint::new(
             self.name(),
             vec![self.set.clone(), self.set.element(), self.unit.clone()],
-            *span,
+            span.clone(),
         )
         .into_box()
     }
@@ -380,7 +380,7 @@ impl PrimitiveLike for Union {
         SimpleTypeConstraint::new(
             self.name(),
             vec![self.set.clone(), self.set.clone(), self.set.clone()],
-            *span,
+            span.clone(),
         )
         .into_box()
     }
@@ -407,7 +407,7 @@ impl PrimitiveLike for Intersect {
         SimpleTypeConstraint::new(
             self.name(),
             vec![self.set.clone(), self.set.clone(), self.set.clone()],
-            *span,
+            span.clone(),
         )
         .into_box()
     }
@@ -433,7 +433,7 @@ impl PrimitiveLike for Length {
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(self.name(), vec![self.set.clone(), self.i64.clone()], *span)
+        SimpleTypeConstraint::new(self.name(), vec![self.set.clone(), self.i64.clone()], span.clone())
             .into_box()
     }
 
@@ -457,7 +457,7 @@ impl PrimitiveLike for Get {
         SimpleTypeConstraint::new(
             self.name(),
             vec![self.set.clone(), self.i64.clone(), self.set.element()],
-            *span,
+            span.clone(),
         )
         .into_box()
     }
@@ -483,7 +483,7 @@ impl PrimitiveLike for Remove {
         SimpleTypeConstraint::new(
             self.name(),
             vec![self.set.clone(), self.set.element(), self.set.clone()],
-            *span,
+            span.clone(),
         )
         .into_box()
     }
@@ -509,7 +509,7 @@ impl PrimitiveLike for Diff {
         SimpleTypeConstraint::new(
             self.name(),
             vec![self.set.clone(), self.set.clone(), self.set.clone()],
-            *span,
+            span.clone(),
         )
         .into_box()
     }

@@ -45,18 +45,18 @@ fn desugar_rewrite(
     rewrite: &Rewrite,
     subsume: bool,
 ) -> Vec<NCommand> {
-    let span = rewrite.span;
+    let span = rewrite.span.clone();
     let var = Symbol::from("rewrite_var__");
     let mut head = Actions::singleton(Action::Union(
-        span,
-        Expr::Var(span, var),
+        span.clone(),
+        Expr::Var(span.clone(), var),
         rewrite.rhs.clone(),
     ));
     if subsume {
         match &rewrite.lhs {
             Expr::Call(_, f, args) => {
                 head.0
-                    .push(Action::Change(span, Change::Subsume, *f, args.to_vec()));
+                    .push(Action::Change(span.clone(), Change::Subsume, *f, args.to_vec()));
             }
             _ => {
                 panic!("Subsumed rewrite must have a function call on the lhs");
@@ -70,9 +70,9 @@ fn desugar_rewrite(
         ruleset,
         name,
         rule: Rule {
-            span,
+            span: span.clone(),
             body: [Fact::Eq(
-                span,
+                span.clone(),
                 vec![Expr::Var(span, var), rewrite.lhs.clone()],
             )]
             .into_iter()
@@ -84,7 +84,7 @@ fn desugar_rewrite(
 }
 
 fn desugar_birewrite(ruleset: Symbol, name: Symbol, rewrite: &Rewrite) -> Vec<NCommand> {
-    let span = rewrite.span;
+    let span = rewrite.span.clone();
     let rw2 = Rewrite {
         span,
         lhs: rewrite.rhs.clone(),
@@ -120,9 +120,9 @@ fn add_semi_naive_rule(desugar: &mut Desugar, rule: Rule) -> Option<Rule> {
                     add_new_rule = true;
 
                     let fresh_symbol = desugar.get_fresh();
-                    let fresh_var = Expr::Var(*span, fresh_symbol);
+                    let fresh_var = Expr::Var(span.clone(), fresh_symbol);
                     let expr = std::mem::replace(expr, fresh_var.clone());
-                    new_head_atoms.push(Fact::Eq(*span, vec![fresh_var, expr]));
+                    new_head_atoms.push(Fact::Eq(span.clone(), vec![fresh_var, expr]));
                 };
             }
             Action::Let(span, symbol, expr) if var_set.contains(symbol) => {
@@ -130,8 +130,8 @@ fn add_semi_naive_rule(desugar: &mut Desugar, rule: Rule) -> Option<Rule> {
                 if let Expr::Call(..) = expr {
                     add_new_rule = true;
 
-                    let var = Expr::Var(*span, *symbol);
-                    new_head_atoms.push(Fact::Eq(*span, vec![var, expr.clone()]));
+                    let var = Expr::Var(span.clone(), *symbol);
+                    new_head_atoms.push(Fact::Eq(span.clone(), vec![var, expr.clone()]));
                 }
             }
             _ => (),
@@ -155,7 +155,7 @@ fn desugar_simplify(desugar: &mut Desugar, expr: &Expr, schedule: &Schedule) -> 
     let span = expr.span();
     let mut res = vec![NCommand::Push(1)];
     let lhs = desugar.get_fresh();
-    res.push(NCommand::CoreAction(Action::Let(span, lhs, expr.clone())));
+    res.push(NCommand::CoreAction(Action::Let(span.clone(), lhs, expr.clone())));
     res.push(NCommand::RunSchedule(schedule.clone()));
     res.extend(
         desugar_command(
@@ -186,7 +186,7 @@ pub(crate) fn desugar_calc(
     // first, push all the idents
     for IdentSort { ident, sort } in idents {
         res.push(Command::Declare {
-            span,
+            span: span.clone(),
             name: ident,
             sort,
         });
@@ -207,19 +207,19 @@ pub(crate) fn desugar_calc(
         }
 
         res.push(Command::RunSchedule(Schedule::Saturate(
-            span,
+            span.clone(),
             Box::new(Schedule::Run(
-                span,
+                span.clone(),
                 RunConfig {
                     ruleset: "".into(),
-                    until: Some(vec![Fact::Eq(span, vec![expr1.clone(), expr2.clone()])]),
+                    until: Some(vec![Fact::Eq(span.clone(), vec![expr1.clone(), expr2.clone()])]),
                 },
             )),
         )));
 
         res.push(Command::Check(
-            span,
-            vec![Fact::Eq(span, vec![expr1.clone(), expr2.clone()])],
+            span.clone(),
+            vec![Fact::Eq(span.clone(), vec![expr1.clone(), expr2.clone()])],
         ));
 
         res.push(Command::Pop(1));
@@ -409,13 +409,17 @@ impl Desugar {
 
     pub fn parse_program(
         &self,
-        filename: Option<Symbol>,
+        filename: Option<String>,
         input: &str,
     ) -> Result<Vec<Command>, Error> {
-        let filename = filename.unwrap_or_else(|| Symbol::from(DEFAULT_FILENAME));
+        let filename = filename.unwrap_or_else(|| DEFAULT_FILENAME.to_string());
+        let srcfile = Arc::new(SrcFile {
+            name: filename,
+            contents: Some(input.to_string()),
+        });
         Ok(self
             .parser
-            .parse(filename, input)
+            .parse(&srcfile, input)
             .map_err(|e| e.map_token(|tok| tok.to_string()))?)
     }
 
@@ -436,7 +440,7 @@ impl Desugar {
                 unextractable: false,
                 ignore_viz: false,
             }),
-            NCommand::CoreAction(Action::Let(span, name, Expr::Call(span, fresh, vec![]))),
+            NCommand::CoreAction(Action::Let(span.clone(), name, Expr::Call(span.clone(), fresh, vec![]))),
         ]
     }
 

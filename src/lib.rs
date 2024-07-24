@@ -301,7 +301,7 @@ impl Primitive {
     fn accept(&self, tys: &[Arc<dyn Sort>]) -> bool {
         let mut constraints = vec![];
         let lits: Vec<_> = (0..tys.len())
-            .map(|i| AtomTerm::Literal(*DUMMY_SPAN, Literal::Int(i as i64)))
+            .map(|i| AtomTerm::Literal(DUMMY_SPAN.clone(), Literal::Int(i as i64)))
             .collect();
         for (lit, ty) in lits.iter().zip(tys.iter()) {
             constraints.push(Constraint::Assign(lit.clone(), ty.clone()))
@@ -371,7 +371,7 @@ impl PrimitiveLike for SimplePrimitive {
             .chain(once(&self.output as &ArcSort))
             .cloned()
             .collect();
-        SimpleTypeConstraint::new(self.name(), sorts, *span).into_box()
+        SimpleTypeConstraint::new(self.name(), sorts, span.clone()).into_box()
     }
     fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         (self.f)(values)
@@ -1137,7 +1137,7 @@ impl EGraph {
 
     pub fn eval_expr(&mut self, expr: &Expr) -> Result<(ArcSort, Value), Error> {
         let fresh_name = self.desugar.get_fresh();
-        let command = Command::Action(Action::Let(*DUMMY_SPAN, fresh_name, expr.clone()));
+        let command = Command::Action(Action::Let(DUMMY_SPAN.clone(), fresh_name, expr.clone()));
         self.run_program(vec![command])?;
         // find the table with the same name as the fresh name
         let func = self.functions.get(&fresh_name).unwrap();
@@ -1213,7 +1213,7 @@ impl EGraph {
 
     fn check_facts(&mut self, span: &Span, facts: &[ResolvedFact]) -> Result<(), Error> {
         let rule = ast::ResolvedRule {
-            span: *span,
+            span: span.clone(),
             head: ResolvedActions::default(),
             body: facts.to_vec(),
         };
@@ -1388,7 +1388,7 @@ impl EGraph {
         let mut contents = String::new();
         f.read_to_string(&mut contents).unwrap();
 
-        let span: Span = *DUMMY_SPAN;
+        let span: Span = DUMMY_SPAN.clone();
         let mut actions: Vec<Action> = vec![];
         let mut str_buf: Vec<&str> = vec![];
         for line in contents.lines() {
@@ -1400,10 +1400,10 @@ impl EGraph {
 
             let parse = |s: &str| -> Expr {
                 match s.parse::<i64>() {
-                    Ok(i) => Expr::Lit(span, Literal::Int(i)),
+                    Ok(i) => Expr::Lit(span.clone(), Literal::Int(i)),
                     Err(_) => match s.parse::<f64>() {
-                        Ok(f) => Expr::Lit(span, Literal::F64(f.into())),
-                        Err(_) => Expr::Lit(span, Literal::String(s.into())),
+                        Ok(f) => Expr::Lit(span.clone(), Literal::F64(f.into())),
+                        Err(_) => Expr::Lit(span.clone(), Literal::String(s.into())),
                     },
                 }
             };
@@ -1412,10 +1412,10 @@ impl EGraph {
 
             actions.push(
                 if function_type.is_datatype || function_type.output.name() == UNIT_SYM.into() {
-                    Action::Expr(span, Expr::Call(span, func_name, exprs))
+                    Action::Expr(span.clone(), Expr::Call(span.clone(), func_name, exprs))
                 } else {
                     let out = exprs.pop().unwrap();
-                    Action::Set(span, func_name, exprs, out)
+                    Action::Set(span.clone(), func_name, exprs, out)
                 },
             );
         }
@@ -1488,7 +1488,7 @@ impl EGraph {
 
     pub fn parse_program(
         &self,
-        filename: Option<Symbol>,
+        filename: Option<String>,
         input: &str,
     ) -> Result<Vec<Command>, Error> {
         self.desugar.parse_program(filename, input)
@@ -1496,7 +1496,7 @@ impl EGraph {
 
     pub fn parse_and_run_program(
         &mut self,
-        filename: Option<Symbol>,
+        filename: Option<String>,
         input: &str,
     ) -> Result<Vec<String>, Error> {
         let parsed = self.desugar.parse_program(filename, input)?;
@@ -1640,7 +1640,7 @@ mod tests {
             SimpleTypeConstraint::new(
                 self.name(),
                 vec![self.vec.clone(), self.vec.clone(), self.ele.clone()],
-                *span,
+                span.clone(),
             )
             .into_box()
         }

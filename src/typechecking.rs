@@ -190,13 +190,13 @@ impl TypeInfo {
                     // not a global reference, but a global binding
                     is_global_ref: false,
                 };
-                ResolvedNCommand::CoreAction(ResolvedAction::Let(*span, var, expr))
+                ResolvedNCommand::CoreAction(ResolvedAction::Let(span.clone(), var, expr))
             }
             NCommand::CoreAction(action) => {
                 ResolvedNCommand::CoreAction(self.typecheck_action(action, &Default::default())?)
             }
             NCommand::Check(span, facts) => {
-                ResolvedNCommand::Check(*span, self.typecheck_facts(facts)?)
+                ResolvedNCommand::Check(span.clone(), self.typecheck_facts(facts)?)
             }
             NCommand::Fail(cmd) => ResolvedNCommand::Fail(Box::new(self.typecheck_command(cmd)?)),
             NCommand::RunSchedule(schedule) => {
@@ -253,8 +253,8 @@ impl TypeInfo {
         }
         let mut bound_vars = IndexMap::default();
         let output_type = self.sorts.get(&fdecl.schema.output).unwrap();
-        bound_vars.insert("old".into(), (*DUMMY_SPAN, output_type.clone()));
-        bound_vars.insert("new".into(), (*DUMMY_SPAN, output_type.clone()));
+        bound_vars.insert("old".into(), (DUMMY_SPAN.clone(), output_type.clone()));
+        bound_vars.insert("new".into(), (DUMMY_SPAN.clone(), output_type.clone()));
 
         Ok(ResolvedFunctionDecl {
             name: fdecl.name,
@@ -278,7 +278,7 @@ impl TypeInfo {
     fn typecheck_schedule(&self, schedule: &Schedule) -> Result<ResolvedSchedule, TypeError> {
         let schedule = match schedule {
             Schedule::Repeat(span, times, schedule) => ResolvedSchedule::Repeat(
-                *span,
+                span.clone(),
                 *times,
                 Box::new(self.typecheck_schedule(schedule)?),
             ),
@@ -287,10 +287,10 @@ impl TypeInfo {
                     .iter()
                     .map(|schedule| self.typecheck_schedule(schedule))
                     .collect::<Result<Vec<_>, _>>()?;
-                ResolvedSchedule::Sequence(*span, schedules)
+                ResolvedSchedule::Sequence(span.clone(), schedules)
             }
             Schedule::Saturate(span, schedule) => {
-                ResolvedSchedule::Saturate(*span, Box::new(self.typecheck_schedule(schedule)?))
+                ResolvedSchedule::Saturate(span.clone(), Box::new(self.typecheck_schedule(schedule)?))
             }
             Schedule::Run(span, RunConfig { ruleset, until }) => {
                 let until = until
@@ -298,7 +298,7 @@ impl TypeInfo {
                     .map(|facts| self.typecheck_facts(facts))
                     .transpose()?;
                 ResolvedSchedule::Run(
-                    *span,
+                    span.clone(),
                     ResolvedRunConfig {
                         ruleset: *ruleset,
                         until,
@@ -347,7 +347,7 @@ impl TypeInfo {
         let mut problem = Problem::default();
         problem.add_rule(
             &CoreRule {
-                span: *span,
+                span: span.clone(),
                 body: query,
                 head: actions,
             },
@@ -362,7 +362,7 @@ impl TypeInfo {
         let actions: ResolvedActions = assignment.annotate_actions(&mapped_action, self)?;
 
         Ok(ResolvedRule {
-            span: *span,
+            span: span.clone(),
             body,
             head: actions,
         })
@@ -396,7 +396,7 @@ impl TypeInfo {
 
         // add bindings from the context
         for (var, (span, sort)) in binding {
-            problem.assign_local_var_type(*var, *span, sort.clone())?;
+            problem.assign_local_var_type(*var, span.clone(), sort.clone())?;
         }
 
         let assignment = problem
@@ -412,7 +412,7 @@ impl TypeInfo {
         expr: &Expr,
         binding: &IndexMap<Symbol, (Span, ArcSort)>,
     ) -> Result<ResolvedExpr, TypeError> {
-        let action = Action::Expr(*DUMMY_SPAN, expr.clone());
+        let action = Action::Expr(DUMMY_SPAN.clone(), expr.clone());
         let typechecked_action = self.typecheck_action(&action, binding)?;
         match typechecked_action {
             ResolvedAction::Expr(_, expr) => Ok(expr),

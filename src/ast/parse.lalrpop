@@ -3,7 +3,7 @@ use crate::Symbol;
 use crate::Schedule;
 use ordered_float::OrderedFloat;
 
-grammar(filename: Symbol);
+grammar(srcfile: &Arc<SrcFile>);
 
 extern {
     type Error = String;
@@ -55,39 +55,39 @@ Command: Command = {
         <merge:(":merge" <Expr>)?> <default:(":default" <Expr>)?> RParen => {
         Command::Function(FunctionDecl { name, schema, merge, merge_action: Actions::new(merge_action.unwrap_or_default()), default, cost, unextractable: unextractable.is_some(), ignore_viz: false })
     },
-    <lo:LParen> "declare" <name:Ident> <sort:Ident> <hi:RParen> => Command::Declare{span: Span(filename, lo, hi), name, sort},
+    <lo:LParen> "declare" <name:Ident> <sort:Ident> <hi:RParen> => Command::Declare{span: Span(srcfile.clone(), lo, hi), name, sort},
     LParen "relation" <constructor:Ident> <inputs:List<Type>> RParen => Command::Relation{constructor, inputs},
     LParen "ruleset" <name:Ident> RParen => Command::AddRuleset(name),
     LParen "unstable-combined-ruleset" <name:Ident> <subrulesets:Ident*> RParen => Command::UnstableCombinedRuleset(name, subrulesets),
     <lo:LParen> "rule" <body:List<Fact>> <head:List<Action>> 
         <ruleset:(":ruleset" <Ident>)?> 
         <name:(":name" <String>)?> 
-    <hi:RParen> => Command::Rule{ruleset: ruleset.unwrap_or("".into()), name: name.unwrap_or("".to_string()).into(), rule: Rule { span: Span(filename, lo, hi), head: Actions::new(head), body }},
+    <hi:RParen> => Command::Rule{ruleset: ruleset.unwrap_or("".into()), name: name.unwrap_or("".to_string()).into(), rule: Rule { span: Span(srcfile.clone(), lo, hi), head: Actions::new(head), body }},
     <lo:LParen> "rewrite" <lhs:Expr> <rhs:Expr>
         <subsume:(":subsume")?>
         <conditions:(":when" <List<Fact>>)?>
         <ruleset:(":ruleset" <Ident>)?>
-    <hi:RParen> => Command::Rewrite(ruleset.unwrap_or("".into()), Rewrite { span: Span(filename, lo, hi), lhs, rhs, conditions: conditions.unwrap_or_default() }, subsume.is_some()),
+    <hi:RParen> => Command::Rewrite(ruleset.unwrap_or("".into()), Rewrite { span: Span(srcfile.clone(), lo, hi), lhs, rhs, conditions: conditions.unwrap_or_default() }, subsume.is_some()),
     <lo:LParen> "birewrite" <lhs:Expr> <rhs:Expr>
         <conditions:(":when" <List<Fact>>)?>
         <ruleset:(":ruleset" <Ident>)?>
-    <hi:RParen> => Command::BiRewrite(ruleset.unwrap_or("".into()), Rewrite { span: Span(filename, lo, hi), lhs, rhs, conditions: conditions.unwrap_or_default() }),
-    <lo:LParen> "let" <name:Ident> <expr:Expr> <hi:RParen> => Command::Action(Action::Let(Span(filename, lo, hi), name, expr)),
+    <hi:RParen> => Command::BiRewrite(ruleset.unwrap_or("".into()), Rewrite { span: Span(srcfile.clone(), lo, hi), lhs, rhs, conditions: conditions.unwrap_or_default() }),
+    <lo:LParen> "let" <name:Ident> <expr:Expr> <hi:RParen> => Command::Action(Action::Let(Span(srcfile.clone(), lo, hi), name, expr)),
     <NonLetAction> => Command::Action(<>),
     <lo:LParen> "run" <limit:UNum>  <until:(":until" <(Fact)*>)?> <hi:RParen> => 
-        Command::RunSchedule(Schedule::Repeat(Span(filename, lo, hi), limit, Box::new(
-            Schedule::Run(Span(filename, lo, hi), RunConfig { ruleset : "".into(), until })))),
+        Command::RunSchedule(Schedule::Repeat(Span(srcfile.clone(), lo, hi), limit, Box::new(
+            Schedule::Run(Span(srcfile.clone(), lo, hi), RunConfig { ruleset : "".into(), until })))),
     <lo:LParen> "run" <ruleset: Ident> <limit:UNum> <until:(":until" <(Fact)*>)?> <hi:RParen> => 
-        Command::RunSchedule(Schedule::Repeat(Span(filename, lo, hi), limit, Box::new(
-            Schedule::Run(Span(filename, lo, hi), RunConfig { ruleset, until })))),
+        Command::RunSchedule(Schedule::Repeat(Span(srcfile.clone(), lo, hi), limit, Box::new(
+            Schedule::Run(Span(srcfile.clone(), lo, hi), RunConfig { ruleset, until })))),
     LParen "simplify"  <schedule:Schedule> <expr:Expr> RParen
         => Command::Simplify { expr, schedule },
-    <lo:LParen> "calc" LParen <idents:IdentSort*> RParen <exprs:Expr+> <hi:RParen> => Command::Calc(Span(filename, lo, hi), idents, exprs),
+    <lo:LParen> "calc" LParen <idents:IdentSort*> RParen <exprs:Expr+> <hi:RParen> => Command::Calc(Span(srcfile.clone(), lo, hi), idents, exprs),
     LParen "query-extract" <variants:(":variants" <UNum>)?> <expr:Expr> RParen => Command::QueryExtract { expr, variants: variants.unwrap_or(0) },
-    <lo:LParen> "check" <facts:(Fact)*> <hi:RParen> => Command::Check(Span(filename, lo, hi), facts),
+    <lo:LParen> "check" <facts:(Fact)*> <hi:RParen> => Command::Check(Span(srcfile.clone(), lo, hi), facts),
     LParen "check-proof" RParen => Command::CheckProof,
       <lo:LParen> "run-schedule" <scheds:Schedule*> <hi:RParen> => 
-        Command::RunSchedule(Schedule::Sequence(Span(filename, lo, hi), scheds)),
+        Command::RunSchedule(Schedule::Sequence(Span(srcfile.clone(), lo, hi), scheds)),
     LParen "print-stats" RParen => Command::PrintOverallStatistics,
     LParen "push" <UNum?> RParen => Command::Push(<>.unwrap_or(1)),
     LParen "pop" <UNum?> RParen => Command::Pop(<>.unwrap_or(1)),
@@ -101,19 +101,19 @@ Command: Command = {
 
 Schedule: Schedule = {
     <lo:LParen> "saturate" <scheds:Schedule*> <hi:RParen> => 
-        Schedule::Saturate(Span(filename, lo, hi), Box::new(
-            Schedule::Sequence(Span(filename, lo, hi), scheds))),
+        Schedule::Saturate(Span(srcfile.clone(), lo, hi), Box::new(
+            Schedule::Sequence(Span(srcfile.clone(), lo, hi), scheds))),
     <lo:LParen> "seq" <scheds:Schedule*> <hi:RParen> => 
-        Schedule::Sequence(Span(filename, lo, hi), scheds),
+        Schedule::Sequence(Span(srcfile.clone(), lo, hi), scheds),
     <lo:LParen> "repeat" <limit:UNum> <scheds:Schedule*> <hi:RParen> => 
-        Schedule::Repeat(Span(filename, lo, hi), limit, Box::new(
-            Schedule::Sequence(Span(filename, lo, hi), scheds))),
+        Schedule::Repeat(Span(srcfile.clone(), lo, hi), limit, Box::new(
+            Schedule::Sequence(Span(srcfile.clone(), lo, hi), scheds))),
     <lo:LParen> "run" <until:(":until" <(Fact)*>)?> <hi:RParen> =>
-        Schedule::Run(Span(filename, lo, hi), RunConfig { ruleset: "".into(), until }),
+        Schedule::Run(Span(srcfile.clone(), lo, hi), RunConfig { ruleset: "".into(), until }),
     <lo:LParen> "run" <ruleset: Ident> <until:(":until" <(Fact)*>)?> <hi:RParen> => 
-        Schedule::Run(Span(filename, lo, hi), RunConfig { ruleset, until }),
+        Schedule::Run(Span(srcfile.clone(), lo, hi), RunConfig { ruleset, until }),
     <lo:@L> <ident:Ident> <hi:@R> => 
-        Schedule::Run(Span(filename, lo, hi), RunConfig { ruleset: ident, until: None }),
+        Schedule::Run(Span(srcfile.clone(), lo, hi), RunConfig { ruleset: ident, until: None }),
 }
 
 Cost: Option<usize> = {
@@ -122,18 +122,18 @@ Cost: Option<usize> = {
 }
 
 NonLetAction: Action = {
-    <lo:LParen> "set" LParen <f: Ident> <args:Expr*> RParen <v:Expr> <hi:RParen> => Action::Set ( Span(filename, lo, hi), f, args, v ),
-    <lo:LParen> "delete" LParen <f: Ident> <args:Expr*> RParen <hi:RParen> => Action::Change ( Span(filename, lo, hi), Change::Delete, f, args),
-    <lo:LParen> "subsume" LParen <f: Ident> <args:Expr*> RParen <hi:RParen> => Action::Change ( Span(filename, lo, hi), Change::Subsume, f, args),
-    <lo:LParen> "union" <e1:Expr> <e2:Expr> <hi:RParen> => Action::Union(Span(filename, lo, hi), e1, e2),
-    <lo:LParen> "panic" <msg:String> <hi:RParen> => Action::Panic(Span(filename, lo, hi), msg),
-    <lo:LParen> "extract" <expr:Expr> <hi:RParen> => Action::Extract(Span(filename, lo, hi), expr, Expr::Lit(Span(filename, lo, hi), Literal::Int(0))),
-    <lo:LParen> "extract" <expr:Expr> <variants:Expr> <hi:RParen> => Action::Extract(Span(filename, lo, hi), expr, variants),
-    <lo:@L> <e:CallExpr> <hi:@R> => Action::Expr(Span(filename, lo, hi), e),
+    <lo:LParen> "set" LParen <f: Ident> <args:Expr*> RParen <v:Expr> <hi:RParen> => Action::Set ( Span(srcfile.clone(), lo, hi), f, args, v ),
+    <lo:LParen> "delete" LParen <f: Ident> <args:Expr*> RParen <hi:RParen> => Action::Change ( Span(srcfile.clone(), lo, hi), Change::Delete, f, args),
+    <lo:LParen> "subsume" LParen <f: Ident> <args:Expr*> RParen <hi:RParen> => Action::Change ( Span(srcfile.clone(), lo, hi), Change::Subsume, f, args),
+    <lo:LParen> "union" <e1:Expr> <e2:Expr> <hi:RParen> => Action::Union(Span(srcfile.clone(), lo, hi), e1, e2),
+    <lo:LParen> "panic" <msg:String> <hi:RParen> => Action::Panic(Span(srcfile.clone(), lo, hi), msg),
+    <lo:LParen> "extract" <expr:Expr> <hi:RParen> => Action::Extract(Span(srcfile.clone(), lo, hi), expr, Expr::Lit(Span(srcfile.clone(), lo, hi), Literal::Int(0))),
+    <lo:LParen> "extract" <expr:Expr> <variants:Expr> <hi:RParen> => Action::Extract(Span(srcfile.clone(), lo, hi), expr, variants),
+    <lo:@L> <e:CallExpr> <hi:@R> => Action::Expr(Span(srcfile.clone(), lo, hi), e),
 }
 
 pub Action: Action = {
-    <lo:LParen> "let" <name:Ident> <expr:Expr> <hi:RParen> => Action::Let(Span(filename, lo, hi), name, expr),
+    <lo:LParen> "let" <name:Ident> <expr:Expr> <hi:RParen> => Action::Let(Span(srcfile.clone(), lo, hi), name, expr),
     <NonLetAction> => <>,
 }
 
@@ -142,7 +142,7 @@ Name: Symbol = { "[" <Ident> "]" => <> }
 pub Fact: Fact = {
     <lo:LParen> "=" <mut es:Expr+> <e:Expr> <hi:RParen> => {
         es.push(e);
-        Fact::Eq(Span(filename, lo, hi), es)
+        Fact::Eq(Span(srcfile.clone(), lo, hi), es)
     },
     <CallExpr> => Fact::Fact(<>),
 }
@@ -152,8 +152,8 @@ Schema: Schema = {
 }
 
 pub Expr: Expr = {
-    <lo:@L> <lit:Literal> <hi:@R> => Expr::Lit(Span(filename, lo, hi), lit),
-    <lo:@L> <id:Ident> <hi:@R> => Expr::Var(Span(filename, lo, hi), id),
+    <lo:@L> <lit:Literal> <hi:@R> => Expr::Lit(Span(srcfile.clone(), lo, hi), lit),
+    <lo:@L> <id:Ident> <hi:@R> => Expr::Var(Span(srcfile.clone(), lo, hi), id),
     <CallExpr> => <>,
 };
 
@@ -171,7 +171,7 @@ Bool: bool = {
 }
 
 CallExpr: Expr = {
-    <lo:LParen> <head:Ident> <tail:(Expr)*> <hi:RParen> => Expr::Call(Span(filename, lo, hi), head, tail),
+    <lo:LParen> <head:Ident> <tail:(Expr)*> <hi:RParen> => Expr::Call(Span(srcfile.clone(), lo, hi), head, tail),
 }
 
 ExprList: Vec<Expr> = { LParen <sexps:(Expr)*> RParen => sexps }

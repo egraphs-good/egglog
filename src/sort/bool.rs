@@ -35,7 +35,7 @@ impl Sort for BoolSort {
         assert!(value.tag == self.name());
         (
             1,
-            GenericExpr::Lit(*DUMMY_SPAN, Literal::Bool(value.bits > 0)),
+            GenericExpr::Lit(DUMMY_SPAN.clone(), Literal::Bool(value.bits > 0)),
         )
     }
 }

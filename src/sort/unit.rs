@@ -27,7 +27,7 @@ impl Sort for UnitSort {
 
     fn make_expr(&self, _egraph: &EGraph, value: Value) -> (Cost, Expr) {
         assert_eq!(value.tag, self.name);
-        (1, GenericExpr::Lit(*DUMMY_SPAN, Literal::Unit))
+        (1, GenericExpr::Lit(DUMMY_SPAN.clone(), Literal::Unit))
     }
 }
 
@@ -49,7 +49,7 @@ impl PrimitiveLike for NotEqualPrimitive {
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        AllEqualTypeConstraint::new(self.name(), *span)
+        AllEqualTypeConstraint::new(self.name(), span.clone())
             .with_exact_length(3)
             .with_output_sort(self.unit.clone())
             .into_box()

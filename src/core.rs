@@ -182,9 +182,9 @@ impl<Leaf> GenericAtomTerm<Leaf> {
 impl<Leaf: Clone> GenericAtomTerm<Leaf> {
     pub fn to_expr<Head>(&self) -> GenericExpr<Head, Leaf> {
         match self {
-            GenericAtomTerm::Var(span, v) => GenericExpr::Var(*span, v.clone()),
-            GenericAtomTerm::Literal(span, l) => GenericExpr::Lit(*span, l.clone()),
-            GenericAtomTerm::Global(span, v) => GenericExpr::Var(*span, v.clone()),
+            GenericAtomTerm::Var(span, v) => GenericExpr::Var(span.clone(), v.clone()),
+            GenericAtomTerm::Literal(span, l) => GenericExpr::Lit(span.clone(), l.clone()),
+            GenericAtomTerm::Global(span, v) => GenericExpr::Var(span.clone(), v.clone()),
         }
     }
 }
@@ -255,7 +255,7 @@ impl Atom<Symbol> {
     pub(crate) fn to_expr(&self) -> Expr {
         let n = self.args.len();
         Expr::Call(
-            self.span,
+            self.span.clone(),
             self.head,
             self.args[0..n - 1]
                 .iter()
@@ -352,7 +352,7 @@ impl<Leaf: Clone> Query<ResolvedCall, Leaf> {
         self.atoms.iter().filter_map(|atom| match &atom.head {
             ResolvedCall::Func(_) => None,
             ResolvedCall::Primitive(head) => Some(GenericAtom {
-                span: atom.span,
+                span: atom.span.clone(),
                 head: head.primitive.clone(),
                 args: atom.args.clone(),
             }),
@@ -362,7 +362,7 @@ impl<Leaf: Clone> Query<ResolvedCall, Leaf> {
     pub fn funcs(&self) -> impl Iterator<Item = GenericAtom<Symbol, Leaf>> + '_ {
         self.atoms.iter().filter_map(|atom| match &atom.head {
             ResolvedCall::Func(head) => Some(GenericAtom {
-                span: atom.span,
+                span: atom.span.clone(),
                 head: head.name,
                 args: atom.args.clone(),
             }),
@@ -405,7 +405,7 @@ where
 {
     pub(crate) fn subst(&mut self, subst: &HashMap<Leaf, GenericAtomTerm<Leaf>>) {
         let actions = subst.iter().map(|(symbol, atom_term)| {
-            GenericCoreAction::LetAtomTerm(*atom_term.span(), symbol.clone(), atom_term.clone())
+            GenericCoreAction::LetAtomTerm(atom_term.span().clone(), symbol.clone(), atom_term.clone())
         });
         let existing_actions = std::mem::take(&mut self.0);
         self.0 = actions.chain(existing_actions).collect();
@@ -447,13 +447,13 @@ where
                         expr.to_core_actions(typeinfo, binding, fresh_gen)?;
                     norm_actions.extend(actions.0);
                     norm_actions.push(GenericCoreAction::LetAtomTerm(
-                        *span,
+                        span.clone(),
                         var.clone(),
                         mapped_expr.get_corresponding_var_or_lit(typeinfo),
                     ));
                     mapped_actions
                         .0
-                        .push(GenericAction::Let(*span, var.clone(), mapped_expr));
+                        .push(GenericAction::Let(span.clone(), var.clone(), mapped_expr));
                     binding.insert(var.clone());
                 }
                 GenericAction::Set(span, head, args, expr) => {
@@ -468,7 +468,7 @@ where
                         expr.to_core_actions(typeinfo, binding, fresh_gen)?;
                     norm_actions.extend(actions.0);
                     norm_actions.push(GenericCoreAction::Set(
-                        *span,
+                        span.clone(),
                         head.clone(),
                         mapped_args
                             .iter()
@@ -478,7 +478,7 @@ where
                     ));
                     let v = fresh_gen.fresh(head);
                     mapped_actions.0.push(GenericAction::Set(
-                        *span,
+                        span.clone(),
                         CorrespondingVar::new(head.clone(), v),
                         mapped_args,
                         mapped_expr,
@@ -493,7 +493,7 @@ where
                         mapped_args.push(mapped_arg);
                     }
                     norm_actions.push(GenericCoreAction::Change(
-                        *span,
+                        span.clone(),
                         *change,
                         head.clone(),
                         mapped_args
@@ -503,7 +503,7 @@ where
                     ));
                     let v = fresh_gen.fresh(head);
                     mapped_actions.0.push(GenericAction::Change(
-                        *span,
+                        span.clone(),
                         *change,
                         CorrespondingVar::new(head.clone(), v),
                         mapped_args,
@@ -515,13 +515,13 @@ where
                     let (actions2, mapped_e2) = e2.to_core_actions(typeinfo, binding, fresh_gen)?;
                     norm_actions.extend(actions2.0);
                     norm_actions.push(GenericCoreAction::Union(
-                        *span,
+                        span.clone(),
                         mapped_e1.get_corresponding_var_or_lit(typeinfo),
                         mapped_e2.get_corresponding_var_or_lit(typeinfo),
                     ));
                     mapped_actions
                         .0
-                        .push(GenericAction::Union(*span, mapped_e1, mapped_e2));
+                        .push(GenericAction::Union(span.clone(), mapped_e1, mapped_e2));
                 }
                 GenericAction::Extract(span, e, n) => {
                     let (actions, mapped_e) = e.to_core_actions(typeinfo, binding, fresh_gen)?;
@@ -529,19 +529,19 @@ where
                     let (actions, mapped_n) = n.to_core_actions(typeinfo, binding, fresh_gen)?;
                     norm_actions.extend(actions.0);
                     norm_actions.push(GenericCoreAction::Extract(
-                        *span,
+                        span.clone(),
                         mapped_e.get_corresponding_var_or_lit(typeinfo),
                         mapped_n.get_corresponding_var_or_lit(typeinfo),
                     ));
                     mapped_actions
                         .0
-                        .push(GenericAction::Extract(*span, mapped_e, mapped_n));
+                        .push(GenericAction::Extract(span.clone(), mapped_e, mapped_n));
                 }
                 GenericAction::Panic(span, string) => {
-                    norm_actions.push(GenericCoreAction::Panic(*span, string.clone()));
+                    norm_actions.push(GenericCoreAction::Panic(span.clone(), string.clone()));
                     mapped_actions
                         .0
-                        .push(GenericAction::Panic(*span, string.clone()));
+                        .push(GenericAction::Panic(span.clone(), string.clone()));
                 }
                 GenericAction::Expr(span, expr) => {
                     let (actions, mapped_expr) =
@@ -549,7 +549,7 @@ where
                     norm_actions.extend(actions.0);
                     mapped_actions
                         .0
-                        .push(GenericAction::Expr(*span, mapped_expr));
+                        .push(GenericAction::Expr(span.clone(), mapped_expr));
                 }
             }
         }
@@ -574,8 +574,8 @@ where
         Leaf: SymbolLike,
     {
         match self {
-            GenericExpr::Lit(span, lit) => (vec![], GenericExpr::Lit(*span, lit.clone())),
-            GenericExpr::Var(span, v) => (vec![], GenericExpr::Var(*span, v.clone())),
+            GenericExpr::Lit(span, lit) => (vec![], GenericExpr::Lit(span.clone(), lit.clone())),
+            GenericExpr::Var(span, v) => (vec![], GenericExpr::Var(span.clone(), v.clone())),
             GenericExpr::Call(span, f, children) => {
                 let fresh = fresh_gen.fresh(f);
                 let mut new_children = vec![];
@@ -589,17 +589,17 @@ where
                     child_exprs.push(child_expr);
                 }
                 let args = {
-                    new_children.push(GenericAtomTerm::Var(*span, fresh.clone()));
+                    new_children.push(GenericAtomTerm::Var(span.clone(), fresh.clone()));
                     new_children
                 };
                 atoms.push(GenericAtom {
-                    span: *span,
+                    span: span.clone(),
                     head: HeadOrEq::Symbol(f.clone()),
                     args,
                 });
                 (
                     atoms,
-                    GenericExpr::Call(*span, CorrespondingVar::new(f.clone(), fresh), child_exprs),
+                    GenericExpr::Call(span.clone(), CorrespondingVar::new(f.clone(), fresh), child_exprs),
                 )
             }
         }
@@ -617,14 +617,14 @@ where
         match self {
             GenericExpr::Lit(span, lit) => Ok((
                 GenericCoreActions::default(),
-                GenericExpr::Lit(*span, lit.clone()),
+                GenericExpr::Lit(span.clone(), lit.clone()),
             )),
             GenericExpr::Var(span, v) => {
                 let sym = v.to_symbol();
                 if binding.contains(v) || typeinfo.is_global(sym) {
                     Ok((
                         GenericCoreActions::default(),
-                        GenericExpr::Var(*span, v.clone()),
+                        GenericExpr::Var(span.clone(), v.clone()),
                     ))
                 } else {
                     Err(TypeError::Unbound(sym))
@@ -646,14 +646,14 @@ where
                 binding.insert(var.clone());
 
                 norm_actions.push(GenericCoreAction::Let(
-                    *span,
+                    span.clone(),
                     var.clone(),
                     f.clone(),
                     norm_args,
                 ));
                 Ok((
                     GenericCoreActions::new(norm_actions),
-                    GenericExpr::Call(*span, CorrespondingVar::new(f.clone(), var), mapped_args),
+                    GenericExpr::Call(span.clone(), CorrespondingVar::new(f.clone(), var), mapped_args),
                 ))
             }
         }
@@ -747,12 +747,12 @@ where
                                 None
                             } else {
                                 Some(GenericAtom {
-                                    span: atom.span,
+                                    span: atom.span.clone(),
                                     head: value_eq(&atom.args[0], &atom.args[1]),
                                     args: vec![
                                         atom.args[0].clone(),
                                         atom.args[1].clone(),
-                                        GenericAtomTerm::Literal(atom.span, Literal::Unit),
+                                        GenericAtomTerm::Literal(atom.span.clone(), Literal::Unit),
                                     ],
                                 })
                             }
@@ -760,7 +760,7 @@ where
                     }
                 }
                 HeadOrEq::Symbol(symbol) => Some(GenericAtom {
-                    span: atom.span,
+                    span: atom.span.clone(),
                     head: symbol,
                     args: atom.args,
                 }),
@@ -798,7 +798,7 @@ where
         let (head, _correspondence) =
             head.to_core_actions(typeinfo, &mut binding, &mut fresh_gen)?;
         Ok(GenericCoreRule {
-            span: self.span,
+            span: self.span.clone(),
             body,
             head,
         })

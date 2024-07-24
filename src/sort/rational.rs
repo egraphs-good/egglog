@@ -120,8 +120,8 @@ impl Sort for RationalSort {
             Expr::call_no_span(
                 "rational",
                 vec![
-                    GenericExpr::Lit(*DUMMY_SPAN, Literal::Int(numer)),
-                    GenericExpr::Lit(*DUMMY_SPAN, Literal::Int(denom)),
+                    GenericExpr::Lit(DUMMY_SPAN.clone(), Literal::Int(numer)),
+                    GenericExpr::Lit(DUMMY_SPAN.clone(), Literal::Int(denom)),
                 ],
             ),
         )

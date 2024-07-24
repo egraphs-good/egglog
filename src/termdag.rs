@@ -236,7 +236,7 @@ mod tests {
         let (td, t) = parse_term(s);
         match_term_app!(t; {
             ("f", [_, x, _, _]) =>
-                assert_eq!(td.term_to_expr(&td.get(*x)), ast::GenericExpr::Var(*DUMMY_SPAN, Symbol::new("x"))),
+                assert_eq!(td.term_to_expr(&td.get(*x)), ast::GenericExpr::Var(DUMMY_SPAN.clone(), Symbol::new("x"))),
             (head, _) => panic!("unexpected head {}, in {}:{}:{}", head, file!(), line!(), column!())
         })
     }

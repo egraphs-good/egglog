@@ -78,7 +78,7 @@ impl Sort for I64Sort {
         assert!(value.tag == self.name());
         (
             1,
-            GenericExpr::Lit(*DUMMY_SPAN, Literal::Int(value.bits as _)),
+            GenericExpr::Lit(DUMMY_SPAN.clone(), Literal::Int(value.bits as _)),
         )
     }
 }
@@ -112,7 +112,7 @@ impl PrimitiveLike for CountMatches {
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        AllEqualTypeConstraint::new(self.name(), *span)
+        AllEqualTypeConstraint::new(self.name(), span.clone())
             .with_all_arguments_sort(self.string.clone())
             .with_exact_length(3)
             .with_output_sort(self.int.clone())

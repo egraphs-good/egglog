@@ -58,7 +58,7 @@ impl Sort for F64Sort {
         (
             1,
             GenericExpr::Lit(
-                *DUMMY_SPAN,
+                DUMMY_SPAN.clone(),
                 Literal::F64(OrderedFloat(f64::from_bits(value.bits))),
             ),
         )

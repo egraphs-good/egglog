@@ -55,15 +55,27 @@ pub(crate) enum Ruleset {
 pub(crate) const DEFAULT_FILENAME: &str = "<unnamed.egg>";
 pub(crate) const DUMMY_FILENAME: &str = "<internal.egg>";
 
-/// A [`Span`] contains the file name and a pair of offsets representing the start and the end.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Span(pub Symbol, pub usize, pub usize);
-
-lazy_static! {
-    pub(crate) static ref DUMMY_SPAN: Span = Span(Symbol::from(DUMMY_FILENAME), 0, 0);
+pub struct SrcFile {
+    pub name: String,
+    pub contents: Option<String>,
 }
 
-impl Copy for Span {}
+/// A [`Span`] contains the file name and a pair of offsets representing the start and the end.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Span(pub Arc<SrcFile>, pub usize, pub usize);
+
+lazy_static! {
+    pub(crate) static ref DUMMY_FILE: Arc<SrcFile> = Arc::new(SrcFile {
+        name: DUMMY_FILENAME.to_string(),
+        contents: None
+    });
+    pub(crate) static ref DUMMY_SPAN: Span = Span(
+        DUMMY_FILE.clone(),
+        0,
+        0
+    );
+}
 
 pub type NCommand = GenericNCommand<Symbol, Symbol>;
 /// [`ResolvedNCommand`] is another specialization of [`GenericNCommand`], which
@@ -150,7 +162,7 @@ where
             GenericNCommand::RunSchedule(schedule) => GenericCommand::RunSchedule(schedule.clone()),
             GenericNCommand::PrintOverallStatistics => GenericCommand::PrintOverallStatistics,
             GenericNCommand::CoreAction(action) => GenericCommand::Action(action.clone()),
-            GenericNCommand::Check(span, facts) => GenericCommand::Check(*span, facts.clone()),
+            GenericNCommand::Check(span, facts) => GenericCommand::Check(span.clone(), facts.clone()),
             GenericNCommand::CheckProof => GenericCommand::CheckProof,
             GenericNCommand::PrintTable(name, n) => GenericCommand::PrintFunction(*name, *n),
             GenericNCommand::PrintSize(name) => GenericCommand::PrintSize(*name),
@@ -923,7 +935,7 @@ impl FunctionDecl {
             },
             merge: None,
             merge_action: Actions::default(),
-            default: Some(Expr::Lit(*DUMMY_SPAN, Literal::Unit)),
+            default: Some(Expr::Lit(DUMMY_SPAN.clone(), Literal::Unit)),
             cost: None,
             unextractable: false,
             ignore_viz: false,
@@ -1060,11 +1072,11 @@ where
                         new_exprs.push(expr);
                     }
                     atoms.push(GenericAtom {
-                        span: *span,
+                        span: span.clone(),
                         head: HeadOrEq::Eq,
                         args: to_equate,
                     });
-                    new_body.push(GenericFact::Eq(*span, new_exprs));
+                    new_body.push(GenericFact::Eq(span.clone(), new_exprs));
                 }
                 GenericFact::Fact(expr) => {
                     let (child_atoms, expr) = expr.to_query(typeinfo, fresh_gen);
@@ -1113,7 +1125,7 @@ where
         f: &mut impl FnMut(&GenericExpr<Head, Leaf>) -> GenericExpr<Head2, Leaf2>,
     ) -> GenericFact<Head2, Leaf2> {
         match self {
-            GenericFact::Eq(span, exprs) => GenericFact::Eq(*span, exprs.iter().map(f).collect()),
+            GenericFact::Eq(span, exprs) => GenericFact::Eq(span.clone(), exprs.iter().map(f).collect()),
             GenericFact::Fact(expr) => GenericFact::Fact(f(expr)),
         }
     }
@@ -1138,7 +1150,7 @@ where
         Head: SymbolLike,
     {
         self.subst(
-            &mut |span, v| GenericExpr::Var(*span, v.to_symbol()),
+            &mut |span, v| GenericExpr::Var(span.clone(), v.to_symbol()),
             &mut |h| h.to_symbol(),
         )
     }
@@ -1328,20 +1340,20 @@ where
         f: &mut impl FnMut(&GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
     ) -> Self {
         match self {
-            GenericAction::Let(span, lhs, rhs) => GenericAction::Let(*span, lhs.clone(), f(rhs)),
+            GenericAction::Let(span, lhs, rhs) => GenericAction::Let(span.clone(), lhs.clone(), f(rhs)),
             GenericAction::Set(span, lhs, args, rhs) => {
                 let right = f(rhs);
-                GenericAction::Set(*span, lhs.clone(), args.iter().map(f).collect(), right)
+                GenericAction::Set(span.clone(), lhs.clone(), args.iter().map(f).collect(), right)
             }
             GenericAction::Change(span, change, lhs, args) => {
-                GenericAction::Change(*span, *change, lhs.clone(), args.iter().map(f).collect())
+                GenericAction::Change(span.clone(), *change, lhs.clone(), args.iter().map(f).collect())
             }
-            GenericAction::Union(span, lhs, rhs) => GenericAction::Union(*span, f(lhs), f(rhs)),
+            GenericAction::Union(span, lhs, rhs) => GenericAction::Union(span.clone(), f(lhs), f(rhs)),
             GenericAction::Extract(span, expr, variants) => {
-                GenericAction::Extract(*span, f(expr), f(variants))
+                GenericAction::Extract(span.clone(), f(expr), f(variants))
             }
-            GenericAction::Panic(span, msg) => GenericAction::Panic(*span, msg.clone()),
-            GenericAction::Expr(span, e) => GenericAction::Expr(*span, f(e)),
+            GenericAction::Panic(span, msg) => GenericAction::Panic(span.clone(), msg.clone()),
+            GenericAction::Expr(span, e) => GenericAction::Expr(span.clone(), f(e)),
         }
     }
 
@@ -1622,13 +1634,13 @@ where
         match self {
             GenericExpr::Var(span, v) => {
                 if typeinfo.is_global(v.to_symbol()) {
-                    GenericAtomTerm::Global(*span, v.clone())
+                    GenericAtomTerm::Global(span.clone(), v.clone())
                 } else {
-                    GenericAtomTerm::Var(*span, v.clone())
+                    GenericAtomTerm::Var(span.clone(), v.clone())
                 }
             }
-            GenericExpr::Lit(span, lit) => GenericAtomTerm::Literal(*span, lit.clone()),
-            GenericExpr::Call(span, head, _) => GenericAtomTerm::Var(*span, head.to.clone()),
+            GenericExpr::Lit(span, lit) => GenericAtomTerm::Literal(span.clone(), lit.clone()),
+            GenericExpr::Call(span, head, _) => GenericAtomTerm::Var(span.clone(), head.to.clone()),
         }
     }
 }

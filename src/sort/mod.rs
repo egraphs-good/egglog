@@ -171,7 +171,7 @@ impl PrimitiveLike for ValueEq {
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        AllEqualTypeConstraint::new(self.name(), *span)
+        AllEqualTypeConstraint::new(self.name(), span.clone())
             .with_exact_length(3)
             .with_output_sort(self.unit.clone())
             .into_box()

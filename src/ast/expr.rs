@@ -141,24 +141,24 @@ impl ResolvedExpr {
 
 impl Expr {
     pub fn call_no_span(op: impl Into<Symbol>, children: impl IntoIterator<Item = Self>) -> Self {
-        Self::Call(*DUMMY_SPAN, op.into(), children.into_iter().collect())
+        Self::Call(DUMMY_SPAN.clone(), op.into(), children.into_iter().collect())
     }
 
     pub fn lit_no_span(lit: impl Into<Literal>) -> Self {
-        Self::Lit(*DUMMY_SPAN, lit.into())
+        Self::Lit(DUMMY_SPAN.clone(), lit.into())
     }
 
     pub fn var_no_span(v: impl Into<Symbol>) -> Self {
-        Self::Var(*DUMMY_SPAN, v.into())
+        Self::Var(DUMMY_SPAN.clone(), v.into())
     }
 }
 
 impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq> GenericExpr<Head, Leaf> {
     pub fn span(&self) -> Span {
         match self {
-            GenericExpr::Lit(span, _) => *span,
-            GenericExpr::Var(span, _) => *span,
-            GenericExpr::Call(span, _, _) => *span,
+            GenericExpr::Lit(span, _) => span.clone(),
+            GenericExpr::Var(span, _) => span.clone(),
+            GenericExpr::Call(span, _, _) => span.clone(),
         }
     }
 
@@ -219,14 +219,14 @@ impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq> GenericExpr<Head,
         subst_head: &mut impl FnMut(&Head) -> Head2,
     ) -> GenericExpr<Head2, Leaf2> {
         match self {
-            GenericExpr::Lit(span, lit) => GenericExpr::Lit(*span, lit.clone()),
+            GenericExpr::Lit(span, lit) => GenericExpr::Lit(span.clone(), lit.clone()),
             GenericExpr::Var(span, v) => subst_leaf(span, v),
             GenericExpr::Call(span, op, children) => {
                 let children = children
                     .iter()
                     .map(|c| c.subst(subst_leaf, subst_head))
                     .collect();
-                GenericExpr::Call(*span, subst_head(op), children)
+                GenericExpr::Call(span.clone(), subst_head(op), children)
             }
         }
     }
@@ -282,7 +282,7 @@ where
 pub(crate) fn parse_expr(s: &str) -> Result<Expr, lalrpop_util::ParseError<usize, String, String>> {
     let parser = ast::parse::ExprParser::new();
     parser
-        .parse(DEFAULT_FILENAME.into(), s)
+        .parse(&SrcFile::dummy(), s)
         .map_err(|e| e.map_token(|tok| tok.to_string()))
 }
 

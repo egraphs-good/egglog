@@ -126,7 +126,7 @@ impl<'a> GlobalRemover<'a> {
                         // output is eq-able, so generate a union
                         if ty.is_eq_sort() {
                             GenericNCommand::CoreAction(GenericAction::Union(
-                                span,
+                                span.clone(),
                                 GenericExpr::Call(span, resolved_call, vec![]),
                                 remove_globals_expr(expr),
                             ))
