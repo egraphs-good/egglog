@@ -338,7 +338,12 @@ impl Assignment<AtomTerm, ArcSort> {
                 if !matches!(resolved_call, ResolvedCall::Func(_)) {
                     return Err(TypeError::UnboundFunction(*head));
                 }
-                Ok(ResolvedAction::Set(span.clone(), resolved_call, children, rhs))
+                Ok(ResolvedAction::Set(
+                    span.clone(),
+                    resolved_call,
+                    children,
+                    rhs,
+                ))
             }
             // Note mapped_var for delete is a dummy variable that does not mean anything
             GenericAction::Change(
@@ -550,7 +555,10 @@ impl CoreAction {
             CoreAction::Panic(_ann, _) => Ok(vec![]),
             CoreAction::LetAtomTerm(span, v, at) => {
                 Ok(get_literal_and_global_constraints(&[at.clone()], typeinfo)
-                    .chain(once(Constraint::Eq(AtomTerm::Var(span.clone(), *v), at.clone())))
+                    .chain(once(Constraint::Eq(
+                        AtomTerm::Var(span.clone(), *v),
+                        at.clone(),
+                    )))
                     .collect())
             }
         }

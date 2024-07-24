@@ -211,8 +211,12 @@ impl PrimitiveLike for MapRebuild {
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(self.name(), vec![self.map.clone(), self.map.clone()], span.clone())
-            .into_box()
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![self.map.clone(), self.map.clone()],
+            span.clone(),
+        )
+        .into_box()
     }
 
     fn apply(&self, values: &[Value], egraph: Option<&mut EGraph>) -> Option<Value> {
@@ -452,8 +456,12 @@ impl PrimitiveLike for Length {
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(self.name(), vec![self.map.clone(), self.i64.clone()], span.clone())
-            .into_box()
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![self.map.clone(), self.i64.clone()],
+            span.clone(),
+        )
+        .into_box()
     }
 
     fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {

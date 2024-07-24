@@ -289,9 +289,10 @@ impl TypeInfo {
                     .collect::<Result<Vec<_>, _>>()?;
                 ResolvedSchedule::Sequence(span.clone(), schedules)
             }
-            Schedule::Saturate(span, schedule) => {
-                ResolvedSchedule::Saturate(span.clone(), Box::new(self.typecheck_schedule(schedule)?))
-            }
+            Schedule::Saturate(span, schedule) => ResolvedSchedule::Saturate(
+                span.clone(),
+                Box::new(self.typecheck_schedule(schedule)?),
+            ),
             Schedule::Run(span, RunConfig { ruleset, until }) => {
                 let until = until
                     .as_ref()

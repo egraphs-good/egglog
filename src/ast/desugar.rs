@@ -55,8 +55,12 @@ fn desugar_rewrite(
     if subsume {
         match &rewrite.lhs {
             Expr::Call(_, f, args) => {
-                head.0
-                    .push(Action::Change(span.clone(), Change::Subsume, *f, args.to_vec()));
+                head.0.push(Action::Change(
+                    span.clone(),
+                    Change::Subsume,
+                    *f,
+                    args.to_vec(),
+                ));
             }
             _ => {
                 panic!("Subsumed rewrite must have a function call on the lhs");
@@ -155,7 +159,11 @@ fn desugar_simplify(desugar: &mut Desugar, expr: &Expr, schedule: &Schedule) -> 
     let span = expr.span();
     let mut res = vec![NCommand::Push(1)];
     let lhs = desugar.get_fresh();
-    res.push(NCommand::CoreAction(Action::Let(span.clone(), lhs, expr.clone())));
+    res.push(NCommand::CoreAction(Action::Let(
+        span.clone(),
+        lhs,
+        expr.clone(),
+    )));
     res.push(NCommand::RunSchedule(schedule.clone()));
     res.extend(
         desugar_command(
@@ -212,7 +220,10 @@ pub(crate) fn desugar_calc(
                 span.clone(),
                 RunConfig {
                     ruleset: "".into(),
-                    until: Some(vec![Fact::Eq(span.clone(), vec![expr1.clone(), expr2.clone()])]),
+                    until: Some(vec![Fact::Eq(
+                        span.clone(),
+                        vec![expr1.clone(), expr2.clone()],
+                    )]),
                 },
             )),
         )));
@@ -440,7 +451,11 @@ impl Desugar {
                 unextractable: false,
                 ignore_viz: false,
             }),
-            NCommand::CoreAction(Action::Let(span.clone(), name, Expr::Call(span.clone(), fresh, vec![]))),
+            NCommand::CoreAction(Action::Let(
+                span.clone(),
+                name,
+                Expr::Call(span.clone(), fresh, vec![]),
+            )),
         ]
     }
 

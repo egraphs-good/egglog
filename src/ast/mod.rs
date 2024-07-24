@@ -70,11 +70,7 @@ lazy_static! {
         name: DUMMY_FILENAME.to_string(),
         contents: None
     });
-    pub(crate) static ref DUMMY_SPAN: Span = Span(
-        DUMMY_FILE.clone(),
-        0,
-        0
-    );
+    pub(crate) static ref DUMMY_SPAN: Span = Span(DUMMY_FILE.clone(), 0, 0);
 }
 
 pub type NCommand = GenericNCommand<Symbol, Symbol>;
@@ -162,7 +158,9 @@ where
             GenericNCommand::RunSchedule(schedule) => GenericCommand::RunSchedule(schedule.clone()),
             GenericNCommand::PrintOverallStatistics => GenericCommand::PrintOverallStatistics,
             GenericNCommand::CoreAction(action) => GenericCommand::Action(action.clone()),
-            GenericNCommand::Check(span, facts) => GenericCommand::Check(span.clone(), facts.clone()),
+            GenericNCommand::Check(span, facts) => {
+                GenericCommand::Check(span.clone(), facts.clone())
+            }
             GenericNCommand::CheckProof => GenericCommand::CheckProof,
             GenericNCommand::PrintTable(name, n) => GenericCommand::PrintFunction(*name, *n),
             GenericNCommand::PrintSize(name) => GenericCommand::PrintSize(*name),
@@ -1125,7 +1123,9 @@ where
         f: &mut impl FnMut(&GenericExpr<Head, Leaf>) -> GenericExpr<Head2, Leaf2>,
     ) -> GenericFact<Head2, Leaf2> {
         match self {
-            GenericFact::Eq(span, exprs) => GenericFact::Eq(span.clone(), exprs.iter().map(f).collect()),
+            GenericFact::Eq(span, exprs) => {
+                GenericFact::Eq(span.clone(), exprs.iter().map(f).collect())
+            }
             GenericFact::Fact(expr) => GenericFact::Fact(f(expr)),
         }
     }
@@ -1340,15 +1340,27 @@ where
         f: &mut impl FnMut(&GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
     ) -> Self {
         match self {
-            GenericAction::Let(span, lhs, rhs) => GenericAction::Let(span.clone(), lhs.clone(), f(rhs)),
+            GenericAction::Let(span, lhs, rhs) => {
+                GenericAction::Let(span.clone(), lhs.clone(), f(rhs))
+            }
             GenericAction::Set(span, lhs, args, rhs) => {
                 let right = f(rhs);
-                GenericAction::Set(span.clone(), lhs.clone(), args.iter().map(f).collect(), right)
+                GenericAction::Set(
+                    span.clone(),
+                    lhs.clone(),
+                    args.iter().map(f).collect(),
+                    right,
+                )
             }
-            GenericAction::Change(span, change, lhs, args) => {
-                GenericAction::Change(span.clone(), *change, lhs.clone(), args.iter().map(f).collect())
+            GenericAction::Change(span, change, lhs, args) => GenericAction::Change(
+                span.clone(),
+                *change,
+                lhs.clone(),
+                args.iter().map(f).collect(),
+            ),
+            GenericAction::Union(span, lhs, rhs) => {
+                GenericAction::Union(span.clone(), f(lhs), f(rhs))
             }
-            GenericAction::Union(span, lhs, rhs) => GenericAction::Union(span.clone(), f(lhs), f(rhs)),
             GenericAction::Extract(span, expr, variants) => {
                 GenericAction::Extract(span.clone(), f(expr), f(variants))
             }

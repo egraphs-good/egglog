@@ -141,7 +141,11 @@ impl ResolvedExpr {
 
 impl Expr {
     pub fn call_no_span(op: impl Into<Symbol>, children: impl IntoIterator<Item = Self>) -> Self {
-        Self::Call(DUMMY_SPAN.clone(), op.into(), children.into_iter().collect())
+        Self::Call(
+            DUMMY_SPAN.clone(),
+            op.into(),
+            children.into_iter().collect(),
+        )
     }
 
     pub fn lit_no_span(lit: impl Into<Literal>) -> Self {

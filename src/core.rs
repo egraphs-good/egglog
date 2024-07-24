@@ -405,7 +405,11 @@ where
 {
     pub(crate) fn subst(&mut self, subst: &HashMap<Leaf, GenericAtomTerm<Leaf>>) {
         let actions = subst.iter().map(|(symbol, atom_term)| {
-            GenericCoreAction::LetAtomTerm(atom_term.span().clone(), symbol.clone(), atom_term.clone())
+            GenericCoreAction::LetAtomTerm(
+                atom_term.span().clone(),
+                symbol.clone(),
+                atom_term.clone(),
+            )
         });
         let existing_actions = std::mem::take(&mut self.0);
         self.0 = actions.chain(existing_actions).collect();
@@ -451,9 +455,11 @@ where
                         var.clone(),
                         mapped_expr.get_corresponding_var_or_lit(typeinfo),
                     ));
-                    mapped_actions
-                        .0
-                        .push(GenericAction::Let(span.clone(), var.clone(), mapped_expr));
+                    mapped_actions.0.push(GenericAction::Let(
+                        span.clone(),
+                        var.clone(),
+                        mapped_expr,
+                    ));
                     binding.insert(var.clone());
                 }
                 GenericAction::Set(span, head, args, expr) => {
@@ -599,7 +605,11 @@ where
                 });
                 (
                     atoms,
-                    GenericExpr::Call(span.clone(), CorrespondingVar::new(f.clone(), fresh), child_exprs),
+                    GenericExpr::Call(
+                        span.clone(),
+                        CorrespondingVar::new(f.clone(), fresh),
+                        child_exprs,
+                    ),
                 )
             }
         }
@@ -653,7 +663,11 @@ where
                 ));
                 Ok((
                     GenericCoreActions::new(norm_actions),
-                    GenericExpr::Call(span.clone(), CorrespondingVar::new(f.clone(), var), mapped_args),
+                    GenericExpr::Call(
+                        span.clone(),
+                        CorrespondingVar::new(f.clone(), var),
+                        mapped_args,
+                    ),
                 ))
             }
         }
