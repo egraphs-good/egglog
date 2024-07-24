@@ -2,7 +2,6 @@ use std::path::PathBuf;
 
 use egglog::*;
 use libtest_mimic::Trial;
-use symbol_table::GlobalSymbol as Symbol;
 
 #[derive(Clone)]
 struct Run {
@@ -18,7 +17,7 @@ impl Run {
 
         if !self.resugar {
             self.test_program(
-                self.path.to_str().map(Symbol::from),
+                self.path.to_str().map(String::from),
                 &program,
                 "Top level error",
             );
@@ -27,7 +26,7 @@ impl Run {
             egraph.run_mode = RunMode::ShowDesugaredEgglog;
             egraph.set_reserved_symbol("__".into());
             let desugared_str = egraph
-                .parse_and_run_program(self.path.to_str().map(Symbol::from), &program)
+                .parse_and_run_program(self.path.to_str().map(String::from), &program)
                 .unwrap()
                 .join("\n");
 
@@ -39,7 +38,7 @@ impl Run {
         }
     }
 
-    fn test_program(&self, filename: Option<Symbol>, program: &str, message: &str) {
+    fn test_program(&self, filename: Option<String>, program: &str, message: &str) {
         let mut egraph = EGraph::default();
         egraph.set_reserved_symbol("___".into());
         match egraph.parse_and_run_program(filename, program) {

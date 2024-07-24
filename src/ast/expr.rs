@@ -282,7 +282,7 @@ where
 pub(crate) fn parse_expr(s: &str) -> Result<Expr, lalrpop_util::ParseError<usize, String, String>> {
     let parser = ast::parse::ExprParser::new();
     parser
-        .parse(&SrcFile::dummy(), s)
+        .parse(&DUMMY_FILE, s)
         .map_err(|e| e.map_token(|tok| tok.to_string()))
 }
 
