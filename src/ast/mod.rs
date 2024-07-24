@@ -61,9 +61,81 @@ pub struct SrcFile {
     pub contents: Option<String>,
 }
 
+pub struct Location {
+    pub line: usize,
+    pub col: usize,
+}
+
+pub enum Quote {
+    Quote {
+        quote: String,
+        start: Location,
+        end: Location,
+    },
+    NotAvailable,
+}
+
+impl Display for Quote {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Quote::Quote {
+                quote,
+                start,
+                end,
+            } => {
+                if start.line == end.line {
+                    write!(
+                        f,
+                        "In {}:{}-{}: {}",
+                        start.line, start.col, end.col, quote
+                    )
+                } else {
+                    write!(
+                        f,
+                        "In {}:{}-{}:{}: {}",
+                        start.line, start.col, end.line, end.col, quote
+                    )
+                }
+            }
+            Quote::NotAvailable => write!(f, "In <Unknown>"),
+        }
+    }
+}
+
+impl SrcFile {
+    pub fn get_location(&self, offset: usize) -> Location {
+        let mut line = 1;
+        let mut col = 1;
+        for (i, c) in self.contents.as_ref().unwrap().chars().enumerate() {
+            if i == offset {
+                break;
+            }
+            if c == '\n' {
+                line += 1;
+                col = 1;
+            } else {
+                col += 1;
+            }
+        }
+        Location { line, col }
+    }
+}
+
 /// A [`Span`] contains the file name and a pair of offsets representing the start and the end.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Span(pub Arc<SrcFile>, pub usize, pub usize);
+
+impl Span {
+    pub fn get_quote(&self) -> Quote {
+        let Some(contents) = self.0.contents.as_ref() else {
+            return Quote::NotAvailable;
+        };
+        let start = self.0.get_location(self.1);
+        let end = self.0.get_location(self.2 - 1);
+        let quote = contents[self.1..self.2].to_string();
+        Quote::Quote { quote, start, end }
+    }
+}
 
 lazy_static! {
     pub(crate) static ref DUMMY_FILE: Arc<SrcFile> = Arc::new(SrcFile {
@@ -114,16 +186,18 @@ where
     PrintOverallStatistics,
     Check(Span, Vec<GenericFact<Head, Leaf>>),
     CheckProof,
-    PrintTable(Symbol, usize),
-    PrintSize(Option<Symbol>),
+    PrintTable(Span, Symbol, usize),
+    PrintSize(Span, Option<Symbol>),
     Output {
+        span: Span,
         file: String,
         exprs: Vec<GenericExpr<Head, Leaf>>,
     },
     Push(usize),
-    Pop(usize),
-    Fail(Box<GenericNCommand<Head, Leaf>>),
+    Pop(Span, usize),
+    Fail(Span, Box<GenericNCommand<Head, Leaf>>),
     Input {
+        span: Span,
         name: Symbol,
         file: String,
     },
@@ -162,16 +236,24 @@ where
                 GenericCommand::Check(span.clone(), facts.clone())
             }
             GenericNCommand::CheckProof => GenericCommand::CheckProof,
-            GenericNCommand::PrintTable(name, n) => GenericCommand::PrintFunction(*name, *n),
-            GenericNCommand::PrintSize(name) => GenericCommand::PrintSize(*name),
-            GenericNCommand::Output { file, exprs } => GenericCommand::Output {
+            GenericNCommand::PrintTable(span, name, n) => {
+                GenericCommand::PrintFunction(span.clone(), *name, *n)
+            }
+            GenericNCommand::PrintSize(span, name) => {
+                GenericCommand::PrintSize(span.clone(), *name)
+            }
+            GenericNCommand::Output { span, file, exprs } => GenericCommand::Output {
+                span: span.clone(),
                 file: file.to_string(),
                 exprs: exprs.clone(),
             },
             GenericNCommand::Push(n) => GenericCommand::Push(*n),
-            GenericNCommand::Pop(n) => GenericCommand::Pop(*n),
-            GenericNCommand::Fail(cmd) => GenericCommand::Fail(Box::new(cmd.to_command())),
-            GenericNCommand::Input { name, file } => GenericCommand::Input {
+            GenericNCommand::Pop(span, n) => GenericCommand::Pop(span.clone(), *n),
+            GenericNCommand::Fail(span, cmd) => {
+                GenericCommand::Fail(span.clone(), Box::new(cmd.to_command()))
+            }
+            GenericNCommand::Input { span, name, file } => GenericCommand::Input {
+                span: span.clone(),
                 name: *name,
                 file: file.clone(),
             },
@@ -214,16 +296,23 @@ where
                 facts.into_iter().map(|fact| fact.visit_exprs(f)).collect(),
             ),
             GenericNCommand::CheckProof => GenericNCommand::CheckProof,
-            GenericNCommand::PrintTable(name, n) => GenericNCommand::PrintTable(name, n),
-            GenericNCommand::PrintSize(name) => GenericNCommand::PrintSize(name),
-            GenericNCommand::Output { file, exprs } => GenericNCommand::Output {
+            GenericNCommand::PrintTable(span, name, n) => {
+                GenericNCommand::PrintTable(span, name, n)
+            }
+            GenericNCommand::PrintSize(span, name) => GenericNCommand::PrintSize(span, name),
+            GenericNCommand::Output { span, file, exprs } => GenericNCommand::Output {
+                span,
                 file,
                 exprs: exprs.into_iter().map(f).collect(),
             },
             GenericNCommand::Push(n) => GenericNCommand::Push(n),
-            GenericNCommand::Pop(n) => GenericNCommand::Pop(n),
-            GenericNCommand::Fail(cmd) => GenericNCommand::Fail(Box::new(cmd.visit_exprs(f))),
-            GenericNCommand::Input { name, file } => GenericNCommand::Input { name, file },
+            GenericNCommand::Pop(span, n) => GenericNCommand::Pop(span, n),
+            GenericNCommand::Fail(span, cmd) => {
+                GenericNCommand::Fail(span, Box::new(cmd.visit_exprs(f)))
+            }
+            GenericNCommand::Input { span, name, file } => {
+                GenericNCommand::Input { span, name, file }
+            }
         }
     }
 }
@@ -618,6 +707,7 @@ where
     PrintOverallStatistics,
     // TODO provide simplify docs
     Simplify {
+        span: Span,
         expr: GenericExpr<Head, Leaf>,
         schedule: GenericSchedule<Head, Leaf>,
     },
@@ -649,6 +739,7 @@ where
     /// Under the hood, this command is implemented with the [`EGraph::extract`]
     /// function.
     QueryExtract {
+        span: Span,
         variants: usize,
         expr: GenericExpr<Head, Leaf>,
     },
@@ -682,16 +773,18 @@ where
     /// ```
     /// prints the first 20 rows of the `Add` function.
     ///
-    PrintFunction(Symbol, usize),
+    PrintFunction(Span, Symbol, usize),
     /// Print out the number of rows in a function or all functions.
-    PrintSize(Option<Symbol>),
+    PrintSize(Span, Option<Symbol>),
     /// Input a CSV file directly into a function.
     Input {
+        span: Span,
         name: Symbol,
         file: String,
     },
     /// Extract and output a set of expressions to a file.
     Output {
+        span: Span,
         file: String,
         exprs: Vec<GenericExpr<Head, Leaf>>,
     },
@@ -700,11 +793,11 @@ where
     Push(usize),
     /// `pop` the current egraph, restoring the previous one.
     /// The argument specifies how many egraphs to pop.
-    Pop(usize),
+    Pop(Span, usize),
     /// Assert that a command fails with an error.
-    Fail(Box<GenericCommand<Head, Leaf>>),
+    Fail(Span, Box<GenericCommand<Head, Leaf>>),
     /// Include another egglog file directly as text and run it.
-    Include(String),
+    Include(Span, String),
 }
 
 impl<Head, Leaf> ToSexp for GenericCommand<Head, Leaf>
@@ -747,22 +840,28 @@ where
             GenericCommand::RunSchedule(sched) => list!("run-schedule", sched),
             GenericCommand::PrintOverallStatistics => list!("print-stats"),
             GenericCommand::Calc(_ann, args, exprs) => list!("calc", list!(++ args), ++ exprs),
-            GenericCommand::QueryExtract { variants, expr } => {
+            GenericCommand::QueryExtract {
+                span: _,
+                variants,
+                expr,
+            } => {
                 list!("query-extract", ":variants", variants, expr)
             }
             GenericCommand::Check(_ann, facts) => list!("check", ++ facts),
             GenericCommand::CheckProof => list!("check-proof"),
             GenericCommand::Push(n) => list!("push", n),
-            GenericCommand::Pop(n) => list!("pop", n),
-            GenericCommand::PrintFunction(name, n) => list!("print-function", name, n),
-            GenericCommand::PrintSize(name) => list!("print-size", ++ name),
-            GenericCommand::Input { name, file } => list!("input", name, format!("\"{}\"", file)),
-            GenericCommand::Output { file, exprs } => {
+            GenericCommand::Pop(_span, n) => list!("pop", n),
+            GenericCommand::PrintFunction(_span, name, n) => list!("print-function", name, n),
+            GenericCommand::PrintSize(_span, name) => list!("print-size", ++ name),
+            GenericCommand::Input { span: _, name, file } => {
+                list!("input", name, format!("\"{}\"", file))
+            }
+            GenericCommand::Output { span: _, file, exprs } => {
                 list!("output", format!("\"{}\"", file), ++ exprs)
             }
-            GenericCommand::Fail(cmd) => list!("fail", cmd),
-            GenericCommand::Include(file) => list!("include", format!("\"{}\"", file)),
-            GenericCommand::Simplify { expr, schedule } => list!("simplify", schedule, expr),
+            GenericCommand::Fail(_span, cmd) => list!("fail", cmd),
+            GenericCommand::Include(_span, file) => list!("include", format!("\"{}\"", file)),
+            GenericCommand::Simplify { span: _, expr, schedule } => list!("simplify", schedule, expr),
         }
     }
 }

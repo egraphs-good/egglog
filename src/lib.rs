@@ -516,7 +516,7 @@ impl EGraph {
     /// it with the previously pushed egraph.
     /// It preserves the run report and messages from the popped
     /// egraph.
-    pub fn pop(&mut self) -> Result<(), Error> {
+    pub fn pop(&mut self) -> Result<(), ()> {
         match self.egraphs.pop() {
             Some(e) => {
                 // Copy the reports and messages from the popped egraph
@@ -535,7 +535,7 @@ impl EGraph {
                 self.msgs = messages;
                 Ok(())
             }
-            None => Err(Error::Pop),
+            None => Err(()),
         }
     }
 
@@ -739,7 +739,10 @@ impl EGraph {
         sym: Symbol,
         n: usize,
     ) -> Result<(Vec<(Term, Term)>, TermDag), Error> {
-        let f = self.functions.get(&sym).ok_or(TypeError::Unbound(sym))?;
+        let f = self
+            .functions
+            .get(&sym)
+            .ok_or(TypeError::UnboundFunction(sym, DUMMY_SPAN.clone()))?;
         let schema = f.schema.clone();
         let nodes = f
             .nodes
@@ -782,7 +785,8 @@ impl EGraph {
         let f = self
             .functions
             .get(&sym)
-            .ok_or(TypeError::UnboundFunction(sym))?;
+            // function_to_dag should have checked this
+            .unwrap();
         let out_is_unit = f.schema.output.name() == UNIT_SYM.into();
 
         let mut buf = String::new();
@@ -812,7 +816,10 @@ impl EGraph {
 
     pub fn print_size(&mut self, sym: Option<Symbol>) -> Result<(), Error> {
         if let Some(sym) = sym {
-            let f = self.functions.get(&sym).ok_or(TypeError::Unbound(sym))?;
+            let f = self
+                .functions
+                .get(&sym)
+                .ok_or(TypeError::UnboundFunction(sym, DUMMY_SPAN.clone()))?;
             log::info!("Function {} has size {}", sym, f.nodes.len());
             self.print_msg(f.nodes.len().to_string());
             Ok(())
@@ -1308,30 +1315,42 @@ impl EGraph {
                 (0..n).for_each(|_| self.push());
                 log::info!("Pushed {n} levels.")
             }
-            ResolvedNCommand::Pop(n) => {
+            ResolvedNCommand::Pop(span, n) => {
                 for _ in 0..n {
-                    self.pop()?;
+                    self.pop().map_err(|_| Error::Pop(span.clone()))?;
                 }
                 log::info!("Popped {n} levels.")
             }
-            ResolvedNCommand::PrintTable(f, n) => {
-                self.print_function(f, n)?;
+            ResolvedNCommand::PrintTable(span, f, n) => {
+                self.print_function(f, n).map_err(|e| match e {
+                    Error::TypeError(TypeError::UnboundFunction(f, _)) => {
+                        Error::TypeError(TypeError::UnboundFunction(f, span.clone()))
+                    }
+                    // This case is currently impossible
+                    _ => e,
+                })?;
             }
-            ResolvedNCommand::PrintSize(f) => {
-                self.print_size(f)?;
+            ResolvedNCommand::PrintSize(span, f) => {
+                self.print_size(f).map_err(|e| match e {
+                    Error::TypeError(TypeError::UnboundFunction(f, _)) => {
+                        Error::TypeError(TypeError::UnboundFunction(f, span.clone()))
+                    }
+                    // This case is currently impossible
+                    _ => e,
+                })?;
             }
-            ResolvedNCommand::Fail(c) => {
+            ResolvedNCommand::Fail(span, c) => {
                 let result = self.run_command(*c);
                 if let Err(e) = result {
                     log::info!("Command failed as expected: {e}");
                 } else {
-                    return Err(Error::ExpectFail);
+                    return Err(Error::ExpectFail(span));
                 }
             }
-            ResolvedNCommand::Input { name, file } => {
+            ResolvedNCommand::Input { span: _, name, file } => {
                 self.input_file(name, file)?;
             }
-            ResolvedNCommand::Output { file, exprs } => {
+            ResolvedNCommand::Output { span, file, exprs } => {
                 let mut filename = self.fact_directory.clone().unwrap_or_default();
                 filename.push(file.as_str());
                 // append to file
@@ -1340,7 +1359,7 @@ impl EGraph {
                     .append(true)
                     .create(true)
                     .open(&filename)
-                    .map_err(|e| Error::IoError(filename.clone(), e))?;
+                    .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
                 let mut termdag = TermDag::default();
                 for expr in exprs {
                     let value = self.eval_resolved_expr(&expr, true)?;
@@ -1348,7 +1367,7 @@ impl EGraph {
                     let term = self.extract(value, &mut termdag, &expr_type).1;
                     use std::io::Write;
                     writeln!(f, "{}", termdag.to_string(&term))
-                        .map_err(|e| Error::IoError(filename.clone(), e))?;
+                        .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
                 }
 
                 log::info!("Output to '{filename:?}'.")
@@ -1606,12 +1625,12 @@ pub enum Error {
     PrimitiveError(Primitive, Vec<Value>),
     #[error("Illegal merge attempted for function {0}, {1:?} != {2:?}")]
     MergeError(Symbol, Value, Value),
-    #[error("Tried to pop too much")]
-    Pop,
-    #[error("Command should have failed.")]
-    ExpectFail,
-    #[error("IO error: {0}: {1}")]
-    IoError(PathBuf, std::io::Error),
+    #[error("{}\nTried to pop too much", .0.get_quote())]
+    Pop(Span),
+    #[error("{}\nCommand should have failed.", .0.get_quote())]
+    ExpectFail(Span),
+    #[error("{}\nIO error: {0}: {1}", .2.get_quote())]
+    IoError(PathBuf, std::io::Error, Span),
     #[error("Cannot subsume function with merge: {0}")]
     SubsumeMergeError(Symbol),
 }

@@ -155,8 +155,7 @@ fn add_semi_naive_rule(desugar: &mut Desugar, rule: Rule) -> Option<Rule> {
     }
 }
 
-fn desugar_simplify(desugar: &mut Desugar, expr: &Expr, schedule: &Schedule) -> Vec<NCommand> {
-    let span = expr.span();
+fn desugar_simplify(desugar: &mut Desugar, expr: &Expr, schedule: &Schedule, span: Span) -> Vec<NCommand> {
     let mut res = vec![NCommand::Push(1)];
     let lhs = desugar.get_fresh();
     res.push(NCommand::CoreAction(Action::Let(
@@ -168,8 +167,9 @@ fn desugar_simplify(desugar: &mut Desugar, expr: &Expr, schedule: &Schedule) -> 
     res.extend(
         desugar_command(
             Command::QueryExtract {
+                span: span.clone(),
                 variants: 0,
-                expr: Expr::Var(span, lhs),
+                expr: Expr::Var(span.clone(), lhs),
             },
             desugar,
             false,
@@ -178,7 +178,7 @@ fn desugar_simplify(desugar: &mut Desugar, expr: &Expr, schedule: &Schedule) -> 
         .unwrap(),
     );
 
-    res.push(NCommand::Pop(1));
+    res.push(NCommand::Pop(span, 1));
     res
 }
 
@@ -233,7 +233,7 @@ pub(crate) fn desugar_calc(
             vec![Fact::Eq(span.clone(), vec![expr1.clone(), expr2.clone()])],
         ));
 
-        res.push(Command::Pop(1));
+        res.push(Command::Pop(span.clone(), 1));
     }
 
     desugar_commands(res, desugar, false, seminaive_transform)
@@ -269,9 +269,9 @@ pub(crate) fn desugar_command(
         Command::BiRewrite(ruleset, rewrite) => {
             desugar_birewrite(ruleset, rewrite_name(&rewrite).into(), &rewrite)
         }
-        Command::Include(file) => {
+        Command::Include(span, file) => {
             let s = std::fs::read_to_string(&file)
-                .unwrap_or_else(|_| panic!("Failed to read file {file}"));
+                .unwrap_or_else(|_| panic!("{} Failed to read file {file}", span.get_quote()));
             return desugar_commands(
                 desugar.parse_program(Some(file), &s)?,
                 desugar,
@@ -312,7 +312,7 @@ pub(crate) fn desugar_command(
             vec![NCommand::UnstableCombinedRuleset(name, subrulesets)]
         }
         Command::Action(action) => vec![NCommand::CoreAction(action)],
-        Command::Simplify { expr, schedule } => desugar_simplify(desugar, &expr, &schedule),
+        Command::Simplify { span, expr, schedule } => desugar_simplify(desugar, &expr, &schedule, span),
         Command::Calc(span, idents, exprs) => {
             desugar_calc(desugar, span, idents, exprs, seminaive_transform)?
         }
@@ -322,7 +322,7 @@ pub(crate) fn desugar_command(
         Command::PrintOverallStatistics => {
             vec![NCommand::PrintOverallStatistics]
         }
-        Command::QueryExtract { variants, expr } => {
+        Command::QueryExtract { span: _, variants, expr } => {
             let fresh = desugar.get_fresh();
             let fresh_ruleset = desugar.get_fresh();
             let desugaring = if let Expr::Var(_, v) = expr {
@@ -339,6 +339,7 @@ pub(crate) fn desugar_command(
             };
 
             desugar.desugar_program(
+                // TODO: all spans should be that of the original query
                 desugar.parse_program(None, &desugaring).unwrap(),
                 get_all_proofs,
                 seminaive_transform,
@@ -354,26 +355,26 @@ pub(crate) fn desugar_command(
             res
         }
         Command::CheckProof => vec![NCommand::CheckProof],
-        Command::PrintFunction(symbol, size) => {
-            vec![NCommand::PrintTable(symbol, size)]
+        Command::PrintFunction(span, symbol, size) => {
+            vec![NCommand::PrintTable(span, symbol, size)]
         }
-        Command::PrintSize(symbol) => vec![NCommand::PrintSize(symbol)],
-        Command::Output { file, exprs } => vec![NCommand::Output { file, exprs }],
+        Command::PrintSize(span, symbol) => vec![NCommand::PrintSize(span, symbol)],
+        Command::Output { span, file, exprs } => vec![NCommand::Output { span, file, exprs }],
         Command::Push(num) => {
             vec![NCommand::Push(num)]
         }
-        Command::Pop(num) => {
-            vec![NCommand::Pop(num)]
+        Command::Pop(span, num) => {
+            vec![NCommand::Pop(span, num)]
         }
-        Command::Fail(cmd) => {
+        Command::Fail(span, cmd) => {
             let mut desugared = desugar_command(*cmd, desugar, false, seminaive_transform)?;
 
             let last = desugared.pop().unwrap();
-            desugared.push(NCommand::Fail(Box::new(last)));
+            desugared.push(NCommand::Fail(span, Box::new(last)));
             return Ok(desugared);
         }
-        Command::Input { name, file } => {
-            vec![NCommand::Input { name, file }]
+        Command::Input { span, name, file } => {
+            vec![NCommand::Input { span, name, file }]
         }
     };
 
