@@ -62,16 +62,16 @@ impl FunctionSort {
         name: Symbol,
         args: &[Expr],
     ) -> Result<ArcSort, TypeError> {
-        if let [inputs, Expr::Var((), output)] = args {
+        if let [inputs, Expr::Var(_, output)] = args {
             let output_sort = typeinfo
                 .sorts
                 .get(output)
                 .ok_or(TypeError::UndefinedSort(*output))?;
 
             let input_sorts = match inputs {
-                Expr::Call((), first, rest_args) => {
+                Expr::Call(_, first, rest_args) => {
                     let all_args = once(first).chain(rest_args.iter().map(|arg| {
-                        if let Expr::Var((), arg) = arg {
+                        if let Expr::Var(_, arg) = arg {
                             arg
                         } else {
                             panic!("function sort must be called with list of input sorts");
@@ -88,7 +88,7 @@ impl FunctionSort {
                         .collect::<Result<Vec<_>, _>>()?
                 }
                 // an empty list of inputs args is parsed as a unit literal
-                Expr::Lit((), Literal::Unit) => vec![],
+                Expr::Lit(_, Literal::Unit) => vec![],
                 _ => panic!("function sort must be called with list of input sorts"),
             };
 
@@ -176,7 +176,10 @@ impl Sort for FunctionSort {
     ) -> Option<(Cost, Expr)> {
         let ValueFunction(name, inputs) = ValueFunction::load(self, &value);
         let (cost, args) = inputs.into_iter().try_fold(
-            (1usize, vec![Expr::Lit((), Literal::String(name))]),
+            (
+                1usize,
+                vec![GenericExpr::Lit(DUMMY_SPAN.clone(), Literal::String(name))],
+            ),
             |(cost, mut args), (sort, value)| {
                 let (new_cost, term) = extractor.find_best(value, termdag, &sort)?;
                 args.push(termdag.term_to_expr(&term));
@@ -184,7 +187,7 @@ impl Sort for FunctionSort {
             },
         )?;
 
-        Some((cost, Expr::call("unstable-fn", args)))
+        Some((cost, Expr::call_no_span("unstable-fn", args)))
     }
 }
 
@@ -212,6 +215,7 @@ struct FunctionCTorTypeConstraint {
     name: Symbol,
     function: Arc<FunctionSort>,
     string: Arc<StringSort>,
+    span: Span,
 }
 
 impl TypeConstraint for FunctionCTorTypeConstraint {
@@ -221,6 +225,7 @@ impl TypeConstraint for FunctionCTorTypeConstraint {
             vec![Constraint::Impossible(
                 constraint::ImpossibleConstraint::ArityMismatch {
                     atom: core::Atom {
+                        span: self.span.clone(),
                         head: self.name,
                         args: arguments.to_vec(),
                     },
@@ -252,11 +257,12 @@ impl PrimitiveLike for Ctor {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         Box::new(FunctionCTorTypeConstraint {
             name: self.name,
             function: self.function.clone(),
             string: self.string.clone(),
+            span: span.clone(),
         })
     }
 
@@ -285,11 +291,11 @@ impl PrimitiveLike for Apply {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         let mut sorts: Vec<ArcSort> = vec![self.function.clone()];
         sorts.extend(self.function.inputs.clone());
         sorts.push(self.function.output.clone());
-        SimpleTypeConstraint::new(self.name(), sorts).into_box()
+        SimpleTypeConstraint::new(self.name(), sorts, span.clone()).into_box()
     }
 
     fn apply(&self, values: &[Value], egraph: Option<&mut EGraph>) -> Option<Value> {
@@ -333,9 +339,9 @@ fn call_fn(egraph: &mut EGraph, name: &Symbol, types: Vec<ArcSort>, args: Vec<Va
     let binding = IndexSet::from_iter(arg_vars.clone());
     let resolved_args = arg_vars
         .into_iter()
-        .map(|v| ResolvedExpr::Var((), v))
+        .map(|v| GenericExpr::Var(DUMMY_SPAN.clone(), v))
         .collect();
-    let expr = ResolvedExpr::Call((), resolved_call, resolved_args);
+    let expr = GenericExpr::Call(DUMMY_SPAN.clone(), resolved_call, resolved_args);
     // Similar to how the merge function is created in `Function::new`
     let (actions, mapped_expr) = expr
         .to_core_actions(

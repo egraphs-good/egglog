@@ -57,7 +57,10 @@ impl Sort for F64Sort {
         assert!(value.tag == self.name());
         (
             1,
-            Expr::Lit((), Literal::F64(OrderedFloat(f64::from_bits(value.bits)))),
+            GenericExpr::Lit(
+                DUMMY_SPAN.clone(),
+                Literal::F64(OrderedFloat(f64::from_bits(value.bits))),
+            ),
         )
     }
 }

@@ -1,7 +1,7 @@
 use crate::{
-    ast::{Expr, Literal},
+    ast::Literal,
     util::{HashMap, HashSet},
-    Symbol,
+    Expr, GenericExpr, Symbol,
 };
 
 pub type TermId = usize;
@@ -109,11 +109,11 @@ impl TermDag {
     /// This involves inserting every subexpression into this DAG. Because
     /// TermDags are hashconsed, the resulting term is guaranteed to maximally
     /// share subterms.
-    pub fn expr_to_term(&mut self, expr: &Expr) -> Term {
+    pub fn expr_to_term(&mut self, expr: &GenericExpr<Symbol, Symbol>) -> Term {
         let res = match expr {
-            Expr::Lit((), lit) => Term::Lit(lit.clone()),
-            Expr::Var((), v) => Term::Var(*v),
-            Expr::Call((), op, args) => {
+            GenericExpr::Lit(_, lit) => Term::Lit(lit.clone()),
+            GenericExpr::Var(_, v) => Term::Var(*v),
+            GenericExpr::Call(_, op, args) => {
                 let args = args
                     .iter()
                     .map(|a| {
@@ -133,17 +133,17 @@ impl TermDag {
     /// Panics if the term contains subterms that are not in the DAG.
     pub fn term_to_expr(&self, term: &Term) -> Expr {
         match term {
-            Term::Lit(lit) => Expr::Lit((), lit.clone()),
-            Term::Var(v) => Expr::Var((), *v),
+            Term::Lit(lit) => Expr::lit_no_span(lit.clone()),
+            Term::Var(v) => Expr::var_no_span(*v),
             Term::App(op, args) => {
-                let args = args
+                let args: Vec<_> = args
                     .iter()
                     .map(|a| {
                         let term = self.get(*a);
                         self.term_to_expr(&term)
                     })
                     .collect();
-                Expr::Call((), *op, args)
+                Expr::call_no_span(*op, args)
             }
         }
     }
@@ -191,7 +191,7 @@ impl TermDag {
 
 #[cfg(test)]
 mod tests {
-    use crate::ast;
+    use crate::{ast, DUMMY_SPAN};
 
     use super::*;
 
@@ -224,7 +224,10 @@ mod tests {
             ]
         );
         let e2 = td.term_to_expr(&t);
-        assert_eq!(e, e2); // roundtrip
+        // This is tested using Sexp's equality because e1 and e2 have different
+        // annotations. A better way to test this would be to implement a map_ann
+        // function for GenericExpr.
+        assert_eq!(e.to_sexp(), e2.to_sexp()); // roundtrip
     }
 
     #[test]
@@ -233,7 +236,7 @@ mod tests {
         let (td, t) = parse_term(s);
         match_term_app!(t; {
             ("f", [_, x, _, _]) =>
-                assert_eq!(td.term_to_expr(&td.get(*x)), ast::Expr::Var((), Symbol::new("x"))),
+                assert_eq!(td.term_to_expr(&td.get(*x)), ast::GenericExpr::Var(DUMMY_SPAN.clone(), Symbol::new("x"))),
             (head, _) => panic!("unexpected head {}, in {}:{}:{}", head, file!(), line!(), column!())
         })
     }

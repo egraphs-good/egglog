@@ -43,7 +43,7 @@ impl VecSort {
         name: Symbol,
         args: &[Expr],
     ) -> Result<ArcSort, TypeError> {
-        if let [Expr::Var((), e)] = args {
+        if let [Expr::Var(_, e)] = args {
             let e = typeinfo.sorts.get(e).ok_or(TypeError::UndefinedSort(*e))?;
 
             if e.is_eq_container_sort() {
@@ -183,7 +183,7 @@ impl Sort for VecSort {
         let mut cost = 0usize;
 
         if vec.is_empty() {
-            Some((cost, Expr::call("vec-empty", [])))
+            Some((cost, Expr::call_no_span("vec-empty", [])))
         } else {
             let elems = vec
                 .into_iter()
@@ -194,7 +194,7 @@ impl Sort for VecSort {
                 })
                 .collect::<Option<Vec<_>>>()?;
 
-            Some((cost, Expr::call("vec-of", elems)))
+            Some((cost, Expr::call_no_span("vec-of", elems)))
         }
     }
 }
@@ -229,8 +229,13 @@ impl PrimitiveLike for VecRebuild {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(self.name(), vec![self.vec.clone(), self.vec.clone()]).into_box()
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![self.vec.clone(), self.vec.clone()],
+            span.clone(),
+        )
+        .into_box()
     }
 
     fn apply(&self, values: &[Value], egraph: Option<&mut EGraph>) -> Option<Value> {
@@ -251,8 +256,8 @@ impl PrimitiveLike for VecOf {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
-        AllEqualTypeConstraint::new(self.name())
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        AllEqualTypeConstraint::new(self.name(), span.clone())
             .with_all_arguments_sort(self.vec.element())
             .with_output_sort(self.vec.clone())
             .into_box()
@@ -274,8 +279,8 @@ impl PrimitiveLike for Append {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
-        AllEqualTypeConstraint::new(self.name())
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        AllEqualTypeConstraint::new(self.name(), span.clone())
             .with_all_arguments_sort(self.vec.clone())
             .into_box()
     }
@@ -296,8 +301,8 @@ impl PrimitiveLike for Ctor {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(self.name(), vec![self.vec.clone()]).into_box()
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(self.name(), vec![self.vec.clone()], span.clone()).into_box()
     }
 
     fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
@@ -316,10 +321,11 @@ impl PrimitiveLike for Push {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         SimpleTypeConstraint::new(
             self.name(),
             vec![self.vec.clone(), self.vec.element(), self.vec.clone()],
+            span.clone(),
         )
         .into_box()
     }
@@ -341,8 +347,13 @@ impl PrimitiveLike for Pop {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(self.name(), vec![self.vec.clone(), self.vec.clone()]).into_box()
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![self.vec.clone(), self.vec.clone()],
+            span.clone(),
+        )
+        .into_box()
     }
 
     fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
@@ -363,10 +374,11 @@ impl PrimitiveLike for NotContains {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         SimpleTypeConstraint::new(
             self.name(),
             vec![self.vec.clone(), self.vec.element(), self.unit.clone()],
+            span.clone(),
         )
         .into_box()
     }
@@ -392,10 +404,11 @@ impl PrimitiveLike for Contains {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         SimpleTypeConstraint::new(
             self.name(),
             vec![self.vec.clone(), self.vec.element(), self.unit.clone()],
+            span.clone(),
         )
         .into_box()
     }
@@ -421,8 +434,13 @@ impl PrimitiveLike for Length {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(self.name(), vec![self.vec.clone(), self.i64.clone()]).into_box()
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![self.vec.clone(), self.i64.clone()],
+            span.clone(),
+        )
+        .into_box()
     }
 
     fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
@@ -442,10 +460,11 @@ impl PrimitiveLike for Get {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         SimpleTypeConstraint::new(
             self.name(),
             vec![self.vec.clone(), self.i64.clone(), self.vec.element()],
+            span.clone(),
         )
         .into_box()
     }
@@ -468,7 +487,7 @@ impl PrimitiveLike for Set {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         SimpleTypeConstraint::new(
             self.name(),
             vec![
@@ -477,6 +496,7 @@ impl PrimitiveLike for Set {
                 self.vec.element.clone(),
                 self.vec.clone(),
             ],
+            span.clone(),
         )
         .into_box()
     }
@@ -500,10 +520,11 @@ impl PrimitiveLike for Remove {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         SimpleTypeConstraint::new(
             self.name(),
             vec![self.vec.clone(), self.i64.clone(), self.vec.clone()],
+            span.clone(),
         )
         .into_box()
     }
@@ -525,6 +546,7 @@ mod tests {
         let mut egraph = EGraph::default();
         let outputs = egraph
             .parse_and_run_program(
+                None,
                 r#"
             (sort IVec (Vec i64))
             (let v0 (vec-empty))
@@ -537,13 +559,16 @@ mod tests {
 
         // Check extracted expr is parsed as an original expr
         egraph
-            .parse_and_run_program(&format!(
-                r#"
+            .parse_and_run_program(
+                None,
+                &format!(
+                    r#"
                 (check (= v0 {}))
                 (check (= v1 {}))
                 "#,
-                outputs[0], outputs[1],
-            ))
+                    outputs[0], outputs[1],
+                ),
+            )
             .unwrap();
     }
 }
