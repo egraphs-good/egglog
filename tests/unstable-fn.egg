@@ -66,3 +66,5 @@
 
 ;; Verify that function parsing works with a function with no args
 (sort TestNullaryFunction (UnstableFn () Math))
+;; Verify that we know the type of a function based on the string name
+(extract (unstable-fn "square"))
