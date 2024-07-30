@@ -1494,6 +1494,8 @@ impl EGraph {
         self.desugar.parse_program(filename, input)
     }
 
+    /// Parse and run a program, returning a list of messages.
+    /// If filename is None, a default name will be provided
     pub fn parse_and_run_program(
         &mut self,
         filename: Option<String>,
