@@ -246,18 +246,18 @@ impl<'b> Context<'b> {
                 let mut values: Vec<Value> = vec![];
                 for arg in args {
                     values.push(match arg {
-                        AtomTerm::Var(v) => {
+                        AtomTerm::Var(_ann, v) => {
                             let i = self.query.vars.get_index_of(v).unwrap();
                             self.tuple[i]
                         }
-                        AtomTerm::Literal(lit) => self.egraph.eval_lit(lit),
-                        AtomTerm::Global(_g) => panic!("Globals should have been desugared"),
+                        AtomTerm::Literal(_ann, lit) => self.egraph.eval_lit(lit),
+                        AtomTerm::Global(_ann, _g) => panic!("Globals should have been desugared"),
                     })
                 }
 
                 if let Some(res) = prim.apply(&values, None) {
                     match out {
-                        AtomTerm::Var(v) => {
+                        AtomTerm::Var(_ann, v) => {
                             let i = self.query.vars.get_index_of(v).unwrap();
 
                             if *check {
@@ -269,14 +269,14 @@ impl<'b> Context<'b> {
 
                             self.tuple[i] = res;
                         }
-                        AtomTerm::Literal(lit) => {
+                        AtomTerm::Literal(_ann, lit) => {
                             assert!(check);
                             let val = &self.egraph.eval_lit(lit);
                             if val != &res {
                                 return Ok(());
                             }
                         }
-                        AtomTerm::Global(_g) => {
+                        AtomTerm::Global(_ann, _g) => {
                             panic!("Globals should have been desugared")
                         }
                     }
@@ -362,11 +362,12 @@ impl EGraph {
             .into_iter()
             .map(|atom| {
                 let args = atom.args.into_iter().map(|arg| match arg {
-                    ResolvedAtomTerm::Var(v) => AtomTerm::Var(v.name),
-                    ResolvedAtomTerm::Literal(lit) => AtomTerm::Literal(lit),
-                    ResolvedAtomTerm::Global(g) => AtomTerm::Global(g.name),
+                    ResolvedAtomTerm::Var(span, v) => AtomTerm::Var(span, v.name),
+                    ResolvedAtomTerm::Literal(span, lit) => AtomTerm::Literal(span, lit),
+                    ResolvedAtomTerm::Global(span, g) => AtomTerm::Global(span, g.name),
                 });
                 Atom {
+                    span: atom.span,
                     head: atom.head,
                     args: args.collect(),
                 }
@@ -389,14 +390,14 @@ impl EGraph {
         let mut constraints = vec![];
         for (i, t) in atom.args.iter().enumerate() {
             match t {
-                AtomTerm::Literal(lit) => {
+                AtomTerm::Literal(_ann, lit) => {
                     let val = self.eval_lit(lit);
                     constraints.push(Constraint::Const(i, val))
                 }
-                AtomTerm::Global(_g) => {
+                AtomTerm::Global(_ann, _g) => {
                     panic!("Globals should have been desugared")
                 }
-                AtomTerm::Var(_v) => {
+                AtomTerm::Var(_ann, _v) => {
                     if let Some(j) = atom.args[..i].iter().position(|t2| t == t2) {
                         constraints.push(Constraint::Eq(j, i));
                     }
@@ -423,7 +424,13 @@ impl EGraph {
         let column = atom
             .args
             .iter()
-            .position(|arg| arg == &AtomTerm::Var(var))
+            .position(|arg| {
+                if let AtomTerm::Var(_, var2) = arg {
+                    &var == var2
+                } else {
+                    false
+                }
+            })
             .unwrap();
         self.make_trie_access_for_column(atom, column, timestamp_range, include_subsumed)
     }
@@ -448,12 +455,12 @@ impl EGraph {
         for (i, atom) in atoms.iter().enumerate() {
             for (col, arg) in atom.args.iter().enumerate() {
                 match arg {
-                    AtomTerm::Var(var) => vars.entry(*var).or_default().occurences.push(i),
-                    AtomTerm::Literal(lit) => {
+                    AtomTerm::Var(_ann, var) => vars.entry(*var).or_default().occurences.push(i),
+                    AtomTerm::Literal(_ann, lit) => {
                         let val = self.eval_lit(lit);
                         constants.entry(i).or_default().push((col, val));
                     }
-                    AtomTerm::Global(_g) => {
+                    AtomTerm::Global(_ann, _g) => {
                         panic!("Globals should have been desugared")
                     }
                 }
@@ -568,24 +575,24 @@ impl EGraph {
             let next = extra.iter().position(|p| {
                 assert!(!p.args.is_empty());
                 p.args[..p.args.len() - 1].iter().all(|a| match a {
-                    AtomTerm::Var(v) => vars.contains_key(v),
-                    AtomTerm::Literal(_) => true,
-                    AtomTerm::Global(_) => true,
+                    AtomTerm::Var(_ann, v) => vars.contains_key(v),
+                    AtomTerm::Literal(_ann, _) => true,
+                    AtomTerm::Global(_ann, _) => true,
                 })
             });
 
             if let Some(i) = next {
                 let p = extra.remove(i);
                 let check = match p.args.last().unwrap() {
-                    AtomTerm::Var(v) => match vars.entry(*v) {
+                    AtomTerm::Var(_ann, v) => match vars.entry(*v) {
                         Entry::Occupied(_) => true,
                         Entry::Vacant(e) => {
                             e.insert(Default::default());
                             false
                         }
                     },
-                    AtomTerm::Literal(_) => true,
-                    AtomTerm::Global(_) => true,
+                    AtomTerm::Literal(_ann, _) => true,
+                    AtomTerm::Global(_ann, _) => true,
                 };
                 program.push(Instr::Call {
                     prim: p.head.clone(),
@@ -623,24 +630,24 @@ impl EGraph {
                     };
 
                     for a in args {
-                        if let AtomTerm::Var(v) = a {
+                        if let AtomTerm::Var(_ann, v) = a {
                             let i = query.vars.get_index_of(v).unwrap();
                             assert!(tuple_valid[i]);
                         }
                     }
 
                     match last {
-                        AtomTerm::Var(v) => {
+                        AtomTerm::Var(_ann, v) => {
                             let i = query.vars.get_index_of(v).unwrap();
                             assert_eq!(*check, tuple_valid[i], "{instr}");
                             if !*check {
                                 tuple_valid[i] = true;
                             }
                         }
-                        AtomTerm::Literal(_) => {
+                        AtomTerm::Literal(_ann, _) => {
                             assert!(*check);
                         }
-                        AtomTerm::Global(_) => {
+                        AtomTerm::Global(_ann, _) => {
                             assert!(*check);
                         }
                     }
@@ -736,7 +743,7 @@ impl EGraph {
         if has_atoms {
             for atom in cq.query.funcs() {
                 for arg in &atom.args {
-                    if let AtomTerm::Global(_g) = arg {
+                    if let AtomTerm::Global(_ann, _g) = arg {
                         panic!("Globals should have been desugared")
                     }
                 }

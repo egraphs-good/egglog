@@ -8,6 +8,7 @@ fn test_subsumed_unextractable_action_extract() {
 
     egraph
         .parse_and_run_program(
+            None,
             r#"
             (datatype Math)
             (function exp () Math :cost 100)
@@ -28,6 +29,7 @@ fn test_subsumed_unextractable_action_extract() {
     // Then if we make one as subsumed, it should give back the variable term
     egraph
         .parse_and_run_program(
+            None,
             r#"
             (subsume (cheap))
             (query-extract (exp))
@@ -61,6 +63,7 @@ fn test_subsumed_unextractable_rebuild_arg() {
 
     egraph
         .parse_and_run_program(
+            None,
             r#"
             (datatype Math)
             (function container (Math) Math)
@@ -83,6 +86,7 @@ fn test_subsumed_unextractable_rebuild_arg() {
     // Then we can union them
     egraph
         .parse_and_run_program(
+            None,
             r#"
             (union (cheap-1) (cheap))
             "#,
@@ -97,6 +101,7 @@ fn test_subsumed_unextractable_rebuild_arg() {
     // Now verify that if we extract, it still respects the unextractable, even though it's a different values now
     egraph
         .parse_and_run_program(
+            None,
             r#"
             (query-extract res)
             "#,
@@ -107,7 +112,7 @@ fn test_subsumed_unextractable_rebuild_arg() {
         panic!();
     };
     let expr = termdag.term_to_expr(&term);
-    assert_eq!(expr, Expr::Call((), GlobalSymbol::from("exp"), vec![]));
+    assert_eq!(expr, Expr::call_no_span(GlobalSymbol::from("exp"), vec![]));
 }
 
 #[test]
@@ -117,6 +122,7 @@ fn test_subsumed_unextractable_rebuild_self() {
 
     egraph
         .parse_and_run_program(
+            None,
             r#"
             (datatype Math)
             (function container (Math) Math)
@@ -132,6 +138,7 @@ fn test_subsumed_unextractable_rebuild_self() {
     // Then we can union them
     egraph
         .parse_and_run_program(
+            None,
             r#"
             (union (exp) x)
             "#,
@@ -145,6 +152,7 @@ fn test_subsumed_unextractable_rebuild_self() {
     // Now verify that if we extract, it still respects the subsumption, even though it's a different values now
     egraph
         .parse_and_run_program(
+            None,
             r#"
             (query-extract x)
             "#,
@@ -155,7 +163,7 @@ fn test_subsumed_unextractable_rebuild_self() {
         panic!();
     };
     let expr = termdag.term_to_expr(&term);
-    assert_eq!(expr, Expr::Call((), GlobalSymbol::from("exp"), vec![]));
+    assert_eq!(expr, Expr::call_no_span(GlobalSymbol::from("exp"), vec![]));
 }
 
 #[test]
@@ -165,6 +173,7 @@ fn test_subsume_unextractable_insert_and_merge() {
 
     egraph
         .parse_and_run_program(
+            None,
             r#"
             (datatype Expr
                 (f Expr)
@@ -198,6 +207,7 @@ fn test_subsume_unextractable_action_extract_multiple() {
 
     egraph
         .parse_and_run_program(
+            None,
             "
             (datatype Math (Num i64))
             (Num 1)
@@ -215,6 +225,7 @@ fn test_subsume_unextractable_action_extract_multiple() {
     // Then if we make one unextractable, it should only give back one term
     egraph
         .parse_and_run_program(
+            None,
             "
             (subsume (Num 2))
             (query-extract :variants 2 (Num 1))
@@ -236,6 +247,7 @@ fn test_rewrite_subsumed_unextractable() {
 
     egraph
         .parse_and_run_program(
+            None,
             r#"
             (datatype Math)
             (function exp () Math :cost 100)
@@ -265,6 +277,7 @@ fn test_rewrite_subsumed() {
     // If we rerite most-exp to another term, that rewrite shouldnt trigger since its been subsumed.
     egraph
         .parse_and_run_program(
+            None,
             r#"
             (datatype Math)
             (function exp () Math :cost 100)
@@ -296,6 +309,7 @@ fn test_subsume() {
     let mut egraph = EGraph::default();
     egraph
         .parse_and_run_program(
+            None,
             r#"
         (datatype Math
           (Add Math Math)
@@ -317,6 +331,7 @@ fn test_subsume() {
 
     egraph
         .parse_and_run_program(
+            None,
             r#"
         ;; add something equal to x that can be extracted:
         (declare other Math)
@@ -337,6 +352,7 @@ fn test_subsume_primitive() {
 
     let mut egraph = EGraph::default();
     let res = egraph.parse_and_run_program(
+        None,
         r#"
         (function one () i64)
         (set (one) 1)
@@ -352,6 +368,7 @@ fn test_cant_subsume_merge() {
 
     let mut egraph = EGraph::default();
     let res = egraph.parse_and_run_program(
+        None,
         r#"
         (function one () i64 :merge old)
         (set (one) 1)

@@ -27,7 +27,10 @@ impl Sort for StringSort {
     fn make_expr(&self, _egraph: &EGraph, value: Value) -> (Cost, Expr) {
         assert!(value.tag == self.name);
         let sym = Symbol::from(NonZeroU32::new(value.bits as _).unwrap());
-        (1, Expr::Lit((), Literal::String(sym)))
+        (
+            1,
+            GenericExpr::Lit(DUMMY_SPAN.clone(), Literal::String(sym)),
+        )
     }
 
     fn register_primitives(self: Arc<Self>, typeinfo: &mut TypeInfo) {
@@ -71,8 +74,8 @@ impl PrimitiveLike for Add {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
-        AllEqualTypeConstraint::new(self.name())
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        AllEqualTypeConstraint::new(self.name(), span.clone())
             .with_all_arguments_sort(self.string.clone())
             .into_box()
     }
@@ -98,8 +101,8 @@ impl PrimitiveLike for Replace {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
-        AllEqualTypeConstraint::new(self.name())
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        AllEqualTypeConstraint::new(self.name(), span.clone())
             .with_all_arguments_sort(self.string.clone())
             .with_exact_length(4)
             .into_box()
