@@ -384,6 +384,7 @@ fn test_value_to_classid() {
 
     egraph
         .parse_and_run_program(
+            None,
             r#"
             (datatype Math)
             (function exp () Math )
