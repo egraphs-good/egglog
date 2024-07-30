@@ -45,7 +45,7 @@ struct Args {
     max_calls_per_function: usize,
 }
 
-// Takes a multi-line string, processes the first command, and returns the rest of the string
+// test if the current command should be evaluated
 fn should_eval(curr_cmd: &str) -> bool {
     let mut count = 0;
     let mut indices = curr_cmd.chars();
@@ -246,6 +246,41 @@ fn main() {
         // no need to drop the egraph if we are going to exit
         if idx == args.inputs.len() - 1 {
             std::mem::forget(egraph)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_should_eval() {
+        #[rustfmt::skip]
+        let test_cases = vec![
+            vec![
+                "(extract", 
+                "\"1", 
+                ")", 
+                "(", 
+                ")))", 
+                "\"", 
+                ";; )",
+                ")"
+            ],
+            vec![
+                "(extract 1) (extract",
+                "2) (",
+                "extract 3) (extract 4) ;;;; ("
+            ]];
+        for test in test_cases {
+            let mut cmd_buffer = String::new();
+            for (i, line) in test.iter().enumerate() {
+                cmd_buffer.push_str(line);
+                cmd_buffer.push('\n');
+                dbg!(i, &cmd_buffer, should_eval(&cmd_buffer));
+                assert_eq!(should_eval(&cmd_buffer), i == test.len() - 1);
+            }
         }
     }
 }
