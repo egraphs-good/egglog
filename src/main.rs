@@ -278,7 +278,6 @@ mod tests {
             for (i, line) in test.iter().enumerate() {
                 cmd_buffer.push_str(line);
                 cmd_buffer.push('\n');
-                dbg!(i, &cmd_buffer, should_eval(&cmd_buffer));
                 assert_eq!(should_eval(&cmd_buffer), i == test.len() - 1);
             }
         }
