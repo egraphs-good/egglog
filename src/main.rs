@@ -63,12 +63,12 @@ fn should_eval(curr_cmd: &str) -> bool {
             }
             ';' => {
                 // `any` moves the iterator forward until it finds a match
-                if indices.any(|ch| ch == '\n') {
+                if !indices.any(|ch| ch == '\n') {
                     return false;
                 }
             }
             '"' => {
-                if indices.any(|ch| ch == '"') {
+                if !indices.any(|ch| ch == '"') {
                     return false;
                 }
             }
