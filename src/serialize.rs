@@ -148,20 +148,20 @@ impl EGraph {
         egraph
     }
 
-    /**
-     * Gets the serialized class ID for a value.
-     */
+    /// Gets the serialized class ID for a value.
     pub fn value_to_class_id(&self, value: &Value) -> egraph_serialize::ClassId {
         // Canonicalize the value first so that we always use the canonical e-class ID
         let sort = self.get_sort_from_value(value).unwrap();
         let mut value = *value;
         sort.canonicalize(&mut value, &self.unionfind);
+        assert!(
+            !value.tag.to_string().contains('-'),
+            "Tag cannot contain '-' when serializing"
+        );
         format!("{}-{}", value.tag, value.bits).into()
     }
 
-    /**
-     * Gets the value for a serialized class ID.
-     */
+    /// Gets the value for a serialized class ID.
     pub fn class_id_to_value(&self, eclass_id: &egraph_serialize::ClassId) -> Value {
         let s = eclass_id.to_string();
         let (tag, bits) = s.split_once('-').unwrap();
