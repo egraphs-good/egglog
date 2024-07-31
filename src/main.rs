@@ -45,6 +45,53 @@ struct Args {
     max_calls_per_function: usize,
 }
 
+// test if the current command should be evaluated
+fn should_eval(curr_cmd: &str) -> bool {
+    let mut count = 0;
+    let mut indices = curr_cmd.chars();
+    while let Some(ch) = indices.next() {
+        match ch {
+            '(' => count += 1,
+            ')' => {
+                count -= 1;
+                // if we have a negative count,
+                // this means excessive closing parenthesis
+                // which we would like to throw an error eagerly
+                if count < 0 {
+                    return true;
+                }
+            }
+            ';' => {
+                // `any` moves the iterator forward until it finds a match
+                if !indices.any(|ch| ch == '\n') {
+                    return false;
+                }
+            }
+            '"' => {
+                if !indices.any(|ch| ch == '"') {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
+    count <= 0
+}
+
+#[allow(clippy::disallowed_macros)]
+fn run_command_in_scripting(egraph: &mut EGraph, command: &str) {
+    match egraph.parse_and_run_program(None, command) {
+        Ok(msgs) => {
+            for msg in msgs {
+                println!("{msg}");
+            }
+        }
+        Err(err) => {
+            log::error!("{err}");
+        }
+    }
+}
+
 #[allow(clippy::disallowed_macros)]
 fn main() {
     env_logger::Builder::new()
@@ -79,18 +126,19 @@ fn main() {
         log::info!("Welcome to Egglog!");
         let mut egraph = mk_egraph();
 
+        let mut cmd_buffer = String::new();
+
         for line in BufReader::new(stdin).lines() {
             match line {
-                Ok(line_str) => match egraph.parse_and_run_program(None, &line_str) {
-                    Ok(msgs) => {
-                        for msg in msgs {
-                            println!("{msg}");
-                        }
+                Ok(line_str) => {
+                    cmd_buffer.push_str(&line_str);
+                    cmd_buffer.push('\n');
+                    // handles multi-line commands
+                    if should_eval(&cmd_buffer) {
+                        run_command_in_scripting(&mut egraph, &cmd_buffer);
+                        cmd_buffer = String::new();
                     }
-                    Err(err) => {
-                        log::error!("{err}");
-                    }
-                },
+                }
                 Err(err) => {
                     log::error!("{err}");
                     std::process::exit(1)
@@ -102,7 +150,11 @@ fn main() {
             }
         }
 
-        std::process::exit(1)
+        if !cmd_buffer.is_empty() {
+            run_command_in_scripting(&mut egraph, &cmd_buffer)
+        }
+
+        std::process::exit(0)
     }
 
     for (idx, input) in args.inputs.iter().enumerate() {
@@ -194,6 +246,40 @@ fn main() {
         // no need to drop the egraph if we are going to exit
         if idx == args.inputs.len() - 1 {
             std::mem::forget(egraph)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_should_eval() {
+        #[rustfmt::skip]
+        let test_cases = vec![
+            vec![
+                "(extract", 
+                "\"1", 
+                ")", 
+                "(", 
+                ")))", 
+                "\"", 
+                ";; )",
+                ")"
+            ],
+            vec![
+                "(extract 1) (extract",
+                "2) (",
+                "extract 3) (extract 4) ;;;; ("
+            ]];
+        for test in test_cases {
+            let mut cmd_buffer = String::new();
+            for (i, line) in test.iter().enumerate() {
+                cmd_buffer.push_str(line);
+                cmd_buffer.push('\n');
+                assert_eq!(should_eval(&cmd_buffer), i == test.len() - 1);
+            }
         }
     }
 }
