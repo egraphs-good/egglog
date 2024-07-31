@@ -98,7 +98,7 @@ impl ResolvedCall {
 
         if let Some(primitives) = typeinfo.primitives.get(head) {
             for primitive in primitives {
-                if primitive.accept(types) {
+                if primitive.accept(types, typeinfo) {
                     let (out, inp) = types.split_last().unwrap();
                     resolved_call.push(ResolvedCall::Primitive(SpecializedPrimitive {
                         primitive: primitive.clone(),

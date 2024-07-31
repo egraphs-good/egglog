@@ -490,6 +490,8 @@ pub enum TypeError {
     PrimitiveAlreadyBound(Symbol),
     #[error("Type mismatch: expected {}, actual {}", .0.name(), .1.name())]
     TypeMismatch(ArcSort, ArcSort),
+    #[error("Function type mismatch: expected {} => {}, actual {} => {}", .1.iter().map(|s| s.name().to_string()).collect::<Vec<_>>().join(", "), .0.name(), .3.iter().map(|s| s.name().to_string()).collect::<Vec<_>>().join(", "), .2.name())]
+    FunctionTypeMismatch(ArcSort, Vec<ArcSort>, ArcSort, Vec<ArcSort>),
     #[error("Presort {0} not found.")]
     PresortNotFound(Symbol),
     #[error("Cannot type a variable as unit: {0}")]

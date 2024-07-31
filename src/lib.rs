@@ -298,7 +298,7 @@ pub struct Primitive(Arc<dyn PrimitiveLike>);
 impl Primitive {
     // Takes the full signature of a primitive (including input and output types)
     // Returns whether the primitive is compatible with this signature
-    fn accept(&self, tys: &[Arc<dyn Sort>]) -> bool {
+    fn accept(&self, tys: &[Arc<dyn Sort>], typeinfo: &TypeInfo) -> bool {
         let mut constraints = vec![];
         let lits: Vec<_> = (0..tys.len())
             .map(|i| AtomTerm::Literal(DUMMY_SPAN.clone(), Literal::Int(i as i64)))
@@ -306,7 +306,7 @@ impl Primitive {
         for (lit, ty) in lits.iter().zip(tys.iter()) {
             constraints.push(Constraint::Assign(lit.clone(), ty.clone()))
         }
-        constraints.extend(self.get_type_constraints(&DUMMY_SPAN).get(&lits));
+        constraints.extend(self.get_type_constraints(&DUMMY_SPAN).get(&lits, typeinfo));
         let problem = Problem {
             constraints,
             range: HashSet::default(),

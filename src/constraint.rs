@@ -11,7 +11,7 @@ use crate::{
     util::{FreshGen, HashSet, SymbolGen},
     ArcSort, CorrespondingVar, Span, Symbol, TypeInfo, DUMMY_SPAN,
 };
-use core::hash::Hash;
+use core::{hash::Hash, panic};
 // Use immutable hashmap for performance
 // cloning assignments is common and O(1) with immutable hashmap
 use im_rc::HashMap;
@@ -23,6 +23,12 @@ pub enum ImpossibleConstraint {
         atom: Atom<Symbol>,
         expected: usize,
         actual: usize,
+    },
+    FunctionMismatch {
+        expected_output: ArcSort,
+        expected_input: Vec<ArcSort>,
+        actual_output: ArcSort,
+        actual_input: Vec<ArcSort>,
     },
 }
 
@@ -68,6 +74,17 @@ impl ConstraintError<AtomTerm, ArcSort> {
                     expected: *expected,
                 }
             }
+            ConstraintError::ImpossibleCaseIdentified(ImpossibleConstraint::FunctionMismatch {
+                expected_output,
+                expected_input,
+                actual_output,
+                actual_input,
+            }) => TypeError::FunctionTypeMismatch(
+                expected_output.clone(),
+                expected_input.clone(),
+                actual_output.clone(),
+                actual_input.clone(),
+            ),
         }
     }
 }
@@ -642,7 +659,7 @@ fn get_atom_application_constraints(
     // primitive atom constraints
     if let Some(primitives) = type_info.primitives.get(head) {
         for p in primitives {
-            let constraints = p.get_type_constraints(span).get(args);
+            let constraints = p.get_type_constraints(span).get(args, type_info);
             xor_constraints.push(constraints);
         }
     }
@@ -682,7 +699,11 @@ fn get_literal_and_global_constraints<'a>(
 }
 
 pub trait TypeConstraint {
-    fn get(&self, arguments: &[AtomTerm]) -> Vec<Constraint<AtomTerm, ArcSort>>;
+    fn get(
+        &self,
+        arguments: &[AtomTerm],
+        typeinfo: &TypeInfo,
+    ) -> Vec<Constraint<AtomTerm, ArcSort>>;
 }
 
 /// Construct a set of `Assign` constraints that fully constrain the type of arguments
@@ -703,7 +724,11 @@ impl SimpleTypeConstraint {
 }
 
 impl TypeConstraint for SimpleTypeConstraint {
-    fn get(&self, arguments: &[AtomTerm]) -> Vec<Constraint<AtomTerm, ArcSort>> {
+    fn get(
+        &self,
+        arguments: &[AtomTerm],
+        _typeinfo: &TypeInfo,
+    ) -> Vec<Constraint<AtomTerm, ArcSort>> {
         if arguments.len() != self.sorts.len() {
             vec![Constraint::Impossible(
                 ImpossibleConstraint::ArityMismatch {
@@ -774,7 +799,11 @@ impl AllEqualTypeConstraint {
 }
 
 impl TypeConstraint for AllEqualTypeConstraint {
-    fn get(&self, mut arguments: &[AtomTerm]) -> Vec<Constraint<AtomTerm, ArcSort>> {
+    fn get(
+        &self,
+        mut arguments: &[AtomTerm],
+        _typeinfo: &TypeInfo,
+    ) -> Vec<Constraint<AtomTerm, ArcSort>> {
         if arguments.is_empty() {
             panic!("all arguments should have length > 0")
         }
