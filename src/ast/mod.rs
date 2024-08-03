@@ -52,8 +52,8 @@ pub(crate) enum Ruleset {
     Combined(Symbol, Vec<Symbol>),
 }
 
-pub(crate) const DEFAULT_FILENAME: &str = "<unnamed.egg>";
-pub(crate) const DUMMY_FILENAME: &str = "<internal.egg>";
+pub const DEFAULT_FILENAME: &str = "<unnamed.egg>";
+pub const DUMMY_FILENAME: &str = "<internal.egg>";
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct SrcFile {
@@ -66,11 +66,11 @@ pub struct SrcFile {
 pub struct Span(pub Arc<SrcFile>, pub usize, pub usize);
 
 lazy_static! {
-    pub(crate) static ref DUMMY_FILE: Arc<SrcFile> = Arc::new(SrcFile {
+    pub static ref DUMMY_FILE: Arc<SrcFile> = Arc::new(SrcFile {
         name: DUMMY_FILENAME.to_string(),
         contents: None
     });
-    pub(crate) static ref DUMMY_SPAN: Span = Span(DUMMY_FILE.clone(), 0, 0);
+    pub static ref DUMMY_SPAN: Span = Span(DUMMY_FILE.clone(), 0, 0);
 }
 
 pub type NCommand = GenericNCommand<Symbol, Symbol>;
