@@ -198,12 +198,12 @@ impl TypeInfo {
             NCommand::Check(span, facts) => {
                 ResolvedNCommand::Check(span.clone(), self.typecheck_facts(facts)?)
             }
-            NCommand::Fail(cmd) => ResolvedNCommand::Fail(Box::new(self.typecheck_command(cmd)?)),
+            NCommand::Fail(span, cmd) => ResolvedNCommand::Fail(span.clone(), Box::new(self.typecheck_command(cmd)?)),
             NCommand::RunSchedule(schedule) => {
                 ResolvedNCommand::RunSchedule(self.typecheck_schedule(schedule)?)
             }
-            NCommand::Pop(n) => ResolvedNCommand::Pop(*n),
-            NCommand::Push(n) => ResolvedNCommand::Push(*n),
+            NCommand::Pop(span, n) => ResolvedNCommand::Pop(span.clone(), *n),
+            NCommand::Push( n) => ResolvedNCommand::Push(*n),
             NCommand::SetOption { name, value } => {
                 let value = self.typecheck_expr(value, &Default::default())?;
                 ResolvedNCommand::SetOption { name: *name, value }
@@ -214,22 +214,24 @@ impl TypeInfo {
             }
             NCommand::PrintOverallStatistics => ResolvedNCommand::PrintOverallStatistics,
             NCommand::CheckProof => ResolvedNCommand::CheckProof,
-            NCommand::PrintTable(table, size) => ResolvedNCommand::PrintTable(*table, *size),
-            NCommand::PrintSize(n) => {
+            NCommand::PrintTable(span, table, size) => ResolvedNCommand::PrintTable(span.clone(), *table, *size),
+            NCommand::PrintSize(span, n) => {
                 // Should probably also resolve the function symbol here
-                ResolvedNCommand::PrintSize(*n)
+                ResolvedNCommand::PrintSize(span.clone(), *n)
             }
-            NCommand::Output { file, exprs } => {
+            NCommand::Output { span, file, exprs } => {
                 let exprs = exprs
                     .iter()
                     .map(|expr| self.typecheck_expr(expr, &Default::default()))
                     .collect::<Result<Vec<_>, _>>()?;
                 ResolvedNCommand::Output {
+                    span: span.clone(),
                     file: file.clone(),
                     exprs,
                 }
             }
-            NCommand::Input { name, file } => ResolvedNCommand::Input {
+            NCommand::Input { span, name, file } => ResolvedNCommand::Input {
+                span: span.clone(),
                 name: *name,
                 file: file.clone(),
             },
@@ -470,8 +472,8 @@ pub enum TypeError {
     Unbound(Symbol),
     #[error("Undefined sort {0}")]
     UndefinedSort(Symbol),
-    #[error("Unbound function {0}")]
-    UnboundFunction(Symbol),
+    #[error("{}\nUnbound function {0}", .1.get_quote())]
+    UnboundFunction(Symbol, Span),
     #[error("Function already bound {0}")]
     FunctionAlreadyBound(Symbol),
     #[error("Function declarations are not allowed after a push.")]
