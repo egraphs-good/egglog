@@ -48,7 +48,7 @@ impl Display for Id {
 #[derive(Clone, Debug)]
 /// The egglog internal representation of already compiled rules
 pub(crate) enum Ruleset {
-    Rules(Symbol, HashMap<Symbol, CompiledRule>),
+    Rules(Symbol, IndexMap<Symbol, CompiledRule>),
     Combined(Symbol, Vec<Symbol>),
 }
 
