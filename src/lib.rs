@@ -33,6 +33,7 @@ use hashbrown::hash_map::Entry;
 use index::ColumnIndex;
 use instant::{Duration, Instant};
 pub use serialize::SerializeConfig;
+pub use serialize::SerializedNode;
 use sort::*;
 pub use termdag::{Term, TermDag, TermId};
 use thiserror::Error;
@@ -1550,24 +1551,6 @@ impl EGraph {
     /// Gets the overall run report and returns it.
     pub fn get_overall_run_report(&self) -> &RunReport {
         &self.overall_run_report
-    }
-
-    /// Serializes the egraph for export to graphviz.
-    ///
-    /// This will limit the total number of nodes so that visualization does not blow up.
-    pub fn serialize_for_graphviz(
-        &self,
-        split_primitive_outputs: bool,
-        max_functions: usize,
-        max_calls_per_function: usize,
-    ) -> egraph_serialize::EGraph {
-        let config = SerializeConfig {
-            split_primitive_outputs,
-            max_functions: Some(max_functions),
-            max_calls_per_function: Some(max_calls_per_function),
-            ..Default::default()
-        };
-        self.serialize(config)
     }
 
     pub(crate) fn print_msg(&mut self, msg: String) {
