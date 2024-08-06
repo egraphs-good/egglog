@@ -48,7 +48,12 @@ impl Display for Id {
 #[derive(Clone, Debug)]
 /// The egglog internal representation of already compiled rules
 pub(crate) enum Ruleset {
+    /// Represents a ruleset with a set of rules.
+    /// Use an [`IndexMap`] to ensure egglog is deterministic.
+    /// Rules added to the [`IndexMap`] first apply their
+    /// actions first.
     Rules(Symbol, IndexMap<Symbol, CompiledRule>),
+    /// A combined ruleset may contain other rulesets.
     Combined(Symbol, Vec<Symbol>),
 }
 
