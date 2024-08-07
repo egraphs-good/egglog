@@ -22,9 +22,9 @@
 (set (size re) 10000)
 (set (size rf) 1)
 
-;; cost of relation is its size
+;; cost of relation is its size minus 1, since the string arg will have a cost of 1 as well
 (rule ((= (size (Rel a)) asize))
-      ((unstable-cost (Rel a) asize)))
+      ((unstable-cost (Rel a) (- asize 1))))
 ;; cost/size of join is product of sizes
 (rule ((Join a b)
        (= (size a) asize)
