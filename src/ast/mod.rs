@@ -1318,7 +1318,7 @@ where
             GenericAction::Change(_ann, change, lhs, args) => match change {
                 Change::Delete => list!("delete", list!(lhs, ++ args)),
                 Change::Subsume => list!("subsume", list!(lhs, ++ args)),
-                Change::Cost(cost) => list!("cost", list!(lhs, ++ args), cost),
+                Change::Cost(cost) => list!("unstable-cost", list!(lhs, ++ args), cost),
             },
             GenericAction::Extract(_ann, expr, variants) => list!("extract", expr, variants),
             GenericAction::Panic(_ann, msg) => list!("panic", format!("\"{}\"", msg.clone())),
