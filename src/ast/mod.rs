@@ -1205,8 +1205,6 @@ pub enum Change {
     /// `subsume` this entry so that it cannot be queried or extracted, but still can be checked.
     /// Note that this is currently forbidden for functions with custom merges.
     Subsume,
-    /// Overrides the `cost` for this entry.
-    Cost(usize),
 }
 
 pub type Action = GenericAction<Symbol, Symbol>;
@@ -1226,11 +1224,13 @@ where
     /// `set` a function to a particular result.
     /// `set` should not be used on datatypes-
     /// instead, use `union`.
+    /// If the last argument is `true`, then we are setting a cost instead of a value.
     Set(
         Span,
         Head,
         Vec<GenericExpr<Head, Leaf>>,
         GenericExpr<Head, Leaf>,
+        bool,
     ),
     /// Delete or subsume (mark as hidden from future rewrites and unextractable) an entry from a function.
     Change(Span, Change, Head, Vec<GenericExpr<Head, Leaf>>),
@@ -1313,12 +1313,17 @@ where
     fn to_sexp(&self) -> Sexp {
         match self {
             GenericAction::Let(_ann, lhs, rhs) => list!("let", lhs, rhs),
-            GenericAction::Set(_ann, lhs, args, rhs) => list!("set", list!(lhs, ++ args), rhs),
+            GenericAction::Set(_ann, lhs, args, rhs, is_cost) => {
+                list!(
+                    if *is_cost { "unstable-cost" } else { "set" },
+                    list!(lhs, ++ args),
+                    rhs
+                )
+            }
             GenericAction::Union(_ann, lhs, rhs) => list!("union", lhs, rhs),
             GenericAction::Change(_ann, change, lhs, args) => match change {
                 Change::Delete => list!("delete", list!(lhs, ++ args)),
                 Change::Subsume => list!("subsume", list!(lhs, ++ args)),
-                Change::Cost(cost) => list!("unstable-cost", list!(lhs, ++ args), cost),
             },
             GenericAction::Extract(_ann, expr, variants) => list!("extract", expr, variants),
             GenericAction::Panic(_ann, msg) => list!("panic", format!("\"{}\"", msg.clone())),
@@ -1341,13 +1346,14 @@ where
             GenericAction::Let(span, lhs, rhs) => {
                 GenericAction::Let(span.clone(), lhs.clone(), f(rhs))
             }
-            GenericAction::Set(span, lhs, args, rhs) => {
+            GenericAction::Set(span, lhs, args, rhs, is_cost) => {
                 let right = f(rhs);
                 GenericAction::Set(
                     span.clone(),
                     lhs.clone(),
                     args.iter().map(f).collect(),
                     right,
+                    *is_cost,
                 )
             }
             GenericAction::Change(span, change, lhs, args) => GenericAction::Change(
@@ -1380,9 +1386,9 @@ where
             // TODO should we refactor `Set` so that we can map over Expr::Call(lhs, args)?
             // This seems more natural to oflatt
             // Currently, visit_exprs does not apply f to the first argument of Set.
-            GenericAction::Set(span, lhs, args, rhs) => {
+            GenericAction::Set(span, lhs, args, rhs, is_cost) => {
                 let args = args.into_iter().map(|e| e.visit_exprs(f)).collect();
-                GenericAction::Set(span, lhs.clone(), args, rhs.visit_exprs(f))
+                GenericAction::Set(span, lhs.clone(), args, rhs.visit_exprs(f), is_cost)
             }
             GenericAction::Change(span, change, lhs, args) => {
                 let args = args.into_iter().map(|e| e.visit_exprs(f)).collect();
@@ -1415,13 +1421,13 @@ where
                 let rhs = rhs.subst_leaf(&mut fvar_expr!());
                 GenericAction::Let(span, lhs, rhs)
             }
-            GenericAction::Set(span, lhs, args, rhs) => {
+            GenericAction::Set(span, lhs, args, rhs, is_cost) => {
                 let args = args
                     .into_iter()
                     .map(|e| e.subst_leaf(&mut fvar_expr!()))
                     .collect();
                 let rhs = rhs.subst_leaf(&mut fvar_expr!());
-                GenericAction::Set(span, lhs.clone(), args, rhs)
+                GenericAction::Set(span, lhs.clone(), args, rhs, is_cost)
             }
             GenericAction::Change(span, change, lhs, args) => {
                 let args = args

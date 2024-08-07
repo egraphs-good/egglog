@@ -439,7 +439,7 @@ impl Function {
         }
         let out_ty = &self.schema.output;
         self.nodes
-            .insert_and_merge(scratch, timestamp, out.subsumed, |prev| {
+            .insert_and_merge(scratch, timestamp, out.subsumed, out.cost, |prev| {
                 if let Some(mut prev) = prev {
                     out_ty.canonicalize(&mut prev, uf);
                     let mut appended = false;

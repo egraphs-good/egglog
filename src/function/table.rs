@@ -136,7 +136,7 @@ impl Table {
     /// previous value, if there was one.
     pub(crate) fn insert(&mut self, inputs: &[Value], out: Value, ts: u32) -> Option<Value> {
         let mut res = None;
-        self.insert_and_merge(inputs, ts, false, |prev| {
+        self.insert_and_merge(inputs, ts, false, None, |prev| {
             res = prev;
             out
         });
@@ -155,6 +155,7 @@ impl Table {
         inputs: &[Value],
         ts: u32,
         subsumed: bool,
+        cost: Option<usize>,
         on_merge: impl FnOnce(Option<Value>) -> Value,
     ) {
         assert!(ts >= self.max_ts);
@@ -167,7 +168,7 @@ impl Table {
             let prev_subsumed = prev.subsumed;
             let prev_cost = prev.cost;
             let next = on_merge(Some(prev.value));
-            if next == prev.value && prev_subsumed == subsumed {
+            if next == prev.value && prev_subsumed == subsumed && prev_cost == cost {
                 return;
             }
             inp.stale_at = ts;
@@ -180,7 +181,7 @@ impl Table {
                     value: next,
                     timestamp: ts,
                     subsumed: subsumed || prev_subsumed,
-                    cost: prev_cost,
+                    cost: cost.or(prev_cost),
                 },
             ));
             *off = new_offset;

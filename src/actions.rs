@@ -29,7 +29,7 @@ impl<'a> ActionCompiler<'a> {
                 self.do_atom_term(b);
                 self.instructions.push(Instruction::Extract(2));
             }
-            GenericCoreAction::Set(_ann, f, args, e) => {
+            GenericCoreAction::Set(_ann, f, args, e, is_cost) => {
                 let ResolvedCall::Func(func) = f else {
                     panic!("Cannot set primitive- should have been caught by typechecking!!!")
                 };
@@ -37,7 +37,8 @@ impl<'a> ActionCompiler<'a> {
                     self.do_atom_term(arg);
                 }
                 self.do_atom_term(e);
-                self.instructions.push(Instruction::Set(func.name));
+                self.instructions
+                    .push(Instruction::Set(func.name, *is_cost));
             }
             GenericCoreAction::Change(_ann, change, f, args) => {
                 let ResolvedCall::Func(func) = f else {
@@ -125,12 +126,13 @@ enum Instruction {
     /// Pop primitive arguments off the stack, calls the primitive,
     /// and push the result onto the stack.
     CallPrimitive(Primitive, usize),
-    /// Pop function arguments off the stack and either deletes or subsumes the corresponding row
-    /// in the function.
+    /// Pop function arguments off the stack and either deletes, subsumes, or changes the cost
+    /// of the corresponding row in the function.
     Change(Change, Symbol),
     /// Pop the value to be set and the function arguments off the stack.
     /// Set the function at the given arguments to the new value.
-    Set(Symbol),
+    /// If the second argument is true, then we set the cost of the function to the value.
+    Set(Symbol, bool),
     /// Union the last `n` values on the stack.
     Union(usize),
     /// Extract the best expression. `n` is always 2.
@@ -206,12 +208,19 @@ impl EGraph {
         table: Symbol,
         new_value: Value,
         stack: &mut Vec<Value>,
+        set_cost: bool,
     ) -> Result<(), Error> {
+        let i64sort: Arc<I64Sort> = self.type_info().get_sort_nofail();
         let function = self.functions.get_mut(&table).unwrap();
 
         let new_len = stack.len() - function.schema.input.len();
         let args = &stack[new_len..];
 
+        if set_cost {
+            let cost = i64::load(&i64sort, &new_value);
+            function.update_cost(args, cost.try_into().unwrap());
+            return Ok(());
+        }
         // We should only have canonical values here: omit the canonicalization step
         let old_value = function.get(args);
 
@@ -328,7 +337,7 @@ impl EGraph {
                         return Err(Error::PrimitiveError(p.clone(), values.to_vec()));
                     }
                 }
-                Instruction::Set(f) => {
+                Instruction::Set(f, is_cost) => {
                     assert!(make_defaults);
                     let function = self.functions.get_mut(f).unwrap();
                     // desugaring should have desugared
@@ -336,8 +345,7 @@ impl EGraph {
                     // except for setting the parent relation
                     let new_value = stack.pop().unwrap();
                     let new_len = stack.len() - function.schema.input.len();
-
-                    self.perform_set(*f, new_value, stack)?;
+                    self.perform_set(*f, new_value, stack, *is_cost)?;
                     stack.truncate(new_len)
                 }
                 Instruction::Union(arity) => {
@@ -418,7 +426,6 @@ impl EGraph {
                             }
                             function.subsume(args);
                         }
-                        Change::Cost(cost) => function.update_cost(args, *cost),
                     }
                     stack.truncate(new_len);
                 }

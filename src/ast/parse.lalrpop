@@ -122,10 +122,10 @@ Cost: Option<usize> = {
 }
 
 NonLetAction: Action = {
-    <lo:LParen> "set" LParen <f: Ident> <args:Expr*> RParen <v:Expr> <hi:RParen> => Action::Set ( Span(srcfile.clone(), lo, hi), f, args, v ),
+    <lo:LParen> "set" LParen <f: Ident> <args:Expr*> RParen <v:Expr> <hi:RParen> => Action::Set ( Span(srcfile.clone(), lo, hi), f, args, v, false ),
     <lo:LParen> "delete" LParen <f: Ident> <args:Expr*> RParen <hi:RParen> => Action::Change ( Span(srcfile.clone(), lo, hi), Change::Delete, f, args),
     <lo:LParen> "subsume" LParen <f: Ident> <args:Expr*> RParen <hi:RParen> => Action::Change ( Span(srcfile.clone(), lo, hi), Change::Subsume, f, args),
-    <lo:LParen> "unstable-cost" LParen <f: Ident> <args:Expr*> RParen <cost:UNum> <hi:RParen> => Action::Change ( Span(srcfile.clone(), lo, hi), Change::Cost(cost), f, args),
+    <lo:LParen> "unstable-cost" LParen <f: Ident> <args:Expr*> RParen <cost:Expr> <hi:RParen> => Action::Set ( Span(srcfile.clone(), lo, hi), f, args, cost, true ),
     <lo:LParen> "union" <e1:Expr> <e2:Expr> <hi:RParen> => Action::Union(Span(srcfile.clone(), lo, hi), e1, e2),
     <lo:LParen> "panic" <msg:String> <hi:RParen> => Action::Panic(Span(srcfile.clone(), lo, hi), msg),
     <lo:LParen> "extract" <expr:Expr> <hi:RParen> => Action::Extract(Span(srcfile.clone(), lo, hi), expr, Expr::Lit(Span(srcfile.clone(), lo, hi), Literal::Int(0))),

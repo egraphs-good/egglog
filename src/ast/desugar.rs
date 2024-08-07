@@ -118,7 +118,10 @@ fn add_semi_naive_rule(desugar: &mut Desugar, rule: Rule) -> Option<Rule> {
     let mut var_set = HashSet::default();
     for head_slice in new_rule.head.0.iter_mut().rev() {
         match head_slice {
-            Action::Set(span, _, _, expr) => {
+            Action::Set(span, _, _, expr, is_cost) => {
+                if *is_cost {
+                    continue;
+                }
                 var_set.extend(expr.vars());
                 if let Expr::Call(..) = expr {
                     add_new_rule = true;

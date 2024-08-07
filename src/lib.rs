@@ -1415,7 +1415,7 @@ impl EGraph {
                     Action::Expr(span.clone(), Expr::Call(span.clone(), func_name, exprs))
                 } else {
                     let out = exprs.pop().unwrap();
-                    Action::Set(span.clone(), func_name, exprs, out)
+                    Action::Set(span.clone(), func_name, exprs, out, false)
                 },
             );
         }
