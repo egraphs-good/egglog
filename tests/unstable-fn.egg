@@ -1,0 +1,70 @@
+(datatype Math
+  (Num i64)
+  (Var String)
+  (Add Math Math)
+  (Mul Math Math))
+
+(rewrite (Mul (Num x) (Num y)) (Num (* x y)))
+
+(datatype MathList
+  (Nil)
+  (Cons Math MathList))
+
+(sort MathFn (UnstableFn (Math) Math))
+
+
+(function square (Math) Math)
+(rewrite (square x) (Mul x x))
+
+(let square-fn (unstable-fn "square" ))
+
+;; test that we can call a function
+(let squared-3 (unstable-app square-fn (Num 3)))
+(check (= squared-3 (square (Num 3))))
+
+;; test that we can apply a function to a list
+
+(function list-map-math (MathList MathFn) MathList)
+(rewrite (list-map-math (Nil) fn) (Nil))
+(rewrite (list-map-math (Cons x xs) fn) (Cons (unstable-app fn x) (list-map-math xs fn)))
+
+(let x (Cons (Num 1) (Cons (Num 2) (Cons (Num 3) (Nil)))))
+(let squared-x (list-map-math x square-fn))
+(run-schedule (saturate (run)))
+(check (= squared-x (Cons (Num 1) (Cons (Num 4) (Cons (Num 9) (Nil))))))
+
+;; Test that we can partially apply a function in a rewrite rule
+
+(function list-multiply-by (MathList Math) MathList)
+(rewrite (list-multiply-by l i) (list-map-math l (unstable-fn "Mul" i)))
+
+(let doubled-x (list-multiply-by x (Num 2)))
+(run-schedule (saturate (run)))
+(check (= doubled-x (Cons (Num 2) (Cons (Num 4) (Cons (Num 6) (Nil))))))
+
+;; Test we can define a higher order compose function
+
+(function composed-math (MathFn MathFn Math) Math)
+(rewrite (composed-math f g v) (unstable-app f (unstable-app g v)))
+
+(let square-of-double (unstable-fn "composed-math" square-fn (unstable-fn "Mul" (Num 2))))
+
+(let squared-doubled-x (list-map-math x square-of-double))
+(run-schedule (saturate (run)))
+(check (= squared-doubled-x (Cons (Num 4) (Cons (Num 16) (Cons (Num 36) (Nil))))))
+
+
+;; See that it supports primitive values as well
+(sort i64Fun (UnstableFn (i64) i64))
+
+(function composed-i64-math (MathFn i64Fun i64) Math)
+(rewrite (composed-i64-math f g v) (unstable-app f (Num (unstable-app g v))))
+
+(let res (composed-i64-math square-fn (unstable-fn "*" 2) 4))
+(run-schedule (saturate (run)))
+(check (= res (Num 64)))
+
+;; Verify that function parsing works with a function with no args
+(sort TestNullaryFunction (UnstableFn () Math))
+;; Verify that we know the type of a function based on the string name
+(extract (unstable-fn "square"))

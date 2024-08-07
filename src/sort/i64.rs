@@ -76,7 +76,10 @@ impl Sort for I64Sort {
 
     fn make_expr(&self, _egraph: &EGraph, value: Value) -> (Cost, Expr) {
         assert!(value.tag == self.name());
-        (1, Expr::Lit((), Literal::Int(value.bits as _)))
+        (
+            1,
+            GenericExpr::Lit(DUMMY_SPAN.clone(), Literal::Int(value.bits as _)),
+        )
     }
 }
 
@@ -108,15 +111,15 @@ impl PrimitiveLike for CountMatches {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
-        AllEqualTypeConstraint::new(self.name())
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        AllEqualTypeConstraint::new(self.name(), span.clone())
             .with_all_arguments_sort(self.string.clone())
             .with_exact_length(3)
             .with_output_sort(self.int.clone())
             .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let string1 = Symbol::load(&self.string, &values[0]).to_string();
         let string2 = Symbol::load(&self.string, &values[1]).to_string();
         Some(Value::from(string1.matches(&string2).count() as i64))

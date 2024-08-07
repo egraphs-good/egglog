@@ -73,8 +73,10 @@ pub type Subst = IndexMap<Symbol, Value>;
 
 pub trait PrimitiveLike {
     fn name(&self) -> Symbol;
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint>;
-    fn apply(&self, values: &[Value], egraph: &EGraph) -> Option<Value>;
+    /// Constructs a type constraint for the primitive that uses the span information
+    /// for error localization.
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint>;
+    fn apply(&self, values: &[Value], egraph: Option<&mut EGraph>) -> Option<Value>;
 }
 
 /// Running a schedule produces a report of the results.
@@ -108,6 +110,30 @@ impl RunReport {
             s.push_str("...");
         }
         s
+    }
+
+    fn add_rule_search_time(&mut self, rule: Symbol, time: Duration) {
+        *self.search_time_per_rule.entry(rule).or_default() += time;
+    }
+
+    fn add_ruleset_search_time(&mut self, ruleset: Symbol, time: Duration) {
+        *self.search_time_per_ruleset.entry(ruleset).or_default() += time;
+    }
+
+    fn add_rule_apply_time(&mut self, rule: Symbol, time: Duration) {
+        *self.apply_time_per_rule.entry(rule).or_default() += time;
+    }
+
+    fn add_ruleset_apply_time(&mut self, ruleset: Symbol, time: Duration) {
+        *self.apply_time_per_ruleset.entry(ruleset).or_default() += time;
+    }
+
+    fn add_ruleset_rebuild_time(&mut self, ruleset: Symbol, time: Duration) {
+        *self.rebuild_time_per_ruleset.entry(ruleset).or_default() += time;
+    }
+
+    fn add_rule_num_matches(&mut self, rule: Symbol, num_matches: usize) {
+        *self.num_matches_per_rule.entry(rule).or_default() += num_matches;
     }
 }
 
@@ -272,15 +298,15 @@ pub struct Primitive(Arc<dyn PrimitiveLike>);
 impl Primitive {
     // Takes the full signature of a primitive (including input and output types)
     // Returns whether the primitive is compatible with this signature
-    fn accept(&self, tys: &[Arc<dyn Sort>]) -> bool {
+    fn accept(&self, tys: &[Arc<dyn Sort>], typeinfo: &TypeInfo) -> bool {
         let mut constraints = vec![];
         let lits: Vec<_> = (0..tys.len())
-            .map(|i| AtomTerm::Literal(Literal::Int(i as i64)))
+            .map(|i| AtomTerm::Literal(DUMMY_SPAN.clone(), Literal::Int(i as i64)))
             .collect();
         for (lit, ty) in lits.iter().zip(tys.iter()) {
             constraints.push(Constraint::Assign(lit.clone(), ty.clone()))
         }
-        constraints.extend(self.get_type_constraints().get(&lits));
+        constraints.extend(self.get_type_constraints(&DUMMY_SPAN).get(&lits, typeinfo));
         let problem = Problem {
             constraints,
             range: HashSet::default(),
@@ -338,16 +364,16 @@ impl PrimitiveLike for SimplePrimitive {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         let sorts: Vec<_> = self
             .input
             .iter()
             .chain(once(&self.output as &ArcSort))
             .cloned()
             .collect();
-        SimpleTypeConstraint::new(self.name(), sorts).into_box()
+        SimpleTypeConstraint::new(self.name(), sorts, span.clone()).into_box()
     }
-    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         (self.f)(values)
     }
 }
@@ -403,14 +429,13 @@ pub struct EGraph {
     unionfind: UnionFind,
     pub(crate) desugar: Desugar,
     pub functions: HashMap<Symbol, Function>,
-    rulesets: HashMap<Symbol, HashMap<Symbol, Rule>>,
-    ruleset_iteration: HashMap<Symbol, usize>,
+    rulesets: HashMap<Symbol, Ruleset>,
+    rule_last_run_timestamp: HashMap<Symbol, u32>,
     proofs_enabled: bool,
     terms_enabled: bool,
     interactive_mode: bool,
     timestamp: u32,
     pub run_mode: RunMode,
-    // pub(crate) term_header_added: bool,
     pub test_proofs: bool,
     pub match_limit: usize,
     pub node_limit: usize,
@@ -425,16 +450,6 @@ pub struct EGraph {
     msgs: Vec<String>,
 }
 
-#[derive(Clone, Debug)]
-struct Rule {
-    query: CompiledQuery,
-    program: Program,
-    matches: usize,
-    times_banned: usize,
-    banned_until: usize,
-    todo_timestamp: u32,
-}
-
 impl Default for EGraph {
     fn default() -> Self {
         let mut egraph = Self {
@@ -442,7 +457,7 @@ impl Default for EGraph {
             unionfind: Default::default(),
             functions: Default::default(),
             rulesets: Default::default(),
-            ruleset_iteration: Default::default(),
+            rule_last_run_timestamp: Default::default(),
             desugar: Desugar::default(),
             match_limit: usize::MAX,
             node_limit: usize::MAX,
@@ -460,24 +475,24 @@ impl Default for EGraph {
             msgs: Default::default(),
             type_info: Default::default(),
         };
-        egraph.rulesets.insert("".into(), Default::default());
+        egraph
+            .rulesets
+            .insert("".into(), Ruleset::Rules("".into(), Default::default()));
         egraph
     }
 }
 
 #[derive(Debug, Error)]
 #[error("Not found: {0}")]
-pub struct NotFoundError(Expr);
+pub struct NotFoundError(String);
 
 /// For each rule, we produce a `SearchResult`
 /// storing data about that rule's matches.
 /// When a rule has no variables, it may still match- in this case
 /// the `did_match` field is used.
 struct SearchResult {
-    name: Symbol,
     all_matches: Vec<Value>,
     did_match: bool,
-    rule_search_time: Duration,
 }
 
 impl EGraph {
@@ -594,7 +609,15 @@ impl EGraph {
     pub fn find(&self, value: Value) -> Value {
         if self.terms_enabled {
             // HACK using value tag for parent table name
-            let parent_name = self.desugar.parent_name(value.tag);
+            let parent_name = self
+                .desugar
+                .lookup_parent_name(value.tag)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "Term encoding should have created parent table for {}",
+                        value.tag
+                    )
+                });
             if let Some(func) = self.functions.get(&parent_name) {
                 func.get(&[value])
                     .unwrap_or_else(|| panic!("No value {:?} in {parent_name}.", value,))
@@ -822,8 +845,8 @@ impl EGraph {
     // returns whether the egraph was updated
     fn run_schedule(&mut self, sched: &ResolvedSchedule) -> RunReport {
         match sched {
-            ResolvedSchedule::Run(config) => self.run_rules(config),
-            ResolvedSchedule::Repeat(limit, sched) => {
+            ResolvedSchedule::Run(span, config) => self.run_rules(span, config),
+            ResolvedSchedule::Repeat(_span, limit, sched) => {
                 let mut report = RunReport::default();
                 for _i in 0..*limit {
                     let rec = self.run_schedule(sched);
@@ -834,7 +857,7 @@ impl EGraph {
                 }
                 report
             }
-            ResolvedSchedule::Saturate(sched) => {
+            ResolvedSchedule::Saturate(_span, sched) => {
                 let mut report = RunReport::default();
                 loop {
                     let rec = self.run_schedule(sched);
@@ -845,7 +868,7 @@ impl EGraph {
                 }
                 report
             }
-            ResolvedSchedule::Sequence(scheds) => {
+            ResolvedSchedule::Sequence(_span, scheds) => {
                 let mut report = RunReport::default();
                 for sched in scheds {
                     report = report.union(&self.run_schedule(sched));
@@ -872,7 +895,7 @@ impl EGraph {
         termdag.to_string(&term)
     }
 
-    fn run_rules(&mut self, config: &ResolvedRunConfig) -> RunReport {
+    fn run_rules(&mut self, span: &Span, config: &ResolvedRunConfig) -> RunReport {
         let mut report: RunReport = Default::default();
 
         // first rebuild
@@ -881,16 +904,13 @@ impl EGraph {
         log::debug!("database size: {}", self.num_tuples());
         log::debug!("Made {updates} updates");
         // add to the rebuild time for this ruleset
-        *report
-            .rebuild_time_per_ruleset
-            .entry(config.ruleset)
-            .or_default() += rebuild_start.elapsed();
+        report.add_ruleset_rebuild_time(config.ruleset, rebuild_start.elapsed());
         self.timestamp += 1;
 
         let GenericRunConfig { ruleset, until } = config;
 
         if let Some(facts) = until {
-            if self.check_facts(facts).is_ok() {
+            if self.check_facts(span, facts).is_ok() {
                 log::info!(
                     "Breaking early because of facts:\n {}!",
                     ListDisplay(facts, "\n")
@@ -912,142 +932,141 @@ impl EGraph {
         report
     }
 
+    /// Search all the rules in a ruleset.
+    /// Add the search results for a rule to search_results, a map indexed by rule name.
+    fn search_rules(
+        &self,
+        ruleset: Symbol,
+        run_report: &mut RunReport,
+        search_results: &mut HashMap<Symbol, SearchResult>,
+    ) {
+        let rules = self
+            .rulesets
+            .get(&ruleset)
+            .unwrap_or_else(|| panic!("ruleset does not exist: {}", &ruleset));
+        match rules {
+            Ruleset::Rules(_ruleset_name, rule_names) => {
+                let copy_rules = rule_names.clone();
+                let search_start = Instant::now();
+
+                for (rule_name, rule) in copy_rules.iter() {
+                    let mut all_matches = vec![];
+                    let rule_search_start = Instant::now();
+                    let mut did_match = false;
+                    let timestamp = self.rule_last_run_timestamp.get(rule_name).unwrap_or(&0);
+                    self.run_query(&rule.query, *timestamp, false, |values| {
+                        did_match = true;
+                        assert_eq!(values.len(), rule.query.vars.len());
+                        all_matches.extend_from_slice(values);
+                        Ok(())
+                    });
+                    let rule_search_time = rule_search_start.elapsed();
+                    log::trace!(
+                        "Searched for {rule_name} in {:.3}s ({} results)",
+                        rule_search_time.as_secs_f64(),
+                        all_matches.len()
+                    );
+                    run_report.add_rule_search_time(*rule_name, rule_search_time);
+                    search_results.insert(
+                        *rule_name,
+                        SearchResult {
+                            all_matches,
+                            did_match,
+                        },
+                    );
+                }
+
+                let search_time = search_start.elapsed();
+                run_report.add_ruleset_search_time(ruleset, search_time);
+            }
+            Ruleset::Combined(_name, sub_rulesets) => {
+                let start_time = Instant::now();
+                for sub_ruleset in sub_rulesets {
+                    self.search_rules(*sub_ruleset, run_report, search_results);
+                }
+                let search_time = start_time.elapsed();
+                run_report.add_ruleset_search_time(ruleset, search_time);
+            }
+        }
+    }
+
+    fn apply_rules(
+        &mut self,
+        ruleset: Symbol,
+        run_report: &mut RunReport,
+        search_results: &HashMap<Symbol, SearchResult>,
+    ) {
+        // TODO this clone is not efficient
+        let rules = self.rulesets.get(&ruleset).unwrap().clone();
+        match rules {
+            Ruleset::Rules(_name, compiled_rules) => {
+                let apply_start = Instant::now();
+                let rule_names = compiled_rules.keys().cloned().collect::<Vec<_>>();
+                for rule_name in rule_names {
+                    let SearchResult {
+                        all_matches,
+                        did_match,
+                    } = search_results.get(&rule_name).unwrap();
+                    let rule = compiled_rules.get(&rule_name).unwrap();
+                    let num_vars = rule.query.vars.len();
+
+                    // make sure the query requires matches
+                    if num_vars != 0 {
+                        run_report.add_rule_num_matches(rule_name, all_matches.len() / num_vars);
+                    }
+
+                    self.rule_last_run_timestamp
+                        .insert(rule_name, self.timestamp);
+                    let rule_apply_start = Instant::now();
+
+                    let stack = &mut vec![];
+
+                    // when there are no variables, a query can still fail to match
+                    // here we handle that case
+                    if num_vars == 0 {
+                        if *did_match {
+                            stack.clear();
+                            self.run_actions(stack, &[], &rule.program, true)
+                                .unwrap_or_else(|e| {
+                                    panic!("error while running actions for {rule_name}: {e}")
+                                });
+                        }
+                    } else {
+                        for values in all_matches.chunks(num_vars) {
+                            stack.clear();
+                            self.run_actions(stack, values, &rule.program, true)
+                                .unwrap_or_else(|e| {
+                                    panic!("error while running actions for {rule_name}: {e}")
+                                });
+                        }
+                    }
+
+                    // add to the rule's apply time
+                    run_report.add_rule_apply_time(rule_name, rule_apply_start.elapsed());
+                }
+                run_report.add_ruleset_apply_time(ruleset, apply_start.elapsed());
+            }
+            Ruleset::Combined(_name, sub_rulesets) => {
+                let start_time = Instant::now();
+                for sub_ruleset in sub_rulesets {
+                    self.apply_rules(sub_ruleset, run_report, search_results);
+                }
+                let apply_time = start_time.elapsed();
+                run_report.add_ruleset_apply_time(ruleset, apply_time);
+            }
+        }
+    }
+
     fn step_rules(&mut self, ruleset: Symbol) -> RunReport {
         let n_unions_before = self.unionfind.n_unions();
-        // don't ban parent or rebuilding
-        let match_limit =
-            if ruleset.as_str().contains("parent_") || ruleset.as_str().contains("rebuilding_") {
-                usize::MAX
-            } else {
-                self.match_limit
-            };
-        let mut report = RunReport::default();
+        let mut run_report = Default::default();
+        let mut search_results = HashMap::<Symbol, SearchResult>::default();
+        self.search_rules(ruleset, &mut run_report, &mut search_results);
+        self.apply_rules(ruleset, &mut run_report, &search_results);
+        run_report.updated |=
+            self.did_change_tables() || n_unions_before != self.unionfind.n_unions();
 
-        let ban_length = 5;
-
-        if !self.rulesets.contains_key(&ruleset) {
-            panic!("run: No ruleset named '{ruleset}'");
-        }
-        let mut rules: HashMap<Symbol, Rule> =
-            std::mem::take(self.rulesets.get_mut(&ruleset).unwrap());
-        let iteration = *self.ruleset_iteration.entry(ruleset).or_default();
-        self.ruleset_iteration.insert(ruleset, iteration + 1);
-        // TODO why did I have to copy the rules here for the first for loop?
-        let copy_rules = rules.clone();
-        let search_start = Instant::now();
-        let mut searched = vec![];
-        for (name, rule) in copy_rules.iter() {
-            let mut all_matches = vec![];
-            if rule.banned_until <= iteration {
-                let mut fuel = safe_shl(match_limit, rule.times_banned);
-                let rule_search_start = Instant::now();
-                let mut did_match = false;
-                self.run_query(&rule.query, rule.todo_timestamp, false, |values| {
-                    did_match = true;
-                    assert_eq!(values.len(), rule.query.vars.len());
-                    all_matches.extend_from_slice(values);
-                    if fuel > 0 {
-                        fuel -= 1;
-                        Ok(())
-                    } else {
-                        Err(())
-                    }
-                });
-                let rule_search_time = rule_search_start.elapsed();
-                log::trace!(
-                    "Searched for {name} in {:.3}s ({} results)",
-                    rule_search_time.as_secs_f64(),
-                    all_matches.len()
-                );
-                searched.push(SearchResult {
-                    name: *name,
-                    all_matches,
-                    rule_search_time,
-                    did_match,
-                });
-            }
-        }
-
-        let search_elapsed = search_start.elapsed();
-        // add to the ruleset searched time
-        *report
-            .search_time_per_ruleset
-            .entry(ruleset)
-            .or_insert(Duration::default()) += search_elapsed;
-
-        let apply_start = Instant::now();
-        for search_result in searched {
-            let SearchResult {
-                name,
-                all_matches,
-                rule_search_time,
-                did_match,
-            } = search_result;
-            let rule = rules.get_mut(&name).unwrap();
-            // add to the rule's search time
-            *report
-                .search_time_per_rule
-                .entry(name)
-                .or_insert(Duration::default()) += rule_search_time;
-            let num_vars = rule.query.vars.len();
-
-            // make sure the query requires matches
-            if num_vars != 0 {
-                *report.num_matches_per_rule.entry(name).or_insert(0) +=
-                    all_matches.len() / num_vars;
-
-                // backoff logic
-                let len = all_matches.len() / num_vars;
-                let threshold = safe_shl(match_limit, rule.times_banned);
-                if len > threshold {
-                    let ban_length = safe_shl(ban_length, rule.times_banned);
-                    rule.times_banned = rule.times_banned.saturating_add(1);
-                    rule.banned_until = iteration + ban_length;
-                    log::info!("Banning rule {name} for {ban_length} iterations, matched {len} > {threshold} times");
-                    report.updated = true;
-                    continue;
-                }
-            }
-
-            rule.todo_timestamp = self.timestamp;
-            let rule_apply_start = Instant::now();
-
-            let stack = &mut vec![];
-
-            // when there are no variables, a query can still fail to match
-            // here we handle that case
-            if num_vars == 0 {
-                if did_match {
-                    rule.matches += 1;
-                    stack.clear();
-                    self.run_actions(stack, &[], &rule.program, true)
-                        .unwrap_or_else(|e| panic!("error while running actions for {name}: {e}"));
-                }
-            } else {
-                for values in all_matches.chunks(num_vars) {
-                    rule.matches += 1;
-                    stack.clear();
-                    self.run_actions(stack, values, &rule.program, true)
-                        .unwrap_or_else(|e| panic!("error while running actions for {name}: {e}"));
-                }
-            }
-
-            // add to the rule's apply time
-            *report
-                .apply_time_per_rule
-                .entry(name)
-                .or_insert(Duration::default()) += rule_apply_start.elapsed();
-        }
-        self.rulesets.insert(ruleset, rules);
-        let apply_elapsed = apply_start.elapsed();
-        // add to the apply time for the ruleset
-        *report
-            .apply_time_per_ruleset
-            .entry(ruleset)
-            .or_insert(Duration::default()) += apply_elapsed;
-        report.updated |= self.did_change_tables() || n_unions_before != self.unionfind.n_unions();
-
-        report
+        run_report
     }
 
     fn did_change_tables(&self) -> bool {
@@ -1076,23 +1095,21 @@ impl EGraph {
         let program = self
             .compile_actions(&vars, &actions)
             .map_err(Error::TypeErrors)?;
-        let compiled_rule = Rule {
-            query,
-            matches: 0,
-            times_banned: 0,
-            banned_until: 0,
-            todo_timestamp: 0,
-            program,
-        };
+        let compiled_rule = CompiledRule { query, program };
         if let Some(rules) = self.rulesets.get_mut(&ruleset) {
-            match rules.entry(name) {
-                Entry::Occupied(_) => panic!("Rule '{name}' was already present"),
-                Entry::Vacant(e) => e.insert(compiled_rule),
-            };
+            match rules {
+                Ruleset::Rules(_, rules) => {
+                    match rules.entry(name) {
+                        Entry::Occupied(_) => panic!("Rule '{name}' was already present"),
+                        Entry::Vacant(e) => e.insert(compiled_rule),
+                    };
+                    Ok(name)
+                }
+                Ruleset::Combined(_, _) => Err(Error::CombinedRulesetError(ruleset)),
+            }
         } else {
-            panic!("No such ruleset {ruleset}");
+            Err(Error::NoSuchRuleset(ruleset))
         }
-        Ok(name)
     }
 
     pub(crate) fn add_rule(
@@ -1108,7 +1125,7 @@ impl EGraph {
         let (actions, _) = actions.to_core_actions(
             self.type_info(),
             &mut Default::default(),
-            &mut ResolvedGen::new(),
+            &mut ResolvedGen::new("$".to_string()),
         )?;
         let program = self
             .compile_actions(&Default::default(), &actions)
@@ -1120,7 +1137,7 @@ impl EGraph {
 
     pub fn eval_expr(&mut self, expr: &Expr) -> Result<(ArcSort, Value), Error> {
         let fresh_name = self.desugar.get_fresh();
-        let command = Command::Action(Action::Let((), fresh_name, expr.clone()));
+        let command = Command::Action(Action::Let(DUMMY_SPAN.clone(), fresh_name, expr.clone()));
         self.run_program(vec![command])?;
         // find the table with the same name as the fresh name
         let func = self.functions.get(&fresh_name).unwrap();
@@ -1139,7 +1156,7 @@ impl EGraph {
         let (actions, mapped_expr) = expr.to_core_actions(
             self.type_info(),
             &mut Default::default(),
-            &mut ResolvedGen::new(),
+            &mut ResolvedGen::new("$".to_string()),
         )?;
         let target = mapped_expr.get_corresponding_var_or_lit(self.type_info());
         let program = self
@@ -1150,10 +1167,17 @@ impl EGraph {
         Ok(stack.pop().unwrap())
     }
 
+    fn add_combined_ruleset(&mut self, name: Symbol, rulesets: Vec<Symbol>) {
+        match self.rulesets.entry(name) {
+            Entry::Occupied(_) => panic!("Ruleset '{name}' was already present"),
+            Entry::Vacant(e) => e.insert(Ruleset::Combined(name, rulesets)),
+        };
+    }
+
     fn add_ruleset(&mut self, name: Symbol) {
         match self.rulesets.entry(name) {
             Entry::Occupied(_) => panic!("Ruleset '{name}' was already present"),
-            Entry::Vacant(e) => e.insert(Default::default()),
+            Entry::Vacant(e) => e.insert(Ruleset::Rules(name, Default::default())),
         };
     }
 
@@ -1187,8 +1211,9 @@ impl EGraph {
         }
     }
 
-    fn check_facts(&mut self, facts: &[ResolvedFact]) -> Result<(), Error> {
+    fn check_facts(&mut self, span: &Span, facts: &[ResolvedFact]) -> Result<(), Error> {
         let rule = ast::ResolvedRule {
+            span: span.clone(),
             head: ResolvedActions::default(),
             body: facts.to_vec(),
         };
@@ -1243,6 +1268,10 @@ impl EGraph {
                 self.add_ruleset(name);
                 log::info!("Declared ruleset {name}.");
             }
+            ResolvedNCommand::UnstableCombinedRuleset(name, others) => {
+                self.add_combined_ruleset(name, others);
+                log::info!("Declared ruleset {name}.");
+            }
             ResolvedNCommand::NormRule {
                 ruleset,
                 rule,
@@ -1262,13 +1291,13 @@ impl EGraph {
                 log::info!("Overall statistics:\n{}", self.overall_run_report);
                 self.print_msg(format!("Overall statistics:\n{}", self.overall_run_report));
             }
-            ResolvedNCommand::Check(facts) => {
-                self.check_facts(&facts)?;
+            ResolvedNCommand::Check(span, facts) => {
+                self.check_facts(&span, &facts)?;
                 log::info!("Checked fact {:?}.", facts);
             }
             ResolvedNCommand::CheckProof => log::error!("TODO implement proofs"),
             ResolvedNCommand::CoreAction(action) => match &action {
-                ResolvedAction::Let((), name, contents) => {
+                ResolvedAction::Let(_, name, contents) => {
                     panic!("Globals should have been desugared away: {name} = {contents}")
                 }
                 _ => {
@@ -1342,7 +1371,7 @@ impl EGraph {
 
         for t in &func.schema.input {
             match t.name().as_str() {
-                "i64" | "String" => {}
+                "i64" | "f64" | "String" => {}
                 s => panic!("Unsupported type {} for input", s),
             }
         }
@@ -1359,6 +1388,7 @@ impl EGraph {
         let mut contents = String::new();
         f.read_to_string(&mut contents).unwrap();
 
+        let span: Span = DUMMY_SPAN.clone();
         let mut actions: Vec<Action> = vec![];
         let mut str_buf: Vec<&str> = vec![];
         for line in contents.lines() {
@@ -1369,10 +1399,12 @@ impl EGraph {
             }
 
             let parse = |s: &str| -> Expr {
-                if let Ok(i) = s.parse() {
-                    Expr::Lit((), Literal::Int(i))
-                } else {
-                    Expr::Lit((), Literal::String(s.into()))
+                match s.parse::<i64>() {
+                    Ok(i) => Expr::Lit(span.clone(), Literal::Int(i)),
+                    Err(_) => match s.parse::<f64>() {
+                        Ok(f) => Expr::Lit(span.clone(), Literal::F64(f.into())),
+                        Err(_) => Expr::Lit(span.clone(), Literal::String(s.into())),
+                    },
                 }
             };
 
@@ -1380,10 +1412,10 @@ impl EGraph {
 
             actions.push(
                 if function_type.is_datatype || function_type.output.name() == UNIT_SYM.into() {
-                    Action::Expr((), Expr::Call((), func_name, exprs))
+                    Action::Expr(span.clone(), Expr::Call(span.clone(), func_name, exprs))
                 } else {
                     let out = exprs.pop().unwrap();
-                    Action::Set((), func_name, exprs, out)
+                    Action::Set(span.clone(), func_name, exprs, out)
                 },
             );
         }
@@ -1406,8 +1438,12 @@ impl EGraph {
         }
     }
 
-    pub fn set_underscores_for_desugaring(&mut self, underscores: usize) {
-        self.desugar.number_underscores = underscores;
+    pub fn set_reserved_symbol(&mut self, sym: Symbol) {
+        assert!(
+            !self.desugar.fresh_gen.has_been_used(),
+            "Reserved symbol must be set before any symbols are generated"
+        );
+        self.desugar.fresh_gen = SymbolGen::new(sym.to_string());
     }
 
     fn process_command(&mut self, command: Command) -> Result<Vec<ResolvedNCommand>, Error> {
@@ -1417,7 +1453,7 @@ impl EGraph {
 
         let program = self.type_info_mut().typecheck_program(&program)?;
 
-        let program = remove_globals(&self.type_info, program);
+        let program = remove_globals(&self.type_info, program, &mut self.desugar.fresh_gen);
 
         Ok(program)
     }
@@ -1450,12 +1486,22 @@ impl EGraph {
         Ok(self.flush_msgs())
     }
 
-    pub fn parse_program(&self, input: &str) -> Result<Vec<Command>, Error> {
-        self.desugar.parse_program(input)
+    pub fn parse_program(
+        &self,
+        filename: Option<String>,
+        input: &str,
+    ) -> Result<Vec<Command>, Error> {
+        self.desugar.parse_program(filename, input)
     }
 
-    pub fn parse_and_run_program(&mut self, input: &str) -> Result<Vec<String>, Error> {
-        let parsed = self.desugar.parse_program(input)?;
+    /// Parse and run a program, returning a list of messages.
+    /// If filename is None, a default name will be provided
+    pub fn parse_and_run_program(
+        &mut self,
+        filename: Option<String>,
+        input: &str,
+    ) -> Result<Vec<String>, Error> {
+        let parsed = self.desugar.parse_program(filename, input)?;
         self.run_program(parsed)
     }
 
@@ -1512,16 +1558,16 @@ impl EGraph {
     pub fn serialize_for_graphviz(
         &self,
         split_primitive_outputs: bool,
+        max_functions: usize,
+        max_calls_per_function: usize,
     ) -> egraph_serialize::EGraph {
         let config = SerializeConfig {
             split_primitive_outputs,
-            max_functions: Some(40),
-            max_calls_per_function: Some(40),
+            max_functions: Some(max_functions),
+            max_calls_per_function: Some(max_calls_per_function),
             ..Default::default()
         };
-        let mut serialized = self.serialize(config);
-        serialized.inline_leaves();
-        serialized
+        self.serialize(config)
     }
 
     pub(crate) fn print_msg(&mut self, msg: String) {
@@ -1554,6 +1600,10 @@ pub enum Error {
     TypeErrors(Vec<TypeError>),
     #[error("Check failed: \n{}", ListDisplay(.0, "\n"))]
     CheckError(Vec<Fact>),
+    #[error("No such ruleset: {0}")]
+    NoSuchRuleset(Symbol),
+    #[error("Attempted to add a rule to combined ruleset {0}. Combined rulesets may only depend on other rulesets.")]
+    CombinedRulesetError(Symbol),
     #[error("Evaluating primitive {0:?} failed. ({0:?} {:?})", ListDebug(.1, " "))]
     PrimitiveError(Primitive, Vec<Value>),
     #[error("Illegal merge attempted for function {0}, {1:?} != {2:?}")]
@@ -1568,10 +1618,6 @@ pub enum Error {
     SubsumeMergeError(Symbol),
 }
 
-fn safe_shl(a: usize, b: usize) -> usize {
-    a.checked_shl(b.try_into().unwrap()).unwrap_or(usize::MAX)
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -1579,7 +1625,7 @@ mod tests {
     use crate::{
         constraint::SimpleTypeConstraint,
         sort::{FromSort, I64Sort, IntoSort, Sort, VecSort},
-        EGraph, PrimitiveLike, Value,
+        EGraph, PrimitiveLike, Span, Value,
     };
 
     struct InnerProduct {
@@ -1592,15 +1638,20 @@ mod tests {
             "inner-product".into()
         }
 
-        fn get_type_constraints(&self) -> Box<dyn crate::constraint::TypeConstraint> {
+        fn get_type_constraints(&self, span: &Span) -> Box<dyn crate::constraint::TypeConstraint> {
             SimpleTypeConstraint::new(
                 self.name(),
                 vec![self.vec.clone(), self.vec.clone(), self.ele.clone()],
+                span.clone(),
             )
             .into_box()
         }
 
-        fn apply(&self, values: &[crate::Value], _egraph: &EGraph) -> Option<crate::Value> {
+        fn apply(
+            &self,
+            values: &[crate::Value],
+            _egraph: Option<&mut EGraph>,
+        ) -> Option<crate::Value> {
             let mut sum = 0;
             let vec1 = Vec::<Value>::load(&self.vec, &values[0]);
             let vec2 = Vec::<Value>::load(&self.vec, &values[1]);
@@ -1619,6 +1670,7 @@ mod tests {
         let mut egraph = EGraph::default();
         egraph
             .parse_and_run_program(
+                None,
                 "
                 (sort IntVec (Vec i64))
             ",
@@ -1634,6 +1686,7 @@ mod tests {
         });
         egraph
             .parse_and_run_program(
+                None,
                 "
                 (let a (vec-of 1 2 3 4 5 6))
                 (let b (vec-of 6 5 4 3 2 1))

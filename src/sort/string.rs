@@ -27,7 +27,10 @@ impl Sort for StringSort {
     fn make_expr(&self, _egraph: &EGraph, value: Value) -> (Cost, Expr) {
         assert!(value.tag == self.name);
         let sym = Symbol::from(NonZeroU32::new(value.bits as _).unwrap());
-        (1, Expr::Lit((), Literal::String(sym)))
+        (
+            1,
+            GenericExpr::Lit(DUMMY_SPAN.clone(), Literal::String(sym)),
+        )
     }
 
     fn register_primitives(self: Arc<Self>, typeinfo: &mut TypeInfo) {
@@ -71,13 +74,13 @@ impl PrimitiveLike for Add {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
-        AllEqualTypeConstraint::new(self.name())
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        AllEqualTypeConstraint::new(self.name(), span.clone())
             .with_all_arguments_sort(self.string.clone())
             .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let mut res_string: String = "".to_owned();
         for value in values {
             let sym = Symbol::load(&self.string, value);
@@ -98,14 +101,14 @@ impl PrimitiveLike for Replace {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
-        AllEqualTypeConstraint::new(self.name())
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        AllEqualTypeConstraint::new(self.name(), span.clone())
             .with_all_arguments_sort(self.string.clone())
             .with_exact_length(4)
             .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let string1 = Symbol::load(&self.string, &values[0]).to_string();
         let string2 = Symbol::load(&self.string, &values[1]).to_string();
         let string3 = Symbol::load(&self.string, &values[2]).to_string();

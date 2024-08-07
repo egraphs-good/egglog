@@ -13,8 +13,10 @@ struct Args {
     desugar: bool,
     #[clap(long)]
     resugar: bool,
+    /// Currently unused.
     #[clap(long)]
     proofs: bool,
+    /// Currently unused.
     /// Use the rust backend implimentation of eqsat,
     /// including a rust implementation of the union-find
     /// data structure and the rust implementation of
@@ -24,8 +26,8 @@ struct Args {
     #[clap(long, default_value_t = RunMode::Normal)]
     show: RunMode,
     // TODO remove this evil hack
-    #[clap(long, default_value_t = 3)]
-    num_underscores: usize,
+    #[clap(long, default_value = "__")]
+    reserved_symbol: String,
     inputs: Vec<PathBuf>,
     #[clap(long)]
     to_json: bool,
@@ -35,6 +37,59 @@ struct Args {
     to_svg: bool,
     #[clap(long)]
     serialize_split_primitive_outputs: bool,
+    /// Maximum number of function nodes to render in dot/svg output
+    #[clap(long, default_value = "40")]
+    max_functions: usize,
+    /// Maximum number of calls per function to render in dot/svg output
+    #[clap(long, default_value = "40")]
+    max_calls_per_function: usize,
+}
+
+// test if the current command should be evaluated
+fn should_eval(curr_cmd: &str) -> bool {
+    let mut count = 0;
+    let mut indices = curr_cmd.chars();
+    while let Some(ch) = indices.next() {
+        match ch {
+            '(' => count += 1,
+            ')' => {
+                count -= 1;
+                // if we have a negative count,
+                // this means excessive closing parenthesis
+                // which we would like to throw an error eagerly
+                if count < 0 {
+                    return true;
+                }
+            }
+            ';' => {
+                // `any` moves the iterator forward until it finds a match
+                if !indices.any(|ch| ch == '\n') {
+                    return false;
+                }
+            }
+            '"' => {
+                if !indices.any(|ch| ch == '"') {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
+    count <= 0
+}
+
+#[allow(clippy::disallowed_macros)]
+fn run_command_in_scripting(egraph: &mut EGraph, command: &str) {
+    match egraph.parse_and_run_program(None, command) {
+        Ok(msgs) => {
+            for msg in msgs {
+                println!("{msg}");
+            }
+        }
+        Err(err) => {
+            log::error!("{err}");
+        }
+    }
 }
 
 #[allow(clippy::disallowed_macros)]
@@ -50,16 +105,17 @@ fn main() {
 
     let mk_egraph = || {
         let mut egraph = EGraph::default();
-        egraph.set_underscores_for_desugaring(args.num_underscores);
+        egraph.set_reserved_symbol(args.reserved_symbol.clone().into());
         egraph.fact_directory = args.fact_directory.clone();
         egraph.seminaive = !args.naive;
         egraph.run_mode = args.show;
+        // NB: both terms_encoding and proofs are currently unused
         if args.terms_encoding {
             egraph.enable_terms_encoding();
         }
         if args.proofs {
             egraph
-                .parse_and_run_program("(set-option enable_proofs 1)")
+                .parse_and_run_program(None, "(set-option enable_proofs 1)")
                 .unwrap();
         }
         egraph
@@ -70,18 +126,19 @@ fn main() {
         log::info!("Welcome to Egglog!");
         let mut egraph = mk_egraph();
 
+        let mut cmd_buffer = String::new();
+
         for line in BufReader::new(stdin).lines() {
             match line {
-                Ok(line_str) => match egraph.parse_and_run_program(&line_str) {
-                    Ok(msgs) => {
-                        for msg in msgs {
-                            println!("{msg}");
-                        }
+                Ok(line_str) => {
+                    cmd_buffer.push_str(&line_str);
+                    cmd_buffer.push('\n');
+                    // handles multi-line commands
+                    if should_eval(&cmd_buffer) {
+                        run_command_in_scripting(&mut egraph, &cmd_buffer);
+                        cmd_buffer = String::new();
                     }
-                    Err(err) => {
-                        log::error!("{err}");
-                    }
-                },
+                }
                 Err(err) => {
                     log::error!("{err}");
                     std::process::exit(1)
@@ -93,24 +150,21 @@ fn main() {
             }
         }
 
-        std::process::exit(1)
+        if !cmd_buffer.is_empty() {
+            run_command_in_scripting(&mut egraph, &cmd_buffer)
+        }
+
+        std::process::exit(0)
     }
 
     for (idx, input) in args.inputs.iter().enumerate() {
-        let program_read = std::fs::read_to_string(input).unwrap_or_else(|_| {
+        let program = std::fs::read_to_string(input).unwrap_or_else(|_| {
             let arg = input.to_string_lossy();
             panic!("Failed to read file {arg}")
         });
         let mut egraph = mk_egraph();
-        let already_enables = program_read.starts_with("(set-option enable_proofs 1)");
-        let (program, program_offset) = if args.proofs && !already_enables {
-            let expr = "(set-option enable_proofs 1)\n";
-            (format!("{}{}", expr, program_read), expr.len())
-        } else {
-            (program_read, 0)
-        };
-
-        match egraph.parse_and_run_program(&program) {
+        let program_offset = 0;
+        match egraph.parse_and_run_program(Some(input.to_str().unwrap().into()), &program) {
             Ok(msgs) => {
                 for msg in msgs {
                     println!("{msg}");
@@ -175,7 +229,11 @@ fn main() {
         }
 
         if args.to_dot || args.to_svg {
-            let serialized = egraph.serialize_for_graphviz(args.serialize_split_primitive_outputs);
+            let serialized = egraph.serialize_for_graphviz(
+                args.serialize_split_primitive_outputs,
+                args.max_functions,
+                args.max_calls_per_function,
+            );
             if args.to_dot {
                 let dot_path = serialize_filename.with_extension("dot");
                 serialized.to_dot_file(dot_path).unwrap()
@@ -188,6 +246,40 @@ fn main() {
         // no need to drop the egraph if we are going to exit
         if idx == args.inputs.len() - 1 {
             std::mem::forget(egraph)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_should_eval() {
+        #[rustfmt::skip]
+        let test_cases = vec![
+            vec![
+                "(extract", 
+                "\"1", 
+                ")", 
+                "(", 
+                ")))", 
+                "\"", 
+                ";; )",
+                ")"
+            ],
+            vec![
+                "(extract 1) (extract",
+                "2) (",
+                "extract 3) (extract 4) ;;;; ("
+            ]];
+        for test in test_cases {
+            let mut cmd_buffer = String::new();
+            for (i, line) in test.iter().enumerate() {
+                cmd_buffer.push_str(line);
+                cmd_buffer.push('\n');
+                assert_eq!(should_eval(&cmd_buffer), i == test.len() - 1);
+            }
         }
     }
 }

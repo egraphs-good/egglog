@@ -11,8 +11,8 @@ use crate::{
     ResolvedFact, ResolvedFunctionDecl, ResolvedNCommand, ResolvedVar, Schema, SymbolGen, TypeInfo,
 };
 
-struct GlobalRemover {
-    fresh: SymbolGen,
+struct GlobalRemover<'a> {
+    fresh: &'a mut SymbolGen,
 }
 
 /// Removes all globals from a program.
@@ -47,10 +47,9 @@ struct GlobalRemover {
 pub(crate) fn remove_globals(
     type_info: &TypeInfo,
     prog: Vec<ResolvedNCommand>,
+    fresh: &mut SymbolGen,
 ) -> Vec<ResolvedNCommand> {
-    let mut remover = GlobalRemover {
-        fresh: SymbolGen::new(),
-    };
+    let mut remover = GlobalRemover { fresh };
     prog.into_iter()
         .flat_map(|cmd| remover.remove_globals_cmd(type_info, cmd))
         .collect()
@@ -77,7 +76,7 @@ fn resolved_var_to_call(var: &ResolvedVar) -> ResolvedCall {
 fn replace_global_vars(expr: ResolvedExpr) -> ResolvedExpr {
     match expr.get_global_var() {
         Some(resolved_var) => {
-            GenericExpr::Call(expr.ann(), resolved_var_to_call(&resolved_var), vec![])
+            GenericExpr::Call(expr.span(), resolved_var_to_call(&resolved_var), vec![])
         }
         None => expr,
     }
@@ -91,7 +90,7 @@ fn remove_globals_action(action: ResolvedAction) -> ResolvedAction {
     action.visit_exprs(&mut replace_global_vars)
 }
 
-impl GlobalRemover {
+impl<'a> GlobalRemover<'a> {
     fn remove_globals_cmd(
         &mut self,
         type_info: &TypeInfo,
@@ -99,7 +98,7 @@ impl GlobalRemover {
     ) -> Vec<ResolvedNCommand> {
         match cmd {
             GenericNCommand::CoreAction(action) => match action {
-                GenericAction::Let(ann, name, expr) => {
+                GenericAction::Let(span, name, expr) => {
                     let ty = expr.output_type(type_info);
 
                     let func_decl = ResolvedFunctionDecl {
@@ -127,13 +126,13 @@ impl GlobalRemover {
                         // output is eq-able, so generate a union
                         if ty.is_eq_sort() {
                             GenericNCommand::CoreAction(GenericAction::Union(
-                                ann,
-                                GenericExpr::Call(ann, resolved_call, vec![]),
+                                span.clone(),
+                                GenericExpr::Call(span, resolved_call, vec![]),
                                 remove_globals_expr(expr),
                             ))
                         } else {
                             GenericNCommand::CoreAction(GenericAction::Set(
-                                ann,
+                                span,
                                 resolved_call,
                                 vec![],
                                 remove_globals_expr(expr),
@@ -157,7 +156,7 @@ impl GlobalRemover {
                         globals.insert(
                             resolved_var.clone(),
                             GenericExpr::Var(
-                                (),
+                                expr.span(),
                                 ResolvedVar {
                                     name: new_name,
                                     sort: resolved_var.sort.clone(),
@@ -171,14 +170,18 @@ impl GlobalRemover {
                 let new_facts: Vec<ResolvedFact> = globals
                     .iter()
                     .map(|(old, new)| {
-                        GenericFact::Eq(vec![
-                            GenericExpr::Call((), resolved_var_to_call(old), vec![]),
-                            new.clone(),
-                        ])
+                        GenericFact::Eq(
+                            new.span(),
+                            vec![
+                                GenericExpr::Call(new.span(), resolved_var_to_call(old), vec![]),
+                                new.clone(),
+                            ],
+                        )
                     })
                     .collect();
 
                 let new_rule = GenericRule {
+                    span: rule.span,
                     // instrument the old facts and add the new facts to the end
                     body: rule
                         .body

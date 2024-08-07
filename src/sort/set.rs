@@ -28,7 +28,7 @@ impl SetSort {
         name: Symbol,
         args: &[Expr],
     ) -> Result<ArcSort, TypeError> {
-        if let [Expr::Var((), e)] = args {
+        if let [Expr::Var(_, e)] = args {
             let e = typeinfo.sorts.get(e).ok_or(TypeError::UndefinedSort(*e))?;
 
             if e.is_eq_container_sort() {
@@ -83,13 +83,13 @@ impl Sort for SetSort {
         self.element.is_eq_sort()
     }
 
-    fn inner_values(&self, value: &Value) -> Vec<(&ArcSort, Value)> {
+    fn inner_values(&self, value: &Value) -> Vec<(ArcSort, Value)> {
         // TODO: Potential duplication of code
         let sets = self.sets.lock().unwrap();
         let set = sets.get_index(value.bits as usize).unwrap();
         let mut result = Vec::new();
         for e in set.iter() {
-            result.push((&self.element, *e));
+            result.push((self.element.clone(), *e));
         }
         result
     }
@@ -181,12 +181,12 @@ impl Sort for SetSort {
         termdag: &mut TermDag,
     ) -> Option<(Cost, Expr)> {
         let set = ValueSet::load(self, &value);
-        let mut expr = Expr::call("set-empty", []);
+        let mut expr = Expr::call_no_span("set-empty", []);
         let mut cost = 0usize;
         for e in set.iter().rev() {
             let e = extractor.find_best(*e, termdag, &self.element)?;
             cost = cost.saturating_add(e.0);
-            expr = Expr::call("set-insert", [expr, termdag.term_to_expr(&e.1)])
+            expr = Expr::call_no_span("set-insert", [expr, termdag.term_to_expr(&e.1)])
         }
         Some((cost, expr))
     }
@@ -222,14 +222,14 @@ impl PrimitiveLike for SetOf {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
-        AllEqualTypeConstraint::new(self.name())
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        AllEqualTypeConstraint::new(self.name(), span.clone())
             .with_all_arguments_sort(self.set.element())
             .with_output_sort(self.set.clone())
             .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let set = ValueSet::from_iter(values.iter().copied());
         Some(set.store(&self.set).unwrap())
     }
@@ -245,11 +245,11 @@ impl PrimitiveLike for Ctor {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(self.name(), vec![self.set.clone()]).into_box()
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(self.name(), vec![self.set.clone()], span.clone()).into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         assert!(values.is_empty());
         ValueSet::default().store(&self.set)
     }
@@ -265,11 +265,17 @@ impl PrimitiveLike for SetRebuild {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(self.name(), vec![self.set.clone(), self.set.clone()]).into_box()
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![self.set.clone(), self.set.clone()],
+            span.clone(),
+        )
+        .into_box()
     }
 
-    fn apply(&self, values: &[Value], egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], egraph: Option<&mut EGraph>) -> Option<Value> {
+        let egraph = egraph.unwrap();
         let set = ValueSet::load(&self.set, &values[0]);
         let new_set: ValueSet = set.iter().map(|e| egraph.find(*e)).collect();
         // drop set to make sure we lose lock
@@ -288,15 +294,16 @@ impl PrimitiveLike for Insert {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         SimpleTypeConstraint::new(
             self.name(),
             vec![self.set.clone(), self.set.element(), self.set.clone()],
+            span.clone(),
         )
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let mut set = ValueSet::load(&self.set, &values[0]);
         set.insert(values[1]);
         set.store(&self.set)
@@ -314,15 +321,16 @@ impl PrimitiveLike for NotContains {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         SimpleTypeConstraint::new(
             self.name(),
             vec![self.set.clone(), self.set.element(), self.unit.clone()],
+            span.clone(),
         )
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let set = ValueSet::load(&self.set, &values[0]);
         if set.contains(&values[1]) {
             None
@@ -343,15 +351,16 @@ impl PrimitiveLike for Contains {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         SimpleTypeConstraint::new(
             self.name(),
             vec![self.set.clone(), self.set.element(), self.unit.clone()],
+            span.clone(),
         )
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let set = ValueSet::load(&self.set, &values[0]);
         if set.contains(&values[1]) {
             Some(Value::unit())
@@ -371,15 +380,16 @@ impl PrimitiveLike for Union {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         SimpleTypeConstraint::new(
             self.name(),
             vec![self.set.clone(), self.set.clone(), self.set.clone()],
+            span.clone(),
         )
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let mut set1 = ValueSet::load(&self.set, &values[0]);
         let set2 = ValueSet::load(&self.set, &values[1]);
         set1.extend(set2.iter());
@@ -397,15 +407,16 @@ impl PrimitiveLike for Intersect {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         SimpleTypeConstraint::new(
             self.name(),
             vec![self.set.clone(), self.set.clone(), self.set.clone()],
+            span.clone(),
         )
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let mut set1 = ValueSet::load(&self.set, &values[0]);
         let set2 = ValueSet::load(&self.set, &values[1]);
         set1.retain(|k| set2.contains(k));
@@ -425,11 +436,16 @@ impl PrimitiveLike for Length {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(self.name(), vec![self.set.clone(), self.i64.clone()]).into_box()
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![self.set.clone(), self.i64.clone()],
+            span.clone(),
+        )
+        .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let set = ValueSet::load(&self.set, &values[0]);
         Some(Value::from(set.len() as i64))
     }
@@ -445,15 +461,16 @@ impl PrimitiveLike for Get {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         SimpleTypeConstraint::new(
             self.name(),
             vec![self.set.clone(), self.i64.clone(), self.set.element()],
+            span.clone(),
         )
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let set = ValueSet::load(&self.set, &values[0]);
         let index = i64::load(&self.i64, &values[1]);
         set.iter().nth(index as usize).copied()
@@ -470,15 +487,16 @@ impl PrimitiveLike for Remove {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         SimpleTypeConstraint::new(
             self.name(),
             vec![self.set.clone(), self.set.element(), self.set.clone()],
+            span.clone(),
         )
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let mut set = ValueSet::load(&self.set, &values[0]);
         set.remove(&values[1]);
         set.store(&self.set)
@@ -495,15 +513,16 @@ impl PrimitiveLike for Diff {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         SimpleTypeConstraint::new(
             self.name(),
             vec![self.set.clone(), self.set.clone(), self.set.clone()],
+            span.clone(),
         )
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let mut set1 = ValueSet::load(&self.set, &values[0]);
         let set2 = ValueSet::load(&self.set, &values[1]);
         set1.retain(|k| !set2.contains(k));

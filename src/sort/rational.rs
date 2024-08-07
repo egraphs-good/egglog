@@ -109,6 +109,7 @@ impl Sort for RationalSort {
         add_primitives!(eg, "<=" = |a: R, b: R| -> Opt { if a <= b {Some(())} else {None} });
         add_primitives!(eg, ">=" = |a: R, b: R| -> Opt { if a >= b {Some(())} else {None} });
    }
+
     fn make_expr(&self, _egraph: &EGraph, value: Value) -> (Cost, Expr) {
         assert!(value.tag == self.name());
         let rat = R::load(self, &value);
@@ -116,11 +117,11 @@ impl Sort for RationalSort {
         let denom = *rat.denom();
         (
             1,
-            Expr::call(
+            Expr::call_no_span(
                 "rational",
                 vec![
-                    Expr::Lit((), Literal::Int(numer)),
-                    Expr::Lit((), Literal::Int(denom)),
+                    GenericExpr::Lit(DUMMY_SPAN.clone(), Literal::Int(numer)),
+                    GenericExpr::Lit(DUMMY_SPAN.clone(), Literal::Int(denom)),
                 ],
             ),
         )

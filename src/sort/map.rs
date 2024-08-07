@@ -29,7 +29,7 @@ impl MapSort {
         name: Symbol,
         args: &[Expr],
     ) -> Result<ArcSort, TypeError> {
-        if let [Expr::Var((), k), Expr::Var((), v)] = args {
+        if let [Expr::Var(_, k), Expr::Var(_, v)] = args {
             let k = typeinfo.sorts.get(k).ok_or(TypeError::UndefinedSort(*k))?;
             let v = typeinfo.sorts.get(v).ok_or(TypeError::UndefinedSort(*v))?;
 
@@ -83,13 +83,13 @@ impl Sort for MapSort {
         self.key.is_eq_sort() || self.value.is_eq_sort()
     }
 
-    fn inner_values(&self, value: &Value) -> Vec<(&ArcSort, Value)> {
+    fn inner_values(&self, value: &Value) -> Vec<(ArcSort, Value)> {
         let maps = self.maps.lock().unwrap();
         let map = maps.get_index(value.bits as usize).unwrap();
         let mut result = Vec::new();
         for (k, v) in map.iter() {
-            result.push((&self.key, *k));
-            result.push((&self.value, *v));
+            result.push((self.key.clone(), *k));
+            result.push((self.value.clone(), *v));
         }
         result
     }
@@ -165,13 +165,13 @@ impl Sort for MapSort {
         termdag: &mut TermDag,
     ) -> Option<(Cost, Expr)> {
         let map = ValueMap::load(self, &value);
-        let mut expr = Expr::call("map-empty", []);
+        let mut expr = Expr::call_no_span("map-empty", []);
         let mut cost = 0usize;
         for (k, v) in map.iter().rev() {
             let k = extractor.find_best(*k, termdag, &self.key)?;
             let v = extractor.find_best(*v, termdag, &self.value)?;
             cost = cost.saturating_add(k.0).saturating_add(v.0);
-            expr = Expr::call(
+            expr = Expr::call_no_span(
                 "map-insert",
                 [expr, termdag.term_to_expr(&k.1), termdag.term_to_expr(&v.1)],
             )
@@ -210,11 +210,17 @@ impl PrimitiveLike for MapRebuild {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(self.name(), vec![self.map.clone(), self.map.clone()]).into_box()
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![self.map.clone(), self.map.clone()],
+            span.clone(),
+        )
+        .into_box()
     }
 
-    fn apply(&self, values: &[Value], egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], egraph: Option<&mut EGraph>) -> Option<Value> {
+        let egraph = egraph.unwrap();
         let maps = self.map.maps.lock().unwrap();
         let map = maps.get_index(values[0].bits as usize).unwrap();
         let new_map: ValueMap = map
@@ -242,13 +248,13 @@ impl PrimitiveLike for TermOrderingMin {
         "ordering-min".into()
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
-        AllEqualTypeConstraint::new(self.name())
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        AllEqualTypeConstraint::new(self.name(), span.clone())
             .with_exact_length(3)
             .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         assert_eq!(values.len(), 2);
         if values[0] < values[1] {
             Some(values[0])
@@ -265,13 +271,13 @@ impl PrimitiveLike for TermOrderingMax {
         "ordering-max".into()
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
-        AllEqualTypeConstraint::new(self.name())
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        AllEqualTypeConstraint::new(self.name(), span.clone())
             .with_exact_length(3)
             .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         assert_eq!(values.len(), 2);
         if values[0] > values[1] {
             Some(values[0])
@@ -286,11 +292,11 @@ impl PrimitiveLike for Ctor {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(self.name(), vec![self.map.clone()]).into_box()
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(self.name(), vec![self.map.clone()], span.clone()).into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         assert!(values.is_empty());
         ValueMap::default().store(&self.map)
     }
@@ -306,7 +312,7 @@ impl PrimitiveLike for Insert {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         SimpleTypeConstraint::new(
             self.name(),
             vec![
@@ -315,11 +321,12 @@ impl PrimitiveLike for Insert {
                 self.map.value(),
                 self.map.clone(),
             ],
+            span.clone(),
         )
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let mut map = ValueMap::load(&self.map, &values[0]);
         map.insert(values[1], values[2]);
         map.store(&self.map)
@@ -336,15 +343,16 @@ impl PrimitiveLike for Get {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         SimpleTypeConstraint::new(
             self.name(),
             vec![self.map.clone(), self.map.key(), self.map.value()],
+            span.clone(),
         )
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let map = ValueMap::load(&self.map, &values[0]);
         map.get(&values[1]).copied()
     }
@@ -361,15 +369,16 @@ impl PrimitiveLike for NotContains {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         SimpleTypeConstraint::new(
             self.name(),
             vec![self.map.clone(), self.map.key(), self.unit.clone()],
+            span.clone(),
         )
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let map = ValueMap::load(&self.map, &values[0]);
         if map.contains_key(&values[1]) {
             None
@@ -390,15 +399,16 @@ impl PrimitiveLike for Contains {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         SimpleTypeConstraint::new(
             self.name(),
             vec![self.map.clone(), self.map.key(), self.unit.clone()],
+            span.clone(),
         )
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let map = ValueMap::load(&self.map, &values[0]);
         if map.contains_key(&values[1]) {
             Some(Value::unit())
@@ -418,15 +428,16 @@ impl PrimitiveLike for Remove {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         SimpleTypeConstraint::new(
             self.name(),
             vec![self.map.clone(), self.map.key(), self.map.clone()],
+            span.clone(),
         )
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let mut map = ValueMap::load(&self.map, &values[0]);
         map.remove(&values[1]);
         map.store(&self.map)
@@ -444,11 +455,16 @@ impl PrimitiveLike for Length {
         self.name
     }
 
-    fn get_type_constraints(&self) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(self.name(), vec![self.map.clone(), self.i64.clone()]).into_box()
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![self.map.clone(), self.i64.clone()],
+            span.clone(),
+        )
+        .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: &EGraph) -> Option<Value> {
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let map = ValueMap::load(&self.map, &values[0]);
         Some(Value::from(map.len() as i64))
     }

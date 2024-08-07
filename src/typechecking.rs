@@ -45,10 +45,13 @@ impl Default for TypeInfo {
         res.presort_names.extend(MapSort::presort_names());
         res.presort_names.extend(SetSort::presort_names());
         res.presort_names.extend(VecSort::presort_names());
+        res.presort_names.extend(FunctionSort::presort_names());
 
         res.presorts.insert("Map".into(), MapSort::make_sort);
         res.presorts.insert("Set".into(), SetSort::make_sort);
         res.presorts.insert("Vec".into(), VecSort::make_sort);
+        res.presorts
+            .insert("UnstableFn".into(), FunctionSort::make_sort);
 
         res.add_primitive(ValueEq {
             unit: res.get_sort_nofail(),
@@ -177,7 +180,7 @@ impl TypeInfo {
                 self.declare_sort(*sort, presort_and_args)?;
                 ResolvedNCommand::Sort(*sort, presort_and_args.clone())
             }
-            NCommand::CoreAction(Action::Let(_, var, expr)) => {
+            NCommand::CoreAction(Action::Let(span, var, expr)) => {
                 let expr = self.typecheck_expr(expr, &Default::default())?;
                 let output_type = expr.output_type(self);
                 self.global_types.insert(*var, output_type.clone());
@@ -187,12 +190,14 @@ impl TypeInfo {
                     // not a global reference, but a global binding
                     is_global_ref: false,
                 };
-                ResolvedNCommand::CoreAction(ResolvedAction::Let((), var, expr))
+                ResolvedNCommand::CoreAction(ResolvedAction::Let(span.clone(), var, expr))
             }
             NCommand::CoreAction(action) => {
                 ResolvedNCommand::CoreAction(self.typecheck_action(action, &Default::default())?)
             }
-            NCommand::Check(facts) => ResolvedNCommand::Check(self.typecheck_facts(facts)?),
+            NCommand::Check(span, facts) => {
+                ResolvedNCommand::Check(span.clone(), self.typecheck_facts(facts)?)
+            }
             NCommand::Fail(cmd) => ResolvedNCommand::Fail(Box::new(self.typecheck_command(cmd)?)),
             NCommand::RunSchedule(schedule) => {
                 ResolvedNCommand::RunSchedule(self.typecheck_schedule(schedule)?)
@@ -204,6 +209,9 @@ impl TypeInfo {
                 ResolvedNCommand::SetOption { name: *name, value }
             }
             NCommand::AddRuleset(ruleset) => ResolvedNCommand::AddRuleset(*ruleset),
+            NCommand::UnstableCombinedRuleset(name, sub_rulesets) => {
+                ResolvedNCommand::UnstableCombinedRuleset(*name, sub_rulesets.clone())
+            }
             NCommand::PrintOverallStatistics => ResolvedNCommand::PrintOverallStatistics,
             NCommand::CheckProof => ResolvedNCommand::CheckProof,
             NCommand::PrintTable(table, size) => ResolvedNCommand::PrintTable(*table, *size),
@@ -245,8 +253,8 @@ impl TypeInfo {
         }
         let mut bound_vars = IndexMap::default();
         let output_type = self.sorts.get(&fdecl.schema.output).unwrap();
-        bound_vars.insert("old".into(), output_type.clone());
-        bound_vars.insert("new".into(), output_type.clone());
+        bound_vars.insert("old".into(), (DUMMY_SPAN.clone(), output_type.clone()));
+        bound_vars.insert("new".into(), (DUMMY_SPAN.clone(), output_type.clone()));
 
         Ok(ResolvedFunctionDecl {
             name: fdecl.name,
@@ -269,28 +277,34 @@ impl TypeInfo {
 
     fn typecheck_schedule(&self, schedule: &Schedule) -> Result<ResolvedSchedule, TypeError> {
         let schedule = match schedule {
-            Schedule::Repeat(times, schedule) => {
-                ResolvedSchedule::Repeat(*times, Box::new(self.typecheck_schedule(schedule)?))
-            }
-            Schedule::Sequence(schedules) => {
+            Schedule::Repeat(span, times, schedule) => ResolvedSchedule::Repeat(
+                span.clone(),
+                *times,
+                Box::new(self.typecheck_schedule(schedule)?),
+            ),
+            Schedule::Sequence(span, schedules) => {
                 let schedules = schedules
                     .iter()
                     .map(|schedule| self.typecheck_schedule(schedule))
                     .collect::<Result<Vec<_>, _>>()?;
-                ResolvedSchedule::Sequence(schedules)
+                ResolvedSchedule::Sequence(span.clone(), schedules)
             }
-            Schedule::Saturate(schedule) => {
-                ResolvedSchedule::Saturate(Box::new(self.typecheck_schedule(schedule)?))
-            }
-            Schedule::Run(RunConfig { ruleset, until }) => {
+            Schedule::Saturate(span, schedule) => ResolvedSchedule::Saturate(
+                span.clone(),
+                Box::new(self.typecheck_schedule(schedule)?),
+            ),
+            Schedule::Run(span, RunConfig { ruleset, until }) => {
                 let until = until
                     .as_ref()
                     .map(|facts| self.typecheck_facts(facts))
                     .transpose()?;
-                ResolvedSchedule::Run(ResolvedRunConfig {
-                    ruleset: *ruleset,
-                    until,
-                })
+                ResolvedSchedule::Run(
+                    span.clone(),
+                    ResolvedRunConfig {
+                        ruleset: *ruleset,
+                        until,
+                    },
+                )
             }
         };
 
@@ -321,10 +335,10 @@ impl TypeInfo {
     }
 
     fn typecheck_rule(&self, rule: &Rule) -> Result<ResolvedRule, TypeError> {
-        let Rule { head, body } = rule;
+        let Rule { span, head, body } = rule;
         let mut constraints = vec![];
 
-        let mut fresh_gen = SymbolGen::new();
+        let mut fresh_gen = SymbolGen::new("$".to_string());
         let (query, mapped_query) = Facts(body.clone()).to_query(self, &mut fresh_gen);
         constraints.extend(query.get_constraints(self)?);
 
@@ -334,6 +348,7 @@ impl TypeInfo {
         let mut problem = Problem::default();
         problem.add_rule(
             &CoreRule {
+                span: span.clone(),
                 body: query,
                 head: actions,
             },
@@ -348,13 +363,14 @@ impl TypeInfo {
         let actions: ResolvedActions = assignment.annotate_actions(&mapped_action, self)?;
 
         Ok(ResolvedRule {
+            span: span.clone(),
             body,
             head: actions,
         })
     }
 
     fn typecheck_facts(&self, facts: &[Fact]) -> Result<Vec<ResolvedFact>, TypeError> {
-        let mut fresh_gen = SymbolGen::new();
+        let mut fresh_gen = SymbolGen::new("$".to_string());
         let (query, mapped_facts) = Facts(facts.to_vec()).to_query(self, &mut fresh_gen);
         let mut problem = Problem::default();
         problem.add_query(&query, self)?;
@@ -368,10 +384,10 @@ impl TypeInfo {
     fn typecheck_actions(
         &self,
         actions: &Actions,
-        binding: &IndexMap<Symbol, ArcSort>,
+        binding: &IndexMap<Symbol, (Span, ArcSort)>,
     ) -> Result<ResolvedActions, TypeError> {
         let mut binding_set = binding.keys().cloned().collect::<IndexSet<_>>();
-        let mut fresh_gen = SymbolGen::new();
+        let mut fresh_gen = SymbolGen::new("$".to_string());
         let (actions, mapped_action) =
             actions.to_core_actions(self, &mut binding_set, &mut fresh_gen)?;
         let mut problem = Problem::default();
@@ -380,8 +396,8 @@ impl TypeInfo {
         problem.add_actions(&actions, self)?;
 
         // add bindings from the context
-        for (var, sort) in binding {
-            problem.assign_local_var_type(*var, sort.clone())?;
+        for (var, (span, sort)) in binding {
+            problem.assign_local_var_type(*var, span.clone(), sort.clone())?;
         }
 
         let assignment = problem
@@ -395,9 +411,9 @@ impl TypeInfo {
     fn typecheck_expr(
         &self,
         expr: &Expr,
-        binding: &IndexMap<Symbol, ArcSort>,
+        binding: &IndexMap<Symbol, (Span, ArcSort)>,
     ) -> Result<ResolvedExpr, TypeError> {
-        let action = Action::Expr((), expr.clone());
+        let action = Action::Expr(DUMMY_SPAN.clone(), expr.clone());
         let typechecked_action = self.typecheck_action(&action, binding)?;
         match typechecked_action {
             ResolvedAction::Expr(_, expr) => Ok(expr),
@@ -408,7 +424,7 @@ impl TypeInfo {
     fn typecheck_action(
         &self,
         action: &Action,
-        binding: &IndexMap<Symbol, ArcSort>,
+        binding: &IndexMap<Symbol, (Span, ArcSort)>,
     ) -> Result<ResolvedAction, TypeError> {
         self.typecheck_actions(&Actions::singleton(action.clone()), binding)
             .map(|mut v| {
@@ -474,6 +490,8 @@ pub enum TypeError {
     PrimitiveAlreadyBound(Symbol),
     #[error("Type mismatch: expected {}, actual {}", .0.name(), .1.name())]
     TypeMismatch(ArcSort, ArcSort),
+    #[error("Function type mismatch: expected {} => {}, actual {} => {}", .1.iter().map(|s| s.name().to_string()).collect::<Vec<_>>().join(", "), .0.name(), .3.iter().map(|s| s.name().to_string()).collect::<Vec<_>>().join(", "), .2.name())]
+    FunctionTypeMismatch(ArcSort, Vec<ArcSort>, ArcSort, Vec<ArcSort>),
     #[error("Presort {0} not found.")]
     PresortNotFound(Symbol),
     #[error("Cannot type a variable as unit: {0}")]
@@ -496,15 +514,20 @@ mod test {
     fn test_arity_mismatch() {
         let mut egraph = EGraph::default();
 
-        let res = egraph.parse_and_run_program(
-            "
+        let prog = "
             (relation f (i64 i64))
             (rule ((f a b c)) ())
-       ",
-        );
-        assert!(matches!(
-            res,
-            Err(Error::TypeError(TypeError::Arity { expected: 2, .. }))
-        ));
+       ";
+        let res = egraph.parse_and_run_program(None, prog);
+        match res {
+            Err(Error::TypeError(TypeError::Arity {
+                expected: 2,
+                expr: e,
+            })) => {
+                let span = e.span();
+                assert_eq!(&prog[span.1..span.2], "(f a b c)");
+            }
+            _ => panic!("Expected arity mismatch, got: {:?}", res),
+        }
     }
 }
