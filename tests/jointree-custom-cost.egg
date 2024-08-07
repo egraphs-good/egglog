@@ -21,19 +21,16 @@
 (set (size rd) 123)
 (set (size re) 10000)
 (set (size rf) 1)
-;; size of join is product of sizes
-(rule ((Join a b) (= (size a) asize) (= (size b) bsize))
-      ((set (size (Join a b)) (* asize bsize))))
 
-; Cost
 ;; cost of relation is its size
 (rule ((= (size (Rel a)) asize))
       ((unstable-cost (Rel a) asize)))
-;; cost of join is product of sizes
-(rule ((Join a b) (= (size a) asize)
-       			  (= (size b) bsize))
-      ((unstable-cost (Join a b) (* asize bsize)) ))
-
+;; cost/size of join is product of sizes
+(rule ((Join a b)
+       (= (size a) asize)
+       (= (size b) bsize))
+      ((set (size (Join a b)) (* asize bsize))
+       (unstable-cost (Join a b) (* asize bsize))))
 
 ; Associativity
 (rewrite (Join a b) (Join b a))
