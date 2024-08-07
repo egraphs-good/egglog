@@ -194,7 +194,6 @@ impl Sort for SetSort {
     fn serialized_name(&self, _value: &Value) -> Symbol {
         "set-of".into()
     }
-
 }
 
 impl IntoSort for ValueSet {

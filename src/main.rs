@@ -1,5 +1,5 @@
 use clap::Parser;
-use egglog::{EGraph, Error, RunMode, SerializeConfig, SerializedNode};
+use egglog::{EGraph, Error, RunMode, SerializeConfig};
 use std::io::{self, BufRead, BufReader};
 use std::path::PathBuf;
 
