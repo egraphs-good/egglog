@@ -45,6 +45,7 @@ pub struct TupleOutput {
     pub value: Value,
     pub timestamp: u32,
     pub subsumed: bool,
+    pub cost: Option<usize>,
 }
 
 #[derive(Clone, Debug)]
@@ -228,6 +229,11 @@ impl Function {
     /// Mark the given inputs as subsumed.
     pub fn subsume(&mut self, inputs: &[Value]) {
         self.nodes.get_mut(inputs).unwrap().subsumed = true;
+    }
+
+    /// Updates the cost of the given inputs.
+    pub fn update_cost(&mut self, inputs: &[Value], cost: usize) {
+        self.nodes.get_mut(inputs).unwrap().cost = Some(cost);
     }
 
     /// Return a column index that contains (a superset of) the offsets for the
@@ -433,7 +439,7 @@ impl Function {
         }
         let out_ty = &self.schema.output;
         self.nodes
-            .insert_and_merge(scratch, timestamp, out.subsumed, |prev| {
+            .insert_and_merge(scratch, timestamp, out.subsumed, out.cost, |prev| {
                 if let Some(mut prev) = prev {
                     out_ty.canonicalize(&mut prev, uf);
                     let mut appended = false;
