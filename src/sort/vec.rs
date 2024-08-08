@@ -197,6 +197,10 @@ impl Sort for VecSort {
             Some((cost, Expr::call_no_span("vec-of", elems)))
         }
     }
+
+    fn serialized_name(&self, _value: &Value) -> Symbol {
+        "vec-of".into()
+    }
 }
 
 impl IntoSort for ValueVec {
