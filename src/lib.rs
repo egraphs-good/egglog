@@ -1100,7 +1100,9 @@ impl EGraph {
             match rules {
                 Ruleset::Rules(_, rules) => {
                     match rules.entry(name) {
-                        indexmap::map::Entry::Occupied(_) => panic!("Rule '{name}' was already present"),
+                        indexmap::map::Entry::Occupied(_) => {
+                            panic!("Rule '{name}' was already present")
+                        }
                         indexmap::map::Entry::Vacant(e) => e.insert(compiled_rule),
                     };
                     Ok(name)
