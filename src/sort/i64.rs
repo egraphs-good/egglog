@@ -37,7 +37,6 @@ impl Sort for I64Sort {
         add_primitives!(typeinfo, "+" = |a: i64, b: i64| -> i64 { a + b });
         add_primitives!(typeinfo, "-" = |a: i64, b: i64| -> i64 { a - b });
         add_primitives!(typeinfo, "*" = |a: i64, b: i64| -> i64 { a * b });
-        add_primitives!(typeinfo, "^" = |a: i64, b: i64| -> i64 { a.pow(b)});
         add_primitives!(typeinfo, "/" = |a: i64, b: i64| -> Opt<i64> { (b != 0).then(|| a / b) });
         add_primitives!(typeinfo, "%" = |a: i64, b: i64| -> Opt<i64> { (b != 0).then(|| a % b) });
 
