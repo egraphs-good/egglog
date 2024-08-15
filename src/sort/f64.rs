@@ -34,7 +34,7 @@ impl Sort for F64Sort {
         add_primitives!(eg, "+" = |a: f64, b: f64| -> f64 { a + b });
         add_primitives!(eg, "-" = |a: f64, b: f64| -> f64 { a - b });
         add_primitives!(eg, "*" = |a: f64, b: f64| -> f64 { a * b });
-        add_primitives!(eg, "^" = |a: f64, b: f64| ->  a.powf(b) );
+        add_primitives!(eg, "^" = |a: f64, b: f64| -> f64 { a.powf(b) });
         add_primitives!(eg, "/" = |a: f64, b: f64| -> Opt<f64> { (b != 0.0).then(|| a / b) });
         add_primitives!(eg, "%" = |a: f64, b: f64| -> Opt<f64> { (b != 0.0).then(|| a % b) });
 
