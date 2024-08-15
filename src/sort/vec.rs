@@ -44,7 +44,10 @@ impl VecSort {
         args: &[Expr],
     ) -> Result<ArcSort, TypeError> {
         if let [Expr::Var(span, e)] = args {
-            let e = typeinfo.sorts.get(e).ok_or(TypeError::UndefinedSort(*e, span.clone()))?;
+            let e = typeinfo
+                .sorts
+                .get(e)
+                .ok_or(TypeError::UndefinedSort(*e, span.clone()))?;
 
             if e.is_eq_container_sort() {
                 return Err(TypeError::DisallowedSort(

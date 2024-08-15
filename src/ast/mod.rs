@@ -78,17 +78,9 @@ pub enum Quote {
 impl Display for Quote {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Quote::Quote {
-                quote,
-                start,
-                end,
-            } => {
+            Quote::Quote { quote, start, end } => {
                 if start.line == end.line {
-                    write!(
-                        f,
-                        "In {}:{}-{}: {}",
-                        start.line, start.col, end.col, quote
-                    )
+                    write!(f, "In {}:{}-{}: {}", start.line, start.col, end.col, quote)
                 } else {
                     write!(
                         f,
@@ -172,7 +164,11 @@ where
         name: Symbol,
         value: GenericExpr<Head, Leaf>,
     },
-    Sort(Span, Symbol, Option<(Symbol, Vec<GenericExpr<Symbol, Symbol>>)>),
+    Sort(
+        Span,
+        Symbol,
+        Option<(Symbol, Vec<GenericExpr<Symbol, Symbol>>)>,
+    ),
     Function(GenericFunctionDecl<Head, Leaf>),
     AddRuleset(Symbol),
     UnstableCombinedRuleset(Symbol, Vec<Symbol>),
@@ -214,7 +210,9 @@ where
                 name: *name,
                 value: value.clone(),
             },
-            GenericNCommand::Sort(span, name, params) => GenericCommand::Sort(span.clone(), *name, params.clone()),
+            GenericNCommand::Sort(span, name, params) => {
+                GenericCommand::Sort(span.clone(), *name, params.clone())
+            }
             GenericNCommand::Function(f) => GenericCommand::Function(f.clone()),
             GenericNCommand::AddRuleset(name) => GenericCommand::AddRuleset(*name),
             GenericNCommand::UnstableCombinedRuleset(name, others) => {
@@ -502,7 +500,11 @@ where
     /// ```
     ///
     /// Now `MathVec` can be used as an input or output sort.
-    Sort(Span, Symbol, Option<(Symbol, Vec<GenericExpr<Symbol, Symbol>>)>),
+    Sort(
+        Span,
+        Symbol,
+        Option<(Symbol, Vec<GenericExpr<Symbol, Symbol>>)>,
+    ),
     /// Declare an egglog function, which is a database table with a
     /// a functional dependency (also called a primary key) on its inputs to one output.
     ///
@@ -814,7 +816,11 @@ where
                 rewrite.to_sexp(*name, false, *subsume)
             }
             GenericCommand::BiRewrite(name, rewrite) => rewrite.to_sexp(*name, true, false),
-            GenericCommand::Datatype { span: _, name, variants } => list!("datatype", name, ++ variants),
+            GenericCommand::Datatype {
+                span: _,
+                name,
+                variants,
+            } => list!("datatype", name, ++ variants),
             GenericCommand::Declare {
                 span: _,
                 name,
@@ -856,15 +862,27 @@ where
             GenericCommand::Pop(_span, n) => list!("pop", n),
             GenericCommand::PrintFunction(_span, name, n) => list!("print-function", name, n),
             GenericCommand::PrintSize(_span, name) => list!("print-size", ++ name),
-            GenericCommand::Input { span: _, name, file } => {
+            GenericCommand::Input {
+                span: _,
+                name,
+                file,
+            } => {
                 list!("input", name, format!("\"{}\"", file))
             }
-            GenericCommand::Output { span: _, file, exprs } => {
+            GenericCommand::Output {
+                span: _,
+                file,
+                exprs,
+            } => {
                 list!("output", format!("\"{}\"", file), ++ exprs)
             }
             GenericCommand::Fail(_span, cmd) => list!("fail", cmd),
             GenericCommand::Include(_span, file) => list!("include", format!("\"{}\"", file)),
-            GenericCommand::Simplify { span: _, expr, schedule } => list!("simplify", schedule, expr),
+            GenericCommand::Simplify {
+                span: _,
+                expr,
+                schedule,
+            } => list!("simplify", schedule, expr),
         }
     }
 }

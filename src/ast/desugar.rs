@@ -156,7 +156,12 @@ fn add_semi_naive_rule(desugar: &mut Desugar, rule: Rule) -> Option<Rule> {
     }
 }
 
-fn desugar_simplify(desugar: &mut Desugar, expr: &Expr, schedule: &Schedule, span: Span) -> Vec<NCommand> {
+fn desugar_simplify(
+    desugar: &mut Desugar,
+    expr: &Expr,
+    schedule: &Schedule,
+    span: Span,
+) -> Vec<NCommand> {
     let mut res = vec![NCommand::Push(1)];
     let lhs = desugar.get_fresh();
     res.push(NCommand::CoreAction(Action::Let(
@@ -264,7 +269,11 @@ pub(crate) fn desugar_command(
             inputs,
         } => desugar.desugar_function(&FunctionDecl::relation(span, constructor, inputs)),
         Command::Declare { span, name, sort } => desugar.declare(span, name, sort),
-        Command::Datatype { span, name, variants } => desugar_datatype(span, name, variants),
+        Command::Datatype {
+            span,
+            name,
+            variants,
+        } => desugar_datatype(span, name, variants),
         Command::Rewrite(ruleset, rewrite, subsume) => {
             desugar_rewrite(ruleset, rewrite_name(&rewrite).into(), &rewrite, subsume)
         }
@@ -314,7 +323,11 @@ pub(crate) fn desugar_command(
             vec![NCommand::UnstableCombinedRuleset(name, subrulesets)]
         }
         Command::Action(action) => vec![NCommand::CoreAction(action)],
-        Command::Simplify { span, expr, schedule } => desugar_simplify(desugar, &expr, &schedule, span),
+        Command::Simplify {
+            span,
+            expr,
+            schedule,
+        } => desugar_simplify(desugar, &expr, &schedule, span),
         Command::Calc(span, idents, exprs) => {
             desugar_calc(desugar, span, idents, exprs, seminaive_transform)?
         }
@@ -324,7 +337,11 @@ pub(crate) fn desugar_command(
         Command::PrintOverallStatistics => {
             vec![NCommand::PrintOverallStatistics]
         }
-        Command::QueryExtract { span: _, variants, expr } => {
+        Command::QueryExtract {
+            span: _,
+            variants,
+            expr,
+        } => {
             let fresh = desugar.get_fresh();
             let fresh_ruleset = desugar.get_fresh();
             let desugaring = if let Expr::Var(_, v) = expr {
@@ -453,7 +470,7 @@ impl Desugar {
                 cost: None,
                 unextractable: false,
                 ignore_viz: false,
-                span: span.clone()
+                span: span.clone(),
             }),
             NCommand::CoreAction(Action::Let(
                 span.clone(),

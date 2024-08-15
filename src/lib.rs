@@ -516,7 +516,7 @@ impl EGraph {
     /// it with the previously pushed egraph.
     /// It preserves the run report and messages from the popped
     /// egraph.
-    pub fn pop(&mut self) -> Result<(), ()> {
+    pub fn pop(&mut self) -> Result<(), Error> {
         match self.egraphs.pop() {
             Some(e) => {
                 // Copy the reports and messages from the popped egraph
@@ -535,7 +535,7 @@ impl EGraph {
                 self.msgs = messages;
                 Ok(())
             }
-            None => Err(()),
+            None => Err(Error::Pop(DUMMY_SPAN.clone())),
         }
     }
 
@@ -1317,7 +1317,13 @@ impl EGraph {
             }
             ResolvedNCommand::Pop(span, n) => {
                 for _ in 0..n {
-                    self.pop().map_err(|_| Error::Pop(span.clone()))?;
+                    self.pop().map_err(|err| {
+                        if let Error::Pop(_) = err {
+                            Error::Pop(span.clone())
+                        } else {
+                            err
+                        }
+                    })?;
                 }
                 log::info!("Popped {n} levels.")
             }
@@ -1347,7 +1353,11 @@ impl EGraph {
                     return Err(Error::ExpectFail(span));
                 }
             }
-            ResolvedNCommand::Input { span: _, name, file } => {
+            ResolvedNCommand::Input {
+                span: _,
+                name,
+                file,
+            } => {
                 self.input_file(name, file)?;
             }
             ResolvedNCommand::Output { span, file, exprs } => {
@@ -1546,7 +1556,8 @@ impl EGraph {
 
     /// Add a user-defined sort
     pub fn add_arcsort(&mut self, arcsort: ArcSort) -> Result<(), TypeError> {
-        self.type_info_mut().add_arcsort(arcsort, DUMMY_SPAN.clone())
+        self.type_info_mut()
+            .add_arcsort(arcsort, DUMMY_SPAN.clone())
     }
 
     /// Add a user-defined primitive
