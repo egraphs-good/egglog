@@ -47,7 +47,7 @@
 ; commutativity
 (rewrite (myor a (myor b c)) (myor b (myor a c)))
 
-;absoprtion
+;absorption
 (rewrite (myor a (myor a b)) (myor a b))
 (rewrite (myor a (myor (negate a) b)) True)
 
