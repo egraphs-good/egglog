@@ -43,6 +43,7 @@ impl EGraph {
     /// - Primitives: 1.0
     /// - Function without costs: 1.0
     /// - Function with costs: the cost
+    /// - Omitted nodes: infinite
     ///
     /// For node IDs:
     /// - Functions: Function name + hash of input values
@@ -127,8 +128,7 @@ impl EGraph {
                 .0;
             let children: Vec<_> = input
                 .iter()
-                // Filter out children which don't have an ID, meaning that we skipped emitting them due to size constraints
-                .filter_map(|v| self.serialize_value(&mut egraph, &mut node_ids, v, None).1)
+                .map(|v| self.serialize_value(&mut egraph, &mut node_ids, v, None).1)
                 .collect();
             egraph.nodes.insert(
                 node_id,
@@ -141,12 +141,11 @@ impl EGraph {
             );
         }
 
-        let roots = config
+        egraph.root_eclasses = config
             .root_eclasses
             .iter()
             .map(|v| self.serialize_value(&mut egraph, &mut node_ids, v, None).0)
             .collect();
-        egraph.root_eclasses = roots;
 
         egraph
     }
@@ -163,14 +162,14 @@ impl EGraph {
         // The node ID to use for a primitive value, if this is None, use the hash of the value and the sort name
         // Set iff `split_primitive_outputs` is set and this is an output of a function.
         prim_node_id: Option<String>,
-    ) -> (egraph_serialize::ClassId, Option<egraph_serialize::NodeId>) {
+    ) -> (egraph_serialize::ClassId, egraph_serialize::NodeId) {
         let sort = self.get_sort_from_value(value).unwrap();
-        let (class_id, node_id): (egraph_serialize::ClassId, Option<egraph_serialize::NodeId>) =
+        let (class_id, node_id): (egraph_serialize::ClassId, egraph_serialize::NodeId) =
             if sort.is_eq_sort() {
                 let id: usize = value.bits as usize;
                 let canonical: usize = self.unionfind.find(Id::from(id)).into();
                 let class_id: egraph_serialize::ClassId = canonical.to_string().into();
-                (class_id.clone(), get_node_id(node_ids, class_id))
+                (class_id.clone(), get_node_id(egraph, node_ids, class_id))
             } else {
                 let (class_id, node_id): (egraph_serialize::ClassId, egraph_serialize::NodeId) =
                     if let Some(node_id) = prim_node_id {
@@ -183,14 +182,14 @@ impl EGraph {
                     };
                 // Add node for value
                 {
+                    // Children will be empty unless this is a container sort
                     let children: Vec<egraph_serialize::NodeId> = sort
                         .inner_values(value)
                         .into_iter()
-                        .filter_map(|(_, v)| self.serialize_value(egraph, node_ids, &v, None).1)
+                        .map(|(_, v)| self.serialize_value(egraph, node_ids, &v, None).1)
                         .collect();
                     // If this is a container sort, use the name, otherwise use the value
-                    let op: String = if sort.is_container_sort() {
-                        log::warn!("{} is a container sort", sort.name());
+                    let op = if sort.is_container_sort() {
                         sort.serialized_name(value).to_string()
                     } else {
                         sort.make_expr(self, *value).1.to_string()
@@ -205,7 +204,7 @@ impl EGraph {
                         },
                     );
                 };
-                (class_id, Some(node_id))
+                (class_id, node_id)
             };
         egraph.class_data.insert(
             class_id.clone(),
@@ -221,10 +220,25 @@ type NodeIDs = HashMap<egraph_serialize::ClassId, VecDeque<egraph_serialize::Nod
 
 /// Returns the node ID for the given class ID, rotating the queue
 fn get_node_id(
+    egraph: &mut egraph_serialize::EGraph,
     node_ids: &mut HashMap<egraph_serialize::ClassId, VecDeque<egraph_serialize::NodeId>>,
     class_id: egraph_serialize::ClassId,
-) -> Option<egraph_serialize::NodeId> {
-    let node_ids = node_ids.get_mut(&class_id)?;
+) -> egraph_serialize::NodeId {
+    // If we don't find node IDs for this class, it means that all nodes for it were omitted due to size constraints
+    // In this case, add a dummy node in this class to represent the missing nodes
+    let node_ids = node_ids.entry(class_id.clone()).or_insert_with(|| {
+        let node_id = egraph_serialize::NodeId::from(format!("{}-dummy", class_id));
+        egraph.nodes.insert(
+            node_id.clone(),
+            egraph_serialize::Node {
+                op: "[...]".to_string(),
+                eclass: class_id.clone(),
+                cost: NotNan::new(f64::INFINITY).unwrap(),
+                children: vec![],
+            },
+        );
+        VecDeque::from(vec![node_id])
+    });
     node_ids.rotate_left(1);
-    Some(node_ids.front().unwrap().clone())
+    node_ids.front().unwrap().clone()
 }
