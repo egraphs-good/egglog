@@ -1264,7 +1264,7 @@ impl EGraph {
                 log::info!("{}", str)
             }
             // Sorts are already declared during typechecking
-            ResolvedNCommand::Sort(name, _presort_and_args) => {
+            ResolvedNCommand::Sort(_span, name, _presort_and_args) => {
                 log::info!("Declared sort {}.", name)
             }
             ResolvedNCommand::Function(fdecl) => {
@@ -1546,7 +1546,7 @@ impl EGraph {
 
     /// Add a user-defined sort
     pub fn add_arcsort(&mut self, arcsort: ArcSort) -> Result<(), TypeError> {
-        self.type_info_mut().add_arcsort(arcsort)
+        self.type_info_mut().add_arcsort(arcsort, DUMMY_SPAN.clone())
     }
 
     /// Add a user-defined primitive

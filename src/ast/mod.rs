@@ -172,7 +172,7 @@ where
         name: Symbol,
         value: GenericExpr<Head, Leaf>,
     },
-    Sort(Symbol, Option<(Symbol, Vec<GenericExpr<Symbol, Symbol>>)>),
+    Sort(Span, Symbol, Option<(Symbol, Vec<GenericExpr<Symbol, Symbol>>)>),
     Function(GenericFunctionDecl<Head, Leaf>),
     AddRuleset(Symbol),
     UnstableCombinedRuleset(Symbol, Vec<Symbol>),
@@ -214,7 +214,7 @@ where
                 name: *name,
                 value: value.clone(),
             },
-            GenericNCommand::Sort(name, params) => GenericCommand::Sort(*name, params.clone()),
+            GenericNCommand::Sort(span, name, params) => GenericCommand::Sort(span.clone(), *name, params.clone()),
             GenericNCommand::Function(f) => GenericCommand::Function(f.clone()),
             GenericNCommand::AddRuleset(name) => GenericCommand::AddRuleset(*name),
             GenericNCommand::UnstableCombinedRuleset(name, others) => {
@@ -269,7 +269,7 @@ where
                 name,
                 value: f(value.clone()),
             },
-            GenericNCommand::Sort(name, params) => GenericNCommand::Sort(name, params),
+            GenericNCommand::Sort(span, name, params) => GenericNCommand::Sort(span, name, params),
             GenericNCommand::Function(func) => GenericNCommand::Function(func.visit_exprs(f)),
             GenericNCommand::AddRuleset(name) => GenericNCommand::AddRuleset(name),
             GenericNCommand::UnstableCombinedRuleset(name, rulesets) => {
@@ -463,6 +463,7 @@ where
 
     /// Datatypes are also known as algebraic data types, tagged unions and sum types.
     Datatype {
+        span: Span,
         name: Symbol,
         variants: Vec<Variant>,
     },
@@ -501,7 +502,7 @@ where
     /// ```
     ///
     /// Now `MathVec` can be used as an input or output sort.
-    Sort(Symbol, Option<(Symbol, Vec<GenericExpr<Symbol, Symbol>>)>),
+    Sort(Span, Symbol, Option<(Symbol, Vec<GenericExpr<Symbol, Symbol>>)>),
     /// Declare an egglog function, which is a database table with a
     /// a functional dependency (also called a primary key) on its inputs to one output.
     ///
@@ -561,6 +562,7 @@ where
     /// (function edge (i64 i64) Unit :default ())
     /// ```
     Relation {
+        span: Span,
         constructor: Symbol,
         inputs: Vec<Symbol>,
     },
@@ -812,19 +814,20 @@ where
                 rewrite.to_sexp(*name, false, *subsume)
             }
             GenericCommand::BiRewrite(name, rewrite) => rewrite.to_sexp(*name, true, false),
-            GenericCommand::Datatype { name, variants } => list!("datatype", name, ++ variants),
+            GenericCommand::Datatype { span: _, name, variants } => list!("datatype", name, ++ variants),
             GenericCommand::Declare {
                 span: _,
                 name,
                 sort,
             } => list!("declare", name, sort),
             GenericCommand::Action(a) => a.to_sexp(),
-            GenericCommand::Sort(name, None) => list!("sort", name),
-            GenericCommand::Sort(name, Some((name2, args))) => {
+            GenericCommand::Sort(_span, name, None) => list!("sort", name),
+            GenericCommand::Sort(_span, name, Some((name2, args))) => {
                 list!("sort", name, list!( name2, ++ args))
             }
             GenericCommand::Function(f) => f.to_sexp(),
             GenericCommand::Relation {
+                span: _,
                 constructor,
                 inputs,
             } => list!("relation", constructor, list!(++ inputs)),
@@ -981,10 +984,12 @@ where
     /// Globals are desugared to functions, with this flag set to true.
     /// This is used by visualization to handle globals differently.
     pub ignore_viz: bool,
+    pub span: Span,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Variant {
+    pub span: Span,
     pub name: Symbol,
     pub types: Vec<Symbol>,
     pub cost: Option<usize>,
@@ -1023,7 +1028,7 @@ impl Schema {
 }
 
 impl FunctionDecl {
-    pub fn relation(name: Symbol, input: Vec<Symbol>) -> Self {
+    pub fn relation(span: Span, name: Symbol, input: Vec<Symbol>) -> Self {
         Self {
             name,
             schema: Schema {
@@ -1036,6 +1041,7 @@ impl FunctionDecl {
             cost: None,
             unextractable: false,
             ignore_viz: false,
+            span,
         }
     }
 }
@@ -1058,6 +1064,7 @@ where
             cost: self.cost,
             unextractable: self.unextractable,
             ignore_viz: self.ignore_viz,
+            span: self.span,
         }
     }
 }

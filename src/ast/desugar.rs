@@ -18,8 +18,8 @@ impl Default for Desugar {
     }
 }
 
-fn desugar_datatype(name: Symbol, variants: Vec<Variant>) -> Vec<NCommand> {
-    vec![NCommand::Sort(name, None)]
+fn desugar_datatype(span: Span, name: Symbol, variants: Vec<Variant>) -> Vec<NCommand> {
+    vec![NCommand::Sort(span.clone(), name, None)]
         .into_iter()
         .chain(variants.into_iter().map(|variant| {
             NCommand::Function(FunctionDecl {
@@ -34,6 +34,7 @@ fn desugar_datatype(name: Symbol, variants: Vec<Variant>) -> Vec<NCommand> {
                 cost: variant.cost,
                 unextractable: false,
                 ignore_viz: false,
+                span: variant.span,
             })
         }))
         .collect()
@@ -258,11 +259,12 @@ pub(crate) fn desugar_command(
         }
         Command::Function(fdecl) => desugar.desugar_function(&fdecl),
         Command::Relation {
+            span,
             constructor,
             inputs,
-        } => desugar.desugar_function(&FunctionDecl::relation(constructor, inputs)),
+        } => desugar.desugar_function(&FunctionDecl::relation(span, constructor, inputs)),
         Command::Declare { span, name, sort } => desugar.declare(span, name, sort),
-        Command::Datatype { name, variants } => desugar_datatype(name, variants),
+        Command::Datatype { span, name, variants } => desugar_datatype(span, name, variants),
         Command::Rewrite(ruleset, rewrite, subsume) => {
             desugar_rewrite(ruleset, rewrite_name(&rewrite).into(), &rewrite, subsume)
         }
@@ -306,7 +308,7 @@ pub(crate) fn desugar_command(
 
             result
         }
-        Command::Sort(sort, option) => vec![NCommand::Sort(sort, option)],
+        Command::Sort(span, sort, option) => vec![NCommand::Sort(span, sort, option)],
         Command::AddRuleset(name) => vec![NCommand::AddRuleset(name)],
         Command::UnstableCombinedRuleset(name, subrulesets) => {
             vec![NCommand::UnstableCombinedRuleset(name, subrulesets)]
@@ -451,6 +453,7 @@ impl Desugar {
                 cost: None,
                 unextractable: false,
                 ignore_viz: false,
+                span: span.clone()
             }),
             NCommand::CoreAction(Action::Let(
                 span.clone(),
@@ -461,16 +464,7 @@ impl Desugar {
     }
 
     pub fn desugar_function(&mut self, fdecl: &FunctionDecl) -> Vec<NCommand> {
-        vec![NCommand::Function(FunctionDecl {
-            name: fdecl.name,
-            schema: fdecl.schema.clone(),
-            default: fdecl.default.clone(),
-            merge: fdecl.merge.clone(),
-            merge_action: fdecl.merge_action.clone(),
-            cost: fdecl.cost,
-            unextractable: fdecl.unextractable,
-            ignore_viz: fdecl.ignore_viz,
-        })]
+        vec![NCommand::Function(fdecl.clone())]
     }
 
     pub fn parent_name(&mut self, eqsort_name: Symbol) -> Symbol {

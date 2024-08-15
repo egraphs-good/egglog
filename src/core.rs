@@ -445,7 +445,7 @@ where
             match action {
                 GenericAction::Let(span, var, expr) => {
                     if binding.contains(var) {
-                        return Err(TypeError::AlreadyDefined(var.to_symbol()));
+                        return Err(TypeError::AlreadyDefined(var.to_symbol(), span.clone()));
                     }
                     let (actions, mapped_expr) =
                         expr.to_core_actions(typeinfo, binding, fresh_gen)?;
@@ -637,7 +637,7 @@ where
                         GenericExpr::Var(span.clone(), v.clone()),
                     ))
                 } else {
-                    Err(TypeError::Unbound(sym))
+                    Err(TypeError::Unbound(sym, span.clone()))
                 }
             }
             GenericExpr::Call(span, f, args) => {
