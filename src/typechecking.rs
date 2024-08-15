@@ -472,16 +472,15 @@ pub enum TypeError {
     #[error("{}\nArity mismatch, expected {expected} args: {expr}", .expr.span().get_quote())]
     Arity { expr: Expr, expected: usize },
     #[error(
-        "{}\nType mismatch: expr = {expr}, expected = {}, actual = {}, reason: {reason}",
+        "{}\n Expect expression {expr} to have type {}, but get type {}",
         .expr.span().get_quote(), .expected.name(), .actual.name(),
     )]
     Mismatch {
         expr: Expr,
         expected: ArcSort,
         actual: ArcSort,
-        reason: String,
     },
-    #[error("Unbound symbol {0}")]
+    #[error("{}\nUnbound symbol {0}", .1.get_quote())]
     Unbound(Symbol, Span),
     #[error("{}\nUndefined sort {0}", .1.get_quote())]
     UndefinedSort(Symbol, Span),

@@ -57,7 +57,6 @@ impl ConstraintError<AtomTerm, ArcSort> {
                 expr: x.to_expr(),
                 expected: v1.clone(),
                 actual: v2.clone(),
-                reason: "mismatch".into(),
             },
             ConstraintError::UnconstrainedVar(v) => TypeError::InferenceFailure(v.to_expr()),
             ConstraintError::NoConstraintSatisfied(constraints) => TypeError::AllAlternativeFailed(
