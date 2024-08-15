@@ -495,6 +495,8 @@ pub enum TypeError {
     SortAlreadyBound(Symbol, Span),
     #[error("{}\nPrimitive {0} already declared.", .1.get_quote())]
     PrimitiveAlreadyBound(Symbol, Span),
+    #[error("Function type mismatch: expected {} => {}, actual {} => {}", .1.iter().map(|s| s.name().to_string()).collect::<Vec<_>>().join(", "), .0.name(), .3.iter().map(|s| s.name().to_string()).collect::<Vec<_>>().join(", "), .2.name())]
+    FunctionTypeMismatch(ArcSort, Vec<ArcSort>, ArcSort, Vec<ArcSort>),
     #[error("{}\nPresort {0} not found.", .1.get_quote())]
     PresortNotFound(Symbol, Span),
     #[error("{}\nFailed to infer a type for: {0}", .0.span().get_quote())]

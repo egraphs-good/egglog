@@ -48,12 +48,17 @@ impl Display for Id {
 #[derive(Clone, Debug)]
 /// The egglog internal representation of already compiled rules
 pub(crate) enum Ruleset {
-    Rules(Symbol, HashMap<Symbol, CompiledRule>),
+    /// Represents a ruleset with a set of rules.
+    /// Use an [`IndexMap`] to ensure egglog is deterministic.
+    /// Rules added to the [`IndexMap`] first apply their
+    /// actions first.
+    Rules(Symbol, IndexMap<Symbol, CompiledRule>),
+    /// A combined ruleset may contain other rulesets.
     Combined(Symbol, Vec<Symbol>),
 }
 
-pub(crate) const DEFAULT_FILENAME: &str = "<unnamed.egg>";
-pub(crate) const DUMMY_FILENAME: &str = "<internal.egg>";
+pub const DEFAULT_FILENAME: &str = "<unnamed.egg>";
+pub const DUMMY_FILENAME: &str = "<internal.egg>";
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct SrcFile {
@@ -130,11 +135,11 @@ impl Span {
 }
 
 lazy_static! {
-    pub(crate) static ref DUMMY_FILE: Arc<SrcFile> = Arc::new(SrcFile {
+    pub static ref DUMMY_FILE: Arc<SrcFile> = Arc::new(SrcFile {
         name: DUMMY_FILENAME.to_string(),
         contents: None
     });
-    pub(crate) static ref DUMMY_SPAN: Span = Span(DUMMY_FILE.clone(), 0, 0);
+    pub static ref DUMMY_SPAN: Span = Span(DUMMY_FILE.clone(), 0, 0);
 }
 
 pub type NCommand = GenericNCommand<Symbol, Symbol>;
