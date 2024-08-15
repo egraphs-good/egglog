@@ -1525,10 +1525,9 @@ impl EGraph {
         self.desugar.parse_program(filename, input)
     }
 
-
     /// Takes a source program `input`, parses it, runs it, and returns a list of messages.
-    /// 
-    /// `filename` is an optional argument to indicate the source of 
+    ///
+    /// `filename` is an optional argument to indicate the source of
     /// the program for error reporting. If `filename` is `None`,
     /// a default name will be used.
     pub fn parse_and_run_program(
