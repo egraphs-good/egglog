@@ -73,6 +73,7 @@ pub struct Location {
 
 pub enum Quote {
     Quote {
+        filename: String,
         quote: String,
         start: Location,
         end: Location,
@@ -83,13 +84,22 @@ pub enum Quote {
 impl Display for Quote {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Quote::Quote { quote, start, end } => {
+            Quote::Quote {
+                filename,
+                quote,
+                start,
+                end,
+            } => {
                 if start.line == end.line {
-                    write!(f, "In {}:{}-{}: {}", start.line, start.col, end.col, quote)
+                    write!(
+                        f,
+                        "In {}:{}-{} of {filename}: {}",
+                        start.line, start.col, end.col, quote
+                    )
                 } else {
                     write!(
                         f,
-                        "In {}:{}-{}:{}: {}",
+                        "In {}:{}-{}:{} of {filename}: {}",
                         start.line, start.col, end.line, end.col, quote
                     )
                 }
@@ -127,10 +137,16 @@ impl Span {
         let Some(contents) = self.0.contents.as_ref() else {
             return Quote::NotAvailable;
         };
+        let filename = self.0.name.clone();
         let start = self.0.get_location(self.1);
         let end = self.0.get_location(self.2 - 1);
         let quote = contents[self.1..self.2].to_string();
-        Quote::Quote { quote, start, end }
+        Quote::Quote {
+            filename,
+            quote,
+            start,
+            end,
+        }
     }
 }
 
