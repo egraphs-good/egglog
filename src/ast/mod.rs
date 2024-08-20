@@ -382,26 +382,6 @@ where
         name: Symbol,
         variants: Vec<Variant>,
     },
-    /// `declare` is syntactic sugar allowing for the declaration of constants.
-    /// For example, the following program:
-    /// ```text
-    /// (sort Bool)
-    /// (declare True Bool)
-    /// ```
-    /// Desugars to:
-    /// ```text
-    /// (sort Bool)
-    /// (function True_table () Bool)
-    /// (let True (True_table))
-    /// ```
-
-    /// Note that declare inserts the constant into the database,
-    /// so rules can use the constant directly as a variable.
-    Declare {
-        span: Span,
-        name: Symbol,
-        sort: Symbol,
-    },
     /// Create a new user-defined sort, which can then
     /// be used in new [`Command::Function`] declarations.
     /// The [`Command::Datatype`] command desugars directly to this command, with one [`Command::Function`]
@@ -626,8 +606,6 @@ where
         expr: GenericExpr<Head, Leaf>,
         schedule: GenericSchedule<Head, Leaf>,
     },
-    // TODO provide calc docs
-    Calc(Span, Vec<IdentSort>, Vec<GenericExpr<Head, Leaf>>),
     /// The `query-extract` command runs a query,
     /// extracting the result for each match that it finds.
     /// For a simpler extraction command, use [`Action::Extract`] instead.
@@ -691,10 +669,7 @@ where
     /// Print out the number of rows in a function or all functions.
     PrintSize(Option<Symbol>),
     /// Input a CSV file directly into a function.
-    Input {
-        name: Symbol,
-        file: String,
-    },
+    Input { name: Symbol, file: String },
     /// Extract and output a set of expressions to a file.
     Output {
         file: String,
@@ -725,11 +700,6 @@ where
             }
             GenericCommand::BiRewrite(name, rewrite) => rewrite.to_sexp(*name, true, false),
             GenericCommand::Datatype { name, variants } => list!("datatype", name, ++ variants),
-            GenericCommand::Declare {
-                span: _,
-                name,
-                sort,
-            } => list!("declare", name, sort),
             GenericCommand::Action(a) => a.to_sexp(),
             GenericCommand::Sort(name, None) => list!("sort", name),
             GenericCommand::Sort(name, Some((name2, args))) => {
@@ -751,7 +721,6 @@ where
             } => rule.to_sexp(*ruleset, *name),
             GenericCommand::RunSchedule(sched) => list!("run-schedule", sched),
             GenericCommand::PrintOverallStatistics => list!("print-stats"),
-            GenericCommand::Calc(_ann, args, exprs) => list!("calc", list!(++ args), ++ exprs),
             GenericCommand::QueryExtract { variants, expr } => {
                 list!("query-extract", ":variants", variants, expr)
             }

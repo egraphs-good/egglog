@@ -182,63 +182,6 @@ fn desugar_simplify(desugar: &mut Desugar, expr: &Expr, schedule: &Schedule) -> 
     res
 }
 
-pub(crate) fn desugar_calc(
-    desugar: &mut Desugar,
-    span: Span,
-    idents: Vec<IdentSort>,
-    exprs: Vec<Expr>,
-    seminaive_transform: bool,
-) -> Result<Vec<NCommand>, Error> {
-    let mut res = vec![];
-
-    // first, push all the idents
-    for IdentSort { ident, sort } in idents {
-        res.push(Command::Declare {
-            span: span.clone(),
-            name: ident,
-            sort,
-        });
-    }
-
-    // now, for every pair of exprs we need to prove them equal
-    for expr1and2 in exprs.windows(2) {
-        let expr1 = &expr1and2[0];
-        let expr2 = &expr1and2[1];
-        res.push(Command::Push(1));
-
-        // add the two exprs only when they are calls (consts and vars don't need to be populated).
-        if let Expr::Call(..) = expr1 {
-            res.push(Command::Action(Action::Expr(expr1.span(), expr1.clone())));
-        }
-        if let Expr::Call(..) = expr2 {
-            res.push(Command::Action(Action::Expr(expr2.span(), expr2.clone())));
-        }
-
-        res.push(Command::RunSchedule(Schedule::Saturate(
-            span.clone(),
-            Box::new(Schedule::Run(
-                span.clone(),
-                RunConfig {
-                    ruleset: "".into(),
-                    until: Some(vec![Fact::Eq(
-                        span.clone(),
-                        vec![expr1.clone(), expr2.clone()],
-                    )]),
-                },
-            )),
-        )));
-
-        res.push(Command::Check(
-            span.clone(),
-            vec![Fact::Eq(span.clone(), vec![expr1.clone(), expr2.clone()])],
-        ));
-
-        res.push(Command::Pop(1));
-    }
-
-    desugar_commands(res, desugar, false, seminaive_transform)
-}
-
 pub(crate) fn rewrite_name(rewrite: &Rewrite) -> String {
     rewrite.to_string().replace('\"', "'")
 }
@@ -261,7 +204,6 @@ pub(crate) fn desugar_command(
             constructor,
             inputs,
         } => desugar.desugar_function(&FunctionDecl::relation(constructor, inputs)),
-        Command::Declare { span, name, sort } => desugar.declare(span, name, sort),
         Command::Datatype { name, variants } => desugar_datatype(name, variants),
         Command::Rewrite(ruleset, rewrite, subsume) => {
             desugar_rewrite(ruleset, rewrite_name(&rewrite).into(), &rewrite, subsume)
@@ -313,9 +255,6 @@ pub(crate) fn desugar_command(
         }
         Command::Action(action) => vec![NCommand::CoreAction(action)],
         Command::Simplify { expr, schedule } => desugar_simplify(desugar, &expr, &schedule),
-        Command::Calc(span, idents, exprs) => {
-            desugar_calc(desugar, span, idents, exprs, seminaive_transform)?
-        }
         Command::RunSchedule(sched) => {
             vec![NCommand::RunSchedule(sched.clone())]
         }

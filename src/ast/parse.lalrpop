@@ -55,7 +55,6 @@ Command: Command = {
         <merge:(":merge" <Expr>)?> <default:(":default" <Expr>)?> RParen => {
         Command::Function(FunctionDecl { name, schema, merge, merge_action: Actions::new(merge_action.unwrap_or_default()), default, cost, unextractable: unextractable.is_some(), ignore_viz: false })
     },
-    <lo:LParen> "declare" <name:Ident> <sort:Ident> <hi:RParen> => Command::Declare{span: Span(srcfile.clone(), lo, hi), name, sort},
     LParen "relation" <constructor:Ident> <inputs:List<Type>> RParen => Command::Relation{constructor, inputs},
     LParen "ruleset" <name:Ident> RParen => Command::AddRuleset(name),
     LParen "unstable-combined-ruleset" <name:Ident> <subrulesets:Ident*> RParen => Command::UnstableCombinedRuleset(name, subrulesets),
@@ -82,7 +81,6 @@ Command: Command = {
             Schedule::Run(Span(srcfile.clone(), lo, hi), RunConfig { ruleset, until })))),
     LParen "simplify"  <schedule:Schedule> <expr:Expr> RParen
         => Command::Simplify { expr, schedule },
-    <lo:LParen> "calc" LParen <idents:IdentSort*> RParen <exprs:Expr+> <hi:RParen> => Command::Calc(Span(srcfile.clone(), lo, hi), idents, exprs),
     LParen "query-extract" <variants:(":variants" <UNum>)?> <expr:Expr> RParen => Command::QueryExtract { expr, variants: variants.unwrap_or(0) },
     <lo:LParen> "check" <facts:(Fact)*> <hi:RParen> => Command::Check(Span(srcfile.clone(), lo, hi), facts),
     LParen "check-proof" RParen => Command::CheckProof,
