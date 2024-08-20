@@ -334,7 +334,8 @@ fn test_subsume() {
             None,
             r#"
         ;; add something equal to x that can be extracted:
-        (declare other Math)
+        (function otherConst () Math)
+        (let other (otherConst))
         (union x other)
         (extract x 10)
         "#,
