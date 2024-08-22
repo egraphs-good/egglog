@@ -66,22 +66,24 @@ pub struct SrcFile {
     pub contents: Option<String>,
 }
 
+#[derive(Clone, Copy)]
 pub struct Location {
     pub line: usize,
     pub col: usize,
 }
 
-pub enum Quote {
+#[derive(Clone, Copy)]
+pub enum Quote<'a> {
     Quote {
-        filename: String,
-        quote: String,
+        filename: &'a str,
+        quote: &'a str,
         start: Location,
         end: Location,
     },
     NotAvailable,
 }
 
-impl Display for Quote {
+impl<'a> Display for Quote<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Quote::Quote {
@@ -133,14 +135,14 @@ impl SrcFile {
 pub struct Span(pub Arc<SrcFile>, pub usize, pub usize);
 
 impl Span {
-    pub fn get_quote(&self) -> Quote {
+    pub fn get_quote(&self) -> Quote<'_> {
         let Some(contents) = self.0.contents.as_ref() else {
             return Quote::NotAvailable;
         };
-        let filename = self.0.name.clone();
+        let filename = &self.0.name;
         let start = self.0.get_location(self.1);
         let end = self.0.get_location(self.2 - 1);
-        let quote = contents[self.1..self.2].to_string();
+        let quote = &contents[self.1..self.2];
         Quote::Quote {
             filename,
             quote,
