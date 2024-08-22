@@ -1114,10 +1114,10 @@ impl EGraph {
                     };
                     Ok(name)
                 }
-                Ruleset::Combined(_, _) => Err(Error::CombinedRulesetError(ruleset)),
+                Ruleset::Combined(_, _) => Err(Error::CombinedRulesetError(ruleset, rule.span)),
             }
         } else {
-            Err(Error::NoSuchRuleset(ruleset))
+            Err(Error::NoSuchRuleset(ruleset, rule.span))
         }
     }
 
@@ -1238,9 +1238,9 @@ impl EGraph {
             Err(())
         });
         if !matched {
-            // TODO add useful info here
             Err(Error::CheckError(
                 facts.iter().map(|f| f.clone().make_unresolved()).collect(),
+                span.clone(),
             ))
         } else {
             Ok(())
@@ -1623,6 +1623,10 @@ impl EGraph {
     }
 }
 
+// Currently, only the following errors can thrown without location information:
+// * PrimitiveError
+// * MergeError
+// * SubsumeMergeError
 #[derive(Debug, Error)]
 pub enum Error {
     #[error(transparent)]
@@ -1633,12 +1637,12 @@ pub enum Error {
     TypeError(#[from] TypeError),
     #[error("Errors:\n{}", ListDisplay(.0, "\n"))]
     TypeErrors(Vec<TypeError>),
-    #[error("Check failed: \n{}", ListDisplay(.0, "\n"))]
-    CheckError(Vec<Fact>),
-    #[error("No such ruleset: {0}")]
-    NoSuchRuleset(Symbol),
-    #[error("Attempted to add a rule to combined ruleset {0}. Combined rulesets may only depend on other rulesets.")]
-    CombinedRulesetError(Symbol),
+    #[error("{}\nCheck failed: \n{}", .1.get_quote(), ListDisplay(.0, "\n"))]
+    CheckError(Vec<Fact>, Span),
+    #[error("{}\nNo such ruleset: {0}", .1.get_quote())]
+    NoSuchRuleset(Symbol, Span),
+    #[error("{}\nAttempted to add a rule to combined ruleset {0}. Combined rulesets may only depend on other rulesets.", .1.get_quote())]
+    CombinedRulesetError(Symbol, Span),
     #[error("Evaluating primitive {0:?} failed. ({0:?} {:?})", ListDebug(.1, " "))]
     PrimitiveError(Primitive, Vec<Value>),
     #[error("Illegal merge attempted for function {0}, {1:?} != {2:?}")]
