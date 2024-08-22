@@ -9,8 +9,10 @@
 (datatype BDD
     (ITE i64 BDD BDD) ; variables labelled by number
 )
-(declare True BDD)
-(declare False BDD)
+(function TrueConst () BDD)
+(let True (TrueConst))
+(function FalseConst () BDD)
+(let False (FalseConst))
 
 ; compress unneeded nodes
 (rewrite (ITE n a a) a)

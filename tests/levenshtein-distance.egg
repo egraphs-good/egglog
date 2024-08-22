@@ -10,7 +10,8 @@
 ; `String` supports limited operations, let's just use it as a char type
 (datatype str
     (Cons String str))
-(declare Empty str)
+(function EmptyConst () str)
+(let Empty (EmptyConst))
 
 ; Length function
 

@@ -1,8 +1,11 @@
 ; A simple group
 (datatype G)
-(declare I G)
-(declare A G)
-(declare B G)
+(function IConst () G)
+(let I (IConst))
+(function AConst () G)
+(let A (AConst))
+(function BConst () G)
+(let B (BConst))
 
 (function g* (G G) G)
 (function inv (G) G)
