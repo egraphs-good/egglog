@@ -88,13 +88,23 @@ impl Function {
         for s in &decl.schema.input {
             input.push(match egraph.type_info().sorts.get(s) {
                 Some(sort) => sort.clone(),
-                None => return Err(Error::TypeError(TypeError::Unbound(*s))),
+                None => {
+                    return Err(Error::TypeError(TypeError::UndefinedSort(
+                        *s,
+                        decl.span.clone(),
+                    )))
+                }
             })
         }
 
         let output = match egraph.type_info().sorts.get(&decl.schema.output) {
             Some(sort) => sort.clone(),
-            None => return Err(Error::TypeError(TypeError::Unbound(decl.schema.output))),
+            None => {
+                return Err(Error::TypeError(TypeError::UndefinedSort(
+                    decl.schema.output,
+                    decl.span.clone(),
+                )))
+            }
         };
 
         let binding = IndexSet::from_iter([
