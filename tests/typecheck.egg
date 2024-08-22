@@ -3,19 +3,22 @@
 (datatype Type 
   (TArr Type Type) ; t1 -> t2
 )
-(declare TUnit Type)
+(function TUnitConst () Type)
+(let TUnit (TUnitConst))
 
 (datatype Expr 
   (Lam String Type Expr) ; lam x : t . e
   (App Expr Expr) 
   (Var String) 
 )
-(declare MyUnit Expr)
+(function MyUnitConst () Expr)
+(let MyUnit (MyUnitConst))
 
 (datatype Ctx 
   (Cons String Type Ctx)
 )
-(declare Nil Ctx)
+(function NilConst () Ctx)
+(let Nil (NilConst))
 
 ; ctx |- expr : type
 (function typeof (Ctx Expr) Type)

@@ -1,7 +1,10 @@
 (datatype G)
-(declare I G)
-(declare A G)
-(declare B G)
+(function IConst () G)
+(let I (IConst))
+(function AConst () G)
+(let A (AConst))
+(function BConst () G)
+(let B (BConst))
 (function g* (G G) G)
 (function inv (G) G)
 (birewrite (g* (g* a b) c) (g* a (g* b c))) ; assoc
@@ -18,15 +21,41 @@
 (let A8 (g* A4 A4))
 
 
-(calc ()
-    (g* A4 A4)
-    (g* (g* A2 A2) (g* A2 A2))
-    (g* A2 (g* A2 (g* A2 A2)))
-)
+(push)
+(g* A4 A4)
 
-; Note that (calc ((I G) (b G)) ...) will fail because names must be unused
-(calc ((a G) (b G))
-    (g* (g* b (g* (inv a) a)) (inv b))
-    (g* b (inv b))
-    I
-)
+(run 10000 :until (= (g* A4 A4) (g* (g* A2 A2) (g* A2 A2))))
+
+(check (= (g* A4 A4) (g* (g* A2 A2) (g* A2 A2))))
+(pop)
+
+(push)
+(g* (g* A2 A2) (g* A2 A2))
+
+(run 10000 :until (= (g* (g* A2 A2) (g* A2 A2))
+(g* A2 (g* A2 (g* A2 A2)))))
+(check (= (g* (g* A2 A2) (g* A2 A2))
+(g* A2 (g* A2 (g* A2 A2)))))
+(pop)
+
+
+(function aConst () G)
+(function bConst () G)
+(let a (aConst))
+(let b (bConst))
+(push)
+
+(g* (g* b (g* (inv a) a)) (inv b))
+
+(run 100000 :until (= (g* (g* b (g* (inv a) a)) (inv b)) (g* b (inv b))))
+
+(check (= (g* (g* b (g* (inv a) a)) (inv b)) (g* b (inv b))))
+
+(pop)
+
+(push)
+(g* b (inv b))
+(run 100000 :until (= (g* b (inv b)) I))
+(check (= (g* b (inv b)) I))
+
+(pop)

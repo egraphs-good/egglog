@@ -8,7 +8,8 @@
     (Num i64)
     (CaseSplit Term Term Term)
     (Cons Term Term))
-(declare Nil Term)
+(function NilConst () Term)
+(let Nil (NilConst))
 
 (function V (String) Var) 
 (function From (Term) Var)

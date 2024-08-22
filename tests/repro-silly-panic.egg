@@ -1,7 +1,8 @@
 (datatype KAT
     (par KAT KAT)
 )
-(declare A KAT)
+(function AConst () KAT)
+(let A (AConst))
 
 (rewrite (par p p) p)
 (rule ((= r (par q r)) (= q (par q r))) ((union r q)))

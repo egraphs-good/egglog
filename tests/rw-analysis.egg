@@ -4,9 +4,12 @@
 
 ; Top means it can be an arbitrary value
 (datatype Val (I i64))
-(declare Top Val)
-(declare True Val)
-(declare False Val)
+(function TopConst () Val)
+(let Top (TopConst))
+(function TrueConst () Val)
+(let True (TrueConst))
+(function FalseConst () Val)
+(let False (FalseConst))
 (relation Bool (Val))
 (Bool True)
 (Bool False)
@@ -56,7 +59,8 @@
     (If VarT Loc Loc)
     (Goto Loc)
     (Call VarT))
-(declare End ProgStmt)
+(function EndConst () ProgStmt)
+(let End (EndConst))
 (function Prog (Loc) ProgStmt)
 (relation RProg (Loc ProgStmt))
 
