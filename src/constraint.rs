@@ -57,7 +57,6 @@ impl ConstraintError<AtomTerm, ArcSort> {
                 expr: x.to_expr(),
                 expected: v1.clone(),
                 actual: v2.clone(),
-                reason: "mismatch".into(),
             },
             ConstraintError::UnconstrainedVar(v) => TypeError::InferenceFailure(v.to_expr()),
             ConstraintError::NoConstraintSatisfied(constraints) => TypeError::AllAlternativeFailed(
@@ -357,7 +356,7 @@ impl Assignment<AtomTerm, ArcSort> {
                     .collect();
                 let resolved_call = ResolvedCall::from_resolution(head, &types, typeinfo);
                 if !matches!(resolved_call, ResolvedCall::Func(_)) {
-                    return Err(TypeError::UnboundFunction(*head));
+                    return Err(TypeError::UnboundFunction(*head, span.clone()));
                 }
                 Ok(ResolvedAction::Set(
                     span.clone(),
@@ -386,7 +385,7 @@ impl Assignment<AtomTerm, ArcSort> {
                     .collect();
                 let resolved_call =
                     ResolvedCall::from_resolution_func_types(head, &types, typeinfo)
-                        .ok_or_else(|| TypeError::UnboundFunction(*head))?;
+                        .ok_or_else(|| TypeError::UnboundFunction(*head, span.clone()))?;
                 Ok(ResolvedAction::Change(
                     span.clone(),
                     *change,
@@ -667,7 +666,7 @@ fn get_atom_application_constraints(
     // do literal and global variable constraints first
     // as they are the most "informative"
     match xor_constraints.len() {
-        0 => Err(TypeError::UnboundFunction(*head)),
+        0 => Err(TypeError::UnboundFunction(*head, span.clone())),
         1 => Ok(xor_constraints.pop().unwrap()),
         _ => Ok(vec![Constraint::Xor(
             xor_constraints.into_iter().map(Constraint::And).collect(),

@@ -535,7 +535,7 @@ impl EGraph {
                 self.msgs = messages;
                 Ok(())
             }
-            None => Err(Error::Pop),
+            None => Err(Error::Pop(DUMMY_SPAN.clone())),
         }
     }
 
@@ -739,7 +739,10 @@ impl EGraph {
         sym: Symbol,
         n: usize,
     ) -> Result<(Vec<(Term, Term)>, TermDag), Error> {
-        let f = self.functions.get(&sym).ok_or(TypeError::Unbound(sym))?;
+        let f = self
+            .functions
+            .get(&sym)
+            .ok_or(TypeError::UnboundFunction(sym, DUMMY_SPAN.clone()))?;
         let schema = f.schema.clone();
         let nodes = f
             .nodes
@@ -782,7 +785,8 @@ impl EGraph {
         let f = self
             .functions
             .get(&sym)
-            .ok_or(TypeError::UnboundFunction(sym))?;
+            // function_to_dag should have checked this
+            .unwrap();
         let out_is_unit = f.schema.output.name() == UNIT_SYM.into();
 
         let mut buf = String::new();
@@ -812,7 +816,10 @@ impl EGraph {
 
     pub fn print_size(&mut self, sym: Option<Symbol>) -> Result<(), Error> {
         if let Some(sym) = sym {
-            let f = self.functions.get(&sym).ok_or(TypeError::Unbound(sym))?;
+            let f = self
+                .functions
+                .get(&sym)
+                .ok_or(TypeError::UnboundFunction(sym, DUMMY_SPAN.clone()))?;
             log::info!("Function {} has size {}", sym, f.nodes.len());
             self.print_msg(f.nodes.len().to_string());
             Ok(())
@@ -1107,10 +1114,10 @@ impl EGraph {
                     };
                     Ok(name)
                 }
-                Ruleset::Combined(_, _) => Err(Error::CombinedRulesetError(ruleset)),
+                Ruleset::Combined(_, _) => Err(Error::CombinedRulesetError(ruleset, rule.span)),
             }
         } else {
-            Err(Error::NoSuchRuleset(ruleset))
+            Err(Error::NoSuchRuleset(ruleset, rule.span))
         }
     }
 
@@ -1231,9 +1238,9 @@ impl EGraph {
             Err(())
         });
         if !matched {
-            // TODO add useful info here
             Err(Error::CheckError(
                 facts.iter().map(|f| f.clone().make_unresolved()).collect(),
+                span.clone(),
             ))
         } else {
             Ok(())
@@ -1259,7 +1266,7 @@ impl EGraph {
                 log::info!("{}", str)
             }
             // Sorts are already declared during typechecking
-            ResolvedNCommand::Sort(name, _presort_and_args) => {
+            ResolvedNCommand::Sort(_span, name, _presort_and_args) => {
                 log::info!("Declared sort {}.", name)
             }
             ResolvedNCommand::Function(fdecl) => {
@@ -1310,30 +1317,52 @@ impl EGraph {
                 (0..n).for_each(|_| self.push());
                 log::info!("Pushed {n} levels.")
             }
-            ResolvedNCommand::Pop(n) => {
+            ResolvedNCommand::Pop(span, n) => {
                 for _ in 0..n {
-                    self.pop()?;
+                    self.pop().map_err(|err| {
+                        if let Error::Pop(_) = err {
+                            Error::Pop(span.clone())
+                        } else {
+                            err
+                        }
+                    })?;
                 }
                 log::info!("Popped {n} levels.")
             }
-            ResolvedNCommand::PrintTable(f, n) => {
-                self.print_function(f, n)?;
+            ResolvedNCommand::PrintTable(span, f, n) => {
+                self.print_function(f, n).map_err(|e| match e {
+                    Error::TypeError(TypeError::UnboundFunction(f, _)) => {
+                        Error::TypeError(TypeError::UnboundFunction(f, span.clone()))
+                    }
+                    // This case is currently impossible
+                    _ => e,
+                })?;
             }
-            ResolvedNCommand::PrintSize(f) => {
-                self.print_size(f)?;
+            ResolvedNCommand::PrintSize(span, f) => {
+                self.print_size(f).map_err(|e| match e {
+                    Error::TypeError(TypeError::UnboundFunction(f, _)) => {
+                        Error::TypeError(TypeError::UnboundFunction(f, span.clone()))
+                    }
+                    // This case is currently impossible
+                    _ => e,
+                })?;
             }
-            ResolvedNCommand::Fail(c) => {
+            ResolvedNCommand::Fail(span, c) => {
                 let result = self.run_command(*c);
                 if let Err(e) = result {
                     log::info!("Command failed as expected: {e}");
                 } else {
-                    return Err(Error::ExpectFail);
+                    return Err(Error::ExpectFail(span));
                 }
             }
-            ResolvedNCommand::Input { name, file } => {
+            ResolvedNCommand::Input {
+                span: _,
+                name,
+                file,
+            } => {
                 self.input_file(name, file)?;
             }
-            ResolvedNCommand::Output { file, exprs } => {
+            ResolvedNCommand::Output { span, file, exprs } => {
                 let mut filename = self.fact_directory.clone().unwrap_or_default();
                 filename.push(file.as_str());
                 // append to file
@@ -1342,7 +1371,7 @@ impl EGraph {
                     .append(true)
                     .create(true)
                     .open(&filename)
-                    .map_err(|e| Error::IoError(filename.clone(), e))?;
+                    .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
                 let mut termdag = TermDag::default();
                 for expr in exprs {
                     let value = self.eval_resolved_expr(&expr, true)?;
@@ -1350,7 +1379,7 @@ impl EGraph {
                     let term = self.extract(value, &mut termdag, &expr_type).1;
                     use std::io::Write;
                     writeln!(f, "{}", termdag.to_string(&term))
-                        .map_err(|e| Error::IoError(filename.clone(), e))?;
+                        .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
                 }
 
                 log::info!("Output to '{filename:?}'.")
@@ -1496,8 +1525,11 @@ impl EGraph {
         self.desugar.parse_program(filename, input)
     }
 
-    /// Parse and run a program, returning a list of messages.
-    /// If filename is None, a default name will be provided
+    /// Takes a source program `input`, parses it, runs it, and returns a list of messages.
+    ///
+    /// `filename` is an optional argument to indicate the source of
+    /// the program for error reporting. If `filename` is `None`,
+    /// a default name will be used.
     pub fn parse_and_run_program(
         &mut self,
         filename: Option<String>,
@@ -1531,7 +1563,8 @@ impl EGraph {
 
     /// Add a user-defined sort
     pub fn add_arcsort(&mut self, arcsort: ArcSort) -> Result<(), TypeError> {
-        self.type_info_mut().add_arcsort(arcsort)
+        self.type_info_mut()
+            .add_arcsort(arcsort, DUMMY_SPAN.clone())
     }
 
     /// Add a user-defined primitive
@@ -1590,6 +1623,10 @@ impl EGraph {
     }
 }
 
+// Currently, only the following errors can thrown without location information:
+// * PrimitiveError
+// * MergeError
+// * SubsumeMergeError
 #[derive(Debug, Error)]
 pub enum Error {
     #[error(transparent)]
@@ -1600,22 +1637,22 @@ pub enum Error {
     TypeError(#[from] TypeError),
     #[error("Errors:\n{}", ListDisplay(.0, "\n"))]
     TypeErrors(Vec<TypeError>),
-    #[error("Check failed: \n{}", ListDisplay(.0, "\n"))]
-    CheckError(Vec<Fact>),
-    #[error("No such ruleset: {0}")]
-    NoSuchRuleset(Symbol),
-    #[error("Attempted to add a rule to combined ruleset {0}. Combined rulesets may only depend on other rulesets.")]
-    CombinedRulesetError(Symbol),
+    #[error("{}\nCheck failed: \n{}", .1.get_quote(), ListDisplay(.0, "\n"))]
+    CheckError(Vec<Fact>, Span),
+    #[error("{}\nNo such ruleset: {0}", .1.get_quote())]
+    NoSuchRuleset(Symbol, Span),
+    #[error("{}\nAttempted to add a rule to combined ruleset {0}. Combined rulesets may only depend on other rulesets.", .1.get_quote())]
+    CombinedRulesetError(Symbol, Span),
     #[error("Evaluating primitive {0:?} failed. ({0:?} {:?})", ListDebug(.1, " "))]
     PrimitiveError(Primitive, Vec<Value>),
     #[error("Illegal merge attempted for function {0}, {1:?} != {2:?}")]
     MergeError(Symbol, Value, Value),
-    #[error("Tried to pop too much")]
-    Pop,
-    #[error("Command should have failed.")]
-    ExpectFail,
-    #[error("IO error: {0}: {1}")]
-    IoError(PathBuf, std::io::Error),
+    #[error("{}\nTried to pop too much", .0.get_quote())]
+    Pop(Span),
+    #[error("{}\nCommand should have failed.", .0.get_quote())]
+    ExpectFail(Span),
+    #[error("{}\nIO error: {0}: {1}", .2.get_quote())]
+    IoError(PathBuf, std::io::Error, Span),
     #[error("Cannot subsume function with merge: {0}")]
     SubsumeMergeError(Symbol),
 }
