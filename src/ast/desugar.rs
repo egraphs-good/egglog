@@ -423,32 +423,6 @@ impl Desugar {
             .map_err(|e| e.map_token(|tok| tok.to_string()))?)
     }
 
-    // TODO declare by creating a new global function. See issue #334
-    pub fn declare(&mut self, span: Span, name: Symbol, sort: Symbol) -> Vec<NCommand> {
-        let fresh = self.get_fresh();
-        vec![
-            NCommand::Function(FunctionDecl {
-                name: fresh,
-                schema: Schema {
-                    input: vec![],
-                    output: sort,
-                },
-                default: None,
-                merge: None,
-                merge_action: Actions::default(),
-                cost: None,
-                unextractable: false,
-                ignore_viz: false,
-                span: span.clone(),
-            }),
-            NCommand::CoreAction(Action::Let(
-                span.clone(),
-                name,
-                Expr::Call(span.clone(), fresh, vec![]),
-            )),
-        ]
-    }
-
     pub fn parent_name(&mut self, eqsort_name: Symbol) -> Symbol {
         self.fresh_gen
             .generate_special(&format!("{}Parent", eqsort_name).into())
