@@ -365,7 +365,7 @@ impl EGraph {
                             values[0],
                             &mut termdag,
                             self.type_info().sorts.get(&values[0].tag).unwrap(),
-                        );
+                        )?;
                         let extracted = termdag.to_string(&term);
                         log::info!("extracted with cost {cost}: {extracted}");
                         self.print_msg(extracted);
