@@ -46,17 +46,16 @@ Comma<T>: Vec<T> = {
 
 Command: Command = {
     LParen "set-option" <name:Ident> <value:Expr> RParen => Command::SetOption { name, value },
-    LParen "datatype" <name:Ident> <variants:(Variant)*> RParen => Command::Datatype { <> },
-    LParen "sort" <name:Ident> LParen <head:Ident> <tail:(Expr)*> RParen RParen => Command::Sort (name, Some((head, tail))),
-    LParen "sort" <name:Ident> RParen => Command::Sort (name, None),
-    LParen "function" <name:Ident> <schema:Schema> <cost:Cost>
+    <lo:LParen> "datatype" <name:Ident> <variants:(Variant)*> <hi:RParen> => Command::Datatype { span: Span(srcfile.clone(), lo, hi), name, variants },
+    <lo:LParen> "sort" <name:Ident> LParen <head:Ident> <tail:(Expr)*> RParen <hi:RParen> => Command::Sort (Span(srcfile.clone(), lo, hi), name, Some((head, tail))),
+    <lo:LParen> "sort" <name:Ident> <hi:RParen> => Command::Sort (Span(srcfile.clone(), lo, hi), name, None),
+    <lo:LParen> "function" <name:Ident> <schema:Schema> <cost:Cost>
         <unextractable:(":unextractable")?>
         <merge_action:(":on_merge" <List<Action>>)?>
-        <merge:(":merge" <Expr>)?> <default:(":default" <Expr>)?> RParen => {
-        Command::Function(FunctionDecl { name, schema, merge, merge_action: Actions::new(merge_action.unwrap_or_default()), default, cost, unextractable: unextractable.is_some(), ignore_viz: false })
+        <merge:(":merge" <Expr>)?> <default:(":default" <Expr>)?> <hi:RParen> => {
+        Command::Function(FunctionDecl { span: Span(srcfile.clone(), lo, hi), name, schema, merge, merge_action: Actions::new(merge_action.unwrap_or_default()), default, cost, unextractable: unextractable.is_some(), ignore_viz: false })
     },
-    <lo:LParen> "declare" <name:Ident> <sort:Ident> <hi:RParen> => Command::Declare{span: Span(srcfile.clone(), lo, hi), name, sort},
-    LParen "relation" <constructor:Ident> <inputs:List<Type>> RParen => Command::Relation{constructor, inputs},
+    <lo:LParen> "relation" <constructor:Ident> <inputs:List<Type>> <hi:RParen> => Command::Relation{span: Span(srcfile.clone(), lo, hi), constructor, inputs},
     LParen "ruleset" <name:Ident> RParen => Command::AddRuleset(name),
     LParen "unstable-combined-ruleset" <name:Ident> <subrulesets:Ident*> RParen => Command::UnstableCombinedRuleset(name, subrulesets),
     <lo:LParen> "rule" <body:List<Fact>> <head:List<Action>> 
@@ -80,23 +79,22 @@ Command: Command = {
     <lo:LParen> "run" <ruleset: Ident> <limit:UNum> <until:(":until" <(Fact)*>)?> <hi:RParen> => 
         Command::RunSchedule(Schedule::Repeat(Span(srcfile.clone(), lo, hi), limit, Box::new(
             Schedule::Run(Span(srcfile.clone(), lo, hi), RunConfig { ruleset, until })))),
-    LParen "simplify"  <schedule:Schedule> <expr:Expr> RParen
-        => Command::Simplify { expr, schedule },
-    <lo:LParen> "calc" LParen <idents:IdentSort*> RParen <exprs:Expr+> <hi:RParen> => Command::Calc(Span(srcfile.clone(), lo, hi), idents, exprs),
-    LParen "query-extract" <variants:(":variants" <UNum>)?> <expr:Expr> RParen => Command::QueryExtract { expr, variants: variants.unwrap_or(0) },
+    <lo:LParen> "simplify"  <schedule:Schedule> <expr:Expr> <hi:RParen>
+        => Command::Simplify { span: Span(srcfile.clone(), lo, hi), expr, schedule },
+    <lo:LParen> "query-extract" <variants:(":variants" <UNum>)?> <expr:Expr> <hi:RParen> => Command::QueryExtract { span: Span(srcfile.clone(), lo, hi), expr, variants: variants.unwrap_or(0) },
     <lo:LParen> "check" <facts:(Fact)*> <hi:RParen> => Command::Check(Span(srcfile.clone(), lo, hi), facts),
     LParen "check-proof" RParen => Command::CheckProof,
       <lo:LParen> "run-schedule" <scheds:Schedule*> <hi:RParen> => 
         Command::RunSchedule(Schedule::Sequence(Span(srcfile.clone(), lo, hi), scheds)),
     LParen "print-stats" RParen => Command::PrintOverallStatistics,
     LParen "push" <UNum?> RParen => Command::Push(<>.unwrap_or(1)),
-    LParen "pop" <UNum?> RParen => Command::Pop(<>.unwrap_or(1)),
-    LParen "print-function" <sym:Ident> <n:UNum> RParen => Command::PrintFunction(sym, n),
-    LParen "print-size" <sym:Ident?> RParen => Command::PrintSize(sym),
-    LParen "input" <name:Ident> <file:String> RParen => Command::Input { name, file },
-    LParen "output" <file:String> <exprs:Expr+> RParen => Command::Output { file, exprs },
-    LParen "fail" <Command> RParen => Command::Fail(Box::new(<>)),
-    LParen "include" <file:String> RParen => Command::Include(file),
+    <lo:LParen> "pop" <n:UNum?> <hi:RParen> => Command::Pop(Span(srcfile.clone(), lo, hi), n.unwrap_or(1)),
+    <lo:LParen> "print-function" <sym:Ident> <n:UNum> <hi:RParen> => Command::PrintFunction(Span(srcfile.clone(), lo, hi), sym, n),
+    <lo:LParen> "print-size" <sym:Ident?> <hi:RParen> => Command::PrintSize(Span(srcfile.clone(), lo, hi), sym),
+    <lo:LParen> "input" <name:Ident> <file:String> <hi:RParen> => Command::Input { span: Span(srcfile.clone(), lo, hi), name, file },
+    <lo:LParen> "output" <file:String> <exprs:Expr+> <hi:RParen> => Command::Output { span: Span(srcfile.clone(), lo, hi), file, exprs },
+    <lo:LParen> "fail" <c:Command> <hi:RParen> => Command::Fail(Span(srcfile.clone(), lo, hi), Box::new(c)),
+    <lo:LParen> "include" <file:String> <hi:RParen> => Command::Include(Span(srcfile.clone(), lo, hi), file),
 }
 
 Schedule: Schedule = {
@@ -177,7 +175,7 @@ CallExpr: Expr = {
 ExprList: Vec<Expr> = { LParen <sexps:(Expr)*> RParen => sexps }
 
 Variant: Variant = {
-    LParen <name:Ident> <types:(Type)*> <cost:Cost> RParen => Variant { <> },
+    <lo:LParen> <name:Ident> <types:(Type)*> <cost:Cost> <hi:RParen> => Variant { span: Span(srcfile.clone(), lo, hi), name, types, cost },
 }
 
 Type: Symbol = <Ident>;

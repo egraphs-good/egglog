@@ -62,11 +62,11 @@ impl FunctionSort {
         name: Symbol,
         args: &[Expr],
     ) -> Result<ArcSort, TypeError> {
-        if let [inputs, Expr::Var(_, output)] = args {
+        if let [inputs, Expr::Var(span, output)] = args {
             let output_sort = typeinfo
                 .sorts
                 .get(output)
-                .ok_or(TypeError::UndefinedSort(*output))?;
+                .ok_or(TypeError::UndefinedSort(*output, span.clone()))?;
 
             let input_sorts = match inputs {
                 Expr::Call(_, first, rest_args) => {
@@ -82,7 +82,7 @@ impl FunctionSort {
                             typeinfo
                                 .sorts
                                 .get(arg)
-                                .ok_or(TypeError::UndefinedSort(*arg))
+                                .ok_or(TypeError::UndefinedSort(*arg, span.clone()))
                                 .map(|s| s.clone())
                         })
                         .collect::<Result<Vec<_>, _>>()?

@@ -28,12 +28,17 @@ impl SetSort {
         name: Symbol,
         args: &[Expr],
     ) -> Result<ArcSort, TypeError> {
-        if let [Expr::Var(_, e)] = args {
-            let e = typeinfo.sorts.get(e).ok_or(TypeError::UndefinedSort(*e))?;
+        if let [Expr::Var(span, e)] = args {
+            let e = typeinfo
+                .sorts
+                .get(e)
+                .ok_or(TypeError::UndefinedSort(*e, span.clone()))?;
 
             if e.is_eq_container_sort() {
-                return Err(TypeError::UndefinedSort(
+                return Err(TypeError::DisallowedSort(
+                    name,
                     "Sets nested with other EqSort containers are not allowed".into(),
+                    span.clone(),
                 ));
             }
 

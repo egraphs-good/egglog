@@ -1,7 +1,9 @@
 ;; NOTE: This file contains several unsafe operations
 (datatype Value (Num i64))
-(declare True Value)
-(declare False Value)
+(function TrueConst () Value)
+(let True (TrueConst))
+(function FalseConst () Value)
+(let False (FalseConst))
 (datatype VarType)
 (datatype Term
     (Val Value)

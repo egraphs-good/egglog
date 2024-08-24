@@ -27,8 +27,10 @@
 ; This encoding as it stands really only supports ground atoms modulo equality
 
 (datatype Bool)
-(declare True Bool)
-(declare False Bool)
+(function TrueConst () Bool)
+(let True (TrueConst))
+(function FalseConst () Bool)
+(let False (FalseConst))
 (function myor (Bool Bool) Bool)
 (function negate (Bool) Bool)
 
