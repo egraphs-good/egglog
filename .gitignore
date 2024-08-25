@@ -19,3 +19,6 @@ _scratch.egg
 
 # racket
 scripts/compiled
+semantics/compiled
+semantics/*.png
+docs
