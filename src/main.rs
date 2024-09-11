@@ -216,7 +216,7 @@ fn main() {
         if args.to_json || args.to_dot || args.to_svg {
             let mut serialized = egraph.serialize(SerializeConfig::default());
             if args.serialize_split_primitive_outputs {
-                serialized.split_e_classes(|id, _| egraph.from_node_id(id).is_primitive())
+                serialized.split_classes(|id, _| egraph.from_node_id(id).is_primitive())
             }
             for _ in 0..args.serialize_n_inline_leaves {
                 serialized.inline_leaves();
