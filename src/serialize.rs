@@ -156,9 +156,7 @@ impl EGraph {
                     eclass: class_id.clone(),
                     cost: NotNan::new(decl.cost.unwrap_or(1) as f64).unwrap(),
                     children,
-                    data: egraph_serialize::NodeData {
-                        subsumed: output.subsumed,
-                    },
+                    subsumed: output.subsumed,
                 },
             );
         }
@@ -264,7 +262,7 @@ impl EGraph {
                         eclass: class_id.clone(),
                         cost: NotNan::new(f64::INFINITY).unwrap(),
                         children: vec![],
-                        data: egraph_serialize::NodeData { subsumed: false },
+                        subsumed: false,
                     },
                 );
                 VecDeque::from(vec![node_id])
@@ -296,8 +294,7 @@ impl EGraph {
                         eclass: class_id.clone(),
                         cost: NotNan::new(1.0).unwrap(),
                         children,
-                        // primitives can never be subsumed
-                        data: egraph_serialize::NodeData { subsumed: false },
+                        subsumed: false,
                     },
                 );
             };
