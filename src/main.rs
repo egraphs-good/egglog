@@ -43,6 +43,9 @@ struct Args {
     /// Maximum number of calls per function to render in dot/svg output
     #[clap(long, default_value = "40")]
     max_calls_per_function: usize,
+    /// Number of times to inline leaves
+    #[clap(long, default_value = "0")]
+    serialize_n_inline_leaves: usize,
 }
 
 // test if the current command should be evaluated
@@ -209,31 +212,25 @@ fn main() {
                 std::process::exit(1)
             }
         }
-        // if we are splitting primitive outputs, add `-split` to the end of the file name
-        let serialize_filename = if args.serialize_split_primitive_outputs {
-            input.with_file_name(format!(
-                "{}-split",
-                input.file_stem().unwrap().to_str().unwrap()
-            ))
-        } else {
-            input.clone()
-        };
-        if args.to_json {
-            let json_path = serialize_filename.with_extension("json");
-            let config = SerializeConfig {
-                split_primitive_outputs: args.serialize_split_primitive_outputs,
-                ..SerializeConfig::default()
-            };
-            let serialized = egraph.serialize(config);
-            serialized.to_json_file(json_path).unwrap();
-        }
 
-        if args.to_dot || args.to_svg {
-            let serialized = egraph.serialize_for_graphviz(
-                args.serialize_split_primitive_outputs,
-                args.max_functions,
-                args.max_calls_per_function,
-            );
+        if args.to_json || args.to_dot || args.to_svg {
+            let mut serialized = egraph.serialize(SerializeConfig::default());
+            if args.serialize_split_primitive_outputs {
+                serialized.split_classes(|id, _| egraph.from_node_id(id).is_primitive())
+            }
+            for _ in 0..args.serialize_n_inline_leaves {
+                serialized.inline_leaves();
+            }
+
+            // if we are splitting primitive outputs, add `-split` to the end of the file name
+            let serialize_filename = if args.serialize_split_primitive_outputs {
+                input.with_file_name(format!(
+                    "{}-split",
+                    input.file_stem().unwrap().to_str().unwrap()
+                ))
+            } else {
+                input.clone()
+            };
             if args.to_dot {
                 let dot_path = serialize_filename.with_extension("dot");
                 serialized.to_dot_file(dot_path).unwrap()
@@ -241,6 +238,10 @@ fn main() {
             if args.to_svg {
                 let svg_path = serialize_filename.with_extension("svg");
                 serialized.to_svg_file(svg_path).unwrap()
+            }
+            if args.to_json {
+                let json_path = serialize_filename.with_extension("json");
+                serialized.to_json_file(json_path).unwrap();
             }
         }
         // no need to drop the egraph if we are going to exit
@@ -259,12 +260,12 @@ mod tests {
         #[rustfmt::skip]
         let test_cases = vec![
             vec![
-                "(extract", 
-                "\"1", 
-                ")", 
-                "(", 
-                ")))", 
-                "\"", 
+                "(extract",
+                "\"1",
+                ")",
+                "(",
+                ")))",
+                "\"",
                 ";; )",
                 ")"
             ],

@@ -37,7 +37,10 @@ smallvec = "1.11"
 
 generic_symbolic_expressions = "5.0.4"
 
-egraph-serialize = { version = "0.1.0", features = ["serde", "graphviz"] }
+egraph-serialize = { git = "https://github.com/egraphs-good/egraph-serialize", rev = "9ce281291635b0e1e7685b488de67bb5a3fee3db", features = [
+  "serde",
+  "graphviz",
+] }
 serde_json = { optional = true, version = "1.0.100", features = [
   "preserve_order",
 ] }

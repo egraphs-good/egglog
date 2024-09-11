@@ -53,9 +53,16 @@ impl Run {
                         log::info!("  {}", msg);
                     }
                     // Test graphviz dot generation
-                    egraph.serialize_for_graphviz(false, 40, 40).to_dot();
-                    // Also try splitting
-                    egraph.serialize_for_graphviz(true, 40, 40).to_dot();
+                    let mut serialized = egraph.serialize(SerializeConfig {
+                        max_functions: Some(40),
+                        max_calls_per_function: Some(40),
+                        ..Default::default()
+                    });
+                    serialized.to_dot();
+                    // Also try splitting and inlining
+                    serialized.split_classes(|id, _| egraph.from_node_id(id).is_primitive());
+                    serialized.inline_leaves();
+                    serialized.to_dot();
                 }
             }
             Err(err) => {
