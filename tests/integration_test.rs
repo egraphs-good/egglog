@@ -1,6 +1,4 @@
-use egglog::{
-    ast::Expr, sort::EqSort, EGraph, ExtractReport, Function, SerializeConfig, Term, Value,
-};
+use egglog::{ast::Expr, EGraph, ExtractReport, Function, SerializeConfig, Term, Value};
 use symbol_table::GlobalSymbol;
 
 #[test]
