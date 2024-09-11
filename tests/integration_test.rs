@@ -1,4 +1,6 @@
-use egglog::{ast::Expr, EGraph, ExtractReport, Function, SerializeConfig, Term, Value};
+use egglog::{
+    ast::Expr, sort::EqSort, EGraph, ExtractReport, Function, SerializeConfig, Term, Value,
+};
 use symbol_table::GlobalSymbol;
 
 #[test]
@@ -405,4 +407,35 @@ fn test_value_to_classid() {
     let class_id = egraph.value_to_class_id(&value);
     assert!(serialized.class_data.get(&class_id).is_some());
     assert_eq!(value, egraph.class_id_to_value(&class_id));
+}
+
+#[test]
+fn test_serialize_subsume_status() {
+    let mut egraph = EGraph::default();
+
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+            (datatype Math)
+            (function a () Math )
+            (function b () Math )
+            (a)
+            (b)
+            (subsume (a))
+            "#,
+        )
+        .unwrap();
+
+    let serialized = egraph.serialize(SerializeConfig::default());
+    let a_id = egraph.to_node_id(egglog::SerializedNode::Function {
+        name: ("a").into(),
+        offset: 0,
+    });
+    let b_id = egraph.to_node_id(egglog::SerializedNode::Function {
+        name: "b".into(),
+        offset: 0,
+    });
+    assert!(serialized.nodes[&a_id].data.subsumed);
+    assert!(!serialized.nodes[&b_id].data.subsumed);
 }
