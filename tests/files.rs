@@ -60,7 +60,7 @@ impl Run {
                     });
                     serialized.to_dot();
                     // Also try splitting and inlining
-                    serialized.split_e_classes(|id, _| egraph.from_node_id(id).is_primitive());
+                    serialized.split_classes(|id, _| egraph.from_node_id(id).is_primitive());
                     serialized.inline_leaves();
                     serialized.to_dot();
                 }
