@@ -434,6 +434,6 @@ fn test_serialize_subsume_status() {
         name: "b".into(),
         offset: 0,
     });
-    assert!(serialized.nodes[&a_id].data.subsumed);
-    assert!(!serialized.nodes[&b_id].data.subsumed);
+    assert!(serialized.nodes[&a_id].subsumed);
+    assert!(!serialized.nodes[&b_id].subsumed);
 }
