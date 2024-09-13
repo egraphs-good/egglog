@@ -6,15 +6,15 @@
 
 Cleanups
 
-- Remove `declare` and `calc` keywords (#418, #419).
+- Remove `declare` and `calc` keywords (#418, #419)
 - Fix determinism bug from new combined ruleset code (#406)
 - Fix performance bug in typechecking containers (#395)
-- Minor improvements to the web demo (#413, #414, #415).
+- Minor improvements to the web demo (#413, #414, #415)
 - Add power operators to i64 and f64 (#412)
 
 Error reporting
 
-- Report the source locations for errors (#389, #398, #405).
+- Report the source locations for errors (#389, #398, #405)
 
 Serialization
 
@@ -76,6 +76,7 @@ As of yet, the rust interface is not documented or well supported. We reccomend 
 [Unreleased]: https://github.com/egraphs-good/egglog/compare/v0.2.0...HEAD
 [0.1.0]: https://github.com/egraphs-good/egglog/tree/v0.1.0
 [0.2.0]: https://github.com/egraphs-good/egglog/tree/v0.2.0
+[0.3.0]: https://github.com/egraphs-good/egglog/tree/v0.3.0
 
 
 See release-instructions.md for more information on how to do a release.
