@@ -2,7 +2,7 @@ use ordered_float::NotNan;
 use std::collections::VecDeque;
 use symbol_table::GlobalSymbol;
 
-use crate::{ast::ResolvedFunctionDecl, util::HashMap, EGraph, Value};
+use crate::{ast::ResolvedFunctionDecl, util::HashMap, EGraph, TupleOutput, Value};
 
 pub struct SerializeConfig {
     // Maximumum number of functions to include in the serialized graph, any after this will be discarded
@@ -87,7 +87,7 @@ impl EGraph {
         let all_calls: Vec<(
             &ResolvedFunctionDecl,
             &[Value],
-            &Value,
+            &TupleOutput,
             egraph_serialize::ClassId,
             egraph_serialize::NodeId,
         )> = self
@@ -103,7 +103,7 @@ impl EGraph {
                         (
                             &function.decl,
                             input,
-                            &output.value,
+                            output,
                             self.value_to_class_id(&output.value),
                             self.to_node_id(SerializedNode::Function {
                                 name: *name,
@@ -126,7 +126,11 @@ impl EGraph {
         let mut node_ids: NodeIDs = all_calls.iter().fold(
             HashMap::default(),
             |mut acc, (_decl, _input, output, class_id, node_id)| {
-                if self.get_sort_from_value(output).unwrap().is_eq_sort() {
+                if self
+                    .get_sort_from_value(&output.value)
+                    .unwrap()
+                    .is_eq_sort()
+                {
                     acc.entry(class_id.clone())
                         .or_insert_with(VecDeque::new)
                         .push_back(node_id.clone());
@@ -137,7 +141,8 @@ impl EGraph {
 
         let mut egraph = egraph_serialize::EGraph::default();
         for (decl, input, output, class_id, node_id) in all_calls {
-            self.serialize_value(&mut egraph, &mut node_ids, output, &class_id);
+            self.serialize_value(&mut egraph, &mut node_ids, &output.value, &class_id);
+
             let children: Vec<_> = input
                 .iter()
                 .map(|v| {
@@ -151,6 +156,7 @@ impl EGraph {
                     eclass: class_id.clone(),
                     cost: NotNan::new(decl.cost.unwrap_or(1) as f64).unwrap(),
                     children,
+                    subsumed: output.subsumed,
                 },
             );
         }
@@ -256,6 +262,7 @@ impl EGraph {
                         eclass: class_id.clone(),
                         cost: NotNan::new(f64::INFINITY).unwrap(),
                         children: vec![],
+                        subsumed: false,
                     },
                 );
                 VecDeque::from(vec![node_id])
@@ -287,6 +294,7 @@ impl EGraph {
                         eclass: class_id.clone(),
                         cost: NotNan::new(1.0).unwrap(),
                         children,
+                        subsumed: false,
                     },
                 );
             };
