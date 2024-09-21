@@ -137,6 +137,7 @@ impl<'a> GlobalRemover<'a> {
                                 resolved_call,
                                 vec![],
                                 remove_globals_expr(expr),
+                                false,
                             ))
                         },
                     ]

@@ -1,0 +1,12 @@
+(datatype E
+  (Foo String))
+
+(union (Foo "x") (Foo "y"))
+(union (Foo "y") (Foo "z"))
+
+(unstable-cost (Foo "x") 17)
+(unstable-cost (Foo "y") 11)
+(unstable-cost (Foo "z") 15)
+
+(extract (Foo "y"))
+
