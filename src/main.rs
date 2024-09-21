@@ -90,6 +90,7 @@ fn run_command_in_scripting(egraph: &mut EGraph, command: &str) {
             }
         }
         Err(err) => {
+            println!("(error \"{err}\")");
             log::error!("{err}");
         }
     }

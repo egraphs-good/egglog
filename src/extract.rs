@@ -3,7 +3,7 @@ use hashbrown::hash_map::Entry;
 use crate::ast::Symbol;
 use crate::termdag::{Term, TermDag};
 use crate::util::HashMap;
-use crate::{ArcSort, EGraph, Function, Id, Value};
+use crate::{ArcSort, EGraph, Error, Function, Id, Value};
 
 pub type Cost = usize;
 
@@ -37,33 +37,35 @@ impl EGraph {
     /// let (sort, value) = egraph
     ///     .eval_expr(&egglog::ast::Expr::var_no_span("expr"))
     ///     .unwrap();
-    /// let (_, extracted) = egraph.extract(value, &mut termdag, &sort);
+    /// let (_, extracted) = egraph.extract(value, &mut termdag, &sort).unwrap();
     /// assert_eq!(termdag.to_string(&extracted), "(Add 1 1)");
     /// ```
-    pub fn extract(&self, value: Value, termdag: &mut TermDag, arcsort: &ArcSort) -> (Cost, Term) {
+    pub fn extract(
+        &self,
+        value: Value,
+        termdag: &mut TermDag,
+        arcsort: &ArcSort,
+    ) -> Result<(Cost, Term), Error> {
         let extractor = Extractor::new(self, termdag);
-        extractor
-            .find_best(value, termdag, arcsort)
-            .unwrap_or_else(|| {
-                log::error!("No cost for {:?}", value);
-                for func in self.functions.values() {
-                    for (inputs, output) in func.nodes.iter(false) {
-                        if output.value == value {
-                            log::error!("Found unextractable function: {:?}", func.decl.name);
-                            log::error!("Inputs: {:?}", inputs);
-                            log::error!(
-                                "{:?}",
-                                inputs
-                                    .iter()
-                                    .map(|input| extractor.costs.get(&extractor.find_id(*input)))
-                                    .collect::<Vec<_>>()
-                            );
-                        }
+        extractor.find_best(value, termdag, arcsort).ok_or_else(|| {
+            log::error!("No cost for {:?}", value);
+            for func in self.functions.values() {
+                for (inputs, output) in func.nodes.iter(false) {
+                    if output.value == value {
+                        log::error!("Found unextractable function: {:?}", func.decl.name);
+                        log::error!("Inputs: {:?}", inputs);
+                        log::error!(
+                            "{:?}",
+                            inputs
+                                .iter()
+                                .map(|input| extractor.costs.get(&extractor.find_id(*input)))
+                                .collect::<Vec<_>>()
+                        );
                     }
                 }
-
-                panic!("No cost for {:?}", value)
-            })
+            }
+            Error::ExtractError(value)
+        })
     }
 
     pub fn extract_variants(
