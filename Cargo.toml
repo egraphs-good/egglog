@@ -62,6 +62,7 @@ im-rc = "15.1.0"
 
 [build-dependencies]
 lalrpop = "0.20"
+chrono = "0.4"
 
 [dev-dependencies]
 glob = "0.3.1"
