@@ -1,9 +1,10 @@
 use std::{env, process::Command};
 
+#[allow(clippy::disallowed_macros)] // for println!
 fn main() {
     lalrpop::process_root().unwrap();
     let output = Command::new("git")
-        .args(&["rev-parse", "--short", "HEAD"])
+        .args(["rev-parse", "--short", "HEAD"])
         .output()
         .unwrap();
     let git_hash = String::from_utf8(output.stdout).unwrap();
