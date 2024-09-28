@@ -18,13 +18,15 @@ Error reporting
 
 Serialization
 
+- Include subsumption information in serialization (#424)
 - Move splitting primitive nodes into the serialize library (#407)
 - Support omitted nodes (#394)
 - Support Class ID <-> Value conversion (#396)
 
 REPL
 
-- Evaluates multiple lines at once (#402)
+- Evaluate multiple lines at once (#402)
+- Show build information in the REPL (#427)
 
 Higher-order functions (UNSTABLE)
 
