@@ -4,6 +4,7 @@ use std::io::{self, BufRead, BufReader};
 use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
+#[command(version = env!("FULL_VERSION"), about = env!("CARGO_PKG_DESCRIPTION"))]
 struct Args {
     #[clap(short = 'F', long)]
     fact_directory: Option<PathBuf>,
@@ -126,7 +127,7 @@ fn main() {
 
     if args.inputs.is_empty() {
         let stdin = io::stdin();
-        log::info!("Welcome to Egglog!");
+        log::info!("Welcome to Egglog! (build: {})", env!("FULL_VERSION"));
         let mut egraph = mk_egraph();
 
         let mut cmd_buffer = String::new();
