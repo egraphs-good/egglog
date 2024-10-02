@@ -3,7 +3,7 @@ use std::{env, process::Command};
 #[allow(clippy::disallowed_macros)] // for println!
 fn main() {
     lalrpop::process_root().unwrap();
-    let git_hash = Command::new("git2")
+    let git_hash = Command::new("git")
         .args(["rev-parse", "--short", "HEAD"])
         .output()
         .map(|output| {
