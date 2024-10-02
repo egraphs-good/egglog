@@ -2,6 +2,40 @@
 
 ## [Unreleased] - ReleaseDate
 
+## [0.3.0] - 2024-9-12
+
+Cleanups
+
+- Remove `declare` and `calc` keywords (#418, #419)
+- Fix determinism bug from new combined ruleset code (#406)
+- Fix performance bug in typechecking containers (#395)
+- Minor improvements to the web demo (#413, #414, #415)
+- Add power operators to i64 and f64 (#412)
+
+Error reporting
+
+- Report the source locations for errors (#389, #398, #405)
+
+Serialization
+
+- Include subsumption information in serialization (#424)
+- Move splitting primitive nodes into the serialize library (#407)
+- Support omitted nodes (#394)
+- Support Class ID <-> Value conversion (#396)
+
+REPL
+
+- Evaluate multiple lines at once (#402)
+- Show build information in the REPL (#427)
+
+Higher-order functions (UNSTABLE)
+
+- Infer types of function values based on names (#400)
+
+Import relation from files
+
+- Accept f64 function arguments #384
+
 ## [0.2.0] - 2024-05-17
 
 Usability
@@ -44,6 +78,7 @@ As of yet, the rust interface is not documented or well supported. We reccomend 
 [Unreleased]: https://github.com/egraphs-good/egglog/compare/v0.2.0...HEAD
 [0.1.0]: https://github.com/egraphs-good/egglog/tree/v0.1.0
 [0.2.0]: https://github.com/egraphs-good/egglog/tree/v0.2.0
+[0.3.0]: https://github.com/egraphs-good/egglog/tree/v0.3.0
 
 
 See release-instructions.md for more information on how to do a release.

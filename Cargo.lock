@@ -310,7 +310,7 @@ checksum = "675e35c02a51bb4d4618cb4885b3839ce6d1787c97b664474d9208d074742e20"
 
 [[package]]
 name = "egglog"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "clap",
@@ -342,8 +342,9 @@ dependencies = [
 
 [[package]]
 name = "egraph-serialize"
-version = "0.1.0"
-source = "git+https://github.com/egraphs-good/egraph-serialize?rev=3625e0daf655932f2e9548c448d6a63d6cb8d831#3625e0daf655932f2e9548c448d6a63d6cb8d831"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c31c5c0d7f760f9c1c84e21d73dcd3b3ce7a4770c27689f56a0db26e0f3e79ca"
 dependencies = [
  "graphviz-rust",
  "indexmap",
@@ -1332,7 +1333,7 @@ dependencies = [
 
 [[package]]
 name = "web-demo"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "console_error_panic_hook",
  "egglog",
