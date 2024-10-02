@@ -422,14 +422,4 @@ impl Desugar {
             .parse(&srcfile, input)
             .map_err(|e| e.map_token(|tok| tok.to_string()))?)
     }
-
-    pub fn parent_name(&mut self, eqsort_name: Symbol) -> Symbol {
-        self.fresh_gen
-            .generate_special(&format!("{}Parent", eqsort_name).into())
-    }
-
-    pub fn lookup_parent_name(&self, eqsort_name: Symbol) -> Option<Symbol> {
-        self.fresh_gen
-            .lookup_special(&format!("{}Parent", eqsort_name).into())
-    }
 }
