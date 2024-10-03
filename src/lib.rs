@@ -660,15 +660,13 @@ impl EGraph {
 
         for (inputs, old, new) in merges {
             if let Some(prog) = function.merge.on_merge.clone() {
-                self.run_actions(&mut stack, &[*old, *new], &prog)
-                    .unwrap();
+                self.run_actions(&mut stack, &[*old, *new], &prog).unwrap();
                 function = self.functions.get_mut(&func).unwrap();
                 stack.clear();
             }
             if let Some(prog) = &merge_prog {
                 // TODO: error handling?
-                self.run_actions(&mut stack, &[*old, *new], prog)
-                    .unwrap();
+                self.run_actions(&mut stack, &[*old, *new], prog).unwrap();
                 let merged = stack.pop().expect("merges should produce a value");
                 stack.clear();
                 function = self.functions.get_mut(&func).unwrap();
@@ -1120,10 +1118,7 @@ impl EGraph {
 
     // TODO make a public version of eval_expr that makes a command,
     // then returns the value at the end.
-    fn eval_resolved_expr(
-        &mut self,
-        expr: &ResolvedExpr,
-    ) -> Result<Value, Error> {
+    fn eval_resolved_expr(&mut self, expr: &ResolvedExpr) -> Result<Value, Error> {
         let (actions, mapped_expr) = expr.to_core_actions(
             self.type_info(),
             &mut Default::default(),

@@ -120,7 +120,7 @@ enum Instruction {
     /// Pop function arguments off the stack, calls the function,
     /// and push the result onto the stack. The bool indicates
     /// whether to make defaults.
-    /// 
+    ///
     /// This should be set to true after we disallow lookup in rule's actions and :default keyword
     /// Currently, it's true when has_default() || is_datatype()
     CallFunction(Symbol, bool),
