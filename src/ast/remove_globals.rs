@@ -183,6 +183,7 @@ impl<'a> GlobalRemover<'a> {
 
                 let new_rule = GenericRule {
                     span: rule.span,
+                    props: rule.props,
                     // instrument the old facts and add the new facts to the end
                     body: rule
                         .body

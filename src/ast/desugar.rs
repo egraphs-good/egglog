@@ -1,3 +1,5 @@
+use hashbrown::HashMap;
+
 use super::{Rewrite, Rule};
 use crate::*;
 
@@ -76,6 +78,7 @@ fn desugar_rewrite(
         name,
         rule: Rule {
             span: span.clone(),
+            props: rewrite.props.clone(),
             body: [Fact::Eq(
                 span.clone(),
                 vec![Expr::Var(span, var), rewrite.lhs.clone()],
@@ -92,6 +95,7 @@ fn desugar_birewrite(ruleset: Symbol, name: Symbol, rewrite: &Rewrite) -> Vec<NC
     let span = rewrite.span.clone();
     let rw2 = Rewrite {
         span,
+        props: rewrite.props.clone(),
         lhs: rewrite.rhs.clone(),
         rhs: rewrite.lhs.clone(),
         conditions: rewrite.conditions.clone(),
@@ -305,6 +309,7 @@ pub(crate) fn desugar_command(
                 let fresh_rulename = desugar.get_fresh();
                 let rule = Rule {
                     span: span.clone(),
+                    props: HashMap::default(),
                     body: vec![Fact::Eq(
                         span.clone(),
                         vec![Expr::Var(span.clone(), fresh), expr.clone()],

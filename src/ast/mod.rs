@@ -177,7 +177,7 @@ pub(crate) type ResolvedNCommand = GenericNCommand<ResolvedCall, ResolvedVar>;
 /// TODO: The name "NCommand" used to denote normalized command, but this
 /// meaning is obsolete. A future PR should rename this type to something
 /// like "DCommand".
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub enum GenericNCommand<Head, Leaf>
 where
     Head: Clone + Display,
@@ -1588,13 +1588,14 @@ pub(crate) struct CompiledRule {
 pub type Rule = GenericRule<Symbol, Symbol>;
 pub(crate) type ResolvedRule = GenericRule<ResolvedCall, ResolvedVar>;
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GenericRule<Head, Leaf>
 where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
     pub span: Span,
+    pub props: HashMap<String, Literal>,
     pub head: GenericActions<Head, Leaf>,
     pub body: Vec<GenericFact<Head, Leaf>>,
 }
@@ -1610,6 +1611,7 @@ where
     ) -> Self {
         Self {
             span: self.span,
+            props: self.props,
             head: self.head.visit_exprs(f),
             body: self
                 .body
@@ -1708,6 +1710,7 @@ type Rewrite = GenericRewrite<Symbol, Symbol>;
 #[derive(Clone, Debug)]
 pub struct GenericRewrite<Head, Leaf> {
     pub span: Span,
+    pub props: HashMap<String, Literal>,
     pub lhs: GenericExpr<Head, Leaf>,
     pub rhs: GenericExpr<Head, Leaf>,
     pub conditions: Vec<GenericFact<Head, Leaf>>,

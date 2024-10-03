@@ -1224,6 +1224,7 @@ impl EGraph {
     fn check_facts(&mut self, span: &Span, facts: &[ResolvedFact]) -> Result<(), Error> {
         let rule = ast::ResolvedRule {
             span: span.clone(),
+            props: Default::default(),
             head: ResolvedActions::default(),
             body: facts.to_vec(),
         };

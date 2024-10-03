@@ -352,7 +352,7 @@ impl TypeInfo {
     }
 
     fn typecheck_rule(&self, rule: &Rule) -> Result<ResolvedRule, TypeError> {
-        let Rule { span, head, body } = rule;
+        let Rule { span, head, body, props } = rule;
         let mut constraints = vec![];
 
         let mut fresh_gen = SymbolGen::new("$".to_string());
@@ -381,6 +381,7 @@ impl TypeInfo {
 
         Ok(ResolvedRule {
             span: span.clone(),
+            props: props.clone(),
             body,
             head: actions,
         })
