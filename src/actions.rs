@@ -227,8 +227,7 @@ impl EGraph {
                     }
                     MergeFn::Expr(merge_prog) => {
                         let values = [old_value, new_value];
-                        let mut stack = vec![];
-                        self.run_actions(&mut stack, &values, &merge_prog, true)?;
+                        let mut stack = self.run_actions(&values, &merge_prog, true)?;
                         stack.pop().unwrap()
                     }
                 };
@@ -243,7 +242,7 @@ impl EGraph {
                     let values = [old_value, new_value];
                     // We need to pass a new stack instead of reusing the old one
                     // because Load(Stack(idx)) use absolute index.
-                    self.run_actions(&mut Vec::new(), &values, &prog, true)?;
+                    self.run_actions(&values, &prog, true)?;
                 }
             }
         } else {
@@ -252,13 +251,15 @@ impl EGraph {
         Ok(())
     }
 
+    /// Runs actions with the given substitution
+    /// Returns the resulting stack if successful
     pub(crate) fn run_actions(
         &mut self,
-        stack: &mut Vec<Value>,
         subst: &[Value],
         program: &Program,
         make_defaults: bool,
-    ) -> Result<(), Error> {
+    ) -> Result<Vec<Value>, Error> {
+        let mut stack = vec![];
         for instr in &program.0 {
             match instr {
                 Instruction::Load(load) => match load {
@@ -337,7 +338,7 @@ impl EGraph {
                     let new_value = stack.pop().unwrap();
                     let new_len = stack.len() - function.schema.input.len();
 
-                    self.perform_set(*f, new_value, stack)?;
+                    self.perform_set(*f, new_value, &mut stack)?;
                     stack.truncate(new_len)
                 }
                 Instruction::Union(arity) => {
@@ -423,6 +424,6 @@ impl EGraph {
                 }
             }
         }
-        Ok(())
+        Ok(stack)
     }
 }

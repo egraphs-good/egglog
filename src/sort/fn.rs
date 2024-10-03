@@ -419,9 +419,6 @@ fn call_fn(egraph: &mut EGraph, name: &Symbol, types: Vec<ArcSort>, args: Vec<Va
     let program = egraph.compile_expr(&binding, &actions, &target).unwrap();
     // Similar to how the `MergeFn::Expr` case is handled in `Egraph::perform_set`
     // egraph.rebuild().unwrap();
-    let mut stack = vec![];
-    egraph
-        .run_actions(&mut stack, &args, &program, true)
-        .unwrap();
+    let mut stack = egraph.run_actions(&args, &program, true).unwrap();
     stack.pop().unwrap()
 }
