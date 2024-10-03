@@ -421,7 +421,7 @@ fn call_fn(egraph: &mut EGraph, name: &Symbol, types: Vec<ArcSort>, args: Vec<Va
     // egraph.rebuild().unwrap();
     let mut stack = vec![];
     egraph
-        .run_actions(&mut stack, &args, &program, true)
+        .run_actions(&mut stack, &args, &program)
         .unwrap();
     stack.pop().unwrap()
 }

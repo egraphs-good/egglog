@@ -660,14 +660,14 @@ impl EGraph {
 
         for (inputs, old, new) in merges {
             if let Some(prog) = function.merge.on_merge.clone() {
-                self.run_actions(&mut stack, &[*old, *new], &prog, true)
+                self.run_actions(&mut stack, &[*old, *new], &prog)
                     .unwrap();
                 function = self.functions.get_mut(&func).unwrap();
                 stack.clear();
             }
             if let Some(prog) = &merge_prog {
                 // TODO: error handling?
-                self.run_actions(&mut stack, &[*old, *new], prog, true)
+                self.run_actions(&mut stack, &[*old, *new], prog)
                     .unwrap();
                 let merged = stack.pop().expect("merges should produce a value");
                 stack.clear();
@@ -996,7 +996,7 @@ impl EGraph {
                     if num_vars == 0 {
                         if *did_match {
                             stack.clear();
-                            self.run_actions(stack, &[], &rule.program, true)
+                            self.run_actions(stack, &[], &rule.program)
                                 .unwrap_or_else(|e| {
                                     panic!("error while running actions for {rule_name}: {e}")
                                 });
@@ -1004,7 +1004,7 @@ impl EGraph {
                     } else {
                         for values in all_matches.chunks(num_vars) {
                             stack.clear();
-                            self.run_actions(stack, values, &rule.program, true)
+                            self.run_actions(stack, values, &rule.program)
                                 .unwrap_or_else(|e| {
                                     panic!("error while running actions for {rule_name}: {e}")
                                 });
@@ -1103,7 +1103,7 @@ impl EGraph {
             .compile_actions(&Default::default(), &actions)
             .map_err(Error::TypeErrors)?;
         let mut stack = vec![];
-        self.run_actions(&mut stack, &[], &program, true)?;
+        self.run_actions(&mut stack, &[], &program)?;
         Ok(())
     }
 
@@ -1123,7 +1123,6 @@ impl EGraph {
     fn eval_resolved_expr(
         &mut self,
         expr: &ResolvedExpr,
-        make_defaults: bool,
     ) -> Result<Value, Error> {
         let (actions, mapped_expr) = expr.to_core_actions(
             self.type_info(),
@@ -1135,7 +1134,7 @@ impl EGraph {
             .compile_expr(&Default::default(), &actions, &target)
             .map_err(Error::TypeErrors)?;
         let mut stack = vec![];
-        self.run_actions(&mut stack, &[], &program, make_defaults)?;
+        self.run_actions(&mut stack, &[], &program)?;
         Ok(stack.pop().unwrap())
     }
 
@@ -1323,7 +1322,7 @@ impl EGraph {
                     .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
                 let mut termdag = TermDag::default();
                 for expr in exprs {
-                    let value = self.eval_resolved_expr(&expr, true)?;
+                    let value = self.eval_resolved_expr(&expr)?;
                     let expr_type = expr.output_type(self.type_info());
                     let term = self.extract(value, &mut termdag, &expr_type).1;
                     use std::io::Write;
