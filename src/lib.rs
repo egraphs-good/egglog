@@ -292,8 +292,6 @@ impl RunReport {
     }
 }
 
-pub const HIGH_COST: usize = i64::MAX as usize;
-
 #[derive(Clone)]
 pub struct Primitive(Arc<dyn PrimitiveLike>);
 impl Primitive {
