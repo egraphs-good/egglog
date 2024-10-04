@@ -263,7 +263,7 @@ pub(crate) fn desugar_command(
                 if let Some(new_rule) = add_semi_naive_rule(desugar, rule) {
                     result.push(NCommand::NormRule {
                         ruleset,
-                        name: (desugar.get_fresh().to_string() + &"__seminaive-" + &name).into(),
+                        name: (desugar.get_fresh().to_string() + "__seminaive-" + &name).into(),
                         rule: new_rule,
                     });
                 }
