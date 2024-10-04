@@ -346,7 +346,6 @@ pub trait Scheduler {
         report: &mut RunReport,
         search_results: &mut HashMap<Symbol, SearchResult>,
     ) -> Result<(), Error> {
-        log::warn!("searching ruleset: {}", ruleset);
         let rules = rulesets
             .get(&ruleset)
             .ok_or_else(|| Error::NoSuchRuleset(ruleset, span.clone()))?;
@@ -440,7 +439,7 @@ pub trait Scheduler {
             Ruleset::Rules(_name, compiled_rules) => {
                 let apply_start = Instant::now();
                 for (&rule_name, rule) in compiled_rules.iter() {
-                    self.apply_rule(egraph, span, rule_name, rule, report, search_results);
+                    self.apply_rule(egraph, span, rule_name, rule, report, search_results)?;
                 }
                 report.add_ruleset_apply_time(ruleset, apply_start.elapsed());
             }
@@ -468,11 +467,15 @@ pub trait Scheduler {
         rule: &CompiledRule,
         report: &mut RunReport,
         search_results: &HashMap<Symbol, SearchResult>,
-    ) {
-        let SearchResult {
+    ) -> Result<(), Error> {
+        let Some(SearchResult {
             all_matches,
             did_match,
-        } = search_results.get(&rule_name).unwrap();
+        }) = search_results.get(&rule_name)
+        else {
+            return Ok(());
+        };
+
         let num_vars = rule.query.vars.len();
 
         let num_matches = if num_vars != 0 {
@@ -490,20 +493,18 @@ pub trait Scheduler {
         // here we handle that case
         if num_vars == 0 {
             if *did_match {
-                egraph
-                    .run_actions(&[], &rule.program, true)
-                    .unwrap_or_else(|e| panic!("error while running actions for {rule_name}: {e}"));
+                egraph.run_actions(&[], &rule.program, true)?;
             }
         } else {
             for values in all_matches.chunks(num_vars) {
-                egraph
-                    .run_actions(values, &rule.program, true)
-                    .unwrap_or_else(|e| panic!("error while running actions for {rule_name}: {e}"));
+                egraph.run_actions(values, &rule.program, true)?;
             }
         }
 
         // add to the rule's apply time
         report.add_rule_apply_time(rule_name, rule_apply_start.elapsed());
+
+        Ok(())
     }
 }
 
@@ -610,20 +611,20 @@ impl Scheduler for BackoffScheduler {
             assert_eq!(values.len(), rule.query.vars.len());
             all_matches.extend_from_slice(values);
 
-            fuel -= 1;
             if fuel == 0 {
                 Err(())
             } else {
+                fuel -= 1;
                 Ok(())
             }
         });
 
         let rule_search_time = rule_search_start.elapsed();
         report.add_rule_search_time(rule_name, rule_search_time);
-        log::trace!(
-            "Searched for {rule_name} in {:.3}s ({} results)",
+        log::info!(
+            "Searched for {rule_name} in {:.3}s ({} results/threshold {threshold})",
             rule_search_time.as_secs_f64(),
-            all_matches.len()
+            all_matches.len(),
         );
 
         // Step 3: Decide if we should discard the matches
