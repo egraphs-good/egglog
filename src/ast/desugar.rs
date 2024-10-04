@@ -364,6 +364,49 @@ pub(crate) fn desugar_command(
         Command::Input { span, name, file } => {
             vec![NCommand::Input { span, name, file }]
         }
+        Command::Datatypes { span: _, datatypes } => {
+            let mut res = vec![];
+            for datatype in datatypes.iter() {
+                let span = datatype.0.clone();
+                let name = datatype.1;
+                if datatype.2.is_ok() {
+                    res.push(NCommand::Sort(span, name, None));
+                }
+            }
+            let (variants_vec, sorts): (Vec<_>, Vec<_>) = datatypes
+                .into_iter()
+                .partition(|datatype| datatype.2.is_ok());
+
+            for sort in sorts {
+                let span = sort.0.clone();
+                let name = sort.1;
+                let constructor = sort.2.unwrap_err();
+                res.push(NCommand::Sort(span, name, Some(constructor)));
+            }
+
+            for variants in variants_vec {
+                let datatype = variants.1;
+                let variants = variants.2.unwrap();
+                for variant in variants {
+                    res.push(NCommand::Function(FunctionDecl {
+                        name: variant.name,
+                        schema: Schema {
+                            input: variant.types,
+                            output: datatype,
+                        },
+                        merge: None,
+                        merge_action: Actions::default(),
+                        default: None,
+                        cost: variant.cost,
+                        unextractable: false,
+                        ignore_viz: false,
+                        span: variant.span,
+                    }));
+                }
+            }
+
+            res
+        }
     };
 
     Ok(res)
