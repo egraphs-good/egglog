@@ -322,6 +322,16 @@ impl TypeInfo {
                     },
                 )
             }
+            GenericSchedule::WithScheduler(span, scheduler, args, schedule) => {
+                ResolvedSchedule::WithScheduler(
+                    span.clone(),
+                    scheduler.clone(),
+                    args.iter()
+                        .map(|arg| self.typecheck_expr(arg, &Default::default()))
+                        .collect::<Result<Vec<_>, _>>()?,
+                    Box::new(self.typecheck_schedule(schedule)?),
+                )
+            }
         };
 
         Result::Ok(schedule)
@@ -352,7 +362,12 @@ impl TypeInfo {
     }
 
     fn typecheck_rule(&self, rule: &Rule) -> Result<ResolvedRule, TypeError> {
-        let Rule { span, head, body, props } = rule;
+        let Rule {
+            span,
+            head,
+            body,
+            props,
+        } = rule;
         let mut constraints = vec![];
 
         let mut fresh_gen = SymbolGen::new("$".to_string());

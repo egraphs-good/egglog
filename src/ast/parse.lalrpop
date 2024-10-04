@@ -101,6 +101,11 @@ Command: Command = {
 }
 
 Schedule: Schedule = {
+    <lo:LParen> "with-scheduler" 
+        <lo2:LParen> <scheduler:Ident> <args:Expr*> <hi2:RParen>
+        <sched:Schedule>
+    <hi:RParen> =>
+        Schedule::WithScheduler(Span(srcfile.clone(), lo, hi), scheduler, args, Box::new(sched)),
     <lo:LParen> "saturate" <scheds:Schedule*> <hi:RParen> => 
         Schedule::Saturate(Span(srcfile.clone(), lo, hi), Box::new(
             Schedule::Sequence(Span(srcfile.clone(), lo, hi), scheds))),

@@ -32,7 +32,8 @@ use ast::remove_globals::remove_globals;
 use extract::Extractor;
 use hashbrown::hash_map::Entry;
 use index::ColumnIndex;
-use instant::{Duration, Instant};
+use instant::Instant;
+use scheduler::RunReport;
 pub use serialize::SerializeConfig;
 pub use serialize::SerializedNode;
 use sort::*;
@@ -82,148 +83,6 @@ pub trait PrimitiveLike {
     fn apply(&self, values: &[Value], egraph: Option<&mut EGraph>) -> Option<Value>;
 }
 
-/// Running a schedule produces a report of the results.
-/// This includes rough timing information and whether
-/// the database was updated.
-/// Calling `union` on two run reports adds the timing
-/// information together.
-#[derive(Debug, Clone, Default)]
-pub struct RunReport {
-    /// If any changes were made to the database, this is
-    /// true.
-    pub updated: bool,
-    /// The time it took to run the query, for each rule.
-    pub search_time_per_rule: HashMap<Symbol, Duration>,
-    pub apply_time_per_rule: HashMap<Symbol, Duration>,
-    pub search_time_per_ruleset: HashMap<Symbol, Duration>,
-    pub num_matches_per_rule: HashMap<Symbol, usize>,
-    pub apply_time_per_ruleset: HashMap<Symbol, Duration>,
-    pub rebuild_time_per_ruleset: HashMap<Symbol, Duration>,
-}
-
-impl RunReport {
-    /// add a ... and a maximum size to the name
-    /// for printing, since they may be the rule itself
-    fn truncate_rule_name(sym: Symbol) -> String {
-        let mut s = sym.to_string();
-        // replace newlines in s with a space
-        s = s.replace('\n', " ");
-        if s.len() > 80 {
-            s.truncate(80);
-            s.push_str("...");
-        }
-        s
-    }
-
-    fn add_rule_search_time(&mut self, rule: Symbol, time: Duration) {
-        *self.search_time_per_rule.entry(rule).or_default() += time;
-    }
-
-    fn add_ruleset_search_time(&mut self, ruleset: Symbol, time: Duration) {
-        *self.search_time_per_ruleset.entry(ruleset).or_default() += time;
-    }
-
-    fn add_rule_apply_time(&mut self, rule: Symbol, time: Duration) {
-        *self.apply_time_per_rule.entry(rule).or_default() += time;
-    }
-
-    fn add_ruleset_apply_time(&mut self, ruleset: Symbol, time: Duration) {
-        *self.apply_time_per_ruleset.entry(ruleset).or_default() += time;
-    }
-
-    fn add_ruleset_rebuild_time(&mut self, ruleset: Symbol, time: Duration) {
-        *self.rebuild_time_per_ruleset.entry(ruleset).or_default() += time;
-    }
-
-    fn add_rule_num_matches(&mut self, rule: Symbol, num_matches: usize) {
-        *self.num_matches_per_rule.entry(rule).or_default() += num_matches;
-    }
-}
-
-impl Display for RunReport {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let all_rules = self
-            .search_time_per_rule
-            .keys()
-            .chain(self.apply_time_per_rule.keys())
-            .collect::<HashSet<_>>();
-        let mut all_rules_vec = all_rules.iter().cloned().collect::<Vec<_>>();
-        // sort rules by search and apply time
-        all_rules_vec.sort_by_key(|rule| {
-            let search_time = self
-                .search_time_per_rule
-                .get(*rule)
-                .cloned()
-                .unwrap_or(Duration::default())
-                .as_millis();
-            let apply_time = self
-                .apply_time_per_rule
-                .get(*rule)
-                .cloned()
-                .unwrap_or(Duration::default())
-                .as_millis();
-            search_time + apply_time
-        });
-
-        for rule in all_rules_vec {
-            let truncated = Self::truncate_rule_name(*rule);
-            // print out the search and apply time for rule
-            let search_time = self
-                .search_time_per_rule
-                .get(rule)
-                .cloned()
-                .unwrap_or(Duration::default())
-                .as_secs_f64();
-            let apply_time = self
-                .apply_time_per_rule
-                .get(rule)
-                .cloned()
-                .unwrap_or(Duration::default())
-                .as_secs_f64();
-            let num_matches = self.num_matches_per_rule.get(rule).cloned().unwrap_or(0);
-            writeln!(
-                f,
-                "Rule {truncated}: search {search_time:.3}s, apply {apply_time:.3}s, num matches {num_matches}",
-            )?;
-        }
-
-        let rulesets = self
-            .search_time_per_ruleset
-            .keys()
-            .chain(self.apply_time_per_ruleset.keys())
-            .chain(self.rebuild_time_per_ruleset.keys())
-            .collect::<HashSet<_>>();
-
-        for ruleset in rulesets {
-            // print out the search and apply time for rule
-            let search_time = self
-                .search_time_per_ruleset
-                .get(ruleset)
-                .cloned()
-                .unwrap_or(Duration::default())
-                .as_secs_f64();
-            let apply_time = self
-                .apply_time_per_ruleset
-                .get(ruleset)
-                .cloned()
-                .unwrap_or(Duration::default())
-                .as_secs_f64();
-            let rebuild_time = self
-                .rebuild_time_per_ruleset
-                .get(ruleset)
-                .cloned()
-                .unwrap_or(Duration::default())
-                .as_secs_f64();
-            writeln!(
-                f,
-                "Ruleset {ruleset}: search {search_time:.3}s, apply {apply_time:.3}s, rebuild {rebuild_time:.3}s",
-            )?;
-        }
-
-        Ok(())
-    }
-}
-
 /// A report of the results of an extract action.
 #[derive(Debug, Clone)]
 pub enum ExtractReport {
@@ -236,62 +95,6 @@ pub enum ExtractReport {
         termdag: TermDag,
         terms: Vec<Term>,
     },
-}
-
-impl RunReport {
-    fn union_times(
-        times: &HashMap<Symbol, Duration>,
-        other_times: &HashMap<Symbol, Duration>,
-    ) -> HashMap<Symbol, Duration> {
-        let mut new_times = times.clone();
-        for (k, v) in other_times {
-            let entry = new_times.entry(*k).or_default();
-            *entry += *v;
-        }
-        new_times
-    }
-
-    fn union_counts(
-        counts: &HashMap<Symbol, usize>,
-        other_counts: &HashMap<Symbol, usize>,
-    ) -> HashMap<Symbol, usize> {
-        let mut new_counts = counts.clone();
-        for (k, v) in other_counts {
-            let entry = new_counts.entry(*k).or_default();
-            *entry += *v;
-        }
-        new_counts
-    }
-
-    pub fn union(&self, other: &Self) -> Self {
-        Self {
-            updated: self.updated || other.updated,
-            search_time_per_rule: Self::union_times(
-                &self.search_time_per_rule,
-                &other.search_time_per_rule,
-            ),
-            apply_time_per_rule: Self::union_times(
-                &self.apply_time_per_rule,
-                &other.apply_time_per_rule,
-            ),
-            num_matches_per_rule: Self::union_counts(
-                &self.num_matches_per_rule,
-                &other.num_matches_per_rule,
-            ),
-            search_time_per_ruleset: Self::union_times(
-                &self.search_time_per_ruleset,
-                &other.search_time_per_ruleset,
-            ),
-            apply_time_per_ruleset: Self::union_times(
-                &self.apply_time_per_ruleset,
-                &other.apply_time_per_ruleset,
-            ),
-            rebuild_time_per_ruleset: Self::union_times(
-                &self.rebuild_time_per_ruleset,
-                &other.rebuild_time_per_ruleset,
-            ),
-        }
-    }
 }
 
 pub const HIGH_COST: usize = i64::MAX as usize;
@@ -451,6 +254,7 @@ pub struct EGraph {
     /// The run report unioned over all runs so far.
     overall_run_report: RunReport,
     msgs: Vec<String>,
+    scheduler_constructors: HashMap<Symbol, Rc<dyn Fn(Vec<Value>) -> Box<dyn Scheduler>>>,
 }
 
 impl Default for EGraph {
@@ -477,10 +281,19 @@ impl Default for EGraph {
             overall_run_report: Default::default(),
             msgs: Default::default(),
             type_info: Default::default(),
+            scheduler_constructors: Default::default(),
         };
         egraph
             .rulesets
             .insert("".into(), Ruleset::Rules("".into(), Default::default()));
+        egraph.scheduler_constructors.insert(
+            "simple".into(),
+            Rc::new(|_| Box::new(scheduler::SimpleScheduler)),
+        );
+        egraph.scheduler_constructors.insert(
+            "backoff".into(),
+            Rc::new(|_| Box::new(scheduler::BackoffScheduler::default())),
+        );
         egraph
     }
 }
@@ -488,15 +301,6 @@ impl Default for EGraph {
 #[derive(Debug, Error)]
 #[error("Not found: {0}")]
 pub struct NotFoundError(String);
-
-/// For each rule, we produce a `SearchResult`
-/// storing data about that rule's matches.
-/// When a rule has no variables, it may still match- in this case
-/// the `did_match` field is used.
-struct SearchResult {
-    all_matches: Vec<Value>,
-    did_match: bool,
-}
 
 impl EGraph {
     /// Use the rust backend implimentation of eqsat,
@@ -847,8 +651,8 @@ impl EGraph {
         }
     }
 
-    // returns whether the egraph was updated
-    fn run_schedule(&mut self, sched: &ResolvedSchedule) -> RunReport {
+    /// Run a schedule of commands.
+    fn run_schedule(&mut self, sched: &ResolvedSchedule) -> Result<RunReport, Error> {
         scheduler::SimpleScheduler.run_schedule(self, sched)
     }
 
@@ -894,7 +698,11 @@ impl EGraph {
         let program = self
             .compile_actions(&vars, &actions)
             .map_err(Error::TypeErrors)?;
-        let compiled_rule = CompiledRule { query, program };
+        let compiled_rule = CompiledRule {
+            props: rule.props,
+            query,
+            program,
+        };
         if let Some(rules) = self.rulesets.get_mut(&ruleset) {
             match rules {
                 Ruleset::Rules(_, rules) => {
@@ -1081,7 +889,7 @@ impl EGraph {
                 log::info!("Declared rule {name}.")
             }
             ResolvedNCommand::RunSchedule(sched) => {
-                let report = self.run_schedule(&sched);
+                let report = self.run_schedule(&sched)?;
                 log::info!("Ran schedule {}.", sched);
                 log::info!("Report: {}", report);
                 self.overall_run_report = self.overall_run_report.union(&report);
@@ -1093,7 +901,7 @@ impl EGraph {
             }
             ResolvedNCommand::Check(span, facts) => {
                 self.check_facts(&span, &facts)?;
-                log::info!("Checked fact {:?}.", facts);
+                log::info!("Checked fact {}.", Facts(facts));
             }
             ResolvedNCommand::CheckProof => log::error!("TODO implement proofs"),
             ResolvedNCommand::CoreAction(action) => match &action {
@@ -1395,10 +1203,26 @@ impl EGraph {
         &mut self.type_info
     }
 
+    /// Get the timestamp when the rule was last run.
+    pub fn get_rule_timestamp(&self, rule: Symbol) -> u32 {
+        *self.rule_last_run_timestamp.get(&rule).unwrap_or(&0)
+    }
+
+    /// Set the timestamp of a rule to the current timestamp.
+    ///
+    /// Note that the user is responsible for making sure the rule is indeed run
+    /// over the database; the ruleset may not be fired for tuples created during
+    /// `egraph.get_rule_timestamp(ruleset)`--`self.get_timestamp()` time.
+    pub fn update_rule_timestamp(&mut self, ruleset: Symbol) {
+        self.rule_last_run_timestamp.insert(ruleset, self.timestamp);
+    }
+
+    /// Get the current timestamp
     pub fn get_timestamp(&self) -> u32 {
         return self.timestamp;
     }
 
+    /// Bump the timestamp by 1
     pub fn bump_timestamp(&mut self) {
         self.timestamp += 1;
     }
@@ -1436,6 +1260,8 @@ pub enum Error {
     IoError(PathBuf, std::io::Error, Span),
     #[error("Cannot subsume function with merge: {0}")]
     SubsumeMergeError(Symbol),
+    #[error("{}\nScheduler not found: {0}", .1.get_quote())]
+    SchedulerNotFound(String, Span),
 }
 
 #[cfg(test)]

@@ -242,16 +242,18 @@ pub(crate) fn desugar_command(
         }
         Command::Rule {
             ruleset,
-            mut name,
+            name,
             rule,
         } => {
-            if name == "".into() {
-                name = rule.to_string().replace('\"', "'").into();
-            }
+            let name = if name.as_str() == "" {
+                rule.to_string().replace('\"', "'")
+            } else {
+                name.to_string()
+            };
 
             let mut result = vec![NCommand::NormRule {
                 ruleset,
-                name,
+                name: name.clone().into(),
                 rule: rule.clone(),
             }];
 
@@ -259,7 +261,7 @@ pub(crate) fn desugar_command(
                 if let Some(new_rule) = add_semi_naive_rule(desugar, rule) {
                     result.push(NCommand::NormRule {
                         ruleset,
-                        name,
+                        name: ("__seminaive-".to_string() + &name).into(),
                         rule: new_rule,
                     });
                 }

@@ -343,6 +343,12 @@ pub(crate) type ResolvedSchedule = GenericSchedule<ResolvedCall, ResolvedVar>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum GenericSchedule<Head, Leaf> {
+    WithScheduler(
+        Span,
+        Symbol,
+        Vec<GenericExpr<Head, Leaf>>,
+        Box<GenericSchedule<Head, Leaf>>,
+    ),
     Saturate(Span, Box<GenericSchedule<Head, Leaf>>),
     Repeat(Span, usize, Box<GenericSchedule<Head, Leaf>>),
     Run(Span, GenericRunConfig<Head, Leaf>),
@@ -410,6 +416,11 @@ where
                 span,
                 scheds.into_iter().map(|s| s.visit_exprs(f)).collect(),
             ),
+            GenericSchedule::WithScheduler(span, scheduler, args, sched) => {
+                let sched = Box::new(sched.visit_exprs(f));
+                let args = args.into_iter().map(f).collect();
+                GenericSchedule::WithScheduler(span, scheduler, args, sched)
+            }
         }
     }
 }
@@ -421,6 +432,9 @@ impl<Head: Display, Leaf: Display> ToSexp for GenericSchedule<Head, Leaf> {
             GenericSchedule::Repeat(_ann, size, sched) => list!("repeat", size, sched),
             GenericSchedule::Run(_ann, config) => config.to_sexp(),
             GenericSchedule::Sequence(_ann, scheds) => list!("seq", ++ scheds),
+            GenericSchedule::WithScheduler(_ann, scheduler, args, sched) => {
+                list!("with-scheduler", list!(scheduler, ++ args), sched)
+            }
         }
     }
 }
@@ -1285,6 +1299,16 @@ where
     }
 }
 
+impl<Head, Leaf> Display for Facts<Head, Leaf>
+where
+    Head: Clone + Display,
+    Leaf: Clone + PartialEq + Eq + Display + Hash,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", ListDisplay(&self.0, "\n"))
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct CorrespondingVar<Head, Leaf>
 where
@@ -1580,7 +1604,8 @@ where
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct CompiledRule {
+pub struct CompiledRule {
+    pub props: HashMap<String, Literal>,
     pub(crate) query: CompiledQuery,
     pub(crate) program: Program,
 }
