@@ -44,19 +44,11 @@ Comma<T>: Vec<T> = {
     }
 };
 
-RecDatatype: (Span, Symbol, Result<Vec<Variant>, (Symbol, Vec<Expr>)>) = {
-    <lo:LParen> <name:Ident> <variants:(Variant)*> <hi:RParen> => (Span(srcfile.clone(), lo, hi), name, Ok(variants)),
-    <lo:LParen> "sort" <name:Ident> LParen <head:Ident> <exprs:(Expr)*> RParen <hi:RParen> => (Span(srcfile.clone(), lo, hi), name, Err((head, exprs))),
-}
-
 Command: Command = {
     LParen "set-option" <name:Ident> <value:Expr> RParen => Command::SetOption { name, value },
     <lo:LParen> "datatype" <name:Ident> <variants:(Variant)*> <hi:RParen> => Command::Datatype { span: Span(srcfile.clone(), lo, hi), name, variants },
     <lo:LParen> "sort" <name:Ident> LParen <head:Ident> <tail:(Expr)*> RParen <hi:RParen> => Command::Sort (Span(srcfile.clone(), lo, hi), name, Some((head, tail))),
     <lo:LParen> "sort" <name:Ident> <hi:RParen> => Command::Sort (Span(srcfile.clone(), lo, hi), name, None),
-    <lo:LParen> "datatype*"
-        <datatypes:RecDatatype*>
-    <hi:RParen> => Command::Datatypes { span: Span(srcfile.clone(), lo, hi), datatypes },
     <lo:LParen> "function" <name:Ident> <schema:Schema> <cost:Cost>
         <unextractable:(":unextractable")?>
         <merge_action:(":on_merge" <List<Action>>)?>
