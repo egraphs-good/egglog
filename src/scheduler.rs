@@ -322,9 +322,10 @@ pub trait Scheduler {
             &mut report,
             &search_results,
         )?;
+        report.updated |= egraph.did_change_tables()
+            || n_unions_before != egraph.unionfind.n_unions()
+            || self.is_active(&rulesets, *ruleset);
         egraph.rulesets = rulesets;
-        report.updated |=
-            egraph.did_change_tables() || n_unions_before != egraph.unionfind.n_unions();
         log::debug!("database size: {}", egraph.num_tuples());
 
         egraph.bump_timestamp();
@@ -434,7 +435,7 @@ pub trait Scheduler {
     ) -> Result<(), Error> {
         let rules = rulesets
             .get(&ruleset)
-            .unwrap_or_else(|| panic!("ruleset does not exist: {}", &ruleset));
+            .ok_or_else(|| Error::NoSuchRuleset(ruleset, span.clone()))?;
         match rules {
             Ruleset::Rules(_name, compiled_rules) => {
                 let apply_start = Instant::now();
@@ -505,6 +506,14 @@ pub trait Scheduler {
         report.add_rule_apply_time(rule_name, rule_apply_start.elapsed());
 
         Ok(())
+    }
+
+    /// This is only called when the database is not updated and
+    /// used to detect if the scheduler is still active.
+    ///
+    /// Similar to `RewriteScheduler::can_stop` in the egg library.
+    fn is_active(&mut self, _rulesets: &HashMap<Symbol, Ruleset>, _ruleset: Symbol) -> bool {
+        false
     }
 }
 
@@ -603,18 +612,18 @@ impl Scheduler for BackoffScheduler {
             .match_limit
             .checked_shl(stats.times_banned as u32)
             .unwrap();
-        let mut fuel = threshold.saturating_add(1);
         let mut all_matches = vec![];
+        let mut num_matches = 0;
 
         let timestamp = egraph.get_rule_timestamp(rule_name);
         egraph.run_query(&rule.query, timestamp, false, |values| {
+            num_matches += 1;
             assert_eq!(values.len(), rule.query.vars.len());
             all_matches.extend_from_slice(values);
 
-            if fuel == 0 {
+            if num_matches > threshold {
                 Err(())
             } else {
-                fuel -= 1;
                 Ok(())
             }
         });
@@ -628,8 +637,7 @@ impl Scheduler for BackoffScheduler {
         );
 
         // Step 3: Decide if we should discard the matches
-        let did_match = fuel != threshold;
-        let search_result = if fuel == 0 {
+        let search_result = if num_matches > threshold {
             let ban_length = stats.ban_length << stats.times_banned;
             stats.times_banned += 1;
             stats.banned_until = stats.iteration + ban_length;
@@ -646,6 +654,7 @@ impl Scheduler for BackoffScheduler {
                 did_match: true,
             }
         } else {
+            let did_match = num_matches > 0;
             stats.times_applied += 1;
             SearchResult {
                 all_matches,
@@ -653,5 +662,61 @@ impl Scheduler for BackoffScheduler {
             }
         };
         search_results.insert(rule_name, search_result);
+    }
+
+    fn is_active(&mut self, rulesets: &HashMap<Symbol, Ruleset>, ruleset: Symbol) -> bool {
+        fn collect_rules(rulesets: &HashMap<Symbol, Ruleset>, ruleset: Symbol) -> Vec<Symbol> {
+            let rules = rulesets.get(&ruleset).unwrap();
+            match rules {
+                Ruleset::Rules(_name, rule_names) => rule_names.iter().map(|(k, _)| *k).collect(),
+                Ruleset::Combined(_name, sub_rulesets) => sub_rulesets
+                    .iter()
+                    .flat_map(|ruleset| collect_rules(rulesets, *ruleset))
+                    .collect(),
+            }
+        }
+        let rules = collect_rules(rulesets, ruleset);
+        let banned: Vec<_> = rules
+            .iter()
+            .filter(|rule| {
+                let stats = self.stats.get(*rule).unwrap();
+                stats.iteration < stats.banned_until
+            })
+            .collect();
+
+        if banned.is_empty() {
+            false
+        } else {
+            let num_banned = banned.len();
+            let delta = banned
+                .iter()
+                .map(|rule| {
+                    let stats = self.stats.get(*rule).unwrap();
+                    assert!(stats.iteration < stats.banned_until);
+                    stats.banned_until - stats.iteration
+                })
+                .min()
+                .unwrap();
+
+            let mut num_unbanned = 0;
+            for rule in banned {
+                let s = self.stats.get_mut(rule).unwrap();
+                s.banned_until -= delta;
+                if s.banned_until == s.iteration {
+                    num_unbanned += 1;
+                }
+            }
+
+            assert!(num_unbanned > 0);
+            log::info!(
+                "Banned {}/{}, fast-forwarded by {} to unban {} rules",
+                num_banned,
+                rules.len(),
+                delta,
+                num_unbanned,
+            );
+
+            true
+        }
     }
 }
