@@ -432,7 +432,6 @@ pub struct EGraph {
     pub functions: HashMap<Symbol, Function>,
     rulesets: HashMap<Symbol, Ruleset>,
     rule_last_run_timestamp: HashMap<Symbol, u32>,
-    terms_enabled: bool,
     interactive_mode: bool,
     timestamp: u32,
     pub run_mode: RunMode,
@@ -461,7 +460,6 @@ impl Default for EGraph {
             node_limit: usize::MAX,
             timestamp: 0,
             run_mode: RunMode::Normal,
-            terms_enabled: false,
             interactive_mode: false,
             test_proofs: false,
             fact_directory: None,
@@ -493,14 +491,6 @@ struct SearchResult {
 }
 
 impl EGraph {
-    /// Use the rust backend implimentation of eqsat,
-    /// including a rust implementation of the union-find
-    /// data structure and the rust implementation of
-    /// the rebuilding algorithm (maintains congruence closure).
-    pub fn enable_terms_encoding(&mut self) {
-        self.terms_enabled = true;
-    }
-
     pub fn is_interactive_mode(&self) -> bool {
         self.interactive_mode
     }
@@ -542,12 +532,6 @@ impl EGraph {
 
     #[track_caller]
     fn debug_assert_invariants(&self) {
-        // we can't use find before something
-        // is added to the parent table, so this
-        // is disabled in terms mode
-        if self.terms_enabled {
-            return;
-        }
         #[cfg(debug_assertions)]
         for (name, function) in self.functions.iter() {
             function.nodes.assert_sorted();
@@ -604,35 +588,15 @@ impl EGraph {
 
     /// find the leader value for a particular eclass
     pub fn find(&self, value: Value) -> Value {
-        if self.terms_enabled {
-            // HACK using value tag for parent table name
-            let parent_name = self
-                .desugar
-                .lookup_parent_name(value.tag)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "Term encoding should have created parent table for {}",
-                        value.tag
-                    )
-                });
-            if let Some(func) = self.functions.get(&parent_name) {
-                func.get(&[value])
-                    .unwrap_or_else(|| panic!("No value {:?} in {parent_name}.", value,))
-            } else {
-                value
+        if let Some(sort) = self.get_sort_from_value(&value) {
+            if sort.is_eq_sort() {
+                return Value {
+                    tag: value.tag,
+                    bits: usize::from(self.unionfind.find(Id::from(value.bits as usize))) as u64,
+                };
             }
-        } else {
-            if let Some(sort) = self.get_sort_from_value(&value) {
-                if sort.is_eq_sort() {
-                    return Value {
-                        tag: value.tag,
-                        bits: usize::from(self.unionfind.find(Id::from(value.bits as usize)))
-                            as u64,
-                    };
-                }
-            }
-            value
         }
+        value
     }
 
     pub fn rebuild_nofail(&mut self) -> usize {

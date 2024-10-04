@@ -14,16 +14,6 @@ struct Args {
     desugar: bool,
     #[clap(long)]
     resugar: bool,
-    /// Currently unused.
-    #[clap(long)]
-    proofs: bool,
-    /// Currently unused.
-    /// Use the rust backend implimentation of eqsat,
-    /// including a rust implementation of the union-find
-    /// data structure and the rust implementation of
-    /// the rebuilding algorithm (maintains congruence closure).
-    #[clap(long)]
-    terms_encoding: bool,
     #[clap(long, default_value_t = RunMode::Normal)]
     show: RunMode,
     // TODO remove this evil hack
@@ -113,15 +103,6 @@ fn main() {
         egraph.fact_directory = args.fact_directory.clone();
         egraph.seminaive = !args.naive;
         egraph.run_mode = args.show;
-        // NB: both terms_encoding and proofs are currently unused
-        if args.terms_encoding {
-            egraph.enable_terms_encoding();
-        }
-        if args.proofs {
-            egraph
-                .parse_and_run_program(None, "(set-option enable_proofs 1)")
-                .unwrap();
-        }
         egraph
     };
 
