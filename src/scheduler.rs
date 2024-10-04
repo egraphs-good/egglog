@@ -1,6 +1,6 @@
+use instant::{Duration, Instant};
 use std::fmt::{Display, Formatter};
 use std::mem;
-use std::time::{Duration, Instant};
 
 use crate::{CompiledRule, Error, HashSet, Ruleset, Symbol, Value};
 

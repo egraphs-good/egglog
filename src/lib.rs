@@ -292,7 +292,7 @@ impl Default for EGraph {
         );
         egraph.scheduler_constructors.insert(
             "backoff".into(),
-            Rc::new(|_| Box::new(scheduler::BackoffScheduler::default())),
+            Rc::new(|_| Box::<scheduler::BackoffScheduler>::default()),
         );
         egraph
     }
@@ -1219,7 +1219,7 @@ impl EGraph {
 
     /// Get the current timestamp
     pub fn get_timestamp(&self) -> u32 {
-        return self.timestamp;
+        self.timestamp
     }
 
     /// Bump the timestamp by 1

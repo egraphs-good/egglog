@@ -325,7 +325,7 @@ impl TypeInfo {
             GenericSchedule::WithScheduler(span, scheduler, args, schedule) => {
                 ResolvedSchedule::WithScheduler(
                     span.clone(),
-                    scheduler.clone(),
+                    *scheduler,
                     args.iter()
                         .map(|arg| self.typecheck_expr(arg, &Default::default()))
                         .collect::<Result<Vec<_>, _>>()?,

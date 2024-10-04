@@ -246,7 +246,9 @@ pub(crate) fn desugar_command(
             rule,
         } => {
             let name = if name.as_str() == "" {
-                rule.to_string().replace('\"', "'")
+                // Adding a unique prefix because there may be duplicate rules (e.g., when
+                // processing a resugared egglog program).
+                desugar.get_fresh().to_string() + &rule.to_string().replace('\"', "'")
             } else {
                 name.to_string()
             };
@@ -261,7 +263,7 @@ pub(crate) fn desugar_command(
                 if let Some(new_rule) = add_semi_naive_rule(desugar, rule) {
                     result.push(NCommand::NormRule {
                         ruleset,
-                        name: ("__seminaive-".to_string() + &name).into(),
+                        name: (desugar.get_fresh().to_string() + &"__seminaive-" + &name).into(),
                         rule: new_rule,
                     });
                 }
