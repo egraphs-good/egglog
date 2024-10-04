@@ -432,13 +432,11 @@ pub struct EGraph {
     pub functions: HashMap<Symbol, Function>,
     rulesets: HashMap<Symbol, Ruleset>,
     rule_last_run_timestamp: HashMap<Symbol, u32>,
-    proofs_enabled: bool,
     terms_enabled: bool,
     interactive_mode: bool,
     timestamp: u32,
     pub run_mode: RunMode,
     pub test_proofs: bool,
-    pub match_limit: usize,
     pub node_limit: usize,
     pub fact_directory: Option<PathBuf>,
     pub seminaive: bool,
@@ -460,11 +458,9 @@ impl Default for EGraph {
             rulesets: Default::default(),
             rule_last_run_timestamp: Default::default(),
             desugar: Desugar::default(),
-            match_limit: usize::MAX,
             node_limit: usize::MAX,
             timestamp: 0,
             run_mode: RunMode::Normal,
-            proofs_enabled: false,
             terms_enabled: false,
             interactive_mode: false,
             test_proofs: false,
@@ -1193,21 +1189,11 @@ impl EGraph {
 
     fn set_option(&mut self, name: &str, value: ResolvedExpr) {
         match name {
-            "enable_proofs" => {
-                self.proofs_enabled = true;
-            }
             "interactive_mode" => {
                 if let ResolvedExpr::Lit(_ann, Literal::Int(i)) = value {
                     self.interactive_mode = i != 0;
                 } else {
                     panic!("interactive_mode must be an integer");
-                }
-            }
-            "match_limit" => {
-                if let ResolvedExpr::Lit(_ann, Literal::Int(i)) = value {
-                    self.match_limit = i as usize;
-                } else {
-                    panic!("match_limit must be an integer");
                 }
             }
             "node_limit" => {
