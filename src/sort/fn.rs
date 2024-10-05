@@ -420,8 +420,6 @@ fn call_fn(egraph: &mut EGraph, name: &Symbol, types: Vec<ArcSort>, args: Vec<Va
     // Similar to how the `MergeFn::Expr` case is handled in `Egraph::perform_set`
     // egraph.rebuild().unwrap();
     let mut stack = vec![];
-    egraph
-        .run_actions(&mut stack, &args, &program, true)
-        .unwrap();
+    egraph.run_actions(&mut stack, &args, &program).unwrap();
     stack.pop().unwrap()
 }

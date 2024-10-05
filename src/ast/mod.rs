@@ -167,7 +167,7 @@ pub type NCommand = GenericNCommand<Symbol, Symbol>;
 pub(crate) type ResolvedNCommand = GenericNCommand<ResolvedCall, ResolvedVar>;
 
 /// A [`NCommand`] is a desugared [`Command`], where syntactic sugars
-/// like [`Command::Datatype`], [`Command::Declare`], and [`Command::Rewrite`]
+/// like [`Command::Datatype`] and [`Command::Rewrite`]
 /// are eliminated.
 /// Most of the heavy lifting in egglog is done over [`NCommand`]s.
 ///
@@ -447,10 +447,7 @@ where
     /// Egglog supports several *experimental* options
     /// that can be set using the `set-option` command.
     ///
-    /// For example, `(set-option node_limit 1000)` sets a hard limit on the number of "nodes" or rows in the database.
-    /// Once this limit is reached, egglog stops running rules.
-    ///
-    /// Other options supported include:
+    /// Options supported include:
     /// - "interactive_mode" (default: false): when enabled, egglog prints "(done)" after each command, allowing an external
     /// tool to know when each command has finished running.
     SetOption {

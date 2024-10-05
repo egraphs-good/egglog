@@ -432,14 +432,10 @@ pub struct EGraph {
     pub functions: HashMap<Symbol, Function>,
     rulesets: HashMap<Symbol, Ruleset>,
     rule_last_run_timestamp: HashMap<Symbol, u32>,
-    proofs_enabled: bool,
-    terms_enabled: bool,
     interactive_mode: bool,
     timestamp: u32,
     pub run_mode: RunMode,
     pub test_proofs: bool,
-    pub match_limit: usize,
-    pub node_limit: usize,
     pub fact_directory: Option<PathBuf>,
     pub seminaive: bool,
     type_info: TypeInfo,
@@ -460,12 +456,8 @@ impl Default for EGraph {
             rulesets: Default::default(),
             rule_last_run_timestamp: Default::default(),
             desugar: Desugar::default(),
-            match_limit: usize::MAX,
-            node_limit: usize::MAX,
             timestamp: 0,
             run_mode: RunMode::Normal,
-            proofs_enabled: false,
-            terms_enabled: false,
             interactive_mode: false,
             test_proofs: false,
             fact_directory: None,
@@ -502,7 +494,7 @@ impl EGraph {
     /// data structure and the rust implementation of
     /// the rebuilding algorithm (maintains congruence closure).
     pub fn enable_terms_encoding(&mut self) {
-        self.terms_enabled = true;
+        panic!("terms are not implemented")
     }
 
     pub fn is_interactive_mode(&self) -> bool {
@@ -546,12 +538,6 @@ impl EGraph {
 
     #[track_caller]
     fn debug_assert_invariants(&self) {
-        // we can't use find before something
-        // is added to the parent table, so this
-        // is disabled in terms mode
-        if self.terms_enabled {
-            return;
-        }
         #[cfg(debug_assertions)]
         for (name, function) in self.functions.iter() {
             function.nodes.assert_sorted();
@@ -608,35 +594,15 @@ impl EGraph {
 
     /// find the leader value for a particular eclass
     pub fn find(&self, value: Value) -> Value {
-        if self.terms_enabled {
-            // HACK using value tag for parent table name
-            let parent_name = self
-                .desugar
-                .lookup_parent_name(value.tag)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "Term encoding should have created parent table for {}",
-                        value.tag
-                    )
-                });
-            if let Some(func) = self.functions.get(&parent_name) {
-                func.get(&[value])
-                    .unwrap_or_else(|| panic!("No value {:?} in {parent_name}.", value,))
-            } else {
-                value
+        if let Some(sort) = self.get_sort_from_value(&value) {
+            if sort.is_eq_sort() {
+                return Value {
+                    tag: value.tag,
+                    bits: usize::from(self.unionfind.find(Id::from(value.bits as usize))) as u64,
+                };
             }
-        } else {
-            if let Some(sort) = self.get_sort_from_value(&value) {
-                if sort.is_eq_sort() {
-                    return Value {
-                        tag: value.tag,
-                        bits: usize::from(self.unionfind.find(Id::from(value.bits as usize)))
-                            as u64,
-                    };
-                }
-            }
-            value
         }
+        value
     }
 
     pub fn rebuild_nofail(&mut self) -> usize {
@@ -694,15 +660,13 @@ impl EGraph {
 
         for (inputs, old, new) in merges {
             if let Some(prog) = function.merge.on_merge.clone() {
-                self.run_actions(&mut stack, &[*old, *new], &prog, true)
-                    .unwrap();
+                self.run_actions(&mut stack, &[*old, *new], &prog).unwrap();
                 function = self.functions.get_mut(&func).unwrap();
                 stack.clear();
             }
             if let Some(prog) = &merge_prog {
                 // TODO: error handling?
-                self.run_actions(&mut stack, &[*old, *new], prog, true)
-                    .unwrap();
+                self.run_actions(&mut stack, &[*old, *new], prog).unwrap();
                 let merged = stack.pop().expect("merges should produce a value");
                 stack.clear();
                 function = self.functions.get_mut(&func).unwrap();
@@ -933,10 +897,6 @@ impl EGraph {
         log::debug!("database size: {}", self.num_tuples());
         self.timestamp += 1;
 
-        if self.num_tuples() > self.node_limit {
-            log::warn!("Node limit reached, {} nodes. Stopping!", self.num_tuples());
-        }
-
         report
     }
 
@@ -1034,7 +994,7 @@ impl EGraph {
                     if num_vars == 0 {
                         if *did_match {
                             stack.clear();
-                            self.run_actions(stack, &[], &rule.program, true)
+                            self.run_actions(stack, &[], &rule.program)
                                 .unwrap_or_else(|e| {
                                     panic!("error while running actions for {rule_name}: {e}")
                                 });
@@ -1042,7 +1002,7 @@ impl EGraph {
                     } else {
                         for values in all_matches.chunks(num_vars) {
                             stack.clear();
-                            self.run_actions(stack, values, &rule.program, true)
+                            self.run_actions(stack, values, &rule.program)
                                 .unwrap_or_else(|e| {
                                     panic!("error while running actions for {rule_name}: {e}")
                                 });
@@ -1141,7 +1101,7 @@ impl EGraph {
             .compile_actions(&Default::default(), &actions)
             .map_err(Error::TypeErrors)?;
         let mut stack = vec![];
-        self.run_actions(&mut stack, &[], &program, true)?;
+        self.run_actions(&mut stack, &[], &program)?;
         Ok(())
     }
 
@@ -1158,11 +1118,7 @@ impl EGraph {
 
     // TODO make a public version of eval_expr that makes a command,
     // then returns the value at the end.
-    fn eval_resolved_expr(
-        &mut self,
-        expr: &ResolvedExpr,
-        make_defaults: bool,
-    ) -> Result<Value, Error> {
+    fn eval_resolved_expr(&mut self, expr: &ResolvedExpr) -> Result<Value, Error> {
         let (actions, mapped_expr) = expr.to_core_actions(
             self.type_info(),
             &mut Default::default(),
@@ -1173,7 +1129,7 @@ impl EGraph {
             .compile_expr(&Default::default(), &actions, &target)
             .map_err(Error::TypeErrors)?;
         let mut stack = vec![];
-        self.run_actions(&mut stack, &[], &program, make_defaults)?;
+        self.run_actions(&mut stack, &[], &program)?;
         Ok(stack.pop().unwrap())
     }
 
@@ -1194,27 +1150,13 @@ impl EGraph {
     fn set_option(&mut self, name: &str, value: ResolvedExpr) {
         match name {
             "enable_proofs" => {
-                self.proofs_enabled = true;
+                panic!("Proofs are not implemented")
             }
             "interactive_mode" => {
                 if let ResolvedExpr::Lit(_ann, Literal::Int(i)) = value {
                     self.interactive_mode = i != 0;
                 } else {
                     panic!("interactive_mode must be an integer");
-                }
-            }
-            "match_limit" => {
-                if let ResolvedExpr::Lit(_ann, Literal::Int(i)) = value {
-                    self.match_limit = i as usize;
-                } else {
-                    panic!("match_limit must be an integer");
-                }
-            }
-            "node_limit" => {
-                if let ResolvedExpr::Lit(_ann, Literal::Int(i)) = value {
-                    self.node_limit = i as usize;
-                } else {
-                    panic!("node_limit must be an integer");
                 }
             }
             _ => panic!("Unknown option '{}'", name),
@@ -1375,7 +1317,7 @@ impl EGraph {
                     .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
                 let mut termdag = TermDag::default();
                 for expr in exprs {
-                    let value = self.eval_resolved_expr(&expr, true)?;
+                    let value = self.eval_resolved_expr(&expr)?;
                     let expr_type = expr.output_type(self.type_info());
                     let term = self.extract(value, &mut termdag, &expr_type).1;
                     use std::io::Write;
