@@ -433,7 +433,6 @@ pub struct EGraph {
     interactive_mode: bool,
     timestamp: u32,
     pub run_mode: RunMode,
-    pub test_proofs: bool,
     pub fact_directory: Option<PathBuf>,
     pub seminaive: bool,
     type_info: TypeInfo,
@@ -457,7 +456,6 @@ impl Default for EGraph {
             timestamp: 0,
             run_mode: RunMode::Normal,
             interactive_mode: false,
-            test_proofs: false,
             fact_directory: None,
             seminaive: true,
             extract_report: None,
@@ -1419,9 +1417,9 @@ impl EGraph {
     }
 
     fn process_command(&mut self, command: Command) -> Result<Vec<ResolvedNCommand>, Error> {
-        let program =
-            self.desugar
-                .desugar_program(vec![command], self.test_proofs, self.seminaive)?;
+        let program = self
+            .desugar
+            .desugar_program(vec![command], self.seminaive)?;
 
         let program = self.type_info.typecheck_program(&program)?;
 
