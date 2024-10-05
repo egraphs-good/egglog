@@ -331,7 +331,6 @@ pub(crate) fn desugar_command(
             }
         }
         Command::Check(span, facts) => vec![NCommand::Check(span, facts)],
-        Command::CheckProof => vec![NCommand::CheckProof],
         Command::PrintFunction(span, symbol, size) => {
             vec![NCommand::PrintTable(span, symbol, size)]
         }

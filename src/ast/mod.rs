@@ -204,7 +204,6 @@ where
     RunSchedule(GenericSchedule<Head, Leaf>),
     PrintOverallStatistics,
     Check(Span, Vec<GenericFact<Head, Leaf>>),
-    CheckProof,
     PrintTable(Span, Symbol, usize),
     PrintSize(Span, Option<Symbol>),
     Output {
@@ -256,7 +255,6 @@ where
             GenericNCommand::Check(span, facts) => {
                 GenericCommand::Check(span.clone(), facts.clone())
             }
-            GenericNCommand::CheckProof => GenericCommand::CheckProof,
             GenericNCommand::PrintTable(span, name, n) => {
                 GenericCommand::PrintFunction(span.clone(), *name, *n)
             }
@@ -316,7 +314,6 @@ where
                 span,
                 facts.into_iter().map(|fact| fact.visit_exprs(f)).collect(),
             ),
-            GenericNCommand::CheckProof => GenericNCommand::CheckProof,
             GenericNCommand::PrintTable(span, name, n) => {
                 GenericNCommand::PrintTable(span, name, n)
             }
@@ -766,8 +763,6 @@ where
     /// [INFO ] Command failed as expected.
     /// ```
     Check(Span, Vec<GenericFact<Head, Leaf>>),
-    /// Currently unused, this command will check proofs when they are implemented.
-    CheckProof,
     /// Print out rows a given function, extracting each of the elements of the function.
     /// Example:
     /// ```text
@@ -849,7 +844,6 @@ where
                 list!("query-extract", ":variants", variants, expr)
             }
             GenericCommand::Check(_ann, facts) => list!("check", ++ facts),
-            GenericCommand::CheckProof => list!("check-proof"),
             GenericCommand::Push(n) => list!("push", n),
             GenericCommand::Pop(_span, n) => list!("pop", n),
             GenericCommand::PrintFunction(_span, name, n) => list!("print-function", name, n),
