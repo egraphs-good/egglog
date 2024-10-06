@@ -14,10 +14,13 @@ lalrpop_mod!(
     "/ast/parse.rs"
 );
 
+// For some reason the parser is slow to construct so
+// we make it static and only construct it once.
 lazy_static! {
     static ref PARSER: parse::ProgramParser = Default::default();
 }
 
+/// Parse a file into a program.
 pub fn parse_program(filename: Option<String>, input: &str) -> Result<Vec<Command>, Error> {
     let filename = filename.unwrap_or_else(|| DEFAULT_FILENAME.to_string());
     let srcfile = Arc::new(SrcFile {
