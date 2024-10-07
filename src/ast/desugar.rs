@@ -1,8 +1,18 @@
 use super::{Rewrite, Rule};
 use crate::*;
 
-#[derive(Default)]
-pub struct Desugar {}
+pub(crate) fn desugar_program(
+    program: Vec<Command>,
+    symbol_gen: &mut SymbolGen,
+    seminaive_transform: bool,
+) -> Result<Vec<NCommand>, Error> {
+    let mut res = vec![];
+    for command in program {
+        let desugared = desugar_command(command, symbol_gen, seminaive_transform)?;
+        res.extend(desugared);
+    }
+    Ok(res)
+}
 
 fn desugar_datatype(span: Span, name: Symbol, variants: Vec<Variant>) -> Vec<NCommand> {
     vec![NCommand::Sort(span.clone(), name, None)]
@@ -94,11 +104,7 @@ fn desugar_birewrite(ruleset: Symbol, name: Symbol, rewrite: &Rewrite) -> Vec<NC
 }
 
 // TODO(yz): we can delete this code once we enforce that all rule bodies cannot read the database (except EqSort).
-fn add_semi_naive_rule(
-    desugar: &mut Desugar,
-    symbol_gen: &mut SymbolGen,
-    rule: Rule,
-) -> Option<Rule> {
+fn add_semi_naive_rule(symbol_gen: &mut SymbolGen, rule: Rule) -> Option<Rule> {
     let mut new_rule = rule;
     // Whenever an Let(_, expr@Call(...)) or Set(_, expr@Call(...)) is present in action,
     // an additional seminaive rule should be created.
@@ -114,7 +120,7 @@ fn add_semi_naive_rule(
                 if let Expr::Call(..) = expr {
                     add_new_rule = true;
 
-                    let fresh_symbol = desugar.get_fresh(symbol_gen);
+                    let fresh_symbol = symbol_gen.fresh(&"desugar_snrule".into());
                     let fresh_var = Expr::Var(span.clone(), fresh_symbol);
                     let expr = std::mem::replace(expr, fresh_var.clone());
                     new_head_atoms.push(Fact::Eq(span.clone(), vec![fresh_var, expr]));
@@ -147,14 +153,13 @@ fn add_semi_naive_rule(
 }
 
 fn desugar_simplify(
-    desugar: &mut Desugar,
     expr: &Expr,
     schedule: &Schedule,
     span: Span,
     symbol_gen: &mut SymbolGen,
 ) -> Vec<NCommand> {
     let mut res = vec![NCommand::Push(1)];
-    let lhs = desugar.get_fresh(symbol_gen);
+    let lhs = symbol_gen.fresh(&"desugar_simplify".into());
     res.push(NCommand::CoreAction(Action::Let(
         span.clone(),
         lhs,
@@ -168,7 +173,6 @@ fn desugar_simplify(
                 variants: 0,
                 expr: Expr::Var(span.clone(), lhs),
             },
-            desugar,
             symbol_gen,
             false,
         )
@@ -179,16 +183,11 @@ fn desugar_simplify(
     res
 }
 
-pub(crate) fn rewrite_name(rewrite: &Rewrite) -> String {
-    rewrite.to_string().replace('\"', "'")
-}
-
 /// Desugars a single command into the normalized form.
 /// Gets rid of a bunch of syntactic sugar, but also
 /// makes rules into a SSA-like format (see [`NormFact`]).
 pub(crate) fn desugar_command(
     command: Command,
-    desugar: &mut Desugar,
     symbol_gen: &mut SymbolGen,
     seminaive_transform: bool,
 ) -> Result<Vec<NCommand>, Error> {
@@ -211,18 +210,22 @@ pub(crate) fn desugar_command(
             name,
             variants,
         } => desugar_datatype(span, name, variants),
-        Command::Rewrite(ruleset, rewrite, subsume) => {
-            desugar_rewrite(ruleset, rewrite_name(&rewrite).into(), &rewrite, subsume)
-        }
-        Command::BiRewrite(ruleset, rewrite) => {
-            desugar_birewrite(ruleset, rewrite_name(&rewrite).into(), &rewrite)
-        }
+        Command::Rewrite(ruleset, rewrite, subsume) => desugar_rewrite(
+            ruleset,
+            rewrite.to_string().replace('\"', "'").into(),
+            &rewrite,
+            subsume,
+        ),
+        Command::BiRewrite(ruleset, rewrite) => desugar_birewrite(
+            ruleset,
+            rewrite.to_string().replace('\"', "'").into(),
+            &rewrite,
+        ),
         Command::Include(span, file) => {
             let s = std::fs::read_to_string(&file)
                 .unwrap_or_else(|_| panic!("{} Failed to read file {file}", span.get_quote()));
-            return desugar_commands(
+            return desugar_program(
                 parse_program(Some(file), &s)?,
-                desugar,
                 symbol_gen,
                 seminaive_transform,
             );
@@ -243,7 +246,7 @@ pub(crate) fn desugar_command(
             }];
 
             if seminaive_transform {
-                if let Some(new_rule) = add_semi_naive_rule(desugar, symbol_gen, rule) {
+                if let Some(new_rule) = add_semi_naive_rule(symbol_gen, rule) {
                     result.push(NCommand::NormRule {
                         ruleset,
                         name,
@@ -264,7 +267,7 @@ pub(crate) fn desugar_command(
             span,
             expr,
             schedule,
-        } => desugar_simplify(desugar, &expr, &schedule, span, symbol_gen),
+        } => desugar_simplify(&expr, &schedule, span, symbol_gen),
         Command::RunSchedule(sched) => {
             vec![NCommand::RunSchedule(sched.clone())]
         }
@@ -291,9 +294,9 @@ pub(crate) fn desugar_command(
                 //       ((extract {fresh} {variants}))
                 //       :ruleset {fresh_ruleset})
                 // (run {fresh_ruleset} 1)
-                let fresh = desugar.get_fresh(symbol_gen);
-                let fresh_ruleset = desugar.get_fresh(symbol_gen);
-                let fresh_rulename = desugar.get_fresh(symbol_gen);
+                let fresh = symbol_gen.fresh(&"desugar_qextract_var".into());
+                let fresh_ruleset = symbol_gen.fresh(&"desugar_qextract_ruleset".into());
+                let fresh_rulename = symbol_gen.fresh(&"desugar_qextract_rulename".into());
                 let rule = Rule {
                     span: span.clone(),
                     body: vec![Fact::Eq(
@@ -337,7 +340,7 @@ pub(crate) fn desugar_command(
             vec![NCommand::Pop(span, num)]
         }
         Command::Fail(span, cmd) => {
-            let mut desugared = desugar_command(*cmd, desugar, symbol_gen, seminaive_transform)?;
+            let mut desugared = desugar_command(*cmd, symbol_gen, seminaive_transform)?;
 
             let last = desugared.pop().unwrap();
             desugared.push(NCommand::Fail(span, Box::new(last)));
@@ -349,40 +352,4 @@ pub(crate) fn desugar_command(
     };
 
     Ok(res)
-}
-
-pub(crate) fn desugar_commands(
-    program: Vec<Command>,
-    desugar: &mut Desugar,
-    symbol_gen: &mut SymbolGen,
-    seminaive_transform: bool,
-) -> Result<Vec<NCommand>, Error> {
-    let mut res = vec![];
-    for command in program {
-        let desugared = desugar_command(command, desugar, symbol_gen, seminaive_transform)?;
-        res.extend(desugared);
-    }
-    Ok(res)
-}
-
-impl Clone for Desugar {
-    fn clone(&self) -> Self {
-        Self {}
-    }
-}
-
-impl Desugar {
-    pub fn get_fresh(&mut self, symbol_gen: &mut SymbolGen) -> Symbol {
-        symbol_gen.fresh(&"v".into())
-    }
-
-    pub(crate) fn desugar_program(
-        &mut self,
-        program: Vec<Command>,
-        symbol_gen: &mut SymbolGen,
-        seminaive_transform: bool,
-    ) -> Result<Vec<NCommand>, Error> {
-        let res = desugar_commands(program, self, symbol_gen, seminaive_transform)?;
-        Ok(res)
-    }
 }

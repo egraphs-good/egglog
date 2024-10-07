@@ -26,7 +26,6 @@ mod unionfind;
 pub mod util;
 mod value;
 
-use ast::desugar::Desugar;
 use ast::remove_globals::remove_globals;
 use extract::Extractor;
 use hashbrown::hash_map::Entry;
@@ -427,7 +426,6 @@ pub struct EGraph {
     symbol_gen: SymbolGen,
     egraphs: Vec<Self>,
     unionfind: UnionFind,
-    pub(crate) desugar: Desugar,
     pub functions: HashMap<Symbol, Function>,
     rulesets: HashMap<Symbol, Ruleset>,
     rule_last_run_timestamp: HashMap<Symbol, u32>,
@@ -454,7 +452,6 @@ impl Default for EGraph {
             functions: Default::default(),
             rulesets: Default::default(),
             rule_last_run_timestamp: Default::default(),
-            desugar: Desugar::default(),
             timestamp: 0,
             run_mode: RunMode::Normal,
             interactive_mode: false,
@@ -1096,7 +1093,7 @@ impl EGraph {
     }
 
     pub fn eval_expr(&mut self, expr: &Expr) -> Result<(ArcSort, Value), Error> {
-        let fresh_name = self.desugar.get_fresh(&mut self.symbol_gen);
+        let fresh_name = self.symbol_gen.fresh(&"egraph_evalexpr".into());
         let command = Command::Action(Action::Let(DUMMY_SPAN.clone(), fresh_name, expr.clone()));
         self.run_program(vec![command])?;
         // find the table with the same name as the fresh name
@@ -1410,8 +1407,7 @@ impl EGraph {
 
     fn process_command(&mut self, command: Command) -> Result<Vec<ResolvedNCommand>, Error> {
         let program =
-            self.desugar
-                .desugar_program(vec![command], &mut self.symbol_gen, self.seminaive)?;
+            desugar::desugar_program(vec![command], &mut self.symbol_gen, self.seminaive)?;
 
         let program = self
             .type_info
