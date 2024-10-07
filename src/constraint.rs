@@ -471,11 +471,11 @@ impl Problem<AtomTerm, ArcSort> {
         &mut self,
         actions: &GenericCoreActions<Symbol, Symbol>,
         typeinfo: &TypeInfo,
+        symbol_gen: &mut SymbolGen,
     ) -> Result<(), TypeError> {
-        let mut symbol_gen = SymbolGen::new("$".to_string());
         for action in actions.0.iter() {
             self.constraints
-                .extend(action.get_constraints(typeinfo, &mut symbol_gen)?);
+                .extend(action.get_constraints(typeinfo, symbol_gen)?);
 
             // bound vars are added to range
             match action {
@@ -495,6 +495,7 @@ impl Problem<AtomTerm, ArcSort> {
         &mut self,
         rule: &CoreRule,
         typeinfo: &TypeInfo,
+        symbol_gen: &mut SymbolGen,
     ) -> Result<(), TypeError> {
         let CoreRule {
             span: _,
@@ -502,7 +503,7 @@ impl Problem<AtomTerm, ArcSort> {
             body,
         } = rule;
         self.add_query(body, typeinfo)?;
-        self.add_actions(head, typeinfo)?;
+        self.add_actions(head, typeinfo, symbol_gen)?;
         Ok(())
     }
 

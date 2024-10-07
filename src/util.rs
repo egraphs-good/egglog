@@ -65,14 +65,14 @@ where
 /// These are guaranteed not to collide with the
 /// user's symbols because they use $.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SymbolGen {
+pub struct SymbolGen {
     gen: usize,
     reserved_string: String,
     special_reserved: HashMap<Symbol, String>,
 }
 
 impl SymbolGen {
-    pub(crate) fn new(reserved_string: String) -> Self {
+    pub fn new(reserved_string: String) -> Self {
         Self {
             gen: 0,
             reserved_string,
@@ -80,13 +80,13 @@ impl SymbolGen {
         }
     }
 
-    pub(crate) fn has_been_used(&self) -> bool {
+    pub fn has_been_used(&self) -> bool {
         self.gen > 0
     }
 }
 
 /// This trait lets us statically dispatch between `fresh` methods for generic structs.
-pub(crate) trait FreshGen<Head, Leaf> {
+pub trait FreshGen<Head, Leaf> {
     fn fresh(&mut self, name_hint: &Head) -> Leaf;
 }
 

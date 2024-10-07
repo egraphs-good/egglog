@@ -83,7 +83,7 @@ impl Debug for Function {
 pub(crate) type DeferredMerge = (ValueVec, Value, Value);
 
 impl Function {
-    pub(crate) fn new(egraph: &EGraph, decl: &ResolvedFunctionDecl) -> Result<Self, Error> {
+    pub(crate) fn new(egraph: &mut EGraph, decl: &ResolvedFunctionDecl) -> Result<Self, Error> {
         let mut input = Vec::with_capacity(decl.schema.input.len());
         for s in &decl.schema.input {
             input.push(match egraph.type_info.sorts.get(s) {
@@ -125,7 +125,7 @@ impl Function {
             let (actions, mapped_expr) = merge_expr.to_core_actions(
                 &egraph.type_info,
                 &mut binding.clone(),
-                &mut SymbolGen::new("$".to_string()),
+                &mut egraph.symbol_gen,
             )?;
             let target = mapped_expr.get_corresponding_var_or_lit(&egraph.type_info);
             let program = egraph
@@ -144,7 +144,7 @@ impl Function {
             let (merge_action, _) = decl.merge_action.to_core_actions(
                 &egraph.type_info,
                 &mut binding.clone(),
-                &mut SymbolGen::new("$".to_string()),
+                &mut egraph.symbol_gen,
             )?;
             let program = egraph
                 .compile_actions(&binding, &merge_action)
