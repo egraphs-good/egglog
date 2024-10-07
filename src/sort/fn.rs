@@ -412,7 +412,7 @@ fn call_fn(egraph: &mut EGraph, name: &Symbol, types: Vec<ArcSort>, args: Vec<Va
         .to_core_actions(
             &egraph.type_info,
             &mut binding.clone(),
-            &mut ResolvedGen::new("$".to_string()),
+            &mut egraph.symbol_gen,
         )
         .unwrap();
     let target = mapped_expr.get_corresponding_var_or_lit(&egraph.type_info);

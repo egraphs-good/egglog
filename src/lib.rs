@@ -424,6 +424,7 @@ impl FromStr for RunMode {
 
 #[derive(Clone)]
 pub struct EGraph {
+    symbol_gen: SymbolGen,
     egraphs: Vec<Self>,
     unionfind: UnionFind,
     pub(crate) desugar: Desugar,
@@ -447,6 +448,7 @@ pub struct EGraph {
 impl Default for EGraph {
     fn default() -> Self {
         let mut egraph = Self {
+            symbol_gen: SymbolGen::new("$".to_string()),
             egraphs: vec![],
             unionfind: Default::default(),
             functions: Default::default(),
@@ -1042,7 +1044,7 @@ impl EGraph {
         ruleset: Symbol,
     ) -> Result<Symbol, Error> {
         let name = Symbol::from(name);
-        let core_rule = rule.to_canonicalized_core_rule(&self.type_info)?;
+        let core_rule = rule.to_canonicalized_core_rule(&self.type_info, &mut self.symbol_gen)?;
         let (query, actions) = (core_rule.body, core_rule.head);
 
         let vars = query.get_vars();
@@ -1083,7 +1085,7 @@ impl EGraph {
         let (actions, _) = actions.to_core_actions(
             &self.type_info,
             &mut Default::default(),
-            &mut ResolvedGen::new("$".to_string()),
+            &mut self.symbol_gen,
         )?;
         let program = self
             .compile_actions(&Default::default(), &actions)
@@ -1094,7 +1096,7 @@ impl EGraph {
     }
 
     pub fn eval_expr(&mut self, expr: &Expr) -> Result<(ArcSort, Value), Error> {
-        let fresh_name = self.desugar.get_fresh();
+        let fresh_name = self.desugar.get_fresh(&mut self.symbol_gen);
         let command = Command::Action(Action::Let(DUMMY_SPAN.clone(), fresh_name, expr.clone()));
         self.run_program(vec![command])?;
         // find the table with the same name as the fresh name
@@ -1110,7 +1112,7 @@ impl EGraph {
         let (actions, mapped_expr) = expr.to_core_actions(
             &self.type_info,
             &mut Default::default(),
-            &mut ResolvedGen::new("$".to_string()),
+            &mut self.symbol_gen,
         )?;
         let target = mapped_expr.get_corresponding_var_or_lit(&self.type_info);
         let program = self
@@ -1154,7 +1156,7 @@ impl EGraph {
             head: ResolvedActions::default(),
             body: facts.to_vec(),
         };
-        let core_rule = rule.to_canonicalized_core_rule(&self.type_info)?;
+        let core_rule = rule.to_canonicalized_core_rule(&self.type_info, &mut self.symbol_gen)?;
         let query = core_rule.body;
         let ordering = &query.get_vars();
         let query = self.compile_gj_query(query, ordering);
@@ -1382,7 +1384,9 @@ impl EGraph {
             .into_iter()
             .map(NCommand::CoreAction)
             .collect::<Vec<_>>();
-        let commands: Vec<_> = self.type_info.typecheck_program(&commands)?;
+        let commands: Vec<_> = self
+            .type_info
+            .typecheck_program(&mut self.symbol_gen, &commands)?;
         for command in commands {
             self.run_command(command)?;
         }
@@ -1398,20 +1402,22 @@ impl EGraph {
 
     pub fn set_reserved_symbol(&mut self, sym: Symbol) {
         assert!(
-            !self.desugar.fresh_gen.has_been_used(),
+            !self.symbol_gen.has_been_used(),
             "Reserved symbol must be set before any symbols are generated"
         );
-        self.desugar.fresh_gen = SymbolGen::new(sym.to_string());
+        self.symbol_gen = SymbolGen::new(sym.to_string());
     }
 
     fn process_command(&mut self, command: Command) -> Result<Vec<ResolvedNCommand>, Error> {
+        let program =
+            self.desugar
+                .desugar_program(vec![command], &mut self.symbol_gen, self.seminaive)?;
+
         let program = self
-            .desugar
-            .desugar_program(vec![command], self.seminaive)?;
+            .type_info
+            .typecheck_program(&mut self.symbol_gen, &program)?;
 
-        let program = self.type_info.typecheck_program(&program)?;
-
-        let program = remove_globals(&self.type_info, program, &mut self.desugar.fresh_gen);
+        let program = remove_globals(&self.type_info, program, &mut self.symbol_gen);
 
         Ok(program)
     }
