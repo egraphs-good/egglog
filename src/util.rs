@@ -68,7 +68,6 @@ where
 pub struct SymbolGen {
     gen: usize,
     reserved_string: String,
-    special_reserved: HashMap<Symbol, String>,
 }
 
 impl SymbolGen {
@@ -76,7 +75,6 @@ impl SymbolGen {
         Self {
             gen: 0,
             reserved_string,
-            special_reserved: HashMap::default(),
         }
     }
 
