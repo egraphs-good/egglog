@@ -1083,7 +1083,7 @@ impl EGraph {
         let (actions, _) = actions.to_core_actions(
             &self.type_info,
             &mut Default::default(),
-            &mut ResolvedGen::new("$".to_string()),
+            &mut SymbolGen::new("$".to_string()),
         )?;
         let program = self
             .compile_actions(&Default::default(), &actions)
@@ -1110,7 +1110,7 @@ impl EGraph {
         let (actions, mapped_expr) = expr.to_core_actions(
             &self.type_info,
             &mut Default::default(),
-            &mut ResolvedGen::new("$".to_string()),
+            &mut SymbolGen::new("$".to_string()),
         )?;
         let target = mapped_expr.get_corresponding_var_or_lit(&self.type_info);
         let program = self

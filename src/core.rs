@@ -841,7 +841,7 @@ impl ResolvedRule {
         let unit = typeinfo.get_sort_nofail::<UnitSort>();
         self.to_canonicalized_core_rule_impl(
             typeinfo,
-            ResolvedGen::new("$".to_string()),
+            SymbolGen::new("$".to_string()),
             |at1, at2| {
                 ResolvedCall::Primitive(SpecializedPrimitive {
                     primitive: value_eq.clone(),

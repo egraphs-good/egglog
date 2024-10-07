@@ -64,11 +64,6 @@ where
 /// Generates fresh symbols for internal use during typechecking and flattening.
 /// These are guaranteed not to collide with the
 /// user's symbols because they use $.
-pub(crate) trait FreshGen<Head, Leaf> {
-    fn fresh(&mut self, name_hint: &Head) -> Leaf;
-    fn has_been_used(&self) -> bool;
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SymbolGen {
     gen: usize,
@@ -90,33 +85,20 @@ impl SymbolGen {
     }
 }
 
+/// This trait lets us statically dispatch between `fresh` methods for generic structs.
+pub(crate) trait FreshGen<Head, Leaf> {
+    fn fresh(&mut self, name_hint: &Head) -> Leaf;
+}
+
 impl FreshGen<Symbol, Symbol> for SymbolGen {
     fn fresh(&mut self, name_hint: &Symbol) -> Symbol {
         let s = format!("{}{}{}", self.reserved_string, name_hint, self.gen);
         self.gen += 1;
         Symbol::from(s)
     }
-
-    fn has_been_used(&self) -> bool {
-        self.gen > 0
-    }
 }
 
-pub(crate) struct ResolvedGen {
-    gen: usize,
-    reserved_string: String,
-}
-
-impl ResolvedGen {
-    pub(crate) fn new(reserved_string: String) -> Self {
-        Self {
-            gen: 0,
-            reserved_string,
-        }
-    }
-}
-
-impl FreshGen<ResolvedCall, ResolvedVar> for ResolvedGen {
+impl FreshGen<ResolvedCall, ResolvedVar> for SymbolGen {
     fn fresh(&mut self, name_hint: &ResolvedCall) -> ResolvedVar {
         let s = format!("{}{}{}", self.reserved_string, name_hint, self.gen);
         self.gen += 1;
@@ -131,10 +113,6 @@ impl FreshGen<ResolvedCall, ResolvedVar> for ResolvedGen {
             // are desugared away by `remove_globals`
             is_global_ref: false,
         }
-    }
-
-    fn has_been_used(&self) -> bool {
-        self.gen > 0
     }
 }
 
