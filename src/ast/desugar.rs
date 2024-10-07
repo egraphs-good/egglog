@@ -1,8 +1,192 @@
 use super::{Rewrite, Rule};
 use crate::*;
 
-#[derive(Default)]
-pub struct Desugar {}
+/// Desugars a list of commands into the normalized form.
+/// Gets rid of a bunch of syntactic sugar, but also
+/// makes rules into a SSA-like format (see [`NormFact`]).
+pub(crate) fn desugar_program(
+    program: Vec<Command>,
+    symbol_gen: &mut SymbolGen,
+    seminaive_transform: bool,
+) -> Result<Vec<NCommand>, Error> {
+    let mut res = vec![];
+    for command in program {
+        let desugared = desugar_command(command, symbol_gen, seminaive_transform)?;
+        res.extend(desugared);
+    }
+    Ok(res)
+}
+
+/// Desugars a single command into the normalized form.
+/// Gets rid of a bunch of syntactic sugar, but also
+/// makes rules into a SSA-like format (see [`NormFact`]).
+pub(crate) fn desugar_command(
+    command: Command,
+    symbol_gen: &mut SymbolGen,
+    seminaive_transform: bool,
+) -> Result<Vec<NCommand>, Error> {
+    let res = match command {
+        Command::SetOption { name, value } => {
+            vec![NCommand::SetOption { name, value }]
+        }
+        Command::Function(fdecl) => vec![NCommand::Function(fdecl)],
+        Command::Relation {
+            span,
+            constructor,
+            inputs,
+        } => vec![NCommand::Function(FunctionDecl::relation(
+            span,
+            constructor,
+            inputs,
+        ))],
+        Command::Datatype {
+            span,
+            name,
+            variants,
+        } => desugar_datatype(span, name, variants),
+        Command::Rewrite(ruleset, rewrite, subsume) => desugar_rewrite(
+            ruleset,
+            rewrite.to_string().replace('\"', "'").into(),
+            &rewrite,
+            subsume,
+        ),
+        Command::BiRewrite(ruleset, rewrite) => desugar_birewrite(
+            ruleset,
+            rewrite.to_string().replace('\"', "'").into(),
+            &rewrite,
+        ),
+        Command::Include(span, file) => {
+            let s = std::fs::read_to_string(&file)
+                .unwrap_or_else(|_| panic!("{} Failed to read file {file}", span.get_quote()));
+            return desugar_program(
+                parse_program(Some(file), &s)?,
+                symbol_gen,
+                seminaive_transform,
+            );
+        }
+        Command::Rule {
+            ruleset,
+            mut name,
+            rule,
+        } => {
+            if name == "".into() {
+                name = rule.to_string().replace('\"', "'").into();
+            }
+
+            let mut result = vec![NCommand::NormRule {
+                ruleset,
+                name,
+                rule: rule.clone(),
+            }];
+
+            if seminaive_transform {
+                if let Some(new_rule) = add_semi_naive_rule(symbol_gen, rule) {
+                    result.push(NCommand::NormRule {
+                        ruleset,
+                        name,
+                        rule: new_rule,
+                    });
+                }
+            }
+
+            result
+        }
+        Command::Sort(span, sort, option) => vec![NCommand::Sort(span, sort, option)],
+        Command::AddRuleset(name) => vec![NCommand::AddRuleset(name)],
+        Command::UnstableCombinedRuleset(name, subrulesets) => {
+            vec![NCommand::UnstableCombinedRuleset(name, subrulesets)]
+        }
+        Command::Action(action) => vec![NCommand::CoreAction(action)],
+        Command::Simplify {
+            span,
+            expr,
+            schedule,
+        } => desugar_simplify(&expr, &schedule, span, symbol_gen),
+        Command::RunSchedule(sched) => {
+            vec![NCommand::RunSchedule(sched.clone())]
+        }
+        Command::PrintOverallStatistics => {
+            vec![NCommand::PrintOverallStatistics]
+        }
+        Command::QueryExtract {
+            span,
+            variants,
+            expr,
+        } => {
+            let variants = Expr::Lit(span.clone(), Literal::Int(variants.try_into().unwrap()));
+            if let Expr::Var(..) = expr {
+                // (extract {v} {variants})
+                vec![NCommand::CoreAction(Action::Extract(
+                    span.clone(),
+                    expr,
+                    variants,
+                ))]
+            } else {
+                // (check {expr})
+                // (ruleset {fresh_ruleset})
+                // (rule ((= {fresh} {expr}))
+                //       ((extract {fresh} {variants}))
+                //       :ruleset {fresh_ruleset})
+                // (run {fresh_ruleset} 1)
+                let fresh = symbol_gen.fresh(&"desugar_qextract_var".into());
+                let fresh_ruleset = symbol_gen.fresh(&"desugar_qextract_ruleset".into());
+                let fresh_rulename = symbol_gen.fresh(&"desugar_qextract_rulename".into());
+                let rule = Rule {
+                    span: span.clone(),
+                    body: vec![Fact::Eq(
+                        span.clone(),
+                        vec![Expr::Var(span.clone(), fresh), expr.clone()],
+                    )],
+                    head: Actions::singleton(Action::Extract(
+                        span.clone(),
+                        Expr::Var(span.clone(), fresh),
+                        variants,
+                    )),
+                };
+                vec![
+                    NCommand::Check(span.clone(), vec![Fact::Fact(expr.clone())]),
+                    NCommand::AddRuleset(fresh_ruleset),
+                    NCommand::NormRule {
+                        name: fresh_rulename,
+                        ruleset: fresh_ruleset,
+                        rule,
+                    },
+                    NCommand::RunSchedule(Schedule::Run(
+                        span.clone(),
+                        RunConfig {
+                            ruleset: fresh_ruleset,
+                            until: None,
+                        },
+                    )),
+                ]
+            }
+        }
+        Command::Check(span, facts) => vec![NCommand::Check(span, facts)],
+        Command::PrintFunction(span, symbol, size) => {
+            vec![NCommand::PrintTable(span, symbol, size)]
+        }
+        Command::PrintSize(span, symbol) => vec![NCommand::PrintSize(span, symbol)],
+        Command::Output { span, file, exprs } => vec![NCommand::Output { span, file, exprs }],
+        Command::Push(num) => {
+            vec![NCommand::Push(num)]
+        }
+        Command::Pop(span, num) => {
+            vec![NCommand::Pop(span, num)]
+        }
+        Command::Fail(span, cmd) => {
+            let mut desugared = desugar_command(*cmd, symbol_gen, seminaive_transform)?;
+
+            let last = desugared.pop().unwrap();
+            desugared.push(NCommand::Fail(span, Box::new(last)));
+            return Ok(desugared);
+        }
+        Command::Input { span, name, file } => {
+            vec![NCommand::Input { span, name, file }]
+        }
+    };
+
+    Ok(res)
+}
 
 fn desugar_datatype(span: Span, name: Symbol, variants: Vec<Variant>) -> Vec<NCommand> {
     vec![NCommand::Sort(span.clone(), name, None)]
@@ -94,11 +278,7 @@ fn desugar_birewrite(ruleset: Symbol, name: Symbol, rewrite: &Rewrite) -> Vec<NC
 }
 
 // TODO(yz): we can delete this code once we enforce that all rule bodies cannot read the database (except EqSort).
-fn add_semi_naive_rule(
-    desugar: &mut Desugar,
-    symbol_gen: &mut SymbolGen,
-    rule: Rule,
-) -> Option<Rule> {
+fn add_semi_naive_rule(symbol_gen: &mut SymbolGen, rule: Rule) -> Option<Rule> {
     let mut new_rule = rule;
     // Whenever an Let(_, expr@Call(...)) or Set(_, expr@Call(...)) is present in action,
     // an additional seminaive rule should be created.
@@ -114,7 +294,7 @@ fn add_semi_naive_rule(
                 if let Expr::Call(..) = expr {
                     add_new_rule = true;
 
-                    let fresh_symbol = desugar.get_fresh(symbol_gen);
+                    let fresh_symbol = symbol_gen.fresh(&"desugar_snrule".into());
                     let fresh_var = Expr::Var(span.clone(), fresh_symbol);
                     let expr = std::mem::replace(expr, fresh_var.clone());
                     new_head_atoms.push(Fact::Eq(span.clone(), vec![fresh_var, expr]));
@@ -147,14 +327,13 @@ fn add_semi_naive_rule(
 }
 
 fn desugar_simplify(
-    desugar: &mut Desugar,
     expr: &Expr,
     schedule: &Schedule,
     span: Span,
     symbol_gen: &mut SymbolGen,
 ) -> Vec<NCommand> {
     let mut res = vec![NCommand::Push(1)];
-    let lhs = desugar.get_fresh(symbol_gen);
+    let lhs = symbol_gen.fresh(&"desugar_simplify".into());
     res.push(NCommand::CoreAction(Action::Let(
         span.clone(),
         lhs,
@@ -168,7 +347,6 @@ fn desugar_simplify(
                 variants: 0,
                 expr: Expr::Var(span.clone(), lhs),
             },
-            desugar,
             symbol_gen,
             false,
         )
@@ -177,212 +355,4 @@ fn desugar_simplify(
 
     res.push(NCommand::Pop(span, 1));
     res
-}
-
-pub(crate) fn rewrite_name(rewrite: &Rewrite) -> String {
-    rewrite.to_string().replace('\"', "'")
-}
-
-/// Desugars a single command into the normalized form.
-/// Gets rid of a bunch of syntactic sugar, but also
-/// makes rules into a SSA-like format (see [`NormFact`]).
-pub(crate) fn desugar_command(
-    command: Command,
-    desugar: &mut Desugar,
-    symbol_gen: &mut SymbolGen,
-    seminaive_transform: bool,
-) -> Result<Vec<NCommand>, Error> {
-    let res = match command {
-        Command::SetOption { name, value } => {
-            vec![NCommand::SetOption { name, value }]
-        }
-        Command::Function(fdecl) => vec![NCommand::Function(fdecl)],
-        Command::Relation {
-            span,
-            constructor,
-            inputs,
-        } => vec![NCommand::Function(FunctionDecl::relation(
-            span,
-            constructor,
-            inputs,
-        ))],
-        Command::Datatype {
-            span,
-            name,
-            variants,
-        } => desugar_datatype(span, name, variants),
-        Command::Rewrite(ruleset, rewrite, subsume) => {
-            desugar_rewrite(ruleset, rewrite_name(&rewrite).into(), &rewrite, subsume)
-        }
-        Command::BiRewrite(ruleset, rewrite) => {
-            desugar_birewrite(ruleset, rewrite_name(&rewrite).into(), &rewrite)
-        }
-        Command::Include(span, file) => {
-            let s = std::fs::read_to_string(&file)
-                .unwrap_or_else(|_| panic!("{} Failed to read file {file}", span.get_quote()));
-            return desugar_commands(
-                parse_program(Some(file), &s)?,
-                desugar,
-                symbol_gen,
-                seminaive_transform,
-            );
-        }
-        Command::Rule {
-            ruleset,
-            mut name,
-            rule,
-        } => {
-            if name == "".into() {
-                name = rule.to_string().replace('\"', "'").into();
-            }
-
-            let mut result = vec![NCommand::NormRule {
-                ruleset,
-                name,
-                rule: rule.clone(),
-            }];
-
-            if seminaive_transform {
-                if let Some(new_rule) = add_semi_naive_rule(desugar, symbol_gen, rule) {
-                    result.push(NCommand::NormRule {
-                        ruleset,
-                        name,
-                        rule: new_rule,
-                    });
-                }
-            }
-
-            result
-        }
-        Command::Sort(span, sort, option) => vec![NCommand::Sort(span, sort, option)],
-        Command::AddRuleset(name) => vec![NCommand::AddRuleset(name)],
-        Command::UnstableCombinedRuleset(name, subrulesets) => {
-            vec![NCommand::UnstableCombinedRuleset(name, subrulesets)]
-        }
-        Command::Action(action) => vec![NCommand::CoreAction(action)],
-        Command::Simplify {
-            span,
-            expr,
-            schedule,
-        } => desugar_simplify(desugar, &expr, &schedule, span, symbol_gen),
-        Command::RunSchedule(sched) => {
-            vec![NCommand::RunSchedule(sched.clone())]
-        }
-        Command::PrintOverallStatistics => {
-            vec![NCommand::PrintOverallStatistics]
-        }
-        Command::QueryExtract {
-            span,
-            variants,
-            expr,
-        } => {
-            let variants = Expr::Lit(span.clone(), Literal::Int(variants.try_into().unwrap()));
-            if let Expr::Var(..) = expr {
-                // (extract {v} {variants})
-                vec![NCommand::CoreAction(Action::Extract(
-                    span.clone(),
-                    expr,
-                    variants,
-                ))]
-            } else {
-                // (check {expr})
-                // (ruleset {fresh_ruleset})
-                // (rule ((= {fresh} {expr}))
-                //       ((extract {fresh} {variants}))
-                //       :ruleset {fresh_ruleset})
-                // (run {fresh_ruleset} 1)
-                let fresh = desugar.get_fresh(symbol_gen);
-                let fresh_ruleset = desugar.get_fresh(symbol_gen);
-                let fresh_rulename = desugar.get_fresh(symbol_gen);
-                let rule = Rule {
-                    span: span.clone(),
-                    body: vec![Fact::Eq(
-                        span.clone(),
-                        vec![Expr::Var(span.clone(), fresh), expr.clone()],
-                    )],
-                    head: Actions::singleton(Action::Extract(
-                        span.clone(),
-                        Expr::Var(span.clone(), fresh),
-                        variants,
-                    )),
-                };
-                vec![
-                    NCommand::Check(span.clone(), vec![Fact::Fact(expr.clone())]),
-                    NCommand::AddRuleset(fresh_ruleset),
-                    NCommand::NormRule {
-                        name: fresh_rulename,
-                        ruleset: fresh_ruleset,
-                        rule,
-                    },
-                    NCommand::RunSchedule(Schedule::Run(
-                        span.clone(),
-                        RunConfig {
-                            ruleset: fresh_ruleset,
-                            until: None,
-                        },
-                    )),
-                ]
-            }
-        }
-        Command::Check(span, facts) => vec![NCommand::Check(span, facts)],
-        Command::PrintFunction(span, symbol, size) => {
-            vec![NCommand::PrintTable(span, symbol, size)]
-        }
-        Command::PrintSize(span, symbol) => vec![NCommand::PrintSize(span, symbol)],
-        Command::Output { span, file, exprs } => vec![NCommand::Output { span, file, exprs }],
-        Command::Push(num) => {
-            vec![NCommand::Push(num)]
-        }
-        Command::Pop(span, num) => {
-            vec![NCommand::Pop(span, num)]
-        }
-        Command::Fail(span, cmd) => {
-            let mut desugared = desugar_command(*cmd, desugar, symbol_gen, seminaive_transform)?;
-
-            let last = desugared.pop().unwrap();
-            desugared.push(NCommand::Fail(span, Box::new(last)));
-            return Ok(desugared);
-        }
-        Command::Input { span, name, file } => {
-            vec![NCommand::Input { span, name, file }]
-        }
-    };
-
-    Ok(res)
-}
-
-pub(crate) fn desugar_commands(
-    program: Vec<Command>,
-    desugar: &mut Desugar,
-    symbol_gen: &mut SymbolGen,
-    seminaive_transform: bool,
-) -> Result<Vec<NCommand>, Error> {
-    let mut res = vec![];
-    for command in program {
-        let desugared = desugar_command(command, desugar, symbol_gen, seminaive_transform)?;
-        res.extend(desugared);
-    }
-    Ok(res)
-}
-
-impl Clone for Desugar {
-    fn clone(&self) -> Self {
-        Self {}
-    }
-}
-
-impl Desugar {
-    pub fn get_fresh(&mut self, symbol_gen: &mut SymbolGen) -> Symbol {
-        symbol_gen.fresh(&"v".into())
-    }
-
-    pub(crate) fn desugar_program(
-        &mut self,
-        program: Vec<Command>,
-        symbol_gen: &mut SymbolGen,
-        seminaive_transform: bool,
-    ) -> Result<Vec<NCommand>, Error> {
-        let res = desugar_commands(program, self, symbol_gen, seminaive_transform)?;
-        Ok(res)
-    }
 }
