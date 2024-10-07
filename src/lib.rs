@@ -433,7 +433,6 @@ pub struct EGraph {
     interactive_mode: bool,
     timestamp: u32,
     pub run_mode: RunMode,
-    pub test_proofs: bool,
     pub fact_directory: Option<PathBuf>,
     pub seminaive: bool,
     type_info: TypeInfo,
@@ -457,7 +456,6 @@ impl Default for EGraph {
             timestamp: 0,
             run_mode: RunMode::Normal,
             interactive_mode: false,
-            test_proofs: false,
             fact_directory: None,
             seminaive: true,
             extract_report: None,
@@ -487,14 +485,6 @@ struct SearchResult {
 }
 
 impl EGraph {
-    /// Use the rust backend implimentation of eqsat,
-    /// including a rust implementation of the union-find
-    /// data structure and the rust implementation of
-    /// the rebuilding algorithm (maintains congruence closure).
-    pub fn enable_terms_encoding(&mut self) {
-        panic!("terms are not implemented")
-    }
-
     pub fn is_interactive_mode(&self) -> bool {
         self.interactive_mode
     }
@@ -1147,9 +1137,6 @@ impl EGraph {
 
     fn set_option(&mut self, name: &str, value: ResolvedExpr) {
         match name {
-            "enable_proofs" => {
-                panic!("Proofs are not implemented")
-            }
             "interactive_mode" => {
                 if let ResolvedExpr::Lit(_ann, Literal::Int(i)) = value {
                     self.interactive_mode = i != 0;
@@ -1245,7 +1232,6 @@ impl EGraph {
                 self.check_facts(&span, &facts)?;
                 log::info!("Checked fact {:?}.", facts);
             }
-            ResolvedNCommand::CheckProof => log::error!("TODO implement proofs"),
             ResolvedNCommand::CoreAction(action) => match &action {
                 ResolvedAction::Let(_, name, contents) => {
                     panic!("Globals should have been desugared away: {name} = {contents}")
@@ -1419,9 +1405,9 @@ impl EGraph {
     }
 
     fn process_command(&mut self, command: Command) -> Result<Vec<ResolvedNCommand>, Error> {
-        let program =
-            self.desugar
-                .desugar_program(vec![command], self.test_proofs, self.seminaive)?;
+        let program = self
+            .desugar
+            .desugar_program(vec![command], self.seminaive)?;
 
         let program = self.type_info.typecheck_program(&program)?;
 

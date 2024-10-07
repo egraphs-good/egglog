@@ -218,7 +218,6 @@ impl TypeInfo {
                 ResolvedNCommand::UnstableCombinedRuleset(*name, sub_rulesets.clone())
             }
             NCommand::PrintOverallStatistics => ResolvedNCommand::PrintOverallStatistics,
-            NCommand::CheckProof => ResolvedNCommand::CheckProof,
             NCommand::PrintTable(span, table, size) => {
                 ResolvedNCommand::PrintTable(span.clone(), *table, *size)
             }

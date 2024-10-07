@@ -175,7 +175,6 @@ fn desugar_simplify(
             },
             desugar,
             false,
-            false,
         )
         .unwrap(),
     );
@@ -194,7 +193,6 @@ pub(crate) fn rewrite_name(rewrite: &Rewrite) -> String {
 pub(crate) fn desugar_command(
     command: Command,
     desugar: &mut Desugar,
-    get_all_proofs: bool,
     seminaive_transform: bool,
 ) -> Result<Vec<NCommand>, Error> {
     let res = match command {
@@ -228,7 +226,6 @@ pub(crate) fn desugar_command(
             return desugar_commands(
                 parse_program(Some(file), &s)?,
                 desugar,
-                get_all_proofs,
                 seminaive_transform,
             );
         }
@@ -329,16 +326,7 @@ pub(crate) fn desugar_command(
                 ]
             }
         }
-        Command::Check(span, facts) => {
-            let res = vec![NCommand::Check(span, facts)];
-
-            if get_all_proofs {
-                // TODO check proofs
-            }
-
-            res
-        }
-        Command::CheckProof => vec![NCommand::CheckProof],
+        Command::Check(span, facts) => vec![NCommand::Check(span, facts)],
         Command::PrintFunction(span, symbol, size) => {
             vec![NCommand::PrintTable(span, symbol, size)]
         }
@@ -351,7 +339,7 @@ pub(crate) fn desugar_command(
             vec![NCommand::Pop(span, num)]
         }
         Command::Fail(span, cmd) => {
-            let mut desugared = desugar_command(*cmd, desugar, false, seminaive_transform)?;
+            let mut desugared = desugar_command(*cmd, desugar, seminaive_transform)?;
 
             let last = desugared.pop().unwrap();
             desugared.push(NCommand::Fail(span, Box::new(last)));
@@ -368,12 +356,11 @@ pub(crate) fn desugar_command(
 pub(crate) fn desugar_commands(
     program: Vec<Command>,
     desugar: &mut Desugar,
-    get_all_proofs: bool,
     seminaive_transform: bool,
 ) -> Result<Vec<NCommand>, Error> {
     let mut res = vec![];
     for command in program {
-        let desugared = desugar_command(command, desugar, get_all_proofs, seminaive_transform)?;
+        let desugared = desugar_command(command, desugar, seminaive_transform)?;
         res.extend(desugared);
     }
     Ok(res)
@@ -395,10 +382,9 @@ impl Desugar {
     pub(crate) fn desugar_program(
         &mut self,
         program: Vec<Command>,
-        get_all_proofs: bool,
         seminaive_transform: bool,
     ) -> Result<Vec<NCommand>, Error> {
-        let res = desugar_commands(program, self, get_all_proofs, seminaive_transform)?;
+        let res = desugar_commands(program, self, seminaive_transform)?;
         Ok(res)
     }
 }
