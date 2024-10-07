@@ -3,9 +3,6 @@ use crate::*;
 
 pub struct Desugar {
     pub(crate) fresh_gen: SymbolGen,
-    // Store the parser because it takes some time
-    // on startup for some reason
-    parser: ast::parse::ProgramParser,
 }
 
 impl Default for Desugar {
@@ -13,7 +10,6 @@ impl Default for Desugar {
         Self {
             // the default reserved string in egglog is "_"
             fresh_gen: SymbolGen::new("_".repeat(2)),
-            parser: ast::parse::ProgramParser::new(),
         }
     }
 }
@@ -230,7 +226,7 @@ pub(crate) fn desugar_command(
             let s = std::fs::read_to_string(&file)
                 .unwrap_or_else(|_| panic!("{} Failed to read file {file}", span.get_quote()));
             return desugar_commands(
-                desugar.parse_program(Some(file), &s)?,
+                parse_program(Some(file), &s)?,
                 desugar,
                 get_all_proofs,
                 seminaive_transform,
@@ -387,7 +383,6 @@ impl Clone for Desugar {
     fn clone(&self) -> Self {
         Self {
             fresh_gen: self.fresh_gen.clone(),
-            parser: ast::parse::ProgramParser::new(),
         }
     }
 }
@@ -405,21 +400,5 @@ impl Desugar {
     ) -> Result<Vec<NCommand>, Error> {
         let res = desugar_commands(program, self, get_all_proofs, seminaive_transform)?;
         Ok(res)
-    }
-
-    pub fn parse_program(
-        &self,
-        filename: Option<String>,
-        input: &str,
-    ) -> Result<Vec<Command>, Error> {
-        let filename = filename.unwrap_or_else(|| DEFAULT_FILENAME.to_string());
-        let srcfile = Arc::new(SrcFile {
-            name: filename,
-            contents: Some(input.to_string()),
-        });
-        Ok(self
-            .parser
-            .parse(&srcfile, input)
-            .map_err(|e| e.map_token(|tok| tok.to_string()))?)
     }
 }

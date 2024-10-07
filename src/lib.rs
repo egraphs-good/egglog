@@ -1458,14 +1458,6 @@ impl EGraph {
         Ok(self.flush_msgs())
     }
 
-    pub fn parse_program(
-        &self,
-        filename: Option<String>,
-        input: &str,
-    ) -> Result<Vec<Command>, Error> {
-        self.desugar.parse_program(filename, input)
-    }
-
     /// Takes a source program `input`, parses it, runs it, and returns a list of messages.
     ///
     /// `filename` is an optional argument to indicate the source of
@@ -1476,7 +1468,7 @@ impl EGraph {
         filename: Option<String>,
         input: &str,
     ) -> Result<Vec<String>, Error> {
-        let parsed = self.desugar.parse_program(filename, input)?;
+        let parsed = parse_program(filename, input)?;
         self.run_program(parsed)
     }
 
