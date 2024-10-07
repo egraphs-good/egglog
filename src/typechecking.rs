@@ -1,5 +1,6 @@
 use crate::{core::CoreRule, *};
 use ast::Rule;
+use hashbrown::hash_map;
 
 #[derive(Clone, Debug)]
 pub struct FuncType {
@@ -84,8 +85,8 @@ impl TypeInfo {
         let name = sort.name();
 
         match self.sorts.entry(name) {
-            Entry::Occupied(_) => Err(TypeError::SortAlreadyBound(name, span)),
-            Entry::Vacant(e) => {
+            hash_map::Entry::Occupied(_) => Err(TypeError::SortAlreadyBound(name, span)),
+            hash_map::Entry::Vacant(e) => {
                 e.insert(sort.clone());
                 sort.register_primitives(self);
                 Ok(())

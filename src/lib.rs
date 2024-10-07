@@ -28,8 +28,8 @@ mod value;
 
 use ast::remove_globals::remove_globals;
 use extract::Extractor;
-use hashbrown::hash_map::Entry;
 use index::ColumnIndex;
+use indexmap::map::Entry;
 use instant::{Duration, Instant};
 pub use serialize::SerializeConfig;
 pub use serialize::SerializedNode;
