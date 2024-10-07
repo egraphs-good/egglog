@@ -88,22 +88,6 @@ impl SymbolGen {
     pub(crate) fn has_been_used(&self) -> bool {
         self.gen > 0
     }
-
-    pub(crate) fn generate_special(&mut self, sym: &Symbol) -> Symbol {
-        match self.special_reserved.get(sym) {
-            Some(res) => res.into(),
-            None => {
-                let res = format!("{}{}{}", self.reserved_string, sym, self.gen);
-                self.gen += 1;
-                self.special_reserved.insert(*sym, res.clone());
-                res.into()
-            }
-        }
-    }
-
-    pub(crate) fn lookup_special(&self, sym: &Symbol) -> Option<Symbol> {
-        self.special_reserved.get(sym).map(|s| s.into())
-    }
 }
 
 impl FreshGen<Symbol, Symbol> for SymbolGen {
