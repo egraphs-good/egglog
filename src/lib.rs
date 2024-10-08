@@ -28,8 +28,8 @@ mod value;
 
 use ast::remove_globals::remove_globals;
 use extract::Extractor;
-use hashbrown::hash_map::Entry;
 use index::ColumnIndex;
+use indexmap::map::Entry;
 use instant::{Duration, Instant};
 pub use serialize::SerializeConfig;
 pub use serialize::SerializedNode;
@@ -426,8 +426,8 @@ pub struct EGraph {
     symbol_gen: SymbolGen,
     egraphs: Vec<Self>,
     unionfind: UnionFind,
-    pub functions: HashMap<Symbol, Function>,
-    rulesets: HashMap<Symbol, Ruleset>,
+    pub functions: IndexMap<Symbol, Function>,
+    rulesets: IndexMap<Symbol, Ruleset>,
     rule_last_run_timestamp: HashMap<Symbol, u32>,
     interactive_mode: bool,
     timestamp: u32,
