@@ -5,9 +5,11 @@
 //! When a globally-bound primitive value is used in the actions of a rule,
 //! we add a new variable to the query bound to the primitive value.
 
+use indexmap::IndexMap;
+
 use crate::{
     core::ResolvedCall, typechecking::FuncType, FreshGen, GenericAction, GenericActions,
-    GenericExpr, GenericFact, GenericNCommand, GenericRule, HashMap, ResolvedAction, ResolvedExpr,
+    GenericExpr, GenericFact, GenericNCommand, GenericRule, ResolvedAction, ResolvedExpr,
     ResolvedFact, ResolvedFunctionDecl, ResolvedNCommand, ResolvedVar, Schema, SymbolGen, TypeInfo,
 };
 
@@ -150,7 +152,7 @@ impl<'a> GlobalRemover<'a> {
             } => {
                 // A map from the global variables in actions to their new names
                 // in the query.
-                let mut globals = HashMap::default();
+                let mut globals = IndexMap::new();
                 rule.head.clone().visit_exprs(&mut |expr| {
                     if let Some(resolved_var) = expr.get_global_var() {
                         let new_name = self.fresh.fresh(&resolved_var.name);
