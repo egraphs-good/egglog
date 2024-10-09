@@ -105,14 +105,14 @@ impl<'a> ActionCompiler<'a> {
 }
 
 #[derive(Clone, Debug)]
-enum Load {
+pub enum Load {
     Stack(usize),
     Subst(usize),
 }
 
 /// The instruction set for the action VM.
 #[derive(Clone, Debug)]
-enum Instruction {
+pub enum Instruction {
     /// Push a literal onto the stack.
     Literal(Literal),
     /// Push a value from the stack or the substitution onto the stack.
@@ -145,6 +145,12 @@ enum Instruction {
 
 #[derive(Clone, Debug)]
 pub struct Program(Vec<Instruction>);
+
+impl Program {
+    pub fn new(instrs: Vec<Instruction>) -> Self {
+        Program(instrs)
+    }
+}
 
 impl EGraph {
     /// Takes `binding`, which is a set of variables bound during matching
@@ -254,7 +260,7 @@ impl EGraph {
         Ok(())
     }
 
-    pub(crate) fn run_actions(
+    pub fn run_actions(
         &mut self,
         stack: &mut Vec<Value>,
         subst: &[Value],

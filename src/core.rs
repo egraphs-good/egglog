@@ -18,12 +18,12 @@ use crate::{typechecking::FuncType, *};
 use typechecking::TypeError;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum HeadOrEq<Head> {
+pub enum HeadOrEq<Head> {
     Symbol(Head),
     Eq,
 }
 
-pub(crate) type SymbolOrEq = HeadOrEq<Symbol>;
+pub type SymbolOrEq = HeadOrEq<Symbol>;
 
 impl From<Symbol> for SymbolOrEq {
     fn from(value: Symbol) -> Self {

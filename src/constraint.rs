@@ -218,7 +218,7 @@ impl Default for Problem<AtomTerm, ArcSort> {
 }
 
 #[derive(Clone)]
-pub(crate) struct Assignment<Var, Value>(pub HashMap<Var, Value>);
+pub struct Assignment<Var, Value>(pub HashMap<Var, Value>);
 
 impl<Var, Value> Assignment<Var, Value>
 where
@@ -430,7 +430,7 @@ where
     Var: Eq + PartialEq + Hash + Clone + Debug,
     Value: Clone + Debug,
 {
-    pub(crate) fn solve<K: Eq + Debug>(
+    pub fn solve<K: Eq + Debug>(
         &self,
         key: impl Fn(&Value) -> K + Copy,
     ) -> Result<Assignment<Var, Value>, ConstraintError<Var, Value>> {
@@ -457,7 +457,7 @@ where
 }
 
 impl Problem<AtomTerm, ArcSort> {
-    pub(crate) fn add_query(
+    pub fn add_query(
         &mut self,
         query: &Query<SymbolOrEq, Symbol>,
         typeinfo: &TypeInfo,

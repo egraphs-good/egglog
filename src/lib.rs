@@ -11,10 +11,10 @@
 //! [Here](https://www.youtube.com/watch?v=N2RDQGRBrSY) is the video tutorial on what egglog is and how to use it.
 //! We plan to have a text tutorial here soon, PRs welcome!
 //!
-mod actions;
+pub mod actions;
 pub mod ast;
 pub mod constraint;
-mod core;
+pub mod core;
 mod extract;
 mod function;
 mod gj;
@@ -296,7 +296,7 @@ pub struct Primitive(Arc<dyn PrimitiveLike>);
 impl Primitive {
     // Takes the full signature of a primitive (including input and output types)
     // Returns whether the primitive is compatible with this signature
-    fn accept(&self, tys: &[Arc<dyn Sort>], typeinfo: &TypeInfo) -> bool {
+    pub fn accept(&self, tys: &[Arc<dyn Sort>], typeinfo: &TypeInfo) -> bool {
         let mut constraints = vec![];
         let lits: Vec<_> = (0..tys.len())
             .map(|i| AtomTerm::Literal(DUMMY_SPAN.clone(), Literal::Int(i as i64)))
@@ -430,11 +430,11 @@ pub struct EGraph {
     rulesets: HashMap<Symbol, Ruleset>,
     rule_last_run_timestamp: HashMap<Symbol, u32>,
     interactive_mode: bool,
-    timestamp: u32,
+    pub timestamp: u32,
     pub run_mode: RunMode,
     pub fact_directory: Option<PathBuf>,
     pub seminaive: bool,
-    type_info: TypeInfo,
+    pub type_info: TypeInfo,
     extract_report: Option<ExtractReport>,
     /// The run report for the most recent run of a schedule.
     recent_run_report: Option<RunReport>,
@@ -1464,7 +1464,7 @@ impl EGraph {
         self.functions.values().map(|f| f.nodes.len()).sum()
     }
 
-    pub(crate) fn get_sort_from_value(&self, value: &Value) -> Option<&ArcSort> {
+    pub fn get_sort_from_value(&self, value: &Value) -> Option<&ArcSort> {
         self.type_info.sorts.get(&value.tag)
     }
 
