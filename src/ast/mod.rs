@@ -897,7 +897,7 @@ where
                         Err((head, args)) => list!("sort", name, list!(head, ++ args)),
                     })
                     .collect();
-                list!("datatypes", ++ datatypes)
+                list!("datatype*", ++ datatypes)
             }
         }
     }
