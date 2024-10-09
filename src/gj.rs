@@ -791,7 +791,14 @@ impl Debug for LazyTrie {
     }
 }
 
+#[cfg(feature = "nondeterministic")]
+type SparseMap = HashMap<Value, LazyTrie>;
+#[cfg(feature = "nondeterministic")]
+type SEntry<'a, A, B, D> = hashbrown::hash_map::Entry<'a, A, B, D>;
+#[cfg(not(feature = "nondeterministic"))]
 type SparseMap = IndexMap<Value, LazyTrie>;
+#[cfg(not(feature = "nondeterministic"))]
+type SEntry<'a, A, B> = Entry<'a, A, B>;
 type RowIdx = u32;
 
 #[derive(Debug)]
@@ -887,8 +894,8 @@ impl LazyTrie {
             LazyTrieInner::Borrowed { index, map } => {
                 let ixs = index.get(&value)?;
                 match map.entry(value) {
-                    Entry::Occupied(o) => Some(o.into_mut()),
-                    Entry::Vacant(v) => {
+                    SEntry::Occupied(o) => Some(o.into_mut()),
+                    SEntry::Vacant(v) => {
                         Some(v.insert(LazyTrie::from_indexes(access.filter_live(ixs))?))
                     }
                 }
@@ -940,14 +947,14 @@ impl<'a> TrieAccess<'a> {
                 && self.constraints.iter().all(|c| c.check(tup, out))
             {
                 match map.entry(val) {
-                    indexmap::map::Entry::Occupied(mut e) => {
+                    SEntry::Occupied(mut e) => {
                         if let LazyTrieInner::Delayed(ref mut v) = e.get_mut().0.get_mut() {
                             v.push(i as RowIdx)
                         } else {
                             unreachable!()
                         }
                     }
-                    indexmap::map::Entry::Vacant(e) => {
+                    SEntry::Vacant(e) => {
                         e.insert(LazyTrie(UnsafeCell::new(LazyTrieInner::Delayed(
                             smallvec::smallvec![i as RowIdx,],
                         ))));
