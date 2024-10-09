@@ -1,5 +1,3 @@
-use hashbrown::HashMap;
-
 use super::{Rewrite, Rule};
 use crate::*;
 
@@ -46,17 +44,12 @@ pub(crate) fn desugar_command(
             name,
             variants,
         } => desugar_datatype(span, name, variants),
-        Command::Rewrite(ruleset, rewrite, subsume) => desugar_rewrite(
-            ruleset,
-            rewrite_name(&rewrite).into(),
-            &rewrite,
-            subsume,
-        ),
-        Command::BiRewrite(ruleset, rewrite) => desugar_birewrite(
-            ruleset,
-            rewrite_name(&rewrite).into(),
-            &rewrite,
-        ),
+        Command::Rewrite(ruleset, rewrite, subsume) => {
+            desugar_rewrite(ruleset, rewrite_name(&rewrite).into(), &rewrite, subsume)
+        }
+        Command::BiRewrite(ruleset, rewrite) => {
+            desugar_birewrite(ruleset, rewrite_name(&rewrite).into(), &rewrite)
+        }
         Command::Include(span, file) => {
             let s = std::fs::read_to_string(&file)
                 .unwrap_or_else(|_| panic!("{} Failed to read file {file}", span.get_quote()));
@@ -68,24 +61,30 @@ pub(crate) fn desugar_command(
         }
         Command::Rule {
             ruleset,
-            mut name,
+            name,
             rule,
         } => {
-            if name == "".into() {
-                name = rule.to_string().replace('\"', "'").into();
-            }
+            let name = if name.as_str() == "" {
+                // Adding a unique prefix because there may be duplicate rules (e.g., when
+                // processing a resugared egglog program).
+                let prefix: Symbol = symbol_gen.fresh(&"rule".into());
+                prefix.to_string() + &rule.to_string().replace('\"', "'")
+            } else {
+                name.to_string()
+            };
 
             let mut result = vec![NCommand::NormRule {
                 ruleset,
-                name,
+                name: name.clone().into(),
                 rule: rule.clone(),
             }];
 
             if seminaive_transform {
                 if let Some(new_rule) = add_semi_naive_rule(symbol_gen, rule) {
+                    let prefix: Symbol = symbol_gen.fresh(&"seminaive".into());
                     result.push(NCommand::NormRule {
                         ruleset,
-                        name,
+                        name: (prefix.to_string() + "-" + &name).into(),
                         rule: new_rule,
                     });
                 }
@@ -144,6 +143,7 @@ pub(crate) fn desugar_command(
                         Expr::Var(span.clone(), fresh),
                         variants,
                     )),
+                    props: Default::default(),
                 };
                 vec![
                     NCommand::Check(span.clone(), vec![Fact::Fact(expr.clone())]),

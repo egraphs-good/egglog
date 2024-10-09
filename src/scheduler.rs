@@ -1,3 +1,4 @@
+use crate::IndexMap;
 use instant::{Duration, Instant};
 use std::fmt::{Display, Formatter};
 use std::mem;
@@ -260,7 +261,7 @@ pub trait Scheduler {
             ResolvedSchedule::WithScheduler(span, scheduler, args, sched) => {
                 let args = args
                     .iter()
-                    .map(|arg| egraph.eval_resolved_expr(arg, true))
+                    .map(|arg| egraph.eval_resolved_expr(arg))
                     .collect::<Result<Vec<_>, _>>()?;
                 let f = egraph
                     .scheduler_constructors
@@ -342,7 +343,7 @@ pub trait Scheduler {
         &mut self,
         egraph: &EGraph,
         span: &Span,
-        rulesets: &HashMap<Symbol, Ruleset>,
+        rulesets: &IndexMap<Symbol, Ruleset>,
         ruleset: Symbol,
         report: &mut RunReport,
         search_results: &mut HashMap<Symbol, SearchResult>,
@@ -428,7 +429,7 @@ pub trait Scheduler {
         &mut self,
         egraph: &mut EGraph,
         span: &Span,
-        rulesets: &HashMap<Symbol, Ruleset>,
+        rulesets: &IndexMap<Symbol, Ruleset>,
         ruleset: Symbol,
         report: &mut RunReport,
         search_results: &HashMap<Symbol, SearchResult>,
@@ -494,11 +495,11 @@ pub trait Scheduler {
         // here we handle that case
         if num_vars == 0 {
             if *did_match {
-                egraph.run_actions(&[], &rule.program, true)?;
+                egraph.run_actions(&[], &rule.program)?;
             }
         } else {
             for values in all_matches.chunks(num_vars) {
-                egraph.run_actions(values, &rule.program, true)?;
+                egraph.run_actions(values, &rule.program)?;
             }
         }
 
@@ -512,7 +513,7 @@ pub trait Scheduler {
     /// used to detect if the scheduler is still active.
     ///
     /// Similar to `RewriteScheduler::can_stop` in the egg library.
-    fn is_active(&mut self, _rulesets: &HashMap<Symbol, Ruleset>, _ruleset: Symbol) -> bool {
+    fn is_active(&mut self, _rulesets: &IndexMap<Symbol, Ruleset>, _ruleset: Symbol) -> bool {
         false
     }
 }
@@ -664,8 +665,8 @@ impl Scheduler for BackoffScheduler {
         search_results.insert(rule_name, search_result);
     }
 
-    fn is_active(&mut self, rulesets: &HashMap<Symbol, Ruleset>, ruleset: Symbol) -> bool {
-        fn collect_rules(rulesets: &HashMap<Symbol, Ruleset>, ruleset: Symbol) -> Vec<Symbol> {
+    fn is_active(&mut self, rulesets: &IndexMap<Symbol, Ruleset>, ruleset: Symbol) -> bool {
+        fn collect_rules(rulesets: &IndexMap<Symbol, Ruleset>, ruleset: Symbol) -> Vec<Symbol> {
             let rules = rulesets.get(&ruleset).unwrap();
             match rules {
                 Ruleset::Rules(_name, rule_names) => rule_names.iter().map(|(k, _)| *k).collect(),

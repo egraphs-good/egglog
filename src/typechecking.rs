@@ -339,9 +339,9 @@ impl TypeInfo {
                     span.clone(),
                     *scheduler,
                     args.iter()
-                        .map(|arg| self.typecheck_expr(arg, &Default::default()))
+                        .map(|arg| self.typecheck_expr(symbol_gen, arg, &Default::default()))
                         .collect::<Result<Vec<_>, _>>()?,
-                    Box::new(self.typecheck_schedule(schedule)?),
+                    Box::new(self.typecheck_schedule(symbol_gen, schedule)?),
                 )
             }
         };
@@ -378,7 +378,12 @@ impl TypeInfo {
         symbol_gen: &mut SymbolGen,
         rule: &Rule,
     ) -> Result<ResolvedRule, TypeError> {
-        let Rule { span, head, body, props } = rule;
+        let Rule {
+            span,
+            head,
+            body,
+            props,
+        } = rule;
         let mut constraints = vec![];
 
         let (query, mapped_query) = Facts(body.clone()).to_query(self, symbol_gen);
