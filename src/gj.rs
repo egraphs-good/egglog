@@ -1,4 +1,3 @@
-use hashbrown::hash_map::Entry as HEntry;
 use indexmap::map::Entry;
 use log::log_enabled;
 use smallvec::SmallVec;
@@ -792,7 +791,7 @@ impl Debug for LazyTrie {
     }
 }
 
-type SparseMap = HashMap<Value, LazyTrie>;
+type SparseMap = IndexMap<Value, LazyTrie>;
 type RowIdx = u32;
 
 #[derive(Debug)]
@@ -888,8 +887,8 @@ impl LazyTrie {
             LazyTrieInner::Borrowed { index, map } => {
                 let ixs = index.get(&value)?;
                 match map.entry(value) {
-                    HEntry::Occupied(o) => Some(o.into_mut()),
-                    HEntry::Vacant(v) => {
+                    Entry::Occupied(o) => Some(o.into_mut()),
+                    Entry::Vacant(v) => {
                         Some(v.insert(LazyTrie::from_indexes(access.filter_live(ixs))?))
                     }
                 }
@@ -937,19 +936,18 @@ impl<'a> TrieAccess<'a> {
         let arity = self.function.schema.input.len();
         let mut map = SparseMap::default();
         let mut insert = |i: usize, tup: &[Value], out: &TupleOutput, val: Value| {
-            use hashbrown::hash_map::Entry;
             if self.timestamp_range.contains(&out.timestamp)
                 && self.constraints.iter().all(|c| c.check(tup, out))
             {
                 match map.entry(val) {
-                    Entry::Occupied(mut e) => {
+                    indexmap::map::Entry::Occupied(mut e) => {
                         if let LazyTrieInner::Delayed(ref mut v) = e.get_mut().0.get_mut() {
                             v.push(i as RowIdx)
                         } else {
                             unreachable!()
                         }
                     }
-                    Entry::Vacant(e) => {
+                    indexmap::map::Entry::Vacant(e) => {
                         e.insert(LazyTrie(UnsafeCell::new(LazyTrieInner::Delayed(
                             smallvec::smallvec![i as RowIdx,],
                         ))));
