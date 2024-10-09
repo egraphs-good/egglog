@@ -802,7 +802,8 @@ where
         Leaf: SymbolLike,
     {
         let GenericRule {
-            span: _,
+            span,
+            props: _,
             head,
             body,
         } = self;
@@ -811,7 +812,7 @@ where
         let mut binding = body.get_vars();
         let (head, _correspondence) = head.to_core_actions(typeinfo, &mut binding, fresh_gen)?;
         Ok(GenericCoreRule {
-            span: self.span.clone(),
+            span: span.clone(),
             body,
             head,
         })

@@ -334,6 +334,16 @@ impl TypeInfo {
                     },
                 )
             }
+            GenericSchedule::WithScheduler(span, scheduler, args, schedule) => {
+                ResolvedSchedule::WithScheduler(
+                    span.clone(),
+                    *scheduler,
+                    args.iter()
+                        .map(|arg| self.typecheck_expr(symbol_gen, arg, &Default::default()))
+                        .collect::<Result<Vec<_>, _>>()?,
+                    Box::new(self.typecheck_schedule(symbol_gen, schedule)?),
+                )
+            }
         };
 
         Result::Ok(schedule)
@@ -368,7 +378,12 @@ impl TypeInfo {
         symbol_gen: &mut SymbolGen,
         rule: &Rule,
     ) -> Result<ResolvedRule, TypeError> {
-        let Rule { span, head, body } = rule;
+        let Rule {
+            span,
+            head,
+            body,
+            props,
+        } = rule;
         let mut constraints = vec![];
 
         let (query, mapped_query) = Facts(body.clone()).to_query(self, symbol_gen);
@@ -397,6 +412,7 @@ impl TypeInfo {
 
         Ok(ResolvedRule {
             span: span.clone(),
+            props: props.clone(),
             body,
             head: actions,
         })

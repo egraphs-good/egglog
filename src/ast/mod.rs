@@ -195,7 +195,7 @@ pub(crate) type ResolvedNCommand = GenericNCommand<ResolvedCall, ResolvedVar>;
 /// TODO: The name "NCommand" used to denote normalized command, but this
 /// meaning is obsolete. A future PR should rename this type to something
 /// like "DCommand".
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub enum GenericNCommand<Head, Leaf>
 where
     Head: Clone + Display,
@@ -358,6 +358,12 @@ pub(crate) type ResolvedSchedule = GenericSchedule<ResolvedCall, ResolvedVar>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum GenericSchedule<Head, Leaf> {
+    WithScheduler(
+        Span,
+        Symbol,
+        Vec<GenericExpr<Head, Leaf>>,
+        Box<GenericSchedule<Head, Leaf>>,
+    ),
     Saturate(Span, Box<GenericSchedule<Head, Leaf>>),
     Repeat(Span, usize, Box<GenericSchedule<Head, Leaf>>),
     Run(Span, GenericRunConfig<Head, Leaf>),
@@ -425,6 +431,11 @@ where
                 span,
                 scheds.into_iter().map(|s| s.visit_exprs(f)).collect(),
             ),
+            GenericSchedule::WithScheduler(span, scheduler, args, sched) => {
+                let sched = Box::new(sched.visit_exprs(f));
+                let args = args.into_iter().map(f).collect();
+                GenericSchedule::WithScheduler(span, scheduler, args, sched)
+            }
         }
     }
 }
@@ -436,6 +447,9 @@ impl<Head: Display, Leaf: Display> ToSexp for GenericSchedule<Head, Leaf> {
             GenericSchedule::Repeat(_ann, size, sched) => list!("repeat", size, sched),
             GenericSchedule::Run(_ann, config) => config.to_sexp(),
             GenericSchedule::Sequence(_ann, scheds) => list!("seq", ++ scheds),
+            GenericSchedule::WithScheduler(_ann, scheduler, args, sched) => {
+                list!("with-scheduler", list!(scheduler, ++ args), sched)
+            }
         }
     }
 }
@@ -1294,6 +1308,16 @@ where
     }
 }
 
+impl<Head, Leaf> Display for Facts<Head, Leaf>
+where
+    Head: Clone + Display,
+    Leaf: Clone + PartialEq + Eq + Display + Hash,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", ListDisplay(&self.0, "\n"))
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct CorrespondingVar<Head, Leaf>
 where
@@ -1589,7 +1613,8 @@ where
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct CompiledRule {
+pub struct CompiledRule {
+    pub props: HashMap<String, Literal>,
     pub(crate) query: CompiledQuery,
     pub(crate) program: Program,
 }
@@ -1597,13 +1622,14 @@ pub(crate) struct CompiledRule {
 pub type Rule = GenericRule<Symbol, Symbol>;
 pub(crate) type ResolvedRule = GenericRule<ResolvedCall, ResolvedVar>;
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GenericRule<Head, Leaf>
 where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
     pub span: Span,
+    pub props: HashMap<String, Literal>,
     pub head: GenericActions<Head, Leaf>,
     pub body: Vec<GenericFact<Head, Leaf>>,
 }
@@ -1619,6 +1645,7 @@ where
     ) -> Self {
         Self {
             span: self.span,
+            props: self.props,
             head: self.head.visit_exprs(f),
             body: self
                 .body
@@ -1717,6 +1744,7 @@ type Rewrite = GenericRewrite<Symbol, Symbol>;
 #[derive(Clone, Debug)]
 pub struct GenericRewrite<Head, Leaf> {
     pub span: Span,
+    pub props: HashMap<String, Literal>,
     pub lhs: GenericExpr<Head, Leaf>,
     pub rhs: GenericExpr<Head, Leaf>,
     pub conditions: Vec<GenericFact<Head, Leaf>>,
