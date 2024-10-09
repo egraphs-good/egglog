@@ -1,7 +1,7 @@
 [package]
 edition = "2021"
 name = "egglog"
-version = "0.2.0"
+version = "0.3.0"
 description = "egglog is a language that combines the benefits of equality saturation and datalog. It can be used for analysis, optimization, and synthesis of programs. It is the successor to the popular rust library egg."
 repository = "https://github.com/egraphs-good/egglog"
 keywords = ["e-graphs", "egglog", "datalog", "compiler", "equality"]
@@ -37,7 +37,7 @@ smallvec = "1.11"
 
 generic_symbolic_expressions = "5.0.4"
 
-egraph-serialize = { git = "https://github.com/egraphs-good/egraph-serialize", rev = "3625e0daf655932f2e9548c448d6a63d6cb8d831", features = [
+egraph-serialize = { version = "0.2.0", features = [
   "serde",
   "graphviz",
 ] }
