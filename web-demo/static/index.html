@@ -104,6 +104,7 @@
     </style>
 
     <link rel="stylesheet" href="//unpkg.com/codemirror@5.65.2/lib/codemirror.css">
+    <link rel="stylesheet" href="https://esm.sh/egraph-visualizer/dist/style.css" />
     <script src="//unpkg.com/codemirror@5.65.2/lib/codemirror.js"></script>
     <script src="//unpkg.com/codemirror@5.65.2/mode/scheme/scheme.js"></script>
     <script src="//unpkg.com/codemirror@5.65.2/addon/edit/matchbrackets.js"></script>
@@ -113,6 +114,7 @@
     <script src="https://cdn.jsdelivr.net/npm/d3-graphviz@5.4.0/build/d3-graphviz.min.js"></script>
     <script type="module">
         import { compressUrlSafe, decompressUrlSafe } from './lzma-url.mjs';
+        import { mount } from "https://esm.sh/egraph-visualizer";
 
         let editor, output, examples, loginfo;
         let fulllog = [];
@@ -130,12 +132,31 @@
 
         worker.onmessage = function (message) {
             console.log("got message", message);
+            window.lastMessage = message;
             output.innerHTML = message.data.text;
             output.scrollTop = output.scrollHeight;
             fulllog = message.data.log;
             refreshLog();
+            window.fillGraph();
+        }
 
-            const graphContainer = d3.select("#graph-inner")
+        window.fillGraph = function () {
+          const message = window.lastMessage;
+          if (!message) {
+            return;
+          }
+          const visualizerSelectValue = document.getElementById("visualizer-select").value;
+          if (visualizerSelectValue == "graphviz") {
+            if (window.lastGraph?.type === "elk") {
+              window.lastGraph.mounted.unmount();
+            }
+            let graphContainer;
+            if (window.lastGraph?.type !== "graphviz") {
+              graphContainer = d3.select("#graph-inner");
+              window.lastGraph = { type: "graphviz", graphContainer };
+            } else {
+              graphContainer = window.lastGraph.graphContainer;
+            }
             const width = graphContainer.node().clientWidth;
             const height = graphContainer.node().clientHeight;
             const graphviz = graphContainer.graphviz({
@@ -149,6 +170,20 @@
             })
                 .transition(d3.transition().duration(2000))
                 .dot(message.data.dot).render();
+            window.lastGraph.graphviz = graphviz;
+          } else {
+            if (window.lastGraph?.type === "graphviz") {
+              window.lastGraph.graphviz.destroy();
+            }
+            let mounted;
+            if (window.lastGraph?.type !== "elk") {
+              mounted = mount(document.getElementById("graph-inner"));
+              window.lastGraph = { type: "elk", mounted };
+            } else {
+              mounted = window.lastGraph.mounted;
+            }
+            mounted.render(message.data.json);
+          }
         }
 
         window.onpopstate = function (event) {
@@ -386,6 +421,10 @@
             githubButton = document.getElementById("github");
             slideNumber = document.getElementById("slideNumber");
             examplesDropDown = document.getElementById("examples");
+            const visualizerSelect = document.getElementById("visualizer-select");
+            visualizerSelect.onchange = function () {
+              window.fillGraph();
+            }
 
             loadEditor();
             updateSlideMode();
@@ -428,6 +467,10 @@
             <!-- <label for="examples">Examples:</label> -->
             <select name="examples" id="examples">
                 <option value=""> Load an example </option>
+            </select>
+            <select name="select visualizer" id="visualizer-select">
+                <option value="graphviz">Graphviz</option>
+                <option value="elk">React Flow w/ Eclipse Layout Kernel</option>
             </select>
             <div class="right" id="github">
                 <a class="badge" href="https://github.com/egraphs-good/egglog">
