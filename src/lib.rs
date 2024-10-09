@@ -26,11 +26,10 @@ mod unionfind;
 pub mod util;
 mod value;
 
-use ast::desugar::Desugar;
 use ast::remove_globals::remove_globals;
 use extract::Extractor;
-use hashbrown::hash_map::Entry;
 use index::ColumnIndex;
+use indexmap::map::Entry;
 use instant::{Duration, Instant};
 pub use serialize::SerializeConfig;
 pub use serialize::SerializedNode;
@@ -292,8 +291,6 @@ impl RunReport {
     }
 }
 
-pub const HIGH_COST: usize = i64::MAX as usize;
-
 #[derive(Clone)]
 pub struct Primitive(Arc<dyn PrimitiveLike>);
 impl Primitive {
@@ -426,20 +423,15 @@ impl FromStr for RunMode {
 
 #[derive(Clone)]
 pub struct EGraph {
+    symbol_gen: SymbolGen,
     egraphs: Vec<Self>,
     unionfind: UnionFind,
-    pub(crate) desugar: Desugar,
-    pub functions: HashMap<Symbol, Function>,
-    rulesets: HashMap<Symbol, Ruleset>,
+    pub functions: IndexMap<Symbol, Function>,
+    rulesets: IndexMap<Symbol, Ruleset>,
     rule_last_run_timestamp: HashMap<Symbol, u32>,
-    proofs_enabled: bool,
-    terms_enabled: bool,
     interactive_mode: bool,
     timestamp: u32,
     pub run_mode: RunMode,
-    pub test_proofs: bool,
-    pub match_limit: usize,
-    pub node_limit: usize,
     pub fact_directory: Option<PathBuf>,
     pub seminaive: bool,
     type_info: TypeInfo,
@@ -454,20 +446,15 @@ pub struct EGraph {
 impl Default for EGraph {
     fn default() -> Self {
         let mut egraph = Self {
+            symbol_gen: SymbolGen::new("$".to_string()),
             egraphs: vec![],
             unionfind: Default::default(),
             functions: Default::default(),
             rulesets: Default::default(),
             rule_last_run_timestamp: Default::default(),
-            desugar: Desugar::default(),
-            match_limit: usize::MAX,
-            node_limit: usize::MAX,
             timestamp: 0,
             run_mode: RunMode::Normal,
-            proofs_enabled: false,
-            terms_enabled: false,
             interactive_mode: false,
-            test_proofs: false,
             fact_directory: None,
             seminaive: true,
             extract_report: None,
@@ -497,14 +484,6 @@ struct SearchResult {
 }
 
 impl EGraph {
-    /// Use the rust backend implimentation of eqsat,
-    /// including a rust implementation of the union-find
-    /// data structure and the rust implementation of
-    /// the rebuilding algorithm (maintains congruence closure).
-    pub fn enable_terms_encoding(&mut self) {
-        self.terms_enabled = true;
-    }
-
     pub fn is_interactive_mode(&self) -> bool {
         self.interactive_mode
     }
@@ -546,12 +525,6 @@ impl EGraph {
 
     #[track_caller]
     fn debug_assert_invariants(&self) {
-        // we can't use find before something
-        // is added to the parent table, so this
-        // is disabled in terms mode
-        if self.terms_enabled {
-            return;
-        }
         #[cfg(debug_assertions)]
         for (name, function) in self.functions.iter() {
             function.nodes.assert_sorted();
@@ -608,35 +581,15 @@ impl EGraph {
 
     /// find the leader value for a particular eclass
     pub fn find(&self, value: Value) -> Value {
-        if self.terms_enabled {
-            // HACK using value tag for parent table name
-            let parent_name = self
-                .desugar
-                .lookup_parent_name(value.tag)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "Term encoding should have created parent table for {}",
-                        value.tag
-                    )
-                });
-            if let Some(func) = self.functions.get(&parent_name) {
-                func.get(&[value])
-                    .unwrap_or_else(|| panic!("No value {:?} in {parent_name}.", value,))
-            } else {
-                value
+        if let Some(sort) = self.get_sort_from_value(&value) {
+            if sort.is_eq_sort() {
+                return Value {
+                    tag: value.tag,
+                    bits: usize::from(self.unionfind.find(Id::from(value.bits as usize))) as u64,
+                };
             }
-        } else {
-            if let Some(sort) = self.get_sort_from_value(&value) {
-                if sort.is_eq_sort() {
-                    return Value {
-                        tag: value.tag,
-                        bits: usize::from(self.unionfind.find(Id::from(value.bits as usize)))
-                            as u64,
-                    };
-                }
-            }
-            value
         }
+        value
     }
 
     pub fn rebuild_nofail(&mut self) -> usize {
@@ -694,15 +647,13 @@ impl EGraph {
 
         for (inputs, old, new) in merges {
             if let Some(prog) = function.merge.on_merge.clone() {
-                self.run_actions(&mut stack, &[*old, *new], &prog, true)
-                    .unwrap();
+                self.run_actions(&mut stack, &[*old, *new], &prog).unwrap();
                 function = self.functions.get_mut(&func).unwrap();
                 stack.clear();
             }
             if let Some(prog) = &merge_prog {
                 // TODO: error handling?
-                self.run_actions(&mut stack, &[*old, *new], prog, true)
-                    .unwrap();
+                self.run_actions(&mut stack, &[*old, *new], prog).unwrap();
                 let merged = stack.pop().expect("merges should produce a value");
                 stack.clear();
                 function = self.functions.get_mut(&func).unwrap();
@@ -727,11 +678,11 @@ impl EGraph {
 
     pub fn eval_lit(&self, lit: &Literal) -> Value {
         match lit {
-            Literal::Int(i) => i.store(&self.type_info().get_sort_nofail()).unwrap(),
-            Literal::F64(f) => f.store(&self.type_info().get_sort_nofail()).unwrap(),
-            Literal::String(s) => s.store(&self.type_info().get_sort_nofail()).unwrap(),
-            Literal::Unit => ().store(&self.type_info().get_sort_nofail()).unwrap(),
-            Literal::Bool(b) => b.store(&self.type_info().get_sort_nofail()).unwrap(),
+            Literal::Int(i) => i.store(&self.type_info.get_sort_nofail()).unwrap(),
+            Literal::F64(f) => f.store(&self.type_info.get_sort_nofail()).unwrap(),
+            Literal::String(s) => s.store(&self.type_info.get_sort_nofail()).unwrap(),
+            Literal::Unit => ().store(&self.type_info.get_sort_nofail()).unwrap(),
+            Literal::Bool(b) => b.store(&self.type_info.get_sort_nofail()).unwrap(),
         }
     }
 
@@ -891,7 +842,7 @@ impl EGraph {
     /// See also extract_value_to_string for convenience.
     pub fn extract_value(&self, value: Value) -> (TermDag, Term) {
         let mut termdag = TermDag::default();
-        let sort = self.type_info().sorts.get(&value.tag).unwrap();
+        let sort = self.type_info.sorts.get(&value.tag).unwrap();
         let term = self.extract(value, &mut termdag, sort).1;
         (termdag, term)
     }
@@ -932,10 +883,6 @@ impl EGraph {
 
         log::debug!("database size: {}", self.num_tuples());
         self.timestamp += 1;
-
-        if self.num_tuples() > self.node_limit {
-            log::warn!("Node limit reached, {} nodes. Stopping!", self.num_tuples());
-        }
 
         report
     }
@@ -1034,7 +981,7 @@ impl EGraph {
                     if num_vars == 0 {
                         if *did_match {
                             stack.clear();
-                            self.run_actions(stack, &[], &rule.program, true)
+                            self.run_actions(stack, &[], &rule.program)
                                 .unwrap_or_else(|e| {
                                     panic!("error while running actions for {rule_name}: {e}")
                                 });
@@ -1042,7 +989,7 @@ impl EGraph {
                     } else {
                         for values in all_matches.chunks(num_vars) {
                             stack.clear();
-                            self.run_actions(stack, values, &rule.program, true)
+                            self.run_actions(stack, values, &rule.program)
                                 .unwrap_or_else(|e| {
                                     panic!("error while running actions for {rule_name}: {e}")
                                 });
@@ -1094,7 +1041,7 @@ impl EGraph {
         ruleset: Symbol,
     ) -> Result<Symbol, Error> {
         let name = Symbol::from(name);
-        let core_rule = rule.to_canonicalized_core_rule(self.type_info())?;
+        let core_rule = rule.to_canonicalized_core_rule(&self.type_info, &mut self.symbol_gen)?;
         let (query, actions) = (core_rule.body, core_rule.head);
 
         let vars = query.get_vars();
@@ -1133,20 +1080,20 @@ impl EGraph {
 
     fn eval_actions(&mut self, actions: &ResolvedActions) -> Result<(), Error> {
         let (actions, _) = actions.to_core_actions(
-            self.type_info(),
+            &self.type_info,
             &mut Default::default(),
-            &mut ResolvedGen::new("$".to_string()),
+            &mut self.symbol_gen,
         )?;
         let program = self
             .compile_actions(&Default::default(), &actions)
             .map_err(Error::TypeErrors)?;
         let mut stack = vec![];
-        self.run_actions(&mut stack, &[], &program, true)?;
+        self.run_actions(&mut stack, &[], &program)?;
         Ok(())
     }
 
     pub fn eval_expr(&mut self, expr: &Expr) -> Result<(ArcSort, Value), Error> {
-        let fresh_name = self.desugar.get_fresh();
+        let fresh_name = self.symbol_gen.fresh(&"egraph_evalexpr".into());
         let command = Command::Action(Action::Let(DUMMY_SPAN.clone(), fresh_name, expr.clone()));
         self.run_program(vec![command])?;
         // find the table with the same name as the fresh name
@@ -1158,22 +1105,18 @@ impl EGraph {
 
     // TODO make a public version of eval_expr that makes a command,
     // then returns the value at the end.
-    fn eval_resolved_expr(
-        &mut self,
-        expr: &ResolvedExpr,
-        make_defaults: bool,
-    ) -> Result<Value, Error> {
+    fn eval_resolved_expr(&mut self, expr: &ResolvedExpr) -> Result<Value, Error> {
         let (actions, mapped_expr) = expr.to_core_actions(
-            self.type_info(),
+            &self.type_info,
             &mut Default::default(),
-            &mut ResolvedGen::new("$".to_string()),
+            &mut self.symbol_gen,
         )?;
-        let target = mapped_expr.get_corresponding_var_or_lit(self.type_info());
+        let target = mapped_expr.get_corresponding_var_or_lit(&self.type_info);
         let program = self
             .compile_expr(&Default::default(), &actions, &target)
             .map_err(Error::TypeErrors)?;
         let mut stack = vec![];
-        self.run_actions(&mut stack, &[], &program, make_defaults)?;
+        self.run_actions(&mut stack, &[], &program)?;
         Ok(stack.pop().unwrap())
     }
 
@@ -1193,28 +1136,11 @@ impl EGraph {
 
     fn set_option(&mut self, name: &str, value: ResolvedExpr) {
         match name {
-            "enable_proofs" => {
-                self.proofs_enabled = true;
-            }
             "interactive_mode" => {
                 if let ResolvedExpr::Lit(_ann, Literal::Int(i)) = value {
                     self.interactive_mode = i != 0;
                 } else {
                     panic!("interactive_mode must be an integer");
-                }
-            }
-            "match_limit" => {
-                if let ResolvedExpr::Lit(_ann, Literal::Int(i)) = value {
-                    self.match_limit = i as usize;
-                } else {
-                    panic!("match_limit must be an integer");
-                }
-            }
-            "node_limit" => {
-                if let ResolvedExpr::Lit(_ann, Literal::Int(i)) = value {
-                    self.node_limit = i as usize;
-                } else {
-                    panic!("node_limit must be an integer");
                 }
             }
             _ => panic!("Unknown option '{}'", name),
@@ -1227,7 +1153,7 @@ impl EGraph {
             head: ResolvedActions::default(),
             body: facts.to_vec(),
         };
-        let core_rule = rule.to_canonicalized_core_rule(self.type_info())?;
+        let core_rule = rule.to_canonicalized_core_rule(&self.type_info, &mut self.symbol_gen)?;
         let query = core_rule.body;
         let ordering = &query.get_vars();
         let query = self.compile_gj_query(query, ordering);
@@ -1305,7 +1231,6 @@ impl EGraph {
                 self.check_facts(&span, &facts)?;
                 log::info!("Checked fact {:?}.", facts);
             }
-            ResolvedNCommand::CheckProof => log::error!("TODO implement proofs"),
             ResolvedNCommand::CoreAction(action) => match &action {
                 ResolvedAction::Let(_, name, contents) => {
                     panic!("Globals should have been desugared away: {name} = {contents}")
@@ -1375,8 +1300,8 @@ impl EGraph {
                     .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
                 let mut termdag = TermDag::default();
                 for expr in exprs {
-                    let value = self.eval_resolved_expr(&expr, true)?;
-                    let expr_type = expr.output_type(self.type_info());
+                    let value = self.eval_resolved_expr(&expr)?;
+                    let expr_type = expr.output_type(&self.type_info);
                     let term = self.extract(value, &mut termdag, &expr_type).1;
                     use std::io::Write;
                     writeln!(f, "{}", termdag.to_string(&term))
@@ -1391,7 +1316,7 @@ impl EGraph {
 
     fn input_file(&mut self, func_name: Symbol, file: String) -> Result<(), Error> {
         let function_type = self
-            .type_info()
+            .type_info
             .lookup_user_func(func_name)
             .unwrap_or_else(|| panic!("Unrecognized function name {}", func_name));
         let func = self.functions.get_mut(&func_name).unwrap();
@@ -1456,7 +1381,9 @@ impl EGraph {
             .into_iter()
             .map(NCommand::CoreAction)
             .collect::<Vec<_>>();
-        let commands: Vec<_> = self.type_info_mut().typecheck_program(&commands)?;
+        let commands: Vec<_> = self
+            .type_info
+            .typecheck_program(&mut self.symbol_gen, &commands)?;
         for command in commands {
             self.run_command(command)?;
         }
@@ -1472,20 +1399,21 @@ impl EGraph {
 
     pub fn set_reserved_symbol(&mut self, sym: Symbol) {
         assert!(
-            !self.desugar.fresh_gen.has_been_used(),
+            !self.symbol_gen.has_been_used(),
             "Reserved symbol must be set before any symbols are generated"
         );
-        self.desugar.fresh_gen = SymbolGen::new(sym.to_string());
+        self.symbol_gen = SymbolGen::new(sym.to_string());
     }
 
     fn process_command(&mut self, command: Command) -> Result<Vec<ResolvedNCommand>, Error> {
         let program =
-            self.desugar
-                .desugar_program(vec![command], self.test_proofs, self.seminaive)?;
+            desugar::desugar_program(vec![command], &mut self.symbol_gen, self.seminaive)?;
 
-        let program = self.type_info_mut().typecheck_program(&program)?;
+        let program = self
+            .type_info
+            .typecheck_program(&mut self.symbol_gen, &program)?;
 
-        let program = remove_globals(&self.type_info, program, &mut self.desugar.fresh_gen);
+        let program = remove_globals(&self.type_info, program, &mut self.symbol_gen);
 
         Ok(program)
     }
@@ -1518,14 +1446,6 @@ impl EGraph {
         Ok(self.flush_msgs())
     }
 
-    pub fn parse_program(
-        &self,
-        filename: Option<String>,
-        input: &str,
-    ) -> Result<Vec<Command>, Error> {
-        self.desugar.parse_program(filename, input)
-    }
-
     /// Takes a source program `input`, parses it, runs it, and returns a list of messages.
     ///
     /// `filename` is an optional argument to indicate the source of
@@ -1536,7 +1456,7 @@ impl EGraph {
         filename: Option<String>,
         input: &str,
     ) -> Result<Vec<String>, Error> {
-        let parsed = self.desugar.parse_program(filename, input)?;
+        let parsed = parse_program(filename, input)?;
         self.run_program(parsed)
     }
 
@@ -1545,7 +1465,7 @@ impl EGraph {
     }
 
     pub(crate) fn get_sort_from_value(&self, value: &Value) -> Option<&ArcSort> {
-        self.type_info().sorts.get(&value.tag)
+        self.type_info.sorts.get(&value.tag)
     }
 
     /// Returns the first sort that satisfies the type and predicate if there's one.
@@ -1554,23 +1474,22 @@ impl EGraph {
         &self,
         pred: impl Fn(&Arc<S>) -> bool,
     ) -> Option<Arc<S>> {
-        self.type_info().get_sort_by(pred)
+        self.type_info.get_sort_by(pred)
     }
 
     /// Returns a sort based on the type
     pub fn get_sort<S: Sort + Send + Sync>(&self) -> Option<Arc<S>> {
-        self.type_info().get_sort_by(|_| true)
+        self.type_info.get_sort_by(|_| true)
     }
 
     /// Add a user-defined sort
     pub fn add_arcsort(&mut self, arcsort: ArcSort) -> Result<(), TypeError> {
-        self.type_info_mut()
-            .add_arcsort(arcsort, DUMMY_SPAN.clone())
+        self.type_info.add_arcsort(arcsort, DUMMY_SPAN.clone())
     }
 
     /// Add a user-defined primitive
     pub fn add_primitive(&mut self, prim: impl Into<Primitive>) {
-        self.type_info_mut().add_primitive(prim)
+        self.type_info.add_primitive(prim)
     }
 
     /// Gets the last extract report and returns it, if the last command saved it.
@@ -1595,14 +1514,6 @@ impl EGraph {
     fn flush_msgs(&mut self) -> Vec<String> {
         self.msgs.dedup_by(|a, b| a.is_empty() && b.is_empty());
         std::mem::take(&mut self.msgs)
-    }
-
-    pub(crate) fn type_info(&self) -> &TypeInfo {
-        &self.type_info
-    }
-
-    pub(crate) fn type_info_mut(&mut self) -> &mut TypeInfo {
-        &mut self.type_info
     }
 }
 

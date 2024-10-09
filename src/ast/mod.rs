@@ -14,6 +14,24 @@ lalrpop_mod!(
     "/ast/parse.rs"
 );
 
+// For some reason the parser is slow to construct so
+// we make it static and only construct it once.
+lazy_static! {
+    static ref PARSER: parse::ProgramParser = Default::default();
+}
+
+/// Parse a file into a program.
+pub fn parse_program(filename: Option<String>, input: &str) -> Result<Vec<Command>, Error> {
+    let filename = filename.unwrap_or_else(|| DEFAULT_FILENAME.to_string());
+    let srcfile = Arc::new(SrcFile {
+        name: filename,
+        contents: Some(input.to_string()),
+    });
+    Ok(PARSER
+        .parse(&srcfile, input)
+        .map_err(|e| e.map_token(|tok| tok.to_string()))?)
+}
+
 use crate::{
     core::{GenericAtom, GenericAtomTerm, HeadOrEq, Query, ResolvedCall},
     *,
@@ -167,7 +185,7 @@ pub type NCommand = GenericNCommand<Symbol, Symbol>;
 pub(crate) type ResolvedNCommand = GenericNCommand<ResolvedCall, ResolvedVar>;
 
 /// A [`NCommand`] is a desugared [`Command`], where syntactic sugars
-/// like [`Command::Datatype`], [`Command::Declare`], and [`Command::Rewrite`]
+/// like [`Command::Datatype`] and [`Command::Rewrite`]
 /// are eliminated.
 /// Most of the heavy lifting in egglog is done over [`NCommand`]s.
 ///
@@ -204,7 +222,6 @@ where
     RunSchedule(GenericSchedule<Head, Leaf>),
     PrintOverallStatistics,
     Check(Span, Vec<GenericFact<Head, Leaf>>),
-    CheckProof,
     PrintTable(Span, Symbol, usize),
     PrintSize(Span, Option<Symbol>),
     Output {
@@ -256,7 +273,6 @@ where
             GenericNCommand::Check(span, facts) => {
                 GenericCommand::Check(span.clone(), facts.clone())
             }
-            GenericNCommand::CheckProof => GenericCommand::CheckProof,
             GenericNCommand::PrintTable(span, name, n) => {
                 GenericCommand::PrintFunction(span.clone(), *name, *n)
             }
@@ -316,7 +332,6 @@ where
                 span,
                 facts.into_iter().map(|fact| fact.visit_exprs(f)).collect(),
             ),
-            GenericNCommand::CheckProof => GenericNCommand::CheckProof,
             GenericNCommand::PrintTable(span, name, n) => {
                 GenericNCommand::PrintTable(span, name, n)
             }
@@ -449,10 +464,7 @@ where
     /// Egglog supports several *experimental* options
     /// that can be set using the `set-option` command.
     ///
-    /// For example, `(set-option node_limit 1000)` sets a hard limit on the number of "nodes" or rows in the database.
-    /// Once this limit is reached, egglog stops running rules.
-    ///
-    /// Other options supported include:
+    /// Options supported include:
     /// - "interactive_mode" (default: false): when enabled, egglog prints "(done)" after each command, allowing an external
     /// tool to know when each command has finished running.
     SetOption {
@@ -771,8 +783,6 @@ where
     /// [INFO ] Command failed as expected.
     /// ```
     Check(Span, Vec<GenericFact<Head, Leaf>>),
-    /// Currently unused, this command will check proofs when they are implemented.
-    CheckProof,
     /// Print out rows a given function, extracting each of the elements of the function.
     /// Example:
     /// ```text
@@ -854,7 +864,6 @@ where
                 list!("query-extract", ":variants", variants, expr)
             }
             GenericCommand::Check(_ann, facts) => list!("check", ++ facts),
-            GenericCommand::CheckProof => list!("check-proof"),
             GenericCommand::Push(n) => list!("push", n),
             GenericCommand::Pop(_span, n) => list!("pop", n),
             GenericCommand::PrintFunction(_span, name, n) => list!("print-function", name, n),

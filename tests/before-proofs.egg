@@ -1,5 +1,3 @@
-(set-option enable_proofs 1)
-
 (datatype Math
     (Add Math Math)
     (Sub Math Math)
