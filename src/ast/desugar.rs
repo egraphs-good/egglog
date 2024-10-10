@@ -45,6 +45,7 @@ pub(crate) fn desugar_command(
             variants,
         } => desugar_datatype(span, name, variants),
         Command::Datatypes { span: _, datatypes } => {
+            // first declare all the datatypes as sorts, then add all explicit sorts which could refer to the datatypes, and finally add all the variants as functions
             let mut res = vec![];
             for datatype in datatypes.iter() {
                 let span = datatype.0.clone();
