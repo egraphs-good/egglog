@@ -49,13 +49,13 @@ pub(crate) fn desugar_command(
             for datatype in datatypes.iter() {
                 let span = datatype.0.clone();
                 let name = datatype.1;
-                if let Subdatatypes::NewSort(..) = datatype.2 {
+                if let Subdatatypes::Variants(..) = datatype.2 {
                     res.push(NCommand::Sort(span, name, None));
                 }
             }
             let (variants_vec, sorts): (Vec<_>, Vec<_>) = datatypes
                 .into_iter()
-                .partition(|datatype| matches!(datatype.2, Subdatatypes::NewSort(..)));
+                .partition(|datatype| matches!(datatype.2, Subdatatypes::Variants(..)));
 
             for sort in sorts {
                 let span = sort.0.clone();
