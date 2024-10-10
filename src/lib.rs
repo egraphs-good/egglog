@@ -837,9 +837,9 @@ impl EGraph {
         }
     }
 
-    /// Extract a value to a [`TermDag`] and [`Term`]
-    /// in the [`TermDag`].
-    /// See also extract_value_to_string for convenience.
+    /// Extract a value to a [`TermDag`] and [`Term`] in the [`TermDag`].
+    /// Note that the `TermDag` may contain a superset of the nodes in the `Term`.
+    /// See also `extract_value_to_string` for convenience.
     pub fn extract_value(&self, value: Value) -> (TermDag, Term) {
         let mut termdag = TermDag::default();
         let sort = self.type_info.sorts.get(&value.tag).unwrap();
@@ -848,7 +848,7 @@ impl EGraph {
     }
 
     /// Extract a value to a string for printing.
-    /// See also extract_value for more control.
+    /// See also `extract_value` for more control.
     pub fn extract_value_to_string(&self, value: Value) -> String {
         let (termdag, term) = self.extract_value(value);
         termdag.to_string(&term)
