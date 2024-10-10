@@ -677,12 +677,13 @@ impl EGraph {
     }
 
     pub fn eval_lit(&self, lit: &Literal) -> Value {
+        let any_sort = self.type_info.infer_literal(lit).as_arc_any();
         match lit {
-            Literal::Int(i) => i.store(&self.type_info.get_sort_nofail()).unwrap(),
-            Literal::F64(f) => f.store(&self.type_info.get_sort_nofail()).unwrap(),
-            Literal::String(s) => s.store(&self.type_info.get_sort_nofail()).unwrap(),
-            Literal::Unit => ().store(&self.type_info.get_sort_nofail()).unwrap(),
-            Literal::Bool(b) => b.store(&self.type_info.get_sort_nofail()).unwrap(),
+            Literal::Int(i) => i.store(&any_sort.downcast().unwrap()).unwrap(),
+            Literal::F64(f) => f.store(&any_sort.downcast().unwrap()).unwrap(),
+            Literal::String(s) => s.store(&any_sort.downcast().unwrap()).unwrap(),
+            Literal::Unit => ().store(&any_sort.downcast().unwrap()).unwrap(),
+            Literal::Bool(b) => b.store(&any_sort.downcast().unwrap()).unwrap(),
         }
     }
 
