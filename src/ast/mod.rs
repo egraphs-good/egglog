@@ -450,7 +450,11 @@ pub type Command = GenericCommand<Symbol, Symbol>;
 
 pub type Subsume = bool;
 
-pub type Subdatatypes = Result<Vec<Variant>, (Symbol, Vec<Expr>)>;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Subdatatypes {
+    Variants(Vec<Variant>),
+    NewSort(Symbol, Vec<Expr>),
+}
 
 /// A [`Command`] is the top-level construct in egglog.
 /// It includes defining rules, declaring functions,
@@ -893,8 +897,10 @@ where
                 let datatypes: Vec<_> = datatypes
                     .iter()
                     .map(|(_, name, variants)| match variants {
-                        Ok(variants) => list!(name, ++ variants),
-                        Err((head, args)) => list!("sort", name, list!(head, ++ args)),
+                        Subdatatypes::Variants(variants) => list!(name, ++ variants),
+                        Subdatatypes::NewSort(head, args) => {
+                            list!("sort", name, list!(head, ++ args))
+                        }
                     })
                     .collect();
                 list!("datatypes", ++ datatypes)

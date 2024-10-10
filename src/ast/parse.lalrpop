@@ -44,9 +44,9 @@ Comma<T>: Vec<T> = {
     }
 };
 
-RecDatatype: (Span, Symbol, Result<Vec<Variant>, (Symbol, Vec<Expr>)>) = {
-    <lo:LParen> <name:Ident> <variants:(Variant)*> <hi:RParen> => (Span(srcfile.clone(), lo, hi), name, Ok(variants)),
-    <lo:LParen> "sort" <name:Ident> LParen <head:Ident> <exprs:(Expr)*> RParen <hi:RParen> => (Span(srcfile.clone(), lo, hi), name, Err((head, exprs))),
+RecDatatype: (Span, Symbol, Subdatatypes) = {
+    <lo:LParen> <name:Ident> <variants:(Variant)*> <hi:RParen> => (Span(srcfile.clone(), lo, hi), name, Subdatatypes::Variants(variants)),
+    <lo:LParen> "sort" <name:Ident> LParen <head:Ident> <exprs:(Expr)*> RParen <hi:RParen> => (Span(srcfile.clone(), lo, hi), name, Subdatatypes::NewSort(head, exprs)),
 }
 
 Command: Command = {
