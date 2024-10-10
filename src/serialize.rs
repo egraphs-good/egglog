@@ -2,7 +2,7 @@ use ordered_float::NotNan;
 use std::collections::VecDeque;
 use symbol_table::GlobalSymbol;
 
-use crate::{ast::ResolvedFunctionDecl, util::HashMap, EGraph, TupleOutput, Value};
+use crate::{ast::ResolvedFunctionDecl, EGraph, IndexMap, TupleOutput, Value};
 
 pub struct SerializeConfig {
     // Maximumum number of functions to include in the serialized graph, any after this will be discarded
@@ -124,7 +124,7 @@ impl EGraph {
         // This is for when we need to find what node ID to use for an edge to an e-class, we can rotate them evenly
         // amoung all possible options.
         let mut node_ids: NodeIDs = all_calls.iter().fold(
-            HashMap::default(),
+            IndexMap::default(),
             |mut acc, (_decl, _input, output, class_id, node_id)| {
                 if self
                     .get_sort_from_value(&output.value)
@@ -132,7 +132,7 @@ impl EGraph {
                     .is_eq_sort()
                 {
                     acc.entry(class_id.clone())
-                        .or_insert_with(VecDeque::new)
+                        .or_default()
                         .push_back(node_id.clone());
                 }
                 acc
@@ -310,4 +310,4 @@ impl EGraph {
     }
 }
 
-type NodeIDs = HashMap<egraph_serialize::ClassId, VecDeque<egraph_serialize::NodeId>>;
+type NodeIDs = IndexMap<egraph_serialize::ClassId, VecDeque<egraph_serialize::NodeId>>;

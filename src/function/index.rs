@@ -2,14 +2,16 @@
 use smallvec::SmallVec;
 use symbol_table::GlobalSymbol;
 
-use crate::{unionfind::UnionFind, util::HashMap, Value};
+use crate::{unionfind::UnionFind, Value};
+
+use super::IndexMap;
 
 pub(crate) type Offset = u32;
 
 #[derive(Clone, Debug)]
 pub(crate) struct ColumnIndex {
     sort: GlobalSymbol,
-    ids: HashMap<u64, SmallVec<[Offset; 8]>>,
+    ids: IndexMap<u64, SmallVec<[Offset; 8]>>,
 }
 
 impl ColumnIndex {
