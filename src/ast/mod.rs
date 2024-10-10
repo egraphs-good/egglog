@@ -903,7 +903,7 @@ where
                         }
                     })
                     .collect();
-                list!("datatypes", ++ datatypes)
+                list!("datatype*", ++ datatypes)
             }
         }
     }
