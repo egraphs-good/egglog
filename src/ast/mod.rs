@@ -450,6 +450,12 @@ pub type Command = GenericCommand<Symbol, Symbol>;
 
 pub type Subsume = bool;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Subdatatypes {
+    Variants(Vec<Variant>),
+    NewSort(Symbol, Vec<Expr>),
+}
+
 /// A [`Command`] is the top-level construct in egglog.
 /// It includes defining rules, declaring functions,
 /// adding to tables, and running rules (via a [`Schedule`]).
@@ -500,6 +506,10 @@ where
         name: Symbol,
         variants: Vec<Variant>,
     },
+    Datatypes {
+        span: Span,
+        datatypes: Vec<(Span, Symbol, Subdatatypes)>,
+    },
     /// Create a new user-defined sort, which can then
     /// be used in new [`Command::Function`] declarations.
     /// The [`Command::Datatype`] command desugars directly to this command, with one [`Command::Function`]
@@ -515,11 +525,7 @@ where
     /// ```
     ///
     /// Now `MathVec` can be used as an input or output sort.
-    Sort(
-        Span,
-        Symbol,
-        Option<(Symbol, Vec<GenericExpr<Symbol, Symbol>>)>,
-    ),
+    Sort(Span, Symbol, Option<(Symbol, Vec<Expr>)>),
     /// Declare an egglog function, which is a database table with a
     /// a functional dependency (also called a primary key) on its inputs to one output.
     ///
@@ -887,6 +893,18 @@ where
                 expr,
                 schedule,
             } => list!("simplify", schedule, expr),
+            GenericCommand::Datatypes { span: _, datatypes } => {
+                let datatypes: Vec<_> = datatypes
+                    .iter()
+                    .map(|(_, name, variants)| match variants {
+                        Subdatatypes::Variants(variants) => list!(name, ++ variants),
+                        Subdatatypes::NewSort(head, args) => {
+                            list!("sort", name, list!(head, ++ args))
+                        }
+                    })
+                    .collect();
+                list!("datatype*", ++ datatypes)
+            }
         }
     }
 }

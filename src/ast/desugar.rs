@@ -44,17 +44,60 @@ pub(crate) fn desugar_command(
             name,
             variants,
         } => desugar_datatype(span, name, variants),
-        Command::Rewrite(ruleset, rewrite, subsume) => desugar_rewrite(
-            ruleset,
-            rewrite.to_string().replace('\"', "'").into(),
-            &rewrite,
-            subsume,
-        ),
-        Command::BiRewrite(ruleset, rewrite) => desugar_birewrite(
-            ruleset,
-            rewrite.to_string().replace('\"', "'").into(),
-            &rewrite,
-        ),
+        Command::Datatypes { span: _, datatypes } => {
+            // first declare all the datatypes as sorts, then add all explicit sorts which could refer to the datatypes, and finally add all the variants as functions
+            let mut res = vec![];
+            for datatype in datatypes.iter() {
+                let span = datatype.0.clone();
+                let name = datatype.1;
+                if let Subdatatypes::Variants(..) = datatype.2 {
+                    res.push(NCommand::Sort(span, name, None));
+                }
+            }
+            let (variants_vec, sorts): (Vec<_>, Vec<_>) = datatypes
+                .into_iter()
+                .partition(|datatype| matches!(datatype.2, Subdatatypes::Variants(..)));
+
+            for sort in sorts {
+                let span = sort.0.clone();
+                let name = sort.1;
+                let Subdatatypes::NewSort(sort, args) = sort.2 else {
+                    unreachable!()
+                };
+                res.push(NCommand::Sort(span, name, Some((sort, args))));
+            }
+
+            for variants in variants_vec {
+                let datatype = variants.1;
+                let Subdatatypes::Variants(variants) = variants.2 else {
+                    unreachable!();
+                };
+                for variant in variants {
+                    res.push(NCommand::Function(FunctionDecl {
+                        name: variant.name,
+                        schema: Schema {
+                            input: variant.types,
+                            output: datatype,
+                        },
+                        merge: None,
+                        merge_action: Actions::default(),
+                        default: None,
+                        cost: variant.cost,
+                        unextractable: false,
+                        ignore_viz: false,
+                        span: variant.span,
+                    }));
+                }
+            }
+
+            res
+        }
+        Command::Rewrite(ruleset, rewrite, subsume) => {
+            desugar_rewrite(ruleset, rewrite_name(&rewrite).into(), &rewrite, subsume)
+        }
+        Command::BiRewrite(ruleset, rewrite) => {
+            desugar_birewrite(ruleset, rewrite_name(&rewrite).into(), &rewrite)
+        }
         Command::Include(span, file) => {
             let s = std::fs::read_to_string(&file)
                 .unwrap_or_else(|_| panic!("{} Failed to read file {file}", span.get_quote()));
@@ -355,4 +398,8 @@ fn desugar_simplify(
 
     res.push(NCommand::Pop(span, 1));
     res
+}
+
+pub(crate) fn rewrite_name(rewrite: &Rewrite) -> String {
+    rewrite.to_string().replace('\"', "'")
 }
