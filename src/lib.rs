@@ -1476,11 +1476,6 @@ impl EGraph {
         self.type_info.get_sort_by(pred)
     }
 
-    /// Returns a sort based on the type
-    pub fn get_sort<S: Sort + Send + Sync>(&self) -> Option<Arc<S>> {
-        self.type_info.get_sort_by(|_| true)
-    }
-
     /// Add a user-defined sort
     pub fn add_arcsort(&mut self, arcsort: ArcSort) -> Result<(), TypeError> {
         self.type_info.add_arcsort(arcsort, DUMMY_SPAN.clone())
@@ -1601,21 +1596,18 @@ mod tests {
     fn test_user_defined_primitive() {
         let mut egraph = EGraph::default();
         egraph
-            .parse_and_run_program(
-                None,
-                "
-                (sort IntVec (Vec i64))
-            ",
-            )
+            .parse_and_run_program(None, "(sort IntVec (Vec i64))")
             .unwrap();
-        let i64_sort: Arc<I64Sort> = egraph.get_sort().unwrap();
+
         let int_vec_sort: Arc<VecSort> = egraph
-            .get_sort_by(|s: &Arc<VecSort>| s.element_name() == i64_sort.name())
+            .get_sort_by(|s: &Arc<VecSort>| s.element_name() == I64Sort.name())
             .unwrap();
+
         egraph.add_primitive(InnerProduct {
-            ele: i64_sort,
+            ele: I64Sort.into(),
             vec: int_vec_sort,
         });
+
         egraph
             .parse_and_run_program(
                 None,
