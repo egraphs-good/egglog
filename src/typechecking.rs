@@ -36,12 +36,12 @@ impl Default for TypeInfo {
             global_types: Default::default(),
         };
 
-        res.add_sort(UnitSort::new(UNIT_SYM.into()), DUMMY_SPAN.clone());
-        res.add_sort(StringSort::new("String".into()), DUMMY_SPAN.clone());
+        res.add_sort(UnitSort, DUMMY_SPAN.clone());
+        res.add_sort(StringSort, DUMMY_SPAN.clone());
         res.add_sort(BoolSort, DUMMY_SPAN.clone());
-        res.add_sort(I64Sort::new("i64".into()), DUMMY_SPAN.clone());
+        res.add_sort(I64Sort, DUMMY_SPAN.clone());
         res.add_sort(F64Sort, DUMMY_SPAN.clone());
-        res.add_sort(RationalSort::new("Rational".into()), DUMMY_SPAN.clone());
+        res.add_sort(RationalSort, DUMMY_SPAN.clone());
 
         res.presort_names.extend(MapSort::presort_names());
         res.presort_names.extend(SetSort::presort_names());
@@ -61,8 +61,6 @@ impl Default for TypeInfo {
         res
     }
 }
-
-pub const UNIT_SYM: &str = "Unit";
 
 impl TypeInfo {
     pub(crate) fn infer_literal(&self, lit: &Literal) -> ArcSort {

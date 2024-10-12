@@ -40,7 +40,7 @@ use thiserror::Error;
 use generic_symbolic_expressions::Sexp;
 
 use ast::*;
-pub use typechecking::{TypeInfo, UNIT_SYM};
+pub use typechecking::TypeInfo;
 
 use crate::core::{AtomTerm, ResolvedCall};
 use actions::Program;
@@ -739,7 +739,7 @@ impl EGraph {
             .get(&sym)
             // function_to_dag should have checked this
             .unwrap();
-        let out_is_unit = f.schema.output.name() == UNIT_SYM.into();
+        let out_is_unit = f.schema.output.name() == UnitSort.name();
 
         let mut buf = String::new();
         let s = &mut buf;
@@ -1367,7 +1367,7 @@ impl EGraph {
             let mut exprs: Vec<Expr> = str_buf.iter().map(|&s| parse(s)).collect();
 
             actions.push(
-                if function_type.is_datatype || function_type.output.name() == UNIT_SYM.into() {
+                if function_type.is_datatype || function_type.output.name() == UnitSort.name() {
                     Action::Expr(span.clone(), Expr::Call(span.clone(), func_name, exprs))
                 } else {
                     let out = exprs.pop().unwrap();
