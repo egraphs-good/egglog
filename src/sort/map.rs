@@ -23,8 +23,27 @@ impl MapSort {
     fn value(&self) -> ArcSort {
         self.value.clone()
     }
+}
 
-    pub fn make_sort(
+impl Presort for MapSort {
+    fn name() -> Symbol {
+        "Map".into()
+    }
+
+    fn presort_names() -> Vec<Symbol> {
+        vec![
+            "rebuild".into(),
+            "map-empty".into(),
+            "map-insert".into(),
+            "map-get".into(),
+            "map-not-contains".into(),
+            "map-contains".into(),
+            "map-remove".into(),
+            "map-length".into(),
+        ]
+    }
+
+    fn make_sort(
         typeinfo: &mut TypeInfo,
         name: Symbol,
         args: &[Expr],
@@ -65,21 +84,6 @@ impl MapSort {
         } else {
             panic!()
         }
-    }
-}
-
-impl MapSort {
-    pub fn presort_names() -> Vec<Symbol> {
-        vec![
-            "rebuild".into(),
-            "map-empty".into(),
-            "map-insert".into(),
-            "map-get".into(),
-            "map-not-contains".into(),
-            "map-contains".into(),
-            "map-remove".into(),
-            "map-length".into(),
-        ]
     }
 }
 

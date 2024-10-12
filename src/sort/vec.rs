@@ -21,8 +21,14 @@ impl VecSort {
     pub fn element_name(&self) -> Symbol {
         self.element.name()
     }
+}
 
-    pub fn presort_names() -> Vec<Symbol> {
+impl Presort for VecSort {
+    fn name() -> Symbol {
+        "Vec".into()
+    }
+
+    fn presort_names() -> Vec<Symbol> {
         vec![
             "vec-of".into(),
             "vec-append".into(),
@@ -38,7 +44,7 @@ impl VecSort {
         ]
     }
 
-    pub fn make_sort(
+    fn make_sort(
         typeinfo: &mut TypeInfo,
         name: Symbol,
         args: &[Expr],

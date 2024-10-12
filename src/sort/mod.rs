@@ -102,6 +102,16 @@ pub trait Sort: Any + Send + Sync + Debug {
     }
 }
 
+pub trait Presort {
+    fn name() -> Symbol;
+    fn presort_names() -> Vec<Symbol>;
+    fn make_sort(
+        typeinfo: &mut TypeInfo,
+        name: Symbol,
+        args: &[Expr],
+    ) -> Result<ArcSort, TypeError>;
+}
+
 #[derive(Debug)]
 pub struct EqSort {
     pub name: Symbol,

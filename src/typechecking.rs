@@ -1,6 +1,6 @@
 use crate::{core::CoreRule, *};
 use ast::Rule;
-use hashbrown::hash_map;
+use hashbrown::hash_map::Entry;
 
 #[derive(Clone, Debug)]
 pub struct FuncType {
@@ -36,23 +36,17 @@ impl Default for TypeInfo {
             global_types: Default::default(),
         };
 
-        res.add_sort(UnitSort, DUMMY_SPAN.clone());
-        res.add_sort(StringSort, DUMMY_SPAN.clone());
-        res.add_sort(BoolSort, DUMMY_SPAN.clone());
-        res.add_sort(I64Sort, DUMMY_SPAN.clone());
-        res.add_sort(F64Sort, DUMMY_SPAN.clone());
-        res.add_sort(RationalSort, DUMMY_SPAN.clone());
+        res.add_sort(UnitSort, DUMMY_SPAN.clone()).unwrap();
+        res.add_sort(StringSort, DUMMY_SPAN.clone()).unwrap();
+        res.add_sort(BoolSort, DUMMY_SPAN.clone()).unwrap();
+        res.add_sort(I64Sort, DUMMY_SPAN.clone()).unwrap();
+        res.add_sort(F64Sort, DUMMY_SPAN.clone()).unwrap();
+        res.add_sort(RationalSort, DUMMY_SPAN.clone()).unwrap();
 
-        res.presort_names.extend(MapSort::presort_names());
-        res.presort_names.extend(SetSort::presort_names());
-        res.presort_names.extend(VecSort::presort_names());
-        res.presort_names.extend(FunctionSort::presort_names());
-
-        res.presorts.insert("Map".into(), MapSort::make_sort);
-        res.presorts.insert("Set".into(), SetSort::make_sort);
-        res.presorts.insert("Vec".into(), VecSort::make_sort);
-        res.presorts
-            .insert("UnstableFn".into(), FunctionSort::make_sort);
+        res.add_presort::<MapSort>(DUMMY_SPAN.clone()).unwrap();
+        res.add_presort::<SetSort>(DUMMY_SPAN.clone()).unwrap();
+        res.add_presort::<VecSort>(DUMMY_SPAN.clone()).unwrap();
+        res.add_presort::<FunctionSort>(DUMMY_SPAN.clone()).unwrap();
 
         res.add_primitive(ValueEq);
 
@@ -61,16 +55,28 @@ impl Default for TypeInfo {
 }
 
 impl TypeInfo {
-    pub fn add_sort<S: Sort + 'static>(&mut self, sort: S, span: Span) {
-        self.add_arcsort(Arc::new(sort), span).unwrap()
+    pub fn add_sort<S: Sort + 'static>(&mut self, sort: S, span: Span) -> Result<(), TypeError> {
+        self.add_arcsort(Arc::new(sort), span)
+    }
+
+    pub fn add_presort<S: Presort>(&mut self, span: Span) -> Result<(), TypeError> {
+        let name = S::name();
+        match self.presorts.entry(name) {
+            Entry::Occupied(_) => Err(TypeError::SortAlreadyBound(name, span)),
+            Entry::Vacant(e) => {
+                e.insert(S::make_sort);
+                self.presort_names.extend(S::presort_names());
+                Ok(())
+            }
+        }
     }
 
     pub fn add_arcsort(&mut self, sort: ArcSort, span: Span) -> Result<(), TypeError> {
         let name = sort.name();
 
         match self.sorts.entry(name) {
-            hash_map::Entry::Occupied(_) => Err(TypeError::SortAlreadyBound(name, span)),
-            hash_map::Entry::Vacant(e) => {
+            Entry::Occupied(_) => Err(TypeError::SortAlreadyBound(name, span)),
+            Entry::Vacant(e) => {
                 e.insert(sort.clone());
                 sort.register_primitives(self);
                 Ok(())

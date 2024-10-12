@@ -54,10 +54,22 @@ pub struct FunctionSort {
 }
 
 impl FunctionSort {
-    pub fn presort_names() -> Vec<Symbol> {
+    fn get_value(&self, value: &Value) -> ValueFunction {
+        let functions = self.functions.lock().unwrap();
+        functions.get_index(value.bits as usize).unwrap().clone()
+    }
+}
+
+impl Presort for FunctionSort {
+    fn name() -> Symbol {
+        "UnstableFn".into()
+    }
+
+    fn presort_names() -> Vec<Symbol> {
         vec!["unstable-fn".into(), "unstable-app".into()]
     }
-    pub fn make_sort(
+
+    fn make_sort(
         typeinfo: &mut TypeInfo,
         name: Symbol,
         args: &[Expr],
@@ -101,11 +113,6 @@ impl FunctionSort {
         } else {
             panic!("function sort must be called with list of input args and output sort");
         }
-    }
-
-    fn get_value(&self, value: &Value) -> ValueFunction {
-        let functions = self.functions.lock().unwrap();
-        functions.get_index(value.bits as usize).unwrap().clone()
     }
 }
 
