@@ -54,27 +54,13 @@ impl Default for TypeInfo {
         res.presorts
             .insert("UnstableFn".into(), FunctionSort::make_sort);
 
-        res.add_primitive(ValueEq {
-            unit: res.get_sort_nofail(),
-        });
+        res.add_primitive(ValueEq);
 
         res
     }
 }
 
 impl TypeInfo {
-    pub(crate) fn infer_literal(&self, lit: &Literal) -> ArcSort {
-        match lit {
-            Literal::Int(_) => self.sorts.get(&Symbol::from("i64")),
-            Literal::F64(_) => self.sorts.get(&Symbol::from("f64")),
-            Literal::String(_) => self.sorts.get(&Symbol::from("String")),
-            Literal::Bool(_) => self.sorts.get(&Symbol::from("bool")),
-            Literal::Unit => self.sorts.get(&Symbol::from("Unit")),
-        }
-        .unwrap()
-        .clone()
-    }
-
     pub fn add_sort<S: Sort + 'static>(&mut self, sort: S, span: Span) {
         self.add_arcsort(Arc::new(sort), span).unwrap()
     }
@@ -190,7 +176,7 @@ impl TypeInfo {
                 }
                 NCommand::CoreAction(Action::Let(span, var, expr)) => {
                     let expr = self.typecheck_expr(symbol_gen, expr, &Default::default())?;
-                    let output_type = expr.output_type(self);
+                    let output_type = expr.output_type();
                     self.global_types.insert(*var, output_type.clone());
                     let var = ResolvedVar {
                         name: *var,

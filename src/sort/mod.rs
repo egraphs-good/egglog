@@ -157,23 +157,17 @@ impl<T: IntoSort> IntoSort for Option<T> {
 pub type PreSort =
     fn(typeinfo: &mut TypeInfo, name: Symbol, params: &[Expr]) -> Result<ArcSort, TypeError>;
 
-pub(crate) struct ValueEq {
-    pub unit: Arc<UnitSort>,
-}
-
-lazy_static! {
-    static ref VALUE_EQ: Symbol = "value-eq".into();
-}
+pub(crate) struct ValueEq;
 
 impl PrimitiveLike for ValueEq {
     fn name(&self) -> Symbol {
-        *VALUE_EQ
+        "value-eq".into()
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         AllEqualTypeConstraint::new(self.name(), span.clone())
             .with_exact_length(3)
-            .with_output_sort(self.unit.clone())
+            .with_output_sort(Arc::new(UnitSort))
             .into_box()
     }
 
@@ -184,5 +178,15 @@ impl PrimitiveLike for ValueEq {
         } else {
             None
         }
+    }
+}
+
+pub fn literal_sort(lit: &Literal) -> ArcSort {
+    match lit {
+        Literal::Int(_) => Arc::new(I64Sort) as ArcSort,
+        Literal::F64(_) => Arc::new(F64Sort) as ArcSort,
+        Literal::String(_) => Arc::new(StringSort) as ArcSort,
+        Literal::Bool(_) => Arc::new(BoolSort) as ArcSort,
+        Literal::Unit => Arc::new(UnitSort) as ArcSort,
     }
 }

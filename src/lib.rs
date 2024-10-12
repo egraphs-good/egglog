@@ -678,11 +678,11 @@ impl EGraph {
 
     pub fn eval_lit(&self, lit: &Literal) -> Value {
         match lit {
-            Literal::Int(i) => i.store(&self.type_info.get_sort_nofail()).unwrap(),
-            Literal::F64(f) => f.store(&self.type_info.get_sort_nofail()).unwrap(),
-            Literal::String(s) => s.store(&self.type_info.get_sort_nofail()).unwrap(),
-            Literal::Unit => ().store(&self.type_info.get_sort_nofail()).unwrap(),
-            Literal::Bool(b) => b.store(&self.type_info.get_sort_nofail()).unwrap(),
+            Literal::Int(i) => i.store(&I64Sort).unwrap(),
+            Literal::F64(f) => f.store(&F64Sort).unwrap(),
+            Literal::String(s) => s.store(&StringSort).unwrap(),
+            Literal::Unit => ().store(&UnitSort).unwrap(),
+            Literal::Bool(b) => b.store(&BoolSort).unwrap(),
         }
     }
 
@@ -1300,7 +1300,7 @@ impl EGraph {
                 let mut termdag = TermDag::default();
                 for expr in exprs {
                     let value = self.eval_resolved_expr(&expr)?;
-                    let expr_type = expr.output_type(&self.type_info);
+                    let expr_type = expr.output_type();
                     let term = self.extract(value, &mut termdag, &expr_type).1;
                     use std::io::Write;
                     writeln!(f, "{}", termdag.to_string(&term))
@@ -1412,7 +1412,7 @@ impl EGraph {
             .type_info
             .typecheck_program(&mut self.symbol_gen, &program)?;
 
-        let program = remove_globals(&self.type_info, program, &mut self.symbol_gen);
+        let program = remove_globals(program, &mut self.symbol_gen);
 
         Ok(program)
     }

@@ -152,7 +152,6 @@ impl Sort for FunctionSort {
         typeinfo.add_primitive(Ctor {
             name: "unstable-fn".into(),
             function: self.clone(),
-            string: typeinfo.get_sort_nofail(),
         });
         typeinfo.add_primitive(Apply {
             name: "unstable-app".into(),
@@ -214,7 +213,6 @@ impl FromSort for ValueFunction {
 struct FunctionCTorTypeConstraint {
     name: Symbol,
     function: Arc<FunctionSort>,
-    string: Arc<StringSort>,
     span: Span,
 }
 
@@ -304,7 +302,7 @@ impl TypeConstraint for FunctionCTorTypeConstraint {
 
         // Otherwise we just try assuming it's this function, we don't know if it is or not
         vec![
-            Constraint::Assign(arguments[0].clone(), self.string.clone()),
+            Constraint::Assign(arguments[0].clone(), Arc::new(StringSort)),
             output_sort_constraint,
         ]
     }
@@ -314,7 +312,6 @@ impl TypeConstraint for FunctionCTorTypeConstraint {
 struct Ctor {
     name: Symbol,
     function: Arc<FunctionSort>,
-    string: Arc<StringSort>,
 }
 
 impl PrimitiveLike for Ctor {
@@ -326,14 +323,13 @@ impl PrimitiveLike for Ctor {
         Box::new(FunctionCTorTypeConstraint {
             name: self.name,
             function: self.function.clone(),
-            string: self.string.clone(),
             span: span.clone(),
         })
     }
 
     fn apply(&self, values: &[Value], egraph: Option<&mut EGraph>) -> Option<Value> {
         let egraph = egraph.expect("`unstable-fn` is not supported yet in facts.");
-        let name = Symbol::load(&self.string, &values[0]);
+        let name = Symbol::load(&StringSort, &values[0]);
         // self.function
         //     .sorts
         //     .insert(name.clone(), self.function.clone());
