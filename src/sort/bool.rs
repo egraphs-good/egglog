@@ -3,19 +3,11 @@ use crate::ast::Literal;
 use super::*;
 
 #[derive(Debug)]
-pub struct BoolSort {
-    name: Symbol,
-}
-
-impl BoolSort {
-    pub fn new(name: Symbol) -> Self {
-        Self { name }
-    }
-}
+pub struct BoolSort;
 
 impl Sort for BoolSort {
     fn name(&self) -> Symbol {
-        self.name
+        "bool".into()
     }
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
@@ -44,7 +36,7 @@ impl IntoSort for bool {
     type Sort = BoolSort;
     fn store(self, sort: &Self::Sort) -> Option<Value> {
         Some(Value {
-            tag: sort.name,
+            tag: sort.name(),
             bits: self as u64,
         })
     }

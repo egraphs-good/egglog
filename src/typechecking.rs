@@ -38,9 +38,9 @@ impl Default for TypeInfo {
 
         res.add_sort(UnitSort::new(UNIT_SYM.into()), DUMMY_SPAN.clone());
         res.add_sort(StringSort::new("String".into()), DUMMY_SPAN.clone());
-        res.add_sort(BoolSort::new("bool".into()), DUMMY_SPAN.clone());
+        res.add_sort(BoolSort, DUMMY_SPAN.clone());
         res.add_sort(I64Sort::new("i64".into()), DUMMY_SPAN.clone());
-        res.add_sort(F64Sort::new("f64".into()), DUMMY_SPAN.clone());
+        res.add_sort(F64Sort, DUMMY_SPAN.clone());
         res.add_sort(RationalSort::new("Rational".into()), DUMMY_SPAN.clone());
 
         res.presort_names.extend(MapSort::presort_names());
