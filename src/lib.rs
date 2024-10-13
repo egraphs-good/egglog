@@ -1293,7 +1293,6 @@ impl EGraph {
                 filename.push(file.as_str());
                 // append to file
                 let mut f = File::options()
-                    .write(true)
                     .append(true)
                     .create(true)
                     .open(&filename)
