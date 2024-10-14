@@ -154,7 +154,8 @@ impl EGraph {
                 egraph_serialize::Node {
                     op: decl.name.to_string(),
                     eclass: class_id.clone(),
-                    cost: NotNan::new(decl.cost.unwrap_or(1) as f64).unwrap(),
+                    cost: NotNan::new(output.cost.unwrap_or(decl.cost.unwrap_or(1)) as f64)
+                        .unwrap(),
                     children,
                     subsumed: output.subsumed,
                 },
