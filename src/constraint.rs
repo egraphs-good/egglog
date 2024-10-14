@@ -356,7 +356,7 @@ impl Assignment<AtomTerm, ArcSort> {
                     .collect();
                 let resolved_call = if *is_cost {
                     ResolvedCall::from_resolution_func_types(head, &types, typeinfo)
-                        .ok_or_else(|| TypeError::UnboundFunction(*head))?
+                        .ok_or_else(|| TypeError::UnboundFunction(*head, span.clone()))?
                 } else {
                     types.push(rhs.output_type(typeinfo));
                     ResolvedCall::from_resolution(head, &types, typeinfo)

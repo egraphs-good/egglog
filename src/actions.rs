@@ -212,7 +212,7 @@ impl EGraph {
         stack: &mut Vec<Value>,
         set_cost: bool,
     ) -> Result<(), Error> {
-        let i64sort: Arc<I64Sort> = self.type_info().get_sort_nofail();
+        let i64sort: Arc<I64Sort> = self.type_info.get_sort_nofail();
         let function = self.functions.get_mut(&table).unwrap();
 
         let new_len = stack.len() - function.schema.input.len();

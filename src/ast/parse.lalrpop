@@ -91,7 +91,6 @@ Command: Command = {
         => Command::Simplify { span: Span(srcfile.clone(), lo, hi), expr, schedule },
     <lo:LParen> "query-extract" <variants:(":variants" <UNum>)?> <expr:Expr> <hi:RParen> => Command::QueryExtract { span: Span(srcfile.clone(), lo, hi), expr, variants: variants.unwrap_or(0) },
     <lo:LParen> "check" <facts:(Fact)*> <hi:RParen> => Command::Check(Span(srcfile.clone(), lo, hi), facts),
-    LParen "check-proof" RParen => Command::CheckProof,
       <lo:LParen> "run-schedule" <scheds:Schedule*> <hi:RParen> =>
         Command::RunSchedule(Schedule::Sequence(Span(srcfile.clone(), lo, hi), scheds)),
     LParen "print-stats" RParen => Command::PrintOverallStatistics,
