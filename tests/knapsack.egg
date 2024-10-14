@@ -8,7 +8,8 @@
 ; List of (weight, value) pairs
 (datatype objects
     (Cons i64 i64 objects))
-(declare Nil objects)
+(function NilConst () objects)
+(let Nil (NilConst))
 
 ; Given a capacity and a list of objects, finds the maximum value of a
 ; collection of objects whose total weight does not exceed the capacity.

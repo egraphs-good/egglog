@@ -4,6 +4,7 @@ use std::io::{self, BufRead, BufReader};
 use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
+#[command(version = env!("FULL_VERSION"), about = env!("CARGO_PKG_DESCRIPTION"))]
 struct Args {
     #[clap(short = 'F', long)]
     fact_directory: Option<PathBuf>,
@@ -13,16 +14,6 @@ struct Args {
     desugar: bool,
     #[clap(long)]
     resugar: bool,
-    /// Currently unused.
-    #[clap(long)]
-    proofs: bool,
-    /// Currently unused.
-    /// Use the rust backend implimentation of eqsat,
-    /// including a rust implementation of the union-find
-    /// data structure and the rust implementation of
-    /// the rebuilding algorithm (maintains congruence closure).
-    #[clap(long)]
-    terms_encoding: bool,
     #[clap(long, default_value_t = RunMode::Normal)]
     show: RunMode,
     // TODO remove this evil hack
@@ -43,6 +34,9 @@ struct Args {
     /// Maximum number of calls per function to render in dot/svg output
     #[clap(long, default_value = "40")]
     max_calls_per_function: usize,
+    /// Number of times to inline leaves
+    #[clap(long, default_value = "0")]
+    serialize_n_inline_leaves: usize,
 }
 
 // test if the current command should be evaluated
@@ -109,21 +103,12 @@ fn main() {
         egraph.fact_directory = args.fact_directory.clone();
         egraph.seminaive = !args.naive;
         egraph.run_mode = args.show;
-        // NB: both terms_encoding and proofs are currently unused
-        if args.terms_encoding {
-            egraph.enable_terms_encoding();
-        }
-        if args.proofs {
-            egraph
-                .parse_and_run_program(None, "(set-option enable_proofs 1)")
-                .unwrap();
-        }
         egraph
     };
 
     if args.inputs.is_empty() {
         let stdin = io::stdin();
-        log::info!("Welcome to Egglog!");
+        log::info!("Welcome to Egglog! (build: {})", env!("FULL_VERSION"));
         let mut egraph = mk_egraph();
 
         let mut cmd_buffer = String::new();
@@ -209,31 +194,25 @@ fn main() {
                 std::process::exit(1)
             }
         }
-        // if we are splitting primitive outputs, add `-split` to the end of the file name
-        let serialize_filename = if args.serialize_split_primitive_outputs {
-            input.with_file_name(format!(
-                "{}-split",
-                input.file_stem().unwrap().to_str().unwrap()
-            ))
-        } else {
-            input.clone()
-        };
-        if args.to_json {
-            let json_path = serialize_filename.with_extension("json");
-            let config = SerializeConfig {
-                split_primitive_outputs: args.serialize_split_primitive_outputs,
-                ..SerializeConfig::default()
-            };
-            let serialized = egraph.serialize(config);
-            serialized.to_json_file(json_path).unwrap();
-        }
 
-        if args.to_dot || args.to_svg {
-            let serialized = egraph.serialize_for_graphviz(
-                args.serialize_split_primitive_outputs,
-                args.max_functions,
-                args.max_calls_per_function,
-            );
+        if args.to_json || args.to_dot || args.to_svg {
+            let mut serialized = egraph.serialize(SerializeConfig::default());
+            if args.serialize_split_primitive_outputs {
+                serialized.split_classes(|id, _| egraph.from_node_id(id).is_primitive())
+            }
+            for _ in 0..args.serialize_n_inline_leaves {
+                serialized.inline_leaves();
+            }
+
+            // if we are splitting primitive outputs, add `-split` to the end of the file name
+            let serialize_filename = if args.serialize_split_primitive_outputs {
+                input.with_file_name(format!(
+                    "{}-split",
+                    input.file_stem().unwrap().to_str().unwrap()
+                ))
+            } else {
+                input.clone()
+            };
             if args.to_dot {
                 let dot_path = serialize_filename.with_extension("dot");
                 serialized.to_dot_file(dot_path).unwrap()
@@ -241,6 +220,10 @@ fn main() {
             if args.to_svg {
                 let svg_path = serialize_filename.with_extension("svg");
                 serialized.to_svg_file(svg_path).unwrap()
+            }
+            if args.to_json {
+                let json_path = serialize_filename.with_extension("json");
+                serialized.to_json_file(json_path).unwrap();
             }
         }
         // no need to drop the egraph if we are going to exit
@@ -259,12 +242,12 @@ mod tests {
         #[rustfmt::skip]
         let test_cases = vec![
             vec![
-                "(extract", 
-                "\"1", 
-                ")", 
-                "(", 
-                ")))", 
-                "\"", 
+                "(extract",
+                "\"1",
+                ")",
+                "(",
+                ")))",
+                "\"",
                 ";; )",
                 ")"
             ],

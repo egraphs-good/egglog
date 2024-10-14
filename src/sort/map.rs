@@ -29,13 +29,30 @@ impl MapSort {
         name: Symbol,
         args: &[Expr],
     ) -> Result<ArcSort, TypeError> {
-        if let [Expr::Var(_, k), Expr::Var(_, v)] = args {
-            let k = typeinfo.sorts.get(k).ok_or(TypeError::UndefinedSort(*k))?;
-            let v = typeinfo.sorts.get(v).ok_or(TypeError::UndefinedSort(*v))?;
+        if let [Expr::Var(k_span, k), Expr::Var(v_span, v)] = args {
+            let k = typeinfo
+                .sorts
+                .get(k)
+                .ok_or(TypeError::UndefinedSort(*k, k_span.clone()))?;
+            let v = typeinfo
+                .sorts
+                .get(v)
+                .ok_or(TypeError::UndefinedSort(*v, v_span.clone()))?;
 
-            if k.is_eq_container_sort() || v.is_container_sort() {
-                return Err(TypeError::UndefinedSort(
+            // TODO: specialize the error message
+            if k.is_eq_container_sort() {
+                return Err(TypeError::DisallowedSort(
+                    name,
                     "Maps nested with other EqSort containers are not allowed".into(),
+                    k_span.clone(),
+                ));
+            }
+
+            if v.is_container_sort() {
+                return Err(TypeError::DisallowedSort(
+                    name,
+                    "Maps nested with other EqSort containers are not allowed".into(),
+                    v_span.clone(),
                 ));
             }
 

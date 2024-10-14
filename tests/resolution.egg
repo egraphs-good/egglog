@@ -27,8 +27,10 @@
 ; This encoding as it stands really only supports ground atoms modulo equality
 
 (datatype Bool)
-(declare True Bool)
-(declare False Bool)
+(function TrueConst () Bool)
+(let True (TrueConst))
+(function FalseConst () Bool)
+(let False (FalseConst))
 (function myor (Bool Bool) Bool)
 (function negate (Bool) Bool)
 
@@ -47,7 +49,7 @@
 ; commutativity
 (rewrite (myor a (myor b c)) (myor b (myor a c)))
 
-;absoprtion
+;absorption
 (rewrite (myor a (myor a b)) (myor a b))
 (rewrite (myor a (myor (negate a) b)) True)
 

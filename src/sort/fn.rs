@@ -62,11 +62,11 @@ impl FunctionSort {
         name: Symbol,
         args: &[Expr],
     ) -> Result<ArcSort, TypeError> {
-        if let [inputs, Expr::Var(_, output)] = args {
+        if let [inputs, Expr::Var(span, output)] = args {
             let output_sort = typeinfo
                 .sorts
                 .get(output)
-                .ok_or(TypeError::UndefinedSort(*output))?;
+                .ok_or(TypeError::UndefinedSort(*output, span.clone()))?;
 
             let input_sorts = match inputs {
                 Expr::Call(_, first, rest_args) => {
@@ -82,7 +82,7 @@ impl FunctionSort {
                             typeinfo
                                 .sorts
                                 .get(arg)
-                                .ok_or(TypeError::UndefinedSort(*arg))
+                                .ok_or(TypeError::UndefinedSort(*arg, span.clone()))
                                 .map(|s| s.clone())
                         })
                         .collect::<Result<Vec<_>, _>>()?
@@ -389,7 +389,7 @@ impl PrimitiveLike for Apply {
 /// so that we can re-use the logic for primitive and regular functions.
 fn call_fn(egraph: &mut EGraph, name: &Symbol, types: Vec<ArcSort>, args: Vec<Value>) -> Value {
     // Make a call with temp vars as each of the args
-    let resolved_call = ResolvedCall::from_resolution(name, types.as_slice(), egraph.type_info());
+    let resolved_call = ResolvedCall::from_resolution(name, types.as_slice(), &egraph.type_info);
     let arg_vars: Vec<_> = types
         .into_iter()
         // Skip last sort which is the output sort
@@ -410,18 +410,16 @@ fn call_fn(egraph: &mut EGraph, name: &Symbol, types: Vec<ArcSort>, args: Vec<Va
     // Similar to how the merge function is created in `Function::new`
     let (actions, mapped_expr) = expr
         .to_core_actions(
-            egraph.type_info(),
+            &egraph.type_info,
             &mut binding.clone(),
-            &mut ResolvedGen::new("$".to_string()),
+            &mut egraph.symbol_gen,
         )
         .unwrap();
-    let target = mapped_expr.get_corresponding_var_or_lit(egraph.type_info());
+    let target = mapped_expr.get_corresponding_var_or_lit(&egraph.type_info);
     let program = egraph.compile_expr(&binding, &actions, &target).unwrap();
     // Similar to how the `MergeFn::Expr` case is handled in `Egraph::perform_set`
     // egraph.rebuild().unwrap();
     let mut stack = vec![];
-    egraph
-        .run_actions(&mut stack, &args, &program, true)
-        .unwrap();
+    egraph.run_actions(&mut stack, &args, &program).unwrap();
     stack.pop().unwrap()
 }

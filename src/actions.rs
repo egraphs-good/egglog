@@ -121,7 +121,9 @@ enum Instruction {
     /// Pop function arguments off the stack, calls the function,
     /// and push the result onto the stack. The bool indicates
     /// whether to make defaults.
-    /// Currently, it is always set to true
+    ///
+    /// This should be set to true after we disallow lookup in rule's actions and :default keyword
+    /// Currently, it's true when has_default() || is_datatype()
     CallFunction(Symbol, bool),
     /// Pop primitive arguments off the stack, calls the primitive,
     /// and push the result onto the stack.
@@ -237,7 +239,7 @@ impl EGraph {
                     MergeFn::Expr(merge_prog) => {
                         let values = [old_value, new_value];
                         let mut stack = vec![];
-                        self.run_actions(&mut stack, &values, &merge_prog, true)?;
+                        self.run_actions(&mut stack, &values, &merge_prog)?;
                         stack.pop().unwrap()
                     }
                 };
@@ -252,7 +254,7 @@ impl EGraph {
                     let values = [old_value, new_value];
                     // We need to pass a new stack instead of reusing the old one
                     // because Load(Stack(idx)) use absolute index.
-                    self.run_actions(&mut Vec::new(), &values, &prog, true)?;
+                    self.run_actions(&mut Vec::new(), &values, &prog)?;
                 }
             }
         } else {
@@ -266,7 +268,6 @@ impl EGraph {
         stack: &mut Vec<Value>,
         subst: &[Value],
         program: &Program,
-        make_defaults: bool,
     ) -> Result<(), Error> {
         for instr in &program.0 {
             match instr {
@@ -274,8 +275,7 @@ impl EGraph {
                     Load::Stack(idx) => stack.push(stack[*idx]),
                     Load::Subst(idx) => stack.push(subst[*idx]),
                 },
-                Instruction::CallFunction(f, make_defaults_func) => {
-                    let make_defaults = make_defaults && *make_defaults_func;
+                Instruction::CallFunction(f, make_defaults) => {
                     let function = self.functions.get_mut(f).unwrap();
                     let output_tag = function.schema.output.name();
                     let new_len = stack.len() - function.schema.input.len();
@@ -289,7 +289,7 @@ impl EGraph {
 
                     let value = if let Some(out) = function.nodes.get(values) {
                         out.value
-                    } else if make_defaults {
+                    } else if *make_defaults {
                         let ts = self.timestamp;
                         let out = &function.schema.output;
                         match function.decl.default.as_ref() {
@@ -305,7 +305,7 @@ impl EGraph {
                             }
                             Some(default) => {
                                 let default = default.clone();
-                                let value = self.eval_resolved_expr(&default, true)?;
+                                let value = self.eval_resolved_expr(&default)?;
                                 self.functions.get_mut(f).unwrap().insert(values, value, ts);
                                 value
                             }
@@ -338,11 +338,9 @@ impl EGraph {
                     }
                 }
                 Instruction::Set(f, is_cost) => {
-                    assert!(make_defaults);
                     let function = self.functions.get_mut(f).unwrap();
                     // desugaring should have desugared
                     // set to union
-                    // except for setting the parent relation
                     let new_value = stack.pop().unwrap();
                     let new_len = stack.len() - function.schema.input.len();
                     self.perform_set(*f, new_value, stack, *is_cost)?;
@@ -372,7 +370,7 @@ impl EGraph {
                         let (cost, term) = self.extract(
                             values[0],
                             &mut termdag,
-                            self.type_info().sorts.get(&values[0].tag).unwrap(),
+                            self.type_info.sorts.get(&values[0].tag).unwrap(),
                         );
                         let extracted = termdag.to_string(&term);
                         log::info!("extracted with cost {cost}: {extracted}");

@@ -334,7 +334,8 @@ fn test_subsume() {
             None,
             r#"
         ;; add something equal to x that can be extracted:
-        (declare other Math)
+        (function otherConst () Math)
+        (let other (otherConst))
         (union x other)
         (extract x 10)
         "#,
@@ -404,4 +405,35 @@ fn test_value_to_classid() {
     let class_id = egraph.value_to_class_id(&value);
     assert!(serialized.class_data.get(&class_id).is_some());
     assert_eq!(value, egraph.class_id_to_value(&class_id));
+}
+
+#[test]
+fn test_serialize_subsume_status() {
+    let mut egraph = EGraph::default();
+
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+            (datatype Math)
+            (function a () Math )
+            (function b () Math )
+            (a)
+            (b)
+            (subsume (a))
+            "#,
+        )
+        .unwrap();
+
+    let serialized = egraph.serialize(SerializeConfig::default());
+    let a_id = egraph.to_node_id(egglog::SerializedNode::Function {
+        name: ("a").into(),
+        offset: 0,
+    });
+    let b_id = egraph.to_node_id(egglog::SerializedNode::Function {
+        name: "b".into(),
+        offset: 0,
+    });
+    assert!(serialized.nodes[&a_id].subsumed);
+    assert!(!serialized.nodes[&b_id].subsumed);
 }

@@ -14,6 +14,24 @@ lalrpop_mod!(
     "/ast/parse.rs"
 );
 
+// For some reason the parser is slow to construct so
+// we make it static and only construct it once.
+lazy_static! {
+    static ref PARSER: parse::ProgramParser = Default::default();
+}
+
+/// Parse a file into a program.
+pub fn parse_program(filename: Option<String>, input: &str) -> Result<Vec<Command>, Error> {
+    let filename = filename.unwrap_or_else(|| DEFAULT_FILENAME.to_string());
+    let srcfile = Arc::new(SrcFile {
+        name: filename,
+        contents: Some(input.to_string()),
+    });
+    Ok(PARSER
+        .parse(&srcfile, input)
+        .map_err(|e| e.map_token(|tok| tok.to_string()))?)
+}
+
 use crate::{
     core::{GenericAtom, GenericAtomTerm, HeadOrEq, Query, ResolvedCall},
     *,
@@ -48,7 +66,12 @@ impl Display for Id {
 #[derive(Clone, Debug)]
 /// The egglog internal representation of already compiled rules
 pub(crate) enum Ruleset {
-    Rules(Symbol, HashMap<Symbol, CompiledRule>),
+    /// Represents a ruleset with a set of rules.
+    /// Use an [`IndexMap`] to ensure egglog is deterministic.
+    /// Rules added to the [`IndexMap`] first apply their
+    /// actions first.
+    Rules(Symbol, IndexMap<Symbol, CompiledRule>),
+    /// A combined ruleset may contain other rulesets.
     Combined(Symbol, Vec<Symbol>),
 }
 
@@ -61,9 +84,91 @@ pub struct SrcFile {
     pub contents: Option<String>,
 }
 
+#[derive(Clone, Copy)]
+pub struct Location {
+    pub line: usize,
+    pub col: usize,
+}
+
+#[derive(Clone, Copy)]
+pub enum Quote<'a> {
+    Quote {
+        filename: &'a str,
+        quote: &'a str,
+        start: Location,
+        end: Location,
+    },
+    NotAvailable,
+}
+
+impl<'a> Display for Quote<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Quote::Quote {
+                filename,
+                quote,
+                start,
+                end,
+            } => {
+                if start.line == end.line {
+                    write!(
+                        f,
+                        "In {}:{}-{} of {filename}: {}",
+                        start.line, start.col, end.col, quote
+                    )
+                } else {
+                    write!(
+                        f,
+                        "In {}:{}-{}:{} of {filename}: {}",
+                        start.line, start.col, end.line, end.col, quote
+                    )
+                }
+            }
+            Quote::NotAvailable => write!(f, "In <Unknown>"),
+        }
+    }
+}
+
+impl SrcFile {
+    pub fn get_location(&self, offset: usize) -> Location {
+        let mut line = 1;
+        let mut col = 1;
+        for (i, c) in self.contents.as_ref().unwrap().chars().enumerate() {
+            if i == offset {
+                break;
+            }
+            if c == '\n' {
+                line += 1;
+                col = 1;
+            } else {
+                col += 1;
+            }
+        }
+        Location { line, col }
+    }
+}
+
 /// A [`Span`] contains the file name and a pair of offsets representing the start and the end.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Span(pub Arc<SrcFile>, pub usize, pub usize);
+
+impl Span {
+    pub fn get_quote(&self) -> Quote<'_> {
+        let Some(contents) = self.0.contents.as_ref() else {
+            return Quote::NotAvailable;
+        };
+        let filename = &self.0.name;
+        let start = self.0.get_location(self.1);
+        let end = self.0.get_location(self.2 - 1);
+        let quote = &contents[self.1..self.2];
+        Quote::Quote {
+            filename,
+            quote,
+            start,
+            end,
+        }
+    }
+}
 
 lazy_static! {
     pub static ref DUMMY_FILE: Arc<SrcFile> = Arc::new(SrcFile {
@@ -80,7 +185,7 @@ pub type NCommand = GenericNCommand<Symbol, Symbol>;
 pub(crate) type ResolvedNCommand = GenericNCommand<ResolvedCall, ResolvedVar>;
 
 /// A [`NCommand`] is a desugared [`Command`], where syntactic sugars
-/// like [`Command::Datatype`], [`Command::Declare`], and [`Command::Rewrite`]
+/// like [`Command::Datatype`] and [`Command::Rewrite`]
 /// are eliminated.
 /// Most of the heavy lifting in egglog is done over [`NCommand`]s.
 ///
@@ -100,7 +205,11 @@ where
         name: Symbol,
         value: GenericExpr<Head, Leaf>,
     },
-    Sort(Symbol, Option<(Symbol, Vec<GenericExpr<Symbol, Symbol>>)>),
+    Sort(
+        Span,
+        Symbol,
+        Option<(Symbol, Vec<GenericExpr<Symbol, Symbol>>)>,
+    ),
     Function(GenericFunctionDecl<Head, Leaf>),
     AddRuleset(Symbol),
     UnstableCombinedRuleset(Symbol, Vec<Symbol>),
@@ -113,17 +222,18 @@ where
     RunSchedule(GenericSchedule<Head, Leaf>),
     PrintOverallStatistics,
     Check(Span, Vec<GenericFact<Head, Leaf>>),
-    CheckProof,
-    PrintTable(Symbol, usize),
-    PrintSize(Option<Symbol>),
+    PrintTable(Span, Symbol, usize),
+    PrintSize(Span, Option<Symbol>),
     Output {
+        span: Span,
         file: String,
         exprs: Vec<GenericExpr<Head, Leaf>>,
     },
     Push(usize),
-    Pop(usize),
-    Fail(Box<GenericNCommand<Head, Leaf>>),
+    Pop(Span, usize),
+    Fail(Span, Box<GenericNCommand<Head, Leaf>>),
     Input {
+        span: Span,
         name: Symbol,
         file: String,
     },
@@ -140,7 +250,9 @@ where
                 name: *name,
                 value: value.clone(),
             },
-            GenericNCommand::Sort(name, params) => GenericCommand::Sort(*name, params.clone()),
+            GenericNCommand::Sort(span, name, params) => {
+                GenericCommand::Sort(span.clone(), *name, params.clone())
+            }
             GenericNCommand::Function(f) => GenericCommand::Function(f.clone()),
             GenericNCommand::AddRuleset(name) => GenericCommand::AddRuleset(*name),
             GenericNCommand::UnstableCombinedRuleset(name, others) => {
@@ -161,17 +273,24 @@ where
             GenericNCommand::Check(span, facts) => {
                 GenericCommand::Check(span.clone(), facts.clone())
             }
-            GenericNCommand::CheckProof => GenericCommand::CheckProof,
-            GenericNCommand::PrintTable(name, n) => GenericCommand::PrintFunction(*name, *n),
-            GenericNCommand::PrintSize(name) => GenericCommand::PrintSize(*name),
-            GenericNCommand::Output { file, exprs } => GenericCommand::Output {
+            GenericNCommand::PrintTable(span, name, n) => {
+                GenericCommand::PrintFunction(span.clone(), *name, *n)
+            }
+            GenericNCommand::PrintSize(span, name) => {
+                GenericCommand::PrintSize(span.clone(), *name)
+            }
+            GenericNCommand::Output { span, file, exprs } => GenericCommand::Output {
+                span: span.clone(),
                 file: file.to_string(),
                 exprs: exprs.clone(),
             },
             GenericNCommand::Push(n) => GenericCommand::Push(*n),
-            GenericNCommand::Pop(n) => GenericCommand::Pop(*n),
-            GenericNCommand::Fail(cmd) => GenericCommand::Fail(Box::new(cmd.to_command())),
-            GenericNCommand::Input { name, file } => GenericCommand::Input {
+            GenericNCommand::Pop(span, n) => GenericCommand::Pop(span.clone(), *n),
+            GenericNCommand::Fail(span, cmd) => {
+                GenericCommand::Fail(span.clone(), Box::new(cmd.to_command()))
+            }
+            GenericNCommand::Input { span, name, file } => GenericCommand::Input {
+                span: span.clone(),
                 name: *name,
                 file: file.clone(),
             },
@@ -187,7 +306,7 @@ where
                 name,
                 value: f(value.clone()),
             },
-            GenericNCommand::Sort(name, params) => GenericNCommand::Sort(name, params),
+            GenericNCommand::Sort(span, name, params) => GenericNCommand::Sort(span, name, params),
             GenericNCommand::Function(func) => GenericNCommand::Function(func.visit_exprs(f)),
             GenericNCommand::AddRuleset(name) => GenericNCommand::AddRuleset(name),
             GenericNCommand::UnstableCombinedRuleset(name, rulesets) => {
@@ -213,17 +332,23 @@ where
                 span,
                 facts.into_iter().map(|fact| fact.visit_exprs(f)).collect(),
             ),
-            GenericNCommand::CheckProof => GenericNCommand::CheckProof,
-            GenericNCommand::PrintTable(name, n) => GenericNCommand::PrintTable(name, n),
-            GenericNCommand::PrintSize(name) => GenericNCommand::PrintSize(name),
-            GenericNCommand::Output { file, exprs } => GenericNCommand::Output {
+            GenericNCommand::PrintTable(span, name, n) => {
+                GenericNCommand::PrintTable(span, name, n)
+            }
+            GenericNCommand::PrintSize(span, name) => GenericNCommand::PrintSize(span, name),
+            GenericNCommand::Output { span, file, exprs } => GenericNCommand::Output {
+                span,
                 file,
                 exprs: exprs.into_iter().map(f).collect(),
             },
             GenericNCommand::Push(n) => GenericNCommand::Push(n),
-            GenericNCommand::Pop(n) => GenericNCommand::Pop(n),
-            GenericNCommand::Fail(cmd) => GenericNCommand::Fail(Box::new(cmd.visit_exprs(f))),
-            GenericNCommand::Input { name, file } => GenericNCommand::Input { name, file },
+            GenericNCommand::Pop(span, n) => GenericNCommand::Pop(span, n),
+            GenericNCommand::Fail(span, cmd) => {
+                GenericNCommand::Fail(span, Box::new(cmd.visit_exprs(f)))
+            }
+            GenericNCommand::Input { span, name, file } => {
+                GenericNCommand::Input { span, name, file }
+            }
         }
     }
 }
@@ -325,6 +450,12 @@ pub type Command = GenericCommand<Symbol, Symbol>;
 
 pub type Subsume = bool;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Subdatatypes {
+    Variants(Vec<Variant>),
+    NewSort(Symbol, Vec<Expr>),
+}
+
 /// A [`Command`] is the top-level construct in egglog.
 /// It includes defining rules, declaring functions,
 /// adding to tables, and running rules (via a [`Schedule`]).
@@ -337,10 +468,7 @@ where
     /// Egglog supports several *experimental* options
     /// that can be set using the `set-option` command.
     ///
-    /// For example, `(set-option node_limit 1000)` sets a hard limit on the number of "nodes" or rows in the database.
-    /// Once this limit is reached, egglog stops running rules.
-    ///
-    /// Other options supported include:
+    /// Options supported include:
     /// - "interactive_mode" (default: false): when enabled, egglog prints "(done)" after each command, allowing an external
     /// tool to know when each command has finished running.
     SetOption {
@@ -374,28 +502,13 @@ where
 
     /// Datatypes are also known as algebraic data types, tagged unions and sum types.
     Datatype {
+        span: Span,
         name: Symbol,
         variants: Vec<Variant>,
     },
-    /// `declare` is syntactic sugar allowing for the declaration of constants.
-    /// For example, the following program:
-    /// ```text
-    /// (sort Bool)
-    /// (declare True Bool)
-    /// ```
-    /// Desugars to:
-    /// ```text
-    /// (sort Bool)
-    /// (function True_table () Bool)
-    /// (let True (True_table))
-    /// ```
-
-    /// Note that declare inserts the constant into the database,
-    /// so rules can use the constant directly as a variable.
-    Declare {
+    Datatypes {
         span: Span,
-        name: Symbol,
-        sort: Symbol,
+        datatypes: Vec<(Span, Symbol, Subdatatypes)>,
     },
     /// Create a new user-defined sort, which can then
     /// be used in new [`Command::Function`] declarations.
@@ -412,7 +525,7 @@ where
     /// ```
     ///
     /// Now `MathVec` can be used as an input or output sort.
-    Sort(Symbol, Option<(Symbol, Vec<GenericExpr<Symbol, Symbol>>)>),
+    Sort(Span, Symbol, Option<(Symbol, Vec<Expr>)>),
     /// Declare an egglog function, which is a database table with a
     /// a functional dependency (also called a primary key) on its inputs to one output.
     ///
@@ -472,6 +585,7 @@ where
     /// (function edge (i64 i64) Unit :default ())
     /// ```
     Relation {
+        span: Span,
         constructor: Symbol,
         inputs: Vec<Symbol>,
     },
@@ -618,11 +732,10 @@ where
     PrintOverallStatistics,
     // TODO provide simplify docs
     Simplify {
+        span: Span,
         expr: GenericExpr<Head, Leaf>,
         schedule: GenericSchedule<Head, Leaf>,
     },
-    // TODO provide calc docs
-    Calc(Span, Vec<IdentSort>, Vec<GenericExpr<Head, Leaf>>),
     /// The `query-extract` command runs a query,
     /// extracting the result for each match that it finds.
     /// For a simpler extraction command, use [`Action::Extract`] instead.
@@ -649,6 +762,7 @@ where
     /// Under the hood, this command is implemented with the [`EGraph::extract`]
     /// function.
     QueryExtract {
+        span: Span,
         variants: usize,
         expr: GenericExpr<Head, Leaf>,
     },
@@ -673,8 +787,6 @@ where
     /// [INFO ] Command failed as expected.
     /// ```
     Check(Span, Vec<GenericFact<Head, Leaf>>),
-    /// Currently unused, this command will check proofs when they are implemented.
-    CheckProof,
     /// Print out rows a given function, extracting each of the elements of the function.
     /// Example:
     /// ```text
@@ -682,16 +794,18 @@ where
     /// ```
     /// prints the first 20 rows of the `Add` function.
     ///
-    PrintFunction(Symbol, usize),
+    PrintFunction(Span, Symbol, usize),
     /// Print out the number of rows in a function or all functions.
-    PrintSize(Option<Symbol>),
+    PrintSize(Span, Option<Symbol>),
     /// Input a CSV file directly into a function.
     Input {
+        span: Span,
         name: Symbol,
         file: String,
     },
     /// Extract and output a set of expressions to a file.
     Output {
+        span: Span,
         file: String,
         exprs: Vec<GenericExpr<Head, Leaf>>,
     },
@@ -700,11 +814,11 @@ where
     Push(usize),
     /// `pop` the current egraph, restoring the previous one.
     /// The argument specifies how many egraphs to pop.
-    Pop(usize),
+    Pop(Span, usize),
     /// Assert that a command fails with an error.
-    Fail(Box<GenericCommand<Head, Leaf>>),
+    Fail(Span, Box<GenericCommand<Head, Leaf>>),
     /// Include another egglog file directly as text and run it.
-    Include(String),
+    Include(Span, String),
 }
 
 impl<Head, Leaf> ToSexp for GenericCommand<Head, Leaf>
@@ -719,19 +833,19 @@ where
                 rewrite.to_sexp(*name, false, *subsume)
             }
             GenericCommand::BiRewrite(name, rewrite) => rewrite.to_sexp(*name, true, false),
-            GenericCommand::Datatype { name, variants } => list!("datatype", name, ++ variants),
-            GenericCommand::Declare {
+            GenericCommand::Datatype {
                 span: _,
                 name,
-                sort,
-            } => list!("declare", name, sort),
+                variants,
+            } => list!("datatype", name, ++ variants),
             GenericCommand::Action(a) => a.to_sexp(),
-            GenericCommand::Sort(name, None) => list!("sort", name),
-            GenericCommand::Sort(name, Some((name2, args))) => {
+            GenericCommand::Sort(_span, name, None) => list!("sort", name),
+            GenericCommand::Sort(_span, name, Some((name2, args))) => {
                 list!("sort", name, list!( name2, ++ args))
             }
             GenericCommand::Function(f) => f.to_sexp(),
             GenericCommand::Relation {
+                span: _,
                 constructor,
                 inputs,
             } => list!("relation", constructor, list!(++ inputs)),
@@ -746,23 +860,51 @@ where
             } => rule.to_sexp(*ruleset, *name),
             GenericCommand::RunSchedule(sched) => list!("run-schedule", sched),
             GenericCommand::PrintOverallStatistics => list!("print-stats"),
-            GenericCommand::Calc(_ann, args, exprs) => list!("calc", list!(++ args), ++ exprs),
-            GenericCommand::QueryExtract { variants, expr } => {
+            GenericCommand::QueryExtract {
+                span: _,
+                variants,
+                expr,
+            } => {
                 list!("query-extract", ":variants", variants, expr)
             }
             GenericCommand::Check(_ann, facts) => list!("check", ++ facts),
-            GenericCommand::CheckProof => list!("check-proof"),
             GenericCommand::Push(n) => list!("push", n),
-            GenericCommand::Pop(n) => list!("pop", n),
-            GenericCommand::PrintFunction(name, n) => list!("print-function", name, n),
-            GenericCommand::PrintSize(name) => list!("print-size", ++ name),
-            GenericCommand::Input { name, file } => list!("input", name, format!("\"{}\"", file)),
-            GenericCommand::Output { file, exprs } => {
+            GenericCommand::Pop(_span, n) => list!("pop", n),
+            GenericCommand::PrintFunction(_span, name, n) => list!("print-function", name, n),
+            GenericCommand::PrintSize(_span, name) => list!("print-size", ++ name),
+            GenericCommand::Input {
+                span: _,
+                name,
+                file,
+            } => {
+                list!("input", name, format!("\"{}\"", file))
+            }
+            GenericCommand::Output {
+                span: _,
+                file,
+                exprs,
+            } => {
                 list!("output", format!("\"{}\"", file), ++ exprs)
             }
-            GenericCommand::Fail(cmd) => list!("fail", cmd),
-            GenericCommand::Include(file) => list!("include", format!("\"{}\"", file)),
-            GenericCommand::Simplify { expr, schedule } => list!("simplify", schedule, expr),
+            GenericCommand::Fail(_span, cmd) => list!("fail", cmd),
+            GenericCommand::Include(_span, file) => list!("include", format!("\"{}\"", file)),
+            GenericCommand::Simplify {
+                span: _,
+                expr,
+                schedule,
+            } => list!("simplify", schedule, expr),
+            GenericCommand::Datatypes { span: _, datatypes } => {
+                let datatypes: Vec<_> = datatypes
+                    .iter()
+                    .map(|(_, name, variants)| match variants {
+                        Subdatatypes::Variants(variants) => list!(name, ++ variants),
+                        Subdatatypes::NewSort(head, args) => {
+                            list!("sort", name, list!(head, ++ args))
+                        }
+                    })
+                    .collect();
+                list!("datatype*", ++ datatypes)
+            }
         }
     }
 }
@@ -882,10 +1024,12 @@ where
     /// Globals are desugared to functions, with this flag set to true.
     /// This is used by visualization to handle globals differently.
     pub ignore_viz: bool,
+    pub span: Span,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Variant {
+    pub span: Span,
     pub name: Symbol,
     pub types: Vec<Symbol>,
     pub cost: Option<usize>,
@@ -924,7 +1068,7 @@ impl Schema {
 }
 
 impl FunctionDecl {
-    pub fn relation(name: Symbol, input: Vec<Symbol>) -> Self {
+    pub fn relation(span: Span, name: Symbol, input: Vec<Symbol>) -> Self {
         Self {
             name,
             schema: Schema {
@@ -937,6 +1081,7 @@ impl FunctionDecl {
             cost: None,
             unextractable: false,
             ignore_viz: false,
+            span,
         }
     }
 }
@@ -959,6 +1104,7 @@ where
             cost: self.cost,
             unextractable: self.unextractable,
             ignore_viz: self.ignore_viz,
+            span: self.span,
         }
     }
 }

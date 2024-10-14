@@ -1,9 +1,8 @@
 use ordered_float::NotNan;
 use std::collections::VecDeque;
+use symbol_table::GlobalSymbol;
 
-use crate::{
-    ast::ResolvedFunctionDecl, function::table::hash_values, util::HashMap, EGraph, Value,
-};
+use crate::{ast::ResolvedFunctionDecl, util::HashMap, EGraph, TupleOutput, Value};
 
 pub struct SerializeConfig {
     // Maximumum number of functions to include in the serialized graph, any after this will be discarded
@@ -12,8 +11,6 @@ pub struct SerializeConfig {
     pub max_calls_per_function: Option<usize>,
     // Whether to include temporary functions in the serialized graph
     pub include_temporary_functions: bool,
-    // Whether to split primitive output values into their own e-classes with the function
-    pub split_primitive_outputs: bool,
     // Root eclasses to include in the output
     pub root_eclasses: Vec<Value>,
 }
@@ -25,8 +22,37 @@ impl Default for SerializeConfig {
             max_functions: None,
             max_calls_per_function: None,
             include_temporary_functions: false,
-            split_primitive_outputs: false,
             root_eclasses: vec![],
+        }
+    }
+}
+
+/// A node in the serialized egraph.
+#[derive(PartialEq, Debug, Clone)]
+pub enum SerializedNode {
+    /// A user defined function call.
+    Function {
+        /// The name of the function.
+        name: GlobalSymbol,
+        /// The offset of the index in the table.
+        /// This can be resolved to the output and input values with table.get_index(offset, true).
+        offset: usize,
+    },
+    /// A primitive value.
+    Primitive(Value),
+    /// A dummy node used to represent omitted nodes.
+    Dummy(Value),
+    /// A node that was split into multiple e-classes.
+    Split(Box<SerializedNode>),
+}
+
+impl SerializedNode {
+    /// Returns true if the node is a primitive value.
+    pub fn is_primitive(&self) -> bool {
+        match self {
+            SerializedNode::Primitive(_) => true,
+            SerializedNode::Split(node) => node.is_primitive(),
+            _ => false,
         }
     }
 }
@@ -46,11 +72,9 @@ impl EGraph {
     /// - Functions: Function name + hash of input values
     /// - Args which are eq sorts: Choose one ID from the e-class, distribute roughly evenly.
     /// - Args and outputs values which are primitives: Sort name + hash of value
-    ///   Notes: If `split_primitive_returns` is true, then each output value will be the function node id + `-output`
     ///
-    /// For e-classes:
-    /// - Eq sorts: Use the canonical ID of the e-class
-    /// - Primitives: Use the node ID
+    /// For e-classes IDs:
+    /// - tag and value of canonicalized value
     ///
     /// This is to achieve the following properties:
     /// - Equivalent primitive values will show up once in the e-graph.
@@ -63,23 +87,28 @@ impl EGraph {
         let all_calls: Vec<(
             &ResolvedFunctionDecl,
             &[Value],
-            &Value,
+            &TupleOutput,
+            egraph_serialize::ClassId,
             egraph_serialize::NodeId,
         )> = self
             .functions
-            .values()
-            .filter(|function| !function.decl.ignore_viz)
-            .map(|function| {
+            .iter()
+            .filter(|(_, function)| !function.decl.ignore_viz)
+            .map(|(name, function)| {
                 function
                     .nodes
-                    .iter(true)
+                    .iter_range(0..function.nodes.num_offsets(), true)
                     .take(config.max_calls_per_function.unwrap_or(usize::MAX))
-                    .map(|(input, output)| {
+                    .map(|(offset, input, output)| {
                         (
                             &function.decl,
                             input,
-                            &output.value,
-                            format!("{}-{}", function.decl.name, hash_values(input)).into(),
+                            output,
+                            self.value_to_class_id(&output.value),
+                            self.to_node_id(SerializedNode::Function {
+                                name: *name,
+                                offset,
+                            }),
                         )
                     })
                     .collect::<Vec<_>>()
@@ -94,34 +123,26 @@ impl EGraph {
         // Note that this is only for e-classes, primitives have e-classes equal to their node ID
         // This is for when we need to find what node ID to use for an edge to an e-class, we can rotate them evenly
         // amoung all possible options.
-        let mut node_ids: NodeIDs = all_calls
-            .iter()
-            .filter_map(|(_decl, _input, output, node_id)| {
-                if self.get_sort_from_value(output).unwrap().is_eq_sort() {
-                    Some((self.value_to_class_id(output), node_id))
-                } else {
-                    None
+        let mut node_ids: NodeIDs = all_calls.iter().fold(
+            HashMap::default(),
+            |mut acc, (_decl, _input, output, class_id, node_id)| {
+                if self
+                    .get_sort_from_value(&output.value)
+                    .unwrap()
+                    .is_eq_sort()
+                {
+                    acc.entry(class_id.clone())
+                        .or_insert_with(VecDeque::new)
+                        .push_back(node_id.clone());
                 }
-            })
-            .fold(HashMap::default(), |mut acc, (canonical_id, node_id)| {
-                acc.entry(canonical_id)
-                    .or_insert_with(VecDeque::new)
-                    .push_back(node_id.clone());
                 acc
-            });
+            },
+        );
 
         let mut egraph = egraph_serialize::EGraph::default();
-        for (decl, input, output, node_id) in all_calls {
-            // If we are splitting primitive outputs, then we will use the function node ID as the e-class for the output, so
-            // that even if two functions have the same primitive output, they will be in different e-classes.
-            let eclass = if config.split_primitive_outputs
-                && !self.get_sort_from_value(output).unwrap().is_eq_sort()
-            {
-                format!("{}-value", node_id.clone()).into()
-            } else {
-                self.value_to_class_id(output)
-            };
-            self.serialize_value(&mut egraph, &mut node_ids, output, &eclass);
+        for (decl, input, output, class_id, node_id) in all_calls {
+            self.serialize_value(&mut egraph, &mut node_ids, &output.value, &class_id);
+
             let children: Vec<_> = input
                 .iter()
                 .map(|v| {
@@ -132,9 +153,10 @@ impl EGraph {
                 node_id,
                 egraph_serialize::Node {
                     op: decl.name.to_string(),
-                    eclass,
+                    eclass: class_id.clone(),
                     cost: NotNan::new(decl.cost.unwrap_or(1) as f64).unwrap(),
                     children,
+                    subsumed: output.subsumed,
                 },
             );
         }
@@ -171,6 +193,51 @@ impl EGraph {
         }
     }
 
+    /// Gets the serialized node ID for the primitive, omitted, or function value.
+    pub fn to_node_id(&self, node: SerializedNode) -> egraph_serialize::NodeId {
+        match node {
+            SerializedNode::Function { name, offset } => {
+                format!("function-{}-{}", offset, name).into()
+            }
+            SerializedNode::Primitive(value) => {
+                format!("primitive-{}", self.value_to_class_id(&value)).into()
+            }
+            SerializedNode::Dummy(value) => {
+                format!("dummy-{}", self.value_to_class_id(&value)).into()
+            }
+            SerializedNode::Split(node) => format!("split-{}", self.to_node_id(*node)).into(),
+        }
+    }
+
+    /// Gets the serialized node for the node ID.
+    pub fn from_node_id(&self, node_id: &egraph_serialize::NodeId) -> SerializedNode {
+        let node_id = node_id.to_string();
+        let (tag, rest) = node_id.split_once('-').unwrap();
+        match tag {
+            "function" => {
+                let (offset, name) = rest.split_once('-').unwrap();
+                SerializedNode::Function {
+                    name: name.into(),
+                    offset: offset.parse().unwrap(),
+                }
+            }
+            "primitive" => {
+                let class_id: egraph_serialize::ClassId = rest.into();
+                SerializedNode::Primitive(self.class_id_to_value(&class_id))
+            }
+            "dummy" => {
+                let class_id: egraph_serialize::ClassId = rest.into();
+                SerializedNode::Dummy(self.class_id_to_value(&class_id))
+            }
+            "split" => {
+                let (_offset, rest) = rest.split_once('-').unwrap();
+                let node_id: egraph_serialize::NodeId = rest.into();
+                SerializedNode::Split(Box::new(self.from_node_id(&node_id)))
+            }
+            _ => std::panic::panic_any(format!("Unknown node ID: {}-{}", tag, rest)),
+        }
+    }
+
     /// Serialize the value and return the eclass and node ID
     /// If this is a primitive value, we will add the node to the data, but if it is an eclass, we will not
     /// When this is called on the output of a node, we only use the e-class to know which e-class its a part of
@@ -187,7 +254,7 @@ impl EGraph {
             let node_ids = node_ids.entry(class_id.clone()).or_insert_with(|| {
                 // If we don't find node IDs for this class, it means that all nodes for it were omitted due to size constraints
                 // In this case, add a dummy node in this class to represent the missing nodes
-                let node_id = egraph_serialize::NodeId::from(format!("{}-dummy", class_id));
+                let node_id = self.to_node_id(SerializedNode::Dummy(*value));
                 egraph.nodes.insert(
                     node_id.clone(),
                     egraph_serialize::Node {
@@ -195,6 +262,7 @@ impl EGraph {
                         eclass: class_id.clone(),
                         cost: NotNan::new(f64::INFINITY).unwrap(),
                         children: vec![],
+                        subsumed: false,
                     },
                 );
                 VecDeque::from(vec![node_id])
@@ -202,7 +270,7 @@ impl EGraph {
             node_ids.rotate_left(1);
             node_ids.front().unwrap().clone()
         } else {
-            let node_id: egraph_serialize::NodeId = class_id.to_string().into();
+            let node_id = self.to_node_id(SerializedNode::Primitive(*value));
             // Add node for value
             {
                 // Children will be empty unless this is a container sort
@@ -226,6 +294,7 @@ impl EGraph {
                         eclass: class_id.clone(),
                         cost: NotNan::new(1.0).unwrap(),
                         children,
+                        subsumed: false,
                     },
                 );
             };
