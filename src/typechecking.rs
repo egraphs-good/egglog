@@ -18,7 +18,7 @@ pub struct TypeInfo {
     // get the sort from the sorts name()
     pub presorts: HashMap<Symbol, PreSort>,
     // TODO(yz): I want to get rid of this as now we have user-defined primitives and constraint based type checking
-    pub presort_names: HashSet<Symbol>,
+    pub reserved_primitives: HashSet<Symbol>,
     pub sorts: HashMap<Symbol, Arc<dyn Sort>>,
     pub primitives: HashMap<Symbol, Vec<Primitive>>,
     pub func_types: HashMap<Symbol, FuncType>,
@@ -29,7 +29,7 @@ impl Default for TypeInfo {
     fn default() -> Self {
         let mut res = Self {
             presorts: Default::default(),
-            presort_names: Default::default(),
+            reserved_primitives: Default::default(),
             sorts: Default::default(),
             primitives: Default::default(),
             func_types: Default::default(),
@@ -60,12 +60,12 @@ impl TypeInfo {
     }
 
     pub fn add_presort<S: Presort>(&mut self, span: Span) -> Result<(), TypeError> {
-        let name = S::name();
+        let name = S::presort_name();
         match self.presorts.entry(name) {
             Entry::Occupied(_) => Err(TypeError::SortAlreadyBound(name, span)),
             Entry::Vacant(e) => {
                 e.insert(S::make_sort);
-                self.presort_names.extend(S::presort_names());
+                self.reserved_primitives.extend(S::reserved_primitives());
                 Ok(())
             }
         }
@@ -466,7 +466,7 @@ impl TypeInfo {
     }
 
     pub(crate) fn is_primitive(&self, sym: Symbol) -> bool {
-        self.primitives.contains_key(&sym) || self.presort_names.contains(&sym)
+        self.primitives.contains_key(&sym) || self.reserved_primitives.contains(&sym)
     }
 
     pub(crate) fn lookup_user_func(&self, sym: Symbol) -> Option<FuncType> {

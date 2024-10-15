@@ -25,11 +25,11 @@ impl SetSort {
 }
 
 impl Presort for SetSort {
-    fn name() -> Symbol {
+    fn presort_name() -> Symbol {
         "Set".into()
     }
 
-    fn presort_names() -> Vec<Symbol> {
+    fn reserved_primitives() -> Vec<Symbol> {
         vec![
             "set-of".into(),
             "set-empty".into(),

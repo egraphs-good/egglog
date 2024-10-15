@@ -26,11 +26,11 @@ impl MapSort {
 }
 
 impl Presort for MapSort {
-    fn name() -> Symbol {
+    fn presort_name() -> Symbol {
         "Map".into()
     }
 
-    fn presort_names() -> Vec<Symbol> {
+    fn reserved_primitives() -> Vec<Symbol> {
         vec![
             "rebuild".into(),
             "map-empty".into(),

@@ -109,8 +109,8 @@ pub trait Sort: Any + Send + Sync + Debug {
 // (for example, we want to add partial application) we should revisit
 // this and make the methods take a `self` parameter.
 pub trait Presort {
-    fn name() -> Symbol;
-    fn presort_names() -> Vec<Symbol>;
+    fn presort_name() -> Symbol;
+    fn reserved_primitives() -> Vec<Symbol>;
     fn make_sort(
         typeinfo: &mut TypeInfo,
         name: Symbol,

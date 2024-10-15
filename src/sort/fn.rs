@@ -61,11 +61,11 @@ impl FunctionSort {
 }
 
 impl Presort for FunctionSort {
-    fn name() -> Symbol {
+    fn presort_name() -> Symbol {
         "UnstableFn".into()
     }
 
-    fn presort_names() -> Vec<Symbol> {
+    fn reserved_primitives() -> Vec<Symbol> {
         vec!["unstable-fn".into(), "unstable-app".into()]
     }
 

@@ -24,11 +24,11 @@ impl VecSort {
 }
 
 impl Presort for VecSort {
-    fn name() -> Symbol {
+    fn presort_name() -> Symbol {
         "Vec".into()
     }
 
-    fn presort_names() -> Vec<Symbol> {
+    fn reserved_primitives() -> Vec<Symbol> {
         vec![
             "vec-of".into(),
             "vec-append".into(),
