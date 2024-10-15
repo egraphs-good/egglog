@@ -343,24 +343,18 @@ impl Assignment<AtomTerm, ArcSort> {
                 },
                 children,
                 rhs,
-                is_cost,
             ) => {
                 let children: Vec<_> = children
                     .iter()
                     .map(|child| self.annotate_expr(child, typeinfo))
                     .collect();
                 let rhs = self.annotate_expr(rhs, typeinfo);
-                let mut types: Vec<_> = children
+                let types: Vec<_> = children
                     .iter()
                     .map(|child| child.output_type(typeinfo))
+                    .chain(once(rhs.output_type(typeinfo)))
                     .collect();
-                let resolved_call = if *is_cost {
-                    ResolvedCall::from_resolution_func_types(head, &types, typeinfo)
-                        .ok_or_else(|| TypeError::UnboundFunction(*head, span.clone()))?
-                } else {
-                    types.push(rhs.output_type(typeinfo));
-                    ResolvedCall::from_resolution(head, &types, typeinfo)
-                };
+                let resolved_call = ResolvedCall::from_resolution(head, &types, typeinfo);
                 if !matches!(resolved_call, ResolvedCall::Func(_)) {
                     return Err(TypeError::UnboundFunction(*head, span.clone()));
                 }
@@ -369,7 +363,35 @@ impl Assignment<AtomTerm, ArcSort> {
                     resolved_call,
                     children,
                     rhs,
-                    *is_cost,
+                ))
+            }
+            // (cost (f [*x]) rhs) where rhs should have type I64
+            GenericAction::Cost(
+                span,
+                CorrespondingVar {
+                    head,
+                    to: _mapped_var,
+                },
+                children,
+                rhs,
+            ) => {
+                let children: Vec<_> = children
+                    .iter()
+                    .map(|child| self.annotate_expr(child, typeinfo))
+                    .collect();
+                let types: Vec<_> = children
+                    .iter()
+                    .map(|child| child.output_type(typeinfo))
+                    .collect();
+                let resolved_call =
+                    ResolvedCall::from_resolution_func_types(head, &types, typeinfo)
+                        .ok_or_else(|| TypeError::UnboundFunction(*head, span.clone()))?;
+                let resolved_rhs = self.annotate_expr(rhs, typeinfo);
+                Ok(ResolvedAction::Cost(
+                    span.clone(),
+                    resolved_call,
+                    children.clone(),
+                    resolved_rhs,
                 ))
             }
             // Note mapped_var for delete is a dummy variable that does not mean anything
@@ -541,28 +563,33 @@ impl CoreAction {
                     .chain(get_atom_application_constraints(f, &args, span, typeinfo)?)
                     .collect())
             }
-            CoreAction::Set(span, head, args, rhs, is_cost) => {
+            CoreAction::Set(span, head, args, rhs) => {
                 let mut args = args.clone();
-                if *is_cost {
-                    // Add a dummy last output argument
-                    let var = symbol_gen.fresh(head);
-                    args.push(AtomTerm::Var(span.clone(), var));
-                } else {
-                    args.push(rhs.clone());
-                }
+                args.push(rhs.clone());
 
-                let mut res: Vec<_> = get_literal_and_global_constraints(&args, typeinfo)
+                Ok(get_literal_and_global_constraints(&args, typeinfo)
                     .chain(get_atom_application_constraints(
                         head, &args, span, typeinfo,
                     )?)
-                    .collect();
-                if *is_cost {
-                    res.push(Constraint::Assign(
+                    .collect())
+            }
+            CoreAction::Cost(span, head, args, rhs) => {
+                let mut args = args.clone();
+                let var = symbol_gen.fresh(head);
+                args.push(AtomTerm::Var(span.clone(), var));
+
+                let mut all_terms = args.clone();
+                all_terms.push(rhs.clone());
+
+                Ok(get_literal_and_global_constraints(&all_terms, typeinfo)
+                    .chain(get_atom_application_constraints(
+                        head, &args, span, typeinfo,
+                    )?)
+                    .chain(once(Constraint::Assign(
                         rhs.clone(),
                         typeinfo.get_sort_nofail::<I64Sort>() as ArcSort,
-                    ));
-                }
-                Ok(res)
+                    )))
+                    .collect())
             }
             CoreAction::Change(span, _change, head, args) => {
                 let mut args = args.clone();

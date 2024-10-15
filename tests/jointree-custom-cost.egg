@@ -24,13 +24,13 @@
 
 ;; cost of relation is its size minus 1, since the string arg will have a cost of 1 as well
 (rule ((= (size (Rel a)) asize))
-      ((unstable-cost (Rel a) (- asize 1))))
+      ((cost (Rel a) (- asize 1))))
 ;; cost/size of join is product of sizes
 (rule ((Join a b)
        (= (size a) asize)
        (= (size b) bsize))
       ((set (size (Join a b)) (* asize bsize))
-       (unstable-cost (Join a b) (* asize bsize))))
+       (cost (Join a b) (* asize bsize))))
 
 ; Associativity
 (rewrite (Join a b) (Join b a))

@@ -381,7 +381,12 @@ pub enum GenericCoreAction<Head, Leaf> {
         Head,
         Vec<GenericAtomTerm<Leaf>>,
         GenericAtomTerm<Leaf>,
-        bool,
+    ),
+    Cost(
+        Span,
+        Head,
+        Vec<GenericAtomTerm<Leaf>>,
+        GenericAtomTerm<Leaf>,
     ),
     Change(Span, Change, Head, Vec<GenericAtomTerm<Leaf>>),
     Union(Span, GenericAtomTerm<Leaf>, GenericAtomTerm<Leaf>),
@@ -463,7 +468,7 @@ where
                     ));
                     binding.insert(var.clone());
                 }
-                GenericAction::Set(span, head, args, expr, is_cost) => {
+                GenericAction::Set(span, head, args, expr) => {
                     let mut mapped_args = vec![];
                     for arg in args {
                         let (actions, mapped_arg) =
@@ -482,7 +487,6 @@ where
                             .map(|e| e.get_corresponding_var_or_lit(typeinfo))
                             .collect(),
                         mapped_expr.get_corresponding_var_or_lit(typeinfo),
-                        *is_cost,
                     ));
                     let v = fresh_gen.fresh(head);
                     mapped_actions.0.push(GenericAction::Set(
@@ -490,7 +494,34 @@ where
                         CorrespondingVar::new(head.clone(), v),
                         mapped_args,
                         mapped_expr,
-                        *is_cost,
+                    ));
+                }
+                GenericAction::Cost(span, head, args, expr) => {
+                    let mut mapped_args = vec![];
+                    for arg in args {
+                        let (actions, mapped_arg) =
+                            arg.to_core_actions(typeinfo, binding, fresh_gen)?;
+                        norm_actions.extend(actions.0);
+                        mapped_args.push(mapped_arg);
+                    }
+                    let (actions, mapped_expr) =
+                        expr.to_core_actions(typeinfo, binding, fresh_gen)?;
+                    norm_actions.extend(actions.0);
+                    norm_actions.push(GenericCoreAction::Cost(
+                        span.clone(),
+                        head.clone(),
+                        mapped_args
+                            .iter()
+                            .map(|e| e.get_corresponding_var_or_lit(typeinfo))
+                            .collect(),
+                        mapped_expr.get_corresponding_var_or_lit(typeinfo),
+                    ));
+                    let v = fresh_gen.fresh(head);
+                    mapped_actions.0.push(GenericAction::Cost(
+                        span.clone(),
+                        CorrespondingVar::new(head.clone(), v),
+                        mapped_args,
+                        mapped_expr,
                     ));
                 }
                 GenericAction::Change(span, change, head, args) => {

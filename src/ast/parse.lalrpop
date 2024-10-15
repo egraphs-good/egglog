@@ -66,9 +66,9 @@ Command: Command = {
     <lo:LParen> "relation" <constructor:Ident> <inputs:List<Type>> <hi:RParen> => Command::Relation{span: Span(srcfile.clone(), lo, hi), constructor, inputs},
     LParen "ruleset" <name:Ident> RParen => Command::AddRuleset(name),
     LParen "unstable-combined-ruleset" <name:Ident> <subrulesets:Ident*> RParen => Command::UnstableCombinedRuleset(name, subrulesets),
-    <lo:LParen> "rule" <body:List<Fact>> <head:List<Action>>
-        <ruleset:(":ruleset" <Ident>)?>
-        <name:(":name" <String>)?>
+    <lo:LParen> "rule" <body:List<Fact>> <head:List<Action>> 
+        <ruleset:(":ruleset" <Ident>)?> 
+        <name:(":name" <String>)?> 
     <hi:RParen> => Command::Rule{ruleset: ruleset.unwrap_or("".into()), name: name.unwrap_or("".to_string()).into(), rule: Rule { span: Span(srcfile.clone(), lo, hi), head: Actions::new(head), body }},
     <lo:LParen> "rewrite" <lhs:Expr> <rhs:Expr>
         <subsume:(":subsume")?>
@@ -81,17 +81,17 @@ Command: Command = {
     <hi:RParen> => Command::BiRewrite(ruleset.unwrap_or("".into()), Rewrite { span: Span(srcfile.clone(), lo, hi), lhs, rhs, conditions: conditions.unwrap_or_default() }),
     <lo:LParen> "let" <name:Ident> <expr:Expr> <hi:RParen> => Command::Action(Action::Let(Span(srcfile.clone(), lo, hi), name, expr)),
     <NonLetAction> => Command::Action(<>),
-    <lo:LParen> "run" <limit:UNum>  <until:(":until" <(Fact)*>)?> <hi:RParen> =>
+    <lo:LParen> "run" <limit:UNum>  <until:(":until" <(Fact)*>)?> <hi:RParen> => 
         Command::RunSchedule(Schedule::Repeat(Span(srcfile.clone(), lo, hi), limit, Box::new(
             Schedule::Run(Span(srcfile.clone(), lo, hi), RunConfig { ruleset : "".into(), until })))),
-    <lo:LParen> "run" <ruleset: Ident> <limit:UNum> <until:(":until" <(Fact)*>)?> <hi:RParen> =>
+    <lo:LParen> "run" <ruleset: Ident> <limit:UNum> <until:(":until" <(Fact)*>)?> <hi:RParen> => 
         Command::RunSchedule(Schedule::Repeat(Span(srcfile.clone(), lo, hi), limit, Box::new(
             Schedule::Run(Span(srcfile.clone(), lo, hi), RunConfig { ruleset, until })))),
     <lo:LParen> "simplify"  <schedule:Schedule> <expr:Expr> <hi:RParen>
         => Command::Simplify { span: Span(srcfile.clone(), lo, hi), expr, schedule },
     <lo:LParen> "query-extract" <variants:(":variants" <UNum>)?> <expr:Expr> <hi:RParen> => Command::QueryExtract { span: Span(srcfile.clone(), lo, hi), expr, variants: variants.unwrap_or(0) },
     <lo:LParen> "check" <facts:(Fact)*> <hi:RParen> => Command::Check(Span(srcfile.clone(), lo, hi), facts),
-      <lo:LParen> "run-schedule" <scheds:Schedule*> <hi:RParen> =>
+      <lo:LParen> "run-schedule" <scheds:Schedule*> <hi:RParen> => 
         Command::RunSchedule(Schedule::Sequence(Span(srcfile.clone(), lo, hi), scheds)),
     LParen "print-stats" RParen => Command::PrintOverallStatistics,
     LParen "push" <UNum?> RParen => Command::Push(<>.unwrap_or(1)),
@@ -105,19 +105,19 @@ Command: Command = {
 }
 
 Schedule: Schedule = {
-    <lo:LParen> "saturate" <scheds:Schedule*> <hi:RParen> =>
+    <lo:LParen> "saturate" <scheds:Schedule*> <hi:RParen> => 
         Schedule::Saturate(Span(srcfile.clone(), lo, hi), Box::new(
             Schedule::Sequence(Span(srcfile.clone(), lo, hi), scheds))),
-    <lo:LParen> "seq" <scheds:Schedule*> <hi:RParen> =>
+    <lo:LParen> "seq" <scheds:Schedule*> <hi:RParen> => 
         Schedule::Sequence(Span(srcfile.clone(), lo, hi), scheds),
-    <lo:LParen> "repeat" <limit:UNum> <scheds:Schedule*> <hi:RParen> =>
+    <lo:LParen> "repeat" <limit:UNum> <scheds:Schedule*> <hi:RParen> => 
         Schedule::Repeat(Span(srcfile.clone(), lo, hi), limit, Box::new(
             Schedule::Sequence(Span(srcfile.clone(), lo, hi), scheds))),
     <lo:LParen> "run" <until:(":until" <(Fact)*>)?> <hi:RParen> =>
         Schedule::Run(Span(srcfile.clone(), lo, hi), RunConfig { ruleset: "".into(), until }),
-    <lo:LParen> "run" <ruleset: Ident> <until:(":until" <(Fact)*>)?> <hi:RParen> =>
+    <lo:LParen> "run" <ruleset: Ident> <until:(":until" <(Fact)*>)?> <hi:RParen> => 
         Schedule::Run(Span(srcfile.clone(), lo, hi), RunConfig { ruleset, until }),
-    <lo:@L> <ident:Ident> <hi:@R> =>
+    <lo:@L> <ident:Ident> <hi:@R> => 
         Schedule::Run(Span(srcfile.clone(), lo, hi), RunConfig { ruleset: ident, until: None }),
 }
 
@@ -127,10 +127,10 @@ Cost: Option<usize> = {
 }
 
 NonLetAction: Action = {
-    <lo:LParen> "set" LParen <f: Ident> <args:Expr*> RParen <v:Expr> <hi:RParen> => Action::Set ( Span(srcfile.clone(), lo, hi), f, args, v, false ),
+    <lo:LParen> "set" LParen <f: Ident> <args:Expr*> RParen <v:Expr> <hi:RParen> => Action::Set ( Span(srcfile.clone(), lo, hi), f, args, v ),
+    <lo:LParen> "cost" LParen <f: Ident> <args:Expr*> RParen <v:Expr> <hi:RParen> => Action::Cost ( Span(srcfile.clone(), lo, hi), f, args, v ),
     <lo:LParen> "delete" LParen <f: Ident> <args:Expr*> RParen <hi:RParen> => Action::Change ( Span(srcfile.clone(), lo, hi), Change::Delete, f, args),
     <lo:LParen> "subsume" LParen <f: Ident> <args:Expr*> RParen <hi:RParen> => Action::Change ( Span(srcfile.clone(), lo, hi), Change::Subsume, f, args),
-    <lo:LParen> "unstable-cost" LParen <f: Ident> <args:Expr*> RParen <cost:Expr> <hi:RParen> => Action::Set ( Span(srcfile.clone(), lo, hi), f, args, cost, true ),
     <lo:LParen> "union" <e1:Expr> <e2:Expr> <hi:RParen> => Action::Union(Span(srcfile.clone(), lo, hi), e1, e2),
     <lo:LParen> "panic" <msg:String> <hi:RParen> => Action::Panic(Span(srcfile.clone(), lo, hi), msg),
     <lo:LParen> "extract" <expr:Expr> <hi:RParen> => Action::Extract(Span(srcfile.clone(), lo, hi), expr, Expr::Lit(Span(srcfile.clone(), lo, hi), Literal::Int(0))),
