@@ -1704,6 +1704,6 @@
 (let v103 (Func v0 v4 v5 v102))
 
 (run-schedule
-        (repeat 2 (saturate fast-analyses)
+        (repeat 1 (saturate fast-analyses)
                   (run)
                   (saturate subst)))
