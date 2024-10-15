@@ -1,4 +1,7 @@
-use egglog::{ast::Expr, EGraph, ExtractReport, Function, SerializeConfig, Term, Value};
+use egglog::{
+    ast::{Expr, Literal},
+    EGraph, ExtractReport, Function, SerializeConfig, Term, Value,
+};
 use symbol_table::GlobalSymbol;
 
 #[test]
@@ -436,4 +439,55 @@ fn test_serialize_subsume_status() {
     });
     assert!(serialized.nodes[&a_id].subsumed);
     assert!(!serialized.nodes[&b_id].subsumed);
+}
+
+#[test]
+fn test_set_cost() {
+    let mut egraph = EGraph::default();
+
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+            (datatype E
+            (Foo String))
+
+            (union (Foo "x") (Foo "y"))
+            (union (Foo "y") (Foo "z"))
+
+            (cost (Foo "x") 17)
+            (cost (Foo "y") 11)
+            (cost (Foo "z") 15)
+
+            (extract (Foo "z"))
+            "#,
+        )
+        .unwrap();
+    let report = egraph.get_extract_report().clone().unwrap();
+    match report {
+        ExtractReport::Best {
+            term,
+            termdag,
+            cost,
+        } => {
+            assert_eq!(cost, 12);
+            let expr = termdag.term_to_expr(&term);
+            match expr {
+                Expr::Call(_, head, args) => {
+                    assert_eq!(head.to_string(), "Foo");
+                    match args.as_slice() {
+                        [expr] => match expr {
+                            Expr::Lit(_, Literal::String(s)) => {
+                                assert_eq!(s.to_string(), "y");
+                            }
+                            _ => panic!(),
+                        },
+                        _ => panic!(),
+                    }
+                }
+                _ => panic!(),
+            }
+        }
+        _ => panic!(),
+    }
 }
