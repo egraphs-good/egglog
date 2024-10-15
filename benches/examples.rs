@@ -12,11 +12,9 @@ fn run_example(filename: &String, program: &str) {
 pub fn criterion_benchmark(c: &mut Criterion) {
     for entry in glob::glob("tests/**/*.egg").unwrap() {
         let path = entry.unwrap().clone();
-        if path
-            .to_string_lossy()
-            .to_string()
-            .contains("fail-typecheck")
-        {
+        let path_string = path.to_string_lossy().to_string();
+        // Skip python_array_optimize since it is too slow and doesn't even reflect currenty python implementation
+        if path_string.contains("fail-typecheck") || path_string.contains("python_array_optimize") {
             continue;
         }
         let name = path.file_stem().unwrap().to_string_lossy().to_string();
