@@ -64,7 +64,7 @@
                             (Div (Sub (Const (rational 1 1))
                                     (Sqrt (Var "five")))
                                 (Const (rational 2 1)))))
-(run 11)
+(run 9)
 (print-size Add)
 (print-size Mul)
 
