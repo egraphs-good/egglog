@@ -104,6 +104,10 @@ pub trait Sort: Any + Send + Sync + Debug {
     }
 }
 
+// Note: this trait is currently intended to be implemented on the
+// same struct as `Sort`. If in the future we have dynamic presorts
+// (for example, we want to add partial application) we should revisit
+// this and make the methods take a `self` parameter.
 pub trait Presort {
     fn name() -> Symbol;
     fn presort_names() -> Vec<Symbol>;
