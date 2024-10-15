@@ -59,6 +59,7 @@ impl TypeInfo {
         self.add_arcsort(Arc::new(sort), span)
     }
 
+    /// Adds a sort constructor to the typechecker's known set of types.
     pub fn add_presort<S: Presort>(&mut self, span: Span) -> Result<(), TypeError> {
         let name = S::presort_name();
         match self.presorts.entry(name) {
