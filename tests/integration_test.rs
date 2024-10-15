@@ -476,12 +476,9 @@ fn test_set_cost() {
                 Expr::Call(_, head, args) => {
                     assert_eq!(head.to_string(), "Foo");
                     match args.as_slice() {
-                        [expr] => match expr {
-                            Expr::Lit(_, Literal::String(s)) => {
-                                assert_eq!(s.to_string(), "y");
-                            }
-                            _ => panic!(),
-                        },
+                        [Expr::Lit(_, Literal::String(s))] => {
+                            assert_eq!(s.to_string(), "y");
+                        }
                         _ => panic!(),
                     }
                 }
