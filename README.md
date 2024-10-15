@@ -4,6 +4,8 @@
     <img alt="Web Demo" src="https://img.shields.io/badge/-web demo-blue"></a>
 <a href="https://egraphs-good.github.io/egglog/docs/egglog">
     <img alt="Main Branch Documentation" src="https://img.shields.io/badge/docs-main-blue"></a>
+<a href="https://codspeed.io/egraphs-good/egglog">
+    <img src="https://img.shields.io/endpoint?url=https://codspeed.io/badge.json" alt="CodSpeed Badge"/></a>
 
 This is the repo for the `egglog` tool accompanying the paper
   "Better Together: Unifying Datalog and Equality Saturation"
