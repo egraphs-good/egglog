@@ -24,9 +24,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
         {
             continue;
         }
-        c.bench_with_input(BenchmarkId::new("example", &name), &path, |_b, f| {
-            run_example(f)
-        });
+        c.bench_function(&name, |b| b.iter(|| run_example(&path)));
     }
 }
 
