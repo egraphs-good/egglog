@@ -1,22 +1,17 @@
-use std::path::Path;
-
-use codspeed_criterion_compat::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use codspeed_criterion_compat::{criterion_group, criterion_main, Criterion};
 use egglog::EGraph;
 
-fn run_example(name: &Path) {
-    let filename = name.to_string_lossy().to_string();
-    let program = std::fs::read_to_string(&filename).unwrap();
+fn run_example(filename: &String, program: &str) {
     let mut egraph = EGraph::default();
     egraph.set_reserved_symbol("___".into());
     egraph
-        .parse_and_run_program(Some(filename), &program)
+        .parse_and_run_program(Some(filename.clone()), program)
         .unwrap();
 }
 
 pub fn criterion_benchmark(c: &mut Criterion) {
     for entry in glob::glob("tests/**/*.egg").unwrap() {
         let path = entry.unwrap().clone();
-        let name = path.file_stem().unwrap().to_string_lossy().to_string();
         if path
             .to_string_lossy()
             .to_string()
@@ -24,7 +19,10 @@ pub fn criterion_benchmark(c: &mut Criterion) {
         {
             continue;
         }
-        c.bench_function(&name, |b| b.iter(|| run_example(&path)));
+        let name = path.file_stem().unwrap().to_string_lossy().to_string();
+        let filename = path.to_string_lossy().to_string();
+        let program = std::fs::read_to_string(&filename).unwrap();
+        c.bench_function(&name, |b| b.iter(|| run_example(&filename, &program)));
     }
 }
 
