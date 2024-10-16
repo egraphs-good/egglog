@@ -81,9 +81,9 @@ impl Sort for I64Sort {
 
 impl IntoSort for i64 {
     type Sort = I64Sort;
-    fn store(self, _sort: &Self::Sort) -> Option<Value> {
+    fn store(self, sort: &Self::Sort) -> Option<Value> {
         Some(Value {
-            tag: *I64_SORT_NAME,
+            tag: sort.name(),
             bits: self as u64,
         })
     }
