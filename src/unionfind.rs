@@ -3,11 +3,13 @@
 //!
 //! This implementation uses interior mutability for `find`.
 use crate::util::HashMap;
-use crate::{Id, Symbol, Value};
+use crate::{Symbol, Value};
 
 use std::cell::Cell;
 use std::fmt::Debug;
 use std::mem;
+
+pub type Id = u64;
 
 #[derive(Debug, Clone, Default)]
 #[cfg_attr(feature = "serde-1", derive(serde::Serialize, serde::Deserialize))]
@@ -27,7 +29,7 @@ impl UnionFind {
 
     /// Create a fresh [`Id`].
     pub fn make_set(&mut self) -> Id {
-        let res = Id::from(self.parents.len());
+        let res = self.parents.len() as u64;
         self.parents.push(Cell::new(res));
         res
     }
@@ -88,13 +90,13 @@ impl UnionFind {
     /// This method assumes that the given values belong to the same, "eq-able",
     /// sort. Its behavior is unspecified on other values.
     pub fn union_values(&mut self, val1: Value, val2: Value, sort: Symbol) -> Value {
+        #[cfg(debug_assertions)]
         debug_assert_eq!(val1.tag, val2.tag);
-        let id1 = Id::from(val1.bits as usize);
-        let id2 = Id::from(val2.bits as usize);
-        let res = self.union(id1, id2, sort);
+
         Value {
-            bits: usize::from(res) as u64,
+            #[cfg(debug_assertions)]
             tag: val1.tag,
+            bits: self.union(val1.bits, val2.bits, sort),
         }
     }
 
@@ -132,7 +134,7 @@ impl UnionFind {
     }
 
     fn parent(&self, id: Id) -> &Cell<Id> {
-        &self.parents[usize::from(id)]
+        &self.parents[id as usize]
     }
 }
 
@@ -140,14 +142,13 @@ impl UnionFind {
 mod tests {
     use super::*;
 
-    fn ids(us: impl IntoIterator<Item = usize>) -> Vec<Cell<Id>> {
-        us.into_iter().map(|u| Cell::new(u.into())).collect()
+    fn ids(us: impl IntoIterator<Item = Id>) -> Vec<Cell<Id>> {
+        us.into_iter().map(Cell::new).collect()
     }
 
     #[test]
     fn union_find() {
         let n = 10;
-        let id = Id::from;
 
         let mut uf = UnionFind::default();
         for _ in 0..n {
@@ -158,18 +159,18 @@ mod tests {
         assert_eq!(uf.parents, ids(0..n));
 
         // build up one set
-        uf.union_raw(id(0), id(1));
-        uf.union_raw(id(0), id(2));
-        uf.union_raw(id(0), id(3));
+        uf.union_raw(0, 1);
+        uf.union_raw(0, 2);
+        uf.union_raw(0, 3);
 
         // build up another set
-        uf.union_raw(id(6), id(7));
-        uf.union_raw(id(6), id(8));
-        uf.union_raw(id(6), id(9));
+        uf.union_raw(6, 7);
+        uf.union_raw(6, 8);
+        uf.union_raw(6, 9);
 
         // this should compress all paths
         for i in 0..n {
-            uf.find(id(i));
+            uf.find(i);
         }
 
         // indexes:         0, 1, 2, 3, 4, 5, 6, 7, 8, 9

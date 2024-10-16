@@ -214,6 +214,7 @@ impl IntoSort for ValueVec {
         let mut vecs = sort.vecs.lock().unwrap();
         let (i, _) = vecs.insert_full(self);
         Some(Value {
+            #[cfg(debug_assertions)]
             tag: sort.name,
             bits: i as u64,
         })
@@ -250,7 +251,10 @@ impl PrimitiveLike for VecRebuild {
     fn apply(&self, values: &[Value], egraph: Option<&mut EGraph>) -> Option<Value> {
         let egraph = egraph.unwrap();
         let vec = ValueVec::load(&self.vec, &values[0]);
-        let new_vec: ValueVec = vec.iter().map(|e| egraph.find(*e)).collect();
+        let new_vec: ValueVec = vec
+            .iter()
+            .map(|e| egraph.find(self.vec.element.is_eq_sort(), *e))
+            .collect();
         drop(vec);
         Some(new_vec.store(&self.vec).unwrap())
     }

@@ -42,27 +42,6 @@ pub use expr::*;
 pub mod desugar;
 pub(crate) mod remove_globals;
 
-#[derive(Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, Debug)]
-pub struct Id(usize);
-
-impl From<usize> for Id {
-    fn from(n: usize) -> Self {
-        Id(n)
-    }
-}
-
-impl From<Id> for usize {
-    fn from(id: Id) -> Self {
-        id.0
-    }
-}
-
-impl Display for Id {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "id{}", self.0)
-    }
-}
-
 #[derive(Clone, Debug)]
 /// The egglog internal representation of already compiled rules
 pub(crate) enum Ruleset {

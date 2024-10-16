@@ -207,6 +207,7 @@ impl IntoSort for ValueSet {
         let mut sets = sort.sets.lock().unwrap();
         let (i, _) = sets.insert_full(self);
         Some(Value {
+            #[cfg(debug_assertions)]
             tag: sort.name,
             bits: i as u64,
         })
@@ -286,7 +287,10 @@ impl PrimitiveLike for SetRebuild {
     fn apply(&self, values: &[Value], egraph: Option<&mut EGraph>) -> Option<Value> {
         let egraph = egraph.unwrap();
         let set = ValueSet::load(&self.set, &values[0]);
-        let new_set: ValueSet = set.iter().map(|e| egraph.find(*e)).collect();
+        let new_set: ValueSet = set
+            .iter()
+            .map(|e| egraph.find(self.set.element.is_eq_sort(), *e))
+            .collect();
         // drop set to make sure we lose lock
         drop(set);
         new_set.store(&self.set)
