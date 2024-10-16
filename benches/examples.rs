@@ -1,11 +1,9 @@
 use codspeed_criterion_compat::{criterion_group, criterion_main, Criterion};
 use egglog::EGraph;
 
-fn run_example(filename: &String, program: &str) {
-    let mut egraph = EGraph::default();
-    egraph.set_reserved_symbol("___".into());
-    egraph
-        .parse_and_run_program(Some(filename.clone()), program)
+fn run_example(filename: &str, program: &str) {
+    EGraph::default()
+        .parse_and_run_program(Some(filename.to_owned()), program)
         .unwrap();
 }
 
