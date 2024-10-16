@@ -5,9 +5,13 @@ use super::*;
 #[derive(Debug)]
 pub struct I64Sort;
 
+lazy_static! {
+    static ref I64_SORT_NAME: Symbol = "i64".into();
+}
+
 impl Sort for I64Sort {
     fn name(&self) -> Symbol {
-        "i64".into()
+        *I64_SORT_NAME
     }
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
@@ -77,9 +81,9 @@ impl Sort for I64Sort {
 
 impl IntoSort for i64 {
     type Sort = I64Sort;
-    fn store(self, sort: &Self::Sort) -> Option<Value> {
+    fn store(self, _sort: &Self::Sort) -> Option<Value> {
         Some(Value {
-            tag: sort.name(),
+            tag: *I64_SORT_NAME,
             bits: self as u64,
         })
     }
