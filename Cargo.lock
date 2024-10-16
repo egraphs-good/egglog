@@ -1556,6 +1556,7 @@ dependencies = [
  "egglog",
  "js-sys",
  "log",
+ "serde_json",
  "wasm-bindgen",
  "wasm-logger",
  "web-sys",
