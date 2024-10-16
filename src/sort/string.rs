@@ -5,19 +5,15 @@ use crate::{ast::Literal, constraint::AllEqualTypeConstraint};
 use super::*;
 
 #[derive(Debug)]
-pub struct StringSort {
-    pub name: Symbol,
-}
+pub struct StringSort;
 
-impl StringSort {
-    pub fn new(name: Symbol) -> Self {
-        Self { name }
-    }
+lazy_static! {
+    static ref STRING_SORT_NAME: Symbol = "String".into();
 }
 
 impl Sort for StringSort {
     fn name(&self) -> Symbol {
-        self.name
+        *STRING_SORT_NAME
     }
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
@@ -25,7 +21,7 @@ impl Sort for StringSort {
     }
 
     fn make_expr(&self, _egraph: &EGraph, value: Value) -> (Cost, Expr) {
-        assert!(value.tag == self.name);
+        assert!(value.tag == self.name());
         let sym = Symbol::from(NonZeroU32::new(value.bits as _).unwrap());
         (
             1,
@@ -51,7 +47,7 @@ impl IntoSort for Symbol {
     type Sort = StringSort;
     fn store(self, sort: &Self::Sort) -> Option<Value> {
         Some(Value {
-            tag: sort.name,
+            tag: sort.name(),
             bits: NonZeroU32::from(self).get() as _,
         })
     }

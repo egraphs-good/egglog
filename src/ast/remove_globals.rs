@@ -5,11 +5,8 @@
 //! When a globally-bound primitive value is used in the actions of a rule,
 //! we add a new variable to the query bound to the primitive value.
 
-use crate::{
-    core::ResolvedCall, typechecking::FuncType, FreshGen, GenericAction, GenericActions,
-    GenericExpr, GenericFact, GenericNCommand, GenericRule, HashMap, ResolvedAction, ResolvedExpr,
-    ResolvedFact, ResolvedFunctionDecl, ResolvedNCommand, ResolvedVar, Schema, SymbolGen, TypeInfo,
-};
+use crate::*;
+use crate::{core::ResolvedCall, typechecking::FuncType};
 
 struct GlobalRemover<'a> {
     fresh: &'a mut SymbolGen,
@@ -45,13 +42,12 @@ struct GlobalRemover<'a> {
 ///       ((Add fresh_var_for_x fresh_var_for_x)))
 /// ```
 pub(crate) fn remove_globals(
-    type_info: &TypeInfo,
     prog: Vec<ResolvedNCommand>,
     fresh: &mut SymbolGen,
 ) -> Vec<ResolvedNCommand> {
     let mut remover = GlobalRemover { fresh };
     prog.into_iter()
-        .flat_map(|cmd| remover.remove_globals_cmd(type_info, cmd))
+        .flat_map(|cmd| remover.remove_globals_cmd(cmd))
         .collect()
 }
 
@@ -91,15 +87,11 @@ fn remove_globals_action(action: ResolvedAction) -> ResolvedAction {
 }
 
 impl<'a> GlobalRemover<'a> {
-    fn remove_globals_cmd(
-        &mut self,
-        type_info: &TypeInfo,
-        cmd: ResolvedNCommand,
-    ) -> Vec<ResolvedNCommand> {
+    fn remove_globals_cmd(&mut self, cmd: ResolvedNCommand) -> Vec<ResolvedNCommand> {
         match cmd {
             GenericNCommand::CoreAction(action) => match action {
                 GenericAction::Let(span, name, expr) => {
-                    let ty = expr.output_type(type_info);
+                    let ty = expr.output_type();
 
                     let func_decl = ResolvedFunctionDecl {
                         name: name.name,

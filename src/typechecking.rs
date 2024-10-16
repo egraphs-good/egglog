@@ -1,6 +1,6 @@
 use crate::{core::CoreRule, *};
 use ast::Rule;
-use hashbrown::hash_map;
+use hashbrown::hash_map::Entry;
 
 #[derive(Clone, Debug)]
 pub struct FuncType {
@@ -18,7 +18,7 @@ pub struct TypeInfo {
     // get the sort from the sorts name()
     pub presorts: HashMap<Symbol, PreSort>,
     // TODO(yz): I want to get rid of this as now we have user-defined primitives and constraint based type checking
-    pub presort_names: HashSet<Symbol>,
+    pub reserved_primitives: HashSet<Symbol>,
     pub sorts: HashMap<Symbol, Arc<dyn Sort>>,
     pub primitives: HashMap<Symbol, Vec<Primitive>>,
     pub func_types: HashMap<Symbol, FuncType>,
@@ -29,64 +29,55 @@ impl Default for TypeInfo {
     fn default() -> Self {
         let mut res = Self {
             presorts: Default::default(),
-            presort_names: Default::default(),
+            reserved_primitives: Default::default(),
             sorts: Default::default(),
             primitives: Default::default(),
             func_types: Default::default(),
             global_types: Default::default(),
         };
 
-        res.add_sort(UnitSort::new(UNIT_SYM.into()), DUMMY_SPAN.clone());
-        res.add_sort(StringSort::new("String".into()), DUMMY_SPAN.clone());
-        res.add_sort(BoolSort::new("bool".into()), DUMMY_SPAN.clone());
-        res.add_sort(I64Sort::new("i64".into()), DUMMY_SPAN.clone());
-        res.add_sort(F64Sort::new("f64".into()), DUMMY_SPAN.clone());
-        res.add_sort(RationalSort::new("Rational".into()), DUMMY_SPAN.clone());
+        res.add_sort(UnitSort, DUMMY_SPAN.clone()).unwrap();
+        res.add_sort(StringSort, DUMMY_SPAN.clone()).unwrap();
+        res.add_sort(BoolSort, DUMMY_SPAN.clone()).unwrap();
+        res.add_sort(I64Sort, DUMMY_SPAN.clone()).unwrap();
+        res.add_sort(F64Sort, DUMMY_SPAN.clone()).unwrap();
+        res.add_sort(RationalSort, DUMMY_SPAN.clone()).unwrap();
 
-        res.presort_names.extend(MapSort::presort_names());
-        res.presort_names.extend(SetSort::presort_names());
-        res.presort_names.extend(VecSort::presort_names());
-        res.presort_names.extend(FunctionSort::presort_names());
+        res.add_presort::<MapSort>(DUMMY_SPAN.clone()).unwrap();
+        res.add_presort::<SetSort>(DUMMY_SPAN.clone()).unwrap();
+        res.add_presort::<VecSort>(DUMMY_SPAN.clone()).unwrap();
+        res.add_presort::<FunctionSort>(DUMMY_SPAN.clone()).unwrap();
 
-        res.presorts.insert("Map".into(), MapSort::make_sort);
-        res.presorts.insert("Set".into(), SetSort::make_sort);
-        res.presorts.insert("Vec".into(), VecSort::make_sort);
-        res.presorts
-            .insert("UnstableFn".into(), FunctionSort::make_sort);
-
-        res.add_primitive(ValueEq {
-            unit: res.get_sort_nofail(),
-        });
+        res.add_primitive(ValueEq);
 
         res
     }
 }
 
-pub const UNIT_SYM: &str = "Unit";
-
 impl TypeInfo {
-    pub(crate) fn infer_literal(&self, lit: &Literal) -> ArcSort {
-        match lit {
-            Literal::Int(_) => self.sorts.get(&Symbol::from("i64")),
-            Literal::F64(_) => self.sorts.get(&Symbol::from("f64")),
-            Literal::String(_) => self.sorts.get(&Symbol::from("String")),
-            Literal::Bool(_) => self.sorts.get(&Symbol::from("bool")),
-            Literal::Unit => self.sorts.get(&Symbol::from("Unit")),
-        }
-        .unwrap()
-        .clone()
+    pub fn add_sort<S: Sort + 'static>(&mut self, sort: S, span: Span) -> Result<(), TypeError> {
+        self.add_arcsort(Arc::new(sort), span)
     }
 
-    pub fn add_sort<S: Sort + 'static>(&mut self, sort: S, span: Span) {
-        self.add_arcsort(Arc::new(sort), span).unwrap()
+    /// Adds a sort constructor to the typechecker's known set of types.
+    pub fn add_presort<S: Presort>(&mut self, span: Span) -> Result<(), TypeError> {
+        let name = S::presort_name();
+        match self.presorts.entry(name) {
+            Entry::Occupied(_) => Err(TypeError::SortAlreadyBound(name, span)),
+            Entry::Vacant(e) => {
+                e.insert(S::make_sort);
+                self.reserved_primitives.extend(S::reserved_primitives());
+                Ok(())
+            }
+        }
     }
 
     pub fn add_arcsort(&mut self, sort: ArcSort, span: Span) -> Result<(), TypeError> {
         let name = sort.name();
 
         match self.sorts.entry(name) {
-            hash_map::Entry::Occupied(_) => Err(TypeError::SortAlreadyBound(name, span)),
-            hash_map::Entry::Vacant(e) => {
+            Entry::Occupied(_) => Err(TypeError::SortAlreadyBound(name, span)),
+            Entry::Vacant(e) => {
                 e.insert(sort.clone());
                 sort.register_primitives(self);
                 Ok(())
@@ -192,7 +183,7 @@ impl TypeInfo {
                 }
                 NCommand::CoreAction(Action::Let(span, var, expr)) => {
                     let expr = self.typecheck_expr(symbol_gen, expr, &Default::default())?;
-                    let output_type = expr.output_type(self);
+                    let output_type = expr.output_type();
                     self.global_types.insert(*var, output_type.clone());
                     let var = ResolvedVar {
                         name: *var,
@@ -476,7 +467,7 @@ impl TypeInfo {
     }
 
     pub(crate) fn is_primitive(&self, sym: Symbol) -> bool {
-        self.primitives.contains_key(&sym) || self.presort_names.contains(&sym)
+        self.primitives.contains_key(&sym) || self.reserved_primitives.contains(&sym)
     }
 
     pub(crate) fn lookup_user_func(&self, sym: Symbol) -> Option<FuncType> {

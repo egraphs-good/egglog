@@ -31,7 +31,9 @@ use crate::*;
 
 pub trait Sort: Any + Send + Sync + Debug {
     fn name(&self) -> Symbol;
+
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static>;
+
     fn is_eq_sort(&self) -> bool {
         false
     }
@@ -102,6 +104,20 @@ pub trait Sort: Any + Send + Sync + Debug {
     }
 }
 
+// Note: this trait is currently intended to be implemented on the
+// same struct as `Sort`. If in the future we have dynamic presorts
+// (for example, we want to add partial application) we should revisit
+// this and make the methods take a `self` parameter.
+pub trait Presort {
+    fn presort_name() -> Symbol;
+    fn reserved_primitives() -> Vec<Symbol>;
+    fn make_sort(
+        typeinfo: &mut TypeInfo,
+        name: Symbol,
+        args: &[Expr],
+    ) -> Result<ArcSort, TypeError>;
+}
+
 #[derive(Debug)]
 pub struct EqSort {
     pub name: Symbol,
@@ -157,23 +173,17 @@ impl<T: IntoSort> IntoSort for Option<T> {
 pub type PreSort =
     fn(typeinfo: &mut TypeInfo, name: Symbol, params: &[Expr]) -> Result<ArcSort, TypeError>;
 
-pub(crate) struct ValueEq {
-    pub unit: Arc<UnitSort>,
-}
-
-lazy_static! {
-    static ref VALUE_EQ: Symbol = "value-eq".into();
-}
+pub(crate) struct ValueEq;
 
 impl PrimitiveLike for ValueEq {
     fn name(&self) -> Symbol {
-        *VALUE_EQ
+        "value-eq".into()
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         AllEqualTypeConstraint::new(self.name(), span.clone())
             .with_exact_length(3)
-            .with_output_sort(self.unit.clone())
+            .with_output_sort(Arc::new(UnitSort))
             .into_box()
     }
 
@@ -184,5 +194,15 @@ impl PrimitiveLike for ValueEq {
         } else {
             None
         }
+    }
+}
+
+pub fn literal_sort(lit: &Literal) -> ArcSort {
+    match lit {
+        Literal::Int(_) => Arc::new(I64Sort) as ArcSort,
+        Literal::F64(_) => Arc::new(F64Sort) as ArcSort,
+        Literal::String(_) => Arc::new(StringSort) as ArcSort,
+        Literal::Bool(_) => Arc::new(BoolSort) as ArcSort,
+        Literal::Unit => Arc::new(UnitSort) as ArcSort,
     }
 }

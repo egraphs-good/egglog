@@ -21,8 +21,14 @@ impl VecSort {
     pub fn element_name(&self) -> Symbol {
         self.element.name()
     }
+}
 
-    pub fn presort_names() -> Vec<Symbol> {
+impl Presort for VecSort {
+    fn presort_name() -> Symbol {
+        "Vec".into()
+    }
+
+    fn reserved_primitives() -> Vec<Symbol> {
         vec![
             "vec-of".into(),
             "vec-append".into(),
@@ -38,7 +44,7 @@ impl VecSort {
         ]
     }
 
-    pub fn make_sort(
+    fn make_sort(
         typeinfo: &mut TypeInfo,
         name: Symbol,
         args: &[Expr],
@@ -141,32 +147,26 @@ impl Sort for VecSort {
         typeinfo.add_primitive(NotContains {
             name: "vec-not-contains".into(),
             vec: self.clone(),
-            unit: typeinfo.get_sort_nofail(),
         });
         typeinfo.add_primitive(Contains {
             name: "vec-contains".into(),
             vec: self.clone(),
-            unit: typeinfo.get_sort_nofail(),
         });
         typeinfo.add_primitive(Length {
             name: "vec-length".into(),
             vec: self.clone(),
-            i64: typeinfo.get_sort_nofail(),
         });
         typeinfo.add_primitive(Get {
             name: "vec-get".into(),
             vec: self.clone(),
-            i64: typeinfo.get_sort_nofail(),
         });
         typeinfo.add_primitive(Set {
             name: "vec-set".into(),
             vec: self.clone(),
-            i64: typeinfo.get_sort_nofail(),
         });
         typeinfo.add_primitive(Remove {
             name: "vec-remove".into(),
             vec: self,
-            i64: typeinfo.get_sort_nofail(),
         })
     }
 
@@ -375,7 +375,6 @@ impl PrimitiveLike for Pop {
 struct NotContains {
     name: Symbol,
     vec: Arc<VecSort>,
-    unit: Arc<UnitSort>,
 }
 
 impl PrimitiveLike for NotContains {
@@ -386,7 +385,7 @@ impl PrimitiveLike for NotContains {
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         SimpleTypeConstraint::new(
             self.name(),
-            vec![self.vec.clone(), self.vec.element(), self.unit.clone()],
+            vec![self.vec.clone(), self.vec.element(), Arc::new(UnitSort)],
             span.clone(),
         )
         .into_box()
@@ -405,7 +404,6 @@ impl PrimitiveLike for NotContains {
 struct Contains {
     name: Symbol,
     vec: Arc<VecSort>,
-    unit: Arc<UnitSort>,
 }
 
 impl PrimitiveLike for Contains {
@@ -416,7 +414,7 @@ impl PrimitiveLike for Contains {
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         SimpleTypeConstraint::new(
             self.name(),
-            vec![self.vec.clone(), self.vec.element(), self.unit.clone()],
+            vec![self.vec.clone(), self.vec.element(), Arc::new(UnitSort)],
             span.clone(),
         )
         .into_box()
@@ -435,7 +433,6 @@ impl PrimitiveLike for Contains {
 struct Length {
     name: Symbol,
     vec: Arc<VecSort>,
-    i64: Arc<I64Sort>,
 }
 
 impl PrimitiveLike for Length {
@@ -446,7 +443,7 @@ impl PrimitiveLike for Length {
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         SimpleTypeConstraint::new(
             self.name(),
-            vec![self.vec.clone(), self.i64.clone()],
+            vec![self.vec.clone(), Arc::new(I64Sort)],
             span.clone(),
         )
         .into_box()
@@ -461,7 +458,6 @@ impl PrimitiveLike for Length {
 struct Get {
     name: Symbol,
     vec: Arc<VecSort>,
-    i64: Arc<I64Sort>,
 }
 
 impl PrimitiveLike for Get {
@@ -472,7 +468,7 @@ impl PrimitiveLike for Get {
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         SimpleTypeConstraint::new(
             self.name(),
-            vec![self.vec.clone(), self.i64.clone(), self.vec.element()],
+            vec![self.vec.clone(), Arc::new(I64Sort), self.vec.element()],
             span.clone(),
         )
         .into_box()
@@ -480,7 +476,7 @@ impl PrimitiveLike for Get {
 
     fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let vec = ValueVec::load(&self.vec, &values[0]);
-        let index = i64::load(&self.i64, &values[1]);
+        let index = i64::load(&I64Sort, &values[1]);
         vec.get(index as usize).copied()
     }
 }
@@ -488,7 +484,6 @@ impl PrimitiveLike for Get {
 struct Set {
     name: Symbol,
     vec: Arc<VecSort>,
-    i64: Arc<I64Sort>,
 }
 
 impl PrimitiveLike for Set {
@@ -501,7 +496,7 @@ impl PrimitiveLike for Set {
             self.name(),
             vec![
                 self.vec.clone(),
-                self.i64.clone(),
+                Arc::new(I64Sort),
                 self.vec.element.clone(),
                 self.vec.clone(),
             ],
@@ -512,7 +507,7 @@ impl PrimitiveLike for Set {
 
     fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let mut vec = ValueVec::load(&self.vec, &values[0]);
-        let index = i64::load(&self.i64, &values[1]);
+        let index = i64::load(&I64Sort, &values[1]);
         vec[index as usize] = values[2];
         vec.store(&self.vec)
     }
@@ -521,7 +516,6 @@ impl PrimitiveLike for Set {
 struct Remove {
     name: Symbol,
     vec: Arc<VecSort>,
-    i64: Arc<I64Sort>,
 }
 
 impl PrimitiveLike for Remove {
@@ -532,7 +526,7 @@ impl PrimitiveLike for Remove {
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         SimpleTypeConstraint::new(
             self.name(),
-            vec![self.vec.clone(), self.i64.clone(), self.vec.clone()],
+            vec![self.vec.clone(), Arc::new(I64Sort), self.vec.clone()],
             span.clone(),
         )
         .into_box()
@@ -540,7 +534,7 @@ impl PrimitiveLike for Remove {
 
     fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let mut vec = ValueVec::load(&self.vec, &values[0]);
-        let i = i64::load(&self.i64, &values[1]);
+        let i = i64::load(&I64Sort, &values[1]);
         vec.remove(i.try_into().unwrap());
         vec.store(&self.vec)
     }

@@ -284,7 +284,7 @@ impl EGraph {
                         let ts = self.timestamp;
                         let out = &function.schema.output;
                         match function.decl.default.as_ref() {
-                            None if out.name() == UNIT_SYM.into() => {
+                            None if out.name() == UnitSort.name() => {
                                 function.insert(values, Value::unit(), ts);
                                 Value::unit()
                             }

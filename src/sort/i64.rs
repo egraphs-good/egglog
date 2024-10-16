@@ -3,19 +3,15 @@ use crate::{ast::Literal, constraint::AllEqualTypeConstraint};
 use super::*;
 
 #[derive(Debug)]
-pub struct I64Sort {
-    name: Symbol,
-}
+pub struct I64Sort;
 
-impl I64Sort {
-    pub fn new(name: Symbol) -> Self {
-        Self { name }
-    }
+lazy_static! {
+    static ref I64_SORT_NAME: Symbol = "i64".into();
 }
 
 impl Sort for I64Sort {
     fn name(&self) -> Symbol {
-        self.name
+        *I64_SORT_NAME
     }
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
@@ -87,7 +83,7 @@ impl IntoSort for i64 {
     type Sort = I64Sort;
     fn store(self, sort: &Self::Sort) -> Option<Value> {
         Some(Value {
-            tag: sort.name,
+            tag: sort.name(),
             bits: self as u64,
         })
     }

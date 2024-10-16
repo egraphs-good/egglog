@@ -1,28 +1,6 @@
-#[macro_export]
-macro_rules! to_tt {
-    ($tt:tt, $callback:ident) => {
-        $callback!($tt)
-    };
-}
-
-#[macro_export]
-macro_rules! unpack {
-    (& $t:ident) => {
-        $t
-    };
-    ($t:ident) => {
-        $t
-    };
-}
-
-#[macro_export]
 macro_rules! add_primitives {
-    // ($egraph:expr, $($rest:tt)*) => {
-    //      add_primitives!(@doubled $egraph, $($rest)*, $($rest)*)
-    // };
     ($type_info:expr,
         $name:literal = |$($param:ident : $param_t:ty),*| -> $ret:ty { $body:expr }
-        // $name2:literal = |$($param2:ident : $(&)? $base_param_t:ident),*| -> $ret2:ty { $body2:expr }
     ) => {{
         let type_info: &mut _ = $type_info;
         #[allow(unused_imports, non_snake_case)]

@@ -7,24 +7,17 @@ use crate::{ast::Literal, util::IndexSet};
 
 use super::*;
 
-#[derive(Debug)]
-pub struct RationalSort {
-    name: Symbol,
-    rats: Mutex<IndexSet<R>>,
+lazy_static! {
+    static ref RATIONAL_SORT_NAME: Symbol = "Rational".into();
+    static ref RATS: Mutex<IndexSet<R>> = Default::default();
 }
 
-impl RationalSort {
-    pub fn new(name: Symbol) -> Self {
-        Self {
-            name,
-            rats: Default::default(),
-        }
-    }
-}
+#[derive(Debug)]
+pub struct RationalSort;
 
 impl Sort for RationalSort {
     fn name(&self) -> Symbol {
-        self.name
+        *RATIONAL_SORT_NAME
     }
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
@@ -130,18 +123,18 @@ impl Sort for RationalSort {
 
 impl FromSort for R {
     type Sort = RationalSort;
-    fn load(sort: &Self::Sort, value: &Value) -> Self {
+    fn load(_sort: &Self::Sort, value: &Value) -> Self {
         let i = value.bits as usize;
-        *sort.rats.lock().unwrap().get_index(i).unwrap()
+        *RATS.lock().unwrap().get_index(i).unwrap()
     }
 }
 
 impl IntoSort for R {
     type Sort = RationalSort;
     fn store(self, sort: &Self::Sort) -> Option<Value> {
-        let (i, _) = sort.rats.lock().unwrap().insert_full(self);
+        let (i, _) = RATS.lock().unwrap().insert_full(self);
         Some(Value {
-            tag: sort.name,
+            tag: sort.name(),
             bits: i as u64,
         })
     }

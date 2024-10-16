@@ -23,8 +23,27 @@ impl MapSort {
     fn value(&self) -> ArcSort {
         self.value.clone()
     }
+}
 
-    pub fn make_sort(
+impl Presort for MapSort {
+    fn presort_name() -> Symbol {
+        "Map".into()
+    }
+
+    fn reserved_primitives() -> Vec<Symbol> {
+        vec![
+            "rebuild".into(),
+            "map-empty".into(),
+            "map-insert".into(),
+            "map-get".into(),
+            "map-not-contains".into(),
+            "map-contains".into(),
+            "map-remove".into(),
+            "map-length".into(),
+        ]
+    }
+
+    fn make_sort(
         typeinfo: &mut TypeInfo,
         name: Symbol,
         args: &[Expr],
@@ -65,21 +84,6 @@ impl MapSort {
         } else {
             panic!()
         }
-    }
-}
-
-impl MapSort {
-    pub fn presort_names() -> Vec<Symbol> {
-        vec![
-            "rebuild".into(),
-            "map-empty".into(),
-            "map-insert".into(),
-            "map-get".into(),
-            "map-not-contains".into(),
-            "map-contains".into(),
-            "map-remove".into(),
-            "map-length".into(),
-        ]
     }
 }
 
@@ -149,12 +153,10 @@ impl Sort for MapSort {
         typeinfo.add_primitive(NotContains {
             name: "map-not-contains".into(),
             map: self.clone(),
-            unit: typeinfo.get_sort_nofail(),
         });
         typeinfo.add_primitive(Contains {
             name: "map-contains".into(),
             map: self.clone(),
-            unit: typeinfo.get_sort_nofail(),
         });
         typeinfo.add_primitive(Remove {
             name: "map-remove".into(),
@@ -162,7 +164,6 @@ impl Sort for MapSort {
         });
         typeinfo.add_primitive(Length {
             name: "map-length".into(),
-            i64: typeinfo.get_sort_nofail(),
             map: self,
         });
     }
@@ -378,7 +379,6 @@ impl PrimitiveLike for Get {
 struct NotContains {
     name: Symbol,
     map: Arc<MapSort>,
-    unit: Arc<UnitSort>,
 }
 
 impl PrimitiveLike for NotContains {
@@ -389,7 +389,7 @@ impl PrimitiveLike for NotContains {
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         SimpleTypeConstraint::new(
             self.name(),
-            vec![self.map.clone(), self.map.key(), self.unit.clone()],
+            vec![self.map.clone(), self.map.key(), Arc::new(UnitSort)],
             span.clone(),
         )
         .into_box()
@@ -408,7 +408,6 @@ impl PrimitiveLike for NotContains {
 struct Contains {
     name: Symbol,
     map: Arc<MapSort>,
-    unit: Arc<UnitSort>,
 }
 
 impl PrimitiveLike for Contains {
@@ -419,7 +418,7 @@ impl PrimitiveLike for Contains {
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         SimpleTypeConstraint::new(
             self.name(),
-            vec![self.map.clone(), self.map.key(), self.unit.clone()],
+            vec![self.map.clone(), self.map.key(), Arc::new(UnitSort)],
             span.clone(),
         )
         .into_box()
@@ -464,7 +463,6 @@ impl PrimitiveLike for Remove {
 struct Length {
     name: Symbol,
     map: Arc<MapSort>,
-    i64: Arc<I64Sort>,
 }
 
 impl PrimitiveLike for Length {
@@ -475,7 +473,7 @@ impl PrimitiveLike for Length {
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         SimpleTypeConstraint::new(
             self.name(),
-            vec![self.map.clone(), self.i64.clone()],
+            vec![self.map.clone(), Arc::new(I64Sort)],
             span.clone(),
         )
         .into_box()
