@@ -5,9 +5,13 @@ use ordered_float::OrderedFloat;
 #[derive(Debug)]
 pub struct F64Sort;
 
+lazy_static! {
+    static ref F64_SORT_NAME: Symbol = "f64".into();
+}
+
 impl Sort for F64Sort {
     fn name(&self) -> Symbol {
-        "f64".into()
+        *F64_SORT_NAME
     }
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {

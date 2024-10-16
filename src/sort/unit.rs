@@ -4,9 +4,13 @@ use crate::{ast::Literal, constraint::AllEqualTypeConstraint, ArcSort, Primitive
 #[derive(Debug)]
 pub struct UnitSort;
 
+lazy_static! {
+    static ref UNIT_SORT_NAME: Symbol = "Unit".into();
+}
+
 impl Sort for UnitSort {
     fn name(&self) -> Symbol {
-        "Unit".into()
+        *UNIT_SORT_NAME
     }
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {

@@ -7,9 +7,13 @@ use super::*;
 #[derive(Debug)]
 pub struct StringSort;
 
+lazy_static! {
+    static ref STRING_SORT_NAME: Symbol = "String".into();
+}
+
 impl Sort for StringSort {
     fn name(&self) -> Symbol {
-        "String".into()
+        *STRING_SORT_NAME
     }
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {

@@ -5,9 +5,13 @@ use super::*;
 #[derive(Debug)]
 pub struct BoolSort;
 
+lazy_static! {
+    static ref BOOL_SORT_NAME: Symbol = "bool".into();
+}
+
 impl Sort for BoolSort {
     fn name(&self) -> Symbol {
-        "bool".into()
+        *BOOL_SORT_NAME
     }
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
