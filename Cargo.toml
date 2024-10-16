@@ -9,7 +9,7 @@ license = "MIT"
 readme = "README.md"
 
 [[bench]]
-name = "examples"
+name = "example_benchmarks"
 harness = false
 
 [workspace]
