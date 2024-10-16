@@ -83,7 +83,7 @@ impl FunctionSort {
                                 .sorts
                                 .get(arg)
                                 .ok_or(TypeError::UndefinedSort(*arg, span.clone()))
-                                .map(|s| s.clone())
+                                .cloned()
                         })
                         .collect::<Result<Vec<_>, _>>()?
                 }

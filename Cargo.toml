@@ -8,6 +8,10 @@ keywords = ["e-graphs", "egglog", "datalog", "compiler", "equality"]
 license = "MIT"
 readme = "README.md"
 
+[[bench]]
+name = "example_benchmarks"
+harness = false
+
 [workspace]
 members = [".", "web-demo"]
 
@@ -65,5 +69,6 @@ lalrpop = "0.20"
 chrono = { version = "0.4", default-features = false, features = ["now"] }
 
 [dev-dependencies]
+codspeed-criterion-compat = "2.7.2"
 glob = "0.3.1"
 libtest-mimic = "0.6.1"

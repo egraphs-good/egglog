@@ -11,6 +11,7 @@ static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
 pub struct Result {
     pub text: String,
     pub dot: String,
+    pub json: String,
 }
 
 #[wasm_bindgen]
@@ -23,14 +24,17 @@ pub fn run_program(input: &str) -> Result {
                 max_calls_per_function: Some(40),
                 ..Default::default()
             });
+            let json = serde_json::to_string(&serialized).unwrap();
             Result {
                 text: outputs.join("<br>"),
                 dot: serialized.to_dot(),
+                json,
             }
         }
         Err(e) => Result {
             text: e.to_string(),
             dot: "".to_string(),
+            json: "{}".to_string(),
         },
     }
 }
