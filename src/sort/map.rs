@@ -204,6 +204,7 @@ impl IntoSort for ValueMap {
         let mut maps = sort.maps.lock().unwrap();
         let (i, _) = maps.insert_full(self);
         Some(Value {
+            #[cfg(debug_assertions)]
             tag: sort.name,
             bits: i as u64,
         })
@@ -243,7 +244,12 @@ impl PrimitiveLike for MapRebuild {
         let map = maps.get_index(values[0].bits as usize).unwrap();
         let new_map: ValueMap = map
             .iter()
-            .map(|(k, v)| (egraph.find(*k), egraph.find(*v)))
+            .map(|(k, v)| {
+                (
+                    egraph.find(self.map.key.is_eq_sort(), *k),
+                    egraph.find(self.map.value.is_eq_sort(), *v),
+                )
+            })
             .collect();
 
         drop(maps);

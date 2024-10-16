@@ -219,15 +219,15 @@ impl Function {
         // portion of the table after this entry is inserted.
         maybe_rehash: bool,
     ) -> Option<Value> {
-        if cfg!(debug_assertions) {
-            for (v, sort) in inputs
-                .iter()
-                .zip(self.schema.input.iter())
-                .chain(once((&value, &self.schema.output)))
-            {
-                assert_eq!(sort.name(), v.tag);
-            }
+        #[cfg(debug_assertions)]
+        for (v, sort) in inputs
+            .iter()
+            .zip(self.schema.input.iter())
+            .chain(once((&value, &self.schema.output)))
+        {
+            assert_eq!(sort.name(), v.tag);
         }
+
         let res = self.nodes.insert(inputs, value, timestamp);
         if maybe_rehash {
             self.maybe_rehash();
@@ -292,17 +292,19 @@ impl Function {
             // rebuild_index
             if let Some(rebuild_index) = rebuild_index {
                 if col == self.schema.input.len() {
+                    let sort = self.schema.output.name();
                     for (slot, _, out) in self.nodes.iter_range(offsets.clone(), true) {
                         self.schema.output.foreach_tracked_values(
                             &out.value,
-                            Box::new(|value| rebuild_index.add(value, slot)),
+                            Box::new(|value| rebuild_index.add(sort, value, slot)),
                         )
                     }
                 } else {
+                    let sort = self.schema.input[col].name();
                     for (slot, inp, _) in self.nodes.iter_range(offsets.clone(), true) {
                         self.schema.input[col].foreach_tracked_values(
                             &inp[col],
-                            Box::new(|value| rebuild_index.add(value, slot)),
+                            Box::new(|value| rebuild_index.add(sort, value, slot)),
                         )
                     }
                 }

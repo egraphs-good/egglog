@@ -529,17 +529,18 @@ impl EGraph {
         for (name, function) in self.functions.iter() {
             function.nodes.assert_sorted();
             for (i, inputs, output) in function.nodes.iter_range(0..function.nodes.len(), true) {
-                for input in inputs {
+                assert_eq!(inputs.len(), function.schema.input.len());
+                for (input, sort) in inputs.iter().zip(&function.schema.input) {
                     assert_eq!(
                         input,
-                        &self.find(*input),
+                        &self.find(sort.is_eq_sort(), *input),
                         "[{i}] {name}({inputs:?}) = {output:?}\n{:?}",
                         function.schema,
                     )
                 }
                 assert_eq!(
                     output.value,
-                    self.find(output.value),
+                    self.find(function.schema.output.is_eq_sort(), output.value),
                     "[{i}] {name}({inputs:?}) = {output:?}\n{:?}",
                     function.schema,
                 )
@@ -580,16 +581,16 @@ impl EGraph {
     }
 
     /// find the leader value for a particular eclass
-    pub fn find(&self, value: Value) -> Value {
-        if let Some(sort) = self.get_sort_from_value(&value) {
-            if sort.is_eq_sort() {
-                return Value {
-                    tag: value.tag,
-                    bits: usize::from(self.unionfind.find(Id::from(value.bits as usize))) as u64,
-                };
+    pub fn find(&self, is_eq_sort: bool, value: Value) -> Value {
+        if is_eq_sort {
+            Value {
+                #[cfg(debug_assertions)]
+                tag: value.tag,
+                bits: self.unionfind.find(value.bits),
             }
+        } else {
+            value
         }
-        value
     }
 
     pub fn rebuild_nofail(&mut self) -> usize {
@@ -840,17 +841,16 @@ impl EGraph {
     /// Extract a value to a [`TermDag`] and [`Term`] in the [`TermDag`].
     /// Note that the `TermDag` may contain a superset of the nodes in the `Term`.
     /// See also `extract_value_to_string` for convenience.
-    pub fn extract_value(&self, value: Value) -> (TermDag, Term) {
+    pub fn extract_value(&self, sort: &ArcSort, value: Value) -> (TermDag, Term) {
         let mut termdag = TermDag::default();
-        let sort = self.type_info.sorts.get(&value.tag).unwrap();
         let term = self.extract(value, &mut termdag, sort).1;
         (termdag, term)
     }
 
     /// Extract a value to a string for printing.
     /// See also `extract_value` for more control.
-    pub fn extract_value_to_string(&self, value: Value) -> String {
-        let (termdag, term) = self.extract_value(value);
+    pub fn extract_value_to_string(&self, sort: &ArcSort, value: Value) -> String {
+        let (termdag, term) = self.extract_value(sort, value);
         termdag.to_string(&term)
     }
 
@@ -1461,10 +1461,6 @@ impl EGraph {
 
     pub fn num_tuples(&self) -> usize {
         self.functions.values().map(|f| f.nodes.len()).sum()
-    }
-
-    pub(crate) fn get_sort_from_value(&self, value: &Value) -> Option<&ArcSort> {
-        self.type_info.sorts.get(&value.tag)
     }
 
     /// Returns a sort based on the type

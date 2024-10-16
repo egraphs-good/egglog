@@ -55,6 +55,7 @@ mod tests {
 
     fn make_value(bits: u32) -> Value {
         Value {
+            #[cfg(debug_assertions)]
             tag: "testing".into(),
             bits: bits as u64,
         }
