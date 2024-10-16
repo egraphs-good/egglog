@@ -51,10 +51,14 @@ pub trait Sort: Any + Send + Sync + Debug {
 
     // Only eq_container_sort need to implement this method,
     // which returns a list of ids to be tracked.
-    fn foreach_tracked_values<'a>(&'a self, value: &'a Value, mut f: Box<dyn FnMut(Value) + 'a>) {
+    fn foreach_tracked_values<'a>(
+        &'a self,
+        value: &'a Value,
+        mut f: Box<dyn FnMut(ArcSort, Value) + 'a>,
+    ) {
         for (sort, value) in self.inner_values(value) {
             if sort.is_eq_sort() {
-                f(value)
+                f(sort, value)
             }
         }
     }

@@ -292,19 +292,17 @@ impl Function {
             // rebuild_index
             if let Some(rebuild_index) = rebuild_index {
                 if col == self.schema.input.len() {
-                    let sort = self.schema.output.name();
                     for (slot, _, out) in self.nodes.iter_range(offsets.clone(), true) {
                         self.schema.output.foreach_tracked_values(
                             &out.value,
-                            Box::new(|value| rebuild_index.add(sort, value, slot)),
+                            Box::new(|sort, value| rebuild_index.add(sort.name(), value, slot)),
                         )
                     }
                 } else {
-                    let sort = self.schema.input[col].name();
                     for (slot, inp, _) in self.nodes.iter_range(offsets.clone(), true) {
                         self.schema.input[col].foreach_tracked_values(
                             &inp[col],
-                            Box::new(|value| rebuild_index.add(sort, value, slot)),
+                            Box::new(|sort, value| rebuild_index.add(sort.name(), value, slot)),
                         )
                     }
                 }
