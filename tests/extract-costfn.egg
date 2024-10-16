@@ -1,0 +1,12 @@
+(datatype E
+  (Foo String))
+
+(union (Foo "x") (Foo "y"))
+(union (Foo "y") (Foo "z"))
+
+(cost (Foo "x") 17)
+(cost (Foo "y") 11)
+(cost (Foo "z") 15)
+
+(extract (Foo "y"))
+

@@ -128,6 +128,7 @@ Cost: Option<usize> = {
 
 NonLetAction: Action = {
     <lo:LParen> "set" LParen <f: Ident> <args:Expr*> RParen <v:Expr> <hi:RParen> => Action::Set ( Span(srcfile.clone(), lo, hi), f, args, v ),
+    <lo:LParen> "cost" LParen <f: Ident> <args:Expr*> RParen <v:Expr> <hi:RParen> => Action::Cost ( Span(srcfile.clone(), lo, hi), f, args, v ),
     <lo:LParen> "delete" LParen <f: Ident> <args:Expr*> RParen <hi:RParen> => Action::Change ( Span(srcfile.clone(), lo, hi), Change::Delete, f, args),
     <lo:LParen> "subsume" LParen <f: Ident> <args:Expr*> RParen <hi:RParen> => Action::Change ( Span(srcfile.clone(), lo, hi), Change::Subsume, f, args),
     <lo:LParen> "union" <e1:Expr> <e2:Expr> <hi:RParen> => Action::Union(Span(srcfile.clone(), lo, hi), e1, e2),
