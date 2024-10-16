@@ -207,7 +207,7 @@ impl EGraph {
         &mut self,
         table: Symbol,
         new_value: Value,
-        stack: &mut Vec<Value>,
+        stack: &mut [Value],
     ) -> Result<(), Error> {
         let function = self.functions.get_mut(&table).unwrap();
 
