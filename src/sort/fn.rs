@@ -336,16 +336,7 @@ impl PrimitiveLike for Ctor {
 
     fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let name = Symbol::load(&StringSort, &values[0]);
-
-        assert_eq!(values[1..].len(), self.function.inputs.len());
-        let args = self
-            .function
-            .inputs
-            .iter()
-            .zip(&values[1..])
-            .map(|(sort, value)| (sort.clone(), *value))
-            .collect();
-
+        let args = todo!();
         ValueFunction(name, args).store(&self.function)
     }
 }
