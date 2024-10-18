@@ -51,10 +51,14 @@ pub trait Sort: Any + Send + Sync + Debug {
 
     // Only eq_container_sort need to implement this method,
     // which returns a list of ids to be tracked.
-    fn foreach_tracked_values<'a>(&'a self, value: &'a Value, mut f: Box<dyn FnMut(Value) + 'a>) {
+    fn foreach_tracked_values<'a>(
+        &'a self,
+        value: &'a Value,
+        mut f: Box<dyn FnMut(ArcSort, Value) + 'a>,
+    ) {
         for (sort, value) in self.inner_values(value) {
             if sort.is_eq_sort() {
-                f(value)
+                f(sort, value)
             }
         }
     }
@@ -62,7 +66,11 @@ pub trait Sort: Any + Send + Sync + Debug {
     // Sort-wise canonicalization. Return true if value is modified.
     // Only EqSort or containers of EqSort should override.
     fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
+        #[cfg(debug_assertions)]
         debug_assert_eq!(self.name(), value.tag);
+
+        #[cfg(not(debug_assertions))]
+        let _ = value;
         let _ = unionfind;
         false
     }
@@ -137,8 +145,10 @@ impl Sort for EqSort {
     }
 
     fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
+        #[cfg(debug_assertions)]
         debug_assert_eq!(self.name(), value.tag);
-        let bits = usize::from(unionfind.find(Id::from(value.bits as usize))) as u64;
+
+        let bits = unionfind.find(value.bits);
         if bits != value.bits {
             value.bits = bits;
             true

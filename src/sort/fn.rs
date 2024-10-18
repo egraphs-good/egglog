@@ -20,7 +20,6 @@ use super::*;
 /// Note that we must store the actual arcsorts so we can return them when returning inner values
 /// and when canonicalizing
 #[derive(Debug, Clone)]
-
 struct ValueFunction(Symbol, Vec<(ArcSort, Value)>);
 
 impl ValueFunction {
@@ -203,6 +202,7 @@ impl IntoSort for ValueFunction {
         let mut functions = sort.functions.lock().unwrap();
         let (i, _) = functions.insert_full(self);
         Some(Value {
+            #[cfg(debug_assertions)]
             tag: sort.name,
             bits: i as u64,
         })
@@ -334,17 +334,13 @@ impl PrimitiveLike for Ctor {
         })
     }
 
-    fn apply(&self, values: &[Value], egraph: Option<&mut EGraph>) -> Option<Value> {
-        let egraph = egraph.expect("`unstable-fn` is not supported yet in facts.");
+    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let name = Symbol::load(&StringSort, &values[0]);
-        // self.function
-        //     .sorts
-        //     .insert(name.clone(), self.function.clone());
-        let args = values[1..]
-            .iter()
-            .map(|arg| (egraph.get_sort_from_value(arg).unwrap().clone(), *arg))
-            .collect();
-        ValueFunction(name, args).store(&self.function)
+
+        // TODO: solve static partial application
+        assert_eq!(values.len(), 1, "partial application banned");
+
+        ValueFunction(name, Vec::new()).store(&self.function)
     }
 }
 
