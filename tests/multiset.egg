@@ -1,0 +1,58 @@
+(datatype Math (Num i64))
+(sort MathToMath (UnstableFn (Math) Math))
+(sort Maths (MultiSet Math))
+
+(let xs (multiset-of (Num 1) (Num 2) (Num 3)))
+
+;; verify equal to other ordering
+(check (=
+    (multiset-of (Num 3) (Num 2) (Num 1))
+    xs
+))
+
+;; verify not equal to different counts
+(check (!=
+    (multiset-of (Num 3) (Num 2) (Num 1) (Num 1))
+    xs
+))
+
+;; Unclear why check won't work if this is defined inline
+(let inserted (multiset-insert xs (Num 4)))
+;; insert
+(check (=
+    (multiset-of (Num 1) (Num 2) (Num 3) (Num 4))
+    inserted
+))
+
+
+;; contains and not contains
+(check (multiset-contains xs (Num 1)))
+(check (multiset-not-contains xs (Num 4)))
+
+;; remove last
+(check (=
+    (multiset-of (Num 1) (Num 3))
+    (multiset-remove xs (Num 2))
+))
+;; remove one of
+(check (= (multiset-of (Num 1)) (multiset-remove (multiset-of (Num 1) (Num 1)) (Num 1))))
+
+
+;; length
+(check (= 3 (multiset-length xs)))
+;; length repeated
+(check (= 3 (multiset-length (multiset-of (Num 1) (Num 1) (Num 1)))))
+
+;; pick
+(check (= (Num 1) (multiset-pick (multiset-of (Num 1)))))
+
+;; map
+(function square (Math) Math)
+(rewrite (square (Num x)) (Num (* x x)))
+
+(let squared-xs (unstable-multiset-map (unstable-fn "square") xs))
+(run 1)
+(check (=
+    (multiset-of (Num 1) (Num 4) (Num 9))
+    squared-xs
+))

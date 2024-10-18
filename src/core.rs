@@ -107,8 +107,11 @@ impl ResolvedCall {
                 }
             }
         }
-
-        assert!(resolved_call.len() == 1);
+        assert!(
+            resolved_call.len() == 1,
+            "Ambiguous resolution for {:?}",
+            head,
+        );
         resolved_call.pop().unwrap()
     }
 }
