@@ -336,8 +336,11 @@ impl PrimitiveLike for Ctor {
 
     fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let name = Symbol::load(&StringSort, &values[0]);
-        let args = todo!();
-        ValueFunction(name, args).store(&self.function)
+
+        // TODO: solve static partial application
+        assert_eq!(values.len(), 1, "partial application banned");
+
+        ValueFunction(name, Vec::new()).store(&self.function)
     }
 }
 
