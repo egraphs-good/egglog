@@ -21,7 +21,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
             continue;
         }
         // skip unstable_fn because partial application is banned
-        if path_string.contains("unstable_fn") {
+        if path_string.contains("unstable-fn") {
             continue;
         }
 
