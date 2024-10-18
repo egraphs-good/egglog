@@ -26,7 +26,7 @@ bin = ["dep:clap", "dep:env_logger", "egraph-serialize/serde", "dep:serde_json"]
 wasm-bindgen = ["instant/wasm-bindgen", "dep:getrandom"]
 
 [dependencies]
-hashbrown = { version = "0.14", features = ["raw"] }
+hashbrown = { version = "0.15" }
 indexmap = "2.0"
 instant = "0.1"
 log = "0.4"

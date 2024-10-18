@@ -1,6 +1,6 @@
 use crate::{
     ast::Literal,
-    util::{HashMap, HashSet},
+    util::{HashMap, HashSet, IndexSet},
     Expr, GenericExpr, Symbol,
 };
 
@@ -21,14 +21,8 @@ pub enum Term {
 /// A hashconsing arena for [`Term`]s.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct TermDag {
-    // think of nodes as a map from indices to Terms.
-    // invariant: the nodes map and the hashcons map are inverses.
-    // note that this implies:
-    // - no duplicates in nodes
-    // - every element of node is a key in hashcons
-    // - every key of hashcons is in nodes
-    pub nodes: Vec<Term>,
-    pub hashcons: HashMap<Term, TermId>,
+    /// A bidirectional map between deduplicated `Term`s and indices.
+    nodes: IndexSet<Term>,
 }
 
 #[macro_export]
@@ -54,14 +48,14 @@ impl TermDag {
     ///
     /// Panics if the term does not already exist in this [TermDag].
     pub fn lookup(&self, node: &Term) -> TermId {
-        *self.hashcons.get(node).unwrap()
+        self.nodes.get_index_of(node).unwrap()
     }
 
     /// Convert the given id to the corresponding term.
     ///
     /// Panics if the id is not valid.
     pub fn get(&self, id: TermId) -> Term {
-        self.nodes[id].clone()
+        self.nodes.get_index(id).unwrap().clone()
     }
 
     /// Make and return a [`Term::App`] with the given head symbol and children,
@@ -97,10 +91,8 @@ impl TermDag {
     }
 
     fn add_node(&mut self, node: &Term) {
-        if self.hashcons.get(node).is_none() {
-            let idx = self.nodes.len();
-            self.nodes.push(node.clone());
-            self.hashcons.insert(node.clone(), idx);
+        if self.nodes.get(node).is_none() {
+            self.nodes.insert(node.clone());
         }
     }
 
@@ -215,7 +207,7 @@ mod tests {
         //     x, y, (g x y), and the root call to f
         // so we can compute expected answer by hand:
         assert_eq!(
-            td.nodes,
+            td.nodes.as_slice().iter().cloned().collect::<Vec<_>>(),
             vec![
                 Term::Var("x".into()),
                 Term::Var("y".into()),
