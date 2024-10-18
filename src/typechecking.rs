@@ -47,6 +47,7 @@ impl Default for TypeInfo {
         res.add_presort::<SetSort>(DUMMY_SPAN.clone()).unwrap();
         res.add_presort::<VecSort>(DUMMY_SPAN.clone()).unwrap();
         res.add_presort::<FunctionSort>(DUMMY_SPAN.clone()).unwrap();
+        res.add_presort::<MultiSetSort>(DUMMY_SPAN.clone()).unwrap();
 
         res.add_primitive(ValueEq);
 
