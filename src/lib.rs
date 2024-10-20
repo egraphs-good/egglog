@@ -26,25 +26,23 @@ mod unionfind;
 pub mod util;
 mod value;
 
+use crate::constraint::Problem;
+use crate::core::{AtomTerm, ResolvedCall};
+use crate::typechecking::TypeError;
+use actions::Program;
 use ast::remove_globals::remove_globals;
+use ast::*;
+use constraint::{Constraint, SimpleTypeConstraint, TypeConstraint};
 use extract::Extractor;
+pub use function::Function;
+use function::*;
+use generic_symbolic_expressions::Sexp;
+use gj::*;
 use index::ColumnIndex;
 use indexmap::map::Entry;
 use instant::{Duration, Instant};
-pub use serialize::SerializeConfig;
-pub use serialize::SerializedNode;
+pub use serialize::{SerializeConfig, SerializedNode};
 use sort::*;
-pub use termdag::{Term, TermDag, TermId};
-use thiserror::Error;
-
-use generic_symbolic_expressions::Sexp;
-
-use ast::*;
-pub use typechecking::TypeInfo;
-
-use crate::core::{AtomTerm, ResolvedCall};
-use actions::Program;
-use constraint::{Constraint, SimpleTypeConstraint, TypeConstraint};
 use std::fmt::{Display, Formatter};
 use std::fs::File;
 use std::hash::Hash;
@@ -55,19 +53,14 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::str::FromStr;
 use std::{fmt::Debug, sync::Arc};
-
-pub type ArcSort = Arc<dyn Sort>;
-
-pub use value::*;
-
-pub use function::Function;
-use function::*;
-use gj::*;
+pub use termdag::{Term, TermDag, TermId};
+use thiserror::Error;
+pub use typechecking::TypeInfo;
 use unionfind::*;
 use util::*;
+pub use value::*;
 
-use crate::constraint::Problem;
-use crate::typechecking::TypeError;
+pub type ArcSort = Arc<dyn Sort>;
 
 pub type Subst = IndexMap<Symbol, Value>;
 
@@ -1529,28 +1522,28 @@ impl EGraph {
 #[derive(Debug, Error)]
 pub enum Error {
     #[error(transparent)]
-    ParseError(#[from] lalrpop_util::ParseError<usize, String, String>),
+    ParseError(#[from] ParseError),
     #[error(transparent)]
     NotFoundError(#[from] NotFoundError),
     #[error(transparent)]
     TypeError(#[from] TypeError),
     #[error("Errors:\n{}", ListDisplay(.0, "\n"))]
     TypeErrors(Vec<TypeError>),
-    #[error("{}\nCheck failed: \n{}", .1.get_quote(), ListDisplay(.0, "\n"))]
+    #[error("{1}\nCheck failed: \n{}", ListDisplay(.0, "\n"))]
     CheckError(Vec<Fact>, Span),
-    #[error("{}\nNo such ruleset: {0}", .1.get_quote())]
+    #[error("{1}\nNo such ruleset: {0}")]
     NoSuchRuleset(Symbol, Span),
-    #[error("{}\nAttempted to add a rule to combined ruleset {0}. Combined rulesets may only depend on other rulesets.", .1.get_quote())]
+    #[error("{1}\nAttempted to add a rule to combined ruleset {0}. Combined rulesets may only depend on other rulesets.")]
     CombinedRulesetError(Symbol, Span),
     #[error("Evaluating primitive {0:?} failed. ({0:?} {:?})", ListDebug(.1, " "))]
     PrimitiveError(Primitive, Vec<Value>),
     #[error("Illegal merge attempted for function {0}, {1:?} != {2:?}")]
     MergeError(Symbol, Value, Value),
-    #[error("{}\nTried to pop too much", .0.get_quote())]
+    #[error("{0}\nTried to pop too much")]
     Pop(Span),
-    #[error("{}\nCommand should have failed.", .0.get_quote())]
+    #[error("{0}\nCommand should have failed.")]
     ExpectFail(Span),
-    #[error("{}\nIO error: {0}: {1}", .2.get_quote())]
+    #[error("{2}\nIO error: {0}: {1}")]
     IoError(PathBuf, std::io::Error, Span),
     #[error("Cannot subsume function with merge: {0}")]
     SubsumeMergeError(Symbol),

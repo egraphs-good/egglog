@@ -49,9 +49,6 @@ serde_json = { optional = true, version = "1.0.100", features = [
   "preserve_order",
 ] }
 
-lalrpop-util = { version = "0.20", features = ["lexer"] }
-regex = "1.10"
-
 # binary dependencies
 clap = { version = "4", features = ["derive"], optional = true }
 env_logger = { version = "0.10", optional = true }
@@ -66,7 +63,6 @@ im = "15.1.0"
 
 
 [build-dependencies]
-lalrpop = "0.20"
 chrono = { version = "0.4", default-features = false, features = ["now"] }
 
 [dev-dependencies]
