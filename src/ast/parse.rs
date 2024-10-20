@@ -224,7 +224,7 @@ fn repeat_all<T>(parser: impl Parser<T>) -> impl Parser<Vec<T>> {
 fn choice<T>(a: impl Parser<T>, b: impl Parser<T>) -> impl Parser<T> {
     move |ctx| match (a(ctx), b(ctx)) {
         (Ok(x), _) | (_, Ok(x)) => Ok(x),
-        (Err(x), _) => Err(x),
+        (_, Err(x)) => Err(x),
     }
 }
 
@@ -287,8 +287,8 @@ fn option<T>(parser: impl Parser<T>) -> impl Parser<Option<T>> {
 fn parens_span<T>(f: impl Parser<T>) -> impl Parser<(Span, T)> {
     move |ctx| {
         let ((lo, x, hi), next) = choice(
-            sequence3(text("("), f.clone(), text(")")),
             sequence3(text("["), f.clone(), text("]")),
+            sequence3(text("("), f.clone(), text(")")),
         )(ctx)?;
         Ok(((Span(lo.0, lo.1, hi.2), x), next))
     }
@@ -864,10 +864,21 @@ pub enum ParseError {
 
 #[cfg(test)]
 mod tests {
+    use crate::*;
+
+    fn parse_expr(s: &str) -> Expr {
+        crate::ast::parse_expr(None, s).unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    #[test]
+    fn test_parser() {
+        let _ = parse_expr("(f a b)");
+    }
+
     #[test]
     fn test_parser_display_roundtrip() {
         let s = r#"(f (g a 3) 4.0 (H "hello"))"#;
-        let e = crate::ast::parse_expr(None, s).unwrap();
+        let e = parse_expr(s);
         assert_eq!(format!("{}", e), s);
     }
 }
