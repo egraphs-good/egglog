@@ -92,7 +92,7 @@ struct Context {
 }
 
 impl Context {
-    pub fn new(name: Option<String>, contents: &str) -> Context {
+    fn new(name: Option<String>, contents: &str) -> Context {
         let mut next = Context {
             source: Arc::new(SrcFile {
                 name,
@@ -102,19 +102,6 @@ impl Context {
         };
         next.advance_past_whitespace();
         next
-    }
-
-    pub fn advance_text(&self, s: &str, skip_whitespace: bool) -> Option<(Span, Context)> {
-        if self.source.contents[self.index..].starts_with(s) {
-            let mut next = self.clone();
-            next.index += s.len();
-            if skip_whitespace {
-                next.advance_past_whitespace();
-            }
-            Some((Span(self.source.clone(), self.index, next.index), next))
-        } else {
-            None
-        }
     }
 
     fn advance_past_whitespace(&mut self) {
@@ -140,7 +127,7 @@ impl Context {
         }
     }
 
-    pub fn is_at_end(&self) -> bool {
+    fn is_at_end(&self) -> bool {
         self.index == self.source.contents.len()
     }
 }
@@ -160,8 +147,13 @@ fn text(s: &str) -> impl Parser<Span> + '_ {
 
 fn text_internal(s: &str, skip_whitespace: bool) -> impl Parser<Span> + '_ {
     move |ctx| {
-        if let Some((span, next)) = ctx.advance_text(s, skip_whitespace) {
-            Ok((span, next))
+        if ctx.source.contents[ctx.index..].starts_with(s) {
+            let mut next = ctx.clone();
+            next.index += s.len();
+            if skip_whitespace {
+                next.advance_past_whitespace();
+            }
+            Ok((Span(ctx.source.clone(), ctx.index, next.index), next))
         } else {
             let span = Span(ctx.source.clone(), ctx.index, ctx.index);
             Err(ParseError::ExpectedText(span, s.to_string()))
@@ -204,7 +196,10 @@ fn repeat_all<T>(parser: impl Parser<T>) -> impl Parser<Vec<T>> {
 }
 
 fn choice<T>(a: impl Parser<T>, b: impl Parser<T>) -> impl Parser<T> {
-    move |ctx| a(ctx).or_else(|_| b(ctx))
+    move |ctx| match (a(ctx), b(ctx)) {
+        (Ok(x), _) | (_, Ok(x)) => Ok(x),
+        (Err(x), _) => Err(x),
+    }
 }
 
 macro_rules! choices {
@@ -727,22 +722,22 @@ fn digit(ctx: &Context) -> Res<Span> {
 }
 
 fn num(ctx: &Context) -> Res<i64> {
-    let start = ctx.index;
     let (_, next) = sequence3(option(text_exact("-")), repeat1(digit), text(""))(ctx)?;
-    let end = next.index;
-    let i = ctx.source.contents[start..end]
+    let i = ctx.source.contents[ctx.index..next.index]
         .parse()
-        .map_err(|_| ParseError::ExpectedInt(Span(ctx.source.clone(), start, end)))?;
+        .map_err(|_| {
+            let span = Span(ctx.source.clone(), ctx.index, next.index);
+            ParseError::ExpectedInt(span)
+        })?;
     Ok((i, next))
 }
 
 fn unum(ctx: &Context) -> Res<usize> {
-    let start = ctx.index;
-    let (_, next) = sequence(repeat1(digit), text(""))(ctx)?;
-    let end = next.index;
-    let i = ctx.source.contents[start..end]
-        .parse()
-        .map_err(|_| ParseError::ExpectedUint(Span(ctx.source.clone(), start, end)))?;
+    let (i, next) = num(ctx)?;
+    let i = i.try_into().map_err(|_| {
+        let span = Span(ctx.source.clone(), ctx.index, next.index);
+        ParseError::ExpectedUint(span)
+    })?;
     Ok((i, next))
 }
 
@@ -758,7 +753,6 @@ fn r#f64(ctx: &Context) -> Res<ordered_float::OrderedFloat<f64>> {
             f64::NEG_INFINITY
         )),
         |ctx| {
-            let start = ctx.index;
             let (_, next) = sequences!(
                 option(text_exact("-")),
                 repeat1(digit),
@@ -772,10 +766,12 @@ fn r#f64(ctx: &Context) -> Res<ordered_float::OrderedFloat<f64>> {
                 )),
                 text(""),
             )(ctx)?;
-            let end = next.index;
-            let f = ctx.source.contents[start..end]
+            let f = ctx.source.contents[ctx.index..next.index]
                 .parse()
-                .map_err(|_| ParseError::ExpectedFloat(Span(ctx.source.clone(), start, end)))?;
+                .map_err(|_| {
+                    let span = Span(ctx.source.clone(), ctx.index, next.index);
+                    ParseError::ExpectedFloat(span)
+                })?;
             Ok((ordered_float::OrderedFloat::<f64>(f), next))
         },
     )(ctx)
