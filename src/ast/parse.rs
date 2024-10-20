@@ -173,8 +173,13 @@ fn token(ctx: &Context) -> Res<Span> {
 
 fn text(s: &str) -> impl Parser<Span> + '_ {
     move |ctx| {
-        let (span, next) = token(ctx)?;
+        let end = (ctx.index + s.len()).min(ctx.source.contents.len());
+        let span = Span(ctx.source.clone(), ctx.index, end);
+
         if span.string() == s {
+            let mut next = ctx.clone();
+            next.index += s.len();
+            next.advance_past_whitespace();
             Ok((span, next))
         } else {
             Err(ParseError::Text(span, s.to_string()))
