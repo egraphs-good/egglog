@@ -1704,6 +1704,8 @@
 (let v103 (Func v0 v4 v5 v102))
 
 (run-schedule
-        (repeat 5 (saturate fast-analyses)
+        ; only repeating twice to reduce benchmark CI performance
+        ; increasing to 3 times will change benchmark time from 4 minutes to 40+ minutes
+        (repeat 2 (saturate fast-analyses)
                   (run)
                   (saturate subst)))

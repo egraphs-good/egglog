@@ -100,7 +100,7 @@ fn main() {
     let mk_egraph = || {
         let mut egraph = EGraph::default();
         egraph.set_reserved_symbol(args.reserved_symbol.clone().into());
-        egraph.fact_directory = args.fact_directory.clone();
+        egraph.fact_directory.clone_from(&args.fact_directory);
         egraph.seminaive = !args.naive;
         egraph.run_mode = args.show;
         egraph

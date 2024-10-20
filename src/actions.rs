@@ -213,7 +213,7 @@ impl EGraph {
         &mut self,
         table: Symbol,
         new_value: Value,
-        stack: &mut Vec<Value>,
+        stack: &mut [Value],
     ) -> Result<(), Error> {
         let function = self.functions.get_mut(&table).unwrap();
 
@@ -290,7 +290,7 @@ impl EGraph {
                         let ts = self.timestamp;
                         let out = &function.schema.output;
                         match function.decl.default.as_ref() {
-                            None if out.name() == UNIT_SYM.into() => {
+                            None if out.name() == UnitSort.name() => {
                                 function.insert(values, Value::unit(), ts);
                                 Value::unit()
                             }

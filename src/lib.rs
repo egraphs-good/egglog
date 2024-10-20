@@ -28,8 +28,8 @@ mod value;
 
 use ast::remove_globals::remove_globals;
 use extract::Extractor;
-use hashbrown::hash_map::Entry;
 use index::ColumnIndex;
+use indexmap::map::Entry;
 use instant::{Duration, Instant};
 pub use serialize::SerializeConfig;
 pub use serialize::SerializedNode;
@@ -40,7 +40,7 @@ use thiserror::Error;
 use generic_symbolic_expressions::Sexp;
 
 use ast::*;
-pub use typechecking::{TypeInfo, UNIT_SYM};
+pub use typechecking::TypeInfo;
 
 use crate::core::{AtomTerm, ResolvedCall};
 use actions::Program;
@@ -426,8 +426,8 @@ pub struct EGraph {
     symbol_gen: SymbolGen,
     egraphs: Vec<Self>,
     unionfind: UnionFind,
-    pub functions: HashMap<Symbol, Function>,
-    rulesets: HashMap<Symbol, Ruleset>,
+    pub functions: IndexMap<Symbol, Function>,
+    rulesets: IndexMap<Symbol, Ruleset>,
     rule_last_run_timestamp: HashMap<Symbol, u32>,
     interactive_mode: bool,
     pub timestamp: u32,
@@ -678,11 +678,11 @@ impl EGraph {
 
     pub fn eval_lit(&self, lit: &Literal) -> Value {
         match lit {
-            Literal::Int(i) => i.store(&self.type_info.get_sort_nofail()).unwrap(),
-            Literal::F64(f) => f.store(&self.type_info.get_sort_nofail()).unwrap(),
-            Literal::String(s) => s.store(&self.type_info.get_sort_nofail()).unwrap(),
-            Literal::Unit => ().store(&self.type_info.get_sort_nofail()).unwrap(),
-            Literal::Bool(b) => b.store(&self.type_info.get_sort_nofail()).unwrap(),
+            Literal::Int(i) => i.store(&I64Sort).unwrap(),
+            Literal::F64(f) => f.store(&F64Sort).unwrap(),
+            Literal::String(s) => s.store(&StringSort).unwrap(),
+            Literal::Unit => ().store(&UnitSort).unwrap(),
+            Literal::Bool(b) => b.store(&BoolSort).unwrap(),
         }
     }
 
@@ -739,7 +739,7 @@ impl EGraph {
             .get(&sym)
             // function_to_dag should have checked this
             .unwrap();
-        let out_is_unit = f.schema.output.name() == UNIT_SYM.into();
+        let out_is_unit = f.schema.output.name() == UnitSort.name();
 
         let mut buf = String::new();
         let s = &mut buf;
@@ -837,9 +837,9 @@ impl EGraph {
         }
     }
 
-    /// Extract a value to a [`TermDag`] and [`Term`]
-    /// in the [`TermDag`].
-    /// See also extract_value_to_string for convenience.
+    /// Extract a value to a [`TermDag`] and [`Term`] in the [`TermDag`].
+    /// Note that the `TermDag` may contain a superset of the nodes in the `Term`.
+    /// See also `extract_value_to_string` for convenience.
     pub fn extract_value(&self, value: Value) -> (TermDag, Term) {
         let mut termdag = TermDag::default();
         let sort = self.type_info.sorts.get(&value.tag).unwrap();
@@ -848,7 +848,7 @@ impl EGraph {
     }
 
     /// Extract a value to a string for printing.
-    /// See also extract_value for more control.
+    /// See also `extract_value` for more control.
     pub fn extract_value_to_string(&self, value: Value) -> String {
         let (termdag, term) = self.extract_value(value);
         termdag.to_string(&term)
@@ -1293,7 +1293,6 @@ impl EGraph {
                 filename.push(file.as_str());
                 // append to file
                 let mut f = File::options()
-                    .write(true)
                     .append(true)
                     .create(true)
                     .open(&filename)
@@ -1301,7 +1300,7 @@ impl EGraph {
                 let mut termdag = TermDag::default();
                 for expr in exprs {
                     let value = self.eval_resolved_expr(&expr)?;
-                    let expr_type = expr.output_type(&self.type_info);
+                    let expr_type = expr.output_type();
                     let term = self.extract(value, &mut termdag, &expr_type).1;
                     use std::io::Write;
                     writeln!(f, "{}", termdag.to_string(&term))
@@ -1368,7 +1367,7 @@ impl EGraph {
             let mut exprs: Vec<Expr> = str_buf.iter().map(|&s| parse(s)).collect();
 
             actions.push(
-                if function_type.is_datatype || function_type.output.name() == UNIT_SYM.into() {
+                if function_type.is_datatype || function_type.output.name() == UnitSort.name() {
                     Action::Expr(span.clone(), Expr::Call(span.clone(), func_name, exprs))
                 } else {
                     let out = exprs.pop().unwrap();
@@ -1413,7 +1412,7 @@ impl EGraph {
             .type_info
             .typecheck_program(&mut self.symbol_gen, &program)?;
 
-        let program = remove_globals(&self.type_info, program, &mut self.symbol_gen);
+        let program = remove_globals(program, &mut self.symbol_gen);
 
         Ok(program)
     }
@@ -1475,11 +1474,6 @@ impl EGraph {
         pred: impl Fn(&Arc<S>) -> bool,
     ) -> Option<Arc<S>> {
         self.type_info.get_sort_by(pred)
-    }
-
-    /// Returns a sort based on the type
-    pub fn get_sort<S: Sort + Send + Sync>(&self) -> Option<Arc<S>> {
-        self.type_info.get_sort_by(|_| true)
     }
 
     /// Add a user-defined sort
@@ -1602,21 +1596,18 @@ mod tests {
     fn test_user_defined_primitive() {
         let mut egraph = EGraph::default();
         egraph
-            .parse_and_run_program(
-                None,
-                "
-                (sort IntVec (Vec i64))
-            ",
-            )
+            .parse_and_run_program(None, "(sort IntVec (Vec i64))")
             .unwrap();
-        let i64_sort: Arc<I64Sort> = egraph.get_sort().unwrap();
+
         let int_vec_sort: Arc<VecSort> = egraph
-            .get_sort_by(|s: &Arc<VecSort>| s.element_name() == i64_sort.name())
+            .get_sort_by(|s: &Arc<VecSort>| s.element_name() == I64Sort.name())
             .unwrap();
+
         egraph.add_primitive(InnerProduct {
-            ele: i64_sort,
+            ele: I64Sort.into(),
             vec: int_vec_sort,
         });
+
         egraph
             .parse_and_run_program(
                 None,

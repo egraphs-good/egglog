@@ -3,19 +3,15 @@ use crate::ast::Literal;
 use ordered_float::OrderedFloat;
 
 #[derive(Debug)]
-pub struct F64Sort {
-    name: Symbol,
-}
+pub struct F64Sort;
 
-impl F64Sort {
-    pub fn new(name: Symbol) -> Self {
-        Self { name }
-    }
+lazy_static! {
+    static ref F64_SORT_NAME: Symbol = "f64".into();
 }
 
 impl Sort for F64Sort {
     fn name(&self) -> Symbol {
-        self.name
+        *F64_SORT_NAME
     }
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
@@ -70,7 +66,7 @@ impl IntoSort for f64 {
     type Sort = F64Sort;
     fn store(self, sort: &Self::Sort) -> Option<Value> {
         Some(Value {
-            tag: sort.name,
+            tag: sort.name(),
             bits: self.to_bits(),
         })
     }

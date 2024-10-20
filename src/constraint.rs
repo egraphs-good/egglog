@@ -273,7 +273,7 @@ impl Assignment<AtomTerm, ArcSort> {
                     .collect();
                 let types: Vec<_> = args
                     .iter()
-                    .map(|arg| arg.output_type(typeinfo))
+                    .map(|arg| arg.output_type())
                     .chain(once(
                         self.get(&AtomTerm::Var(DUMMY_SPAN.clone(), *corresponding_var))
                             .unwrap()
@@ -351,8 +351,8 @@ impl Assignment<AtomTerm, ArcSort> {
                 let rhs = self.annotate_expr(rhs, typeinfo);
                 let types: Vec<_> = children
                     .iter()
-                    .map(|child| child.output_type(typeinfo))
-                    .chain(once(rhs.output_type(typeinfo)))
+                    .map(|child| child.output_type())
+                    .chain(once(rhs.output_type()))
                     .collect();
                 let resolved_call = ResolvedCall::from_resolution(head, &types, typeinfo);
                 if !matches!(resolved_call, ResolvedCall::Func(_)) {
@@ -379,10 +379,7 @@ impl Assignment<AtomTerm, ArcSort> {
                     .iter()
                     .map(|child| self.annotate_expr(child, typeinfo))
                     .collect();
-                let types: Vec<_> = children
-                    .iter()
-                    .map(|child| child.output_type(typeinfo))
-                    .collect();
+                let types: Vec<_> = children.iter().map(|child| child.output_type()).collect();
                 let resolved_call =
                     ResolvedCall::from_resolution_func_types(head, &types, typeinfo)
                         .ok_or_else(|| TypeError::UnboundFunction(*head, span.clone()))?;
@@ -568,7 +565,7 @@ impl CoreAction {
                     get_literal_and_global_constraints(&[e.clone(), n.clone()], typeinfo)
                         .chain(once(Constraint::Assign(
                             n.clone(),
-                            typeinfo.get_sort_nofail::<I64Sort>() as ArcSort,
+                            std::sync::Arc::new(I64Sort) as ArcSort,
                         )))
                         .collect(),
                 )
@@ -684,8 +681,8 @@ fn get_literal_and_global_constraints<'a>(
             AtomTerm::Var(_, _) => None,
             // Literal to type constraint
             AtomTerm::Literal(_, lit) => {
-                let typ = type_info.infer_literal(lit);
-                Some(Constraint::Assign(arg.clone(), typ.clone()))
+                let typ = crate::sort::literal_sort(lit);
+                Some(Constraint::Assign(arg.clone(), typ))
             }
             AtomTerm::Global(_, v) => {
                 if let Some(typ) = type_info.lookup_global(v) {
