@@ -294,11 +294,6 @@ fn parens_span<T>(f: impl Parser<T>) -> impl Parser<(Span, T)> {
     }
 }
 
-fn ident_after_paren(ctx: &Context) -> Result<&str, ParseError> {
-    let ((_, x), _next) = sequence(choice(text("("), text("[")), ident)(ctx)?;
-    Ok(x.into())
-}
-
 fn parens<T>(f: impl Parser<T>) -> impl Parser<T> {
     map(parens_span(f), |(_, x)| x)
 }
@@ -312,20 +307,20 @@ fn program(ctx: &Context) -> Res<Vec<Command>> {
 }
 
 fn rec_datatype(ctx: &Context) -> Res<(Span, Symbol, Subdatatypes)> {
-    match ident_after_paren(ctx)? {
-        "sort" => map(
+    choices!(
+        map(
+            parens_span(sequence(ident, repeat(variant))),
+            |(span, (name, variants))| (span, name, Subdatatypes::Variants(variants))
+        ),
+        map(
             parens_span(sequence3(
                 text("sort"),
                 ident,
                 parens(sequence(ident, repeat(expr))),
             )),
-            |(span, (_, name, (head, exprs)))| (span, name, Subdatatypes::NewSort(head, exprs)),
-        )(ctx),
-        _ => map(
-            parens_span(sequence(ident, repeat(variant))),
-            |(span, (name, variants))| (span, name, Subdatatypes::Variants(variants)),
-        )(ctx),
-    }
+            |(span, (_, name, (head, exprs)))| (span, name, Subdatatypes::NewSort(head, exprs))
+        ),
+    )(ctx)
 }
 
 fn list<T>(f: impl Parser<T>) -> impl Parser<Vec<T>> {
@@ -337,281 +332,294 @@ fn snd<T, U>(x: Option<(T, U)>) -> Option<U> {
 }
 
 fn command(ctx: &Context) -> Res<Command> {
-    wrap_err(command_, ParseError::Command)(ctx)
-}
-
-fn command_(ctx: &Context) -> Res<Command> {
-    match ident_after_paren(ctx)? {
-        "set-option" => map(
-            parens(sequence3(text("set-option"), ident, expr)),
-            |(_, name, value)| Command::SetOption { name, value },
-        )(ctx),
-        "datatype" => map(
-            parens_span(sequence3(text("datatype"), ident, repeat(variant))),
-            |(span, (_, name, variants))| Command::Datatype {
-                span,
-                name,
-                variants,
-            },
-        )(ctx),
-        "sort" => map(
-            parens_span(sequence3(
-                text("sort"),
-                ident,
-                option(parens(sequence(ident, repeat(expr)))),
-            )),
-            |(span, (_, name, container))| Command::Sort(span, name, container),
-        )(ctx),
-        "datatype*" => map(
-            parens_span(sequence(text("datatype*"), repeat(rec_datatype))),
-            |(span, (_, datatypes))| Command::Datatypes { span, datatypes },
-        )(ctx),
-        "function" => map(
-            parens_span(sequences!(
-                text("function"),
-                ident,
-                schema,
-                cost,
-                map(option(text(":unextractable")), |x| x.is_some()),
-                map(option(sequence(text(":on_merge"), list(action))), snd),
-                map(option(sequence(text(":merge"), expr)), snd),
-                map(option(sequence(text(":default"), expr)), snd),
-            )),
-            |(
-                span,
-                (_, (name, (schema, (cost, (unextractable, (merge_action, (merge, default))))))),
-            )| {
-                Command::Function(FunctionDecl {
+    wrap_err(
+        choices!(
+            map(
+                parens(sequence3(text("set-option"), ident, expr)),
+                |(_, name, value)| Command::SetOption { name, value }
+            ),
+            map(
+                parens_span(sequence3(text("datatype"), ident, repeat(variant))),
+                |(span, (_, name, variants))| Command::Datatype {
                     span,
                     name,
+                    variants
+                }
+            ),
+            map(
+                parens_span(sequence3(
+                    text("sort"),
+                    ident,
+                    parens(sequence(ident, repeat(expr)))
+                )),
+                |(span, (_, name, (head, tail)))| Command::Sort(span, name, Some((head, tail)))
+            ),
+            map(
+                parens_span(sequence(text("sort"), ident)),
+                |(span, (_, name))| Command::Sort(span, name, None),
+            ),
+            map(
+                parens_span(sequence(text("datatype*"), repeat(rec_datatype))),
+                |(span, (_, datatypes))| Command::Datatypes { span, datatypes }
+            ),
+            map(
+                parens_span(sequences!(
+                    text("function"),
+                    ident,
                     schema,
-                    merge,
-                    merge_action: Actions::new(merge_action.unwrap_or_default()),
-                    default,
                     cost,
-                    unextractable,
-                    ignore_viz: false,
-                })
-            },
-        )(ctx),
-        "relation" => map(
-            parens_span(sequence3(text("relation"), ident, list(r#type))),
-            |(span, (_, constructor, inputs))| Command::Relation {
-                span,
-                constructor,
-                inputs,
-            },
-        )(ctx),
-        "ruleset" => map(parens(sequence(text("ruleset"), ident)), |(_, name)| {
-            Command::AddRuleset(name)
-        })(ctx),
-        "unstable-combined-ruleset" => map(
-            parens(sequence3(
-                text("unstable-combined-ruleset"),
-                ident,
-                repeat(ident),
-            )),
-            |(_, name, subrulesets)| Command::UnstableCombinedRuleset(name, subrulesets),
-        )(ctx),
-        "rule" => map(
-            parens_span(sequences!(
-                text("rule"),
-                list(fact),
-                map(list(action), Actions::new),
-                map(option(sequence(text(":ruleset"), ident)), snd),
-                map(option(sequence(text(":name"), string)), snd),
-            )),
-            |(span, (_, (body, (head, (ruleset, name)))))| Command::Rule {
-                ruleset: ruleset.unwrap_or("".into()),
-                name: name.unwrap_or("".to_string()).into(),
-                rule: Rule { span, head, body },
-            },
-        )(ctx),
-        "rewrite" => map(
-            parens_span(sequences!(
-                text("rewrite"),
-                expr,
-                expr,
-                map(option(text(":subsume")), |x| x.is_some()),
-                map(option(sequence(text(":when"), list(fact))), snd),
-                map(option(sequence(text(":ruleset"), ident)), snd),
-            )),
-            |(span, (_, (lhs, (rhs, (subsume, (conditions, ruleset))))))| {
-                Command::Rewrite(
+                    map(option(text(":unextractable")), |x| x.is_some()),
+                    map(option(sequence(text(":on_merge"), list(action))), snd),
+                    map(option(sequence(text(":merge"), expr)), snd),
+                    map(option(sequence(text(":default"), expr)), snd),
+                )),
+                |(
+                    span,
+                    (
+                        _,
+                        (name, (schema, (cost, (unextractable, (merge_action, (merge, default)))))),
+                    ),
+                )| {
+                    Command::Function(FunctionDecl {
+                        span,
+                        name,
+                        schema,
+                        merge,
+                        merge_action: Actions::new(merge_action.unwrap_or_default()),
+                        default,
+                        cost,
+                        unextractable,
+                        ignore_viz: false,
+                    })
+                }
+            ),
+            map(
+                parens_span(sequence3(text("relation"), ident, list(r#type))),
+                |(span, (_, constructor, inputs))| Command::Relation {
+                    span,
+                    constructor,
+                    inputs
+                },
+            ),
+            map(parens(sequence(text("ruleset"), ident)), |(_, name)| {
+                Command::AddRuleset(name)
+            },),
+            map(
+                parens(sequence3(
+                    text("unstable-combined-ruleset"),
+                    ident,
+                    repeat(ident)
+                )),
+                |(_, name, subrulesets)| Command::UnstableCombinedRuleset(name, subrulesets),
+            ),
+            map(
+                parens_span(sequences!(
+                    text("rule"),
+                    list(fact),
+                    map(list(action), Actions::new),
+                    map(option(sequence(text(":ruleset"), ident)), snd),
+                    map(option(sequence(text(":name"), string)), snd),
+                )),
+                |(span, (_, (body, (head, (ruleset, name)))))| Command::Rule {
+                    ruleset: ruleset.unwrap_or("".into()),
+                    name: name.unwrap_or("".to_string()).into(),
+                    rule: Rule { span, head, body },
+                }
+            ),
+            map(
+                parens_span(sequences!(
+                    text("rewrite"),
+                    expr,
+                    expr,
+                    map(option(text(":subsume")), |x| x.is_some()),
+                    map(option(sequence(text(":when"), list(fact))), snd),
+                    map(option(sequence(text(":ruleset"), ident)), snd),
+                )),
+                |(span, (_, (lhs, (rhs, (subsume, (conditions, ruleset))))))| Command::Rewrite(
                     ruleset.unwrap_or("".into()),
                     Rewrite {
                         span,
                         lhs,
                         rhs,
-                        conditions: conditions.unwrap_or_default(),
+                        conditions: conditions.unwrap_or_default()
                     },
-                    subsume,
+                    subsume
                 )
-            },
-        )(ctx),
-        "birewrite" => map(
-            parens_span(sequences!(
-                text("birewrite"),
-                expr,
-                expr,
-                map(option(sequence(text(":when"), list(fact))), snd),
-                map(option(sequence(text(":ruleset"), ident)), snd),
-            )),
-            |(span, (_, (lhs, (rhs, (conditions, ruleset)))))| {
-                Command::BiRewrite(
+            ),
+            map(
+                parens_span(sequences!(
+                    text("birewrite"),
+                    expr,
+                    expr,
+                    map(option(sequence(text(":when"), list(fact))), snd),
+                    map(option(sequence(text(":ruleset"), ident)), snd),
+                )),
+                |(span, (_, (lhs, (rhs, (conditions, ruleset)))))| Command::BiRewrite(
                     ruleset.unwrap_or("".into()),
                     Rewrite {
                         span,
                         lhs,
                         rhs,
-                        conditions: conditions.unwrap_or_default(),
-                    },
+                        conditions: conditions.unwrap_or_default()
+                    }
                 )
-            },
-        )(ctx),
-        "let" => map(
-            parens_span(sequence3(text("let"), ident, expr)),
-            |(span, (_, name, expr))| Command::Action(Action::Let(span, name, expr)),
-        )(ctx),
-        "run" => map(
-            parens_span(sequences!(
-                text("run"),
-                option(ident),
-                unum,
-                map(option(sequence(text(":until"), repeat(fact))), snd),
-            )),
-            |(span, (_, (ruleset, (limit, until))))| {
-                Command::RunSchedule(Schedule::Repeat(
+            ),
+            map(
+                parens_span(sequence3(text("let"), ident, expr)),
+                |(span, (_, name, expr))| Command::Action(Action::Let(span, name, expr)),
+            ),
+            map(non_let_action, Command::Action),
+            map(
+                parens_span(sequence3(
+                    text("run"),
+                    unum,
+                    map(option(sequence(text(":until"), repeat(fact))), snd),
+                )),
+                |(span, (_, limit, until))| Command::RunSchedule(Schedule::Repeat(
                     span.clone(),
                     limit,
                     Box::new(Schedule::Run(
                         span,
                         RunConfig {
-                            ruleset: ruleset.unwrap_or_else(|| "".into()),
-                            until,
-                        },
-                    )),
-                ))
-            },
-        )(ctx),
-        "simplify" => map(
-            parens_span(sequence3(text("simplify"), schedule, expr)),
-            |(span, (_, schedule, expr))| Command::Simplify {
-                span,
-                expr,
-                schedule,
-            },
-        )(ctx),
-        "query-extract" => map(
-            parens_span(sequence3(
-                text("query-extract"),
-                map(option(sequence(text(":variants"), unum)), snd),
-                expr,
-            )),
-            |(span, (_, variants, expr))| Command::QueryExtract {
-                span,
-                expr,
-                variants: variants.unwrap_or(0),
-            },
-        )(ctx),
-        "check" => map(
-            parens_span(sequence(text("check"), repeat(fact))),
-            |(span, (_, facts))| Command::Check(span, facts),
-        )(ctx),
-        "run-schedule" => map(
-            parens_span(sequence(text("run-schedule"), repeat(schedule))),
-            |(span, (_, scheds))| Command::RunSchedule(Schedule::Sequence(span, scheds)),
-        )(ctx),
-        "print-stats" => map(parens(text("print-stats")), |_| {
-            Command::PrintOverallStatistics
-        })(ctx),
-        "push" => map(parens(sequence(text("push"), option(unum))), |(_, n)| {
-            Command::Push(n.unwrap_or(1))
-        })(ctx),
-        "pop" => map(
-            parens_span(sequence(text("pop"), option(unum))),
-            |(span, (_, n))| Command::Pop(span, n.unwrap_or(1)),
-        )(ctx),
-        "print-function" => map(
-            parens_span(sequence3(text("print-function"), ident, unum)),
-            |(span, (_, sym, n))| Command::PrintFunction(span, sym, n),
-        )(ctx),
-        "print-size" => map(
-            parens_span(sequence(text("print-size"), option(ident))),
-            |(span, (_, sym))| Command::PrintSize(span, sym),
-        )(ctx),
-        "input" => map(
-            parens_span(sequence3(text("input"), ident, string)),
-            |(span, (_, name, file))| Command::Input { span, name, file },
-        )(ctx),
-        "output" => map(
-            parens_span(sequence3(text("output"), string, repeat1(expr))),
-            |(span, (_, file, exprs))| Command::Output { span, file, exprs },
-        )(ctx),
-        "fail" => map(
-            parens_span(sequence(text("fail"), command)),
-            |(span, (_, c))| Command::Fail(span, Box::new(c)),
-        )(ctx),
-        "include" => map(
-            parens_span(sequence(text("include"), string)),
-            |(span, (_, file))| Command::Include(span, file),
-        )(ctx),
-        _ => map(non_let_action, Command::Action)(ctx),
-    }
+                            ruleset: "".into(),
+                            until
+                        }
+                    ))
+                )),
+            ),
+            map(
+                parens_span(sequences!(
+                    text("run"),
+                    ident,
+                    unum,
+                    map(option(sequence(text(":until"), repeat(fact))), snd),
+                )),
+                |(span, (_, (ruleset, (limit, until))))| Command::RunSchedule(Schedule::Repeat(
+                    span.clone(),
+                    limit,
+                    Box::new(Schedule::Run(span, RunConfig { ruleset, until }))
+                )),
+            ),
+            map(
+                parens_span(sequence3(text("simplify"), schedule, expr)),
+                |(span, (_, schedule, expr))| Command::Simplify {
+                    span,
+                    expr,
+                    schedule
+                },
+            ),
+            map(
+                parens_span(sequence3(
+                    text("query-extract"),
+                    map(option(sequence(text(":variants"), unum)), snd),
+                    expr
+                )),
+                |(span, (_, variants, expr))| Command::QueryExtract {
+                    span,
+                    expr,
+                    variants: variants.unwrap_or(0)
+                }
+            ),
+            map(
+                parens_span(sequence(text("check"), repeat(fact))),
+                |(span, (_, facts))| Command::Check(span, facts),
+            ),
+            map(
+                parens_span(sequence(text("run-schedule"), repeat(schedule))),
+                |(span, (_, scheds))| Command::RunSchedule(Schedule::Sequence(span, scheds)),
+            ),
+            map(parens(text("print-stats")), |_| {
+                Command::PrintOverallStatistics
+            }),
+            map(parens(sequence(text("push"), option(unum))), |(_, n)| {
+                Command::Push(n.unwrap_or(1))
+            },),
+            map(
+                parens_span(sequence(text("pop"), option(unum))),
+                |(span, (_, n))| Command::Pop(span, n.unwrap_or(1)),
+            ),
+            map(
+                parens_span(sequence3(text("print-function"), ident, unum)),
+                |(span, (_, sym, n))| Command::PrintFunction(span, sym, n),
+            ),
+            map(
+                parens_span(sequence(text("print-size"), option(ident))),
+                |(span, (_, sym))| Command::PrintSize(span, sym),
+            ),
+            map(
+                parens_span(sequence3(text("input"), ident, string)),
+                |(span, (_, name, file))| Command::Input { span, name, file }
+            ),
+            map(
+                parens_span(sequence3(text("output"), string, repeat1(expr))),
+                |(span, (_, file, exprs))| Command::Output { span, file, exprs }
+            ),
+            map(
+                parens_span(sequence(text("fail"), command)),
+                |(span, (_, c))| Command::Fail(span, Box::new(c)),
+            ),
+            map(
+                parens_span(sequence(text("include"), string)),
+                |(span, (_, file))| Command::Include(span, file),
+            ),
+        ),
+        ParseError::Command,
+    )(ctx)
 }
 
 fn schedule(ctx: &Context) -> Res<Schedule> {
-    wrap_err(schedule_, ParseError::Schedule)(ctx)
-}
-
-fn schedule_(ctx: &Context) -> Res<Schedule> {
-    match ident_after_paren(ctx)? {
-        "saturate" => map(
-            parens_span(sequence(text("saturate"), repeat(schedule))),
-            |(span, (_, scheds))| {
-                Schedule::Saturate(span.clone(), Box::new(Schedule::Sequence(span, scheds)))
-            },
-        )(ctx),
-        "seq" => map(
-            parens_span(sequence(text("seq"), repeat(schedule))),
-            |(span, (_, scheds))| Schedule::Sequence(span, scheds),
-        )(ctx),
-        "repeat" => map(
-            parens_span(sequence3(text("repeat"), unum, repeat(schedule))),
-            |(span, (_, limit, scheds))| {
-                Schedule::Repeat(
+    wrap_err(
+        choices!(
+            map(
+                parens_span(sequence(text("saturate"), repeat(schedule))),
+                |(span, (_, scheds))| Schedule::Saturate(
+                    span.clone(),
+                    Box::new(Schedule::Sequence(span, scheds),)
+                ),
+            ),
+            map(
+                parens_span(sequence(text("seq"), repeat(schedule))),
+                |(span, (_, scheds))| Schedule::Sequence(span, scheds),
+            ),
+            map(
+                parens_span(sequence3(text("repeat"), unum, repeat(schedule))),
+                |(span, (_, limit, scheds))| Schedule::Repeat(
                     span.clone(),
                     limit,
-                    Box::new(Schedule::Sequence(span, scheds)),
+                    Box::new(Schedule::Sequence(span, scheds),)
                 )
-            },
-        )(ctx),
-        "run" => map(
-            parens_span(sequence3(
-                text("run"),
-                option(ident),
-                map(option(sequence(text(":until"), repeat(fact))), snd),
-            )),
-            |(span, (_, ruleset, until))| {
-                Schedule::Run(
+            ),
+            map(
+                parens_span(sequence(
+                    text("run"),
+                    map(option(sequence(text(":until"), repeat(fact))), snd)
+                )),
+                |(span, (_, until))| Schedule::Run(
                     span,
                     RunConfig {
-                        ruleset: ruleset.unwrap_or_else(|| "".into()),
-                        until,
-                    },
-                )
-            },
-        )(ctx),
-        _ => map(parens_span(ident), |(span, ruleset)| {
-            Schedule::Run(
+                        ruleset: "".into(),
+                        until
+                    }
+                ),
+            ),
+            map(
+                parens_span(sequence3(
+                    text("run"),
+                    ident,
+                    map(option(sequence(text(":until"), repeat(fact))), snd)
+                )),
+                |(span, (_, ruleset, until))| Schedule::Run(span, RunConfig { ruleset, until })
+            ),
+            map(parens_span(ident), |(span, ruleset)| Schedule::Run(
                 span,
                 RunConfig {
                     ruleset,
-                    until: None,
-                },
-            )
-        })(ctx),
-    }
+                    until: None
+                }
+            )),
+        ),
+        ParseError::Schedule,
+    )(ctx)
 }
 
 fn cost(ctx: &Context) -> Res<Option<usize>> {
@@ -619,80 +627,77 @@ fn cost(ctx: &Context) -> Res<Option<usize>> {
 }
 
 fn action(ctx: &Context) -> Res<Action> {
-    wrap_err(action_, ParseError::Action)(ctx)
-}
-
-fn action_(ctx: &Context) -> Res<Action> {
-    match ident_after_paren(ctx)? {
-        "let" => map(
+    choice(
+        map(
             parens_span(sequence3(text("let"), ident, expr)),
             |(span, (_, name, expr))| Action::Let(span, name, expr),
-        )(ctx),
-        _ => non_let_action(ctx),
-    }
+        ),
+        non_let_action,
+    )(ctx)
 }
 
 fn non_let_action(ctx: &Context) -> Res<Action> {
-    match ident_after_paren(ctx)? {
-        "set" => map(
+    choices!(
+        map(
             parens_span(sequence3(
                 text("set"),
                 parens(sequence(ident, repeat(expr))),
-                expr,
+                expr
             )),
             |(span, (_, (f, args), v))| Action::Set(span, f, args, v),
-        )(ctx),
-        "delete" => map(
+        ),
+        map(
             parens_span(sequence(
                 text("delete"),
-                parens(sequence(ident, repeat(expr))),
+                parens(sequence(ident, repeat(expr)))
             )),
             |(span, (_, (f, args)))| Action::Change(span, Change::Delete, f, args),
-        )(ctx),
-        "subsume" => map(
+        ),
+        map(
             parens_span(sequence(
                 text("subsume"),
-                parens(sequence(ident, repeat(expr))),
+                parens(sequence(ident, repeat(expr)))
             )),
             |(span, (_, (f, args)))| Action::Change(span, Change::Subsume, f, args),
-        )(ctx),
-        "union" => map(
+        ),
+        map(
             parens_span(sequence3(text("union"), expr, expr)),
             |(span, (_, e1, e2))| Action::Union(span, e1, e2),
-        )(ctx),
-        "panic" => map(
+        ),
+        map(
             parens_span(sequence(text("panic"), string)),
             |(span, (_, msg))| Action::Panic(span, msg),
-        )(ctx),
-        "extract" => map(
-            parens_span(sequence3(text("extract"), expr, option(expr))),
-            |(span, (_, expr, variants))| {
-                Action::Extract(
-                    span.clone(),
-                    expr,
-                    variants.unwrap_or(Expr::Lit(span, Literal::Int(0))),
-                )
-            },
-        )(ctx),
-        _ => map(parens_span(call_expr), |(span, e)| Action::Expr(span, e))(ctx),
-    }
+        ),
+        map(
+            parens_span(sequence(text("extract"), expr)),
+            |(span, (_, expr))| Action::Extract(
+                span.clone(),
+                expr,
+                Expr::Lit(span, Literal::Int(0))
+            ),
+        ),
+        map(
+            parens_span(sequence3(text("extract"), expr, expr)),
+            |(span, (_, expr, variants))| Action::Extract(span, expr, variants),
+        ),
+        map(parens_span(call_expr), |(span, e)| Action::Expr(span, e),),
+    )(ctx)
 }
 
 fn fact(ctx: &Context) -> Res<Fact> {
-    wrap_err(fact_, ParseError::Fact)(ctx)
-}
-
-fn fact_(ctx: &Context) -> Res<Fact> {
-    match ident_after_paren(ctx)? {
-        "=" => map(
-            parens_span(sequence3(text("="), repeat1(expr), expr)),
-            |(span, (_, mut es, e))| {
-                es.push(e);
-                Fact::Eq(span, es)
-            },
-        )(ctx),
-        _ => map(call_expr, Fact::Fact)(ctx),
-    }
+    wrap_err(
+        choice(
+            map(
+                parens_span(sequence3(text("="), repeat1(expr), expr)),
+                |(span, (_, mut es, e))| {
+                    es.push(e);
+                    Fact::Eq(span, es)
+                },
+            ),
+            map(call_expr, Fact::Fact),
+        ),
+        ParseError::Fact,
+    )(ctx)
 }
 
 fn schema(ctx: &Context) -> Res<Schema> {
@@ -714,12 +719,15 @@ fn expr(ctx: &Context) -> Res<Expr> {
 }
 
 fn literal(ctx: &Context) -> Res<Literal> {
-    choices!(
-        map(sequence(text("("), text(")")), |_| Literal::Unit,),
-        map(num, Literal::Int),
-        map(r#f64, Literal::F64),
-        map(r#bool, Literal::Bool),
-        map(sym_string, Literal::String),
+    wrap_err(
+        choices!(
+            map(sequence(text("("), text(")")), |_| Literal::Unit,),
+            map(num, Literal::Int),
+            map(r#f64, Literal::F64),
+            map(r#bool, Literal::Bool),
+            map(sym_string, Literal::String),
+        ),
+        ParseError::Literal,
     )(ctx)
 }
 
@@ -850,6 +858,8 @@ pub enum ParseError {
     Fact(Box<ParseError>),
     #[error("{0}\nwhen parsing expr")]
     Expr(Box<ParseError>),
+    #[error("{0}\nwhen parsing literal")]
+    Literal(Box<ParseError>),
 }
 
 #[cfg(test)]
