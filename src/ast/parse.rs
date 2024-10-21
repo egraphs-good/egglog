@@ -306,11 +306,11 @@ fn rec_datatype(ctx: &Context) -> Res<(Span, Symbol, Subdatatypes)> {
                 ident,
                 parens(sequence(ident, repeat(expr))),
             )),
-            |((), name, (head, exprs)), span| (span, name, Subdatatypes::NewSort(head, exprs))
+            |((), name, (head, exprs)), span| (span, name, Subdatatypes::NewSort(head, exprs)),
         ),
         map(
             parens(sequence(ident, repeat(variant))),
-            |(name, variants), span| (span, name, Subdatatypes::Variants(variants))
+            |(name, variants), span| (span, name, Subdatatypes::Variants(variants)),
         ),
     )(ctx)
 }
