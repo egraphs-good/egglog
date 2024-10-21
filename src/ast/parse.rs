@@ -754,14 +754,20 @@ fn unum(ctx: &Context) -> Res<usize> {
 }
 
 fn r#f64(ctx: &Context) -> Res<OrderedFloat<f64>> {
+    use std::num::FpCategory::*;
     let (_, span, next) = ident(ctx)?;
     match span.string() {
         "NaN" => Ok((OrderedFloat(f64::NAN), span, next)),
         "inf" => Ok((OrderedFloat(f64::INFINITY), span, next)),
         "-inf" => Ok((OrderedFloat(f64::NEG_INFINITY), span, next)),
         _ => match span.string().parse::<f64>() {
-            Ok(x) => Ok((OrderedFloat(x), span, next)),
             Err(_) => Err(ParseError::Float(span)),
+            // Rust will parse "infinity" as a float, which we don't want
+            // we're only using `parse` to avoid implementing it ourselves anyway
+            Ok(x) => match x.classify() {
+                Nan | Infinite => Err(ParseError::Float(span)),
+                Zero | Subnormal | Normal => Ok((OrderedFloat(x), span, next)),
+            },
         },
     }
 }
