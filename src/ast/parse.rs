@@ -198,12 +198,16 @@ fn text(s: &str) -> impl Parser<()> + '_ {
     }
 }
 
-fn repeat<T>(parser: impl Parser<T>) -> impl Parser<Vec<T>> {
+fn repeat_until<T>(
+    inner: impl Parser<T>,
+    end: impl Fn(&Context) -> bool + Clone,
+) -> impl Parser<Vec<T>> {
     move |ctx| {
         let mut vec = Vec::new();
         let mut span = ctx.span();
         let mut next = ctx.clone();
-        while let Ok((x, s, n)) = parser(&next) {
+        while !end(&next) {
+            let (x, s, n) = inner(&next)?;
             vec.push(x);
             next = n;
             span.2 = s.2;
@@ -212,19 +216,8 @@ fn repeat<T>(parser: impl Parser<T>) -> impl Parser<Vec<T>> {
     }
 }
 
-fn repeat_all<T>(parser: impl Parser<T>) -> impl Parser<Vec<T>> {
-    move |ctx| {
-        let mut vec = Vec::new();
-        let mut span = ctx.span();
-        let mut next = ctx.clone();
-        while next.index < next.source.contents.len() {
-            let (x, s, n) = parser(&next)?;
-            vec.push(x);
-            next = n;
-            span.2 = s.2;
-        }
-        Ok((vec, span, next))
-    }
+fn repeat_until_end_paren<T>(inner: impl Parser<T>) -> impl Parser<Vec<T>> {
+    repeat_until(inner, |ctx| text(")")(ctx).is_ok())
 }
 
 fn choice<T>(a: impl Parser<T>, b: impl Parser<T>) -> impl Parser<T> {
@@ -295,7 +288,7 @@ fn parens<T>(f: impl Parser<T>) -> impl Parser<T> {
 }
 
 fn program(ctx: &Context) -> Res<Vec<Command>> {
-    repeat_all(command)(ctx)
+    repeat_until(command, |ctx| ctx.index == ctx.source.contents.len())(ctx)
 }
 
 fn rec_datatype(ctx: &Context) -> Res<(Span, Symbol, Subdatatypes)> {
@@ -304,19 +297,19 @@ fn rec_datatype(ctx: &Context) -> Res<(Span, Symbol, Subdatatypes)> {
             parens(sequence3(
                 text("sort"),
                 ident,
-                parens(sequence(ident, repeat(expr))),
+                parens(sequence(ident, repeat_until_end_paren(expr))),
             )),
             |((), name, (head, exprs)), span| (span, name, Subdatatypes::NewSort(head, exprs)),
         ),
         map(
-            parens(sequence(ident, repeat(variant))),
+            parens(sequence(ident, repeat_until_end_paren(variant))),
             |(name, variants), span| (span, name, Subdatatypes::Variants(variants)),
         ),
     )(ctx)
 }
 
 fn list<T>(f: impl Parser<T>) -> impl Parser<Vec<T>> {
-    parens(repeat(f))
+    parens(repeat_until_end_paren(f))
 }
 
 fn snd<T, U>(x: Option<(T, U)>, _span: Span) -> Option<U> {
@@ -337,7 +330,11 @@ fn command(ctx: &Context) -> Res<Command> {
             |((), name, value), _| Command::SetOption { name, value },
         )(ctx),
         "datatype" => map(
-            parens(sequence3(text("datatype"), ident, repeat(variant))),
+            parens(sequence3(
+                text("datatype"),
+                ident,
+                repeat_until_end_paren(variant),
+            )),
             |((), name, variants), span| Command::Datatype {
                 span,
                 name,
@@ -349,7 +346,7 @@ fn command(ctx: &Context) -> Res<Command> {
                 parens(sequence3(
                     text("sort"),
                     ident,
-                    parens(sequence(ident, repeat(expr))),
+                    parens(sequence(ident, repeat_until_end_paren(expr))),
                 )),
                 |((), name, (head, tail)), span| Command::Sort(span, name, Some((head, tail))),
             ),
@@ -358,7 +355,10 @@ fn command(ctx: &Context) -> Res<Command> {
             }),
         )(ctx),
         "datatype*" => map(
-            parens(sequence(text("datatype*"), repeat(rec_datatype))),
+            parens(sequence(
+                text("datatype*"),
+                repeat_until_end_paren(rec_datatype),
+            )),
             |((), datatypes), span| Command::Datatypes { span, datatypes },
         )(ctx),
         "function" => map(
@@ -402,7 +402,7 @@ fn command(ctx: &Context) -> Res<Command> {
             parens(sequence3(
                 text("unstable-combined-ruleset"),
                 ident,
-                repeat(ident),
+                repeat_until_end_paren(ident),
             )),
             |((), name, subrulesets), _| Command::UnstableCombinedRuleset(name, subrulesets),
         )(ctx),
@@ -471,7 +471,10 @@ fn command(ctx: &Context) -> Res<Command> {
                 parens(sequence3(
                     text("run"),
                     unum,
-                    map(option(sequence(text(":until"), repeat(fact))), snd),
+                    map(
+                        option(sequence(text(":until"), repeat_until_end_paren(fact))),
+                        snd,
+                    ),
                 )),
                 |((), limit, until), span| {
                     Command::RunSchedule(Schedule::Repeat(
@@ -492,7 +495,10 @@ fn command(ctx: &Context) -> Res<Command> {
                     text("run"),
                     ident,
                     unum,
-                    map(option(sequence(text(":until"), repeat(fact))), snd),
+                    map(
+                        option(sequence(text(":until"), repeat_until_end_paren(fact))),
+                        snd,
+                    ),
                 )),
                 |((), ruleset, limit, until), span| {
                     Command::RunSchedule(Schedule::Repeat(
@@ -524,11 +530,14 @@ fn command(ctx: &Context) -> Res<Command> {
             },
         )(ctx),
         "check" => map(
-            parens(sequence(text("check"), repeat(fact))),
+            parens(sequence(text("check"), repeat_until_end_paren(fact))),
             |((), facts), span| Command::Check(span, facts),
         )(ctx),
         "run-schedule" => map(
-            parens(sequence(text("run-schedule"), repeat(schedule))),
+            parens(sequence(
+                text("run-schedule"),
+                repeat_until_end_paren(schedule),
+            )),
             |((), scheds), span| Command::RunSchedule(Schedule::Sequence(span, scheds)),
         )(ctx),
         "print-stats" => map(parens(text("print-stats")), |(), _| {
@@ -555,7 +564,12 @@ fn command(ctx: &Context) -> Res<Command> {
             |((), name, file), span| Command::Input { span, name, file },
         )(ctx),
         "output" => map(
-            parens(sequence4(text("output"), string, expr, repeat(expr))),
+            parens(sequence4(
+                text("output"),
+                string,
+                expr,
+                repeat_until_end_paren(expr),
+            )),
             |((), file, e, mut exprs), span| {
                 exprs.insert(0, e);
                 Command::Output { span, file, exprs }
@@ -575,17 +589,21 @@ fn command(ctx: &Context) -> Res<Command> {
 fn schedule(ctx: &Context) -> Res<Schedule> {
     match ident_after_paren(ctx) {
         "saturate" => map(
-            parens(sequence(text("saturate"), repeat(schedule))),
+            parens(sequence(text("saturate"), repeat_until_end_paren(schedule))),
             |((), scheds), span| {
                 Schedule::Saturate(span.clone(), Box::new(Schedule::Sequence(span, scheds)))
             },
         )(ctx),
         "seq" => map(
-            parens(sequence(text("seq"), repeat(schedule))),
+            parens(sequence(text("seq"), repeat_until_end_paren(schedule))),
             |((), scheds), span| Schedule::Sequence(span, scheds),
         )(ctx),
         "repeat" => map(
-            parens(sequence3(text("repeat"), unum, repeat(schedule))),
+            parens(sequence3(
+                text("repeat"),
+                unum,
+                repeat_until_end_paren(schedule),
+            )),
             |((), limit, scheds), span| {
                 Schedule::Repeat(
                     span.clone(),
@@ -598,7 +616,10 @@ fn schedule(ctx: &Context) -> Res<Schedule> {
             map(
                 parens(sequence(
                     text("run"),
-                    map(option(sequence(text(":until"), repeat(fact))), snd),
+                    map(
+                        option(sequence(text(":until"), repeat_until_end_paren(fact))),
+                        snd,
+                    ),
                 )),
                 |((), until), span| {
                     Schedule::Run(
@@ -614,7 +635,10 @@ fn schedule(ctx: &Context) -> Res<Schedule> {
                 parens(sequence3(
                     text("run"),
                     ident,
-                    map(option(sequence(text(":until"), repeat(fact))), snd),
+                    map(
+                        option(sequence(text(":until"), repeat_until_end_paren(fact))),
+                        snd,
+                    ),
                 )),
                 |((), ruleset, until), span| Schedule::Run(span, RunConfig { ruleset, until }),
             ),
@@ -650,7 +674,7 @@ fn non_let_action(ctx: &Context) -> Res<Action> {
         "set" => map(
             parens(sequence3(
                 text("set"),
-                parens(sequence(ident, repeat(expr))),
+                parens(sequence(ident, repeat_until_end_paren(expr))),
                 expr,
             )),
             |((), (f, args), v), span| Action::Set(span, f, args, v),
@@ -658,14 +682,14 @@ fn non_let_action(ctx: &Context) -> Res<Action> {
         "delete" => map(
             parens(sequence(
                 text("delete"),
-                parens(sequence(ident, repeat(expr))),
+                parens(sequence(ident, repeat_until_end_paren(expr))),
             )),
             |((), (f, args)), span| Action::Change(span, Change::Delete, f, args),
         )(ctx),
         "subsume" => map(
             parens(sequence(
                 text("subsume"),
-                parens(sequence(ident, repeat(expr))),
+                parens(sequence(ident, repeat_until_end_paren(expr))),
             )),
             |((), (f, args)), span| Action::Change(span, Change::Subsume, f, args),
         )(ctx),
@@ -742,14 +766,18 @@ fn r#bool(ctx: &Context) -> Res<bool> {
 
 fn call_expr(ctx: &Context) -> Res<Expr> {
     map(
-        parens(sequence(ident, repeat(expr))),
+        parens(sequence(ident, repeat_until_end_paren(expr))),
         |(head, tail), span| Expr::Call(span, head, tail),
     )(ctx)
 }
 
 fn variant(ctx: &Context) -> Res<Variant> {
     map(
-        parens(sequence3(ident, repeat(r#type), cost)),
+        parens(sequence3(
+            ident,
+            repeat_until(r#type, |ctx| r#type(ctx).is_err()),
+            cost,
+        )),
         |(name, types, cost), span| Variant {
             span,
             name,
