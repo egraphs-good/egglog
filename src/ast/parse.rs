@@ -454,22 +454,34 @@ fn command(ctx: &Context) -> Res<Command> {
             |((), name, expr), span| Command::Action(Action::Let(span, name, expr)),
         ),
         map(
+            parens(sequence3(
+                text("run"),
+                unum,
+                map(option(sequence(text(":until"), repeat(fact))), snd),
+            )),
+            |((), limit, until), span| Command::RunSchedule(Schedule::Repeat(
+                span.clone(),
+                limit,
+                Box::new(Schedule::Run(
+                    span,
+                    RunConfig {
+                        ruleset: "".into(),
+                        until
+                    }
+                ))
+            )),
+        ),
+        map(
             parens(sequence4(
                 text("run"),
-                option(ident),
+                ident,
                 unum,
                 map(option(sequence(text(":until"), repeat(fact))), snd),
             )),
             |((), ruleset, limit, until), span| Command::RunSchedule(Schedule::Repeat(
                 span.clone(),
                 limit,
-                Box::new(Schedule::Run(
-                    span,
-                    RunConfig {
-                        ruleset: ruleset.unwrap_or_else(|| "".into()),
-                        until
-                    }
-                ))
+                Box::new(Schedule::Run(span, RunConfig { ruleset, until }))
             )),
         ),
         map(
@@ -563,18 +575,25 @@ fn schedule(ctx: &Context) -> Res<Schedule> {
             )
         ),
         map(
-            parens(sequence3(
+            parens(sequence(
                 text("run"),
-                option(ident),
                 map(option(sequence(text(":until"), repeat(fact))), snd)
             )),
-            |((), ruleset, until), span| Schedule::Run(
+            |((), until), span| Schedule::Run(
                 span,
                 RunConfig {
-                    ruleset: ruleset.unwrap_or_else(|| "".into()),
+                    ruleset: "".into(),
                     until
                 }
             ),
+        ),
+        map(
+            parens(sequence3(
+                text("run"),
+                ident,
+                map(option(sequence(text(":until"), repeat(fact))), snd)
+            )),
+            |((), ruleset, until), span| Schedule::Run(span, RunConfig { ruleset, until }),
         ),
         map(ident, |ruleset, span| Schedule::Run(
             span.clone(),
