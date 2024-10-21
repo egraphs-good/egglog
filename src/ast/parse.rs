@@ -301,16 +301,16 @@ fn program(ctx: &Context) -> Res<Vec<Command>> {
 fn rec_datatype(ctx: &Context) -> Res<(Span, Symbol, Subdatatypes)> {
     choices!(
         map(
-            parens(sequence(ident, repeat(variant))),
-            |(name, variants), span| (span, name, Subdatatypes::Variants(variants))
-        ),
-        map(
             parens(sequence3(
                 text("sort"),
                 ident,
                 parens(sequence(ident, repeat(expr))),
             )),
             |((), name, (head, exprs)), span| (span, name, Subdatatypes::NewSort(head, exprs))
+        ),
+        map(
+            parens(sequence(ident, repeat(variant))),
+            |(name, variants), span| (span, name, Subdatatypes::Variants(variants))
         ),
     )(ctx)
 }
@@ -453,36 +453,23 @@ fn command(ctx: &Context) -> Res<Command> {
             parens(sequence3(text("let"), ident, expr)),
             |((), name, expr), span| Command::Action(Action::Let(span, name, expr)),
         ),
-        map(non_let_action, |action, _| Command::Action(action)),
-        map(
-            parens(sequence3(
-                text("run"),
-                unum,
-                map(option(sequence(text(":until"), repeat(fact))), snd),
-            )),
-            |((), limit, until), span| Command::RunSchedule(Schedule::Repeat(
-                span.clone(),
-                limit,
-                Box::new(Schedule::Run(
-                    span,
-                    RunConfig {
-                        ruleset: "".into(),
-                        until
-                    }
-                ))
-            )),
-        ),
         map(
             parens(sequence4(
                 text("run"),
-                ident,
+                option(ident),
                 unum,
                 map(option(sequence(text(":until"), repeat(fact))), snd),
             )),
             |((), ruleset, limit, until), span| Command::RunSchedule(Schedule::Repeat(
                 span.clone(),
                 limit,
-                Box::new(Schedule::Run(span, RunConfig { ruleset, until }))
+                Box::new(Schedule::Run(
+                    span,
+                    RunConfig {
+                        ruleset: ruleset.unwrap_or_else(|| "".into()),
+                        until
+                    }
+                ))
             )),
         ),
         map(
@@ -550,6 +537,7 @@ fn command(ctx: &Context) -> Res<Command> {
             parens(sequence(text("include"), string)),
             |((), file), span| Command::Include(span, file),
         ),
+        map(non_let_action, |action, _| Command::Action(action)),
     )(ctx)
 }
 
@@ -575,25 +563,18 @@ fn schedule(ctx: &Context) -> Res<Schedule> {
             )
         ),
         map(
-            parens(sequence(
+            parens(sequence3(
                 text("run"),
+                option(ident),
                 map(option(sequence(text(":until"), repeat(fact))), snd)
             )),
-            |((), until), span| Schedule::Run(
+            |((), ruleset, until), span| Schedule::Run(
                 span,
                 RunConfig {
-                    ruleset: "".into(),
+                    ruleset: ruleset.unwrap_or_else(|| "".into()),
                     until
                 }
             ),
-        ),
-        map(
-            parens(sequence3(
-                text("run"),
-                ident,
-                map(option(sequence(text(":until"), repeat(fact))), snd)
-            )),
-            |((), ruleset, until), span| Schedule::Run(span, RunConfig { ruleset, until })
         ),
         map(ident, |ruleset, span| Schedule::Run(
             span.clone(),
@@ -689,9 +670,9 @@ fn schema(ctx: &Context) -> Res<Schema> {
 
 fn expr(ctx: &Context) -> Res<Expr> {
     choices!(
+        call_expr,
         map(literal, |literal, span| Expr::Lit(span, literal)),
         map(ident, |ident, span| Expr::Var(span, ident)),
-        call_expr,
     )(ctx)
 }
 
@@ -701,7 +682,7 @@ fn literal(ctx: &Context) -> Res<Literal> {
         map(num, |x, _| Literal::Int(x)),
         map(r#f64, |x, _| Literal::F64(x)),
         map(r#bool, |x, _| Literal::Bool(x)),
-        map(sym_string, |x, _| Literal::String(x)),
+        map(string, |x, _| Literal::String(x.into())),
     )(ctx)
 }
 
@@ -764,10 +745,6 @@ fn r#f64(ctx: &Context) -> Res<OrderedFloat<f64>> {
             Err(_) => Err(ParseError::Float(span)),
         },
     }
-}
-
-fn sym_string(ctx: &Context) -> Res<Symbol> {
-    map(string, |x, _| Symbol::from(x))(ctx)
 }
 
 fn string(ctx: &Context) -> Res<String> {
