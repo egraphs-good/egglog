@@ -299,7 +299,7 @@ fn program(ctx: &Context) -> Res<Vec<Command>> {
 }
 
 fn rec_datatype(ctx: &Context) -> Res<(Span, Symbol, Subdatatypes)> {
-    choices!(
+    choice(
         map(
             parens(sequence3(
                 text("sort"),
@@ -323,13 +323,15 @@ fn snd<T, U>(x: Option<(T, U)>, _span: Span) -> Option<U> {
     x.map(|(_, x)| x)
 }
 
-fn ident_after_paren(ctx: &Context) -> Result<&str, ParseError> {
-    let (((), symbol), _, _) = sequence(choice(text("("), text("[")), ident)(ctx)?;
-    Ok(symbol.into())
+fn ident_after_paren(ctx: &Context) -> &str {
+    match sequence(choice(text("("), text("[")), ident)(ctx) {
+        Ok((((), symbol), _, _)) => symbol.into(),
+        Err(_) => "",
+    }
 }
 
 fn command(ctx: &Context) -> Res<Command> {
-    match ident_after_paren(ctx)? {
+    match ident_after_paren(ctx) {
         "set-option" => map(
             parens(sequence3(text("set-option"), ident, expr)),
             |((), name, value), _| Command::SetOption { name, value },
@@ -571,55 +573,62 @@ fn command(ctx: &Context) -> Res<Command> {
 }
 
 fn schedule(ctx: &Context) -> Res<Schedule> {
-    choices!(
-        map(
+    match ident_after_paren(ctx) {
+        "saturate" => map(
             parens(sequence(text("saturate"), repeat(schedule))),
-            |((), scheds), span| Schedule::Saturate(
-                span.clone(),
-                Box::new(Schedule::Sequence(span, scheds))
-            ),
-        ),
-        map(
+            |((), scheds), span| {
+                Schedule::Saturate(span.clone(), Box::new(Schedule::Sequence(span, scheds)))
+            },
+        )(ctx),
+        "seq" => map(
             parens(sequence(text("seq"), repeat(schedule))),
             |((), scheds), span| Schedule::Sequence(span, scheds),
-        ),
-        map(
+        )(ctx),
+        "repeat" => map(
             parens(sequence3(text("repeat"), unum, repeat(schedule))),
-            |((), limit, scheds), span| Schedule::Repeat(
-                span.clone(),
-                limit,
-                Box::new(Schedule::Sequence(span, scheds))
-            )
-        ),
-        map(
-            parens(sequence(
-                text("run"),
-                map(option(sequence(text(":until"), repeat(fact))), snd)
-            )),
-            |((), until), span| Schedule::Run(
-                span,
-                RunConfig {
-                    ruleset: "".into(),
-                    until
-                }
+            |((), limit, scheds), span| {
+                Schedule::Repeat(
+                    span.clone(),
+                    limit,
+                    Box::new(Schedule::Sequence(span, scheds)),
+                )
+            },
+        )(ctx),
+        "run" => choice(
+            map(
+                parens(sequence(
+                    text("run"),
+                    map(option(sequence(text(":until"), repeat(fact))), snd),
+                )),
+                |((), until), span| {
+                    Schedule::Run(
+                        span,
+                        RunConfig {
+                            ruleset: "".into(),
+                            until,
+                        },
+                    )
+                },
             ),
-        ),
-        map(
-            parens(sequence3(
-                text("run"),
-                ident,
-                map(option(sequence(text(":until"), repeat(fact))), snd)
-            )),
-            |((), ruleset, until), span| Schedule::Run(span, RunConfig { ruleset, until }),
-        ),
-        map(ident, |ruleset, span| Schedule::Run(
-            span.clone(),
-            RunConfig {
-                ruleset,
-                until: None
-            }
-        )),
-    )(ctx)
+            map(
+                parens(sequence3(
+                    text("run"),
+                    ident,
+                    map(option(sequence(text(":until"), repeat(fact))), snd),
+                )),
+                |((), ruleset, until), span| Schedule::Run(span, RunConfig { ruleset, until }),
+            ),
+        )(ctx),
+        _ => map(ident, |ruleset, span| {
+            Schedule::Run(
+                span.clone(),
+                RunConfig {
+                    ruleset,
+                    until: None,
+                },
+            )
+        })(ctx),
+    }
 }
 
 fn cost(ctx: &Context) -> Res<Option<usize>> {
@@ -637,50 +646,50 @@ fn action(ctx: &Context) -> Res<Action> {
 }
 
 fn non_let_action(ctx: &Context) -> Res<Action> {
-    choices!(
-        map(
+    match ident_after_paren(ctx) {
+        "set" => map(
             parens(sequence3(
                 text("set"),
                 parens(sequence(ident, repeat(expr))),
-                expr
+                expr,
             )),
             |((), (f, args), v), span| Action::Set(span, f, args, v),
-        ),
-        map(
+        )(ctx),
+        "delete" => map(
             parens(sequence(
                 text("delete"),
-                parens(sequence(ident, repeat(expr)))
+                parens(sequence(ident, repeat(expr))),
             )),
             |((), (f, args)), span| Action::Change(span, Change::Delete, f, args),
-        ),
-        map(
+        )(ctx),
+        "subsume" => map(
             parens(sequence(
                 text("subsume"),
-                parens(sequence(ident, repeat(expr)))
+                parens(sequence(ident, repeat(expr))),
             )),
             |((), (f, args)), span| Action::Change(span, Change::Subsume, f, args),
-        ),
-        map(
+        )(ctx),
+        "union" => map(
             parens(sequence3(text("union"), expr, expr)),
             |((), e1, e2), span| Action::Union(span, e1, e2),
-        ),
-        map(parens(sequence(text("panic"), string)), |(_, msg), span| {
+        )(ctx),
+        "panic" => map(parens(sequence(text("panic"), string)), |(_, msg), span| {
             Action::Panic(span, msg)
-        }),
-        map(
-            parens(sequence(text("extract"), expr)),
-            |((), expr), span| Action::Extract(
-                span.clone(),
-                expr,
-                Expr::Lit(span, Literal::Int(0))
+        })(ctx),
+        "extract" => choice(
+            map(
+                parens(sequence(text("extract"), expr)),
+                |((), expr), span| {
+                    Action::Extract(span.clone(), expr, Expr::Lit(span, Literal::Int(0)))
+                },
             ),
-        ),
-        map(
-            parens(sequence3(text("extract"), expr, expr)),
-            |((), expr, variants), span| Action::Extract(span, expr, variants),
-        ),
-        map(call_expr, |e, span| Action::Expr(span, e)),
-    )(ctx)
+            map(
+                parens(sequence3(text("extract"), expr, expr)),
+                |((), expr, variants), span| Action::Extract(span, expr, variants),
+            ),
+        )(ctx),
+        _ => map(call_expr, |e, span| Action::Expr(span, e))(ctx),
+    }
 }
 
 fn fact(ctx: &Context) -> Res<Fact> {
