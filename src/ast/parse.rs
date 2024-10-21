@@ -45,7 +45,7 @@ impl SrcFile {
     pub fn get_location(&self, offset: usize) -> Location {
         let mut line = 1;
         let mut col = 1;
-        for (i, c) in self.contents.chars().enumerate() {
+        for (i, c) in self.contents.char_indices() {
             if i == offset {
                 break;
             }
@@ -159,7 +159,7 @@ impl<T, F: Fn(&Context) -> Res<T> + Clone> Parser<T> for F {}
 fn ident(ctx: &Context) -> Res<Symbol> {
     let mut span = ctx.span();
     if ctx.index >= ctx.source.contents.len() {
-        return Err(ParseError::Ident(span));
+        return Err(ParseError::EndOfFile(span));
     }
 
     let mut next = ctx.clone();
@@ -870,6 +870,8 @@ pub enum ParseError {
     #[error("{0}\nmissing end quote for string")]
     MissingEndQuote(Span),
     #[error("{0}\nunexpected end of file")]
+    EndOfFile(Span),
+    #[error("{0}\nexpected identifier")]
     Ident(Span),
     #[error("{0}\nexpected integer literal")]
     Int(Span),
