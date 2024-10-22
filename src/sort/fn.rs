@@ -334,13 +334,24 @@ impl PrimitiveLike for Ctor {
         })
     }
 
-    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(&self, values: &[Value], egraph: Option<&mut EGraph>) -> Option<Value> {
+        let egraph = egraph.expect("`unstable-fn` is not supported yet in facts.");
         let name = Symbol::load(&StringSort, &values[0]);
 
-        // TODO: solve static partial application
-        assert_eq!(values.len(), 1, "partial application banned");
+        let schema = if let Some(f) = egraph.functions.get(&name) {
+            &f.schema
+        } else {
+            panic!("`unstable-fn` only supports tables, found {name}")
+        };
 
-        ValueFunction(name, Vec::new()).store(&self.function)
+        assert!(values[1..].len() <= schema.input.len());
+        let args: Vec<(ArcSort, Value)> = values[1..]
+            .iter()
+            .zip(&schema.input)
+            .map(|(value, sort)| (sort.clone(), *value))
+            .collect();
+
+        ValueFunction(name, args).store(&self.function)
     }
 }
 

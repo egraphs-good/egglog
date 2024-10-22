@@ -18,10 +18,6 @@ pub fn criterion_benchmark(c: &mut Criterion) {
         if path_string.contains("python_array_optimize") {
             continue;
         }
-        // skip unstable_fn because partial application is banned
-        if path_string.contains("unstable-fn") {
-            continue;
-        }
 
         let name = path.file_stem().unwrap().to_string_lossy().to_string();
         let filename = path.to_string_lossy().to_string();
