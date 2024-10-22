@@ -78,10 +78,16 @@ pub(crate) enum Ruleset {
 pub const DEFAULT_FILENAME: &str = "<unnamed.egg>";
 pub const DUMMY_FILENAME: &str = "<internal.egg>";
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct SrcFile {
     pub name: String,
     pub contents: Option<String>,
+}
+
+impl Debug for SrcFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "SrcFile({}, contents=...)", self.name)
+    }
 }
 
 #[derive(Clone, Copy)]
