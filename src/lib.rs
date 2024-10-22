@@ -18,7 +18,6 @@ mod core;
 mod extract;
 mod function;
 mod gj;
-mod multiset;
 mod serialize;
 pub mod sort;
 mod termdag;
