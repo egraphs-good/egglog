@@ -16,12 +16,14 @@ mod inner {
     pub(crate) struct MultiSet<T: Hash + Ord + Clone>(
         /// All values should be > 0
         OrdMap<T, usize>,
+        /// cached length
+        usize,
     );
 
     impl<T: Hash + Ord + Clone> MultiSet<T> {
         /// Create a new empty multiset.
         pub(crate) fn new() -> Self {
-            MultiSet(OrdMap::new())
+            MultiSet(OrdMap::new(), 0)
         }
 
         /// Check if the multiset contains a key.
@@ -31,7 +33,7 @@ mod inner {
 
         /// Return the total number of elements in the multiset.
         pub(crate) fn len(&self) -> usize {
-            self.0.iter().map(|(_, v)| *v).sum()
+            self.1
         }
 
         /// Return an iterator over all elements in the multiset.
@@ -64,6 +66,7 @@ mod inner {
         /// Remove a value from the multiset, taking ownership of it and returning a new multiset.
         pub(crate) fn remove(mut self, value: &T) -> Option<MultiSet<T>> {
             if let Some(v) = self.0.get(value) {
+                self.1 -= 1;
                 if *v == 1 {
                     self.0.remove(value);
                 } else {
@@ -76,6 +79,7 @@ mod inner {
         }
 
         fn insert_multiple_mut(&mut self, value: T, n: usize) {
+            self.1 += n;
             if let Some(v) = self.0.get(&value) {
                 self.0.insert(value, v + n);
             } else {
