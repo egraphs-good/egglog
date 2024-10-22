@@ -857,7 +857,6 @@ fn string(ctx: &Context) -> Res<String> {
 
     let s = span.string();
     let s = &s[1..s.len() - 1];
-    // s.replace("\"\"", "\""); // TODO: remove if not needed
     Ok((s.to_string(), span, next))
 }
 
