@@ -171,7 +171,6 @@ impl Sort for MultiSetSort {
     ) -> Option<(Cost, Expr)> {
         let multiset = ValueMultiSet::load(self, &value);
         let mut children = vec![];
-        // let mut expr = Expr::call_no_span("set-empty", []);
         let mut cost = 0usize;
         for e in multiset.iter() {
             let (child_cost, child_term) = extractor.find_best(*e, termdag, &self.element)?;
