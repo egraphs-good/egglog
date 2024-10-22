@@ -48,8 +48,9 @@ impl Eq for ValueFunction {}
 #[derive(Debug)]
 pub struct FunctionSort {
     name: Symbol,
-    pub(crate) inputs: Vec<ArcSort>,
-    pub(crate) output: ArcSort,
+    // Public so that other primitive sorts (external or internal) can find a function sort by the sorts of its inputs/output
+    pub inputs: Vec<ArcSort>,
+    pub output: ArcSort,
     functions: Mutex<IndexSet<ValueFunction>>,
 }
 
