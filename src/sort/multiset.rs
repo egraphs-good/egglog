@@ -7,7 +7,7 @@ use crate::constraint::{AllEqualTypeConstraint, SimpleTypeConstraint};
 
 // Place multiset in its own module to keep implementation details private from sort
 mod inner {
-    use rpds::RedBlackTreeMapSync;
+    use im::OrdMap;
     use std::hash::Hash;
     /// Immutable multiset implementation, which is threadsafe and hash stable, regardless of insertion order.
     ///
@@ -15,13 +15,13 @@ mod inner {
     #[derive(Debug, Hash, Eq, PartialEq, Clone)]
     pub(crate) struct MultiSet<T: Hash + Ord + Clone>(
         /// All values should be > 0
-        RedBlackTreeMapSync<T, usize>,
+        OrdMap<T, usize>,
     );
 
     impl<T: Hash + Ord + Clone> MultiSet<T> {
         /// Create a new empty multiset.
         pub(crate) fn new() -> Self {
-            MultiSet(RedBlackTreeMapSync::new_sync())
+            MultiSet(OrdMap::new())
         }
 
         /// Check if the multiset contains a key.
@@ -43,14 +43,14 @@ mod inner {
 
         /// Return an arbitrary element from the multiset.
         pub(crate) fn pick(&self) -> Option<&T> {
-            self.0.first().map(|(k, _)| k)
+            self.0.keys().next()
         }
 
         /// Map a function over all elements in the multiset, taking ownership of it and returning a new multiset.
         pub(crate) fn map(self, mut f: impl FnMut(&T) -> T) -> MultiSet<T> {
             let mut new = MultiSet::new();
             for (k, v) in self.0.into_iter() {
-                new.insert_multiple_mut(f(k), *v);
+                new.insert_multiple_mut(f(&k), v);
             }
             new
         }
@@ -65,9 +65,9 @@ mod inner {
         pub(crate) fn remove(mut self, value: &T) -> Option<MultiSet<T>> {
             if let Some(v) = self.0.get(value) {
                 if *v == 1 {
-                    self.0.remove_mut(value);
+                    self.0.remove(value);
                 } else {
-                    self.0.insert_mut(value.clone(), v - 1);
+                    self.0.insert(value.clone(), v - 1);
                 }
                 Some(self)
             } else {
@@ -77,9 +77,9 @@ mod inner {
 
         fn insert_multiple_mut(&mut self, value: T, n: usize) {
             if let Some(v) = self.0.get(&value) {
-                self.0.insert_mut(value, v + n);
+                self.0.insert(value, v + n);
             } else {
-                self.0.insert_mut(value, n);
+                self.0.insert(value, n);
             }
         }
 
