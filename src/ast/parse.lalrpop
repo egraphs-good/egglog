@@ -199,7 +199,7 @@ F64: OrderedFloat<f64> = {
     "inf" => OrderedFloat::<f64>(f64::INFINITY),
     "-inf" => OrderedFloat::<f64>(f64::NEG_INFINITY),
 }
-Ident: Symbol = <s:r"(([[:alpha:]][\w-]*)|([-+*/?!=<>&|^/%_]))+"> => s.parse().unwrap();
+Ident: Symbol = <s:r"(([[:alpha:]][\w-]*)|([-+*/?!=<>&|^/%_#]))+"> => s.parse().unwrap();
 SymString: Symbol = <String> => Symbol::from(<>);
 
 String: String = <r#"("[^"]*")+"#> => {
