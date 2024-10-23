@@ -322,7 +322,7 @@ impl TypeConstraint for FunctionCTorTypeConstraint {
                 ImpossibleConstraint::ArityMismatch {
                     atom: Atom {
                         span: self.span.clone(),
-                        head: self.name.clone(),
+                        head: self.name,
                         args: arguments.to_vec(),
                     },
                     expected: 1,
@@ -334,7 +334,7 @@ impl TypeConstraint for FunctionCTorTypeConstraint {
         let this = self.clone();
         let arguments = arguments.to_vec();
         let argument = arguments[0].clone();
-        return vec![Constraint::LazyConstraint(
+        vec![Constraint::LazyConstraint(
             arguments[0].clone(),
             Box::new(move |sort| {
                 let sort = sort.clone().as_arc_any();
@@ -386,7 +386,7 @@ impl TypeConstraint for FunctionCTorTypeConstraint {
 
                 Constraint::And(all_constraints)
             }),
-        )];
+        )]
     }
 }
 

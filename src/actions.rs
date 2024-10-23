@@ -97,10 +97,8 @@ impl<'a> ActionCompiler<'a> {
     }
 
     fn do_prim(&mut self, prim: &SpecializedPrimitive) {
-        self.instructions.push(Instruction::CallPrimitive(
-            prim.clone(),
-            prim.input.len(),
-        ));
+        self.instructions
+            .push(Instruction::CallPrimitive(prim.clone(), prim.input.len()));
     }
 }
 
@@ -321,7 +319,9 @@ impl EGraph {
                 Instruction::CallPrimitive(p, arity) => {
                     let new_len = stack.len() - arity;
                     let values = &stack[new_len..];
-                    if let Some(value) = p.primitive.apply(values, (&p.input, &p.output), Some(self)) {
+                    if let Some(value) =
+                        p.primitive.apply(values, (&p.input, &p.output), Some(self))
+                    {
                         stack.truncate(new_len);
                         stack.push(value);
                     } else {

@@ -108,10 +108,9 @@ impl ConstraintError<AtomTerm, ArcSort> {
             ConstraintError::ImpossibleCaseIdentified(
                 ImpossibleConstraint::CompileTimeConstantExpected { span, sort },
             ) => TypeError::CompileTimeConstantExpected(sort.clone(), span.clone()),
-            ConstraintError::ImpossibleCaseIdentified(ImpossibleConstraint::UnboundedFunction {
-                head,
-                span,
-            }) => TypeError::UnboundFunction(*head, span.clone()),
+            ConstraintError::ImpossibleCaseIdentified(
+                ImpossibleConstraint::UnboundedFunction { head, span },
+            ) => TypeError::UnboundFunction(*head, span.clone()),
         }
     }
 }
@@ -243,7 +242,7 @@ where
         if let Some(new_self) = new_self {
             *self = new_self;
         }
-        return result;
+        result
     }
 }
 
@@ -732,11 +731,11 @@ fn get_literal_and_global_constraints<'a, 'b>(
             AtomTerm::Var(_, _) => None,
             // Literal to type constraint
             AtomTerm::Literal(_, lit) => {
-                let typ = crate::sort::literal_sort(&lit);
+                let typ = crate::sort::literal_sort(lit);
                 Some(Constraint::Assign(arg.clone(), typ))
             }
             AtomTerm::Global(_, v) => {
-                if let Some(typ) = type_info.lookup_global(&v) {
+                if let Some(typ) = type_info.lookup_global(v) {
                     Some(Constraint::Assign(arg.clone(), typ.clone()))
                 } else {
                     panic!("All global variables should be bound before type checking")
