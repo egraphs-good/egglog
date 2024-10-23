@@ -332,16 +332,17 @@ impl TypeConstraint for FunctionCTorTypeConstraint {
         }
 
         let this = self.clone();
+        let (head, arguments) = arguments.split_first().unwrap();
+        let head = head.clone();
         let arguments = arguments.to_vec();
-        let argument = arguments[0].clone();
         vec![Constraint::LazyConstraint(
-            arguments[0].clone(),
+            head.clone(),
             Box::new(move |sort| {
                 let sort = sort.clone().as_arc_any();
                 let Ok(sort) = Arc::downcast::<ConstSort>(sort) else {
                     return Constraint::Impossible(
                         ImpossibleConstraint::CompileTimeConstantExpected {
-                            span: argument.span().clone(),
+                            span: head.span().clone(),
                             sort: Arc::new(StringSort),
                         },
                     );
@@ -350,14 +351,15 @@ impl TypeConstraint for FunctionCTorTypeConstraint {
                 let Literal::String(head) = sort.literal else {
                     return Constraint::Impossible(
                         ImpossibleConstraint::CompileTimeConstantExpected {
-                            span: argument.span().clone(),
+                            span: head.span().clone(),
                             sort: Arc::new(StringSort),
                         },
                     );
                 };
 
                 let mut all_constraints = vec![];
-                let mut arguments = arguments[1..].to_vec();
+                let mut arguments = arguments.clone();
+
                 let output_sort = arguments.pop().unwrap();
                 let output_sort_constraint =
                     Constraint::Assign(output_sort, this.function.clone() as ArcSort);
@@ -413,9 +415,8 @@ impl PrimitiveLike for Ctor {
         &self,
         values: &[Value],
         sorts: (&[ArcSort], &ArcSort),
-        egraph: Option<&mut EGraph>,
+        _egraph: Option<&mut EGraph>,
     ) -> Option<Value> {
-        egraph.expect("`unstable-fn` is not supported yet in facts.");
         let const_sort: Arc<ConstSort> = Arc::downcast(sorts.0[0].clone().as_arc_any()).unwrap();
         let Literal::String(name) = const_sort.literal else {
             panic!("`unstable-fn` must be called with a string literal as the first argument");

@@ -714,7 +714,6 @@ pub(crate) fn get_atom_application_constraints<'a>(
                 span: span.clone(),
             },
         )],
-        // 0 => Err(TypeError::UnboundFunction(*head, span.clone())),
         1 => xor_constraints.pop().unwrap(),
         _ => vec![Constraint::Xor(
             xor_constraints.into_iter().map(Constraint::And).collect(),
