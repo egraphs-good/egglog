@@ -76,7 +76,7 @@ pub trait PrimitiveLike {
     /// Constructs a type constraint for the primitive that uses the span information
     /// for error localization.
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint>;
-    fn apply(&self, values: &[Value], egraph: Option<&mut EGraph>) -> Option<Value>;
+    fn apply(&self, values: &[Value], _sorts: (&[ArcSort], &ArcSort), egraph: Option<&mut EGraph>) -> Option<Value>;
 }
 
 /// Running a schedule produces a report of the results.
@@ -371,7 +371,7 @@ impl PrimitiveLike for SimplePrimitive {
             .collect();
         SimpleTypeConstraint::new(self.name(), sorts, span.clone()).into_box()
     }
-    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(&self, values: &[Value], _sorts: (&[ArcSort], &ArcSort), _egraph: Option<&mut EGraph>) -> Option<Value> {
         (self.f)(values)
     }
 }
@@ -1550,9 +1550,7 @@ mod tests {
     use std::sync::Arc;
 
     use crate::{
-        constraint::SimpleTypeConstraint,
-        sort::{FromSort, I64Sort, IntoSort, Sort, VecSort},
-        EGraph, PrimitiveLike, Span, Value,
+        constraint::SimpleTypeConstraint, sort::{FromSort, I64Sort, IntoSort, Sort, VecSort}, ArcSort, EGraph, PrimitiveLike, Span, Value
     };
 
     struct InnerProduct {
@@ -1577,6 +1575,7 @@ mod tests {
         fn apply(
             &self,
             values: &[crate::Value],
+            _sorts: (&[ArcSort], &ArcSort),
             _egraph: Option<&mut EGraph>,
         ) -> Option<crate::Value> {
             let mut sum = 0;

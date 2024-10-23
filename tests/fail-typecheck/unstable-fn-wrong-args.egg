@@ -5,4 +5,4 @@
     (Inc Math))
 
 (sort Fn (UnstableFn (Math) Math))
-(unstable-app (unstable-fn "Inc") 10)
+(unstable-app (unstable-fn (# "Inc")) 10)

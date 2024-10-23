@@ -5,4 +5,4 @@
     (Inc Math))
 
 (sort Fn (UnstableFn (i64) Math))
-(unstable-fn "Inc")
+(unstable-fn (# "Inc"))

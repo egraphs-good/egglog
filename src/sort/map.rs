@@ -237,7 +237,7 @@ impl PrimitiveLike for MapRebuild {
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(&self, values: &[Value], _sorts: (&[ArcSort], &ArcSort), egraph: Option<&mut EGraph>) -> Option<Value> {
         let egraph = egraph.unwrap();
         let maps = self.map.maps.lock().unwrap();
         let map = maps.get_index(values[0].bits as usize).unwrap();
@@ -272,7 +272,7 @@ impl PrimitiveLike for TermOrderingMin {
             .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(&self, values: &[Value], _sorts: (&[ArcSort], &ArcSort), _egraph: Option<&mut EGraph>) -> Option<Value> {
         assert_eq!(values.len(), 2);
         if values[0] < values[1] {
             Some(values[0])
@@ -295,7 +295,7 @@ impl PrimitiveLike for TermOrderingMax {
             .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(&self, values: &[Value], _sorts: (&[ArcSort], &ArcSort), _egraph: Option<&mut EGraph>) -> Option<Value> {
         assert_eq!(values.len(), 2);
         if values[0] > values[1] {
             Some(values[0])
@@ -314,7 +314,7 @@ impl PrimitiveLike for Ctor {
         SimpleTypeConstraint::new(self.name(), vec![self.map.clone()], span.clone()).into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(&self, values: &[Value], _sorts: (&[ArcSort], &ArcSort), _egraph: Option<&mut EGraph>) -> Option<Value> {
         assert!(values.is_empty());
         ValueMap::default().store(&self.map)
     }
@@ -344,7 +344,7 @@ impl PrimitiveLike for Insert {
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(&self, values: &[Value], _sorts: (&[ArcSort], &ArcSort), _egraph: Option<&mut EGraph>) -> Option<Value> {
         let mut map = ValueMap::load(&self.map, &values[0]);
         map.insert(values[1], values[2]);
         map.store(&self.map)
@@ -370,7 +370,7 @@ impl PrimitiveLike for Get {
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(&self, values: &[Value], _sorts: (&[ArcSort], &ArcSort), _egraph: Option<&mut EGraph>) -> Option<Value> {
         let map = ValueMap::load(&self.map, &values[0]);
         map.get(&values[1]).copied()
     }
@@ -395,7 +395,7 @@ impl PrimitiveLike for NotContains {
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(&self, values: &[Value], _sorts: (&[ArcSort], &ArcSort), _egraph: Option<&mut EGraph>) -> Option<Value> {
         let map = ValueMap::load(&self.map, &values[0]);
         if map.contains_key(&values[1]) {
             None
@@ -424,7 +424,7 @@ impl PrimitiveLike for Contains {
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(&self, values: &[Value], _sorts: (&[ArcSort], &ArcSort), _egraph: Option<&mut EGraph>) -> Option<Value> {
         let map = ValueMap::load(&self.map, &values[0]);
         if map.contains_key(&values[1]) {
             Some(Value::unit())
@@ -453,7 +453,7 @@ impl PrimitiveLike for Remove {
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(&self, values: &[Value], _sorts: (&[ArcSort], &ArcSort), _egraph: Option<&mut EGraph>) -> Option<Value> {
         let mut map = ValueMap::load(&self.map, &values[0]);
         map.remove(&values[1]);
         map.store(&self.map)
@@ -479,7 +479,7 @@ impl PrimitiveLike for Length {
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(&self, values: &[Value], _sorts: (&[ArcSort], &ArcSort), _egraph: Option<&mut EGraph>) -> Option<Value> {
         let map = ValueMap::load(&self.map, &values[0]);
         Some(Value::from(map.len() as i64))
     }

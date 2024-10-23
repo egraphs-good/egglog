@@ -97,7 +97,12 @@ impl ResolvedCall {
 
         if let Some(primitives) = typeinfo.primitives.get(head) {
             for primitive in primitives {
-                if primitive.accept(types, typeinfo) {
+                // the check `primitives.len() == 1` is both a performance optimization
+                // and a hack. It is a performance optimization becaues primitive.accept is
+                // expensive and we have already done type checking so we know it must be right.
+                // It is a hack because `#` wouldn't pass the `accept` test, because its string parameter
+                // (i.e., "a" in (# "a")) wouldn't show up so get_constraint cannot infer the correct type.
+                if primitives.len() == 1 || primitive.accept(types, typeinfo) {
                     let (out, inp) = types.split_last().unwrap();
                     resolved_call.push(ResolvedCall::Primitive(SpecializedPrimitive {
                         primitive: primitive.clone(),
@@ -278,10 +283,10 @@ impl<Head, Leaf> Default for Query<Head, Leaf> {
 }
 
 impl Query<SymbolOrEq, Symbol> {
-    pub fn get_constraints(
+    pub fn get_constraints<'a>(
         &self,
-        type_info: &TypeInfo,
-    ) -> Result<Vec<Constraint<AtomTerm, ArcSort>>, TypeError> {
+        type_info: &'a TypeInfo,
+    ) -> Result<Vec<Constraint<'a, AtomTerm, ArcSort>>, TypeError> {
         let mut constraints = vec![];
         for atom in self.atoms.iter() {
             constraints.extend(atom.get_constraints(type_info)?.into_iter());
@@ -337,7 +342,7 @@ impl std::fmt::Display for Query<ResolvedCall, Symbol> {
                 writeln!(
                     f,
                     "({} {})",
-                    filter.head.name(),
+                    filter.head.primitive.name(),
                     ListDisplay(&filter.args, " ")
                 )?;
             }
@@ -347,12 +352,12 @@ impl std::fmt::Display for Query<ResolvedCall, Symbol> {
 }
 
 impl<Leaf: Clone> Query<ResolvedCall, Leaf> {
-    pub fn filters(&self) -> impl Iterator<Item = GenericAtom<Primitive, Leaf>> + '_ {
+    pub fn filters(&self) -> impl Iterator<Item = GenericAtom<SpecializedPrimitive, Leaf>> + '_ {
         self.atoms.iter().filter_map(|atom| match &atom.head {
             ResolvedCall::Func(_) => None,
             ResolvedCall::Primitive(head) => Some(GenericAtom {
                 span: atom.span.clone(),
-                head: head.primitive.clone(),
+                head: head.clone(),
                 args: atom.args.clone(),
             }),
         })

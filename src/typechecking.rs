@@ -49,6 +49,7 @@ impl Default for TypeInfo {
         res.add_presort::<FunctionSort>(DUMMY_SPAN.clone()).unwrap();
 
         res.add_primitive(ValueEq);
+        res.add_primitive(HashConst);
 
         res
     }
@@ -516,6 +517,8 @@ pub enum TypeError {
     AlreadyDefined(Symbol, Span),
     #[error("All alternative definitions considered failed\n{}", .0.iter().map(|e| format!("  {e}\n")).collect::<Vec<_>>().join(""))]
     AllAlternativeFailed(Vec<TypeError>),
+    #[error("{}\nExpect a {} constant", .1.get_quote(), .0.name())]
+    CompileTimeConstantExpected(ArcSort, Span),
 }
 
 #[cfg(test)]

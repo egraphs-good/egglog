@@ -98,7 +98,7 @@ impl<'a> ActionCompiler<'a> {
 
     fn do_prim(&mut self, prim: &SpecializedPrimitive) {
         self.instructions.push(Instruction::CallPrimitive(
-            prim.primitive.clone(),
+            prim.clone(),
             prim.input.len(),
         ));
     }
@@ -126,7 +126,7 @@ enum Instruction {
     CallFunction(Symbol, bool),
     /// Pop primitive arguments off the stack, calls the primitive,
     /// and push the result onto the stack.
-    CallPrimitive(Primitive, usize),
+    CallPrimitive(SpecializedPrimitive, usize),
     /// Pop function arguments off the stack and either deletes or subsumes the corresponding row
     /// in the function.
     Change(Change, Symbol),
@@ -321,11 +321,11 @@ impl EGraph {
                 Instruction::CallPrimitive(p, arity) => {
                     let new_len = stack.len() - arity;
                     let values = &stack[new_len..];
-                    if let Some(value) = p.apply(values, Some(self)) {
+                    if let Some(value) = p.primitive.apply(values, (&p.input, &p.output), Some(self)) {
                         stack.truncate(new_len);
                         stack.push(value);
                     } else {
-                        return Err(Error::PrimitiveError(p.clone(), values.to_vec()));
+                        return Err(Error::PrimitiveError(p.primitive.clone(), values.to_vec()));
                     }
                 }
                 Instruction::Set(f) => {
