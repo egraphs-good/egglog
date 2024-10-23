@@ -749,27 +749,22 @@ impl EGraph {
                 }
             }
 
-            let do_seminaive = self.seminaive;
             // for the later atoms, we consider everything
             let mut timestamp_ranges =
                 vec![0..u32::MAX; cq.query.funcs().collect::<Vec<_>>().len()];
-            if do_seminaive {
-                for (atom_i, _atom) in cq.query.funcs().enumerate() {
-                    timestamp_ranges[atom_i] = timestamp..u32::MAX;
+            for (atom_i, _atom) in cq.query.funcs().enumerate() {
+                timestamp_ranges[atom_i] = timestamp..u32::MAX;
 
-                    self.gj_for_atom(
-                        Some(atom_i),
-                        &timestamp_ranges,
-                        cq,
-                        include_subsumed,
-                        &mut f,
-                    );
-                    // now we can fix this atom to be "old stuff" only
-                    // range is half-open; timestamp is excluded
-                    timestamp_ranges[atom_i] = 0..timestamp;
-                }
-            } else {
-                self.gj_for_atom(None, &timestamp_ranges, cq, include_subsumed, &mut f);
+                self.gj_for_atom(
+                    Some(atom_i),
+                    &timestamp_ranges,
+                    cq,
+                    include_subsumed,
+                    &mut f,
+                );
+                // now we can fix this atom to be "old stuff" only
+                // range is half-open; timestamp is excluded
+                timestamp_ranges[atom_i] = 0..timestamp;
             }
         } else if let Some((mut ctx, program, _)) = Context::new(self, cq, &[], include_subsumed) {
             let mut meausrements = HashMap::<usize, Vec<usize>>::default();

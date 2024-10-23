@@ -433,7 +433,6 @@ pub struct EGraph {
     timestamp: u32,
     pub run_mode: RunMode,
     pub fact_directory: Option<PathBuf>,
-    pub seminaive: bool,
     type_info: TypeInfo,
     extract_report: Option<ExtractReport>,
     /// The run report for the most recent run of a schedule.
@@ -456,7 +455,6 @@ impl Default for EGraph {
             run_mode: RunMode::Normal,
             interactive_mode: false,
             fact_directory: None,
-            seminaive: true,
             extract_report: None,
             recent_run_report: None,
             overall_run_report: Default::default(),
@@ -1406,7 +1404,7 @@ impl EGraph {
 
     fn process_command(&mut self, command: Command) -> Result<Vec<ResolvedNCommand>, Error> {
         let program =
-            desugar::desugar_program(vec![command], &mut self.symbol_gen, self.seminaive)?;
+            desugar::desugar_program(vec![command], &mut self.symbol_gen)?;
 
         let program = self
             .type_info
