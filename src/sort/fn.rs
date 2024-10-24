@@ -337,22 +337,15 @@ impl PrimitiveLike for Ctor {
     fn apply(
         &self,
         values: &[Value],
-        _sorts: (&[ArcSort], &ArcSort),
-        egraph: Option<&mut EGraph>,
+        sorts: (&[ArcSort], &ArcSort),
+        _egraph: Option<&mut EGraph>,
     ) -> Option<Value> {
-        let egraph = egraph.expect("`unstable-fn` is not supported yet in facts.");
         let name = Symbol::load(&StringSort, &values[0]);
 
-        let schema = if let Some(f) = egraph.functions.get(&name) {
-            &f.schema
-        } else {
-            panic!("`unstable-fn` only supports tables, found {name}")
-        };
-
-        assert!(values[1..].len() <= schema.input.len());
+        assert!(values.len() == sorts.0.len());
         let args: Vec<(ArcSort, Value)> = values[1..]
             .iter()
-            .zip(&schema.input)
+            .zip(&sorts.0[1..])
             .map(|(value, sort)| (sort.clone(), *value))
             .collect();
 
