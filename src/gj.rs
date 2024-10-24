@@ -3,11 +3,7 @@ use indexmap::map::Entry;
 use log::log_enabled;
 use smallvec::SmallVec;
 
-use crate::{
-    core::{Atom, AtomTerm, ResolvedAtomTerm, ResolvedCall},
-    function::index::Offset,
-    *,
-};
+use crate::{core::*, function::index::Offset, *};
 use std::{
     cell::UnsafeCell,
     fmt::{self, Debug},
@@ -30,7 +26,7 @@ enum Instr<'a> {
         trie_access: TrieAccess<'a>,
     },
     Call {
-        prim: Primitive,
+        prim: SpecializedPrimitive,
         args: Vec<AtomTerm>,
         check: bool, // check or assign to output variable
     },
@@ -255,7 +251,10 @@ impl<'b> Context<'b> {
                     })
                 }
 
-                if let Some(res) = prim.apply(&values, None) {
+                if let Some(res) = prim
+                    .primitive
+                    .apply(&values, (&prim.input, &prim.output), None)
+                {
                     match out {
                         AtomTerm::Var(_ann, v) => {
                             let i = self.query.vars.get_index_of(v).unwrap();

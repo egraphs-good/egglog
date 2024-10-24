@@ -248,7 +248,12 @@ impl PrimitiveLike for VecRebuild {
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(
+        &self,
+        values: &[Value],
+        _sorts: (&[ArcSort], &ArcSort),
+        egraph: Option<&mut EGraph>,
+    ) -> Option<Value> {
         let egraph = egraph.unwrap();
         let vec = ValueVec::load(&self.vec, &values[0]);
         let new_vec: ValueVec = vec
@@ -276,7 +281,12 @@ impl PrimitiveLike for VecOf {
             .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(
+        &self,
+        values: &[Value],
+        _sorts: (&[ArcSort], &ArcSort),
+        _egraph: Option<&mut EGraph>,
+    ) -> Option<Value> {
         let vec = ValueVec::from_iter(values.iter().copied());
         vec.store(&self.vec)
     }
@@ -298,7 +308,12 @@ impl PrimitiveLike for Append {
             .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(
+        &self,
+        values: &[Value],
+        _sorts: (&[ArcSort], &ArcSort),
+        _egraph: Option<&mut EGraph>,
+    ) -> Option<Value> {
         let vec = ValueVec::from_iter(values.iter().flat_map(|v| ValueVec::load(&self.vec, v)));
         vec.store(&self.vec)
     }
@@ -318,7 +333,12 @@ impl PrimitiveLike for Ctor {
         SimpleTypeConstraint::new(self.name(), vec![self.vec.clone()], span.clone()).into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(
+        &self,
+        values: &[Value],
+        _sorts: (&[ArcSort], &ArcSort),
+        _egraph: Option<&mut EGraph>,
+    ) -> Option<Value> {
         assert!(values.is_empty());
         ValueVec::default().store(&self.vec)
     }
@@ -343,7 +363,12 @@ impl PrimitiveLike for Push {
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(
+        &self,
+        values: &[Value],
+        _sorts: (&[ArcSort], &ArcSort),
+        _egraph: Option<&mut EGraph>,
+    ) -> Option<Value> {
         let mut vec = ValueVec::load(&self.vec, &values[0]);
         vec.push(values[1]);
         vec.store(&self.vec)
@@ -369,7 +394,12 @@ impl PrimitiveLike for Pop {
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(
+        &self,
+        values: &[Value],
+        _sorts: (&[ArcSort], &ArcSort),
+        _egraph: Option<&mut EGraph>,
+    ) -> Option<Value> {
         let mut vec = ValueVec::load(&self.vec, &values[0]);
         vec.pop();
         vec.store(&self.vec)
@@ -395,7 +425,12 @@ impl PrimitiveLike for NotContains {
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(
+        &self,
+        values: &[Value],
+        _sorts: (&[ArcSort], &ArcSort),
+        _egraph: Option<&mut EGraph>,
+    ) -> Option<Value> {
         let vec = ValueVec::load(&self.vec, &values[0]);
         if vec.contains(&values[1]) {
             None
@@ -424,7 +459,12 @@ impl PrimitiveLike for Contains {
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(
+        &self,
+        values: &[Value],
+        _sorts: (&[ArcSort], &ArcSort),
+        _egraph: Option<&mut EGraph>,
+    ) -> Option<Value> {
         let vec = ValueVec::load(&self.vec, &values[0]);
         if vec.contains(&values[1]) {
             Some(Value::unit())
@@ -453,7 +493,12 @@ impl PrimitiveLike for Length {
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(
+        &self,
+        values: &[Value],
+        _sorts: (&[ArcSort], &ArcSort),
+        _egraph: Option<&mut EGraph>,
+    ) -> Option<Value> {
         let vec = ValueVec::load(&self.vec, &values[0]);
         Some(Value::from(vec.len() as i64))
     }
@@ -478,7 +523,12 @@ impl PrimitiveLike for Get {
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(
+        &self,
+        values: &[Value],
+        _sorts: (&[ArcSort], &ArcSort),
+        _egraph: Option<&mut EGraph>,
+    ) -> Option<Value> {
         let vec = ValueVec::load(&self.vec, &values[0]);
         let index = i64::load(&I64Sort, &values[1]);
         vec.get(index as usize).copied()
@@ -509,7 +559,12 @@ impl PrimitiveLike for Set {
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(
+        &self,
+        values: &[Value],
+        _sorts: (&[ArcSort], &ArcSort),
+        _egraph: Option<&mut EGraph>,
+    ) -> Option<Value> {
         let mut vec = ValueVec::load(&self.vec, &values[0]);
         let index = i64::load(&I64Sort, &values[1]);
         vec[index as usize] = values[2];
@@ -536,7 +591,12 @@ impl PrimitiveLike for Remove {
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(
+        &self,
+        values: &[Value],
+        _sorts: (&[ArcSort], &ArcSort),
+        _egraph: Option<&mut EGraph>,
+    ) -> Option<Value> {
         let mut vec = ValueVec::load(&self.vec, &values[0]);
         let i = i64::load(&I64Sort, &values[1]);
         vec.remove(i.try_into().unwrap());

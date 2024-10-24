@@ -334,7 +334,12 @@ impl PrimitiveLike for Ctor {
         })
     }
 
-    fn apply(&self, values: &[Value], egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(
+        &self,
+        values: &[Value],
+        _sorts: (&[ArcSort], &ArcSort),
+        egraph: Option<&mut EGraph>,
+    ) -> Option<Value> {
         let egraph = egraph.expect("`unstable-fn` is not supported yet in facts.");
         let name = Symbol::load(&StringSort, &values[0]);
 
@@ -373,7 +378,12 @@ impl PrimitiveLike for Apply {
         SimpleTypeConstraint::new(self.name(), sorts, span.clone()).into_box()
     }
 
-    fn apply(&self, values: &[Value], egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(
+        &self,
+        values: &[Value],
+        _sorts: (&[ArcSort], &ArcSort),
+        egraph: Option<&mut EGraph>,
+    ) -> Option<Value> {
         let egraph = egraph.expect("`unstable-app` is not supported yet in facts.");
         let ValueFunction(name, args) = ValueFunction::load(&self.function, &values[0]);
         let types: Vec<_> = args
