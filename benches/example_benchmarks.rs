@@ -14,11 +14,6 @@ pub fn criterion_benchmark(c: &mut Criterion) {
         if path_string.contains("fail-typecheck") {
             continue;
         }
-        // skip python_array_optimize since it is too slow and doesn't even reflect the current python implementation
-        if path_string.contains("python_array_optimize") {
-            continue;
-        }
-
         let name = path.file_stem().unwrap().to_string_lossy().to_string();
         let filename = path.to_string_lossy().to_string();
         let program = std::fs::read_to_string(&filename).unwrap();
