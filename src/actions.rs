@@ -39,6 +39,18 @@ impl<'a> ActionCompiler<'a> {
                 self.do_atom_term(e);
                 self.instructions.push(Instruction::Set(func.name));
             }
+            GenericCoreAction::Cost(_ann, f, args, e) => {
+                let ResolvedCall::Func(func) = f else {
+                    panic!(
+                        "Cannot set cost of primitive- should have been caught by typechecking!!!"
+                    )
+                };
+                for arg in args {
+                    self.do_atom_term(arg);
+                }
+                self.do_atom_term(e);
+                self.instructions.push(Instruction::Cost(func.name));
+            }
             GenericCoreAction::Change(_ann, change, f, args) => {
                 let ResolvedCall::Func(func) = f else {
                     panic!("Cannot change primitive- should have been caught by typechecking!!!")
@@ -127,12 +139,15 @@ enum Instruction {
     /// Pop primitive arguments off the stack, calls the primitive,
     /// and push the result onto the stack.
     CallPrimitive(Primitive, usize),
-    /// Pop function arguments off the stack and either deletes or subsumes the corresponding row
-    /// in the function.
+    /// Pop function arguments off the stack and either deletes, subsumes, or changes the cost
+    /// of the corresponding row in the function.
     Change(Change, Symbol),
     /// Pop the value to be set and the function arguments off the stack.
     /// Set the function at the given arguments to the new value.
     Set(Symbol),
+    /// Pop the value to have its cost set and the function arguments off the stack.
+    /// Set the function at the given arguments to the new cost.
+    Cost(Symbol),
     /// Union the last `n` values on the stack.
     Union(usize),
     /// Extract the best expression. `n` is always 2.
@@ -334,10 +349,25 @@ impl EGraph {
                     // set to union
                     let new_value = stack.pop().unwrap();
                     let new_len = stack.len() - function.schema.input.len();
-
                     self.perform_set(*f, new_value, stack)?;
                     stack.truncate(new_len)
                 }
+                Instruction::Cost(f) => {
+                    let function = self.functions.get_mut(f).unwrap();
+                    let new_cost = stack.pop().unwrap();
+                    let new_len = stack.len() - function.schema.input.len();
+
+                    let function = self.functions.get_mut(f).unwrap();
+
+                    let args = &stack[new_len..];
+
+                    let i64sort: Arc<I64Sort> = self.type_info.get_sort_nofail();
+                    let cost = i64::load(&i64sort, &new_cost);
+                    function.update_cost(args, cost.try_into().unwrap());
+
+                    stack.truncate(new_len);
+                }
+
                 Instruction::Union(arity) => {
                     let new_len = stack.len() - arity;
                     let values = &stack[new_len..];

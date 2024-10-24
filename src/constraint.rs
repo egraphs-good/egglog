@@ -365,6 +365,35 @@ impl Assignment<AtomTerm, ArcSort> {
                     rhs,
                 ))
             }
+            // (cost (f [*x]) rhs) where rhs should have type I64
+            GenericAction::Cost(
+                span,
+                CorrespondingVar {
+                    head,
+                    to: _mapped_var,
+                },
+                children,
+                rhs,
+            ) => {
+                let children: Vec<_> = children
+                    .iter()
+                    .map(|child| self.annotate_expr(child, typeinfo))
+                    .collect();
+                let types: Vec<_> = children
+                    .iter()
+                    .map(|child| child.output_type(typeinfo))
+                    .collect();
+                let resolved_call =
+                    ResolvedCall::from_resolution_func_types(head, &types, typeinfo)
+                        .ok_or_else(|| TypeError::UnboundFunction(*head, span.clone()))?;
+                let resolved_rhs = self.annotate_expr(rhs, typeinfo);
+                Ok(ResolvedAction::Cost(
+                    span.clone(),
+                    resolved_call,
+                    children.clone(),
+                    resolved_rhs,
+                ))
+            }
             // Note mapped_var for delete is a dummy variable that does not mean anything
             GenericAction::Change(
                 span,
@@ -539,6 +568,24 @@ impl CoreAction {
                     .chain(get_atom_application_constraints(
                         head, &args, span, typeinfo,
                     )?)
+                    .collect())
+            }
+            CoreAction::Cost(span, head, args, rhs) => {
+                let mut args = args.clone();
+                let var = symbol_gen.fresh(head);
+                args.push(AtomTerm::Var(span.clone(), var));
+
+                let mut all_terms = args.clone();
+                all_terms.push(rhs.clone());
+
+                Ok(get_literal_and_global_constraints(&all_terms, typeinfo)
+                    .chain(get_atom_application_constraints(
+                        head, &args, span, typeinfo,
+                    )?)
+                    .chain(once(Constraint::Assign(
+                        rhs.clone(),
+                        typeinfo.get_sort_nofail::<I64Sort>() as ArcSort,
+                    )))
                     .collect())
             }
             CoreAction::Change(span, _change, head, args) => {

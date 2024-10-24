@@ -381,6 +381,12 @@ pub enum GenericCoreAction<Head, Leaf> {
         Vec<GenericAtomTerm<Leaf>>,
         GenericAtomTerm<Leaf>,
     ),
+    Cost(
+        Span,
+        Head,
+        Vec<GenericAtomTerm<Leaf>>,
+        GenericAtomTerm<Leaf>,
+    ),
     Change(Span, Change, Head, Vec<GenericAtomTerm<Leaf>>),
     Union(Span, GenericAtomTerm<Leaf>, GenericAtomTerm<Leaf>),
     Panic(Span, String),
@@ -483,6 +489,34 @@ where
                     ));
                     let v = fresh_gen.fresh(head);
                     mapped_actions.0.push(GenericAction::Set(
+                        span.clone(),
+                        CorrespondingVar::new(head.clone(), v),
+                        mapped_args,
+                        mapped_expr,
+                    ));
+                }
+                GenericAction::Cost(span, head, args, expr) => {
+                    let mut mapped_args = vec![];
+                    for arg in args {
+                        let (actions, mapped_arg) =
+                            arg.to_core_actions(typeinfo, binding, fresh_gen)?;
+                        norm_actions.extend(actions.0);
+                        mapped_args.push(mapped_arg);
+                    }
+                    let (actions, mapped_expr) =
+                        expr.to_core_actions(typeinfo, binding, fresh_gen)?;
+                    norm_actions.extend(actions.0);
+                    norm_actions.push(GenericCoreAction::Cost(
+                        span.clone(),
+                        head.clone(),
+                        mapped_args
+                            .iter()
+                            .map(|e| e.get_corresponding_var_or_lit(typeinfo))
+                            .collect(),
+                        mapped_expr.get_corresponding_var_or_lit(typeinfo),
+                    ));
+                    let v = fresh_gen.fresh(head);
+                    mapped_actions.0.push(GenericAction::Cost(
                         span.clone(),
                         CorrespondingVar::new(head.clone(), v),
                         mapped_args,

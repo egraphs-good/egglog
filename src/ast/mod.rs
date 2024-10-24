@@ -1382,6 +1382,13 @@ where
         Vec<GenericExpr<Head, Leaf>>,
         GenericExpr<Head, Leaf>,
     ),
+    /// `cost` sets the cost of a function to a particular value.
+    Cost(
+        Span,
+        Head,
+        Vec<GenericExpr<Head, Leaf>>,
+        GenericExpr<Head, Leaf>,
+    ),
     /// Delete or subsume (mark as hidden from future rewrites and unextractable) an entry from a function.
     Change(Span, Change, Head, Vec<GenericExpr<Head, Leaf>>),
     /// `union` two datatypes, making them equal
@@ -1464,16 +1471,12 @@ where
         match self {
             GenericAction::Let(_ann, lhs, rhs) => list!("let", lhs, rhs),
             GenericAction::Set(_ann, lhs, args, rhs) => list!("set", list!(lhs, ++ args), rhs),
+            GenericAction::Cost(_ann, lhs, args, rhs) => list!("cost", list!(lhs, ++ args), rhs),
             GenericAction::Union(_ann, lhs, rhs) => list!("union", lhs, rhs),
-            GenericAction::Change(_ann, change, lhs, args) => {
-                list!(
-                    match change {
-                        Change::Delete => "delete",
-                        Change::Subsume => "subsume",
-                    },
-                    list!(lhs, ++ args)
-                )
-            }
+            GenericAction::Change(_ann, change, lhs, args) => match change {
+                Change::Delete => list!("delete", list!(lhs, ++ args)),
+                Change::Subsume => list!("subsume", list!(lhs, ++ args)),
+            },
             GenericAction::Extract(_ann, expr, variants) => list!("extract", expr, variants),
             GenericAction::Panic(_ann, msg) => list!("panic", format!("\"{}\"", msg.clone())),
             GenericAction::Expr(_ann, e) => e.to_sexp(),
@@ -1498,6 +1501,15 @@ where
             GenericAction::Set(span, lhs, args, rhs) => {
                 let right = f(rhs);
                 GenericAction::Set(
+                    span.clone(),
+                    lhs.clone(),
+                    args.iter().map(f).collect(),
+                    right,
+                )
+            }
+            GenericAction::Cost(span, lhs, args, rhs) => {
+                let right = f(rhs);
+                GenericAction::Cost(
                     span.clone(),
                     lhs.clone(),
                     args.iter().map(f).collect(),
@@ -1538,6 +1550,10 @@ where
                 let args = args.into_iter().map(|e| e.visit_exprs(f)).collect();
                 GenericAction::Set(span, lhs.clone(), args, rhs.visit_exprs(f))
             }
+            GenericAction::Cost(span, lhs, args, rhs) => {
+                let args = args.into_iter().map(|e| e.visit_exprs(f)).collect();
+                GenericAction::Cost(span, lhs.clone(), args, rhs.visit_exprs(f))
+            }
             GenericAction::Change(span, change, lhs, args) => {
                 let args = args.into_iter().map(|e| e.visit_exprs(f)).collect();
                 GenericAction::Change(span, change, lhs.clone(), args)
@@ -1576,6 +1592,14 @@ where
                     .collect();
                 let rhs = rhs.subst_leaf(&mut fvar_expr!());
                 GenericAction::Set(span, lhs.clone(), args, rhs)
+            }
+            GenericAction::Cost(span, lhs, args, rhs) => {
+                let args = args
+                    .into_iter()
+                    .map(|e| e.subst_leaf(&mut fvar_expr!()))
+                    .collect();
+                let rhs = rhs.subst_leaf(&mut fvar_expr!());
+                GenericAction::Cost(span, lhs.clone(), args, rhs)
             }
             GenericAction::Change(span, change, lhs, args) => {
                 let args = args
