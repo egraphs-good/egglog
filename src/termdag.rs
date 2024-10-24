@@ -180,12 +180,11 @@ impl TermDag {
 
 #[cfg(test)]
 mod tests {
-    use crate::{ast, DUMMY_SPAN};
-
     use super::*;
+    use crate::ast::*;
 
     fn parse_term(s: &str) -> (TermDag, Term) {
-        let e = crate::ast::parse_expr(s).unwrap();
+        let e = parse_expr(None, s).unwrap();
         let mut td = TermDag::default();
         let t = td.expr_to_term(&e);
         (td, t)
@@ -194,7 +193,7 @@ mod tests {
     #[test]
     fn test_to_from_expr() {
         let s = r#"(f (g x y) x y (g x y))"#;
-        let e = crate::ast::parse_expr(s).unwrap();
+        let e = parse_expr(None, s).unwrap();
         let mut td = TermDag::default();
         assert_eq!(td.size(), 0);
         let t = td.expr_to_term(&e);
@@ -224,8 +223,10 @@ mod tests {
         let s = r#"(f (g x y) x y (g x y))"#;
         let (td, t) = parse_term(s);
         match_term_app!(t; {
-            ("f", [_, x, _, _]) =>
-                assert_eq!(td.term_to_expr(td.get(*x)), ast::GenericExpr::Var(DUMMY_SPAN.clone(), Symbol::new("x"))),
+            ("f", [_, x, _, _]) => assert_eq!(
+                td.term_to_expr(td.get(*x)),
+                crate::ast::GenericExpr::Var(DUMMY_SPAN.clone(), Symbol::new("x"))
+            ),
             (head, _) => panic!("unexpected head {}, in {}:{}:{}", head, file!(), line!(), column!())
         })
     }
