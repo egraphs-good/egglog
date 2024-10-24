@@ -138,4 +138,5 @@ we ["ignore"](https://docs.codspeed.io/features/ignoring-benchmarks/) them in co
 capture their performance, but their timings don't show up in our reports by default.
 
 We use 50ms as our cutoff currently, any benchmarks shorter than that are ignored. This number was selected to try to ignore
-any benchmarks with have changes > 1% when they haven't been modified.
+any benchmarks with have changes > 1% when they haven't been modified. Note that all the ignoring is done manually,
+so if you add another example that's short, an admin on the codspeed project will need to manually ignore it.
