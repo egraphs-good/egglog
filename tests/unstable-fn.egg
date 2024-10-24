@@ -3,7 +3,9 @@
   (Var String)
   (Add Math Math)
   (Mul Math Math))
+
 (rewrite (Mul (Num x) (Num y)) (Num (* x y)))
+
 (datatype MathList
   (Nil)
   (Cons Math MathList))
@@ -25,6 +27,7 @@
 (function list-map-math (MathList MathFn) MathList)
 (rewrite (list-map-math (Nil) fn) (Nil))
 (rewrite (list-map-math (Cons x xs) fn) (Cons (unstable-app fn x) (list-map-math xs fn)))
+
 (let x (Cons (Num 1) (Cons (Num 2) (Cons (Num 3) (Nil)))))
 (let squared-x (list-map-math x square-fn))
 (run-schedule (saturate (run)))
@@ -45,6 +48,7 @@
 (rewrite (composed-math f g v) (unstable-app f (unstable-app g v)))
 
 (let square-of-double (unstable-fn "composed-math" square-fn (unstable-fn "Mul" (Num 2))))
+
 (let squared-doubled-x (list-map-math x square-of-double))
 (run-schedule (saturate (run)))
 (check (= squared-doubled-x (Cons (Num 4) (Cons (Num 16) (Cons (Num 36) (Nil))))))
