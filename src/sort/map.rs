@@ -251,8 +251,8 @@ impl PrimitiveLike for MapRebuild {
             .iter()
             .map(|(k, v)| {
                 (
-                    egraph.find(self.map.key.is_eq_sort(), *k),
-                    egraph.find(self.map.value.is_eq_sort(), *v),
+                    egraph.find(&self.map.key, *k),
+                    egraph.find(&self.map.value, *v),
                 )
             })
             .collect();

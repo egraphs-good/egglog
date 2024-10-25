@@ -304,7 +304,7 @@ impl PrimitiveLike for SetRebuild {
         let set = ValueSet::load(&self.set, &values[0]);
         let new_set: ValueSet = set
             .iter()
-            .map(|e| egraph.find(self.set.element.is_eq_sort(), *e))
+            .map(|e| egraph.find(&self.set.element, *e))
             .collect();
         // drop set to make sure we lose lock
         drop(set);

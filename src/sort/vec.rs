@@ -258,7 +258,7 @@ impl PrimitiveLike for VecRebuild {
         let vec = ValueVec::load(&self.vec, &values[0]);
         let new_vec: ValueVec = vec
             .iter()
-            .map(|e| egraph.find(self.vec.element.is_eq_sort(), *e))
+            .map(|e| egraph.find(&self.vec.element, *e))
             .collect();
         drop(vec);
         Some(new_vec.store(&self.vec).unwrap())

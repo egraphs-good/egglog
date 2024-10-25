@@ -59,9 +59,9 @@ impl EGraph {
                                 inputs
                                     .iter()
                                     .zip(&func.schema.input)
-                                    .map(|(input, sort)| extractor.costs.get(
-                                        &extractor.egraph.find(sort.is_eq_sort(), *input).bits
-                                    ))
+                                    .map(|(input, sort)| extractor
+                                        .costs
+                                        .get(&extractor.egraph.find(sort, *input).bits))
                                     .collect::<Vec<_>>()
                             );
                         }
@@ -80,7 +80,7 @@ impl EGraph {
         termdag: &mut TermDag,
     ) -> Vec<Term> {
         let output_sort = sort.name();
-        let output_value = self.find(sort.is_eq_sort(), value);
+        let output_value = self.find(sort, value);
         let ext = &Extractor::new(self, termdag);
         ext.ctors
             .iter()
@@ -152,7 +152,7 @@ impl<'a> Extractor<'a> {
         sort: &ArcSort,
     ) -> Option<(Cost, Term)> {
         if sort.is_eq_sort() {
-            let id = self.egraph.find(true, value).bits;
+            let id = self.egraph.find(sort, value).bits;
             let (cost, node) = self.costs.get(&id)?.clone();
             Some((cost, node))
         } else {
@@ -192,7 +192,7 @@ impl<'a> Extractor<'a> {
                         {
                             let make_new_pair = || (new_cost, termdag.app(sym, term_inputs));
 
-                            let id = self.egraph.find(true, output.value).bits;
+                            let id = self.egraph.find(&func.schema.output, output.value).bits;
                             match self.costs.entry(id) {
                                 Entry::Vacant(e) => {
                                     did_something = true;

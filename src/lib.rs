@@ -543,14 +543,14 @@ impl EGraph {
                 for (input, sort) in inputs.iter().zip(&function.schema.input) {
                     assert_eq!(
                         input,
-                        &self.find(sort.is_eq_sort(), *input),
+                        &self.find(sort, *input),
                         "[{i}] {name}({inputs:?}) = {output:?}\n{:?}",
                         function.schema,
                     )
                 }
                 assert_eq!(
                     output.value,
-                    self.find(function.schema.output.is_eq_sort(), output.value),
+                    self.find(&function.schema.output, output.value),
                     "[{i}] {name}({inputs:?}) = {output:?}\n{:?}",
                     function.schema,
                 )
@@ -591,8 +591,8 @@ impl EGraph {
     }
 
     /// find the leader value for a particular eclass
-    pub fn find(&self, is_eq_sort: bool, value: Value) -> Value {
-        if is_eq_sort {
+    pub fn find(&self, sort: &ArcSort, value: Value) -> Value {
+        if sort.is_eq_sort() {
             Value {
                 #[cfg(debug_assertions)]
                 tag: value.tag,
