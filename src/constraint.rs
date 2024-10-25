@@ -379,10 +379,7 @@ impl Assignment<AtomTerm, ArcSort> {
                     .iter()
                     .map(|child| self.annotate_expr(child, typeinfo))
                     .collect();
-                let types: Vec<_> = children
-                    .iter()
-                    .map(|child| child.output_type(typeinfo))
-                    .collect();
+                let types: Vec<_> = children.iter().map(|child| child.output_type()).collect();
                 let resolved_call =
                     ResolvedCall::from_resolution_func_types(head, &types, typeinfo)
                         .ok_or_else(|| TypeError::UnboundFunction(*head, span.clone()))?;
