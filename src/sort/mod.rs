@@ -24,6 +24,8 @@ mod vec;
 pub use vec::*;
 mod r#fn;
 pub use r#fn::*;
+mod multiset;
+pub use multiset::*;
 
 use crate::constraint::AllEqualTypeConstraint;
 use crate::extract::{Cost, Extractor};

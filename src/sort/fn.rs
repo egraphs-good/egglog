@@ -48,8 +48,9 @@ impl Eq for ValueFunction {}
 #[derive(Debug)]
 pub struct FunctionSort {
     name: Symbol,
-    inputs: Vec<ArcSort>,
-    output: ArcSort,
+    // Public so that other primitive sorts (external or internal) can find a function sort by the sorts of its inputs/output
+    pub inputs: Vec<ArcSort>,
+    pub output: ArcSort,
     functions: Mutex<IndexSet<ValueFunction>>,
 }
 
@@ -57,6 +58,25 @@ impl FunctionSort {
     fn get_value(&self, value: &Value) -> ValueFunction {
         let functions = self.functions.lock().unwrap();
         functions.get_index(value.bits as usize).unwrap().clone()
+    }
+
+    /// Apply the function to the values
+    ///
+    /// Public so that other primitive sorts (external or internal) can use this to apply functions
+    pub fn apply(&self, fn_value: &Value, arg_values: &[Value], egraph: &mut EGraph) -> Value {
+        let ValueFunction(name, args) = self.get_value(fn_value);
+        let types: Vec<_> = args
+            .iter()
+            .map(|(sort, _)| sort.clone())
+            .chain(self.inputs.clone())
+            .chain(once(self.output.clone()))
+            .collect();
+        let values = args
+            .iter()
+            .map(|(_, v)| *v)
+            .chain(arg_values.iter().cloned())
+            .collect();
+        call_fn(egraph, &name, types, values)
     }
 }
 
@@ -368,21 +388,7 @@ impl PrimitiveLike for Apply {
 
     fn apply(&self, values: &[Value], egraph: Option<&mut EGraph>) -> Option<Value> {
         let egraph = egraph.expect("`unstable-app` is not supported yet in facts.");
-        let ValueFunction(name, args) = ValueFunction::load(&self.function, &values[0]);
-        let types: Vec<_> = args
-            .iter()
-            // get the sorts of partially applied args
-            .map(|(sort, _)| sort.clone())
-            // combine with the args for the function call and then the output
-            .chain(self.function.inputs.clone())
-            .chain(once(self.function.output.clone()))
-            .collect();
-        let values = args
-            .iter()
-            .map(|(_, v)| *v)
-            .chain(values[1..].iter().copied())
-            .collect();
-        Some(call_fn(egraph, &name, types, values))
+        Some(self.function.apply(&values[0], &values[1..], egraph))
     }
 }
 

@@ -62,6 +62,7 @@ ordered-float = { version = "3.7" }
 getrandom = { version = "0.2.10", features = ["js"], optional = true }
 
 im-rc = "15.1.0"
+im = "15.1.0"
 
 
 [build-dependencies]
