@@ -22,8 +22,30 @@ impl SetSort {
     pub fn element_name(&self) -> Symbol {
         self.element.name()
     }
+}
 
-    pub fn make_sort(
+impl Presort for SetSort {
+    fn presort_name() -> Symbol {
+        "Set".into()
+    }
+
+    fn reserved_primitives() -> Vec<Symbol> {
+        vec![
+            "set-of".into(),
+            "set-empty".into(),
+            "set-insert".into(),
+            "set-not-contains".into(),
+            "set-contains".into(),
+            "set-remove".into(),
+            "set-union".into(),
+            "set-diff".into(),
+            "set-intersect".into(),
+            "set-get".into(),
+            "set-length".into(),
+        ]
+    }
+
+    fn make_sort(
         typeinfo: &mut TypeInfo,
         name: Symbol,
         args: &[Expr],
@@ -50,24 +72,6 @@ impl SetSort {
         } else {
             panic!()
         }
-    }
-}
-
-impl SetSort {
-    pub fn presort_names() -> Vec<Symbol> {
-        vec![
-            "set-of".into(),
-            "set-empty".into(),
-            "set-insert".into(),
-            "set-not-contains".into(),
-            "set-contains".into(),
-            "set-remove".into(),
-            "set-union".into(),
-            "set-diff".into(),
-            "set-intersect".into(),
-            "set-get".into(),
-            "set-length".into(),
-        ]
     }
 }
 
@@ -136,12 +140,10 @@ impl Sort for SetSort {
         typeinfo.add_primitive(NotContains {
             name: "set-not-contains".into(),
             set: self.clone(),
-            unit: typeinfo.get_sort_nofail(),
         });
         typeinfo.add_primitive(Contains {
             name: "set-contains".into(),
             set: self.clone(),
-            unit: typeinfo.get_sort_nofail(),
         });
         typeinfo.add_primitive(Remove {
             name: "set-remove".into(),
@@ -150,12 +152,10 @@ impl Sort for SetSort {
         typeinfo.add_primitive(Get {
             name: "set-get".into(),
             set: self.clone(),
-            i64: typeinfo.get_sort_nofail(),
         });
         typeinfo.add_primitive(Length {
             name: "set-length".into(),
             set: self.clone(),
-            i64: typeinfo.get_sort_nofail(),
         });
         typeinfo.add_primitive(Union {
             name: "set-union".into(),
@@ -322,7 +322,6 @@ impl PrimitiveLike for Insert {
 struct NotContains {
     name: Symbol,
     set: Arc<SetSort>,
-    unit: Arc<UnitSort>,
 }
 
 impl PrimitiveLike for NotContains {
@@ -333,7 +332,7 @@ impl PrimitiveLike for NotContains {
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         SimpleTypeConstraint::new(
             self.name(),
-            vec![self.set.clone(), self.set.element(), self.unit.clone()],
+            vec![self.set.clone(), self.set.element(), Arc::new(UnitSort)],
             span.clone(),
         )
         .into_box()
@@ -352,7 +351,6 @@ impl PrimitiveLike for NotContains {
 struct Contains {
     name: Symbol,
     set: Arc<SetSort>,
-    unit: Arc<UnitSort>,
 }
 
 impl PrimitiveLike for Contains {
@@ -363,7 +361,7 @@ impl PrimitiveLike for Contains {
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         SimpleTypeConstraint::new(
             self.name(),
-            vec![self.set.clone(), self.set.element(), self.unit.clone()],
+            vec![self.set.clone(), self.set.element(), Arc::new(UnitSort)],
             span.clone(),
         )
         .into_box()
@@ -437,7 +435,6 @@ impl PrimitiveLike for Intersect {
 struct Length {
     name: Symbol,
     set: Arc<SetSort>,
-    i64: Arc<I64Sort>,
 }
 
 impl PrimitiveLike for Length {
@@ -448,7 +445,7 @@ impl PrimitiveLike for Length {
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         SimpleTypeConstraint::new(
             self.name(),
-            vec![self.set.clone(), self.i64.clone()],
+            vec![self.set.clone(), Arc::new(I64Sort)],
             span.clone(),
         )
         .into_box()
@@ -459,10 +456,10 @@ impl PrimitiveLike for Length {
         Some(Value::from(set.len() as i64))
     }
 }
+
 struct Get {
     name: Symbol,
     set: Arc<SetSort>,
-    i64: Arc<I64Sort>,
 }
 
 impl PrimitiveLike for Get {
@@ -473,7 +470,7 @@ impl PrimitiveLike for Get {
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         SimpleTypeConstraint::new(
             self.name(),
-            vec![self.set.clone(), self.i64.clone(), self.set.element()],
+            vec![self.set.clone(), Arc::new(I64Sort), self.set.element()],
             span.clone(),
         )
         .into_box()
@@ -481,7 +478,7 @@ impl PrimitiveLike for Get {
 
     fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
         let set = ValueSet::load(&self.set, &values[0]);
-        let index = i64::load(&self.i64, &values[1]);
+        let index = i64::load(&I64Sort, &values[1]);
         set.iter().nth(index as usize).copied()
     }
 }

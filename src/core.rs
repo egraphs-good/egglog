@@ -13,8 +13,7 @@
 use std::hash::Hasher;
 use std::ops::AddAssign;
 
-use crate::HashMap;
-use crate::{typechecking::FuncType, *};
+use crate::{typechecking::FuncType, HashMap, *};
 use typechecking::TypeError;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -108,8 +107,11 @@ impl ResolvedCall {
                 }
             }
         }
-
-        assert!(resolved_call.len() == 1);
+        assert!(
+            resolved_call.len() == 1,
+            "Ambiguous resolution for {:?}",
+            head,
+        );
         resolved_call.pop().unwrap()
     }
 }
@@ -190,10 +192,10 @@ impl<Leaf: Clone> GenericAtomTerm<Leaf> {
 }
 
 impl ResolvedAtomTerm {
-    pub fn output(&self, typeinfo: &TypeInfo) -> ArcSort {
+    pub fn output(&self) -> ArcSort {
         match self {
             ResolvedAtomTerm::Var(_, v) => v.sort.clone(),
-            ResolvedAtomTerm::Literal(_, l) => typeinfo.infer_literal(l),
+            ResolvedAtomTerm::Literal(_, l) => literal_sort(l),
             ResolvedAtomTerm::Global(_, v) => v.sort.clone(),
         }
     }
@@ -872,12 +874,11 @@ impl ResolvedRule {
         fresh_gen: &mut SymbolGen,
     ) -> Result<ResolvedCoreRule, TypeError> {
         let value_eq = &typeinfo.primitives.get(&Symbol::from("value-eq")).unwrap()[0];
-        let unit = typeinfo.get_sort_nofail::<UnitSort>();
         self.to_canonicalized_core_rule_impl(typeinfo, fresh_gen, |at1, at2| {
             ResolvedCall::Primitive(SpecializedPrimitive {
                 primitive: value_eq.clone(),
-                input: vec![at1.output(typeinfo), at2.output(typeinfo)],
-                output: unit.clone(),
+                input: vec![at1.output(), at2.output()],
+                output: Arc::new(UnitSort),
             })
         })
     }

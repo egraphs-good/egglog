@@ -32,7 +32,7 @@ use std::{
     ops::Range,
 };
 
-use hashbrown::raw::RawTable;
+use hashbrown::HashTable;
 
 use super::binary_search::binary_search_table_by_key;
 use crate::{util::BuildHasher as BH, TupleOutput, Value, ValueVec};
@@ -51,11 +51,11 @@ struct TableOffset {
 pub(crate) struct Table {
     max_ts: u32,
     n_stale: usize,
-    table: RawTable<TableOffset>,
+    table: HashTable<TableOffset>,
     pub(crate) vals: Vec<(Input, TupleOutput)>,
 }
 
-/// Used for the RawTable probe sequence.
+/// Used for the HashTable probe sequence.
 macro_rules! search_for {
     ($slf:expr, $hash:expr, $inp:expr) => {
         |to| {
@@ -97,19 +97,18 @@ impl Table {
 
     /// Rehashes the table, invalidating any offsets stored into the table.
     pub(crate) fn rehash(&mut self) {
-        let mut src = 0usize;
         let mut dst = 0usize;
         self.table.clear();
         self.vals.retain(|(inp, _)| {
             if inp.live() {
                 let hash = hash_values(inp.data());
+                let to = TableOffset { hash, off: dst };
                 self.table
-                    .insert(hash, TableOffset { hash, off: dst }, |to| to.hash);
-                src += 1;
+                    .entry(hash, |to2| to2 == &to, |to2| to2.hash)
+                    .insert(to);
                 dst += 1;
                 true
             } else {
-                src += 1;
                 false
             }
         });
@@ -120,16 +119,16 @@ impl Table {
     /// table.
     pub(crate) fn get(&self, inputs: &[Value]) -> Option<&TupleOutput> {
         let hash = hash_values(inputs);
-        let TableOffset { off, .. } = self.table.get(hash, search_for!(self, hash, inputs))?;
-        debug_assert!(self.vals[*off].0.live());
-        Some(&self.vals[*off].1)
+        let &TableOffset { off, .. } = self.table.find(hash, search_for!(self, hash, inputs))?;
+        debug_assert!(self.vals[off].0.live());
+        Some(&self.vals[off].1)
     }
 
     pub(crate) fn get_mut(&mut self, inputs: &[Value]) -> Option<&mut TupleOutput> {
         let hash: u64 = hash_values(inputs);
-        let TableOffset { off, .. } = self.table.get(hash, search_for!(self, hash, inputs))?;
-        debug_assert!(self.vals[*off].0.live());
-        Some(&mut self.vals[*off].1)
+        let &TableOffset { off, .. } = self.table.find(hash, search_for!(self, hash, inputs))?;
+        debug_assert!(self.vals[off].0.live());
+        Some(&mut self.vals[off].1)
     }
 
     /// Insert the given data into the table at the given timestamp. Return the
@@ -162,7 +161,7 @@ impl Table {
         self.max_ts = ts;
         let hash = hash_values(inputs);
         if let Some(TableOffset { off, .. }) =
-            self.table.get_mut(hash, search_for!(self, hash, inputs))
+            self.table.find_mut(hash, search_for!(self, hash, inputs))
         {
             let (inp, prev) = &mut self.vals[*off];
             let prev_subsumed = prev.subsumed;
@@ -197,14 +196,13 @@ impl Table {
                 cost: None,
             },
         ));
-        self.table.insert(
+        let to = TableOffset {
             hash,
-            TableOffset {
-                hash,
-                off: new_offset,
-            },
-            |off| off.hash,
-        );
+            off: new_offset,
+        };
+        self.table
+            .entry(hash, |to2| to2 == &to, |to2| to2.hash)
+            .insert(to);
     }
 
     /// One more than the maximum (potentially) valid offset into the table.
@@ -241,13 +239,11 @@ impl Table {
     /// removed.
     pub(crate) fn remove(&mut self, inp: &[Value], ts: u32) -> bool {
         let hash = hash_values(inp);
-        let entry = if let Some(entry) = self.table.remove_entry(hash, search_for!(self, hash, inp))
-        {
-            entry
-        } else {
+        let Ok(entry) = self.table.find_entry(hash, search_for!(self, hash, inp)) else {
             return false;
         };
-        self.vals[entry.off].0.stale_at = ts;
+        let (TableOffset { off, .. }, _) = entry.remove();
+        self.vals[off].0.stale_at = ts;
         self.n_stale += 1;
         true
     }

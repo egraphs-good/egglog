@@ -2,19 +2,15 @@ use super::*;
 use crate::{ast::Literal, constraint::AllEqualTypeConstraint, ArcSort, PrimitiveLike};
 
 #[derive(Debug)]
-pub struct UnitSort {
-    name: Symbol,
-}
+pub struct UnitSort;
 
-impl UnitSort {
-    pub fn new(name: Symbol) -> Self {
-        Self { name }
-    }
+lazy_static! {
+    static ref UNIT_SORT_NAME: Symbol = "Unit".into();
 }
 
 impl Sort for UnitSort {
     fn name(&self) -> Symbol {
-        self.name
+        *UNIT_SORT_NAME
     }
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
@@ -26,7 +22,7 @@ impl Sort for UnitSort {
     }
 
     fn make_expr(&self, _egraph: &EGraph, value: Value) -> (Cost, Expr) {
-        assert_eq!(value.tag, self.name);
+        assert_eq!(value.tag, self.name());
         (1, GenericExpr::Lit(DUMMY_SPAN.clone(), Literal::Unit))
     }
 }
