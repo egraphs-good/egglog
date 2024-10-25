@@ -1473,10 +1473,15 @@ where
             GenericAction::Set(_ann, lhs, args, rhs) => list!("set", list!(lhs, ++ args), rhs),
             GenericAction::Cost(_ann, lhs, args, rhs) => list!("cost", list!(lhs, ++ args), rhs),
             GenericAction::Union(_ann, lhs, rhs) => list!("union", lhs, rhs),
-            GenericAction::Change(_ann, change, lhs, args) => match change {
-                Change::Delete => list!("delete", list!(lhs, ++ args)),
-                Change::Subsume => list!("subsume", list!(lhs, ++ args)),
-            },
+            GenericAction::Change(_ann, change, lhs, args) => {
+                list!(
+                    match change {
+                        Change::Delete => "delete",
+                        Change::Subsume => "subsume",
+                    },
+                    list!(lhs, ++ args)
+                )
+            }
             GenericAction::Extract(_ann, expr, variants) => list!("extract", expr, variants),
             GenericAction::Panic(_ann, msg) => list!("panic", format!("\"{}\"", msg.clone())),
             GenericAction::Expr(_ann, e) => e.to_sexp(),
