@@ -21,7 +21,9 @@ impl Sort for StringSort {
     }
 
     fn make_expr(&self, _egraph: &EGraph, value: Value) -> (Cost, Expr) {
-        assert!(value.tag == self.name());
+        #[cfg(debug_assertions)]
+        debug_assert_eq!(value.tag, self.name());
+
         let sym = Symbol::from(NonZeroU32::new(value.bits as _).unwrap());
         (
             1,
@@ -45,9 +47,10 @@ impl Sort for StringSort {
 
 impl IntoSort for Symbol {
     type Sort = StringSort;
-    fn store(self, sort: &Self::Sort) -> Option<Value> {
+    fn store(self, _sort: &Self::Sort) -> Option<Value> {
         Some(Value {
-            tag: sort.name(),
+            #[cfg(debug_assertions)]
+            tag: StringSort.name(),
             bits: NonZeroU32::from(self).get() as _,
         })
     }
@@ -76,7 +79,12 @@ impl PrimitiveLike for Add {
             .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(
+        &self,
+        values: &[Value],
+        _sorts: (&[ArcSort], &ArcSort),
+        _egraph: Option<&mut EGraph>,
+    ) -> Option<Value> {
         let mut res_string: String = "".to_owned();
         for value in values {
             let sym = Symbol::load(&self.string, value);
@@ -104,7 +112,12 @@ impl PrimitiveLike for Replace {
             .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(
+        &self,
+        values: &[Value],
+        _sorts: (&[ArcSort], &ArcSort),
+        _egraph: Option<&mut EGraph>,
+    ) -> Option<Value> {
         let string1 = Symbol::load(&self.string, &values[0]).to_string();
         let string2 = Symbol::load(&self.string, &values[1]).to_string();
         let string3 = Symbol::load(&self.string, &values[2]).to_string();

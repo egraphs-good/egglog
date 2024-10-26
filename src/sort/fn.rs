@@ -20,7 +20,6 @@ use super::*;
 /// Note that we must store the actual arcsorts so we can return them when returning inner values
 /// and when canonicalizing
 #[derive(Debug, Clone)]
-
 struct ValueFunction(Symbol, Vec<(ArcSort, Value)>);
 
 impl ValueFunction {
@@ -223,6 +222,7 @@ impl IntoSort for ValueFunction {
         let mut functions = sort.functions.lock().unwrap();
         let (i, _) = functions.insert_full(self);
         Some(Value {
+            #[cfg(debug_assertions)]
             tag: sort.name,
             bits: i as u64,
         })
@@ -354,16 +354,21 @@ impl PrimitiveLike for Ctor {
         })
     }
 
-    fn apply(&self, values: &[Value], egraph: Option<&mut EGraph>) -> Option<Value> {
-        let egraph = egraph.expect("`unstable-fn` is not supported yet in facts.");
+    fn apply(
+        &self,
+        values: &[Value],
+        sorts: (&[ArcSort], &ArcSort),
+        _egraph: Option<&mut EGraph>,
+    ) -> Option<Value> {
         let name = Symbol::load(&StringSort, &values[0]);
-        // self.function
-        //     .sorts
-        //     .insert(name.clone(), self.function.clone());
-        let args = values[1..]
+
+        assert!(values.len() == sorts.0.len());
+        let args: Vec<(ArcSort, Value)> = values[1..]
             .iter()
-            .map(|arg| (egraph.get_sort_from_value(arg).unwrap().clone(), *arg))
+            .zip(&sorts.0[1..])
+            .map(|(value, sort)| (sort.clone(), *value))
             .collect();
+
         ValueFunction(name, args).store(&self.function)
     }
 }
@@ -386,7 +391,12 @@ impl PrimitiveLike for Apply {
         SimpleTypeConstraint::new(self.name(), sorts, span.clone()).into_box()
     }
 
-    fn apply(&self, values: &[Value], egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(
+        &self,
+        values: &[Value],
+        _sorts: (&[ArcSort], &ArcSort),
+        egraph: Option<&mut EGraph>,
+    ) -> Option<Value> {
         let egraph = egraph.expect("`unstable-app` is not supported yet in facts.");
         Some(self.function.apply(&values[0], &values[1..], egraph))
     }

@@ -1,31 +1,32 @@
 //! Column-level indexes on values from a common sort.
 use smallvec::SmallVec;
-use symbol_table::GlobalSymbol;
 
-use crate::{unionfind::UnionFind, util::HashMap, Value};
+use crate::{unionfind::UnionFind, util::HashMap, Symbol, Value};
 
 pub(crate) type Offset = u32;
 
 #[derive(Clone, Debug)]
 pub(crate) struct ColumnIndex {
-    sort: GlobalSymbol,
+    sort: Symbol,
     ids: HashMap<u64, SmallVec<[Offset; 8]>>,
 }
 
 impl ColumnIndex {
-    pub(crate) fn new(sort: GlobalSymbol) -> ColumnIndex {
+    pub(crate) fn new(sort: Symbol) -> ColumnIndex {
         ColumnIndex {
             sort,
             ids: Default::default(),
         }
     }
 
-    pub(crate) fn sort(&self) -> GlobalSymbol {
+    pub(crate) fn sort(&self) -> Symbol {
         self.sort
     }
 
     pub(crate) fn add(&mut self, v: Value, i: usize) {
+        #[cfg(debug_assertions)]
         assert_eq!(v.tag, self.sort);
+
         self.ids.entry(v.bits).or_default().push(i as Offset);
     }
 
@@ -49,6 +50,7 @@ impl ColumnIndex {
         self.ids.iter().map(|(bits, v)| {
             (
                 Value {
+                    #[cfg(debug_assertions)]
                     tag: self.sort,
                     bits: *bits,
                 },
@@ -62,7 +64,7 @@ impl ColumnIndex {
         uf: &'a UnionFind,
     ) -> impl Iterator<Item = usize> + '_ {
         uf.dirty_ids(self.sort).flat_map(|x| {
-            self.get_indexes_for_bits(usize::from(x) as u64)
+            self.get_indexes_for_bits(x)
                 .unwrap_or(&[])
                 .iter()
                 .copied()
@@ -78,11 +80,11 @@ impl CompositeColumnIndex {
         CompositeColumnIndex(SmallVec::new())
     }
 
-    pub(crate) fn add(&mut self, v: Value, i: usize) {
-        if let Some(index) = self.0.iter().position(|index| index.sort() == v.tag) {
+    pub(crate) fn add(&mut self, s: Symbol, v: Value, i: usize) {
+        if let Some(index) = self.0.iter().position(|index| index.sort() == s) {
             (self.0)[index].add(v, i);
         } else {
-            let mut index = ColumnIndex::new(v.tag);
+            let mut index = ColumnIndex::new(s);
             index.add(v, i);
             self.0.push(index);
         }
