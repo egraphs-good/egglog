@@ -286,6 +286,7 @@ impl IntoSort for ValueMultiSet {
         let mut multisets = sort.multisets.lock().unwrap();
         let (i, _) = multisets.insert_full(self);
         Some(Value {
+            #[cfg(debug_assertions)]
             tag: sort.name,
             bits: i as u64,
         })
@@ -317,7 +318,12 @@ impl PrimitiveLike for MultiSetOf {
             .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(
+        &self,
+        values: &[Value],
+        _sorts: (&[ArcSort], &ArcSort),
+        _egraph: Option<&mut EGraph>,
+    ) -> Option<Value> {
         let multiset = MultiSet::from_iter(values.iter().copied());
         Some(multiset.store(&self.multiset).unwrap())
     }
@@ -346,7 +352,12 @@ impl PrimitiveLike for Insert {
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(
+        &self,
+        values: &[Value],
+        _sorts: (&[ArcSort], &ArcSort),
+        _egraph: Option<&mut EGraph>,
+    ) -> Option<Value> {
         let multiset = ValueMultiSet::load(&self.multiset, &values[0]);
         let multiset = multiset.insert(values[1]);
         multiset.store(&self.multiset)
@@ -376,7 +387,12 @@ impl PrimitiveLike for Contains {
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(
+        &self,
+        values: &[Value],
+        _sorts: (&[ArcSort], &ArcSort),
+        _egraph: Option<&mut EGraph>,
+    ) -> Option<Value> {
         let multiset = ValueMultiSet::load(&self.multiset, &values[0]);
         if multiset.contains(&values[1]) {
             Some(Value::unit())
@@ -409,7 +425,12 @@ impl PrimitiveLike for NotContains {
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(
+        &self,
+        values: &[Value],
+        _sorts: (&[ArcSort], &ArcSort),
+        _egraph: Option<&mut EGraph>,
+    ) -> Option<Value> {
         let multiset = ValueMultiSet::load(&self.multiset, &values[0]);
         if !multiset.contains(&values[1]) {
             Some(Value::unit())
@@ -438,7 +459,12 @@ impl PrimitiveLike for Length {
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(
+        &self,
+        values: &[Value],
+        _sorts: (&[ArcSort], &ArcSort),
+        _egraph: Option<&mut EGraph>,
+    ) -> Option<Value> {
         let multiset = ValueMultiSet::load(&self.multiset, &values[0]);
         Some(Value::from(multiset.len() as i64))
     }
@@ -467,7 +493,12 @@ impl PrimitiveLike for Remove {
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(
+        &self,
+        values: &[Value],
+        _sorts: (&[ArcSort], &ArcSort),
+        _egraph: Option<&mut EGraph>,
+    ) -> Option<Value> {
         let multiset = ValueMultiSet::load(&self.multiset, &values[0]);
         let multiset = multiset.remove(&values[1]);
         multiset.store(&self.multiset)
@@ -493,7 +524,12 @@ impl PrimitiveLike for Pick {
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(
+        &self,
+        values: &[Value],
+        _sorts: (&[ArcSort], &ArcSort),
+        _egraph: Option<&mut EGraph>,
+    ) -> Option<Value> {
         let multiset = ValueMultiSet::load(&self.multiset, &values[0]);
         Some(*multiset.pick().expect("Cannot pick from an empty multiset"))
     }
@@ -523,7 +559,12 @@ impl PrimitiveLike for Map {
         .into_box()
     }
 
-    fn apply(&self, values: &[Value], egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(
+        &self,
+        values: &[Value],
+        _sorts: (&[ArcSort], &ArcSort),
+        egraph: Option<&mut EGraph>,
+    ) -> Option<Value> {
         let egraph =
             egraph.unwrap_or_else(|| panic!("`{}` is not supported yet in facts.", self.name));
         let multiset = ValueMultiSet::load(&self.multiset, &values[1]);
