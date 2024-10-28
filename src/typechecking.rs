@@ -1,6 +1,5 @@
 use crate::{core::CoreRule, *};
 use ast::Rule;
-use hashbrown::hash_map::Entry;
 
 #[derive(Clone, Debug)]
 pub struct FuncType {
@@ -64,8 +63,8 @@ impl TypeInfo {
     pub fn add_presort<S: Presort>(&mut self, span: Span) -> Result<(), TypeError> {
         let name = S::presort_name();
         match self.presorts.entry(name) {
-            Entry::Occupied(_) => Err(TypeError::SortAlreadyBound(name, span)),
-            Entry::Vacant(e) => {
+            HEntry::Occupied(_) => Err(TypeError::SortAlreadyBound(name, span)),
+            HEntry::Vacant(e) => {
                 e.insert(S::make_sort);
                 self.reserved_primitives.extend(S::reserved_primitives());
                 Ok(())
@@ -77,8 +76,8 @@ impl TypeInfo {
         let name = sort.name();
 
         match self.sorts.entry(name) {
-            Entry::Occupied(_) => Err(TypeError::SortAlreadyBound(name, span)),
-            Entry::Vacant(e) => {
+            HEntry::Occupied(_) => Err(TypeError::SortAlreadyBound(name, span)),
+            HEntry::Vacant(e) => {
                 e.insert(sort.clone());
                 sort.register_primitives(self);
                 Ok(())
