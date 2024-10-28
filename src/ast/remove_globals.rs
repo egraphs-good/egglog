@@ -7,7 +7,6 @@
 
 use crate::*;
 use crate::{core::ResolvedCall, typechecking::FuncType};
-use indexmap::IndexMap;
 
 struct GlobalRemover<'a> {
     fresh: &'a mut SymbolGen,
@@ -143,7 +142,7 @@ impl<'a> GlobalRemover<'a> {
             } => {
                 // A map from the global variables in actions to their new names
                 // in the query.
-                let mut globals = IndexMap::new();
+                let mut globals = HashMap::default();
                 rule.head.clone().visit_exprs(&mut |expr| {
                     if let Some(resolved_var) = expr.get_global_var() {
                         let new_name = self.fresh.fresh(&resolved_var.name);
