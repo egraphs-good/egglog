@@ -28,6 +28,8 @@ impl Sort for BigIntSort {
     fn register_primitives(self: Arc<Self>, eg: &mut TypeInfo) {
         type Opt<T=()> = Option<T>;
 
+        add_primitives!(eg, "bigint" = |a: i64| -> Z { a.into() });
+
         add_primitives!(eg, "+" = |a: Z, b: Z| -> Z { a + b });
         add_primitives!(eg, "-" = |a: Z, b: Z| -> Z { a - b });
         add_primitives!(eg, "*" = |a: Z, b: Z| -> Z { a * b });
@@ -58,7 +60,7 @@ impl Sort for BigIntSort {
         add_primitives!(eg, "max" = |a: Z, b: Z| -> Z { a.max(b) });
 
         add_primitives!(eg, "to-string" = |a: Z| -> Symbol { a.to_string().into() });
-        add_primitives!(eg, "from-string" = |a: Symbol| -> Opt<Z> { a.as_str().parse::<Z>().ok() })
+        add_primitives!(eg, "from-string" = |a: Symbol| -> Opt<Z> { a.as_str().parse::<Z>().ok() });
    }
 
     fn make_expr(&self, _egraph: &EGraph, value: Value) -> (Cost, Expr) {

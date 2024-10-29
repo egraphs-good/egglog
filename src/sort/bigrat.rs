@@ -9,7 +9,7 @@ use crate::{ast::Literal, util::IndexSet};
 use super::*;
 
 lazy_static! {
-    static ref BIG_RAT_SORT_NAME: Symbol = "Rational".into();
+    static ref BIG_RAT_SORT_NAME: Symbol = "BigRat".into();
     static ref RATS: Mutex<IndexSet<Q>> = Default::default();
 }
 
@@ -41,7 +41,7 @@ impl Sort for BigRatSort {
         add_primitives!(eg, "floor" = |a: Q| -> Q { a.floor() });
         add_primitives!(eg, "ceil" = |a: Q| -> Q { a.ceil() });
         add_primitives!(eg, "round" = |a: Q| -> Q { a.round() });
-        add_primitives!(eg, "rational" = |a: Z, b: Z| -> Q { Q::new(a, b) });
+        add_primitives!(eg, "bigrat" = |a: Z, b: Z| -> Q { Q::new(a, b) });
         add_primitives!(eg, "numer" = |a: Q| -> Z { a.numer().clone() });
         add_primitives!(eg, "denom" = |a: Q| -> Z { a.denom().clone() });
 
@@ -114,13 +114,19 @@ impl Sort for BigRatSort {
             Expr::call_no_span(
                 "bigrat",
                 vec![
-                    Expr::Lit(
-                        DUMMY_SPAN.clone(),
-                        Literal::String(numer.to_string().into()),
+                    Expr::call_no_span(
+                        "from-string",
+                        vec![GenericExpr::Lit(
+                            DUMMY_SPAN.clone(),
+                            Literal::String(numer.to_string().into()),
+                        )],
                     ),
-                    Expr::Lit(
-                        DUMMY_SPAN.clone(),
-                        Literal::String(denom.to_string().into()),
+                    Expr::call_no_span(
+                        "from-string",
+                        vec![GenericExpr::Lit(
+                            DUMMY_SPAN.clone(),
+                            Literal::String(denom.to_string().into()),
+                        )],
                     ),
                 ],
             ),

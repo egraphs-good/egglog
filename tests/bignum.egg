@@ -1,0 +1,5 @@
+
+(let x (bigint -1234))
+(let y (from-string "2"))
+(let z (bigrat x y))
+(check (= (to-string (numer z)) "-617"))
