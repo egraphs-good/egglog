@@ -4,6 +4,8 @@ use lazy_static::lazy_static;
 use std::fmt::Debug;
 use std::{any::Any, sync::Arc};
 
+mod bigint;
+pub use bigint::*;
 mod bool;
 pub use self::bool::*;
 mod rational;
