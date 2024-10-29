@@ -6,6 +6,8 @@ use std::{any::Any, sync::Arc};
 
 mod bigint;
 pub use bigint::*;
+mod bigrat;
+pub use bigrat::*;
 mod bool;
 pub use self::bool::*;
 mod rational;

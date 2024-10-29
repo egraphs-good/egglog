@@ -1,4 +1,5 @@
 use num::BigInt;
+use std::ops::{Shl, Shr};
 use std::sync::Mutex;
 
 type Z = BigInt;
@@ -36,18 +37,16 @@ impl Sort for BigIntSort {
         add_primitives!(eg, "&" = |a: Z, b: Z| -> Z { a & b });
         add_primitives!(eg, "|" = |a: Z, b: Z| -> Z { a | b });
         add_primitives!(eg, "^" = |a: Z, b: Z| -> Z { a ^ b });
-        // TODO: figure out type error
-        // add_primitives!(eg, "<<" = |a: Z, b: i64| -> Z { a.shl(b) });
-        // add_primitives!(eg, ">>" = |a: Z, b: i64| -> Z { a.shr(b) });
+        add_primitives!(eg, "<<" = |a: Z, b: i64| -> Z { a.shl(b) });
+        add_primitives!(eg, ">>" = |a: Z, b: i64| -> Z { a.shr(b) });
         add_primitives!(eg, "not-Z" = |a: Z| -> Z { !a });
 
-        // TODO: use `BigInt::bits`?
-        // add_primitives!(eg, "log2" = |a: Z| -> Z { (a as Z).ilog2() as Z });
+        add_primitives!(eg, "bits" = |a: Z| -> Z { a.bits().into() });
 
-        add_primitives!(eg, "<" = |a: Z, b: Z| -> Opt { (a < b).then(|| ()) });
-        add_primitives!(eg, ">" = |a: Z, b: Z| -> Opt { (a > b).then(|| ()) });
-        add_primitives!(eg, "<=" = |a: Z, b: Z| -> Opt { (a <= b).then(|| ()) });
-        add_primitives!(eg, ">=" = |a: Z, b: Z| -> Opt { (a >= b).then(|| ()) });
+        add_primitives!(eg, "<" = |a: Z, b: Z| -> Opt { (a < b).then_some(()) });
+        add_primitives!(eg, ">" = |a: Z, b: Z| -> Opt { (a > b).then_some(()) });
+        add_primitives!(eg, "<=" = |a: Z, b: Z| -> Opt { (a <= b).then_some(()) });
+        add_primitives!(eg, ">=" = |a: Z, b: Z| -> Opt { (a >= b).then_some(()) });
 
         add_primitives!(eg, "bool-=" = |a: Z, b: Z| -> bool { a == b });
         add_primitives!(eg, "bool-<" = |a: Z, b: Z| -> bool { a < b });
