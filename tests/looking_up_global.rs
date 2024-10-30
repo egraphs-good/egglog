@@ -10,7 +10,7 @@ fn test_looking_up_global() {
             None, 
             r#"
             (function g () i64)
-            (fail (let y (g)))
+            (let y (g))
             "#
         );
 

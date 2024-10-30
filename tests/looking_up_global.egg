@@ -1,3 +1,6 @@
 (function f () i64)
 (set (f) 0)
 (let x (f))
+
+(function g () i64)
+(fail (let y (g)))
