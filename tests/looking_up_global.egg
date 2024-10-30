@@ -1,0 +1,3 @@
+(function f () i64)
+(set (f) 0)
+(let x (f))
