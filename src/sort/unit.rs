@@ -22,7 +22,12 @@ impl Sort for UnitSort {
     }
 
     fn make_expr(&self, _egraph: &EGraph, value: Value) -> (Cost, Expr) {
-        assert_eq!(value.tag, self.name());
+        #[cfg(debug_assertions)]
+        debug_assert_eq!(value.tag, self.name());
+
+        #[cfg(not(debug_assertions))]
+        let _ = value;
+
         (1, GenericExpr::Lit(DUMMY_SPAN.clone(), Literal::Unit))
     }
 }
@@ -51,7 +56,12 @@ impl PrimitiveLike for NotEqualPrimitive {
             .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(
+        &self,
+        values: &[Value],
+        _sorts: (&[ArcSort], &ArcSort),
+        _egraph: Option<&mut EGraph>,
+    ) -> Option<Value> {
         (values[0] != values[1]).then(Value::unit)
     }
 }

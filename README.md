@@ -57,6 +57,22 @@ for the REPL.
 
 To run the tests use `make test`.
 
+## Benchmarks
+
+We run all of our "examples" [as benchmarks in codspeed](https://codspeed.io/egraphs-good/egglog). These are in CI
+for every commit in main and for all PRs. It will run the examples with extra instrumentation added so that it can
+capture a single trace of the CPU interactions ([src](https://docs.codspeed.io/features/understanding-the-metrics/)):
+
+> CodSpeed instruments your benchmarks to measure the performance of your code. A benchmark will be run only once and the CPU behavior will be simulated. This ensures that the measurement is as accurate as possible, taking into account not only the instructions executed but also the cache and memory access patterns. The simulation gives us an equivalent of the CPU cycles that includes cache and memory access.
+
+Since many of the shorter running benchmarks have unstable timings due to non deterministic performance ([like in the memory allocator](https://github.com/oxc-project/backlog/issues/89)),
+we ["ignore"](https://docs.codspeed.io/features/ignoring-benchmarks/) them in codspeed. That way, we still
+capture their performance, but their timings don't show up in our reports by default.
+
+We use 50ms as our cutoff currently, any benchmarks shorter than that are ignored. This number was selected to try to ignore
+any benchmarks with have changes > 1% when they haven't been modified. Note that all the ignoring is done manually,
+so if you add another example that's short, an admin on the codspeed project will need to manually ignore it.
+
 # Documentation
 
 To view documentation, run `cargo doc --open`.

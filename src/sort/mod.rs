@@ -24,6 +24,8 @@ mod vec;
 pub use vec::*;
 mod r#fn;
 pub use r#fn::*;
+mod multiset;
+pub use multiset::*;
 
 use crate::constraint::AllEqualTypeConstraint;
 use crate::extract::{Cost, Extractor};
@@ -51,10 +53,14 @@ pub trait Sort: Any + Send + Sync + Debug {
 
     // Only eq_container_sort need to implement this method,
     // which returns a list of ids to be tracked.
-    fn foreach_tracked_values<'a>(&'a self, value: &'a Value, mut f: Box<dyn FnMut(Value) + 'a>) {
+    fn foreach_tracked_values<'a>(
+        &'a self,
+        value: &'a Value,
+        mut f: Box<dyn FnMut(ArcSort, Value) + 'a>,
+    ) {
         for (sort, value) in self.inner_values(value) {
             if sort.is_eq_sort() {
-                f(value)
+                f(sort, value)
             }
         }
     }
@@ -62,7 +68,11 @@ pub trait Sort: Any + Send + Sync + Debug {
     // Sort-wise canonicalization. Return true if value is modified.
     // Only EqSort or containers of EqSort should override.
     fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
+        #[cfg(debug_assertions)]
         debug_assert_eq!(self.name(), value.tag);
+
+        #[cfg(not(debug_assertions))]
+        let _ = value;
         let _ = unionfind;
         false
     }
@@ -137,8 +147,10 @@ impl Sort for EqSort {
     }
 
     fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
+        #[cfg(debug_assertions)]
         debug_assert_eq!(self.name(), value.tag);
-        let bits = usize::from(unionfind.find(Id::from(value.bits as usize))) as u64;
+
+        let bits = unionfind.find(value.bits);
         if bits != value.bits {
             value.bits = bits;
             true
@@ -187,7 +199,12 @@ impl PrimitiveLike for ValueEq {
             .into_box()
     }
 
-    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(
+        &self,
+        values: &[Value],
+        _sorts: (&[ArcSort], &ArcSort),
+        _egraph: Option<&mut EGraph>,
+    ) -> Option<Value> {
         assert_eq!(values.len(), 2);
         if values[0] == values[1] {
             Some(Value::unit())

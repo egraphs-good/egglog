@@ -26,7 +26,12 @@ macro_rules! add_primitives {
                     SimpleTypeConstraint::new(self.name(), sorts, span.clone()).into_box()
                 }
 
-                fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
+                fn apply(
+                    &self,
+                    values: &[Value],
+                    _sorts: (&[ArcSort], &ArcSort),
+                    _egraph: Option<&mut EGraph>,
+                ) -> Option<Value> {
                     if let [$($param),*] = values {
                         $(let $param: $param_t = <$param_t as FromSort>::load(&self.$param, $param);)*
                         // print!("{}( ", $name);
