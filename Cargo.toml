@@ -33,9 +33,7 @@ log = "0.4"
 rustc-hash = "1.1"
 thiserror = "1"
 lazy_static = "1.4"
-num-integer = "0.1.45"
-num-rational = "0.4.1"
-num-traits = "0.2.15"
+num = "0.4.3"
 smallvec = "1.11"
 
 generic_symbolic_expressions = "5.0.4"
@@ -68,3 +66,6 @@ chrono = { version = "0.4", default-features = false, features = ["now"] }
 codspeed-criterion-compat = "2.7.2"
 glob = "0.3.1"
 libtest-mimic = "0.6.1"
+
+[profile.release]
+incremental = true

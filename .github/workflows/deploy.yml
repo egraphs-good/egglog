@@ -6,6 +6,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+    - name: Disable Incremental Build
+      run: echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
+
     - uses: actions/checkout@v3
 
     - name: Install wasm-pack
