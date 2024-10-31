@@ -180,7 +180,8 @@ impl Table {
                     value: next,
                     timestamp: ts,
                     subsumed: subsumed || prev_subsumed,
-                    cost: cost.or(prev_cost),
+                    // Take miminum of cost and prev_cost, if both exist
+                    cost: cost.or(prev_cost.map(|x| cost.map_or(x, |y| x.min(y)))),
                 },
             ));
             *off = new_offset;
