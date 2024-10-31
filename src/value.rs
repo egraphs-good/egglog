@@ -58,16 +58,6 @@ impl From<OrderedFloat<f64>> for Value {
     }
 }
 
-// impl From<String> for Value {
-//     fn from(s: String) -> Self {
-//         Self {
-//             #[cfg(debug_assertions)]
-//             tag: StringSort.name(),
-//             bits: NonZeroU32::from(s).get().into(),
-//         }
-//     }
-// }
-
 impl From<bool> for Value {
     fn from(b: bool) -> Self {
         Self {
