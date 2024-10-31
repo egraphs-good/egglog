@@ -93,7 +93,7 @@ impl Display for ResolvedVar {
 
 impl ToSexp for ResolvedVar {
     fn to_sexp(&self) -> Sexp {
-        Sexp::String(self.name.to_string())
+        Sexp::Symbol(self.name.to_string())
     }
 }
 
@@ -119,7 +119,7 @@ impl Display for ResolvedLiteral {
 
 impl ToSexp for ResolvedLiteral {
     fn to_sexp(&self) -> Sexp {
-        Sexp::String(self.literal.to_string())
+        Sexp::Symbol(self.literal.to_string())
     }
 }
 
@@ -279,10 +279,10 @@ impl<Head: Display, Leaf: Display, Lit: Display> GenericExpr<Head, Leaf, Lit> {
     /// Example: `(Add (Add 2 3) 4)`
     pub fn to_sexp(&self) -> Sexp {
         let res = match self {
-            GenericExpr::Lit(_ann, lit) => Sexp::String(lit.to_string()),
-            GenericExpr::Var(_ann, v) => Sexp::String(v.to_string()),
+            GenericExpr::Lit(_ann, lit) => Sexp::Symbol(lit.to_string()),
+            GenericExpr::Var(_ann, v) => Sexp::Symbol(v.to_string()),
             GenericExpr::Call(_ann, op, children) => Sexp::List(
-                vec![Sexp::String(op.to_string())]
+                vec![Sexp::Symbol(op.to_string())]
                     .into_iter()
                     .chain(children.iter().map(|c| c.to_sexp()))
                     .collect(),

@@ -217,25 +217,25 @@ pub trait ToSexp {
 
 impl ToSexp for str {
     fn to_sexp(&self) -> Sexp {
-        Sexp::String(String::from(self))
+        Sexp::Symbol(String::from(self))
     }
 }
 
 impl ToSexp for String {
     fn to_sexp(&self) -> Sexp {
-        Sexp::String(self.to_string())
+        Sexp::Symbol(self.to_string())
     }
 }
 
 impl ToSexp for usize {
     fn to_sexp(&self) -> Sexp {
-        Sexp::String(self.to_string())
+        Sexp::Symbol(self.to_string())
     }
 }
 
 impl ToSexp for Literal {
     fn to_sexp(&self) -> Sexp {
-        Sexp::String(self.to_string())
+        Sexp::Symbol(self.to_string())
     }
 }
 

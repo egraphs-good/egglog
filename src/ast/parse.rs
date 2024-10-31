@@ -818,6 +818,7 @@ mod tests {
     fn test_parser_display_roundtrip() {
         let s = r#"(f (g a 3) 4.0 (H "hello"))"#;
         let e = crate::ast::parse_expr(None, s).unwrap();
+        println!("{}", e.to_sexp());
         assert_eq!(format!("{}", e), s);
     }
 }

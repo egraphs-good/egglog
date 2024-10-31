@@ -118,7 +118,7 @@ impl Display for ResolvedCall {
 
 impl ToSexp for ResolvedCall {
     fn to_sexp(&self) -> Sexp {
-        Sexp::String(self.to_string())
+        Sexp::Symbol(self.to_string())
     }
 }
 
