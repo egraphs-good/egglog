@@ -10,7 +10,7 @@ use crate::{
     sort::I64Sort,
     typechecking::TypeError,
     util::{FreshGen, HashSet, StringGen},
-    ArcSort, CorrespondingVar, Literal, Span, StringSort, TypeInfo, DUMMY_SPAN,
+    ArcSort, CorrespondingVar, Literal, Span, TypeInfo, DUMMY_SPAN,
 };
 use core::{hash::Hash, panic};
 // Use immutable hashmap for performance
@@ -246,7 +246,7 @@ impl Assignment<AtomTerm, ArcSort> {
                 span.clone(),
                 crate::ResolvedLiteral {
                     literal: literal.clone(),
-                    sort: literal_sort(&literal, typeinfo.get_sort_nofail::<StringSort>()),
+                    sort: literal_sort(&literal, typeinfo),
                 },
             ),
             GenericExpr::Var(span, var) => {
@@ -694,7 +694,7 @@ fn get_literal_and_global_constraints<'a>(
             AtomTerm::Var(_, _) => None,
             // Literal to type constraint
             AtomTerm::Literal(_, lit) => {
-                let typ = crate::sort::literal_sort(lit, type_info.get_sort_nofail::<StringSort>());
+                let typ = crate::sort::literal_sort(lit, type_info);
                 Some(Constraint::Assign(arg.clone(), typ))
             }
             AtomTerm::Global(_, v) => {
