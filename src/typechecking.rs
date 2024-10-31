@@ -4,7 +4,7 @@ use hashbrown::hash_map::Entry;
 
 #[derive(Clone, Debug)]
 pub struct FuncType {
-    pub name: Symbol,
+    pub name: String,
     pub input: Vec<ArcSort>,
     pub output: ArcSort,
     pub is_datatype: bool,
@@ -16,13 +16,13 @@ pub struct FuncType {
 #[derive(Clone)]
 pub struct TypeInfo {
     // get the sort from the sorts name()
-    pub presorts: HashMap<Symbol, PreSort>,
+    pub presorts: HashMap<String, PreSort>,
     // TODO(yz): I want to get rid of this as now we have user-defined primitives and constraint based type checking
-    pub reserved_primitives: HashSet<Symbol>,
-    pub sorts: HashMap<Symbol, Arc<dyn Sort>>,
-    pub primitives: HashMap<Symbol, Vec<Primitive>>,
-    pub func_types: HashMap<Symbol, FuncType>,
-    pub global_types: HashMap<Symbol, ArcSort>,
+    pub reserved_primitives: HashSet<String>,
+    pub sorts: HashMap<String, Arc<dyn Sort>>,
+    pub primitives: HashMap<String, Vec<Primitive>>,
+    pub func_types: HashMap<String, FuncType>,
+    pub global_types: HashMap<String, ArcSort>,
 }
 
 impl Default for TypeInfo {
@@ -37,7 +37,8 @@ impl Default for TypeInfo {
         };
 
         res.add_sort(UnitSort, DUMMY_SPAN.clone()).unwrap();
-        res.add_sort(StringSort, DUMMY_SPAN.clone()).unwrap();
+        res.add_sort(StringSort::default(), DUMMY_SPAN.clone())
+            .unwrap();
         res.add_sort(BoolSort, DUMMY_SPAN.clone()).unwrap();
         res.add_sort(I64Sort, DUMMY_SPAN.clone()).unwrap();
         res.add_sort(F64Sort, DUMMY_SPAN.clone()).unwrap();
@@ -63,7 +64,7 @@ impl TypeInfo {
     /// Adds a sort constructor to the typechecker's known set of types.
     pub fn add_presort<S: Presort>(&mut self, span: Span) -> Result<(), TypeError> {
         let name = S::presort_name();
-        match self.presorts.entry(name) {
+        match self.presorts.entry(name.clone()) {
             Entry::Occupied(_) => Err(TypeError::SortAlreadyBound(name, span)),
             Entry::Vacant(e) => {
                 e.insert(S::make_sort);
@@ -76,7 +77,7 @@ impl TypeInfo {
     pub fn add_arcsort(&mut self, sort: ArcSort, span: Span) -> Result<(), TypeError> {
         let name = sort.name();
 
-        match self.sorts.entry(name) {
+        match self.sorts.entry(name.clone()) {
             Entry::Occupied(_) => Err(TypeError::SortAlreadyBound(name, span)),
             Entry::Vacant(e) => {
                 e.insert(sort.clone());
@@ -115,7 +116,7 @@ impl TypeInfo {
 
     pub(crate) fn typecheck_program(
         &mut self,
-        symbol_gen: &mut SymbolGen,
+        symbol_gen: &mut StringGen,
         program: &Vec<NCommand>,
     ) -> Result<Vec<ResolvedNCommand>, TypeError> {
         let mut result = vec![];
@@ -135,7 +136,7 @@ impl TypeInfo {
                 if let Some(sort) = self.sorts.get(name) {
                     Ok(sort.clone())
                 } else {
-                    Err(TypeError::UndefinedSort(*name, func.span.clone()))
+                    Err(TypeError::UndefinedSort(name.clone(), func.span.clone()))
                 }
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -143,13 +144,13 @@ impl TypeInfo {
             Ok(sort.clone())
         } else {
             Err(TypeError::UndefinedSort(
-                func.schema.output,
+                func.schema.output.clone(),
                 func.span.clone(),
             ))
         }?;
 
         Ok(FuncType {
-            name: func.name,
+            name: func.name.clone(),
             input,
             output: output.clone(),
             is_datatype: output.is_eq_sort() && func.merge.is_none() && func.default.is_none(),
@@ -159,7 +160,7 @@ impl TypeInfo {
 
     fn typecheck_command(
         &mut self,
-        symbol_gen: &mut SymbolGen,
+        symbol_gen: &mut StringGen,
         command: &NCommand,
     ) -> Result<ResolvedNCommand, TypeError> {
         let command: ResolvedNCommand =
@@ -173,21 +174,21 @@ impl TypeInfo {
                     name,
                 } => ResolvedNCommand::NormRule {
                     rule: self.typecheck_rule(symbol_gen, rule)?,
-                    ruleset: *ruleset,
-                    name: *name,
+                    ruleset: ruleset.clone(),
+                    name: name.clone(),
                 },
                 NCommand::Sort(span, sort, presort_and_args) => {
                     // Note this is bad since typechecking should be pure and idempotent
                     // Otherwise typechecking the same program twice will fail
-                    self.declare_sort(*sort, presort_and_args, span.clone())?;
-                    ResolvedNCommand::Sort(span.clone(), *sort, presort_and_args.clone())
+                    self.declare_sort(sort.clone(), presort_and_args, span.clone())?;
+                    ResolvedNCommand::Sort(span.clone(), sort.clone(), presort_and_args.clone())
                 }
                 NCommand::CoreAction(Action::Let(span, var, expr)) => {
                     let expr = self.typecheck_expr(symbol_gen, expr, &Default::default())?;
                     let output_type = expr.output_type();
-                    self.global_types.insert(*var, output_type.clone());
+                    self.global_types.insert(var.clone(), output_type.clone());
                     let var = ResolvedVar {
-                        name: *var,
+                        name: var.clone(),
                         sort: output_type,
                         // not a global reference, but a global binding
                         is_global_ref: false,
@@ -211,19 +212,22 @@ impl TypeInfo {
                 NCommand::Push(n) => ResolvedNCommand::Push(*n),
                 NCommand::SetOption { name, value } => {
                     let value = self.typecheck_expr(symbol_gen, value, &Default::default())?;
-                    ResolvedNCommand::SetOption { name: *name, value }
+                    ResolvedNCommand::SetOption {
+                        name: name.clone(),
+                        value,
+                    }
                 }
-                NCommand::AddRuleset(ruleset) => ResolvedNCommand::AddRuleset(*ruleset),
+                NCommand::AddRuleset(ruleset) => ResolvedNCommand::AddRuleset(ruleset.clone()),
                 NCommand::UnstableCombinedRuleset(name, sub_rulesets) => {
-                    ResolvedNCommand::UnstableCombinedRuleset(*name, sub_rulesets.clone())
+                    ResolvedNCommand::UnstableCombinedRuleset(name.clone(), sub_rulesets.clone())
                 }
                 NCommand::PrintOverallStatistics => ResolvedNCommand::PrintOverallStatistics,
                 NCommand::PrintTable(span, table, size) => {
-                    ResolvedNCommand::PrintTable(span.clone(), *table, *size)
+                    ResolvedNCommand::PrintTable(span.clone(), table.clone(), *size)
                 }
                 NCommand::PrintSize(span, n) => {
                     // Should probably also resolve the function symbol here
-                    ResolvedNCommand::PrintSize(span.clone(), *n)
+                    ResolvedNCommand::PrintSize(span.clone(), n.clone())
                 }
                 NCommand::Output { span, file, exprs } => {
                     let exprs = exprs
@@ -238,7 +242,7 @@ impl TypeInfo {
                 }
                 NCommand::Input { span, name, file } => ResolvedNCommand::Input {
                     span: span.clone(),
-                    name: *name,
+                    name: name.clone(),
                     file: file.clone(),
                 },
             };
@@ -247,22 +251,25 @@ impl TypeInfo {
 
     fn typecheck_function(
         &mut self,
-        symbol_gen: &mut SymbolGen,
+        symbol_gen: &mut StringGen,
         fdecl: &FunctionDecl,
     ) -> Result<ResolvedFunctionDecl, TypeError> {
         if self.sorts.contains_key(&fdecl.name) {
-            return Err(TypeError::SortAlreadyBound(fdecl.name, fdecl.span.clone()));
+            return Err(TypeError::SortAlreadyBound(
+                fdecl.name.clone(),
+                fdecl.span.clone(),
+            ));
         }
-        if self.is_primitive(fdecl.name) {
+        if self.is_primitive(fdecl.name.clone()) {
             return Err(TypeError::PrimitiveAlreadyBound(
-                fdecl.name,
+                fdecl.name.clone(),
                 fdecl.span.clone(),
             ));
         }
         let ftype = self.function_to_functype(fdecl)?;
-        if self.func_types.insert(fdecl.name, ftype).is_some() {
+        if self.func_types.insert(fdecl.name.clone(), ftype).is_some() {
             return Err(TypeError::FunctionAlreadyBound(
-                fdecl.name,
+                fdecl.name.clone(),
                 fdecl.span.clone(),
             ));
         }
@@ -272,7 +279,7 @@ impl TypeInfo {
         bound_vars.insert("new".into(), (DUMMY_SPAN.clone(), output_type.clone()));
 
         Ok(ResolvedFunctionDecl {
-            name: fdecl.name,
+            name: fdecl.name.clone(),
             schema: fdecl.schema.clone(),
             merge: match &fdecl.merge {
                 Some(merge) => Some(self.typecheck_expr(symbol_gen, merge, &bound_vars)?),
@@ -293,7 +300,7 @@ impl TypeInfo {
 
     fn typecheck_schedule(
         &self,
-        symbol_gen: &mut SymbolGen,
+        symbol_gen: &mut StringGen,
         schedule: &Schedule,
     ) -> Result<ResolvedSchedule, TypeError> {
         let schedule = match schedule {
@@ -321,7 +328,7 @@ impl TypeInfo {
                 ResolvedSchedule::Run(
                     span.clone(),
                     ResolvedRunConfig {
-                        ruleset: *ruleset,
+                        ruleset: ruleset.clone(),
                         until,
                     },
                 )
@@ -333,8 +340,8 @@ impl TypeInfo {
 
     pub fn declare_sort(
         &mut self,
-        name: impl Into<Symbol>,
-        presort_and_args: &Option<(Symbol, Vec<Expr>)>,
+        name: impl Into<String>,
+        presort_and_args: &Option<(String, Vec<Expr>)>,
         span: Span,
     ) -> Result<(), TypeError> {
         let name = name.into();
@@ -347,7 +354,7 @@ impl TypeInfo {
                 if let Some(mksort) = self.presorts.get(presort) {
                     mksort(self, name, args)?
                 } else {
-                    return Err(TypeError::PresortNotFound(*presort, span));
+                    return Err(TypeError::PresortNotFound(presort.clone(), span));
                 }
             }
             None => Arc::new(EqSort { name }),
@@ -357,7 +364,7 @@ impl TypeInfo {
 
     fn typecheck_rule(
         &self,
-        symbol_gen: &mut SymbolGen,
+        symbol_gen: &mut StringGen,
         rule: &Rule,
     ) -> Result<ResolvedRule, TypeError> {
         let Rule { span, head, body } = rule;
@@ -396,7 +403,7 @@ impl TypeInfo {
 
     fn typecheck_facts(
         &self,
-        symbol_gen: &mut SymbolGen,
+        symbol_gen: &mut StringGen,
         facts: &[Fact],
     ) -> Result<Vec<ResolvedFact>, TypeError> {
         let (query, mapped_facts) = Facts(facts.to_vec()).to_query(self, symbol_gen);
@@ -411,9 +418,9 @@ impl TypeInfo {
 
     fn typecheck_actions(
         &self,
-        symbol_gen: &mut SymbolGen,
+        symbol_gen: &mut StringGen,
         actions: &Actions,
-        binding: &IndexMap<Symbol, (Span, ArcSort)>,
+        binding: &IndexMap<String, (Span, ArcSort)>,
     ) -> Result<ResolvedActions, TypeError> {
         let mut binding_set = binding.keys().cloned().collect::<IndexSet<_>>();
         let (actions, mapped_action) =
@@ -425,7 +432,7 @@ impl TypeInfo {
 
         // add bindings from the context
         for (var, (span, sort)) in binding {
-            problem.assign_local_var_type(*var, span.clone(), sort.clone())?;
+            problem.assign_local_var_type(var.clone(), span.clone(), sort.clone())?;
         }
 
         let assignment = problem
@@ -438,9 +445,9 @@ impl TypeInfo {
 
     fn typecheck_expr(
         &self,
-        symbol_gen: &mut SymbolGen,
+        symbol_gen: &mut StringGen,
         expr: &Expr,
-        binding: &IndexMap<Symbol, (Span, ArcSort)>,
+        binding: &IndexMap<String, (Span, ArcSort)>,
     ) -> Result<ResolvedExpr, TypeError> {
         let action = Action::Expr(DUMMY_SPAN.clone(), expr.clone());
         let typechecked_action = self.typecheck_action(symbol_gen, &action, binding)?;
@@ -452,9 +459,9 @@ impl TypeInfo {
 
     fn typecheck_action(
         &self,
-        symbol_gen: &mut SymbolGen,
+        symbol_gen: &mut StringGen,
         action: &Action,
-        binding: &IndexMap<Symbol, (Span, ArcSort)>,
+        binding: &IndexMap<String, (Span, ArcSort)>,
     ) -> Result<ResolvedAction, TypeError> {
         self.typecheck_actions(symbol_gen, &Actions::singleton(action.clone()), binding)
             .map(|mut v| {
@@ -463,19 +470,19 @@ impl TypeInfo {
             })
     }
 
-    pub fn lookup_global(&self, sym: &Symbol) -> Option<ArcSort> {
+    pub fn lookup_global(&self, sym: &String) -> Option<ArcSort> {
         self.global_types.get(sym).cloned()
     }
 
-    pub(crate) fn is_primitive(&self, sym: Symbol) -> bool {
+    pub(crate) fn is_primitive(&self, sym: String) -> bool {
         self.primitives.contains_key(&sym) || self.reserved_primitives.contains(&sym)
     }
 
-    pub(crate) fn lookup_user_func(&self, sym: Symbol) -> Option<FuncType> {
+    pub(crate) fn lookup_user_func(&self, sym: String) -> Option<FuncType> {
         self.func_types.get(&sym).cloned()
     }
 
-    pub(crate) fn is_global(&self, sym: Symbol) -> bool {
+    pub(crate) fn is_global(&self, sym: String) -> bool {
         self.global_types.contains_key(&sym)
     }
 }
@@ -494,27 +501,27 @@ pub enum TypeError {
         actual: ArcSort,
     },
     #[error("{1}\nUnbound symbol {0}")]
-    Unbound(Symbol, Span),
+    Unbound(String, Span),
     #[error("{1}\nUndefined sort {0}")]
-    UndefinedSort(Symbol, Span),
+    UndefinedSort(String, Span),
     #[error("{2}\nSort {0} definition is disallowed: {1}")]
-    DisallowedSort(Symbol, String, Span),
+    DisallowedSort(String, String, Span),
     #[error("{1}\nUnbound function {0}")]
-    UnboundFunction(Symbol, Span),
+    UnboundFunction(String, Span),
     #[error("{1}\nFunction already bound {0}")]
-    FunctionAlreadyBound(Symbol, Span),
+    FunctionAlreadyBound(String, Span),
     #[error("{1}\nSort {0} already declared.")]
-    SortAlreadyBound(Symbol, Span),
+    SortAlreadyBound(String, Span),
     #[error("{1}\nPrimitive {0} already declared.")]
-    PrimitiveAlreadyBound(Symbol, Span),
+    PrimitiveAlreadyBound(String, Span),
     #[error("Function type mismatch: expected {} => {}, actual {} => {}", .1.iter().map(|s| s.name().to_string()).collect::<Vec<_>>().join(", "), .0.name(), .3.iter().map(|s| s.name().to_string()).collect::<Vec<_>>().join(", "), .2.name())]
     FunctionTypeMismatch(ArcSort, Vec<ArcSort>, ArcSort, Vec<ArcSort>),
     #[error("{1}\nPresort {0} not found.")]
-    PresortNotFound(Symbol, Span),
+    PresortNotFound(String, Span),
     #[error("{}\nFailed to infer a type for: {0}", .0.span())]
     InferenceFailure(Expr),
     #[error("{1}\nVariable {0} was already defined")]
-    AlreadyDefined(Symbol, Span),
+    AlreadyDefined(String, Span),
     #[error("All alternative definitions considered failed\n{}", .0.iter().map(|e| format!("  {e}\n")).collect::<Vec<_>>().join(""))]
     AllAlternativeFailed(Vec<TypeError>),
 }

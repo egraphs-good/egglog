@@ -18,15 +18,15 @@ use typechecking::TypeError;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum HeadOrEq<Head> {
-    Symbol(Head),
+    String(Head),
     Eq,
 }
 
-pub(crate) type SymbolOrEq = HeadOrEq<Symbol>;
+pub(crate) type StringOrEq = HeadOrEq<String>;
 
-impl From<Symbol> for SymbolOrEq {
-    fn from(value: Symbol) -> Self {
-        SymbolOrEq::Symbol(value)
+impl From<String> for StringOrEq {
+    fn from(value: String) -> Self {
+        StringOrEq::String(value)
     }
 }
 
@@ -49,15 +49,6 @@ pub(crate) enum ResolvedCall {
     Primitive(SpecializedPrimitive),
 }
 
-impl SymbolLike for ResolvedCall {
-    fn to_symbol(&self) -> Symbol {
-        match self {
-            ResolvedCall::Func(f) => f.name,
-            ResolvedCall::Primitive(prim) => prim.primitive.0.name(),
-        }
-    }
-}
-
 impl ResolvedCall {
     pub fn output(&self) -> &ArcSort {
         match self {
@@ -70,7 +61,7 @@ impl ResolvedCall {
     // As a result, it only requires input argument types, so types.len() == func.input.len(),
     // while for `from_resolution`, types.len() == func.input.len() + 1 to account for the output type
     pub fn from_resolution_func_types(
-        head: &Symbol,
+        head: &String,
         types: &[ArcSort],
         typeinfo: &TypeInfo,
     ) -> Option<ResolvedCall> {
@@ -85,7 +76,7 @@ impl ResolvedCall {
         None
     }
 
-    pub fn from_resolution(head: &Symbol, types: &[ArcSort], typeinfo: &TypeInfo) -> ResolvedCall {
+    pub fn from_resolution(head: &String, types: &[ArcSort], typeinfo: &TypeInfo) -> ResolvedCall {
         let mut resolved_call = Vec::with_capacity(1);
         if let Some(ty) = typeinfo.func_types.get(head) {
             let expected = ty.input.iter().chain(once(&ty.output)).map(|s| s.name());
@@ -127,21 +118,41 @@ impl Display for ResolvedCall {
 
 impl ToSexp for ResolvedCall {
     fn to_sexp(&self) -> Sexp {
-        Sexp::Symbol(self.to_string())
+        Sexp::String(self.to_string())
+    }
+}
+
+pub(crate) trait CreateUnit {
+    fn unit() -> Self;
+}
+
+impl CreateUnit for Literal {
+    fn unit() -> Self {
+        Literal::Unit
+    }
+}
+
+impl CreateUnit for ResolvedLiteral {
+    fn unit() -> Self {
+        ResolvedLiteral {
+            literal: Literal::Unit,
+            sort: Arc::new(UnitSort),
+        }
     }
 }
 
 #[derive(Debug, Clone)]
-pub enum GenericAtomTerm<Leaf> {
+pub enum GenericAtomTerm<Leaf, Lit> {
     Var(Span, Leaf),
-    Literal(Span, Literal),
+    Literal(Span, Lit),
     Global(Span, Leaf),
 }
 
 // Ignores annotations for equality and hasing
-impl<Leaf> PartialEq for GenericAtomTerm<Leaf>
+impl<Leaf, Lit> PartialEq for GenericAtomTerm<Leaf, Lit>
 where
     Leaf: PartialEq,
+    Lit: PartialEq,
 {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
@@ -153,11 +164,17 @@ where
     }
 }
 
-impl<Leaf> Eq for GenericAtomTerm<Leaf> where Leaf: Eq {}
+impl<Leaf, Lit> Eq for GenericAtomTerm<Leaf, Lit>
+where
+    Leaf: Eq,
+    Lit: Eq,
+{
+}
 
-impl<Leaf> Hash for GenericAtomTerm<Leaf>
+impl<Leaf, Lit> Hash for GenericAtomTerm<Leaf, Lit>
 where
     Leaf: Hash,
+    Lit: Hash,
 {
     fn hash<H: Hasher>(&self, state: &mut H) {
         match self {
@@ -168,10 +185,10 @@ where
     }
 }
 
-pub type AtomTerm = GenericAtomTerm<Symbol>;
-pub type ResolvedAtomTerm = GenericAtomTerm<ResolvedVar>;
+pub type AtomTerm = GenericAtomTerm<String, Literal>;
+pub type ResolvedAtomTerm = GenericAtomTerm<ResolvedVar, ResolvedLiteral>;
 
-impl<Leaf> GenericAtomTerm<Leaf> {
+impl<Leaf, Lit> GenericAtomTerm<Leaf, Lit> {
     pub fn span(&self) -> &Span {
         match self {
             GenericAtomTerm::Var(span, _) => span,
@@ -181,8 +198,8 @@ impl<Leaf> GenericAtomTerm<Leaf> {
     }
 }
 
-impl<Leaf: Clone> GenericAtomTerm<Leaf> {
-    pub fn to_expr<Head>(&self) -> GenericExpr<Head, Leaf> {
+impl<Leaf: Clone, Lit: Clone> GenericAtomTerm<Leaf, Lit> {
+    pub fn to_expr<Head>(&self) -> GenericExpr<Head, Leaf, Lit> {
         match self {
             GenericAtomTerm::Var(span, v) => GenericExpr::Var(span.clone(), v.clone()),
             GenericAtomTerm::Literal(span, l) => GenericExpr::Lit(span.clone(), l.clone()),
@@ -195,7 +212,7 @@ impl ResolvedAtomTerm {
     pub fn output(&self) -> ArcSort {
         match self {
             ResolvedAtomTerm::Var(_, v) => v.sort.clone(),
-            ResolvedAtomTerm::Literal(_, l) => literal_sort(l),
+            ResolvedAtomTerm::Literal(_, l) => l.sort.clone(),
             ResolvedAtomTerm::Global(_, v) => v.sort.clone(),
         }
     }
@@ -212,13 +229,13 @@ impl std::fmt::Display for AtomTerm {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct GenericAtom<Head, Leaf> {
+pub struct GenericAtom<Head, Leaf, Lit> {
     pub span: Span,
     pub head: Head,
-    pub args: Vec<GenericAtomTerm<Leaf>>,
+    pub args: Vec<GenericAtomTerm<Leaf, Lit>>,
 }
 
-pub type Atom<T> = GenericAtom<T, Symbol>;
+pub type Atom<T> = GenericAtom<T, String, Literal>;
 
 impl<T: std::fmt::Display> std::fmt::Display for Atom<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -226,10 +243,11 @@ impl<T: std::fmt::Display> std::fmt::Display for Atom<T> {
     }
 }
 
-impl<Head, Leaf> GenericAtom<Head, Leaf>
+impl<Head, Leaf, Lit> GenericAtom<Head, Leaf, Lit>
 where
     Leaf: Clone + Eq + Hash,
     Head: Clone,
+    Lit: Clone,
 {
     pub fn vars(&self) -> impl Iterator<Item = Leaf> + '_ {
         self.args.iter().filter_map(|t| match t {
@@ -239,7 +257,7 @@ where
         })
     }
 
-    fn subst(&mut self, subst: &HashMap<Leaf, GenericAtomTerm<Leaf>>) {
+    fn subst(&mut self, subst: &HashMap<Leaf, GenericAtomTerm<Leaf, Lit>>) {
         for arg in self.args.iter_mut() {
             match arg {
                 GenericAtomTerm::Var(_, v) => {
@@ -253,12 +271,12 @@ where
         }
     }
 }
-impl Atom<Symbol> {
+impl Atom<String> {
     pub(crate) fn to_expr(&self) -> Expr {
         let n = self.args.len();
         Expr::Call(
             self.span.clone(),
-            self.head,
+            self.head.clone(),
             self.args[0..n - 1]
                 .iter()
                 .map(|arg| arg.to_expr())
@@ -268,11 +286,11 @@ impl Atom<Symbol> {
 }
 
 #[derive(Debug, Clone)]
-pub struct Query<Head, Leaf> {
-    pub atoms: Vec<GenericAtom<Head, Leaf>>,
+pub struct Query<Head, Leaf, Lit> {
+    pub atoms: Vec<GenericAtom<Head, Leaf, Lit>>,
 }
 
-impl<Head, Leaf> Default for Query<Head, Leaf> {
+impl<Head, Leaf, Lit> Default for Query<Head, Leaf, Lit> {
     fn default() -> Self {
         Self {
             atoms: Default::default(),
@@ -280,7 +298,7 @@ impl<Head, Leaf> Default for Query<Head, Leaf> {
     }
 }
 
-impl Query<SymbolOrEq, Symbol> {
+impl Query<StringOrEq, String, Literal> {
     pub fn get_constraints(
         &self,
         type_info: &TypeInfo,
@@ -300,10 +318,11 @@ impl Query<SymbolOrEq, Symbol> {
     }
 }
 
-impl<Head, Leaf> Query<Head, Leaf>
+impl<Head, Leaf, Lit> Query<Head, Leaf, Lit>
 where
     Leaf: Eq + Clone + Hash,
     Head: Clone,
+    Lit: Clone,
 {
     pub(crate) fn get_vars(&self) -> IndexSet<Leaf> {
         self.atoms
@@ -313,13 +332,13 @@ where
     }
 }
 
-impl<Head, Leaf> AddAssign for Query<Head, Leaf> {
+impl<Head, Leaf, Lit> AddAssign for Query<Head, Leaf, Lit> {
     fn add_assign(&mut self, rhs: Self) {
         self.atoms.extend(rhs.atoms);
     }
 }
 
-impl std::fmt::Display for Query<Symbol, Symbol> {
+impl std::fmt::Display for Query<String, String, Literal> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for atom in &self.atoms {
             writeln!(f, "{atom}")?;
@@ -328,7 +347,7 @@ impl std::fmt::Display for Query<Symbol, Symbol> {
     }
 }
 
-impl std::fmt::Display for Query<ResolvedCall, Symbol> {
+impl std::fmt::Display for Query<ResolvedCall, String, Literal> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for atom in self.funcs() {
             writeln!(f, "{atom}")?;
@@ -349,8 +368,10 @@ impl std::fmt::Display for Query<ResolvedCall, Symbol> {
     }
 }
 
-impl<Leaf: Clone> Query<ResolvedCall, Leaf> {
-    pub fn filters(&self) -> impl Iterator<Item = GenericAtom<SpecializedPrimitive, Leaf>> + '_ {
+impl<Leaf: Clone, Lit: Clone> Query<ResolvedCall, Leaf, Lit> {
+    pub fn filters(
+        &self,
+    ) -> impl Iterator<Item = GenericAtom<SpecializedPrimitive, Leaf, Lit>> + '_ {
         self.atoms.iter().filter_map(|atom| match &atom.head {
             ResolvedCall::Func(_) => None,
             ResolvedCall::Primitive(head) => Some(GenericAtom {
@@ -361,11 +382,11 @@ impl<Leaf: Clone> Query<ResolvedCall, Leaf> {
         })
     }
 
-    pub fn funcs(&self) -> impl Iterator<Item = GenericAtom<Symbol, Leaf>> + '_ {
+    pub fn funcs(&self) -> impl Iterator<Item = GenericAtom<String, Leaf, Lit>> + '_ {
         self.atoms.iter().filter_map(|atom| match &atom.head {
             ResolvedCall::Func(head) => Some(GenericAtom {
                 span: atom.span.clone(),
-                head: head.name,
+                head: head.name.clone(),
                 args: atom.args.clone(),
             }),
             ResolvedCall::Primitive(_) => None,
@@ -374,38 +395,40 @@ impl<Leaf: Clone> Query<ResolvedCall, Leaf> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum GenericCoreAction<Head, Leaf> {
-    Let(Span, Leaf, Head, Vec<GenericAtomTerm<Leaf>>),
-    LetAtomTerm(Span, Leaf, GenericAtomTerm<Leaf>),
-    Extract(Span, GenericAtomTerm<Leaf>, GenericAtomTerm<Leaf>),
+pub enum GenericCoreAction<Head, Leaf, Lit> {
+    Let(Span, Leaf, Head, Vec<GenericAtomTerm<Leaf, Lit>>),
+    LetAtomTerm(Span, Leaf, GenericAtomTerm<Leaf, Lit>),
+    Extract(Span, GenericAtomTerm<Leaf, Lit>, GenericAtomTerm<Leaf, Lit>),
     Set(
         Span,
         Head,
-        Vec<GenericAtomTerm<Leaf>>,
-        GenericAtomTerm<Leaf>,
+        Vec<GenericAtomTerm<Leaf, Lit>>,
+        GenericAtomTerm<Leaf, Lit>,
     ),
-    Change(Span, Change, Head, Vec<GenericAtomTerm<Leaf>>),
-    Union(Span, GenericAtomTerm<Leaf>, GenericAtomTerm<Leaf>),
+    Change(Span, Change, Head, Vec<GenericAtomTerm<Leaf, Lit>>),
+    Union(Span, GenericAtomTerm<Leaf, Lit>, GenericAtomTerm<Leaf, Lit>),
     Panic(Span, String),
 }
 
-pub type CoreAction = GenericCoreAction<Symbol, Symbol>;
+pub type CoreAction = GenericCoreAction<String, String, Literal>;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct GenericCoreActions<Head, Leaf>(pub(crate) Vec<GenericCoreAction<Head, Leaf>>);
-pub(crate) type ResolvedCoreActions = GenericCoreActions<ResolvedCall, ResolvedVar>;
+pub struct GenericCoreActions<Head, Leaf, Lit>(pub(crate) Vec<GenericCoreAction<Head, Leaf, Lit>>);
+pub(crate) type ResolvedCoreActions =
+    GenericCoreActions<ResolvedCall, ResolvedVar, ResolvedLiteral>;
 
-impl<Head, Leaf> Default for GenericCoreActions<Head, Leaf> {
+impl<Head, Leaf, Lit> Default for GenericCoreActions<Head, Leaf, Lit> {
     fn default() -> Self {
         Self(vec![])
     }
 }
 
-impl<Head, Leaf> GenericCoreActions<Head, Leaf>
+impl<Head, Leaf, Lit> GenericCoreActions<Head, Leaf, Lit>
 where
     Leaf: Clone,
+    Lit: Clone,
 {
-    pub(crate) fn subst(&mut self, subst: &HashMap<Leaf, GenericAtomTerm<Leaf>>) {
+    pub(crate) fn subst(&mut self, subst: &HashMap<Leaf, GenericAtomTerm<Leaf, Lit>>) {
         let actions = subst.iter().map(|(symbol, atom_term)| {
             GenericCoreAction::LetAtomTerm(
                 atom_term.span().clone(),
@@ -417,28 +440,37 @@ where
         self.0 = actions.chain(existing_actions).collect();
     }
 
-    fn new(actions: Vec<GenericCoreAction<Head, Leaf>>) -> GenericCoreActions<Head, Leaf> {
+    fn new(
+        actions: Vec<GenericCoreAction<Head, Leaf, Lit>>,
+    ) -> GenericCoreActions<Head, Leaf, Lit> {
         Self(actions)
     }
 }
 
 #[allow(clippy::type_complexity)]
-impl<Head, Leaf> GenericActions<Head, Leaf>
+impl<Head, Leaf, Lit> GenericActions<Head, Leaf, Lit>
 where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
+    Lit: Clone + Display,
 {
-    pub(crate) fn to_core_actions<FG: FreshGen<Head, Leaf>>(
+    pub(crate) fn to_core_actions<FG: FreshGen<Head, Leaf, Lit>>(
         &self,
         typeinfo: &TypeInfo,
         binding: &mut IndexSet<Leaf>,
         fresh_gen: &mut FG,
-    ) -> Result<(GenericCoreActions<Head, Leaf>, MappedActions<Head, Leaf>), TypeError>
+    ) -> Result<
+        (
+            GenericCoreActions<Head, Leaf, Lit>,
+            MappedActions<Head, Leaf, Lit>,
+        ),
+        TypeError,
+    >
     where
-        Leaf: SymbolLike,
+        Leaf: ToString,
     {
         let mut norm_actions = vec![];
-        let mut mapped_actions: MappedActions<Head, Leaf> = GenericActions(vec![]);
+        let mut mapped_actions: MappedActions<Head, Leaf, Lit> = GenericActions(vec![]);
 
         // During the lowering, there are two important guaratees:
         //   Every used variable should be bound.
@@ -447,7 +479,7 @@ where
             match action {
                 GenericAction::Let(span, var, expr) => {
                     if binding.contains(var) {
-                        return Err(TypeError::AlreadyDefined(var.to_symbol(), span.clone()));
+                        return Err(TypeError::AlreadyDefined(var.to_string(), span.clone()));
                     }
                     let (actions, mapped_expr) =
                         expr.to_core_actions(typeinfo, binding, fresh_gen)?;
@@ -565,21 +597,22 @@ where
     }
 }
 
-impl<Head, Leaf> GenericExpr<Head, Leaf>
+impl<Head, Leaf, Lit> GenericExpr<Head, Leaf, Lit>
 where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash,
+    Lit: Clone + Display,
 {
     pub(crate) fn to_query(
         &self,
         typeinfo: &TypeInfo,
-        fresh_gen: &mut impl FreshGen<Head, Leaf>,
+        fresh_gen: &mut impl FreshGen<Head, Leaf, Lit>,
     ) -> (
-        Vec<GenericAtom<HeadOrEq<Head>, Leaf>>,
-        MappedExpr<Head, Leaf>,
+        Vec<GenericAtom<HeadOrEq<Head>, Leaf, Lit>>,
+        MappedExpr<Head, Leaf, Lit>,
     )
     where
-        Leaf: SymbolLike,
+        Leaf: ToString,
     {
         match self {
             GenericExpr::Lit(span, lit) => (vec![], GenericExpr::Lit(span.clone(), lit.clone())),
@@ -602,7 +635,7 @@ where
                 };
                 atoms.push(GenericAtom {
                     span: span.clone(),
-                    head: HeadOrEq::Symbol(f.clone()),
+                    head: HeadOrEq::String(f.clone()),
                     args,
                 });
                 (
@@ -617,14 +650,20 @@ where
         }
     }
 
-    pub(crate) fn to_core_actions<FG: FreshGen<Head, Leaf>>(
+    pub(crate) fn to_core_actions<FG: FreshGen<Head, Leaf, Lit>>(
         &self,
         typeinfo: &TypeInfo,
         binding: &mut IndexSet<Leaf>,
         fresh_gen: &mut FG,
-    ) -> Result<(GenericCoreActions<Head, Leaf>, MappedExpr<Head, Leaf>), TypeError>
+    ) -> Result<
+        (
+            GenericCoreActions<Head, Leaf, Lit>,
+            MappedExpr<Head, Leaf, Lit>,
+        ),
+        TypeError,
+    >
     where
-        Leaf: Hash + Eq + SymbolLike,
+        Leaf: Hash + Eq + ToString,
     {
         match self {
             GenericExpr::Lit(span, lit) => Ok((
@@ -632,8 +671,8 @@ where
                 GenericExpr::Lit(span.clone(), lit.clone()),
             )),
             GenericExpr::Var(span, v) => {
-                let sym = v.to_symbol();
-                if binding.contains(v) || typeinfo.is_global(sym) {
+                let sym = v.to_string();
+                if binding.contains(v) || typeinfo.is_global(sym.clone()) {
                     Ok((
                         GenericCoreActions::default(),
                         GenericExpr::Var(span.clone(), v.clone()),
@@ -684,22 +723,24 @@ where
 /// for `body` needs to be a `HeadOrEq<Head>`, while `head` does not have equality
 /// constraints.
 #[derive(Debug, Clone)]
-pub struct GenericCoreRule<HeadQ, HeadA, Leaf> {
+pub struct GenericCoreRule<HeadQ, HeadA, Leaf, Lit> {
     pub span: Span,
-    pub body: Query<HeadQ, Leaf>,
-    pub head: GenericCoreActions<HeadA, Leaf>,
+    pub body: Query<HeadQ, Leaf, Lit>,
+    pub head: GenericCoreActions<HeadA, Leaf, Lit>,
 }
 
-pub(crate) type CoreRule = GenericCoreRule<SymbolOrEq, Symbol, Symbol>;
-pub(crate) type ResolvedCoreRule = GenericCoreRule<ResolvedCall, ResolvedCall, ResolvedVar>;
+pub(crate) type CoreRule = GenericCoreRule<StringOrEq, String, String, Literal>;
+pub(crate) type ResolvedCoreRule =
+    GenericCoreRule<ResolvedCall, ResolvedCall, ResolvedVar, ResolvedLiteral>;
 
-impl<Head1, Head2, Leaf> GenericCoreRule<Head1, Head2, Leaf>
+impl<Head1, Head2, Leaf, Lit> GenericCoreRule<Head1, Head2, Leaf, Lit>
 where
     Head1: Clone,
     Head2: Clone,
     Leaf: Clone + Eq + Hash,
+    Lit: Clone,
 {
-    pub fn subst(&mut self, subst: &HashMap<Leaf, GenericAtomTerm<Leaf>>) {
+    pub fn subst(&mut self, subst: &HashMap<Leaf, GenericAtomTerm<Leaf, Lit>>) {
         for atom in &mut self.body.atoms {
             atom.subst(subst);
         }
@@ -707,10 +748,11 @@ where
     }
 }
 
-impl<Head, Leaf> GenericCoreRule<HeadOrEq<Head>, Head, Leaf>
+impl<Head, Leaf, Lit> GenericCoreRule<HeadOrEq<Head>, Head, Leaf, Lit>
 where
     Leaf: Eq + Clone + Hash + Debug,
     Head: Clone,
+    Lit: Clone + Eq + CreateUnit,
 {
     /// Transformed a UnresolvedCoreRule into a CanonicalizedCoreRule.
     /// In particular, it removes equality checks between variables and
@@ -719,8 +761,8 @@ where
     pub(crate) fn canonicalize(
         self,
         // Users need to pass in a substitute for equality constraints.
-        value_eq: impl Fn(&GenericAtomTerm<Leaf>, &GenericAtomTerm<Leaf>) -> Head,
-    ) -> GenericCoreRule<Head, Head, Leaf> {
+        value_eq: impl Fn(&GenericAtomTerm<Leaf, Lit>, &GenericAtomTerm<Leaf, Lit>) -> Head,
+    ) -> GenericCoreRule<Head, Head, Leaf, Lit> {
         let mut result_rule = self;
         loop {
             let mut to_subst = None;
@@ -768,14 +810,14 @@ where
                                     args: vec![
                                         atom.args[0].clone(),
                                         atom.args[1].clone(),
-                                        GenericAtomTerm::Literal(atom.span.clone(), Literal::Unit),
+                                        GenericAtomTerm::Literal(atom.span.clone(), Lit::unit()),
                                     ],
                                 })
                             }
                         },
                     }
                 }
-                HeadOrEq::Symbol(symbol) => Some(GenericAtom {
+                HeadOrEq::String(symbol) => Some(GenericAtom {
                     span: atom.span.clone(),
                     head: symbol,
                     args: atom.args,
@@ -790,18 +832,19 @@ where
     }
 }
 
-impl<Head, Leaf> GenericRule<Head, Leaf>
+impl<Head, Leaf, Lit> GenericRule<Head, Leaf, Lit>
 where
     Head: Clone + Display,
     Leaf: Clone + PartialEq + Eq + Display + Hash + Debug,
+    Lit: Clone + Display + Eq,
 {
     pub(crate) fn to_core_rule(
         &self,
         typeinfo: &TypeInfo,
-        fresh_gen: &mut impl FreshGen<Head, Leaf>,
-    ) -> Result<GenericCoreRule<HeadOrEq<Head>, Head, Leaf>, TypeError>
+        fresh_gen: &mut impl FreshGen<Head, Leaf, Lit>,
+    ) -> Result<GenericCoreRule<HeadOrEq<Head>, Head, Leaf, Lit>, TypeError>
     where
-        Leaf: SymbolLike,
+        Leaf: ToString,
     {
         let GenericRule {
             span: _,
@@ -822,11 +865,12 @@ where
     fn to_canonicalized_core_rule_impl(
         &self,
         typeinfo: &TypeInfo,
-        fresh_gen: &mut impl FreshGen<Head, Leaf>,
-        value_eq: impl Fn(&GenericAtomTerm<Leaf>, &GenericAtomTerm<Leaf>) -> Head,
-    ) -> Result<GenericCoreRule<Head, Head, Leaf>, TypeError>
+        fresh_gen: &mut impl FreshGen<Head, Leaf, Lit>,
+        value_eq: impl Fn(&GenericAtomTerm<Leaf, Lit>, &GenericAtomTerm<Leaf, Lit>) -> Head,
+    ) -> Result<GenericCoreRule<Head, Head, Leaf, Lit>, TypeError>
     where
-        Leaf: SymbolLike,
+        Leaf: ToString,
+        Lit: CreateUnit,
     {
         let rule = self.to_core_rule(typeinfo, fresh_gen)?;
         Ok(rule.canonicalize(value_eq))
@@ -837,9 +881,9 @@ impl ResolvedRule {
     pub(crate) fn to_canonicalized_core_rule(
         &self,
         typeinfo: &TypeInfo,
-        fresh_gen: &mut SymbolGen,
+        fresh_gen: &mut StringGen,
     ) -> Result<ResolvedCoreRule, TypeError> {
-        let value_eq = &typeinfo.primitives.get(&Symbol::from("value-eq")).unwrap()[0];
+        let value_eq = &typeinfo.primitives.get(&String::from("value-eq")).unwrap()[0];
         self.to_canonicalized_core_rule_impl(typeinfo, fresh_gen, |at1, at2| {
             ResolvedCall::Primitive(SpecializedPrimitive {
                 primitive: value_eq.clone(),

@@ -8,7 +8,7 @@
 //!
 //!
 //! The value is stored similar to the `vec` sort, as an index into a set, where each item in
-//! the set is a `(Symbol, Vec<Value>)` pairs. The Symbol is the function name, and the `Vec<Value>` is
+//! the set is a `(String, Vec<Value>)` pairs. The String is the function name, and the `Vec<Value>` is
 //! the list of partially applied arguments.
 use std::sync::Mutex;
 
@@ -20,13 +20,13 @@ use super::*;
 /// Note that we must store the actual arcsorts so we can return them when returning inner values
 /// and when canonicalizing
 #[derive(Debug, Clone)]
-struct ValueFunction(Symbol, Vec<(ArcSort, Value)>);
+struct ValueFunction(String, Vec<(ArcSort, Value)>);
 
 impl ValueFunction {
     /// Remove the arcsorts to make this hashable
     /// The arg values contain the sort name anyways
-    fn hashable(&self) -> (Symbol, Vec<&Value>) {
-        (self.0, self.1.iter().map(|(_, v)| v).collect())
+    fn hashable(&self) -> (String, Vec<&Value>) {
+        (self.0.clone(), self.1.iter().map(|(_, v)| v).collect())
     }
 }
 
@@ -46,7 +46,7 @@ impl Eq for ValueFunction {}
 
 #[derive(Debug)]
 pub struct FunctionSort {
-    name: Symbol,
+    name: String,
     // Public so that other primitive sorts (external or internal) can find a function sort by the sorts of its inputs/output
     pub inputs: Vec<ArcSort>,
     pub output: ArcSort,
@@ -72,7 +72,7 @@ impl FunctionSort {
             .collect();
         let values = args
             .iter()
-            .map(|(_, v)| *v)
+            .map(|(_, v)| v.clone())
             .chain(arg_values.iter().cloned())
             .collect();
         call_fn(egraph, &name, types, values)
@@ -80,24 +80,24 @@ impl FunctionSort {
 }
 
 impl Presort for FunctionSort {
-    fn presort_name() -> Symbol {
+    fn presort_name() -> String {
         "UnstableFn".into()
     }
 
-    fn reserved_primitives() -> Vec<Symbol> {
+    fn reserved_primitives() -> Vec<String> {
         vec!["unstable-fn".into(), "unstable-app".into()]
     }
 
     fn make_sort(
         typeinfo: &mut TypeInfo,
-        name: Symbol,
+        name: String,
         args: &[Expr],
     ) -> Result<ArcSort, TypeError> {
         if let [inputs, Expr::Var(span, output)] = args {
             let output_sort = typeinfo
                 .sorts
                 .get(output)
-                .ok_or(TypeError::UndefinedSort(*output, span.clone()))?;
+                .ok_or(TypeError::UndefinedSort(output.clone(), span.clone()))?;
 
             let input_sorts = match inputs {
                 Expr::Call(_, first, rest_args) => {
@@ -113,7 +113,7 @@ impl Presort for FunctionSort {
                             typeinfo
                                 .sorts
                                 .get(arg)
-                                .ok_or(TypeError::UndefinedSort(*arg, span.clone()))
+                                .ok_or(TypeError::UndefinedSort(arg.clone(), span.clone()))
                                 .cloned()
                         })
                         .collect::<Result<Vec<_>, _>>()?
@@ -136,8 +136,8 @@ impl Presort for FunctionSort {
 }
 
 impl Sort for FunctionSort {
-    fn name(&self) -> Symbol {
-        self.name
+    fn name(&self) -> String {
+        self.name.clone()
     }
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
@@ -152,7 +152,7 @@ impl Sort for FunctionSort {
         self.inputs.iter().any(|s| s.is_eq_sort())
     }
 
-    fn serialized_name(&self, value: &Value) -> Symbol {
+    fn serialized_name(&self, value: &Value) -> String {
         self.get_value(value).0
     }
 
@@ -178,6 +178,7 @@ impl Sort for FunctionSort {
         typeinfo.add_primitive(Ctor {
             name: "unstable-fn".into(),
             function: self.clone(),
+            string: typeinfo.get_sort_nofail(),
         });
         typeinfo.add_primitive(Apply {
             name: "unstable-app".into(),
@@ -223,7 +224,7 @@ impl IntoSort for ValueFunction {
         let (i, _) = functions.insert_full(self);
         Some(Value {
             #[cfg(debug_assertions)]
-            tag: sort.name,
+            tag: sort.name.clone(),
             bits: i as u64,
         })
     }
@@ -238,8 +239,9 @@ impl FromSort for ValueFunction {
 
 /// Takes a string and any number of partially applied args of any sort and returns a function
 struct FunctionCTorTypeConstraint {
-    name: Symbol,
+    name: String,
     function: Arc<FunctionSort>,
+    string: Arc<StringSort>,
     span: Span,
 }
 
@@ -255,7 +257,7 @@ impl TypeConstraint for FunctionCTorTypeConstraint {
                 constraint::ImpossibleConstraint::ArityMismatch {
                     atom: core::Atom {
                         span: self.span.clone(),
-                        head: self.name,
+                        head: self.name.clone(),
                         args: arguments.to_vec(),
                     },
                     expected: 1,
@@ -280,7 +282,7 @@ impl TypeConstraint for FunctionCTorTypeConstraint {
                         constraint::ImpossibleConstraint::ArityMismatch {
                             atom: core::Atom {
                                 span: self.span.clone(),
-                                head: self.name,
+                                head: self.name.clone(),
                                 args: arguments.to_vec(),
                             },
                             expected: self.function.inputs.len() + func_type.input.len() + 1,
@@ -329,7 +331,7 @@ impl TypeConstraint for FunctionCTorTypeConstraint {
 
         // Otherwise we just try assuming it's this function, we don't know if it is or not
         vec![
-            Constraint::Assign(arguments[0].clone(), Arc::new(StringSort)),
+            Constraint::Assign(arguments[0].clone(), self.string.clone()),
             output_sort_constraint,
         ]
     }
@@ -337,20 +339,22 @@ impl TypeConstraint for FunctionCTorTypeConstraint {
 
 // (unstable-fn "name" [<arg1>, <arg2>, ...])
 struct Ctor {
-    name: Symbol,
+    name: String,
     function: Arc<FunctionSort>,
+    string: Arc<StringSort>,
 }
 
 impl PrimitiveLike for Ctor {
-    fn name(&self) -> Symbol {
-        self.name
+    fn name(&self) -> String {
+        self.name.clone()
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
         Box::new(FunctionCTorTypeConstraint {
-            name: self.name,
+            name: self.name.clone(),
             function: self.function.clone(),
             span: span.clone(),
+            string: self.string.clone(),
         })
     }
 
@@ -360,13 +364,13 @@ impl PrimitiveLike for Ctor {
         sorts: (&[ArcSort], &ArcSort),
         _egraph: Option<&mut EGraph>,
     ) -> Option<Value> {
-        let name = Symbol::load(&StringSort, &values[0]);
+        let name = String::load(&self.string, &values[0]);
 
         assert!(values.len() == sorts.0.len());
         let args: Vec<(ArcSort, Value)> = values[1..]
             .iter()
             .zip(&sorts.0[1..])
-            .map(|(value, sort)| (sort.clone(), *value))
+            .map(|(value, sort)| (sort.clone(), value.clone()))
             .collect();
 
         ValueFunction(name, args).store(&self.function)
@@ -375,13 +379,13 @@ impl PrimitiveLike for Ctor {
 
 // (unstable-app <function> [<arg1>, <arg2>, ...])
 struct Apply {
-    name: Symbol,
+    name: String,
     function: Arc<FunctionSort>,
 }
 
 impl PrimitiveLike for Apply {
-    fn name(&self) -> Symbol {
-        self.name
+    fn name(&self) -> String {
+        self.name.clone()
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
@@ -406,7 +410,7 @@ impl PrimitiveLike for Apply {
 ///
 /// Does this in a similar way to how merge functions are resolved, using the stack and actions,
 /// so that we can re-use the logic for primitive and regular functions.
-fn call_fn(egraph: &mut EGraph, name: &Symbol, types: Vec<ArcSort>, args: Vec<Value>) -> Value {
+fn call_fn(egraph: &mut EGraph, name: &String, types: Vec<ArcSort>, args: Vec<Value>) -> Value {
     // Make a call with temp vars as each of the args
     let resolved_call = ResolvedCall::from_resolution(name, types.as_slice(), &egraph.type_info);
     let arg_vars: Vec<_> = types

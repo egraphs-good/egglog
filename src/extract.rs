@@ -1,6 +1,5 @@
 use hashbrown::hash_map::Entry;
 
-use crate::ast::Symbol;
 use crate::termdag::{Term, TermDag};
 use crate::util::HashMap;
 use crate::{ArcSort, EGraph, Function, Id, Value};
@@ -9,14 +8,14 @@ pub type Cost = usize;
 
 #[derive(Debug)]
 pub(crate) struct Node<'a> {
-    sym: Symbol,
+    sym: String,
     func: &'a Function,
     inputs: &'a [Value],
 }
 
 pub struct Extractor<'a> {
     pub costs: HashMap<Id, (Cost, Term)>,
-    ctors: Vec<Symbol>,
+    ctors: Vec<String>,
     egraph: &'a EGraph,
 }
 
@@ -44,7 +43,7 @@ impl EGraph {
     pub fn extract(&self, value: Value, termdag: &mut TermDag, arcsort: &ArcSort) -> (Cost, Term) {
         let extractor = Extractor::new(self, termdag);
         extractor
-            .find_best(value, termdag, arcsort)
+            .find_best(value.clone(), termdag, arcsort)
             .unwrap_or_else(|| {
                 log::error!("No cost for {:?}", value);
                 for func in self.functions.values() {
@@ -61,7 +60,7 @@ impl EGraph {
                                     .zip(&func.schema.input)
                                     .map(|(input, sort)| extractor
                                         .costs
-                                        .get(&extractor.egraph.find(sort, *input).bits))
+                                        .get(&extractor.egraph.find(sort, input.clone()).bits))
                                     .collect::<Vec<_>>()
                             );
                         }
@@ -84,8 +83,8 @@ impl EGraph {
         let ext = &Extractor::new(self, termdag);
         ext.ctors
             .iter()
-            .flat_map(|&sym| {
-                let func = &self.functions[&sym];
+            .flat_map(|sym| {
+                let func = &self.functions[sym];
                 if !func.schema.output.is_eq_sort() {
                     return vec![];
                 }
@@ -97,7 +96,11 @@ impl EGraph {
                         func.schema.output.name() == output_sort && output.value == output_value
                     })
                     .map(|(inputs, _output)| {
-                        let node = Node { sym, func, inputs };
+                        let node = Node {
+                            sym: sym.clone(),
+                            func,
+                            inputs,
+                        };
                         ext.expr_from_node(&node, termdag).expect(
                             "extract_variants should be called after extractor initialization",
                         )
@@ -139,10 +142,10 @@ impl<'a> Extractor<'a> {
         assert_eq!(values.len(), arcsorts.len());
 
         for (value, arcsort) in values.iter().zip(arcsorts) {
-            children.push(self.find_best(*value, termdag, arcsort)?.1)
+            children.push(self.find_best(value.clone(), termdag, arcsort)?.1)
         }
 
-        Some(termdag.app(node.sym, children))
+        Some(termdag.app(node.sym.clone(), children))
     }
 
     pub fn find_best(
@@ -171,7 +174,7 @@ impl<'a> Extractor<'a> {
         let types = &function.schema.input;
         let mut terms: Vec<Term> = vec![];
         for (ty, value) in types.iter().zip(children) {
-            let (term_cost, term) = self.find_best(*value, termdag, ty)?;
+            let (term_cost, term) = self.find_best(value.clone(), termdag, ty)?;
             terms.push(term.clone());
             cost = cost.saturating_add(term_cost);
         }
@@ -190,9 +193,13 @@ impl<'a> Extractor<'a> {
                         if let Some((term_inputs, new_cost)) =
                             self.node_total_cost(func, inputs, termdag)
                         {
-                            let make_new_pair = || (new_cost, termdag.app(sym, term_inputs));
+                            let make_new_pair =
+                                || (new_cost, termdag.app(sym.clone(), term_inputs));
 
-                            let id = self.egraph.find(&func.schema.output, output.value).bits;
+                            let id = self
+                                .egraph
+                                .find(&func.schema.output, output.value.clone())
+                                .bits;
                             match self.costs.entry(id) {
                                 Entry::Vacant(e) => {
                                     did_something = true;

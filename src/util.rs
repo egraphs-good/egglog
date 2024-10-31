@@ -65,12 +65,12 @@ where
 /// These are guaranteed not to collide with the
 /// user's symbols because they use $.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SymbolGen {
+pub struct StringGen {
     gen: usize,
     reserved_string: String,
 }
 
-impl SymbolGen {
+impl StringGen {
     pub fn new(reserved_string: String) -> Self {
         Self {
             gen: 0,
@@ -84,19 +84,19 @@ impl SymbolGen {
 }
 
 /// This trait lets us statically dispatch between `fresh` methods for generic structs.
-pub trait FreshGen<Head, Leaf> {
+pub trait FreshGen<Head, Leaf, Lit> {
     fn fresh(&mut self, name_hint: &Head) -> Leaf;
 }
 
-impl FreshGen<Symbol, Symbol> for SymbolGen {
-    fn fresh(&mut self, name_hint: &Symbol) -> Symbol {
+impl FreshGen<String, String, Literal> for StringGen {
+    fn fresh(&mut self, name_hint: &String) -> String {
         let s = format!("{}{}{}", self.reserved_string, name_hint, self.gen);
         self.gen += 1;
-        Symbol::from(s)
+        String::from(s)
     }
 }
 
-impl FreshGen<ResolvedCall, ResolvedVar> for SymbolGen {
+impl FreshGen<ResolvedCall, ResolvedVar, ResolvedLiteral> for StringGen {
     fn fresh(&mut self, name_hint: &ResolvedCall) -> ResolvedVar {
         let s = format!("{}{}{}", self.reserved_string, name_hint, self.gen);
         self.gen += 1;
@@ -111,16 +111,5 @@ impl FreshGen<ResolvedCall, ResolvedVar> for SymbolGen {
             // are desugared away by `remove_globals`
             is_global_ref: false,
         }
-    }
-}
-
-// This is a convenient for `for<'a> impl Into<Symbol> for &'a T`
-pub(crate) trait SymbolLike {
-    fn to_symbol(&self) -> Symbol;
-}
-
-impl SymbolLike for Symbol {
-    fn to_symbol(&self) -> Symbol {
-        *self
     }
 }

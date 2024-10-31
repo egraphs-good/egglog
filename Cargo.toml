@@ -31,7 +31,6 @@ indexmap = "2.0"
 instant = "0.1"
 log = "0.4"
 rustc-hash = "1.1"
-symbol_table = { version = "0.4.0", features = ["global"] }
 thiserror = "1"
 lazy_static = "1.4"
 num-integer = "0.1.45"

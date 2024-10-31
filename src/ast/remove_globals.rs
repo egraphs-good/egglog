@@ -9,7 +9,7 @@ use crate::*;
 use crate::{core::ResolvedCall, typechecking::FuncType};
 
 struct GlobalRemover<'a> {
-    fresh: &'a mut SymbolGen,
+    fresh: &'a mut StringGen,
 }
 
 /// Removes all globals from a program.
@@ -43,7 +43,7 @@ struct GlobalRemover<'a> {
 /// ```
 pub(crate) fn remove_globals(
     prog: Vec<ResolvedNCommand>,
-    fresh: &mut SymbolGen,
+    fresh: &mut StringGen,
 ) -> Vec<ResolvedNCommand> {
     let mut remover = GlobalRemover { fresh };
     prog.into_iter()
@@ -57,7 +57,7 @@ fn resolved_var_to_call(var: &ResolvedVar) -> ResolvedCall {
         "resolved_var_to_call called on non-global var"
     );
     ResolvedCall::Func(FuncType {
-        name: var.name,
+        name: var.name.clone(),
         input: vec![],
         output: var.sort.clone(),
         is_datatype: var.sort.is_eq_sort(),
@@ -94,7 +94,7 @@ impl<'a> GlobalRemover<'a> {
                     let ty = expr.output_type();
 
                     let func_decl = ResolvedFunctionDecl {
-                        name: name.name,
+                        name: name.clone().name,
                         schema: Schema {
                             input: vec![],
                             output: ty.name(),

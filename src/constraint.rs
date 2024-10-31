@@ -4,12 +4,13 @@ use crate::{
         ResolvedActions, ResolvedExpr, ResolvedFact, ResolvedVar,
     },
     core::{
-        Atom, AtomTerm, CoreAction, CoreRule, GenericCoreActions, Query, ResolvedCall, SymbolOrEq,
+        Atom, AtomTerm, CoreAction, CoreRule, GenericCoreActions, Query, ResolvedCall, StringOrEq,
     },
+    literal_sort,
     sort::I64Sort,
     typechecking::TypeError,
-    util::{FreshGen, HashSet, SymbolGen},
-    ArcSort, CorrespondingVar, Span, Symbol, TypeInfo, DUMMY_SPAN,
+    util::{FreshGen, HashSet, StringGen},
+    ArcSort, CorrespondingVar, Literal, Span, StringSort, TypeInfo, DUMMY_SPAN,
 };
 use core::{hash::Hash, panic};
 // Use immutable hashmap for performance
@@ -20,7 +21,7 @@ use std::{fmt::Debug, iter::once, mem::swap};
 #[derive(Clone, Debug)]
 pub enum ImpossibleConstraint {
     ArityMismatch {
-        atom: Atom<Symbol>,
+        atom: Atom<String>,
         expected: usize,
         actual: usize,
     },
@@ -237,22 +238,31 @@ where
 impl Assignment<AtomTerm, ArcSort> {
     pub(crate) fn annotate_expr(
         &self,
-        expr: &GenericExpr<CorrespondingVar<Symbol, Symbol>, Symbol>,
+        expr: &GenericExpr<CorrespondingVar<String, String>, String, Literal>,
         typeinfo: &TypeInfo,
     ) -> ResolvedExpr {
         match &expr {
-            GenericExpr::Lit(span, literal) => ResolvedExpr::Lit(span.clone(), literal.clone()),
+            GenericExpr::Lit(span, literal) => ResolvedExpr::Lit(
+                span.clone(),
+                crate::ResolvedLiteral {
+                    literal: literal.clone(),
+                    sort: literal_sort(&literal, typeinfo.get_sort_nofail::<StringSort>()),
+                },
+            ),
             GenericExpr::Var(span, var) => {
                 let global_ty = typeinfo.lookup_global(var);
                 let ty = global_ty
                     .clone()
                     // Span is ignored when looking up atom_terms
-                    .or_else(|| self.get(&AtomTerm::Var(DUMMY_SPAN.clone(), *var)).cloned())
+                    .or_else(|| {
+                        self.get(&AtomTerm::Var(DUMMY_SPAN.clone(), var.clone()))
+                            .cloned()
+                    })
                     .expect("All variables should be assigned before annotation");
                 ResolvedExpr::Var(
                     span.clone(),
                     ResolvedVar {
-                        name: *var,
+                        name: var.clone(),
                         sort: ty.clone(),
                         is_global_ref: global_ty.is_some(),
                     },
@@ -275,9 +285,12 @@ impl Assignment<AtomTerm, ArcSort> {
                     .iter()
                     .map(|arg| arg.output_type())
                     .chain(once(
-                        self.get(&AtomTerm::Var(DUMMY_SPAN.clone(), *corresponding_var))
-                            .unwrap()
-                            .clone(),
+                        self.get(&AtomTerm::Var(
+                            DUMMY_SPAN.clone(),
+                            corresponding_var.clone(),
+                        ))
+                        .unwrap()
+                        .clone(),
                     ))
                     .collect();
                 let resolved_call = ResolvedCall::from_resolution(head, &types, typeinfo);
@@ -288,7 +301,7 @@ impl Assignment<AtomTerm, ArcSort> {
 
     pub(crate) fn annotate_fact(
         &self,
-        facts: &GenericFact<CorrespondingVar<Symbol, Symbol>, Symbol>,
+        facts: &GenericFact<CorrespondingVar<String, String>, String, Literal>,
         typeinfo: &TypeInfo,
     ) -> ResolvedFact {
         match facts {
@@ -305,7 +318,7 @@ impl Assignment<AtomTerm, ArcSort> {
 
     pub(crate) fn annotate_facts(
         &self,
-        mapped_facts: &[GenericFact<CorrespondingVar<Symbol, Symbol>, Symbol>],
+        mapped_facts: &[GenericFact<CorrespondingVar<String, String>, String, Literal>],
         typeinfo: &TypeInfo,
     ) -> Vec<ResolvedFact> {
         mapped_facts
@@ -322,12 +335,12 @@ impl Assignment<AtomTerm, ArcSort> {
         match action {
             GenericAction::Let(span, var, expr) => {
                 let ty = self
-                    .get(&AtomTerm::Var(span.clone(), *var))
+                    .get(&AtomTerm::Var(span.clone(), var.clone()))
                     .expect("All variables should be assigned before annotation");
                 Ok(ResolvedAction::Let(
                     span.clone(),
                     ResolvedVar {
-                        name: *var,
+                        name: var.clone(),
                         sort: ty.clone(),
                         is_global_ref: false,
                     },
@@ -356,7 +369,7 @@ impl Assignment<AtomTerm, ArcSort> {
                     .collect();
                 let resolved_call = ResolvedCall::from_resolution(head, &types, typeinfo);
                 if !matches!(resolved_call, ResolvedCall::Func(_)) {
-                    return Err(TypeError::UnboundFunction(*head, span.clone()));
+                    return Err(TypeError::UnboundFunction(head.clone(), span.clone()));
                 }
                 Ok(ResolvedAction::Set(
                     span.clone(),
@@ -382,7 +395,7 @@ impl Assignment<AtomTerm, ArcSort> {
                 let types: Vec<_> = children.iter().map(|child| child.output_type()).collect();
                 let resolved_call =
                     ResolvedCall::from_resolution_func_types(head, &types, typeinfo)
-                        .ok_or_else(|| TypeError::UnboundFunction(*head, span.clone()))?;
+                        .ok_or_else(|| TypeError::UnboundFunction(head.clone(), span.clone()))?;
                 Ok(ResolvedAction::Change(
                     span.clone(),
                     *change,
@@ -410,7 +423,7 @@ impl Assignment<AtomTerm, ArcSort> {
 
     pub(crate) fn annotate_actions(
         &self,
-        mapped_actions: &GenericActions<CorrespondingVar<Symbol, Symbol>, Symbol>,
+        mapped_actions: &GenericActions<CorrespondingVar<String, String>, String, Literal>,
         typeinfo: &TypeInfo,
     ) -> Result<ResolvedActions, TypeError> {
         let actions = mapped_actions
@@ -456,7 +469,7 @@ where
 impl Problem<AtomTerm, ArcSort> {
     pub(crate) fn add_query(
         &mut self,
-        query: &Query<SymbolOrEq, Symbol>,
+        query: &Query<StringOrEq, String, Literal>,
         typeinfo: &TypeInfo,
     ) -> Result<(), TypeError> {
         self.constraints.extend(query.get_constraints(typeinfo)?);
@@ -466,9 +479,9 @@ impl Problem<AtomTerm, ArcSort> {
 
     pub fn add_actions(
         &mut self,
-        actions: &GenericCoreActions<Symbol, Symbol>,
+        actions: &GenericCoreActions<String, String, Literal>,
         typeinfo: &TypeInfo,
-        symbol_gen: &mut SymbolGen,
+        symbol_gen: &mut StringGen,
     ) -> Result<(), TypeError> {
         for action in actions.0.iter() {
             self.constraints
@@ -477,10 +490,10 @@ impl Problem<AtomTerm, ArcSort> {
             // bound vars are added to range
             match action {
                 CoreAction::Let(span, var, _, _) => {
-                    self.range.insert(AtomTerm::Var(span.clone(), *var));
+                    self.range.insert(AtomTerm::Var(span.clone(), var.clone()));
                 }
                 CoreAction::LetAtomTerm(span, v, _) => {
-                    self.range.insert(AtomTerm::Var(span.clone(), *v));
+                    self.range.insert(AtomTerm::Var(span.clone(), v.clone()));
                 }
                 _ => (),
             }
@@ -492,7 +505,7 @@ impl Problem<AtomTerm, ArcSort> {
         &mut self,
         rule: &CoreRule,
         typeinfo: &TypeInfo,
-        symbol_gen: &mut SymbolGen,
+        symbol_gen: &mut StringGen,
     ) -> Result<(), TypeError> {
         let CoreRule {
             span: _,
@@ -506,11 +519,11 @@ impl Problem<AtomTerm, ArcSort> {
 
     pub(crate) fn assign_local_var_type(
         &mut self,
-        var: Symbol,
+        var: String,
         span: Span,
         sort: ArcSort,
     ) -> Result<(), TypeError> {
-        self.add_binding(AtomTerm::Var(span.clone(), var), sort);
+        self.add_binding(AtomTerm::Var(span.clone(), var.clone()), sort);
         self.range.insert(AtomTerm::Var(span, var));
         Ok(())
     }
@@ -520,12 +533,12 @@ impl CoreAction {
     pub(crate) fn get_constraints(
         &self,
         typeinfo: &TypeInfo,
-        symbol_gen: &mut SymbolGen,
+        symbol_gen: &mut StringGen,
     ) -> Result<Vec<Constraint<AtomTerm, ArcSort>>, TypeError> {
         match self {
             CoreAction::Let(span, symbol, f, args) => {
                 let mut args = args.clone();
-                args.push(AtomTerm::Var(span.clone(), *symbol));
+                args.push(AtomTerm::Var(span.clone(), symbol.clone()));
 
                 Ok(get_literal_and_global_constraints(&args, typeinfo)
                     .chain(get_atom_application_constraints(f, &args, span, typeinfo)?)
@@ -544,7 +557,7 @@ impl CoreAction {
             CoreAction::Change(span, _change, head, args) => {
                 let mut args = args.clone();
                 // Add a dummy last output argument
-                let var = symbol_gen.fresh(head);
+                let var = symbol_gen.fresh(&head.to_string());
                 args.push(AtomTerm::Var(span.clone(), var));
 
                 Ok(get_literal_and_global_constraints(&args, typeinfo)
@@ -574,7 +587,7 @@ impl CoreAction {
             CoreAction::LetAtomTerm(span, v, at) => {
                 Ok(get_literal_and_global_constraints(&[at.clone()], typeinfo)
                     .chain(once(Constraint::Eq(
-                        AtomTerm::Var(span.clone(), *v),
+                        AtomTerm::Var(span.clone(), v.clone()),
                         at.clone(),
                     )))
                     .collect())
@@ -583,14 +596,14 @@ impl CoreAction {
     }
 }
 
-impl Atom<SymbolOrEq> {
+impl Atom<StringOrEq> {
     pub fn get_constraints(
         &self,
         type_info: &TypeInfo,
     ) -> Result<Vec<Constraint<AtomTerm, ArcSort>>, TypeError> {
         let literal_constraints = get_literal_and_global_constraints(&self.args, type_info);
         match &self.head {
-            SymbolOrEq::Eq => {
+            StringOrEq::Eq => {
                 assert_eq!(self.args.len(), 2);
                 let constraints = literal_constraints
                     .chain(once(Constraint::Eq(
@@ -600,7 +613,7 @@ impl Atom<SymbolOrEq> {
                     .collect();
                 Ok(constraints)
             }
-            SymbolOrEq::Symbol(head) => Ok(literal_constraints
+            StringOrEq::String(head) => Ok(literal_constraints
                 .chain(get_atom_application_constraints(
                     head, &self.args, &self.span, type_info,
                 )?)
@@ -610,7 +623,7 @@ impl Atom<SymbolOrEq> {
 }
 
 fn get_atom_application_constraints(
-    head: &Symbol,
+    head: &String,
     args: &[AtomTerm],
     span: &Span,
     type_info: &TypeInfo,
@@ -632,7 +645,7 @@ fn get_atom_application_constraints(
                 ImpossibleConstraint::ArityMismatch {
                     atom: Atom {
                         span: span.clone(),
-                        head: *head,
+                        head: head.clone(),
                         args: args.to_vec(),
                     },
                     expected: typ.input.len(),
@@ -664,7 +677,7 @@ fn get_atom_application_constraints(
     // do literal and global variable constraints first
     // as they are the most "informative"
     match xor_constraints.len() {
-        0 => Err(TypeError::UnboundFunction(*head, span.clone())),
+        0 => Err(TypeError::UnboundFunction(head.clone(), span.clone())),
         1 => Ok(xor_constraints.pop().unwrap()),
         _ => Ok(vec![Constraint::Xor(
             xor_constraints.into_iter().map(Constraint::And).collect(),
@@ -681,7 +694,7 @@ fn get_literal_and_global_constraints<'a>(
             AtomTerm::Var(_, _) => None,
             // Literal to type constraint
             AtomTerm::Literal(_, lit) => {
-                let typ = crate::sort::literal_sort(lit);
+                let typ = crate::sort::literal_sort(lit, type_info.get_sort_nofail::<StringSort>());
                 Some(Constraint::Assign(arg.clone(), typ))
             }
             AtomTerm::Global(_, v) => {
@@ -705,13 +718,13 @@ pub trait TypeConstraint {
 
 /// Construct a set of `Assign` constraints that fully constrain the type of arguments
 pub struct SimpleTypeConstraint {
-    name: Symbol,
+    name: String,
     sorts: Vec<ArcSort>,
     span: Span,
 }
 
 impl SimpleTypeConstraint {
-    pub fn new(name: Symbol, sorts: Vec<ArcSort>, span: Span) -> SimpleTypeConstraint {
+    pub fn new(name: String, sorts: Vec<ArcSort>, span: Span) -> SimpleTypeConstraint {
         SimpleTypeConstraint { name, sorts, span }
     }
 
@@ -731,7 +744,7 @@ impl TypeConstraint for SimpleTypeConstraint {
                 ImpossibleConstraint::ArityMismatch {
                     atom: Atom {
                         span: self.span.clone(),
-                        head: self.name,
+                        head: self.name.clone(),
                         args: arguments.to_vec(),
                     },
                     expected: self.sorts.len(),
@@ -751,7 +764,7 @@ impl TypeConstraint for SimpleTypeConstraint {
 
 /// This constraint requires all types to be equivalent to each other
 pub struct AllEqualTypeConstraint {
-    name: Symbol,
+    name: String,
     sort: Option<ArcSort>,
     exact_length: Option<usize>,
     output: Option<ArcSort>,
@@ -759,7 +772,7 @@ pub struct AllEqualTypeConstraint {
 }
 
 impl AllEqualTypeConstraint {
-    pub fn new(name: Symbol, span: Span) -> AllEqualTypeConstraint {
+    pub fn new(name: String, span: Span) -> AllEqualTypeConstraint {
         AllEqualTypeConstraint {
             name,
             sort: None,
@@ -811,7 +824,7 @@ impl TypeConstraint for AllEqualTypeConstraint {
                     ImpossibleConstraint::ArityMismatch {
                         atom: Atom {
                             span: self.span.clone(),
-                            head: self.name,
+                            head: self.name.clone(),
                             args: arguments.to_vec(),
                         },
                         expected: exact_length,

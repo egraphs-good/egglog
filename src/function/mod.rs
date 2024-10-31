@@ -16,7 +16,7 @@ pub struct Function {
     pub schema: ResolvedSchema,
     pub merge: MergeAction,
     pub(crate) nodes: table::Table,
-    sorts: HashSet<Symbol>,
+    sorts: HashSet<String>,
     pub(crate) indexes: Vec<Rc<ColumnIndex>>,
     pub(crate) rebuild_indexes: Vec<Option<CompositeColumnIndex>>,
     index_updated_through: usize,
@@ -90,7 +90,7 @@ impl Function {
                 Some(sort) => sort.clone(),
                 None => {
                     return Err(Error::TypeError(TypeError::UndefinedSort(
-                        *s,
+                        s.clone(),
                         decl.span.clone(),
                     )))
                 }
@@ -101,7 +101,7 @@ impl Function {
             Some(sort) => sort.clone(),
             None => {
                 return Err(Error::TypeError(TypeError::UndefinedSort(
-                    decl.schema.output,
+                    decl.schema.output.clone(),
                     decl.span.clone(),
                 )))
             }
@@ -109,12 +109,12 @@ impl Function {
 
         let binding = IndexSet::from_iter([
             ResolvedVar {
-                name: Symbol::from("old"),
+                name: String::from("old"),
                 sort: output.clone(),
                 is_global_ref: false,
             },
             ResolvedVar {
-                name: Symbol::from("new"),
+                name: String::from("new"),
                 sort: output.clone(),
                 is_global_ref: false,
             },
@@ -167,7 +167,7 @@ impl Function {
             }
         }));
 
-        let sorts: HashSet<Symbol> = input
+        let sorts: HashSet<String> = input
             .iter()
             .map(|x| x.name())
             .chain(once(output.name()))
@@ -192,7 +192,7 @@ impl Function {
     }
 
     pub fn get(&self, inputs: &[Value]) -> Option<Value> {
-        self.nodes.get(inputs).map(|output| output.value)
+        self.nodes.get(inputs).map(|output| output.value.clone())
     }
 
     pub fn insert(&mut self, inputs: &[Value], value: Value, timestamp: u32) -> Option<Value> {
@@ -281,11 +281,11 @@ impl Function {
             let as_mut = Rc::make_mut(index);
             if col == self.schema.input.len() {
                 for (slot, _, out) in self.nodes.iter_range(offsets.clone(), true) {
-                    as_mut.add(out.value, slot)
+                    as_mut.add(out.value.clone(), slot)
                 }
             } else {
                 for (slot, inp, _) in self.nodes.iter_range(offsets.clone(), true) {
-                    as_mut.add(inp[col], slot)
+                    as_mut.add(inp[col].clone(), slot)
                 }
             }
 
@@ -428,9 +428,9 @@ impl Function {
             return result;
         };
 
-        let mut out_val = out.value;
+        let mut out_val = out.value.clone();
         scratch.clear();
-        scratch.extend(args.iter().copied());
+        scratch.extend(args.iter().cloned());
 
         for (val, ty) in scratch.iter_mut().zip(&self.schema.input) {
             modified |= ty.canonicalize(val, uf);
@@ -444,27 +444,35 @@ impl Function {
         let out_ty = &self.schema.output;
         self.nodes
             .insert_and_merge(scratch, timestamp, out.subsumed, |prev| {
-                if let Some(mut prev) = prev {
+                if let Some(mut prev) = prev.clone() {
                     out_ty.canonicalize(&mut prev, uf);
                     let mut appended = false;
                     if self.merge.on_merge.is_some() && prev != out_val {
-                        deferred_merges.push((scratch.clone(), prev, out_val));
+                        deferred_merges.push((scratch.clone(), prev.clone(), out_val.clone()));
                         appended = true;
                     }
                     match &self.merge.merge_vals {
                         MergeFn::Union => {
                             debug_assert!(self.schema.output.is_eq_sort());
-                            uf.union_values(prev, out_val, self.schema.output.name())
+                            uf.union_values(
+                                prev.clone(),
+                                out_val.clone(),
+                                self.schema.output.name(),
+                            )
                         }
                         MergeFn::AssertEq => {
                             if prev != out_val {
-                                result = Err(Error::MergeError(self.decl.name, prev, out_val));
+                                result = Err(Error::MergeError(
+                                    self.decl.name.clone(),
+                                    prev.clone(),
+                                    out_val,
+                                ));
                             }
                             prev
                         }
                         MergeFn::Expr(_) => {
                             if !appended && prev != out_val {
-                                deferred_merges.push((scratch.clone(), prev, out_val));
+                                deferred_merges.push((scratch.clone(), prev.clone(), out_val));
                             }
                             prev
                         }
@@ -476,7 +484,7 @@ impl Function {
         if let Some((inputs, _)) = self.nodes.get_index(i, true) {
             if inputs != &scratch[..] {
                 scratch.clear();
-                scratch.extend_from_slice(inputs);
+                scratch.extend(inputs.iter().cloned());
                 self.nodes.remove(scratch, timestamp);
                 scratch.clear();
             }

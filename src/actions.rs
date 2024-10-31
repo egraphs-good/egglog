@@ -8,13 +8,16 @@ use typechecking::TypeError;
 use crate::{ast::Literal, core::ResolvedCall, ExtractReport, Value};
 
 struct ActionCompiler<'a> {
-    types: &'a IndexMap<Symbol, ArcSort>,
+    types: &'a IndexMap<String, ArcSort>,
     locals: IndexSet<ResolvedVar>,
     instructions: Vec<Instruction>,
 }
 
 impl<'a> ActionCompiler<'a> {
-    fn compile_action(&mut self, action: &GenericCoreAction<ResolvedCall, ResolvedVar>) {
+    fn compile_action(
+        &mut self,
+        action: &GenericCoreAction<ResolvedCall, ResolvedVar, ResolvedLiteral>,
+    ) {
         match action {
             GenericCoreAction::Let(_ann, v, f, args) => {
                 self.do_call(f, args);
@@ -37,7 +40,7 @@ impl<'a> ActionCompiler<'a> {
                     self.do_atom_term(arg);
                 }
                 self.do_atom_term(e);
-                self.instructions.push(Instruction::Set(func.name));
+                self.instructions.push(Instruction::Set(func.name.clone()));
             }
             GenericCoreAction::Change(_ann, change, f, args) => {
                 let ResolvedCall::Func(func) = f else {
@@ -47,7 +50,7 @@ impl<'a> ActionCompiler<'a> {
                     self.do_atom_term(arg);
                 }
                 self.instructions
-                    .push(Instruction::Change(*change, func.name));
+                    .push(Instruction::Change(*change, func.name.clone()));
             }
             GenericCoreAction::Union(_ann, arg1, arg2) => {
                 let sort = self.do_atom_term(arg1);
@@ -83,8 +86,9 @@ impl<'a> ActionCompiler<'a> {
                 }
             }
             ResolvedAtomTerm::Literal(_ann, lit) => {
-                self.instructions.push(Instruction::Literal(lit.clone()));
-                crate::sort::literal_sort(lit)
+                self.instructions
+                    .push(Instruction::Literal(lit.literal.clone()));
+                lit.sort.clone()
             }
             ResolvedAtomTerm::Global(_ann, _var) => {
                 panic!("Global variables should have been desugared");
@@ -94,7 +98,7 @@ impl<'a> ActionCompiler<'a> {
 
     fn do_function(&mut self, func_type: &FuncType) {
         self.instructions.push(Instruction::CallFunction(
-            func_type.name,
+            func_type.name.clone(),
             func_type.has_default || func_type.is_datatype,
         ));
     }
@@ -124,16 +128,16 @@ enum Instruction {
     ///
     /// This should be set to true after we disallow lookup in rule's actions and :default keyword
     /// Currently, it's true when has_default() || is_datatype()
-    CallFunction(Symbol, bool),
+    CallFunction(String, bool),
     /// Pop primitive arguments off the stack, calls the primitive,
     /// and push the result onto the stack.
     CallPrimitive(SpecializedPrimitive, usize),
     /// Pop function arguments off the stack and either deletes or subsumes the corresponding row
     /// in the function.
-    Change(Change, Symbol),
+    Change(Change, String),
     /// Pop the value to be set and the function arguments off the stack.
     /// Set the function at the given arguments to the new value.
-    Set(Symbol),
+    Set(String),
     /// Union the last `n` values on the stack.
     Union(usize, ArcSort),
     /// Extract the best expression. `n` is always 2.
@@ -155,12 +159,12 @@ impl EGraph {
     pub(crate) fn compile_actions(
         &self,
         binding: &IndexSet<ResolvedVar>,
-        actions: &GenericCoreActions<ResolvedCall, ResolvedVar>,
+        actions: &GenericCoreActions<ResolvedCall, ResolvedVar, ResolvedLiteral>,
     ) -> Result<Program, Vec<TypeError>> {
         // TODO: delete types and just keep the ordering
         let mut types = IndexMap::default();
         for var in binding {
-            types.insert(var.name, var.sort.clone());
+            types.insert(var.name.clone(), var.sort.clone());
         }
         let mut compiler = ActionCompiler {
             types: &types,
@@ -188,7 +192,7 @@ impl EGraph {
         // TODO: delete types and just keep the ordering
         let mut types = IndexMap::default();
         for var in binding {
-            types.insert(var.name, var.sort.clone());
+            types.insert(var.name.clone(), var.sort.clone());
         }
         let mut compiler = ActionCompiler {
             types: &types,
@@ -206,7 +210,7 @@ impl EGraph {
 
     fn perform_set(
         &mut self,
-        table: Symbol,
+        table: String,
         new_value: Value,
         stack: &mut [Value],
     ) -> Result<(), Error> {
@@ -225,12 +229,12 @@ impl EGraph {
                         return Err(Error::MergeError(table, new_value, old_value));
                     }
                     MergeFn::Union => self.unionfind.union_values(
-                        old_value,
-                        new_value,
-                        function.decl.schema.output,
+                        old_value.clone(),
+                        new_value.clone(),
+                        function.decl.schema.output.clone(),
                     ),
                     MergeFn::Expr(merge_prog) => {
-                        let values = [old_value, new_value];
+                        let values = [old_value.clone(), new_value.clone()];
                         let mut stack = vec![];
                         self.run_actions(&mut stack, &values, &merge_prog)?;
                         stack.pop().unwrap()
@@ -265,8 +269,8 @@ impl EGraph {
         for instr in &program.0 {
             match instr {
                 Instruction::Load(load) => match load {
-                    Load::Stack(idx) => stack.push(stack[*idx]),
-                    Load::Subst(idx) => stack.push(subst[*idx]),
+                    Load::Stack(idx) => stack.push(stack[*idx].clone()),
+                    Load::Subst(idx) => stack.push(subst[*idx].clone()),
                 },
                 Instruction::CallFunction(f, make_defaults) => {
                     let function = self.functions.get_mut(f).unwrap();
@@ -282,7 +286,7 @@ impl EGraph {
                     }
 
                     let value = if let Some(out) = function.nodes.get(values) {
-                        out.value
+                        out.value.clone()
                     } else if *make_defaults {
                         let ts = self.timestamp;
                         let out = &function.schema.output;
@@ -297,13 +301,17 @@ impl EGraph {
                                     tag: out.name(),
                                     bits: self.unionfind.make_set(),
                                 };
-                                function.insert(values, value, ts);
+                                function.insert(values, value.clone(), ts);
                                 value
                             }
                             Some(default) => {
                                 let default = default.clone();
                                 let value = self.eval_resolved_expr(&default)?;
-                                self.functions.get_mut(f).unwrap().insert(values, value, ts);
+                                self.functions.get_mut(f).unwrap().insert(
+                                    values,
+                                    value.clone(),
+                                    ts,
+                                );
                                 value
                             }
                             _ => {
@@ -347,7 +355,7 @@ impl EGraph {
                     let new_value = stack.pop().unwrap();
                     let new_len = stack.len() - function.schema.input.len();
 
-                    self.perform_set(*f, new_value, stack)?;
+                    self.perform_set(f.clone(), new_value, stack)?;
                     stack.truncate(new_len)
                 }
                 Instruction::Union(arity, sort) => {
@@ -368,7 +376,7 @@ impl EGraph {
 
                     let variants = values[1].bits as i64;
                     if variants == 0 {
-                        let (cost, term) = self.extract(values[0], &mut termdag, sort);
+                        let (cost, term) = self.extract(values[0].clone(), &mut termdag, sort);
                         let extracted = termdag.to_string(&term);
                         log::info!("extracted with cost {cost}: {extracted}");
                         self.print_msg(extracted);
@@ -381,8 +389,12 @@ impl EGraph {
                         if variants < 0 {
                             panic!("Cannot extract negative number of variants");
                         }
-                        let terms =
-                            self.extract_variants(sort, values[0], variants as usize, &mut termdag);
+                        let terms = self.extract_variants(
+                            sort,
+                            values[0].clone(),
+                            variants as usize,
+                            &mut termdag,
+                        );
                         log::info!("extracted variants:");
                         let mut msg = String::default();
                         msg += "(\n";
@@ -403,7 +415,9 @@ impl EGraph {
                 Instruction::Literal(lit) => match lit {
                     Literal::Int(i) => stack.push(Value::from(*i)),
                     Literal::F64(f) => stack.push(Value::from(*f)),
-                    Literal::String(s) => stack.push(Value::from(*s)),
+                    Literal::String(s) => {
+                        stack.push(s.clone().store(&self.get_sort().unwrap()).unwrap())
+                    }
                     Literal::Bool(b) => stack.push(Value::from(*b)),
                     Literal::Unit => stack.push(Value::unit()),
                 },
@@ -417,7 +431,7 @@ impl EGraph {
                         }
                         Change::Subsume => {
                             if function.decl.merge.is_some() {
-                                return Err(Error::SubsumeMergeError(*f));
+                                return Err(Error::SubsumeMergeError(f.clone()));
                             }
                             function.subsume(args);
                         }

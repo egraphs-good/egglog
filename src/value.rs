@@ -1,33 +1,30 @@
 use ordered_float::OrderedFloat;
-use std::num::NonZeroU32;
 
 use lazy_static::lazy_static;
 
-use crate::ast::Symbol;
-
 #[cfg(debug_assertions)]
-use crate::{BoolSort, F64Sort, I64Sort, Sort, StringSort};
+use crate::{BoolSort, F64Sort, I64Sort, Sort};
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
 // FIXME this shouldn't be pub
 pub struct Value {
     // since egglog is type-safe, we don't need to store the tag
     // however, it is useful in debugging, so we keep it in debug builds
     #[cfg(debug_assertions)]
-    pub tag: Symbol,
+    pub tag: String,
     pub bits: u64,
 }
 
 lazy_static! {
-    static ref BOGUS: Symbol = "__bogus__".into();
-    static ref UNIT: Symbol = "Unit".into();
+    static ref BOGUS: String = "__bogus__".into();
+    static ref UNIT: String = "Unit".into();
 }
 
 impl Value {
     pub fn unit() -> Self {
         Value {
             #[cfg(debug_assertions)]
-            tag: *UNIT,
+            tag: UNIT.clone(),
             bits: 0,
         }
     }
@@ -35,7 +32,7 @@ impl Value {
     pub fn fake() -> Self {
         Value {
             #[cfg(debug_assertions)]
-            tag: *BOGUS,
+            tag: BOGUS.clone(),
             bits: 1234567890,
         }
     }
@@ -61,15 +58,15 @@ impl From<OrderedFloat<f64>> for Value {
     }
 }
 
-impl From<Symbol> for Value {
-    fn from(s: Symbol) -> Self {
-        Self {
-            #[cfg(debug_assertions)]
-            tag: StringSort.name(),
-            bits: NonZeroU32::from(s).get().into(),
-        }
-    }
-}
+// impl From<String> for Value {
+//     fn from(s: String) -> Self {
+//         Self {
+//             #[cfg(debug_assertions)]
+//             tag: StringSort.name(),
+//             bits: NonZeroU32::from(s).get().into(),
+//         }
+//     }
+// }
 
 impl From<bool> for Value {
     fn from(b: bool) -> Self {

@@ -394,7 +394,6 @@ dependencies = [
  "rustc-hash",
  "serde_json",
  "smallvec",
- "symbol_table",
  "thiserror",
 ]
 
@@ -1077,17 +1076,6 @@ name = "strsim"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
-
-[[package]]
-name = "symbol_table"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f19bffd69fb182e684d14e3c71d04c0ef33d1641ac0b9e81c712c734e83703bc"
-dependencies = [
- "crossbeam-utils",
- "foldhash",
- "hashbrown",
-]
 
 [[package]]
 name = "syn"

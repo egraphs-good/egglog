@@ -1,5 +1,4 @@
 use egglog::{ast::Expr, EGraph, ExtractReport, Function, SerializeConfig, Term, Value};
-use symbol_table::GlobalSymbol;
 
 #[test]
 fn test_subsumed_unextractable_action_extract() {

@@ -8,7 +8,7 @@ use crate::{ast::Literal, util::IndexSet};
 use super::*;
 
 lazy_static! {
-    static ref RATIONAL_SORT_NAME: Symbol = "Rational".into();
+    static ref RATIONAL_SORT_NAME: String = "Rational".into();
     static ref RATS: Mutex<IndexSet<R>> = Default::default();
 }
 
@@ -16,8 +16,8 @@ lazy_static! {
 pub struct RationalSort;
 
 impl Sort for RationalSort {
-    fn name(&self) -> Symbol {
-        *RATIONAL_SORT_NAME
+    fn name(&self) -> String {
+        RATIONAL_SORT_NAME.clone()
     }
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {

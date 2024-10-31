@@ -9,7 +9,7 @@ type ValueSet = BTreeSet<Value>;
 
 #[derive(Debug)]
 pub struct SetSort {
-    name: Symbol,
+    name: String,
     element: ArcSort,
     sets: Mutex<IndexSet<ValueSet>>,
 }
@@ -19,17 +19,17 @@ impl SetSort {
         self.element.clone()
     }
 
-    pub fn element_name(&self) -> Symbol {
+    pub fn element_name(&self) -> String {
         self.element.name()
     }
 }
 
 impl Presort for SetSort {
-    fn presort_name() -> Symbol {
+    fn presort_name() -> String {
         "Set".into()
     }
 
-    fn reserved_primitives() -> Vec<Symbol> {
+    fn reserved_primitives() -> Vec<String> {
         vec![
             "set-of".into(),
             "set-empty".into(),
@@ -47,14 +47,14 @@ impl Presort for SetSort {
 
     fn make_sort(
         typeinfo: &mut TypeInfo,
-        name: Symbol,
+        name: String,
         args: &[Expr],
     ) -> Result<ArcSort, TypeError> {
         if let [Expr::Var(span, e)] = args {
             let e = typeinfo
                 .sorts
                 .get(e)
-                .ok_or(TypeError::UndefinedSort(*e, span.clone()))?;
+                .ok_or(TypeError::UndefinedSort(e.clone(), span.clone()))?;
 
             if e.is_eq_container_sort() {
                 return Err(TypeError::DisallowedSort(
@@ -76,8 +76,8 @@ impl Presort for SetSort {
 }
 
 impl Sort for SetSort {
-    fn name(&self) -> Symbol {
-        self.name
+    fn name(&self) -> String {
+        self.name.clone()
     }
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
@@ -98,7 +98,7 @@ impl Sort for SetSort {
         let set = sets.get_index(value.bits as usize).unwrap();
         let mut result = Vec::new();
         for e in set.iter() {
-            result.push((self.element.clone(), *e));
+            result.push((self.element.clone(), e.clone()));
         }
         result
     }
@@ -110,7 +110,7 @@ impl Sort for SetSort {
         let new_set: ValueSet = set
             .iter()
             .map(|e| {
-                let mut e = *e;
+                let mut e = e.clone();
                 changed |= self.element.canonicalize(&mut e, unionfind);
                 e
             })
@@ -189,14 +189,14 @@ impl Sort for SetSort {
         let mut expr = Expr::call_no_span("set-empty", []);
         let mut cost = 0usize;
         for e in set.iter().rev() {
-            let e = extractor.find_best(*e, termdag, &self.element)?;
+            let e = extractor.find_best(e.clone(), termdag, &self.element)?;
             cost = cost.saturating_add(e.0);
             expr = Expr::call_no_span("set-insert", [expr, termdag.term_to_expr(&e.1)])
         }
         Some((cost, expr))
     }
 
-    fn serialized_name(&self, _value: &Value) -> Symbol {
+    fn serialized_name(&self, _value: &Value) -> String {
         "set-of".into()
     }
 }
@@ -208,7 +208,7 @@ impl IntoSort for ValueSet {
         let (i, _) = sets.insert_full(self);
         Some(Value {
             #[cfg(debug_assertions)]
-            tag: sort.name,
+            tag: sort.name.clone(),
             bits: i as u64,
         })
     }
@@ -223,13 +223,13 @@ impl FromSort for ValueSet {
 }
 
 struct SetOf {
-    name: Symbol,
+    name: String,
     set: Arc<SetSort>,
 }
 
 impl PrimitiveLike for SetOf {
-    fn name(&self) -> Symbol {
-        self.name
+    fn name(&self) -> String {
+        self.name.clone()
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
@@ -245,19 +245,19 @@ impl PrimitiveLike for SetOf {
         _sorts: (&[ArcSort], &ArcSort),
         _egraph: Option<&mut EGraph>,
     ) -> Option<Value> {
-        let set = ValueSet::from_iter(values.iter().copied());
+        let set = ValueSet::from_iter(values.iter().cloned());
         Some(set.store(&self.set).unwrap())
     }
 }
 
 struct Ctor {
-    name: Symbol,
+    name: String,
     set: Arc<SetSort>,
 }
 
 impl PrimitiveLike for Ctor {
-    fn name(&self) -> Symbol {
-        self.name
+    fn name(&self) -> String {
+        self.name.clone()
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
@@ -276,13 +276,13 @@ impl PrimitiveLike for Ctor {
 }
 
 struct SetRebuild {
-    name: Symbol,
+    name: String,
     set: Arc<SetSort>,
 }
 
 impl PrimitiveLike for SetRebuild {
-    fn name(&self) -> Symbol {
-        self.name
+    fn name(&self) -> String {
+        self.name.clone()
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
@@ -304,7 +304,7 @@ impl PrimitiveLike for SetRebuild {
         let set = ValueSet::load(&self.set, &values[0]);
         let new_set: ValueSet = set
             .iter()
-            .map(|e| egraph.find(&self.set.element, *e))
+            .map(|e| egraph.find(&self.set.element, e.clone()))
             .collect();
         // drop set to make sure we lose lock
         drop(set);
@@ -313,13 +313,13 @@ impl PrimitiveLike for SetRebuild {
 }
 
 struct Insert {
-    name: Symbol,
+    name: String,
     set: Arc<SetSort>,
 }
 
 impl PrimitiveLike for Insert {
-    fn name(&self) -> Symbol {
-        self.name
+    fn name(&self) -> String {
+        self.name.clone()
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
@@ -338,19 +338,19 @@ impl PrimitiveLike for Insert {
         _egraph: Option<&mut EGraph>,
     ) -> Option<Value> {
         let mut set = ValueSet::load(&self.set, &values[0]);
-        set.insert(values[1]);
+        set.insert(values[1].clone());
         set.store(&self.set)
     }
 }
 
 struct NotContains {
-    name: Symbol,
+    name: String,
     set: Arc<SetSort>,
 }
 
 impl PrimitiveLike for NotContains {
-    fn name(&self) -> Symbol {
-        self.name
+    fn name(&self) -> String {
+        self.name.clone()
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
@@ -378,13 +378,13 @@ impl PrimitiveLike for NotContains {
 }
 
 struct Contains {
-    name: Symbol,
+    name: String,
     set: Arc<SetSort>,
 }
 
 impl PrimitiveLike for Contains {
-    fn name(&self) -> Symbol {
-        self.name
+    fn name(&self) -> String {
+        self.name.clone()
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
@@ -412,13 +412,13 @@ impl PrimitiveLike for Contains {
 }
 
 struct Union {
-    name: Symbol,
+    name: String,
     set: Arc<SetSort>,
 }
 
 impl PrimitiveLike for Union {
-    fn name(&self) -> Symbol {
-        self.name
+    fn name(&self) -> String {
+        self.name.clone()
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
@@ -438,19 +438,19 @@ impl PrimitiveLike for Union {
     ) -> Option<Value> {
         let mut set1 = ValueSet::load(&self.set, &values[0]);
         let set2 = ValueSet::load(&self.set, &values[1]);
-        set1.extend(set2.iter());
+        set1.extend(set2.iter().cloned());
         set1.store(&self.set)
     }
 }
 
 struct Intersect {
-    name: Symbol,
+    name: String,
     set: Arc<SetSort>,
 }
 
 impl PrimitiveLike for Intersect {
-    fn name(&self) -> Symbol {
-        self.name
+    fn name(&self) -> String {
+        self.name.clone()
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
@@ -477,13 +477,13 @@ impl PrimitiveLike for Intersect {
 }
 
 struct Length {
-    name: Symbol,
+    name: String,
     set: Arc<SetSort>,
 }
 
 impl PrimitiveLike for Length {
-    fn name(&self) -> Symbol {
-        self.name
+    fn name(&self) -> String {
+        self.name.clone()
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
@@ -507,13 +507,13 @@ impl PrimitiveLike for Length {
 }
 
 struct Get {
-    name: Symbol,
+    name: String,
     set: Arc<SetSort>,
 }
 
 impl PrimitiveLike for Get {
-    fn name(&self) -> Symbol {
-        self.name
+    fn name(&self) -> String {
+        self.name.clone()
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
@@ -533,18 +533,18 @@ impl PrimitiveLike for Get {
     ) -> Option<Value> {
         let set = ValueSet::load(&self.set, &values[0]);
         let index = i64::load(&I64Sort, &values[1]);
-        set.iter().nth(index as usize).copied()
+        set.iter().nth(index as usize).cloned()
     }
 }
 
 struct Remove {
-    name: Symbol,
+    name: String,
     set: Arc<SetSort>,
 }
 
 impl PrimitiveLike for Remove {
-    fn name(&self) -> Symbol {
-        self.name
+    fn name(&self) -> String {
+        self.name.clone()
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
@@ -569,13 +569,13 @@ impl PrimitiveLike for Remove {
 }
 
 struct Diff {
-    name: Symbol,
+    name: String,
     set: Arc<SetSort>,
 }
 
 impl PrimitiveLike for Diff {
-    fn name(&self) -> Symbol {
-        self.name
+    fn name(&self) -> String {
+        self.name.clone()
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {

@@ -32,7 +32,7 @@ use crate::extract::{Cost, Extractor};
 use crate::*;
 
 pub trait Sort: Any + Send + Sync + Debug {
-    fn name(&self) -> Symbol;
+    fn name(&self) -> String;
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static>;
 
@@ -80,7 +80,7 @@ pub trait Sort: Any + Send + Sync + Debug {
     /// Return the serialized name of the sort
     ///
     /// Only used for container sorts, which cannot be serialized with make_expr so need an explicit name
-    fn serialized_name(&self, _value: &Value) -> Symbol {
+    fn serialized_name(&self, _value: &Value) -> String {
         self.name()
     }
 
@@ -119,23 +119,23 @@ pub trait Sort: Any + Send + Sync + Debug {
 // (for example, we want to add partial application) we should revisit
 // this and make the methods take a `self` parameter.
 pub trait Presort {
-    fn presort_name() -> Symbol;
-    fn reserved_primitives() -> Vec<Symbol>;
+    fn presort_name() -> String;
+    fn reserved_primitives() -> Vec<String>;
     fn make_sort(
         typeinfo: &mut TypeInfo,
-        name: Symbol,
+        name: String,
         args: &[Expr],
     ) -> Result<ArcSort, TypeError>;
 }
 
 #[derive(Debug)]
 pub struct EqSort {
-    pub name: Symbol,
+    pub name: String,
 }
 
 impl Sort for EqSort {
-    fn name(&self) -> Symbol {
-        self.name
+    fn name(&self) -> String {
+        self.name.clone()
     }
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
@@ -183,12 +183,12 @@ impl<T: IntoSort> IntoSort for Option<T> {
 }
 
 pub type PreSort =
-    fn(typeinfo: &mut TypeInfo, name: Symbol, params: &[Expr]) -> Result<ArcSort, TypeError>;
+    fn(typeinfo: &mut TypeInfo, name: String, params: &[Expr]) -> Result<ArcSort, TypeError>;
 
 pub(crate) struct ValueEq;
 
 impl PrimitiveLike for ValueEq {
-    fn name(&self) -> Symbol {
+    fn name(&self) -> String {
         "value-eq".into()
     }
 
@@ -214,11 +214,11 @@ impl PrimitiveLike for ValueEq {
     }
 }
 
-pub fn literal_sort(lit: &Literal) -> ArcSort {
+pub fn literal_sort(lit: &Literal, string_sort: ArcSort) -> ArcSort {
     match lit {
         Literal::Int(_) => Arc::new(I64Sort) as ArcSort,
         Literal::F64(_) => Arc::new(F64Sort) as ArcSort,
-        Literal::String(_) => Arc::new(StringSort) as ArcSort,
+        Literal::String(_) => string_sort,
         Literal::Bool(_) => Arc::new(BoolSort) as ArcSort,
         Literal::Unit => Arc::new(UnitSort) as ArcSort,
     }

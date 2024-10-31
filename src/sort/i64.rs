@@ -6,12 +6,12 @@ use super::*;
 pub struct I64Sort;
 
 lazy_static! {
-    static ref I64_SORT_NAME: Symbol = "i64".into();
+    static ref I64_SORT_NAME: String = "i64".into();
 }
 
 impl Sort for I64Sort {
-    fn name(&self) -> Symbol {
-        *I64_SORT_NAME
+    fn name(&self) -> String {
+        I64_SORT_NAME.clone()
     }
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
@@ -59,7 +59,7 @@ impl Sort for I64Sort {
         add_primitives!(typeinfo, "min" = |a: i64, b: i64| -> i64 { a.min(b) });
         add_primitives!(typeinfo, "max" = |a: i64, b: i64| -> i64 { a.max(b) });
 
-        add_primitives!(typeinfo, "to-string" = |a: i64| -> Symbol { a.to_string().into() });
+        add_primitives!(typeinfo, "to-string" = |a: i64| -> String { a.to_string().into() });
 
         // Must be in the i64 sort register function because the string sort is registered before the i64 sort.
         typeinfo.add_primitive(CountMatches {
@@ -100,14 +100,14 @@ impl FromSort for i64 {
 }
 
 struct CountMatches {
-    name: Symbol,
+    name: String,
     string: Arc<StringSort>,
     int: Arc<I64Sort>,
 }
 
 impl PrimitiveLike for CountMatches {
-    fn name(&self) -> Symbol {
-        self.name
+    fn name(&self) -> String {
+        self.name.clone()
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
@@ -124,8 +124,8 @@ impl PrimitiveLike for CountMatches {
         _sorts: (&[ArcSort], &ArcSort),
         _egraph: Option<&mut EGraph>,
     ) -> Option<Value> {
-        let string1 = Symbol::load(&self.string, &values[0]).to_string();
-        let string2 = Symbol::load(&self.string, &values[1]).to_string();
+        let string1 = String::load(&self.string, &values[0]).to_string();
+        let string2 = String::load(&self.string, &values[1]).to_string();
         Some(Value::from(string1.matches(&string2).count() as i64))
     }
 }

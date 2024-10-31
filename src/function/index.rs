@@ -1,26 +1,26 @@
 //! Column-level indexes on values from a common sort.
 use smallvec::SmallVec;
 
-use crate::{unionfind::UnionFind, util::HashMap, Symbol, Value};
+use crate::{unionfind::UnionFind, util::HashMap, Value};
 
 pub(crate) type Offset = u32;
 
 #[derive(Clone, Debug)]
 pub(crate) struct ColumnIndex {
-    sort: Symbol,
+    sort: String,
     ids: HashMap<u64, SmallVec<[Offset; 8]>>,
 }
 
 impl ColumnIndex {
-    pub(crate) fn new(sort: Symbol) -> ColumnIndex {
+    pub(crate) fn new(sort: String) -> ColumnIndex {
         ColumnIndex {
             sort,
             ids: Default::default(),
         }
     }
 
-    pub(crate) fn sort(&self) -> Symbol {
-        self.sort
+    pub(crate) fn sort(&self) -> String {
+        self.sort.clone()
     }
 
     pub(crate) fn add(&mut self, v: Value, i: usize) {
@@ -51,7 +51,7 @@ impl ColumnIndex {
             (
                 Value {
                     #[cfg(debug_assertions)]
-                    tag: self.sort,
+                    tag: self.sort.clone(),
                     bits: *bits,
                 },
                 v.as_slice(),
@@ -63,7 +63,7 @@ impl ColumnIndex {
         &'a self,
         uf: &'a UnionFind,
     ) -> impl Iterator<Item = usize> + '_ {
-        uf.dirty_ids(self.sort).flat_map(|x| {
+        uf.dirty_ids(self.sort.clone()).flat_map(|x| {
             self.get_indexes_for_bits(x)
                 .unwrap_or(&[])
                 .iter()
@@ -80,7 +80,7 @@ impl CompositeColumnIndex {
         CompositeColumnIndex(SmallVec::new())
     }
 
-    pub(crate) fn add(&mut self, s: Symbol, v: Value, i: usize) {
+    pub(crate) fn add(&mut self, s: String, v: Value, i: usize) {
         if let Some(index) = self.0.iter().position(|index| index.sort() == s) {
             (self.0)[index].add(v, i);
         } else {

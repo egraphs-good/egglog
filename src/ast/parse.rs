@@ -163,7 +163,7 @@ trait Parser<T>: Fn(&Context) -> Res<T> + Clone {
 }
 impl<T, F: Fn(&Context) -> Res<T> + Clone> Parser<T> for F {}
 
-fn ident(ctx: &Context) -> Res<Symbol> {
+fn ident(ctx: &Context) -> Res<String> {
     let mut span = ctx.span();
     if ctx.index >= ctx.source.contents.len() {
         return Err(ParseError::EndOfFile(span));
@@ -185,7 +185,7 @@ fn ident(ctx: &Context) -> Res<Symbol> {
         Err(ParseError::Ident(span))
     } else {
         next.advance_past_whitespace();
-        Ok((Symbol::from(span.string()), span, next))
+        Ok((span.clone().string().to_string(), span, next))
     }
 }
 
@@ -289,7 +289,7 @@ fn program(ctx: &Context) -> Res<Vec<Command>> {
     repeat_until(command, |ctx| ctx.index == ctx.source.contents.len())(ctx)
 }
 
-fn rec_datatype(ctx: &Context) -> Res<(Span, Symbol, Subdatatypes)> {
+fn rec_datatype(ctx: &Context) -> Res<(Span, String, Subdatatypes)> {
     choice(
         parens(sequence3(
             text("sort"),
@@ -310,15 +310,15 @@ fn snd<T, U>(x: Option<(T, U)>, _span: Span) -> Option<U> {
     x.map(|(_, x)| x)
 }
 
-fn ident_after_paren(ctx: &Context) -> &str {
+fn ident_after_paren(ctx: &Context) -> String {
     match sequence(choice(text("("), text("[")), ident)(ctx) {
-        Ok((((), symbol), _, _)) => symbol.into(),
-        Err(_) => "",
+        Ok((((), symbol), _, _)) => symbol.clone(),
+        Err(_) => "".to_owned(),
     }
 }
 
 fn command(ctx: &Context) -> Res<Command> {
-    match ident_after_paren(ctx) {
+    match ident_after_paren(ctx).as_str() {
         "set-option" => {
             parens(sequence3(text("set-option"), ident, expr))
                 .map(|((), name, value), _| Command::SetOption { name, value })(ctx)
@@ -548,7 +548,7 @@ fn command(ctx: &Context) -> Res<Command> {
 }
 
 fn schedule(ctx: &Context) -> Res<Schedule> {
-    match ident_after_paren(ctx) {
+    match ident_after_paren(ctx).as_str() {
         "saturate" => parens(sequence(text("saturate"), repeat_until_end_paren(schedule))).map(
             |((), scheds), span| {
                 Schedule::Saturate(span.clone(), Box::new(Schedule::Sequence(span, scheds)))
@@ -614,7 +614,7 @@ fn action(ctx: &Context) -> Res<Action> {
 }
 
 fn non_let_action(ctx: &Context) -> Res<Action> {
-    match ident_after_paren(ctx) {
+    match ident_after_paren(ctx).as_str() {
         "set" => parens(sequence3(
             text("set"),
             parens(sequence(ident, repeat_until_end_paren(expr))),
@@ -652,9 +652,9 @@ fn non_let_action(ctx: &Context) -> Res<Action> {
 
 fn fact(ctx: &Context) -> Res<Fact> {
     let (call_expr, span, next) = call_expr(ctx)?;
-    match call_expr {
+    match call_expr.clone() {
         Expr::Call(_, head, ref tail) => {
-            let fact = match head.into() {
+            let fact = match head.as_str() {
                 "=" if tail.len() < 2 => return Err(ParseError::EqFactLt2(span)),
                 "=" => Fact::Eq(span.clone(), tail.clone()),
                 _ => Fact::Fact(call_expr),
@@ -715,7 +715,7 @@ fn variant(ctx: &Context) -> Res<Variant> {
     })(ctx)
 }
 
-fn r#type(ctx: &Context) -> Res<Symbol> {
+fn r#type(ctx: &Context) -> Res<String> {
     ident(ctx)
 }
 

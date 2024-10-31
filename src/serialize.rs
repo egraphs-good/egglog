@@ -1,7 +1,7 @@
 use ordered_float::NotNan;
 use std::collections::VecDeque;
 
-use crate::{util::HashMap, ArcSort, EGraph, Function, Symbol, TupleOutput, Value};
+use crate::{util::HashMap, ArcSort, EGraph, Function, TupleOutput, Value};
 
 pub struct SerializeConfig {
     // Maximumum number of functions to include in the serialized graph, any after this will be discarded
@@ -32,7 +32,7 @@ pub enum SerializedNode {
     /// A user defined function call.
     Function {
         /// The name of the function.
-        name: Symbol,
+        name: String,
         /// The offset of the index in the table.
         /// This can be resolved to the output and input values with table.get_index(offset, true).
         offset: usize,
@@ -107,7 +107,7 @@ impl EGraph {
                             self.to_node_id(
                                 None,
                                 SerializedNode::Function {
-                                    name: *name,
+                                    name: name.clone(),
                                     offset,
                                 },
                             ),
@@ -185,7 +185,7 @@ impl EGraph {
     /// Gets the serialized class ID for a value.
     pub fn value_to_class_id(&self, sort: &ArcSort, value: &Value) -> egraph_serialize::ClassId {
         // Canonicalize the value first so that we always use the canonical e-class ID
-        let mut value = *value;
+        let mut value = value.clone();
         sort.canonicalize(&mut value, &self.unionfind);
         assert!(
             !sort.name().to_string().contains('-'),
@@ -275,7 +275,7 @@ impl EGraph {
             let node_ids = node_ids.entry(class_id.clone()).or_insert_with(|| {
                 // If we don't find node IDs for this class, it means that all nodes for it were omitted due to size constraints
                 // In this case, add a dummy node in this class to represent the missing nodes
-                let node_id = self.to_node_id(Some(sort), SerializedNode::Dummy(*value));
+                let node_id = self.to_node_id(Some(sort), SerializedNode::Dummy(value.clone()));
                 egraph.nodes.insert(
                     node_id.clone(),
                     egraph_serialize::Node {
@@ -291,7 +291,7 @@ impl EGraph {
             node_ids.rotate_left(1);
             node_ids.front().unwrap().clone()
         } else {
-            let node_id = self.to_node_id(Some(sort), SerializedNode::Primitive(*value));
+            let node_id = self.to_node_id(Some(sort), SerializedNode::Primitive(value.clone()));
             // Add node for value
             {
                 // Children will be empty unless this is a container sort
@@ -312,7 +312,7 @@ impl EGraph {
                 let op = if sort.is_container_sort() {
                     sort.serialized_name(value).to_string()
                 } else {
-                    sort.make_expr(self, *value).1.to_string()
+                    sort.make_expr(self, value.clone()).1.to_string()
                 };
                 egraph.nodes.insert(
                     node_id.clone(),

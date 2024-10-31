@@ -6,7 +6,7 @@ use crate::*;
 /// makes rules into a SSA-like format (see [`NormFact`]).
 pub(crate) fn desugar_program(
     program: Vec<Command>,
-    symbol_gen: &mut SymbolGen,
+    symbol_gen: &mut StringGen,
     seminaive_transform: bool,
 ) -> Result<Vec<NCommand>, Error> {
     let mut res = vec![];
@@ -22,7 +22,7 @@ pub(crate) fn desugar_program(
 /// makes rules into a SSA-like format (see [`NormFact`]).
 pub(crate) fn desugar_command(
     command: Command,
-    symbol_gen: &mut SymbolGen,
+    symbol_gen: &mut StringGen,
     seminaive_transform: bool,
 ) -> Result<Vec<NCommand>, Error> {
     let res = match command {
@@ -49,7 +49,7 @@ pub(crate) fn desugar_command(
             let mut res = vec![];
             for datatype in datatypes.iter() {
                 let span = datatype.0.clone();
-                let name = datatype.1;
+                let name = datatype.1.clone();
                 if let Subdatatypes::Variants(..) = datatype.2 {
                     res.push(NCommand::Sort(span, name, None));
                 }
@@ -77,7 +77,7 @@ pub(crate) fn desugar_command(
                         name: variant.name,
                         schema: Schema {
                             input: variant.types,
-                            output: datatype,
+                            output: datatype.clone(),
                         },
                         merge: None,
                         merge_action: Actions::default(),
@@ -93,10 +93,10 @@ pub(crate) fn desugar_command(
             res
         }
         Command::Rewrite(ruleset, rewrite, subsume) => {
-            desugar_rewrite(ruleset, rewrite_name(&rewrite).into(), &rewrite, subsume)
+            desugar_rewrite(ruleset, rewrite_name(&rewrite), &rewrite, subsume)
         }
         Command::BiRewrite(ruleset, rewrite) => {
-            desugar_birewrite(ruleset, rewrite_name(&rewrite).into(), &rewrite)
+            desugar_birewrite(ruleset, rewrite_name(&rewrite), &rewrite)
         }
         Command::Include(span, file) => {
             let s = std::fs::read_to_string(&file)
@@ -112,13 +112,13 @@ pub(crate) fn desugar_command(
             mut name,
             rule,
         } => {
-            if name == "".into() {
-                name = rule.to_string().replace('\"', "'").into();
+            if name.is_empty() {
+                name = rule.to_string().replace('\"', "'");
             }
 
             let mut result = vec![NCommand::NormRule {
-                ruleset,
-                name,
+                ruleset: ruleset.clone(),
+                name: name.clone(),
                 rule: rule.clone(),
             }];
 
@@ -171,14 +171,14 @@ pub(crate) fn desugar_command(
                 //       ((extract {fresh} {variants}))
                 //       :ruleset {fresh_ruleset})
                 // (run {fresh_ruleset} 1)
-                let fresh = symbol_gen.fresh(&"desugar_qextract_var".into());
-                let fresh_ruleset = symbol_gen.fresh(&"desugar_qextract_ruleset".into());
-                let fresh_rulename = symbol_gen.fresh(&"desugar_qextract_rulename".into());
+                let fresh: String = symbol_gen.fresh(&"desugar_qextract_var".into());
+                let fresh_ruleset: String = symbol_gen.fresh(&"desugar_qextract_ruleset".into());
+                let fresh_rulename: String = symbol_gen.fresh(&"desugar_qextract_rulename".into());
                 let rule = Rule {
                     span: span.clone(),
                     body: vec![Fact::Eq(
                         span.clone(),
-                        vec![Expr::Var(span.clone(), fresh), expr.clone()],
+                        vec![Expr::Var(span.clone(), fresh.clone()), expr.clone()],
                     )],
                     head: Actions::singleton(Action::Extract(
                         span.clone(),
@@ -188,10 +188,10 @@ pub(crate) fn desugar_command(
                 };
                 vec![
                     NCommand::Check(span.clone(), vec![Fact::Fact(expr.clone())]),
-                    NCommand::AddRuleset(fresh_ruleset),
+                    NCommand::AddRuleset(fresh_ruleset.clone()),
                     NCommand::NormRule {
                         name: fresh_rulename,
-                        ruleset: fresh_ruleset,
+                        ruleset: fresh_ruleset.clone(),
                         rule,
                     },
                     NCommand::RunSchedule(Schedule::Run(
@@ -231,15 +231,15 @@ pub(crate) fn desugar_command(
     Ok(res)
 }
 
-fn desugar_datatype(span: Span, name: Symbol, variants: Vec<Variant>) -> Vec<NCommand> {
-    vec![NCommand::Sort(span.clone(), name, None)]
+fn desugar_datatype(span: Span, name: String, variants: Vec<Variant>) -> Vec<NCommand> {
+    vec![NCommand::Sort(span.clone(), name.clone(), None)]
         .into_iter()
         .chain(variants.into_iter().map(|variant| {
             NCommand::Function(FunctionDecl {
                 name: variant.name,
                 schema: Schema {
                     input: variant.types,
-                    output: name,
+                    output: name.clone(),
                 },
                 merge: None,
                 merge_action: Actions::default(),
@@ -254,16 +254,16 @@ fn desugar_datatype(span: Span, name: Symbol, variants: Vec<Variant>) -> Vec<NCo
 }
 
 fn desugar_rewrite(
-    ruleset: Symbol,
-    name: Symbol,
+    ruleset: String,
+    name: String,
     rewrite: &Rewrite,
     subsume: bool,
 ) -> Vec<NCommand> {
     let span = rewrite.span.clone();
-    let var = Symbol::from("rewrite_var__");
+    let var = String::from("rewrite_var__");
     let mut head = Actions::singleton(Action::Union(
         span.clone(),
-        Expr::Var(span.clone(), var),
+        Expr::Var(span.clone(), var.clone()),
         rewrite.rhs.clone(),
     ));
     if subsume {
@@ -272,7 +272,7 @@ fn desugar_rewrite(
                 head.0.push(Action::Change(
                     span.clone(),
                     Change::Subsume,
-                    *f,
+                    f.clone(),
                     args.to_vec(),
                 ));
             }
@@ -291,7 +291,7 @@ fn desugar_rewrite(
             span: span.clone(),
             body: [Fact::Eq(
                 span.clone(),
-                vec![Expr::Var(span, var), rewrite.lhs.clone()],
+                vec![Expr::Var(span, var.clone()), rewrite.lhs.clone()],
             )]
             .into_iter()
             .chain(rewrite.conditions.clone())
@@ -301,7 +301,7 @@ fn desugar_rewrite(
     }]
 }
 
-fn desugar_birewrite(ruleset: Symbol, name: Symbol, rewrite: &Rewrite) -> Vec<NCommand> {
+fn desugar_birewrite(ruleset: String, name: String, rewrite: &Rewrite) -> Vec<NCommand> {
     let span = rewrite.span.clone();
     let rw2 = Rewrite {
         span,
@@ -309,11 +309,11 @@ fn desugar_birewrite(ruleset: Symbol, name: Symbol, rewrite: &Rewrite) -> Vec<NC
         rhs: rewrite.lhs.clone(),
         conditions: rewrite.conditions.clone(),
     };
-    desugar_rewrite(ruleset, format!("{}=>", name).into(), rewrite, false)
+    desugar_rewrite(ruleset.clone(), format!("{}=>", name), rewrite, false)
         .into_iter()
         .chain(desugar_rewrite(
-            ruleset,
-            format!("{}<=", name).into(),
+            ruleset.clone(),
+            format!("{}<=", name),
             &rw2,
             false,
         ))
@@ -321,7 +321,7 @@ fn desugar_birewrite(ruleset: Symbol, name: Symbol, rewrite: &Rewrite) -> Vec<NC
 }
 
 // TODO(yz): we can delete this code once we enforce that all rule bodies cannot read the database (except EqSort).
-fn add_semi_naive_rule(symbol_gen: &mut SymbolGen, rule: Rule) -> Option<Rule> {
+fn add_semi_naive_rule(symbol_gen: &mut StringGen, rule: Rule) -> Option<Rule> {
     let mut new_rule = rule;
     // Whenever an Let(_, expr@Call(...)) or Set(_, expr@Call(...)) is present in action,
     // an additional seminaive rule should be created.
@@ -348,7 +348,7 @@ fn add_semi_naive_rule(symbol_gen: &mut SymbolGen, rule: Rule) -> Option<Rule> {
                 if let Expr::Call(..) = expr {
                     add_new_rule = true;
 
-                    let var = Expr::Var(span.clone(), *symbol);
+                    let var = Expr::Var(span.clone(), symbol.clone());
                     new_head_atoms.push(Fact::Eq(span.clone(), vec![var, expr.clone()]));
                 }
             }
@@ -373,13 +373,13 @@ fn desugar_simplify(
     expr: &Expr,
     schedule: &Schedule,
     span: Span,
-    symbol_gen: &mut SymbolGen,
+    symbol_gen: &mut StringGen,
 ) -> Vec<NCommand> {
     let mut res = vec![NCommand::Push(1)];
-    let lhs = symbol_gen.fresh(&"desugar_simplify".into());
+    let lhs: String = symbol_gen.fresh(&"desugar_simplify".into());
     res.push(NCommand::CoreAction(Action::Let(
         span.clone(),
-        lhs,
+        lhs.clone(),
         expr.clone(),
     )));
     res.push(NCommand::RunSchedule(schedule.clone()));

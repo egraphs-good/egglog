@@ -3,7 +3,7 @@
 //!
 //! This implementation uses interior mutability for `find`.
 use crate::util::HashMap;
-use crate::{Symbol, Value};
+use crate::Value;
 
 use std::cell::Cell;
 use std::fmt::Debug;
@@ -16,8 +16,8 @@ pub type Id = u64;
 pub struct UnionFind {
     parents: Vec<Cell<Id>>,
     n_unions: usize,
-    recent_ids: HashMap<Symbol, Vec<Id>>,
-    staged_ids: HashMap<Symbol, Vec<Id>>,
+    recent_ids: HashMap<String, Vec<Id>>,
+    staged_ids: HashMap<String, Vec<Id>>,
 }
 
 impl UnionFind {
@@ -35,11 +35,11 @@ impl UnionFind {
     }
 
     /// The number of ids that recently stopped being canonical.
-    pub fn new_ids(&self, sort_filter: impl Fn(Symbol) -> bool) -> usize {
+    pub fn new_ids(&self, sort_filter: impl Fn(String) -> bool) -> usize {
         self.recent_ids
             .iter()
             .filter_map(|(sort, ids)| {
-                if sort_filter(*sort) {
+                if sort_filter(sort.clone()) {
                     Some(ids.len())
                 } else {
                     None
@@ -61,7 +61,7 @@ impl UnionFind {
     /// [`clear_recent_ids`] and the call prior to that.
     ///
     /// [`clear_recent_ids`]: UnionFind::clear_recent_ids
-    pub fn dirty_ids(&self, sort: Symbol) -> impl Iterator<Item = Id> + '_ {
+    pub fn dirty_ids(&self, sort: String) -> impl Iterator<Item = Id> + '_ {
         let ids = self
             .recent_ids
             .get(&sort)
@@ -89,7 +89,7 @@ impl UnionFind {
     ///
     /// This method assumes that the given values belong to the same, "eq-able",
     /// sort. Its behavior is unspecified on other values.
-    pub fn union_values(&mut self, val1: Value, val2: Value, sort: Symbol) -> Value {
+    pub fn union_values(&mut self, val1: Value, val2: Value, sort: String) -> Value {
         #[cfg(debug_assertions)]
         debug_assert_eq!(val1.tag, val2.tag);
 
@@ -103,7 +103,7 @@ impl UnionFind {
     /// Like [`union_values`], but operating on raw [`Id`]s.
     ///
     /// [`union_values`]: UnionFind::union_values
-    pub fn union(&mut self, id1: Id, id2: Id, sort: Symbol) -> Id {
+    pub fn union(&mut self, id1: Id, id2: Id, sort: String) -> Id {
         let (res, reparented) = self.do_union(id1, id2);
         if let Some(id) = reparented {
             self.staged_ids.entry(sort).or_default().push(id)

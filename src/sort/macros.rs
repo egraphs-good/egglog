@@ -14,7 +14,7 @@ macro_rules! add_primitives {
             }
 
             impl $crate::PrimitiveLike for MyPrim {
-                fn name(&self) -> $crate::Symbol {
+                fn name(&self) -> String {
                     $name.into()
                 }
 

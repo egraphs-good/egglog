@@ -5,12 +5,12 @@ use crate::{ast::Literal, constraint::AllEqualTypeConstraint, ArcSort, Primitive
 pub struct UnitSort;
 
 lazy_static! {
-    static ref UNIT_SORT_NAME: Symbol = "Unit".into();
+    static ref UNIT_SORT_NAME: String = "Unit".into();
 }
 
 impl Sort for UnitSort {
-    fn name(&self) -> Symbol {
-        *UNIT_SORT_NAME
+    fn name(&self) -> String {
+        UNIT_SORT_NAME.clone()
     }
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
@@ -45,7 +45,7 @@ pub struct NotEqualPrimitive {
 }
 
 impl PrimitiveLike for NotEqualPrimitive {
-    fn name(&self) -> Symbol {
+    fn name(&self) -> String {
         "!=".into()
     }
 

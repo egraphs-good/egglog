@@ -9,7 +9,7 @@ type ValueMap = BTreeMap<Value, Value>;
 
 #[derive(Debug)]
 pub struct MapSort {
-    name: Symbol,
+    name: String,
     key: ArcSort,
     value: ArcSort,
     maps: Mutex<IndexSet<ValueMap>>,
@@ -26,11 +26,11 @@ impl MapSort {
 }
 
 impl Presort for MapSort {
-    fn presort_name() -> Symbol {
+    fn presort_name() -> String {
         "Map".into()
     }
 
-    fn reserved_primitives() -> Vec<Symbol> {
+    fn reserved_primitives() -> Vec<String> {
         vec![
             "rebuild".into(),
             "map-empty".into(),
@@ -45,18 +45,18 @@ impl Presort for MapSort {
 
     fn make_sort(
         typeinfo: &mut TypeInfo,
-        name: Symbol,
+        name: String,
         args: &[Expr],
     ) -> Result<ArcSort, TypeError> {
         if let [Expr::Var(k_span, k), Expr::Var(v_span, v)] = args {
             let k = typeinfo
                 .sorts
                 .get(k)
-                .ok_or(TypeError::UndefinedSort(*k, k_span.clone()))?;
+                .ok_or(TypeError::UndefinedSort(k.clone(), k_span.clone()))?;
             let v = typeinfo
                 .sorts
                 .get(v)
-                .ok_or(TypeError::UndefinedSort(*v, v_span.clone()))?;
+                .ok_or(TypeError::UndefinedSort(v.clone(), v_span.clone()))?;
 
             // TODO: specialize the error message
             if k.is_eq_container_sort() {
@@ -88,8 +88,8 @@ impl Presort for MapSort {
 }
 
 impl Sort for MapSort {
-    fn name(&self) -> Symbol {
-        self.name
+    fn name(&self) -> String {
+        self.name.clone()
     }
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
@@ -109,8 +109,8 @@ impl Sort for MapSort {
         let map = maps.get_index(value.bits as usize).unwrap();
         let mut result = Vec::new();
         for (k, v) in map.iter() {
-            result.push((self.key.clone(), *k));
-            result.push((self.value.clone(), *v));
+            result.push((self.key.clone(), k.clone()));
+            result.push((self.value.clone(), v.clone()));
         }
         result
     }
@@ -122,7 +122,7 @@ impl Sort for MapSort {
         let new_map: ValueMap = map
             .iter()
             .map(|(k, v)| {
-                let (mut k, mut v) = (*k, *v);
+                let (mut k, mut v) = (k.clone(), v.clone());
                 changed |= self.key.canonicalize(&mut k, unionfind);
                 changed |= self.value.canonicalize(&mut v, unionfind);
                 (k, v)
@@ -186,8 +186,8 @@ impl Sort for MapSort {
         let mut expr = Expr::call_no_span("map-empty", []);
         let mut cost = 0usize;
         for (k, v) in map.iter().rev() {
-            let k = extractor.find_best(*k, termdag, &self.key)?;
-            let v = extractor.find_best(*v, termdag, &self.value)?;
+            let k = extractor.find_best(k.clone(), termdag, &self.key)?;
+            let v = extractor.find_best(v.clone(), termdag, &self.value)?;
             cost = cost.saturating_add(k.0).saturating_add(v.0);
             expr = Expr::call_no_span(
                 "map-insert",
@@ -205,7 +205,7 @@ impl IntoSort for ValueMap {
         let (i, _) = maps.insert_full(self);
         Some(Value {
             #[cfg(debug_assertions)]
-            tag: sort.name,
+            tag: sort.name.clone(),
             bits: i as u64,
         })
     }
@@ -220,13 +220,13 @@ impl FromSort for ValueMap {
 }
 
 struct MapRebuild {
-    name: Symbol,
+    name: String,
     map: Arc<MapSort>,
 }
 
 impl PrimitiveLike for MapRebuild {
-    fn name(&self) -> Symbol {
-        self.name
+    fn name(&self) -> String {
+        self.name.clone()
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
@@ -251,8 +251,8 @@ impl PrimitiveLike for MapRebuild {
             .iter()
             .map(|(k, v)| {
                 (
-                    egraph.find(&self.map.key, *k),
-                    egraph.find(&self.map.value, *v),
+                    egraph.find(&self.map.key, k.clone()),
+                    egraph.find(&self.map.value, v.clone()),
                 )
             })
             .collect();
@@ -265,7 +265,7 @@ impl PrimitiveLike for MapRebuild {
 }
 
 struct Ctor {
-    name: Symbol,
+    name: String,
     map: Arc<MapSort>,
 }
 
@@ -273,7 +273,7 @@ struct Ctor {
 pub(crate) struct TermOrderingMin {}
 
 impl PrimitiveLike for TermOrderingMin {
-    fn name(&self) -> Symbol {
+    fn name(&self) -> String {
         "ordering-min".into()
     }
 
@@ -291,9 +291,9 @@ impl PrimitiveLike for TermOrderingMin {
     ) -> Option<Value> {
         assert_eq!(values.len(), 2);
         if values[0] < values[1] {
-            Some(values[0])
+            Some(values[0].clone())
         } else {
-            Some(values[1])
+            Some(values[1].clone())
         }
     }
 }
@@ -301,7 +301,7 @@ impl PrimitiveLike for TermOrderingMin {
 pub(crate) struct TermOrderingMax {}
 
 impl PrimitiveLike for TermOrderingMax {
-    fn name(&self) -> Symbol {
+    fn name(&self) -> String {
         "ordering-max".into()
     }
 
@@ -319,16 +319,16 @@ impl PrimitiveLike for TermOrderingMax {
     ) -> Option<Value> {
         assert_eq!(values.len(), 2);
         if values[0] > values[1] {
-            Some(values[0])
+            Some(values[0].clone())
         } else {
-            Some(values[1])
+            Some(values[1].clone())
         }
     }
 }
 
 impl PrimitiveLike for Ctor {
-    fn name(&self) -> Symbol {
-        self.name
+    fn name(&self) -> String {
+        self.name.clone()
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
@@ -347,13 +347,13 @@ impl PrimitiveLike for Ctor {
 }
 
 struct Insert {
-    name: Symbol,
+    name: String,
     map: Arc<MapSort>,
 }
 
 impl PrimitiveLike for Insert {
-    fn name(&self) -> Symbol {
-        self.name
+    fn name(&self) -> String {
+        self.name.clone()
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
@@ -377,19 +377,19 @@ impl PrimitiveLike for Insert {
         _egraph: Option<&mut EGraph>,
     ) -> Option<Value> {
         let mut map = ValueMap::load(&self.map, &values[0]);
-        map.insert(values[1], values[2]);
+        map.insert(values[1].clone(), values[2].clone());
         map.store(&self.map)
     }
 }
 
 struct Get {
-    name: Symbol,
+    name: String,
     map: Arc<MapSort>,
 }
 
 impl PrimitiveLike for Get {
-    fn name(&self) -> Symbol {
-        self.name
+    fn name(&self) -> String {
+        self.name.clone()
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
@@ -408,18 +408,18 @@ impl PrimitiveLike for Get {
         _egraph: Option<&mut EGraph>,
     ) -> Option<Value> {
         let map = ValueMap::load(&self.map, &values[0]);
-        map.get(&values[1]).copied()
+        map.get(&values[1]).cloned()
     }
 }
 
 struct NotContains {
-    name: Symbol,
+    name: String,
     map: Arc<MapSort>,
 }
 
 impl PrimitiveLike for NotContains {
-    fn name(&self) -> Symbol {
-        self.name
+    fn name(&self) -> String {
+        self.name.clone()
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
@@ -447,13 +447,13 @@ impl PrimitiveLike for NotContains {
 }
 
 struct Contains {
-    name: Symbol,
+    name: String,
     map: Arc<MapSort>,
 }
 
 impl PrimitiveLike for Contains {
-    fn name(&self) -> Symbol {
-        self.name
+    fn name(&self) -> String {
+        self.name.clone()
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
@@ -481,13 +481,13 @@ impl PrimitiveLike for Contains {
 }
 
 struct Remove {
-    name: Symbol,
+    name: String,
     map: Arc<MapSort>,
 }
 
 impl PrimitiveLike for Remove {
-    fn name(&self) -> Symbol {
-        self.name
+    fn name(&self) -> String {
+        self.name.clone()
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
@@ -512,13 +512,13 @@ impl PrimitiveLike for Remove {
 }
 
 struct Length {
-    name: Symbol,
+    name: String,
     map: Arc<MapSort>,
 }
 
 impl PrimitiveLike for Length {
-    fn name(&self) -> Symbol {
-        self.name
+    fn name(&self) -> String {
+        self.name.clone()
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {

@@ -6,12 +6,12 @@ use super::*;
 pub struct BoolSort;
 
 lazy_static! {
-    static ref BOOL_SORT_NAME: Symbol = "bool".into();
+    static ref BOOL_SORT_NAME: String = "bool".into();
 }
 
 impl Sort for BoolSort {
-    fn name(&self) -> Symbol {
-        *BOOL_SORT_NAME
+    fn name(&self) -> String {
+        BOOL_SORT_NAME.clone()
     }
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {

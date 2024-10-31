@@ -63,7 +63,7 @@ mod tests {
 
     fn insert_to_map(table: &mut Table, i: u32, ts: u32) {
         let v = make_value(i);
-        table.insert(&[v], v, ts);
+        table.insert(&[v.clone()], v, ts);
     }
 
     #[test]

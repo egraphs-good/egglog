@@ -102,7 +102,7 @@ type ValueMultiSet = MultiSet<Value>;
 
 #[derive(Debug)]
 pub struct MultiSetSort {
-    name: Symbol,
+    name: String,
     element: ArcSort,
     multisets: Mutex<IndexSet<ValueMultiSet>>,
 }
@@ -112,17 +112,17 @@ impl MultiSetSort {
         self.element.clone()
     }
 
-    pub fn element_name(&self) -> Symbol {
+    pub fn element_name(&self) -> String {
         self.element.name()
     }
 }
 
 impl Presort for MultiSetSort {
-    fn presort_name() -> Symbol {
+    fn presort_name() -> String {
         "MultiSet".into()
     }
 
-    fn reserved_primitives() -> Vec<Symbol> {
+    fn reserved_primitives() -> Vec<String> {
         vec![
             "multiset-of".into(),
             "multiset-insert".into(),
@@ -136,14 +136,14 @@ impl Presort for MultiSetSort {
 
     fn make_sort(
         typeinfo: &mut TypeInfo,
-        name: Symbol,
+        name: String,
         args: &[Expr],
     ) -> Result<ArcSort, TypeError> {
         if let [Expr::Var(span, e)] = args {
             let e = typeinfo
                 .sorts
                 .get(e)
-                .ok_or(TypeError::UndefinedSort(*e, span.clone()))?;
+                .ok_or(TypeError::UndefinedSort(e.clone(), span.clone()))?;
 
             if e.is_eq_container_sort() {
                 return Err(TypeError::DisallowedSort(
@@ -165,8 +165,8 @@ impl Presort for MultiSetSort {
 }
 
 impl Sort for MultiSetSort {
-    fn name(&self) -> Symbol {
-        self.name
+    fn name(&self) -> String {
+        self.name.clone()
     }
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
@@ -186,7 +186,7 @@ impl Sort for MultiSetSort {
         let multiset = multisets.get_index(value.bits as usize).unwrap();
         multiset
             .iter()
-            .map(|k| (self.element.clone(), *k))
+            .map(|k| (self.element.clone(), k.clone()))
             .collect()
     }
 
@@ -195,7 +195,7 @@ impl Sort for MultiSetSort {
         let multiset = multisets.get_index(value.bits as usize).unwrap().clone();
         let mut changed = false;
         let new_multiset = multiset.map(|e| {
-            let mut e = *e;
+            let mut e = e.clone();
             changed |= self.element.canonicalize(&mut e, unionfind);
             e
         });
@@ -267,7 +267,8 @@ impl Sort for MultiSetSort {
         let mut children = vec![];
         let mut cost = 0usize;
         for e in multiset.iter() {
-            let (child_cost, child_term) = extractor.find_best(*e, termdag, &self.element)?;
+            let (child_cost, child_term) =
+                extractor.find_best(e.clone(), termdag, &self.element)?;
             cost = cost.saturating_add(child_cost);
             children.push(termdag.term_to_expr(&child_term));
         }
@@ -275,7 +276,7 @@ impl Sort for MultiSetSort {
         Some((cost, expr))
     }
 
-    fn serialized_name(&self, _value: &Value) -> Symbol {
+    fn serialized_name(&self, _value: &Value) -> String {
         "multiset-of".into()
     }
 }
@@ -287,7 +288,7 @@ impl IntoSort for ValueMultiSet {
         let (i, _) = multisets.insert_full(self);
         Some(Value {
             #[cfg(debug_assertions)]
-            tag: sort.name,
+            tag: sort.name.clone(),
             bits: i as u64,
         })
     }
@@ -302,13 +303,13 @@ impl FromSort for ValueMultiSet {
 }
 
 struct MultiSetOf {
-    name: Symbol,
+    name: String,
     multiset: Arc<MultiSetSort>,
 }
 
 impl PrimitiveLike for MultiSetOf {
-    fn name(&self) -> Symbol {
-        self.name
+    fn name(&self) -> String {
+        self.name.clone()
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
@@ -324,19 +325,19 @@ impl PrimitiveLike for MultiSetOf {
         _sorts: (&[ArcSort], &ArcSort),
         _egraph: Option<&mut EGraph>,
     ) -> Option<Value> {
-        let multiset = MultiSet::from_iter(values.iter().copied());
+        let multiset = MultiSet::from_iter(values.iter().cloned());
         Some(multiset.store(&self.multiset).unwrap())
     }
 }
 
 struct Insert {
-    name: Symbol,
+    name: String,
     multiset: Arc<MultiSetSort>,
 }
 
 impl PrimitiveLike for Insert {
-    fn name(&self) -> Symbol {
-        self.name
+    fn name(&self) -> String {
+        self.name.clone()
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
@@ -359,19 +360,19 @@ impl PrimitiveLike for Insert {
         _egraph: Option<&mut EGraph>,
     ) -> Option<Value> {
         let multiset = ValueMultiSet::load(&self.multiset, &values[0]);
-        let multiset = multiset.insert(values[1]);
+        let multiset = multiset.insert(values[1].clone());
         multiset.store(&self.multiset)
     }
 }
 
 struct Contains {
-    name: Symbol,
+    name: String,
     multiset: Arc<MultiSetSort>,
 }
 
 impl PrimitiveLike for Contains {
-    fn name(&self) -> Symbol {
-        self.name
+    fn name(&self) -> String {
+        self.name.clone()
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
@@ -403,13 +404,13 @@ impl PrimitiveLike for Contains {
 }
 
 struct NotContains {
-    name: Symbol,
+    name: String,
     multiset: Arc<MultiSetSort>,
 }
 
 impl PrimitiveLike for NotContains {
-    fn name(&self) -> Symbol {
-        self.name
+    fn name(&self) -> String {
+        self.name.clone()
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
@@ -441,13 +442,13 @@ impl PrimitiveLike for NotContains {
 }
 
 struct Length {
-    name: Symbol,
+    name: String,
     multiset: Arc<MultiSetSort>,
 }
 
 impl PrimitiveLike for Length {
-    fn name(&self) -> Symbol {
-        self.name
+    fn name(&self) -> String {
+        self.name.clone()
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
@@ -471,13 +472,13 @@ impl PrimitiveLike for Length {
 }
 
 struct Remove {
-    name: Symbol,
+    name: String,
     multiset: Arc<MultiSetSort>,
 }
 
 impl PrimitiveLike for Remove {
-    fn name(&self) -> Symbol {
-        self.name
+    fn name(&self) -> String {
+        self.name.clone()
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
@@ -506,13 +507,13 @@ impl PrimitiveLike for Remove {
 }
 
 struct Pick {
-    name: Symbol,
+    name: String,
     multiset: Arc<MultiSetSort>,
 }
 
 impl PrimitiveLike for Pick {
-    fn name(&self) -> Symbol {
-        self.name
+    fn name(&self) -> String {
+        self.name.clone()
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
@@ -531,19 +532,24 @@ impl PrimitiveLike for Pick {
         _egraph: Option<&mut EGraph>,
     ) -> Option<Value> {
         let multiset = ValueMultiSet::load(&self.multiset, &values[0]);
-        Some(*multiset.pick().expect("Cannot pick from an empty multiset"))
+        Some(
+            multiset
+                .pick()
+                .expect("Cannot pick from an empty multiset")
+                .clone(),
+        )
     }
 }
 
 struct Map {
-    name: Symbol,
+    name: String,
     multiset: Arc<MultiSetSort>,
     fn_: Arc<FunctionSort>,
 }
 
 impl PrimitiveLike for Map {
-    fn name(&self) -> Symbol {
-        self.name
+    fn name(&self) -> String {
+        self.name.clone()
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
@@ -568,7 +574,7 @@ impl PrimitiveLike for Map {
         let egraph =
             egraph.unwrap_or_else(|| panic!("`{}` is not supported yet in facts.", self.name));
         let multiset = ValueMultiSet::load(&self.multiset, &values[1]);
-        let new_multiset = multiset.map(|e| self.fn_.apply(&values[0], &[*e], egraph));
+        let new_multiset = multiset.map(|e| self.fn_.apply(&values[0], &[e.clone()], egraph));
         new_multiset.store(&self.multiset)
     }
 }

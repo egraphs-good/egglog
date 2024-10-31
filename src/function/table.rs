@@ -164,7 +164,7 @@ impl Table {
         {
             let (inp, prev) = &mut self.vals[*off];
             let prev_subsumed = prev.subsumed;
-            let next = on_merge(Some(prev.value));
+            let next = on_merge(Some(prev.value.clone()));
             if next == prev.value && prev_subsumed == subsumed {
                 return;
             }

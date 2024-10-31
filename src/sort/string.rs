@@ -1,19 +1,21 @@
-use std::num::NonZeroU32;
+use std::sync::Mutex;
 
 use crate::{ast::Literal, constraint::AllEqualTypeConstraint};
 
 use super::*;
 
-#[derive(Debug)]
-pub struct StringSort;
+#[derive(Debug, Default)]
+pub struct StringSort {
+    strings: Mutex<IndexSet<String>>,
+}
 
 lazy_static! {
-    static ref STRING_SORT_NAME: Symbol = "String".into();
+    static ref STRING_SORT_NAME: String = "String".into();
 }
 
 impl Sort for StringSort {
-    fn name(&self) -> Symbol {
-        *STRING_SORT_NAME
+    fn name(&self) -> String {
+        STRING_SORT_NAME.clone()
     }
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
@@ -24,10 +26,11 @@ impl Sort for StringSort {
         #[cfg(debug_assertions)]
         debug_assert_eq!(value.tag, self.name());
 
-        let sym = Symbol::from(NonZeroU32::new(value.bits as _).unwrap());
+        let string = String::load(self, &value);
+
         (
             1,
-            GenericExpr::Lit(DUMMY_SPAN.clone(), Literal::String(sym)),
+            GenericExpr::Lit(DUMMY_SPAN.clone(), Literal::String(string)),
         )
     }
 
@@ -45,32 +48,35 @@ impl Sort for StringSort {
 
 // TODO could use a local symbol table
 
-impl IntoSort for Symbol {
+impl IntoSort for String {
     type Sort = StringSort;
-    fn store(self, _sort: &Self::Sort) -> Option<Value> {
+    fn store(self, sort: &Self::Sort) -> Option<Value> {
+        let mut strings = sort.strings.lock().unwrap();
+        let (i, _) = strings.insert_full(self);
         Some(Value {
             #[cfg(debug_assertions)]
-            tag: StringSort.name(),
-            bits: NonZeroU32::from(self).get() as _,
+            tag: sort.name(),
+            bits: i as u64,
         })
     }
 }
 
-impl FromSort for Symbol {
+impl FromSort for String {
     type Sort = StringSort;
-    fn load(_sort: &Self::Sort, value: &Value) -> Self {
-        NonZeroU32::new(value.bits as u32).unwrap().into()
+    fn load(sort: &Self::Sort, value: &Value) -> Self {
+        let strings = sort.strings.lock().unwrap();
+        strings.get_index(value.bits as usize).unwrap().clone()
     }
 }
 
 struct Add {
-    name: Symbol,
+    name: String,
     string: Arc<StringSort>,
 }
 
 impl PrimitiveLike for Add {
-    fn name(&self) -> Symbol {
-        self.name
+    fn name(&self) -> String {
+        self.name.clone()
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
@@ -87,22 +93,21 @@ impl PrimitiveLike for Add {
     ) -> Option<Value> {
         let mut res_string: String = "".to_owned();
         for value in values {
-            let sym = Symbol::load(&self.string, value);
+            let sym = String::load(&self.string, value);
             res_string.push_str(sym.as_str());
         }
-        let res_symbol: Symbol = res_string.into();
-        Some(Value::from(res_symbol))
+        res_string.store(&self.string)
     }
 }
 
 struct Replace {
-    name: Symbol,
+    name: String,
     string: Arc<StringSort>,
 }
 
 impl PrimitiveLike for Replace {
-    fn name(&self) -> Symbol {
-        self.name
+    fn name(&self) -> String {
+        self.name.clone()
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
@@ -118,10 +123,10 @@ impl PrimitiveLike for Replace {
         _sorts: (&[ArcSort], &ArcSort),
         _egraph: Option<&mut EGraph>,
     ) -> Option<Value> {
-        let string1 = Symbol::load(&self.string, &values[0]).to_string();
-        let string2 = Symbol::load(&self.string, &values[1]).to_string();
-        let string3 = Symbol::load(&self.string, &values[2]).to_string();
-        let res: Symbol = string1.replace(&string2, &string3).into();
-        Some(Value::from(res))
+        let string1 = String::load(&self.string, &values[0]).to_string();
+        let string2 = String::load(&self.string, &values[1]).to_string();
+        let string3 = String::load(&self.string, &values[2]).to_string();
+        let res: String = string1.replace(&string2, &string3).into();
+        res.store(&self.string)
     }
 }

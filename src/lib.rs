@@ -62,10 +62,10 @@ pub use value::*;
 
 pub type ArcSort = Arc<dyn Sort>;
 
-pub type Subst = IndexMap<Symbol, Value>;
+pub type Subst = IndexMap<String, Value>;
 
 pub trait PrimitiveLike {
-    fn name(&self) -> Symbol;
+    fn name(&self) -> String;
     /// Constructs a type constraint for the primitive that uses the span information
     /// for error localization.
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint>;
@@ -88,18 +88,18 @@ pub struct RunReport {
     /// true.
     pub updated: bool,
     /// The time it took to run the query, for each rule.
-    pub search_time_per_rule: HashMap<Symbol, Duration>,
-    pub apply_time_per_rule: HashMap<Symbol, Duration>,
-    pub search_time_per_ruleset: HashMap<Symbol, Duration>,
-    pub num_matches_per_rule: HashMap<Symbol, usize>,
-    pub apply_time_per_ruleset: HashMap<Symbol, Duration>,
-    pub rebuild_time_per_ruleset: HashMap<Symbol, Duration>,
+    pub search_time_per_rule: HashMap<String, Duration>,
+    pub apply_time_per_rule: HashMap<String, Duration>,
+    pub search_time_per_ruleset: HashMap<String, Duration>,
+    pub num_matches_per_rule: HashMap<String, usize>,
+    pub apply_time_per_ruleset: HashMap<String, Duration>,
+    pub rebuild_time_per_ruleset: HashMap<String, Duration>,
 }
 
 impl RunReport {
     /// add a ... and a maximum size to the name
     /// for printing, since they may be the rule itself
-    fn truncate_rule_name(sym: Symbol) -> String {
+    fn truncate_rule_name(sym: String) -> String {
         let mut s = sym.to_string();
         // replace newlines in s with a space
         s = s.replace('\n', " ");
@@ -110,27 +110,27 @@ impl RunReport {
         s
     }
 
-    fn add_rule_search_time(&mut self, rule: Symbol, time: Duration) {
+    fn add_rule_search_time(&mut self, rule: String, time: Duration) {
         *self.search_time_per_rule.entry(rule).or_default() += time;
     }
 
-    fn add_ruleset_search_time(&mut self, ruleset: Symbol, time: Duration) {
+    fn add_ruleset_search_time(&mut self, ruleset: String, time: Duration) {
         *self.search_time_per_ruleset.entry(ruleset).or_default() += time;
     }
 
-    fn add_rule_apply_time(&mut self, rule: Symbol, time: Duration) {
+    fn add_rule_apply_time(&mut self, rule: String, time: Duration) {
         *self.apply_time_per_rule.entry(rule).or_default() += time;
     }
 
-    fn add_ruleset_apply_time(&mut self, ruleset: Symbol, time: Duration) {
+    fn add_ruleset_apply_time(&mut self, ruleset: String, time: Duration) {
         *self.apply_time_per_ruleset.entry(ruleset).or_default() += time;
     }
 
-    fn add_ruleset_rebuild_time(&mut self, ruleset: Symbol, time: Duration) {
+    fn add_ruleset_rebuild_time(&mut self, ruleset: String, time: Duration) {
         *self.rebuild_time_per_ruleset.entry(ruleset).or_default() += time;
     }
 
-    fn add_rule_num_matches(&mut self, rule: Symbol, num_matches: usize) {
+    fn add_rule_num_matches(&mut self, rule: String, num_matches: usize) {
         *self.num_matches_per_rule.entry(rule).or_default() += num_matches;
     }
 }
@@ -161,7 +161,7 @@ impl Display for RunReport {
         });
 
         for rule in all_rules_vec {
-            let truncated = Self::truncate_rule_name(*rule);
+            let truncated = Self::truncate_rule_name(rule.clone());
             // print out the search and apply time for rule
             let search_time = self
                 .search_time_per_rule
@@ -235,24 +235,24 @@ pub enum ExtractReport {
 
 impl RunReport {
     fn union_times(
-        times: &HashMap<Symbol, Duration>,
-        other_times: &HashMap<Symbol, Duration>,
-    ) -> HashMap<Symbol, Duration> {
+        times: &HashMap<String, Duration>,
+        other_times: &HashMap<String, Duration>,
+    ) -> HashMap<String, Duration> {
         let mut new_times = times.clone();
         for (k, v) in other_times {
-            let entry = new_times.entry(*k).or_default();
+            let entry = new_times.entry(k.clone()).or_default();
             *entry += *v;
         }
         new_times
     }
 
     fn union_counts(
-        counts: &HashMap<Symbol, usize>,
-        other_counts: &HashMap<Symbol, usize>,
-    ) -> HashMap<Symbol, usize> {
+        counts: &HashMap<String, usize>,
+        other_counts: &HashMap<String, usize>,
+    ) -> HashMap<String, usize> {
         let mut new_counts = counts.clone();
         for (k, v) in other_counts {
-            let entry = new_counts.entry(*k).or_default();
+            let entry = new_counts.entry(k.clone()).or_default();
             *entry += *v;
         }
         new_counts
@@ -349,15 +349,15 @@ impl<T: PrimitiveLike + 'static> From<T> for Primitive {
 }
 
 pub struct SimplePrimitive {
-    name: Symbol,
+    name: String,
     input: Vec<ArcSort>,
     output: ArcSort,
     f: fn(&[Value]) -> Option<Value>,
 }
 
 impl PrimitiveLike for SimplePrimitive {
-    fn name(&self) -> Symbol {
-        self.name
+    fn name(&self) -> String {
+        self.name.clone()
     }
 
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
@@ -426,12 +426,12 @@ impl FromStr for RunMode {
 
 #[derive(Clone)]
 pub struct EGraph {
-    symbol_gen: SymbolGen,
+    symbol_gen: StringGen,
     egraphs: Vec<Self>,
     unionfind: UnionFind,
-    pub functions: IndexMap<Symbol, Function>,
-    rulesets: IndexMap<Symbol, Ruleset>,
-    rule_last_run_timestamp: HashMap<Symbol, u32>,
+    pub functions: IndexMap<String, Function>,
+    rulesets: IndexMap<String, Ruleset>,
+    rule_last_run_timestamp: HashMap<String, u32>,
     interactive_mode: bool,
     timestamp: u32,
     pub run_mode: RunMode,
@@ -449,7 +449,7 @@ pub struct EGraph {
 impl Default for EGraph {
     fn default() -> Self {
         let mut egraph = Self {
-            symbol_gen: SymbolGen::new("$".to_string()),
+            symbol_gen: StringGen::new("$".to_string()),
             egraphs: vec![],
             unionfind: Default::default(),
             functions: Default::default(),
@@ -522,7 +522,7 @@ impl EGraph {
         }
     }
 
-    pub fn union(&mut self, id1: Id, id2: Id, sort: Symbol) -> Id {
+    pub fn union(&mut self, id1: Id, id2: Id, sort: String) -> Id {
         self.unionfind.union(id1, id2, sort)
     }
 
@@ -536,14 +536,14 @@ impl EGraph {
                 for (input, sort) in inputs.iter().zip(&function.schema.input) {
                     assert_eq!(
                         input,
-                        &self.find(sort, *input),
+                        &self.find(sort, input.clone()),
                         "[{i}] {name}({inputs:?}) = {output:?}\n{:?}",
                         function.schema,
                     )
                 }
                 assert_eq!(
                     output.value,
-                    self.find(&function.schema.output, output.value),
+                    self.find(&function.schema.output, output.value.clone()),
                     "[{i}] {name}({inputs:?}) = {output:?}\n{:?}",
                     function.schema,
                 )
@@ -629,7 +629,7 @@ impl EGraph {
         for function in self.functions.values_mut() {
             let (unions, merges) = function.rebuild(&mut self.unionfind, self.timestamp)?;
             if !merges.is_empty() {
-                deferred_merges.push((function.decl.name, merges));
+                deferred_merges.push((function.decl.name.clone(), merges));
             }
             new_unions += unions;
         }
@@ -640,7 +640,7 @@ impl EGraph {
         Ok(new_unions)
     }
 
-    fn apply_merges(&mut self, func: Symbol, merges: &[DeferredMerge]) -> usize {
+    fn apply_merges(&mut self, func: String, merges: &[DeferredMerge]) -> usize {
         let mut stack = Vec::new();
         let mut function = self.functions.get_mut(&func).unwrap();
         let n_unions = self.unionfind.n_unions();
@@ -651,13 +651,15 @@ impl EGraph {
 
         for (inputs, old, new) in merges {
             if let Some(prog) = function.merge.on_merge.clone() {
-                self.run_actions(&mut stack, &[*old, *new], &prog).unwrap();
+                self.run_actions(&mut stack, &[old.clone(), new.clone()], &prog)
+                    .unwrap();
                 function = self.functions.get_mut(&func).unwrap();
                 stack.clear();
             }
             if let Some(prog) = &merge_prog {
                 // TODO: error handling?
-                self.run_actions(&mut stack, &[*old, *new], prog).unwrap();
+                self.run_actions(&mut stack, &[old.clone(), new.clone()], prog)
+                    .unwrap();
                 let merged = stack.pop().expect("merges should produce a value");
                 stack.clear();
                 function = self.functions.get_mut(&func).unwrap();
@@ -669,7 +671,7 @@ impl EGraph {
 
     fn declare_function(&mut self, decl: &ResolvedFunctionDecl) -> Result<(), Error> {
         let function = Function::new(self, decl)?;
-        let old = self.functions.insert(decl.name, function);
+        let old = self.functions.insert(decl.name.clone(), function);
         if old.is_some() {
             panic!(
                 "Typechecking should have caught function already bound: {}",
@@ -684,7 +686,7 @@ impl EGraph {
         match lit {
             Literal::Int(i) => i.store(&I64Sort).unwrap(),
             Literal::F64(f) => f.store(&F64Sort).unwrap(),
-            Literal::String(s) => s.store(&StringSort).unwrap(),
+            Literal::String(s) => s.clone().store(&self.type_info.get_sort_nofail()).unwrap(),
             Literal::Unit => ().store(&UnitSort).unwrap(),
             Literal::Bool(b) => b.store(&BoolSort).unwrap(),
         }
@@ -692,13 +694,13 @@ impl EGraph {
 
     pub fn function_to_dag(
         &mut self,
-        sym: Symbol,
+        sym: String,
         n: usize,
     ) -> Result<(Vec<(Term, Term)>, TermDag), Error> {
         let f = self
             .functions
             .get(&sym)
-            .ok_or(TypeError::UnboundFunction(sym, DUMMY_SPAN.clone()))?;
+            .ok_or(TypeError::UnboundFunction(sym.clone(), DUMMY_SPAN.clone()))?;
         let schema = f.schema.clone();
         let nodes = f
             .nodes
@@ -712,11 +714,16 @@ impl EGraph {
         let mut terms = Vec::new();
         for (ins, out) in nodes {
             let mut children = Vec::new();
-            for (a, a_type) in ins.iter().copied().zip(&schema.input) {
+            for (a, a_type) in ins.iter().zip(&schema.input) {
                 if a_type.is_eq_sort() {
-                    children.push(extractor.find_best(a, &mut termdag, a_type).unwrap().1);
+                    children.push(
+                        extractor
+                            .find_best(a.clone(), &mut termdag, a_type)
+                            .unwrap()
+                            .1,
+                    );
                 } else {
-                    children.push(termdag.expr_to_term(&a_type.make_expr(self, a).1));
+                    children.push(termdag.expr_to_term(&a_type.make_expr(self, a.clone()).1));
                 };
             }
 
@@ -728,16 +735,16 @@ impl EGraph {
             } else {
                 termdag.expr_to_term(&schema.output.make_expr(self, out.value).1)
             };
-            terms.push((termdag.app(sym, children), out));
+            terms.push((termdag.app(sym.clone(), children), out));
         }
         drop(extractor);
 
         Ok((terms, termdag))
     }
 
-    pub fn print_function(&mut self, sym: Symbol, n: usize) -> Result<(), Error> {
-        log::info!("Printing up to {n} tuples of table {sym}: ");
-        let (terms_with_outputs, termdag) = self.function_to_dag(sym, n)?;
+    pub fn print_function(&mut self, sym: String, n: usize) -> Result<(), Error> {
+        log::info!("Printing up to {n} tuples of table {}: ", sym.clone());
+        let (terms_with_outputs, termdag) = self.function_to_dag(sym.clone(), n)?;
         let f = self
             .functions
             .get(&sym)
@@ -770,13 +777,13 @@ impl EGraph {
         Ok(())
     }
 
-    pub fn print_size(&mut self, sym: Option<Symbol>) -> Result<(), Error> {
+    pub fn print_size(&mut self, sym: Option<String>) -> Result<(), Error> {
         if let Some(sym) = sym {
             let f = self
                 .functions
                 .get(&sym)
-                .ok_or(TypeError::UnboundFunction(sym, DUMMY_SPAN.clone()))?;
-            log::info!("Function {} has size {}", sym, f.nodes.len());
+                .ok_or(TypeError::UnboundFunction(sym.clone(), DUMMY_SPAN.clone()))?;
+            log::info!("Function {} has size {}", &sym, f.nodes.len());
             self.print_msg(f.nodes.len().to_string());
             Ok(())
         } else {
@@ -784,7 +791,7 @@ impl EGraph {
             let mut lens = self
                 .functions
                 .iter()
-                .map(|(sym, f)| (*sym, f.nodes.len()))
+                .map(|(sym, f)| (sym, f.nodes.len()))
                 .collect::<Vec<_>>();
 
             // Function name's alphabetical order
@@ -866,7 +873,7 @@ impl EGraph {
         log::debug!("database size: {}", self.num_tuples());
         log::debug!("Made {updates} updates");
         // add to the rebuild time for this ruleset
-        report.add_ruleset_rebuild_time(config.ruleset, rebuild_start.elapsed());
+        report.add_ruleset_rebuild_time(config.ruleset.clone(), rebuild_start.elapsed());
         self.timestamp += 1;
 
         let GenericRunConfig { ruleset, until } = config;
@@ -881,7 +888,7 @@ impl EGraph {
             }
         }
 
-        let subreport = self.step_rules(*ruleset);
+        let subreport = self.step_rules(ruleset.clone());
         report = report.union(&subreport);
 
         log::debug!("database size: {}", self.num_tuples());
@@ -894,9 +901,9 @@ impl EGraph {
     /// Add the search results for a rule to search_results, a map indexed by rule name.
     fn search_rules(
         &self,
-        ruleset: Symbol,
+        ruleset: String,
         run_report: &mut RunReport,
-        search_results: &mut HashMap<Symbol, SearchResult>,
+        search_results: &mut HashMap<String, SearchResult>,
     ) {
         let rules = self
             .rulesets
@@ -924,9 +931,9 @@ impl EGraph {
                         rule_search_time.as_secs_f64(),
                         all_matches.len()
                     );
-                    run_report.add_rule_search_time(*rule_name, rule_search_time);
+                    run_report.add_rule_search_time(rule_name.clone(), rule_search_time);
                     search_results.insert(
-                        *rule_name,
+                        rule_name.clone(),
                         SearchResult {
                             all_matches,
                             did_match,
@@ -940,7 +947,7 @@ impl EGraph {
             Ruleset::Combined(_name, sub_rulesets) => {
                 let start_time = Instant::now();
                 for sub_ruleset in sub_rulesets {
-                    self.search_rules(*sub_ruleset, run_report, search_results);
+                    self.search_rules(sub_ruleset.clone(), run_report, search_results);
                 }
                 let search_time = start_time.elapsed();
                 run_report.add_ruleset_search_time(ruleset, search_time);
@@ -950,9 +957,9 @@ impl EGraph {
 
     fn apply_rules(
         &mut self,
-        ruleset: Symbol,
+        ruleset: String,
         run_report: &mut RunReport,
-        search_results: &HashMap<Symbol, SearchResult>,
+        search_results: &HashMap<String, SearchResult>,
     ) {
         // TODO this clone is not efficient
         let rules = self.rulesets.get(&ruleset).unwrap().clone();
@@ -970,11 +977,12 @@ impl EGraph {
 
                     // make sure the query requires matches
                     if num_vars != 0 {
-                        run_report.add_rule_num_matches(rule_name, all_matches.len() / num_vars);
+                        run_report
+                            .add_rule_num_matches(rule_name.clone(), all_matches.len() / num_vars);
                     }
 
                     self.rule_last_run_timestamp
-                        .insert(rule_name, self.timestamp);
+                        .insert(rule_name.clone(), self.timestamp);
                     let rule_apply_start = Instant::now();
 
                     let stack = &mut vec![];
@@ -1015,11 +1023,11 @@ impl EGraph {
         }
     }
 
-    fn step_rules(&mut self, ruleset: Symbol) -> RunReport {
+    fn step_rules(&mut self, ruleset: String) -> RunReport {
         let n_unions_before = self.unionfind.n_unions();
         let mut run_report = Default::default();
-        let mut search_results = HashMap::<Symbol, SearchResult>::default();
-        self.search_rules(ruleset, &mut run_report, &mut search_results);
+        let mut search_results = HashMap::<String, SearchResult>::default();
+        self.search_rules(ruleset.clone(), &mut run_report, &mut search_results);
         self.apply_rules(ruleset, &mut run_report, &search_results);
         run_report.updated |=
             self.did_change_tables() || n_unions_before != self.unionfind.n_unions();
@@ -1041,9 +1049,8 @@ impl EGraph {
         &mut self,
         name: String,
         rule: ast::ResolvedRule,
-        ruleset: Symbol,
-    ) -> Result<Symbol, Error> {
-        let name = Symbol::from(name);
+        ruleset: String,
+    ) -> Result<String, Error> {
         let core_rule = rule.to_canonicalized_core_rule(&self.type_info, &mut self.symbol_gen)?;
         let (query, actions) = (core_rule.body, core_rule.head);
 
@@ -1057,9 +1064,9 @@ impl EGraph {
         if let Some(rules) = self.rulesets.get_mut(&ruleset) {
             match rules {
                 Ruleset::Rules(_, rules) => {
-                    match rules.entry(name) {
+                    match rules.entry(name.clone()) {
                         indexmap::map::Entry::Occupied(_) => {
-                            panic!("Rule '{name}' was already present")
+                            panic!("Rule '{}' was already present", name.clone())
                         }
                         indexmap::map::Entry::Vacant(e) => e.insert(compiled_rule),
                     };
@@ -1075,8 +1082,8 @@ impl EGraph {
     pub(crate) fn add_rule(
         &mut self,
         rule: ast::ResolvedRule,
-        ruleset: Symbol,
-    ) -> Result<Symbol, Error> {
+        ruleset: String,
+    ) -> Result<String, Error> {
         let name = format!("{}", rule);
         self.add_rule_with_name(name, rule, ruleset)
     }
@@ -1096,12 +1103,16 @@ impl EGraph {
     }
 
     pub fn eval_expr(&mut self, expr: &Expr) -> Result<(ArcSort, Value), Error> {
-        let fresh_name = self.symbol_gen.fresh(&"egraph_evalexpr".into());
-        let command = Command::Action(Action::Let(DUMMY_SPAN.clone(), fresh_name, expr.clone()));
+        let fresh_name: String = self.symbol_gen.fresh(&"egraph_evalexpr".into());
+        let command = Command::Action(Action::Let(
+            DUMMY_SPAN.clone(),
+            fresh_name.clone(),
+            expr.clone(),
+        ));
         self.run_program(vec![command])?;
         // find the table with the same name as the fresh name
         let func = self.functions.get(&fresh_name).unwrap();
-        let value = func.nodes.get(&[]).unwrap().value;
+        let value = func.nodes.get(&[]).unwrap().value.clone();
         let sort = func.schema.output.clone();
         Ok((sort, value))
     }
@@ -1123,16 +1134,16 @@ impl EGraph {
         Ok(stack.pop().unwrap())
     }
 
-    fn add_combined_ruleset(&mut self, name: Symbol, rulesets: Vec<Symbol>) {
-        match self.rulesets.entry(name) {
-            Entry::Occupied(_) => panic!("Ruleset '{name}' was already present"),
+    fn add_combined_ruleset(&mut self, name: String, rulesets: Vec<String>) {
+        match self.rulesets.entry(name.clone()) {
+            Entry::Occupied(_) => panic!("Ruleset '{}' was already present", name.clone()),
             Entry::Vacant(e) => e.insert(Ruleset::Combined(name, rulesets)),
         };
     }
 
-    fn add_ruleset(&mut self, name: Symbol) {
-        match self.rulesets.entry(name) {
-            Entry::Occupied(_) => panic!("Ruleset '{name}' was already present"),
+    fn add_ruleset(&mut self, name: String) {
+        match self.rulesets.entry(name.clone()) {
+            Entry::Occupied(_) => panic!("Ruleset '{}' was already present", name.clone()),
             Entry::Vacant(e) => e.insert(Ruleset::Rules(name, Default::default())),
         };
     }
@@ -1140,7 +1151,14 @@ impl EGraph {
     fn set_option(&mut self, name: &str, value: ResolvedExpr) {
         match name {
             "interactive_mode" => {
-                if let ResolvedExpr::Lit(_ann, Literal::Int(i)) = value {
+                if let ResolvedExpr::Lit(
+                    _ann,
+                    ResolvedLiteral {
+                        literal: Literal::Int(i),
+                        sort: _,
+                    },
+                ) = value
+                {
                     self.interactive_mode = i != 0;
                 } else {
                     panic!("interactive_mode must be an integer");
@@ -1192,7 +1210,7 @@ impl EGraph {
         match command {
             ResolvedNCommand::SetOption { name, value } => {
                 let str = format!("Set option {} to {}", name, value);
-                self.set_option(name.into(), value);
+                self.set_option(&name, value);
                 log::info!("{}", str)
             }
             // Sorts are already declared during typechecking
@@ -1204,11 +1222,11 @@ impl EGraph {
                 log::info!("Declared function {}.", fdecl.name)
             }
             ResolvedNCommand::AddRuleset(name) => {
-                self.add_ruleset(name);
+                self.add_ruleset(name.clone());
                 log::info!("Declared ruleset {name}.");
             }
             ResolvedNCommand::UnstableCombinedRuleset(name, others) => {
-                self.add_combined_ruleset(name, others);
+                self.add_combined_ruleset(name.clone(), others);
                 log::info!("Declared ruleset {name}.");
             }
             ResolvedNCommand::NormRule {
@@ -1316,11 +1334,11 @@ impl EGraph {
         Ok(())
     }
 
-    fn input_file(&mut self, func_name: Symbol, file: String) -> Result<(), Error> {
+    fn input_file(&mut self, func_name: String, file: String) -> Result<(), Error> {
         let function_type = self
             .type_info
-            .lookup_user_func(func_name)
-            .unwrap_or_else(|| panic!("Unrecognized function name {}", func_name));
+            .lookup_user_func(func_name.clone())
+            .unwrap_or_else(|| panic!("Unrecognized function name {}", func_name.clone()));
         let func = self.functions.get_mut(&func_name).unwrap();
 
         let mut filename = self.fact_directory.clone().unwrap_or_default();
@@ -1371,10 +1389,13 @@ impl EGraph {
 
             actions.push(
                 if function_type.is_datatype || function_type.output.name() == UnitSort.name() {
-                    Action::Expr(span.clone(), Expr::Call(span.clone(), func_name, exprs))
+                    Action::Expr(
+                        span.clone(),
+                        Expr::Call(span.clone(), func_name.clone(), exprs),
+                    )
                 } else {
                     let out = exprs.pop().unwrap();
-                    Action::Set(span.clone(), func_name, exprs, out)
+                    Action::Set(span.clone(), func_name.clone(), exprs, out)
                 },
             );
         }
@@ -1399,12 +1420,12 @@ impl EGraph {
         }
     }
 
-    pub fn set_reserved_symbol(&mut self, sym: Symbol) {
+    pub fn set_reserved_symbol(&mut self, sym: String) {
         assert!(
             !self.symbol_gen.has_been_used(),
             "Reserved symbol must be set before any symbols are generated"
         );
-        self.symbol_gen = SymbolGen::new(sym.to_string());
+        self.symbol_gen = StringGen::new(sym.to_string());
     }
 
     fn process_command(&mut self, command: Command) -> Result<Vec<ResolvedNCommand>, Error> {
@@ -1532,13 +1553,13 @@ pub enum Error {
     #[error("{1}\nCheck failed: \n{}", ListDisplay(.0, "\n"))]
     CheckError(Vec<Fact>, Span),
     #[error("{1}\nNo such ruleset: {0}")]
-    NoSuchRuleset(Symbol, Span),
+    NoSuchRuleset(String, Span),
     #[error("{1}\nAttempted to add a rule to combined ruleset {0}. Combined rulesets may only depend on other rulesets.")]
-    CombinedRulesetError(Symbol, Span),
+    CombinedRulesetError(String, Span),
     #[error("Evaluating primitive {0:?} failed. ({0:?} {:?})", ListDebug(.1, " "))]
     PrimitiveError(Primitive, Vec<Value>),
     #[error("Illegal merge attempted for function {0}, {1:?} != {2:?}")]
-    MergeError(Symbol, Value, Value),
+    MergeError(String, Value, Value),
     #[error("{0}\nTried to pop too much")]
     Pop(Span),
     #[error("{0}\nCommand should have failed.")]
@@ -1546,7 +1567,7 @@ pub enum Error {
     #[error("{2}\nIO error: {0}: {1}")]
     IoError(PathBuf, std::io::Error, Span),
     #[error("Cannot subsume function with merge: {0}")]
-    SubsumeMergeError(Symbol),
+    SubsumeMergeError(String),
 }
 
 #[cfg(test)]
@@ -1563,8 +1584,8 @@ mod tests {
     }
 
     impl PrimitiveLike for InnerProduct {
-        fn name(&self) -> symbol_table::GlobalSymbol {
-            "inner-product".into()
+        fn name(&self) -> String {
+            "inner-product".to_string()
         }
 
         fn get_type_constraints(&self, span: &Span) -> Box<dyn crate::constraint::TypeConstraint> {

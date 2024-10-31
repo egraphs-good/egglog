@@ -10,13 +10,13 @@ use std::{
     ops::Range,
 };
 
-type Query = crate::core::Query<ResolvedCall, Symbol>;
+type Query = crate::core::Query<ResolvedCall, String, Literal>;
 
 #[derive(Clone, Debug)]
 enum Instr<'a> {
     Intersect {
         value_idx: usize,
-        variable_name: Symbol,
+        variable_name: String,
         info: VarInfo2,
         trie_accesses: Vec<(usize, TrieAccess<'a>)>,
     },
@@ -112,7 +112,7 @@ impl<'a> std::fmt::Display for Program<'a> {
 
 struct Context<'b> {
     query: &'b CompiledQuery,
-    join_var_ordering: Vec<Symbol>,
+    join_var_ordering: Vec<String>,
     tuple: Vec<Value>,
     matches: usize,
     egraph: &'b EGraph,
@@ -163,7 +163,7 @@ impl<'b> Context<'b> {
                 val,
                 trie_access,
             } => {
-                if let Some(next) = tries[*index].get(trie_access, *val) {
+                if let Some(next) = tries[*index].get(trie_access, val.clone()) {
                     let old = tries[*index];
                     tries[*index] = next;
                     self.eval(tries, program, stage.next(), f)?;
@@ -199,7 +199,7 @@ impl<'b> Context<'b> {
                             (b, a)
                         };
                         tries[a.0].for_each(&a.1, |value, ta| {
-                            if let Some(tb) = tries[b.0].get(&b.1, value) {
+                            if let Some(tb) = tries[b.0].get(&b.1, value.clone()) {
                                 let old_ta = std::mem::replace(&mut tries[a.0], ta);
                                 let old_tb = std::mem::replace(&mut tries[b.0], tb);
                                 self.tuple[*value_idx] = value;
@@ -222,7 +222,7 @@ impl<'b> Context<'b> {
                             new_tries[*j_min] = min_trie;
                             for (j, access) in trie_accesses {
                                 if j != j_min {
-                                    if let Some(t) = tries[*j].get(access, value) {
+                                    if let Some(t) = tries[*j].get(access, value.clone()) {
                                         new_tries[*j] = t;
                                     } else {
                                         return Ok(());
@@ -244,7 +244,7 @@ impl<'b> Context<'b> {
                     values.push(match arg {
                         AtomTerm::Var(_ann, v) => {
                             let i = self.query.vars.get_index_of(v).unwrap();
-                            self.tuple[i]
+                            self.tuple[i].clone()
                         }
                         AtomTerm::Literal(_ann, lit) => self.egraph.eval_lit(lit),
                         AtomTerm::Global(_ann, _g) => panic!("Globals should have been desugared"),
@@ -322,37 +322,37 @@ pub struct CompiledQuery {
     query: Query,
     // Ordering is used for the tuple
     // The GJ variable ordering is stored in the context
-    pub vars: IndexMap<Symbol, VarInfo>,
+    pub vars: IndexMap<String, VarInfo>,
 }
 
 impl EGraph {
     pub(crate) fn compile_gj_query(
         &self,
-        // TODO: The legacy code uses Query<ResolvedCall, Symbol>
-        // instead of Query<ResolvedCall, ResolvedVar>, so we do
+        // TODO: The legacy code uses Query<ResolvedCall, String>
+        // instead of Query<ResolvedCall, ResolvedVar, ResolvedLiteral>, so we do
         // the manual conversion here.
         // This needs to be fixed in the future.
-        query: core::Query<ResolvedCall, ResolvedVar>,
+        query: core::Query<ResolvedCall, ResolvedVar, ResolvedLiteral>,
         ordering: &IndexSet<ResolvedVar>,
     ) -> CompiledQuery {
         // NOTE: this vars order only used for ordering the tuple storing the resulting match
         // It is not the GJ variable order.
-        let mut vars: IndexMap<Symbol, VarInfo> = Default::default();
+        let mut vars: IndexMap<String, VarInfo> = Default::default();
         for var in ordering.iter() {
-            vars.entry(var.name).or_default();
+            vars.entry(var.name.clone()).or_default();
         }
 
         for (i, atom) in query.funcs().enumerate() {
             for v in atom.vars() {
                 // only count grounded occurrences
-                vars.entry(v.to_symbol()).or_default().occurences.push(i)
+                vars.entry(v.to_string()).or_default().occurences.push(i)
             }
         }
 
         // make sure everyone has an entry in the vars table
         for prim in query.filters() {
             for v in prim.vars() {
-                vars.entry(v.to_symbol()).or_default();
+                vars.entry(v.to_string()).or_default();
             }
         }
 
@@ -362,7 +362,7 @@ impl EGraph {
             .map(|atom| {
                 let args = atom.args.into_iter().map(|arg| match arg {
                     ResolvedAtomTerm::Var(span, v) => AtomTerm::Var(span, v.name),
-                    ResolvedAtomTerm::Literal(span, lit) => AtomTerm::Literal(span, lit),
+                    ResolvedAtomTerm::Literal(span, lit) => AtomTerm::Literal(span, lit.literal),
                     ResolvedAtomTerm::Global(span, g) => AtomTerm::Global(span, g.name),
                 });
                 Atom {
@@ -379,7 +379,7 @@ impl EGraph {
 
     fn make_trie_access_for_column(
         &self,
-        atom: &Atom<Symbol>,
+        atom: &Atom<String>,
         column: usize,
         timestamp_range: Range<u32>,
         include_subsumed: bool,
@@ -415,8 +415,8 @@ impl EGraph {
 
     fn make_trie_access(
         &self,
-        var: Symbol,
-        atom: &Atom<Symbol>,
+        var: String,
+        atom: &Atom<String>,
         timestamp_range: Range<u32>,
         include_subsumed: bool,
     ) -> TrieAccess {
@@ -443,18 +443,20 @@ impl EGraph {
         include_subsumed: bool,
     ) -> Option<(
         Program,
-        Vec<Symbol>,        /* variable ordering */
+        Vec<String>,        /* variable ordering */
         Vec<Option<usize>>, /* the first column accessed per-atom */
     )> {
         let atoms: &Vec<_> = &query.query.funcs().collect();
-        let mut vars: IndexMap<Symbol, VarInfo2> = Default::default();
+        let mut vars: IndexMap<String, VarInfo2> = Default::default();
         let mut constants =
             IndexMap::<usize /* atom */, Vec<(usize /* column */, Value)>>::default();
 
         for (i, atom) in atoms.iter().enumerate() {
             for (col, arg) in atom.args.iter().enumerate() {
                 match arg {
-                    AtomTerm::Var(_ann, var) => vars.entry(*var).or_default().occurences.push(i),
+                    AtomTerm::Var(_ann, var) => {
+                        vars.entry(var.clone()).or_default().occurences.push(i)
+                    }
                     AtomTerm::Literal(_ann, lit) => {
                         let val = self.eval_lit(lit);
                         constants.entry(i).or_default().push((col, val));
@@ -508,7 +510,7 @@ impl EGraph {
 
             log::debug!("Variable costs: {:?}", ListDebug(&var_cost, "\n"));
 
-            let var = *var_cost[0].1;
+            let var = var_cost[0].1.clone();
             let info = vars.swap_remove(&var).unwrap();
             for &i in &info.occurences {
                 for v in atoms[i].vars() {
@@ -535,20 +537,20 @@ impl EGraph {
 
                 Instr::ConstrainConstant {
                     index: *atom,
-                    val: *val,
+                    val: val.clone(),
                     trie_access,
                 }
             })
         });
         let mut program: Vec<Instr> = const_instrs.collect();
 
-        let var_instrs = vars.iter().map(|(&v, info)| {
-            let value_idx = query.vars.get_index_of(&v).unwrap_or_else(|| {
+        let var_instrs = vars.iter().map(|(v, info)| {
+            let value_idx = query.vars.get_index_of(v).unwrap_or_else(|| {
                 panic!("variable {} not found in query", v);
             });
             Instr::Intersect {
                 value_idx,
-                variable_name: v,
+                variable_name: v.clone(),
                 info: info.clone(),
                 trie_accesses: info
                     .occurences
@@ -556,7 +558,8 @@ impl EGraph {
                     .map(|&atom_idx| {
                         let atom = &atoms[atom_idx];
                         let range = timestamp_ranges[atom_idx].clone();
-                        let access = self.make_trie_access(v, atom, range, include_subsumed);
+                        let access =
+                            self.make_trie_access(v.clone(), atom, range, include_subsumed);
                         let initial_col = &mut initial_columns[atom_idx];
                         if initial_col.is_none() {
                             *initial_col = Some(access.column);
@@ -583,7 +586,7 @@ impl EGraph {
             if let Some(i) = next {
                 let p = extra.remove(i);
                 let check = match p.args.last().unwrap() {
-                    AtomTerm::Var(_ann, v) => match vars.entry(*v) {
+                    AtomTerm::Var(_ann, v) => match vars.entry(v.clone()) {
                         Entry::Occupied(_) => true,
                         Entry::Vacant(e) => {
                             e.insert(Default::default());
@@ -874,7 +877,7 @@ impl LazyTrie {
         match self.force_borrowed(access) {
             LazyTrieInner::Sparse(m) => {
                 for (k, v) in m {
-                    f(*k, v)?;
+                    f(k.clone(), v)?;
                 }
                 Ok(())
             }
@@ -964,19 +967,19 @@ impl<'a> TrieAccess<'a> {
                 .iter_timestamp_range(&self.timestamp_range, true);
             if self.column < arity {
                 for (i, tup, out) in rows {
-                    insert(i, tup, out, tup[self.column])
+                    insert(i, tup, out, tup[self.column].clone())
                 }
             } else {
                 assert_eq!(self.column, arity);
                 for (i, tup, out) in rows {
-                    insert(i, tup, out, out.value);
+                    insert(i, tup, out, out.value.clone());
                 }
             };
         } else if self.column < arity {
             for idx in idxs {
                 let i = *idx as usize;
                 if let Some((tup, out)) = self.function.nodes.get_index(i, self.include_subsumed) {
-                    insert(i, tup, out, tup[self.column])
+                    insert(i, tup, out, tup[self.column].clone())
                 }
             }
         } else {
@@ -984,7 +987,7 @@ impl<'a> TrieAccess<'a> {
             for idx in idxs {
                 let i = *idx as usize;
                 if let Some((tup, out)) = self.function.nodes.get_index(i, self.include_subsumed) {
-                    insert(i, tup, out, out.value)
+                    insert(i, tup, out, out.value.clone())
                 }
             }
         }
