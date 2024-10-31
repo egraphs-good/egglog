@@ -1,67 +1,16 @@
-use lazy_static::lazy_static;
-use std::fmt::Display;
-
-pub use symbol_table::GlobalSymbol as Symbol;
-
-// macro_rules! lalrpop_error {
-//     ($($x:tt)*) => { Err(::lalrpop_util::ParseError::User { error: format!($($x)*)}) }
-// }
-
-use lalrpop_util::lalrpop_mod;
-lalrpop_mod!(
-    #[allow(clippy::all)]
-    pub parse,
-    "/ast/parse.rs"
-);
-
-// For some reason the parser is slow to construct so
-// we make it static and only construct it once.
-lazy_static! {
-    static ref PARSER: parse::ProgramParser = Default::default();
-}
-
-/// Parse a file into a program.
-pub fn parse_program(filename: Option<String>, input: &str) -> Result<Vec<Command>, Error> {
-    let filename = filename.unwrap_or_else(|| DEFAULT_FILENAME.to_string());
-    let srcfile = Arc::new(SrcFile {
-        name: filename,
-        contents: Some(input.to_string()),
-    });
-    Ok(PARSER
-        .parse(&srcfile, input)
-        .map_err(|e| e.map_token(|tok| tok.to_string()))?)
-}
+pub mod desugar;
+mod expr;
+pub mod parse;
+pub(crate) mod remove_globals;
 
 use crate::{
     core::{GenericAtom, GenericAtomTerm, HeadOrEq, Query, ResolvedCall},
     *,
 };
-
-mod expr;
 pub use expr::*;
-pub mod desugar;
-pub(crate) mod remove_globals;
-
-#[derive(Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, Debug)]
-pub struct Id(usize);
-
-impl From<usize> for Id {
-    fn from(n: usize) -> Self {
-        Id(n)
-    }
-}
-
-impl From<Id> for usize {
-    fn from(id: Id) -> Self {
-        id.0
-    }
-}
-
-impl Display for Id {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "id{}", self.0)
-    }
-}
+pub use parse::*;
+use std::fmt::Display;
+pub use symbol_table::GlobalSymbol as Symbol;
 
 #[derive(Clone, Debug)]
 /// The egglog internal representation of already compiled rules
@@ -73,115 +22,6 @@ pub(crate) enum Ruleset {
     Rules(Symbol, IndexMap<Symbol, CompiledRule>),
     /// A combined ruleset may contain other rulesets.
     Combined(Symbol, Vec<Symbol>),
-}
-
-pub const DEFAULT_FILENAME: &str = "<unnamed.egg>";
-pub const DUMMY_FILENAME: &str = "<internal.egg>";
-
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub struct SrcFile {
-    pub name: String,
-    pub contents: Option<String>,
-}
-
-impl Debug for SrcFile {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "SrcFile({}, contents=...)", self.name)
-    }
-}
-
-#[derive(Clone, Copy)]
-pub struct Location {
-    pub line: usize,
-    pub col: usize,
-}
-
-#[derive(Clone, Copy)]
-pub enum Quote<'a> {
-    Quote {
-        filename: &'a str,
-        quote: &'a str,
-        start: Location,
-        end: Location,
-    },
-    NotAvailable,
-}
-
-impl<'a> Display for Quote<'a> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Quote::Quote {
-                filename,
-                quote,
-                start,
-                end,
-            } => {
-                if start.line == end.line {
-                    write!(
-                        f,
-                        "In {}:{}-{} of {filename}: {}",
-                        start.line, start.col, end.col, quote
-                    )
-                } else {
-                    write!(
-                        f,
-                        "In {}:{}-{}:{} of {filename}: {}",
-                        start.line, start.col, end.line, end.col, quote
-                    )
-                }
-            }
-            Quote::NotAvailable => write!(f, "In <Unknown>"),
-        }
-    }
-}
-
-impl SrcFile {
-    pub fn get_location(&self, offset: usize) -> Location {
-        let mut line = 1;
-        let mut col = 1;
-        for (i, c) in self.contents.as_ref().unwrap().chars().enumerate() {
-            if i == offset {
-                break;
-            }
-            if c == '\n' {
-                line += 1;
-                col = 1;
-            } else {
-                col += 1;
-            }
-        }
-        Location { line, col }
-    }
-}
-
-/// A [`Span`] contains the file name and a pair of offsets representing the start and the end.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Span(pub Arc<SrcFile>, pub usize, pub usize);
-
-impl Span {
-    pub fn get_quote(&self) -> Quote<'_> {
-        let Some(contents) = self.0.contents.as_ref() else {
-            return Quote::NotAvailable;
-        };
-        let filename = &self.0.name;
-        let start = self.0.get_location(self.1);
-        let end = self.0.get_location(self.2 - 1);
-        let quote = &contents[self.1..self.2];
-        Quote::Quote {
-            filename,
-            quote,
-            start,
-            end,
-        }
-    }
-}
-
-lazy_static! {
-    pub static ref DUMMY_FILE: Arc<SrcFile> = Arc::new(SrcFile {
-        name: DUMMY_FILENAME.to_string(),
-        contents: None
-    });
-    pub static ref DUMMY_SPAN: Span = Span(DUMMY_FILE.clone(), 0, 0);
 }
 
 pub type NCommand = GenericNCommand<Symbol, Symbol>;
@@ -1765,7 +1605,7 @@ where
     }
 }
 
-type Rewrite = GenericRewrite<Symbol, Symbol>;
+pub type Rewrite = GenericRewrite<Symbol, Symbol>;
 
 #[derive(Clone, Debug)]
 pub struct GenericRewrite<Head, Leaf> {

@@ -42,6 +42,8 @@ impl Default for TypeInfo {
         res.add_sort(I64Sort, DUMMY_SPAN.clone()).unwrap();
         res.add_sort(F64Sort, DUMMY_SPAN.clone()).unwrap();
         res.add_sort(RationalSort, DUMMY_SPAN.clone()).unwrap();
+        res.add_sort(BigIntSort, DUMMY_SPAN.clone()).unwrap();
+        res.add_sort(BigRatSort, DUMMY_SPAN.clone()).unwrap();
 
         res.add_presort::<MapSort>(DUMMY_SPAN.clone()).unwrap();
         res.add_presort::<SetSort>(DUMMY_SPAN.clone()).unwrap();
@@ -482,38 +484,38 @@ impl TypeInfo {
 
 #[derive(Debug, Clone, Error)]
 pub enum TypeError {
-    #[error("{}\nArity mismatch, expected {expected} args: {expr}", .expr.span().get_quote())]
+    #[error("{}\nArity mismatch, expected {expected} args: {expr}", .expr.span())]
     Arity { expr: Expr, expected: usize },
     #[error(
         "{}\n Expect expression {expr} to have type {}, but get type {}",
-        .expr.span().get_quote(), .expected.name(), .actual.name(),
+        .expr.span(), .expected.name(), .actual.name(),
     )]
     Mismatch {
         expr: Expr,
         expected: ArcSort,
         actual: ArcSort,
     },
-    #[error("{}\nUnbound symbol {0}", .1.get_quote())]
+    #[error("{1}\nUnbound symbol {0}")]
     Unbound(Symbol, Span),
-    #[error("{}\nUndefined sort {0}", .1.get_quote())]
+    #[error("{1}\nUndefined sort {0}")]
     UndefinedSort(Symbol, Span),
-    #[error("{}\nSort {0} definition is disallowed: {1}", .2.get_quote())]
+    #[error("{2}\nSort {0} definition is disallowed: {1}")]
     DisallowedSort(Symbol, String, Span),
-    #[error("{}\nUnbound function {0}", .1.get_quote())]
+    #[error("{1}\nUnbound function {0}")]
     UnboundFunction(Symbol, Span),
-    #[error("{}\nFunction already bound {0}", .1.get_quote())]
+    #[error("{1}\nFunction already bound {0}")]
     FunctionAlreadyBound(Symbol, Span),
-    #[error("{}\nSort {0} already declared.", .1.get_quote())]
+    #[error("{1}\nSort {0} already declared.")]
     SortAlreadyBound(Symbol, Span),
-    #[error("{}\nPrimitive {0} already declared.", .1.get_quote())]
+    #[error("{1}\nPrimitive {0} already declared.")]
     PrimitiveAlreadyBound(Symbol, Span),
     #[error("Function type mismatch: expected {} => {}, actual {} => {}", .1.iter().map(|s| s.name().to_string()).collect::<Vec<_>>().join(", "), .0.name(), .3.iter().map(|s| s.name().to_string()).collect::<Vec<_>>().join(", "), .2.name())]
     FunctionTypeMismatch(ArcSort, Vec<ArcSort>, ArcSort, Vec<ArcSort>),
-    #[error("{}\nPresort {0} not found.", .1.get_quote())]
+    #[error("{1}\nPresort {0} not found.")]
     PresortNotFound(Symbol, Span),
-    #[error("{}\nFailed to infer a type for: {0}", .0.span().get_quote())]
+    #[error("{}\nFailed to infer a type for: {0}", .0.span())]
     InferenceFailure(Expr),
-    #[error("{}\nVariable {0} was already defined", .1.get_quote())]
+    #[error("{1}\nVariable {0} was already defined")]
     AlreadyDefined(Symbol, Span),
     #[error("All alternative definitions considered failed\n{}", .0.iter().map(|e| format!("  {e}\n")).collect::<Vec<_>>().join(""))]
     AllAlternativeFailed(Vec<TypeError>),
@@ -537,8 +539,7 @@ mod test {
                 expected: 2,
                 expr: e,
             })) => {
-                let span = e.span();
-                assert_eq!(&prog[span.1..span.2], "(f a b c)");
+                assert_eq!(e.span().string(), "(f a b c)");
             }
             _ => panic!("Expected arity mismatch, got: {:?}", res),
         }

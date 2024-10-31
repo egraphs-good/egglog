@@ -340,7 +340,7 @@ impl std::fmt::Display for Query<ResolvedCall, Symbol> {
                 writeln!(
                     f,
                     "({} {})",
-                    filter.head.name(),
+                    filter.head.primitive.name(),
                     ListDisplay(&filter.args, " ")
                 )?;
             }
@@ -350,12 +350,12 @@ impl std::fmt::Display for Query<ResolvedCall, Symbol> {
 }
 
 impl<Leaf: Clone> Query<ResolvedCall, Leaf> {
-    pub fn filters(&self) -> impl Iterator<Item = GenericAtom<Primitive, Leaf>> + '_ {
+    pub fn filters(&self) -> impl Iterator<Item = GenericAtom<SpecializedPrimitive, Leaf>> + '_ {
         self.atoms.iter().filter_map(|atom| match &atom.head {
             ResolvedCall::Func(_) => None,
             ResolvedCall::Primitive(head) => Some(GenericAtom {
                 span: atom.span.clone(),
-                head: head.primitive.clone(),
+                head: head.clone(),
                 args: atom.args.clone(),
             }),
         })

@@ -25,9 +25,9 @@ impl<'a> ActionCompiler<'a> {
                 self.locals.insert(v.clone());
             }
             GenericCoreAction::Extract(_ann, e, b) => {
-                self.do_atom_term(e);
+                let sort = self.do_atom_term(e);
                 self.do_atom_term(b);
-                self.instructions.push(Instruction::Extract(2));
+                self.instructions.push(Instruction::Extract(2, sort));
             }
             GenericCoreAction::Set(_ann, f, args, e) => {
                 let ResolvedCall::Func(func) = f else {
@@ -62,9 +62,9 @@ impl<'a> ActionCompiler<'a> {
                     .push(Instruction::Change(*change, func.name));
             }
             GenericCoreAction::Union(_ann, arg1, arg2) => {
-                self.do_atom_term(arg1);
+                let sort = self.do_atom_term(arg1);
                 self.do_atom_term(arg2);
-                self.instructions.push(Instruction::Union(2));
+                self.instructions.push(Instruction::Union(2, sort));
             }
             GenericCoreAction::Panic(_ann, msg) => {
                 self.instructions.push(Instruction::Panic(msg.clone()));
@@ -82,18 +82,21 @@ impl<'a> ActionCompiler<'a> {
         }
     }
 
-    fn do_atom_term(&mut self, at: &ResolvedAtomTerm) {
+    fn do_atom_term(&mut self, at: &ResolvedAtomTerm) -> ArcSort {
         match at {
             ResolvedAtomTerm::Var(_ann, var) => {
-                if let Some((i, _ty)) = self.locals.get_full(var) {
+                if let Some((i, ty)) = self.locals.get_full(var) {
                     self.instructions.push(Instruction::Load(Load::Stack(i)));
+                    ty.sort.clone()
                 } else {
-                    let (i, _, _ty) = self.types.get_full(&var.name).unwrap();
+                    let (i, _, ty) = self.types.get_full(&var.name).unwrap();
                     self.instructions.push(Instruction::Load(Load::Subst(i)));
+                    ty.clone()
                 }
             }
             ResolvedAtomTerm::Literal(_ann, lit) => {
                 self.instructions.push(Instruction::Literal(lit.clone()));
+                crate::sort::literal_sort(lit)
             }
             ResolvedAtomTerm::Global(_ann, _var) => {
                 panic!("Global variables should have been desugared");
@@ -109,10 +112,8 @@ impl<'a> ActionCompiler<'a> {
     }
 
     fn do_prim(&mut self, prim: &SpecializedPrimitive) {
-        self.instructions.push(Instruction::CallPrimitive(
-            prim.primitive.clone(),
-            prim.input.len(),
-        ));
+        self.instructions
+            .push(Instruction::CallPrimitive(prim.clone(), prim.input.len()));
     }
 }
 
@@ -138,7 +139,7 @@ enum Instruction {
     CallFunction(Symbol, bool),
     /// Pop primitive arguments off the stack, calls the primitive,
     /// and push the result onto the stack.
-    CallPrimitive(Primitive, usize),
+    CallPrimitive(SpecializedPrimitive, usize),
     /// Pop function arguments off the stack and either deletes, subsumes, or changes the cost
     /// of the corresponding row in the function.
     Change(Change, Symbol),
@@ -149,11 +150,11 @@ enum Instruction {
     /// Set the function at the given arguments to the new cost.
     Cost(Symbol),
     /// Union the last `n` values on the stack.
-    Union(usize),
+    Union(usize, ArcSort),
     /// Extract the best expression. `n` is always 2.
     /// The first value on the stack is the expression to extract,
     /// and the second value is the number of variants to extract.
-    Extract(usize),
+    Extract(usize, ArcSort),
     /// Panic with the given message.
     Panic(String),
 }
@@ -238,10 +239,11 @@ impl EGraph {
                     MergeFn::AssertEq => {
                         return Err(Error::MergeError(table, new_value, old_value));
                     }
-                    MergeFn::Union => {
-                        self.unionfind
-                            .union_values(old_value, new_value, old_value.tag)
-                    }
+                    MergeFn::Union => self.unionfind.union_values(
+                        old_value,
+                        new_value,
+                        function.decl.schema.output,
+                    ),
                     MergeFn::Expr(merge_prog) => {
                         let values = [old_value, new_value];
                         let mut stack = vec![];
@@ -283,14 +285,15 @@ impl EGraph {
                 },
                 Instruction::CallFunction(f, make_defaults) => {
                     let function = self.functions.get_mut(f).unwrap();
-                    let output_tag = function.schema.output.name();
                     let new_len = stack.len() - function.schema.input.len();
                     let values = &stack[new_len..];
 
-                    if cfg!(debug_assertions) {
-                        for (ty, val) in function.schema.input.iter().zip(values) {
-                            assert_eq!(ty.name(), val.tag,);
-                        }
+                    #[cfg(debug_assertions)]
+                    let output_tag = function.schema.output.name();
+
+                    #[cfg(debug_assertions)]
+                    for (ty, val) in function.schema.input.iter().zip(values) {
+                        assert_eq!(ty.name(), val.tag);
                     }
 
                     let value = if let Some(out) = function.nodes.get(values) {
@@ -304,8 +307,11 @@ impl EGraph {
                                 Value::unit()
                             }
                             None if out.is_eq_sort() => {
-                                let id = self.unionfind.make_set();
-                                let value = Value::from_id(out.name(), id);
+                                let value = Value {
+                                    #[cfg(debug_assertions)]
+                                    tag: out.name(),
+                                    bits: self.unionfind.make_set(),
+                                };
                                 function.insert(values, value, ts);
                                 value
                             }
@@ -329,18 +335,24 @@ impl EGraph {
                         ))));
                     };
 
+                    // cfg is necessary because debug_assert_eq still evaluates its
+                    // arguments in release mode (is has to because of side effects)
+                    #[cfg(debug_assertions)]
                     debug_assert_eq!(output_tag, value.tag);
+
                     stack.truncate(new_len);
                     stack.push(value);
                 }
                 Instruction::CallPrimitive(p, arity) => {
                     let new_len = stack.len() - arity;
                     let values = &stack[new_len..];
-                    if let Some(value) = p.apply(values, Some(self)) {
+                    if let Some(value) =
+                        p.primitive.apply(values, (&p.input, &p.output), Some(self))
+                    {
                         stack.truncate(new_len);
                         stack.push(value);
                     } else {
-                        return Err(Error::PrimitiveError(p.clone(), values.to_vec()));
+                        return Err(Error::PrimitiveError(p.primitive.clone(), values.to_vec()));
                     }
                 }
                 Instruction::Set(f) => {
@@ -368,32 +380,25 @@ impl EGraph {
                     stack.truncate(new_len);
                 }
 
-                Instruction::Union(arity) => {
+                Instruction::Union(arity, sort) => {
                     let new_len = stack.len() - arity;
                     let values = &stack[new_len..];
-                    let sort = values[0].tag;
-                    let first = self.unionfind.find(Id::from(values[0].bits as usize));
+                    let first = self.unionfind.find(values[0].bits);
                     values[1..].iter().fold(first, |a, b| {
-                        let b = self.unionfind.find(Id::from(b.bits as usize));
-                        self.unionfind.union(a, b, sort)
+                        let b = self.unionfind.find(b.bits);
+                        self.unionfind.union(a, b, sort.name())
                     });
                     stack.truncate(new_len);
                 }
-                Instruction::Extract(arity) => {
+                Instruction::Extract(arity, sort) => {
                     let new_len = stack.len() - arity;
                     let values = &stack[new_len..];
                     let new_len = stack.len() - arity;
                     let mut termdag = TermDag::default();
-                    let num_sort = values[1].tag;
-                    assert!(num_sort.to_string() == "i64");
 
                     let variants = values[1].bits as i64;
                     if variants == 0 {
-                        let (cost, term) = self.extract(
-                            values[0],
-                            &mut termdag,
-                            self.type_info.sorts.get(&values[0].tag).unwrap(),
-                        );
+                        let (cost, term) = self.extract(values[0], &mut termdag, sort);
                         let extracted = termdag.to_string(&term);
                         log::info!("extracted with cost {cost}: {extracted}");
                         self.print_msg(extracted);
@@ -407,7 +412,7 @@ impl EGraph {
                             panic!("Cannot extract negative number of variants");
                         }
                         let terms =
-                            self.extract_variants(values[0], variants as usize, &mut termdag);
+                            self.extract_variants(sort, values[0], variants as usize, &mut termdag);
                         log::info!("extracted variants:");
                         let mut msg = String::default();
                         msg += "(\n";
