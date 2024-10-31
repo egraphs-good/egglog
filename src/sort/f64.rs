@@ -46,7 +46,7 @@ impl Sort for F64Sort {
         add_primitives!(eg, "to-f64" = |a: i64| -> f64 { a as f64 });
         add_primitives!(eg, "to-i64" = |a: f64| -> i64 { a as i64 });
         // Use debug instead of to_string so that decimal place is always printed
-        add_primitives!(eg, "to-string" = |a: f64| -> String { format!("{:?}", a).into() });
+        add_primitives!(eg, "to-string" = |a: f64| -> String { format!("{:?}", a) });
 
     }
 

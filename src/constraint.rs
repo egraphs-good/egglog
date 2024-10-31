@@ -246,7 +246,7 @@ impl Assignment<AtomTerm, ArcSort> {
                 span.clone(),
                 crate::ResolvedLiteral {
                     literal: literal.clone(),
-                    sort: literal_sort(&literal, typeinfo),
+                    sort: literal_sort(literal, typeinfo),
                 },
             ),
             GenericExpr::Var(span, var) => {

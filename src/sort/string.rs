@@ -126,7 +126,7 @@ impl PrimitiveLike for Replace {
         let string1 = String::load(&self.string, &values[0]).to_string();
         let string2 = String::load(&self.string, &values[1]).to_string();
         let string3 = String::load(&self.string, &values[2]).to_string();
-        let res: String = string1.replace(&string2, &string3).into();
+        let res: String = string1.replace(&string2, &string3);
         res.store(&self.string)
     }
 }

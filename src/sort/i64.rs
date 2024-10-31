@@ -59,7 +59,7 @@ impl Sort for I64Sort {
         add_primitives!(typeinfo, "min" = |a: i64, b: i64| -> i64 { a.min(b) });
         add_primitives!(typeinfo, "max" = |a: i64, b: i64| -> i64 { a.max(b) });
 
-        add_primitives!(typeinfo, "to-string" = |a: i64| -> String { a.to_string().into() });
+        add_primitives!(typeinfo, "to-string" = |a: i64| -> String { a.to_string() });
 
         // Must be in the i64 sort register function because the string sort is registered before the i64 sort.
         typeinfo.add_primitive(CountMatches {

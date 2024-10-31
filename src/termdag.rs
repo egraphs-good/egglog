@@ -169,7 +169,7 @@ impl TermDag {
                     stored.insert(next, format!("{}", lit));
                 }
                 Term::Var(v) => {
-                    stored.insert(next, format!("{}", v));
+                    stored.insert(next, v.to_string());
                 }
             }
         }

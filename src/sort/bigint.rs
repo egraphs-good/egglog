@@ -59,7 +59,7 @@ impl Sort for BigIntSort {
         add_primitives!(eg, "min" = |a: Z, b: Z| -> Z { a.min(b) });
         add_primitives!(eg, "max" = |a: Z, b: Z| -> Z { a.max(b) });
 
-        add_primitives!(eg, "to-string" = |a: Z| -> String { a.to_string().into() });
+        add_primitives!(eg, "to-string" = |a: Z| -> String { a.to_string() });
         add_primitives!(eg, "from-string" = |a: String| -> Opt<Z> { a.as_str().parse::<Z>().ok() });
    }
 
@@ -74,7 +74,7 @@ impl Sort for BigIntSort {
                 "from-string",
                 vec![GenericExpr::Lit(
                     DUMMY_SPAN.clone(),
-                    Literal::String(bigint.to_string().into()),
+                    Literal::String(bigint.to_string()),
                 )],
             ),
         )

@@ -118,14 +118,14 @@ impl Sort for BigRatSort {
                         "from-string",
                         vec![GenericExpr::Lit(
                             DUMMY_SPAN.clone(),
-                            Literal::String(numer.to_string().into()),
+                            Literal::String(numer.to_string()),
                         )],
                     ),
                     Expr::call_no_span(
                         "from-string",
                         vec![GenericExpr::Lit(
                             DUMMY_SPAN.clone(),
-                            Literal::String(denom.to_string().into()),
+                            Literal::String(denom.to_string()),
                         )],
                     ),
                 ],

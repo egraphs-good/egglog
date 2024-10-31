@@ -92,7 +92,7 @@ impl FreshGen<String, String, Literal> for StringGen {
     fn fresh(&mut self, name_hint: &String) -> String {
         let s = format!("{}{}{}", self.reserved_string, name_hint, self.gen);
         self.gen += 1;
-        String::from(s)
+        s
     }
 }
 
@@ -105,7 +105,7 @@ impl FreshGen<ResolvedCall, ResolvedVar, ResolvedLiteral> for StringGen {
             ResolvedCall::Primitive(SpecializedPrimitive { output, .. }) => output.clone(),
         };
         ResolvedVar {
-            name: s.into(),
+            name: s,
             sort,
             // fresh variables are never global references, since globals
             // are desugared away by `remove_globals`

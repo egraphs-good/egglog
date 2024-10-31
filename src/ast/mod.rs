@@ -851,7 +851,7 @@ where
 {
     fn to_sexp(&self) -> Sexp {
         let mut res = vec![Sexp::Symbol("run".into())];
-        if self.ruleset != "" {
+        if !self.ruleset.is_empty() {
             res.push(Sexp::Symbol(self.ruleset.to_string()));
         }
         if let Some(until) = &self.until {
@@ -1577,12 +1577,12 @@ where
                 write!(f, "{}", action)?;
             }
         }
-        let ruleset = if ruleset != "" {
+        let ruleset = if !ruleset.is_empty() {
             format!(":ruleset {}", ruleset)
         } else {
             "".into()
         };
-        let name = if name != "" {
+        let name = if !name.is_empty() {
             format!(":name \"{}\"", name)
         } else {
             "".into()
@@ -1604,11 +1604,11 @@ where
             Sexp::List(self.body.iter().map(|f| f.to_sexp()).collect()),
             Sexp::List(self.head.0.iter().map(|a| a.to_sexp()).collect()),
         ];
-        if ruleset != "" {
+        if !ruleset.is_empty() {
             res.push(Sexp::Symbol(":ruleset".into()));
             res.push(Sexp::Symbol(ruleset.to_string()));
         }
-        if name != "" {
+        if !name.is_empty() {
             res.push(Sexp::Symbol(":name".into()));
             res.push(Sexp::Symbol(format!("\"{}\"", name)));
         }
@@ -1660,7 +1660,7 @@ impl<Head: Display, Leaf: Display, Lit: Display> GenericRewrite<Head, Leaf, Lit>
             ));
         }
 
-        if ruleset != "" {
+        if !ruleset.is_empty() {
             res.push(Sexp::Symbol(":ruleset".into()));
             res.push(Sexp::Symbol(ruleset.to_string()));
         }

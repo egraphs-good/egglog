@@ -403,7 +403,7 @@ fn command(ctx: &Context) -> Res<Command> {
         .map(
             |((), (body, (head, (ruleset, name)))), span| Command::Rule {
                 ruleset: ruleset.unwrap_or("".into()),
-                name: name.unwrap_or("".to_string()).into(),
+                name: name.unwrap_or("".to_string()),
                 rule: Rule { span, head, body },
             },
         )(ctx),
@@ -683,7 +683,7 @@ fn literal(ctx: &Context) -> Res<Literal> {
         num.map(|x, _| Literal::Int(x)),
         r#f64.map(|x, _| Literal::F64(x)),
         r#bool.map(|x, _| Literal::Bool(x)),
-        string.map(|x, _| Literal::String(x.into())),
+        string.map(|x, _| Literal::String(x)),
     )(ctx)
 }
 

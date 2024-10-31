@@ -419,7 +419,7 @@ fn call_fn(egraph: &mut EGraph, name: &String, types: Vec<ArcSort>, args: Vec<Va
         .take(args.len())
         .enumerate()
         .map(|(i, sort)| ResolvedVar {
-            name: format!("__arg_{}", i).into(),
+            name: format!("__arg_{}", i),
             sort,
             is_global_ref: false,
         })
