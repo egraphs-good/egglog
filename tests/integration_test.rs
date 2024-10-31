@@ -23,7 +23,7 @@ fn test_subsumed_unextractable_action_extract() {
         Some(ExtractReport::Best {
             term: Term::App(s, ..),
             ..
-        }) if s == &GlobalSymbol::from("cheap")
+        }) if s == "cheap"
     ));
     // Then if we make one as subsumed, it should give back the variable term
     egraph
@@ -40,16 +40,12 @@ fn test_subsumed_unextractable_action_extract() {
         Some(ExtractReport::Best {
             term: Term::App(s, ..),
             ..
-        }) if s == &GlobalSymbol::from("exp")
+        }) if s == "exp"
     ));
 }
 
 fn get_function(egraph: &EGraph, name: &str) -> Function {
-    egraph
-        .functions
-        .get(&GlobalSymbol::from(name))
-        .unwrap()
-        .clone()
+    egraph.functions.get(name).unwrap().clone()
 }
 fn get_value(egraph: &EGraph, name: &str) -> Value {
     get_function(egraph, name).get(&[]).unwrap()
@@ -111,7 +107,7 @@ fn test_subsumed_unextractable_rebuild_arg() {
         panic!();
     };
     let expr = termdag.term_to_expr(&term);
-    assert_eq!(expr, Expr::call_no_span(GlobalSymbol::from("exp"), vec![]));
+    assert_eq!(expr, Expr::call_no_span("exp", vec![]));
 }
 
 #[test]
@@ -162,7 +158,7 @@ fn test_subsumed_unextractable_rebuild_self() {
         panic!();
     };
     let expr = termdag.term_to_expr(&term);
-    assert_eq!(expr, Expr::call_no_span(GlobalSymbol::from("exp"), vec![]));
+    assert_eq!(expr, Expr::call_no_span("exp", vec![]));
 }
 
 #[test]
@@ -194,7 +190,7 @@ fn test_subsume_unextractable_insert_and_merge() {
         Some(ExtractReport::Best {
             term: Term::App(s, ..),
             ..
-        }) if s == &GlobalSymbol::from("exp")
+        }) if s == "exp"
     ));
 }
 
@@ -264,7 +260,7 @@ fn test_rewrite_subsumed_unextractable() {
         Some(ExtractReport::Best {
             term: Term::App(s, ..),
             ..
-        }) if s == &GlobalSymbol::from("exp")
+        }) if s == "exp"
     ));
 }
 #[test]
@@ -296,7 +292,7 @@ fn test_rewrite_subsumed() {
         Some(ExtractReport::Best {
             term: Term::App(s, ..),
             ..
-        }) if s == &GlobalSymbol::from("exp")
+        }) if s == "exp"
     ));
 }
 
