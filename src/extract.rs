@@ -1,9 +1,7 @@
-use hashbrown::hash_map::Entry;
-
 use crate::ast::Symbol;
 use crate::termdag::{Term, TermDag};
 use crate::util::HashMap;
-use crate::{ArcSort, EGraph, Function, Id, Value};
+use crate::{ArcSort, EGraph, Function, HEntry, Id, Value};
 
 pub type Cost = usize;
 
@@ -194,11 +192,11 @@ impl<'a> Extractor<'a> {
 
                             let id = self.egraph.find(&func.schema.output, output.value).bits;
                             match self.costs.entry(id) {
-                                Entry::Vacant(e) => {
+                                HEntry::Vacant(e) => {
                                     did_something = true;
                                     e.insert(make_new_pair());
                                 }
-                                Entry::Occupied(mut e) => {
+                                HEntry::Occupied(mut e) => {
                                     if new_cost < e.get().0 {
                                         did_something = true;
                                         e.insert(make_new_pair());

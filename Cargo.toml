@@ -24,6 +24,7 @@ default = ["bin"]
 
 bin = ["dep:clap", "dep:env_logger", "egraph-serialize/serde", "dep:serde_json"]
 wasm-bindgen = ["instant/wasm-bindgen", "dep:getrandom"]
+nondeterministic = []
 
 [dependencies]
 hashbrown = { version = "0.15" }
