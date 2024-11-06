@@ -1,8 +1,8 @@
-use num_integer::Roots;
-use num_traits::{CheckedAdd, CheckedDiv, CheckedMul, CheckedSub, One, Signed, ToPrimitive, Zero};
+use num::integer::Roots;
+use num::traits::{CheckedAdd, CheckedDiv, CheckedMul, CheckedSub, One, Signed, ToPrimitive, Zero};
 use std::sync::Mutex;
 
-type R = num_rational::Rational64;
+type R = num::rational::Rational64;
 use crate::{ast::Literal, util::IndexSet};
 
 use super::*;
@@ -59,7 +59,7 @@ impl Sort for RationalSort {
                 Some(R::one())
             } else if let Some(b) = b.to_i64() {
                 if let Ok(b) = usize::try_from(b) {
-                    num_traits::checked_pow(a, b)
+                    num::traits::checked_pow(a, b)
                 } else {
                     // TODO handle negative powers
                     None

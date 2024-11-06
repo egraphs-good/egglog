@@ -130,7 +130,7 @@ impl EGraph {
             |mut acc, (func, _input, _output, class_id, node_id)| {
                 if func.schema.output.is_eq_sort() {
                     acc.entry(class_id.clone())
-                        .or_insert_with(VecDeque::new)
+                        .or_default()
                         .push_back(node_id.clone());
                 }
                 acc
