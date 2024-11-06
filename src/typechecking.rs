@@ -376,7 +376,7 @@ impl TypeInfo {
                 GenericAction::Set(_, _, _, Expr::Call(_, symbol, _)) => {
                     return Err(TypeError::LookupInRuleDisallowed(*symbol, span.clone()));
                 }
-                _ => ()
+                _ => (),
             }
         }
 

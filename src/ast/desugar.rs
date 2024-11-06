@@ -99,10 +99,7 @@ pub(crate) fn desugar_command(
         Command::Include(span, file) => {
             let s = std::fs::read_to_string(&file)
                 .unwrap_or_else(|_| panic!("{span} Failed to read file {file}"));
-            return desugar_program(
-                parse_program(Some(file), &s)?,
-                symbol_gen
-            );
+            return desugar_program(parse_program(Some(file), &s)?, symbol_gen);
         }
         Command::Rule {
             ruleset,
@@ -328,7 +325,7 @@ fn desugar_simplify(
                 variants: 0,
                 expr: Expr::Var(span.clone(), lhs),
             },
-            symbol_gen
+            symbol_gen,
         )
         .unwrap(),
     );

@@ -1406,8 +1406,7 @@ impl EGraph {
     }
 
     fn process_command(&mut self, command: Command) -> Result<Vec<ResolvedNCommand>, Error> {
-        let program =
-            desugar::desugar_program(vec![command], &mut self.symbol_gen)?;
+        let program = desugar::desugar_program(vec![command], &mut self.symbol_gen)?;
 
         let program = self
             .type_info
