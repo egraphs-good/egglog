@@ -204,7 +204,7 @@ impl<'a> GlobalRemover<'a> {
                 let boxed_last = Box::new(last);
                 let new_command = GenericNCommand::Fail (span, boxed_last);
                 removed.push(new_command);
-                return removed
+                removed
             }
             _ => vec![cmd.visit_exprs(&mut replace_global_vars)],
         }
