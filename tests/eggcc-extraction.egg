@@ -122,7 +122,8 @@
 
             (function VecOperand-length (VecOperand) i64)
             (rule ((VO x))
-                  ((set (VecOperand-length (VO x)) (vec-length x)))
+                  (= y (vec-length x))
+                  ((set (VecOperand-length (VO x)) y))
                   :ruleset fast-analyses)
         
 
@@ -137,7 +138,8 @@
 
             (function VecVecOperand-length (VecVecOperand) i64)
             (rule ((VVO x))
-                  ((set (VecVecOperand-length (VVO x)) (vec-length x)))
+                  (= y (vec-length x))
+                  ((set (VecVecOperand-length (VVO x)) y))
                   :ruleset fast-analyses)
         
 

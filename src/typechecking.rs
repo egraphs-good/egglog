@@ -366,6 +366,23 @@ impl TypeInfo {
         let (query, mapped_query) = Facts(body.clone()).to_query(self, symbol_gen);
         constraints.extend(query.get_constraints(self)?);
 
+        //Disallowing Let/Set actions to look up non-constructor functions in rules
+        for action in head.iter() {
+            match action {
+                GenericAction::Let(_, symbol, expr) => {
+                    if let Expr::Call(..) = expr {
+                        return Err(TypeError::LookupInRuleDisallowed(symbol.clone(), span.clone()));
+                    }
+                }
+                GenericAction::Set(_, symbol, _, expr) => {
+                    if let Expr::Call(..) = expr {
+                        return Err(TypeError::LookupInRuleDisallowed(symbol.clone(), span.clone()));
+                    }
+                }
+                _ => ()
+            }
+        }
+
         let mut binding = query.get_vars();
         let (actions, mapped_action) = head.to_core_actions(self, &mut binding, symbol_gen)?;
 
@@ -515,6 +532,8 @@ pub enum TypeError {
     InferenceFailure(Expr),
     #[error("{1}\nVariable {0} was already defined")]
     AlreadyDefined(Symbol, Span),
+    #[error("{1}\nValue lookup of non-constructor function {0} in rule is disallowed.")]
+    LookupInRuleDisallowed(Symbol, Span),
     #[error("All alternative definitions considered failed\n{}", .0.iter().map(|e| format!("  {e}\n")).collect::<Vec<_>>().join(""))]
     AllAlternativeFailed(Vec<TypeError>),
 }
