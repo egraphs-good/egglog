@@ -121,8 +121,8 @@
                 :ruleset fast-analyses)
 
             (function VecOperand-length (VecOperand) i64)
-            (rule ((VO x))
-                  (= y (vec-length x))
+            (rule ((VO x)
+                  (= y (vec-length x)))
                   ((set (VecOperand-length (VO x)) y))
                   :ruleset fast-analyses)
         
@@ -137,8 +137,8 @@
                 :ruleset fast-analyses)
 
             (function VecVecOperand-length (VecVecOperand) i64)
-            (rule ((VVO x))
-                  (= y (vec-length x))
+            (rule ((VVO x)
+                  (= y (vec-length x)))
                   ((set (VecVecOperand-length (VVO x)) y))
                   :ruleset fast-analyses)
         
@@ -238,8 +238,9 @@
                   :ruleset fast-analyses)
             (rule ((= i (VecOperand-pure-prefix f))
                    (< i (VecOperand-length f))
-                   (Operand-is-pure (VecOperand-get f i)))
-                  ((set (VecOperand-pure-prefix f) (+ i 1)))
+                   (Operand-is-pure (VecOperand-get f i))
+                   (= sum (+ i 1)))
+                  ((set (VecOperand-pure-prefix f) sum))
                   :ruleset fast-analyses)
             (rule ((= (VecOperand-length f) (VecOperand-pure-prefix f)))
                   ((VecOperand-is-pure f))
@@ -251,8 +252,9 @@
                   :ruleset fast-analyses)
             (rule ((= i (VecVecOperand-pure-prefix f))
                    (< i (VecVecOperand-length f))
-                   (VecOperand-is-pure (VecVecOperand-get f i)))
-                  ((set (VecVecOperand-pure-prefix f) (+ i 1)))
+                   (VecOperand-is-pure (VecVecOperand-get f i))
+                   (= sum (+ i 1)))
+                  ((set (VecVecOperand-pure-prefix f) sum))
                   :ruleset fast-analyses)
             (rule ((= (VecVecOperand-length f) (VecVecOperand-pure-prefix f)))
                   ((VecVecOperand-is-pure f))
@@ -1007,8 +1009,9 @@
           ;; gamma predicate is false
           (Theta (Node (PureOp (Const (BoolT) (const) (Bool false))))
                  (VO inputs)
-                 (VO outputs))))
-      ((let after-one-iter (SubstVecOperandAll (VO outputs) (VO inputs)))
+                 (VO outputs)))
+       (= x (SubstVecOperandAll (VO outputs) (VO inputs))))
+      ((let after-one-iter x)
        (union theta
           (OperandGroup after-one-iter))))
 
@@ -1141,55 +1144,61 @@
 
 (rule ((= lhs (badd ty a b))
        (= (OperandAndCost expr1 cost1) (ExtractedOperand a))
-       (= (OperandAndCost expr2 cost2) (ExtractedOperand b)))
-      ((set (ExtractedExpr lhs)
-            (ExprAndCost (badd ty expr1 expr2)
+       (= (OperandAndCost expr2 cost2) (ExtractedOperand b))
+       (= x (ExprAndCost (badd ty expr1 expr2)
                          (+ 1 (+ cost1 cost2)))))
+      ((set (ExtractedExpr lhs)
+            x))
         :ruleset fast-analyses)
 
 
 (rule ((= lhs (bsub ty a b))
        (= (OperandAndCost expr1 cost1) (ExtractedOperand a))
-       (= (OperandAndCost expr2 cost2) (ExtractedOperand b)))
-      ((set (ExtractedExpr lhs)
-            (ExprAndCost (bsub ty expr1 expr2)
+       (= (OperandAndCost expr2 cost2) (ExtractedOperand b))
+       (= x (ExprAndCost (bsub ty expr1 expr2)
                          (+ 1 (+ cost1 cost2)))))
+      ((set (ExtractedExpr lhs)
+            x))
         :ruleset fast-analyses)
 
 
 (rule ((= lhs (bmul ty a b))
        (= (OperandAndCost expr1 cost1) (ExtractedOperand a))
-       (= (OperandAndCost expr2 cost2) (ExtractedOperand b)))
-      ((set (ExtractedExpr lhs)
-            (ExprAndCost (bmul ty expr1 expr2)
+       (= (OperandAndCost expr2 cost2) (ExtractedOperand b))
+       (= x (ExprAndCost (bmul ty expr1 expr2)
                          (+ 1 (+ cost1 cost2)))))
+      ((set (ExtractedExpr lhs)
+            x))
         :ruleset fast-analyses)
 
 
 (rule ((= lhs (bdiv ty a b))
        (= (OperandAndCost expr1 cost1) (ExtractedOperand a))
-       (= (OperandAndCost expr2 cost2) (ExtractedOperand b)))
-      ((set (ExtractedExpr lhs)
-            (ExprAndCost (bdiv ty expr1 expr2)
+       (= (OperandAndCost expr2 cost2) (ExtractedOperand b))
+       (= x (ExprAndCost (bdiv ty expr1 expr2)
                          (+ 1 (+ cost1 cost2)))))
+      ((set (ExtractedExpr lhs)
+            x))
         :ruleset fast-analyses)
 
 
 (rule ((= lhs (blt ty a b))
        (= (OperandAndCost expr1 cost1) (ExtractedOperand a))
-       (= (OperandAndCost expr2 cost2) (ExtractedOperand b)))
-      ((set (ExtractedExpr lhs)
-            (ExprAndCost (blt ty expr1 expr2)
+       (= (OperandAndCost expr2 cost2) (ExtractedOperand b))
+       (= x (ExprAndCost (blt ty expr1 expr2)
                          (+ 1 (+ cost1 cost2)))))
+      ((set (ExtractedExpr lhs)
+            x))
         :ruleset fast-analyses)
 
 
 (rule ((= lhs (PRINT a b))
         (= (OperandAndCost expr1 cost1) (ExtractedOperand a))
-        (= (OperandAndCost expr2 cost2) (ExtractedOperand b)))
-      ((set (ExtractedExpr lhs)
-            (ExprAndCost (PRINT expr1 expr2)
+        (= (OperandAndCost expr2 cost2) (ExtractedOperand b))
+        (= x (ExprAndCost (PRINT expr1 expr2)
                          (+ 1 (+ cost1 cost2)))))
+      ((set (ExtractedExpr lhs)
+            x))
       :ruleset fast-analyses)
 
 ;; TODO fix this HACK
@@ -1203,9 +1212,10 @@
 
 ;; base case: extract nothing
 (rule
-   ((VO vec))
+   ((VO vec)
+    (= x (VecOperandAndCost (VO (vec-of)) 0)))
    ((set (ExtractedVecOperandHelper (VO vec) 0)
-         (VecOperandAndCost (VO (vec-of)) 0)))
+         x))
     :ruleset fast-analyses)
 
 ;; extract one more thing
@@ -1213,11 +1223,12 @@
    ((= (VecOperandAndCost (VO current) current-cost)
        (ExtractedVecOperandHelper (VO vec) index))
     (< index (vec-length vec))
-    (= (ExtractedOperand (VecOperand-get (VO vec) index)) (OperandAndCost expr expr-cost)))
-   ((set (ExtractedVecOperandHelper (VO vec) (+ index 1))
-         (VecOperandAndCost
+    (= (ExtractedOperand (VecOperand-get (VO vec) index)) (OperandAndCost expr expr-cost))
+    (= x (VecOperandAndCost
              (VO (vec-push current expr))
              (+ current-cost expr-cost))))
+   ((set (ExtractedVecOperandHelper (VO vec) (+ index 1))
+         x))
     :ruleset fast-analyses)
     
 
@@ -1237,9 +1248,10 @@
 
 ;; base case: extract nothing
 (rule
-   ((VVO vec))
+   ((VVO vec)
+    (= x (VecVecOperandAndCost (VVO empty-vvo) 0)))
    ((set (ExtractedVecVecOperandHelper (VVO vec) 0)
-         (VecVecOperandAndCost (VVO empty-vvo) 0)))
+         x))
     :ruleset fast-analyses)
 
 ;; extract one more thing
@@ -1247,11 +1259,12 @@
    ((= (VecVecOperandAndCost (VVO current) current-cost)
        (ExtractedVecVecOperandHelper (VVO vec) index))
     (< index (vec-length vec))
-    (= (ExtractedVecOperand (VecVecOperand-get (VVO vec) index)) (VecOperandAndCost expr expr-cost)))
-   ((set (ExtractedVecVecOperandHelper (VVO vec) (+ index 1))
-         (VecVecOperandAndCost
+    (= (ExtractedVecOperand (VecVecOperand-get (VVO vec) index)) (VecOperandAndCost expr expr-cost))
+    (= x (VecVecOperandAndCost
              (VVO (vec-push current expr))
              (+ current-cost expr-cost))))
+   ((set (ExtractedVecVecOperandHelper (VVO vec) (+ index 1))
+         x))
     :ruleset fast-analyses)
     
 
@@ -1269,14 +1282,16 @@
 
 ;; Constant gets cost of 1
 (rule
-  ((= lhs (Const ty ops lit)))
-  ((set (ExtractedExpr lhs) (ExprAndCost lhs 1)))
+  ((= lhs (Const ty ops lit))
+   (= x (ExprAndCost lhs 1)))
+  ((set (ExtractedExpr lhs) x))
   :ruleset fast-analyses)
 
 ;; arg gets cost of 1
 (rule
-  ((= lhs (Arg index)))
-  ((set (ExtractedOperand lhs) (OperandAndCost lhs 1)))
+  ((= lhs (Arg index))
+   (= x (OperandAndCost lhs 1)))
+  ((set (ExtractedOperand lhs) x))
   :ruleset fast-analyses)
 
 
@@ -1284,16 +1299,18 @@
 (rule
   ((= lhs (PureOp expr))
    (= (ExprAndCost expr-extracted expr-cost)
-      (ExtractedExpr expr)))
-   ((set (ExtractedBody lhs) (BodyAndCost (PureOp expr-extracted) expr-cost)))
+      (ExtractedExpr expr))
+   (= x (BodyAndCost (PureOp expr-extracted) expr-cost)))
+   ((set (ExtractedBody lhs) x))
     :ruleset fast-analyses)
 
 ;; Nor does Node
 (rule
   ((= lhs (Node body))
    (= (BodyAndCost body-extracted body-cost)
-      (ExtractedBody body)))
-   ((set (ExtractedOperand lhs) (OperandAndCost (Node body-extracted) body-cost)))
+      (ExtractedBody body))
+   (= x (OperandAndCost (Node body-extracted) body-cost)))
+   ((set (ExtractedOperand lhs) x))
     :ruleset fast-analyses)
 
 ;; Theta gets a cost of 1 for now
@@ -1304,11 +1321,12 @@
    (= (VecOperandAndCost inputs-extracted inputs-cost)
       (ExtractedVecOperand inputs))
    (= (VecOperandAndCost outputs-extracted outputs-cost)
-      (ExtractedVecOperand outputs)))
-   ((set (ExtractedBody lhs)
-         (BodyAndCost
+      (ExtractedVecOperand outputs))
+   (= x (BodyAndCost
             (Theta pred-extracted inputs-extracted outputs-extracted)
             (+ 1 (+ pred-cost (+ inputs-cost outputs-cost))))))
+   ((set (ExtractedBody lhs)
+         x))
     :ruleset fast-analyses)
 
 ;; Gamma gets a cost of 1 for now
@@ -1319,20 +1337,22 @@
    (= (VecOperandAndCost inputs-extracted inputs-cost)
       (ExtractedVecOperand inputs))
    (= (VecVecOperandAndCost outputs-extracted outputs-cost)
-      (ExtractedVecVecOperand outputs)))
-  ((set (ExtractedBody lhs)
-        (BodyAndCost
+      (ExtractedVecVecOperand outputs))
+   (= x (BodyAndCost
           (Gamma pred-extracted inputs-extracted outputs-extracted)
           (+ 1 (+ pred-cost (+ inputs-cost outputs-cost))))))
+  ((set (ExtractedBody lhs)
+        x))
     :ruleset fast-analyses)
 
 
 ;; Project is also free
 (rule ((= lhs (Project index body))
        (= (BodyAndCost body-extracted body-cost)
-          (ExtractedBody body)))
+          (ExtractedBody body))
+       (= x (OperandAndCost (Project index body-extracted) body-cost)))
       ((set (ExtractedOperand lhs)
-            (OperandAndCost (Project index body-extracted) body-cost)))
+            x))
       :ruleset fast-analyses)
         
 
@@ -1400,11 +1420,12 @@
        (= (vec-get outputs 1) (VO A))
        (= (vec-get outputs 0) (VO B))
        (= args (vec-length inputs))
-       (= rets (vec-length B)))
-      ((let inner (Gamma (Arg args) ; we pass b as an extra argument to the outer gamma
+       (= rets (vec-length B))
+       (= x (Gamma (Arg args) ; we pass b as an extra argument to the outer gamma
                          (PassThroughArguments args)
                          (VVO (vec-of (VO B)
-                                      (VO A)))))
+                                      (VO A))))))
+      ((let inner x)
        (union gamma (Gamma a
                            (VO (vec-push inputs b)) ; pass b as an extra argument
                            (VVO (vec-of (VO B)
@@ -1427,11 +1448,12 @@
        (= (vec-get outputs 1) (VO A))
        (= (vec-get outputs 0) (VO B))
        (= args (vec-length inputs))
-       (= rets (vec-length B)))
-      ((let inner (Gamma (Arg args) ; we pass b as an extra argument to the outer gamma
+       (= rets (vec-length B))
+       (= x (Gamma (Arg args) ; we pass b as an extra argument to the outer gamma
                          (PassThroughArguments args)
                          (VVO (vec-of (VO B)
-                                      (VO A)))))
+                                      (VO A))))))
+      ((let inner x)
        (union gamma (Gamma a
                            (VO (vec-push inputs b)) ; pass b as an extra argument
                            (VVO (vec-of (BodyToVecOperand rets inner)
@@ -1450,12 +1472,14 @@
 
 
 ;; unroll loops
-(rule ((= theta (Theta pred (VO inputs) (VO outputs))))
+(rule ((= theta (Theta pred (VO inputs) (VO outputs)))
                           ;;            arguments body
+        (= x (SubstVecOperandAll (VO outputs) (VO inputs)))
+        (= y (PassThroughArguments (vec-length outputs))))
       ((let after-one-iter
-         (SubstVecOperandAll (VO outputs) (VO inputs)))
+         x)
        ;; (vec-of (Arg 0) (Arg 1) ...)
-       (let pass-through (PassThroughArguments (vec-length outputs)))
+       (let pass-through y)
        (union theta
           (Gamma
             (SubstOperandAll pred after-one-iter)
@@ -1496,18 +1520,21 @@
 (function context-ival (Operand Body) Interval
   :merge (interval-intersect old new))
 
-(rule ((= lhs (Node (PureOp (Const (BoolT) (const) (Bool b))))))
-      ((set (ival lhs) (BoolI b b))))
+(rule ((= lhs (Node (PureOp (Const (BoolT) (const) (Bool b)))))
+       (= nval (BoolI b b)))
+      ((set (ival lhs) nval)))
 
-(rule ((= lhs (Node (PureOp (Const (IntT) (const) (Num n))))))
-      ((set (ival lhs) (IntI n n))))
+(rule ((= lhs (Node (PureOp (Const (IntT) (const) (Num n)))))
+       (= nval (IntI n n)))
+      ((set (ival lhs) nval)))
 
 
 ; < a b interval (< ha lb) (< la hb)
 (rule ((= lhs (Node (PureOp (blt (BoolT) a b))))
        (= (IntI la ha) (ival a))
-       (= (IntI lb hb) (ival b)))
-      ((set (ival lhs) (BoolI (bool-< ha lb) (bool-< la hb)))))
+       (= (IntI lb hb) (ival b))
+       (= nval (BoolI (bool-< ha lb) (bool-< la hb))))
+      ((set (ival lhs) nval)))
 
 ; Rule that unions intervals for a gamma
 (rule (
@@ -1516,9 +1543,10 @@
         (= (VO elses) (vec-get outs 0))
         (= thenival (ival (vec-get thens i)))
         (= elseival (ival (vec-get elses i)))
+        (= nval (interval-union thenival elseival))
       )
       (
-        (set (ival lhs) (interval-union thenival elseival))
+        (set (ival lhs) nval)
       )
 )
 

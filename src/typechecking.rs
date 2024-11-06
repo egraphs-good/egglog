@@ -370,13 +370,13 @@ impl TypeInfo {
         //Disallowing Let/Set actions to look up non-constructor functions in rules
         for action in head.iter() {
             match action {
-                GenericAction::Let(_, symbol, expr) => {
-                    if let Expr::Call(..) = expr {
+                GenericAction::Let(_, _, expr) => {
+                    if let Expr::Call(_, symbol, _) = expr {
                         return Err(TypeError::LookupInRuleDisallowed(symbol.clone(), span.clone()));
                     }
                 }
-                GenericAction::Set(_, symbol, _, expr) => {
-                    if let Expr::Call(..) = expr {
+                GenericAction::Set(_, _, _, expr) => {
+                    if let Expr::Call(_, symbol, _) = expr {
                         return Err(TypeError::LookupInRuleDisallowed(symbol.clone(), span.clone()));
                     }
                 }

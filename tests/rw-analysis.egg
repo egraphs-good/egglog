@@ -85,8 +85,9 @@
     (= v1 (const-prop l x1))
     (= v2 (const-prop l x2))
     (= l (L li))
+    (= sum (add-val v1 v2))
 )(
-    (set (const-prop (L (+ li 1)) x) (add-val v1 v2))
+    (set (const-prop (L (+ li 1)) x) sum)
 ))
 
 ; propagate x = a == b
@@ -95,8 +96,9 @@
     (= v1 (const-prop l x1))
     (= v2 (const-prop l x2))
     (= l (L li))
+    (= eqv (eq-val v1 v2))
 )(
-    (set (const-prop (L (+ li 1)) x) (eq-val v1 v2))
+    (set (const-prop (L (+ li 1)) x) eqv)
 ))
 
 ; propagate other vars

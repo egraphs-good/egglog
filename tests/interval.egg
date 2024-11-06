@@ -6,10 +6,11 @@
 (function hi (Math) Rational :merge (min old new))
 (function lo (Math) Rational :merge (max old new))
 
-(rule ((= mul (Mul a b)))
+(rule ((= mul (Mul a b))
+       (= nlo (min (min (* (lo a) (lo b)) (* (lo a) (hi b)))
+               (min (* (hi a) (lo b)) (* (hi a) (hi b))))))
       ((set (lo mul) 
-          (min (min (* (lo a) (lo b)) (* (lo a) (hi b)))
-               (min (* (hi a) (lo b)) (* (hi a) (hi b)))))))
+          nlo)))
 
 (let x (Var "x"))
 (let e (Mul x x))
@@ -21,8 +22,9 @@
 
 (check (= (lo e) (rational -100 1)))
 
-(rule ((= mul (Mul a a)))
-      ((set (lo mul) (* (lo a) (lo a)))))
+(rule ((= mul (Mul a a))
+       (= nlo (* (lo a) (lo a))))
+      ((set (lo mul) nlo)))
 
 (run 1)
 (check (= (lo e) (rational 100 1)))
