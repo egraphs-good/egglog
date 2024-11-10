@@ -62,7 +62,7 @@ impl ColumnIndex {
     pub(crate) fn to_canonicalize<'a>(
         &'a self,
         uf: &'a UnionFind,
-    ) -> impl Iterator<Item = usize> + '_ {
+    ) -> impl Iterator<Item = usize> + 'a {
         uf.dirty_ids(self.sort).flat_map(|x| {
             self.get_indexes_for_bits(x)
                 .unwrap_or(&[])

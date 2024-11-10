@@ -12,7 +12,6 @@ use std::mem;
 pub type Id = u64;
 
 #[derive(Debug, Clone, Default)]
-#[cfg_attr(feature = "serde-1", derive(serde::Serialize, serde::Deserialize))]
 pub struct UnionFind {
     parents: Vec<Cell<Id>>,
     n_unions: usize,
