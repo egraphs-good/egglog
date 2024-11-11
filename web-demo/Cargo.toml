@@ -8,7 +8,7 @@ crate-type = ["cdylib"]
 
 [dependencies.egglog]
 default-features = false
-features = ["wasm-bindgen"]
+features = ["serde", "graphviz", "wasm-bindgen"]
 path = ".."
 
 [dependencies]
@@ -20,7 +20,7 @@ serde_json = "1.0"
 console_error_panic_hook = "0.1.7"
 js-sys = "0.3"
 wasm-bindgen = "0.2"
-web-sys = {version = "0.3.64", features = [
+web-sys = { version = "0.3.64", features = [
   # "Blob",
   # "BlobPropertyBag",
   # "console",
@@ -33,4 +33,4 @@ web-sys = {version = "0.3.64", features = [
   # "Text",
   "Worker",
   "DedicatedWorkerGlobalScope",
-]}
+] }
