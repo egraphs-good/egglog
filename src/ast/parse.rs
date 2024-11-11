@@ -2,6 +2,7 @@
 
 use crate::*;
 use ordered_float::OrderedFloat;
+use std::marker::PhantomData;
 
 pub fn parse_program(filename: Option<String>, input: &str) -> Result<Vec<Command>, ParseError> {
     let (out, _span, rest) = program(&Context::new(filename, input))?;
@@ -153,15 +154,46 @@ impl Context {
 
 type Res<T> = Result<(T, Span, Context), ParseError>;
 
-trait Parser<T>: Fn(&Context) -> Res<T> + Clone {
-    fn map<U>(self, f: impl Fn(T, Span) -> U + Clone) -> impl Parser<U> {
-        move |ctx| {
-            let (x, span, next) = self(ctx)?;
-            Ok((f(x, span.clone()), span, next))
-        }
+trait Parser<T>: Sized + Clone {
+    fn parse(&self, context: &Context) -> Res<T>;
+
+    fn map<F, U>(self, f: F) -> Map<Self, F, T>
+    where
+        F: Fn(T, Span) -> U + Clone,
+    {
+        Map(self, f, PhantomData)
     }
 }
-impl<T, F: Fn(&Context) -> Res<T> + Clone> Parser<T> for F {}
+
+impl<T, F: Fn(&Context) -> Res<T> + Clone> Parser<T> for F {
+    #[inline]
+    fn parse(&self, ctx: &Context) -> Res<T> {
+        self(ctx)
+    }
+}
+
+struct Map<P, F, T>(P, F, PhantomData<T>);
+
+impl<P, F, T> Clone for Map<P, F, T>
+where
+    P: Clone,
+    F: Clone,
+{
+    fn clone(&self) -> Self {
+        Map(self.0.clone(), self.1.clone(), PhantomData)
+    }
+}
+
+impl<P, F, T, U> Parser<U> for Map<P, F, T>
+where
+    P: Parser<T>,
+    F: Fn(T, Span) -> U + Clone,
+{
+    fn parse(&self, ctx: &Context) -> Res<U> {
+        let (x, span, next) = self.0.parse(ctx)?;
+        Ok(((self.1)(x, span.clone()), span, next))
+    }
+}
 
 fn ident(ctx: &Context) -> Res<Symbol> {
     let mut span = ctx.span();
@@ -190,7 +222,7 @@ fn ident(ctx: &Context) -> Res<Symbol> {
 }
 
 fn text(s: &str) -> impl Parser<()> + '_ {
-    move |ctx| {
+    move |ctx: &Context| {
         let mut span = ctx.span();
         span.2 = (span.1 + s.len()).min(ctx.source.contents.len());
 
@@ -209,12 +241,12 @@ fn repeat_until<T>(
     inner: impl Parser<T>,
     end: impl Fn(&Context) -> bool + Clone,
 ) -> impl Parser<Vec<T>> {
-    move |ctx| {
+    move |ctx: &Context| {
         let mut vec = Vec::new();
         let mut span = ctx.span();
         let mut next = ctx.clone();
         while !end(&next) {
-            let (x, s, n) = inner(&next)?;
+            let (x, s, n) = inner.parse(&next)?;
             vec.push(x);
             next = n;
             span.2 = s.2;
@@ -224,11 +256,11 @@ fn repeat_until<T>(
 }
 
 fn repeat_until_end_paren<T>(inner: impl Parser<T>) -> impl Parser<Vec<T>> {
-    repeat_until(inner, |ctx| text(")")(ctx).is_ok())
+    repeat_until(inner, |ctx| text(")").parse(ctx).is_ok())
 }
 
 fn choice<T>(a: impl Parser<T>, b: impl Parser<T>) -> impl Parser<T> {
-    move |ctx| a(ctx).or_else(|_| b(ctx))
+    move |ctx: &Context| a.parse(ctx).or_else(|_| b.parse(ctx))
 }
 
 macro_rules! choices {
@@ -239,9 +271,9 @@ macro_rules! choices {
 }
 
 fn sequence<T, U>(a: impl Parser<T>, b: impl Parser<U>) -> impl Parser<(T, U)> {
-    move |ctx| {
-        let (x, lo, next) = a(ctx)?;
-        let (y, hi, next) = b(&next)?;
+    move |ctx: &Context| {
+        let (x, lo, next) = a.parse(ctx)?;
+        let (y, hi, next) = b.parse(&next)?;
         Ok(((x, y), Span(lo.0, lo.1, hi.2), next))
     }
 }
@@ -271,7 +303,7 @@ fn sequence4<T, U, V, W>(
 }
 
 fn option<T>(parser: impl Parser<T>) -> impl Parser<Option<T>> {
-    move |ctx| match parser(ctx) {
+    move |ctx: &Context| match parser.parse(ctx) {
         Ok((x, span, next)) => Ok((Some(x), span, next)),
         Err(_) => Ok((None, ctx.span(), ctx.clone())),
     }
@@ -286,7 +318,7 @@ fn parens<T>(f: impl Parser<T>) -> impl Parser<T> {
 }
 
 fn program(ctx: &Context) -> Res<Vec<Command>> {
-    repeat_until(command, |ctx| ctx.index == ctx.source.contents.len())(ctx)
+    repeat_until(command, |ctx| ctx.index == ctx.source.contents.len()).parse(ctx)
 }
 
 fn rec_datatype(ctx: &Context) -> Res<(Span, Symbol, Subdatatypes)> {
@@ -299,7 +331,8 @@ fn rec_datatype(ctx: &Context) -> Res<(Span, Symbol, Subdatatypes)> {
         .map(|((), name, (head, exprs)), span| (span, name, Subdatatypes::NewSort(head, exprs))),
         parens(sequence(ident, repeat_until_end_paren(variant)))
             .map(|(name, variants), span| (span, name, Subdatatypes::Variants(variants))),
-    )(ctx)
+    )
+    .parse(ctx)
 }
 
 fn list<T>(f: impl Parser<T>) -> impl Parser<Vec<T>> {
@@ -311,7 +344,7 @@ fn snd<T, U>(x: Option<(T, U)>, _span: Span) -> Option<U> {
 }
 
 fn ident_after_paren(ctx: &Context) -> &str {
-    match sequence(choice(text("("), text("[")), ident)(ctx) {
+    match sequence(choice(text("("), text("[")), ident).parse(ctx) {
         Ok((((), symbol), _, _)) => symbol.into(),
         Err(_) => "",
     }
@@ -319,10 +352,9 @@ fn ident_after_paren(ctx: &Context) -> &str {
 
 fn command(ctx: &Context) -> Res<Command> {
     match ident_after_paren(ctx) {
-        "set-option" => {
-            parens(sequence3(text("set-option"), ident, expr))
-                .map(|((), name, value), _| Command::SetOption { name, value })(ctx)
-        }
+        "set-option" => parens(sequence3(text("set-option"), ident, expr))
+            .map(|((), name, value), _| Command::SetOption { name, value })
+            .parse(ctx),
         "datatype" => parens(sequence3(
             text("datatype"),
             ident,
@@ -332,7 +364,8 @@ fn command(ctx: &Context) -> Res<Command> {
             span,
             name,
             variants,
-        })(ctx),
+        })
+        .parse(ctx),
         "sort" => choice(
             parens(sequence3(
                 text("sort"),
@@ -342,14 +375,14 @@ fn command(ctx: &Context) -> Res<Command> {
             .map(|((), name, (head, tail)), span| Command::Sort(span, name, Some((head, tail)))),
             parens(sequence(text("sort"), ident))
                 .map(|((), name), span| Command::Sort(span, name, None)),
-        )(ctx),
-        "datatype*" => {
-            parens(sequence(
-                text("datatype*"),
-                repeat_until_end_paren(rec_datatype),
-            ))
-            .map(|((), datatypes), span| Command::Datatypes { span, datatypes })(ctx)
-        }
+        )
+        .parse(ctx),
+        "datatype*" => parens(sequence(
+            text("datatype*"),
+            repeat_until_end_paren(rec_datatype),
+        ))
+        .map(|((), datatypes), span| Command::Datatypes { span, datatypes })
+        .parse(ctx),
         "function" => parens(sequences!(
             text("function"),
             ident,
@@ -375,24 +408,25 @@ fn command(ctx: &Context) -> Res<Command> {
                     ignore_viz: false,
                 })
             },
-        )(ctx),
-        "relation" => parens(sequence3(text("relation"), ident, list(r#type))).map(
-            |((), constructor, inputs), span| Command::Relation {
+        )
+        .parse(ctx),
+        "relation" => parens(sequence3(text("relation"), ident, list(r#type)))
+            .map(|((), constructor, inputs), span| Command::Relation {
                 span,
                 constructor,
                 inputs,
-            },
-        )(ctx),
+            })
+            .parse(ctx),
         "ruleset" => parens(sequence(text("ruleset"), ident))
-            .map(|((), name), _| Command::AddRuleset(name))(ctx),
+            .map(|((), name), _| Command::AddRuleset(name))
+            .parse(ctx),
         "unstable-combined-ruleset" => parens(sequence3(
             text("unstable-combined-ruleset"),
             ident,
             repeat_until_end_paren(ident),
         ))
-        .map(|((), name, subrulesets), _| Command::UnstableCombinedRuleset(name, subrulesets))(
-            ctx
-        ),
+        .map(|((), name, subrulesets), _| Command::UnstableCombinedRuleset(name, subrulesets))
+        .parse(ctx),
         "rule" => parens(sequences!(
             text("rule"),
             list(fact),
@@ -406,7 +440,8 @@ fn command(ctx: &Context) -> Res<Command> {
                 name: name.unwrap_or("".to_string()).into(),
                 rule: Rule { span, head, body },
             },
-        )(ctx),
+        )
+        .parse(ctx),
         "rewrite" => parens(sequences!(
             text("rewrite"),
             expr,
@@ -428,7 +463,8 @@ fn command(ctx: &Context) -> Res<Command> {
                     subsume,
                 )
             },
-        )(ctx),
+        )
+        .parse(ctx),
         "birewrite" => parens(sequences!(
             text("birewrite"),
             expr,
@@ -446,11 +482,11 @@ fn command(ctx: &Context) -> Res<Command> {
                     conditions: conditions.unwrap_or_default(),
                 },
             )
-        })(ctx),
+        })
+        .parse(ctx),
         "let" => parens(sequence3(text("let"), ident, expr))
-            .map(|((), name, expr), span| Command::Action(Action::Let(span, name, expr)))(
-            ctx
-        ),
+            .map(|((), name, expr), span| Command::Action(Action::Let(span, name, expr)))
+            .parse(ctx),
         "run" => choice(
             parens(sequence3(
                 text("run"),
@@ -483,16 +519,15 @@ fn command(ctx: &Context) -> Res<Command> {
                     Box::new(Schedule::Run(span, RunConfig { ruleset, until })),
                 ))
             }),
-        )(ctx),
-        "simplify" => {
-            parens(sequence3(text("simplify"), schedule, expr)).map(|((), schedule, expr), span| {
-                Command::Simplify {
-                    span,
-                    expr,
-                    schedule,
-                }
-            })(ctx)
-        }
+        )
+        .parse(ctx),
+        "simplify" => parens(sequence3(text("simplify"), schedule, expr))
+            .map(|((), schedule, expr), span| Command::Simplify {
+                span,
+                expr,
+                schedule,
+            })
+            .parse(ctx),
         "query-extract" => parens(sequence3(
             text("query-extract"),
             option(sequence(text(":variants"), unum)).map(snd),
@@ -502,33 +537,35 @@ fn command(ctx: &Context) -> Res<Command> {
             span,
             expr,
             variants: variants.unwrap_or(0),
-        })(ctx),
+        })
+        .parse(ctx),
         "check" => parens(sequence(text("check"), repeat_until_end_paren(fact)))
-            .map(|((), facts), span| Command::Check(span, facts))(ctx),
+            .map(|((), facts), span| Command::Check(span, facts))
+            .parse(ctx),
         "run-schedule" => parens(sequence(
             text("run-schedule"),
             repeat_until_end_paren(schedule),
         ))
-        .map(|((), scheds), span| Command::RunSchedule(Schedule::Sequence(span, scheds)))(
-            ctx
-        ),
-        "print-stats" => {
-            parens(text("print-stats")).map(|(), _| Command::PrintOverallStatistics)(ctx)
-        }
+        .map(|((), scheds), span| Command::RunSchedule(Schedule::Sequence(span, scheds)))
+        .parse(ctx),
+        "print-stats" => parens(text("print-stats"))
+            .map(|(), _| Command::PrintOverallStatistics)
+            .parse(ctx),
         "push" => parens(sequence(text("push"), option(unum)))
-            .map(|((), n), _| Command::Push(n.unwrap_or(1)))(ctx),
+            .map(|((), n), _| Command::Push(n.unwrap_or(1)))
+            .parse(ctx),
         "pop" => parens(sequence(text("pop"), option(unum)))
-            .map(|((), n), span| Command::Pop(span, n.unwrap_or(1)))(ctx),
-        "print-function" => {
-            parens(sequence3(text("print-function"), ident, unum))
-                .map(|((), sym, n), span| Command::PrintFunction(span, sym, n))(ctx)
-        }
+            .map(|((), n), span| Command::Pop(span, n.unwrap_or(1)))
+            .parse(ctx),
+        "print-function" => parens(sequence3(text("print-function"), ident, unum))
+            .map(|((), sym, n), span| Command::PrintFunction(span, sym, n))
+            .parse(ctx),
         "print-size" => parens(sequence(text("print-size"), option(ident)))
-            .map(|((), sym), span| Command::PrintSize(span, sym))(ctx),
-        "input" => {
-            parens(sequence3(text("input"), ident, string))
-                .map(|((), name, file), span| Command::Input { span, name, file })(ctx)
-        }
+            .map(|((), sym), span| Command::PrintSize(span, sym))
+            .parse(ctx),
+        "input" => parens(sequence3(text("input"), ident, string))
+            .map(|((), name, file), span| Command::Input { span, name, file })
+            .parse(ctx),
         "output" => parens(sequence4(
             text("output"),
             string,
@@ -538,24 +575,30 @@ fn command(ctx: &Context) -> Res<Command> {
         .map(|((), file, e, mut exprs), span| {
             exprs.insert(0, e);
             Command::Output { span, file, exprs }
-        })(ctx),
+        })
+        .parse(ctx),
         "fail" => parens(sequence(text("fail"), command))
-            .map(|((), c), span| Command::Fail(span, Box::new(c)))(ctx),
+            .map(|((), c), span| Command::Fail(span, Box::new(c)))
+            .parse(ctx),
         "include" => parens(sequence(text("include"), string))
-            .map(|((), file), span| Command::Include(span, file))(ctx),
-        _ => non_let_action.map(|action, _| Command::Action(action))(ctx),
+            .map(|((), file), span| Command::Include(span, file))
+            .parse(ctx),
+        _ => non_let_action
+            .map(|action, _| Command::Action(action))
+            .parse(ctx),
     }
 }
 
 fn schedule(ctx: &Context) -> Res<Schedule> {
     match ident_after_paren(ctx) {
-        "saturate" => parens(sequence(text("saturate"), repeat_until_end_paren(schedule))).map(
-            |((), scheds), span| {
+        "saturate" => parens(sequence(text("saturate"), repeat_until_end_paren(schedule)))
+            .map(|((), scheds), span| {
                 Schedule::Saturate(span.clone(), Box::new(Schedule::Sequence(span, scheds)))
-            },
-        )(ctx),
+            })
+            .parse(ctx),
         "seq" => parens(sequence(text("seq"), repeat_until_end_paren(schedule)))
-            .map(|((), scheds), span| Schedule::Sequence(span, scheds))(ctx),
+            .map(|((), scheds), span| Schedule::Sequence(span, scheds))
+            .parse(ctx),
         "repeat" => parens(sequence3(
             text("repeat"),
             unum,
@@ -567,7 +610,8 @@ fn schedule(ctx: &Context) -> Res<Schedule> {
                 limit,
                 Box::new(Schedule::Sequence(span, scheds)),
             )
-        })(ctx),
+        })
+        .parse(ctx),
         "run" => choice(
             parens(sequence(
                 text("run"),
@@ -588,21 +632,24 @@ fn schedule(ctx: &Context) -> Res<Schedule> {
                 option(sequence(text(":until"), repeat_until_end_paren(fact))).map(snd),
             ))
             .map(|((), ruleset, until), span| Schedule::Run(span, RunConfig { ruleset, until })),
-        )(ctx),
-        _ => ident.map(|ruleset, span| {
-            Schedule::Run(
-                span.clone(),
-                RunConfig {
-                    ruleset,
-                    until: None,
-                },
-            )
-        })(ctx),
+        )
+        .parse(ctx),
+        _ => ident
+            .map(|ruleset, span| {
+                Schedule::Run(
+                    span.clone(),
+                    RunConfig {
+                        ruleset,
+                        until: None,
+                    },
+                )
+            })
+            .parse(ctx),
     }
 }
 
 fn cost(ctx: &Context) -> Res<Option<usize>> {
-    option(sequence(text(":cost"), unum)).map(snd)(ctx)
+    option(sequence(text(":cost"), unum)).map(snd).parse(ctx)
 }
 
 fn action(ctx: &Context) -> Res<Action> {
@@ -610,7 +657,8 @@ fn action(ctx: &Context) -> Res<Action> {
         parens(sequence3(text("let"), ident, expr))
             .map(|((), name, expr), span| Action::Let(span, name, expr)),
         non_let_action,
-    )(ctx)
+    )
+    .parse(ctx)
 }
 
 fn non_let_action(ctx: &Context) -> Res<Action> {
@@ -620,33 +668,35 @@ fn non_let_action(ctx: &Context) -> Res<Action> {
             parens(sequence(ident, repeat_until_end_paren(expr))),
             expr,
         ))
-        .map(|((), (f, args), v), span| Action::Set(span, f, args, v))(ctx),
+        .map(|((), (f, args), v), span| Action::Set(span, f, args, v))
+        .parse(ctx),
         "delete" => parens(sequence(
             text("delete"),
             parens(sequence(ident, repeat_until_end_paren(expr))),
         ))
-        .map(|((), (f, args)), span| Action::Change(span, Change::Delete, f, args))(
-            ctx
-        ),
+        .map(|((), (f, args)), span| Action::Change(span, Change::Delete, f, args))
+        .parse(ctx),
         "subsume" => parens(sequence(
             text("subsume"),
             parens(sequence(ident, repeat_until_end_paren(expr))),
         ))
-        .map(|((), (f, args)), span| Action::Change(span, Change::Subsume, f, args))(
-            ctx
-        ),
+        .map(|((), (f, args)), span| Action::Change(span, Change::Subsume, f, args))
+        .parse(ctx),
         "union" => parens(sequence3(text("union"), expr, expr))
-            .map(|((), e1, e2), span| Action::Union(span, e1, e2))(ctx),
+            .map(|((), e1, e2), span| Action::Union(span, e1, e2))
+            .parse(ctx),
         "panic" => parens(sequence(text("panic"), string))
-            .map(|(_, msg), span| Action::Panic(span, msg))(ctx),
+            .map(|(_, msg), span| Action::Panic(span, msg))
+            .parse(ctx),
         "extract" => choice(
             parens(sequence(text("extract"), expr)).map(|((), expr), span| {
                 Action::Extract(span.clone(), expr, Expr::Lit(span, Literal::Int(0)))
             }),
             parens(sequence3(text("extract"), expr, expr))
                 .map(|((), expr, variants), span| Action::Extract(span, expr, variants)),
-        )(ctx),
-        _ => call_expr.map(|e, span| Action::Expr(span, e))(ctx),
+        )
+        .parse(ctx),
+        _ => call_expr.map(|e, span| Action::Expr(span, e)).parse(ctx),
     }
 }
 
@@ -666,7 +716,9 @@ fn fact(ctx: &Context) -> Res<Fact> {
 }
 
 fn schema(ctx: &Context) -> Res<Schema> {
-    sequence(list(r#type), r#type).map(|(input, output), _| Schema { input, output })(ctx)
+    sequence(list(r#type), r#type)
+        .map(|(input, output), _| Schema { input, output })
+        .parse(ctx)
 }
 
 fn expr(ctx: &Context) -> Res<Expr> {
@@ -674,7 +726,8 @@ fn expr(ctx: &Context) -> Res<Expr> {
         call_expr,
         literal.map(|literal, span| Expr::Lit(span, literal)),
         ident.map(|ident, span| Expr::Var(span, ident)),
-    )(ctx)
+    )
+    .parse(ctx)
 }
 
 fn literal(ctx: &Context) -> Res<Literal> {
@@ -684,7 +737,8 @@ fn literal(ctx: &Context) -> Res<Literal> {
         r#f64.map(|x, _| Literal::F64(x)),
         r#bool.map(|x, _| Literal::Bool(x)),
         string.map(|x, _| Literal::String(x.into())),
-    )(ctx)
+    )
+    .parse(ctx)
 }
 
 fn r#bool(ctx: &Context) -> Res<bool> {
@@ -698,7 +752,8 @@ fn r#bool(ctx: &Context) -> Res<bool> {
 
 fn call_expr(ctx: &Context) -> Res<Expr> {
     parens(sequence(ident, repeat_until_end_paren(expr)))
-        .map(|(head, tail), span| Expr::Call(span, head, tail))(ctx)
+        .map(|(head, tail), span| Expr::Call(span, head, tail))
+        .parse(ctx)
 }
 
 fn variant(ctx: &Context) -> Res<Variant> {
@@ -712,7 +767,8 @@ fn variant(ctx: &Context) -> Res<Variant> {
         name,
         types,
         cost,
-    })(ctx)
+    })
+    .parse(ctx)
 }
 
 fn r#type(ctx: &Context) -> Res<Symbol> {
