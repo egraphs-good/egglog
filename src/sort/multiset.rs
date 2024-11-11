@@ -95,6 +95,14 @@ mod inner {
             }
             multiset
         }
+
+        /// Compute the sum of two multisets.
+        pub fn sum(self, MultiSet(other_map, other_count): Self) -> Self {
+            Self(
+                self.0.union_with(other_map, std::ops::Add::add),
+                self.1 + other_count,
+            )
+        }
     }
 }
 
@@ -130,6 +138,7 @@ impl Presort for MultiSetSort {
             "multiset-not-contains".into(),
             "multiset-remove".into(),
             "multiset-length".into(),
+            "multiset-sum".into(),
             "unstable-multiset-map".into(),
         ]
     }
@@ -231,6 +240,10 @@ impl Sort for MultiSetSort {
         });
         typeinfo.add_primitive(Pick {
             name: "multiset-pick".into(),
+            multiset: self.clone(),
+        });
+        typeinfo.add_primitive(Sum {
+            name: "multiset-sum".into(),
             multiset: self.clone(),
         });
         let inner_name = self.element.name();
@@ -532,6 +545,41 @@ impl PrimitiveLike for Pick {
     ) -> Option<Value> {
         let multiset = ValueMultiSet::load(&self.multiset, &values[0]);
         Some(*multiset.pick().expect("Cannot pick from an empty multiset"))
+    }
+}
+
+struct Sum {
+    name: Symbol,
+    multiset: Arc<MultiSetSort>,
+}
+
+impl PrimitiveLike for Sum {
+    fn name(&self) -> Symbol {
+        self.name
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![
+                self.multiset.clone(),
+                self.multiset.clone(),
+                self.multiset.clone(),
+            ],
+            span.clone(),
+        )
+        .into_box()
+    }
+
+    fn apply(
+        &self,
+        values: &[Value],
+        _sorts: (&[ArcSort], &ArcSort),
+        _egraph: Option<&mut EGraph>,
+    ) -> Option<Value> {
+        let lhs_multiset = ValueMultiSet::load(&self.multiset, &values[0]);
+        let rhs_multiset = ValueMultiSet::load(&self.multiset, &values[1]);
+        lhs_multiset.sum(rhs_multiset).store(&self.multiset)
     }
 }
 
