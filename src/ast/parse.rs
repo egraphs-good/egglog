@@ -189,7 +189,7 @@ fn ident(ctx: &Context) -> Res<Symbol> {
     }
 }
 
-fn text(s: &str) -> impl Parser<()> + '_ {
+fn text(s: &'static str) -> impl Parser<()> {
     move |ctx| {
         let mut span = ctx.span();
         span.2 = (span.1 + s.len()).min(ctx.source.contents.len());
@@ -200,7 +200,7 @@ fn text(s: &str) -> impl Parser<()> + '_ {
             next.advance_past_whitespace();
             Ok(((), span, next))
         } else {
-            Err(ParseError::Text(span, s.to_string()))
+            Err(ParseError::Text(span, s))
         }
     }
 }
@@ -280,7 +280,7 @@ fn option<T>(parser: impl Parser<T>) -> impl Parser<Option<T>> {
 fn parens<T>(f: impl Parser<T>) -> impl Parser<T> {
     choice(
         sequence3(text("["), f.clone(), text("]")),
-        sequence3(text("("), f.clone(), text(")")),
+        sequence3(text("("), f, text(")")),
     )
     .map(|((), x, ()), _| x)
 }
@@ -791,7 +791,7 @@ fn string(ctx: &Context) -> Res<String> {
 #[derive(Debug, Error)]
 pub enum ParseError {
     #[error("{0}\nexpected \"{1}\"")]
-    Text(Span, String),
+    Text(Span, &'static str),
     #[error("{0}\nexpected string")]
     String(Span),
     #[error("{0}\nmissing end quote for string")]

@@ -16,13 +16,21 @@ harness = false
 members = [".", "web-demo"]
 
 [[test]]
-harness = false
 name = "files"
+harness = false
+required-features = ["bin"]
+
+[[bin]]
+name = "egglog"
+path = "src/main.rs"
+required-features = ["bin"]
 
 [features]
 default = ["bin"]
 
-bin = ["dep:clap", "dep:env_logger", "egraph-serialize/serde", "dep:serde_json"]
+bin = ["serde", "graphviz", "dep:clap", "dep:env_logger", "dep:serde_json"]
+serde = ["egraph-serialize/serde"]
+graphviz = ["egraph-serialize/graphviz"]
 wasm-bindgen = ["instant/wasm-bindgen", "dep:getrandom"]
 nondeterministic = []
 
@@ -40,17 +48,14 @@ smallvec = "1.11"
 
 generic_symbolic_expressions = "5.0.4"
 
-egraph-serialize = { version = "0.2.0", features = [
-  "serde",
-  "graphviz",
-] }
-serde_json = { optional = true, version = "1.0.100", features = [
-  "preserve_order",
-] }
+egraph-serialize = { version = "0.2.0", default-features = false }
 
 # binary dependencies
 clap = { version = "4", features = ["derive"], optional = true }
 env_logger = { version = "0.10", optional = true }
+serde_json = { version = "1.0.100", optional = true, features = [
+  "preserve_order",
+] }
 
 ordered-float = { version = "3.7" }
 
@@ -59,7 +64,6 @@ getrandom = { version = "0.2.10", features = ["js"], optional = true }
 
 im-rc = "15.1.0"
 im = "15.1.0"
-
 
 [build-dependencies]
 chrono = { version = "0.4", default-features = false, features = ["now"] }

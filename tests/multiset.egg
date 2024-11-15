@@ -56,3 +56,15 @@
     (multiset-of (Num 1) (Num 4) (Num 9))
     squared-xs
 ))
+
+;; sum
+(check (=
+    (multiset-sum (multiset-of (Num 1) (Num 2) (Num 3)) (multiset-of (Num 1) (Num 2) (Num 4)))
+    (multiset-of (Num 1) (Num 4) (Num 2) (Num 3) (Num 2) (Num 1))
+))
+
+;; verify that sum computes length
+(check (=
+    (multiset-length (multiset-sum (multiset-of (Num 1) (Num 2) (Num 3)) (multiset-of (Num 1) (Num 2) (Num 4))))
+    6
+))
