@@ -28,7 +28,14 @@ required-features = ["bin"]
 [features]
 default = ["bin"]
 
-bin = ["serde", "graphviz", "dep:clap", "dep:env_logger", "dep:serde_json"]
+bin = [
+  "serde",
+  "graphviz",
+  "dep:clap",
+  "dep:env_logger",
+  "dep:serde_json",
+  "dep:chrono",
+]
 serde = ["egraph-serialize/serde"]
 graphviz = ["egraph-serialize/graphviz"]
 wasm-bindgen = ["instant/wasm-bindgen", "dep:getrandom"]
@@ -66,7 +73,9 @@ im-rc = "15.1.0"
 im = "15.1.0"
 
 [build-dependencies]
-chrono = { version = "0.4", default-features = false, features = ["now"] }
+chrono = { version = "0.4", default-features = false, optional = true, features = [
+  "now",
+] }
 
 [dev-dependencies]
 codspeed-criterion-compat = "2.7.2"
