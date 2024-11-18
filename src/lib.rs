@@ -1197,19 +1197,19 @@ impl EGraph {
             }
             // Sorts are already declared during typechecking
             ResolvedNCommand::Sort(_span, name, _presort_and_args) => {
-                log::info!("Declared sort {}.", name)
+                log::debug!("Declared sort {}.", name)
             }
             ResolvedNCommand::Function(fdecl) => {
                 self.declare_function(&fdecl)?;
-                log::info!("Declared function {}.", fdecl.name)
+                log::debug!("Declared function {}.", fdecl.name)
             }
             ResolvedNCommand::AddRuleset(name) => {
                 self.add_ruleset(name);
-                log::info!("Declared ruleset {name}.");
+                log::debug!("Declared ruleset {name}.");
             }
             ResolvedNCommand::UnstableCombinedRuleset(name, others) => {
                 self.add_combined_ruleset(name, others);
-                log::info!("Declared ruleset {name}.");
+                log::debug!("Declared ruleset {name}.");
             }
             ResolvedNCommand::NormRule {
                 ruleset,
@@ -1217,7 +1217,7 @@ impl EGraph {
                 name,
             } => {
                 self.add_rule(rule, ruleset)?;
-                log::info!("Declared rule {name}.")
+                log::debug!("Declared rule {name}.")
             }
             ResolvedNCommand::RunSchedule(sched) => {
                 let report = self.run_schedule(&sched);

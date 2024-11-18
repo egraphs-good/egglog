@@ -66,7 +66,10 @@ impl EGraph {
                     }
                 }
 
-                panic!("No cost for {:?}", value)
+                panic!(
+                    "Failed to extract value {:?}. Did you use :unextractable constructors or the delete keyword?",
+                    value
+                )
             })
     }
 
