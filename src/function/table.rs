@@ -48,7 +48,7 @@ struct TableOffset {
 }
 
 #[derive(Default, Clone)]
-pub(crate) struct Table {
+pub struct Table {
     max_ts: u32,
     n_stale: usize,
     table: RawTable<TableOffset>,
@@ -262,7 +262,7 @@ impl Table {
     }
 
     /// Iterate over the live entries in the table, in insertion order.
-    pub(crate) fn iter(
+    pub fn iter(
         &self,
         include_subsumed: bool,
     ) -> impl Iterator<Item = (&[Value], &TupleOutput)> + '_ {

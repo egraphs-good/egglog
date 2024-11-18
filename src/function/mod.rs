@@ -15,7 +15,7 @@ pub struct Function {
     pub(crate) decl: ResolvedFunctionDecl,
     pub schema: ResolvedSchema,
     pub merge: MergeAction,
-    pub(crate) nodes: table::Table,
+    pub nodes: table::Table,
     sorts: HashSet<Symbol>,
     pub(crate) indexes: Vec<Rc<ColumnIndex>>,
     pub(crate) rebuild_indexes: Vec<Option<CompositeColumnIndex>>,
@@ -490,5 +490,12 @@ impl Function {
 
     pub fn is_extractable(&self) -> bool {
         !self.decl.unextractable
+    }
+
+    pub fn iter(
+        &self,
+        include_subsumed: bool,
+    ) -> impl Iterator<Item = (&[Value], &TupleOutput)> + '_ {
+        self.nodes.iter(include_subsumed)
     }
 }
