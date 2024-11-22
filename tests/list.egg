@@ -16,9 +16,8 @@
 	:ruleset list)
 (rule
 	(	(list-length-demand (Cons head tail))
-		(= (list-length tail) tail-length)
-		(= nlength (+ tail-length 1)))
-	((set (list-length (Cons head tail)) nlength))
+		(= (list-length tail) tail-length))
+	((set (list-length (Cons head tail)) (+ tail-length 1)))
 	:ruleset list)
 
 (function list-get (List i64) i64)

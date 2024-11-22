@@ -17,9 +17,8 @@
 (set (bar) 1)
 (set (bar) 2)
 
-(rule ((= f (baz x)) (< x 50)
-      (= y (+ x 1)))
-      ((set (bar) y)))
+(rule ((= f (baz x)) (< x 50))
+      ((set (bar) (+ x 1))))
 
 (run 100)
 (check (= 0 (baz 50)))

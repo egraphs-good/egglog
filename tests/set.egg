@@ -26,13 +26,11 @@
 (function IS (ISetBase) ISet)
 
 (function ISet-get (ISet i64) i64 :unextractable)
-(rule ((IS x) (> (set-length x) 0)
-       (= y (set-get x 0)))
-    ((set (ISet-get (IS x) 0) y)))
+(rule ((IS x) (> (set-length x) 0))
+    ((set (ISet-get (IS x) 0) (set-get x 0))))
 (rule ((ISet-get (IS x) j)
-     (= i (+ j 1)) (< i (set-length x))
-       (= y (set-get x i)))
-    ((set (ISet-get (IS x) i) y)))
+     (= i (+ j 1)) (< i (set-length x)))
+    ((set (ISet-get (IS x) i) (set-get x i))))
 
 (let myset (IS (set-of 2 4 1 4 -1)))
 (run 100)

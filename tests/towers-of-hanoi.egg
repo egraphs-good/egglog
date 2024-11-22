@@ -5,22 +5,19 @@
 (function Config (Stack Stack Stack) i64 :merge (min old new))
 
 ;; move from first stack
-(rule ((= len (Config (Cons x a) b c))
-       (= y (+ len 1)))
-      ((set (Config a (Cons x b) c) y)
-       (set (Config a b (Cons x c)) y)))
+(rule ((= len (Config (Cons x a) b c)))
+      ((set (Config a (Cons x b) c) (+ len 1))
+       (set (Config a b (Cons x c)) (+ len 1))))
 
 ;; move from second stack
-(rule ((= len (Config a (Cons x b) c))
-       (= y (+ len 1)))
-      ((set (Config (Cons x a) b c) y)
-       (set (Config a b (Cons x c)) y)))
+(rule ((= len (Config a (Cons x b) c)))
+      ((set (Config (Cons x a) b c) (+ len 1))
+       (set (Config a b (Cons x c)) (+ len 1))))
 
 ;; move from third stack
-(rule ((= len (Config a b (Cons x c)))
-       (= y (+ len 1)))
-      ((set (Config (Cons x a) b c) y)
-       (set (Config a (Cons x b) c) y)))
+(rule ((= len (Config a b (Cons x c))))
+      ((set (Config (Cons x a) b c) (+ len 1))
+       (set (Config a (Cons x b) c) (+ len 1))))
 
 (let e (Empty))
 

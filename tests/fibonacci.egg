@@ -3,9 +3,8 @@
 (set (fib 1) 1)
 
 (rule ((= f0 (fib x))
-       (= f1 (fib (+ x 1)))
-       (= sum (+ f0 f1)))
-      ((set (fib (+ x 2)) sum)))
+       (= f1 (fib (+ x 1))))
+      ((set (fib (+ x 2)) (+ f0 f1))))
 
 (run 7)
 

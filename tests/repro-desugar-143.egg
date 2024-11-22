@@ -7,7 +7,7 @@
 (set (f 0) 0)
 
 ;; a funky id rule
-(rule ((f x) (= x y) (= z y) (= t0 (f z)) (= t1 (+ t0 1))) ((let a t0) (set (f (+ z 1)) t1)))
+(rule ((f x) (= x y) (= z y)) ((let a (f z)) (set (f (+ z 1)) (+ a 1))))
 
 (run 20)
 
@@ -28,10 +28,8 @@
 		(= y1 y2)
 		(= a1 a2)
 		(= b1 b2)
-		(= 1 (- x2 y2))
-		(= t0 (+ x 1))
-		(= t1 (+ a1 b2)))
-	((let n t0) (let sum t1) (union (fib (Num n)) (Num sum))))
+		(= 1 (- x2 y2)))
+	((let n (+ x 1)) (let sum (+ a1 b2)) (union (fib (Num n)) (Num sum))))
 
 (union (fib (Num 1)) (Num 1))
 (union (fib (Num 2)) (Num 1))
