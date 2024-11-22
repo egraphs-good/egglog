@@ -7,7 +7,7 @@
 (set (f 0) 0)
 
 ;; a funky id rule
-(rule ((f x) (= x y) (= z y)) ((let a (f z)) (set (f (+ z 1)) (+ a 1))))
+(rule ((f x) (= x y) (= z y) (= a (f z))) ((set (f (+ z 1)) (+ a 1))))
 
 (run 20)
 
