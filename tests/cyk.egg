@@ -15,13 +15,13 @@
 
 (rule ((End (NonTerm a) s)
        (= s (getString pos)))
-      ((P 1 pos (NonTerm a))
+      ((set (P 1 pos (NonTerm a)) ())
        (union (B 1 pos (NonTerm a)) (T a s)))) 
 
 (rule ((Prod (NonTerm a) (NonTerm b) (NonTerm c)) ;; a -> bc
        (P p1 s (NonTerm b))
        (P p2 (+ s p1) (NonTerm c)))
-      ((P (+ p1 p2) s (NonTerm a))))
+      ((set (P (+ p1 p2) s (NonTerm a)) ())))
 
 
 (rule ((Prod (NonTerm a) (NonTerm b) (NonTerm c))
@@ -42,18 +42,18 @@
 (set (getString 7) "fork")
 
 
-(Prod (NonTerm "S") (NonTerm "NP") (NonTerm "VP"))
-(Prod (NonTerm "VP") (NonTerm "VP") (NonTerm "PP"))
-(Prod (NonTerm "VP") (NonTerm "V") (NonTerm "NP"))
-(End (NonTerm "VP")  "eats")
-(Prod (NonTerm "PP") (NonTerm "P") (NonTerm "NP"))
-(Prod (NonTerm "NP") (NonTerm "DET") (NonTerm "N"))
-(End (NonTerm "NP") "she")
-(End (NonTerm "V") "eats")
-(End (NonTerm "P") "with")
-(End (NonTerm "N") "fish")
-(End (NonTerm "N") "fork")
-(End (NonTerm "DET") "a")
+(set (Prod (NonTerm "S") (NonTerm "NP") (NonTerm "VP")) ())
+(set (Prod (NonTerm "VP") (NonTerm "VP") (NonTerm "PP")) ())
+(set (Prod (NonTerm "VP") (NonTerm "V") (NonTerm "NP")) ())
+(set (End (NonTerm "VP")  "eats") ())
+(set (Prod (NonTerm "PP") (NonTerm "P") (NonTerm "NP")) ())
+(set (Prod (NonTerm "NP") (NonTerm "DET") (NonTerm "N")) ())
+(set (End (NonTerm "NP") "she") ())
+(set (End (NonTerm "V") "eats") ())
+(set (End (NonTerm "P") "with") ())
+(set (End (NonTerm "N") "fish") ())
+(set (End (NonTerm "N") "fork") ())
+(set (End (NonTerm "DET") "a") ())
 
 
 (let test1 (B 7 1 (NonTerm "S")))
@@ -70,14 +70,14 @@
 
 (push)
 
-(Prod (NonTerm "S") (NonTerm "A") (NonTerm "B"))
-(Prod (NonTerm "S") (NonTerm "B") (NonTerm "C"))
-(Prod (NonTerm "A") (NonTerm "B") (NonTerm "A"))
-(End (NonTerm "A") "a")
-(Prod (NonTerm "B") (NonTerm "C") (NonTerm "C"))
-(End (NonTerm "B") "b")
-(Prod (NonTerm "C") (NonTerm "A") (NonTerm "B"))
-(End (NonTerm "C") "a")
+(set (Prod (NonTerm "S") (NonTerm "A") (NonTerm "B")) ())
+(set (Prod (NonTerm "S") (NonTerm "B") (NonTerm "C")) ())
+(set (Prod (NonTerm "A") (NonTerm "B") (NonTerm "A")) ())
+(set (End (NonTerm "A") "a") ())
+(set (Prod (NonTerm "B") (NonTerm "C") (NonTerm "C")) ())
+(set (End (NonTerm "B") "b") ())
+(set (Prod (NonTerm "C") (NonTerm "A") (NonTerm "B")) ())
+(set (End (NonTerm "C") "a") ())
 
 (push)
 
