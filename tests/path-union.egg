@@ -5,10 +5,10 @@
 (relation path (Node Node))
             
 (rule ((edge x y))
-      ((path x y)))
+      ((set (path x y) ())))
 
 (rule ((path x y) (edge y z))
-      ((path x z)))
+      ((set (path x z) ())))
 
 (edge (mk 1) (mk 2))
 (edge (mk 2) (mk 3))
