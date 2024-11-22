@@ -81,10 +81,10 @@
 ;; This assumes that intervals are well-formed: lo <= hi at all times.
 (rule ((= l (lo e))
        (> l r-zero))
-      ((non-zero e)))
+      ((set (non-zero e) ())))
 (rule ((= h (hi e))
        (< h r-zero))
-      ((non-zero e)))
+      ((set (non-zero e) ())))
 
 (rule ((= e (Num ve)))
       ((set (lo e) ve)
