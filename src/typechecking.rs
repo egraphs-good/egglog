@@ -367,20 +367,6 @@ impl TypeInfo {
         let (query, mapped_query) = Facts(body.clone()).to_query(self, symbol_gen);
         constraints.extend(query.get_constraints(self)?);
 
-        //Disallowing Let/Set actions to look up non-constructor functions in rules
-        for action in head.iter() {
-            match action {
-                GenericAction::Let(_, _, Expr::Call(_, symbol, _)) => {
-                    return Err(TypeError::LookupInRuleDisallowed(*symbol, span.clone()));
-                }
-                GenericAction::Set(_, _, _, Expr::Call(_, symbol, _)) => {
-                    return Err(TypeError::LookupInRuleDisallowed(*symbol, span.clone()));
-
-                }
-                _ => (),
-            }
-        }
-
         let mut binding = query.get_vars();
         let (actions, mapped_action) = head.to_core_actions(self, &mut binding, symbol_gen)?;
 
@@ -402,11 +388,73 @@ impl TypeInfo {
         let body: Vec<ResolvedFact> = assignment.annotate_facts(&mapped_query, self);
         let actions: ResolvedActions = assignment.annotate_actions(&mapped_action, self)?;
 
+        Self::check_lookup_actions(&actions)?;
+
         Ok(ResolvedRule {
             span: span.clone(),
             body,
             head: actions,
         })
+    }
+
+    fn check_lookup_expr(
+        expr : &GenericExpr<ResolvedCall, ResolvedVar>
+    ) -> Result<(), TypeError> {
+        match expr {
+            GenericExpr::Call(span, head, args) => {
+                match head {
+                    ResolvedCall::Func(t) => {
+                        // Only allowed to lookup constructor
+                        if !t.is_datatype {
+                            Err(TypeError::LookupInRuleDisallowed(head.to_symbol(), span.clone()))
+                        } else {
+                            Ok(())
+                        }
+                    },
+                    ResolvedCall::Primitive(_) => Ok(())
+                }?;
+                for arg in args.iter() {
+                    Self::check_lookup_expr(arg)?
+                }
+                Ok(())
+            }, 
+            _ => Ok(())
+        }
+    }
+
+    fn check_lookup_actions(
+        actions : &ResolvedActions
+    ) -> Result<(), TypeError> {
+        for action in actions.iter() {
+            match action {
+                GenericAction::Let(_, _, rhs) => Self::check_lookup_expr(rhs),
+                GenericAction::Set(_, _, args, rhs) => {
+                    for arg in args.iter() {
+                        Self::check_lookup_expr(arg)?
+                    }
+                    Self::check_lookup_expr(rhs)
+                },
+                GenericAction::Union(_, lhs, rhs) => {
+                    Self::check_lookup_expr(lhs)?;
+                    Self::check_lookup_expr(rhs)
+                },
+                GenericAction::Change(_, _, _, args) => {
+                    for arg in args.iter() {
+                        Self::check_lookup_expr(arg)?
+                    }
+                    Ok(())
+                },
+                GenericAction::Extract(_, expr, variants) => {
+                    Self::check_lookup_expr(expr)?;
+                    Self::check_lookup_expr(variants)
+                },
+                GenericAction::Panic(..) => Ok(()),
+                GenericAction::Expr(_, expr) => {
+                    Self::check_lookup_expr(expr)
+                }
+            }?
+        };
+        Ok(())
     }
 
     fn typecheck_facts(
