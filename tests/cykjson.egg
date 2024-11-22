@@ -12,13 +12,13 @@
 
 (rule ((End a s)
        (= s (getString pos)))
-      ((P 1 pos a)
+      ((set (P 1 pos a) ())
        (union (B 1 pos a) (T a s)))) 
 
 (rule ((Prod a b c) ;; a -> bc
        (P p1 s b)
        (P p2 (+ s p1) c))
-      ((P (+ p1 p2) s a)))
+      ((set (P (+ p1 p2) s a) ())))
 
 
 (rule ((Prod a b c)
