@@ -12,7 +12,7 @@
 	:ruleset list)
 (rule
 	((list-length-demand (Cons head tail)))
-	((list-length-demand tail))
+	((set (list-length-demand tail) ()))
 	:ruleset list)
 (rule
 	(	(list-length-demand (Cons head tail))
@@ -30,7 +30,7 @@
 (rule
 	(	(list-get-demand list n) (> n 0)
 		(= list (Cons head tail)))
-	((list-get-demand tail (- n 1)))
+	((set (list-get-demand tail (- n 1)) ()))
 	:ruleset list)
 (rule
 	(	(list-get-demand list n)
