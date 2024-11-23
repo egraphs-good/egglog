@@ -2,11 +2,11 @@
 (relation edge (i64 i64))
 
 (rule ((edge x y))
-      ((path x y)))
+      ((set (path x y) ())))
 
-(edge 1 2)
-(edge 2 3)
-(edge 3 4)
+(set (edge 1 2) ())
+(set (edge 2 3) ())
+(set (edge 3 4) ())
 (check (edge 1 2))
 (run 3)
 (check (path 1 2))
@@ -14,10 +14,10 @@
 (ruleset path-rules)
 
 (rule ((path x y) (edge y z))
-      ((path x z))
+      ((set (path x z) ()))
       :ruleset path-rules)
 
-(edge 3 8)
+(set (edge 3 8) ())
 (run path-rules 1)
 (check (path 1 3))
 
