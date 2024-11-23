@@ -1,6 +1,8 @@
 (datatype E)
-(function h () E :merge old)
-(rule () 
-      ((set (h) (h))))
+(function f () E :merge old)
+(rule (
+) (
+      (set (f) (f))
+))
 
 (run 1)

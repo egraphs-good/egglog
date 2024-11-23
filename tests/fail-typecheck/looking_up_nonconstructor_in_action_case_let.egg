@@ -2,10 +2,16 @@
 (function g () i64 :merge (min old new))
 (datatype E)
 (function h () E :merge old)
-(rule () 
-      ((let x (f))))
-(rule () 
-      ((let x (g))))
-(rule () 
-      ((let x (h))))
+(rule (
+) (
+      (let x (f))
+))
+(rule (
+) (
+      (let x (g))
+))
+(rule (
+) (
+      (let x (h))
+))
 (run 1)
