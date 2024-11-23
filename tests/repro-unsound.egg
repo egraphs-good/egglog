@@ -8,7 +8,7 @@
 (let r-four (rational 4 1))
 (let r-neg-one (rational -1 1))
 (relation universe (Math HerbieType))
-(rule ((= t (Expm1 ty a))) ((universe t ty)))
+(rule ((= t (Expm1 ty a))) ((set (universe t ty) ())))
 (rewrite (Mul ty a b) (Mul ty b a))
 
 (rewrite (Sub ty x x) (Num ty r-zero))
