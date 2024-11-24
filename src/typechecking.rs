@@ -397,34 +397,33 @@ impl TypeInfo {
         })
     }
 
-    fn check_lookup_expr(
-        expr : &GenericExpr<ResolvedCall, ResolvedVar>
-    ) -> Result<(), TypeError> {
+    fn check_lookup_expr(expr: &GenericExpr<ResolvedCall, ResolvedVar>) -> Result<(), TypeError> {
         match expr {
             GenericExpr::Call(span, head, args) => {
                 match head {
                     ResolvedCall::Func(t) => {
                         // Only allowed to lookup constructor
                         if !t.is_datatype {
-                            Err(TypeError::LookupInRuleDisallowed(head.to_symbol(), span.clone()))
+                            Err(TypeError::LookupInRuleDisallowed(
+                                head.to_symbol(),
+                                span.clone(),
+                            ))
                         } else {
                             Ok(())
                         }
-                    },
-                    ResolvedCall::Primitive(_) => Ok(())
+                    }
+                    ResolvedCall::Primitive(_) => Ok(()),
                 }?;
                 for arg in args.iter() {
                     Self::check_lookup_expr(arg)?
                 }
                 Ok(())
-            }, 
-            _ => Ok(())
+            }
+            _ => Ok(()),
         }
     }
 
-    fn check_lookup_actions(
-        actions : &ResolvedActions
-    ) -> Result<(), TypeError> {
+    fn check_lookup_actions(actions: &ResolvedActions) -> Result<(), TypeError> {
         for action in actions.iter() {
             match action {
                 GenericAction::Let(_, _, rhs) => Self::check_lookup_expr(rhs),
@@ -433,27 +432,25 @@ impl TypeInfo {
                         Self::check_lookup_expr(arg)?
                     }
                     Self::check_lookup_expr(rhs)
-                },
+                }
                 GenericAction::Union(_, lhs, rhs) => {
                     Self::check_lookup_expr(lhs)?;
                     Self::check_lookup_expr(rhs)
-                },
+                }
                 GenericAction::Change(_, _, _, args) => {
                     for arg in args.iter() {
                         Self::check_lookup_expr(arg)?
                     }
                     Ok(())
-                },
+                }
                 GenericAction::Extract(_, expr, variants) => {
                     Self::check_lookup_expr(expr)?;
                     Self::check_lookup_expr(variants)
-                },
-                GenericAction::Panic(..) => Ok(()),
-                GenericAction::Expr(_, expr) => {
-                    Self::check_lookup_expr(expr)
                 }
+                GenericAction::Panic(..) => Ok(()),
+                GenericAction::Expr(_, expr) => Self::check_lookup_expr(expr),
             }?
-        };
+        }
         Ok(())
     }
 
