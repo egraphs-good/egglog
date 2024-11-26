@@ -95,7 +95,7 @@ impl<'a> ActionCompiler<'a> {
     fn do_function(&mut self, func_type: &FuncType) {
         self.instructions.push(Instruction::CallFunction(
             func_type.name,
-            func_type.has_default || func_type.is_datatype,
+            func_type.is_datatype,
         ));
     }
 
@@ -286,32 +286,22 @@ impl EGraph {
                     } else if *make_defaults {
                         let ts = self.timestamp;
                         let out = &function.schema.output;
-                        match function.decl.default.as_ref() {
-                            None if out.name() == UnitSort.name() => {
-                                function.insert(values, Value::unit(), ts);
-                                Value::unit()
-                            }
-                            None if out.is_eq_sort() => {
-                                let value = Value {
-                                    #[cfg(debug_assertions)]
-                                    tag: out.name(),
-                                    bits: self.unionfind.make_set(),
-                                };
-                                function.insert(values, value, ts);
-                                value
-                            }
-                            Some(default) => {
-                                let default = default.clone();
-                                let value = self.eval_resolved_expr(&default)?;
-                                self.functions.get_mut(f).unwrap().insert(values, value, ts);
-                                value
-                            }
-                            _ => {
-                                return Err(Error::NotFoundError(NotFoundError(format!(
-                                    "No value found for {f} {:?}",
-                                    values
-                                ))))
-                            }
+                        if out.name() == UnitSort.name() {
+                            function.insert(values, Value::unit(), ts);
+                            Value::unit()
+                        } else if out.is_eq_sort() {
+                            let value = Value {
+                                #[cfg(debug_assertions)]
+                                tag: out.name(),
+                                bits: self.unionfind.make_set(),
+                            };
+                            function.insert(values, value, ts);
+                            value
+                        } else {
+                            return Err(Error::NotFoundError(NotFoundError(format!(
+                                "No value found for {f} {:?}",
+                                values
+                            ))));
                         }
                     } else {
                         return Err(Error::NotFoundError(NotFoundError(format!(

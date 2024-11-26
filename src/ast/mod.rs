@@ -378,11 +378,9 @@ where
     /// ```text
     /// (function <name:Ident> <schema:Schema> <cost:Cost>
     ///        (:on_merge <List<Action>>)?
-    ///        (:merge <Expr>)?
-    ///        (:default <Expr>)?)
+    ///        (:merge <Expr>)?)
     ///```
     /// A function can have a `cost` for extraction.
-    /// It can also have a `default` value, which is used when calling the function.
     ///
     /// Finally, it can have a `merge` and `on_merge`, which are triggered when
     /// the function dependency is violated.
@@ -398,9 +396,8 @@ where
     /// actions may be applied more than once with different results.
     ///
     /// The function is a datatype when:
-    /// - The output is not a primitive
+    /// - The output must be an EqSort
     /// - No merge function is provided
-    /// - No default is provided
     ///
     /// For example, the following is a datatype:
     /// ```text
@@ -427,8 +424,8 @@ where
 
     /// Desugars to:
     /// ```text
-    /// (function path (i64 i64) Unit :default ())
-    /// (function edge (i64 i64) Unit :default ())
+    /// (function path (i64 i64) Unit)
+    /// (function edge (i64 i64) Unit)
     /// ```
     Relation {
         span: Span,
@@ -862,7 +859,6 @@ where
 {
     pub name: Symbol,
     pub schema: Schema,
-    pub default: Option<GenericExpr<Head, Leaf>>,
     pub merge: Option<GenericExpr<Head, Leaf>>,
     pub merge_action: GenericActions<Head, Leaf>,
     pub cost: Option<usize>,
@@ -923,7 +919,6 @@ impl FunctionDecl {
             },
             merge: None,
             merge_action: Actions::default(),
-            default: Some(Expr::Lit(DUMMY_SPAN.clone(), Literal::Unit)),
             cost: None,
             unextractable: false,
             ignore_viz: false,
@@ -944,7 +939,6 @@ where
         GenericFunctionDecl {
             name: self.name,
             schema: self.schema,
-            default: self.default.map(|expr| expr.visit_exprs(f)),
             merge: self.merge.map(|expr| expr.visit_exprs(f)),
             merge_action: self.merge_action.visit_exprs(f),
             cost: self.cost,
@@ -993,11 +987,6 @@ where
         if let Some(merge) = &self.merge {
             res.push(Sexp::Symbol(":merge".into()));
             res.push(merge.to_sexp());
-        }
-
-        if let Some(default) = &self.default {
-            res.push(Sexp::Symbol(":default".into()));
-            res.push(default.to_sexp());
         }
 
         Sexp::List(res)

@@ -7,7 +7,6 @@ pub struct FuncType {
     pub input: Vec<ArcSort>,
     pub output: ArcSort,
     pub is_datatype: bool,
-    pub has_default: bool,
 }
 
 /// Stores resolved typechecking information.
@@ -153,8 +152,7 @@ impl TypeInfo {
             name: func.name,
             input,
             output: output.clone(),
-            is_datatype: output.is_eq_sort() && func.merge.is_none() && func.default.is_none(),
-            has_default: func.default.is_some(),
+            is_datatype: output.is_eq_sort() && func.merge.is_none(),
         })
     }
 
@@ -279,11 +277,6 @@ impl TypeInfo {
                 Some(merge) => Some(self.typecheck_expr(symbol_gen, merge, &bound_vars)?),
                 None => None,
             },
-            default: fdecl
-                .default
-                .as_ref()
-                .map(|default| self.typecheck_expr(symbol_gen, default, &Default::default()))
-                .transpose()?,
             merge_action: self.typecheck_actions(symbol_gen, &fdecl.merge_action, &bound_vars)?,
             cost: fdecl.cost,
             unextractable: fdecl.unextractable,

@@ -370,17 +370,14 @@ fn command(ctx: &Context) -> Res<Command> {
                 map(option(text(":unextractable")), |x, _| x.is_some()),
                 map(option(sequence(text(":on_merge"), list(action))), snd),
                 map(option(sequence(text(":merge"), expr)), snd),
-                map(option(sequence(text(":default"), expr)), snd),
             )),
-            |((), (name, (schema, (cost, (unextractable, (merge_action, (merge, default))))))),
-             span| {
+            |((), (name, (schema, (cost, (unextractable, (merge_action, merge)))))), span| {
                 Command::Function(FunctionDecl {
                     span,
                     name,
                     schema,
                     merge,
                     merge_action: Actions::new(merge_action.unwrap_or_default()),
-                    default,
                     cost,
                     unextractable,
                     ignore_viz: false,

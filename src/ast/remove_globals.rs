@@ -61,7 +61,6 @@ fn resolved_var_to_call(var: &ResolvedVar) -> ResolvedCall {
         input: vec![],
         output: var.sort.clone(),
         is_datatype: var.sort.is_eq_sort(),
-        has_default: false,
     })
 }
 
@@ -99,7 +98,6 @@ impl<'a> GlobalRemover<'a> {
                             input: vec![],
                             output: ty.name(),
                         },
-                        default: None,
                         merge: None,
                         merge_action: GenericActions(vec![]),
                         cost: None,
@@ -112,7 +110,6 @@ impl<'a> GlobalRemover<'a> {
                         input: vec![],
                         is_datatype: ty.is_eq_sort(),
                         output: ty.clone(),
-                        has_default: false,
                     });
                     vec![
                         GenericNCommand::Function(func_decl),
