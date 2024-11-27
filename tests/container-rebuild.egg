@@ -11,7 +11,7 @@
 
 (check (= v1 v2))
 
-(function MyVec (MathVec) Math)
+(constructor MyVec (MathVec) Math)
 
 (MyVec v1)
 
@@ -45,7 +45,7 @@
 
 (union (Num 1) (Num 2))
 
-(function MyVec (MathVec) Math)
+(constructor MyVec (MathVec) Math)
 
 ;; make a reference to v1
 (MyVec v1)
@@ -66,7 +66,7 @@
 (let myvec (vec-of (Expensive)))
 (let cheapvec (vec-of (Add 1 2)))
 
-(function VecContainer (MathVec) Math)
+(constructor VecContainer (MathVec) Math)
 
 (let myvecontainer (VecContainer cheapvec))
 
