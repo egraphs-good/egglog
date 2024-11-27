@@ -4,21 +4,21 @@
 
 (ruleset myrules1)
 (rule ((edge x y))
-      ((set (path x y) ()))
+      ((path x y))
       :ruleset myrules1)
 (ruleset myrules2)
 (rule ((path x y) (edge y z))
-      ((set (path x z) ()))
+      ((path x z))
       :ruleset myrules2)
 
 (unstable-combined-ruleset myrules-combined
     myrules1 myrules2)
 
 
-(set (edge 0 1) ())
-(set (edge 1 2) ())
-(set (edge 2 3) ())
-(set (edge 2 4) ())
+(edge 0 1)
+(edge 1 2)
+(edge 2 3)
+(edge 2 4)
 
 (run-schedule
   (repeat 3 myrules-combined))
