@@ -1335,7 +1335,7 @@ impl EGraph {
             }
         }
 
-        if !function_type.is_datatype {
+        if function_type.subtype != FunctionSubtype::Constructor {
             match func.schema.output.name().as_str() {
                 "i64" | "String" | "Unit" => {}
                 s => panic!("Unsupported type {} for input", s),
@@ -1370,7 +1370,8 @@ impl EGraph {
             let mut exprs: Vec<Expr> = str_buf.iter().map(|&s| parse(s)).collect();
 
             actions.push(
-                if function_type.is_datatype || function_type.output.name() == UnitSort.name() {
+                if function_type.subtype == FunctionSubtype::Constructor 
+                    || function_type.subtype == FunctionSubtype::Relation {
                     Action::Expr(span.clone(), Expr::Call(span.clone(), func_name, exprs))
                 } else {
                     let out = exprs.pop().unwrap();

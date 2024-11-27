@@ -58,9 +58,9 @@ fn resolved_var_to_call(var: &ResolvedVar) -> ResolvedCall {
     );
     ResolvedCall::Func(FuncType {
         name: var.name,
+        subtype: FunctionSubtype::Custom,
         input: vec![],
         output: var.sort.clone(),
-        is_datatype: var.sort.is_eq_sort(),
     })
 }
 
@@ -94,6 +94,7 @@ impl<'a> GlobalRemover<'a> {
 
                     let func_decl = ResolvedFunctionDecl {
                         name: name.name,
+                        subtype: FunctionSubtype::Custom,
                         schema: Schema {
                             input: vec![],
                             output: ty.name(),
@@ -107,8 +108,8 @@ impl<'a> GlobalRemover<'a> {
                     };
                     let resolved_call = ResolvedCall::Func(FuncType {
                         name: name.name,
+                        subtype: FunctionSubtype::Custom,
                         input: vec![],
-                        is_datatype: ty.is_eq_sort(),
                         output: ty.clone(),
                     });
                     vec![

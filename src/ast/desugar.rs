@@ -29,7 +29,36 @@ pub(crate) fn desugar_command(
         Command::SetOption { name, value } => {
             vec![NCommand::SetOption { name, value }]
         }
-        Command::Function(fdecl) => vec![NCommand::Function(fdecl)],
+        Command::Function { 
+            span, 
+            name, 
+            schema, 
+            merge, 
+            merge_action, 
+            cost, 
+            unextractable ,
+        } => vec![NCommand::Function(FunctionDecl::function(
+            span, 
+            name, 
+            schema, 
+            merge, 
+            merge_action, 
+            cost, 
+            unextractable,
+        ))],
+        Command::Constructor { 
+            span, 
+            name, 
+            schema, 
+            cost, 
+            unextractable 
+        } => vec![NCommand::Function(FunctionDecl::constructor(
+            span, 
+            name, 
+            schema, 
+            cost, 
+            unextractable,
+        ))],
         Command::Relation {
             span,
             constructor,
@@ -73,19 +102,16 @@ pub(crate) fn desugar_command(
                     unreachable!();
                 };
                 for variant in variants {
-                    res.push(NCommand::Function(FunctionDecl {
-                        name: variant.name,
-                        schema: Schema {
+                    res.push(NCommand::Function(FunctionDecl::constructor(
+                        variant.span, 
+                        variant.name, 
+                        Schema {
                             input: variant.types,
                             output: datatype,
-                        },
-                        merge: None,
-                        merge_action: Actions::default(),
-                        cost: variant.cost,
-                        unextractable: false,
-                        ignore_viz: false,
-                        span: variant.span,
-                    }));
+                        }, 
+                        variant.cost, 
+                        false,
+                    )));
                 }
             }
 
@@ -224,19 +250,16 @@ fn desugar_datatype(span: Span, name: Symbol, variants: Vec<Variant>) -> Vec<NCo
     vec![NCommand::Sort(span.clone(), name, None)]
         .into_iter()
         .chain(variants.into_iter().map(|variant| {
-            NCommand::Function(FunctionDecl {
-                name: variant.name,
-                schema: Schema {
+            NCommand::Function(FunctionDecl::constructor (
+                variant.span,
+                variant.name,
+                Schema {
                     input: variant.types,
                     output: name,
                 },
-                merge: None,
-                merge_action: Actions::default(),
-                cost: variant.cost,
-                unextractable: false,
-                ignore_viz: false,
-                span: variant.span,
-            })
+                variant.cost,
+                false,
+            ))
         }))
         .collect()
 }

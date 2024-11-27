@@ -93,10 +93,7 @@ impl<'a> ActionCompiler<'a> {
     }
 
     fn do_function(&mut self, func_type: &FuncType) {
-        self.instructions.push(Instruction::CallFunction(
-            func_type.name,
-            func_type.is_datatype,
-        ));
+        self.instructions.push(Instruction::CallFunction(func_type.name));
     }
 
     fn do_prim(&mut self, prim: &SpecializedPrimitive) {
@@ -119,12 +116,8 @@ enum Instruction {
     /// Push a value from the stack or the substitution onto the stack.
     Load(Load),
     /// Pop function arguments off the stack, calls the function,
-    /// and push the result onto the stack. The bool indicates
-    /// whether to make defaults.
-    ///
-    /// This should be set to true after we disallow lookup in rule's actions and :default keyword
-    /// Currently, it's true when has_default() || is_datatype()
-    CallFunction(Symbol, bool),
+    /// and push the result onto the stack. 
+    CallFunction(Symbol),
     /// Pop primitive arguments off the stack, calls the primitive,
     /// and push the result onto the stack.
     CallPrimitive(SpecializedPrimitive, usize),
@@ -268,7 +261,7 @@ impl EGraph {
                     Load::Stack(idx) => stack.push(stack[*idx]),
                     Load::Subst(idx) => stack.push(subst[*idx]),
                 },
-                Instruction::CallFunction(f, make_defaults) => {
+                Instruction::CallFunction(f) => {
                     let function = self.functions.get_mut(f).unwrap();
                     let new_len = stack.len() - function.schema.input.len();
                     let values = &stack[new_len..];
@@ -283,16 +276,15 @@ impl EGraph {
 
                     let value = if let Some(out) = function.nodes.get(values) {
                         out.value
-                    } else if *make_defaults {
+                    } else {
                         let ts = self.timestamp;
-                        let out = &function.schema.output;
-                        if out.name() == UnitSort.name() {
+                        if function.decl.subtype == FunctionSubtype::Relation {
                             function.insert(values, Value::unit(), ts);
                             Value::unit()
-                        } else if out.is_eq_sort() {
+                        } else if function.decl.subtype == FunctionSubtype::Constructor {
                             let value = Value {
                                 #[cfg(debug_assertions)]
-                                tag: out.name(),
+                                tag: function.schema.output.name(),
                                 bits: self.unionfind.make_set(),
                             };
                             function.insert(values, value, ts);
@@ -303,11 +295,6 @@ impl EGraph {
                                 values
                             ))));
                         }
-                    } else {
-                        return Err(Error::NotFoundError(NotFoundError(format!(
-                            "No value found for {f} {:?}",
-                            values
-                        ))));
                     };
 
                     // cfg is necessary because debug_assert_eq still evaluates its

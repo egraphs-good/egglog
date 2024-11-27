@@ -4,9 +4,9 @@ use ast::Rule;
 #[derive(Clone, Debug)]
 pub struct FuncType {
     pub name: Symbol,
+    pub subtype: FunctionSubtype,
     pub input: Vec<ArcSort>,
     pub output: ArcSort,
-    pub is_datatype: bool,
 }
 
 /// Stores resolved typechecking information.
@@ -150,9 +150,9 @@ impl TypeInfo {
 
         Ok(FuncType {
             name: func.name,
+            subtype: func.subtype,
             input,
             output: output.clone(),
-            is_datatype: output.is_eq_sort() && func.merge.is_none(),
         })
     }
 
@@ -272,6 +272,7 @@ impl TypeInfo {
 
         Ok(ResolvedFunctionDecl {
             name: fdecl.name,
+            subtype: fdecl.subtype,
             schema: fdecl.schema.clone(),
             merge: match &fdecl.merge {
                 Some(merge) => Some(self.typecheck_expr(symbol_gen, merge, &bound_vars)?),
@@ -395,8 +396,9 @@ impl TypeInfo {
             GenericExpr::Call(span, head, args) => {
                 match head {
                     ResolvedCall::Func(t) => {
-                        // Only allowed to lookup constructor
-                        if !t.is_datatype {
+                        // Only allowed to lookup constructor or relation
+                        if t.subtype != FunctionSubtype::Constructor 
+                            && t.subtype != FunctionSubtype::Relation {
                             Err(TypeError::LookupInRuleDisallowed(
                                 head.to_symbol(),
                                 span.clone(),
