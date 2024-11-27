@@ -3,11 +3,11 @@
 
 (ruleset myrules1)
 (rule ()
-      ((set (number 1) ()))
+      ((number 1))
       :ruleset myrules1)
 (ruleset myrules2)
 (rule ()
-      ((set (number 2) ()))
+      ((number 2))
       :ruleset myrules2)
 
 (unstable-combined-ruleset rules1and2
@@ -15,24 +15,24 @@
 
 ;; allowed to add to myrules2 and the change is reflected
 (rule ()
-      ((set (number 3) ()))
+      ((number 3))
       :ruleset myrules2)
 
 ;; not allowed to add to combined ruleset
 (fail
  (rule ()
-    ((set (number 4) ()))
+    ((number 4))
     :ruleset myrules1and2))
 
 
 (fail
   (rule ()
-    ((set (number 4) ()))
+    ((number 4))
     :ruleset unboundruleset))
 
 (ruleset myrules5)
 (rule ()
-      ((set (number 5) ()))
+      ((number 5))
       :ruleset myrules5)
 
 (unstable-combined-ruleset rules1and2and5
