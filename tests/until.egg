@@ -22,8 +22,8 @@
 
 ; non terminating rule
 (relation allgs (G))
-(rule ((allgs x)) ((set (allgs (g* B x)) ())))
-(set (allgs A) ())
+(rule ((allgs x)) ((allgs (g* B x))))
+(allgs A)
 
 ; if you remove :until, this will take a very long time
 (run 10000 :until (= A8 I))
