@@ -9,7 +9,7 @@
 ;; antiunificaiton returns an expression that could unify with either
 ;; of the input expressions
 ;; (AU x y) can be considered a placeholder variable
-(function AU (Expr Expr) Expr)
+(constructor AU (Expr Expr) Expr)
 
 (rewrite (AU x x) x)
 (rewrite
