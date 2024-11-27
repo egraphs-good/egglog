@@ -3,22 +3,22 @@
 (relation right (i64))
 (relation middle (i64))
 
-(set (left 0) ())
-(set (right 0) ())
+(left 0)
+(right 0)
 
 (ruleset step-left)
 (rule ((left x) (right x))
-      ((set (left (+ x 1)) ()))
+      ((left (+ x 1)))
       :ruleset step-left)
 
 (ruleset step-right)
 (rule ((left x) (right y) (= x (+ y 1)))
-      ((set (right x) ()))
+      ((right x))
       :ruleset step-right)
 
 (ruleset step-middle)
 (rule ((left x))
-      ((set (middle x) ()))
+      ((middle x))
       :ruleset step-middle)
 
 (unstable-combined-ruleset
