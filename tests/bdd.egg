@@ -9,15 +9,15 @@
 (datatype BDD
     (ITE i64 BDD BDD) ; variables labelled by number
 )
-(function TrueConst () BDD)
+(constructor TrueConst () BDD)
 (let True (TrueConst))
-(function FalseConst () BDD)
+(constructor FalseConst () BDD)
 (let False (FalseConst))
 
 ; compress unneeded nodes
 (rewrite (ITE n a a) a)
 
-(function bddand (BDD BDD) BDD)
+(constructor bddand (BDD BDD) BDD)
 (rewrite (bddand x y) (bddand y x))
 (rewrite (bddand False n) False)
 (rewrite (bddand True x) x)
@@ -32,7 +32,7 @@
     (ITE n (bddand a1 b1) (bddand a2 b2))
 )
 
-(function bddor (BDD BDD) BDD)
+(constructor bddor (BDD BDD) BDD)
 (rewrite (bddor x y) (bddor y x))
 (rewrite (bddor True n) True)
 (rewrite (bddor False x) x)
@@ -44,13 +44,13 @@
     (ITE n (bddor a1 b1) (bddor a2 b2))
 )
 
-(function bddnot (BDD) BDD)
+(constructor bddnot (BDD) BDD)
 (rewrite (bddnot True) False)
 (rewrite (bddnot False) True)
 (rewrite (bddnot (ITE n a1 a2)) (ITE n (bddnot a1) (bddnot a2)))
 
 
-(function bddxor (BDD BDD) BDD)
+(constructor bddxor (BDD BDD) BDD)
 (rewrite (bddxor x y) (bddxor y x))
 (rewrite (bddxor True n) (bddnot n))
 (rewrite (bddxor False x) x)
