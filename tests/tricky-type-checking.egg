@@ -19,7 +19,7 @@
 
 (rule ((= x 1)
        (= x 2))
-      ((set (f x) ())))
+      ((f x)))
       
 (run 1)
 (print-function f 10)
@@ -35,7 +35,7 @@
 (rule 
   ((= x y)
    (= y 1)) 
-  ((set (R x) ())))
+  ((R x)))
 (run 1)
 (check (R 1))
 (pop)
@@ -46,7 +46,7 @@
 (rule 
   ((= x (+ y 1))
    (= y 1)) 
-  ((set (R x) ())))
+  ((R x)))
 (run 1)
 (check (R 2))
 (pop)
