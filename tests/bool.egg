@@ -34,6 +34,6 @@
     ((set (F i) true))
 )
 
-(set (R 0) ())
+(R 0)
 
 (run 3)
