@@ -383,7 +383,7 @@ fn command(ctx: &Context) -> Res<Command> {
                 }
             },
         )(ctx),
-        "constructor" => map (
+        "constructor" => map(
             parens(sequences!(
                 text("constructor"),
                 ident,
@@ -391,14 +391,12 @@ fn command(ctx: &Context) -> Res<Command> {
                 cost,
                 map(option(text(":unextractable")), |x, _| x.is_some()),
             )),
-            |((), (name, (schema, (cost, unextractable, )))), span| {
-                Command::Constructor {
-                    span,
-                    name,
-                    schema,
-                    cost,
-                    unextractable,
-                }
+            |((), (name, (schema, (cost, unextractable)))), span| Command::Constructor {
+                span,
+                name,
+                schema,
+                cost,
+                unextractable,
             },
         )(ctx),
         "relation" => map(

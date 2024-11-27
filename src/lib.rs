@@ -1370,8 +1370,9 @@ impl EGraph {
             let mut exprs: Vec<Expr> = str_buf.iter().map(|&s| parse(s)).collect();
 
             actions.push(
-                if function_type.subtype == FunctionSubtype::Constructor 
-                    || function_type.subtype == FunctionSubtype::Relation {
+                if function_type.subtype == FunctionSubtype::Constructor
+                    || function_type.subtype == FunctionSubtype::Relation
+                {
                     Action::Expr(span.clone(), Expr::Call(span.clone(), func_name, exprs))
                 } else {
                     let out = exprs.pop().unwrap();

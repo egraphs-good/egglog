@@ -7,9 +7,9 @@ use crate::{
     core::{GenericAtom, GenericAtomTerm, HeadOrEq, Query, ResolvedCall},
     *,
 };
+use ::core::fmt;
 pub use expr::*;
 pub use parse::*;
-use ::core::fmt;
 use std::fmt::Display;
 pub use symbol_table::GlobalSymbol as Symbol;
 
@@ -101,31 +101,29 @@ where
                 GenericCommand::Sort(span.clone(), *name, params.clone())
             }
             // This is awkward for the three subtypes change
-            GenericNCommand::Function(f) => {
-                match f.subtype {
-                    FunctionSubtype::Constructor => GenericCommand::Constructor { 
-                        span: f.span.clone(), 
-                        name: f.name, 
-                        schema: f.schema.clone(), 
-                        cost: f.cost,
-                        unextractable: f.unextractable,
-                    },
-                    FunctionSubtype::Relation => GenericCommand::Relation {
-                        span: f.span.clone(),
-                        constructor: f.name,
-                        inputs: f.schema.input.clone(),
-                    },
-                    FunctionSubtype::Custom => GenericCommand::Function {
-                        span: f.span.clone(),
-                        schema: f.schema.clone(),
-                        name: f.name,
-                        merge: f.merge.clone(),
-                        merge_action: f.merge_action.clone(),
-                        cost: f.cost,
-                        unextractable: f.unextractable,
-                    }
-                }
-            }
+            GenericNCommand::Function(f) => match f.subtype {
+                FunctionSubtype::Constructor => GenericCommand::Constructor {
+                    span: f.span.clone(),
+                    name: f.name,
+                    schema: f.schema.clone(),
+                    cost: f.cost,
+                    unextractable: f.unextractable,
+                },
+                FunctionSubtype::Relation => GenericCommand::Relation {
+                    span: f.span.clone(),
+                    constructor: f.name,
+                    inputs: f.schema.input.clone(),
+                },
+                FunctionSubtype::Custom => GenericCommand::Function {
+                    span: f.span.clone(),
+                    schema: f.schema.clone(),
+                    name: f.name,
+                    merge: f.merge.clone(),
+                    merge_action: f.merge_action.clone(),
+                    cost: f.cost,
+                    unextractable: f.unextractable,
+                },
+            },
             GenericNCommand::AddRuleset(name) => GenericCommand::AddRuleset(*name),
             GenericNCommand::UnstableCombinedRuleset(name, others) => {
                 GenericCommand::UnstableCombinedRuleset(*name, others.clone())
@@ -366,14 +364,14 @@ where
     Sort(Span, Symbol, Option<(Symbol, Vec<Expr>)>),
 
     /// Egglog supports three types of functions
-    /// 
+    ///
     /// A constructor models an egg-style user-defined datatype
     /// It can only be defined through the `datatype`/`datatype*` command
     /// or the `constructor` command
-    /// 
+    ///
     /// A relation models a datalog-style mathematical relation
     /// It can only be defined through the `relation` command
-    /// 
+    ///
     /// A custom function is a map
     /// It can only be defined through the `function` command
 
@@ -469,7 +467,7 @@ where
     ///
     /// Functions can be `set`
     /// with [`Action::Set`].
-    Function{
+    Function {
         span: Span,
         name: Symbol,
         schema: Schema,
@@ -479,7 +477,6 @@ where
         unextractable: bool,
     },
 
-    
     /// Using the `ruleset` command, defines a new
     /// ruleset that can be added to in [`Command::Rule`]s.
     /// Rulesets are used to group rules together
@@ -734,66 +731,80 @@ where
             GenericCommand::Sort(_span, name, Some((name2, args))) => {
                 list!("sort", name, list!( name2, ++ args))
             }
-            GenericCommand::Function { span: _, name, schema, merge, merge_action, cost, unextractable } => {
+            GenericCommand::Function {
+                span: _,
+                name,
+                schema,
+                merge,
+                merge_action,
+                cost,
+                unextractable,
+            } => {
                 let mut res = vec![
                     Sexp::Symbol("function".into()),
                     Sexp::Symbol(name.to_string()),
                 ];
-        
+
                 if let Sexp::List(contents) = schema.to_sexp() {
                     res.extend(contents);
                 } else {
                     unreachable!();
                 }
-        
+
                 if let Some(cost) = cost {
                     res.extend(vec![
                         Sexp::Symbol(":cost".into()),
                         Sexp::Symbol(cost.to_string()),
                     ]);
                 }
-        
+
                 if *unextractable {
                     res.push(Sexp::Symbol(":unextractable".into()));
                 }
-        
+
                 if !merge_action.is_empty() {
                     res.push(Sexp::Symbol(":on_merge".into()));
                     res.push(Sexp::List(
                         merge_action.iter().map(|a| a.to_sexp()).collect(),
                     ));
                 }
-        
+
                 if let Some(merge) = &merge {
                     res.push(Sexp::Symbol(":merge".into()));
                     res.push(merge.to_sexp());
                 }
-        
+
                 Sexp::List(res)
             }
-            GenericCommand::Constructor { span: _, name, schema, cost, unextractable } => {
+            GenericCommand::Constructor {
+                span: _,
+                name,
+                schema,
+                cost,
+                unextractable,
+            } => {
                 let mut res = vec![
                     Sexp::Symbol("constructor".into()),
                     Sexp::Symbol(name.to_string()),
                 ];
-        
+
                 if let Sexp::List(contents) = schema.to_sexp() {
                     res.extend(contents);
                 } else {
                     unreachable!();
                 }
-        
+
                 if let Some(cost) = cost {
                     res.extend(vec![
                         Sexp::Symbol(":cost".into()),
                         Sexp::Symbol(cost.to_string()),
                     ]);
                 }
-        
+
                 if *unextractable {
                     res.push(Sexp::Symbol(":unextractable".into()));
                 }
-        
+
                 Sexp::List(res)
             }
             GenericCommand::Relation {
@@ -1036,13 +1047,19 @@ impl Schema {
     }
 }
 
-
 impl FunctionDecl {
-    pub fn function(span: Span, name: Symbol, schema: Schema, merge: Option<GenericExpr<Symbol, Symbol>>, 
-        merge_action: GenericActions<Symbol, Symbol>, cost: Option<usize>, unextractable: bool) -> Self {
+    pub fn function(
+        span: Span,
+        name: Symbol,
+        schema: Schema,
+        merge: Option<GenericExpr<Symbol, Symbol>>,
+        merge_action: GenericActions<Symbol, Symbol>,
+        cost: Option<usize>,
+        unextractable: bool,
+    ) -> Self {
         Self {
             name,
-            subtype:FunctionSubtype::Custom,
+            subtype: FunctionSubtype::Custom,
             schema,
             merge,
             merge_action,
@@ -1053,10 +1070,16 @@ impl FunctionDecl {
         }
     }
 
-    pub fn constructor(span: Span, name: Symbol, schema: Schema, cost: Option<usize>, unextractable: bool) -> Self {
+    pub fn constructor(
+        span: Span,
+        name: Symbol,
+        schema: Schema,
+        cost: Option<usize>,
+        unextractable: bool,
+    ) -> Self {
         Self {
             name,
-            subtype:FunctionSubtype::Constructor,
+            subtype: FunctionSubtype::Constructor,
             schema,
             merge: None,
             merge_action: Actions::default(),

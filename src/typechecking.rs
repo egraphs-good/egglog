@@ -397,8 +397,9 @@ impl TypeInfo {
                 match head {
                     ResolvedCall::Func(t) => {
                         // Only allowed to lookup constructor or relation
-                        if t.subtype != FunctionSubtype::Constructor 
-                            && t.subtype != FunctionSubtype::Relation {
+                        if t.subtype != FunctionSubtype::Constructor
+                            && t.subtype != FunctionSubtype::Relation
+                        {
                             Err(TypeError::LookupInRuleDisallowed(
                                 head.to_symbol(),
                                 span.clone(),

@@ -93,7 +93,8 @@ impl<'a> ActionCompiler<'a> {
     }
 
     fn do_function(&mut self, func_type: &FuncType) {
-        self.instructions.push(Instruction::CallFunction(func_type.name));
+        self.instructions
+            .push(Instruction::CallFunction(func_type.name));
     }
 
     fn do_prim(&mut self, prim: &SpecializedPrimitive) {
@@ -116,7 +117,7 @@ enum Instruction {
     /// Push a value from the stack or the substitution onto the stack.
     Load(Load),
     /// Pop function arguments off the stack, calls the function,
-    /// and push the result onto the stack. 
+    /// and push the result onto the stack.
     CallFunction(Symbol),
     /// Pop primitive arguments off the stack, calls the primitive,
     /// and push the result onto the stack.
