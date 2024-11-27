@@ -101,13 +101,13 @@
          (CaseSplit e (App f e1) (Lam x (Lam xs (App f e2)))))
 
 (relation is-tail (Term))
-(rule ((= demand (pushdown f e)) (= e (App e1 e2))) ((set (is-tail e) ())))
-(rule ((= demand (pushdown f e)) (= e (Lam x e))) ((set (is-tail e) ())))
-(rule ((= demand (pushdown f e)) (= e (TVar x))) ((set (is-tail e) ())))
-(rule ((= demand (pushdown f e)) (= e (Cons e1 e2))) ((set (is-tail e) ())))
-(rule ((= demand (pushdown f e)) (= e Nil)) ((set (is-tail e) ())))
-(rule ((= demand (pushdown f e)) (= e (Add e1 e2))) ((set (is-tail e) ())))
-(rule ((= demand (pushdown f e)) (= e (Num n1))) ((set (is-tail e) ())))
+(rule ((= demand (pushdown f e)) (= e (App e1 e2))) ((is-tail e)))
+(rule ((= demand (pushdown f e)) (= e (Lam x e))) ((is-tail e)))
+(rule ((= demand (pushdown f e)) (= e (TVar x))) ((is-tail e)))
+(rule ((= demand (pushdown f e)) (= e (Cons e1 e2))) ((is-tail e)))
+(rule ((= demand (pushdown f e)) (= e Nil)) ((is-tail e)))
+(rule ((= demand (pushdown f e)) (= e (Add e1 e2))) ((is-tail e)))
+(rule ((= demand (pushdown f e)) (= e (Num n1))) ((is-tail e)))
 (rewrite (pushdown f e) (App f e) :when ((is-tail e)))
 
 ;; ==== definition ====
