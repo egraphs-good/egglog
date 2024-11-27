@@ -9,6 +9,8 @@ struct Args {
     #[clap(short = 'F', long)]
     fact_directory: Option<PathBuf>,
     #[clap(long)]
+    naive: bool,
+    #[clap(long)]
     desugar: bool,
     #[clap(long)]
     resugar: bool,
@@ -99,6 +101,7 @@ fn main() {
         let mut egraph = EGraph::default();
         egraph.set_reserved_symbol(args.reserved_symbol.clone().into());
         egraph.fact_directory.clone_from(&args.fact_directory);
+        egraph.seminaive = !args.naive;
         egraph.run_mode = args.show;
         egraph
     };

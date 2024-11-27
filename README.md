@@ -33,7 +33,7 @@ make all
 ## Usage
 
 ```
-cargo run [-f fact-path] [--to-json] [--to-dot] [--to-svg] <files.egg>
+cargo run [-f fact-path] [-naive] [--to-json] [--to-dot] [--to-svg] <files.egg>
 ```
 
 or just

@@ -7,10 +7,11 @@ use crate::*;
 pub(crate) fn desugar_program(
     program: Vec<Command>,
     symbol_gen: &mut SymbolGen,
+    seminaive_transform: bool,
 ) -> Result<Vec<NCommand>, Error> {
     let mut res = vec![];
     for command in program {
-        let desugared = desugar_command(command, symbol_gen)?;
+        let desugared = desugar_command(command, symbol_gen, seminaive_transform)?;
         res.extend(desugared);
     }
     Ok(res)
@@ -22,6 +23,7 @@ pub(crate) fn desugar_program(
 pub(crate) fn desugar_command(
     command: Command,
     symbol_gen: &mut SymbolGen,
+    seminaive_transform: bool,
 ) -> Result<Vec<NCommand>, Error> {
     let res = match command {
         Command::SetOption { name, value } => {
@@ -97,8 +99,12 @@ pub(crate) fn desugar_command(
         }
         Command::Include(span, file) => {
             let s = std::fs::read_to_string(&file)
-                .unwrap_or_else(|_| panic!("{span} Failed to read file {file}"));
-            return desugar_program(parse_program(Some(file), &s)?, symbol_gen);
+                .unwrap_or_else(|_| panic!("{} Failed to read file {file}", span.get_quote()));
+            return desugar_program(
+                parse_program(Some(file), &s)?,
+                symbol_gen,
+                seminaive_transform,
+            );
         }
         Command::Rule {
             ruleset,
@@ -109,11 +115,21 @@ pub(crate) fn desugar_command(
                 name = rule.to_string().replace('\"', "'").into();
             }
 
-            let result = vec![NCommand::NormRule {
+            let mut result = vec![NCommand::NormRule {
                 ruleset,
                 name,
                 rule: rule.clone(),
             }];
+
+            if seminaive_transform {
+                if let Some(new_rule) = add_semi_naive_rule(symbol_gen, rule) {
+                    result.push(NCommand::NormRule {
+                        ruleset,
+                        name,
+                        rule: new_rule,
+                    });
+                }
+            }
 
             result
         }
@@ -200,7 +216,7 @@ pub(crate) fn desugar_command(
             vec![NCommand::Pop(span, num)]
         }
         Command::Fail(span, cmd) => {
-            let mut desugared = desugar_command(*cmd, symbol_gen)?;
+            let mut desugared = desugar_command(*cmd, symbol_gen, seminaive_transform)?;
 
             let last = desugared.pop().unwrap();
             desugared.push(NCommand::Fail(span, Box::new(last)));
@@ -302,6 +318,55 @@ fn desugar_birewrite(ruleset: Symbol, name: Symbol, rewrite: &Rewrite) -> Vec<NC
         .collect()
 }
 
+// TODO(yz): we can delete this code once we enforce that all rule bodies cannot read the database (except EqSort).
+fn add_semi_naive_rule(symbol_gen: &mut SymbolGen, rule: Rule) -> Option<Rule> {
+    let mut new_rule = rule;
+    // Whenever an Let(_, expr@Call(...)) or Set(_, expr@Call(...)) is present in action,
+    // an additional seminaive rule should be created.
+    // Moreover, for each such expr, expr and all variable definitions that it relies on should be moved to trigger.
+    let mut new_head_atoms = vec![];
+    let mut add_new_rule = false;
+
+    let mut var_set = HashSet::default();
+    for head_slice in new_rule.head.0.iter_mut().rev() {
+        match head_slice {
+            Action::Set(span, _, _, expr) => {
+                var_set.extend(expr.vars());
+                if let Expr::Call(..) = expr {
+                    add_new_rule = true;
+
+                    let fresh_symbol = symbol_gen.fresh(&"desugar_snrule".into());
+                    let fresh_var = Expr::Var(span.clone(), fresh_symbol);
+                    let expr = std::mem::replace(expr, fresh_var.clone());
+                    new_head_atoms.push(Fact::Eq(span.clone(), vec![fresh_var, expr]));
+                };
+            }
+            Action::Let(span, symbol, expr) if var_set.contains(symbol) => {
+                var_set.extend(expr.vars());
+                if let Expr::Call(..) = expr {
+                    add_new_rule = true;
+
+                    let var = Expr::Var(span.clone(), *symbol);
+                    new_head_atoms.push(Fact::Eq(span.clone(), vec![var, expr.clone()]));
+                }
+            }
+            _ => (),
+        }
+    }
+
+    if add_new_rule {
+        new_rule.body.extend(new_head_atoms.into_iter().rev());
+        // remove all let action
+        new_rule.head.0.retain_mut(
+            |action| !matches!(action, Action::Let(_ann, var, _) if var_set.contains(var)),
+        );
+        log::debug!("Added a semi-naive desugared rule:\n{}", new_rule);
+        Some(new_rule)
+    } else {
+        None
+    }
+}
+
 fn desugar_simplify(
     expr: &Expr,
     schedule: &Schedule,
@@ -324,6 +389,7 @@ fn desugar_simplify(
                 expr: Expr::Var(span.clone(), lhs),
             },
             symbol_gen,
+            false,
         )
         .unwrap(),
     );
