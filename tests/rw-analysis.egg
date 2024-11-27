@@ -133,7 +133,7 @@
     (= (I val) (add-val (const-prop l x1)
                         (const-prop l x2)))
 )(
-    (set (RProg l (Ass x (Const (I val)))) ())
+    (RProg l (Ass x (Const (I val))))
 ))
 
 ; replace x = a + b (non-contant)
@@ -142,7 +142,7 @@
     (= Top (add-val (const-prop l x1)
                       (const-prop l x2)))
 )(
-    (set (RProg l (Ass x (Add x1 x2))) ())
+    (RProg l (Ass x (Add x1 x2)))
 ))
 
 ; replace x = a == b (constant)
@@ -151,7 +151,7 @@
     (= b (eq-val (const-prop l x1) (const-prop l x2)))
     (Bool b)
 )(
-    (set (RProg l (Ass x (Const b))) ())
+    (RProg l (Ass x (Const b)))
 ))
 
 ; replace x = a == b (non-constant)
@@ -159,14 +159,14 @@
     (= (Prog l) (Ass x (Eq x1 x2)))
     (= Top (eq-val (const-prop l x1) (const-prop l x2)))
 )(
-    (set (RProg l (Ass x (Eq x1 x2))) ())
+    (RProg l (Ass x (Eq x1 x2)))
 ))
 
 ; replace x = k
 (rule (
     (= (Prog l) (Ass x (Const val)))
 )(
-    (set (RProg l (Ass x (Const val))) ())
+    (RProg l (Ass x (Const val)))
 ))
 
 ;;;;;;;;;;;;;;;;
@@ -186,7 +186,7 @@
 (rule (
     (= (Prog l) (Call f))
 )(
-    (set (RProg l (Call f)) ())
+    (RProg l (Call f))
 ))
 
 ;;;;;;;;;;;;;;;;
@@ -209,7 +209,7 @@
     (= (Prog l) (If b l1 l2))
     (= True (const-prop l b))
 )(
-    (set (RProg l (Goto l1)) ())
+    (RProg l (Goto l1))
 ))
 
 ; replace if false
@@ -217,7 +217,7 @@
     (= (Prog l) (If b l1 l2))
     (= False (const-prop l b))
 )(
-    (set (RProg l (Goto l2)) ())
+    (RProg l (Goto l2))
 ))
 
 ; replace if Top
@@ -225,7 +225,7 @@
     (= (Prog l) (If b l1 l2))
     (= Top (const-prop l b))
 )(
-    (set (RProg l (If b l1 l2)) ())
+    (RProg l (If b l1 l2))
 ))
 
 ;;;;;;;;;;;;;;;;
@@ -244,7 +244,7 @@
 (rule (
     (= (Prog l1) (Goto l2))
 )(
-    (set (RProg l1 (Goto l2)) ())
+    (RProg l1 (Goto l2))
 ))
 
 ;;;;;;;;;;;;;;;;
