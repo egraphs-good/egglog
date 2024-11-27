@@ -114,21 +114,12 @@ impl<'a> GlobalRemover<'a> {
                     });
                     vec![
                         GenericNCommand::Function(func_decl),
-                        // output is eq-able, so generate a union
-                        if ty.is_eq_sort() {
-                            GenericNCommand::CoreAction(GenericAction::Union(
-                                span.clone(),
-                                GenericExpr::Call(span, resolved_call, vec![]),
-                                remove_globals_expr(expr),
-                            ))
-                        } else {
-                            GenericNCommand::CoreAction(GenericAction::Set(
-                                span,
-                                resolved_call,
-                                vec![],
-                                remove_globals_expr(expr),
-                            ))
-                        },
+                        GenericNCommand::CoreAction(GenericAction::Set(
+                            span,
+                            resolved_call,
+                            vec![],
+                            remove_globals_expr(expr),
+                        )),
                     ]
                 }
                 _ => vec![GenericNCommand::CoreAction(remove_globals_action(action))],
