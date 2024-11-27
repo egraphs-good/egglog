@@ -257,7 +257,7 @@
 
         (rule ((= f (Func name input-types output-types body))
                (VecOperand-is-pure body))
-              ((set (Function-is-pure f) ()))
+              ((set (Function-is-pure f) ())
               :ruleset fast-analyses)
     
 
@@ -290,11 +290,11 @@
     
 
         (rule ((Body-contains-Body f i (PureOp e)))
-              ((set (Body-contains-Expr f i e) ()))
+              ((set (Body-contains-Expr f i e)))
               :ruleset fast-analyses)
         ; A Gamma's pred and inputs are in the outer context
         (rule ((Body-contains-Body f i (Gamma pred inputs outputs)))
-              ((set (Body-contains-Operand f i pred) ()))
+              ((set (Body-contains-Operand f i pred)))
               :ruleset fast-analyses)
         (rule ((Body-contains-Body f i (Gamma pred inputs outputs))
                (= x (VecOperand-get inputs any)))
