@@ -7,12 +7,12 @@
 
 (ruleset step-left)
 (rule ((left x) (right x))
-      ((set (left (+ x 1)) ()))
+      ((left (+ x 1)))
       :ruleset step-left)
 
 (ruleset step-right)
 (rule ((left x) (right y) (= x (+ y 1)))
-      ((set (right x) ()))
+      ((right x))
       :ruleset step-right)
 
 (run-schedule
