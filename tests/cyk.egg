@@ -16,7 +16,7 @@
 (rule ((End (NonTerm a) s)
        (= s (getString pos)))
       ((P 1 pos (NonTerm a))
-       (union (B 1 pos (NonTerm a)) (T a s)))) 
+       (set (B 1 pos (NonTerm a)) (T a s)))) 
 
 (rule ((Prod (NonTerm a) (NonTerm b) (NonTerm c)) ;; a -> bc
        (P p1 s (NonTerm b))
@@ -27,7 +27,7 @@
 (rule ((Prod (NonTerm a) (NonTerm b) (NonTerm c))
        (= f1 (B p1 s (NonTerm b)))
        (= f2 (B p2 (+ s p1) (NonTerm c))))
-      ((union (B (+ p1 p2) s (NonTerm a)) 
+      ((set (B (+ p1 p2) s (NonTerm a)) 
        (NT a f1 f2))))
 
 (push)
@@ -56,9 +56,9 @@
 (End (NonTerm "DET") "a")
 
 
-(let test1 (B 7 1 (NonTerm "S")))
-
 (run 100)
+
+(let test1 (B 7 1 (NonTerm "S")))
 
 (check (P 7 1 (NonTerm "S")))
 (fail (check (P 7 1 (NonTerm "VP"))))
