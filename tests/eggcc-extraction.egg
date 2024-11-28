@@ -25,53 +25,53 @@
     (SomeType Type)
     (NoneType))
 ;; Literal
-(function Num (i64) Literal)
-(function Float (f64) Literal)
-(function Char (String) Literal)
-(function Bool (bool) Literal)
+(constructor Num (i64) Literal)
+(constructor Float (f64) Literal)
+(constructor Char (String) Literal)
+(constructor Bool (bool) Literal)
 
 ;; Expr
 (datatype ConstOps (const))
-(function Const (Type ConstOps Literal) Expr)
+(constructor Const (Type ConstOps Literal) Expr)
 ;; Call may return multiple values but at most one of them
 ;; is a value type, which is stored in OptionType.
 ;; The last fields denotes how many return values it have
 ;; Finally, we assume if call ever returns a value, 
 ;; it has to be the first one.
-(function Call (OptionType String VecOperand i64) Expr :cost 1000) ; TODO: fix cost model
-(function badd (Type Operand Operand) Expr)
-(function bsub (Type Operand Operand) Expr)
-(function bmul (Type Operand Operand) Expr)
-(function bfmul (Type Operand Operand) Expr)
-(function bdiv (Type Operand Operand) Expr)
-(function beq (Type Operand Operand) Expr)
-(function blt (Type Operand Operand) Expr)
-(function bgt (Type Operand Operand) Expr)
-(function ble (Type Operand Operand) Expr)
-(function bge (Type Operand Operand) Expr)
-(function bnot (Type Operand Operand) Expr)
-(function band (Type Operand Operand) Expr)
-(function bor (Type Operand Operand) Expr)
-(function PRINT (Operand Operand) Expr)
+(constructor Call (OptionType String VecOperand i64) Expr :cost 1000) ; TODO: fix cost model
+(constructor badd (Type Operand Operand) Expr)
+(constructor bsub (Type Operand Operand) Expr)
+(constructor bmul (Type Operand Operand) Expr)
+(constructor bfmul (Type Operand Operand) Expr)
+(constructor bdiv (Type Operand Operand) Expr)
+(constructor beq (Type Operand Operand) Expr)
+(constructor blt (Type Operand Operand) Expr)
+(constructor bgt (Type Operand Operand) Expr)
+(constructor ble (Type Operand Operand) Expr)
+(constructor bge (Type Operand Operand) Expr)
+(constructor bnot (Type Operand Operand) Expr)
+(constructor band (Type Operand Operand) Expr)
+(constructor bor (Type Operand Operand) Expr)
+(constructor PRINT (Operand Operand) Expr)
 
 ;; Operand
-(function Arg (i64) Operand)
-(function Node (Body) Operand)
-(function Project (i64 Body) Operand)
+(constructor Arg (i64) Operand)
+(constructor Node (Body) Operand)
+(constructor Project (i64 Body) Operand)
 
 ;; Body
-(function PureOp (Expr) Body)
+(constructor PureOp (Expr) Body)
 ;; branching
 ;; predicate (outside switch), inputs (outside switch),
 ;; and for each branch a vector of outputs
-(function Gamma (Operand VecOperand VecVecOperand) Body)
+(constructor Gamma (Operand VecOperand VecVecOperand) Body)
 ;; loops
 ;; predicate (inside loop), inputs (outside loop), outputs (inside loop)
-(function Theta (Operand VecOperand VecOperand) Body)
+(constructor Theta (Operand VecOperand VecOperand) Body)
 ;; A body can also just be a VecOperand for convenience
 ;; This has no corresponding node in rust, it can be
 ;; removed during translation
-(function OperandGroup (VecOperand) Body)
+(constructor OperandGroup (VecOperand) Body)
 
 (datatype Function
     ;;    name   input types    output types    body
@@ -113,11 +113,11 @@
 
           (function VecOperand-get (VecOperand i64) Operand)
           (rule ((VO x) (> (vec-length x) 0))
-                ((union (VecOperand-get (VO x) 0) (vec-get x 0)))
+                ((set (VecOperand-get (VO x) 0) (vec-get x 0)))
                 :ruleset fast-analyses)
           (rule ((VecOperand-get (VO x) j)
                  (= i (+ j 1)) (< i (vec-length x)))
-                ((union (VecOperand-get (VO x) i) (vec-get x i)))
+                ((set (VecOperand-get (VO x) i) (vec-get x i)))
                 :ruleset fast-analyses)
 
             (function VecOperand-length (VecOperand) i64)
@@ -129,11 +129,11 @@
 
           (function VecVecOperand-get (VecVecOperand i64) VecOperand)
           (rule ((VVO x) (> (vec-length x) 0))
-                ((union (VecVecOperand-get (VVO x) 0) (vec-get x 0)))
+                ((set (VecVecOperand-get (VVO x) 0) (vec-get x 0)))
                 :ruleset fast-analyses)
           (rule ((VecVecOperand-get (VVO x) j)
                  (= i (+ j 1)) (< i (vec-length x)))
-                ((union (VecVecOperand-get (VVO x) i) (vec-get x i)))
+                ((set (VecVecOperand-get (VVO x) i) (vec-get x i)))
                 :ruleset fast-analyses)
 
             (function VecVecOperand-length (VecVecOperand) i64)
@@ -500,11 +500,11 @@
                     (VVO vec)
                     (VVO (vec-set vec i to))))
                 :ruleset subst)
-(function SubstExpr (Expr i64 Operand) Expr :unextractable)
-(function SubstOperand (Operand i64 Operand) Operand :unextractable)
-(function SubstBody (Body i64 Operand) Body :unextractable)
-(function SubstVecOperand (VecOperand i64 Operand) VecOperand :unextractable)
-(function SubstVecVecOperand (VecVecOperand i64 Operand) VecVecOperand :unextractable)
+(constructor SubstExpr (Expr i64 Operand) Expr :unextractable)
+(constructor SubstOperand (Operand i64 Operand) Operand :unextractable)
+(constructor SubstBody (Body i64 Operand) Body :unextractable)
+(constructor SubstVecOperand (VecOperand i64 Operand) VecOperand :unextractable)
+(constructor SubstVecVecOperand (VecVecOperand i64 Operand) VecVecOperand :unextractable)
 
                 (rewrite
                     (SubstExpr (badd ty a b) x0 x1)
@@ -595,7 +595,7 @@
             (Theta pred (SubstVecOperand inputs x0 x1) outputs)
             :ruleset subst)
 
-            (function SubstVecOperand-helper (VecOperand i64 Operand i64) VecOperand)
+            (constructor SubstVecOperand-helper (VecOperand i64 Operand i64) VecOperand)
             (rewrite
                 (SubstVecOperand vec x0 x1)
                 (SubstVecOperand-helper vec x0 x1 0)
@@ -617,7 +617,7 @@
                     (VO vec)))
                 :ruleset subst)
 
-            (function SubstVecVecOperand-helper (VecVecOperand i64 Operand i64) VecVecOperand)
+            (constructor SubstVecVecOperand-helper (VecVecOperand i64 Operand i64) VecVecOperand)
             (rewrite
                 (SubstVecVecOperand vec x0 x1)
                 (SubstVecVecOperand-helper vec x0 x1 0)
@@ -638,11 +638,11 @@
                     (SubstVecVecOperand-helper (VVO vec) x0 x1 i)
                     (VVO vec)))
                 :ruleset subst)
-(function SubstExprAll (Expr VecOperand) Expr :unextractable)
-(function SubstOperandAll (Operand VecOperand) Operand :unextractable)
-(function SubstBodyAll (Body VecOperand) Body :unextractable)
-(function SubstVecOperandAll (VecOperand VecOperand) VecOperand :unextractable)
-(function SubstVecVecOperandAll (VecVecOperand VecOperand) VecVecOperand :unextractable)
+(constructor SubstExprAll (Expr VecOperand) Expr :unextractable)
+(constructor SubstOperandAll (Operand VecOperand) Operand :unextractable)
+(constructor SubstBodyAll (Body VecOperand) Body :unextractable)
+(constructor SubstVecOperandAll (VecOperand VecOperand) VecOperand :unextractable)
+(constructor SubstVecVecOperandAll (VecVecOperand VecOperand) VecVecOperand :unextractable)
 
                 (rewrite
                     (SubstExprAll (badd ty a b) x0)
@@ -733,7 +733,7 @@
             (Theta pred (SubstVecOperandAll inputs x0) outputs)
             :ruleset subst)
 
-            (function SubstVecOperandAll-helper (VecOperand VecOperand i64) VecOperand)
+            (constructor SubstVecOperandAll-helper (VecOperand VecOperand i64) VecOperand)
             (rewrite
                 (SubstVecOperandAll vec x0)
                 (SubstVecOperandAll-helper vec x0 0)
@@ -755,7 +755,7 @@
                     (VO vec)))
                 :ruleset subst)
 
-            (function SubstVecVecOperandAll-helper (VecVecOperand VecOperand i64) VecVecOperand)
+            (constructor SubstVecVecOperandAll-helper (VecVecOperand VecOperand i64) VecVecOperand)
             (rewrite
                 (SubstVecVecOperandAll vec x0)
                 (SubstVecVecOperandAll-helper vec x0 0)
@@ -776,11 +776,11 @@
                     (SubstVecVecOperandAll-helper (VVO vec) x0 i)
                     (VVO vec)))
                 :ruleset subst)
-(function ShiftExpr (Expr i64 i64) Expr :unextractable)
-(function ShiftOperand (Operand i64 i64) Operand :unextractable)
-(function ShiftBody (Body i64 i64) Body :unextractable)
-(function ShiftVecOperand (VecOperand i64 i64) VecOperand :unextractable)
-(function ShiftVecVecOperand (VecVecOperand i64 i64) VecVecOperand :unextractable)
+(constructor ShiftExpr (Expr i64 i64) Expr :unextractable)
+(constructor ShiftOperand (Operand i64 i64) Operand :unextractable)
+(constructor ShiftBody (Body i64 i64) Body :unextractable)
+(constructor ShiftVecOperand (VecOperand i64 i64) VecOperand :unextractable)
+(constructor ShiftVecVecOperand (VecVecOperand i64 i64) VecVecOperand :unextractable)
 
                 (rewrite
                     (ShiftExpr (badd ty a b) x0 x1)
@@ -872,7 +872,7 @@
             (Theta pred (ShiftVecOperand inputs x0 x1) outputs)
             :ruleset shift)
 
-            (function ShiftVecOperand-helper (VecOperand i64 i64 i64) VecOperand)
+            (constructor ShiftVecOperand-helper (VecOperand i64 i64 i64) VecOperand)
             (rewrite
                 (ShiftVecOperand vec x0 x1)
                 (ShiftVecOperand-helper vec x0 x1 0)
@@ -894,7 +894,7 @@
                     (VO vec)))
                 :ruleset shift)
 
-            (function ShiftVecVecOperand-helper (VecVecOperand i64 i64 i64) VecVecOperand)
+            (constructor ShiftVecVecOperand-helper (VecVecOperand i64 i64 i64) VecVecOperand)
             (rewrite
                 (ShiftVecVecOperand vec x0 x1)
                 (ShiftVecVecOperand-helper vec x0 x1 0)
@@ -919,12 +919,12 @@
 ;; implementation of PassThroughArguments
 ;; Creates a vec of arguments
 ;; (vec-of (Arg 0) (Arg 1) ...) with length i
-(function PassThroughArguments (i64) VecOperand :unextractable)
+(constructor PassThroughArguments (i64) VecOperand :unextractable)
 
 
 
 ;; (how many arguments to generate, vector so far)
-(function PassThroughArgumentsHelper (i64 VecOperand) VecOperand :unextractable)
+(constructor PassThroughArgumentsHelper (i64 VecOperand) VecOperand :unextractable)
 
 (rewrite (PassThroughArguments i)
   (PassThroughArgumentsHelper i (VO (vec-of)))
@@ -945,9 +945,9 @@
 
 
 ;; Project each argument out of a body
-(function BodyToVecOperand (i64 Body) VecOperand :unextractable)
+(constructor BodyToVecOperand (i64 Body) VecOperand :unextractable)
 ;; current index, body length, body, and vector so far
-(function BodyToVecOperandHelper (i64 i64 Body VecOperandBase) VecOperand :unextractable)
+(constructor BodyToVecOperandHelper (i64 i64 Body VecOperandBase) VecOperand :unextractable)
 
 (rewrite (BodyToVecOperand body-len body)
          (BodyToVecOperandHelper 0 body-len body (vec-of)))
@@ -1040,13 +1040,13 @@
                   (Node (PureOp (Const ty3 (const) (Num n2)))))
                 (Const output_type (const) (Bool (bool-< n1 n2))))
 (sort TermAndCost)
-(function Smaller (TermAndCost TermAndCost) TermAndCost)
+(constructor Smaller (TermAndCost TermAndCost) TermAndCost)
 
 ;; manual, bottom-up extraction of terms using this function
 (function ExtractedExpr (Expr) TermAndCost
             :merge (Smaller old new))
 ;; Store a term and its cost for this type
-(function ExprAndCost (Expr i64) TermAndCost)
+(constructor ExprAndCost (Expr i64) TermAndCost)
 
 ;; Perform smaller using the next two rules
 (rule ((= lhs (Smaller (ExprAndCost t1 cost1)
@@ -1066,7 +1066,7 @@
 (function ExtractedOperand (Operand) TermAndCost
             :merge (Smaller old new))
 ;; Store a term and its cost for this type
-(function OperandAndCost (Operand i64) TermAndCost)
+(constructor OperandAndCost (Operand i64) TermAndCost)
 
 ;; Perform smaller using the next two rules
 (rule ((= lhs (Smaller (OperandAndCost t1 cost1)
@@ -1086,7 +1086,7 @@
 (function ExtractedBody (Body) TermAndCost
             :merge (Smaller old new))
 ;; Store a term and its cost for this type
-(function BodyAndCost (Body i64) TermAndCost)
+(constructor BodyAndCost (Body i64) TermAndCost)
 
 ;; Perform smaller using the next two rules
 (rule ((= lhs (Smaller (BodyAndCost t1 cost1)
@@ -1106,7 +1106,7 @@
 (function ExtractedVecOperand (VecOperand) TermAndCost
             :merge (Smaller old new))
 ;; Store a term and its cost for this type
-(function VecOperandAndCost (VecOperand i64) TermAndCost)
+(constructor VecOperandAndCost (VecOperand i64) TermAndCost)
 
 ;; Perform smaller using the next two rules
 (rule ((= lhs (Smaller (VecOperandAndCost t1 cost1)
@@ -1126,7 +1126,7 @@
 (function ExtractedVecVecOperand (VecVecOperand) TermAndCost
             :merge (Smaller old new))
 ;; Store a term and its cost for this type
-(function VecVecOperandAndCost (VecVecOperand i64) TermAndCost)
+(constructor VecVecOperandAndCost (VecVecOperand i64) TermAndCost)
 
 ;; Perform smaller using the next two rules
 (rule ((= lhs (Smaller (VecVecOperandAndCost t1 cost1)
