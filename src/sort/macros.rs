@@ -1,3 +1,4 @@
+#[macro_export]
 macro_rules! add_primitives {
     ($type_info:expr,
         $name:literal = |$($param:ident : $param_t:ty),*| -> $ret:ty { $body:expr }
