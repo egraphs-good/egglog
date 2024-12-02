@@ -11,7 +11,7 @@
     (= f1 (f x1))
     (= f2 (f x2))
 )(
-    (union (intersect f1 f2) (f x3))
+    (set (intersect f1 f2) (f x3))
 ))
 
 (let a1 (Var "a1")) (let a2 (Var "a2")) (let a3 (Var "a3"))
@@ -27,8 +27,8 @@
 (let t2p (f (f b2)))
 (union t2 t2p)
 
-(union (intersect a1 a2) a3)
-(union (intersect b1 b2) b3)
+(set (intersect a1 a2) a3)
+(set (intersect b1 b2) b3)
 
 (run 100)
 
