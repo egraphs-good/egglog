@@ -4,17 +4,17 @@
 
 ; Top means it can be an arbitrary value
 (datatype Val (I i64))
-(function TopConst () Val)
+(constructor TopConst () Val)
 (let Top (TopConst))
-(function TrueConst () Val)
+(constructor TrueConst () Val)
 (let True (TrueConst))
-(function FalseConst () Val)
+(constructor FalseConst () Val)
 (let False (FalseConst))
 (relation Bool (Val))
 (Bool True)
 (Bool False)
 
-(function merge-val (Val Val) Val)
+(constructor merge-val (Val Val) Val)
 
 (rewrite (merge-val Top x) Top)
 (rewrite (merge-val x Top) Top)
@@ -25,7 +25,7 @@
 (rewrite (merge-val (I x) (I y)) Top :when ((!= x y)))
 (rewrite (merge-val x x) x)
 
-(function add-val (Val Val) Val)
+(constructor add-val (Val Val) Val)
 
 (rewrite (add-val Top x) Top)
 (rewrite (add-val x Top) Top)
@@ -35,7 +35,7 @@
 (rewrite (add-val x False) Top)
 (rewrite (add-val (I x) (I y)) (I (+ x y)))
 
-(function eq-val (Val Val) Val)
+(constructor eq-val (Val Val) Val)
 
 (rewrite (eq-val Top x) Top)
 (rewrite (eq-val x Top) Top)
@@ -59,9 +59,9 @@
     (If VarT Loc Loc)
     (Goto Loc)
     (Call VarT))
-(function EndConst () ProgStmt)
+(constructor EndConst () ProgStmt)
 (let End (EndConst))
-(function Prog (Loc) ProgStmt)
+(constructor Prog (Loc) ProgStmt)
 (relation RProg (Loc ProgStmt))
 
 (function const-prop (Loc VarT) Val :merge (merge-val old new))
