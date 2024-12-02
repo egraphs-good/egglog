@@ -23,7 +23,7 @@
 
 ; Reify set
 (sort ISet)
-(function IS (ISetBase) ISet)
+(constructor IS (ISetBase) ISet)
 
 (function ISet-get (ISet i64) i64 :unextractable)
 (rule ((IS x) (> (set-length x) 0))
