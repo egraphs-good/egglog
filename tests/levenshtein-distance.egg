@@ -10,12 +10,12 @@
 ; `String` supports limited operations, let's just use it as a char type
 (datatype str
     (Cons String str))
-(function EmptyConst () str)
+(constructor EmptyConst () str)
 (let Empty (EmptyConst))
 
 ; Length function
 
-(function Length (str) expr)
+(constructor Length (str) expr)
 
 (rule ((= f (Length Empty)))
       ((union (Length Empty) (Num 0))))
@@ -25,7 +25,7 @@
 
 ; EditDist function
 
-(function EditDist (str str) expr)
+(constructor EditDist (str str) expr)
 
 (rule ((= f (EditDist Empty s)))
       ((union (EditDist Empty s) (Length s))))
