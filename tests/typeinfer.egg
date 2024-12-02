@@ -10,27 +10,27 @@
 ;; TODO: can't do unit right now
 (sort QuantifiedVs (Set Ident))
 
-(function Fresh (Ident i64) Ident)
-(function V (String) Ident)
+(constructor Fresh (Ident i64) Ident)
+(constructor V (String) Ident)
 
-(function Var (Ident) Expr)
-(function App (Expr Expr) Expr)
-(function Abs (Ident Expr) Expr)
-(function Let (Ident Expr Expr) Expr)
-(function Num (i64) Expr)
-(function True () Expr)
-(function False () Expr)
-(function MyUnit () Expr)
+(constructor Var (Ident) Expr)
+(constructor App (Expr Expr) Expr)
+(constructor Abs (Ident Expr) Expr)
+(constructor Let (Ident Expr Expr) Expr)
+(constructor Num (i64) Expr)
+(constructor True () Expr)
+(constructor False () Expr)
+(constructor MyUnit () Expr)
 
-(function TVar (Ident) Type :cost 3)
-(function TArr (Type Type) Type :cost 1)
-(function TInt () Type :cost 1)
-(function TBool () Type :cost 1)
-(function TUnit () Type :cost 1)
+(constructor TVar (Ident) Type :cost 3)
+(constructor TArr (Type Type) Type :cost 1)
+(constructor TInt () Type :cost 1)
+(constructor TBool () Type :cost 1)
+(constructor TUnit () Type :cost 1)
 
-(function Forall (QuantifiedVs Type) Scheme)
-(function Nil () Ctx)
-(function Cons (Ident Scheme Ctx) Ctx)
+(constructor Forall (QuantifiedVs Type) Scheme)
+(constructor Nil () Ctx)
+(constructor Cons (Ident Scheme Ctx) Ctx)
 
 (relation ftvCtx (Ctx QuantifiedVs))
 (relation ftv (Type QuantifiedVs))
@@ -83,7 +83,7 @@
 
 
 ;; TODO: rewrite lookup to use native sets
-(function lookup (Ctx Ident) Scheme :cost 1000)
+(constructor lookup (Ctx Ident) Scheme :cost 1000)
 (rewrite (lookup (Cons x s tl) x) s)
 (rule (
   (= t (lookup (Cons y s tl) x))
@@ -96,8 +96,8 @@
 ;; Generalization and Instantiation
 ;;;;;;;;;;;;;;;;;;;;;;
 
-(function generalize (Ctx Type) Scheme :cost 1000)
-(function instantiate (Scheme i64) Type :cost 1000)
+(constructor generalize (Ctx Type) Scheme :cost 1000)
+(constructor instantiate (Scheme i64) Type :cost 1000)
 
 (rule ((has-qs-demand ctx (TInt)))
       ((has-qs ctx (TInt) (set-empty))))
@@ -129,7 +129,7 @@
          (Forall qs t)
          :when ((has-qs ctx t qs)))
 
-(function subst-fresh (QuantifiedVs Type i64) Type :cost 1000)
+(constructor subst-fresh (QuantifiedVs Type i64) Type :cost 1000)
 (rewrite (subst-fresh vs (TInt) c) (TInt))
 (rewrite (subst-fresh vs (TBool) c) (TBool))
 (rewrite (subst-fresh vs (TUnit) c) (TUnit))
@@ -158,7 +158,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;
 
 ; ctx |- expr : type
-(function typeof (Ctx Expr i64) Type :cost 1000)
+(constructor typeof (Ctx Expr i64) Type :cost 1000)
 
 ;; Basic types (TInt, TBool, TUnit)
 (rewrite (typeof ctx (Num x) c) (TInt))
@@ -200,7 +200,7 @@
 ;; Occurs check
 ;;;;;;;;;;;;;;;;;;;;;;
 (relation occurs-check (Ident Type))
-(function errors () Ident)
+(constructor errors () Ident)
 (rule ((= (TVar x) (TArr fr to)))
       ((occurs-check x fr)
        (occurs-check x to)))
