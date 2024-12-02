@@ -144,7 +144,7 @@
     (assign s t1 v c)
     (malloc c t2)
 )(
-    (union (expr-points-to v) (AllocVar v))
+    (set (expr-points-to v) (AllocVar v))
 ))
 
 ;; If `t v = e` and `e -> a`, then `v -> a`.
@@ -152,7 +152,7 @@
     (assign s t v e)
     (= (expr-points-to e) a)
 )(
-    (union (expr-points-to v) a)
+    (set (expr-points-to v) a)
 ))
 
 ;; If `*v = u`, `v -> a`, and `u -> b`, then `a -> b`.
@@ -161,7 +161,7 @@
     (= (expr-points-to v) a)
     (= (expr-points-to u) b)
 )(
-    (union (ptr-points-to a) b)
+    (set (ptr-points-to a) b)
 ))
 
 ;; If `e.f -> a` then `e -> a`.
@@ -169,7 +169,7 @@
     (field ef e f)
     (= (expr-points-to ef) a)
 )(
-    (union (expr-points-to e) a)
+    (set (expr-points-to e) a)
 ))
 
 ;; If `e -> a` then `e.f -> a`.
@@ -177,7 +177,7 @@
     (= (expr-points-to e) a)
     (field ef e f)
 )(
-    (union (expr-points-to ef) a)    
+    (set (expr-points-to ef) a)    
 ))
 
 ;; If `u -> a` and `a -> b`, then `&(u->f) -> b`.
@@ -186,7 +186,7 @@
     (= (ptr-points-to a) b)
     (addr e u f)
 )(
-    (union (expr-points-to e) b)
+    (set (expr-points-to e) b)
 ))
 
 ;; If `u -> a` and `&(u->f) -> b`, then `a -> b`.
@@ -195,7 +195,7 @@
     (addr e u f)
     (= (expr-points-to e) b)
 )(
-    (union (ptr-points-to a) b)
+    (set (ptr-points-to a) b)
 ))
 
 ;; If `(struct t){..., x, ...}` and `x -> b`, then `(struct t){..., x, ...} -> b`.
@@ -203,7 +203,7 @@
     (struct-lit-field l f x)
     (= (expr-points-to x) b)
 )(
-    (union (expr-points-to l) b)    
+    (set (expr-points-to l) b)    
 ))
 
 ;; If `f(t* x)`, `f(v)`, and `v -> a`, then `x -> a`.
@@ -212,7 +212,7 @@
     (call e f v)
     (= (expr-points-to v) a)
 )(
-    (union (expr-points-to x) a)  
+    (set (expr-points-to x) a)  
 ))
 
 ;; If `return u` in `f` and `u -> a`, then `f(z) -> a`.
@@ -222,7 +222,7 @@
     (return s u)
     (= (expr-points-to u) a)
 )(
-    (union (expr-points-to e) a)    
+    (set (expr-points-to e) a)    
 ))
 
 ;; store rule
@@ -231,7 +231,7 @@
     (= (expr-points-to u) a)
     (= (ptr-points-to a) b)
 )(
-    (union (expr-points-to e) b)
+    (set (expr-points-to e) b)
 ))
 
 (run 40)
