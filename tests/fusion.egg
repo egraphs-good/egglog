@@ -8,11 +8,11 @@
     (Num i64)
     (CaseSplit Term Term Term)
     (Cons Term Term))
-(function NilConst () Term)
+(constructor NilConst () Term)
 (let Nil (NilConst))
 
-(function V (String) Var) 
-(function From (Term) Var)
+(constructor V (String) Var) 
+(constructor From (Term) Var)
 
 ;; ==== FV ====
 (sort StringSet (Set Var))
@@ -93,7 +93,7 @@
        (set-contains fvs v2))
       ((union expr (Lam (From expr) (Let v1 e (Let v2 (TVar (From expr)) body))))))
 
-(function pushdown (Term Term) Term :cost 10000)
+(constructor pushdown (Term Term) Term :cost 10000)
 (rewrite (App f (App (Lam x e) e2))
          (App (Lam x (pushdown f e)) e2))
 
@@ -112,9 +112,9 @@
 
 ;; ==== definition ====
 
-(function sum () Term :cost 1000)
-(function mapf () Term :cost 1000)
-(function sum-o-mapf () Term)
+(constructor sum () Term :cost 1000)
+(constructor mapf () Term :cost 1000)
+(constructor sum-o-mapf () Term)
 (rewrite (App (sum) (App (mapf) x)) (App (sum-o-mapf) x))
 (union (sum) (Lam (V "xs")
     (CaseSplit (TVar (V "xs")) 
