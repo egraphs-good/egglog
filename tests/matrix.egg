@@ -21,8 +21,8 @@
 )
 
 ; alternative encoding (type A) = (Matrix n m) may be more useful for "large story example"
-(function nrows (MExpr) Dim)
-(function ncols (MExpr) Dim)
+(constructor nrows (MExpr) Dim)
+(constructor ncols (MExpr) Dim)
 
 (rewrite (nrows (Kron A B)) (Times (nrows A) (nrows B)))
 (rewrite (ncols (Kron A B)) (Times (ncols A) (ncols B)))
