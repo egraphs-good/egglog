@@ -1,3 +1,3 @@
 (function f (i64) i64)
 ;; the let's y should fail checking
-(rule ((= x 1) (= y x)) ((let y (f 1)) (set (f 0) 0)))
+(rule ((= x 1) (= y x) (= f1 (f 1))) ((let y f1) (set (f 0) 0)))
