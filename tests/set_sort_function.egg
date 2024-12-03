@@ -1,0 +1,10 @@
+(sort Foo)
+(function bar () Foo)
+(constructor baz () Foo)
+(constructor qux () Foo)
+(constructor quux () Foo)
+
+(set (bar) (baz))
+(union (baz) (qux))
+(set (bar) (qux))
+(fail (set (bar) (quux)))
