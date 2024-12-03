@@ -1,0 +1,7 @@
+(function foo () i64)
+
+(function bar () i64 :merge (foo))
+
+(set (bar) 0)
+
+(fail (set (bar) 1))
