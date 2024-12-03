@@ -1,0 +1,5 @@
+(function f () i64)
+(set f 1)
+(function g () i64)
+(set g 2)
+(union (f) (g))
