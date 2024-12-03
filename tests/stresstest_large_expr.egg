@@ -355,7 +355,7 @@
        (< __var__i __var__j))
       ((union __var__r (FALSE)))
         :ruleset array_api_ruleset )
-(constructor Int_i64 (Int) i64)
+(function Int_i64 (Int) i64)
 (rule ((= __var__o (Int___init__ __var__j)))
       ((set (Int_i64 __var__o) __var__j))
         :ruleset array_api_ruleset )
