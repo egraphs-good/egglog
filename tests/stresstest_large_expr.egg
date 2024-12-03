@@ -380,7 +380,7 @@
 (rewrite (Int___invert__ (Int___init__ __var__i)) (Int___init__ (not-i64 __var__i)) :ruleset array_api_ruleset)
 (rewrite (Int_if_ (TRUE) __var__o __var__b) __var__o :ruleset array_api_ruleset)
 (rewrite (Int_if_ (FALSE) __var__o __var__b) __var__b :ruleset array_api_ruleset)
-(constructor Boolean_bool (Boolean) bool)
+(function Boolean_bool (Boolean) bool)
 (rule ((= __var__x (TRUE)))
       ((set (Boolean_bool __var__x) true))
         :ruleset array_api_ruleset )
