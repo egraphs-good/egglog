@@ -372,7 +372,7 @@ where
     /// A relation models a datalog-style mathematical relation
     /// It can only be defined through the `relation` command
     ///
-    /// A custom function is a map
+    /// A custom function is a dictionary
     /// It can only be defined through the `function` command
 
     /// The `datatype` command declares a user-defined datatype.
@@ -414,7 +414,7 @@ where
     /// The `constructor` command defines a new constructor for a user-defined datatype
     /// Example:
     /// ```text
-    /// (Constructor Add (i64 i64) Math)
+    /// (constructor Add (i64 i64) Math)
     /// ```
     ///
     Constructor {
@@ -460,13 +460,22 @@ where
     /// If the merge expression is not monotonic, the behavior can vary as
     /// actions may be applied more than once with different results.
     ///
-    /// Specifically, a custom function can also have an EqSort output type:
     /// ```text
     /// (function LowerBound (Math) i64 :merge (max old new))
     /// ```
     ///
-    /// Functions can be `set`
+    /// Specifically, a custom function can also have an EqSort output type:
+    ///
+    /// ```text
+    /// (function Add (i64 i64) Math)
+    /// ```
+    ///
+    /// All functions can be `set`
     /// with [`Action::Set`].
+    ///
+    /// Output of a function, if being the EqSort type, can be unioned with [`Action::Union`]
+    /// with another datatype of the same `sort`.
+    ///
     Function {
         span: Span,
         name: Symbol,
