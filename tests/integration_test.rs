@@ -355,7 +355,7 @@ fn test_subsume_primitive() {
     let res = egraph.parse_and_run_program(
         None,
         r#"
-        (constructor one () i64)
+        (function one () i64)
         (set (one) 1)
         (subsume (one))
         "#,
