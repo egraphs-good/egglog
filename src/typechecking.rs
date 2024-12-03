@@ -267,6 +267,13 @@ impl TypeInfo {
         }
         let mut bound_vars = IndexMap::default();
         let output_type = self.sorts.get(&fdecl.schema.output).unwrap();
+        if fdecl.subtype == FunctionSubtype::Constructor
+            && !output_type.is_eq_sort() {
+            return Err(TypeError::ConstructorOutputNotSort(
+                fdecl.name,
+                fdecl.span.clone(),
+            ));
+        }
         bound_vars.insert("old".into(), (DUMMY_SPAN.clone(), output_type.clone()));
         bound_vars.insert("new".into(), (DUMMY_SPAN.clone(), output_type.clone()));
 
@@ -571,6 +578,8 @@ pub enum TypeError {
     InferenceFailure(Expr),
     #[error("{1}\nVariable {0} was already defined")]
     AlreadyDefined(Symbol, Span),
+    #[error("{1}\nThe output type of constructor function {0} must be sort")]
+    ConstructorOutputNotSort(Symbol, Span),
     #[error("{1}\nValue lookup of non-constructor function {0} in rule is disallowed.")]
     LookupInRuleDisallowed(Symbol, Span),
     #[error("All alternative definitions considered failed\n{}", .0.iter().map(|e| format!("  {e}\n")).collect::<Vec<_>>().join(""))]
