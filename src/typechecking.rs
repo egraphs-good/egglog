@@ -267,8 +267,7 @@ impl TypeInfo {
         }
         let mut bound_vars = IndexMap::default();
         let output_type = self.sorts.get(&fdecl.schema.output).unwrap();
-        if fdecl.subtype == FunctionSubtype::Constructor
-            && !output_type.is_eq_sort() {
+        if fdecl.subtype == FunctionSubtype::Constructor && !output_type.is_eq_sort() {
             return Err(TypeError::ConstructorOutputNotSort(
                 fdecl.name,
                 fdecl.span.clone(),
