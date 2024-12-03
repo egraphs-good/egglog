@@ -373,7 +373,7 @@
        (< i j))
       ((union r (FALSE)))
         :ruleset array_api_ruleset )
-(constructor Int_i64 (Int) i64)
+(function Int_i64 (Int) i64)
 (rule ((= o (Int___init__ j)))
       ((set (Int_i64 o) j))
         :ruleset array_api_ruleset )
