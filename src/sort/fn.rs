@@ -238,8 +238,7 @@ impl TypeConstraint for FunctionCTorTypeConstraint {
                         head: self.name,
                         args: arguments.to_vec(),
                     },
-                    expected: 1,
-                    actual: 0,
+                    expected: 2,
                 },
             )];
         }
@@ -264,7 +263,6 @@ impl TypeConstraint for FunctionCTorTypeConstraint {
                                 args: arguments.to_vec(),
                             },
                             expected: self.function.inputs.len() + func_type.input.len() + 1,
-                            actual: arguments.len() - 1,
                         },
                     )];
                 }

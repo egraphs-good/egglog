@@ -21,8 +21,8 @@ use std::{fmt::Debug, iter::once, mem::swap};
 pub enum ImpossibleConstraint {
     ArityMismatch {
         atom: Atom<Symbol>,
+        // The expected arity for this atom
         expected: usize,
-        actual: usize,
     },
     FunctionMismatch {
         expected_output: ArcSort,
@@ -65,14 +65,10 @@ impl ConstraintError<AtomTerm, ArcSort> {
             ConstraintError::ImpossibleCaseIdentified(ImpossibleConstraint::ArityMismatch {
                 atom,
                 expected,
-                actual,
-            }) => {
-                assert_eq!(*actual, atom.args.len() - 1);
-                TypeError::Arity {
-                    expr: atom.to_expr(),
-                    expected: *expected,
-                }
-            }
+            }) => TypeError::Arity {
+                expr: atom.to_expr(),
+                expected: *expected - 1,
+            },
             ConstraintError::ImpossibleCaseIdentified(ImpossibleConstraint::FunctionMismatch {
                 expected_output,
                 expected_input,
@@ -635,8 +631,7 @@ fn get_atom_application_constraints(
                         head: *head,
                         args: args.to_vec(),
                     },
-                    expected: typ.input.len(),
-                    actual: args.len() - 1,
+                    expected: typ.input.len() + 1,
                 },
             ));
         } else {
@@ -735,7 +730,6 @@ impl TypeConstraint for SimpleTypeConstraint {
                         args: arguments.to_vec(),
                     },
                     expected: self.sorts.len(),
-                    actual: arguments.len(),
                 },
             )]
         } else {
@@ -815,7 +809,6 @@ impl TypeConstraint for AllEqualTypeConstraint {
                             args: arguments.to_vec(),
                         },
                         expected: exact_length,
-                        actual: arguments.len(),
                     },
                 )]
             }
