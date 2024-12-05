@@ -399,10 +399,10 @@ fn test_value_to_classid() {
         panic!();
     };
     let expr = termdag.term_to_expr(&term);
-    let value = egraph.eval_expr(&expr).unwrap().1;
+    let (sort, value) = egraph.eval_expr(&expr).unwrap();
 
     let serialized = egraph.serialize(SerializeConfig::default());
-    let class_id = egraph.value_to_class_id(&value);
+    let class_id = egraph.value_to_class_id(&sort, &value);
     assert!(serialized.class_data.get(&class_id).is_some());
     assert_eq!(value, egraph.class_id_to_value(&class_id));
 }
@@ -426,14 +426,20 @@ fn test_serialize_subsume_status() {
         .unwrap();
 
     let serialized = egraph.serialize(SerializeConfig::default());
-    let a_id = egraph.to_node_id(egglog::SerializedNode::Function {
-        name: ("a").into(),
-        offset: 0,
-    });
-    let b_id = egraph.to_node_id(egglog::SerializedNode::Function {
-        name: "b".into(),
-        offset: 0,
-    });
+    let a_id = egraph.to_node_id(
+        None,
+        egglog::SerializedNode::Function {
+            name: ("a").into(),
+            offset: 0,
+        },
+    );
+    let b_id = egraph.to_node_id(
+        None,
+        egglog::SerializedNode::Function {
+            name: "b".into(),
+            offset: 0,
+        },
+    );
     assert!(serialized.nodes[&a_id].subsumed);
     assert!(!serialized.nodes[&b_id].subsumed);
 }

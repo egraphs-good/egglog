@@ -26,25 +26,23 @@ mod unionfind;
 pub mod util;
 mod value;
 
+use crate::constraint::Problem;
+use crate::core::{AtomTerm, ResolvedCall};
+use crate::typechecking::TypeError;
+use actions::Program;
 use ast::remove_globals::remove_globals;
+use ast::*;
+use constraint::{Constraint, SimpleTypeConstraint, TypeConstraint};
 use extract::Extractor;
+pub use function::Function;
+use function::*;
+use generic_symbolic_expressions::Sexp;
+use gj::*;
 use index::ColumnIndex;
 use indexmap::map::Entry;
 use instant::{Duration, Instant};
-pub use serialize::SerializeConfig;
-pub use serialize::SerializedNode;
+pub use serialize::{SerializeConfig, SerializedNode};
 use sort::*;
-pub use termdag::{Term, TermDag, TermId};
-use thiserror::Error;
-
-use generic_symbolic_expressions::Sexp;
-
-use ast::*;
-pub use typechecking::TypeInfo;
-
-use crate::core::{AtomTerm, ResolvedCall};
-use actions::Program;
-use constraint::{Constraint, SimpleTypeConstraint, TypeConstraint};
 use std::fmt::{Display, Formatter};
 use std::fs::File;
 use std::hash::Hash;
@@ -55,19 +53,14 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::str::FromStr;
 use std::{fmt::Debug, sync::Arc};
-
-pub type ArcSort = Arc<dyn Sort>;
-
-pub use value::*;
-
-pub use function::Function;
-use function::*;
-use gj::*;
+pub use termdag::{Term, TermDag, TermId};
+use thiserror::Error;
+pub use typechecking::TypeInfo;
 use unionfind::*;
 use util::*;
+pub use value::*;
 
-use crate::constraint::Problem;
-use crate::typechecking::TypeError;
+pub type ArcSort = Arc<dyn Sort>;
 
 pub type Subst = IndexMap<Symbol, Value>;
 
@@ -76,7 +69,12 @@ pub trait PrimitiveLike {
     /// Constructs a type constraint for the primitive that uses the span information
     /// for error localization.
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint>;
-    fn apply(&self, values: &[Value], egraph: Option<&mut EGraph>) -> Option<Value>;
+    fn apply(
+        &self,
+        values: &[Value],
+        _sorts: (&[ArcSort], &ArcSort),
+        egraph: Option<&mut EGraph>,
+    ) -> Option<Value>;
 }
 
 /// Running a schedule produces a report of the results.
@@ -371,7 +369,12 @@ impl PrimitiveLike for SimplePrimitive {
             .collect();
         SimpleTypeConstraint::new(self.name(), sorts, span.clone()).into_box()
     }
-    fn apply(&self, values: &[Value], _egraph: Option<&mut EGraph>) -> Option<Value> {
+    fn apply(
+        &self,
+        values: &[Value],
+        _sorts: (&[ArcSort], &ArcSort),
+        _egraph: Option<&mut EGraph>,
+    ) -> Option<Value> {
         (self.f)(values)
     }
 }
@@ -529,17 +532,18 @@ impl EGraph {
         for (name, function) in self.functions.iter() {
             function.nodes.assert_sorted();
             for (i, inputs, output) in function.nodes.iter_range(0..function.nodes.len(), true) {
-                for input in inputs {
+                assert_eq!(inputs.len(), function.schema.input.len());
+                for (input, sort) in inputs.iter().zip(&function.schema.input) {
                     assert_eq!(
                         input,
-                        &self.find(*input),
+                        &self.find(sort, *input),
                         "[{i}] {name}({inputs:?}) = {output:?}\n{:?}",
                         function.schema,
                     )
                 }
                 assert_eq!(
                     output.value,
-                    self.find(output.value),
+                    self.find(&function.schema.output, output.value),
                     "[{i}] {name}({inputs:?}) = {output:?}\n{:?}",
                     function.schema,
                 )
@@ -580,16 +584,16 @@ impl EGraph {
     }
 
     /// find the leader value for a particular eclass
-    pub fn find(&self, value: Value) -> Value {
-        if let Some(sort) = self.get_sort_from_value(&value) {
-            if sort.is_eq_sort() {
-                return Value {
-                    tag: value.tag,
-                    bits: usize::from(self.unionfind.find(Id::from(value.bits as usize))) as u64,
-                };
+    pub fn find(&self, sort: &ArcSort, value: Value) -> Value {
+        if sort.is_eq_sort() {
+            Value {
+                #[cfg(debug_assertions)]
+                tag: value.tag,
+                bits: self.unionfind.find(value.bits),
             }
+        } else {
+            value
         }
-        value
     }
 
     pub fn rebuild_nofail(&mut self) -> usize {
@@ -840,17 +844,16 @@ impl EGraph {
     /// Extract a value to a [`TermDag`] and [`Term`] in the [`TermDag`].
     /// Note that the `TermDag` may contain a superset of the nodes in the `Term`.
     /// See also `extract_value_to_string` for convenience.
-    pub fn extract_value(&self, value: Value) -> (TermDag, Term) {
+    pub fn extract_value(&self, sort: &ArcSort, value: Value) -> (TermDag, Term) {
         let mut termdag = TermDag::default();
-        let sort = self.type_info.sorts.get(&value.tag).unwrap();
         let term = self.extract(value, &mut termdag, sort).1;
         (termdag, term)
     }
 
     /// Extract a value to a string for printing.
     /// See also `extract_value` for more control.
-    pub fn extract_value_to_string(&self, value: Value) -> String {
-        let (termdag, term) = self.extract_value(value);
+    pub fn extract_value_to_string(&self, sort: &ArcSort, value: Value) -> String {
+        let (termdag, term) = self.extract_value(sort, value);
         termdag.to_string(&term)
     }
 
@@ -1463,8 +1466,9 @@ impl EGraph {
         self.functions.values().map(|f| f.nodes.len()).sum()
     }
 
-    pub(crate) fn get_sort_from_value(&self, value: &Value) -> Option<&ArcSort> {
-        self.type_info.sorts.get(&value.tag)
+    /// Returns a sort based on the type
+    pub fn get_sort<S: Sort + Send + Sync>(&self) -> Option<Arc<S>> {
+        self.type_info.get_sort_by(|_| true)
     }
 
     /// Returns the first sort that satisfies the type and predicate if there's one.
@@ -1518,28 +1522,28 @@ impl EGraph {
 #[derive(Debug, Error)]
 pub enum Error {
     #[error(transparent)]
-    ParseError(#[from] lalrpop_util::ParseError<usize, String, String>),
+    ParseError(#[from] ParseError),
     #[error(transparent)]
     NotFoundError(#[from] NotFoundError),
     #[error(transparent)]
     TypeError(#[from] TypeError),
     #[error("Errors:\n{}", ListDisplay(.0, "\n"))]
     TypeErrors(Vec<TypeError>),
-    #[error("{}\nCheck failed: \n{}", .1.get_quote(), ListDisplay(.0, "\n"))]
+    #[error("{1}\nCheck failed: \n{}", ListDisplay(.0, "\n"))]
     CheckError(Vec<Fact>, Span),
-    #[error("{}\nNo such ruleset: {0}", .1.get_quote())]
+    #[error("{1}\nNo such ruleset: {0}")]
     NoSuchRuleset(Symbol, Span),
-    #[error("{}\nAttempted to add a rule to combined ruleset {0}. Combined rulesets may only depend on other rulesets.", .1.get_quote())]
+    #[error("{1}\nAttempted to add a rule to combined ruleset {0}. Combined rulesets may only depend on other rulesets.")]
     CombinedRulesetError(Symbol, Span),
     #[error("Evaluating primitive {0:?} failed. ({0:?} {:?})", ListDebug(.1, " "))]
     PrimitiveError(Primitive, Vec<Value>),
     #[error("Illegal merge attempted for function {0}, {1:?} != {2:?}")]
     MergeError(Symbol, Value, Value),
-    #[error("{}\nTried to pop too much", .0.get_quote())]
+    #[error("{0}\nTried to pop too much")]
     Pop(Span),
-    #[error("{}\nCommand should have failed.", .0.get_quote())]
+    #[error("{0}\nCommand should have failed.")]
     ExpectFail(Span),
-    #[error("{}\nIO error: {0}: {1}", .2.get_quote())]
+    #[error("{2}\nIO error: {0}: {1}")]
     IoError(PathBuf, std::io::Error, Span),
     #[error("Cannot subsume function with merge: {0}")]
     SubsumeMergeError(Symbol),
@@ -1549,11 +1553,9 @@ pub enum Error {
 mod tests {
     use std::sync::Arc;
 
-    use crate::{
-        constraint::SimpleTypeConstraint,
-        sort::{FromSort, I64Sort, IntoSort, Sort, VecSort},
-        EGraph, PrimitiveLike, Span, Value,
-    };
+    use crate::constraint::SimpleTypeConstraint;
+    use crate::sort::*;
+    use crate::*;
 
     struct InnerProduct {
         ele: Arc<I64Sort>,
@@ -1576,9 +1578,10 @@ mod tests {
 
         fn apply(
             &self,
-            values: &[crate::Value],
+            values: &[Value],
+            _sorts: (&[ArcSort], &ArcSort),
             _egraph: Option<&mut EGraph>,
-        ) -> Option<crate::Value> {
+        ) -> Option<Value> {
             let mut sum = 0;
             let vec1 = Vec::<Value>::load(&self.vec, &values[0]);
             let vec2 = Vec::<Value>::load(&self.vec, &values[1]);

@@ -1,8 +1,8 @@
-use num_integer::Roots;
-use num_traits::{CheckedAdd, CheckedDiv, CheckedMul, CheckedSub, One, Signed, ToPrimitive, Zero};
+use num::integer::Roots;
+use num::traits::{CheckedAdd, CheckedDiv, CheckedMul, CheckedSub, One, Signed, ToPrimitive, Zero};
 use std::sync::Mutex;
 
-type R = num_rational::Rational64;
+type R = num::rational::Rational64;
 use crate::{ast::Literal, util::IndexSet};
 
 use super::*;
@@ -59,7 +59,7 @@ impl Sort for RationalSort {
                 Some(R::one())
             } else if let Some(b) = b.to_i64() {
                 if let Ok(b) = usize::try_from(b) {
-                    num_traits::checked_pow(a, b)
+                    num::traits::checked_pow(a, b)
                 } else {
                     // TODO handle negative powers
                     None
@@ -104,7 +104,9 @@ impl Sort for RationalSort {
    }
 
     fn make_expr(&self, _egraph: &EGraph, value: Value) -> (Cost, Expr) {
-        assert!(value.tag == self.name());
+        #[cfg(debug_assertions)]
+        debug_assert_eq!(value.tag, self.name());
+
         let rat = R::load(self, &value);
         let numer = *rat.numer();
         let denom = *rat.denom();
@@ -131,10 +133,11 @@ impl FromSort for R {
 
 impl IntoSort for R {
     type Sort = RationalSort;
-    fn store(self, sort: &Self::Sort) -> Option<Value> {
+    fn store(self, _sort: &Self::Sort) -> Option<Value> {
         let (i, _) = RATS.lock().unwrap().insert_full(self);
         Some(Value {
-            tag: sort.name(),
+            #[cfg(debug_assertions)]
+            tag: RationalSort.name(),
             bits: i as u64,
         })
     }

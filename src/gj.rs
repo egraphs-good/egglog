@@ -1,13 +1,9 @@
-use hashbrown::hash_map::Entry as HEntry;
 use indexmap::map::Entry;
 use log::log_enabled;
 use smallvec::SmallVec;
+use util::HashMap;
 
-use crate::{
-    core::{Atom, AtomTerm, ResolvedAtomTerm, ResolvedCall},
-    function::index::Offset,
-    *,
-};
+use crate::{core::*, function::index::Offset, *};
 use std::{
     cell::UnsafeCell,
     fmt::{self, Debug},
@@ -30,7 +26,7 @@ enum Instr<'a> {
         trie_access: TrieAccess<'a>,
     },
     Call {
-        prim: Primitive,
+        prim: SpecializedPrimitive,
         args: Vec<AtomTerm>,
         check: bool, // check or assign to output variable
     },
@@ -255,7 +251,10 @@ impl<'b> Context<'b> {
                     })
                 }
 
-                if let Some(res) = prim.apply(&values, None) {
+                if let Some(res) = prim
+                    .primitive
+                    .apply(&values, (&prim.input, &prim.output), None)
+                {
                     match out {
                         AtomTerm::Var(_ann, v) => {
                             let i = self.query.vars.get_index_of(v).unwrap();
@@ -793,17 +792,16 @@ impl Debug for LazyTrie {
     }
 }
 
-type SparseMap = HashMap<Value, LazyTrie>;
 type RowIdx = u32;
 
 #[derive(Debug)]
 enum LazyTrieInner {
     Borrowed {
         index: Rc<ColumnIndex>,
-        map: SparseMap,
+        map: HashMap<Value, LazyTrie>,
     },
     Delayed(SmallVec<[RowIdx; 4]>),
-    Sparse(SparseMap),
+    Sparse(HashMap<Value, LazyTrie>),
 }
 
 impl Default for LazyTrie {
@@ -851,7 +849,7 @@ impl LazyTrie {
         let this = unsafe { &mut *self.0.get() };
         match this {
             LazyTrieInner::Borrowed { index, .. } => {
-                let mut map = SparseMap::with_capacity_and_hasher(index.len(), Default::default());
+                let mut map = HashMap::with_capacity_and_hasher(index.len(), Default::default());
                 map.extend(index.iter().filter_map(|(v, ixs)| {
                     LazyTrie::from_indexes(access.filter_live(ixs)).map(|trie| (v, trie))
                 }));
@@ -936,21 +934,20 @@ impl<'a> TrieAccess<'a> {
     #[cold]
     fn make_trie_inner(&self, idxs: &[RowIdx]) -> LazyTrieInner {
         let arity = self.function.schema.input.len();
-        let mut map = SparseMap::default();
+        let mut map: HashMap<Value, LazyTrie> = HashMap::default();
         let mut insert = |i: usize, tup: &[Value], out: &TupleOutput, val: Value| {
-            use hashbrown::hash_map::Entry;
             if self.timestamp_range.contains(&out.timestamp)
                 && self.constraints.iter().all(|c| c.check(tup, out))
             {
                 match map.entry(val) {
-                    Entry::Occupied(mut e) => {
+                    HEntry::Occupied(mut e) => {
                         if let LazyTrieInner::Delayed(ref mut v) = e.get_mut().0.get_mut() {
                             v.push(i as RowIdx)
                         } else {
                             unreachable!()
                         }
                     }
-                    Entry::Vacant(e) => {
+                    HEntry::Vacant(e) => {
                         e.insert(LazyTrie(UnsafeCell::new(LazyTrieInner::Delayed(
                             smallvec::smallvec![i as RowIdx,],
                         ))));
@@ -962,7 +959,7 @@ impl<'a> TrieAccess<'a> {
         if idxs.is_empty() {
             let rows = self
                 .function
-                .iter_timestamp_range(&self.timestamp_range, true);
+                .iter_timestamp_range(&self.timestamp_range, self.include_subsumed);
             if self.column < arity {
                 for (i, tup, out) in rows {
                     insert(i, tup, out, tup[self.column])

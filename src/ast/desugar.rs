@@ -100,7 +100,7 @@ pub(crate) fn desugar_command(
         }
         Command::Include(span, file) => {
             let s = std::fs::read_to_string(&file)
-                .unwrap_or_else(|_| panic!("{} Failed to read file {file}", span.get_quote()));
+                .unwrap_or_else(|_| panic!("{span} Failed to read file {file}"));
             return desugar_program(
                 parse_program(Some(file), &s)?,
                 symbol_gen,
