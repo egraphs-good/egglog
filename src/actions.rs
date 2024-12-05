@@ -419,7 +419,7 @@ impl EGraph {
                             if function.decl.merge.is_some() {
                                 return Err(Error::SubsumeMergeError(*f));
                             }
-                            function.subsume(args);
+                            function.subsume(args, self.timestamp);
                         }
                     }
                     stack.truncate(new_len);
