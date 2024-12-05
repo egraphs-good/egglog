@@ -136,6 +136,44 @@ pub(crate) fn desugar_command(
         }
         Command::Sort(span, sort, option) => vec![NCommand::Sort(span, sort, option)],
         Command::AddRuleset(name) => vec![NCommand::AddRuleset(name)],
+        Command::WithRuleset(_span, ruleset, rules) => {
+            let mut res = vec![];
+            for rule in rules {
+                match rule {
+                    Command::Rule {
+                        ruleset: rule_ruleset,
+                        name,
+                        rule,
+                    } => {
+                        assert_eq!(rule_ruleset, "".into());
+                        res.push(NCommand::NormRule {
+                            ruleset,
+                            name,
+                            rule: rule.clone(),
+                        });
+                    }
+                    Command::Rewrite(rule_ruleset, rewrite, subsume) => {
+                        assert_eq!(rule_ruleset, "".into());
+                        res.extend(desugar_rewrite(
+                            ruleset,
+                            rewrite_name(&rewrite).into(),
+                            &rewrite,
+                            subsume,
+                        ));
+                    }
+                    Command::BiRewrite(rule_ruleset, rewrite) => {
+                        assert_eq!(rule_ruleset, "".into());
+                        res.extend(desugar_birewrite(
+                            ruleset,
+                            rewrite_name(&rewrite).into(),
+                            &rewrite,
+                        ));
+                    }
+                    _ => unreachable!("Non-rules in `with-ruleset`"),
+                }
+            }
+            res
+        }
         Command::UnstableCombinedRuleset(name, subrulesets) => {
             vec![NCommand::UnstableCombinedRuleset(name, subrulesets)]
         }

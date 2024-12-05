@@ -406,6 +406,14 @@ fn command(ctx: &Context) -> Res<Command> {
             )),
             |((), name, subrulesets), _| Command::UnstableCombinedRuleset(name, subrulesets),
         )(ctx),
+        "with-ruleset" => map(
+            parens(sequences!(
+                text("with-ruleset"),
+                ident,
+                repeat_until_end_paren(with_ruleset_rules),
+            )),
+            |((), (ruleset, rules)), span| Command::WithRuleset(span, ruleset, rules),
+        )(ctx),
         "rule" => map(
             parens(sequences!(
                 text("rule"),
@@ -583,6 +591,66 @@ fn command(ctx: &Context) -> Res<Command> {
             |((), file), span| Command::Include(span, file),
         )(ctx),
         _ => map(non_let_action, |action, _| Command::Action(action))(ctx),
+    }
+}
+
+// Same as rule/rewrite/birewrite, but the user cannot specify a ruleset
+fn with_ruleset_rules(ctx: &Context) -> Res<Command> {
+    match ident_after_paren(ctx) {
+        "rule" => map(
+            parens(sequences!(
+                text("rule"),
+                list(fact),
+                map(list(action), |x, _| Actions::new(x)),
+                map(option(sequence(text(":name"), string)), snd),
+            )),
+            |((), (body, (head, name))), span| Command::Rule {
+                ruleset: "".into(),
+                name: name.unwrap_or("".to_string()).into(),
+                rule: Rule { span, head, body },
+            },
+        )(ctx),
+        "rewrite" => map(
+            parens(sequences!(
+                text("rewrite"),
+                expr,
+                expr,
+                map(option(text(":subsume")), |x, _| x.is_some()),
+                map(option(sequence(text(":when"), list(fact))), snd),
+            )),
+            |((), (lhs, (rhs, (subsume, conditions)))), span| {
+                Command::Rewrite(
+                    "".into(),
+                    Rewrite {
+                        span,
+                        lhs,
+                        rhs,
+                        conditions: conditions.unwrap_or_default(),
+                    },
+                    subsume,
+                )
+            },
+        )(ctx),
+        "birewrite" => map(
+            parens(sequences!(
+                text("birewrite"),
+                expr,
+                expr,
+                map(option(sequence(text(":when"), list(fact))), snd),
+            )),
+            |((), (lhs, (rhs, conditions))), span| {
+                Command::BiRewrite(
+                    "".into(),
+                    Rewrite {
+                        span,
+                        lhs,
+                        rhs,
+                        conditions: conditions.unwrap_or_default(),
+                    },
+                )
+            },
+        )(ctx),
+        _ => Result::Err(ParseError::WithRulesetRules(ctx.span())),
     }
 }
 
@@ -882,6 +950,8 @@ pub enum ParseError {
     Bool(Span),
     #[error("{0}\nusing = with less than two arguments is not allowed")]
     EqFactLt2(Span),
+    #[error("{0}\nexpected rules")]
+    WithRulesetRules(Span),
 }
 
 #[cfg(test)]

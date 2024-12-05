@@ -494,6 +494,28 @@ where
         ruleset: Symbol,
         rule: GenericRule<Head, Leaf>,
     },
+    /// Allows users to introduce a series of rules that all share the same ruleset.
+    ///
+    /// Example:
+    /// ```text
+    /// (datatype Math (Add Math Math) (True) (False))
+    /// (ruleset A)
+    /// (with-ruleset A
+    ///   (rewrite (Add a b) (Add b a))
+    ///   (rule () ((True)))
+    ///   (birewrite (Add (Add a b) c) (Add a (Add b c)))
+    /// )
+    /// ```
+    /// is desugared to
+    /// ```text
+    /// (datatype Math (Add Math Math) (True) (False))
+    /// (ruleset A)
+    /// (rewrite (Add a b) (Add b a) :ruleset A)
+    /// (rule () ((True)) :ruleset A)
+    /// (birewrite (Add (Add a b) c) (Add a (Add b c)) :ruleset A)
+    /// ```
+    /// (which gets further desugared to rules)
+    WithRuleset(Span, Symbol, Vec<GenericCommand<Head, Leaf>>),
     /// `rewrite` is syntactic sugar for a specific form of `rule`
     /// which simply unions the left and right hand sides.
     ///
@@ -750,6 +772,11 @@ where
                     })
                     .collect();
                 list!("datatype*", ++ datatypes)
+            }
+            GenericCommand::WithRuleset(_span, ruleset, rules) => {
+                // This relies on the fact that `to_sexp` of rules/rewrites/birewrites
+                // does not print :ruleset for empty rulesets.
+                list!("with-ruleset", ruleset, ++ rules)
             }
         }
     }

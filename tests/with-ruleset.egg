@@ -1,0 +1,17 @@
+(ruleset optimization)
+(datatype Math (Add Math Math) (Num i64))
+(with-ruleset optimization
+  (rewrite (Add a b) (Add b a))
+  (rule () ((Num 1)))
+  (birewrite (Add (Add a b) c) (Add a (Add b c))))
+
+
+(Add (Num 2) (Num 3))
+
+(run 1)
+(fail (check (Num 1)))
+(fail (check (Add (Num 3) (Num 2))))
+
+(run-schedule optimization)
+(check (Num 1))
+(check (Add (Num 3) (Num 2)))
