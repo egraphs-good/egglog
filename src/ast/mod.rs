@@ -494,6 +494,7 @@ where
         ruleset: Symbol,
         rule: GenericRule<Head, Leaf>,
     },
+    For(GenericRule<Head, Leaf>),
     /// `rewrite` is syntactic sugar for a specific form of `rule`
     /// which simply unions the left and right hand sides.
     ///
@@ -704,6 +705,7 @@ where
                 ruleset,
                 rule,
             } => rule.to_sexp(*ruleset, *name),
+            GenericCommand::For(rule) => rule.for_to_sexp(),
             GenericCommand::RunSchedule(sched) => list!("run-schedule", sched),
             GenericCommand::PrintOverallStatistics => list!("print-stats"),
             GenericCommand::QueryExtract {
@@ -1223,6 +1225,9 @@ where
         GenericExpr<Head, Leaf>,
     ),
     /// Delete or subsume (mark as hidden from future rewrites and unextractable) an entry from a function.
+    /// 
+    /// Both `subsume` and `delete` will succeed even when the deleted/subsumed tuple does not exist.
+    /// In this case, `delete` is a no-op, while `subsume` will create a dummy tuple and then subsume it.
     Change(Span, Change, Head, Vec<GenericExpr<Head, Leaf>>),
     /// `union` two datatypes, making them equal
     /// in the implicit, global equality relation
@@ -1562,6 +1567,15 @@ where
             res.push(Sexp::Symbol(":name".into()));
             res.push(Sexp::Symbol(format!("\"{}\"", name)));
         }
+        Sexp::List(res)
+    }
+
+    pub fn for_to_sexp(&self) -> Sexp {
+        let res = vec![
+            Sexp::Symbol("for".into()),
+            Sexp::List(self.body.iter().map(|f| f.to_sexp()).collect()),
+            Sexp::List(self.head.0.iter().map(|a| a.to_sexp()).collect()),
+        ];
         Sexp::List(res)
     }
 }

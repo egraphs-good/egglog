@@ -420,6 +420,14 @@ fn command(ctx: &Context) -> Res<Command> {
                 rule: Rule { span, head, body },
             },
         )(ctx),
+        "for" => map(
+            parens(sequences!(
+                text("for"),
+                list(fact),
+                map(list(action), |x, _| Actions::new(x)),
+            )),
+            |((), (body, head)), span| Command::For(Rule { span, head, body }),
+        )(ctx),
         "rewrite" => map(
             parens(sequences!(
                 text("rewrite"),

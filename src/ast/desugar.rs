@@ -134,6 +134,25 @@ pub(crate) fn desugar_command(
 
             result
         }
+        Command::For(rule) => {
+            let ruleset = symbol_gen.fresh(&"implicit_ruleset".into());
+            let span = rule.span.clone();
+            vec![
+                NCommand::AddRuleset(ruleset),
+                NCommand::NormRule {
+                    ruleset,
+                    name: rule.to_string().replace('\"', "'").into(),
+                    rule,
+                },
+                NCommand::RunSchedule(Schedule::Run(
+                    span,
+                    RunConfig {
+                        ruleset,
+                        until: None,
+                    },
+                )),
+            ]
+        }
         Command::Sort(span, sort, option) => vec![NCommand::Sort(span, sort, option)],
         Command::AddRuleset(name) => vec![NCommand::AddRuleset(name)],
         Command::UnstableCombinedRuleset(name, subrulesets) => {
