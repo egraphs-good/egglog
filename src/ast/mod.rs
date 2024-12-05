@@ -1225,9 +1225,6 @@ where
         GenericExpr<Head, Leaf>,
     ),
     /// Delete or subsume (mark as hidden from future rewrites and unextractable) an entry from a function.
-    /// 
-    /// Both `subsume` and `delete` will succeed even when the deleted/subsumed tuple does not exist.
-    /// In this case, `delete` is a no-op, while `subsume` will create a dummy tuple and then subsume it.
     Change(Span, Change, Head, Vec<GenericExpr<Head, Leaf>>),
     /// `union` two datatypes, making them equal
     /// in the implicit, global equality relation
