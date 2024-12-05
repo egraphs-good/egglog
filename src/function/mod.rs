@@ -239,9 +239,10 @@ impl Function {
     /// This will succeed no matter the tuple is already present or not.
     /// In case the tuple is absent, it will use a dummy value for the output instead.
     pub fn subsume(&mut self, inputs: &[Value], timestamp: u32) {
-        self.nodes.insert_and_merge(inputs, timestamp, true, |prev| {
-            prev.unwrap_or(Value::fake())
-        });
+        self.nodes
+            .insert_and_merge(inputs, timestamp, true, |prev| {
+                prev.unwrap_or(Value::fake())
+            });
     }
 
     /// Return a column index that contains (a superset of) the offsets for the
