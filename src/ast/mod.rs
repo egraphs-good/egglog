@@ -545,6 +545,7 @@ where
         ruleset: Symbol,
         rule: GenericRule<Head, Leaf>,
     },
+    For(GenericRule<Head, Leaf>),
     /// `rewrite` is syntactic sugar for a specific form of `rule`
     /// which simply unions the left and right hand sides.
     ///
@@ -830,6 +831,7 @@ where
                 ruleset,
                 rule,
             } => rule.to_sexp(*ruleset, *name),
+            GenericCommand::For(rule) => rule.for_to_sexp(),
             GenericCommand::RunSchedule(sched) => list!("run-schedule", sched),
             GenericCommand::PrintOverallStatistics => list!("print-stats"),
             GenericCommand::QueryExtract {
@@ -1743,6 +1745,15 @@ where
             res.push(Sexp::Symbol(":name".into()));
             res.push(Sexp::Symbol(format!("\"{}\"", name)));
         }
+        Sexp::List(res)
+    }
+
+    pub fn for_to_sexp(&self) -> Sexp {
+        let res = vec![
+            Sexp::Symbol("for".into()),
+            Sexp::List(self.body.iter().map(|f| f.to_sexp()).collect()),
+            Sexp::List(self.head.0.iter().map(|a| a.to_sexp()).collect()),
+        ];
         Sexp::List(res)
     }
 }
