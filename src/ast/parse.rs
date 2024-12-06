@@ -71,7 +71,7 @@ impl Debug for Span {
 impl Display for Span {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let start = self.0.get_location(self.1);
-        let end = self.0.get_location((self.2 - 1).max(self.1));
+        let end = self.0.get_location((self.2.saturating_sub(1)).max(self.1));
         let quote = self.string();
         match (&self.0.name, start.line == end.line) {
             (Some(filename), true) => write!(
@@ -903,5 +903,10 @@ mod tests {
         let s = r#"(f (g a 3) 4.0 (H "hello"))"#;
         let e = crate::ast::parse_expr(None, s).unwrap();
         assert_eq!(format!("{}", e), s);
+    }
+
+    #[test]
+    fn dummy_span_display() {
+        assert_eq!(format!("{}", *super::DUMMY_SPAN), "In 1:1-1: ");
     }
 }
