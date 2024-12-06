@@ -1,0 +1,4 @@
+(ruleset optimization)
+(with-ruleset optimization
+  (extract 1)
+)
