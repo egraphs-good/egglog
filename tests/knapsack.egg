@@ -8,12 +8,12 @@
 ; List of (weight, value) pairs
 (datatype objects
     (Cons i64 i64 objects))
-(function NilConst () objects)
+(constructor NilConst () objects)
 (let Nil (NilConst))
 
 ; Given a capacity and a list of objects, finds the maximum value of a
 ; collection of objects whose total weight does not exceed the capacity.
-(function Knap (i64 objects) expr)
+(constructor Knap (i64 objects) expr)
 
 (rule ((= f (Knap capacity (Cons weight val rest))) (<= weight capacity))
       ((union (Knap capacity (Cons weight val rest))

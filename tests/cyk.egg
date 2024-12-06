@@ -11,7 +11,7 @@
 
 
 (relation P (i64 i64 nonterm))
-(function B (i64 i64 nonterm) tree :cost 1000)
+(constructor B (i64 i64 nonterm) tree :cost 1000)
 
 (rule ((End (NonTerm a) s)
        (= s (getString pos)))
@@ -56,9 +56,9 @@
 (End (NonTerm "DET") "a")
 
 
-(let test1 (B 7 1 (NonTerm "S")))
-
 (run 100)
+
+(let test1 (B 7 1 (NonTerm "S")))
 
 (check (P 7 1 (NonTerm "S")))
 (fail (check (P 7 1 (NonTerm "VP"))))

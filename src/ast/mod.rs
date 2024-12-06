@@ -7,6 +7,7 @@ use crate::{
     core::{GenericAtom, GenericAtomTerm, HeadOrEq, Query, ResolvedCall},
     *,
 };
+use ::core::fmt;
 pub use expr::*;
 pub use parse::*;
 use std::fmt::Display;
@@ -99,7 +100,30 @@ where
             GenericNCommand::Sort(span, name, params) => {
                 GenericCommand::Sort(span.clone(), *name, params.clone())
             }
-            GenericNCommand::Function(f) => GenericCommand::Function(f.clone()),
+            // This is awkward for the three subtypes change
+            GenericNCommand::Function(f) => match f.subtype {
+                FunctionSubtype::Constructor => GenericCommand::Constructor {
+                    span: f.span.clone(),
+                    name: f.name,
+                    schema: f.schema.clone(),
+                    cost: f.cost,
+                    unextractable: f.unextractable,
+                },
+                FunctionSubtype::Relation => GenericCommand::Relation {
+                    span: f.span.clone(),
+                    constructor: f.name,
+                    inputs: f.schema.input.clone(),
+                },
+                FunctionSubtype::Custom => GenericCommand::Function {
+                    span: f.span.clone(),
+                    schema: f.schema.clone(),
+                    name: f.name,
+                    merge: f.merge.clone(),
+                    merge_action: f.merge_action.clone(),
+                    cost: f.cost,
+                    unextractable: f.unextractable,
+                },
+            },
             GenericNCommand::AddRuleset(name) => GenericCommand::AddRuleset(*name),
             GenericNCommand::UnstableCombinedRuleset(name, others) => {
                 GenericCommand::UnstableCombinedRuleset(*name, others.clone())
@@ -321,41 +345,7 @@ where
         name: Symbol,
         value: GenericExpr<Head, Leaf>,
     },
-    /// Declare a user-defined datatype.
-    /// Datatypes can be unioned with [`Action::Union`] either
-    /// at the top level or in the actions of a rule.
-    /// This makes them equal in the implicit, global equality relation.
 
-    /// Example:
-    /// ```text
-    /// (datatype Math
-    ///   (Num i64)
-    ///   (Var String)
-    ///   (Add Math Math)
-    ///   (Mul Math Math))
-    /// ```
-
-    /// defines a simple `Math` datatype with variants for numbers, named variables, addition and multiplication.
-    ///
-    /// Datatypes desugar directly to a [`Command::Sort`] and a [`Command::Function`] for each constructor.
-    /// The code above becomes:
-    /// ```text
-    /// (sort Math)
-    /// (function Num (i64) Math)
-    /// (function Var (String) Math)
-    /// (function Add (Math Math) Math)
-    /// (function Mul (Math Math) Math)
-
-    /// Datatypes are also known as algebraic data types, tagged unions and sum types.
-    Datatype {
-        span: Span,
-        name: Symbol,
-        variants: Vec<Variant>,
-    },
-    Datatypes {
-        span: Span,
-        datatypes: Vec<(Span, Symbol, Subdatatypes)>,
-    },
     /// Create a new user-defined sort, which can then
     /// be used in new [`Command::Function`] declarations.
     /// The [`Command::Datatype`] command desugars directly to this command, with one [`Command::Function`]
@@ -372,17 +362,90 @@ where
     ///
     /// Now `MathVec` can be used as an input or output sort.
     Sort(Span, Symbol, Option<(Symbol, Vec<Expr>)>),
-    /// Declare an egglog function, which is a database table with a
+
+    /// Egglog supports three types of functions
+    ///
+    /// A constructor models an egg-style user-defined datatype
+    /// It can only be defined through the `datatype`/`datatype*` command
+    /// or the `constructor` command
+    ///
+    /// A relation models a datalog-style mathematical relation
+    /// It can only be defined through the `relation` command
+    ///
+    /// A custom function is a dictionary
+    /// It can only be defined through the `function` command
+
+    /// The `datatype` command declares a user-defined datatype.
+    /// Datatypes can be unioned with [`Action::Union`] either
+    /// at the top level or in the actions of a rule.
+    /// This makes them equal in the implicit, global equality relation.
+
+    /// Example:
+    /// ```text
+    /// (datatype Math
+    ///   (Num i64)
+    ///   (Var String)
+    ///   (Add Math Math)
+    ///   (Mul Math Math))
+    /// ```
+
+    /// defines a simple `Math` datatype with variants for numbers, named variables, addition and multiplication.
+    ///
+    /// Datatypes desugar directly to a [`Command::Sort`] and a [`Command::Constructor`] for each constructor.
+    /// The code above becomes:
+    /// ```text
+    /// (sort Math)
+    /// (constructor Num (i64) Math)
+    /// (constructor Var (String) Math)
+    /// (constructor Add (Math Math) Math)
+    /// (constructor Mul (Math Math) Math)
+
+    /// Datatypes are also known as algebraic data types, tagged unions and sum types.
+    Datatype {
+        span: Span,
+        name: Symbol,
+        variants: Vec<Variant>,
+    },
+    Datatypes {
+        span: Span,
+        datatypes: Vec<(Span, Symbol, Subdatatypes)>,
+    },
+
+    /// The `constructor` command defines a new constructor for a user-defined datatype
+    /// Example:
+    /// ```text
+    /// (constructor Add (i64 i64) Math)
+    /// ```
+    ///
+    Constructor {
+        span: Span,
+        name: Symbol,
+        schema: Schema,
+        cost: Option<usize>,
+        unextractable: bool,
+    },
+
+    /// The `relation` command declares a named relation
+    /// Example:
+    /// ```text
+    /// (relation path (i64 i64))
+    /// (relation edge (i64 i64))
+    /// ```
+    Relation {
+        span: Span,
+        constructor: Symbol,
+        inputs: Vec<Symbol>,
+    },
+
+    /// The `function` command declare an egglog custom function, which is a database table with a
     /// a functional dependency (also called a primary key) on its inputs to one output.
     ///
     /// ```text
     /// (function <name:Ident> <schema:Schema> <cost:Cost>
     ///        (:on_merge <List<Action>>)?
-    ///        (:merge <Expr>)?
-    ///        (:default <Expr>)?)
+    ///        (:merge <Expr>)?)
     ///```
     /// A function can have a `cost` for extraction.
-    /// It can also have a `default` value, which is used when calling the function.
     ///
     /// Finally, it can have a `merge` and `on_merge`, which are triggered when
     /// the function dependency is violated.
@@ -397,44 +460,32 @@ where
     /// If the merge expression is not monotonic, the behavior can vary as
     /// actions may be applied more than once with different results.
     ///
-    /// The function is a datatype when:
-    /// - The output is not a primitive
-    /// - No merge function is provided
-    /// - No default is provided
-    ///
-    /// For example, the following is a datatype:
-    /// ```text
-    /// (function Add (i64 i64) Math)
-    /// ```
-    ///
-    /// However, this function is not:
     /// ```text
     /// (function LowerBound (Math) i64 :merge (max old new))
     /// ```
     ///
-    /// A datatype can be unioned with [`Action::Union`]
+    /// Specifically, a custom function can also have an EqSort output type:
+    ///
+    /// ```text
+    /// (function Add (i64 i64) Math)
+    /// ```
+    ///
+    /// All functions can be `set`
+    /// with [`Action::Set`].
+    ///
+    /// Output of a function, if being the EqSort type, can be unioned with [`Action::Union`]
     /// with another datatype of the same `sort`.
     ///
-    /// Functions that are not a datatype can be `set`
-    /// with [`Action::Set`].
-    Function(GenericFunctionDecl<Head, Leaf>),
-    /// The `relation` is syntactic sugar for a named function which returns the `Unit` type.
-    /// Example:
-    /// ```text
-    /// (relation path (i64 i64))
-    /// (relation edge (i64 i64))
-    /// ```
-
-    /// Desugars to:
-    /// ```text
-    /// (function path (i64 i64) Unit :default ())
-    /// (function edge (i64 i64) Unit :default ())
-    /// ```
-    Relation {
+    Function {
         span: Span,
-        constructor: Symbol,
-        inputs: Vec<Symbol>,
+        name: Symbol,
+        schema: Schema,
+        merge: Option<GenericExpr<Head, Leaf>>,
+        merge_action: GenericActions<Head, Leaf>,
+        cost: Option<usize>,
+        unextractable: bool,
     },
+
     /// Using the `ruleset` command, defines a new
     /// ruleset that can be added to in [`Command::Rule`]s.
     /// Rulesets are used to group rules together
@@ -689,7 +740,82 @@ where
             GenericCommand::Sort(_span, name, Some((name2, args))) => {
                 list!("sort", name, list!( name2, ++ args))
             }
-            GenericCommand::Function(f) => f.to_sexp(),
+            GenericCommand::Function {
+                span: _,
+                name,
+                schema,
+                merge,
+                merge_action,
+                cost,
+                unextractable,
+            } => {
+                let mut res = vec![
+                    Sexp::Symbol("function".into()),
+                    Sexp::Symbol(name.to_string()),
+                ];
+
+                if let Sexp::List(contents) = schema.to_sexp() {
+                    res.extend(contents);
+                } else {
+                    unreachable!();
+                }
+
+                if let Some(cost) = cost {
+                    res.extend(vec![
+                        Sexp::Symbol(":cost".into()),
+                        Sexp::Symbol(cost.to_string()),
+                    ]);
+                }
+
+                if *unextractable {
+                    res.push(Sexp::Symbol(":unextractable".into()));
+                }
+
+                if !merge_action.is_empty() {
+                    res.push(Sexp::Symbol(":on_merge".into()));
+                    res.push(Sexp::List(
+                        merge_action.iter().map(|a| a.to_sexp()).collect(),
+                    ));
+                }
+
+                if let Some(merge) = &merge {
+                    res.push(Sexp::Symbol(":merge".into()));
+                    res.push(merge.to_sexp());
+                }
+
+                Sexp::List(res)
+            }
+            GenericCommand::Constructor {
+                span: _,
+                name,
+                schema,
+                cost,
+                unextractable,
+            } => {
+                let mut res = vec![
+                    Sexp::Symbol("constructor".into()),
+                    Sexp::Symbol(name.to_string()),
+                ];
+
+                if let Sexp::List(contents) = schema.to_sexp() {
+                    res.extend(contents);
+                } else {
+                    unreachable!();
+                }
+
+                if let Some(cost) = cost {
+                    res.extend(vec![
+                        Sexp::Symbol(":cost".into()),
+                        Sexp::Symbol(cost.to_string()),
+                    ]);
+                }
+
+                if *unextractable {
+                    res.push(Sexp::Symbol(":unextractable".into()));
+                }
+
+                Sexp::List(res)
+            }
             GenericCommand::Relation {
                 span: _,
                 constructor,
@@ -852,6 +978,23 @@ where
 pub type FunctionDecl = GenericFunctionDecl<Symbol, Symbol>;
 pub(crate) type ResolvedFunctionDecl = GenericFunctionDecl<ResolvedCall, ResolvedVar>;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum FunctionSubtype {
+    Constructor,
+    Relation,
+    Custom,
+}
+
+impl fmt::Display for FunctionSubtype {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FunctionSubtype::Constructor => write!(f, "Constructor"),
+            FunctionSubtype::Relation => write!(f, "Relation"),
+            FunctionSubtype::Custom => write!(f, "CustomFunction"),
+        }
+    }
+}
+
 /// Represents the declaration of a function
 /// directly parsed from source syntax.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -861,8 +1004,8 @@ where
     Leaf: Clone + PartialEq + Eq + Display + Hash,
 {
     pub name: Symbol,
+    pub subtype: FunctionSubtype,
     pub schema: Schema,
-    pub default: Option<GenericExpr<Head, Leaf>>,
     pub merge: Option<GenericExpr<Head, Leaf>>,
     pub merge_action: GenericActions<Head, Leaf>,
     pub cost: Option<usize>,
@@ -914,16 +1057,58 @@ impl Schema {
 }
 
 impl FunctionDecl {
+    pub fn function(
+        span: Span,
+        name: Symbol,
+        schema: Schema,
+        merge: Option<GenericExpr<Symbol, Symbol>>,
+        merge_action: GenericActions<Symbol, Symbol>,
+        cost: Option<usize>,
+        unextractable: bool,
+    ) -> Self {
+        Self {
+            name,
+            subtype: FunctionSubtype::Custom,
+            schema,
+            merge,
+            merge_action,
+            cost,
+            unextractable,
+            ignore_viz: false,
+            span,
+        }
+    }
+
+    pub fn constructor(
+        span: Span,
+        name: Symbol,
+        schema: Schema,
+        cost: Option<usize>,
+        unextractable: bool,
+    ) -> Self {
+        Self {
+            name,
+            subtype: FunctionSubtype::Constructor,
+            schema,
+            merge: None,
+            merge_action: Actions::default(),
+            cost,
+            unextractable,
+            ignore_viz: false,
+            span,
+        }
+    }
+
     pub fn relation(span: Span, name: Symbol, input: Vec<Symbol>) -> Self {
         Self {
             name,
+            subtype: FunctionSubtype::Relation,
             schema: Schema {
                 input,
                 output: Symbol::from("Unit"),
             },
             merge: None,
             merge_action: Actions::default(),
-            default: Some(Expr::Lit(DUMMY_SPAN.clone(), Literal::Unit)),
             cost: None,
             unextractable: false,
             ignore_viz: false,
@@ -943,8 +1128,8 @@ where
     ) -> GenericFunctionDecl<Head, Leaf> {
         GenericFunctionDecl {
             name: self.name,
+            subtype: self.subtype,
             schema: self.schema,
-            default: self.default.map(|expr| expr.visit_exprs(f)),
             merge: self.merge.map(|expr| expr.visit_exprs(f)),
             merge_action: self.merge_action.visit_exprs(f),
             cost: self.cost,
@@ -960,9 +1145,10 @@ where
     Head: Clone + Display + ToSexp,
     Leaf: Clone + PartialEq + Eq + Display + Hash + ToSexp,
 {
+    // Not used
     fn to_sexp(&self) -> Sexp {
         let mut res = vec![
-            Sexp::Symbol("function".into()),
+            Sexp::Symbol(self.subtype.to_string()),
             Sexp::Symbol(self.name.to_string()),
         ];
 
@@ -993,11 +1179,6 @@ where
         if let Some(merge) = &self.merge {
             res.push(Sexp::Symbol(":merge".into()));
             res.push(merge.to_sexp());
-        }
-
-        if let Some(default) = &self.default {
-            res.push(Sexp::Symbol(":default".into()));
-            res.push(default.to_sexp());
         }
 
         Sexp::List(res)

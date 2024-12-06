@@ -370,21 +370,33 @@ fn command(ctx: &Context) -> Res<Command> {
                 map(option(text(":unextractable")), |x, _| x.is_some()),
                 map(option(sequence(text(":on_merge"), list(action))), snd),
                 map(option(sequence(text(":merge"), expr)), snd),
-                map(option(sequence(text(":default"), expr)), snd),
             )),
-            |((), (name, (schema, (cost, (unextractable, (merge_action, (merge, default))))))),
-             span| {
-                Command::Function(FunctionDecl {
+            |((), (name, (schema, (cost, (unextractable, (merge_action, merge)))))), span| {
+                Command::Function {
                     span,
                     name,
                     schema,
                     merge,
                     merge_action: Actions::new(merge_action.unwrap_or_default()),
-                    default,
                     cost,
                     unextractable,
-                    ignore_viz: false,
-                })
+                }
+            },
+        )(ctx),
+        "constructor" => map(
+            parens(sequences!(
+                text("constructor"),
+                ident,
+                schema,
+                cost,
+                map(option(text(":unextractable")), |x, _| x.is_some()),
+            )),
+            |((), (name, (schema, (cost, unextractable)))), span| Command::Constructor {
+                span,
+                name,
+                schema,
+                cost,
+                unextractable,
             },
         )(ctx),
         "relation" => map(

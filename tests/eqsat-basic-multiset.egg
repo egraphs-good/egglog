@@ -61,7 +61,7 @@
 
 
 ;; so instead we can define a function and partially apply it to get the same function as the lambda
-(function tmp-fn (MathMultiSet Math) Math)
+(constructor tmp-fn (MathMultiSet Math) Math)
 (rewrite (tmp-fn xs x) (Product (multiset-insert xs x)))
 
 (rule

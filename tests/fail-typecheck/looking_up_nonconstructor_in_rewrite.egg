@@ -1,0 +1,8 @@
+(function f (i64) i64)
+(datatype E 
+    (Sum i64 i64))
+(rewrite 
+    (Sum 3 4)
+    (Sum 5 (+ 6 (f 7)))
+)
+(run 1)

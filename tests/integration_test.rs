@@ -11,8 +11,8 @@ fn test_subsumed_unextractable_action_extract() {
             None,
             r#"
             (datatype Math)
-            (function exp () Math :cost 100)
-            (function cheap () Math :cost 1)
+            (constructor exp () Math :cost 100)
+            (constructor cheap () Math :cost 1)
             (union (exp) (cheap))
             (query-extract (exp))
             "#,
@@ -66,10 +66,10 @@ fn test_subsumed_unextractable_rebuild_arg() {
             None,
             r#"
             (datatype Math)
-            (function container (Math) Math)
-            (function exp () Math :cost 100)
-            (function cheap () Math)
-            (function cheap-1 () Math)
+            (constructor container (Math) Math)
+            (constructor exp () Math :cost 100)
+            (constructor cheap () Math)
+            (constructor cheap-1 () Math)
             ; we make the container cheap so that it will be extracted if possible, but then we mark it as subsumed
             ; so the (exp) expr should be extracted instead
             (let res (container (cheap)))
@@ -125,9 +125,9 @@ fn test_subsumed_unextractable_rebuild_self() {
             None,
             r#"
             (datatype Math)
-            (function container (Math) Math)
-            (function exp () Math :cost 100)
-            (function cheap () Math)
+            (constructor container (Math) Math)
+            (constructor exp () Math :cost 100)
+            (constructor cheap () Math)
             (let x (cheap))
             (subsume (cheap))
             "#,
@@ -178,7 +178,7 @@ fn test_subsume_unextractable_insert_and_merge() {
             (datatype Expr
                 (f Expr)
                 (Num i64))
-            (function exp () Expr :cost 100)
+            (constructor exp () Expr :cost 100)
 
               (f (Num 1))
               (subsume (f (Num 1)))
@@ -250,8 +250,8 @@ fn test_rewrite_subsumed_unextractable() {
             None,
             r#"
             (datatype Math)
-            (function exp () Math :cost 100)
-            (function cheap () Math :cost 1)
+            (constructor exp () Math :cost 100)
+            (constructor cheap () Math :cost 1)
             (rewrite (cheap) (exp) :subsume)
             (cheap)
             (run 1)
@@ -280,12 +280,12 @@ fn test_rewrite_subsumed() {
             None,
             r#"
             (datatype Math)
-            (function exp () Math :cost 100)
-            (function most-exp () Math :cost 1000)
+            (constructor exp () Math :cost 100)
+            (constructor most-exp () Math :cost 1000)
             (rewrite (most-exp) (exp) :subsume)
             (most-exp)
             (run 1)
-            (function cheap () Math :cost 1)
+            (constructor cheap () Math :cost 1)
             (rewrite (most-exp) (cheap))
             (run 1)
             (extract (most-exp))
@@ -334,7 +334,7 @@ fn test_subsume() {
             None,
             r#"
         ;; add something equal to x that can be extracted:
-        (function otherConst () Math)
+        (constructor otherConst () Math)
         (let other (otherConst))
         (union x other)
         (extract x 10)
@@ -371,7 +371,7 @@ fn test_cant_subsume_merge() {
     let res = egraph.parse_and_run_program(
         None,
         r#"
-        (function one () i64 :merge old)
+        (constructor one () i64 :merge old)
         (set (one) 1)
         (subsume (one))
         "#,
@@ -388,7 +388,7 @@ fn test_value_to_classid() {
             None,
             r#"
             (datatype Math)
-            (function exp () Math )
+            (constructor exp () Math )
             (exp)
             (query-extract (exp))
             "#,
@@ -416,8 +416,8 @@ fn test_serialize_subsume_status() {
             None,
             r#"
             (datatype Math)
-            (function a () Math )
-            (function b () Math )
+            (constructor a () Math )
+            (constructor b () Math )
             (a)
             (b)
             (subsume (a))

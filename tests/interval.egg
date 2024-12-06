@@ -6,10 +6,15 @@
 (function hi (Math) i64 :merge (min old new))
 (function lo (Math) i64 :merge (max old new))
 
-(rule ((= mul (Mul a b)))
+(rule ((= mul (Mul a b))
+       (= loa (lo a))
+       (= lob (lo b))
+       (= hia (hi a))
+       (= hib (hi b))
+      )
       ((set (lo mul) 
-          (min (min (* (lo a) (lo b)) (* (lo a) (hi b)))
-               (min (* (hi a) (lo b)) (* (hi a) (hi b)))))))
+          (min (min (* loa lob) (* loa hib))
+               (min (* hia lob) (* hia hib))))))
 
 (let x (Var "x"))
 (let e (Mul x x))
@@ -21,8 +26,10 @@
 
 (check (= (lo e) -100))
 
-(rule ((= mul (Mul a a)))
-      ((set (lo mul) (* (lo a) (lo a)))))
+(rule ((= mul (Mul a a))
+       (= loa (lo a))
+      )
+      ((set (lo mul) (* loa loa))))
 
 (run 1)
 (check (= (lo e) 100))

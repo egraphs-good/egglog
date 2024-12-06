@@ -13,7 +13,7 @@
 (sort MathFn (UnstableFn (Math) Math))
 
 
-(function square (Math) Math)
+(constructor square (Math) Math)
 (rewrite (square x) (Mul x x))
 
 (let square-fn (unstable-fn "square" ))
@@ -24,7 +24,7 @@
 
 ;; test that we can apply a function to a list
 
-(function list-map-math (MathList MathFn) MathList)
+(constructor list-map-math (MathList MathFn) MathList)
 (rewrite (list-map-math (Nil) fn) (Nil))
 (rewrite (list-map-math (Cons x xs) fn) (Cons (unstable-app fn x) (list-map-math xs fn)))
 
@@ -35,7 +35,7 @@
 
 ;; Test that we can partially apply a function in a rewrite rule
 
-(function list-multiply-by (MathList Math) MathList)
+(constructor list-multiply-by (MathList Math) MathList)
 (rewrite (list-multiply-by l i) (list-map-math l (unstable-fn "Mul" i)))
 
 (let doubled-x (list-multiply-by x (Num 2)))
@@ -44,7 +44,7 @@
 
 ;; Test we can define a higher order compose function
 
-(function composed-math (MathFn MathFn Math) Math)
+(constructor composed-math (MathFn MathFn Math) Math)
 (rewrite (composed-math f g v) (unstable-app f (unstable-app g v)))
 
 (let square-of-double (unstable-fn "composed-math" square-fn (unstable-fn "Mul" (Num 2))))
@@ -57,7 +57,7 @@
 ;; See that it supports primitive values as well
 (sort i64Fun (UnstableFn (i64) i64))
 
-(function composed-i64-math (MathFn i64Fun i64) Math)
+(constructor composed-i64-math (MathFn i64Fun i64) Math)
 (rewrite (composed-i64-math f g v) (unstable-app f (Num (unstable-app g v))))
 
 (let res (composed-i64-math square-fn (unstable-fn "*" 2) 4))

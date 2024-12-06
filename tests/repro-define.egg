@@ -1,6 +1,6 @@
 (datatype Nat
   (S Nat))
-(function ZeroConst () Nat)
+(constructor ZeroConst () Nat)
 (let Zero (ZeroConst))
 
 (let two (S (S Zero)))

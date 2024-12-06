@@ -136,8 +136,8 @@
 (load (Expr "*zp") (Expr "zp"))
 
 ;; a variable points to its allocation
-(function expr-points-to (ExprT) AllocT)
-(function ptr-points-to (AllocT) AllocT)
+(constructor expr-points-to (ExprT) AllocT)
+(constructor ptr-points-to (AllocT) AllocT)
 
 ;; If `v = malloc(...)`, then `v -> alloc[v]`.
 (rule (

@@ -1,8 +1,8 @@
 ;; NOTE: This file contains several unsafe operations
 (datatype Value (Num i64))
-(function TrueConst () Value)
+(constructor TrueConst () Value)
 (let True (TrueConst))
-(function FalseConst () Value)
+(constructor FalseConst () Value)
 (let False (FalseConst))
 (datatype VarType)
 (datatype Term
@@ -15,8 +15,8 @@
     (Let VarType Term Term)
     (Fix VarType Term)
     (If Term Term Term))
-(function V (String) VarType) 
-(function From (Term) VarType)
+(constructor V (String) VarType) 
+(constructor From (Term) VarType)
 
 ; All free variables are free,
 ; but some free variables are more free than others
@@ -62,20 +62,20 @@
 (function evals-to (Term) Value)
 
 (rule ((= e (Val val)))
-      ((union (evals-to e) val)))
+      ((set (evals-to e) val)))
 (rule ((= e (Add a b))
        (= (Num va) (evals-to a))
        (= (Num vb) (evals-to b)))
-      ((union (evals-to e) (Num (+ va vb)))))
+      ((set (evals-to e) (Num (+ va vb)))))
 (rule ((= e (Eq a b))
        (= (evals-to b) (evals-to a)))
-      ((union (evals-to e) True)))
+      ((set (evals-to e) True)))
 (rule ((= e (Eq a b))
        (= va (evals-to a))
        (= vb (evals-to b))
        (!= va vb)) ; TODO: if true and false are non-mergeable datatype, 
                    ; we should be able to do != over it
-      ((union (evals-to e) False)))
+      ((set (evals-to e) False)))
 (rule ((= v (evals-to e)))
       ((union e (Val v))))
 ;; END evals-to

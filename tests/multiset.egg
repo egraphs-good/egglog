@@ -47,7 +47,7 @@
 (check (= (Num 1) (multiset-pick (multiset-of (Num 1)))))
 
 ;; map
-(function square (Math) Math)
+(constructor square (Math) Math)
 (rewrite (square (Num x)) (Num (* x x)))
 
 (let squared-xs (unstable-multiset-map (unstable-fn "square") xs))

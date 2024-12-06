@@ -39,7 +39,7 @@
 	((set (list-get list n) item))
 	:ruleset list)
 
-(function list-append (List List) List)
+(constructor list-append (List List) List)
 (rewrite (list-append (Nil) list) list :ruleset list)
 (rewrite (list-append (Cons head tail) list) (Cons head (list-append tail list)) :ruleset list)
 
@@ -48,7 +48,7 @@
 ; list-contains (Cons head tail) item => assert(head != item); (list-contains tail item)
 ; list-contains needs inequality
 
-(function list-set (List i64 i64) List)
+(constructor list-set (List i64 i64) List)
 (rewrite (list-set (Cons head tail) 0 item) (Cons item tail) :ruleset list)
 (rewrite (list-set (Cons head tail) i item) (Cons head (list-set tail (- i 1) item)) :when ((> i 0)) :ruleset list)
 

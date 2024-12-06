@@ -10,15 +10,40 @@
 ; This should run for about 50 iterations, because even though the merge doesn't
 ; change the value of baz, it has a side effect of expanding the domain of bar.
 
-(function baz (i64) i64 :default 0)
+;(function baz (i64) i64 :default 0)
 
-(function bar () i64 :merge (min (baz new) 0))
+;(function bar () i64 :merge (min (baz new) 0))
 
+;(set (bar) 1)
+;(set (bar) 2)
+
+;(rule ((= f (baz x)) (< x 50))
+;      ((set (bar) (+ x 1))))
+
+;(run 100)
+;(check (= 0 (baz 50)))
+
+; The exploit above is no longer valid due to the removal of default
+; however, can still do with lookups in merge and constructors/relations
+
+(relation baz (i64))
+
+(function const (Unit) i64)
+
+(set (const ()) 0)
+
+(function bar () i64 :merge (const (baz new)))
+
+(set (bar) 0)
 (set (bar) 1)
 (set (bar) 2)
 
-(rule ((= f (baz x)) (< x 50))
-      ((set (bar) (+ x 1))))
+(rule (
+      (baz x)
+      (< x 50)
+) (
+      (set (bar) (+ x 1))
+))
 
 (run 100)
-(check (= 0 (baz 50)))
+(check (baz 50))

@@ -13,7 +13,7 @@
 (rule ((End a s)
        (= s (getString pos)))
       ((P 1 pos a)
-       (union (B 1 pos a) (T a s)))) 
+       (set (B 1 pos a) (T a s)))) 
 
 (rule ((Prod a b c) ;; a -> bc
        (P p1 s b)
@@ -24,7 +24,7 @@
 (rule ((Prod a b c)
        (= f1 (B p1 s b))
        (= f2 (B p2 (+ s p1) c)))
-      ((union (B (+ p1 p2) s a) 
+      ((set (B (+ p1 p2) s a) 
        (NT a f1 f2))))
 
 
@@ -37,8 +37,8 @@
 ; medium size 7821 but runs for 2 min.
 ;(input getString "./tests/cykjson_medium_token.csv")
 
-(let test1 (B 801 1 "VAL"))
-
 (run 10000)
+
+(let test1 (B 801 1 "VAL"))
 
 (check (P 801 1 "VAL"))

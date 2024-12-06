@@ -58,10 +58,9 @@ fn resolved_var_to_call(var: &ResolvedVar) -> ResolvedCall {
     );
     ResolvedCall::Func(FuncType {
         name: var.name,
+        subtype: FunctionSubtype::Custom,
         input: vec![],
         output: var.sort.clone(),
-        is_datatype: var.sort.is_eq_sort(),
-        has_default: false,
     })
 }
 
@@ -95,11 +94,11 @@ impl<'a> GlobalRemover<'a> {
 
                     let func_decl = ResolvedFunctionDecl {
                         name: name.name,
+                        subtype: FunctionSubtype::Custom,
                         schema: Schema {
                             input: vec![],
                             output: ty.name(),
                         },
-                        default: None,
                         merge: None,
                         merge_action: GenericActions(vec![]),
                         cost: None,
@@ -109,28 +108,18 @@ impl<'a> GlobalRemover<'a> {
                     };
                     let resolved_call = ResolvedCall::Func(FuncType {
                         name: name.name,
+                        subtype: FunctionSubtype::Custom,
                         input: vec![],
-                        is_datatype: ty.is_eq_sort(),
                         output: ty.clone(),
-                        has_default: false,
                     });
                     vec![
                         GenericNCommand::Function(func_decl),
-                        // output is eq-able, so generate a union
-                        if ty.is_eq_sort() {
-                            GenericNCommand::CoreAction(GenericAction::Union(
-                                span.clone(),
-                                GenericExpr::Call(span, resolved_call, vec![]),
-                                remove_globals_expr(expr),
-                            ))
-                        } else {
-                            GenericNCommand::CoreAction(GenericAction::Set(
-                                span,
-                                resolved_call,
-                                vec![],
-                                remove_globals_expr(expr),
-                            ))
-                        },
+                        GenericNCommand::CoreAction(GenericAction::Set(
+                            span,
+                            resolved_call,
+                            vec![],
+                            remove_globals_expr(expr),
+                        )),
                     ]
                 }
                 _ => vec![GenericNCommand::CoreAction(remove_globals_action(action))],
@@ -196,6 +185,15 @@ impl<'a> GlobalRemover<'a> {
                     ruleset,
                     rule: new_rule,
                 }]
+            }
+            //Handle the corner case where a global command is wrap in (fail )
+            GenericNCommand::Fail(span, cmd) => {
+                let mut removed = self.remove_globals_cmd(*cmd);
+                let last = removed.pop().unwrap();
+                let boxed_last = Box::new(last);
+                let new_command = GenericNCommand::Fail(span, boxed_last);
+                removed.push(new_command);
+                removed
             }
             _ => vec![cmd.visit_exprs(&mut replace_global_vars)],
         }

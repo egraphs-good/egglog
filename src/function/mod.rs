@@ -132,7 +132,7 @@ impl Function {
                 .compile_expr(&binding, &actions, &target)
                 .map_err(Error::TypeErrors)?;
             MergeFn::Expr(Rc::new(program))
-        } else if output.is_eq_sort() {
+        } else if decl.subtype == FunctionSubtype::Constructor {
             MergeFn::Union
         } else {
             MergeFn::AssertEq

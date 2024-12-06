@@ -3,7 +3,7 @@
 (datatype Type 
   (TArr Type Type) ; t1 -> t2
 )
-(function TUnitConst () Type)
+(constructor TUnitConst () Type)
 (let TUnit (TUnitConst))
 
 (datatype Expr 
@@ -11,17 +11,17 @@
   (App Expr Expr) 
   (Var String) 
 )
-(function MyUnitConst () Expr)
+(constructor MyUnitConst () Expr)
 (let MyUnit (MyUnitConst))
 
 (datatype Ctx 
   (Cons String Type Ctx)
 )
-(function NilConst () Ctx)
+(constructor NilConst () Ctx)
 (let Nil (NilConst))
 
 ; ctx |- expr : type
-(function typeof (Ctx Expr) Type)
+(constructor typeof (Ctx Expr) Type)
 
 ; ctx |- () : unit
 (rewrite (typeof ctx MyUnit) TUnit)

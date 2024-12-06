@@ -4,7 +4,7 @@
     (Var String)
     (f Expr))
 
-(function intersect (Expr Expr) Expr)
+(constructor intersect (Expr Expr) Expr)
 
 (rule (
     (= x3 (intersect x1 x2))

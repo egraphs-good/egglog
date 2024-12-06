@@ -13,9 +13,9 @@
   (AVar String)
 )
 
-(function add (Math Math) Math)
-(function select (Array Math) Math)
-(function store (Array Math Math) Array)
+(constructor add (Math Math) Math)
+(constructor select (Array Math) Math)
+(constructor store (Array Math Math) Array)
 
 (relation neq (Math Math))
 

@@ -1,12 +1,12 @@
 (datatype G)
-(function IConst () G)
+(constructor IConst () G)
 (let I (IConst))
-(function AConst () G)
+(constructor AConst () G)
 (let A (AConst))
-(function BConst () G)
+(constructor BConst () G)
 (let B (BConst))
-(function g* (G G) G)
-(function inv (G) G)
+(constructor g* (G G) G)
+(constructor inv (G) G)
 (birewrite (g* (g* a b) c) (g* a (g* b c))) ; assoc
 (rewrite (g* I a) a) ; idl
 (rewrite (g* a I) a) ; idr
@@ -39,8 +39,8 @@
 (pop)
 
 
-(function aConst () G)
-(function bConst () G)
+(constructor aConst () G)
+(constructor bConst () G)
 (let a (aConst))
 (let b (bConst))
 (push)

@@ -4,10 +4,9 @@ use ast::Rule;
 #[derive(Clone, Debug)]
 pub struct FuncType {
     pub name: Symbol,
+    pub subtype: FunctionSubtype,
     pub input: Vec<ArcSort>,
     pub output: ArcSort,
-    pub is_datatype: bool,
-    pub has_default: bool,
 }
 
 /// Stores resolved typechecking information.
@@ -150,10 +149,9 @@ impl TypeInfo {
 
         Ok(FuncType {
             name: func.name,
+            subtype: func.subtype,
             input,
             output: output.clone(),
-            is_datatype: output.is_eq_sort() && func.merge.is_none() && func.default.is_none(),
-            has_default: func.default.is_some(),
         })
     }
 
@@ -268,21 +266,23 @@ impl TypeInfo {
         }
         let mut bound_vars = IndexMap::default();
         let output_type = self.sorts.get(&fdecl.schema.output).unwrap();
+        if fdecl.subtype == FunctionSubtype::Constructor && !output_type.is_eq_sort() {
+            return Err(TypeError::ConstructorOutputNotSort(
+                fdecl.name,
+                fdecl.span.clone(),
+            ));
+        }
         bound_vars.insert("old".into(), (DUMMY_SPAN.clone(), output_type.clone()));
         bound_vars.insert("new".into(), (DUMMY_SPAN.clone(), output_type.clone()));
 
         Ok(ResolvedFunctionDecl {
             name: fdecl.name,
+            subtype: fdecl.subtype,
             schema: fdecl.schema.clone(),
             merge: match &fdecl.merge {
                 Some(merge) => Some(self.typecheck_expr(symbol_gen, merge, &bound_vars)?),
                 None => None,
             },
-            default: fdecl
-                .default
-                .as_ref()
-                .map(|default| self.typecheck_expr(symbol_gen, default, &Default::default()))
-                .transpose()?,
             merge_action: self.typecheck_actions(symbol_gen, &fdecl.merge_action, &bound_vars)?,
             cost: fdecl.cost,
             unextractable: fdecl.unextractable,
@@ -387,11 +387,72 @@ impl TypeInfo {
         let body: Vec<ResolvedFact> = assignment.annotate_facts(&mapped_query, self);
         let actions: ResolvedActions = assignment.annotate_actions(&mapped_action, self)?;
 
+        Self::check_lookup_actions(&actions)?;
+
         Ok(ResolvedRule {
             span: span.clone(),
             body,
             head: actions,
         })
+    }
+
+    fn check_lookup_expr(expr: &GenericExpr<ResolvedCall, ResolvedVar>) -> Result<(), TypeError> {
+        match expr {
+            GenericExpr::Call(span, head, args) => {
+                match head {
+                    ResolvedCall::Func(t) => {
+                        // Only allowed to lookup constructor or relation
+                        if t.subtype != FunctionSubtype::Constructor
+                            && t.subtype != FunctionSubtype::Relation
+                        {
+                            Err(TypeError::LookupInRuleDisallowed(
+                                head.to_symbol(),
+                                span.clone(),
+                            ))
+                        } else {
+                            Ok(())
+                        }
+                    }
+                    ResolvedCall::Primitive(_) => Ok(()),
+                }?;
+                for arg in args.iter() {
+                    Self::check_lookup_expr(arg)?
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    fn check_lookup_actions(actions: &ResolvedActions) -> Result<(), TypeError> {
+        for action in actions.iter() {
+            match action {
+                GenericAction::Let(_, _, rhs) => Self::check_lookup_expr(rhs),
+                GenericAction::Set(_, _, args, rhs) => {
+                    for arg in args.iter() {
+                        Self::check_lookup_expr(arg)?
+                    }
+                    Self::check_lookup_expr(rhs)
+                }
+                GenericAction::Union(_, lhs, rhs) => {
+                    Self::check_lookup_expr(lhs)?;
+                    Self::check_lookup_expr(rhs)
+                }
+                GenericAction::Change(_, _, _, args) => {
+                    for arg in args.iter() {
+                        Self::check_lookup_expr(arg)?
+                    }
+                    Ok(())
+                }
+                GenericAction::Extract(_, expr, variants) => {
+                    Self::check_lookup_expr(expr)?;
+                    Self::check_lookup_expr(variants)
+                }
+                GenericAction::Panic(..) => Ok(()),
+                GenericAction::Expr(_, expr) => Self::check_lookup_expr(expr),
+            }?
+        }
+        Ok(())
     }
 
     fn typecheck_facts(
@@ -515,6 +576,10 @@ pub enum TypeError {
     InferenceFailure(Expr),
     #[error("{1}\nVariable {0} was already defined")]
     AlreadyDefined(Symbol, Span),
+    #[error("{1}\nThe output type of constructor function {0} must be sort")]
+    ConstructorOutputNotSort(Symbol, Span),
+    #[error("{1}\nValue lookup of non-constructor function {0} in rule is disallowed.")]
+    LookupInRuleDisallowed(Symbol, Span),
     #[error("All alternative definitions considered failed\n{}", .0.iter().map(|e| format!("  {e}\n")).collect::<Vec<_>>().join(""))]
     AllAlternativeFailed(Vec<TypeError>),
 }

@@ -1,6 +1,6 @@
 (datatype list
     (Cons i64 list))
-(function EmptyConst () list)
+(constructor EmptyConst () list)
 (let Empty (EmptyConst))
 
 (relation eq (list list))
