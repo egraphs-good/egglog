@@ -1,3 +1,4 @@
+#[macro_export]
 macro_rules! add_primitives {
     ($type_info:expr,
         $name:literal = |$($param:ident : $param_t:ty),*| -> $ret:ty { $body:expr }
@@ -5,7 +6,7 @@ macro_rules! add_primitives {
         let type_info: &mut _ = $type_info;
         #[allow(unused_imports, non_snake_case)]
         {
-            use $crate::{*, sort::*, constraint::*};
+            use $crate::{*, ast::*, sort::*, constraint::*};
 
             struct MyPrim {$(
                 $param: Arc<<$param_t as FromSort>::Sort>,
@@ -13,8 +14,8 @@ macro_rules! add_primitives {
                 __out: Arc<<$ret as IntoSort>::Sort>,
             }
 
-            impl $crate::PrimitiveLike for MyPrim {
-                fn name(&self) -> $crate::Symbol {
+            impl PrimitiveLike for MyPrim {
+                fn name(&self) -> Symbol {
                     $name.into()
                 }
 
@@ -44,7 +45,7 @@ macro_rules! add_primitives {
                     }
                 }
             }
-            type_info.add_primitive($crate::Primitive::from(MyPrim {
+            type_info.add_primitive( Primitive::from(MyPrim {
                 $( $param: type_info.get_sort_nofail::<<$param_t as IntoSort>::Sort>(), )*
                 __out: type_info.get_sort_nofail::<<$ret as IntoSort>::Sort>(),
             }))

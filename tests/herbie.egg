@@ -6,7 +6,7 @@
 
 (datatype Math
   ; Ground terms
-  (Num Rational)
+  (Num BigRat)
   (Var String)
 
   ; Custom ops
@@ -30,13 +30,13 @@
   (Round Math)
   (Log Math))
 
-(let r-zero (rational 0 1))
-(let r-one  (rational 1 1))
-(let r-two  (rational 2 1))
+(let r-zero (bigrat (bigint 0) (bigint 1)))
+(let r-one  (bigrat (bigint 1) (bigint 1)))
+(let r-two  (bigrat (bigint 2) (bigint 1)))
 (let zero (Num r-zero))
 (let one  (Num r-one))
 (let two  (Num r-two))
-(let three (Num (rational 3 1)))
+(let three (Num (bigrat (bigint 3) (bigint 1))))
 (let neg-one (Neg one))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -50,8 +50,8 @@
 ;; that rewrites are sound, even if some parts of an expr can't be const-evaled)
 
 ; TODO: unbounded intervals?
-(function hi (Math) Rational :merge (min old new))
-(function lo (Math) Rational :merge (max old new))
+(function hi (Math) BigRat :merge (min old new))
+(function lo (Math) BigRat :merge (max old new))
 (relation non-zero (Math))
 
 ;; First, constant folding!
@@ -359,9 +359,9 @@
 
 (rewrite (Unary "Exp" (Mul (Log a) b)) (Pow a b))
 (rewrite (Mul (Pow a b) a) (Pow a (Add b one)))
-(rewrite (Pow a (Num (rational 1 2))) (Sqrt a))
+(rewrite (Pow a (Num (bigrat (bigint 1) (bigint 2)))) (Sqrt a))
 (rewrite (Pow a two) (Mul a a))
-(rewrite (Pow a (Num (rational 1 3))) (Cbrt a))
+(rewrite (Pow a (Num (bigrat (bigint 1) (bigint 3)))) (Cbrt a))
 (rewrite (Pow a three) (Mul (Mul a a) a))
 
 ; 0^0 is undefined
@@ -381,17 +381,17 @@
          (Mul (Unary "sin" a) (Unary "sin" a)))
 (rewrite (Sub one (Mul (Unary "sin" a) (Unary "sin" a)))
          (Mul (Unary "cos" a) (Unary "cos" a)))
-(rewrite (Add (Mul (Unary "cos" a) (Unary "cos" a)) (Num (rational -1 1))) 
+(rewrite (Add (Mul (Unary "cos" a) (Unary "cos" a)) (Num (bigrat (bigint -1) (bigint 1)))) 
          (Neg (Mul (Unary "sin" a) (Unary "sin" a))))
-(rewrite (Add (Mul (Unary "sin" a) (Unary "sin" a)) (Num (rational -1 1))) 
+(rewrite (Add (Mul (Unary "sin" a) (Unary "sin" a)) (Num (bigrat (bigint -1) (bigint 1)))) 
          (Neg (Mul (Unary "cos" a) (Unary "cos" a))))
 (rewrite (Sub (Mul (Unary "cos" a) (Unary "cos" a)) one)  
          (Neg (Mul (Unary "sin" a) (Unary "sin" a))))
 (rewrite (Sub (Mul (Unary "sin" a) (Unary "sin" a)) one)  
          (Neg (Mul (Unary "cos" a) (Unary "cos" a))))
-(rewrite (Unary "sin" (Div (Const "PI") (Num (rational 6 1))))       
-         (Num (rational 1 2)))
-(rewrite (Unary "sin" (Div (Const "PI") (Num (rational 4 1))))       
+(rewrite (Unary "sin" (Div (Const "PI") (Num (bigrat (bigint 6) (bigint 1)))))       
+         (Num (bigrat (bigint 1) (bigint 2))))
+(rewrite (Unary "sin" (Div (Const "PI") (Num (bigrat (bigint 4) (bigint 1)))))       
          (Div (Sqrt two) two))
 (rewrite (Unary "sin" (Div (Const "PI") three))       
          (Div (Sqrt three) two))
@@ -403,23 +403,23 @@
          (Neg (Unary "sin" x)))
 (rewrite (Unary "sin" (Add x (Div (Const "PI") two))) 
          (Unary "cos" x))
-(rewrite (Unary "cos" (Div (Const "PI") (Num (rational 6 1))))       
+(rewrite (Unary "cos" (Div (Const "PI") (Num (bigrat (bigint 6) (bigint 1)))))       
          (Div (Sqrt three) two))
-(rewrite (Unary "cos" (Div (Const "PI") (Num (rational 4 1))))       
+(rewrite (Unary "cos" (Div (Const "PI") (Num (bigrat (bigint 4) (bigint 1)))))       
          (Div (Sqrt two) two))
 (rewrite (Unary "cos" (Div (Const "PI") three))       
-         (Num (rational 1 2)))
+         (Num (bigrat (bigint 1) (bigint 2))))
 (rewrite (Unary "cos" (Div (Const "PI") two))       
          zero)
 (rewrite (Unary "cos" (Const "PI"))             
-         (Num (rational -1 1)))
+         (Num (bigrat (bigint -1) (bigint 1))))
 (rewrite (Unary "cos" (Add x (Const "PI")))       
          (Neg (Unary "cos" x)))
 (rewrite (Unary "cos" (Add x (Div (Const "PI") two))) 
          (Neg (Unary "sin" x)))
-(rewrite (Unary "tan" (Div (Const "PI") (Num (rational 6 1))))       
+(rewrite (Unary "tan" (Div (Const "PI") (Num (bigrat (bigint 6) (bigint 1)))))       
          (Div one (Sqrt three)))
-(rewrite (Unary "tan" (Div (Const "PI") (Num (rational 4 1))))       
+(rewrite (Unary "tan" (Div (Const "PI") (Num (bigrat (bigint 4) (bigint 1)))))       
          one)
 (rewrite (Unary "tan" (Div (Const "PI") three))       
          (Sqrt three))
@@ -455,7 +455,7 @@
 (rewrite (Unary "cosh" x) (Div (Add (Unary "exp" x) (Unary "exp" (Neg x))) two))
 (rewrite (Unary "tanh" x) (Div (Sub (Unary "exp" x) (Unary "exp" (Neg x))) (Add (Unary "exp" x) (Unary "exp" (Neg x)))))
 (rewrite (Unary "tanh" x) (Div (Sub (Unary "exp" (Mul two x)) one) (Add (Unary "exp" (Mul two x)) one)))
-(rewrite (Unary "tanh" x) (Div (Sub one (Unary "exp" (Mul (Num (rational -2 1)) x))) (Add one (Unary "exp" (Mul (Num (rational -2 1)) x)))))
+(rewrite (Unary "tanh" x) (Div (Sub one (Unary "exp" (Mul (Num (bigrat (bigint -2) (bigint 1))) x))) (Add one (Unary "exp" (Mul (Num (bigrat (bigint -2) (bigint 1))) x)))))
 (rewrite (Sub (Mul (Unary "cosh" x) (Unary "cosh" x)) (Mul (Unary "sinh" x) (Unary "sinh" x))) one)
 (rewrite (Add (Unary "cosh" x) (Unary "sinh" x)) (Unary "exp" x))
 (rewrite (Sub (Unary "cosh" x) (Unary "sinh" x)) (Unary "exp" (Neg x)))
@@ -477,8 +477,8 @@
 (pop)
 
 (push)
-(let five (Num (rational 5 1)))
-(let six (Num (rational 6 1)))
+(let five (Num (bigrat (bigint 5) (bigint 1))))
+(let six (Num (bigrat (bigint 6) (bigint 1))))
 (let e2 (Add one five))
 (run 1)
 (check (= e2 six))
@@ -516,7 +516,7 @@
 
 (let e7 (Sub (Mul one x) (Mul (Add x one) one)))
 (run 3)
-(check (= e7 (Num (rational -1 1))))
+(check (= e7 (Num (bigrat (bigint -1) (bigint 1)))))
 (pop)
 
 (push)
@@ -549,19 +549,19 @@
 (pop)
 
 (push)
-(let e12 (Add (Num (rational 1 5)) (Num (rational 3 10))))
+(let e12 (Add (Num (bigrat (bigint 1) (bigint 5))) (Num (bigrat (bigint 3) (bigint 10)))))
 (run 1)
-(check (= e12 (Num (rational 1 2))))
+(check (= e12 (Num (bigrat (bigint 1) (bigint 2)))))
 (pop)
 
 (push)
 (let e13 (Unary "cos" (Const "PI")))
 (run 1)
-(check (= e13 (Num (rational -1 1))))
+(check (= e13 (Num (bigrat (bigint -1) (bigint 1)))))
 (pop)
 
 (push)
-(let sqrt5 (Sqrt (Num (rational 5 1))))
+(let sqrt5 (Sqrt (Num (bigrat (bigint 5) (bigint 1)))))
 (let e14
   (Div one (Sub (Div (Add one sqrt5) two) (Div (Sub one sqrt5) two))))
 (let tgt (Div one sqrt5))

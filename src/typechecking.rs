@@ -39,7 +39,6 @@ impl Default for TypeInfo {
         res.add_sort(BoolSort, DUMMY_SPAN.clone()).unwrap();
         res.add_sort(I64Sort, DUMMY_SPAN.clone()).unwrap();
         res.add_sort(F64Sort, DUMMY_SPAN.clone()).unwrap();
-        res.add_sort(RationalSort, DUMMY_SPAN.clone()).unwrap();
         res.add_sort(BigIntSort, DUMMY_SPAN.clone()).unwrap();
         res.add_sort(BigRatSort, DUMMY_SPAN.clone()).unwrap();
 
