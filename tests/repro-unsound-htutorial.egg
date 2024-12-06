@@ -1,5 +1,5 @@
 (datatype Math
-  (Num Rational)
+  (Num i64)
   (Var String)
   (Add Math Math)
   (Div Math Math)

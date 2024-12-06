@@ -10,8 +10,6 @@ mod bigrat;
 pub use bigrat::*;
 mod bool;
 pub use self::bool::*;
-mod rational;
-pub use rational::*;
 mod string;
 pub use string::*;
 mod unit;

@@ -1,10 +1,10 @@
 (datatype Math
-  (Num Rational)
+  (Num i64)
   (Var String)
   (Mul Math Math))
 
-(function hi (Math) Rational :merge (min old new))
-(function lo (Math) Rational :merge (max old new))
+(function hi (Math) i64 :merge (min old new))
+(function lo (Math) i64 :merge (max old new))
 
 (rule ((= mul (Mul a b)))
       ((set (lo mul) 
@@ -14,18 +14,18 @@
 (let x (Var "x"))
 (let e (Mul x x))
 
-(set (lo x) (rational -10 1))
-(set (hi x) (rational 10 1))
+(set (lo x) -10)
+(set (hi x) 10)
 
 (run 1)
 
-(check (= (lo e) (rational -100 1)))
+(check (= (lo e) -100))
 
 (rule ((= mul (Mul a a)))
       ((set (lo mul) (* (lo a) (lo a)))))
 
 (run 1)
-(check (= (lo e) (rational 100 1)))
+(check (= (lo e) 100))
 
 ;; testing extraction of rationals
 (query-extract (lo e))
