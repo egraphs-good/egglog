@@ -8,7 +8,7 @@
 
 
 (relation P (i64 i64 String))
-(function B (i64 i64 String) tree :cost 100000)
+(function B (i64 i64 String) tree)
 
 (rule ((End a s)
        (= s (getString pos)))

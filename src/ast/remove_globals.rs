@@ -100,7 +100,6 @@ impl<'a> GlobalRemover<'a> {
                             output: ty.name(),
                         },
                         merge: None,
-                        merge_action: GenericActions(vec![]),
                         cost: None,
                         unextractable: true,
                         ignore_viz: true,

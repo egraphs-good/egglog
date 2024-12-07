@@ -283,7 +283,6 @@ impl TypeInfo {
                 Some(merge) => Some(self.typecheck_expr(symbol_gen, merge, &bound_vars)?),
                 None => None,
             },
-            merge_action: self.typecheck_actions(symbol_gen, &fdecl.merge_action, &bound_vars)?,
             cost: fdecl.cost,
             unextractable: fdecl.unextractable,
             ignore_viz: fdecl.ignore_viz,

@@ -1381,7 +1381,7 @@
         :ruleset program_gen_ruleset )
 (constructor Program_expr_to_statement (Program) Program)
 (rewrite (Program_statement p1 p2) (Program___add__ p1 (Program_expr_to_statement p2)) :ruleset program_gen_ruleset)
-(function Program_parent (Program) Program :unextractable :merge old)
+(function Program_parent (Program) Program :merge old)
 (rule ((= p (Program_expr_to_statement p1))
        (Program_compile p i))
       ((set (Program_parent p1) p)
