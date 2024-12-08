@@ -4,7 +4,7 @@
 (let z (bigrat x y))
 (check (= (to-string (numer z)) "-617"))
 
-(function bignums (BigInt BigInt) BigRat)
+(function bignums (BigInt BigInt) BigRat :no-merge)
 (set (bignums x y) z)
 (check
 	(= (bignums a b) c)

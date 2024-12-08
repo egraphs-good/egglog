@@ -644,17 +644,12 @@ impl EGraph {
         let mut stack = Vec::new();
         let mut function = self.functions.get_mut(&func).unwrap();
         let n_unions = self.unionfind.n_unions();
-        let merge_prog = match &function.merge.merge_vals {
+        let merge_prog = match &function.merge {
             MergeFn::Expr(e) => Some(e.clone()),
             MergeFn::AssertEq | MergeFn::Union => None,
         };
 
         for (inputs, old, new) in merges {
-            if let Some(prog) = function.merge.on_merge.clone() {
-                self.run_actions(&mut stack, &[*old, *new], &prog).unwrap();
-                function = self.functions.get_mut(&func).unwrap();
-                stack.clear();
-            }
             if let Some(prog) = &merge_prog {
                 // TODO: error handling?
                 self.run_actions(&mut stack, &[*old, *new], prog).unwrap();

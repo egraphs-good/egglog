@@ -25,7 +25,7 @@
 (sort ISet)
 (constructor IS (ISetBase) ISet)
 
-(function ISet-get (ISet i64) i64 :unextractable)
+(function ISet-get (ISet i64) i64 :no-merge)
 (rule ((IS x) (> (set-length x) 0))
     ((set (ISet-get (IS x) 0) (set-get x 0))))
 (rule ((ISet-get (IS x) j)

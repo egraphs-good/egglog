@@ -1,14 +1,14 @@
 (datatype tree (NT String tree tree)
                   (T String String))
 
-(function getString (i64) String)
+(function getString (i64) String :no-merge)
 
 (relation Prod (String String String))
 (relation End (String String))
 
 
 (relation P (i64 i64 String))
-(function B (i64 i64 String) tree :cost 100000)
+(function B (i64 i64 String) tree :no-merge)
 
 (rule ((End a s)
        (= s (getString pos)))

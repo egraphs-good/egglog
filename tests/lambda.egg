@@ -59,7 +59,7 @@
       ((set (freer e) (set-union fv1 (set-union fv2 fv3)))))
 
 ;; START evals-to
-(function evals-to (Term) Value)
+(function evals-to (Term) Value :no-merge)
 
 (rule ((= e (Val val)))
       ((set (evals-to e) val)))

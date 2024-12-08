@@ -1,4 +1,4 @@
-(function foo (i64) i64)
+(function foo (i64) i64 :no-merge)
 (set (foo 1) 7)
 (check (= (foo 1) 7))
 (delete (foo 1))

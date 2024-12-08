@@ -1,5 +1,5 @@
 (sort Foo)
-(function bar () Foo)
+(function bar () Foo :no-merge)
 (constructor baz () Foo)
 (constructor qux () Foo)
 (constructor quux () Foo)

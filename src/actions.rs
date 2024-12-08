@@ -214,7 +214,7 @@ impl EGraph {
 
         if let Some(old_value) = old_value {
             if new_value != old_value {
-                let merged: Value = match function.merge.merge_vals.clone() {
+                let merged: Value = match function.merge.clone() {
                     MergeFn::AssertEq => {
                         return Err(Error::MergeError(table, new_value, old_value));
                     }
@@ -234,14 +234,6 @@ impl EGraph {
                     let args = &stack[new_len..];
                     let function = self.functions.get_mut(&table).unwrap();
                     function.insert(args, merged, self.timestamp);
-                }
-                // re-borrow
-                let function = self.functions.get_mut(&table).unwrap();
-                if let Some(prog) = function.merge.on_merge.clone() {
-                    let values = [old_value, new_value];
-                    // We need to pass a new stack instead of reusing the old one
-                    // because Load(Stack(idx)) use absolute index.
-                    self.run_actions(&mut Vec::new(), &values, &prog)?;
                 }
             }
         } else {

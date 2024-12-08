@@ -4,7 +4,7 @@
 
 (ruleset list)
 
-(function list-length (List) i64)
+(function list-length (List) i64 :no-merge)
 (relation list-length-demand (List))
 (rule
 	((list-length-demand (Nil)))
@@ -20,7 +20,7 @@
 	((set (list-length (Cons head tail)) (+ tail-length 1)))
 	:ruleset list)
 
-(function list-get (List i64) i64)
+(function list-get (List i64) i64 :no-merge)
 (relation list-get-demand (List i64))
 (rule
 	(	(list-get-demand list 0)

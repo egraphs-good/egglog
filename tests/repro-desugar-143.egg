@@ -2,7 +2,7 @@
 (rule ((= x 1) (= y x)) ())
 (rule ((= x 1) (= y x) (= z y)) ())
 
-(function f (i64) i64)
+(function f (i64) i64 :no-merge)
 
 (set (f 0) 0)
 

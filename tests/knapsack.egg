@@ -37,7 +37,7 @@
 (let test4 (Knap 15 (Cons 12 40 (Cons 2 20 (Cons 1 20 (Cons 1 10 (Cons 4 100 Nil)))))))
 
 ; turn a (Num n) into n
-(function Unwrap (expr) i64)
+(function Unwrap (expr) i64 :no-merge)
 (rule ((= x (Num n))) ((set (Unwrap (Num n)) n)))
 
 (run 100)

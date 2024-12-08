@@ -3,7 +3,7 @@
 (datatype tree (NT String tree tree)
                   (T String String))
 
-(function getString (i64) String)
+(function getString (i64) String :no-merge)
 
 (relation Prod (nonterm nonterm nonterm))
 (relation End (nonterm String))
