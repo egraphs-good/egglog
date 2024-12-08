@@ -27,7 +27,7 @@
 
 ; Test bool's tag
 (relation R (i64))
-(function F (i64) bool)
+(function F (i64) bool :no-merge)
 
 (rule
     ((R i))

@@ -28,7 +28,7 @@
 
 (relation baz (i64))
 
-(function const (Unit) i64)
+(function const (Unit) i64 :no-merge)
 
 (set (const ()) 0)
 

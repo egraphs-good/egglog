@@ -366,7 +366,10 @@ fn command(ctx: &Context) -> Res<Command> {
                 text("function"),
                 ident,
                 schema,
-                map(option(sequence(text(":merge"), expr)), snd),
+                choice(
+                    map(sequence(text(":merge"), expr), |((), x), _| Some(x)),
+                    map(text(":no-merge"), |(), _| None)
+                ),
             )),
             |((), (name, (schema, merge))), span| Command::Function {
                 span,

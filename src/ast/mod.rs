@@ -754,6 +754,8 @@ where
                 if let Some(merge) = &merge {
                     res.push(Sexp::Symbol(":merge".into()));
                     res.push(merge.to_sexp());
+                } else {
+                    res.push(Sexp::Symbol(":no-merge".into()));
                 }
 
                 Sexp::List(res)

@@ -46,7 +46,7 @@
 
 ; Unwrap function - turn a (Num n) into n
 
-(function Unwrap (expr) i64)
+(function Unwrap (expr) i64 :no-merge)
 (rule ((= x (Num n))) ((set (Unwrap (Num n)) n)))
 
 ; Tests
