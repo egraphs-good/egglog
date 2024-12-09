@@ -1,6 +1,6 @@
-(function f () i64)
+(function f () i64 :no-merge)
 (set (f) 0)
 (let x (f))
 
-(function g () i64)
+(function g () i64 :no-merge)
 (fail (let y (g)))

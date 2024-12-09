@@ -1,4 +1,4 @@
-(function foo () i64)
+(function foo () i64 :no-merge)
 
 (function bar () i64 :merge (foo))
 

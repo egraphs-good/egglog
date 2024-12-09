@@ -14,7 +14,7 @@ pub type ValueVec = SmallVec<[Value; 3]>;
 pub struct Function {
     pub(crate) decl: ResolvedFunctionDecl,
     pub schema: ResolvedSchema,
-    pub merge: MergeAction,
+    pub merge: MergeFn,
     pub(crate) nodes: table::Table,
     sorts: HashSet<Symbol>,
     pub(crate) indexes: Vec<Rc<ColumnIndex>>,
@@ -22,12 +22,6 @@ pub struct Function {
     index_updated_through: usize,
     updates: usize,
     scratch: IndexSet<usize>,
-}
-
-#[derive(Clone)]
-pub struct MergeAction {
-    pub on_merge: Option<Rc<Program>>,
-    pub merge_vals: MergeFn,
 }
 
 #[derive(Clone)]
@@ -138,20 +132,6 @@ impl Function {
             MergeFn::AssertEq
         };
 
-        let on_merge = if decl.merge_action.is_empty() {
-            None
-        } else {
-            let (merge_action, _) = decl.merge_action.to_core_actions(
-                &egraph.type_info,
-                &mut binding.clone(),
-                &mut egraph.symbol_gen,
-            )?;
-            let program = egraph
-                .compile_actions(&binding, &merge_action)
-                .map_err(Error::TypeErrors)?;
-            Some(Rc::new(program))
-        };
-
         let indexes = Vec::from_iter(
             input
                 .iter()
@@ -184,10 +164,7 @@ impl Function {
             rebuild_indexes,
             index_updated_through: 0,
             updates: 0,
-            merge: MergeAction {
-                on_merge,
-                merge_vals,
-            },
+            merge: merge_vals,
         })
     }
 
@@ -446,12 +423,7 @@ impl Function {
             .insert_and_merge(scratch, timestamp, out.subsumed, |prev| {
                 if let Some(mut prev) = prev {
                     out_ty.canonicalize(&mut prev, uf);
-                    let mut appended = false;
-                    if self.merge.on_merge.is_some() && prev != out_val {
-                        deferred_merges.push((scratch.clone(), prev, out_val));
-                        appended = true;
-                    }
-                    match &self.merge.merge_vals {
+                    match &self.merge {
                         MergeFn::Union => {
                             debug_assert!(self.schema.output.is_eq_sort());
                             uf.union_values(prev, out_val, self.schema.output.name())
@@ -463,7 +435,7 @@ impl Function {
                             prev
                         }
                         MergeFn::Expr(_) => {
-                            if !appended && prev != out_val {
+                            if prev != out_val {
                                 deferred_merges.push((scratch.clone(), prev, out_val));
                             }
                             prev

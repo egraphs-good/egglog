@@ -120,7 +120,7 @@
                 ((union (VecOperand-get (VO x) i) (vec-get x i)))
                 :ruleset fast-analyses)
 
-            (function VecOperand-length (VecOperand) i64)
+            (function VecOperand-length (VecOperand) i64 :no-merge)
             (rule ((VO x))
                   ((set (VecOperand-length (VO x)) (vec-length x)))
                   :ruleset fast-analyses)
@@ -135,7 +135,7 @@
                 ((union (VecVecOperand-get (VVO x) i) (vec-get x i)))
                 :ruleset fast-analyses)
 
-            (function VecVecOperand-length (VecVecOperand) i64)
+            (function VecVecOperand-length (VecVecOperand) i64 :no-merge)
             (rule ((VVO x))
                   ((set (VecVecOperand-length (VVO x)) (vec-length x)))
                   :ruleset fast-analyses)

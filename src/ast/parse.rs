@@ -366,21 +366,16 @@ fn command(ctx: &Context) -> Res<Command> {
                 text("function"),
                 ident,
                 schema,
-                cost,
-                map(option(text(":unextractable")), |x, _| x.is_some()),
-                map(option(sequence(text(":on_merge"), list(action))), snd),
-                map(option(sequence(text(":merge"), expr)), snd),
+                choice(
+                    map(sequence(text(":merge"), expr), |((), x), _| Some(x)),
+                    map(text(":no-merge"), |(), _| None)
+                ),
             )),
-            |((), (name, (schema, (cost, (unextractable, (merge_action, merge)))))), span| {
-                Command::Function {
-                    span,
-                    name,
-                    schema,
-                    merge,
-                    merge_action: Actions::new(merge_action.unwrap_or_default()),
-                    cost,
-                    unextractable,
-                }
+            |((), (name, (schema, merge))), span| Command::Function {
+                span,
+                name,
+                schema,
+                merge,
             },
         )(ctx),
         "constructor" => map(

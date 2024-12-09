@@ -119,9 +119,6 @@ where
                     schema: f.schema.clone(),
                     name: f.name,
                     merge: f.merge.clone(),
-                    merge_action: f.merge_action.clone(),
-                    cost: f.cost,
-                    unextractable: f.unextractable,
                 },
             },
             GenericNCommand::AddRuleset(name) => GenericCommand::AddRuleset(*name),
@@ -481,9 +478,6 @@ where
         name: Symbol,
         schema: Schema,
         merge: Option<GenericExpr<Head, Leaf>>,
-        merge_action: GenericActions<Head, Leaf>,
-        cost: Option<usize>,
-        unextractable: bool,
     },
 
     /// Using the `ruleset` command, defines a new
@@ -745,9 +739,6 @@ where
                 name,
                 schema,
                 merge,
-                merge_action,
-                cost,
-                unextractable,
             } => {
                 let mut res = vec![
                     Sexp::Symbol("function".into()),
@@ -760,27 +751,11 @@ where
                     unreachable!();
                 }
 
-                if let Some(cost) = cost {
-                    res.extend(vec![
-                        Sexp::Symbol(":cost".into()),
-                        Sexp::Symbol(cost.to_string()),
-                    ]);
-                }
-
-                if *unextractable {
-                    res.push(Sexp::Symbol(":unextractable".into()));
-                }
-
-                if !merge_action.is_empty() {
-                    res.push(Sexp::Symbol(":on_merge".into()));
-                    res.push(Sexp::List(
-                        merge_action.iter().map(|a| a.to_sexp()).collect(),
-                    ));
-                }
-
                 if let Some(merge) = &merge {
                     res.push(Sexp::Symbol(":merge".into()));
                     res.push(merge.to_sexp());
+                } else {
+                    res.push(Sexp::Symbol(":no-merge".into()));
                 }
 
                 Sexp::List(res)
@@ -1007,7 +982,6 @@ where
     pub subtype: FunctionSubtype,
     pub schema: Schema,
     pub merge: Option<GenericExpr<Head, Leaf>>,
-    pub merge_action: GenericActions<Head, Leaf>,
     pub cost: Option<usize>,
     pub unextractable: bool,
     /// Globals are desugared to functions, with this flag set to true.
@@ -1062,18 +1036,14 @@ impl FunctionDecl {
         name: Symbol,
         schema: Schema,
         merge: Option<GenericExpr<Symbol, Symbol>>,
-        merge_action: GenericActions<Symbol, Symbol>,
-        cost: Option<usize>,
-        unextractable: bool,
     ) -> Self {
         Self {
             name,
             subtype: FunctionSubtype::Custom,
             schema,
             merge,
-            merge_action,
-            cost,
-            unextractable,
+            cost: None,
+            unextractable: true,
             ignore_viz: false,
             span,
         }
@@ -1091,7 +1061,6 @@ impl FunctionDecl {
             subtype: FunctionSubtype::Constructor,
             schema,
             merge: None,
-            merge_action: Actions::default(),
             cost,
             unextractable,
             ignore_viz: false,
@@ -1108,9 +1077,8 @@ impl FunctionDecl {
                 output: Symbol::from("Unit"),
             },
             merge: None,
-            merge_action: Actions::default(),
             cost: None,
-            unextractable: false,
+            unextractable: true,
             ignore_viz: false,
             span,
         }
@@ -1131,7 +1099,6 @@ where
             subtype: self.subtype,
             schema: self.schema,
             merge: self.merge.map(|expr| expr.visit_exprs(f)),
-            merge_action: self.merge_action.visit_exprs(f),
             cost: self.cost,
             unextractable: self.unextractable,
             ignore_viz: self.ignore_viz,
@@ -1167,13 +1134,6 @@ where
 
         if self.unextractable {
             res.push(Sexp::Symbol(":unextractable".into()));
-        }
-
-        if !self.merge_action.is_empty() {
-            res.push(Sexp::Symbol(":on_merge".into()));
-            res.push(Sexp::List(
-                self.merge_action.iter().map(|a| a.to_sexp()).collect(),
-            ));
         }
 
         if let Some(merge) = &self.merge {
@@ -1462,10 +1422,6 @@ where
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = &GenericAction<Head, Leaf>> {
         self.0.iter()
-    }
-
-    pub(crate) fn is_empty(&self) -> bool {
-        self.0.is_empty()
     }
 
     pub(crate) fn visit_exprs(

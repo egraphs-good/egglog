@@ -91,7 +91,7 @@
 (query-extract (lower-bound x1))
 (query-extract (upper-bound x1))
 
-(function true-value (Math) f64)
+(function true-value (Math) f64 :no-merge)
 
 (rule ((= (to-f64 (lower-bound e))
           (to-f64 (upper-bound e)))
