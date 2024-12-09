@@ -1,0 +1,3 @@
+(function() {var implementors = {
+"egglog":[["impl <a class=\"trait\" href=\"https://docs.rs/lazy_static/1.5.0/lazy_static/trait.LazyStatic.html\" title=\"trait lazy_static::LazyStatic\">LazyStatic</a> for <a class=\"struct\" href=\"egglog/ast/parse/struct.DUMMY_SPAN.html\" title=\"struct egglog::ast::parse::DUMMY_SPAN\">DUMMY_SPAN</a>"]]
+};if (window.register_implementors) {window.register_implementors(implementors);} else {window.pending_implementors = implementors;}})()
