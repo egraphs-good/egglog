@@ -1043,7 +1043,7 @@ impl FunctionDecl {
             schema,
             merge,
             cost: None,
-            unextractable: false,
+            unextractable: true,
             ignore_viz: false,
             span,
         }
@@ -1078,7 +1078,7 @@ impl FunctionDecl {
             },
             merge: None,
             cost: None,
-            unextractable: false,
+            unextractable: true,
             ignore_viz: false,
             span,
         }
