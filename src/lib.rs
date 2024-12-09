@@ -15,6 +15,7 @@ mod actions;
 pub mod ast;
 pub mod constraint;
 mod core;
+pub mod debugging;
 mod extract;
 mod function;
 mod gj;
