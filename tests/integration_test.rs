@@ -360,7 +360,7 @@ fn test_subsume_primitive() {
         (subsume (one))
         "#,
     );
-    assert!(res.is_ok());
+    assert!(res.is_err());
 }
 
 #[test]
@@ -430,7 +430,7 @@ fn test_serialize_subsume_status() {
         None,
         egglog::SerializedNode::Function {
             name: ("a").into(),
-            offset: 0,
+            offset: 1,
         },
     );
     let b_id = egraph.to_node_id(
