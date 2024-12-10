@@ -124,13 +124,6 @@ impl Table {
         Some(&self.vals[off].1)
     }
 
-    pub(crate) fn get_mut(&mut self, inputs: &[Value]) -> Option<&mut TupleOutput> {
-        let hash: u64 = hash_values(inputs);
-        let &TableOffset { off, .. } = self.table.find(hash, search_for!(self, hash, inputs))?;
-        debug_assert!(self.vals[off].0.live());
-        Some(&mut self.vals[off].1)
-    }
-
     /// Insert the given data into the table at the given timestamp. Return the
     /// previous value, if there was one.
     pub(crate) fn insert(&mut self, inputs: &[Value], out: Value, ts: u32) -> Option<Value> {
