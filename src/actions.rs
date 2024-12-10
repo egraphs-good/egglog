@@ -372,7 +372,7 @@ impl EGraph {
                 Instruction::Panic(msg) => panic!("Panic: {msg}"),
                 Instruction::Literal(lit) => match lit {
                     Literal::Int(i) => stack.push(Value::from(*i)),
-                    Literal::F64(f) => stack.push(Value::from(*f)),
+                    Literal::Float(f) => stack.push(Value::from(*f)),
                     Literal::String(s) => stack.push(Value::from(*s)),
                     Literal::Bool(b) => stack.push(Value::from(*b)),
                     Literal::Unit => stack.push(Value::unit()),

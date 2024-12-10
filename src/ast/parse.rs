@@ -4,15 +4,13 @@ use crate::*;
 use ordered_float::OrderedFloat;
 
 pub fn parse_program(filename: Option<String>, input: &str) -> Result<Vec<Command>, ParseError> {
-    let (sexps, _span, rest) = all_sexps(&Context::new(filename, input))?;
-    assert!(rest.is_at_end(), "did not parse entire program");
+    let sexps = all_sexps(Context::new(filename, input))?;
     sexps.iter().map(command).collect()
 }
 
 // currently only used for testing, but no reason it couldn't be used elsewhere later
 pub fn parse_expr(filename: Option<String>, input: &str) -> Result<Expr, ParseError> {
-    let (sexp, _span, rest) = sexp(&Context::new(filename, input))?;
-    assert!(rest.is_at_end(), "did not parse entire expression");
+    let sexp = sexp(&mut Context::new(filename, input))?;
     expr(&sexp)
 }
 
@@ -115,10 +113,10 @@ macro_rules! error {
 }
 
 enum Sexp {
+    // Will never contain `Literal::Unit`, as this
+    // will be parsed as an empty `Sexp::List`.
     Literal(Literal, Span),
     Atom(Symbol, Span),
-    // `List`s are always nonempty, since an
-    // empty list is actually a `Literal::Unit`
     List(Vec<Sexp>, Span),
 }
 
@@ -160,8 +158,6 @@ impl Sexp {
     fn expect_list(&self, e: &'static str) -> Result<&[Sexp], ParseError> {
         if let Sexp::List(sexps, _) = self {
             return Ok(sexps);
-        } else if let Sexp::Literal(Literal::Unit, _) = self {
-            return Ok(&[]);
         }
         error!(self.span(), "expected {e}")
     }
@@ -700,10 +696,13 @@ fn expr(sexp: &Sexp) -> Result<Expr, ParseError> {
     Ok(match sexp {
         Sexp::Literal(literal, span) => Expr::Lit(span.clone(), literal.clone()),
         Sexp::Atom(symbol, span) => Expr::Var(span.clone(), *symbol),
-        Sexp::List(..) => {
-            let (func, args, span) = sexp.expect_call("call expression")?;
-            Expr::Call(span.clone(), func, map_fallible(args, expr)?)
-        }
+        Sexp::List(list, span) => match list.as_slice() {
+            [] => Expr::Lit(span.clone(), Literal::Unit),
+            _ => {
+                let (func, args, span) = sexp.expect_call("call expression")?;
+                Expr::Call(span.clone(), func, map_fallible(args, expr)?)
+            }
+        },
     })
 }
 
@@ -715,15 +714,13 @@ struct Context {
 
 impl Context {
     fn new(name: Option<String>, contents: &str) -> Context {
-        let mut next = Context {
+        Context {
             source: Arc::new(SrcFile {
                 name,
                 contents: contents.to_string(),
             }),
             index: 0,
-        };
-        next.advance_past_whitespace();
-        next
+        }
     }
 
     fn current_char(&self) -> Option<char> {
@@ -759,206 +756,121 @@ impl Context {
         self.index == self.source.contents.len()
     }
 
-    fn span(&self) -> Span {
-        Span(self.source.clone(), self.index, self.index)
-    }
-}
+    fn next(&mut self) -> Result<(Token, Span), ParseError> {
+        self.advance_past_whitespace();
+        let mut span = Span(self.source.clone(), self.index, self.index);
 
-type Res<T> = Result<(T, Span, Context), ParseError>;
+        let Some(c) = self.current_char() else {
+            return error!(span, "unexpected end of file");
+        };
+        self.advance_char();
 
-trait Parser<T>: Fn(&Context) -> Res<T> + Clone {}
-impl<T, F: Fn(&Context) -> Res<T> + Clone> Parser<T> for F {}
+        let token = match c {
+            '(' => Token::Open,
+            ')' => Token::Close,
+            '"' => {
+                let mut in_escape = false;
+                let mut string = String::new();
 
-fn ident(ctx: &Context) -> Res<Symbol> {
-    let mut span = ctx.span();
-    if ctx.index >= ctx.source.contents.len() {
-        return error!(span, "unexpected end of file");
-    }
+                loop {
+                    match self.current_char() {
+                        None => {
+                            span.2 = self.index;
+                            return error!(span, "string is missing end quote");
+                        }
+                        Some('"') if !in_escape => break,
+                        Some('\\') if !in_escape => in_escape = true,
+                        Some(c) => {
+                            string.push(c);
+                            in_escape = false;
+                        }
+                    }
+                    self.advance_char();
+                }
+                self.advance_char();
 
-    let mut next = ctx.clone();
-    loop {
-        match next.current_char() {
-            None => break,
-            Some(c) if c.is_alphanumeric() => {}
-            Some(c) if "-+*/?!=<>&|^/%_.:".contains(c) => {}
-            Some(_) => break,
-        }
-        next.advance_char();
-    }
-    span.2 = next.index;
-
-    if span.1 == span.2 {
-        error!(span, "expected identifier")
-    } else {
-        next.advance_past_whitespace();
-        Ok((Symbol::from(span.string()), span, next))
-    }
-}
-
-fn text(s: &'static str) -> impl Parser<()> {
-    move |ctx| {
-        let mut span = ctx.span();
-        span.2 = (span.1 + s.len()).min(ctx.source.contents.len());
-
-        if span.string() == s {
-            let mut next = ctx.clone();
-            next.index += s.len();
-            next.advance_past_whitespace();
-            Ok(((), span, next))
-        } else {
-            error!(span, "expected \"{s}\"")
-        }
-    }
-}
-
-fn repeat_until<T>(
-    inner: impl Parser<T>,
-    end: impl Fn(&Context) -> bool + Clone,
-) -> impl Parser<Vec<T>> {
-    move |ctx| {
-        let mut vec = Vec::new();
-        let mut span = ctx.span();
-        let mut next = ctx.clone();
-        while !end(&next) {
-            let (x, s, n) = inner(&next)?;
-            vec.push(x);
-            next = n;
-            span.2 = s.2;
-        }
-        Ok((vec, span, next))
-    }
-}
-
-fn repeat_until_end_paren<T>(inner: impl Parser<T>) -> impl Parser<Vec<T>> {
-    repeat_until(inner, |ctx| text(")")(ctx).is_ok())
-}
-
-fn choice<T>(a: impl Parser<T>, b: impl Parser<T>) -> impl Parser<T> {
-    move |ctx| a(ctx).or_else(|_| b(ctx))
-}
-
-macro_rules! choices {
-    ( $x:expr ) => { $x };
-    ( $x:expr , $( $xs:expr ),+ $(,)? ) => {
-        choice( $x, choices!( $( $xs ),+ ) )
-    };
-}
-
-fn map<T, U>(parser: impl Parser<T>, f: impl Fn(T, Span) -> U + Clone) -> impl Parser<U> {
-    move |ctx| {
-        let (x, span, next) = parser(ctx)?;
-        Ok((f(x, span.clone()), span, next))
-    }
-}
-
-fn sequence<T, U>(a: impl Parser<T>, b: impl Parser<U>) -> impl Parser<(T, U)> {
-    move |ctx| {
-        let (x, lo, next) = a(ctx)?;
-        let (y, hi, next) = b(&next)?;
-        Ok(((x, y), Span(lo.0, lo.1, hi.2), next))
-    }
-}
-
-fn parens<T>(f: impl Parser<T>) -> impl Parser<T> {
-    map(
-        choice(
-            sequence(text("["), sequence(f.clone(), text("]"))),
-            sequence(text("("), sequence(f, text(")"))),
-        ),
-        |((), (x, ())), _| x,
-    )
-}
-
-fn all_sexps(ctx: &Context) -> Res<Vec<Sexp>> {
-    repeat_until(sexp, |ctx| ctx.index == ctx.source.contents.len())(ctx)
-}
-
-fn sexp(ctx: &Context) -> Res<Sexp> {
-    choices!(
-        map(literal, Sexp::Literal),
-        map(ident, Sexp::Atom),
-        map(parens(repeat_until_end_paren(sexp)), Sexp::List),
-    )(ctx)
-}
-
-fn literal(ctx: &Context) -> Res<Literal> {
-    choices!(
-        map(sequence(text("("), text(")")), |((), ()), _| Literal::Unit),
-        map(num, |x, _| Literal::Int(x)),
-        map(r#f64, |x, _| Literal::F64(x)),
-        map(r#bool, |x, _| Literal::Bool(x)),
-        map(string, |x, _| Literal::String(x.into())),
-    )(ctx)
-}
-
-fn r#bool(ctx: &Context) -> Res<bool> {
-    let (_, span, next) = ident(ctx)?;
-    match span.string() {
-        "true" => Ok((true, span, next)),
-        "false" => Ok((false, span, next)),
-        _ => error!(span, "expected boolean literal"),
-    }
-}
-
-fn num(ctx: &Context) -> Res<i64> {
-    let (_, span, next) = ident(ctx)?;
-    match span.string().parse::<i64>() {
-        Ok(x) => Ok((x, span, next)),
-        Err(_) => error!(span, "expected integer literal"),
-    }
-}
-
-fn r#f64(ctx: &Context) -> Res<OrderedFloat<f64>> {
-    use std::num::FpCategory::*;
-    let (_, span, next) = ident(ctx)?;
-    match span.string() {
-        "NaN" => Ok((OrderedFloat(f64::NAN), span, next)),
-        "inf" => Ok((OrderedFloat(f64::INFINITY), span, next)),
-        "-inf" => Ok((OrderedFloat(f64::NEG_INFINITY), span, next)),
-        _ => match span.string().parse::<f64>() {
-            Err(_) => error!(span, "expected floating point literal"),
-            // Rust will parse "infinity" as a float, which we don't want
-            // we're only using `parse` to avoid implementing it ourselves anyway
-            Ok(x) => match x.classify() {
-                Nan | Infinite => error!(span, "expected floating point literal"),
-                Zero | Subnormal | Normal => Ok((OrderedFloat(x), span, next)),
-            },
-        },
-    }
-}
-
-fn string(ctx: &Context) -> Res<String> {
-    let mut span = Span(ctx.source.clone(), ctx.index, ctx.index);
-    if ctx.current_char() != Some('"') {
-        return error!(span, "expected string literal");
-    }
-
-    let mut next = ctx.clone();
-    let mut in_escape = false;
-
-    next.advance_char();
-    loop {
-        match next.current_char() {
-            None => {
-                span.2 = next.index;
-                return error!(span, "string is missing end quote");
+                Token::String(string.into())
             }
-            Some('"') if !in_escape => break,
-            Some('\\') if !in_escape => in_escape = true,
-            Some(_) => in_escape = false,
-        }
+            _ => {
+                loop {
+                    match self.current_char() {
+                        Some(c) if c.is_whitespace() => break,
+                        Some(';' | '(' | ')') => break,
+                        None => break,
+                        Some(_) => self.advance_char(),
+                    }
+                }
+                Token::Other
+            }
+        };
 
-        next.advance_char();
+        span.2 = self.index;
+        self.advance_past_whitespace();
+
+        Ok((token, span))
     }
-    next.advance_char();
+}
 
-    span.2 = next.index;
+enum Token {
+    Open,
+    Close,
+    String(Symbol),
+    Other,
+}
 
-    next.advance_past_whitespace();
+fn sexp(ctx: &mut Context) -> Result<Sexp, ParseError> {
+    let mut stack: Vec<(Span, Vec<Sexp>)> = vec![];
 
-    let s = span.string();
-    let s = &s[1..s.len() - 1];
-    Ok((s.to_string(), span, next))
+    loop {
+        let (token, span) = ctx.next()?;
+
+        let sexp = match token {
+            Token::Open => {
+                stack.push((span, vec![]));
+                continue;
+            }
+            Token::Close => {
+                if stack.is_empty() {
+                    return error!(span, "unexpected `)`");
+                }
+                let (mut list_span, list) = stack.pop().unwrap();
+                list_span.2 = span.2;
+                Sexp::List(list, list_span)
+            }
+            Token::String(s) => Sexp::Literal(Literal::String(s), span),
+            Token::Other => {
+                let s = span.string();
+                let int = s.parse::<i64>();
+                let float = s.parse::<f64>();
+                match s {
+                    "true" => Sexp::Literal(Literal::Bool(true), span),
+                    "false" => Sexp::Literal(Literal::Bool(false), span),
+                    _ if int.is_ok() => Sexp::Literal(Literal::Int(int.unwrap()), span),
+                    "NaN" => Sexp::Literal(Literal::Float(OrderedFloat(f64::NAN)), span),
+                    "inf" => Sexp::Literal(Literal::Float(OrderedFloat(f64::INFINITY)), span),
+                    "-inf" => Sexp::Literal(Literal::Float(OrderedFloat(f64::NEG_INFINITY)), span),
+                    _ if float.is_ok() && float.as_ref().unwrap().is_finite() => {
+                        Sexp::Literal(Literal::Float(OrderedFloat(float.unwrap())), span)
+                    }
+                    _ => Sexp::Atom(s.into(), span),
+                }
+            }
+        };
+
+        if stack.is_empty() {
+            return Ok(sexp);
+        } else {
+            stack.last_mut().unwrap().1.push(sexp);
+        }
+    }
+}
+
+fn all_sexps(mut ctx: Context) -> Result<Vec<Sexp>, ParseError> {
+    let mut sexps = Vec::new();
+    while !ctx.is_at_end() {
+        sexps.push(sexp(&mut ctx)?);
+    }
+    Ok(sexps)
 }
 
 #[cfg(test)]
