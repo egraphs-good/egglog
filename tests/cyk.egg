@@ -91,7 +91,7 @@
 (check (P 5 1 (NonTerm "S")))
 (fail (check (P 5 1 (NonTerm "B"))))
 (let test2 (B 5 1 (NonTerm "S")))
-(query-extract:variants 10  test2)
+(query-extract :variants 10 test2)
 
 (pop)
 
