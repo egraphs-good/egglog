@@ -111,7 +111,7 @@ where
                 },
                 FunctionSubtype::Relation => GenericCommand::Relation {
                     span: f.span.clone(),
-                    constructor: f.name,
+                    name: f.name,
                     inputs: f.schema.input.clone(),
                 },
                 FunctionSubtype::Custom => GenericCommand::Function {
@@ -430,7 +430,7 @@ where
     /// ```
     Relation {
         span: Span,
-        constructor: Symbol,
+        name: Symbol,
         inputs: Vec<Symbol>,
     },
 
@@ -793,9 +793,9 @@ where
             }
             GenericCommand::Relation {
                 span: _,
-                constructor,
+                name,
                 inputs,
-            } => list!("relation", constructor, list!(++ inputs)),
+            } => list!("relation", name, list!(++ inputs)),
             GenericCommand::AddRuleset(name) => list!("ruleset", name),
             GenericCommand::UnstableCombinedRuleset(name, others) => {
                 list!("unstable-combined-ruleset", name, ++ others)

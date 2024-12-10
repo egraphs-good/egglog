@@ -50,15 +50,9 @@ pub(crate) fn desugar_command(
             cost,
             unextractable,
         ))],
-        Command::Relation {
-            span,
-            constructor,
-            inputs,
-        } => vec![NCommand::Function(FunctionDecl::relation(
-            span,
-            constructor,
-            inputs,
-        ))],
+        Command::Relation { span, name, inputs } => vec![NCommand::Function(
+            FunctionDecl::relation(span, name, inputs),
+        )],
         Command::Datatype {
             span,
             name,
