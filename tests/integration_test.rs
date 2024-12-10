@@ -360,7 +360,7 @@ fn test_subsume_primitive() {
         (subsume (one))
         "#,
     );
-    assert!(res.is_ok());
+    assert!(res.is_err());
 }
 
 #[test]
