@@ -185,7 +185,7 @@ impl Table {
         }
         let new_offset = self.vals.len();
         self.vals.push((
-            Input::new(inputs.into()),
+            Input::new(ValueVec::from_slice(inputs)),
             TupleOutput {
                 value: on_merge(None),
                 timestamp: ts,
