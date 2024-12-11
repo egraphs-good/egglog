@@ -846,19 +846,27 @@ fn sexp(ctx: &mut Context) -> Result<Sexp, ParseError> {
             Token::String(s) => Sexp::Literal(Literal::String(s), span),
             Token::Other => {
                 let s = span.string();
-                let int = s.parse::<i64>();
-                let float = s.parse::<f64>();
-                match s {
-                    "true" => Sexp::Literal(Literal::Bool(true), span),
-                    "false" => Sexp::Literal(Literal::Bool(false), span),
-                    _ if int.is_ok() => Sexp::Literal(Literal::Int(int.unwrap()), span),
-                    "NaN" => Sexp::Literal(Literal::Float(OrderedFloat(f64::NAN)), span),
-                    "inf" => Sexp::Literal(Literal::Float(OrderedFloat(f64::INFINITY)), span),
-                    "-inf" => Sexp::Literal(Literal::Float(OrderedFloat(f64::NEG_INFINITY)), span),
-                    _ if float.is_ok() && float.as_ref().unwrap().is_finite() => {
-                        Sexp::Literal(Literal::Float(OrderedFloat(float.unwrap())), span)
+
+                if s == "true" {
+                    Sexp::Literal(Literal::Bool(true), span)
+                } else if s == "false" {
+                    Sexp::Literal(Literal::Bool(false), span)
+                } else if let Ok(int) = s.parse::<i64>() {
+                    Sexp::Literal(Literal::Int(int), span)
+                } else if s == "NaN" {
+                    Sexp::Literal(Literal::Float(OrderedFloat(f64::NAN)), span)
+                } else if s == "inf" {
+                    Sexp::Literal(Literal::Float(OrderedFloat(f64::INFINITY)), span)
+                } else if s == "-inf" {
+                    Sexp::Literal(Literal::Float(OrderedFloat(f64::NEG_INFINITY)), span)
+                } else if let Ok(float) = s.parse::<f64>() {
+                    if float.is_finite() {
+                        Sexp::Literal(Literal::Float(OrderedFloat(float)), span)
+                    } else {
+                        Sexp::Atom(s.into(), span)
                     }
-                    _ => Sexp::Atom(s.into(), span),
+                } else {
+                    Sexp::Atom(s.into(), span)
                 }
             }
         };
