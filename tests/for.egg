@@ -1,0 +1,21 @@
+(relation range (i64))
+(relation R (i64 i64))
+
+(range 0)
+(range 1)
+(range 2)
+
+(for ((range x))
+    ((extract x)))
+
+(for ()
+    ((let x1 1)
+     (let x2 2)
+     (R x1 x2)))
+
+(check (R 1 2))
+
+(for ((R x y))
+    ((delete (R x y))))
+
+(fail (check (R 1 2)))
