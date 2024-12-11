@@ -84,3 +84,8 @@ libtest-mimic = "0.6.1"
 
 [profile.release]
 incremental = true
+
+# https://github.com/mstange/samply/?tab=readme-ov-file#turn-on-debug-info-for-full-stacks
+[profile.profiling]
+inherits = "release"
+debug = true

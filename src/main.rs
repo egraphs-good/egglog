@@ -37,6 +37,8 @@ struct Args {
     /// Number of times to inline leaves
     #[clap(long, default_value = "0")]
     serialize_n_inline_leaves: usize,
+    #[clap(long)]
+    dont_print_messages: bool,
 }
 
 // test if the current command should be evaluated
@@ -150,8 +152,10 @@ fn main() {
         let mut egraph = mk_egraph();
         match egraph.parse_and_run_program(Some(input.to_str().unwrap().into()), &program) {
             Ok(msgs) => {
-                for msg in msgs {
-                    println!("{msg}");
+                if !args.dont_print_messages {
+                    for msg in msgs {
+                        println!("{msg}");
+                    }
                 }
             }
             Err(err) => {
