@@ -678,7 +678,7 @@ impl EGraph {
     pub fn eval_lit(&self, lit: &Literal) -> Value {
         match lit {
             Literal::Int(i) => i.store(&I64Sort).unwrap(),
-            Literal::F64(f) => f.store(&F64Sort).unwrap(),
+            Literal::Float(f) => f.store(&F64Sort).unwrap(),
             Literal::String(s) => s.store(&StringSort).unwrap(),
             Literal::Unit => ().store(&UnitSort).unwrap(),
             Literal::Bool(b) => b.store(&BoolSort).unwrap(),
@@ -1356,7 +1356,7 @@ impl EGraph {
                 match s.parse::<i64>() {
                     Ok(i) => Expr::Lit(span.clone(), Literal::Int(i)),
                     Err(_) => match s.parse::<f64>() {
-                        Ok(f) => Expr::Lit(span.clone(), Literal::F64(f.into())),
+                        Ok(f) => Expr::Lit(span.clone(), Literal::Float(f.into())),
                         Err(_) => Expr::Lit(span.clone(), Literal::String(s.into())),
                     },
                 }

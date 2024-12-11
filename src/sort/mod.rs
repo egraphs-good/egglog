@@ -219,7 +219,7 @@ impl PrimitiveLike for ValueEq {
 pub fn literal_sort(lit: &Literal) -> ArcSort {
     match lit {
         Literal::Int(_) => Arc::new(I64Sort) as ArcSort,
-        Literal::F64(_) => Arc::new(F64Sort) as ArcSort,
+        Literal::Float(_) => Arc::new(F64Sort) as ArcSort,
         Literal::String(_) => Arc::new(StringSort) as ArcSort,
         Literal::Bool(_) => Arc::new(BoolSort) as ArcSort,
         Literal::Unit => Arc::new(UnitSort) as ArcSort,

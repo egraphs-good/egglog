@@ -6,7 +6,7 @@ use std::{fmt::Display, hash::Hasher};
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
 pub enum Literal {
     Int(i64),
-    F64(OrderedFloat<f64>),
+    Float(OrderedFloat<f64>),
     String(Symbol),
     Bool(bool),
     Unit,
@@ -33,14 +33,14 @@ macro_rules! impl_from {
 }
 
 impl_from!(Int(i64));
-impl_from!(F64(OrderedFloat<f64>));
+impl_from!(Float(OrderedFloat<f64>));
 impl_from!(String(Symbol));
 
 impl Display for Literal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self {
             Literal::Int(i) => Display::fmt(i, f),
-            Literal::F64(n) => {
+            Literal::Float(n) => {
                 // need to display with decimal if there is none
                 let str = n.to_string();
                 if let Ok(_num) = str.parse::<i64>() {
