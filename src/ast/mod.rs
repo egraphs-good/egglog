@@ -1161,8 +1161,7 @@ pub(crate) type MappedFact<Head, Leaf> = GenericFact<CorrespondingVar<Head, Leaf
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum GenericFact<Head, Leaf> {
-    /// Must be at least two things in an eq fact
-    Eq(Span, Vec<GenericExpr<Head, Leaf>>),
+    Eq(Span, GenericExpr<Head, Leaf>, GenericExpr<Head, Leaf>),
     Fact(GenericExpr<Head, Leaf>),
 }
 
@@ -1193,21 +1192,22 @@ where
 
         for fact in self.0.iter() {
             match fact {
-                GenericFact::Eq(span, exprs) => {
-                    let mut new_exprs = vec![];
+                GenericFact::Eq(span, e1, e2) => {
                     let mut to_equate = vec![];
-                    for expr in exprs {
+                    let mut process = |expr: &GenericExpr<Head, Leaf>| {
                         let (child_atoms, expr) = expr.to_query(typeinfo, fresh_gen);
                         atoms.extend(child_atoms);
                         to_equate.push(expr.get_corresponding_var_or_lit(typeinfo));
-                        new_exprs.push(expr);
-                    }
+                        expr
+                    };
+                    let e1 = process(e1);
+                    let e2 = process(e2);
                     atoms.push(GenericAtom {
                         span: span.clone(),
                         head: HeadOrEq::Eq,
                         args: to_equate,
                     });
-                    new_body.push(GenericFact::Eq(span.clone(), new_exprs));
+                    new_body.push(GenericFact::Eq(span.clone(), e1, e2));
                 }
                 GenericFact::Fact(expr) => {
                     let (child_atoms, expr) = expr.to_query(typeinfo, fresh_gen);
@@ -1227,7 +1227,7 @@ where
 {
     fn to_sexp(&self) -> Sexp {
         match self {
-            GenericFact::Eq(_, exprs) => list!("=", ++ exprs),
+            GenericFact::Eq(_, e1, e2) => list!("=", e1, e2),
             GenericFact::Fact(expr) => expr.to_sexp(),
         }
     }
@@ -1243,10 +1243,9 @@ where
         f: &mut impl FnMut(GenericExpr<Head, Leaf>) -> GenericExpr<Head, Leaf>,
     ) -> GenericFact<Head, Leaf> {
         match self {
-            GenericFact::Eq(span, exprs) => GenericFact::Eq(
-                span,
-                exprs.into_iter().map(|expr| expr.visit_exprs(f)).collect(),
-            ),
+            GenericFact::Eq(span, e1, e2) => {
+                GenericFact::Eq(span, e1.visit_exprs(f), e2.visit_exprs(f))
+            }
             GenericFact::Fact(expr) => GenericFact::Fact(expr.visit_exprs(f)),
         }
     }
@@ -1256,9 +1255,7 @@ where
         f: &mut impl FnMut(&GenericExpr<Head, Leaf>) -> GenericExpr<Head2, Leaf2>,
     ) -> GenericFact<Head2, Leaf2> {
         match self {
-            GenericFact::Eq(span, exprs) => {
-                GenericFact::Eq(span.clone(), exprs.iter().map(f).collect())
-            }
+            GenericFact::Eq(span, e1, e2) => GenericFact::Eq(span.clone(), f(e1), f(e2)),
             GenericFact::Fact(expr) => GenericFact::Fact(f(expr)),
         }
     }

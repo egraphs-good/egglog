@@ -178,7 +178,8 @@ pub(crate) fn desugar_command(
                     span: span.clone(),
                     body: vec![Fact::Eq(
                         span.clone(),
-                        vec![Expr::Var(span.clone(), fresh), expr.clone()],
+                        Expr::Var(span.clone(), fresh),
+                        expr.clone(),
                     )],
                     head: Actions::singleton(Action::Extract(
                         span.clone(),
@@ -287,7 +288,8 @@ fn desugar_rewrite(
             span: span.clone(),
             body: [Fact::Eq(
                 span.clone(),
-                vec![Expr::Var(span, var), rewrite.lhs.clone()],
+                Expr::Var(span, var),
+                rewrite.lhs.clone(),
             )]
             .into_iter()
             .chain(rewrite.conditions.clone())

@@ -685,8 +685,8 @@ fn fact(sexp: &Sexp) -> Result<Fact, ParseError> {
 
     Ok(match head.into() {
         "=" => match tail {
-            [_, _, ..] => Fact::Eq(span, map_fallible(tail, expr)?),
-            _ => return error!(span, "using = with less than two arguments is not allowed"),
+            [e1, e2] => Fact::Eq(span, expr(e1)?, expr(e2)?),
+            _ => return error!(span, "usage: (= <expr> <expr>)"),
         },
         _ => Fact::Fact(expr(sexp)?),
     })
