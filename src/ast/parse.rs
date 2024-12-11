@@ -773,15 +773,21 @@ impl Context {
                 let mut string = String::new();
 
                 loop {
+                    span.2 = self.index;
                     match self.current_char() {
-                        None => {
-                            span.2 = self.index;
-                            return error!(span, "string is missing end quote");
-                        }
+                        None => return error!(span, "string is missing end quote"),
                         Some('"') if !in_escape => break,
                         Some('\\') if !in_escape => in_escape = true,
                         Some(c) => {
-                            string.push(c);
+                            string.push(match (in_escape, c) {
+                                (false, c) => c,
+                                (true, 'n') => '\n',
+                                (true, 't') => '\t',
+                                (true, '\\') => '\\',
+                                (true, c) => {
+                                    return error!(span, "unrecognized escape character {c}")
+                                }
+                            });
                             in_escape = false;
                         }
                     }
