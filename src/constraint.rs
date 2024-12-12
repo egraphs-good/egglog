@@ -288,12 +288,10 @@ impl Assignment<AtomTerm, ArcSort> {
         typeinfo: &TypeInfo,
     ) -> ResolvedFact {
         match facts {
-            GenericFact::Eq(span, facts) => ResolvedFact::Eq(
+            GenericFact::Eq(span, e1, e2) => ResolvedFact::Eq(
                 span.clone(),
-                facts
-                    .iter()
-                    .map(|expr| self.annotate_expr(expr, typeinfo))
-                    .collect(),
+                self.annotate_expr(e1, typeinfo),
+                self.annotate_expr(e2, typeinfo),
             ),
             GenericFact::Fact(expr) => ResolvedFact::Fact(self.annotate_expr(expr, typeinfo)),
         }
