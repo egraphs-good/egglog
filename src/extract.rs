@@ -154,8 +154,8 @@ impl<'a> Extractor<'a> {
             let (cost, node) = self.costs.get(&id)?.clone();
             Some((cost, node))
         } else {
-            let (cost, node) = sort.extract_expr(self.egraph, value, self, termdag)?;
-            Some((cost, termdag.expr_to_term(&node)))
+            let (cost, node) = sort.extract_term(self.egraph, value, self, termdag)?;
+            Some((cost, node))
         }
     }
 

@@ -20,15 +20,18 @@ impl Sort for StringSort {
         self
     }
 
-    fn make_expr(&self, _egraph: &EGraph, value: Value) -> (Cost, Expr) {
+    fn extract_term(
+        &self,
+        _egraph: &EGraph,
+        value: Value,
+        _extractor: &Extractor,
+        termdag: &mut TermDag,
+    ) -> Option<(Cost, Term)> {
         #[cfg(debug_assertions)]
         debug_assert_eq!(value.tag, self.name());
 
         let sym = Symbol::from(NonZeroU32::new(value.bits as _).unwrap());
-        (
-            1,
-            GenericExpr::Lit(DUMMY_SPAN.clone(), Literal::String(sym)),
-        )
+        Some((1, termdag.lit(Literal::String(sym))))
     }
 
     fn register_primitives(self: Arc<Self>, typeinfo: &mut TypeInfo) {

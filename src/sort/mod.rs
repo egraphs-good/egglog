@@ -97,23 +97,14 @@ pub trait Sort: Any + Send + Sync + Debug {
         let _ = info;
     }
 
-    /// Extracting an expression (with smallest cost) out of a primitive value
-    fn make_expr(&self, egraph: &EGraph, value: Value) -> (Cost, Expr);
-
-    /// For values like EqSort containers, to make/extract an expression from it
-    /// requires an extractor. Moreover, the extraction may be unsuccessful if
-    /// the extractor is not fully initialized.
-    ///
-    /// The default behavior is to call make_expr
-    fn extract_expr(
+    /// Extracting a term (with smallest cost) out of a primitive value
+    fn extract_term(
         &self,
         egraph: &EGraph,
         value: Value,
         _extractor: &Extractor,
         _termdag: &mut TermDag,
-    ) -> Option<(Cost, Expr)> {
-        Some(self.make_expr(egraph, value))
-    }
+    ) -> Option<(Cost, Term)>;
 }
 
 // Note: this trait is currently intended to be implemented on the
@@ -161,8 +152,14 @@ impl Sort for EqSort {
         }
     }
 
-    fn make_expr(&self, _egraph: &EGraph, _value: Value) -> (Cost, Expr) {
-        unimplemented!("No make_expr for EqSort {}", self.name)
+    fn extract_term(
+        &self,
+        _egraph: &EGraph,
+        _value: Value,
+        _extractor: &Extractor,
+        _termdag: &mut TermDag,
+    ) -> Option<(Cost, Term)> {
+        unimplemented!("No extract_term for EqSort {}", self.name)
     }
 }
 

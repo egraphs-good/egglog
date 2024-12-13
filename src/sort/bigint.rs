@@ -63,21 +63,20 @@ impl Sort for BigIntSort {
         add_primitives!(eg, "from-string" = |a: Symbol| -> Opt<Z> { a.as_str().parse::<Z>().ok() });
    }
 
-    fn make_expr(&self, _egraph: &EGraph, value: Value) -> (Cost, Expr) {
+    fn extract_term(
+        &self,
+        _egraph: &EGraph,
+        value: Value,
+        _extractor: &Extractor,
+        termdag: &mut TermDag,
+    ) -> Option<(Cost, Term)> {
         #[cfg(debug_assertions)]
         debug_assert_eq!(value.tag, self.name());
 
         let bigint = Z::load(self, &value);
-        (
-            1,
-            Expr::call_no_span(
-                "from-string",
-                vec![GenericExpr::Lit(
-                    DUMMY_SPAN.clone(),
-                    Literal::String(bigint.to_string().into()),
-                )],
-            ),
-        )
+
+        let as_string = termdag.lit(Literal::String(bigint.to_string().into()));
+        Some((1, termdag.app("from-string".into(), vec![as_string])))
     }
 }
 

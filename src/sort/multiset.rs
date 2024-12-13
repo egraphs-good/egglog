@@ -262,30 +262,22 @@ impl Sort for MultiSetSort {
         }
     }
 
-    fn make_expr(&self, egraph: &EGraph, value: Value) -> (Cost, Expr) {
-        let mut termdag = TermDag::default();
-        let extractor = Extractor::new(egraph, &mut termdag);
-        self.extract_expr(egraph, value, &extractor, &mut termdag)
-            .expect("Extraction should be successful since extractor has been fully initialized")
-    }
-
-    fn extract_expr(
+    fn extract_term(
         &self,
         _egraph: &EGraph,
         value: Value,
         extractor: &Extractor,
         termdag: &mut TermDag,
-    ) -> Option<(Cost, Expr)> {
+    ) -> Option<(Cost, Term)> {
         let multiset = ValueMultiSet::load(self, &value);
         let mut children = vec![];
         let mut cost = 0usize;
         for e in multiset.iter() {
             let (child_cost, child_term) = extractor.find_best(*e, termdag, &self.element)?;
             cost = cost.saturating_add(child_cost);
-            children.push(termdag.term_to_expr(&child_term));
+            children.push(child_term);
         }
-        let expr = Expr::call_no_span("multiset-of", children);
-        Some((cost, expr))
+        Some((cost, termdag.app("multiset-of".into(), children)))
     }
 
     fn serialized_name(&self, _value: &Value) -> Symbol {

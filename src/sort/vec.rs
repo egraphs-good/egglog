@@ -170,36 +170,29 @@ impl Sort for VecSort {
         })
     }
 
-    fn make_expr(&self, egraph: &EGraph, value: Value) -> (Cost, Expr) {
-        let mut termdag = TermDag::default();
-        let extractor = Extractor::new(egraph, &mut termdag);
-        self.extract_expr(egraph, value, &extractor, &mut termdag)
-            .expect("Extraction should be successful since extractor has been fully initialized")
-    }
-
-    fn extract_expr(
+    fn extract_term(
         &self,
         _egraph: &EGraph,
         value: Value,
         extractor: &Extractor,
         termdag: &mut TermDag,
-    ) -> Option<(Cost, Expr)> {
-        let vec = ValueVec::load(self, &value);
+    ) -> Option<(Cost, Term)> {
+        let vec: Vec<Value> = ValueVec::load(self, &value);
         let mut cost = 0usize;
 
         if vec.is_empty() {
-            Some((cost, Expr::call_no_span("vec-empty", [])))
+            Some((cost, termdag.app("vec-empty".into(), vec![])))
         } else {
             let elems = vec
                 .into_iter()
                 .map(|e| {
-                    let e = extractor.find_best(e, termdag, &self.element)?;
-                    cost = cost.saturating_add(e.0);
-                    Some(termdag.term_to_expr(&e.1))
+                    let (extra_cost, term) = extractor.find_best(e, termdag, &self.element)?;
+                    cost = cost.saturating_add(extra_cost);
+                    Some(term)
                 })
                 .collect::<Option<Vec<_>>>()?;
 
-            Some((cost, Expr::call_no_span("vec-of", elems)))
+            Some((cost, termdag.app("vec-of".into(), elems)))
         }
     }
 
