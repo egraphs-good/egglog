@@ -711,7 +711,12 @@ impl EGraph {
                 if a_type.is_eq_sort() {
                     children.push(extractor.find_best(a, &mut termdag, a_type).unwrap().1);
                 } else {
-                    children.push(termdag.expr_to_term(&a_type.make_expr(self, a).1));
+                    children.push(
+                        a_type
+                            .extract_term(self, a, &extractor, &mut termdag)
+                            .unwrap()
+                            .1,
+                    )
                 };
             }
 
@@ -721,7 +726,11 @@ impl EGraph {
                     .unwrap()
                     .1
             } else {
-                termdag.expr_to_term(&schema.output.make_expr(self, out.value).1)
+                schema
+                    .output
+                    .extract_term(self, out.value, &extractor, &mut termdag)
+                    .unwrap()
+                    .1
             };
             terms.push((termdag.app(sym, children), out));
         }

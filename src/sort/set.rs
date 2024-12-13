@@ -171,29 +171,22 @@ impl Sort for SetSort {
         });
     }
 
-    fn make_expr(&self, egraph: &EGraph, value: Value) -> (Cost, Expr) {
-        let mut termdag = TermDag::default();
-        let extractor = Extractor::new(egraph, &mut termdag);
-        self.extract_expr(egraph, value, &extractor, &mut termdag)
-            .expect("Extraction should be successful since extractor has been fully initialized")
-    }
-
-    fn extract_expr(
+    fn extract_term(
         &self,
         _egraph: &EGraph,
         value: Value,
         extractor: &Extractor,
         termdag: &mut TermDag,
-    ) -> Option<(Cost, Expr)> {
+    ) -> Option<(Cost, Term)> {
         let set = ValueSet::load(self, &value);
-        let mut expr = Expr::call_no_span("set-empty", []);
+        let mut term = termdag.app("set-empty".into(), vec![]);
         let mut cost = 0usize;
         for e in set.iter().rev() {
             let e = extractor.find_best(*e, termdag, &self.element)?;
             cost = cost.saturating_add(e.0);
-            expr = Expr::call_no_span("set-insert", [expr, termdag.term_to_expr(&e.1)])
+            term = termdag.app("set-insert".into(), vec![term, e.1])
         }
-        Some((cost, expr))
+        Some((cost, term))
     }
 
     fn serialized_name(&self, _value: &Value) -> Symbol {
