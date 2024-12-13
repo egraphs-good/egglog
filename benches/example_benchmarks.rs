@@ -1,8 +1,12 @@
 use codspeed_criterion_compat::{criterion_group, criterion_main, Criterion};
 use egglog::EGraph;
 
-fn run_example(filename: &str, program: &str) {
-    EGraph::default()
+fn run_example(filename: &str, program: &str, no_messages: bool) {
+    let mut egraph = EGraph::default();
+    if no_messages {
+        egraph.disable_messages();
+    }
+    egraph
         .parse_and_run_program(Some(filename.to_owned()), program)
         .unwrap();
 }
@@ -17,7 +21,10 @@ pub fn criterion_benchmark(c: &mut Criterion) {
         let name = path.file_stem().unwrap().to_string_lossy().to_string();
         let filename = path.to_string_lossy().to_string();
         let program = std::fs::read_to_string(&filename).unwrap();
-        c.bench_function(&name, |b| b.iter(|| run_example(&filename, &program)));
+        let no_messages = path_string.contains("no-messages");
+        c.bench_function(&name, |b| {
+            b.iter(|| run_example(&filename, &program, no_messages))
+        });
     }
 }
 

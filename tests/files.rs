@@ -40,6 +40,9 @@ impl Run {
 
     fn test_program(&self, filename: Option<String>, program: &str, message: &str) {
         let mut egraph = EGraph::default();
+        if self.no_messages() {
+            egraph.disable_messages();
+        }
         egraph.set_reserved_symbol("___".into());
         match egraph.parse_and_run_program(filename, program) {
             Ok(msgs) => {
@@ -99,6 +102,10 @@ impl Run {
 
     fn should_fail(&self) -> bool {
         self.path.to_string_lossy().contains("fail-typecheck")
+    }
+
+    fn no_messages(&self) -> bool {
+        self.path.to_string_lossy().contains("no-messages")
     }
 }
 

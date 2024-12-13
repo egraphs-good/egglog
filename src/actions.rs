@@ -339,9 +339,11 @@ impl EGraph {
                     let variants = values[1].bits as i64;
                     if variants == 0 {
                         let (cost, term) = self.extract(values[0], &mut termdag, sort);
-                        let extracted = termdag.to_string(&term);
-                        log::info!("extracted with cost {cost}: {extracted}");
-                        self.print_msg(extracted);
+                        if self.messages_enabled() {
+                            let extracted = termdag.to_string(&term);
+                            log::info!("extracted with cost {cost}: {extracted}");
+                            self.print_msg(extracted);
+                        }
                         self.extract_report = Some(ExtractReport::Best {
                             termdag,
                             cost,
@@ -353,17 +355,19 @@ impl EGraph {
                         }
                         let terms =
                             self.extract_variants(sort, values[0], variants as usize, &mut termdag);
-                        log::info!("extracted variants:");
-                        let mut msg = String::default();
-                        msg += "(\n";
-                        assert!(!terms.is_empty());
-                        for expr in &terms {
-                            let str = termdag.to_string(expr);
-                            log::info!("   {str}");
-                            msg += &format!("   {str}\n");
+                        if self.messages_enabled() {
+                            log::info!("extracted variants:");
+                            let mut msg = String::default();
+                            msg += "(\n";
+                            assert!(!terms.is_empty());
+                            for expr in &terms {
+                                let str = termdag.to_string(expr);
+                                log::info!("   {str}");
+                                msg += &format!("   {str}\n");
+                            }
+                            msg += ")";
+                            self.print_msg(msg);
                         }
-                        msg += ")";
-                        self.print_msg(msg);
                         self.extract_report = Some(ExtractReport::Variants { termdag, terms });
                     }
 

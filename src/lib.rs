@@ -443,7 +443,8 @@ pub struct EGraph {
     recent_run_report: Option<RunReport>,
     /// The run report unioned over all runs so far.
     overall_run_report: RunReport,
-    msgs: Vec<String>,
+    /// Messages to be printed to the user. If this is `None`, then we are ignoring messages.
+    msgs: Option<Vec<String>>,
 }
 
 impl Default for EGraph {
@@ -463,7 +464,7 @@ impl Default for EGraph {
             extract_report: None,
             recent_run_report: None,
             overall_run_report: Default::default(),
-            msgs: Default::default(),
+            msgs: Some(vec![]),
             type_info: Default::default(),
         };
         egraph
@@ -493,6 +494,23 @@ impl EGraph {
 
     pub fn push(&mut self) {
         self.egraphs.push(self.clone());
+    }
+
+    /// Disable saving messages to be printed to the user and remove any saved messages.
+    ///
+    /// When messages are disabled the vec of messages returned by evaluating commands will always be empty.
+    pub fn disable_messages(&mut self) {
+        self.msgs = None;
+    }
+
+    /// Enable saving messages to be printed to the user.
+    pub fn enable_messages(&mut self) {
+        self.msgs = Some(vec![]);
+    }
+
+    /// Whether messages are enabled.
+    pub fn messages_enabled(&self) -> bool {
+        self.msgs.is_some()
     }
 
     /// Pop the current egraph off the stack, replacing
@@ -1503,12 +1521,18 @@ impl EGraph {
     }
 
     pub(crate) fn print_msg(&mut self, msg: String) {
-        self.msgs.push(msg);
+        if let Some(ref mut msgs) = self.msgs {
+            msgs.push(msg);
+        }
     }
 
     fn flush_msgs(&mut self) -> Vec<String> {
-        self.msgs.dedup_by(|a, b| a.is_empty() && b.is_empty());
-        std::mem::take(&mut self.msgs)
+        if let Some(ref mut msgs) = self.msgs {
+            msgs.dedup_by(|a, b| a.is_empty() && b.is_empty());
+            std::mem::take(msgs)
+        } else {
+            vec![]
+        }
     }
 }
 

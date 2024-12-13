@@ -105,6 +105,9 @@ fn main() {
         egraph.fact_directory.clone_from(&args.fact_directory);
         egraph.seminaive = !args.naive;
         egraph.run_mode = args.show;
+        if args.dont_print_messages {
+            egraph.disable_messages();
+        }
         egraph
     };
 
@@ -152,10 +155,8 @@ fn main() {
         let mut egraph = mk_egraph();
         match egraph.parse_and_run_program(Some(input.to_str().unwrap().into()), &program) {
             Ok(msgs) => {
-                if !args.dont_print_messages {
-                    for msg in msgs {
-                        println!("{msg}");
-                    }
+                for msg in msgs {
+                    println!("{msg}");
                 }
             }
             Err(err) => {
