@@ -1,8 +1,9 @@
 use crate::{
     ast::Literal,
-    util::{HashMap, HashSet, IndexSet},
+    util::{HashMap, IndexSet},
     Expr, GenericExpr, Symbol,
 };
+use std::io::Write;
 
 pub type TermId = usize;
 
@@ -141,40 +142,53 @@ impl TermDag {
     ///
     /// Panics if the term or any of its subterms are not in the DAG.
     pub fn to_string(&self, term: &Term) -> String {
-        let mut stored = HashMap::<TermId, String>::default();
-        let mut seen = HashSet::<TermId>::default();
+        // Vec is used here instead of String as String doesn't have it's
+        // extend_from_within method stabilized.
+        let mut result = vec![];
+        // subranges of the `result` string containing already stringified subterms
+        let mut ranges = HashMap::<TermId, (usize, usize)>::default();
         let id = self.lookup(term);
         // use a stack to avoid stack overflow
-        let mut stack = vec![id];
-        while let Some(next) = stack.pop() {
-            match self.nodes[next].clone() {
+
+        let mut stack = vec![(id, false, None)];
+        while let Some((id, space_before, mut start_index)) = stack.pop() {
+            if space_before {
+                result.push(b' ');
+            }
+
+            if let Some((start, end)) = ranges.get(&id) {
+                result.extend_from_within(*start..*end);
+                continue;
+            }
+
+            match self.nodes[id].clone() {
                 Term::App(name, children) => {
-                    if seen.contains(&next) {
-                        let mut str = String::new();
-                        str.push_str(&format!("({}", name));
-                        for c in children.iter() {
-                            str.push_str(&format!(" {}", stored[c]));
-                        }
-                        str.push(')');
-                        stored.insert(next, str);
+                    if start_index.is_some() {
+                        result.push(b')');
                     } else {
-                        seen.insert(next);
-                        stack.push(next);
+                        stack.push((id, false, Some(result.len())));
+                        write!(&mut result, "({}", name).unwrap();
                         for c in children.iter().rev() {
-                            stack.push(*c);
+                            stack.push((*c, true, None));
                         }
                     }
                 }
                 Term::Lit(lit) => {
-                    stored.insert(next, format!("{}", lit));
+                    start_index = Some(result.len());
+                    write!(&mut result, "{lit}").unwrap();
                 }
                 Term::Var(v) => {
-                    stored.insert(next, format!("{}", v));
+                    start_index = Some(result.len());
+                    write!(&mut result, "{v}").unwrap();
                 }
+            }
+
+            if let Some(start_index) = start_index {
+                ranges.insert(id, (start_index, result.len()));
             }
         }
 
-        stored.get(&id).unwrap().clone()
+        String::from_utf8(result).unwrap()
     }
 }
 
