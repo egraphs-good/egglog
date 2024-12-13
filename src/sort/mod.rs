@@ -105,18 +105,6 @@ pub trait Sort: Any + Send + Sync + Debug {
         _extractor: &Extractor,
         _termdag: &mut TermDag,
     ) -> Option<(Cost, Term)>;
-
-    /// Extracting an expression (with smallest cost) out of a primitive value.
-    /// The default implementation uses [`Sort::extract_term`].
-    fn make_expr(&self, egraph: &EGraph, value: Value) -> (Cost, Expr) {
-        let mut termdag = TermDag::default();
-        let extractor = Extractor::new(egraph, &mut termdag);
-        let (cost, term) = self
-            .extract_term(egraph, value, &extractor, &mut termdag)
-            .expect("Extraction should be successful since extractor has been fully initialized");
-
-        (cost, termdag.term_to_expr(&term))
-    }
 }
 
 // Note: this trait is currently intended to be implemented on the
