@@ -180,6 +180,35 @@ fn map_fallible<T>(
     slice.iter().map(func).collect::<Result<_, _>>()
 }
 
+// helper for parsing a list of options
+fn options(sexps: &[Sexp]) -> Result<Vec<(&str, &[Sexp])>, ParseError> {
+    fn option_name(sexp: &Sexp) -> Option<&str> {
+        if let Ok(symbol) = sexp.expect_atom("") {
+            let s: &str = symbol.into();
+            if let Some(':') = s.chars().next() {
+                return Some(s);
+            }
+        }
+        None
+    }
+
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < sexps.len() {
+        let Some(key) = option_name(&sexps[i]) else {
+            return error!(sexps[i].span(), "option key must start with ':'");
+        };
+        i += 1;
+
+        let start = i;
+        while i < sexps.len() && option_name(&sexps[i]).is_none() {
+            i += 1;
+        }
+        out.push((key, &sexps[start..i]));
+    }
+    Ok(out)
+}
+
 fn command(sexp: &Sexp) -> Result<Command, ParseError> {
     let (head, tail, span) = sexp.expect_call("command")?;
 
@@ -221,12 +250,12 @@ fn command(sexp: &Sexp) -> Result<Command, ParseError> {
             datatypes: map_fallible(tail, rec_datatype)?,
         },
         "function" => match tail {
-            [name, inputs, output, merge @ ..] => Command::Function {
+            [name, inputs, output, rest @ ..] => Command::Function {
                 name: name.expect_atom("function name")?,
                 schema: schema(inputs, output)?,
-                merge: match merge {
-                    [Sexp::Atom(o, _)] if *o == ":no-merge".into() => None,
-                    [Sexp::Atom(o, _), e] if *o == ":merge".into() => Some(expr(e)?),
+                merge: match options(rest)?.as_slice() {
+                    [(":no-merge", [])] => None,
+                    [(":merge", [e])] => Some(expr(e)?),
                     [] => return error!(span, "functions are required to specify merge behaviour"),
                     _ => return error!(span, "could not parse function options"),
                 },
@@ -239,16 +268,13 @@ fn command(sexp: &Sexp) -> Result<Command, ParseError> {
             }
         },
         "constructor" => match tail {
-            [name, inputs, output, options @ ..] => {
+            [name, inputs, output, rest @ ..] => {
                 let mut cost = None;
                 let mut unextractable = false;
-
-                match options {
+                match options(rest)?.as_slice() {
                     [] => {}
-                    [Sexp::Atom(o, _)] if *o == ":unextractable".into() => unextractable = true,
-                    [Sexp::Atom(o, _), c] if *o == ":cost".into() => {
-                        cost = Some(c.expect_uint("cost")?)
-                    }
+                    [(":unextractable", [])] => unextractable = true,
+                    [(":cost", [c])] => cost = Some(c.expect_uint("cost")?),
                     _ => return error!(span, "could not parse constructor options"),
                 }
 
@@ -294,27 +320,19 @@ fn command(sexp: &Sexp) -> Result<Command, ParseError> {
             }
         },
         "rule" => match tail {
-            [lhs, rhs, options @ ..] => {
+            [lhs, rhs, rest @ ..] => {
                 let body = map_fallible(lhs.expect_list("rule query")?, fact)?;
                 let head = map_fallible(rhs.expect_list("rule actions")?, action)?;
                 let head = GenericActions(head);
 
                 let mut ruleset = "".into();
                 let mut name = "".into();
-                let mut i = 0;
-                while i < options.len() {
-                    match options[i].expect_atom("rule option")?.into() {
-                        ":ruleset" => {
-                            i += 1;
-                            ruleset = options[i].expect_atom("ruleset name")?;
-                        }
-                        ":name" => {
-                            i += 1;
-                            name = options[i].expect_string("rule name")?.into();
-                        }
-                        _ => return error!(options[i].span(), "could not parse rule option"),
+                for option in options(rest)? {
+                    match option {
+                        (":ruleset", [r]) => ruleset = r.expect_atom("ruleset name")?,
+                        (":name", [s]) => name = s.expect_string("rule name")?.into(),
+                        _ => return error!(span, "could not parse rule option"),
                     }
-                    i += 1;
                 }
 
                 Command::Rule {
@@ -326,29 +344,22 @@ fn command(sexp: &Sexp) -> Result<Command, ParseError> {
             _ => return error!(span, "usage: (rule (<fact>*) (<action>*) <option>*)"),
         },
         "rewrite" => match tail {
-            [lhs, rhs, options @ ..] => {
+            [lhs, rhs, rest @ ..] => {
                 let lhs = expr(lhs)?;
                 let rhs = expr(rhs)?;
 
                 let mut ruleset = "".into();
                 let mut conditions = Vec::new();
                 let mut subsume = false;
-                let mut i = 0;
-                while i < options.len() {
-                    match options[i].expect_atom("rewrite option")?.into() {
-                        ":ruleset" => {
-                            i += 1;
-                            ruleset = options[i].expect_atom("ruleset name")?;
+                for option in options(rest)? {
+                    match option {
+                        (":ruleset", [r]) => ruleset = r.expect_atom("ruleset name")?,
+                        (":subsume", []) => subsume = true,
+                        (":when", [w]) => {
+                            conditions = map_fallible(w.expect_list("rewrite conditions")?, fact)?
                         }
-                        ":subsume" => subsume = true,
-                        ":when" => {
-                            i += 1;
-                            conditions =
-                                map_fallible(options[i].expect_list("rewrite conditions")?, fact)?;
-                        }
-                        _ => return error!(options[i].span(), "could not parse rewrite option"),
+                        _ => return error!(span, "could not parse rewrite options"),
                     }
-                    i += 1;
                 }
 
                 Command::Rewrite(
@@ -365,27 +376,20 @@ fn command(sexp: &Sexp) -> Result<Command, ParseError> {
             _ => return error!(span, "usage: (rewrite <expr> <expr> <option>*)"),
         },
         "birewrite" => match tail {
-            [lhs, rhs, options @ ..] => {
+            [lhs, rhs, rest @ ..] => {
                 let lhs = expr(lhs)?;
                 let rhs = expr(rhs)?;
 
                 let mut ruleset = "".into();
                 let mut conditions = Vec::new();
-                let mut i = 0;
-                while i < options.len() {
-                    match options[i].expect_atom("rewrite option")?.into() {
-                        ":ruleset" => {
-                            i += 1;
-                            ruleset = options[i].expect_atom("ruleset name")?;
+                for option in options(rest)? {
+                    match option {
+                        (":ruleset", [r]) => ruleset = r.expect_atom("ruleset name")?,
+                        (":when", [w]) => {
+                            conditions = map_fallible(w.expect_list("rewrite conditions")?, fact)?
                         }
-                        ":when" => {
-                            i += 1;
-                            conditions =
-                                map_fallible(options[i].expect_list("rewrite conditions")?, fact)?;
-                        }
-                        _ => return error!(options[i].span(), "could not parse rewrite option"),
+                        _ => return error!(span, "could not parse birewrite options"),
                     }
-                    i += 1;
                 }
 
                 Command::BiRewrite(
@@ -407,7 +411,7 @@ fn command(sexp: &Sexp) -> Result<Command, ParseError> {
 
             let has_ruleset = tail.len() >= 2 && tail[1].expect_uint("").is_ok();
 
-            let (ruleset, limit, options) = if has_ruleset {
+            let (ruleset, limit, rest) = if has_ruleset {
                 (
                     tail[0].expect_atom("ruleset name")?,
                     tail[1].expect_uint("number of iterations")?,
@@ -421,11 +425,9 @@ fn command(sexp: &Sexp) -> Result<Command, ParseError> {
                 )
             };
 
-            let until = match options {
+            let until = match options(rest)?.as_slice() {
                 [] => None,
-                [Sexp::Atom(o, _), facts @ ..] if *o == ":until".into() => {
-                    Some(map_fallible(facts, fact)?)
-                }
+                [(":until", facts)] => Some(map_fallible(facts, fact)?),
                 _ => return error!(span, "could not parse run options"),
             };
 
@@ -447,12 +449,10 @@ fn command(sexp: &Sexp) -> Result<Command, ParseError> {
             _ => return error!(span, "usage: (simplify <schedule> <expr>)"),
         },
         "query-extract" => match tail {
-            [options @ .., e] => {
-                let variants = match options {
+            [rest @ .., e] => {
+                let variants = match options(rest)?.as_slice() {
                     [] => 0,
-                    [Sexp::Atom(o, _), v] if *o == ":variants".into() => {
-                        v.expect_uint("number of variants")?
-                    }
+                    [(":variants", [v])] => v.expect_uint("number of variants")?,
                     _ => return error!(span, "could not parse query-extract options"),
                 };
                 Command::QueryExtract {
@@ -610,17 +610,15 @@ fn schedule(sexp: &Sexp) -> Result<Schedule, ParseError> {
                 _ => true,
             };
 
-            let (ruleset, options) = if has_ruleset {
+            let (ruleset, rest) = if has_ruleset {
                 (tail[0].expect_atom("ruleset name")?, &tail[1..])
             } else {
                 ("".into(), tail)
             };
 
-            let until = match options {
+            let until = match options(rest)?.as_slice() {
                 [] => None,
-                [Sexp::Atom(o, _), facts @ ..] if *o == ":until".into() => {
-                    Some(map_fallible(facts, fact)?)
-                }
+                [(":until", facts)] => Some(map_fallible(facts, fact)?),
                 _ => return error!(span, "could not parse run options"),
             };
 
