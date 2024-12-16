@@ -339,6 +339,7 @@ impl EGraph {
                     let variants = values[1].bits as i64;
                     if variants == 0 {
                         let (cost, term) = self.extract(values[0], &mut termdag, sort);
+                        // dont turn termdag into a string if we have messages disabled for performance reasons
                         if self.messages_enabled() {
                             let extracted = termdag.to_string(&term);
                             log::info!("extracted with cost {cost}: {extracted}");
@@ -355,6 +356,7 @@ impl EGraph {
                         }
                         let terms =
                             self.extract_variants(sort, values[0], variants as usize, &mut termdag);
+                        // Same as above, avoid turning termdag into a string if we have messages disabled for performance
                         if self.messages_enabled() {
                             log::info!("extracted variants:");
                             let mut msg = String::default();
