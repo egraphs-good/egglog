@@ -36,7 +36,6 @@ use constraint::{Constraint, SimpleTypeConstraint, TypeConstraint};
 use extract::Extractor;
 pub use function::Function;
 use function::*;
-use generic_symbolic_expressions::Sexp;
 use gj::*;
 use index::ColumnIndex;
 use indexmap::map::Entry;
@@ -427,6 +426,7 @@ impl FromStr for RunMode {
 #[derive(Clone)]
 pub struct EGraph {
     symbol_gen: SymbolGen,
+    pub macros: Macros,
     egraphs: Vec<Self>,
     unionfind: UnionFind,
     pub functions: IndexMap<Symbol, Function>,
@@ -451,6 +451,7 @@ impl Default for EGraph {
     fn default() -> Self {
         let mut egraph = Self {
             symbol_gen: SymbolGen::new("$".to_string()),
+            macros: Default::default(),
             egraphs: vec![],
             unionfind: Default::default(),
             functions: Default::default(),
@@ -1432,8 +1433,12 @@ impl EGraph {
     }
 
     fn process_command(&mut self, command: Command) -> Result<Vec<ResolvedNCommand>, Error> {
-        let program =
-            desugar::desugar_program(vec![command], &mut self.symbol_gen, self.seminaive)?;
+        let program = desugar::desugar_program(
+            vec![command],
+            &mut self.symbol_gen,
+            self.seminaive,
+            &self.macros,
+        )?;
 
         let program = self
             .type_info
@@ -1482,7 +1487,7 @@ impl EGraph {
         filename: Option<String>,
         input: &str,
     ) -> Result<Vec<String>, Error> {
-        let parsed = parse_program(filename, input)?;
+        let parsed = parse_program(filename, input, &self.macros)?;
         self.run_program(parsed)
     }
 

@@ -8,10 +8,11 @@ pub(crate) fn desugar_program(
     program: Vec<Command>,
     symbol_gen: &mut SymbolGen,
     seminaive_transform: bool,
+    macros: &Macros,
 ) -> Result<Vec<NCommand>, Error> {
     let mut res = vec![];
     for command in program {
-        let desugared = desugar_command(command, symbol_gen, seminaive_transform)?;
+        let desugared = desugar_command(command, symbol_gen, seminaive_transform, macros)?;
         res.extend(desugared);
     }
     Ok(res)
@@ -24,6 +25,7 @@ pub(crate) fn desugar_command(
     command: Command,
     symbol_gen: &mut SymbolGen,
     seminaive_transform: bool,
+    macros: &Macros,
 ) -> Result<Vec<NCommand>, Error> {
     let res = match command {
         Command::SetOption { name, value } => {
@@ -112,9 +114,10 @@ pub(crate) fn desugar_command(
             let s = std::fs::read_to_string(&file)
                 .unwrap_or_else(|_| panic!("{span} Failed to read file {file}"));
             return desugar_program(
-                parse_program(Some(file), &s)?,
+                parse_program(Some(file), &s, macros)?,
                 symbol_gen,
                 seminaive_transform,
+                macros,
             );
         }
         Command::Rule {
@@ -144,7 +147,7 @@ pub(crate) fn desugar_command(
             span,
             expr,
             schedule,
-        } => desugar_simplify(&expr, &schedule, span, symbol_gen),
+        } => desugar_simplify(&expr, &schedule, span, symbol_gen, macros),
         Command::RunSchedule(sched) => {
             vec![NCommand::RunSchedule(sched.clone())]
         }
@@ -218,7 +221,7 @@ pub(crate) fn desugar_command(
             vec![NCommand::Pop(span, num)]
         }
         Command::Fail(span, cmd) => {
-            let mut desugared = desugar_command(*cmd, symbol_gen, seminaive_transform)?;
+            let mut desugared = desugar_command(*cmd, symbol_gen, seminaive_transform, macros)?;
 
             let last = desugared.pop().unwrap();
             desugared.push(NCommand::Fail(span, Box::new(last)));
@@ -323,6 +326,7 @@ fn desugar_simplify(
     schedule: &Schedule,
     span: Span,
     symbol_gen: &mut SymbolGen,
+    macros: &Macros,
 ) -> Vec<NCommand> {
     let mut res = vec![NCommand::Push(1)];
     let lhs = symbol_gen.fresh(&"desugar_simplify".into());
@@ -341,6 +345,7 @@ fn desugar_simplify(
             },
             symbol_gen,
             false,
+            macros,
         )
         .unwrap(),
     );
