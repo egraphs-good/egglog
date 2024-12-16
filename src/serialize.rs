@@ -1,7 +1,10 @@
 use ordered_float::NotNan;
 use std::collections::VecDeque;
 
-use crate::{util::HashMap, ArcSort, EGraph, Function, Symbol, TupleOutput, Value};
+use crate::{
+    extract::Extractor, util::HashMap, ArcSort, EGraph, Function, Symbol, TermDag, TupleOutput,
+    Value,
+};
 
 pub struct SerializeConfig {
     // Maximumum number of functions to include in the serialized graph, any after this will be discarded
@@ -312,7 +315,13 @@ impl EGraph {
                 let op = if sort.is_container_sort() {
                     sort.serialized_name(value).to_string()
                 } else {
-                    sort.make_expr(self, *value).1.to_string()
+                    let mut termdag = TermDag::default();
+                    let extractor = Extractor::new(self, &mut termdag);
+                    let (_, term) = sort
+                            .extract_term(self, *value, &extractor, &mut termdag)
+                            .expect("Extraction should be successful since extractor has been fully initialized");
+
+                    termdag.term_to_expr(&term).to_string()
                 };
                 egraph.nodes.insert(
                     node_id.clone(),

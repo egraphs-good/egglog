@@ -696,7 +696,7 @@ impl EGraph {
     pub fn eval_lit(&self, lit: &Literal) -> Value {
         match lit {
             Literal::Int(i) => i.store(&I64Sort).unwrap(),
-            Literal::F64(f) => f.store(&F64Sort).unwrap(),
+            Literal::Float(f) => f.store(&F64Sort).unwrap(),
             Literal::String(s) => s.store(&StringSort).unwrap(),
             Literal::Unit => ().store(&UnitSort).unwrap(),
             Literal::Bool(b) => b.store(&BoolSort).unwrap(),
@@ -729,7 +729,12 @@ impl EGraph {
                 if a_type.is_eq_sort() {
                     children.push(extractor.find_best(a, &mut termdag, a_type).unwrap().1);
                 } else {
-                    children.push(termdag.expr_to_term(&a_type.make_expr(self, a).1));
+                    children.push(
+                        a_type
+                            .extract_term(self, a, &extractor, &mut termdag)
+                            .unwrap()
+                            .1,
+                    )
                 };
             }
 
@@ -739,7 +744,11 @@ impl EGraph {
                     .unwrap()
                     .1
             } else {
-                termdag.expr_to_term(&schema.output.make_expr(self, out.value).1)
+                schema
+                    .output
+                    .extract_term(self, out.value, &extractor, &mut termdag)
+                    .unwrap()
+                    .1
             };
             terms.push((termdag.app(sym, children), out));
         }
@@ -1374,7 +1383,7 @@ impl EGraph {
                 match s.parse::<i64>() {
                     Ok(i) => Expr::Lit(span.clone(), Literal::Int(i)),
                     Err(_) => match s.parse::<f64>() {
-                        Ok(f) => Expr::Lit(span.clone(), Literal::F64(f.into())),
+                        Ok(f) => Expr::Lit(span.clone(), Literal::Float(f.into())),
                         Err(_) => Expr::Lit(span.clone(), Literal::String(s.into())),
                     },
                 }

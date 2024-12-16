@@ -55,22 +55,6 @@ pub(crate) struct Table {
     pub(crate) vals: Vec<(Input, TupleOutput)>,
 }
 
-/// Used for the HashTable probe sequence.
-macro_rules! search_for {
-    ($slf:expr, $hash:expr, $inp:expr) => {
-        |to| {
-            // Test that hashes match.
-            if to.hash != $hash {
-                return false;
-            }
-            // If the hash matches, the value should not be stale, and the data
-            // should match.
-            let inp = &$slf.vals[to.off as usize].0;
-            inp.live() && inp.data() == $inp
-        }
-    };
-}
-
 impl Debug for Table {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Table")
@@ -119,14 +103,14 @@ impl Table {
     /// table.
     pub(crate) fn get(&self, inputs: &[Value]) -> Option<&TupleOutput> {
         let hash = hash_values(inputs);
-        let &TableOffset { off, .. } = self.table.find(hash, search_for!(self, hash, inputs))?;
+        let &TableOffset { off, .. } = self.table.find(hash, self.search_for(hash, inputs))?;
         debug_assert!(self.vals[off].0.live());
         Some(&self.vals[off].1)
     }
 
     pub(crate) fn get_mut(&mut self, inputs: &[Value]) -> Option<&mut TupleOutput> {
         let hash: u64 = hash_values(inputs);
-        let &TableOffset { off, .. } = self.table.find(hash, search_for!(self, hash, inputs))?;
+        let &TableOffset { off, .. } = self.table.find(hash, self.search_for(hash, inputs))?;
         debug_assert!(self.vals[off].0.live());
         Some(&mut self.vals[off].1)
     }
@@ -159,8 +143,9 @@ impl Table {
         assert!(ts >= self.max_ts);
         self.max_ts = ts;
         let hash = hash_values(inputs);
-        if let Some(TableOffset { off, .. }) =
-            self.table.find_mut(hash, search_for!(self, hash, inputs))
+        if let Some(TableOffset { off, .. }) = self
+            .table
+            .find_mut(hash, search_for(&self.vals, hash, inputs))
         {
             let (inp, prev) = &mut self.vals[*off];
             let prev_subsumed = prev.subsumed;
@@ -185,7 +170,7 @@ impl Table {
         }
         let new_offset = self.vals.len();
         self.vals.push((
-            Input::new(inputs.into()),
+            Input::new(ValueVec::from_slice(inputs)),
             TupleOutput {
                 value: on_merge(None),
                 timestamp: ts,
@@ -235,7 +220,10 @@ impl Table {
     /// removed.
     pub(crate) fn remove(&mut self, inp: &[Value], ts: u32) -> bool {
         let hash = hash_values(inp);
-        let Ok(entry) = self.table.find_entry(hash, search_for!(self, hash, inp)) else {
+        let Ok(entry) = self
+            .table
+            .find_entry(hash, search_for(&self.vals, hash, inp))
+        else {
             return false;
         };
         let (TableOffset { off, .. }, _) = entry.remove();
@@ -323,6 +311,33 @@ impl Table {
         } else {
             0..0
         }
+    }
+
+    /// Used for the HashTable probe sequence.
+    fn search_for<'a>(
+        &'a self,
+        hash: u64,
+        input: &'a [Value],
+    ) -> impl Fn(&TableOffset) -> bool + 'a {
+        search_for(&self.vals, hash, input)
+    }
+}
+
+/// Used for the HashTable probe sequence.
+fn search_for<'a>(
+    vals: &'a [(Input, TupleOutput)],
+    hash: u64,
+    input: &'a [Value],
+) -> impl Fn(&TableOffset) -> bool + 'a {
+    move |to| {
+        // Test that hashes match.
+        if to.hash != hash {
+            return false;
+        }
+        // If the hash matches, the value should not be stale, and the data
+        // should match.
+        let (inp, _) = &vals[to.off];
+        inp.live() && inp.data() == input
     }
 }
 

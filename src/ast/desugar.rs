@@ -50,15 +50,9 @@ pub(crate) fn desugar_command(
             cost,
             unextractable,
         ))],
-        Command::Relation {
-            span,
-            constructor,
-            inputs,
-        } => vec![NCommand::Function(FunctionDecl::relation(
-            span,
-            constructor,
-            inputs,
-        ))],
+        Command::Relation { span, name, inputs } => vec![NCommand::Function(
+            FunctionDecl::relation(span, name, inputs),
+        )],
         Command::Datatype {
             span,
             name,
@@ -184,7 +178,8 @@ pub(crate) fn desugar_command(
                     span: span.clone(),
                     body: vec![Fact::Eq(
                         span.clone(),
-                        vec![Expr::Var(span.clone(), fresh), expr.clone()],
+                        Expr::Var(span.clone(), fresh),
+                        expr.clone(),
                     )],
                     head: Actions::singleton(Action::Extract(
                         span.clone(),
@@ -293,7 +288,8 @@ fn desugar_rewrite(
             span: span.clone(),
             body: [Fact::Eq(
                 span.clone(),
-                vec![Expr::Var(span, var), rewrite.lhs.clone()],
+                Expr::Var(span, var),
+                rewrite.lhs.clone(),
             )]
             .into_iter()
             .chain(rewrite.conditions.clone())
