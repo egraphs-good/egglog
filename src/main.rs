@@ -38,7 +38,7 @@ struct Args {
     #[clap(long, default_value = "0")]
     serialize_n_inline_leaves: usize,
     #[clap(long)]
-    dont_print_messages: bool,
+    no_messages: bool,
 }
 
 // test if the current command should be evaluated
@@ -105,7 +105,7 @@ fn main() {
         egraph.fact_directory.clone_from(&args.fact_directory);
         egraph.seminaive = !args.naive;
         egraph.run_mode = args.show;
-        if args.dont_print_messages {
+        if args.no_messages {
             egraph.disable_messages();
         }
         egraph
