@@ -37,6 +37,8 @@ struct Args {
     /// Number of times to inline leaves
     #[clap(long, default_value = "0")]
     serialize_n_inline_leaves: usize,
+    #[clap(long)]
+    no_messages: bool,
 }
 
 // test if the current command should be evaluated
@@ -103,6 +105,9 @@ fn main() {
         egraph.fact_directory.clone_from(&args.fact_directory);
         egraph.seminaive = !args.naive;
         egraph.run_mode = args.show;
+        if args.no_messages {
+            egraph.disable_messages();
+        }
         egraph
     };
 
