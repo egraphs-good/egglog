@@ -130,24 +130,6 @@ impl ResolvedExpr {
     }
 }
 
-impl Expr {
-    pub fn call_no_span(op: impl Into<Symbol>, children: impl IntoIterator<Item = Self>) -> Self {
-        Self::Call(
-            DUMMY_SPAN.clone(),
-            op.into(),
-            children.into_iter().collect(),
-        )
-    }
-
-    pub fn lit_no_span(lit: impl Into<Literal>) -> Self {
-        Self::Lit(DUMMY_SPAN.clone(), lit.into())
-    }
-
-    pub fn var_no_span(v: impl Into<Symbol>) -> Self {
-        Self::Var(DUMMY_SPAN.clone(), v.into())
-    }
-}
-
 impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq> GenericExpr<Head, Leaf> {
     pub fn span(&self) -> Span {
         match self {
