@@ -376,7 +376,6 @@ dependencies = [
  "codspeed-criterion-compat",
  "egraph-serialize",
  "env_logger",
- "generic_symbolic_expressions",
  "getrandom",
  "glob",
  "hashbrown",
@@ -466,12 +465,6 @@ dependencies = [
  "typenum",
  "version_check",
 ]
-
-[[package]]
-name = "generic_symbolic_expressions"
-version = "5.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "597eb584fb7cfd1935294fc3608a453fc35a58dfa9da4299c8fd3bc75a4c0b4b"
 
 [[package]]
 name = "getrandom"

@@ -6,13 +6,12 @@ use crate::*;
 /// makes rules into a SSA-like format (see [`NormFact`]).
 pub(crate) fn desugar_program(
     program: Vec<Command>,
-    symbol_gen: &mut SymbolGen,
+    parser: &mut Parser,
     seminaive_transform: bool,
-    macros: &Macros,
 ) -> Result<Vec<NCommand>, Error> {
     let mut res = vec![];
     for command in program {
-        let desugared = desugar_command(command, symbol_gen, seminaive_transform, macros)?;
+        let desugared = desugar_command(command, parser, seminaive_transform)?;
         res.extend(desugared);
     }
     Ok(res)
@@ -23,9 +22,8 @@ pub(crate) fn desugar_program(
 /// makes rules into a SSA-like format (see [`NormFact`]).
 pub(crate) fn desugar_command(
     command: Command,
-    symbol_gen: &mut SymbolGen,
+    parser: &mut Parser,
     seminaive_transform: bool,
-    macros: &Macros,
 ) -> Result<Vec<NCommand>, Error> {
     let res = match command {
         Command::SetOption { name, value } => {
@@ -114,10 +112,9 @@ pub(crate) fn desugar_command(
             let s = std::fs::read_to_string(&file)
                 .unwrap_or_else(|_| panic!("{span} Failed to read file {file}"));
             return desugar_program(
-                parse_program(Some(file), &s, macros)?,
-                symbol_gen,
+                parse_program(Some(file), &s, parser)?,
+                parser,
                 seminaive_transform,
-                macros,
             );
         }
         Command::Rule {
@@ -147,7 +144,7 @@ pub(crate) fn desugar_command(
             span,
             expr,
             schedule,
-        } => desugar_simplify(&expr, &schedule, span, symbol_gen, macros),
+        } => desugar_simplify(&expr, &schedule, span, parser),
         Command::RunSchedule(sched) => {
             vec![NCommand::RunSchedule(sched.clone())]
         }
@@ -174,9 +171,9 @@ pub(crate) fn desugar_command(
                 //       ((extract {fresh} {variants}))
                 //       :ruleset {fresh_ruleset})
                 // (run {fresh_ruleset} 1)
-                let fresh = symbol_gen.fresh(&"desugar_qextract_var".into());
-                let fresh_ruleset = symbol_gen.fresh(&"desugar_qextract_ruleset".into());
-                let fresh_rulename = symbol_gen.fresh(&"desugar_qextract_rulename".into());
+                let fresh = parser.symbol_gen.fresh(&"desugar_qextract_var".into());
+                let fresh_ruleset = parser.symbol_gen.fresh(&"desugar_qextract_ruleset".into());
+                let fresh_rulename = parser.symbol_gen.fresh(&"desugar_qextract_rulename".into());
                 let rule = Rule {
                     span: span.clone(),
                     body: vec![Fact::Eq(
@@ -221,7 +218,7 @@ pub(crate) fn desugar_command(
             vec![NCommand::Pop(span, num)]
         }
         Command::Fail(span, cmd) => {
-            let mut desugared = desugar_command(*cmd, symbol_gen, seminaive_transform, macros)?;
+            let mut desugared = desugar_command(*cmd, parser, seminaive_transform)?;
 
             let last = desugared.pop().unwrap();
             desugared.push(NCommand::Fail(span, Box::new(last)));
@@ -325,11 +322,10 @@ fn desugar_simplify(
     expr: &Expr,
     schedule: &Schedule,
     span: Span,
-    symbol_gen: &mut SymbolGen,
-    macros: &Macros,
+    parser: &mut Parser,
 ) -> Vec<NCommand> {
     let mut res = vec![NCommand::Push(1)];
-    let lhs = symbol_gen.fresh(&"desugar_simplify".into());
+    let lhs = parser.symbol_gen.fresh(&"desugar_simplify".into());
     res.push(NCommand::CoreAction(Action::Let(
         span.clone(),
         lhs,
@@ -343,9 +339,8 @@ fn desugar_simplify(
                 variants: 0,
                 expr: Expr::Var(span.clone(), lhs),
             },
-            symbol_gen,
+            parser,
             false,
-            macros,
         )
         .unwrap(),
     );
