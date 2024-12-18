@@ -1060,11 +1060,10 @@ impl EGraph {
 
     fn add_rule_with_name(
         &mut self,
-        name: String,
+        name: Symbol,
         rule: ast::ResolvedRule,
         ruleset: Symbol,
     ) -> Result<Symbol, Error> {
-        let name = Symbol::from(name);
         let core_rule =
             rule.to_canonicalized_core_rule(&self.type_info, &mut self.parser.symbol_gen)?;
         let (query, actions) = (core_rule.body, core_rule.head);
@@ -1099,7 +1098,11 @@ impl EGraph {
         rule: ast::ResolvedRule,
         ruleset: Symbol,
     ) -> Result<Symbol, Error> {
-        let name = format!("{}", rule);
+        let name = ast::desugar::rule_name(&GenericCommand::Rule {
+            rule: rule.clone(),
+            name: "".into(),
+            ruleset,
+        });
         self.add_rule_with_name(name, rule, ruleset)
     }
 

@@ -247,7 +247,7 @@ fn commands(sexp: &Sexp, parser: &Parser) -> Result<Vec<Command>, ParseError> {
     let (head, tail, span) = sexp.expect_call("command")?;
 
     if let Some(func) = parser.commands.get(&head) {
-        return func(tail, span);
+        return func(tail, span, parser);
     }
 
     Ok(match head.into() {
@@ -584,7 +584,7 @@ fn schema(input: &Sexp, output: &Sexp) -> Result<Schema, ParseError> {
     Ok(Schema {
         input: input
             .expect_list("input sorts")?
-            .into_iter()
+            .iter()
             .map(|sexp| sexp.expect_atom("input sort"))
             .collect::<Result<_, _>>()?,
         output: output.expect_atom("output sort")?,
@@ -698,7 +698,7 @@ fn actions(sexp: &Sexp, parser: &Parser) -> Result<Vec<Action>, ParseError> {
     let (head, tail, span) = sexp.expect_call("action")?;
 
     if let Some(func) = parser.actions.get(&head) {
-        return func(tail, span);
+        return func(tail, span, parser);
     }
 
     Ok(match head.into() {
@@ -778,7 +778,7 @@ fn expr(sexp: &Sexp, parser: &Parser) -> Result<Expr, ParseError> {
                 let (head, tail, span) = sexp.expect_call("call expression")?;
 
                 if let Some(func) = parser.exprs.get(&head) {
-                    return func(tail, span);
+                    return func(tail, span, parser);
                 }
 
                 Expr::Call(span.clone(), head, map_fallible(tail, parser, expr)?)
@@ -970,6 +970,8 @@ fn all_sexps(mut ctx: Context) -> Result<Vec<Sexp>, ParseError> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn test_parser_display_roundtrip() {
         let s = r#"(f (g a 3) 4.0 (H "hello"))"#;
@@ -983,7 +985,18 @@ mod tests {
     }
 
     #[test]
-    fn test_parser_parser() {
-        todo!()
+    fn test_parser_macros() {
+        let mut parser = Parser::default();
+        parser.exprs.insert("qqqq".into(), |tail, span, macros| {
+            Ok(Expr::Call(
+                span,
+                "xxxx".into(),
+                map_fallible(tail, macros, expr)?,
+            ))
+        });
+        let s = r#"(f (qqqq a 3) 4.0 (H "hello"))"#;
+        let t = r#"(f (xxxx a 3) 4.0 (H "hello"))"#;
+        let e = crate::ast::parse_expr(None, s, &parser).unwrap();
+        assert_eq!(format!("{}", e), t);
     }
 }

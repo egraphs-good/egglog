@@ -102,11 +102,11 @@ pub(crate) fn desugar_command(
 
             res
         }
-        Command::Rewrite(ruleset, rewrite, subsume) => {
-            desugar_rewrite(ruleset, rewrite_name(&rewrite).into(), &rewrite, subsume)
+        Command::Rewrite(ruleset, ref rewrite, subsume) => {
+            desugar_rewrite(ruleset, rule_name(&command), rewrite, subsume)
         }
-        Command::BiRewrite(ruleset, rewrite) => {
-            desugar_birewrite(ruleset, rewrite_name(&rewrite).into(), &rewrite)
+        Command::BiRewrite(ruleset, ref rewrite) => {
+            desugar_birewrite(ruleset, rule_name(&command), rewrite)
         }
         Command::Include(span, file) => {
             let s = std::fs::read_to_string(&file)
@@ -120,10 +120,10 @@ pub(crate) fn desugar_command(
         Command::Rule {
             ruleset,
             mut name,
-            rule,
+            ref rule,
         } => {
             if name == "".into() {
-                name = rule.to_string().replace('\"', "'").into();
+                name = rule_name(&command);
             }
 
             let result = vec![NCommand::NormRule {
@@ -349,6 +349,10 @@ fn desugar_simplify(
     res
 }
 
-pub(crate) fn rewrite_name(rewrite: &Rewrite) -> String {
-    rewrite.to_string().replace('\"', "'")
+pub fn rule_name<Head, Leaf>(command: &GenericCommand<Head, Leaf>) -> Symbol
+where
+    Head: Clone + Display,
+    Leaf: Clone + PartialEq + Eq + Hash + Display,
+{
+    command.to_string().replace('\"', "'").into()
 }
