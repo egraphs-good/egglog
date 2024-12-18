@@ -1,17 +1,7 @@
 use crate::{
-    ast::{
-        GenericAction, GenericActions, GenericExpr, GenericFact, MappedAction, ResolvedAction,
-        ResolvedActions, ResolvedExpr, ResolvedFact, ResolvedVar,
-    },
-    core::{
-        Atom, AtomTerm, CoreAction, CoreRule, GenericCoreActions, Query, ResolvedCall, SymbolOrEq,
-    },
-    sort::I64Sort,
-    typechecking::TypeError,
-    util::{FreshGen, HashSet, SymbolGen},
-    ArcSort, CorrespondingVar, Span, Symbol, TypeInfo, DUMMY_SPAN,
+    core::{Atom, CoreAction, CoreRule, GenericCoreActions, Query, SymbolOrEq},
+    *,
 };
-use core::{hash::Hash, panic};
 // Use immutable hashmap for performance
 // cloning assignments is common and O(1) with immutable hashmap
 use im_rc::HashMap;
@@ -243,7 +233,7 @@ impl Assignment<AtomTerm, ArcSort> {
                 let ty = global_ty
                     .clone()
                     // Span is ignored when looking up atom_terms
-                    .or_else(|| self.get(&AtomTerm::Var(DUMMY_SPAN.clone(), *var)).cloned())
+                    .or_else(|| self.get(&AtomTerm::Var(Span::Panic, *var)).cloned())
                     .expect("All variables should be assigned before annotation");
                 ResolvedExpr::Var(
                     span.clone(),
@@ -271,7 +261,7 @@ impl Assignment<AtomTerm, ArcSort> {
                     .iter()
                     .map(|arg| arg.output_type())
                     .chain(once(
-                        self.get(&AtomTerm::Var(DUMMY_SPAN.clone(), *corresponding_var))
+                        self.get(&AtomTerm::Var(span.clone(), *corresponding_var))
                             .unwrap()
                             .clone(),
                     ))

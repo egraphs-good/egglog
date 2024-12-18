@@ -411,9 +411,9 @@ fn call_fn(egraph: &mut EGraph, name: &Symbol, types: Vec<ArcSort>, args: Vec<Va
     let binding = IndexSet::from_iter(arg_vars.clone());
     let resolved_args = arg_vars
         .into_iter()
-        .map(|v| GenericExpr::Var(DUMMY_SPAN.clone(), v))
+        .map(|v| GenericExpr::Var(span!(), v))
         .collect();
-    let expr = GenericExpr::Call(DUMMY_SPAN.clone(), resolved_call, resolved_args);
+    let expr = GenericExpr::Call(span!(), resolved_call, resolved_args);
     // Similar to how the merge function is created in `Function::new`
     let (actions, mapped_expr) = expr
         .to_core_actions(
