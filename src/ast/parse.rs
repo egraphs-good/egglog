@@ -52,27 +52,33 @@ pub enum Span {
     Panic,
     /// A span from a `.egg` file.
     /// Constructed by `parse_program` and `parse_expr`.
-    Egglog {
-        file: Arc<SrcFile>,
-        i: usize,
-        j: usize,
-    },
+    Egglog(Arc<EgglogSpan>),
     /// A span from a `.rs` file. Constructed by the `span!` macro.
-    Rust {
-        file: &'static str,
-        line: u32,
-        column: u32,
-    },
+    Rust(Arc<RustSpan>),
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct EgglogSpan {
+    file: Arc<SrcFile>,
+    i: usize,
+    j: usize,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct RustSpan {
+    pub file: &'static str,
+    pub line: u32,
+    pub column: u32,
 }
 
 #[macro_export]
 macro_rules! span {
     () => {
-        $crate::ast::Span::Rust {
+        $crate::ast::Span::Rust(std::sync::Arc::new($crate::ast::RustSpan {
             file: file!(),
             line: line!(),
             column: column!(),
-        }
+        }))
     };
 }
 
@@ -80,8 +86,8 @@ impl Span {
     pub fn string(&self) -> &str {
         match self {
             Span::Panic => panic!("Span::Panic in Span::String"),
-            Span::Rust { .. } => todo!(),
-            Span::Egglog { file, i, j } => &file.contents[*i..*j],
+            Span::Rust(_) => todo!(),
+            Span::Egglog(span) => &span.file.contents[span.i..span.j],
         }
     }
 }
@@ -128,12 +134,14 @@ impl Display for Span {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Span::Panic => panic!("Span::Panic in impl Display"),
-            Span::Rust { file, line, column } => write!(f, "At {line}:{column} of {file}"),
-            Span::Egglog { file, i, j } => {
-                let start = file.get_location(*i);
-                let end = file.get_location((j.saturating_sub(1)).max(*i));
+            Span::Rust(span) => write!(f, "At {}:{} of {}", span.line, span.column, span.file),
+            Span::Egglog(span) => {
+                let start = span.file.get_location(span.i);
+                let end = span
+                    .file
+                    .get_location((span.j.saturating_sub(1)).max(span.i));
                 let quote = self.string();
-                match (&file.name, start.line == end.line) {
+                match (&span.file.name, start.line == end.line) {
                     (Some(filename), true) => write!(
                         f,
                         "In {}:{}-{} of {filename}: {quote}",
@@ -873,9 +881,13 @@ impl Context {
         self.index == self.source.contents.len()
     }
 
-    fn next(&mut self) -> Result<(Token, (Arc<SrcFile>, usize, usize)), ParseError> {
+    fn next(&mut self) -> Result<(Token, EgglogSpan), ParseError> {
         self.advance_past_whitespace();
-        let mut span = (self.source.clone(), self.index, self.index);
+        let mut span = EgglogSpan {
+            file: self.source.clone(),
+            i: self.index,
+            j: self.index,
+        };
 
         let Some(c) = self.current_char() else {
             return error!(s(span), "unexpected end of file");
@@ -890,7 +902,7 @@ impl Context {
                 let mut string = String::new();
 
                 loop {
-                    span.2 = self.index;
+                    span.j = self.index;
                     match self.current_char() {
                         None => return error!(s(span), "string is missing end quote"),
                         Some('"') if !in_escape => break,
@@ -927,15 +939,15 @@ impl Context {
             }
         };
 
-        span.2 = self.index;
+        span.j = self.index;
         self.advance_past_whitespace();
 
         Ok((token, span))
     }
 }
 
-fn s((file, i, j): (Arc<SrcFile>, usize, usize)) -> Span {
-    Span::Egglog { file, i, j }
+fn s(span: EgglogSpan) -> Span {
+    Span::Egglog(Arc::new(span))
 }
 
 enum Token {
@@ -946,7 +958,7 @@ enum Token {
 }
 
 fn sexp(ctx: &mut Context) -> Result<Sexp, ParseError> {
-    let mut stack: Vec<((Arc<SrcFile>, usize, usize), Vec<Sexp>)> = vec![];
+    let mut stack: Vec<(EgglogSpan, Vec<Sexp>)> = vec![];
 
     loop {
         let (token, span) = ctx.next()?;
@@ -961,7 +973,7 @@ fn sexp(ctx: &mut Context) -> Result<Sexp, ParseError> {
                     return error!(s(span), "unexpected `)`");
                 }
                 let (mut list_span, list) = stack.pop().unwrap();
-                list_span.2 = span.2;
+                list_span.j = span.j;
                 Sexp::List(list, s(list_span))
             }
             Token::String(sym) => Sexp::Literal(Literal::String(sym), s(span)),
@@ -1022,7 +1034,7 @@ mod tests {
 
     #[test]
     fn rust_span_display() {
-        assert_eq!(format!("{}", span!()), "At 940:34 of src/ast/parse.rs");
+        assert_eq!(format!("{}", span!()), "At 952:34 of src/ast/parse.rs");
     }
 
     #[test]
