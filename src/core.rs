@@ -125,12 +125,6 @@ impl Display for ResolvedCall {
     }
 }
 
-impl ToSexp for ResolvedCall {
-    fn to_sexp(&self) -> Sexp {
-        Sexp::Symbol(self.to_string())
-    }
-}
-
 #[derive(Debug, Clone)]
 pub enum GenericAtomTerm<Leaf> {
     Var(Span, Leaf),
