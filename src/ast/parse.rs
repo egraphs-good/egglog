@@ -1034,7 +1034,7 @@ mod tests {
 
     #[test]
     fn rust_span_display() {
-        assert_eq!(format!("{}", span!()), "At 952:34 of src/ast/parse.rs");
+        assert_eq!(format!("{}", span!()), "At 1037:34 of src/ast/parse.rs");
     }
 
     #[test]
