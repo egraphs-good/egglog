@@ -1,8 +1,4 @@
-use crate::{
-    ast::Literal,
-    util::{HashMap, IndexSet},
-    Expr, GenericExpr, Symbol,
-};
+use crate::*;
 use std::io::Write;
 
 pub type TermId = usize;
@@ -124,16 +120,16 @@ impl TermDag {
     /// Recursively converts the given term to an expression.
     ///
     /// Panics if the term contains subterms that are not in the DAG.
-    pub fn term_to_expr(&self, term: &Term) -> Expr {
+    pub fn term_to_expr(&self, term: &Term, span: Span) -> Expr {
         match term {
-            Term::Lit(lit) => Expr::lit_no_span(lit.clone()),
-            Term::Var(v) => Expr::var_no_span(*v),
+            Term::Lit(lit) => Expr::Lit(span, lit.clone()),
+            Term::Var(v) => Expr::Var(span, *v),
             Term::App(op, args) => {
                 let args: Vec<_> = args
                     .iter()
-                    .map(|a| self.term_to_expr(self.get(*a)))
+                    .map(|a| self.term_to_expr(self.get(*a), span.clone()))
                     .collect();
-                Expr::call_no_span(*op, args)
+                Expr::Call(span, *op, args)
             }
         }
     }
@@ -195,7 +191,7 @@ impl TermDag {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::*;
+    use crate::{ast::*, span};
 
     fn parse_term(s: &str) -> (TermDag, Term) {
         let e = parse_expr(None, s, &Default::default()).unwrap();
@@ -225,8 +221,8 @@ mod tests {
                 Term::App("f".into(), vec![2, 0, 1, 2]),
             ]
         );
-        let e2 = td.term_to_expr(&t);
         // This is tested using string equality because e1 and e2 have different
+        let e2 = td.term_to_expr(&t, span!());
         // annotations. A better way to test this would be to implement a map_ann
         // function for GenericExpr.
         assert_eq!(format!("{e}"), format!("{e2}")); // roundtrip
@@ -237,10 +233,13 @@ mod tests {
         let s = r#"(f (g x y) x y (g x y))"#;
         let (td, t) = parse_term(s);
         match_term_app!(t; {
-            ("f", [_, x, _, _]) => assert_eq!(
-                td.term_to_expr(td.get(*x)),
-                crate::ast::GenericExpr::Var(DUMMY_SPAN.clone(), Symbol::new("x"))
-            ),
+            ("f", [_, x, _, _]) => {
+                let span = span!();
+                assert_eq!(
+                    td.term_to_expr(td.get(*x), span.clone()),
+                    crate::ast::GenericExpr::Var(span, Symbol::new("x"))
+                )
+            }
             (head, _) => panic!("unexpected head {}, in {}:{}:{}", head, file!(), line!(), column!())
         })
     }
