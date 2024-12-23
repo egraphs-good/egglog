@@ -1,4 +1,3 @@
-use super::ToSexp;
 use crate::{core::ResolvedCall, *};
 use ordered_float::OrderedFloat;
 use std::{fmt::Display, hash::Hasher};
@@ -94,12 +93,6 @@ impl SymbolLike for ResolvedVar {
 impl Display for ResolvedVar {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.name)
-    }
-}
-
-impl ToSexp for ResolvedVar {
-    fn to_sexp(&self) -> Sexp {
-        Sexp::Symbol(self.name.to_string())
     }
 }
 
@@ -250,31 +243,18 @@ impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq> GenericExpr<Head,
     }
 }
 
-impl<Head: Display, Leaf: Display> GenericExpr<Head, Leaf> {
-    /// Converts this expression into a
-    /// s-expression (symbolic expression).
-    /// Example: `(Add (Add 2 3) 4)`
-    pub fn to_sexp(&self) -> Sexp {
-        let res = match self {
-            GenericExpr::Lit(_ann, lit) => Sexp::Symbol(lit.to_string()),
-            GenericExpr::Var(_ann, v) => Sexp::Symbol(v.to_string()),
-            GenericExpr::Call(_ann, op, children) => Sexp::List(
-                vec![Sexp::Symbol(op.to_string())]
-                    .into_iter()
-                    .chain(children.iter().map(|c| c.to_sexp()))
-                    .collect(),
-            ),
-        };
-        res
-    }
-}
-
 impl<Head, Leaf> Display for GenericExpr<Head, Leaf>
 where
     Head: Display,
     Leaf: Display,
 {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.to_sexp())
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        match self {
+            GenericExpr::Lit(_ann, lit) => write!(f, "{lit}"),
+            GenericExpr::Var(_ann, var) => write!(f, "{var}"),
+            GenericExpr::Call(_ann, op, children) => {
+                write!(f, "({} {})", op, ListDisplay(children, " "))
+            }
+        }
     }
 }
