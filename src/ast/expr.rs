@@ -130,6 +130,30 @@ impl ResolvedExpr {
     }
 }
 
+#[macro_export]
+macro_rules! call {
+    ($func:expr, $args:expr) => {
+        $crate::ast::GenericExpr::Call($crate::span!(), $func.into(), $args.into_iter().collect())
+    };
+}
+
+#[macro_export]
+macro_rules! lit {
+    ($lit:expr) => {
+        $crate::ast::GenericExpr::Lit($crate::span!(), $lit.into())
+    };
+}
+
+#[macro_export]
+macro_rules! var {
+    ($var:expr) => {
+        $crate::ast::GenericExpr::Var($crate::span!(), $var.into())
+    };
+}
+
+// Rust macro annoyance; see stackoverflow.com/questions/26731243/how-do-i-use-a-macro-across-module-files
+pub use {call, lit, var};
+
 impl<Head: Clone + Display, Leaf: Hash + Clone + Display + Eq> GenericExpr<Head, Leaf> {
     pub fn span(&self) -> Span {
         match self {
