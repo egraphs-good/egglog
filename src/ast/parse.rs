@@ -46,20 +46,54 @@ pub fn parse_expr(
 
 /// A [`Span`] contains the file name and a pair of offsets representing the start and the end.
 #[derive(Clone, PartialEq, Eq, Hash)]
-pub struct Span(Arc<SrcFile>, usize, usize);
+pub enum Span {
+    /// Panics if a span is needed. Prefer `Span::Rust` (see `span!`)
+    /// unless this behaviour is explicitly desired.
+    Panic,
+    /// A span from a `.egg` file.
+    /// Constructed by `parse_program` and `parse_expr`.
+    Egglog(Arc<EgglogSpan>),
+    /// A span from a `.rs` file. Constructed by the `span!` macro.
+    Rust(Arc<RustSpan>),
+}
 
-lazy_static::lazy_static! {
-    pub static ref DUMMY_SPAN: Span = Span(Arc::new(SrcFile {name: None, contents: String::new()}), 0, 0);
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct EgglogSpan {
+    file: Arc<SrcFile>,
+    i: usize,
+    j: usize,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct RustSpan {
+    pub file: &'static str,
+    pub line: u32,
+    pub column: u32,
+}
+
+#[macro_export]
+macro_rules! span {
+    () => {
+        $crate::ast::Span::Rust(std::sync::Arc::new($crate::ast::RustSpan {
+            file: file!(),
+            line: line!(),
+            column: column!(),
+        }))
+    };
 }
 
 impl Span {
     pub fn string(&self) -> &str {
-        &self.0.contents[self.1..self.2]
+        match self {
+            Span::Panic => panic!("Span::Panic in Span::String"),
+            Span::Rust(_) => todo!(),
+            Span::Egglog(span) => &span.file.contents[span.i..span.j],
+        }
     }
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
-struct SrcFile {
+pub struct SrcFile {
     name: Option<String>,
     contents: String,
 }
@@ -70,7 +104,7 @@ struct Location {
 }
 
 impl SrcFile {
-    pub fn get_location(&self, offset: usize) -> Location {
+    fn get_location(&self, offset: usize) -> Location {
         let mut line = 1;
         let mut col = 1;
         for (i, c) in self.contents.char_indices() {
@@ -98,26 +132,36 @@ impl Debug for Span {
 
 impl Display for Span {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let start = self.0.get_location(self.1);
-        let end = self.0.get_location((self.2.saturating_sub(1)).max(self.1));
-        let quote = self.string();
-        match (&self.0.name, start.line == end.line) {
-            (Some(filename), true) => write!(
-                f,
-                "In {}:{}-{} of {filename}: {quote}",
-                start.line, start.col, end.col
-            ),
-            (Some(filename), false) => write!(
-                f,
-                "In {}:{}-{}:{} of {filename}: {quote}",
-                start.line, start.col, end.line, end.col
-            ),
-            (None, false) => write!(
-                f,
-                "In {}:{}-{}:{}: {quote}",
-                start.line, start.col, end.line, end.col
-            ),
-            (None, true) => write!(f, "In {}:{}-{}: {quote}", start.line, start.col, end.col),
+        match self {
+            Span::Panic => panic!("Span::Panic in impl Display"),
+            Span::Rust(span) => write!(f, "At {}:{} of {}", span.line, span.column, span.file),
+            Span::Egglog(span) => {
+                let start = span.file.get_location(span.i);
+                let end = span
+                    .file
+                    .get_location((span.j.saturating_sub(1)).max(span.i));
+                let quote = self.string();
+                match (&span.file.name, start.line == end.line) {
+                    (Some(filename), true) => write!(
+                        f,
+                        "In {}:{}-{} of {filename}: {quote}",
+                        start.line, start.col, end.col
+                    ),
+                    (Some(filename), false) => write!(
+                        f,
+                        "In {}:{}-{}:{} of {filename}: {quote}",
+                        start.line, start.col, end.line, end.col
+                    ),
+                    (None, false) => write!(
+                        f,
+                        "In {}:{}-{}:{}: {quote}",
+                        start.line, start.col, end.line, end.col
+                    ),
+                    (None, true) => {
+                        write!(f, "In {}:{}-{}: {quote}", start.line, start.col, end.col)
+                    }
+                }
+            }
         }
     }
 }
@@ -837,12 +881,16 @@ impl Context {
         self.index == self.source.contents.len()
     }
 
-    fn next(&mut self) -> Result<(Token, Span), ParseError> {
+    fn next(&mut self) -> Result<(Token, EgglogSpan), ParseError> {
         self.advance_past_whitespace();
-        let mut span = Span(self.source.clone(), self.index, self.index);
+        let mut span = EgglogSpan {
+            file: self.source.clone(),
+            i: self.index,
+            j: self.index,
+        };
 
         let Some(c) = self.current_char() else {
-            return error!(span, "unexpected end of file");
+            return error!(s(span), "unexpected end of file");
         };
         self.advance_char();
 
@@ -854,9 +902,9 @@ impl Context {
                 let mut string = String::new();
 
                 loop {
-                    span.2 = self.index;
+                    span.j = self.index;
                     match self.current_char() {
-                        None => return error!(span, "string is missing end quote"),
+                        None => return error!(s(span), "string is missing end quote"),
                         Some('"') if !in_escape => break,
                         Some('\\') if !in_escape => in_escape = true,
                         Some(c) => {
@@ -866,7 +914,7 @@ impl Context {
                                 (true, 't') => '\t',
                                 (true, '\\') => '\\',
                                 (true, c) => {
-                                    return error!(span, "unrecognized escape character {c}")
+                                    return error!(s(span), "unrecognized escape character {c}")
                                 }
                             });
                             in_escape = false;
@@ -891,11 +939,15 @@ impl Context {
             }
         };
 
-        span.2 = self.index;
+        span.j = self.index;
         self.advance_past_whitespace();
 
         Ok((token, span))
     }
+}
+
+fn s(span: EgglogSpan) -> Span {
+    Span::Egglog(Arc::new(span))
 }
 
 enum Token {
@@ -906,7 +958,7 @@ enum Token {
 }
 
 fn sexp(ctx: &mut Context) -> Result<Sexp, ParseError> {
-    let mut stack: Vec<(Span, Vec<Sexp>)> = vec![];
+    let mut stack: Vec<(EgglogSpan, Vec<Sexp>)> = vec![];
 
     loop {
         let (token, span) = ctx.next()?;
@@ -918,14 +970,15 @@ fn sexp(ctx: &mut Context) -> Result<Sexp, ParseError> {
             }
             Token::Close => {
                 if stack.is_empty() {
-                    return error!(span, "unexpected `)`");
+                    return error!(s(span), "unexpected `)`");
                 }
                 let (mut list_span, list) = stack.pop().unwrap();
-                list_span.2 = span.2;
-                Sexp::List(list, list_span)
+                list_span.j = span.j;
+                Sexp::List(list, s(list_span))
             }
-            Token::String(s) => Sexp::Literal(Literal::String(s), span),
+            Token::String(sym) => Sexp::Literal(Literal::String(sym), s(span)),
             Token::Other => {
+                let span = s(span);
                 let s = span.string();
 
                 if s == "true" {
@@ -980,8 +1033,8 @@ mod tests {
     }
 
     #[test]
-    fn dummy_span_display() {
-        assert_eq!(format!("{}", *super::DUMMY_SPAN), "In 1:1-1: ");
+    fn rust_span_display() {
+        assert_eq!(format!("{}", span!()), "At 1037:34 of src/ast/parse.rs");
     }
 
     #[test]

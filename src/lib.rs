@@ -296,12 +296,12 @@ impl Primitive {
     fn accept(&self, tys: &[Arc<dyn Sort>], typeinfo: &TypeInfo) -> bool {
         let mut constraints = vec![];
         let lits: Vec<_> = (0..tys.len())
-            .map(|i| AtomTerm::Literal(DUMMY_SPAN.clone(), Literal::Int(i as i64)))
+            .map(|i| AtomTerm::Literal(Span::Panic, Literal::Int(i as i64)))
             .collect();
         for (lit, ty) in lits.iter().zip(tys.iter()) {
             constraints.push(Constraint::Assign(lit.clone(), ty.clone()))
         }
-        constraints.extend(self.get_type_constraints(&DUMMY_SPAN).get(&lits, typeinfo));
+        constraints.extend(self.get_type_constraints(&Span::Panic).get(&lits, typeinfo));
         let problem = Problem {
             constraints,
             range: HashSet::default(),
@@ -535,7 +535,7 @@ impl EGraph {
                 self.msgs = messages;
                 Ok(())
             }
-            None => Err(Error::Pop(DUMMY_SPAN.clone())),
+            None => Err(Error::Pop(span!())),
         }
     }
 
@@ -710,7 +710,7 @@ impl EGraph {
         let f = self
             .functions
             .get(&sym)
-            .ok_or(TypeError::UnboundFunction(sym, DUMMY_SPAN.clone()))?;
+            .ok_or(TypeError::UnboundFunction(sym, span!()))?;
         let schema = f.schema.clone();
         let nodes = f
             .nodes
@@ -796,7 +796,7 @@ impl EGraph {
             let f = self
                 .functions
                 .get(&sym)
-                .ok_or(TypeError::UnboundFunction(sym, DUMMY_SPAN.clone()))?;
+                .ok_or(TypeError::UnboundFunction(sym, span!()))?;
             log::info!("Function {} has size {}", sym, f.nodes.len());
             self.print_msg(f.nodes.len().to_string());
             Ok(())
@@ -1109,7 +1109,7 @@ impl EGraph {
 
     pub fn eval_expr(&mut self, expr: &Expr) -> Result<(ArcSort, Value), Error> {
         let fresh_name = self.parser.symbol_gen.fresh(&"egraph_evalexpr".into());
-        let command = Command::Action(Action::Let(DUMMY_SPAN.clone(), fresh_name, expr.clone()));
+        let command = Command::Action(Action::Let(expr.span(), fresh_name, expr.clone()));
         self.run_program(vec![command])?;
         // find the table with the same name as the fresh name
         let func = self.functions.get(&fresh_name).unwrap();
@@ -1360,7 +1360,7 @@ impl EGraph {
         let mut contents = String::new();
         f.read_to_string(&mut contents).unwrap();
 
-        let span: Span = DUMMY_SPAN.clone();
+        let span: Span = span!();
         let mut actions: Vec<Action> = vec![];
         let mut str_buf: Vec<&str> = vec![];
         for line in contents.lines() {
@@ -1495,8 +1495,8 @@ impl EGraph {
     }
 
     /// Add a user-defined sort
-    pub fn add_arcsort(&mut self, arcsort: ArcSort) -> Result<(), TypeError> {
-        self.type_info.add_arcsort(arcsort, DUMMY_SPAN.clone())
+    pub fn add_arcsort(&mut self, arcsort: ArcSort, span: Span) -> Result<(), TypeError> {
+        self.type_info.add_arcsort(arcsort, span)
     }
 
     /// Add a user-defined primitive

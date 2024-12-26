@@ -1,4 +1,4 @@
-use egglog::{ast::Expr, EGraph, ExtractReport, Function, SerializeConfig, Term, Value};
+use egglog::{ast::Expr, *};
 use symbol_table::GlobalSymbol;
 
 #[test]
@@ -111,8 +111,9 @@ fn test_subsumed_unextractable_rebuild_arg() {
     let ExtractReport::Best { term, termdag, .. } = report else {
         panic!();
     };
-    let expr = termdag.term_to_expr(&term);
-    assert_eq!(expr, Expr::call_no_span(GlobalSymbol::from("exp"), vec![]));
+    let span = span!();
+    let expr = termdag.term_to_expr(&term, span.clone());
+    assert_eq!(expr, Expr::Call(span, GlobalSymbol::from("exp"), vec![]));
 }
 
 #[test]
@@ -162,8 +163,9 @@ fn test_subsumed_unextractable_rebuild_self() {
     let ExtractReport::Best { term, termdag, .. } = report else {
         panic!();
     };
-    let expr = termdag.term_to_expr(&term);
-    assert_eq!(expr, Expr::call_no_span(GlobalSymbol::from("exp"), vec![]));
+    let span = span!();
+    let expr = termdag.term_to_expr(&term, span.clone());
+    assert_eq!(expr, Expr::Call(span, GlobalSymbol::from("exp"), vec![]));
 }
 
 #[test]
@@ -398,7 +400,7 @@ fn test_value_to_classid() {
     let ExtractReport::Best { term, termdag, .. } = report else {
         panic!();
     };
-    let expr = termdag.term_to_expr(&term);
+    let expr = termdag.term_to_expr(&term, span!());
     let (sort, value) = egraph.eval_expr(&expr).unwrap();
 
     let serialized = egraph.serialize(SerializeConfig::default());

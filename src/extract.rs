@@ -33,9 +33,7 @@ impl EGraph {
     ///     )
     ///     .unwrap();
     /// let mut termdag = TermDag::default();
-    /// let (sort, value) = egraph
-    ///     .eval_expr(&egglog::ast::Expr::var_no_span("expr"))
-    ///     .unwrap();
+    /// let (sort, value) = egraph.eval_expr(&egglog::var!("expr")).unwrap();
     /// let (_, extracted) = egraph.extract(value, &mut termdag, &sort);
     /// assert_eq!(termdag.to_string(&extracted), "(Add 1 1)");
     /// ```
