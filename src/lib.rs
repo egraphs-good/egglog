@@ -1093,19 +1093,6 @@ impl EGraph {
         }
     }
 
-    pub(crate) fn add_rule(
-        &mut self,
-        rule: ast::ResolvedRule,
-        ruleset: Symbol,
-    ) -> Result<Symbol, Error> {
-        let name = ast::desugar::rule_name(&GenericCommand::Rule {
-            rule: rule.clone(),
-            name: "".into(),
-            ruleset,
-        });
-        self.add_rule_with_name(name, rule, ruleset)
-    }
-
     fn eval_actions(&mut self, actions: &ResolvedActions) -> Result<(), Error> {
         let (actions, _) = actions.to_core_actions(
             &self.type_info,
@@ -1242,7 +1229,7 @@ impl EGraph {
                 rule,
                 name,
             } => {
-                self.add_rule(rule, ruleset)?;
+                self.add_rule_with_name(name, rule, ruleset)?;
                 log::info!("Declared rule {name}.")
             }
             ResolvedNCommand::RunSchedule(sched) => {
