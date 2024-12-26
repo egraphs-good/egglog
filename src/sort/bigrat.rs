@@ -102,35 +102,30 @@ impl Sort for BigRatSort {
         add_primitives!(eg, ">=" = |a: Q, b: Q| -> Opt { if a >= b {Some(())} else {None} });
    }
 
-    fn make_expr(&self, _egraph: &EGraph, value: Value) -> (Cost, Expr) {
+    fn extract_term(
+        &self,
+        _egraph: &EGraph,
+        value: Value,
+        _extractor: &Extractor,
+        termdag: &mut TermDag,
+    ) -> Option<(Cost, Term)> {
         #[cfg(debug_assertions)]
         debug_assert_eq!(value.tag, self.name());
 
         let rat = Q::load(self, &value);
         let numer = rat.numer();
         let denom = rat.denom();
-        (
+
+        let numer_as_string = termdag.lit(Literal::String(numer.to_string().into()));
+        let denom_as_string = termdag.lit(Literal::String(denom.to_string().into()));
+
+        let numer_term = termdag.app("from-string".into(), vec![numer_as_string]);
+        let denom_term = termdag.app("from-string".into(), vec![denom_as_string]);
+
+        Some((
             1,
-            Expr::call_no_span(
-                "bigrat",
-                vec![
-                    Expr::call_no_span(
-                        "from-string",
-                        vec![GenericExpr::Lit(
-                            DUMMY_SPAN.clone(),
-                            Literal::String(numer.to_string().into()),
-                        )],
-                    ),
-                    Expr::call_no_span(
-                        "from-string",
-                        vec![GenericExpr::Lit(
-                            DUMMY_SPAN.clone(),
-                            Literal::String(denom.to_string().into()),
-                        )],
-                    ),
-                ],
-            ),
-        )
+            termdag.app("bigrat".into(), vec![numer_term, denom_term]),
+        ))
     }
 }
 

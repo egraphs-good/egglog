@@ -6,12 +6,12 @@ use crate::*;
 /// makes rules into a SSA-like format (see [`NormFact`]).
 pub(crate) fn desugar_program(
     program: Vec<Command>,
-    symbol_gen: &mut SymbolGen,
+    parser: &mut Parser,
     seminaive_transform: bool,
 ) -> Result<Vec<NCommand>, Error> {
     let mut res = vec![];
     for command in program {
-        let desugared = desugar_command(command, symbol_gen, seminaive_transform)?;
+        let desugared = desugar_command(command, parser, seminaive_transform)?;
         res.extend(desugared);
     }
     Ok(res)
@@ -22,7 +22,7 @@ pub(crate) fn desugar_program(
 /// makes rules into a SSA-like format (see [`NormFact`]).
 pub(crate) fn desugar_command(
     command: Command,
-    symbol_gen: &mut SymbolGen,
+    parser: &mut Parser,
     seminaive_transform: bool,
 ) -> Result<Vec<NCommand>, Error> {
     let res = match command {
@@ -50,15 +50,9 @@ pub(crate) fn desugar_command(
             cost,
             unextractable,
         ))],
-        Command::Relation {
-            span,
-            constructor,
-            inputs,
-        } => vec![NCommand::Function(FunctionDecl::relation(
-            span,
-            constructor,
-            inputs,
-        ))],
+        Command::Relation { span, name, inputs } => vec![NCommand::Function(
+            FunctionDecl::relation(span, name, inputs),
+        )],
         Command::Datatype {
             span,
             name,
@@ -108,28 +102,28 @@ pub(crate) fn desugar_command(
 
             res
         }
-        Command::Rewrite(ruleset, rewrite, subsume) => {
-            desugar_rewrite(ruleset, rewrite_name(&rewrite).into(), &rewrite, subsume)
+        Command::Rewrite(ruleset, ref rewrite, subsume) => {
+            desugar_rewrite(ruleset, rule_name(&command), rewrite, subsume)
         }
-        Command::BiRewrite(ruleset, rewrite) => {
-            desugar_birewrite(ruleset, rewrite_name(&rewrite).into(), &rewrite)
+        Command::BiRewrite(ruleset, ref rewrite) => {
+            desugar_birewrite(ruleset, rule_name(&command), rewrite)
         }
         Command::Include(span, file) => {
             let s = std::fs::read_to_string(&file)
                 .unwrap_or_else(|_| panic!("{span} Failed to read file {file}"));
             return desugar_program(
-                parse_program(Some(file), &s)?,
-                symbol_gen,
+                parse_program(Some(file), &s, parser)?,
+                parser,
                 seminaive_transform,
             );
         }
         Command::Rule {
             ruleset,
             mut name,
-            rule,
+            ref rule,
         } => {
             if name == "".into() {
-                name = rule.to_string().replace('\"', "'").into();
+                name = rule_name(&command);
             }
 
             let result = vec![NCommand::NormRule {
@@ -150,7 +144,7 @@ pub(crate) fn desugar_command(
             span,
             expr,
             schedule,
-        } => desugar_simplify(&expr, &schedule, span, symbol_gen),
+        } => desugar_simplify(&expr, &schedule, span, parser),
         Command::RunSchedule(sched) => {
             vec![NCommand::RunSchedule(sched.clone())]
         }
@@ -177,14 +171,15 @@ pub(crate) fn desugar_command(
                 //       ((extract {fresh} {variants}))
                 //       :ruleset {fresh_ruleset})
                 // (run {fresh_ruleset} 1)
-                let fresh = symbol_gen.fresh(&"desugar_qextract_var".into());
-                let fresh_ruleset = symbol_gen.fresh(&"desugar_qextract_ruleset".into());
-                let fresh_rulename = symbol_gen.fresh(&"desugar_qextract_rulename".into());
+                let fresh = parser.symbol_gen.fresh(&"desugar_qextract_var".into());
+                let fresh_ruleset = parser.symbol_gen.fresh(&"desugar_qextract_ruleset".into());
+                let fresh_rulename = parser.symbol_gen.fresh(&"desugar_qextract_rulename".into());
                 let rule = Rule {
                     span: span.clone(),
                     body: vec![Fact::Eq(
                         span.clone(),
-                        vec![Expr::Var(span.clone(), fresh), expr.clone()],
+                        Expr::Var(span.clone(), fresh),
+                        expr.clone(),
                     )],
                     head: Actions::singleton(Action::Extract(
                         span.clone(),
@@ -223,7 +218,7 @@ pub(crate) fn desugar_command(
             vec![NCommand::Pop(span, num)]
         }
         Command::Fail(span, cmd) => {
-            let mut desugared = desugar_command(*cmd, symbol_gen, seminaive_transform)?;
+            let mut desugared = desugar_command(*cmd, parser, seminaive_transform)?;
 
             let last = desugared.pop().unwrap();
             desugared.push(NCommand::Fail(span, Box::new(last)));
@@ -293,7 +288,8 @@ fn desugar_rewrite(
             span: span.clone(),
             body: [Fact::Eq(
                 span.clone(),
-                vec![Expr::Var(span, var), rewrite.lhs.clone()],
+                Expr::Var(span, var),
+                rewrite.lhs.clone(),
             )]
             .into_iter()
             .chain(rewrite.conditions.clone())
@@ -326,10 +322,10 @@ fn desugar_simplify(
     expr: &Expr,
     schedule: &Schedule,
     span: Span,
-    symbol_gen: &mut SymbolGen,
+    parser: &mut Parser,
 ) -> Vec<NCommand> {
     let mut res = vec![NCommand::Push(1)];
-    let lhs = symbol_gen.fresh(&"desugar_simplify".into());
+    let lhs = parser.symbol_gen.fresh(&"desugar_simplify".into());
     res.push(NCommand::CoreAction(Action::Let(
         span.clone(),
         lhs,
@@ -343,7 +339,7 @@ fn desugar_simplify(
                 variants: 0,
                 expr: Expr::Var(span.clone(), lhs),
             },
-            symbol_gen,
+            parser,
             false,
         )
         .unwrap(),
@@ -353,6 +349,10 @@ fn desugar_simplify(
     res
 }
 
-pub(crate) fn rewrite_name(rewrite: &Rewrite) -> String {
-    rewrite.to_string().replace('\"', "'")
+pub fn rule_name<Head, Leaf>(command: &GenericCommand<Head, Leaf>) -> Symbol
+where
+    Head: Clone + Display,
+    Leaf: Clone + PartialEq + Eq + Hash + Display,
+{
+    command.to_string().replace('\"', "'").into()
 }

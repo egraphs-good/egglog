@@ -185,34 +185,24 @@ impl Sort for FunctionSort {
         });
     }
 
-    fn make_expr(&self, egraph: &EGraph, value: Value) -> (Cost, Expr) {
-        let mut termdag = TermDag::default();
-        let extractor = Extractor::new(egraph, &mut termdag);
-        self.extract_expr(egraph, value, &extractor, &mut termdag)
-            .expect("Extraction should be successful since extractor has been fully initialized")
-    }
-
-    fn extract_expr(
+    fn extract_term(
         &self,
         _egraph: &EGraph,
         value: Value,
         extractor: &Extractor,
         termdag: &mut TermDag,
-    ) -> Option<(Cost, Expr)> {
+    ) -> Option<(Cost, Term)> {
         let ValueFunction(name, inputs) = ValueFunction::load(self, &value);
         let (cost, args) = inputs.into_iter().try_fold(
-            (
-                1usize,
-                vec![GenericExpr::Lit(DUMMY_SPAN.clone(), Literal::String(name))],
-            ),
+            (1usize, vec![termdag.lit(Literal::String(name))]),
             |(cost, mut args), (sort, value)| {
                 let (new_cost, term) = extractor.find_best(value, termdag, &sort)?;
-                args.push(termdag.term_to_expr(&term));
+                args.push(term);
                 Some((cost.saturating_add(new_cost), args))
             },
         )?;
 
-        Some((cost, Expr::call_no_span("unstable-fn", args)))
+        Some((cost, termdag.app("unstable-fn".into(), args)))
     }
 }
 
@@ -429,7 +419,7 @@ fn call_fn(egraph: &mut EGraph, name: &Symbol, types: Vec<ArcSort>, args: Vec<Va
         .to_core_actions(
             &egraph.type_info,
             &mut binding.clone(),
-            &mut egraph.symbol_gen,
+            &mut egraph.parser.symbol_gen,
         )
         .unwrap();
     let target = mapped_expr.get_corresponding_var_or_lit(&egraph.type_info);

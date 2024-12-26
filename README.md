@@ -73,6 +73,22 @@ We use 50ms as our cutoff currently, any benchmarks shorter than that are ignore
 any benchmarks with have changes > 1% when they haven't been modified. Note that all the ignoring is done manually,
 so if you add another example that's short, an admin on the codspeed project will need to manually ignore it.
 
+## Profiling
+
+One way to profile egglog is to use [samply](https://github.com/mstange/samply/). Here's how you can use it:
+
+```bash
+# install samply
+cargo install --locked samply
+# build a profile build which includes debug symbols
+cargo build --profile profiling
+# run the egglog file and profile
+samply record ./target/profiling/egglog tests/extract-vec-bench.egg
+# [optional] run the egglog file without logging or printing messages, which can help reduce the stdout
+# when you are profiling extracting a large expression
+env RUST_LOG=error samply record ./target/profiling/egglog --dont-print-messages tests/extract-vec-bench.egg
+```
+
 # Documentation
 
 To view documentation, run `cargo doc --open`.

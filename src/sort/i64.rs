@@ -70,14 +70,14 @@ impl Sort for I64Sort {
 
     }
 
-    fn make_expr(&self, _egraph: &EGraph, value: Value) -> (Cost, Expr) {
-        #[cfg(debug_assertions)]
-        debug_assert_eq!(value.tag, self.name());
-
-        (
-            1,
-            GenericExpr::Lit(DUMMY_SPAN.clone(), Literal::Int(value.bits as _)),
-        )
+    fn extract_term(
+        &self,
+        _egraph: &EGraph,
+        value: Value,
+        _extractor: &Extractor,
+        termdag: &mut TermDag,
+    ) -> Option<(Cost, Term)> {
+        Some((1, termdag.lit(Literal::Int(value.bits as _))))
     }
 }
 

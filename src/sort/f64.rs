@@ -50,17 +50,20 @@ impl Sort for F64Sort {
 
     }
 
-    fn make_expr(&self, _egraph: &EGraph, value: Value) -> (Cost, Expr) {
+    fn extract_term(
+        &self,
+        _egraph: &EGraph,
+        value: Value,
+        _extractor: &Extractor,
+        termdag: &mut TermDag,
+    ) -> Option<(Cost, Term)> {
         #[cfg(debug_assertions)]
         debug_assert_eq!(value.tag, self.name());
 
-        (
+        Some((
             1,
-            GenericExpr::Lit(
-                DUMMY_SPAN.clone(),
-                Literal::F64(OrderedFloat(f64::from_bits(value.bits))),
-            ),
-        )
+            termdag.lit(Literal::Float(OrderedFloat(f64::from_bits(value.bits)))),
+        ))
     }
 }
 

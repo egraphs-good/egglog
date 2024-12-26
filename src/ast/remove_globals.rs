@@ -153,10 +153,8 @@ impl<'a> GlobalRemover<'a> {
                     .map(|(old, new)| {
                         GenericFact::Eq(
                             new.span(),
-                            vec![
-                                GenericExpr::Call(new.span(), resolved_var_to_call(old), vec![]),
-                                new.clone(),
-                            ],
+                            GenericExpr::Call(new.span(), resolved_var_to_call(old), vec![]),
+                            new.clone(),
                         )
                     })
                     .collect();

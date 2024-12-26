@@ -36,7 +36,6 @@ use constraint::{Constraint, SimpleTypeConstraint, TypeConstraint};
 use extract::Extractor;
 pub use function::Function;
 use function::*;
-use generic_symbolic_expressions::Sexp;
 use gj::*;
 use index::ColumnIndex;
 use indexmap::map::Entry;
@@ -426,7 +425,7 @@ impl FromStr for RunMode {
 
 #[derive(Clone)]
 pub struct EGraph {
-    symbol_gen: SymbolGen,
+    pub parser: Parser,
     egraphs: Vec<Self>,
     unionfind: UnionFind,
     pub functions: IndexMap<Symbol, Function>,
@@ -443,13 +442,14 @@ pub struct EGraph {
     recent_run_report: Option<RunReport>,
     /// The run report unioned over all runs so far.
     overall_run_report: RunReport,
-    msgs: Vec<String>,
+    /// Messages to be printed to the user. If this is `None`, then we are ignoring messages.
+    msgs: Option<Vec<String>>,
 }
 
 impl Default for EGraph {
     fn default() -> Self {
         let mut egraph = Self {
-            symbol_gen: SymbolGen::new("$".to_string()),
+            parser: Default::default(),
             egraphs: vec![],
             unionfind: Default::default(),
             functions: Default::default(),
@@ -463,7 +463,7 @@ impl Default for EGraph {
             extract_report: None,
             recent_run_report: None,
             overall_run_report: Default::default(),
-            msgs: Default::default(),
+            msgs: Some(vec![]),
             type_info: Default::default(),
         };
         egraph
@@ -493,6 +493,23 @@ impl EGraph {
 
     pub fn push(&mut self) {
         self.egraphs.push(self.clone());
+    }
+
+    /// Disable saving messages to be printed to the user and remove any saved messages.
+    ///
+    /// When messages are disabled the vec of messages returned by evaluating commands will always be empty.
+    pub fn disable_messages(&mut self) {
+        self.msgs = None;
+    }
+
+    /// Enable saving messages to be printed to the user.
+    pub fn enable_messages(&mut self) {
+        self.msgs = Some(vec![]);
+    }
+
+    /// Whether messages are enabled.
+    pub fn messages_enabled(&self) -> bool {
+        self.msgs.is_some()
     }
 
     /// Pop the current egraph off the stack, replacing
@@ -678,7 +695,7 @@ impl EGraph {
     pub fn eval_lit(&self, lit: &Literal) -> Value {
         match lit {
             Literal::Int(i) => i.store(&I64Sort).unwrap(),
-            Literal::F64(f) => f.store(&F64Sort).unwrap(),
+            Literal::Float(f) => f.store(&F64Sort).unwrap(),
             Literal::String(s) => s.store(&StringSort).unwrap(),
             Literal::Unit => ().store(&UnitSort).unwrap(),
             Literal::Bool(b) => b.store(&BoolSort).unwrap(),
@@ -711,7 +728,12 @@ impl EGraph {
                 if a_type.is_eq_sort() {
                     children.push(extractor.find_best(a, &mut termdag, a_type).unwrap().1);
                 } else {
-                    children.push(termdag.expr_to_term(&a_type.make_expr(self, a).1));
+                    children.push(
+                        a_type
+                            .extract_term(self, a, &extractor, &mut termdag)
+                            .unwrap()
+                            .1,
+                    )
                 };
             }
 
@@ -721,7 +743,11 @@ impl EGraph {
                     .unwrap()
                     .1
             } else {
-                termdag.expr_to_term(&schema.output.make_expr(self, out.value).1)
+                schema
+                    .output
+                    .extract_term(self, out.value, &extractor, &mut termdag)
+                    .unwrap()
+                    .1
             };
             terms.push((termdag.app(sym, children), out));
         }
@@ -1034,12 +1060,12 @@ impl EGraph {
 
     fn add_rule_with_name(
         &mut self,
-        name: String,
+        name: Symbol,
         rule: ast::ResolvedRule,
         ruleset: Symbol,
     ) -> Result<Symbol, Error> {
-        let name = Symbol::from(name);
-        let core_rule = rule.to_canonicalized_core_rule(&self.type_info, &mut self.symbol_gen)?;
+        let core_rule =
+            rule.to_canonicalized_core_rule(&self.type_info, &mut self.parser.symbol_gen)?;
         let (query, actions) = (core_rule.body, core_rule.head);
 
         let vars = query.get_vars();
@@ -1067,20 +1093,11 @@ impl EGraph {
         }
     }
 
-    pub(crate) fn add_rule(
-        &mut self,
-        rule: ast::ResolvedRule,
-        ruleset: Symbol,
-    ) -> Result<Symbol, Error> {
-        let name = format!("{}", rule);
-        self.add_rule_with_name(name, rule, ruleset)
-    }
-
     fn eval_actions(&mut self, actions: &ResolvedActions) -> Result<(), Error> {
         let (actions, _) = actions.to_core_actions(
             &self.type_info,
             &mut Default::default(),
-            &mut self.symbol_gen,
+            &mut self.parser.symbol_gen,
         )?;
         let program = self
             .compile_actions(&Default::default(), &actions)
@@ -1091,7 +1108,7 @@ impl EGraph {
     }
 
     pub fn eval_expr(&mut self, expr: &Expr) -> Result<(ArcSort, Value), Error> {
-        let fresh_name = self.symbol_gen.fresh(&"egraph_evalexpr".into());
+        let fresh_name = self.parser.symbol_gen.fresh(&"egraph_evalexpr".into());
         let command = Command::Action(Action::Let(DUMMY_SPAN.clone(), fresh_name, expr.clone()));
         self.run_program(vec![command])?;
         // find the table with the same name as the fresh name
@@ -1107,7 +1124,7 @@ impl EGraph {
         let (actions, mapped_expr) = expr.to_core_actions(
             &self.type_info,
             &mut Default::default(),
-            &mut self.symbol_gen,
+            &mut self.parser.symbol_gen,
         )?;
         let target = mapped_expr.get_corresponding_var_or_lit(&self.type_info);
         let program = self
@@ -1151,7 +1168,8 @@ impl EGraph {
             head: ResolvedActions::default(),
             body: facts.to_vec(),
         };
-        let core_rule = rule.to_canonicalized_core_rule(&self.type_info, &mut self.symbol_gen)?;
+        let core_rule =
+            rule.to_canonicalized_core_rule(&self.type_info, &mut self.parser.symbol_gen)?;
         let query = core_rule.body;
         let ordering = &query.get_vars();
         let query = self.compile_gj_query(query, ordering);
@@ -1211,7 +1229,7 @@ impl EGraph {
                 rule,
                 name,
             } => {
-                self.add_rule(rule, ruleset)?;
+                self.add_rule_with_name(name, rule, ruleset)?;
                 log::info!("Declared rule {name}.")
             }
             ResolvedNCommand::RunSchedule(sched) => {
@@ -1356,7 +1374,7 @@ impl EGraph {
                 match s.parse::<i64>() {
                     Ok(i) => Expr::Lit(span.clone(), Literal::Int(i)),
                     Err(_) => match s.parse::<f64>() {
-                        Ok(f) => Expr::Lit(span.clone(), Literal::F64(f.into())),
+                        Ok(f) => Expr::Lit(span.clone(), Literal::Float(f.into())),
                         Err(_) => Expr::Lit(span.clone(), Literal::String(s.into())),
                     },
                 }
@@ -1382,7 +1400,7 @@ impl EGraph {
             .collect::<Vec<_>>();
         let commands: Vec<_> = self
             .type_info
-            .typecheck_program(&mut self.symbol_gen, &commands)?;
+            .typecheck_program(&mut self.parser.symbol_gen, &commands)?;
         for command in commands {
             self.run_command(command)?;
         }
@@ -1398,21 +1416,20 @@ impl EGraph {
 
     pub fn set_reserved_symbol(&mut self, sym: Symbol) {
         assert!(
-            !self.symbol_gen.has_been_used(),
+            !self.parser.symbol_gen.has_been_used(),
             "Reserved symbol must be set before any symbols are generated"
         );
-        self.symbol_gen = SymbolGen::new(sym.to_string());
+        self.parser.symbol_gen = SymbolGen::new(sym.to_string());
     }
 
     fn process_command(&mut self, command: Command) -> Result<Vec<ResolvedNCommand>, Error> {
-        let program =
-            desugar::desugar_program(vec![command], &mut self.symbol_gen, self.seminaive)?;
+        let program = desugar::desugar_program(vec![command], &mut self.parser, self.seminaive)?;
 
         let program = self
             .type_info
-            .typecheck_program(&mut self.symbol_gen, &program)?;
+            .typecheck_program(&mut self.parser.symbol_gen, &program)?;
 
-        let program = remove_globals(program, &mut self.symbol_gen);
+        let program = remove_globals(program, &mut self.parser.symbol_gen);
 
         Ok(program)
     }
@@ -1455,7 +1472,7 @@ impl EGraph {
         filename: Option<String>,
         input: &str,
     ) -> Result<Vec<String>, Error> {
-        let parsed = parse_program(filename, input)?;
+        let parsed = parse_program(filename, input, &self.parser)?;
         self.run_program(parsed)
     }
 
@@ -1503,12 +1520,18 @@ impl EGraph {
     }
 
     pub(crate) fn print_msg(&mut self, msg: String) {
-        self.msgs.push(msg);
+        if let Some(ref mut msgs) = self.msgs {
+            msgs.push(msg);
+        }
     }
 
     fn flush_msgs(&mut self) -> Vec<String> {
-        self.msgs.dedup_by(|a, b| a.is_empty() && b.is_empty());
-        std::mem::take(&mut self.msgs)
+        if let Some(ref mut msgs) = self.msgs {
+            msgs.dedup_by(|a, b| a.is_empty() && b.is_empty());
+            std::mem::take(msgs)
+        } else {
+            vec![]
+        }
     }
 }
 

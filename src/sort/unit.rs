@@ -21,14 +21,14 @@ impl Sort for UnitSort {
         type_info.add_primitive(NotEqualPrimitive { unit: self })
     }
 
-    fn make_expr(&self, _egraph: &EGraph, value: Value) -> (Cost, Expr) {
-        #[cfg(debug_assertions)]
-        debug_assert_eq!(value.tag, self.name());
-
-        #[cfg(not(debug_assertions))]
-        let _ = value;
-
-        (1, GenericExpr::Lit(DUMMY_SPAN.clone(), Literal::Unit))
+    fn extract_term(
+        &self,
+        _egraph: &EGraph,
+        _value: Value,
+        _extractor: &Extractor,
+        termdag: &mut TermDag,
+    ) -> Option<(Cost, Term)> {
+        Some((1, termdag.lit(Literal::Unit)))
     }
 }
 

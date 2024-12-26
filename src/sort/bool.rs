@@ -27,14 +27,17 @@ impl Sort for BoolSort {
         add_primitives!(eg, "=>" = |a: bool, b: bool| -> bool { !a || b });
     }
 
-    fn make_expr(&self, _egraph: &EGraph, value: Value) -> (Cost, Expr) {
+    fn extract_term(
+        &self,
+        _egraph: &EGraph,
+        value: Value,
+        _extractor: &Extractor,
+        termdag: &mut TermDag,
+    ) -> Option<(Cost, Term)> {
         #[cfg(debug_assertions)]
         debug_assert_eq!(value.tag, self.name());
 
-        (
-            1,
-            GenericExpr::Lit(DUMMY_SPAN.clone(), Literal::Bool(value.bits > 0)),
-        )
+        Some((1, termdag.lit(Literal::Bool(value.bits > 0))))
     }
 }
 
