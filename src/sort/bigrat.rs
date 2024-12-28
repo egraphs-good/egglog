@@ -48,7 +48,13 @@ impl Sort for BigRatSort {
         add_primitives!(eg, "to-f64" = |a: Q| -> f64 { a.to_f64().unwrap() });
 
         add_primitives!(eg, "pow" = |a: Q, b: Q| -> Option<Q> {
-            if a.is_zero() {
+            if !b.is_integer() {
+                // fractional powers are forbidden.
+                // reject this even for the zero case
+                None
+            } else if a.is_zero() {
+                // remove zero from the field of rationals
+                // so that multiplicative inverse is always safe
                 if b.is_zero() {
                     // 0^0 = 1 by common convention
                     Some(Q::one())
