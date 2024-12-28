@@ -19,9 +19,6 @@ impl Sort for I64Sort {
     }
 
     #[rustfmt::skip]
-    // We need the closure for division and mod operations, as they can panic.
-    // cf https://github.com/rust-lang/rust-clippy/issues/9422
-    #[allow(clippy::unnecessary_lazy_evaluations)]
     fn register_primitives(self: Arc<Self>, typeinfo: &mut TypeInfo) {
         typeinfo.add_primitive(TermOrderingMin {
            });
@@ -30,11 +27,11 @@ impl Sort for I64Sort {
 
         type Opt<T=()> = Option<T>;
 
-        add_primitives!(typeinfo, "+" = |a: i64, b: i64| -> i64 { a + b });
-        add_primitives!(typeinfo, "-" = |a: i64, b: i64| -> i64 { a - b });
-        add_primitives!(typeinfo, "*" = |a: i64, b: i64| -> i64 { a * b });
-        add_primitives!(typeinfo, "/" = |a: i64, b: i64| -> Opt<i64> { (b != 0).then(|| a / b) });
-        add_primitives!(typeinfo, "%" = |a: i64, b: i64| -> Opt<i64> { (b != 0).then(|| a % b) });
+        add_primitives!(typeinfo, "+" = |a: i64, b: i64| -> Opt<i64> { a.checked_add(b) });
+        add_primitives!(typeinfo, "-" = |a: i64, b: i64| -> Opt<i64> { a.checked_sub(b) });
+        add_primitives!(typeinfo, "*" = |a: i64, b: i64| -> Opt<i64> { a.checked_mul(b) });
+        add_primitives!(typeinfo, "/" = |a: i64, b: i64| -> Opt<i64> { a.checked_div(b) });
+        add_primitives!(typeinfo, "%" = |a: i64, b: i64| -> Opt<i64> { a.checked_rem(b) });
 
         add_primitives!(typeinfo, "&" = |a: i64, b: i64| -> i64 { a & b });
         add_primitives!(typeinfo, "|" = |a: i64, b: i64| -> i64 { a | b });
