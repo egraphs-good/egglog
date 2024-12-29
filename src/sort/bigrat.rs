@@ -72,7 +72,6 @@ impl Sort for BigRatSort {
                 } else {
                     (a, b)
                 };
-                
                 // series of type-conversions
                 // to match the `checked_pow` signature
                 let adj_exp_int = adj_exp.to_i64()?;
