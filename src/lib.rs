@@ -15,7 +15,7 @@ mod actions;
 pub mod ast;
 pub mod constraint;
 mod core;
-mod extract;
+pub mod extract;
 mod function;
 mod gj;
 mod serialize;
