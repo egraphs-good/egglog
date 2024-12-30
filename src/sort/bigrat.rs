@@ -13,6 +13,13 @@ lazy_static! {
     static ref RATS: Mutex<IndexSet<Q>> = Default::default();
 }
 
+/// Rational numbers supporting these primitives:
+/// - Arithmetic: `+`, `-`, `*`, `/`, `neg`, `abs`
+/// - Exponential: `pow`, `log`, `sqrt`, `cbrt`
+/// - Rounding: `floor`, `ceil`, `round`
+/// - Con/Destruction: `bigrat`, `numer`, `denom`
+/// - Comparisons: `<`, `>`, `<=`, `>=`
+/// - Other: `min`, `max`, `to-f64`
 #[derive(Debug)]
 pub struct BigRatSort;
 
@@ -41,10 +48,10 @@ impl Sort for BigRatSort {
         add_primitives!(eg, "floor" = |a: Q| -> Q { a.floor() });
         add_primitives!(eg, "ceil" = |a: Q| -> Q { a.ceil() });
         add_primitives!(eg, "round" = |a: Q| -> Q { a.round() });
+
         add_primitives!(eg, "bigrat" = |a: Z, b: Z| -> Q { Q::new(a, b) });
         add_primitives!(eg, "numer" = |a: Q| -> Z { a.numer().clone() });
         add_primitives!(eg, "denom" = |a: Q| -> Z { a.denom().clone() });
-
         add_primitives!(eg, "to-f64" = |a: Q| -> f64 { a.to_f64().unwrap() });
 
         add_primitives!(eg, "pow" = |a: Q, b: Q| -> Option<Q> {

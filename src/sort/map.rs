@@ -7,6 +7,14 @@ use super::*;
 
 type ValueMap = BTreeMap<Value, Value>;
 
+/// A map from a key type to a value type supporting these primitives:
+/// - `map-empty`
+/// - `map-insert`
+/// - `map-get`
+/// - `map-contains`
+/// - `map-not-contains`
+/// - `map-remove`
+/// - `map-length`
 #[derive(Debug)]
 pub struct MapSort {
     name: Symbol,
