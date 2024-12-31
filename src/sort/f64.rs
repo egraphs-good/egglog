@@ -2,6 +2,10 @@ use super::*;
 use crate::ast::Literal;
 use ordered_float::OrderedFloat;
 
+/// 64-bit floating point numbers supporting these primitives:
+/// - Arithmetic: `+`, `-`, `*`, `/`, `%`, `^`, `neg`, `abs`
+/// - Comparisons: `<`, `>`, `<=`, `>=`
+/// - Other: `min`, `max`, `to-i64`, `to-string`
 #[derive(Debug)]
 pub struct F64Sort;
 
@@ -25,14 +29,13 @@ impl Sort for F64Sort {
     fn register_primitives(self: Arc<Self>, eg: &mut TypeInfo) {
         type Opt<T=()> = Option<T>;
 
-        add_primitives!(eg, "neg" = |a: f64| -> f64 { -a });
-
         add_primitives!(eg, "+" = |a: f64, b: f64| -> f64 { a + b });
         add_primitives!(eg, "-" = |a: f64, b: f64| -> f64 { a - b });
         add_primitives!(eg, "*" = |a: f64, b: f64| -> f64 { a * b });
-        add_primitives!(eg, "^" = |a: f64, b: f64| -> f64 { a.powf(b) });
         add_primitives!(eg, "/" = |a: f64, b: f64| -> Opt<f64> { (b != 0.0).then(|| a / b) });
         add_primitives!(eg, "%" = |a: f64, b: f64| -> Opt<f64> { (b != 0.0).then(|| a % b) });
+        add_primitives!(eg, "^" = |a: f64, b: f64| -> f64 { a.powf(b) });
+        add_primitives!(eg, "neg" = |a: f64| -> f64 { -a });
 
         add_primitives!(eg, "<" = |a: f64, b: f64| -> Opt { (a < b).then(|| ()) });
         add_primitives!(eg, ">" = |a: f64, b: f64| -> Opt { (a > b).then(|| ()) });
@@ -43,11 +46,11 @@ impl Sort for F64Sort {
         add_primitives!(eg, "max" = |a: f64, b: f64| -> f64 { a.max(b) });
         add_primitives!(eg, "abs" = |a: f64| -> f64 { a.abs() });
 
+        // `to-f64` should be in `i64.rs`, but `F64Sort` wouldn't exist yet
         add_primitives!(eg, "to-f64" = |a: i64| -> f64 { a as f64 });
         add_primitives!(eg, "to-i64" = |a: f64| -> i64 { a as i64 });
         // Use debug instead of to_string so that decimal place is always printed
         add_primitives!(eg, "to-string" = |a: f64| -> Symbol { format!("{:?}", a).into() });
-
     }
 
     fn extract_term(
