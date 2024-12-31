@@ -1,0 +1,57 @@
+(let zero (bigrat (bigint 0) (bigint 1)))
+(let zero-alt (bigrat (bigint 0) (bigint -1)))
+(check (= zero zero-alt))
+(check (= zero (* (bigrat (bigint -1) (bigint 1)) zero-alt)))
+
+(let one (bigrat (bigint 1) (bigint 1)))
+(let two (bigrat (bigint 2) (bigint 1)))
+
+(let four (bigrat (bigint 4) (bigint 1)))
+(let fourth (bigrat (bigint 1) (bigint 4)))
+(check (!= four fourth))
+
+(let neg-one (bigrat (bigint -1) (bigint 1)))
+(let neg-one-alt (bigrat (bigint 1) (bigint -1)))
+(check (= neg-one neg-one-alt))
+
+(let neg-two (* neg-one two))
+
+
+; 1 = 0^0 (zero-to-zero edge case)
+(check (= one (pow zero zero)))
+(check (= one (pow zero zero-alt)))
+; 0 = 0^2 (a positive power)
+(check (= zero (pow zero two)))
+; 1/0 error condition
+(fail (pow zero neg-one))
+(fail (pow zero neg-two))
+
+; 4 = 2^2
+(check (= four (pow two two)))
+; 1/4 == 4^-1
+(check (= fourth (pow four neg-one)))
+; 1/4 = 2^-2
+(check (= fourth (pow two neg-two)))
+; 1 = 1^-2
+(check (= one (pow one neg-two)))
+; 1 = 2^0
+(check (= one (pow two zero)))
+; 1 = (-2)^0
+(check (= one (pow neg-two zero)))
+
+; rational powers are forbidden!
+(fail (pow zero fourth))
+(fail (pow two fourth))
+
+
+; big numbers
+(let sixty-four (bigrat (bigint 64) (bigint 1)))
+(let sixty-three (- sixty-four one))
+(let max-i64 (- (pow two sixty-three) one ))
+(let max-u64 (pow two sixty-four))
+
+; max power is max-i64
+(check (= one (pow one max-i64)))
+; adding one more to the power should fail
+(fail (check (= one (pow one (+ one max-i64) ))))
+(fail (pow two max-u64))
