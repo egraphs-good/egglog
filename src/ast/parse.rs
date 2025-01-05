@@ -218,11 +218,11 @@ fn map_fallible<T>(
 }
 
 pub trait Macro<T> {
-    fn name(&self) -> String;
+    fn name(&self) -> Symbol;
     fn parse(&self, args: &[Sexp], span: Span, parser: &mut Parser) -> Result<T, ParseError>;
 }
 
-pub struct SimpleMacro<T, F: Fn(&[Sexp], Span, &mut Parser) -> Result<T, ParseError>>(String, F);
+pub struct SimpleMacro<T, F: Fn(&[Sexp], Span, &mut Parser) -> Result<T, ParseError>>(Symbol, F);
 
 impl<T, F> SimpleMacro<T, F>
 where
@@ -237,8 +237,8 @@ impl<T, F> Macro<T> for SimpleMacro<T, F>
 where
     F: Fn(&[Sexp], Span, &mut Parser) -> Result<T, ParseError>,
 {
-    fn name(&self) -> String {
-        self.0.clone()
+    fn name(&self) -> Symbol {
+        self.0
     }
 
     fn parse(&self, args: &[Sexp], span: Span, parser: &mut Parser) -> Result<T, ParseError> {
@@ -287,15 +287,15 @@ impl Parser {
     }
 
     pub fn add_command_macro(&mut self, ma: Arc<dyn Macro<Vec<Command>>>) {
-        self.commands.insert(ma.name().into(), ma);
+        self.commands.insert(ma.name(), ma);
     }
 
     pub fn add_action_macro(&mut self, ma: Arc<dyn Macro<Vec<Action>>>) {
-        self.actions.insert(ma.name().into(), ma);
+        self.actions.insert(ma.name(), ma);
     }
 
     pub fn add_expr_macro(&mut self, ma: Arc<dyn Macro<Expr>>) {
-        self.exprs.insert(ma.name().into(), ma);
+        self.exprs.insert(ma.name(), ma);
     }
 
     pub fn parse_command(&mut self, sexp: &Sexp) -> Result<Vec<Command>, ParseError> {
