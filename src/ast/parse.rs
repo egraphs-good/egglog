@@ -3,47 +3,6 @@
 use crate::*;
 use ordered_float::OrderedFloat;
 
-pub type Macro<T> = fn(&[Sexp], Span, &Parser) -> Result<T, ParseError>;
-
-#[derive(Clone)]
-pub struct Parser {
-    pub commands: HashMap<Symbol, Macro<Vec<Command>>>,
-    pub actions: HashMap<Symbol, Macro<Vec<Action>>>,
-    pub exprs: HashMap<Symbol, Macro<Expr>>,
-    pub symbol_gen: SymbolGen,
-}
-
-impl Default for Parser {
-    fn default() -> Self {
-        Self {
-            commands: Default::default(),
-            actions: Default::default(),
-            exprs: Default::default(),
-            symbol_gen: SymbolGen::new("$".to_string()),
-        }
-    }
-}
-
-pub fn parse_program(
-    filename: Option<String>,
-    input: &str,
-    parser: &Parser,
-) -> Result<Vec<Command>, ParseError> {
-    let sexps = all_sexps(Context::new(filename, input))?;
-    let nested = map_fallible(&sexps, parser, commands)?;
-    Ok(nested.into_iter().flatten().collect())
-}
-
-// currently only used for testing, but no reason it couldn't be used elsewhere later
-pub fn parse_expr(
-    filename: Option<String>,
-    input: &str,
-    parser: &Parser,
-) -> Result<Expr, ParseError> {
-    let sexp = sexp(&mut Context::new(filename, input))?;
-    expr(&sexp, parser)
-}
-
 /// A [`Span`] contains the file name and a pair of offsets representing the start and the end.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Span {
@@ -250,11 +209,11 @@ impl Sexp {
 fn map_fallible<T>(
     slice: &[Sexp],
     parser: &Parser,
-    func: impl Fn(&Sexp, &Parser) -> Result<T, ParseError>,
+    func: impl Fn(&Parser, &Sexp) -> Result<T, ParseError>,
 ) -> Result<Vec<T>, ParseError> {
     slice
         .iter()
-        .map(|sexp| func(sexp, parser))
+        .map(|sexp| func(parser, sexp))
         .collect::<Result<_, _>>()
 }
 
@@ -287,343 +246,6 @@ fn options(sexps: &[Sexp]) -> Result<Vec<(&str, &[Sexp])>, ParseError> {
     Ok(out)
 }
 
-fn commands(sexp: &Sexp, parser: &Parser) -> Result<Vec<Command>, ParseError> {
-    let (head, tail, span) = sexp.expect_call("command")?;
-
-    if let Some(func) = parser.commands.get(&head) {
-        return func(tail, span, parser);
-    }
-
-    Ok(match head.into() {
-        "set-option" => match tail {
-            [name, value] => vec![Command::SetOption {
-                name: name.expect_atom("option name")?,
-                value: expr(value, parser)?,
-            }],
-            _ => return error!(span, "usage: (set-option <name> <value>)"),
-        },
-        "sort" => match tail {
-            [name] => vec![Command::Sort(span, name.expect_atom("sort name")?, None)],
-            [name, call] => {
-                let (func, args, _) = call.expect_call("container sort declaration")?;
-                vec![Command::Sort(
-                    span,
-                    name.expect_atom("sort name")?,
-                    Some((func, map_fallible(args, parser, expr)?)),
-                )]
-            }
-            _ => {
-                return error!(
-                    span,
-                    "usages:\n(sort <name>)\n(sort <name> (<container sort> <argument sort>*))"
-                )
-            }
-        },
-        "datatype" => match tail {
-            [name, variants @ ..] => vec![Command::Datatype {
-                span,
-                name: name.expect_atom("sort name")?,
-                variants: map_fallible(variants, parser, variant)?,
-            }],
-            _ => return error!(span, "usage: (datatype <name> <variant>*)"),
-        },
-        "datatype*" => vec![Command::Datatypes {
-            span,
-            datatypes: map_fallible(tail, parser, rec_datatype)?,
-        }],
-        "function" => match tail {
-            [name, inputs, output, rest @ ..] => vec![Command::Function {
-                name: name.expect_atom("function name")?,
-                schema: schema(inputs, output)?,
-                merge: match options(rest)?.as_slice() {
-                    [(":no-merge", [])] => None,
-                    [(":merge", [e])] => Some(expr(e, parser)?),
-                    [] => return error!(span, "functions are required to specify merge behaviour"),
-                    _ => return error!(span, "could not parse function options"),
-                },
-                span,
-            }],
-            _ => {
-                let a = "(function <name> (<input sort>*) <output sort> :merge <expr>)";
-                let b = "(function <name> (<input sort>*) <output sort> :no-merge)";
-                return error!(span, "usages:\n{a}\n{b}");
-            }
-        },
-        "constructor" => match tail {
-            [name, inputs, output, rest @ ..] => {
-                let mut cost = None;
-                let mut unextractable = false;
-                match options(rest)?.as_slice() {
-                    [] => {}
-                    [(":unextractable", [])] => unextractable = true,
-                    [(":cost", [c])] => cost = Some(c.expect_uint("cost")?),
-                    _ => return error!(span, "could not parse constructor options"),
-                }
-
-                vec![Command::Constructor {
-                    span,
-                    name: name.expect_atom("constructor name")?,
-                    schema: schema(inputs, output)?,
-                    cost,
-                    unextractable,
-                }]
-            }
-            _ => {
-                let a = "(constructor <name> (<input sort>*) <output sort>)";
-                let b = "(constructor <name> (<input sort>*) <output sort> :cost <cost>)";
-                let c = "(constructor <name> (<input sort>*) <output sort> :unextractable)";
-                return error!(span, "usages:\n{a}\n{b}\n{c}");
-            }
-        },
-        "relation" => match tail {
-            [name, inputs] => vec![Command::Relation {
-                span,
-                name: name.expect_atom("relation name")?,
-                inputs: map_fallible(inputs.expect_list("input sorts")?, parser, |sexp, _| {
-                    sexp.expect_atom("input sort")
-                })?,
-            }],
-            _ => return error!(span, "usage: (relation <name> (<input sort>*))"),
-        },
-        "ruleset" => match tail {
-            [name] => vec![Command::AddRuleset(name.expect_atom("ruleset name")?)],
-            _ => return error!(span, "usage: (ruleset <name>)"),
-        },
-        "unstable-combined-ruleset" => match tail {
-            [name, subrulesets @ ..] => vec![Command::UnstableCombinedRuleset(
-                name.expect_atom("combined ruleset name")?,
-                map_fallible(subrulesets, parser, |sexp, _| {
-                    sexp.expect_atom("subruleset name")
-                })?,
-            )],
-            _ => {
-                return error!(
-                    span,
-                    "usage: (unstable-combined-ruleset <name> <child ruleset>*)"
-                )
-            }
-        },
-        "rule" => match tail {
-            [lhs, rhs, rest @ ..] => {
-                let body = map_fallible(lhs.expect_list("rule query")?, parser, fact)?;
-                let head = map_fallible(rhs.expect_list("rule actions")?, parser, actions)?;
-                let head = GenericActions(head.into_iter().flatten().collect());
-
-                let mut ruleset = "".into();
-                let mut name = "".into();
-                for option in options(rest)? {
-                    match option {
-                        (":ruleset", [r]) => ruleset = r.expect_atom("ruleset name")?,
-                        (":name", [s]) => name = s.expect_string("rule name")?.into(),
-                        _ => return error!(span, "could not parse rule option"),
-                    }
-                }
-
-                vec![Command::Rule {
-                    ruleset,
-                    name,
-                    rule: Rule { span, head, body },
-                }]
-            }
-            _ => return error!(span, "usage: (rule (<fact>*) (<action>*) <option>*)"),
-        },
-        "rewrite" => match tail {
-            [lhs, rhs, rest @ ..] => {
-                let lhs = expr(lhs, parser)?;
-                let rhs = expr(rhs, parser)?;
-
-                let mut ruleset = "".into();
-                let mut conditions = Vec::new();
-                let mut subsume = false;
-                for option in options(rest)? {
-                    match option {
-                        (":ruleset", [r]) => ruleset = r.expect_atom("ruleset name")?,
-                        (":subsume", []) => subsume = true,
-                        (":when", [w]) => {
-                            conditions =
-                                map_fallible(w.expect_list("rewrite conditions")?, parser, fact)?
-                        }
-                        _ => return error!(span, "could not parse rewrite options"),
-                    }
-                }
-
-                vec![Command::Rewrite(
-                    ruleset,
-                    Rewrite {
-                        span,
-                        lhs,
-                        rhs,
-                        conditions,
-                    },
-                    subsume,
-                )]
-            }
-            _ => return error!(span, "usage: (rewrite <expr> <expr> <option>*)"),
-        },
-        "birewrite" => match tail {
-            [lhs, rhs, rest @ ..] => {
-                let lhs = expr(lhs, parser)?;
-                let rhs = expr(rhs, parser)?;
-
-                let mut ruleset = "".into();
-                let mut conditions = Vec::new();
-                for option in options(rest)? {
-                    match option {
-                        (":ruleset", [r]) => ruleset = r.expect_atom("ruleset name")?,
-                        (":when", [w]) => {
-                            conditions =
-                                map_fallible(w.expect_list("rewrite conditions")?, parser, fact)?
-                        }
-                        _ => return error!(span, "could not parse birewrite options"),
-                    }
-                }
-
-                vec![Command::BiRewrite(
-                    ruleset,
-                    Rewrite {
-                        span,
-                        lhs,
-                        rhs,
-                        conditions,
-                    },
-                )]
-            }
-            _ => return error!(span, "usage: (birewrite <expr> <expr> <option>*)"),
-        },
-        "run" => {
-            if tail.is_empty() {
-                return error!(span, "usage: (run <ruleset>? <uint> <:until (<fact>*)>?)");
-            }
-
-            let has_ruleset = tail.len() >= 2 && tail[1].expect_uint("").is_ok();
-
-            let (ruleset, limit, rest) = if has_ruleset {
-                (
-                    tail[0].expect_atom("ruleset name")?,
-                    tail[1].expect_uint("number of iterations")?,
-                    &tail[2..],
-                )
-            } else {
-                (
-                    "".into(),
-                    tail[0].expect_uint("number of iterations")?,
-                    &tail[1..],
-                )
-            };
-
-            let until = match options(rest)?.as_slice() {
-                [] => None,
-                [(":until", facts)] => Some(map_fallible(facts, parser, fact)?),
-                _ => return error!(span, "could not parse run options"),
-            };
-
-            vec![Command::RunSchedule(Schedule::Repeat(
-                span.clone(),
-                limit,
-                Box::new(Schedule::Run(span, RunConfig { ruleset, until })),
-            ))]
-        }
-        "run-schedule" => vec![Command::RunSchedule(Schedule::Sequence(
-            span,
-            map_fallible(tail, parser, schedule)?,
-        ))],
-        "simplify" => match tail {
-            [s, e] => vec![Command::Simplify {
-                span,
-                schedule: schedule(s, parser)?,
-                expr: expr(e, parser)?,
-            }],
-            _ => return error!(span, "usage: (simplify <schedule> <expr>)"),
-        },
-        "query-extract" => match tail {
-            [rest @ .., e] => {
-                let variants = match options(rest)?.as_slice() {
-                    [] => 0,
-                    [(":variants", [v])] => v.expect_uint("number of variants")?,
-                    _ => return error!(span, "could not parse query-extract options"),
-                };
-                vec![Command::QueryExtract {
-                    span,
-                    expr: expr(e, parser)?,
-                    variants,
-                }]
-            }
-            _ => return error!(span, "usage: (query-extract <:variants <uint>>? <expr>)"),
-        },
-        "check" => vec![Command::Check(span, map_fallible(tail, parser, fact)?)],
-        "push" => match tail {
-            [] => vec![Command::Push(1)],
-            [n] => vec![Command::Push(n.expect_uint("number of times to push")?)],
-            _ => return error!(span, "usage: (push <uint>?)"),
-        },
-        "pop" => match tail {
-            [] => vec![Command::Pop(span, 1)],
-            [n] => vec![Command::Pop(span, n.expect_uint("number of times to pop")?)],
-            _ => return error!(span, "usage: (pop <uint>?)"),
-        },
-        "print-stats" => match tail {
-            [] => vec![Command::PrintOverallStatistics],
-            _ => return error!(span, "usage: (print-stats)"),
-        },
-        "print-function" => match tail {
-            [name, rows] => vec![Command::PrintFunction(
-                span,
-                name.expect_atom("table name")?,
-                rows.expect_uint("number of rows to print")?,
-            )],
-            _ => {
-                return error!(
-                    span,
-                    "usage: (print-function <table name> <number of rows>)"
-                )
-            }
-        },
-        "print-size" => match tail {
-            [] => vec![Command::PrintSize(span, None)],
-            [name] => vec![Command::PrintSize(
-                span,
-                Some(name.expect_atom("table name")?),
-            )],
-            _ => return error!(span, "usage: (print-size <table name>?)"),
-        },
-        "input" => match tail {
-            [name, file] => vec![Command::Input {
-                span,
-                name: name.expect_atom("table name")?,
-                file: file.expect_string("file name")?,
-            }],
-            _ => return error!(span, "usage: (input <table name> \"<file name>\")"),
-        },
-        "output" => match tail {
-            [file, exprs @ ..] => vec![Command::Output {
-                span,
-                file: file.expect_string("file name")?,
-                exprs: map_fallible(exprs, parser, expr)?,
-            }],
-            _ => return error!(span, "usage: (output <file name> <expr>+)"),
-        },
-        "include" => match tail {
-            [file] => vec![Command::Include(span, file.expect_string("file name")?)],
-            _ => return error!(span, "usage: (include <file name>)"),
-        },
-        "fail" => match tail {
-            [subcommand] => {
-                let mut cs = commands(subcommand, parser)?;
-                if cs.len() != 1 {
-                    todo!("extend Fail to work with multiple parsed commands")
-                }
-                vec![Command::Fail(span, Box::new(cs.remove(0)))]
-            }
-            _ => return error!(span, "usage: (fail <command>)"),
-        },
-        _ => actions(sexp, parser)
-            .into_iter()
-            .flatten()
-            .map(Command::Action)
-            .collect(),
-    })
-}
-
 fn schema(input: &Sexp, output: &Sexp) -> Result<Schema, ParseError> {
     Ok(Schema {
         input: input
@@ -635,200 +257,631 @@ fn schema(input: &Sexp, output: &Sexp) -> Result<Schema, ParseError> {
     })
 }
 
-fn rec_datatype(sexp: &Sexp, parser: &Parser) -> Result<(Span, Symbol, Subdatatypes), ParseError> {
-    let (head, tail, span) = sexp.expect_call("datatype")?;
-
-    Ok(match head.into() {
-        "sort" => match tail {
-            [name, call] => {
-                let name = name.expect_atom("sort name")?;
-                let (func, args, _) = call.expect_call("container sort declaration")?;
-                let args = map_fallible(args, parser, expr)?;
-                (span, name, Subdatatypes::NewSort(func, args))
-            }
-            _ => {
-                return error!(
-                    span,
-                    "usage: (sort <name> (<container sort> <argument sort>*))"
-                )
-            }
-        },
-        _ => {
-            let variants = map_fallible(tail, parser, variant)?;
-            (span, head, Subdatatypes::Variants(variants))
-        }
-    })
+pub trait Macro<T> {
+    fn get_head(&self) -> String;
+    fn parse(&self, args: &[Sexp], span: Span, parser: &Parser) -> Result<T, ParseError>;
 }
 
-fn variant(sexp: &Sexp, parser: &Parser) -> Result<Variant, ParseError> {
-    let (name, tail, span) = sexp.expect_call("datatype variant")?;
+pub struct SimpleMacro<T, F: Fn(&[Sexp], Span, &Parser) -> Result<T, ParseError>>(String, F);
 
-    let (types, cost) = match tail {
-        [types @ .., Sexp::Atom(o, _), c] if *o == ":cost".into() => {
-            (types, Some(c.expect_uint("cost")?))
-        }
-        types => (types, None),
-    };
-
-    Ok(Variant {
-        span,
-        name,
-        types: map_fallible(types, parser, |sexp, _| {
-            sexp.expect_atom("variant argument type")
-        })?,
-        cost,
-    })
+impl<T, F> SimpleMacro<T, F>
+where
+    F: Fn(&[Sexp], Span, &Parser) -> Result<T, ParseError>,
+{
+    pub fn new(head: &str, f: F) -> Self {
+        Self(head.into(), f)
+    }
 }
 
-fn schedule(sexp: &Sexp, parser: &Parser) -> Result<Schedule, ParseError> {
-    if let Sexp::Atom(ruleset, span) = sexp {
-        return Ok(Schedule::Run(
-            span.clone(),
-            RunConfig {
-                ruleset: *ruleset,
-                until: None,
+impl<T, F> Macro<T> for SimpleMacro<T, F>
+where
+    F: Fn(&[Sexp], Span, &Parser) -> Result<T, ParseError>,
+{
+    fn get_head(&self) -> String {
+        self.0.clone()
+    }
+
+    fn parse(&self, args: &[Sexp], span: Span, parser: &Parser) -> Result<T, ParseError> {
+        self.1(args, span, parser)
+    }
+}
+
+#[derive(Clone)]
+pub struct Parser {
+    commands: HashMap<Symbol, Arc<dyn Macro<Vec<Command>>>>,
+    actions: HashMap<Symbol, Arc<dyn Macro<Vec<Action>>>>,
+    exprs: HashMap<Symbol, Arc<dyn Macro<Expr>>>,
+    pub symbol_gen: SymbolGen,
+}
+
+impl Default for Parser {
+    fn default() -> Self {
+        Self {
+            commands: Default::default(),
+            actions: Default::default(),
+            exprs: Default::default(),
+            symbol_gen: SymbolGen::new("$".to_string()),
+        }
+    }
+}
+
+impl Parser {
+    pub fn get_program_from_string(
+        &self,
+        filename: Option<String>,
+        input: &str,
+    ) -> Result<Vec<Command>, ParseError> {
+        let sexps = all_sexps(Context::new(filename, input))?;
+        let nested = map_fallible(&sexps, self, Self::commands)?;
+        Ok(nested.into_iter().flatten().collect())
+    }
+
+    // currently only used for testing, but no reason it couldn't be used elsewhere later
+    pub fn get_expr_from_string(
+        &self,
+        filename: Option<String>,
+        input: &str,
+    ) -> Result<Expr, ParseError> {
+        let sexp = sexp(&mut Context::new(filename, input))?;
+        self.expr(&sexp)
+    }
+
+    pub fn add_command_macro(&mut self, ma: Arc<dyn Macro<Vec<Command>>>) {
+        self.commands.insert(ma.get_head().into(), ma);
+    }
+
+    pub fn add_action_macro(&mut self, ma: Arc<dyn Macro<Vec<Action>>>) {
+        self.actions.insert(ma.get_head().into(), ma);
+    }
+
+    pub fn add_expr_macro(&mut self, ma: Arc<dyn Macro<Expr>>) {
+        self.exprs.insert(ma.get_head().into(), ma);
+    }
+
+    pub fn commands(&self, sexp: &Sexp) -> Result<Vec<Command>, ParseError> {
+        let (head, tail, span) = sexp.expect_call("command")?;
+
+        if let Some(macr0) = self.commands.get(&head) {
+            return macr0.parse(tail, span, self);
+        }
+
+        Ok(match head.into() {
+            "set-option" => match tail {
+                [name, value] => vec![Command::SetOption {
+                    name: name.expect_atom("option name")?,
+                    value: self.expr(value)?,
+                }],
+                _ => return error!(span, "usage: (set-option <name> <value>)"),
             },
-        ));
-    }
-
-    let (head, tail, span) = sexp.expect_call("schedule")?;
-
-    Ok(match head.into() {
-        "saturate" => Schedule::Saturate(
-            span.clone(),
-            Box::new(Schedule::Sequence(
-                span,
-                map_fallible(tail, parser, schedule)?,
-            )),
-        ),
-        "seq" => Schedule::Sequence(span, map_fallible(tail, parser, schedule)?),
-        "repeat" => match tail {
-            [limit, tail @ ..] => Schedule::Repeat(
-                span.clone(),
-                limit.expect_uint("number of iterations")?,
-                Box::new(Schedule::Sequence(
+            "sort" => match tail {
+                [name] => vec![Command::Sort(span, name.expect_atom("sort name")?, None)],
+                [name, call] => {
+                    let (func, args, _) = call.expect_call("container sort declaration")?;
+                    vec![Command::Sort(
+                        span,
+                        name.expect_atom("sort name")?,
+                        Some((func, map_fallible(args, self, Self::expr)?)),
+                    )]
+                }
+                _ => {
+                    return error!(
+                        span,
+                        "usages:\n(sort <name>)\n(sort <name> (<container sort> <argument sort>*))"
+                    )
+                }
+            },
+            "datatype" => match tail {
+                [name, variants @ ..] => vec![Command::Datatype {
                     span,
-                    map_fallible(tail, parser, schedule)?,
-                )),
-            ),
-            _ => return error!(span, "usage: (repeat <number of iterations> <schedule>*)"),
-        },
-        "run" => {
-            let has_ruleset = match tail.first() {
-                None => false,
-                Some(Sexp::Atom(o, _)) if *o == ":until".into() => false,
-                _ => true,
-            };
-
-            let (ruleset, rest) = if has_ruleset {
-                (tail[0].expect_atom("ruleset name")?, &tail[1..])
-            } else {
-                ("".into(), tail)
-            };
-
-            let until = match options(rest)?.as_slice() {
-                [] => None,
-                [(":until", facts)] => Some(map_fallible(facts, parser, fact)?),
-                _ => return error!(span, "could not parse run options"),
-            };
-
-            Schedule::Run(span, RunConfig { ruleset, until })
-        }
-        _ => return error!(span, "expected either saturate, seq, repeat, or run"),
-    })
-}
-
-fn actions(sexp: &Sexp, parser: &Parser) -> Result<Vec<Action>, ParseError> {
-    let (head, tail, span) = sexp.expect_call("action")?;
-
-    if let Some(func) = parser.actions.get(&head) {
-        return func(tail, span, parser);
-    }
-
-    Ok(match head.into() {
-        "let" => match tail {
-            [name, value] => vec![Action::Let(
+                    name: name.expect_atom("sort name")?,
+                    variants: map_fallible(variants, self, Self::variant)?,
+                }],
+                _ => return error!(span, "usage: (datatype <name> <variant>*)"),
+            },
+            "datatype*" => vec![Command::Datatypes {
                 span,
-                name.expect_atom("binding name")?,
-                expr(value, parser)?,
-            )],
-            _ => return error!(span, "usage: (let <name> <expr>)"),
-        },
-        "set" => match tail {
-            [call, value] => {
-                let (func, args, _) = call.expect_call("table lookup")?;
-                let args = map_fallible(args, parser, expr)?;
-                let value = expr(value, parser)?;
-                vec![Action::Set(span, func, args, value)]
-            }
-            _ => return error!(span, "usage: (set (<table name> <expr>*) <expr>)"),
-        },
-        "delete" => match tail {
-            [call] => {
-                let (func, args, _) = call.expect_call("table lookup")?;
-                let args = map_fallible(args, parser, expr)?;
-                vec![Action::Change(span, Change::Delete, func, args)]
-            }
-            _ => return error!(span, "usage: (delete (<table name> <expr>*))"),
-        },
-        "subsume" => match tail {
-            [call] => {
-                let (func, args, _) = call.expect_call("table lookup")?;
-                let args = map_fallible(args, parser, expr)?;
-                vec![Action::Change(span, Change::Subsume, func, args)]
-            }
-            _ => return error!(span, "usage: (subsume (<table name> <expr>*))"),
-        },
-        "union" => match tail {
-            [e1, e2] => vec![Action::Union(span, expr(e1, parser)?, expr(e2, parser)?)],
-            _ => return error!(span, "usage: (union <expr> <expr>)"),
-        },
-        "panic" => match tail {
-            [message] => vec![Action::Panic(span, message.expect_string("error message")?)],
-            _ => return error!(span, "usage: (panic <string>)"),
-        },
-        "extract" => match tail {
-            [e] => vec![Action::Extract(
-                span.clone(),
-                expr(e, parser)?,
-                Expr::Lit(span, Literal::Int(0)),
-            )],
-            [e, v] => vec![Action::Extract(span, expr(e, parser)?, expr(v, parser)?)],
-            _ => return error!(span, "usage: (extract <expr> <number of variants>?)"),
-        },
-        _ => vec![Action::Expr(span, expr(sexp, parser)?)],
-    })
-}
+                datatypes: map_fallible(tail, self, Self::rec_datatype)?,
+            }],
+            "function" => match tail {
+                [name, inputs, output, rest @ ..] => vec![Command::Function {
+                    name: name.expect_atom("function name")?,
+                    schema: schema(inputs, output)?,
+                    merge: match options(rest)?.as_slice() {
+                        [(":no-merge", [])] => None,
+                        [(":merge", [e])] => Some(self.expr(e)?),
+                        [] => {
+                            return error!(
+                                span,
+                                "functions are required to specify merge behaviour"
+                            )
+                        }
+                        _ => return error!(span, "could not parse function options"),
+                    },
+                    span,
+                }],
+                _ => {
+                    let a = "(function <name> (<input sort>*) <output sort> :merge <expr>)";
+                    let b = "(function <name> (<input sort>*) <output sort> :no-merge)";
+                    return error!(span, "usages:\n{a}\n{b}");
+                }
+            },
+            "constructor" => match tail {
+                [name, inputs, output, rest @ ..] => {
+                    let mut cost = None;
+                    let mut unextractable = false;
+                    match options(rest)?.as_slice() {
+                        [] => {}
+                        [(":unextractable", [])] => unextractable = true,
+                        [(":cost", [c])] => cost = Some(c.expect_uint("cost")?),
+                        _ => return error!(span, "could not parse constructor options"),
+                    }
 
-fn fact(sexp: &Sexp, parser: &Parser) -> Result<Fact, ParseError> {
-    let (head, tail, span) = sexp.expect_call("fact")?;
+                    vec![Command::Constructor {
+                        span,
+                        name: name.expect_atom("constructor name")?,
+                        schema: schema(inputs, output)?,
+                        cost,
+                        unextractable,
+                    }]
+                }
+                _ => {
+                    let a = "(constructor <name> (<input sort>*) <output sort>)";
+                    let b = "(constructor <name> (<input sort>*) <output sort> :cost <cost>)";
+                    let c = "(constructor <name> (<input sort>*) <output sort> :unextractable)";
+                    return error!(span, "usages:\n{a}\n{b}\n{c}");
+                }
+            },
+            "relation" => match tail {
+                [name, inputs] => vec![Command::Relation {
+                    span,
+                    name: name.expect_atom("relation name")?,
+                    inputs: map_fallible(inputs.expect_list("input sorts")?, self, |_, sexp| {
+                        sexp.expect_atom("input sort")
+                    })?,
+                }],
+                _ => return error!(span, "usage: (relation <name> (<input sort>*))"),
+            },
+            "ruleset" => match tail {
+                [name] => vec![Command::AddRuleset(name.expect_atom("ruleset name")?)],
+                _ => return error!(span, "usage: (ruleset <name>)"),
+            },
+            "unstable-combined-ruleset" => match tail {
+                [name, subrulesets @ ..] => vec![Command::UnstableCombinedRuleset(
+                    name.expect_atom("combined ruleset name")?,
+                    map_fallible(subrulesets, self, |_, sexp| {
+                        sexp.expect_atom("subruleset name")
+                    })?,
+                )],
+                _ => {
+                    return error!(
+                        span,
+                        "usage: (unstable-combined-ruleset <name> <child ruleset>*)"
+                    )
+                }
+            },
+            "rule" => match tail {
+                [lhs, rhs, rest @ ..] => {
+                    let body = map_fallible(lhs.expect_list("rule query")?, self, Self::fact)?;
+                    let head = map_fallible(rhs.expect_list("rule actions")?, self, Self::actions)?;
+                    let head = GenericActions(head.into_iter().flatten().collect());
 
-    Ok(match head.into() {
-        "=" => match tail {
-            [e1, e2] => Fact::Eq(span, expr(e1, parser)?, expr(e2, parser)?),
-            _ => return error!(span, "usage: (= <expr> <expr>)"),
-        },
-        _ => Fact::Fact(expr(sexp, parser)?),
-    })
-}
+                    let mut ruleset = "".into();
+                    let mut name = "".into();
+                    for option in options(rest)? {
+                        match option {
+                            (":ruleset", [r]) => ruleset = r.expect_atom("ruleset name")?,
+                            (":name", [s]) => name = s.expect_string("rule name")?.into(),
+                            _ => return error!(span, "could not parse rule option"),
+                        }
+                    }
 
-fn expr(sexp: &Sexp, parser: &Parser) -> Result<Expr, ParseError> {
-    Ok(match sexp {
-        Sexp::Literal(literal, span) => Expr::Lit(span.clone(), literal.clone()),
-        Sexp::Atom(symbol, span) => Expr::Var(span.clone(), *symbol),
-        Sexp::List(list, span) => match list.as_slice() {
-            [] => Expr::Lit(span.clone(), Literal::Unit),
-            _ => {
-                let (head, tail, span) = sexp.expect_call("call expression")?;
+                    vec![Command::Rule {
+                        ruleset,
+                        name,
+                        rule: Rule { span, head, body },
+                    }]
+                }
+                _ => return error!(span, "usage: (rule (<fact>*) (<action>*) <option>*)"),
+            },
+            "rewrite" => match tail {
+                [lhs, rhs, rest @ ..] => {
+                    let lhs = self.expr(lhs)?;
+                    let rhs = self.expr(rhs)?;
 
-                if let Some(func) = parser.exprs.get(&head) {
-                    return func(tail, span, parser);
+                    let mut ruleset = "".into();
+                    let mut conditions = Vec::new();
+                    let mut subsume = false;
+                    for option in options(rest)? {
+                        match option {
+                            (":ruleset", [r]) => ruleset = r.expect_atom("ruleset name")?,
+                            (":subsume", []) => subsume = true,
+                            (":when", [w]) => {
+                                conditions = map_fallible(
+                                    w.expect_list("rewrite conditions")?,
+                                    self,
+                                    Self::fact,
+                                )?
+                            }
+                            _ => return error!(span, "could not parse rewrite options"),
+                        }
+                    }
+
+                    vec![Command::Rewrite(
+                        ruleset,
+                        Rewrite {
+                            span,
+                            lhs,
+                            rhs,
+                            conditions,
+                        },
+                        subsume,
+                    )]
+                }
+                _ => return error!(span, "usage: (rewrite <expr> <expr> <option>*)"),
+            },
+            "birewrite" => match tail {
+                [lhs, rhs, rest @ ..] => {
+                    let lhs = self.expr(lhs)?;
+                    let rhs = self.expr(rhs)?;
+
+                    let mut ruleset = "".into();
+                    let mut conditions = Vec::new();
+                    for option in options(rest)? {
+                        match option {
+                            (":ruleset", [r]) => ruleset = r.expect_atom("ruleset name")?,
+                            (":when", [w]) => {
+                                conditions = map_fallible(
+                                    w.expect_list("rewrite conditions")?,
+                                    self,
+                                    Self::fact,
+                                )?
+                            }
+                            _ => return error!(span, "could not parse birewrite options"),
+                        }
+                    }
+
+                    vec![Command::BiRewrite(
+                        ruleset,
+                        Rewrite {
+                            span,
+                            lhs,
+                            rhs,
+                            conditions,
+                        },
+                    )]
+                }
+                _ => return error!(span, "usage: (birewrite <expr> <expr> <option>*)"),
+            },
+            "run" => {
+                if tail.is_empty() {
+                    return error!(span, "usage: (run <ruleset>? <uint> <:until (<fact>*)>?)");
                 }
 
-                Expr::Call(span.clone(), head, map_fallible(tail, parser, expr)?)
+                let has_ruleset = tail.len() >= 2 && tail[1].expect_uint("").is_ok();
+
+                let (ruleset, limit, rest) = if has_ruleset {
+                    (
+                        tail[0].expect_atom("ruleset name")?,
+                        tail[1].expect_uint("number of iterations")?,
+                        &tail[2..],
+                    )
+                } else {
+                    (
+                        "".into(),
+                        tail[0].expect_uint("number of iterations")?,
+                        &tail[1..],
+                    )
+                };
+
+                let until = match options(rest)?.as_slice() {
+                    [] => None,
+                    [(":until", facts)] => Some(map_fallible(facts, self, Self::fact)?),
+                    _ => return error!(span, "could not parse run options"),
+                };
+
+                vec![Command::RunSchedule(Schedule::Repeat(
+                    span.clone(),
+                    limit,
+                    Box::new(Schedule::Run(span, RunConfig { ruleset, until })),
+                ))]
             }
-        },
-    })
+            "run-schedule" => vec![Command::RunSchedule(Schedule::Sequence(
+                span,
+                map_fallible(tail, self, Self::schedule)?,
+            ))],
+            "simplify" => match tail {
+                [s, e] => vec![Command::Simplify {
+                    span,
+                    schedule: self.schedule(s)?,
+                    expr: self.expr(e)?,
+                }],
+                _ => return error!(span, "usage: (simplify <schedule> <expr>)"),
+            },
+            "query-extract" => match tail {
+                [rest @ .., e] => {
+                    let variants = match options(rest)?.as_slice() {
+                        [] => 0,
+                        [(":variants", [v])] => v.expect_uint("number of variants")?,
+                        _ => return error!(span, "could not parse query-extract options"),
+                    };
+                    vec![Command::QueryExtract {
+                        span,
+                        expr: self.expr(e)?,
+                        variants,
+                    }]
+                }
+                _ => return error!(span, "usage: (query-extract <:variants <uint>>? <expr>)"),
+            },
+            "check" => vec![Command::Check(span, map_fallible(tail, self, Self::fact)?)],
+            "push" => match tail {
+                [] => vec![Command::Push(1)],
+                [n] => vec![Command::Push(n.expect_uint("number of times to push")?)],
+                _ => return error!(span, "usage: (push <uint>?)"),
+            },
+            "pop" => match tail {
+                [] => vec![Command::Pop(span, 1)],
+                [n] => vec![Command::Pop(span, n.expect_uint("number of times to pop")?)],
+                _ => return error!(span, "usage: (pop <uint>?)"),
+            },
+            "print-stats" => match tail {
+                [] => vec![Command::PrintOverallStatistics],
+                _ => return error!(span, "usage: (print-stats)"),
+            },
+            "print-function" => match tail {
+                [name, rows] => vec![Command::PrintFunction(
+                    span,
+                    name.expect_atom("table name")?,
+                    rows.expect_uint("number of rows to print")?,
+                )],
+                _ => {
+                    return error!(
+                        span,
+                        "usage: (print-function <table name> <number of rows>)"
+                    )
+                }
+            },
+            "print-size" => match tail {
+                [] => vec![Command::PrintSize(span, None)],
+                [name] => vec![Command::PrintSize(
+                    span,
+                    Some(name.expect_atom("table name")?),
+                )],
+                _ => return error!(span, "usage: (print-size <table name>?)"),
+            },
+            "input" => match tail {
+                [name, file] => vec![Command::Input {
+                    span,
+                    name: name.expect_atom("table name")?,
+                    file: file.expect_string("file name")?,
+                }],
+                _ => return error!(span, "usage: (input <table name> \"<file name>\")"),
+            },
+            "output" => match tail {
+                [file, exprs @ ..] => vec![Command::Output {
+                    span,
+                    file: file.expect_string("file name")?,
+                    exprs: map_fallible(exprs, self, Self::expr)?,
+                }],
+                _ => return error!(span, "usage: (output <file name> <expr>+)"),
+            },
+            "include" => match tail {
+                [file] => vec![Command::Include(span, file.expect_string("file name")?)],
+                _ => return error!(span, "usage: (include <file name>)"),
+            },
+            "fail" => match tail {
+                [subcommand] => {
+                    let mut cs = self.commands(subcommand)?;
+                    if cs.len() != 1 {
+                        todo!("extend Fail to work with multiple parsed commands")
+                    }
+                    vec![Command::Fail(span, Box::new(cs.remove(0)))]
+                }
+                _ => return error!(span, "usage: (fail <command>)"),
+            },
+            _ => self
+                .actions(sexp)
+                .into_iter()
+                .flatten()
+                .map(Command::Action)
+                .collect(),
+        })
+    }
+
+    pub fn rec_datatype(&self, sexp: &Sexp) -> Result<(Span, Symbol, Subdatatypes), ParseError> {
+        let (head, tail, span) = sexp.expect_call("datatype")?;
+
+        Ok(match head.into() {
+            "sort" => match tail {
+                [name, call] => {
+                    let name = name.expect_atom("sort name")?;
+                    let (func, args, _) = call.expect_call("container sort declaration")?;
+                    let args = map_fallible(args, self, Self::expr)?;
+                    (span, name, Subdatatypes::NewSort(func, args))
+                }
+                _ => {
+                    return error!(
+                        span,
+                        "usage: (sort <name> (<container sort> <argument sort>*))"
+                    )
+                }
+            },
+            _ => {
+                let variants = map_fallible(tail, self, Self::variant)?;
+                (span, head, Subdatatypes::Variants(variants))
+            }
+        })
+    }
+
+    pub fn variant(&self, sexp: &Sexp) -> Result<Variant, ParseError> {
+        let (name, tail, span) = sexp.expect_call("datatype variant")?;
+
+        let (types, cost) = match tail {
+            [types @ .., Sexp::Atom(o, _), c] if *o == ":cost".into() => {
+                (types, Some(c.expect_uint("cost")?))
+            }
+            types => (types, None),
+        };
+
+        Ok(Variant {
+            span,
+            name,
+            types: map_fallible(types, self, |_, sexp| {
+                sexp.expect_atom("variant argument type")
+            })?,
+            cost,
+        })
+    }
+
+    pub fn schedule(&self, sexp: &Sexp) -> Result<Schedule, ParseError> {
+        if let Sexp::Atom(ruleset, span) = sexp {
+            return Ok(Schedule::Run(
+                span.clone(),
+                RunConfig {
+                    ruleset: *ruleset,
+                    until: None,
+                },
+            ));
+        }
+
+        let (head, tail, span) = sexp.expect_call("schedule")?;
+
+        Ok(match head.into() {
+            "saturate" => Schedule::Saturate(
+                span.clone(),
+                Box::new(Schedule::Sequence(
+                    span,
+                    map_fallible(tail, self, Self::schedule)?,
+                )),
+            ),
+            "seq" => Schedule::Sequence(span, map_fallible(tail, self, Self::schedule)?),
+            "repeat" => match tail {
+                [limit, tail @ ..] => Schedule::Repeat(
+                    span.clone(),
+                    limit.expect_uint("number of iterations")?,
+                    Box::new(Schedule::Sequence(
+                        span,
+                        map_fallible(tail, self, Self::schedule)?,
+                    )),
+                ),
+                _ => return error!(span, "usage: (repeat <number of iterations> <schedule>*)"),
+            },
+            "run" => {
+                let has_ruleset = match tail.first() {
+                    None => false,
+                    Some(Sexp::Atom(o, _)) if *o == ":until".into() => false,
+                    _ => true,
+                };
+
+                let (ruleset, rest) = if has_ruleset {
+                    (tail[0].expect_atom("ruleset name")?, &tail[1..])
+                } else {
+                    ("".into(), tail)
+                };
+
+                let until = match options(rest)?.as_slice() {
+                    [] => None,
+                    [(":until", facts)] => Some(map_fallible(facts, self, Self::fact)?),
+                    _ => return error!(span, "could not parse run options"),
+                };
+
+                Schedule::Run(span, RunConfig { ruleset, until })
+            }
+            _ => return error!(span, "expected either saturate, seq, repeat, or run"),
+        })
+    }
+
+    pub fn actions(&self, sexp: &Sexp) -> Result<Vec<Action>, ParseError> {
+        let (head, tail, span) = sexp.expect_call("action")?;
+
+        if let Some(func) = self.actions.get(&head) {
+            return func.parse(tail, span, self);
+        }
+
+        Ok(match head.into() {
+            "let" => match tail {
+                [name, value] => vec![Action::Let(
+                    span,
+                    name.expect_atom("binding name")?,
+                    self.expr(value)?,
+                )],
+                _ => return error!(span, "usage: (let <name> <expr>)"),
+            },
+            "set" => match tail {
+                [call, value] => {
+                    let (func, args, _) = call.expect_call("table lookup")?;
+                    let args = map_fallible(args, self, Self::expr)?;
+                    let value = self.expr(value)?;
+                    vec![Action::Set(span, func, args, value)]
+                }
+                _ => return error!(span, "usage: (set (<table name> <expr>*) <expr>)"),
+            },
+            "delete" => match tail {
+                [call] => {
+                    let (func, args, _) = call.expect_call("table lookup")?;
+                    let args = map_fallible(args, self, Self::expr)?;
+                    vec![Action::Change(span, Change::Delete, func, args)]
+                }
+                _ => return error!(span, "usage: (delete (<table name> <expr>*))"),
+            },
+            "subsume" => match tail {
+                [call] => {
+                    let (func, args, _) = call.expect_call("table lookup")?;
+                    let args = map_fallible(args, self, Self::expr)?;
+                    vec![Action::Change(span, Change::Subsume, func, args)]
+                }
+                _ => return error!(span, "usage: (subsume (<table name> <expr>*))"),
+            },
+            "union" => match tail {
+                [e1, e2] => vec![Action::Union(span, self.expr(e1)?, self.expr(e2)?)],
+                _ => return error!(span, "usage: (union <expr> <expr>)"),
+            },
+            "panic" => match tail {
+                [message] => vec![Action::Panic(span, message.expect_string("error message")?)],
+                _ => return error!(span, "usage: (panic <string>)"),
+            },
+            "extract" => match tail {
+                [e] => vec![Action::Extract(
+                    span.clone(),
+                    self.expr(e)?,
+                    Expr::Lit(span, Literal::Int(0)),
+                )],
+                [e, v] => vec![Action::Extract(span, self.expr(e)?, self.expr(v)?)],
+                _ => return error!(span, "usage: (extract <expr> <number of variants>?)"),
+            },
+            _ => vec![Action::Expr(span, self.expr(sexp)?)],
+        })
+    }
+
+    fn fact(&self, sexp: &Sexp) -> Result<Fact, ParseError> {
+        let (head, tail, span) = sexp.expect_call("fact")?;
+
+        Ok(match head.into() {
+            "=" => match tail {
+                [e1, e2] => Fact::Eq(span, self.expr(e1)?, self.expr(e2)?),
+                _ => return error!(span, "usage: (= <expr> <expr>)"),
+            },
+            _ => Fact::Fact(self.expr(sexp)?),
+        })
+    }
+
+    fn expr(&self, sexp: &Sexp) -> Result<Expr, ParseError> {
+        Ok(match sexp {
+            Sexp::Literal(literal, span) => Expr::Lit(span.clone(), literal.clone()),
+            Sexp::Atom(symbol, span) => Expr::Var(span.clone(), *symbol),
+            Sexp::List(list, span) => match list.as_slice() {
+                [] => Expr::Lit(span.clone(), Literal::Unit),
+                _ => {
+                    let (head, tail, span) = sexp.expect_call("call expression")?;
+
+                    if let Some(func) = self.exprs.get(&head) {
+                        return func.parse(tail, span, self);
+                    }
+
+                    Expr::Call(span.clone(), head, map_fallible(tail, self, Self::expr)?)
+                }
+            },
+        })
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1028,28 +1081,30 @@ mod tests {
     #[test]
     fn test_parser_display_roundtrip() {
         let s = r#"(f (g a 3) 4.0 (H "hello"))"#;
-        let e = crate::ast::parse_expr(None, s, &Default::default()).unwrap();
+        let e = Parser::default().get_expr_from_string(None, s).unwrap();
         assert_eq!(format!("{}", e), s);
     }
 
     #[test]
+    #[rustfmt::skip]
     fn rust_span_display() {
-        assert_eq!(format!("{}", span!()), "At 1037:34 of src/ast/parse.rs");
+        assert_eq!(format!("{}", span!()), format!("At {}:34 of src/ast/parse.rs", line!()));
     }
 
     #[test]
     fn test_parser_macros() {
         let mut parser = Parser::default();
-        parser.exprs.insert("qqqq".into(), |tail, span, macros| {
+        let y = "xxxx";
+        parser.add_expr_macro(Arc::new(SimpleMacro::new("qqqq", |tail, span, macros| {
             Ok(Expr::Call(
                 span,
-                "xxxx".into(),
-                map_fallible(tail, macros, expr)?,
+                y.into(),
+                map_fallible(tail, macros, Parser::expr)?,
             ))
-        });
+        })));
         let s = r#"(f (qqqq a 3) 4.0 (H "hello"))"#;
         let t = r#"(f (xxxx a 3) 4.0 (H "hello"))"#;
-        let e = crate::ast::parse_expr(None, s, &parser).unwrap();
+        let e = parser.get_expr_from_string(None, s).unwrap();
         assert_eq!(format!("{}", e), t);
     }
 }

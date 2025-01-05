@@ -194,7 +194,7 @@ mod tests {
     use crate::{ast::*, span};
 
     fn parse_term(s: &str) -> (TermDag, Term) {
-        let e = parse_expr(None, s, &Default::default()).unwrap();
+        let e = Parser::default().get_expr_from_string(None, s).unwrap();
         let mut td = TermDag::default();
         let t = td.expr_to_term(&e);
         (td, t)
@@ -203,7 +203,7 @@ mod tests {
     #[test]
     fn test_to_from_expr() {
         let s = r#"(f (g x y) x y (g x y))"#;
-        let e = parse_expr(None, s, &Default::default()).unwrap();
+        let e = Parser::default().get_expr_from_string(None, s).unwrap();
         let mut td = TermDag::default();
         assert_eq!(td.size(), 0);
         let t = td.expr_to_term(&e);

@@ -112,7 +112,7 @@ pub(crate) fn desugar_command(
             let s = std::fs::read_to_string(&file)
                 .unwrap_or_else(|_| panic!("{span} Failed to read file {file}"));
             return desugar_program(
-                parse_program(Some(file), &s, parser)?,
+                parser.get_program_from_string(Some(file), &s)?,
                 parser,
                 seminaive_transform,
             );

@@ -1472,7 +1472,7 @@ impl EGraph {
         filename: Option<String>,
         input: &str,
     ) -> Result<Vec<String>, Error> {
-        let parsed = parse_program(filename, input, &self.parser)?;
+        let parsed = self.parser.get_program_from_string(filename, input)?;
         self.run_program(parsed)
     }
 
