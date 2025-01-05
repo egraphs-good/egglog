@@ -218,7 +218,7 @@ fn map_fallible<T>(
 }
 
 pub trait Macro<T> {
-    fn get_head(&self) -> String;
+    fn name(&self) -> String;
     fn parse(&self, args: &[Sexp], span: Span, parser: &mut Parser) -> Result<T, ParseError>;
 }
 
@@ -237,7 +237,7 @@ impl<T, F> Macro<T> for SimpleMacro<T, F>
 where
     F: Fn(&[Sexp], Span, &mut Parser) -> Result<T, ParseError>,
 {
-    fn get_head(&self) -> String {
+    fn name(&self) -> String {
         self.0.clone()
     }
 
@@ -287,15 +287,15 @@ impl Parser {
     }
 
     pub fn add_command_macro(&mut self, ma: Arc<dyn Macro<Vec<Command>>>) {
-        self.commands.insert(ma.get_head().into(), ma);
+        self.commands.insert(ma.name().into(), ma);
     }
 
     pub fn add_action_macro(&mut self, ma: Arc<dyn Macro<Vec<Action>>>) {
-        self.actions.insert(ma.get_head().into(), ma);
+        self.actions.insert(ma.name().into(), ma);
     }
 
     pub fn add_expr_macro(&mut self, ma: Arc<dyn Macro<Expr>>) {
-        self.exprs.insert(ma.get_head().into(), ma);
+        self.exprs.insert(ma.name().into(), ma);
     }
 
     pub fn parse_command(&mut self, sexp: &Sexp) -> Result<Vec<Command>, ParseError> {
