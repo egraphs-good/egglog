@@ -131,13 +131,7 @@ impl Display for Span {
 // error messages are defined in the same place that they are created,
 // making it easier to improve errors over time.
 #[derive(Debug, Error)]
-pub struct ParseError(Span, String);
-
-impl ParseError {
-    pub fn new(span: Span, message: &str) -> Self {
-        Self(span, message.to_string())
-    }
-}
+pub struct ParseError(pub Span, pub String);
 
 impl std::fmt::Display for ParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -221,46 +215,6 @@ fn map_fallible<T>(
         .iter()
         .map(|sexp| func(parser, sexp))
         .collect::<Result<_, _>>()
-}
-
-// helper for parsing a list of options
-fn options(sexps: &[Sexp]) -> Result<Vec<(&str, &[Sexp])>, ParseError> {
-    fn option_name(sexp: &Sexp) -> Option<&str> {
-        if let Ok(symbol) = sexp.expect_atom("") {
-            let s: &str = symbol.into();
-            if let Some(':') = s.chars().next() {
-                return Some(s);
-            }
-        }
-        None
-    }
-
-    let mut out = Vec::new();
-    let mut i = 0;
-    while i < sexps.len() {
-        let Some(key) = option_name(&sexps[i]) else {
-            return error!(sexps[i].span(), "option key must start with ':'");
-        };
-        i += 1;
-
-        let start = i;
-        while i < sexps.len() && option_name(&sexps[i]).is_none() {
-            i += 1;
-        }
-        out.push((key, &sexps[start..i]));
-    }
-    Ok(out)
-}
-
-fn schema(input: &Sexp, output: &Sexp) -> Result<Schema, ParseError> {
-    Ok(Schema {
-        input: input
-            .expect_list("input sorts")?
-            .iter()
-            .map(|sexp| sexp.expect_atom("input sort"))
-            .collect::<Result<_, _>>()?,
-        output: output.expect_atom("output sort")?,
-    })
 }
 
 pub trait Macro<T> {
@@ -391,8 +345,8 @@ impl Parser {
             "function" => match tail {
                 [name, inputs, output, rest @ ..] => vec![Command::Function {
                     name: name.expect_atom("function name")?,
-                    schema: schema(inputs, output)?,
-                    merge: match options(rest)?.as_slice() {
+                    schema: self.parse_schema(inputs, output)?,
+                    merge: match self.parse_options(rest)?.as_slice() {
                         [(":no-merge", [])] => None,
                         [(":merge", [e])] => Some(self.parse_expr(e)?),
                         [] => {
@@ -415,7 +369,7 @@ impl Parser {
                 [name, inputs, output, rest @ ..] => {
                     let mut cost = None;
                     let mut unextractable = false;
-                    match options(rest)?.as_slice() {
+                    match self.parse_options(rest)?.as_slice() {
                         [] => {}
                         [(":unextractable", [])] => unextractable = true,
                         [(":cost", [c])] => cost = Some(c.expect_uint("cost")?),
@@ -425,7 +379,7 @@ impl Parser {
                     vec![Command::Constructor {
                         span,
                         name: name.expect_atom("constructor name")?,
-                        schema: schema(inputs, output)?,
+                        schema: self.parse_schema(inputs, output)?,
                         cost,
                         unextractable,
                     }]
@@ -475,7 +429,7 @@ impl Parser {
 
                     let mut ruleset = "".into();
                     let mut name = "".into();
-                    for option in options(rest)? {
+                    for option in self.parse_options(rest)? {
                         match option {
                             (":ruleset", [r]) => ruleset = r.expect_atom("ruleset name")?,
                             (":name", [s]) => name = s.expect_string("rule name")?.into(),
@@ -499,7 +453,7 @@ impl Parser {
                     let mut ruleset = "".into();
                     let mut conditions = Vec::new();
                     let mut subsume = false;
-                    for option in options(rest)? {
+                    for option in self.parse_options(rest)? {
                         match option {
                             (":ruleset", [r]) => ruleset = r.expect_atom("ruleset name")?,
                             (":subsume", []) => subsume = true,
@@ -534,7 +488,7 @@ impl Parser {
 
                     let mut ruleset = "".into();
                     let mut conditions = Vec::new();
-                    for option in options(rest)? {
+                    for option in self.parse_options(rest)? {
                         match option {
                             (":ruleset", [r]) => ruleset = r.expect_atom("ruleset name")?,
                             (":when", [w]) => {
@@ -581,7 +535,7 @@ impl Parser {
                     )
                 };
 
-                let until = match options(rest)?.as_slice() {
+                let until = match self.parse_options(rest)?.as_slice() {
                     [] => None,
                     [(":until", facts)] => Some(map_fallible(facts, self, Self::parse_fact)?),
                     _ => return error!(span, "could not parse run options"),
@@ -607,7 +561,7 @@ impl Parser {
             },
             "query-extract" => match tail {
                 [rest @ .., e] => {
-                    let variants = match options(rest)?.as_slice() {
+                    let variants = match self.parse_options(rest)?.as_slice() {
                         [] => 0,
                         [(":variants", [v])] => v.expect_uint("number of variants")?,
                         _ => return error!(span, "could not parse query-extract options"),
@@ -744,7 +698,7 @@ impl Parser {
                     ("".into(), tail)
                 };
 
-                let until = match options(rest)?.as_slice() {
+                let until = match self.parse_options(rest)?.as_slice() {
                     [] => None,
                     [(":until", facts)] => Some(map_fallible(facts, self, Self::parse_fact)?),
                     _ => return error!(span, "could not parse run options"),
@@ -903,6 +857,46 @@ impl Parser {
                 sexp.expect_atom("variant argument type")
             })?,
             cost,
+        })
+    }
+
+    // helper for parsing a list of options
+    pub fn parse_options<'a>(&self, sexps: &'a [Sexp]) -> Result<Vec<(&'a str, &'a [Sexp])>, ParseError> {
+        fn option_name(sexp: &Sexp) -> Option<&str> {
+            if let Ok(symbol) = sexp.expect_atom("") {
+                let s: &str = symbol.into();
+                if let Some(':') = s.chars().next() {
+                    return Some(s);
+                }
+            }
+            None
+        }
+
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < sexps.len() {
+            let Some(key) = option_name(&sexps[i]) else {
+                return error!(sexps[i].span(), "option key must start with ':'");
+            };
+            i += 1;
+
+            let start = i;
+            while i < sexps.len() && option_name(&sexps[i]).is_none() {
+                i += 1;
+            }
+            out.push((key, &sexps[start..i]));
+        }
+        Ok(out)
+    }
+
+    pub fn parse_schema(&self, input: &Sexp, output: &Sexp) -> Result<Schema, ParseError> {
+        Ok(Schema {
+            input: input
+                .expect_list("input sorts")?
+                .iter()
+                .map(|sexp| sexp.expect_atom("input sort"))
+                .collect::<Result<_, _>>()?,
+            output: output.expect_atom("output sort")?,
         })
     }
 }
