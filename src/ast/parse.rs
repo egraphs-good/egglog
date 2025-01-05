@@ -861,7 +861,10 @@ impl Parser {
     }
 
     // helper for parsing a list of options
-    pub fn parse_options<'a>(&self, sexps: &'a [Sexp]) -> Result<Vec<(&'a str, &'a [Sexp])>, ParseError> {
+    pub fn parse_options<'a>(
+        &self,
+        sexps: &'a [Sexp],
+    ) -> Result<Vec<(&'a str, &'a [Sexp])>, ParseError> {
         fn option_name(sexp: &Sexp) -> Option<&str> {
             if let Ok(symbol) = sexp.expect_atom("") {
                 let s: &str = symbol.into();
