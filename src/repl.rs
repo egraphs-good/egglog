@@ -7,6 +7,7 @@ impl EGraph {
     pub fn repl(&mut self) -> io::Result<()> {
         self.repl_with(io::stdin(), io::stdout())
     }
+
     pub fn repl_with<R, W>(&mut self, input: R, mut output: W) -> io::Result<()>
     where
         R: Read,
@@ -27,8 +28,6 @@ impl EGraph {
 
         if !cmd_buffer.is_empty() {
             run_command_in_scripting(self, &cmd_buffer, &mut output)?;
-
-            log::logger().flush();
         }
 
         Ok(())
