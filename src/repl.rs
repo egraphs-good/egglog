@@ -1,7 +1,7 @@
 use std::io::{self, Read};
 use std::io::{BufRead, BufReader, Write};
 
-use crate::EGraph;
+use crate::{all_sexps, Context, EGraph};
 
 impl EGraph {
     pub fn repl(&mut self) -> io::Result<()> {
@@ -34,39 +34,8 @@ impl EGraph {
     }
 }
 
-// test if the current command should be evaluated
-// upon success, return the number of commands to evaluate
 fn should_eval(curr_cmd: &str) -> bool {
-    let mut paren_count = 0;
-    let mut indices = curr_cmd.chars();
-    while let Some(ch) = indices.next() {
-        match ch {
-            '(' => paren_count += 1,
-            ')' => {
-                paren_count -= 1;
-                // if we have a negative count,
-                // this means excessive closing parenthesis
-                // which we would like to throw an error eagerly
-                if paren_count < 0 {
-                    return false;
-                }
-            }
-            ';' => {
-                // `any` moves the iterator forward until it finds a match
-                if !indices.any(|ch| ch == '\n') {
-                    return false;
-                }
-            }
-            '"' => {
-                if !indices.any(|ch| ch == '"') {
-                    return false;
-                }
-            }
-            _ => {}
-        }
-    }
-
-    paren_count <= 0
+    all_sexps(Context::new(None, curr_cmd)).is_ok()
 }
 
 fn run_command_in_scripting<W>(egraph: &mut EGraph, command: &str, mut output: W) -> io::Result<()>
@@ -108,6 +77,9 @@ mod tests {
                 "(extract 1) (extract",
                 "2) (",
                 "extract 3) (extract 4) ;;;; ("
+            ],
+            vec![
+                "(extract \"\\\")\")"
             ]];
         for test in test_cases {
             let mut cmd_buffer = String::new();
