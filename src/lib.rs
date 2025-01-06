@@ -299,7 +299,7 @@ impl Primitive {
             .map(|i| AtomTerm::Literal(Span::Panic, Literal::Int(i as i64)))
             .collect();
         for (lit, ty) in lits.iter().zip(tys.iter()) {
-            constraints.push(Constraint::Assign(lit.clone(), ty.clone()))
+            constraints.push(constraint::assign(lit.clone(), ty.clone()))
         }
         constraints.extend(self.get_type_constraints(&Span::Panic).get(&lits, typeinfo));
         let problem = Problem {
