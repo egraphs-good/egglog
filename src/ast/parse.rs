@@ -1035,8 +1035,9 @@ mod tests {
     }
 
     #[test]
+    #[rustfmt::skip]
     fn rust_span_display() {
-        assert_eq!(format!("{}", span!()), "At 1037:34 of src/ast/parse.rs");
+        assert_eq!(format!("{}", span!()), format!("At {}:34 of src/ast/parse.rs", line!()));
     }
 
     #[test]
