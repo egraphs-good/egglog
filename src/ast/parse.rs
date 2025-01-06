@@ -905,13 +905,13 @@ impl Parser {
 }
 
 #[derive(Clone, Debug)]
-struct Context {
+pub(crate) struct Context {
     source: Arc<SrcFile>,
     index: usize,
 }
 
 impl Context {
-    fn new(name: Option<String>, contents: &str) -> Context {
+    pub(crate) fn new(name: Option<String>, contents: &str) -> Context {
         Context {
             source: Arc::new(SrcFile {
                 name,
@@ -986,6 +986,7 @@ impl Context {
                                 (true, 'n') => '\n',
                                 (true, 't') => '\t',
                                 (true, '\\') => '\\',
+                                (true, '\"') => '\"',
                                 (true, c) => {
                                     return error!(s(span), "unrecognized escape character {c}")
                                 }
@@ -1086,10 +1087,12 @@ fn sexp(ctx: &mut Context) -> Result<Sexp, ParseError> {
     }
 }
 
-fn all_sexps(mut ctx: Context) -> Result<Vec<Sexp>, ParseError> {
+pub(crate) fn all_sexps(mut ctx: Context) -> Result<Vec<Sexp>, ParseError> {
     let mut sexps = Vec::new();
+    ctx.advance_past_whitespace();
     while !ctx.is_at_end() {
         sexps.push(sexp(&mut ctx)?);
+        ctx.advance_past_whitespace();
     }
     Ok(sexps)
 }

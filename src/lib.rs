@@ -18,6 +18,7 @@ mod core;
 pub mod extract;
 mod function;
 mod gj;
+mod repl;
 mod serialize;
 pub mod sort;
 mod termdag;
@@ -1454,7 +1455,16 @@ impl EGraph {
                     continue;
                 }
 
-                self.run_command(processed)?;
+                let result = self.run_command(processed);
+
+                if self.is_interactive_mode() {
+                    self.print_msg(match result {
+                        Ok(()) => "(done)".into(),
+                        Err(_) => "(error)".into(),
+                    });
+                }
+
+                result?
             }
         }
         log::logger().flush();
