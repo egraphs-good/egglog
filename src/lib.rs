@@ -865,17 +865,17 @@ impl EGraph {
     /// Extract a value to a [`TermDag`] and [`Term`] in the [`TermDag`].
     /// Note that the `TermDag` may contain a superset of the nodes in the `Term`.
     /// See also `extract_value_to_string` for convenience.
-    pub fn extract_value(&self, sort: &ArcSort, value: Value) -> (TermDag, Term) {
+    pub fn extract_value(&self, sort: &ArcSort, value: Value) -> Result<(TermDag, Term), Error> {
         let mut termdag = TermDag::default();
-        let term = self.extract(value, &mut termdag, sort).1;
-        (termdag, term)
+        let term = self.extract(value, &mut termdag, sort)?.1;
+        Ok((termdag, term))
     }
 
     /// Extract a value to a string for printing.
     /// See also `extract_value` for more control.
-    pub fn extract_value_to_string(&self, sort: &ArcSort, value: Value) -> String {
-        let (termdag, term) = self.extract_value(sort, value);
-        termdag.to_string(&term)
+    pub fn extract_value_to_string(&self, sort: &ArcSort, value: Value) -> Result<String, Error> {
+        let (termdag, term) = self.extract_value(sort, value)?;
+        Ok(termdag.to_string(&term))
     }
 
     fn run_rules(&mut self, span: &Span, config: &ResolvedRunConfig) -> RunReport {
@@ -1317,7 +1317,7 @@ impl EGraph {
                 for expr in exprs {
                     let value = self.eval_resolved_expr(&expr)?;
                     let expr_type = expr.output_type();
-                    let term = self.extract(value, &mut termdag, &expr_type).1;
+                    let term = self.extract(value, &mut termdag, &expr_type)?.1;
                     use std::io::Write;
                     writeln!(f, "{}", termdag.to_string(&term))
                         .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
@@ -1567,6 +1567,8 @@ pub enum Error {
     IoError(PathBuf, std::io::Error, Span),
     #[error("Cannot subsume function with merge: {0}")]
     SubsumeMergeError(Symbol),
+    #[error("extraction failure: {:?}", .0)]
+    ExtractError(Value),
 }
 
 #[cfg(test)]
