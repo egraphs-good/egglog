@@ -36,7 +36,7 @@ impl EGraph {
     /// let (sort, value) = egraph.eval_expr(&egglog::var!("expr")).unwrap();
     /// let (_, extracted) = egraph.extract(value, &mut termdag, &sort).unwrap();
     /// assert_eq!(termdag.to_string(&extracted), "(Add 1 1)");
-    /// ```    
+    /// ```
     pub fn extract(
         &self,
         value: Value,
