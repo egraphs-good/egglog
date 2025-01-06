@@ -12,8 +12,6 @@ impl EGraph {
         R: Read,
         W: Write,
     {
-        log::info!("Welcome to Egglog REPL! (build: {})", env!("FULL_VERSION"));
-
         let mut cmd_buffer = String::new();
 
         for line in BufReader::new(input).lines() {

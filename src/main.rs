@@ -65,6 +65,8 @@ fn main() {
 
     if args.inputs.is_empty() {
         let mut egraph = mk_egraph();
+
+        log::info!("Welcome to Egglog REPL! (build: {})", env!("FULL_VERSION"));
         match egraph.repl() {
             Ok(()) => std::process::exit(0),
             Err(err) => {
