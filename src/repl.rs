@@ -48,9 +48,7 @@ where
                 writeln!(output, "{msg}")?;
             }
         }
-        Err(err) => {
-            log::error!("{err}");
-        }
+        Err(err) => log::error!("{err}"),
     }
     Ok(())
 }
