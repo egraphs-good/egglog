@@ -1015,8 +1015,10 @@ fn sexp(ctx: &mut Context) -> Result<Sexp, ParseError> {
 
 fn all_sexps(mut ctx: Context) -> Result<Vec<Sexp>, ParseError> {
     let mut sexps = Vec::new();
+    ctx.advance_past_whitespace();
     while !ctx.is_at_end() {
         sexps.push(sexp(&mut ctx)?);
+        ctx.advance_past_whitespace();
     }
     Ok(sexps)
 }
