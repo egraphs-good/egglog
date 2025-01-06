@@ -1,6 +1,5 @@
 use clap::Parser;
 use egglog::{EGraph, RunMode, SerializeConfig};
-use std::io::{self, BufRead, BufReader};
 use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
