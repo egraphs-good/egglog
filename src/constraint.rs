@@ -2,6 +2,7 @@ use crate::{
     core::{Atom, CoreAction, CoreRule, GenericCoreActions, Query, SymbolOrEq},
     *,
 };
+use std::cmp;
 // Use immutable hashmap for performance
 // cloning assignments is common and O(1) with immutable hashmap
 use im_rc::HashMap;
@@ -22,15 +23,256 @@ pub enum ImpossibleConstraint {
     },
 }
 
-#[derive(Debug)]
-pub enum Constraint<Var, Value> {
-    Eq(Var, Var),
-    Assign(Var, Value),
-    And(Vec<Constraint<Var, Value>>),
-    // Exactly one of the constraints holds
-    // and all others are false
-    Xor(Vec<Constraint<Var, Value>>),
-    Impossible(ImpossibleConstraint),
+pub trait Constraint<Var, Value> {
+    fn update(
+        &self,
+        assignment: &mut Assignment<Var, Value>,
+        key: fn(&Value) -> Symbol,
+    ) -> Result<bool, ConstraintError<Var, Value>>;
+
+    fn pretty(&self) -> String;
+}
+
+pub fn eq<Var, Value>(x: Var, y: Var) -> Box<dyn Constraint<Var, Value>>
+where
+    Var: cmp::Eq + PartialEq + Hash + Clone + Debug + 'static,
+    Value: Clone + Debug + 'static,
+{
+    Box::new(Eq(x, y))
+}
+
+pub fn assign<Var, Value>(x: Var, v: Value) -> Box<dyn Constraint<Var, Value>>
+where
+    Var: cmp::Eq + PartialEq + Hash + Clone + Debug + 'static,
+    Value: Clone + Debug + 'static,
+{
+    Box::new(Assign(x, v))
+}
+
+pub fn and<Var, Value>(cs: Vec<Box<dyn Constraint<Var, Value>>>) -> Box<dyn Constraint<Var, Value>>
+where
+    Var: cmp::Eq + PartialEq + Hash + Clone + Debug + 'static,
+    Value: Clone + Debug + 'static,
+{
+    Box::new(And(cs))
+}
+
+pub fn xor<Var, Value>(cs: Vec<Box<dyn Constraint<Var, Value>>>) -> Box<dyn Constraint<Var, Value>>
+where
+    Var: cmp::Eq + PartialEq + Hash + Clone + Debug + 'static,
+    Value: Clone + Debug + 'static,
+{
+    Box::new(Xor(cs))
+}
+
+pub fn impossible<Var, Value>(constraint: ImpossibleConstraint) -> Box<dyn Constraint<Var, Value>>
+where
+    Var: cmp::Eq + PartialEq + Hash + Clone + Debug + 'static,
+    Value: Clone + Debug + 'static,
+{
+    Box::new(Impossible { constraint })
+}
+
+struct Eq<Var>(Var, Var);
+
+impl<Var, Value> Constraint<Var, Value> for Eq<Var>
+where
+    Var: cmp::Eq + PartialEq + Hash + Clone + Debug,
+    Value: Clone + Debug,
+{
+    fn update(
+        &self,
+        assignment: &mut Assignment<Var, Value>,
+        key: fn(&Value) -> Symbol,
+    ) -> Result<bool, ConstraintError<Var, Value>> {
+        match (assignment.0.get(&self.0), assignment.0.get(&self.1)) {
+            (Some(value), None) => {
+                assignment.insert(self.1.clone(), value.clone());
+                Ok(true)
+            }
+            (None, Some(value)) => {
+                assignment.insert(self.0.clone(), value.clone());
+                Ok(true)
+            }
+            (Some(v1), Some(v2)) => {
+                if key(v1) == key(v2) {
+                    Ok(false)
+                } else {
+                    Err(ConstraintError::InconsistentConstraint(
+                        self.0.clone(),
+                        v1.clone(),
+                        v2.clone(),
+                    ))
+                }
+            }
+            (None, None) => Ok(false),
+        }
+    }
+
+    fn pretty(&self) -> String {
+        format!("{:?} = {:?}", self.0, self.1)
+    }
+}
+
+struct Assign<Var, Value>(Var, Value);
+
+impl<Var, Value> Constraint<Var, Value> for Assign<Var, Value>
+where
+    Var: cmp::Eq + PartialEq + Hash + Clone + Debug,
+    Value: Clone + Debug,
+{
+    fn update(
+        &self,
+        assignment: &mut Assignment<Var, Value>,
+        key: fn(&Value) -> Symbol,
+    ) -> Result<bool, ConstraintError<Var, Value>> {
+        match assignment.0.get(&self.0) {
+            None => {
+                assignment.insert(self.0.clone(), self.1.clone());
+                Ok(true)
+            }
+            Some(value) => {
+                if key(value) == key(&self.1) {
+                    Ok(false)
+                } else {
+                    Err(ConstraintError::InconsistentConstraint(
+                        self.0.clone(),
+                        self.1.clone(),
+                        value.clone(),
+                    ))
+                }
+            }
+        }
+    }
+
+    fn pretty(&self) -> String {
+        format!("{:?} = {:?}", self.0, self.1)
+    }
+}
+
+struct And<Var, Value>(Vec<Box<dyn Constraint<Var, Value>>>);
+
+impl<Var, Value> Constraint<Var, Value> for And<Var, Value>
+where
+    Var: cmp::Eq + PartialEq + Hash + Clone + Debug,
+    Value: Clone + Debug,
+{
+    fn update(
+        &self,
+        assignment: &mut Assignment<Var, Value>,
+        key: fn(&Value) -> Symbol,
+    ) -> Result<bool, ConstraintError<Var, Value>> {
+        let orig_assignment = assignment.clone();
+        let mut updated = false;
+        for c in self.0.iter() {
+            match c.update(assignment, key) {
+                Ok(upd) => updated |= upd,
+                Err(error) => {
+                    // In the case of failure,
+                    // we need to restore the assignment
+                    *assignment = orig_assignment;
+                    return Err(error);
+                }
+            }
+        }
+        Ok(updated)
+    }
+
+    fn pretty(&self) -> String {
+        format!(
+            "({})",
+            self.0
+                .iter()
+                .map(|c| c.pretty())
+                .collect::<Vec<_>>()
+                .join(" /\\ ")
+        )
+    }
+}
+
+struct Xor<Var, Value>(Vec<Box<dyn Constraint<Var, Value>>>);
+
+impl<Var, Value> Constraint<Var, Value> for Xor<Var, Value>
+where
+    Var: cmp::Eq + PartialEq + Hash + Clone + Debug,
+    Value: Clone + Debug,
+{
+    fn update(
+        &self,
+        assignment: &mut Assignment<Var, Value>,
+        key: fn(&Value) -> Symbol,
+    ) -> Result<bool, ConstraintError<Var, Value>> {
+        let mut success_count = 0;
+        let orig_assignment = assignment.clone();
+        let mut result_assignment = assignment.clone();
+        let mut assignment_updated = false;
+        let mut errors = vec![];
+        for c in self.0.iter() {
+            let result = c.update(assignment, key);
+            match result {
+                Ok(updated) => {
+                    success_count += 1;
+                    if success_count > 1 {
+                        break;
+                    }
+
+                    if updated {
+                        swap(&mut result_assignment, assignment);
+                    }
+                    assignment_updated = updated;
+                }
+                Err(error) => errors.push(error),
+            }
+        }
+        // If update is successful for only one sub constraint, then we have nailed down the only true constraint.
+        // If update is successful for more than one constraint, then Xor succeeds with no updates.
+        // If update fails for every constraint, then Xor fails
+        match success_count.cmp(&1) {
+            std::cmp::Ordering::Equal => {
+                *assignment = result_assignment;
+                Ok(assignment_updated)
+            }
+            std::cmp::Ordering::Greater => {
+                *assignment = orig_assignment;
+                Ok(false)
+            }
+            std::cmp::Ordering::Less => Err(ConstraintError::NoConstraintSatisfied(errors)),
+        }
+    }
+
+    fn pretty(&self) -> String {
+        format!(
+            "({})",
+            self.0
+                .iter()
+                .map(|c| c.pretty())
+                .collect::<Vec<_>>()
+                .join(" \\/ ")
+        )
+    }
+}
+
+struct Impossible {
+    constraint: ImpossibleConstraint,
+}
+impl<Var, Value> Constraint<Var, Value> for Impossible
+where
+    Var: cmp::Eq + PartialEq + Hash + Clone + Debug,
+    Value: Clone + Debug,
+{
+    fn update(
+        &self,
+        _assignment: &mut Assignment<Var, Value>,
+        _key: fn(&Value) -> Symbol,
+    ) -> Result<bool, ConstraintError<Var, Value>> {
+        Err(ConstraintError::ImpossibleCaseIdentified(
+            self.constraint.clone(),
+        ))
+    }
+
+    fn pretty(&self) -> String {
+        format!("{:?}", self.constraint)
+    }
 }
 
 pub enum ConstraintError<Var, Value> {
@@ -74,124 +316,25 @@ impl ConstraintError<AtomTerm, ArcSort> {
     }
 }
 
-impl<Var, Value> Constraint<Var, Value>
-where
-    Var: Eq + PartialEq + Hash + Clone + Debug,
-    Value: Clone + Debug,
-{
-    /// Takes a partial assignment and update it based on the constraint.
-    /// If there's a conflict, returns the conflicting variable, the assigned conflicting types.
-    /// Otherwise, return whether the assignment is updated.
-    fn update<K: Eq>(
-        &self,
-        assignment: &mut Assignment<Var, Value>,
-        key: impl Fn(&Value) -> K + Copy,
-    ) -> Result<bool, ConstraintError<Var, Value>> {
-        match self {
-            Constraint::Eq(x, y) => match (assignment.0.get(x), assignment.0.get(y)) {
-                (Some(value), None) => {
-                    assignment.insert(y.clone(), value.clone());
-                    Ok(true)
-                }
-                (None, Some(value)) => {
-                    assignment.insert(x.clone(), value.clone());
-                    Ok(true)
-                }
-                (Some(v1), Some(v2)) => {
-                    if key(v1) == key(v2) {
-                        Ok(false)
-                    } else {
-                        Err(ConstraintError::InconsistentConstraint(
-                            x.clone(),
-                            v1.clone(),
-                            v2.clone(),
-                        ))
-                    }
-                }
-                (None, None) => Ok(false),
-            },
-            Constraint::Assign(x, v) => match assignment.0.get(x) {
-                None => {
-                    assignment.insert(x.clone(), v.clone());
-                    Ok(true)
-                }
-                Some(value) => {
-                    if key(value) == key(v) {
-                        Ok(false)
-                    } else {
-                        Err(ConstraintError::InconsistentConstraint(
-                            x.clone(),
-                            v.clone(),
-                            value.clone(),
-                        ))
-                    }
-                }
-            },
-            Constraint::Xor(cs) => {
-                let mut success_count = 0;
-                let orig_assignment = assignment.clone();
-                let mut result_assignment = assignment.clone();
-                let mut assignment_updated = false;
-                let mut errors = vec![];
-                for c in cs {
-                    let result = c.update(assignment, key);
-                    match result {
-                        Ok(updated) => {
-                            success_count += 1;
-                            if success_count > 1 {
-                                break;
-                            }
-
-                            if updated {
-                                swap(&mut result_assignment, assignment);
-                            }
-                            assignment_updated = updated;
-                        }
-                        Err(error) => errors.push(error),
-                    }
-                }
-                // If update is successful for only one sub constraint, then we have nailed down the only true constraint.
-                // If update is successful for more than one constraint, then Xor succeeds with no updates.
-                // If update fails for every constraint, then Xor fails
-                match success_count.cmp(&1) {
-                    std::cmp::Ordering::Equal => {
-                        *assignment = result_assignment;
-                        Ok(assignment_updated)
-                    }
-                    std::cmp::Ordering::Greater => {
-                        *assignment = orig_assignment;
-                        Ok(false)
-                    }
-                    std::cmp::Ordering::Less => Err(ConstraintError::NoConstraintSatisfied(errors)),
-                }
-            }
-            Constraint::Impossible(constraint) => Err(ConstraintError::ImpossibleCaseIdentified(
-                constraint.clone(),
-            )),
-            Constraint::And(cs) => {
-                let orig_assignment = assignment.clone();
-                let mut updated = false;
-                for c in cs {
-                    match c.update(assignment, key) {
-                        Ok(upd) => updated |= upd,
-                        Err(error) => {
-                            // In the case of failure,
-                            // we need to restore the assignment
-                            *assignment = orig_assignment;
-                            return Err(error);
-                        }
-                    }
-                }
-                Ok(updated)
-            }
-        }
-    }
+pub struct Problem<Var, Value> {
+    pub constraints: Vec<Box<dyn Constraint<Var, Value>>>,
+    pub range: HashSet<Var>,
 }
 
-#[derive(Debug)]
-pub struct Problem<Var, Value> {
-    pub constraints: Vec<Constraint<Var, Value>>,
-    pub range: HashSet<Var>,
+impl Debug for Problem<AtomTerm, ArcSort> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Problem")
+            .field(
+                "constraints",
+                &self
+                    .constraints
+                    .iter()
+                    .map(|c| c.pretty())
+                    .collect::<Vec<_>>(),
+            )
+            .field("range", &self.range)
+            .finish()
+    }
 }
 
 impl Default for Problem<AtomTerm, ArcSort> {
@@ -204,11 +347,11 @@ impl Default for Problem<AtomTerm, ArcSort> {
 }
 
 #[derive(Clone)]
-pub(crate) struct Assignment<Var, Value>(pub HashMap<Var, Value>);
+pub struct Assignment<Var, Value>(pub HashMap<Var, Value>);
 
 impl<Var, Value> Assignment<Var, Value>
 where
-    Var: Hash + Eq + PartialEq + Clone,
+    Var: Hash + cmp::Eq + PartialEq + Clone,
     Value: Clone,
 {
     pub fn insert(&mut self, var: Var, value: Value) -> Option<Value> {
@@ -408,12 +551,12 @@ impl Assignment<AtomTerm, ArcSort> {
 
 impl<Var, Value> Problem<Var, Value>
 where
-    Var: Eq + PartialEq + Hash + Clone + Debug,
-    Value: Clone + Debug,
+    Var: cmp::Eq + PartialEq + Hash + Clone + Debug + 'static,
+    Value: Clone + Debug + 'static,
 {
-    pub(crate) fn solve<K: Eq + Debug>(
+    pub(crate) fn solve(
         &self,
-        key: impl Fn(&Value) -> K + Copy,
+        key: fn(&Value) -> Symbol,
     ) -> Result<Assignment<Var, Value>, ConstraintError<Var, Value>> {
         let mut assignment = Assignment(HashMap::default());
         let mut changed = true;
@@ -433,7 +576,7 @@ where
     }
 
     pub(crate) fn add_binding(&mut self, var: Var, clone: Value) {
-        self.constraints.push(Constraint::Assign(var, clone));
+        self.constraints.push(constraint::assign(var, clone));
     }
 }
 
@@ -505,7 +648,7 @@ impl CoreAction {
         &self,
         typeinfo: &TypeInfo,
         symbol_gen: &mut SymbolGen,
-    ) -> Result<Vec<Constraint<AtomTerm, ArcSort>>, TypeError> {
+    ) -> Result<Vec<Box<dyn Constraint<AtomTerm, ArcSort>>>, TypeError> {
         match self {
             CoreAction::Let(span, symbol, f, args) => {
                 let mut args = args.clone();
@@ -541,13 +684,13 @@ impl CoreAction {
                 &[lhs.clone(), rhs.clone()],
                 typeinfo,
             )
-            .chain(once(Constraint::Eq(lhs.clone(), rhs.clone())))
+            .chain(once(constraint::eq(lhs.clone(), rhs.clone())))
             .collect()),
             CoreAction::Extract(_ann, e, n) => {
                 // e can be anything
                 Ok(
                     get_literal_and_global_constraints(&[e.clone(), n.clone()], typeinfo)
-                        .chain(once(Constraint::Assign(
+                        .chain(once(constraint::assign(
                             n.clone(),
                             std::sync::Arc::new(I64Sort) as ArcSort,
                         )))
@@ -557,7 +700,7 @@ impl CoreAction {
             CoreAction::Panic(_ann, _) => Ok(vec![]),
             CoreAction::LetAtomTerm(span, v, at) => {
                 Ok(get_literal_and_global_constraints(&[at.clone()], typeinfo)
-                    .chain(once(Constraint::Eq(
+                    .chain(once(constraint::eq(
                         AtomTerm::Var(span.clone(), *v),
                         at.clone(),
                     )))
@@ -571,13 +714,13 @@ impl Atom<SymbolOrEq> {
     pub fn get_constraints(
         &self,
         type_info: &TypeInfo,
-    ) -> Result<Vec<Constraint<AtomTerm, ArcSort>>, TypeError> {
+    ) -> Result<Vec<Box<dyn Constraint<AtomTerm, ArcSort>>>, TypeError> {
         let literal_constraints = get_literal_and_global_constraints(&self.args, type_info);
         match &self.head {
             SymbolOrEq::Eq => {
                 assert_eq!(self.args.len(), 2);
                 let constraints = literal_constraints
-                    .chain(once(Constraint::Eq(
+                    .chain(once(constraint::eq(
                         self.args[0].clone(),
                         self.args[1].clone(),
                     )))
@@ -598,21 +741,21 @@ fn get_atom_application_constraints(
     args: &[AtomTerm],
     span: &Span,
     type_info: &TypeInfo,
-) -> Result<Vec<Constraint<AtomTerm, ArcSort>>, TypeError> {
+) -> Result<Vec<Box<dyn Constraint<AtomTerm, ArcSort>>>, TypeError> {
     // An atom can have potentially different semantics due to polymorphism
     // e.g. (set-empty) can mean any empty set with some element type.
     // To handle this, we collect each possible instantiations of an atom
     // (where each instantiation is a vec of constraints, thus vec of vec)
     // into `xor_constraints`.
-    // `Constraint::Xor` means one and only one of the instantiation can hold.
-    let mut xor_constraints: Vec<Vec<Constraint<AtomTerm, ArcSort>>> = vec![];
+    // `constraint::xor` means one and only one of the instantiation can hold.
+    let mut xor_constraints: Vec<Vec<Box<dyn Constraint<AtomTerm, ArcSort>>>> = vec![];
 
     // function atom constraints
     if let Some(typ) = type_info.func_types.get(head) {
         let mut constraints = vec![];
         // arity mismatch
         if typ.input.len() + 1 != args.len() {
-            constraints.push(Constraint::Impossible(
+            constraints.push(constraint::impossible(
                 ImpossibleConstraint::ArityMismatch {
                     atom: Atom {
                         span: span.clone(),
@@ -630,7 +773,7 @@ fn get_atom_application_constraints(
                 .chain(once(typ.output.clone()))
                 .zip(args.iter().cloned())
             {
-                constraints.push(Constraint::Assign(arg, arg_typ));
+                constraints.push(constraint::assign(arg, arg_typ));
             }
         }
         xor_constraints.push(constraints);
@@ -649,8 +792,8 @@ fn get_atom_application_constraints(
     match xor_constraints.len() {
         0 => Err(TypeError::UnboundFunction(*head, span.clone())),
         1 => Ok(xor_constraints.pop().unwrap()),
-        _ => Ok(vec![Constraint::Xor(
-            xor_constraints.into_iter().map(Constraint::And).collect(),
+        _ => Ok(vec![constraint::xor(
+            xor_constraints.into_iter().map(constraint::and).collect(),
         )]),
     }
 }
@@ -658,18 +801,18 @@ fn get_atom_application_constraints(
 fn get_literal_and_global_constraints<'a>(
     args: &'a [AtomTerm],
     type_info: &'a TypeInfo,
-) -> impl Iterator<Item = Constraint<AtomTerm, ArcSort>> + 'a {
+) -> impl Iterator<Item = Box<dyn Constraint<AtomTerm, ArcSort>>> + 'a {
     args.iter().filter_map(|arg| {
         match arg {
             AtomTerm::Var(_, _) => None,
             // Literal to type constraint
             AtomTerm::Literal(_, lit) => {
                 let typ = crate::sort::literal_sort(lit);
-                Some(Constraint::Assign(arg.clone(), typ))
+                Some(constraint::assign(arg.clone(), typ) as Box<dyn Constraint<AtomTerm, ArcSort>>)
             }
             AtomTerm::Global(_, v) => {
                 if let Some(typ) = type_info.lookup_global(v) {
-                    Some(Constraint::Assign(arg.clone(), typ.clone()))
+                    Some(constraint::assign(arg.clone(), typ.clone()))
                 } else {
                     panic!("All global variables should be bound before type checking")
                 }
@@ -683,7 +826,7 @@ pub trait TypeConstraint {
         &self,
         arguments: &[AtomTerm],
         typeinfo: &TypeInfo,
-    ) -> Vec<Constraint<AtomTerm, ArcSort>>;
+    ) -> Vec<Box<dyn Constraint<AtomTerm, ArcSort>>>;
 }
 
 /// Construct a set of `Assign` constraints that fully constrain the type of arguments
@@ -708,9 +851,9 @@ impl TypeConstraint for SimpleTypeConstraint {
         &self,
         arguments: &[AtomTerm],
         _typeinfo: &TypeInfo,
-    ) -> Vec<Constraint<AtomTerm, ArcSort>> {
+    ) -> Vec<Box<dyn Constraint<AtomTerm, ArcSort>>> {
         if arguments.len() != self.sorts.len() {
-            vec![Constraint::Impossible(
+            vec![constraint::impossible(
                 ImpossibleConstraint::ArityMismatch {
                     atom: Atom {
                         span: self.span.clone(),
@@ -725,7 +868,7 @@ impl TypeConstraint for SimpleTypeConstraint {
                 .iter()
                 .cloned()
                 .zip(self.sorts.iter().cloned())
-                .map(|(arg, sort)| Constraint::Assign(arg, sort))
+                .map(|(arg, sort)| constraint::assign(arg, sort))
                 .collect()
         }
     }
@@ -782,14 +925,14 @@ impl TypeConstraint for AllEqualTypeConstraint {
         &self,
         mut arguments: &[AtomTerm],
         _typeinfo: &TypeInfo,
-    ) -> Vec<Constraint<AtomTerm, ArcSort>> {
+    ) -> Vec<Box<dyn Constraint<AtomTerm, ArcSort>>> {
         if arguments.is_empty() {
             panic!("all arguments should have length > 0")
         }
 
         match self.exact_length {
             Some(exact_length) if exact_length != arguments.len() => {
-                return vec![Constraint::Impossible(
+                return vec![constraint::impossible(
                     ImpossibleConstraint::ArityMismatch {
                         atom: Atom {
                             span: self.span.clone(),
@@ -806,7 +949,7 @@ impl TypeConstraint for AllEqualTypeConstraint {
         let mut constraints = vec![];
         if let Some(output) = self.output.clone() {
             let (out, inputs) = arguments.split_last().unwrap();
-            constraints.push(Constraint::Assign(out.clone(), output));
+            constraints.push(constraint::assign(out.clone(), output));
             arguments = inputs;
         }
 
@@ -815,13 +958,13 @@ impl TypeConstraint for AllEqualTypeConstraint {
                 arguments
                     .iter()
                     .cloned()
-                    .map(|arg| Constraint::Assign(arg, sort.clone())),
+                    .map(|arg| constraint::assign(arg, sort.clone())),
             )
         } else if let Some((first, rest)) = arguments.split_first() {
             constraints.extend(
                 rest.iter()
                     .cloned()
-                    .map(|arg| Constraint::Eq(arg, first.clone())),
+                    .map(|arg| constraint::eq(arg, first.clone())),
             );
         }
         constraints
