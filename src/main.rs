@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
 #[command(version = env!("FULL_VERSION"), about = env!("CARGO_PKG_DESCRIPTION"))]
-struct Args {
+pub struct Args {
     #[clap(short = 'F', long)]
     fact_directory: Option<PathBuf>,
     #[clap(long)]
@@ -40,8 +40,12 @@ struct Args {
     no_messages: bool,
 }
 
-#[allow(clippy::disallowed_macros)]
 fn main() {
+    cli(EGraph::default())
+}
+
+#[allow(clippy::disallowed_macros)]
+pub fn cli(mut egraph: EGraph) {
     env_logger::Builder::new()
         .filter_level(log::LevelFilter::Info)
         .format_timestamp(None)
@@ -50,8 +54,6 @@ fn main() {
         .init();
 
     let args = Args::parse();
-
-    let mut egraph = EGraph::default();
     egraph.set_reserved_symbol(args.reserved_symbol.clone().into());
     egraph.fact_directory.clone_from(&args.fact_directory);
     egraph.seminaive = !args.naive;
