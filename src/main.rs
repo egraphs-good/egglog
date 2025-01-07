@@ -5,26 +5,32 @@ use std::path::PathBuf;
 #[derive(Debug, Parser)]
 #[command(version = env!("FULL_VERSION"), about = env!("CARGO_PKG_DESCRIPTION"))]
 pub struct Args {
+    /// Directory for files when using `input` and `output` commands
     #[clap(short = 'F', long)]
     fact_directory: Option<PathBuf>,
+    /// Turns off the seminaive optimization
     #[clap(long)]
     naive: bool,
-    #[clap(long)]
-    desugar: bool,
-    #[clap(long)]
-    resugar: bool,
+    /// Prints extra information, which can be useful for debugging
     #[clap(long, default_value_t = RunMode::Normal)]
     show: RunMode,
+    /// Changes the prefix of the generated symbols
+    // TODO why do we support this?
     // TODO remove this evil hack
     #[clap(long, default_value = "__")]
     reserved_symbol: String,
+    /// The file names for the egglog files to run
     inputs: Vec<PathBuf>,
+    /// Serializes the egraph for each egglog file as JSON
     #[clap(long)]
     to_json: bool,
+    /// Serializes the egraph for each egglog file as a dot file
     #[clap(long)]
     to_dot: bool,
+    /// Serializes the egraph for each egglog file as an SVG
     #[clap(long)]
     to_svg: bool,
+    /// Splits the serialized egraph into primitives and non-primitives
     #[clap(long)]
     serialize_split_primitive_outputs: bool,
     /// Maximum number of function nodes to render in dot/svg output
@@ -36,6 +42,7 @@ pub struct Args {
     /// Number of times to inline leaves
     #[clap(long, default_value = "0")]
     serialize_n_inline_leaves: usize,
+    /// Prevents egglog from printing messages
     #[clap(long)]
     no_messages: bool,
 }
