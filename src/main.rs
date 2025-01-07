@@ -51,21 +51,16 @@ fn main() {
 
     let args = Args::parse();
 
-    let mk_egraph = || {
-        let mut egraph = EGraph::default();
-        egraph.set_reserved_symbol(args.reserved_symbol.clone().into());
-        egraph.fact_directory.clone_from(&args.fact_directory);
-        egraph.seminaive = !args.naive;
-        egraph.run_mode = args.show;
-        if args.no_messages {
-            egraph.disable_messages();
-        }
-        egraph
-    };
+    let mut egraph = EGraph::default();
+    egraph.set_reserved_symbol(args.reserved_symbol.clone().into());
+    egraph.fact_directory.clone_from(&args.fact_directory);
+    egraph.seminaive = !args.naive;
+    egraph.run_mode = args.show;
+    if args.no_messages {
+        egraph.disable_messages();
+    }
 
     if args.inputs.is_empty() {
-        let mut egraph = mk_egraph();
-
         log::info!("Welcome to Egglog REPL! (build: {})", env!("FULL_VERSION"));
         match egraph.repl() {
             Ok(()) => std::process::exit(0),
@@ -74,60 +69,59 @@ fn main() {
                 std::process::exit(1)
             }
         }
-    }
+    } else {
+        for input in &args.inputs {
+            let program = std::fs::read_to_string(input).unwrap_or_else(|_| {
+                let arg = input.to_string_lossy();
+                panic!("Failed to read file {arg}")
+            });
 
-    for (idx, input) in args.inputs.iter().enumerate() {
-        let program = std::fs::read_to_string(input).unwrap_or_else(|_| {
-            let arg = input.to_string_lossy();
-            panic!("Failed to read file {arg}")
-        });
-        let mut egraph = mk_egraph();
-        match egraph.parse_and_run_program(Some(input.to_str().unwrap().into()), &program) {
-            Ok(msgs) => {
-                for msg in msgs {
-                    println!("{msg}");
+            match egraph.parse_and_run_program(Some(input.to_str().unwrap().into()), &program) {
+                Ok(msgs) => {
+                    for msg in msgs {
+                        println!("{msg}");
+                    }
+                }
+                Err(err) => {
+                    log::error!("{err}");
+                    std::process::exit(1)
                 }
             }
-            Err(err) => {
-                log::error!("{err}");
-                std::process::exit(1)
-            }
-        }
 
-        if args.to_json || args.to_dot || args.to_svg {
-            let mut serialized = egraph.serialize(SerializeConfig::default());
-            if args.serialize_split_primitive_outputs {
-                serialized.split_classes(|id, _| egraph.from_node_id(id).is_primitive())
-            }
-            for _ in 0..args.serialize_n_inline_leaves {
-                serialized.inline_leaves();
-            }
+            if args.to_json || args.to_dot || args.to_svg {
+                let mut serialized = egraph.serialize(SerializeConfig::default());
+                if args.serialize_split_primitive_outputs {
+                    serialized.split_classes(|id, _| egraph.from_node_id(id).is_primitive())
+                }
+                for _ in 0..args.serialize_n_inline_leaves {
+                    serialized.inline_leaves();
+                }
 
-            // if we are splitting primitive outputs, add `-split` to the end of the file name
-            let serialize_filename = if args.serialize_split_primitive_outputs {
-                input.with_file_name(format!(
-                    "{}-split",
-                    input.file_stem().unwrap().to_str().unwrap()
-                ))
-            } else {
-                input.clone()
-            };
-            if args.to_dot {
-                let dot_path = serialize_filename.with_extension("dot");
-                serialized.to_dot_file(dot_path).unwrap()
+                // if we are splitting primitive outputs, add `-split` to the end of the file name
+                let serialize_filename = if args.serialize_split_primitive_outputs {
+                    input.with_file_name(format!(
+                        "{}-split",
+                        input.file_stem().unwrap().to_str().unwrap()
+                    ))
+                } else {
+                    input.clone()
+                };
+                if args.to_dot {
+                    let dot_path = serialize_filename.with_extension("dot");
+                    serialized.to_dot_file(dot_path).unwrap()
+                }
+                if args.to_svg {
+                    let svg_path = serialize_filename.with_extension("svg");
+                    serialized.to_svg_file(svg_path).unwrap()
+                }
+                if args.to_json {
+                    let json_path = serialize_filename.with_extension("json");
+                    serialized.to_json_file(json_path).unwrap();
+                }
             }
-            if args.to_svg {
-                let svg_path = serialize_filename.with_extension("svg");
-                serialized.to_svg_file(svg_path).unwrap()
-            }
-            if args.to_json {
-                let json_path = serialize_filename.with_extension("json");
-                serialized.to_json_file(json_path).unwrap();
-            }
-        }
-        // no need to drop the egraph if we are going to exit
-        if idx == args.inputs.len() - 1 {
-            std::mem::forget(egraph)
         }
     }
+
+    // no need to drop the egraph if we are going to exit
+    std::mem::forget(egraph)
 }
