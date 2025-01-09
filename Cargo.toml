@@ -28,14 +28,7 @@ required-features = ["bin"]
 [features]
 default = ["bin"]
 
-bin = [
-  "serde",
-  "graphviz",
-  "dep:clap",
-  "dep:env_logger",
-  "dep:serde_json",
-  "dep:chrono",
-]
+bin = ["serde", "graphviz"]
 serde = ["egraph-serialize/serde"]
 graphviz = ["egraph-serialize/graphviz"]
 wasm-bindgen = ["instant/wasm-bindgen", "dep:getrandom"]
@@ -56,24 +49,20 @@ smallvec = "1.11"
 egraph-serialize = { version = "0.2.0", default-features = false }
 
 # binary dependencies
-clap = { version = "4", features = ["derive"], optional = true }
-env_logger = { version = "0.10", optional = true }
-serde_json = { version = "1.0.100", optional = true, features = [
-  "preserve_order",
-] }
+clap = { version = "4", features = ["derive"] }
+env_logger = { version = "0.10" }
+serde_json = { version = "1.0.100", features = ["preserve_order"] }
 
 ordered-float = { version = "3.7" }
 
 # Need to add "js" feature for "graphviz-rust" to work in wasm
-getrandom = { version = "0.2.10", features = ["js"], optional = true }
+getrandom = { version = "0.2.10", optional = true, features = ["js"] }
 
 im-rc = "15.1.0"
 im = "15.1.0"
 
 [build-dependencies]
-chrono = { version = "0.4", default-features = false, optional = true, features = [
-  "now",
-] }
+chrono = { version = "0.4", default-features = false, features = ["now"] }
 
 [dev-dependencies]
 codspeed-criterion-compat = "2.7.2"
