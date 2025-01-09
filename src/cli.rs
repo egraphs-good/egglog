@@ -1,11 +1,8 @@
 use crate::*;
+use clap::Parser;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
 
-#[cfg(not(target_arch = "wasm32"))]
-use clap::Parser;
-
-#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug, Parser)]
 #[command(version = env!("FULL_VERSION"), about = env!("CARGO_PKG_DESCRIPTION"))]
 struct Args {
@@ -51,7 +48,6 @@ struct Args {
     no_messages: bool,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 #[allow(clippy::disallowed_macros)]
 pub fn cli(mut egraph: EGraph) {
     env_logger::Builder::new()
