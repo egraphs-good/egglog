@@ -18,25 +18,18 @@ members = [".", "web-demo"]
 [[test]]
 name = "files"
 harness = false
-required-features = ["bin"]
 
 [[bin]]
 name = "egglog"
 path = "src/main.rs"
-required-features = ["bin"]
 
 [features]
-default = ["bin"]
-
-bin = ["serde", "graphviz"]
-serde = ["egraph-serialize/serde"]
-graphviz = ["egraph-serialize/graphviz"]
 wasm-bindgen = ["instant/wasm-bindgen", "dep:getrandom"]
 nondeterministic = []
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
-egraph-serialize = { version = "0.2.0", default-features = false }
+egraph-serialize = { version = "0.2.0", features = ["serde", "graphviz"] }
 env_logger = { version = "0.10" }
 hashbrown = { version = "0.15" }
 im-rc = "15.1.0"
