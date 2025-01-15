@@ -7,6 +7,7 @@ version = "0.3.0"
 crate-type = ["cdylib"]
 
 [dependencies.egglog]
+default-features = false
 features = ["wasm-bindgen"]
 path = ".."
 

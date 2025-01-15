@@ -389,7 +389,6 @@ dependencies = [
  "num",
  "ordered-float",
  "rustc-hash",
- "serde_json",
  "smallvec",
  "symbol_table",
  "thiserror",

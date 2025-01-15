@@ -18,19 +18,24 @@ members = [".", "web-demo"]
 [[test]]
 name = "files"
 harness = false
+required-features = ["bin"]
 
 [[bin]]
 name = "egglog"
 path = "src/main.rs"
+required-features = ["bin"]
 
 [features]
+default = ["bin"]
+
+bin = ["dep:clap", "dep:env_logger", "dep:chrono"]
 wasm-bindgen = ["instant/wasm-bindgen", "dep:getrandom"]
 nondeterministic = []
 
 [dependencies]
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive"], optional = true }
 egraph-serialize = { version = "0.2.0", features = ["serde", "graphviz"] }
-env_logger = { version = "0.10" }
+env_logger = { version = "0.10", optional = true }
 hashbrown = { version = "0.15" }
 im-rc = "15.1.0"
 im = "15.1.0"
@@ -42,7 +47,6 @@ num = "0.4.3"
 ordered-float = { version = "3.7" }
 rustc-hash = "1.1"
 smallvec = "1.11"
-serde_json = { version = "1.0.100", features = ["preserve_order"] }
 symbol_table = { version = "0.4.0", features = ["global"] }
 thiserror = "1"
 
@@ -50,7 +54,7 @@ thiserror = "1"
 getrandom = { version = "0.2.10", optional = true, features = ["js"] }
 
 [build-dependencies]
-chrono = { version = "0.4", default-features = false, features = ["now"] }
+chrono = { version = "0.4", default-features = false, features = ["now"], optional = true }
 
 [dev-dependencies]
 codspeed-criterion-compat = "2.7.2"

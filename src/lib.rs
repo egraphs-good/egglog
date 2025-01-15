@@ -33,7 +33,8 @@ use crate::typechecking::TypeError;
 use actions::Program;
 use ast::remove_globals::remove_globals;
 use ast::*;
-pub use cli::*;
+#[cfg(feature = "bin")]
+pub use cli::bin::*;
 use constraint::{Constraint, SimpleTypeConstraint, TypeConstraint};
 use extract::Extractor;
 pub use function::Function;

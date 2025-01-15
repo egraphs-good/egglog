@@ -1,3 +1,4 @@
+#[cfg(feature = "bin")]
 #[allow(clippy::disallowed_macros)] // for println!
 fn main() {
     use std::{env, process::Command};
@@ -16,3 +17,6 @@ fn main() {
     let full_version = format!("{}_{}{}", version, build_date, git_hash);
     println!("cargo:rustc-env=FULL_VERSION={}", full_version);
 }
+
+#[cfg(not(feature = "bin"))]
+fn main() {}
