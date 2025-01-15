@@ -28,13 +28,21 @@ required-features = ["bin"]
 [features]
 default = ["bin"]
 
-bin = ["dep:clap", "dep:env_logger", "dep:chrono"]
+bin = [
+	"serde",
+	"graphviz",
+	"dep:clap",
+	"dep:env_logger",
+	"dep:chrono",
+]
+serde = ["egraph-serialize/serde"]
+graphviz = ["egraph-serialize/graphviz"]
 wasm-bindgen = ["instant/wasm-bindgen", "dep:getrandom"]
 nondeterministic = []
 
 [dependencies]
 clap = { version = "4", features = ["derive"], optional = true }
-egraph-serialize = { version = "0.2.0", features = ["serde", "graphviz"] }
+egraph-serialize = { version = "0.2.0", default-features = false }
 env_logger = { version = "0.10", optional = true }
 hashbrown = { version = "0.15" }
 im-rc = "15.1.0"

@@ -8,7 +8,7 @@ crate-type = ["cdylib"]
 
 [dependencies.egglog]
 default-features = false
-features = ["wasm-bindgen"]
+features = ["serde", "graphviz", "wasm-bindgen"]
 path = ".."
 
 [dependencies]
