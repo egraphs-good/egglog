@@ -846,3 +846,36 @@ impl TypeConstraint for AllEqualTypeConstraint {
         constraints
     }
 }
+
+pub struct ReturnsLastConstraint {}
+
+impl ReturnsLastConstraint {
+    pub fn new() -> ReturnsLastConstraint {
+        ReturnsLastConstraint {}
+    }
+}
+
+impl TypeConstraint for ReturnsLastConstraint {
+    fn get(
+        &self,
+        mut arguments: &[AtomTerm],
+        _typeinfo: &TypeInfo,
+    ) -> Vec<Box<dyn Constraint<AtomTerm, ArcSort>>> {
+        if arguments.is_empty() {
+            panic!("all arguments should have length > 0")
+        }
+
+        // if there are not at least 2 arguments, then we can't have an output
+        if arguments.len() < 2 {
+            return vec![];
+        }
+
+        let mut constraints = vec![];
+
+        let (out, inputs) = arguments.split_last().unwrap();
+        let (last, rest) = inputs.split_last().unwrap();
+        constraints.push(constraint::eq(out.clone(), last.clone()));
+
+        constraints
+    }
+}
