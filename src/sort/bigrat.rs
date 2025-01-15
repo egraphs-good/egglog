@@ -130,6 +130,10 @@ impl Sort for BigRatSort {
         eg.add_primitive(MatchOnce {
             name: "match-once-unstable".into(),
         });
+
+        eg.add_primitive(ClearMatchCache {
+            name: "clear-match-cache-unstable".into(),
+        });
    }
 
     fn extract_term(
@@ -188,7 +192,7 @@ impl PrimitiveLike for MatchOnce {
         self.name
     }
 
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+    fn get_type_constraints(&self, _span: &Span) -> Box<dyn TypeConstraint> {
         Box::new(ReturnsLastConstraint::new())
     }
 
@@ -207,5 +211,35 @@ impl PrimitiveLike for MatchOnce {
             matched.insert(values.to_vec().into());
             Some(values[values.len() - 1])
         }
+    }
+}
+
+struct ClearMatchCache {
+    name: Symbol,
+}
+
+impl PrimitiveLike for ClearMatchCache {
+    fn name(&self) -> Symbol {
+        self.name
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        Box::new(SimpleTypeConstraint::new(
+            self.name,
+            vec![Arc::new(UnitSort)],
+            span.clone(),
+        ))
+    }
+
+    /// Clear the match cache
+    fn apply(
+        &self,
+        _values: &[Value],
+        _sorts: (&[ArcSort], &ArcSort),
+        _egraph: Option<&mut EGraph>,
+    ) -> Option<Value> {
+        MATCHED.lock().unwrap().clear();
+        // return a dummy value
+        Some(Value::unit())
     }
 }
