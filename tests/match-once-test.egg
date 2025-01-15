@@ -1,0 +1,20 @@
+(datatype Math
+   (Num i64)
+   (Neg Math))
+
+
+(Neg (Neg (Num 1)))
+(Neg (Neg (Num 2)))
+(union (Neg (Num 1)) (Neg (Num 2)))
+
+
+(relation matched (i64))
+
+(rule ((= lhs (Neg child))
+       (match-once-unstable "myrule" child lhs)
+       (= child (Neg (Num n))))
+      ((matched n)))
+
+(run 10)
+
+(print-function matched 100)

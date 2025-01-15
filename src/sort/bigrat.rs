@@ -1,9 +1,12 @@
+use constraint::ReturnsLastConstraint;
 use num::traits::{CheckedAdd, CheckedDiv, CheckedMul, CheckedSub, One, Signed, ToPrimitive, Zero};
 use num::{rational::BigRational, BigInt};
+use smallvec::SmallVec;
 use std::sync::Mutex;
 
 type Z = BigInt;
 type Q = BigRational;
+type Match = SmallVec<[Value; 4]>;
 use crate::{ast::Literal, util::IndexSet};
 
 use super::*;
@@ -11,6 +14,7 @@ use super::*;
 lazy_static! {
     static ref BIG_RAT_SORT_NAME: Symbol = "BigRat".into();
     static ref RATS: Mutex<IndexSet<Q>> = Default::default();
+    static ref MATCHED: Mutex<IndexSet<Match>> = Default::default();
 }
 
 /// Rational numbers supporting these primitives:
@@ -120,6 +124,12 @@ impl Sort for BigRatSort {
         add_primitives!(eg, ">" = |a: Q, b: Q| -> Opt { if a > b {Some(())} else {None} });
         add_primitives!(eg, "<=" = |a: Q, b: Q| -> Opt { if a <= b {Some(())} else {None} });
         add_primitives!(eg, ">=" = |a: Q, b: Q| -> Opt { if a >= b {Some(())} else {None} });
+
+
+        // HACK: add the match-once primitive
+        eg.add_primitive(MatchOnce {
+            name: "match-once-unstable".into(),
+        });
    }
 
     fn extract_term(
@@ -166,5 +176,36 @@ impl IntoSort for Q {
             tag: BigRatSort.name(),
             bits: i as u64,
         })
+    }
+}
+
+struct MatchOnce {
+    name: Symbol,
+}
+
+impl PrimitiveLike for MatchOnce {
+    fn name(&self) -> Symbol {
+        self.name
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        Box::new(ReturnsLastConstraint::new())
+    }
+
+    /// If we have seen this match before, return None
+    /// Otherwise, return the last value in the values array
+    fn apply(
+        &self,
+        values: &[Value],
+        _sorts: (&[ArcSort], &ArcSort),
+        _egraph: Option<&mut EGraph>,
+    ) -> Option<Value> {
+        let mut matched = MATCHED.lock().unwrap();
+        if matched.contains(values) {
+            None
+        } else {
+            matched.insert(values.to_vec().into());
+            Some(values[values.len() - 1])
+        }
     }
 }
