@@ -29,11 +29,11 @@ required-features = ["bin"]
 default = ["bin"]
 
 bin = [
-	"serde",
-	"graphviz",
-	"dep:clap",
-	"dep:env_logger",
-	"dep:chrono",
+  "serde",
+  "graphviz",
+  "dep:clap",
+  "dep:env_logger",
+  "dep:chrono",
 ]
 serde = ["egraph-serialize/serde"]
 graphviz = ["egraph-serialize/graphviz"]
