@@ -858,9 +858,9 @@ impl ReturnsLastConstraint {
 impl TypeConstraint for ReturnsLastConstraint {
     fn get(
         &self,
-        mut arguments: &[AtomTerm],
+        arguments: &[AtomTerm],
         _typeinfo: &TypeInfo,
-    ) -> Vec<Box<dyn Constraint<AtomTerm, ArcSort>>> {
+    ) -> Vec<Constraint<AtomTerm, ArcSort>> {
         if arguments.is_empty() {
             panic!("all arguments should have length > 0")
         }
@@ -873,8 +873,8 @@ impl TypeConstraint for ReturnsLastConstraint {
         let mut constraints = vec![];
 
         let (out, inputs) = arguments.split_last().unwrap();
-        let (last, rest) = inputs.split_last().unwrap();
-        constraints.push(constraint::eq(out.clone(), last.clone()));
+        let (last, _rest) = inputs.split_last().unwrap();
+        constraints.push(Constraint::Eq(out.clone(), last.clone()));
 
         constraints
     }
