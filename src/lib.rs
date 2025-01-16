@@ -13,12 +13,12 @@
 //!
 mod actions;
 pub mod ast;
+mod cli;
 pub mod constraint;
 mod core;
 pub mod extract;
 mod function;
 mod gj;
-mod repl;
 mod serialize;
 pub mod sort;
 mod termdag;
@@ -33,6 +33,8 @@ use crate::typechecking::TypeError;
 use actions::Program;
 use ast::remove_globals::remove_globals;
 use ast::*;
+#[cfg(feature = "bin")]
+pub use cli::bin::*;
 use constraint::{Constraint, SimpleTypeConstraint, TypeConstraint};
 use extract::Extractor;
 pub use function::Function;
