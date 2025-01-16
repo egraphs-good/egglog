@@ -29,7 +29,7 @@ jobs:
     # (https://github.com/orgs/community/discussions/7730)
     # this can be removed.
     - name: Upload web artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: www
         path: target/www
