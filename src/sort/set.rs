@@ -179,14 +179,14 @@ impl Sort for SetSort {
         termdag: &mut TermDag,
     ) -> Option<(Cost, Term)> {
         let set = ValueSet::load(self, &value);
-        let mut term = termdag.app("set-empty".into(), vec![]);
+        let mut children = vec![];
         let mut cost = 0usize;
-        for e in set.iter().rev() {
-            let e = extractor.find_best(*e, termdag, &self.element)?;
-            cost = cost.saturating_add(e.0);
-            term = termdag.app("set-insert".into(), vec![term, e.1])
+        for e in set.iter() {
+            let (child_cost, child_term) = extractor.find_best(*e, termdag, &self.element)?;
+            cost = cost.saturating_add(child_cost);
+            children.push(child_term);
         }
-        Some((cost, term))
+        Some((cost, termdag.app("set-of".into(), children)))
     }
 
     fn serialized_name(&self, _value: &Value) -> Symbol {
