@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["Sexp","Span"],"struct":["EgglogSpan","ParseError","Parser","RustSpan","SimpleMacro","SrcFile"],"trait":["Macro"]};
