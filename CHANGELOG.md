@@ -35,6 +35,7 @@ Extraction
 - Remove unused 'serde-1' attribute (#465)
 - Extract egraph-serialize features  (#466)
 - Expose extraction module publicly (#503)
+- Use `set-of` instead of `set-insert` for extraction result of sets. (#514)
 
 Bug fixes
 
