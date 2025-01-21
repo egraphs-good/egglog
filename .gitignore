@@ -1,0 +1,24 @@
+target/
+notes.md
+.vscode
+node_modules
+dist/
+pkg/
+# so long as this is library-only
+Cargo.lock
+
+# perf stuff
+flamegraph.svg
+perf.data*
+profile.json
+
+_scratch.egg
+/*.egg
+*.log
+*.dot
+*.svg
+*.DS_Store
+
+# racket
+scripts/compiled
+tests/*.json
