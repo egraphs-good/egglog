@@ -220,24 +220,24 @@ impl SortedWritesTable {
 }
 
 fn do_parallel(_workload_size: usize) -> bool {
-    #[cfg(test)]
+    #[cfg(debug_assertions)]
     {
         use rand::{thread_rng, Rng};
         thread_rng().gen::<bool>()
     }
-    #[cfg(not(test))]
+    #[cfg(not(debug_assertions))]
     {
         _workload_size > 1000 && rayon::current_num_threads() > 1
     }
 }
 
 fn incremental_rebuild(_uf_size: usize, _table_size: usize, _parallel: bool) -> bool {
-    #[cfg(test)]
+    #[cfg(debug_assertions)]
     {
         use rand::{thread_rng, Rng};
         thread_rng().gen::<bool>()
     }
-    #[cfg(not(test))]
+    #[cfg(not(debug_assertions))]
     {
         if _parallel {
             _table_size > 10_000 && _uf_size * 8192 <= _table_size
