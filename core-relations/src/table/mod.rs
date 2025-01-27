@@ -754,7 +754,7 @@ impl SortedWritesTable {
             .map(|(shard_id, shard)| {
                 let shard_id = ShardId::from_usize(shard_id);
                 let mut checker = checker.clone();
-                let mut exec_state = exec_state.new_handle();
+                let mut exec_state = exec_state.clone();
                 let mut scratch = with_pool_set(|ps| ps.get::<Vec<Value>>());
                 let queue = &self.pending_state.pending_rows[shard_id];
                 let mut marked_stale = 0usize;

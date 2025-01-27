@@ -100,7 +100,7 @@ impl SortedWritesTable {
             WrappedTableRef::with_wrapper(self, |wrapped| {
                 buf.par_iter()
                     .fold(
-                        || (self.new_buffer(), exec_state.new_handle()),
+                        || (self.new_buffer(), exec_state.clone()),
                         |(mut mutation_buf, mut exec_state), (_, row)| {
                             let Some(subset) = self.rebuild_index.get_subset(&row[0]) else {
                                 return (mutation_buf, exec_state);
@@ -164,7 +164,7 @@ impl SortedWritesTable {
                         (
                             self.new_buffer(),
                             TaggedRowBuffer::new(self.n_columns),
-                            exec_state.new_handle(),
+                            exec_state.clone(),
                         )
                     },
                     |(mut mutation_buf, mut buf, mut exec_state), start| {

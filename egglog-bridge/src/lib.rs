@@ -160,7 +160,7 @@ impl EGraph {
     pub fn get_container_val<C: Container>(&mut self, val: C) -> Value {
         self.register_container_ty::<C>();
         self.db
-            .with_execution_state(|state| state.new_handle().containers().register_val(val, state))
+            .with_execution_state(|state| state.clone().containers().register_val(val, state))
     }
 
     /// Register the given [`Container`] type with this EGraph.

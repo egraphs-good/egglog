@@ -504,7 +504,7 @@ fn register_vec_push(egraph: &mut EGraph) -> ExternalFunctionId {
         vec.0.push(*val);
         // Vectors are immutable. May as well not use O(n) auxiliary space.
         vec.0.shrink_to_fit();
-        Some(state.new_handle().containers().register_val(vec, state))
+        Some(state.clone().containers().register_val(vec, state))
     });
     egraph.register_external_func(external_func)
 }

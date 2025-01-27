@@ -151,14 +151,39 @@ impl DbView<'_> {
     }
 }
 
+/// A handle on a database that may be in the process of running a rule.
+///
+/// An ExecutionState grants immutable access to the (much of) the database, and also provides a
+/// limited API to mutate database contents.
+///
+/// A few important notes:
+///
+/// ## Some tables may be missing
+/// Callers external to this crate cannot construct an `ExecutionState` directly. Depending on the
+/// context, some tables may not be available. In particular, when running [`crate::Table::merge`]
+/// operations, only a table's read-side dependencies are available for reading (sim. for writing).
+/// This allows tables that do not need access to one another to be merged in parallel.
+///
+/// When executing a rule, ExecutionState has access to all tables.
+///
+/// ## Limited Mutability
+/// Callers can only stage insertsions and deletions to tables. These changes are not applied until
+/// the next call to `merge` on the underlying table.
+///
+/// ## Predicted Values
+/// ExecutionStates provide a means of synchronizing the results of a pending write across
+/// different executions of a rule. This is particularly important in the case where the result of
+/// an operation (such as "lookup or insert new id" operatiosn) is a fresh id. A common
+/// ExecutionState ensures that future lookups will see the same id (even across calls to
+/// [`ExecutionState::clone`]).
 pub struct ExecutionState<'a> {
     pub(crate) predicted: &'a PredictedVals,
     pub(crate) db: DbView<'a>,
     pub(crate) buffers: DenseIdMap<TableId, Box<dyn MutationBuffer>>,
 }
 
-impl<'a> ExecutionState<'a> {
-    pub fn new_handle(&self) -> ExecutionState<'a> {
+impl Clone for ExecutionState<'_> {
+    fn clone(&self) -> Self {
         let mut res = ExecutionState {
             predicted: self.predicted,
             db: self.db,
@@ -169,15 +194,21 @@ impl<'a> ExecutionState<'a> {
         }
         res
     }
-    pub fn stage_insert(&mut self, table: TableId, vals: &[Value]) {
+}
+
+impl ExecutionState<'_> {
+    /// Stage an insertion of the given row into `table`.
+    pub fn stage_insert(&mut self, table: TableId, row: &[Value]) {
         self.buffers
             .get_or_insert(table, || self.db.table_info[table].table.new_buffer())
-            .stage_insert(vals);
+            .stage_insert(row);
     }
-    pub fn stage_remove(&mut self, table: TableId, vals: &[Value]) {
+
+    /// Stage a removal of the given row from `table` if it is present.
+    pub fn stage_remove(&mut self, table: TableId, key: &[Value]) {
         self.buffers
             .get_or_insert(table, || self.db.table_info[table].table.new_buffer())
-            .stage_remove(vals);
+            .stage_remove(key);
     }
 
     pub fn inc_counter(&self, ctr: CounterId) -> usize {

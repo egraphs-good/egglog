@@ -99,7 +99,7 @@ impl Containers {
         if do_parallel() {
             self.data
                 .iter_mut()
-                .zip(std::iter::repeat_with(|| exec_state.new_handle()))
+                .zip(std::iter::repeat_with(|| exec_state.clone()))
                 .par_bridge()
                 .map(|((_, env), mut exec_state)| {
                     env.apply_rewrite(
@@ -433,7 +433,7 @@ impl<C: Container> ContainerEnv<C> {
         shards
             .iter_mut()
             .enumerate()
-            .map(|(i, shard)| (i, shard, exec_state.new_handle()))
+            .map(|(i, shard)| (i, shard, exec_state.clone()))
             .par_bridge()
             .for_each(|(shard_id, shard, mut exec_state)| {
                 // This bit is a real slog. Once Dashmap updates from RawTable to HashTable for
