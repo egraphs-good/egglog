@@ -585,7 +585,7 @@ fn container_test() {
         MergeFn::UnionId,
         "vec",
     );
-    let int_add = core_relations::lift_operation! {
+    let int_add = core_relations::lift_function! {
         [egraph.primitives_mut()] fn add(x: i64, y: i64) -> i64 {
             x + y
         }

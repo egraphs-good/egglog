@@ -688,7 +688,7 @@ static THREAD_POOL: Lazy<rayon::ThreadPool> = Lazy::new(|| {
         .unwrap()
 });
 
-/// A simple free list used to reuse slots in a [`SubsetBuffer`] or [`ParallelSubsetBuffer`].
+/// A simple free list used to reuse slots in a [`SubsetBuffer`].
 ///
 /// This free list works as a map from power-of-two size classes to a vector of offsets that point
 /// to the beginning of an unused vector.

@@ -1,14 +1,14 @@
-use crate::lift_operation;
+use crate::lift_function;
 
 use super::{PrimitivePrinter, Primitives};
 
 #[test]
 fn basic_primitive() {
     let mut prims = Primitives::default();
-    let add32 = lift_operation!([&mut prims] fn add32(x: i32, y: i32) -> i32 {
+    let add32 = lift_function!([&mut prims] fn add32(x: i32, y: i32) -> i32 {
         x + y
     });
-    let maybe_add = lift_operation!([&mut prims] fn maybe_add(t: bool, x: i64, y: i64) -> i64 {
+    let maybe_add = lift_function!([&mut prims] fn maybe_add(t: bool, x: i64, y: i64) -> i64 {
         if t {
             x + y
         } else {
@@ -37,7 +37,7 @@ fn basic_primitive() {
 #[should_panic]
 fn arity_mismatch() {
     let mut prims = Primitives::default();
-    let add32 = lift_operation!([&mut prims] fn add32(x: i32, y: i32) -> i32 {
+    let add32 = lift_function!([&mut prims] fn add32(x: i32, y: i32) -> i32 {
         x + y
     });
     prims.apply_op(add32, &[]);
@@ -47,7 +47,7 @@ fn arity_mismatch() {
 #[should_panic]
 fn operation_type_mismatch() {
     let mut prims = Primitives::default();
-    let add32 = lift_operation!([&mut prims] fn add32(x: i32, y: i32) -> i32 {
+    let add32 = lift_function!([&mut prims] fn add32(x: i32, y: i32) -> i32 {
         x + y
     });
     let x = prims.get(1i64);

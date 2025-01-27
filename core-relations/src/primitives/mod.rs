@@ -1,4 +1,4 @@
-//! Mechanisms for declaring primitive types and operations on them.
+//! Mechanisms for declaring primitive types and functions on them.
 
 use std::{
     any::{Any, TypeId},
@@ -23,8 +23,12 @@ use crate::{
 mod tests;
 
 define_id!(pub PrimitiveId, u32, "an identifier for primitive types");
-define_id!(pub PrimitiveFunctionId, u32, "an identifier for primitive operations");
+define_id!(pub PrimitiveFunctionId, u32, "an identifier for primitive functions");
 
+/// A simple primitive type that can be interned in a database.
+///
+/// No one needs to implement this trait directly: any type with the trait requirements implements
+/// it automatically.
 pub trait Primitive: Clone + Hash + Eq + Any + Debug + Send + Sync {
     fn intern(&self, table: &InternTable<Self, Value>) -> Value {
         table.intern(self)
@@ -52,12 +56,12 @@ impl Debug for PrimitivePrinter<'_> {
     }
 }
 
-/// A registry for primitive values and operations on them.
+/// A registry for primitive values and functions on them.
 #[derive(Default)]
 pub struct Primitives {
     type_ids: InternTable<TypeId, PrimitiveId>,
     tables: DenseIdMap<PrimitiveId, Box<dyn DynamicInternTable>>,
-    operations: DenseIdMap<PrimitiveFunctionId, DynamicPrimitveOperation>,
+    funcs: DenseIdMap<PrimitiveFunctionId, DynamicPrimitveFunction>,
 }
 
 impl Primitives {
@@ -100,25 +104,29 @@ impl Primitives {
         self.unwrap_ref::<P>(v).clone()
     }
 
-    pub fn register_op(&mut self, op: impl PrimitiveOperation + 'static) -> PrimitiveFunctionId {
+    /// Register the given primitive function with this registry.
+    pub fn register_func(&mut self, op: impl PrimitiveFunction + 'static) -> PrimitiveFunctionId {
         op.register_types(self);
-        self.operations.push(DynamicPrimitveOperation::new(op))
+        self.funcs.push(DynamicPrimitveFunction::new(op))
     }
 
+    /// Get the signature of the given primitive function.
     pub fn get_schema(&self, id: PrimitiveFunctionId) -> PrimitiveFunctionSignature {
-        self.operations[id].op.signature()
+        self.funcs[id].op.signature()
     }
 
-    /// Apply the given operation to the supplied arguments.
+    /// Apply the given function to the supplied arguments.
     ///
-    /// This operation is not particularly efficient, but it is useful when
-    /// writing tests or external proof checkers.
+    /// Note: This function needs to perform a number of table lookups in order
+    /// to apply the function in question. This overhead is substantial for
+    /// small functions.
     pub fn apply_op(&mut self, id: PrimitiveFunctionId, args: &[Value]) -> Option<Value> {
-        let dyn_op = self.operations.unwrap_val(id);
+        let dyn_op = self.funcs.unwrap_val(id);
         let res = dyn_op.op.apply(self, args);
-        self.operations.insert(id, dyn_op);
+        self.funcs.insert(id, dyn_op);
         res
     }
+
     pub(crate) fn apply_vectorized(
         &self,
         id: PrimitiveFunctionId,
@@ -128,19 +136,19 @@ impl Primitives {
         args: &[QueryEntry],
         out_var: Variable,
     ) {
-        let dyn_op = &self.operations[id];
+        let dyn_op = &self.funcs[id];
         dyn_op
             .op
             .apply_vectorized(self, pool, mask, bindings, args, out_var);
     }
 }
 
-struct DynamicPrimitveOperation {
-    op: Box<dyn PrimitiveOperationExt>,
+struct DynamicPrimitveFunction {
+    op: Box<dyn PrimitiveFunctionExt>,
 }
 
-impl DynamicPrimitveOperation {
-    fn new(op: impl PrimitiveOperation + 'static) -> Self {
+impl DynamicPrimitveFunction {
+    fn new(op: impl PrimitiveFunction + 'static) -> Self {
         Self { op: Box::new(op) }
     }
 }
@@ -167,17 +175,23 @@ pub struct PrimitiveFunctionSignature<'a> {
     pub ret: PrimitiveId,
 }
 
-/// A primitive operation on a set of primitive types.
+/// A function from primitive values to primitive values.
 ///
 /// Most of the time you can get away with using the `lift_operation` macro,
 /// which implements this under the hood.
-pub trait PrimitiveOperation: Send + Sync {
+pub trait PrimitiveFunction: Send + Sync {
     fn signature(&self) -> PrimitiveFunctionSignature;
+
+    /// Explicitly register any types that this function depends on with the given [`Primitives`].
     fn register_types(&self, prims: &mut Primitives);
+
+    /// Apply this function to the given arguments. Returning `None` indicates
+    /// that the function is not defined on these inputs. During execution, this
+    /// halts execution of the rule.
     fn apply(&self, prims: &Primitives, args: &[Value]) -> Option<Value>;
 }
 
-pub(crate) trait PrimitiveOperationExt: PrimitiveOperation {
+pub(crate) trait PrimitiveFunctionExt: PrimitiveFunction {
     fn apply_vectorized(
         &self,
         prims: &Primitives,
@@ -200,13 +214,13 @@ pub(crate) trait PrimitiveOperationExt: PrimitiveOperation {
     }
 }
 
-impl<T: PrimitiveOperation> PrimitiveOperationExt for T {}
+impl<T: PrimitiveFunction> PrimitiveFunctionExt for T {}
 
 #[macro_export]
-macro_rules! lift_operation_impl {
+macro_rules! lift_function_impl {
     ([$arity:expr, $table:expr] fn $name:ident ( $($id:ident : $ty:ty : $n:tt),* ) -> $ret:ty { $body:expr }) => {
          {
-            use $crate::{Primitives, PrimitiveOperation, PrimitiveId, PrimitiveFunctionSignature};
+            use $crate::{Primitives, PrimitiveFunction, PrimitiveId, PrimitiveFunctionSignature};
             use $crate::Value;
             fn $name(prims: &mut Primitives) -> $crate::PrimitiveFunctionId {
                 struct Impl<F> {
@@ -225,7 +239,7 @@ macro_rules! lift_operation_impl {
                     }
                 }
 
-                impl<F: Fn($($ty),*) -> $ret + Send + Sync> PrimitiveOperation for Impl<F> {
+                impl<F: Fn($($ty),*) -> $ret + Send + Sync> PrimitiveFunction for Impl<F> {
                     fn signature(&self) -> PrimitiveFunctionSignature {
                         PrimitiveFunctionSignature {
                             args: &self.arg_prims,
@@ -250,7 +264,7 @@ macro_rules! lift_operation_impl {
                 }
 
                 let op = Impl::new(__impl, prims);
-                prims.register_op(op)
+                prims.register_func(op)
             }
             $name($table)
         }
@@ -258,16 +272,16 @@ macro_rules! lift_operation_impl {
 }
 
 #[macro_export]
-macro_rules! lift_operation_count {
+macro_rules! lift_function_count {
     ([$next:expr, $table:expr] [$($x:ident : $ty:ty : $n: expr),*] fn $name:ident() -> $ret:ty { $body:expr }) => {
-        $crate::lift_operation_impl!(
+        $crate::lift_function_impl!(
             [$next, $table] fn $name($($x : $ty : $n),*) -> $ret {
                 $body
             }
         )
     };
     ([$next:expr, $table:expr] [$($p:ident : $ty:ty : $n:expr),*] fn $name:ident($id:ident : $hd:ty $(,$rest:ident : $tl:ty)*) -> $ret:ty { $body:expr }) => {
-        $crate::lift_operation_count!(
+        $crate::lift_function_count!(
             [($next + 1), $table]
             [$($p : $ty : $n,)* $id : $hd : $next]
             fn $name($($rest:$tl),*) -> $ret {
@@ -277,12 +291,11 @@ macro_rules! lift_operation_count {
     };
 }
 
-/// Lifts a function into a primitive operation, adding it to the supplied table
-/// of primitives.
+/// Registers the given function as a [`PrimitiveFunction`] in the supplied table of primitives.
 #[macro_export]
-macro_rules! lift_operation {
+macro_rules! lift_function {
     ([$table:expr] fn $name:ident ( $($id:ident : $ty:ty),* ) -> $ret:ty { $($body:tt)* } ) => {
-        $crate::lift_operation_count!(
+        $crate::lift_function_count!(
             [0, $table]
             []
             fn $name($($id : $ty),*) -> $ret {{

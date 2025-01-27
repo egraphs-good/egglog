@@ -6,7 +6,7 @@ use crate::{
     action::WriteVal,
     common::Value,
     free_join::{CounterId, Database, TableId},
-    lift_operation,
+    lift_function,
     query::RuleSetBuilder,
     table::SortedWritesTable,
     table_shortcuts::v,
@@ -24,7 +24,7 @@ fn basic_query() {
         mut db,
         ..
     } = basic_math_egraph();
-    let add_int = lift_operation!(
+    let add_int = lift_function!(
         [db.primitives_mut()] fn add(x: i64, y: i64) -> i64 {
             x + y
         }

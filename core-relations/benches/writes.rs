@@ -115,7 +115,7 @@ fn bench_workload<const K: usize, const C: usize>(
         .with_inputs(|| {
             (
                 Database::default(),
-                SortedWritesTable::new(K, C, None, |_, old, new, out| {
+                SortedWritesTable::new(K, C, None, vec![], |_, old, new, out| {
                     out.extend_from_slice(new);
                     old != new
                 }),
