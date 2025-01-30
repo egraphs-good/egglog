@@ -8,6 +8,7 @@ use std::{
 };
 
 use concurrency::ReadOptimizedLock;
+use dyn_clone::DynClone;
 use numeric_id::{define_id, DenseIdMap, NumericId};
 use rayon::prelude::*;
 use smallvec::SmallVec;
@@ -130,20 +131,23 @@ define_id!(pub ExternalFunctionId, u32, "A user-defined operation that can be in
 ///
 /// This is a useful, if low-level, interface for extending this database with
 /// functionality and state not built into the core model.
-pub trait ExternalFunction: Send + Sync {
+pub trait ExternalFunction: DynClone + Send + Sync {
     /// Invoke the function with mutable access to the database. If a value is
     /// not returned, halt the execution of the current rule.
     fn invoke(&self, state: &mut ExecutionState, args: &[Value]) -> Option<Value>;
 }
 
 /// Automatically generate an `ExternalFunction` implementation from a function.
-pub fn make_external_func<F: Fn(&mut ExecutionState, &[Value]) -> Option<Value> + Send + Sync>(
+pub fn make_external_func<
+    F: Fn(&mut ExecutionState, &[Value]) -> Option<Value> + Clone + Send + Sync,
+>(
     f: F,
 ) -> impl ExternalFunction {
+    #[derive(Clone)]
     struct Wrapped<F>(F);
     impl<F> ExternalFunction for Wrapped<F>
     where
-        F: Fn(&mut ExecutionState, &[Value]) -> Option<Value> + Send + Sync,
+        F: Fn(&mut ExecutionState, &[Value]) -> Option<Value> + Clone + Send + Sync,
     {
         fn invoke(&self, state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
             (self.0)(state, args)
@@ -182,6 +186,9 @@ pub(crate) trait ExternalFunctionExt: ExternalFunction {
 }
 
 impl<T: ExternalFunction> ExternalFunctionExt for T {}
+
+// Implements `Clone` for `Box<dyn ExternalFunctionExt>`.
+dyn_clone::clone_trait_object!(ExternalFunctionExt);
 
 #[derive(Default)]
 pub(crate) struct Counters(DenseIdMap<CounterId, AtomicUsize>);

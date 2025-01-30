@@ -974,6 +974,7 @@ fn marker_nonincremental_rebuild<R>(f: impl FnOnce() -> R) -> R {
 //
 // TODO: once we have parallelism wired in, we'll want to replace this with a
 // more efficient solution (e.g. one baesd on crossbeam or arcswap).
+#[derive(Clone)]
 pub(crate) struct GetFirstMatch {
     pub(crate) side_channel: Arc<Mutex<Option<Vec<Value>>>>,
 }
