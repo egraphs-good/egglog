@@ -19,7 +19,9 @@ use crate::{
     ExternalFunctionId, PoolSet, PrimitiveFunctionSignature,
 };
 
-/// A set of queries to run against a [`Database`]
+/// A set of rules to run against a [`Database`].
+///
+/// See [`Database::new_rule_set`] for more information.
 #[derive(Default)]
 pub struct RuleSet {
     pub(crate) plans: Vec<(Plan, String /* description */)>,
@@ -50,8 +52,8 @@ impl<'outer> RuleSetBuilder<'outer> {
         self.db.estimate_size(table, c)
     }
 
-    /// Start a new query against this rule set.
-    pub fn new_query<'a>(&'a mut self) -> QueryBuilder<'outer, 'a> {
+    /// Add a rule to this rule set.
+    pub fn new_rule<'a>(&'a mut self) -> QueryBuilder<'outer, 'a> {
         let instrs = with_pool_set(PoolSet::get);
         QueryBuilder {
             rsb: self,
@@ -83,7 +85,8 @@ pub struct QueryBuilder<'outer, 'a> {
 }
 
 impl<'outer, 'a> QueryBuilder<'outer, 'a> {
-    pub fn rules(self) -> RuleBuilder<'outer, 'a> {
+    /// Finish the query and start building the right-hand side of the rule.
+    pub fn build(self) -> RuleBuilder<'outer, 'a> {
         RuleBuilder { qb: self }
     }
 
@@ -276,6 +279,9 @@ pub enum QueryError {
     },
 }
 
+/// Builder for the "action" portion of the rule.
+///
+/// Rules can refer to the variables bound in their query to modify the database.
 pub struct RuleBuilder<'outer, 'a> {
     qb: QueryBuilder<'outer, 'a>,
 }

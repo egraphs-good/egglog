@@ -59,7 +59,7 @@ fn basic_query() {
     db.merge_all();
 
     let mut rsb = RuleSetBuilder::new(&mut db);
-    let mut add_query = rsb.new_query();
+    let mut add_query = rsb.new_rule();
     // Add(x, y, z, t1),
     // Num(a, x, t2),
     // Num(b, y, t3),
@@ -83,7 +83,7 @@ fn basic_query() {
     add_query
         .add_atom(num, &[b.into(), y.into(), t3.into()], &[])
         .unwrap();
-    let mut rules = add_query.rules();
+    let mut rules = add_query.build();
     let add_a_b = rules.prim(add_int, &[a.into(), b.into()]).unwrap();
     rules
         .insert(num, &[add_a_b.into(), z.into(), Value::new(1).into()])
@@ -139,7 +139,7 @@ fn line_graph_1_test(strat: PlanStrategy) {
     db.merge_all();
 
     let mut rsb = RuleSetBuilder::new(&mut db);
-    let mut query = rsb.new_query();
+    let mut query = rsb.new_rule();
     query.set_plan_strategy(strat);
     // edge(x, y), edge(y, z) => edge(x, z)
     let x = query.new_var();
@@ -147,7 +147,7 @@ fn line_graph_1_test(strat: PlanStrategy) {
     let z = query.new_var();
     query.add_atom(edges, &[x.into(), y.into()], &[]).unwrap();
     query.add_atom(edges, &[y.into(), z.into()], &[]).unwrap();
-    let mut rule = query.rules();
+    let mut rule = query.build();
     rule.insert(edges, &[x.into(), z.into()]).unwrap();
     rule.build();
     let rule_set = rsb.build();
@@ -205,7 +205,7 @@ fn line_graph_2_test(strat: PlanStrategy) {
     db.merge_all();
 
     let mut rsb = RuleSetBuilder::new(&mut db);
-    let mut query = rsb.new_query();
+    let mut query = rsb.new_rule();
     query.set_plan_strategy(strat);
     // edge(x, y), edge(y, z) => edge(x, z) :where y > 1
     let x = query.new_var();
@@ -222,7 +222,7 @@ fn line_graph_2_test(strat: PlanStrategy) {
         )
         .unwrap();
     query.add_atom(edges, &[y.into(), z.into()], &[]).unwrap();
-    let mut rule = query.rules();
+    let mut rule = query.build();
     rule.insert(edges, &[x.into(), z.into()]).unwrap();
     rule.build();
     let rule_set = rsb.build();
@@ -271,7 +271,7 @@ fn minimal_ac() {
         db.merge_all();
     }
     let mut rsb = db.new_rule_set();
-    let mut add_assoc = rsb.new_query();
+    let mut add_assoc = rsb.new_rule();
     // Add(x, Add(y, z)) => Add(Add(x, y), z)
     //
     // Add(y, z, i1, t1)
@@ -319,7 +319,7 @@ fn minimal_ac() {
             ],
         )
         .unwrap();
-    let mut rules = add_assoc.rules();
+    let mut rules = add_assoc.build();
     let res = rules
         .lookup_or_insert(
             add,
@@ -441,7 +441,7 @@ fn ac_test(strat: PlanStrategy) {
             (all_range, recent_range.clone()),
             (recent_range.clone(), old_range.clone()),
         ] {
-            let mut add_assoc = rsb.new_query();
+            let mut add_assoc = rsb.new_rule();
             add_assoc.set_plan_strategy(strat);
             // Add(x, Add(y, z)) => Add(Add(x, y), z)
             //
@@ -490,7 +490,7 @@ fn ac_test(strat: PlanStrategy) {
                     ],
                 )
                 .unwrap();
-            let mut rules = add_assoc.rules();
+            let mut rules = add_assoc.build();
             let res = rules
                 .lookup_or_insert(
                     add,
@@ -511,7 +511,7 @@ fn ac_test(strat: PlanStrategy) {
         // Add(x, y, z, t1),
         // => Add(y, x, z, cur)
 
-        let mut add_comm = rsb.new_query();
+        let mut add_comm = rsb.new_rule();
         add_comm.set_plan_strategy(strat);
         let x = add_comm.new_var();
         let y = add_comm.new_var();
@@ -529,7 +529,7 @@ fn ac_test(strat: PlanStrategy) {
             )
             .unwrap();
 
-        let mut rules = add_comm.rules();
+        let mut rules = add_comm.build();
         rules
             .insert(add, &[y.into(), x.into(), z.into(), next_ts.into()])
             .unwrap();
@@ -554,7 +554,7 @@ fn ac_test(strat: PlanStrategy) {
                     val: cur_ts,
                 }),
             );
-            let mut num_rebuild = rsb.new_query();
+            let mut num_rebuild = rsb.new_rule();
             num_rebuild.set_plan_strategy(strat);
             if incremental_rebuild(uf_size, num_size) {
                 // nonincremental:
@@ -566,7 +566,7 @@ fn ac_test(strat: PlanStrategy) {
                 num_rebuild
                     .add_atom(num, &[x.into(), id.into(), t1.into()], &[])
                     .unwrap();
-                let mut rules = num_rebuild.rules();
+                let mut rules = num_rebuild.build();
                 let id_canon = rules
                     .lookup_with_default(uf, &[id.into()], id.into(), ColumnId::new(1))
                     .unwrap();
@@ -594,7 +594,7 @@ fn ac_test(strat: PlanStrategy) {
                         }],
                     )
                     .unwrap();
-                let mut rules = num_rebuild.rules();
+                let mut rules = num_rebuild.build();
                 rules
                     .insert(num, &[x.into(), id_new.into(), next_ts.into()])
                     .unwrap();
@@ -612,7 +612,7 @@ fn ac_test(strat: PlanStrategy) {
             }),
         );
         if incremental_rebuild(uf_size, add_size) {
-            let mut add_rebuild_id = rsb.new_query();
+            let mut add_rebuild_id = rsb.new_rule();
             add_rebuild_id.set_plan_strategy(strat);
             let x = add_rebuild_id.new_var();
             let y = add_rebuild_id.new_var();
@@ -633,7 +633,7 @@ fn ac_test(strat: PlanStrategy) {
                     }],
                 )
                 .unwrap();
-            let mut rules = add_rebuild_id.rules();
+            let mut rules = add_rebuild_id.build();
             let x_new = rules
                 .lookup_with_default(uf, &[x.into()], x.into(), ColumnId::new(1))
                 .unwrap();
@@ -652,7 +652,7 @@ fn ac_test(strat: PlanStrategy) {
             changed |= db.run_rule_set(&rs);
             let mut rsb = db.new_rule_set();
             num_rebuild(&mut rsb, cur_ts, next_ts);
-            let mut add_rebuild_l = rsb.new_query();
+            let mut add_rebuild_l = rsb.new_rule();
             add_rebuild_l.set_plan_strategy(strat);
             let x = add_rebuild_l.new_var();
             let y = add_rebuild_l.new_var();
@@ -673,7 +673,7 @@ fn ac_test(strat: PlanStrategy) {
                     }],
                 )
                 .unwrap();
-            let mut rules = add_rebuild_l.rules();
+            let mut rules = add_rebuild_l.build();
             let y_new = rules
                 .lookup_with_default(uf, &[y.into()], y.into(), ColumnId::new(1))
                 .unwrap();
@@ -693,7 +693,7 @@ fn ac_test(strat: PlanStrategy) {
             changed |= db.run_rule_set(&rs);
             let mut rsb = db.new_rule_set();
             num_rebuild(&mut rsb, cur_ts, next_ts);
-            let mut add_rebuild_r = rsb.new_query();
+            let mut add_rebuild_r = rsb.new_rule();
             add_rebuild_r.set_plan_strategy(strat);
             let x = add_rebuild_r.new_var();
             let y = add_rebuild_r.new_var();
@@ -714,7 +714,7 @@ fn ac_test(strat: PlanStrategy) {
                     }],
                 )
                 .unwrap();
-            let mut rules = add_rebuild_r.rules();
+            let mut rules = add_rebuild_r.build();
             let x_new = rules
                 .lookup_with_default(uf, &[x.into()], x.into(), ColumnId::new(1))
                 .unwrap();
@@ -740,7 +740,7 @@ fn ac_test(strat: PlanStrategy) {
             //   assertanyne([x, y, id], [x', y', id'])
             //   delete add(x, y)
             //   insert add(x', y', id', cur)
-            let mut rebuild = rsb.new_query();
+            let mut rebuild = rsb.new_rule();
             rebuild.set_plan_strategy(strat);
             let x = rebuild.new_var();
             let y = rebuild.new_var();
@@ -749,7 +749,7 @@ fn ac_test(strat: PlanStrategy) {
             rebuild
                 .add_atom(add, &[x.into(), y.into(), id.into(), t1.into()], &[])
                 .unwrap();
-            let mut rules = rebuild.rules();
+            let mut rules = rebuild.build();
             let x_canon = rules
                 .lookup_with_default(uf, &[x.into()], x.into(), ColumnId::new(1))
                 .unwrap();

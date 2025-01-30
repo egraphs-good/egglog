@@ -859,7 +859,7 @@ impl Query {
         rsb: &'a mut RuleSetBuilder<'outer>,
         next_ts: Timestamp,
     ) -> (QueryBuilder<'outer, 'a>, Bindings) {
-        let mut qb = rsb.new_query();
+        let mut qb = rsb.new_rule();
         qb.set_plan_strategy(self.plan_strategy);
         let mut inner = Bindings {
             uf_table: self.uf_table,
@@ -873,7 +873,7 @@ impl Query {
     }
 
     fn run_rules_and_build(&self, qb: QueryBuilder, mut inner: Bindings, desc: &str) -> Result<()> {
-        let mut rb = qb.rules();
+        let mut rb = qb.build();
         self.add_rule
             .iter()
             .try_for_each(|f| f(&mut inner, &mut rb))?;

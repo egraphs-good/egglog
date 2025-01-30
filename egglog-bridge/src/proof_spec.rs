@@ -789,14 +789,14 @@ impl EGraph {
                 panic!("failed to find term with id {term_id:?}")
             };
             let mut rsb = self.db.new_rule_set();
-            let mut qb = rsb.new_query();
+            let mut qb = rsb.new_rule();
             for _ in 0..*keys + 1 {
                 atom.push(qb.new_var().into());
             }
             atom.push(term_id.into());
             atom.push(qb.new_var().into()); // reason
             qb.add_atom(*table, &atom, iter::empty()).unwrap();
-            let mut rb = qb.rules();
+            let mut rb = qb.build();
             rb.call_external(self.get_first_id, &atom).unwrap();
             rb.build();
             let rs = rsb.build();
@@ -820,13 +820,13 @@ impl EGraph {
                 .get_index(cur)
                 .unwrap_or_else(|| panic!("failed to find reason with id {reason_id:?}"));
             let mut rsb = self.db.new_rule_set();
-            let mut qb = rsb.new_query();
+            let mut qb = rsb.new_rule();
             for _ in 0..*arity {
                 atom.push(qb.new_var().into());
             }
             atom.push(reason_id.into());
             qb.add_atom(*table, &atom, iter::empty()).unwrap();
-            let mut rb = qb.rules();
+            let mut rb = qb.build();
             rb.call_external(self.get_first_id, &atom).unwrap();
             rb.build();
             let rs = rsb.build();
