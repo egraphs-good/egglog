@@ -183,6 +183,31 @@ pub(crate) trait ExternalFunctionExt: ExternalFunction {
 
 impl<T: ExternalFunction> ExternalFunctionExt for T {}
 
+#[derive(Default)]
+pub(crate) struct Counters(DenseIdMap<CounterId, AtomicUsize>);
+
+impl Clone for Counters {
+    fn clone(&self) -> Counters {
+        let mut map = DenseIdMap::new();
+        for (k, v) in self.0.iter() {
+            // NB: we may want to experiment with Ordering::Relaxed here.
+            map.insert(k, AtomicUsize::new(v.load(Ordering::SeqCst)))
+        }
+        Counters(map)
+    }
+}
+
+impl Counters {
+    pub(crate) fn read(&self, ctr: CounterId) -> usize {
+        self.0[ctr].load(Ordering::Acquire)
+    }
+    pub(crate) fn inc(&self, ctr: CounterId) -> usize {
+        // We synchronize with `read_counter` but not with other increments.
+        // NB: we may want to experiment with Ordering::Relaxed here.
+        self.0[ctr].fetch_add(1, Ordering::Release)
+    }
+}
+
 /// A collection of tables and indexes over them.
 ///
 /// A database also owns the memory pools used by its tables.
@@ -195,21 +220,12 @@ pub struct Database {
     // should look into prefetching counters when creating a new ExecutionState
     // and incrementing locally. Note that the batch size shouldn't be too big
     // because we keep an array per id in the UF.
-    pub(crate) counters: DenseIdMap<CounterId, AtomicUsize>,
+    pub(crate) counters: Counters,
     pub(crate) external_functions: DenseIdMap<ExternalFunctionId, Box<dyn ExternalFunctionExt>>,
     containers: Containers,
     // Tracks the relative dependencies between tables during merge operations.
     deps: DependencyGraph,
     primitives: Primitives,
-}
-
-pub(crate) fn inc_counter(
-    counters: &DenseIdMap<CounterId, AtomicUsize>,
-    counter_id: CounterId,
-) -> usize {
-    // We synchronize with `read_counter` but not with other increments.
-    // NB: we may want to experimetn with Relaxed here.
-    counters[counter_id].fetch_add(1, Ordering::Release)
 }
 
 impl Database {
@@ -366,7 +382,17 @@ impl Database {
     ///
     /// These counters can be used to generate unique ids as part of an action.
     pub fn add_counter(&mut self) -> CounterId {
-        self.counters.push(AtomicUsize::new(0))
+        self.counters.0.push(AtomicUsize::new(0))
+    }
+
+    /// Increment the given counter and return its previous value.
+    pub fn inc_counter(&self, counter: CounterId) -> usize {
+        self.counters.inc(counter)
+    }
+
+    /// Get the current value of the given counter.
+    pub fn read_counter(&self, counter: CounterId) -> usize {
+        self.counters.read(counter)
     }
 
     /// A helper for merging all pending updates. Currently only used in tests.
@@ -457,15 +483,6 @@ impl Database {
             buffers: Default::default(),
         });
         self.tables.insert(table, info);
-    }
-
-    /// Increment the given counter and return its previous value.
-    pub fn inc_counter(&self, counter: CounterId) -> usize {
-        inc_counter(&self.counters, counter)
-    }
-
-    pub fn read_counter(&self, counter: CounterId) -> usize {
-        self.counters[counter].load(Ordering::Acquire)
     }
 
     /// Get id of the next table to be added to the database.

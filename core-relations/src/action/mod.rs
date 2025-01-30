@@ -2,7 +2,7 @@
 //!
 //! This allows us to execute the "right-hand-side" of a rule. The
 //! implementation here is optimized to execute on a batch of rows at a time.
-use std::{mem, ops::Deref, sync::atomic::AtomicUsize};
+use std::{mem, ops::Deref};
 
 use numeric_id::{DenseIdMap, NumericId};
 use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
@@ -10,7 +10,7 @@ use smallvec::SmallVec;
 
 use crate::{
     common::{DashMap, Value},
-    free_join::{CounterId, ExternalFunctionExt, TableId, TableInfo, Variable},
+    free_join::{CounterId, Counters, ExternalFunctionExt, TableId, TableInfo, Variable},
     pool::{with_pool_set, Clear, PoolSet, Pooled},
     primitives::PrimitiveFunctionId,
     table_spec::{ColumnId, MutationBuffer},
@@ -136,19 +136,10 @@ impl PredictedVals {
 #[derive(Copy, Clone)]
 pub(crate) struct DbView<'a> {
     pub(crate) table_info: &'a DenseIdMap<TableId, TableInfo>,
-    pub(crate) counters: &'a DenseIdMap<CounterId, AtomicUsize>,
+    pub(crate) counters: &'a Counters,
     pub(crate) external_funcs: &'a DenseIdMap<ExternalFunctionId, Box<dyn ExternalFunctionExt>>,
     pub(crate) prims: &'a Primitives,
     pub(crate) containers: &'a Containers,
-}
-
-impl DbView<'_> {
-    fn inc_counter(&self, ctr: CounterId) -> usize {
-        self.counters[ctr].fetch_add(1, std::sync::atomic::Ordering::Release)
-    }
-    fn read_counter(&self, ctr: CounterId) -> usize {
-        self.counters[ctr].load(std::sync::atomic::Ordering::Acquire)
-    }
 }
 
 /// A handle on a database that may be in the process of running a rule.
@@ -212,11 +203,11 @@ impl ExecutionState<'_> {
     }
 
     pub fn inc_counter(&self, ctr: CounterId) -> usize {
-        self.db.inc_counter(ctr)
+        self.db.counters.inc(ctr)
     }
 
     pub fn read_counter(&self, ctr: CounterId) -> usize {
-        self.db.read_counter(ctr)
+        self.db.counters.read(ctr)
     }
 
     /// Get an immutable reference to the table with id `table`.
@@ -257,9 +248,7 @@ impl ExecutionState<'_> {
                         new.extend_from_slice(key);
                         for val in vals {
                             new.push(match val {
-                                MergeVal::Counter(ctr) => {
-                                    Value::from_usize(self.db.inc_counter(ctr))
-                                }
+                                MergeVal::Counter(ctr) => Value::from_usize(self.inc_counter(ctr)),
                                 MergeVal::Constant(c) => c,
                             })
                         }
@@ -401,10 +390,7 @@ impl ExecutionState<'_> {
                                     WriteVal::QueryEntry(QueryEntry::Var(v)) => {
                                         bindings[*v][offset]
                                     }
-                                    WriteVal::IncCounter(ctr) => Value::from_usize(
-                                        ctrs[*ctr]
-                                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-                                    ),
+                                    WriteVal::IncCounter(ctr) => Value::from_usize(ctrs.inc(*ctr)),
                                     WriteVal::CurrentVal(ix) => row[*ix],
                                 };
                                 row.push(val)
