@@ -60,6 +60,7 @@ thiserror = "1"
 
 # Backend
 # TODO: migrate to core egglog repo
+core-relations = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "3705faf" }
 egglog-bridge = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "3705faf" }
 
 # Need to add "js" feature for "graphviz-rust" to work in wasm
