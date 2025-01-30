@@ -449,6 +449,7 @@ dependencies = [
  "chrono",
  "clap",
  "codspeed-criterion-compat",
+ "core-relations",
  "egglog-bridge",
  "egraph-serialize",
  "env_logger",
