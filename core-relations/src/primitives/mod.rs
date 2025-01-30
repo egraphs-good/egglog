@@ -61,7 +61,7 @@ impl Debug for PrimitivePrinter<'_> {
 pub struct Primitives {
     type_ids: InternTable<TypeId, PrimitiveId>,
     tables: DenseIdMap<PrimitiveId, Box<dyn DynamicInternTable>>,
-    funcs: DenseIdMap<PrimitiveFunctionId, DynamicPrimitveFunction>,
+    funcs: DenseIdMap<PrimitiveFunctionId, DynamicPrimitiveFunction>,
 }
 
 impl Primitives {
@@ -107,7 +107,7 @@ impl Primitives {
     /// Register the given primitive function with this registry.
     pub fn register_func(&mut self, op: impl PrimitiveFunction + 'static) -> PrimitiveFunctionId {
         op.register_types(self);
-        self.funcs.push(DynamicPrimitveFunction::new(op))
+        self.funcs.push(DynamicPrimitiveFunction::new(op))
     }
 
     /// Get the signature of the given primitive function.
@@ -143,11 +143,11 @@ impl Primitives {
     }
 }
 
-struct DynamicPrimitveFunction {
+struct DynamicPrimitiveFunction {
     op: Box<dyn PrimitiveFunctionExt>,
 }
 
-impl DynamicPrimitveFunction {
+impl DynamicPrimitiveFunction {
     fn new(op: impl PrimitiveFunction + 'static) -> Self {
         Self { op: Box::new(op) }
     }

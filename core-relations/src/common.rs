@@ -88,7 +88,6 @@ impl<K: NumericId, V> Clear for DenseIdMap<K, V> {
     fn reuse(&self) -> bool {
         self.capacity() > 0
     }
-
     fn clear(&mut self) {
         self.clear();
     }
