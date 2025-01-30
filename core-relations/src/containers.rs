@@ -32,9 +32,16 @@ use crate::{
 
 define_id!(pub ContainerId, u32, "an identifier for containers");
 
-pub type MergeFn = dyn Fn(&mut ExecutionState, Value, Value) -> Value + Send + Sync;
+pub trait MergeFn:
+    Fn(&mut ExecutionState, Value, Value) -> Value + dyn_clone::DynClone + Send + Sync
+{
+}
+impl<T: Fn(&mut ExecutionState, Value, Value) -> Value + Clone + Send + Sync> MergeFn for T {}
 
-#[derive(Default)]
+// Implements `Clone` for `Box<dyn MergeFn>`.
+dyn_clone::clone_trait_object!(MergeFn);
+
+#[derive(Clone, Default)]
 pub struct Containers {
     subset_tracker: SubsetTracker,
     container_ids: InternTable<TypeId, ContainerId>,
@@ -132,7 +139,7 @@ impl Containers {
     pub fn register_type<C: Container>(
         &mut self,
         id_counter: CounterId,
-        merge_fn: impl Fn(&mut ExecutionState, Value, Value) -> Value + Send + Sync + 'static,
+        merge_fn: impl MergeFn + 'static,
     ) -> ContainerId {
         let id = self.container_ids.intern(&TypeId::of::<C>());
         self.data.get_or_insert(id, || {
@@ -163,7 +170,7 @@ pub trait Container: Hash + Eq + Clone + Send + Sync + 'static {
     fn iter(&self) -> impl Iterator<Item = Value> + '_;
 }
 
-pub trait DynamicContainerEnv: Any + Send + Sync {
+pub trait DynamicContainerEnv: Any + dyn_clone::DynClone + Send + Sync {
     fn as_any(&self) -> &dyn Any;
     fn apply_rebuild(
         &mut self,
@@ -174,14 +181,18 @@ pub trait DynamicContainerEnv: Any + Send + Sync {
     ) -> bool;
 }
 
+// Implements `Clone` for `Box<dyn DynamicContainerEnv>`.
+dyn_clone::clone_trait_object!(DynamicContainerEnv);
+
 fn hash_container(container: &impl Container) -> u64 {
     let mut hasher = FxHasher::default();
     container.hash(&mut hasher);
     hasher.finish()
 }
 
-struct ContainerEnv<C> {
-    merge_fn: Box<MergeFn>,
+#[derive(Clone)]
+struct ContainerEnv<C: Eq + Hash> {
+    merge_fn: Box<dyn MergeFn>,
     counter: CounterId,
     to_id: DashMap<C, Value>,
     to_container: DashMap<Value, (usize /* hash code */, usize /* map */)>,
@@ -217,7 +228,7 @@ impl<C: Container> DynamicContainerEnv for ContainerEnv<C> {
 }
 
 impl<C: Container> ContainerEnv<C> {
-    pub fn new(merge_fn: Box<MergeFn>, counter: CounterId) -> Self {
+    pub fn new(merge_fn: Box<dyn MergeFn>, counter: CounterId) -> Self {
         Self {
             merge_fn,
             counter,
