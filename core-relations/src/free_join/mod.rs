@@ -8,7 +8,6 @@ use std::{
 };
 
 use concurrency::ReadOptimizedLock;
-use dyn_clone::DynClone;
 use numeric_id::{define_id, DenseIdMap, NumericId};
 use rayon::prelude::*;
 use smallvec::SmallVec;
@@ -131,7 +130,7 @@ define_id!(pub ExternalFunctionId, u32, "A user-defined operation that can be in
 ///
 /// This is a useful, if low-level, interface for extending this database with
 /// functionality and state not built into the core model.
-pub trait ExternalFunction: DynClone + Send + Sync {
+pub trait ExternalFunction: dyn_clone::DynClone + Send + Sync {
     /// Invoke the function with mutable access to the database. If a value is
     /// not returned, halt the execution of the current rule.
     fn invoke(&self, state: &mut ExecutionState, args: &[Value]) -> Option<Value>;

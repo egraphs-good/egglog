@@ -57,7 +57,7 @@ impl Debug for PrimitivePrinter<'_> {
 }
 
 /// A registry for primitive values and functions on them.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Primitives {
     type_ids: InternTable<TypeId, PrimitiveId>,
     tables: DenseIdMap<PrimitiveId, Box<dyn DynamicInternTable>>,
@@ -143,6 +143,7 @@ impl Primitives {
     }
 }
 
+#[derive(Clone)]
 struct DynamicPrimitiveFunction {
     op: Box<dyn PrimitiveFunctionExt>,
 }
@@ -153,10 +154,13 @@ impl DynamicPrimitiveFunction {
     }
 }
 
-trait DynamicInternTable: Any + Send + Sync {
+trait DynamicInternTable: Any + dyn_clone::DynClone + Send + Sync {
     fn as_any(&self) -> &dyn Any;
     fn print_value(&self, val: Value, f: &mut fmt::Formatter) -> fmt::Result;
 }
+
+// Implements `Clone` for `Box<dyn DynamicInternTable>`.
+dyn_clone::clone_trait_object!(DynamicInternTable);
 
 impl<P: Primitive> DynamicInternTable for InternTable<P, Value> {
     fn as_any(&self) -> &dyn Any {
@@ -179,7 +183,7 @@ pub struct PrimitiveFunctionSignature<'a> {
 ///
 /// Most of the time you can get away with using the `lift_operation` macro,
 /// which implements this under the hood.
-pub trait PrimitiveFunction: Send + Sync {
+pub trait PrimitiveFunction: dyn_clone::DynClone + Send + Sync {
     fn signature(&self) -> PrimitiveFunctionSignature;
 
     /// Explicitly register any types that this function depends on with the given [`Primitives`].
@@ -216,6 +220,9 @@ pub(crate) trait PrimitiveFunctionExt: PrimitiveFunction {
 
 impl<T: PrimitiveFunction> PrimitiveFunctionExt for T {}
 
+// Implements `Clone` for `Box<dyn PrimitiveFunctionExt>`.
+dyn_clone::clone_trait_object!(PrimitiveFunctionExt);
+
 #[macro_export]
 macro_rules! lift_function_impl {
     ([$arity:expr, $table:expr] fn $name:ident ( $($id:ident : $ty:ty : $n:tt),* ) -> $ret:ty { $body:expr }) => {
@@ -223,6 +230,7 @@ macro_rules! lift_function_impl {
             use $crate::{Primitives, PrimitiveFunction, PrimitiveId, PrimitiveFunctionSignature};
             use $crate::Value;
             fn $name(prims: &mut Primitives) -> $crate::PrimitiveFunctionId {
+                #[derive(Clone)]
                 struct Impl<F> {
                     arg_prims: Vec<PrimitiveId>,
                     ret: PrimitiveId,
@@ -239,7 +247,7 @@ macro_rules! lift_function_impl {
                     }
                 }
 
-                impl<F: Fn($($ty),*) -> $ret + Send + Sync> PrimitiveFunction for Impl<F> {
+                impl<F: Fn($($ty),*) -> $ret + Clone + Send + Sync> PrimitiveFunction for Impl<F> {
                     fn signature(&self) -> PrimitiveFunctionSignature {
                         PrimitiveFunctionSignature {
                             args: &self.arg_prims,
