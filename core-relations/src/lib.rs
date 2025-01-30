@@ -38,6 +38,6 @@ pub use query::{QueryBuilder, QueryError, RuleBuilder, RuleSet, RuleSetBuilder};
 pub use row_buffer::TaggedRowBuffer;
 pub use table::SortedWritesTable;
 pub use table_spec::{
-    ColumnId, Constraint, Offset, Rewriter, Row, Table, TableSpec, TableVersion, WrappedTable,
+    ColumnId, Constraint, Offset, Rebuilder, Row, Table, TableSpec, TableVersion, WrappedTable,
 };
 pub use uf::{DisplacedTable, DisplacedTableWithProvenance, ProofReason, ProofStep};

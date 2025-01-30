@@ -154,7 +154,7 @@ pub struct SortedWritesTable {
     merge: MergeFn,
     to_rebuild: Vec<ColumnId>,
     rebuild_index: Index<ColumnIndex>,
-    // Used to manage incremental rewrites.
+    // Used to manage incremental rebuilds.
     subset_tracker: SubsetTracker,
 }
 
@@ -268,14 +268,14 @@ impl Table for SortedWritesTable {
         }
     }
 
-    fn apply_rewrite(
+    fn apply_rebuild(
         &mut self,
         table_id: TableId,
         table: &crate::WrappedTable,
         next_ts: Value,
         exec_state: &mut ExecutionState,
     ) {
-        self.do_rewrite(table_id, table, next_ts, exec_state);
+        self.do_rebuild(table_id, table, next_ts, exec_state);
     }
 
     fn version(&self) -> TableVersion {

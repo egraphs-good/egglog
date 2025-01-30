@@ -1,6 +1,6 @@
 use std::thread;
 
-use core_relations::{make_external_func, Container, ExternalFunctionId, Rewriter, Value};
+use core_relations::{make_external_func, Container, ExternalFunctionId, Rebuilder, Value};
 use log::debug;
 use num_rational::Rational64;
 
@@ -486,8 +486,8 @@ fn math_test(mut egraph: EGraph) {
 #[derive(Clone, Debug, Hash, Eq, PartialEq)]
 struct VecContainer(Vec<Value>);
 impl Container for VecContainer {
-    fn rewrite_contents(&mut self, rewriter: &dyn Rewriter) -> bool {
-        rewriter.rewrite_slice(&mut self.0)
+    fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool {
+        rebuilder.rebuild_slice(&mut self.0)
     }
     fn iter(&self) -> impl Iterator<Item = Value> + '_ {
         self.0.iter().copied()

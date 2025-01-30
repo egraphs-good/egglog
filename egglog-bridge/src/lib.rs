@@ -677,7 +677,7 @@ impl EGraph {
                 rayon::current_num_threads() > 1
             }
         }
-        if self.db.get_table(self.uf_table).rewriter(&[]).is_some() {
+        if self.db.get_table(self.uf_table).rebuilder(&[]).is_some() {
             // The UF implementation supports "native"  rebuilding.
             let mut tables = Vec::with_capacity(self.funcs.next_id().index());
             for (_, func) in self.funcs.iter() {
@@ -685,8 +685,8 @@ impl EGraph {
             }
             while self
                 .db
-                .apply_rewrite(self.uf_table, &tables, self.next_ts().to_value())
-                || self.db.rewrite_containers(self.uf_table)
+                .apply_rebuild(self.uf_table, &tables, self.next_ts().to_value())
+                || self.db.rebuild_containers(self.uf_table)
             {
                 self.inc_ts();
             }

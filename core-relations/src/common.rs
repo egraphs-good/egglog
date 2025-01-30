@@ -179,7 +179,7 @@ impl ShardData {
     }
 }
 
-/// A simple helper struct used when handling incremental rewrites that tracks the subsets of set
+/// A simple helper struct used when handling incremental rebuilds that tracks the subsets of set
 /// of tables that have been passed to the tracker.
 #[derive(Default)]
 pub(crate) struct SubsetTracker {

@@ -92,21 +92,21 @@ pub enum Constraint {
     GeConst { col: ColumnId, val: Value },
 }
 
-/// Custom functions used for tables that encode a bulk value-level rewrites of other tables.
+/// Custom functions used for tables that encode a bulk value-level rebuild of other tables.
 ///
 /// The initial use-case for this trait is to support optimized implementations of rebuilding,
-/// where Rewriter is implemented as a Union-find.
+/// where `Rebuilder` is implemented as a Union-find.
 ///
-/// Value-level rewrites are difficult to implement efficiently using rules as they require
+/// Value-level rebuilds are difficult to implement efficiently using rules as they require
 /// searching for changes to any column for a table: while it is possible to do, implementing this
 /// custom is more efficient in the case of rebuilding.
-pub trait Rewriter: Send + Sync {
-    /// The column that contains values that should be rewritten. If this is set, callers can use
-    /// this functionality to perform rewrites incrementally.
+pub trait Rebuilder: Send + Sync {
+    /// The column that contains values that should be rebuilt. If this is set, callers can use
+    /// this functionality to perform rebuilds incrementally.
     fn hint_col(&self) -> Option<ColumnId>;
-    fn rewrite_val(&self, val: Value) -> Value;
-    /// Rewrite a contiguous slice of rows in the table.
-    fn rewrite_buf(
+    fn rebuild_val(&self, val: Value) -> Value;
+    /// Rebuild a contiguous slice of rows in the table.
+    fn rebuild_buf(
         &self,
         buf: &RowBuffer,
         start: RowId,
@@ -114,17 +114,16 @@ pub trait Rewriter: Send + Sync {
         out: &mut TaggedRowBuffer,
         exec_state: &mut ExecutionState,
     );
-    /// Rewrite am arbitrary subset of the table.
-    fn rewrite_subset(
+    /// Rebuild an arbitrary subset of the table.
+    fn rebuild_subset(
         &self,
         other: WrappedTableRef,
         subset: SubsetRef,
         out: &mut TaggedRowBuffer,
         exec_state: &mut ExecutionState,
     );
-
-    /// Rewrite a slice of values in place, returning true if any values were changed.
-    fn rewrite_slice(&self, vals: &mut [Value]) -> bool;
+    /// Rebuild a slice of values in place, returning true if any values were changed.
+    fn rebuild_slice(&self, vals: &mut [Value]) -> bool;
 }
 
 /// A row in a table.
@@ -141,18 +140,18 @@ pub trait Table: Any + Send + Sync {
     /// must contain all of the data associated with the current table.
     fn dyn_clone(&self) -> Box<dyn Table>;
 
-    /// If this table can perform a table-level rewrite, construct a [`Rewriter`] for it.
-    fn rewriter<'a>(&'a self, _cols: &[ColumnId]) -> Option<Box<dyn Rewriter + 'a>> {
+    /// If this table can perform a table-level rebuild, construct a [`Rebuilder`] for it.
+    fn rebuilder<'a>(&'a self, _cols: &[ColumnId]) -> Option<Box<dyn Rebuilder + 'a>> {
         None
     }
 
-    /// Apply a rewrite to the table according to the given rewriter implemented by `table`, if
-    /// there is one. Applying a rewrite can cause more mutations to be buffered, which can in turn
+    /// Rebuild the table according to the given [`Rebuilder`] implemented by `table`, if
+    /// there is one. Applying a rebuild can cause more mutations to be buffered, which can in turn
     /// be flushed by a call to [`Table::merge`].
     ///
-    /// Note that value-level rewrites are only relevant for tables that opt into it. As a result,
+    /// Note that value-level rebuilds are only relevant for tables that opt into it. As a result,
     /// tables do nothing by default.
-    fn apply_rewrite(
+    fn apply_rebuild(
         &mut self,
         _table_id: TableId,
         _table: &WrappedTable,

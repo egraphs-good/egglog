@@ -281,24 +281,24 @@ impl Database {
         &mut self.containers
     }
 
-    pub fn rewrite_containers(&mut self, table_id: TableId) -> bool {
+    pub fn rebuild_containers(&mut self, table_id: TableId) -> bool {
         let mut containers = mem::take(&mut self.containers);
         let table = &self.tables[table_id].table;
-        let res = self.with_execution_state(|state| containers.rewrite_all(table_id, table, state));
+        let res = self.with_execution_state(|state| containers.rebuild_all(table_id, table, state));
         self.containers = containers;
         res
     }
 
-    /// Apply the value-level rewrite rule encoded by `func_id` to all the tables in `to_rewrite`.
+    /// Apply the value-level rebuild encoded by `func_id` to all the tables in `to_rebuild`.
     ///
-    /// The native [`Table::apply_rewrite`] method takes a `next_ts` argument for filling in new
+    /// The native [`Table::apply_rebuild`] method takes a `next_ts` argument for filling in new
     /// values in a table like [`crate::SortedWritesTable`] where values in a certain column need
     /// to be inserted in sorted order; the `next_ts` argument to this method is passed to
-    /// `apply_rewrite` for this purpose.
-    pub fn apply_rewrite(
+    /// `apply_rebuild` for this purpose.
+    pub fn apply_rebuild(
         &mut self,
         func_id: TableId,
-        to_rewrite: &[TableId],
+        to_rebuild: &[TableId],
         next_ts: Value,
     ) -> bool {
         fn do_parallel() -> bool {
@@ -316,12 +316,12 @@ impl Database {
         let func = self.tables.take(func_id).unwrap();
         let predicted = PredictedVals::default();
         if do_parallel() {
-            let mut tables = Vec::with_capacity(to_rewrite.len());
-            for id in to_rewrite {
+            let mut tables = Vec::with_capacity(to_rebuild.len());
+            for id in to_rebuild {
                 tables.push((*id, self.tables.take(*id).unwrap()));
             }
             tables.par_iter_mut().for_each(|(_, info)| {
-                info.table.apply_rewrite(
+                info.table.apply_rebuild(
                     func_id,
                     &func.table,
                     next_ts,
@@ -336,9 +336,9 @@ impl Database {
                 self.tables.insert(id, info);
             }
         } else {
-            for id in to_rewrite {
+            for id in to_rebuild {
                 let mut info = self.tables.take(*id).unwrap();
-                info.table.apply_rewrite(
+                info.table.apply_rebuild(
                     func_id,
                     &func.table,
                     next_ts,

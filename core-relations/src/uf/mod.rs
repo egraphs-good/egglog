@@ -18,7 +18,7 @@ use crate::{
     pool::with_pool_set,
     row_buffer::RowBuffer,
     table_spec::{
-        ColumnId, Constraint, Generation, MutationBuffer, Offset, Rewriter, Row, Table, TableSpec,
+        ColumnId, Constraint, Generation, MutationBuffer, Offset, Rebuilder, Row, Table, TableSpec,
         TableVersion, WrappedTableRef,
     },
     TaggedRowBuffer,
@@ -66,14 +66,14 @@ struct Canonicalizer<'a> {
     table: &'a DisplacedTable,
 }
 
-impl Rewriter for Canonicalizer<'_> {
+impl Rebuilder for Canonicalizer<'_> {
     fn hint_col(&self) -> Option<ColumnId> {
         Some(ColumnId::new(0))
     }
-    fn rewrite_val(&self, val: Value) -> Value {
+    fn rebuild_val(&self, val: Value) -> Value {
         self.table.uf.find_naive(val)
     }
-    fn rewrite_buf(
+    fn rebuild_buf(
         &self,
         buf: &RowBuffer,
         start: RowId,
@@ -161,9 +161,7 @@ impl Rewriter for Canonicalizer<'_> {
             }
         }
     }
-
-    /// Rewrite am arbitrary subset of the table.
-    fn rewrite_subset(
+    fn rebuild_subset(
         &self,
         other: WrappedTableRef,
         subset: SubsetRef,
@@ -187,8 +185,7 @@ impl Rewriter for Canonicalizer<'_> {
             }
         }
     }
-
-    fn rewrite_slice(&self, vals: &mut [Value]) -> bool {
+    fn rebuild_slice(&self, vals: &mut [Value]) -> bool {
         let mut changed = false;
         for val in vals {
             let canon = self.table.uf.find_naive(*val);
@@ -272,7 +269,7 @@ impl Table for DisplacedTable {
         }
     }
 
-    fn rewriter<'a>(&'a self, cols: &[ColumnId]) -> Option<Box<dyn Rewriter + 'a>> {
+    fn rebuilder<'a>(&'a self, cols: &[ColumnId]) -> Option<Box<dyn Rebuilder + 'a>> {
         Some(Box::new(Canonicalizer {
             cols: cols.to_vec(),
             table: self,

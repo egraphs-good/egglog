@@ -25,7 +25,7 @@ use rustc_hash::FxHasher;
 
 use crate::{
     common::{DashMap, IndexSet, InternTable, SubsetTracker},
-    table_spec::Rewriter,
+    table_spec::Rebuilder,
     ColumnId, CounterId, ExecutionState, Offset, SubsetRef, TableId, TaggedRowBuffer, Value,
     WrappedTable,
 };
@@ -82,18 +82,18 @@ impl Containers {
         env.get_or_insert(&container, exec_state)
     }
 
-    /// Apply the given rewrite rule to the contents of each container.
-    pub fn rewrite_all(
+    /// Apply the given rebuild to the contents of each container.
+    pub fn rebuild_all(
         &mut self,
         table_id: TableId,
         table: &WrappedTable,
         exec_state: &mut ExecutionState,
     ) -> bool {
-        let Some(rewriter) = table.rewriter(&[]) else {
+        let Some(rebuilder) = table.rebuilder(&[]) else {
             return false;
         };
-        let to_scan = rewriter.hint_col().map(|_| {
-            // We may attempt an incremental rewrite.
+        let to_scan = rebuilder.hint_col().map(|_| {
+            // We may attempt an incremental rebuild.
             self.subset_tracker.recent_updates(table_id, table)
         });
         if do_parallel() {
@@ -102,9 +102,9 @@ impl Containers {
                 .zip(std::iter::repeat_with(|| exec_state.clone()))
                 .par_bridge()
                 .map(|((_, env), mut exec_state)| {
-                    env.apply_rewrite(
+                    env.apply_rebuild(
                         table,
-                        &*rewriter,
+                        &*rebuilder,
                         to_scan.as_ref().map(|x| x.as_ref()),
                         &mut exec_state,
                     )
@@ -114,9 +114,9 @@ impl Containers {
         } else {
             let mut changed = false;
             for (_, env) in self.data.iter_mut() {
-                changed |= env.apply_rewrite(
+                changed |= env.apply_rebuild(
                     table,
-                    &*rewriter,
+                    &*rebuilder,
                     to_scan.as_ref().map(|x| x.as_ref()),
                     exec_state,
                 );
@@ -145,30 +145,30 @@ impl Containers {
 /// A trait implemented by container types.
 ///
 /// Containers behave a lot like primitives, but they include extra trait methods to support
-/// rebuilding of container contents and merging containers that become equal after a rewrite pass
-/// as taken place.
+/// rebuilding of container contents and merging containers that become equal after a rebuild pass
+/// has taken place.
 pub trait Container: Hash + Eq + Clone + Send + Sync + 'static {
-    /// Rewrite an additional container in place according the the given [`Rewriter`].
+    /// Rebuild an additional container in place according the the given [`Rebuilder`].
     ///
     /// If this method returns `false` then the container must not have been modified (i.e. it must
     /// hash to the same value, and compare equal to a copy of itself before the call).
-    fn rewrite_contents(&mut self, rewriter: &dyn Rewriter) -> bool;
+    fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool;
 
     /// Iterate over the contents of the container.
     ///
     /// Note that containers can be more structured than just a sequence of values. This iterator
-    /// is used to populate an index that in turn is used to speed up rewrites. If a value in the
-    /// container is eligible for a rewrite and it is not mentioned by this iterator, the outer
-    /// [`Containers`] registry may skip rewriting this container.
+    /// is used to populate an index that in turn is used to speed up rebuilds. If a value in the
+    /// container is eligible for a rebuild and it is not mentioned by this iterator, the outer
+    /// [`Containers`] registry may skip rebuilding this container.
     fn iter(&self) -> impl Iterator<Item = Value> + '_;
 }
 
 pub trait DynamicContainerEnv: Any + Send + Sync {
     fn as_any(&self) -> &dyn Any;
-    fn apply_rewrite(
+    fn apply_rebuild(
         &mut self,
         table: &WrappedTable,
-        rewriter: &dyn Rewriter,
+        rebuilder: &dyn Rebuilder,
         subset: Option<SubsetRef>,
         exec_state: &mut ExecutionState,
     ) -> bool;
@@ -194,25 +194,25 @@ impl<C: Container> DynamicContainerEnv for ContainerEnv<C> {
         self
     }
 
-    fn apply_rewrite(
+    fn apply_rebuild(
         &mut self,
         table: &WrappedTable,
-        rewriter: &dyn Rewriter,
+        rebuilder: &dyn Rebuilder,
         subset: Option<SubsetRef>,
         exec_state: &mut ExecutionState,
     ) -> bool {
         if let Some(subset) = subset {
             if incremental_rebuild(subset.size(), self.to_id.len(), do_parallel()) {
-                return self.apply_rewrite_incremental(
+                return self.apply_rebuild_incremental(
                     table,
-                    rewriter,
+                    rebuilder,
                     exec_state,
                     subset,
-                    rewriter.hint_col().unwrap(),
+                    rebuilder.hint_col().unwrap(),
                 );
             }
         }
-        self.apply_rewrite_nonincremental(rewriter, exec_state)
+        self.apply_rebuild_nonincremental(rebuilder, exec_state)
     }
 }
 
@@ -279,10 +279,10 @@ impl<C: Container> ContainerEnv<C> {
             }
         }
     }
-    fn apply_rewrite_incremental(
+    fn apply_rebuild_incremental(
         &mut self,
         table: &WrappedTable,
-        rewriter: &dyn Rewriter,
+        rebuilder: &dyn Rebuilder,
         exec_state: &mut ExecutionState,
         to_scan: SubsetRef,
         search_col: ColumnId,
@@ -303,7 +303,7 @@ impl<C: Container> ContainerEnv<C> {
             &[],
             &mut buf,
         );
-        // For each value in the buffer, rewrite all containers that mention it.
+        // For each value in the buffer, rebuild all containers that mention it.
         let mut to_rebuild = IndexSet::<Value>::default();
         for (_, row) in buf.iter() {
             to_rebuild.insert(row[0]);
@@ -322,19 +322,19 @@ impl<C: Container> ContainerEnv<C> {
             else {
                 continue;
             };
-            changed |= container.rewrite_contents(rewriter);
+            changed |= container.rebuild_contents(rebuilder);
             self.insert_owned(container, id, exec_state);
         }
         changed
     }
 
-    fn apply_rewrite_nonincremental(
+    fn apply_rebuild_nonincremental(
         &mut self,
-        rewriter: &dyn Rewriter,
+        rebuilder: &dyn Rebuilder,
         exec_state: &mut ExecutionState,
     ) -> bool {
         if do_parallel() {
-            return self.apply_rewrite_nonincremental_parallel(rewriter, exec_state);
+            return self.apply_rebuild_nonincremental_parallel(rebuilder, exec_state);
         }
         let mut changed = false;
         let mut to_reinsert = Vec::new();
@@ -346,8 +346,8 @@ impl<C: Container> ContainerEnv<C> {
                 // SAFETY: the bucket is valid; we just got it from the iterator.
                 let (container, val) = unsafe { bucket.as_mut() };
                 let old_val = *val.get();
-                let new_val = rewriter.rewrite_val(old_val);
-                let container_changed = container.rewrite_contents(rewriter);
+                let new_val = rebuilder.rebuild_val(old_val);
+                let container_changed = container.rebuild_contents(rebuilder);
                 if !container_changed && new_val == old_val {
                     // Nothing changed about this entry. Leave it in place.
                     continue;
@@ -374,9 +374,9 @@ impl<C: Container> ContainerEnv<C> {
         changed
     }
 
-    fn apply_rewrite_nonincremental_parallel(
+    fn apply_rebuild_nonincremental_parallel(
         &mut self,
-        rewriter: &dyn Rewriter,
+        rebuilder: &dyn Rebuilder,
         exec_state: &mut ExecutionState,
     ) -> bool {
         // This is very similar to the serial variant. The main difference is that
@@ -397,8 +397,8 @@ impl<C: Container> ContainerEnv<C> {
                     // SAFETY: the bucket is valid; we just got it from the iterator.
                     let (container, val) = unsafe { bucket.as_mut() };
                     let old_val = *val.get();
-                    let new_val = rewriter.rewrite_val(old_val);
-                    let container_changed = container.rewrite_contents(rewriter);
+                    let new_val = rebuilder.rebuild_val(old_val);
+                    let container_changed = container.rebuild_contents(rebuilder);
                     if !container_changed && new_val == old_val {
                         // Nothing changed about this entry. Leave it in place.
                         continue;

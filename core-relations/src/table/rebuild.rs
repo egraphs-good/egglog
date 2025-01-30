@@ -1,4 +1,4 @@
-//! Apply value-level rewrites to a table.
+//! Apply value-level rebuilds to a table.
 
 use std::{cmp, mem};
 
@@ -9,7 +9,7 @@ use rayon::prelude::*;
 use crate::{
     common::ShardId,
     hash_index::{ColumnIndex, Index},
-    table_spec::{Rewriter, WrappedTableRef},
+    table_spec::{Rebuilder, WrappedTableRef},
     ColumnId, ExecutionState, Offset, RowId, Subset, Table, TableId, TaggedRowBuffer, Value,
     WrappedTable,
 };
@@ -30,7 +30,7 @@ macro_rules! insert_row {
 }
 
 impl SortedWritesTable {
-    pub(super) fn do_rewrite(
+    pub(super) fn do_rebuild(
         &mut self,
         table_id: TableId,
         table: &WrappedTable,
@@ -40,12 +40,12 @@ impl SortedWritesTable {
         if self.to_rebuild.is_empty() {
             return;
         }
-        let Some(rewrite) = table.rewriter(&self.to_rebuild) else {
+        let Some(rebuilder) = table.rebuilder(&self.to_rebuild) else {
             return;
         };
-        // First, decide whether to do an incremental or full rewrite.
-        if let Some(hint_col) = rewrite.hint_col() {
-            // Incremental rewrites are possible if we can scan the subset of the columns that are
+        // First, decide whether to do an incremental or full rebuild.
+        if let Some(hint_col) = rebuilder.hint_col() {
+            // Incremental rebuilds are possible if we can scan the subset of the columns that are
             // relevant.
             let to_scan = self.subset_tracker.recent_updates(table_id, table);
             if incremental_rebuild(
@@ -53,19 +53,26 @@ impl SortedWritesTable {
                 self.data.next_row().index(),
                 do_parallel(to_scan.size()),
             ) {
-                self.rewrite_incremental(table, &*rewrite, hint_col, to_scan, next_ts, exec_state);
+                self.rebuild_incremental(
+                    table,
+                    &*rebuilder,
+                    hint_col,
+                    to_scan,
+                    next_ts,
+                    exec_state,
+                );
             } else {
-                self.rewrite_nonincremental(&*rewrite, next_ts, exec_state);
+                self.rebuild_nonincremental(&*rebuilder, next_ts, exec_state);
             }
         } else {
-            self.rewrite_nonincremental(&*rewrite, next_ts, exec_state);
+            self.rebuild_nonincremental(&*rebuilder, next_ts, exec_state);
         }
     }
 
-    fn rewrite_incremental(
+    fn rebuild_incremental(
         &mut self,
         table: &WrappedTable,
-        rewriter: &dyn Rewriter,
+        rebuilder: &dyn Rebuilder,
         search_col: ColumnId,
         to_scan: Subset,
         next_ts: Value,
@@ -106,7 +113,12 @@ impl SortedWritesTable {
                                 return (mutation_buf, exec_state);
                             };
                             let mut scanned = TaggedRowBuffer::new(self.n_columns);
-                            rewriter.rewrite_subset(wrapped, subset, &mut scanned, &mut exec_state);
+                            rebuilder.rebuild_subset(
+                                wrapped,
+                                subset,
+                                &mut scanned,
+                                &mut exec_state,
+                            );
                             for (row_id, row) in scanned.non_stale_mut() {
                                 let to_remove =
                                     self.data.get_row(row_id).map(|x| &x[0..self.n_keys]);
@@ -128,7 +140,7 @@ impl SortedWritesTable {
                     continue;
                 };
                 WrappedTableRef::with_wrapper(self, |wrapped| {
-                    rewriter.rewrite_subset(wrapped, subset, &mut scratch, exec_state);
+                    rebuilder.rebuild_subset(wrapped, subset, &mut scratch, exec_state);
                 });
                 for (row_id, row) in scratch.non_stale_mut() {
                     let Some(to_remove) = self.data.get_row(row_id) else {
@@ -148,9 +160,9 @@ impl SortedWritesTable {
         }
     }
 
-    fn rewrite_nonincremental(
+    fn rebuild_nonincremental(
         &mut self,
-        rewriter: &dyn Rewriter,
+        rebuilder: &dyn Rebuilder,
         next_ts: Value,
         exec_state: &mut ExecutionState,
     ) {
@@ -168,7 +180,7 @@ impl SortedWritesTable {
                         )
                     },
                     |(mut mutation_buf, mut buf, mut exec_state), start| {
-                        rewriter.rewrite_buf(
+                        rebuilder.rebuild_buf(
                             &self.data.data,
                             RowId::from_usize(start),
                             RowId::from_usize(cmp::min(
@@ -194,7 +206,7 @@ impl SortedWritesTable {
             let mut buf = TaggedRowBuffer::new(self.n_columns);
             let mut write_buf = self.new_buffer();
             for start in (0..self.data.next_row().index()).step_by(STEP_SIZE) {
-                rewriter.rewrite_buf(
+                rebuilder.rebuild_buf(
                     &self.data.data,
                     RowId::from_usize(start),
                     RowId::from_usize(cmp::min(start + STEP_SIZE, self.data.next_row().index())),
