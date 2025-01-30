@@ -38,7 +38,7 @@ pub(crate) fn concat_vecs<T>(to: &mut Vec<T>, mut from: Vec<T>) {
 
 pub(crate) struct ListDisplay<'a, TS>(pub TS, pub &'a str);
 
-impl<'a, TS> Display for ListDisplay<'a, TS>
+impl<TS> Display for ListDisplay<'_, TS>
 where
     TS: Clone + IntoIterator,
     TS::Item: Display,
@@ -58,7 +58,7 @@ where
 
 pub(crate) struct ListDebug<'a, TS>(pub TS, pub &'a str);
 
-impl<'a, TS> Debug for ListDebug<'a, TS>
+impl<TS> Debug for ListDebug<'_, TS>
 where
     TS: Clone + IntoIterator,
     TS::Item: Debug,

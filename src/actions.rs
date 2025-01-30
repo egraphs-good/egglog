@@ -13,7 +13,7 @@ struct ActionCompiler<'a> {
     instructions: Vec<Instruction>,
 }
 
-impl<'a> ActionCompiler<'a> {
+impl ActionCompiler<'_> {
     fn compile_action(&mut self, action: &GenericCoreAction<ResolvedCall, ResolvedVar>) {
         match action {
             GenericCoreAction::Let(_ann, v, f, args) => {
