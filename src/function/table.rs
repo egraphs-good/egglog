@@ -4,10 +4,10 @@
 //! but they make different trade-offs than standard HashMaps or IndexMaps:
 //!
 //! * Like indexmap, tables preserve insertion order and support lookups based on
-//! vector-like "offsets" in addition to table keys.
+//!   vector-like "offsets" in addition to table keys.
 //!
 //! * Unlike indexmap, these tables support constant-time removals that preserve
-//! insertion order. Removals merely mark entries as "stale."
+//!   insertion order. Removals merely mark entries as "stale."
 //!
 //! These features come at the cost of needing to periodically rehash the table.
 //! These rehashes must be done explicitly because they perturb the integer

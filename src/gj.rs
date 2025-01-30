@@ -47,7 +47,7 @@ struct InputSizes<'a> {
     stage_sizes: &'a mut HashMap<usize, Vec<usize>>,
 }
 
-impl<'a> InputSizes<'a> {
+impl InputSizes<'_> {
     fn add_measurement(&mut self, max_size: usize) {
         self.stage_sizes
             .entry(self.cur_stage)
@@ -67,7 +67,7 @@ type Result = std::result::Result<(), ()>;
 
 struct Program<'a>(Vec<Instr<'a>>);
 
-impl<'a> std::fmt::Display for Instr<'a> {
+impl std::fmt::Display for Instr<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Instr::Intersect {
@@ -101,7 +101,7 @@ impl<'a> std::fmt::Display for Instr<'a> {
     }
 }
 
-impl<'a> std::fmt::Display for Program<'a> {
+impl std::fmt::Display for Program<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for (i, instr) in self.0.iter().enumerate() {
             write!(f, "{i:2}. {instr}")?;
@@ -910,7 +910,7 @@ struct TrieAccess<'a> {
     include_subsumed: bool,
 }
 
-impl<'a> std::fmt::Display for TrieAccess<'a> {
+impl std::fmt::Display for TrieAccess<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}.{}", self.function.decl.name, self.column)
     }
