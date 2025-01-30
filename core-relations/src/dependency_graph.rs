@@ -11,7 +11,7 @@ define_id!(
     "an identifier for a level in the dependency graph"
 );
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct DependencyGraph {
     levels: DenseIdMap<LevelId, IndexSet<TableId>>,
     to_level: DenseIdMap<TableId, LevelId>,
