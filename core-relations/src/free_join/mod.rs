@@ -201,12 +201,6 @@ pub struct Database {
     // Tracks the relative dependencies between tables during merge operations.
     deps: DependencyGraph,
     primitives: Primitives,
-    stack: Vec<DbState>,
-}
-
-struct DbState {
-    tables: DenseIdMap<TableId, TableInfo>,
-    counters: DenseIdMap<CounterId, AtomicUsize>,
 }
 
 pub(crate) fn inc_counter(
@@ -225,31 +219,6 @@ impl Database {
     /// thread pool.
     pub fn new() -> Database {
         Database::default()
-    }
-
-    /// Store a snapshot of the current database state.
-    ///
-    /// Depending on the implementation of the tables in the database, this
-    /// could deep-copy all database state.
-    pub fn push(&mut self) {
-        let mut counters = DenseIdMap::with_capacity(self.counters.n_ids());
-        for (k, v) in self.counters.iter() {
-            counters.insert(k, AtomicUsize::new(v.load(Ordering::Acquire)));
-        }
-        self.stack.push(DbState {
-            tables: self.tables.clone(),
-            counters,
-        });
-    }
-
-    /// Restore the database state to the last snapshot.
-    ///
-    /// # Panics
-    /// This method panics if there is no state to pop.
-    pub fn pop(&mut self) {
-        let DbState { tables, counters } = self.stack.pop().expect("must have a state to pop");
-        self.tables = tables;
-        self.counters = counters;
     }
 
     /// Initialize a new rulse set to run against this database.
