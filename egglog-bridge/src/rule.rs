@@ -166,7 +166,7 @@ pub struct RuleBuilder<'a> {
 }
 
 impl EGraph {
-    pub fn new_query_described(&mut self, desc: &str) -> RuleBuilder {
+    pub fn new_rule_described(&mut self, desc: &str) -> RuleBuilder {
         let uf_table = self.uf_table;
         let id_counter = self.id_counter;
         let tracing = self.tracing;
@@ -190,12 +190,12 @@ impl EGraph {
             },
         }
     }
-    pub fn new_query(&mut self) -> RuleBuilder {
-        self.new_query_described("")
+    pub fn new_rule(&mut self) -> RuleBuilder {
+        self.new_rule_described("")
     }
 
     pub(crate) fn new_nonincremental_query(&mut self) -> RuleBuilder {
-        let mut res = self.new_query();
+        let mut res = self.new_rule();
         res.query.seminaive = false;
         res
     }

@@ -842,7 +842,7 @@ impl EGraph {
         let table_id = self.funcs[table].table;
         let uf_table = self.uf_table;
         // Two atoms, one binding a whole tuple, one binding a displaced column
-        let mut rb = self.new_query();
+        let mut rb = self.new_rule();
         rb.set_plan_strategy(PlanStrategy::MinCover);
         let mut vars = Vec::<QueryEntry>::with_capacity(schema.len());
         for ty in schema {

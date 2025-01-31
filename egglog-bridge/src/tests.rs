@@ -617,7 +617,7 @@ fn container_test() {
     ]);
 
     let vec_expand = {
-        let mut rb = egraph.new_query();
+        let mut rb = egraph.new_rule();
         let vec = rb.new_var(ColumnTy::Id);
         let vec_id = rb.new_var(ColumnTy::Id);
         rb.add_atom(Function::Table(vec_table), &[vec.into(), vec_id.into()])
@@ -635,7 +635,7 @@ fn container_test() {
     };
 
     let eval_add = {
-        let mut rb = egraph.new_query();
+        let mut rb = egraph.new_rule();
         let lhs_raw = rb.new_var(ColumnTy::Primitive(int_prim));
         let lhs_id = rb.new_var(ColumnTy::Id);
         let rhs_raw = rb.new_var(ColumnTy::Primitive(int_prim));
