@@ -1073,6 +1073,37 @@ impl EGraph {
             rule.to_canonicalized_core_rule(&self.type_info, &mut self.parser.symbol_gen)?;
         let (query, actions) = (core_rule.body, core_rule.head);
 
+        {
+            use core::*;
+            let mut rb = self.backend.new_rule_described(name.into());
+            let vars: IndexMap<ResolvedAtomTerm, egglog_bridge::QueryEntry> = HashMap::default();
+            for atom in &query.atoms {
+                match &atom.head {
+                    ResolvedCall::Func(_f) => todo!(),
+                    ResolvedCall::Primitive(..) => todo!(),
+                }
+            }
+            for action in &actions.0 {
+                match action {
+                    GenericCoreAction::Let(_, _v, _f, _xs) => todo!(),
+                    GenericCoreAction::LetAtomTerm(_, _v, _x) => todo!(),
+                    GenericCoreAction::Extract(_, _x, _n) => todo!(),
+                    GenericCoreAction::Set(_, f, xs, y) => match f {
+                        ResolvedCall::Func(f) => {
+                            let entries: Vec<_> =
+                                xs.iter().chain([y]).map(|x| vars[x].clone()).collect();
+                            rb.set(self.functions[&f.name].new_backend_id, &entries)
+                        }
+                        ResolvedCall::Primitive(..) => todo!(),
+                    },
+                    GenericCoreAction::Change(_, _change, _f, _xs) => todo!(),
+                    GenericCoreAction::Union(_, x, y) => rb.union(vars[x].clone(), vars[y].clone()),
+                    GenericCoreAction::Panic(_, _msg) => todo!(),
+                }
+            }
+            // TODO: build and store rule id
+        }
+
         let vars = query.get_vars();
         let query = self.compile_gj_query(query, &vars);
 
