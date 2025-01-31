@@ -428,6 +428,7 @@ impl FromStr for RunMode {
 
 #[derive(Clone)]
 pub struct EGraph {
+    pub backend: egglog_bridge::EGraph,
     pub parser: Parser,
     egraphs: Vec<Self>,
     unionfind: UnionFind,
@@ -452,6 +453,7 @@ pub struct EGraph {
 impl Default for EGraph {
     fn default() -> Self {
         let mut egraph = Self {
+            backend: Default::default(),
             parser: Default::default(),
             egraphs: vec![],
             unionfind: Default::default(),
@@ -706,7 +708,7 @@ impl EGraph {
     }
 
     pub fn function_to_dag(
-        &mut self,
+        &self,
         sym: Symbol,
         n: usize,
     ) -> Result<(Vec<(Term, Term)>, TermDag), Error> {

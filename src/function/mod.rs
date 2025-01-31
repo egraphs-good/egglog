@@ -22,6 +22,7 @@ pub struct Function {
     index_updated_through: usize,
     updates: usize,
     scratch: IndexSet<usize>,
+    pub new_backend_id: egglog_bridge::FunctionId,
 }
 
 #[derive(Clone)]
@@ -153,6 +154,35 @@ impl Function {
             .chain(once(output.name()))
             .collect();
 
+        let new_backend_id = {
+            use egglog_bridge::{ColumnTy, DefaultVal, MergeFn};
+            let schema = input
+                .iter()
+                .chain([&output])
+                .map(|sort| {
+                    if sort.is_eq_sort() {
+                        ColumnTy::Id
+                    } else {
+                        todo!()
+                    }
+                })
+                .collect();
+            let default = match decl.subtype {
+                FunctionSubtype::Constructor => DefaultVal::FreshId,
+                _ => DefaultVal::Fail,
+            };
+            let merge = match decl.subtype {
+                FunctionSubtype::Constructor => MergeFn::UnionId,
+                FunctionSubtype::Relation => todo!(),
+                FunctionSubtype::Custom => match &decl.merge {
+                    Some(_merge_expr) => todo!(),
+                    None => todo!(),
+                },
+            };
+            let name = decl.name.into();
+            egraph.backend.add_table(schema, default, merge, name)
+        };
+
         Ok(Function {
             decl: decl.clone(),
             schema: ResolvedSchema { input, output },
@@ -165,6 +195,7 @@ impl Function {
             index_updated_through: 0,
             updates: 0,
             merge: merge_vals,
+            new_backend_id,
         })
     }
 
