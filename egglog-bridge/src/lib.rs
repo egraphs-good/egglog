@@ -405,11 +405,11 @@ impl EGraph {
         self.rebuild().unwrap();
     }
 
-    pub fn approx_table_size(&mut self, table: FunctionId) -> usize {
+    pub fn approx_table_size(&self, table: FunctionId) -> usize {
         self.db.estimate_size(self.funcs[table].table, None)
     }
 
-    pub fn table_size(&mut self, table: FunctionId) -> usize {
+    pub fn table_size(&self, table: FunctionId) -> usize {
         self.db.get_table(self.funcs[table].table).len()
     }
 
