@@ -392,7 +392,9 @@ impl EGraph {
                             function.remove(args, self.timestamp);
                         }
                         Change::Subsume => {
-                            if function.decl.subtype != FunctionSubtype::Constructor {
+                            if function.decl.subtype != FunctionSubtype::Constructor
+                                && function.decl.subtype != FunctionSubtype::Relation
+                            {
                                 return Err(Error::SubsumeMergeError(*f));
                             }
                             function

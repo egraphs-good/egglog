@@ -350,8 +350,9 @@ fn test_subsume() {
 }
 
 #[test]
-fn test_subsume_primitive() {
-    // Test that we can subsume a primitive
+fn test_subsume_custom() {
+    // Test that we can't subsume  a custom function
+    // Only relations and constructors are allowed to be subsumed
 
     let mut egraph = EGraph::default();
     let res = egraph.parse_and_run_program(
@@ -363,6 +364,29 @@ fn test_subsume_primitive() {
         "#,
     );
     assert!(res.is_err());
+}
+
+#[test]
+fn test_subsume_ok() {
+    let mut egraph = EGraph::default();
+    let res = egraph.parse_and_run_program(
+        None,
+        r#"
+        (sort E)
+        (constructor one () E)
+        (constructor two () E)
+        (one)
+        (subsume (one))
+        ;; subsuming a non-existent tuple
+        (subsume (two))
+
+        (relation R (i64))
+        (R 1)
+        (subsume (R 1))
+        (subsume (R 2))
+        "#,
+    );
+    assert!(res.is_ok());
 }
 
 #[test]
