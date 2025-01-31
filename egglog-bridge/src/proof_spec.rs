@@ -231,7 +231,7 @@ impl ProofBuilder {
         after: &[QueryEntry],
         vars: RebuildVars,
         db: &mut EGraph,
-    ) -> impl Fn(&mut Bindings, &mut RuleBuilder) -> Result<()> {
+    ) -> impl Fn(&mut Bindings, &mut RuleBuilder) -> Result<()> + Clone {
         // TODO/optimization: we only ever need one CongRow reason.
         let reason_spec = Rc::new(ProofReason::CongRow);
         let reason_table = db.reason_table(&reason_spec);
@@ -273,7 +273,7 @@ impl ProofBuilder {
         dst_atom: &[QueryEntry],
         reason_var: Variable,
         db: &mut EGraph,
-    ) -> impl Fn(&mut Bindings, &mut RuleBuilder) -> Result<()> {
+    ) -> impl Fn(&mut Bindings, &mut RuleBuilder) -> Result<()> + Clone {
         // NB: we could cache these.
         let (to_materialize, canonical_mapping) = self.canonical_mappings();
         let spec = Rc::new(ProofReason::Rule(RuleData {
@@ -322,14 +322,14 @@ impl ProofBuilder {
     }
 
     /// Generate a callback that will add a proof reason to the database and
-    /// bind a poitner to that reason to `reason_var`.
+    /// bind a pointer to that reason to `reason_var`.
     pub(crate) fn union(
         &mut self,
         l: QueryEntry,
         r: QueryEntry,
         reason_var: Variable,
         db: &mut EGraph,
-    ) -> impl Fn(&mut Bindings, &mut RuleBuilder) -> Result<()> {
+    ) -> impl Fn(&mut Bindings, &mut RuleBuilder) -> Result<()> + Clone {
         self.make_reason(Insertable::UnionFind, &[l, r], reason_var, db)
     }
 
@@ -342,7 +342,7 @@ impl ProofBuilder {
         term_var: Variable,
         reason_var: Variable,
         db: &mut EGraph,
-    ) -> impl Fn(&mut Bindings, &mut RuleBuilder) -> Result<()> {
+    ) -> impl Fn(&mut Bindings, &mut RuleBuilder) -> Result<()> + Clone {
         let make_reason = self.make_reason(Insertable::Func(func), &entries, reason_var, db);
         self.add_rhs(&entries, term_var);
         let func_table = db.funcs[func].table;

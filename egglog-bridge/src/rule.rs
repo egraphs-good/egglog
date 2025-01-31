@@ -36,6 +36,7 @@ enum RuleBuilderError {
     ArityMismatch { expected: usize, got: usize },
 }
 
+#[derive(Clone)]
 struct VarInfo {
     ty: ColumnTy,
     /// If there is a "term-level" variant of this variable bound elsewhere, it
@@ -129,8 +130,12 @@ impl From<PrimitiveFunctionId> for Function {
     }
 }
 
-type BuildRuleCallback = Box<dyn Fn(&mut Bindings, &mut CoreRuleBuilder) -> Result<()>>;
+trait Brc: Fn(&mut Bindings, &mut CoreRuleBuilder) -> Result<()> + dyn_clone::DynClone {}
+impl<T: Fn(&mut Bindings, &mut CoreRuleBuilder) -> Result<()> + Clone> Brc for T {}
+dyn_clone::clone_trait_object!(Brc);
+type BuildRuleCallback = Box<dyn Brc>;
 
+#[derive(Clone)]
 pub(crate) struct Query {
     uf_table: TableId,
     id_counter: CounterId,
@@ -197,10 +202,7 @@ impl EGraph {
 }
 
 impl RuleBuilder<'_> {
-    fn add_callback(
-        &mut self,
-        cb: impl Fn(&mut Bindings, &mut CoreRuleBuilder) -> Result<()> + 'static,
-    ) {
+    fn add_callback(&mut self, cb: impl Brc + 'static) {
         self.query.add_rule.push(Box::new(cb));
     }
 

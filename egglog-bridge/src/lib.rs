@@ -57,6 +57,7 @@ impl Timestamp {
 }
 
 /// The state associated with an egglog program.
+#[derive(Clone)]
 pub struct EGraph {
     db: Database,
     uf_table: TableId,
@@ -896,6 +897,7 @@ impl EGraph {
     }
 }
 
+#[derive(Clone)]
 struct RuleInfo {
     last_run_at: Timestamp,
     query: rule::Query,
@@ -903,6 +905,7 @@ struct RuleInfo {
     desc: String,
 }
 
+#[derive(Clone)]
 struct FunctionInfo {
     table: TableId,
     schema: Vec<ColumnTy>,
@@ -919,6 +922,7 @@ impl FunctionInfo {
 }
 
 /// How defaults are computed for the given function.
+#[derive(Clone)]
 pub enum DefaultVal {
     /// Generate a fresh UF id.
     FreshId,
