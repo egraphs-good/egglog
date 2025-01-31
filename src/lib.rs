@@ -427,6 +427,7 @@ impl FromStr for RunMode {
 
 #[derive(Clone)]
 pub struct EGraph {
+    pub backend: egglog_bridge::EGraph,
     pub parser: Parser,
     names: check_shadowing::Names,
     /// pushed_egraph forms a linked list of pushed egraphs.
@@ -454,6 +455,7 @@ pub struct EGraph {
 impl Default for EGraph {
     fn default() -> Self {
         let mut egraph = Self {
+            backend: Default::default(),
             parser: Default::default(),
             names: Default::default(),
             pushed_egraph: Default::default(),
@@ -714,7 +716,7 @@ impl EGraph {
     }
 
     pub fn function_to_dag(
-        &mut self,
+        &self,
         sym: Symbol,
         n: usize,
     ) -> Result<(Vec<(Term, Term)>, TermDag), Error> {
