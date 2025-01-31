@@ -797,7 +797,7 @@ type RowIdx = u32;
 #[derive(Debug)]
 enum LazyTrieInner {
     Borrowed {
-        index: Rc<ColumnIndex>,
+        index: Arc<ColumnIndex>,
         map: HashMap<Value, LazyTrie>,
     },
     Delayed(SmallVec<[RowIdx; 4]>),
@@ -822,7 +822,7 @@ impl LazyTrie {
             LazyTrieInner::Borrowed { index, .. } => index.len(),
         }
     }
-    fn from_column_index(index: Rc<ColumnIndex>) -> LazyTrie {
+    fn from_column_index(index: Arc<ColumnIndex>) -> LazyTrie {
         LazyTrie(UnsafeCell::new(LazyTrieInner::Borrowed {
             index,
             map: Default::default(),

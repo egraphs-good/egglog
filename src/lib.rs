@@ -45,6 +45,7 @@ use indexmap::map::Entry;
 use instant::{Duration, Instant};
 pub use serialize::{SerializeConfig, SerializedNode};
 use sort::*;
+use std::fmt::Debug;
 use std::fmt::{Display, Formatter};
 use std::fs::File;
 use std::hash::Hash;
@@ -52,9 +53,8 @@ use std::io::Read;
 use std::iter::once;
 use std::ops::{Deref, Range};
 use std::path::PathBuf;
-use std::rc::Rc;
 use std::str::FromStr;
-use std::{fmt::Debug, sync::Arc};
+use std::sync::Arc;
 pub use termdag::{Term, TermDag, TermId};
 use thiserror::Error;
 pub use typechecking::TypeInfo;
@@ -292,7 +292,7 @@ impl RunReport {
 }
 
 #[derive(Clone)]
-pub struct Primitive(Arc<dyn PrimitiveLike>);
+pub struct Primitive(Arc<dyn PrimitiveLike + Send + Sync>);
 impl Primitive {
     // Takes the full signature of a primitive (including input and output types)
     // Returns whether the primitive is compatible with this signature
@@ -344,7 +344,7 @@ impl Debug for Primitive {
     }
 }
 
-impl<T: PrimitiveLike + 'static> From<T> for Primitive {
+impl<T: PrimitiveLike + 'static + Send + Sync> From<T> for Primitive {
     fn from(p: T) -> Self {
         Self(Arc::new(p))
     }
@@ -1585,7 +1585,9 @@ pub enum Error {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
+
+    use lazy_static::lazy_static;
 
     use crate::constraint::SimpleTypeConstraint;
     use crate::sort::*;
@@ -1655,5 +1657,9 @@ mod tests {
             ",
             )
             .unwrap();
+    }
+
+    lazy_static! {
+        pub static ref RT: Mutex<EGraph> = Mutex::new(EGraph::default());
     }
 }

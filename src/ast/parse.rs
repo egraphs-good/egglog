@@ -217,16 +217,19 @@ fn map_fallible<T>(
         .collect::<Result<_, _>>()
 }
 
-pub trait Macro<T> {
+pub trait Macro<T>: Send {
     fn name(&self) -> Symbol;
     fn parse(&self, args: &[Sexp], span: Span, parser: &mut Parser) -> Result<T, ParseError>;
 }
 
-pub struct SimpleMacro<T, F: Fn(&[Sexp], Span, &mut Parser) -> Result<T, ParseError>>(Symbol, F);
+pub struct SimpleMacro<T, F: Fn(&[Sexp], Span, &mut Parser) -> Result<T, ParseError> + Send>(
+    Symbol,
+    F,
+);
 
 impl<T, F> SimpleMacro<T, F>
 where
-    F: Fn(&[Sexp], Span, &mut Parser) -> Result<T, ParseError>,
+    F: Fn(&[Sexp], Span, &mut Parser) -> Result<T, ParseError> + Send,
 {
     pub fn new(head: &str, f: F) -> Self {
         Self(head.into(), f)
@@ -235,7 +238,7 @@ where
 
 impl<T, F> Macro<T> for SimpleMacro<T, F>
 where
-    F: Fn(&[Sexp], Span, &mut Parser) -> Result<T, ParseError>,
+    F: Fn(&[Sexp], Span, &mut Parser) -> Result<T, ParseError> + Send,
 {
     fn name(&self) -> Symbol {
         self.0
@@ -248,9 +251,9 @@ where
 
 #[derive(Clone)]
 pub struct Parser {
-    commands: HashMap<Symbol, Arc<dyn Macro<Vec<Command>>>>,
-    actions: HashMap<Symbol, Arc<dyn Macro<Vec<Action>>>>,
-    exprs: HashMap<Symbol, Arc<dyn Macro<Expr>>>,
+    commands: HashMap<Symbol, Arc<dyn Macro<Vec<Command>> + Send + Sync>>,
+    actions: HashMap<Symbol, Arc<dyn Macro<Vec<Action>> + Send + Sync>>,
+    exprs: HashMap<Symbol, Arc<dyn Macro<Expr> + Send + Sync>>,
     pub symbol_gen: SymbolGen,
 }
 
@@ -286,15 +289,15 @@ impl Parser {
         self.parse_expr(&sexp)
     }
 
-    pub fn add_command_macro(&mut self, ma: Arc<dyn Macro<Vec<Command>>>) {
+    pub fn add_command_macro(&mut self, ma: Arc<dyn Macro<Vec<Command>> + Send + Sync>) {
         self.commands.insert(ma.name(), ma);
     }
 
-    pub fn add_action_macro(&mut self, ma: Arc<dyn Macro<Vec<Action>>>) {
+    pub fn add_action_macro(&mut self, ma: Arc<dyn Macro<Vec<Action>> + Send + Sync>) {
         self.actions.insert(ma.name(), ma);
     }
 
-    pub fn add_expr_macro(&mut self, ma: Arc<dyn Macro<Expr>>) {
+    pub fn add_expr_macro(&mut self, ma: Arc<dyn Macro<Expr> + Send + Sync>) {
         self.exprs.insert(ma.name(), ma);
     }
 
