@@ -34,19 +34,19 @@ impl Default for TypeInfo {
             global_types: Default::default(),
         };
 
-        res.add_sort(UnitSort, DUMMY_SPAN.clone()).unwrap();
-        res.add_sort(StringSort, DUMMY_SPAN.clone()).unwrap();
-        res.add_sort(BoolSort, DUMMY_SPAN.clone()).unwrap();
-        res.add_sort(I64Sort, DUMMY_SPAN.clone()).unwrap();
-        res.add_sort(F64Sort, DUMMY_SPAN.clone()).unwrap();
-        res.add_sort(BigIntSort, DUMMY_SPAN.clone()).unwrap();
-        res.add_sort(BigRatSort, DUMMY_SPAN.clone()).unwrap();
+        res.add_sort(UnitSort, span!()).unwrap();
+        res.add_sort(StringSort, span!()).unwrap();
+        res.add_sort(BoolSort, span!()).unwrap();
+        res.add_sort(I64Sort, span!()).unwrap();
+        res.add_sort(F64Sort, span!()).unwrap();
+        res.add_sort(BigIntSort, span!()).unwrap();
+        res.add_sort(BigRatSort, span!()).unwrap();
 
-        res.add_presort::<MapSort>(DUMMY_SPAN.clone()).unwrap();
-        res.add_presort::<SetSort>(DUMMY_SPAN.clone()).unwrap();
-        res.add_presort::<VecSort>(DUMMY_SPAN.clone()).unwrap();
-        res.add_presort::<FunctionSort>(DUMMY_SPAN.clone()).unwrap();
-        res.add_presort::<MultiSetSort>(DUMMY_SPAN.clone()).unwrap();
+        res.add_presort::<MapSort>(span!()).unwrap();
+        res.add_presort::<SetSort>(span!()).unwrap();
+        res.add_presort::<VecSort>(span!()).unwrap();
+        res.add_presort::<FunctionSort>(span!()).unwrap();
+        res.add_presort::<MultiSetSort>(span!()).unwrap();
 
         res.add_primitive(ValueEq);
 
@@ -272,8 +272,8 @@ impl TypeInfo {
                 fdecl.span.clone(),
             ));
         }
-        bound_vars.insert("old".into(), (DUMMY_SPAN.clone(), output_type.clone()));
-        bound_vars.insert("new".into(), (DUMMY_SPAN.clone(), output_type.clone()));
+        bound_vars.insert("old".into(), (fdecl.span.clone(), output_type.clone()));
+        bound_vars.insert("new".into(), (fdecl.span.clone(), output_type.clone()));
 
         Ok(ResolvedFunctionDecl {
             name: fdecl.name,
@@ -502,7 +502,7 @@ impl TypeInfo {
         expr: &Expr,
         binding: &IndexMap<Symbol, (Span, ArcSort)>,
     ) -> Result<ResolvedExpr, TypeError> {
-        let action = Action::Expr(DUMMY_SPAN.clone(), expr.clone());
+        let action = Action::Expr(expr.span(), expr.clone());
         let typechecked_action = self.typecheck_action(symbol_gen, &action, binding)?;
         match typechecked_action {
             ResolvedAction::Expr(_, expr) => Ok(expr),

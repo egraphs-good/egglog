@@ -338,7 +338,7 @@ impl EGraph {
 
                     let variants = values[1].bits as i64;
                     if variants == 0 {
-                        let (cost, term) = self.extract(values[0], &mut termdag, sort);
+                        let (cost, term) = self.extract(values[0], &mut termdag, sort)?;
                         // dont turn termdag into a string if we have messages disabled for performance reasons
                         if self.messages_enabled() {
                             let extracted = termdag.to_string(&term);

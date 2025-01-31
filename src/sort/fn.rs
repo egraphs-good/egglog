@@ -238,10 +238,10 @@ impl TypeConstraint for FunctionCTorTypeConstraint {
         &self,
         arguments: &[AtomTerm],
         typeinfo: &TypeInfo,
-    ) -> Vec<Constraint<AtomTerm, ArcSort>> {
+    ) -> Vec<Box<dyn Constraint<AtomTerm, ArcSort>>> {
         // Must have at least one arg (plus the return value)
         if arguments.len() < 2 {
-            return vec![Constraint::Impossible(
+            return vec![constraint::impossible(
                 constraint::ImpossibleConstraint::ArityMismatch {
                     atom: core::Atom {
                         span: self.span.clone(),
@@ -252,7 +252,7 @@ impl TypeConstraint for FunctionCTorTypeConstraint {
                 },
             )];
         }
-        let output_sort_constraint: constraint::Constraint<_, ArcSort> = Constraint::Assign(
+        let output_sort_constraint: Box<dyn Constraint<_, ArcSort>> = constraint::assign(
             arguments[arguments.len() - 1].clone(),
             self.function.clone(),
         );
@@ -265,7 +265,7 @@ impl TypeConstraint for FunctionCTorTypeConstraint {
                 // the number of partial args must match the number of inputs from the func type minus the number from
                 // this function sort
                 if self.function.inputs.len() + n_partial_args != func_type.input.len() {
-                    return vec![Constraint::Impossible(
+                    return vec![constraint::impossible(
                         constraint::ImpossibleConstraint::ArityMismatch {
                             atom: core::Atom {
                                 span: self.span.clone(),
@@ -292,7 +292,7 @@ impl TypeConstraint for FunctionCTorTypeConstraint {
                         .map(|s| s.name())
                         .ne(actual_input.iter().map(|s| s.name()))
                 {
-                    return vec![Constraint::Impossible(
+                    return vec![constraint::impossible(
                         constraint::ImpossibleConstraint::FunctionMismatch {
                             expected_output,
                             expected_input,
@@ -308,7 +308,7 @@ impl TypeConstraint for FunctionCTorTypeConstraint {
                     .take(n_partial_args)
                     .zip(arguments.iter().skip(1))
                     .map(|(expected_sort, actual_term)| {
-                        Constraint::Assign(actual_term.clone(), expected_sort.clone())
+                        constraint::assign(actual_term.clone(), expected_sort.clone())
                     })
                     .chain(once(output_sort_constraint))
                     .collect();
@@ -317,7 +317,7 @@ impl TypeConstraint for FunctionCTorTypeConstraint {
 
         // Otherwise we just try assuming it's this function, we don't know if it is or not
         vec![
-            Constraint::Assign(arguments[0].clone(), Arc::new(StringSort)),
+            constraint::assign(arguments[0].clone(), Arc::new(StringSort)),
             output_sort_constraint,
         ]
     }
@@ -409,11 +409,8 @@ fn call_fn(egraph: &mut EGraph, name: &Symbol, types: Vec<ArcSort>, args: Vec<Va
         })
         .collect();
     let binding = IndexSet::from_iter(arg_vars.clone());
-    let resolved_args = arg_vars
-        .into_iter()
-        .map(|v| GenericExpr::Var(DUMMY_SPAN.clone(), v))
-        .collect();
-    let expr = GenericExpr::Call(DUMMY_SPAN.clone(), resolved_call, resolved_args);
+    let resolved_args = arg_vars.into_iter().map(|v| var!(v));
+    let expr = call!(resolved_call, resolved_args);
     // Similar to how the merge function is created in `Function::new`
     let (actions, mapped_expr) = expr
         .to_core_actions(

@@ -13,9 +13,10 @@
 //!
 mod actions;
 pub mod ast;
+mod cli;
 pub mod constraint;
 mod core;
-mod extract;
+pub mod extract;
 mod function;
 mod gj;
 mod serialize;
@@ -32,6 +33,8 @@ use crate::typechecking::TypeError;
 use actions::Program;
 use ast::remove_globals::remove_globals;
 use ast::*;
+#[cfg(feature = "bin")]
+pub use cli::bin::*;
 use constraint::{Constraint, SimpleTypeConstraint, TypeConstraint};
 use extract::Extractor;
 pub use function::Function;
@@ -296,12 +299,12 @@ impl Primitive {
     fn accept(&self, tys: &[Arc<dyn Sort>], typeinfo: &TypeInfo) -> bool {
         let mut constraints = vec![];
         let lits: Vec<_> = (0..tys.len())
-            .map(|i| AtomTerm::Literal(DUMMY_SPAN.clone(), Literal::Int(i as i64)))
+            .map(|i| AtomTerm::Literal(Span::Panic, Literal::Int(i as i64)))
             .collect();
         for (lit, ty) in lits.iter().zip(tys.iter()) {
-            constraints.push(Constraint::Assign(lit.clone(), ty.clone()))
+            constraints.push(constraint::assign(lit.clone(), ty.clone()))
         }
-        constraints.extend(self.get_type_constraints(&DUMMY_SPAN).get(&lits, typeinfo));
+        constraints.extend(self.get_type_constraints(&Span::Panic).get(&lits, typeinfo));
         let problem = Problem {
             constraints,
             range: HashSet::default(),
@@ -535,7 +538,7 @@ impl EGraph {
                 self.msgs = messages;
                 Ok(())
             }
-            None => Err(Error::Pop(DUMMY_SPAN.clone())),
+            None => Err(Error::Pop(span!())),
         }
     }
 
@@ -710,7 +713,7 @@ impl EGraph {
         let f = self
             .functions
             .get(&sym)
-            .ok_or(TypeError::UnboundFunction(sym, DUMMY_SPAN.clone()))?;
+            .ok_or(TypeError::UnboundFunction(sym, span!()))?;
         let schema = f.schema.clone();
         let nodes = f
             .nodes
@@ -796,7 +799,7 @@ impl EGraph {
             let f = self
                 .functions
                 .get(&sym)
-                .ok_or(TypeError::UnboundFunction(sym, DUMMY_SPAN.clone()))?;
+                .ok_or(TypeError::UnboundFunction(sym, span!()))?;
             log::info!("Function {} has size {}", sym, f.nodes.len());
             self.print_msg(f.nodes.len().to_string());
             Ok(())
@@ -865,17 +868,17 @@ impl EGraph {
     /// Extract a value to a [`TermDag`] and [`Term`] in the [`TermDag`].
     /// Note that the `TermDag` may contain a superset of the nodes in the `Term`.
     /// See also `extract_value_to_string` for convenience.
-    pub fn extract_value(&self, sort: &ArcSort, value: Value) -> (TermDag, Term) {
+    pub fn extract_value(&self, sort: &ArcSort, value: Value) -> Result<(TermDag, Term), Error> {
         let mut termdag = TermDag::default();
-        let term = self.extract(value, &mut termdag, sort).1;
-        (termdag, term)
+        let term = self.extract(value, &mut termdag, sort)?.1;
+        Ok((termdag, term))
     }
 
     /// Extract a value to a string for printing.
     /// See also `extract_value` for more control.
-    pub fn extract_value_to_string(&self, sort: &ArcSort, value: Value) -> String {
-        let (termdag, term) = self.extract_value(sort, value);
-        termdag.to_string(&term)
+    pub fn extract_value_to_string(&self, sort: &ArcSort, value: Value) -> Result<String, Error> {
+        let (termdag, term) = self.extract_value(sort, value)?;
+        Ok(termdag.to_string(&term))
     }
 
     fn run_rules(&mut self, span: &Span, config: &ResolvedRunConfig) -> RunReport {
@@ -1109,7 +1112,7 @@ impl EGraph {
 
     pub fn eval_expr(&mut self, expr: &Expr) -> Result<(ArcSort, Value), Error> {
         let fresh_name = self.parser.symbol_gen.fresh(&"egraph_evalexpr".into());
-        let command = Command::Action(Action::Let(DUMMY_SPAN.clone(), fresh_name, expr.clone()));
+        let command = Command::Action(Action::Let(expr.span(), fresh_name, expr.clone()));
         self.run_program(vec![command])?;
         // find the table with the same name as the fresh name
         let func = self.functions.get(&fresh_name).unwrap();
@@ -1317,7 +1320,7 @@ impl EGraph {
                 for expr in exprs {
                     let value = self.eval_resolved_expr(&expr)?;
                     let expr_type = expr.output_type();
-                    let term = self.extract(value, &mut termdag, &expr_type).1;
+                    let term = self.extract(value, &mut termdag, &expr_type)?.1;
                     use std::io::Write;
                     writeln!(f, "{}", termdag.to_string(&term))
                         .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
@@ -1360,7 +1363,7 @@ impl EGraph {
         let mut contents = String::new();
         f.read_to_string(&mut contents).unwrap();
 
-        let span: Span = DUMMY_SPAN.clone();
+        let span: Span = span!();
         let mut actions: Vec<Action> = vec![];
         let mut str_buf: Vec<&str> = vec![];
         for line in contents.lines() {
@@ -1454,7 +1457,16 @@ impl EGraph {
                     continue;
                 }
 
-                self.run_command(processed)?;
+                let result = self.run_command(processed);
+
+                if self.is_interactive_mode() {
+                    self.print_msg(match result {
+                        Ok(()) => "(done)".into(),
+                        Err(_) => "(error)".into(),
+                    });
+                }
+
+                result?
             }
         }
         log::logger().flush();
@@ -1472,7 +1484,7 @@ impl EGraph {
         filename: Option<String>,
         input: &str,
     ) -> Result<Vec<String>, Error> {
-        let parsed = parse_program(filename, input, &self.parser)?;
+        let parsed = self.parser.get_program_from_string(filename, input)?;
         self.run_program(parsed)
     }
 
@@ -1495,8 +1507,8 @@ impl EGraph {
     }
 
     /// Add a user-defined sort
-    pub fn add_arcsort(&mut self, arcsort: ArcSort) -> Result<(), TypeError> {
-        self.type_info.add_arcsort(arcsort, DUMMY_SPAN.clone())
+    pub fn add_arcsort(&mut self, arcsort: ArcSort, span: Span) -> Result<(), TypeError> {
+        self.type_info.add_arcsort(arcsort, span)
     }
 
     /// Add a user-defined primitive
@@ -1567,6 +1579,8 @@ pub enum Error {
     IoError(PathBuf, std::io::Error, Span),
     #[error("Cannot subsume function with merge: {0}")]
     SubsumeMergeError(Symbol),
+    #[error("extraction failure: {:?}", .0)]
+    ExtractError(Value),
 }
 
 #[cfg(test)]

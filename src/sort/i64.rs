@@ -2,6 +2,20 @@ use crate::{ast::Literal, constraint::AllEqualTypeConstraint};
 
 use super::*;
 
+/// Signed 64-bit integers supporting these primitives:
+/// - Arithmetic: `+`, `-`, `*`, `/`, `%`
+/// - Bitwise: `&`, `|`, `^`, `<<`, `>>`, `not-i64`
+/// - Fallible comparisons: `<`, `>`, `<=`, `>=`
+/// - Boolean comparisons: `bool-=`, `bool-<`, `bool->`, `bool-<=`, `bool->=`
+/// - Other: `min`, `max`, `to-f64`, `to-string`, `log2`
+///
+/// Note: fallible comparisons are used at the top-level of a query.
+/// For example, this rule will only match if `a` is less than `b`.
+/// ```text
+/// (rule (... (< a b)) (...))
+/// ```
+/// On the other hand, boolean comparisons will always match, and so
+/// make sense to use inside expressions.
 #[derive(Debug)]
 pub struct I64Sort;
 
@@ -19,9 +33,6 @@ impl Sort for I64Sort {
     }
 
     #[rustfmt::skip]
-    // We need the closure for division and mod operations, as they can panic.
-    // cf https://github.com/rust-lang/rust-clippy/issues/9422
-    #[allow(clippy::unnecessary_lazy_evaluations)]
     fn register_primitives(self: Arc<Self>, typeinfo: &mut TypeInfo) {
         typeinfo.add_primitive(TermOrderingMin {
            });
@@ -30,11 +41,11 @@ impl Sort for I64Sort {
 
         type Opt<T=()> = Option<T>;
 
-        add_primitives!(typeinfo, "+" = |a: i64, b: i64| -> i64 { a + b });
-        add_primitives!(typeinfo, "-" = |a: i64, b: i64| -> i64 { a - b });
-        add_primitives!(typeinfo, "*" = |a: i64, b: i64| -> i64 { a * b });
-        add_primitives!(typeinfo, "/" = |a: i64, b: i64| -> Opt<i64> { (b != 0).then(|| a / b) });
-        add_primitives!(typeinfo, "%" = |a: i64, b: i64| -> Opt<i64> { (b != 0).then(|| a % b) });
+        add_primitives!(typeinfo, "+" = |a: i64, b: i64| -> Opt<i64> { a.checked_add(b) });
+        add_primitives!(typeinfo, "-" = |a: i64, b: i64| -> Opt<i64> { a.checked_sub(b) });
+        add_primitives!(typeinfo, "*" = |a: i64, b: i64| -> Opt<i64> { a.checked_mul(b) });
+        add_primitives!(typeinfo, "/" = |a: i64, b: i64| -> Opt<i64> { a.checked_div(b) });
+        add_primitives!(typeinfo, "%" = |a: i64, b: i64| -> Opt<i64> { a.checked_rem(b) });
 
         add_primitives!(typeinfo, "&" = |a: i64, b: i64| -> i64 { a & b });
         add_primitives!(typeinfo, "|" = |a: i64, b: i64| -> i64 { a | b });

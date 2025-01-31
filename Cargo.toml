@@ -1,7 +1,7 @@
 [package]
 edition = "2021"
 name = "egglog"
-version = "0.3.0"
+version = "0.4.0"
 description = "egglog is a language that combines the benefits of equality saturation and datalog. It can be used for analysis, optimization, and synthesis of programs. It is the successor to the popular rust library egg."
 repository = "https://github.com/egraphs-good/egglog"
 keywords = ["e-graphs", "egglog", "datalog", "compiler", "equality"]
@@ -33,7 +33,6 @@ bin = [
   "graphviz",
   "dep:clap",
   "dep:env_logger",
-  "dep:serde_json",
   "dep:chrono",
 ]
 serde = ["egraph-serialize/serde"]
@@ -42,38 +41,28 @@ wasm-bindgen = ["instant/wasm-bindgen", "dep:getrandom"]
 nondeterministic = []
 
 [dependencies]
-hashbrown = { version = "0.15" }
-indexmap = "2.0"
-instant = "0.1"
-log = "0.4"
-rustc-hash = "1.1"
-symbol_table = { version = "0.4.0", features = ["global"] }
-thiserror = "1"
-lazy_static = "1.4"
-num = "0.4.3"
-smallvec = "1.11"
-
-egraph-serialize = { version = "0.2.0", default-features = false }
-
-# binary dependencies
 clap = { version = "4", features = ["derive"], optional = true }
+egraph-serialize = { version = "0.2.0", default-features = false }
 env_logger = { version = "0.10", optional = true }
-serde_json = { version = "1.0.100", optional = true, features = [
-  "preserve_order",
-] }
-
-ordered-float = { version = "3.7" }
-
-# Need to add "js" feature for "graphviz-rust" to work in wasm
-getrandom = { version = "0.2.10", features = ["js"], optional = true }
-
+hashbrown = { version = "0.15" }
 im-rc = "15.1.0"
 im = "15.1.0"
+indexmap = "2.0"
+instant = "0.1"
+lazy_static = "1.4"
+log = "0.4"
+num = "0.4.3"
+ordered-float = { version = "3.7" }
+rustc-hash = "1.1"
+smallvec = "1.11"
+symbol_table = { version = "0.4.0", features = ["global"] }
+thiserror = "1"
+
+# Need to add "js" feature for "graphviz-rust" to work in wasm
+getrandom = { version = "0.2.10", optional = true, features = ["js"] }
 
 [build-dependencies]
-chrono = { version = "0.4", default-features = false, optional = true, features = [
-  "now",
-] }
+chrono = { version = "0.4", default-features = false, features = ["now"], optional = true }
 
 [dev-dependencies]
 codspeed-criterion-compat = "2.7.2"

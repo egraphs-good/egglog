@@ -278,7 +278,7 @@ impl Query<SymbolOrEq, Symbol> {
     pub fn get_constraints(
         &self,
         type_info: &TypeInfo,
-    ) -> Result<Vec<Constraint<AtomTerm, ArcSort>>, TypeError> {
+    ) -> Result<Vec<Box<dyn Constraint<AtomTerm, ArcSort>>>, TypeError> {
         let mut constraints = vec![];
         for atom in self.atoms.iter() {
             constraints.extend(atom.get_constraints(type_info)?.into_iter());

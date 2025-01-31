@@ -7,6 +7,7 @@ macro_rules! add_primitives {
         #[allow(unused_imports, non_snake_case)]
         {
             use $crate::{*, ast::*, sort::*, constraint::*};
+            use ::std::sync::Arc;
 
             struct MyPrim {$(
                 $param: Arc<<$param_t as FromSort>::Sort>,

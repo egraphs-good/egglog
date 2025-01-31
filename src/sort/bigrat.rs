@@ -13,6 +13,13 @@ lazy_static! {
     static ref RATS: Mutex<IndexSet<Q>> = Default::default();
 }
 
+/// Rational numbers supporting these primitives:
+/// - Arithmetic: `+`, `-`, `*`, `/`, `neg`, `abs`
+/// - Exponential: `pow`, `log`, `sqrt`, `cbrt`
+/// - Rounding: `floor`, `ceil`, `round`
+/// - Con/Destruction: `bigrat`, `numer`, `denom`
+/// - Comparisons: `<`, `>`, `<=`, `>=`
+/// - Other: `min`, `max`, `to-f64`
 #[derive(Debug)]
 pub struct BigRatSort;
 
@@ -41,30 +48,43 @@ impl Sort for BigRatSort {
         add_primitives!(eg, "floor" = |a: Q| -> Q { a.floor() });
         add_primitives!(eg, "ceil" = |a: Q| -> Q { a.ceil() });
         add_primitives!(eg, "round" = |a: Q| -> Q { a.round() });
+
         add_primitives!(eg, "bigrat" = |a: Z, b: Z| -> Q { Q::new(a, b) });
         add_primitives!(eg, "numer" = |a: Q| -> Z { a.numer().clone() });
         add_primitives!(eg, "denom" = |a: Q| -> Z { a.denom().clone() });
-
         add_primitives!(eg, "to-f64" = |a: Q| -> f64 { a.to_f64().unwrap() });
 
         add_primitives!(eg, "pow" = |a: Q, b: Q| -> Option<Q> {
-            if a.is_zero() {
-                if b.is_positive() {
+            if !b.is_integer() {
+                // fractional powers are forbidden.
+                // reject this even for the zero case
+                None
+            } else if a.is_zero() {
+                // remove zero from the field of rationals
+                // so that multiplicative inverse is always safe
+                if b.is_zero() {
+                    // 0^0 = 1 by common convention
+                    Some(Q::one())
+                } else if b.is_positive() {
+                    // 0^n = 0 where (n > 0)
                     Some(Q::zero())
                 } else {
-                    None
-                }
-            } else if b.is_zero() {
-                Some(Q::one())
-            } else if let Some(b) = b.to_i64() {
-                if let Ok(b) = usize::try_from(b) {
-                    num::traits::checked_pow(a, b)
-                } else {
-                    // TODO handle negative powers
+                    // 0^n => (1/0)^(abs n) where (n < 0)
                     None
                 }
             } else {
-                None
+                let is_neg_pow = b.is_negative();
+                let (adj_base, adj_exp) = if is_neg_pow {
+                    (a.recip(), b.abs())
+                } else {
+                    (a, b)
+                };
+                // series of type-conversions
+                // to match the `checked_pow` signature
+                let adj_exp_int = adj_exp.to_i64()?;
+                let adj_exp_usize = usize::try_from(adj_exp_int).ok()?;
+
+                num::traits::checked_pow(adj_base, adj_exp_usize)
             }
         });
         add_primitives!(eg, "log" = |a: Q| -> Option<Q> {
