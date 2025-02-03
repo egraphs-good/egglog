@@ -212,11 +212,6 @@ impl Function {
         res
     }
 
-    /// Mark the given inputs as subsumed.
-    pub fn subsume(&mut self, inputs: &[Value]) {
-        self.nodes.get_mut(inputs).unwrap().subsumed = true;
-    }
-
     /// Return a column index that contains (a superset of) the offsets for the
     /// given column. This method can return nothing if the indexes available
     /// contain too many irrelevant offsets.

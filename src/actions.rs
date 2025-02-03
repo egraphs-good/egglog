@@ -392,10 +392,20 @@ impl EGraph {
                             function.remove(args, self.timestamp);
                         }
                         Change::Subsume => {
-                            if function.decl.merge.is_some() {
+                            if function.decl.subtype != FunctionSubtype::Constructor
+                                && function.decl.subtype != FunctionSubtype::Relation
+                            {
                                 return Err(Error::SubsumeMergeError(*f));
                             }
-                            function.subsume(args);
+                            function
+                                .nodes
+                                .insert_and_merge(args, self.timestamp, true, |old| {
+                                    old.unwrap_or_else(|| Value {
+                                        #[cfg(debug_assertions)]
+                                        tag: function.schema.output.name(),
+                                        bits: self.unionfind.make_set(),
+                                    })
+                                });
                         }
                     }
                     stack.truncate(new_len);

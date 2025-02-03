@@ -350,8 +350,9 @@ fn test_subsume() {
 }
 
 #[test]
-fn test_subsume_primitive() {
-    // Test that we can subsume a primitive
+fn test_subsume_custom() {
+    // Test that we can't subsume  a custom function
+    // Only relations and constructors are allowed to be subsumed
 
     let mut egraph = EGraph::default();
     let res = egraph.parse_and_run_program(
@@ -360,6 +361,29 @@ fn test_subsume_primitive() {
         (function one () i64 :no-merge)
         (set (one) 1)
         (subsume (one))
+        "#,
+    );
+    assert!(res.is_err());
+}
+
+#[test]
+fn test_subsume_ok() {
+    let mut egraph = EGraph::default();
+    let res = egraph.parse_and_run_program(
+        None,
+        r#"
+        (sort E)
+        (constructor one () E)
+        (constructor two () E)
+        (one)
+        (subsume (one))
+        ;; subsuming a non-existent tuple
+        (subsume (two))
+
+        (relation R (i64))
+        (R 1)
+        (subsume (R 1))
+        (subsume (R 2))
         "#,
     );
     assert!(res.is_ok());
@@ -432,7 +456,7 @@ fn test_serialize_subsume_status() {
         None,
         egglog::SerializedNode::Function {
             name: ("a").into(),
-            offset: 0,
+            offset: 1,
         },
     );
     let b_id = egraph.to_node_id(
