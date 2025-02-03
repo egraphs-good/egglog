@@ -217,16 +217,19 @@ fn map_fallible<T>(
         .collect::<Result<_, _>>()
 }
 
-pub trait Macro<T> {
+pub trait Macro<T>: Send + Sync {
     fn name(&self) -> Symbol;
     fn parse(&self, args: &[Sexp], span: Span, parser: &mut Parser) -> Result<T, ParseError>;
 }
 
-pub struct SimpleMacro<T, F: Fn(&[Sexp], Span, &mut Parser) -> Result<T, ParseError>>(Symbol, F);
+pub struct SimpleMacro<T, F: Fn(&[Sexp], Span, &mut Parser) -> Result<T, ParseError> + Send + Sync>(
+    Symbol,
+    F,
+);
 
 impl<T, F> SimpleMacro<T, F>
 where
-    F: Fn(&[Sexp], Span, &mut Parser) -> Result<T, ParseError>,
+    F: Fn(&[Sexp], Span, &mut Parser) -> Result<T, ParseError> + Send + Sync,
 {
     pub fn new(head: &str, f: F) -> Self {
         Self(head.into(), f)
@@ -235,7 +238,7 @@ where
 
 impl<T, F> Macro<T> for SimpleMacro<T, F>
 where
-    F: Fn(&[Sexp], Span, &mut Parser) -> Result<T, ParseError>,
+    F: Fn(&[Sexp], Span, &mut Parser) -> Result<T, ParseError> + Send + Sync,
 {
     fn name(&self) -> Symbol {
         self.0
