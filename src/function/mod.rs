@@ -155,17 +155,11 @@ impl Function {
             .collect();
 
         let new_backend_id = {
-            use egglog_bridge::{ColumnTy, DefaultVal, MergeFn};
+            use egglog_bridge::{DefaultVal, MergeFn};
             let schema = input
                 .iter()
                 .chain([&output])
-                .map(|sort| {
-                    if sort.is_eq_sort() {
-                        ColumnTy::Id
-                    } else {
-                        todo!()
-                    }
-                })
+                .map(EGraph::column_ty)
                 .collect();
             let default = match decl.subtype {
                 FunctionSubtype::Constructor => DefaultVal::FreshId,
