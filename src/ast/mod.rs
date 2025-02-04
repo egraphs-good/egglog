@@ -18,7 +18,10 @@ pub(crate) enum Ruleset {
     /// Use an [`IndexMap`] to ensure egglog is deterministic.
     /// Rules added to the [`IndexMap`] first apply their
     /// actions first.
-    Rules(Symbol, IndexMap<Symbol, CompiledRule>),
+    Rules(
+        Symbol,
+        IndexMap<Symbol, (CompiledRule, egglog_bridge::RuleId)>,
+    ),
     /// A combined ruleset may contain other rulesets.
     Combined(Symbol, Vec<Symbol>),
 }

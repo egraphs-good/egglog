@@ -933,7 +933,7 @@ impl EGraph {
                 let copy_rules = rule_names.clone();
                 let search_start = Instant::now();
 
-                for (rule_name, rule) in copy_rules.iter() {
+                for (rule_name, (rule, _)) in copy_rules.iter() {
                     let mut all_matches = vec![];
                     let rule_search_start = Instant::now();
                     let mut did_match = false;
@@ -991,7 +991,7 @@ impl EGraph {
                         all_matches,
                         did_match,
                     } = search_results.get(&rule_name).unwrap();
-                    let rule = compiled_rules.get(&rule_name).unwrap();
+                    let (rule, _) = compiled_rules.get(&rule_name).unwrap();
                     let num_vars = rule.query.vars.len();
 
                     // make sure the query requires matches
@@ -1047,8 +1047,17 @@ impl EGraph {
         let mut search_results = HashMap::<Symbol, SearchResult>::default();
         self.search_rules(ruleset, &mut run_report, &mut search_results);
         self.apply_rules(ruleset, &mut run_report, &search_results);
-        run_report.updated |=
-            self.did_change_tables() || n_unions_before != self.unionfind.n_unions();
+        let old_updated = self.did_change_tables() || n_unions_before != self.unionfind.n_unions();
+        run_report.updated |= old_updated;
+
+        {
+            let rule_ids: Vec<_> = match &self.rulesets[&ruleset] {
+                Ruleset::Rules(_, xs) => xs.iter().map(|(_, (_, x))| *x).collect(),
+                Ruleset::Combined(_, _sub_rulesets) => todo!(),
+            };
+            let new_updated = self.backend.run_rules(&rule_ids).unwrap();
+            assert_eq!(old_updated, new_updated);
+        }
 
         run_report
     }
@@ -1081,7 +1090,7 @@ impl EGraph {
             rule.to_canonicalized_core_rule(&self.type_info, &mut self.parser.symbol_gen)?;
         let (query, actions) = (core_rule.body, core_rule.head);
 
-        {
+        let rule_id = {
             use core::*;
             let mut rb = self.backend.new_rule_described(name.into());
             let mut entries: HashMap<ResolvedAtomTerm, egglog_bridge::QueryEntry> =
@@ -1168,8 +1177,8 @@ impl EGraph {
                     GenericCoreAction::Panic(_, _msg) => todo!("no panic yet"),
                 }
             }
-            // TODO: build and store rule id
-        }
+            rb.build_described(name.to_string())
+        };
 
         let vars = query.get_vars();
         let query = self.compile_gj_query(query, &vars);
@@ -1185,7 +1194,7 @@ impl EGraph {
                         indexmap::map::Entry::Occupied(_) => {
                             panic!("Rule '{name}' was already present")
                         }
-                        indexmap::map::Entry::Vacant(e) => e.insert(compiled_rule),
+                        indexmap::map::Entry::Vacant(e) => e.insert((compiled_rule, rule_id)),
                     };
                     Ok(name)
                 }
