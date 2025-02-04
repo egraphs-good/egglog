@@ -1063,6 +1063,14 @@ impl EGraph {
         false
     }
 
+    fn column_ty(sort: &ArcSort) -> egglog_bridge::ColumnTy {
+        if sort.is_eq_sort() {
+            egglog_bridge::ColumnTy::Id
+        } else {
+            todo!("implement primitives")
+        }
+    }
+
     fn add_rule_with_name(
         &mut self,
         name: Symbol,
@@ -1076,29 +1084,88 @@ impl EGraph {
         {
             use core::*;
             let mut rb = self.backend.new_rule_described(name.into());
-            let vars: IndexMap<ResolvedAtomTerm, egglog_bridge::QueryEntry> = HashMap::default();
+            let mut entries: HashMap<ResolvedAtomTerm, egglog_bridge::QueryEntry> =
+                HashMap::default();
+            let entry = |rb: &mut egglog_bridge::RuleBuilder,
+                         entries: &mut HashMap<ResolvedAtomTerm, egglog_bridge::QueryEntry>,
+                         x: &ResolvedAtomTerm| {
+                entries
+                    .entry(x.clone())
+                    .or_insert_with(|| match x {
+                        GenericAtomTerm::Var(_, v) => {
+                            rb.new_var_named(EGraph::column_ty(&v.sort), v.name.into())
+                        }
+                        GenericAtomTerm::Literal(_, _l) => {
+                            todo!("look up Value for l in self.backend.primitives?")
+                        }
+                        GenericAtomTerm::Global(..) => {
+                            panic!("Globals should have been desugared")
+                        }
+                    })
+                    .clone()
+            };
             for atom in &query.atoms {
                 match &atom.head {
-                    ResolvedCall::Func(_f) => todo!(),
+                    ResolvedCall::Func(f) => {
+                        let f = self.functions[&f.name].new_backend_id;
+                        let args: Vec<_> = atom
+                            .args
+                            .iter()
+                            .map(|x| entry(&mut rb, &mut entries, x))
+                            .collect();
+                        rb.add_atom(f.into(), &args).unwrap()
+                    }
                     ResolvedCall::Primitive(..) => todo!(),
                 }
             }
             for action in &actions.0 {
                 match action {
-                    GenericCoreAction::Let(_, _v, _f, _xs) => todo!(),
-                    GenericCoreAction::LetAtomTerm(_, _v, _x) => todo!(),
-                    GenericCoreAction::Extract(_, _x, _n) => todo!(),
-                    GenericCoreAction::Set(_, f, xs, y) => match f {
+                    GenericCoreAction::Let(span, v, f, xs) => match f {
                         ResolvedCall::Func(f) => {
-                            let entries: Vec<_> =
-                                xs.iter().chain([y]).map(|x| vars[x].clone()).collect();
-                            rb.set(self.functions[&f.name].new_backend_id, &entries)
+                            let f = self.functions[&f.name].new_backend_id;
+                            let xs: Vec<_> =
+                                xs.iter().map(|x| entry(&mut rb, &mut entries, x)).collect();
+                            let v = GenericAtomTerm::Var(span.clone(), v.clone());
+                            entries.insert(v, rb.lookup(f.into(), &xs).into());
                         }
                         ResolvedCall::Primitive(..) => todo!(),
                     },
-                    GenericCoreAction::Change(_, _change, _f, _xs) => todo!(),
-                    GenericCoreAction::Union(_, x, y) => rb.union(vars[x].clone(), vars[y].clone()),
-                    GenericCoreAction::Panic(_, _msg) => todo!(),
+                    GenericCoreAction::LetAtomTerm(span, v, x) => {
+                        let v = GenericAtomTerm::Var(span.clone(), v.clone());
+                        let x = entry(&mut rb, &mut entries, x);
+                        entries.insert(v, x);
+                    }
+                    GenericCoreAction::Extract(_, _x, _n) => todo!("no extraction yet"),
+                    GenericCoreAction::Set(_, f, xs, y) => match f {
+                        ResolvedCall::Func(f) => {
+                            let f = self.functions[&f.name].new_backend_id;
+                            let xs: Vec<_> = xs
+                                .iter()
+                                .chain([y])
+                                .map(|x| entry(&mut rb, &mut entries, x))
+                                .collect();
+                            rb.set(f, &xs)
+                        }
+                        ResolvedCall::Primitive(..) => todo!(),
+                    },
+                    GenericCoreAction::Change(_, change, f, xs) => match f {
+                        ResolvedCall::Primitive(..) => todo!("this shouldn't be allowed, right?"),
+                        ResolvedCall::Func(f) => match change {
+                            Change::Delete => {
+                                let f = self.functions[&f.name].new_backend_id;
+                                let xs: Vec<_> =
+                                    xs.iter().map(|x| entry(&mut rb, &mut entries, x)).collect();
+                                rb.remove(f, &xs)
+                            }
+                            Change::Subsume => todo!("no subsumption yet"),
+                        },
+                    },
+                    GenericCoreAction::Union(_, x, y) => {
+                        let x = entry(&mut rb, &mut entries, x);
+                        let y = entry(&mut rb, &mut entries, y);
+                        rb.union(x, y)
+                    }
+                    GenericCoreAction::Panic(_, _msg) => todo!("no panic yet"),
                 }
             }
             // TODO: build and store rule id
