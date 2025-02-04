@@ -162,9 +162,9 @@ impl EGraph {
             if should_eval(&cmd_buffer) {
                 run_command_in_scripting(self, &cmd_buffer, &mut output)?;
                 cmd_buffer = String::new();
+                print!("{}", prompt);
+                stdout().flush()?;
             }
-            print!("{}", prompt);
-            stdout().flush()?;
         }
 
         if !cmd_buffer.is_empty() {
