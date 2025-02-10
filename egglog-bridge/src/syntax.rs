@@ -8,7 +8,7 @@
 //! * Syntax is needed on some level when representing proofs, particularly when
 //!   those proofs need to be serialized to an external checker.
 
-use std::{fmt, rc::Rc};
+use std::{fmt, sync::Arc};
 
 use core_relations::PrimitiveFunctionId;
 
@@ -33,7 +33,7 @@ pub(crate) struct Binding {
     pub var: Variable,
     /// A syntactic egglog atom (e.g. the head of a term (F x_0 ... x_n) where
     /// x_i are variables and F is either an egglog function or a primitive).
-    pub syntax: Rc<TermFragment<Variable>>,
+    pub syntax: Arc<TermFragment<Variable>>,
 }
 
 /// An atomic entry in an atom.

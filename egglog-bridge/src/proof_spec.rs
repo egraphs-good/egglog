@@ -1,4 +1,4 @@
-use std::{iter, rc::Rc};
+use std::{iter, rc::Rc, sync::Arc};
 
 use core_relations::{
     ColumnId, DisplacedTableWithProvenance, PrimitiveFunctionId, PrimitivePrinter,
@@ -28,7 +28,7 @@ pub(crate) enum ProofReason {
     CongRow,
     /// A row that was created with no added justification (e.g. base values).
     Fiat {
-        desc: Rc<str>,
+        desc: Arc<str>,
     },
 }
 
@@ -41,7 +41,7 @@ pub(crate) enum CaonicalIdRef {
 #[derive(Debug)]
 pub(crate) struct RuleData {
     rule_id: RuleId,
-    desc: Rc<str>,
+    desc: Arc<str>,
     insert_to: Insertable,
     /// The atoms on the LHS of the rule.
     lhs_atoms: Vec<Vec<QueryEntry>>,
@@ -104,10 +104,10 @@ pub(crate) enum Insertable {
     UnionFind,
 }
 
-pub(crate) type SyntaxEnv = HashMap<Variable, Rc<TermFragment<Variable>>>;
+pub(crate) type SyntaxEnv = HashMap<Variable, Arc<TermFragment<Variable>>>;
 
 pub(crate) struct ProofBuilder {
-    rule_description: Rc<str>,
+    rule_description: Arc<str>,
     rule_id: RuleId,
     lhs_atoms: Vec<Vec<QueryEntry>>,
     /// The atom against which to compare during proofs. Serves as a guide for
@@ -233,7 +233,7 @@ impl ProofBuilder {
         db: &mut EGraph,
     ) -> impl Fn(&mut Bindings, &mut RuleBuilder) -> Result<()> + Clone {
         // TODO/optimization: we only ever need one CongRow reason.
-        let reason_spec = Rc::new(ProofReason::CongRow);
+        let reason_spec = Arc::new(ProofReason::CongRow);
         let reason_table = db.reason_table(&reason_spec);
         let reason_spec_id = db.proof_specs.push(reason_spec);
         let reason_counter = db.reason_counter;
@@ -276,7 +276,7 @@ impl ProofBuilder {
     ) -> impl Fn(&mut Bindings, &mut RuleBuilder) -> Result<()> + Clone {
         // NB: we could cache these.
         let (to_materialize, canonical_mapping) = self.canonical_mappings();
-        let spec = Rc::new(ProofReason::Rule(RuleData {
+        let spec = Arc::new(ProofReason::Rule(RuleData {
             desc: self.rule_description.clone(),
             insert_to,
             rule_id: self.rule_id,
@@ -349,7 +349,7 @@ impl ProofBuilder {
         let term_table = db.term_table(func_table);
         let func_val = Value::new(func.rep());
         let res_var = entries.last().unwrap().var();
-        let rhs_term = Rc::new(TermFragment::App(
+        let rhs_term = Arc::new(TermFragment::App(
             func,
             entries[..entries.len() - 1]
                 .iter()
@@ -383,7 +383,7 @@ impl ProofBuilder {
         res: Variable,
         db: &EGraph,
     ) {
-        let app = Rc::new(TermFragment::Prim(
+        let app = Arc::new(TermFragment::Prim(
             func,
             args.iter().map(|v| v.to_syntax(db).unwrap()).collect(),
         ));
@@ -594,7 +594,7 @@ impl EGraph {
         let new_term = self.get_term_row(new_term_id);
         let func_id = FunctionId::new(old_term[0].rep());
         let info = &self.funcs[func_id];
-        let func: Rc<str> = info.name.clone();
+        let func: Arc<str> = info.name.clone();
         let schema = info.schema.clone();
         let pairwise_eq = self.lift_to_values(
             old_term[1..]

@@ -67,7 +67,7 @@ pub struct EGraph {
     rules: DenseIdMap<RuleId, RuleInfo>,
     next_rule: RuleId,
     funcs: DenseIdMap<FunctionId, FunctionInfo>,
-    proof_specs: DenseIdMap<ReasonSpecId, Rc<ProofReason>>,
+    proof_specs: DenseIdMap<ReasonSpecId, Arc<ProofReason>>,
     /// Side tables used to store proof information. We initialize these lazily
     /// as a proof object with a given number of parameters is added.
     reason_tables: IndexMap<usize /* arity */, TableId>,
@@ -341,7 +341,7 @@ impl EGraph {
     }
 
     fn get_fiat_reason(&mut self, desc: &str) -> Value {
-        let reason = Rc::new(ProofReason::Fiat { desc: desc.into() });
+        let reason = Arc::new(ProofReason::Fiat { desc: desc.into() });
         let reason_table = self.reason_table(&reason);
         let reason_spec_id = self.proof_specs.push(reason);
         let reason_id = Value::from_usize(self.db.inc_counter(self.reason_counter));
@@ -912,7 +912,7 @@ struct FunctionInfo {
     incremental_rebuild_rules: Vec<RuleId>,
     nonincremental_rebuild_rule: RuleId,
     default_val: DefaultVal,
-    name: Rc<str>,
+    name: Arc<str>,
 }
 
 impl FunctionInfo {

@@ -4,8 +4,7 @@
 //! parameterized by a range of timestamps used as constraints during seminaive
 //! evaluation.
 
-use std::iter;
-use std::{cmp::Ordering, rc::Rc};
+use std::{cmp::Ordering, iter, sync::Arc};
 
 use anyhow::Context;
 use core_relations::{
@@ -130,8 +129,8 @@ impl From<PrimitiveFunctionId> for Function {
     }
 }
 
-trait Brc: Fn(&mut Bindings, &mut CoreRuleBuilder) -> Result<()> + dyn_clone::DynClone {}
-impl<T: Fn(&mut Bindings, &mut CoreRuleBuilder) -> Result<()> + Clone> Brc for T {}
+trait Brc: Fn(&mut Bindings, &mut CoreRuleBuilder) -> Result<()> + dyn_clone::DynClone + Send {}
+impl<T: Fn(&mut Bindings, &mut CoreRuleBuilder) -> Result<()> + Clone + Send> Brc for T {}
 dyn_clone::clone_trait_object!(Brc);
 type BuildRuleCallback = Box<dyn Brc>;
 
@@ -377,7 +376,7 @@ impl RuleBuilder<'_> {
             self.query.atom_proofs.push(proof_var);
             if let Some(func) = func {
                 // If we have a function, record its syntax as a LHS term.
-                let term = Rc::new(TermFragment::App(
+                let term = Arc::new(TermFragment::App(
                     func,
                     entries[0..entries.len() - 1]
                         .iter()
@@ -489,7 +488,7 @@ impl RuleBuilder<'_> {
                             })
                     })?;
 
-                let lhs_term = Rc::new(TermFragment::Prim(
+                let lhs_term = Arc::new(TermFragment::Prim(
                     p,
                     entries[..entries.len() - 1]
                         .iter()

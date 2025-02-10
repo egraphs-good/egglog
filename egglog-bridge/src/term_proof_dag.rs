@@ -7,6 +7,7 @@ use std::{
     fmt,
     io::{self, Write},
     rc::Rc,
+    sync::Arc,
 };
 
 use hashbrown::{hash_map::Entry, HashMap};
@@ -67,15 +68,15 @@ pub enum TermProof {
     /// * Each argument in `r` is equal to `r'`.
     Cong {
         func_id: FunctionId,
-        func: Rc<str>,
+        func: Arc<str>,
         old_term: Rc<TermProof>,
         pairwise_eq: Vec<TermValue<EqProof>>,
     },
     /// The base case of a proof. Terms that were added as base values to the
     /// database.
     Fiat {
-        desc: Rc<str>,
-        func: Rc<str>,
+        desc: Arc<str>,
+        func: Arc<str>,
         func_id: FunctionId,
         row: Vec<TermValue<TermProof>>,
     },
@@ -85,9 +86,9 @@ pub enum TermProof {
         rule_id: RuleId,
         lhs_atoms: usize,
         rhs_atoms: usize,
-        rule_desc: Rc<str>,
+        rule_desc: Arc<str>,
         atom_desc: Rc<str>,
-        func: Rc<str>,
+        func: Arc<str>,
         // NB: "none" means that this is a non-function, like "union".
         func_id: RuleTarget,
         row: Vec<TermValue<TermProof>>,
@@ -432,7 +433,7 @@ pub struct PrimitiveConstant {
     /// primitives associated with an egraph.
     pub(crate) interned: Value,
     /// The string representation of the primitive.
-    pub(crate) rendered: Rc<str>,
+    pub(crate) rendered: Arc<str>,
 }
 
 impl fmt::Display for PrimitiveConstant {
@@ -453,7 +454,7 @@ pub enum Term {
     Prim(PrimitiveConstant),
     Expr {
         func_id: FunctionId,
-        func: Rc<str>,
+        func: Arc<str>,
         subterms: Vec<Rc<Term>>,
     },
 }

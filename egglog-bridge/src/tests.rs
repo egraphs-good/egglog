@@ -701,3 +701,8 @@ fn basic_container() {
         container_test()
     }
 }
+
+const _: () = {
+    const fn assert_send<T: Send>() {}
+    assert_send::<EGraph>()
+};
