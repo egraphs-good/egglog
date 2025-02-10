@@ -44,8 +44,8 @@ macro_rules! span {
 impl Span {
     pub fn string(&self) -> &str {
         match self {
-            Span::Panic => panic!("Span::Panic in Span::String"),
-            Span::Rust(_) => todo!(),
+            Span::Panic => panic!("Span::Panic in Span::string"),
+            Span::Rust(_) => panic!("Span::Rust cannot track end position"),
             Span::Egglog(span) => &span.file.contents[span.i..span.j],
         }
     }
