@@ -43,6 +43,10 @@ impl EGraph {
         termdag: &mut TermDag,
         arcsort: &ArcSort,
     ) -> Result<(Cost, Term), Error> {
+        if true {
+            todo!("extraction")
+        }
+
         let extractor = Extractor::new(self, termdag);
         extractor.find_best(value, termdag, arcsort).ok_or_else(|| {
             log::error!("No cost for {:?}", value);
