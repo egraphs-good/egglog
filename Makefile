@@ -56,3 +56,10 @@ json: $(patsubst %.egg,%.json,$(filter-out $(wildcard tests/repro-*.egg),$(wildc
 
 rm-graphs:
 	rm -f tests/*.dot tests/*.svg
+
+# TODO: remove before merging
+collect-todos:
+	cargo nextest run -r --no-fail-fast 2>&1 >/dev/null \
+	| grep "not yet implemented:" \
+	| sort \
+	| uniq
