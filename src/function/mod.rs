@@ -167,10 +167,10 @@ impl Function {
             };
             let merge = match decl.subtype {
                 FunctionSubtype::Constructor => MergeFn::UnionId,
-                FunctionSubtype::Relation => todo!(),
+                FunctionSubtype::Relation => todo!("relation merge fn"),
                 FunctionSubtype::Custom => match &decl.merge {
-                    Some(_merge_expr) => todo!(),
-                    None => todo!(),
+                    Some(_merge_expr) => todo!("custom merge fn"),
+                    None => todo!("assert eq merge fn"),
                 },
             };
             let name = decl.name.into();
