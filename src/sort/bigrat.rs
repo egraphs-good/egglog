@@ -91,7 +91,7 @@ impl Sort for BigRatSort {
             if a.is_one() {
                 Some(Q::zero())
             } else {
-                todo!()
+                todo!("log of bigrat")
             }
         });
         add_primitives!(eg, "sqrt" = |a: Q| -> Option<Q> {
@@ -112,7 +112,7 @@ impl Sort for BigRatSort {
             if a.is_one() {
                 Some(Q::one())
             } else {
-                todo!()
+                todo!("cbrt of bigrat")
             }
         });
 

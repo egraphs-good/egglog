@@ -1061,7 +1061,7 @@ impl EGraph {
         {
             let rule_ids: Vec<_> = match &self.rulesets[&ruleset] {
                 Ruleset::Rules(_, xs) => xs.iter().map(|(_, (_, x))| *x).collect(),
-                Ruleset::Combined(_, _sub_rulesets) => todo!(),
+                Ruleset::Combined(_, _sub_rulesets) => todo!("running combined rulesets"),
             };
             let new_updated = self.backend.run_rules(&rule_ids).unwrap();
             assert_eq!(old_updated, new_updated);
@@ -1132,7 +1132,7 @@ impl EGraph {
                             .collect();
                         rb.add_atom(f.into(), &args).unwrap()
                     }
-                    ResolvedCall::Primitive(..) => todo!(),
+                    ResolvedCall::Primitive(..) => todo!("primitives in queries"),
                 }
             }
             for action in &actions.0 {
@@ -1145,7 +1145,7 @@ impl EGraph {
                             let v = GenericAtomTerm::Var(span.clone(), v.clone());
                             entries.insert(v, rb.lookup(f.into(), &xs).into());
                         }
-                        ResolvedCall::Primitive(..) => todo!(),
+                        ResolvedCall::Primitive(..) => todo!("primitives in actions"),
                     },
                     GenericCoreAction::LetAtomTerm(span, v, x) => {
                         let v = GenericAtomTerm::Var(span.clone(), v.clone());
@@ -1163,7 +1163,7 @@ impl EGraph {
                                 .collect();
                             rb.set(f, &xs)
                         }
-                        ResolvedCall::Primitive(..) => todo!(),
+                        ResolvedCall::Primitive(..) => todo!("primitives in actions"),
                     },
                     GenericCoreAction::Change(_, change, f, xs) => match f {
                         ResolvedCall::Primitive(..) => todo!("this shouldn't be allowed, right?"),
