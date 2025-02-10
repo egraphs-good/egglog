@@ -720,6 +720,10 @@ impl EGraph {
         sym: Symbol,
         n: usize,
     ) -> Result<(Vec<(Term, Term)>, TermDag), Error> {
+        if true {
+            todo!("function_to_dag")
+        }
+
         let f = self
             .functions
             .get(&sym)
@@ -805,6 +809,10 @@ impl EGraph {
     }
 
     pub fn print_size(&mut self, sym: Option<Symbol>) -> Result<(), Error> {
+        if true {
+            todo!("print_size")
+        }
+
         if let Some(sym) = sym {
             let f = self
                 .functions
@@ -1214,6 +1222,10 @@ impl EGraph {
     }
 
     fn eval_actions(&mut self, actions: &ResolvedActions) -> Result<(), Error> {
+        if true {
+            todo!("eval_actions")
+        }
+
         let (actions, _) = actions.to_core_actions(
             &self.type_info,
             &mut Default::default(),
@@ -1283,6 +1295,10 @@ impl EGraph {
     }
 
     fn check_facts(&mut self, span: &Span, facts: &[ResolvedFact]) -> Result<(), Error> {
+        if true {
+            todo!("check_facts");
+        }
+
         let rule = ast::ResolvedRule {
             span: span.clone(),
             head: ResolvedActions::default(),
@@ -1450,6 +1466,10 @@ impl EGraph {
     }
 
     fn input_file(&mut self, func_name: Symbol, file: String) -> Result<(), Error> {
+        if true {
+            todo!("input_file")
+        }
+
         let function_type = self
             .type_info
             .lookup_user_func(func_name)
