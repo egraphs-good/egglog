@@ -130,7 +130,7 @@ impl EGraph {
         // Note that this is only for e-classes, primitives have e-classes equal to their node ID
         // This is for when we need to find what node ID to use for an edge to an e-class, we can rotate them evenly
         // amoung all possible options.
-        let mut node_ids: NodeIDs = all_calls.iter().fold(
+        let node_ids: NodeIDs = all_calls.iter().fold(
             HashMap::default(),
             |mut acc, (func, _input, _output, class_id, node_id)| {
                 if func.schema.output.is_eq_sort() {
