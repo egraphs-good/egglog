@@ -43,4 +43,5 @@ collect-todos:
 	cargo nextest run -r --no-fail-fast 2>&1 >/dev/null \
 	| grep "not yet implemented:" \
 	| sort \
-	| uniq
+	| uniq -c \
+	| sort -n
