@@ -7,7 +7,7 @@ use crate::{core::*, function::index::Offset, *};
 use std::{
     cell::UnsafeCell,
     fmt::{self, Debug},
-    ops::Range,
+    ops::Range, rc::Rc,
 };
 
 type Query = crate::core::Query<ResolvedCall, Symbol>;
@@ -797,7 +797,7 @@ type RowIdx = u32;
 #[derive(Debug)]
 enum LazyTrieInner {
     Borrowed {
-        index: Arc<ColumnIndex>,
+        index: Rc<ColumnIndex>,
         map: HashMap<Value, LazyTrie>,
     },
     Delayed(SmallVec<[RowIdx; 4]>),
@@ -822,7 +822,7 @@ impl LazyTrie {
             LazyTrieInner::Borrowed { index, .. } => index.len(),
         }
     }
-    fn from_column_index(index: Arc<ColumnIndex>) -> LazyTrie {
+    fn from_column_index(index: Rc<ColumnIndex>) -> LazyTrie {
         LazyTrie(UnsafeCell::new(LazyTrieInner::Borrowed {
             index,
             map: Default::default(),

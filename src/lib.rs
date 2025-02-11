@@ -1658,8 +1658,4 @@ mod tests {
             )
             .unwrap();
     }
-
-    lazy_static! {
-        pub static ref RT: Mutex<EGraph> = Mutex::new(EGraph::default());
-    }
 }

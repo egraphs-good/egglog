@@ -1,4 +1,4 @@
-use std::mem;
+use std::{mem, rc::Rc};
 
 use crate::*;
 use index::*;
@@ -17,7 +17,7 @@ pub struct Function {
     pub merge: MergeFn,
     pub(crate) nodes: table::Table,
     sorts: HashSet<Symbol>,
-    pub(crate) indexes: Vec<Arc<ColumnIndex>>,
+    pub(crate) indexes: Vec<Rc<ColumnIndex>>,
     pub(crate) rebuild_indexes: Vec<Option<CompositeColumnIndex>>,
     index_updated_through: usize,
     updates: usize,
@@ -136,7 +136,7 @@ impl Function {
             input
                 .iter()
                 .chain(once(&output))
-                .map(|x| Arc::new(ColumnIndex::new(x.name()))),
+                .map(|x| Rc::new(ColumnIndex::new(x.name()))),
         );
 
         let rebuild_indexes = Vec::from_iter(input.iter().chain(once(&output)).map(|x| {
@@ -179,7 +179,7 @@ impl Function {
         self.nodes.clear();
         self.indexes
             .iter_mut()
-            .for_each(|x| Arc::make_mut(x).clear());
+            .for_each(|x| Rc::make_mut(x).clear());
         self.rebuild_indexes.iter_mut().for_each(|x| {
             if let Some(x) = x {
                 x.clear()
@@ -219,7 +219,7 @@ impl Function {
         &self,
         col: usize,
         timestamps: &Range<u32>,
-    ) -> Option<Arc<ColumnIndex>> {
+    ) -> Option<Rc<ColumnIndex>> {
         let range = self.nodes.transform_range(timestamps);
         if range.end > self.index_updated_through {
             return None;
@@ -250,7 +250,7 @@ impl Function {
             .zip(self.rebuild_indexes.iter_mut())
             .enumerate()
         {
-            let as_mut = Arc::make_mut(index);
+            let as_mut = Rc::make_mut(index);
             if col == self.schema.input.len() {
                 for (slot, _, out) in self.nodes.iter_range(offsets.clone(), true) {
                     as_mut.add(out.value, slot)
@@ -295,7 +295,7 @@ impl Function {
         for index in &mut self.indexes {
             // Everything works if we don't have a unique copy of the indexes,
             // but we ought to be able to avoid this copy.
-            Arc::make_mut(index).clear();
+            Rc::make_mut(index).clear();
         }
         for rebuild_index in self.rebuild_indexes.iter_mut().flatten() {
             rebuild_index.clear();
