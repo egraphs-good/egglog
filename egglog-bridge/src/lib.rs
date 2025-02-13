@@ -63,7 +63,7 @@ pub struct EGraph {
     uf_table: TableId,
     id_counter: CounterId,
     reason_counter: CounterId,
-    timetstamp_counter: CounterId,
+    timestamp_counter: CounterId,
     rules: DenseIdMap<RuleId, RuleInfo>,
     next_rule: RuleId,
     funcs: DenseIdMap<FunctionId, FunctionInfo>,
@@ -119,7 +119,7 @@ impl EGraph {
             uf_table,
             id_counter,
             reason_counter: trace_counter,
-            timetstamp_counter: ts_counter,
+            timestamp_counter: ts_counter,
             rules: Default::default(),
             funcs: Default::default(),
             next_rule: RuleId::new(0),
@@ -133,11 +133,11 @@ impl EGraph {
     }
 
     fn next_ts(&self) -> Timestamp {
-        Timestamp::from_usize(self.db.read_counter(self.timetstamp_counter))
+        Timestamp::from_usize(self.db.read_counter(self.timestamp_counter))
     }
 
     fn inc_ts(&mut self) {
-        self.db.inc_counter(self.timetstamp_counter);
+        self.db.inc_counter(self.timestamp_counter);
     }
 
     /// Get a mutable reference to the underlying table of primitives for this
@@ -170,7 +170,7 @@ impl EGraph {
     /// of containers with a common id.
     pub fn register_container_ty<C: Container>(&mut self) {
         let uf_table = self.uf_table;
-        let ts_counter = self.timetstamp_counter;
+        let ts_counter = self.timestamp_counter;
         self.db
             .containers_mut()
             .register_type::<C>(self.id_counter, move |state, old, new| {
@@ -977,7 +977,7 @@ fn marker_nonincremental_rebuild<R>(f: impl FnOnce() -> R) -> R {
 /// particular query.
 //
 // TODO: once we have parallelism wired in, we'll want to replace this with a
-// more efficient solution (e.g. one baesd on crossbeam or arcswap).
+// more efficient solution (e.g. one based on crossbeam or arcswap).
 #[derive(Clone)]
 pub(crate) struct GetFirstMatch {
     pub(crate) side_channel: Arc<Mutex<Option<Vec<Value>>>>,
