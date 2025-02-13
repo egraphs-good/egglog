@@ -67,13 +67,14 @@ pub struct EGraph {
     rules: DenseIdMap<RuleId, RuleInfo>,
     next_rule: RuleId,
     funcs: DenseIdMap<FunctionId, FunctionInfo>,
+    get_first_id: ExternalFunctionId,
+    get_first_result: SideChannel<Vec<Value>>,
+    panic_message: SideChannel<String>,
     proof_specs: DenseIdMap<ReasonSpecId, Arc<ProofReason>>,
     /// Side tables used to store proof information. We initialize these lazily
     /// as a proof object with a given number of parameters is added.
     reason_tables: IndexMap<usize /* arity */, TableId>,
     term_tables: IndexMap<usize /* arity */, TableId>,
-    side_channel: Arc<Mutex<Option<Vec<Value>>>>,
-    get_first_id: ExternalFunctionId,
     tracing: bool,
 }
 
@@ -109,11 +110,10 @@ impl EGraph {
         let ts_counter = db.add_counter();
         // Start the timestamp counter at 1.
         db.inc_counter(ts_counter);
-        let side_channel = Arc::new(Mutex::new(None));
-        let get_first = GetFirstMatch {
-            side_channel: side_channel.clone(),
-        };
-        let get_first_id = db.add_external_function(get_first);
+
+        let get_first_result = SideChannel::default();
+        let get_first_id = db.add_external_function(GetFirstMatch(get_first_result.clone()));
+
         Self {
             db,
             uf_table,
@@ -121,13 +121,14 @@ impl EGraph {
             reason_counter: trace_counter,
             timestamp_counter: ts_counter,
             rules: Default::default(),
-            funcs: Default::default(),
             next_rule: RuleId::new(0),
+            funcs: Default::default(),
+            get_first_id,
+            get_first_result,
+            panic_message: Default::default(),
             proof_specs: Default::default(),
             reason_tables: Default::default(),
             term_tables: Default::default(),
-            side_channel,
-            get_first_id,
             tracing,
         }
     }
@@ -199,14 +200,6 @@ impl EGraph {
     /// Generate a fresh id.
     pub fn fresh_id(&mut self) -> Value {
         Value::from_usize(self.db.inc_counter(self.id_counter))
-    }
-
-    /// Get the value populated by the `GetFirstMatch` external function and
-    /// clear the side-channel state for that function.
-    ///
-    /// This is a lightweight way to pass information returned by a query.
-    pub(crate) fn take_side_channel(&self) -> Option<Vec<Value>> {
-        self.side_channel.lock().unwrap().take()
     }
 
     /// Look up the canonical value for `val` in the union-find.
@@ -973,24 +966,54 @@ fn marker_nonincremental_rebuild<R>(f: impl FnOnce() -> R) -> R {
     f()
 }
 
+/// A useful type definition for external functions that need to pass data
+/// to outside code, such as `Panic`.
+pub type SideChannel<T> = Arc<Mutex<Option<T>>>;
+
 /// An external function used to grab a value out of the database matching a
 /// particular query.
 //
 // TODO: once we have parallelism wired in, we'll want to replace this with a
 // more efficient solution (e.g. one based on crossbeam or arcswap).
 #[derive(Clone)]
-pub(crate) struct GetFirstMatch {
-    pub(crate) side_channel: Arc<Mutex<Option<Vec<Value>>>>,
-}
+struct GetFirstMatch(SideChannel<Vec<Value>>);
 
 impl ExternalFunction for GetFirstMatch {
     fn invoke(&self, _: &mut core_relations::ExecutionState, args: &[Value]) -> Option<Value> {
-        let mut guard = self.side_channel.lock().unwrap();
+        let mut guard = self.0.lock().unwrap();
         if guard.is_some() {
             return None;
         }
         *guard = Some(args.to_vec());
         Some(Value::new(0))
+    }
+}
+
+/// An external function used to store a message when a panic occurs.
+//
+// TODO: once we have parallelism wired in, we'll want to replace this with a
+// more efficient solution (e.g. one based on crossbeam or arcswap).
+#[derive(Clone)]
+struct Panic(String, SideChannel<String>);
+
+impl EGraph {
+    /// Create a new `ExternalFunction` that panics with the given message.
+    pub fn new_panic(&mut self, message: String) -> ExternalFunctionId {
+        let panic = Panic(message, self.panic_message.clone());
+        self.db.add_external_function(panic)
+    }
+}
+
+impl ExternalFunction for Panic {
+    fn invoke(&self, _: &mut core_relations::ExecutionState, args: &[Value]) -> Option<Value> {
+        // TODO (egglog feature): change this to support interpolating panic messages
+        assert!(args.is_empty());
+
+        let mut guard = self.1.lock().unwrap();
+        if guard.is_none() {
+            *guard = Some(self.0.clone());
+        }
+        None
     }
 }
 

@@ -802,7 +802,7 @@ impl EGraph {
             let rs = rsb.build();
             atom.clear();
             self.db.run_rule_set(&rs);
-            if let Some(vals) = self.take_side_channel() {
+            if let Some(vals) = self.get_first_result.lock().unwrap().take() {
                 return vals;
             }
             cur += 1;
@@ -832,7 +832,7 @@ impl EGraph {
             let rs = rsb.build();
             atom.clear();
             self.db.run_rule_set(&rs);
-            if let Some(vals) = self.take_side_channel() {
+            if let Some(vals) = self.get_first_result.lock().unwrap().take() {
                 return vals;
             }
             cur += 1;
