@@ -669,6 +669,9 @@ impl EGraph {
             return Ok(false);
         }
         self.rebuild()?;
+        if let Some(message) = self.panic_message.lock().unwrap().take() {
+            return Err(PanicError(message).into());
+        }
         Ok(true)
     }
 
