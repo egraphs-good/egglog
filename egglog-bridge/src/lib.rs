@@ -67,8 +67,6 @@ pub struct EGraph {
     rules: DenseIdMap<RuleId, RuleInfo>,
     next_rule: RuleId,
     funcs: DenseIdMap<FunctionId, FunctionInfo>,
-    get_first_id: ExternalFunctionId,
-    get_first_result: SideChannel<Vec<Value>>,
     panic_message: SideChannel<String>,
     proof_specs: DenseIdMap<ReasonSpecId, Arc<ProofReason>>,
     /// Side tables used to store proof information. We initialize these lazily
@@ -111,9 +109,6 @@ impl EGraph {
         // Start the timestamp counter at 1.
         db.inc_counter(ts_counter);
 
-        let get_first_result = SideChannel::default();
-        let get_first_id = db.add_external_function(GetFirstMatch(get_first_result.clone()));
-
         Self {
             db,
             uf_table,
@@ -123,8 +118,6 @@ impl EGraph {
             rules: Default::default(),
             next_rule: RuleId::new(0),
             funcs: Default::default(),
-            get_first_id,
-            get_first_result,
             panic_message: Default::default(),
             proof_specs: Default::default(),
             reason_tables: Default::default(),

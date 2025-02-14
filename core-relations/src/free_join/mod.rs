@@ -17,7 +17,7 @@ use crate::{
         mask::{Mask, MaskIter, ValueSource},
         Bindings, DbView,
     },
-    common::DashMap,
+    common::{DashMap, HashMap},
     dependency_graph::DependencyGraph,
     hash_index::{ColumnIndex, Index},
     offsets::Subset,
@@ -227,7 +227,7 @@ pub struct Database {
     // and incrementing locally. Note that the batch size shouldn't be too big
     // because we keep an array per id in the UF.
     pub(crate) counters: Counters,
-    pub(crate) external_functions: DenseIdMap<ExternalFunctionId, Box<dyn ExternalFunctionExt>>,
+    pub(crate) external_functions: HashMap<ExternalFunctionId, Box<dyn ExternalFunctionExt>>,
     containers: Containers,
     // Tracks the relative dependencies between tables during merge operations.
     deps: DependencyGraph,
@@ -253,7 +253,14 @@ impl Database {
         &mut self,
         f: impl ExternalFunction + 'static,
     ) -> ExternalFunctionId {
-        self.external_functions.push(Box::new(f))
+        let id = ExternalFunctionId::from_usize(self.external_functions.len());
+        self.external_functions.insert(id, Box::new(f));
+        id
+    }
+
+    /// Free an existing external function. Make sure not to use `id` afterwards.
+    pub fn free_external_function(&mut self, id: ExternalFunctionId) {
+        self.external_functions.remove(&id);
     }
 
     pub fn primitives(&self) -> &Primitives {

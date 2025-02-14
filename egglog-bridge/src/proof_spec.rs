@@ -11,7 +11,7 @@ use crate::{
     rule::{Bindings, DstVar, Variable},
     syntax::{Binding, RuleRepresentation, TermFragment},
     term_proof_dag::{EqProof, EqReason, PrimitiveConstant, RuleTarget, TermProof, TermValue},
-    ColumnTy, EGraph, FunctionId, QueryEntry, Result, RuleId,
+    ColumnTy, EGraph, FunctionId, GetFirstMatch, QueryEntry, Result, RuleId, SideChannel,
 };
 
 define_id!(pub(crate) ReasonSpecId, u32, "A unique identifier for the step in a proof.");
@@ -788,21 +788,28 @@ impl EGraph {
             let Some((keys, table)) = self.term_tables.get_index(cur) else {
                 panic!("failed to find term with id {term_id:?}")
             };
-            let mut rsb = self.db.new_rule_set();
-            let mut qb = rsb.new_rule();
-            for _ in 0..*keys + 1 {
-                atom.push(qb.new_var().into());
+
+            let gfm_sc = SideChannel::default();
+            let gfm_id = self.db.add_external_function(GetFirstMatch(gfm_sc.clone()));
+            {
+                let mut rsb = self.db.new_rule_set();
+                let mut qb = rsb.new_rule();
+                for _ in 0..*keys + 1 {
+                    atom.push(qb.new_var().into());
+                }
+                atom.push(term_id.into());
+                atom.push(qb.new_var().into()); // reason
+                qb.add_atom(*table, &atom, iter::empty()).unwrap();
+                let mut rb = qb.build();
+                rb.call_external(gfm_id, &atom).unwrap();
+                rb.build();
+                let rs = rsb.build();
+                atom.clear();
+                self.db.run_rule_set(&rs);
             }
-            atom.push(term_id.into());
-            atom.push(qb.new_var().into()); // reason
-            qb.add_atom(*table, &atom, iter::empty()).unwrap();
-            let mut rb = qb.build();
-            rb.call_external(self.get_first_id, &atom).unwrap();
-            rb.build();
-            let rs = rsb.build();
-            atom.clear();
-            self.db.run_rule_set(&rs);
-            if let Some(vals) = self.get_first_result.lock().unwrap().take() {
+            self.db.free_external_function(gfm_id);
+
+            if let Some(vals) = gfm_sc.lock().unwrap().take() {
                 return vals;
             }
             cur += 1;
@@ -819,20 +826,27 @@ impl EGraph {
                 .reason_tables
                 .get_index(cur)
                 .unwrap_or_else(|| panic!("failed to find reason with id {reason_id:?}"));
-            let mut rsb = self.db.new_rule_set();
-            let mut qb = rsb.new_rule();
-            for _ in 0..*arity {
-                atom.push(qb.new_var().into());
+
+            let gfm_sc = SideChannel::default();
+            let gfm_id = self.db.add_external_function(GetFirstMatch(gfm_sc.clone()));
+            {
+                let mut rsb = self.db.new_rule_set();
+                let mut qb = rsb.new_rule();
+                for _ in 0..*arity {
+                    atom.push(qb.new_var().into());
+                }
+                atom.push(reason_id.into());
+                qb.add_atom(*table, &atom, iter::empty()).unwrap();
+                let mut rb = qb.build();
+                rb.call_external(gfm_id, &atom).unwrap();
+                rb.build();
+                let rs = rsb.build();
+                atom.clear();
+                self.db.run_rule_set(&rs);
             }
-            atom.push(reason_id.into());
-            qb.add_atom(*table, &atom, iter::empty()).unwrap();
-            let mut rb = qb.build();
-            rb.call_external(self.get_first_id, &atom).unwrap();
-            rb.build();
-            let rs = rsb.build();
-            atom.clear();
-            self.db.run_rule_set(&rs);
-            if let Some(vals) = self.get_first_result.lock().unwrap().take() {
+            self.db.free_external_function(gfm_id);
+
+            if let Some(vals) = gfm_sc.lock().unwrap().take() {
                 return vals;
             }
             cur += 1;
