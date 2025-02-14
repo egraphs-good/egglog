@@ -17,7 +17,7 @@ use crate::{
         mask::{Mask, MaskIter, ValueSource},
         Bindings, DbView,
     },
-    common::{DashMap, HashMap},
+    common::DashMap,
     dependency_graph::DependencyGraph,
     hash_index::{ColumnIndex, Index},
     offsets::Subset,
@@ -189,6 +189,39 @@ impl<T: ExternalFunction> ExternalFunctionExt for T {}
 // Implements `Clone` for `Box<dyn ExternalFunctionExt>`.
 dyn_clone::clone_trait_object!(ExternalFunctionExt);
 
+#[derive(Clone, Default)]
+pub(crate) struct ExternalFunctions {
+    data: DenseIdMap<ExternalFunctionId, Box<dyn ExternalFunctionExt>>,
+    free: Vec<ExternalFunctionId>,
+}
+
+impl std::ops::Index<ExternalFunctionId> for ExternalFunctions {
+    type Output = Box<dyn ExternalFunctionExt>;
+    fn index(&self, key: ExternalFunctionId) -> &Box<dyn ExternalFunctionExt> {
+        self.data.get(key).unwrap()
+    }
+}
+
+impl ExternalFunctions {
+    fn push(&mut self, value: Box<dyn ExternalFunctionExt>) -> ExternalFunctionId {
+        match self.free.pop() {
+            None => self.data.push(value),
+            Some(key) => {
+                self.data.insert(key, value);
+                key
+            }
+        }
+    }
+
+    fn take(&mut self, id: ExternalFunctionId) -> Option<Box<dyn ExternalFunctionExt>> {
+        let res = self.data.take(id);
+        if res.is_some() {
+            self.free.push(id);
+        }
+        res
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct Counters(DenseIdMap<CounterId, AtomicUsize>);
 
@@ -227,7 +260,7 @@ pub struct Database {
     // and incrementing locally. Note that the batch size shouldn't be too big
     // because we keep an array per id in the UF.
     pub(crate) counters: Counters,
-    pub(crate) external_functions: HashMap<ExternalFunctionId, Box<dyn ExternalFunctionExt>>,
+    pub(crate) external_functions: ExternalFunctions,
     containers: Containers,
     // Tracks the relative dependencies between tables during merge operations.
     deps: DependencyGraph,
@@ -253,14 +286,12 @@ impl Database {
         &mut self,
         f: impl ExternalFunction + 'static,
     ) -> ExternalFunctionId {
-        let id = ExternalFunctionId::from_usize(self.external_functions.len());
-        self.external_functions.insert(id, Box::new(f));
-        id
+        self.external_functions.push(Box::new(f))
     }
 
     /// Free an existing external function. Make sure not to use `id` afterwards.
     pub fn free_external_function(&mut self, id: ExternalFunctionId) {
-        self.external_functions.remove(&id);
+        self.external_functions.take(id);
     }
 
     pub fn primitives(&self) -> &Primitives {

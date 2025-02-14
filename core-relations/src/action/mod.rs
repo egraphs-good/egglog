@@ -9,8 +9,8 @@ use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
 use smallvec::SmallVec;
 
 use crate::{
-    common::{DashMap, HashMap, Value},
-    free_join::{CounterId, Counters, ExternalFunctionExt, TableId, TableInfo, Variable},
+    common::{DashMap, Value},
+    free_join::{CounterId, Counters, ExternalFunctions, TableId, TableInfo, Variable},
     pool::{with_pool_set, Clear, PoolSet, Pooled},
     primitives::PrimitiveFunctionId,
     table_spec::{ColumnId, MutationBuffer},
@@ -137,7 +137,7 @@ impl PredictedVals {
 pub(crate) struct DbView<'a> {
     pub(crate) table_info: &'a DenseIdMap<TableId, TableInfo>,
     pub(crate) counters: &'a Counters,
-    pub(crate) external_funcs: &'a HashMap<ExternalFunctionId, Box<dyn ExternalFunctionExt>>,
+    pub(crate) external_funcs: &'a ExternalFunctions,
     pub(crate) prims: &'a Primitives,
     pub(crate) containers: &'a Containers,
 }
@@ -471,7 +471,7 @@ impl ExecutionState<'_> {
                     .apply_vectorized(*func, pool, mask, bindings, args, *dst);
             }
             Instr::External { func, args, dst } => {
-                self.db.external_funcs[func].invoke_batch(self, mask, bindings, args, *dst);
+                self.db.external_funcs[*func].invoke_batch(self, mask, bindings, args, *dst);
             }
             Instr::AssertAnyNe { ops, divider } => {
                 let pool = pool_set.get_pool::<Vec<Value>>().clone();
