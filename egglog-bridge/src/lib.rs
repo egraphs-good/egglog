@@ -645,7 +645,11 @@ impl EGraph {
     /// If the given rules are malformed, this method can return an error.
     pub fn run_rules(&mut self, rules: &[RuleId]) -> Result<bool> {
         let ts = self.next_ts();
-        if !run_rules_impl(&mut self.db, &mut self.rules, rules, ts)? {
+        let changed = run_rules_impl(&mut self.db, &mut self.rules, rules, ts)?;
+        if let Some(message) = self.panic_message.lock().unwrap().take() {
+            return Err(PanicError(message).into());
+        }
+        if !changed {
             return Ok(false);
         }
         self.rebuild()?;
@@ -1027,3 +1031,7 @@ fn incremental_rebuild(uf_size: usize, table_size: usize, parallel: bool) -> boo
         uf_size <= (table_size / 8)
     }
 }
+
+#[derive(Error, Debug)]
+#[error("Panic: {0}")]
+struct PanicError(String);
