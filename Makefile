@@ -59,8 +59,10 @@ rm-graphs:
 
 # TODO: remove before merging
 collect-todos:
-	cargo nextest run -r --no-fail-fast 2>&1 >/dev/null \
+	@ cargo nextest run -r --no-fail-fast 2>&1 >/dev/null \
 	| grep "not yet implemented:" \
 	| sort \
 	| uniq -c \
 	| sort -n
+	@ cargo nextest run -r --no-fail-fast 2>&1 >/dev/null \
+	| grep "     Summary" \
