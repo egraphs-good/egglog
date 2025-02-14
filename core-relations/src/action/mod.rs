@@ -202,6 +202,15 @@ impl ExecutionState<'_> {
             .stage_remove(key);
     }
 
+    /// Call an external function.
+    pub fn call_external_function(
+        &mut self,
+        func: ExternalFunctionId,
+        args: &[Value],
+    ) -> Option<Value> {
+        self.db.external_funcs[func].invoke(self, args)
+    }
+
     pub fn inc_counter(&self, ctr: CounterId) -> usize {
         self.db.counters.inc(ctr)
     }
