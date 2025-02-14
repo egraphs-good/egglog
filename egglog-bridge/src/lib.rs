@@ -545,6 +545,22 @@ impl EGraph {
             write_deps.push(uf_table);
         }
         let table = match merge {
+            MergeFn::AssertEq => {
+                let panic = self.new_panic(format!("Illegal merge attempted for function {name}"));
+                SortedWritesTable::new(
+                    n_args,
+                    n_cols,
+                    Some(ColumnId::from_usize(schema.len())),
+                    to_rebuild,
+                    move |state, cur, new, _out| {
+                        if cur != new {
+                            let res = state.call_external_func(panic, &[]);
+                            assert_eq!(res, None);
+                        }
+                        false
+                    },
+                )
+            }
             MergeFn::UnionId => {
                 SortedWritesTable::new(
                     n_args,
@@ -927,6 +943,8 @@ pub enum DefaultVal {
 
 /// How to resolve FD conflicts for a table.
 pub enum MergeFn {
+    /// Panic if the old and new values don't match.
+    AssertEq,
     /// Use congruence to resolve FD conflicts.
     UnionId,
     /// The corresponding output is replaced with the mapping in a table.

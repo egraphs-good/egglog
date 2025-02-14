@@ -203,7 +203,7 @@ impl ExecutionState<'_> {
     }
 
     /// Call an external function.
-    pub fn call_external_function(
+    pub fn call_external_func(
         &mut self,
         func: ExternalFunctionId,
         args: &[Value],
