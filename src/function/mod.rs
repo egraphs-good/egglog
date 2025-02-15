@@ -159,7 +159,7 @@ impl Function {
             let schema = input
                 .iter()
                 .chain([&output])
-                .map(EGraph::column_ty)
+                .map(|sort| sort.column_ty(egraph.backend.primitives()))
                 .collect();
             let default = match decl.subtype {
                 FunctionSubtype::Constructor => DefaultVal::FreshId,

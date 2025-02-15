@@ -4,6 +4,12 @@ use lazy_static::lazy_static;
 use std::fmt::Debug;
 use std::{any::Any, sync::Arc};
 
+use egglog_bridge::ColumnTy;
+
+use crate::constraint::AllEqualTypeConstraint;
+use crate::extract::{Cost, Extractor};
+use crate::*;
+
 mod bigint;
 pub use bigint::*;
 mod bigrat;
@@ -29,12 +35,10 @@ pub use r#fn::*;
 mod multiset;
 pub use multiset::*;
 
-use crate::constraint::AllEqualTypeConstraint;
-use crate::extract::{Cost, Extractor};
-use crate::*;
-
 pub trait Sort: Any + Send + Sync + Debug {
     fn name(&self) -> Symbol;
+
+    fn column_ty(&self, prims: &core_relations::Primitives) -> ColumnTy;
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static>;
 
@@ -129,6 +133,10 @@ pub struct EqSort {
 impl Sort for EqSort {
     fn name(&self) -> Symbol {
         self.name
+    }
+
+    fn column_ty(&self, _prims: &core_relations::Primitives) -> ColumnTy {
+        ColumnTy::Id
     }
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {

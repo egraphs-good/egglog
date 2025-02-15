@@ -28,6 +28,10 @@ impl Sort for I64Sort {
         *I64_SORT_NAME
     }
 
+    fn column_ty(&self, prims: &core_relations::Primitives) -> ColumnTy {
+        ColumnTy::Primitive(prims.get_ty::<i64>())
+    }
+
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
         self
     }
