@@ -206,7 +206,7 @@ impl RuleBuilder<'_> {
     }
 
     /// Access the underlying egraph within the builder.
-    pub(crate) fn egraph(&self) -> &EGraph {
+    pub fn egraph(&self) -> &EGraph {
         self.egraph
     }
 
