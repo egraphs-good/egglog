@@ -1088,14 +1088,6 @@ impl EGraph {
         false
     }
 
-    fn column_ty(sort: &ArcSort) -> egglog_bridge::ColumnTy {
-        if sort.is_eq_sort() {
-            egglog_bridge::ColumnTy::Id
-        } else {
-            todo!("implement primitives")
-        }
-    }
-
     fn add_rule_with_name(
         &mut self,
         name: Symbol,
@@ -1117,9 +1109,10 @@ impl EGraph {
                 entries
                     .entry(x.clone())
                     .or_insert_with(|| match x {
-                        GenericAtomTerm::Var(_, v) => {
-                            rb.new_var_named(EGraph::column_ty(&v.sort), v.name.into())
-                        }
+                        GenericAtomTerm::Var(_, v) => rb.new_var_named(
+                            v.sort.column_ty(rb.egraph().primitives()),
+                            v.name.into(),
+                        ),
                         GenericAtomTerm::Literal(_, _l) => {
                             todo!("look up Value for l in self.backend.primitives?")
                         }

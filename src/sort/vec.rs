@@ -79,6 +79,10 @@ impl Sort for VecSort {
         self.name
     }
 
+    fn column_ty(&self, prims: &core_relations::Primitives) -> ColumnTy {
+        ColumnTy::Primitive(prims.get_ty::<ValueVec>())
+    }
+
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
         self
     }
