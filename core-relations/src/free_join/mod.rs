@@ -8,7 +8,7 @@ use std::{
 };
 
 use concurrency::ReadOptimizedLock;
-use numeric_id::{define_id, DenseIdMap, NumericId};
+use numeric_id::{define_id, DenseIdMap, DenseIdMapWithReuse, NumericId};
 use rayon::prelude::*;
 use smallvec::SmallVec;
 
@@ -189,38 +189,8 @@ impl<T: ExternalFunction> ExternalFunctionExt for T {}
 // Implements `Clone` for `Box<dyn ExternalFunctionExt>`.
 dyn_clone::clone_trait_object!(ExternalFunctionExt);
 
-#[derive(Clone, Default)]
-pub(crate) struct ExternalFunctions {
-    data: DenseIdMap<ExternalFunctionId, Box<dyn ExternalFunctionExt>>,
-    free: Vec<ExternalFunctionId>,
-}
-
-impl std::ops::Index<ExternalFunctionId> for ExternalFunctions {
-    type Output = Box<dyn ExternalFunctionExt>;
-    fn index(&self, key: ExternalFunctionId) -> &Box<dyn ExternalFunctionExt> {
-        self.data.get(key).unwrap()
-    }
-}
-
-impl ExternalFunctions {
-    fn push(&mut self, value: Box<dyn ExternalFunctionExt>) -> ExternalFunctionId {
-        match self.free.pop() {
-            None => self.data.push(value),
-            Some(key) => {
-                self.data.insert(key, value);
-                key
-            }
-        }
-    }
-
-    fn take(&mut self, id: ExternalFunctionId) -> Option<Box<dyn ExternalFunctionExt>> {
-        let res = self.data.take(id);
-        if res.is_some() {
-            self.free.push(id);
-        }
-        res
-    }
-}
+pub(crate) type ExternalFunctions =
+    DenseIdMapWithReuse<ExternalFunctionId, Box<dyn ExternalFunctionExt>>;
 
 #[derive(Default)]
 pub(crate) struct Counters(DenseIdMap<CounterId, AtomicUsize>);

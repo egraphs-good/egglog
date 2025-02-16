@@ -234,6 +234,66 @@ impl<K, V> Default for IdVec<K, V> {
     }
 }
 
+/// Like a [`DenseIdMap`], but supports freeing (and reusing) slots.
+#[derive(Clone)]
+pub struct DenseIdMapWithReuse<K, V> {
+    data: DenseIdMap<K, V>,
+    free: Vec<K>,
+}
+
+impl<K, V> Default for DenseIdMapWithReuse<K, V> {
+    fn default() -> Self {
+        Self {
+            data: Default::default(),
+            free: Default::default(),
+        }
+    }
+}
+
+impl<K: NumericId, V> DenseIdMapWithReuse<K, V> {
+    /// Reserve the index of the next free slot.
+    /// Unlike [`DenseIdMap`], this is NOT idempotent.
+    pub fn next_id(&mut self) -> K {
+        self.free.pop().unwrap_or(self.data.next_id())
+    }
+
+    /// Insert the given mapping into the table. You probably
+    /// want to use [`push`] instead, unless you need to use
+    /// the [`next_id`] to build the value.
+    pub fn insert(&mut self, key: K, value: V) {
+        self.data.insert(key, value)
+    }
+
+    /// Add the given value to the table.
+    pub fn push(&mut self, value: V) -> K {
+        let res = self.next_id();
+        self.insert(res, value);
+        res
+    }
+
+    /// Remove the given key from the table, if it is present.
+    pub fn take(&mut self, id: K) -> Option<V> {
+        let res = self.data.take(id);
+        if res.is_some() {
+            self.free.push(id);
+        }
+        res
+    }
+}
+
+impl<K: NumericId, V> std::ops::Index<K> for DenseIdMapWithReuse<K, V> {
+    type Output = V;
+    fn index(&self, key: K) -> &V {
+        &self.data[key]
+    }
+}
+
+impl<K: NumericId, V> std::ops::IndexMut<K> for DenseIdMapWithReuse<K, V> {
+    fn index_mut(&mut self, key: K) -> &mut V {
+        &mut self.data[key]
+    }
+}
+
 impl<K: NumericId, V> IdVec<K, V> {
     pub fn with_capacity(cap: usize) -> IdVec<K, V> {
         IdVec {

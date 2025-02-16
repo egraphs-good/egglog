@@ -169,8 +169,7 @@ impl EGraph {
         let uf_table = self.uf_table;
         let id_counter = self.id_counter;
         let tracing = self.tracing;
-        let rule_id = self.next_rule;
-        self.next_rule = self.next_rule.inc();
+        let rule_id = self.rules.next_id();
         RuleBuilder {
             egraph: self,
             proof_builder: ProofBuilder::new(desc.to_string(), rule_id),
@@ -189,11 +188,16 @@ impl EGraph {
             },
         }
     }
+
     pub fn new_rule(&mut self) -> RuleBuilder {
         self.new_rule_described("")
     }
 
-    pub(crate) fn new_nonincremental_query(&mut self) -> RuleBuilder {
+    pub fn free_rule(&mut self, id: RuleId) {
+        self.rules.take(id);
+    }
+
+    pub(crate) fn new_nonincremental_rule(&mut self) -> RuleBuilder {
         let mut res = self.new_rule();
         res.query.seminaive = false;
         res

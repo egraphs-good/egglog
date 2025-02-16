@@ -22,7 +22,7 @@ use core_relations::{
 };
 use indexmap::{map::Entry, IndexMap};
 use log::info;
-use numeric_id::{define_id, DenseIdMap, NumericId};
+use numeric_id::{define_id, DenseIdMap, DenseIdMapWithReuse, NumericId};
 use proof_spec::{ProofReason, ProofReconstructionState, ReasonSpecId};
 use smallvec::SmallVec;
 use web_time::Instant;
@@ -64,8 +64,7 @@ pub struct EGraph {
     id_counter: CounterId,
     reason_counter: CounterId,
     timestamp_counter: CounterId,
-    rules: DenseIdMap<RuleId, RuleInfo>,
-    next_rule: RuleId,
+    rules: DenseIdMapWithReuse<RuleId, RuleInfo>,
     funcs: DenseIdMap<FunctionId, FunctionInfo>,
     panic_message: SideChannel<String>,
     proof_specs: DenseIdMap<ReasonSpecId, Arc<ProofReason>>,
@@ -116,7 +115,6 @@ impl EGraph {
             reason_counter: trace_counter,
             timestamp_counter: ts_counter,
             rules: Default::default(),
-            next_rule: RuleId::new(0),
             funcs: Default::default(),
             panic_message: Default::default(),
             proof_specs: Default::default(),
@@ -880,7 +878,7 @@ impl EGraph {
     }
 
     fn nonincremental_rebuild(&mut self, table: FunctionId, schema: &[ColumnTy]) -> RuleId {
-        let mut rb = self.new_nonincremental_query();
+        let mut rb = self.new_nonincremental_rule();
         rb.set_plan_strategy(PlanStrategy::MinCover);
         let mut vars = Vec::<QueryEntry>::with_capacity(schema.len());
         for ty in schema {
@@ -956,7 +954,7 @@ pub enum MergeFn {
 
 fn run_rules_impl(
     db: &mut Database,
-    rule_info: &mut DenseIdMap<RuleId, RuleInfo>,
+    rule_info: &mut DenseIdMapWithReuse<RuleId, RuleInfo>,
     rules: &[RuleId],
     next_ts: Timestamp,
 ) -> Result<bool> {
