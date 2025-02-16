@@ -1,5 +1,5 @@
 use crate::*;
-use std::io::{self, stdout, BufRead, BufReader, Read, Write};
+use std::io::{self, stderr, stdout, BufRead, BufReader, Read, Write};
 
 #[cfg(feature = "bin")]
 pub mod bin {
@@ -153,6 +153,10 @@ impl EGraph {
         let mut cmd_buffer = String::new();
 
         print!("{}", prompt);
+        // it's probably important that we flush stderr before stdout: if we're
+        // detecting the prompt, then by the time we detect the prompt, we'll
+        // also know stderr has been flushed.
+        stderr().flush()?;
         stdout().flush()?;
         for line in BufReader::new(input).lines() {
             let line_str = line?;
@@ -163,6 +167,7 @@ impl EGraph {
                 run_command_in_scripting(self, &cmd_buffer, &mut output)?;
                 cmd_buffer = String::new();
                 print!("{}", prompt);
+                stderr().flush()?;
                 stdout().flush()?;
             }
         }
@@ -170,6 +175,9 @@ impl EGraph {
         if !cmd_buffer.is_empty() {
             run_command_in_scripting(self, &cmd_buffer, &mut output)?;
         }
+
+        stderr().flush()?;
+        stdout().flush()?;
 
         Ok(())
     }
