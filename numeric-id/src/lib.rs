@@ -251,22 +251,29 @@ impl<K, V> Default for DenseIdMapWithReuse<K, V> {
 }
 
 impl<K: NumericId, V> DenseIdMapWithReuse<K, V> {
-    /// Reserve the index of the next free slot.
-    /// Unlike [`DenseIdMap`], this is NOT idempotent.
-    pub fn next_id(&mut self) -> K {
-        self.free.pop().unwrap_or(self.data.next_id())
+    /// Reserve a slot in the map for use later with [`insert`].
+    pub fn reserve_slot(&mut self) -> K {
+        match self.free.pop() {
+            Some(res) => res,
+            None => {
+                let res = self.data.next_id();
+                self.data.reserve_space(res);
+                res
+            }
+        }
     }
 
     /// Insert the given mapping into the table. You probably
     /// want to use [`push`] instead, unless you need to use
-    /// the [`next_id`] to build the value.
+    /// the key to build the value, in which case you can
+    /// use [`reserve_slot`] to get the key for this method.
     pub fn insert(&mut self, key: K, value: V) {
         self.data.insert(key, value)
     }
 
     /// Add the given value to the table.
     pub fn push(&mut self, value: V) -> K {
-        let res = self.next_id();
+        let res = self.reserve_slot();
         self.insert(res, value);
         res
     }

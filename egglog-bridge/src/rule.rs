@@ -169,7 +169,7 @@ impl EGraph {
         let uf_table = self.uf_table;
         let id_counter = self.id_counter;
         let tracing = self.tracing;
-        let rule_id = self.rules.next_id();
+        let rule_id = self.rules.reserve_slot();
         RuleBuilder {
             egraph: self,
             proof_builder: ProofBuilder::new(desc.to_string(), rule_id),
