@@ -1624,9 +1624,18 @@ impl<'a> BackendRuleTranslator<'a> {
                     v.sort.column_ty(self.rb.egraph().primitives()),
                     v.name.into(),
                 ),
-                core::GenericAtomTerm::Literal(_, _l) => {
-                    todo!("look up Value for l in self.backend.primitives?")
+                core::GenericAtomTerm::Literal(_, l) => match l {
+                    Literal::Int(x) => self.rb.egraph().primitives().get::<i64>(*x),
+                    Literal::Float(x) => self
+                        .rb
+                        .egraph()
+                        .primitives()
+                        .get::<ordered_float::OrderedFloat<f64>>(*x),
+                    Literal::String(x) => self.rb.egraph().primitives().get::<Symbol>(*x),
+                    Literal::Bool(x) => self.rb.egraph().primitives().get::<bool>(*x),
+                    Literal::Unit => self.rb.egraph().primitives().get::<()>(()),
                 }
+                .into(),
                 core::GenericAtomTerm::Global(..) => {
                     panic!("Globals should have been desugared")
                 }

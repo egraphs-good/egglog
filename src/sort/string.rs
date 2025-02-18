@@ -17,7 +17,7 @@ impl Sort for StringSort {
     }
 
     fn column_ty(&self, prims: &core_relations::Primitives) -> ColumnTy {
-        ColumnTy::Primitive(prims.get_ty::<String>())
+        ColumnTy::Primitive(prims.get_ty::<Symbol>())
     }
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
