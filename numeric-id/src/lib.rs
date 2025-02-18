@@ -251,7 +251,7 @@ impl<K, V> Default for DenseIdMapWithReuse<K, V> {
 }
 
 impl<K: NumericId, V> DenseIdMapWithReuse<K, V> {
-    /// Reserve a slot in the map for use later with [`insert`].
+    /// Reserve a slot in the map for use later with [`DenseIdMapWithReuse::insert`].
     pub fn reserve_slot(&mut self) -> K {
         match self.free.pop() {
             Some(res) => res,
@@ -264,9 +264,9 @@ impl<K: NumericId, V> DenseIdMapWithReuse<K, V> {
     }
 
     /// Insert the given mapping into the table. You probably
-    /// want to use [`push`] instead, unless you need to use
+    /// want to use [`DenseIdMapWithReuse::push`] instead, unless you need to use
     /// the key to build the value, in which case you can
-    /// use [`reserve_slot`] to get the key for this method.
+    /// use [`DenseIdMapWithReuse::reserve_slot`] to get the key for this method.
     pub fn insert(&mut self, key: K, value: V) {
         self.data.insert(key, value)
     }

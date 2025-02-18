@@ -188,6 +188,10 @@ impl EGraph {
         self.db.add_external_function(func)
     }
 
+    pub fn free_external_func(&mut self, func: ExternalFunctionId) {
+        self.db.free_external_function(func)
+    }
+
     /// Generate a fresh id.
     pub fn fresh_id(&mut self) -> Value {
         Value::from_usize(self.db.inc_counter(self.id_counter))
