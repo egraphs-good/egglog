@@ -1099,94 +1099,13 @@ impl EGraph {
         let (query, actions) = (core_rule.body, core_rule.head);
 
         let rule_id = {
-            use core::*;
-            let mut rb = self.backend.new_rule_described(name.into());
-            let mut entries: HashMap<ResolvedAtomTerm, egglog_bridge::QueryEntry> =
-                HashMap::default();
-            let entry = |rb: &mut egglog_bridge::RuleBuilder,
-                         entries: &mut HashMap<ResolvedAtomTerm, egglog_bridge::QueryEntry>,
-                         x: &ResolvedAtomTerm| {
-                entries
-                    .entry(x.clone())
-                    .or_insert_with(|| match x {
-                        GenericAtomTerm::Var(_, v) => rb.new_var_named(
-                            v.sort.column_ty(rb.egraph().primitives()),
-                            v.name.into(),
-                        ),
-                        GenericAtomTerm::Literal(_, _l) => {
-                            todo!("look up Value for l in self.backend.primitives?")
-                        }
-                        GenericAtomTerm::Global(..) => {
-                            panic!("Globals should have been desugared")
-                        }
-                    })
-                    .clone()
-            };
-            for atom in &query.atoms {
-                match &atom.head {
-                    ResolvedCall::Func(f) => {
-                        let f = self.functions[&f.name].new_backend_id;
-                        let args: Vec<_> = atom
-                            .args
-                            .iter()
-                            .map(|x| entry(&mut rb, &mut entries, x))
-                            .collect();
-                        rb.add_atom(f.into(), &args).unwrap()
-                    }
-                    ResolvedCall::Primitive(..) => todo!("primitives in queries"),
-                }
-            }
-            for action in &actions.0 {
-                match action {
-                    GenericCoreAction::Let(span, v, f, xs) => match f {
-                        ResolvedCall::Func(f) => {
-                            let f = self.functions[&f.name].new_backend_id;
-                            let xs: Vec<_> =
-                                xs.iter().map(|x| entry(&mut rb, &mut entries, x)).collect();
-                            let v = GenericAtomTerm::Var(span.clone(), v.clone());
-                            entries.insert(v, rb.lookup(f.into(), &xs).into());
-                        }
-                        ResolvedCall::Primitive(..) => todo!("primitives in actions"),
-                    },
-                    GenericCoreAction::LetAtomTerm(span, v, x) => {
-                        let v = GenericAtomTerm::Var(span.clone(), v.clone());
-                        let x = entry(&mut rb, &mut entries, x);
-                        entries.insert(v, x);
-                    }
-                    GenericCoreAction::Extract(_, _x, _n) => todo!("no extraction yet"),
-                    GenericCoreAction::Set(_, f, xs, y) => match f {
-                        ResolvedCall::Func(f) => {
-                            let f = self.functions[&f.name].new_backend_id;
-                            let xs: Vec<_> = xs
-                                .iter()
-                                .chain([y])
-                                .map(|x| entry(&mut rb, &mut entries, x))
-                                .collect();
-                            rb.set(f, &xs)
-                        }
-                        ResolvedCall::Primitive(..) => todo!("primitives in actions"),
-                    },
-                    GenericCoreAction::Change(_, change, f, xs) => match f {
-                        ResolvedCall::Primitive(..) => todo!("this shouldn't be allowed, right?"),
-                        ResolvedCall::Func(f) => match change {
-                            Change::Delete => {
-                                let f = self.functions[&f.name].new_backend_id;
-                                let xs: Vec<_> =
-                                    xs.iter().map(|x| entry(&mut rb, &mut entries, x)).collect();
-                                rb.remove(f, &xs)
-                            }
-                            Change::Subsume => todo!("no subsumption yet"),
-                        },
-                    },
-                    GenericCoreAction::Union(_, x, y) => {
-                        let x = entry(&mut rb, &mut entries, x);
-                        let y = entry(&mut rb, &mut entries, y);
-                        rb.union(x, y)
-                    }
-                    GenericCoreAction::Panic(_, _msg) => todo!("no panic yet"),
-                }
-            }
-            rb.build_described(name.to_string())
+            let mut translator = BackendRuleTranslator::new(
+                self.backend.new_rule_described(name.into()),
+                &self.functions,
+            );
+            translator.query(&query);
+            translator.actions(&actions);
+            translator.finish().build_described(name.to_string())
         };
 
         let vars = query.get_vars();
@@ -1215,15 +1134,21 @@ impl EGraph {
     }
 
     fn eval_actions(&mut self, actions: &ResolvedActions) -> Result<(), Error> {
-        if true {
-            todo!("eval_actions")
-        }
-
         let (actions, _) = actions.to_core_actions(
             &self.type_info,
             &mut Default::default(),
             &mut self.parser.symbol_gen,
         )?;
+
+        {
+            let mut translator =
+                BackendRuleTranslator::new(self.backend.new_rule(), &self.functions);
+            translator.actions(&actions);
+            let id = translator.finish().build();
+            let _ = self.backend.run_rules(&[id]).unwrap();
+            self.backend.free_rule(id);
+        }
+
         let program = self
             .compile_actions(&Default::default(), &actions)
             .map_err(Error::TypeErrors)?;
@@ -1670,6 +1595,107 @@ impl EGraph {
         } else {
             vec![]
         }
+    }
+}
+
+struct BackendRuleTranslator<'a> {
+    rb: egglog_bridge::RuleBuilder<'a>,
+    entries: HashMap<core::ResolvedAtomTerm, egglog_bridge::QueryEntry>,
+    functions: &'a IndexMap<Symbol, Function>,
+}
+
+impl<'a> BackendRuleTranslator<'a> {
+    fn new(
+        rb: egglog_bridge::RuleBuilder<'a>,
+        functions: &'a IndexMap<Symbol, Function>,
+    ) -> BackendRuleTranslator<'a> {
+        BackendRuleTranslator {
+            rb,
+            functions,
+            entries: Default::default(),
+        }
+    }
+
+    fn entry(&mut self, x: &core::ResolvedAtomTerm) -> egglog_bridge::QueryEntry {
+        self.entries
+            .entry(x.clone())
+            .or_insert_with(|| match x {
+                core::GenericAtomTerm::Var(_, v) => self.rb.new_var_named(
+                    v.sort.column_ty(self.rb.egraph().primitives()),
+                    v.name.into(),
+                ),
+                core::GenericAtomTerm::Literal(_, _l) => {
+                    todo!("look up Value for l in self.backend.primitives?")
+                }
+                core::GenericAtomTerm::Global(..) => {
+                    panic!("Globals should have been desugared")
+                }
+            })
+            .clone()
+    }
+
+    fn query(&mut self, query: &core::Query<ResolvedCall, ResolvedVar>) {
+        for atom in &query.atoms {
+            match &atom.head {
+                ResolvedCall::Func(f) => {
+                    let f = self.functions[&f.name].new_backend_id;
+                    let args: Vec<_> = atom.args.iter().map(|x| self.entry(x)).collect();
+                    self.rb.add_atom(f.into(), &args).unwrap()
+                }
+                ResolvedCall::Primitive(..) => todo!("primitives in queries"),
+            }
+        }
+    }
+
+    fn actions(&mut self, actions: &core::ResolvedCoreActions) {
+        for action in &actions.0 {
+            match action {
+                core::GenericCoreAction::Let(span, v, f, xs) => match f {
+                    ResolvedCall::Func(f) => {
+                        let f = self.functions[&f.name].new_backend_id;
+                        let xs: Vec<_> = xs.iter().map(|x| self.entry(x)).collect();
+                        let v = core::GenericAtomTerm::Var(span.clone(), v.clone());
+                        self.entries.insert(v, self.rb.lookup(f.into(), &xs).into());
+                    }
+                    ResolvedCall::Primitive(..) => todo!("primitives in actions"),
+                },
+                core::GenericCoreAction::LetAtomTerm(span, v, x) => {
+                    let v = core::GenericAtomTerm::Var(span.clone(), v.clone());
+                    let x = self.entry(x);
+                    self.entries.insert(v, x);
+                }
+                core::GenericCoreAction::Extract(_, _x, _n) => todo!("no extraction yet"),
+                core::GenericCoreAction::Set(_, f, xs, y) => match f {
+                    ResolvedCall::Func(f) => {
+                        let f = self.functions[&f.name].new_backend_id;
+                        let xs: Vec<_> = xs.iter().chain([y]).map(|x| self.entry(x)).collect();
+                        self.rb.set(f, &xs)
+                    }
+                    ResolvedCall::Primitive(..) => todo!("primitives in actions"),
+                },
+                core::GenericCoreAction::Change(_, change, f, xs) => match f {
+                    ResolvedCall::Primitive(..) => todo!("this shouldn't be allowed, right?"),
+                    ResolvedCall::Func(f) => match change {
+                        Change::Delete => {
+                            let f = self.functions[&f.name].new_backend_id;
+                            let xs: Vec<_> = xs.iter().map(|x| self.entry(x)).collect();
+                            self.rb.remove(f, &xs)
+                        }
+                        Change::Subsume => todo!("no subsumption yet"),
+                    },
+                },
+                core::GenericCoreAction::Union(_, x, y) => {
+                    let x = self.entry(x);
+                    let y = self.entry(y);
+                    self.rb.union(x, y)
+                }
+                core::GenericCoreAction::Panic(_, _msg) => todo!("no panic yet"),
+            }
+        }
+    }
+
+    fn finish(self) -> egglog_bridge::RuleBuilder<'a> {
+        self.rb
     }
 }
 
