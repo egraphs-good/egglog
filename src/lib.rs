@@ -1099,7 +1099,7 @@ impl EGraph {
         let (query, actions) = (core_rule.body, core_rule.head);
 
         let rule_id = {
-            let mut translator = BackendRuleTranslator::new(
+            let mut translator = BackendRule::new(
                 self.backend.new_rule_described(name.into()),
                 &self.functions,
             );
@@ -1141,8 +1141,7 @@ impl EGraph {
         )?;
 
         {
-            let mut translator =
-                BackendRuleTranslator::new(self.backend.new_rule(), &self.functions);
+            let mut translator = BackendRule::new(self.backend.new_rule(), &self.functions);
             translator.actions(&actions);
             let id = translator.finish().build();
             let _ = self.backend.run_rules(&[id]).unwrap();
@@ -1213,10 +1212,6 @@ impl EGraph {
     }
 
     fn check_facts(&mut self, span: &Span, facts: &[ResolvedFact]) -> Result<(), Error> {
-        if true {
-            todo!("check_facts");
-        }
-
         let rule = ast::ResolvedRule {
             span: span.clone(),
             head: ResolvedActions::default(),
@@ -1225,6 +1220,38 @@ impl EGraph {
         let core_rule =
             rule.to_canonicalized_core_rule(&self.type_info, &mut self.parser.symbol_gen)?;
         let query = core_rule.body;
+
+        let new_matched = {
+            #[derive(Clone)]
+            struct Ext(egglog_bridge::SideChannel<()>);
+            impl core_relations::ExternalFunction for Ext {
+                fn invoke(
+                    &self,
+                    _: &mut core_relations::ExecutionState,
+                    _: &[core_relations::Value],
+                ) -> Option<core_relations::Value> {
+                    *self.0.lock().unwrap() = Some(());
+                    None
+                }
+            }
+
+            let ext_sc = egglog_bridge::SideChannel::default();
+            let ext_id = self.backend.register_external_func(Ext(ext_sc.clone()));
+
+            let mut translator = BackendRule::new(self.backend.new_rule(), &self.functions);
+            translator.query(&query);
+            let mut rb = translator.finish();
+            rb.call_external_func(ext_id, &[], egglog_bridge::ColumnTy::Id);
+            let id = rb.build();
+            let _ = self.backend.run_rules(&[id]).unwrap();
+            self.backend.free_rule(id);
+
+            self.backend.free_external_func(ext_id);
+
+            let ext_sc_val = ext_sc.lock().unwrap().take();
+            matches!(ext_sc_val, Some(()))
+        };
+
         let ordering = &query.get_vars();
         let query = self.compile_gj_query(query, ordering);
 
@@ -1234,6 +1261,9 @@ impl EGraph {
             matched = true;
             Err(())
         });
+
+        assert_eq!(matched, new_matched);
+
         if !matched {
             Err(Error::CheckError(
                 facts.iter().map(|f| f.clone().make_unresolved()).collect(),
@@ -1598,18 +1628,18 @@ impl EGraph {
     }
 }
 
-struct BackendRuleTranslator<'a> {
+struct BackendRule<'a> {
     rb: egglog_bridge::RuleBuilder<'a>,
     entries: HashMap<core::ResolvedAtomTerm, egglog_bridge::QueryEntry>,
     functions: &'a IndexMap<Symbol, Function>,
 }
 
-impl<'a> BackendRuleTranslator<'a> {
+impl<'a> BackendRule<'a> {
     fn new(
         rb: egglog_bridge::RuleBuilder<'a>,
         functions: &'a IndexMap<Symbol, Function>,
-    ) -> BackendRuleTranslator<'a> {
-        BackendRuleTranslator {
+    ) -> BackendRule<'a> {
+        BackendRule {
             rb,
             functions,
             entries: Default::default(),
