@@ -1214,21 +1214,14 @@ impl EGraph {
         let query = core_rule.body;
 
         let new_matched = {
-            #[derive(Clone)]
-            struct Ext(egglog_bridge::SideChannel<()>);
-            impl core_relations::ExternalFunction for Ext {
-                fn invoke(
-                    &self,
-                    _: &mut core_relations::ExecutionState,
-                    _: &[core_relations::Value],
-                ) -> Option<core_relations::Value> {
-                    *self.0.lock().unwrap() = Some(());
-                    None
-                }
-            }
-
             let ext_sc = egglog_bridge::SideChannel::default();
-            let ext_id = self.backend.register_external_func(Ext(ext_sc.clone()));
+            let ext_sc_ref = ext_sc.clone();
+            let ext_id = self
+                .backend
+                .register_external_func(core_relations::make_external_func(move |_, _| {
+                    *ext_sc_ref.lock().unwrap() = Some(());
+                    None
+                }));
 
             let mut translator = BackendRule::new(self.backend.new_rule(), &self.functions);
             translator.query(&query);
