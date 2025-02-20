@@ -13,11 +13,11 @@ use crate::{
 /// A subset of offsets that are still active.
 #[derive(Debug)]
 pub(crate) struct Mask {
-    // NB: why keep track of an extra length? Different bitset operations (e.g.
-    // symmetric_difference) can increase the length of a bitset up to the total capacity, and the
-    // capacity of the bitset may be larger than the initial length of the range we are targetting.
-    // This can lead to later bindings being longer (albeit, filled with stale enttries) than
-    // earlier ones, which violates an invariant of the Bindings struct.
+    // NB: why keep track of an extra length? We call `clear` on bitsets when we add them to the
+    // memory pool, and that bitset may have a larger length than the size of the max we construct.
+    //
+    // To keep the length of the mask consistent regardless of the contents of the pool, we use
+    // `len` to cap iteration of the bitset at number of elements passed to `new`.
     len: usize,
     data: Pooled<FixedBitSet>,
 }
