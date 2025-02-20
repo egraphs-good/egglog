@@ -169,13 +169,13 @@ impl Database {
     }
     pub fn run_rule_set(&mut self, rule_set: &RuleSet) -> bool {
         fn do_parallel() -> bool {
-            #[cfg(test)]
+            #[cfg(debug_assertions)]
             {
                 use rand::Rng;
                 rand::thread_rng().gen_bool(0.5)
             }
 
-            #[cfg(not(test))]
+            #[cfg(not(debug_assertions))]
             {
                 rayon::current_num_threads() > 1
             }
@@ -859,12 +859,7 @@ impl<'a, 'outer: 'a> ActionBuffer<'a> for InPlaceActionBuffer<'outer> {
         let action_state = self.batches.get_or_default(action);
         action_state.n_runs += 1;
         action_state.len += 1;
-        with_pool_set(|ps| {
-            for (var, val) in bindings.iter() {
-                let vals = action_state.bindings.get_or_insert(var, || ps.get());
-                vals.push(*val);
-            }
-        });
+        action_state.bindings.push(bindings);
         if action_state.len > VAR_BATCH_SIZE {
             let mut state = to_exec_state();
             state.run_instrs(&self.rule_set.actions[action], &mut action_state.bindings);
@@ -920,12 +915,7 @@ impl<'scope> ActionBuffer<'scope> for ScopedActionBuffer<'_, 'scope> {
         let action_state = self.batches.get_or_default(action);
         action_state.n_runs += 1;
         action_state.len += 1;
-        with_pool_set(|ps| {
-            for (var, val) in bindings.iter() {
-                let vals = action_state.bindings.get_or_insert(var, || ps.get());
-                vals.push(*val);
-            }
-        });
+        action_state.bindings.push(bindings);
         if action_state.len > VAR_BATCH_SIZE {
             let mut state = to_exec_state();
             let mut bindings = mem::take(&mut action_state.bindings);
