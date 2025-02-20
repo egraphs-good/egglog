@@ -169,13 +169,13 @@ impl Database {
     }
     pub fn run_rule_set(&mut self, rule_set: &RuleSet) -> bool {
         fn do_parallel() -> bool {
-            #[cfg(test)]
+            #[cfg(debug_assertions)]
             {
                 use rand::Rng;
                 rand::thread_rng().gen_bool(0.5)
             }
 
-            #[cfg(not(test))]
+            #[cfg(not(debug_assertions))]
             {
                 rayon::current_num_threads() > 1
             }
