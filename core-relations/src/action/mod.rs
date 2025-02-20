@@ -95,7 +95,7 @@ impl From<Value> for MergeVal {
 /// Bindings store a sequence of values for a given set of variables.
 ///
 /// The intent of bindings is to store a sequence of mappings from [`Variable`] to [`Value`], in a
-/// struct-of-arrays style form that is better laid out for processing bindings in batches.
+/// struct-of-arrays style that is better laid out for processing bindings in batches.
 #[derive(Debug, Default)]
 pub(crate) struct Bindings {
     // INVARIANT: self.vars.iter().map(|(_, v)| v.len() == self.matches)
