@@ -2,7 +2,7 @@
 //!
 //! This allows us to execute the "right-hand-side" of a rule. The
 //! implementation here is optimized to execute on a batch of rows at a time.
-use std::{mem, ops::Deref};
+use std::ops::Deref;
 
 use numeric_id::{DenseIdMap, NumericId};
 use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
@@ -92,7 +92,62 @@ impl From<Value> for MergeVal {
     }
 }
 
-pub(crate) type Bindings = DenseIdMap<Variable, Pooled<Vec<Value>>>;
+#[derive(Debug, Default)]
+pub(crate) struct Bindings {
+    // INVARIANT: self.vars.iter().map(|(_, v)| v.len() == self.matches)
+    matches: usize,
+    vars: DenseIdMap<Variable, Pooled<Vec<Value>>>,
+}
+
+impl std::ops::Index<Variable> for Bindings {
+    type Output = Pooled<Vec<Value>>;
+    fn index(&self, var: Variable) -> &Pooled<Vec<Value>> {
+        &self.vars[var]
+    }
+}
+
+impl Bindings {
+    fn assert_invariant(&self) {
+        for (_, v) in self.vars.iter() {
+            assert_eq!(v.len(), self.matches);
+        }
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.matches = 0;
+        self.vars.clear();
+        self.assert_invariant();
+    }
+
+    fn get(&self, var: Variable) -> Option<&Pooled<Vec<Value>>> {
+        self.vars.get(var)
+    }
+
+    pub(crate) fn insert(&mut self, var: Variable, vals: Pooled<Vec<Value>>) {
+        if self.vars.n_ids() == 0 {
+            self.matches = vals.len();
+        } else {
+            assert_eq!(self.matches, vals.len());
+        }
+        self.vars.insert(var, vals);
+        self.assert_invariant();
+    }
+
+    pub(crate) fn push(&mut self, map: &DenseIdMap<Variable, Value>) {
+        self.matches += 1;
+        with_pool_set(|ps| {
+            for (var, val) in map.iter() {
+                let vals = self.vars.get_or_insert(var, || ps.get());
+                vals.push(*val);
+            }
+        });
+        self.assert_invariant();
+    }
+
+    fn take(&mut self, var: Variable) -> Option<Pooled<Vec<Value>>> {
+        self.vars.take(var)
+    }
+}
 
 #[derive(Default)]
 pub(crate) struct PredictedVals {
@@ -274,12 +329,8 @@ impl ExecutionState<'_> {
 
 impl ExecutionState<'_> {
     pub(crate) fn run_instrs(&mut self, instrs: &[Instr], bindings: &mut Bindings) {
-        let Some(batch_size) = bindings.iter().map(|(_, x)| x.len()).next() else {
-            // Empty bindings; nothing to do.
-            return;
-        };
         with_pool_set(|ps| {
-            let mut mask = Mask::new(0..batch_size, ps);
+            let mut mask = Mask::new(0..bindings.matches, ps);
             for instr in instrs {
                 if mask.is_empty() {
                     break;
@@ -369,7 +420,7 @@ impl ExecutionState<'_> {
                 if mask_copy.is_empty() {
                     return;
                 }
-                let mut out = mem::take(&mut bindings[*dst_var]);
+                let mut out = bindings.take(*dst_var).unwrap();
                 iter_entries!(mask_copy, pool, args).assign_vec(&mut out, |offset, key| {
                     // First, check if the entry is already in the table:
                     // if let Some(row) = table.get_row_column(&key, *dst_col) {
