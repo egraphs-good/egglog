@@ -13,19 +13,12 @@ use crate::{
 /// A subset of offsets that are still active.
 #[derive(Debug)]
 pub(crate) struct Mask {
-    // NB: why keep track of an extra length? We call `clear` on bitsets when we add them to the
-    // memory pool, and that bitset may have a larger length than the size of the max we construct.
-    //
-    // To keep the length of the mask consistent regardless of the contents of the pool, we use
-    // `len` to cap iteration of the bitset at number of elements passed to `new`.
-    len: usize,
     data: Pooled<FixedBitSet>,
 }
 
 impl Clone for Mask {
     fn clone(&self) -> Self {
         Mask {
-            len: self.len,
             data: Pooled::cloned(&self.data),
         }
     }
@@ -48,10 +41,9 @@ impl Clone for Mask {
 impl Mask {
     pub(super) fn new(range: Range<usize>, ps: &PoolSet) -> Mask {
         let mut data = ps.get::<FixedBitSet>();
-        let len = range.end;
-        data.grow(len);
+        data.grow(range.end);
         data.set_range(range, true);
-        Mask { data, len }
+        Mask { data }
     }
 
     pub(super) fn is_empty(&self) -> bool {
@@ -85,7 +77,7 @@ impl Mask {
             counter: 0,
             data: SmallVec::from_iter(sources),
             pool,
-            mask: self,
+            mask: &mut self.data,
         }
     }
 
@@ -204,7 +196,7 @@ pub(crate) struct MaskIterDynamicSource<'slice, 'mask, T> {
     counter: usize,
     data: SmallVec<[ValueSource<'slice, T>; 4]>,
     pool: Pool<Vec<T>>,
-    mask: &'mask mut Mask,
+    mask: &'mask mut FixedBitSet,
 }
 
 // NB: We could get this to work by passing references as well. This way is just
@@ -220,7 +212,7 @@ where
         res
     }
     fn get_at(&mut self, idx: usize) -> IterResult<Self::Item> {
-        if self.mask.data.contains(idx) {
+        if self.mask.contains(idx) {
             let mut result = self.pool.get();
             result.reserve(self.data.len());
             result.extend(self.data.iter().map(|x| match x {
@@ -228,14 +220,14 @@ where
                 ValueSource::Slice(x) => x[idx].clone(),
             }));
             IterResult::Item(result)
-        } else if idx < self.mask.len {
+        } else if idx < self.mask.len() {
             IterResult::Skip
         } else {
             IterResult::Done
         }
     }
     fn remove(&mut self, idx: usize) {
-        self.mask.data.set(idx, false);
+        self.mask.set(idx, false);
     }
 }
 

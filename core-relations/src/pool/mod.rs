@@ -139,7 +139,7 @@ impl<T> Clear for IndexSet<T> {
 
 impl Clear for FixedBitSet {
     fn clear(&mut self) {
-        self.clear();
+        self.clone_from(&Default::default());
     }
     fn reuse(&self) -> bool {
         !self.is_empty()
