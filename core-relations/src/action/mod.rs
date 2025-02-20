@@ -112,8 +112,11 @@ impl std::ops::Index<Variable> for Bindings {
 
 impl Bindings {
     fn assert_invariant(&self) {
-        for (_, v) in self.vars.iter() {
-            assert_eq!(v.len(), self.matches);
+        #[cfg(debug_assertions)]
+        {
+            for (_, v) in self.vars.iter() {
+                assert_eq!(v.len(), self.matches);
+            }
         }
     }
 
