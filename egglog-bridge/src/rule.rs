@@ -907,7 +907,9 @@ impl Query {
             }
         }
         // For N atoms, we create N queries for seminaive evaluation.
-        if !self.seminaive {
+        if !self.seminaive || (self.atoms.is_empty() && mid_ts == Timestamp::new(0)) {
+            // If a rule has an empty LHS, we still want to run it once. This will cause the right
+            // hand side of the rule to run once, globally across all runs.
             let (mut qb, inner) = self.query_state(rsb, next_ts);
             for (table, entries) in &self.atoms {
                 let dst_vars = inner.convert_all(entries);

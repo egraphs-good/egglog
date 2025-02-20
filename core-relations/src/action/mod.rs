@@ -336,6 +336,10 @@ impl ExecutionState<'_> {
 
 impl ExecutionState<'_> {
     pub(crate) fn run_instrs(&mut self, instrs: &[Instr], bindings: &mut Bindings) {
+        if bindings.vars.next_id().rep() == 0 {
+            // If we have no variables, we want to run the rules once.
+            bindings.matches = 1;
+        }
         with_pool_set(|ps| {
             let mut mask = Mask::new(0..bindings.matches, ps);
             for instr in instrs {

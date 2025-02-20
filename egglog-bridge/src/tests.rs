@@ -1,8 +1,15 @@
-use std::thread;
+use std::{
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    thread,
+};
 
 use core_relations::{make_external_func, Container, ExternalFunctionId, Rebuilder, Value};
 use log::debug;
 use num_rational::Rational64;
+use numeric_id::NumericId;
 
 use crate::{add_expressions, define_rule, ColumnTy, DefaultVal, EGraph, Function, MergeFn};
 
@@ -700,6 +707,61 @@ fn basic_container() {
     for _ in 0..8 {
         container_test()
     }
+}
+
+#[test]
+fn rhs_only_rule() {
+    let mut egraph = EGraph::default();
+    let int_prim = egraph.primitives_mut().register_type::<i64>();
+    let zero = egraph.primitives_mut().get(0i64);
+    let one = egraph.primitives_mut().get(1i64);
+    let num_table = egraph.add_table(
+        vec![ColumnTy::Primitive(int_prim), ColumnTy::Id],
+        DefaultVal::FreshId,
+        MergeFn::UnionId,
+        "num",
+    );
+    let add_data = {
+        let mut rb = egraph.new_rule();
+        let _zero_id = rb.lookup(Function::Table(num_table), &[zero.into()]);
+        let _one_id = rb.lookup(Function::Table(num_table), &[one.into()]);
+        rb.build()
+    };
+
+    let mut contents = Vec::new();
+
+    assert!(contents.is_empty());
+    assert!(egraph.run_rules(&[add_data]).unwrap());
+    egraph.dump_table(num_table, |vals| {
+        contents.push(vals.to_vec());
+    });
+
+    contents.sort();
+    assert_eq!(
+        contents,
+        vec![vec![zero, Value::new(0)], vec![one, Value::new(1)]]
+    );
+}
+
+#[test]
+fn rhs_only_rule_only_runs_once() {
+    let mut egraph = EGraph::default();
+    let counter = Arc::new(AtomicUsize::new(0));
+    let inner = counter.clone();
+    let inc_counter_func = egraph.register_external_func(make_external_func(move |_, _| {
+        inner.fetch_add(1, Ordering::SeqCst);
+        Some(Value::new(0))
+    }));
+    let inc_counter_rule = {
+        let mut rb = egraph.new_rule();
+        rb.call_external_func(inc_counter_func, &[], ColumnTy::Id);
+        rb.build()
+    };
+
+    assert!(!egraph.run_rules(&[inc_counter_rule]).unwrap());
+    assert_eq!(counter.load(Ordering::SeqCst), 1);
+    assert!(!egraph.run_rules(&[inc_counter_rule]).unwrap());
+    assert_eq!(counter.load(Ordering::SeqCst), 1);
 }
 
 const _: () = {
