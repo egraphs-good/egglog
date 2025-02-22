@@ -1727,7 +1727,7 @@ impl<'a> BackendRule<'a> {
                     let y = self.entry(y);
                     self.rb.union(x, y)
                 }
-                core::GenericCoreAction::Panic(_, _msg) => todo!("no panic yet"),
+                core::GenericCoreAction::Panic(_, message) => self.rb.panic(message.clone()),
                 core::GenericCoreAction::Extract(_, _x, _n) => todo!("no extraction yet"),
             }
         }
