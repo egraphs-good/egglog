@@ -1643,18 +1643,17 @@ impl<'a> BackendRule<'a> {
                     v.sort.column_ty(self.rb.egraph().primitives()),
                     v.name.into(),
                 ),
-                core::GenericAtomTerm::Literal(_, l) => match l {
-                    Literal::Int(x) => self.rb.egraph().primitives().get::<i64>(*x),
-                    Literal::Float(x) => self
-                        .rb
-                        .egraph()
-                        .primitives()
-                        .get::<ordered_float::OrderedFloat<f64>>(*x),
-                    Literal::String(x) => self.rb.egraph().primitives().get::<Symbol>(*x),
-                    Literal::Bool(x) => self.rb.egraph().primitives().get::<bool>(*x),
-                    Literal::Unit => self.rb.egraph().primitives().get::<()>(()),
+                core::GenericAtomTerm::Literal(_, l) => {
+                    let prims = self.rb.egraph().primitives();
+                    match l {
+                        Literal::Int(x) => prims.get::<i64>(*x),
+                        Literal::Float(x) => prims.get::<ordered_float::OrderedFloat<f64>>(*x),
+                        Literal::String(x) => prims.get::<Symbol>(*x),
+                        Literal::Bool(x) => prims.get::<bool>(*x),
+                        Literal::Unit => prims.get::<()>(()),
+                    }
+                    .into()
                 }
-                .into(),
                 core::GenericAtomTerm::Global(..) => {
                     panic!("Globals should have been desugared")
                 }
@@ -1662,12 +1661,22 @@ impl<'a> BackendRule<'a> {
             .clone()
     }
 
+    fn function_call<'b>(
+        &mut self,
+        f: &typechecking::FuncType,
+        args: impl IntoIterator<Item = &'b core::ResolvedAtomTerm>,
+    ) -> (egglog_bridge::FunctionId, Vec<egglog_bridge::QueryEntry>) {
+        (
+            self.functions[&f.name].new_backend_id,
+            args.into_iter().map(|x| self.entry(x)).collect(),
+        )
+    }
+
     fn query(&mut self, query: &core::Query<ResolvedCall, ResolvedVar>) {
         for atom in &query.atoms {
             match &atom.head {
                 ResolvedCall::Func(f) => {
-                    let f = self.functions[&f.name].new_backend_id;
-                    let args: Vec<_> = atom.args.iter().map(|x| self.entry(x)).collect();
+                    let (f, args) = self.function_call(f, &atom.args);
                     self.rb.add_atom(f.into(), &args).unwrap()
                 }
                 ResolvedCall::Primitive(..) => todo!("primitives in queries"),
@@ -1678,12 +1687,12 @@ impl<'a> BackendRule<'a> {
     fn actions(&mut self, actions: &core::ResolvedCoreActions) {
         for action in &actions.0 {
             match action {
-                core::GenericCoreAction::Let(span, v, f, xs) => match f {
+                core::GenericCoreAction::Let(span, v, f, args) => match f {
                     ResolvedCall::Func(f) => {
-                        let f = self.functions[&f.name].new_backend_id;
-                        let xs: Vec<_> = xs.iter().map(|x| self.entry(x)).collect();
                         let v = core::GenericAtomTerm::Var(span.clone(), v.clone());
-                        self.entries.insert(v, self.rb.lookup(f.into(), &xs).into());
+                        let (f, args) = self.function_call(f, args);
+                        let x = self.rb.lookup(f.into(), &args).into();
+                        self.entries.insert(v, x);
                     }
                     ResolvedCall::Primitive(..) => todo!("primitives in actions"),
                 },
@@ -1692,25 +1701,22 @@ impl<'a> BackendRule<'a> {
                     let x = self.entry(x);
                     self.entries.insert(v, x);
                 }
-                core::GenericCoreAction::Extract(_, _x, _n) => todo!("no extraction yet"),
                 core::GenericCoreAction::Set(_, f, xs, y) => match f {
+                    ResolvedCall::Primitive(..) => panic!("runtime primitive set!"),
                     ResolvedCall::Func(f) => {
-                        let f = self.functions[&f.name].new_backend_id;
-                        let xs: Vec<_> = xs.iter().chain([y]).map(|x| self.entry(x)).collect();
-                        self.rb.set(f, &xs)
+                        let (f, args) = self.function_call(f, xs.iter().chain([y]));
+                        self.rb.set(f, &args)
                     }
-                    ResolvedCall::Primitive(..) => todo!("primitives in actions"),
                 },
-                core::GenericCoreAction::Change(_, change, f, xs) => match f {
-                    ResolvedCall::Primitive(..) => todo!("this shouldn't be allowed, right?"),
-                    ResolvedCall::Func(f) => match change {
-                        Change::Delete => {
-                            let f = self.functions[&f.name].new_backend_id;
-                            let xs: Vec<_> = xs.iter().map(|x| self.entry(x)).collect();
-                            self.rb.remove(f, &xs)
+                core::GenericCoreAction::Change(_, change, f, args) => match f {
+                    ResolvedCall::Primitive(..) => panic!("runtime primitive change!"),
+                    ResolvedCall::Func(f) => {
+                        let (f, args) = self.function_call(f, args);
+                        match change {
+                            Change::Delete => self.rb.remove(f, &args),
+                            Change::Subsume => todo!("no subsumption yet"),
                         }
-                        Change::Subsume => todo!("no subsumption yet"),
-                    },
+                    }
                 },
                 core::GenericCoreAction::Union(_, x, y) => {
                     let x = self.entry(x);
@@ -1718,6 +1724,7 @@ impl<'a> BackendRule<'a> {
                     self.rb.union(x, y)
                 }
                 core::GenericCoreAction::Panic(_, _msg) => todo!("no panic yet"),
+                core::GenericCoreAction::Extract(_, _x, _n) => todo!("no extraction yet"),
             }
         }
     }
