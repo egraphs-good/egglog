@@ -856,6 +856,12 @@ impl RuleBuilder<'_> {
         });
         self.query.add_rule.push(cb);
     }
+
+    /// Panic with a given message.
+    pub fn panic(&mut self, message: String) {
+        let panic = self.egraph.new_panic(message.clone());
+        self.call_external_func(panic, &[], ColumnTy::Id);
+    }
 }
 
 impl Query {
