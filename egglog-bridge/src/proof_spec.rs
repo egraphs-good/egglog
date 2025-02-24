@@ -107,7 +107,7 @@ pub(crate) enum Insertable {
 pub(crate) type SyntaxEnv = HashMap<Variable, Arc<TermFragment<Variable>>>;
 
 pub(crate) struct ProofBuilder {
-    rule_description: Arc<str>,
+    pub(crate) rule_description: Arc<str>,
     rule_id: RuleId,
     lhs_atoms: Vec<Vec<QueryEntry>>,
     /// The atom against which to compare during proofs. Serves as a guide for
@@ -130,7 +130,7 @@ pub(crate) struct RebuildVars {
 }
 
 impl ProofBuilder {
-    pub(crate) fn new(description: String, rule_id: RuleId) -> ProofBuilder {
+    pub(crate) fn new(description: &str, rule_id: RuleId) -> ProofBuilder {
         ProofBuilder {
             rule_id,
             rule_description: description.into(),

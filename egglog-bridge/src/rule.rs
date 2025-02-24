@@ -165,20 +165,22 @@ pub struct RuleBuilder<'a> {
 }
 
 impl EGraph {
-    pub fn new_rule_described(&mut self, desc: &str) -> RuleBuilder {
+    /// Add a rewrite rule for this [`EGraph`] using a [`RuleBuilder`].
+    /// If you aren't sure, use `egraph.new_rule("", true)`.
+    pub fn new_rule(&mut self, desc: &str, seminaive: bool) -> RuleBuilder {
         let uf_table = self.uf_table;
         let id_counter = self.id_counter;
         let tracing = self.tracing;
         let rule_id = self.rules.reserve_slot();
         RuleBuilder {
             egraph: self,
-            proof_builder: ProofBuilder::new(desc.to_string(), rule_id),
+            proof_builder: ProofBuilder::new(desc, rule_id),
             query: Query {
                 uf_table,
                 id_counter,
                 tracing,
                 rule_id,
-                seminaive: true,
+                seminaive,
                 sole_focus: None,
                 atom_proofs: Default::default(),
                 vars: Default::default(),
@@ -189,18 +191,9 @@ impl EGraph {
         }
     }
 
-    pub fn new_rule(&mut self) -> RuleBuilder {
-        self.new_rule_described("")
-    }
-
+    /// Remove a rewrite rule from this [`EGraph`].
     pub fn free_rule(&mut self, id: RuleId) {
         self.rules.take(id);
-    }
-
-    pub(crate) fn new_nonincremental_rule(&mut self) -> RuleBuilder {
-        let mut res = self.new_rule();
-        res.query.seminaive = false;
-        res
     }
 }
 
@@ -312,18 +305,7 @@ impl RuleBuilder<'_> {
     }
 
     /// Register the given rule with the egraph.
-    pub fn build(self) -> RuleId {
-        self.build_described("")
-    }
-
-    pub(crate) fn set_focus(&mut self, focus: usize) {
-        self.query.sole_focus = Some(focus);
-    }
-
-    /// Register the given rule with the egraph.
-    ///
-    /// Include a string describing the rule for debugging purposes.
-    pub fn build_described(mut self, msg: impl Into<String>) -> RuleId {
+    pub fn build(mut self) -> RuleId {
         if self.query.atoms.len() == 1 {
             self.query.plan_strategy = PlanStrategy::MinCover;
         }
@@ -332,11 +314,15 @@ impl RuleBuilder<'_> {
             last_run_at: Timestamp::new(0),
             query: self.query,
             syntax: self.proof_builder.syntax,
-            desc: msg.into(),
+            desc: self.proof_builder.rule_description,
         };
         debug!("created rule {res:?} / {}:\n{:?}", info.desc, info.syntax);
         self.egraph.rules.insert(res, info);
         res
+    }
+
+    pub(crate) fn set_focus(&mut self, focus: usize) {
+        self.query.sole_focus = Some(focus);
     }
 
     /// Bind a new variable of the given type in the query.

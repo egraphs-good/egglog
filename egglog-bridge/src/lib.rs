@@ -853,7 +853,7 @@ impl EGraph {
         let table_id = self.funcs[table].table;
         let uf_table = self.uf_table;
         // Two atoms, one binding a whole tuple, one binding a displaced column
-        let mut rb = self.new_rule();
+        let mut rb = self.new_rule(&format!("incremental rebuild {table:?}, {col:?}"), true);
         rb.set_plan_strategy(PlanStrategy::MinCover);
         let mut vars = Vec::<QueryEntry>::with_capacity(schema.len());
         for ty in schema {
@@ -878,11 +878,11 @@ impl EGraph {
 
         // Remove the old row and insert the new one.
         rb.rebuild_row(table, &vars, &canon);
-        rb.build_described(format!("incremental rebuild {table:?}, {col:?}"))
+        rb.build()
     }
 
     fn nonincremental_rebuild(&mut self, table: FunctionId, schema: &[ColumnTy]) -> RuleId {
-        let mut rb = self.new_nonincremental_rule();
+        let mut rb = self.new_rule(&format!("nonincremental rebuild {table:?}"), false);
         rb.set_plan_strategy(PlanStrategy::MinCover);
         let mut vars = Vec::<QueryEntry>::with_capacity(schema.len());
         for ty in schema {
@@ -904,7 +904,7 @@ impl EGraph {
         }
         rb.check_for_update(&lhs, &rhs).unwrap();
         rb.rebuild_row(table, &vars, &canon);
-        rb.build_described(format!("nonincremental rebuild {table:?}"))
+        rb.build()
     }
 }
 
@@ -913,7 +913,7 @@ struct RuleInfo {
     last_run_at: Timestamp,
     query: rule::Query,
     syntax: RuleRepresentation,
-    desc: String,
+    desc: Arc<str>,
 }
 
 #[derive(Clone)]

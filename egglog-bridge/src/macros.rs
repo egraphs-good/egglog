@@ -146,10 +146,10 @@ macro_rules! parse_lhs {
 macro_rules! define_rule {
     ([$egraph:expr] ($($lhs:tt)*) => ($($rhs:tt)*))  => {{
         let mut ebuilder = $crate::macros::ExpressionBuilder::default();
-        let mut builder = $egraph.new_rule_described(stringify!(($($lhs)* => $($rhs)*)));
+        let mut builder = $egraph.new_rule(stringify!(($($lhs)* => $($rhs)*)), true);
         $crate::parse_lhs!(ebuilder, builder, [ $($lhs)* ]);
         $crate::parse_rhs_command!(ebuilder, builder, [ $($rhs)* ]);
-        builder.build_described(stringify!(($($lhs)* => $($rhs)*)))
+        builder.build()
     }};
 }
 

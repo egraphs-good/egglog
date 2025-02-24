@@ -624,7 +624,7 @@ fn container_test() {
     ]);
 
     let vec_expand = {
-        let mut rb = egraph.new_rule();
+        let mut rb = egraph.new_rule("", true);
         let vec = rb.new_var(ColumnTy::Id);
         let vec_id = rb.new_var(ColumnTy::Id);
         rb.add_atom(Function::Table(vec_table), &[vec.into(), vec_id.into()])
@@ -642,7 +642,7 @@ fn container_test() {
     };
 
     let eval_add = {
-        let mut rb = egraph.new_rule();
+        let mut rb = egraph.new_rule("", true);
         let lhs_raw = rb.new_var(ColumnTy::Primitive(int_prim));
         let lhs_id = rb.new_var(ColumnTy::Id);
         let rhs_raw = rb.new_var(ColumnTy::Primitive(int_prim));
@@ -722,7 +722,7 @@ fn rhs_only_rule() {
         "num",
     );
     let add_data = {
-        let mut rb = egraph.new_rule();
+        let mut rb = egraph.new_rule("", true);
         let _zero_id = rb.lookup(Function::Table(num_table), &[zero.into()]);
         let _one_id = rb.lookup(Function::Table(num_table), &[one.into()]);
         rb.build()
@@ -753,7 +753,7 @@ fn rhs_only_rule_only_runs_once() {
         Some(Value::new(0))
     }));
     let inc_counter_rule = {
-        let mut rb = egraph.new_rule();
+        let mut rb = egraph.new_rule("", true);
         rb.call_external_func(inc_counter_func, &[], ColumnTy::Id);
         rb.build()
     };
