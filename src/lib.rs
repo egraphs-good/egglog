@@ -1100,12 +1100,12 @@ impl EGraph {
 
         let rule_id = {
             let mut translator = BackendRule::new(
-                self.backend.new_rule_described(name.into()),
+                self.backend.new_rule(name.into(), self.seminaive),
                 &self.functions,
             );
             translator.query(&query);
             translator.actions(&actions);
-            translator.finish().build_described(name.to_string())
+            translator.finish().build()
         };
 
         let vars = query.get_vars();
@@ -1141,7 +1141,10 @@ impl EGraph {
         )?;
 
         {
-            let mut translator = BackendRule::new(self.backend.new_rule(), &self.functions);
+            let mut translator = BackendRule::new(
+                self.backend.new_rule("eval_actions", false),
+                &self.functions,
+            );
             translator.actions(&actions);
             let id = translator.finish().build();
             let _ = self.backend.run_rules(&[id]).unwrap();
@@ -1231,7 +1234,8 @@ impl EGraph {
                     None
                 }));
 
-            let mut translator = BackendRule::new(self.backend.new_rule(), &self.functions);
+            let mut translator =
+                BackendRule::new(self.backend.new_rule("check_facts", false), &self.functions);
             translator.query(&query);
             let mut rb = translator.finish();
             rb.call_external_func(ext_id, &[], egglog_bridge::ColumnTy::Id);
