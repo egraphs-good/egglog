@@ -64,10 +64,9 @@ impl Run {
                     serialized.inline_leaves();
                     serialized.to_dot();
 
-                    // TODO: remove this in phase 2
-                    let max = egraph.num_tuples();
-                    for (name, func) in &egraph.functions {
-                        let old_backend = egraph.function_to_dag(*name, max).unwrap().0.len();
+                    // TODO: remove this before merging
+                    for func in egraph.functions.values() {
+                        let old_backend = func.len();
                         let new_backend = egraph.backend.table_size(func.new_backend_id);
                         assert_eq!(old_backend, new_backend);
                     }
@@ -93,6 +92,9 @@ impl Run {
         struct Wrapper<'a>(&'a Run);
         impl std::fmt::Display for Wrapper<'_> {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                if self.0.path.parent().unwrap().ends_with("fail-typecheck") {
+                    write!(f, "fail-typecheck/")?;
+                }
                 let stem = self.0.path.file_stem().unwrap();
                 let stem_str = stem.to_string_lossy().replace(['.', '-', ' '], "_");
                 write!(f, "{stem_str}")?;

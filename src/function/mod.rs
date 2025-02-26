@@ -193,6 +193,12 @@ impl Function {
         })
     }
 
+    // TODO: remove before merging
+    #[allow(clippy::len_without_is_empty)]
+    pub fn len(&self) -> usize {
+        self.nodes.len()
+    }
+
     pub fn get(&self, inputs: &[Value]) -> Option<Value> {
         self.nodes.get(inputs).map(|output| output.value)
     }
