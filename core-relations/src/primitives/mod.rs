@@ -120,11 +120,8 @@ impl Primitives {
     /// Note: This function needs to perform a number of table lookups in order
     /// to apply the function in question. This overhead is substantial for
     /// small functions.
-    pub fn apply_op(&mut self, id: PrimitiveFunctionId, args: &[Value]) -> Option<Value> {
-        let dyn_op = self.funcs.unwrap_val(id);
-        let res = dyn_op.op.apply(self, args);
-        self.funcs.insert(id, dyn_op);
-        res
+    pub fn apply_op(&self, id: PrimitiveFunctionId, args: &[Value]) -> Option<Value> {
+        self.funcs[id].op.apply(self, args)
     }
 
     pub(crate) fn apply_vectorized(
