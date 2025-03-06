@@ -180,6 +180,7 @@ pub struct PrimitiveFunctionSignature<'a> {
 ///
 /// Most of the time you can get away with using the `lift_operation` macro,
 /// which implements this under the hood.
+#[deprecated]
 pub trait PrimitiveFunction: dyn_clone::DynClone + Send + Sync {
     fn signature(&self) -> PrimitiveFunctionSignature;
 
