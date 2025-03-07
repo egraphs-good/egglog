@@ -80,7 +80,7 @@
 //         self.name
 //     }
 
-//     fn column_ty(&self, prims: &core_relations::Primitives) -> ColumnTy {
+//     fn column_ty(&self, prims: &Primitives) -> ColumnTy {
 //         ColumnTy::Primitive(prims.get_ty::<ValueSet>())
 //     }
 

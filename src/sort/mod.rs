@@ -4,6 +4,7 @@ use lazy_static::lazy_static;
 use std::fmt::Debug;
 use std::{any::Any, sync::Arc};
 
+use core_relations::Primitives;
 use egglog_bridge::ColumnTy;
 
 use crate::constraint::AllEqualTypeConstraint;
@@ -38,7 +39,9 @@ mod multiset;
 pub trait Sort: Any + Send + Sync + Debug {
     fn name(&self) -> Symbol;
 
-    fn column_ty(&self, prims: &core_relations::Primitives) -> ColumnTy;
+    fn column_ty(&self, prims: &Primitives) -> ColumnTy;
+
+    fn register_type(&self, prims: &mut Primitives);
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static>;
 
@@ -135,9 +138,11 @@ impl Sort for EqSort {
         self.name
     }
 
-    fn column_ty(&self, _prims: &core_relations::Primitives) -> ColumnTy {
+    fn column_ty(&self, _prims: &Primitives) -> ColumnTy {
         ColumnTy::Id
     }
+
+    fn register_type(&self, _: &mut Primitives) {}
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
         self
