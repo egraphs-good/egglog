@@ -65,10 +65,10 @@ impl Run {
                     serialized.to_dot();
 
                     // TODO: remove this before merging
-                    for func in egraph.functions.values() {
+                    for (name, func) in &egraph.functions {
                         let old_backend = func.len();
                         let new_backend = egraph.backend.table_size(func.new_backend_id);
-                        assert_eq!(old_backend, new_backend);
+                        assert_eq!(old_backend, new_backend, "func: {name}");
                     }
                 }
             }
