@@ -10,10 +10,6 @@
 // //! The value is stored similar to the `vec` sort, as an index into a set, where each item in
 // //! the set is a `(Symbol, Vec<Value>)` pairs. The Symbol is the function name, and the `Vec<Value>` is
 // //! the list of partially applied arguments.
-// use std::sync::Mutex;
-
-// use crate::ast::Literal;
-
 // use super::*;
 
 // /// A function value is a name of a function, a list of partially applied arguments (values and sort)

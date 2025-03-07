@@ -1,6 +1,4 @@
 use super::*;
-use crate::ast::Literal;
-use ordered_float::OrderedFloat;
 
 /// 64-bit floating point numbers supporting these primitives:
 /// - Arithmetic: `+`, `-`, `*`, `/`, `%`, `^`, `neg`, `abs`
@@ -19,11 +17,11 @@ impl Sort for F64Sort {
     }
 
     fn column_ty(&self, prims: &Primitives) -> ColumnTy {
-        ColumnTy::Primitive(prims.get_ty::<OrderedFloat<f64>>())
+        ColumnTy::Primitive(prims.get_ty::<F>())
     }
 
     fn register_type(&self, prims: &mut Primitives) {
-        prims.register_type::<OrderedFloat<f64>>();
+        prims.register_type::<F>();
     }
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {

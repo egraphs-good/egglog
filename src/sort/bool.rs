@@ -1,5 +1,3 @@
-use crate::ast::Literal;
-
 use super::*;
 
 #[derive(Debug)]
