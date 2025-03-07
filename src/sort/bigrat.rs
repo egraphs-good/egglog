@@ -38,12 +38,10 @@ impl Sort for BigRatSort {
 
     #[rustfmt::skip]
     fn register_primitives(self: Arc<Self>, eg: &mut TypeInfo) {
-        type Opt<T=()> = Option<T>;
-
-        add_primitives!(eg, "+" = |a: Q, b: Q| -> Opt<Q> { a.checked_add(&b) });
-        add_primitives!(eg, "-" = |a: Q, b: Q| -> Opt<Q> { a.checked_sub(&b) });
-        add_primitives!(eg, "*" = |a: Q, b: Q| -> Opt<Q> { a.checked_mul(&b) });
-        add_primitives!(eg, "/" = |a: Q, b: Q| -> Opt<Q> { a.checked_div(&b) });
+        add_primitives!(eg, "+" = |a: Q, b: Q| -> Option<Q> { a.checked_add(&b) });
+        add_primitives!(eg, "-" = |a: Q, b: Q| -> Option<Q> { a.checked_sub(&b) });
+        add_primitives!(eg, "*" = |a: Q, b: Q| -> Option<Q> { a.checked_mul(&b) });
+        add_primitives!(eg, "/" = |a: Q, b: Q| -> Option<Q> { a.checked_div(&b) });
 
         add_primitives!(eg, "min" = |a: Q, b: Q| -> Q { a.min(b) });
         add_primitives!(eg, "max" = |a: Q, b: Q| -> Q { a.max(b) });
@@ -120,10 +118,10 @@ impl Sort for BigRatSort {
             }
         });
 
-        add_primitives!(eg, "<" = |a: Q, b: Q| -> Opt { if a < b {Some(())} else {None} });
-        add_primitives!(eg, ">" = |a: Q, b: Q| -> Opt { if a > b {Some(())} else {None} });
-        add_primitives!(eg, "<=" = |a: Q, b: Q| -> Opt { if a <= b {Some(())} else {None} });
-        add_primitives!(eg, ">=" = |a: Q, b: Q| -> Opt { if a >= b {Some(())} else {None} });
+        add_primitives!(eg, "<" = |a: Q, b: Q| -> Option<()> { if a < b {Some(())} else {None} });
+        add_primitives!(eg, ">" = |a: Q, b: Q| -> Option<()> { if a > b {Some(())} else {None} });
+        add_primitives!(eg, "<=" = |a: Q, b: Q| -> Option<()> { if a <= b {Some(())} else {None} });
+        add_primitives!(eg, ">=" = |a: Q, b: Q| -> Option<()> { if a >= b {Some(())} else {None} });
    }
 
     fn extract_term(
@@ -163,12 +161,12 @@ impl FromSort for Q {
 
 impl IntoSort for Q {
     type Sort = BigRatSort;
-    fn store(self, _sort: &Self::Sort) -> Option<Value> {
+    fn store(self, _sort: &Self::Sort) -> Value {
         let (i, _) = RATS.lock().unwrap().insert_full(self);
-        Some(Value {
+        Value {
             #[cfg(debug_assertions)]
             tag: BigRatSort.name(),
             bits: i as u64,
-        })
+        }
     }
 }

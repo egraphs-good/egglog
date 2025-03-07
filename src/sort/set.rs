@@ -120,7 +120,7 @@ impl Sort for SetSort {
             })
             .collect();
         drop(sets);
-        *value = new_set.store(self).unwrap();
+        *value = new_set.store(self);
         changed
     }
 
@@ -200,14 +200,14 @@ impl Sort for SetSort {
 
 impl IntoSort for ValueSet {
     type Sort = SetSort;
-    fn store(self, sort: &Self::Sort) -> Option<Value> {
+    fn store(self, sort: &Self::Sort) -> Value {
         let mut sets = sort.sets.lock().unwrap();
         let (i, _) = sets.insert_full(self);
-        Some(Value {
+        Value {
             #[cfg(debug_assertions)]
             tag: sort.name,
             bits: i as u64,
-        })
+        }
     }
 }
 
@@ -243,7 +243,7 @@ impl PrimitiveLike for SetOf {
         _egraph: Option<&mut EGraph>,
     ) -> Option<Value> {
         let set = ValueSet::from_iter(values.iter().copied());
-        Some(set.store(&self.set).unwrap())
+        Some(set.store(&self.set))
     }
 }
 
@@ -268,7 +268,7 @@ impl PrimitiveLike for Ctor {
         _egraph: Option<&mut EGraph>,
     ) -> Option<Value> {
         assert!(values.is_empty());
-        ValueSet::default().store(&self.set)
+        Some(ValueSet::default().store(&self.set))
     }
 }
 
@@ -305,7 +305,7 @@ impl PrimitiveLike for SetRebuild {
             .collect();
         // drop set to make sure we lose lock
         drop(set);
-        new_set.store(&self.set)
+        Some(new_set.store(&self.set))
     }
 }
 
@@ -336,7 +336,7 @@ impl PrimitiveLike for Insert {
     ) -> Option<Value> {
         let mut set = ValueSet::load(&self.set, &values[0]);
         set.insert(values[1]);
-        set.store(&self.set)
+        Some(set.store(&self.set))
     }
 }
 
@@ -436,7 +436,7 @@ impl PrimitiveLike for Union {
         let mut set1 = ValueSet::load(&self.set, &values[0]);
         let set2 = ValueSet::load(&self.set, &values[1]);
         set1.extend(set2.iter());
-        set1.store(&self.set)
+        Some(set1.store(&self.set))
     }
 }
 
@@ -469,7 +469,7 @@ impl PrimitiveLike for Intersect {
         let set2 = ValueSet::load(&self.set, &values[1]);
         set1.retain(|k| set2.contains(k));
         // set.insert(values[1], values[2]);
-        set1.store(&self.set)
+        Some(set1.store(&self.set))
     }
 }
 
@@ -561,7 +561,7 @@ impl PrimitiveLike for Remove {
     ) -> Option<Value> {
         let mut set = ValueSet::load(&self.set, &values[0]);
         set.remove(&values[1]);
-        set.store(&self.set)
+        Some(set.store(&self.set))
     }
 }
 
@@ -593,6 +593,6 @@ impl PrimitiveLike for Diff {
         let mut set1 = ValueSet::load(&self.set, &values[0]);
         let set2 = ValueSet::load(&self.set, &values[1]);
         set1.retain(|k| !set2.contains(k));
-        set1.store(&self.set)
+        Some(set1.store(&self.set))
     }
 }

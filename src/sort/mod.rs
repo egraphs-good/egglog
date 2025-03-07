@@ -178,15 +178,7 @@ pub trait FromSort: Sized {
 
 pub trait IntoSort: Sized {
     type Sort: Sort;
-    fn store(self, sort: &Self::Sort) -> Option<Value>;
-}
-
-impl<T: IntoSort> IntoSort for Option<T> {
-    type Sort = T::Sort;
-
-    fn store(self, sort: &Self::Sort) -> Option<Value> {
-        self?.store(sort)
-    }
+    fn store(self, sort: &Self::Sort) -> Value;
 }
 
 pub type PreSort =

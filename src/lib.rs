@@ -699,11 +699,11 @@ impl EGraph {
 
     pub fn eval_lit(&self, lit: &Literal) -> Value {
         match lit {
-            Literal::Int(i) => i.store(&I64Sort).unwrap(),
-            Literal::Float(f) => f.store(&F64Sort).unwrap(),
-            Literal::String(s) => s.store(&StringSort).unwrap(),
-            Literal::Unit => ().store(&UnitSort).unwrap(),
-            Literal::Bool(b) => b.store(&BoolSort).unwrap(),
+            Literal::Int(i) => i.store(&I64Sort),
+            Literal::Float(f) => f.store(&F64Sort),
+            Literal::String(s) => s.store(&StringSort),
+            Literal::Unit => ().store(&UnitSort),
+            Literal::Bool(b) => b.store(&BoolSort),
         }
     }
 
@@ -1818,7 +1818,7 @@ mod tests {
                 let b = i64::load(&self.ele, b);
                 sum += a * b;
             }
-            sum.store(&self.ele)
+            Some(sum.store(&self.ele))
         }
     }
 

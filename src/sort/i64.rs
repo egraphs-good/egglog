@@ -43,27 +43,25 @@ impl Sort for I64Sort {
         typeinfo.add_primitive(TermOrderingMax {
            });
 
-        type Opt<T=()> = Option<T>;
-
-        add_primitives!(typeinfo, "+" = |a: i64, b: i64| -> Opt<i64> { a.checked_add(b) });
-        add_primitives!(typeinfo, "-" = |a: i64, b: i64| -> Opt<i64> { a.checked_sub(b) });
-        add_primitives!(typeinfo, "*" = |a: i64, b: i64| -> Opt<i64> { a.checked_mul(b) });
-        add_primitives!(typeinfo, "/" = |a: i64, b: i64| -> Opt<i64> { a.checked_div(b) });
-        add_primitives!(typeinfo, "%" = |a: i64, b: i64| -> Opt<i64> { a.checked_rem(b) });
+        add_primitives!(typeinfo, "+" = |a: i64, b: i64| -> Option<i64> { a.checked_add(b) });
+        add_primitives!(typeinfo, "-" = |a: i64, b: i64| -> Option<i64> { a.checked_sub(b) });
+        add_primitives!(typeinfo, "*" = |a: i64, b: i64| -> Option<i64> { a.checked_mul(b) });
+        add_primitives!(typeinfo, "/" = |a: i64, b: i64| -> Option<i64> { a.checked_div(b) });
+        add_primitives!(typeinfo, "%" = |a: i64, b: i64| -> Option<i64> { a.checked_rem(b) });
 
         add_primitives!(typeinfo, "&" = |a: i64, b: i64| -> i64 { a & b });
         add_primitives!(typeinfo, "|" = |a: i64, b: i64| -> i64 { a | b });
         add_primitives!(typeinfo, "^" = |a: i64, b: i64| -> i64 { a ^ b });
-        add_primitives!(typeinfo, "<<" = |a: i64, b: i64| -> Opt<i64> { b.try_into().ok().and_then(|b| a.checked_shl(b)) });
-        add_primitives!(typeinfo, ">>" = |a: i64, b: i64| -> Opt<i64> { b.try_into().ok().and_then(|b| a.checked_shr(b)) });
+        add_primitives!(typeinfo, "<<" = |a: i64, b: i64| -> Option<i64> { b.try_into().ok().and_then(|b| a.checked_shl(b)) });
+        add_primitives!(typeinfo, ">>" = |a: i64, b: i64| -> Option<i64> { b.try_into().ok().and_then(|b| a.checked_shr(b)) });
         add_primitives!(typeinfo, "not-i64" = |a: i64| -> i64 { !a });
 
         add_primitives!(typeinfo, "log2" = |a: i64| -> i64 { (a as i64).ilog2() as i64 });
 
-        add_primitives!(typeinfo, "<" = |a: i64, b: i64| -> Opt { (a < b).then_some(()) });
-        add_primitives!(typeinfo, ">" = |a: i64, b: i64| -> Opt { (a > b).then_some(()) });
-        add_primitives!(typeinfo, "<=" = |a: i64, b: i64| -> Opt { (a <= b).then_some(()) });
-        add_primitives!(typeinfo, ">=" = |a: i64, b: i64| -> Opt { (a >= b).then_some(()) });
+        add_primitives!(typeinfo, "<" = |a: i64, b: i64| -> Option<()> { (a < b).then_some(()) });
+        add_primitives!(typeinfo, ">" = |a: i64, b: i64| -> Option<()> { (a > b).then_some(()) });
+        add_primitives!(typeinfo, "<=" = |a: i64, b: i64| -> Option<()> { (a <= b).then_some(()) });
+        add_primitives!(typeinfo, ">=" = |a: i64, b: i64| -> Option<()> { (a >= b).then_some(()) });
 
         add_primitives!(typeinfo, "bool-=" = |a: i64, b: i64| -> bool { a == b });
         add_primitives!(typeinfo, "bool-<" = |a: i64, b: i64| -> bool { a < b });
@@ -98,12 +96,12 @@ impl Sort for I64Sort {
 
 impl IntoSort for i64 {
     type Sort = I64Sort;
-    fn store(self, _sort: &Self::Sort) -> Option<Value> {
-        Some(Value {
+    fn store(self, _sort: &Self::Sort) -> Value {
+        Value {
             #[cfg(debug_assertions)]
             tag: I64Sort.name(),
             bits: self as u64,
-        })
+        }
     }
 }
 

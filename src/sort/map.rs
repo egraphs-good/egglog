@@ -141,7 +141,7 @@ impl Sort for MapSort {
             })
             .collect();
         drop(maps);
-        *value = new_map.store(self).unwrap();
+        *value = new_map.store(self);
         changed
     }
 
@@ -202,14 +202,14 @@ impl Sort for MapSort {
 
 impl IntoSort for ValueMap {
     type Sort = MapSort;
-    fn store(self, sort: &Self::Sort) -> Option<Value> {
+    fn store(self, sort: &Self::Sort) -> Value {
         let mut maps = sort.maps.lock().unwrap();
         let (i, _) = maps.insert_full(self);
-        Some(Value {
+        Value {
             #[cfg(debug_assertions)]
             tag: sort.name,
             bits: i as u64,
-        })
+        }
     }
 }
 
@@ -261,7 +261,7 @@ impl PrimitiveLike for MapRebuild {
 
         drop(maps);
 
-        let res = new_map.store(&self.map).unwrap();
+        let res = new_map.store(&self.map);
         Some(res)
     }
 }
@@ -344,7 +344,7 @@ impl PrimitiveLike for Ctor {
         _egraph: Option<&mut EGraph>,
     ) -> Option<Value> {
         assert!(values.is_empty());
-        ValueMap::default().store(&self.map)
+        Some(ValueMap::default().store(&self.map))
     }
 }
 
@@ -380,7 +380,7 @@ impl PrimitiveLike for Insert {
     ) -> Option<Value> {
         let mut map = ValueMap::load(&self.map, &values[0]);
         map.insert(values[1], values[2]);
-        map.store(&self.map)
+        Some(map.store(&self.map))
     }
 }
 
@@ -509,7 +509,7 @@ impl PrimitiveLike for Remove {
     ) -> Option<Value> {
         let mut map = ValueMap::load(&self.map, &values[0]);
         map.remove(&values[1]);
-        map.store(&self.map)
+        Some(map.store(&self.map))
     }
 }
 

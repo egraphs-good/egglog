@@ -47,12 +47,12 @@ impl Sort for BoolSort {
 
 impl IntoSort for bool {
     type Sort = BoolSort;
-    fn store(self, _sort: &Self::Sort) -> Option<Value> {
-        Some(Value {
+    fn store(self, _sort: &Self::Sort) -> Value {
+        Value {
             #[cfg(debug_assertions)]
             tag: BoolSort.name(),
             bits: self as u64,
-        })
+        }
     }
 }
 
