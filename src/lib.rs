@@ -809,16 +809,13 @@ impl EGraph {
     }
 
     pub fn print_size(&mut self, sym: Option<Symbol>) -> Result<(), Error> {
-        if true {
-            todo!("print_size")
-        }
-
         if let Some(sym) = sym {
             let f = self
                 .functions
                 .get(&sym)
                 .ok_or(TypeError::UnboundFunction(sym, span!()))?;
             log::info!("Function {} has size {}", sym, f.nodes.len());
+            assert_eq!(f.nodes.len(), self.backend.table_size(f.new_backend_id));
             self.print_msg(f.nodes.len().to_string());
             Ok(())
         } else {
@@ -826,7 +823,10 @@ impl EGraph {
             let mut lens = self
                 .functions
                 .iter()
-                .map(|(sym, f)| (*sym, f.nodes.len()))
+                .map(|(sym, f)| {
+                    assert_eq!(f.nodes.len(), self.backend.table_size(f.new_backend_id));
+                    (*sym, f.nodes.len())
+                })
                 .collect::<Vec<_>>();
 
             // Function name's alphabetical order
