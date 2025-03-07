@@ -174,7 +174,7 @@ impl Sort for FunctionSort {
             changed |= s.canonicalize(&mut v, unionfind);
             new_outputs.push((s, v));
         }
-        *value = ValueFunction(name, new_outputs).store(self).unwrap();
+        *value = ValueFunction(name, new_outputs).store(self);
         changed
     }
 
@@ -212,14 +212,14 @@ impl Sort for FunctionSort {
 
 impl IntoSort for ValueFunction {
     type Sort = FunctionSort;
-    fn store(self, sort: &Self::Sort) -> Option<Value> {
+    fn store(self, sort: &Self::Sort) -> Value {
         let mut functions = sort.functions.lock().unwrap();
         let (i, _) = functions.insert_full(self);
-        Some(Value {
+        Value {
             #[cfg(debug_assertions)]
             tag: sort.name,
             bits: i as u64,
-        })
+        }
     }
 }
 
@@ -361,7 +361,7 @@ impl PrimitiveLike for Ctor {
             .map(|(value, sort)| (sort.clone(), *value))
             .collect();
 
-        ValueFunction(name, args).store(&self.function)
+        Some(ValueFunction(name, args).store(&self.function))
     }
 }
 

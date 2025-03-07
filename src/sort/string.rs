@@ -54,12 +54,12 @@ impl Sort for StringSort {
 
 impl IntoSort for Symbol {
     type Sort = StringSort;
-    fn store(self, _sort: &Self::Sort) -> Option<Value> {
-        Some(Value {
+    fn store(self, _sort: &Self::Sort) -> Value {
+        Value {
             #[cfg(debug_assertions)]
             tag: StringSort.name(),
             bits: NonZeroU32::from(self).get() as _,
-        })
+        }
     }
 }
 

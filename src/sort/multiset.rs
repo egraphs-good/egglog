@@ -213,7 +213,7 @@ impl Sort for MultiSetSort {
             e
         });
         drop(multisets);
-        *value = new_multiset.store(self).unwrap();
+        *value = new_multiset.store(self);
         changed
     }
 
@@ -291,14 +291,14 @@ impl Sort for MultiSetSort {
 
 impl IntoSort for ValueMultiSet {
     type Sort = MultiSetSort;
-    fn store(self, sort: &Self::Sort) -> Option<Value> {
+    fn store(self, sort: &Self::Sort) -> Value {
         let mut multisets = sort.multisets.lock().unwrap();
         let (i, _) = multisets.insert_full(self);
-        Some(Value {
+        Value {
             #[cfg(debug_assertions)]
             tag: sort.name,
             bits: i as u64,
-        })
+        }
     }
 }
 
@@ -334,7 +334,7 @@ impl PrimitiveLike for MultiSetOf {
         _egraph: Option<&mut EGraph>,
     ) -> Option<Value> {
         let multiset = MultiSet::from_iter(values.iter().copied());
-        Some(multiset.store(&self.multiset).unwrap())
+        Some(multiset.store(&self.multiset))
     }
 }
 
@@ -369,7 +369,7 @@ impl PrimitiveLike for Insert {
     ) -> Option<Value> {
         let multiset = ValueMultiSet::load(&self.multiset, &values[0]);
         let multiset = multiset.insert(values[1]);
-        multiset.store(&self.multiset)
+        Some(multiset.store(&self.multiset))
     }
 }
 
@@ -509,8 +509,8 @@ impl PrimitiveLike for Remove {
         _egraph: Option<&mut EGraph>,
     ) -> Option<Value> {
         let multiset = ValueMultiSet::load(&self.multiset, &values[0]);
-        let multiset = multiset.remove(&values[1]);
-        multiset.store(&self.multiset)
+        let multiset = multiset.remove(&values[1])?;
+        Some(multiset.store(&self.multiset))
     }
 }
 
@@ -575,7 +575,7 @@ impl PrimitiveLike for Sum {
     ) -> Option<Value> {
         let lhs_multiset = ValueMultiSet::load(&self.multiset, &values[0]);
         let rhs_multiset = ValueMultiSet::load(&self.multiset, &values[1]);
-        lhs_multiset.sum(rhs_multiset).store(&self.multiset)
+        Some(lhs_multiset.sum(rhs_multiset).store(&self.multiset))
     }
 }
 
@@ -613,6 +613,6 @@ impl PrimitiveLike for Map {
             egraph.unwrap_or_else(|| panic!("`{}` is not supported yet in facts.", self.name));
         let multiset = ValueMultiSet::load(&self.multiset, &values[1]);
         let new_multiset = multiset.map(|e| self.fn_.apply(&values[0], &[*e], egraph));
-        new_multiset.store(&self.multiset)
+        Some(new_multiset.store(&self.multiset))
     }
 }
