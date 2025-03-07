@@ -42,11 +42,11 @@ impl Default for TypeInfo {
         res.add_sort(BigIntSort, span!()).unwrap();
         res.add_sort(BigRatSort, span!()).unwrap();
 
-        res.add_presort::<MapSort>(span!()).unwrap();
-        res.add_presort::<SetSort>(span!()).unwrap();
-        res.add_presort::<VecSort>(span!()).unwrap();
-        res.add_presort::<FunctionSort>(span!()).unwrap();
-        res.add_presort::<MultiSetSort>(span!()).unwrap();
+        // res.add_presort::<MapSort>(span!()).unwrap();
+        // res.add_presort::<SetSort>(span!()).unwrap();
+        // res.add_presort::<VecSort>(span!()).unwrap();
+        // res.add_presort::<FunctionSort>(span!()).unwrap();
+        // res.add_presort::<MultiSetSort>(span!()).unwrap();
 
         res.add_primitive(ValueEq);
 
