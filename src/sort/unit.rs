@@ -1,5 +1,4 @@
 use super::*;
-use crate::{ast::Literal, constraint::AllEqualTypeConstraint, ArcSort, PrimitiveLike};
 
 #[derive(Debug)]
 pub struct UnitSort;

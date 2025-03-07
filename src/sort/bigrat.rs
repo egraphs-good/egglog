@@ -1,11 +1,3 @@
-use num::traits::{CheckedAdd, CheckedDiv, CheckedMul, CheckedSub, One, Signed, ToPrimitive, Zero};
-use num::{rational::BigRational, BigInt};
-use std::sync::Mutex;
-
-type Z = BigInt;
-type Q = BigRational;
-use crate::{ast::Literal, util::IndexSet};
-
 use super::*;
 
 lazy_static! {

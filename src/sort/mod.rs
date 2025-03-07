@@ -1,15 +1,28 @@
 #[macro_use]
 mod macros;
+
 use lazy_static::lazy_static;
+use num::traits::{CheckedAdd, CheckedDiv, CheckedMul, CheckedSub, One, Signed, ToPrimitive, Zero};
+use num::{rational::BigRational, BigInt};
+use ordered_float::OrderedFloat;
 use std::fmt::Debug;
+use std::ops::{Shl, Shr};
+use std::sync::Mutex;
 use std::{any::Any, sync::Arc};
 
 use core_relations::Primitives;
 use egglog_bridge::ColumnTy;
 
+use crate::ast::Literal;
 use crate::constraint::AllEqualTypeConstraint;
 use crate::extract::{Cost, Extractor};
+use crate::util::IndexSet;
 use crate::*;
+
+type Z = BigInt;
+type Q = BigRational;
+type F = OrderedFloat<f64>;
+type S = Symbol;
 
 mod bigint;
 pub use bigint::*;

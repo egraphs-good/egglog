@@ -1,8 +1,3 @@
-// use std::collections::BTreeSet;
-// use std::sync::Mutex;
-
-// use crate::constraint::{AllEqualTypeConstraint, SimpleTypeConstraint};
-
 // use super::*;
 
 // type ValueSet = BTreeSet<Value>;

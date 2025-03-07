@@ -1,5 +1,3 @@
-use crate::{ast::Literal, constraint::AllEqualTypeConstraint};
-
 use super::*;
 
 /// Signed 64-bit integers supporting these primitives:
