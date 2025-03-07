@@ -16,8 +16,12 @@ impl Sort for StringSort {
         *STRING_SORT_NAME
     }
 
-    fn column_ty(&self, prims: &core_relations::Primitives) -> ColumnTy {
+    fn column_ty(&self, prims: &Primitives) -> ColumnTy {
         ColumnTy::Primitive(prims.get_ty::<Symbol>())
+    }
+
+    fn register_type(&self, prims: &mut Primitives) {
+        prims.register_type::<Symbol>();
     }
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
