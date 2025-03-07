@@ -142,3 +142,60 @@ impl PrimitiveLike for CountMatches {
         Some(Value::from(string1.matches(&string2).count() as i64))
     }
 }
+
+// TODO: move term ordering min/max to its own mod
+pub(crate) struct TermOrderingMin {}
+
+impl PrimitiveLike for TermOrderingMin {
+    fn name(&self) -> Symbol {
+        "ordering-min".into()
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        AllEqualTypeConstraint::new(self.name(), span.clone())
+            .with_exact_length(3)
+            .into_box()
+    }
+
+    fn apply(
+        &self,
+        values: &[Value],
+        _sorts: (&[ArcSort], &ArcSort),
+        _egraph: Option<&mut EGraph>,
+    ) -> Option<Value> {
+        assert_eq!(values.len(), 2);
+        if values[0] < values[1] {
+            Some(values[0])
+        } else {
+            Some(values[1])
+        }
+    }
+}
+
+pub(crate) struct TermOrderingMax {}
+
+impl PrimitiveLike for TermOrderingMax {
+    fn name(&self) -> Symbol {
+        "ordering-max".into()
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        AllEqualTypeConstraint::new(self.name(), span.clone())
+            .with_exact_length(3)
+            .into_box()
+    }
+
+    fn apply(
+        &self,
+        values: &[Value],
+        _sorts: (&[ArcSort], &ArcSort),
+        _egraph: Option<&mut EGraph>,
+    ) -> Option<Value> {
+        assert_eq!(values.len(), 2);
+        if values[0] > values[1] {
+            Some(values[0])
+        } else {
+            Some(values[1])
+        }
+    }
+}
