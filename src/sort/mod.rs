@@ -25,15 +25,15 @@ pub use self::i64::*;
 mod f64;
 pub use self::f64::*;
 mod map;
-pub use map::*;
+// pub use map::*;
 mod set;
-pub use set::*;
+// pub use set::*;
 mod vec;
-pub use vec::*;
+// pub use vec::*;
 mod r#fn;
-pub use r#fn::*;
+// pub use r#fn::*;
 mod multiset;
-pub use multiset::*;
+// pub use multiset::*;
 
 pub trait Sort: Any + Send + Sync + Debug {
     fn name(&self) -> Symbol;
