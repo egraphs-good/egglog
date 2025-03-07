@@ -119,7 +119,7 @@ impl Sort for VecSort {
             })
             .collect();
         drop(vecs);
-        *value = new_vec.store(self).unwrap();
+        *value = new_vec.store(self);
         changed
     }
 
@@ -207,14 +207,14 @@ impl Sort for VecSort {
 
 impl IntoSort for ValueVec {
     type Sort = VecSort;
-    fn store(self, sort: &Self::Sort) -> Option<Value> {
+    fn store(self, sort: &Self::Sort) -> Value {
         let mut vecs = sort.vecs.lock().unwrap();
         let (i, _) = vecs.insert_full(self);
-        Some(Value {
+        Value {
             #[cfg(debug_assertions)]
             tag: sort.name,
             bits: i as u64,
-        })
+        }
     }
 }
 
@@ -258,7 +258,7 @@ impl PrimitiveLike for VecRebuild {
             .map(|e| egraph.find(&self.vec.element, *e))
             .collect();
         drop(vec);
-        Some(new_vec.store(&self.vec).unwrap())
+        Some(new_vec.store(&self.vec))
     }
 }
 struct VecOf {
@@ -285,7 +285,7 @@ impl PrimitiveLike for VecOf {
         _egraph: Option<&mut EGraph>,
     ) -> Option<Value> {
         let vec = ValueVec::from_iter(values.iter().copied());
-        vec.store(&self.vec)
+        Some(vec.store(&self.vec))
     }
 }
 
@@ -312,7 +312,7 @@ impl PrimitiveLike for Append {
         _egraph: Option<&mut EGraph>,
     ) -> Option<Value> {
         let vec = ValueVec::from_iter(values.iter().flat_map(|v| ValueVec::load(&self.vec, v)));
-        vec.store(&self.vec)
+        Some(vec.store(&self.vec))
     }
 }
 
@@ -337,7 +337,7 @@ impl PrimitiveLike for Ctor {
         _egraph: Option<&mut EGraph>,
     ) -> Option<Value> {
         assert!(values.is_empty());
-        ValueVec::default().store(&self.vec)
+        Some(ValueVec::default().store(&self.vec))
     }
 }
 
@@ -368,7 +368,7 @@ impl PrimitiveLike for Push {
     ) -> Option<Value> {
         let mut vec = ValueVec::load(&self.vec, &values[0]);
         vec.push(values[1]);
-        vec.store(&self.vec)
+        Some(vec.store(&self.vec))
     }
 }
 
@@ -399,7 +399,7 @@ impl PrimitiveLike for Pop {
     ) -> Option<Value> {
         let mut vec = ValueVec::load(&self.vec, &values[0]);
         vec.pop();
-        vec.store(&self.vec)
+        Some(vec.store(&self.vec))
     }
 }
 
@@ -565,7 +565,7 @@ impl PrimitiveLike for Set {
         let mut vec = ValueVec::load(&self.vec, &values[0]);
         let index = i64::load(&I64Sort, &values[1]);
         vec[index as usize] = values[2];
-        vec.store(&self.vec)
+        Some(vec.store(&self.vec))
     }
 }
 
@@ -597,7 +597,7 @@ impl PrimitiveLike for Remove {
         let mut vec = ValueVec::load(&self.vec, &values[0]);
         let i = i64::load(&I64Sort, &values[1]);
         vec.remove(i.try_into().unwrap());
-        vec.store(&self.vec)
+        Some(vec.store(&self.vec))
     }
 }
 

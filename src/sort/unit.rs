@@ -39,8 +39,8 @@ impl Sort for UnitSort {
 impl IntoSort for () {
     type Sort = UnitSort;
 
-    fn store(self, _sort: &Self::Sort) -> Option<Value> {
-        Some(Value::unit())
+    fn store(self, _sort: &Self::Sort) -> Value {
+        Value::unit()
     }
 }
 

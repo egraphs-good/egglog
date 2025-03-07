@@ -30,15 +30,13 @@ impl Sort for BigIntSort {
 
     #[rustfmt::skip]
     fn register_primitives(self: Arc<Self>, eg: &mut TypeInfo) {
-        type Opt<T=()> = Option<T>;
-
         add_primitives!(eg, "bigint" = |a: i64| -> Z { a.into() });
 
         add_primitives!(eg, "+" = |a: Z, b: Z| -> Z { a + b });
         add_primitives!(eg, "-" = |a: Z, b: Z| -> Z { a - b });
         add_primitives!(eg, "*" = |a: Z, b: Z| -> Z { a * b });
-        add_primitives!(eg, "/" = |a: Z, b: Z| -> Opt<Z> { (b != BigInt::ZERO).then(|| a / b) });
-        add_primitives!(eg, "%" = |a: Z, b: Z| -> Opt<Z> { (b != BigInt::ZERO).then(|| a % b) });
+        add_primitives!(eg, "/" = |a: Z, b: Z| -> Option<Z> { (b != BigInt::ZERO).then(|| a / b) });
+        add_primitives!(eg, "%" = |a: Z, b: Z| -> Option<Z> { (b != BigInt::ZERO).then(|| a % b) });
 
         add_primitives!(eg, "&" = |a: Z, b: Z| -> Z { a & b });
         add_primitives!(eg, "|" = |a: Z, b: Z| -> Z { a | b });
@@ -49,10 +47,10 @@ impl Sort for BigIntSort {
 
         add_primitives!(eg, "bits" = |a: Z| -> Z { a.bits().into() });
 
-        add_primitives!(eg, "<" = |a: Z, b: Z| -> Opt { (a < b).then_some(()) });
-        add_primitives!(eg, ">" = |a: Z, b: Z| -> Opt { (a > b).then_some(()) });
-        add_primitives!(eg, "<=" = |a: Z, b: Z| -> Opt { (a <= b).then_some(()) });
-        add_primitives!(eg, ">=" = |a: Z, b: Z| -> Opt { (a >= b).then_some(()) });
+        add_primitives!(eg, "<" = |a: Z, b: Z| -> Option<()> { (a < b).then_some(()) });
+        add_primitives!(eg, ">" = |a: Z, b: Z| -> Option<()> { (a > b).then_some(()) });
+        add_primitives!(eg, "<=" = |a: Z, b: Z| -> Option<()> { (a <= b).then_some(()) });
+        add_primitives!(eg, ">=" = |a: Z, b: Z| -> Option<()> { (a >= b).then_some(()) });
 
         add_primitives!(eg, "bool-=" = |a: Z, b: Z| -> bool { a == b });
         add_primitives!(eg, "bool-<" = |a: Z, b: Z| -> bool { a < b });
@@ -64,7 +62,7 @@ impl Sort for BigIntSort {
         add_primitives!(eg, "max" = |a: Z, b: Z| -> Z { a.max(b) });
 
         add_primitives!(eg, "to-string" = |a: Z| -> Symbol { a.to_string().into() });
-        add_primitives!(eg, "from-string" = |a: Symbol| -> Opt<Z> { a.as_str().parse::<Z>().ok() });
+        add_primitives!(eg, "from-string" = |a: Symbol| -> Option<Z> { a.as_str().parse::<Z>().ok() });
    }
 
     fn extract_term(
@@ -94,12 +92,12 @@ impl FromSort for Z {
 
 impl IntoSort for Z {
     type Sort = BigIntSort;
-    fn store(self, _sort: &Self::Sort) -> Option<Value> {
+    fn store(self, _sort: &Self::Sort) -> Value {
         let (i, _) = INTS.lock().unwrap().insert_full(self);
-        Some(Value {
+        Value {
             #[cfg(debug_assertions)]
             tag: BigIntSort.name(),
             bits: i as u64,
-        })
+        }
     }
 }
