@@ -1,8 +1,5 @@
-use std::num::NonZeroU32;
-
-use crate::{ast::Literal, constraint::AllEqualTypeConstraint};
-
 use super::*;
+use std::num::NonZeroU32;
 
 #[derive(Debug)]
 pub struct StringSort;
@@ -17,11 +14,11 @@ impl Sort for StringSort {
     }
 
     fn column_ty(&self, prims: &Primitives) -> ColumnTy {
-        ColumnTy::Primitive(prims.get_ty::<Symbol>())
+        ColumnTy::Primitive(prims.get_ty::<S>())
     }
 
     fn register_type(&self, prims: &mut Primitives) {
-        prims.register_type::<Symbol>();
+        prims.register_type::<S>();
     }
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {

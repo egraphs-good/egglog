@@ -1,10 +1,3 @@
-use num::BigInt;
-use std::ops::{Shl, Shr};
-use std::sync::Mutex;
-
-type Z = BigInt;
-use crate::{ast::Literal, util::IndexSet};
-
 use super::*;
 
 lazy_static! {

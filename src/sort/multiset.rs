@@ -1,9 +1,5 @@
-// use std::sync::Mutex;
-
-// use inner::MultiSet;
-
 // use super::*;
-// use crate::constraint::{AllEqualTypeConstraint, SimpleTypeConstraint};
+// use inner::MultiSet;
 
 // // Place multiset in its own module to keep implementation details private from sort
 // mod inner {
