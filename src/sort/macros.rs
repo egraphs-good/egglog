@@ -106,9 +106,9 @@ macro_rules! add_primitive {
             }
         }
 
-        eg.add_primitive(Primitive::from(
+        eg.add_primitive(Primitive(Arc::new(
             add_primitive!{@prim_use eg Prim [$($xs)* $($y)*] -> []}
-        ))
+        )))
     }};
 
     // -------- Body of get_type_constraints() -------- //

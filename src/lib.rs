@@ -343,12 +343,6 @@ impl Debug for Primitive {
     }
 }
 
-impl<T: PrimitiveLike + 'static + Send + Sync> From<T> for Primitive {
-    fn from(p: T) -> Self {
-        Self(Arc::new(p))
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
 pub enum RunMode {
     Normal,
