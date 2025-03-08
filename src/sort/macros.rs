@@ -114,7 +114,7 @@ macro_rules! add_primitive {
             fn invoke(&self, exec_state: &mut ExecutionState, args: &[V]) -> Option<V> {
                 let _prims = exec_state.prims();
                 let _args = args;
-                todo!()
+                todo!("invoke for Ext")
             }
         }
 
