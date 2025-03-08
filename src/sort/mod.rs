@@ -14,7 +14,6 @@ use core_relations::Primitives;
 use egglog_bridge::ColumnTy;
 
 use crate::ast::Literal;
-use crate::constraint::AllEqualTypeConstraint;
 use crate::extract::{Cost, Extractor};
 use crate::util::IndexSet;
 use crate::*;
@@ -113,8 +112,8 @@ pub trait Sort: Any + Send + Sync + Debug {
         vec![]
     }
 
-    fn register_primitives(self: Arc<Self>, info: &mut TypeInfo) {
-        let _ = info;
+    fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
+        let _ = eg;
     }
 
     /// Extracting a term (with smallest cost) out of a primitive value

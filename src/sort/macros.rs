@@ -29,35 +29,35 @@ macro_rules! add_primitive {
     // adding/extending type constraints)
 
     // -------- START OF PARSING -------- //
-    ($ti:ident, $name:literal = $($tail:tt)*) => {
-        add_primitive!(@1 $ti $name $($tail)*)
+    ($eg:expr, $name:literal = $($tail:tt)*) => {
+        add_primitive!(@1 $eg, $name $($tail)*)
     };
     // -------- parse the arguments -------- //
-    (@1 $ti:ident $name:literal |$($x:ident : $t:ty),*| $($tail:tt)*) => {
-        add_primitive!(@2 $ti $name fixarg [$($x : $t,)*] $($tail)*)
+    (@1 $eg:expr, $name:literal |$($x:ident : $t:ty),*| $($tail:tt)*) => {
+        add_primitive!(@2 $eg, $name fixarg [$($x : $t,)*] $($tail)*)
     };
-    (@1 $ti:ident $name:literal |$($x:ident : #),*| $($tail:tt)*) => {
-        add_primitive!(@2 $ti $name fixarg [$($x : #,)*] $($tail)*)
+    (@1 $eg:expr, $name:literal |$($x:ident : #),*| $($tail:tt)*) => {
+        add_primitive!(@2 $eg, $name fixarg [$($x : #,)*] $($tail)*)
     };
-    (@1 $ti:ident $name:literal [$x:ident : $t:ty] $($tail:tt)*) => {
-        add_primitive!(@2 $ti $name vararg [$x : $t,] $($tail)*)
+    (@1 $eg:expr, $name:literal [$x:ident : $t:ty] $($tail:tt)*) => {
+        add_primitive!(@2 $eg, $name vararg [$x : $t,] $($tail)*)
     };
-    (@1 $ti:ident $name:literal [$x:ident : #] $($tail:tt)*) => {
-        add_primitive!(@2 $ti $name vararg [$x : #,] $($tail)*)
+    (@1 $eg:expr, $name:literal [$x:ident : #] $($tail:tt)*) => {
+        add_primitive!(@2 $eg, $name vararg [$x : #,] $($tail)*)
     };
     // -------- parse the arrow -------- //
-    (@2 $ti:ident $name:literal $v:ident [$($xs:tt)*] -> $($tail:tt)*) => {
-        add_primitive!(@3 $ti $name $v pure [$($xs)*] $($tail)*)
+    (@2 $eg:expr, $name:literal $v:ident [$($xs:tt)*] -> $($tail:tt)*) => {
+        add_primitive!(@3 $eg, $name $v pure [$($xs)*] $($tail)*)
     };
-    (@2 $ti:ident $name:literal $v:ident [$($xs:tt)*] -?> $($tail:tt)*) => {
-        add_primitive!(@3 $ti $name $v fail [$($xs)*] $($tail)*)
+    (@2 $eg:expr, $name:literal $v:ident [$($xs:tt)*] -?> $($tail:tt)*) => {
+        add_primitive!(@3 $eg, $name $v fail [$($xs)*] $($tail)*)
     };
     // -------- parse the return type -------- //
-    (@3 $ti:ident $name:literal $v:ident $f:ident [$($xs:tt)*] $y:ty { $body:expr }) => {
-        add_primitive!(@main $ti $name $v $f [$($xs)*] [__y : $y,] $body)
+    (@3 $eg:expr, $name:literal $v:ident $f:ident [$($xs:tt)*] $y:ty { $body:expr }) => {
+        add_primitive!(@main $eg, $name $v $f [$($xs)*] [__y : $y,] $body)
     };
-    (@3 $ti:ident $name:literal $v:ident $f:ident [$($xs:tt)*] # { $body:expr }) => {
-        add_primitive!(@main $ti $name $v $f [$($xs)*] [__y : #,] $body)
+    (@3 $eg:expr, $name:literal $v:ident $f:ident [$($xs:tt)*] # { $body:expr }) => {
+        add_primitive!(@main $eg, $name $v $f [$($xs)*] [__y : #,] $body)
     };
     // -------- END OF PARSING -------- //
 
@@ -67,7 +67,7 @@ macro_rules! add_primitive {
     // We cache the egglog types that we need to generate the type constraints
     // inside the struct's fields.
     // Schema:
-    // - $ti: reference to egglog object
+    // - $eg: mutable reference to the egraph
     // - $name: the name of this primitive as a string
     // - $v: arity of the primitive: either `fixarg` or `vararg`
     // - $f: fallibility of the primitive: either `pure` or `fail`
@@ -79,10 +79,16 @@ macro_rules! add_primitive {
     //   - matching formats makes it easier to generate the struct fields
     //   - we make up `__y` as a struct field name that avoids collisions
     // - $body: the code to insert into the body of the primitive
-    (@main $ti:ident $name:literal $v:ident $f:ident [$($xs:tt)*] [$($y:tt)*] $body:expr) => {{
+    (@main $eg:expr, $name:literal $v:ident $f:ident [$($xs:tt)*] [$($y:tt)*] $body:expr) => {{
+        #[allow(unused_imports)]
+        use $crate::{*, constraint::*};
         #[allow(unused_imports)]
         use ::std::sync::Arc;
-        use $crate::*;
+
+        // Here we both assert the type of the reference and ensure
+        // that $eg is only evaluated once. This requires binding a
+        // new identifier, which changes the type of $eg in `@prim_use`.
+        let eg: &mut EGraph = $eg;
 
         add_primitive!{@prim_def Prim [$($xs)* $($y)*] -> []}
 
@@ -100,8 +106,8 @@ macro_rules! add_primitive {
             }
         }
 
-        $ti.add_primitive(Primitive::from(
-            add_primitive!{@prim_use $ti Prim [$($xs)* $($y)*] -> []}
+        eg.add_primitive(Primitive::from(
+            add_primitive!{@prim_use eg Prim [$($xs)* $($y)*] -> []}
         ))
     }};
 
@@ -192,14 +198,14 @@ macro_rules! add_primitive {
     };
 
     // -------- Generate struct construction -------- //
-    (@prim_use $ti:ident $name:ident [$x:ident : #    , $($xs:tt)*] -> [$($f:tt)*]) => {
-        add_primitive!(@prim_use $ti $name [$($xs)*] -> [$($f)*])
+    (@prim_use $eg:ident $name:ident [$x:ident : #    , $($xs:tt)*] -> [$($f:tt)*]) => {
+        add_primitive!(@prim_use $eg $name [$($xs)*] -> [$($f)*])
     };
-    (@prim_use $ti:ident $name:ident [$x:ident : $t:ty, $($xs:tt)*] -> [$($f:tt)*]) => {
-        add_primitive!(@prim_use $ti $name [$($xs)*] -> [$($f)*
-            $x: $ti.get_sort_nofail::<<$t as IntoSort>::Sort>(),])
+    (@prim_use $eg:ident $name:ident [$x:ident : $t:ty, $($xs:tt)*] -> [$($f:tt)*]) => {
+        add_primitive!(@prim_use $eg $name [$($xs)*] -> [$($f)*
+            $x: $eg.type_info.get_sort_nofail::<<$t as IntoSort>::Sort>(),])
     };
-    (@prim_use $ti:ident $name:ident [] -> [$($fields:tt)*]) => {
+    (@prim_use $eg:ident $name:ident [] -> [$($fields:tt)*]) => {
         $name {
             $($fields)*
         }

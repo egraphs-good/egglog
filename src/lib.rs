@@ -421,7 +421,7 @@ pub struct EGraph {
 
 impl Default for EGraph {
     fn default() -> Self {
-        let mut egraph = Self {
+        let mut eg = Self {
             backend: Default::default(),
             parser: Default::default(),
             egraphs: vec![],
@@ -440,10 +440,37 @@ impl Default for EGraph {
             msgs: Some(vec![]),
             type_info: Default::default(),
         };
-        egraph
-            .rulesets
+
+        eg.add_sort(UnitSort, span!()).unwrap();
+        eg.add_sort(StringSort, span!()).unwrap();
+        eg.add_sort(BoolSort, span!()).unwrap();
+        eg.add_sort(I64Sort, span!()).unwrap();
+        eg.add_sort(F64Sort, span!()).unwrap();
+        eg.add_sort(BigIntSort, span!()).unwrap();
+        eg.add_sort(BigRatSort, span!()).unwrap();
+        // eg.add_presort::<MapSort>(span!()).unwrap();
+        // eg.add_presort::<SetSort>(span!()).unwrap();
+        // eg.add_presort::<VecSort>(span!()).unwrap();
+        // eg.add_presort::<FunctionSort>(span!()).unwrap();
+        // eg.add_presort::<MultiSetSort>(span!()).unwrap();
+
+        add_primitive!(&mut eg, "!=" = |a: #, b: #| -?> () {
+            (a != b).then_some(())
+        });
+        add_primitive!(&mut eg, "value-eq" = |a: #, b: #| -?> () {
+            (a == b).then_some(())
+        });
+        add_primitive!(&mut eg, "ordering-min" = |a: #, b: #| -> # {
+            if a < b { *a } else { *b }
+        });
+        add_primitive!(&mut eg, "ordering-max" = |a: #, b: #| -> # {
+            if a > b { *a } else { *b }
+        });
+
+        eg.rulesets
             .insert("".into(), Ruleset::Rules("".into(), Default::default()));
-        egraph
+
+        eg
     }
 }
 
@@ -1444,9 +1471,7 @@ impl EGraph {
             .into_iter()
             .map(NCommand::CoreAction)
             .collect::<Vec<_>>();
-        let commands: Vec<_> = self
-            .type_info
-            .typecheck_program(&mut self.parser.symbol_gen, &commands)?;
+        let commands: Vec<_> = self.typecheck_program(&commands)?;
         for command in commands {
             self.run_command(command)?;
         }
@@ -1471,9 +1496,7 @@ impl EGraph {
     fn process_command(&mut self, command: Command) -> Result<Vec<ResolvedNCommand>, Error> {
         let program = desugar::desugar_program(vec![command], &mut self.parser, self.seminaive)?;
 
-        let program = self
-            .type_info
-            .typecheck_program(&mut self.parser.symbol_gen, &program)?;
+        let program = self.typecheck_program(&program)?;
 
         let program = remove_globals(program, &mut self.parser.symbol_gen);
 
@@ -1547,16 +1570,6 @@ impl EGraph {
         pred: impl Fn(&Arc<S>) -> bool,
     ) -> Option<Arc<S>> {
         self.type_info.get_sort_by(pred)
-    }
-
-    /// Add a user-defined sort
-    pub fn add_arcsort(&mut self, arcsort: ArcSort, span: Span) -> Result<(), TypeError> {
-        self.type_info.add_arcsort(arcsort, span)
-    }
-
-    /// Add a user-defined primitive
-    pub fn add_primitive(&mut self, prim: impl Into<Primitive>) {
-        self.type_info.add_primitive(prim)
     }
 
     /// Gets the last extract report and returns it, if the last command saved it.
