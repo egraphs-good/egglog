@@ -292,7 +292,10 @@ impl RunReport {
 }
 
 #[derive(Clone)]
-pub struct Primitive(Arc<dyn PrimitiveLike + Send + Sync>);
+pub struct Primitive(
+    Arc<dyn PrimitiveLike + Send + Sync>,
+    #[allow(unused)] core_relations::ExternalFunctionId,
+);
 impl Primitive {
     // Takes the full signature of a primitive (including input and output types)
     // Returns whether the primitive is compatible with this signature
