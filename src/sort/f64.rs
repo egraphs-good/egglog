@@ -33,28 +33,28 @@ impl Sort for F64Sort {
     // cf https://github.com/rust-lang/rust-clippy/issues/9422
     #[allow(clippy::unnecessary_lazy_evaluations)]
     fn register_primitives(self: Arc<Self>, eg: &mut TypeInfo) {
-        add_primitives!(eg, "+" = |a: F, b: F| -> F { a + b });
-        add_primitives!(eg, "-" = |a: F, b: F| -> F { a - b });
-        add_primitives!(eg, "*" = |a: F, b: F| -> F { a * b });
-        add_primitives!(eg, "/" = |a: F, b: F| -?> F { (b != 0.0).then(|| a / b) });
-        add_primitives!(eg, "%" = |a: F, b: F| -?> F { (b != 0.0).then(|| a % b) });
-        add_primitives!(eg, "^" = |a: F, b: F| -> F { OrderedFloat(a.powf(*b)) });
-        add_primitives!(eg, "neg" = |a: F| -> F { -a });
+        add_primitive!(eg, "+" = |a: F, b: F| -> F { a + b });
+        add_primitive!(eg, "-" = |a: F, b: F| -> F { a - b });
+        add_primitive!(eg, "*" = |a: F, b: F| -> F { a * b });
+        add_primitive!(eg, "/" = |a: F, b: F| -?> F { (b != 0.0).then(|| a / b) });
+        add_primitive!(eg, "%" = |a: F, b: F| -?> F { (b != 0.0).then(|| a % b) });
+        add_primitive!(eg, "^" = |a: F, b: F| -> F { OrderedFloat(a.powf(*b)) });
+        add_primitive!(eg, "neg" = |a: F| -> F { -a });
 
-        add_primitives!(eg, "<" = |a: F, b: F| -?> () { (a < b).then(|| ()) });
-        add_primitives!(eg, ">" = |a: F, b: F| -?> () { (a > b).then(|| ()) });
-        add_primitives!(eg, "<=" = |a: F, b: F| -?> () { (a <= b).then(|| ()) });
-        add_primitives!(eg, ">=" = |a: F, b: F| -?> () { (a >= b).then(|| ()) });
+        add_primitive!(eg, "<" = |a: F, b: F| -?> () { (a < b).then(|| ()) });
+        add_primitive!(eg, ">" = |a: F, b: F| -?> () { (a > b).then(|| ()) });
+        add_primitive!(eg, "<=" = |a: F, b: F| -?> () { (a <= b).then(|| ()) });
+        add_primitive!(eg, ">=" = |a: F, b: F| -?> () { (a >= b).then(|| ()) });
 
-        add_primitives!(eg, "min" = |a: F, b: F| -> F { a.min(b) });
-        add_primitives!(eg, "max" = |a: F, b: F| -> F { a.max(b) });
-        add_primitives!(eg, "abs" = |a: F| -> F { a.abs() });
+        add_primitive!(eg, "min" = |a: F, b: F| -> F { a.min(b) });
+        add_primitive!(eg, "max" = |a: F, b: F| -> F { a.max(b) });
+        add_primitive!(eg, "abs" = |a: F| -> F { a.abs() });
 
         // `to-f64` should be in `i64.rs`, but `F64Sort` wouldn't exist yet
-        add_primitives!(eg, "to-f64" = |a: i64| -> F { OrderedFloat(a as f64) });
-        add_primitives!(eg, "to-i64" = |a: F| -> i64 { a.0 as i64 });
+        add_primitive!(eg, "to-f64" = |a: i64| -> F { OrderedFloat(a as f64) });
+        add_primitive!(eg, "to-i64" = |a: F| -> i64 { a.0 as i64 });
         // Use debug instead of to_string so that decimal place is always printed
-        add_primitives!(eg, "to-string" = |a: F| -> S { format!("{:?}", a).into() });
+        add_primitive!(eg, "to-string" = |a: F| -> S { format!("{:?}", a).into() });
     }
 
     fn extract_term(
