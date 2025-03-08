@@ -84,6 +84,7 @@ macro_rules! add_primitive {
         use $crate::{*, constraint::*};
         #[allow(unused_imports)]
         use ::std::sync::Arc;
+        use core_relations::{ExecutionState, ExternalFunction, Value as V};
 
         // Here we both assert the type of the reference and ensure
         // that $eg is only evaluated once. This requires binding a
@@ -106,9 +107,20 @@ macro_rules! add_primitive {
             }
         }
 
-        eg.add_primitive(Primitive(Arc::new(
-            add_primitive!{@prim_use eg Prim [$($xs)* $($y)*] -> []}
-        )))
+        #[derive(Clone)]
+        struct Ext;
+
+        impl ExternalFunction for Ext {
+            fn invoke(&self, exec_state: &mut ExecutionState, args: &[V]) -> Option<V> {
+                let _prims = exec_state.prims();
+                let _args = args;
+                todo!()
+            }
+        }
+
+        let prim = add_primitive!{@prim_use eg Prim [$($xs)* $($y)*] -> []};
+        let ext = eg.backend.register_external_func(Ext);
+        eg.add_primitive(Primitive(Arc::new(prim), ext))
     }};
 
     // -------- Body of get_type_constraints() -------- //
