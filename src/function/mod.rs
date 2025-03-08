@@ -81,7 +81,7 @@ impl Function {
     pub(crate) fn new(egraph: &mut EGraph, decl: &ResolvedFunctionDecl) -> Result<Self, Error> {
         let mut input = Vec::with_capacity(decl.schema.input.len());
         for s in &decl.schema.input {
-            input.push(match egraph.type_info.sorts.get(s) {
+            input.push(match egraph.type_info.get_sort(s) {
                 Some(sort) => sort.clone(),
                 None => {
                     return Err(Error::TypeError(TypeError::UndefinedSort(
@@ -92,7 +92,7 @@ impl Function {
             })
         }
 
-        let output = match egraph.type_info.sorts.get(&decl.schema.output) {
+        let output = match egraph.type_info.get_sort(&decl.schema.output) {
             Some(sort) => sort.clone(),
             None => {
                 return Err(Error::TypeError(TypeError::UndefinedSort(

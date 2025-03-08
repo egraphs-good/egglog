@@ -1405,7 +1405,7 @@ impl EGraph {
 
         let function_type = self
             .type_info
-            .lookup_user_func(func_name)
+            .get_func_type(&func_name)
             .unwrap_or_else(|| panic!("Unrecognized function name {}", func_name));
         let func = self.functions.get_mut(&func_name).unwrap();
 

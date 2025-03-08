@@ -74,7 +74,7 @@ impl ResolvedCall {
         types: &[ArcSort],
         typeinfo: &TypeInfo,
     ) -> Option<ResolvedCall> {
-        if let Some(ty) = typeinfo.func_types.get(head) {
+        if let Some(ty) = typeinfo.get_func_type(head) {
             // As long as input types match, a result is returned.
             let expected = ty.input.iter().map(|s| s.name());
             let actual = types.iter().map(|s| s.name());
@@ -87,7 +87,7 @@ impl ResolvedCall {
 
     pub fn from_resolution(head: &Symbol, types: &[ArcSort], typeinfo: &TypeInfo) -> ResolvedCall {
         let mut resolved_call = Vec::with_capacity(1);
-        if let Some(ty) = typeinfo.func_types.get(head) {
+        if let Some(ty) = typeinfo.get_func_type(head) {
             let expected = ty.input.iter().chain(once(&ty.output)).map(|s| s.name());
             let actual = types.iter().map(|s| s.name());
             if expected.eq(actual) {
@@ -95,7 +95,7 @@ impl ResolvedCall {
             }
         }
 
-        if let Some(primitives) = typeinfo.primitives.get(head) {
+        if let Some(primitives) = typeinfo.get_prims(head) {
             for primitive in primitives {
                 if primitive.accept(types, typeinfo) {
                     let (out, inp) = types.split_last().unwrap();
@@ -833,7 +833,7 @@ impl ResolvedRule {
         typeinfo: &TypeInfo,
         fresh_gen: &mut SymbolGen,
     ) -> Result<ResolvedCoreRule, TypeError> {
-        let value_eq = &typeinfo.primitives.get(&Symbol::from("value-eq")).unwrap()[0];
+        let value_eq = &typeinfo.get_prims(&Symbol::from("value-eq")).unwrap()[0];
         self.to_canonicalized_core_rule_impl(typeinfo, fresh_gen, |at1, at2| {
             ResolvedCall::Primitive(SpecializedPrimitive {
                 primitive: value_eq.clone(),
