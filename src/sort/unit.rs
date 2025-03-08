@@ -31,6 +31,13 @@ impl Sort for UnitSort {
         add_primitive!(type_info, "value-eq" = |a: #, b: #| -?> () {
             (a == b).then_some(())
         });
+
+        add_primitive!(type_info, "ordering-min" = |a: #, b: #| -> # {
+            if a < b { *a } else { *b }
+        });
+        add_primitive!(type_info, "ordering-max" = |a: #, b: #| -> # {
+            if a > b { *a } else { *b }
+        });
     }
 
     fn extract_term(
