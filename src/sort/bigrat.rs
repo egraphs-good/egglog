@@ -50,7 +50,7 @@ impl Sort for BigRatSort {
         add_primitives!(eg, "bigrat" = |a: Z, b: Z| -> Q { Q::new(a, b) });
         add_primitives!(eg, "numer" = |a: Q| -> Z { a.numer().clone() });
         add_primitives!(eg, "denom" = |a: Q| -> Z { a.denom().clone() });
-        add_primitives!(eg, "to-f64" = |a: Q| -> f64 { a.to_f64().unwrap() });
+        add_primitives!(eg, "to-f64" = |a: Q| -> F { OrderedFloat(a.to_f64().unwrap()) });
 
         add_primitives!(eg, "pow" = |a: Q, b: Q| -> Option<Q> {
             if !b.is_integer() {
