@@ -202,35 +202,6 @@ pub trait IntoSort: Sized {
 pub type PreSort =
     fn(typeinfo: &mut TypeInfo, name: Symbol, params: &[Expr]) -> Result<ArcSort, TypeError>;
 
-pub(crate) struct ValueEq;
-
-impl PrimitiveLike for ValueEq {
-    fn name(&self) -> Symbol {
-        "value-eq".into()
-    }
-
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        AllEqualTypeConstraint::new(self.name(), span.clone())
-            .with_exact_length(3)
-            .with_output_sort(Arc::new(UnitSort))
-            .into_box()
-    }
-
-    fn apply(
-        &self,
-        values: &[Value],
-        _sorts: (&[ArcSort], &ArcSort),
-        _egraph: Option<&mut EGraph>,
-    ) -> Option<Value> {
-        assert_eq!(values.len(), 2);
-        if values[0] == values[1] {
-            Some(Value::unit())
-        } else {
-            None
-        }
-    }
-}
-
 pub fn literal_sort(lit: &Literal) -> ArcSort {
     match lit {
         Literal::Int(_) => Arc::new(I64Sort) as ArcSort,
