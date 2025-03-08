@@ -40,14 +40,16 @@ impl Sort for StringSort {
     }
 
     fn register_primitives(self: Arc<Self>, typeinfo: &mut TypeInfo) {
-        typeinfo.add_primitive(Add {
-            name: "+".into(),
-            string: self.clone(),
-        });
-        typeinfo.add_primitive(Replace {
-            name: "replace".into(),
-            string: self,
-        });
+        add_primitive!(typeinfo, "+" = [xs: S] -> S {{
+            let mut y = String::new();
+            xs.for_each(|x| y.push_str(x.as_str()));
+            y.into()
+        }});
+        add_primitive!(
+            typeinfo,
+            "replace" =
+                |a: S, b: S, c: S| -> S { a.as_str().replace(b.as_str(), c.as_str()).into() }
+        );
     }
 }
 
@@ -68,68 +70,5 @@ impl FromSort for Symbol {
     type Sort = StringSort;
     fn load(_sort: &Self::Sort, value: &Value) -> Self {
         NonZeroU32::new(value.bits as u32).unwrap().into()
-    }
-}
-
-struct Add {
-    name: Symbol,
-    string: Arc<StringSort>,
-}
-
-impl PrimitiveLike for Add {
-    fn name(&self) -> Symbol {
-        self.name
-    }
-
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        AllEqualTypeConstraint::new(self.name(), span.clone())
-            .with_all_arguments_sort(self.string.clone())
-            .into_box()
-    }
-
-    fn apply(
-        &self,
-        values: &[Value],
-        _sorts: (&[ArcSort], &ArcSort),
-        _egraph: Option<&mut EGraph>,
-    ) -> Option<Value> {
-        let mut res_string: String = "".to_owned();
-        for value in values {
-            let sym = Symbol::load(&self.string, value);
-            res_string.push_str(sym.as_str());
-        }
-        let res_symbol: Symbol = res_string.into();
-        Some(Value::from(res_symbol))
-    }
-}
-
-struct Replace {
-    name: Symbol,
-    string: Arc<StringSort>,
-}
-
-impl PrimitiveLike for Replace {
-    fn name(&self) -> Symbol {
-        self.name
-    }
-
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        AllEqualTypeConstraint::new(self.name(), span.clone())
-            .with_all_arguments_sort(self.string.clone())
-            .with_exact_length(4)
-            .into_box()
-    }
-
-    fn apply(
-        &self,
-        values: &[Value],
-        _sorts: (&[ArcSort], &ArcSort),
-        _egraph: Option<&mut EGraph>,
-    ) -> Option<Value> {
-        let string1 = Symbol::load(&self.string, &values[0]).to_string();
-        let string2 = Symbol::load(&self.string, &values[1]).to_string();
-        let string3 = Symbol::load(&self.string, &values[2]).to_string();
-        let res: Symbol = string1.replace(&string2, &string3).into();
-        Some(Value::from(res))
     }
 }

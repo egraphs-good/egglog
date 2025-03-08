@@ -115,6 +115,12 @@ macro_rules! add_primitive {
             .with_output_sort($self.$y.clone())
             .into_box()
     }};
+    (@types vararg $self:ident $span:ident [$x:ident : $xt:ty,] [$y:ident : $yt:tt,]) => {{
+        AllEqualTypeConstraint::new($self.name(), $span.clone())
+            .with_all_arguments_sort($self.$x.clone())
+            .with_output_sort($self.$y.clone())
+            .into_box()
+    }};
 
     // -------- Body of apply() -------- //
     (@apply $v:ident $self:ident $args:ident [$($xs:tt)*] [$($y:tt)*] $f:ident $body:expr) => {{
@@ -130,8 +136,8 @@ macro_rules! add_primitive {
         let [$($x,)*] = $args else { panic!("wrong number of arguments") };
     };
     (@args vararg $self:ident $args:ident [$x:ident : $t:ty,]) => {
-        add_primitive!(@args vararg $self $args [$($x : #,)*]);
-        let $x = $x.map(|x| <$t as FromSort>::load($self.$x, x));
+        add_primitive!(@args vararg $self $args [$x : #,]);
+        let $x = $x.map(|x| <$t as FromSort>::load(&$self.$x, x));
     };
     (@args fixarg $self:ident $args:ident [$($x:ident : $t:ty,)*]) => {
         add_primitive!(@args fixarg $self $args [$($x : #,)*]);
