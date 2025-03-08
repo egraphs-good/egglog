@@ -32,8 +32,8 @@ impl Sort for BigIntSort {
         add_primitives!(eg, "+" = |a: Z, b: Z| -> Z { a + b });
         add_primitives!(eg, "-" = |a: Z, b: Z| -> Z { a - b });
         add_primitives!(eg, "*" = |a: Z, b: Z| -> Z { a * b });
-        add_primitives!(eg, "/" = |a: Z, b: Z| -> Option<Z> { (b != BigInt::ZERO).then(|| a / b) });
-        add_primitives!(eg, "%" = |a: Z, b: Z| -> Option<Z> { (b != BigInt::ZERO).then(|| a % b) });
+        add_primitives!(eg, "/" = |a: Z, b: Z| -?> Z { (b != BigInt::ZERO).then(|| a / b) });
+        add_primitives!(eg, "%" = |a: Z, b: Z| -?> Z { (b != BigInt::ZERO).then(|| a % b) });
 
         add_primitives!(eg, "&" = |a: Z, b: Z| -> Z { a & b });
         add_primitives!(eg, "|" = |a: Z, b: Z| -> Z { a | b });
@@ -44,10 +44,10 @@ impl Sort for BigIntSort {
 
         add_primitives!(eg, "bits" = |a: Z| -> Z { a.bits().into() });
 
-        add_primitives!(eg, "<" = |a: Z, b: Z| -> Option<()> { (a < b).then_some(()) });
-        add_primitives!(eg, ">" = |a: Z, b: Z| -> Option<()> { (a > b).then_some(()) });
-        add_primitives!(eg, "<=" = |a: Z, b: Z| -> Option<()> { (a <= b).then_some(()) });
-        add_primitives!(eg, ">=" = |a: Z, b: Z| -> Option<()> { (a >= b).then_some(()) });
+        add_primitives!(eg, "<" = |a: Z, b: Z| -?> () { (a < b).then_some(()) });
+        add_primitives!(eg, ">" = |a: Z, b: Z| -?> () { (a > b).then_some(()) });
+        add_primitives!(eg, "<=" = |a: Z, b: Z| -?> () { (a <= b).then_some(()) });
+        add_primitives!(eg, ">=" = |a: Z, b: Z| -?> () { (a >= b).then_some(()) });
 
         add_primitives!(eg, "bool-=" = |a: Z, b: Z| -> bool { a == b });
         add_primitives!(eg, "bool-<" = |a: Z, b: Z| -> bool { a < b });
@@ -59,7 +59,7 @@ impl Sort for BigIntSort {
         add_primitives!(eg, "max" = |a: Z, b: Z| -> Z { a.max(b) });
 
         add_primitives!(eg, "to-string" = |a: Z| -> Symbol { a.to_string().into() });
-        add_primitives!(eg, "from-string" = |a: Symbol| -> Option<Z> { a.as_str().parse::<Z>().ok() });
+        add_primitives!(eg, "from-string" = |a: Symbol| -?> Z { a.as_str().parse::<Z>().ok() });
    }
 
     fn extract_term(
