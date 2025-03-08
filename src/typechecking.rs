@@ -70,8 +70,7 @@ impl EGraph {
     }
 
     /// Add a user-defined primitive
-    pub fn add_primitive(&mut self, prim: impl Into<Primitive>) {
-        let prim = prim.into();
+    pub fn add_primitive(&mut self, prim: Primitive) {
         self.type_info
             .primitives
             .entry(prim.name())
