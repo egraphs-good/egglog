@@ -34,10 +34,10 @@ impl Sort for BigRatSort {
 
     #[rustfmt::skip]
     fn register_primitives(self: Arc<Self>, eg: &mut TypeInfo) {
-        add_primitives!(eg, "+" = |a: Q, b: Q| -> Option<Q> { a.checked_add(&b) });
-        add_primitives!(eg, "-" = |a: Q, b: Q| -> Option<Q> { a.checked_sub(&b) });
-        add_primitives!(eg, "*" = |a: Q, b: Q| -> Option<Q> { a.checked_mul(&b) });
-        add_primitives!(eg, "/" = |a: Q, b: Q| -> Option<Q> { a.checked_div(&b) });
+        add_primitives!(eg, "+" = |a: Q, b: Q| -?> Q { a.checked_add(&b) });
+        add_primitives!(eg, "-" = |a: Q, b: Q| -?> Q { a.checked_sub(&b) });
+        add_primitives!(eg, "*" = |a: Q, b: Q| -?> Q { a.checked_mul(&b) });
+        add_primitives!(eg, "/" = |a: Q, b: Q| -?> Q { a.checked_div(&b) });
 
         add_primitives!(eg, "min" = |a: Q, b: Q| -> Q { a.min(b) });
         add_primitives!(eg, "max" = |a: Q, b: Q| -> Q { a.max(b) });
@@ -52,7 +52,7 @@ impl Sort for BigRatSort {
         add_primitives!(eg, "denom" = |a: Q| -> Z { a.denom().clone() });
         add_primitives!(eg, "to-f64" = |a: Q| -> F { OrderedFloat(a.to_f64().unwrap()) });
 
-        add_primitives!(eg, "pow" = |a: Q, b: Q| -> Option<Q> {
+        add_primitives!(eg, "pow" = |a: Q, b: Q| -?> Q {
             if !b.is_integer() {
                 // fractional powers are forbidden.
                 // reject this even for the zero case
@@ -85,14 +85,14 @@ impl Sort for BigRatSort {
                 num::traits::checked_pow(adj_base, adj_exp_usize)
             }
         });
-        add_primitives!(eg, "log" = |a: Q| -> Option<Q> {
+        add_primitives!(eg, "log" = |a: Q| -?> Q {
             if a.is_one() {
                 Some(Q::zero())
             } else {
                 todo!("log of bigrat")
             }
         });
-        add_primitives!(eg, "sqrt" = |a: Q| -> Option<Q> {
+        add_primitives!(eg, "sqrt" = |a: Q| -?> Q {
             if a.numer().is_positive() && a.denom().is_positive() {
                 let s1 = a.numer().sqrt();
                 let s2 = a.denom().sqrt();
@@ -106,7 +106,7 @@ impl Sort for BigRatSort {
                 None
             }
         });
-        add_primitives!(eg, "cbrt" = |a: Q| -> Option<Q> {
+        add_primitives!(eg, "cbrt" = |a: Q| -?> Q {
             if a.is_one() {
                 Some(Q::one())
             } else {
@@ -114,10 +114,10 @@ impl Sort for BigRatSort {
             }
         });
 
-        add_primitives!(eg, "<" = |a: Q, b: Q| -> Option<()> { if a < b {Some(())} else {None} });
-        add_primitives!(eg, ">" = |a: Q, b: Q| -> Option<()> { if a > b {Some(())} else {None} });
-        add_primitives!(eg, "<=" = |a: Q, b: Q| -> Option<()> { if a <= b {Some(())} else {None} });
-        add_primitives!(eg, ">=" = |a: Q, b: Q| -> Option<()> { if a >= b {Some(())} else {None} });
+        add_primitives!(eg, "<" = |a: Q, b: Q| -?> () { if a < b {Some(())} else {None} });
+        add_primitives!(eg, ">" = |a: Q, b: Q| -?> () { if a > b {Some(())} else {None} });
+        add_primitives!(eg, "<=" = |a: Q, b: Q| -?> () { if a <= b {Some(())} else {None} });
+        add_primitives!(eg, ">=" = |a: Q, b: Q| -?> () { if a >= b {Some(())} else {None} });
    }
 
     fn extract_term(

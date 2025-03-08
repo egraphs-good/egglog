@@ -36,15 +36,15 @@ impl Sort for F64Sort {
         add_primitives!(eg, "+" = |a: F, b: F| -> F { a + b });
         add_primitives!(eg, "-" = |a: F, b: F| -> F { a - b });
         add_primitives!(eg, "*" = |a: F, b: F| -> F { a * b });
-        add_primitives!(eg, "/" = |a: F, b: F| -> Option<F> { (b != 0.0).then(|| a / b) });
-        add_primitives!(eg, "%" = |a: F, b: F| -> Option<F> { (b != 0.0).then(|| a % b) });
+        add_primitives!(eg, "/" = |a: F, b: F| -?> F { (b != 0.0).then(|| a / b) });
+        add_primitives!(eg, "%" = |a: F, b: F| -?> F { (b != 0.0).then(|| a % b) });
         add_primitives!(eg, "^" = |a: F, b: F| -> F { OrderedFloat(a.powf(*b)) });
         add_primitives!(eg, "neg" = |a: F| -> F { -a });
 
-        add_primitives!(eg, "<" = |a: F, b: F| -> Option<()> { (a < b).then(|| ()) });
-        add_primitives!(eg, ">" = |a: F, b: F| -> Option<()> { (a > b).then(|| ()) });
-        add_primitives!(eg, "<=" = |a: F, b: F| -> Option<()> { (a <= b).then(|| ()) });
-        add_primitives!(eg, ">=" = |a: F, b: F| -> Option<()> { (a >= b).then(|| ()) });
+        add_primitives!(eg, "<" = |a: F, b: F| -?> () { (a < b).then(|| ()) });
+        add_primitives!(eg, ">" = |a: F, b: F| -?> () { (a > b).then(|| ()) });
+        add_primitives!(eg, "<=" = |a: F, b: F| -?> () { (a <= b).then(|| ()) });
+        add_primitives!(eg, ">=" = |a: F, b: F| -?> () { (a >= b).then(|| ()) });
 
         add_primitives!(eg, "min" = |a: F, b: F| -> F { a.min(b) });
         add_primitives!(eg, "max" = |a: F, b: F| -> F { a.max(b) });
