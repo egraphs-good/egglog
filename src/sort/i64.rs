@@ -45,36 +45,36 @@ impl Sort for I64Sort {
         typeinfo.add_primitive(TermOrderingMax {
            });
 
-        add_primitives!(typeinfo, "+" = |a: i64, b: i64| -?> i64 { a.checked_add(b) });
-        add_primitives!(typeinfo, "-" = |a: i64, b: i64| -?> i64 { a.checked_sub(b) });
-        add_primitives!(typeinfo, "*" = |a: i64, b: i64| -?> i64 { a.checked_mul(b) });
-        add_primitives!(typeinfo, "/" = |a: i64, b: i64| -?> i64 { a.checked_div(b) });
-        add_primitives!(typeinfo, "%" = |a: i64, b: i64| -?> i64 { a.checked_rem(b) });
+        add_primitive!(typeinfo, "+" = |a: i64, b: i64| -?> i64 { a.checked_add(b) });
+        add_primitive!(typeinfo, "-" = |a: i64, b: i64| -?> i64 { a.checked_sub(b) });
+        add_primitive!(typeinfo, "*" = |a: i64, b: i64| -?> i64 { a.checked_mul(b) });
+        add_primitive!(typeinfo, "/" = |a: i64, b: i64| -?> i64 { a.checked_div(b) });
+        add_primitive!(typeinfo, "%" = |a: i64, b: i64| -?> i64 { a.checked_rem(b) });
 
-        add_primitives!(typeinfo, "&" = |a: i64, b: i64| -> i64 { a & b });
-        add_primitives!(typeinfo, "|" = |a: i64, b: i64| -> i64 { a | b });
-        add_primitives!(typeinfo, "^" = |a: i64, b: i64| -> i64 { a ^ b });
-        add_primitives!(typeinfo, "<<" = |a: i64, b: i64| -?> i64 { b.try_into().ok().and_then(|b| a.checked_shl(b)) });
-        add_primitives!(typeinfo, ">>" = |a: i64, b: i64| -?> i64 { b.try_into().ok().and_then(|b| a.checked_shr(b)) });
-        add_primitives!(typeinfo, "not-i64" = |a: i64| -> i64 { !a });
+        add_primitive!(typeinfo, "&" = |a: i64, b: i64| -> i64 { a & b });
+        add_primitive!(typeinfo, "|" = |a: i64, b: i64| -> i64 { a | b });
+        add_primitive!(typeinfo, "^" = |a: i64, b: i64| -> i64 { a ^ b });
+        add_primitive!(typeinfo, "<<" = |a: i64, b: i64| -?> i64 { b.try_into().ok().and_then(|b| a.checked_shl(b)) });
+        add_primitive!(typeinfo, ">>" = |a: i64, b: i64| -?> i64 { b.try_into().ok().and_then(|b| a.checked_shr(b)) });
+        add_primitive!(typeinfo, "not-i64" = |a: i64| -> i64 { !a });
 
-        add_primitives!(typeinfo, "log2" = |a: i64| -> i64 { (a as i64).ilog2() as i64 });
+        add_primitive!(typeinfo, "log2" = |a: i64| -> i64 { (a as i64).ilog2() as i64 });
 
-        add_primitives!(typeinfo, "<" = |a: i64, b: i64| -?> () { (a < b).then_some(()) });
-        add_primitives!(typeinfo, ">" = |a: i64, b: i64| -?> () { (a > b).then_some(()) });
-        add_primitives!(typeinfo, "<=" = |a: i64, b: i64| -?> () { (a <= b).then_some(()) });
-        add_primitives!(typeinfo, ">=" = |a: i64, b: i64| -?> () { (a >= b).then_some(()) });
+        add_primitive!(typeinfo, "<" = |a: i64, b: i64| -?> () { (a < b).then_some(()) });
+        add_primitive!(typeinfo, ">" = |a: i64, b: i64| -?> () { (a > b).then_some(()) });
+        add_primitive!(typeinfo, "<=" = |a: i64, b: i64| -?> () { (a <= b).then_some(()) });
+        add_primitive!(typeinfo, ">=" = |a: i64, b: i64| -?> () { (a >= b).then_some(()) });
 
-        add_primitives!(typeinfo, "bool-=" = |a: i64, b: i64| -> bool { a == b });
-        add_primitives!(typeinfo, "bool-<" = |a: i64, b: i64| -> bool { a < b });
-        add_primitives!(typeinfo, "bool->" = |a: i64, b: i64| -> bool { a > b });
-        add_primitives!(typeinfo, "bool-<=" = |a: i64, b: i64| -> bool { a <= b });
-        add_primitives!(typeinfo, "bool->=" = |a: i64, b: i64| -> bool { a >= b });
+        add_primitive!(typeinfo, "bool-=" = |a: i64, b: i64| -> bool { a == b });
+        add_primitive!(typeinfo, "bool-<" = |a: i64, b: i64| -> bool { a < b });
+        add_primitive!(typeinfo, "bool->" = |a: i64, b: i64| -> bool { a > b });
+        add_primitive!(typeinfo, "bool-<=" = |a: i64, b: i64| -> bool { a <= b });
+        add_primitive!(typeinfo, "bool->=" = |a: i64, b: i64| -> bool { a >= b });
 
-        add_primitives!(typeinfo, "min" = |a: i64, b: i64| -> i64 { a.min(b) });
-        add_primitives!(typeinfo, "max" = |a: i64, b: i64| -> i64 { a.max(b) });
+        add_primitive!(typeinfo, "min" = |a: i64, b: i64| -> i64 { a.min(b) });
+        add_primitive!(typeinfo, "max" = |a: i64, b: i64| -> i64 { a.max(b) });
 
-        add_primitives!(typeinfo, "to-string" = |a: i64| -> Symbol { a.to_string().into() });
+        add_primitive!(typeinfo, "to-string" = |a: i64| -> Symbol { a.to_string().into() });
 
         // Must be in the i64 sort register function because the string sort is registered before the i64 sort.
         typeinfo.add_primitive(CountMatches {
