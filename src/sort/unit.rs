@@ -27,7 +27,10 @@ impl Sort for UnitSort {
     fn register_primitives(self: Arc<Self>, type_info: &mut TypeInfo) {
         add_primitive!(type_info, "!=" = |a: #, b: #| -?> () {
             (a != b).then_some(())
-        })
+        });
+        add_primitive!(type_info, "value-eq" = |a: #, b: #| -?> () {
+            (a == b).then_some(())
+        });
     }
 
     fn extract_term(
