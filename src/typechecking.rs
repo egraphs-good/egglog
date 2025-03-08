@@ -10,17 +10,16 @@ pub struct FuncType {
 }
 
 /// Stores resolved typechecking information.
-/// TODO make these not public, use accessor methods
 #[derive(Clone, Default)]
 pub struct TypeInfo {
     // get the sort from the sorts name()
-    pub presorts: HashMap<Symbol, PreSort>,
+    presorts: HashMap<Symbol, PreSort>,
     // TODO(yz): I want to get rid of this as now we have user-defined primitives and constraint based type checking
-    pub reserved_primitives: HashSet<Symbol>,
-    pub sorts: HashMap<Symbol, Arc<dyn Sort>>,
-    pub primitives: HashMap<Symbol, Vec<Primitive>>,
-    pub func_types: HashMap<Symbol, FuncType>,
-    pub global_types: HashMap<Symbol, ArcSort>,
+    reserved_primitives: HashSet<Symbol>,
+    sorts: HashMap<Symbol, Arc<dyn Sort>>,
+    primitives: HashMap<Symbol, Vec<Primitive>>,
+    func_types: HashMap<Symbol, FuncType>,
+    global_sorts: HashMap<Symbol, ArcSort>,
 }
 
 // These methods need to be on the `EGraph` in order to
@@ -118,7 +117,7 @@ impl EGraph {
                     .typecheck_expr(symbol_gen, expr, &Default::default())?;
                 let output_type = expr.output_type();
                 self.type_info
-                    .global_types
+                    .global_sorts
                     .insert(*var, output_type.clone());
                 let var = ResolvedVar {
                     name: *var,
@@ -202,10 +201,7 @@ impl TypeInfo {
         }
     }
 
-    pub fn get_sort_by<S: Sort + Send + Sync>(
-        &self,
-        pred: impl Fn(&Arc<S>) -> bool,
-    ) -> Option<Arc<S>> {
+    pub fn get_sort_by<S: Sort>(&self, pred: impl Fn(&Arc<S>) -> bool) -> Option<Arc<S>> {
         for sort in self.sorts.values() {
             let sort = sort.clone().as_arc_any();
             if let Ok(sort) = Arc::downcast(sort) {
@@ -217,14 +213,7 @@ impl TypeInfo {
         None
     }
 
-    pub fn get_sort_nofail<S: Sort + Send + Sync>(&self) -> Arc<S> {
-        match self.get_sort_by(|_| true) {
-            Some(sort) => sort,
-            None => panic!("Failed to lookup sort: {}", std::any::type_name::<S>()),
-        }
-    }
-
-    pub(crate) fn function_to_functype(&self, func: &FunctionDecl) -> Result<FuncType, TypeError> {
+    fn function_to_functype(&self, func: &FunctionDecl) -> Result<FuncType, TypeError> {
         let input = func
             .schema
             .input
@@ -510,20 +499,28 @@ impl TypeInfo {
             })
     }
 
-    pub fn lookup_global(&self, sym: &Symbol) -> Option<ArcSort> {
-        self.global_types.get(sym).cloned()
+    pub fn get_sort(&self, sym: &Symbol) -> Option<&ArcSort> {
+        self.sorts.get(sym)
     }
 
-    pub(crate) fn is_primitive(&self, sym: Symbol) -> bool {
+    pub fn get_prims(&self, sym: &Symbol) -> Option<&Vec<Primitive>> {
+        self.primitives.get(sym)
+    }
+
+    pub fn is_primitive(&self, sym: Symbol) -> bool {
         self.primitives.contains_key(&sym) || self.reserved_primitives.contains(&sym)
     }
 
-    pub(crate) fn lookup_user_func(&self, sym: Symbol) -> Option<FuncType> {
-        self.func_types.get(&sym).cloned()
+    pub fn get_func_type(&self, sym: &Symbol) -> Option<&FuncType> {
+        self.func_types.get(sym)
     }
 
-    pub(crate) fn is_global(&self, sym: Symbol) -> bool {
-        self.global_types.contains_key(&sym)
+    pub fn get_global_sort(&self, sym: &Symbol) -> Option<&ArcSort> {
+        self.global_sorts.get(sym)
+    }
+
+    pub fn is_global(&self, sym: Symbol) -> bool {
+        self.global_sorts.contains_key(&sym)
     }
 }
 

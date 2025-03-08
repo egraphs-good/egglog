@@ -203,7 +203,10 @@ macro_rules! add_primitive {
     };
     (@prim_use $eg:ident $name:ident [$x:ident : $t:ty, $($xs:tt)*] -> [$($f:tt)*]) => {
         add_primitive!(@prim_use $eg $name [$($xs)*] -> [$($f)*
-            $x: $eg.type_info.get_sort_nofail::<<$t as IntoSort>::Sort>(),])
+            $x: $eg.type_info
+                   .get_sort_by::<<$t as IntoSort>::Sort>(|_| true)
+                   .unwrap_or_else(|| panic!("Failed to lookup sort: {}", std::any::type_name::<$t>())),
+        ])
     };
     (@prim_use $eg:ident $name:ident [] -> [$($fields:tt)*]) => {
         $name {
