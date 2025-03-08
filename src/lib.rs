@@ -350,37 +350,6 @@ impl<T: PrimitiveLike + 'static + Send + Sync> From<T> for Primitive {
     }
 }
 
-pub struct SimplePrimitive {
-    name: Symbol,
-    input: Vec<ArcSort>,
-    output: ArcSort,
-    f: fn(&[Value]) -> Option<Value>,
-}
-
-impl PrimitiveLike for SimplePrimitive {
-    fn name(&self) -> Symbol {
-        self.name
-    }
-
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        let sorts: Vec<_> = self
-            .input
-            .iter()
-            .chain(once(&self.output as &ArcSort))
-            .cloned()
-            .collect();
-        SimpleTypeConstraint::new(self.name(), sorts, span.clone()).into_box()
-    }
-    fn apply(
-        &self,
-        values: &[Value],
-        _sorts: (&[ArcSort], &ArcSort),
-        _egraph: Option<&mut EGraph>,
-    ) -> Option<Value> {
-        (self.f)(values)
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
 pub enum RunMode {
     Normal,
