@@ -80,10 +80,8 @@ macro_rules! add_primitive {
     //   - we make up `__y` as a struct field name that avoids collisions
     // - $body: the code to insert into the body of the primitive
     (@main $eg:expr, $name:literal $v:ident $f:ident [$($xs:tt)*] [$($y:tt)*] $body:expr) => {{
-        #[allow(unused_imports)]
-        use $crate::{*, constraint::*};
-        #[allow(unused_imports)]
-        use ::std::sync::Arc;
+        #[allow(unused_imports)] use $crate::{*, constraint::*};
+        #[allow(unused_imports)] use ::std::sync::Arc;
         use core_relations::{ExecutionState, ExternalFunction, Value as V};
 
         // Here we both assert the type of the reference and ensure
@@ -103,7 +101,7 @@ macro_rules! add_primitive {
             }
 
             fn apply(&self, args: &[Value], _: (&[ArcSort], &ArcSort), _: Option<&mut EGraph>) -> Option<Value> {
-                add_primitive!(@apply $v self args [$($xs)*] [$($y)*] $f $body)
+                add_primitive!(@func apply $v self args $f [$($xs)*] [$($y)*] $body)
             }
         }
 
@@ -112,9 +110,8 @@ macro_rules! add_primitive {
 
         impl ExternalFunction for Ext {
             fn invoke(&self, exec_state: &mut ExecutionState, args: &[V]) -> Option<V> {
-                let _prims = exec_state.prims();
-                let _args = args;
-                todo!("invoke for Ext")
+                #[allow(unused_variables)] let prims = exec_state.prims();
+                add_primitive!(@func invoke $v prims args $f [$($xs)*] [$($y)*] $body)
             }
         }
 
@@ -146,43 +143,51 @@ macro_rules! add_primitive {
             .into_box()
     }};
 
-    // -------- Body of apply() -------- //
-    (@apply $v:ident $self:ident $args:ident [$($xs:tt)*] [$($y:tt)*] $f:ident $body:expr) => {{
-        add_primitive!(@args $v $self $args [$($xs)*]);
-        add_primitive!(@body $f $self [$($y)*] $body)
+    // -------- START FUNCTION IMPL -------- //
+    // Each implementation of apply() and invoke() has four parts:
+    // - @args: create a new variable for each $x
+    // - @cast: cast arguments to the correct type
+    // - @exec: run the $body, failing if appropriate
+    // - @ret: cast the result back to a value
+    (@func $m:ident $v:ident $self:ident $args:ident $f:ident [$($xs:tt)*] [$($y:tt)*] $body:expr) => {{
+        add_primitive!(@args    $v       $args    [$($xs)*]                  );
+        add_primitive!(@cast $m $v $self          [$($xs)*]                  );
+        add_primitive!(@exec $m                $f           [$($y)*]    $body);
+   Some(add_primitive!(@ret  $m    $self                    [$($y)*]         ))
     }};
 
-    // -------- Destruct apply() args -------- //
-    (@args vararg $self:ident $args:ident [$x:ident : #,]) => {
-        let $x = $args.iter();
-    };
-    (@args fixarg $self:ident $args:ident [$($x:ident : #,)*]) => {
-        let [$($x,)*] = $args else { panic!("wrong number of arguments") };
-    };
-    (@args vararg $self:ident $args:ident [$x:ident : $t:ty,]) => {
-        add_primitive!(@args vararg $self $args [$x : #,]);
-        let $x = $x.map(|x| <$t as FromSort>::load(&$self.$x, x));
-    };
-    (@args fixarg $self:ident $args:ident [$($x:ident : $t:ty,)*]) => {
-        add_primitive!(@args fixarg $self $args [$($x : #,)*]);
-        $(let $x: $t = <$t as FromSort>::load(&$self.$x, $x);)*
-    };
+    // vararg vs. fixarg
+    (@args vararg $args:ident [  $x:ident : #,  ]) => { let    $x     = $args.iter()                                      ; };
+    (@args fixarg $args:ident [$($x:ident : #,)*]) => { let [$($x,)*] = $args else { panic!("wrong number of arguments") }; };
+    // ignore types
+    (@args vararg $args:ident [  $x:ident : $t:ty,  ]) => { add_primitive!(@args vararg $args [  $x : #,  ]); };
+    (@args fixarg $args:ident [$($x:ident : $t:ty,)*]) => { add_primitive!(@args fixarg $args [$($x : #,)*]); };
 
-    // -------- Run apply() body and return -------- //
-    (@body pure $self:ident [$y:ident : #,] $body:expr) => {{
-        Some($body)
-    }};
-    (@body fail $self:ident [$y:ident : #,] $body:expr) => {{
-        $body
-    }};
-    (@body pure $self:ident [$y:ident : $t:ty,] $body:expr) => {{
-        let y: $t = $body;
-        Some(y.store(&$self.$y))
-    }};
-    (@body fail $self:ident [$y:ident : $t:ty,] $body:expr) => {{
-        let y: $t = $body?;
-        Some(y.store(&$self.$y))
-    }};
+    // if arg types are # then don't cast
+    (@cast $m:ident $v:ident $self:ident [$x:ident : #, $($xs:tt)*]) => {};
+    // vararg vs. fixarg
+    (@cast $m:ident vararg   $self:ident [  $x:ident : $t:ty,  ]) => { let $x = $x.map(|$x| add_primitive!(@cast1 $m $self $x $t)); };
+    (@cast $m:ident fixarg   $self:ident [$($x:ident : $t:ty,)*]) => { $(let $x: $t =       add_primitive!(@cast1 $m $self $x $t);)* };
+
+    // apply vs. invoke
+    (@cast1 apply  $self:ident $x:ident $t:ty) => { <$t as FromSort>::load(&$self.$x, $x) };
+    (@cast1 invoke $self:ident $x:ident $t:ty) => { $self.unwrap::<$t>(*$x)               };
+
+    // (apply # vs. invoke # vs. ty) and (pure vs. fail)
+    (@exec apply    pure [$y:ident : #    ,] $body:expr) => { let $y: Value = $body; };
+    (@exec invoke   pure [$y:ident : #    ,] $body:expr) => { let $y: V     = $body; };
+    (@exec $m:ident pure [$y:ident : $t:ty,] $body:expr) => { let $y: $t    = $body; };
+    (@exec apply    fail [$y:ident : #    ,] $body:expr) => { let $y: Value = $body?; };
+    (@exec invoke   fail [$y:ident : #    ,] $body:expr) => { let $y: V     = $body?; };
+    (@exec $m:ident fail [$y:ident : $t:ty,] $body:expr) => { let $y: $t    = $body?; };
+
+    // # vs. ty
+    // (@ret [$y:ident])
+    (@ret $m:ident $self:ident [$y:ident : #    ,]) => { $y                  };
+    (@ret apply    $self:ident [$y:ident : $t:ty,]) => { $y.store(&$self.$y) };
+    (@ret invoke   $self:ident [$y:ident : $t:ty,]) => { $self.get::<$t>($y) };
+
+    // -------- END FUNCTION IMPL -------- //
 
     // -------- Get the length of a list -------- //
     // no this is really the best way:
