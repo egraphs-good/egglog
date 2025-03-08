@@ -39,14 +39,14 @@ impl Sort for StringSort {
         Some((1, termdag.lit(Literal::String(sym))))
     }
 
-    fn register_primitives(self: Arc<Self>, typeinfo: &mut TypeInfo) {
-        add_primitive!(typeinfo, "+" = [xs: S] -> S {{
+    fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
+        add_primitive!(eg, "+" = [xs: S] -> S {{
             let mut y = String::new();
             xs.for_each(|x| y.push_str(x.as_str()));
             y.into()
         }});
         add_primitive!(
-            typeinfo,
+            eg,
             "replace" =
                 |a: S, b: S, c: S| -> S { a.as_str().replace(b.as_str(), c.as_str()).into() }
         );

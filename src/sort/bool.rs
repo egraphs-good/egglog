@@ -25,7 +25,7 @@ impl Sort for BoolSort {
     }
 
     #[rustfmt::skip]
-    fn register_primitives(self: Arc<Self>, eg: &mut TypeInfo) {
+    fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
         add_primitive!(eg, "not" = |a: bool| -> bool { !a });
         add_primitive!(eg, "and" = |a: bool, b: bool| -> bool { a && b });
         add_primitive!(eg, "or" = |a: bool, b: bool| -> bool { a || b });
