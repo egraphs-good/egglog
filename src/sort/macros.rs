@@ -15,7 +15,7 @@
 ///   arguments must also be.
 ///
 #[macro_export]
-macro_rules! add_primitives {
+macro_rules! add_primitive {
     // This is a complicated macro. The first annoying thing is that
     // `macro_rules` macros have no `|` operator, so you have to break out
     // all of your choices into separate arms. To make the code shorter,
@@ -30,34 +30,34 @@ macro_rules! add_primitives {
 
     // -------- START OF PARSING -------- //
     ($ti:ident, $name:literal = $($tail:tt)*) => {
-        add_primitives!(@1 $ti $name $($tail)*)
+        add_primitive!(@1 $ti $name $($tail)*)
     };
     // -------- parse the arguments -------- //
     (@1 $ti:ident $name:literal |$($x:ident : $t:ty),*| $($tail:tt)*) => {
-        add_primitives!(@2 $ti $name fixarg [$($x : $t,)*] $($tail)*)
+        add_primitive!(@2 $ti $name fixarg [$($x : $t,)*] $($tail)*)
     };
     (@1 $ti:ident $name:literal |$($x:ident : #),*| $($tail:tt)*) => {
-        add_primitives!(@2 $ti $name fixarg [$($x : #,)*] $($tail)*)
+        add_primitive!(@2 $ti $name fixarg [$($x : #,)*] $($tail)*)
     };
     (@1 $ti:ident $name:literal [$x:ident : $t:ty] $($tail:tt)*) => {
-        add_primitives!(@2 $ti $name vararg [$x : $t,] $($tail)*)
+        add_primitive!(@2 $ti $name vararg [$x : $t,] $($tail)*)
     };
     (@1 $ti:ident $name:literal [$x:ident : #] $($tail:tt)*) => {
-        add_primitives!(@2 $ti $name vararg [$x : #,] $($tail)*)
+        add_primitive!(@2 $ti $name vararg [$x : #,] $($tail)*)
     };
     // -------- parse the arrow -------- //
     (@2 $ti:ident $name:literal $v:ident [$($xs:tt)*] -> $($tail:tt)*) => {
-        add_primitives!(@3 $ti $name $v pure [$($xs)*] $($tail)*)
+        add_primitive!(@3 $ti $name $v pure [$($xs)*] $($tail)*)
     };
     (@2 $ti:ident $name:literal $v:ident [$($xs:tt)*] -?> $($tail:tt)*) => {
-        add_primitives!(@3 $ti $name $v fail [$($xs)*] $($tail)*)
+        add_primitive!(@3 $ti $name $v fail [$($xs)*] $($tail)*)
     };
     // -------- parse the return type -------- //
     (@3 $ti:ident $name:literal $v:ident $f:ident [$($xs:tt)*] $y:ty { $body:expr }) => {
-        add_primitives!(@main $ti $name $v $f [$($xs)*] [__y : $y,] $body)
+        add_primitive!(@main $ti $name $v $f [$($xs)*] [__y : $y,] $body)
     };
     (@3 $ti:ident $name:literal $v:ident $f:ident [$($xs:tt)*] # { $body:expr }) => {
-        add_primitives!(@main $ti $name $v $f [$($xs)*] [__y : #,] $body)
+        add_primitive!(@main $ti $name $v $f [$($xs)*] [__y : #,] $body)
     };
     // -------- END OF PARSING -------- //
 
@@ -83,7 +83,7 @@ macro_rules! add_primitives {
         use ::std::sync::Arc;
         use $crate::*;
 
-        add_primitives!{@prim_def Prim [$($xs)* $($y)*] -> []}
+        add_primitive!{@prim_def Prim [$($xs)* $($y)*] -> []}
 
         impl PrimitiveLike for Prim {
             fn name(&self) -> Symbol {
@@ -91,16 +91,16 @@ macro_rules! add_primitives {
             }
 
             fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-                add_primitives!(@types $v self span [$($xs)*] [$($y)*])
+                add_primitive!(@types $v self span [$($xs)*] [$($y)*])
             }
 
             fn apply(&self, args: &[Value], _: (&[ArcSort], &ArcSort), _: Option<&mut EGraph>) -> Option<Value> {
-                add_primitives!(@apply $v self args [$($xs)*] [$($y)*] $f $body)
+                add_primitive!(@apply $v self args [$($xs)*] [$($y)*] $f $body)
             }
         }
 
         $ti.add_primitive(Primitive::from(
-            add_primitives!{@prim_use $ti Prim [$($xs)* $($y)*] -> []}
+            add_primitive!{@prim_use $ti Prim [$($xs)* $($y)*] -> []}
         ))
     }};
 
@@ -112,8 +112,8 @@ macro_rules! add_primitives {
 
     // -------- Body of apply() -------- //
     (@apply $v:ident $self:ident $args:ident [$($xs:tt)*] [$($y:tt)*] $f:ident $body:expr) => {{
-        add_primitives!(@args $v $self $args [$($xs)*]);
-        add_primitives!(@body $f $self [$($y)*] $body)
+        add_primitive!(@args $v $self $args [$($xs)*]);
+        add_primitive!(@body $f $self [$($y)*] $body)
     }};
 
     // -------- Destruct apply() args -------- //
@@ -124,11 +124,11 @@ macro_rules! add_primitives {
         let [$($x,)*] = $args else { panic!("wrong number of arguments") };
     };
     (@args vararg $self:ident $args:ident [$x:ident : $t:ty,]) => {
-        add_primitives!(@args vararg $self $args [$($x : #,)*]);
+        add_primitive!(@args vararg $self $args [$($x : #,)*]);
         let $x = $x.map(|x| <$t as FromSort>::load($self.$x, x));
     };
     (@args fixarg $self:ident $args:ident [$($x:ident : $t:ty,)*]) => {
-        add_primitives!(@args fixarg $self $args [$($x : #,)*]);
+        add_primitive!(@args fixarg $self $args [$($x : #,)*]);
         $(let $x: $t = <$t as FromSort>::load(&$self.$x, $x);)*
     };
 
@@ -155,10 +155,10 @@ macro_rules! add_primitives {
 
     // -------- Generate struct definition -------- //
     (@prim_def $name:ident [$x:ident : #    , $($xs:tt)*] -> [$($f:tt)*]) => {
-        add_primitives!(@prim_def $name [$($xs)*] -> [$($f)*])
+        add_primitive!(@prim_def $name [$($xs)*] -> [$($f)*])
     };
     (@prim_def $name:ident [$x:ident : $t:ty, $($xs:tt)*] -> [$($f:tt)*]) => {
-        add_primitives!(@prim_def $name [$($xs)*] -> [$($f)*
+        add_primitive!(@prim_def $name [$($xs)*] -> [$($f)*
             $x: Arc<<$t as IntoSort>::Sort>,])
     };
     (@prim_def $name:ident [] -> [$($fields:tt)*]) => {
@@ -169,10 +169,10 @@ macro_rules! add_primitives {
 
     // -------- Generate struct construction -------- //
     (@prim_use $ti:ident $name:ident [$x:ident : #    , $($xs:tt)*] -> [$($f:tt)*]) => {
-        add_primitives!(@prim_use $ti $name [$($xs)*] -> [$($f)*])
+        add_primitive!(@prim_use $ti $name [$($xs)*] -> [$($f)*])
     };
     (@prim_use $ti:ident $name:ident [$x:ident : $t:ty, $($xs:tt)*] -> [$($f:tt)*]) => {
-        add_primitives!(@prim_use $ti $name [$($xs)*] -> [$($f)*
+        add_primitive!(@prim_use $ti $name [$($xs)*] -> [$($f)*
             $x: $ti.get_sort_nofail::<<$t as IntoSort>::Sort>(),])
     };
     (@prim_use $ti:ident $name:ident [] -> [$($fields:tt)*]) => {

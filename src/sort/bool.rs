@@ -26,11 +26,11 @@ impl Sort for BoolSort {
 
     #[rustfmt::skip]
     fn register_primitives(self: Arc<Self>, eg: &mut TypeInfo) {
-        add_primitives!(eg, "not" = |a: bool| -> bool { !a });
-        add_primitives!(eg, "and" = |a: bool, b: bool| -> bool { a && b });
-        add_primitives!(eg, "or" = |a: bool, b: bool| -> bool { a || b });
-        add_primitives!(eg, "xor" = |a: bool, b: bool| -> bool { a ^ b });
-        add_primitives!(eg, "=>" = |a: bool, b: bool| -> bool { !a || b });
+        add_primitive!(eg, "not" = |a: bool| -> bool { !a });
+        add_primitive!(eg, "and" = |a: bool, b: bool| -> bool { a && b });
+        add_primitive!(eg, "or" = |a: bool, b: bool| -> bool { a || b });
+        add_primitive!(eg, "xor" = |a: bool, b: bool| -> bool { a ^ b });
+        add_primitive!(eg, "=>" = |a: bool, b: bool| -> bool { !a || b });
     }
 
     fn extract_term(
