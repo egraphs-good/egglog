@@ -36,6 +36,8 @@ use ast::*;
 #[cfg(feature = "bin")]
 pub use cli::bin::*;
 use constraint::{Constraint, SimpleTypeConstraint, TypeConstraint};
+use core_relations::ExternalFunctionId;
+use egglog_bridge::ColumnTy;
 use extract::Extractor;
 pub use function::Function;
 use function::*;
@@ -292,10 +294,7 @@ impl RunReport {
 }
 
 #[derive(Clone)]
-pub struct Primitive(
-    Arc<dyn PrimitiveLike + Send + Sync>,
-    #[allow(unused)] core_relations::ExternalFunctionId,
-);
+pub struct Primitive(Arc<dyn PrimitiveLike + Send + Sync>, ExternalFunctionId);
 impl Primitive {
     // Takes the full signature of a primitive (including input and output types)
     // Returns whether the primitive is compatible with this signature
@@ -1630,8 +1629,8 @@ impl<'a> BackendRule<'a> {
                     let prims = self.rb.egraph().primitives();
                     match l {
                         Literal::Int(x) => prims.get::<i64>(*x),
-                        Literal::Float(x) => prims.get::<ordered_float::OrderedFloat<f64>>(*x),
-                        Literal::String(x) => prims.get::<Symbol>(*x),
+                        Literal::Float(x) => prims.get::<sort::F>(*x),
+                        Literal::String(x) => prims.get::<sort::S>(*x),
                         Literal::Bool(x) => prims.get::<bool>(*x),
                         Literal::Unit => prims.get::<()>(()),
                     }
@@ -1644,25 +1643,39 @@ impl<'a> BackendRule<'a> {
             .clone()
     }
 
-    fn function_call<'b>(
-        &mut self,
-        f: &typechecking::FuncType,
-        args: impl IntoIterator<Item = &'b core::ResolvedAtomTerm>,
-    ) -> (egglog_bridge::FunctionId, Vec<egglog_bridge::QueryEntry>) {
+    fn func(&self, f: &typechecking::FuncType) -> egglog_bridge::FunctionId {
+        self.functions[&f.name].new_backend_id
+    }
+
+    fn prim(&self, p: &core::SpecializedPrimitive) -> (ExternalFunctionId, ColumnTy) {
         (
-            self.functions[&f.name].new_backend_id,
-            args.into_iter().map(|x| self.entry(x)).collect(),
+            p.primitive.1,
+            p.output.column_ty(self.rb.egraph().primitives()),
         )
+    }
+
+    fn args<'b>(
+        &mut self,
+        args: impl IntoIterator<Item = &'b core::ResolvedAtomTerm>,
+    ) -> Vec<egglog_bridge::QueryEntry> {
+        args.into_iter().map(|x| self.entry(x)).collect()
     }
 
     fn query(&mut self, query: &core::Query<ResolvedCall, ResolvedVar>) {
         for atom in &query.atoms {
             match &atom.head {
                 ResolvedCall::Func(f) => {
-                    let (f, args) = self.function_call(f, &atom.args);
-                    self.rb.add_atom(f.into(), &args).unwrap()
+                    let f = self.func(f).into();
+                    let args = self.args(&atom.args);
+                    self.rb.add_atom(f, &args).unwrap()
                 }
-                ResolvedCall::Primitive(..) => todo!("primitives in queries"),
+                ResolvedCall::Primitive(p) => {
+                    let (p, ty) = self.prim(p);
+                    let (v, args) = atom.args.split_last().unwrap();
+                    let args = self.args(args);
+                    let y = self.rb.call_external_func(p, &args, ty).into();
+                    self.entries.insert(v.clone(), y);
+                }
             }
         }
     }
@@ -1670,15 +1683,21 @@ impl<'a> BackendRule<'a> {
     fn actions(&mut self, actions: &core::ResolvedCoreActions) {
         for action in &actions.0 {
             match action {
-                core::GenericCoreAction::Let(span, v, f, args) => match f {
-                    ResolvedCall::Func(f) => {
-                        let v = core::GenericAtomTerm::Var(span.clone(), v.clone());
-                        let (f, args) = self.function_call(f, args);
-                        let x = self.rb.lookup(f.into(), &args).into();
-                        self.entries.insert(v, x);
-                    }
-                    ResolvedCall::Primitive(..) => todo!("primitives in actions"),
-                },
+                core::GenericCoreAction::Let(span, v, f, args) => {
+                    let v = core::GenericAtomTerm::Var(span.clone(), v.clone());
+                    let args = self.args(args);
+                    let y = match f {
+                        ResolvedCall::Func(f) => {
+                            let f = self.func(f).into();
+                            self.rb.lookup(f, &args).into()
+                        }
+                        ResolvedCall::Primitive(p) => {
+                            let (p, ty) = self.prim(p);
+                            self.rb.call_external_func(p, &args, ty).into()
+                        }
+                    };
+                    self.entries.insert(v, y);
+                }
                 core::GenericCoreAction::LetAtomTerm(span, v, x) => {
                     let v = core::GenericAtomTerm::Var(span.clone(), v.clone());
                     let x = self.entry(x);
@@ -1687,14 +1706,16 @@ impl<'a> BackendRule<'a> {
                 core::GenericCoreAction::Set(_, f, xs, y) => match f {
                     ResolvedCall::Primitive(..) => panic!("runtime primitive set!"),
                     ResolvedCall::Func(f) => {
-                        let (f, args) = self.function_call(f, xs.iter().chain([y]));
+                        let f = self.func(f);
+                        let args = self.args(xs.iter().chain([y]));
                         self.rb.set(f, &args)
                     }
                 },
                 core::GenericCoreAction::Change(_, change, f, args) => match f {
                     ResolvedCall::Primitive(..) => panic!("runtime primitive change!"),
                     ResolvedCall::Func(f) => {
-                        let (f, args) = self.function_call(f, args);
+                        let f = self.func(f);
+                        let args = self.args(args);
                         match change {
                             Change::Delete => self.rb.remove(f, &args),
                             Change::Subsume => todo!("no subsumption yet"),

@@ -18,10 +18,10 @@ use crate::extract::{Cost, Extractor};
 use crate::util::IndexSet;
 use crate::*;
 
-type Z = BigInt;
-type Q = BigRational;
-type F = OrderedFloat<f64>;
-type S = Symbol;
+pub type Z = BigInt;
+pub type Q = BigRational;
+pub type F = OrderedFloat<f64>;
+pub type S = Symbol;
 
 mod bigint;
 pub use bigint::*;
