@@ -48,8 +48,6 @@ impl Default for TypeInfo {
         // res.add_presort::<FunctionSort>(span!()).unwrap();
         // res.add_presort::<MultiSetSort>(span!()).unwrap();
 
-        res.add_primitive(ValueEq);
-
         res
     }
 }
