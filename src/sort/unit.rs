@@ -25,7 +25,9 @@ impl Sort for UnitSort {
     }
 
     fn register_primitives(self: Arc<Self>, type_info: &mut TypeInfo) {
-        type_info.add_primitive(NotEqualPrimitive { unit: self })
+        add_primitive!(type_info, "!=" = |a: #, b: #| -?> () {
+            (a != b).then_some(())
+        })
     }
 
     fn extract_term(
@@ -44,31 +46,5 @@ impl IntoSort for () {
 
     fn store(self, _sort: &Self::Sort) -> Value {
         Value::unit()
-    }
-}
-
-pub struct NotEqualPrimitive {
-    unit: ArcSort,
-}
-
-impl PrimitiveLike for NotEqualPrimitive {
-    fn name(&self) -> Symbol {
-        "!=".into()
-    }
-
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        AllEqualTypeConstraint::new(self.name(), span.clone())
-            .with_exact_length(3)
-            .with_output_sort(self.unit.clone())
-            .into_box()
-    }
-
-    fn apply(
-        &self,
-        values: &[Value],
-        _sorts: (&[ArcSort], &ArcSort),
-        _egraph: Option<&mut EGraph>,
-    ) -> Option<Value> {
-        (values[0] != values[1]).then(Value::unit)
     }
 }

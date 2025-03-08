@@ -106,8 +106,14 @@ macro_rules! add_primitive {
 
     // -------- Body of get_type_constraints() -------- //
     (@types fixarg $self:ident $span:ident [$($x:ident : $xt:ty,)*] [$y:ident : $yt:tt,]) => {{
-        let sorts = vec![$($self.$x.clone() as ArcSort,)* $self.$y.clone() as ArcSort];
+        let sorts = vec![$($self.$x.clone() as ArcSort,)* $self.$y.clone()];
         SimpleTypeConstraint::new($self.name(), sorts, $span.clone()).into_box()
+    }};
+    (@types fixarg $self:ident $span:ident [$($x:ident : #,)*] [$y:ident : $yt:tt,]) => {{
+        AllEqualTypeConstraint::new($self.name(), $span.clone())
+            .with_exact_length(add_primitive!(@len [$($x)*]))
+            .with_output_sort($self.$y.clone())
+            .into_box()
     }};
 
     // -------- Body of apply() -------- //
@@ -147,6 +153,12 @@ macro_rules! add_primitive {
         let y: $t = $body?;
         Some(y.store(&$self.$y))
     }};
+
+    // -------- Get the length of a list -------- //
+    // no this is really the best way:
+    // veykril.github.io/tlborm/decl-macros/building-blocks/counting.html
+    (@len [$($x:ident)*]) => { <[()]>::len(&[$(add_primitive!(@sub $x)),*]) };
+    (@sub $x:ident) => { () };
 
     // The below helper macros match on `(@helper ... [a*] -> [b*])`,
     // where `a` is the work to be performed, and `b` is the work to be
