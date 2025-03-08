@@ -32,7 +32,7 @@ impl Sort for F64Sort {
     // We need the closure for division and mod operations, as they can panic.
     // cf https://github.com/rust-lang/rust-clippy/issues/9422
     #[allow(clippy::unnecessary_lazy_evaluations)]
-    fn register_primitives(self: Arc<Self>, eg: &mut TypeInfo) {
+    fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
         add_primitive!(eg, "+" = |a: F, b: F| -> F { a + b });
         add_primitive!(eg, "-" = |a: F, b: F| -> F { a - b });
         add_primitive!(eg, "*" = |a: F, b: F| -> F { a * b });

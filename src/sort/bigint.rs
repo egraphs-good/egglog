@@ -26,7 +26,7 @@ impl Sort for BigIntSort {
     }
 
     #[rustfmt::skip]
-    fn register_primitives(self: Arc<Self>, eg: &mut TypeInfo) {
+    fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
         add_primitive!(eg, "bigint" = |a: i64| -> Z { a.into() });
 
         add_primitive!(eg, "+" = |a: Z, b: Z| -> Z { a + b });

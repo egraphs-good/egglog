@@ -33,7 +33,7 @@ impl Sort for BigRatSort {
     }
 
     #[rustfmt::skip]
-    fn register_primitives(self: Arc<Self>, eg: &mut TypeInfo) {
+    fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
         add_primitive!(eg, "+" = |a: Q, b: Q| -?> Q { a.checked_add(&b) });
         add_primitive!(eg, "-" = |a: Q, b: Q| -?> Q { a.checked_sub(&b) });
         add_primitive!(eg, "*" = |a: Q, b: Q| -?> Q { a.checked_mul(&b) });
