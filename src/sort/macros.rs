@@ -80,6 +80,7 @@ macro_rules! add_primitive {
     //   - we make up `__y` as a struct field name that avoids collisions
     // - $body: the code to insert into the body of the primitive
     (@main $ti:ident $name:literal $v:ident $f:ident [$($xs:tt)*] [$($y:tt)*] $body:expr) => {{
+        #[allow(unused_imports)]
         use ::std::sync::Arc;
         use $crate::*;
 
@@ -105,17 +106,22 @@ macro_rules! add_primitive {
     }};
 
     // -------- Body of get_type_constraints() -------- //
-    (@types fixarg $self:ident $span:ident [$($x:ident : $xt:ty,)*] [$y:ident : $yt:tt,]) => {{
+    (@types fixarg $self:ident $span:ident [$($x:ident : $xt:ty,)*] [$y:ident : $yt:ty,]) => {{
         let sorts = vec![$($self.$x.clone() as ArcSort,)* $self.$y.clone()];
         SimpleTypeConstraint::new($self.name(), sorts, $span.clone()).into_box()
     }};
-    (@types fixarg $self:ident $span:ident [$($x:ident : #,)*] [$y:ident : $yt:tt,]) => {{
+    (@types fixarg $self:ident $span:ident [$($x:ident : #,)*] [$y:ident : $yt:ty,]) => {{
         AllEqualTypeConstraint::new($self.name(), $span.clone())
-            .with_exact_length(add_primitive!(@len [$($x)*]))
+            .with_exact_length(add_primitive!(@len [$($x)*]) + 1)
             .with_output_sort($self.$y.clone())
             .into_box()
     }};
-    (@types vararg $self:ident $span:ident [$x:ident : $xt:ty,] [$y:ident : $yt:tt,]) => {{
+    (@types fixarg $self:ident $span:ident [$($x:ident : #,)*] [$y:ident : #,]) => {{
+        AllEqualTypeConstraint::new($self.name(), $span.clone())
+            .with_exact_length(add_primitive!(@len [$($x)*]) + 1)
+            .into_box()
+    }};
+    (@types vararg $self:ident $span:ident [$x:ident : $xt:ty,] [$y:ident : $yt:ty,]) => {{
         AllEqualTypeConstraint::new($self.name(), $span.clone())
             .with_all_arguments_sort($self.$x.clone())
             .with_output_sort($self.$y.clone())
