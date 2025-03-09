@@ -163,7 +163,8 @@ impl Function {
                 .collect();
             let default = match decl.subtype {
                 FunctionSubtype::Constructor => DefaultVal::FreshId,
-                _ => DefaultVal::Fail,
+                FunctionSubtype::Custom => DefaultVal::Fail,
+                FunctionSubtype::Relation => DefaultVal::Const(egraph.backend.primitives().get(())),
             };
             let merge = match decl.subtype {
                 FunctionSubtype::Constructor => MergeFn::UnionId,
