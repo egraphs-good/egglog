@@ -16,11 +16,11 @@ use std::{
 
 use core_relations::{
     ColumnId, Constraint, Container, Containers, CounterId, Database, DisplacedTable,
-    DisplacedTableWithProvenance, ExternalFunction, ExternalFunctionId, MergeVal, Offset,
-    PlanStrategy, PrimitiveId, Primitives, SortedWritesTable, TableId, TaggedRowBuffer, Value,
-    WrappedTable,
+    DisplacedTableWithProvenance, ExecutionState, ExternalFunction, ExternalFunctionId, MergeVal,
+    Offset, PlanStrategy, PrimitiveId, Primitives, SortedWritesTable, TableId, TaggedRowBuffer,
+    Value, WrappedTable,
 };
-use indexmap::{map::Entry, IndexMap};
+use indexmap::{map::Entry, IndexMap, IndexSet};
 use log::info;
 use numeric_id::{define_id, DenseIdMap, DenseIdMapWithReuse, NumericId};
 use proof_spec::{ProofReason, ProofReconstructionState, ReasonSpecId};
@@ -538,106 +538,18 @@ impl EGraph {
         } else {
             schema.len() + 1
         };
-        let uf_table = self.uf_table;
-        let tracing = self.tracing;
         let next_func_id = self.funcs.next_id();
-        let mut read_deps = SmallVec::<[TableId; 2]>::new();
-        let mut write_deps = SmallVec::<[TableId; 2]>::new();
-        if !tracing {
-            write_deps.push(uf_table);
-        }
-        let table = match merge {
-            MergeFn::AssertEq => {
-                let panic = self.new_panic(format!("Illegal merge attempted for function {name}"));
-                SortedWritesTable::new(
-                    n_args,
-                    n_cols,
-                    Some(ColumnId::from_usize(schema.len())),
-                    to_rebuild,
-                    move |state, cur, new, _out| {
-                        if cur != new {
-                            let res = state.call_external_func(panic, &[]);
-                            assert_eq!(res, None);
-                        }
-                        false
-                    },
-                )
-            }
-            MergeFn::UnionId => {
-                SortedWritesTable::new(
-                    n_args,
-                    n_cols,
-                    Some(ColumnId::from_usize(schema.len())),
-                    to_rebuild,
-                    move |state, cur, new, out| {
-                        let l = cur[n_args];
-                        let r = new[n_args];
-                        let next_ts = new[n_args + 1];
-                        if l != r && !tracing {
-                            // When proofs are enabled, these are the same term. They are already
-                            // equal and we can just do nothing.
-                            state.stage_insert(uf_table, &[l, r, next_ts]);
-                            out.extend_from_slice(&new[0..n_args]);
-                            // We pick the minimum when unioning. This matches the original egglog
-                            // behavior.
-                            let res = std::cmp::min(l, r);
-                            out.push(std::cmp::min(l, r));
-                            out.extend_from_slice(&new[n_args + 1..]);
-                            r == res
-                        } else {
-                            false
-                        }
-                    },
-                )
-            }
-            MergeFn::Table(merge_table) => {
-                read_deps.push(merge_table);
-                write_deps.push(merge_table);
-                let id_counter = self.id_counter;
-                SortedWritesTable::new(
-                    n_args,
-                    n_cols,
-                    Some(ColumnId::from_usize(schema.len())),
-                    to_rebuild,
-                    move |state, cur, new, out| {
-                        // We have F(x0, ..., xn, v1, t1) and F(x0, ..., xn, v2,
-                        // t2) in the same table.
-                        // F has a merge function given by T. (`merge_table`).
-                        let l = cur[n_args];
-                        let r = new[n_args];
-                        let next_ts = new[n_args + 1];
-                        if l == r {
-                            // Merge functions should be idempotent: T(x,x)
-                            // should eventually equal x. We short-circuit here.
-                            return false;
-                        }
-                        // Look up T(v1, v2), giving us a new value v* (+ a
-                        // timestamp that we ignore). We use the "predictions"
-                        // API, which is only safe because we do not allow "raw
-                        // primitives" in return position here.
-                        let res = if tracing {
-                            panic!("proofs aren't supported for non-union merge functions")
-                        } else {
-                            state.predict_val(
-                                merge_table,
-                                &[l, r],
-                                [MergeVal::from(id_counter), MergeVal::from(next_ts)].into_iter(),
-                            )
-                        };
-                        debug_assert_eq!(res.len(), 2);
-                        // If v* = v1, return with "no change".
-                        if res[0] == l {
-                            return false;
-                        }
-                        // Otherwise, build a new tuple F(x0, ..., xn, v*, t2).
-                        out.extend_from_slice(&new[0..n_args]);
-                        out.push(res[0]);
-                        out.extend_from_slice(&new[n_args + 1..]);
-                        true
-                    },
-                )
-            }
-        };
+        let mut read_deps = IndexSet::<TableId>::new();
+        let mut write_deps = IndexSet::<TableId>::new();
+        merge.fill_deps(self, &mut read_deps, &mut write_deps);
+        let merge_fn = merge.to_callback(n_args, name, self);
+        let table = SortedWritesTable::new(
+            n_args,
+            n_cols,
+            Some(ColumnId::from_usize(schema.len())),
+            to_rebuild,
+            merge_fn,
+        );
         let table_id =
             self.db
                 .add_table(table, read_deps.iter().copied(), write_deps.iter().copied());
@@ -952,8 +864,192 @@ pub enum MergeFn {
     AssertEq,
     /// Use congruence to resolve FD conflicts.
     UnionId,
-    /// The corresponding output is replaced with the mapping in a table.
-    Table(TableId),
+    Primitive(ExternalFunctionId, Box<MergeFn>, Box<MergeFn>),
+    Function(FunctionId, Box<MergeFn>, Box<MergeFn>),
+    /// Always return the old value for the given function.
+    Old,
+    /// Always return the new value for the given function.
+    New,
+    /// Always overwrite the new value for the given function with a constant. This is more useful
+    /// as a "base case" in a more complicated merge function (e.g. one that clamps a value between
+    /// 1 and 100) than it is as a standalone merge function.
+    Const(Value),
+}
+
+impl MergeFn {
+    fn fill_deps(
+        &self,
+        egraph: &EGraph,
+        read_deps: &mut IndexSet<TableId>,
+        write_deps: &mut IndexSet<TableId>,
+    ) {
+        use MergeFn::*;
+        match self {
+            Primitive(_, l, r) => {
+                l.fill_deps(egraph, read_deps, write_deps);
+                r.fill_deps(egraph, read_deps, write_deps);
+            }
+            Function(func, l, r) => {
+                read_deps.insert(egraph.funcs[*func].table);
+                write_deps.insert(egraph.funcs[*func].table);
+                l.fill_deps(egraph, read_deps, write_deps);
+                r.fill_deps(egraph, read_deps, write_deps);
+            }
+            UnionId if !egraph.tracing => {
+                write_deps.insert(egraph.uf_table);
+            }
+            UnionId | AssertEq | Old | New | Const(..) => {}
+        }
+    }
+    #[allow(clippy::type_complexity)]
+    fn to_callback(
+        &self,
+        n_args: usize,
+        function_name: &str,
+        egraph: &mut EGraph,
+    ) -> Box<dyn Fn(&mut ExecutionState, &[Value], &[Value], &mut Vec<Value>) -> bool + Send + Sync>
+    {
+        let todo_fix_merge_fn_constructor = 1;
+        // TODO: have the constructor take a Box<dyn UpdateFn> instead of a generic function.
+        match self {
+            MergeFn::AssertEq => {
+                let panic = egraph.new_panic(format!(
+                    "Illegal merge attempted for function {function_name}"
+                ));
+                Box::new(move |state, cur, new, _out| {
+                    if cur != new {
+                        let res = state.call_external_func(panic, &[]);
+                        assert_eq!(res, None);
+                    }
+                    false
+                })
+            }
+            MergeFn::Const(val) => {
+                assert!(
+                    !egraph.tracing,
+                    "proofs aren't supported for non-union merge functions"
+                );
+                let val = *val;
+                Box::new(move |_, old, new, out| {
+                    if old[n_args] == val {
+                        return false;
+                    }
+                    out.extend_from_slice(&old[0..n_args]);
+                    out.push(val);
+                    out.extend_from_slice(&new[n_args + 1..]);
+                    true
+                })
+            }
+            MergeFn::UnionId => {
+                let uf_table = egraph.uf_table;
+                let tracing = egraph.tracing;
+                Box::new(move |state, cur, new, out| {
+                    let l = cur[n_args];
+                    let r = new[n_args];
+                    let next_ts = new[n_args + 1];
+                    if l != r && !tracing {
+                        // When proofs are enabled, these are the same term. They are already
+                        // equal and we can just do nothing.
+                        state.stage_insert(uf_table, &[l, r, next_ts]);
+                        out.extend_from_slice(&new[0..n_args]);
+                        // We pick the minimum when unioning. This matches the original egglog
+                        // behavior.
+                        let res = std::cmp::min(l, r);
+                        out.push(std::cmp::min(l, r));
+                        out.extend_from_slice(&new[n_args + 1..]);
+                        r == res
+                    } else {
+                        false
+                    }
+                })
+            }
+            MergeFn::Old => Box::new(|_, _, _, _| false),
+            MergeFn::New => Box::new(move |_, old, new, out| {
+                if new[n_args] == old[n_args] {
+                    false
+                } else {
+                    out.extend_from_slice(new);
+                    true
+                }
+            }),
+            // NB: The primitive and function-based merge functions heap allocate a single callback
+            // for each layer of nesting. This introduces a bit of overhead, particularly for cases
+            // that look like `(f old new)` or `(f new old)`. We could special-case common cases in
+            // this function if that overhead shows up.
+            MergeFn::Primitive(func, fn_l, fn_r) => {
+                assert!(
+                    !egraph.tracing,
+                    "proofs aren't supported for non-union merge functions"
+                );
+                let func = *func;
+                let make_l = fn_l.to_callback(n_args, function_name, egraph);
+                let make_r = fn_r.to_callback(n_args, function_name, egraph);
+                Box::new(move |state, cur, new, out| {
+                    let mut out_l = Vec::new();
+                    let mut out_r = Vec::new();
+                    let changed_l = make_l(state, cur, new, &mut out_l);
+                    let changed_r = make_r(state, cur, new, &mut out_r);
+                    let res_l = if changed_l { &out_l } else { cur }[n_args];
+                    let res_r = if changed_r { &out_r } else { cur }[n_args];
+                    let Some(result) = state.call_external_func(func, &[res_l, res_r]) else {
+                        return false;
+                    };
+                    if result == cur[n_args] {
+                        false
+                    } else {
+                        out.extend_from_slice(&new[0..n_args]);
+                        out.push(result);
+                        out.extend_from_slice(&new[n_args + 1..]);
+                        true
+                    }
+                })
+            }
+            MergeFn::Function(function_id, fn_l, fn_r) => {
+                assert!(
+                    !egraph.tracing,
+                    "proofs aren't supported for non-union merge functions"
+                );
+                let func_info = &egraph.funcs[*function_id];
+                assert_eq!(
+                    func_info.schema.len(),
+                    3,
+                    "functions used in merge functions must have two arguments. (When defining {function_name}, using {})",
+                    func_info.name
+                );
+                let table = func_info.table;
+                let default_value = match &func_info.default_val {
+                    DefaultVal::FreshId => MergeVal::from(egraph.id_counter),
+                    DefaultVal::Fail => panic!("cannot use a fail default in a merge function (function in question is {})", function_name),
+                    DefaultVal::Const(val) => MergeVal::from(*val),
+                };
+                let make_l = fn_l.to_callback(n_args, function_name, egraph);
+                let make_r = fn_r.to_callback(n_args, function_name, egraph);
+                Box::new(move |state, cur, new, out| {
+                    let mut out_l = Vec::new();
+                    let mut out_r = Vec::new();
+                    let changed_l = make_l(state, cur, new, &mut out_l);
+                    let changed_r = make_r(state, cur, new, &mut out_r);
+                    let res_l = if changed_l { &out_l } else { cur }[n_args];
+                    let res_r = if changed_r { &out_r } else { cur }[n_args];
+                    let ts = new[n_args + 1];
+                    let result = state.predict_val(
+                        table,
+                        &[res_l, res_r],
+                        [default_value, MergeVal::from(ts)].into_iter(),
+                    )[2];
+
+                    if result == cur[n_args] {
+                        false
+                    } else {
+                        out.extend_from_slice(&new[0..n_args]);
+                        out.push(result);
+                        out.extend_from_slice(&new[n_args + 1..]);
+                        true
+                    }
+                })
+            }
+        }
+    }
 }
 
 fn run_rules_impl(

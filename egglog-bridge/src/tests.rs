@@ -764,6 +764,237 @@ fn rhs_only_rule_only_runs_once() {
     assert_eq!(counter.load(Ordering::SeqCst), 1);
 }
 
+#[test]
+fn test_mergefn_arithmetic() {
+    let mut egraph = EGraph::default();
+    let int_prim = egraph.primitives_mut().register_type::<i64>();
+
+    // Create external functions for multiplication and addition
+    let multiply_func = egraph.register_external_func(core_relations::make_external_func(
+        |state, vals| -> Option<Value> {
+            let [a, b] = vals else {
+                return None;
+            };
+            let a_val = *state.prims().unwrap_ref::<i64>(*a);
+            let b_val = *state.prims().unwrap_ref::<i64>(*b);
+            let res = state.prims().get::<i64>(a_val * b_val);
+            Some(res)
+        },
+    ));
+
+    let add_func = egraph.register_external_func(core_relations::make_external_func(
+        |state, vals| -> Option<Value> {
+            let [a, b] = vals else {
+                return None;
+            };
+            let a_val = *state.prims().unwrap_ref::<i64>(*a);
+            let b_val = *state.prims().unwrap_ref::<i64>(*b);
+            let res = state.prims().get::<i64>(a_val + b_val);
+            Some(res)
+        },
+    ));
+
+    let value_0 = egraph.primitives_mut().get(0i64);
+    let value_1 = egraph.primitives_mut().get(1i64);
+    let value_2 = egraph.primitives_mut().get(2i64);
+    let value_3 = egraph.primitives_mut().get(3i64);
+    let value_4 = egraph.primitives_mut().get(4i64);
+    let value_5 = egraph.primitives_mut().get(5i64);
+    let value_6 = egraph.primitives_mut().get(6i64);
+
+    // Create a function with merge function (+ 1 (* old new))
+    // This uses nested MergeFn::Primitive with external functions to build the complex merge function
+    let f_table = egraph.add_table(
+        vec![ColumnTy::Primitive(int_prim), ColumnTy::Primitive(int_prim)],
+        DefaultVal::Fail,
+        MergeFn::Primitive(
+            add_func,
+            Box::new(MergeFn::Const(value_1)),
+            Box::new(MergeFn::Primitive(
+                multiply_func,
+                Box::new(MergeFn::Old),
+                Box::new(MergeFn::New),
+            )),
+        ),
+        "f",
+    );
+
+    // First rule writes (f 1 0) (f 2 1)
+    let rule1 = {
+        let mut rb = egraph.new_rule("rule1", true);
+        rb.set(f_table, &[value_1.into(), value_0.into()]);
+        rb.set(f_table, &[value_2.into(), value_1.into()]);
+        rb.build()
+    };
+
+    // Run the first rule and check state
+    assert!(egraph.run_rules(&[rule1]).unwrap());
+    let mut contents = Vec::new();
+    egraph.dump_table(f_table, |vals| {
+        contents.push((
+            *egraph.primitives().unwrap_ref::<i64>(vals[0]),
+            *egraph.primitives().unwrap_ref::<i64>(vals[1]),
+        ));
+    });
+    contents.sort();
+    assert_eq!(contents, vec![(1, 0), (2, 1)]);
+
+    // Second rule writes (f 1 5) (f 2 6)
+    let rule2 = {
+        let mut rb = egraph.new_rule("rule2", true);
+        rb.set(f_table, &[value_1.into(), value_5.into()]);
+        rb.set(f_table, &[value_2.into(), value_6.into()]);
+        rb.build()
+    };
+
+    // Run the second rule and check state
+    // Expected: (f 1 1) because 1 + (0 * 5) = 1
+    // Expected: (f 2 7) because 1 + (1 * 6) = 7
+    assert!(egraph.run_rules(&[rule2]).unwrap());
+    contents.clear();
+    egraph.dump_table(f_table, |vals| {
+        contents.push((
+            *egraph.primitives().unwrap_ref::<i64>(vals[0]),
+            *egraph.primitives().unwrap_ref::<i64>(vals[1]),
+        ));
+    });
+    contents.sort();
+    assert_eq!(contents, vec![(1, 1), (2, 7)]);
+
+    // Third rule writes (f 1 3) (f 2 4)
+    let rule3 = {
+        let mut rb = egraph.new_rule("rule3", true);
+        rb.set(f_table, &[value_1.into(), value_3.into()]);
+        rb.set(f_table, &[value_2.into(), value_4.into()]);
+        rb.build()
+    };
+
+    // Run the third rule and check state
+    // Expected: (f 1 4) because 1 + (1 * 3) = 4
+    // Expected: (f 2 29) because 1 + (7 * 4) = 29
+    assert!(egraph.run_rules(&[rule3]).unwrap());
+    contents.clear();
+    egraph.dump_table(f_table, |vals| {
+        contents.push((
+            *egraph.primitives().unwrap_ref::<i64>(vals[0]),
+            *egraph.primitives().unwrap_ref::<i64>(vals[1]),
+        ));
+    });
+    contents.sort();
+    assert_eq!(contents, vec![(1, 4), (2, 29)]);
+}
+
+#[test]
+fn test_mergefn_nested_function() {
+    let mut egraph = EGraph::default();
+    let int_prim = egraph.primitives_mut().register_type::<i64>();
+
+    // Create a function g that will be used in the merge function for f
+    let g_table = egraph.add_table(
+        vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
+        DefaultVal::FreshId,
+        MergeFn::UnionId,
+        "g",
+    );
+
+    // Create a function f whose merge function is (g (g new new) (g old old))
+    // This uses nested MergeFn::Function to build the complex merge function
+    let f_table = egraph.add_table(
+        vec![ColumnTy::Primitive(int_prim), ColumnTy::Id],
+        DefaultVal::FreshId,
+        MergeFn::Function(
+            g_table,
+            Box::new(MergeFn::Function(
+                g_table,
+                Box::new(MergeFn::New),
+                Box::new(MergeFn::New),
+            )),
+            Box::new(MergeFn::Function(
+                g_table,
+                Box::new(MergeFn::Old),
+                Box::new(MergeFn::Old),
+            )),
+        ),
+        "f",
+    );
+
+    let value_1 = egraph.primitives_mut().get(1i64);
+    let value_2 = egraph.primitives_mut().get(2i64);
+
+    // Create an rhs-only rule that writes f values with fresh IDs
+    // We'll run this rule multiple times and observe how the merge function works
+
+    let write_rule = {
+        let mut rb = egraph.new_rule("write_rule", true);
+        rb.lookup(Function::Table(f_table), &[value_1.into()]);
+        rb.lookup(Function::Table(f_table), &[value_2.into()]);
+        rb.build()
+    };
+
+    // Helper function to get all g-table entries
+    let get_g_entries = |egraph: &EGraph| {
+        let mut entries = Vec::new();
+        egraph.dump_table(g_table, |vals| {
+            entries.push((vals[0], vals[1], vals[2]));
+        });
+        entries.sort();
+        entries
+    };
+
+    // Helper function to get all f-table entries
+    let get_f_entries = |egraph: &EGraph| {
+        let mut entries = Vec::new();
+        egraph.dump_table(f_table, |vals| {
+            entries.push((*egraph.primitives().unwrap_ref::<i64>(vals[0]), vals[1]));
+        });
+        entries.sort();
+        entries
+    };
+
+    // First run of the rule
+    assert!(egraph.run_rules(&[write_rule]).unwrap());
+    let f_entries_1 = get_f_entries(&egraph);
+    let g_entries_1 = get_g_entries(&egraph);
+    assert_eq!(f_entries_1.len(), 2);
+    let base_1 = f_entries_1[0].1;
+    let base_2 = f_entries_1[1].1;
+    // After first run, there should be no g entries yet because no merging occurred
+    assert_eq!(g_entries_1.len(), 0);
+
+    let set_rule = {
+        let mut rb = egraph.new_rule("iterate", true);
+        rb.set(f_table, &[value_1.into(), base_2.into()]);
+        rb.build()
+    };
+
+    // Second run of the rule - should trigger merging with previous values
+    assert!(egraph.run_rules(&[set_rule]).unwrap());
+    let f_entries_2 = get_f_entries(&egraph);
+    let g_entries_2 = get_g_entries(&egraph);
+    assert_eq!(f_entries_2.len(), 2);
+    // After second run, g table should have entries from the merge functions
+    assert_eq!(g_entries_2.len(), 3);
+
+    // Get the entry for (f 1)
+    let new_base_1 = f_entries_2[0].1;
+    // Find the first layer of g:
+    let (mid_1, mid_2, _) = *g_entries_2
+        .iter()
+        .find(|(_, _, a)| *a == new_base_1)
+        .unwrap();
+    let (base_l1, base_l2, _) = *g_entries_2.iter().find(|(_, _, a)| *a == mid_1).unwrap();
+    let (base_r1, base_r2, _) = *g_entries_2.iter().find(|(_, _, a)| *a == mid_2).unwrap();
+
+    // The merge function for f is (g (g new new) (g old old))
+    // new here should have been base_2, old should have been base_1
+    //
+    // That means basel1 == basel2 == base_2, and baser1 == baser2 == base_1
+    assert_eq!(base_l1, base_l2);
+    assert_eq!(base_l1, base_2);
+    assert_eq!(base_r1, base_r2);
+    assert_eq!(base_r1, base_1);
+}
+
 const _: () = {
     const fn assert_send<T: Send>() {}
     assert_send::<EGraph>()
