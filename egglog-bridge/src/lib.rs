@@ -16,9 +16,9 @@ use std::{
 
 use core_relations::{
     ColumnId, Constraint, Container, Containers, CounterId, Database, DisplacedTable,
-    DisplacedTableWithProvenance, ExecutionState, ExternalFunction, ExternalFunctionId, MergeVal,
-    Offset, PlanStrategy, PrimitiveId, Primitives, SortedWritesTable, TableId, TaggedRowBuffer,
-    Value, WrappedTable,
+    DisplacedTableWithProvenance, ExternalFunction, ExternalFunctionId, MergeVal, Offset,
+    PlanStrategy, PrimitiveId, Primitives, SortedWritesTable, TableId, TaggedRowBuffer, Value,
+    WrappedTable,
 };
 use indexmap::{map::Entry, IndexMap, IndexSet};
 use log::info;
@@ -216,7 +216,7 @@ impl EGraph {
                     spec.n_keys + 1 + 2, // one value for the term id, one for the reason,
                     None,
                     vec![], // no rebuilding needed for term table
-                    |_, _, _, _| false,
+                    Box::new(|_, _, _, _| false),
                 );
                 let table_id = self.db.add_table(table, iter::empty(), iter::empty());
                 *v.insert(table_id)
@@ -234,7 +234,7 @@ impl EGraph {
                     arity + 1, // one value for the reason id
                     None,
                     vec![], // no rebuilding needed for reason tables
-                    |_, _, _, _| false,
+                    Box::new(|_, _, _, _| false),
                 );
                 let table_id = self.db.add_table(table, iter::empty(), iter::empty());
                 *v.insert(table_id)
@@ -901,16 +901,13 @@ impl MergeFn {
             UnionId | AssertEq | Old | New | Const(..) => {}
         }
     }
-    #[allow(clippy::type_complexity)]
+
     fn to_callback(
         &self,
         n_args: usize,
         function_name: &str,
         egraph: &mut EGraph,
-    ) -> Box<dyn Fn(&mut ExecutionState, &[Value], &[Value], &mut Vec<Value>) -> bool + Send + Sync>
-    {
-        let todo_fix_merge_fn_constructor = 1;
-        // TODO: have the constructor take a Box<dyn UpdateFn> instead of a generic function.
+    ) -> Box<core_relations::MergeFn> {
         match self {
             MergeFn::AssertEq => {
                 let panic = egraph.new_panic(format!(

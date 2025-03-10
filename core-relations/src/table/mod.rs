@@ -130,15 +130,15 @@ impl Rows {
     }
 }
 
-type UpdateFn =
-    dyn Fn(&mut ExecutionState, &[Value], &[Value], &mut Vec<Value>) -> bool + Send + Sync;
-
-/// A callback that can perform merges for a table.
+/// The type of closures that are used to merge values in a [`SortedWritesTable`].
 ///
-/// Merge functions get a handle to the current ExecutionState, the old row, and the updated row.
-/// They can then return some new output and indicate if they have mutated the state of the table.
-#[derive(Clone)]
-struct MergeFn(Arc<UpdateFn>);
+/// The first argument grants access to database using an [`ExecutionState`], the second argument
+/// is the current value of the tuple. The third argument is the new, or "incoming" value of the
+/// tuple. The fourth argument is a mutable reference to a vector that will be used to store the
+/// output of the merge function _if_ it changes the value of the tuple. If it does not, then the
+/// merge function should return `false`.
+pub type MergeFn =
+    dyn Fn(&mut ExecutionState, &[Value], &[Value], &mut Vec<Value>) -> bool + Send + Sync;
 
 pub struct SortedWritesTable {
     generation: Generation,
@@ -151,7 +151,7 @@ pub struct SortedWritesTable {
     offsets: Vec<(Value, RowId)>,
 
     pending_state: Arc<PendingState>,
-    merge: MergeFn,
+    merge: Arc<MergeFn>,
     to_rebuild: Vec<ColumnId>,
     rebuild_index: Index<ColumnIndex>,
     // Used to manage incremental rebuilds.
@@ -485,10 +485,7 @@ impl SortedWritesTable {
         n_columns: usize,
         sort_by: Option<ColumnId>,
         to_rebuild: Vec<ColumnId>,
-        merge_fn: impl Fn(&mut ExecutionState, &[Value], &[Value], &mut Vec<Value>) -> bool
-            + 'static
-            + Send
-            + Sync,
+        merge_fn: Box<MergeFn>,
     ) -> Self {
         let hash = ShardedHashTable::<TableEntry>::default();
         let shard_data = hash.shard_data();
@@ -502,7 +499,7 @@ impl SortedWritesTable {
             sort_by,
             offsets: Default::default(),
             pending_state: Arc::new(PendingState::new(shard_data)),
-            merge: MergeFn(Arc::new(merge_fn)),
+            merge: merge_fn.into(),
             to_rebuild,
             rebuild_index,
             subset_tracker: Default::default(),
@@ -640,7 +637,7 @@ impl SortedWritesTable {
                                 .data
                                 .get_row(*row)
                                 .expect("table should not point to stale entry");
-                            if (self.merge.0)(exec_state, cur, query, &mut scratch) {
+                            if (self.merge)(exec_state, cur, query, &mut scratch) {
                                 let sort_val = query[sort_by.index()];
                                 let new = self.data.add_row(&scratch);
                                 if let Some(largest) = self.offsets.last().map(|(v, _)| *v) {
@@ -702,7 +699,7 @@ impl SortedWritesTable {
                                 .data
                                 .get_row(*row)
                                 .expect("table should not point to stale entry");
-                            if (self.merge.0)(exec_state, cur, query, &mut scratch) {
+                            if (self.merge)(exec_state, cur, query, &mut scratch) {
                                 let new = self.data.add_row(&scratch);
                                 self.data.set_stale(*row);
                                 *row = new;
@@ -811,7 +808,7 @@ impl SortedWritesTable {
                                     // concurrent accesses to `row`. We have
                                     // exclusive access to any row whose hash matches this
                                     // shard.
-                                    if (self.merge.0)(&mut exec_state, cur, row, &mut scratch) {
+                                    if (self.merge)(&mut exec_state, cur, row, &mut scratch) {
                                         unsafe {
                                             let _was_stale = read_handle.set_stale_shared(occ.get().row);
                                             debug_assert!(!_was_stale);
@@ -851,7 +848,7 @@ impl SortedWritesTable {
                     // writer.
                     for row in buf.non_stale() {
                         staged.insert(row, |cur, new, out| {
-                            (self.merge.0)(&mut exec_state, cur, new, out)
+                            (self.merge)(&mut exec_state, cur, new, out)
                         });
                         if staged.len() >= BATCH_SIZE {
                             flush_staged_outputs!();

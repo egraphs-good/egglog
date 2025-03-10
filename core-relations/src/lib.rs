@@ -36,7 +36,7 @@ pub use primitives::{
 };
 pub use query::{QueryBuilder, QueryError, RuleBuilder, RuleSet, RuleSetBuilder};
 pub use row_buffer::TaggedRowBuffer;
-pub use table::SortedWritesTable;
+pub use table::{MergeFn, SortedWritesTable};
 pub use table_spec::{
     ColumnId, Constraint, Offset, Rebuilder, Row, Table, TableSpec, TableVersion, WrappedTable,
 };
