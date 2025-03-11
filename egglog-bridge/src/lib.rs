@@ -864,8 +864,12 @@ pub enum MergeFn {
     AssertEq,
     /// Use congruence to resolve FD conflicts.
     UnionId,
-    Primitive(ExternalFunctionId, Box<MergeFn>, Box<MergeFn>),
-    Function(FunctionId, Box<MergeFn>, Box<MergeFn>),
+    /// The output of a merge is determined by applying the given ExternalFunction to the result
+    /// of the argument merge functions.
+    Primitive(ExternalFunctionId, Vec<MergeFn>),
+    /// The output of a merge is dteremined by looking up the value for the given function and the
+    /// given arguments in the egraph.
+    Function(FunctionId, Vec<MergeFn>),
     /// Always return the old value for the given function.
     Old,
     /// Always return the new value for the given function.
@@ -885,15 +889,15 @@ impl MergeFn {
     ) {
         use MergeFn::*;
         match self {
-            Primitive(_, l, r) => {
-                l.fill_deps(egraph, read_deps, write_deps);
-                r.fill_deps(egraph, read_deps, write_deps);
+            Primitive(_, args) => {
+                args.iter()
+                    .for_each(|arg| arg.fill_deps(egraph, read_deps, write_deps));
             }
-            Function(func, l, r) => {
+            Function(func, args) => {
                 read_deps.insert(egraph.funcs[*func].table);
                 write_deps.insert(egraph.funcs[*func].table);
-                l.fill_deps(egraph, read_deps, write_deps);
-                r.fill_deps(egraph, read_deps, write_deps);
+                args.iter()
+                    .for_each(|arg| arg.fill_deps(egraph, read_deps, write_deps));
             }
             UnionId if !egraph.tracing => {
                 write_deps.insert(egraph.uf_table);
@@ -973,23 +977,33 @@ impl MergeFn {
             // for each layer of nesting. This introduces a bit of overhead, particularly for cases
             // that look like `(f old new)` or `(f new old)`. We could special-case common cases in
             // this function if that overhead shows up.
-            MergeFn::Primitive(func, fn_l, fn_r) => {
+            MergeFn::Primitive(func, args) => {
                 assert!(
                     !egraph.tracing,
                     "proofs aren't supported for non-union merge functions"
                 );
                 let func = *func;
-                let make_l = fn_l.to_callback(n_args, function_name, egraph);
-                let make_r = fn_r.to_callback(n_args, function_name, egraph);
+                let make_args = args
+                    .iter()
+                    .map(|arg| arg.to_callback(n_args, function_name, egraph))
+                    .collect::<Vec<_>>();
+                let function_name = function_name.to_string();
                 Box::new(move |state, cur, new, out| {
-                    let mut out_l = Vec::new();
-                    let mut out_r = Vec::new();
-                    let changed_l = make_l(state, cur, new, &mut out_l);
-                    let changed_r = make_r(state, cur, new, &mut out_r);
-                    let res_l = if changed_l { &out_l } else { cur }[n_args];
-                    let res_r = if changed_r { &out_r } else { cur }[n_args];
-                    let Some(result) = state.call_external_func(func, &[res_l, res_r]) else {
-                        return false;
+                    let mut scratch = Vec::new();
+                    let results = make_args
+                        .iter()
+                        .map(|f| {
+                            let res = if f(state, cur, new, &mut scratch) {
+                                scratch[n_args]
+                            } else {
+                                cur[n_args]
+                            };
+                            scratch.clear();
+                            res
+                        })
+                        .collect::<Vec<_>>();
+                    let Some(result) = state.call_external_func(func, &results) else {
+                        panic!("merge function not defined on all inputs (in function {function_name})")
                     };
                     if result == cur[n_args] {
                         false
@@ -1001,7 +1015,7 @@ impl MergeFn {
                     }
                 })
             }
-            MergeFn::Function(function_id, fn_l, fn_r) => {
+            MergeFn::Function(function_id, args) => {
                 assert!(
                     !egraph.tracing,
                     "proofs aren't supported for non-union merge functions"
@@ -1009,8 +1023,8 @@ impl MergeFn {
                 let func_info = &egraph.funcs[*function_id];
                 assert_eq!(
                     func_info.schema.len(),
-                    3,
-                    "functions used in merge functions must have two arguments. (When defining {function_name}, using {})",
+                    args.len() + 1,
+                    "Merge function must match function arity (When defining {function_name}, using {})",
                     func_info.name
                 );
                 let table = func_info.table;
@@ -1019,19 +1033,28 @@ impl MergeFn {
                     DefaultVal::Fail => panic!("cannot use a fail default in a merge function (function in question is {})", function_name),
                     DefaultVal::Const(val) => MergeVal::from(*val),
                 };
-                let make_l = fn_l.to_callback(n_args, function_name, egraph);
-                let make_r = fn_r.to_callback(n_args, function_name, egraph);
+                let make_args = args
+                    .iter()
+                    .map(|arg| arg.to_callback(n_args, function_name, egraph))
+                    .collect::<Vec<_>>();
                 Box::new(move |state, cur, new, out| {
-                    let mut out_l = Vec::new();
-                    let mut out_r = Vec::new();
-                    let changed_l = make_l(state, cur, new, &mut out_l);
-                    let changed_r = make_r(state, cur, new, &mut out_r);
-                    let res_l = if changed_l { &out_l } else { cur }[n_args];
-                    let res_r = if changed_r { &out_r } else { cur }[n_args];
+                    let mut scratch = Vec::new();
+                    let results = make_args
+                        .iter()
+                        .map(|f| {
+                            let res = if f(state, cur, new, &mut scratch) {
+                                scratch[n_args]
+                            } else {
+                                cur[n_args]
+                            };
+                            scratch.clear();
+                            res
+                        })
+                        .collect::<Vec<_>>();
                     let ts = new[n_args + 1];
                     let result = state.predict_val(
                         table,
-                        &[res_l, res_r],
+                        &results,
                         [default_value, MergeVal::from(ts)].into_iter(),
                     )[2];
 

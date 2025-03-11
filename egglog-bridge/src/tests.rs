@@ -809,12 +809,10 @@ fn test_mergefn_arithmetic() {
         DefaultVal::Fail,
         MergeFn::Primitive(
             add_func,
-            Box::new(MergeFn::Const(value_1)),
-            Box::new(MergeFn::Primitive(
-                multiply_func,
-                Box::new(MergeFn::Old),
-                Box::new(MergeFn::New),
-            )),
+            vec![
+                MergeFn::Const(value_1),
+                MergeFn::Primitive(multiply_func, vec![MergeFn::Old, MergeFn::New]),
+            ],
         ),
         "f",
     );
@@ -904,16 +902,10 @@ fn test_mergefn_nested_function() {
         DefaultVal::FreshId,
         MergeFn::Function(
             g_table,
-            Box::new(MergeFn::Function(
-                g_table,
-                Box::new(MergeFn::New),
-                Box::new(MergeFn::New),
-            )),
-            Box::new(MergeFn::Function(
-                g_table,
-                Box::new(MergeFn::Old),
-                Box::new(MergeFn::Old),
-            )),
+            vec![
+                MergeFn::Function(g_table, vec![MergeFn::New, MergeFn::New]),
+                MergeFn::Function(g_table, vec![MergeFn::Old, MergeFn::Old]),
+            ],
         ),
         "f",
     );
