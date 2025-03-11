@@ -40,15 +40,20 @@ pub(crate) fn fill_table(
     let init = iter.next().expect("iterator must be nonempty");
     let n_cols = init.len();
     assert!(n_cols >= n_keys, "must have at least {n_keys} columns");
-    let mut table =
-        SortedWritesTable::new(n_keys, n_cols, sort_by, vec![], move |_, old, new, out| {
+    let mut table = SortedWritesTable::new(
+        n_keys,
+        n_cols,
+        sort_by,
+        vec![],
+        Box::new(move |_, old, new, out| {
             if let Some(res) = merge_fn(old, new) {
                 *out = res;
                 true
             } else {
                 false
             }
-        });
+        }),
+    );
 
     // We write tests that assume that assume rows are inserted in order.
     // SortedWritesTable does not preserver ordering of writes between two calls
