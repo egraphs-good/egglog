@@ -1,6 +1,4 @@
 use super::*;
-use crate::ast::Literal;
-use ordered_float::OrderedFloat;
 
 /// 64-bit floating point numbers supporting these primitives:
 /// - Arithmetic: `+`, `-`, `*`, `/`, `%`, `^`, `neg`, `abs`
@@ -18,6 +16,14 @@ impl Sort for F64Sort {
         *F64_SORT_NAME
     }
 
+    fn column_ty(&self, prims: &Primitives) -> ColumnTy {
+        ColumnTy::Primitive(prims.get_ty::<F>())
+    }
+
+    fn register_type(&self, prims: &mut Primitives) {
+        prims.register_type::<F>();
+    }
+
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
         self
     }
@@ -26,31 +32,29 @@ impl Sort for F64Sort {
     // We need the closure for division and mod operations, as they can panic.
     // cf https://github.com/rust-lang/rust-clippy/issues/9422
     #[allow(clippy::unnecessary_lazy_evaluations)]
-    fn register_primitives(self: Arc<Self>, eg: &mut TypeInfo) {
-        type Opt<T=()> = Option<T>;
+    fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
+        add_primitive!(eg, "+" = |a: F, b: F| -> F { a + b });
+        add_primitive!(eg, "-" = |a: F, b: F| -> F { a - b });
+        add_primitive!(eg, "*" = |a: F, b: F| -> F { a * b });
+        add_primitive!(eg, "/" = |a: F, b: F| -?> F { (b != 0.0).then(|| a / b) });
+        add_primitive!(eg, "%" = |a: F, b: F| -?> F { (b != 0.0).then(|| a % b) });
+        add_primitive!(eg, "^" = |a: F, b: F| -> F { OrderedFloat(a.powf(*b)) });
+        add_primitive!(eg, "neg" = |a: F| -> F { -a });
 
-        add_primitives!(eg, "+" = |a: f64, b: f64| -> f64 { a + b });
-        add_primitives!(eg, "-" = |a: f64, b: f64| -> f64 { a - b });
-        add_primitives!(eg, "*" = |a: f64, b: f64| -> f64 { a * b });
-        add_primitives!(eg, "/" = |a: f64, b: f64| -> Opt<f64> { (b != 0.0).then(|| a / b) });
-        add_primitives!(eg, "%" = |a: f64, b: f64| -> Opt<f64> { (b != 0.0).then(|| a % b) });
-        add_primitives!(eg, "^" = |a: f64, b: f64| -> f64 { a.powf(b) });
-        add_primitives!(eg, "neg" = |a: f64| -> f64 { -a });
+        add_primitive!(eg, "<" = |a: F, b: F| -?> () { (a < b).then(|| ()) });
+        add_primitive!(eg, ">" = |a: F, b: F| -?> () { (a > b).then(|| ()) });
+        add_primitive!(eg, "<=" = |a: F, b: F| -?> () { (a <= b).then(|| ()) });
+        add_primitive!(eg, ">=" = |a: F, b: F| -?> () { (a >= b).then(|| ()) });
 
-        add_primitives!(eg, "<" = |a: f64, b: f64| -> Opt { (a < b).then(|| ()) });
-        add_primitives!(eg, ">" = |a: f64, b: f64| -> Opt { (a > b).then(|| ()) });
-        add_primitives!(eg, "<=" = |a: f64, b: f64| -> Opt { (a <= b).then(|| ()) });
-        add_primitives!(eg, ">=" = |a: f64, b: f64| -> Opt { (a >= b).then(|| ()) });
-
-        add_primitives!(eg, "min" = |a: f64, b: f64| -> f64 { a.min(b) });
-        add_primitives!(eg, "max" = |a: f64, b: f64| -> f64 { a.max(b) });
-        add_primitives!(eg, "abs" = |a: f64| -> f64 { a.abs() });
+        add_primitive!(eg, "min" = |a: F, b: F| -> F { a.min(b) });
+        add_primitive!(eg, "max" = |a: F, b: F| -> F { a.max(b) });
+        add_primitive!(eg, "abs" = |a: F| -> F { a.abs() });
 
         // `to-f64` should be in `i64.rs`, but `F64Sort` wouldn't exist yet
-        add_primitives!(eg, "to-f64" = |a: i64| -> f64 { a as f64 });
-        add_primitives!(eg, "to-i64" = |a: f64| -> i64 { a as i64 });
+        add_primitive!(eg, "to-f64" = |a: i64| -> F { OrderedFloat(a as f64) });
+        add_primitive!(eg, "to-i64" = |a: F| -> i64 { a.0 as i64 });
         // Use debug instead of to_string so that decimal place is always printed
-        add_primitives!(eg, "to-string" = |a: f64| -> Symbol { format!("{:?}", a).into() });
+        add_primitive!(eg, "to-string" = |a: F| -> S { format!("{:?}", a).into() });
     }
 
     fn extract_term(
@@ -70,20 +74,20 @@ impl Sort for F64Sort {
     }
 }
 
-impl IntoSort for f64 {
+impl IntoSort for F {
     type Sort = F64Sort;
-    fn store(self, _sort: &Self::Sort) -> Option<Value> {
-        Some(Value {
+    fn store(self, _sort: &Self::Sort) -> Value {
+        Value {
             #[cfg(debug_assertions)]
             tag: F64Sort.name(),
             bits: self.to_bits(),
-        })
+        }
     }
 }
 
-impl FromSort for f64 {
+impl FromSort for F {
     type Sort = F64Sort;
     fn load(_sort: &Self::Sort, value: &Value) -> Self {
-        f64::from_bits(value.bits)
+        OrderedFloat(f64::from_bits(value.bits))
     }
 }

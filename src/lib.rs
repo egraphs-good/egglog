@@ -36,6 +36,8 @@ use ast::*;
 #[cfg(feature = "bin")]
 pub use cli::bin::*;
 use constraint::{Constraint, SimpleTypeConstraint, TypeConstraint};
+use core_relations::ExternalFunctionId;
+use egglog_bridge::ColumnTy;
 use extract::Extractor;
 pub use function::Function;
 use function::*;
@@ -292,7 +294,7 @@ impl RunReport {
 }
 
 #[derive(Clone)]
-pub struct Primitive(Arc<dyn PrimitiveLike + Send + Sync>);
+pub struct Primitive(Arc<dyn PrimitiveLike + Send + Sync>, ExternalFunctionId);
 impl Primitive {
     // Takes the full signature of a primitive (including input and output types)
     // Returns whether the primitive is compatible with this signature
@@ -344,43 +346,6 @@ impl Debug for Primitive {
     }
 }
 
-impl<T: PrimitiveLike + 'static + Send + Sync> From<T> for Primitive {
-    fn from(p: T) -> Self {
-        Self(Arc::new(p))
-    }
-}
-
-pub struct SimplePrimitive {
-    name: Symbol,
-    input: Vec<ArcSort>,
-    output: ArcSort,
-    f: fn(&[Value]) -> Option<Value>,
-}
-
-impl PrimitiveLike for SimplePrimitive {
-    fn name(&self) -> Symbol {
-        self.name
-    }
-
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        let sorts: Vec<_> = self
-            .input
-            .iter()
-            .chain(once(&self.output as &ArcSort))
-            .cloned()
-            .collect();
-        SimpleTypeConstraint::new(self.name(), sorts, span.clone()).into_box()
-    }
-    fn apply(
-        &self,
-        values: &[Value],
-        _sorts: (&[ArcSort], &ArcSort),
-        _egraph: Option<&mut EGraph>,
-    ) -> Option<Value> {
-        (self.f)(values)
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
 pub enum RunMode {
     Normal,
@@ -428,6 +393,7 @@ impl FromStr for RunMode {
 
 #[derive(Clone)]
 pub struct EGraph {
+    pub backend: egglog_bridge::EGraph,
     pub parser: Parser,
     egraphs: Vec<Self>,
     unionfind: UnionFind,
@@ -451,7 +417,8 @@ pub struct EGraph {
 
 impl Default for EGraph {
     fn default() -> Self {
-        let mut egraph = Self {
+        let mut eg = Self {
+            backend: Default::default(),
             parser: Default::default(),
             egraphs: vec![],
             unionfind: Default::default(),
@@ -469,10 +436,37 @@ impl Default for EGraph {
             msgs: Some(vec![]),
             type_info: Default::default(),
         };
-        egraph
-            .rulesets
+
+        eg.add_sort(UnitSort, span!()).unwrap();
+        eg.add_sort(StringSort, span!()).unwrap();
+        eg.add_sort(BoolSort, span!()).unwrap();
+        eg.add_sort(I64Sort, span!()).unwrap();
+        eg.add_sort(F64Sort, span!()).unwrap();
+        eg.add_sort(BigIntSort, span!()).unwrap();
+        eg.add_sort(BigRatSort, span!()).unwrap();
+        // eg.add_presort::<MapSort>(span!()).unwrap();
+        // eg.add_presort::<SetSort>(span!()).unwrap();
+        // eg.add_presort::<VecSort>(span!()).unwrap();
+        // eg.add_presort::<FunctionSort>(span!()).unwrap();
+        // eg.add_presort::<MultiSetSort>(span!()).unwrap();
+
+        add_primitive!(&mut eg, "!=" = |a: #, b: #| -?> () {
+            (a != b).then_some(())
+        });
+        add_primitive!(&mut eg, "value-eq" = |a: #, b: #| -?> () {
+            (a == b).then_some(())
+        });
+        add_primitive!(&mut eg, "ordering-min" = |a: #, b: #| -> # {
+            if a < b { *a } else { *b }
+        });
+        add_primitive!(&mut eg, "ordering-max" = |a: #, b: #| -> # {
+            if a > b { *a } else { *b }
+        });
+
+        eg.rulesets
             .insert("".into(), Ruleset::Rules("".into(), Default::default()));
-        egraph
+
+        eg
     }
 }
 
@@ -697,19 +691,23 @@ impl EGraph {
 
     pub fn eval_lit(&self, lit: &Literal) -> Value {
         match lit {
-            Literal::Int(i) => i.store(&I64Sort).unwrap(),
-            Literal::Float(f) => f.store(&F64Sort).unwrap(),
-            Literal::String(s) => s.store(&StringSort).unwrap(),
-            Literal::Unit => ().store(&UnitSort).unwrap(),
-            Literal::Bool(b) => b.store(&BoolSort).unwrap(),
+            Literal::Int(i) => i.store(&I64Sort),
+            Literal::Float(f) => f.store(&F64Sort),
+            Literal::String(s) => s.store(&StringSort),
+            Literal::Unit => ().store(&UnitSort),
+            Literal::Bool(b) => b.store(&BoolSort),
         }
     }
 
     pub fn function_to_dag(
-        &mut self,
+        &self,
         sym: Symbol,
         n: usize,
     ) -> Result<(Vec<(Term, Term)>, TermDag), Error> {
+        if true {
+            todo!("function_to_dag")
+        }
+
         let f = self
             .functions
             .get(&sym)
@@ -801,6 +799,7 @@ impl EGraph {
                 .get(&sym)
                 .ok_or(TypeError::UnboundFunction(sym, span!()))?;
             log::info!("Function {} has size {}", sym, f.nodes.len());
+            assert_eq!(f.nodes.len(), self.backend.table_size(f.new_backend_id));
             self.print_msg(f.nodes.len().to_string());
             Ok(())
         } else {
@@ -808,7 +807,10 @@ impl EGraph {
             let mut lens = self
                 .functions
                 .iter()
-                .map(|(sym, f)| (*sym, f.nodes.len()))
+                .map(|(sym, f)| {
+                    assert_eq!(f.nodes.len(), self.backend.table_size(f.new_backend_id));
+                    (*sym, f.nodes.len())
+                })
                 .collect::<Vec<_>>();
 
             // Function name's alphabetical order
@@ -931,7 +933,7 @@ impl EGraph {
                 let copy_rules = rule_names.clone();
                 let search_start = Instant::now();
 
-                for (rule_name, rule) in copy_rules.iter() {
+                for (rule_name, (rule, _)) in copy_rules.iter() {
                     let mut all_matches = vec![];
                     let rule_search_start = Instant::now();
                     let mut did_match = false;
@@ -989,7 +991,7 @@ impl EGraph {
                         all_matches,
                         did_match,
                     } = search_results.get(&rule_name).unwrap();
-                    let rule = compiled_rules.get(&rule_name).unwrap();
+                    let (rule, _) = compiled_rules.get(&rule_name).unwrap();
                     let num_vars = rule.query.vars.len();
 
                     // make sure the query requires matches
@@ -1045,8 +1047,17 @@ impl EGraph {
         let mut search_results = HashMap::<Symbol, SearchResult>::default();
         self.search_rules(ruleset, &mut run_report, &mut search_results);
         self.apply_rules(ruleset, &mut run_report, &search_results);
-        run_report.updated |=
-            self.did_change_tables() || n_unions_before != self.unionfind.n_unions();
+        let old_updated = self.did_change_tables() || n_unions_before != self.unionfind.n_unions();
+        run_report.updated |= old_updated;
+
+        {
+            let rule_ids: Vec<_> = match &self.rulesets[&ruleset] {
+                Ruleset::Rules(_, xs) => xs.iter().map(|(_, (_, x))| *x).collect(),
+                Ruleset::Combined(_, _sub_rulesets) => todo!("running combined rulesets"),
+            };
+            let new_updated = self.backend.run_rules(&rule_ids).unwrap();
+            assert_eq!(old_updated, new_updated);
+        }
 
         run_report
     }
@@ -1071,6 +1082,16 @@ impl EGraph {
             rule.to_canonicalized_core_rule(&self.type_info, &mut self.parser.symbol_gen)?;
         let (query, actions) = (core_rule.body, core_rule.head);
 
+        let rule_id = {
+            let mut translator = BackendRule::new(
+                self.backend.new_rule(name.into(), self.seminaive),
+                &self.functions,
+            );
+            translator.query(&query);
+            translator.actions(&actions);
+            translator.finish().build()
+        };
+
         let vars = query.get_vars();
         let query = self.compile_gj_query(query, &vars);
 
@@ -1085,7 +1106,7 @@ impl EGraph {
                         indexmap::map::Entry::Occupied(_) => {
                             panic!("Rule '{name}' was already present")
                         }
-                        indexmap::map::Entry::Vacant(e) => e.insert(compiled_rule),
+                        indexmap::map::Entry::Vacant(e) => e.insert((compiled_rule, rule_id)),
                     };
                     Ok(name)
                 }
@@ -1102,6 +1123,18 @@ impl EGraph {
             &mut Default::default(),
             &mut self.parser.symbol_gen,
         )?;
+
+        {
+            let mut translator = BackendRule::new(
+                self.backend.new_rule("eval_actions", false),
+                &self.functions,
+            );
+            translator.actions(&actions);
+            let id = translator.finish().build();
+            let _ = self.backend.run_rules(&[id]).unwrap();
+            self.backend.free_rule(id);
+        }
+
         let program = self
             .compile_actions(&Default::default(), &actions)
             .map_err(Error::TypeErrors)?;
@@ -1174,6 +1207,32 @@ impl EGraph {
         let core_rule =
             rule.to_canonicalized_core_rule(&self.type_info, &mut self.parser.symbol_gen)?;
         let query = core_rule.body;
+
+        let new_matched = {
+            let ext_sc = egglog_bridge::SideChannel::default();
+            let ext_sc_ref = ext_sc.clone();
+            let ext_id = self
+                .backend
+                .register_external_func(core_relations::make_external_func(move |_, _| {
+                    *ext_sc_ref.lock().unwrap() = Some(());
+                    None
+                }));
+
+            let mut translator =
+                BackendRule::new(self.backend.new_rule("check_facts", false), &self.functions);
+            translator.query(&query);
+            let mut rb = translator.finish();
+            rb.call_external_func(ext_id, &[], egglog_bridge::ColumnTy::Id);
+            let id = rb.build();
+            let _ = self.backend.run_rules(&[id]).unwrap();
+            self.backend.free_rule(id);
+
+            self.backend.free_external_func(ext_id);
+
+            let ext_sc_val = ext_sc.lock().unwrap().take();
+            matches!(ext_sc_val, Some(()))
+        };
+
         let ordering = &query.get_vars();
         let query = self.compile_gj_query(query, ordering);
 
@@ -1183,6 +1242,9 @@ impl EGraph {
             matched = true;
             Err(())
         });
+
+        assert_eq!(matched, new_matched);
+
         if !matched {
             Err(Error::CheckError(
                 facts.iter().map(|f| f.clone().make_unresolved()).collect(),
@@ -1333,9 +1395,13 @@ impl EGraph {
     }
 
     fn input_file(&mut self, func_name: Symbol, file: String) -> Result<(), Error> {
+        if true {
+            todo!("input_file")
+        }
+
         let function_type = self
             .type_info
-            .lookup_user_func(func_name)
+            .get_func_type(&func_name)
             .unwrap_or_else(|| panic!("Unrecognized function name {}", func_name));
         let func = self.functions.get_mut(&func_name).unwrap();
 
@@ -1401,9 +1467,7 @@ impl EGraph {
             .into_iter()
             .map(NCommand::CoreAction)
             .collect::<Vec<_>>();
-        let commands: Vec<_> = self
-            .type_info
-            .typecheck_program(&mut self.parser.symbol_gen, &commands)?;
+        let commands: Vec<_> = self.typecheck_program(&commands)?;
         for command in commands {
             self.run_command(command)?;
         }
@@ -1428,9 +1492,7 @@ impl EGraph {
     fn process_command(&mut self, command: Command) -> Result<Vec<ResolvedNCommand>, Error> {
         let program = desugar::desugar_program(vec![command], &mut self.parser, self.seminaive)?;
 
-        let program = self
-            .type_info
-            .typecheck_program(&mut self.parser.symbol_gen, &program)?;
+        let program = self.typecheck_program(&program)?;
 
         let program = remove_globals(program, &mut self.parser.symbol_gen);
 
@@ -1506,16 +1568,6 @@ impl EGraph {
         self.type_info.get_sort_by(pred)
     }
 
-    /// Add a user-defined sort
-    pub fn add_arcsort(&mut self, arcsort: ArcSort, span: Span) -> Result<(), TypeError> {
-        self.type_info.add_arcsort(arcsort, span)
-    }
-
-    /// Add a user-defined primitive
-    pub fn add_primitive(&mut self, prim: impl Into<Primitive>) {
-        self.type_info.add_primitive(prim)
-    }
-
     /// Gets the last extract report and returns it, if the last command saved it.
     pub fn get_extract_report(&self) -> &Option<ExtractReport> {
         &self.extract_report
@@ -1544,6 +1596,145 @@ impl EGraph {
         } else {
             vec![]
         }
+    }
+}
+
+struct BackendRule<'a> {
+    rb: egglog_bridge::RuleBuilder<'a>,
+    entries: HashMap<core::ResolvedAtomTerm, egglog_bridge::QueryEntry>,
+    functions: &'a IndexMap<Symbol, Function>,
+}
+
+impl<'a> BackendRule<'a> {
+    fn new(
+        rb: egglog_bridge::RuleBuilder<'a>,
+        functions: &'a IndexMap<Symbol, Function>,
+    ) -> BackendRule<'a> {
+        BackendRule {
+            rb,
+            functions,
+            entries: Default::default(),
+        }
+    }
+
+    fn entry(&mut self, x: &core::ResolvedAtomTerm) -> egglog_bridge::QueryEntry {
+        self.entries
+            .entry(x.clone())
+            .or_insert_with(|| match x {
+                core::GenericAtomTerm::Var(_, v) => self.rb.new_var_named(
+                    v.sort.column_ty(self.rb.egraph().primitives()),
+                    v.name.into(),
+                ),
+                core::GenericAtomTerm::Literal(_, l) => {
+                    let prims = self.rb.egraph().primitives();
+                    match l {
+                        Literal::Int(x) => prims.get::<i64>(*x),
+                        Literal::Float(x) => prims.get::<sort::F>(*x),
+                        Literal::String(x) => prims.get::<sort::S>(*x),
+                        Literal::Bool(x) => prims.get::<bool>(*x),
+                        Literal::Unit => prims.get::<()>(()),
+                    }
+                    .into()
+                }
+                core::GenericAtomTerm::Global(..) => {
+                    panic!("Globals should have been desugared")
+                }
+            })
+            .clone()
+    }
+
+    fn func(&self, f: &typechecking::FuncType) -> egglog_bridge::FunctionId {
+        self.functions[&f.name].new_backend_id
+    }
+
+    fn prim(&self, p: &core::SpecializedPrimitive) -> (ExternalFunctionId, ColumnTy) {
+        (
+            p.primitive.1,
+            p.output.column_ty(self.rb.egraph().primitives()),
+        )
+    }
+
+    fn args<'b>(
+        &mut self,
+        args: impl IntoIterator<Item = &'b core::ResolvedAtomTerm>,
+    ) -> Vec<egglog_bridge::QueryEntry> {
+        args.into_iter().map(|x| self.entry(x)).collect()
+    }
+
+    fn query(&mut self, query: &core::Query<ResolvedCall, ResolvedVar>) {
+        for atom in &query.atoms {
+            match &atom.head {
+                ResolvedCall::Func(f) => {
+                    let f = self.func(f).into();
+                    let args = self.args(&atom.args);
+                    self.rb.add_atom(f, &args).unwrap()
+                }
+                ResolvedCall::Primitive(p) => {
+                    let (p, ty) = self.prim(p);
+                    let (v, args) = atom.args.split_last().unwrap();
+                    let args = self.args(args);
+                    let y = self.rb.call_external_func(p, &args, ty).into();
+                    self.entries.insert(v.clone(), y);
+                }
+            }
+        }
+    }
+
+    fn actions(&mut self, actions: &core::ResolvedCoreActions) {
+        for action in &actions.0 {
+            match action {
+                core::GenericCoreAction::Let(span, v, f, args) => {
+                    let v = core::GenericAtomTerm::Var(span.clone(), v.clone());
+                    let args = self.args(args);
+                    let y = match f {
+                        ResolvedCall::Func(f) => {
+                            let f = self.func(f).into();
+                            self.rb.lookup(f, &args).into()
+                        }
+                        ResolvedCall::Primitive(p) => {
+                            let (p, ty) = self.prim(p);
+                            self.rb.call_external_func(p, &args, ty).into()
+                        }
+                    };
+                    self.entries.insert(v, y);
+                }
+                core::GenericCoreAction::LetAtomTerm(span, v, x) => {
+                    let v = core::GenericAtomTerm::Var(span.clone(), v.clone());
+                    let x = self.entry(x);
+                    self.entries.insert(v, x);
+                }
+                core::GenericCoreAction::Set(_, f, xs, y) => match f {
+                    ResolvedCall::Primitive(..) => panic!("runtime primitive set!"),
+                    ResolvedCall::Func(f) => {
+                        let f = self.func(f);
+                        let args = self.args(xs.iter().chain([y]));
+                        self.rb.set(f, &args)
+                    }
+                },
+                core::GenericCoreAction::Change(_, change, f, args) => match f {
+                    ResolvedCall::Primitive(..) => panic!("runtime primitive change!"),
+                    ResolvedCall::Func(f) => {
+                        let f = self.func(f);
+                        let args = self.args(args);
+                        match change {
+                            Change::Delete => self.rb.remove(f, &args),
+                            Change::Subsume => todo!("no subsumption yet"),
+                        }
+                    }
+                },
+                core::GenericCoreAction::Union(_, x, y) => {
+                    let x = self.entry(x);
+                    let y = self.entry(y);
+                    self.rb.union(x, y)
+                }
+                core::GenericCoreAction::Panic(_, message) => self.rb.panic(message.clone()),
+                core::GenericCoreAction::Extract(_, _x, _n) => todo!("no extraction yet"),
+            }
+        }
+    }
+
+    fn finish(self) -> egglog_bridge::RuleBuilder<'a> {
+        self.rb
     }
 }
 
@@ -1585,79 +1776,79 @@ pub enum Error {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use std::sync::{/*Arc, */ Mutex};
 
     use lazy_static::lazy_static;
 
-    use crate::constraint::SimpleTypeConstraint;
-    use crate::sort::*;
+    // use crate::constraint::SimpleTypeConstraint;
+    // use crate::sort::*;
     use crate::*;
 
-    struct InnerProduct {
-        ele: Arc<I64Sort>,
-        vec: Arc<VecSort>,
-    }
+    // struct InnerProduct {
+    //     ele: Arc<I64Sort>,
+    //     vec: Arc<VecSort>,
+    // }
 
-    impl PrimitiveLike for InnerProduct {
-        fn name(&self) -> symbol_table::GlobalSymbol {
-            "inner-product".into()
-        }
+    // impl PrimitiveLike for InnerProduct {
+    //     fn name(&self) -> symbol_table::GlobalSymbol {
+    //         "inner-product".into()
+    //     }
 
-        fn get_type_constraints(&self, span: &Span) -> Box<dyn crate::constraint::TypeConstraint> {
-            SimpleTypeConstraint::new(
-                self.name(),
-                vec![self.vec.clone(), self.vec.clone(), self.ele.clone()],
-                span.clone(),
-            )
-            .into_box()
-        }
+    //     fn get_type_constraints(&self, span: &Span) -> Box<dyn crate::constraint::TypeConstraint> {
+    //         SimpleTypeConstraint::new(
+    //             self.name(),
+    //             vec![self.vec.clone(), self.vec.clone(), self.ele.clone()],
+    //             span.clone(),
+    //         )
+    //         .into_box()
+    //     }
 
-        fn apply(
-            &self,
-            values: &[Value],
-            _sorts: (&[ArcSort], &ArcSort),
-            _egraph: Option<&mut EGraph>,
-        ) -> Option<Value> {
-            let mut sum = 0;
-            let vec1 = Vec::<Value>::load(&self.vec, &values[0]);
-            let vec2 = Vec::<Value>::load(&self.vec, &values[1]);
-            assert_eq!(vec1.len(), vec2.len());
-            for (a, b) in vec1.iter().zip(vec2.iter()) {
-                let a = i64::load(&self.ele, a);
-                let b = i64::load(&self.ele, b);
-                sum += a * b;
-            }
-            sum.store(&self.ele)
-        }
-    }
+    //     fn apply(
+    //         &self,
+    //         values: &[Value],
+    //         _sorts: (&[ArcSort], &ArcSort),
+    //         _egraph: Option<&mut EGraph>,
+    //     ) -> Option<Value> {
+    //         let mut sum = 0;
+    //         let vec1 = Vec::<Value>::load(&self.vec, &values[0]);
+    //         let vec2 = Vec::<Value>::load(&self.vec, &values[1]);
+    //         assert_eq!(vec1.len(), vec2.len());
+    //         for (a, b) in vec1.iter().zip(vec2.iter()) {
+    //             let a = i64::load(&self.ele, a);
+    //             let b = i64::load(&self.ele, b);
+    //             sum += a * b;
+    //         }
+    //         Some(sum.store(&self.ele))
+    //     }
+    // }
 
-    #[test]
-    fn test_user_defined_primitive() {
-        let mut egraph = EGraph::default();
-        egraph
-            .parse_and_run_program(None, "(sort IntVec (Vec i64))")
-            .unwrap();
+    // #[test]
+    // fn test_user_defined_primitive() {
+    //     let mut egraph = EGraph::default();
+    //     egraph
+    //         .parse_and_run_program(None, "(sort IntVec (Vec i64))")
+    //         .unwrap();
 
-        let int_vec_sort: Arc<VecSort> = egraph
-            .get_sort_by(|s: &Arc<VecSort>| s.element_name() == I64Sort.name())
-            .unwrap();
+    //     let int_vec_sort: Arc<VecSort> = egraph
+    //         .get_sort_by(|s: &Arc<VecSort>| s.element_name() == I64Sort.name())
+    //         .unwrap();
 
-        egraph.add_primitive(InnerProduct {
-            ele: I64Sort.into(),
-            vec: int_vec_sort,
-        });
+    //     egraph.add_primitive(InnerProduct {
+    //         ele: I64Sort.into(),
+    //         vec: int_vec_sort,
+    //     });
 
-        egraph
-            .parse_and_run_program(
-                None,
-                "
-                (let a (vec-of 1 2 3 4 5 6))
-                (let b (vec-of 6 5 4 3 2 1))
-                (check (= (inner-product a b) 56))
-            ",
-            )
-            .unwrap();
-    }
+    //     egraph
+    //         .parse_and_run_program(
+    //             None,
+    //             "
+    //             (let a (vec-of 1 2 3 4 5 6))
+    //             (let b (vec-of 6 5 4 3 2 1))
+    //             (check (= (inner-product a b) 56))
+    //         ",
+    //         )
+    //         .unwrap();
+    // }
 
     lazy_static! {
         pub static ref RT: Mutex<EGraph> = Mutex::new(EGraph::default());

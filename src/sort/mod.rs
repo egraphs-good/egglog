@@ -1,8 +1,27 @@
 #[macro_use]
 mod macros;
+
 use lazy_static::lazy_static;
+use num::traits::{CheckedAdd, CheckedDiv, CheckedMul, CheckedSub, One, Signed, ToPrimitive, Zero};
+use num::{rational::BigRational, BigInt};
+use ordered_float::OrderedFloat;
 use std::fmt::Debug;
+use std::ops::{Shl, Shr};
+use std::sync::Mutex;
 use std::{any::Any, sync::Arc};
+
+use core_relations::Primitives;
+use egglog_bridge::ColumnTy;
+
+use crate::ast::Literal;
+use crate::extract::{Cost, Extractor};
+use crate::util::IndexSet;
+use crate::*;
+
+pub type Z = BigInt;
+pub type Q = BigRational;
+pub type F = OrderedFloat<f64>;
+pub type S = Symbol;
 
 mod bigint;
 pub use bigint::*;
@@ -19,22 +38,22 @@ pub use self::i64::*;
 mod f64;
 pub use self::f64::*;
 mod map;
-pub use map::*;
+// pub use map::*;
 mod set;
-pub use set::*;
+// pub use set::*;
 mod vec;
-pub use vec::*;
+// pub use vec::*;
 mod r#fn;
-pub use r#fn::*;
+// pub use r#fn::*;
 mod multiset;
-pub use multiset::*;
-
-use crate::constraint::AllEqualTypeConstraint;
-use crate::extract::{Cost, Extractor};
-use crate::*;
+// pub use multiset::*;
 
 pub trait Sort: Any + Send + Sync + Debug {
     fn name(&self) -> Symbol;
+
+    fn column_ty(&self, prims: &Primitives) -> ColumnTy;
+
+    fn register_type(&self, prims: &mut Primitives);
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static>;
 
@@ -93,8 +112,8 @@ pub trait Sort: Any + Send + Sync + Debug {
         vec![]
     }
 
-    fn register_primitives(self: Arc<Self>, info: &mut TypeInfo) {
-        let _ = info;
+    fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
+        let _ = eg;
     }
 
     /// Extracting a term (with smallest cost) out of a primitive value
@@ -130,6 +149,12 @@ impl Sort for EqSort {
     fn name(&self) -> Symbol {
         self.name
     }
+
+    fn column_ty(&self, _prims: &Primitives) -> ColumnTy {
+        ColumnTy::Id
+    }
+
+    fn register_type(&self, _: &mut Primitives) {}
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
         self
@@ -170,48 +195,11 @@ pub trait FromSort: Sized {
 
 pub trait IntoSort: Sized {
     type Sort: Sort;
-    fn store(self, sort: &Self::Sort) -> Option<Value>;
-}
-
-impl<T: IntoSort> IntoSort for Option<T> {
-    type Sort = T::Sort;
-
-    fn store(self, sort: &Self::Sort) -> Option<Value> {
-        self?.store(sort)
-    }
+    fn store(self, sort: &Self::Sort) -> Value;
 }
 
 pub type PreSort =
     fn(typeinfo: &mut TypeInfo, name: Symbol, params: &[Expr]) -> Result<ArcSort, TypeError>;
-
-pub(crate) struct ValueEq;
-
-impl PrimitiveLike for ValueEq {
-    fn name(&self) -> Symbol {
-        "value-eq".into()
-    }
-
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        AllEqualTypeConstraint::new(self.name(), span.clone())
-            .with_exact_length(3)
-            .with_output_sort(Arc::new(UnitSort))
-            .into_box()
-    }
-
-    fn apply(
-        &self,
-        values: &[Value],
-        _sorts: (&[ArcSort], &ArcSort),
-        _egraph: Option<&mut EGraph>,
-    ) -> Option<Value> {
-        assert_eq!(values.len(), 2);
-        if values[0] == values[1] {
-            Some(Value::unit())
-        } else {
-            None
-        }
-    }
-}
 
 pub fn literal_sort(lit: &Literal) -> ArcSort {
     match lit {

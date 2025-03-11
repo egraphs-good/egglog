@@ -22,6 +22,7 @@ pub struct Function {
     index_updated_through: usize,
     updates: usize,
     scratch: IndexSet<usize>,
+    pub new_backend_id: egglog_bridge::FunctionId,
 }
 
 #[derive(Clone)]
@@ -80,7 +81,7 @@ impl Function {
     pub(crate) fn new(egraph: &mut EGraph, decl: &ResolvedFunctionDecl) -> Result<Self, Error> {
         let mut input = Vec::with_capacity(decl.schema.input.len());
         for s in &decl.schema.input {
-            input.push(match egraph.type_info.sorts.get(s) {
+            input.push(match egraph.type_info.get_sort(s) {
                 Some(sort) => sort.clone(),
                 None => {
                     return Err(Error::TypeError(TypeError::UndefinedSort(
@@ -91,7 +92,7 @@ impl Function {
             })
         }
 
-        let output = match egraph.type_info.sorts.get(&decl.schema.output) {
+        let output = match egraph.type_info.get_sort(&decl.schema.output) {
             Some(sort) => sort.clone(),
             None => {
                 return Err(Error::TypeError(TypeError::UndefinedSort(
@@ -153,6 +154,30 @@ impl Function {
             .chain(once(output.name()))
             .collect();
 
+        let new_backend_id = {
+            use egglog_bridge::{DefaultVal, MergeFn};
+            let schema = input
+                .iter()
+                .chain([&output])
+                .map(|sort| sort.column_ty(egraph.backend.primitives()))
+                .collect();
+            let default = match decl.subtype {
+                FunctionSubtype::Constructor => DefaultVal::FreshId,
+                FunctionSubtype::Custom => DefaultVal::Fail,
+                FunctionSubtype::Relation => DefaultVal::Const(egraph.backend.primitives().get(())),
+            };
+            let merge = match decl.subtype {
+                FunctionSubtype::Constructor => MergeFn::UnionId,
+                FunctionSubtype::Relation => MergeFn::AssertEq,
+                FunctionSubtype::Custom => match &decl.merge {
+                    None => MergeFn::AssertEq,
+                    Some(_merge_expr) => todo!("custom merge fn"),
+                },
+            };
+            let name = decl.name.into();
+            egraph.backend.add_table(schema, default, merge, name)
+        };
+
         Ok(Function {
             decl: decl.clone(),
             schema: ResolvedSchema { input, output },
@@ -165,7 +190,14 @@ impl Function {
             index_updated_through: 0,
             updates: 0,
             merge: merge_vals,
+            new_backend_id,
         })
+    }
+
+    // TODO: remove before merging
+    #[allow(clippy::len_without_is_empty)]
+    pub fn len(&self) -> usize {
+        self.nodes.len()
     }
 
     pub fn get(&self, inputs: &[Value]) -> Option<Value> {

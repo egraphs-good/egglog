@@ -1,10 +1,3 @@
-use num::BigInt;
-use std::ops::{Shl, Shr};
-use std::sync::Mutex;
-
-type Z = BigInt;
-use crate::{ast::Literal, util::IndexSet};
-
 use super::*;
 
 lazy_static! {
@@ -20,47 +13,53 @@ impl Sort for BigIntSort {
         *BIG_INT_SORT_NAME
     }
 
+    fn column_ty(&self, prims: &Primitives) -> ColumnTy {
+        ColumnTy::Primitive(prims.get_ty::<Z>())
+    }
+
+    fn register_type(&self, prims: &mut Primitives) {
+        prims.register_type::<Z>();
+    }
+
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
         self
     }
 
     #[rustfmt::skip]
-    fn register_primitives(self: Arc<Self>, eg: &mut TypeInfo) {
-        type Opt<T=()> = Option<T>;
+    fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
+        add_primitive!(eg, "bigint" = |a: i64| -> Z { a.into() });
 
-        add_primitives!(eg, "bigint" = |a: i64| -> Z { a.into() });
+        add_primitive!(eg, "+" = |a: Z, b: Z| -> Z { a + b });
+        add_primitive!(eg, "-" = |a: Z, b: Z| -> Z { a - b });
+        add_primitive!(eg, "*" = |a: Z, b: Z| -> Z { a * b });
+        add_primitive!(eg, "/" = |a: Z, b: Z| -?> Z { (b != BigInt::ZERO).then(|| a / b) });
+        add_primitive!(eg, "%" = |a: Z, b: Z| -?> Z { (b != BigInt::ZERO).then(|| a % b) });
 
-        add_primitives!(eg, "+" = |a: Z, b: Z| -> Z { a + b });
-        add_primitives!(eg, "-" = |a: Z, b: Z| -> Z { a - b });
-        add_primitives!(eg, "*" = |a: Z, b: Z| -> Z { a * b });
-        add_primitives!(eg, "/" = |a: Z, b: Z| -> Opt<Z> { (b != BigInt::ZERO).then(|| a / b) });
-        add_primitives!(eg, "%" = |a: Z, b: Z| -> Opt<Z> { (b != BigInt::ZERO).then(|| a % b) });
+        add_primitive!(eg, "&" = |a: Z, b: Z| -> Z { a & b });
+        add_primitive!(eg, "|" = |a: Z, b: Z| -> Z { a | b });
+        add_primitive!(eg, "^" = |a: Z, b: Z| -> Z { a ^ b });
+        add_primitive!(eg, "<<" = |a: Z, b: i64| -> Z { a.shl(b) });
+        add_primitive!(eg, ">>" = |a: Z, b: i64| -> Z { a.shr(b) });
+        add_primitive!(eg, "not-Z" = |a: Z| -> Z { !a });
 
-        add_primitives!(eg, "&" = |a: Z, b: Z| -> Z { a & b });
-        add_primitives!(eg, "|" = |a: Z, b: Z| -> Z { a | b });
-        add_primitives!(eg, "^" = |a: Z, b: Z| -> Z { a ^ b });
-        add_primitives!(eg, "<<" = |a: Z, b: i64| -> Z { a.shl(b) });
-        add_primitives!(eg, ">>" = |a: Z, b: i64| -> Z { a.shr(b) });
-        add_primitives!(eg, "not-Z" = |a: Z| -> Z { !a });
+        add_primitive!(eg, "bits" = |a: Z| -> Z { a.bits().into() });
 
-        add_primitives!(eg, "bits" = |a: Z| -> Z { a.bits().into() });
+        add_primitive!(eg, "<" = |a: Z, b: Z| -?> () { (a < b).then_some(()) });
+        add_primitive!(eg, ">" = |a: Z, b: Z| -?> () { (a > b).then_some(()) });
+        add_primitive!(eg, "<=" = |a: Z, b: Z| -?> () { (a <= b).then_some(()) });
+        add_primitive!(eg, ">=" = |a: Z, b: Z| -?> () { (a >= b).then_some(()) });
 
-        add_primitives!(eg, "<" = |a: Z, b: Z| -> Opt { (a < b).then_some(()) });
-        add_primitives!(eg, ">" = |a: Z, b: Z| -> Opt { (a > b).then_some(()) });
-        add_primitives!(eg, "<=" = |a: Z, b: Z| -> Opt { (a <= b).then_some(()) });
-        add_primitives!(eg, ">=" = |a: Z, b: Z| -> Opt { (a >= b).then_some(()) });
+        add_primitive!(eg, "bool-=" = |a: Z, b: Z| -> bool { a == b });
+        add_primitive!(eg, "bool-<" = |a: Z, b: Z| -> bool { a < b });
+        add_primitive!(eg, "bool->" = |a: Z, b: Z| -> bool { a > b });
+        add_primitive!(eg, "bool-<=" = |a: Z, b: Z| -> bool { a <= b });
+        add_primitive!(eg, "bool->=" = |a: Z, b: Z| -> bool { a >= b });
 
-        add_primitives!(eg, "bool-=" = |a: Z, b: Z| -> bool { a == b });
-        add_primitives!(eg, "bool-<" = |a: Z, b: Z| -> bool { a < b });
-        add_primitives!(eg, "bool->" = |a: Z, b: Z| -> bool { a > b });
-        add_primitives!(eg, "bool-<=" = |a: Z, b: Z| -> bool { a <= b });
-        add_primitives!(eg, "bool->=" = |a: Z, b: Z| -> bool { a >= b });
+        add_primitive!(eg, "min" = |a: Z, b: Z| -> Z { a.min(b) });
+        add_primitive!(eg, "max" = |a: Z, b: Z| -> Z { a.max(b) });
 
-        add_primitives!(eg, "min" = |a: Z, b: Z| -> Z { a.min(b) });
-        add_primitives!(eg, "max" = |a: Z, b: Z| -> Z { a.max(b) });
-
-        add_primitives!(eg, "to-string" = |a: Z| -> Symbol { a.to_string().into() });
-        add_primitives!(eg, "from-string" = |a: Symbol| -> Opt<Z> { a.as_str().parse::<Z>().ok() });
+        add_primitive!(eg, "to-string" = |a: Z| -> Symbol { a.to_string().into() });
+        add_primitive!(eg, "from-string" = |a: Symbol| -?> Z { a.as_str().parse::<Z>().ok() });
    }
 
     fn extract_term(
@@ -90,12 +89,12 @@ impl FromSort for Z {
 
 impl IntoSort for Z {
     type Sort = BigIntSort;
-    fn store(self, _sort: &Self::Sort) -> Option<Value> {
+    fn store(self, _sort: &Self::Sort) -> Value {
         let (i, _) = INTS.lock().unwrap().insert_full(self);
-        Some(Value {
+        Value {
             #[cfg(debug_assertions)]
             tag: BigIntSort.name(),
             bits: i as u64,
-        })
+        }
     }
 }

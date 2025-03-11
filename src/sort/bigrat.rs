@@ -1,11 +1,3 @@
-use num::traits::{CheckedAdd, CheckedDiv, CheckedMul, CheckedSub, One, Signed, ToPrimitive, Zero};
-use num::{rational::BigRational, BigInt};
-use std::sync::Mutex;
-
-type Z = BigInt;
-type Q = BigRational;
-use crate::{ast::Literal, util::IndexSet};
-
 use super::*;
 
 lazy_static! {
@@ -28,33 +20,39 @@ impl Sort for BigRatSort {
         *BIG_RAT_SORT_NAME
     }
 
+    fn column_ty(&self, prims: &Primitives) -> ColumnTy {
+        ColumnTy::Primitive(prims.get_ty::<Q>())
+    }
+
+    fn register_type(&self, prims: &mut Primitives) {
+        prims.register_type::<Q>();
+    }
+
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
         self
     }
 
     #[rustfmt::skip]
-    fn register_primitives(self: Arc<Self>, eg: &mut TypeInfo) {
-        type Opt<T=()> = Option<T>;
+    fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
+        add_primitive!(eg, "+" = |a: Q, b: Q| -?> Q { a.checked_add(&b) });
+        add_primitive!(eg, "-" = |a: Q, b: Q| -?> Q { a.checked_sub(&b) });
+        add_primitive!(eg, "*" = |a: Q, b: Q| -?> Q { a.checked_mul(&b) });
+        add_primitive!(eg, "/" = |a: Q, b: Q| -?> Q { a.checked_div(&b) });
 
-        add_primitives!(eg, "+" = |a: Q, b: Q| -> Opt<Q> { a.checked_add(&b) });
-        add_primitives!(eg, "-" = |a: Q, b: Q| -> Opt<Q> { a.checked_sub(&b) });
-        add_primitives!(eg, "*" = |a: Q, b: Q| -> Opt<Q> { a.checked_mul(&b) });
-        add_primitives!(eg, "/" = |a: Q, b: Q| -> Opt<Q> { a.checked_div(&b) });
+        add_primitive!(eg, "min" = |a: Q, b: Q| -> Q { a.min(b) });
+        add_primitive!(eg, "max" = |a: Q, b: Q| -> Q { a.max(b) });
+        add_primitive!(eg, "neg" = |a: Q| -> Q { -a });
+        add_primitive!(eg, "abs" = |a: Q| -> Q { a.abs() });
+        add_primitive!(eg, "floor" = |a: Q| -> Q { a.floor() });
+        add_primitive!(eg, "ceil" = |a: Q| -> Q { a.ceil() });
+        add_primitive!(eg, "round" = |a: Q| -> Q { a.round() });
 
-        add_primitives!(eg, "min" = |a: Q, b: Q| -> Q { a.min(b) });
-        add_primitives!(eg, "max" = |a: Q, b: Q| -> Q { a.max(b) });
-        add_primitives!(eg, "neg" = |a: Q| -> Q { -a });
-        add_primitives!(eg, "abs" = |a: Q| -> Q { a.abs() });
-        add_primitives!(eg, "floor" = |a: Q| -> Q { a.floor() });
-        add_primitives!(eg, "ceil" = |a: Q| -> Q { a.ceil() });
-        add_primitives!(eg, "round" = |a: Q| -> Q { a.round() });
+        add_primitive!(eg, "bigrat" = |a: Z, b: Z| -> Q { Q::new(a, b) });
+        add_primitive!(eg, "numer" = |a: Q| -> Z { a.numer().clone() });
+        add_primitive!(eg, "denom" = |a: Q| -> Z { a.denom().clone() });
+        add_primitive!(eg, "to-f64" = |a: Q| -> F { OrderedFloat(a.to_f64().unwrap()) });
 
-        add_primitives!(eg, "bigrat" = |a: Z, b: Z| -> Q { Q::new(a, b) });
-        add_primitives!(eg, "numer" = |a: Q| -> Z { a.numer().clone() });
-        add_primitives!(eg, "denom" = |a: Q| -> Z { a.denom().clone() });
-        add_primitives!(eg, "to-f64" = |a: Q| -> f64 { a.to_f64().unwrap() });
-
-        add_primitives!(eg, "pow" = |a: Q, b: Q| -> Option<Q> {
+        add_primitive!(eg, "pow" = |a: Q, b: Q| -?> Q {
             if !b.is_integer() {
                 // fractional powers are forbidden.
                 // reject this even for the zero case
@@ -87,14 +85,14 @@ impl Sort for BigRatSort {
                 num::traits::checked_pow(adj_base, adj_exp_usize)
             }
         });
-        add_primitives!(eg, "log" = |a: Q| -> Option<Q> {
+        add_primitive!(eg, "log" = |a: Q| -?> Q {
             if a.is_one() {
                 Some(Q::zero())
             } else {
-                todo!()
+                todo!("log of bigrat")
             }
         });
-        add_primitives!(eg, "sqrt" = |a: Q| -> Option<Q> {
+        add_primitive!(eg, "sqrt" = |a: Q| -?> Q {
             if a.numer().is_positive() && a.denom().is_positive() {
                 let s1 = a.numer().sqrt();
                 let s2 = a.denom().sqrt();
@@ -108,18 +106,18 @@ impl Sort for BigRatSort {
                 None
             }
         });
-        add_primitives!(eg, "cbrt" = |a: Q| -> Option<Q> {
+        add_primitive!(eg, "cbrt" = |a: Q| -?> Q {
             if a.is_one() {
                 Some(Q::one())
             } else {
-                todo!()
+                todo!("cbrt of bigrat")
             }
         });
 
-        add_primitives!(eg, "<" = |a: Q, b: Q| -> Opt { if a < b {Some(())} else {None} });
-        add_primitives!(eg, ">" = |a: Q, b: Q| -> Opt { if a > b {Some(())} else {None} });
-        add_primitives!(eg, "<=" = |a: Q, b: Q| -> Opt { if a <= b {Some(())} else {None} });
-        add_primitives!(eg, ">=" = |a: Q, b: Q| -> Opt { if a >= b {Some(())} else {None} });
+        add_primitive!(eg, "<" = |a: Q, b: Q| -?> () { if a < b {Some(())} else {None} });
+        add_primitive!(eg, ">" = |a: Q, b: Q| -?> () { if a > b {Some(())} else {None} });
+        add_primitive!(eg, "<=" = |a: Q, b: Q| -?> () { if a <= b {Some(())} else {None} });
+        add_primitive!(eg, ">=" = |a: Q, b: Q| -?> () { if a >= b {Some(())} else {None} });
    }
 
     fn extract_term(
@@ -159,12 +157,12 @@ impl FromSort for Q {
 
 impl IntoSort for Q {
     type Sort = BigRatSort;
-    fn store(self, _sort: &Self::Sort) -> Option<Value> {
+    fn store(self, _sort: &Self::Sort) -> Value {
         let (i, _) = RATS.lock().unwrap().insert_full(self);
-        Some(Value {
+        Value {
             #[cfg(debug_assertions)]
             tag: BigRatSort.name(),
             bits: i as u64,
-        })
+        }
     }
 }

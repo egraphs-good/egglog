@@ -1,5 +1,3 @@
-use crate::ast::Literal;
-
 use super::*;
 
 #[derive(Debug)]
@@ -14,17 +12,25 @@ impl Sort for BoolSort {
         *BOOL_SORT_NAME
     }
 
+    fn column_ty(&self, prims: &Primitives) -> ColumnTy {
+        ColumnTy::Primitive(prims.get_ty::<bool>())
+    }
+
+    fn register_type(&self, prims: &mut Primitives) {
+        prims.register_type::<bool>();
+    }
+
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
         self
     }
 
     #[rustfmt::skip]
-    fn register_primitives(self: Arc<Self>, eg: &mut TypeInfo) {
-        add_primitives!(eg, "not" = |a: bool| -> bool { !a });
-        add_primitives!(eg, "and" = |a: bool, b: bool| -> bool { a && b });
-        add_primitives!(eg, "or" = |a: bool, b: bool| -> bool { a || b });
-        add_primitives!(eg, "xor" = |a: bool, b: bool| -> bool { a ^ b });
-        add_primitives!(eg, "=>" = |a: bool, b: bool| -> bool { !a || b });
+    fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
+        add_primitive!(eg, "not" = |a: bool| -> bool { !a });
+        add_primitive!(eg, "and" = |a: bool, b: bool| -> bool { a && b });
+        add_primitive!(eg, "or" = |a: bool, b: bool| -> bool { a || b });
+        add_primitive!(eg, "xor" = |a: bool, b: bool| -> bool { a ^ b });
+        add_primitive!(eg, "=>" = |a: bool, b: bool| -> bool { !a || b });
     }
 
     fn extract_term(
@@ -43,12 +49,12 @@ impl Sort for BoolSort {
 
 impl IntoSort for bool {
     type Sort = BoolSort;
-    fn store(self, _sort: &Self::Sort) -> Option<Value> {
-        Some(Value {
+    fn store(self, _sort: &Self::Sort) -> Value {
+        Value {
             #[cfg(debug_assertions)]
             tag: BoolSort.name(),
             bits: self as u64,
-        })
+        }
     }
 }
 

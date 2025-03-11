@@ -1,0 +1,32 @@
+; recursive definition of naturals
+(datatype N (Z) (S N))
+
+; small constants
+(let zero  (Z))
+(let one   (S (Z)))
+(let two   (S (S (Z))))
+(let three (S (S (S (Z)))))
+
+; addition
+(constructor Plus (N N) N)
+(rewrite (Plus (Z)   n) n)
+(rewrite (Plus (S m) n) (S (Plus m n)))
+
+; check that addition works
+(let four1 (S three))
+(let four2 (Plus two two))
+(fail (check (= four1 four2)))
+(run-schedule (saturate (run)))
+(check (= four1 four2))
+
+; multiplication
+(constructor Times (N N) N)
+(rewrite (Times (Z)   n) (Z))
+(rewrite (Times (S m) n) (Plus n (Times m n)))
+
+; check that multiplication works
+(let six1 (Times two three))
+(let six2 (Plus two (Plus two two)))
+(fail (check (= six1 six2)))
+(run-schedule (saturate (run)))
+(check (= six1 six2))

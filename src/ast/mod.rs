@@ -18,7 +18,10 @@ pub(crate) enum Ruleset {
     /// Use an [`IndexMap`] to ensure egglog is deterministic.
     /// Rules added to the [`IndexMap`] first apply their
     /// actions first.
-    Rules(Symbol, IndexMap<Symbol, CompiledRule>),
+    Rules(
+        Symbol,
+        IndexMap<Symbol, (CompiledRule, egglog_bridge::RuleId)>,
+    ),
     /// A combined ruleset may contain other rulesets.
     Combined(Symbol, Vec<Symbol>),
 }
@@ -291,7 +294,7 @@ where
     ///
     /// Options supported include:
     /// - "interactive_mode" (default: false): when enabled, egglog prints "(done)" after each command, allowing an external
-    /// tool to know when each command has finished running.
+    ///   tool to know when each command has finished running.
     SetOption {
         name: Symbol,
         value: GenericExpr<Head, Leaf>,
@@ -325,12 +328,12 @@ where
     ///
     /// A custom function is a dictionary
     /// It can only be defined through the `function` command
-
+    ///
     /// The `datatype` command declares a user-defined datatype.
     /// Datatypes can be unioned with [`Action::Union`] either
     /// at the top level or in the actions of a rule.
     /// This makes them equal in the implicit, global equality relation.
-
+    ///
     /// Example:
     /// ```text
     /// (datatype Math
@@ -339,7 +342,7 @@ where
     ///   (Add Math Math)
     ///   (Mul Math Math))
     /// ```
-
+    ///
     /// defines a simple `Math` datatype with variants for numbers, named variables, addition and multiplication.
     ///
     /// Datatypes desugar directly to a [`Command::Sort`] and a [`Command::Constructor`] for each constructor.
@@ -350,7 +353,7 @@ where
     /// (constructor Var (String) Math)
     /// (constructor Add (Math Math) Math)
     /// (constructor Mul (Math Math) Math)
-
+    ///
     /// Datatypes are also known as algebraic data types, tagged unions and sum types.
     Datatype {
         span: Span,
@@ -441,7 +444,7 @@ where
     ///
     /// Example:
     /// Ruleset allows users to define a ruleset- a set of rules
-
+    ///
     /// ```text
     /// (ruleset myrules)
     /// (rule ((edge x y))
@@ -471,7 +474,7 @@ where
     /// ```text
     /// (rule <body:List<Fact>> <head:List<Action>>)
     /// ```
-
+    ///
     /// defines an egglog rule.
     /// The rule matches a list of facts with respect to
     /// the global database, and runs the list of actions
@@ -479,12 +482,12 @@ where
     /// The matches are done *modulo equality*, meaning
     /// equal datatypes in the database are considered
     /// equal.
-
+    ///
     /// Example:
     /// ```text
     /// (rule ((edge x y))
     ///       ((path x y)))
-
+    ///
     /// (rule ((path x y) (edge y z))
     ///       ((path x z)))
     /// ```
@@ -616,15 +619,15 @@ where
     /// The list of facts is matched in the same way a [`Command::Rule`] is matched.
     ///
     /// Example:
-
+    ///
     /// ```text
     /// (check (= (+ 1 2) 3))
     /// (check (<= 0 3) (>= 3 0))
     /// (fail (check (= 1 2)))
     /// ```
-
+    ///
     /// prints
-
+    ///
     /// ```text
     /// [INFO ] Checked.
     /// [INFO ] Checked.
