@@ -2,6 +2,7 @@ use std::mem;
 
 use crate::*;
 use index::*;
+use ordered_float::OrderedFloat;
 use smallvec::SmallVec;
 
 mod binary_search;
@@ -171,7 +172,7 @@ impl Function {
                 FunctionSubtype::Relation => MergeFn::AssertEq,
                 FunctionSubtype::Custom => match &decl.merge {
                     None => MergeFn::AssertEq,
-                    Some(_merge_expr) => todo!("custom merge fn"),
+                    Some(expr) => translate_expr_to_mergefn(expr, egraph)?,
                 },
             };
             let name = decl.name.into();
@@ -489,5 +490,66 @@ impl Function {
 
     pub fn is_extractable(&self) -> bool {
         !self.decl.unextractable
+    }
+}
+
+fn translate_expr_to_mergefn(
+    expr: &GenericExpr<ResolvedCall, ResolvedVar>,
+    egraph: &mut EGraph,
+) -> Result<egglog_bridge::MergeFn, Error> {
+    match expr {
+        GenericExpr::Lit(_, literal) => {
+            let prims = egraph.backend.primitives_mut();
+            let val = match literal {
+                Literal::Int(ival) => {
+                    prims.register_type::<i64>();
+                    prims.get::<i64>(*ival)
+                }
+                Literal::Float(ordered_float) => {
+                    prims.register_type::<OrderedFloat<f64>>();
+                    prims.get::<OrderedFloat<f64>>(*ordered_float)
+                }
+                Literal::String(global_symbol) => {
+                    let as_string = global_symbol.to_string();
+                    prims.register_type::<String>();
+                    prims.get::<String>(as_string)
+                }
+                Literal::Bool(b) => {
+                    prims.register_type::<bool>();
+                    prims.get::<bool>(*b)
+                }
+                Literal::Unit => {
+                    prims.register_type::<()>();
+                    prims.get::<()>(())
+                }
+            };
+            Ok(egglog_bridge::MergeFn::Const(val))
+        }
+        GenericExpr::Var(span, resolved_var) => match resolved_var.name.as_str() {
+            "old" => Ok(egglog_bridge::MergeFn::Old),
+            "new" => Ok(egglog_bridge::MergeFn::New),
+            // NB: type-checking should already catch unbound variables here.
+            _ => Err(TypeError::Unbound(resolved_var.name, span.clone()).into()),
+        },
+        GenericExpr::Call(_, ResolvedCall::Func(f), args) => {
+            let mut translated_args = Vec::with_capacity(args.len());
+            for arg in args {
+                translated_args.push(translate_expr_to_mergefn(arg, egraph)?);
+            }
+            Ok(egglog_bridge::MergeFn::Function(
+                egraph.functions[&f.name].new_backend_id,
+                translated_args,
+            ))
+        }
+        GenericExpr::Call(_, ResolvedCall::Primitive(p), args) => {
+            let mut translated_args = Vec::with_capacity(args.len());
+            for arg in args {
+                translated_args.push(translate_expr_to_mergefn(arg, egraph)?);
+            }
+            Ok(egglog_bridge::MergeFn::Primitive(
+                p.primitive.1,
+                translated_args,
+            ))
+        }
     }
 }
