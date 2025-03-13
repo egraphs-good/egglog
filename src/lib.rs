@@ -1630,15 +1630,7 @@ impl<'a> BackendRule<'a> {
                     v.name.into(),
                 ),
                 core::GenericAtomTerm::Literal(_, l) => {
-                    let prims = self.rb.egraph().primitives();
-                    match l {
-                        Literal::Int(x) => prims.get::<i64>(*x),
-                        Literal::Float(x) => prims.get::<sort::F>(*x),
-                        Literal::String(x) => prims.get::<sort::S>(*x),
-                        Literal::Bool(x) => prims.get::<bool>(*x),
-                        Literal::Unit => prims.get::<()>(()),
-                    }
-                    .into()
+                    translate_literal(self.rb.egraph(), l).into()
                 }
                 core::GenericAtomTerm::Global(..) => {
                     panic!("Globals should have been desugared")
@@ -1739,6 +1731,16 @@ impl<'a> BackendRule<'a> {
 
     fn finish(self) -> egglog_bridge::RuleBuilder<'a> {
         self.rb
+    }
+}
+
+fn translate_literal(egraph: &egglog_bridge::EGraph, l: &Literal) -> core_relations::Value {
+    match l {
+        Literal::Int(x) => egraph.primitives().get::<i64>(*x),
+        Literal::Float(x) => egraph.primitives().get::<sort::F>(*x),
+        Literal::String(x) => egraph.primitives().get::<sort::S>(*x),
+        Literal::Bool(x) => egraph.primitives().get::<bool>(*x),
+        Literal::Unit => egraph.primitives().get::<()>(()),
     }
 }
 
