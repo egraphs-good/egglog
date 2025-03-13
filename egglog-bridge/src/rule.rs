@@ -8,9 +8,8 @@ use std::{cmp::Ordering, iter, sync::Arc};
 
 use anyhow::Context;
 use core_relations::{
-    ColumnId, Constraint, CounterId, ExternalFunctionId, PlanStrategy, PrimitiveFunctionId,
-    PrimitivePrinter, QueryBuilder, RuleBuilder as CoreRuleBuilder, RuleSetBuilder, TableId, Value,
-    WriteVal,
+    ColumnId, Constraint, CounterId, ExternalFunctionId, PlanStrategy, PrimitivePrinter,
+    QueryBuilder, RuleBuilder as CoreRuleBuilder, RuleSetBuilder, TableId, Value, WriteVal,
 };
 use log::debug;
 use numeric_id::{define_id, DenseIdMap, NumericId};
@@ -114,7 +113,7 @@ impl From<Value> for QueryEntry {
 #[derive(Copy, Clone, Debug)]
 pub enum Function {
     Table(FunctionId),
-    Prim(PrimitiveFunctionId),
+    Prim(ExternalFunctionId),
 }
 
 impl From<FunctionId> for Function {
@@ -123,8 +122,8 @@ impl From<FunctionId> for Function {
     }
 }
 
-impl From<PrimitiveFunctionId> for Function {
-    fn from(f: PrimitiveFunctionId) -> Self {
+impl From<ExternalFunctionId> for Function {
+    fn from(f: ExternalFunctionId) -> Self {
         Function::Prim(f)
     }
 }
@@ -514,7 +513,7 @@ impl RuleBuilder<'_> {
                 self.query.add_rule.push(Box::new(move |inner, rb| {
                     let mut dst_vars = inner.convert_all(&entries);
                     let expected = dst_vars.pop().expect("must specify a return value");
-                    let var = rb.prim(p, &dst_vars)?;
+                    let var = rb.call_external(p, &dst_vars)?;
                     rb.assert_eq(var.into(), expected);
                     Ok(())
                 }));
@@ -553,7 +552,7 @@ impl RuleBuilder<'_> {
                     .map(|(entry, ty)| {
                         if let QueryEntry::Const { val, .. } = entry {
                             QueryEntry::Const {
-                                val: *val,
+                                val,
                                 ty: Some(ColumnTy::Primitive(*ty)),
                             }
                         } else {
@@ -702,7 +701,7 @@ impl RuleBuilder<'_> {
                     res,
                     Box::new(move |inner, rb| {
                         let dst_vars = inner.convert_all(&entries);
-                        let var = rb.prim(p, &dst_vars)?;
+                        let var = rb.call_external(p, &dst_vars)?;
                         inner.mapping.insert(res, var.into());
                         Ok(())
                     }),

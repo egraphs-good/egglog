@@ -1,7 +1,7 @@
 use std::{iter, rc::Rc, sync::Arc};
 
 use core_relations::{
-    ColumnId, DisplacedTableWithProvenance, PrimitiveFunctionId, PrimitivePrinter,
+    ColumnId, DisplacedTableWithProvenance, ExternalFunctionId, PrimitivePrinter,
     ProofReason as UfProofReason, ProofStep, RuleBuilder, Value,
 };
 use hashbrown::{HashMap, HashSet};
@@ -378,7 +378,7 @@ impl ProofBuilder {
     }
     pub(crate) fn register_prim(
         &mut self,
-        func: PrimitiveFunctionId,
+        func: ExternalFunctionId,
         args: &[QueryEntry],
         res: Variable,
         db: &EGraph,

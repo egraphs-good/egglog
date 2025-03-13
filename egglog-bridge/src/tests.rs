@@ -592,11 +592,13 @@ fn container_test() {
         MergeFn::UnionId,
         "vec",
     );
-    let int_add = core_relations::lift_function! {
-        [egraph.primitives_mut()] fn add(x: i64, y: i64) -> i64 {
-            x + y
-        }
-    };
+    let int_add = egraph.register_external_func(make_external_func(|exec_state, args| {
+        let [x, y] = args else { panic!() };
+        let x: i64 = exec_state.prims().unwrap(*x);
+        let y: i64 = exec_state.prims().unwrap(*y);
+        let z: i64 = x + y;
+        Some(exec_state.prims().get(z))
+    }));
     let vec_last = register_vec_last(&mut egraph);
     let vec_push = register_vec_push(&mut egraph);
 
