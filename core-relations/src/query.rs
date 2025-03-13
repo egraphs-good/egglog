@@ -14,9 +14,9 @@ use crate::{
         Variable,
     },
     pool::{with_pool_set, Pooled},
-    primitives::{PrimitiveFunctionId, PrimitiveId},
+    primitives::PrimitiveId,
     table_spec::{ColumnId, Constraint},
-    ExternalFunctionId, PoolSet, PrimitiveFunctionSignature,
+    ExternalFunctionId, PoolSet,
 };
 
 /// A set of rules to run against a [`Database`].
@@ -240,23 +240,6 @@ pub enum QueryError {
         prim: PrimitiveId,
     },
 
-    #[error("primitive {prim:?} expects {expected:?} arguments but got {got:?}")]
-    PrimitiveArityMismatch {
-        prim: PrimitiveFunctionId,
-        expected: usize,
-        got: usize,
-    },
-
-    #[error(
-        "primitive {prim:?} expects argument {arg:?} to be of type {expected:?} but got {got:?}"
-    )]
-    PrimitiveTypeMismatch {
-        prim: PrimitiveFunctionId,
-        arg: usize,
-        expected: PrimitiveId,
-        got: PrimitiveId,
-    },
-
     #[error("attempt to compare two groups of values, one of length {l}, another of length {r}")]
     MultiComparisonMismatch { l: usize, r: usize },
 
@@ -466,31 +449,6 @@ impl RuleBuilder<'_, '_> {
         });
         self.qb.mark_used(args);
         Ok(())
-    }
-
-    /// Apply the given primitive function to the specified arguments.
-    pub fn prim(
-        &mut self,
-        prim_func: PrimitiveFunctionId,
-        args: &[QueryEntry],
-    ) -> Result<Variable, QueryError> {
-        let PrimitiveFunctionSignature { args: arg_tys, .. } =
-            self.qb.rsb.db.primitives().get_schema(prim_func);
-        if args.len() != arg_tys.len() {
-            return Err(QueryError::PrimitiveArityMismatch {
-                prim: prim_func,
-                expected: arg_tys.len(),
-                got: args.len(),
-            });
-        }
-        let res = self.qb.new_var();
-        self.qb.instrs.push(Instr::Prim {
-            func: prim_func,
-            args: args.to_vec(),
-            dst: res,
-        });
-        self.qb.mark_used(args);
-        Ok(res)
     }
 
     /// Apply the given external function to the specified arguments.

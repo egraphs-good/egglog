@@ -9,21 +9,12 @@ use std::{
 
 use numeric_id::{define_id, DenseIdMap};
 
-use crate::{
-    action::{
-        mask::{Mask, MaskIter, ValueSource},
-        Bindings,
-    },
-    common::{InternTable, Value},
-    pool::Pool,
-    QueryEntry, Variable,
-};
+use crate::common::{InternTable, Value};
 
 #[cfg(test)]
 mod tests;
 
 define_id!(pub PrimitiveId, u32, "an identifier for primitive types");
-define_id!(pub PrimitiveFunctionId, u32, "an identifier for primitive functions");
 
 /// A simple primitive type that can be interned in a database.
 ///
@@ -61,7 +52,6 @@ impl Debug for PrimitivePrinter<'_> {
 pub struct Primitives {
     type_ids: InternTable<TypeId, PrimitiveId>,
     tables: DenseIdMap<PrimitiveId, Box<dyn DynamicInternTable>>,
-    funcs: DenseIdMap<PrimitiveFunctionId, DynamicPrimitiveFunction>,
 }
 
 impl Primitives {
@@ -100,54 +90,9 @@ impl Primitives {
             .unwrap();
         table.get(v)
     }
+
     pub fn unwrap<P: Primitive>(&self, v: Value) -> P {
         self.unwrap_ref::<P>(v).clone()
-    }
-
-    /// Register the given primitive function with this registry.
-    pub fn register_func(&mut self, op: impl PrimitiveFunction + 'static) -> PrimitiveFunctionId {
-        op.register_types(self);
-        self.funcs.push(DynamicPrimitiveFunction::new(op))
-    }
-
-    /// Get the signature of the given primitive function.
-    pub fn get_schema(&self, id: PrimitiveFunctionId) -> PrimitiveFunctionSignature {
-        self.funcs[id].op.signature()
-    }
-
-    /// Apply the given function to the supplied arguments.
-    ///
-    /// Note: This function needs to perform a number of table lookups in order
-    /// to apply the function in question. This overhead is substantial for
-    /// small functions.
-    pub fn apply_op(&self, id: PrimitiveFunctionId, args: &[Value]) -> Option<Value> {
-        self.funcs[id].op.apply(self, args)
-    }
-
-    pub(crate) fn apply_vectorized(
-        &self,
-        id: PrimitiveFunctionId,
-        pool: Pool<Vec<Value>>,
-        mask: &mut Mask,
-        bindings: &mut Bindings,
-        args: &[QueryEntry],
-        out_var: Variable,
-    ) {
-        let dyn_op = &self.funcs[id];
-        dyn_op
-            .op
-            .apply_vectorized(self, pool, mask, bindings, args, out_var);
-    }
-}
-
-#[derive(Clone)]
-struct DynamicPrimitiveFunction {
-    op: Box<dyn PrimitiveFunctionExt>,
-}
-
-impl DynamicPrimitiveFunction {
-    fn new(op: impl PrimitiveFunction + 'static) -> Self {
-        Self { op: Box::new(op) }
     }
 }
 
@@ -168,145 +113,4 @@ impl<P: Primitive> DynamicInternTable for InternTable<P, Value> {
         let p = self.get(val);
         write!(f, "{:?}", &*p)
     }
-}
-
-/// The type signature for a primitive function.
-pub struct PrimitiveFunctionSignature<'a> {
-    pub args: &'a [PrimitiveId],
-    pub ret: PrimitiveId,
-}
-
-/// A function from primitive values to primitive values.
-///
-/// Most of the time you can get away with using the `lift_operation` macro,
-/// which implements this under the hood.
-#[deprecated]
-pub trait PrimitiveFunction: dyn_clone::DynClone + Send + Sync {
-    fn signature(&self) -> PrimitiveFunctionSignature;
-
-    /// Explicitly register any types that this function depends on with the given [`Primitives`].
-    fn register_types(&self, prims: &mut Primitives);
-
-    /// Apply this function to the given arguments. Returning `None` indicates
-    /// that the function is not defined on these inputs. During execution, this
-    /// halts execution of the rule.
-    fn apply(&self, prims: &Primitives, args: &[Value]) -> Option<Value>;
-}
-
-pub(crate) trait PrimitiveFunctionExt: PrimitiveFunction {
-    fn apply_vectorized(
-        &self,
-        prims: &Primitives,
-        pool: Pool<Vec<Value>>,
-        mask: &mut Mask,
-        bindings: &mut Bindings,
-        args: &[QueryEntry],
-        out_var: Variable,
-    ) {
-        let mut out = pool.get();
-        mask.iter_dynamic(
-            pool,
-            args.iter().map(|v| match v {
-                QueryEntry::Var(v) => ValueSource::Slice(&bindings[*v]),
-                QueryEntry::Const(c) => ValueSource::Const(*c),
-            }),
-        )
-        .fill_vec(&mut out, Value::stale, |_, args| self.apply(prims, &args));
-        bindings.insert(out_var, out);
-    }
-}
-
-impl<T: PrimitiveFunction> PrimitiveFunctionExt for T {}
-
-// Implements `Clone` for `Box<dyn PrimitiveFunctionExt>`.
-dyn_clone::clone_trait_object!(PrimitiveFunctionExt);
-
-#[macro_export]
-macro_rules! lift_function_impl {
-    ([$arity:expr, $table:expr] fn $name:ident ( $($id:ident : $ty:ty : $n:tt),* ) -> $ret:ty { $body:expr }) => {
-         {
-            use $crate::{Primitives, PrimitiveFunction, PrimitiveId, PrimitiveFunctionSignature};
-            use $crate::Value;
-            fn $name(prims: &mut Primitives) -> $crate::PrimitiveFunctionId {
-                #[derive(Clone)]
-                struct Impl<F> {
-                    arg_prims: Vec<PrimitiveId>,
-                    ret: PrimitiveId,
-                    f: F,
-                }
-
-                impl<F: FnMut($($ty),*) -> $ret> Impl<F> {
-                    fn new(f: F, prims: &mut Primitives) -> Self {
-                        Self {
-                            arg_prims: vec![$(prims.get_ty::<$ty>()),*],
-                            ret: prims.get_ty::<$ret>(),
-                            f,
-                        }
-                    }
-                }
-
-                impl<F: Fn($($ty),*) -> $ret + Clone + Send + Sync> PrimitiveFunction for Impl<F> {
-                    fn signature(&self) -> PrimitiveFunctionSignature {
-                        PrimitiveFunctionSignature {
-                            args: &self.arg_prims,
-                            ret: self.ret,
-                        }
-                    }
-
-                    fn apply(&self, prims: &Primitives, args: &[Value]) -> Option<Value> {
-                        assert_eq!(args.len(), $arity, "wrong number of arguments to {}", stringify!($name));
-                        let ret = (self.f)($(prims.unwrap::<$ty>(args[$n]).clone()),*);
-                        Some(prims.get(ret))
-                    }
-
-                    fn register_types(&self, prims: &mut Primitives) {
-                        $( prims.register_type::<$ty>();)*
-                        prims.register_type::<$ret>();
-                    }
-                }
-
-                fn __impl($($id: $ty),*) -> $ret {
-                    $body
-                }
-
-                let op = Impl::new(__impl, prims);
-                prims.register_func(op)
-            }
-            $name($table)
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! lift_function_count {
-    ([$next:expr, $table:expr] [$($x:ident : $ty:ty : $n: expr),*] fn $name:ident() -> $ret:ty { $body:expr }) => {
-        $crate::lift_function_impl!(
-            [$next, $table] fn $name($($x : $ty : $n),*) -> $ret {
-                $body
-            }
-        )
-    };
-    ([$next:expr, $table:expr] [$($p:ident : $ty:ty : $n:expr),*] fn $name:ident($id:ident : $hd:ty $(,$rest:ident : $tl:ty)*) -> $ret:ty { $body:expr }) => {
-        $crate::lift_function_count!(
-            [($next + 1), $table]
-            [$($p : $ty : $n,)* $id : $hd : $next]
-            fn $name($($rest:$tl),*) -> $ret {
-                $body
-            }
-        )
-    };
-}
-
-/// Registers the given function as a [`PrimitiveFunction`] in the supplied table of primitives.
-#[macro_export]
-macro_rules! lift_function {
-    ([$table:expr] fn $name:ident ( $($id:ident : $ty:ty),* ) -> $ret:ty { $($body:tt)* } ) => {
-        $crate::lift_function_count!(
-            [0, $table]
-            []
-            fn $name($($id : $ty),*) -> $ret {{
-                $($body)*
-            }}
-        )
-    };
 }
