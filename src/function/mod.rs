@@ -499,29 +499,16 @@ fn translate_expr_to_mergefn(
 ) -> Result<egglog_bridge::MergeFn, Error> {
     match expr {
         GenericExpr::Lit(_, literal) => {
-            let prims = egraph.backend.primitives_mut();
+            let prims = egraph.backend.primitives();
             let val = match literal {
-                Literal::Int(ival) => {
-                    prims.register_type::<i64>();
-                    prims.get::<i64>(*ival)
-                }
-                Literal::Float(ordered_float) => {
-                    prims.register_type::<OrderedFloat<f64>>();
-                    prims.get::<OrderedFloat<f64>>(*ordered_float)
-                }
+                Literal::Int(ival) => prims.get::<i64>(*ival),
+                Literal::Float(ordered_float) => prims.get::<OrderedFloat<f64>>(*ordered_float),
                 Literal::String(global_symbol) => {
                     let as_string = global_symbol.to_string();
-                    prims.register_type::<String>();
                     prims.get::<String>(as_string)
                 }
-                Literal::Bool(b) => {
-                    prims.register_type::<bool>();
-                    prims.get::<bool>(*b)
-                }
-                Literal::Unit => {
-                    prims.register_type::<()>();
-                    prims.get::<()>(())
-                }
+                Literal::Bool(b) => prims.get::<bool>(*b),
+                Literal::Unit => prims.get::<()>(()),
             };
             Ok(egglog_bridge::MergeFn::Const(val))
         }
@@ -542,10 +529,10 @@ fn translate_expr_to_mergefn(
             ))
         }
         GenericExpr::Call(_, ResolvedCall::Primitive(p), args) => {
-            let mut translated_args = Vec::with_capacity(args.len());
-            for arg in args {
-                translated_args.push(translate_expr_to_mergefn(arg, egraph)?);
-            }
+            let translated_args = args
+                .iter()
+                .map(|arg| translate_expr_to_mergefn(arg, egraph))
+                .collect::<Result<Vec<_>, _>>()?;
             Ok(egglog_bridge::MergeFn::Primitive(
                 p.primitive.1,
                 translated_args,
