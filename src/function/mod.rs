@@ -2,7 +2,6 @@ use std::mem;
 
 use crate::*;
 use index::*;
-use ordered_float::OrderedFloat;
 use smallvec::SmallVec;
 
 mod binary_search;
@@ -499,17 +498,7 @@ fn translate_expr_to_mergefn(
 ) -> Result<egglog_bridge::MergeFn, Error> {
     match expr {
         GenericExpr::Lit(_, literal) => {
-            let prims = egraph.backend.primitives();
-            let val = match literal {
-                Literal::Int(ival) => prims.get::<i64>(*ival),
-                Literal::Float(ordered_float) => prims.get::<OrderedFloat<f64>>(*ordered_float),
-                Literal::String(global_symbol) => {
-                    let as_string = global_symbol.to_string();
-                    prims.get::<String>(as_string)
-                }
-                Literal::Bool(b) => prims.get::<bool>(*b),
-                Literal::Unit => prims.get::<()>(()),
-            };
+            let val = translate_literal(&egraph.backend, literal);
             Ok(egglog_bridge::MergeFn::Const(val))
         }
         GenericExpr::Var(span, resolved_var) => match resolved_var.name.as_str() {
