@@ -171,7 +171,7 @@ impl Function {
                 FunctionSubtype::Relation => MergeFn::AssertEq,
                 FunctionSubtype::Custom => match &decl.merge {
                     None => MergeFn::AssertEq,
-                    Some(_merge_expr) => todo!("custom merge fn"),
+                    Some(expr) => translate_expr_to_mergefn(expr, egraph)?,
                 },
             };
             let name = decl.name.into();
@@ -489,5 +489,43 @@ impl Function {
 
     pub fn is_extractable(&self) -> bool {
         !self.decl.unextractable
+    }
+}
+
+fn translate_expr_to_mergefn(
+    expr: &GenericExpr<ResolvedCall, ResolvedVar>,
+    egraph: &mut EGraph,
+) -> Result<egglog_bridge::MergeFn, Error> {
+    match expr {
+        GenericExpr::Lit(_, literal) => {
+            let val = translate_literal(&egraph.backend, literal);
+            Ok(egglog_bridge::MergeFn::Const(val))
+        }
+        GenericExpr::Var(span, resolved_var) => match resolved_var.name.as_str() {
+            "old" => Ok(egglog_bridge::MergeFn::Old),
+            "new" => Ok(egglog_bridge::MergeFn::New),
+            // NB: type-checking should already catch unbound variables here.
+            _ => Err(TypeError::Unbound(resolved_var.name, span.clone()).into()),
+        },
+        GenericExpr::Call(_, ResolvedCall::Func(f), args) => {
+            let translated_args = args
+                .iter()
+                .map(|arg| translate_expr_to_mergefn(arg, egraph))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(egglog_bridge::MergeFn::Function(
+                egraph.functions[&f.name].new_backend_id,
+                translated_args,
+            ))
+        }
+        GenericExpr::Call(_, ResolvedCall::Primitive(p), args) => {
+            let translated_args = args
+                .iter()
+                .map(|arg| translate_expr_to_mergefn(arg, egraph))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(egglog_bridge::MergeFn::Primitive(
+                p.primitive.1,
+                translated_args,
+            ))
+        }
     }
 }
