@@ -78,7 +78,7 @@ impl EGraph {
         termdag: &mut TermDag,
     ) -> Vec<Term> {
         Extractor::new(self, termdag)
-            .find_variants(value, termdag, sort.clone(), limit)
+            .find_variants(value, termdag, sort, limit)
             .unwrap()
     }
 }
@@ -139,11 +139,11 @@ impl<'a> Extractor<'a> {
         &self,
         value: Value,
         termdag: &mut TermDag,
-        sort: ArcSort,
+        sort: &ArcSort,
         limit: usize,
     ) -> Option<Vec<Term>> {
         let output_sort = sort.name();
-        let output_value = self.egraph.find(&sort, value);
+        let output_value = self.egraph.find(sort, value);
         let terms = self
             .ctors
             .iter()
