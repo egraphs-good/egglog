@@ -3,7 +3,6 @@
 (set (f (bigint 1)) (bigint 1))
 (set (f (bigint 1)) (bigint 2))
 (set (f (bigint 1)) (bigint 3))
-(run 1)
 (check (= (f (bigint 1)) (bigint 15)))
 
 

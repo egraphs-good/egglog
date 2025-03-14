@@ -508,10 +508,10 @@ fn translate_expr_to_mergefn(
             _ => Err(TypeError::Unbound(resolved_var.name, span.clone()).into()),
         },
         GenericExpr::Call(_, ResolvedCall::Func(f), args) => {
-            let mut translated_args = Vec::with_capacity(args.len());
-            for arg in args {
-                translated_args.push(translate_expr_to_mergefn(arg, egraph)?);
-            }
+            let translated_args = args
+                .iter()
+                .map(|arg| translate_expr_to_mergefn(arg, egraph))
+                .collect::<Result<Vec<_>, _>>()?;
             Ok(egglog_bridge::MergeFn::Function(
                 egraph.functions[&f.name].new_backend_id,
                 translated_args,
