@@ -66,11 +66,6 @@ impl QueryEntry {
         }
     }
 
-    /// Indicate whether this entry is a constant.j
-    pub(crate) fn is_const(&self) -> bool {
-        matches!(self, QueryEntry::Const { .. })
-    }
-
     pub(crate) fn to_syntax(&self, eg: &EGraph) -> Option<Entry<Variable>> {
         Some(match self {
             QueryEntry::Var { id, .. } => Entry::Placeholder(*id),
@@ -419,12 +414,10 @@ impl RuleBuilder<'_> {
             }))
             .with_context(|| format!("query_table: mismatch between {entries:?} and {schema:?}"));
         }
-        let mut has_const = false;
         entries
             .iter()
             .zip(schema.iter())
             .try_for_each(|(entry, ty)| {
-                has_const |= entry.is_const();
                 self.assert_has_ty(entry, *ty)
                     .with_context(|| format!("query_table: mismatch between {entry:?} and {ty:?}"))
             })?;
