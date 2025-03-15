@@ -4,13 +4,12 @@
 //! parameterized by a range of timestamps used as constraints during seminaive
 //! evaluation.
 
-use std::{cmp::Ordering, iter, sync::Arc};
+use std::{cmp::Ordering, sync::Arc};
 
 use anyhow::Context;
 use core_relations::{
-    ColumnId, Constraint, CounterId, ExternalFunctionId, PlanStrategy, PrimitiveFunctionId,
-    PrimitivePrinter, QueryBuilder, RuleBuilder as CoreRuleBuilder, RuleSetBuilder, TableId, Value,
-    WriteVal,
+    ColumnId, Constraint, CounterId, ExternalFunctionId, PlanStrategy, PrimitivePrinter,
+    QueryBuilder, RuleBuilder as CoreRuleBuilder, RuleSetBuilder, TableId, Value, WriteVal,
 };
 use log::debug;
 use numeric_id::{define_id, DenseIdMap, NumericId};
@@ -53,7 +52,7 @@ pub enum QueryEntry {
         val: Value,
         // Constants can have a type plumbed through, particularly if they
         // correspond to a primitive constant in egglog.
-        ty: Option<ColumnTy>,
+        ty: ColumnTy,
     },
 }
 
@@ -67,16 +66,11 @@ impl QueryEntry {
         }
     }
 
-    /// Indicate whether this entry is a constant.j
-    pub(crate) fn is_const(&self) -> bool {
-        matches!(self, QueryEntry::Const { .. })
-    }
-
     pub(crate) fn to_syntax(&self, eg: &EGraph) -> Option<Entry<Variable>> {
         Some(match self {
             QueryEntry::Var { id, .. } => Entry::Placeholder(*id),
             QueryEntry::Const { val, ty } => {
-                let ColumnTy::Primitive(ty) = *ty.as_ref()? else {
+                let ColumnTy::Primitive(ty) = *ty else {
                     panic!("expected primitive type, found {:?}", ty);
                 };
                 let interned = *val;
@@ -105,16 +99,10 @@ impl From<Variable> for QueryEntry {
     }
 }
 
-impl From<Value> for QueryEntry {
-    fn from(val: Value) -> Self {
-        QueryEntry::Const { val, ty: None }
-    }
-}
-
 #[derive(Copy, Clone, Debug)]
 pub enum Function {
     Table(FunctionId),
-    Prim(PrimitiveFunctionId),
+    Prim(ExternalFunctionId),
 }
 
 impl From<FunctionId> for Function {
@@ -123,8 +111,8 @@ impl From<FunctionId> for Function {
     }
 }
 
-impl From<PrimitiveFunctionId> for Function {
-    fn from(f: PrimitiveFunctionId) -> Self {
+impl From<ExternalFunctionId> for Function {
+    fn from(f: ExternalFunctionId) -> Self {
         Function::Prim(f)
     }
 }
@@ -400,12 +388,12 @@ impl RuleBuilder<'_> {
         args: &[QueryEntry],
         ret_ty: ColumnTy,
     ) -> Variable {
-        let res = self.new_var(ret_ty);
-        assert!(
-            !self.egraph.tracing,
-            "calling an external / container function with proofs enabled"
-        );
         let args = args.to_vec();
+        let res = self.new_var(ret_ty);
+        if self.egraph.tracing {
+            self.proof_builder
+                .register_prim(func, &args, res, ret_ty, self.egraph);
+        }
         self.query.add_rule.push(Box::new(move |inner, rb| {
             let args = inner.convert_all(&args);
             let var = rb.call_external(func, &args)?;
@@ -415,298 +403,195 @@ impl RuleBuilder<'_> {
         res
     }
 
-    /// Add the given atom to query. As elsewhere in the crate, the last
+    /// Add the given table atom to query. As elsewhere in the crate, the last
     /// argument is the "return value" of the function.
-    pub fn add_atom(&mut self, func: Function, entries: &[QueryEntry]) -> Result<()> {
-        match func {
-            Function::Table(func) => {
-                let schema = &self.egraph.funcs[func].schema;
-                if schema.len() != entries.len() {
-                    return Err(anyhow::Error::from(RuleBuilderError::ArityMismatch {
-                        expected: schema.len(),
-                        got: entries.len(),
-                    }))
-                    .with_context(|| {
-                        format!("add_atom: mismatch between {entries:?} and {schema:?}")
-                    });
-                }
-                let mut has_const = false;
-                entries
-                    .iter()
-                    .zip(schema.iter())
-                    .try_for_each(|(entry, ty)| {
-                        has_const |= entry.is_const();
-                        self.assert_has_ty(entry, *ty).with_context(|| {
-                            format!("add_atom: mismatch between {entry:?} and {ty:?}")
-                        })
-                    })?;
-                if has_const {
-                    // Annotate any constants with their types.
-                    let entries: Vec<QueryEntry> =
-                        self.with_constant_types(Function::Table(func), entries);
-                    self.add_atom_func(func, &entries);
-                } else {
-                    self.add_atom_func(func, entries);
-                }
-                Ok(())
-            }
-            Function::Prim(p) => {
-                // Primitives on the LHS side of a rule turn into a call to a
-                // primitive, along with an assertion that the result equals the
-                // return value.
-                let entries = self.with_constant_types(Function::Prim(p), entries);
-                let prim_schema = self.egraph.db.primitives().get_schema(p);
-                if prim_schema.args.len() + 1 != entries.len() {
-                    return Err(anyhow::Error::from(RuleBuilderError::ArityMismatch {
-                        expected: prim_schema.args.len(),
-                        got: entries.len(),
-                    }))
-                    .with_context(|| {
-                        format!(
-                            "add_atom/primitive: mismatch between {entries:?} and {:?}",
-                            prim_schema.args
-                        )
-                    });
-                }
-                entries
-                    .iter()
-                    .zip(prim_schema.args.iter().chain(iter::once(&prim_schema.ret)))
-                    .try_for_each(|(entry, ty)| {
-                        self.assert_has_ty(entry, ColumnTy::Primitive(*ty))
-                            .with_context(|| {
-                                format!("add_atom/primitive: mismatch between {entry:?} and {ty:?}")
-                            })
-                    })?;
-
-                let lhs_term = Arc::new(TermFragment::Prim(
-                    p,
-                    entries[..entries.len() - 1]
-                        .iter()
-                        .map(|x| {
-                            x.to_syntax(self.egraph)
-                                .expect("all variables should have type information")
-                        })
-                        .collect(),
-                ));
-                let rhs_term = entries.last().unwrap().to_syntax(self.egraph).unwrap();
-                match rhs_term {
-                    Entry::Placeholder(var) => {
-                        self.proof_builder.syntax.rhs_bindings.push(Binding {
-                            var,
-                            syntax: lhs_term,
-                        });
-                    }
-                    Entry::Const(primitive_constant) => {
-                        let anon = self.new_var(ColumnTy::Primitive(prim_schema.ret));
-                        self.proof_builder.syntax.rhs_bindings.push(Binding {
-                            var: anon,
-                            syntax: lhs_term,
-                        });
-                        self.proof_builder
-                            .syntax
-                            .statements
-                            .push(Statement::AssertEq(
-                                Entry::Placeholder(anon),
-                                Entry::Const(primitive_constant),
-                            ));
-                    }
-                }
-                self.query.add_rule.push(Box::new(move |inner, rb| {
-                    let mut dst_vars = inner.convert_all(&entries);
-                    let expected = dst_vars.pop().expect("must specify a return value");
-                    let var = rb.prim(p, &dst_vars)?;
-                    rb.assert_eq(var.into(), expected);
-                    Ok(())
-                }));
-                Ok(())
-            }
+    pub fn query_table(&mut self, func: FunctionId, entries: &[QueryEntry]) -> Result<()> {
+        let schema = &self.egraph.funcs[func].schema;
+        if schema.len() != entries.len() {
+            return Err(anyhow::Error::from(RuleBuilderError::ArityMismatch {
+                expected: schema.len(),
+                got: entries.len(),
+            }))
+            .with_context(|| format!("query_table: mismatch between {entries:?} and {schema:?}"));
         }
+        entries
+            .iter()
+            .zip(schema.iter())
+            .try_for_each(|(entry, ty)| {
+                self.assert_has_ty(entry, *ty)
+                    .with_context(|| format!("query_table: mismatch between {entry:?} and {ty:?}"))
+            })?;
+        self.add_atom_func(func, entries);
+        Ok(())
     }
 
-    /// A simple helper for adding type information to constants. This is useful
-    /// for debugging and is also helpful in proof reconstruction, so that boxed
-    /// values can be correctly rendered as primitives of the appropriate type.
-    fn with_constant_types(&self, func: Function, entries: &[QueryEntry]) -> Vec<QueryEntry> {
-        match func {
-            Function::Table(function_id) => {
-                let schema = &self.egraph.funcs[function_id].schema;
-                entries
-                    .iter()
-                    .zip(schema.iter())
-                    .map(|(entry, ty)| {
-                        if let QueryEntry::Const { val, .. } = entry {
-                            QueryEntry::Const {
-                                val: *val,
-                                ty: Some(*ty),
-                            }
-                        } else {
-                            entry.clone()
-                        }
-                    })
-                    .collect()
+    /// Add the given primitive atom to query. As elsewhere in the crate, the last
+    /// argument is the "return value" of the function.
+    pub fn query_prim(
+        &mut self,
+        func: ExternalFunctionId,
+        entries: &[QueryEntry],
+        ret_ty: ColumnTy,
+    ) -> Result<()> {
+        // Primitives on the LHS side of a rule turn into a call to a
+        // primitive, along with an assertion that the result equals the
+        // return value.
+        let entries = entries.to_vec();
+        let lhs_term = Arc::new(TermFragment::Prim(
+            func,
+            entries[..entries.len() - 1]
+                .iter()
+                .map(|x| {
+                    x.to_syntax(self.egraph)
+                        .expect("all variables should have type information")
+                })
+                .collect(),
+            ret_ty,
+        ));
+        let rhs_term = entries.last().unwrap().to_syntax(self.egraph).unwrap();
+        match rhs_term {
+            Entry::Placeholder(var) => {
+                self.proof_builder.syntax.rhs_bindings.push(Binding {
+                    var,
+                    syntax: lhs_term,
+                });
             }
-            Function::Prim(pfunc) => {
-                let schema = self.egraph.db.primitives().get_schema(pfunc);
-                entries
-                    .iter()
-                    .zip(schema.args.iter())
-                    .map(|(entry, ty)| {
-                        if let QueryEntry::Const { val, .. } = entry {
-                            QueryEntry::Const {
-                                val: *val,
-                                ty: Some(ColumnTy::Primitive(*ty)),
-                            }
-                        } else {
-                            entry.clone()
-                        }
-                    })
-                    .collect()
+            Entry::Const(primitive_constant) => {
+                let anon = self.new_var(ret_ty);
+                self.proof_builder.syntax.rhs_bindings.push(Binding {
+                    var: anon,
+                    syntax: lhs_term,
+                });
+                self.proof_builder
+                    .syntax
+                    .statements
+                    .push(Statement::AssertEq(
+                        Entry::Placeholder(anon),
+                        Entry::Const(primitive_constant),
+                    ));
             }
         }
+        self.query.add_rule.push(Box::new(move |inner, rb| {
+            let mut dst_vars = inner.convert_all(&entries);
+            let expected = dst_vars.pop().expect("must specify a return value");
+            let var = rb.call_external(func, &dst_vars)?;
+            rb.assert_eq(var.into(), expected);
+            Ok(())
+        }));
+        Ok(())
     }
 
     /// Look up the value of a function in the database. If the value is not
     /// present, the configured default for the function is used.
-    pub fn lookup(&mut self, func: Function, entries: &[QueryEntry]) -> Variable {
-        let entries = self.with_constant_types(func, entries);
+    pub fn lookup(&mut self, func: FunctionId, entries: &[QueryEntry]) -> Variable {
+        let entries = entries.to_vec();
         let val_col = ColumnId::from_usize(entries.len());
-        let (res, cb): (Variable, BuildRuleCallback) = match func {
-            Function::Table(func) => {
-                let info = &self.egraph.funcs[func];
-                let res = self.query.vars.push(VarInfo {
-                    ty: info.ret_ty(),
-                    term_var: self.query.vars.next_id(),
-                });
-                let table = info.table;
-                let id_counter = self.query.id_counter;
-                (
-                    res,
-                    match info.default_val {
-                        DefaultVal::Const(_) | DefaultVal::FreshId => {
-                            let (wv, wv_ref): (WriteVal, WriteVal) = match &info.default_val {
-                                DefaultVal::Const(c) => ((*c).into(), (*c).into()),
-                                DefaultVal::FreshId => (
-                                    WriteVal::IncCounter(id_counter),
-                                    // When we create a new term, we should
-                                    // simply "reuse" the value we just minted
-                                    // for the value.
-                                    WriteVal::CurrentVal(val_col.index()),
-                                ),
-                                _ => unreachable!(),
-                            };
-                            if self.egraph.tracing {
-                                let term_var = self.new_var(ColumnTy::Id);
-                                self.query.vars[res].term_var = term_var;
-                                let ts_var = self.new_var(ColumnTy::Id);
-                                let reason_var = self.new_var(ColumnTy::Id);
-                                let mut insert_entries = entries.clone();
-                                insert_entries.push(res.into());
-                                let add_proof = self.proof_builder.new_row(
-                                    func,
-                                    insert_entries,
-                                    term_var,
-                                    reason_var,
-                                    self.egraph,
-                                );
-                                Box::new(move |inner, rb| {
-                                    let dst_vars = inner.convert_all(&entries);
-                                    // NB: having one `lookup_or_insert` call
-                                    // per projection is pretty inefficient
-                                    // here, but merging these into a custom
-                                    // instruction didn't move the needle on a
-                                    // write-heavy benchmark when I tried it
-                                    // early on. May be worth revisiting after
-                                    // more low-hanging fruit has been
-                                    // optimized.
-                                    let var = rb.lookup_or_insert(
-                                        table,
-                                        &dst_vars,
-                                        &[wv, inner.next_ts.to_value().into(), wv_ref],
-                                        val_col,
-                                    )?;
-                                    let ts = rb.lookup_or_insert(
-                                        table,
-                                        &dst_vars,
-                                        &[wv, inner.next_ts.to_value().into(), wv_ref],
-                                        val_col.inc(),
-                                    )?;
-                                    let term = rb.lookup_or_insert(
-                                        table,
-                                        &dst_vars,
-                                        &[wv, inner.next_ts.to_value().into(), wv_ref],
-                                        val_col.inc().inc(),
-                                    )?;
-                                    inner.mapping.insert(term_var, term.into());
-                                    inner.mapping.insert(res, var.into());
-                                    inner.mapping.insert(ts_var, ts.into());
-                                    rb.assert_eq(var.into(), term.into());
-                                    // The following bookeeping is only needed
-                                    // if the value is new. That only happens if
-                                    // the main id equals the term id.
-                                    add_proof(inner, rb)?;
-                                    Ok(())
-                                })
-                            } else {
-                                Box::new(move |inner, rb| {
-                                    let dst_vars = inner.convert_all(&entries);
-                                    let var = rb.lookup_or_insert(
-                                        table,
-                                        &dst_vars,
-                                        &[wv, inner.next_ts.to_value().into()],
-                                        val_col,
-                                    )?;
-                                    inner.mapping.insert(res, var.into());
-                                    Ok(())
-                                })
-                            }
-                        }
-                        DefaultVal::Fail => {
-                            if self.egraph.tracing {
-                                let term_var = self.new_var(ColumnTy::Id);
-                                self.proof_builder.add_lhs(&entries, term_var);
-                                Box::new(move |inner, rb| {
-                                    let dst_vars = inner.convert_all(&entries);
-                                    let var = rb.lookup(table, &dst_vars, val_col)?;
-                                    let term = rb.lookup(
-                                        table,
-                                        &dst_vars,
-                                        ColumnId::new(val_col.rep() + 1),
-                                    )?;
-                                    inner.mapping.insert(res, var.into());
-                                    inner.mapping.insert(term_var, term.into());
-                                    Ok(())
-                                })
-                            } else {
-                                Box::new(move |inner, rb| {
-                                    let dst_vars = inner.convert_all(&entries);
-                                    let var = rb.lookup(table, &dst_vars, val_col)?;
-                                    inner.mapping.insert(res, var.into());
-                                    Ok(())
-                                })
-                            }
-                        }
-                    },
-                )
-            }
-            Function::Prim(p) => {
-                let ret = self.egraph.db.primitives().get_schema(p).ret;
-                let res = self.query.vars.push(VarInfo {
-                    ty: ColumnTy::Primitive(ret),
-                    term_var: self.query.vars.next_id(),
-                });
+        let info = &self.egraph.funcs[func];
+        let res = self.query.vars.push(VarInfo {
+            ty: info.ret_ty(),
+            term_var: self.query.vars.next_id(),
+        });
+        let table = info.table;
+        let id_counter = self.query.id_counter;
+        let cb: BuildRuleCallback = match info.default_val {
+            DefaultVal::Const(_) | DefaultVal::FreshId => {
+                let (wv, wv_ref): (WriteVal, WriteVal) = match &info.default_val {
+                    DefaultVal::Const(c) => ((*c).into(), (*c).into()),
+                    DefaultVal::FreshId => (
+                        WriteVal::IncCounter(id_counter),
+                        // When we create a new term, we should
+                        // simply "reuse" the value we just minted
+                        // for the value.
+                        WriteVal::CurrentVal(val_col.index()),
+                    ),
+                    _ => unreachable!(),
+                };
                 if self.egraph.tracing {
-                    self.proof_builder
-                        .register_prim(p, &entries, res, self.egraph);
-                }
-                (
-                    res,
+                    let term_var = self.new_var(ColumnTy::Id);
+                    self.query.vars[res].term_var = term_var;
+                    let ts_var = self.new_var(ColumnTy::Id);
+                    let reason_var = self.new_var(ColumnTy::Id);
+                    let mut insert_entries = entries.to_vec();
+                    insert_entries.push(res.into());
+                    let add_proof = self.proof_builder.new_row(
+                        func,
+                        insert_entries,
+                        term_var,
+                        reason_var,
+                        self.egraph,
+                    );
                     Box::new(move |inner, rb| {
                         let dst_vars = inner.convert_all(&entries);
-                        let var = rb.prim(p, &dst_vars)?;
+                        // NB: having one `lookup_or_insert` call
+                        // per projection is pretty inefficient
+                        // here, but merging these into a custom
+                        // instruction didn't move the needle on a
+                        // write-heavy benchmark when I tried it
+                        // early on. May be worth revisiting after
+                        // more low-hanging fruit has been
+                        // optimized.
+                        let var = rb.lookup_or_insert(
+                            table,
+                            &dst_vars,
+                            &[wv, inner.next_ts.to_value().into(), wv_ref],
+                            val_col,
+                        )?;
+                        let ts = rb.lookup_or_insert(
+                            table,
+                            &dst_vars,
+                            &[wv, inner.next_ts.to_value().into(), wv_ref],
+                            val_col.inc(),
+                        )?;
+                        let term = rb.lookup_or_insert(
+                            table,
+                            &dst_vars,
+                            &[wv, inner.next_ts.to_value().into(), wv_ref],
+                            val_col.inc().inc(),
+                        )?;
+                        inner.mapping.insert(term_var, term.into());
+                        inner.mapping.insert(res, var.into());
+                        inner.mapping.insert(ts_var, ts.into());
+                        rb.assert_eq(var.into(), term.into());
+                        // The following bookeeping is only needed
+                        // if the value is new. That only happens if
+                        // the main id equals the term id.
+                        add_proof(inner, rb)?;
+                        Ok(())
+                    })
+                } else {
+                    Box::new(move |inner, rb| {
+                        let dst_vars = inner.convert_all(&entries);
+                        let var = rb.lookup_or_insert(
+                            table,
+                            &dst_vars,
+                            &[wv, inner.next_ts.to_value().into()],
+                            val_col,
+                        )?;
                         inner.mapping.insert(res, var.into());
                         Ok(())
-                    }),
-                )
+                    })
+                }
+            }
+            DefaultVal::Fail => {
+                if self.egraph.tracing {
+                    let term_var = self.new_var(ColumnTy::Id);
+                    self.proof_builder.add_lhs(&entries, term_var);
+                    Box::new(move |inner, rb| {
+                        let dst_vars = inner.convert_all(&entries);
+                        let var = rb.lookup(table, &dst_vars, val_col)?;
+                        let term = rb.lookup(table, &dst_vars, ColumnId::new(val_col.rep() + 1))?;
+                        inner.mapping.insert(res, var.into());
+                        inner.mapping.insert(term_var, term.into());
+                        Ok(())
+                    })
+                } else {
+                    Box::new(move |inner, rb| {
+                        let dst_vars = inner.convert_all(&entries);
+                        let var = rb.lookup(table, &dst_vars, val_col)?;
+                        inner.mapping.insert(res, var.into());
+                        Ok(())
+                    })
+                }
             }
         };
         self.query.add_rule.push(cb);
@@ -821,7 +706,7 @@ impl RuleBuilder<'_> {
         let table = self.egraph.funcs[func].table;
         let entries = entries.to_vec();
         if self.egraph.tracing {
-            let res = self.lookup(Function::Table(func), &entries[0..entries.len() - 1]);
+            let res = self.lookup(func, &entries[0..entries.len() - 1]);
             self.union(res.into(), entries.last().unwrap().clone());
         } else {
             self.query.add_rule.push(Box::new(move |inner, rb| {

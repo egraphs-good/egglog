@@ -6,7 +6,7 @@ use crate::{
     action::WriteVal,
     common::Value,
     free_join::{CounterId, Database, TableId},
-    lift_function,
+    make_external_func,
     query::RuleSetBuilder,
     table::SortedWritesTable,
     table_shortcuts::v,
@@ -24,11 +24,15 @@ fn basic_query() {
         mut db,
         ..
     } = basic_math_egraph();
-    let add_int = lift_function!(
-        [db.primitives_mut()] fn add(x: i64, y: i64) -> i64 {
-            x + y
-        }
-    );
+
+    db.primitives_mut().register_type::<i64>();
+    let add_int = db.add_external_function(make_external_func(|exec_state, args| {
+        let [x, y] = args else { panic!() };
+        let x: i64 = exec_state.prims().unwrap(*x);
+        let y: i64 = exec_state.prims().unwrap(*y);
+        let z: i64 = x + y;
+        Some(exec_state.prims().get(z))
+    }));
 
     // Add the numbers 1 through 10 to the num table at timestamp 0.
     let mut ids = Vec::new();
@@ -84,7 +88,7 @@ fn basic_query() {
         .add_atom(num, &[b.into(), y.into(), t3.into()], &[])
         .unwrap();
     let mut rules = add_query.build();
-    let add_a_b = rules.prim(add_int, &[a.into(), b.into()]).unwrap();
+    let add_a_b = rules.call_external(add_int, &[a.into(), b.into()]).unwrap();
     rules
         .insert(num, &[add_a_b.into(), z.into(), Value::new(1).into()])
         .unwrap();

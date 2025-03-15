@@ -12,7 +12,6 @@ use crate::{
     common::{DashMap, Value},
     free_join::{CounterId, Counters, ExternalFunctions, TableId, TableInfo, Variable},
     pool::{with_pool_set, Clear, PoolSet, Pooled},
-    primitives::PrimitiveFunctionId,
     table_spec::{ColumnId, MutationBuffer},
     Containers, ExternalFunctionId, Primitives, WrappedTable,
 };
@@ -535,12 +534,6 @@ impl ExecutionState<'_> {
                     self.stage_remove(*table, &args);
                 })
             }
-            Instr::Prim { func, args, dst } => {
-                let pool = pool_set.get_pool::<Vec<Value>>().clone();
-                self.db
-                    .prims
-                    .apply_vectorized(*func, pool, mask, bindings, args, *dst);
-            }
             Instr::External { func, args, dst } => {
                 self.db.external_funcs[*func].invoke_batch(self, mask, bindings, args, *dst);
             }
@@ -609,13 +602,6 @@ pub(crate) enum Instr {
     Remove {
         table: TableId,
         args: Vec<QueryEntry>,
-    },
-
-    /// Bind the result of a primitive function to a variable.
-    Prim {
-        func: PrimitiveFunctionId,
-        args: Vec<QueryEntry>,
-        dst: Variable,
     },
 
     /// Bind the result of the external function to a variable.

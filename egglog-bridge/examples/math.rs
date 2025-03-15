@@ -111,12 +111,10 @@ fn main() {
             "var",
         );
 
-        let zero = egraph.primitives().get(Rational64::new(0, 1));
-        let one = egraph.primitives().get(Rational64::new(1, 1));
-        let neg1 = egraph.primitives().get(Rational64::new(-1, 1));
-        let two = egraph.primitives().get(Rational64::new(2, 1));
-        let three = egraph.primitives().get(Rational64::new(3, 1));
-        let seven = egraph.primitives().get(Rational64::new(7, 1));
+        let zero = egraph.primitive_constant(Rational64::new(0, 1));
+        let one = egraph.primitive_constant(Rational64::new(1, 1));
+        let neg1 = egraph.primitive_constant(Rational64::new(-1, 1));
+        let two = egraph.primitive_constant(Rational64::new(2, 1));
         let rules = [
             define_rule! {
                 [egraph] ((-> (add x y) id)) => ((set (add y x) id))
@@ -131,17 +129,17 @@ fn main() {
                 [egraph] ((-> (mul x (mul y z)) id)) => ((set (mul (mul x y) z) id))
             },
             define_rule! {
-                [egraph] ((-> (sub x y) id)) => ((set (add x (mul (rat {neg1}) y)) id))
+                [egraph] ((-> (sub x y) id)) => ((set (add x (mul (rat {neg1.clone()}) y)) id))
             },
             define_rule! {
-                [egraph] ((-> (add a (rat {zero})) id)) => ((union a id))
+                [egraph] ((-> (add a (rat {zero.clone()})) id)) => ((union a id))
             },
             define_rule! {
-                [egraph] ((-> (rat {zero}) z_id) (-> (mul a z_id) id))
+                [egraph] ((-> (rat {zero.clone()}) z_id) (-> (mul a z_id) id))
                         => ((union id z_id))
             },
             define_rule! {
-                [egraph] ((-> (mul a (rat {one})) id)) => ((union a id))
+                [egraph] ((-> (mul a (rat {one.clone()})) id)) => ((union a id))
             },
             define_rule! {
                 [egraph] ((-> (sub x x) id)) => ((union id (rat {zero})))
@@ -156,7 +154,7 @@ fn main() {
                 [egraph] ((-> (mul (pow a b) (pow a c)) id)) => ((set (pow a (add b c)) id))
             },
             define_rule! {
-                [egraph] ((-> (pow x (rat {one})) id)) => ((union x id))
+                [egraph] ((-> (pow x (rat {one.clone()})) id)) => ((union x id))
             },
             define_rule! {
                 [egraph] ((-> (pow x (rat {two})) id)) => ((set (mul x x) id))
@@ -171,7 +169,7 @@ fn main() {
                 [egraph] ((-> (diff x (sin x)) id)) => ((set (cos x) id))
             },
             define_rule! {
-                [egraph] ((-> (diff x (cos x)) id)) => ((set (mul (rat {neg1}) (sin x)) id))
+                [egraph] ((-> (diff x (cos x)) id)) => ((set (mul (rat {neg1.clone()}) (sin x)) id))
             },
             define_rule! {
                 [egraph] ((-> (integral (rat {one}) x) id)) => ((union id x))
@@ -194,25 +192,31 @@ fn main() {
                               (integral (mul (diff x a) (integral b x)) x)) id))
             },
         ];
-        let x_str = egraph.primitives_mut().get::<&'static str>("x");
-        let y_str = egraph.primitives_mut().get::<&'static str>("y");
-        let five_str = egraph.primitives_mut().get::<&'static str>("five");
-        add_expressions! {
-            [egraph]
+        {
+            let one = egraph.primitives().get(Rational64::new(1, 1));
+            let two = egraph.primitives().get(Rational64::new(2, 1));
+            let three = egraph.primitives().get(Rational64::new(3, 1));
+            let seven = egraph.primitives().get(Rational64::new(7, 1));
+            let x_str = egraph.primitives_mut().get::<&'static str>("x");
+            let y_str = egraph.primitives_mut().get::<&'static str>("y");
+            let five_str = egraph.primitives_mut().get::<&'static str>("five");
+            add_expressions! {
+                [egraph]
 
-            (integral (ln (var x_str)) (var x_str))
-            (integral (add (var x_str) (cos (var x_str))) (var x_str))
-            (integral (mul (cos (var x_str)) (var x_str)) (var x_str))
-            (diff (var x_str)
-                (add (rat one) (mul (rat two) (var x_str))))
-            (diff (var x_str)
-                (sub (pow (var x_str) (rat three)) (mul (rat seven) (pow (var x_str) (rat two)))))
-            (add
-                (mul (var y_str) (add (var x_str) (var y_str)))
-                (sub (add (var x_str) (rat two)) (add (var x_str) (var x_str))))
-            (div (rat one)
-                 (sub (div (add (rat one) (sqrt (var five_str))) (rat two))
-                      (div (sub (rat one) (sqrt (var five_str))) (rat two))))
+                (integral (ln (var x_str)) (var x_str))
+                (integral (add (var x_str) (cos (var x_str))) (var x_str))
+                (integral (mul (cos (var x_str)) (var x_str)) (var x_str))
+                (diff (var x_str)
+                    (add (rat one) (mul (rat two) (var x_str))))
+                (diff (var x_str)
+                    (sub (pow (var x_str) (rat three)) (mul (rat seven) (pow (var x_str) (rat two)))))
+                (add
+                    (mul (var y_str) (add (var x_str) (var y_str)))
+                    (sub (add (var x_str) (rat two)) (add (var x_str) (var x_str))))
+                (div (rat one)
+                     (sub (div (add (rat one) (sqrt (var five_str))) (rat two))
+                          (div (sub (rat one) (sqrt (var five_str))) (rat two))))
+            }
         }
 
         for i in 0..N {

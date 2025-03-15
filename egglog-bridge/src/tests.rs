@@ -1,4 +1,6 @@
 use std::{
+    fmt::Debug,
+    hash::Hash,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -11,7 +13,7 @@ use log::debug;
 use num_rational::Rational64;
 use numeric_id::NumericId;
 
-use crate::{add_expressions, define_rule, ColumnTy, DefaultVal, EGraph, Function, MergeFn};
+use crate::{add_expressions, define_rule, ColumnTy, DefaultVal, EGraph, MergeFn, QueryEntry};
 
 #[test]
 fn ac() {
@@ -167,7 +169,7 @@ fn ac_fail() {
     let mut egraph = EGraph::default();
     egraph.primitives_mut().register_type::<i64>();
     let int_prim = egraph.primitives_mut().get_ty::<i64>();
-    let one = egraph.primitives_mut().get(1i64);
+    let one = egraph.primitive_constant(1i64);
     let num_table = egraph.add_table(
         vec![ColumnTy::Primitive(int_prim), ColumnTy::Id],
         DefaultVal::FreshId,
@@ -332,12 +334,10 @@ fn math_test(mut egraph: EGraph) {
         "var",
     );
 
-    let zero = egraph.primitives_mut().get(Rational64::new(0, 1));
-    let one = egraph.primitives_mut().get(Rational64::new(1, 1));
-    let neg1 = egraph.primitives_mut().get(Rational64::new(-1, 1));
-    let two = egraph.primitives_mut().get(Rational64::new(2, 1));
-    let three = egraph.primitives_mut().get(Rational64::new(3, 1));
-    let seven = egraph.primitives_mut().get(Rational64::new(7, 1));
+    let zero = egraph.primitive_constant(Rational64::new(0, 1));
+    let one = egraph.primitive_constant(Rational64::new(1, 1));
+    let neg1 = egraph.primitive_constant(Rational64::new(-1, 1));
+    let two = egraph.primitive_constant(Rational64::new(2, 1));
     let rules = [
         define_rule! {
             [egraph] ((-> (add x y) id)) => ((set (add y x) id))
@@ -352,17 +352,17 @@ fn math_test(mut egraph: EGraph) {
             [egraph] ((-> (mul x (mul y z)) id)) => ((set (mul (mul x y) z) id))
         },
         define_rule! {
-            [egraph] ((-> (sub x y) id)) => ((set (add x (mul (rat {neg1}) y)) id))
+            [egraph] ((-> (sub x y) id)) => ((set (add x (mul (rat {neg1.clone()}) y)) id))
         },
         define_rule! {
-            [egraph] ((-> (add a (rat {zero})) id)) => ((union a id))
+            [egraph] ((-> (add a (rat {zero.clone()})) id)) => ((union a id))
         },
         define_rule! {
-            [egraph] ((-> (rat {zero}) z_id) (-> (mul a z_id) id))
+            [egraph] ((-> (rat {zero.clone()}) z_id) (-> (mul a z_id) id))
                     => ((union id z_id))
         },
         define_rule! {
-            [egraph] ((-> (mul a (rat {one})) id)) => ((union a id))
+            [egraph] ((-> (mul a (rat {one.clone()})) id)) => ((union a id))
         },
         define_rule! {
             [egraph] ((-> (sub x x) id)) => ((union id (rat {zero})))
@@ -377,7 +377,7 @@ fn math_test(mut egraph: EGraph) {
             [egraph] ((-> (mul (pow a b) (pow a c)) id)) => ((set (pow a (add b c)) id))
         },
         define_rule! {
-            [egraph] ((-> (pow x (rat {one})) id)) => ((union x id))
+            [egraph] ((-> (pow x (rat {one.clone()})) id)) => ((union x id))
         },
         define_rule! {
             [egraph] ((-> (pow x (rat {two})) id)) => ((set (mul x x) id))
@@ -392,7 +392,7 @@ fn math_test(mut egraph: EGraph) {
             [egraph] ((-> (diff x (sin x)) id)) => ((set (cos x) id))
         },
         define_rule! {
-            [egraph] ((-> (diff x (cos x)) id)) => ((set (mul (rat {neg1}) (sin x)) id))
+            [egraph] ((-> (diff x (cos x)) id)) => ((set (mul (rat {neg1.clone()}) (sin x)) id))
         },
         define_rule! {
             [egraph] ((-> (integral (rat {one}) x) id)) => ((union id x))
@@ -415,25 +415,32 @@ fn math_test(mut egraph: EGraph) {
                           (integral (mul (diff x a) (integral b x)) x)) id))
         },
     ];
-    let x_str = egraph.primitives_mut().get::<&'static str>("x");
-    let y_str = egraph.primitives_mut().get::<&'static str>("y");
-    let five_str = egraph.primitives_mut().get::<&'static str>("five");
-    add_expressions! {
-        [egraph]
 
-        (integral (ln (var x_str)) (var x_str))
-        (integral (add (var x_str) (cos (var x_str))) (var x_str))
-        (integral (mul (cos (var x_str)) (var x_str)) (var x_str))
-        (diff (var x_str)
-            (add (rat one) (mul (rat two) (var x_str))))
-        (diff (var x_str)
-            (sub (pow (var x_str) (rat three)) (mul (rat seven) (pow (var x_str) (rat two)))))
-        (add
-            (mul (var y_str) (add (var x_str) (var y_str)))
-            (sub (add (var x_str) (rat two)) (add (var x_str) (var x_str))))
-        (div (rat one)
-             (sub (div (add (rat one) (sqrt (var five_str))) (rat two))
-                  (div (sub (rat one) (sqrt (var five_str))) (rat two))))
+    {
+        let one = egraph.primitives_mut().get(Rational64::new(1, 1));
+        let two = egraph.primitives_mut().get(Rational64::new(2, 1));
+        let three = egraph.primitives_mut().get(Rational64::new(3, 1));
+        let seven = egraph.primitives_mut().get(Rational64::new(7, 1));
+        let x_str = egraph.primitives_mut().get::<&'static str>("x");
+        let y_str = egraph.primitives_mut().get::<&'static str>("y");
+        let five_str = egraph.primitives_mut().get::<&'static str>("five");
+        add_expressions! {
+            [egraph]
+
+            (integral (ln (var x_str)) (var x_str))
+            (integral (add (var x_str) (cos (var x_str))) (var x_str))
+            (integral (mul (cos (var x_str)) (var x_str)) (var x_str))
+            (diff (var x_str)
+                (add (rat one) (mul (rat two) (var x_str))))
+            (diff (var x_str)
+                (sub (pow (var x_str) (rat three)) (mul (rat seven) (pow (var x_str) (rat two)))))
+            (add
+                (mul (var y_str) (add (var x_str) (var y_str)))
+                (sub (add (var x_str) (rat two)) (add (var x_str) (var x_str))))
+            (div (rat one)
+                 (sub (div (add (rat one) (sqrt (var five_str))) (rat two))
+                      (div (sub (rat one) (sqrt (var five_str))) (rat two))))
+        }
     }
 
     for _ in 0..N {
@@ -592,11 +599,13 @@ fn container_test() {
         MergeFn::UnionId,
         "vec",
     );
-    let int_add = core_relations::lift_function! {
-        [egraph.primitives_mut()] fn add(x: i64, y: i64) -> i64 {
-            x + y
-        }
-    };
+    let int_add = egraph.register_external_func(make_external_func(|exec_state, args| {
+        let [x, y] = args else { panic!() };
+        let x: i64 = exec_state.prims().unwrap(*x);
+        let y: i64 = exec_state.prims().unwrap(*y);
+        let z: i64 = x + y;
+        Some(exec_state.prims().get(z))
+    }));
     let vec_last = register_vec_last(&mut egraph);
     let vec_push = register_vec_push(&mut egraph);
 
@@ -627,17 +636,35 @@ fn container_test() {
         let mut rb = egraph.new_rule("", true);
         let vec = rb.new_var(ColumnTy::Id);
         let vec_id = rb.new_var(ColumnTy::Id);
-        rb.add_atom(Function::Table(vec_table), &[vec.into(), vec_id.into()])
+        rb.query_table(vec_table, &[vec.into(), vec_id.into()])
             .unwrap();
         let last = rb.call_external_func(vec_last, &[vec.into()], ColumnTy::Id);
-        let add_last_0 = rb.lookup(Function::Table(add_table), &[last.into(), ids[0].into()]);
-        let add_0_last = rb.lookup(Function::Table(add_table), &[ids[0].into(), last.into()]);
+        let add_last_0 = rb.lookup(
+            add_table,
+            &[
+                last.into(),
+                QueryEntry::Const {
+                    val: ids[0],
+                    ty: ColumnTy::Primitive(int_prim),
+                },
+            ],
+        );
+        let add_0_last = rb.lookup(
+            add_table,
+            &[
+                QueryEntry::Const {
+                    val: ids[0],
+                    ty: ColumnTy::Primitive(int_prim),
+                },
+                last.into(),
+            ],
+        );
         let new_vec_1 =
             rb.call_external_func(vec_push, &[vec.into(), add_last_0.into()], ColumnTy::Id);
         let new_vec_2 =
             rb.call_external_func(vec_push, &[vec.into(), add_0_last.into()], ColumnTy::Id);
-        rb.lookup(Function::Table(vec_table), &[new_vec_1.into()]);
-        rb.lookup(Function::Table(vec_table), &[new_vec_2.into()]);
+        rb.lookup(vec_table, &[new_vec_1.into()]);
+        rb.lookup(vec_table, &[new_vec_2.into()]);
         rb.build()
     };
 
@@ -648,17 +675,18 @@ fn container_test() {
         let rhs_raw = rb.new_var(ColumnTy::Primitive(int_prim));
         let rhs_id = rb.new_var(ColumnTy::Id);
         let add_id = rb.new_var(ColumnTy::Id);
-        rb.add_atom(Function::Table(num_table), &[lhs_raw.into(), lhs_id.into()])
+        rb.query_table(num_table, &[lhs_raw.into(), lhs_id.into()])
             .unwrap();
-        rb.add_atom(Function::Table(num_table), &[rhs_raw.into(), rhs_id.into()])
+        rb.query_table(num_table, &[rhs_raw.into(), rhs_id.into()])
             .unwrap();
-        rb.add_atom(
-            Function::Table(add_table),
-            &[lhs_id.into(), rhs_id.into(), add_id.into()],
-        )
-        .unwrap();
-        let evaled = rb.lookup(Function::Prim(int_add), &[lhs_raw.into(), rhs_raw.into()]);
-        let boxed = rb.lookup(Function::Table(num_table), &[evaled.into()]);
+        rb.query_table(add_table, &[lhs_id.into(), rhs_id.into(), add_id.into()])
+            .unwrap();
+        let evaled = rb.call_external_func(
+            int_add,
+            &[lhs_raw.into(), rhs_raw.into()],
+            ColumnTy::Primitive(int_prim),
+        );
+        let boxed = rb.lookup(num_table, &[evaled.into()]);
         rb.union(add_id.into(), boxed.into());
         rb.build()
     };
@@ -722,9 +750,11 @@ fn rhs_only_rule() {
         "num",
     );
     let add_data = {
+        let zero = egraph.primitive_constant(0i64);
+        let one = egraph.primitive_constant(1i64);
         let mut rb = egraph.new_rule("", true);
-        let _zero_id = rb.lookup(Function::Table(num_table), &[zero.into()]);
-        let _one_id = rb.lookup(Function::Table(num_table), &[one.into()]);
+        let _zero_id = rb.lookup(num_table, &[zero]);
+        let _one_id = rb.lookup(num_table, &[one]);
         rb.build()
     };
 
@@ -794,13 +824,7 @@ fn test_mergefn_arithmetic() {
         },
     ));
 
-    let value_0 = egraph.primitives_mut().get(0i64);
     let value_1 = egraph.primitives_mut().get(1i64);
-    let value_2 = egraph.primitives_mut().get(2i64);
-    let value_3 = egraph.primitives_mut().get(3i64);
-    let value_4 = egraph.primitives_mut().get(4i64);
-    let value_5 = egraph.primitives_mut().get(5i64);
-    let value_6 = egraph.primitives_mut().get(6i64);
 
     // Create a function with merge function (+ 1 (* old new))
     // This uses nested MergeFn::Primitive with external functions to build the complex merge function
@@ -817,11 +841,19 @@ fn test_mergefn_arithmetic() {
         "f",
     );
 
+    let value_0 = egraph.primitive_constant(0i64);
+    let value_1 = egraph.primitive_constant(1i64);
+    let value_2 = egraph.primitive_constant(2i64);
+    let value_3 = egraph.primitive_constant(3i64);
+    let value_4 = egraph.primitive_constant(4i64);
+    let value_5 = egraph.primitive_constant(5i64);
+    let value_6 = egraph.primitive_constant(6i64);
+
     // First rule writes (f 1 0) (f 2 1)
     let rule1 = {
         let mut rb = egraph.new_rule("rule1", true);
-        rb.set(f_table, &[value_1.into(), value_0.into()]);
-        rb.set(f_table, &[value_2.into(), value_1.into()]);
+        rb.set(f_table, &[value_1.clone(), value_0]);
+        rb.set(f_table, &[value_2.clone(), value_1.clone()]);
         rb.build()
     };
 
@@ -840,8 +872,8 @@ fn test_mergefn_arithmetic() {
     // Second rule writes (f 1 5) (f 2 6)
     let rule2 = {
         let mut rb = egraph.new_rule("rule2", true);
-        rb.set(f_table, &[value_1.into(), value_5.into()]);
-        rb.set(f_table, &[value_2.into(), value_6.into()]);
+        rb.set(f_table, &[value_1.clone(), value_5]);
+        rb.set(f_table, &[value_2.clone(), value_6]);
         rb.build()
     };
 
@@ -862,8 +894,8 @@ fn test_mergefn_arithmetic() {
     // Third rule writes (f 1 3) (f 2 4)
     let rule3 = {
         let mut rb = egraph.new_rule("rule3", true);
-        rb.set(f_table, &[value_1.into(), value_3.into()]);
-        rb.set(f_table, &[value_2.into(), value_4.into()]);
+        rb.set(f_table, &[value_1, value_3]);
+        rb.set(f_table, &[value_2, value_4]);
         rb.build()
     };
 
@@ -910,16 +942,16 @@ fn test_mergefn_nested_function() {
         "f",
     );
 
-    let value_1 = egraph.primitives_mut().get(1i64);
-    let value_2 = egraph.primitives_mut().get(2i64);
+    let value_1 = egraph.primitive_constant(1i64);
+    let value_2 = egraph.primitive_constant(2i64);
 
     // Create an rhs-only rule that writes f values with fresh IDs
     // We'll run this rule multiple times and observe how the merge function works
 
     let write_rule = {
         let mut rb = egraph.new_rule("write_rule", true);
-        rb.lookup(Function::Table(f_table), &[value_1.into()]);
-        rb.lookup(Function::Table(f_table), &[value_2.into()]);
+        rb.lookup(f_table, &[value_1.clone()]);
+        rb.lookup(f_table, &[value_2]);
         rb.build()
     };
 
@@ -955,7 +987,16 @@ fn test_mergefn_nested_function() {
 
     let set_rule = {
         let mut rb = egraph.new_rule("iterate", true);
-        rb.set(f_table, &[value_1.into(), base_2.into()]);
+        rb.set(
+            f_table,
+            &[
+                value_1,
+                QueryEntry::Const {
+                    val: base_2,
+                    ty: ColumnTy::Id,
+                },
+            ],
+        );
         rb.build()
     };
 

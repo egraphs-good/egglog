@@ -10,9 +10,9 @@
 
 use std::{fmt, sync::Arc};
 
-use core_relations::PrimitiveFunctionId;
-
-use crate::{rule::Variable, term_proof_dag::PrimitiveConstant, FunctionId};
+use crate::{
+    rule::Variable, term_proof_dag::PrimitiveConstant, ColumnTy, ExternalFunctionId, FunctionId,
+};
 
 /// A syntactic representation of a rule.
 #[derive(Debug, Default, Clone)]
@@ -60,7 +60,7 @@ pub enum Statement<T> {
 
 pub enum TermFragment<T> {
     /// Apply a given primitive function to the given arguments.
-    Prim(PrimitiveFunctionId, Vec<Entry<T>>),
+    Prim(ExternalFunctionId, Vec<Entry<T>>, ColumnTy),
 
     /// Apply the function to the given arguments.
     App(FunctionId, Vec<Entry<T>>),
@@ -87,7 +87,7 @@ impl<T: fmt::Debug> fmt::Debug for Statement<T> {
 impl<T: fmt::Debug> fmt::Debug for TermFragment<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            TermFragment::Prim(p, args) => {
+            TermFragment::Prim(p, args, _) => {
                 write!(f, "({p:?} ")?;
                 for (ix, arg) in args.iter().enumerate() {
                     if ix > 0 {

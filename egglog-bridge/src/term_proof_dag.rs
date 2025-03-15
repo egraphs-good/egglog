@@ -15,7 +15,7 @@ use hashbrown::{hash_map::Entry, HashMap};
 use crate::{
     rule::Variable,
     syntax::{Binding, Entry as SyntaxEntry, Statement, TermFragment},
-    EGraph, FunctionId, Result, RuleId,
+    ColumnTy, EGraph, FunctionId, Result, RuleId,
 };
 
 #[derive(Debug)]
@@ -933,7 +933,10 @@ impl Substitution<'_> {
         on_term: &mut impl FnMut(&Term),
     ) -> Result<Rc<Term>> {
         let result: Rc<Term> = match rule {
-            TermFragment::Prim(func, args) => {
+            TermFragment::Prim(func, args, ty) => {
+                let ColumnTy::Primitive(ty) = *ty else {
+                    panic!("expected primitive type, found {:?}", ty);
+                };
                 // This is the hardest case but still fairly straight-forwad: we
                 // need to extract primitives from `args`, then apply `func` to
                 // them.
@@ -950,27 +953,27 @@ impl Substitution<'_> {
                         Ok(pc.interned)
                     })
                     .collect::<Result<Vec<_>>>()?;
-                let prims = self.egraph.db.primitives_mut();
-                let result = prims
-                    .apply_op(*func, &args)
+                let result = self
+                    .egraph
+                    .db
+                    .with_execution_state(|exec_state| exec_state.call_external_func(*func, &args))
                     // This should be a pretty rare error, but if we see it
                     // often we can upgrade it to a full ProofCheckError.
                     //
                     // When primitives return None, they intend to halt
                     // execution and not match a rule.
                     .expect("primitive functions should return a value");
-                let ret_ty = prims.get_schema(*func).ret;
 
                 let rendered = format!(
                     "{:?}",
                     PrimitivePrinter {
-                        prim: prims,
-                        ty: ret_ty,
+                        prim: self.egraph.db.primitives_mut(),
+                        ty,
                         val: result,
                     }
                 );
                 Rc::new(Term::Prim(PrimitiveConstant {
-                    ty: ret_ty,
+                    ty,
                     interned: result,
                     rendered: rendered.into(),
                 }))
