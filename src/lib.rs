@@ -1629,9 +1629,7 @@ impl<'a> BackendRule<'a> {
                     v.sort.column_ty(self.rb.egraph().primitives()),
                     v.name.into(),
                 ),
-                core::GenericAtomTerm::Literal(_, l) => {
-                    translate_literal(self.rb.egraph(), l).into()
-                }
+                core::GenericAtomTerm::Literal(_, l) => translate_literal(self.rb.egraph(), l),
                 core::GenericAtomTerm::Global(..) => {
                     panic!("Globals should have been desugared")
                 }
@@ -1659,18 +1657,15 @@ impl<'a> BackendRule<'a> {
 
     fn query(&mut self, query: &core::Query<ResolvedCall, ResolvedVar>) {
         for atom in &query.atoms {
+            let args = self.args(&atom.args);
             match &atom.head {
                 ResolvedCall::Func(f) => {
-                    let f = self.func(f).into();
-                    let args = self.args(&atom.args);
-                    self.rb.add_atom(f, &args).unwrap()
+                    let f = self.func(f);
+                    self.rb.query_table(f, &args).unwrap()
                 }
                 ResolvedCall::Primitive(p) => {
                     let (p, ty) = self.prim(p);
-                    let (v, args) = atom.args.split_last().unwrap();
-                    let args = self.args(args);
-                    let y = self.rb.call_external_func(p, &args, ty).into();
-                    self.entries.insert(v.clone(), y);
+                    self.rb.query_prim(p, &args, ty).unwrap()
                 }
             }
         }
@@ -1684,7 +1679,7 @@ impl<'a> BackendRule<'a> {
                     let args = self.args(args);
                     let y = match f {
                         ResolvedCall::Func(f) => {
-                            let f = self.func(f).into();
+                            let f = self.func(f);
                             self.rb.lookup(f, &args).into()
                         }
                         ResolvedCall::Primitive(p) => {
@@ -1734,13 +1729,13 @@ impl<'a> BackendRule<'a> {
     }
 }
 
-fn translate_literal(egraph: &egglog_bridge::EGraph, l: &Literal) -> core_relations::Value {
+fn translate_literal(egraph: &egglog_bridge::EGraph, l: &Literal) -> egglog_bridge::QueryEntry {
     match l {
-        Literal::Int(x) => egraph.primitives().get::<i64>(*x),
-        Literal::Float(x) => egraph.primitives().get::<sort::F>(*x),
-        Literal::String(x) => egraph.primitives().get::<sort::S>(*x),
-        Literal::Bool(x) => egraph.primitives().get::<bool>(*x),
-        Literal::Unit => egraph.primitives().get::<()>(()),
+        Literal::Int(x) => egraph.primitive_constant::<i64>(*x),
+        Literal::Float(x) => egraph.primitive_constant::<sort::F>(*x),
+        Literal::String(x) => egraph.primitive_constant::<sort::S>(*x),
+        Literal::Bool(x) => egraph.primitive_constant::<bool>(*x),
+        Literal::Unit => egraph.primitive_constant::<()>(()),
     }
 }
 
