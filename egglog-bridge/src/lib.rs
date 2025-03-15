@@ -9,6 +9,8 @@
 //! joins, union-finds, etc.
 
 use std::{
+    fmt::Debug,
+    hash::Hash,
     iter, mem,
     rc::Rc,
     sync::{Arc, Mutex},
@@ -179,6 +181,17 @@ impl EGraph {
     /// Get a reference to the underlying table of primitives for this EGraph.
     pub fn primitives(&self) -> &Primitives {
         self.db.primitives()
+    }
+
+    /// Create a [`QueryEntry`] for a primitive value.
+    pub fn primitive_constant<T>(&self, x: T) -> QueryEntry
+    where
+        T: Clone + Debug + Eq + Hash + Send + Sync + 'static,
+    {
+        QueryEntry::Const {
+            val: self.primitives().get(x),
+            ty: ColumnTy::Primitive(self.primitives().get_ty::<T>()),
+        }
     }
 
     pub fn register_external_func(
@@ -800,7 +813,7 @@ impl EGraph {
         for ty in schema {
             vars.push(rb.new_var(*ty).into());
         }
-        rb.add_atom(Function::Table(table), &vars).unwrap();
+        rb.query_table(table, &vars).unwrap();
         let mut lhs = SmallVec::<[QueryEntry; 4]>::new();
         let mut rhs = SmallVec::<[QueryEntry; 4]>::new();
         let mut canon = Vec::<QueryEntry>::with_capacity(schema.len());

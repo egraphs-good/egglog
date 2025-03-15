@@ -381,11 +381,13 @@ impl ProofBuilder {
         func: ExternalFunctionId,
         args: &[QueryEntry],
         res: Variable,
+        ty: ColumnTy,
         db: &EGraph,
     ) {
         let app = Arc::new(TermFragment::Prim(
             func,
             args.iter().map(|v| v.to_syntax(db).unwrap()).collect(),
+            ty,
         ));
         assert!(self.syntax_env.insert(res, app.clone()).is_none());
         self.syntax.rhs_bindings.push(Binding {

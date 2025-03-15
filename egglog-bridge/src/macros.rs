@@ -1,20 +1,13 @@
 use hashbrown::HashMap;
 
-use numeric_id::NumericId;
-
-use crate::{ColumnTy, QueryEntry};
-
-use crate::{
-    rule::{Function, Variable},
-    RuleBuilder,
-};
+use crate::{rule::Variable, ColumnTy, FunctionId, QueryEntry, RuleBuilder};
 
 #[macro_export]
 #[doc(hidden)]
 macro_rules! parse_rhs_atom_args {
     ($ebuilder:expr, $builder:expr, $table:ident, $v:expr, []) => { };
     ($ebuilder:expr, $builder:expr, $table:ident, $v:expr, [{ $e:expr } $($args:tt)*]) => {
-        $v.push($e.into());
+        $v.push($e);
         $crate::parse_rhs_atom_args!($ebuilder, $builder, $table, $v, [$($args)*]);
     };
     ($ebuilder:expr, $builder:expr, $table:ident, $v:expr, [$var:ident $($args:tt)*]) => {
@@ -80,7 +73,7 @@ macro_rules! parse_rhs_command {
 macro_rules! parse_lhs_atom_args {
     ($ebuilder:expr, $builder:expr, $table:ident, $v:expr, []) => {};
     ($ebuilder:expr, $builder:expr, $table:ident, $v:expr, [{ $e:expr } $( $args:tt)*]) => {
-        $v.push($e.into());
+        $v.push($e);
         $crate::parse_lhs_atom_args!($ebuilder, $builder, $table, $v, [$($args),*]);
     };
     ($ebuilder:expr, $builder:expr, $table:ident, $v:expr, [$var:ident $( $args:tt)*]) => {
@@ -110,7 +103,7 @@ macro_rules! parse_lhs_atom {
         let ty = $ebuilder.infer_type($func.into(), vec.len(), &$builder);
         let res = $builder.new_var_named(ty, stringify!($func ($($args)*)));
         vec.push(res.clone());
-        $builder.add_atom($func.into(), &vec).unwrap();
+        $builder.query_table($func.into(), &vec).unwrap();
         res
     }};
 }
@@ -124,7 +117,7 @@ macro_rules! parse_lhs_atom_with_ret {
             let mut vec = Vec::<$crate::QueryEntry>::new();
             $crate::parse_lhs_atom_args!($ebuilder, $builder, $func, vec, [$($args)*]);
             vec.push($ret.into());
-            $builder.add_atom($func.into(), &vec).unwrap();
+            $builder.query_table($func.into(), &vec).unwrap();
         }
     }};
 }
@@ -215,51 +208,24 @@ impl ExpressionBuilder {
     pub fn get_var(
         &mut self,
         name: &'static str,
-        func: impl Into<Function>,
+        func: FunctionId,
         col: usize,
         rb: &mut RuleBuilder,
     ) -> QueryEntry {
         if let Some(var) = self.vars.get(name) {
             return var.clone();
         }
-        let func: Function = func.into();
         let ty = self.infer_type(func, col, rb);
         let var = rb.new_var_named(ty, name);
         self.vars.insert(name, var.clone());
         var
     }
 
-    pub fn infer_return_type(&self, func: Function, rb: &RuleBuilder) -> ColumnTy {
-        let egraph = rb.egraph();
-        match func {
-            Function::Table(t) => {
-                let table_info = &egraph.funcs[t];
-                table_info.ret_ty()
-            }
-            Function::Prim(p) => {
-                let schema = egraph.db.primitives().get_schema(p);
-                ColumnTy::Primitive(schema.ret)
-            }
-        }
+    pub fn infer_return_type(&self, func: FunctionId, rb: &RuleBuilder) -> ColumnTy {
+        rb.egraph().funcs[func].ret_ty()
     }
 
-    pub fn infer_type(&self, func: Function, col: usize, rb: &RuleBuilder) -> ColumnTy {
-        let egraph = rb.egraph();
-        match func {
-            Function::Table(t) => {
-                let info = &egraph.funcs[t];
-                info.schema[col]
-            }
-            Function::Prim(p) => {
-                let schema = egraph.db.primitives().get_schema(p);
-                ColumnTy::Primitive(if col.index() == schema.args.len() {
-                    schema.ret
-                } else {
-                    *schema.args.get(col.index()).unwrap_or_else(|| {
-                        panic!("Column index out of bounds for primitive function: attempted to access {col:?} but the function only has {} arguments (and one return value)", schema.args.len())
-                    })
-                })
-            }
-        }
+    pub fn infer_type(&self, func: FunctionId, col: usize, rb: &RuleBuilder) -> ColumnTy {
+        rb.egraph().funcs[func].schema[col]
     }
 }
