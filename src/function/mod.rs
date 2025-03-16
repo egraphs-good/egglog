@@ -498,11 +498,7 @@ fn translate_expr_to_mergefn(
 ) -> Result<egglog_bridge::MergeFn, Error> {
     match expr {
         GenericExpr::Lit(_, literal) => {
-            let egglog_bridge::QueryEntry::Const { val, .. } =
-                translate_literal(&egraph.backend, literal)
-            else {
-                unreachable!()
-            };
+            let val = literal_to_value(&egraph.backend, literal);
             Ok(egglog_bridge::MergeFn::Const(val))
         }
         GenericExpr::Var(span, resolved_var) => match resolved_var.name.as_str() {

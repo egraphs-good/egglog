@@ -1625,7 +1625,7 @@ impl<'a> BackendRule<'a> {
                     v.sort.column_ty(self.rb.egraph().primitives()),
                     v.name.into(),
                 ),
-                core::GenericAtomTerm::Literal(_, l) => translate_literal(self.rb.egraph(), l),
+                core::GenericAtomTerm::Literal(_, l) => literal_to_entry(self.rb.egraph(), l),
                 core::GenericAtomTerm::Global(..) => {
                     panic!("Globals should have been desugared")
                 }
@@ -1725,13 +1725,23 @@ impl<'a> BackendRule<'a> {
     }
 }
 
-fn translate_literal(egraph: &egglog_bridge::EGraph, l: &Literal) -> egglog_bridge::QueryEntry {
+fn literal_to_entry(egraph: &egglog_bridge::EGraph, l: &Literal) -> egglog_bridge::QueryEntry {
     match l {
         Literal::Int(x) => egraph.primitive_constant::<i64>(*x),
         Literal::Float(x) => egraph.primitive_constant::<sort::F>(*x),
         Literal::String(x) => egraph.primitive_constant::<sort::S>(*x),
         Literal::Bool(x) => egraph.primitive_constant::<bool>(*x),
         Literal::Unit => egraph.primitive_constant::<()>(()),
+    }
+}
+
+fn literal_to_value(egraph: &egglog_bridge::EGraph, l: &Literal) -> core_relations::Value {
+    match l {
+        Literal::Int(x) => egraph.primitives().get::<i64>(*x),
+        Literal::Float(x) => egraph.primitives().get::<sort::F>(*x),
+        Literal::String(x) => egraph.primitives().get::<sort::S>(*x),
+        Literal::Bool(x) => egraph.primitives().get::<bool>(*x),
+        Literal::Unit => egraph.primitives().get::<()>(()),
     }
 }
 
