@@ -15,6 +15,7 @@ pub struct SerializeConfig {
 
 struct Serializer<'a> {
     extractor: Extractor<'a>,
+    termdag: TermDag,
     node_ids: NodeIDs,
     result: egraph_serialize::EGraph,
 }
@@ -142,10 +143,13 @@ impl EGraph {
             },
         );
 
+        let mut termdag = TermDag::default();
+
         let mut serializer = Serializer {
-            extractor: Extractor::new(self, &mut TermDag::default()),
+            extractor: Extractor::new(self, &mut termdag),
             node_ids,
             result: egraph_serialize::EGraph::default(),
+            termdag,
         };
 
         for (func, input, output, class_id, node_id) in all_calls {
@@ -311,12 +315,14 @@ impl EGraph {
                 let op = if sort.is_container_sort() {
                     sort.serialized_name(value).to_string()
                 } else {
-                    let termdag = &mut TermDag::default();
                     let (_, term) = sort
-                            .extract_term(self, *value, &serializer.extractor, termdag)
+                            .extract_term(self, *value, &serializer.extractor, &mut serializer.termdag)
                             .expect("Extraction should be successful since extractor has been fully initialized");
 
-                    termdag.term_to_expr(&term, Span::Panic).to_string()
+                    serializer
+                        .termdag
+                        .term_to_expr(&term, Span::Panic)
+                        .to_string()
                 };
                 serializer.result.nodes.insert(
                     node_id.clone(),
