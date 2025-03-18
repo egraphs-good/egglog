@@ -9,6 +9,8 @@ fn run_example(filename: &str, program: &str, no_messages: bool) {
     egraph
         .parse_and_run_program(Some(filename.to_owned()), program)
         .unwrap();
+    // test performance of serialization as well
+    let _ = egraph.serialize(egglog::SerializeConfig::default());
 }
 
 pub fn criterion_benchmark(c: &mut Criterion) {

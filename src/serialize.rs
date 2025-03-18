@@ -13,6 +13,13 @@ pub struct SerializeConfig {
     pub root_eclasses: Vec<(ArcSort, Value)>,
 }
 
+struct Serializer<'a> {
+    extractor: Extractor<'a>,
+    termdag: TermDag,
+    node_ids: NodeIDs,
+    result: egraph_serialize::EGraph,
+}
+
 /// Default is used for exporting JSON and will output all nodes.
 impl Default for SerializeConfig {
     fn default() -> Self {
@@ -124,7 +131,7 @@ impl EGraph {
         // Note that this is only for e-classes, primitives have e-classes equal to their node ID
         // This is for when we need to find what node ID to use for an edge to an e-class, we can rotate them evenly
         // amoung all possible options.
-        let mut node_ids: NodeIDs = all_calls.iter().fold(
+        let node_ids: NodeIDs = all_calls.iter().fold(
             HashMap::default(),
             |mut acc, (func, _input, _output, class_id, node_id)| {
                 if func.schema.output.is_eq_sort() {
@@ -136,11 +143,18 @@ impl EGraph {
             },
         );
 
-        let mut egraph = egraph_serialize::EGraph::default();
+        let mut termdag = TermDag::default();
+
+        let mut serializer = Serializer {
+            extractor: Extractor::new(self, &mut termdag),
+            node_ids,
+            result: egraph_serialize::EGraph::default(),
+            termdag,
+        };
+
         for (func, input, output, class_id, node_id) in all_calls {
             self.serialize_value(
-                &mut egraph,
-                &mut node_ids,
+                &mut serializer,
                 &func.schema.output,
                 &output.value,
                 &class_id,
@@ -151,16 +165,10 @@ impl EGraph {
                 .iter()
                 .zip(&func.schema.input)
                 .map(|(v, sort)| {
-                    self.serialize_value(
-                        &mut egraph,
-                        &mut node_ids,
-                        sort,
-                        v,
-                        &self.value_to_class_id(sort, v),
-                    )
+                    self.serialize_value(&mut serializer, sort, v, &self.value_to_class_id(sort, v))
                 })
                 .collect();
-            egraph.nodes.insert(
+            serializer.result.nodes.insert(
                 node_id,
                 egraph_serialize::Node {
                     op: func.decl.name.to_string(),
@@ -172,13 +180,13 @@ impl EGraph {
             );
         }
 
-        egraph.root_eclasses = config
+        serializer.result.root_eclasses = config
             .root_eclasses
             .iter()
             .map(|(sort, v)| self.value_to_class_id(sort, v))
             .collect();
 
-        egraph
+        serializer.result
     }
 
     /// Gets the serialized class ID for a value.
@@ -264,29 +272,31 @@ impl EGraph {
     /// When this is called on an input of a node, we only use the node ID to know which node to point to.
     fn serialize_value(
         &self,
-        egraph: &mut egraph_serialize::EGraph,
-        node_ids: &mut NodeIDs,
+        serializer: &mut Serializer,
         sort: &ArcSort,
         value: &Value,
         class_id: &egraph_serialize::ClassId,
     ) -> egraph_serialize::NodeId {
         let node_id = if sort.is_eq_sort() {
-            let node_ids = node_ids.entry(class_id.clone()).or_insert_with(|| {
-                // If we don't find node IDs for this class, it means that all nodes for it were omitted due to size constraints
-                // In this case, add a dummy node in this class to represent the missing nodes
-                let node_id = self.to_node_id(Some(sort), SerializedNode::Dummy(*value));
-                egraph.nodes.insert(
-                    node_id.clone(),
-                    egraph_serialize::Node {
-                        op: "[...]".to_string(),
-                        eclass: class_id.clone(),
-                        cost: NotNan::new(f64::INFINITY).unwrap(),
-                        children: vec![],
-                        subsumed: false,
-                    },
-                );
-                VecDeque::from(vec![node_id])
-            });
+            let node_ids = serializer
+                .node_ids
+                .entry(class_id.clone())
+                .or_insert_with(|| {
+                    // If we don't find node IDs for this class, it means that all nodes for it were omitted due to size constraints
+                    // In this case, add a dummy node in this class to represent the missing nodes
+                    let node_id = self.to_node_id(Some(sort), SerializedNode::Dummy(*value));
+                    serializer.result.nodes.insert(
+                        node_id.clone(),
+                        egraph_serialize::Node {
+                            op: "[...]".to_string(),
+                            eclass: class_id.clone(),
+                            cost: NotNan::new(f64::INFINITY).unwrap(),
+                            children: vec![],
+                            subsumed: false,
+                        },
+                    );
+                    VecDeque::from(vec![node_id])
+                });
             node_ids.rotate_left(1);
             node_ids.front().unwrap().clone()
         } else {
@@ -298,28 +308,23 @@ impl EGraph {
                     .inner_values(value)
                     .into_iter()
                     .map(|(s, v)| {
-                        self.serialize_value(
-                            egraph,
-                            node_ids,
-                            &s,
-                            &v,
-                            &self.value_to_class_id(&s, &v),
-                        )
+                        self.serialize_value(serializer, &s, &v, &self.value_to_class_id(&s, &v))
                     })
                     .collect();
                 // If this is a container sort, use the name, otherwise use the value
                 let op = if sort.is_container_sort() {
                     sort.serialized_name(value).to_string()
                 } else {
-                    let mut termdag = TermDag::default();
-                    let extractor = Extractor::new(self, &mut termdag);
                     let (_, term) = sort
-                            .extract_term(self, *value, &extractor, &mut termdag)
+                            .extract_term(self, *value, &serializer.extractor, &mut serializer.termdag)
                             .expect("Extraction should be successful since extractor has been fully initialized");
 
-                    termdag.term_to_expr(&term, Span::Panic).to_string()
+                    serializer
+                        .termdag
+                        .term_to_expr(&term, Span::Panic)
+                        .to_string()
                 };
-                egraph.nodes.insert(
+                serializer.result.nodes.insert(
                     node_id.clone(),
                     egraph_serialize::Node {
                         op,
@@ -332,7 +337,7 @@ impl EGraph {
             };
             node_id
         };
-        egraph.class_data.insert(
+        serializer.result.class_data.insert(
             class_id.clone(),
             egraph_serialize::ClassData {
                 typ: Some(sort.name().to_string()),
