@@ -545,17 +545,18 @@ impl EGraph {
             .filter(|(_, ty)| matches!(ty, ColumnTy::Id))
             .map(|(i, _)| ColumnId::from_usize(i))
             .collect();
-        let n_args = schema.len() - 1;
-        let n_cols = if self.tracing {
-            schema.len() + 2
-        } else {
-            schema.len() + 1
+        let schema_math = SchemaMath {
+            tracing: self.tracing,
+            subsume: false,
+            func_cols: schema.len(),
         };
+        let n_args = schema_math.num_keys();
+        let n_cols = schema_math.table_columns();
         let next_func_id = self.funcs.next_id();
         let mut read_deps = IndexSet::<TableId>::new();
         let mut write_deps = IndexSet::<TableId>::new();
         merge.fill_deps(self, &mut read_deps, &mut write_deps);
-        let merge_fn = merge.to_callback(n_args, name, self);
+        let merge_fn = merge.to_callback(schema_math, name, self);
         let table = SortedWritesTable::new(
             n_args,
             n_cols,
@@ -921,7 +922,7 @@ impl MergeFn {
 
     fn to_callback(
         &self,
-        n_args: usize,
+        schema_math: SchemaMath,
         function_name: &str,
         egraph: &mut EGraph,
     ) -> Box<core_relations::MergeFn> {
@@ -945,12 +946,11 @@ impl MergeFn {
                 );
                 let val = *val;
                 Box::new(move |_, old, new, out| {
-                    if old[n_args] == val {
+                    if old[schema_math.ret_val_col()] == val {
                         return false;
                     }
-                    out.extend_from_slice(&old[0..n_args]);
-                    out.push(val);
-                    out.extend_from_slice(&new[n_args + 1..]);
+                    out.extend_from_slice(new);
+                    out[schema_math.ret_val_col()] = val;
                     true
                 })
             }
@@ -958,19 +958,18 @@ impl MergeFn {
                 let uf_table = egraph.uf_table;
                 let tracing = egraph.tracing;
                 Box::new(move |state, cur, new, out| {
-                    let l = cur[n_args];
-                    let r = new[n_args];
-                    let next_ts = new[n_args + 1];
+                    let l = cur[schema_math.ret_val_col()];
+                    let r = new[schema_math.ret_val_col()];
+                    let next_ts = new[schema_math.ts_col()];
                     if l != r && !tracing {
                         // When proofs are enabled, these are the same term. They are already
                         // equal and we can just do nothing.
                         state.stage_insert(uf_table, &[l, r, next_ts]);
-                        out.extend_from_slice(&new[0..n_args]);
+                        out.extend_from_slice(new);
                         // We pick the minimum when unioning. This matches the original egglog
                         // behavior.
                         let res = std::cmp::min(l, r);
-                        out.push(std::cmp::min(l, r));
-                        out.extend_from_slice(&new[n_args + 1..]);
+                        out[schema_math.ret_val_col()] = res;
                         r == res
                     } else {
                         false
@@ -979,7 +978,7 @@ impl MergeFn {
             }
             MergeFn::Old => Box::new(|_, _, _, _| false),
             MergeFn::New => Box::new(move |_, old, new, out| {
-                if new[n_args] == old[n_args] {
+                if new[schema_math.ret_val_col()] == old[schema_math.ret_val_col()] {
                     false
                 } else {
                     out.extend_from_slice(new);
@@ -998,7 +997,7 @@ impl MergeFn {
                 let func = *func;
                 let make_args = args
                     .iter()
-                    .map(|arg| arg.to_callback(n_args, function_name, egraph))
+                    .map(|arg| arg.to_callback(schema_math, function_name, egraph))
                     .collect::<Vec<_>>();
                 let function_name = function_name.to_string();
                 Box::new(move |state, cur, new, out| {
@@ -1007,9 +1006,9 @@ impl MergeFn {
                         .iter()
                         .map(|f| {
                             let res = if f(state, cur, new, &mut scratch) {
-                                scratch[n_args]
+                                scratch[schema_math.ret_val_col()]
                             } else {
-                                cur[n_args]
+                                cur[schema_math.ret_val_col()]
                             };
                             scratch.clear();
                             res
@@ -1018,12 +1017,11 @@ impl MergeFn {
                     let Some(result) = state.call_external_func(func, &results) else {
                         panic!("merge function not defined on all inputs (in function {function_name})")
                     };
-                    if result == cur[n_args] {
+                    if result == cur[schema_math.ret_val_col()] {
                         false
                     } else {
-                        out.extend_from_slice(&new[0..n_args]);
-                        out.push(result);
-                        out.extend_from_slice(&new[n_args + 1..]);
+                        out.extend_from_slice(new);
+                        out[schema_math.ret_val_col()] = result;
                         true
                     }
                 })
@@ -1048,7 +1046,7 @@ impl MergeFn {
                 };
                 let make_args = args
                     .iter()
-                    .map(|arg| arg.to_callback(n_args, function_name, egraph))
+                    .map(|arg| arg.to_callback(schema_math, function_name, egraph))
                     .collect::<Vec<_>>();
                 Box::new(move |state, cur, new, out| {
                     let mut scratch = Vec::new();
@@ -1056,27 +1054,26 @@ impl MergeFn {
                         .iter()
                         .map(|f| {
                             let res = if f(state, cur, new, &mut scratch) {
-                                scratch[n_args]
+                                scratch[schema_math.ret_val_col()]
                             } else {
-                                cur[n_args]
+                                cur[schema_math.ret_val_col()]
                             };
                             scratch.clear();
                             res
                         })
                         .collect::<Vec<_>>();
-                    let ts = new[n_args + 1];
+                    let ts = new[schema_math.ts_col()];
                     let result = state.predict_val(
                         table,
                         &results,
                         [default_value, MergeVal::from(ts)].into_iter(),
                     )[2];
 
-                    if result == cur[n_args] {
+                    if result == cur[schema_math.ret_val_col()] {
                         false
                     } else {
-                        out.extend_from_slice(&new[0..n_args]);
-                        out.push(result);
-                        out.extend_from_slice(&new[n_args + 1..]);
+                        out.extend(new);
+                        out[schema_math.ret_val_col()] = result;
                         true
                     }
                 })
@@ -1181,6 +1178,45 @@ fn incremental_rebuild(uf_size: usize, table_size: usize, parallel: bool) -> boo
         uf_size <= (table_size / 16)
     } else {
         uf_size <= (table_size / 8)
+    }
+}
+
+/// A struct helping with some calculations of where some information is stored at the
+/// core-relations Table level for a given function.
+#[derive(Copy, Clone)]
+struct SchemaMath {
+    /// Whether or not proofs are enabled.
+    tracing: bool,
+    /// Whether or not the table is enabled for subsumption.
+    subsume: bool,
+    /// The number of columns in the function (including the return value).
+    func_cols: usize,
+}
+
+impl SchemaMath {
+    fn num_keys(&self) -> usize {
+        self.func_cols - 1
+    }
+    fn table_columns(&self) -> usize {
+        self.func_cols + 1 /* timestamp */ + if self.tracing { 1 } else { 0 } + if self.subsume { 1 } else { 0 }
+    }
+    fn proof_id_col(&self) -> usize {
+        assert!(self.tracing);
+        self.func_cols + 1
+    }
+    fn ret_val_col(&self) -> usize {
+        self.func_cols - 1
+    }
+    fn ts_col(&self) -> usize {
+        self.func_cols
+    }
+    fn subsume_col(&self) -> usize {
+        assert!(self.subsume);
+        if self.tracing {
+            self.func_cols + 2
+        } else {
+            self.func_cols + 1
+        }
     }
 }
 
