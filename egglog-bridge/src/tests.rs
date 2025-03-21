@@ -13,7 +13,9 @@ use log::debug;
 use num_rational::Rational64;
 use numeric_id::NumericId;
 
-use crate::{add_expressions, define_rule, ColumnTy, DefaultVal, EGraph, MergeFn, QueryEntry};
+use crate::{
+    add_expressions, define_rule, ColumnTy, DefaultVal, EGraph, FunctionId, MergeFn, QueryEntry,
+};
 
 #[test]
 fn ac() {
@@ -795,7 +797,7 @@ fn rhs_only_rule_only_runs_once() {
 }
 
 #[test]
-fn test_mergefn_arithmetic() {
+fn mergefn_arithmetic() {
     let mut egraph = EGraph::default();
     let int_prim = egraph.primitives_mut().register_type::<i64>();
 
@@ -915,7 +917,7 @@ fn test_mergefn_arithmetic() {
 }
 
 #[test]
-fn test_mergefn_nested_function() {
+fn mergefn_nested_function() {
     let mut egraph = EGraph::default();
     let int_prim = egraph.primitives_mut().register_type::<i64>();
 
@@ -1026,6 +1028,173 @@ fn test_mergefn_nested_function() {
     assert_eq!(base_l1, base_2);
     assert_eq!(base_r1, base_r2);
     assert_eq!(base_r1, base_1);
+}
+
+#[test]
+fn constrain_prims_simple() {
+    // Take two functions, f and g. Fill f with (f 1) (f 2) (f 3), then filter for even numbers
+    // when adding to 'g'. This should only add 2 to g.
+    let mut egraph = EGraph::default();
+    let int_prim = egraph.primitives_mut().register_type::<i64>();
+    let bool_prim = egraph.primitives_mut().register_type::<bool>();
+    let f_table = egraph.add_table(
+        vec![ColumnTy::Primitive(int_prim), ColumnTy::Id],
+        DefaultVal::FreshId,
+        MergeFn::UnionId,
+        "f",
+    );
+    let g_table = egraph.add_table(
+        vec![ColumnTy::Primitive(int_prim), ColumnTy::Id],
+        DefaultVal::FreshId,
+        MergeFn::UnionId,
+        "g",
+    );
+
+    let is_even = egraph.register_external_func(core_relations::make_external_func(
+        |state, vals| -> Option<Value> {
+            let [a] = vals else {
+                return None;
+            };
+            let a_val = *state.prims().unwrap_ref::<i64>(*a);
+            let result: bool = a_val % 2 == 0;
+            Some(state.prims().get(result))
+        },
+    ));
+
+    let value_1 = egraph.primitive_constant(1i64);
+    let value_2 = egraph.primitive_constant(2i64);
+    let value_3 = egraph.primitive_constant(3i64);
+    let value_true = egraph.primitive_constant(true);
+    let write_f = {
+        let mut rb = egraph.new_rule("write_f", true);
+        rb.lookup(f_table, &[value_1.clone()]);
+        rb.lookup(f_table, &[value_2.clone()]);
+        rb.lookup(f_table, &[value_3.clone()]);
+        rb.build()
+    };
+
+    let copy_to_g = {
+        let mut rb = egraph.new_rule("copy_to_g", true);
+        let val = rb.new_var(ColumnTy::Primitive(int_prim));
+        let id = rb.new_var(ColumnTy::Id);
+        rb.query_table(f_table, &[val.into(), id.into()]).unwrap();
+        rb.query_prim(
+            is_even,
+            &[val.into(), value_true.clone()],
+            ColumnTy::Primitive(bool_prim),
+        )
+        .unwrap();
+        rb.set(g_table, &[val.into(), id.into()]);
+        rb.build()
+    };
+    let get_entries = |egraph: &EGraph, table: FunctionId| {
+        let mut entries = Vec::new();
+        egraph.dump_table(table, |vals| {
+            entries.push((*egraph.primitives().unwrap_ref::<i64>(vals[0]), vals[1]));
+        });
+        entries.sort();
+        entries
+    };
+
+    assert!(get_entries(&egraph, f_table).is_empty());
+    assert!(get_entries(&egraph, g_table).is_empty());
+    egraph.run_rules(&[write_f]).unwrap();
+    let f = get_entries(&egraph, f_table);
+    assert_eq!(f.len(), 3);
+    egraph.run_rules(&[copy_to_g]).unwrap();
+    let g = get_entries(&egraph, g_table);
+    assert_eq!(g.len(), 1);
+    assert_eq!(g[0], f[1])
+}
+
+#[test]
+fn constrain_prims_abstract() {
+    // Take two functions, f and g. Fill f with (f -1) (f 0) (f 1), then filter for numbers where
+    // (neg x) = (abs x) when adding to 'g'. This adds only -1 and 0 to g
+    let mut egraph = EGraph::default();
+    let int_prim = egraph.primitives_mut().register_type::<i64>();
+    let f_table = egraph.add_table(
+        vec![ColumnTy::Primitive(int_prim), ColumnTy::Id],
+        DefaultVal::FreshId,
+        MergeFn::UnionId,
+        "f",
+    );
+    let g_table = egraph.add_table(
+        vec![ColumnTy::Primitive(int_prim), ColumnTy::Id],
+        DefaultVal::FreshId,
+        MergeFn::UnionId,
+        "g",
+    );
+
+    let neg = egraph.register_external_func(core_relations::make_external_func(
+        |state, vals| -> Option<Value> {
+            let [a] = vals else {
+                return None;
+            };
+            let a_val = *state.prims().unwrap_ref::<i64>(*a);
+            Some(state.prims().get(-a_val))
+        },
+    ));
+    let abs = egraph.register_external_func(core_relations::make_external_func(
+        |state, vals| -> Option<Value> {
+            let [a] = vals else {
+                return None;
+            };
+            let a_val = *state.prims().unwrap_ref::<i64>(*a);
+            Some(state.prims().get(a_val.abs()))
+        },
+    ));
+
+    let value_n1 = egraph.primitive_constant(-1i64);
+    let value_0 = egraph.primitive_constant(0i64);
+    let value_1 = egraph.primitive_constant(1i64);
+    let write_f = {
+        let mut rb = egraph.new_rule("write_f", true);
+        rb.lookup(f_table, &[value_n1.clone()]);
+        rb.lookup(f_table, &[value_0.clone()]);
+        rb.lookup(f_table, &[value_1.clone()]);
+        rb.build()
+    };
+
+    let copy_to_g = {
+        let mut rb = egraph.new_rule("copy_to_g", true);
+        let val = rb.new_var(ColumnTy::Primitive(int_prim));
+        let id = rb.new_var(ColumnTy::Id);
+        let negval = rb.new_var(ColumnTy::Primitive(int_prim));
+        rb.query_table(f_table, &[val.into(), id.into()]).unwrap();
+        rb.query_prim(
+            neg,
+            &[val.into(), negval.into()],
+            ColumnTy::Primitive(int_prim),
+        )
+        .unwrap();
+        rb.query_prim(
+            abs,
+            &[val.into(), negval.into()],
+            ColumnTy::Primitive(int_prim),
+        )
+        .unwrap();
+        rb.set(g_table, &[val.into(), id.into()]);
+        rb.build()
+    };
+    let get_entries = |egraph: &EGraph, table: FunctionId| {
+        let mut entries = Vec::new();
+        egraph.dump_table(table, |vals| {
+            entries.push((*egraph.primitives().unwrap_ref::<i64>(vals[0]), vals[1]));
+        });
+        entries.sort();
+        entries
+    };
+
+    assert!(get_entries(&egraph, f_table).is_empty());
+    assert!(get_entries(&egraph, g_table).is_empty());
+    egraph.run_rules(&[write_f]).unwrap();
+    let f = get_entries(&egraph, f_table);
+    assert_eq!(f.len(), 3);
+    egraph.run_rules(&[copy_to_g]).unwrap();
+    let g = get_entries(&egraph, g_table);
+    assert_eq!(g.len(), 2);
+    assert_eq!(g, f[0..2])
 }
 
 const _: () = {

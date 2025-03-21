@@ -11,6 +11,7 @@ use core_relations::{
     ColumnId, Constraint, CounterId, ExternalFunctionId, PlanStrategy, PrimitivePrinter,
     QueryBuilder, RuleBuilder as CoreRuleBuilder, RuleSetBuilder, TableId, Value, WriteVal,
 };
+use hashbrown::HashSet;
 use log::debug;
 use numeric_id::{define_id, DenseIdMap, NumericId};
 use smallvec::SmallVec;
@@ -475,7 +476,13 @@ impl RuleBuilder<'_> {
             let mut dst_vars = inner.convert_all(&entries);
             let expected = dst_vars.pop().expect("must specify a return value");
             let var = rb.call_external(func, &dst_vars)?;
-            rb.assert_eq(var.into(), expected);
+            match entries.last().unwrap() {
+                QueryEntry::Var { id, .. } if !inner.grounded.contains(id) => {
+                    inner.mapping.insert(*id, var.into());
+                    inner.grounded.insert(*id);
+                }
+                _ => rb.assert_eq(var.into(), expected),
+            }
             Ok(())
         }));
         Ok(())
@@ -747,6 +754,7 @@ impl Query {
             uf_table: self.uf_table,
             next_ts,
             mapping: Default::default(),
+            grounded: Default::default(),
         };
         for (var, _) in self.vars.iter() {
             inner.mapping.insert(var, DstVar::Var(qb.new_var()));
@@ -783,21 +791,35 @@ impl Query {
                 ColumnId::from_usize(atom.len() - 1)
             }
         }
+        fn add_atom(
+            qb: &mut QueryBuilder,
+            table: TableId,
+            entries: &[QueryEntry],
+            constraints: &[Constraint],
+            inner: &mut Bindings,
+        ) -> Result<()> {
+            for entry in entries {
+                if let QueryEntry::Var { id, .. } = entry {
+                    inner.grounded.insert(*id);
+                }
+            }
+            let vars = inner.convert_all(entries);
+            qb.add_atom(table, &vars, constraints)?;
+            Ok(())
+        }
         // For N atoms, we create N queries for seminaive evaluation.
         if !self.seminaive || (self.atoms.is_empty() && mid_ts == Timestamp::new(0)) {
             // If a rule has an empty LHS, we still want to run it once. This will cause the right
             // hand side of the rule to run once, globally across all runs.
-            let (mut qb, inner) = self.query_state(rsb, next_ts);
+            let (mut qb, mut inner) = self.query_state(rsb, next_ts);
             for (table, entries) in &self.atoms {
-                let dst_vars = inner.convert_all(entries);
-                qb.add_atom(*table, &dst_vars, &[])?;
+                add_atom(&mut qb, *table, entries, &[], &mut inner)?;
             }
             return self.run_rules_and_build(qb, inner, desc);
         }
         if let Some(focus_atom) = self.sole_focus {
-            let (mut qb, inner) = self.query_state(rsb, next_ts);
+            let (mut qb, mut inner) = self.query_state(rsb, next_ts);
             for (i, (table, entries)) in self.atoms.iter().enumerate() {
-                let dst_vars = inner.convert_all(entries);
                 let ts_col = get_ts_col(entries, self.tracing);
                 let constraint = if i == focus_atom {
                     Some(Constraint::GeConst {
@@ -808,9 +830,9 @@ impl Query {
                     None
                 };
                 if let Some(c) = constraint {
-                    qb.add_atom(*table, &dst_vars, &[c])
+                    add_atom(&mut qb, *table, entries, &[c], &mut inner)
                 } else {
-                    qb.add_atom(*table, &dst_vars, &[])
+                    add_atom(&mut qb, *table, entries, &[], &mut inner)
                 }?;
             }
             return self.run_rules_and_build(
@@ -820,9 +842,8 @@ impl Query {
             );
         }
         'outer: for focus_atom in 0..self.atoms.len() {
-            let (mut qb, inner) = self.query_state(rsb, next_ts);
+            let (mut qb, mut inner) = self.query_state(rsb, next_ts);
             for (i, (table, entries)) in self.atoms.iter().enumerate() {
-                let dst_vars = inner.convert_all(entries);
                 let ts_col = get_ts_col(entries, self.tracing);
                 let constraint = match i.cmp(&focus_atom) {
                     Ordering::Less => {
@@ -841,9 +862,9 @@ impl Query {
                     Ordering::Greater => None,
                 };
                 if let Some(c) = constraint {
-                    qb.add_atom(*table, &dst_vars, &[c])
+                    add_atom(&mut qb, *table, entries, &[c], &mut inner)
                 } else {
-                    qb.add_atom(*table, &dst_vars, &[])
+                    add_atom(&mut qb, *table, entries, &[], &mut inner)
                 }?;
             }
             self.run_rules_and_build(
@@ -862,6 +883,7 @@ pub(crate) struct Bindings {
     uf_table: TableId,
     pub(crate) next_ts: Timestamp,
     pub(crate) mapping: DenseIdMap<Variable, DstVar>,
+    grounded: HashSet<Variable>,
 }
 
 impl Bindings {
