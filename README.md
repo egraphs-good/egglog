@@ -1,4 +1,14 @@
-# egglog
+# egglog ICDT demo
+
+This artifact shows a demonstration of how to use egglog to perform Cascades-style rule- and cost-based query optimization.
+In order to support the demo, this branch make two changes to the egglog mainline:
+
+- the `cost` action for setting a cost of an E-node (#355).
+- the `unstable-set-map` primitive via the custom primitive interface.
+
+To play with the demo yourself, you can run `make serve` and visit `http://localhost:8080/?example=linear-algebra`
+
+Below is the original README of the egglog tool.
 
 <a href="https://egraphs-good.github.io/egglog/">
     <img alt="Web Demo" src="https://img.shields.io/badge/-web demo-blue"></a>
