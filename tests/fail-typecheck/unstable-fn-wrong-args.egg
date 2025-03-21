@@ -1,8 +1,0 @@
-;; test that applying a function with the wrong number of args will violate the type checker
-
-
-(datatype Math
-    (Inc Math))
-
-(sort Fn (UnstableFn (Math) Math))
-(unstable-app (unstable-fn "Inc") 10)

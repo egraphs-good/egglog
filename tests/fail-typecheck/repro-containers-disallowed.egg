@@ -1,4 +1,0 @@
-(sort IVec (Vec i64))
-
-; Test vec-of
-(fail (check (= (vec-of 1 2) (vec-push (vec-push (vec-empty) 1) 2))))

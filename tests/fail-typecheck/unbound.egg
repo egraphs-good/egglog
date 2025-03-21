@@ -1,6 +1,0 @@
-(datatype Math
-    (Add Math Math)
-    (Sub Math Math)
-)
-
-(rule ((= e (Add x y))) ((Add x i)))

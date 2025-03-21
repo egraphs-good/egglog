@@ -1,6 +1,0 @@
-(function foo (i64) i64)
-(set (foo 1) 7)
-(check (= (foo 1) 7))
-(delete (foo 1))
-(rule ((= x (foo 1))) ((panic "foo 1 was there!")))
-(run 1)

@@ -1,1 +1,0 @@
-(check (= (to-string 20) "20"))

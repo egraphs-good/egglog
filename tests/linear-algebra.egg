@@ -1,0 +1,128 @@
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Schema definition
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; helper type definition
+(sort ReduceFunc (UnstableFn (String) i64))
+(sort StringSet (Set String))
+;; Define the Mat datatype for matrix expressions
+(sort Mat)
+;; Matrix constructor
+(function Matrix (
+    ;; matrix name
+    String
+    ; The two indices of a matrix
+    String 
+    String
+) Mat)
+;; Product of two matrices (relational join)
+(function Prod (Mat Mat) Mat)
+;; aggregation over a variable (projection)
+(function Agg (String Mat) Mat)
+;; This can be alternatively be written as
+;; (datatype Mat
+;;     (Matrix String String)
+;;     (Prod Mat Mat)
+;;     (Agg String Mat))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; Define some example expressions
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(let A (Matrix "A" "i" "j"))
+(let B (Matrix "B" "j" "k"))
+(let C (Matrix "C" "k" "l"))
+(let D (Matrix "D" "l" "m"))
+; e(i, l) = sum_k sum_j { (A(i, j) * B(j, k)) * C(k, l) }
+(let ABC (Agg "k" (Agg "j" (Prod (Prod A B) C))))
+; e(i, l) = sum_k sum_j { (A(i, j) * B(j, k)) * (C(k, l) * D(l, m)) }
+(let ABCD (Agg "l" (Agg "k" (Agg "j" (Prod (Prod A B) (Prod C D))))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Tracking free variables in
+;;   a matrix expression.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(ruleset helper)
+(function vars-of (Mat) StringSet)
+(rule (
+    (= e (Matrix m i j))
+) (
+    (set (vars-of e) (set-of i j))
+) :ruleset helper)
+(rule (
+    (= e (Prod e1 e2))
+    (= (vars-of e1) s1)
+    (= (vars-of e2) s2)
+) (
+    (set (vars-of e) (set-union s1 s2))
+) :ruleset helper)
+(rule (
+    (= e (Agg v e1))
+    (= (vars-of e1) s1)
+) (
+    (set (vars-of e) (set-diff s1 (set-of v)))
+) :ruleset helper)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; algebraic rewrite rules
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; (A x B) x C = A x (B x C)
+(birewrite (Prod (Prod x y) z) (Prod x (Prod y z)))
+;; A x B = B x A
+(rewrite (Prod x y) (Prod y x))
+
+;; sum[i] sum[j] e = sum[j] sum[i] e
+(rewrite (Agg v1 (Agg v2 e)) (Agg v2 (Agg v1 e)))
+;; sum[v] { A x B } = sum[v]{A} x B if v is only in A
+(rewrite (Agg v (Prod x y)) (Prod (Agg v x) y)
+         :when ((= (vars-of y) s)
+                (set-not-contains s v)))
+;; sum[v] { A x B } = A x sum[v]{B} if v is only in B
+(rewrite (Agg v (Prod x y)) (Prod x (Agg v y))
+         :when ((= (vars-of x) s)
+                (set-not-contains s v)))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Cost models for matrix multiplication
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; The extent of each variable
+(function dim-of (String) i64)
+;; The total size of each matrix expression (equals to its cost)
+(function size-of (Mat) i64 :merge (min old new))
+(rule (
+    (= (vars-of e) vs)
+) (
+    ;; map-sum takes a function from String to Int and a StringSet,
+    ;; and sums over the mapped integers.
+    (set (size-of e) (map-sum (unstable-fn "dim-of") vs))
+) :ruleset helper)
+;; assigning matrix size as the cost of an E-node
+(rule ((= sz (size-of (Prod e1 e2)))) ((cost (Prod e1 e2) sz)) :ruleset helper)
+(rule ((= sz (size-of (Agg x e)))) ((cost (Agg x e) sz)) :ruleset helper)
+(rule ((= sz (size-of (Matrix m i j)))) ((cost (Matrix m i j) sz)) :ruleset helper)
+
+
+; Example dimension definition
+(set (dim-of "i") 2)
+(set (dim-of "j") 16)
+(set (dim-of "k") 32)
+(set (dim-of "l") 2)
+(set (dim-of "m") 8)
+
+
+(run-schedule 
+ 	(repeat 10 
+         (saturate helper)
+         (run)))
+
+(extract ABC) ;; sum_k {(sum_j {A(i, j) * B(j, k)}) * C(k, l)}
+              ;; egglog discovers they are equivalent
+(extract ABCD)
+
+;; Result: sum[l] { sum[k] { sum[j] { A(i, j) x B(j, k) } x C(k, l) } x D(l, m) }
+;; (it first reduces j, and then k)
+;; Changing the dimension of k to 32 gives a different dimension.
+;;  sum[l] { sum[j] { A(i, j) * sum[k] { B(j, k) x C(k l) } } x D(l, m)}
+;; (it first reduces k, then j, since k is the largest dimension now)
+
+

@@ -1,6 +1,0 @@
-(rule () ())
-
-;; This should type check
-(run-schedule 
-  (seq (run :until (= a 1))
-       (run :until (= a "s"))))

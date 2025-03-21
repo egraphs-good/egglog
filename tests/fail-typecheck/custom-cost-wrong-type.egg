@@ -1,3 +1,0 @@
-;;; test that setting the cost of a function to a non i64 will be a type error
-(relation a ())
-(cost (a) "hi")

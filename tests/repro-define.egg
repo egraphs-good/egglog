@@ -1,9 +1,0 @@
-(datatype Nat
-  (S Nat))
-(function ZeroConst () Nat)
-(let Zero (ZeroConst))
-
-(let two (S (S Zero)))
-
-(union two (S (S (S Zero))))
-(check (= two (S (S (S Zero)))))

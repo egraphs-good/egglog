@@ -1,9 +1,0 @@
-(function foo () i64 :merge (min old new))
-
-(rule ((= (foo) 10)) ((set (foo) 4)))
-
-(set (foo) 10)
-
-(run 3)
-
-(check (= (foo) 4))

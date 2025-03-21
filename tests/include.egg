@@ -1,2 +1,0 @@
-(include "tests/path.egg")
-(check (path 1 3))

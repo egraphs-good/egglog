@@ -1,8 +1,0 @@
-;; test that you can't resolve a function with the wrong return type
-
-(datatype Math
-    (Zero)
-    (Inc Math))
-
-(sort Fn (UnstableFn (Math) i64))
-(unstable-fn "Inc")

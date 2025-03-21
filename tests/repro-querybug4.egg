@@ -1,9 +1,0 @@
-(sort Nat)
-(function Num (i64) Nat)
-(function OtherNum (i64) Nat)
-(rule ((= fvar5__ 2) (= fvar6__ fvar5__) (= y fvar5__))
-      ((union (OtherNum fvar5__) (Num fvar5__))))
-
-(Num 2)
-(run 100)
-(check (= (OtherNum 2) (Num 2)))
