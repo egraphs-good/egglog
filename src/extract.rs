@@ -77,9 +77,7 @@ impl EGraph {
         limit: usize,
         termdag: &mut TermDag,
     ) -> Vec<Term> {
-        Extractor::new(self, termdag)
-            .find_variants(value, termdag, sort, limit)
-            .unwrap()
+        Extractor::new(self, termdag).find_variants(value, termdag, sort, limit)
     }
 }
 
@@ -141,7 +139,7 @@ impl<'a> Extractor<'a> {
         termdag: &mut TermDag,
         sort: &ArcSort,
         limit: usize,
-    ) -> Option<Vec<Term>> {
+    ) -> Vec<Term> {
         let output_sort = sort.name();
         let output_value = self.egraph.find(sort, value);
         let terms = self
@@ -170,11 +168,8 @@ impl<'a> Extractor<'a> {
             .take(limit)
             .collect::<Vec<Term>>();
 
-        if terms.is_empty() {
-            None
-        } else {
-            Some(terms)
-        }
+        // TODO: what happens if `terms` is empty?
+        terms
     }
 
     fn node_total_cost(
