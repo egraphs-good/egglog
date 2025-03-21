@@ -42,6 +42,7 @@ impl Presort for SetSort {
             "set-intersect".into(),
             "set-get".into(),
             "set-length".into(),
+            "unstable-set-map".into(),
         ]
     }
 
@@ -167,8 +168,24 @@ impl Sort for SetSort {
         });
         typeinfo.add_primitive(Intersect {
             name: "set-intersect".into(),
-            set: self,
+            set: self.clone(),
         });
+        let inner_name = self.element.name();
+        let i64_sort: Arc<I64Sort> = typeinfo.get_sort_nofail();
+        let fn_sort = typeinfo.get_sort_by(|s: &Arc<FunctionSort>| {
+            (s.output.name() == i64_sort.name())
+                && s.inputs.len() == 1
+                && (s.inputs[0].name() == inner_name)
+        });
+        // Only include map function if we already declared a function sort with the correct signature
+        if let Some(fn_sort) = fn_sort {
+            typeinfo.add_primitive(MapSum {
+                name: "map-sum".into(),
+                set: self.clone(),
+                i64_sort,
+                fn_: fn_sort,
+            });
+        }
     }
 
     fn make_expr(&self, egraph: &EGraph, value: Value) -> (Cost, Expr) {
@@ -185,17 +202,24 @@ impl Sort for SetSort {
         extractor: &Extractor,
         termdag: &mut TermDag,
     ) -> Option<(Cost, Expr)> {
-        let set = ValueSet::load(self, &value);
-        let mut expr = Expr::call_no_span("set-empty", []);
+        let vec = ValueSet::load(self, &value);
         let mut cost = 0usize;
-        for e in set.iter().rev() {
-            let e = extractor.find_best(*e, termdag, &self.element)?;
-            cost = cost.saturating_add(e.0);
-            expr = Expr::call_no_span("set-insert", [expr, termdag.term_to_expr(&e.1)])
-        }
-        Some((cost, expr))
-    }
 
+        if vec.is_empty() {
+            Some((cost, Expr::call_no_span("set-empty", [])))
+        } else {
+            let elems = vec
+                .into_iter()
+                .map(|e| {
+                    let e = extractor.find_best(e, termdag, &self.element)?;
+                    cost = cost.saturating_add(e.0);
+                    Some(termdag.term_to_expr(&e.1))
+                })
+                .collect::<Option<Vec<_>>>()?;
+
+            Some((cost, Expr::call_no_span("set-of", elems)))
+        }
+    }
     fn serialized_name(&self, _value: &Value) -> Symbol {
         "set-of".into()
     }
@@ -597,5 +621,43 @@ impl PrimitiveLike for Diff {
         let set2 = ValueSet::load(&self.set, &values[1]);
         set1.retain(|k| !set2.contains(k));
         set1.store(&self.set)
+    }
+}
+
+struct MapSum {
+    name: Symbol,
+    set: Arc<SetSort>,
+    i64_sort: Arc<I64Sort>,
+    fn_: Arc<FunctionSort>,
+}
+
+impl PrimitiveLike for MapSum {
+    fn name(&self) -> Symbol {
+        self.name
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![self.fn_.clone(), self.set.clone(), self.i64_sort.clone()],
+            span.clone(),
+        )
+        .into_box()
+    }
+
+    fn apply(
+        &self,
+        values: &[Value],
+        _sorts: (&[ArcSort], &ArcSort),
+        egraph: Option<&mut EGraph>,
+    ) -> Option<Value> {
+        let egraph =
+            egraph.unwrap_or_else(|| panic!("`{}` is not supported yet in facts.", self.name));
+        let set = ValueSet::load(&self.set, &values[1]);
+        let acc: i64 = set.into_iter()
+            .map(|e| self.fn_.apply(&values[0], &[e], egraph))
+            .map(|e| i64::load(&self.i64_sort, &e))
+            .sum();
+        Some(Value::from(acc))
     }
 }

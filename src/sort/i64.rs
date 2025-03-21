@@ -6,7 +6,7 @@ use super::*;
 pub struct I64Sort;
 
 lazy_static! {
-    static ref I64_SORT_NAME: Symbol = "i64".into();
+    pub(crate) static ref I64_SORT_NAME: Symbol = "i64".into();
 }
 
 impl Sort for I64Sort {

@@ -459,7 +459,7 @@ impl Default for EGraph {
             run_mode: RunMode::Normal,
             interactive_mode: false,
             fact_directory: None,
-            seminaive: true,
+            seminaive: false,
             extract_report: None,
             recent_run_report: None,
             overall_run_report: Default::default(),
