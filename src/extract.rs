@@ -70,6 +70,7 @@ impl EGraph {
         })
     }
 
+    /// Extracts up to `limit` terms for a given `value`.
     pub fn extract_variants(
         &mut self,
         sort: &ArcSort,
@@ -133,6 +134,7 @@ impl<'a> Extractor<'a> {
         }
     }
 
+    /// Extracts up to `limit` terms for a given `value`.
     pub fn find_variants(
         &self,
         value: Value,
