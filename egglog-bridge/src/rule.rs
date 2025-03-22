@@ -19,6 +19,7 @@ use thiserror::Error;
 
 use crate::syntax::{Binding, Entry, Statement, TermFragment};
 use crate::term_proof_dag::PrimitiveConstant;
+use crate::SchemaMath;
 use crate::{
     proof_spec::{ProofBuilder, RebuildVars},
     ColumnTy, DefaultVal, EGraph, FunctionId, Result, RuleId, RuleInfo, Timestamp,
@@ -354,10 +355,15 @@ impl RuleBuilder<'_> {
             self.proof_builder.add_lhs(entries, proof_var);
             self.query.atom_proofs.push(proof_var);
             if let Some(func) = func {
+                let math = SchemaMath {
+                    tracing: true,
+                    subsume: false,
+                    func_cols: self.egraph.funcs[func].schema.len(),
+                };
                 // If we have a function, record its syntax as a LHS term.
                 let term = Arc::new(TermFragment::App(
                     func,
-                    entries[0..entries.len() - 1]
+                    entries[0..math.num_keys()]
                         .iter()
                         .map(|x| {
                             x.to_syntax(self.egraph)
