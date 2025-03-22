@@ -14,7 +14,7 @@ use crate::{
     WrappedTable,
 };
 
-use super::{hash_code, SortedWritesTable};
+use super::SortedWritesTable;
 
 // Helper macro used for adjusting sort before inserting to a mutation buffer.
 macro_rules! insert_row {
@@ -143,16 +143,9 @@ impl SortedWritesTable {
                     rebuilder.rebuild_subset(wrapped, subset, &mut scratch, exec_state);
                 });
                 for (row_id, row) in scratch.non_stale_mut() {
-                    let Some(to_remove) = self.data.get_row(row_id) else {
-                        continue;
-                    };
-                    let (shard, hc) = hash_code(self.hash.shard_data(), to_remove, self.n_keys);
-                    if let Ok(entry) = self.hash.mut_shards()[shard.index()]
-                        .find_entry(hc, |entry| entry.row == row_id)
-                    {
-                        entry.remove();
+                    if let Some(to_remove) = self.data.get_row(row_id).map(|x| &x[0..self.n_keys]) {
+                        write_buf.stage_remove(to_remove);
                     }
-                    self.data.set_stale(row_id);
                     insert_row!(self, write_buf, row, next_ts);
                 }
                 scratch.clear();
@@ -205,23 +198,18 @@ impl SortedWritesTable {
         } else {
             let mut buf = TaggedRowBuffer::new(self.n_columns);
             let mut write_buf = self.new_buffer();
-            for start in (0..self.data.next_row().index()).step_by(STEP_SIZE) {
+            let max_row = self.data.next_row().index();
+            for start in (0..max_row).step_by(STEP_SIZE) {
                 rebuilder.rebuild_buf(
                     &self.data.data,
                     RowId::from_usize(start),
-                    RowId::from_usize(cmp::min(start + STEP_SIZE, self.data.next_row().index())),
+                    RowId::from_usize(cmp::min(start + STEP_SIZE, max_row)),
                     &mut buf,
                     exec_state,
                 );
                 for (row_id, row) in buf.non_stale_mut() {
                     if let Some(to_remove) = self.data.get_row(row_id).map(|x| &x[0..self.n_keys]) {
-                        let (shard, hc) = hash_code(self.hash.shard_data(), to_remove, self.n_keys);
-                        if let Ok(entry) = self.hash.mut_shards()[shard.index()]
-                            .find_entry(hc, |entry| entry.row == row_id)
-                        {
-                            entry.remove();
-                        }
-                        self.data.set_stale(row_id);
+                        write_buf.stage_remove(to_remove);
                     }
                     insert_row!(self, write_buf, row, next_ts);
                 }
