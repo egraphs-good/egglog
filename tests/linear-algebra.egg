@@ -92,9 +92,9 @@
 (rule (
     (= (vars-of e) vs)
 ) (
-    ;; map-sum takes a function from String to Int and a StringSet,
-    ;; and sums over the mapped integers.
-    (set (size-of e) (map-sum (unstable-fn "dim-of") vs))
+    ;; map-prod takes a function from String to Int and a StringSet,
+    ;; and computes the product of the mapped integers.
+    (set (size-of e) (map-prod (unstable-fn "dim-of") vs))
 ) :ruleset helper)
 ;; assigning matrix size as the cost of an E-node
 (rule ((= sz (size-of (Prod e1 e2)))) ((cost (Prod e1 e2) sz)) :ruleset helper)
@@ -103,10 +103,10 @@
 
 
 ; Example dimension definition
-(set (dim-of "i") 2)
-(set (dim-of "j") 16)
-(set (dim-of "k") 32)
-(set (dim-of "l") 2)
+(set (dim-of "i") 256)
+(set (dim-of "j") 64)
+(set (dim-of "k") 16)
+(set (dim-of "l") 256)
 (set (dim-of "m") 8)
 
 

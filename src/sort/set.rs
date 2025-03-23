@@ -179,8 +179,8 @@ impl Sort for SetSort {
         });
         // Only include map function if we already declared a function sort with the correct signature
         if let Some(fn_sort) = fn_sort {
-            typeinfo.add_primitive(MapSum {
-                name: "map-sum".into(),
+            typeinfo.add_primitive(MapProd {
+                name: "map-prod".into(),
                 set: self.clone(),
                 i64_sort,
                 fn_: fn_sort,
@@ -624,14 +624,14 @@ impl PrimitiveLike for Diff {
     }
 }
 
-struct MapSum {
+struct MapProd {
     name: Symbol,
     set: Arc<SetSort>,
     i64_sort: Arc<I64Sort>,
     fn_: Arc<FunctionSort>,
 }
 
-impl PrimitiveLike for MapSum {
+impl PrimitiveLike for MapProd {
     fn name(&self) -> Symbol {
         self.name
     }
@@ -657,7 +657,7 @@ impl PrimitiveLike for MapSum {
         let acc: i64 = set.into_iter()
             .map(|e| self.fn_.apply(&values[0], &[e], egraph))
             .map(|e| i64::load(&self.i64_sort, &e))
-            .sum();
+            .product();
         Some(Value::from(acc))
     }
 }
