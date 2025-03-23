@@ -548,7 +548,7 @@ impl EGraph {
             default,
             merge,
             name,
-            can_subsume: _,
+            can_subsume,
         } = config;
         assert!(
             !schema.is_empty(),
@@ -562,7 +562,7 @@ impl EGraph {
             .collect();
         let schema_math = SchemaMath {
             tracing: self.tracing,
-            subsume: false,
+            subsume: can_subsume,
             func_cols: schema.len(),
         };
         let n_args = schema_math.num_keys();
@@ -588,6 +588,7 @@ impl EGraph {
             incremental_rebuild_rules: Default::default(),
             nonincremental_rebuild_rule: RuleId::new(!0),
             default_val: default,
+            can_subsume,
             name: name.into(),
         });
         debug_assert_eq!(res, next_func_id);
@@ -864,6 +865,7 @@ struct FunctionInfo {
     incremental_rebuild_rules: Vec<RuleId>,
     nonincremental_rebuild_rule: RuleId,
     default_val: DefaultVal,
+    can_subsume: bool,
     name: Arc<str>,
 }
 
@@ -1198,6 +1200,14 @@ fn incremental_rebuild(uf_size: usize, table_size: usize, parallel: bool) -> boo
 
 /// A struct helping with some calculations of where some information is stored at the
 /// core-relations Table level for a given function.
+///
+/// Functions can have multiple "output columns" in the underlying core-relations layer depending
+/// on whether different features are enabled. Roughly, tables are laid out as:
+///
+/// > `[key0, ..., keyn, return value, timestamp, proof_id?, subsume?]`
+///
+/// Where there are `n+1` key columns and columns marked with a question mark are optional,
+/// depending on the egraph and table-level configuration.
 #[derive(Copy, Clone)]
 struct SchemaMath {
     /// Whether or not proofs are enabled.
