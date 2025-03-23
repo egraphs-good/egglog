@@ -1,6 +1,6 @@
 use std::mem;
 
-use egglog_bridge::{define_rule, ColumnTy, DefaultVal, EGraph, MergeFn};
+use egglog_bridge::{define_rule, ColumnTy, DefaultVal, EGraph, FunctionConfig, MergeFn};
 
 fn main() {
     const N: usize = 12;
@@ -14,18 +14,20 @@ fn main() {
     }
     let mut egraph = EGraph::with_tracing();
     let int_prim = egraph.primitives_mut().register_type::<i64>();
-    let num_table = egraph.add_table(
-        vec![ColumnTy::Primitive(int_prim), ColumnTy::Id],
-        DefaultVal::FreshId,
-        MergeFn::UnionId,
-        "num",
-    );
-    let add_table = egraph.add_table(
-        vec![ColumnTy::Id; 3],
-        DefaultVal::FreshId,
-        MergeFn::UnionId,
-        "add",
-    );
+    let num_table = egraph.add_table(FunctionConfig {
+        schema: vec![ColumnTy::Primitive(int_prim), ColumnTy::Id],
+        default: DefaultVal::FreshId,
+        merge: MergeFn::UnionId,
+        name: "num".into(),
+        can_subsume: true,
+    });
+    let add_table = egraph.add_table(FunctionConfig {
+        schema: vec![ColumnTy::Id; 3],
+        default: DefaultVal::FreshId,
+        merge: MergeFn::UnionId,
+        name: "add".into(),
+        can_subsume: true,
+    });
 
     let add_comm = define_rule! {
         [egraph] ((-> (add_table x y) id))

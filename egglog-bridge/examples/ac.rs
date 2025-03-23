@@ -1,4 +1,4 @@
-use egglog_bridge::{define_rule, ColumnTy, DefaultVal, EGraph, MergeFn};
+use egglog_bridge::{define_rule, ColumnTy, DefaultVal, EGraph, FunctionConfig, MergeFn};
 
 use mimalloc::MiMalloc;
 
@@ -28,18 +28,20 @@ fn main() {
         let start = web_time::Instant::now();
         let mut egraph = EGraph::default();
         let int_prim = egraph.primitives_mut().get_ty::<i64>();
-        let num_table = egraph.add_table(
-            vec![ColumnTy::Primitive(int_prim), ColumnTy::Id],
-            DefaultVal::FreshId,
-            MergeFn::UnionId,
-            "num",
-        );
-        let add_table = egraph.add_table(
-            vec![ColumnTy::Id; 3],
-            DefaultVal::FreshId,
-            MergeFn::UnionId,
-            "add",
-        );
+        let num_table = egraph.add_table(FunctionConfig {
+            schema: vec![ColumnTy::Primitive(int_prim), ColumnTy::Id],
+            default: DefaultVal::FreshId,
+            merge: MergeFn::UnionId,
+            name: "num".into(),
+            can_subsume: true,
+        });
+        let add_table = egraph.add_table(FunctionConfig {
+            schema: vec![ColumnTy::Id; 3],
+            default: DefaultVal::FreshId,
+            merge: MergeFn::UnionId,
+            name: "add".into(),
+            can_subsume: true,
+        });
 
         let add_comm = define_rule! {
             [egraph] ((-> (add_table x y) id))

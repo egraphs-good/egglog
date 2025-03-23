@@ -87,6 +87,20 @@ impl Default for EGraph {
     }
 }
 
+/// Properties of a function added to an [`EGraph`].
+pub struct FunctionConfig {
+    /// The function's schema. The last column in the schema is the return type.
+    pub schema: Vec<ColumnTy>,
+    /// The behavior of the function when lookups are made on keys not currently present.
+    pub default: DefaultVal,
+    /// How to resolve FD conflicts for the function.
+    pub merge: MergeFn,
+    /// The function's name
+    pub name: String,
+    /// Whether or not subsumption is enabled for this function.
+    pub can_subsume: bool,
+}
+
 impl EGraph {
     /// Create a new EGraph with tracing (aka 'proofs') enabled.
     ///
@@ -528,13 +542,14 @@ impl EGraph {
     }
 
     /// Register a function in this EGraph.
-    pub fn add_table(
-        &mut self,
-        schema: Vec<ColumnTy>,
-        default: DefaultVal,
-        merge: MergeFn,
-        name: &str,
-    ) -> FunctionId {
+    pub fn add_table(&mut self, config: FunctionConfig) -> FunctionId {
+        let FunctionConfig {
+            schema,
+            default,
+            merge,
+            name,
+            can_subsume: _,
+        } = config;
         assert!(
             !schema.is_empty(),
             "must have at least one column in schema"
@@ -556,7 +571,7 @@ impl EGraph {
         let mut read_deps = IndexSet::<TableId>::new();
         let mut write_deps = IndexSet::<TableId>::new();
         merge.fill_deps(self, &mut read_deps, &mut write_deps);
-        let merge_fn = merge.to_callback(schema_math, name, self);
+        let merge_fn = merge.to_callback(schema_math, &name, self);
         let table = SortedWritesTable::new(
             n_args,
             n_cols,

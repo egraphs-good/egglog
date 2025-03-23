@@ -133,7 +133,7 @@ pub(crate) struct Query {
     vars: DenseIdMap<Variable, VarInfo>,
     /// The current proofs that are in scope.
     atom_proofs: Vec<Variable>,
-    atoms: Vec<(TableId, Vec<QueryEntry>)>,
+    atoms: Vec<(TableId, Vec<QueryEntry>, SchemaMath)>,
     /// The builders for queries in this module essentially wrap the lower-level
     /// builders from the `core_relations` crate. A single egglog rule can turn
     /// into N core-relations rules. The code is structured by constructing a
@@ -349,21 +349,33 @@ impl RuleBuilder<'_> {
         entries: &[QueryEntry],
     ) {
         let mut atom = entries.to_vec();
-        atom.push(self.new_var(ColumnTy::Id).into());
+        let schema_math = if let Some(func) = func {
+            let info = &self.egraph.funcs[func];
+            assert_eq!(info.schema.len(), entries.len());
+            SchemaMath {
+                tracing: self.egraph.tracing,
+                subsume: false,
+                func_cols: info.schema.len(),
+            }
+        } else {
+            SchemaMath {
+                tracing: self.egraph.tracing,
+                subsume: false,
+                func_cols: entries.len(),
+            }
+        };
+        atom.resize_with(schema_math.table_columns(), || {
+            self.new_var(ColumnTy::Id).into()
+        });
         if self.egraph.tracing {
-            let proof_var = self.new_var(ColumnTy::Id);
+            let proof_var = atom[schema_math.proof_id_col()].var();
             self.proof_builder.add_lhs(entries, proof_var);
             self.query.atom_proofs.push(proof_var);
             if let Some(func) = func {
-                let math = SchemaMath {
-                    tracing: true,
-                    subsume: false,
-                    func_cols: self.egraph.funcs[func].schema.len(),
-                };
                 // If we have a function, record its syntax as a LHS term.
                 let term = Arc::new(TermFragment::App(
                     func,
-                    entries[0..math.num_keys()]
+                    entries[0..schema_math.num_keys()]
                         .iter()
                         .map(|x| {
                             x.to_syntax(self.egraph)
@@ -384,9 +396,8 @@ impl RuleBuilder<'_> {
                     self.query.vars[*id].term_var = proof_var;
                 }
             }
-            atom.push(proof_var.into());
         }
-        self.query.atoms.push((table, atom));
+        self.query.atoms.push((table, atom, schema_math));
     }
 
     pub fn call_external_func(
@@ -498,7 +509,6 @@ impl RuleBuilder<'_> {
     /// present, the configured default for the function is used.
     pub fn lookup(&mut self, func: FunctionId, entries: &[QueryEntry]) -> Variable {
         let entries = entries.to_vec();
-        let val_col = ColumnId::from_usize(entries.len());
         let info = &self.egraph.funcs[func];
         let res = self.query.vars.push(VarInfo {
             ty: info.ret_ty(),
@@ -506,6 +516,11 @@ impl RuleBuilder<'_> {
         });
         let table = info.table;
         let id_counter = self.query.id_counter;
+        let schema_math = SchemaMath {
+            tracing: self.egraph.tracing,
+            subsume: false,
+            func_cols: info.schema.len(),
+        };
         let cb: BuildRuleCallback = match info.default_val {
             DefaultVal::Const(_) | DefaultVal::FreshId => {
                 let (wv, wv_ref): (WriteVal, WriteVal) = match &info.default_val {
@@ -515,10 +530,28 @@ impl RuleBuilder<'_> {
                         // When we create a new term, we should
                         // simply "reuse" the value we just minted
                         // for the value.
-                        WriteVal::CurrentVal(val_col.index()),
+                        WriteVal::CurrentVal(schema_math.ret_val_col()),
                     ),
                     _ => unreachable!(),
                 };
+                let get_write_vals = move |inner: &mut Bindings| {
+                    let mut write_vals = SmallVec::<[WriteVal; 4]>::new();
+                    for i in schema_math.num_keys()..schema_math.table_columns() {
+                        if i == schema_math.ts_col() {
+                            write_vals.push(inner.next_ts.to_value().into());
+                        } else if i == schema_math.ret_val_col() {
+                            write_vals.push(wv);
+                        } else if schema_math.tracing && i == schema_math.proof_id_col() {
+                            write_vals.push(wv_ref);
+                        } else if schema_math.subsume && i == schema_math.subsume_col() {
+                            todo!("subsumption not implemented yet")
+                        } else {
+                            unreachable!()
+                        }
+                    }
+                    write_vals
+                };
+
                 if self.egraph.tracing {
                     let term_var = self.new_var(ColumnTy::Id);
                     self.query.vars[res].term_var = term_var;
@@ -534,6 +567,7 @@ impl RuleBuilder<'_> {
                         self.egraph,
                     );
                     Box::new(move |inner, rb| {
+                        let write_vals = get_write_vals(inner);
                         let dst_vars = inner.convert_all(&entries);
                         // NB: having one `lookup_or_insert` call
                         // per projection is pretty inefficient
@@ -546,20 +580,20 @@ impl RuleBuilder<'_> {
                         let var = rb.lookup_or_insert(
                             table,
                             &dst_vars,
-                            &[wv, inner.next_ts.to_value().into(), wv_ref],
-                            val_col,
+                            &write_vals,
+                            ColumnId::from_usize(schema_math.ret_val_col()),
                         )?;
                         let ts = rb.lookup_or_insert(
                             table,
                             &dst_vars,
-                            &[wv, inner.next_ts.to_value().into(), wv_ref],
-                            val_col.inc(),
+                            &write_vals,
+                            ColumnId::from_usize(schema_math.ts_col()),
                         )?;
                         let term = rb.lookup_or_insert(
                             table,
                             &dst_vars,
-                            &[wv, inner.next_ts.to_value().into(), wv_ref],
-                            val_col.inc().inc(),
+                            &write_vals,
+                            ColumnId::from_usize(schema_math.proof_id_col()),
                         )?;
                         inner.mapping.insert(term_var, term.into());
                         inner.mapping.insert(res, var.into());
@@ -573,12 +607,13 @@ impl RuleBuilder<'_> {
                     })
                 } else {
                     Box::new(move |inner, rb| {
+                        let write_vals = get_write_vals(inner);
                         let dst_vars = inner.convert_all(&entries);
                         let var = rb.lookup_or_insert(
                             table,
                             &dst_vars,
-                            &[wv, inner.next_ts.to_value().into()],
-                            val_col,
+                            &write_vals,
+                            ColumnId::from_usize(schema_math.ret_val_col()),
                         )?;
                         inner.mapping.insert(res, var.into());
                         Ok(())
@@ -591,8 +626,16 @@ impl RuleBuilder<'_> {
                     self.proof_builder.add_lhs(&entries, term_var);
                     Box::new(move |inner, rb| {
                         let dst_vars = inner.convert_all(&entries);
-                        let var = rb.lookup(table, &dst_vars, val_col)?;
-                        let term = rb.lookup(table, &dst_vars, ColumnId::new(val_col.rep() + 1))?;
+                        let var = rb.lookup(
+                            table,
+                            &dst_vars,
+                            ColumnId::from_usize(schema_math.ret_val_col()),
+                        )?;
+                        let term = rb.lookup(
+                            table,
+                            &dst_vars,
+                            ColumnId::from_usize(schema_math.proof_id_col()),
+                        )?;
                         inner.mapping.insert(res, var.into());
                         inner.mapping.insert(term_var, term.into());
                         Ok(())
@@ -600,7 +643,11 @@ impl RuleBuilder<'_> {
                 } else {
                     Box::new(move |inner, rb| {
                         let dst_vars = inner.convert_all(&entries);
-                        let var = rb.lookup(table, &dst_vars, val_col)?;
+                        let var = rb.lookup(
+                            table,
+                            &dst_vars,
+                            ColumnId::from_usize(schema_math.ret_val_col()),
+                        )?;
                         inner.mapping.insert(res, var.into());
                         Ok(())
                     })
@@ -790,13 +837,6 @@ impl Query {
         next_ts: Timestamp,
         desc: &str,
     ) -> Result<()> {
-        fn get_ts_col(atom: &[QueryEntry], tracing: bool) -> ColumnId {
-            if tracing {
-                ColumnId::from_usize(atom.len() - 2)
-            } else {
-                ColumnId::from_usize(atom.len() - 1)
-            }
-        }
         fn add_atom(
             qb: &mut QueryBuilder,
             table: TableId,
@@ -818,15 +858,15 @@ impl Query {
             // If a rule has an empty LHS, we still want to run it once. This will cause the right
             // hand side of the rule to run once, globally across all runs.
             let (mut qb, mut inner) = self.query_state(rsb, next_ts);
-            for (table, entries) in &self.atoms {
+            for (table, entries, _schema_info) in &self.atoms {
                 add_atom(&mut qb, *table, entries, &[], &mut inner)?;
             }
             return self.run_rules_and_build(qb, inner, desc);
         }
         if let Some(focus_atom) = self.sole_focus {
             let (mut qb, mut inner) = self.query_state(rsb, next_ts);
-            for (i, (table, entries)) in self.atoms.iter().enumerate() {
-                let ts_col = get_ts_col(entries, self.tracing);
+            for (i, (table, entries, schema_info)) in self.atoms.iter().enumerate() {
+                let ts_col = ColumnId::from_usize(schema_info.ts_col());
                 let constraint = if i == focus_atom {
                     Some(Constraint::GeConst {
                         col: ts_col,
@@ -849,8 +889,8 @@ impl Query {
         }
         'outer: for focus_atom in 0..self.atoms.len() {
             let (mut qb, mut inner) = self.query_state(rsb, next_ts);
-            for (i, (table, entries)) in self.atoms.iter().enumerate() {
-                let ts_col = get_ts_col(entries, self.tracing);
+            for (i, (table, entries, schema_info)) in self.atoms.iter().enumerate() {
+                let ts_col = ColumnId::from_usize(schema_info.ts_col());
                 let constraint = match i.cmp(&focus_atom) {
                     Ordering::Less => {
                         if mid_ts == Timestamp::new(0) {
