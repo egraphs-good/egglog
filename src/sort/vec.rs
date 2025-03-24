@@ -1,230 +1,229 @@
-// use super::*;
+use super::*;
 
-// type ValueVec = Vec<Value>;
+type ValueVec = Vec<Value>;
 
-// #[derive(Debug)]
-// pub struct VecSort {
-//     name: Symbol,
-//     element: ArcSort,
-//     vecs: Mutex<IndexSet<ValueVec>>,
-// }
+#[derive(Debug)]
+pub struct VecSort {
+    name: Symbol,
+    element: ArcSort,
+    vecs: Mutex<IndexSet<ValueVec>>,
+}
 
-// impl VecSort {
-//     pub fn element(&self) -> ArcSort {
-//         self.element.clone()
-//     }
+impl VecSort {
+    pub fn element(&self) -> ArcSort {
+        self.element.clone()
+    }
 
-//     pub fn element_name(&self) -> Symbol {
-//         self.element.name()
-//     }
-// }
+    pub fn element_name(&self) -> Symbol {
+        self.element.name()
+    }
+}
 
-// impl Presort for VecSort {
-//     fn presort_name() -> Symbol {
-//         "Vec".into()
-//     }
+impl Presort for VecSort {
+    fn presort_name() -> Symbol {
+        "Vec".into()
+    }
 
-//     fn reserved_primitives() -> Vec<Symbol> {
-//         vec![
-//             "vec-of".into(),
-//             "vec-append".into(),
-//             "vec-empty".into(),
-//             "vec-push".into(),
-//             "vec-pop".into(),
-//             "vec-not-contains".into(),
-//             "vec-contains".into(),
-//             "vec-length".into(),
-//             "vec-get".into(),
-//             "vec-set".into(),
-//             "vec-remove".into(),
-//         ]
-//     }
+    fn reserved_primitives() -> Vec<Symbol> {
+        vec![
+            "vec-of".into(),
+            "vec-append".into(),
+            "vec-empty".into(),
+            "vec-push".into(),
+            "vec-pop".into(),
+            "vec-not-contains".into(),
+            "vec-contains".into(),
+            "vec-length".into(),
+            "vec-get".into(),
+            "vec-set".into(),
+            "vec-remove".into(),
+        ]
+    }
 
-//     fn make_sort(
-//         typeinfo: &mut TypeInfo,
-//         name: Symbol,
-//         args: &[Expr],
-//     ) -> Result<ArcSort, TypeError> {
-//         if let [Expr::Var(span, e)] = args {
-//             let e = typeinfo
-//                 .sorts
-//                 .get(e)
-//                 .ok_or(TypeError::UndefinedSort(*e, span.clone()))?;
+    fn make_sort(
+        typeinfo: &mut TypeInfo,
+        name: Symbol,
+        args: &[Expr],
+    ) -> Result<ArcSort, TypeError> {
+        if let [Expr::Var(span, e)] = args {
+            let e = typeinfo
+                .get_sort(e)
+                .ok_or(TypeError::UndefinedSort(*e, span.clone()))?;
 
-//             if e.is_eq_container_sort() {
-//                 return Err(TypeError::DisallowedSort(
-//                     name,
-//                     "Sets nested with other EqSort containers are not allowed".into(),
-//                     span.clone(),
-//                 ));
-//             }
+            if e.is_eq_container_sort() {
+                return Err(TypeError::DisallowedSort(
+                    name,
+                    "Sets nested with other EqSort containers are not allowed".into(),
+                    span.clone(),
+                ));
+            }
 
-//             Ok(Arc::new(Self {
-//                 name,
-//                 element: e.clone(),
-//                 vecs: Default::default(),
-//             }))
-//         } else {
-//             panic!("Vec sort must have sort as argument. Got {:?}", args)
-//         }
-//     }
-// }
+            Ok(Arc::new(Self {
+                name,
+                element: e.clone(),
+                vecs: Default::default(),
+            }))
+        } else {
+            panic!("Vec sort must have sort as argument. Got {:?}", args)
+        }
+    }
+}
 
-// impl Sort for VecSort {
-//     fn name(&self) -> Symbol {
-//         self.name
-//     }
+impl Sort for VecSort {
+    fn name(&self) -> Symbol {
+        self.name
+    }
 
-//     fn column_ty(&self, prims: &Primitives) -> ColumnTy {
-//         ColumnTy::Primitive(prims.get_ty::<ValueVec>())
-//     }
+    fn column_ty(&self, prims: &Primitives) -> ColumnTy {
+        ColumnTy::Primitive(prims.get_ty::<ValueVec>())
+    }
 
-//     fn register_type(&self, prims: &mut Primitives) {
-//         prims.register_type::<ValueVec>();
-//     }
+    fn register_type(&self, prims: &mut Primitives) {
+        prims.register_type::<ValueVec>();
+    }
 
-//     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
-//         self
-//     }
+    fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
+        self
+    }
 
-//     fn is_container_sort(&self) -> bool {
-//         true
-//     }
+    fn is_container_sort(&self) -> bool {
+        true
+    }
 
-//     fn is_eq_container_sort(&self) -> bool {
-//         self.element.is_eq_sort()
-//     }
+    fn is_eq_container_sort(&self) -> bool {
+        self.element.is_eq_sort()
+    }
 
-//     fn inner_values(&self, value: &Value) -> Vec<(ArcSort, Value)> {
-//         // TODO: Potential duplication of code
-//         let vecs = self.vecs.lock().unwrap();
-//         let vec = vecs.get_index(value.bits as usize).unwrap();
-//         let mut result = Vec::new();
-//         for e in vec.iter() {
-//             result.push((self.element.clone(), *e));
-//         }
-//         result
-//     }
+    fn inner_values(&self, value: &Value) -> Vec<(ArcSort, Value)> {
+        // TODO: Potential duplication of code
+        let vecs = self.vecs.lock().unwrap();
+        let vec = vecs.get_index(value.bits as usize).unwrap();
+        let mut result = Vec::new();
+        for e in vec.iter() {
+            result.push((self.element.clone(), *e));
+        }
+        result
+    }
 
-//     fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
-//         let vecs = self.vecs.lock().unwrap();
-//         let vec = vecs.get_index(value.bits as usize).unwrap();
-//         let mut changed = false;
-//         let new_vec: ValueVec = vec
-//             .iter()
-//             .map(|e| {
-//                 let mut e = *e;
-//                 changed |= self.element.canonicalize(&mut e, unionfind);
-//                 e
-//             })
-//             .collect();
-//         drop(vecs);
-//         *value = new_vec.store(self);
-//         changed
-//     }
+    fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
+        let vecs = self.vecs.lock().unwrap();
+        let vec = vecs.get_index(value.bits as usize).unwrap();
+        let mut changed = false;
+        let new_vec: ValueVec = vec
+            .iter()
+            .map(|e| {
+                let mut e = *e;
+                changed |= self.element.canonicalize(&mut e, unionfind);
+                e
+            })
+            .collect();
+        drop(vecs);
+        *value = new_vec.store(self);
+        changed
+    }
 
-//     fn register_primitives(self: Arc<Self>, typeinfo: &mut TypeInfo) {
-//         typeinfo.add_primitive(VecRebuild {
-//             name: "rebuild".into(),
-//             vec: self.clone(),
-//         });
-//         typeinfo.add_primitive(VecOf {
-//             name: "vec-of".into(),
-//             vec: self.clone(),
-//         });
-//         typeinfo.add_primitive(Append {
-//             name: "vec-append".into(),
-//             vec: self.clone(),
-//         });
-//         typeinfo.add_primitive(Ctor {
-//             name: "vec-empty".into(),
-//             vec: self.clone(),
-//         });
-//         typeinfo.add_primitive(Push {
-//             name: "vec-push".into(),
-//             vec: self.clone(),
-//         });
-//         typeinfo.add_primitive(Pop {
-//             name: "vec-pop".into(),
-//             vec: self.clone(),
-//         });
-//         typeinfo.add_primitive(NotContains {
-//             name: "vec-not-contains".into(),
-//             vec: self.clone(),
-//         });
-//         typeinfo.add_primitive(Contains {
-//             name: "vec-contains".into(),
-//             vec: self.clone(),
-//         });
-//         typeinfo.add_primitive(Length {
-//             name: "vec-length".into(),
-//             vec: self.clone(),
-//         });
-//         typeinfo.add_primitive(Get {
-//             name: "vec-get".into(),
-//             vec: self.clone(),
-//         });
-//         typeinfo.add_primitive(Set {
-//             name: "vec-set".into(),
-//             vec: self.clone(),
-//         });
-//         typeinfo.add_primitive(Remove {
-//             name: "vec-remove".into(),
-//             vec: self,
-//         })
-//     }
+    fn register_primitives(self: Arc<Self>, _eg: &mut EGraph) {
+        // typeinfo.add_primitive(VecRebuild {
+        //     name: "rebuild".into(),
+        //     vec: self.clone(),
+        // });
+        // typeinfo.add_primitive(VecOf {
+        //     name: "vec-of".into(),
+        //     vec: self.clone(),
+        // });
+        // typeinfo.add_primitive(Append {
+        //     name: "vec-append".into(),
+        //     vec: self.clone(),
+        // });
+        // typeinfo.add_primitive(Ctor {
+        //     name: "vec-empty".into(),
+        //     vec: self.clone(),
+        // });
+        // typeinfo.add_primitive(Push {
+        //     name: "vec-push".into(),
+        //     vec: self.clone(),
+        // });
+        // typeinfo.add_primitive(Pop {
+        //     name: "vec-pop".into(),
+        //     vec: self.clone(),
+        // });
+        // typeinfo.add_primitive(NotContains {
+        //     name: "vec-not-contains".into(),
+        //     vec: self.clone(),
+        // });
+        // typeinfo.add_primitive(Contains {
+        //     name: "vec-contains".into(),
+        //     vec: self.clone(),
+        // });
+        // typeinfo.add_primitive(Length {
+        //     name: "vec-length".into(),
+        //     vec: self.clone(),
+        // });
+        // typeinfo.add_primitive(Get {
+        //     name: "vec-get".into(),
+        //     vec: self.clone(),
+        // });
+        // typeinfo.add_primitive(Set {
+        //     name: "vec-set".into(),
+        //     vec: self.clone(),
+        // });
+        // typeinfo.add_primitive(Remove {
+        //     name: "vec-remove".into(),
+        //     vec: self,
+        // })
+    }
 
-//     fn extract_term(
-//         &self,
-//         _egraph: &EGraph,
-//         value: Value,
-//         extractor: &Extractor,
-//         termdag: &mut TermDag,
-//     ) -> Option<(Cost, Term)> {
-//         let vec: Vec<Value> = ValueVec::load(self, &value);
-//         let mut cost = 0usize;
+    fn extract_term(
+        &self,
+        _egraph: &EGraph,
+        value: Value,
+        extractor: &Extractor,
+        termdag: &mut TermDag,
+    ) -> Option<(Cost, Term)> {
+        let vec: Vec<Value> = ValueVec::load(self, &value);
+        let mut cost = 0usize;
 
-//         if vec.is_empty() {
-//             Some((cost, termdag.app("vec-empty".into(), vec![])))
-//         } else {
-//             let elems = vec
-//                 .into_iter()
-//                 .map(|e| {
-//                     let (extra_cost, term) = extractor.find_best(e, termdag, &self.element)?;
-//                     cost = cost.saturating_add(extra_cost);
-//                     Some(term)
-//                 })
-//                 .collect::<Option<Vec<_>>>()?;
+        if vec.is_empty() {
+            Some((cost, termdag.app("vec-empty".into(), vec![])))
+        } else {
+            let elems = vec
+                .into_iter()
+                .map(|e| {
+                    let (extra_cost, term) = extractor.find_best(e, termdag, &self.element)?;
+                    cost = cost.saturating_add(extra_cost);
+                    Some(term)
+                })
+                .collect::<Option<Vec<_>>>()?;
 
-//             Some((cost, termdag.app("vec-of".into(), elems)))
-//         }
-//     }
+            Some((cost, termdag.app("vec-of".into(), elems)))
+        }
+    }
 
-//     fn serialized_name(&self, _value: &Value) -> Symbol {
-//         "vec-of".into()
-//     }
-// }
+    fn serialized_name(&self, _value: &Value) -> Symbol {
+        "vec-of".into()
+    }
+}
 
-// impl IntoSort for ValueVec {
-//     type Sort = VecSort;
-//     fn store(self, sort: &Self::Sort) -> Value {
-//         let mut vecs = sort.vecs.lock().unwrap();
-//         let (i, _) = vecs.insert_full(self);
-//         Value {
-//             #[cfg(debug_assertions)]
-//             tag: sort.name,
-//             bits: i as u64,
-//         }
-//     }
-// }
+impl IntoSort for ValueVec {
+    type Sort = VecSort;
+    fn store(self, sort: &Self::Sort) -> Value {
+        let mut vecs = sort.vecs.lock().unwrap();
+        let (i, _) = vecs.insert_full(self);
+        Value {
+            #[cfg(debug_assertions)]
+            tag: sort.name,
+            bits: i as u64,
+        }
+    }
+}
 
-// impl FromSort for ValueVec {
-//     type Sort = VecSort;
-//     fn load(sort: &Self::Sort, value: &Value) -> Self {
-//         let vecs = sort.vecs.lock().unwrap();
-//         vecs.get_index(value.bits as usize).unwrap().clone()
-//     }
-// }
+impl FromSort for ValueVec {
+    type Sort = VecSort;
+    fn load(sort: &Self::Sort, value: &Value) -> Self {
+        let vecs = sort.vecs.lock().unwrap();
+        vecs.get_index(value.bits as usize).unwrap().clone()
+    }
+}
 
 // struct VecRebuild {
 //     name: Symbol,
