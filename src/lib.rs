@@ -444,11 +444,11 @@ impl Default for EGraph {
         eg.add_sort(F64Sort, span!()).unwrap();
         eg.add_sort(BigIntSort, span!()).unwrap();
         eg.add_sort(BigRatSort, span!()).unwrap();
-        // eg.add_presort::<MapSort>(span!()).unwrap();
-        // eg.add_presort::<SetSort>(span!()).unwrap();
-        // eg.add_presort::<VecSort>(span!()).unwrap();
-        // eg.add_presort::<FunctionSort>(span!()).unwrap();
-        // eg.add_presort::<MultiSetSort>(span!()).unwrap();
+        // eg.type_info.add_presort::<MapSort>(span!()).unwrap();
+        // eg.type_info.add_presort::<SetSort>(span!()).unwrap();
+        eg.type_info.add_presort::<VecSort>(span!()).unwrap();
+        // eg.type_info.add_presort::<FunctionSort>(span!()).unwrap();
+        // eg.type_info.add_presort::<MultiSetSort>(span!()).unwrap();
 
         add_primitive!(&mut eg, "!=" = |a: #, b: #| -?> () {
             (a != b).then_some(())

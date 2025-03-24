@@ -42,7 +42,7 @@ mod map;
 mod set;
 // pub use set::*;
 mod vec;
-// pub use vec::*;
+pub use vec::*;
 mod r#fn;
 // pub use r#fn::*;
 mod multiset;
