@@ -41,6 +41,7 @@ wasm-bindgen = ["instant/wasm-bindgen", "dep:getrandom"]
 nondeterministic = []
 
 [dependencies]
+add_primitive = { path = "src/sort/add_primitive" }
 clap = { version = "4", features = ["derive"], optional = true }
 egraph-serialize = { version = "0.2.0", default-features = false }
 env_logger = { version = "0.10", optional = true }
