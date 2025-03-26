@@ -15,10 +15,8 @@ use syn::{braced, bracketed, parse_macro_input, Expr, Ident, LitStr, Token};
 ///   primitive to take a variable number of arguments, which will be
 ///   passed to be body as an `Iterator<Item=T>`.
 ///
-/// - Polymorphism: using `#` as a type will allow any type.
-///   The value will be passed to the argument as an `egglog::Value`.
-///   NOTE: currently, if one argument is polymorphic, all other
-///   arguments must also be.
+/// - Polymorphism: using `#` as a type will allow any type during
+///   typechecking. These will be given type `Value` in the body.
 ///
 #[proc_macro]
 pub fn add_primitive(input: TokenStream) -> TokenStream {
@@ -28,20 +26,29 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
     // hard without that context.
 
     // Parse the input by implementing `syn::Parse` for our data types.
-    let AddPrimitive(eg, name, args, arrow, ret, body) = parse_macro_input!(input);
+    let AddPrimitive {
+        eg,
+        name,
+        is_varargs,
+        args,
+        is_fallible,
+        ret,
+        body,
+    } = parse_macro_input!(input);
 
     // Create a new field name for the `Prim` struct to hold the return sort.
     // (We reuse the closure argument names for the argument sorts.)
     let y = Ident::new("__y", Span::mixed_site().into());
+    // Create a type that refers to whichever `Value` import is closer.
+    let value_type = syn::Type::Verbatim(quote!(Value));
 
     // List out the sorts that we need to store.
     let fields = args
-        .vec
         .iter()
         .map(|arg| (&arg.x, &arg.t))
         .chain([(&y, &ret)])
         .filter_map(|(x, t)| match t {
-            Type::Value => None,
+            Type::Any => None,
             Type::Type(t) => Some((x, t)),
         });
     // Create a struct field definition and instantiation for each sort.
@@ -64,39 +71,43 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
     // of features that this macro supports. Right now `|a: #, b: i64|` is
     // impossible to express with the current type constraints.
     let type_constraint = {
-        let arg_is_value = args.vec.iter().any(|arg| matches!(arg.t, Type::Value));
-        let ret_is_value = matches!(ret, Type::Value);
+        let has_type = |t: &Type| match t {
+            Type::Any => false,
+            Type::Type(_) => true,
+        };
+        let args_have_types = args.iter().map(|arg| &arg.t).all(has_type);
+        let ret_has_type = has_type(&ret);
 
         // If we're in the simple case, we can use the `SimpleTypeConstraint`.
         // However, use of either `#` or varargs makes this impossible.
-        if !args.is_varargs && !arg_is_value && !ret_is_value {
-            let x = args.vec.iter().map(|arg| &arg.x);
+        if !is_varargs && args_have_types && ret_has_type {
+            let x = args.iter().map(|arg| &arg.x);
             quote! {
                 let sorts = vec![#(self.#x.clone() as ArcSort,)* self.#y.clone()];
                 SimpleTypeConstraint::new(self.name(), sorts, span.clone()).into_box()
             }
         } else {
             // As a fallback, try to use `AllEqualTypeConstraint` for everything else.
-            let Arg { x, t } = &args.vec[0];
-            for arg in &args.vec {
+            let Arg { x, t } = &args[0];
+            for arg in &args {
                 // NOTE: this is a conservative (incomplete!) check, as `syn::Type`
                 // is not `PartialEq`. See the TODO on `type_constraint`.
-                if let (Type::Value, Type::Type(_)) | (Type::Type(_), Type::Value) = (t, &arg.t) {
+                if let (Type::Any, Type::Type(_)) | (Type::Type(_), Type::Any) = (t, &arg.t) {
                     todo!("AllEqualTypeConstraint doesn't support multiple argument types")
                 }
             }
 
             let new = quote!(AllEqualTypeConstraint::new(self.name(), span.clone()));
 
-            let len = args.vec.len() + 1;
+            let len = args.len() + 1;
             let len = quote!(.with_exact_length(#len));
-            let len = if args.is_varargs { quote!() } else { len };
+            let len = if is_varargs { quote!() } else { len };
 
             let args = quote!(.with_all_arguments_sort(self.#x.clone()));
-            let args = if arg_is_value { quote!() } else { args };
+            let args = if args_have_types { args } else { quote!() };
 
             let ret = quote!(.with_output_sort(self.#y.clone()));
-            let ret = if ret_is_value { quote!() } else { ret };
+            let ret = if ret_has_type { ret } else { quote!() };
 
             quote!(#new #len #args #ret .into_box())
         }
@@ -105,12 +116,12 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
     // Create the function body for either `apply` or `invoke`.
     let body = |target| {
         // Bind the argument names that were passed in to this macro.
-        let bind = if args.is_varargs {
-            let x = &args.vec[0].x;
+        let bind = if is_varargs {
+            let x = &args[0].x;
             quote!(let #x = args.iter();)
         } else {
-            let x = args.vec.iter().map(|arg| &arg.x);
-            quote!(let [#(#x,)*] = args else { panic!("wrong number of arguments") };)
+            let x = args.iter().map(|arg| &arg.x);
+            quote!(let [#(#x),*] = args else { panic!("wrong number of arguments") };)
         };
 
         // Cast the arguments to the desired type.
@@ -118,20 +129,19 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
             Target::OldBackend => quote!(<#t as FromSort>::load(&self.#x, #x)),
             Target::NewBackend => quote!(prims.unwrap::<#t>(*#x)),
         };
-        let cast = if args.is_varargs {
-            let Arg { x, t } = &args.vec[0];
+        let cast = if is_varargs {
+            let Arg { x, t } = &args[0];
             match t {
-                Type::Value => quote!(),
+                Type::Any => quote!(),
                 Type::Type(t) => {
                     let cast = cast1(x, t);
                     quote!(let #x = #x.map(|#x| #cast);)
                 }
             }
         } else {
-            args.vec
-                .iter()
+            args.iter()
                 .map(|Arg { x, t }| match t {
-                    Type::Value => quote!(),
+                    Type::Any => quote!(),
                     Type::Type(t) => {
                         let cast = cast1(x, t);
                         quote!(let #x: #t = #cast;)
@@ -142,14 +152,14 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
 
         // Do typechecking on the result of the body.
         let yt = match &ret {
-            Type::Value => syn::Type::Verbatim(quote!(Value)),
-            Type::Type(t) => t.clone(),
+            Type::Any => &value_type,
+            Type::Type(t) => t,
         };
         // If the primitive is fallible, put a `?` after the body.
-        let fail = if arrow.fallible { quote!(?) } else { quote!() };
+        let fail = if is_fallible { quote!(?) } else { quote!() };
         // Cast the result back to an interned value.
         let ret = match &ret {
-            Type::Value => quote!(#y),
+            Type::Any => quote!(#y),
             Type::Type(t) => match target {
                 Target::OldBackend => quote!(#y.store(&self.#y)),
                 Target::NewBackend => quote!(prims.get::<#t>(#y)),
@@ -211,7 +221,15 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
     }}.into()
 }
 
-struct AddPrimitive(Expr, LitStr, Args, Arrow, Type, Expr);
+struct AddPrimitive {
+    eg: Expr,
+    name: LitStr,
+    args: Vec<Arg>,
+    ret: Type,
+    body: Expr,
+    is_varargs: bool,
+    is_fallible: bool,
+}
 
 impl Parse for AddPrimitive {
     fn parse(input: ParseStream) -> Result<Self> {
@@ -219,21 +237,29 @@ impl Parse for AddPrimitive {
         input.parse::<Token![,]>()?;
         let name = input.parse()?;
         input.parse::<Token![=]>()?;
-        let args = input.parse()?;
-        let arrow = input.parse()?;
+        let Args { is_varargs, args } = input.parse()?;
+        let Arrow { is_fallible } = input.parse()?;
         let ret = input.parse()?;
 
         let body;
         braced!(body in input);
         let body = body.parse()?;
 
-        Ok(AddPrimitive(eg, name, args, arrow, ret, body))
+        Ok(AddPrimitive {
+            eg,
+            name,
+            args,
+            ret,
+            body,
+            is_varargs,
+            is_fallible,
+        })
     }
 }
 
 struct Args {
     is_varargs: bool,
-    vec: Vec<Arg>,
+    args: Vec<Arg>,
 }
 
 impl Parse for Args {
@@ -243,7 +269,7 @@ impl Parse for Args {
             bracketed!(arg in input);
             Ok(Args {
                 is_varargs: true,
-                vec: vec![arg.parse()?],
+                args: vec![arg.parse()?],
             })
         }
 
@@ -265,7 +291,7 @@ impl Parse for Args {
 
             Ok(Args {
                 is_varargs: false,
-                vec: args.into_iter().collect(),
+                args: args.into_iter().collect(),
             })
         }
 
@@ -287,17 +313,15 @@ impl Parse for Arg {
     }
 }
 
-// We separate `Value` from other types because we
-// need to be able to specialize it to both backends.
 enum Type {
-    Value,
+    Any,
     Type(syn::Type),
 }
 
 impl Parse for Type {
     fn parse(input: ParseStream) -> Result<Self> {
         if input.parse::<Token![#]>().is_ok() {
-            Ok(Type::Value)
+            Ok(Type::Any)
         } else {
             Ok(Type::Type(input.parse()?))
         }
@@ -305,7 +329,7 @@ impl Parse for Type {
 }
 
 struct Arrow {
-    fallible: bool,
+    is_fallible: bool,
 }
 
 impl Parse for Arrow {
@@ -313,9 +337,9 @@ impl Parse for Arrow {
         syn::custom_punctuation!(FailArrow, -?>);
 
         if input.parse::<Token![->]>().is_ok() {
-            Ok(Arrow { fallible: false })
+            Ok(Arrow { is_fallible: false })
         } else if input.parse::<FailArrow>().is_ok() {
-            Ok(Arrow { fallible: true })
+            Ok(Arrow { is_fallible: true })
         } else {
             Err(input.error("expected -> or -?>"))
         }
