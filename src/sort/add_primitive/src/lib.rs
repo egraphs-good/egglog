@@ -141,7 +141,10 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
         };
 
         // Do typechecking on the result of the body.
-        let yt = ret.specialize(&target);
+        let yt = match &ret {
+            Type::Value => syn::Type::Verbatim(quote!(Value)),
+            Type::Type(t) => t.clone(),
+        };
         // If the primitive is fallible, put a `?` after the body.
         let fail = if arrow.fallible { quote!(?) } else { quote!() };
         // Cast the result back to an interned value.
@@ -168,9 +171,8 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
     // backend. `Prim` has to support `get_type_constraint`, so it stores
     // sorts in its fields. `Ext` only has to support `invoke`, so it does not.
     quote!{{
-        #[allow(unused_imports)] use crate::{*, constraint::*};
+        #[allow(unused_imports)] use ::egglog::{*, constraint::*};
         #[allow(unused_imports)] use ::std::sync::Arc;
-        use core_relations::{ExecutionState, ExternalFunction, Value as V};
 
         let eg: &mut EGraph = #eg;
 
@@ -193,10 +195,13 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
         #[derive(Clone)]
         struct Ext;
 
-        impl ExternalFunction for Ext {
-            fn invoke(&self, exec_state: &mut ExecutionState, args: &[V]) -> Option<V> {
-                #[allow(unused_variables)] let prims = exec_state.prims();
-                #invoke
+        {
+            use core_relations::{ExecutionState, ExternalFunction, Value};
+            impl ExternalFunction for Ext {
+                fn invoke(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
+                    #[allow(unused_variables)] let prims = exec_state.prims();
+                    #invoke
+                }
             }
         }
 
@@ -287,18 +292,6 @@ impl Parse for Arg {
 enum Type {
     Value,
     Type(syn::Type),
-}
-
-impl Type {
-    fn specialize(&self, target: &Target) -> syn::Type {
-        match self {
-            Type::Type(t) => t.clone(),
-            Type::Value => syn::Type::Verbatim(match target {
-                Target::NewBackend => quote!(V),
-                Target::OldBackend => quote!(Value),
-            }),
-        }
-    }
 }
 
 impl Parse for Type {
