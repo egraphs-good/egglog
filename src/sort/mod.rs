@@ -1,6 +1,4 @@
-#[macro_use]
-mod macros;
-
+pub use add_primitive::add_primitive;
 use lazy_static::lazy_static;
 use num::traits::{CheckedAdd, CheckedDiv, CheckedMul, CheckedSub, One, Signed, ToPrimitive, Zero};
 use num::{rational::BigRational, BigInt};
