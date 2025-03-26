@@ -53,7 +53,7 @@ impl Sort for I64Sort {
         add_primitive!(eg, ">>" = |a: i64, b: i64| -?> i64 { b.try_into().ok().and_then(|b| a.checked_shr(b)) });
         add_primitive!(eg, "not-i64" = |a: i64| -> i64 { !a });
 
-        add_primitive!(eg, "log2" = |a: i64| -> i64 { (a as i64).ilog2() as i64 });
+        add_primitive!(eg, "log2" = |a: i64| -> i64 { a.ilog2() as i64 });
 
         add_primitive!(eg, "<" = |a: i64, b: i64| -?> () { (a < b).then_some(()) });
         add_primitive!(eg, ">" = |a: i64, b: i64| -?> () { (a > b).then_some(()) });
