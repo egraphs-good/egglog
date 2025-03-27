@@ -79,7 +79,11 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
             }
         } else {
             // As a fallback, try to use `AllEqualTypeConstraint` for everything else.
-            let Arg { x, t } = &args[0];
+            let Arg {
+                x,
+                t,
+                is_mutable: _,
+            } = &args[0];
             for arg in &args {
                 // NOTE: this is a conservative (incomplete!) check, as `syn::Type`
                 // is not `PartialEq`. See the TODO on `type_constraint`.
@@ -123,21 +127,25 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
             Target::NewBackend => quote!(prims.unwrap::<#t>(*#x)),
         };
         let cast = if is_varargs {
-            let Arg { x, t } = &args[0];
+            let Arg { x, t, is_mutable } = &args[0];
+            let mutable = if *is_mutable { quote!(mut) } else { quote!() };
             match &t.cast {
-                None => quote!(let #x = #x.copied();),
+                None => quote!(let #mutable #x = #x.copied();),
                 Some(t) => {
                     let cast = cast1(x, t);
-                    quote!(let #x = #x.map(|#x| #cast);)
+                    quote!(let #mutable #x = #x.map(|#x| #cast);)
                 }
             }
         } else {
             args.iter()
-                .map(|Arg { x, t }| match &t.cast {
-                    None => quote!(let #x = *#x;),
-                    Some(t) => {
-                        let cast = cast1(x, t);
-                        quote!(let #x: #t = #cast;)
+                .map(|Arg { x, t, is_mutable }| {
+                    let mutable = if *is_mutable { quote!(mut) } else { quote!() };
+                    match &t.cast {
+                        None => quote!(let #mutable #x: Value = *#x;),
+                        Some(t) => {
+                            let cast = cast1(x, t);
+                            quote!(let #mutable #x: #t = #cast;)
+                        }
                     }
                 })
                 .collect()
@@ -301,14 +309,16 @@ impl Parse for Args {
 struct Arg {
     x: Ident,
     t: Type,
+    is_mutable: bool,
 }
 
 impl Parse for Arg {
     fn parse(input: ParseStream) -> Result<Self> {
+        let is_mutable = input.parse::<Token![mut]>().is_ok();
         let x = input.parse()?;
         input.parse::<Token![:]>()?;
         let t = input.parse()?;
-        Ok(Arg { x, t })
+        Ok(Arg { x, t, is_mutable })
     }
 }
 
