@@ -120,10 +120,6 @@
 //     }
 
 //     fn register_primitives(self: Arc<Self>, typeinfo: &mut TypeInfo) {
-//         typeinfo.add_primitive(SetRebuild {
-//             name: "rebuild".into(),
-//             set: self.clone(),
-//         });
 //         typeinfo.add_primitive(SetOf {
 //             name: "set-of".into(),
 //             set: self.clone(),
@@ -264,43 +260,6 @@
 //     ) -> Option<Value> {
 //         assert!(values.is_empty());
 //         Some(ValueSet::default().store(&self.set))
-//     }
-// }
-
-// struct SetRebuild {
-//     name: Symbol,
-//     set: Arc<SetSort>,
-// }
-
-// impl PrimitiveLike for SetRebuild {
-//     fn name(&self) -> Symbol {
-//         self.name
-//     }
-
-//     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-//         SimpleTypeConstraint::new(
-//             self.name(),
-//             vec![self.set.clone(), self.set.clone()],
-//             span.clone(),
-//         )
-//         .into_box()
-//     }
-
-//     fn apply(
-//         &self,
-//         values: &[Value],
-//         _sorts: (&[ArcSort], &ArcSort),
-//         egraph: Option<&mut EGraph>,
-//     ) -> Option<Value> {
-//         let egraph = egraph.unwrap();
-//         let set = ValueSet::load(&self.set, &values[0]);
-//         let new_set: ValueSet = set
-//             .iter()
-//             .map(|e| egraph.find(&self.set.element, *e))
-//             .collect();
-//         // drop set to make sure we lose lock
-//         drop(set);
-//         Some(new_set.store(&self.set))
 //     }
 // }
 
