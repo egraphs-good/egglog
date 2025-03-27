@@ -54,7 +54,7 @@ impl Sort for F64Sort {
         add_primitive!(eg, "to-f64" = |a: i64| -> F { OrderedFloat(a as f64) });
         add_primitive!(eg, "to-i64" = |a: F| -> i64 { a.0 as i64 });
         // Use debug instead of to_string so that decimal place is always printed
-        add_primitive!(eg, "to-string" = |a: F| -> S { format!("{:?}", a).into() });
+        add_primitive!(eg, "to-string" = |a: F| -> S { format!("{:?}", a.0).into() });
     }
 
     fn extract_term(
