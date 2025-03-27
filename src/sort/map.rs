@@ -35,7 +35,6 @@
 
 //     fn reserved_primitives() -> Vec<Symbol> {
 //         vec![
-//             "rebuild".into(),
 //             "map-empty".into(),
 //             "map-insert".into(),
 //             "map-get".into(),
@@ -145,10 +144,6 @@
 //     }
 
 //     fn register_primitives(self: Arc<Self>, typeinfo: &mut TypeInfo) {
-//         typeinfo.add_primitive(MapRebuild {
-//             name: "rebuild".into(),
-//             map: self.clone(),
-//         });
 //         typeinfo.add_primitive(Ctor {
 //             name: "map-empty".into(),
 //             map: self.clone(),
@@ -217,51 +212,6 @@
 //     fn load(sort: &Self::Sort, value: &Value) -> Self {
 //         let maps = sort.maps.lock().unwrap();
 //         maps.get_index(value.bits as usize).unwrap().clone()
-//     }
-// }
-
-// struct MapRebuild {
-//     name: Symbol,
-//     map: Arc<MapSort>,
-// }
-
-// impl PrimitiveLike for MapRebuild {
-//     fn name(&self) -> Symbol {
-//         self.name
-//     }
-
-//     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-//         SimpleTypeConstraint::new(
-//             self.name(),
-//             vec![self.map.clone(), self.map.clone()],
-//             span.clone(),
-//         )
-//         .into_box()
-//     }
-
-//     fn apply(
-//         &self,
-//         values: &[Value],
-//         _sorts: (&[ArcSort], &ArcSort),
-//         egraph: Option<&mut EGraph>,
-//     ) -> Option<Value> {
-//         let egraph = egraph.unwrap();
-//         let maps = self.map.maps.lock().unwrap();
-//         let map = maps.get_index(values[0].bits as usize).unwrap();
-//         let new_map: ValueMap = map
-//             .iter()
-//             .map(|(k, v)| {
-//                 (
-//                     egraph.find(&self.map.key, *k),
-//                     egraph.find(&self.map.value, *v),
-//                 )
-//             })
-//             .collect();
-
-//         drop(maps);
-
-//         let res = new_map.store(&self.map);
-//         Some(res)
 //     }
 // }
 
