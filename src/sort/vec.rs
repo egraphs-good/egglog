@@ -140,7 +140,6 @@ impl Sort for VecSort {
         add_primitive!(eg, "vec-contains"     = |xs: Vec<Value> (self.clone()), x: # (self.element())| -?> () { ( xs.contains(&x)).then_some(()) });
         add_primitive!(eg, "vec-not-contains" = |xs: Vec<Value> (self.clone()), x: # (self.element())| -?> () { (!xs.contains(&x)).then_some(()) });
 
-        // TODO: should `vec-get` panic if you do an out-of-bounds lookup, or stop execution?
         add_primitive!(eg, "vec-get"    = |    xs: Vec<Value> (self.clone()), i: i64                       | -?> # (self.element()) { xs.get(i as usize).copied() });
         add_primitive!(eg, "vec-set"    = |mut xs: Vec<Value> (self.clone()), i: i64, x: # (self.element())| -> Vec<Value> (self.clone()) {{ xs[i as usize] = x;    xs }});
         add_primitive!(eg, "vec-remove" = |mut xs: Vec<Value> (self.clone()), i: i64                       | -> Vec<Value> (self.clone()) {{ xs.remove(i as usize); xs }});
