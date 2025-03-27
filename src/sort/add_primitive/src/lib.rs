@@ -2,7 +2,7 @@ use proc_macro::{Span, TokenStream};
 use quote::quote;
 use syn::parse::{Parse, ParseStream, Result};
 use syn::punctuated::Punctuated;
-use syn::{braced, bracketed, parse_macro_input, Expr, Ident, LitStr, Token};
+use syn::{braced, bracketed, parenthesized, parse_macro_input, Expr, Ident, LitStr, Token};
 ///
 /// This macro lets the user declare custom egglog primitives.
 /// It supports a few special features:
@@ -17,6 +17,9 @@ use syn::{braced, bracketed, parse_macro_input, Expr, Ident, LitStr, Token};
 ///
 /// - Polymorphism: using `#` as a type will allow any type during
 ///   typechecking. These will be given type `Value` in the body.
+///
+/// - Specialized Constraints: using `T (E)` as a type will use
+///   `E:expr` in the type constraint but `T:ty` in the body.
 ///
 #[proc_macro]
 pub fn add_primitive(input: TokenStream) -> TokenStream {
@@ -43,25 +46,16 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
     let value_type = syn::Type::Verbatim(quote!(Value));
 
     // List out the sorts that we need to store.
-    let fields = args
+    let (field_defs, field_uses): (Vec<_>, Vec<_>) = args
         .iter()
         .map(|arg| (&arg.x, &arg.t))
         .chain([(&y, &ret)])
-        .filter_map(|(x, t)| match t {
-            Type::Any => None,
-            Type::Type(t) => Some((x, t)),
-        });
-    // Create a struct field definition and instantiation for each sort.
-    let field_defs = fields
-        .clone()
-        .map(|(x, t)| quote!(#x: Arc<<#t as IntoSort>::Sort>));
-    let field_uses = fields.map(|(x, t)| {
-        quote! {
-            #x: eg.type_info
-               .get_sort_by::<<#t as IntoSort>::Sort>(|_| true)
-               .unwrap_or_else(|| panic!("Failed to lookup sort: {}", std::any::type_name::<#t>()))
-        }
-    });
+        .filter_map(|(x, t)| {
+            t.field
+                .as_ref()
+                .map(|(d, u)| (quote!(#x: #d), quote!(#x: #u)))
+        })
+        .unzip();
     // Bundle up the defs and uses into structs.
     let prim_def = quote!(struct Prim { #(#field_defs,)* });
     let prim_use = quote!(       Prim { #(#field_uses,)* });
@@ -71,11 +65,8 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
     // of features that this macro supports. Right now `|a: #, b: i64|` is
     // impossible to express with the current type constraints.
     let type_constraint = {
-        let has_type = |t: &Type| match t {
-            Type::Any => false,
-            Type::Type(_) => true,
-        };
-        let args_have_types = args.iter().map(|arg| &arg.t).all(has_type);
+        let has_type = |t: &Type| t.field.is_some();
+        let args_have_types = args.iter().all(|arg| has_type(&arg.t));
         let ret_has_type = has_type(&ret);
 
         // If we're in the simple case, we can use the `SimpleTypeConstraint`.
@@ -92,9 +83,11 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
             for arg in &args {
                 // NOTE: this is a conservative (incomplete!) check, as `syn::Type`
                 // is not `PartialEq`. See the TODO on `type_constraint`.
-                if let (Type::Any, Type::Type(_)) | (Type::Type(_), Type::Any) = (t, &arg.t) {
-                    todo!("AllEqualTypeConstraint doesn't support multiple argument types")
-                }
+                assert_eq!(
+                    has_type(t),
+                    has_type(&arg.t),
+                    "AllEqualTypeConstraint doesn't support multiple argument types"
+                )
             }
 
             let new = quote!(AllEqualTypeConstraint::new(self.name(), span.clone()));
@@ -131,18 +124,18 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
         };
         let cast = if is_varargs {
             let Arg { x, t } = &args[0];
-            match t {
-                Type::Any => quote!(),
-                Type::Type(t) => {
+            match &t.cast {
+                None => quote!(let #x = #x.copied();),
+                Some(t) => {
                     let cast = cast1(x, t);
                     quote!(let #x = #x.map(|#x| #cast);)
                 }
             }
         } else {
             args.iter()
-                .map(|Arg { x, t }| match t {
-                    Type::Any => quote!(),
-                    Type::Type(t) => {
+                .map(|Arg { x, t }| match &t.cast {
+                    None => quote!(let #x = *#x;),
+                    Some(t) => {
                         let cast = cast1(x, t);
                         quote!(let #x: #t = #cast;)
                     }
@@ -151,16 +144,16 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
         };
 
         // Do typechecking on the result of the body.
-        let yt = match &ret {
-            Type::Any => &value_type,
-            Type::Type(t) => t,
+        let yt = match &ret.cast {
+            None => &value_type,
+            Some(t) => t,
         };
         // If the primitive is fallible, put a `?` after the body.
         let fail = if is_fallible { quote!(?) } else { quote!() };
         // Cast the result back to an interned value.
-        let ret = match &ret {
-            Type::Any => quote!(#y),
-            Type::Type(t) => match target {
+        let ret = match &ret.cast {
+            None => quote!(#y),
+            Some(t) => match target {
                 Target::OldBackend => quote!(#y.store(&self.#y)),
                 Target::NewBackend => quote!(prims.get::<#t>(#y)),
             },
@@ -274,28 +267,22 @@ impl Parse for Args {
         }
 
         fn fix(input: ParseStream) -> Result<Args> {
-            let mut args = Punctuated::<Arg, Token![,]>::new();
-
             input.parse::<Token![|]>()?;
-            loop {
-                if input.peek(Token![|]) {
-                    break;
-                }
-                args.push_value(input.parse()?);
-                if input.peek(Token![|]) {
-                    break;
-                }
-                args.push_punct(input.parse()?);
-            }
+            let args = Punctuated::<Arg, Token![,]>::parse_separated_nonempty(input)?;
             input.parse::<Token![|]>()?;
-
             Ok(Args {
                 is_varargs: false,
                 args: args.into_iter().collect(),
             })
         }
 
-        var(input).or_else(|_| fix(input))
+        var(input).or_else(|a| {
+            fix(input).map_err(|b| {
+                let mut e = a;
+                e.combine(b);
+                e
+            })
+        })
     }
 }
 
@@ -313,18 +300,47 @@ impl Parse for Arg {
     }
 }
 
-enum Type {
-    Any,
-    Type(syn::Type),
+struct Type {
+    cast: Option<syn::Type>,
+    field: Option<(syn::Type, Expr)>,
 }
 
 impl Parse for Type {
     fn parse(input: ParseStream) -> Result<Self> {
-        if input.parse::<Token![#]>().is_ok() {
-            Ok(Type::Any)
+        let cast = match input.parse::<Token![#]>() {
+            Ok(_) => None,
+            Err(_) => Some(input.parse()?),
+        };
+
+        let field_def = syn::Type::Verbatim(match &cast {
+            None => quote!(ArcSort),
+            Some(t) => quote!(Arc<<#t as IntoSort>::Sort>),
+        });
+
+        let field = if input.peek(syn::token::Paren) {
+            let inner;
+            parenthesized!(inner in input);
+            let field_use = inner.parse()?;
+
+            Some((field_def, field_use))
+        } else if let Some(t) = &cast {
+            let sort = quote!(<#t as IntoSort>::Sort);
+
+            let field_use = Expr::Verbatim(quote! {
+               eg.type_info
+                   .get_sort_by::<#sort>(|_| true)
+                   .unwrap_or_else(|| panic!(
+                       "Failed to lookup sort: {}",
+                       ::std::any::type_name::<#t>()
+                   ))
+            });
+
+            Some((field_def, field_use))
         } else {
-            Ok(Type::Type(input.parse()?))
-        }
+            None
+        };
+
+        Ok(Type { cast, field })
     }
 }
 

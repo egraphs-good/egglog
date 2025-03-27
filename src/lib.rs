@@ -462,10 +462,10 @@ impl Default for EGraph {
             (a == b).then_some(())
         });
         add_primitive!(&mut eg, "ordering-min" = |a: #, b: #| -> # {
-            if a < b { *a } else { *b }
+            if a < b { a } else { b }
         });
         add_primitive!(&mut eg, "ordering-max" = |a: #, b: #| -> # {
-            if a > b { *a } else { *b }
+            if a > b { a } else { b }
         });
 
         eg.rulesets
