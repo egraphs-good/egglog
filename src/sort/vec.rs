@@ -121,14 +121,6 @@ impl Sort for VecSort {
     }
 
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
-        eg.add_primitive(Primitive(
-            Arc::new(VecRebuild {
-                name: "rebuild".into(),
-                vec: self.clone(),
-            }),
-            ExternalFunctionId::new_const(u32::MAX),
-        ));
-
         add_primitive!(eg, "vec-empty"  = |                             | -> Vec<Value> (self.clone()) { Vec::new()             });
         add_primitive!(eg, "vec-of"     = [xs: # (self.element())       ] -> Vec<Value> (self.clone()) { xs.collect()           });
         add_primitive!(eg, "vec-append" = [xs: Vec<Value> (self.clone())] -> Vec<Value> (self.clone()) { xs.flatten().collect() });
@@ -194,43 +186,6 @@ impl FromSort for Vec<Value> {
     fn load(sort: &Self::Sort, value: &Value) -> Self {
         let vecs = sort.vecs.lock().unwrap();
         vecs.get_index(value.bits as usize).unwrap().clone()
-    }
-}
-
-// TODO: is this used anywhere?
-struct VecRebuild {
-    name: Symbol,
-    vec: Arc<VecSort>,
-}
-
-impl PrimitiveLike for VecRebuild {
-    fn name(&self) -> Symbol {
-        self.name
-    }
-
-    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-        SimpleTypeConstraint::new(
-            self.name(),
-            vec![self.vec.clone(), self.vec.clone()],
-            span.clone(),
-        )
-        .into_box()
-    }
-
-    fn apply(
-        &self,
-        values: &[Value],
-        _sorts: (&[ArcSort], &ArcSort),
-        egraph: Option<&mut EGraph>,
-    ) -> Option<Value> {
-        let egraph = egraph.unwrap();
-        let vec = Vec::load(&self.vec, &values[0]);
-        let new_vec: Vec<Value> = vec
-            .iter()
-            .map(|e| egraph.find(&self.vec.element, *e))
-            .collect();
-        drop(vec);
-        Some(new_vec.store(&self.vec))
     }
 }
 
