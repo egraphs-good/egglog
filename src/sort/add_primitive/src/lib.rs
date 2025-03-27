@@ -74,7 +74,7 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
         if !is_varargs && args_have_types && ret_has_type {
             let x = args.iter().map(|arg| &arg.x);
             quote! {
-                let sorts = vec![#(self.#x.clone() as ArcSort,)* self.#y.clone()];
+                let sorts: Vec<ArcSort> = vec![#(self.#x.clone() as ArcSort,)* self.#y.clone()];
                 SimpleTypeConstraint::new(self.name(), sorts, span.clone()).into_box()
             }
         } else {
@@ -267,9 +267,21 @@ impl Parse for Args {
         }
 
         fn fix(input: ParseStream) -> Result<Args> {
+            let mut args = Punctuated::<Arg, Token![,]>::new();
+
             input.parse::<Token![|]>()?;
-            let args = Punctuated::<Arg, Token![,]>::parse_separated_nonempty(input)?;
+            loop {
+                if input.peek(Token![|]) {
+                    break;
+                }
+                args.push_value(input.parse()?);
+                if input.peek(Token![|]) {
+                    break;
+                }
+                args.push_punct(input.parse()?);
+            }
             input.parse::<Token![|]>()?;
+
             Ok(Args {
                 is_varargs: false,
                 args: args.into_iter().collect(),
