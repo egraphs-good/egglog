@@ -1,10 +1,22 @@
 use super::*;
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct VecContainer<V>(Vec<V>);
+
+impl Container for VecContainer<core_relations::Value> {
+    fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool {
+        rebuilder.rebuild_slice(&mut self.0)
+    }
+    fn iter(&self) -> impl Iterator<Item = core_relations::Value> + '_ {
+        self.0.iter().copied()
+    }
+}
+
 #[derive(Debug)]
 pub struct VecSort {
     name: Symbol,
     element: ArcSort,
-    vecs: Mutex<IndexSet<Vec<Value>>>,
+    vecs: Mutex<IndexSet<VecContainer<Value>>>,
 }
 
 impl VecSort {
@@ -73,11 +85,11 @@ impl Sort for VecSort {
     }
 
     fn column_ty(&self, prims: &Primitives) -> ColumnTy {
-        ColumnTy::Primitive(prims.get_ty::<Vec<core_relations::Value>>())
+        ColumnTy::Primitive(prims.get_ty::<VecContainer<core_relations::Value>>())
     }
 
     fn register_type(&self, prims: &mut Primitives) {
-        prims.register_type::<Vec<core_relations::Value>>();
+        prims.register_type::<VecContainer<core_relations::Value>>();
     }
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
@@ -96,45 +108,43 @@ impl Sort for VecSort {
         // TODO: Potential duplication of code
         let vecs = self.vecs.lock().unwrap();
         let vec = vecs.get_index(value.bits as usize).unwrap();
-        let mut result = Vec::new();
-        for e in vec.iter() {
-            result.push((self.element.clone(), *e));
-        }
-        result
+        vec.0.iter().map(|e| (self.element(), *e)).collect()
     }
 
     fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
         let vecs = self.vecs.lock().unwrap();
         let vec = vecs.get_index(value.bits as usize).unwrap();
         let mut changed = false;
-        let new_vec: Vec<_> = vec
-            .iter()
-            .map(|e| {
-                let mut e = *e;
-                changed |= self.element.canonicalize(&mut e, unionfind);
-                e
-            })
-            .collect();
+        let new_vec = VecContainer(
+            vec.0
+                .iter()
+                .map(|e| {
+                    let mut e = *e;
+                    changed |= self.element.canonicalize(&mut e, unionfind);
+                    e
+                })
+                .collect(),
+        );
         drop(vecs);
         *value = new_vec.store(self);
         changed
     }
 
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
-        add_primitive!(eg, "vec-empty"  = |                             | -> Vec<Value> (self.clone()) { Vec::new()             });
-        add_primitive!(eg, "vec-of"     = [xs: # (self.element())       ] -> Vec<Value> (self.clone()) { xs.collect()           });
-        add_primitive!(eg, "vec-append" = [xs: Vec<Value> (self.clone())] -> Vec<Value> (self.clone()) { xs.flatten().collect() });
+        add_primitive!(eg, "vec-empty"  = |                                      | -> VecContainer<Value> (self.clone()) { VecContainer(Vec::new()                    ) });
+        add_primitive!(eg, "vec-of"     = [xs: # (self.element())                ] -> VecContainer<Value> (self.clone()) { VecContainer(xs                  .collect()) });
+        add_primitive!(eg, "vec-append" = [xs: VecContainer<Value> (self.clone())] -> VecContainer<Value> (self.clone()) { VecContainer(xs.flat_map(|x| x.0).collect()) });
 
-        add_primitive!(eg, "vec-push" = |mut xs: Vec<Value> (self.clone()), x: # (self.element())| -> Vec<Value> (self.clone()) {{ xs.push(x); xs }});
-        add_primitive!(eg, "vec-pop"  = |mut xs: Vec<Value> (self.clone())                       | -> Vec<Value> (self.clone()) {{ xs.pop();   xs }});
+        add_primitive!(eg, "vec-push" = |mut xs: VecContainer<Value> (self.clone()), x: # (self.element())| -> VecContainer<Value> (self.clone()) {{ xs.0.push(x); xs }});
+        add_primitive!(eg, "vec-pop"  = |mut xs: VecContainer<Value> (self.clone())                       | -> VecContainer<Value> (self.clone()) {{ xs.0.pop();   xs }});
 
-        add_primitive!(eg, "vec-length" = |xs: Vec<Value> (self.clone())| -> i64 { xs.len() as i64 });
-        add_primitive!(eg, "vec-contains"     = |xs: Vec<Value> (self.clone()), x: # (self.element())| -?> () { ( xs.contains(&x)).then_some(()) });
-        add_primitive!(eg, "vec-not-contains" = |xs: Vec<Value> (self.clone()), x: # (self.element())| -?> () { (!xs.contains(&x)).then_some(()) });
+        add_primitive!(eg, "vec-length"       = |xs: VecContainer<Value> (self.clone())| -> i64 { xs.0.len() as i64 });
+        add_primitive!(eg, "vec-contains"     = |xs: VecContainer<Value> (self.clone()), x: # (self.element())| -?> () { ( xs.0.contains(&x)).then_some(()) });
+        add_primitive!(eg, "vec-not-contains" = |xs: VecContainer<Value> (self.clone()), x: # (self.element())| -?> () { (!xs.0.contains(&x)).then_some(()) });
 
-        add_primitive!(eg, "vec-get"    = |    xs: Vec<Value> (self.clone()), i: i64                       | -?> # (self.element()) { xs.get(i as usize).copied() });
-        add_primitive!(eg, "vec-set"    = |mut xs: Vec<Value> (self.clone()), i: i64, x: # (self.element())| -> Vec<Value> (self.clone()) {{ xs[i as usize] = x;    xs }});
-        add_primitive!(eg, "vec-remove" = |mut xs: Vec<Value> (self.clone()), i: i64                       | -> Vec<Value> (self.clone()) {{ xs.remove(i as usize); xs }});
+        add_primitive!(eg, "vec-get"    = |    xs: VecContainer<Value> (self.clone()), i: i64                       | -?> # (self.element()) { xs.0.get(i as usize).copied() });
+        add_primitive!(eg, "vec-set"    = |mut xs: VecContainer<Value> (self.clone()), i: i64, x: # (self.element())| -> VecContainer<Value> (self.clone()) {{ xs.0[i as usize] = x;    xs }});
+        add_primitive!(eg, "vec-remove" = |mut xs: VecContainer<Value> (self.clone()), i: i64                       | -> VecContainer<Value> (self.clone()) {{ xs.0.remove(i as usize); xs }});
     }
 
     fn extract_term(
@@ -144,13 +154,14 @@ impl Sort for VecSort {
         extractor: &Extractor,
         termdag: &mut TermDag,
     ) -> Option<(Cost, Term)> {
-        let vec = Vec::load(self, &value);
+        let vec = VecContainer::load(self, &value);
         let mut cost = 0usize;
 
-        if vec.is_empty() {
+        if vec.0.is_empty() {
             Some((cost, termdag.app("vec-empty".into(), vec![])))
         } else {
             let elems = vec
+                .0
                 .into_iter()
                 .map(|e| {
                     let (extra_cost, term) = extractor.find_best(e, termdag, &self.element)?;
@@ -168,7 +179,7 @@ impl Sort for VecSort {
     }
 }
 
-impl IntoSort for Vec<Value> {
+impl IntoSort for VecContainer<Value> {
     type Sort = VecSort;
     fn store(self, sort: &Self::Sort) -> Value {
         let mut vecs = sort.vecs.lock().unwrap();
@@ -181,7 +192,7 @@ impl IntoSort for Vec<Value> {
     }
 }
 
-impl FromSort for Vec<Value> {
+impl FromSort for VecContainer<Value> {
     type Sort = VecSort;
     fn load(sort: &Self::Sort, value: &Value) -> Self {
         let vecs = sort.vecs.lock().unwrap();
