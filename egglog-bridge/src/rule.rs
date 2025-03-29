@@ -894,37 +894,33 @@ impl RuleBuilder<'_> {
     ) {
         let info = &self.egraph.funcs[func];
         let table = info.table;
-        let mut entries = entries.to_vec();
+        let entries = entries.to_vec();
         let schema_math = SchemaMath {
             tracing: self.egraph.tracing,
             subsume: info.can_subsume,
             func_cols: info.schema.len(),
         };
         if self.egraph.tracing {
-            let todo_remove = eprintln!("subsumed={subsume_entry:?}");
-            // Based on subsumption status we need to also subsume this row that we have looked up.
-            let res = self.lookup_with_subsumed(
-                func,
-                &entries[0..schema_math.num_keys()],
-                subsume_entry.clone(),
-            );
-            let new_val = entries.last().unwrap().clone();
-            entries[schema_math.ret_val_col()] = res.into();
-            self.add_callback(move |inner, rb| {
-                let mut dst_vars = inner.convert_all(&entries);
-                dst_vars.resize_with(schema_math.table_columns(), || {
-                    inner.convert(&subsume_entry)
+            let res = self.lookup(func, &entries[0..entries.len() - 1]);
+            self.union(res.into(), entries.last().unwrap().clone());
+            if schema_math.subsume {
+                // Set the original row but with the passed-in subsumption value.
+                self.add_callback(move |inner, rb| {
+                    let mut dst_vars = inner.convert_all(&entries);
+                    dst_vars.resize_with(schema_math.table_columns(), || {
+                        inner.convert(&subsume_entry)
+                    });
+                    dst_vars[schema_math.ret_val_col()] = inner.convert(&res.into());
+                    let proof_var = rb.lookup(
+                        table,
+                        &dst_vars[0..schema_math.num_keys()],
+                        ColumnId::from_usize(schema_math.proof_id_col()),
+                    )?;
+                    dst_vars[schema_math.ts_col()] = inner.next_ts.to_value().into();
+                    dst_vars[schema_math.proof_id_col()] = proof_var.into();
+                    rb.insert(table, &dst_vars).context("set")
                 });
-                let proof_var = rb.lookup(
-                    table,
-                    &dst_vars[0..schema_math.num_keys()],
-                    ColumnId::from_usize(schema_math.proof_id_col()),
-                )?;
-                dst_vars[schema_math.ts_col()] = inner.next_ts.to_value().into();
-                dst_vars[schema_math.proof_id_col()] = proof_var.into();
-                rb.insert(table, &dst_vars).context("set")
-            });
-            self.union(res.into(), new_val);
+            }
         } else {
             self.query.add_rule.push(Box::new(move |inner, rb| {
                 let mut dst_vars = inner.convert_all(&entries);
