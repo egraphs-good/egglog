@@ -19,11 +19,11 @@ use thiserror::Error;
 
 use crate::syntax::{Binding, Entry, Statement, TermFragment};
 use crate::term_proof_dag::PrimitiveConstant;
-use crate::SchemaMath;
 use crate::{
     proof_spec::{ProofBuilder, RebuildVars},
     ColumnTy, DefaultVal, EGraph, FunctionId, Result, RuleId, RuleInfo, Timestamp,
 };
+use crate::{SchemaMath, NOT_SUBSUMED, SUBSUMED};
 
 define_id!(pub Variable, u32, "A variable in an egglog query");
 pub(crate) type DstVar = core_relations::QueryEntry;
@@ -335,17 +335,26 @@ impl RuleBuilder<'_> {
 
     pub(crate) fn add_atom_func(&mut self, func: FunctionId, entries: &[QueryEntry]) {
         let table_id = self.egraph.funcs[func].table;
-        self.add_atom_with_timestamp_and_func(table_id, Some(func), entries);
+        self.add_atom_with_timestamp_and_func(table_id, Some(func), None, entries);
     }
 
     pub(crate) fn add_atom_with_timestamp(&mut self, table: TableId, entries: &[QueryEntry]) {
-        self.add_atom_with_timestamp_and_func(table, None, entries);
+        self.add_atom_with_timestamp_and_func(table, None, None, entries);
     }
 
-    fn add_atom_with_timestamp_and_func(
+    /// A low-level way to add an atom to a query. Most of the time you can use
+    /// [`RuleBuilder::add_atom_func`] or [`RuleBuilder::add_atom_with_timestamp`].
+    ///
+    /// The atom is added directly to `table`. If `func` is supplied, then metadata about the
+    /// function is used for schema validation and proof generation. If `subsume_entry` is
+    /// supplied and the supplied function is enabled for subsumption, then the given
+    /// [`QueryEntry`] is used to populated the subsumption column for the table. This allows
+    /// higher-level routines to constrain the subsumption column or use it for other purposes.
+    pub(crate) fn add_atom_with_timestamp_and_func(
         &mut self,
         table: TableId,
         func: Option<FunctionId>,
+        subsume_entry: Option<QueryEntry>,
         entries: &[QueryEntry],
     ) {
         let mut atom = entries.to_vec();
@@ -354,19 +363,24 @@ impl RuleBuilder<'_> {
             assert_eq!(info.schema.len(), entries.len());
             SchemaMath {
                 tracing: self.egraph.tracing,
-                subsume: false,
+                subsume: info.can_subsume,
                 func_cols: info.schema.len(),
             }
         } else {
             SchemaMath {
                 tracing: self.egraph.tracing,
-                subsume: false,
+                subsume: subsume_entry.is_some(),
                 func_cols: entries.len(),
             }
         };
         atom.resize_with(schema_math.table_columns(), || {
             self.new_var(ColumnTy::Id).into()
         });
+        if let Some(subsume_entry) = subsume_entry {
+            if schema_math.subsume {
+                atom[schema_math.subsume_col()] = subsume_entry;
+            }
+        }
         if self.egraph.tracing {
             let proof_var = atom[schema_math.proof_id_col()].var();
             self.proof_builder.add_lhs(entries, proof_var);
@@ -505,9 +519,69 @@ impl RuleBuilder<'_> {
         Ok(())
     }
 
-    /// Look up the value of a function in the database. If the value is not
-    /// present, the configured default for the function is used.
-    pub fn lookup(&mut self, func: FunctionId, entries: &[QueryEntry]) -> Variable {
+    /// Subsume the given entry in `func`.
+    ///
+    /// `entries` should match the number of keys to the function.
+    pub fn subsume(&mut self, func: FunctionId, entries: &[QueryEntry]) {
+        // First, insert a subsumed value if the tuple is new.
+        let ret = self.lookup_with_subsumed(
+            func,
+            entries,
+            QueryEntry::Const {
+                val: SUBSUMED,
+                ty: ColumnTy::Id,
+            },
+        );
+        let info = &self.egraph.funcs[func];
+        let schema_math = SchemaMath {
+            tracing: self.egraph.tracing,
+            subsume: info.can_subsume,
+            func_cols: info.schema.len(),
+        };
+        assert!(info.can_subsume);
+        assert_eq!(entries.len(), info.schema.len());
+        let entries = entries.to_vec();
+        let table = info.table;
+        self.add_callback(move |inner, rb| {
+            // Then, add a tuple subsuming the entry, but only if the entry isn't already subsumed.
+            // Look up the current subsume value.
+            let mut dst_entries = inner.convert_all(&entries);
+            let cur_subsume_val = rb.lookup(
+                table,
+                &dst_entries,
+                ColumnId::from_usize(schema_math.subsume_col()),
+            )?;
+            let cur_proof_val = if schema_math.tracing {
+                Some(rb.lookup(
+                    table,
+                    &dst_entries,
+                    ColumnId::from_usize(schema_math.proof_id_col()),
+                )?)
+            } else {
+                None
+            };
+            dst_entries.resize_with(schema_math.table_columns(), || SUBSUMED.into());
+            dst_entries[schema_math.ret_val_col()] = inner.convert(&ret.into());
+            dst_entries[schema_math.ts_col()] = inner.next_ts.to_value().into();
+            if let Some(proof_val) = cur_proof_val {
+                dst_entries[schema_math.proof_id_col()] = proof_val.into();
+            }
+            rb.insert_if_eq(
+                table,
+                cur_subsume_val.into(),
+                NOT_SUBSUMED.into(),
+                &dst_entries,
+            )?;
+            Ok(())
+        });
+    }
+
+    pub(crate) fn lookup_with_subsumed(
+        &mut self,
+        func: FunctionId,
+        entries: &[QueryEntry],
+        subsumed: QueryEntry,
+    ) -> Variable {
         let entries = entries.to_vec();
         let info = &self.egraph.funcs[func];
         let res = self.query.vars.push(VarInfo {
@@ -518,7 +592,7 @@ impl RuleBuilder<'_> {
         let id_counter = self.query.id_counter;
         let schema_math = SchemaMath {
             tracing: self.egraph.tracing,
-            subsume: false,
+            subsume: info.can_subsume,
             func_cols: info.schema.len(),
         };
         let cb: BuildRuleCallback = match info.default_val {
@@ -544,7 +618,7 @@ impl RuleBuilder<'_> {
                         } else if schema_math.tracing && i == schema_math.proof_id_col() {
                             write_vals.push(wv_ref);
                         } else if schema_math.subsume && i == schema_math.subsume_col() {
-                            todo!("subsumption not implemented yet")
+                            write_vals.push(inner.convert(&subsumed).into())
                         } else {
                             unreachable!()
                         }
@@ -658,6 +732,19 @@ impl RuleBuilder<'_> {
         res
     }
 
+    /// Look up the value of a function in the database. If the value is not
+    /// present, the configured default for the function is used.
+    pub fn lookup(&mut self, func: FunctionId, entries: &[QueryEntry]) -> Variable {
+        self.lookup_with_subsumed(
+            func,
+            entries,
+            QueryEntry::Const {
+                val: NOT_SUBSUMED,
+                ty: ColumnTy::Id,
+            },
+        )
+    }
+
     /// Merge the two values in the union-find.
     pub fn union(&mut self, mut l: QueryEntry, mut r: QueryEntry) {
         let cb: BuildRuleCallback = if self.query.tracing {
@@ -715,11 +802,26 @@ impl RuleBuilder<'_> {
         func: FunctionId,
         before: &[QueryEntry],
         after: &[QueryEntry],
+        // If subsumption is enabled for this function, we can optionally propagate it to the next
+        // row.
+        subsume_var: Option<Variable>,
     ) {
+        let todo_remove = eprintln!("rebuild, subsumed={subsume_var:?}");
         assert_eq!(before.len(), after.len());
         self.remove(func, &before[..before.len() - 1]);
         if !self.egraph.tracing {
-            self.set(func, after);
+            if let Some(subsume_var) = subsume_var {
+                self.set_with_subsume(
+                    func,
+                    after,
+                    QueryEntry::Var {
+                        id: subsume_var,
+                        name: None,
+                    },
+                );
+            } else {
+                self.set(func, after);
+            }
             return;
         }
         let table = self.egraph.funcs[func].table;
@@ -740,11 +842,22 @@ impl RuleBuilder<'_> {
         );
         let after = SmallVec::<[_; 4]>::from_iter(after.iter().cloned());
         let uf_table = self.query.uf_table;
+        let info = &self.egraph.funcs[func];
+        let schema_math = SchemaMath {
+            tracing: self.egraph.tracing,
+            subsume: info.can_subsume,
+            func_cols: info.schema.len(),
+        };
         self.query.add_rule.push(Box::new(move |inner, rb| {
             add_proof(inner, rb)?;
             let mut dst_vars = inner.convert_all(&after);
-            dst_vars.push(inner.next_ts.to_value().into());
-            dst_vars.push(inner.mapping[term_var]);
+            dst_vars.resize_with(schema_math.table_columns(), || {
+                inner.next_ts.to_value().into()
+            });
+            dst_vars[schema_math.proof_id_col()] = inner.mapping[term_var];
+            if let Some(subsume_var) = subsume_var {
+                dst_vars[schema_math.subsume_col()] = inner.mapping[subsume_var];
+            }
             // This congruence rule will also serve as a proof that the old and
             // new terms are equal.
             rb.insert(
@@ -763,15 +876,62 @@ impl RuleBuilder<'_> {
 
     /// Set the value of a function in the database.
     pub fn set(&mut self, func: FunctionId, entries: &[QueryEntry]) {
-        let table = self.egraph.funcs[func].table;
-        let entries = entries.to_vec();
+        self.set_with_subsume(
+            func,
+            entries,
+            QueryEntry::Const {
+                val: NOT_SUBSUMED,
+                ty: ColumnTy::Id,
+            },
+        );
+    }
+
+    pub(crate) fn set_with_subsume(
+        &mut self,
+        func: FunctionId,
+        entries: &[QueryEntry],
+        subsume_entry: QueryEntry,
+    ) {
+        let info = &self.egraph.funcs[func];
+        let table = info.table;
+        let mut entries = entries.to_vec();
+        let schema_math = SchemaMath {
+            tracing: self.egraph.tracing,
+            subsume: info.can_subsume,
+            func_cols: info.schema.len(),
+        };
         if self.egraph.tracing {
-            let res = self.lookup(func, &entries[0..entries.len() - 1]);
-            self.union(res.into(), entries.last().unwrap().clone());
+            let todo_remove = eprintln!("subsumed={subsume_entry:?}");
+            // Based on subsumption status we need to also subsume this row that we have looked up.
+            let res = self.lookup_with_subsumed(
+                func,
+                &entries[0..schema_math.num_keys()],
+                subsume_entry.clone(),
+            );
+            let new_val = entries.last().unwrap().clone();
+            entries[schema_math.ret_val_col()] = res.into();
+            self.add_callback(move |inner, rb| {
+                let mut dst_vars = inner.convert_all(&entries);
+                dst_vars.resize_with(schema_math.table_columns(), || {
+                    inner.convert(&subsume_entry)
+                });
+                let proof_var = rb.lookup(
+                    table,
+                    &dst_vars[0..schema_math.num_keys()],
+                    ColumnId::from_usize(schema_math.proof_id_col()),
+                )?;
+                dst_vars[schema_math.ts_col()] = inner.next_ts.to_value().into();
+                dst_vars[schema_math.proof_id_col()] = proof_var.into();
+                rb.insert(table, &dst_vars).context("set")
+            });
+            self.union(res.into(), new_val);
         } else {
             self.query.add_rule.push(Box::new(move |inner, rb| {
                 let mut dst_vars = inner.convert_all(&entries);
-                dst_vars.push(inner.next_ts.to_value().into());
+                dst_vars.resize_with(schema_math.table_columns(), || {
+                    inner.convert(&subsume_entry)
+                });
+                dst_vars[schema_math.ts_col()] = inner.next_ts.to_value().into();
                 rb.insert(table, &dst_vars).context("set")
             }));
         };

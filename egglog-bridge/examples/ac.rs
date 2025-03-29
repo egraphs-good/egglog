@@ -33,14 +33,14 @@ fn main() {
             default: DefaultVal::FreshId,
             merge: MergeFn::UnionId,
             name: "num".into(),
-            can_subsume: true,
+            can_subsume: false,
         });
         let add_table = egraph.add_table(FunctionConfig {
             schema: vec![ColumnTy::Id; 3],
             default: DefaultVal::FreshId,
             merge: MergeFn::UnionId,
             name: "add".into(),
-            can_subsume: true,
+            can_subsume: false,
         });
 
         let add_comm = define_rule! {

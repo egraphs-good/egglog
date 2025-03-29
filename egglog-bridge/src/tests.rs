@@ -18,99 +18,27 @@ use crate::{
     MergeFn, QueryEntry,
 };
 
-#[test]
-fn ac() {
+fn ac_test(tracing: bool, can_subsume: bool) {
     const N: usize = 5;
-    let mut egraph = EGraph::default();
+    let mut egraph = if tracing {
+        EGraph::with_tracing()
+    } else {
+        EGraph::default()
+    };
     let int_prim = egraph.primitives_mut().register_type::<i64>();
     let num_table = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Primitive(int_prim), ColumnTy::Id],
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "num".into(),
-        can_subsume: false,
+        can_subsume,
     });
     let add_table = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id; 3],
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "add".into(),
-        can_subsume: false,
-    });
-
-    let add_comm = define_rule! {
-        [egraph] ((-> (add_table x y) id))
-              => ((set (add_table y x) id))
-    };
-
-    let add_assoc = define_rule! {
-        [egraph] ((-> (add_table x (add_table y z)) id))
-              => ((set (add_table (add_table x y) z) id))
-    };
-
-    // Running these rules on an empty database should change nothing.
-    assert!(!egraph.run_rules(&[add_comm, add_assoc]).unwrap());
-
-    // Fill the database.
-    let mut ids = Vec::new();
-    //  Add 0 .. N to the database.
-    let num_rows = (0..N)
-        .map(|i| {
-            let id = egraph.fresh_id();
-            let i = egraph.primitives_mut().get(i as i64);
-            ids.push(id);
-            (num_table, vec![i, id])
-        })
-        .collect::<Vec<_>>();
-    egraph.add_values(num_rows);
-
-    // construct (0 + ... + N), left-associated, and (N + ... + 0),
-    // right-associated. With the assoc and comm rules saturated, these two
-    // should be equal.
-    let (left_root, right_root) = {
-        let mut to_add = Vec::new();
-        let mut prev = ids[0];
-        for num in &ids[1..] {
-            let id = egraph.fresh_id();
-            to_add.push((add_table, vec![*num, prev, id]));
-            prev = id;
-        }
-        let left_root = to_add.last().unwrap().1[2];
-        prev = *ids.last().unwrap();
-        for num in ids[0..(N - 1)].iter() {
-            let id = egraph.fresh_id();
-            to_add.push((add_table, vec![prev, *num, id]));
-            prev = id;
-        }
-        let right_root = to_add.last().unwrap().1[2];
-        egraph.add_values(to_add);
-        (left_root, right_root)
-    };
-    // Saturate
-    while egraph.run_rules(&[add_comm, add_assoc]).unwrap() {}
-    let canon_left = egraph.get_canon(left_root);
-    let canon_right = egraph.get_canon(right_root);
-    assert_eq!(canon_left, canon_right);
-}
-
-#[test]
-fn ac_tracing() {
-    const N: usize = 5;
-    let mut egraph = EGraph::with_tracing();
-    let int_prim = egraph.primitives_mut().register_type::<i64>();
-    let num_table = egraph.add_table(FunctionConfig {
-        schema: vec![ColumnTy::Primitive(int_prim), ColumnTy::Id],
-        default: DefaultVal::FreshId,
-        merge: MergeFn::UnionId,
-        name: "num".into(),
-        can_subsume: false,
-    });
-    let add_table = egraph.add_table(FunctionConfig {
-        schema: vec![ColumnTy::Id; 3],
-        default: DefaultVal::FreshId,
-        merge: MergeFn::UnionId,
-        name: "add".into(),
-        can_subsume: false,
+        can_subsume,
     });
 
     let add_comm = define_rule! {
@@ -156,18 +84,40 @@ fn ac_tracing() {
     while egraph.run_rules(&[add_comm, add_assoc]).unwrap() {}
     let canon_left = egraph.get_canon(left_root);
     let canon_right = egraph.get_canon(right_root);
-    assert_eq!(canon_left, canon_right);
-    let mut row = Vec::new();
-    egraph.dump_table(add_table, |vals| {
-        row.clear();
-        row.extend_from_slice(vals);
-    });
+    assert_eq!(canon_left, canon_right, "failed to reassociate!");
+    if tracing {
+        let mut row = Vec::new();
+        egraph.dump_table(add_table, |vals| {
+            row.clear();
+            row.extend_from_slice(vals);
+        });
 
-    let term_id = egraph.lookup_id(add_table, &row[0..row.len() - 1]).unwrap();
-    let term_explanation = egraph.explain_term(term_id).unwrap();
-    egraph.check_term_proof(term_explanation).unwrap();
-    let eq_explanation = egraph.explain_terms_equal(left_root, right_root).unwrap();
-    egraph.check_eq_proof(&eq_explanation).unwrap();
+        let term_id = egraph.lookup_id(add_table, &row[0..row.len() - 1]).unwrap();
+        let term_explanation = egraph.explain_term(term_id).unwrap();
+        egraph.check_term_proof(term_explanation).unwrap();
+        let eq_explanation = egraph.explain_terms_equal(left_root, right_root).unwrap();
+        egraph.check_eq_proof(&eq_explanation).unwrap();
+    }
+}
+
+#[test]
+fn ac_tracing_subsume() {
+    ac_test(true, true);
+}
+
+#[test]
+fn ac_tracing() {
+    ac_test(true, false);
+}
+
+#[test]
+fn ac() {
+    ac_test(false, false);
+}
+
+#[test]
+fn ac_subsume() {
+    ac_test(false, true);
 }
 
 #[test]
@@ -249,16 +199,28 @@ fn ac_fail() {
 
 #[test]
 fn math() {
-    let handles = Vec::from_iter((0..2).map(|_| thread::spawn(|| math_test(EGraph::default()))));
+    let handles =
+        Vec::from_iter((0..2).map(|_| thread::spawn(|| math_test(EGraph::default(), false))));
+    handles.into_iter().for_each(|h| h.join().unwrap());
+}
+
+#[test]
+fn math_subsume() {
+    let handles =
+        Vec::from_iter((0..2).map(|_| thread::spawn(|| math_test(EGraph::default(), true))));
     handles.into_iter().for_each(|h| h.join().unwrap());
 }
 
 #[test]
 fn math_tracing() {
-    math_test(EGraph::with_tracing())
+    math_test(EGraph::with_tracing(), false)
+}
+#[test]
+fn math_tracing_subsume() {
+    math_test(EGraph::with_tracing(), true)
 }
 
-fn math_test(mut egraph: EGraph) {
+fn math_test(mut egraph: EGraph, can_subsume: bool) {
     const N: usize = 8;
     let rational_ty = egraph.primitives_mut().register_type::<Rational64>();
     let string_ty = egraph.primitives_mut().register_type::<&'static str>();
@@ -268,49 +230,49 @@ fn math_test(mut egraph: EGraph) {
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "diff".into(),
-        can_subsume: false,
+        can_subsume,
     });
     let integral = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "integral".into(),
-        can_subsume: false,
+        can_subsume,
     });
     let add = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "add".into(),
-        can_subsume: false,
+        can_subsume,
     });
     let sub = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "sub".into(),
-        can_subsume: false,
+        can_subsume,
     });
     let mul = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "mul".into(),
-        can_subsume: false,
+        can_subsume,
     });
     let div = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "div".into(),
-        can_subsume: false,
+        can_subsume,
     });
     let pow = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "pow".into(),
-        can_subsume: false,
+        can_subsume,
     });
 
     let ln = egraph.add_table(FunctionConfig {
@@ -318,42 +280,42 @@ fn math_test(mut egraph: EGraph) {
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "ln".into(),
-        can_subsume: false,
+        can_subsume,
     });
     let sqrt = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id],
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "sqrt".into(),
-        can_subsume: false,
+        can_subsume,
     });
     let sin = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id],
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "sin".into(),
-        can_subsume: false,
+        can_subsume,
     });
     let cos = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Id, ColumnTy::Id],
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "cos".into(),
-        can_subsume: false,
+        can_subsume,
     });
     let rat = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Primitive(rational_ty), ColumnTy::Id],
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "rat".into(),
-        can_subsume: false,
+        can_subsume,
     });
     let var = egraph.add_table(FunctionConfig {
         schema: vec![ColumnTy::Primitive(string_ty), ColumnTy::Id],
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "var".into(),
-        can_subsume: false,
+        can_subsume,
     });
 
     let zero = egraph.primitive_constant(Rational64::new(0, 1));

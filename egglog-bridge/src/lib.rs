@@ -288,21 +288,30 @@ impl EGraph {
     /// # Panics
     /// This method panics if the values do not match the arity of the function.
     pub fn add_term(&mut self, func: FunctionId, inputs: &[Value], desc: &str) -> Value {
+        let info = &self.funcs[func];
+        let schema_math = SchemaMath {
+            tracing: self.tracing,
+            subsume: info.can_subsume,
+            func_cols: info.schema.len(),
+        };
         let mut extended_row = Vec::new();
         extended_row.extend_from_slice(inputs);
+        extended_row.resize_with(schema_math.table_columns(), || Value::new(0));
+        extended_row[schema_math.ts_col()] = self.next_ts().to_value();
         let res = if self.tracing {
             let reason = self.get_fiat_reason(desc);
             let term = self.get_term(func, inputs, reason);
-            extended_row.push(term);
-            extended_row.push(self.next_ts().to_value());
-            extended_row.push(term);
+            extended_row[schema_math.ret_val_col()] = term;
+            extended_row[schema_math.proof_id_col()] = term;
             term
         } else {
             let id = self.fresh_id();
-            extended_row.push(id);
-            extended_row.push(self.next_ts().to_value());
+            extended_row[schema_math.ret_val_col()] = id;
             id
         };
+        if schema_math.subsume {
+            extended_row[schema_math.subsume_col()] = NOT_SUBSUMED;
+        }
         let table_id = self.funcs[func].table;
         self.db
             .get_table(table_id)
@@ -390,9 +399,18 @@ impl EGraph {
         };
         let mut bufs = DenseIdMap::default();
         for (func, row) in values.into_iter() {
-            extended_row.extend_from_slice(&row);
-            extended_row.push(self.next_ts().to_value());
             let table_info = &self.funcs[func];
+            let schema_math = SchemaMath {
+                tracing: self.tracing,
+                subsume: table_info.can_subsume,
+                func_cols: table_info.schema.len(),
+            };
+            extended_row.extend_from_slice(&row);
+            extended_row.resize_with(schema_math.table_columns(), || Value::new(0));
+            extended_row[schema_math.ts_col()] = self.next_ts().to_value();
+            if schema_math.subsume {
+                extended_row[schema_math.subsume_col()] = NOT_SUBSUMED;
+            }
             let table_id = table_info.table;
             if let Some(reason_id) = reason_id {
                 // Get the term id itself
@@ -407,7 +425,7 @@ impl EGraph {
                     self.next_ts().to_value(),
                     reason_id,
                 ]);
-                extended_row.push(term_id);
+                extended_row[schema_math.proof_id_col()] = term_id;
             }
             let buf = bufs.get_or_insert(table_id, || self.db.get_table(table_id).new_buffer());
             buf.stage_insert(&extended_row);
@@ -474,20 +492,25 @@ impl EGraph {
     ///
     /// Useful for debugging.
     pub fn dump_table(&self, table: FunctionId, mut f: impl FnMut(&[Value])) {
+        let info = &self.funcs[table];
         let table = self.funcs[table].table;
+        let schema_math = SchemaMath {
+            tracing: self.tracing,
+            subsume: info.can_subsume,
+            func_cols: info.schema.len(),
+        };
         let imp = self.db.get_table(table);
-        let truncate = if self.tracing { 2 } else { 1 };
         let all = imp.all();
         let mut cur = Offset::new(0);
         let mut buf = TaggedRowBuffer::new(imp.spec().arity());
         while let Some(next) = imp.scan_bounded(all.as_ref(), cur, 500, &mut buf) {
             buf.non_stale()
-                .for_each(|(_, row)| f(&row[0..row.len() - truncate]));
+                .for_each(|(_, row)| f(&row[0..schema_math.func_cols]));
             cur = next;
             buf.clear();
         }
         buf.non_stale()
-            .for_each(|(_, row)| f(&row[0..row.len() - truncate]));
+            .for_each(|(_, row)| f(&row[0..schema_math.func_cols]));
     }
 
     /// A basic method for dumping the state of the database to `log::info!`.
@@ -792,6 +815,7 @@ impl EGraph {
         schema: &[ColumnTy],
         col: ColumnId,
     ) -> RuleId {
+        let subsume = self.funcs[table].can_subsume;
         let table_id = self.funcs[table].table;
         let uf_table = self.uf_table;
         // Two atoms, one binding a whole tuple, one binding a displaced column
@@ -802,7 +826,17 @@ impl EGraph {
             vars.push(rb.new_var(*ty).into());
         }
         let canon_val = rb.new_var(ColumnTy::Id);
-        rb.add_atom_with_timestamp(table_id, &vars);
+        let subsume_var = if subsume {
+            Some(rb.new_var(ColumnTy::Id))
+        } else {
+            None
+        };
+        rb.add_atom_with_timestamp_and_func(
+            table_id,
+            Some(table),
+            subsume_var.map(QueryEntry::from),
+            &vars,
+        );
         rb.add_atom_with_timestamp(uf_table, &[vars[col.index()].clone(), canon_val.into()]);
         rb.set_focus(1); // Set the uf atom as the sole focus.
 
@@ -819,18 +853,30 @@ impl EGraph {
         }
 
         // Remove the old row and insert the new one.
-        rb.rebuild_row(table, &vars, &canon);
+        rb.rebuild_row(table, &vars, &canon, subsume_var);
         rb.build()
     }
 
     fn nonincremental_rebuild(&mut self, table: FunctionId, schema: &[ColumnTy]) -> RuleId {
+        let can_subsume = self.funcs[table].can_subsume;
+        let table_id = self.funcs[table].table;
         let mut rb = self.new_rule(&format!("nonincremental rebuild {table:?}"), false);
         rb.set_plan_strategy(PlanStrategy::MinCover);
         let mut vars = Vec::<QueryEntry>::with_capacity(schema.len());
         for ty in schema {
             vars.push(rb.new_var(*ty).into());
         }
-        rb.query_table(table, &vars).unwrap();
+        let subsume_var = if can_subsume {
+            Some(rb.new_var(ColumnTy::Id))
+        } else {
+            None
+        };
+        rb.add_atom_with_timestamp_and_func(
+            table_id,
+            Some(table),
+            subsume_var.map(QueryEntry::from),
+            &vars,
+        );
         let mut lhs = SmallVec::<[QueryEntry; 4]>::new();
         let mut rhs = SmallVec::<[QueryEntry; 4]>::new();
         let mut canon = Vec::<QueryEntry>::with_capacity(schema.len());
@@ -845,7 +891,7 @@ impl EGraph {
             })
         }
         rb.check_for_update(&lhs, &rhs).unwrap();
-        rb.rebuild_row(table, &vars, &canon);
+        rb.rebuild_row(table, &vars, &canon, subsume_var);
         rb.build()
     }
 }
@@ -948,12 +994,18 @@ impl MergeFn {
                 let panic = egraph.new_panic(format!(
                     "Illegal merge attempted for function {function_name}"
                 ));
-                Box::new(move |state, cur, new, _out| {
+                Box::new(move |state, cur, new, out| {
                     if cur != new {
                         let res = state.call_external_func(panic, &[]);
                         assert_eq!(res, None);
                     }
-                    false
+                    if let Some(subsume) = schema_math.propagate_subsume(cur, new) {
+                        out.extend_from_slice(new);
+                        out[schema_math.subsume_col()] = subsume;
+                        true
+                    } else {
+                        false
+                    }
                 })
             }
             MergeFn::Const(val) => {
@@ -963,12 +1015,18 @@ impl MergeFn {
                 );
                 let val = *val;
                 Box::new(move |_, old, new, out| {
-                    if old[schema_math.ret_val_col()] == val {
-                        return false;
+                    if let Some(subsume) = schema_math.propagate_subsume(old, new) {
+                        out.extend_from_slice(new);
+                        out[schema_math.subsume_col()] = subsume;
+                        out[schema_math.ret_val_col()] = val;
+                        true
+                    } else if old[schema_math.ret_val_col()] != val {
+                        out.extend_from_slice(new);
+                        out[schema_math.ret_val_col()] = val;
+                        true
+                    } else {
+                        false
                     }
-                    out.extend_from_slice(new);
-                    out[schema_math.ret_val_col()] = val;
-                    true
                 })
             }
             MergeFn::UnionId => {
@@ -987,26 +1045,49 @@ impl MergeFn {
                         // behavior.
                         let res = std::cmp::min(l, r);
                         out[schema_math.ret_val_col()] = res;
+                        if let Some(v) = schema_math.propagate_subsume(cur, new) {
+                            out[schema_math.subsume_col()] = v;
+                        }
                         r == res
+                    } else if let Some(v) = schema_math.propagate_subsume(cur, new) {
+                        out.extend_from_slice(new);
+                        out[schema_math.subsume_col()] = v;
+                        true
                     } else {
                         false
                     }
                 })
             }
-            MergeFn::Old => Box::new(|_, _, _, _| false),
-            MergeFn::New => Box::new(move |_, old, new, out| {
-                if new[schema_math.ret_val_col()] == old[schema_math.ret_val_col()] {
-                    false
-                } else {
-                    out.extend_from_slice(new);
-                    true
-                }
-            }),
+            MergeFn::Old => {
+                assert!(
+                    !schema_math.subsume,
+                    "subsumption not supported for the 'old' merge function"
+                );
+                Box::new(|_, _, _, _| false)
+            }
+            MergeFn::New => {
+                assert!(
+                    !schema_math.subsume,
+                    "subsumption not supported for the 'new' merge function"
+                );
+                Box::new(move |_, old, new, out| {
+                    if new[schema_math.ret_val_col()] == old[schema_math.ret_val_col()] {
+                        false
+                    } else {
+                        out.extend_from_slice(new);
+                        true
+                    }
+                })
+            }
             // NB: The primitive and function-based merge functions heap allocate a single callback
             // for each layer of nesting. This introduces a bit of overhead, particularly for cases
             // that look like `(f old new)` or `(f new old)`. We could special-case common cases in
             // this function if that overhead shows up.
             MergeFn::Primitive(func, args) => {
+                assert!(
+                    !schema_math.subsume,
+                    "subsumption not supported for primitive merge functions"
+                );
                 assert!(
                     !egraph.tracing,
                     "proofs aren't supported for non-union merge functions"
@@ -1044,6 +1125,10 @@ impl MergeFn {
                 })
             }
             MergeFn::Function(function_id, args) => {
+                assert!(
+                    !schema_math.subsume,
+                    "subsumption not supported for non-union merge functions"
+                );
                 assert!(
                     !egraph.tracing,
                     "proofs aren't supported for non-union merge functions"
@@ -1198,6 +1283,12 @@ fn incremental_rebuild(uf_size: usize, table_size: usize, parallel: bool) -> boo
     }
 }
 
+pub(crate) const SUBSUMED: Value = Value::new_const(1);
+pub(crate) const NOT_SUBSUMED: Value = Value::new_const(0);
+fn combine_subsumed(v1: Value, v2: Value) -> Value {
+    std::cmp::max(v1, v2)
+}
+
 /// A struct helping with some calculations of where some information is stored at the
 /// core-relations Table level for a given function.
 ///
@@ -1219,6 +1310,18 @@ struct SchemaMath {
 }
 
 impl SchemaMath {
+    fn propagate_subsume(&self, old: &[Value], new: &[Value]) -> Option<Value> {
+        if self.subsume {
+            let res = combine_subsumed(new[self.subsume_col()], old[self.subsume_col()]);
+            if res != old[self.subsume_col()] {
+                Some(res)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
     fn num_keys(&self) -> usize {
         self.func_cols - 1
     }
