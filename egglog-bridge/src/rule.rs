@@ -334,8 +334,21 @@ impl RuleBuilder<'_> {
     }
 
     pub(crate) fn add_atom_func(&mut self, func: FunctionId, entries: &[QueryEntry]) {
-        let table_id = self.egraph.funcs[func].table;
-        self.add_atom_with_timestamp_and_func(table_id, Some(func), None, entries);
+        let info = &self.egraph.funcs[func];
+        let table_id = info.table;
+        if info.can_subsume {
+            self.add_atom_with_timestamp_and_func(
+                table_id,
+                Some(func),
+                Some(QueryEntry::Const {
+                    val: NOT_SUBSUMED,
+                    ty: ColumnTy::Id,
+                }),
+                entries,
+            );
+        } else {
+            self.add_atom_with_timestamp_and_func(table_id, Some(func), None, entries);
+        }
     }
 
     pub(crate) fn add_atom_with_timestamp(&mut self, table: TableId, entries: &[QueryEntry]) {
@@ -539,7 +552,7 @@ impl RuleBuilder<'_> {
             func_cols: info.schema.len(),
         };
         assert!(info.can_subsume);
-        assert_eq!(entries.len(), info.schema.len());
+        assert_eq!(entries.len() + 1, info.schema.len());
         let entries = entries.to_vec();
         let table = info.table;
         self.add_callback(move |inner, rb| {
@@ -806,7 +819,6 @@ impl RuleBuilder<'_> {
         // row.
         subsume_var: Option<Variable>,
     ) {
-        let todo_remove = eprintln!("rebuild, subsumed={subsume_var:?}");
         assert_eq!(before.len(), after.len());
         self.remove(func, &before[..before.len() - 1]);
         if !self.egraph.tracing {

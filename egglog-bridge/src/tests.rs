@@ -1190,6 +1190,77 @@ fn constrain_prims_abstract() {
     assert_eq!(g, f[0..2])
 }
 
+#[test]
+fn basic_subsumption() {
+    // fill (f 1) (f 2). Subsume (f 3) (f 2). Copy (f to g). Should only see (g 1)
+
+    let mut egraph = EGraph::default();
+    let int_prim = egraph.primitives_mut().register_type::<i64>();
+    let f_table = egraph.add_table(FunctionConfig {
+        schema: vec![ColumnTy::Primitive(int_prim), ColumnTy::Id],
+        default: DefaultVal::FreshId,
+        merge: MergeFn::UnionId,
+        name: "f".into(),
+        can_subsume: true,
+    });
+    let g_table = egraph.add_table(FunctionConfig {
+        schema: vec![ColumnTy::Primitive(int_prim), ColumnTy::Id],
+        default: DefaultVal::FreshId,
+        merge: MergeFn::UnionId,
+        name: "g".into(),
+        can_subsume: false,
+    });
+
+    let value_1 = egraph.primitive_constant(1i64);
+    let value_2 = egraph.primitive_constant(2i64);
+    let value_3 = egraph.primitive_constant(3i64);
+    let write_f = {
+        let mut rb = egraph.new_rule("write_f", true);
+        rb.lookup(f_table, &[value_1.clone()]);
+        rb.lookup(f_table, &[value_2.clone()]);
+        rb.build()
+    };
+
+    let subsume_f = {
+        let mut rb = egraph.new_rule("write_f", true);
+        rb.subsume(f_table, &[value_2.clone()]);
+        rb.subsume(f_table, &[value_3.clone()]);
+        rb.build()
+    };
+
+    let copy_to_g = {
+        let mut rb = egraph.new_rule("copy_to_g", true);
+        let val = rb.new_var(ColumnTy::Primitive(int_prim));
+        let id = rb.new_var(ColumnTy::Id);
+        rb.query_table(f_table, &[val.into(), id.into()]).unwrap();
+        rb.set(g_table, &[val.into(), id.into()]);
+        rb.build()
+    };
+    let get_entries = |egraph: &EGraph, table: FunctionId| {
+        let mut entries = Vec::new();
+        egraph.dump_table(table, |vals| {
+            entries.push((*egraph.primitives().unwrap_ref::<i64>(vals[0]), vals[1]));
+        });
+        entries.sort();
+        entries
+    };
+
+    assert!(get_entries(&egraph, f_table).is_empty());
+    assert!(get_entries(&egraph, g_table).is_empty());
+    egraph.run_rules(&[write_f]).unwrap();
+    let f = get_entries(&egraph, f_table);
+    assert_eq!(f.len(), 2);
+    assert_eq!(f.iter().map(|(x, _)| *x).collect::<Vec<_>>(), vec![1, 2]);
+    egraph.run_rules(&[subsume_f]).unwrap();
+    let f = get_entries(&egraph, f_table);
+    assert_eq!(f.len(), 3);
+    assert_eq!(f.iter().map(|(x, _)| *x).collect::<Vec<_>>(), vec![1, 2, 3]);
+    egraph.run_rules(&[copy_to_g]).unwrap();
+    let g = get_entries(&egraph, g_table);
+    assert_eq!(g.len(), 1);
+    assert_eq!(g[0], f[0])
+}
+
 const _: () = {
     const fn assert_send<T: Send>() {}
     assert_send::<EGraph>()
