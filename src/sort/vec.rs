@@ -23,10 +23,6 @@ impl VecSort {
     pub fn element(&self) -> ArcSort {
         self.element.clone()
     }
-
-    pub fn element_name(&self) -> Symbol {
-        self.element.name()
-    }
 }
 
 impl Presort for VecSort {
