@@ -41,9 +41,9 @@ pub use set::*;
 mod vec;
 pub use vec::*;
 mod r#fn;
-// pub use r#fn::*;
+pub use r#fn::*;
 mod multiset;
-// pub use multiset::*;
+pub use multiset::*;
 
 pub trait Sort: Any + Send + Sync + Debug {
     fn name(&self) -> Symbol;
