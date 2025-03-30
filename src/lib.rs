@@ -452,8 +452,8 @@ impl Default for EGraph {
         eg.type_info.add_presort::<MapSort>(span!()).unwrap();
         eg.type_info.add_presort::<SetSort>(span!()).unwrap();
         eg.type_info.add_presort::<VecSort>(span!()).unwrap();
-        // eg.type_info.add_presort::<FunctionSort>(span!()).unwrap();
-        // eg.type_info.add_presort::<MultiSetSort>(span!()).unwrap();
+        eg.type_info.add_presort::<FunctionSort>(span!()).unwrap();
+        eg.type_info.add_presort::<MultiSetSort>(span!()).unwrap();
 
         add_primitive!(&mut eg, "!=" = |a: #, b: #| -?> () {
             (a != b).then_some(())
