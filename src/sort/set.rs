@@ -138,14 +138,13 @@ impl Sort for SetSort {
         add_primitive!(eg, "set-empty" = |                      | -> @SetContainer<Value> (self.clone()) { SetContainer(BTreeSet::new()) });
         add_primitive!(eg, "set-of"    = [xs: # (self.element())] -> @SetContainer<Value> (self.clone()) { SetContainer(xs.collect()   ) });
 
+        add_primitive!(eg, "set-get" = |xs: @SetContainer<Value> (self.clone()), i: i64| -?> # (self.element()) { xs.0.iter().nth(i as usize).copied() });
         add_primitive!(eg, "set-insert" = |mut xs: @SetContainer<Value> (self.clone()), x: # (self.element())| -> @SetContainer<Value> (self.clone()) {{ xs.0.insert( x); xs }});
         add_primitive!(eg, "set-remove" = |mut xs: @SetContainer<Value> (self.clone()), x: # (self.element())| -> @SetContainer<Value> (self.clone()) {{ xs.0.remove(&x); xs }});
 
         add_primitive!(eg, "set-length"       = |xs: @SetContainer<Value> (self.clone())| -> i64 { xs.0.len() as i64 });
         add_primitive!(eg, "set-contains"     = |xs: @SetContainer<Value> (self.clone()), x: # (self.element())| -?> () { ( xs.0.contains(&x)).then_some(()) });
         add_primitive!(eg, "set-not-contains" = |xs: @SetContainer<Value> (self.clone()), x: # (self.element())| -?> () { (!xs.0.contains(&x)).then_some(()) });
-
-        add_primitive!(eg, "set-get" = |xs: @SetContainer<Value> (self.clone()), i: i64| -?> # (self.element()) { xs.0.iter().nth(i as usize).copied() });
 
         add_primitive!(eg, "set-union"      = |mut xs: @SetContainer<Value> (self.clone()), ys: @SetContainer<Value> (self.clone())| -> @SetContainer<Value> (self.clone()) {{ xs.0.extend(ys.0);                  xs }});
         add_primitive!(eg, "set-diff"       = |mut xs: @SetContainer<Value> (self.clone()), ys: @SetContainer<Value> (self.clone())| -> @SetContainer<Value> (self.clone()) {{ xs.0.retain(|k| !ys.0.contains(k)); xs }});
