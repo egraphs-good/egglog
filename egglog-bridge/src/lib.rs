@@ -12,6 +12,7 @@ use std::{
     fmt::Debug,
     hash::Hash,
     iter, mem,
+    ops::{Index, IndexMut},
     rc::Rc,
     sync::{Arc, Mutex},
 };
@@ -296,22 +297,18 @@ impl EGraph {
         };
         let mut extended_row = Vec::new();
         extended_row.extend_from_slice(inputs);
-        extended_row.resize_with(schema_math.table_columns(), || Value::new(0));
-        extended_row[schema_math.ts_col()] = self.next_ts().to_value();
-        let res = if self.tracing {
+        let term = self.tracing.then(|| {
             let reason = self.get_fiat_reason(desc);
-            let term = self.get_term(func, inputs, reason);
-            extended_row[schema_math.ret_val_col()] = term;
-            extended_row[schema_math.proof_id_col()] = term;
-            term
-        } else {
-            let id = self.fresh_id();
-            extended_row[schema_math.ret_val_col()] = id;
-            id
-        };
-        if schema_math.subsume {
-            extended_row[schema_math.subsume_col()] = NOT_SUBSUMED;
-        }
+            self.get_term(func, inputs, reason)
+        });
+        schema_math.write_table_row(
+            &mut extended_row,
+            self.next_ts().to_value(),
+            term,
+            schema_math.subsume.then_some(NOT_SUBSUMED),
+        );
+        let res = term.unwrap_or_else(|| self.fresh_id());
+        extended_row[schema_math.ret_val_col()] = res;
         let table_id = self.funcs[func].table;
         self.db
             .get_table(table_id)
@@ -391,12 +388,8 @@ impl EGraph {
         desc: &str,
         values: impl IntoIterator<Item = (FunctionId, Vec<Value>)>,
     ) {
-        let mut extended_row = SmallVec::<[Value; 8]>::new();
-        let reason_id = if self.tracing {
-            Some(self.get_fiat_reason(desc))
-        } else {
-            None
-        };
+        let mut extended_row = Vec::<Value>::new();
+        let reason_id = self.tracing.then(|| self.get_fiat_reason(desc));
         let mut bufs = DenseIdMap::default();
         for (func, row) in values.into_iter() {
             let table_info = &self.funcs[func];
@@ -405,16 +398,10 @@ impl EGraph {
                 subsume: table_info.can_subsume,
                 func_cols: table_info.schema.len(),
             };
-            extended_row.extend_from_slice(&row);
-            extended_row.resize_with(schema_math.table_columns(), || Value::new(0));
-            extended_row[schema_math.ts_col()] = self.next_ts().to_value();
-            if schema_math.subsume {
-                extended_row[schema_math.subsume_col()] = NOT_SUBSUMED;
-            }
             let table_id = table_info.table;
-            if let Some(reason_id) = reason_id {
+            let term_id = reason_id.map(|reason| {
                 // Get the term id itself
-                let term_id = self.get_term(func, &row[0..row.len() - 1], reason_id);
+                let term_id = self.get_term(func, &row[0..row.len() - 1], reason);
                 let buf = bufs.get_or_insert(self.uf_table, || {
                     self.db.get_table(self.uf_table).new_buffer()
                 });
@@ -423,10 +410,17 @@ impl EGraph {
                     *row.last().unwrap(),
                     term_id,
                     self.next_ts().to_value(),
-                    reason_id,
+                    reason,
                 ]);
-                extended_row[schema_math.proof_id_col()] = term_id;
-            }
+                term_id
+            });
+            extended_row.extend_from_slice(&row);
+            schema_math.write_table_row(
+                &mut extended_row,
+                self.next_ts().to_value(),
+                term_id,
+                schema_math.subsume.then_some(NOT_SUBSUMED),
+            );
             let buf = bufs.get_or_insert(table_id, || self.db.get_table(table_id).new_buffer());
             buf.stage_insert(&extended_row);
             extended_row.clear();
@@ -837,7 +831,12 @@ impl EGraph {
             subsume_var.map(QueryEntry::from),
             &vars,
         );
-        rb.add_atom_with_timestamp(uf_table, &[vars[col.index()].clone(), canon_val.into()]);
+        rb.add_atom_with_timestamp_and_func(
+            uf_table,
+            None,
+            None,
+            &[vars[col.index()].clone(), canon_val.into()],
+        );
         rb.set_focus(1); // Set the uf atom as the sole focus.
 
         // Now canonicalize the entire row.
@@ -866,11 +865,7 @@ impl EGraph {
         for ty in schema {
             vars.push(rb.new_var(*ty).into());
         }
-        let subsume_var = if can_subsume {
-            Some(rb.new_var(ColumnTy::Id))
-        } else {
-            None
-        };
+        let subsume_var = can_subsume.then(|| rb.new_var(ColumnTy::Id));
         rb.add_atom_with_timestamp_and_func(
             table_id,
             Some(table),
@@ -1310,6 +1305,32 @@ struct SchemaMath {
 }
 
 impl SchemaMath {
+    fn write_table_row<T: Clone>(
+        &self,
+        row: &mut impl HasResizeWith<T>,
+        timestamp: T,
+        proof: Option<T>,
+        subsume: Option<T>,
+    ) {
+        row.resize_with(self.table_columns(), || timestamp.clone());
+        row[self.ts_col()] = timestamp;
+        if let Some(proof_id) = proof {
+            row[self.proof_id_col()] = proof_id;
+        } else {
+            assert!(
+                !self.tracing,
+                "proof_id must be provided if tracing is enabled"
+            );
+        }
+        if let Some(subsume) = subsume {
+            row[self.subsume_col()] = subsume;
+        } else {
+            assert!(
+                !self.subsume,
+                "subsume flag be provided if subsumption is enabled"
+            );
+        }
+    }
     fn propagate_subsume(&self, old: &[Value], new: &[Value]) -> Option<Value> {
         if self.subsume {
             let res = combine_subsumed(new[self.subsume_col()], old[self.subsume_col()]);
@@ -1351,3 +1372,31 @@ impl SchemaMath {
 #[derive(Error, Debug)]
 #[error("Panic: {0}")]
 struct PanicError(String);
+
+/// Basic ad-hoc polymorphism around `resize_with` in order to get [`SchemaMath::write_table_row`]
+/// to work with both `Vec` and `SmallVec`.
+trait HasResizeWith<T>:
+    AsMut<[T]> + AsRef<[T]> + Index<usize, Output = T> + IndexMut<usize, Output = T>
+{
+    fn resize_with<F>(&mut self, new_size: usize, f: F)
+    where
+        F: FnMut() -> T;
+}
+
+impl<T> HasResizeWith<T> for Vec<T> {
+    fn resize_with<F>(&mut self, new_size: usize, f: F)
+    where
+        F: FnMut() -> T,
+    {
+        self.resize_with(new_size, f);
+    }
+}
+
+impl<T, A: smallvec::Array<Item = T>> HasResizeWith<T> for SmallVec<A> {
+    fn resize_with<F>(&mut self, new_size: usize, f: F)
+    where
+        F: FnMut() -> T,
+    {
+        self.resize_with(new_size, f);
+    }
+}

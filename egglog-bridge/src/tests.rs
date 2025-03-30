@@ -18,6 +18,13 @@ use crate::{
     MergeFn, QueryEntry,
 };
 
+/// Run a simple associativity/commutativity test. In addition to testing that the rules properly
+/// reassociate a nested sum, this test checks a proof of an arbitrary term in the database if
+/// `tracing` is true.
+///
+/// The `can_subsume` argument is only used to enable subsumption on the underlying tables created
+/// during this test, and exercise the different column handling caused by enabling subsumption.
+/// Subsumption itself is not used.
 fn ac_test(tracing: bool, can_subsume: bool) {
     const N: usize = 5;
     let mut egraph = if tracing {
@@ -220,6 +227,13 @@ fn math_tracing_subsume() {
     math_test(EGraph::with_tracing(), true)
 }
 
+/// Run a more complex benchmark from the egg and egglog test suite. The core of this test is to
+/// ensure that the test generates a set of tables of exactly the same
+/// size that the corresponding rules in egglog do in egglog's initial implementation.
+///
+/// As in `ac_test` the `can_subsume` argument is only used to enable subsumption on the underlying
+/// tables created during this test, and exercise the different column handling caused by enabling
+/// subsumption. Subsumption itself is not used.
 fn math_test(mut egraph: EGraph, can_subsume: bool) {
     const N: usize = 8;
     let rational_ty = egraph.primitives_mut().register_type::<Rational64>();

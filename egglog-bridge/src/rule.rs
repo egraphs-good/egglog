@@ -336,27 +336,19 @@ impl RuleBuilder<'_> {
     pub(crate) fn add_atom_func(&mut self, func: FunctionId, entries: &[QueryEntry]) {
         let info = &self.egraph.funcs[func];
         let table_id = info.table;
-        if info.can_subsume {
-            self.add_atom_with_timestamp_and_func(
-                table_id,
-                Some(func),
-                Some(QueryEntry::Const {
-                    val: NOT_SUBSUMED,
-                    ty: ColumnTy::Id,
-                }),
-                entries,
-            );
-        } else {
-            self.add_atom_with_timestamp_and_func(table_id, Some(func), None, entries);
-        }
-    }
-
-    pub(crate) fn add_atom_with_timestamp(&mut self, table: TableId, entries: &[QueryEntry]) {
-        self.add_atom_with_timestamp_and_func(table, None, None, entries);
+        self.add_atom_with_timestamp_and_func(
+            table_id,
+            Some(func),
+            info.can_subsume.then_some(QueryEntry::Const {
+                val: NOT_SUBSUMED,
+                ty: ColumnTy::Id,
+            }),
+            entries,
+        );
     }
 
     /// A low-level way to add an atom to a query. Most of the time you can use
-    /// [`RuleBuilder::add_atom_func`] or [`RuleBuilder::add_atom_with_timestamp`].
+    /// [`RuleBuilder::add_atom_func`].
     ///
     /// The atom is added directly to `table`. If `func` is supplied, then metadata about the
     /// function is used for schema validation and proof generation. If `subsume_entry` is
@@ -565,20 +557,21 @@ impl RuleBuilder<'_> {
                 ColumnId::from_usize(schema_math.subsume_col()),
             )?;
             let cur_proof_val = if schema_math.tracing {
-                Some(rb.lookup(
+                Some(DstVar::from(rb.lookup(
                     table,
                     &dst_entries,
                     ColumnId::from_usize(schema_math.proof_id_col()),
-                )?)
+                )?))
             } else {
                 None
             };
-            dst_entries.resize_with(schema_math.table_columns(), || SUBSUMED.into());
+            schema_math.write_table_row(
+                &mut dst_entries,
+                inner.next_ts.to_value().into(),
+                cur_proof_val,
+                Some(SUBSUMED.into()),
+            );
             dst_entries[schema_math.ret_val_col()] = inner.convert(&ret.into());
-            dst_entries[schema_math.ts_col()] = inner.next_ts.to_value().into();
-            if let Some(proof_val) = cur_proof_val {
-                dst_entries[schema_math.proof_id_col()] = proof_val.into();
-            }
             rb.insert_if_eq(
                 table,
                 cur_subsume_val.into(),
@@ -863,13 +856,12 @@ impl RuleBuilder<'_> {
         self.query.add_rule.push(Box::new(move |inner, rb| {
             add_proof(inner, rb)?;
             let mut dst_vars = inner.convert_all(&after);
-            dst_vars.resize_with(schema_math.table_columns(), || {
-                inner.next_ts.to_value().into()
-            });
-            dst_vars[schema_math.proof_id_col()] = inner.mapping[term_var];
-            if let Some(subsume_var) = subsume_var {
-                dst_vars[schema_math.subsume_col()] = inner.mapping[subsume_var];
-            }
+            schema_math.write_table_row(
+                &mut dst_vars,
+                inner.next_ts.to_value().into(),
+                Some(inner.mapping[term_var]),
+                subsume_var.map(|v| inner.mapping[v]),
+            );
             // This congruence rule will also serve as a proof that the old and
             // new terms are equal.
             rb.insert(
@@ -919,27 +911,31 @@ impl RuleBuilder<'_> {
                 // Set the original row but with the passed-in subsumption value.
                 self.add_callback(move |inner, rb| {
                     let mut dst_vars = inner.convert_all(&entries);
-                    dst_vars.resize_with(schema_math.table_columns(), || {
-                        inner.convert(&subsume_entry)
-                    });
-                    dst_vars[schema_math.ret_val_col()] = inner.convert(&res.into());
                     let proof_var = rb.lookup(
                         table,
                         &dst_vars[0..schema_math.num_keys()],
                         ColumnId::from_usize(schema_math.proof_id_col()),
                     )?;
-                    dst_vars[schema_math.ts_col()] = inner.next_ts.to_value().into();
-                    dst_vars[schema_math.proof_id_col()] = proof_var.into();
+                    schema_math.write_table_row(
+                        &mut dst_vars,
+                        inner.next_ts.to_value().into(),
+                        Some(proof_var.into()),
+                        Some(inner.convert(&subsume_entry)),
+                    );
+                    // Overwrite the return value with the "old" value.
+                    dst_vars[schema_math.ret_val_col()] = inner.convert(&res.into());
                     rb.insert(table, &dst_vars).context("set")
                 });
             }
         } else {
             self.query.add_rule.push(Box::new(move |inner, rb| {
                 let mut dst_vars = inner.convert_all(&entries);
-                dst_vars.resize_with(schema_math.table_columns(), || {
-                    inner.convert(&subsume_entry)
-                });
-                dst_vars[schema_math.ts_col()] = inner.next_ts.to_value().into();
+                schema_math.write_table_row(
+                    &mut dst_vars,
+                    inner.next_ts.to_value().into(),
+                    None, // tracing is off
+                    schema_math.subsume.then(|| inner.convert(&subsume_entry)),
+                );
                 rb.insert(table, &dst_vars).context("set")
             }));
         };
