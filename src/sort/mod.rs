@@ -37,7 +37,7 @@ pub use self::f64::*;
 mod map;
 // pub use map::*;
 mod set;
-// pub use set::*;
+pub use set::*;
 mod vec;
 pub use vec::*;
 mod r#fn;
