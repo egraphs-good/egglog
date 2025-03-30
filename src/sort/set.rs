@@ -1,552 +1,197 @@
-// use super::*;
-
-// type ValueSet = BTreeSet<Value>;
-
-// #[derive(Debug)]
-// pub struct SetSort {
-//     name: Symbol,
-//     element: ArcSort,
-//     sets: Mutex<IndexSet<ValueSet>>,
-// }
-
-// impl SetSort {
-//     pub fn element(&self) -> ArcSort {
-//         self.element.clone()
-//     }
-
-//     pub fn element_name(&self) -> Symbol {
-//         self.element.name()
-//     }
-// }
-
-// impl Presort for SetSort {
-//     fn presort_name() -> Symbol {
-//         "Set".into()
-//     }
-
-//     fn reserved_primitives() -> Vec<Symbol> {
-//         vec![
-//             "set-of".into(),
-//             "set-empty".into(),
-//             "set-insert".into(),
-//             "set-not-contains".into(),
-//             "set-contains".into(),
-//             "set-remove".into(),
-//             "set-union".into(),
-//             "set-diff".into(),
-//             "set-intersect".into(),
-//             "set-get".into(),
-//             "set-length".into(),
-//         ]
-//     }
-
-//     fn make_sort(
-//         typeinfo: &mut TypeInfo,
-//         name: Symbol,
-//         args: &[Expr],
-//     ) -> Result<ArcSort, TypeError> {
-//         if let [Expr::Var(span, e)] = args {
-//             let e = typeinfo
-//                 .sorts
-//                 .get(e)
-//                 .ok_or(TypeError::UndefinedSort(*e, span.clone()))?;
-
-//             if e.is_eq_container_sort() {
-//                 return Err(TypeError::DisallowedSort(
-//                     name,
-//                     "Sets nested with other EqSort containers are not allowed".into(),
-//                     span.clone(),
-//                 ));
-//             }
-
-//             Ok(Arc::new(Self {
-//                 name,
-//                 element: e.clone(),
-//                 sets: Default::default(),
-//             }))
-//         } else {
-//             panic!()
-//         }
-//     }
-// }
-
-// impl Sort for SetSort {
-//     fn name(&self) -> Symbol {
-//         self.name
-//     }
-
-//     fn column_ty(&self, prims: &Primitives) -> ColumnTy {
-//         ColumnTy::Primitive(prims.get_ty::<ValueSet>())
-//     }
-
-//     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
-//         self
-//     }
-
-//     fn is_container_sort(&self) -> bool {
-//         true
-//     }
-
-//     fn is_eq_container_sort(&self) -> bool {
-//         self.element.is_eq_sort()
-//     }
-
-//     fn inner_values(&self, value: &Value) -> Vec<(ArcSort, Value)> {
-//         // TODO: Potential duplication of code
-//         let sets = self.sets.lock().unwrap();
-//         let set = sets.get_index(value.bits as usize).unwrap();
-//         let mut result = Vec::new();
-//         for e in set.iter() {
-//             result.push((self.element.clone(), *e));
-//         }
-//         result
-//     }
-
-//     fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
-//         let sets = self.sets.lock().unwrap();
-//         let set = sets.get_index(value.bits as usize).unwrap();
-//         let mut changed = false;
-//         let new_set: ValueSet = set
-//             .iter()
-//             .map(|e| {
-//                 let mut e = *e;
-//                 changed |= self.element.canonicalize(&mut e, unionfind);
-//                 e
-//             })
-//             .collect();
-//         drop(sets);
-//         *value = new_set.store(self);
-//         changed
-//     }
-
-//     fn register_primitives(self: Arc<Self>, typeinfo: &mut TypeInfo) {
-//         typeinfo.add_primitive(SetOf {
-//             name: "set-of".into(),
-//             set: self.clone(),
-//         });
-//         typeinfo.add_primitive(Ctor {
-//             name: "set-empty".into(),
-//             set: self.clone(),
-//         });
-//         typeinfo.add_primitive(Insert {
-//             name: "set-insert".into(),
-//             set: self.clone(),
-//         });
-//         typeinfo.add_primitive(NotContains {
-//             name: "set-not-contains".into(),
-//             set: self.clone(),
-//         });
-//         typeinfo.add_primitive(Contains {
-//             name: "set-contains".into(),
-//             set: self.clone(),
-//         });
-//         typeinfo.add_primitive(Remove {
-//             name: "set-remove".into(),
-//             set: self.clone(),
-//         });
-//         typeinfo.add_primitive(Get {
-//             name: "set-get".into(),
-//             set: self.clone(),
-//         });
-//         typeinfo.add_primitive(Length {
-//             name: "set-length".into(),
-//             set: self.clone(),
-//         });
-//         typeinfo.add_primitive(Union {
-//             name: "set-union".into(),
-//             set: self.clone(),
-//         });
-//         typeinfo.add_primitive(Diff {
-//             name: "set-diff".into(),
-//             set: self.clone(),
-//         });
-//         typeinfo.add_primitive(Intersect {
-//             name: "set-intersect".into(),
-//             set: self,
-//         });
-//     }
-
-//     fn extract_term(
-//         &self,
-//         _egraph: &EGraph,
-//         value: Value,
-//         extractor: &Extractor,
-//         termdag: &mut TermDag,
-//     ) -> Option<(Cost, Term)> {
-//         let set = ValueSet::load(self, &value);
-//         let mut children = vec![];
-//         let mut cost = 0usize;
-//         for e in set.iter() {
-//             let (child_cost, child_term) = extractor.find_best(*e, termdag, &self.element)?;
-//             cost = cost.saturating_add(child_cost);
-//             children.push(child_term);
-//         }
-//         Some((cost, termdag.app("set-of".into(), children)))
-//     }
-
-//     fn serialized_name(&self, _value: &Value) -> Symbol {
-//         "set-of".into()
-//     }
-// }
-
-// impl IntoSort for ValueSet {
-//     type Sort = SetSort;
-//     fn store(self, sort: &Self::Sort) -> Value {
-//         let mut sets = sort.sets.lock().unwrap();
-//         let (i, _) = sets.insert_full(self);
-//         Value {
-//             #[cfg(debug_assertions)]
-//             tag: sort.name,
-//             bits: i as u64,
-//         }
-//     }
-// }
-
-// impl FromSort for ValueSet {
-//     type Sort = SetSort;
-//     fn load(sort: &Self::Sort, value: &Value) -> Self {
-//         let sets = sort.sets.lock().unwrap();
-//         sets.get_index(value.bits as usize).unwrap().clone()
-//     }
-// }
-
-// struct SetOf {
-//     name: Symbol,
-//     set: Arc<SetSort>,
-// }
-
-// impl PrimitiveLike for SetOf {
-//     fn name(&self) -> Symbol {
-//         self.name
-//     }
-
-//     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-//         AllEqualTypeConstraint::new(self.name(), span.clone())
-//             .with_all_arguments_sort(self.set.element())
-//             .with_output_sort(self.set.clone())
-//             .into_box()
-//     }
-
-//     fn apply(
-//         &self,
-//         values: &[Value],
-//         _sorts: (&[ArcSort], &ArcSort),
-//         _egraph: Option<&mut EGraph>,
-//     ) -> Option<Value> {
-//         let set = ValueSet::from_iter(values.iter().copied());
-//         Some(set.store(&self.set))
-//     }
-// }
-
-// struct Ctor {
-//     name: Symbol,
-//     set: Arc<SetSort>,
-// }
-
-// impl PrimitiveLike for Ctor {
-//     fn name(&self) -> Symbol {
-//         self.name
-//     }
-
-//     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-//         SimpleTypeConstraint::new(self.name(), vec![self.set.clone()], span.clone()).into_box()
-//     }
-
-//     fn apply(
-//         &self,
-//         values: &[Value],
-//         _sorts: (&[ArcSort], &ArcSort),
-//         _egraph: Option<&mut EGraph>,
-//     ) -> Option<Value> {
-//         assert!(values.is_empty());
-//         Some(ValueSet::default().store(&self.set))
-//     }
-// }
-
-// struct Insert {
-//     name: Symbol,
-//     set: Arc<SetSort>,
-// }
-
-// impl PrimitiveLike for Insert {
-//     fn name(&self) -> Symbol {
-//         self.name
-//     }
-
-//     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-//         SimpleTypeConstraint::new(
-//             self.name(),
-//             vec![self.set.clone(), self.set.element(), self.set.clone()],
-//             span.clone(),
-//         )
-//         .into_box()
-//     }
-
-//     fn apply(
-//         &self,
-//         values: &[Value],
-//         _sorts: (&[ArcSort], &ArcSort),
-//         _egraph: Option<&mut EGraph>,
-//     ) -> Option<Value> {
-//         let mut set = ValueSet::load(&self.set, &values[0]);
-//         set.insert(values[1]);
-//         Some(set.store(&self.set))
-//     }
-// }
-
-// struct NotContains {
-//     name: Symbol,
-//     set: Arc<SetSort>,
-// }
-
-// impl PrimitiveLike for NotContains {
-//     fn name(&self) -> Symbol {
-//         self.name
-//     }
-
-//     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-//         SimpleTypeConstraint::new(
-//             self.name(),
-//             vec![self.set.clone(), self.set.element(), Arc::new(UnitSort)],
-//             span.clone(),
-//         )
-//         .into_box()
-//     }
-
-//     fn apply(
-//         &self,
-//         values: &[Value],
-//         _sorts: (&[ArcSort], &ArcSort),
-//         _egraph: Option<&mut EGraph>,
-//     ) -> Option<Value> {
-//         let set = ValueSet::load(&self.set, &values[0]);
-//         if set.contains(&values[1]) {
-//             None
-//         } else {
-//             Some(Value::unit())
-//         }
-//     }
-// }
-
-// struct Contains {
-//     name: Symbol,
-//     set: Arc<SetSort>,
-// }
-
-// impl PrimitiveLike for Contains {
-//     fn name(&self) -> Symbol {
-//         self.name
-//     }
-
-//     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-//         SimpleTypeConstraint::new(
-//             self.name(),
-//             vec![self.set.clone(), self.set.element(), Arc::new(UnitSort)],
-//             span.clone(),
-//         )
-//         .into_box()
-//     }
-
-//     fn apply(
-//         &self,
-//         values: &[Value],
-//         _sorts: (&[ArcSort], &ArcSort),
-//         _egraph: Option<&mut EGraph>,
-//     ) -> Option<Value> {
-//         let set = ValueSet::load(&self.set, &values[0]);
-//         if set.contains(&values[1]) {
-//             Some(Value::unit())
-//         } else {
-//             None
-//         }
-//     }
-// }
-
-// struct Union {
-//     name: Symbol,
-//     set: Arc<SetSort>,
-// }
-
-// impl PrimitiveLike for Union {
-//     fn name(&self) -> Symbol {
-//         self.name
-//     }
-
-//     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-//         SimpleTypeConstraint::new(
-//             self.name(),
-//             vec![self.set.clone(), self.set.clone(), self.set.clone()],
-//             span.clone(),
-//         )
-//         .into_box()
-//     }
-
-//     fn apply(
-//         &self,
-//         values: &[Value],
-//         _sorts: (&[ArcSort], &ArcSort),
-//         _egraph: Option<&mut EGraph>,
-//     ) -> Option<Value> {
-//         let mut set1 = ValueSet::load(&self.set, &values[0]);
-//         let set2 = ValueSet::load(&self.set, &values[1]);
-//         set1.extend(set2.iter());
-//         Some(set1.store(&self.set))
-//     }
-// }
-
-// struct Intersect {
-//     name: Symbol,
-//     set: Arc<SetSort>,
-// }
-
-// impl PrimitiveLike for Intersect {
-//     fn name(&self) -> Symbol {
-//         self.name
-//     }
-
-//     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-//         SimpleTypeConstraint::new(
-//             self.name(),
-//             vec![self.set.clone(), self.set.clone(), self.set.clone()],
-//             span.clone(),
-//         )
-//         .into_box()
-//     }
-
-//     fn apply(
-//         &self,
-//         values: &[Value],
-//         _sorts: (&[ArcSort], &ArcSort),
-//         _egraph: Option<&mut EGraph>,
-//     ) -> Option<Value> {
-//         let mut set1 = ValueSet::load(&self.set, &values[0]);
-//         let set2 = ValueSet::load(&self.set, &values[1]);
-//         set1.retain(|k| set2.contains(k));
-//         // set.insert(values[1], values[2]);
-//         Some(set1.store(&self.set))
-//     }
-// }
-
-// struct Length {
-//     name: Symbol,
-//     set: Arc<SetSort>,
-// }
-
-// impl PrimitiveLike for Length {
-//     fn name(&self) -> Symbol {
-//         self.name
-//     }
-
-//     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-//         SimpleTypeConstraint::new(
-//             self.name(),
-//             vec![self.set.clone(), Arc::new(I64Sort)],
-//             span.clone(),
-//         )
-//         .into_box()
-//     }
-
-//     fn apply(
-//         &self,
-//         values: &[Value],
-//         _sorts: (&[ArcSort], &ArcSort),
-//         _egraph: Option<&mut EGraph>,
-//     ) -> Option<Value> {
-//         let set = ValueSet::load(&self.set, &values[0]);
-//         Some(Value::from(set.len() as i64))
-//     }
-// }
-
-// struct Get {
-//     name: Symbol,
-//     set: Arc<SetSort>,
-// }
-
-// impl PrimitiveLike for Get {
-//     fn name(&self) -> Symbol {
-//         self.name
-//     }
-
-//     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-//         SimpleTypeConstraint::new(
-//             self.name(),
-//             vec![self.set.clone(), Arc::new(I64Sort), self.set.element()],
-//             span.clone(),
-//         )
-//         .into_box()
-//     }
-
-//     fn apply(
-//         &self,
-//         values: &[Value],
-//         _sorts: (&[ArcSort], &ArcSort),
-//         _egraph: Option<&mut EGraph>,
-//     ) -> Option<Value> {
-//         let set = ValueSet::load(&self.set, &values[0]);
-//         let index = i64::load(&I64Sort, &values[1]);
-//         set.iter().nth(index as usize).copied()
-//     }
-// }
-
-// struct Remove {
-//     name: Symbol,
-//     set: Arc<SetSort>,
-// }
-
-// impl PrimitiveLike for Remove {
-//     fn name(&self) -> Symbol {
-//         self.name
-//     }
-
-//     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-//         SimpleTypeConstraint::new(
-//             self.name(),
-//             vec![self.set.clone(), self.set.element(), self.set.clone()],
-//             span.clone(),
-//         )
-//         .into_box()
-//     }
-
-//     fn apply(
-//         &self,
-//         values: &[Value],
-//         _sorts: (&[ArcSort], &ArcSort),
-//         _egraph: Option<&mut EGraph>,
-//     ) -> Option<Value> {
-//         let mut set = ValueSet::load(&self.set, &values[0]);
-//         set.remove(&values[1]);
-//         Some(set.store(&self.set))
-//     }
-// }
-
-// struct Diff {
-//     name: Symbol,
-//     set: Arc<SetSort>,
-// }
-
-// impl PrimitiveLike for Diff {
-//     fn name(&self) -> Symbol {
-//         self.name
-//     }
-
-//     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-//         SimpleTypeConstraint::new(
-//             self.name(),
-//             vec![self.set.clone(), self.set.clone(), self.set.clone()],
-//             span.clone(),
-//         )
-//         .into_box()
-//     }
-
-//     fn apply(
-//         &self,
-//         values: &[Value],
-//         _sorts: (&[ArcSort], &ArcSort),
-//         _egraph: Option<&mut EGraph>,
-//     ) -> Option<Value> {
-//         let mut set1 = ValueSet::load(&self.set, &values[0]);
-//         let set2 = ValueSet::load(&self.set, &values[1]);
-//         set1.retain(|k| !set2.contains(k));
-//         Some(set1.store(&self.set))
-//     }
-// }
+use super::*;
+use std::collections::BTreeSet;
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct SetContainer<V>(BTreeSet<V>);
+
+impl Container for SetContainer<core_relations::Value> {
+    fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool {
+        let mut xs: Vec<_> = self.0.iter().copied().collect();
+        let changed = rebuilder.rebuild_slice(&mut xs);
+        self.0 = xs.into_iter().collect();
+        changed
+    }
+    fn iter(&self) -> impl Iterator<Item = core_relations::Value> + '_ {
+        self.0.iter().copied()
+    }
+}
+
+#[derive(Debug)]
+pub struct SetSort {
+    name: Symbol,
+    element: ArcSort,
+    sets: Mutex<IndexSet<SetContainer<Value>>>,
+}
+
+impl SetSort {
+    pub fn element(&self) -> ArcSort {
+        self.element.clone()
+    }
+}
+
+impl Presort for SetSort {
+    fn presort_name() -> Symbol {
+        "Set".into()
+    }
+
+    fn reserved_primitives() -> Vec<Symbol> {
+        vec![
+            "set-of".into(),
+            "set-empty".into(),
+            "set-insert".into(),
+            "set-not-contains".into(),
+            "set-contains".into(),
+            "set-remove".into(),
+            "set-union".into(),
+            "set-diff".into(),
+            "set-intersect".into(),
+            "set-get".into(),
+            "set-length".into(),
+        ]
+    }
+
+    fn make_sort(
+        typeinfo: &mut TypeInfo,
+        name: Symbol,
+        args: &[Expr],
+    ) -> Result<ArcSort, TypeError> {
+        if let [Expr::Var(span, e)] = args {
+            let e = typeinfo
+                .get_sort(e)
+                .ok_or(TypeError::UndefinedSort(*e, span.clone()))?;
+
+            if e.is_eq_container_sort() {
+                return Err(TypeError::DisallowedSort(
+                    name,
+                    "Sets nested with other EqSort containers are not allowed".into(),
+                    span.clone(),
+                ));
+            }
+
+            Ok(Arc::new(Self {
+                name,
+                element: e.clone(),
+                sets: Default::default(),
+            }))
+        } else {
+            panic!()
+        }
+    }
+}
+
+impl Sort for SetSort {
+    fn name(&self) -> Symbol {
+        self.name
+    }
+
+    fn column_ty(&self, _backend: &egglog_bridge::EGraph) -> ColumnTy {
+        ColumnTy::Id
+    }
+
+    fn register_type(&self, backend: &mut egglog_bridge::EGraph) {
+        backend.register_container_ty::<SetContainer<core_relations::Value>>();
+    }
+
+    fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
+        self
+    }
+
+    fn is_container_sort(&self) -> bool {
+        true
+    }
+
+    fn is_eq_container_sort(&self) -> bool {
+        self.element.is_eq_sort()
+    }
+
+    fn inner_values(&self, value: &Value) -> Vec<(ArcSort, Value)> {
+        // TODO: Potential duplication of code
+        let sets = self.sets.lock().unwrap();
+        let set = sets.get_index(value.bits as usize).unwrap();
+        let mut result = Vec::new();
+        for e in set.0.iter() {
+            result.push((self.element.clone(), *e));
+        }
+        result
+    }
+
+    fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
+        let sets = self.sets.lock().unwrap();
+        let set = sets.get_index(value.bits as usize).unwrap();
+        let mut changed = false;
+        let new_set = SetContainer(
+            set.0
+                .iter()
+                .map(|e| {
+                    let mut e = *e;
+                    changed |= self.element.canonicalize(&mut e, unionfind);
+                    e
+                })
+                .collect(),
+        );
+        drop(sets);
+        *value = new_set.store(self);
+        changed
+    }
+
+    fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
+        add_primitive!(eg, "set-empty" = |                      | -> @SetContainer<Value> (self.clone()) { SetContainer(BTreeSet::new()) });
+        add_primitive!(eg, "set-of"    = [xs: # (self.element())] -> @SetContainer<Value> (self.clone()) { SetContainer(xs.collect()   ) });
+
+        add_primitive!(eg, "set-insert" = |mut xs: @SetContainer<Value> (self.clone()), x: # (self.element())| -> @SetContainer<Value> (self.clone()) {{ xs.0.insert( x); xs }});
+        add_primitive!(eg, "set-remove" = |mut xs: @SetContainer<Value> (self.clone()), x: # (self.element())| -> @SetContainer<Value> (self.clone()) {{ xs.0.remove(&x); xs }});
+
+        add_primitive!(eg, "set-length"       = |xs: @SetContainer<Value> (self.clone())| -> i64 { xs.0.len() as i64 });
+        add_primitive!(eg, "set-contains"     = |xs: @SetContainer<Value> (self.clone()), x: # (self.element())| -?> () { ( xs.0.contains(&x)).then_some(()) });
+        add_primitive!(eg, "set-not-contains" = |xs: @SetContainer<Value> (self.clone()), x: # (self.element())| -?> () { (!xs.0.contains(&x)).then_some(()) });
+
+        add_primitive!(eg, "set-get" = |xs: @SetContainer<Value> (self.clone()), i: i64| -?> # (self.element()) { xs.0.iter().nth(i as usize).copied() });
+
+        add_primitive!(eg, "set-union"      = |mut xs: @SetContainer<Value> (self.clone()), ys: @SetContainer<Value> (self.clone())| -> @SetContainer<Value> (self.clone()) {{ xs.0.extend(ys.0);                  xs }});
+        add_primitive!(eg, "set-diff"       = |mut xs: @SetContainer<Value> (self.clone()), ys: @SetContainer<Value> (self.clone())| -> @SetContainer<Value> (self.clone()) {{ xs.0.retain(|k| !ys.0.contains(k)); xs }});
+        add_primitive!(eg, "set-intersect"  = |mut xs: @SetContainer<Value> (self.clone()), ys: @SetContainer<Value> (self.clone())| -> @SetContainer<Value> (self.clone()) {{ xs.0.retain(|k|  ys.0.contains(k)); xs }});
+    }
+
+    fn extract_term(
+        &self,
+        _egraph: &EGraph,
+        value: Value,
+        extractor: &Extractor,
+        termdag: &mut TermDag,
+    ) -> Option<(Cost, Term)> {
+        let set = SetContainer::load(self, &value);
+        let mut children = vec![];
+        let mut cost = 0usize;
+        for e in set.0.iter() {
+            let (child_cost, child_term) = extractor.find_best(*e, termdag, &self.element)?;
+            cost = cost.saturating_add(child_cost);
+            children.push(child_term);
+        }
+        Some((cost, termdag.app("set-of".into(), children)))
+    }
+
+    fn serialized_name(&self, _value: &Value) -> Symbol {
+        "set-of".into()
+    }
+}
+
+impl IntoSort for SetContainer<Value> {
+    type Sort = SetSort;
+    fn store(self, sort: &Self::Sort) -> Value {
+        let mut sets = sort.sets.lock().unwrap();
+        let (i, _) = sets.insert_full(self);
+        Value {
+            #[cfg(debug_assertions)]
+            tag: sort.name,
+            bits: i as u64,
+        }
+    }
+}
+
+impl FromSort for SetContainer<Value> {
+    type Sort = SetSort;
+    fn load(sort: &Self::Sort, value: &Value) -> Self {
+        let sets = sort.sets.lock().unwrap();
+        sets.get_index(value.bits as usize).unwrap().clone()
+    }
+}
