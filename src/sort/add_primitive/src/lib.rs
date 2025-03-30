@@ -18,6 +18,8 @@ use syn::{braced, bracketed, parenthesized, parse_macro_input, Expr, Ident, LitS
 /// - Polymorphism: using `#` as a type will allow any type during
 ///   typechecking. These will be given type `Value` in the body.
 ///
+/// - Containers: you must put an `@` in front of container types.
+///
 /// - Specialized Constraints: using `T (E)` as a type will use
 ///   `E:expr` in the type constraint but `T:ty` in the body.
 ///
@@ -122,17 +124,20 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
         };
 
         // Cast the arguments to the desired type.
-        let cast1 = |x, t: &syn::Type| match target {
+        let cast1 = |x, t: &syn::Type, is_container| match target {
             Target::OldBackend => quote!(<#t as FromSort>::load(&self.#x, #x)),
-            Target::NewBackend => quote!(prims.unwrap::<#t>(*#x)),
+            Target::NewBackend => match is_container {
+                false => quote!(exec_state.prims().unwrap::<#t>(*#x)),
+                true => quote!(exec_state.containers().get_val::<#t>(*#x).unwrap().clone()),
+            },
         };
         let cast = if is_varargs {
             let Arg { x, t, is_mutable } = &args[0];
             let mutable = if *is_mutable { quote!(mut) } else { quote!() };
             match &t.cast {
                 None => quote!(let #mutable #x = #x.copied();),
-                Some(t) => {
-                    let cast = cast1(x, t);
+                Some((t, is_container)) => {
+                    let cast = cast1(x, t, *is_container);
                     quote!(let #mutable #x = #x.map(|#x| #cast);)
                 }
             }
@@ -142,8 +147,8 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
                     let mutable = if *is_mutable { quote!(mut) } else { quote!() };
                     match &t.cast {
                         None => quote!(let #mutable #x: Value = *#x;),
-                        Some(t) => {
-                            let cast = cast1(x, t);
+                        Some((t, is_container)) => {
+                            let cast = cast1(x, t, *is_container);
                             quote!(let #mutable #x: #t = #cast;)
                         }
                     }
@@ -151,20 +156,23 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
                 .collect()
         };
 
-        // Do typechecking on the result of the body.
-        let yt = match &ret.cast {
-            None => &value_type,
-            Some(t) => t,
-        };
         // If the primitive is fallible, put a `?` after the body.
         let fail = if is_fallible { quote!(?) } else { quote!() };
         // Cast the result back to an interned value.
-        let ret = match &ret.cast {
-            None => quote!(#y),
-            Some(t) => match target {
-                Target::OldBackend => quote!(#y.store(&self.#y)),
-                Target::NewBackend => quote!(prims.get::<#t>(#y)),
-            },
+        let (yt, ret) = match &ret.cast {
+            None => (&value_type, quote!(#y)),
+            Some((t, is_container)) => (
+                t,
+                match target {
+                    Target::OldBackend => quote!(#y.store(&self.#y)),
+                    Target::NewBackend => match is_container {
+                        false => quote!(exec_state.prims().get::<#t>(#y)),
+                        true => quote!(
+                            exec_state.clone().containers().register_val::<#t>(#y, exec_state)
+                        ),
+                    },
+                },
+            ),
         };
 
         quote! {
@@ -210,7 +218,6 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
             use core_relations::{ExecutionState, ExternalFunction, Value};
             impl ExternalFunction for Ext {
                 fn invoke(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
-                    #[allow(unused_variables)] let prims = exec_state.prims();
                     #invoke
                 }
             }
@@ -323,20 +330,21 @@ impl Parse for Arg {
 }
 
 struct Type {
-    cast: Option<syn::Type>,
+    cast: Option<(syn::Type, bool)>,
     field: Option<(syn::Type, Expr)>,
 }
 
 impl Parse for Type {
     fn parse(input: ParseStream) -> Result<Self> {
+        let is_container = input.parse::<Token![@]>().is_ok();
         let cast = match input.parse::<Token![#]>() {
             Ok(_) => None,
-            Err(_) => Some(input.parse()?),
+            Err(_) => Some((input.parse()?, is_container)),
         };
 
         let field_def = syn::Type::Verbatim(match &cast {
             None => quote!(ArcSort),
-            Some(t) => quote!(Arc<<#t as IntoSort>::Sort>),
+            Some((t, _)) => quote!(Arc<<#t as IntoSort>::Sort>),
         });
 
         let field = if input.peek(syn::token::Paren) {
@@ -345,7 +353,7 @@ impl Parse for Type {
             let field_use = inner.parse()?;
 
             Some((field_def, field_use))
-        } else if let Some(t) = &cast {
+        } else if let Some((t, _)) = &cast {
             let sort = quote!(<#t as IntoSort>::Sort);
 
             let field_use = Expr::Verbatim(quote! {

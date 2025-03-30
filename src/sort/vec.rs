@@ -84,18 +84,12 @@ impl Sort for VecSort {
         self.name
     }
 
-    fn column_ty(&self, backend: &egglog_bridge::EGraph) -> ColumnTy {
-        ColumnTy::Primitive(
-            backend
-                .primitives()
-                .get_ty::<VecContainer<core_relations::Value>>(),
-        )
+    fn column_ty(&self, _backend: &egglog_bridge::EGraph) -> ColumnTy {
+        ColumnTy::Id
     }
 
     fn register_type(&self, backend: &mut egglog_bridge::EGraph) {
-        backend
-            .primitives_mut()
-            .register_type::<VecContainer<core_relations::Value>>();
+        backend.register_container_ty::<VecContainer<core_relations::Value>>();
     }
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
@@ -137,20 +131,20 @@ impl Sort for VecSort {
     }
 
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
-        add_primitive!(eg, "vec-empty"  = |                                      | -> VecContainer<Value> (self.clone()) { VecContainer(Vec::new()                    ) });
-        add_primitive!(eg, "vec-of"     = [xs: # (self.element())                ] -> VecContainer<Value> (self.clone()) { VecContainer(xs                  .collect()) });
-        add_primitive!(eg, "vec-append" = [xs: VecContainer<Value> (self.clone())] -> VecContainer<Value> (self.clone()) { VecContainer(xs.flat_map(|x| x.0).collect()) });
+        add_primitive!(eg, "vec-empty"  = |                                       | -> @VecContainer<Value> (self.clone()) { VecContainer(Vec::new()                    ) });
+        add_primitive!(eg, "vec-of"     = [xs: # (self.element())                 ] -> @VecContainer<Value> (self.clone()) { VecContainer(xs                  .collect()) });
+        add_primitive!(eg, "vec-append" = [xs: @VecContainer<Value> (self.clone())] -> @VecContainer<Value> (self.clone()) { VecContainer(xs.flat_map(|x| x.0).collect()) });
 
-        add_primitive!(eg, "vec-push" = |mut xs: VecContainer<Value> (self.clone()), x: # (self.element())| -> VecContainer<Value> (self.clone()) {{ xs.0.push(x); xs }});
-        add_primitive!(eg, "vec-pop"  = |mut xs: VecContainer<Value> (self.clone())                       | -> VecContainer<Value> (self.clone()) {{ xs.0.pop();   xs }});
+        add_primitive!(eg, "vec-push" = |mut xs: @VecContainer<Value> (self.clone()), x: # (self.element())| -> @VecContainer<Value> (self.clone()) {{ xs.0.push(x); xs }});
+        add_primitive!(eg, "vec-pop"  = |mut xs: @VecContainer<Value> (self.clone())                       | -> @VecContainer<Value> (self.clone()) {{ xs.0.pop();   xs }});
 
-        add_primitive!(eg, "vec-length"       = |xs: VecContainer<Value> (self.clone())| -> i64 { xs.0.len() as i64 });
-        add_primitive!(eg, "vec-contains"     = |xs: VecContainer<Value> (self.clone()), x: # (self.element())| -?> () { ( xs.0.contains(&x)).then_some(()) });
-        add_primitive!(eg, "vec-not-contains" = |xs: VecContainer<Value> (self.clone()), x: # (self.element())| -?> () { (!xs.0.contains(&x)).then_some(()) });
+        add_primitive!(eg, "vec-length"       = |xs: @VecContainer<Value> (self.clone())| -> i64 { xs.0.len() as i64 });
+        add_primitive!(eg, "vec-contains"     = |xs: @VecContainer<Value> (self.clone()), x: # (self.element())| -?> () { ( xs.0.contains(&x)).then_some(()) });
+        add_primitive!(eg, "vec-not-contains" = |xs: @VecContainer<Value> (self.clone()), x: # (self.element())| -?> () { (!xs.0.contains(&x)).then_some(()) });
 
-        add_primitive!(eg, "vec-get"    = |    xs: VecContainer<Value> (self.clone()), i: i64                       | -?> # (self.element()) { xs.0.get(i as usize).copied() });
-        add_primitive!(eg, "vec-set"    = |mut xs: VecContainer<Value> (self.clone()), i: i64, x: # (self.element())| -> VecContainer<Value> (self.clone()) {{ xs.0[i as usize] = x;    xs }});
-        add_primitive!(eg, "vec-remove" = |mut xs: VecContainer<Value> (self.clone()), i: i64                       | -> VecContainer<Value> (self.clone()) {{ xs.0.remove(i as usize); xs }});
+        add_primitive!(eg, "vec-get"    = |    xs: @VecContainer<Value> (self.clone()), i: i64                       | -?> # (self.element()) { xs.0.get(i as usize).copied() });
+        add_primitive!(eg, "vec-set"    = |mut xs: @VecContainer<Value> (self.clone()), i: i64, x: # (self.element())| -> @VecContainer<Value> (self.clone()) {{ xs.0[i as usize] = x;    xs }});
+        add_primitive!(eg, "vec-remove" = |mut xs: @VecContainer<Value> (self.clone()), i: i64                       | -> @VecContainer<Value> (self.clone()) {{ xs.0.remove(i as usize); xs }});
     }
 
     fn extract_term(
