@@ -1630,10 +1630,9 @@ impl<'a> BackendRule<'a> {
         self.entries
             .entry(x.clone())
             .or_insert_with(|| match x {
-                core::GenericAtomTerm::Var(_, v) => self.rb.new_var_named(
-                    v.sort.column_ty(self.rb.egraph().primitives()),
-                    v.name.into(),
-                ),
+                core::GenericAtomTerm::Var(_, v) => self
+                    .rb
+                    .new_var_named(v.sort.column_ty(self.rb.egraph()), v.name.into()),
                 core::GenericAtomTerm::Literal(_, l) => literal_to_entry(self.rb.egraph(), l),
                 core::GenericAtomTerm::Global(..) => {
                     panic!("Globals should have been desugared")
@@ -1647,10 +1646,7 @@ impl<'a> BackendRule<'a> {
     }
 
     fn prim(&self, p: &core::SpecializedPrimitive) -> (ExternalFunctionId, ColumnTy) {
-        (
-            p.primitive.1,
-            p.output.column_ty(self.rb.egraph().primitives()),
-        )
+        (p.primitive.1, p.output.column_ty(self.rb.egraph()))
     }
 
     fn args<'b>(

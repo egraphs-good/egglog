@@ -56,7 +56,7 @@ impl EGraph {
 
     /// Add a user-defined sort
     pub fn add_arcsort(&mut self, sort: ArcSort, span: Span) -> Result<(), TypeError> {
-        sort.register_type(self.backend.primitives_mut());
+        sort.register_type(&mut self.backend);
 
         let name = sort.name();
         match self.type_info.sorts.entry(name) {
