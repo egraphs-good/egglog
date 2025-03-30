@@ -1327,7 +1327,7 @@ impl SchemaMath {
         } else {
             assert!(
                 !self.subsume,
-                "subsume flag be provided if subsumption is enabled"
+                "subsume flag must be provided if subsumption is enabled"
             );
         }
     }
