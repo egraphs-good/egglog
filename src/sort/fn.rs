@@ -1,234 +1,244 @@
-// //! Sort to represent functions as values.
-// //!
-// //! To declare the sort, you must specify the exact number of arguments and the sort of each, followed by the output sort:
-// //! `(sort IntToString (UnstableFn (i64) String))`
-// //!
-// //! To create a function value, use the `(unstable-fn "name" [<partial args>])` primitive and to apply it use the `(unstable-app function arg1 arg2 ...)` primitive.
-// //! The number of args must match the number of arguments in the function sort.
-// //!
-// //!
-// //! The value is stored similar to the `vec` sort, as an index into a set, where each item in
-// //! the set is a `(Symbol, Vec<Value>)` pairs. The Symbol is the function name, and the `Vec<Value>` is
-// //! the list of partially applied arguments.
-// use super::*;
+//! Sort to represent functions as values.
+//!
+//! To declare the sort, you must specify the exact number of arguments and the sort of each, followed by the output sort:
+//! `(sort IntToString (UnstableFn (i64) String))`
+//!
+//! To create a function value, use the `(unstable-fn "name" [<partial args>])` primitive and to apply it use the `(unstable-app function arg1 arg2 ...)` primitive.
+//! The number of args must match the number of arguments in the function sort.
+//!
+//!
+//! The value is stored similar to the `vec` sort, as an index into a set, where each item in
+//! the set is a `(Symbol, Vec<Value>)` pairs. The Symbol is the function name, and the `Vec<Value>` is
+//! the list of partially applied arguments.
+use super::*;
 
-// /// A function value is a name of a function, a list of partially applied arguments (values and sort)
-// /// Note that we must store the actual arcsorts so we can return them when returning inner values
-// /// and when canonicalizing
-// #[derive(Debug, Clone)]
-// struct ValueFunction(Symbol, Vec<(ArcSort, Value)>);
+/// A function value is a name of a function, a list of partially applied arguments (values and sort)
+/// Note that we must store the actual arcsorts so we can return them when returning inner values
+/// and when canonicalizing
+#[derive(Clone, Debug)]
+pub struct FunctionContainer<V>(Symbol, Vec<(ArcSort, V)>);
 
-// impl ValueFunction {
-//     /// Remove the arcsorts to make this hashable
-//     /// The arg values contain the sort name anyways
-//     fn hashable(&self) -> (Symbol, Vec<&Value>) {
-//         (self.0, self.1.iter().map(|(_, v)| v).collect())
-//     }
-// }
+impl<V> FunctionContainer<V> {
+    /// Remove the arcsorts to make this hashable
+    /// The arg values contain the sort name anyways
+    fn hashable(&self) -> (Symbol, Vec<&V>) {
+        (self.0, self.1.iter().map(|(_, v)| v).collect())
+    }
+}
 
-// impl Hash for ValueFunction {
-//     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-//         self.hashable().hash(state);
-//     }
-// }
+impl<V: Hash> Hash for FunctionContainer<V> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.hashable().hash(state);
+    }
+}
 
-// impl PartialEq for ValueFunction {
-//     fn eq(&self, other: &Self) -> bool {
-//         self.hashable() == other.hashable()
-//     }
-// }
+impl<V: PartialEq> PartialEq for FunctionContainer<V> {
+    fn eq(&self, other: &Self) -> bool {
+        self.hashable() == other.hashable()
+    }
+}
 
-// impl Eq for ValueFunction {}
+impl<V: PartialEq> Eq for FunctionContainer<V> {}
 
-// #[derive(Debug)]
-// pub struct FunctionSort {
-//     name: Symbol,
-//     // Public so that other primitive sorts (external or internal) can find a function sort by the sorts of its inputs/output
-//     pub inputs: Vec<ArcSort>,
-//     pub output: ArcSort,
-//     functions: Mutex<IndexSet<ValueFunction>>,
-// }
+impl Container for FunctionContainer<core_relations::Value> {
+    fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool {
+        let (sorts, mut values): (Vec<_>, Vec<_>) = self.1.iter().cloned().unzip();
+        let changed = rebuilder.rebuild_slice(&mut values);
+        self.1 = sorts.into_iter().zip(values).collect();
+        changed
+    }
+    fn iter(&self) -> impl Iterator<Item = core_relations::Value> + '_ {
+        self.1.iter().map(|(_, x)| x).copied()
+    }
+}
 
-// impl FunctionSort {
-//     fn get_value(&self, value: &Value) -> ValueFunction {
-//         let functions = self.functions.lock().unwrap();
-//         functions.get_index(value.bits as usize).unwrap().clone()
-//     }
+#[derive(Debug)]
+pub struct FunctionSort {
+    name: Symbol,
+    // Public so that other primitive sorts (external or internal) can find a function sort by the sorts of its inputs/output
+    pub inputs: Vec<ArcSort>,
+    pub output: ArcSort,
+    functions: Mutex<IndexSet<FunctionContainer<Value>>>,
+}
 
-//     /// Apply the function to the values
-//     ///
-//     /// Public so that other primitive sorts (external or internal) can use this to apply functions
-//     pub fn apply(&self, fn_value: &Value, arg_values: &[Value], egraph: &mut EGraph) -> Value {
-//         let ValueFunction(name, args) = self.get_value(fn_value);
-//         let types: Vec<_> = args
-//             .iter()
-//             .map(|(sort, _)| sort.clone())
-//             .chain(self.inputs.clone())
-//             .chain(once(self.output.clone()))
-//             .collect();
-//         let values = args
-//             .iter()
-//             .map(|(_, v)| *v)
-//             .chain(arg_values.iter().cloned())
-//             .collect();
-//         call_fn(egraph, &name, types, values)
-//     }
-// }
+impl FunctionSort {
+    fn get_value(&self, value: &Value) -> FunctionContainer<Value> {
+        let functions = self.functions.lock().unwrap();
+        functions.get_index(value.bits as usize).unwrap().clone()
+    }
 
-// impl Presort for FunctionSort {
-//     fn presort_name() -> Symbol {
-//         "UnstableFn".into()
-//     }
+    /// Apply the function to the values
+    ///
+    /// Public so that other primitive sorts (external or internal) can use this to apply functions
+    pub fn apply(&self, fn_value: &Value, arg_values: &[Value], egraph: &mut EGraph) -> Value {
+        let FunctionContainer(name, args) = self.get_value(fn_value);
+        let types: Vec<_> = args
+            .iter()
+            .map(|(sort, _)| sort.clone())
+            .chain(self.inputs.clone())
+            .chain(once(self.output.clone()))
+            .collect();
+        let values = args
+            .iter()
+            .map(|(_, v)| *v)
+            .chain(arg_values.iter().cloned())
+            .collect();
+        call_fn(egraph, &name, types, values)
+    }
+}
 
-//     fn reserved_primitives() -> Vec<Symbol> {
-//         vec!["unstable-fn".into(), "unstable-app".into()]
-//     }
+impl Presort for FunctionSort {
+    fn presort_name() -> Symbol {
+        "UnstableFn".into()
+    }
 
-//     fn make_sort(
-//         typeinfo: &mut TypeInfo,
-//         name: Symbol,
-//         args: &[Expr],
-//     ) -> Result<ArcSort, TypeError> {
-//         if let [inputs, Expr::Var(span, output)] = args {
-//             let output_sort = typeinfo
-//                 .sorts
-//                 .get(output)
-//                 .ok_or(TypeError::UndefinedSort(*output, span.clone()))?;
+    fn reserved_primitives() -> Vec<Symbol> {
+        vec!["unstable-fn".into(), "unstable-app".into()]
+    }
 
-//             let input_sorts = match inputs {
-//                 Expr::Call(_, first, rest_args) => {
-//                     let all_args = once(first).chain(rest_args.iter().map(|arg| {
-//                         if let Expr::Var(_, arg) = arg {
-//                             arg
-//                         } else {
-//                             panic!("function sort must be called with list of input sorts");
-//                         }
-//                     }));
-//                     all_args
-//                         .map(|arg| {
-//                             typeinfo
-//                                 .sorts
-//                                 .get(arg)
-//                                 .ok_or(TypeError::UndefinedSort(*arg, span.clone()))
-//                                 .cloned()
-//                         })
-//                         .collect::<Result<Vec<_>, _>>()?
-//                 }
-//                 // an empty list of inputs args is parsed as a unit literal
-//                 Expr::Lit(_, Literal::Unit) => vec![],
-//                 _ => panic!("function sort must be called with list of input sorts"),
-//             };
+    fn make_sort(
+        typeinfo: &mut TypeInfo,
+        name: Symbol,
+        args: &[Expr],
+    ) -> Result<ArcSort, TypeError> {
+        if let [inputs, Expr::Var(span, output)] = args {
+            let output_sort = typeinfo
+                .get_sort(output)
+                .ok_or(TypeError::UndefinedSort(*output, span.clone()))?;
 
-//             Ok(Arc::new(Self {
-//                 name,
-//                 inputs: input_sorts,
-//                 output: output_sort.clone(),
-//                 functions: Default::default(),
-//             }))
-//         } else {
-//             panic!("function sort must be called with list of input args and output sort");
-//         }
-//     }
-// }
+            let input_sorts = match inputs {
+                Expr::Call(_, first, rest_args) => {
+                    let all_args = once(first).chain(rest_args.iter().map(|arg| {
+                        if let Expr::Var(_, arg) = arg {
+                            arg
+                        } else {
+                            panic!("function sort must be called with list of input sorts");
+                        }
+                    }));
+                    all_args
+                        .map(|arg| {
+                            typeinfo
+                                .get_sort(arg)
+                                .ok_or(TypeError::UndefinedSort(*arg, span.clone()))
+                                .cloned()
+                        })
+                        .collect::<Result<Vec<_>, _>>()?
+                }
+                // an empty list of inputs args is parsed as a unit literal
+                Expr::Lit(_, Literal::Unit) => vec![],
+                _ => panic!("function sort must be called with list of input sorts"),
+            };
 
-// impl Sort for FunctionSort {
-//     fn name(&self) -> Symbol {
-//         self.name
-//     }
+            Ok(Arc::new(Self {
+                name,
+                inputs: input_sorts,
+                output: output_sort.clone(),
+                functions: Default::default(),
+            }))
+        } else {
+            panic!("function sort must be called with list of input args and output sort");
+        }
+    }
+}
 
-//     fn column_ty(&self, prims: &Primitives) -> ColumnTy {
-//         ColumnTy::Primitive(prims.get_ty::<ValueFunction>())
-//     }
+impl Sort for FunctionSort {
+    fn name(&self) -> Symbol {
+        self.name
+    }
 
-//     fn register_type(&self, prims: &mut Primitives) {
-//         prims.register_type::<ValueFunction>();
-//     }
+    fn column_ty(&self, _backend: &egglog_bridge::EGraph) -> ColumnTy {
+        ColumnTy::Id
+    }
 
-//     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
-//         self
-//     }
+    fn register_type(&self, backend: &mut egglog_bridge::EGraph) {
+        backend.register_container_ty::<FunctionContainer<core_relations::Value>>();
+    }
 
-//     fn is_container_sort(&self) -> bool {
-//         true
-//     }
+    fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
+        self
+    }
 
-//     fn is_eq_container_sort(&self) -> bool {
-//         self.inputs.iter().any(|s| s.is_eq_sort())
-//     }
+    fn is_container_sort(&self) -> bool {
+        true
+    }
 
-//     fn serialized_name(&self, value: &Value) -> Symbol {
-//         self.get_value(value).0
-//     }
+    fn is_eq_container_sort(&self) -> bool {
+        self.inputs.iter().any(|s| s.is_eq_sort())
+    }
 
-//     fn inner_values(&self, value: &Value) -> Vec<(ArcSort, Value)> {
-//         let functions = self.functions.lock().unwrap();
-//         let input_values = functions.get_index(value.bits as usize).unwrap();
-//         input_values.1.clone()
-//     }
+    fn serialized_name(&self, value: &Value) -> Symbol {
+        self.get_value(value).0
+    }
 
-//     fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
-//         let ValueFunction(name, inputs) = self.get_value(value);
-//         let mut changed = false;
-//         let mut new_outputs = vec![];
-//         for (s, mut v) in inputs.into_iter() {
-//             changed |= s.canonicalize(&mut v, unionfind);
-//             new_outputs.push((s, v));
-//         }
-//         *value = ValueFunction(name, new_outputs).store(self);
-//         changed
-//     }
+    fn inner_values(&self, value: &Value) -> Vec<(ArcSort, Value)> {
+        let functions = self.functions.lock().unwrap();
+        let input_values = functions.get_index(value.bits as usize).unwrap();
+        input_values.1.clone()
+    }
 
-//     fn register_primitives(self: Arc<Self>, typeinfo: &mut TypeInfo) {
-//         typeinfo.add_primitive(Ctor {
-//             name: "unstable-fn".into(),
-//             function: self.clone(),
-//         });
-//         typeinfo.add_primitive(Apply {
-//             name: "unstable-app".into(),
-//             function: self.clone(),
-//         });
-//     }
+    fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
+        let FunctionContainer(name, inputs) = self.get_value(value);
+        let mut changed = false;
+        let mut new_outputs = vec![];
+        for (s, mut v) in inputs.into_iter() {
+            changed |= s.canonicalize(&mut v, unionfind);
+            new_outputs.push((s, v));
+        }
+        *value = FunctionContainer(name, new_outputs).store(self);
+        changed
+    }
 
-//     fn extract_term(
-//         &self,
-//         _egraph: &EGraph,
-//         value: Value,
-//         extractor: &Extractor,
-//         termdag: &mut TermDag,
-//     ) -> Option<(Cost, Term)> {
-//         let ValueFunction(name, inputs) = ValueFunction::load(self, &value);
-//         let (cost, args) = inputs.into_iter().try_fold(
-//             (1usize, vec![termdag.lit(Literal::String(name))]),
-//             |(cost, mut args), (sort, value)| {
-//                 let (new_cost, term) = extractor.find_best(value, termdag, &sort)?;
-//                 args.push(term);
-//                 Some((cost.saturating_add(new_cost), args))
-//             },
-//         )?;
+    fn register_primitives(self: Arc<Self>, _eg: &mut EGraph) {
+        // typeinfo.add_primitive(Ctor {
+        //     name: "unstable-fn".into(),
+        //     function: self.clone(),
+        // });
+        // typeinfo.add_primitive(Apply {
+        //     name: "unstable-app".into(),
+        //     function: self.clone(),
+        // });
+    }
 
-//         Some((cost, termdag.app("unstable-fn".into(), args)))
-//     }
-// }
+    fn extract_term(
+        &self,
+        _egraph: &EGraph,
+        value: Value,
+        extractor: &Extractor,
+        termdag: &mut TermDag,
+    ) -> Option<(Cost, Term)> {
+        let FunctionContainer(name, inputs) = FunctionContainer::load(self, &value);
+        let (cost, args) = inputs.into_iter().try_fold(
+            (1usize, vec![termdag.lit(Literal::String(name))]),
+            |(cost, mut args), (sort, value)| {
+                let (new_cost, term) = extractor.find_best(value, termdag, &sort)?;
+                args.push(term);
+                Some((cost.saturating_add(new_cost), args))
+            },
+        )?;
 
-// impl IntoSort for ValueFunction {
-//     type Sort = FunctionSort;
-//     fn store(self, sort: &Self::Sort) -> Value {
-//         let mut functions = sort.functions.lock().unwrap();
-//         let (i, _) = functions.insert_full(self);
-//         Value {
-//             #[cfg(debug_assertions)]
-//             tag: sort.name,
-//             bits: i as u64,
-//         }
-//     }
-// }
+        Some((cost, termdag.app("unstable-fn".into(), args)))
+    }
+}
 
-// impl FromSort for ValueFunction {
-//     type Sort = FunctionSort;
-//     fn load(sort: &Self::Sort, value: &Value) -> Self {
-//         sort.get_value(value)
-//     }
-// }
+impl IntoSort for FunctionContainer<Value> {
+    type Sort = FunctionSort;
+    fn store(self, sort: &Self::Sort) -> Value {
+        let mut functions = sort.functions.lock().unwrap();
+        let (i, _) = functions.insert_full(self);
+        Value {
+            #[cfg(debug_assertions)]
+            tag: sort.name,
+            bits: i as u64,
+        }
+    }
+}
+
+impl FromSort for FunctionContainer<Value> {
+    type Sort = FunctionSort;
+    fn load(sort: &Self::Sort, value: &Value) -> Self {
+        sort.get_value(value)
+    }
+}
 
 // /// Takes a string and any number of partially applied args of any sort and returns a function
 // struct FunctionCTorTypeConstraint {
@@ -394,40 +404,40 @@
 //     }
 // }
 
-// /// Call function (either primitive or eqsort) <name> with value args <args> and return the value.
-// ///
-// /// Does this in a similar way to how merge functions are resolved, using the stack and actions,
-// /// so that we can re-use the logic for primitive and regular functions.
-// fn call_fn(egraph: &mut EGraph, name: &Symbol, types: Vec<ArcSort>, args: Vec<Value>) -> Value {
-//     // Make a call with temp vars as each of the args
-//     let resolved_call = ResolvedCall::from_resolution(name, types.as_slice(), &egraph.type_info);
-//     let arg_vars: Vec<_> = types
-//         .into_iter()
-//         // Skip last sort which is the output sort
-//         .take(args.len())
-//         .enumerate()
-//         .map(|(i, sort)| ResolvedVar {
-//             name: format!("__arg_{}", i).into(),
-//             sort,
-//             is_global_ref: false,
-//         })
-//         .collect();
-//     let binding = IndexSet::from_iter(arg_vars.clone());
-//     let resolved_args = arg_vars.into_iter().map(|v| var!(v));
-//     let expr = call!(resolved_call, resolved_args);
-//     // Similar to how the merge function is created in `Function::new`
-//     let (actions, mapped_expr) = expr
-//         .to_core_actions(
-//             &egraph.type_info,
-//             &mut binding.clone(),
-//             &mut egraph.parser.symbol_gen,
-//         )
-//         .unwrap();
-//     let target = mapped_expr.get_corresponding_var_or_lit(&egraph.type_info);
-//     let program = egraph.compile_expr(&binding, &actions, &target).unwrap();
-//     // Similar to how the `MergeFn::Expr` case is handled in `Egraph::perform_set`
-//     // egraph.rebuild().unwrap();
-//     let mut stack = vec![];
-//     egraph.run_actions(&mut stack, &args, &program).unwrap();
-//     stack.pop().unwrap()
-// }
+/// Call function (either primitive or eqsort) <name> with value args <args> and return the value.
+///
+/// Does this in a similar way to how merge functions are resolved, using the stack and actions,
+/// so that we can re-use the logic for primitive and regular functions.
+fn call_fn(egraph: &mut EGraph, name: &Symbol, types: Vec<ArcSort>, args: Vec<Value>) -> Value {
+    // Make a call with temp vars as each of the args
+    let resolved_call = ResolvedCall::from_resolution(name, types.as_slice(), &egraph.type_info);
+    let arg_vars: Vec<_> = types
+        .into_iter()
+        // Skip last sort which is the output sort
+        .take(args.len())
+        .enumerate()
+        .map(|(i, sort)| ResolvedVar {
+            name: format!("__arg_{}", i).into(),
+            sort,
+            is_global_ref: false,
+        })
+        .collect();
+    let binding = IndexSet::from_iter(arg_vars.clone());
+    let resolved_args = arg_vars.into_iter().map(|v| var!(v));
+    let expr = call!(resolved_call, resolved_args);
+    // Similar to how the merge function is created in `Function::new`
+    let (actions, mapped_expr) = expr
+        .to_core_actions(
+            &egraph.type_info,
+            &mut binding.clone(),
+            &mut egraph.parser.symbol_gen,
+        )
+        .unwrap();
+    let target = mapped_expr.get_corresponding_var_or_lit(&egraph.type_info);
+    let program = egraph.compile_expr(&binding, &actions, &target).unwrap();
+    // Similar to how the `MergeFn::Expr` case is handled in `Egraph::perform_set`
+    // egraph.rebuild().unwrap();
+    let mut stack = vec![];
+    egraph.run_actions(&mut stack, &args, &program).unwrap();
+    stack.pop().unwrap()
+}
