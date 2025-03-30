@@ -7,7 +7,7 @@ use std::ops::{Shl, Shr};
 use std::sync::Mutex;
 use std::{any::Any, sync::Arc};
 
-use core_relations::{Container, Primitives, Rebuilder};
+use core_relations::{Container, Rebuilder};
 use egglog_bridge::ColumnTy;
 
 use crate::ast::Literal;
@@ -48,9 +48,9 @@ mod multiset;
 pub trait Sort: Any + Send + Sync + Debug {
     fn name(&self) -> Symbol;
 
-    fn column_ty(&self, prims: &Primitives) -> ColumnTy;
+    fn column_ty(&self, backend: &egglog_bridge::EGraph) -> ColumnTy;
 
-    fn register_type(&self, prims: &mut Primitives);
+    fn register_type(&self, backend: &mut egglog_bridge::EGraph);
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static>;
 
@@ -147,11 +147,11 @@ impl Sort for EqSort {
         self.name
     }
 
-    fn column_ty(&self, _prims: &Primitives) -> ColumnTy {
+    fn column_ty(&self, _backend: &egglog_bridge::EGraph) -> ColumnTy {
         ColumnTy::Id
     }
 
-    fn register_type(&self, _: &mut Primitives) {}
+    fn register_type(&self, _backend: &mut egglog_bridge::EGraph) {}
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
         self
