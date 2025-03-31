@@ -23,7 +23,7 @@ use crate::{
     proof_spec::{ProofBuilder, RebuildVars},
     ColumnTy, DefaultVal, EGraph, FunctionId, Result, RuleId, RuleInfo, Timestamp,
 };
-use crate::{SchemaMath, NOT_SUBSUMED, SUBSUMED};
+use crate::{RowVals, SchemaMath, NOT_SUBSUMED, SUBSUMED};
 
 define_id!(pub Variable, u32, "A variable in an egglog query");
 pub(crate) type DstVar = core_relations::QueryEntry;
@@ -567,11 +567,13 @@ impl RuleBuilder<'_> {
             };
             schema_math.write_table_row(
                 &mut dst_entries,
-                inner.next_ts.to_value().into(),
-                cur_proof_val,
-                Some(SUBSUMED.into()),
+                RowVals {
+                    timestamp: inner.next_ts.to_value().into(),
+                    proof: cur_proof_val,
+                    subsume: Some(SUBSUMED.into()),
+                    ret_val: Some(inner.convert(&ret.into())),
+                },
             );
-            dst_entries[schema_math.ret_val_col()] = inner.convert(&ret.into());
             rb.insert_if_eq(
                 table,
                 cur_subsume_val.into(),
@@ -858,9 +860,12 @@ impl RuleBuilder<'_> {
             let mut dst_vars = inner.convert_all(&after);
             schema_math.write_table_row(
                 &mut dst_vars,
-                inner.next_ts.to_value().into(),
-                Some(inner.mapping[term_var]),
-                subsume_var.map(|v| inner.mapping[v]),
+                RowVals {
+                    timestamp: inner.next_ts.to_value().into(),
+                    proof: Some(inner.mapping[term_var]),
+                    subsume: subsume_var.map(|v| inner.mapping[v]),
+                    ret_val: None, // already filled in,
+                },
             );
             // This congruence rule will also serve as a proof that the old and
             // new terms are equal.
@@ -918,12 +923,13 @@ impl RuleBuilder<'_> {
                     )?;
                     schema_math.write_table_row(
                         &mut dst_vars,
-                        inner.next_ts.to_value().into(),
-                        Some(proof_var.into()),
-                        Some(inner.convert(&subsume_entry)),
+                        RowVals {
+                            timestamp: inner.next_ts.to_value().into(),
+                            proof: Some(proof_var.into()),
+                            subsume: Some(inner.convert(&subsume_entry)),
+                            ret_val: Some(inner.convert(&res.into())),
+                        },
                     );
-                    // Overwrite the return value with the "old" value.
-                    dst_vars[schema_math.ret_val_col()] = inner.convert(&res.into());
                     rb.insert(table, &dst_vars).context("set")
                 });
             }
@@ -932,9 +938,12 @@ impl RuleBuilder<'_> {
                 let mut dst_vars = inner.convert_all(&entries);
                 schema_math.write_table_row(
                     &mut dst_vars,
-                    inner.next_ts.to_value().into(),
-                    None, // tracing is off
-                    schema_math.subsume.then(|| inner.convert(&subsume_entry)),
+                    RowVals {
+                        timestamp: inner.next_ts.to_value().into(),
+                        proof: None, // tracing is off
+                        subsume: schema_math.subsume.then(|| inner.convert(&subsume_entry)),
+                        ret_val: None, // already filled in
+                    },
                 );
                 rb.insert(table, &dst_vars).context("set")
             }));

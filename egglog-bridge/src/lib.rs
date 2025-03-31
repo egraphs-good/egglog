@@ -301,13 +301,16 @@ impl EGraph {
             let reason = self.get_fiat_reason(desc);
             self.get_term(func, inputs, reason)
         });
+        let res = term.unwrap_or_else(|| self.fresh_id());
         schema_math.write_table_row(
             &mut extended_row,
-            self.next_ts().to_value(),
-            term,
-            schema_math.subsume.then_some(NOT_SUBSUMED),
+            RowVals {
+                timestamp: self.next_ts().to_value(),
+                ret_val: Some(res),
+                proof: term,
+                subsume: schema_math.subsume.then_some(NOT_SUBSUMED),
+            },
         );
-        let res = term.unwrap_or_else(|| self.fresh_id());
         extended_row[schema_math.ret_val_col()] = res;
         let table_id = self.funcs[func].table;
         self.db
@@ -401,7 +404,7 @@ impl EGraph {
             let table_id = table_info.table;
             let term_id = reason_id.map(|reason| {
                 // Get the term id itself
-                let term_id = self.get_term(func, &row[0..row.len() - 1], reason);
+                let term_id = self.get_term(func, &row[0..schema_math.num_keys()], reason);
                 let buf = bufs.get_or_insert(self.uf_table, || {
                     self.db.get_table(self.uf_table).new_buffer()
                 });
@@ -417,9 +420,12 @@ impl EGraph {
             extended_row.extend_from_slice(&row);
             schema_math.write_table_row(
                 &mut extended_row,
-                self.next_ts().to_value(),
-                term_id,
-                schema_math.subsume.then_some(NOT_SUBSUMED),
+                RowVals {
+                    timestamp: self.next_ts().to_value(),
+                    proof: term_id,
+                    subsume: schema_math.subsume.then_some(NOT_SUBSUMED),
+                    ret_val: None, // already filled in.
+                },
             );
             let buf = bufs.get_or_insert(table_id, || self.db.get_table(table_id).new_buffer());
             buf.stage_insert(&extended_row);
@@ -820,11 +826,7 @@ impl EGraph {
             vars.push(rb.new_var(*ty).into());
         }
         let canon_val = rb.new_var(ColumnTy::Id);
-        let subsume_var = if subsume {
-            Some(rb.new_var(ColumnTy::Id))
-        } else {
-            None
-        };
+        let subsume_var = subsume.then(|| rb.new_var(ColumnTy::Id));
         rb.add_atom_with_timestamp_and_func(
             table_id,
             Some(table),
@@ -1304,16 +1306,36 @@ struct SchemaMath {
     func_cols: usize,
 }
 
+/// A struct containing possible non-key portions of a table row. To be used with
+/// [`SchemaMath::write_table_row`].
+struct RowVals<T> {
+    /// The timestamp for the row.
+    timestamp: T,
+    /// The proof id (or term id) for the row. Only relevant if tracing is enabled.
+    proof: Option<T>,
+    /// The subsumption tag for the row. Only relevant if the table has subsumption enabled.
+    subsume: Option<T>,
+    /// The return value of the row. Return values are mandatory but callers may have already
+    /// filled it in.
+    ret_val: Option<T>,
+}
+
 impl SchemaMath {
     fn write_table_row<T: Clone>(
         &self,
         row: &mut impl HasResizeWith<T>,
-        timestamp: T,
-        proof: Option<T>,
-        subsume: Option<T>,
+        RowVals {
+            timestamp,
+            proof,
+            subsume,
+            ret_val,
+        }: RowVals<T>,
     ) {
         row.resize_with(self.table_columns(), || timestamp.clone());
         row[self.ts_col()] = timestamp;
+        if let Some(ret_val) = ret_val {
+            row[self.ret_val_col()] = ret_val;
+        }
         if let Some(proof_id) = proof {
             row[self.proof_id_col()] = proof_id;
         } else {
@@ -1343,22 +1365,30 @@ impl SchemaMath {
             None
         }
     }
+
     fn num_keys(&self) -> usize {
         self.func_cols - 1
     }
+
     fn table_columns(&self) -> usize {
         self.func_cols + 1 /* timestamp */ + if self.tracing { 1 } else { 0 } + if self.subsume { 1 } else { 0 }
     }
+
+    #[track_caller]
     fn proof_id_col(&self) -> usize {
         assert!(self.tracing);
         self.func_cols + 1
     }
+
     fn ret_val_col(&self) -> usize {
         self.func_cols - 1
     }
+
     fn ts_col(&self) -> usize {
         self.func_cols
     }
+
+    #[track_caller]
     fn subsume_col(&self) -> usize {
         assert!(self.subsume);
         if self.tracing {
