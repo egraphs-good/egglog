@@ -996,13 +996,7 @@ impl MergeFn {
                         let res = state.call_external_func(panic, &[]);
                         assert_eq!(res, None);
                     }
-                    if let Some(subsume) = schema_math.propagate_subsume(cur, new) {
-                        out.extend_from_slice(new);
-                        out[schema_math.subsume_col()] = subsume;
-                        true
-                    } else {
-                        false
-                    }
+                    schema_math.propagate_subsume(cur, new, out)
                 })
             }
             MergeFn::Const(val) => {
@@ -1012,9 +1006,7 @@ impl MergeFn {
                 );
                 let val = *val;
                 Box::new(move |_, old, new, out| {
-                    if let Some(subsume) = schema_math.propagate_subsume(old, new) {
-                        out.extend_from_slice(new);
-                        out[schema_math.subsume_col()] = subsume;
+                    if schema_math.propagate_subsume(old, new, out) {
                         out[schema_math.ret_val_col()] = val;
                         true
                     } else if old[schema_math.ret_val_col()] != val {
@@ -1037,54 +1029,39 @@ impl MergeFn {
                         // When proofs are enabled, these are the same term. They are already
                         // equal and we can just do nothing.
                         state.stage_insert(uf_table, &[l, r, next_ts]);
-                        out.extend_from_slice(new);
+                        let subsumed = schema_math.propagate_subsume(cur, new, out);
+                        if !subsumed {
+                            out.extend_from_slice(new);
+                        }
                         // We pick the minimum when unioning. This matches the original egglog
                         // behavior.
                         let res = std::cmp::min(l, r);
                         out[schema_math.ret_val_col()] = res;
-                        if let Some(v) = schema_math.propagate_subsume(cur, new) {
-                            out[schema_math.subsume_col()] = v;
-                        }
-                        r == res
-                    } else if let Some(v) = schema_math.propagate_subsume(cur, new) {
-                        out.extend_from_slice(new);
-                        out[schema_math.subsume_col()] = v;
-                        true
+                        subsumed || r == res
                     } else {
-                        false
+                        schema_math.propagate_subsume(cur, new, out)
                     }
                 })
             }
             MergeFn::Old => {
-                assert!(
-                    !schema_math.subsume,
-                    "subsumption not supported for the 'old' merge function"
-                );
-                Box::new(|_, _, _, _| false)
+                Box::new(move |_, old, new, out| schema_math.propagate_subsume(old, new, out))
             }
-            MergeFn::New => {
-                assert!(
-                    !schema_math.subsume,
-                    "subsumption not supported for the 'new' merge function"
-                );
-                Box::new(move |_, old, new, out| {
-                    if new[schema_math.ret_val_col()] == old[schema_math.ret_val_col()] {
-                        false
-                    } else {
-                        out.extend_from_slice(new);
-                        true
-                    }
-                })
-            }
+            MergeFn::New => Box::new(move |_, old, new, out| {
+                let subsumed = schema_math.propagate_subsume(old, new, out);
+                if new[schema_math.ret_val_col()] == old[schema_math.ret_val_col()] {
+                    subsumed
+                } else {
+                    if !subsumed {
+                        out.extend_from_slice(new)
+                    };
+                    true
+                }
+            }),
             // NB: The primitive and function-based merge functions heap allocate a single callback
             // for each layer of nesting. This introduces a bit of overhead, particularly for cases
             // that look like `(f old new)` or `(f new old)`. We could special-case common cases in
             // this function if that overhead shows up.
             MergeFn::Primitive(func, args) => {
-                assert!(
-                    !schema_math.subsume,
-                    "subsumption not supported for primitive merge functions"
-                );
                 assert!(
                     !egraph.tracing,
                     "proofs aren't supported for non-union merge functions"
@@ -1112,20 +1089,19 @@ impl MergeFn {
                     let Some(result) = state.call_external_func(func, &results) else {
                         panic!("merge function not defined on all inputs (in function {function_name})")
                     };
+                    let subsumed = schema_math.propagate_subsume(cur, new, out);
                     if result == cur[schema_math.ret_val_col()] {
-                        false
+                        subsumed
                     } else {
-                        out.extend_from_slice(new);
+                        if !subsumed {
+                            out.extend_from_slice(new);
+                        }
                         out[schema_math.ret_val_col()] = result;
                         true
                     }
                 })
             }
             MergeFn::Function(function_id, args) => {
-                assert!(
-                    !schema_math.subsume,
-                    "subsumption not supported for non-union merge functions"
-                );
                 assert!(
                     !egraph.tracing,
                     "proofs aren't supported for non-union merge functions"
@@ -1138,16 +1114,26 @@ impl MergeFn {
                     func_info.name
                 );
                 let table = func_info.table;
+                let mut merge_vals = SmallVec::<[MergeVal; 3]>::new();
                 let default_value = match &func_info.default_val {
                     DefaultVal::FreshId => MergeVal::from(egraph.id_counter),
                     DefaultVal::Fail => panic!("cannot use a fail default in a merge function (function in question is {})", function_name),
                     DefaultVal::Const(val) => MergeVal::from(*val),
                 };
+                merge_vals
+                    .resize_with(schema_math.table_columns() - schema_math.num_keys(), || {
+                        default_value
+                    });
+                if schema_math.subsume {
+                    merge_vals[schema_math.subsume_col() - schema_math.num_keys()] =
+                        MergeVal::from(NOT_SUBSUMED);
+                }
                 let make_args = args
                     .iter()
                     .map(|arg| arg.to_callback(schema_math, function_name, egraph))
                     .collect::<Vec<_>>();
                 Box::new(move |state, cur, new, out| {
+                    let mut merge_vals = merge_vals.clone();
                     let mut scratch = Vec::new();
                     let results = make_args
                         .iter()
@@ -1161,17 +1147,19 @@ impl MergeFn {
                             res
                         })
                         .collect::<Vec<_>>();
-                    let ts = new[schema_math.ts_col()];
-                    let result = state.predict_val(
-                        table,
-                        &results,
-                        [default_value, MergeVal::from(ts)].into_iter(),
-                    )[2];
 
+                    // TODO/question: should this land in the _next_ timestamp?
+                    merge_vals[schema_math.ts_col() - schema_math.num_keys()] =
+                        new[schema_math.ts_col()].into();
+                    let result = state.predict_val(table, &results, merge_vals.iter().copied())[2];
+
+                    let subsumed = schema_math.propagate_subsume(cur, new, out);
                     if result == cur[schema_math.ret_val_col()] {
-                        false
+                        subsumed
                     } else {
-                        out.extend(new);
+                        if !subsumed {
+                            out.extend(new)
+                        };
                         out[schema_math.ret_val_col()] = result;
                         true
                     }
@@ -1353,16 +1341,18 @@ impl SchemaMath {
             );
         }
     }
-    fn propagate_subsume(&self, old: &[Value], new: &[Value]) -> Option<Value> {
+    fn propagate_subsume(&self, old: &[Value], new: &[Value], out: &mut Vec<Value>) -> bool {
         if self.subsume {
             let res = combine_subsumed(new[self.subsume_col()], old[self.subsume_col()]);
             if res != old[self.subsume_col()] {
-                Some(res)
+                out.extend_from_slice(new);
+                out[self.subsume_col()] = res;
+                true
             } else {
-                None
+                false
             }
         } else {
-            None
+            false
         }
     }
 

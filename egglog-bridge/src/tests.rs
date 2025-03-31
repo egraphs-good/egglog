@@ -928,7 +928,7 @@ fn mergefn_nested_function() {
         default: DefaultVal::FreshId,
         merge: MergeFn::UnionId,
         name: "g".into(),
-        can_subsume: false,
+        can_subsume: true,
     });
 
     // Create a function f whose merge function is (g (g new new) (g old old))
@@ -944,7 +944,7 @@ fn mergefn_nested_function() {
             ],
         ),
         name: "f".into(),
-        can_subsume: false,
+        can_subsume: true,
     });
 
     let value_1 = egraph.primitive_constant(1i64);
