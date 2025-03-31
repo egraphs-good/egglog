@@ -177,9 +177,63 @@ impl Clone for SortedWritesTable {
     }
 }
 
+/// A variant of [`RowBuffer`] that can handle arity 0.
+///
+/// We use this to handle empty keys, where the deletion API needs to handle "row buffers of empty
+/// rows". The goal here is to keep most of the API RowBuffer-centric and avoid complicating the
+/// code too much: actual code that was optimized to handle arity 0 would look a bit different.
+#[derive(Clone)]
+enum ArbitraryRowBuffer {
+    NonEmpty(RowBuffer),
+    Empty { rows: usize },
+}
+
+impl ArbitraryRowBuffer {
+    fn new(arity: usize) -> ArbitraryRowBuffer {
+        if arity == 0 {
+            ArbitraryRowBuffer::Empty { rows: 0 }
+        } else {
+            ArbitraryRowBuffer::NonEmpty(RowBuffer::new(arity))
+        }
+    }
+
+    fn add_row(&mut self, row: &[Value]) {
+        match self {
+            ArbitraryRowBuffer::NonEmpty(buf) => {
+                buf.add_row(row);
+            }
+            ArbitraryRowBuffer::Empty { rows } => {
+                *rows += 1;
+            }
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            ArbitraryRowBuffer::NonEmpty(buf) => buf.len(),
+            ArbitraryRowBuffer::Empty { rows } => *rows,
+        }
+    }
+
+    fn for_each(&self, mut f: impl FnMut(&[Value])) {
+        match self {
+            ArbitraryRowBuffer::NonEmpty(buf) => {
+                for row in buf.iter() {
+                    f(row);
+                }
+            }
+            ArbitraryRowBuffer::Empty { rows } => {
+                for _ in 0..*rows {
+                    f(&[]);
+                }
+            }
+        }
+    }
+}
+
 struct Buffer {
     pending_rows: DenseIdMap<ShardId, RowBuffer>,
-    pending_removals: DenseIdMap<ShardId, RowBuffer>,
+    pending_removals: DenseIdMap<ShardId, ArbitraryRowBuffer>,
     state: Weak<PendingState>,
     n_cols: u32,
     n_keys: u32,
@@ -196,7 +250,7 @@ impl MutationBuffer for Buffer {
     fn stage_remove(&mut self, key: &[Value]) {
         let (shard, _) = hash_code(self.shard_data, key, self.n_keys as _);
         self.pending_removals
-            .get_or_insert(shard, || RowBuffer::new(self.n_keys as _))
+            .get_or_insert(shard, || ArbitraryRowBuffer::new(self.n_keys as _))
             .add_row(key);
     }
     fn fresh_handle(&self) -> Box<dyn MutationBuffer> {
@@ -214,29 +268,27 @@ impl MutationBuffer for Buffer {
 impl Drop for Buffer {
     fn drop(&mut self) {
         if let Some(state) = self.state.upgrade() {
-            for (staged, queues, counter) in [
-                (
-                    &mut self.pending_rows,
-                    &state.pending_rows,
-                    &state.total_rows,
-                ),
-                (
-                    &mut self.pending_removals,
-                    &state.pending_removals,
-                    &state.total_removals,
-                ),
-            ] {
-                let mut rows = 0;
-                for shard_id in 0..staged.n_ids() {
-                    let shard = ShardId::from_usize(shard_id);
-                    let Some(buf) = staged.take(shard) else {
-                        continue;
-                    };
-                    rows += buf.len();
-                    queues[shard].push(buf);
-                }
-                counter.fetch_add(rows, Ordering::Relaxed);
+            let mut rows = 0;
+            for shard_id in 0..self.pending_rows.n_ids() {
+                let shard = ShardId::from_usize(shard_id);
+                let Some(buf) = self.pending_rows.take(shard) else {
+                    continue;
+                };
+                rows += buf.len();
+                state.pending_rows[shard].push(buf);
             }
+            state.total_rows.fetch_add(rows, Ordering::Relaxed);
+
+            let mut rows = 0;
+            for shard_id in 0..self.pending_removals.n_ids() {
+                let shard = ShardId::from_usize(shard_id);
+                let Some(buf) = self.pending_removals.take(shard) else {
+                    continue;
+                };
+                rows += buf.len();
+                state.pending_removals[shard].push(buf);
+            }
+            state.total_removals.fetch_add(rows, Ordering::Relaxed);
         }
     }
 }
@@ -525,7 +577,7 @@ impl SortedWritesTable {
                 let queue = &self.pending_state.pending_removals[shard_id];
                 let mut marked_stale = 0;
                 while let Some(buf) = queue.pop() {
-                    for to_remove in buf.non_stale() {
+                    buf.for_each(|to_remove| {
                         let (actual_shard, hc) = hash_code(shard_data, to_remove, self.n_keys);
                         assert_eq!(actual_shard, shard_id);
                         if let Ok(entry) = shard.find_entry(hc, |entry| {
@@ -544,7 +596,7 @@ impl SortedWritesTable {
                             marked_stale +=
                                 unsafe { !self.data.data.set_stale_shared(ent.row) } as usize;
                         }
-                    }
+                    });
                 }
                 marked_stale
             })
@@ -564,7 +616,7 @@ impl SortedWritesTable {
                 let shard_id = ShardId::from_usize(shard_id);
                 let queue = &self.pending_state.pending_removals[shard_id];
                 while let Some(buf) = queue.pop() {
-                    for to_remove in buf.non_stale() {
+                    buf.for_each(|to_remove| {
                         let (actual_shard, hc) = hash_code(shard_data, to_remove, self.n_keys);
                         assert_eq!(actual_shard, shard_id);
                         if let Ok(entry) = shard.find_entry(hc, |entry| {
@@ -576,7 +628,7 @@ impl SortedWritesTable {
                             self.data.set_stale(ent.row);
                             changed = true;
                         }
-                    }
+                    })
                 }
             });
         changed
@@ -1189,7 +1241,7 @@ fn hash_code(shard_data: ShardData, row: &[Value], n_keys: usize) -> (ShardId, u
 /// A simple struct for packaging up pending mutations to a `SortedWritesTable`.
 struct PendingState {
     pending_rows: DenseIdMap<ShardId, SegQueue<RowBuffer>>,
-    pending_removals: DenseIdMap<ShardId, SegQueue<RowBuffer>>,
+    pending_removals: DenseIdMap<ShardId, SegQueue<ArbitraryRowBuffer>>,
     total_removals: AtomicUsize,
     total_rows: AtomicUsize,
 }
