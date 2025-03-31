@@ -1,5 +1,6 @@
 use crate::{core::CoreRule, *};
 use ast::Rule;
+use core_relations::ExternalFunction;
 
 #[derive(Clone, Debug)]
 pub struct FuncType {
@@ -70,12 +71,18 @@ impl EGraph {
     }
 
     /// Add a user-defined primitive
-    pub fn add_primitive(&mut self, prim: Primitive) {
+    pub fn add_primitive(
+        &mut self,
+        prim: impl PrimitiveLike + Send + Sync + 'static,
+        ext: impl ExternalFunction + 'static,
+    ) {
+        let prim = Arc::new(prim);
+        let ext = self.backend.register_external_func(ext);
         self.type_info
             .primitives
             .entry(prim.name())
             .or_default()
-            .push(prim);
+            .push(Primitive(prim, ext));
     }
 
     pub(crate) fn typecheck_program(

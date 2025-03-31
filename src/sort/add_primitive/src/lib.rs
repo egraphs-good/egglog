@@ -193,8 +193,6 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
         #[allow(unused_imports)] use ::egglog::{*, constraint::*};
         #[allow(unused_imports)] use ::std::sync::Arc;
 
-        let eg: &mut EGraph = #eg;
-
         #prim_def
 
         impl PrimitiveLike for Prim {
@@ -223,9 +221,8 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
             }
         }
 
-        let prim = #prim_use;
-        let ext = eg.backend.register_external_func(Ext);
-        eg.add_primitive(Primitive(Arc::new(prim), ext))
+        let eg: &mut EGraph = #eg;
+        eg.add_primitive(#prim_use, Ext);
     }}.into()
 }
 
