@@ -28,6 +28,26 @@ fn dump_subset(table: &impl Table, subset: SubsetRef) -> Vec<(RowId, Vec<Value>)
 }
 
 #[test]
+fn empty_key() {
+    empty_execution_state!(e);
+    let mut table = fill_table(
+        vec![vec![v(1), v(2)], vec![v(2), v(3)]],
+        0,
+        None,
+        |_, new| Some(new.to_vec()),
+    );
+    let row = table.get_row(&[]).expect("empty key should be present");
+    assert_eq!(*row.vals, vec![v(2), v(3)]);
+    table.new_buffer().stage_remove(&[]);
+    table.merge(&mut e);
+    assert!(table.get_row(&[]).is_none(), "empty key should be removed");
+    table.new_buffer().stage_insert(&[v(1), v(2)]);
+    table.merge(&mut e);
+    let row = table.get_row(&[]).expect("empty key should be present");
+    assert_eq!(*row.vals, vec![v(1), v(2)]);
+}
+
+#[test]
 fn insert_scan() {
     let table = fill_table(
         vec![
