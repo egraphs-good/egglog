@@ -7,7 +7,7 @@ use std::ops::{Shl, Shr};
 use std::sync::Mutex;
 use std::{any::Any, sync::Arc};
 
-use core_relations::{Container, Rebuilder};
+use core_relations::{Container, ExecutionState, ExternalFunction, Rebuilder};
 use egglog_bridge::ColumnTy;
 
 use crate::ast::Literal;
