@@ -175,21 +175,21 @@ impl Sort for FunctionSort {
         changed
     }
 
-    fn register_primitives(self: Arc<Self>, _eg: &mut EGraph) {
-        // eg.add_primitive(Primitive(
-        //     Arc::new(Ctor {
-        //         name: "unstable-fn".into(),
-        //         function: self.clone(),
-        //     }),
-        //     CtorExt,
-        // ));
-        // eg.add_primitive(Primitive(
-        //     Arc::new(Apply {
-        //         name: "unstable-app".into(),
-        //         function: self.clone(),
-        //     }),
-        //     ApplyExt,
-        // ));
+    fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
+        eg.add_primitive(
+            Ctor {
+                name: "unstable-fn".into(),
+                function: self.clone(),
+            },
+            CtorExt,
+        );
+        eg.add_primitive(
+            Apply {
+                name: "unstable-app".into(),
+                function: self.clone(),
+            },
+            ApplyExt,
+        );
     }
 
     fn extract_term(
@@ -234,169 +234,195 @@ impl FromSort for FunctionContainer<Value> {
     }
 }
 
-// /// Takes a string and any number of partially applied args of any sort and returns a function
-// struct FunctionCTorTypeConstraint {
-//     name: Symbol,
-//     function: Arc<FunctionSort>,
-//     span: Span,
-// }
+/// Takes a string and any number of partially applied args of any sort and returns a function
+struct FunctionCTorTypeConstraint {
+    name: Symbol,
+    function: Arc<FunctionSort>,
+    span: Span,
+}
 
-// impl TypeConstraint for FunctionCTorTypeConstraint {
-//     fn get(
-//         &self,
-//         arguments: &[AtomTerm],
-//         typeinfo: &TypeInfo,
-//     ) -> Vec<Box<dyn Constraint<AtomTerm, ArcSort>>> {
-//         // Must have at least one arg (plus the return value)
-//         if arguments.len() < 2 {
-//             return vec![constraint::impossible(
-//                 constraint::ImpossibleConstraint::ArityMismatch {
-//                     atom: core::Atom {
-//                         span: self.span.clone(),
-//                         head: self.name,
-//                         args: arguments.to_vec(),
-//                     },
-//                     expected: 2,
-//                 },
-//             )];
-//         }
-//         let output_sort_constraint: Box<dyn Constraint<_, ArcSort>> = constraint::assign(
-//             arguments[arguments.len() - 1].clone(),
-//             self.function.clone(),
-//         );
-//         // If first arg is a literal string and we know the name of the function and can use that to know what
-//         // types to expect
-//         if let AtomTerm::Literal(_, Literal::String(ref name)) = arguments[0] {
-//             if let Some(func_type) = typeinfo.get_func_type(name) {
-//                 // The arguments contains the return sort as well as the function name
-//                 let n_partial_args = arguments.len() - 2;
-//                 // the number of partial args must match the number of inputs from the func type minus the number from
-//                 // this function sort
-//                 if self.function.inputs.len() + n_partial_args != func_type.input.len() {
-//                     return vec![constraint::impossible(
-//                         constraint::ImpossibleConstraint::ArityMismatch {
-//                             atom: core::Atom {
-//                                 span: self.span.clone(),
-//                                 head: self.name,
-//                                 args: arguments.to_vec(),
-//                             },
-//                             expected: self.function.inputs.len() + func_type.input.len() + 1,
-//                         },
-//                     )];
-//                 }
-//                 // the output type and input types (starting after the partial args) must match between these functions
-//                 let expected_output = self.function.output.clone();
-//                 let expected_input = self.function.inputs.clone();
-//                 let actual_output = func_type.output.clone();
-//                 let actual_input: Vec<ArcSort> = func_type
-//                     .input
-//                     .iter()
-//                     .skip(n_partial_args)
-//                     .cloned()
-//                     .collect();
-//                 if expected_output.name() != actual_output.name()
-//                     || expected_input
-//                         .iter()
-//                         .map(|s| s.name())
-//                         .ne(actual_input.iter().map(|s| s.name()))
-//                 {
-//                     return vec![constraint::impossible(
-//                         constraint::ImpossibleConstraint::FunctionMismatch {
-//                             expected_output,
-//                             expected_input,
-//                             actual_output,
-//                             actual_input,
-//                         },
-//                     )];
-//                 }
-//                 // if they match, then just make sure the partial args match as well
-//                 return func_type
-//                     .input
-//                     .iter()
-//                     .take(n_partial_args)
-//                     .zip(arguments.iter().skip(1))
-//                     .map(|(expected_sort, actual_term)| {
-//                         constraint::assign(actual_term.clone(), expected_sort.clone())
-//                     })
-//                     .chain(once(output_sort_constraint))
-//                     .collect();
-//             }
-//         }
+impl TypeConstraint for FunctionCTorTypeConstraint {
+    fn get(
+        &self,
+        arguments: &[AtomTerm],
+        typeinfo: &TypeInfo,
+    ) -> Vec<Box<dyn Constraint<AtomTerm, ArcSort>>> {
+        // Must have at least one arg (plus the return value)
+        if arguments.len() < 2 {
+            return vec![constraint::impossible(
+                constraint::ImpossibleConstraint::ArityMismatch {
+                    atom: core::Atom {
+                        span: self.span.clone(),
+                        head: self.name,
+                        args: arguments.to_vec(),
+                    },
+                    expected: 2,
+                },
+            )];
+        }
+        let output_sort_constraint: Box<dyn Constraint<_, ArcSort>> = constraint::assign(
+            arguments[arguments.len() - 1].clone(),
+            self.function.clone(),
+        );
+        // If first arg is a literal string and we know the name of the function and can use that to know what
+        // types to expect
+        if let AtomTerm::Literal(_, Literal::String(ref name)) = arguments[0] {
+            if let Some(func_type) = typeinfo.get_func_type(name) {
+                // The arguments contains the return sort as well as the function name
+                let n_partial_args = arguments.len() - 2;
+                // the number of partial args must match the number of inputs from the func type minus the number from
+                // this function sort
+                if self.function.inputs.len() + n_partial_args != func_type.input.len() {
+                    return vec![constraint::impossible(
+                        constraint::ImpossibleConstraint::ArityMismatch {
+                            atom: core::Atom {
+                                span: self.span.clone(),
+                                head: self.name,
+                                args: arguments.to_vec(),
+                            },
+                            expected: self.function.inputs.len() + func_type.input.len() + 1,
+                        },
+                    )];
+                }
+                // the output type and input types (starting after the partial args) must match between these functions
+                let expected_output = self.function.output.clone();
+                let expected_input = self.function.inputs.clone();
+                let actual_output = func_type.output.clone();
+                let actual_input: Vec<ArcSort> = func_type
+                    .input
+                    .iter()
+                    .skip(n_partial_args)
+                    .cloned()
+                    .collect();
+                if expected_output.name() != actual_output.name()
+                    || expected_input
+                        .iter()
+                        .map(|s| s.name())
+                        .ne(actual_input.iter().map(|s| s.name()))
+                {
+                    return vec![constraint::impossible(
+                        constraint::ImpossibleConstraint::FunctionMismatch {
+                            expected_output,
+                            expected_input,
+                            actual_output,
+                            actual_input,
+                        },
+                    )];
+                }
+                // if they match, then just make sure the partial args match as well
+                return func_type
+                    .input
+                    .iter()
+                    .take(n_partial_args)
+                    .zip(arguments.iter().skip(1))
+                    .map(|(expected_sort, actual_term)| {
+                        constraint::assign(actual_term.clone(), expected_sort.clone())
+                    })
+                    .chain(once(output_sort_constraint))
+                    .collect();
+            }
+        }
 
-//         // Otherwise we just try assuming it's this function, we don't know if it is or not
-//         vec![
-//             constraint::assign(arguments[0].clone(), Arc::new(StringSort)),
-//             output_sort_constraint,
-//         ]
-//     }
-// }
+        // Otherwise we just try assuming it's this function, we don't know if it is or not
+        vec![
+            constraint::assign(arguments[0].clone(), Arc::new(StringSort)),
+            output_sort_constraint,
+        ]
+    }
+}
 
-// // (unstable-fn "name" [<arg1>, <arg2>, ...])
-// struct Ctor {
-//     name: Symbol,
-//     function: Arc<FunctionSort>,
-// }
+// (unstable-fn "name" [<arg1>, <arg2>, ...])
+struct Ctor {
+    name: Symbol,
+    function: Arc<FunctionSort>,
+}
 
-// impl PrimitiveLike for Ctor {
-//     fn name(&self) -> Symbol {
-//         self.name
-//     }
+impl PrimitiveLike for Ctor {
+    fn name(&self) -> Symbol {
+        self.name
+    }
 
-//     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-//         Box::new(FunctionCTorTypeConstraint {
-//             name: self.name,
-//             function: self.function.clone(),
-//             span: span.clone(),
-//         })
-//     }
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        Box::new(FunctionCTorTypeConstraint {
+            name: self.name,
+            function: self.function.clone(),
+            span: span.clone(),
+        })
+    }
 
-//     fn apply(
-//         &self,
-//         values: &[Value],
-//         sorts: (&[ArcSort], &ArcSort),
-//         _egraph: Option<&mut EGraph>,
-//     ) -> Option<Value> {
-//         let name = Symbol::load(&StringSort, &values[0]);
+    fn apply(
+        &self,
+        values: &[Value],
+        sorts: (&[ArcSort], &ArcSort),
+        _egraph: Option<&mut EGraph>,
+    ) -> Option<Value> {
+        let name = Symbol::load(&StringSort, &values[0]);
 
-//         assert!(values.len() == sorts.0.len());
-//         let args: Vec<(ArcSort, Value)> = values[1..]
-//             .iter()
-//             .zip(&sorts.0[1..])
-//             .map(|(value, sort)| (sort.clone(), *value))
-//             .collect();
+        assert!(values.len() == sorts.0.len());
+        let args: Vec<(ArcSort, Value)> = values[1..]
+            .iter()
+            .zip(&sorts.0[1..])
+            .map(|(value, sort)| (sort.clone(), *value))
+            .collect();
 
-//         Some(FunctionContainer(name, args).store(&self.function))
-//     }
-// }
+        Some(FunctionContainer(name, args).store(&self.function))
+    }
+}
 
-// // (unstable-app <function> [<arg1>, <arg2>, ...])
-// struct Apply {
-//     name: Symbol,
-//     function: Arc<FunctionSort>,
-// }
+#[derive(Clone)]
+struct CtorExt;
 
-// impl PrimitiveLike for Apply {
-//     fn name(&self) -> Symbol {
-//         self.name
-//     }
+impl ExternalFunction for CtorExt {
+    fn invoke(
+        &self,
+        _exec_state: &mut ExecutionState,
+        _args: &[core_relations::Value],
+    ) -> Option<core_relations::Value> {
+        todo!("CtorExt")
+    }
+}
 
-//     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-//         let mut sorts: Vec<ArcSort> = vec![self.function.clone()];
-//         sorts.extend(self.function.inputs.clone());
-//         sorts.push(self.function.output.clone());
-//         SimpleTypeConstraint::new(self.name(), sorts, span.clone()).into_box()
-//     }
+// (unstable-app <function> [<arg1>, <arg2>, ...])
+struct Apply {
+    name: Symbol,
+    function: Arc<FunctionSort>,
+}
 
-//     fn apply(
-//         &self,
-//         values: &[Value],
-//         _sorts: (&[ArcSort], &ArcSort),
-//         egraph: Option<&mut EGraph>,
-//     ) -> Option<Value> {
-//         let egraph = egraph.expect("`unstable-app` is not supported yet in facts.");
-//         Some(self.function.apply(&values[0], &values[1..], egraph))
-//     }
-// }
+impl PrimitiveLike for Apply {
+    fn name(&self) -> Symbol {
+        self.name
+    }
+
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        let mut sorts: Vec<ArcSort> = vec![self.function.clone()];
+        sorts.extend(self.function.inputs.clone());
+        sorts.push(self.function.output.clone());
+        SimpleTypeConstraint::new(self.name(), sorts, span.clone()).into_box()
+    }
+
+    fn apply(
+        &self,
+        values: &[Value],
+        _sorts: (&[ArcSort], &ArcSort),
+        egraph: Option<&mut EGraph>,
+    ) -> Option<Value> {
+        let egraph = egraph.expect("`unstable-app` is not supported yet in facts.");
+        Some(self.function.apply(&values[0], &values[1..], egraph))
+    }
+}
+
+#[derive(Clone)]
+struct ApplyExt;
+
+impl ExternalFunction for ApplyExt {
+    fn invoke(
+        &self,
+        _exec_state: &mut ExecutionState,
+        _args: &[core_relations::Value],
+    ) -> Option<core_relations::Value> {
+        todo!("ApplyExt")
+    }
+}
 
 impl FunctionSort {
     /// Call function (primitive or table) <name> with value args <args> and return the value.
