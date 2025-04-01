@@ -2,17 +2,24 @@ use super::*;
 use std::collections::BTreeSet;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct SetContainer<V>(BTreeSet<V>);
+struct SetContainer<V> {
+    do_rebuild: bool,
+    data: BTreeSet<V>,
+}
 
 impl Container for SetContainer<core_relations::Value> {
     fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool {
-        let mut xs: Vec<_> = self.0.iter().copied().collect();
-        let changed = rebuilder.rebuild_slice(&mut xs);
-        self.0 = xs.into_iter().collect();
-        changed
+        if self.do_rebuild {
+            let mut xs: Vec<_> = self.data.iter().copied().collect();
+            let changed = rebuilder.rebuild_slice(&mut xs);
+            self.data = xs.into_iter().collect();
+            changed
+        } else {
+            false
+        }
     }
     fn iter(&self) -> impl Iterator<Item = core_relations::Value> + '_ {
-        self.0.iter().copied()
+        self.data.iter().copied()
     }
 }
 
@@ -109,7 +116,7 @@ impl Sort for SetSort {
         let sets = self.sets.lock().unwrap();
         let set = sets.get_index(value.bits as usize).unwrap();
         let mut result = Vec::new();
-        for e in set.0.iter() {
+        for e in set.data.iter() {
             result.push((self.element.clone(), *e));
         }
         result
@@ -119,8 +126,10 @@ impl Sort for SetSort {
         let sets = self.sets.lock().unwrap();
         let set = sets.get_index(value.bits as usize).unwrap();
         let mut changed = false;
-        let new_set = SetContainer(
-            set.0
+        let new_set = SetContainer {
+            do_rebuild: set.do_rebuild,
+            data: set
+                .data
                 .iter()
                 .map(|e| {
                     let mut e = *e;
@@ -128,27 +137,27 @@ impl Sort for SetSort {
                     e
                 })
                 .collect(),
-        );
+        };
         drop(sets);
         *value = new_set.store(self);
         changed
     }
 
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
-        add_primitive!(eg, "set-empty" = |                      | -> @SetContainer<Value> (self.clone()) { SetContainer(BTreeSet::new()) });
-        add_primitive!(eg, "set-of"    = [xs: # (self.element())] -> @SetContainer<Value> (self.clone()) { SetContainer(xs.collect()   ) });
+        add_primitive!(eg, "set-empty" = |                      | -> @SetContainer<Value> (self.clone()) { SetContainer { do_rebuild: self.__y.is_eq_container_sort(), data: BTreeSet::new() } });
+        add_primitive!(eg, "set-of"    = [xs: # (self.element())] -> @SetContainer<Value> (self.clone()) { SetContainer { do_rebuild: self.__y.is_eq_container_sort(), data: xs.collect()    } });
 
-        add_primitive!(eg, "set-get" = |xs: @SetContainer<Value> (self.clone()), i: i64| -?> # (self.element()) { xs.0.iter().nth(i as usize).copied() });
-        add_primitive!(eg, "set-insert" = |mut xs: @SetContainer<Value> (self.clone()), x: # (self.element())| -> @SetContainer<Value> (self.clone()) {{ xs.0.insert( x); xs }});
-        add_primitive!(eg, "set-remove" = |mut xs: @SetContainer<Value> (self.clone()), x: # (self.element())| -> @SetContainer<Value> (self.clone()) {{ xs.0.remove(&x); xs }});
+        add_primitive!(eg, "set-get" = |xs: @SetContainer<Value> (self.clone()), i: i64| -?> # (self.element()) { xs.data.iter().nth(i as usize).copied() });
+        add_primitive!(eg, "set-insert" = |mut xs: @SetContainer<Value> (self.clone()), x: # (self.element())| -> @SetContainer<Value> (self.clone()) {{ xs.data.insert( x); xs }});
+        add_primitive!(eg, "set-remove" = |mut xs: @SetContainer<Value> (self.clone()), x: # (self.element())| -> @SetContainer<Value> (self.clone()) {{ xs.data.remove(&x); xs }});
 
-        add_primitive!(eg, "set-length"       = |xs: @SetContainer<Value> (self.clone())| -> i64 { xs.0.len() as i64 });
-        add_primitive!(eg, "set-contains"     = |xs: @SetContainer<Value> (self.clone()), x: # (self.element())| -?> () { ( xs.0.contains(&x)).then_some(()) });
-        add_primitive!(eg, "set-not-contains" = |xs: @SetContainer<Value> (self.clone()), x: # (self.element())| -?> () { (!xs.0.contains(&x)).then_some(()) });
+        add_primitive!(eg, "set-length"       = |xs: @SetContainer<Value> (self.clone())| -> i64 { xs.data.len() as i64 });
+        add_primitive!(eg, "set-contains"     = |xs: @SetContainer<Value> (self.clone()), x: # (self.element())| -?> () { ( xs.data.contains(&x)).then_some(()) });
+        add_primitive!(eg, "set-not-contains" = |xs: @SetContainer<Value> (self.clone()), x: # (self.element())| -?> () { (!xs.data.contains(&x)).then_some(()) });
 
-        add_primitive!(eg, "set-union"      = |mut xs: @SetContainer<Value> (self.clone()), ys: @SetContainer<Value> (self.clone())| -> @SetContainer<Value> (self.clone()) {{ xs.0.extend(ys.0);                  xs }});
-        add_primitive!(eg, "set-diff"       = |mut xs: @SetContainer<Value> (self.clone()), ys: @SetContainer<Value> (self.clone())| -> @SetContainer<Value> (self.clone()) {{ xs.0.retain(|k| !ys.0.contains(k)); xs }});
-        add_primitive!(eg, "set-intersect"  = |mut xs: @SetContainer<Value> (self.clone()), ys: @SetContainer<Value> (self.clone())| -> @SetContainer<Value> (self.clone()) {{ xs.0.retain(|k|  ys.0.contains(k)); xs }});
+        add_primitive!(eg, "set-union"      = |mut xs: @SetContainer<Value> (self.clone()), ys: @SetContainer<Value> (self.clone())| -> @SetContainer<Value> (self.clone()) {{ xs.data.extend(ys.data);                  xs }});
+        add_primitive!(eg, "set-diff"       = |mut xs: @SetContainer<Value> (self.clone()), ys: @SetContainer<Value> (self.clone())| -> @SetContainer<Value> (self.clone()) {{ xs.data.retain(|k| !ys.data.contains(k)); xs }});
+        add_primitive!(eg, "set-intersect"  = |mut xs: @SetContainer<Value> (self.clone()), ys: @SetContainer<Value> (self.clone())| -> @SetContainer<Value> (self.clone()) {{ xs.data.retain(|k|  ys.data.contains(k)); xs }});
     }
 
     fn extract_term(
@@ -161,7 +170,7 @@ impl Sort for SetSort {
         let set = SetContainer::load(self, &value);
         let mut children = vec![];
         let mut cost = 0usize;
-        for e in set.0.iter() {
+        for e in set.data.iter() {
             let (child_cost, child_term) = extractor.find_best(*e, termdag, &self.element)?;
             cost = cost.saturating_add(child_cost);
             children.push(child_term);

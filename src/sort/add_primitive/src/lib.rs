@@ -195,6 +195,7 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
         #[allow(unused_imports)] use ::egglog::{*, constraint::*};
         #[allow(unused_imports)] use ::std::sync::Arc;
 
+        #[derive(Clone)]
         #prim_def
 
         impl PrimitiveLike for Prim {
@@ -211,12 +212,9 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
             }
         }
 
-        #[derive(Clone)]
-        struct Ext;
-
         {
             use core_relations::{ExecutionState, ExternalFunction, Value};
-            impl ExternalFunction for Ext {
+            impl ExternalFunction for Prim {
                 fn invoke(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
                     #invoke
                 }
@@ -224,7 +222,7 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
         }
 
         let eg: &mut EGraph = #eg;
-        eg.add_primitive(#prim_use, Ext);
+        eg.add_primitive(#prim_use);
     }}.into()
 }
 
