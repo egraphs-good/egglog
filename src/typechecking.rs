@@ -207,15 +207,20 @@ impl TypeInfo {
     }
 
     pub fn get_sort_by<S: Sort>(&self, pred: impl Fn(&Arc<S>) -> bool) -> Option<Arc<S>> {
+        let mut results = Vec::new();
         for sort in self.sorts.values() {
             let sort = sort.clone().as_arc_any();
             if let Ok(sort) = Arc::downcast(sort) {
                 if pred(&sort) {
-                    return Some(sort);
+                    results.push(sort);
                 }
             }
         }
-        None
+        match &results[..] {
+            [] => None,
+            [result] => Some(result.clone()),
+            [_, _, ..] => panic!("got more than one sort"),
+        }
     }
 
     fn function_to_functype(&self, func: &FunctionDecl) -> Result<FuncType, TypeError> {
