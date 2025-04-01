@@ -1,14 +1,21 @@
 use super::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct VecContainer<V>(Vec<V>);
+struct VecContainer<V> {
+    do_rebuild: bool,
+    data: Vec<V>,
+}
 
 impl Container for VecContainer<core_relations::Value> {
     fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool {
-        rebuilder.rebuild_slice(&mut self.0)
+        if self.do_rebuild {
+            rebuilder.rebuild_slice(&mut self.data)
+        } else {
+            false
+        }
     }
     fn iter(&self) -> impl Iterator<Item = core_relations::Value> + '_ {
-        self.0.iter().copied()
+        self.data.iter().copied()
     }
 }
 
@@ -104,15 +111,17 @@ impl Sort for VecSort {
         // TODO: Potential duplication of code
         let vecs = self.vecs.lock().unwrap();
         let vec = vecs.get_index(value.bits as usize).unwrap();
-        vec.0.iter().map(|e| (self.element(), *e)).collect()
+        vec.data.iter().map(|e| (self.element(), *e)).collect()
     }
 
     fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
         let vecs = self.vecs.lock().unwrap();
         let vec = vecs.get_index(value.bits as usize).unwrap();
         let mut changed = false;
-        let new_vec = VecContainer(
-            vec.0
+        let new_vec = VecContainer {
+            do_rebuild: vec.do_rebuild,
+            data: vec
+                .data
                 .iter()
                 .map(|e| {
                     let mut e = *e;
@@ -120,27 +129,27 @@ impl Sort for VecSort {
                     e
                 })
                 .collect(),
-        );
+        };
         drop(vecs);
         *value = new_vec.store(self);
         changed
     }
 
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
-        add_primitive!(eg, "vec-empty"  = |                                       | -> @VecContainer<Value> (self.clone()) { VecContainer(Vec::new()                    ) });
-        add_primitive!(eg, "vec-of"     = [xs: # (self.element())                 ] -> @VecContainer<Value> (self.clone()) { VecContainer(xs                  .collect()) });
-        add_primitive!(eg, "vec-append" = [xs: @VecContainer<Value> (self.clone())] -> @VecContainer<Value> (self.clone()) { VecContainer(xs.flat_map(|x| x.0).collect()) });
+        add_primitive!(eg, "vec-empty"  = |                                       | -> @VecContainer<Value> (self.clone()) { VecContainer { do_rebuild: self.__y.is_eq_container_sort(), data: Vec::new()                        } });
+        add_primitive!(eg, "vec-of"     = [xs: # (self.element())                 ] -> @VecContainer<Value> (self.clone()) { VecContainer { do_rebuild: self.__y.is_eq_container_sort(), data: xs                     .collect() } });
+        add_primitive!(eg, "vec-append" = [xs: @VecContainer<Value> (self.clone())] -> @VecContainer<Value> (self.clone()) { VecContainer { do_rebuild: self.__y.is_eq_container_sort(), data: xs.flat_map(|x| x.data).collect() } });
 
-        add_primitive!(eg, "vec-push" = |mut xs: @VecContainer<Value> (self.clone()), x: # (self.element())| -> @VecContainer<Value> (self.clone()) {{ xs.0.push(x); xs }});
-        add_primitive!(eg, "vec-pop"  = |mut xs: @VecContainer<Value> (self.clone())                       | -> @VecContainer<Value> (self.clone()) {{ xs.0.pop();   xs }});
+        add_primitive!(eg, "vec-push" = |mut xs: @VecContainer<Value> (self.clone()), x: # (self.element())| -> @VecContainer<Value> (self.clone()) {{ xs.data.push(x); xs }});
+        add_primitive!(eg, "vec-pop"  = |mut xs: @VecContainer<Value> (self.clone())                       | -> @VecContainer<Value> (self.clone()) {{ xs.data.pop();   xs }});
 
-        add_primitive!(eg, "vec-length"       = |xs: @VecContainer<Value> (self.clone())| -> i64 { xs.0.len() as i64 });
-        add_primitive!(eg, "vec-contains"     = |xs: @VecContainer<Value> (self.clone()), x: # (self.element())| -?> () { ( xs.0.contains(&x)).then_some(()) });
-        add_primitive!(eg, "vec-not-contains" = |xs: @VecContainer<Value> (self.clone()), x: # (self.element())| -?> () { (!xs.0.contains(&x)).then_some(()) });
+        add_primitive!(eg, "vec-length"       = |xs: @VecContainer<Value> (self.clone())| -> i64 { xs.data.len() as i64 });
+        add_primitive!(eg, "vec-contains"     = |xs: @VecContainer<Value> (self.clone()), x: # (self.element())| -?> () { ( xs.data.contains(&x)).then_some(()) });
+        add_primitive!(eg, "vec-not-contains" = |xs: @VecContainer<Value> (self.clone()), x: # (self.element())| -?> () { (!xs.data.contains(&x)).then_some(()) });
 
-        add_primitive!(eg, "vec-get"    = |    xs: @VecContainer<Value> (self.clone()), i: i64                       | -?> # (self.element()) { xs.0.get(i as usize).copied() });
-        add_primitive!(eg, "vec-set"    = |mut xs: @VecContainer<Value> (self.clone()), i: i64, x: # (self.element())| -> @VecContainer<Value> (self.clone()) {{ xs.0[i as usize] = x;    xs }});
-        add_primitive!(eg, "vec-remove" = |mut xs: @VecContainer<Value> (self.clone()), i: i64                       | -> @VecContainer<Value> (self.clone()) {{ xs.0.remove(i as usize); xs }});
+        add_primitive!(eg, "vec-get"    = |    xs: @VecContainer<Value> (self.clone()), i: i64                       | -?> # (self.element()) { xs.data.get(i as usize).copied() });
+        add_primitive!(eg, "vec-set"    = |mut xs: @VecContainer<Value> (self.clone()), i: i64, x: # (self.element())| -> @VecContainer<Value> (self.clone()) {{ xs.data[i as usize] = x;    xs }});
+        add_primitive!(eg, "vec-remove" = |mut xs: @VecContainer<Value> (self.clone()), i: i64                       | -> @VecContainer<Value> (self.clone()) {{ xs.data.remove(i as usize); xs }});
     }
 
     fn extract_term(
@@ -153,11 +162,11 @@ impl Sort for VecSort {
         let vec = VecContainer::load(self, &value);
         let mut cost = 0usize;
 
-        if vec.0.is_empty() {
+        if vec.data.is_empty() {
             Some((cost, termdag.app("vec-empty".into(), vec![])))
         } else {
             let elems = vec
-                .0
+                .data
                 .into_iter()
                 .map(|e| {
                     let (extra_cost, term) = extractor.find_best(e, termdag, &self.element)?;

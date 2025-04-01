@@ -19,7 +19,10 @@ use super::*;
 struct OldFunctionContainer(Symbol, Vec<(ArcSort, Value)>);
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct NewFunctionContainer(egglog_bridge::FunctionId, Vec<core_relations::Value>);
+struct NewFunctionContainer(
+    egglog_bridge::FunctionId,
+    Vec<(bool, core_relations::Value)>,
+);
 
 impl OldFunctionContainer {
     /// Remove the arcsorts to make this hashable
@@ -45,10 +48,18 @@ impl Eq for OldFunctionContainer {}
 
 impl Container for NewFunctionContainer {
     fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool {
-        rebuilder.rebuild_slice(&mut self.1)
+        let mut changed = false;
+        for (do_rebuild, old) in &mut self.1 {
+            if *do_rebuild {
+                let new = rebuilder.rebuild_val(*old);
+                changed |= *old != new;
+                *old = new;
+            }
+        }
+        changed
     }
     fn iter(&self) -> impl Iterator<Item = core_relations::Value> + '_ {
-        self.1.iter().copied()
+        self.1.iter().map(|(_, v)| v).copied()
     }
 }
 
@@ -176,20 +187,14 @@ impl Sort for FunctionSort {
     }
 
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
-        eg.add_primitive(
-            Ctor {
-                name: "unstable-fn".into(),
-                function: self.clone(),
-            },
-            CtorExt,
-        );
-        eg.add_primitive(
-            Apply {
-                name: "unstable-app".into(),
-                function: self.clone(),
-            },
-            ApplyExt,
-        );
+        eg.add_primitive(Ctor {
+            name: "unstable-fn".into(),
+            function: self.clone(),
+        });
+        eg.add_primitive(Apply {
+            name: "unstable-app".into(),
+            function: self.clone(),
+        });
     }
 
     fn extract_term(
@@ -332,6 +337,7 @@ impl TypeConstraint for FunctionCTorTypeConstraint {
 }
 
 // (unstable-fn "name" [<arg1>, <arg2>, ...])
+#[derive(Clone)]
 struct Ctor {
     name: Symbol,
     function: Arc<FunctionSort>,
@@ -369,10 +375,7 @@ impl PrimitiveLike for Ctor {
     }
 }
 
-#[derive(Clone)]
-struct CtorExt;
-
-impl ExternalFunction for CtorExt {
+impl ExternalFunction for Ctor {
     fn invoke(
         &self,
         _exec_state: &mut ExecutionState,
@@ -383,6 +386,7 @@ impl ExternalFunction for CtorExt {
 }
 
 // (unstable-app <function> [<arg1>, <arg2>, ...])
+#[derive(Clone)]
 struct Apply {
     name: Symbol,
     function: Arc<FunctionSort>,
@@ -411,10 +415,7 @@ impl PrimitiveLike for Apply {
     }
 }
 
-#[derive(Clone)]
-struct ApplyExt;
-
-impl ExternalFunction for ApplyExt {
+impl ExternalFunction for Apply {
     fn invoke(
         &self,
         _exec_state: &mut ExecutionState,
