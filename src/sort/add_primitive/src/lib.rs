@@ -22,6 +22,8 @@ use syn::{braced, bracketed, parenthesized, parse_macro_input, Expr, Ident, LitS
 ///
 /// - Specialized Constraints: using `T (E)` as a type will use
 ///   `E:expr` in the type constraint but `T:ty` in the body.
+///   This is necessary because the relationship between Rust types
+///   and egglog sorts is not 1-to-1.
 ///
 #[proc_macro]
 pub fn add_primitive(input: TokenStream) -> TokenStream {
