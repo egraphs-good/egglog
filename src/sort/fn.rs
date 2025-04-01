@@ -16,39 +16,39 @@ use super::*;
 /// Note that we must store the actual arcsorts so we can return them when returning inner values
 /// and when canonicalizing
 #[derive(Clone, Debug)]
-pub struct FunctionContainer<V>(Symbol, Vec<(ArcSort, V)>);
+struct OldFunctionContainer(Symbol, Vec<(ArcSort, Value)>);
 
-impl<V> FunctionContainer<V> {
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct NewFunctionContainer(egglog_bridge::FunctionId, Vec<core_relations::Value>);
+
+impl OldFunctionContainer {
     /// Remove the arcsorts to make this hashable
     /// The arg values contain the sort name anyways
-    fn hashable(&self) -> (Symbol, Vec<&V>) {
+    fn hashable(&self) -> (Symbol, Vec<&Value>) {
         (self.0, self.1.iter().map(|(_, v)| v).collect())
     }
 }
 
-impl<V: Hash> Hash for FunctionContainer<V> {
+impl Hash for OldFunctionContainer {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.hashable().hash(state);
     }
 }
 
-impl<V: PartialEq> PartialEq for FunctionContainer<V> {
+impl PartialEq for OldFunctionContainer {
     fn eq(&self, other: &Self) -> bool {
         self.hashable() == other.hashable()
     }
 }
 
-impl<V: PartialEq> Eq for FunctionContainer<V> {}
+impl Eq for OldFunctionContainer {}
 
-impl Container for FunctionContainer<core_relations::Value> {
+impl Container for NewFunctionContainer {
     fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool {
-        let (sorts, mut values): (Vec<_>, Vec<_>) = self.1.iter().cloned().unzip();
-        let changed = rebuilder.rebuild_slice(&mut values);
-        self.1 = sorts.into_iter().zip(values).collect();
-        changed
+        rebuilder.rebuild_slice(&mut self.1)
     }
     fn iter(&self) -> impl Iterator<Item = core_relations::Value> + '_ {
-        self.1.iter().map(|(_, x)| x).copied()
+        self.1.iter().copied()
     }
 }
 
@@ -57,7 +57,7 @@ pub struct FunctionSort {
     name: Symbol,
     inputs: Vec<ArcSort>,
     output: ArcSort,
-    functions: Mutex<IndexSet<FunctionContainer<Value>>>,
+    functions: Mutex<IndexSet<OldFunctionContainer>>,
 }
 
 impl FunctionSort {
@@ -138,7 +138,7 @@ impl Sort for FunctionSort {
     }
 
     fn register_type(&self, backend: &mut egglog_bridge::EGraph) {
-        backend.register_container_ty::<FunctionContainer<core_relations::Value>>();
+        backend.register_container_ty::<NewFunctionContainer>();
     }
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
@@ -154,7 +154,7 @@ impl Sort for FunctionSort {
     }
 
     fn serialized_name(&self, value: &Value) -> Symbol {
-        FunctionContainer::load(self, value).0
+        OldFunctionContainer::load(self, value).0
     }
 
     fn inner_values(&self, value: &Value) -> Vec<(ArcSort, Value)> {
@@ -164,14 +164,14 @@ impl Sort for FunctionSort {
     }
 
     fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
-        let FunctionContainer(name, inputs) = FunctionContainer::load(self, value);
+        let OldFunctionContainer(name, inputs) = OldFunctionContainer::load(self, value);
         let mut changed = false;
         let mut new_outputs = vec![];
         for (s, mut v) in inputs.into_iter() {
             changed |= s.canonicalize(&mut v, unionfind);
             new_outputs.push((s, v));
         }
-        *value = FunctionContainer(name, new_outputs).store(self);
+        *value = OldFunctionContainer(name, new_outputs).store(self);
         changed
     }
 
@@ -199,7 +199,7 @@ impl Sort for FunctionSort {
         extractor: &Extractor,
         termdag: &mut TermDag,
     ) -> Option<(Cost, Term)> {
-        let FunctionContainer(name, inputs) = FunctionContainer::load(self, &value);
+        let OldFunctionContainer(name, inputs) = OldFunctionContainer::load(self, &value);
         let (cost, args) = inputs.into_iter().try_fold(
             (1usize, vec![termdag.lit(Literal::String(name))]),
             |(cost, mut args), (sort, value)| {
@@ -213,7 +213,7 @@ impl Sort for FunctionSort {
     }
 }
 
-impl IntoSort for FunctionContainer<Value> {
+impl IntoSort for OldFunctionContainer {
     type Sort = FunctionSort;
     fn store(self, sort: &Self::Sort) -> Value {
         let mut functions = sort.functions.lock().unwrap();
@@ -226,7 +226,7 @@ impl IntoSort for FunctionContainer<Value> {
     }
 }
 
-impl FromSort for FunctionContainer<Value> {
+impl FromSort for OldFunctionContainer {
     type Sort = FunctionSort;
     fn load(sort: &Self::Sort, value: &Value) -> Self {
         let functions = sort.functions.lock().unwrap();
@@ -365,7 +365,7 @@ impl PrimitiveLike for Ctor {
             .map(|(value, sort)| (sort.clone(), *value))
             .collect();
 
-        Some(FunctionContainer(name, args).store(&self.function))
+        Some(OldFunctionContainer(name, args).store(&self.function))
     }
 }
 
@@ -429,7 +429,7 @@ impl FunctionSort {
     ///
     /// Public so that other primitive sorts (external or internal) have access.
     pub fn apply(&self, fn_value: &Value, arg_values: &[Value], egraph: &mut EGraph) -> Value {
-        let FunctionContainer(name, args) = FunctionContainer::load(self, fn_value);
+        let OldFunctionContainer(name, args) = OldFunctionContainer::load(self, fn_value);
         let (mut types, mut args): (Vec<_>, Vec<_>) = args.into_iter().unzip();
         types.extend(self.inputs.clone());
         types.push(self.output.clone());
