@@ -996,7 +996,7 @@ impl MergeFn {
                         let res = state.call_external_func(panic, &[]);
                         assert_eq!(res, None);
                     }
-                    schema_math.propagate_subsume(cur, new, out)
+                    schema_math.propagate_subsume(cur, new, out, false)
                 })
             }
             MergeFn::Const(val) => {
@@ -1006,16 +1006,13 @@ impl MergeFn {
                 );
                 let val = *val;
                 Box::new(move |_, old, new, out| {
-                    if schema_math.propagate_subsume(old, new, out) {
-                        out[schema_math.ret_val_col()] = val;
-                        true
-                    } else if old[schema_math.ret_val_col()] != val {
+                    let mut changed = false;
+                    if old[schema_math.ret_val_col()] != val {
                         out.extend_from_slice(new);
                         out[schema_math.ret_val_col()] = val;
-                        true
-                    } else {
-                        false
+                        changed = true;
                     }
+                    schema_math.propagate_subsume(old, new, out, changed)
                 })
             }
             MergeFn::UnionId => {
@@ -1029,33 +1026,27 @@ impl MergeFn {
                         // When proofs are enabled, these are the same term. They are already
                         // equal and we can just do nothing.
                         state.stage_insert(uf_table, &[l, r, next_ts]);
-                        let subsumed = schema_math.propagate_subsume(cur, new, out);
-                        if !subsumed {
-                            out.extend_from_slice(new);
-                        }
+                        out.extend_from_slice(new);
                         // We pick the minimum when unioning. This matches the original egglog
                         // behavior.
                         let res = std::cmp::min(l, r);
                         out[schema_math.ret_val_col()] = res;
-                        subsumed || r == res
+                        schema_math.propagate_subsume(cur, new, out, r == res)
                     } else {
-                        schema_math.propagate_subsume(cur, new, out)
+                        schema_math.propagate_subsume(cur, new, out, false)
                     }
                 })
             }
-            MergeFn::Old => {
-                Box::new(move |_, old, new, out| schema_math.propagate_subsume(old, new, out))
-            }
+            MergeFn::Old => Box::new(move |_, old, new, out| {
+                schema_math.propagate_subsume(old, new, out, false)
+            }),
             MergeFn::New => Box::new(move |_, old, new, out| {
-                let subsumed = schema_math.propagate_subsume(old, new, out);
-                if new[schema_math.ret_val_col()] == old[schema_math.ret_val_col()] {
-                    subsumed
-                } else {
-                    if !subsumed {
-                        out.extend_from_slice(new)
-                    };
-                    true
+                let mut changed = false;
+                if new[schema_math.ret_val_col()] != old[schema_math.ret_val_col()] {
+                    out.extend_from_slice(new);
+                    changed = true;
                 }
+                schema_math.propagate_subsume(old, new, out, changed)
             }),
             // NB: The primitive and function-based merge functions heap allocate a single callback
             // for each layer of nesting. This introduces a bit of overhead, particularly for cases
@@ -1089,16 +1080,14 @@ impl MergeFn {
                     let Some(result) = state.call_external_func(func, &results) else {
                         panic!("merge function not defined on all inputs (in function {function_name})")
                     };
-                    let subsumed = schema_math.propagate_subsume(cur, new, out);
-                    if result == cur[schema_math.ret_val_col()] {
-                        subsumed
-                    } else {
-                        if !subsumed {
-                            out.extend_from_slice(new);
-                        }
+                    let changed = if result != cur[schema_math.ret_val_col()] {
+                        out.extend_from_slice(new);
                         out[schema_math.ret_val_col()] = result;
                         true
-                    }
+                    } else {
+                        false
+                    };
+                    schema_math.propagate_subsume(cur, new, out, changed)
                 })
             }
             MergeFn::Function(function_id, args) => {
@@ -1148,21 +1137,17 @@ impl MergeFn {
                         })
                         .collect::<Vec<_>>();
 
-                    // TODO/question: should this land in the _next_ timestamp?
                     merge_vals[schema_math.ts_col() - schema_math.num_keys()] =
                         new[schema_math.ts_col()].into();
                     let result = state.predict_val(table, &results, merge_vals.iter().copied())[2];
-
-                    let subsumed = schema_math.propagate_subsume(cur, new, out);
-                    if result == cur[schema_math.ret_val_col()] {
-                        subsumed
-                    } else {
-                        if !subsumed {
-                            out.extend(new)
-                        };
+                    let changed = if result != cur[schema_math.ret_val_col()] {
+                        out.extend_from_slice(new);
                         out[schema_math.ret_val_col()] = result;
                         true
-                    }
+                    } else {
+                        false
+                    };
+                    schema_math.propagate_subsume(cur, new, out, changed)
                 })
             }
         }
@@ -1341,19 +1326,25 @@ impl SchemaMath {
             );
         }
     }
-    fn propagate_subsume(&self, old: &[Value], new: &[Value], out: &mut Vec<Value>) -> bool {
+    fn propagate_subsume(
+        &self,
+        old: &[Value],
+        new: &[Value],
+        out: &mut Vec<Value>,
+        mut changed: bool,
+    ) -> bool {
         if self.subsume {
             let res = combine_subsumed(new[self.subsume_col()], old[self.subsume_col()]);
-            if res != old[self.subsume_col()] {
-                out.extend_from_slice(new);
+            changed |= res != old[self.subsume_col()];
+
+            if changed {
+                if out.is_empty() {
+                    out.extend_from_slice(old);
+                }
                 out[self.subsume_col()] = res;
-                true
-            } else {
-                false
             }
-        } else {
-            false
         }
+        changed
     }
 
     fn num_keys(&self) -> usize {
