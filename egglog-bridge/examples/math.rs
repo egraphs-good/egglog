@@ -1,4 +1,6 @@
-use egglog_bridge::{add_expressions, define_rule, ColumnTy, DefaultVal, EGraph, MergeFn};
+use egglog_bridge::{
+    add_expressions, define_rule, ColumnTy, DefaultVal, EGraph, FunctionConfig, MergeFn,
+};
 use mimalloc::MiMalloc;
 use num_rational::Rational64;
 use web_time::Instant;
@@ -31,85 +33,107 @@ fn main() {
         let rational_ty = egraph.primitives_mut().register_type::<Rational64>();
         let string_ty = egraph.primitives_mut().register_type::<&'static str>();
         // tables
-        let diff = egraph.add_table(
-            vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
-            DefaultVal::FreshId,
-            MergeFn::UnionId,
-            "diff",
-        );
-        let integral = egraph.add_table(
-            vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
-            DefaultVal::FreshId,
-            MergeFn::UnionId,
-            "integral",
-        );
-        let add = egraph.add_table(
-            vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
-            DefaultVal::FreshId,
-            MergeFn::UnionId,
-            "add",
-        );
-        let sub = egraph.add_table(
-            vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
-            DefaultVal::FreshId,
-            MergeFn::UnionId,
-            "sub",
-        );
-        let mul = egraph.add_table(
-            vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
-            DefaultVal::FreshId,
-            MergeFn::UnionId,
-            "mul",
-        );
-        let div = egraph.add_table(
-            vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
-            DefaultVal::FreshId,
-            MergeFn::UnionId,
-            "div",
-        );
-        let pow = egraph.add_table(
-            vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
-            DefaultVal::FreshId,
-            MergeFn::UnionId,
-            "pow",
-        );
+        let diff = egraph.add_table(FunctionConfig {
+            schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
+            default: DefaultVal::FreshId,
+            merge: MergeFn::UnionId,
+            name: "diff".into(),
+            can_subsume: false,
+        });
+        let integral = egraph.add_table(FunctionConfig {
+            schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
+            default: DefaultVal::FreshId,
+            merge: MergeFn::UnionId,
+            name: "integral".into(),
+            can_subsume: false,
+        });
 
-        let ln = egraph.add_table(
-            vec![ColumnTy::Id, ColumnTy::Id],
-            DefaultVal::FreshId,
-            MergeFn::UnionId,
-            "ln",
-        );
-        let sqrt = egraph.add_table(
-            vec![ColumnTy::Id, ColumnTy::Id],
-            DefaultVal::FreshId,
-            MergeFn::UnionId,
-            "sqrt",
-        );
-        let sin = egraph.add_table(
-            vec![ColumnTy::Id, ColumnTy::Id],
-            DefaultVal::FreshId,
-            MergeFn::UnionId,
-            "sin",
-        );
-        let cos = egraph.add_table(
-            vec![ColumnTy::Id, ColumnTy::Id],
-            DefaultVal::FreshId,
-            MergeFn::UnionId,
-            "cos",
-        );
-        let rat = egraph.add_table(
-            vec![ColumnTy::Primitive(rational_ty), ColumnTy::Id],
-            DefaultVal::FreshId,
-            MergeFn::UnionId,
-            "ret",
-        );
-        let var = egraph.add_table(
-            vec![ColumnTy::Primitive(string_ty), ColumnTy::Id],
-            DefaultVal::FreshId,
-            MergeFn::UnionId,
-            "var",
-        );
+        let add = egraph.add_table(FunctionConfig {
+            schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
+            default: DefaultVal::FreshId,
+            merge: MergeFn::UnionId,
+            name: "add".into(),
+            can_subsume: false,
+        });
+        let sub = egraph.add_table(FunctionConfig {
+            schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
+            default: DefaultVal::FreshId,
+            merge: MergeFn::UnionId,
+            name: "sub".into(),
+            can_subsume: false,
+        });
+
+        let mul = egraph.add_table(FunctionConfig {
+            schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
+            default: DefaultVal::FreshId,
+            merge: MergeFn::UnionId,
+            name: "mul".into(),
+            can_subsume: false,
+        });
+
+        let div = egraph.add_table(FunctionConfig {
+            schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
+            default: DefaultVal::FreshId,
+            merge: MergeFn::UnionId,
+            name: "div".into(),
+            can_subsume: false,
+        });
+
+        let pow = egraph.add_table(FunctionConfig {
+            schema: vec![ColumnTy::Id, ColumnTy::Id, ColumnTy::Id],
+            default: DefaultVal::FreshId,
+            merge: MergeFn::UnionId,
+            name: "pow".into(),
+            can_subsume: false,
+        });
+
+        let ln = egraph.add_table(FunctionConfig {
+            schema: vec![ColumnTy::Id, ColumnTy::Id],
+            default: DefaultVal::FreshId,
+            merge: MergeFn::UnionId,
+            name: "ln".into(),
+            can_subsume: false,
+        });
+
+        let sqrt = egraph.add_table(FunctionConfig {
+            schema: vec![ColumnTy::Id, ColumnTy::Id],
+            default: DefaultVal::FreshId,
+            merge: MergeFn::UnionId,
+            name: "sqrt".into(),
+            can_subsume: false,
+        });
+
+        let sin = egraph.add_table(FunctionConfig {
+            schema: vec![ColumnTy::Id, ColumnTy::Id],
+            default: DefaultVal::FreshId,
+            merge: MergeFn::UnionId,
+            name: "sin".into(),
+            can_subsume: false,
+        });
+
+        let cos = egraph.add_table(FunctionConfig {
+            schema: vec![ColumnTy::Id, ColumnTy::Id],
+            default: DefaultVal::FreshId,
+            merge: MergeFn::UnionId,
+            name: "cos".into(),
+            can_subsume: false,
+        });
+
+        let rat = egraph.add_table(FunctionConfig {
+            schema: vec![ColumnTy::Primitive(rational_ty), ColumnTy::Id],
+            default: DefaultVal::FreshId,
+            merge: MergeFn::UnionId,
+            name: "rat".into(),
+            can_subsume: false,
+        });
+
+        let var = egraph.add_table(FunctionConfig {
+            schema: vec![ColumnTy::Primitive(string_ty), ColumnTy::Id],
+            default: DefaultVal::FreshId,
+            merge: MergeFn::UnionId,
+            name: "var".into(),
+            can_subsume: false,
+        });
 
         let zero = egraph.primitive_constant(Rational64::new(0, 1));
         let one = egraph.primitive_constant(Rational64::new(1, 1));

@@ -12,6 +12,7 @@ use std::{
     fmt::Debug,
     hash::Hash,
     iter, mem,
+    ops::{Index, IndexMut},
     rc::Rc,
     sync::{Arc, Mutex},
 };
@@ -85,6 +86,20 @@ impl Default for EGraph {
         let uf_table = db.add_table(DisplacedTable::default(), iter::empty(), iter::empty());
         EGraph::create_internal(db, uf_table, false)
     }
+}
+
+/// Properties of a function added to an [`EGraph`].
+pub struct FunctionConfig {
+    /// The function's schema. The last column in the schema is the return type.
+    pub schema: Vec<ColumnTy>,
+    /// The behavior of the function when lookups are made on keys not currently present.
+    pub default: DefaultVal,
+    /// How to resolve FD conflicts for the function.
+    pub merge: MergeFn,
+    /// The function's name
+    pub name: String,
+    /// Whether or not subsumption is enabled for this function.
+    pub can_subsume: bool,
 }
 
 impl EGraph {
@@ -274,21 +289,29 @@ impl EGraph {
     /// # Panics
     /// This method panics if the values do not match the arity of the function.
     pub fn add_term(&mut self, func: FunctionId, inputs: &[Value], desc: &str) -> Value {
+        let info = &self.funcs[func];
+        let schema_math = SchemaMath {
+            tracing: self.tracing,
+            subsume: info.can_subsume,
+            func_cols: info.schema.len(),
+        };
         let mut extended_row = Vec::new();
         extended_row.extend_from_slice(inputs);
-        let res = if self.tracing {
+        let term = self.tracing.then(|| {
             let reason = self.get_fiat_reason(desc);
-            let term = self.get_term(func, inputs, reason);
-            extended_row.push(term);
-            extended_row.push(self.next_ts().to_value());
-            extended_row.push(term);
-            term
-        } else {
-            let id = self.fresh_id();
-            extended_row.push(id);
-            extended_row.push(self.next_ts().to_value());
-            id
-        };
+            self.get_term(func, inputs, reason)
+        });
+        let res = term.unwrap_or_else(|| self.fresh_id());
+        schema_math.write_table_row(
+            &mut extended_row,
+            RowVals {
+                timestamp: self.next_ts().to_value(),
+                ret_val: Some(res),
+                proof: term,
+                subsume: schema_math.subsume.then_some(NOT_SUBSUMED),
+            },
+        );
+        extended_row[schema_math.ret_val_col()] = res;
         let table_id = self.funcs[func].table;
         self.db
             .get_table(table_id)
@@ -368,21 +391,20 @@ impl EGraph {
         desc: &str,
         values: impl IntoIterator<Item = (FunctionId, Vec<Value>)>,
     ) {
-        let mut extended_row = SmallVec::<[Value; 8]>::new();
-        let reason_id = if self.tracing {
-            Some(self.get_fiat_reason(desc))
-        } else {
-            None
-        };
+        let mut extended_row = Vec::<Value>::new();
+        let reason_id = self.tracing.then(|| self.get_fiat_reason(desc));
         let mut bufs = DenseIdMap::default();
         for (func, row) in values.into_iter() {
-            extended_row.extend_from_slice(&row);
-            extended_row.push(self.next_ts().to_value());
             let table_info = &self.funcs[func];
+            let schema_math = SchemaMath {
+                tracing: self.tracing,
+                subsume: table_info.can_subsume,
+                func_cols: table_info.schema.len(),
+            };
             let table_id = table_info.table;
-            if let Some(reason_id) = reason_id {
+            let term_id = reason_id.map(|reason| {
                 // Get the term id itself
-                let term_id = self.get_term(func, &row[0..row.len() - 1], reason_id);
+                let term_id = self.get_term(func, &row[0..schema_math.num_keys()], reason);
                 let buf = bufs.get_or_insert(self.uf_table, || {
                     self.db.get_table(self.uf_table).new_buffer()
                 });
@@ -391,10 +413,20 @@ impl EGraph {
                     *row.last().unwrap(),
                     term_id,
                     self.next_ts().to_value(),
-                    reason_id,
+                    reason,
                 ]);
-                extended_row.push(term_id);
-            }
+                term_id
+            });
+            extended_row.extend_from_slice(&row);
+            schema_math.write_table_row(
+                &mut extended_row,
+                RowVals {
+                    timestamp: self.next_ts().to_value(),
+                    proof: term_id,
+                    subsume: schema_math.subsume.then_some(NOT_SUBSUMED),
+                    ret_val: None, // already filled in.
+                },
+            );
             let buf = bufs.get_or_insert(table_id, || self.db.get_table(table_id).new_buffer());
             buf.stage_insert(&extended_row);
             extended_row.clear();
@@ -460,20 +492,25 @@ impl EGraph {
     ///
     /// Useful for debugging.
     pub fn dump_table(&self, table: FunctionId, mut f: impl FnMut(&[Value])) {
+        let info = &self.funcs[table];
         let table = self.funcs[table].table;
+        let schema_math = SchemaMath {
+            tracing: self.tracing,
+            subsume: info.can_subsume,
+            func_cols: info.schema.len(),
+        };
         let imp = self.db.get_table(table);
-        let truncate = if self.tracing { 2 } else { 1 };
         let all = imp.all();
         let mut cur = Offset::new(0);
         let mut buf = TaggedRowBuffer::new(imp.spec().arity());
         while let Some(next) = imp.scan_bounded(all.as_ref(), cur, 500, &mut buf) {
             buf.non_stale()
-                .for_each(|(_, row)| f(&row[0..row.len() - truncate]));
+                .for_each(|(_, row)| f(&row[0..schema_math.func_cols]));
             cur = next;
             buf.clear();
         }
         buf.non_stale()
-            .for_each(|(_, row)| f(&row[0..row.len() - truncate]));
+            .for_each(|(_, row)| f(&row[0..schema_math.func_cols]));
     }
 
     /// A basic method for dumping the state of the database to `log::info!`.
@@ -528,13 +565,14 @@ impl EGraph {
     }
 
     /// Register a function in this EGraph.
-    pub fn add_table(
-        &mut self,
-        schema: Vec<ColumnTy>,
-        default: DefaultVal,
-        merge: MergeFn,
-        name: &str,
-    ) -> FunctionId {
+    pub fn add_table(&mut self, config: FunctionConfig) -> FunctionId {
+        let FunctionConfig {
+            schema,
+            default,
+            merge,
+            name,
+            can_subsume,
+        } = config;
         assert!(
             !schema.is_empty(),
             "must have at least one column in schema"
@@ -545,17 +583,18 @@ impl EGraph {
             .filter(|(_, ty)| matches!(ty, ColumnTy::Id))
             .map(|(i, _)| ColumnId::from_usize(i))
             .collect();
-        let n_args = schema.len() - 1;
-        let n_cols = if self.tracing {
-            schema.len() + 2
-        } else {
-            schema.len() + 1
+        let schema_math = SchemaMath {
+            tracing: self.tracing,
+            subsume: can_subsume,
+            func_cols: schema.len(),
         };
+        let n_args = schema_math.num_keys();
+        let n_cols = schema_math.table_columns();
         let next_func_id = self.funcs.next_id();
         let mut read_deps = IndexSet::<TableId>::new();
         let mut write_deps = IndexSet::<TableId>::new();
         merge.fill_deps(self, &mut read_deps, &mut write_deps);
-        let merge_fn = merge.to_callback(n_args, name, self);
+        let merge_fn = merge.to_callback(schema_math, &name, self);
         let table = SortedWritesTable::new(
             n_args,
             n_cols,
@@ -572,6 +611,7 @@ impl EGraph {
             incremental_rebuild_rules: Default::default(),
             nonincremental_rebuild_rule: RuleId::new(!0),
             default_val: default,
+            can_subsume,
             name: name.into(),
         });
         debug_assert_eq!(res, next_func_id);
@@ -775,6 +815,7 @@ impl EGraph {
         schema: &[ColumnTy],
         col: ColumnId,
     ) -> RuleId {
+        let subsume = self.funcs[table].can_subsume;
         let table_id = self.funcs[table].table;
         let uf_table = self.uf_table;
         // Two atoms, one binding a whole tuple, one binding a displaced column
@@ -785,8 +826,19 @@ impl EGraph {
             vars.push(rb.new_var(*ty).into());
         }
         let canon_val = rb.new_var(ColumnTy::Id);
-        rb.add_atom_with_timestamp(table_id, &vars);
-        rb.add_atom_with_timestamp(uf_table, &[vars[col.index()].clone(), canon_val.into()]);
+        let subsume_var = subsume.then(|| rb.new_var(ColumnTy::Id));
+        rb.add_atom_with_timestamp_and_func(
+            table_id,
+            Some(table),
+            subsume_var.map(QueryEntry::from),
+            &vars,
+        );
+        rb.add_atom_with_timestamp_and_func(
+            uf_table,
+            None,
+            None,
+            &[vars[col.index()].clone(), canon_val.into()],
+        );
         rb.set_focus(1); // Set the uf atom as the sole focus.
 
         // Now canonicalize the entire row.
@@ -802,18 +854,26 @@ impl EGraph {
         }
 
         // Remove the old row and insert the new one.
-        rb.rebuild_row(table, &vars, &canon);
+        rb.rebuild_row(table, &vars, &canon, subsume_var);
         rb.build()
     }
 
     fn nonincremental_rebuild(&mut self, table: FunctionId, schema: &[ColumnTy]) -> RuleId {
+        let can_subsume = self.funcs[table].can_subsume;
+        let table_id = self.funcs[table].table;
         let mut rb = self.new_rule(&format!("nonincremental rebuild {table:?}"), false);
         rb.set_plan_strategy(PlanStrategy::MinCover);
         let mut vars = Vec::<QueryEntry>::with_capacity(schema.len());
         for ty in schema {
             vars.push(rb.new_var(*ty).into());
         }
-        rb.query_table(table, &vars).unwrap();
+        let subsume_var = can_subsume.then(|| rb.new_var(ColumnTy::Id));
+        rb.add_atom_with_timestamp_and_func(
+            table_id,
+            Some(table),
+            subsume_var.map(QueryEntry::from),
+            &vars,
+        );
         let mut lhs = SmallVec::<[QueryEntry; 4]>::new();
         let mut rhs = SmallVec::<[QueryEntry; 4]>::new();
         let mut canon = Vec::<QueryEntry>::with_capacity(schema.len());
@@ -828,7 +888,7 @@ impl EGraph {
             })
         }
         rb.check_for_update(&lhs, &rhs).unwrap();
-        rb.rebuild_row(table, &vars, &canon);
+        rb.rebuild_row(table, &vars, &canon, subsume_var);
         rb.build()
     }
 }
@@ -848,6 +908,7 @@ struct FunctionInfo {
     incremental_rebuild_rules: Vec<RuleId>,
     nonincremental_rebuild_rule: RuleId,
     default_val: DefaultVal,
+    can_subsume: bool,
     name: Arc<str>,
 }
 
@@ -921,7 +982,7 @@ impl MergeFn {
 
     fn to_callback(
         &self,
-        n_args: usize,
+        schema_math: SchemaMath,
         function_name: &str,
         egraph: &mut EGraph,
     ) -> Box<core_relations::MergeFn> {
@@ -930,12 +991,12 @@ impl MergeFn {
                 let panic = egraph.new_panic(format!(
                     "Illegal merge attempted for function {function_name}"
                 ));
-                Box::new(move |state, cur, new, _out| {
+                Box::new(move |state, cur, new, out| {
                     if cur != new {
                         let res = state.call_external_func(panic, &[]);
                         assert_eq!(res, None);
                     }
-                    false
+                    schema_math.propagate_subsume(cur, new, out, false)
                 })
             }
             MergeFn::Const(val) => {
@@ -945,46 +1006,47 @@ impl MergeFn {
                 );
                 let val = *val;
                 Box::new(move |_, old, new, out| {
-                    if old[n_args] == val {
-                        return false;
+                    let mut changed = false;
+                    if old[schema_math.ret_val_col()] != val {
+                        out.extend_from_slice(new);
+                        out[schema_math.ret_val_col()] = val;
+                        changed = true;
                     }
-                    out.extend_from_slice(&old[0..n_args]);
-                    out.push(val);
-                    out.extend_from_slice(&new[n_args + 1..]);
-                    true
+                    schema_math.propagate_subsume(old, new, out, changed)
                 })
             }
             MergeFn::UnionId => {
                 let uf_table = egraph.uf_table;
                 let tracing = egraph.tracing;
                 Box::new(move |state, cur, new, out| {
-                    let l = cur[n_args];
-                    let r = new[n_args];
-                    let next_ts = new[n_args + 1];
+                    let l = cur[schema_math.ret_val_col()];
+                    let r = new[schema_math.ret_val_col()];
+                    let next_ts = new[schema_math.ts_col()];
                     if l != r && !tracing {
                         // When proofs are enabled, these are the same term. They are already
                         // equal and we can just do nothing.
                         state.stage_insert(uf_table, &[l, r, next_ts]);
-                        out.extend_from_slice(&new[0..n_args]);
+                        out.extend_from_slice(new);
                         // We pick the minimum when unioning. This matches the original egglog
                         // behavior.
                         let res = std::cmp::min(l, r);
-                        out.push(std::cmp::min(l, r));
-                        out.extend_from_slice(&new[n_args + 1..]);
-                        r == res
+                        out[schema_math.ret_val_col()] = res;
+                        schema_math.propagate_subsume(cur, new, out, r == res)
                     } else {
-                        false
+                        schema_math.propagate_subsume(cur, new, out, false)
                     }
                 })
             }
-            MergeFn::Old => Box::new(|_, _, _, _| false),
+            MergeFn::Old => Box::new(move |_, old, new, out| {
+                schema_math.propagate_subsume(old, new, out, false)
+            }),
             MergeFn::New => Box::new(move |_, old, new, out| {
-                if new[n_args] == old[n_args] {
-                    false
-                } else {
+                let mut changed = false;
+                if new[schema_math.ret_val_col()] != old[schema_math.ret_val_col()] {
                     out.extend_from_slice(new);
-                    true
+                    changed = true;
                 }
+                schema_math.propagate_subsume(old, new, out, changed)
             }),
             // NB: The primitive and function-based merge functions heap allocate a single callback
             // for each layer of nesting. This introduces a bit of overhead, particularly for cases
@@ -998,7 +1060,7 @@ impl MergeFn {
                 let func = *func;
                 let make_args = args
                     .iter()
-                    .map(|arg| arg.to_callback(n_args, function_name, egraph))
+                    .map(|arg| arg.to_callback(schema_math, function_name, egraph))
                     .collect::<Vec<_>>();
                 let function_name = function_name.to_string();
                 Box::new(move |state, cur, new, out| {
@@ -1007,9 +1069,9 @@ impl MergeFn {
                         .iter()
                         .map(|f| {
                             let res = if f(state, cur, new, &mut scratch) {
-                                scratch[n_args]
+                                scratch[schema_math.ret_val_col()]
                             } else {
-                                cur[n_args]
+                                cur[schema_math.ret_val_col()]
                             };
                             scratch.clear();
                             res
@@ -1018,14 +1080,14 @@ impl MergeFn {
                     let Some(result) = state.call_external_func(func, &results) else {
                         panic!("merge function not defined on all inputs (in function {function_name})")
                     };
-                    if result == cur[n_args] {
-                        false
-                    } else {
-                        out.extend_from_slice(&new[0..n_args]);
-                        out.push(result);
-                        out.extend_from_slice(&new[n_args + 1..]);
+                    let changed = if result != cur[schema_math.ret_val_col()] {
+                        out.extend_from_slice(new);
+                        out[schema_math.ret_val_col()] = result;
                         true
-                    }
+                    } else {
+                        false
+                    };
+                    schema_math.propagate_subsume(cur, new, out, changed)
                 })
             }
             MergeFn::Function(function_id, args) => {
@@ -1041,44 +1103,51 @@ impl MergeFn {
                     func_info.name
                 );
                 let table = func_info.table;
+                let mut merge_vals = SmallVec::<[MergeVal; 3]>::new();
                 let default_value = match &func_info.default_val {
                     DefaultVal::FreshId => MergeVal::from(egraph.id_counter),
                     DefaultVal::Fail => panic!("cannot use a fail default in a merge function (function in question is {})", function_name),
                     DefaultVal::Const(val) => MergeVal::from(*val),
                 };
+                merge_vals
+                    .resize_with(schema_math.table_columns() - schema_math.num_keys(), || {
+                        default_value
+                    });
+                if schema_math.subsume {
+                    merge_vals[schema_math.subsume_col() - schema_math.num_keys()] =
+                        MergeVal::from(NOT_SUBSUMED);
+                }
                 let make_args = args
                     .iter()
-                    .map(|arg| arg.to_callback(n_args, function_name, egraph))
+                    .map(|arg| arg.to_callback(schema_math, function_name, egraph))
                     .collect::<Vec<_>>();
                 Box::new(move |state, cur, new, out| {
+                    let mut merge_vals = merge_vals.clone();
                     let mut scratch = Vec::new();
                     let results = make_args
                         .iter()
                         .map(|f| {
                             let res = if f(state, cur, new, &mut scratch) {
-                                scratch[n_args]
+                                scratch[schema_math.ret_val_col()]
                             } else {
-                                cur[n_args]
+                                cur[schema_math.ret_val_col()]
                             };
                             scratch.clear();
                             res
                         })
                         .collect::<Vec<_>>();
-                    let ts = new[n_args + 1];
-                    let result = state.predict_val(
-                        table,
-                        &results,
-                        [default_value, MergeVal::from(ts)].into_iter(),
-                    )[2];
 
-                    if result == cur[n_args] {
-                        false
-                    } else {
-                        out.extend_from_slice(&new[0..n_args]);
-                        out.push(result);
-                        out.extend_from_slice(&new[n_args + 1..]);
+                    merge_vals[schema_math.ts_col() - schema_math.num_keys()] =
+                        new[schema_math.ts_col()].into();
+                    let result = state.predict_val(table, &results, merge_vals.iter().copied())[2];
+                    let changed = if result != cur[schema_math.ret_val_col()] {
+                        out.extend_from_slice(new);
+                        out[schema_math.ret_val_col()] = result;
                         true
-                    }
+                    } else {
+                        false
+                    };
+                    schema_math.propagate_subsume(cur, new, out, changed)
                 })
             }
         }
@@ -1184,6 +1253,161 @@ fn incremental_rebuild(uf_size: usize, table_size: usize, parallel: bool) -> boo
     }
 }
 
+pub(crate) const SUBSUMED: Value = Value::new_const(1);
+pub(crate) const NOT_SUBSUMED: Value = Value::new_const(0);
+fn combine_subsumed(v1: Value, v2: Value) -> Value {
+    std::cmp::max(v1, v2)
+}
+
+/// A struct helping with some calculations of where some information is stored at the
+/// core-relations Table level for a given function.
+///
+/// Functions can have multiple "output columns" in the underlying core-relations layer depending
+/// on whether different features are enabled. Roughly, tables are laid out as:
+///
+/// > `[key0, ..., keyn, return value, timestamp, proof_id?, subsume?]`
+///
+/// Where there are `n+1` key columns and columns marked with a question mark are optional,
+/// depending on the egraph and table-level configuration.
+#[derive(Copy, Clone)]
+struct SchemaMath {
+    /// Whether or not proofs are enabled.
+    tracing: bool,
+    /// Whether or not the table is enabled for subsumption.
+    subsume: bool,
+    /// The number of columns in the function (including the return value).
+    func_cols: usize,
+}
+
+/// A struct containing possible non-key portions of a table row. To be used with
+/// [`SchemaMath::write_table_row`].
+struct RowVals<T> {
+    /// The timestamp for the row.
+    timestamp: T,
+    /// The proof id (or term id) for the row. Only relevant if tracing is enabled.
+    proof: Option<T>,
+    /// The subsumption tag for the row. Only relevant if the table has subsumption enabled.
+    subsume: Option<T>,
+    /// The return value of the row. Return values are mandatory but callers may have already
+    /// filled it in.
+    ret_val: Option<T>,
+}
+
+impl SchemaMath {
+    fn write_table_row<T: Clone>(
+        &self,
+        row: &mut impl HasResizeWith<T>,
+        RowVals {
+            timestamp,
+            proof,
+            subsume,
+            ret_val,
+        }: RowVals<T>,
+    ) {
+        row.resize_with(self.table_columns(), || timestamp.clone());
+        row[self.ts_col()] = timestamp;
+        if let Some(ret_val) = ret_val {
+            row[self.ret_val_col()] = ret_val;
+        }
+        if let Some(proof_id) = proof {
+            row[self.proof_id_col()] = proof_id;
+        } else {
+            assert!(
+                !self.tracing,
+                "proof_id must be provided if tracing is enabled"
+            );
+        }
+        if let Some(subsume) = subsume {
+            row[self.subsume_col()] = subsume;
+        } else {
+            assert!(
+                !self.subsume,
+                "subsume flag must be provided if subsumption is enabled"
+            );
+        }
+    }
+    fn propagate_subsume(
+        &self,
+        old: &[Value],
+        new: &[Value],
+        out: &mut Vec<Value>,
+        mut changed: bool,
+    ) -> bool {
+        if self.subsume {
+            let res = combine_subsumed(new[self.subsume_col()], old[self.subsume_col()]);
+            changed |= res != old[self.subsume_col()];
+
+            if changed {
+                if out.is_empty() {
+                    out.extend_from_slice(old);
+                }
+                out[self.subsume_col()] = res;
+            }
+        }
+        changed
+    }
+
+    fn num_keys(&self) -> usize {
+        self.func_cols - 1
+    }
+
+    fn table_columns(&self) -> usize {
+        self.func_cols + 1 /* timestamp */ + if self.tracing { 1 } else { 0 } + if self.subsume { 1 } else { 0 }
+    }
+
+    #[track_caller]
+    fn proof_id_col(&self) -> usize {
+        assert!(self.tracing);
+        self.func_cols + 1
+    }
+
+    fn ret_val_col(&self) -> usize {
+        self.func_cols - 1
+    }
+
+    fn ts_col(&self) -> usize {
+        self.func_cols
+    }
+
+    #[track_caller]
+    fn subsume_col(&self) -> usize {
+        assert!(self.subsume);
+        if self.tracing {
+            self.func_cols + 2
+        } else {
+            self.func_cols + 1
+        }
+    }
+}
+
 #[derive(Error, Debug)]
 #[error("Panic: {0}")]
 struct PanicError(String);
+
+/// Basic ad-hoc polymorphism around `resize_with` in order to get [`SchemaMath::write_table_row`]
+/// to work with both `Vec` and `SmallVec`.
+trait HasResizeWith<T>:
+    AsMut<[T]> + AsRef<[T]> + Index<usize, Output = T> + IndexMut<usize, Output = T>
+{
+    fn resize_with<F>(&mut self, new_size: usize, f: F)
+    where
+        F: FnMut() -> T;
+}
+
+impl<T> HasResizeWith<T> for Vec<T> {
+    fn resize_with<F>(&mut self, new_size: usize, f: F)
+    where
+        F: FnMut() -> T,
+    {
+        self.resize_with(new_size, f);
+    }
+}
+
+impl<T, A: smallvec::Array<Item = T>> HasResizeWith<T> for SmallVec<A> {
+    fn resize_with<F>(&mut self, new_size: usize, f: F)
+    where
+        F: FnMut() -> T,
+    {
+        self.resize_with(new_size, f);
+    }
+}
