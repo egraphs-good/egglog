@@ -378,14 +378,22 @@ impl RuleBuilder<'_> {
                 func_cols: entries.len(),
             }
         };
-        atom.resize_with(schema_math.table_columns(), || {
-            self.new_var(ColumnTy::Id).into()
-        });
-        if let Some(subsume_entry) = subsume_entry {
-            if schema_math.subsume {
-                atom[schema_math.subsume_col()] = subsume_entry;
-            }
-        }
+        schema_math.write_table_row(
+            &mut atom,
+            RowVals {
+                timestamp: self.new_var(ColumnTy::Id).into(),
+                proof: self
+                    .egraph
+                    .tracing
+                    .then(|| self.new_var(ColumnTy::Id).into()),
+                subsume: if schema_math.subsume {
+                    Some(subsume_entry.unwrap_or_else(|| self.new_var(ColumnTy::Id).into()))
+                } else {
+                    None
+                },
+                ret_val: None,
+            },
+        );
         if self.egraph.tracing {
             let proof_var = atom[schema_math.proof_id_col()].var();
             self.proof_builder.add_lhs(entries, proof_var);
