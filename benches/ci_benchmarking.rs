@@ -6,5 +6,9 @@ fn bench(c: &mut Criterion) {
     common::criterion_benchmark(c, "tests/**/*.egg");
 }
 
-criterion_group!(benches, bench);
+criterion_group!(
+    name = benches;
+    config = Criterion::default().sample_size(10);
+    targets = bench
+);
 criterion_main!(benches);

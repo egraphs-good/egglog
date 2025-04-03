@@ -18,7 +18,7 @@ jobs:
         with:
           tool: cargo-codspeed
       - uses: Swatinem/rust-cache@v2
-      - run: cargo codspeed build nightly_benchmarking
+      - run: cargo codspeed build nightly_benchmarking -m walltime
       - uses: CodSpeedHQ/action@v3
         with:
-          run: cargo codspeed run nightly_benchmarking
+          run: cargo codspeed run nightly_benchmarking -m walltime
