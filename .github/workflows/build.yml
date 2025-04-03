@@ -32,4 +32,4 @@ jobs:
       - run: cargo codspeed build
       - uses: CodSpeedHQ/action@v3
         with:
-          run: cargo codspeed run
+          run: cargo codspeed run --bench ci_benchmarking
