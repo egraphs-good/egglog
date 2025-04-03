@@ -4,9 +4,6 @@ on:
   schedule:
     - cron: '0 3 * * *'  # every night at 3 AM UTC
   workflow_dispatch:
-  push:
-    branches:
-      - '**'
 
 jobs:
   nightly-benchmark:
