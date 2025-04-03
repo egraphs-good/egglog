@@ -3,6 +3,14 @@
 version = 4
 
 [[package]]
+name = "add_primitive"
+version = "0.1.0"
+dependencies = [
+ "quote",
+ "syn 2.0.96",
+]
+
+[[package]]
 name = "aho-corasick"
 version = "1.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -262,7 +270,7 @@ dependencies = [
 [[package]]
 name = "concurrency"
 version = "0.1.0"
-source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=2e0866d#2e0866da2ff4e95adf4d269bc7699d2f3222e5da"
+source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=d1e750d#d1e750dbc5e22309b723a01acfe5786fb519bc67"
 dependencies = [
  "arc-swap",
  "rayon",
@@ -281,7 +289,7 @@ dependencies = [
 [[package]]
 name = "core-relations"
 version = "0.1.0"
-source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=2e0866d#2e0866da2ff4e95adf4d269bc7699d2f3222e5da"
+source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=d1e750d#d1e750dbc5e22309b723a01acfe5786fb519bc67"
 dependencies = [
  "anyhow",
  "bumpalo",
@@ -472,6 +480,7 @@ checksum = "0d6ef0072f8a535281e4876be788938b528e9a1d43900b82c2569af7da799125"
 name = "egglog"
 version = "0.4.0"
 dependencies = [
+ "add_primitive",
  "chrono",
  "clap",
  "codspeed-criterion-compat",
@@ -482,7 +491,6 @@ dependencies = [
  "getrandom 0.2.15",
  "glob",
  "hashbrown 0.15.2",
- "im",
  "im-rc",
  "indexmap",
  "instant",
@@ -500,7 +508,7 @@ dependencies = [
 [[package]]
 name = "egglog-bridge"
 version = "0.1.0"
-source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=2e0866d#2e0866da2ff4e95adf4d269bc7699d2f3222e5da"
+source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=d1e750d#d1e750dbc5e22309b723a01acfe5786fb519bc67"
 dependencies = [
  "anyhow",
  "core-relations",
@@ -698,20 +706,6 @@ name = "humantime"
 version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9a3a5bfb195931eeb336b2a7b4d761daec841b97f947d34394601737a7bba5e4"
-
-[[package]]
-name = "im"
-version = "15.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d0acd33ff0285af998aaf9b57342af478078f53492322fafc47450e09397e0e9"
-dependencies = [
- "bitmaps",
- "rand_core",
- "rand_xoshiro",
- "sized-chunks",
- "typenum",
- "version_check",
-]
 
 [[package]]
 name = "im-rc"
@@ -957,7 +951,7 @@ dependencies = [
 [[package]]
 name = "numeric-id"
 version = "0.1.0"
-source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=2e0866d#2e0866da2ff4e95adf4d269bc7699d2f3222e5da"
+source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=d1e750d#d1e750dbc5e22309b723a01acfe5786fb519bc67"
 dependencies = [
  "lazy_static",
  "rayon",
@@ -1462,7 +1456,7 @@ checksum = "a210d160f08b701c8721ba1c726c11662f877ea6b7094007e1ca9a1041945034"
 [[package]]
 name = "union-find"
 version = "0.1.0"
-source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=2e0866d#2e0866da2ff4e95adf4d269bc7699d2f3222e5da"
+source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=d1e750d#d1e750dbc5e22309b723a01acfe5786fb519bc67"
 dependencies = [
  "concurrency",
  "crossbeam",

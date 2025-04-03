@@ -1,5 +1,6 @@
 use crate::{core::CoreRule, *};
 use ast::Rule;
+use core_relations::ExternalFunction;
 
 #[derive(Clone, Debug)]
 pub struct FuncType {
@@ -56,7 +57,7 @@ impl EGraph {
 
     /// Add a user-defined sort
     pub fn add_arcsort(&mut self, sort: ArcSort, span: Span) -> Result<(), TypeError> {
-        sort.register_type(self.backend.primitives_mut());
+        sort.register_type(&mut self.backend);
 
         let name = sort.name();
         match self.type_info.sorts.entry(name) {
@@ -70,12 +71,17 @@ impl EGraph {
     }
 
     /// Add a user-defined primitive
-    pub fn add_primitive(&mut self, prim: Primitive) {
+    pub fn add_primitive<T>(&mut self, x: T)
+    where
+        T: Clone + ExternalFunction + PrimitiveLike + Send + Sync + 'static,
+    {
+        let prim = Arc::new(x.clone());
+        let ext = self.backend.register_external_func(x);
         self.type_info
             .primitives
             .entry(prim.name())
             .or_default()
-            .push(prim);
+            .push(Primitive(prim, ext));
     }
 
     pub(crate) fn typecheck_program(
@@ -199,15 +205,20 @@ impl TypeInfo {
     }
 
     pub fn get_sort_by<S: Sort>(&self, pred: impl Fn(&Arc<S>) -> bool) -> Option<Arc<S>> {
+        let mut results = Vec::new();
         for sort in self.sorts.values() {
             let sort = sort.clone().as_arc_any();
             if let Ok(sort) = Arc::downcast(sort) {
                 if pred(&sort) {
-                    return Some(sort);
+                    results.push(sort);
                 }
             }
         }
-        None
+        match &results[..] {
+            [] => None,
+            [result] => Some(result.clone()),
+            [_, _, ..] => panic!("got more than one sort"),
+        }
     }
 
     fn function_to_functype(&self, func: &FunctionDecl) -> Result<FuncType, TypeError> {

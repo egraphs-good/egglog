@@ -26,12 +26,12 @@ impl Sort for I64Sort {
         *I64_SORT_NAME
     }
 
-    fn column_ty(&self, prims: &Primitives) -> ColumnTy {
-        ColumnTy::Primitive(prims.get_ty::<i64>())
+    fn column_ty(&self, backend: &egglog_bridge::EGraph) -> ColumnTy {
+        ColumnTy::Primitive(backend.primitives().get_ty::<i64>())
     }
 
-    fn register_type(&self, prims: &mut Primitives) {
-        prims.register_type::<i64>();
+    fn register_type(&self, backend: &mut egglog_bridge::EGraph) {
+        backend.primitives_mut().register_type::<i64>();
     }
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
@@ -53,7 +53,7 @@ impl Sort for I64Sort {
         add_primitive!(eg, ">>" = |a: i64, b: i64| -?> i64 { b.try_into().ok().and_then(|b| a.checked_shr(b)) });
         add_primitive!(eg, "not-i64" = |a: i64| -> i64 { !a });
 
-        add_primitive!(eg, "log2" = |a: i64| -> i64 { (a as i64).ilog2() as i64 });
+        add_primitive!(eg, "log2" = |a: i64| -> i64 { a.ilog2() as i64 });
 
         add_primitive!(eg, "<" = |a: i64, b: i64| -?> () { (a < b).then_some(()) });
         add_primitive!(eg, ">" = |a: i64, b: i64| -?> () { (a > b).then_some(()) });

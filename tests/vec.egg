@@ -23,3 +23,16 @@
 
 ; Test vec-set
 (check (= (vec-set (vec-of 1 2 3) 1 4) (vec-of 1 4 3)))
+
+; Test rebuilding
+(sort X)
+(sort VX (Vec X))
+(constructor a () X)
+(constructor b () X)
+
+(let p (vec-of (a)))
+(let q (vec-of (b)))
+(check (!= p q))
+
+(union (a) (b))
+(check (= p q))

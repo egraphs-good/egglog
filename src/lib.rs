@@ -27,6 +27,11 @@ mod unionfind;
 pub mod util;
 mod value;
 
+// This is used to allow the `add_primitive` macro to work in
+// both this crate and other crates by referring to `::egglog`.
+extern crate self as egglog;
+pub use add_primitive::add_primitive;
+
 use crate::constraint::Problem;
 use crate::core::{AtomTerm, ResolvedCall};
 use crate::typechecking::TypeError;
@@ -444,11 +449,11 @@ impl Default for EGraph {
         eg.add_sort(F64Sort, span!()).unwrap();
         eg.add_sort(BigIntSort, span!()).unwrap();
         eg.add_sort(BigRatSort, span!()).unwrap();
-        // eg.add_presort::<MapSort>(span!()).unwrap();
-        // eg.add_presort::<SetSort>(span!()).unwrap();
-        // eg.add_presort::<VecSort>(span!()).unwrap();
-        // eg.add_presort::<FunctionSort>(span!()).unwrap();
-        // eg.add_presort::<MultiSetSort>(span!()).unwrap();
+        eg.type_info.add_presort::<MapSort>(span!()).unwrap();
+        eg.type_info.add_presort::<SetSort>(span!()).unwrap();
+        eg.type_info.add_presort::<VecSort>(span!()).unwrap();
+        eg.type_info.add_presort::<FunctionSort>(span!()).unwrap();
+        eg.type_info.add_presort::<MultiSetSort>(span!()).unwrap();
 
         add_primitive!(&mut eg, "!=" = |a: #, b: #| -?> () {
             (a != b).then_some(())
@@ -457,10 +462,10 @@ impl Default for EGraph {
             (a == b).then_some(())
         });
         add_primitive!(&mut eg, "ordering-min" = |a: #, b: #| -> # {
-            if a < b { *a } else { *b }
+            if a < b { a } else { b }
         });
         add_primitive!(&mut eg, "ordering-max" = |a: #, b: #| -> # {
-            if a > b { *a } else { *b }
+            if a > b { a } else { b }
         });
 
         eg.rulesets
@@ -1621,10 +1626,9 @@ impl<'a> BackendRule<'a> {
         self.entries
             .entry(x.clone())
             .or_insert_with(|| match x {
-                core::GenericAtomTerm::Var(_, v) => self.rb.new_var_named(
-                    v.sort.column_ty(self.rb.egraph().primitives()),
-                    v.name.into(),
-                ),
+                core::GenericAtomTerm::Var(_, v) => self
+                    .rb
+                    .new_var_named(v.sort.column_ty(self.rb.egraph()), v.name.into()),
                 core::GenericAtomTerm::Literal(_, l) => literal_to_entry(self.rb.egraph(), l),
                 core::GenericAtomTerm::Global(..) => {
                     panic!("Globals should have been desugared")
@@ -1638,10 +1642,7 @@ impl<'a> BackendRule<'a> {
     }
 
     fn prim(&self, p: &core::SpecializedPrimitive) -> (ExternalFunctionId, ColumnTy) {
-        (
-            p.primitive.1,
-            p.output.column_ty(self.rb.egraph().primitives()),
-        )
+        (p.primitive.1, p.output.column_ty(self.rb.egraph()))
     }
 
     fn args<'b>(

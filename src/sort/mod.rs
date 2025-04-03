@@ -1,6 +1,3 @@
-#[macro_use]
-mod macros;
-
 use lazy_static::lazy_static;
 use num::traits::{CheckedAdd, CheckedDiv, CheckedMul, CheckedSub, One, Signed, ToPrimitive, Zero};
 use num::{rational::BigRational, BigInt};
@@ -10,7 +7,7 @@ use std::ops::{Shl, Shr};
 use std::sync::Mutex;
 use std::{any::Any, sync::Arc};
 
-use core_relations::Primitives;
+use core_relations::{Container, ExecutionState, ExternalFunction, Rebuilder};
 use egglog_bridge::ColumnTy;
 
 use crate::ast::Literal;
@@ -38,22 +35,22 @@ pub use self::i64::*;
 mod f64;
 pub use self::f64::*;
 mod map;
-// pub use map::*;
+pub use map::*;
 mod set;
-// pub use set::*;
+pub use set::*;
 mod vec;
-// pub use vec::*;
+pub use vec::*;
 mod r#fn;
-// pub use r#fn::*;
+pub use r#fn::*;
 mod multiset;
-// pub use multiset::*;
+pub use multiset::*;
 
 pub trait Sort: Any + Send + Sync + Debug {
     fn name(&self) -> Symbol;
 
-    fn column_ty(&self, prims: &Primitives) -> ColumnTy;
+    fn column_ty(&self, backend: &egglog_bridge::EGraph) -> ColumnTy;
 
-    fn register_type(&self, prims: &mut Primitives);
+    fn register_type(&self, backend: &mut egglog_bridge::EGraph);
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static>;
 
@@ -150,11 +147,11 @@ impl Sort for EqSort {
         self.name
     }
 
-    fn column_ty(&self, _prims: &Primitives) -> ColumnTy {
+    fn column_ty(&self, _backend: &egglog_bridge::EGraph) -> ColumnTy {
         ColumnTy::Id
     }
 
-    fn register_type(&self, _: &mut Primitives) {}
+    fn register_type(&self, _backend: &mut egglog_bridge::EGraph) {}
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
         self

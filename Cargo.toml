@@ -41,12 +41,12 @@ wasm-bindgen = ["instant/wasm-bindgen", "dep:getrandom"]
 nondeterministic = []
 
 [dependencies]
+add_primitive = { path = "src/sort/add_primitive" }
 clap = { version = "4", features = ["derive"], optional = true }
 egraph-serialize = { version = "0.2.0", default-features = false }
 env_logger = { version = "0.10", optional = true }
 hashbrown = { version = "0.15" }
 im-rc = "15.1.0"
-im = "15.1.0"
 indexmap = "2.0"
 instant = "0.1"
 lazy_static = "1.4"
@@ -60,8 +60,8 @@ thiserror = "1"
 
 # Backend
 # TODO: move egglog-backend repo into core egglog repo
-core-relations = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "2e0866d" }
-egglog-bridge = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "2e0866d" }
+core-relations = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "d1e750d" }
+egglog-bridge = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "d1e750d" }
 
 # Need to add "js" feature for "graphviz-rust" to work in wasm
 getrandom = { version = "0.2.10", optional = true, features = ["js"] }

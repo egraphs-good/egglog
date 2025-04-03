@@ -12,12 +12,12 @@ impl Sort for UnitSort {
         *UNIT_SORT_NAME
     }
 
-    fn column_ty(&self, prims: &Primitives) -> ColumnTy {
-        ColumnTy::Primitive(prims.get_ty::<()>())
+    fn column_ty(&self, backend: &egglog_bridge::EGraph) -> ColumnTy {
+        ColumnTy::Primitive(backend.primitives().get_ty::<()>())
     }
 
-    fn register_type(&self, prims: &mut Primitives) {
-        prims.register_type::<()>();
+    fn register_type(&self, backend: &mut egglog_bridge::EGraph) {
+        backend.primitives_mut().register_type::<()>();
     }
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
