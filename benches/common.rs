@@ -1,7 +1,7 @@
-use codspeed_criterion_compat::{criterion_group, criterion_main, Criterion};
+use codspeed_criterion_compat::Criterion;
 use egglog::EGraph;
 
-fn run_example(filename: &str, program: &str, no_messages: bool) {
+pub fn run_example(filename: &str, program: &str, no_messages: bool) {
     let mut egraph = EGraph::default();
     if no_messages {
         egraph.disable_messages();
@@ -11,8 +11,8 @@ fn run_example(filename: &str, program: &str, no_messages: bool) {
         .unwrap();
 }
 
-pub fn criterion_benchmark(c: &mut Criterion) {
-    for entry in glob::glob("tests/**/*.egg").unwrap() {
+pub fn criterion_benchmark(c: &mut Criterion, glob: &str) {
+    for entry in glob::glob(glob).unwrap() {
         let path = entry.unwrap().clone();
         let path_string = path.to_string_lossy().to_string();
         if path_string.contains("fail-typecheck") {
@@ -27,6 +27,3 @@ pub fn criterion_benchmark(c: &mut Criterion) {
         });
     }
 }
-
-criterion_group!(benches, criterion_benchmark);
-criterion_main!(benches);
