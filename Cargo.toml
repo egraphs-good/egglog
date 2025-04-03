@@ -47,7 +47,6 @@ egraph-serialize = { version = "0.2.0", default-features = false }
 env_logger = { version = "0.10", optional = true }
 hashbrown = { version = "0.15" }
 im-rc = "15.1.0"
-im = "15.1.0"
 indexmap = "2.0"
 instant = "0.1"
 lazy_static = "1.4"

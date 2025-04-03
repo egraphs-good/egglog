@@ -234,7 +234,7 @@ impl FromSort for MultiSetContainer<Value> {
 
 // Place multiset in its own module to keep implementation details private from sort
 mod inner {
-    use im::OrdMap;
+    use std::collections::BTreeMap;
     use std::hash::Hash;
     /// Immutable multiset implementation, which is threadsafe and hash stable, regardless of insertion order.
     ///
@@ -242,7 +242,7 @@ mod inner {
     #[derive(Debug, Hash, Eq, PartialEq, Clone)]
     pub(crate) struct MultiSet<T: Clone + Hash + Ord>(
         /// All values should be > 0
-        OrdMap<T, usize>,
+        BTreeMap<T, usize>,
         /// cached length
         usize,
     );
@@ -250,7 +250,7 @@ mod inner {
     impl<T: Clone + Hash + Ord> MultiSet<T> {
         /// Create a new empty multiset.
         pub(crate) fn new() -> Self {
-            MultiSet(OrdMap::new(), 0)
+            MultiSet(BTreeMap::new(), 0)
         }
 
         /// Check if the multiset contains a key.
@@ -315,11 +315,13 @@ mod inner {
         }
 
         /// Compute the sum of two multisets.
-        pub fn sum(self, MultiSet(other_map, other_count): Self) -> Self {
-            Self(
-                self.0.union_with(other_map, std::ops::Add::add),
-                self.1 + other_count,
-            )
+        pub fn sum(mut self, MultiSet(other_map, other_count): Self) -> Self {
+            let target_count = self.1 + other_count;
+            for (k, v) in other_map {
+                self.insert_multiple_mut(k, v);
+            }
+            assert_eq!(self.1, target_count);
+            self
         }
     }
 
