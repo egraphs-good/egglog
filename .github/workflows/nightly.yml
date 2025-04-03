@@ -18,4 +18,4 @@ jobs:
       - run: cargo codspeed build
       - uses: CodSpeedHQ/action@v3
         with:
-          run: cargo codspeed run --bench nightly_benchmarking
+          run: cargo codspeed run nightly_benchmarking
