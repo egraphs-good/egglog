@@ -103,7 +103,7 @@ macro_rules! parse_lhs_atom {
         let ty = $ebuilder.infer_type($func.into(), vec.len(), &$builder);
         let res = $builder.new_var_named(ty, stringify!($func ($($args)*)));
         vec.push(res.clone());
-        $builder.query_table($func.into(), &vec).unwrap();
+        $builder.query_table($func.into(), &vec, Some(false)).unwrap();
         res
     }};
 }
@@ -117,7 +117,7 @@ macro_rules! parse_lhs_atom_with_ret {
             let mut vec = Vec::<$crate::QueryEntry>::new();
             $crate::parse_lhs_atom_args!($ebuilder, $builder, $func, vec, [$($args)*]);
             vec.push($ret.into());
-            $builder.query_table($func.into(), &vec).unwrap();
+            $builder.query_table($func.into(), &vec, Some(false)).unwrap();
         }
     }};
 }

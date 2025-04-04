@@ -333,22 +333,7 @@ impl RuleBuilder<'_> {
         }
     }
 
-    pub(crate) fn add_atom_func(&mut self, func: FunctionId, entries: &[QueryEntry]) {
-        let info = &self.egraph.funcs[func];
-        let table_id = info.table;
-        self.add_atom_with_timestamp_and_func(
-            table_id,
-            Some(func),
-            info.can_subsume.then_some(QueryEntry::Const {
-                val: NOT_SUBSUMED,
-                ty: ColumnTy::Id,
-            }),
-            entries,
-        );
-    }
-
-    /// A low-level way to add an atom to a query. Most of the time you can use
-    /// [`RuleBuilder::add_atom_func`].
+    /// A low-level way to add an atom to a query.
     ///
     /// The atom is added directly to `table`. If `func` is supplied, then metadata about the
     /// function is used for schema validation and proof generation. If `subsume_entry` is
@@ -449,9 +434,16 @@ impl RuleBuilder<'_> {
     }
 
     /// Add the given table atom to query. As elsewhere in the crate, the last
-    /// argument is the "return value" of the function.
-    pub fn query_table(&mut self, func: FunctionId, entries: &[QueryEntry]) -> Result<()> {
-        let schema = &self.egraph.funcs[func].schema;
+    /// argument is the "return value" of the function. Can also optionally
+    /// check the subsumption bit.
+    pub fn query_table(
+        &mut self,
+        func: FunctionId,
+        entries: &[QueryEntry],
+        is_subsumed: Option<bool>,
+    ) -> Result<()> {
+        let info = &self.egraph.funcs[func];
+        let schema = &info.schema;
         if schema.len() != entries.len() {
             return Err(anyhow::Error::from(RuleBuilderError::ArityMismatch {
                 expected: schema.len(),
@@ -466,7 +458,18 @@ impl RuleBuilder<'_> {
                 self.assert_has_ty(entry, *ty)
                     .with_context(|| format!("query_table: mismatch between {entry:?} and {ty:?}"))
             })?;
-        self.add_atom_func(func, entries);
+        self.add_atom_with_timestamp_and_func(
+            info.table,
+            Some(func),
+            is_subsumed.map(|b| QueryEntry::Const {
+                val: match b {
+                    true => SUBSUMED,
+                    false => NOT_SUBSUMED,
+                },
+                ty: ColumnTy::Id,
+            }),
+            entries,
+        );
         Ok(())
     }
 

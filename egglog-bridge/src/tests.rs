@@ -637,7 +637,7 @@ fn container_test() {
         let mut rb = egraph.new_rule("", true);
         let vec = rb.new_var(ColumnTy::Id);
         let vec_id = rb.new_var(ColumnTy::Id);
-        rb.query_table(vec_table, &[vec.into(), vec_id.into()])
+        rb.query_table(vec_table, &[vec.into(), vec_id.into()], Some(false))
             .unwrap();
         let last = rb.call_external_func(vec_last, &[vec.into()], ColumnTy::Id);
         let add_last_0 = rb.lookup(
@@ -676,12 +676,16 @@ fn container_test() {
         let rhs_raw = rb.new_var(ColumnTy::Primitive(int_prim));
         let rhs_id = rb.new_var(ColumnTy::Id);
         let add_id = rb.new_var(ColumnTy::Id);
-        rb.query_table(num_table, &[lhs_raw.into(), lhs_id.into()])
+        rb.query_table(num_table, &[lhs_raw.into(), lhs_id.into()], Some(false))
             .unwrap();
-        rb.query_table(num_table, &[rhs_raw.into(), rhs_id.into()])
+        rb.query_table(num_table, &[rhs_raw.into(), rhs_id.into()], Some(false))
             .unwrap();
-        rb.query_table(add_table, &[lhs_id.into(), rhs_id.into(), add_id.into()])
-            .unwrap();
+        rb.query_table(
+            add_table,
+            &[lhs_id.into(), rhs_id.into(), add_id.into()],
+            Some(false),
+        )
+        .unwrap();
         let evaled = rb.call_external_func(
             int_add,
             &[lhs_raw.into(), rhs_raw.into()],
@@ -1082,7 +1086,8 @@ fn constrain_prims_simple() {
         let mut rb = egraph.new_rule("copy_to_g", true);
         let val = rb.new_var(ColumnTy::Primitive(int_prim));
         let id = rb.new_var(ColumnTy::Id);
-        rb.query_table(f_table, &[val.into(), id.into()]).unwrap();
+        rb.query_table(f_table, &[val.into(), id.into()], Some(false))
+            .unwrap();
         rb.query_prim(
             is_even,
             &[val.into(), value_true.clone()],
@@ -1168,7 +1173,8 @@ fn constrain_prims_abstract() {
         let val = rb.new_var(ColumnTy::Primitive(int_prim));
         let id = rb.new_var(ColumnTy::Id);
         let negval = rb.new_var(ColumnTy::Primitive(int_prim));
-        rb.query_table(f_table, &[val.into(), id.into()]).unwrap();
+        rb.query_table(f_table, &[val.into(), id.into()], Some(false))
+            .unwrap();
         rb.query_prim(
             neg,
             &[val.into(), negval.into()],
@@ -1246,7 +1252,8 @@ fn basic_subsumption() {
         let mut rb = egraph.new_rule("copy_to_g", true);
         let val = rb.new_var(ColumnTy::Primitive(int_prim));
         let id = rb.new_var(ColumnTy::Id);
-        rb.query_table(f_table, &[val.into(), id.into()]).unwrap();
+        rb.query_table(f_table, &[val.into(), id.into()], Some(false))
+            .unwrap();
         rb.set(g_table, &[val.into(), id.into()]);
         rb.build()
     };
