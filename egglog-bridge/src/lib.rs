@@ -992,7 +992,7 @@ impl MergeFn {
                     "Illegal merge attempted for function {function_name}"
                 ));
                 Box::new(move |state, cur, new, out| {
-                    if cur != new {
+                    if cur[schema_math.ret_val_col()] != new[schema_math.ret_val_col()] {
                         let res = state.call_external_func(panic, &[]);
                         assert_eq!(res, None);
                     }
