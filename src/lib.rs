@@ -1100,7 +1100,7 @@ impl EGraph {
                 self.backend.new_rule(name.into(), self.seminaive),
                 &self.functions,
             );
-            translator.query(&query);
+            translator.query(&query, false);
             translator.actions(&actions);
             translator.finish().build()
         };
@@ -1233,7 +1233,7 @@ impl EGraph {
 
             let mut translator =
                 BackendRule::new(self.backend.new_rule("check_facts", false), &self.functions);
-            translator.query(&query);
+            translator.query(&query, true);
             let mut rb = translator.finish();
             rb.call_external_func(ext_id, &[], egglog_bridge::ColumnTy::Id);
             let id = rb.build();
@@ -1656,13 +1656,17 @@ impl<'a> BackendRule<'a> {
         args.into_iter().map(|x| self.entry(x)).collect()
     }
 
-    fn query(&mut self, query: &core::Query<ResolvedCall, ResolvedVar>) {
+    fn query(&mut self, query: &core::Query<ResolvedCall, ResolvedVar>, include_subsumed: bool) {
         for atom in &query.atoms {
             let args = self.args(&atom.args);
             match &atom.head {
                 ResolvedCall::Func(f) => {
                     let f = self.func(f);
-                    self.rb.query_table(f, &args).unwrap()
+                    let is_subsumed = match include_subsumed {
+                        true => None,
+                        false => Some(false),
+                    };
+                    self.rb.query_table(f, &args, is_subsumed).unwrap()
                 }
                 ResolvedCall::Primitive(p) => {
                     let (p, ty) = self.prim(p);
@@ -1710,7 +1714,7 @@ impl<'a> BackendRule<'a> {
                         let args = self.args(args);
                         match change {
                             Change::Delete => self.rb.remove(f, &args),
-                            Change::Subsume => todo!("no subsumption yet"),
+                            Change::Subsume => self.rb.subsume(f, &args),
                         }
                     }
                 },
