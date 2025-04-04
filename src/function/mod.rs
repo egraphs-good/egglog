@@ -174,8 +174,14 @@ impl Function {
                     Some(expr) => translate_expr_to_mergefn(expr, egraph)?,
                 },
             };
-            let name = decl.name.into();
-            egraph.backend.add_table(schema, default, merge, name)
+            let name = decl.name.to_string();
+            egraph.backend.add_table(egglog_bridge::FunctionConfig {
+                schema,
+                default,
+                merge,
+                name,
+                can_subsume: true,
+            })
         };
 
         Ok(Function {
