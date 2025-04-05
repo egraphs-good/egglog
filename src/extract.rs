@@ -70,6 +70,7 @@ impl EGraph {
         })
     }
 
+    /// Extracts up to `limit` terms for a given `value`.
     pub fn extract_variants(
         &mut self,
         sort: &ArcSort,
@@ -77,33 +78,7 @@ impl EGraph {
         limit: usize,
         termdag: &mut TermDag,
     ) -> Vec<Term> {
-        let output_sort = sort.name();
-        let output_value = self.find(sort, value);
-        let ext = &Extractor::new(self, termdag);
-        ext.ctors
-            .iter()
-            .flat_map(|&sym| {
-                let func = &self.functions[&sym];
-                if !func.schema.output.is_eq_sort() {
-                    return vec![];
-                }
-                assert!(func.schema.output.is_eq_sort());
-
-                func.nodes
-                    .iter(false)
-                    .filter(|&(_, output)| {
-                        func.schema.output.name() == output_sort && output.value == output_value
-                    })
-                    .map(|(inputs, _output)| {
-                        let node = Node { sym, func, inputs };
-                        ext.expr_from_node(&node, termdag).expect(
-                            "extract_variants should be called after extractor initialization",
-                        )
-                    })
-                    .collect()
-            })
-            .take(limit)
-            .collect()
+        Extractor::new(self, termdag).find_variants(value, termdag, sort, limit)
     }
 }
 
@@ -157,6 +132,46 @@ impl<'a> Extractor<'a> {
             let (cost, node) = sort.extract_term(self.egraph, value, self, termdag)?;
             Some((cost, node))
         }
+    }
+
+    /// Extracts up to `limit` terms for a given `value`.
+    pub fn find_variants(
+        &self,
+        value: Value,
+        termdag: &mut TermDag,
+        sort: &ArcSort,
+        limit: usize,
+    ) -> Vec<Term> {
+        let output_sort = sort.name();
+        let output_value = self.egraph.find(sort, value);
+        let terms = self
+            .ctors
+            .iter()
+            .flat_map(|&sym| {
+                let func = &self.egraph.functions[&sym];
+                if !func.schema.output.is_eq_sort() {
+                    return vec![];
+                }
+                assert!(func.schema.output.is_eq_sort());
+
+                func.nodes
+                    .iter(false)
+                    .filter(|&(_, output)| {
+                        func.schema.output.name() == output_sort && output.value == output_value
+                    })
+                    .map(|(inputs, _output)| {
+                        let node = Node { sym, func, inputs };
+                        self.expr_from_node(&node, termdag).expect(
+                            "extract_variants should be called after extractor initialization",
+                        )
+                    })
+                    .collect()
+            })
+            .take(limit)
+            .collect::<Vec<Term>>();
+
+        // TODO: what happens if `terms` is empty?
+        terms
     }
 
     fn node_total_cost(
