@@ -18,6 +18,7 @@ pub mod constraint;
 mod core;
 pub mod extract;
 mod function;
+pub mod proofs;
 mod gj;
 mod serialize;
 pub mod sort;
