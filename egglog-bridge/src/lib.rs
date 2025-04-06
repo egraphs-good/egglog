@@ -941,7 +941,7 @@ pub enum MergeFn {
     /// The output of a merge is determined by applying the given ExternalFunction to the result
     /// of the argument merge functions.
     Primitive(ExternalFunctionId, Vec<MergeFn>),
-    /// The output of a merge is dteremined by looking up the value for the given function and the
+    /// The output of a merge is determined by looking up the value for the given function and the
     /// given arguments in the egraph.
     Function(FunctionId, Vec<MergeFn>),
     /// Always return the old value for the given function.
@@ -1103,28 +1103,27 @@ impl MergeFn {
                     func_info.name
                 );
                 let table = func_info.table;
-                let mut merge_vals = SmallVec::<[MergeVal; 3]>::new();
-                let default_value = match &func_info.default_val {
-                    DefaultVal::FreshId => MergeVal::from(egraph.id_counter),
-                    DefaultVal::Fail => panic!("cannot use a fail default in a merge function (function in question is {})", function_name),
-                    DefaultVal::Const(val) => MergeVal::from(*val),
+                let table_math = SchemaMath {
+                    func_cols: func_info.schema.len(),
+                    subsume: func_info.can_subsume,
+                    tracing: false,
                 };
-                merge_vals
-                    .resize_with(schema_math.table_columns() - schema_math.num_keys(), || {
-                        default_value
-                    });
-                if schema_math.subsume {
-                    merge_vals[schema_math.subsume_col() - schema_math.num_keys()] =
-                        MergeVal::from(NOT_SUBSUMED);
-                }
+                let default_value = match &func_info.default_val {
+                    DefaultVal::FreshId => Some(MergeVal::Counter(egraph.id_counter)),
+                    DefaultVal::Fail => None,
+                    DefaultVal::Const(val) => Some(MergeVal::Constant(*val)),
+                };
+                let panic = egraph.new_panic(format!(
+                    "Lookup on {} failed in the merge function for {function_name}",
+                    func_info.name
+                ));
                 let make_args = args
                     .iter()
                     .map(|arg| arg.to_callback(schema_math, function_name, egraph))
                     .collect::<Vec<_>>();
                 Box::new(move |state, cur, new, out| {
-                    let mut merge_vals = merge_vals.clone();
                     let mut scratch = Vec::new();
-                    let results = make_args
+                    let table_args = make_args
                         .iter()
                         .map(|f| {
                             let res = if f(state, cur, new, &mut scratch) {
@@ -1137,9 +1136,37 @@ impl MergeFn {
                         })
                         .collect::<Vec<_>>();
 
-                    merge_vals[schema_math.ts_col() - schema_math.num_keys()] =
-                        new[schema_math.ts_col()].into();
-                    let result = state.predict_val(table, &results, merge_vals.iter().copied())[2];
+                    let result = match default_value {
+                        Some(default_value) => {
+                            let mut merge_vals = SmallVec::<[MergeVal; 3]>::new();
+                            SchemaMath {
+                                func_cols: 1,
+                                ..schema_math
+                            }
+                            .write_table_row(
+                                &mut merge_vals,
+                                RowVals {
+                                    timestamp: MergeVal::Constant(new[schema_math.ts_col()]),
+                                    proof: None,
+                                    subsume: schema_math
+                                        .subsume
+                                        .then_some(MergeVal::Constant(NOT_SUBSUMED)),
+                                    ret_val: Some(default_value),
+                                },
+                            );
+                            state.predict_val(table, &table_args, merge_vals.iter().copied())
+                                [table_math.ret_val_col()]
+                        }
+                        None => match state.get_table(table).get_row(&table_args) {
+                            Some(row) => row.vals[table_math.ret_val_col()],
+                            None => {
+                                let res = state.call_external_func(panic, &[]);
+                                assert_eq!(res, None);
+                                cur[table_math.ret_val_col()]
+                            }
+                        },
+                    };
+
                     let changed = if result != cur[schema_math.ret_val_col()] {
                         out.extend_from_slice(new);
                         out[schema_math.ret_val_col()] = result;
