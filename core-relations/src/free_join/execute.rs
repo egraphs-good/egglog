@@ -200,11 +200,11 @@ impl Database {
                         }
                         join_state.run_plan(plan, 0, 0, &mut binding_info, &mut action_buf);
                         if action_buf.needs_flush {
-                            action_buf.flush(&mut ExecutionState {
-                                db: self.read_only_view(),
-                                predicted: &preds,
-                                buffers: Default::default(),
-                            });
+                            action_buf.flush(&mut ExecutionState::new(
+                                &preds,
+                                self.read_only_view(),
+                                Default::default(),
+                            ));
                         }
                     });
                 }
@@ -225,11 +225,11 @@ impl Database {
                 }
                 join_state.run_plan(plan, 0, 0, &mut binding_info, &mut action_buf);
             }
-            action_buf.flush(&mut ExecutionState {
-                db: self.read_only_view(),
-                predicted: &preds,
-                buffers: Default::default(),
-            });
+            action_buf.flush(&mut ExecutionState::new(
+                &preds,
+                self.read_only_view(),
+                Default::default(),
+            ));
         }
         self.merge_all()
     }
@@ -386,11 +386,7 @@ impl<'a> JoinState<'a> {
                 let db = self.db;
                 action_buf.recur(
                     binding_info,
-                    move || ExecutionState {
-                        db: db.read_only_view(),
-                        predicted,
-                        buffers: Default::default(),
-                    },
+                    move || ExecutionState::new(predicted, db.read_only_view(), Default::default()),
                     move |binding_info, buf| {
                         for mut update in updates.drain(..) {
                             for (var, val) in update.bindings.drain(..) {
@@ -749,10 +745,8 @@ impl<'a> JoinState<'a> {
                 }
             }
             JoinStage::RunInstrs { actions } => {
-                action_buf.push_bindings(*actions, &binding_info.bindings, || ExecutionState {
-                    db: self.db.read_only_view(),
-                    predicted: self.preds,
-                    buffers: Default::default(),
+                action_buf.push_bindings(*actions, &binding_info.bindings, || {
+                    ExecutionState::new(self.preds, self.db.read_only_view(), Default::default())
                 });
             }
         }

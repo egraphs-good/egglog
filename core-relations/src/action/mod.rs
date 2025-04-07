@@ -232,6 +232,8 @@ pub struct ExecutionState<'a> {
     pub(crate) predicted: &'a PredictedVals,
     pub(crate) db: DbView<'a>,
     pub(crate) buffers: DenseIdMap<TableId, Box<dyn MutationBuffer>>,
+    /// Whether any mutations have been staged via this ExecutionState.
+    pub(crate) changed: bool,
 }
 
 impl Clone for ExecutionState<'_> {
@@ -240,6 +242,7 @@ impl Clone for ExecutionState<'_> {
             predicted: self.predicted,
             db: self.db,
             buffers: DenseIdMap::new(),
+            changed: false,
         };
         for (id, buf) in self.buffers.iter() {
             res.buffers.insert(id, buf.fresh_handle());
@@ -248,12 +251,25 @@ impl Clone for ExecutionState<'_> {
     }
 }
 
-impl ExecutionState<'_> {
+impl<'a> ExecutionState<'a> {
+    pub(crate) fn new(
+        predicted: &'a PredictedVals,
+        db: DbView<'a>,
+        buffers: DenseIdMap<TableId, Box<dyn MutationBuffer>>,
+    ) -> Self {
+        ExecutionState {
+            predicted,
+            db,
+            buffers,
+            changed: false,
+        }
+    }
     /// Stage an insertion of the given row into `table`.
     pub fn stage_insert(&mut self, table: TableId, row: &[Value]) {
         self.buffers
             .get_or_insert(table, || self.db.table_info[table].table.new_buffer())
             .stage_insert(row);
+        self.changed = true;
     }
 
     /// Stage a removal of the given row from `table` if it is present.
@@ -261,6 +277,7 @@ impl ExecutionState<'_> {
         self.buffers
             .get_or_insert(table, || self.db.table_info[table].table.new_buffer())
             .stage_remove(key);
+        self.changed = true;
     }
 
     /// Call an external function.
@@ -325,6 +342,7 @@ impl ExecutionState<'_> {
                         self.buffers
                             .get_or_insert(table, || self.db.table_info[table].table.new_buffer())
                             .stage_insert(&new);
+                        self.changed = true;
                         new
                     })
                     .deref(),

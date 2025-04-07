@@ -324,11 +324,7 @@ impl Database {
                     func_id,
                     &func.table,
                     next_ts,
-                    &mut ExecutionState {
-                        db: self.read_only_view(),
-                        predicted: &predicted,
-                        buffers: Default::default(),
-                    },
+                    &mut ExecutionState::new(&predicted, self.read_only_view(), Default::default()),
                 );
             });
             for (id, info) in tables {
@@ -341,11 +337,7 @@ impl Database {
                     func_id,
                     &func.table,
                     next_ts,
-                    &mut ExecutionState {
-                        db: self.read_only_view(),
-                        predicted: &predicted,
-                        buffers: Default::default(),
-                    },
+                    &mut ExecutionState::new(&predicted, self.read_only_view(), Default::default()),
                 );
                 self.tables.insert(*id, info);
             }
@@ -357,11 +349,7 @@ impl Database {
     /// Run `f` with access to an `ExecutionState` mapped to this database.
     pub fn with_execution_state<R>(&self, f: impl FnOnce(&mut ExecutionState) -> R) -> R {
         let predicted = with_pool_set(|ps| ps.get::<PredictedVals>());
-        let mut state = ExecutionState {
-            db: self.read_only_view(),
-            predicted: &predicted,
-            buffers: Default::default(),
-        };
+        let mut state = ExecutionState::new(&predicted, self.read_only_view(), Default::default());
         f(&mut state)
     }
 
@@ -449,11 +437,8 @@ impl Database {
                     tables_merging
                         .par_iter_mut()
                         .map(|(_, (info, buffers))| {
-                            info.as_mut().unwrap().table.merge(&mut ExecutionState {
-                                predicted: &predicted,
-                                db,
-                                buffers: mem::take(buffers),
-                            })
+                            let mut es = ExecutionState::new(&predicted, db, mem::take(buffers));
+                            info.as_mut().unwrap().table.merge(&mut es) || es.changed
                         })
                         .max()
                         .unwrap_or(false)
@@ -461,11 +446,8 @@ impl Database {
                     tables_merging
                         .iter_mut()
                         .map(|(_, (info, buffers))| {
-                            info.as_mut().unwrap().table.merge(&mut ExecutionState {
-                                predicted: &predicted,
-                                db,
-                                buffers: mem::take(buffers),
-                            })
+                            let mut es = ExecutionState::new(&predicted, db, mem::take(buffers));
+                            info.as_mut().unwrap().table.merge(&mut es) || es.changed
                         })
                         .max()
                         .unwrap_or(false)
@@ -491,11 +473,11 @@ impl Database {
     pub fn merge_table(&mut self, table: TableId) {
         let mut info = self.tables.unwrap_val(table);
         let predicted = with_pool_set(|ps| ps.get::<PredictedVals>());
-        let _table_changed = info.table.merge(&mut ExecutionState {
-            db: self.read_only_view(),
-            predicted: &predicted,
-            buffers: Default::default(),
-        });
+        let _table_changed = info.table.merge(&mut ExecutionState::new(
+            &predicted,
+            self.read_only_view(),
+            Default::default(),
+        ));
         self.tables.insert(table, info);
     }
 
