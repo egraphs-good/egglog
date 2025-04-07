@@ -2,16 +2,23 @@ use super::*;
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct MapContainer<V> {
-    do_rebuild: bool,
-    data: BTreeMap<V, V>,
+pub struct MapContainer<V> {
+    do_rebuild_keys: bool,
+    do_rebuild_vals: bool,
+    pub data: BTreeMap<V, V>,
 }
 
 impl Container for MapContainer<core_relations::Value> {
     fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool {
-        if self.do_rebuild {
+        if self.do_rebuild_keys || self.do_rebuild_vals {
+            let mut changed = false;
             let (mut keys, mut vals): (Vec<_>, Vec<_>) = self.data.iter().unzip();
-            let changed = rebuilder.rebuild_slice(&mut keys) || rebuilder.rebuild_slice(&mut vals);
+            if self.do_rebuild_keys {
+                changed |= rebuilder.rebuild_slice(&mut keys);
+            }
+            if self.do_rebuild_vals {
+                changed |= rebuilder.rebuild_slice(&mut vals);
+            }
             self.data = keys.into_iter().zip(vals).collect();
             changed
         } else {
@@ -149,7 +156,8 @@ impl Sort for MapSort {
         let map = maps.get_index(value.bits as usize).unwrap();
         let mut changed = false;
         let new_map = MapContainer {
-            do_rebuild: map.do_rebuild,
+            do_rebuild_keys: map.do_rebuild_keys,
+            do_rebuild_vals: map.do_rebuild_vals,
             data: map
                 .data
                 .iter()
@@ -167,7 +175,7 @@ impl Sort for MapSort {
     }
 
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
-        add_primitive!(eg, "map-empty" = || -> @MapContainer<Value> (self.clone()) { MapContainer { do_rebuild: self.__y.is_eq_container_sort(), data: BTreeMap::new() } });
+        add_primitive!(eg, "map-empty" = || -> @MapContainer<Value> (self.clone()) { MapContainer { do_rebuild_keys: self.__y.key.is_eq_sort(), do_rebuild_vals: self.__y.value.is_eq_sort(), data: BTreeMap::new() } });
 
         add_primitive!(eg, "map-get"    = |    xs: @MapContainer<Value> (self.clone()), x: # (self.key())                     | -?> # (self.value()) { xs.data.get(&x).copied() });
         add_primitive!(eg, "map-insert" = |mut xs: @MapContainer<Value> (self.clone()), x: # (self.key()), y: # (self.value())| -> @MapContainer<Value> (self.clone()) {{ xs.data.insert(x, y); xs }});

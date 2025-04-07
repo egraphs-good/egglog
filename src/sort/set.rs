@@ -2,9 +2,9 @@ use super::*;
 use std::collections::BTreeSet;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct SetContainer<V> {
+pub struct SetContainer<V> {
     do_rebuild: bool,
-    data: BTreeSet<V>,
+    pub data: BTreeSet<V>,
 }
 
 impl Container for SetContainer<core_relations::Value> {
