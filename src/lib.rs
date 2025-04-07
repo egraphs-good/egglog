@@ -1788,79 +1788,105 @@ pub enum Error {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{/*Arc, */ Mutex};
+    use std::sync::{Arc, Mutex};
 
     use lazy_static::lazy_static;
 
-    // use crate::constraint::SimpleTypeConstraint;
-    // use crate::sort::*;
+    use crate::constraint::SimpleTypeConstraint;
+    use crate::sort::*;
     use crate::*;
 
-    // struct InnerProduct {
-    //     ele: Arc<I64Sort>,
-    //     vec: Arc<VecSort>,
-    // }
+    #[derive(Clone)]
+    struct InnerProduct {
+        ele: Arc<I64Sort>,
+        vec: Arc<VecSort>,
+    }
 
-    // impl PrimitiveLike for InnerProduct {
-    //     fn name(&self) -> symbol_table::GlobalSymbol {
-    //         "inner-product".into()
-    //     }
+    impl PrimitiveLike for InnerProduct {
+        fn name(&self) -> symbol_table::GlobalSymbol {
+            "inner-product".into()
+        }
 
-    //     fn get_type_constraints(&self, span: &Span) -> Box<dyn crate::constraint::TypeConstraint> {
-    //         SimpleTypeConstraint::new(
-    //             self.name(),
-    //             vec![self.vec.clone(), self.vec.clone(), self.ele.clone()],
-    //             span.clone(),
-    //         )
-    //         .into_box()
-    //     }
+        fn get_type_constraints(&self, span: &Span) -> Box<dyn crate::constraint::TypeConstraint> {
+            SimpleTypeConstraint::new(
+                self.name(),
+                vec![self.vec.clone(), self.vec.clone(), self.ele.clone()],
+                span.clone(),
+            )
+            .into_box()
+        }
 
-    //     fn apply(
-    //         &self,
-    //         values: &[Value],
-    //         _sorts: (&[ArcSort], &ArcSort),
-    //         _egraph: Option<&mut EGraph>,
-    //     ) -> Option<Value> {
-    //         let mut sum = 0;
-    //         let vec1 = Vec::<Value>::load(&self.vec, &values[0]);
-    //         let vec2 = Vec::<Value>::load(&self.vec, &values[1]);
-    //         assert_eq!(vec1.len(), vec2.len());
-    //         for (a, b) in vec1.iter().zip(vec2.iter()) {
-    //             let a = i64::load(&self.ele, a);
-    //             let b = i64::load(&self.ele, b);
-    //             sum += a * b;
-    //         }
-    //         Some(sum.store(&self.ele))
-    //     }
-    // }
+        fn apply(
+            &self,
+            values: &[Value],
+            _sorts: (&[ArcSort], &ArcSort),
+            _egraph: Option<&mut EGraph>,
+        ) -> Option<Value> {
+            let mut sum = 0;
+            let vec1 = VecContainer::load(&self.vec, &values[0]);
+            let vec2 = VecContainer::load(&self.vec, &values[1]);
+            assert_eq!(vec1.data.len(), vec2.data.len());
+            for (a, b) in vec1.data.iter().zip(vec2.data.iter()) {
+                let a = i64::load(&self.ele, a);
+                let b = i64::load(&self.ele, b);
+                sum += a * b;
+            }
+            Some(sum.store(&self.ele))
+        }
+    }
 
-    // #[test]
-    // fn test_user_defined_primitive() {
-    //     let mut egraph = EGraph::default();
-    //     egraph
-    //         .parse_and_run_program(None, "(sort IntVec (Vec i64))")
-    //         .unwrap();
+    impl ExternalFunction for InnerProduct {
+        fn invoke(
+            &self,
+            exec_state: &mut core_relations::ExecutionState<'_>,
+            args: &[core_relations::Value],
+        ) -> Option<core_relations::Value> {
+            let mut sum = 0;
+            let vec1 = exec_state
+                .containers()
+                .get_val::<VecContainer<_>>(args[0])
+                .unwrap();
+            let vec2 = exec_state
+                .containers()
+                .get_val::<VecContainer<_>>(args[1])
+                .unwrap();
+            assert_eq!(vec1.data.len(), vec2.data.len());
+            for (a, b) in vec1.data.iter().zip(vec2.data.iter()) {
+                let a = exec_state.prims().unwrap::<i64>(*a);
+                let b = exec_state.prims().unwrap::<i64>(*b);
+                sum += a * b;
+            }
+            Some(exec_state.prims().get::<i64>(sum))
+        }
+    }
 
-    //     let int_vec_sort: Arc<VecSort> = egraph
-    //         .get_sort_by(|s: &Arc<VecSort>| s.element_name() == I64Sort.name())
-    //         .unwrap();
+    #[test]
+    fn test_user_defined_primitive() {
+        let mut egraph = EGraph::default();
+        egraph
+            .parse_and_run_program(None, "(sort IntVec (Vec i64))")
+            .unwrap();
 
-    //     egraph.add_primitive(InnerProduct {
-    //         ele: I64Sort.into(),
-    //         vec: int_vec_sort,
-    //     });
+        let int_vec_sort: Arc<VecSort> = egraph
+            .get_sort_by(|s: &Arc<VecSort>| s.element().name() == I64Sort.name())
+            .unwrap();
 
-    //     egraph
-    //         .parse_and_run_program(
-    //             None,
-    //             "
-    //             (let a (vec-of 1 2 3 4 5 6))
-    //             (let b (vec-of 6 5 4 3 2 1))
-    //             (check (= (inner-product a b) 56))
-    //         ",
-    //         )
-    //         .unwrap();
-    // }
+        egraph.add_primitive(InnerProduct {
+            ele: I64Sort.into(),
+            vec: int_vec_sort,
+        });
+
+        egraph
+            .parse_and_run_program(
+                None,
+                "
+                (let a (vec-of 1 2 3 4 5 6))
+                (let b (vec-of 6 5 4 3 2 1))
+                (check (= (inner-product a b) 56))
+            ",
+            )
+            .unwrap();
+    }
 
     lazy_static! {
         pub static ref RT: Mutex<EGraph> = Mutex::new(EGraph::default());
