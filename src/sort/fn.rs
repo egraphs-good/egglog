@@ -16,10 +16,10 @@ use super::*;
 /// Note that we must store the actual arcsorts so we can return them when returning inner values
 /// and when canonicalizing
 #[derive(Clone, Debug)]
-struct OldFunctionContainer(Symbol, Vec<(ArcSort, Value)>);
+pub struct OldFunctionContainer(Symbol, Vec<(ArcSort, Value)>);
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct NewFunctionContainer(
+pub struct NewFunctionContainer(
     egglog_bridge::FunctionId,
     Vec<(bool, core_relations::Value)>,
 );

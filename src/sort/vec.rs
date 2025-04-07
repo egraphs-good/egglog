@@ -1,9 +1,9 @@
 use super::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct VecContainer<V> {
+pub struct VecContainer<V> {
     do_rebuild: bool,
-    data: Vec<V>,
+    pub data: Vec<V>,
 }
 
 impl Container for VecContainer<core_relations::Value> {
