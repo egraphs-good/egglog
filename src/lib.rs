@@ -1129,23 +1129,29 @@ impl EGraph {
             &mut self.parser.symbol_gen,
         )?;
 
-        {
+        let new_result = {
             let mut translator = BackendRule::new(
                 self.backend.new_rule("eval_actions", false),
                 &self.functions,
             );
             translator.actions(&actions);
             let id = translator.finish().build();
-            let _ = self.backend.run_rules(&[id]).unwrap();
+            let result = self.backend.run_rules(&[id]);
             self.backend.free_rule(id);
-        }
+            result
+        };
 
         let program = self
             .compile_actions(&Default::default(), &actions)
             .map_err(Error::TypeErrors)?;
         let mut stack = vec![];
-        self.run_actions(&mut stack, &[], &program)?;
-        Ok(())
+        let old_result = self.run_actions(&mut stack, &[], &program);
+
+        match (old_result, new_result) {
+            (Ok(()), Ok(_)) => Ok(()),
+            (Err(e), Err(_)) => Err(e),
+            (old, new) => panic!("backends did not match:\nold={old:?}\nnew={new:?}"),
+        }
     }
 
     pub fn eval_expr(&mut self, expr: &Expr) -> Result<(ArcSort, Value), Error> {
