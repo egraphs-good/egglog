@@ -1001,11 +1001,7 @@ impl MergeFn {
             let ret_val = {
                 let cur = cur[schema_math.ret_val_col()];
                 let new = new[schema_math.ret_val_col()];
-                let out = if cur == new {
-                    cur
-                } else {
-                    resolved.run(state, cur, new, timestamp)
-                };
+                let out = resolved.run(state, cur, new, timestamp);
                 changed |= cur != out;
                 out
             };
@@ -1173,6 +1169,11 @@ impl ResolvedMergeFn {
                 default,
                 panic,
             } => {
+                // see github.com/egraphs-good/egglog/pull/287
+                if cur == new {
+                    return cur;
+                }
+
                 let args = args
                     .iter()
                     .map(|arg| arg.run(state, cur, new, ts))
