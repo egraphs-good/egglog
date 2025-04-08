@@ -1093,6 +1093,10 @@ impl MergeFn {
     }
 }
 
+/// This enum is taking the place of a
+/// `Box<dyn Fn(&mut ExecutionState, Value, Value, Value) -> Value + Send + Sync>`
+/// to avoid extra boxes. It stores the data needed to run a `MergeFn` without
+/// holding onto any references, so it can be `move`d inside the `core_relations::MergeFn`.
 enum ResolvedMergeFn {
     Const(Value),
     Old,
