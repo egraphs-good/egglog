@@ -19,9 +19,9 @@ use std::{
 
 use core_relations::{
     ColumnId, Constraint, Container, Containers, CounterId, Database, DisplacedTable,
-    DisplacedTableWithProvenance, ExternalFunction, ExternalFunctionId, MergeVal, Offset,
-    PlanStrategy, PrimitiveId, Primitives, SortedWritesTable, TableId, TaggedRowBuffer, Value,
-    WrappedTable,
+    DisplacedTableWithProvenance, ExecutionState, ExternalFunction, ExternalFunctionId, MergeVal,
+    Offset, PlanStrategy, PrimitiveId, Primitives, SortedWritesTable, TableId, TaggedRowBuffer,
+    Value, WrappedTable,
 };
 use indexmap::{map::Entry, IndexMap, IndexSet};
 use log::info;
@@ -986,196 +986,224 @@ impl MergeFn {
         function_name: &str,
         egraph: &mut EGraph,
     ) -> Box<core_relations::MergeFn> {
-        match self {
-            MergeFn::AssertEq => {
-                let panic = egraph.new_panic(format!(
-                    "Illegal merge attempted for function {function_name}"
-                ));
-                Box::new(move |state, cur, new, out| {
-                    if cur[schema_math.ret_val_col()] != new[schema_math.ret_val_col()] {
-                        let res = state.call_external_func(panic, &[]);
-                        assert_eq!(res, None);
-                    }
-                    schema_math.propagate_subsume(cur, new, out, false)
-                })
-            }
-            MergeFn::Const(val) => {
-                assert!(
-                    !egraph.tracing,
-                    "proofs aren't supported for non-union merge functions"
+        assert!(
+            !egraph.tracing || matches!(self, MergeFn::UnionId),
+            "proofs aren't supported for non-union merge functions"
+        );
+
+        let resolved = self.resolve(function_name, egraph);
+
+        Box::new(move |state, cur, new, out| {
+            let timestamp = new[schema_math.ts_col()];
+
+            let mut changed = false;
+
+            let ret_val = {
+                let cur = cur[schema_math.ret_val_col()];
+                let new = new[schema_math.ret_val_col()];
+                let out = resolved.run(state, cur, new, timestamp);
+                changed |= cur != out;
+                out
+            };
+
+            let subsume = schema_math.subsume.then(|| {
+                let cur = cur[schema_math.subsume_col()];
+                let new = new[schema_math.subsume_col()];
+                let out = combine_subsumed(cur, new);
+                changed |= cur != out;
+                out
+            });
+
+            if changed {
+                out.extend_from_slice(new);
+                schema_math.write_table_row(
+                    out,
+                    RowVals {
+                        timestamp,
+                        proof: None,
+                        subsume,
+                        ret_val: Some(ret_val),
+                    },
                 );
-                let val = *val;
-                Box::new(move |_, old, new, out| {
-                    let mut changed = false;
-                    if old[schema_math.ret_val_col()] != val {
-                        out.extend_from_slice(new);
-                        out[schema_math.ret_val_col()] = val;
-                        changed = true;
-                    }
-                    schema_math.propagate_subsume(old, new, out, changed)
-                })
             }
-            MergeFn::UnionId => {
-                let uf_table = egraph.uf_table;
-                let tracing = egraph.tracing;
-                Box::new(move |state, cur, new, out| {
-                    let l = cur[schema_math.ret_val_col()];
-                    let r = new[schema_math.ret_val_col()];
-                    let next_ts = new[schema_math.ts_col()];
-                    if l != r && !tracing {
-                        // When proofs are enabled, these are the same term. They are already
-                        // equal and we can just do nothing.
-                        state.stage_insert(uf_table, &[l, r, next_ts]);
-                        out.extend_from_slice(new);
-                        // We pick the minimum when unioning. This matches the original egglog
-                        // behavior.
-                        let res = std::cmp::min(l, r);
-                        out[schema_math.ret_val_col()] = res;
-                        schema_math.propagate_subsume(cur, new, out, r == res)
-                    } else {
-                        schema_math.propagate_subsume(cur, new, out, false)
-                    }
-                })
-            }
-            MergeFn::Old => Box::new(move |_, old, new, out| {
-                schema_math.propagate_subsume(old, new, out, false)
-            }),
-            MergeFn::New => Box::new(move |_, old, new, out| {
-                let mut changed = false;
-                if new[schema_math.ret_val_col()] != old[schema_math.ret_val_col()] {
-                    out.extend_from_slice(new);
-                    changed = true;
-                }
-                schema_math.propagate_subsume(old, new, out, changed)
-            }),
+
+            changed
+        })
+    }
+
+    fn resolve(&self, function_name: &str, egraph: &mut EGraph) -> ResolvedMergeFn {
+        match self {
+            MergeFn::Const(v) => ResolvedMergeFn::Const(*v),
+            MergeFn::Old => ResolvedMergeFn::Old,
+            MergeFn::New => ResolvedMergeFn::New,
+            MergeFn::AssertEq => ResolvedMergeFn::AssertEq {
+                panic: egraph.new_panic(format!(
+                    "Illegal merge attempted for function {function_name}"
+                )),
+            },
+            MergeFn::UnionId => ResolvedMergeFn::UnionId {
+                uf_table: egraph.uf_table,
+                tracing: egraph.tracing,
+            },
             // NB: The primitive and function-based merge functions heap allocate a single callback
             // for each layer of nesting. This introduces a bit of overhead, particularly for cases
             // that look like `(f old new)` or `(f new old)`. We could special-case common cases in
             // this function if that overhead shows up.
-            MergeFn::Primitive(func, args) => {
-                assert!(
-                    !egraph.tracing,
-                    "proofs aren't supported for non-union merge functions"
-                );
-                let func = *func;
-                let make_args = args
+            MergeFn::Primitive(prim, args) => ResolvedMergeFn::Primitive {
+                prim: *prim,
+                args: args
                     .iter()
-                    .map(|arg| arg.to_callback(schema_math, function_name, egraph))
-                    .collect::<Vec<_>>();
-                let function_name = function_name.to_string();
-                Box::new(move |state, cur, new, out| {
-                    let mut scratch = Vec::new();
-                    let results = make_args
-                        .iter()
-                        .map(|f| {
-                            let res = if f(state, cur, new, &mut scratch) {
-                                scratch[schema_math.ret_val_col()]
-                            } else {
-                                cur[schema_math.ret_val_col()]
-                            };
-                            scratch.clear();
-                            res
-                        })
-                        .collect::<Vec<_>>();
-                    let Some(result) = state.call_external_func(func, &results) else {
-                        panic!("merge function not defined on all inputs (in function {function_name})")
-                    };
-                    let changed = if result != cur[schema_math.ret_val_col()] {
-                        out.extend_from_slice(new);
-                        out[schema_math.ret_val_col()] = result;
-                        true
-                    } else {
-                        false
-                    };
-                    schema_math.propagate_subsume(cur, new, out, changed)
-                })
-            }
-            MergeFn::Function(function_id, args) => {
-                assert!(
-                    !egraph.tracing,
-                    "proofs aren't supported for non-union merge functions"
-                );
-                let func_info = &egraph.funcs[*function_id];
+                    .map(|arg| arg.resolve(function_name, egraph))
+                    .collect::<Vec<_>>(),
+                panic: egraph.new_panic(format!(
+                    "Merge function for {function_name} primitive call failed"
+                )),
+            },
+            MergeFn::Function(func, args) => {
+                let func_info = &egraph.funcs[*func];
                 assert_eq!(
                     func_info.schema.len(),
                     args.len() + 1,
-                    "Merge function must match function arity (When defining {function_name}, using {})",
+                    "Merge function for {function_name} must match function arity for {}",
                     func_info.name
                 );
-                let table = func_info.table;
-                let table_math = SchemaMath {
-                    func_cols: func_info.schema.len(),
-                    subsume: func_info.can_subsume,
-                    tracing: false,
-                };
-                let default_value = match &func_info.default_val {
-                    DefaultVal::FreshId => Some(MergeVal::Counter(egraph.id_counter)),
-                    DefaultVal::Fail => None,
-                    DefaultVal::Const(val) => Some(MergeVal::Constant(*val)),
-                };
-                let panic = egraph.new_panic(format!(
-                    "Lookup on {} failed in the merge function for {function_name}",
-                    func_info.name
-                ));
-                let make_args = args
-                    .iter()
-                    .map(|arg| arg.to_callback(schema_math, function_name, egraph))
-                    .collect::<Vec<_>>();
-                Box::new(move |state, cur, new, out| {
-                    let mut scratch = Vec::new();
-                    let table_args = make_args
+                ResolvedMergeFn::Function {
+                    table: func_info.table,
+                    table_math: SchemaMath {
+                        func_cols: func_info.schema.len(),
+                        subsume: func_info.can_subsume,
+                        tracing: egraph.tracing,
+                    },
+                    default: match &func_info.default_val {
+                        DefaultVal::FreshId => Some(MergeVal::Counter(egraph.id_counter)),
+                        DefaultVal::Fail => None,
+                        DefaultVal::Const(val) => Some(MergeVal::Constant(*val)),
+                    },
+                    panic: egraph.new_panic(format!(
+                        "Lookup on {} failed in the merge function for {function_name}",
+                        func_info.name
+                    )),
+                    args: args
                         .iter()
-                        .map(|f| {
-                            let res = if f(state, cur, new, &mut scratch) {
-                                scratch[schema_math.ret_val_col()]
-                            } else {
-                                cur[schema_math.ret_val_col()]
-                            };
-                            scratch.clear();
-                            res
-                        })
-                        .collect::<Vec<_>>();
+                        .map(|arg| arg.resolve(function_name, egraph))
+                        .collect::<Vec<_>>(),
+                }
+            }
+        }
+    }
+}
 
-                    let result = match default_value {
-                        Some(default_value) => {
-                            let mut merge_vals = SmallVec::<[MergeVal; 3]>::new();
-                            SchemaMath {
-                                func_cols: 1,
-                                ..schema_math
-                            }
-                            .write_table_row(
-                                &mut merge_vals,
-                                RowVals {
-                                    timestamp: MergeVal::Constant(new[schema_math.ts_col()]),
-                                    proof: None,
-                                    subsume: schema_math
-                                        .subsume
-                                        .then_some(MergeVal::Constant(NOT_SUBSUMED)),
-                                    ret_val: Some(default_value),
-                                },
-                            );
-                            state.predict_val(table, &table_args, merge_vals.iter().copied())
-                                [table_math.ret_val_col()]
+enum ResolvedMergeFn {
+    Const(Value),
+    Old,
+    New,
+    AssertEq {
+        panic: ExternalFunctionId,
+    },
+    UnionId {
+        uf_table: TableId,
+        tracing: bool,
+    },
+    Primitive {
+        prim: ExternalFunctionId,
+        args: Vec<ResolvedMergeFn>,
+        panic: ExternalFunctionId,
+    },
+    Function {
+        table: TableId,
+        args: Vec<ResolvedMergeFn>,
+        table_math: SchemaMath,
+        default: Option<MergeVal>,
+        panic: ExternalFunctionId,
+    },
+}
+
+impl ResolvedMergeFn {
+    fn run(&self, state: &mut ExecutionState, cur: Value, new: Value, ts: Value) -> Value {
+        match self {
+            ResolvedMergeFn::Const(v) => *v,
+            ResolvedMergeFn::Old => cur,
+            ResolvedMergeFn::New => new,
+            ResolvedMergeFn::AssertEq { panic } => {
+                if cur != new {
+                    let res = state.call_external_func(*panic, &[]);
+                    assert_eq!(res, None);
+                }
+                cur
+            }
+            ResolvedMergeFn::UnionId { uf_table, tracing } => {
+                if cur != new && !tracing {
+                    // When proofs are enabled, these are the same term. They are already
+                    // equal and we can just do nothing.
+                    state.stage_insert(*uf_table, &[cur, new, ts]);
+                    // We pick the minimum when unioning. This matches the original egglog
+                    // behavior. THIS MUST MATCH THE UNION-FIND IMPLEMENTATION!
+                    std::cmp::min(cur, new)
+                } else {
+                    cur
+                }
+            }
+            // NB: The primitive and function-based merge functions heap allocate a single callback
+            // for each layer of nesting. This introduces a bit of overhead, particularly for cases
+            // that look like `(f old new)` or `(f new old)`. We could special-case common cases in
+            // this function if that overhead shows up.
+            ResolvedMergeFn::Primitive { prim, args, panic } => {
+                let args = args
+                    .iter()
+                    .map(|arg| arg.run(state, cur, new, ts))
+                    .collect::<Vec<_>>();
+
+                match state.call_external_func(*prim, &args) {
+                    Some(result) => result,
+                    None => {
+                        let res = state.call_external_func(*panic, &[]);
+                        assert_eq!(res, None);
+                        cur
+                    }
+                }
+            }
+            ResolvedMergeFn::Function {
+                table,
+                args,
+                table_math,
+                default,
+                panic,
+            } => {
+                let args = args
+                    .iter()
+                    .map(|arg| arg.run(state, cur, new, ts))
+                    .collect::<Vec<_>>();
+
+                match default {
+                    Some(default) => {
+                        let mut merge_vals = SmallVec::<[MergeVal; 3]>::new();
+                        SchemaMath {
+                            func_cols: 1,
+                            ..*table_math
                         }
-                        None => match state.get_table(table).get_row(&table_args) {
-                            Some(row) => row.vals[table_math.ret_val_col()],
-                            None => {
-                                let res = state.call_external_func(panic, &[]);
-                                assert_eq!(res, None);
-                                cur[table_math.ret_val_col()]
-                            }
-                        },
-                    };
-
-                    let changed = if result != cur[schema_math.ret_val_col()] {
-                        out.extend_from_slice(new);
-                        out[schema_math.ret_val_col()] = result;
-                        true
-                    } else {
-                        false
-                    };
-                    schema_math.propagate_subsume(cur, new, out, changed)
-                })
+                        .write_table_row(
+                            &mut merge_vals,
+                            RowVals {
+                                timestamp: MergeVal::Constant(ts),
+                                proof: None,
+                                subsume: table_math
+                                    .subsume
+                                    .then_some(MergeVal::Constant(NOT_SUBSUMED)),
+                                ret_val: Some(*default),
+                            },
+                        );
+                        state.predict_val(*table, &args, merge_vals.iter().copied())
+                            [table_math.ret_val_col()]
+                    }
+                    None => match state.get_table(*table).get_row(&args) {
+                        Some(row) => row.vals[table_math.ret_val_col()],
+                        None => {
+                            let res = state.call_external_func(*panic, &[]);
+                            assert_eq!(res, None);
+                            cur
+                        }
+                    },
+                }
             }
         }
     }
@@ -1352,26 +1380,6 @@ impl SchemaMath {
                 "subsume flag must be provided if subsumption is enabled"
             );
         }
-    }
-    fn propagate_subsume(
-        &self,
-        old: &[Value],
-        new: &[Value],
-        out: &mut Vec<Value>,
-        mut changed: bool,
-    ) -> bool {
-        if self.subsume {
-            let res = combine_subsumed(new[self.subsume_col()], old[self.subsume_col()]);
-            changed |= res != old[self.subsume_col()];
-
-            if changed {
-                if out.is_empty() {
-                    out.extend_from_slice(old);
-                }
-                out[self.subsume_col()] = res;
-            }
-        }
-        changed
     }
 
     fn num_keys(&self) -> usize {
