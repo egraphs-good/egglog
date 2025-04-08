@@ -1001,7 +1001,11 @@ impl MergeFn {
             let ret_val = {
                 let cur = cur[schema_math.ret_val_col()];
                 let new = new[schema_math.ret_val_col()];
-                let out = resolved.run(state, cur, new, timestamp);
+                let out = if cur == new {
+                    cur
+                } else {
+                    resolved.run(state, cur, new, timestamp)
+                };
                 changed |= cur != out;
                 out
             };
