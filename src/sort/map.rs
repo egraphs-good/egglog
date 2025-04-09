@@ -10,20 +10,26 @@ pub struct MapContainer<V> {
 
 impl Container for MapContainer<core_relations::Value> {
     fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool {
-        if self.do_rebuild_keys || self.do_rebuild_vals {
-            let mut changed = false;
-            let (mut keys, mut vals): (Vec<_>, Vec<_>) = self.data.iter().unzip();
-            if self.do_rebuild_keys {
-                changed |= rebuilder.rebuild_slice(&mut keys);
-            }
-            if self.do_rebuild_vals {
-                changed |= rebuilder.rebuild_slice(&mut vals);
-            }
-            self.data = keys.into_iter().zip(vals).collect();
-            changed
-        } else {
-            false
+        let mut changed = false;
+        if self.do_rebuild_keys {
+            self.data = self
+                .data
+                .iter()
+                .map(|(old, v)| {
+                    let new = rebuilder.rebuild_val(*old);
+                    changed |= *old != new;
+                    (new, *v)
+                })
+                .collect();
         }
+        if self.do_rebuild_vals {
+            for old in self.data.values_mut() {
+                let new = rebuilder.rebuild_val(*old);
+                changed |= *old != new;
+                *old = new;
+            }
+        }
+        changed
     }
     fn iter(&self) -> impl Iterator<Item = core_relations::Value> + '_ {
         self.data.iter().flat_map(|(k, v)| [k, v]).copied()
