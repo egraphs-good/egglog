@@ -101,7 +101,7 @@ impl From<Variable> for QueryEntry {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Function {
     Table(FunctionId),
     Prim(ExternalFunctionId),
