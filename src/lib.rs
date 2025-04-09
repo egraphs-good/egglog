@@ -1099,6 +1099,7 @@ impl EGraph {
             let mut translator = BackendRule::new(
                 self.backend.new_rule(name.into(), self.seminaive),
                 &self.functions,
+                &self.type_info,
             );
             translator.query(&query, false);
             translator.actions(&actions);
@@ -1141,6 +1142,7 @@ impl EGraph {
             let mut translator = BackendRule::new(
                 self.backend.new_rule("eval_actions", false),
                 &self.functions,
+                &self.type_info,
             );
             translator.actions(&actions);
             let id = translator.build();
@@ -1237,8 +1239,11 @@ impl EGraph {
                     None
                 }));
 
-            let mut translator =
-                BackendRule::new(self.backend.new_rule("check_facts", false), &self.functions);
+            let mut translator = BackendRule::new(
+                self.backend.new_rule("check_facts", false),
+                &self.functions,
+                &self.type_info,
+            );
             translator.query(&query, true);
             translator
                 .rb
@@ -1620,16 +1625,19 @@ struct BackendRule<'a> {
     pub rb: egglog_bridge::RuleBuilder<'a>,
     entries: HashMap<core::ResolvedAtomTerm, QueryEntry>,
     functions: &'a IndexMap<Symbol, Function>,
+    type_info: &'a TypeInfo,
 }
 
 impl<'a> BackendRule<'a> {
     fn new(
         rb: egglog_bridge::RuleBuilder<'a>,
         functions: &'a IndexMap<Symbol, Function>,
+        type_info: &'a TypeInfo,
     ) -> BackendRule<'a> {
         BackendRule {
             rb,
             functions,
+            type_info,
             entries: Default::default(),
         }
     }
@@ -1653,8 +1661,63 @@ impl<'a> BackendRule<'a> {
         self.functions[&f.name].new_backend_id
     }
 
-    fn prim(&self, p: &core::SpecializedPrimitive) -> (ExternalFunctionId, ColumnTy) {
-        (p.primitive.1, p.output.column_ty(self.rb.egraph()))
+    fn prim(
+        &mut self,
+        prim: &core::SpecializedPrimitive,
+        args: &[core::ResolvedAtomTerm],
+    ) -> (ExternalFunctionId, Vec<QueryEntry>, ColumnTy) {
+        let mut qe_args = self.args(args);
+
+        if prim.primitive.0.name() == "unstable-fn".into() {
+            let core::ResolvedAtomTerm::Literal(_, Literal::String(name)) = args[0] else {
+                panic!("expected string literal after `unstable-fn`")
+            };
+            let id = if let Some(f) = self.type_info.get_func_type(&name) {
+                ResolvedFunctionId::Lookup(egglog_bridge::Lookup::new(
+                    self.rb.egraph(),
+                    self.func(f),
+                ))
+            } else if let Some(possible) = self.type_info.get_prims(&name) {
+                let mut ps: Vec<_> = possible.iter().collect();
+                ps.retain(|p| {
+                    self.type_info
+                        .get_sorts_by::<FunctionSort>(|_| true)
+                        .into_iter()
+                        .any(|f| {
+                            let types: Vec<_> = prim
+                                .input
+                                .iter()
+                                .skip(1)
+                                .chain(f.inputs())
+                                .chain([&f.output()])
+                                .cloned()
+                                .collect();
+                            p.accept(&types, self.type_info)
+                        })
+                });
+                assert!(ps.len() == 1, "options for {name}: {ps:?}");
+                ResolvedFunctionId::Prim(ps.into_iter().next().unwrap().1)
+            } else {
+                panic!("no callable for {name}");
+            };
+            let do_rebuild = prim
+                .input
+                .iter()
+                .skip(1)
+                .map(|s| s.is_eq_sort() || s.is_eq_container_sort())
+                .collect();
+
+            qe_args[0] = self
+                .rb
+                .egraph()
+                .primitive_constant(ResolvedFunction { id, do_rebuild });
+        }
+
+        (
+            prim.primitive.1,
+            qe_args,
+            prim.output.column_ty(self.rb.egraph()),
+        )
     }
 
     fn args<'b>(
@@ -1666,10 +1729,10 @@ impl<'a> BackendRule<'a> {
 
     fn query(&mut self, query: &core::Query<ResolvedCall, ResolvedVar>, include_subsumed: bool) {
         for atom in &query.atoms {
-            let args = self.args(&atom.args);
             match &atom.head {
                 ResolvedCall::Func(f) => {
                     let f = self.func(f);
+                    let args = self.args(&atom.args);
                     let is_subsumed = match include_subsumed {
                         true => None,
                         false => Some(false),
@@ -1677,7 +1740,7 @@ impl<'a> BackendRule<'a> {
                     self.rb.query_table(f, &args, is_subsumed).unwrap()
                 }
                 ResolvedCall::Primitive(p) => {
-                    let (p, ty) = self.prim(p);
+                    let (p, args, ty) = self.prim(p, &atom.args);
                     self.rb.query_prim(p, &args, ty).unwrap()
                 }
             }
@@ -1689,14 +1752,14 @@ impl<'a> BackendRule<'a> {
             match action {
                 core::GenericCoreAction::Let(span, v, f, args) => {
                     let v = core::GenericAtomTerm::Var(span.clone(), v.clone());
-                    let args = self.args(args);
                     let y = match f {
                         ResolvedCall::Func(f) => {
                             let f = self.func(f);
+                            let args = self.args(args);
                             self.rb.lookup(f, &args).into()
                         }
                         ResolvedCall::Primitive(p) => {
-                            let (p, ty) = self.prim(p);
+                            let (p, args, ty) = self.prim(p, args);
                             self.rb.call_external_func(p, &args, ty).into()
                         }
                     };
