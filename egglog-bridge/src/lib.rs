@@ -1068,17 +1068,7 @@ impl MergeFn {
                     func_info.name
                 );
                 ResolvedMergeFn::Function {
-                    table: func_info.table,
-                    table_math: SchemaMath {
-                        func_cols: func_info.schema.len(),
-                        subsume: func_info.can_subsume,
-                        tracing: egraph.tracing,
-                    },
-                    default: match &func_info.default_val {
-                        DefaultVal::FreshId => Some(MergeVal::Counter(egraph.id_counter)),
-                        DefaultVal::Fail => None,
-                        DefaultVal::Const(val) => Some(MergeVal::Constant(*val)),
-                    },
+                    func: Lookup::new(egraph, *func),
                     panic: egraph.new_panic(format!(
                         "Lookup on {} failed in the merge function for {function_name}",
                         func_info.name
@@ -1114,10 +1104,8 @@ enum ResolvedMergeFn {
         panic: ExternalFunctionId,
     },
     Function {
-        table: TableId,
+        func: Lookup,
         args: Vec<ResolvedMergeFn>,
-        table_math: SchemaMath,
-        default: Option<MergeVal>,
         panic: ExternalFunctionId,
     },
 }
@@ -1166,13 +1154,7 @@ impl ResolvedMergeFn {
                     }
                 }
             }
-            ResolvedMergeFn::Function {
-                table,
-                args,
-                table_math,
-                default,
-                panic,
-            } => {
+            ResolvedMergeFn::Function { func, args, panic } => {
                 // see github.com/egraphs-good/egglog/pull/287
                 if cur == new {
                     return cur;
@@ -1183,37 +1165,74 @@ impl ResolvedMergeFn {
                     .map(|arg| arg.run(state, cur, new, ts))
                     .collect::<Vec<_>>();
 
-                match default {
-                    Some(default) => {
-                        let mut merge_vals = SmallVec::<[MergeVal; 3]>::new();
-                        SchemaMath {
-                            func_cols: 1,
-                            ..*table_math
-                        }
-                        .write_table_row(
-                            &mut merge_vals,
-                            RowVals {
-                                timestamp: MergeVal::Constant(ts),
-                                proof: None,
-                                subsume: table_math
-                                    .subsume
-                                    .then_some(MergeVal::Constant(NOT_SUBSUMED)),
-                                ret_val: Some(*default),
-                            },
-                        );
-                        state.predict_val(*table, &args, merge_vals.iter().copied())
-                            [table_math.ret_val_col()]
-                    }
-                    None => match state.get_table(*table).get_row(&args) {
-                        Some(row) => row.vals[table_math.ret_val_col()],
-                        None => {
-                            let res = state.call_external_func(*panic, &[]);
-                            assert_eq!(res, None);
-                            cur
-                        }
-                    },
-                }
+                func.run(state, &args).unwrap_or_else(|| {
+                    let res = state.call_external_func(*panic, &[]);
+                    assert_eq!(res, None);
+                    cur
+                })
             }
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Lookup {
+    table: TableId,
+    table_math: SchemaMath,
+    default: Option<MergeVal>,
+    timestamp: CounterId,
+}
+
+impl Lookup {
+    pub fn new(egraph: &EGraph, func: FunctionId) -> Lookup {
+        let func_info = &egraph.funcs[func];
+        Lookup {
+            table: func_info.table,
+            table_math: SchemaMath {
+                func_cols: func_info.schema.len(),
+                subsume: func_info.can_subsume,
+                tracing: egraph.tracing,
+            },
+            default: match &func_info.default_val {
+                DefaultVal::FreshId => Some(MergeVal::Counter(egraph.id_counter)),
+                DefaultVal::Fail => None,
+                DefaultVal::Const(val) => Some(MergeVal::Constant(*val)),
+            },
+            timestamp: egraph.timestamp_counter,
+        }
+    }
+
+    pub fn run(&self, state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
+        match self.default {
+            Some(default) => {
+                let timestamp =
+                    MergeVal::Constant(Value::from_usize(state.read_counter(self.timestamp)));
+                let mut merge_vals = SmallVec::<[MergeVal; 3]>::new();
+                SchemaMath {
+                    func_cols: 1,
+                    ..self.table_math
+                }
+                .write_table_row(
+                    &mut merge_vals,
+                    RowVals {
+                        timestamp,
+                        proof: None,
+                        subsume: self
+                            .table_math
+                            .subsume
+                            .then_some(MergeVal::Constant(NOT_SUBSUMED)),
+                        ret_val: Some(default),
+                    },
+                );
+                Some(
+                    state.predict_val(self.table, args, merge_vals.iter().copied())
+                        [self.table_math.ret_val_col()],
+                )
+            }
+            None => state
+                .get_table(self.table)
+                .get_row(args)
+                .map(|row| row.vals[self.table_math.ret_val_col()]),
         }
     }
 }
@@ -1333,7 +1352,7 @@ fn combine_subsumed(v1: Value, v2: Value) -> Value {
 ///
 /// Where there are `n+1` key columns and columns marked with a question mark are optional,
 /// depending on the egraph and table-level configuration.
-#[derive(Copy, Clone)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct SchemaMath {
     /// Whether or not proofs are enabled.
     tracing: bool,
