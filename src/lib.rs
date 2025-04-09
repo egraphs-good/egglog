@@ -42,7 +42,7 @@ use ast::*;
 pub use cli::bin::*;
 use constraint::{Constraint, SimpleTypeConstraint, TypeConstraint};
 use core_relations::ExternalFunctionId;
-use egglog_bridge::ColumnTy;
+use egglog_bridge::{ColumnTy, QueryEntry};
 use extract::Extractor;
 pub use function::Function;
 use function::*;
@@ -1613,7 +1613,7 @@ impl EGraph {
 
 struct BackendRule<'a> {
     rb: egglog_bridge::RuleBuilder<'a>,
-    entries: HashMap<core::ResolvedAtomTerm, egglog_bridge::QueryEntry>,
+    entries: HashMap<core::ResolvedAtomTerm, QueryEntry>,
     functions: &'a IndexMap<Symbol, Function>,
 }
 
@@ -1629,7 +1629,7 @@ impl<'a> BackendRule<'a> {
         }
     }
 
-    fn entry(&mut self, x: &core::ResolvedAtomTerm) -> egglog_bridge::QueryEntry {
+    fn entry(&mut self, x: &core::ResolvedAtomTerm) -> QueryEntry {
         self.entries
             .entry(x.clone())
             .or_insert_with(|| match x {
@@ -1655,7 +1655,7 @@ impl<'a> BackendRule<'a> {
     fn args<'b>(
         &mut self,
         args: impl IntoIterator<Item = &'b core::ResolvedAtomTerm>,
-    ) -> Vec<egglog_bridge::QueryEntry> {
+    ) -> Vec<QueryEntry> {
         args.into_iter().map(|x| self.entry(x)).collect()
     }
 
@@ -1737,7 +1737,7 @@ impl<'a> BackendRule<'a> {
     }
 }
 
-fn literal_to_entry(egraph: &egglog_bridge::EGraph, l: &Literal) -> egglog_bridge::QueryEntry {
+fn literal_to_entry(egraph: &egglog_bridge::EGraph, l: &Literal) -> QueryEntry {
     match l {
         Literal::Int(x) => egraph.primitive_constant::<i64>(*x),
         Literal::Float(x) => egraph.primitive_constant::<sort::F>(*x),
