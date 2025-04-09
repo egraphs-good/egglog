@@ -2,17 +2,24 @@ use super::*;
 use inner::MultiSet;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct MultiSetContainer<V: Clone + Hash + Ord>(MultiSet<V>);
+pub struct MultiSetContainer<V: Clone + Hash + Ord> {
+    do_rebuild: bool,
+    pub data: MultiSet<V>,
+}
 
 impl Container for MultiSetContainer<core_relations::Value> {
     fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool {
-        let mut xs: Vec<_> = self.0.iter().copied().collect();
-        let changed = rebuilder.rebuild_slice(&mut xs);
-        self.0 = xs.into_iter().collect();
-        changed
+        if self.do_rebuild {
+            let mut xs: Vec<_> = self.data.iter().copied().collect();
+            let changed = rebuilder.rebuild_slice(&mut xs);
+            self.data = xs.into_iter().collect();
+            changed
+        } else {
+            false
+        }
     }
     fn iter(&self) -> impl Iterator<Item = core_relations::Value> + '_ {
-        self.0.iter().copied()
+        self.data.iter().copied()
     }
 }
 
@@ -105,7 +112,7 @@ impl Sort for MultiSetSort {
         let multisets = self.multisets.lock().unwrap();
         let multiset = multisets.get_index(value.bits as usize).unwrap();
         multiset
-            .0
+            .data
             .iter()
             .map(|k| (self.element.clone(), *k))
             .collect()
@@ -115,28 +122,31 @@ impl Sort for MultiSetSort {
         let multisets = self.multisets.lock().unwrap();
         let multiset = multisets.get_index(value.bits as usize).unwrap().clone();
         let mut changed = false;
-        let new_multiset = MultiSetContainer(multiset.0.map(|e| {
-            let mut e = *e;
-            changed |= self.element.canonicalize(&mut e, unionfind);
-            e
-        }));
+        let new_multiset = MultiSetContainer {
+            do_rebuild: multiset.do_rebuild,
+            data: multiset.data.map(|e| {
+                let mut e = *e;
+                changed |= self.element.canonicalize(&mut e, unionfind);
+                e
+            }),
+        };
         drop(multisets);
         *value = new_multiset.store(self);
         changed
     }
 
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
-        add_primitive!(eg, "multiset-of" = [xs: # (self.element())] -> @MultiSetContainer<Value> (self.clone()) { MultiSetContainer(xs.collect()) });
+        add_primitive!(eg, "multiset-of" = [xs: # (self.element())] -> @MultiSetContainer<Value> (self.clone()) { MultiSetContainer { do_rebuild: self.__y.is_eq_container_sort(), data: xs.collect() } });
 
-        add_primitive!(eg, "multiset-pick" = |xs: @MultiSetContainer<Value> (self.clone())| -> # (self.element()) { *xs.0.pick().expect("Cannot pick from an empty multiset") });
-        add_primitive!(eg, "multiset-insert" = |mut xs: @MultiSetContainer<Value> (self.clone()), x: # (self.element())| -> @MultiSetContainer<Value> (self.clone()) { MultiSetContainer(xs.0.insert( x) ) });
-        add_primitive!(eg, "multiset-remove" = |mut xs: @MultiSetContainer<Value> (self.clone()), x: # (self.element())| -> @MultiSetContainer<Value> (self.clone()) { MultiSetContainer(xs.0.remove(&x)?) });
+        add_primitive!(eg, "multiset-pick" = |xs: @MultiSetContainer<Value> (self.clone())| -> # (self.element()) { *xs.data.pick().expect("Cannot pick from an empty multiset") });
+        add_primitive!(eg, "multiset-insert" = |mut xs: @MultiSetContainer<Value> (self.clone()), x: # (self.element())| -> @MultiSetContainer<Value> (self.clone()) { MultiSetContainer { data: xs.data.insert( x) , ..xs } });
+        add_primitive!(eg, "multiset-remove" = |mut xs: @MultiSetContainer<Value> (self.clone()), x: # (self.element())| -> @MultiSetContainer<Value> (self.clone()) { MultiSetContainer { data: xs.data.remove(&x)?, ..xs } });
 
-        add_primitive!(eg, "multiset-length"       = |xs: @MultiSetContainer<Value> (self.clone())| -> i64 { xs.0.len() as i64 });
-        add_primitive!(eg, "multiset-contains"     = |xs: @MultiSetContainer<Value> (self.clone()), x: # (self.element())| -?> () { ( xs.0.contains(&x)).then_some(()) });
-        add_primitive!(eg, "multiset-not-contains" = |xs: @MultiSetContainer<Value> (self.clone()), x: # (self.element())| -?> () { (!xs.0.contains(&x)).then_some(()) });
+        add_primitive!(eg, "multiset-length"       = |xs: @MultiSetContainer<Value> (self.clone())| -> i64 { xs.data.len() as i64 });
+        add_primitive!(eg, "multiset-contains"     = |xs: @MultiSetContainer<Value> (self.clone()), x: # (self.element())| -?> () { ( xs.data.contains(&x)).then_some(()) });
+        add_primitive!(eg, "multiset-not-contains" = |xs: @MultiSetContainer<Value> (self.clone()), x: # (self.element())| -?> () { (!xs.data.contains(&x)).then_some(()) });
 
-        add_primitive!(eg, "multiset-sum" = |xs: @MultiSetContainer<Value> (self.clone()), ys: @MultiSetContainer<Value> (self.clone())| -> @MultiSetContainer<Value> (self.clone()) { MultiSetContainer(xs.0.sum(ys.0)) });
+        add_primitive!(eg, "multiset-sum" = |xs: @MultiSetContainer<Value> (self.clone()), ys: @MultiSetContainer<Value> (self.clone())| -> @MultiSetContainer<Value> (self.clone()) { MultiSetContainer { data: xs.data.sum(ys.data), ..xs } });
 
         // let inner_name = self.element.name();
         // let fn_sort = eg.type_info.get_sort_by(|s: &Arc<FunctionSort>| {
@@ -160,7 +170,7 @@ impl Sort for MultiSetSort {
         let multiset = MultiSetContainer::load(self, &value);
         let mut children = vec![];
         let mut cost = 0usize;
-        for e in multiset.0.iter() {
+        for e in multiset.data.iter() {
             let (child_cost, child_term) = extractor.find_best(*e, termdag, &self.element)?;
             cost = cost.saturating_add(child_cost);
             children.push(child_term);
@@ -239,8 +249,8 @@ mod inner {
     /// Immutable multiset implementation, which is threadsafe and hash stable, regardless of insertion order.
     ///
     /// All methods that return a new multiset take ownership of the old multiset.
-    #[derive(Debug, Hash, Eq, PartialEq, Clone)]
-    pub(crate) struct MultiSet<T: Clone + Hash + Ord>(
+    #[derive(Debug, Default, Hash, Eq, PartialEq, Clone)]
+    pub struct MultiSet<T: Clone + Hash + Ord>(
         /// All values should be > 0
         BTreeMap<T, usize>,
         /// cached length
@@ -249,34 +259,34 @@ mod inner {
 
     impl<T: Clone + Hash + Ord> MultiSet<T> {
         /// Create a new empty multiset.
-        pub(crate) fn new() -> Self {
+        pub fn new() -> Self {
             MultiSet(BTreeMap::new(), 0)
         }
 
         /// Check if the multiset contains a key.
-        pub(crate) fn contains(&self, value: &T) -> bool {
+        pub fn contains(&self, value: &T) -> bool {
             self.0.contains_key(value)
         }
 
         /// Return the total number of elements in the multiset.
-        pub(crate) fn len(&self) -> usize {
+        pub fn len(&self) -> usize {
             self.1
         }
 
         /// Return an iterator over all elements in the multiset.
-        pub(crate) fn iter(&self) -> impl Iterator<Item = &T> {
+        pub fn iter(&self) -> impl Iterator<Item = &T> {
             self.0
                 .iter()
                 .flat_map(|(k, v)| std::iter::repeat(k).take(*v))
         }
 
         /// Return an arbitrary element from the multiset.
-        pub(crate) fn pick(&self) -> Option<&T> {
+        pub fn pick(&self) -> Option<&T> {
             self.0.keys().next()
         }
 
         /// Map a function over all elements in the multiset, taking ownership of it and returning a new multiset.
-        pub(crate) fn map(self, mut f: impl FnMut(&T) -> T) -> MultiSet<T> {
+        pub fn map(self, mut f: impl FnMut(&T) -> T) -> MultiSet<T> {
             let mut new = MultiSet::new();
             for (k, v) in self.0.into_iter() {
                 new.insert_multiple_mut(f(&k), v);
@@ -285,13 +295,13 @@ mod inner {
         }
 
         /// Insert a value into the multiset, taking ownership of it and returning a new multiset.
-        pub(crate) fn insert(mut self, value: T) -> MultiSet<T> {
+        pub fn insert(mut self, value: T) -> MultiSet<T> {
             self.insert_multiple_mut(value, 1);
             self
         }
 
         /// Remove a value from the multiset, taking ownership of it and returning a new multiset.
-        pub(crate) fn remove(mut self, value: &T) -> Option<MultiSet<T>> {
+        pub fn remove(mut self, value: &T) -> Option<MultiSet<T>> {
             if let Some(v) = self.0.get(value) {
                 self.1 -= 1;
                 if *v == 1 {
