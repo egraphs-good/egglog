@@ -71,7 +71,7 @@ impl From<CounterId> for WriteVal {
 }
 
 /// A value that can be written to the database during a merge action.
-#[derive(Debug, Copy, Clone)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum MergeVal {
     /// A fresh value from the given counter.
     Counter(CounterId),
