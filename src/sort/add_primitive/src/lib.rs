@@ -354,12 +354,7 @@ impl Parse for Type {
             let sort = quote!(<#t as IntoSort>::Sort);
 
             let field_use = Expr::Verbatim(quote! {
-               eg.type_info
-                   .get_sort_by::<#sort>(|_| true)
-                   .unwrap_or_else(|| panic!(
-                       "Failed to lookup sort: {}",
-                       ::std::any::type_name::<#t>()
-                   ))
+               eg.type_info.get_sort_by::<#sort>(|_| true)
             });
 
             Some((field_def, field_use))
