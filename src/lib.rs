@@ -1102,7 +1102,7 @@ impl EGraph {
             );
             translator.query(&query, false);
             translator.actions(&actions);
-            translator.finish().build()
+            translator.build()
         };
 
         let vars = query.get_vars();
@@ -1143,7 +1143,7 @@ impl EGraph {
                 &self.functions,
             );
             translator.actions(&actions);
-            let id = translator.finish().build();
+            let id = translator.build();
             let result = self.backend.run_rules(&[id]);
             self.backend.free_rule(id);
             result
@@ -1240,9 +1240,10 @@ impl EGraph {
             let mut translator =
                 BackendRule::new(self.backend.new_rule("check_facts", false), &self.functions);
             translator.query(&query, true);
-            let mut rb = translator.finish();
-            rb.call_external_func(ext_id, &[], egglog_bridge::ColumnTy::Id);
-            let id = rb.build();
+            translator
+                .rb
+                .call_external_func(ext_id, &[], egglog_bridge::ColumnTy::Id);
+            let id = translator.build();
             let _ = self.backend.run_rules(&[id]).unwrap();
             self.backend.free_rule(id);
 
@@ -1616,7 +1617,7 @@ impl EGraph {
 }
 
 struct BackendRule<'a> {
-    rb: egglog_bridge::RuleBuilder<'a>,
+    pub rb: egglog_bridge::RuleBuilder<'a>,
     entries: HashMap<core::ResolvedAtomTerm, QueryEntry>,
     functions: &'a IndexMap<Symbol, Function>,
 }
@@ -1736,8 +1737,8 @@ impl<'a> BackendRule<'a> {
         }
     }
 
-    fn finish(self) -> egglog_bridge::RuleBuilder<'a> {
-        self.rb
+    fn build(self) -> egglog_bridge::RuleId {
+        self.rb.build()
     }
 }
 
