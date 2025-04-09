@@ -1203,6 +1203,7 @@ impl Lookup {
     }
 
     pub fn run(&self, state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
+        assert!(!self.table_math.tracing, "proofs not supported yet");
         match self.default {
             Some(default) => {
                 let timestamp =
