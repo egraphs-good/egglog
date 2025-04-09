@@ -1570,17 +1570,18 @@ impl EGraph {
     }
 
     /// Returns a sort based on the type
-    pub fn get_sort<S: Sort + Send + Sync>(&self) -> Option<Arc<S>> {
+    pub fn get_sort<S: Sort + Send + Sync>(&self) -> Arc<S> {
         self.type_info.get_sort_by(|_| true)
     }
 
-    /// Returns the first sort that satisfies the type and predicate if there's one.
-    /// Otherwise returns none.
-    pub fn get_sort_by<S: Sort + Send + Sync>(
-        &self,
-        pred: impl Fn(&Arc<S>) -> bool,
-    ) -> Option<Arc<S>> {
-        self.type_info.get_sort_by(pred)
+    /// Returns a sort that satisfies the type and predicate.
+    pub fn get_sort_by<S: Sort + Send + Sync>(&self, f: impl Fn(&Arc<S>) -> bool) -> Arc<S> {
+        self.type_info.get_sort_by(f)
+    }
+
+    /// Returns all sorts that satisfy the type and predicate.
+    pub fn get_sorts_by<S: Sort + Send + Sync>(&self, f: impl Fn(&Arc<S>) -> bool) -> Vec<Arc<S>> {
+        self.type_info.get_sorts_by(f)
     }
 
     /// Gets the last extract report and returns it, if the last command saved it.
@@ -1879,9 +1880,8 @@ mod tests {
             .parse_and_run_program(None, "(sort IntVec (Vec i64))")
             .unwrap();
 
-        let int_vec_sort: Arc<VecSort> = egraph
-            .get_sort_by(|s: &Arc<VecSort>| s.element().name() == I64Sort.name())
-            .unwrap();
+        let int_vec_sort =
+            egraph.get_sort_by(|s: &Arc<VecSort>| s.element().name() == I64Sort.name());
 
         egraph.add_primitive(InnerProduct {
             ele: I64Sort.into(),
