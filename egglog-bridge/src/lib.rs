@@ -1175,7 +1175,14 @@ impl ResolvedMergeFn {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+/// This is an intern-able struct that holds all the data needed
+/// to do a "table lookup" on an [`ExecutionState`], assuming that
+/// the [`FunctionId`] for the table is known ahead of time.
+///
+/// A "table lookup" is not a read-only operation. It will insert a row when
+/// the [`DefaultVal`] for the table is not [`DefaultVal::Fail`] and
+/// the `args` in [`Lookup::run`] are not already present in the table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Lookup {
     table: TableId,
     table_math: SchemaMath,
