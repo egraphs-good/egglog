@@ -11,6 +11,7 @@ We'd also like to experiment with know what kinds of programming can be encoded 
 # Known limitations
 
 - Primitive outputs have to be wrapped in a constructor, which can be inconvenient
+- Type erasure- if the core, for some reason, needs to know the original types later on in the pipeline, this strategy erases them. This can be fixed by a more painful encoding that generates new versions of PartialApp for different types.
 
 # Example
 
@@ -61,15 +62,15 @@ It prodices a new program:
 (constructor Nil () Any)
 (constructor Cons (Any Any) Any)
 
-(constructor square (Math) Math)
+(constructor square (Any) Any)
 (rewrite (square x) (Mul x x))
 
 ;; generated from unstable fn declaration
 (constructor SquareOp () Any)
-(rewrite (PartialApp (SquareOp) (AppCons v1 (AppNil)))
-         (Square v1) :ruleset partialapp)
+(rewrite (PartialApp (SquareOp) v1)
+         (square v1) :ruleset partialapp)
 
-(let squared-3 (PartialApp SquareOp (AppCons (Num 3) (AppNil))))
+(let squared-3 (PartialApp (SquareOp) (Num 3)))
 ;; always saturate partialapp before any database checks
 (run-schedule (saturate partialapp))
 (check (= squared-3 (square (Num 3))))
