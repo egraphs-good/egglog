@@ -148,16 +148,21 @@ impl Sort for MultiSetSort {
 
         add_primitive!(eg, "multiset-sum" = |xs: @MultiSetContainer<Value> (self.clone()), ys: @MultiSetContainer<Value> (self.clone())| -> @MultiSetContainer<Value> (self.clone()) { MultiSetContainer { data: xs.data.sum(ys.data), ..xs } });
 
-        // let inner_name = self.element.name();
-        // let fn_sort = eg.type_info.get_sort_by(|s: &Arc<FunctionSort>| {
-        //     (s.output.name() == inner_name)
-        //         && s.inputs.len() == 1
-        //         && (s.inputs[0].name() == inner_name)
-        // });
-        // // Only include map function if we already declared a function sort with the correct signature
-        // if let Some(fn_sort) = fn_sort {
-        // 	// add_primitive!(eg, "unstable-multiset-map" = {});
-        // }
+        // Only include map function if we already declared a function sort with the correct signature
+        let fn_sorts = eg.type_info.get_sorts_by(|s: &Arc<FunctionSort>| {
+            (s.inputs().len() == 1)
+                && (s.inputs()[0].name() == self.element.name())
+                && (s.output().name() == self.element.name())
+        });
+        match fn_sorts.len() {
+            0 => {}
+            1 => eg.add_primitive(Map {
+                name: "unstable-multiset-map".into(),
+                multiset: self.clone(),
+                fn_: fn_sorts.into_iter().next().unwrap(),
+            }),
+            _ => panic!("too many applicable function sorts"),
+        }
     }
 
     fn extract_term(
@@ -204,43 +209,81 @@ impl FromSort for MultiSetContainer<Value> {
     }
 }
 
-// struct Map {
-//     name: Symbol,
-//     multiset: Arc<MultiSetSort>,
-//     fn_: Arc<FunctionSort>,
-// }
+#[derive(Clone)]
+struct Map {
+    name: Symbol,
+    multiset: Arc<MultiSetSort>,
+    fn_: Arc<FunctionSort>,
+}
 
-// impl PrimitiveLike for Map {
-//     fn name(&self) -> Symbol {
-//         self.name
-//     }
+impl PrimitiveLike for Map {
+    fn name(&self) -> Symbol {
+        self.name
+    }
 
-//     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
-//         SimpleTypeConstraint::new(
-//             self.name(),
-//             vec![
-//                 self.fn_.clone(),
-//                 self.multiset.clone(),
-//                 self.multiset.clone(),
-//             ],
-//             span.clone(),
-//         )
-//         .into_box()
-//     }
+    fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
+        SimpleTypeConstraint::new(
+            self.name(),
+            vec![
+                self.fn_.clone(),
+                self.multiset.clone(),
+                self.multiset.clone(),
+            ],
+            span.clone(),
+        )
+        .into_box()
+    }
 
-//     fn apply(
-//         &self,
-//         values: &[Value],
-//         _sorts: (&[ArcSort], &ArcSort),
-//         egraph: Option<&mut EGraph>,
-//     ) -> Option<Value> {
-//         let egraph =
-//             egraph.unwrap_or_else(|| panic!("`{}` is not supported yet in facts.", self.name));
-//         let multiset = ValueMultiSet::load(&self.multiset, &values[1]);
-//         let new_multiset = multiset.map(|e| self.fn_.apply(&values[0], &[*e], egraph));
-//         Some(new_multiset.store(&self.multiset))
-//     }
-// }
+    fn apply(
+        &self,
+        values: &[Value],
+        _sorts: (&[ArcSort], &ArcSort),
+        egraph: Option<&mut EGraph>,
+    ) -> Option<Value> {
+        let egraph =
+            egraph.unwrap_or_else(|| panic!("`{}` is not supported yet in facts.", self.name));
+        let multiset = MultiSetContainer::load(&self.multiset, &values[1]);
+        let multiset = MultiSetContainer {
+            data: multiset
+                .data
+                .map(|e| self.fn_.apply(&values[0], &[*e], egraph)),
+            ..multiset
+        };
+        Some(multiset.store(&self.multiset))
+    }
+}
+
+impl ExternalFunction for Map {
+    fn invoke(
+        &self,
+        exec_state: &mut ExecutionState,
+        args: &[core_relations::Value],
+    ) -> Option<core_relations::Value> {
+        let fc = exec_state
+            .containers()
+            .get_val::<NewFunctionContainer>(args[0])
+            .unwrap()
+            .clone();
+        let multiset = exec_state
+            .containers()
+            .get_val::<MultiSetContainer<core_relations::Value>>(args[1])
+            .unwrap()
+            .clone();
+        let multiset = MultiSetContainer {
+            data: multiset.data.map(|e| {
+                fc.apply(exec_state, &[*e])
+                    .expect("TODO: don't unwrap here")
+            }),
+            ..multiset
+        };
+        Some(
+            exec_state
+                .clone()
+                .containers()
+                .register_val(multiset, exec_state),
+        )
+    }
+}
 
 // Place multiset in its own module to keep implementation details private from sort
 mod inner {
