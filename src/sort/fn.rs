@@ -19,10 +19,7 @@ use super::*;
 pub struct OldFunctionContainer(Symbol, Vec<(ArcSort, Value)>);
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct NewFunctionContainer(
-    egglog_bridge::FunctionId,
-    Vec<(bool, core_relations::Value)>,
-);
+pub struct NewFunctionContainer(ResolvedFunctionId, Vec<(bool, core_relations::Value)>);
 
 impl OldFunctionContainer {
     /// Remove the arcsorts to make this hashable
@@ -101,7 +98,7 @@ impl Presort for FunctionSort {
     ) -> Result<ArcSort, TypeError> {
         if let [inputs, Expr::Var(span, output)] = args {
             let output_sort = typeinfo
-                .get_sort(output)
+                .get_sort_by_name(output)
                 .ok_or(TypeError::UndefinedSort(*output, span.clone()))?;
 
             let input_sorts = match inputs {
@@ -116,7 +113,7 @@ impl Presort for FunctionSort {
                     all_args
                         .map(|arg| {
                             typeinfo
-                                .get_sort(arg)
+                                .get_sort_by_name(arg)
                                 .ok_or(TypeError::UndefinedSort(*arg, span.clone()))
                                 .cloned()
                         })
@@ -150,6 +147,7 @@ impl Sort for FunctionSort {
 
     fn register_type(&self, backend: &mut egglog_bridge::EGraph) {
         backend.register_container_ty::<NewFunctionContainer>();
+        backend.primitives_mut().register_type::<ResolvedFunction>();
     }
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
@@ -375,13 +373,29 @@ impl PrimitiveLike for Ctor {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ResolvedFunction {
+    pub id: ResolvedFunctionId,
+    pub do_rebuild: Vec<bool>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum ResolvedFunctionId {
+    Lookup(egglog_bridge::Lookup),
+    Prim(ExternalFunctionId),
+}
+
 impl ExternalFunction for Ctor {
     fn invoke(
         &self,
-        _exec_state: &mut ExecutionState,
-        _args: &[core_relations::Value],
+        exec_state: &mut ExecutionState,
+        args: &[core_relations::Value],
     ) -> Option<core_relations::Value> {
-        todo!("CtorExt")
+        let (rf, args) = args.split_first().unwrap();
+        let ResolvedFunction { id, do_rebuild } = exec_state.prims().unwrap(*rf);
+        let args = do_rebuild.iter().zip(args).map(|(b, x)| (*b, *x)).collect();
+        let y = NewFunctionContainer(id, args);
+        Some(exec_state.clone().containers().register_val(y, exec_state))
     }
 }
 
@@ -418,10 +432,16 @@ impl PrimitiveLike for Apply {
 impl ExternalFunction for Apply {
     fn invoke(
         &self,
-        _exec_state: &mut ExecutionState,
-        _args: &[core_relations::Value],
+        exec_state: &mut ExecutionState,
+        args: &[core_relations::Value],
     ) -> Option<core_relations::Value> {
-        todo!("ApplyExt")
+        let (fc, args) = args.split_first().unwrap();
+        let fc = exec_state
+            .containers()
+            .get_val::<NewFunctionContainer>(*fc)
+            .unwrap()
+            .clone();
+        fc.apply(exec_state, args)
     }
 }
 
@@ -468,5 +488,22 @@ impl FunctionSort {
         let mut stack = vec![];
         egraph.run_actions(&mut stack, &args, &program).unwrap();
         stack.pop().unwrap()
+    }
+}
+
+impl NewFunctionContainer {
+    /// Call function (primitive or table) <name> with value args <args> and return the value.
+    ///
+    /// Public so that other primitive sorts (external or internal) have access.
+    pub fn apply(
+        &self,
+        exec_state: &mut ExecutionState,
+        args: &[core_relations::Value],
+    ) -> Option<core_relations::Value> {
+        let args: Vec<_> = self.1.iter().map(|(_, x)| x).chain(args).copied().collect();
+        match &self.0 {
+            ResolvedFunctionId::Lookup(lookup) => lookup.run(exec_state, &args),
+            ResolvedFunctionId::Prim(prim) => exec_state.call_external_func(*prim, &args),
+        }
     }
 }

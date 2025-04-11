@@ -60,7 +60,7 @@ impl Presort for VecSort {
     ) -> Result<ArcSort, TypeError> {
         if let [Expr::Var(span, e)] = args {
             let e = typeinfo
-                .get_sort(e)
+                .get_sort_by_name(e)
                 .ok_or(TypeError::UndefinedSort(*e, span.clone()))?;
 
             if e.is_eq_container_sort() {

@@ -204,7 +204,7 @@ impl TypeInfo {
         }
     }
 
-    pub fn get_sort_by<S: Sort>(&self, pred: impl Fn(&Arc<S>) -> bool) -> Option<Arc<S>> {
+    pub fn get_sorts_by<S: Sort>(&self, pred: impl Fn(&Arc<S>) -> bool) -> Vec<Arc<S>> {
         let mut results = Vec::new();
         for sort in self.sorts.values() {
             let sort = sort.clone().as_arc_any();
@@ -214,11 +214,26 @@ impl TypeInfo {
                 }
             }
         }
-        match &results[..] {
-            [] => None,
-            [result] => Some(result.clone()),
-            [_, _, ..] => panic!("got more than one sort"),
-        }
+        results
+    }
+
+    pub fn get_sorts<S: Sort>(&self) -> Vec<Arc<S>> {
+        self.get_sorts_by(|_| true)
+    }
+
+    pub fn get_sort_by<S: Sort>(&self, pred: impl Fn(&Arc<S>) -> bool) -> Arc<S> {
+        let results = self.get_sorts_by(pred);
+        assert_eq!(
+            results.len(),
+            1,
+            "Expected exactly one sort for type {}",
+            std::any::type_name::<S>()
+        );
+        results.into_iter().next().unwrap()
+    }
+
+    pub fn get_sort<S: Sort>(&self) -> Arc<S> {
+        self.get_sort_by(|_| true)
     }
 
     fn function_to_functype(&self, func: &FunctionDecl) -> Result<FuncType, TypeError> {
@@ -507,7 +522,7 @@ impl TypeInfo {
             })
     }
 
-    pub fn get_sort(&self, sym: &Symbol) -> Option<&ArcSort> {
+    pub fn get_sort_by_name(&self, sym: &Symbol) -> Option<&ArcSort> {
         self.sorts.get(sym)
     }
 

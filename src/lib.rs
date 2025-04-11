@@ -42,7 +42,7 @@ use ast::*;
 pub use cli::bin::*;
 use constraint::{Constraint, SimpleTypeConstraint, TypeConstraint};
 use core_relations::ExternalFunctionId;
-use egglog_bridge::ColumnTy;
+use egglog_bridge::{ColumnTy, QueryEntry};
 use extract::Extractor;
 pub use function::Function;
 use function::*;
@@ -1091,10 +1091,11 @@ impl EGraph {
             let mut translator = BackendRule::new(
                 self.backend.new_rule(name.into(), self.seminaive),
                 &self.functions,
+                &self.type_info,
             );
             translator.query(&query, false);
             translator.actions(&actions);
-            translator.finish().build()
+            translator.build()
         };
 
         let vars = query.get_vars();
@@ -1133,9 +1134,10 @@ impl EGraph {
             let mut translator = BackendRule::new(
                 self.backend.new_rule("eval_actions", false),
                 &self.functions,
+                &self.type_info,
             );
             translator.actions(&actions);
-            let id = translator.finish().build();
+            let id = translator.build();
             let result = self.backend.run_rules(&[id]);
             self.backend.free_rule(id);
             result
@@ -1229,12 +1231,16 @@ impl EGraph {
                     None
                 }));
 
-            let mut translator =
-                BackendRule::new(self.backend.new_rule("check_facts", false), &self.functions);
+            let mut translator = BackendRule::new(
+                self.backend.new_rule("check_facts", false),
+                &self.functions,
+                &self.type_info,
+            );
             translator.query(&query, true);
-            let mut rb = translator.finish();
-            rb.call_external_func(ext_id, &[], egglog_bridge::ColumnTy::Id);
-            let id = rb.build();
+            translator
+                .rb
+                .call_external_func(ext_id, &[], egglog_bridge::ColumnTy::Id);
+            let id = translator.build();
             let _ = self.backend.run_rules(&[id]).unwrap();
             self.backend.free_rule(id);
 
@@ -1565,18 +1571,24 @@ impl EGraph {
         self.functions.values().map(|f| f.nodes.len()).sum()
     }
 
-    /// Returns a sort based on the type
-    pub fn get_sort<S: Sort + Send + Sync>(&self) -> Option<Arc<S>> {
-        self.type_info.get_sort_by(|_| true)
+    /// Returns a sort based on the type.
+    pub fn get_sort<S: Sort + Send + Sync>(&self) -> Arc<S> {
+        self.type_info.get_sort()
     }
 
-    /// Returns the first sort that satisfies the type and predicate if there's one.
-    /// Otherwise returns none.
-    pub fn get_sort_by<S: Sort + Send + Sync>(
-        &self,
-        pred: impl Fn(&Arc<S>) -> bool,
-    ) -> Option<Arc<S>> {
-        self.type_info.get_sort_by(pred)
+    /// Returns a sort that satisfies the type and predicate.
+    pub fn get_sort_by<S: Sort + Send + Sync>(&self, f: impl Fn(&Arc<S>) -> bool) -> Arc<S> {
+        self.type_info.get_sort_by(f)
+    }
+
+    /// Returns all sorts based on the type.
+    pub fn get_sorts<S: Sort + Send + Sync>(&self) -> Vec<Arc<S>> {
+        self.type_info.get_sorts()
+    }
+
+    /// Returns all sorts that satisfy the type and predicate.
+    pub fn get_sorts_by<S: Sort + Send + Sync>(&self, f: impl Fn(&Arc<S>) -> bool) -> Vec<Arc<S>> {
+        self.type_info.get_sorts_by(f)
     }
 
     /// Gets the last extract report and returns it, if the last command saved it.
@@ -1611,24 +1623,27 @@ impl EGraph {
 }
 
 struct BackendRule<'a> {
-    rb: egglog_bridge::RuleBuilder<'a>,
-    entries: HashMap<core::ResolvedAtomTerm, egglog_bridge::QueryEntry>,
+    pub rb: egglog_bridge::RuleBuilder<'a>,
+    entries: HashMap<core::ResolvedAtomTerm, QueryEntry>,
     functions: &'a IndexMap<Symbol, Function>,
+    type_info: &'a TypeInfo,
 }
 
 impl<'a> BackendRule<'a> {
     fn new(
         rb: egglog_bridge::RuleBuilder<'a>,
         functions: &'a IndexMap<Symbol, Function>,
+        type_info: &'a TypeInfo,
     ) -> BackendRule<'a> {
         BackendRule {
             rb,
             functions,
+            type_info,
             entries: Default::default(),
         }
     }
 
-    fn entry(&mut self, x: &core::ResolvedAtomTerm) -> egglog_bridge::QueryEntry {
+    fn entry(&mut self, x: &core::ResolvedAtomTerm) -> QueryEntry {
         self.entries
             .entry(x.clone())
             .or_insert_with(|| match x {
@@ -1647,23 +1662,78 @@ impl<'a> BackendRule<'a> {
         self.functions[&f.name].new_backend_id
     }
 
-    fn prim(&self, p: &core::SpecializedPrimitive) -> (ExternalFunctionId, ColumnTy) {
-        (p.primitive.1, p.output.column_ty(self.rb.egraph()))
+    fn prim(
+        &mut self,
+        prim: &core::SpecializedPrimitive,
+        args: &[core::ResolvedAtomTerm],
+    ) -> (ExternalFunctionId, Vec<QueryEntry>, ColumnTy) {
+        let mut qe_args = self.args(args);
+
+        if prim.primitive.0.name() == "unstable-fn".into() {
+            let core::ResolvedAtomTerm::Literal(_, Literal::String(name)) = args[0] else {
+                panic!("expected string literal after `unstable-fn`")
+            };
+            let id = if let Some(f) = self.type_info.get_func_type(&name) {
+                ResolvedFunctionId::Lookup(egglog_bridge::Lookup::new(
+                    self.rb.egraph(),
+                    self.func(f),
+                ))
+            } else if let Some(possible) = self.type_info.get_prims(&name) {
+                let mut ps: Vec<_> = possible.iter().collect();
+                ps.retain(|p| {
+                    self.type_info
+                        .get_sorts::<FunctionSort>()
+                        .into_iter()
+                        .any(|f| {
+                            let types: Vec<_> = prim
+                                .input
+                                .iter()
+                                .skip(1)
+                                .chain(f.inputs())
+                                .chain([&f.output()])
+                                .cloned()
+                                .collect();
+                            p.accept(&types, self.type_info)
+                        })
+                });
+                assert!(ps.len() == 1, "options for {name}: {ps:?}");
+                ResolvedFunctionId::Prim(ps.into_iter().next().unwrap().1)
+            } else {
+                panic!("no callable for {name}");
+            };
+            let do_rebuild = prim
+                .input
+                .iter()
+                .skip(1)
+                .map(|s| s.is_eq_sort() || s.is_eq_container_sort())
+                .collect();
+
+            qe_args[0] = self
+                .rb
+                .egraph()
+                .primitive_constant(ResolvedFunction { id, do_rebuild });
+        }
+
+        (
+            prim.primitive.1,
+            qe_args,
+            prim.output.column_ty(self.rb.egraph()),
+        )
     }
 
     fn args<'b>(
         &mut self,
         args: impl IntoIterator<Item = &'b core::ResolvedAtomTerm>,
-    ) -> Vec<egglog_bridge::QueryEntry> {
+    ) -> Vec<QueryEntry> {
         args.into_iter().map(|x| self.entry(x)).collect()
     }
 
     fn query(&mut self, query: &core::Query<ResolvedCall, ResolvedVar>, include_subsumed: bool) {
         for atom in &query.atoms {
-            let args = self.args(&atom.args);
             match &atom.head {
                 ResolvedCall::Func(f) => {
                     let f = self.func(f);
+                    let args = self.args(&atom.args);
                     let is_subsumed = match include_subsumed {
                         true => None,
                         false => Some(false),
@@ -1671,7 +1741,7 @@ impl<'a> BackendRule<'a> {
                     self.rb.query_table(f, &args, is_subsumed).unwrap()
                 }
                 ResolvedCall::Primitive(p) => {
-                    let (p, ty) = self.prim(p);
+                    let (p, args, ty) = self.prim(p, &atom.args);
                     self.rb.query_prim(p, &args, ty).unwrap()
                 }
             }
@@ -1683,14 +1753,14 @@ impl<'a> BackendRule<'a> {
             match action {
                 core::GenericCoreAction::Let(span, v, f, args) => {
                     let v = core::GenericAtomTerm::Var(span.clone(), v.clone());
-                    let args = self.args(args);
                     let y = match f {
                         ResolvedCall::Func(f) => {
                             let f = self.func(f);
+                            let args = self.args(args);
                             self.rb.lookup(f, &args).into()
                         }
                         ResolvedCall::Primitive(p) => {
-                            let (p, ty) = self.prim(p);
+                            let (p, args, ty) = self.prim(p, args);
                             self.rb.call_external_func(p, &args, ty).into()
                         }
                     };
@@ -1731,12 +1801,12 @@ impl<'a> BackendRule<'a> {
         }
     }
 
-    fn finish(self) -> egglog_bridge::RuleBuilder<'a> {
-        self.rb
+    fn build(self) -> egglog_bridge::RuleId {
+        self.rb.build()
     }
 }
 
-fn literal_to_entry(egraph: &egglog_bridge::EGraph, l: &Literal) -> egglog_bridge::QueryEntry {
+fn literal_to_entry(egraph: &egglog_bridge::EGraph, l: &Literal) -> QueryEntry {
     match l {
         Literal::Int(x) => egraph.primitive_constant::<i64>(*x),
         Literal::Float(x) => egraph.primitive_constant::<sort::F>(*x),
@@ -1873,9 +1943,8 @@ mod tests {
             .parse_and_run_program(None, "(sort IntVec (Vec i64))")
             .unwrap();
 
-        let int_vec_sort: Arc<VecSort> = egraph
-            .get_sort_by(|s: &Arc<VecSort>| s.element().name() == I64Sort.name())
-            .unwrap();
+        let int_vec_sort =
+            egraph.get_sort_by(|s: &Arc<VecSort>| s.element().name() == I64Sort.name());
 
         egraph.add_primitive(InnerProduct {
             ele: I64Sort.into(),
