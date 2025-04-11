@@ -351,10 +351,8 @@ impl Parse for Type {
 
             Some((field_def, field_use))
         } else if let Some((t, _)) = &cast {
-            let sort = quote!(<#t as IntoSort>::Sort);
-
             let field_use = Expr::Verbatim(quote! {
-               eg.type_info.get_sort_by::<#sort>(|_| true)
+                eg.get_sort::<<#t as IntoSort>::Sort>()
             });
 
             Some((field_def, field_use))
