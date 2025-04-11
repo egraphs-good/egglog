@@ -219,6 +219,10 @@ impl TypeInfo {
         results
     }
 
+    pub fn get_sorts<S: Sort>(&self) -> Vec<Arc<S>> {
+        self.get_sorts_by(|_| true)
+    }
+
     pub fn get_sort_by<S: Sort>(&self, pred: impl Fn(&Arc<S>) -> bool) -> Arc<S> {
         let results = self.get_sorts_by(pred);
         assert_eq!(
@@ -228,6 +232,10 @@ impl TypeInfo {
             std::any::type_name::<S>()
         );
         results.into_iter().next().unwrap()
+    }
+
+    pub fn get_sort<S: Sort>(&self) -> Arc<S> {
+        self.get_sort_by(|_| true)
     }
 
     fn function_to_functype(&self, func: &FunctionDecl) -> Result<FuncType, TypeError> {
@@ -516,7 +524,7 @@ impl TypeInfo {
             })
     }
 
-    pub fn get_sort(&self, sym: &Symbol) -> Option<&ArcSort> {
+    pub fn get_sort_by_name(&self, sym: &Symbol) -> Option<&ArcSort> {
         self.sorts.get(sym)
     }
 

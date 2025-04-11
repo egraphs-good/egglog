@@ -1575,14 +1575,19 @@ impl EGraph {
         self.functions.values().map(|f| f.nodes.len()).sum()
     }
 
-    /// Returns a sort based on the type
+    /// Returns a sort based on the type.
     pub fn get_sort<S: Sort + Send + Sync>(&self) -> Arc<S> {
-        self.type_info.get_sort_by(|_| true)
+        self.type_info.get_sort()
     }
 
     /// Returns a sort that satisfies the type and predicate.
     pub fn get_sort_by<S: Sort + Send + Sync>(&self, f: impl Fn(&Arc<S>) -> bool) -> Arc<S> {
         self.type_info.get_sort_by(f)
+    }
+
+    /// Returns all sorts based on the type.
+    pub fn get_sorts<S: Sort + Send + Sync>(&self) -> Vec<Arc<S>> {
+        self.type_info.get_sorts()
     }
 
     /// Returns all sorts that satisfy the type and predicate.
@@ -1681,7 +1686,7 @@ impl<'a> BackendRule<'a> {
                 let mut ps: Vec<_> = possible.iter().collect();
                 ps.retain(|p| {
                     self.type_info
-                        .get_sorts_by::<FunctionSort>(|_| true)
+                        .get_sorts::<FunctionSort>()
                         .into_iter()
                         .any(|f| {
                             let types: Vec<_> = prim
