@@ -3,7 +3,7 @@ use std::rc::Rc;
 use symbol_table::GlobalSymbol as Symbol;
 
 use crate::{
-    ast::{Actions, Command, Expr, GenericAction, Rule},
+    ast::{Actions, Command, Expr, Fact, GenericAction, GenericFact, Rule},
     HashMap, HashSet, Term, TermDag,
 };
 
@@ -92,9 +92,10 @@ pub enum ProofTerm {
 }
 
 #[derive(PartialEq, Eq, Debug)]
-enum ProofError {
+enum ProofCheckError {
     Todo,
-    MissingPreconditionProof,
+    WrongNumBodyProofs,
+    ProofMismatch(Symbol, Fact, Proposition),
 }
 
 impl ProofStore {
@@ -122,7 +123,7 @@ impl ProofStore {
         self: &Self,
         prog: &'a Vec<Command>,
         name: Symbol,
-    ) -> Result<&'a Rule, ProofError> {
+    ) -> Result<&'a Rule, ProofCheckError> {
         for command in prog {
             if let Command::Rule {
                 name: current_name,
@@ -130,10 +131,12 @@ impl ProofStore {
                 ..
             } = command
             {
-                return Ok(rule);
+                if current_name == &name {
+                    return Ok(rule);
+                }
             }
         }
-        Err(ProofError::Todo)
+        Err(ProofCheckError::Todo)
     }
 
     fn check_rule_fires(
@@ -142,8 +145,51 @@ impl ProofStore {
         rule_name: Symbol,
         subst: &Substitution,
         body_pfs: &Vec<ProofId>,
-    ) -> Result<(), ProofError> {
+    ) -> Result<(), ProofCheckError> {
         let rule_ast = self.get_rule_by_name(prog, rule_name)?;
+        let props = body_pfs
+            .iter()
+            .map(|pf| self.check_id(*pf, prog))
+            .collect::<Result<Vec<_>, _>>()?;
+        if props.len() != rule_ast.body.len() {
+            return Err(ProofCheckError::WrongNumBodyProofs);
+        }
+
+        for (fact, prop) in rule_ast.body.iter().zip(props.iter()) {
+            match (fact, prop) {
+                (GenericFact::Eq(_span, expr1, expr2), Proposition::TEq(term1, term2)) => {
+                    let mut intermediate_terms = HashSet::default();
+                    let rule_term1 = self.substitute(expr1, subst, &mut intermediate_terms)?;
+                    let rule_term2 = self.substitute(expr2, subst, &mut intermediate_terms)?;
+                    if &rule_term1 != term1 || &rule_term2 != term2 {
+                        return Err(ProofCheckError::ProofMismatch(
+                            rule_name,
+                            fact.clone(),
+                            prop.clone(),
+                        ));
+                    }
+                }
+                (GenericFact::Fact(expr), Proposition::TOk(term)) => {
+                    let mut intermediate_terms = HashSet::default();
+                    let rule_term = self.substitute(expr, subst, &mut intermediate_terms)?;
+                    if &rule_term != term {
+                        return Err(ProofCheckError::ProofMismatch(
+                            rule_name,
+                            fact.clone(),
+                            prop.clone(),
+                        ));
+                    }
+                }
+                _ => {
+                    return Err(ProofCheckError::ProofMismatch(
+                        rule_name,
+                        fact.clone(),
+                        prop.clone(),
+                    ));
+                }
+            }
+        }
+
         // TODO: actually check rule fires lol
         Ok(())
     }
@@ -153,12 +199,12 @@ impl ProofStore {
         expr: &Expr,
         substitution: &Substitution,
         intermediate_terms: &mut HashSet<Term>,
-    ) -> Result<Term, ProofError> {
+    ) -> Result<Term, ProofCheckError> {
         let res = match expr {
             crate::ast::GenericExpr::Lit(span, literal) => self.termdag.lit(literal.clone()),
             crate::ast::GenericExpr::Var(span, v) => {
                 let Some(term) = subst_get(substitution, *v) else {
-                    return Err(ProofError::Todo);
+                    return Err(ProofCheckError::Todo);
                 };
                 term.clone()
             }
@@ -180,7 +226,7 @@ impl ProofStore {
         prog: &Vec<Command>,
         rule_name: Symbol,
         subst: &Substitution,
-    ) -> Result<HashSet<Proposition>, ProofError> {
+    ) -> Result<HashSet<Proposition>, ProofCheckError> {
         let rule = self.get_rule_by_name(prog, rule_name)?;
 
         let mut propositions = HashSet::default();
@@ -192,7 +238,7 @@ impl ProofStore {
                     let mut intermediate = HashSet::default();
                     let rhs = self.substitute(generic_expr, &current_subst, &mut intermediate)?;
                     if (subst_get(&current_subst, *lhs).is_some()) {
-                        return Err(ProofError::Todo);
+                        return Err(ProofCheckError::Todo);
                     }
 
                     for term in intermediate {
@@ -223,7 +269,7 @@ impl ProofStore {
         self: &mut Self,
         proof: &ProofTerm,
         prog: &Vec<Command>,
-    ) -> Result<Proposition, ProofError> {
+    ) -> Result<Proposition, ProofCheckError> {
         let proofid = self.to_id(proof);
         self.check_id(proofid, prog)
     }
@@ -234,7 +280,8 @@ impl ProofStore {
         self: &mut Self,
         proof_id: ProofId,
         prog: &Vec<Command>,
-    ) -> Result<Proposition, ProofError> {
+    ) -> Result<Proposition, ProofCheckError> {
+        eprintln!("checking proof id: {proof_id}");
         match self.store[proof_id].clone() {
             ProofTerm::PRule {
                 rule_name,
@@ -249,7 +296,7 @@ impl ProofStore {
                 if props.contains(&result) {
                     Ok(result.clone())
                 } else {
-                    Err(ProofError::Todo)
+                    Err(ProofCheckError::Todo)
                 }
             }
             ProofTerm::PRefl { t_ok_pf, t } => {
@@ -257,13 +304,13 @@ impl ProofStore {
                 let prop = self.check_id(t_ok_pf, prog)?;
                 match prop {
                     Proposition::TOk(term) => Ok(Proposition::TEq(term.clone(), term)),
-                    Proposition::TEq(term, term1) => Err(ProofError::Todo),
+                    Proposition::TEq(term, term1) => Err(ProofCheckError::Todo),
                 }
             }
             ProofTerm::PSym { eq_pf } => {
                 let prop = self.check_id(eq_pf, prog)?;
                 match prop {
-                    Proposition::TOk(_) => Err(ProofError::Todo),
+                    Proposition::TOk(_) => Err(ProofCheckError::Todo),
                     Proposition::TEq(a, b) => Ok(Proposition::TEq(b, a)),
                 }
             }
@@ -274,7 +321,7 @@ impl ProofStore {
                     (Proposition::TEq(a, b), Proposition::TEq(b2, c)) if b == b2 => {
                         Ok(Proposition::TEq(a, c))
                     }
-                    _ => Err(ProofError::Todo),
+                    _ => Err(ProofCheckError::Todo),
                 }
             }
             ProofTerm::PProj {
@@ -285,9 +332,9 @@ impl ProofStore {
                 match prop {
                     Proposition::TOk(Term::App(_symbol, items)) => match items.get(arg_idx) {
                         Some(subterm) => Ok(Proposition::TOk(self.termdag.get(*subterm).clone())),
-                        None => Err(ProofError::Todo),
+                        None => Err(ProofCheckError::Todo),
                     },
-                    _ => Err(ProofError::Todo),
+                    _ => Err(ProofCheckError::Todo),
                 }
             }
             ProofTerm::PCong {
@@ -297,11 +344,11 @@ impl ProofStore {
             } => {
                 let pf_f_args = self.check_id(pf_f_args_ok, prog)?;
                 let Proposition::TOk(Term::App(symbol, children)) = pf_f_args else {
-                    return Err(ProofError::Todo);
+                    return Err(ProofCheckError::Todo);
                 };
 
                 if pf_args_eq.len() != children.len() {
-                    return Err(ProofError::Todo);
+                    return Err(ProofCheckError::Todo);
                 };
 
                 let mut new_children = vec![];
@@ -309,12 +356,12 @@ impl ProofStore {
                     let Proposition::TEq(child_term2, next_term) =
                         self.check_id(child_proof, prog)?
                     else {
-                        return Err(ProofError::Todo);
+                        return Err(ProofCheckError::Todo);
                     };
                     let child_term = self.termdag.get(*child_term_id);
 
                     if &child_term2 != child_term {
-                        return Err(ProofError::Todo);
+                        return Err(ProofCheckError::Todo);
                     }
 
                     new_children.push(next_term);
@@ -331,7 +378,7 @@ impl ProofStore {
 }
 
 mod tests {
-    use crate::proofs::proof::{ProofError, ProofStore, ProofTerm, Proposition};
+    use crate::proofs::proof::{ProofCheckError, ProofStore, ProofTerm, Proposition};
     #[cfg(test)]
     use crate::TermDag;
 
@@ -424,12 +471,38 @@ mod tests {
             body_pfs: vec![],
             result: Proposition::TOk(ss0.clone()),
         };
+
         let body_proof = ProofTerm::PRule {
-            rule_name: "zero".into(),
+            rule_name: "one".into(),
             subst: vec![],
             body_pfs: vec![],
-            result: Proposition::TOk(s0),
+            result: Proposition::TOk(s0.clone()),
         };
+        let proof_of_0 = ProofTerm::PRule {
+            rule_name: "one".into(),
+            subst: vec![],
+            body_pfs: vec![],
+            result: Proposition::TOk(zero.clone()),
+        };
+
+        let ptbad2 = ProofTerm::PRule {
+            rule_name: "succ".into(),
+            subst: vec![("a".into(), zero.clone())],
+            body_pfs: vec![proof_store.to_id(&proof_of_0)],
+            result: Proposition::TEq(zero.clone(), zero.clone()),
+        };
+
+        let ptbad3 = ProofTerm::PRule {
+            rule_name: "succ".into(),
+            subst: vec![("a".into(), s0.clone())],
+            body_pfs: vec![proof_store.to_id(&body_proof)],
+            result: Proposition::TEq(zero.clone(), zero.clone()),
+        };
+
+        assert_eq!(
+            proof_store.check(&body_proof, &parsed),
+            Ok(Proposition::TOk(s0))
+        );
         let ptgood = ProofTerm::PRule {
             rule_name: "succ".into(),
             subst: vec![("a".into(), zero)],
@@ -442,7 +515,15 @@ mod tests {
         );
         assert_eq!(
             proof_store.check(&ptbad, &parsed),
-            Err(ProofError::MissingPreconditionProof)
-        )
+            Err(ProofCheckError::WrongNumBodyProofs)
+        );
+        assert!(matches!(
+            proof_store.check(&ptbad2, &parsed),
+            Err(ProofCheckError::ProofMismatch(_, _, _))
+        ));
+        assert!(matches!(
+            proof_store.check(&ptbad3, &parsed),
+            Err(ProofCheckError::ProofMismatch(_, _, _))
+        ));
     }
 }
