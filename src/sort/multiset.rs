@@ -124,11 +124,15 @@ impl Sort for MultiSetSort {
         let mut changed = false;
         let new_multiset = MultiSetContainer {
             do_rebuild: multiset.do_rebuild,
-            data: multiset.data.map(|e| {
-                let mut e = *e;
-                changed |= self.element.canonicalize(&mut e, unionfind);
-                e
-            }),
+            data: multiset
+                .data
+                .iter()
+                .map(|e| {
+                    let mut e = *e;
+                    changed |= self.element.canonicalize(&mut e, unionfind);
+                    e
+                })
+                .collect(),
         };
         drop(multisets);
         *value = new_multiset.store(self);
@@ -246,7 +250,9 @@ impl PrimitiveLike for Map {
         let multiset = MultiSetContainer {
             data: multiset
                 .data
-                .map(|e| self.fn_.apply(&values[0], &[*e], egraph)),
+                .iter()
+                .map(|e| self.fn_.apply(&values[0], &[*e], egraph))
+                .collect(),
             ..multiset
         };
         Some(multiset.store(&self.multiset))
@@ -270,10 +276,11 @@ impl ExternalFunction for Map {
             .unwrap()
             .clone();
         let multiset = MultiSetContainer {
-            data: multiset.data.map(|e| {
-                fc.apply(exec_state, &[*e])
-                    .expect("TODO: don't unwrap here")
-            }),
+            data: multiset
+                .data
+                .iter()
+                .map(|e| fc.apply(exec_state, &[*e]))
+                .collect::<Option<_>>()?,
             ..multiset
         };
         Some(
@@ -326,15 +333,6 @@ mod inner {
         /// Return an arbitrary element from the multiset.
         pub fn pick(&self) -> Option<&T> {
             self.0.keys().next()
-        }
-
-        /// Map a function over all elements in the multiset, taking ownership of it and returning a new multiset.
-        pub fn map(self, mut f: impl FnMut(&T) -> T) -> MultiSet<T> {
-            let mut new = MultiSet::new();
-            for (k, v) in self.0.into_iter() {
-                new.insert_multiple_mut(f(&k), v);
-            }
-            new
         }
 
         /// Insert a value into the multiset, taking ownership of it and returning a new multiset.
