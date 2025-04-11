@@ -1,9 +1,7 @@
-use std::rc::Rc;
-
 use symbol_table::GlobalSymbol as Symbol;
 
 use crate::{
-    ast::{Actions, Command, Expr, Fact, GenericAction, GenericFact, Rule},
+    ast::{Command, Expr, Fact, GenericAction, GenericFact, Rule},
     HashMap, HashSet, Term, TermDag,
 };
 
@@ -18,7 +16,7 @@ pub struct ProofStore {
 
 type Substitution = Vec<(Symbol, Term)>;
 
-fn subst_get<'a>(subst: &'a Substitution, sym: Symbol) -> Option<&'a Term> {
+fn subst_get(subst: &Substitution, sym: Symbol) -> Option<&Term> {
     for ele in subst {
         if ele.0 == sym {
             return Some(&ele.1);
@@ -28,24 +26,9 @@ fn subst_get<'a>(subst: &'a Substitution, sym: Symbol) -> Option<&'a Term> {
 }
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
-enum Proposition {
+pub enum Proposition {
     TOk(Term),
     TEq(Term, Term),
-}
-
-/// Projects the appropriate expression of an action
-/// TODO currently unused- do we need this?
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-enum ActionProof {
-    APExprOK,
-    APExprEq,
-    APLetOK,
-    APLetAct(Rc<ActionProof>),
-    APUnionOk1,
-    APUnionOk2,
-    APUnion,
-    APSeq1(Rc<ActionProof>),
-    APSeq2(Rc<ActionProof>),
 }
 
 // todo how to ignore this warning?
@@ -92,7 +75,7 @@ pub enum ProofTerm {
 }
 
 #[derive(PartialEq, Eq, Debug)]
-enum ProofCheckError {
+pub enum ProofCheckError {
     Todo,
     WrongNumBodyProofs,
     ProofMismatch(Symbol, Fact, Proposition),
@@ -107,7 +90,7 @@ impl ProofStore {
         }
     }
 
-    fn to_id(&mut self, proof_term: &ProofTerm) -> ProofId {
+    fn id_of(&mut self, proof_term: &ProofTerm) -> ProofId {
         match self.memo.get(proof_term) {
             Some(existing) => *existing,
             None => {
@@ -120,7 +103,7 @@ impl ProofStore {
     }
 
     fn get_rule_by_name<'a>(
-        self: &Self,
+        &self,
         prog: &'a Vec<Command>,
         name: Symbol,
     ) -> Result<&'a Rule, ProofCheckError> {
@@ -140,11 +123,11 @@ impl ProofStore {
     }
 
     fn check_rule_fires(
-        self: &mut Self,
+        &mut self,
         prog: &Vec<Command>,
         rule_name: Symbol,
         subst: &Substitution,
-        body_pfs: &Vec<ProofId>,
+        body_pfs: &[ProofId],
     ) -> Result<(), ProofCheckError> {
         let rule_ast = self.get_rule_by_name(prog, rule_name)?;
         let props = body_pfs
@@ -201,8 +184,8 @@ impl ProofStore {
         intermediate_terms: &mut HashSet<Term>,
     ) -> Result<Term, ProofCheckError> {
         let res = match expr {
-            crate::ast::GenericExpr::Lit(span, literal) => self.termdag.lit(literal.clone()),
-            crate::ast::GenericExpr::Var(span, v) => {
+            crate::ast::GenericExpr::Lit(_span, literal) => self.termdag.lit(literal.clone()),
+            crate::ast::GenericExpr::Var(_span, v) => {
                 let Some(term) = subst_get(substitution, *v) else {
                     return Err(ProofCheckError::Todo);
                 };
@@ -237,7 +220,7 @@ impl ProofStore {
                 GenericAction::Let(_span, lhs, generic_expr) => {
                     let mut intermediate = HashSet::default();
                     let rhs = self.substitute(generic_expr, &current_subst, &mut intermediate)?;
-                    if (subst_get(&current_subst, *lhs).is_some()) {
+                    if subst_get(&current_subst, *lhs).is_some() {
                         return Err(ProofCheckError::Todo);
                     }
 
@@ -248,40 +231,41 @@ impl ProofStore {
                 }
                 GenericAction::Expr(_span, generic_expr) => {
                     let mut intermediate = HashSet::default();
-                    let _rhs = self.substitute(&generic_expr, &current_subst, &mut intermediate)?;
+                    let _rhs = self.substitute(generic_expr, &current_subst, &mut intermediate)?;
 
                     for term in intermediate {
                         propositions.insert(Proposition::TOk(term));
                     }
                 }
-                GenericAction::Set(span, _, generic_exprs, generic_expr) => todo!(),
-                GenericAction::Change(span, change, _, generic_exprs) => todo!(),
-                GenericAction::Union(span, generic_expr, generic_expr1) => todo!(),
-                GenericAction::Extract(span, generic_expr, generic_expr1) => todo!(),
-                GenericAction::Panic(span, _) => todo!(),
+                GenericAction::Set(_span, _, _generic_exprs, _generic_expr) => todo!(),
+                GenericAction::Change(_span, _change, _, _generic_exprs) => todo!(),
+                GenericAction::Union(_span, _generic_expr, _generic_expr1) => todo!(),
+                GenericAction::Extract(_span, _generic_expr, _generic_expr1) => todo!(),
+                GenericAction::Panic(_span, _) => todo!(),
             }
         }
 
         Ok(propositions)
     }
 
-    fn check(
-        self: &mut Self,
+    /// Get the proposition for a [`ProofTerm`],
+    /// or an error for invalid proofs.
+    pub fn check(
+        &mut self,
         proof: &ProofTerm,
         prog: &Vec<Command>,
     ) -> Result<Proposition, ProofCheckError> {
-        let proofid = self.to_id(proof);
+        let proofid = self.id_of(proof);
         self.check_id(proofid, prog)
     }
 
     /// Check a particular proof id, returning the [`Proposition`] it proves.
     /// Borrows proof as mut in order to mutate the [`TermDag`] backing store.
     fn check_id(
-        self: &mut Self,
+        &mut self,
         proof_id: ProofId,
         prog: &Vec<Command>,
     ) -> Result<Proposition, ProofCheckError> {
-        eprintln!("checking proof id: {proof_id}");
         match self.store[proof_id].clone() {
             ProofTerm::PRule {
                 rule_name,
@@ -291,7 +275,6 @@ impl ProofStore {
             } => {
                 self.check_rule_fires(prog, rule_name, &subst, &body_pfs)?;
                 let props = self.rule_propositions(prog, rule_name, &subst)?;
-                eprintln!("props: {:?}", props);
 
                 if props.contains(&result) {
                     Ok(result.clone())
@@ -299,12 +282,12 @@ impl ProofStore {
                     Err(ProofCheckError::Todo)
                 }
             }
-            ProofTerm::PRefl { t_ok_pf, t } => {
+            ProofTerm::PRefl { t_ok_pf, t: _t } => {
                 // check t_ok_pf
                 let prop = self.check_id(t_ok_pf, prog)?;
                 match prop {
                     Proposition::TOk(term) => Ok(Proposition::TEq(term.clone(), term)),
-                    Proposition::TEq(term, term1) => Err(ProofCheckError::Todo),
+                    Proposition::TEq(_term, _term1) => Err(ProofCheckError::Todo),
                 }
             }
             ProofTerm::PSym { eq_pf } => {
@@ -340,7 +323,7 @@ impl ProofStore {
             ProofTerm::PCong {
                 pf_args_eq,
                 pf_f_args_ok,
-                fun_sym,
+                fun_sym: _,
             } => {
                 let pf_f_args = self.check_id(pf_f_args_ok, prog)?;
                 let Proposition::TOk(Term::App(symbol, children)) = pf_f_args else {
@@ -378,9 +361,11 @@ impl ProofStore {
 }
 
 mod tests {
-    use crate::proofs::proof::{ProofCheckError, ProofStore, ProofTerm, Proposition};
+    
     #[cfg(test)]
     use crate::TermDag;
+    #[cfg(test)]
+    use crate::proofs::proof::{ProofCheckError, ProofStore, ProofTerm, Proposition};
 
     #[test]
     fn no_precondition() {
@@ -488,14 +473,14 @@ mod tests {
         let ptbad2 = ProofTerm::PRule {
             rule_name: "succ".into(),
             subst: vec![("a".into(), zero.clone())],
-            body_pfs: vec![proof_store.to_id(&proof_of_0)],
+            body_pfs: vec![proof_store.id_of(&proof_of_0)],
             result: Proposition::TEq(zero.clone(), zero.clone()),
         };
 
         let ptbad3 = ProofTerm::PRule {
             rule_name: "succ".into(),
             subst: vec![("a".into(), s0.clone())],
-            body_pfs: vec![proof_store.to_id(&body_proof)],
+            body_pfs: vec![proof_store.id_of(&body_proof)],
             result: Proposition::TEq(zero.clone(), zero.clone()),
         };
 
@@ -506,7 +491,7 @@ mod tests {
         let ptgood = ProofTerm::PRule {
             rule_name: "succ".into(),
             subst: vec![("a".into(), zero)],
-            body_pfs: vec![proof_store.to_id(&body_proof)],
+            body_pfs: vec![proof_store.id_of(&body_proof)],
             result: Proposition::TOk(ss0.clone()),
         };
         assert_eq!(
