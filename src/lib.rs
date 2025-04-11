@@ -1056,10 +1056,27 @@ impl EGraph {
         run_report.updated |= old_updated;
 
         {
-            let rule_ids: Vec<_> = match &self.rulesets[&ruleset] {
-                Ruleset::Rules(_, xs) => xs.iter().map(|(_, (_, x))| *x).collect(),
-                Ruleset::Combined(_, _sub_rulesets) => todo!("running combined rulesets"),
-            };
+            fn collect_rule_ids(
+                ruleset: Symbol,
+                rulesets: &IndexMap<Symbol, Ruleset>,
+                ids: &mut Vec<egglog_bridge::RuleId>,
+            ) {
+                match &rulesets[&ruleset] {
+                    Ruleset::Rules(_, rules) => {
+                        for (_, id) in rules.values() {
+                            ids.push(*id);
+                        }
+                    }
+                    Ruleset::Combined(_, sub_rulesets) => {
+                        for sub_ruleset in sub_rulesets {
+                            collect_rule_ids(*sub_ruleset, rulesets, ids);
+                        }
+                    }
+                }
+            }
+
+            let mut rule_ids = Vec::new();
+            collect_rule_ids(ruleset, &self.rulesets, &mut rule_ids);
             let new_updated = self.backend.run_rules(&rule_ids).unwrap();
             assert_eq!(old_updated, new_updated);
         }
