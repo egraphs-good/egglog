@@ -98,7 +98,7 @@ impl Presort for FunctionSort {
     ) -> Result<ArcSort, TypeError> {
         if let [inputs, Expr::Var(span, output)] = args {
             let output_sort = typeinfo
-                .get_sort(output)
+                .get_sort_by_name(output)
                 .ok_or(TypeError::UndefinedSort(*output, span.clone()))?;
 
             let input_sorts = match inputs {
@@ -113,7 +113,7 @@ impl Presort for FunctionSort {
                     all_args
                         .map(|arg| {
                             typeinfo
-                                .get_sort(arg)
+                                .get_sort_by_name(arg)
                                 .ok_or(TypeError::UndefinedSort(*arg, span.clone()))
                                 .cloned()
                         })

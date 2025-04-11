@@ -86,10 +86,10 @@ impl Presort for MapSort {
     ) -> Result<ArcSort, TypeError> {
         if let [Expr::Var(k_span, k), Expr::Var(v_span, v)] = args {
             let k = typeinfo
-                .get_sort(k)
+                .get_sort_by_name(k)
                 .ok_or(TypeError::UndefinedSort(*k, k_span.clone()))?;
             let v = typeinfo
-                .get_sort(v)
+                .get_sort_by_name(v)
                 .ok_or(TypeError::UndefinedSort(*v, v_span.clone()))?;
 
             // TODO: specialize the error message
