@@ -1111,7 +1111,7 @@ impl EGraph {
                 &self.type_info,
             );
             translator.query(&query, false);
-            translator.actions(&actions);
+            translator.actions(&actions)?;
             translator.build()
         };
 
@@ -1153,7 +1153,7 @@ impl EGraph {
                 &self.functions,
                 &self.type_info,
             );
-            translator.actions(&actions);
+            translator.actions(&actions)?;
             let id = translator.build();
             let result = self.backend.run_rules(&[id]);
             self.backend.free_rule(id);
@@ -1765,7 +1765,7 @@ impl<'a> BackendRule<'a> {
         }
     }
 
-    fn actions(&mut self, actions: &core::ResolvedCoreActions) {
+    fn actions(&mut self, actions: &core::ResolvedCoreActions) -> Result<(), Error> {
         for action in &actions.0 {
             match action {
                 core::GenericCoreAction::Let(span, v, f, args) => {
@@ -1799,11 +1799,14 @@ impl<'a> BackendRule<'a> {
                 core::GenericCoreAction::Change(_, change, f, args) => match f {
                     ResolvedCall::Primitive(..) => panic!("runtime primitive change!"),
                     ResolvedCall::Func(f) => {
+                        let name = f.name;
+                        let can_subsume = self.functions[&f.name].can_subsume;
                         let f = self.func(f);
                         let args = self.args(args);
                         match change {
                             Change::Delete => self.rb.remove(f, &args),
-                            Change::Subsume => self.rb.subsume(f, &args),
+                            Change::Subsume if can_subsume => self.rb.subsume(f, &args),
+                            Change::Subsume => return Err(Error::SubsumeMergeError(name)),
                         }
                     }
                 },
@@ -1816,6 +1819,7 @@ impl<'a> BackendRule<'a> {
                 core::GenericCoreAction::Extract(_, _x, _n) => todo!("no extraction yet"),
             }
         }
+        Ok(())
     }
 
     fn build(self) -> egglog_bridge::RuleId {
