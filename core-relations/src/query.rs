@@ -500,6 +500,26 @@ impl RuleBuilder<'_, '_> {
         Ok(res)
     }
 
+    pub fn call_external_with_fallback(
+        &mut self,
+        f1: ExternalFunctionId,
+        args1: &[QueryEntry],
+        f2: ExternalFunctionId,
+        args2: &[QueryEntry],
+    ) -> Result<Variable, QueryError> {
+        let res = self.qb.new_var();
+        self.qb.instrs.push(Instr::ExternalWithFallback {
+            f1,
+            args1: args1.to_vec(),
+            f2,
+            args2: args2.to_vec(),
+            dst: res,
+        });
+        self.qb.mark_used(args1);
+        self.qb.mark_used(args2);
+        Ok(res)
+    }
+
     /// Continue execution iff the two arguments are equal.
     pub fn assert_eq(&mut self, l: QueryEntry, r: QueryEntry) {
         self.qb.instrs.push(Instr::AssertEq(l, r));

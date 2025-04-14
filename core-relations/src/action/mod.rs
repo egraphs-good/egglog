@@ -593,6 +593,39 @@ impl ExecutionState<'_> {
             Instr::External { func, args, dst } => {
                 self.db.external_funcs[*func].invoke_batch(self, mask, bindings, args, *dst);
             }
+            Instr::ExternalWithFallback {
+                f1,
+                args1,
+                f2,
+                args2,
+                dst,
+            } => {
+                // Do two passes over the current vector. First, do a round of lookups. Then, for
+                // any offsets where the lookup failed, insert the default value.
+                let mut f1_result = mask.clone();
+                self.db.external_funcs[*f1].invoke_batch(
+                    self,
+                    &mut f1_result,
+                    bindings,
+                    args1,
+                    *dst,
+                );
+                let mut to_call_f2 = f1_result.clone();
+                to_call_f2.symmetric_difference(mask);
+                if to_call_f2.is_empty() {
+                    return;
+                }
+                // Call the given external function on all entries where the first call failed.
+                self.db.external_funcs[*f2].invoke_batch_assign(
+                    self,
+                    &mut to_call_f2,
+                    bindings,
+                    args2,
+                    *dst,
+                );
+                f1_result.union(&to_call_f2);
+                *mask = f1_result;
+            }
             Instr::AssertAnyNe { ops, divider } => {
                 let pool = pool_set.get_pool::<Vec<Value>>().clone();
                 iter_entries!(pool, ops).retain(|vals| {
@@ -677,6 +710,17 @@ pub(crate) enum Instr {
     External {
         func: ExternalFunctionId,
         args: Vec<QueryEntry>,
+        dst: Variable,
+    },
+
+    /// Bind the result of the external function to a variable. If the first external function
+    /// fails, then use the second external function. If both fail, execution is haulted, (as in a
+    /// single failure of `External`).
+    ExternalWithFallback {
+        f1: ExternalFunctionId,
+        args1: Vec<QueryEntry>,
+        f2: ExternalFunctionId,
+        args2: Vec<QueryEntry>,
         dst: Variable,
     },
 

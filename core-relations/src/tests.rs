@@ -969,3 +969,89 @@ fn lookup_or_call_external_partial_success() {
     h_contents.sort();
     assert_eq!(h_contents, vec![vec![v(1), v(0)], vec![v(4), v(0)],]);
 }
+
+#[test]
+fn call_external_with_fallback() {
+    // Insert (f 1) (f 2) (f 3) (f 5).
+    // Iterate over f, binding x to 1, 2, 3.
+    // Have two external functions:
+    // 1. assert_even, which returns None for odd numbers.
+    // 2. inc, which increments the input value and only fails on the number 5
+    // Insert (h lookup_or_call_external(f, x, assert_even, inc))
+    // We should get h 2, h 4.
+    let mut db = Database::default();
+    let [f, h] = (0..2)
+        .map(|_| {
+            db.add_table(
+                SortedWritesTable::new(
+                    1,
+                    2,
+                    None,
+                    vec![],
+                    Box::new(move |_, a, b, _| {
+                        if a[0] != b[0] {
+                            panic!("merge not supported")
+                        } else {
+                            false
+                        }
+                    }),
+                ),
+                iter::empty(),
+                iter::empty(),
+            )
+        })
+        .collect::<Vec<_>>()[..]
+    else {
+        unreachable!()
+    };
+
+    {
+        let mut buf = db.get_table(f).new_buffer();
+        buf.stage_insert(&[v(1), v(0)]);
+        buf.stage_insert(&[v(2), v(0)]);
+        buf.stage_insert(&[v(3), v(0)]);
+        buf.stage_insert(&[v(5), v(0)]);
+    }
+    db.merge_all();
+    let assert_even = db.add_external_function(make_external_func(|_, args| {
+        let [x] = args else { panic!() };
+        if x.rep() % 2 == 0 {
+            Some(*x)
+        } else {
+            None
+        }
+    }));
+
+    let inc = db.add_external_function(make_external_func(|_, args| {
+        let [x] = args else { panic!() };
+        if x.rep() == 5 {
+            None
+        } else {
+            Some(x.inc())
+        }
+    }));
+
+    let mut rsb = RuleSetBuilder::new(&mut db);
+    let mut query = rsb.new_rule();
+    let x = query.new_var();
+    let y = query.new_var();
+    query.add_atom(f, &[x.into(), y.into()], &[]).unwrap();
+    let mut rb = query.build();
+    let res = rb
+        .call_external_with_fallback(assert_even, &[x.into()], inc, &[x.into()])
+        .unwrap();
+    rb.insert(h, &[res.into(), y.into()]).unwrap();
+    rb.build();
+    let rs = rsb.build();
+    assert!(db.run_rule_set(&rs));
+
+    let h = db.get_table(h);
+    let all = h.all();
+    let mut h_contents = h
+        .scan(all.as_ref())
+        .iter()
+        .map(|(_, row)| row.to_vec())
+        .collect::<Vec<_>>();
+    h_contents.sort();
+    assert_eq!(h_contents, vec![vec![v(2), v(0)], vec![v(4), v(0)],]);
+}
