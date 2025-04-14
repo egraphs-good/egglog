@@ -467,6 +467,39 @@ impl RuleBuilder<'_, '_> {
         Ok(res)
     }
 
+    /// Look up the given key in the given table. If the lookup fails, then call the given external
+    /// function with the given arguments. Bind the result to the returned variable. If the
+    /// external function returns None (and the lookup fails) then the execution of the rule halts.
+    pub fn lookup_or_call_external(
+        &mut self,
+        table: TableId,
+        key: &[QueryEntry],
+        dst_col: ColumnId,
+        func: ExternalFunctionId,
+        func_args: &[QueryEntry],
+    ) -> Result<Variable, QueryError> {
+        let table_info = self
+            .qb
+            .rsb
+            .db
+            .tables
+            .get(table)
+            .expect("table must be declared in the current database");
+        self.validate_keys(table, table_info, key)?;
+        let res = self.qb.new_var();
+        self.qb.instrs.push(Instr::LookupOrCallExternal {
+            table,
+            table_key: key.to_vec(),
+            func,
+            func_args: func_args.to_vec(),
+            dst_var: res,
+            dst_col,
+        });
+        self.qb.mark_used(key);
+        self.qb.mark_used(func_args);
+        Ok(res)
+    }
+
     /// Continue execution iff the two arguments are equal.
     pub fn assert_eq(&mut self, l: QueryEntry, r: QueryEntry) {
         self.qb.instrs.push(Instr::AssertEq(l, r));

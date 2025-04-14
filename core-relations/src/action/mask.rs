@@ -55,6 +55,10 @@ impl Mask {
         self.data.symmetric_difference_with(&other.data);
     }
 
+    pub(super) fn union(&mut self, other: &Mask) {
+        self.data.union_with(&other.data);
+    }
+
     /// Iterate over the offsets in the slice that correspond to set offsets in
     /// the `Mask`.
     pub(crate) fn iter<'slice, T>(
@@ -170,6 +174,31 @@ pub(crate) trait MaskIter {
                 IterResult::Done => break,
             };
             out[cur] = f(cur, next);
+        }
+    }
+
+    fn assign_vec_and_retain<Out>(
+        mut self,
+        out: &mut [Out],
+        mut f: impl FnMut(usize, Self::Item) -> Option<Out>,
+    ) where
+        Self: Sized,
+    {
+        loop {
+            let cur = self.inc_counter();
+            let next = match self.get_at(cur) {
+                IterResult::Item(item) => item,
+                IterResult::Skip => {
+                    continue;
+                }
+                IterResult::Done => break,
+            };
+            match f(cur, next) {
+                Some(next) => out[cur] = next,
+                None => {
+                    self.remove(cur);
+                }
+            }
         }
     }
 

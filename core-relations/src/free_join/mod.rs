@@ -182,6 +182,35 @@ pub(crate) trait ExternalFunctionExt: ExternalFunction {
         .fill_vec(&mut out, Value::stale, |_, args| self.invoke(state, &args));
         bindings.insert(out_var, out);
     }
+
+    /// A variant of [`ExternalFunctionExt::invoke_batch`] that overwrites the output variable,
+    /// rather than assigning all new values.
+    ///
+    /// *Panics* This method will panic if `out_var` doesn't already have an appropriately-sized
+    /// vector boudn in `bindings`.
+    #[doc(hidden)]
+    fn invoke_batch_assign(
+        &self,
+        state: &mut ExecutionState,
+        mask: &mut Mask,
+        bindings: &mut Bindings,
+        args: &[QueryEntry],
+        out_var: Variable,
+    ) {
+        let pool: Pool<Vec<Value>> = with_pool_set(|ps| ps.get_pool().clone());
+        let mut out = bindings
+            .take(out_var)
+            .expect("output variable must be bound");
+        mask.iter_dynamic(
+            pool,
+            args.iter().map(|v| match v {
+                QueryEntry::Var(v) => ValueSource::Slice(&bindings[*v]),
+                QueryEntry::Const(c) => ValueSource::Const(*c),
+            }),
+        )
+        .assign_vec_and_retain(&mut out, |_, args| self.invoke(state, &args));
+        bindings.insert(out_var, out);
+    }
 }
 
 impl<T: ExternalFunction> ExternalFunctionExt for T {}
