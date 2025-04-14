@@ -417,6 +417,7 @@ impl RuleBuilder<'_> {
         func: ExternalFunctionId,
         args: &[QueryEntry],
         ret_ty: ColumnTy,
+        panic_msg: &str,
     ) -> Variable {
         let args = args.to_vec();
         let res = self.new_var(ret_ty);
@@ -425,7 +426,7 @@ impl RuleBuilder<'_> {
                 .register_prim(func, &args, res, ret_ty, self.egraph);
         }
         // External functions that fail on the RHS of a rule should cause a panic.
-        let panic_fn = self.egraph.external_function_panic;
+        let panic_fn = self.egraph.new_panic(panic_msg.to_string());
         self.query.add_rule.push(Box::new(move |inner, rb| {
             let args = inner.convert_all(&args);
             let var = rb.call_external_with_fallback(func, &args, panic_fn, &[])?;
@@ -984,7 +985,12 @@ impl RuleBuilder<'_> {
     /// Panic with a given message.
     pub fn panic(&mut self, message: String) {
         let panic = self.egraph.new_panic(message.clone());
-        self.call_external_func(panic, &[], ColumnTy::Id);
+        self.call_external_func(
+            panic,
+            &[],
+            ColumnTy::Id,
+            "this panic message should never show up",
+        );
     }
 }
 

@@ -637,9 +637,11 @@ fn container_test() {
         let mut rb = egraph.new_rule("", true);
         let vec = rb.new_var(ColumnTy::Id);
         let vec_id = rb.new_var(ColumnTy::Id);
+        let last = rb.new_var(ColumnTy::Id);
         rb.query_table(vec_table, &[vec.into(), vec_id.into()], Some(false))
             .unwrap();
-        let last = rb.call_external_func(vec_last, &[vec.into()], ColumnTy::Id);
+        rb.query_prim(vec_last, &[vec.into(), last.into()], ColumnTy::Id)
+            .unwrap();
         let add_last_0 = rb.lookup(
             add_table,
             &[
@@ -661,9 +663,9 @@ fn container_test() {
             ],
         );
         let new_vec_1 =
-            rb.call_external_func(vec_push, &[vec.into(), add_last_0.into()], ColumnTy::Id);
+            rb.call_external_func(vec_push, &[vec.into(), add_last_0.into()], ColumnTy::Id, "");
         let new_vec_2 =
-            rb.call_external_func(vec_push, &[vec.into(), add_0_last.into()], ColumnTy::Id);
+            rb.call_external_func(vec_push, &[vec.into(), add_0_last.into()], ColumnTy::Id, "");
         rb.lookup(vec_table, &[new_vec_1.into()]);
         rb.lookup(vec_table, &[new_vec_2.into()]);
         rb.build()
@@ -690,6 +692,7 @@ fn container_test() {
             int_add,
             &[lhs_raw.into(), rhs_raw.into()],
             ColumnTy::Primitive(int_prim),
+            "",
         );
         let boxed = rb.lookup(num_table, &[evaled.into()]);
         rb.union(add_id.into(), boxed.into());
@@ -790,7 +793,7 @@ fn rhs_only_rule_only_runs_once() {
     }));
     let inc_counter_rule = {
         let mut rb = egraph.new_rule("", true);
-        rb.call_external_func(inc_counter_func, &[], ColumnTy::Id);
+        rb.call_external_func(inc_counter_func, &[], ColumnTy::Id, "");
         rb.build()
     };
 
@@ -1353,11 +1356,13 @@ fn primitive_failure_panics() {
             assert_odd,
             &[value_1.clone()],
             ColumnTy::Primitive(unit_prim),
+            "",
         );
         rb.call_external_func(
             assert_odd,
             &[value_2.clone()],
             ColumnTy::Primitive(unit_prim),
+            "",
         );
         rb.build()
     };

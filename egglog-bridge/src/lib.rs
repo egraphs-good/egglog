@@ -23,6 +23,7 @@ use core_relations::{
     Offset, PlanStrategy, PrimitiveId, Primitives, SortedWritesTable, TableId, TaggedRowBuffer,
     Value, WrappedTable,
 };
+use hashbrown::HashMap;
 use indexmap::{map::Entry, IndexMap, IndexSet};
 use log::info;
 use numeric_id::{define_id, DenseIdMap, DenseIdMapWithReuse, NumericId};
@@ -70,7 +71,12 @@ pub struct EGraph {
     rules: DenseIdMapWithReuse<RuleId, RuleInfo>,
     funcs: DenseIdMap<FunctionId, FunctionInfo>,
     panic_message: SideChannel<String>,
-    external_function_panic: ExternalFunctionId,
+    /// This is a cache of all the different panic messages that we may use while executing rules
+    /// against the EGraph. Oftentimes, these messages are generated dynamically: keeping this map
+    /// around allows us to cache external function ids with repeat panic messages and they can
+    /// also serve as a debugging tool in the case that the number of panic messages grows without
+    /// bound.
+    panic_funcs: HashMap<String, ExternalFunctionId>,
     proof_specs: DenseIdMap<ReasonSpecId, Arc<ProofReason>>,
     /// Side tables used to store proof information. We initialize these lazily
     /// as a proof object with a given number of parameters is added.
@@ -126,7 +132,7 @@ impl EGraph {
         // Start the timestamp counter at 1.
         db.inc_counter(ts_counter);
 
-        let mut egraph = Self {
+        Self {
             db,
             uf_table,
             id_counter,
@@ -135,16 +141,12 @@ impl EGraph {
             rules: Default::default(),
             funcs: Default::default(),
             panic_message: Default::default(),
-            // Placeholder
-            external_function_panic: ExternalFunctionId::new(!0),
+            panic_funcs: Default::default(),
             proof_specs: Default::default(),
             reason_tables: Default::default(),
             term_tables: Default::default(),
             tracing,
-        };
-        let external_function_panic = egraph.new_panic("primitive evaluation failed".to_string());
-        egraph.external_function_panic = external_function_panic;
-        egraph
+        }
     }
 
     fn next_ts(&self) -> Timestamp {
@@ -1316,8 +1318,10 @@ struct Panic(String, SideChannel<String>);
 impl EGraph {
     /// Create a new `ExternalFunction` that panics with the given message.
     pub fn new_panic(&mut self, message: String) -> ExternalFunctionId {
-        let panic = Panic(message, self.panic_message.clone());
-        self.db.add_external_function(panic)
+        *self.panic_funcs.entry(message.clone()).or_insert_with(|| {
+            let panic = Panic(message, self.panic_message.clone());
+            self.db.add_external_function(panic)
+        })
     }
 }
 
