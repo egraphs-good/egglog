@@ -70,6 +70,7 @@ pub struct EGraph {
     rules: DenseIdMapWithReuse<RuleId, RuleInfo>,
     funcs: DenseIdMap<FunctionId, FunctionInfo>,
     panic_message: SideChannel<String>,
+    external_function_panic: ExternalFunctionId,
     proof_specs: DenseIdMap<ReasonSpecId, Arc<ProofReason>>,
     /// Side tables used to store proof information. We initialize these lazily
     /// as a proof object with a given number of parameters is added.
@@ -125,7 +126,7 @@ impl EGraph {
         // Start the timestamp counter at 1.
         db.inc_counter(ts_counter);
 
-        Self {
+        let mut egraph = Self {
             db,
             uf_table,
             id_counter,
@@ -134,11 +135,16 @@ impl EGraph {
             rules: Default::default(),
             funcs: Default::default(),
             panic_message: Default::default(),
+            // Placeholder
+            external_function_panic: ExternalFunctionId::new(!0),
             proof_specs: Default::default(),
             reason_tables: Default::default(),
             term_tables: Default::default(),
             tracing,
-        }
+        };
+        let external_function_panic = egraph.new_panic("primitive evaluation failed".to_string());
+        egraph.external_function_panic = external_function_panic;
+        egraph
     }
 
     fn next_ts(&self) -> Timestamp {
@@ -605,12 +611,16 @@ impl EGraph {
         let table_id =
             self.db
                 .add_table(table, read_deps.iter().copied(), write_deps.iter().copied());
+
+        let panic_func = matches!(default, DefaultVal::Fail)
+            .then(|| self.new_panic(format!("lookup failed for {name}")));
         let res = self.funcs.push(FunctionInfo {
             table: table_id,
             schema: schema.clone(),
             incremental_rebuild_rules: Default::default(),
             nonincremental_rebuild_rule: RuleId::new(!0),
             default_val: default,
+            panic_func,
             can_subsume,
             name: name.into(),
         });
@@ -908,6 +918,7 @@ struct FunctionInfo {
     incremental_rebuild_rules: Vec<RuleId>,
     nonincremental_rebuild_rule: RuleId,
     default_val: DefaultVal,
+    panic_func: Option<ExternalFunctionId>,
     can_subsume: bool,
     name: Arc<str>,
 }
@@ -919,14 +930,11 @@ impl FunctionInfo {
 }
 
 /// How defaults are computed for the given function.
-#[derive(Clone)]
+#[derive(Copy, Clone)]
 pub enum DefaultVal {
     /// Generate a fresh UF id.
     FreshId,
-    /// Stop executing the rule. If a lookup occurs in the body of a rule for a
-    /// mapping not in a function, execution of that rule will stop. This is
-    /// similar to placing the value in the left-hand side of the rule, but this
-    /// time the lookup can depend on values bound in the right-hand-side.
+    /// Cause an egglog-level panic if a lookup fails.
     Fail,
     /// Insert a constant of some kind.
     Const(Value),

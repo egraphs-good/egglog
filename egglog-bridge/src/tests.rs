@@ -1282,6 +1282,89 @@ fn basic_subsumption() {
     assert_eq!(g[0], f[0])
 }
 
+#[test]
+fn lookup_failure_panics() {
+    let mut egraph = EGraph::default();
+    let f = egraph.add_table(FunctionConfig {
+        schema: vec![ColumnTy::Id, ColumnTy::Id],
+        default: DefaultVal::Fail,
+        merge: MergeFn::UnionId,
+        name: "test".into(),
+        can_subsume: false,
+    });
+
+    let to_entry = |val: u32| QueryEntry::Const {
+        val: Value::new(val),
+        ty: ColumnTy::Id,
+    };
+
+    let value_1 = to_entry(1);
+    let value_2 = to_entry(2);
+    let value_3 = to_entry(3);
+    let write_f = {
+        let mut rb = egraph.new_rule("write_f", true);
+        rb.set(f, &[value_1.clone(), value_1.clone()]);
+        rb.set(f, &[value_2.clone(), value_2.clone()]);
+        rb.build()
+    };
+    egraph.run_rules(&[write_f]).unwrap();
+
+    let lookup_success = {
+        let mut rb = egraph.new_rule("lookup_success", true);
+        rb.lookup(f, &[value_1.clone()]);
+        rb.build()
+    };
+    egraph.run_rules(&[lookup_success]).unwrap();
+
+    let lookup_failure = {
+        let mut rb = egraph.new_rule("lookup_fail", true);
+        rb.lookup(f, &[value_3.clone()]);
+        rb.build()
+    };
+    egraph.run_rules(&[lookup_failure]).err().unwrap();
+}
+
+#[test]
+fn primitive_failure_panics() {
+    let mut egraph = EGraph::default();
+    let _int_prim = egraph.primitives_mut().register_type::<i64>();
+    let unit_prim = egraph.primitives_mut().register_type::<()>();
+
+    let value_1 = egraph.primitive_constant(1i64);
+    let value_2 = egraph.primitive_constant(2i64);
+
+    let assert_odd = egraph.register_external_func(core_relations::make_external_func(
+        |state, vals| -> Option<Value> {
+            let [a] = vals else {
+                return None;
+            };
+            let a_val = *state.prims().unwrap_ref::<i64>(*a);
+            if a_val % 2 == 1 {
+                Some(state.prims().get(()))
+            } else {
+                None
+            }
+        },
+    ));
+
+    let assert_odd_rule = {
+        let mut rb = egraph.new_rule("assert_odd", true);
+        rb.call_external_func(
+            assert_odd,
+            &[value_1.clone()],
+            ColumnTy::Primitive(unit_prim),
+        );
+        rb.call_external_func(
+            assert_odd,
+            &[value_2.clone()],
+            ColumnTy::Primitive(unit_prim),
+        );
+        rb.build()
+    };
+
+    egraph.run_rules(&[assert_odd_rule]).err().unwrap();
+}
+
 const _: () = {
     const fn assert_send<T: Send>() {}
     assert_send::<EGraph>()

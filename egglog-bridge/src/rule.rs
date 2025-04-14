@@ -424,9 +424,11 @@ impl RuleBuilder<'_> {
             self.proof_builder
                 .register_prim(func, &args, res, ret_ty, self.egraph);
         }
+        // External functions that fail on the RHS of a rule should cause a panic.
+        let panic_fn = self.egraph.external_function_panic;
         self.query.add_rule.push(Box::new(move |inner, rb| {
             let args = inner.convert_all(&args);
-            let var = rb.call_external(func, &args)?;
+            let var = rb.call_external_with_fallback(func, &args, panic_fn, &[])?;
             inner.mapping.insert(res, var.into());
             Ok(())
         }));
@@ -714,15 +716,20 @@ impl RuleBuilder<'_> {
                 }
             }
             DefaultVal::Fail => {
+                let panic_func = info
+                    .panic_func
+                    .expect("panic_func should be set with DefaultVal::Fail");
                 if self.egraph.tracing {
                     let term_var = self.new_var(ColumnTy::Id);
                     self.proof_builder.add_lhs(&entries, term_var);
                     Box::new(move |inner, rb| {
                         let dst_vars = inner.convert_all(&entries);
-                        let var = rb.lookup(
+                        let var = rb.lookup_or_call_external(
                             table,
                             &dst_vars,
                             ColumnId::from_usize(schema_math.ret_val_col()),
+                            panic_func,
+                            &[],
                         )?;
                         let term = rb.lookup(
                             table,
@@ -736,10 +743,12 @@ impl RuleBuilder<'_> {
                 } else {
                     Box::new(move |inner, rb| {
                         let dst_vars = inner.convert_all(&entries);
-                        let var = rb.lookup(
+                        let var = rb.lookup_or_call_external(
                             table,
                             &dst_vars,
                             ColumnId::from_usize(schema_math.ret_val_col()),
+                            panic_func,
+                            &[],
                         )?;
                         inner.mapping.insert(res, var.into());
                         Ok(())
