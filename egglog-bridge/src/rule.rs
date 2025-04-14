@@ -725,7 +725,7 @@ impl RuleBuilder<'_> {
                     self.proof_builder.add_lhs(&entries, term_var);
                     Box::new(move |inner, rb| {
                         let dst_vars = inner.convert_all(&entries);
-                        let var = rb.lookup_or_call_external(
+                        let var = rb.lookup_with_fallback(
                             table,
                             &dst_vars,
                             ColumnId::from_usize(schema_math.ret_val_col()),
@@ -744,7 +744,7 @@ impl RuleBuilder<'_> {
                 } else {
                     Box::new(move |inner, rb| {
                         let dst_vars = inner.convert_all(&entries);
-                        let var = rb.lookup_or_call_external(
+                        let var = rb.lookup_with_fallback(
                             table,
                             &dst_vars,
                             ColumnId::from_usize(schema_math.ret_val_col()),

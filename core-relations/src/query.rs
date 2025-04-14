@@ -470,7 +470,7 @@ impl RuleBuilder<'_, '_> {
     /// Look up the given key in the given table. If the lookup fails, then call the given external
     /// function with the given arguments. Bind the result to the returned variable. If the
     /// external function returns None (and the lookup fails) then the execution of the rule halts.
-    pub fn lookup_or_call_external(
+    pub fn lookup_with_fallback(
         &mut self,
         table: TableId,
         key: &[QueryEntry],
@@ -487,7 +487,7 @@ impl RuleBuilder<'_, '_> {
             .expect("table must be declared in the current database");
         self.validate_keys(table, table_info, key)?;
         let res = self.qb.new_var();
-        self.qb.instrs.push(Instr::LookupOrCallExternal {
+        self.qb.instrs.push(Instr::LookupWithFallback {
             table,
             table_key: key.to_vec(),
             func,

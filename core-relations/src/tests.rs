@@ -1,4 +1,8 @@
-use std::{iter, ops::Range};
+use std::{
+    iter,
+    ops::Range,
+    sync::{Arc, Mutex},
+};
 
 use numeric_id::NumericId;
 
@@ -892,10 +896,10 @@ fn incremental_rebuild(uf_size: usize, table_size: usize) -> bool {
 }
 
 #[test]
-fn lookup_or_call_external_partial_success() {
+fn lookup_with_fallback_partial_success() {
     // Insert (f 1) (f 2), (g 1) (g 3) (g 4).
     // Run a query that iterates over g, binding x to 1, 3, 4.
-    // Insert (h lookup_or_call_external(f, x, assert_even))
+    // Insert (h (lookup f x, with fallback assert-even))
     // Should get h 1, h 4
     let mut db = Database::default();
     let [f, g, h] = (0..3)
@@ -933,9 +937,19 @@ fn lookup_or_call_external_partial_success() {
         buf.stage_insert(&[v(1), v(0)]);
         buf.stage_insert(&[v(3), v(0)]);
         buf.stage_insert(&[v(4), v(0)]);
+        buf.stage_insert(&[v(5), v(0)]);
     }
 
     db.merge_all();
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let log_vals = {
+        let inner = log.clone();
+        db.add_external_function(make_external_func(move |_, args| {
+            let [x] = args else { panic!() };
+            inner.lock().unwrap().push(*x);
+            Some(*x)
+        }))
+    };
     let assert_even = db.add_external_function(make_external_func(|_, args| {
         let [x] = args else { panic!() };
         if x.rep() % 2 == 0 {
@@ -952,8 +966,9 @@ fn lookup_or_call_external_partial_success() {
     query.add_atom(g, &[x.into(), y.into()], &[]).unwrap();
     let mut rb = query.build();
     let res = rb
-        .lookup_or_call_external(f, &[x.into()], ColumnId::new(0), assert_even, &[x.into()])
+        .lookup_with_fallback(f, &[x.into()], ColumnId::new(0), assert_even, &[x.into()])
         .unwrap();
+    rb.call_external(log_vals, &[x.into()]).unwrap();
     rb.insert(h, &[res.into(), y.into()]).unwrap();
     rb.build();
     let rs = rsb.build();
@@ -968,6 +983,12 @@ fn lookup_or_call_external_partial_success() {
         .collect::<Vec<_>>();
     h_contents.sort();
     assert_eq!(h_contents, vec![vec![v(1), v(0)], vec![v(4), v(0)],]);
+    let sorted_log = {
+        let mut log = log.lock().unwrap().clone();
+        log.sort();
+        log
+    };
+    assert_eq!(sorted_log, vec![v(1), v(4)]);
 }
 
 #[test]
@@ -977,7 +998,7 @@ fn call_external_with_fallback() {
     // Have two external functions:
     // 1. assert_even, which returns None for odd numbers.
     // 2. inc, which increments the input value and only fails on the number 5
-    // Insert (h lookup_or_call_external(f, x, assert_even, inc))
+    // Insert (h (call assert_even x, with fallback inc x))
     // We should get h 2, h 4.
     let mut db = Database::default();
     let [f, h] = (0..2)

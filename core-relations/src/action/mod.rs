@@ -513,7 +513,7 @@ impl ExecutionState<'_> {
                 table.lookup_row_vectorized(mask, bindings, args, *dst_col, *dst_var);
             }
 
-            Instr::LookupOrCallExternal {
+            Instr::LookupWithFallback {
                 table: table_id,
                 table_key,
                 func,
@@ -521,8 +521,6 @@ impl ExecutionState<'_> {
                 dst_col,
                 dst_var,
             } => {
-                // Do two passes over the current vector. First, do a round of lookups. Then, for
-                // any offsets where the lookup failed, insert the default value.
                 let table = &self.db.table_info[*table_id].table;
                 let mut lookup_result = mask.clone();
                 table.lookup_row_vectorized(
@@ -537,6 +535,7 @@ impl ExecutionState<'_> {
                 if to_call_func.is_empty() {
                     return;
                 }
+
                 // Call the given external function on all entries where the lookup failed.
                 self.db.external_funcs[*func].invoke_batch_assign(
                     self,
@@ -600,8 +599,6 @@ impl ExecutionState<'_> {
                 args2,
                 dst,
             } => {
-                // Do two passes over the current vector. First, do a round of lookups. Then, for
-                // any offsets where the lookup failed, insert the default value.
                 let mut f1_result = mask.clone();
                 self.db.external_funcs[*f1].invoke_batch(
                     self,
@@ -676,7 +673,7 @@ pub(crate) enum Instr {
     /// call the given external function with the given arguments. If the external function returns
     /// a value, that value is returned in the given `dst_var`. If the lookup fails and the
     /// external function does not return a value, then execution is halted.
-    LookupOrCallExternal {
+    LookupWithFallback {
         table: TableId,
         table_key: Vec<QueryEntry>,
         func: ExternalFunctionId,
