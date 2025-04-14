@@ -187,7 +187,7 @@ pub(crate) trait ExternalFunctionExt: ExternalFunction {
     /// rather than assigning all new values.
     ///
     /// *Panics* This method will panic if `out_var` doesn't already have an appropriately-sized
-    /// vector boudn in `bindings`.
+    /// vector bound in `bindings`.
     #[doc(hidden)]
     fn invoke_batch_assign(
         &self,
