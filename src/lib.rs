@@ -1344,6 +1344,10 @@ impl EGraph {
             Err(())
         });
 
+        // TODO: remove before merge
+        self.backend.dump_table(self.functions.get(&Symbol::from("P".to_string())).unwrap().new_backend_id, |vals| {
+            log::info!("{} {} {}", *self.backend.primitives().unwrap_ref::<i64>(vals[0]), *self.backend.primitives().unwrap_ref::<i64>(vals[1]), *self.backend.primitives().unwrap_ref::<Symbol>(vals[2]))
+        });
         assert_eq!(matched, new_matched);
 
         if !matched {
