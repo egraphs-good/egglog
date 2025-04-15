@@ -1204,7 +1204,6 @@ impl EGraph {
     // then returns the value at the end.
     #[allow(unreachable_code, unused_variables, deprecated)]
     fn eval_resolved_expr(&mut self, expr: &ResolvedExpr) -> Result<core_relations::Value, Error> {
-        todo!("should be deleted");
         let (actions, mapped_expr) = expr.to_core_actions(
             &self.type_info,
             &mut Default::default(),
@@ -1237,6 +1236,7 @@ impl EGraph {
                 ignore_viz: true,
                 span: span,
             };
+            // TODO(yz): gosh this is dirty
             self.declare_function(&tmp_decl)?;
             let tmp_decl = self.type_info.get_func_type(&tmp_func_name).unwrap().clone();
 
@@ -1246,25 +1246,31 @@ impl EGraph {
                     assert_eq!(target_var.name, v.name);
                     let mut surrogate = v.clone();
                     surrogate.name = format!("surrogate_{}", v.name).into();
-                    actions.0.push(core::GenericCoreAction::Let(span, surrogate, f, args));
-                    actions.0.push(core::GenericCoreAction::Set(span, ResolvedCall::Func(tmp_decl), vec![], GenericAtomTerm::Var(span, surrogate)));
+                    actions.0.push(core::GenericCoreAction::Let(span.clone(), surrogate.clone(), f, args));
+                    actions.0.push(core::GenericCoreAction::Set(span.clone(), ResolvedCall::Func(tmp_decl), vec![], GenericAtomTerm::Var(span, surrogate)));
                 },
-                core::GenericCoreAction::LetAtomTerm(_, v, e) => {
+                core::GenericCoreAction::LetAtomTerm(span, v, e) => {
                     assert_eq!(target_var.name, v.name);
                     actions.0.push(core::GenericCoreAction::Set(span, ResolvedCall::Func(tmp_decl), vec![], e));
                 },
                 _ => panic!("Expected let atom term"),
             }
+            let mut rb = BackendRule::new(
+                self.backend.new_rule("eval_resolved_expr", false),
+                &self.functions,
+                &self.type_info,
+            );
+            rb.actions(&actions);
+            let id = rb.build();
+            let _changed = self.backend.run_rules(&[id]).unwrap();
+            self.backend.free_rule(id);
+            Ok(self.backend.lookup_id(self.functions.get(&tmp_func_name).unwrap().new_backend_id, &[]).unwrap())
+        } else {
+            let GenericAtomTerm::Literal(span, lit) = target else {
+                panic!("Expected a literal");
+            };
+            Ok(literal_to_value(&self.backend, &lit))
         }
-        let mut rb = BackendRule::new(
-            self.backend.new_rule("eval_resolved_expr", false),
-            &self.functions,
-            &self.type_info,
-        );
-        rb.actions(&actions);
-        let id = rb.build();
-        let _changed = self.backend.run_rules(&[id]).unwrap();
-        self.backend.free_rule(id);
 
     }
 
