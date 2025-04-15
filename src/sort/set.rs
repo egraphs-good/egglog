@@ -178,7 +178,7 @@ impl Sort for SetSort {
         Some((cost, termdag.app("set-of".into(), children)))
     }
 
-    fn serialized_name(&self, _value: &Value) -> Symbol {
+    fn serialized_name(&self, _value: &core_relations::Value) -> Symbol {
         "set-of".into()
     }
 }

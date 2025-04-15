@@ -162,8 +162,12 @@ impl Sort for FunctionSort {
         self.inputs.iter().any(|s| s.is_eq_sort())
     }
 
-    fn serialized_name(&self, value: &Value) -> Symbol {
-        OldFunctionContainer::load(self, value).0
+    fn serialized_name(&self, value: &core_relations::Value) -> Symbol {
+        // TODO(yz): I don't have a handle to the new backend, 
+        // so I don't know what the function name actually is
+        // 
+        // OldFunctionContainer::load(self, value).0
+        "unstable-fn".into()
     }
 
     fn inner_values(&self, value: &Value) -> Vec<(ArcSort, Value)> {

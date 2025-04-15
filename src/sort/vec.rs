@@ -179,7 +179,7 @@ impl Sort for VecSort {
         }
     }
 
-    fn serialized_name(&self, _value: &Value) -> Symbol {
+    fn serialized_name(&self, _value: &core_relations::Value) -> Symbol {
         "vec-of".into()
     }
 }

@@ -187,7 +187,7 @@ impl Sort for MultiSetSort {
         Some((cost, termdag.app("multiset-of".into(), children)))
     }
 
-    fn serialized_name(&self, _value: &Value) -> Symbol {
+    fn serialized_name(&self, _value: &core_relations::Value) -> Symbol {
         "multiset-of".into()
     }
 }

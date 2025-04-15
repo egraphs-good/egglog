@@ -39,7 +39,7 @@ pub enum SerializedNode {
     /// A primitive value.
     Primitive(core_relations::Value),
     /// A dummy node used to represent omitted nodes.
-    Dummy(Value),
+    Dummy(core_relations::Value),
     /// A node that was split into multiple e-classes.
     Split(Box<SerializedNode>),
 }
@@ -84,8 +84,8 @@ impl EGraph {
         // First collect a list of all the calls we want to serialize as (function decl, inputs, the output, the node id)
         let all_calls: Vec<(
             &Function,
-            &[core_relations::Value],
-            &core_relations::Value,
+            Vec<core_relations::Value>,
+            core_relations::Value,
             egraph_serialize::ClassId,
             egraph_serialize::NodeId,
         )> = self
@@ -99,14 +99,14 @@ impl EGraph {
                     use numeric_id::NumericId;
                     tuples.push((
                         function,
-                        inps,
-                        out,
+                        inps.to_vec(),
+                        out.clone(),
                         self.value_to_class_id(&function.schema.output, out),
                         self.to_node_id(
                             None,
                             SerializedNode::Function {
                                 name: *name,
-                                // TODO(yz): not sure if this is okay
+                                // TODO(yz): not sure if this is an okay offset
                                 offset: out.index(),
                             },
                         ),
@@ -195,16 +195,10 @@ impl EGraph {
     }
 
     /// Gets the value for a serialized class ID.
-    pub fn class_id_to_value(&self, eclass_id: &egraph_serialize::ClassId) -> Value {
+    pub fn class_id_to_value(&self, eclass_id: &egraph_serialize::ClassId) -> core_relations::Value {
         let s = eclass_id.to_string();
-        let (tag, bits) = s.split_once('-').unwrap();
-        #[cfg(not(debug_assertions))]
-        let _ = tag;
-        Value {
-            #[cfg(debug_assertions)]
-            tag: tag.into(),
-            bits: bits.parse().unwrap(),
-        }
+        let (_tag, bits) = s.split_once('-').unwrap();
+        core_relations::Value::new_const(bits.parse().unwrap())
     }
 
     /// Gets the serialized node ID for the primitive, omitted, or function value.
@@ -295,16 +289,20 @@ impl EGraph {
             // Add node for value
             {
                 // Children will be empty unless this is a container sort
-                let children: Vec<egraph_serialize::NodeId> = sort
-                    .inner_values(value)
+                let children: Vec<egraph_serialize::NodeId> =
+                  sort
+                    // TODO(yz): Don't use innter_values here; instead, use `Container::iter`.
+                    // However, I cannot do this because the container API of the new backend requires
+                    // the user to statically know the type of the container they are calling.
+                    .inner_values(todo!("value"))
                     .into_iter()
                     .map(|(s, v)| {
                         self.serialize_value(
                             egraph,
                             node_ids,
                             &s,
-                            &v,
-                            &self.value_to_class_id(&s, &v),
+                            todo!("&v"),
+                            &self.value_to_class_id(&s, todo!("&v")),
                         )
                     })
                     .collect();
@@ -315,7 +313,8 @@ impl EGraph {
                     let mut termdag = TermDag::default();
                     let extractor = Extractor::new(self, &mut termdag);
                     let (_, term) = sort
-                            .extract_term(self, *value, &extractor, &mut termdag)
+                            // TODO(yz): `extract_term` will be gone soon once Haobin has the extractor interface.
+                            .extract_term(self, todo!("*value"), &extractor, &mut termdag)
                             .expect("Extraction should be successful since extractor has been fully initialized");
 
                     termdag.term_to_expr(&term, Span::Panic).to_string()

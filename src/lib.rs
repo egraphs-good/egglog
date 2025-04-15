@@ -752,7 +752,7 @@ impl EGraph {
             } else {
                 schema
                     .output
-                    .extract_term(self, out.value, &extractor, &mut termdag)
+                    .extract_term(self, todo!("out.value"), &extractor, &mut termdag)
                     .unwrap()
                     .1
             };
