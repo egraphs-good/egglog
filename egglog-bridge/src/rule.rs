@@ -1000,12 +1000,17 @@ impl RuleBuilder<'_> {
     /// Panic with a given message.
     pub fn panic(&mut self, message: String) {
         let panic = self.egraph.new_panic(message.clone());
-        self.call_external_func(
-            panic,
-            &[],
-            ColumnTy::Id,
-            "this panic message should never show up",
-        );
+        let ret_ty = ColumnTy::Id;
+        let res = self.new_var(ret_ty);
+        if self.egraph.tracing {
+            self.proof_builder
+                .register_prim(panic, &[], res, ret_ty, self.egraph);
+        }
+        self.query.add_rule.push(Box::new(move |inner, rb| {
+            let var = rb.call_external(panic, &[])?;
+            inner.mapping.insert(res, var.into());
+            Ok(())
+        }));
     }
 }
 
