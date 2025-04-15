@@ -37,7 +37,7 @@ macro_rules! parse_rhs_atom {
         {
             let mut vec = Vec::<$crate::QueryEntry>::new();
             $crate::parse_rhs_atom_args!($ebuilder, $builder, $func, vec, [$($args)*]);
-            $builder.lookup($func.into(), &vec)
+            $builder.lookup($func.into(), &vec, stringify!($func ($($args)*)))
         }
     }};
 }

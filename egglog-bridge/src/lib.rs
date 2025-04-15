@@ -614,15 +614,12 @@ impl EGraph {
             self.db
                 .add_table(table, read_deps.iter().copied(), write_deps.iter().copied());
 
-        let panic_func = matches!(default, DefaultVal::Fail)
-            .then(|| self.new_panic(format!("lookup failed for {name}")));
         let res = self.funcs.push(FunctionInfo {
             table: table_id,
             schema: schema.clone(),
             incremental_rebuild_rules: Default::default(),
             nonincremental_rebuild_rule: RuleId::new(!0),
             default_val: default,
-            panic_func,
             can_subsume,
             name: name.into(),
         });
@@ -920,7 +917,6 @@ struct FunctionInfo {
     incremental_rebuild_rules: Vec<RuleId>,
     nonincremental_rebuild_rule: RuleId,
     default_val: DefaultVal,
-    panic_func: Option<ExternalFunctionId>,
     can_subsume: bool,
     name: Arc<str>,
 }

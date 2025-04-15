@@ -550,6 +550,9 @@ impl RuleBuilder<'_> {
                 val: SUBSUMED,
                 ty: ColumnTy::Id,
             },
+            // Subsumption only happens with DefaultVal::FreshId, which will not use the panic
+            // message.
+            "this panic message should never show up (subsume)",
         );
         let info = &self.egraph.funcs[func];
         let schema_math = SchemaMath {
@@ -603,6 +606,7 @@ impl RuleBuilder<'_> {
         func: FunctionId,
         entries: &[QueryEntry],
         subsumed: QueryEntry,
+        panic_msg: &str,
     ) -> Variable {
         let entries = entries.to_vec();
         let info = &self.egraph.funcs[func];
@@ -717,9 +721,7 @@ impl RuleBuilder<'_> {
                 }
             }
             DefaultVal::Fail => {
-                let panic_func = info
-                    .panic_func
-                    .expect("panic_func should be set with DefaultVal::Fail");
+                let panic_func = self.egraph.new_panic(panic_msg.to_string());
                 if self.egraph.tracing {
                     let term_var = self.new_var(ColumnTy::Id);
                     self.proof_builder.add_lhs(&entries, term_var);
@@ -763,7 +765,15 @@ impl RuleBuilder<'_> {
 
     /// Look up the value of a function in the database. If the value is not
     /// present, the configured default for the function is used.
-    pub fn lookup(&mut self, func: FunctionId, entries: &[QueryEntry]) -> Variable {
+    ///
+    /// For functions configured with [`DefaultVal::Fail`], failing lookups will use `panic_msg` in
+    /// the panic output.
+    pub fn lookup(
+        &mut self,
+        func: FunctionId,
+        entries: &[QueryEntry],
+        panic_msg: &str,
+    ) -> Variable {
         self.lookup_with_subsumed(
             func,
             entries,
@@ -771,6 +781,7 @@ impl RuleBuilder<'_> {
                 val: NOT_SUBSUMED,
                 ty: ColumnTy::Id,
             },
+            panic_msg,
         )
     }
 
@@ -931,7 +942,11 @@ impl RuleBuilder<'_> {
             func_cols: info.schema.len(),
         };
         if self.egraph.tracing {
-            let res = self.lookup(func, &entries[0..entries.len() - 1]);
+            let res = self.lookup(
+                func,
+                &entries[0..entries.len() - 1],
+                "lookup failed during proof-enabled set. This is an internal proofs bug",
+            );
             self.union(res.into(), entries.last().unwrap().clone());
             if schema_math.subsume {
                 // Set the original row but with the passed-in subsumption value.

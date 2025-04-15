@@ -651,6 +651,7 @@ fn container_test() {
                     ty: ColumnTy::Primitive(int_prim),
                 },
             ],
+            "add_last_0",
         );
         let add_0_last = rb.lookup(
             add_table,
@@ -661,13 +662,14 @@ fn container_test() {
                 },
                 last.into(),
             ],
+            "add_0_last",
         );
         let new_vec_1 =
             rb.call_external_func(vec_push, &[vec.into(), add_last_0.into()], ColumnTy::Id, "");
         let new_vec_2 =
             rb.call_external_func(vec_push, &[vec.into(), add_0_last.into()], ColumnTy::Id, "");
-        rb.lookup(vec_table, &[new_vec_1.into()]);
-        rb.lookup(vec_table, &[new_vec_2.into()]);
+        rb.lookup(vec_table, &[new_vec_1.into()], "");
+        rb.lookup(vec_table, &[new_vec_2.into()], "");
         rb.build()
     };
 
@@ -694,7 +696,7 @@ fn container_test() {
             ColumnTy::Primitive(int_prim),
             "",
         );
-        let boxed = rb.lookup(num_table, &[evaled.into()]);
+        let boxed = rb.lookup(num_table, &[evaled.into()], "");
         rb.union(add_id.into(), boxed.into());
         rb.build()
     };
@@ -762,8 +764,8 @@ fn rhs_only_rule() {
         let zero = egraph.primitive_constant(0i64);
         let one = egraph.primitive_constant(1i64);
         let mut rb = egraph.new_rule("", true);
-        let _zero_id = rb.lookup(num_table, &[zero]);
-        let _one_id = rb.lookup(num_table, &[one]);
+        let _zero_id = rb.lookup(num_table, &[zero], "");
+        let _one_id = rb.lookup(num_table, &[one], "");
         rb.build()
     };
 
@@ -962,8 +964,8 @@ fn mergefn_nested_function() {
 
     let write_rule = {
         let mut rb = egraph.new_rule("write_rule", true);
-        rb.lookup(f_table, &[value_1.clone()]);
-        rb.lookup(f_table, &[value_2]);
+        rb.lookup(f_table, &[value_1.clone()], "");
+        rb.lookup(f_table, &[value_2], "");
         rb.build()
     };
 
@@ -1079,9 +1081,9 @@ fn constrain_prims_simple() {
     let value_true = egraph.primitive_constant(true);
     let write_f = {
         let mut rb = egraph.new_rule("write_f", true);
-        rb.lookup(f_table, &[value_1.clone()]);
-        rb.lookup(f_table, &[value_2.clone()]);
-        rb.lookup(f_table, &[value_3.clone()]);
+        rb.lookup(f_table, &[value_1.clone()], "");
+        rb.lookup(f_table, &[value_2.clone()], "");
+        rb.lookup(f_table, &[value_3.clone()], "");
         rb.build()
     };
 
@@ -1165,9 +1167,9 @@ fn constrain_prims_abstract() {
     let value_1 = egraph.primitive_constant(1i64);
     let write_f = {
         let mut rb = egraph.new_rule("write_f", true);
-        rb.lookup(f_table, &[value_n1.clone()]);
-        rb.lookup(f_table, &[value_0.clone()]);
-        rb.lookup(f_table, &[value_1.clone()]);
+        rb.lookup(f_table, &[value_n1.clone()], "");
+        rb.lookup(f_table, &[value_0.clone()], "");
+        rb.lookup(f_table, &[value_1.clone()], "");
         rb.build()
     };
 
@@ -1239,8 +1241,8 @@ fn basic_subsumption() {
     let value_3 = egraph.primitive_constant(3i64);
     let write_f = {
         let mut rb = egraph.new_rule("write_f", true);
-        rb.lookup(f_table, &[value_1.clone()]);
-        rb.lookup(f_table, &[value_2.clone()]);
+        rb.lookup(f_table, &[value_1.clone()], "");
+        rb.lookup(f_table, &[value_2.clone()], "");
         rb.build()
     };
 
@@ -1314,14 +1316,14 @@ fn lookup_failure_panics() {
 
     let lookup_success = {
         let mut rb = egraph.new_rule("lookup_success", true);
-        rb.lookup(f, &[value_1.clone()]);
+        rb.lookup(f, &[value_1.clone()], "");
         rb.build()
     };
     egraph.run_rules(&[lookup_success]).unwrap();
 
     let lookup_failure = {
         let mut rb = egraph.new_rule("lookup_fail", true);
-        rb.lookup(f, &[value_3.clone()]);
+        rb.lookup(f, &[value_3.clone()], "");
         rb.build()
     };
     egraph.run_rules(&[lookup_failure]).err().unwrap();
