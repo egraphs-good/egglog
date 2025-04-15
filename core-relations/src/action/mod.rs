@@ -544,8 +544,8 @@ impl ExecutionState<'_> {
                     func_args,
                     *dst_var,
                 );
-                // Any value that is not set in mask_copy but is set in mask needs to be cleared.
-                // mask_copy is a subset of mask, so this is just symmetric_difference.
+                // The new mask should be the lanes where the lookup succeeded or where `func`
+                // succeeded.
                 lookup_result.union(&to_call_func);
                 *mask = lookup_result;
             }
@@ -620,6 +620,7 @@ impl ExecutionState<'_> {
                     args2,
                     *dst,
                 );
+                // The new mask should be the lanes where either `f1` or `f2` succeeded.
                 f1_result.union(&to_call_f2);
                 *mask = f1_result;
             }
