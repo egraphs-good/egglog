@@ -16,14 +16,14 @@ pub enum Span {
     Rust(Arc<RustSpan>),
 }
 
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EgglogSpan {
-    file: Arc<SrcFile>,
-    i: usize,
-    j: usize,
+    pub file: Arc<SrcFile>,
+    pub i: usize,
+    pub j: usize,
 }
 
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RustSpan {
     pub file: &'static str,
     pub line: u32,
@@ -51,10 +51,10 @@ impl Span {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub struct SrcFile {
-    name: Option<String>,
-    contents: String,
+    pub name: Option<String>,
+    pub contents: String,
 }
 
 struct Location {
