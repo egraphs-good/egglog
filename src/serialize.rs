@@ -10,7 +10,7 @@ pub struct SerializeConfig {
     // Whether to include temporary functions in the serialized graph
     pub include_temporary_functions: bool,
     // Root eclasses to include in the output
-    pub root_eclasses: Vec<(ArcSort, Value)>,
+    pub root_eclasses: Vec<(ArcSort, core_relations::Value)>,
 }
 
 /// Default is used for exporting JSON and will output all nodes.
@@ -37,7 +37,7 @@ pub enum SerializedNode {
         offset: usize,
     },
     /// A primitive value.
-    Primitive(Value),
+    Primitive(core_relations::Value),
     /// A dummy node used to represent omitted nodes.
     Dummy(Value),
     /// A node that was split into multiple e-classes.
@@ -84,8 +84,8 @@ impl EGraph {
         // First collect a list of all the calls we want to serialize as (function decl, inputs, the output, the node id)
         let all_calls: Vec<(
             &Function,
-            &[Value],
-            &TupleOutput,
+            &[core_relations::Value],
+            &core_relations::Value,
             egraph_serialize::ClassId,
             egraph_serialize::NodeId,
         )> = self
@@ -93,26 +93,26 @@ impl EGraph {
             .iter()
             .filter(|(_, function)| !function.decl.ignore_viz)
             .map(|(name, function)| {
-                function
-                    .nodes
-                    .iter_range(0..function.nodes.num_offsets(), true)
-                    .take(config.max_calls_per_function.unwrap_or(usize::MAX))
-                    .map(|(offset, input, output)| {
-                        (
-                            function,
-                            input,
-                            output,
-                            self.value_to_class_id(&function.schema.output, &output.value),
-                            self.to_node_id(
-                                None,
-                                SerializedNode::Function {
-                                    name: *name,
-                                    offset,
-                                },
-                            ),
-                        )
-                    })
-                    .collect::<Vec<_>>()
+                let mut tuples = vec![];
+                self.backend.dump_table(function.new_backend_id, |vals| {
+                    let (out, inps) = vals.split_last().unwrap();
+                    use numeric_id::NumericId;
+                    tuples.push((
+                        function,
+                        inps,
+                        out,
+                        self.value_to_class_id(&function.schema.output, out),
+                        self.to_node_id(
+                            None,
+                            SerializedNode::Function {
+                                name: *name,
+                                // TODO(yz): not sure if this is okay
+                                offset: out.index(),
+                            },
+                        ),
+                    ));
+                });
+                tuples
             })
             // Filter out functions with no calls
             .filter(|f| !f.is_empty())
@@ -142,7 +142,7 @@ impl EGraph {
                 &mut egraph,
                 &mut node_ids,
                 &func.schema.output,
-                &output.value,
+                &output,
                 &class_id,
             );
 
@@ -167,7 +167,8 @@ impl EGraph {
                     eclass: class_id.clone(),
                     cost: NotNan::new(func.decl.cost.unwrap_or(1) as f64).unwrap(),
                     children,
-                    subsumed: output.subsumed,
+                    // TODO(yz): I don't know how to get the subsumed flag from the new backend
+                    subsumed: false,
                 },
             );
         }
@@ -182,15 +183,15 @@ impl EGraph {
     }
 
     /// Gets the serialized class ID for a value.
-    pub fn value_to_class_id(&self, sort: &ArcSort, value: &Value) -> egraph_serialize::ClassId {
+    pub fn value_to_class_id(&self, sort: &ArcSort, value: &core_relations::Value) -> egraph_serialize::ClassId {
         // Canonicalize the value first so that we always use the canonical e-class ID
-        let mut value = *value;
-        sort.canonicalize(&mut value, &self.unionfind);
+        let value = self.backend.get_canon(*value);
         assert!(
             !sort.name().to_string().contains('-'),
             "Tag cannot contain '-' when serializing"
         );
-        format!("{}-{}", sort.name(), value.bits).into()
+        use numeric_id::NumericId;
+        format!("{}-{}", sort.name(), value.rep()).into()
     }
 
     /// Gets the value for a serialized class ID.
@@ -267,7 +268,7 @@ impl EGraph {
         egraph: &mut egraph_serialize::EGraph,
         node_ids: &mut NodeIDs,
         sort: &ArcSort,
-        value: &Value,
+        value: &core_relations::Value,
         class_id: &egraph_serialize::ClassId,
     ) -> egraph_serialize::NodeId {
         let node_id = if sort.is_eq_sort() {

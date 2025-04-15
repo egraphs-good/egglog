@@ -98,13 +98,13 @@ pub trait Sort: Any + Send + Sync + Debug {
     /// Return the serialized name of the sort
     ///
     /// Only used for container sorts, which cannot be serialized with make_expr so need an explicit name
-    fn serialized_name(&self, _value: &Value) -> Symbol {
+    fn serialized_name(&self, _value: &core_relations::Value) -> Symbol {
         self.name()
     }
 
     /// Return the inner values and sorts.
     /// Only eq_container_sort need to implement this method,
-    fn inner_values(&self, value: &Value) -> Vec<(ArcSort, Value)> {
+    fn inner_values(&self, value: &core_relations::Value) -> Vec<(ArcSort, core_relations::Value)> {
         let _ = value;
         vec![]
     }

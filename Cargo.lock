@@ -498,6 +498,7 @@ dependencies = [
  "libtest-mimic",
  "log",
  "num",
+ "numeric-id",
  "ordered-float",
  "rustc-hash 1.1.0",
  "smallvec",

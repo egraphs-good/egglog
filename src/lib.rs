@@ -52,6 +52,7 @@ use indexmap::map::Entry;
 use instant::{Duration, Instant};
 pub use serialize::{SerializeConfig, SerializedNode};
 use sort::*;
+use core::{GenericAtomTerm};
 use std::fmt::Debug;
 use std::fmt::{Display, Formatter};
 use std::fs::File;
@@ -1173,32 +1174,98 @@ impl EGraph {
         }
     }
 
-    pub fn eval_expr(&mut self, expr: &Expr) -> Result<(ArcSort, Value), Error> {
+    pub fn eval_expr(&mut self, expr: &Expr) -> Result<(ArcSort, core_relations::Value), Error> {
         let fresh_name = self.parser.symbol_gen.fresh(&"egraph_evalexpr".into());
         let command = Command::Action(Action::Let(expr.span(), fresh_name, expr.clone()));
         self.run_program(vec![command])?;
         // find the table with the same name as the fresh name
         let func = self.functions.get(&fresh_name).unwrap();
+        let value_new_backend = self.backend.lookup_id(func.new_backend_id, &[]).unwrap();
+            
+        let func = self.functions.get(&fresh_name).unwrap();
         let value = func.nodes.get(&[]).unwrap().value;
+
         let sort = func.schema.output.clone();
-        Ok((sort, value))
+
+        if sort.name().as_str() == "i64" {
+            let value_new_backend: &i64 = &self.backend.primitives().unwrap_ref(value_new_backend);
+            assert_eq!(value_new_backend, &(value.bits as i64));
+        } else if sort.name().as_str() == "String" {
+            let symbol_new: &Symbol = &self.backend.primitives().unwrap_ref(value_new_backend);
+            let string_sort = self.get_sort::<StringSort>();
+            let symbol_old = &Symbol::load(&string_sort, &value);
+            assert_eq!(symbol_new, symbol_old);
+        }
+
+        Ok((sort, value_new_backend))
     }
 
     // TODO make a public version of eval_expr that makes a command,
     // then returns the value at the end.
-    fn eval_resolved_expr(&mut self, expr: &ResolvedExpr) -> Result<Value, Error> {
+    #[allow(unreachable_code, unused_variables, deprecated)]
+    fn eval_resolved_expr(&mut self, expr: &ResolvedExpr) -> Result<core_relations::Value, Error> {
+        todo!("should be deleted");
         let (actions, mapped_expr) = expr.to_core_actions(
             &self.type_info,
             &mut Default::default(),
             &mut self.parser.symbol_gen,
         )?;
         let target = mapped_expr.get_corresponding_var_or_lit(&self.type_info);
+
+        // old backend
         let program = self
             .compile_expr(&Default::default(), &actions, &target)
             .map_err(Error::TypeErrors)?;
         let mut stack = vec![];
         self.run_actions(&mut stack, &[], &program)?;
-        Ok(stack.pop().unwrap())
+        // Ok(stack.pop().unwrap())
+
+        // new backend
+        if let GenericAtomTerm::Var(span, target_var) = target {
+            let target_var = target_var.clone();
+            let tmp_func_name: Symbol = self.parser.symbol_gen.fresh(&"egraph_tmp".into());
+            let tmp_decl = ResolvedFunctionDecl {
+                name:  tmp_func_name.clone(),
+                subtype: FunctionSubtype::Custom,
+                schema: Schema {
+                    input: vec![],
+                    output: target_var.sort.name(),
+                },
+                merge: None,
+                cost: None,
+                unextractable: true,
+                ignore_viz: true,
+                span: span,
+            };
+            self.declare_function(&tmp_decl)?;
+            let tmp_decl = self.type_info.get_func_type(&tmp_func_name).unwrap().clone();
+
+            let mut actions = actions;
+            match actions.0.pop().unwrap() {
+                core::GenericCoreAction::Let(span, v, f, args) => {
+                    assert_eq!(target_var.name, v.name);
+                    let mut surrogate = v.clone();
+                    surrogate.name = format!("surrogate_{}", v.name).into();
+                    actions.0.push(core::GenericCoreAction::Let(span, surrogate, f, args));
+                    actions.0.push(core::GenericCoreAction::Set(span, ResolvedCall::Func(tmp_decl), vec![], GenericAtomTerm::Var(span, surrogate)));
+                },
+                core::GenericCoreAction::LetAtomTerm(_, v, e) => {
+                    assert_eq!(target_var.name, v.name);
+                    actions.0.push(core::GenericCoreAction::Set(span, ResolvedCall::Func(tmp_decl), vec![], e));
+                },
+                _ => panic!("Expected let atom term"),
+            }
+        }
+        let mut rb = BackendRule::new(
+            self.backend.new_rule("eval_resolved_expr", false),
+            &self.functions,
+            &self.type_info,
+        );
+        rb.actions(&actions);
+        let id = rb.build();
+        let _changed = self.backend.run_rules(&[id]).unwrap();
+        self.backend.free_rule(id);
+
     }
 
     fn add_combined_ruleset(&mut self, name: Symbol, rulesets: Vec<Symbol>) {
@@ -1412,14 +1479,31 @@ impl EGraph {
                     .create(true)
                     .open(&filename)
                     .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
-                let mut termdag = TermDag::default();
+                // let mut termdag = TermDag::default();
                 for expr in exprs {
                     let value = self.eval_resolved_expr(&expr)?;
                     let expr_type = expr.output_type();
-                    let term = self.extract(value, &mut termdag, &expr_type)?.1;
+                    // hack before new backend gets merged:
                     use std::io::Write;
-                    writeln!(f, "{}", termdag.to_string(&term))
-                        .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
+                    if expr_type.name().as_str() == "i64" {
+                        let value: &i64 = &self.backend.primitives().unwrap_ref(value);
+                        writeln!(f, "{}", value)
+                            .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
+                    } else if expr_type.name().as_str() == "String" {
+                        let symbol: &Symbol = &self.backend.primitives().unwrap_ref(value);
+                        writeln!(f, "{}", symbol)
+                            .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
+                    } else if expr_type.name().as_str() == "Unit" {
+                        writeln!(f, "()")
+                            .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
+                    } else {
+                        todo!("handle the general case with extract")
+                        // let term = self.extract(value, &mut termdag, &expr_type)?.1;
+                        // use std::io::Write;
+                        // writeln!(f, "{}", termdag.to_string(&term))
+                        //     .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
+                    }
+                    
                 }
 
                 log::info!("Output to '{filename:?}'.")
@@ -1429,10 +1513,6 @@ impl EGraph {
     }
 
     fn input_file(&mut self, func_name: Symbol, file: String) -> Result<(), Error> {
-        if true {
-            todo!("input_file")
-        }
-
         let function_type = self
             .type_info
             .get_func_type(&func_name)
