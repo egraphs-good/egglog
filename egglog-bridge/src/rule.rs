@@ -550,9 +550,7 @@ impl RuleBuilder<'_> {
                 val: SUBSUMED,
                 ty: ColumnTy::Id,
             },
-            // Subsumption only happens with DefaultVal::FreshId, which will not use the panic
-            // message.
-            "this panic message should never show up (subsume)",
+            "subsumed a nonextestent row!",
         );
         let info = &self.egraph.funcs[func];
         let schema_math = SchemaMath {
