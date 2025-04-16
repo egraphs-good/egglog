@@ -1779,11 +1779,9 @@ impl<'a> BackendRule<'a> {
                             let f = self.func(f);
                             let args = self.args(args);
                             self.rb
-                                .lookup(
-                                    f,
-                                    &args,
-                                    format!("{span}: lookup of function {name} failed").as_str(),
-                                )
+                                .lookup(f, &args, || {
+                                    format!("{span}: lookup of function {name} failed")
+                                })
                                 .into()
                         }
                         ResolvedCall::Primitive(p) => {
