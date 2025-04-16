@@ -550,7 +550,7 @@ impl RuleBuilder<'_> {
                 val: SUBSUMED,
                 ty: ColumnTy::Id,
             },
-            "subsumed a nonextestent row!",
+            || "subsumed a nonextestent row!".to_string(),
         );
         let info = &self.egraph.funcs[func];
         let schema_math = SchemaMath {
@@ -604,7 +604,7 @@ impl RuleBuilder<'_> {
         func: FunctionId,
         entries: &[QueryEntry],
         subsumed: QueryEntry,
-        panic_msg: &str,
+        panic_msg: impl FnOnce() -> String,
     ) -> Variable {
         let entries = entries.to_vec();
         let info = &self.egraph.funcs[func];
@@ -719,7 +719,7 @@ impl RuleBuilder<'_> {
                 }
             }
             DefaultVal::Fail => {
-                let panic_func = self.egraph.new_panic(panic_msg.to_string());
+                let panic_func = self.egraph.new_panic(panic_msg());
                 if self.egraph.tracing {
                     let term_var = self.new_var(ColumnTy::Id);
                     self.proof_builder.add_lhs(&entries, term_var);
@@ -770,7 +770,7 @@ impl RuleBuilder<'_> {
         &mut self,
         func: FunctionId,
         entries: &[QueryEntry],
-        panic_msg: &str,
+        panic_msg: impl FnOnce() -> String,
     ) -> Variable {
         self.lookup_with_subsumed(
             func,
@@ -940,11 +940,9 @@ impl RuleBuilder<'_> {
             func_cols: info.schema.len(),
         };
         if self.egraph.tracing {
-            let res = self.lookup(
-                func,
-                &entries[0..entries.len() - 1],
-                "lookup failed during proof-enabled set. This is an internal proofs bug",
-            );
+            let res = self.lookup(func, &entries[0..entries.len() - 1], || {
+                "lookup failed during proof-enabled set; this is an internal proofs bug".to_string()
+            });
             self.union(res.into(), entries.last().unwrap().clone());
             if schema_math.subsume {
                 // Set the original row but with the passed-in subsumption value.
