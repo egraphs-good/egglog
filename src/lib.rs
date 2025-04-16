@@ -31,6 +31,7 @@ mod value;
 // both this crate and other crates by referring to `::egglog`.
 extern crate self as egglog;
 pub use add_primitive::add_primitive;
+use typechecking::FuncType;
 
 use crate::constraint::Problem;
 use crate::core::{AtomTerm, ResolvedCall};
@@ -41,8 +42,9 @@ use ast::*;
 #[cfg(feature = "bin")]
 pub use cli::bin::*;
 use constraint::{Constraint, SimpleTypeConstraint, TypeConstraint};
+use core::GenericAtomTerm;
 use core_relations::ExternalFunctionId;
-use egglog_bridge::{ColumnTy, QueryEntry};
+use egglog_bridge::{ColumnTy, FunctionConfig, QueryEntry};
 use extract::Extractor;
 pub use function::Function;
 use function::*;
@@ -52,7 +54,6 @@ use indexmap::map::Entry;
 use instant::{Duration, Instant};
 pub use serialize::{SerializeConfig, SerializedNode};
 use sort::*;
-use core::{GenericAtomTerm};
 use std::fmt::Debug;
 use std::fmt::{Display, Formatter};
 use std::fs::File;
@@ -1181,12 +1182,13 @@ impl EGraph {
         // find the table with the same name as the fresh name
         let func = self.functions.get(&fresh_name).unwrap();
         let value_new_backend = self.backend.lookup_id(func.new_backend_id, &[]).unwrap();
-            
+
         let func = self.functions.get(&fresh_name).unwrap();
         let value = func.nodes.get(&[]).unwrap().value;
 
         let sort = func.schema.output.clone();
 
+        // to be removed once the old backend is gone
         if sort.name().as_str() == "i64" {
             let value_new_backend: &i64 = &self.backend.primitives().unwrap_ref(value_new_backend);
             assert_eq!(value_new_backend, &(value.bits as i64));
@@ -1198,80 +1200,6 @@ impl EGraph {
         }
 
         Ok((sort, value_new_backend))
-    }
-
-    // TODO make a public version of eval_expr that makes a command,
-    // then returns the value at the end.
-    #[allow(unreachable_code, unused_variables, deprecated)]
-    fn eval_resolved_expr(&mut self, expr: &ResolvedExpr) -> Result<core_relations::Value, Error> {
-        let (actions, mapped_expr) = expr.to_core_actions(
-            &self.type_info,
-            &mut Default::default(),
-            &mut self.parser.symbol_gen,
-        )?;
-        let target = mapped_expr.get_corresponding_var_or_lit(&self.type_info);
-
-        // old backend
-        let program = self
-            .compile_expr(&Default::default(), &actions, &target)
-            .map_err(Error::TypeErrors)?;
-        let mut stack = vec![];
-        self.run_actions(&mut stack, &[], &program)?;
-        // Ok(stack.pop().unwrap())
-
-        // new backend
-        if let GenericAtomTerm::Var(span, target_var) = target {
-            let target_var = target_var.clone();
-            let tmp_func_name: Symbol = self.parser.symbol_gen.fresh(&"egraph_tmp".into());
-            let tmp_decl = ResolvedFunctionDecl {
-                name:  tmp_func_name.clone(),
-                subtype: FunctionSubtype::Custom,
-                schema: Schema {
-                    input: vec![],
-                    output: target_var.sort.name(),
-                },
-                merge: None,
-                cost: None,
-                unextractable: true,
-                ignore_viz: true,
-                span: span,
-            };
-            // TODO(yz): gosh this is dirty
-            self.declare_function(&tmp_decl)?;
-            let tmp_decl = self.type_info.get_func_type(&tmp_func_name).unwrap().clone();
-
-            let mut actions = actions;
-            match actions.0.pop().unwrap() {
-                core::GenericCoreAction::Let(span, v, f, args) => {
-                    assert_eq!(target_var.name, v.name);
-                    let mut surrogate = v.clone();
-                    surrogate.name = format!("surrogate_{}", v.name).into();
-                    actions.0.push(core::GenericCoreAction::Let(span.clone(), surrogate.clone(), f, args));
-                    actions.0.push(core::GenericCoreAction::Set(span.clone(), ResolvedCall::Func(tmp_decl), vec![], GenericAtomTerm::Var(span, surrogate)));
-                },
-                core::GenericCoreAction::LetAtomTerm(span, v, e) => {
-                    assert_eq!(target_var.name, v.name);
-                    actions.0.push(core::GenericCoreAction::Set(span, ResolvedCall::Func(tmp_decl), vec![], e));
-                },
-                _ => panic!("Expected let atom term"),
-            }
-            let mut rb = BackendRule::new(
-                self.backend.new_rule("eval_resolved_expr", false),
-                &self.functions,
-                &self.type_info,
-            );
-            rb.actions(&actions);
-            let id = rb.build();
-            let _changed = self.backend.run_rules(&[id]).unwrap();
-            self.backend.free_rule(id);
-            Ok(self.backend.lookup_id(self.functions.get(&tmp_func_name).unwrap().new_backend_id, &[]).unwrap())
-        } else {
-            let GenericAtomTerm::Literal(span, lit) = target else {
-                panic!("Expected a literal");
-            };
-            Ok(literal_to_value(&self.backend, &lit))
-        }
-
     }
 
     fn add_combined_ruleset(&mut self, name: Symbol, rulesets: Vec<Symbol>) {
@@ -1351,9 +1279,6 @@ impl EGraph {
         });
 
         // TODO: remove before merge
-        self.backend.dump_table(self.functions.get(&Symbol::from("P".to_string())).unwrap().new_backend_id, |vals| {
-            log::info!("{} {} {}", *self.backend.primitives().unwrap_ref::<i64>(vals[0]), *self.backend.primitives().unwrap_ref::<i64>(vals[1]), *self.backend.primitives().unwrap_ref::<Symbol>(vals[2]))
-        });
         assert_eq!(matched, new_matched);
 
         if !matched {
@@ -1480,7 +1405,12 @@ impl EGraph {
             } => {
                 self.input_file(name, file)?;
             }
-            ResolvedNCommand::Output { span, file, exprs } => {
+            ResolvedNCommand::Output {
+                span,
+                file,
+                exprs,
+                expr_names,
+            } => {
                 let mut filename = self.fact_directory.clone().unwrap_or_default();
                 filename.push(file.as_str());
                 // append to file
@@ -1490,9 +1420,29 @@ impl EGraph {
                     .open(&filename)
                     .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
                 // let mut termdag = TermDag::default();
-                for expr in exprs {
-                    let value = self.eval_resolved_expr(&expr)?;
-                    let expr_type = expr.output_type();
+                for (expr, expr_name) in exprs.into_iter().zip(expr_names.iter()) {
+                    // Normally this should be a look up of TypeInfo, but since
+                    // we don't register global names in TypeInfo as functions, they are
+                    // not available here.
+                    let expr_type = self.functions.get(expr_name).unwrap().schema.output.clone();
+                    let func_type = FuncType {
+                        name: *expr_name,
+                        subtype: FunctionSubtype::Custom,
+                        input: vec![],
+                        output: expr_type.clone(),
+                    };
+                    let action = ResolvedAction::Set(
+                        span.clone(),
+                        ResolvedCall::Func(func_type),
+                        vec![],
+                        expr,
+                    );
+                    dbg!(&action);
+                    self.eval_actions(&ResolvedActions::new(vec![action]))?;
+                    let function = self.functions.get(expr_name).unwrap();
+                    let function_id = function.new_backend_id;
+                    self.backend.dump_debug_info();
+                    let value = self.backend.lookup_id(function_id, &[]).unwrap();
                     // hack before new backend gets merged:
                     use std::io::Write;
                     if expr_type.name().as_str() == "i64" {
@@ -1513,7 +1463,6 @@ impl EGraph {
                         // writeln!(f, "{}", termdag.to_string(&term))
                         //     .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
                     }
-                    
                 }
 
                 log::info!("Output to '{filename:?}'.")

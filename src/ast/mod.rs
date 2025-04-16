@@ -76,6 +76,7 @@ where
         span: Span,
         file: String,
         exprs: Vec<GenericExpr<Head, Leaf>>,
+        expr_names: Vec<Symbol>,
     },
     Push(usize),
     Pop(Span, usize),
@@ -147,7 +148,7 @@ where
             GenericNCommand::PrintSize(span, name) => {
                 GenericCommand::PrintSize(span.clone(), *name)
             }
-            GenericNCommand::Output { span, file, exprs } => GenericCommand::Output {
+            GenericNCommand::Output { span, file, exprs, .. } => GenericCommand::Output {
                 span: span.clone(),
                 file: file.to_string(),
                 exprs: exprs.clone(),
@@ -204,10 +205,11 @@ where
                 GenericNCommand::PrintTable(span, name, n)
             }
             GenericNCommand::PrintSize(span, name) => GenericNCommand::PrintSize(span, name),
-            GenericNCommand::Output { span, file, exprs } => GenericNCommand::Output {
+            GenericNCommand::Output { span, file, exprs, expr_names } => GenericNCommand::Output {
                 span,
                 file,
                 exprs: exprs.into_iter().map(f).collect(),
+                expr_names,
             },
             GenericNCommand::Push(n) => GenericNCommand::Push(n),
             GenericNCommand::Pop(span, n) => GenericNCommand::Pop(span, n),

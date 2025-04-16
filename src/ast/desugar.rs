@@ -210,7 +210,12 @@ pub(crate) fn desugar_command(
             vec![NCommand::PrintTable(span, symbol, size)]
         }
         Command::PrintSize(span, symbol) => vec![NCommand::PrintSize(span, symbol)],
-        Command::Output { span, file, exprs } => vec![NCommand::Output { span, file, exprs }],
+        Command::Output { span, file, exprs } => {
+            let expr_names = exprs.iter().map(|_| {
+                parser.symbol_gen.fresh(&"desugar_output".into())
+            }).collect::<Vec<_>>();
+            vec![NCommand::Output { span, file, exprs, expr_names }]
+        },
         Command::Push(num) => {
             vec![NCommand::Push(num)]
         }

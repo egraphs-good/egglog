@@ -183,6 +183,29 @@ impl GlobalRemover<'_> {
                     rule: new_rule,
                 }]
             }
+            GenericNCommand::Output { ref span, file: _, ref exprs, ref expr_names } => {
+                // The expression names can be viewed as a list of global variables.
+                // Here we replace them with a list of function declarations,
+                // and the actual execution of the `Output` command will set these functions accordingly
+                let mut decls = vec![];
+                for (expr_name, expr) in expr_names.iter().zip(exprs.iter()) {
+                    decls.push(ResolvedNCommand::Function(ResolvedFunctionDecl {
+                        name: *expr_name,
+                        subtype: FunctionSubtype::Custom,
+                        schema: Schema {
+                            input: vec![],
+                            output: expr.output_type().name(),
+                        },
+                        merge: None,
+                        cost: None,
+                        unextractable: true,
+                        ignore_viz: true,
+                        span: span.clone(),
+                    }));
+                }
+                decls.push(cmd);
+                decls
+            }
             //Handle the corner case where a global command is wrap in (fail )
             GenericNCommand::Fail(span, cmd) => {
                 let mut removed = self.remove_globals_cmd(*cmd);
