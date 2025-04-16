@@ -1245,7 +1245,7 @@ impl EGraph {
                 .backend
                 .register_external_func(core_relations::make_external_func(move |_, _| {
                     *ext_sc_ref.lock().unwrap() = Some(());
-                    None
+                    Some(core_relations::Value::new_const(0))
                 }));
 
             let mut translator = BackendRule::new(
@@ -1254,9 +1254,12 @@ impl EGraph {
                 &self.type_info,
             );
             translator.query(&query, true);
-            translator
-                .rb
-                .call_external_func(ext_id, &[], egglog_bridge::ColumnTy::Id);
+            translator.rb.call_external_func(
+                ext_id,
+                &[],
+                egglog_bridge::ColumnTy::Id,
+                "this function will never panic",
+            );
             let id = translator.build();
             let _ = self.backend.run_rules(&[id]).unwrap();
             self.backend.free_rule(id);
@@ -1772,13 +1775,28 @@ impl<'a> BackendRule<'a> {
                     let v = core::GenericAtomTerm::Var(span.clone(), v.clone());
                     let y = match f {
                         ResolvedCall::Func(f) => {
+                            let name = f.name;
                             let f = self.func(f);
                             let args = self.args(args);
-                            self.rb.lookup(f, &args).into()
+                            self.rb
+                                .lookup(
+                                    f,
+                                    &args,
+                                    format!("{span}: lookup of function {name} failed").as_str(),
+                                )
+                                .into()
                         }
                         ResolvedCall::Primitive(p) => {
+                            let name = p.primitive.0.name();
                             let (p, args, ty) = self.prim(p, args);
-                            self.rb.call_external_func(p, &args, ty).into()
+                            self.rb
+                                .call_external_func(
+                                    p,
+                                    &args,
+                                    ty,
+                                    format!("{span}: call of primitive {name} failed").as_str(),
+                                )
+                                .into()
                         }
                     };
                     self.entries.insert(v, y);
