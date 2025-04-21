@@ -427,7 +427,9 @@ impl Database {
         self.counters.read(counter)
     }
 
-    /// A helper for merging all pending updates. Currently only used in tests.
+    /// A helper for merging all pending updates. Used to write to the database after updates have been staged.
+    /// 
+    /// Exposed for testing purposes.
     ///
     /// Useful for out-of-band insertions into the database.
     pub fn merge_all(&mut self) -> bool {
