@@ -532,16 +532,17 @@ impl<C: Container> ContainerEnv<C> {
 // comes from egglog-bridge. And cfg(test) does not propagate between crates.
 
 fn do_parallel() -> bool {
-    #[cfg(debug_assertions)]
-    {
-        use rand::Rng;
-        rand::thread_rng().gen_bool(0.5)
-    }
+    false
+    // #[cfg(debug_assertions)]
+    // {
+    //     use rand::Rng;
+    //     rand::thread_rng().gen_bool(0.5)
+    // }
 
-    #[cfg(not(debug_assertions))]
-    {
-        rayon::current_num_threads() > 1
-    }
+    // #[cfg(not(debug_assertions))]
+    // {
+    //     rayon::current_num_threads() > 1
+    // }
 }
 
 fn incremental_rebuild(_uf_size: usize, _table_size: usize, _parallel: bool) -> bool {

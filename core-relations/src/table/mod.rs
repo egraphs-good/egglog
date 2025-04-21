@@ -277,7 +277,7 @@ impl Drop for Buffer {
                 rows += buf.len();
                 state.pending_rows[shard].push(buf);
             }
-            state.total_rows.fetch_add(rows, Ordering::Relaxed);
+            state.total_rows.fetch_add(rows, Ordering::SeqCst);
 
             let mut rows = 0;
             for shard_id in 0..self.pending_removals.n_ids() {
@@ -288,7 +288,7 @@ impl Drop for Buffer {
                 rows += buf.len();
                 state.pending_removals[shard].push(buf);
             }
-            state.total_removals.fetch_add(rows, Ordering::Relaxed);
+            state.total_removals.fetch_add(rows, Ordering::SeqCst);
         }
     }
 }
@@ -635,7 +635,7 @@ impl SortedWritesTable {
     }
 
     fn do_delete(&mut self) -> bool {
-        let total = self.pending_state.total_removals.swap(0, Ordering::Relaxed);
+        let total = self.pending_state.total_removals.swap(0, Ordering::SeqCst);
 
         if do_parallel(total) {
             self.parallel_delete()
@@ -645,7 +645,7 @@ impl SortedWritesTable {
     }
 
     fn do_insert(&mut self, exec_state: &mut ExecutionState) -> bool {
-        let total = self.pending_state.total_rows.swap(0, Ordering::Relaxed);
+        let total = self.pending_state.total_rows.swap(0, Ordering::SeqCst);
         self.data.data.reserve(total);
         if do_parallel(total) {
             if let Some(col) = self.sort_by {
@@ -1312,8 +1312,8 @@ impl PendingState {
         PendingState {
             pending_rows,
             pending_removals,
-            total_removals: AtomicUsize::new(self.total_removals.load(Ordering::Acquire)),
-            total_rows: AtomicUsize::new(self.total_rows.load(Ordering::Acquire)),
+            total_removals: AtomicUsize::new(self.total_removals.load(Ordering::SeqCst)),
+            total_rows: AtomicUsize::new(self.total_rows.load(Ordering::SeqCst)),
         }
     }
 }
@@ -1414,18 +1414,19 @@ impl OrderingChecker for SortChecker {
 }
 
 fn do_parallel(_workload_size: usize) -> bool {
-    #[cfg(test)]
-    {
-        // In tests, run serial and parallel variants half the time,
-        // nondeterministically.
-        use rand::{thread_rng, Rng};
-        thread_rng().gen::<bool>()
-    }
+    false
+    // #[cfg(test)]
+    // {
+    //     // In tests, run serial and parallel variants half the time,
+    //     // nondeterministically.
+    //     use rand::{thread_rng, Rng};
+    //     thread_rng().gen::<bool>()
+    // }
 
-    #[cfg(not(test))]
-    {
-        _workload_size > 20_000 && rayon::current_num_threads() > 1
-    }
+    // #[cfg(not(test))]
+    // {
+    //     _workload_size > 20_000 && rayon::current_num_threads() > 1
+    // }
 }
 
 /// A type similar to a SortedWritesTable used to buffer outputs. The main thing

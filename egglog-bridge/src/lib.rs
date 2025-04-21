@@ -654,15 +654,16 @@ impl EGraph {
 
     fn rebuild(&mut self) -> Result<()> {
         fn do_parallel() -> bool {
-            #[cfg(test)]
-            {
-                use rand::Rng;
-                rand::thread_rng().gen_bool(0.5)
-            }
-            #[cfg(not(test))]
-            {
-                rayon::current_num_threads() > 1
-            }
+            false
+        //     #[cfg(test)]
+        //     {
+        //         use rand::Rng;
+        //         rand::thread_rng().gen_bool(0.5)
+        //     }
+        //     #[cfg(not(test))]
+        //     {
+        //         rayon::current_num_threads() > 1
+        //     }
         }
         if self.db.get_table(self.uf_table).rebuilder(&[]).is_some() {
             // The UF implementation supports "native"  rebuilding.

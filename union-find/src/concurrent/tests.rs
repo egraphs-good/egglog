@@ -22,7 +22,7 @@ struct Dropper<T> {
 
 impl<T> Drop for Dropper<T> {
     fn drop(&mut self) {
-        self.dropped.fetch_add(1, Ordering::Relaxed);
+        self.dropped.fetch_add(1, Ordering::SeqCst);
     }
 }
 
