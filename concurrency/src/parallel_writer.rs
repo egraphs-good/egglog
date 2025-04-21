@@ -115,7 +115,7 @@ impl<T> ParallelVecWriter<T> {
     /// length. This method panics if the actual length does not match the
     /// length method.
     pub fn write_contents(&self, items: impl ExactSizeIterator<Item = T>) -> usize {
-        let start = self.end_len.fetch_add(items.len(), Ordering::SeqCst);
+        let start = self.end_len.fetch_add(items.len(), Ordering::AcqRel);
         let end = start + items.len();
         let reader = self.data.read();
         let current_len = reader.len();
@@ -142,7 +142,7 @@ impl<T> ParallelVecWriter<T> {
         // SAFETY: this value is incremented past the original length of the
         // vector once for each item written to it.
         unsafe {
-            res.set_len(self.end_len.load(Ordering::SeqCst));
+            res.set_len(self.end_len.load(Ordering::Acquire));
         }
         res
     }
@@ -152,9 +152,9 @@ impl<T> ParallelVecWriter<T> {
         // SAFETY: this value is incremented past the original length of the
         // vector once for each item written to it.
         unsafe {
-            res.set_len(self.end_len.load(Ordering::SeqCst));
+            res.set_len(self.end_len.load(Ordering::Acquire));
         }
-        self.end_len.store(0, Ordering::SeqCst);
+        self.end_len.store(0, Ordering::Release);
         res
     }
 

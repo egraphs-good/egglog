@@ -73,12 +73,12 @@ impl Notification {
     /// threads who may wait.
     pub fn notify(&self) {
         let _guard = self.mutex.lock().unwrap();
-        self.has_been_notified.store(true, Ordering::SeqCst);
+        self.has_been_notified.store(true, Ordering::Release);
         self.cv.notify_all();
     }
 
     /// Query whether this notification has been notified, without blocking.
     pub fn has_been_notified(&self) -> bool {
-        self.has_been_notified.load(Ordering::SeqCst)
+        self.has_been_notified.load(Ordering::Acquire)
     }
 }

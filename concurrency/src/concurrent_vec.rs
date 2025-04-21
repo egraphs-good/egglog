@@ -36,7 +36,7 @@ impl<T> Default for ConcurrentVec<T> {
 impl<T> Drop for ConcurrentVec<T> {
     fn drop(&mut self) {
         let mut writer = self.data.lock();
-        let len = self.head.load(Ordering::SeqCst);
+        let len = self.head.load(Ordering::Acquire);
         if mem::needs_drop::<T>() {
             for i in 0..len {
                 // SAFETY: we own the data, have exclusive access, and know that the
@@ -68,9 +68,9 @@ impl<T> ConcurrentVec<T> {
     /// in order for this item to be visible.
     pub fn push(&self, item: T) -> usize {
         let _guard = self.write_lock.lock().unwrap();
-        let index = self.head.load(Ordering::SeqCst);
+        let index = self.head.load(Ordering::Acquire);
         self.push_at(item, index);
-        self.head.store(index + 1, Ordering::SeqCst);
+        self.head.store(index + 1, Ordering::Release);
         index
     }
 
@@ -92,7 +92,7 @@ impl<T> ConcurrentVec<T> {
     }
 
     pub fn read(&self) -> impl Deref<Target = [T]> + '_ {
-        let valid_prefix = self.head.load(Ordering::SeqCst);
+        let valid_prefix = self.head.load(Ordering::Acquire);
         let reader = self.data.read();
         ReadHandle {
             valid_prefix,

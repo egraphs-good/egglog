@@ -120,14 +120,14 @@ Still, code like this is helpful in microbenchmarks to measure the overhead of
 memory barriers for the code. We've observed 5-10% overhead on an M1 Ultra CPU
 with high concurrency.
 
-const STORE_ORDERING: Ordering = Ordering::SeqCst;
-const LOAD_ORDERING: Ordering = Ordering::SeqCst;
-const CAS_SUCCESS_ORDERING: Ordering = Ordering::SeqCst;
-const CAS_FAILURE_ORDERING: Ordering = Ordering::SeqCst;
+const STORE_ORDERING: Ordering = Ordering::Relaxed;
+const LOAD_ORDERING: Ordering = Ordering::Relaxed;
+const CAS_SUCCESS_ORDERING: Ordering = Ordering::Relaxed;
+const CAS_FAILURE_ORDERING: Ordering = Ordering::Relaxed;
 
 */
 
-const STORE_ORDERING: Ordering = Ordering::SeqCst;
-const LOAD_ORDERING: Ordering = Ordering::SeqCst;
-const CAS_SUCCESS_ORDERING: Ordering = Ordering::SeqCst;
-const CAS_FAILURE_ORDERING: Ordering = Ordering::SeqCst;
+const STORE_ORDERING: Ordering = Ordering::Release;
+const LOAD_ORDERING: Ordering = Ordering::Acquire;
+const CAS_SUCCESS_ORDERING: Ordering = Ordering::AcqRel;
+const CAS_FAILURE_ORDERING: Ordering = Ordering::Acquire;

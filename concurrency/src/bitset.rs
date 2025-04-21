@@ -32,7 +32,7 @@ impl BitSet {
         let reader = self.data.read();
         reader
             .get(cell)
-            .map(|x| x.load(Ordering::SeqCst) & (1 << bit) != 0)
+            .map(|x| x.load(Ordering::Acquire) & (1 << bit) != 0)
             .unwrap_or(false)
     }
 
@@ -45,9 +45,9 @@ impl BitSet {
         let handle = self.data.read();
         if let Some(cell) = handle.get(cell) {
             if val {
-                cell.fetch_or(1 << bit, Ordering::SeqCst);
+                cell.fetch_or(1 << bit, Ordering::Release);
             } else {
-                cell.fetch_and(!(1 << bit), Ordering::SeqCst);
+                cell.fetch_and(!(1 << bit), Ordering::Release);
             }
             return;
         }

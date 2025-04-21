@@ -663,16 +663,15 @@ fn num_shards() -> usize {
 }
 
 fn do_parallel(_workload_size: usize) -> bool {
-    false
-    // #[cfg(test)]
-    // {
-    //     use rand::Rng;
-    //     rand::thread_rng().gen::<bool>()
-    // }
-    // #[cfg(not(test))]
-    // {
-    //     rayon::current_num_threads() > 1 && _workload_size > 20_000
-    // }
+    #[cfg(test)]
+    {
+        use rand::Rng;
+        rand::thread_rng().gen::<bool>()
+    }
+    #[cfg(not(test))]
+    {
+        rayon::current_num_threads() > 1 && _workload_size > 20_000
+    }
 }
 
 /// A thread pool specifically for parallel hash index construction.

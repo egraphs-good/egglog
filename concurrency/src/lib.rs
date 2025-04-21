@@ -119,7 +119,7 @@ impl<T> ReadOptimizedLock<T> {
                 ReadToken::ReadOk(..) => {
                     // This fence ensures that we see the outcome of any
                     // preceeding writes. (I think...).
-                    fence(Ordering::SeqCst);
+                    fence(Ordering::Acquire);
                     return MutexReader {
                         // SAFETY: We guarantee that as long as a guard that's
                         // in scope observes a ReadOk token
