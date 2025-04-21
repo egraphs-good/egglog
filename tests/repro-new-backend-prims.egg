@@ -8,4 +8,4 @@
 
 (set (predicate 1) true)
 
-(check (= false (predicate x)) (predicate (+ x 1)))
+(fail (check (= false (predicate x)) (predicate (+ x 1))))
