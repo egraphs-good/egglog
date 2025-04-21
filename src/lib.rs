@@ -1437,11 +1437,9 @@ impl EGraph {
                         vec![],
                         expr,
                     );
-                    dbg!(&action);
                     self.eval_actions(&ResolvedActions::new(vec![action]))?;
                     let function = self.functions.get(expr_name).unwrap();
                     let function_id = function.new_backend_id;
-                    self.backend.dump_debug_info();
                     let value = self.backend.lookup_id(function_id, &[]).unwrap();
                     // hack before new backend gets merged:
                     use std::io::Write;
