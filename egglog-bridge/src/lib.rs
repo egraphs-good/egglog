@@ -363,12 +363,13 @@ impl EGraph {
         let table_id = self.funcs[func].table;
         let table = self.db.get_table(table_id);
         let row = table.get_row(key)?;
+        let subsume_offset = self.funcs[func].can_subsume as usize;
         if self.tracing {
             // Return the "term id"
-            Some(row.vals[row.vals.len() - 1])
+            Some(row.vals[row.vals.len() - 1 - subsume_offset])
         } else {
             // Return the eclass id
-            Some(row.vals[row.vals.len() - 2])
+            Some(row.vals[row.vals.len() - 2 - subsume_offset])
         }
     }
 
