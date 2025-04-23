@@ -866,6 +866,7 @@ impl SortedWritesTable {
                                             debug_assert!(!_was_stale);
                                         }
                                         occ.get_mut().row = cur_row;
+                                        changed = true;
                                     } else {
                                         // Mark the new row as stale: we didn't end up needing it.
                                         unsafe {
@@ -877,6 +878,7 @@ impl SortedWritesTable {
                                     scratch.clear();
                                 }
                                 Entry::Vacant(v) => {
+                                    changed = true;
                                     v.insert(TableEntry {
                                         hashcode: hc as HashCode,
                                         row: cur_row,
@@ -886,7 +888,6 @@ impl SortedWritesTable {
 
                             cur_row = cur_row.inc();
                         }
-                        changed |= staged.changed;
                         staged.clear();
                     }};
                 }
@@ -1438,10 +1439,6 @@ struct StagedOutputs {
     rows: RowBuffer,
     n_stale: usize,
     scratch: Pooled<Vec<Value>>,
-    // We never want to lose a 'true' output from a merge function. This variable is set to true if
-    // a merge function ever returns true. We use it as a 'changed' signal when bubbling it up
-    // during parallel_insert.
-    changed: bool,
 }
 
 impl StagedOutputs {
@@ -1456,7 +1453,6 @@ impl StagedOutputs {
             hash: ps.get(),
             rows: RowBuffer::new(n_cols),
             scratch: ps.get(),
-            changed: false,
         });
         res.hash.reserve(capacity, TableEntry::hashcode);
         res.rows.reserve(capacity);
@@ -1466,7 +1462,6 @@ impl StagedOutputs {
         self.hash.clear();
         self.rows.clear();
         self.n_stale = 0;
-        self.changed = false;
     }
     fn len(&self) -> usize {
         self.rows.len() - self.n_stale
@@ -1494,7 +1489,6 @@ impl StagedOutputs {
             Entry::Occupied(mut occupied_entry) => {
                 let cur = self.rows.get_row(occupied_entry.get().row);
                 if merge_fn(cur, row, &mut self.scratch) {
-                    self.changed = true;
                     let new = self.rows.add_row(&self.scratch);
                     self.rows.set_stale(occupied_entry.get().row);
                     self.n_stale += 1;
