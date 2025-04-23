@@ -21,7 +21,7 @@ use crate::{
 use super::{
     get_column_index_from_tableinfo,
     plan::{JoinStage, Plan},
-    with_pool_set, ActionId, AtomId, Database, HashColumnIndex, HashIndex, Variable,
+    with_pool_set, ActionId, AtomId, Database, HashColumnIndex, HashIndex, TableId, Variable,
 };
 
 enum DynamicIndex {
@@ -242,7 +242,7 @@ struct ActionState {
     bindings: Bindings,
 }
 
-type IndexCache = DashMap<(ColumnId, Subset), Arc<ColumnIndex>>;
+type IndexCache = DashMap<(ColumnId, TableId, Subset), Arc<ColumnIndex>>;
 
 struct JoinState<'a> {
     db: &'a Database,
@@ -275,7 +275,8 @@ impl<'a> JoinState<'a> {
         let cols = SmallVec::<[ColumnId; 4]>::from_iter(cols);
         let subset = binding_info.subsets.unwrap_val(atom);
 
-        let info = &self.db.tables[plan.atoms[atom].table];
+        let table_id = plan.atoms[atom].table;
+        let info = &self.db.tables[table_id];
         let all_cacheable = cols.iter().all(|col| {
             !info
                 .spec
@@ -313,7 +314,7 @@ impl<'a> JoinState<'a> {
             DynamicIndex::DynamicColumn(if subset.size() > 16 {
                 // NB: we could use the raw api here to avoid cloning the subset
                 // on a cache hit.
-                let entry = self.index_cache.entry((cols[0], subset.clone()));
+                let entry = self.index_cache.entry((cols[0], table_id, subset.clone()));
                 entry
                     .or_insert_with(|| Arc::new(info.table.group_by_col(subset.as_ref(), cols[0])))
                     .value()
