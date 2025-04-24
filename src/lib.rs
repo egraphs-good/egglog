@@ -414,6 +414,8 @@ pub struct EGraph {
     pub fact_directory: Option<PathBuf>,
     pub seminaive: bool,
     type_info: TypeInfo,
+    extract_func_id: Option<ExternalFunctionId>,
+    /// Used for building the extract action
     extract_report: Option<ExtractReport>,
     /// The run report for the most recent run of a schedule.
     recent_run_report: Option<RunReport>,
@@ -439,12 +441,15 @@ impl Default for EGraph {
             interactive_mode: false,
             fact_directory: None,
             seminaive: true,
+            extract_func_id: None,
             extract_report: None,
             recent_run_report: None,
             overall_run_report: Default::default(),
             msgs: Some(vec![]),
             type_info: Default::default(),
         };
+
+        eg.extract_func_id = Some (eg.backend.register_external_func(extract::ExtractorAlter::default()));
 
         eg.add_sort(UnitSort, span!()).unwrap();
         eg.add_sort(StringSort, span!()).unwrap();
@@ -1113,11 +1118,13 @@ impl EGraph {
             rule.to_canonicalized_core_rule(&self.type_info, &mut self.parser.symbol_gen)?;
         let (query, actions) = (core_rule.body, core_rule.head);
 
+        let extract_func_id = self.get_extract_func_id();
         let rule_id = {
             let mut translator = BackendRule::new(
                 self.backend.new_rule(name.into(), self.seminaive),
                 &self.functions,
                 &self.type_info,
+                extract_func_id,
             );
             translator.query(&query, false);
             translator.actions(&actions)?;
@@ -1156,11 +1163,13 @@ impl EGraph {
             &mut self.parser.symbol_gen,
         )?;
 
+        let extract_func_id = self.get_extract_func_id();
         let new_result = {
             let mut translator = BackendRule::new(
                 self.backend.new_rule("eval_actions", false),
                 &self.functions,
                 &self.type_info,
+                extract_func_id,
             );
             translator.actions(&actions)?;
             let id = translator.build();
@@ -1255,10 +1264,12 @@ impl EGraph {
                     Some(core_relations::Value::new_const(0))
                 }));
 
+            let extract_func_id = self.get_extract_func_id();
             let mut translator = BackendRule::new(
                 self.backend.new_rule("check_facts", false),
                 &self.functions,
                 &self.type_info,
+                extract_func_id,
             );
             translator.query(&query, true);
             translator.rb.call_external_func(
@@ -1680,6 +1691,10 @@ impl EGraph {
         self.type_info.get_sorts_by(f)
     }
 
+    pub fn get_extract_func_id(&self) -> ExternalFunctionId {
+        self.extract_func_id.expect("Uninitialized extract_func_id")
+    }
+
     /// Gets the last extract report and returns it, if the last command saved it.
     pub fn get_extract_report(&self) -> &Option<ExtractReport> {
         &self.extract_report
@@ -1716,6 +1731,8 @@ struct BackendRule<'a> {
     entries: HashMap<core::ResolvedAtomTerm, QueryEntry>,
     functions: &'a IndexMap<Symbol, Function>,
     type_info: &'a TypeInfo,
+    // Can and should be in the backend egraph struct
+    extract_func_id: ExternalFunctionId,
 }
 
 impl<'a> BackendRule<'a> {
@@ -1723,12 +1740,14 @@ impl<'a> BackendRule<'a> {
         rb: egglog_bridge::RuleBuilder<'a>,
         functions: &'a IndexMap<Symbol, Function>,
         type_info: &'a TypeInfo,
+        extract_func_id: ExternalFunctionId,
     ) -> BackendRule<'a> {
         BackendRule {
             rb,
             functions,
             type_info,
             entries: Default::default(),
+            extract_func_id,
         }
     }
 
@@ -1899,9 +1918,24 @@ impl<'a> BackendRule<'a> {
                     let x = self.entry(x);
                     let y = self.entry(y);
                     self.rb.union(x, y)
-                }
+                },
                 core::GenericCoreAction::Panic(_, message) => self.rb.panic(message.clone()),
-                core::GenericCoreAction::Extract(_, _x, _n) => todo!("no extraction yet"),
+                core::GenericCoreAction::Extract(span, x, n) => {
+                    match *n {
+                        core::GenericAtomTerm::Literal(_, Literal::Int(variants)) => {
+                            log::debug!("x = {:?} n = {:?}", x, variants);
+                            let x = self.entry(x);
+                            let n = self.entry(n);
+                            self.rb.call_external_func(
+                                self.extract_func_id, 
+                                &vec![x, n], 
+                                ColumnTy::Primitive(self.rb.egraph().primitives().get_ty::<()>()), 
+                                format!("{span}: call of extract failed").as_str(),
+                            );
+                        },
+                        _ => panic!("The number of variants to extract must be an i64"),
+                    }
+                },
             }
         }
         Ok(())
