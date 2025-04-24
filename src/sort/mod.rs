@@ -24,6 +24,10 @@ mod vec;
 pub use vec::*;
 mod r#fn;
 pub use r#fn::*;
+mod bigint;
+pub use bigint::*;
+mod bigrat;
+pub use bigrat::*;
 
 use crate::constraint::AllEqualTypeConstraint;
 use crate::extract::{Cost, Extractor};

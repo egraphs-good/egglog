@@ -42,6 +42,9 @@ impl Default for TypeInfo {
         res.add_sort(I64Sort::new("i64".into()), DUMMY_SPAN.clone());
         res.add_sort(F64Sort::new("f64".into()), DUMMY_SPAN.clone());
         res.add_sort(RationalSort::new("Rational".into()), DUMMY_SPAN.clone());
+        res.add_sort(BigIntSort, DUMMY_SPAN.clone());
+        res.add_sort(BigRatSort, DUMMY_SPAN.clone());
+        
 
         res.presort_names.extend(MapSort::presort_names());
         res.presort_names.extend(SetSort::presort_names());
