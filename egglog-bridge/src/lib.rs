@@ -360,17 +360,16 @@ impl EGraph {
     /// Lookup the id associated with a function `func` and the given arguments
     /// (`key`).
     pub fn lookup_id(&self, func: FunctionId, key: &[Value]) -> Option<Value> {
-        let table_id = self.funcs[func].table;
+        let info = &self.funcs[func];
+        let schema_math = SchemaMath {
+            tracing: self.tracing,
+            subsume: info.can_subsume,
+            func_cols: info.schema.len(),
+        };
+        let table_id = info.table;
         let table = self.db.get_table(table_id);
         let row = table.get_row(key)?;
-        let subsume_offset = self.funcs[func].can_subsume as usize;
-        if self.tracing {
-            // Return the "term id"
-            Some(row.vals[row.vals.len() - 1 - subsume_offset])
-        } else {
-            // Return the eclass id
-            Some(row.vals[row.vals.len() - 2 - subsume_offset])
-        }
+        Some(row.vals[schema_math.ret_val_col()])
     }
 
     fn get_fiat_reason(&mut self, desc: &str) -> Value {
