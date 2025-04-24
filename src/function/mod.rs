@@ -22,6 +22,7 @@ pub struct Function {
     index_updated_through: usize,
     updates: usize,
     scratch: IndexSet<usize>,
+    pub(crate) can_subsume: bool,
     pub new_backend_id: egglog_bridge::FunctionId,
 }
 
@@ -154,6 +155,12 @@ impl Function {
             .chain(once(output.name()))
             .collect();
 
+        let can_subsume = match decl.subtype {
+            FunctionSubtype::Constructor => true,
+            FunctionSubtype::Relation => true,
+            FunctionSubtype::Custom => false,
+        };
+
         let new_backend_id = {
             use egglog_bridge::{DefaultVal, MergeFn};
             let schema = input
@@ -180,7 +187,7 @@ impl Function {
                 default,
                 merge,
                 name,
-                can_subsume: true,
+                can_subsume,
             })
         };
 
@@ -196,6 +203,7 @@ impl Function {
             index_updated_through: 0,
             updates: 0,
             merge: merge_vals,
+            can_subsume,
             new_backend_id,
         })
     }

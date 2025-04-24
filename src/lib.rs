@@ -1113,7 +1113,7 @@ impl EGraph {
                 &self.type_info,
             );
             translator.query(&query, false);
-            translator.actions(&actions);
+            translator.actions(&actions)?;
             translator.build()
         };
 
@@ -1155,7 +1155,7 @@ impl EGraph {
                 &self.functions,
                 &self.type_info,
             );
-            translator.actions(&actions);
+            translator.actions(&actions)?;
             let id = translator.build();
             let result = self.backend.run_rules(&[id]);
             self.backend.free_rule(id);
@@ -1246,7 +1246,7 @@ impl EGraph {
                 .backend
                 .register_external_func(core_relations::make_external_func(move |_, _| {
                     *ext_sc_ref.lock().unwrap() = Some(());
-                    None
+                    Some(core_relations::Value::new_const(0))
                 }));
 
             let mut translator = BackendRule::new(
@@ -1255,9 +1255,12 @@ impl EGraph {
                 &self.type_info,
             );
             translator.query(&query, true);
-            translator
-                .rb
-                .call_external_func(ext_id, &[], egglog_bridge::ColumnTy::Id);
+            translator.rb.call_external_func(
+                ext_id,
+                &[],
+                egglog_bridge::ColumnTy::Id,
+                "this function will never panic",
+            );
             let id = translator.build();
             let _ = self.backend.run_rules(&[id]).unwrap();
             self.backend.free_rule(id);
@@ -1802,20 +1805,33 @@ impl<'a> BackendRule<'a> {
         }
     }
 
-    fn actions(&mut self, actions: &core::ResolvedCoreActions) {
+    fn actions(&mut self, actions: &core::ResolvedCoreActions) -> Result<(), Error> {
         for action in &actions.0 {
             match action {
                 core::GenericCoreAction::Let(span, v, f, args) => {
                     let v = core::GenericAtomTerm::Var(span.clone(), v.clone());
                     let y = match f {
                         ResolvedCall::Func(f) => {
+                            let name = f.name;
                             let f = self.func(f);
                             let args = self.args(args);
-                            self.rb.lookup(f, &args).into()
+                            self.rb
+                                .lookup(f, &args, || {
+                                    format!("{span}: lookup of function {name} failed")
+                                })
+                                .into()
                         }
                         ResolvedCall::Primitive(p) => {
+                            let name = p.primitive.0.name();
                             let (p, args, ty) = self.prim(p, args);
-                            self.rb.call_external_func(p, &args, ty).into()
+                            self.rb
+                                .call_external_func(
+                                    p,
+                                    &args,
+                                    ty,
+                                    format!("{span}: call of primitive {name} failed").as_str(),
+                                )
+                                .into()
                         }
                     };
                     self.entries.insert(v, y);
@@ -1836,11 +1852,14 @@ impl<'a> BackendRule<'a> {
                 core::GenericCoreAction::Change(_, change, f, args) => match f {
                     ResolvedCall::Primitive(..) => panic!("runtime primitive change!"),
                     ResolvedCall::Func(f) => {
+                        let name = f.name;
+                        let can_subsume = self.functions[&f.name].can_subsume;
                         let f = self.func(f);
                         let args = self.args(args);
                         match change {
                             Change::Delete => self.rb.remove(f, &args),
-                            Change::Subsume => self.rb.subsume(f, &args),
+                            Change::Subsume if can_subsume => self.rb.subsume(f, &args),
+                            Change::Subsume => return Err(Error::SubsumeMergeError(name)),
                         }
                     }
                 },
@@ -1853,6 +1872,7 @@ impl<'a> BackendRule<'a> {
                 core::GenericCoreAction::Extract(_, _x, _n) => todo!("no extraction yet"),
             }
         }
+        Ok(())
     }
 
     fn build(self) -> egglog_bridge::RuleId {
