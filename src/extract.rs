@@ -1,4 +1,5 @@
 use crate::ast::Symbol;
+use crate::sort::I64Sort;
 use crate::termdag::{Term, TermDag};
 use crate::util::HashMap;
 use crate::{ArcSort, EGraph, Error, Function, HEntry, Id, Value};
@@ -43,9 +44,9 @@ impl EGraph {
         termdag: &mut TermDag,
         arcsort: &ArcSort,
     ) -> Result<(Cost, Term), Error> {
-        if true {
-            todo!("extraction")
-        }
+        //if true {
+        //    todo!("extraction")
+        //}
 
         let extractor = Extractor::new(self, termdag);
         extractor.find_best(value, termdag, arcsort).ok_or_else(|| {
@@ -212,5 +213,27 @@ impl<'a> Extractor<'a> {
                 }
             }
         }
+    }
+}
+
+#[derive(Clone)]
+pub struct ExtractorAlter {
+    
+}
+
+impl Default for ExtractorAlter {
+    fn default() -> Self {
+        ExtractorAlter {}
+    }
+}
+
+use core_relations::{ExecutionState, ExternalFunction};
+impl ExternalFunction for ExtractorAlter {
+    fn invoke(&self, exec_state: &mut ExecutionState, args: &[core_relations::Value]) -> Option<core_relations::Value> {
+        assert!(args.len() == 2);
+        let target = args[0];
+        let nvariants = exec_state.prims().unwrap::<i64>(args[1]);
+        print!("target = {:?}, nvariants = {}", target, nvariants);
+        Some(exec_state.prims().get::<()>(()))
     }
 }

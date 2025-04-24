@@ -2,6 +2,70 @@ use egglog::{ast::Expr, *};
 use symbol_table::GlobalSymbol;
 
 #[test]
+fn test_simple_extract1() {
+
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut egraph = EGraph::default();
+
+    let result =
+    egraph.parse_and_run_program(
+        None,
+        r#"
+             (datatype Op (Add i64 i64))
+             (let expr (Add 1 1))
+             (extract expr)"#
+        )
+        .unwrap();
+
+    log::debug!("{}", result.join("\n"));
+    /* 
+    let mut termdag = TermDag::default();
+    let (sort, value) = egraph.eval_expr(&egglog::var!("expr")).unwrap();
+    let (_, extracted) = egraph.extract(value, &mut termdag, &sort).unwrap();
+    assert_eq!(termdag.to_string(&extracted), "(Add 1 1)");
+    */
+}
+
+#[test]
+fn test_simple_extract2() {
+
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut egraph = EGraph::default();
+
+    egraph.parse_and_run_program(
+        None,
+        r#"
+             (datatype Term
+               (Origin :cost 0) 
+               (BigStep Term :cost 10)
+               (SmallStep Term :cost 1)
+             )
+             (let t (Origin))
+             (let tb (BigStep t))
+             (let tbs (SmallStep tb))
+             (let ts (SmallStep t))
+             (let tss (SmallStep ts))
+             (let tsss (SmallStep tss))
+             (union tbs tsss)
+             (let tssss (SmallStep tsss))
+             (union tssss tb)
+             "#
+        )
+        .unwrap();
+
+    /*
+    let mut termdag = TermDag::default();
+    let (sort, value) = egraph.eval_expr(&egglog::var!("tb")).unwrap();
+    let (cost, extracted) = egraph.extract(value, &mut termdag, &sort).unwrap();
+    assert_eq!(cost, 4);
+    assert_eq!(termdag.to_string(&extracted), "(SmallStep (SmallStep (SmallStep (SmallStep (Origin)))))");
+    */
+}
+
+
+#[test]
 fn test_subsumed_unextractable_action_extract() {
     // Test when an expression is subsumed, it isn't extracted, even if its the cheapest
     let mut egraph = EGraph::default();
