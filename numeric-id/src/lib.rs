@@ -234,6 +234,15 @@ impl<K, V> Default for IdVec<K, V> {
     }
 }
 
+impl<K, V: Clone> Clone for IdVec<K, V> {
+    fn clone(&self) -> Self {
+        IdVec {
+            data: self.data.clone(),
+            _marker: std::marker::PhantomData,
+        }
+    }
+}
+
 /// Like a [`DenseIdMap`], but supports freeing (and reusing) slots.
 #[derive(Clone)]
 pub struct DenseIdMapWithReuse<K, V> {

@@ -23,6 +23,7 @@ use crate::{
 #[cfg(test)]
 mod tests;
 
+#[derive(Clone)]
 pub(crate) struct TableEntry<T> {
     hash: u64,
     /// Points into `keys`
@@ -30,6 +31,7 @@ pub(crate) struct TableEntry<T> {
     vals: T,
 }
 
+#[derive(Clone)]
 pub(crate) struct Index<TI> {
     key: Vec<ColumnId>,
     updated_to: TableVersion,
@@ -113,6 +115,15 @@ pub(crate) struct SubsetTable {
     hash: Pooled<HashTable<TableEntry<BufferedSubset>>>,
 }
 
+impl Clone for SubsetTable {
+    fn clone(&self) -> Self {
+        SubsetTable {
+            keys: self.keys.clone(),
+            hash: Pooled::cloned(&self.hash),
+        }
+    }
+}
+
 impl SubsetTable {
     fn new(key_arity: usize) -> SubsetTable {
         SubsetTable {
@@ -154,6 +165,16 @@ struct ColumnIndexShard {
     subsets: SubsetBuffer,
 }
 
+impl Clone for ColumnIndexShard {
+    fn clone(&self) -> Self {
+        ColumnIndexShard {
+            table: Pooled::cloned(&self.table),
+            subsets: self.subsets.clone(),
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct ColumnIndex {
     // A specialized index used when we are indexing on a single column.
     shard_data: ShardData,
@@ -295,12 +316,14 @@ impl ColumnIndex {
     }
 }
 
+#[derive(Clone)]
 struct TupleIndexShard {
     table: SubsetTable,
     subsets: SubsetBuffer,
 }
 
 /// A mapping from keys to subsets of rows.
+#[derive(Clone)]
 pub struct TupleIndex {
     // NB: we could store RowBuffers inline and then have indexes reference
     // (u32, RowId) instead of RowId. Trades copying off for indirections.
@@ -503,6 +526,15 @@ struct SubsetBuffer {
     free_list: FreeList,
 }
 
+impl Clone for SubsetBuffer {
+    fn clone(&self) -> Self {
+        SubsetBuffer {
+            buf: Pooled::cloned(&self.buf),
+            free_list: self.free_list.clone(),
+        }
+    }
+}
+
 impl Default for SubsetBuffer {
     fn default() -> SubsetBuffer {
         with_pool_set(|ps| SubsetBuffer {
@@ -592,7 +624,13 @@ impl SubsetBuffer {
 }
 
 /// A sorted vector of offsets stored in a [`SubsetBuffer`].
-#[derive(Debug)]
+///
+/// Note: this implements `Clone` to facilitate cloning entire indexes, but this is a _shallow_
+/// clone, making the clone operation work akin to slices in Golang. In particular: code that
+/// pushes to a clone of a `BufferedVec` can affect the original, and vice versa.
+///
+/// Business logic in this module probably shouldn't call clone explicitly.
+#[derive(Debug, Clone)]
 pub(crate) struct BufferedVec(BufferIndex, BufferIndex);
 
 impl Default for BufferedVec {
@@ -610,6 +648,7 @@ impl BufferedVec {
     }
 }
 
+#[derive(Clone)]
 pub(crate) enum BufferedSubset {
     Dense(OffsetRange),
     Sparse(BufferedVec),
@@ -692,7 +731,7 @@ static THREAD_POOL: Lazy<rayon::ThreadPool> = Lazy::new(|| {
 ///
 /// This free list works as a map from power-of-two size classes to a vector of offsets that point
 /// to the beginning of an unused vector.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub(super) struct FreeList {
     data: HashMap<usize, Vec<BufferIndex>>,
 }
