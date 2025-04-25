@@ -629,7 +629,9 @@ impl SubsetBuffer {
 /// clone, making the clone operation work akin to slices in Golang. In particular: code that
 /// pushes to a clone of a `BufferedVec` can affect the original, and vice versa.
 ///
-/// Business logic in this module probably shouldn't call clone explicitly.
+/// Business logic in this module probably shouldn't call clone explicitly. The implicit uses of
+/// clone (by other generated `Clone` implementations) are fine because they clone the
+/// `SubsetBuffer` that the `BufferedVec` points to at the same time that the vector is cloned.
 #[derive(Debug, Clone)]
 pub(crate) struct BufferedVec(BufferIndex, BufferIndex);
 
