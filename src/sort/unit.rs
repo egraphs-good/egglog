@@ -20,6 +20,7 @@ impl Sort for UnitSort {
         backend.primitives_mut().register_type::<()>();
     }
 
+
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
         self
     }
@@ -32,6 +33,10 @@ impl Sort for UnitSort {
         termdag: &mut TermDag,
     ) -> Option<(Cost, Term)> {
         Some((1, termdag.lit(Literal::Unit)))
+    }
+    
+    fn value_type(&self) -> Option<TypeId> {
+        Some(TypeId::of::<()>())
     }
 }
 

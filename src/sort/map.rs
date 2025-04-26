@@ -146,7 +146,7 @@ impl Sort for MapSort {
         self.key.is_eq_sort() || self.value.is_eq_sort()
     }
 
-    fn inner_values(&self, value: &Value) -> Vec<(ArcSort, Value)> {
+    fn old_inner_values(&self, value: &Value) -> Vec<(ArcSort, Value)> {
         let maps = self.maps.lock().unwrap();
         let map = maps.get_index(value.bits as usize).unwrap();
         let mut result = Vec::new();
@@ -155,6 +155,11 @@ impl Sort for MapSort {
             result.push((self.value.clone(), *v));
         }
         result
+    }
+
+    fn inner_values(&self, egraph: &EGraph, value: &core_relations::Value) -> Vec<(ArcSort, core_relations::Value)> {
+        let val = egraph.backend.containers().get_val::<MapContainer<core_relations::Value>>(*value).unwrap().clone();
+        val.data.iter().flat_map(|(k, v)| [(self.key.clone(), *k), (self.value.clone(), *v)]).collect()
     }
 
     fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
@@ -209,6 +214,10 @@ impl Sort for MapSort {
             term = termdag.app("map-insert".into(), vec![term, k.1, v.1]);
         }
         Some((cost, term))
+    }
+    
+    fn value_type(&self) -> Option<TypeId> {
+        Some(TypeId::of::<MapContainer<Value>>())
     }
 }
 

@@ -145,6 +145,10 @@ impl Sort for BigRatSort {
             termdag.app("bigrat".into(), vec![numer_term, denom_term]),
         ))
     }
+    
+    fn value_type(&self) -> Option<TypeId> {
+        Some(TypeId::of::<Q>())
+    }
 }
 
 impl FromSort for Q {

@@ -21,6 +21,7 @@ impl Sort for StringSort {
         backend.primitives_mut().register_type::<S>();
     }
 
+
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
         self
     }
@@ -50,6 +51,10 @@ impl Sort for StringSort {
             "replace" =
                 |a: S, b: S, c: S| -> S { a.as_str().replace(b.as_str(), c.as_str()).into() }
         );
+    }
+    
+    fn value_type(&self) -> Option<TypeId> {
+        Some(TypeId::of::<S>())
     }
 }
 

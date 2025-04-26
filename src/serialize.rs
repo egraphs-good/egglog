@@ -1,4 +1,5 @@
 use crate::{extract::Extractor, util::HashMap, *};
+use core_relations::PrimitivePrinter;
 use ordered_float::NotNan;
 use std::collections::VecDeque;
 
@@ -300,19 +301,17 @@ impl EGraph {
             let node_id = self.to_node_id(Some(sort), SerializedNode::Primitive(*value));
             // Add node for value
             {
+                 
                 // Children will be empty unless this is a container sort
                 let children: Vec<egraph_serialize::NodeId> = sort
-                    // TODO(yz): Don't use innter_values here; instead, use `Container::iter`.
-                    // However, I cannot do this because the container API of the new backend requires
-                    // the user to statically know the type of the container they are calling.
-                    .inner_values(todo!("value"))
+                    .inner_values(self, value)
                     .into_iter()
                     .map(|(s, v)| {
                         self.serialize_value(
                             serializer,
                             &s,
-                            todo!("&v"),
-                            &self.value_to_class_id(&s, todo!("&v")),
+                            &v,
+                            &self.value_to_class_id(&s, &v),
                         )
                     })
                     .collect();
@@ -320,15 +319,9 @@ impl EGraph {
                 let op = if sort.is_container_sort() {
                     sort.serialized_name(value).to_string()
                 } else {
-                    let (_, term) = sort
-                            // TODO(yz): `extract_term` will be gone soon once Haobin has the extractor interface.
-                            .extract_term(self, todo!("*value"), &serializer.extractor, &mut serializer.termdag)
-                            .expect("Extraction should be successful since extractor has been fully initialized");
-
-                    serializer
-                        .termdag
-                        .term_to_expr(&term, Span::Panic)
-                        .to_string()
+                    let primitive_id = self.backend.primitives().get_ty_by_id(sort.value_type().unwrap());
+                    let formatted_val = PrimitivePrinter { prim: self.backend.primitives(), ty: primitive_id, val: *value };
+                    format!("{:?}", formatted_val)
                 };
                 serializer.result.nodes.insert(
                     node_id.clone(),

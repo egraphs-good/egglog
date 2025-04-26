@@ -106,13 +106,19 @@ impl Sort for VecSort {
     fn is_eq_container_sort(&self) -> bool {
         self.element.is_eq_sort()
     }
-
-    fn inner_values(&self, value: &Value) -> Vec<(ArcSort, Value)> {
+    
+    fn old_inner_values(&self, value: &Value) -> Vec<(ArcSort, Value)> {
         // TODO: Potential duplication of code
         let vecs = self.vecs.lock().unwrap();
         let vec = vecs.get_index(value.bits as usize).unwrap();
         vec.data.iter().map(|e| (self.element(), *e)).collect()
     }
+
+    fn inner_values(&self, egraph: &EGraph, value: &core_relations::Value) -> Vec<(ArcSort, core_relations::Value)> {
+        let val = egraph.backend.containers().get_val::<VecContainer<core_relations::Value>>(*value).unwrap().clone();
+        val.data.iter().map(|e| (self.element.clone(), *e)).collect()
+    }
+
 
     fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
         let vecs = self.vecs.lock().unwrap();
@@ -181,6 +187,10 @@ impl Sort for VecSort {
 
     fn serialized_name(&self, _value: &core_relations::Value) -> Symbol {
         "vec-of".into()
+    }
+    
+    fn value_type(&self) -> Option<TypeId> {
+        Some(TypeId::of::<VecContainer<Value>>())
     }
 }
 
