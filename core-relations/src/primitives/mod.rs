@@ -68,6 +68,12 @@ impl Primitives {
         self.type_ids.intern(&TypeId::of::<P>())
     }
 
+    /// Get the [`PrimitiveId`] for the given primitive type id.
+    pub fn get_ty_by_id(&self, id: TypeId) -> PrimitiveId {
+        self.type_ids
+            .intern(&id)
+    }
+
     /// Get a [`Value`] representing the given primitive `p`.
     pub fn get<P: Primitive>(&self, p: P) -> Value {
         let id = self.get_ty::<P>();

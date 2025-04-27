@@ -298,6 +298,7 @@ impl<'a> ExecutionState<'a> {
     }
 
     /// Get an immutable reference to the table with id `table`.
+    /// Dangerous: Reading from a table during action execution may break the semi-naive evaluation
     pub fn get_table(&self, table: TableId) -> &WrappedTable {
         &self.db.table_info[table].table
     }
