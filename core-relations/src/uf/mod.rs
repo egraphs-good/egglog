@@ -21,7 +21,7 @@ use crate::{
         ColumnId, Constraint, Generation, MutationBuffer, Offset, Rebuilder, Row, Table, TableSpec,
         TableVersion, WrappedTableRef,
     },
-    TaggedRowBuffer,
+    TableChange, TaggedRowBuffer,
 };
 
 #[cfg(test)]
@@ -436,13 +436,19 @@ impl Table for DisplacedTable {
         })
     }
 
-    fn merge(&mut self, _: &mut ExecutionState) -> bool {
+    fn merge(&mut self, _: &mut ExecutionState) -> TableChange {
         while let Some(rowbuf) = self.buffered_writes.pop() {
             for row in rowbuf.iter() {
                 self.changed |= self.insert_impl(row).is_some();
             }
         }
-        mem::take(&mut self.changed)
+        let changed = mem::take(&mut self.changed);
+        // UF table rows can be updated "in place", we count both added and removed as changed in
+        // this case.
+        TableChange {
+            added: changed,
+            removed: changed,
+        }
     }
 }
 
@@ -790,18 +796,13 @@ impl Table for DisplacedTableWithProvenance {
         }
     }
 
-    // fn merge(&mut self, exec_state: &mut ExecutionState) -> bool {
-    //     let rows = mem::take(&mut *self.buffered_writes.borrow_mut());
-    //     for row in rows.iter() {
-    //         self.insert_impl(row);
-    //     }
-    // }
-    fn merge(&mut self, exec_state: &mut ExecutionState) -> bool {
+    fn merge(&mut self, exec_state: &mut ExecutionState) -> TableChange {
         while let Some(rowbuf) = self.buffered_writes.pop() {
             for row in rowbuf.iter() {
                 self.insert_impl(row);
             }
         }
+
         self.base.merge(exec_state)
     }
 

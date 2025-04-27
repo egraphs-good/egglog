@@ -81,6 +81,15 @@ impl TableSpec {
     }
 }
 
+/// A summary of the kinds of changes that a table underwent after a merge operation.
+#[derive(Eq, PartialEq, Copy, Clone)]
+pub struct TableChange {
+    /// Whether or not rows were added to the table.
+    pub added: bool,
+    /// Whether or not rows were removed from the table.
+    pub removed: bool,
+}
+
 /// A constraint on the values within a row.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Constraint {
@@ -307,7 +316,7 @@ pub trait Table: Any + Send + Sync {
 
     /// Merge any updates to the table, and potentially update the generation for
     /// the table.
-    fn merge(&mut self, exec_state: &mut ExecutionState) -> bool;
+    fn merge(&mut self, exec_state: &mut ExecutionState) -> TableChange;
 
     /// Create a new buffer for staging mutations on this table.
     fn new_buffer(&self) -> Box<dyn MutationBuffer>;

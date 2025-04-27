@@ -439,7 +439,8 @@ impl Database {
         self.counters.read(counter)
     }
 
-    /// A helper for merging all pending updates. Used to write to the database after updates have been staged.
+    /// A helper for merging all pending updates. Used to write to the database after updates have
+    /// been staged. Returns true if any tuples were added.
     ///
     /// Exposed for testing purposes.
     ///
@@ -482,7 +483,7 @@ impl Database {
                         .par_iter_mut()
                         .map(|(_, (info, buffers))| {
                             let mut es = ExecutionState::new(&predicted, db, mem::take(buffers));
-                            info.as_mut().unwrap().table.merge(&mut es) || es.changed
+                            info.as_mut().unwrap().table.merge(&mut es).added || es.changed
                         })
                         .max()
                         .unwrap_or(false)
@@ -491,7 +492,7 @@ impl Database {
                         .iter_mut()
                         .map(|(_, (info, buffers))| {
                             let mut es = ExecutionState::new(&predicted, db, mem::take(buffers));
-                            info.as_mut().unwrap().table.merge(&mut es) || es.changed
+                            info.as_mut().unwrap().table.merge(&mut es).added || es.changed
                         })
                         .max()
                         .unwrap_or(false)

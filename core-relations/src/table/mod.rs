@@ -33,7 +33,7 @@ use crate::{
         ColumnId, Constraint, Generation, MutationBuffer, Offset, Row, Table, TableSpec,
         TableVersion,
     },
-    Pooled, TableId,
+    Pooled, TableChange, TableId,
 };
 
 mod rebuild;
@@ -495,12 +495,11 @@ impl Table for SortedWritesTable {
         })
     }
 
-    fn merge(&mut self, exec_state: &mut ExecutionState) -> bool {
-        let mut changed = false;
-        changed |= self.do_delete();
-        changed |= self.do_insert(exec_state);
+    fn merge(&mut self, exec_state: &mut ExecutionState) -> TableChange {
+        let removed = self.do_delete();
+        let added = self.do_insert(exec_state);
         self.maybe_rehash();
-        changed
+        TableChange { removed, added }
     }
 
     fn get_row(&self, key: &[Value]) -> Option<Row> {
