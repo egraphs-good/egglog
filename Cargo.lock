@@ -287,7 +287,11 @@ dependencies = [
 [[package]]
 name = "concurrency"
 version = "0.1.0"
+<<<<<<< HEAD
 source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=e1c938d#e1c938d223ea6c423c9ff455c7a26130ff5ee736"
+=======
+source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=bdc2e0dbc368992c23e218610d723c87a0d8174f#bdc2e0dbc368992c23e218610d723c87a0d8174f"
+>>>>>>> 561c7be (Things are starting to blow up)
 dependencies = [
  "arc-swap",
  "rayon",
@@ -296,7 +300,11 @@ dependencies = [
 [[package]]
 name = "core-relations"
 version = "0.1.0"
+<<<<<<< HEAD
 source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=e1c938d#e1c938d223ea6c423c9ff455c7a26130ff5ee736"
+=======
+source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=bdc2e0dbc368992c23e218610d723c87a0d8174f#bdc2e0dbc368992c23e218610d723c87a0d8174f"
+>>>>>>> 561c7be (Things are starting to blow up)
 dependencies = [
  "anyhow",
  "bumpalo",
@@ -490,7 +498,11 @@ dependencies = [
 [[package]]
 name = "egglog-bridge"
 version = "0.1.0"
+<<<<<<< HEAD
 source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=e1c938d#e1c938d223ea6c423c9ff455c7a26130ff5ee736"
+=======
+source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=bdc2e0dbc368992c23e218610d723c87a0d8174f#bdc2e0dbc368992c23e218610d723c87a0d8174f"
+>>>>>>> 561c7be (Things are starting to blow up)
 dependencies = [
  "anyhow",
  "core-relations",
@@ -918,7 +930,7 @@ dependencies = [
 [[package]]
 name = "numeric-id"
 version = "0.1.0"
-source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=e1c938d#e1c938d223ea6c423c9ff455c7a26130ff5ee736"
+source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=bdc2e0dbc368992c23e218610d723c87a0d8174f#bdc2e0dbc368992c23e218610d723c87a0d8174f"
 dependencies = [
  "lazy_static",
  "rayon",
@@ -1434,7 +1446,11 @@ checksum = "5a5f39404a5da50712a4c1eecf25e90dd62b613502b7e925fd4e4d19b5c96512"
 [[package]]
 name = "union-find"
 version = "0.1.0"
+<<<<<<< HEAD
 source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=e1c938d#e1c938d223ea6c423c9ff455c7a26130ff5ee736"
+=======
+source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=bdc2e0dbc368992c23e218610d723c87a0d8174f#bdc2e0dbc368992c23e218610d723c87a0d8174f"
+>>>>>>> 561c7be (Things are starting to blow up)
 dependencies = [
  "concurrency",
  "crossbeam",

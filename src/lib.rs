@@ -405,7 +405,7 @@ pub struct EGraph {
     /// Pop reverts the egraph to the last pushed egraph.
     pushed_egraph: Option<Box<Self>>,
     unionfind: UnionFind,
-    pub functions: IndexMap<Symbol, Function>,
+    pub functions: Arc<Mutex<IndexMap<Symbol, Function>>>,
     rulesets: IndexMap<Symbol, Ruleset>,
     rule_last_run_timestamp: HashMap<Symbol, u32>,
     interactive_mode: bool,
@@ -414,7 +414,6 @@ pub struct EGraph {
     pub fact_directory: Option<PathBuf>,
     pub seminaive: bool,
     type_info: TypeInfo,
-    extract_func_id: Option<ExternalFunctionId>,
     /// Used for building the extract action
     extract_report: Option<ExtractReport>,
     /// The run report for the most recent run of a schedule.
@@ -433,7 +432,7 @@ impl Default for EGraph {
             names: Default::default(),
             pushed_egraph: Default::default(),
             unionfind: Default::default(),
-            functions: Default::default(),
+            functions: Rc::new(RefCell::new(Default::default())),
             rulesets: Default::default(),
             rule_last_run_timestamp: Default::default(),
             timestamp: 0,
@@ -441,15 +440,12 @@ impl Default for EGraph {
             interactive_mode: false,
             fact_directory: None,
             seminaive: true,
-            extract_func_id: None,
             extract_report: None,
             recent_run_report: None,
             overall_run_report: Default::default(),
             msgs: Some(vec![]),
             type_info: Default::default(),
         };
-
-        eg.extract_func_id = Some (eg.backend.register_external_func(extract::ExtractorAlter::default()));
 
         eg.add_sort(UnitSort, span!()).unwrap();
         eg.add_sort(StringSort, span!()).unwrap();
@@ -562,7 +558,7 @@ impl EGraph {
     #[track_caller]
     fn debug_assert_invariants(&self) {
         #[cfg(debug_assertions)]
-        for (name, function) in self.functions.iter() {
+        for (name, function) in (*self.functions).borrow_mut().iter() {
             function.nodes.assert_sorted();
             for (i, inputs, output) in function.nodes.iter_range(0..function.nodes.len(), true) {
                 assert_eq!(inputs.len(), function.schema.input.len());
@@ -659,7 +655,7 @@ impl EGraph {
     fn rebuild_one(&mut self) -> Result<usize, Error> {
         let mut new_unions = 0;
         let mut deferred_merges = Vec::new();
-        for function in self.functions.values_mut() {
+        for function in (*self.functions).borrow_mut().values_mut() {
             let (unions, merges) = function.rebuild(&mut self.unionfind, self.timestamp)?;
             if !merges.is_empty() {
                 deferred_merges.push((function.decl.name, merges));
@@ -675,7 +671,9 @@ impl EGraph {
 
     fn apply_merges(&mut self, func: Symbol, merges: &[DeferredMerge]) -> usize {
         let mut stack = Vec::new();
-        let mut function = self.functions.get_mut(&func).unwrap();
+        let functions_clone = self.functions.clone();
+        let mut functions_borrow_mut = (*functions_clone).borrow_mut();
+        let mut function = functions_borrow_mut.get_mut(&func).unwrap();
         let n_unions = self.unionfind.n_unions();
         let merge_prog = match &function.merge {
             MergeFn::Expr(e) => Some(e.clone()),
@@ -688,7 +686,7 @@ impl EGraph {
                 self.run_actions(&mut stack, &[*old, *new], prog).unwrap();
                 let merged = stack.pop().expect("merges should produce a value");
                 stack.clear();
-                function = self.functions.get_mut(&func).unwrap();
+                function = functions_borrow_mut.get_mut(&func).unwrap();
                 function.insert(inputs, merged, self.timestamp);
             }
         }
@@ -1118,13 +1116,11 @@ impl EGraph {
             rule.to_canonicalized_core_rule(&self.type_info, &mut self.parser.symbol_gen)?;
         let (query, actions) = (core_rule.body, core_rule.head);
 
-        let extract_func_id = self.get_extract_func_id();
         let rule_id = {
             let mut translator = BackendRule::new(
                 self.backend.new_rule(name.into(), self.seminaive),
                 &self.functions,
                 &self.type_info,
-                extract_func_id,
             );
             translator.query(&query, false);
             translator.actions(&actions)?;
@@ -1163,13 +1159,11 @@ impl EGraph {
             &mut self.parser.symbol_gen,
         )?;
 
-        let extract_func_id = self.get_extract_func_id();
         let new_result = {
             let mut translator = BackendRule::new(
                 self.backend.new_rule("eval_actions", false),
                 &self.functions,
                 &self.type_info,
-                extract_func_id,
             );
             translator.actions(&actions)?;
             let id = translator.build();
@@ -1264,12 +1258,10 @@ impl EGraph {
                     Some(core_relations::Value::new_const(0))
                 }));
 
-            let extract_func_id = self.get_extract_func_id();
             let mut translator = BackendRule::new(
                 self.backend.new_rule("check_facts", false),
                 &self.functions,
                 &self.type_info,
-                extract_func_id,
             );
             translator.query(&query, true);
             translator.rb.call_external_func(
@@ -1691,10 +1683,6 @@ impl EGraph {
         self.type_info.get_sorts_by(f)
     }
 
-    pub fn get_extract_func_id(&self) -> ExternalFunctionId {
-        self.extract_func_id.expect("Uninitialized extract_func_id")
-    }
-
     /// Gets the last extract report and returns it, if the last command saved it.
     pub fn get_extract_report(&self) -> &Option<ExtractReport> {
         &self.extract_report
@@ -1729,25 +1717,21 @@ impl EGraph {
 struct BackendRule<'a> {
     pub rb: egglog_bridge::RuleBuilder<'a>,
     entries: HashMap<core::ResolvedAtomTerm, QueryEntry>,
-    functions: &'a IndexMap<Symbol, Function>,
+    functions: Rc<RefCell<IndexMap<Symbol, Function>>>,
     type_info: &'a TypeInfo,
-    // Can and should be in the backend egraph struct
-    extract_func_id: ExternalFunctionId,
 }
 
 impl<'a> BackendRule<'a> {
     fn new(
         rb: egglog_bridge::RuleBuilder<'a>,
-        functions: &'a IndexMap<Symbol, Function>,
+        functions: Rc<RefCell<IndexMap<Symbol, Function>>>,
         type_info: &'a TypeInfo,
-        extract_func_id: ExternalFunctionId,
     ) -> BackendRule<'a> {
         BackendRule {
             rb,
             functions,
             type_info,
             entries: Default::default(),
-            extract_func_id,
         }
     }
 
@@ -1924,10 +1908,27 @@ impl<'a> BackendRule<'a> {
                     match *n {
                         core::GenericAtomTerm::Literal(_, Literal::Int(variants)) => {
                             log::debug!("x = {:?} n = {:?}", x, variants);
+                            // Resolve the sort of the extract root and pass that to the extractor 
+                            let xsort = match x {
+                                core::GenericAtomTerm::Var(_, leaf) => leaf.sort.clone(),
+                                core::GenericAtomTerm::Global(_, leaf) => leaf.sort.clone(),
+                                core::GenericAtomTerm::Literal(_, literal) =>
+                                    match literal {
+                                        Literal::Bool(_) => self.type_info.get_sort::<BoolSort>() as Arc<dyn Sort>,
+                                        Literal::Int(_) => self.type_info.get_sort::<I64Sort>(),
+                                        Literal::Float(_) => self.type_info.get_sort::<F64Sort>(),
+                                        Literal::String(_) => self.type_info.get_sort::<StringSort>(),
+                                        Literal::Unit => self.type_info.get_sort::<UnitSort>(),
+                                    }
+                            };
                             let x = self.entry(x);
                             let n = self.entry(n);
+                            let extractor = extract::ExtractorAlter::new(
+                                xsort
+                            );
+                            let extract_func_id = self.rb.register_external_func(extractor);
                             self.rb.call_external_func(
-                                self.extract_func_id, 
+                                extract_func_id, 
                                 &vec![x, n], 
                                 ColumnTy::Primitive(self.rb.egraph().primitives().get_ty::<()>()), 
                                 format!("{span}: call of extract failed").as_str(),

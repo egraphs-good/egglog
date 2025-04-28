@@ -1,7 +1,10 @@
+use std::sync::{Arc, Mutex};
+
 use crate::ast::Symbol;
-use crate::sort::I64Sort;
+use crate::sort;
 use crate::termdag::{Term, TermDag};
 use crate::util::HashMap;
+use crate::IndexMap;
 use crate::{ArcSort, EGraph, Error, Function, HEntry, Id, Value};
 
 pub type Cost = usize;
@@ -218,12 +221,19 @@ impl<'a> Extractor<'a> {
 
 #[derive(Clone)]
 pub struct ExtractorAlter {
-    
+    rootsort : ArcSort,
+    functions : Arc<Mutex<IndexMap<Symbol, Function>>>
 }
 
-impl Default for ExtractorAlter {
-    fn default() -> Self {
-        ExtractorAlter {}
+impl ExtractorAlter {
+    pub fn new(
+        rootsort : ArcSort,
+        functions : Arc<Mutex<IndexMap<Symbol, Function>>>
+    ) -> Self {
+        ExtractorAlter {  
+            rootsort,
+            functions,
+        }
     }
 }
 
@@ -233,7 +243,8 @@ impl ExternalFunction for ExtractorAlter {
         assert!(args.len() == 2);
         let target = args[0];
         let nvariants = exec_state.prims().unwrap::<i64>(args[1]);
-        print!("target = {:?}, nvariants = {}", target, nvariants);
+        print!("target = {:?}, rootsort = {:?}, nvariants = {}", target, self.rootsort, nvariants);
+        panic!{"Stop right there"};
         Some(exec_state.prims().get::<()>(()))
     }
 }
