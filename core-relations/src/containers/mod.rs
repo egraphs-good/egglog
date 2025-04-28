@@ -30,6 +30,9 @@ use crate::{
     WrappedTable,
 };
 
+#[cfg(test)]
+mod tests;
+
 define_id!(pub ContainerId, u32, "an identifier for containers");
 
 pub trait MergeFn:
@@ -239,26 +242,46 @@ impl<C: Container> ContainerEnv<C> {
     }
 
     fn get_or_insert(&self, container: &C, exec_state: &mut ExecutionState) -> Value {
-        match self.to_id.get(container) {
-            Some(value) => *value,
-            None => {
-                let value = Value::from_usize(exec_state.inc_counter(self.counter));
-                self.to_id.insert(container.clone(), value);
-                let target_map = self.to_id.determine_map(container);
-                // This assertion is here because in parallel rebuilding we use `to_container` to
-                // compute the intended shard for to_id, because we have a mutable borrow of
-                // `to_container` that means we cannot call `determine_map` on `to_id`.
-                debug_assert_eq!(
-                    target_map,
-                    self.to_container
-                        .determine_shard(hash_container(container) as usize)
-                );
-                self.to_container
-                    .insert(value, (hash_container(container) as usize, target_map));
+        if let Some(value) = self.to_id.get(container) {
+            return *value;
+        }
+
+        // Time to insert a new mapping. First, insert into `to_container`: the moment that we
+        // insert a new value into `to_id`, someone else can return it from another call to
+        // `get_or_insert` and then feed that value to `get_container`.
+
+        let value = Value::from_usize(exec_state.inc_counter(self.counter));
+        let target_map = self.to_id.determine_map(container);
+        // This assertion is here because in parallel rebuilding we use `to_container` to
+        // compute the intended shard for to_id, because we have a mutable borrow of
+        // `to_container` that means we cannot call `determine_map` on `to_id`.
+        debug_assert_eq!(
+            target_map,
+            self.to_container
+                .determine_shard(hash_container(container) as usize)
+        );
+        self.to_container
+            .insert(value, (hash_container(container) as usize, target_map));
+
+        // Now insert into `to_id`, handling the case where a different thread is doing the same
+        // thing.
+        match self.to_id.entry(container.clone()) {
+            dashmap::Entry::Vacant(vac) => {
+                // Common case: insert the mapping in to_id and update the index.
+                vac.insert(value);
                 for val in container.iter() {
                     self.val_index.entry(val).or_default().insert(value);
                 }
                 value
+            }
+            dashmap::Entry::Occupied(occ) => {
+                // Someone inserted `container` into the mapping since we looked it up. Remove the
+                // mapping that we inserted into `to_container` (we won't use it), and instead
+                // return the "winning" value.
+                let res = *occ.get();
+                std::mem::drop(occ); // drop the lock.
+                self.to_container.remove(&value);
+                res
             }
         }
     }
