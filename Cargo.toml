@@ -60,9 +60,9 @@ thiserror = "1"
 
 # Backend
 # TODO: move egglog-backend repo into core egglog repo
-core-relations = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "e1c938d" }
-egglog-bridge = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "e1c938d" }
-numeric-id = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "e1c938d" }
+core-relations = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "bdc2e0dbc368992c23e218610d723c87a0d8174f" }
+egglog-bridge = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "bdc2e0dbc368992c23e218610d723c87a0d8174f" }
+numeric-id = { git = "https://github.com/egraphs-good/egglog-backend.git", rev = "bdc2e0dbc368992c23e218610d723c87a0d8174f" }
 
 # Need to add "js" feature for "graphviz-rust" to work in wasm
 getrandom = { version = "0.2.10", optional = true, features = ["js"] }
