@@ -14,8 +14,8 @@ use crate::{
     pool::{Clear, Pooled},
     query::RuleSet,
     row_buffer::TaggedRowBuffer,
-    table_spec::{ColumnId, Offset},
-    OffsetRange, Pool, PoolSet, SubsetRef,
+    table_spec::{ColumnId, Offset, WrappedTableRef},
+    Constraint, OffsetRange, Pool, PoolSet, SubsetRef,
 };
 
 use super::{
@@ -413,6 +413,16 @@ impl<'a> JoinState<'a> {
                 );
             }};
         }
+
+        fn refine_subset(
+            sub: Subset,
+            constraints: &[Constraint],
+            table: &WrappedTableRef,
+        ) -> Subset {
+            let sub = table.refine_live(sub);
+            table.refine(sub, &constraints)
+        }
+
         match &plan.stages[cur] {
             JoinStage::EvalConstraints { atom, subset, .. } => {
                 if subset.is_empty() {
@@ -431,12 +441,16 @@ impl<'a> JoinState<'a> {
                     }
 
                     let prober = self.get_column_index(plan, binding_info, a.atom, a.column);
+                    let table = self.db.tables[plan.atoms[a.atom].table].table.as_ref();
                     let mut updates = with_pool_set(|ps| {
                         let mut updates: Pooled<Vec<Pooled<FrameUpdate>>> = ps.get();
                         prober.for_each(|val, x| {
                             let mut update: Pooled<FrameUpdate> = ps.get();
                             update.push_binding(*var, val[0]);
-                            let sub = x.to_owned(&ps.get_pool());
+                            let sub = refine_subset(x.to_owned(&ps.get_pool()), &[], &table);
+                            if sub.is_empty() {
+                                return;
+                            }
                             update.refine_atom(a.atom, sub);
                             updates.push(update);
                             if updates.len() >= chunk_size {
@@ -453,14 +467,13 @@ impl<'a> JoinState<'a> {
                         return;
                     }
                     let prober = self.get_column_index(plan, binding_info, a.atom, a.column);
+                    let table = self.db.tables[plan.atoms[a.atom].table].table.as_ref();
                     let mut updates = with_pool_set(|ps| {
                         let mut updates: Pooled<Vec<Pooled<FrameUpdate>>> = ps.get();
                         prober.for_each(|val, x| {
                             let mut update: Pooled<FrameUpdate> = ps.get();
                             update.push_binding(*var, val[0]);
-                            let sub = self.db.tables[plan.atoms[a.atom].table]
-                                .table
-                                .refine(x.to_owned(&ps.get_pool()), &a.cs);
+                            let sub = refine_subset(x.to_owned(&ps.get_pool()), &a.cs, &table);
                             if sub.is_empty() {
                                 return;
                             }
@@ -489,31 +502,25 @@ impl<'a> JoinState<'a> {
 
                     let smaller_atom = smaller_scan.atom;
                     let larger_atom = larger_scan.atom;
+                    let large_table = self.db.tables[plan.atoms[larger_atom].table].table.as_ref();
+                    let small_table = self.db.tables[plan.atoms[smaller_atom].table]
+                        .table
+                        .as_ref();
                     with_pool_set(|ps| {
                         smaller.for_each(|val, small_sub| {
                             if let Some(mut large_sub) = larger.get_subset(val) {
-                                if !larger_scan.cs.is_empty() {
-                                    large_sub = self.db.tables[plan.atoms[larger_atom].table]
-                                        .table
-                                        .refine(large_sub, &larger_scan.cs);
-                                    if large_sub.is_empty() {
-                                        return;
-                                    }
+                                large_sub = refine_subset(large_sub, &larger_scan.cs, &large_table);
+                                if large_sub.is_empty() {
+                                    return;
                                 }
-                                let small_sub = if smaller_scan.cs.is_empty() {
-                                    small_sub.to_owned(&ps.get_pool())
-                                } else {
-                                    let sub = self.db.tables[plan.atoms[smaller_atom].table]
-                                        .table
-                                        .refine(
-                                            small_sub.to_owned(&ps.get_pool()),
-                                            &smaller_scan.cs,
-                                        );
-                                    if sub.is_empty() {
-                                        return;
-                                    }
-                                    sub
-                                };
+                                let small_sub = refine_subset(
+                                    small_sub.to_owned(&ps.get_pool()),
+                                    &smaller_scan.cs,
+                                    &small_table,
+                                );
+                                if small_sub.is_empty() {
+                                    return;
+                                }
                                 let mut update: Pooled<FrameUpdate> = ps.get();
                                 update.push_binding(*var, val[0]);
                                 update.refine_atom(smaller_atom, small_sub);
@@ -546,6 +553,11 @@ impl<'a> JoinState<'a> {
                         probers.push(prober);
                     }
 
+                    let main_spec = &rest[smallest];
+                    let main_spec_table = self.db.tables[plan.atoms[main_spec.atom].table]
+                        .table
+                        .as_ref();
+
                     if smallest_size != 0 {
                         // Smallest leads the scan
                         probers[smallest].for_each(|key, sub| {
@@ -557,13 +569,12 @@ impl<'a> JoinState<'a> {
                                         continue;
                                     }
                                     if let Some(mut sub) = probers[i].get_subset(key) {
-                                        if !rest[i].cs.is_empty() {
-                                            sub = self.db.tables[plan.atoms[rest[i].atom].table]
-                                                .table
-                                                .refine(sub, &rest[i].cs);
-                                            if sub.is_empty() {
-                                                return;
-                                            }
+                                        let table = self.db.tables[plan.atoms[rest[i].atom].table]
+                                            .table
+                                            .as_ref();
+                                        sub = refine_subset(sub, &rest[i].cs, &table);
+                                        if sub.is_empty() {
+                                            return;
                                         }
                                         update.refine_atom(scan.atom, sub)
                                     } else {
@@ -571,15 +582,10 @@ impl<'a> JoinState<'a> {
                                         return;
                                     }
                                 }
-                                let main_spec = &rest[smallest];
-                                let mut sub = sub.to_owned(&ps.get_pool());
-                                if !main_spec.cs.is_empty() {
-                                    sub = self.db.tables[plan.atoms[main_spec.atom].table]
-                                        .table
-                                        .refine(sub, &main_spec.cs);
-                                    if sub.is_empty() {
-                                        return;
-                                    }
+                                let sub = sub.to_owned(&ps.get_pool());
+                                let sub = refine_subset(sub, &main_spec.cs, &main_spec_table);
+                                if sub.is_empty() {
+                                    return;
                                 }
                                 update.refine_atom(main_spec.atom, sub);
                                 updates.push(update);
@@ -712,9 +718,7 @@ impl<'a> JoinState<'a> {
                             // apply any constraints needed in this scan.
                             let table_info = &self.db.tables[plan.atoms[*atom].table];
                             let cs = &to_intersect[*i].0.constraints;
-                            if !cs.is_empty() {
-                                subset = table_info.table.refine(subset, cs);
-                            }
+                            subset = refine_subset(subset, cs, &table_info.table.as_ref());
                             if subset.is_empty() {
                                 // There are no possible values for this subset
                                 continue 'mid;

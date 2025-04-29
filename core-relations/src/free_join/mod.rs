@@ -412,14 +412,18 @@ impl Database {
             .tables
             .get(table)
             .expect("table must be declared in the current database");
-        let mut sub = table_info.table.all();
+        let table = &table_info.table;
         if let Some(c) = c {
-            if let Some(sub) = table_info.table.fast_subset(&c) {
+            if let Some(sub) = table.fast_subset(&c) {
+                // In the case a the constraint can be computed quickly,
+                // we do not filter for staleness, which may over-approximate.
                 return sub.size();
+            } else {
+                table.refine_one(table.refine_live(table.all()), &c).size()
             }
-            sub = table_info.table.refine(sub, &[c]);
+        } else {
+            table.len()
         }
-        sub.size()
     }
 
     /// Create a new counter for this database.

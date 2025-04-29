@@ -412,67 +412,67 @@ impl Table for SortedWritesTable {
         match constraint {
             Constraint::Eq { .. } => None,
             Constraint::EqConst { col, val } => {
-                if col == &sort_by {
-                    match self.binary_search_sort_val(*val) {
-                        Ok((found, bound)) => Some(Subset::Dense(OffsetRange::new(found, bound))),
-                        Err(_) => Some(Subset::empty()),
+                        if col == &sort_by {
+                            match self.binary_search_sort_val(*val) {
+                                Ok((found, bound)) => Some(Subset::Dense(OffsetRange::new(found, bound))),
+                                Err(_) => Some(Subset::empty()),
+                            }
+                        } else {
+                            None
+                        }
                     }
-                } else {
-                    None
-                }
-            }
             Constraint::LtConst { col, val } => {
-                if col == &sort_by {
-                    match self.binary_search_sort_val(*val) {
-                        Ok((found, _)) => {
-                            Some(Subset::Dense(OffsetRange::new(RowId::new(0), found)))
+                        if col == &sort_by {
+                            match self.binary_search_sort_val(*val) {
+                                Ok((found, _)) => {
+                                    Some(Subset::Dense(OffsetRange::new(RowId::new(0), found)))
+                                }
+                                Err(next) => Some(Subset::Dense(OffsetRange::new(RowId::new(0), next))),
+                            }
+                        } else {
+                            None
                         }
-                        Err(next) => Some(Subset::Dense(OffsetRange::new(RowId::new(0), next))),
                     }
-                } else {
-                    None
-                }
-            }
             Constraint::GtConst { col, val } => {
-                if col == &sort_by {
-                    match self.binary_search_sort_val(*val) {
-                        Ok((_, bound)) => {
-                            Some(Subset::Dense(OffsetRange::new(bound, self.data.next_row())))
-                        }
-                        Err(next) => {
-                            Some(Subset::Dense(OffsetRange::new(next, self.data.next_row())))
+                        if col == &sort_by {
+                            match self.binary_search_sort_val(*val) {
+                                Ok((_, bound)) => {
+                                    Some(Subset::Dense(OffsetRange::new(bound, self.data.next_row())))
+                                }
+                                Err(next) => {
+                                    Some(Subset::Dense(OffsetRange::new(next, self.data.next_row())))
+                                }
+                            }
+                        } else {
+                            None
                         }
                     }
-                } else {
-                    None
-                }
-            }
             Constraint::LeConst { col, val } => {
-                if col == &sort_by {
-                    match self.binary_search_sort_val(*val) {
-                        Ok((_, bound)) => {
-                            Some(Subset::Dense(OffsetRange::new(RowId::new(0), bound)))
+                        if col == &sort_by {
+                            match self.binary_search_sort_val(*val) {
+                                Ok((_, bound)) => {
+                                    Some(Subset::Dense(OffsetRange::new(RowId::new(0), bound)))
+                                }
+                                Err(next) => Some(Subset::Dense(OffsetRange::new(RowId::new(0), next))),
+                            }
+                        } else {
+                            None
                         }
-                        Err(next) => Some(Subset::Dense(OffsetRange::new(RowId::new(0), next))),
                     }
-                } else {
-                    None
-                }
-            }
             Constraint::GeConst { col, val } => {
-                if col == &sort_by {
-                    match self.binary_search_sort_val(*val) {
-                        Ok((found, _)) => {
-                            Some(Subset::Dense(OffsetRange::new(found, self.data.next_row())))
-                        }
-                        Err(next) => {
-                            Some(Subset::Dense(OffsetRange::new(next, self.data.next_row())))
+                        if col == &sort_by {
+                            match self.binary_search_sort_val(*val) {
+                                Ok((found, _)) => {
+                                    Some(Subset::Dense(OffsetRange::new(found, self.data.next_row())))
+                                }
+                                Err(next) => {
+                                    Some(Subset::Dense(OffsetRange::new(next, self.data.next_row())))
+                                }
+                            }
+                        } else {
+                            None
                         }
                     }
-                } else {
-                    None
-                }
-            }
         }
     }
 
