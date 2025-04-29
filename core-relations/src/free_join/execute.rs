@@ -546,52 +546,50 @@ impl<'a> JoinState<'a> {
                         probers.push(prober);
                     }
 
-                    if smallest_size == 0 {
-                        return;
-                    }
-
-                    // Smallest leads the scan
-                    probers[smallest].for_each(|key, sub| {
-                        with_pool_set(|ps| {
-                            let mut update: Pooled<FrameUpdate> = ps.get();
-                            update.push_binding(*var, key[0]);
-                            for (i, scan) in rest.iter().enumerate() {
-                                if i == smallest {
-                                    continue;
-                                }
-                                if let Some(mut sub) = probers[i].get_subset(key) {
-                                    if !rest[i].cs.is_empty() {
-                                        sub = self.db.tables[plan.atoms[rest[i].atom].table]
-                                            .table
-                                            .refine(sub, &rest[i].cs);
-                                        if sub.is_empty() {
-                                            return;
-                                        }
+                    if smallest_size != 0 {
+                        // Smallest leads the scan
+                        probers[smallest].for_each(|key, sub| {
+                            with_pool_set(|ps| {
+                                let mut update: Pooled<FrameUpdate> = ps.get();
+                                update.push_binding(*var, key[0]);
+                                for (i, scan) in rest.iter().enumerate() {
+                                    if i == smallest {
+                                        continue;
                                     }
-                                    update.refine_atom(scan.atom, sub)
-                                } else {
-                                    // Empty intersection.
-                                    return;
+                                    if let Some(mut sub) = probers[i].get_subset(key) {
+                                        if !rest[i].cs.is_empty() {
+                                            sub = self.db.tables[plan.atoms[rest[i].atom].table]
+                                                .table
+                                                .refine(sub, &rest[i].cs);
+                                            if sub.is_empty() {
+                                                return;
+                                            }
+                                        }
+                                        update.refine_atom(scan.atom, sub)
+                                    } else {
+                                        // Empty intersection.
+                                        return;
+                                    }
                                 }
-                            }
-                            let main_spec = &rest[smallest];
-                            let mut sub = sub.to_owned(&ps.get_pool());
-                            if !main_spec.cs.is_empty() {
-                                sub = self.db.tables[plan.atoms[main_spec.atom].table]
-                                    .table
-                                    .refine(sub, &main_spec.cs);
-                                if sub.is_empty() {
-                                    return;
+                                let main_spec = &rest[smallest];
+                                let mut sub = sub.to_owned(&ps.get_pool());
+                                if !main_spec.cs.is_empty() {
+                                    sub = self.db.tables[plan.atoms[main_spec.atom].table]
+                                        .table
+                                        .refine(sub, &main_spec.cs);
+                                    if sub.is_empty() {
+                                        return;
+                                    }
                                 }
-                            }
-                            update.refine_atom(main_spec.atom, sub);
-                            updates.push(update);
-                            if updates.len() >= chunk_size {
-                                drain_updates_parallel!(updates);
-                            }
-                        })
-                    });
-                    drain_updates!(updates);
+                                update.refine_atom(main_spec.atom, sub);
+                                updates.push(update);
+                                if updates.len() >= chunk_size {
+                                    drain_updates_parallel!(updates);
+                                }
+                            })
+                        });
+                        drain_updates!(updates);
+                    }
                     for (spec, prober) in rest.iter().zip(probers.into_iter()) {
                         binding_info.subsets.insert(spec.atom, prober.subset);
                     }
