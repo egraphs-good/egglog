@@ -118,15 +118,23 @@ pub mod bin {
                     };
                     if args.to_dot {
                         let dot_path = serialize_filename.with_extension("dot");
-                        serialized.to_dot_file(dot_path).unwrap()
+                        serialized
+                            .to_dot_file(dot_path.clone())
+                            .unwrap_or_else(|_| panic!("Failed to write dot file to {dot_path:?}"));
                     }
                     if args.to_svg {
                         let svg_path = serialize_filename.with_extension("svg");
-                        serialized.to_svg_file(svg_path).unwrap()
+                        serialized.to_svg_file(svg_path.clone()).unwrap_or_else( |_|
+                            panic!("Failed to write svg file to {svg_path:?}. Make sure you have the `dot` executable installed")
+                        );
                     }
                     if args.to_json {
                         let json_path = serialize_filename.with_extension("json");
-                        serialized.to_json_file(json_path).unwrap();
+                        serialized
+                            .to_json_file(json_path.clone())
+                            .unwrap_or_else(|_| {
+                                panic!("Failed to write json file to {json_path:?}")
+                            });
                     }
                 }
             }
