@@ -44,7 +44,7 @@ use constraint::{Constraint, SimpleTypeConstraint, TypeConstraint};
 use core::ResolvedAtomTerm;
 use core_relations::{ExternalFunctionId, PrimitivePrinter};
 use egglog_bridge::{ColumnTy, QueryEntry};
-use extract::Extractor;
+use extract::{Extractor, ExtractorView};
 pub use function::Function;
 use function::*;
 use gj::*;
@@ -62,13 +62,14 @@ use std::iter::once;
 use std::ops::{Deref, Range};
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 pub use termdag::{Term, TermDag, TermId};
 use thiserror::Error;
 pub use typechecking::TypeInfo;
 use unionfind::*;
 use util::*;
 pub use value::*;
+use arc_swap::ArcSwap;
 
 pub type ArcSort = Arc<dyn Sort>;
 
@@ -403,7 +404,7 @@ pub struct EGraph {
     pub parser: Parser,
     egraphs: Vec<Self>,
     unionfind: UnionFind,
-    pub functions: Arc<Mutex<IndexMap<Symbol, Function>>>,
+    pub functions: IndexMap<Symbol, Function>,
     rulesets: IndexMap<Symbol, Ruleset>,
     rule_last_run_timestamp: HashMap<Symbol, u32>,
     interactive_mode: bool,
@@ -412,6 +413,7 @@ pub struct EGraph {
     pub fact_directory: Option<PathBuf>,
     pub seminaive: bool,
     type_info: TypeInfo,
+    extractor_view : Arc<ArcSwap<ExtractorView>>,
     /// Used for building the extract action
     extract_report: Option<ExtractReport>,
     /// The run report for the most recent run of a schedule.
@@ -429,7 +431,7 @@ impl Default for EGraph {
             parser: Default::default(),
             egraphs: vec![],
             unionfind: Default::default(),
-            functions: Rc::new(RefCell::new(Default::default())),
+            functions: Default::default(),
             rulesets: Default::default(),
             rule_last_run_timestamp: Default::default(),
             timestamp: 0,
@@ -442,6 +444,7 @@ impl Default for EGraph {
             overall_run_report: Default::default(),
             msgs: Some(vec![]),
             type_info: Default::default(),
+            extractor_view: Arc::new(ArcSwap::from_pointee(Default::default())),
         };
 
         eg.add_sort(UnitSort, span!()).unwrap();
@@ -550,7 +553,7 @@ impl EGraph {
     #[track_caller]
     fn debug_assert_invariants(&self) {
         #[cfg(debug_assertions)]
-        for (name, function) in (*self.functions).borrow_mut().iter() {
+        for (name, function) in self.functions.iter() {
             function.nodes.assert_sorted();
             for (i, inputs, output) in function.nodes.iter_range(0..function.nodes.len(), true) {
                 assert_eq!(inputs.len(), function.schema.input.len());
@@ -647,7 +650,7 @@ impl EGraph {
     fn rebuild_one(&mut self) -> Result<usize, Error> {
         let mut new_unions = 0;
         let mut deferred_merges = Vec::new();
-        for function in (*self.functions).borrow_mut().values_mut() {
+        for function in self.functions.values_mut() {
             let (unions, merges) = function.rebuild(&mut self.unionfind, self.timestamp)?;
             if !merges.is_empty() {
                 deferred_merges.push((function.decl.name, merges));
@@ -664,7 +667,7 @@ impl EGraph {
     fn apply_merges(&mut self, func: Symbol, merges: &[DeferredMerge]) -> usize {
         let mut stack = Vec::new();
         let functions_clone = self.functions.clone();
-        let mut functions_borrow_mut = (*functions_clone).borrow_mut();
+        let mut functions_borrow_mut = functions_clone;
         let mut function = functions_borrow_mut.get_mut(&func).unwrap();
         let n_unions = self.unionfind.n_unions();
         let merge_prog = match &function.merge {
@@ -1113,6 +1116,7 @@ impl EGraph {
                 self.backend.new_rule(name.into(), self.seminaive),
                 &self.functions,
                 &self.type_info,
+                &self.extractor_view,
             );
             translator.query(&query, false);
             translator.actions(&actions)?;
@@ -1156,6 +1160,7 @@ impl EGraph {
                 self.backend.new_rule("eval_actions", false),
                 &self.functions,
                 &self.type_info,
+                &self.extractor_view,
             );
             translator.actions(&actions)?;
             let id = translator.build();
@@ -1254,6 +1259,7 @@ impl EGraph {
                 self.backend.new_rule("check_facts", false),
                 &self.functions,
                 &self.type_info,
+                &self.extractor_view,
             );
             translator.query(&query, true);
             translator.rb.call_external_func(
@@ -1337,6 +1343,8 @@ impl EGraph {
                 log::info!("Declared rule {name}.")
             }
             ResolvedNCommand::RunSchedule(sched) => {
+                // Update extractor_view before every rule run
+                self.extractor_view.store(Arc::new(ExtractorView::new(&self.functions)));
                 let report = self.run_schedule(&sched);
                 log::info!("Ran schedule {}.", sched);
                 log::info!("Report: {}", report);
@@ -1354,6 +1362,11 @@ impl EGraph {
             ResolvedNCommand::CoreAction(action) => match &action {
                 ResolvedAction::Let(_, name, contents) => {
                     panic!("Globals should have been desugared away: {name} = {contents}")
+                }
+                ResolvedAction::Extract(_, _, _) => {
+                    // Update extractor_view before the top level extract command
+                    self.extractor_view.store(Arc::new(ExtractorView::new(&self.functions)));
+                    self.eval_actions(&ResolvedActions::new(vec![action.clone()]))?;
                 }
                 _ => {
                     self.eval_actions(&ResolvedActions::new(vec![action.clone()]))?;
@@ -1713,20 +1726,23 @@ impl EGraph {
 struct BackendRule<'a> {
     pub rb: egglog_bridge::RuleBuilder<'a>,
     entries: HashMap<core::ResolvedAtomTerm, QueryEntry>,
-    functions: Rc<RefCell<IndexMap<Symbol, Function>>>,
+    functions: &'a IndexMap<Symbol, Function>,
     type_info: &'a TypeInfo,
+    extractor_view: &'a Arc<ArcSwap<ExtractorView>>,
 }
 
 impl<'a> BackendRule<'a> {
     fn new(
         rb: egglog_bridge::RuleBuilder<'a>,
-        functions: Rc<RefCell<IndexMap<Symbol, Function>>>,
+        functions: &'a IndexMap<Symbol, Function>,
         type_info: &'a TypeInfo,
+        extractor_view: &'a Arc<ArcSwap<ExtractorView>>,
     ) -> BackendRule<'a> {
         BackendRule {
             rb,
             functions,
             type_info,
+            extractor_view,
             entries: Default::default(),
         }
     }
@@ -1920,7 +1936,8 @@ impl<'a> BackendRule<'a> {
                             let x = self.entry(x);
                             let n = self.entry(n);
                             let extractor = extract::ExtractorAlter::new(
-                                xsort
+                                xsort,
+                                Arc::clone(self.extractor_view),
                             );
                             let extract_func_id = self.rb.register_external_func(extractor);
                             self.rb.call_external_func(
