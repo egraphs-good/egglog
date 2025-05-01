@@ -470,6 +470,7 @@ name = "egglog"
 version = "0.5.0"
 dependencies = [
  "add_primitive",
+ "arc-swap",
  "chrono",
  "clap",
  "codspeed-criterion-compat",

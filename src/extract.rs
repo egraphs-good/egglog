@@ -1,11 +1,12 @@
-use std::sync::{Arc, Mutex};
-
 use crate::ast::Symbol;
+use crate::function::ResolvedSchema;
 use crate::sort;
 use crate::termdag::{Term, TermDag};
 use crate::util::HashMap;
 use crate::IndexMap;
 use crate::{ArcSort, EGraph, Error, Function, HEntry, Id, Value};
+use std::sync::Arc;
+use arc_swap::ArcSwap;
 
 pub type Cost = usize;
 
@@ -219,31 +220,75 @@ impl<'a> Extractor<'a> {
     }
 }
 
+use egglog_bridge::FunctionId;
+
+/// Captures what the extractor need to know about a table/function
+/// Should only be used for extractable functions
+#[derive(Debug)]
+struct ExtractorViewFunc {
+    pub schema : ResolvedSchema,
+    pub cost : Option<Cost>,
+    pub backend_id : FunctionId,
+}
+
+impl ExtractorViewFunc {
+    fn new (f : &Function) -> Self {
+        debug_assert!(f.is_extractable(), "Unextractable function in ExtractorView");
+        ExtractorViewFunc {
+            schema: f.schema.clone(),
+            cost: f.decl.cost,
+            backend_id: f.new_backend_id,
+        }
+    } 
+}
+
+// A struct for copying meta data required for extraction
+#[derive(Default, Debug)]
+pub struct ExtractorView {
+    funcs : IndexMap<Symbol, ExtractorViewFunc>,
+}
+
+impl ExtractorView {
+    pub fn new (function: &IndexMap<Symbol, Function>) -> Self {
+        let mut funcs : IndexMap<Symbol, ExtractorViewFunc> = Default::default();
+        for func in function.iter() {
+            if func.1.is_extractable() {
+                funcs.insert(func.0.clone(), ExtractorViewFunc::new(func.1));
+            }
+        }
+        ExtractorView {
+            funcs
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct ExtractorAlter {
     rootsort : ArcSort,
-    functions : Arc<Mutex<IndexMap<Symbol, Function>>>
+    func : Arc<ArcSwap<ExtractorView>>,
 }
 
 impl ExtractorAlter {
     pub fn new(
         rootsort : ArcSort,
-        functions : Arc<Mutex<IndexMap<Symbol, Function>>>
+        func : Arc<ArcSwap<ExtractorView>>,
     ) -> Self {
         ExtractorAlter {  
             rootsort,
-            functions,
+            func
         }
     }
 }
 
 use core_relations::{ExecutionState, ExternalFunction};
+
 impl ExternalFunction for ExtractorAlter {
     fn invoke(&self, exec_state: &mut ExecutionState, args: &[core_relations::Value]) -> Option<core_relations::Value> {
         assert!(args.len() == 2);
         let target = args[0];
         let nvariants = exec_state.prims().unwrap::<i64>(args[1]);
-        print!("target = {:?}, rootsort = {:?}, nvariants = {}", target, self.rootsort, nvariants);
+        log::debug!("target = {:?}, rootsort = {:?}, nvariants = {}", target, self.rootsort, nvariants);
+        log::debug!("func: {:?}", self.func);
         panic!{"Stop right there"};
         Some(exec_state.prims().get::<()>(()))
     }
