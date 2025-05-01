@@ -669,14 +669,47 @@ impl EGraph {
             for (_, func) in self.funcs.iter() {
                 tables.push(func.table);
             }
-            while self
-                .db
-                .apply_rebuild(self.uf_table, &tables, self.next_ts().to_value())
-                || self.db.rebuild_containers(self.uf_table)
-            {
+            loop {
+                // Order matters here: we need to rebuild containers first and then rebuild the
+                // tables. Why?
+                //
+                // Say we have a sort that can map to and from a vector containing only itself:
+                // (sort X)
+                // (function to-vec (X) (Vec X) :no-merge)
+                // (constructor from-vec (Vec X) X)
+                // (constructor Num (i64) X)
+                // (constructor Add (X X) X)
+                //
+                // Along with rules:
+                // (rule ((= x (Num i))) ((set (to-vec x) (vec-of x))))
+                // (rule ((= x (Add i j))) ((set (to-vec x) (vec-of x))))
+                // (rule ((= x (from-vec v))) ((set (to-vec x) v))
+                // (rewrite (Add (Num i) (Num j)) (Num (+ i j)))
+                //
+                // These rules, while redundant, should be safe. However, if we rebuild tables
+                // before containers some schedules can cause us to violate the `:no-merge`
+                // directive, which asserts that all values written for a key are equal.
+                //
+                // Suppose we start off with x1=(Num 1), x2=(Num 3), and x3=(Add (Num 1) (Num 2)) as
+                // expressions, with `to-vec` and `from-vec` entries for all three expressions.
+                // We'll call (to-vec xi) vi for all i.
+                //
+                // Now suppose we run the `rewrite` above: now, x3 = x2. But v3 will only equal v2
+                // _after_ we rebuild the `Vec` container. That means that if we rebuild `to-vec`
+                // we will collapse the the rows for x3 and x2, but then fail to merge v3 and v2
+                // because they are not (yet) equal.
+                //
+                // Rebuilding containers first will find that v3 and v2 are equal, and the rest of
+                // the rules can proceed.
+                let container_rebuild = self.db.rebuild_containers(self.uf_table);
+                let table_rebuild =
+                    self.db
+                        .apply_rebuild(self.uf_table, &tables, self.next_ts().to_value());
                 self.inc_ts();
+                if !table_rebuild && !container_rebuild {
+                    break;
+                }
             }
-            self.inc_ts();
             return Ok(());
         }
         if do_parallel() {
