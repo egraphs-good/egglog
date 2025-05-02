@@ -122,7 +122,6 @@ pub mod bin {
                     };
                     if args.to_dot {
                         let dot_path = serialize_filename.with_extension("dot");
-                        dbg!(&dot_path);
                         serialized.to_dot_file(dot_path).unwrap()
                     }
                     if args.to_svg {

@@ -1281,7 +1281,6 @@ impl EGraph {
             Err(())
         });
 
-        // TODO: remove before merge
         assert_eq!(matched, new_matched);
 
         if !matched {
@@ -1422,7 +1421,6 @@ impl EGraph {
                     .create(true)
                     .open(&filename)
                     .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
-                // let mut termdag = TermDag::default();
                 for (expr, expr_name) in exprs.into_iter().zip(expr_names.iter()) {
                     // Normally this should be a look up of TypeInfo, but since
                     // we don't register global names in TypeInfo as functions, they are
