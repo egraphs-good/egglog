@@ -96,13 +96,17 @@ impl EGraph {
             core_relations::Value,
             egraph_serialize::ClassId,
             egraph_serialize::NodeId,
+            bool,
         )> = self
             .functions
             .iter()
             .filter(|(_, function)| !function.decl.ignore_viz)
             .map(|(name, function)| {
                 let mut tuples = vec![];
-                self.backend.dump_table(function.new_backend_id, |vals| {
+                self.backend.dump_table(function.new_backend_id, |vals, is_subsumed| {
+                    if tuples.len() >= config.max_calls_per_function.unwrap_or(usize::MAX) {
+                        return;
+                    }
                     let (out, inps) = vals.split_last().unwrap();
                     use numeric_id::NumericId;
                     tuples.push((
@@ -114,10 +118,10 @@ impl EGraph {
                             None,
                             SerializedNode::Function {
                                 name: *name,
-                                // TODO(yz): not sure if this is an okay offset
-                                offset: out.index(),
+                                offset: out.rep() as usize,
                             },
                         ),
+                        is_subsumed,
                     ));
                 });
                 tuples
@@ -134,7 +138,7 @@ impl EGraph {
         // amoung all possible options.
         let node_ids: NodeIDs = all_calls.iter().fold(
             HashMap::default(),
-            |mut acc, (func, _input, _output, class_id, node_id)| {
+            |mut acc, (func, _input, _output, class_id, node_id, _subsumed)| {
                 if func.schema.output.is_eq_sort() {
                     acc.entry(class_id.clone())
                         .or_default()
@@ -153,7 +157,7 @@ impl EGraph {
             termdag,
         };
 
-        for (func, input, output, class_id, node_id) in all_calls {
+        for (func, input, output, class_id, node_id, subsumed) in all_calls {
             self.serialize_value(&mut serializer, &func.schema.output, &output, &class_id);
 
             assert_eq!(input.len(), func.schema.input.len());
@@ -171,8 +175,7 @@ impl EGraph {
                     eclass: class_id.clone(),
                     cost: NotNan::new(func.decl.cost.unwrap_or(1) as f64).unwrap(),
                     children,
-                    // TODO(yz): I don't know how to get the subsumed flag from the new backend
-                    subsumed: false,
+                    subsumed,
                 },
             );
         }
