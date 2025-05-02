@@ -498,8 +498,10 @@ impl EGraph {
 
     /// Read the contents of the given function.
     ///
+    /// The callback function is called with each row and its subsumption status.
+    ///
     /// Useful for debugging.
-    pub fn dump_table(&self, table: FunctionId, mut f: impl FnMut(&[Value])) {
+    pub fn dump_table(&self, table: FunctionId, mut f: impl FnMut(&[Value], bool)) {
         let info = &self.funcs[table];
         let table = self.funcs[table].table;
         let schema_math = SchemaMath {
@@ -512,13 +514,19 @@ impl EGraph {
         let mut cur = Offset::new(0);
         let mut buf = TaggedRowBuffer::new(imp.spec().arity());
         while let Some(next) = imp.scan_bounded(all.as_ref(), cur, 500, &mut buf) {
-            buf.non_stale()
-                .for_each(|(_, row)| f(&row[0..schema_math.func_cols]));
+            buf.non_stale().for_each(|(_, row)| {
+                let is_subsumed =
+                    schema_math.subsume && self.primitives().unwrap(row[schema_math.subsume_col()]);
+                f(&row[0..schema_math.func_cols], is_subsumed)
+            });
             cur = next;
             buf.clear();
         }
-        buf.non_stale()
-            .for_each(|(_, row)| f(&row[0..schema_math.func_cols]));
+        buf.non_stale().for_each(|(_, row)| {
+            let is_subsumed =
+                schema_math.subsume && self.primitives().unwrap(row[schema_math.subsume_col()]);
+            f(&row[0..schema_math.func_cols], is_subsumed)
+        });
     }
 
     /// A basic method for dumping the state of the database to `log::info!`.

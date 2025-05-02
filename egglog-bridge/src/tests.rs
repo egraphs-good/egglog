@@ -94,7 +94,8 @@ fn ac_test(tracing: bool, can_subsume: bool) {
     assert_eq!(canon_left, canon_right, "failed to reassociate!");
     if tracing {
         let mut row = Vec::new();
-        egraph.dump_table(add_table, |vals| {
+        egraph.dump_table(add_table, |vals, is_subsumed| {
+            assert!(!is_subsumed);
             row.clear();
             row.extend_from_slice(vals);
         });
@@ -485,7 +486,8 @@ fn math_test(mut egraph: EGraph, can_subsume: bool) {
 
     if egraph.tracing {
         let mut row = Vec::new();
-        egraph.dump_table(mul, |vals| {
+        egraph.dump_table(mul, |vals, is_subsumed| {
+            assert!(!is_subsumed);
             row.clear();
             row.extend_from_slice(vals);
         });
@@ -773,7 +775,8 @@ fn rhs_only_rule() {
 
     assert!(contents.is_empty());
     assert!(egraph.run_rules(&[add_data]).unwrap());
-    egraph.dump_table(num_table, |vals| {
+    egraph.dump_table(num_table, |vals, is_subsumed| {
+        assert!(!is_subsumed);
         contents.push(vals.to_vec());
     });
 
@@ -872,7 +875,8 @@ fn mergefn_arithmetic() {
     // Run the first rule and check state
     assert!(egraph.run_rules(&[rule1]).unwrap());
     let mut contents = Vec::new();
-    egraph.dump_table(f_table, |vals| {
+    egraph.dump_table(f_table, |vals, is_subsumed| {
+        assert!(!is_subsumed);
         contents.push((
             *egraph.primitives().unwrap_ref::<i64>(vals[0]),
             *egraph.primitives().unwrap_ref::<i64>(vals[1]),
@@ -894,7 +898,8 @@ fn mergefn_arithmetic() {
     // Expected: (f 2 7) because 1 + (1 * 6) = 7
     assert!(egraph.run_rules(&[rule2]).unwrap());
     contents.clear();
-    egraph.dump_table(f_table, |vals| {
+    egraph.dump_table(f_table, |vals, is_subsumed| {
+        assert!(!is_subsumed);
         contents.push((
             *egraph.primitives().unwrap_ref::<i64>(vals[0]),
             *egraph.primitives().unwrap_ref::<i64>(vals[1]),
@@ -916,7 +921,8 @@ fn mergefn_arithmetic() {
     // Expected: (f 2 29) because 1 + (7 * 4) = 29
     assert!(egraph.run_rules(&[rule3]).unwrap());
     contents.clear();
-    egraph.dump_table(f_table, |vals| {
+    egraph.dump_table(f_table, |vals, is_subsumed| {
+        assert!(!is_subsumed);
         contents.push((
             *egraph.primitives().unwrap_ref::<i64>(vals[0]),
             *egraph.primitives().unwrap_ref::<i64>(vals[1]),
@@ -972,7 +978,8 @@ fn mergefn_nested_function() {
     // Helper function to get all g-table entries
     let get_g_entries = |egraph: &EGraph| {
         let mut entries = Vec::new();
-        egraph.dump_table(g_table, |vals| {
+        egraph.dump_table(g_table, |vals, is_subsumed| {
+            assert!(!is_subsumed);
             entries.push((vals[0], vals[1], vals[2]));
         });
         entries.sort();
@@ -982,7 +989,8 @@ fn mergefn_nested_function() {
     // Helper function to get all f-table entries
     let get_f_entries = |egraph: &EGraph| {
         let mut entries = Vec::new();
-        egraph.dump_table(f_table, |vals| {
+        egraph.dump_table(f_table, |vals, is_subsumed| {
+            assert!(!is_subsumed);
             entries.push((*egraph.primitives().unwrap_ref::<i64>(vals[0]), vals[1]));
         });
         entries.sort();
@@ -1104,7 +1112,8 @@ fn constrain_prims_simple() {
     };
     let get_entries = |egraph: &EGraph, table: FunctionId| {
         let mut entries = Vec::new();
-        egraph.dump_table(table, |vals| {
+        egraph.dump_table(table, |vals, is_subsumed| {
+            assert!(!is_subsumed);
             entries.push((*egraph.primitives().unwrap_ref::<i64>(vals[0]), vals[1]));
         });
         entries.sort();
@@ -1197,7 +1206,8 @@ fn constrain_prims_abstract() {
     };
     let get_entries = |egraph: &EGraph, table: FunctionId| {
         let mut entries = Vec::new();
-        egraph.dump_table(table, |vals| {
+        egraph.dump_table(table, |vals, is_subsumed| {
+            assert!(!is_subsumed);
             entries.push((*egraph.primitives().unwrap_ref::<i64>(vals[0]), vals[1]));
         });
         entries.sort();
@@ -1264,7 +1274,8 @@ fn basic_subsumption() {
     };
     let get_entries = |egraph: &EGraph, table: FunctionId| {
         let mut entries = Vec::new();
-        egraph.dump_table(table, |vals| {
+        egraph.dump_table(table, |vals, is_subsumed| {
+            assert!(!is_subsumed);
             entries.push((*egraph.primitives().unwrap_ref::<i64>(vals[0]), vals[1]));
         });
         entries.sort();
