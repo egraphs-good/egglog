@@ -515,16 +515,14 @@ impl EGraph {
         let mut buf = TaggedRowBuffer::new(imp.spec().arity());
         while let Some(next) = imp.scan_bounded(all.as_ref(), cur, 500, &mut buf) {
             buf.non_stale().for_each(|(_, row)| {
-                let is_subsumed =
-                    schema_math.subsume && self.primitives().unwrap(row[schema_math.subsume_col()]);
+                let is_subsumed = schema_math.subsume && row[schema_math.subsume_col()] == SUBSUMED;
                 f(&row[0..schema_math.func_cols], is_subsumed)
             });
             cur = next;
             buf.clear();
         }
         buf.non_stale().for_each(|(_, row)| {
-            let is_subsumed =
-                schema_math.subsume && self.primitives().unwrap(row[schema_math.subsume_col()]);
+            let is_subsumed = schema_math.subsume && row[schema_math.subsume_col()] == SUBSUMED;
             f(&row[0..schema_math.func_cols], is_subsumed)
         });
     }
