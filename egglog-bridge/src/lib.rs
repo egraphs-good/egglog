@@ -1436,8 +1436,8 @@ struct RowVals<T> {
 /// A struct representing the content of a row in a function table
 #[derive(Clone, Debug)]
 pub struct FunctionRow<'a> {
-    vals: &'a [Value],
-    subsumed: bool,
+    pub vals: &'a [Value],
+    pub subsumed: bool,
 }
 
 impl SchemaMath {
