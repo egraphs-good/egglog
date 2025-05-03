@@ -117,7 +117,7 @@ pub trait Sort: Any + Send + Sync + Debug {
     }
 
     /// Return the type id of values that this sort represents.
-    /// 
+    ///
     /// Every non-EqSort sort should return Some(TypeId).
     fn value_type(&self) -> Option<TypeId>;
 

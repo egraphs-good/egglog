@@ -212,7 +212,7 @@ pub(crate) fn desugar_command(
         Command::PrintSize(span, symbol) => vec![NCommand::PrintSize(span, symbol)],
         Command::Output { span, file, exprs } => {
             vec![NCommand::Output { span, file, exprs }]
-        },
+        }
         Command::Push(num) => {
             vec![NCommand::Push(num)]
         }

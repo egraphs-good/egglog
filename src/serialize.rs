@@ -14,6 +14,9 @@ pub struct SerializeConfig {
     pub root_eclasses: Vec<(ArcSort, core_relations::Value)>,
 }
 
+// TODO: extractor and termdag are deadcode.
+// This part will be rewritten once the new extractor is in.
+#[allow(dead_code)]
 struct Serializer<'a> {
     extractor: Extractor<'a>,
     termdag: TermDag,
@@ -103,27 +106,28 @@ impl EGraph {
             .filter(|(_, function)| !function.decl.ignore_viz)
             .map(|(name, function)| {
                 let mut tuples = vec![];
-                self.backend.dump_table(function.new_backend_id, |func_row| {
-                    if tuples.len() >= config.max_calls_per_function.unwrap_or(usize::MAX) {
-                        return;
-                    }
-                    let (out, inps) = func_row.vals.split_last().unwrap();
-                    use numeric_id::NumericId;
-                    tuples.push((
-                        function,
-                        inps.to_vec(),
-                        out.clone(),
-                        func_row.subsumed,
-                        self.value_to_class_id(&function.schema.output, out),
-                        self.to_node_id(
-                            None,
-                            SerializedNode::Function {
-                                name: *name,
-                                offset: out.rep() as usize,
-                            },
-                        ),
-                    ));
-                });
+                self.backend
+                    .dump_table(function.new_backend_id, |func_row| {
+                        if tuples.len() >= config.max_calls_per_function.unwrap_or(usize::MAX) {
+                            return;
+                        }
+                        let (out, inps) = func_row.vals.split_last().unwrap();
+                        use numeric_id::NumericId;
+                        tuples.push((
+                            function,
+                            inps.to_vec(),
+                            *out,
+                            func_row.subsumed,
+                            self.value_to_class_id(&function.schema.output, out),
+                            self.to_node_id(
+                                None,
+                                SerializedNode::Function {
+                                    name: *name,
+                                    offset: out.rep() as usize,
+                                },
+                            ),
+                        ));
+                    });
                 tuples
             })
             // Filter out functions with no calls
@@ -304,26 +308,27 @@ impl EGraph {
             let node_id = self.to_node_id(Some(sort), SerializedNode::Primitive(*value));
             // Add node for value
             {
-                 
                 // Children will be empty unless this is a container sort
                 let children: Vec<egraph_serialize::NodeId> = sort
                     .inner_values(self, value)
                     .into_iter()
                     .map(|(s, v)| {
-                        self.serialize_value(
-                            serializer,
-                            &s,
-                            &v,
-                            &self.value_to_class_id(&s, &v),
-                        )
+                        self.serialize_value(serializer, &s, &v, &self.value_to_class_id(&s, &v))
                     })
                     .collect();
                 // If this is a container sort, use the name, otherwise use the value
                 let op = if sort.is_container_sort() {
                     sort.serialized_name(value).to_string()
                 } else {
-                    let primitive_id = self.backend.primitives().get_ty_by_id(sort.value_type().unwrap());
-                    let formatted_val = PrimitivePrinter { prim: self.backend.primitives(), ty: primitive_id, val: *value };
+                    let primitive_id = self
+                        .backend
+                        .primitives()
+                        .get_ty_by_id(sort.value_type().unwrap());
+                    let formatted_val = PrimitivePrinter {
+                        prim: self.backend.primitives(),
+                        ty: primitive_id,
+                        val: *value,
+                    };
                     format!("{:?}", formatted_val)
                 };
                 serializer.result.nodes.insert(

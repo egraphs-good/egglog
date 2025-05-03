@@ -1420,7 +1420,7 @@ impl EGraph {
                 let ext_id =
                     self.backend
                         .register_external_func(core_relations::make_external_func(
-                            move |es, vals| {
+                            move |_es, vals| {
                                 debug_assert!(vals.len() == 1);
                                 results_ref.lock().unwrap().push(vals[0]);
                                 Some(core_relations::Value::new_const(0))
