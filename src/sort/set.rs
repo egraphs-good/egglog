@@ -199,7 +199,7 @@ impl Sort for SetSort {
     }
 
     fn value_type(&self) -> Option<TypeId> {
-        Some(TypeId::of::<SetContainer<Value>>())
+        Some(TypeId::of::<SetContainer<core_relations::Value>>())
     }
 }
 

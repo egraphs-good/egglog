@@ -125,7 +125,6 @@ impl Sort for MultiSetSort {
             .collect()
     }
 
-
     fn old_inner_values(&self, value: &Value) -> Vec<(ArcSort, Value)> {
         let multisets = self.multisets.lock().unwrap();
         let multiset = multisets.get_index(value.bits as usize).unwrap();
@@ -208,9 +207,9 @@ impl Sort for MultiSetSort {
     fn serialized_name(&self, _value: &core_relations::Value) -> Symbol {
         "multiset-of".into()
     }
-    
+
     fn value_type(&self) -> Option<TypeId> {
-        Some(TypeId::of::<MultiSetContainer<Value>>())
+        Some(TypeId::of::<MultiSetContainer<core_relations::Value>>())
     }
 }
 

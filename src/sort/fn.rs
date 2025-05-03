@@ -150,7 +150,6 @@ impl Sort for FunctionSort {
         backend.primitives_mut().register_type::<ResolvedFunction>();
     }
 
-
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
         self
     }
@@ -231,7 +230,7 @@ impl Sort for FunctionSort {
 
         Some((cost, termdag.app("unstable-fn".into(), args)))
     }
-    
+
     fn value_type(&self) -> Option<TypeId> {
         Some(TypeId::of::<NewFunctionContainer>())
     }

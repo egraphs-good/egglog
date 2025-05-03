@@ -217,7 +217,7 @@ impl Sort for MapSort {
     }
     
     fn value_type(&self) -> Option<TypeId> {
-        Some(TypeId::of::<MapContainer<Value>>())
+        Some(TypeId::of::<MapContainer<core_relations::Value>>())
     }
 }
 

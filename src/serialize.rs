@@ -94,25 +94,26 @@ impl EGraph {
             &Function,
             Vec<core_relations::Value>,
             core_relations::Value,
+            bool,
             egraph_serialize::ClassId,
             egraph_serialize::NodeId,
-            bool,
         )> = self
             .functions
             .iter()
             .filter(|(_, function)| !function.decl.ignore_viz)
             .map(|(name, function)| {
                 let mut tuples = vec![];
-                self.backend.dump_table(function.new_backend_id, |vals, is_subsumed| {
+                self.backend.dump_table(function.new_backend_id, |func_row| {
                     if tuples.len() >= config.max_calls_per_function.unwrap_or(usize::MAX) {
                         return;
                     }
-                    let (out, inps) = vals.split_last().unwrap();
+                    let (out, inps) = func_row.vals.split_last().unwrap();
                     use numeric_id::NumericId;
                     tuples.push((
                         function,
                         inps.to_vec(),
                         out.clone(),
+                        func_row.subsumed,
                         self.value_to_class_id(&function.schema.output, out),
                         self.to_node_id(
                             None,
@@ -121,7 +122,6 @@ impl EGraph {
                                 offset: out.rep() as usize,
                             },
                         ),
-                        is_subsumed,
                     ));
                 });
                 tuples
@@ -138,7 +138,7 @@ impl EGraph {
         // amoung all possible options.
         let node_ids: NodeIDs = all_calls.iter().fold(
             HashMap::default(),
-            |mut acc, (func, _input, _output, class_id, node_id, _subsumed)| {
+            |mut acc, (func, _input, _output, _subsumed, class_id, node_id)| {
                 if func.schema.output.is_eq_sort() {
                     acc.entry(class_id.clone())
                         .or_default()
@@ -157,7 +157,7 @@ impl EGraph {
             termdag,
         };
 
-        for (func, input, output, class_id, node_id, subsumed) in all_calls {
+        for (func, input, output, subsumed, class_id, node_id) in all_calls {
             self.serialize_value(&mut serializer, &func.schema.output, &output, &class_id);
 
             assert_eq!(input.len(), func.schema.input.len());

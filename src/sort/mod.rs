@@ -105,13 +105,20 @@ pub trait Sort: Any + Send + Sync + Debug {
 
     /// Return the inner values and sorts.
     /// Only container sort need to implement this method,
-    fn inner_values(&self, egraph: &EGraph, value: &core_relations::Value) -> Vec<(ArcSort, core_relations::Value)> {
+    fn inner_values(
+        &self,
+        egraph: &EGraph,
+        value: &core_relations::Value,
+    ) -> Vec<(ArcSort, core_relations::Value)> {
         debug_assert!(!self.is_container_sort());
         let _ = value;
         let _ = egraph;
         vec![]
     }
 
+    /// Return the type id of values that this sort represents.
+    /// 
+    /// Every non-EqSort sort should return Some(TypeId).
     fn value_type(&self) -> Option<TypeId>;
 
     /// Only eq_container_sort need to implement this method,
@@ -194,11 +201,10 @@ impl Sort for EqSort {
     ) -> Option<(Cost, Term)> {
         unimplemented!("No extract_term for EqSort {}", self.name)
     }
-    
+
     fn value_type(&self) -> Option<TypeId> {
         None
     }
-
 }
 
 pub trait FromSort: Sized {

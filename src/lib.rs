@@ -43,7 +43,7 @@ use ast::*;
 pub use cli::bin::*;
 use constraint::{Constraint, SimpleTypeConstraint, TypeConstraint};
 use core::GenericAtomTerm;
-use core_relations::ExternalFunctionId;
+use core_relations::{ExternalFunctionId, PrimitivePrinter};
 use egglog_bridge::{ColumnTy, FunctionConfig, QueryEntry};
 use extract::Extractor;
 pub use function::Function;
@@ -753,7 +753,7 @@ impl EGraph {
             } else {
                 schema
                     .output
-                    .extract_term(self, todo!("out.value"), &extractor, &mut termdag)
+                    .extract_term(self, out.value, &extractor, &mut termdag)
                     .unwrap()
                     .1
             };
@@ -1183,7 +1183,6 @@ impl EGraph {
         let func = self.functions.get(&fresh_name).unwrap();
         let value_new_backend = self.backend.lookup_id(func.new_backend_id, &[]).unwrap();
 
-        let func = self.functions.get(&fresh_name).unwrap();
         let value = func.nodes.get(&[]).unwrap().value;
 
         let sort = func.schema.output.clone();
@@ -1442,19 +1441,13 @@ impl EGraph {
                     let function = self.functions.get(expr_name).unwrap();
                     let function_id = function.new_backend_id;
                     let value = self.backend.lookup_id(function_id, &[]).unwrap();
-                    // hack before new backend gets merged:
+
                     use std::io::Write;
-                    if expr_type.name().as_str() == "i64" {
-                        let value: &i64 = &self.backend.primitives().unwrap_ref(value);
-                        writeln!(f, "{}", value)
-                            .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
-                    } else if expr_type.name().as_str() == "String" {
-                        let symbol: &Symbol = &self.backend.primitives().unwrap_ref(value);
-                        writeln!(f, "{}", symbol)
-                            .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
-                    } else if expr_type.name().as_str() == "Unit" {
-                        writeln!(f, "()")
-                            .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
+                    // hack before extraction for the new backend gets merged:
+                    if expr_type.is_container_sort() && !expr_type.is_eq_sort() {
+                        let primitive_id = self.backend.primitives().get_ty_by_id(expr_type.value_type().unwrap());
+                        let formatted_val = PrimitivePrinter { prim: self.backend.primitives(), ty: primitive_id, val: value };
+                        writeln!(f, "{:?}", formatted_val).map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?
                     } else {
                         todo!("handle the general case with extract")
                         // let term = self.extract(value, &mut termdag, &expr_type)?.1;

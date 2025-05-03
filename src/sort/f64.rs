@@ -24,7 +24,6 @@ impl Sort for F64Sort {
         backend.primitives_mut().register_type::<F>();
     }
 
-
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
         self
     }
@@ -73,7 +72,7 @@ impl Sort for F64Sort {
             termdag.lit(Literal::Float(OrderedFloat(f64::from_bits(value.bits)))),
         ))
     }
-    
+
     fn value_type(&self) -> Option<TypeId> {
         Some(TypeId::of::<F>())
     }
