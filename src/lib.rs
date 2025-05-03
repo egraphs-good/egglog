@@ -31,7 +31,6 @@ mod value;
 // both this crate and other crates by referring to `::egglog`.
 extern crate self as egglog;
 pub use add_primitive::add_primitive;
-use typechecking::FuncType;
 
 use crate::constraint::Problem;
 use crate::core::{AtomTerm, ResolvedCall};
@@ -42,9 +41,9 @@ use ast::*;
 #[cfg(feature = "bin")]
 pub use cli::bin::*;
 use constraint::{Constraint, SimpleTypeConstraint, TypeConstraint};
-use core::GenericAtomTerm;
+use core::ResolvedAtomTerm;
 use core_relations::{ExternalFunctionId, PrimitivePrinter};
-use egglog_bridge::{ColumnTy, FunctionConfig, QueryEntry};
+use egglog_bridge::{ColumnTy, QueryEntry};
 use extract::Extractor;
 pub use function::Function;
 use function::*;
@@ -63,7 +62,7 @@ use std::iter::once;
 use std::ops::{Deref, Range};
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 pub use termdag::{Term, TermDag, TermId};
 use thiserror::Error;
 pub use typechecking::TypeInfo;
@@ -1406,12 +1405,7 @@ impl EGraph {
             } => {
                 self.input_file(name, file)?;
             }
-            ResolvedNCommand::Output {
-                span,
-                file,
-                exprs,
-                expr_names,
-            } => {
+            ResolvedNCommand::Output { span, file, exprs } => {
                 let mut filename = self.fact_directory.clone().unwrap_or_default();
                 filename.push(file.as_str());
                 // append to file
@@ -1420,34 +1414,73 @@ impl EGraph {
                     .create(true)
                     .open(&filename)
                     .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
-                for (expr, expr_name) in exprs.into_iter().zip(expr_names.iter()) {
-                    // Normally this should be a look up of TypeInfo, but since
-                    // we don't register global names in TypeInfo as functions, they are
-                    // not available here.
-                    let expr_type = self.functions.get(expr_name).unwrap().schema.output.clone();
-                    let func_type = FuncType {
-                        name: *expr_name,
-                        subtype: FunctionSubtype::Custom,
-                        input: vec![],
-                        output: expr_type.clone(),
-                    };
-                    let action = ResolvedAction::Set(
-                        span.clone(),
-                        ResolvedCall::Func(func_type),
-                        vec![],
-                        expr,
-                    );
-                    self.eval_actions(&ResolvedActions::new(vec![action]))?;
-                    let function = self.functions.get(expr_name).unwrap();
-                    let function_id = function.new_backend_id;
-                    let value = self.backend.lookup_id(function_id, &[]).unwrap();
 
-                    use std::io::Write;
+                let results: Arc<Mutex<Vec<core_relations::Value>>> = Default::default();
+                let results_ref = results.clone();
+                let ext_id =
+                    self.backend
+                        .register_external_func(core_relations::make_external_func(
+                            move |es, vals| {
+                                debug_assert!(vals.len() == 1);
+                                results_ref.lock().unwrap().push(vals[0]);
+                                Some(core_relations::Value::new_const(0))
+                            },
+                        ));
+
+                let mut translator = BackendRule::new(
+                    self.backend.new_rule("outputs", false),
+                    &self.functions,
+                    &self.type_info,
+                );
+                let expr_types = exprs.iter().map(|e| e.output_type()).collect::<Vec<_>>();
+                for (i, expr) in exprs.into_iter().enumerate() {
+                    let result_var = ResolvedVar {
+                        name: Symbol::from("__egglog_output".to_owned() + &i.to_string()),
+                        sort: expr.output_type(),
+                        is_global_ref: false,
+                    };
+                    let actions = ResolvedActions::singleton(ResolvedAction::Let(
+                        span.clone(),
+                        result_var.clone(),
+                        expr,
+                    ));
+                    let actions = actions
+                        .to_core_actions(
+                            &self.type_info,
+                            &mut Default::default(),
+                            &mut self.parser.symbol_gen,
+                        )?
+                        .0;
+                    translator.actions(&actions)?;
+                    let arg = translator.entry(&ResolvedAtomTerm::Var(span.clone(), result_var));
+                    translator.rb.call_external_func(
+                        ext_id,
+                        &[arg],
+                        egglog_bridge::ColumnTy::Id,
+                        "this function will never panic",
+                    );
+                }
+                let id = translator.build();
+                let _ = self.backend.run_rules(&[id]).unwrap();
+                self.backend.free_rule(id);
+                self.backend.free_external_func(ext_id);
+
+                let results: Vec<_> = std::mem::take(results.lock().unwrap().as_mut());
+                use std::io::Write;
+                for (value, expr_type) in results.into_iter().zip(expr_types) {
                     // hack before extraction for the new backend gets merged:
-                    if expr_type.is_container_sort() && !expr_type.is_eq_sort() {
-                        let primitive_id = self.backend.primitives().get_ty_by_id(expr_type.value_type().unwrap());
-                        let formatted_val = PrimitivePrinter { prim: self.backend.primitives(), ty: primitive_id, val: value };
-                        writeln!(f, "{:?}", formatted_val).map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?
+                    if !expr_type.is_container_sort() && !expr_type.is_eq_sort() {
+                        let primitive_id = self
+                            .backend
+                            .primitives()
+                            .get_ty_by_id(expr_type.value_type().unwrap());
+                        let formatted_val = PrimitivePrinter {
+                            prim: self.backend.primitives(),
+                            ty: primitive_id,
+                            val: value,
+                        };
+                        writeln!(f, "{:?}", formatted_val)
+                            .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?
                     } else {
                         todo!("handle the general case with extract")
                         // let term = self.extract(value, &mut termdag, &expr_type)?.1;

@@ -166,7 +166,7 @@ impl EGraph {
                 // Should probably also resolve the function symbol here
                 ResolvedNCommand::PrintSize(span.clone(), *n)
             }
-            NCommand::Output { span, file, exprs, expr_names } => {
+            NCommand::Output { span, file, exprs } => {
                 let exprs = exprs
                     .iter()
                     .map(|expr| {
@@ -178,7 +178,6 @@ impl EGraph {
                     span: span.clone(),
                     file: file.clone(),
                     exprs,
-                    expr_names: expr_names.clone(),
                 }
             }
             NCommand::Input { span, name, file } => ResolvedNCommand::Input {
