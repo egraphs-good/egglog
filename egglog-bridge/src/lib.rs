@@ -501,7 +501,7 @@ impl EGraph {
     /// The callback function is called with each row and its subsumption status.
     ///
     /// Useful for debugging.
-    pub fn dump_table(&self, table: FunctionId, mut f: impl FnMut(&[Value], bool)) {
+    pub fn dump_table(&self, table: FunctionId, mut f: impl FnMut(FunctionRow<'_>)) {
         let info = &self.funcs[table];
         let table = self.funcs[table].table;
         let schema_math = SchemaMath {
@@ -515,15 +515,15 @@ impl EGraph {
         let mut buf = TaggedRowBuffer::new(imp.spec().arity());
         while let Some(next) = imp.scan_bounded(all.as_ref(), cur, 500, &mut buf) {
             buf.non_stale().for_each(|(_, row)| {
-                let is_subsumed = schema_math.subsume && row[schema_math.subsume_col()] == SUBSUMED;
-                f(&row[0..schema_math.func_cols], is_subsumed)
+                let subsumed = schema_math.subsume && row[schema_math.subsume_col()] == SUBSUMED;
+                f(FunctionRow { vals: &row[0..schema_math.func_cols], subsumed })
             });
             cur = next;
             buf.clear();
         }
         buf.non_stale().for_each(|(_, row)| {
-            let is_subsumed = schema_math.subsume && row[schema_math.subsume_col()] == SUBSUMED;
-            f(&row[0..schema_math.func_cols], is_subsumed)
+            let subsumed = schema_math.subsume && row[schema_math.subsume_col()] == SUBSUMED;
+            f(FunctionRow { vals: &row[0..schema_math.func_cols], subsumed })
         });
     }
 
@@ -1419,6 +1419,8 @@ struct SchemaMath {
 
 /// A struct containing possible non-key portions of a table row. To be used with
 /// [`SchemaMath::write_table_row`].
+/// 
+/// This is not to be confused with [`FunctionRow`], which is higher-level and for public uses.
 struct RowVals<T> {
     /// The timestamp for the row.
     timestamp: T,
@@ -1429,6 +1431,13 @@ struct RowVals<T> {
     /// The return value of the row. Return values are mandatory but callers may have already
     /// filled it in.
     ret_val: Option<T>,
+}
+
+/// A struct representing the content of a row in a function table
+#[derive(Clone, Debug)]
+pub struct FunctionRow<'a> {
+    vals: &'a [Value],
+    subsumed: bool,
 }
 
 impl SchemaMath {
