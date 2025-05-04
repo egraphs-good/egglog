@@ -210,7 +210,9 @@ pub(crate) fn desugar_command(
             vec![NCommand::PrintTable(span, symbol, size)]
         }
         Command::PrintSize(span, symbol) => vec![NCommand::PrintSize(span, symbol)],
-        Command::Output { span, file, exprs } => vec![NCommand::Output { span, file, exprs }],
+        Command::Output { span, file, exprs } => {
+            vec![NCommand::Output { span, file, exprs }]
+        }
         Command::Push(num) => {
             vec![NCommand::Push(num)]
         }

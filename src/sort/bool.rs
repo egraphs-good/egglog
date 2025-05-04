@@ -45,6 +45,10 @@ impl Sort for BoolSort {
 
         Some((1, termdag.lit(Literal::Bool(value.bits > 0))))
     }
+
+    fn value_type(&self) -> Option<TypeId> {
+        Some(TypeId::of::<bool>())
+    }
 }
 
 impl IntoSort for bool {
