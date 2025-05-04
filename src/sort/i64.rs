@@ -87,6 +87,10 @@ impl Sort for I64Sort {
     ) -> Option<(Cost, Term)> {
         Some((1, termdag.lit(Literal::Int(value.bits as _))))
     }
+
+    fn value_type(&self) -> Option<TypeId> {
+        Some(TypeId::of::<i64>())
+    }
 }
 
 impl IntoSort for i64 {

@@ -2,6 +2,7 @@ use lazy_static::lazy_static;
 use num::traits::{CheckedAdd, CheckedDiv, CheckedMul, CheckedSub, One, Signed, ToPrimitive, Zero};
 use num::{rational::BigRational, BigInt};
 use ordered_float::OrderedFloat;
+use std::any::TypeId;
 use std::fmt::Debug;
 use std::ops::{Shl, Shr};
 use std::sync::Mutex;
@@ -76,7 +77,7 @@ pub trait Sort: Any + Send + Sync + Debug {
         value: &'a Value,
         mut f: Box<dyn FnMut(ArcSort, Value) + 'a>,
     ) {
-        for (sort, value) in self.inner_values(value) {
+        for (sort, value) in self.old_inner_values(value) {
             if sort.is_eq_sort() {
                 f(sort, value)
             }
@@ -98,13 +99,30 @@ pub trait Sort: Any + Send + Sync + Debug {
     /// Return the serialized name of the sort
     ///
     /// Only used for container sorts, which cannot be serialized with make_expr so need an explicit name
-    fn serialized_name(&self, _value: &Value) -> Symbol {
+    fn serialized_name(&self, _value: &core_relations::Value) -> Symbol {
         self.name()
     }
 
     /// Return the inner values and sorts.
+    /// Only container sort need to implement this method,
+    fn inner_values(
+        &self,
+        egraph: &EGraph,
+        value: &core_relations::Value,
+    ) -> Vec<(ArcSort, core_relations::Value)> {
+        debug_assert!(!self.is_container_sort());
+        let _ = value;
+        let _ = egraph;
+        vec![]
+    }
+
+    /// Return the type id of values that this sort represents.
+    ///
+    /// Every non-EqSort sort should return Some(TypeId).
+    fn value_type(&self) -> Option<TypeId>;
+
     /// Only eq_container_sort need to implement this method,
-    fn inner_values(&self, value: &Value) -> Vec<(ArcSort, Value)> {
+    fn old_inner_values(&self, value: &Value) -> Vec<(ArcSort, Value)> {
         let _ = value;
         vec![]
     }
@@ -182,6 +200,10 @@ impl Sort for EqSort {
         _termdag: &mut TermDag,
     ) -> Option<(Cost, Term)> {
         unimplemented!("No extract_term for EqSort {}", self.name)
+    }
+
+    fn value_type(&self) -> Option<TypeId> {
+        None
     }
 }
 

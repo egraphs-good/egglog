@@ -33,6 +33,10 @@ impl Sort for UnitSort {
     ) -> Option<(Cost, Term)> {
         Some((1, termdag.lit(Literal::Unit)))
     }
+
+    fn value_type(&self) -> Option<TypeId> {
+        Some(TypeId::of::<()>())
+    }
 }
 
 impl IntoSort for () {

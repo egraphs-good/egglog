@@ -111,7 +111,24 @@ impl Sort for SetSort {
         self.element.is_eq_sort()
     }
 
-    fn inner_values(&self, value: &Value) -> Vec<(ArcSort, Value)> {
+    fn inner_values(
+        &self,
+        egraph: &EGraph,
+        value: &core_relations::Value,
+    ) -> Vec<(ArcSort, core_relations::Value)> {
+        let val = egraph
+            .backend
+            .containers()
+            .get_val::<SetContainer<core_relations::Value>>(*value)
+            .unwrap()
+            .clone();
+        val.data
+            .iter()
+            .map(|e| (self.element.clone(), *e))
+            .collect()
+    }
+
+    fn old_inner_values(&self, value: &Value) -> Vec<(ArcSort, Value)> {
         // TODO: Potential duplication of code
         let sets = self.sets.lock().unwrap();
         let set = sets.get_index(value.bits as usize).unwrap();
@@ -121,7 +138,6 @@ impl Sort for SetSort {
         }
         result
     }
-
     fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
         let sets = self.sets.lock().unwrap();
         let set = sets.get_index(value.bits as usize).unwrap();
@@ -178,8 +194,12 @@ impl Sort for SetSort {
         Some((cost, termdag.app("set-of".into(), children)))
     }
 
-    fn serialized_name(&self, _value: &Value) -> Symbol {
+    fn serialized_name(&self, _value: &core_relations::Value) -> Symbol {
         "set-of".into()
+    }
+
+    fn value_type(&self) -> Option<TypeId> {
+        Some(TypeId::of::<SetContainer<core_relations::Value>>())
     }
 }
 
