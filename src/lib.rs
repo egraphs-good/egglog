@@ -40,7 +40,8 @@ use ast::*;
 #[cfg(feature = "bin")]
 pub use cli::bin::*;
 use constraint::{Constraint, SimpleTypeConstraint, TypeConstraint};
-use core_relations::ExternalFunctionId;
+use core::ResolvedAtomTerm;
+use core_relations::{ExternalFunctionId, PrimitivePrinter};
 use egglog_bridge::{ColumnTy, QueryEntry};
 use extract::Extractor;
 pub use function::Function;
@@ -60,7 +61,7 @@ use std::iter::once;
 use std::ops::{Deref, Range};
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 pub use termdag::{Term, TermDag, TermId};
 use thiserror::Error;
 pub use typechecking::TypeInfo;
@@ -1181,32 +1182,30 @@ impl EGraph {
         }
     }
 
-    pub fn eval_expr(&mut self, expr: &Expr) -> Result<(ArcSort, Value), Error> {
+    pub fn eval_expr(&mut self, expr: &Expr) -> Result<(ArcSort, core_relations::Value), Error> {
         let fresh_name = self.parser.symbol_gen.fresh(&"egraph_evalexpr".into());
         let command = Command::Action(Action::Let(expr.span(), fresh_name, expr.clone()));
         self.run_program(vec![command])?;
         // find the table with the same name as the fresh name
         let func = self.functions.get(&fresh_name).unwrap();
-        let value = func.nodes.get(&[]).unwrap().value;
-        let sort = func.schema.output.clone();
-        Ok((sort, value))
-    }
+        let value_new_backend = self.backend.lookup_id(func.new_backend_id, &[]).unwrap();
 
-    // TODO make a public version of eval_expr that makes a command,
-    // then returns the value at the end.
-    fn eval_resolved_expr(&mut self, expr: &ResolvedExpr) -> Result<Value, Error> {
-        let (actions, mapped_expr) = expr.to_core_actions(
-            &self.type_info,
-            &mut Default::default(),
-            &mut self.parser.symbol_gen,
-        )?;
-        let target = mapped_expr.get_corresponding_var_or_lit(&self.type_info);
-        let program = self
-            .compile_expr(&Default::default(), &actions, &target)
-            .map_err(Error::TypeErrors)?;
-        let mut stack = vec![];
-        self.run_actions(&mut stack, &[], &program)?;
-        Ok(stack.pop().unwrap())
+        let value = func.nodes.get(&[]).unwrap().value;
+
+        let sort = func.schema.output.clone();
+
+        // to be removed once the old backend is gone
+        if sort.name().as_str() == "i64" {
+            let value_new_backend: &i64 = &self.backend.primitives().unwrap_ref(value_new_backend);
+            assert_eq!(value_new_backend, &(value.bits as i64));
+        } else if sort.name().as_str() == "String" {
+            let symbol_new: &Symbol = &self.backend.primitives().unwrap_ref(value_new_backend);
+            let string_sort = self.get_sort::<StringSort>();
+            let symbol_old = &Symbol::load(&string_sort, &value);
+            assert_eq!(symbol_new, symbol_old);
+        }
+
+        Ok((sort, value_new_backend))
     }
 
     fn add_combined_ruleset(&mut self, name: Symbol, rulesets: Vec<Symbol>) {
@@ -1412,14 +1411,84 @@ impl EGraph {
                     .create(true)
                     .open(&filename)
                     .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
-                let mut termdag = TermDag::default();
+    
+                let unit_id = self.backend.primitives().get_ty::<()>();
+                let unit_val = self.backend.primitives().get(());
+
+                let results: Arc<Mutex<Vec<core_relations::Value>>> = Default::default();
+                let results_ref = results.clone();
+                let ext_id =
+                    self.backend
+                        .register_external_func(core_relations::make_external_func(
+                            move |_es, vals| {
+                                debug_assert!(vals.len() == 1);
+                                results_ref.lock().unwrap().push(vals[0]);
+                                Some(unit_val)
+                            },
+                        ));
+
+
+                let mut translator = BackendRule::new(
+                    self.backend.new_rule("outputs", false),
+                    &self.functions,
+                    &self.type_info,
+                );
+                let expr_types = exprs.iter().map(|e| e.output_type()).collect::<Vec<_>>();
                 for expr in exprs {
-                    let value = self.eval_resolved_expr(&expr)?;
-                    let expr_type = expr.output_type();
-                    let term = self.extract(value, &mut termdag, &expr_type)?.1;
-                    use std::io::Write;
-                    writeln!(f, "{}", termdag.to_string(&term))
-                        .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
+                    let result_var = ResolvedVar {
+                        name: self.parser.symbol_gen.fresh(&Symbol::from("__egglog_output")),
+                        sort: expr.output_type(),
+                        is_global_ref: false,
+                    };
+                    let actions = ResolvedActions::singleton(ResolvedAction::Let(
+                        span.clone(),
+                        result_var.clone(),
+                        expr,
+                    ));
+                    let actions = actions
+                        .to_core_actions(
+                            &self.type_info,
+                            &mut Default::default(),
+                            &mut self.parser.symbol_gen,
+                        )?
+                        .0;
+                    translator.actions(&actions)?;
+                    let arg = translator.entry(&ResolvedAtomTerm::Var(span.clone(), result_var));
+                    translator.rb.call_external_func(
+                        ext_id,
+                        &[arg],
+                        egglog_bridge::ColumnTy::Primitive(unit_id),
+                        "this function will never panic",
+                    );
+                }
+                let id = translator.build();
+                let _ = self.backend.run_rules(&[id]).unwrap();
+                self.backend.free_rule(id);
+                self.backend.free_external_func(ext_id);
+
+                let results: Vec<_> = std::mem::take(results.lock().unwrap().as_mut());
+                use std::io::Write;
+                for (value, expr_type) in results.into_iter().zip(expr_types) {
+                    // hack before extraction for the new backend gets merged:
+                    if !expr_type.is_container_sort() && !expr_type.is_eq_sort() {
+                        let primitive_id = self
+                            .backend
+                            .primitives()
+                            .get_ty_by_id(expr_type.value_type().unwrap());
+                        let formatted_val = PrimitivePrinter {
+                            prim: self.backend.primitives(),
+                            ty: primitive_id,
+                            val: value,
+                        };
+                        writeln!(f, "{:?}", formatted_val)
+                            .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?
+                    } else {
+                        todo!("handle the general case with extract")
+                        // let term = self.extract(value, &mut termdag, &expr_type)?.1;
+                        // use std::io::Write;
+                        // writeln!(f, "{}", termdag.to_string(&term))
+                        //     .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
+                    }
                 }
 
                 log::info!("Output to '{filename:?}'.")
@@ -1440,10 +1509,6 @@ impl EGraph {
     }
 
     fn input_file(&mut self, func_name: Symbol, file: String) -> Result<(), Error> {
-        if true {
-            todo!("input_file")
-        }
-
         let function_type = self
             .type_info
             .get_func_type(&func_name)

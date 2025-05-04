@@ -72,6 +72,10 @@ impl Sort for F64Sort {
             termdag.lit(Literal::Float(OrderedFloat(f64::from_bits(value.bits)))),
         ))
     }
+
+    fn value_type(&self) -> Option<TypeId> {
+        Some(TypeId::of::<F>())
+    }
 }
 
 impl IntoSort for F {

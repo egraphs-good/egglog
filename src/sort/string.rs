@@ -51,6 +51,10 @@ impl Sort for StringSort {
                 |a: S, b: S, c: S| -> S { a.as_str().replace(b.as_str(), c.as_str()).into() }
         );
     }
+
+    fn value_type(&self) -> Option<TypeId> {
+        Some(TypeId::of::<S>())
+    }
 }
 
 // TODO could use a local symbol table

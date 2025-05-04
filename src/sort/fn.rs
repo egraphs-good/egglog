@@ -162,14 +162,30 @@ impl Sort for FunctionSort {
         self.inputs.iter().any(|s| s.is_eq_sort())
     }
 
-    fn serialized_name(&self, value: &Value) -> Symbol {
-        OldFunctionContainer::load(self, value).0
+    fn serialized_name(&self, _value: &core_relations::Value) -> Symbol {
+        // TODO: The old implementation looks up the function name contained in the function structure.
+        // In the new backend, this requires a handle to the new backend to get the container value.
+        // We can change the interface of `serialized_name` to take an `EGraph` in a follow-up PR.
+        "unstable-fn".into()
     }
 
-    fn inner_values(&self, value: &Value) -> Vec<(ArcSort, Value)> {
+    fn old_inner_values(&self, value: &Value) -> Vec<(ArcSort, Value)> {
         let functions = self.functions.lock().unwrap();
         let input_values = functions.get_index(value.bits as usize).unwrap();
         input_values.1.clone()
+    }
+
+    fn inner_values(
+        &self,
+        egraph: &EGraph,
+        value: &core_relations::Value,
+    ) -> Vec<(ArcSort, core_relations::Value)> {
+        let val = egraph
+            .backend
+            .containers()
+            .get_val::<NewFunctionContainer>(*value)
+            .unwrap();
+        self.inputs.iter().cloned().zip(val.iter()).collect()
     }
 
     fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
@@ -213,6 +229,10 @@ impl Sort for FunctionSort {
         )?;
 
         Some((cost, termdag.app("unstable-fn".into(), args)))
+    }
+
+    fn value_type(&self) -> Option<TypeId> {
+        Some(TypeId::of::<NewFunctionContainer>())
     }
 }
 

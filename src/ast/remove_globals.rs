@@ -183,7 +183,7 @@ impl GlobalRemover<'_> {
                     rule: new_rule,
                 }]
             }
-            //Handle the corner case where a global command is wrap in (fail )
+            // Handle the corner case where a global command is wrap in (fail )
             GenericNCommand::Fail(span, cmd) => {
                 let mut removed = self.remove_globals_cmd(*cmd);
                 let last = removed.pop().unwrap();
