@@ -1414,6 +1414,9 @@ impl EGraph {
                     .create(true)
                     .open(&filename)
                     .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
+    
+                let unit_id = self.backend.primitives().get_ty::<()>();
+                let unit_val = self.backend.primitives().get(());
 
                 let results: Arc<Mutex<Vec<core_relations::Value>>> = Default::default();
                 let results_ref = results.clone();
@@ -1423,9 +1426,10 @@ impl EGraph {
                             move |_es, vals| {
                                 debug_assert!(vals.len() == 1);
                                 results_ref.lock().unwrap().push(vals[0]);
-                                Some(core_relations::Value::new_const(0))
+                                Some(unit_val)
                             },
                         ));
+
 
                 let mut translator = BackendRule::new(
                     self.backend.new_rule("outputs", false),
@@ -1433,9 +1437,9 @@ impl EGraph {
                     &self.type_info,
                 );
                 let expr_types = exprs.iter().map(|e| e.output_type()).collect::<Vec<_>>();
-                for (i, expr) in exprs.into_iter().enumerate() {
+                for expr in exprs {
                     let result_var = ResolvedVar {
-                        name: Symbol::from("__egglog_output".to_owned() + &i.to_string()),
+                        name: self.parser.symbol_gen.fresh(&Symbol::from("__egglog_output")),
                         sort: expr.output_type(),
                         is_global_ref: false,
                     };
@@ -1456,7 +1460,7 @@ impl EGraph {
                     translator.rb.call_external_func(
                         ext_id,
                         &[arg],
-                        egglog_bridge::ColumnTy::Id,
+                        egglog_bridge::ColumnTy::Primitive(unit_id),
                         "this function will never panic",
                     );
                 }
