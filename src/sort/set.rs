@@ -103,6 +103,10 @@ impl Sort for SetSort {
         self
     }
 
+    fn inner_sorts(&self) -> Vec<&Arc<dyn Sort>> {
+        vec![&self.element]
+    }    
+
     fn is_container_sort(&self) -> bool {
         true
     }
@@ -113,13 +117,10 @@ impl Sort for SetSort {
 
     fn inner_values(
         &self,
-        egraph: &EGraph,
+        containers: &core_relations::Containers,
         value: &core_relations::Value,
     ) -> Vec<(ArcSort, core_relations::Value)> {
-        let val = egraph
-            .backend
-            .containers()
-            .get_val::<SetContainer<core_relations::Value>>(*value)
+        let val = containers.get_val::<SetContainer<core_relations::Value>>(*value)
             .unwrap()
             .clone();
         val.data
@@ -138,6 +139,7 @@ impl Sort for SetSort {
         }
         result
     }
+
     fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
         let sets = self.sets.lock().unwrap();
         let set = sets.get_index(value.bits as usize).unwrap();

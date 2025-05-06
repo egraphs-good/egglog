@@ -177,13 +177,10 @@ impl Sort for FunctionSort {
 
     fn inner_values(
         &self,
-        egraph: &EGraph,
+        containers: &core_relations::Containers,
         value: &core_relations::Value,
     ) -> Vec<(ArcSort, core_relations::Value)> {
-        let val = egraph
-            .backend
-            .containers()
-            .get_val::<NewFunctionContainer>(*value)
+        let val = containers.get_val::<NewFunctionContainer>(*value)
             .unwrap();
         self.inputs.iter().cloned().zip(val.iter()).collect()
     }

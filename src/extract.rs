@@ -1,10 +1,10 @@
 use crate::ast::Symbol;
 use crate::function::ResolvedSchema;
-use crate::sort;
 use crate::termdag::{Term, TermDag};
-use crate::util::HashMap;
+use crate::util::{HashMap, HashSet};
 use crate::IndexMap;
 use crate::{ArcSort, EGraph, Error, Function, HEntry, Id, Value};
+use queues::*;
 use std::sync::Arc;
 use arc_swap::ArcSwap;
 
@@ -220,24 +220,60 @@ impl<'a> Extractor<'a> {
     }
 }
 
-use egglog_bridge::FunctionId;
+trait CostModel {
+    fn fold (
+        &self,
+        head : &Symbol,
+        children_cost : &Vec<Cost>,
+        head_cost : Cost,
+    ) -> Cost;
+
+    fn leaf_primitive (
+        &self,
+        sort : &ArcSort,
+        value : &core_relations::Value,
+    ) -> Cost;
+}
+
+#[derive(Clone, Default)]
+struct TreeAdditiveCostModel {}
+
+impl CostModel for TreeAdditiveCostModel {
+    fn fold(
+        &self,
+        _head : &Symbol,
+        children_cost : &Vec<Cost>,
+        head_cost : Cost,
+    ) -> Cost {
+        return children_cost.iter().fold(head_cost, |s, c| { s.saturating_add(*c) });
+    }
+
+    fn leaf_primitive (
+        &self,
+        _sort : &ArcSort,
+        _value : &core_relations::Value,
+    ) -> Cost {
+        // TODO: should match on the sorts
+        1
+    }
+}
 
 /// Captures what the extractor need to know about a table/function
 /// Should only be used for extractable functions
-#[derive(Debug)]
-struct ExtractorViewFunc {
+#[derive(Clone, Debug)]
+pub struct ExtractorViewFunc {
     pub schema : ResolvedSchema,
     pub cost : Option<Cost>,
-    pub backend_id : FunctionId,
+    pub backend_table_id : TableId,
 }
 
 impl ExtractorViewFunc {
-    fn new (f : &Function) -> Self {
+    fn new (f : &Function, backend: &egglog_bridge::EGraph) -> Self {
         debug_assert!(f.is_extractable(), "Unextractable function in ExtractorView");
         ExtractorViewFunc {
             schema: f.schema.clone(),
             cost: f.decl.cost,
-            backend_id: f.new_backend_id,
+            backend_table_id: backend.get_table_id(f.new_backend_id),
         }
     } 
 }
@@ -245,15 +281,15 @@ impl ExtractorViewFunc {
 // A struct for copying meta data required for extraction
 #[derive(Default, Debug)]
 pub struct ExtractorView {
-    funcs : IndexMap<Symbol, ExtractorViewFunc>,
+    pub funcs : IndexMap<Symbol, ExtractorViewFunc>,
 }
 
 impl ExtractorView {
-    pub fn new (function: &IndexMap<Symbol, Function>) -> Self {
+    pub fn new (function: &IndexMap<Symbol, Function>, backend: &egglog_bridge::EGraph) -> Self {
         let mut funcs : IndexMap<Symbol, ExtractorViewFunc> = Default::default();
         for func in function.iter() {
             if func.1.is_extractable() {
-                funcs.insert(func.0.clone(), ExtractorViewFunc::new(func.1));
+                funcs.insert(func.0.clone(), ExtractorViewFunc::new(func.1, backend));
             }
         }
         ExtractorView {
@@ -265,31 +301,206 @@ impl ExtractorView {
 #[derive(Clone)]
 pub struct ExtractorAlter {
     rootsort : ArcSort,
-    func : Arc<ArcSwap<ExtractorView>>,
+    funcs : Arc<ArcSwap<ExtractorView>>,
+    cost_model : TreeAdditiveCostModel,
 }
 
 impl ExtractorAlter {
     pub fn new(
         rootsort : ArcSort,
-        func : Arc<ArcSwap<ExtractorView>>,
+        funcs : Arc<ArcSwap<ExtractorView>>,
     ) -> Self {
         ExtractorAlter {  
             rootsort,
-            func
+            funcs,
+            cost_model: TreeAdditiveCostModel::default(),
         }
     }
 }
 
-use core_relations::{ExecutionState, ExternalFunction};
+
+impl ExtractorAlter {
+
+    /// Built a reverse index from output sort to function head symbols
+    fn compute_sort_index(&self) -> IndexMap<Symbol, Vec<Symbol>> {
+        let mut rev_index : IndexMap<Symbol, Vec<Symbol>> = Default::default();
+        for func in self.funcs.load().funcs.iter() {
+            let func_name = *func.0;
+            let output_sort = func.1.schema.output.name();
+            if let Some (v) = rev_index.get_mut(&output_sort) {
+                v.push(func_name);
+            } else {
+                rev_index.insert(output_sort, vec![func_name]);
+            }
+        }
+        return rev_index;
+    }
+
+    /// BFS from the rootsort to filter the tables relevant to this root
+    fn compute_filtered_func(&self, sort_index : IndexMap<Symbol, Vec<Symbol>>) -> ExtractorView {
+        let mut q = queue![self.rootsort.clone()];
+        let mut filtered = ExtractorView::default();
+        let mut seen: HashSet<Symbol> = Default::default();
+        seen.insert(self.rootsort.name());
+        while q.size() > 0 {
+            let sort = q.remove().expect("Impossible");
+            if sort.is_container_sort() {
+                let inner_sorts = sort.inner_sorts();
+                for s in inner_sorts {
+                    if !seen.contains(&s.name()) {
+                        let _ = q.add(s.clone());
+                        seen.insert(s.name().clone());
+                    }
+                }
+            } else if sort.is_eq_sort() {
+                if let Some (head_symbols) = sort_index.get(&sort.name()) {
+                    for h in head_symbols {
+                        if !filtered.funcs.contains_key(h) {
+                            let func = self.funcs.load().funcs.get(h).expect("Impossible").clone();
+                            for ch in &func.schema.input {
+                                let ch_name = ch.name();
+                                if !seen.contains(&ch_name) {
+                                    let _ = q.add(ch.clone());
+                                    seen.insert(ch_name);
+                                }
+                            }
+                            filtered.funcs.insert(*h, func);
+                        }
+                    }
+                }
+            }
+        }
+        return filtered;
+    }
+
+    /// Compute the cost of a single enode
+    /// Recurse if container
+    /// Returns None if contains an undefined eqsort term (potentially after unfolding)
+    fn compute_cost_single(
+        &self,
+        exec_state : &ExecutionState,
+        value : &core_relations::Value,
+        sort : &ArcSort,
+        costs : &HashMap<Symbol, IndexMap<core_relations::Value, Cost>>
+    ) -> Option<Cost> {
+        if sort.is_container_sort() {
+            let elements = sort.inner_values(exec_state, value);
+            let mut ch_costs: Vec<Cost> = Vec::new();
+            for ch in elements.iter() {
+                if let Some (c) = self.compute_cost_single(exec_state,&ch.1, &ch.0, costs) {
+                    ch_costs.push(c);
+                } else {
+                    return None
+                }
+            }
+            Some (self.cost_model.fold(&sort.name(), &ch_costs, 0))
+        } else if sort.is_eq_sort() {
+            if costs.get(&sort.name()).is_some_and(|t| {t.get(value).is_some()}) {
+                Some(costs.get(&sort.name()).expect("Impossible").get(value).expect("Impossible").clone())
+            } else {
+                None
+            }
+        } else { // Primitive
+            Some(self.cost_model.leaf_primitive(sort, value))
+        }
+    }
+
+    fn compute_cost_hyperedge(
+        &self,
+        exec_state : &ExecutionState,
+        values : &[core_relations::Value],
+        head : &Symbol,
+        func : &ExtractorViewFunc,
+        costs : &HashMap<Symbol, IndexMap<core_relations::Value, Cost>>
+    ) -> Option<Cost> {
+        let mut ch_costs: Vec<Cost> = Vec::new();
+        let sorts = &func.schema.input;
+        //log::debug!("compute_cost_hyperedge head {} sorts {:?}", head, sorts);
+        debug_assert_eq!(sorts.len(), values.len());
+        for (value, sort) in values.iter().zip(sorts.iter()) {
+            if let Some (c) = self.compute_cost_single(exec_state, value, sort, costs) {
+                ch_costs.push(c);
+            } else {
+                return None;
+            }
+        }
+        Some (self.cost_model.fold(head, &ch_costs, func.cost.unwrap_or(1)))
+    }
+
+}
+
+use core_relations::{ExecutionState, ExternalFunction, TableId};
 
 impl ExternalFunction for ExtractorAlter {
+
     fn invoke(&self, exec_state: &mut ExecutionState, args: &[core_relations::Value]) -> Option<core_relations::Value> {
-        assert!(args.len() == 2);
+        debug_assert!(args.len() == 2);
         let target = args[0];
         let nvariants = exec_state.prims().unwrap::<i64>(args[1]);
         log::debug!("target = {:?}, rootsort = {:?}, nvariants = {}", target, self.rootsort, nvariants);
-        log::debug!("func: {:?}", self.func);
-        panic!{"Stop right there"};
+        log::debug!("func: {:?}", self.funcs);
+        let sort_index = self.compute_sort_index();
+        log::debug!("sort_index_func = {:?}", sort_index);
+        let filtered_func = self.compute_filtered_func(sort_index);
+        log::debug!("filtered_func = {:?}", filtered_func);
+        
+        // We use Bellman-Ford to compute the costs of the relevant eq sorts' terms
+        let mut costs : HashMap<Symbol, IndexMap<core_relations::Value, Cost>> = Default::default();
+        for func in filtered_func.funcs.iter() {
+            if !costs.contains_key(&func.1.schema.output.name()) {
+                debug_assert!(func.1.schema.output.is_eq_sort());
+                costs.insert(func.1.schema.output.name(), Default::default());
+            }
+        }
+
+        let mut ensure_fixpoint = false;
+
+        while !ensure_fixpoint {
+            ensure_fixpoint = true;
+
+            for func in filtered_func.funcs.iter() {
+                let table = exec_state.get_table(func.1.backend_table_id);
+                let all = table.all();
+                // TODO: Make sure Offset::new_const works as expected
+                let mut cur = core_relations::Offset::new_const(0);
+                let mut buf = core_relations::TaggedRowBuffer::new(table.spec().arity());
+                let func_cols = func.1.schema.input.len();
+                let mut done = false;
+                while !done {
+                    if let Some(next) = table.scan_bounded(all.as_ref(), cur, 500, &mut buf) {
+                        cur = next;
+                    } else {
+                        done = true;
+                    }
+                    for (_, row) in buf.non_stale() {
+                        // Output sort and value
+                        let target_sort = &func.1.schema.output;
+                        let target = row[func_cols];
+                        if let Some (new_cost) = self.compute_cost_hyperedge(exec_state, &row[0..func_cols], func.0, func.1, &costs) {
+                            log::debug!("Got cost: {:?}", (target, new_cost));
+                            match costs.get_mut(&target_sort.name()).expect("Impossible").entry(target) {
+                                HEntry::Vacant(e) => {
+                                    log::debug!{"Inserted new cost"}
+                                    ensure_fixpoint = false;
+                                    e.insert(new_cost);
+                                }
+                                HEntry::Occupied(mut e) => {
+                                    if new_cost < *(e.get()) {
+                                        log::debug!{"Updated new cost"}
+                                        ensure_fixpoint = false;
+                                        e.insert(new_cost);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    buf.clear();
+                }
+            }
+        }
+        let best_cost = self.compute_cost_single(exec_state, &target, &self.rootsort, &costs).expect("Failed to extract root!");
+        log::debug!("Best cost for the extract root: {:?}", best_cost);
+        panic!{"Output not implemented yet"};
         Some(exec_state.prims().get::<()>(()))
     }
 }

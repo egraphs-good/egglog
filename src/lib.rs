@@ -1344,7 +1344,7 @@ impl EGraph {
             }
             ResolvedNCommand::RunSchedule(sched) => {
                 // Update extractor_view before every rule run
-                self.extractor_view.store(Arc::new(ExtractorView::new(&self.functions)));
+                self.extractor_view.store(Arc::new(ExtractorView::new(&self.functions, &self.backend)));
                 let report = self.run_schedule(&sched);
                 log::info!("Ran schedule {}.", sched);
                 log::info!("Report: {}", report);
@@ -1365,7 +1365,7 @@ impl EGraph {
                 }
                 ResolvedAction::Extract(_, _, _) => {
                     // Update extractor_view before the top level extract command
-                    self.extractor_view.store(Arc::new(ExtractorView::new(&self.functions)));
+                    self.extractor_view.store(Arc::new(ExtractorView::new(&self.functions, &self.backend)));
                     self.eval_actions(&ResolvedActions::new(vec![action.clone()]))?;
                 }
                 _ => {
