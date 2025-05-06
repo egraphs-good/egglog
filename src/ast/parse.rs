@@ -275,7 +275,7 @@ impl Parser {
         input: &str,
     ) -> Result<Vec<Command>, ParseError> {
         let sexps = all_sexps(Context::new(filename, input))?;
-        let nested = map_fallible(&sexps, self, Self::parse_command)?;
+        let nested: Vec<Vec<_>> = map_fallible(&sexps, self, Self::parse_command)?;
         Ok(nested.into_iter().flatten().collect())
     }
 
@@ -426,7 +426,7 @@ impl Parser {
                 [lhs, rhs, rest @ ..] => {
                     let body =
                         map_fallible(lhs.expect_list("rule query")?, self, Self::parse_fact)?;
-                    let head =
+                    let head: Vec<Vec<_>> =
                         map_fallible(rhs.expect_list("rule actions")?, self, Self::parse_action)?;
                     let head = GenericActions(head.into_iter().flatten().collect());
 
@@ -647,9 +647,8 @@ impl Parser {
                 _ => return error!(span, "usage: (fail <command>)"),
             },
             _ => self
-                .parse_action(sexp)
+                .parse_action(sexp)?
                 .into_iter()
-                .flatten()
                 .map(Command::Action)
                 .collect(),
         })
