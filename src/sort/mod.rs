@@ -51,6 +51,13 @@ pub trait Sort: Any + Send + Sync + Debug {
 
     fn column_ty(&self, backend: &egglog_bridge::EGraph) -> ColumnTy;
 
+    // return the inner sorts if a container sort
+    // remember that containers can contain containers
+    // and this only unfold one level
+    fn inner_sorts(&self) -> Vec<&Arc<dyn Sort>> {
+        vec![]
+    }
+
     fn register_type(&self, backend: &mut egglog_bridge::EGraph);
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static>;
@@ -107,7 +114,7 @@ pub trait Sort: Any + Send + Sync + Debug {
     /// Only container sort need to implement this method,
     fn inner_values(
         &self,
-        egraph: &EGraph,
+        containers: &core_relations::Containers,
         value: &core_relations::Value,
     ) -> Vec<(ArcSort, core_relations::Value)> {
         debug_assert!(!self.is_container_sort());

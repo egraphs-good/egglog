@@ -138,6 +138,10 @@ impl Sort for MapSort {
         self
     }
 
+    fn inner_sorts(&self) -> Vec<&Arc<dyn Sort>> {
+        vec![&self.key, &self.value]
+    }
+
     fn is_container_sort(&self) -> bool {
         true
     }
@@ -159,13 +163,10 @@ impl Sort for MapSort {
 
     fn inner_values(
         &self,
-        egraph: &EGraph,
-        value: &core_relations::Value,
+        containers: &core_relations::Containers,
+        value: &core_relations::Value
     ) -> Vec<(ArcSort, core_relations::Value)> {
-        let val = egraph
-            .backend
-            .containers()
-            .get_val::<MapContainer<core_relations::Value>>(*value)
+        let val = containers.get_val::<MapContainer<core_relations::Value>>(*value)
             .unwrap()
             .clone();
         val.data

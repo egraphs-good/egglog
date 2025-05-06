@@ -51,6 +51,7 @@ fn test_simple_extract2() {
              (union tbs tsss)
              (let tssss (SmallStep tsss))
              (union tssss tb)
+             (extract tb)
              "#
         )
         .unwrap();
@@ -64,6 +65,120 @@ fn test_simple_extract2() {
     */
 }
 
+#[test]
+fn test_simple_extract3() {
+
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut egraph = EGraph::default();
+
+    egraph.parse_and_run_program(
+        None,
+        r#"
+             (datatype Fruit
+               (Apple i64 :cost 1) 
+               (Orange f64 :cost 2)
+             )
+             (datatype Vegetable
+               (Broccoli bool :cost 3)
+               (Carrot Fruit :cost 4)
+             )
+             (let a (Apple 5))
+             (let o (Orange 3.14))
+             (let b (Broccoli true))
+             (let c (Carrot a))
+             (extract a)
+             "#
+        )
+        .unwrap();
+
+}
+
+/*
+#[test]
+fn test_simple_extract4() {
+
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut egraph = EGraph::default();
+
+    egraph.parse_and_run_program(
+        None,
+        r#"
+             (datatype Foo 
+                (Foobar i64)
+             ) 
+             (let foobar (Foobar 42))
+             (datatype Bar
+                (Barfoo i64)
+             )
+             (let barfoo (Barfoo 24))
+             (datatype Baz 
+                (Bazfoo i64)
+             )
+             (sort QuaMap (Map Foo Bar))
+             (sort QuaVecMap (Vec QuaMap))
+             (sort QuaVVM (Vec QuaVecMap))
+             (function Quaz () QuaVVM :no-merge)
+             (set (Quaz) (vec-empty))
+             (extract (Quaz))
+             "#
+        )
+        .unwrap();
+
+}
+*/
+
+#[test]
+fn test_simple_extract5() {
+
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut egraph = EGraph::default();
+
+    egraph.parse_and_run_program(
+        None,
+        r#"
+             (datatype Foo 
+                (Foobar i64)
+             ) 
+             (let foobar (Foobar 42))
+             (datatype Bar
+                (Barfoo i64)
+             )
+             (let barfoo (Barfoo 24))
+             (sort QuaVec (Vec i64))
+             (sort QuaMap (Map QuaVec Foo))
+             (function Quaz () QuaMap :no-merge)
+             (set (Quaz) (map-empty))
+             (extract (Quaz))
+             "#
+        )
+        .unwrap();
+
+}
+
+#[test]
+fn test_simple_extract6() {
+
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut egraph = EGraph::default();
+
+    egraph.parse_and_run_program(
+        None,
+        r#"
+             (datatype False)
+             (sort QuaVec (Vec i64))
+             (sort QuaMap (Map QuaVec False))
+             (function Quaz () QuaMap :no-merge)
+             (set (Quaz) (map-empty))
+             (extract (Quaz))
+             "#
+        )
+        .unwrap();
+
+}
 
 #[test]
 fn test_subsumed_unextractable_action_extract() {
