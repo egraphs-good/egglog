@@ -66,7 +66,7 @@ impl Presort for VecSort {
             if e.is_eq_container_sort() {
                 return Err(TypeError::DisallowedSort(
                     name,
-                    "Sets nested with other EqSort containers are not allowed".into(),
+                    "Vec nested with other EqSort containers are not allowed".into(),
                     span.clone(),
                 ));
             }
@@ -99,6 +99,10 @@ impl Sort for VecSort {
         self
     }
 
+    fn inner_sorts(&self) -> Vec<&Arc<dyn Sort>> {
+        vec![&self.element]
+    }
+
     fn is_container_sort(&self) -> bool {
         true
     }
@@ -116,13 +120,10 @@ impl Sort for VecSort {
 
     fn inner_values(
         &self,
-        egraph: &EGraph,
+        containers: &core_relations::Containers,
         value: &core_relations::Value,
     ) -> Vec<(ArcSort, core_relations::Value)> {
-        let val = egraph
-            .backend
-            .containers()
-            .get_val::<VecContainer<core_relations::Value>>(*value)
+        let val = containers.get_val::<VecContainer<core_relations::Value>>(*value)
             .unwrap()
             .clone();
         val.data

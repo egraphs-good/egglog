@@ -288,10 +288,14 @@ dependencies = [
 name = "concurrency"
 version = "0.1.0"
 <<<<<<< HEAD
+<<<<<<< HEAD
 source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=e1c938d#e1c938d223ea6c423c9ff455c7a26130ff5ee736"
 =======
 source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=bdc2e0dbc368992c23e218610d723c87a0d8174f#bdc2e0dbc368992c23e218610d723c87a0d8174f"
 >>>>>>> 561c7be (Things are starting to blow up)
+=======
+source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=609b3de#609b3dee487a1f827464aab391e9d50e9cd2f4c9"
+>>>>>>> 2acaa7e (Extraction core logic)
 dependencies = [
  "arc-swap",
  "rayon",
@@ -301,10 +305,14 @@ dependencies = [
 name = "core-relations"
 version = "0.1.0"
 <<<<<<< HEAD
+<<<<<<< HEAD
 source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=e1c938d#e1c938d223ea6c423c9ff455c7a26130ff5ee736"
 =======
 source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=bdc2e0dbc368992c23e218610d723c87a0d8174f#bdc2e0dbc368992c23e218610d723c87a0d8174f"
 >>>>>>> 561c7be (Things are starting to blow up)
+=======
+source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=609b3de#609b3dee487a1f827464aab391e9d50e9cd2f4c9"
+>>>>>>> 2acaa7e (Extraction core logic)
 dependencies = [
  "anyhow",
  "bumpalo",
@@ -490,6 +498,7 @@ dependencies = [
  "num",
  "numeric-id",
  "ordered-float",
+ "queues",
  "rustc-hash 1.1.0",
  "smallvec",
  "symbol_table",
@@ -500,10 +509,14 @@ dependencies = [
 name = "egglog-bridge"
 version = "0.1.0"
 <<<<<<< HEAD
+<<<<<<< HEAD
 source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=e1c938d#e1c938d223ea6c423c9ff455c7a26130ff5ee736"
 =======
 source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=bdc2e0dbc368992c23e218610d723c87a0d8174f#bdc2e0dbc368992c23e218610d723c87a0d8174f"
 >>>>>>> 561c7be (Things are starting to blow up)
+=======
+source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=609b3de#609b3dee487a1f827464aab391e9d50e9cd2f4c9"
+>>>>>>> 2acaa7e (Extraction core logic)
 dependencies = [
  "anyhow",
  "core-relations",
@@ -931,7 +944,7 @@ dependencies = [
 [[package]]
 name = "numeric-id"
 version = "0.1.0"
-source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=bdc2e0dbc368992c23e218610d723c87a0d8174f#bdc2e0dbc368992c23e218610d723c87a0d8174f"
+source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=609b3de#609b3dee487a1f827464aab391e9d50e9cd2f4c9"
 dependencies = [
  "lazy_static",
  "rayon",
@@ -1079,6 +1092,12 @@ checksum = "02b3e5e68a3a1a02aad3ec490a98007cbc13c37cbe84a3cd7b8e406d76e7f778"
 dependencies = [
  "unicode-ident",
 ]
+
+[[package]]
+name = "queues"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1475abae4f8ad4998590fe3acfe20104f0a5d48fc420c817cd2c09c3f56151f0"
 
 [[package]]
 name = "quote"
@@ -1448,10 +1467,14 @@ checksum = "5a5f39404a5da50712a4c1eecf25e90dd62b613502b7e925fd4e4d19b5c96512"
 name = "union-find"
 version = "0.1.0"
 <<<<<<< HEAD
+<<<<<<< HEAD
 source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=e1c938d#e1c938d223ea6c423c9ff455c7a26130ff5ee736"
 =======
 source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=bdc2e0dbc368992c23e218610d723c87a0d8174f#bdc2e0dbc368992c23e218610d723c87a0d8174f"
 >>>>>>> 561c7be (Things are starting to blow up)
+=======
+source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=609b3de#609b3dee487a1f827464aab391e9d50e9cd2f4c9"
+>>>>>>> 2acaa7e (Extraction core logic)
 dependencies = [
  "concurrency",
  "crossbeam",
