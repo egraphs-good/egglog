@@ -65,7 +65,7 @@ use std::sync::Arc;
 pub use termdag::{Term, TermDag, TermId};
 use thiserror::Error;
 pub use typechecking::TypeInfo;
-use unionfind::*;
+pub use unionfind::*;
 use util::*;
 pub use value::*;
 
