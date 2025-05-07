@@ -647,36 +647,44 @@ impl Drop for Database {
 /// This is in a separate function to allow us to reuse it while already
 /// borrowing a `TableInfo`.
 fn get_index_from_tableinfo(table_info: &TableInfo, cols: &[ColumnId]) -> HashIndex {
-    let guard = table_info.indexes.entry(cols.into()).or_insert_with(|| {
-        Arc::new(ReadOptimizedLock::new(Index::new(
-            cols.to_vec(),
-            TupleIndex::new(cols.len()),
-        )))
-    });
-    let ix = guard.value().read();
-    if ix.needs_refresh(table_info.table.as_ref()) {
-        mem::drop(ix);
-        let mut ix = guard.value().lock();
-        ix.refresh(table_info.table.as_ref());
-    }
-    guard.value().clone()
-}
-
-/// The core logic behind getting and updating a column index.
-///
-/// This is the single-column analog to [`get_index_from_tableinfo`].
-fn get_column_index_from_tableinfo(table_info: &TableInfo, col: ColumnId) -> HashColumnIndex {
-    let index = table_info.column_indexes.entry(col).or_insert_with(|| {
-        Arc::new(ReadOptimizedLock::new(Index::new(
-            vec![col],
-            ColumnIndex::new(),
-        )))
-    });
+    let index: Arc<_> = table_info
+        .indexes
+        .entry(cols.into())
+        .or_insert_with(|| {
+            Arc::new(ReadOptimizedLock::new(Index::new(
+                cols.to_vec(),
+                TupleIndex::new(cols.len()),
+            )))
+        })
+        .clone();
     let ix = index.read();
     if ix.needs_refresh(table_info.table.as_ref()) {
         mem::drop(ix);
         let mut ix = index.lock();
         ix.refresh(table_info.table.as_ref());
     }
-    index.clone()
+    index
+}
+
+/// The core logic behind getting and updating a column index.
+///
+/// This is the single-column analog to [`get_index_from_tableinfo`].
+fn get_column_index_from_tableinfo(table_info: &TableInfo, col: ColumnId) -> HashColumnIndex {
+    let index: Arc<_> = table_info
+        .column_indexes
+        .entry(col)
+        .or_insert_with(|| {
+            Arc::new(ReadOptimizedLock::new(Index::new(
+                vec![col],
+                ColumnIndex::new(),
+            )))
+        })
+        .clone();
+    let ix = index.read();
+    if ix.needs_refresh(table_info.table.as_ref()) {
+        mem::drop(ix);
+        let mut ix = index.lock();
+        ix.refresh(table_info.table.as_ref());
+    }
+    index
 }

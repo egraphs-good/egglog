@@ -19,6 +19,11 @@ use crate::{
     PlanStrategy,
 };
 
+/// On MacOs the system allocator is vulenrable to contention, causing tests to execute quite
+/// slowly without mimalloc.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 #[test]
 fn basic_query() {
     let MathEgraph {
