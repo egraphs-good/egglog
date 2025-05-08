@@ -110,16 +110,6 @@ impl UnionFind {
         res
     }
 
-    /// Merge the underlying equivalence classes for the two ids.
-    ///
-    /// This method does not update any metadata related to timestamps or sorts;
-    /// that metadata will eventually be required for the correctness of
-    /// rebuilding. This method should only be used for "out-of-band" use-cases,
-    /// such as typechecking.
-    pub(crate) fn union_raw(&mut self, id1: Id, id2: Id) -> Id {
-        self.do_union(id1, id2).0
-    }
-
     fn do_union(&mut self, id1: Id, id2: Id) -> (Id, Option<Id>) {
         let id1 = self.find(id1);
         let id2 = self.find(id2);
@@ -158,14 +148,14 @@ mod tests {
         assert_eq!(uf.parents, ids(0..n));
 
         // build up one set
-        uf.union_raw(0, 1);
-        uf.union_raw(0, 2);
-        uf.union_raw(0, 3);
+        uf.union(0, 1, "T".into());
+        uf.union(0, 2, "T".into());
+        uf.union(0, 3, "T".into());
 
         // build up another set
-        uf.union_raw(6, 7);
-        uf.union_raw(6, 8);
-        uf.union_raw(6, 9);
+        uf.union(6, 7, "T".into());
+        uf.union(6, 8, "T".into());
+        uf.union(6, 9, "T".into());
 
         // this should compress all paths
         for i in 0..n {
