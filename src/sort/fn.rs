@@ -231,6 +231,8 @@ impl Sort for FunctionSort {
     fn value_type(&self) -> Option<TypeId> {
         Some(TypeId::of::<NewFunctionContainer>())
     }
+    
+    //TODO: does not support extraction
 }
 
 impl IntoSort for OldFunctionContainer {

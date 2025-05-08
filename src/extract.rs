@@ -228,8 +228,17 @@ trait CostModel {
         head_cost : Cost,
     ) -> Cost;
 
+    fn container_primitive (
+        &self,
+        exec_state: &ExecutionState,
+        sort : &ArcSort,
+        value : &core_relations::Value,
+        element_costs : &Vec<Cost>,
+    ) -> Cost;
+
     fn leaf_primitive (
         &self,
+        exec_state: &ExecutionState,
         sort : &ArcSort,
         value : &core_relations::Value,
     ) -> Cost;
@@ -245,16 +254,26 @@ impl CostModel for TreeAdditiveCostModel {
         children_cost : &Vec<Cost>,
         head_cost : Cost,
     ) -> Cost {
-        return children_cost.iter().fold(head_cost, |s, c| { s.saturating_add(*c) });
+        children_cost.iter().fold(head_cost, |s, c| { s.saturating_add(*c) })
+    }
+
+    fn container_primitive (
+        &self,
+        exec_state: &ExecutionState,
+        sort : &ArcSort,
+        value : &core_relations::Value,
+        element_costs : &Vec<Cost>,
+    ) -> Cost {
+        sort.default_container_cost(exec_state, value, element_costs)
     }
 
     fn leaf_primitive (
         &self,
-        _sort : &ArcSort,
-        _value : &core_relations::Value,
+        exec_state: &ExecutionState,
+        sort : &ArcSort,
+        value : &core_relations::Value,
     ) -> Cost {
-        // TODO: should match on the sorts
-        1
+        sort.default_leaf_cost(exec_state, value)
     }
 }
 
@@ -337,7 +356,8 @@ impl ExtractorAlter {
     }
 
     /// BFS from the rootsort to filter the tables relevant to this root
-    fn compute_filtered_func(&self, sort_index : IndexMap<Symbol, Vec<Symbol>>) -> ExtractorView {
+    fn compute_filtered_func(&self) -> ExtractorView {
+        let sort_index = self.compute_sort_index();
         let mut q = queue![self.rootsort.clone()];
         let mut filtered = ExtractorView::default();
         let mut seen: HashSet<Symbol> = Default::default();
@@ -376,7 +396,7 @@ impl ExtractorAlter {
     /// Compute the cost of a single enode
     /// Recurse if container
     /// Returns None if contains an undefined eqsort term (potentially after unfolding)
-    fn compute_cost_single(
+    fn compute_cost_node(
         &self,
         exec_state : &ExecutionState,
         value : &core_relations::Value,
@@ -387,13 +407,13 @@ impl ExtractorAlter {
             let elements = sort.inner_values(exec_state, value);
             let mut ch_costs: Vec<Cost> = Vec::new();
             for ch in elements.iter() {
-                if let Some (c) = self.compute_cost_single(exec_state,&ch.1, &ch.0, costs) {
+                if let Some (c) = self.compute_cost_node(exec_state,&ch.1, &ch.0, costs) {
                     ch_costs.push(c);
                 } else {
                     return None
                 }
             }
-            Some (self.cost_model.fold(&sort.name(), &ch_costs, 0))
+            Some (self.cost_model.container_primitive(exec_state, sort, value, &ch_costs))
         } else if sort.is_eq_sort() {
             if costs.get(&sort.name()).is_some_and(|t| {t.get(value).is_some()}) {
                 Some(costs.get(&sort.name()).expect("Impossible").get(value).expect("Impossible").clone())
@@ -401,7 +421,7 @@ impl ExtractorAlter {
                 None
             }
         } else { // Primitive
-            Some(self.cost_model.leaf_primitive(sort, value))
+            Some(self.cost_model.leaf_primitive(exec_state, sort, value))
         }
     }
 
@@ -418,13 +438,44 @@ impl ExtractorAlter {
         //log::debug!("compute_cost_hyperedge head {} sorts {:?}", head, sorts);
         debug_assert_eq!(sorts.len(), values.len());
         for (value, sort) in values.iter().zip(sorts.iter()) {
-            if let Some (c) = self.compute_cost_single(exec_state, value, sort, costs) {
+            if let Some (c) = self.compute_cost_node(exec_state, value, sort, costs) {
                 ch_costs.push(c);
             } else {
                 return None;
             }
         }
         Some (self.cost_model.fold(head, &ch_costs, func.cost.unwrap_or(1)))
+    }
+
+    fn reconstruct_termdag_node(
+        &self,
+        exec_state : &ExecutionState,
+        termdag : &mut TermDag,
+        value : &core_relations::Value,
+        sort : &ArcSort,
+        filtered_func : &ExtractorView,
+        parent_edge : &HashMap<Symbol, HashMap<core_relations::Value, (Symbol, Vec<core_relations::Value>)>>
+    ) -> Term {
+        if sort.is_container_sort() {
+            let elements = sort.inner_values_and_sorts(exec_state, value);
+            let mut ch_terms: Vec<Term> = Vec::new();
+            for ch in elements.iter() {
+                ch_terms.push(self.reconstruct_termdag_node(exec_state, termdag, &ch.0, &ch.1, filtered_func, parent_edge));
+            }
+            sort.reconstruct_termdag_container(exec_state, value, termdag, ch_terms)
+        } else if sort.is_eq_sort() {
+            let (func_name, hyperedge) = parent_edge.get(&sort.name()).expect("Impossible")
+                                                    .get(value).expect("Impossible");
+            let mut ch_terms: Vec<Term> = Vec::new();
+            let ch_sorts = &filtered_func.funcs.get(func_name).expect("Impossible").schema.input;
+            for (value, sort) in hyperedge.iter().zip(ch_sorts.iter()) {
+                ch_terms.push(self.reconstruct_termdag_node(exec_state, termdag, value, sort, filtered_func, parent_edge));
+            }
+            termdag.app(*func_name, ch_terms)
+        } else { // Primitive
+            sort.reconstruct_termdag_leaf(exec_state, value, termdag)
+        }
+
     }
 
 }
@@ -439,23 +490,26 @@ impl ExternalFunction for ExtractorAlter {
         let nvariants = exec_state.prims().unwrap::<i64>(args[1]);
         log::debug!("target = {:?}, rootsort = {:?}, nvariants = {}", target, self.rootsort, nvariants);
         log::debug!("func: {:?}", self.funcs);
-        let sort_index = self.compute_sort_index();
-        log::debug!("sort_index_func = {:?}", sort_index);
-        let filtered_func = self.compute_filtered_func(sort_index);
+        
+        let filtered_func = self.compute_filtered_func();
         log::debug!("filtered_func = {:?}", filtered_func);
         
         // We use Bellman-Ford to compute the costs of the relevant eq sorts' terms
-        let mut costs : HashMap<Symbol, IndexMap<core_relations::Value, Cost>> = Default::default();
+        let mut costs : HashMap<Symbol, HashMap<core_relations::Value, Cost>> = Default::default();
+        let mut parent_edge : HashMap<Symbol, HashMap<core_relations::Value, (Symbol, Vec<core_relations::Value>)>> = Default::default();
         for func in filtered_func.funcs.iter() {
             if !costs.contains_key(&func.1.schema.output.name()) {
                 debug_assert!(func.1.schema.output.is_eq_sort());
                 costs.insert(func.1.schema.output.name(), Default::default());
+                parent_edge.insert(func.1.schema.output.name(), Default::default());
             }
         }
 
         let mut ensure_fixpoint = false;
+        let mut reconstruction_round = false;
 
-        while !ensure_fixpoint {
+        // Runs an extra round to copy the best hyperedges
+        while !ensure_fixpoint || reconstruction_round {
             ensure_fixpoint = true;
 
             for func in filtered_func.funcs.iter() {
@@ -477,18 +531,31 @@ impl ExternalFunction for ExtractorAlter {
                         let target_sort = &func.1.schema.output;
                         let target = row[func_cols];
                         if let Some (new_cost) = self.compute_cost_hyperedge(exec_state, &row[0..func_cols], func.0, func.1, &costs) {
-                            log::debug!("Got cost: {:?}", (target, new_cost));
-                            match costs.get_mut(&target_sort.name()).expect("Impossible").entry(target) {
-                                HEntry::Vacant(e) => {
-                                    log::debug!{"Inserted new cost"}
-                                    ensure_fixpoint = false;
-                                    e.insert(new_cost);
-                                }
-                                HEntry::Occupied(mut e) => {
-                                    if new_cost < *(e.get()) {
-                                        log::debug!{"Updated new cost"}
+                            if !reconstruction_round {
+                                log::debug!("Got cost: {:?}", (target, new_cost));
+                                match costs.get_mut(&target_sort.name()).expect("Impossible").entry(target) {
+                                    HEntry::Vacant(e) => {
+                                        log::debug!{"Inserted new cost"};
                                         ensure_fixpoint = false;
                                         e.insert(new_cost);
+                                    }
+                                    HEntry::Occupied(mut e) => {
+                                        if new_cost < *(e.get()) {
+                                            log::debug!{"Updated new cost"};
+                                            ensure_fixpoint = false;
+                                            e.insert(new_cost);
+                                        }
+                                    }
+                                }
+                            } else {
+                                if new_cost == *costs.get(&target_sort.name()).expect("Impossible")
+                                                     .get(&target).expect("Impossible") {
+                                    // one of the possible best parent edges
+                                    match parent_edge.get_mut(&target_sort.name()).expect("Impossible").entry(target) {
+                                        HEntry::Vacant(e) => {
+                                            e.insert((*func.0, row[0..func_cols].to_vec()));
+                                        }
+                                        _ => {}
                                     }
                                 }
                             }
@@ -497,9 +564,20 @@ impl ExternalFunction for ExtractorAlter {
                     buf.clear();
                 }
             }
+
+            if ensure_fixpoint {
+                reconstruction_round = !reconstruction_round;
+            }
         }
-        let best_cost = self.compute_cost_single(exec_state, &target, &self.rootsort, &costs).expect("Failed to extract root!");
+        let best_cost = self.compute_cost_node(exec_state, &target, &self.rootsort, &costs).expect("Failed to extract root!");
         log::debug!("Best cost for the extract root: {:?}", best_cost);
+        log::debug!("Dumping costs: {:?}", costs);
+        log::debug!{"Dumping parent_edge: {:?}", parent_edge};
+
+        let mut termdag : TermDag = Default::default(); 
+        let term = self.reconstruct_termdag_node(exec_state, &mut termdag, &target, &self.rootsort, &filtered_func, &parent_edge);
+
+        log::debug!("Got termdag: {:?}, term: {:?}", termdag, term);
         panic!{"Output not implemented yet"};
         Some(exec_state.prims().get::<()>(()))
     }

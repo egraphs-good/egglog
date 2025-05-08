@@ -204,6 +204,15 @@ impl Sort for MultiSetSort {
         }
         Some((cost, termdag.app("multiset-of".into(), children)))
     }
+    fn reconstruct_termdag_container(
+        &self,
+        _exec_state: &core_relations::ExecutionState,
+        _value: &core_relations::Value,
+        termdag: &mut TermDag,
+        element_terms: Vec<Term>,
+    ) -> Term {
+        termdag.app("multiset-of".into(), element_terms)
+    }
 
     fn serialized_name(&self, _value: &core_relations::Value) -> Symbol {
         "multiset-of".into()

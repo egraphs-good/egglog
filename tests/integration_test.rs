@@ -181,6 +181,50 @@ fn test_simple_extract6() {
 }
 
 #[test]
+fn test_simple_extract7() {
+
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut egraph = EGraph::default();
+
+    egraph.parse_and_run_program(
+        None,
+        r#"
+            (datatype Foo
+                (bar)
+                (baz)
+            )
+            (sort Mapsrt1 (Map i64 Foo))
+            (let map1 (map-insert (map-empty) 0 (bar)))
+            
+            (sort Mapsrt2 (Map bool Foo))
+            (let map2 (map-insert (map-empty) false (baz)))
+            ;(let map2b (map-insert (map-empty) false (bar)))
+            ;(union map2 map2b)
+
+            ;(extract map1)
+            ;(extract map2)
+            
+            ;(function toerr (Mapsrt2) Foo :no-merge)
+
+            ;(set (toerr map2) (bar))
+
+            (union (bar) (baz))
+            ; Also unions map1 and map2!?
+
+            (extract map1)
+            (extract map2)
+
+            ;(extract (toerr map2))
+
+             "#
+        )
+        .unwrap();
+
+    panic!("!!");
+}
+
+#[test]
 fn test_subsumed_unextractable_action_extract() {
     // Test when an expression is subsumed, it isn't extracted, even if its the cheapest
     let mut egraph = EGraph::default();

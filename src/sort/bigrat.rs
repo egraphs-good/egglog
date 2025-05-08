@@ -149,6 +149,26 @@ impl Sort for BigRatSort {
     fn value_type(&self) -> Option<TypeId> {
         Some(TypeId::of::<Q>())
     }
+    
+    fn reconstruct_termdag_leaf(
+        &self,
+        exec_state: &core_relations::ExecutionState,
+        value: &core_relations::Value,
+        termdag: &mut TermDag,
+    ) -> Term {
+        let rat = exec_state.prims().unwrap_ref::<BigRational>(*value);
+        let numer = rat.numer();
+        let denom = rat.denom();
+
+        let numer_as_string = termdag.lit(Literal::String(numer.to_string().into()));
+        let denom_as_string = termdag.lit(Literal::String(denom.to_string().into()));
+
+        let numer_term = termdag.app("from_string".into(), vec![numer_as_string]);
+        let denom_term = termdag.app("from_string".into(), vec![denom_as_string]);
+
+        termdag.app("bigrat".into(), vec![numer_term, denom_term])
+    }
+
 }
 
 impl FromSort for Q {
