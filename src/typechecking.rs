@@ -581,6 +581,8 @@ pub enum TypeError {
     LookupInRuleDisallowed(Symbol, Span),
     #[error("All alternative definitions considered failed\n{}", .0.iter().map(|e| format!("  {e}\n")).collect::<Vec<_>>().join(""))]
     AllAlternativeFailed(Vec<TypeError>),
+    #[error("{1}\nCannot union values of sort {}", .0.name())]
+    NonEqsortUnion(ArcSort, Span),
 }
 
 #[cfg(test)]
