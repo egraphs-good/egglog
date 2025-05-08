@@ -5,7 +5,7 @@ use crate::util::{HashMap, HashSet};
 use crate::IndexMap;
 use crate::{ArcSort, EGraph, Error, Function, HEntry, Id, Value};
 use queues::*;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use arc_swap::ArcSwap;
 
 pub type Cost = usize;
@@ -220,7 +220,57 @@ impl<'a> Extractor<'a> {
     }
 }
 
-trait CostModel {
+pub trait PreExtractionWriter {
+
+    fn extract_output_single(&self, termdag: &TermDag, term: &Term, cost: Cost);
+
+    //fn extract_output_multiple(termdag: &TermDag, terms: Vec<Term>, costs: Vec<Cost>);
+}
+
+pub trait ExtractionWriter : PreExtractionWriter + Send + Sync {}
+
+#[derive(Clone)]
+pub struct EgraphMsgWriter {
+    msgs : Arc<Mutex<Option<Vec<String>>>>
+}
+
+impl EgraphMsgWriter {
+    pub fn new(msgs: Arc<Mutex<Option<Vec<String>>>>) -> Self {
+        EgraphMsgWriter { msgs: msgs }
+    }
+
+    fn print_msg(&self, msg: String) {
+        match &mut *self.msgs.lock().unwrap() {
+            Some (msgs) => {msgs.push(msg);}
+            _ => {}
+        }
+    }
+}
+
+impl PreExtractionWriter for EgraphMsgWriter {
+    fn extract_output_single(&self, termdag: &TermDag, term: &Term, cost: Cost) {
+        let extracted = termdag.to_string(&term);
+        log::info!("extracted with cost {cost}: {extracted}");
+        self.print_msg(extracted);
+    }
+}
+
+impl ExtractionWriter for EgraphMsgWriter {}
+
+#[derive(Clone)]
+pub struct SaveTermDag {
+    pub buffer : Arc<Mutex<Vec<(TermDag, Term, Cost)>>>,
+}
+
+impl PreExtractionWriter for SaveTermDag {
+    fn extract_output_single(&self, termdag: &TermDag, term: &Term, cost: Cost) {
+        self.buffer.lock().unwrap().push((termdag.clone(), term.clone(), cost));
+    }
+}
+
+impl ExtractionWriter for SaveTermDag {}
+
+pub trait PreCostModel {
     fn fold (
         &self,
         head : &Symbol,
@@ -244,10 +294,12 @@ trait CostModel {
     ) -> Cost;
 }
 
-#[derive(Clone, Default)]
-struct TreeAdditiveCostModel {}
+pub trait CostModel : PreCostModel + Send + Sync {}
 
-impl CostModel for TreeAdditiveCostModel {
+#[derive(Default, Clone)]
+pub struct TreeAdditiveCostModel {}
+
+impl PreCostModel for TreeAdditiveCostModel {
     fn fold(
         &self,
         _head : &Symbol,
@@ -276,6 +328,8 @@ impl CostModel for TreeAdditiveCostModel {
         sort.default_leaf_cost(exec_state, value)
     }
 }
+
+impl CostModel for TreeAdditiveCostModel {}
 
 /// Captures what the extractor need to know about a table/function
 /// Should only be used for extractable functions
@@ -321,18 +375,22 @@ impl ExtractorView {
 pub struct ExtractorAlter {
     rootsort : ArcSort,
     funcs : Arc<ArcSwap<ExtractorView>>,
-    cost_model : TreeAdditiveCostModel,
+    cost_model : Arc<dyn CostModel>,
+    writer : Arc<dyn ExtractionWriter>,
 }
 
 impl ExtractorAlter {
     pub fn new(
         rootsort : ArcSort,
         funcs : Arc<ArcSwap<ExtractorView>>,
+        cost_model : impl CostModel + 'static,
+        writer : impl ExtractionWriter + 'static,
     ) -> Self {
         ExtractorAlter {  
             rootsort,
             funcs,
-            cost_model: TreeAdditiveCostModel::default(),
+            cost_model: Arc::new(cost_model),
+            writer : Arc::new(writer),
         }
     }
 }
@@ -578,7 +636,8 @@ impl ExternalFunction for ExtractorAlter {
         let term = self.reconstruct_termdag_node(exec_state, &mut termdag, &target, &self.rootsort, &filtered_func, &parent_edge);
 
         log::debug!("Got termdag: {:?}, term: {:?}", termdag, term);
-        panic!{"Output not implemented yet"};
+
+        self.writer.extract_output_single(&termdag, &term, best_cost);
         Some(exec_state.prims().get::<()>(()))
     }
 }

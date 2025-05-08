@@ -61,7 +61,7 @@ use std::iter::once;
 use std::ops::{Deref, Range};
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 pub use termdag::{Term, TermDag, TermId};
 use thiserror::Error;
 pub use typechecking::TypeInfo;
@@ -415,15 +415,15 @@ pub struct EGraph {
     pub fact_directory: Option<PathBuf>,
     pub seminaive: bool,
     type_info: TypeInfo,
-    extractor_view : Arc<ArcSwap<ExtractorView>>,
     /// Used for building the extract action
+    extractor_view : Arc<ArcSwap<ExtractorView>>,
     extract_report: Option<ExtractReport>,
     /// The run report for the most recent run of a schedule.
     recent_run_report: Option<RunReport>,
     /// The run report unioned over all runs so far.
     overall_run_report: RunReport,
     /// Messages to be printed to the user. If this is `None`, then we are ignoring messages.
-    msgs: Option<Vec<String>>,
+    msgs: Arc<Mutex<Option<Vec<String>>>>,
 }
 
 impl Default for EGraph {
@@ -445,7 +445,7 @@ impl Default for EGraph {
             extract_report: None,
             recent_run_report: None,
             overall_run_report: Default::default(),
-            msgs: Some(vec![]),
+            msgs: Arc::new(Mutex::new(Some(vec![]))),
             type_info: Default::default(),
             extractor_view: Arc::new(ArcSwap::from_pointee(Default::default())),
         };
@@ -512,17 +512,17 @@ impl EGraph {
     ///
     /// When messages are disabled the vec of messages returned by evaluating commands will always be empty.
     pub fn disable_messages(&mut self) {
-        self.msgs = None;
+        *self.msgs.lock().unwrap() = None;
     }
 
     /// Enable saving messages to be printed to the user.
     pub fn enable_messages(&mut self) {
-        self.msgs = Some(vec![]);
+        *self.msgs.lock().unwrap() = Some(vec![]);
     }
 
     /// Whether messages are enabled.
     pub fn messages_enabled(&self) -> bool {
-        self.msgs.is_some()
+        self.msgs.lock().unwrap().is_some()
     }
 
     /// Pop the current egraph off the stack, replacing
@@ -1125,6 +1125,7 @@ impl EGraph {
                 &self.functions,
                 &self.type_info,
                 &self.extractor_view,
+                &self.msgs,
             );
             translator.query(&query, false);
             translator.actions(&actions)?;
@@ -1169,6 +1170,7 @@ impl EGraph {
                 &self.functions,
                 &self.type_info,
                 &self.extractor_view,
+                &self.msgs,
             );
             translator.actions(&actions)?;
             let id = translator.build();
@@ -1268,6 +1270,7 @@ impl EGraph {
                 &self.functions,
                 &self.type_info,
                 &self.extractor_view,
+                &self.msgs,
             );
             translator.query(&query, true);
             translator.rb.call_external_func(
@@ -1712,18 +1715,22 @@ impl EGraph {
     }
 
     pub(crate) fn print_msg(&mut self, msg: String) {
-        if let Some(ref mut msgs) = self.msgs {
-            msgs.push(msg);
+        match &mut *self.msgs.lock().unwrap() {
+            Some (msgs) => {msgs.push(msg);}
+            _ => {}
         }
     }
 
     fn flush_msgs(&mut self) -> Vec<String> {
-        if let Some(ref mut msgs) = self.msgs {
-            msgs.dedup_by(|a, b| a.is_empty() && b.is_empty());
-            std::mem::take(msgs)
-        } else {
-            vec![]
-        }
+        match &mut *self.msgs.lock().unwrap() {
+            Some (msgs) => {
+                msgs.dedup_by(|a, b| a.is_empty() && b.is_empty());
+                std::mem::take(msgs)
+            }
+            _ => {
+                vec![]
+            }
+        }            
     }
 }
 
@@ -1732,6 +1739,7 @@ struct BackendRule<'a> {
     entries: HashMap<core::ResolvedAtomTerm, QueryEntry>,
     functions: &'a IndexMap<Symbol, Function>,
     type_info: &'a TypeInfo,
+    msgs: &'a Arc<Mutex<Option<Vec<String>>>>,
     extractor_view: &'a Arc<ArcSwap<ExtractorView>>,
 }
 
@@ -1741,12 +1749,14 @@ impl<'a> BackendRule<'a> {
         functions: &'a IndexMap<Symbol, Function>,
         type_info: &'a TypeInfo,
         extractor_view: &'a Arc<ArcSwap<ExtractorView>>,
+        msgs: &'a Arc<Mutex<Option<Vec<String>>>>,
     ) -> BackendRule<'a> {
         BackendRule {
             rb,
             functions,
             type_info,
             extractor_view,
+            msgs,
             entries: Default::default(),
         }
     }
@@ -1942,6 +1952,8 @@ impl<'a> BackendRule<'a> {
                             let extractor = extract::ExtractorAlter::new(
                                 xsort,
                                 Arc::clone(self.extractor_view),
+                                extract::TreeAdditiveCostModel::default(),
+                                extract::EgraphMsgWriter::new(self.msgs.clone()),
                             );
                             let extract_func_id = self.rb.register_external_func(extractor);
                             self.rb.call_external_func(
