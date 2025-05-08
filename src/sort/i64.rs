@@ -91,6 +91,18 @@ impl Sort for I64Sort {
     fn value_type(&self) -> Option<TypeId> {
         Some(TypeId::of::<i64>())
     }
+    
+    fn reconstruct_termdag_leaf(
+        &self,
+        exec_state: &core_relations::ExecutionState,
+        value: &core_relations::Value,
+        termdag: &mut TermDag,
+    ) -> Term {
+        let i = exec_state.prims().unwrap_ref::<i64>(*value);
+
+        termdag.lit(Literal::Int(*i))
+    }
+    
 }
 
 impl IntoSort for i64 {

@@ -81,6 +81,18 @@ impl Sort for BigIntSort {
     fn value_type(&self) -> Option<TypeId> {
         Some(TypeId::of::<Z>())
     }
+    
+    fn reconstruct_termdag_leaf(
+        &self,
+        exec_state: &core_relations::ExecutionState,
+        value: &core_relations::Value,
+        termdag: &mut TermDag,
+    ) -> Term {
+        let bigint = exec_state.prims().unwrap_ref::<BigInt>(*value);
+
+        let as_string = termdag.lit(Literal::String(bigint.to_string().into()));
+        termdag.app("from_string".into(), vec![as_string])
+    }
 }
 
 impl FromSort for Z {
