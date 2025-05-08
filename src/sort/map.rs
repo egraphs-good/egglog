@@ -104,7 +104,7 @@ impl Presort for MapSort {
             if v.is_container_sort() {
                 return Err(TypeError::DisallowedSort(
                     name,
-                    "Maps nested with other EqSort containers are not allowed".into(),
+                    "Maps nested with other containers are not allowed".into(),
                     v_span.clone(),
                 ));
             }
@@ -232,6 +232,23 @@ impl Sort for MapSort {
     fn value_type(&self) -> Option<TypeId> {
         Some(TypeId::of::<MapContainer<core_relations::Value>>())
     }
+    
+    fn reconstruct_termdag_container(
+        &self,
+        _exec_state: &core_relations::ExecutionState,
+        _value: &core_relations::Value,
+        termdag: &mut TermDag,
+        element_terms: Vec<Term>,
+    ) -> Term {
+        let mut term = termdag.app("map-empty".into(), vec![]);
+
+        for x in element_terms.chunks(2) {
+            term = termdag.app("map-insert".into(), vec![term, x[0].clone(), x[1].clone()])
+        }
+
+        term
+    }
+
 }
 
 impl IntoSort for MapContainer<Value> {

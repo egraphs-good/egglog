@@ -197,6 +197,20 @@ impl Sort for VecSort {
         }
     }
 
+    fn reconstruct_termdag_container(
+        &self,
+        _exec_state: &core_relations::ExecutionState,
+        _value: &core_relations::Value,
+        termdag: &mut TermDag,
+        element_terms: Vec<Term>,
+    ) -> Term {
+        if element_terms.is_empty() {
+            termdag.app("vec-empty".into(), vec![])
+        } else {
+            termdag.app("vec-of".into(), element_terms)
+        }
+    }
+
     fn serialized_name(&self, _value: &core_relations::Value) -> Symbol {
         "vec-of".into()
     }
