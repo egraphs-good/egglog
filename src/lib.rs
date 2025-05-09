@@ -1461,6 +1461,9 @@ impl EGraph {
                     self.backend.new_rule("outputs", false),
                     &self.functions,
                     &self.type_info,
+                    &self.extractor_view,
+                    &self.msgs,
+                    &self.new_extract_report,
                 );
                 let expr_types = exprs.iter().map(|e| e.output_type()).collect::<Vec<_>>();
                 for expr in exprs {
