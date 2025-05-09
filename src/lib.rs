@@ -418,6 +418,8 @@ pub struct EGraph {
     /// Used for building the extract action
     extractor_view : Arc<ArcSwap<ExtractorView>>,
     extract_report: Option<ExtractReport>,
+    /// For testing the extractor
+    new_extract_report: Arc<Mutex<Option<ExtractReport>>>,
     /// The run report for the most recent run of a schedule.
     recent_run_report: Option<RunReport>,
     /// The run report unioned over all runs so far.
@@ -443,6 +445,7 @@ impl Default for EGraph {
             fact_directory: None,
             seminaive: true,
             extract_report: None,
+            new_extract_report: Arc::new(Mutex::new(None)),
             recent_run_report: None,
             overall_run_report: Default::default(),
             msgs: Arc::new(Mutex::new(Some(vec![]))),
@@ -1126,6 +1129,7 @@ impl EGraph {
                 &self.type_info,
                 &self.extractor_view,
                 &self.msgs,
+                &self.new_extract_report,
             );
             translator.query(&query, false);
             translator.actions(&actions)?;
@@ -1171,6 +1175,7 @@ impl EGraph {
                 &self.type_info,
                 &self.extractor_view,
                 &self.msgs,
+                &self.new_extract_report,
             );
             translator.actions(&actions)?;
             let id = translator.build();
@@ -1271,6 +1276,7 @@ impl EGraph {
                 &self.type_info,
                 &self.extractor_view,
                 &self.msgs,
+                &self.new_extract_report,
             );
             translator.query(&query, true);
             translator.rb.call_external_func(
@@ -1367,6 +1373,7 @@ impl EGraph {
                     // Update extractor_view before the top level extract command
                     self.extractor_view.store(Arc::new(ExtractorView::new(&self.functions, &self.backend)));
                     self.eval_actions(&ResolvedActions::new(vec![action.clone()]))?;
+                    self.check_extract_report_consistency();
                 }
                 _ => {
                     self.eval_actions(&ResolvedActions::new(vec![action.clone()]))?;
@@ -1699,8 +1706,30 @@ impl EGraph {
         self.type_info.get_sorts_by(f)
     }
 
+    pub fn check_extract_report_consistency(&self) {
+        let old_report = self.extract_report.clone();
+        let new_report = self.new_extract_report.lock().unwrap().clone();
+        if old_report.is_none() && new_report.is_none() {
+        } else if old_report.is_none() && !new_report.is_none() {
+            panic!("No old report found but found new report");
+        } else if !old_report.is_none() && new_report.is_none() {
+            panic!("No new report found but found old report");
+        } else {
+            let old_report = old_report.expect("Impossible");
+            let new_report = new_report.expect("Impossible");
+            match (old_report, new_report) {
+                (ExtractReport::Best { termdag: _old_termdag, cost: old_cost, term: _old_term },
+                 ExtractReport::Best { termdag: _new_termdag, cost: new_cost, term: _new_term }) => {
+                    debug_assert_eq!(old_cost, new_cost);
+                 }
+                _ => {}
+            }
+        }
+    }
+
     /// Gets the last extract report and returns it, if the last command saved it.
     pub fn get_extract_report(&self) -> &Option<ExtractReport> {
+        self.check_extract_report_consistency();
         &self.extract_report
     }
 
@@ -1740,6 +1769,7 @@ struct BackendRule<'a> {
     functions: &'a IndexMap<Symbol, Function>,
     type_info: &'a TypeInfo,
     msgs: &'a Arc<Mutex<Option<Vec<String>>>>,
+    report: &'a Arc<Mutex<Option<ExtractReport>>>,
     extractor_view: &'a Arc<ArcSwap<ExtractorView>>,
 }
 
@@ -1750,6 +1780,7 @@ impl<'a> BackendRule<'a> {
         type_info: &'a TypeInfo,
         extractor_view: &'a Arc<ArcSwap<ExtractorView>>,
         msgs: &'a Arc<Mutex<Option<Vec<String>>>>,
+        report: &'a Arc<Mutex<Option<ExtractReport>>>,
     ) -> BackendRule<'a> {
         BackendRule {
             rb,
@@ -1757,6 +1788,7 @@ impl<'a> BackendRule<'a> {
             type_info,
             extractor_view,
             msgs,
+            report,
             entries: Default::default(),
         }
     }
@@ -1953,7 +1985,7 @@ impl<'a> BackendRule<'a> {
                                 xsort,
                                 Arc::clone(self.extractor_view),
                                 extract::TreeAdditiveCostModel::default(),
-                                extract::EgraphMsgWriter::new(self.msgs.clone()),
+                                extract::EgraphMsgWriter::new(self.msgs.clone(), self.report.clone()),
                             );
                             let extract_func_id = self.rb.register_external_func(extractor);
                             self.rb.call_external_func(
