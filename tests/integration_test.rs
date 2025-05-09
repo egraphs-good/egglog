@@ -2,6 +2,217 @@ use egglog::{ast::Expr, *};
 use symbol_table::GlobalSymbol;
 
 #[test]
+fn test_simple_extract1() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut egraph = EGraph::default();
+
+    let result = egraph
+        .parse_and_run_program(
+            None,
+            r#"
+             (datatype Op (Add i64 i64))
+             (let expr (Add 1 1))
+             (extract expr)"#,
+        )
+        .unwrap();
+
+    log::debug!("{}", result.join("\n"));
+}
+
+#[test]
+fn test_simple_extract2() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut egraph = EGraph::default();
+
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+             (datatype Term
+               (Origin :cost 0) 
+               (BigStep Term :cost 10)
+               (SmallStep Term :cost 1)
+             )
+             (let t (Origin))
+             (let tb (BigStep t))
+             (let tbs (SmallStep tb))
+             (let ts (SmallStep t))
+             (let tss (SmallStep ts))
+             (let tsss (SmallStep tss))
+             (union tbs tsss)
+             (let tssss (SmallStep tsss))
+             (union tssss tb)
+             (extract tb)
+             "#,
+        )
+        .unwrap();
+
+    /*
+    let mut termdag = TermDag::default();
+    let (sort, value) = egraph.eval_expr(&egglog::var!("tb")).unwrap();
+    let (cost, extracted) = egraph.extract(value, &mut termdag, &sort).unwrap();
+    assert_eq!(cost, 4);
+    assert_eq!(termdag.to_string(&extracted), "(SmallStep (SmallStep (SmallStep (SmallStep (Origin)))))");
+    */
+}
+
+#[test]
+fn test_simple_extract3() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut egraph = EGraph::default();
+
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+             (datatype Fruit
+               (Apple i64 :cost 1) 
+               (Orange f64 :cost 2)
+             )
+             (datatype Vegetable
+               (Broccoli bool :cost 3)
+               (Carrot Fruit :cost 4)
+             )
+             (let a (Apple 5))
+             (let o (Orange 3.14))
+             (let b (Broccoli true))
+             (let c (Carrot a))
+             (extract a)
+             "#,
+        )
+        .unwrap();
+}
+
+/*
+#[test]
+fn test_simple_extract4() {
+
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut egraph = EGraph::default();
+
+    egraph.parse_and_run_program(
+        None,
+        r#"
+             (datatype Foo
+                (Foobar i64)
+             )
+             (let foobar (Foobar 42))
+             (datatype Bar
+                (Barfoo i64)
+             )
+             (let barfoo (Barfoo 24))
+             (datatype Baz
+                (Bazfoo i64)
+             )
+             (sort QuaMap (Map Foo Bar))
+             (sort QuaVecMap (Vec QuaMap))
+             (sort QuaVVM (Vec QuaVecMap))
+             (function Quaz () QuaVVM :no-merge)
+             (set (Quaz) (vec-empty))
+             (extract (Quaz))
+             "#
+        )
+        .unwrap();
+
+}
+*/
+
+#[test]
+fn test_simple_extract5() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut egraph = EGraph::default();
+
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+             (datatype Foo 
+                (Foobar i64)
+             ) 
+             (let foobar (Foobar 42))
+             (datatype Bar
+                (Barfoo i64)
+             )
+             (let barfoo (Barfoo 24))
+             (sort QuaVec (Vec i64))
+             (sort QuaMap (Map QuaVec Foo))
+             (function Quaz () QuaMap :no-merge)
+             (set (Quaz) (map-empty))
+             (extract (Quaz))
+             "#,
+        )
+        .unwrap();
+}
+
+#[test]
+fn test_simple_extract6() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut egraph = EGraph::default();
+
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+             (datatype False)
+             (sort QuaVec (Vec i64))
+             (sort QuaMap (Map QuaVec False))
+             (function Quaz () QuaMap :no-merge)
+             (set (Quaz) (map-empty))
+             (extract (Quaz))
+             "#,
+        )
+        .unwrap();
+}
+
+#[test]
+fn test_simple_extract7() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut egraph = EGraph::default();
+
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+            (datatype Foo
+                (bar)
+                (baz)
+            )
+            (sort Mapsrt1 (Map i64 Foo))
+            (let map1 (map-insert (map-empty) 0 (bar)))
+            
+            (sort Mapsrt2 (Map bool Foo))
+            (let map2 (map-insert (map-empty) false (baz)))
+            ;(let map2b (map-insert (map-empty) false (bar)))
+            ;(union map2 map2b)
+
+            ;(extract map1)
+            ;(extract map2)
+            
+            ;(function toerr (Mapsrt2) Foo :no-merge)
+
+            ;(set (toerr map2) (bar))
+
+            (union (bar) (baz))
+            ; Also unions map1 and map2!?
+
+            (extract map1)
+            (extract map2)
+
+            ;(extract (toerr map2))
+
+             "#,
+        )
+        .unwrap();
+}
+
+#[test]
 fn test_subsumed_unextractable_action_extract() {
     // Test when an expression is subsumed, it isn't extracted, even if its the cheapest
     let mut egraph = EGraph::default();

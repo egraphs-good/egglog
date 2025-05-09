@@ -19,7 +19,11 @@ use super::*;
 pub struct OldFunctionContainer(Symbol, Vec<(ArcSort, Value)>);
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct NewFunctionContainer(ResolvedFunctionId, Vec<(bool, core_relations::Value)>);
+pub struct NewFunctionContainer(
+    ResolvedFunctionId,
+    Vec<(bool, core_relations::Value)>,
+    Symbol,
+);
 
 impl OldFunctionContainer {
     /// Remove the arcsorts to make this hashable
@@ -177,14 +181,10 @@ impl Sort for FunctionSort {
 
     fn inner_values(
         &self,
-        egraph: &EGraph,
+        containers: &core_relations::Containers,
         value: &core_relations::Value,
     ) -> Vec<(ArcSort, core_relations::Value)> {
-        let val = egraph
-            .backend
-            .containers()
-            .get_val::<NewFunctionContainer>(*value)
-            .unwrap();
+        let val = containers.get_val::<NewFunctionContainer>(*value).unwrap();
         self.inputs.iter().cloned().zip(val.iter()).collect()
     }
 
@@ -233,6 +233,32 @@ impl Sort for FunctionSort {
 
     fn value_type(&self) -> Option<TypeId> {
         Some(TypeId::of::<NewFunctionContainer>())
+    }
+
+    fn default_container_cost(
+        &self,
+        _exec_state: &core_relations::ExecutionState,
+        _value: core_relations::Value,
+        element_costs: &[Cost],
+    ) -> Cost {
+        element_costs.iter().fold(1, |s, c| s.saturating_add(*c))
+    }
+
+    fn reconstruct_termdag_container(
+        &self,
+        exec_state: &core_relations::ExecutionState,
+        value: &core_relations::Value,
+        termdag: &mut TermDag,
+        mut element_terms: Vec<Term>,
+    ) -> Term {
+        let name = exec_state
+            .containers()
+            .get_val::<NewFunctionContainer>(*value)
+            .unwrap()
+            .2;
+        let head = termdag.lit(Literal::String(name));
+        element_terms.insert(0, head);
+        termdag.app("unstable-fn".into(), element_terms)
     }
 }
 
@@ -397,6 +423,7 @@ impl PrimitiveLike for Ctor {
 pub struct ResolvedFunction {
     pub id: ResolvedFunctionId,
     pub do_rebuild: Vec<bool>,
+    pub name: Symbol,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -412,9 +439,13 @@ impl ExternalFunction for Ctor {
         args: &[core_relations::Value],
     ) -> Option<core_relations::Value> {
         let (rf, args) = args.split_first().unwrap();
-        let ResolvedFunction { id, do_rebuild } = exec_state.prims().unwrap(*rf);
+        let ResolvedFunction {
+            id,
+            do_rebuild,
+            name,
+        } = exec_state.prims().unwrap(*rf);
         let args = do_rebuild.iter().zip(args).map(|(b, x)| (*b, *x)).collect();
-        let y = NewFunctionContainer(id, args);
+        let y = NewFunctionContainer(id, args, name);
         Some(exec_state.clone().containers().register_val(y, exec_state))
     }
 }
