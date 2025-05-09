@@ -1716,7 +1716,9 @@ impl EGraph {
             match (old_report, new_report) {
                 (ExtractReport::Best { termdag: _old_termdag, cost: old_cost, term: _old_term },
                  ExtractReport::Best { termdag: _new_termdag, cost: new_cost, term: _new_term }) => {
-                    debug_assert_eq!(old_cost, new_cost);
+                    if old_cost != new_cost {
+                        panic!("Derived different extraction costs: {:?}, {:?}", old_cost, new_cost);
+                    }
                  }
                 _ => {}
             }

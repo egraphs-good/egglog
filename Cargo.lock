@@ -272,6 +272,7 @@ name = "concurrency"
 version = "0.1.0"
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=e1c938d#e1c938d223ea6c423c9ff455c7a26130ff5ee736"
 =======
 source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=bdc2e0dbc368992c23e218610d723c87a0d8174f#bdc2e0dbc368992c23e218610d723c87a0d8174f"
@@ -279,6 +280,9 @@ source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=bdc2e0dbc36
 =======
 source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=609b3de#609b3dee487a1f827464aab391e9d50e9cd2f4c9"
 >>>>>>> 2acaa7e (Extraction core logic)
+=======
+source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=dbb77d7#dbb77d7750ef1a28b908bfb2c0c096f801fc076e"
+>>>>>>> 6fdb923 (Test passing)
 dependencies = [
  "arc-swap",
  "rayon",
@@ -299,6 +303,7 @@ name = "core-relations"
 version = "0.1.0"
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=e1c938d#e1c938d223ea6c423c9ff455c7a26130ff5ee736"
 =======
 source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=bdc2e0dbc368992c23e218610d723c87a0d8174f#bdc2e0dbc368992c23e218610d723c87a0d8174f"
@@ -306,6 +311,9 @@ source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=bdc2e0dbc36
 =======
 source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=609b3de#609b3dee487a1f827464aab391e9d50e9cd2f4c9"
 >>>>>>> 2acaa7e (Extraction core logic)
+=======
+source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=dbb77d7#dbb77d7750ef1a28b908bfb2c0c096f801fc076e"
+>>>>>>> 6fdb923 (Test passing)
 dependencies = [
  "anyhow",
  "bumpalo",
@@ -529,6 +537,7 @@ name = "egglog-bridge"
 version = "0.1.0"
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=e1c938d#e1c938d223ea6c423c9ff455c7a26130ff5ee736"
 =======
 source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=bdc2e0dbc368992c23e218610d723c87a0d8174f#bdc2e0dbc368992c23e218610d723c87a0d8174f"
@@ -536,6 +545,9 @@ source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=bdc2e0dbc36
 =======
 source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=609b3de#609b3dee487a1f827464aab391e9d50e9cd2f4c9"
 >>>>>>> 2acaa7e (Extraction core logic)
+=======
+source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=dbb77d7#dbb77d7750ef1a28b908bfb2c0c096f801fc076e"
+>>>>>>> 6fdb923 (Test passing)
 dependencies = [
  "anyhow",
  "core-relations",
@@ -978,7 +990,7 @@ dependencies = [
 [[package]]
 name = "numeric-id"
 version = "0.1.0"
-source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=609b3de#609b3dee487a1f827464aab391e9d50e9cd2f4c9"
+source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=dbb77d7#dbb77d7750ef1a28b908bfb2c0c096f801fc076e"
 dependencies = [
  "lazy_static",
  "rayon",
@@ -1491,6 +1503,7 @@ name = "union-find"
 version = "0.1.0"
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=e1c938d#e1c938d223ea6c423c9ff455c7a26130ff5ee736"
 =======
 source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=bdc2e0dbc368992c23e218610d723c87a0d8174f#bdc2e0dbc368992c23e218610d723c87a0d8174f"
@@ -1498,6 +1511,9 @@ source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=bdc2e0dbc36
 =======
 source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=609b3de#609b3dee487a1f827464aab391e9d50e9cd2f4c9"
 >>>>>>> 2acaa7e (Extraction core logic)
+=======
+source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=dbb77d7#dbb77d7750ef1a28b908bfb2c0c096f801fc076e"
+>>>>>>> 6fdb923 (Test passing)
 dependencies = [
  "concurrency",
  "crossbeam",
