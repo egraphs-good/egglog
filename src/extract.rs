@@ -4,6 +4,7 @@ use crate::termdag::{Term, TermDag};
 use crate::util::{HashMap, HashSet};
 use crate::IndexMap;
 use crate::{ArcSort, EGraph, Error, Function, HEntry, Id, Value};
+use egglog_bridge::SchemaMath;
 use queues::*;
 use std::sync::{Arc, Mutex};
 use arc_swap::ArcSwap;
@@ -341,15 +342,20 @@ pub struct ExtractorViewFunc {
     pub schema : ResolvedSchema,
     pub cost : Option<Cost>,
     pub backend_table_id : TableId,
+    pub can_subsume : bool,
+    pub schema_math : SchemaMath,
 }
 
 impl ExtractorViewFunc {
     fn new (f : &Function, backend: &egglog_bridge::EGraph) -> Self {
         debug_assert!(f.is_extractable(), "Unextractable function in ExtractorView");
+        let (table_id, math) = backend.get_func_info(f.new_backend_id);
         ExtractorViewFunc {
             schema: f.schema.clone(),
             cost: f.decl.cost,
-            backend_table_id: backend.get_table_id(f.new_backend_id),
+            backend_table_id: table_id,
+            can_subsume: f.can_subsume,
+            schema_math: math,
         }
     } 
 }
@@ -588,10 +594,13 @@ impl ExternalFunction for ExtractorAlter {
                         done = true;
                     }
                     for (_, row) in buf.non_stale() {
+                        if func.1.can_subsume && row[func.1.schema_math.subsume_col()] == egglog_bridge::SUBSUMED {
+                            continue;
+                        }
                         // Output sort and value
                         let target_sort = &func.1.schema.output;
-                        let target = row[func_cols];
-                        if let Some (new_cost) = self.compute_cost_hyperedge(exec_state, &row[0..func_cols], func.0, func.1, &costs) {
+                        let target = row[func.1.schema_math.ret_val_col()];
+                        if let Some (new_cost) = self.compute_cost_hyperedge(exec_state, &row[0..func.1.schema_math.num_keys()], func.0, func.1, &costs) {
                             if !reconstruction_round {
                                 log::debug!("Got cost: {:?}", (target, new_cost));
                                 match costs.get_mut(&target_sort.name()).expect("Impossible").entry(target) {
