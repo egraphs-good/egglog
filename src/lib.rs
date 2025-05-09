@@ -31,7 +31,6 @@ use crate::constraint::Problem;
 use crate::core::{AtomTerm, ResolvedCall};
 use crate::typechecking::TypeError;
 use actions::Program;
-use ast::remove_globals::remove_globals;
 use ast::*;
 #[cfg(feature = "bin")]
 pub use cli::bin::*;
@@ -1432,7 +1431,7 @@ impl EGraph {
             .type_info
             .typecheck_program(&mut self.parser.symbol_gen, &program)?;
 
-        let program = remove_globals(program, &mut self.parser.symbol_gen);
+        let program = remove_globals::remove_globals(program, &mut self.parser.symbol_gen);
 
         Ok(program)
     }

@@ -1,12 +1,10 @@
 pub mod desugar;
 mod expr;
-pub mod parse;
-pub(crate) mod remove_globals;
+mod parse;
+pub mod remove_globals;
 
-use crate::{
-    core::{GenericAtom, GenericAtomTerm, HeadOrEq, Query, ResolvedCall},
-    *,
-};
+use crate::core::{GenericAtom, GenericAtomTerm, HeadOrEq, Query, ResolvedCall};
+use crate::*;
 pub use expr::*;
 pub use parse::*;
 pub use symbol_table::GlobalSymbol as Symbol;
