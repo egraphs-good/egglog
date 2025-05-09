@@ -774,7 +774,14 @@ impl Parser {
     pub fn parse_expr(&mut self, sexp: &Sexp) -> Result<Expr, ParseError> {
         Ok(match sexp {
             Sexp::Literal(literal, span) => Expr::Lit(span.clone(), literal.clone()),
-            Sexp::Atom(symbol, span) => Expr::Var(span.clone(), *symbol),
+            Sexp::Atom(symbol, span) => Expr::Var(
+                span.clone(),
+                if *symbol == "_".into() {
+                    self.symbol_gen.fresh(symbol)
+                } else {
+                    *symbol
+                },
+            ),
             Sexp::List(list, span) => match list.as_slice() {
                 [] => Expr::Lit(span.clone(), Literal::Unit),
                 _ => {
