@@ -134,7 +134,7 @@
         worker.onmessage = function (message) {
             console.log("got message", message);
             window.lastMessage = message;
-            output.innerHTML = message.data.text;
+            output.textContent = message.data.text;
             output.scrollTop = output.scrollHeight;
             fulllog = message.data.log;
             window.previousEGraphs.push(message.data.json);
@@ -197,7 +197,7 @@
             let level = document.getElementById("logLevel").value;
             let displayloglevel = logLevels.indexOf(level);
             let log = fulllog.filter((entry) => logLevels.indexOf(entry[0]) <= displayloglevel);
-            loginfo.innerHTML = log.map((entry) => entry[1]).join("\n");
+            loginfo.textContent = log.map((entry) => entry[1]).join("\n");
             loginfo.scrollTop = loginfo.scrollHeight;
         }
 
@@ -287,9 +287,9 @@
 
         function updateSlideMode() {
             if (state.hasRun) {
-                nextButton.innerHTML = "Next";
+                nextButton.textContent = "Next";
             } else {
-                nextButton.innerHTML = "Run";
+                nextButton.textContent = "Run";
             }
             if (!state.isSlideMode) {
                 nextButton.style.display = "none";
@@ -307,7 +307,7 @@
                 githubButton.style.display = "none";
                 shareButton.style.display = "none";
                 examplesDropDown.style.display = "none";
-                slideNumber.innerHTML = `${state.slideIndex + 1}`;
+                slideNumber.textContent = `${state.slideIndex + 1}`;
 
                 // content is all the sexps up to slidenum
                 let content = state.contentBySexp.slice(0, state.slideIndex + 1).join("");
@@ -390,7 +390,7 @@
             for (name in examples) {
                 let node = document.createElement("option");
                 node.value = name;
-                node.innerHTML = name;
+                node.textContent = name;
                 select.appendChild(node);
             }
 
