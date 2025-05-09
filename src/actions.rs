@@ -345,10 +345,7 @@ impl EGraph {
                             log::info!("extracted with cost {cost}: {extracted}");
                             self.print_msg(extracted);
                         }
-                        self.extract_report = Some(ExtractReport::Best {
-                            cost,
-                            term,
-                        });
+                        self.extract_report = Some(ExtractReport::Best { cost, term });
                     } else {
                         if variants < 0 {
                             panic!("Cannot extract negative number of variants");

@@ -224,13 +224,8 @@ impl Display for RunReport {
 /// A report of the results of an extract action.
 #[derive(Debug, Clone)]
 pub enum ExtractReport {
-    Best {
-        cost: usize,
-        term: Term,
-    },
-    Variants {
-        terms: Vec<Term>,
-    },
+    Best { cost: usize, term: Term },
+    Variants { terms: Vec<Term> },
 }
 
 impl RunReport {
@@ -1565,7 +1560,7 @@ impl EGraph {
     }
 
     /// Gets a reference to the internal TermDag structure EGraph keeps for extracted programs.
-    /// 
+    ///
     /// The TermDag is refreshed when (1) a new `extract` is performed AND (2) the internal timestamp of the EGraph is increased.
     pub fn termdag(&self) -> &TermDag {
         &self.termdag

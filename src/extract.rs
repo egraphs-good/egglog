@@ -38,11 +38,7 @@ impl EGraph {
     /// let (_, extracted) = egraph.extract(value, &mut termdag, &sort).unwrap();
     /// assert_eq!(termdag.to_string(&extracted), "(Add 1 1)");
     /// ```
-    pub fn extract(
-        &mut self,
-        value: Value,
-        arcsort: &ArcSort,
-    ) -> Result<(Cost, Term), Error> {
+    pub fn extract(&mut self, value: Value, arcsort: &ArcSort) -> Result<(Cost, Term), Error> {
         let mut cost_map = None;
         let mut termdag = std::mem::take(&mut self.termdag);
         if self.cost_cache.is_some() {
@@ -52,42 +48,39 @@ impl EGraph {
             }
         }
         let extractor = Extractor::new(self, &mut termdag, cost_map);
-        let result = extractor.find_best(value, &mut termdag, arcsort).ok_or_else(|| {
-            log::error!("No cost for {:?}", value);
-            for func in self.functions.values() {
-                for (inputs, output) in func.nodes.iter(false) {
-                    if output.value == value {
-                        log::error!("Found unextractable function: {:?}", func.decl.name);
-                        log::error!("Inputs: {:?}", inputs);
+        let result = extractor
+            .find_best(value, &mut termdag, arcsort)
+            .ok_or_else(|| {
+                log::error!("No cost for {:?}", value);
+                for func in self.functions.values() {
+                    for (inputs, output) in func.nodes.iter(false) {
+                        if output.value == value {
+                            log::error!("Found unextractable function: {:?}", func.decl.name);
+                            log::error!("Inputs: {:?}", inputs);
 
-                        assert_eq!(inputs.len(), func.schema.input.len());
-                        log::error!(
-                            "{:?}",
-                            inputs
-                                .iter()
-                                .zip(&func.schema.input)
-                                .map(|(input, sort)| extractor
-                                    .costs
-                                    .get(&extractor.egraph.find(sort, *input).bits))
-                                .collect::<Vec<_>>()
-                        );
+                            assert_eq!(inputs.len(), func.schema.input.len());
+                            log::error!(
+                                "{:?}",
+                                inputs
+                                    .iter()
+                                    .zip(&func.schema.input)
+                                    .map(|(input, sort)| extractor
+                                        .costs
+                                        .get(&extractor.egraph.find(sort, *input).bits))
+                                    .collect::<Vec<_>>()
+                            );
+                        }
                     }
                 }
-            }
-            Error::ExtractError(value)
-        });
+                Error::ExtractError(value)
+            });
         self.cost_cache = Some((self.timestamp, extractor.cost_map()));
         self.termdag = termdag;
         result
     }
 
     /// Extracts up to `limit` terms for a given `value`.
-    pub fn extract_variants(
-        &mut self,
-        sort: &ArcSort,
-        value: Value,
-        limit: usize,
-    ) -> Vec<Term> {
+    pub fn extract_variants(&mut self, sort: &ArcSort, value: Value, limit: usize) -> Vec<Term> {
         let mut cost_map = None;
         let mut termdag = std::mem::take(&mut self.termdag);
         if self.cost_cache.is_some() {
