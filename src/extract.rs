@@ -231,12 +231,14 @@ pub trait ExtractionWriter : PreExtractionWriter + Send + Sync {}
 
 #[derive(Clone)]
 pub struct EgraphMsgWriter {
-    msgs : Arc<Mutex<Option<Vec<String>>>>
+    msgs : Arc<Mutex<Option<Vec<String>>>>,
+    report : Arc<Mutex<Option<crate::ExtractReport>>>,
 }
 
 impl EgraphMsgWriter {
-    pub fn new(msgs: Arc<Mutex<Option<Vec<String>>>>) -> Self {
-        EgraphMsgWriter { msgs: msgs }
+    pub fn new(msgs: Arc<Mutex<Option<Vec<String>>>>,
+               report: Arc<Mutex<Option<crate::ExtractReport>>>) -> Self {
+        EgraphMsgWriter { msgs: msgs, report: report }
     }
 
     fn print_msg(&self, msg: String) {
@@ -250,8 +252,9 @@ impl EgraphMsgWriter {
 impl PreExtractionWriter for EgraphMsgWriter {
     fn extract_output_single(&self, termdag: &TermDag, term: &Term, cost: Cost) {
         let extracted = termdag.to_string(&term);
-        log::info!("extracted with cost {cost}: {extracted}");
+        log::info!("New extractor extracted with cost {cost}: {extracted}");
         self.print_msg(extracted);
+        let _ = self.report.lock().unwrap().insert(crate::ExtractReport::Best { termdag: (termdag.clone()), cost: cost, term: (term.clone()) });
     }
 }
 

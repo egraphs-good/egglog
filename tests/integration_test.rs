@@ -19,12 +19,6 @@ fn test_simple_extract1() {
         .unwrap();
 
     log::debug!("{}", result.join("\n"));
-    /* 
-    let mut termdag = TermDag::default();
-    let (sort, value) = egraph.eval_expr(&egglog::var!("expr")).unwrap();
-    let (_, extracted) = egraph.extract(value, &mut termdag, &sort).unwrap();
-    assert_eq!(termdag.to_string(&extracted), "(Add 1 1)");
-    */
 }
 
 #[test]
@@ -221,7 +215,6 @@ fn test_simple_extract7() {
         )
         .unwrap();
 
-    panic!("!!");
 }
 
 #[test]
