@@ -178,7 +178,7 @@ pub trait Sort: Any + Send + Sync + Debug {
         let _value = value;
         let _termdag = termdag;
         let _element_terms = element_terms;
-        panic!("Not Implemented");
+        todo!("reconstruct_termdag_container");
     }
 
     /// Reconstruct a leaf primitive value in a TermDag
@@ -191,7 +191,7 @@ pub trait Sort: Any + Send + Sync + Debug {
         let _exec_state = exec_state;
         let _value = value;
         let _termdag = termdag;
-        panic!("Not Implemented");
+        todo!("reconstruct_termdag_leaf");
     }
 
 }
