@@ -119,7 +119,7 @@ pub trait Sort: Any + Send + Sync + Debug {
     ) -> Vec<(ArcSort, core_relations::Value)> {
         debug_assert!(!self.is_container_sort());
         let _ = value;
-        let _ = egraph;
+        let _ = containers;
         vec![]
     }
 
@@ -178,7 +178,7 @@ pub trait Sort: Any + Send + Sync + Debug {
         let _value = value;
         let _termdag = termdag;
         let _element_terms = element_terms;
-        todo!("reconstruct_termdag_container");
+        todo!("reconstruct_termdag_container : {}", self.name());
     }
 
     /// Reconstruct a leaf primitive value in a TermDag
@@ -191,7 +191,7 @@ pub trait Sort: Any + Send + Sync + Debug {
         let _exec_state = exec_state;
         let _value = value;
         let _termdag = termdag;
-        todo!("reconstruct_termdag_leaf");
+        todo!("reconstruct_termdag_leaf : {}", self.name());
     }
 
 }

@@ -471,7 +471,7 @@ impl ExtractorAlter {
         costs : &HashMap<Symbol, IndexMap<core_relations::Value, Cost>>
     ) -> Option<Cost> {
         if sort.is_container_sort() {
-            let elements = sort.inner_values(exec_state, value);
+            let elements = sort.inner_values(exec_state.containers(), value);
             let mut ch_costs: Vec<Cost> = Vec::new();
             for ch in elements.iter() {
                 if let Some (c) = self.compute_cost_node(exec_state,&ch.1, &ch.0, costs) {
@@ -524,10 +524,10 @@ impl ExtractorAlter {
         parent_edge : &HashMap<Symbol, HashMap<core_relations::Value, (Symbol, Vec<core_relations::Value>)>>
     ) -> Term {
         if sort.is_container_sort() {
-            let elements = sort.inner_values_and_sorts(exec_state, value);
+            let elements = sort.inner_values(exec_state.containers(), value);
             let mut ch_terms: Vec<Term> = Vec::new();
             for ch in elements.iter() {
-                ch_terms.push(self.reconstruct_termdag_node(exec_state, termdag, &ch.0, &ch.1, filtered_func, parent_edge));
+                ch_terms.push(self.reconstruct_termdag_node(exec_state, termdag, &ch.1, &ch.0, filtered_func, parent_edge));
             }
             sort.reconstruct_termdag_container(exec_state, value, termdag, ch_terms)
         } else if sort.is_eq_sort() {

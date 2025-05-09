@@ -1866,7 +1866,7 @@ impl<'a> BackendRule<'a> {
             qe_args[0] = self
                 .rb
                 .egraph()
-                .primitive_constant(ResolvedFunction { id, do_rebuild });
+                .primitive_constant(ResolvedFunction { id, do_rebuild, name });
         }
 
         (
