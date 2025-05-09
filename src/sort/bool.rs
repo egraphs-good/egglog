@@ -49,7 +49,7 @@ impl Sort for BoolSort {
     fn value_type(&self) -> Option<TypeId> {
         Some(TypeId::of::<bool>())
     }
-    
+
     fn reconstruct_termdag_leaf(
         &self,
         exec_state: &core_relations::ExecutionState,
@@ -60,7 +60,6 @@ impl Sort for BoolSort {
 
         termdag.lit(Literal::Bool(*b))
     }
-    
 }
 
 impl IntoSort for bool {

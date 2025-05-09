@@ -4,10 +4,10 @@ use crate::termdag::{Term, TermDag};
 use crate::util::{HashMap, HashSet};
 use crate::IndexMap;
 use crate::{ArcSort, EGraph, Error, Function, HEntry, Id, Value};
+use arc_swap::ArcSwap;
 use egglog_bridge::SchemaMath;
 use queues::*;
 use std::sync::{Arc, Mutex};
-use arc_swap::ArcSwap;
 
 pub type Cost = usize;
 
@@ -222,40 +222,48 @@ impl<'a> Extractor<'a> {
 }
 
 pub trait PreExtractionWriter {
-
     fn extract_output_single(&self, termdag: &TermDag, term: &Term, cost: Cost);
 
     //fn extract_output_multiple(termdag: &TermDag, terms: Vec<Term>, costs: Vec<Cost>);
 }
 
-pub trait ExtractionWriter : PreExtractionWriter + Send + Sync {}
+pub trait ExtractionWriter: PreExtractionWriter + Send + Sync {}
 
 #[derive(Clone)]
 pub struct EgraphMsgWriter {
-    msgs : Arc<Mutex<Option<Vec<String>>>>,
-    report : Arc<Mutex<Option<crate::ExtractReport>>>,
+    msgs: Arc<Mutex<Option<Vec<String>>>>,
+    report: Arc<Mutex<Option<crate::ExtractReport>>>,
 }
 
 impl EgraphMsgWriter {
-    pub fn new(msgs: Arc<Mutex<Option<Vec<String>>>>,
-               report: Arc<Mutex<Option<crate::ExtractReport>>>) -> Self {
-        EgraphMsgWriter { msgs: msgs, report: report }
+    pub fn new(
+        msgs: Arc<Mutex<Option<Vec<String>>>>,
+        report: Arc<Mutex<Option<crate::ExtractReport>>>,
+    ) -> Self {
+        EgraphMsgWriter { msgs, report }
     }
 
     fn print_msg(&self, msg: String) {
-        match &mut *self.msgs.lock().unwrap() {
-            Some (msgs) => {msgs.push(msg);}
-            _ => {}
+        if let Some(msgs) = &mut *self.msgs.lock().unwrap() {
+            msgs.push(msg);
         }
     }
 }
 
 impl PreExtractionWriter for EgraphMsgWriter {
     fn extract_output_single(&self, termdag: &TermDag, term: &Term, cost: Cost) {
-        let extracted = termdag.to_string(&term);
+        let extracted = termdag.to_string(term);
         log::info!("New extractor extracted with cost {cost}: {extracted}");
         self.print_msg(extracted);
-        let _ = self.report.lock().unwrap().insert(crate::ExtractReport::Best { termdag: (termdag.clone()), cost: cost, term: (term.clone()) });
+        let _ = self
+            .report
+            .lock()
+            .unwrap()
+            .insert(crate::ExtractReport::Best {
+                termdag: (termdag.clone()),
+                cost,
+                term: (term.clone()),
+            });
     }
 }
 
@@ -263,71 +271,66 @@ impl ExtractionWriter for EgraphMsgWriter {}
 
 #[derive(Clone)]
 pub struct SaveTermDag {
-    pub buffer : Arc<Mutex<Vec<(TermDag, Term, Cost)>>>,
+    pub buffer: Arc<Mutex<Vec<(TermDag, Term, Cost)>>>,
 }
 
 impl PreExtractionWriter for SaveTermDag {
     fn extract_output_single(&self, termdag: &TermDag, term: &Term, cost: Cost) {
-        self.buffer.lock().unwrap().push((termdag.clone(), term.clone(), cost));
+        self.buffer
+            .lock()
+            .unwrap()
+            .push((termdag.clone(), term.clone(), cost));
     }
 }
 
 impl ExtractionWriter for SaveTermDag {}
 
 pub trait PreCostModel {
-    fn fold (
-        &self,
-        head : &Symbol,
-        children_cost : &Vec<Cost>,
-        head_cost : Cost,
-    ) -> Cost;
+    fn fold(&self, head: &Symbol, children_cost: &[Cost], head_cost: Cost) -> Cost;
 
-    fn container_primitive (
+    fn container_primitive(
         &self,
         exec_state: &ExecutionState,
-        sort : &ArcSort,
-        value : &core_relations::Value,
-        element_costs : &Vec<Cost>,
+        sort: &ArcSort,
+        value: core_relations::Value,
+        element_costs: &[Cost],
     ) -> Cost;
 
-    fn leaf_primitive (
+    fn leaf_primitive(
         &self,
         exec_state: &ExecutionState,
-        sort : &ArcSort,
-        value : &core_relations::Value,
+        sort: &ArcSort,
+        value: core_relations::Value,
     ) -> Cost;
 }
 
-pub trait CostModel : PreCostModel + Send + Sync {}
+pub trait CostModel: PreCostModel + Send + Sync {}
 
 #[derive(Default, Clone)]
 pub struct TreeAdditiveCostModel {}
 
 impl PreCostModel for TreeAdditiveCostModel {
-    fn fold(
-        &self,
-        _head : &Symbol,
-        children_cost : &Vec<Cost>,
-        head_cost : Cost,
-    ) -> Cost {
-        children_cost.iter().fold(head_cost, |s, c| { s.saturating_add(*c) })
+    fn fold(&self, _head: &Symbol, children_cost: &[Cost], head_cost: Cost) -> Cost {
+        children_cost
+            .iter()
+            .fold(head_cost, |s, c| s.saturating_add(*c))
     }
 
-    fn container_primitive (
+    fn container_primitive(
         &self,
         exec_state: &ExecutionState,
-        sort : &ArcSort,
-        value : &core_relations::Value,
-        element_costs : &Vec<Cost>,
+        sort: &ArcSort,
+        value: core_relations::Value,
+        element_costs: &[Cost],
     ) -> Cost {
         sort.default_container_cost(exec_state, value, element_costs)
     }
 
-    fn leaf_primitive (
+    fn leaf_primitive(
         &self,
         exec_state: &ExecutionState,
-        sort : &ArcSort,
-        value : &core_relations::Value,
+        sort: &ArcSort,
+        value: core_relations::Value,
     ) -> Cost {
         sort.default_leaf_cost(exec_state, value)
     }
@@ -339,16 +342,19 @@ impl CostModel for TreeAdditiveCostModel {}
 /// Should only be used for extractable functions
 #[derive(Clone, Debug)]
 pub struct ExtractorViewFunc {
-    pub schema : ResolvedSchema,
-    pub cost : Option<Cost>,
-    pub backend_table_id : TableId,
-    pub can_subsume : bool,
-    pub schema_math : SchemaMath,
+    pub schema: ResolvedSchema,
+    pub cost: Option<Cost>,
+    pub backend_table_id: TableId,
+    pub can_subsume: bool,
+    pub schema_math: SchemaMath,
 }
 
 impl ExtractorViewFunc {
-    fn new (f : &Function, backend: &egglog_bridge::EGraph) -> Self {
-        debug_assert!(f.is_extractable(), "Unextractable function in ExtractorView");
+    fn new(f: &Function, backend: &egglog_bridge::EGraph) -> Self {
+        debug_assert!(
+            f.is_extractable(),
+            "Unextractable function in ExtractorView"
+        );
         let (table_id, math) = backend.get_func_info(f.new_backend_id);
         ExtractorViewFunc {
             schema: f.schema.clone(),
@@ -357,69 +363,65 @@ impl ExtractorViewFunc {
             can_subsume: f.can_subsume,
             schema_math: math,
         }
-    } 
+    }
 }
 
 // A struct for copying meta data required for extraction
 #[derive(Default, Debug)]
 pub struct ExtractorView {
-    pub funcs : IndexMap<Symbol, ExtractorViewFunc>,
+    pub funcs: IndexMap<Symbol, ExtractorViewFunc>,
 }
 
 impl ExtractorView {
-    pub fn new (function: &IndexMap<Symbol, Function>, backend: &egglog_bridge::EGraph) -> Self {
-        let mut funcs : IndexMap<Symbol, ExtractorViewFunc> = Default::default();
+    pub fn new(function: &IndexMap<Symbol, Function>, backend: &egglog_bridge::EGraph) -> Self {
+        let mut funcs: IndexMap<Symbol, ExtractorViewFunc> = Default::default();
         for func in function.iter() {
             if func.1.is_extractable() {
-                funcs.insert(func.0.clone(), ExtractorViewFunc::new(func.1, backend));
+                funcs.insert(*func.0, ExtractorViewFunc::new(func.1, backend));
             }
         }
-        ExtractorView {
-            funcs
-        }
+        ExtractorView { funcs }
     }
 }
 
 #[derive(Clone)]
 pub struct ExtractorAlter {
-    rootsort : ArcSort,
-    funcs : Arc<ArcSwap<ExtractorView>>,
-    cost_model : Arc<dyn CostModel>,
-    writer : Arc<dyn ExtractionWriter>,
+    rootsort: ArcSort,
+    funcs: Arc<ArcSwap<ExtractorView>>,
+    cost_model: Arc<dyn CostModel>,
+    writer: Arc<dyn ExtractionWriter>,
 }
 
 impl ExtractorAlter {
     pub fn new(
-        rootsort : ArcSort,
-        funcs : Arc<ArcSwap<ExtractorView>>,
-        cost_model : impl CostModel + 'static,
-        writer : impl ExtractionWriter + 'static,
+        rootsort: ArcSort,
+        funcs: Arc<ArcSwap<ExtractorView>>,
+        cost_model: impl CostModel + 'static,
+        writer: impl ExtractionWriter + 'static,
     ) -> Self {
-        ExtractorAlter {  
+        ExtractorAlter {
             rootsort,
             funcs,
             cost_model: Arc::new(cost_model),
-            writer : Arc::new(writer),
+            writer: Arc::new(writer),
         }
     }
 }
 
-
 impl ExtractorAlter {
-
     /// Built a reverse index from output sort to function head symbols
     fn compute_sort_index(&self) -> IndexMap<Symbol, Vec<Symbol>> {
-        let mut rev_index : IndexMap<Symbol, Vec<Symbol>> = Default::default();
+        let mut rev_index: IndexMap<Symbol, Vec<Symbol>> = Default::default();
         for func in self.funcs.load().funcs.iter() {
             let func_name = *func.0;
             let output_sort = func.1.schema.output.name();
-            if let Some (v) = rev_index.get_mut(&output_sort) {
+            if let Some(v) = rev_index.get_mut(&output_sort) {
                 v.push(func_name);
             } else {
                 rev_index.insert(output_sort, vec![func_name]);
             }
         }
-        return rev_index;
+        rev_index
     }
 
     /// BFS from the rootsort to filter the tables relevant to this root
@@ -430,20 +432,20 @@ impl ExtractorAlter {
         let mut seen: HashSet<Symbol> = Default::default();
         seen.insert(self.rootsort.name());
         while q.size() > 0 {
-            let sort = q.remove().expect("Impossible");
+            let sort = q.remove().unwrap();
             if sort.is_container_sort() {
                 let inner_sorts = sort.inner_sorts();
                 for s in inner_sorts {
                     if !seen.contains(&s.name()) {
                         let _ = q.add(s.clone());
-                        seen.insert(s.name().clone());
+                        seen.insert(s.name());
                     }
                 }
             } else if sort.is_eq_sort() {
-                if let Some (head_symbols) = sort_index.get(&sort.name()) {
+                if let Some(head_symbols) = sort_index.get(&sort.name()) {
                     for h in head_symbols {
                         if !filtered.funcs.contains_key(h) {
-                            let func = self.funcs.load().funcs.get(h).expect("Impossible").clone();
+                            let func = self.funcs.load().funcs.get(h).unwrap().clone();
                             for ch in &func.schema.input {
                                 let ch_name = ch.name();
                                 if !seen.contains(&ch_name) {
@@ -457,113 +459,152 @@ impl ExtractorAlter {
                 }
             }
         }
-        return filtered;
+        filtered
     }
 
     /// Compute the cost of a single enode
     /// Recurse if container
     /// Returns None if contains an undefined eqsort term (potentially after unfolding)
+    #[allow(clippy::only_used_in_recursion)]
     fn compute_cost_node(
         &self,
-        exec_state : &ExecutionState,
-        value : &core_relations::Value,
-        sort : &ArcSort,
-        costs : &HashMap<Symbol, IndexMap<core_relations::Value, Cost>>
+        exec_state: &ExecutionState,
+        value: &core_relations::Value,
+        sort: &ArcSort,
+        costs: &HashMap<Symbol, IndexMap<core_relations::Value, Cost>>,
     ) -> Option<Cost> {
         if sort.is_container_sort() {
             let elements = sort.inner_values(exec_state.containers(), value);
             let mut ch_costs: Vec<Cost> = Vec::new();
             for ch in elements.iter() {
-                if let Some (c) = self.compute_cost_node(exec_state,&ch.1, &ch.0, costs) {
+                if let Some(c) = self.compute_cost_node(exec_state, &ch.1, &ch.0, costs) {
                     ch_costs.push(c);
                 } else {
-                    return None
+                    return None;
                 }
             }
-            Some (self.cost_model.container_primitive(exec_state, sort, value, &ch_costs))
+            Some(
+                self.cost_model
+                    .container_primitive(exec_state, sort, *value, &ch_costs),
+            )
         } else if sort.is_eq_sort() {
-            if costs.get(&sort.name()).is_some_and(|t| {t.get(value).is_some()}) {
-                Some(costs.get(&sort.name()).expect("Impossible").get(value).expect("Impossible").clone())
+            if costs
+                .get(&sort.name())
+                .is_some_and(|t| t.get(value).is_some())
+            {
+                Some(*costs.get(&sort.name()).unwrap().get(value).unwrap())
             } else {
                 None
             }
-        } else { // Primitive
-            Some(self.cost_model.leaf_primitive(exec_state, sort, value))
+        } else {
+            // Primitive
+            Some(self.cost_model.leaf_primitive(exec_state, sort, *value))
         }
     }
 
+    #[allow(clippy::only_used_in_recursion)]
     fn compute_cost_hyperedge(
         &self,
-        exec_state : &ExecutionState,
-        values : &[core_relations::Value],
-        head : &Symbol,
-        func : &ExtractorViewFunc,
-        costs : &HashMap<Symbol, IndexMap<core_relations::Value, Cost>>
+        exec_state: &ExecutionState,
+        values: &[core_relations::Value],
+        head: &Symbol,
+        func: &ExtractorViewFunc,
+        costs: &HashMap<Symbol, IndexMap<core_relations::Value, Cost>>,
     ) -> Option<Cost> {
         let mut ch_costs: Vec<Cost> = Vec::new();
         let sorts = &func.schema.input;
         //log::debug!("compute_cost_hyperedge head {} sorts {:?}", head, sorts);
         debug_assert_eq!(sorts.len(), values.len());
         for (value, sort) in values.iter().zip(sorts.iter()) {
-            if let Some (c) = self.compute_cost_node(exec_state, value, sort, costs) {
+            if let Some(c) = self.compute_cost_node(exec_state, value, sort, costs) {
                 ch_costs.push(c);
             } else {
                 return None;
             }
         }
-        Some (self.cost_model.fold(head, &ch_costs, func.cost.unwrap_or(1)))
+        Some(
+            self.cost_model
+                .fold(head, &ch_costs, func.cost.unwrap_or(1)),
+        )
     }
 
+    #[allow(clippy::only_used_in_recursion)]
     fn reconstruct_termdag_node(
         &self,
-        exec_state : &ExecutionState,
-        termdag : &mut TermDag,
-        value : &core_relations::Value,
-        sort : &ArcSort,
-        filtered_func : &ExtractorView,
-        parent_edge : &HashMap<Symbol, HashMap<core_relations::Value, (Symbol, Vec<core_relations::Value>)>>
+        exec_state: &ExecutionState,
+        termdag: &mut TermDag,
+        value: &core_relations::Value,
+        sort: &ArcSort,
+        filtered_func: &ExtractorView,
+        parent_edge: &HashMap<
+            Symbol,
+            HashMap<core_relations::Value, (Symbol, Vec<core_relations::Value>)>,
+        >,
     ) -> Term {
         if sort.is_container_sort() {
             let elements = sort.inner_values(exec_state.containers(), value);
             let mut ch_terms: Vec<Term> = Vec::new();
             for ch in elements.iter() {
-                ch_terms.push(self.reconstruct_termdag_node(exec_state, termdag, &ch.1, &ch.0, filtered_func, parent_edge));
+                ch_terms.push(self.reconstruct_termdag_node(
+                    exec_state,
+                    termdag,
+                    &ch.1,
+                    &ch.0,
+                    filtered_func,
+                    parent_edge,
+                ));
             }
             sort.reconstruct_termdag_container(exec_state, value, termdag, ch_terms)
         } else if sort.is_eq_sort() {
-            let (func_name, hyperedge) = parent_edge.get(&sort.name()).expect("Impossible")
-                                                    .get(value).expect("Impossible");
+            let (func_name, hyperedge) = parent_edge.get(&sort.name()).unwrap().get(value).unwrap();
             let mut ch_terms: Vec<Term> = Vec::new();
-            let ch_sorts = &filtered_func.funcs.get(func_name).expect("Impossible").schema.input;
+            let ch_sorts = &filtered_func.funcs.get(func_name).unwrap().schema.input;
             for (value, sort) in hyperedge.iter().zip(ch_sorts.iter()) {
-                ch_terms.push(self.reconstruct_termdag_node(exec_state, termdag, value, sort, filtered_func, parent_edge));
+                ch_terms.push(self.reconstruct_termdag_node(
+                    exec_state,
+                    termdag,
+                    value,
+                    sort,
+                    filtered_func,
+                    parent_edge,
+                ));
             }
             termdag.app(*func_name, ch_terms)
-        } else { // Primitive
+        } else {
+            // Primitive
             sort.reconstruct_termdag_leaf(exec_state, value, termdag)
         }
-
     }
-
 }
 
 use core_relations::{ExecutionState, ExternalFunction, TableId};
 
 impl ExternalFunction for ExtractorAlter {
-
-    fn invoke(&self, exec_state: &mut ExecutionState, args: &[core_relations::Value]) -> Option<core_relations::Value> {
+    fn invoke(
+        &self,
+        exec_state: &mut ExecutionState,
+        args: &[core_relations::Value],
+    ) -> Option<core_relations::Value> {
         debug_assert!(args.len() == 2);
         let target = args[0];
         let nvariants = exec_state.prims().unwrap::<i64>(args[1]);
-        log::debug!("target = {:?}, rootsort = {:?}, nvariants = {}", target, self.rootsort, nvariants);
+        log::debug!(
+            "target = {:?}, rootsort = {:?}, nvariants = {}",
+            target,
+            self.rootsort,
+            nvariants
+        );
         log::debug!("func: {:?}", self.funcs);
-        
+
         let filtered_func = self.compute_filtered_func();
         log::debug!("filtered_func = {:?}", filtered_func);
-        
+
         // We use Bellman-Ford to compute the costs of the relevant eq sorts' terms
-        let mut costs : HashMap<Symbol, HashMap<core_relations::Value, Cost>> = Default::default();
-        let mut parent_edge : HashMap<Symbol, HashMap<core_relations::Value, (Symbol, Vec<core_relations::Value>)>> = Default::default();
+        let mut costs: HashMap<Symbol, HashMap<core_relations::Value, Cost>> = Default::default();
+        let mut parent_edge: HashMap<
+            Symbol,
+            HashMap<core_relations::Value, (Symbol, Vec<core_relations::Value>)>,
+        > = Default::default();
         for func in filtered_func.funcs.iter() {
             if !costs.contains_key(&func.1.schema.output.name()) {
                 debug_assert!(func.1.schema.output.is_eq_sort());
@@ -594,39 +635,51 @@ impl ExternalFunction for ExtractorAlter {
                         done = true;
                     }
                     for (_, row) in buf.non_stale() {
-                        if func.1.can_subsume && row[func.1.schema_math.subsume_col()] == egglog_bridge::SUBSUMED {
+                        if func.1.can_subsume
+                            && row[func.1.schema_math.subsume_col()] == egglog_bridge::SUBSUMED
+                        {
                             continue;
                         }
                         // Output sort and value
                         let target_sort = &func.1.schema.output;
                         let target = row[func.1.schema_math.ret_val_col()];
-                        if let Some (new_cost) = self.compute_cost_hyperedge(exec_state, &row[0..func.1.schema_math.num_keys()], func.0, func.1, &costs) {
+                        if let Some(new_cost) = self.compute_cost_hyperedge(
+                            exec_state,
+                            &row[0..func.1.schema_math.num_keys()],
+                            func.0,
+                            func.1,
+                            &costs,
+                        ) {
                             if !reconstruction_round {
                                 log::debug!("Got cost: {:?}", (target, new_cost));
-                                match costs.get_mut(&target_sort.name()).expect("Impossible").entry(target) {
+                                match costs.get_mut(&target_sort.name()).unwrap().entry(target) {
                                     HEntry::Vacant(e) => {
-                                        log::debug!{"Inserted new cost"};
+                                        log::debug! {"Inserted new cost"};
                                         ensure_fixpoint = false;
                                         e.insert(new_cost);
                                     }
                                     HEntry::Occupied(mut e) => {
                                         if new_cost < *(e.get()) {
-                                            log::debug!{"Updated new cost"};
+                                            log::debug! {"Updated new cost"};
                                             ensure_fixpoint = false;
                                             e.insert(new_cost);
                                         }
                                     }
                                 }
-                            } else {
-                                if new_cost == *costs.get(&target_sort.name()).expect("Impossible")
-                                                     .get(&target).expect("Impossible") {
-                                    // one of the possible best parent edges
-                                    match parent_edge.get_mut(&target_sort.name()).expect("Impossible").entry(target) {
-                                        HEntry::Vacant(e) => {
-                                            e.insert((*func.0, row[0..func_cols].to_vec()));
-                                        }
-                                        _ => {}
-                                    }
+                            } else if new_cost
+                                == *costs
+                                    .get(&target_sort.name())
+                                    .unwrap()
+                                    .get(&target)
+                                    .unwrap()
+                            {
+                                // one of the possible best parent edges
+                                if let HEntry::Vacant(e) = parent_edge
+                                    .get_mut(&target_sort.name())
+                                    .unwrap()
+                                    .entry(target)
+                                {
+                                    e.insert((*func.0, row[0..func_cols].to_vec()));
                                 }
                             }
                         }
@@ -639,17 +692,27 @@ impl ExternalFunction for ExtractorAlter {
                 reconstruction_round = !reconstruction_round;
             }
         }
-        let best_cost = self.compute_cost_node(exec_state, &target, &self.rootsort, &costs).expect("Failed to extract root!");
+        let best_cost = self
+            .compute_cost_node(exec_state, &target, &self.rootsort, &costs)
+            .expect("Failed to extract root!");
         log::debug!("Best cost for the extract root: {:?}", best_cost);
         log::debug!("Dumping costs: {:?}", costs);
-        log::debug!{"Dumping parent_edge: {:?}", parent_edge};
+        log::debug! {"Dumping parent_edge: {:?}", parent_edge};
 
-        let mut termdag : TermDag = Default::default(); 
-        let term = self.reconstruct_termdag_node(exec_state, &mut termdag, &target, &self.rootsort, &filtered_func, &parent_edge);
+        let mut termdag: TermDag = Default::default();
+        let term = self.reconstruct_termdag_node(
+            exec_state,
+            &mut termdag,
+            &target,
+            &self.rootsort,
+            &filtered_func,
+            &parent_edge,
+        );
 
         log::debug!("Got termdag: {:?}, term: {:?}", termdag, term);
 
-        self.writer.extract_output_single(&termdag, &term, best_cost);
+        self.writer
+            .extract_output_single(&termdag, &term, best_cost);
         Some(exec_state.prims().get::<()>(()))
     }
 }

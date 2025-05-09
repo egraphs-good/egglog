@@ -36,6 +36,7 @@ use crate::constraint::Problem;
 use crate::core::{AtomTerm, ResolvedCall};
 use crate::typechecking::TypeError;
 use actions::Program;
+use arc_swap::ArcSwap;
 use ast::remove_globals::remove_globals;
 use ast::*;
 #[cfg(feature = "bin")]
@@ -69,7 +70,6 @@ pub use typechecking::TypeInfo;
 use unionfind::*;
 use util::*;
 pub use value::*;
-use arc_swap::ArcSwap;
 
 pub type ArcSort = Arc<dyn Sort>;
 
@@ -414,7 +414,7 @@ pub struct EGraph {
     pub seminaive: bool,
     type_info: TypeInfo,
     /// Used for building the extract action
-    extractor_view : Arc<ArcSwap<ExtractorView>>,
+    extractor_view: Arc<ArcSwap<ExtractorView>>,
     extract_report: Option<ExtractReport>,
     /// For testing the extractor
     new_extract_report: Arc<Mutex<Option<ExtractReport>>>,
@@ -719,9 +719,9 @@ impl EGraph {
         sym: Symbol,
         n: usize,
     ) -> Result<(Vec<(Term, Term)>, TermDag), Error> {
-        if true {
-            todo!("function_to_dag")
-        }
+        //if true {
+        //    todo!("function_to_dag")
+        //}
 
         let f = self
             .functions
@@ -1353,7 +1353,8 @@ impl EGraph {
             }
             ResolvedNCommand::RunSchedule(sched) => {
                 // Update extractor_view before every rule run
-                self.extractor_view.store(Arc::new(ExtractorView::new(&self.functions, &self.backend)));
+                self.extractor_view
+                    .store(Arc::new(ExtractorView::new(&self.functions, &self.backend)));
                 let report = self.run_schedule(&sched);
                 log::info!("Ran schedule {}.", sched);
                 log::info!("Report: {}", report);
@@ -1374,7 +1375,8 @@ impl EGraph {
                 }
                 ResolvedAction::Extract(_, _, _) => {
                     // Update extractor_view before the top level extract command
-                    self.extractor_view.store(Arc::new(ExtractorView::new(&self.functions, &self.backend)));
+                    self.extractor_view
+                        .store(Arc::new(ExtractorView::new(&self.functions, &self.backend)));
                     self.eval_actions(&ResolvedActions::new(vec![action.clone()]))?;
                     self.check_extract_report_consistency();
                 }
@@ -1440,7 +1442,7 @@ impl EGraph {
                     .create(true)
                     .open(&filename)
                     .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
-    
+
                 let unit_id = self.backend.primitives().get_ty::<()>();
                 let unit_val = self.backend.primitives().get(());
 
@@ -1456,7 +1458,6 @@ impl EGraph {
                             },
                         ));
 
-
                 let mut translator = BackendRule::new(
                     self.backend.new_rule("outputs", false),
                     &self.functions,
@@ -1468,7 +1469,10 @@ impl EGraph {
                 let expr_types = exprs.iter().map(|e| e.output_type()).collect::<Vec<_>>();
                 for expr in exprs {
                     let result_var = ResolvedVar {
-                        name: self.parser.symbol_gen.fresh(&Symbol::from("__egglog_output")),
+                        name: self
+                            .parser
+                            .symbol_gen
+                            .fresh(&Symbol::from("__egglog_output")),
                         sort: expr.output_type(),
                         is_global_ref: false,
                     };
@@ -1709,21 +1713,24 @@ impl EGraph {
         let old_report = self.extract_report.clone();
         let new_report = self.new_extract_report.lock().unwrap().clone();
         if old_report.is_none() && new_report.is_none() {
-        } else if old_report.is_none() && !new_report.is_none() {
+        } else if old_report.is_none() && new_report.is_some() {
             panic!("No old report found but found new report");
-        } else if !old_report.is_none() && new_report.is_none() {
+        } else if old_report.is_some() && new_report.is_none() {
             panic!("No new report found but found old report");
         } else {
-            let old_report = old_report.expect("Impossible");
-            let new_report = new_report.expect("Impossible");
-            match (old_report, new_report) {
-                (ExtractReport::Best { termdag: _old_termdag, cost: old_cost, term: _old_term },
-                 ExtractReport::Best { termdag: _new_termdag, cost: new_cost, term: _new_term }) => {
-                    if old_cost != new_cost {
-                        panic!("Derived different extraction costs: {:?}, {:?}", old_cost, new_cost);
-                    }
-                 }
-                _ => {}
+            let old_report = old_report.unwrap();
+            let new_report = new_report.unwrap();
+            if let (
+                ExtractReport::Best { cost: old_cost, .. },
+                ExtractReport::Best { cost: new_cost, .. },
+            ) = (old_report, new_report)
+            {
+                if old_cost != new_cost {
+                    panic!(
+                        "Derived different extraction costs: {:?}, {:?}",
+                        old_cost, new_cost
+                    );
+                }
             }
         }
     }
@@ -1745,22 +1752,21 @@ impl EGraph {
     }
 
     pub(crate) fn print_msg(&mut self, msg: String) {
-        match &mut *self.msgs.lock().unwrap() {
-            Some (msgs) => {msgs.push(msg);}
-            _ => {}
+        if let Some(msgs) = &mut *self.msgs.lock().unwrap() {
+            msgs.push(msg);
         }
     }
 
     fn flush_msgs(&mut self) -> Vec<String> {
         match &mut *self.msgs.lock().unwrap() {
-            Some (msgs) => {
+            Some(msgs) => {
                 msgs.dedup_by(|a, b| a.is_empty() && b.is_empty());
                 std::mem::take(msgs)
             }
             _ => {
                 vec![]
             }
-        }            
+        }
     }
 }
 
@@ -1859,10 +1865,11 @@ impl<'a> BackendRule<'a> {
                 .map(|s| s.is_eq_sort() || s.is_eq_container_sort())
                 .collect();
 
-            qe_args[0] = self
-                .rb
-                .egraph()
-                .primitive_constant(ResolvedFunction { id, do_rebuild, name });
+            qe_args[0] = self.rb.egraph().primitive_constant(ResolvedFunction {
+                id,
+                do_rebuild,
+                name,
+            });
         }
 
         (
@@ -1961,24 +1968,25 @@ impl<'a> BackendRule<'a> {
                     let x = self.entry(x);
                     let y = self.entry(y);
                     self.rb.union(x, y)
-                },
+                }
                 core::GenericCoreAction::Panic(_, message) => self.rb.panic(message.clone()),
                 core::GenericCoreAction::Extract(span, x, n) => {
                     match *n {
                         core::GenericAtomTerm::Literal(_, Literal::Int(variants)) => {
                             log::debug!("x = {:?} n = {:?}", x, variants);
-                            // Resolve the sort of the extract root and pass that to the extractor 
+                            // Resolve the sort of the extract root and pass that to the extractor
                             let xsort = match x {
                                 core::GenericAtomTerm::Var(_, leaf) => leaf.sort.clone(),
                                 core::GenericAtomTerm::Global(_, leaf) => leaf.sort.clone(),
-                                core::GenericAtomTerm::Literal(_, literal) =>
-                                    match literal {
-                                        Literal::Bool(_) => self.type_info.get_sort::<BoolSort>() as Arc<dyn Sort>,
-                                        Literal::Int(_) => self.type_info.get_sort::<I64Sort>(),
-                                        Literal::Float(_) => self.type_info.get_sort::<F64Sort>(),
-                                        Literal::String(_) => self.type_info.get_sort::<StringSort>(),
-                                        Literal::Unit => self.type_info.get_sort::<UnitSort>(),
+                                core::GenericAtomTerm::Literal(_, literal) => match literal {
+                                    Literal::Bool(_) => {
+                                        self.type_info.get_sort::<BoolSort>() as Arc<dyn Sort>
                                     }
+                                    Literal::Int(_) => self.type_info.get_sort::<I64Sort>(),
+                                    Literal::Float(_) => self.type_info.get_sort::<F64Sort>(),
+                                    Literal::String(_) => self.type_info.get_sort::<StringSort>(),
+                                    Literal::Unit => self.type_info.get_sort::<UnitSort>(),
+                                },
                             };
                             let x = self.entry(x);
                             let n = self.entry(n);
@@ -1986,19 +1994,22 @@ impl<'a> BackendRule<'a> {
                                 xsort,
                                 Arc::clone(self.extractor_view),
                                 extract::TreeAdditiveCostModel::default(),
-                                extract::EgraphMsgWriter::new(self.msgs.clone(), self.report.clone()),
+                                extract::EgraphMsgWriter::new(
+                                    self.msgs.clone(),
+                                    self.report.clone(),
+                                ),
                             );
                             let extract_func_id = self.rb.register_external_func(extractor);
                             self.rb.call_external_func(
-                                extract_func_id, 
-                                &vec![x, n], 
-                                ColumnTy::Primitive(self.rb.egraph().primitives().get_ty::<()>()), 
+                                extract_func_id,
+                                &[x, n],
+                                ColumnTy::Primitive(self.rb.egraph().primitives().get_ty::<()>()),
                                 format!("{span}: call of extract failed").as_str(),
                             );
-                        },
+                        }
                         _ => panic!("The number of variants to extract must be an i64"),
                     }
-                },
+                }
             }
         }
         Ok(())

@@ -3,18 +3,17 @@ use symbol_table::GlobalSymbol;
 
 #[test]
 fn test_simple_extract1() {
-
     let _ = env_logger::builder().is_test(true).try_init();
 
     let mut egraph = EGraph::default();
 
-    let result =
-    egraph.parse_and_run_program(
-        None,
-        r#"
+    let result = egraph
+        .parse_and_run_program(
+            None,
+            r#"
              (datatype Op (Add i64 i64))
              (let expr (Add 1 1))
-             (extract expr)"#
+             (extract expr)"#,
         )
         .unwrap();
 
@@ -23,14 +22,14 @@ fn test_simple_extract1() {
 
 #[test]
 fn test_simple_extract2() {
-
     let _ = env_logger::builder().is_test(true).try_init();
 
     let mut egraph = EGraph::default();
 
-    egraph.parse_and_run_program(
-        None,
-        r#"
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
              (datatype Term
                (Origin :cost 0) 
                (BigStep Term :cost 10)
@@ -46,7 +45,7 @@ fn test_simple_extract2() {
              (let tssss (SmallStep tsss))
              (union tssss tb)
              (extract tb)
-             "#
+             "#,
         )
         .unwrap();
 
@@ -61,14 +60,14 @@ fn test_simple_extract2() {
 
 #[test]
 fn test_simple_extract3() {
-
     let _ = env_logger::builder().is_test(true).try_init();
 
     let mut egraph = EGraph::default();
 
-    egraph.parse_and_run_program(
-        None,
-        r#"
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
              (datatype Fruit
                (Apple i64 :cost 1) 
                (Orange f64 :cost 2)
@@ -82,10 +81,9 @@ fn test_simple_extract3() {
              (let b (Broccoli true))
              (let c (Carrot a))
              (extract a)
-             "#
+             "#,
         )
         .unwrap();
-
 }
 
 /*
@@ -99,15 +97,15 @@ fn test_simple_extract4() {
     egraph.parse_and_run_program(
         None,
         r#"
-             (datatype Foo 
+             (datatype Foo
                 (Foobar i64)
-             ) 
+             )
              (let foobar (Foobar 42))
              (datatype Bar
                 (Barfoo i64)
              )
              (let barfoo (Barfoo 24))
-             (datatype Baz 
+             (datatype Baz
                 (Bazfoo i64)
              )
              (sort QuaMap (Map Foo Bar))
@@ -125,14 +123,14 @@ fn test_simple_extract4() {
 
 #[test]
 fn test_simple_extract5() {
-
     let _ = env_logger::builder().is_test(true).try_init();
 
     let mut egraph = EGraph::default();
 
-    egraph.parse_and_run_program(
-        None,
-        r#"
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
              (datatype Foo 
                 (Foobar i64)
              ) 
@@ -146,44 +144,42 @@ fn test_simple_extract5() {
              (function Quaz () QuaMap :no-merge)
              (set (Quaz) (map-empty))
              (extract (Quaz))
-             "#
+             "#,
         )
         .unwrap();
-
 }
 
 #[test]
 fn test_simple_extract6() {
-
     let _ = env_logger::builder().is_test(true).try_init();
 
     let mut egraph = EGraph::default();
 
-    egraph.parse_and_run_program(
-        None,
-        r#"
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
              (datatype False)
              (sort QuaVec (Vec i64))
              (sort QuaMap (Map QuaVec False))
              (function Quaz () QuaMap :no-merge)
              (set (Quaz) (map-empty))
              (extract (Quaz))
-             "#
+             "#,
         )
         .unwrap();
-
 }
 
 #[test]
 fn test_simple_extract7() {
-
     let _ = env_logger::builder().is_test(true).try_init();
 
     let mut egraph = EGraph::default();
 
-    egraph.parse_and_run_program(
-        None,
-        r#"
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
             (datatype Foo
                 (bar)
                 (baz)
@@ -211,10 +207,9 @@ fn test_simple_extract7() {
 
             ;(extract (toerr map2))
 
-             "#
+             "#,
         )
         .unwrap();
-
 }
 
 #[test]

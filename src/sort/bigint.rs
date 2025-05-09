@@ -81,7 +81,7 @@ impl Sort for BigIntSort {
     fn value_type(&self) -> Option<TypeId> {
         Some(TypeId::of::<Z>())
     }
-    
+
     fn reconstruct_termdag_leaf(
         &self,
         exec_state: &core_relations::ExecutionState,
