@@ -65,7 +65,6 @@ impl Sort for StringSort {
 
         termdag.lit(Literal::String(*s))
     }
-
 }
 
 // TODO could use a local symbol table

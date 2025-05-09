@@ -164,9 +164,10 @@ impl Sort for MapSort {
     fn inner_values(
         &self,
         containers: &core_relations::Containers,
-        value: &core_relations::Value
+        value: &core_relations::Value,
     ) -> Vec<(ArcSort, core_relations::Value)> {
-        let val = containers.get_val::<MapContainer<core_relations::Value>>(*value)
+        let val = containers
+            .get_val::<MapContainer<core_relations::Value>>(*value)
             .unwrap()
             .clone();
         val.data
@@ -232,7 +233,7 @@ impl Sort for MapSort {
     fn value_type(&self) -> Option<TypeId> {
         Some(TypeId::of::<MapContainer<core_relations::Value>>())
     }
-    
+
     fn reconstruct_termdag_container(
         &self,
         _exec_state: &core_relations::ExecutionState,
@@ -248,7 +249,6 @@ impl Sort for MapSort {
 
         term
     }
-
 }
 
 impl IntoSort for MapContainer<Value> {

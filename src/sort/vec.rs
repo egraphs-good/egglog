@@ -123,7 +123,8 @@ impl Sort for VecSort {
         containers: &core_relations::Containers,
         value: &core_relations::Value,
     ) -> Vec<(ArcSort, core_relations::Value)> {
-        let val = containers.get_val::<VecContainer<core_relations::Value>>(*value)
+        let val = containers
+            .get_val::<VecContainer<core_relations::Value>>(*value)
             .unwrap()
             .clone();
         val.data

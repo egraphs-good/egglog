@@ -149,7 +149,7 @@ impl Sort for BigRatSort {
     fn value_type(&self) -> Option<TypeId> {
         Some(TypeId::of::<Q>())
     }
-    
+
     fn reconstruct_termdag_leaf(
         &self,
         exec_state: &core_relations::ExecutionState,
@@ -168,7 +168,6 @@ impl Sort for BigRatSort {
 
         termdag.app("bigrat".into(), vec![numer_term, denom_term])
     }
-
 }
 
 impl FromSort for Q {
