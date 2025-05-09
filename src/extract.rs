@@ -4,6 +4,7 @@ use crate::util::HashMap;
 use crate::{ArcSort, EGraph, Error, Function, HEntry, Id, Value};
 
 pub type Cost = usize;
+pub(crate) type CostMap = HashMap<Id, (Cost, Term)>;
 
 #[derive(Debug)]
 pub(crate) struct Node<'a> {
@@ -13,7 +14,7 @@ pub(crate) struct Node<'a> {
 }
 
 pub struct Extractor<'a> {
-    pub costs: HashMap<Id, (Cost, Term)>,
+    pub costs: CostMap,
     ctors: Vec<Symbol>,
     egraph: &'a EGraph,
 }
@@ -38,13 +39,20 @@ impl EGraph {
     /// assert_eq!(termdag.to_string(&extracted), "(Add 1 1)");
     /// ```
     pub fn extract(
-        &self,
+        &mut self,
         value: Value,
-        termdag: &mut TermDag,
         arcsort: &ArcSort,
     ) -> Result<(Cost, Term), Error> {
-        let extractor = Extractor::new(self, termdag);
-        extractor.find_best(value, termdag, arcsort).ok_or_else(|| {
+        let mut cost_map = None;
+        let mut termdag = std::mem::take(&mut self.termdag);
+        if self.cost_cache.is_some() {
+            let cost_map_ts = std::mem::take(&mut self.cost_cache).unwrap();
+            if cost_map_ts.0 == self.timestamp {
+                cost_map = Some(cost_map_ts.1);
+            }
+        }
+        let extractor = Extractor::new(self, &mut termdag, cost_map);
+        let result = extractor.find_best(value, &mut termdag, arcsort).ok_or_else(|| {
             log::error!("No cost for {:?}", value);
             for func in self.functions.values() {
                 for (inputs, output) in func.nodes.iter(false) {
@@ -67,7 +75,10 @@ impl EGraph {
                 }
             }
             Error::ExtractError(value)
-        })
+        });
+        self.cost_cache = Some((self.timestamp, extractor.cost_map()));
+        self.termdag = termdag;
+        result
     }
 
     /// Extracts up to `limit` terms for a given `value`.
@@ -76,14 +87,25 @@ impl EGraph {
         sort: &ArcSort,
         value: Value,
         limit: usize,
-        termdag: &mut TermDag,
     ) -> Vec<Term> {
-        Extractor::new(self, termdag).find_variants(value, termdag, sort, limit)
+        let mut cost_map = None;
+        let mut termdag = std::mem::take(&mut self.termdag);
+        if self.cost_cache.is_some() {
+            let cost_map_ts = std::mem::take(&mut self.cost_cache).unwrap();
+            if cost_map_ts.0 == self.timestamp {
+                cost_map = Some(cost_map_ts.1);
+            }
+        }
+        let extractor = Extractor::new(self, &mut termdag, cost_map);
+        let result = extractor.find_variants(value, &mut termdag, sort, limit);
+        self.cost_cache = Some((self.timestamp, extractor.cost_map()));
+        self.termdag = termdag;
+        result
     }
 }
 
 impl<'a> Extractor<'a> {
-    pub fn new(egraph: &'a EGraph, termdag: &mut TermDag) -> Self {
+    pub fn new(egraph: &'a EGraph, termdag: &mut TermDag, cost_map: Option<CostMap>) -> Self {
         let mut extractor = Extractor {
             costs: HashMap::default(),
             egraph,
@@ -100,7 +122,11 @@ impl<'a> Extractor<'a> {
         );
 
         log::debug!("Extracting from ctors: {:?}", extractor.ctors);
-        extractor.find_costs(termdag);
+        if let Some(cost_map) = cost_map {
+            extractor.costs = cost_map;
+        } else {
+            extractor.find_costs(termdag);
+        }
         extractor
     }
 
@@ -223,5 +249,9 @@ impl<'a> Extractor<'a> {
                 }
             }
         }
+    }
+
+    pub fn cost_map(self) -> CostMap {
+        self.costs
     }
 }
