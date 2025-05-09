@@ -91,7 +91,7 @@ impl Sort for I64Sort {
     fn value_type(&self) -> Option<TypeId> {
         Some(TypeId::of::<i64>())
     }
-    
+
     fn reconstruct_termdag_leaf(
         &self,
         exec_state: &core_relations::ExecutionState,
@@ -102,7 +102,6 @@ impl Sort for I64Sort {
 
         termdag.lit(Literal::Int(*i))
     }
-    
 }
 
 impl IntoSort for i64 {

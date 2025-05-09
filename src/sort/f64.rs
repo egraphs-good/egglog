@@ -76,7 +76,7 @@ impl Sort for F64Sort {
     fn value_type(&self) -> Option<TypeId> {
         Some(TypeId::of::<F>())
     }
-    
+
     fn reconstruct_termdag_leaf(
         &self,
         exec_state: &core_relations::ExecutionState,
@@ -87,7 +87,6 @@ impl Sort for F64Sort {
 
         termdag.lit(Literal::Float(*f))
     }
-
 }
 
 impl IntoSort for F {

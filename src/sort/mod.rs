@@ -151,21 +151,21 @@ pub trait Sort: Any + Send + Sync + Debug {
     fn default_container_cost(
         &self,
         _exec_state: &core_relations::ExecutionState,
-        _value: &core_relations::Value,
-        element_costs: &Vec<Cost>,
+        _value: core_relations::Value,
+        element_costs: &[Cost],
     ) -> Cost {
-        element_costs.iter().fold(0, |s, c| { s.saturating_add(*c) })
+        element_costs.iter().fold(0, |s, c| s.saturating_add(*c))
     }
 
     /// Default cost for leaf primitives when the cost model does not specify the cost
     fn default_leaf_cost(
         &self,
         _exec_state: &core_relations::ExecutionState,
-        _value: &core_relations::Value,
+        _value: core_relations::Value,
     ) -> Cost {
         1
     }
-    
+
     /// Reconstruct a container value in a TermDag
     fn reconstruct_termdag_container(
         &self,
@@ -193,7 +193,6 @@ pub trait Sort: Any + Send + Sync + Debug {
         let _termdag = termdag;
         todo!("reconstruct_termdag_leaf : {}", self.name());
     }
-
 }
 
 // Note: this trait is currently intended to be implemented on the
