@@ -334,28 +334,24 @@ impl EGraph {
                     let new_len = stack.len() - arity;
                     let values = &stack[new_len..];
                     let new_len = stack.len() - arity;
-                    let mut termdag = TermDag::default();
 
                     let variants = values[1].bits as i64;
                     if variants == 0 {
-                        let (cost, term) = self.extract(values[0], &mut termdag, sort)?;
+                        let (cost, term) = self.extract(values[0], sort)?;
+                        let termdag = &self.termdag;
                         // dont turn termdag into a string if we have messages disabled for performance reasons
                         if self.messages_enabled() {
                             let extracted = termdag.to_string(&term);
                             log::info!("extracted with cost {cost}: {extracted}");
                             self.print_msg(extracted);
                         }
-                        self.extract_report = Some(ExtractReport::Best {
-                            termdag,
-                            cost,
-                            term,
-                        });
+                        self.extract_report = Some(ExtractReport::Best { cost, term });
                     } else {
                         if variants < 0 {
                             panic!("Cannot extract negative number of variants");
                         }
-                        let terms =
-                            self.extract_variants(sort, values[0], variants as usize, &mut termdag);
+                        let terms = self.extract_variants(sort, values[0], variants as usize);
+                        let termdag = &self.termdag;
                         // Same as above, avoid turning termdag into a string if we have messages disabled for performance
                         if self.messages_enabled() {
                             log::info!("extracted variants:");
@@ -370,7 +366,7 @@ impl EGraph {
                             msg += ")";
                             self.print_msg(msg);
                         }
-                        self.extract_report = Some(ExtractReport::Variants { termdag, terms });
+                        self.extract_report = Some(ExtractReport::Variants { terms });
                     }
 
                     stack.truncate(new_len);

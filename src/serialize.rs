@@ -87,7 +87,7 @@ impl EGraph {
     /// - Nodes will have consistant IDs throughout execution of e-graph (used for animating changes in the visualization)
     /// - Edges in the visualization will be well distributed (used for animating changes in the visualization)
     ///   (Note that this will be changed in `<https://github.com/egraphs-good/egglog/pull/158>` so that edges point to exact nodes instead of looking up the e-class)
-    pub fn serialize(&self, config: SerializeConfig) -> egraph_serialize::EGraph {
+    pub fn serialize(&mut self, config: SerializeConfig) -> egraph_serialize::EGraph {
         // First collect a list of all the calls we want to serialize as (function decl, inputs, the output, the node id)
         let all_calls: Vec<(
             &Function,
@@ -143,10 +143,18 @@ impl EGraph {
             },
         );
 
-        let mut termdag = TermDag::default();
+        let mut termdag = std::mem::take(&mut self.termdag);
+
+        let mut cost_map = None;
+        if self.cost_cache.is_some() {
+            let cost_map_ts = std::mem::take(&mut self.cost_cache).unwrap();
+            if cost_map_ts.0 == self.timestamp {
+                cost_map = Some(cost_map_ts.1);
+            }
+        }
 
         let mut serializer = Serializer {
-            extractor: Extractor::new(self, &mut termdag),
+            extractor: Extractor::new(self, &mut termdag, cost_map),
             node_ids,
             result: egraph_serialize::EGraph::default(),
             termdag,
@@ -186,7 +194,11 @@ impl EGraph {
             .map(|(sort, v)| self.value_to_class_id(sort, v))
             .collect();
 
-        serializer.result
+        let termdag = serializer.termdag;
+        let result = serializer.result;
+        self.cost_cache = Some((self.timestamp, serializer.extractor.cost_map()));
+        self.termdag = termdag;
+        result
     }
 
     /// Gets the serialized class ID for a value.
