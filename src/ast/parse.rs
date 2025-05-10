@@ -405,11 +405,12 @@ impl Parser {
                 _ => return error!(span, "usage: (relation <name> (<input sort>*))"),
             },
             "ruleset" => match tail {
-                [name] => vec![Command::AddRuleset(name.expect_atom("ruleset name")?)],
+                [name] => vec![Command::AddRuleset(span, name.expect_atom("ruleset name")?)],
                 _ => return error!(span, "usage: (ruleset <name>)"),
             },
             "unstable-combined-ruleset" => match tail {
                 [name, subrulesets @ ..] => vec![Command::UnstableCombinedRuleset(
+                    span,
                     name.expect_atom("combined ruleset name")?,
                     map_fallible(subrulesets, self, |_, sexp| {
                         sexp.expect_atom("subruleset name")

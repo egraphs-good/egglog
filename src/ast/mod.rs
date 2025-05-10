@@ -1,3 +1,4 @@
+pub mod check_shadowing;
 pub mod desugar;
 mod expr;
 mod parse;
@@ -54,8 +55,8 @@ where
         Option<(Symbol, Vec<GenericExpr<Symbol, Symbol>>)>,
     ),
     Function(GenericFunctionDecl<Head, Leaf>),
-    AddRuleset(Symbol),
-    UnstableCombinedRuleset(Symbol, Vec<Symbol>),
+    AddRuleset(Span, Symbol),
+    UnstableCombinedRuleset(Span, Symbol, Vec<Symbol>),
     NormRule {
         name: Symbol,
         ruleset: Symbol,
@@ -117,9 +118,11 @@ where
                     merge: f.merge.clone(),
                 },
             },
-            GenericNCommand::AddRuleset(name) => GenericCommand::AddRuleset(*name),
-            GenericNCommand::UnstableCombinedRuleset(name, others) => {
-                GenericCommand::UnstableCombinedRuleset(*name, others.clone())
+            GenericNCommand::AddRuleset(span, name) => {
+                GenericCommand::AddRuleset(span.clone(), *name)
+            }
+            GenericNCommand::UnstableCombinedRuleset(span, name, others) => {
+                GenericCommand::UnstableCombinedRuleset(span.clone(), *name, others.clone())
             }
             GenericNCommand::NormRule {
                 name,
@@ -171,9 +174,9 @@ where
             },
             GenericNCommand::Sort(span, name, params) => GenericNCommand::Sort(span, name, params),
             GenericNCommand::Function(func) => GenericNCommand::Function(func.visit_exprs(f)),
-            GenericNCommand::AddRuleset(name) => GenericNCommand::AddRuleset(name),
-            GenericNCommand::UnstableCombinedRuleset(name, rulesets) => {
-                GenericNCommand::UnstableCombinedRuleset(name, rulesets)
+            GenericNCommand::AddRuleset(span, name) => GenericNCommand::AddRuleset(span, name),
+            GenericNCommand::UnstableCombinedRuleset(span, name, rulesets) => {
+                GenericNCommand::UnstableCombinedRuleset(span, name, rulesets)
             }
             GenericNCommand::NormRule {
                 name,
@@ -447,7 +450,7 @@ where
     ///       :ruleset myrules)
     /// (run myrules 2)
     /// ```
-    AddRuleset(Symbol),
+    AddRuleset(Span, Symbol),
     /// Using the `combined-ruleset` command, construct another ruleset
     /// which runs all the rules in the given rulesets.
     /// This is useful for running multiple rulesets together.
@@ -465,7 +468,7 @@ where
     ///       ((path x z))
     ///       :ruleset myrules2)
     /// (combined-ruleset myrules-combined myrules1 myrules2)
-    UnstableCombinedRuleset(Symbol, Vec<Symbol>),
+    UnstableCombinedRuleset(Span, Symbol, Vec<Symbol>),
     /// ```text
     /// (rule <body:List<Fact>> <head:List<Action>>)
     /// ```
@@ -725,8 +728,8 @@ where
             } => {
                 write!(f, "(relation {name} ({}))", ListDisplay(inputs, " "))
             }
-            GenericCommand::AddRuleset(name) => write!(f, "(ruleset {name})"),
-            GenericCommand::UnstableCombinedRuleset(name, others) => {
+            GenericCommand::AddRuleset(_span, name) => write!(f, "(ruleset {name})"),
+            GenericCommand::UnstableCombinedRuleset(_span, name, others) => {
                 write!(
                     f,
                     "(unstable-combined-ruleset {name} {})",
