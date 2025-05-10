@@ -1393,7 +1393,7 @@
 ;;			B
 ;;	else:
 ;;		B
-(rule ((= gamma (Gamma (Node (PureOp (band BoolT a b))) (VO inputs) (VVO outputs)))
+(rule ((= gamma (Gamma (Node (PureOp (band (BoolT) a b))) (VO inputs) (VVO outputs)))
        (= (vec-length outputs) 2)
        (= (vec-get outputs 1) (VO A))
        (= (vec-get outputs 0) (VO B))
@@ -1420,7 +1420,7 @@
 ;;			A
 ;;		else:
 ;;			B
-(rule ((= gamma (Gamma (Node (PureOp (bor BoolT a b))) (VO inputs) (VVO outputs)))
+(rule ((= gamma (Gamma (Node (PureOp (bor (BoolT) a b))) (VO inputs) (VVO outputs)))
        (= (vec-length outputs) 2)
        (= (vec-get outputs 1) (VO A))
        (= (vec-get outputs 0) (VO B))

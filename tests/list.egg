@@ -2,23 +2,23 @@
 	(Nil)
 	(Cons i64 List))
 
-(ruleset list)
+(ruleset list-ruleset)
 
 (function list-length (List) i64 :no-merge)
 (relation list-length-demand (List))
 (rule
 	((list-length-demand (Nil)))
 	((set (list-length (Nil)) 0))
-	:ruleset list)
+	:ruleset list-ruleset)
 (rule
 	((list-length-demand (Cons head tail)))
 	((list-length-demand tail))
-	:ruleset list)
+	:ruleset list-ruleset)
 (rule
 	(	(list-length-demand (Cons head tail))
 		(= (list-length tail) tail-length))
 	((set (list-length (Cons head tail)) (+ tail-length 1)))
-	:ruleset list)
+	:ruleset list-ruleset)
 
 (function list-get (List i64) i64 :no-merge)
 (relation list-get-demand (List i64))
@@ -26,22 +26,22 @@
 	(	(list-get-demand list 0)
 		(= list (Cons head tail)))
 	((set (list-get list 0) head))
-	:ruleset list)
+	:ruleset list-ruleset)
 (rule
 	(	(list-get-demand list n) (> n 0)
 		(= list (Cons head tail)))
 	((list-get-demand tail (- n 1)))
-	:ruleset list)
+	:ruleset list-ruleset)
 (rule
 	(	(list-get-demand list n)
 		(= list (Cons head tail))
 		(= item (list-get tail (- n 1))))
 	((set (list-get list n) item))
-	:ruleset list)
+	:ruleset list-ruleset)
 
 (constructor list-append (List List) List)
-(rewrite (list-append (Nil) list) list :ruleset list)
-(rewrite (list-append (Cons head tail) list) (Cons head (list-append tail list)) :ruleset list)
+(rewrite (list-append (Nil) list) list :ruleset list-ruleset)
+(rewrite (list-append (Cons head tail) list) (Cons head (list-append tail list)) :ruleset list-ruleset)
 
 ; list-contains Nil _ => false
 ; list-contains (Cons item tail) item => true
@@ -49,8 +49,8 @@
 ; list-contains needs inequality
 
 (constructor list-set (List i64 i64) List)
-(rewrite (list-set (Cons head tail) 0 item) (Cons item tail) :ruleset list)
-(rewrite (list-set (Cons head tail) i item) (Cons head (list-set tail (- i 1) item)) :when ((> i 0)) :ruleset list)
+(rewrite (list-set (Cons head tail) 0 item) (Cons item tail) :ruleset list-ruleset)
+(rewrite (list-set (Cons head tail) i item) (Cons head (list-set tail (- i 1) item)) :when ((> i 0)) :ruleset list-ruleset)
 
 ; Tests
 (let a (Cons 1 (Cons 2 (Nil))))
@@ -64,7 +64,7 @@
 (list-get-demand b 0)
 (list-get-demand a 1)
 
-(run-schedule (saturate (run list)))
+(run-schedule (saturate (run list-ruleset)))
 
 (check (= e c))
 (check (= (list-length c) 3))

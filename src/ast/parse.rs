@@ -405,11 +405,12 @@ impl Parser {
                 _ => return error!(span, "usage: (relation <name> (<input sort>*))"),
             },
             "ruleset" => match tail {
-                [name] => vec![Command::AddRuleset(name.expect_atom("ruleset name")?)],
+                [name] => vec![Command::AddRuleset(span, name.expect_atom("ruleset name")?)],
                 _ => return error!(span, "usage: (ruleset <name>)"),
             },
             "unstable-combined-ruleset" => match tail {
                 [name, subrulesets @ ..] => vec![Command::UnstableCombinedRuleset(
+                    span,
                     name.expect_atom("combined ruleset name")?,
                     map_fallible(subrulesets, self, |_, sexp| {
                         sexp.expect_atom("subruleset name")
@@ -797,7 +798,14 @@ impl Parser {
     pub fn parse_expr(&mut self, sexp: &Sexp) -> Result<Expr, ParseError> {
         Ok(match sexp {
             Sexp::Literal(literal, span) => Expr::Lit(span.clone(), literal.clone()),
-            Sexp::Atom(symbol, span) => Expr::Var(span.clone(), *symbol),
+            Sexp::Atom(symbol, span) => Expr::Var(
+                span.clone(),
+                if *symbol == "_".into() {
+                    self.symbol_gen.fresh(symbol)
+                } else {
+                    *symbol
+                },
+            ),
             Sexp::List(list, span) => match list.as_slice() {
                 [] => Expr::Lit(span.clone(), Literal::Unit),
                 _ => {

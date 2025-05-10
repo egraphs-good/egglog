@@ -160,86 +160,89 @@ impl TypeInfo {
         symbol_gen: &mut SymbolGen,
         command: &NCommand,
     ) -> Result<ResolvedNCommand, TypeError> {
-        let command: ResolvedNCommand =
-            match command {
-                NCommand::Function(fdecl) => {
-                    ResolvedNCommand::Function(self.typecheck_function(symbol_gen, fdecl)?)
-                }
-                NCommand::NormRule {
-                    rule,
-                    ruleset,
-                    name,
-                } => ResolvedNCommand::NormRule {
-                    rule: self.typecheck_rule(symbol_gen, rule)?,
-                    ruleset: *ruleset,
-                    name: *name,
-                },
-                NCommand::Sort(span, sort, presort_and_args) => {
-                    // Note this is bad since typechecking should be pure and idempotent
-                    // Otherwise typechecking the same program twice will fail
-                    self.declare_sort(*sort, presort_and_args, span.clone())?;
-                    ResolvedNCommand::Sort(span.clone(), *sort, presort_and_args.clone())
-                }
-                NCommand::CoreAction(Action::Let(span, var, expr)) => {
-                    let expr = self.typecheck_expr(symbol_gen, expr, &Default::default())?;
-                    let output_type = expr.output_type();
-                    self.global_types.insert(*var, output_type.clone());
-                    let var = ResolvedVar {
-                        name: *var,
-                        sort: output_type,
-                        // not a global reference, but a global binding
-                        is_global_ref: false,
-                    };
-                    ResolvedNCommand::CoreAction(ResolvedAction::Let(span.clone(), var, expr))
-                }
-                NCommand::CoreAction(action) => ResolvedNCommand::CoreAction(
-                    self.typecheck_action(symbol_gen, action, &Default::default())?,
-                ),
-                NCommand::Check(span, facts) => {
-                    ResolvedNCommand::Check(span.clone(), self.typecheck_facts(symbol_gen, facts)?)
-                }
-                NCommand::Fail(span, cmd) => ResolvedNCommand::Fail(
-                    span.clone(),
-                    Box::new(self.typecheck_command(symbol_gen, cmd)?),
-                ),
-                NCommand::RunSchedule(schedule) => {
-                    ResolvedNCommand::RunSchedule(self.typecheck_schedule(symbol_gen, schedule)?)
-                }
-                NCommand::Pop(span, n) => ResolvedNCommand::Pop(span.clone(), *n),
-                NCommand::Push(n) => ResolvedNCommand::Push(*n),
-                NCommand::SetOption { name, value } => {
-                    let value = self.typecheck_expr(symbol_gen, value, &Default::default())?;
-                    ResolvedNCommand::SetOption { name: *name, value }
-                }
-                NCommand::AddRuleset(ruleset) => ResolvedNCommand::AddRuleset(*ruleset),
-                NCommand::UnstableCombinedRuleset(name, sub_rulesets) => {
-                    ResolvedNCommand::UnstableCombinedRuleset(*name, sub_rulesets.clone())
-                }
-                NCommand::PrintOverallStatistics => ResolvedNCommand::PrintOverallStatistics,
-                NCommand::PrintTable(span, table, size) => {
-                    ResolvedNCommand::PrintTable(span.clone(), *table, *size)
-                }
-                NCommand::PrintSize(span, n) => {
-                    // Should probably also resolve the function symbol here
-                    ResolvedNCommand::PrintSize(span.clone(), *n)
-                }
-                NCommand::Output { span, file, exprs } => {
-                    let exprs = exprs
-                        .iter()
-                        .map(|expr| self.typecheck_expr(symbol_gen, expr, &Default::default()))
-                        .collect::<Result<Vec<_>, _>>()?;
-                    ResolvedNCommand::Output {
-                        span: span.clone(),
-                        file: file.clone(),
-                        exprs,
-                    }
-                }
-                NCommand::Input { span, name, file } => ResolvedNCommand::Input {
+        let command: ResolvedNCommand = match command {
+            NCommand::Function(fdecl) => {
+                ResolvedNCommand::Function(self.typecheck_function(symbol_gen, fdecl)?)
+            }
+            NCommand::NormRule {
+                rule,
+                ruleset,
+                name,
+            } => ResolvedNCommand::NormRule {
+                rule: self.typecheck_rule(symbol_gen, rule)?,
+                ruleset: *ruleset,
+                name: *name,
+            },
+            NCommand::Sort(span, sort, presort_and_args) => {
+                // Note this is bad since typechecking should be pure and idempotent
+                // Otherwise typechecking the same program twice will fail
+                self.declare_sort(*sort, presort_and_args, span.clone())?;
+                ResolvedNCommand::Sort(span.clone(), *sort, presort_and_args.clone())
+            }
+            NCommand::CoreAction(Action::Let(span, var, expr)) => {
+                let expr = self.typecheck_expr(symbol_gen, expr, &Default::default())?;
+                let output_type = expr.output_type();
+                self.global_types.insert(*var, output_type.clone());
+                let var = ResolvedVar {
+                    name: *var,
+                    sort: output_type,
+                    // not a global reference, but a global binding
+                    is_global_ref: false,
+                };
+                ResolvedNCommand::CoreAction(ResolvedAction::Let(span.clone(), var, expr))
+            }
+            NCommand::CoreAction(action) => ResolvedNCommand::CoreAction(self.typecheck_action(
+                symbol_gen,
+                action,
+                &Default::default(),
+            )?),
+            NCommand::Check(span, facts) => {
+                ResolvedNCommand::Check(span.clone(), self.typecheck_facts(symbol_gen, facts)?)
+            }
+            NCommand::Fail(span, cmd) => ResolvedNCommand::Fail(
+                span.clone(),
+                Box::new(self.typecheck_command(symbol_gen, cmd)?),
+            ),
+            NCommand::RunSchedule(schedule) => {
+                ResolvedNCommand::RunSchedule(self.typecheck_schedule(symbol_gen, schedule)?)
+            }
+            NCommand::Pop(span, n) => ResolvedNCommand::Pop(span.clone(), *n),
+            NCommand::Push(n) => ResolvedNCommand::Push(*n),
+            NCommand::SetOption { name, value } => {
+                let value = self.typecheck_expr(symbol_gen, value, &Default::default())?;
+                ResolvedNCommand::SetOption { name: *name, value }
+            }
+            NCommand::AddRuleset(span, ruleset) => {
+                ResolvedNCommand::AddRuleset(span.clone(), *ruleset)
+            }
+            NCommand::UnstableCombinedRuleset(span, name, sub_rulesets) => {
+                ResolvedNCommand::UnstableCombinedRuleset(span.clone(), *name, sub_rulesets.clone())
+            }
+            NCommand::PrintOverallStatistics => ResolvedNCommand::PrintOverallStatistics,
+            NCommand::PrintTable(span, table, size) => {
+                ResolvedNCommand::PrintTable(span.clone(), *table, *size)
+            }
+            NCommand::PrintSize(span, n) => {
+                // Should probably also resolve the function symbol here
+                ResolvedNCommand::PrintSize(span.clone(), *n)
+            }
+            NCommand::Output { span, file, exprs } => {
+                let exprs = exprs
+                    .iter()
+                    .map(|expr| self.typecheck_expr(symbol_gen, expr, &Default::default()))
+                    .collect::<Result<Vec<_>, _>>()?;
+                ResolvedNCommand::Output {
                     span: span.clone(),
-                    name: *name,
                     file: file.clone(),
-                },
-            };
+                    exprs,
+                }
+            }
+            NCommand::Input { span, name, file } => ResolvedNCommand::Input {
+                span: span.clone(),
+                name: *name,
+                file: file.clone(),
+            },
+        };
         Ok(command)
     }
 

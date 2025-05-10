@@ -103,10 +103,10 @@ pub(crate) fn desugar_command(
             res
         }
         Command::Rewrite(ruleset, ref rewrite, subsume) => {
-            desugar_rewrite(ruleset, rule_name(&command), rewrite, subsume)
+            desugar_rewrite(ruleset, rule_name(&command), rewrite, subsume, parser)
         }
         Command::BiRewrite(ruleset, ref rewrite) => {
-            desugar_birewrite(ruleset, rule_name(&command), rewrite)
+            desugar_birewrite(ruleset, rule_name(&command), rewrite, parser)
         }
         Command::Include(span, file) => {
             let s = std::fs::read_to_string(&file)
@@ -135,9 +135,9 @@ pub(crate) fn desugar_command(
             result
         }
         Command::Sort(span, sort, option) => vec![NCommand::Sort(span, sort, option)],
-        Command::AddRuleset(name) => vec![NCommand::AddRuleset(name)],
-        Command::UnstableCombinedRuleset(name, subrulesets) => {
-            vec![NCommand::UnstableCombinedRuleset(name, subrulesets)]
+        Command::AddRuleset(span, name) => vec![NCommand::AddRuleset(span, name)],
+        Command::UnstableCombinedRuleset(span, name, subrulesets) => {
+            vec![NCommand::UnstableCombinedRuleset(span, name, subrulesets)]
         }
         Command::Action(action) => vec![NCommand::CoreAction(action)],
         Command::Simplify {
@@ -189,7 +189,7 @@ pub(crate) fn desugar_command(
                 };
                 vec![
                     NCommand::Check(span.clone(), vec![Fact::Fact(expr.clone())]),
-                    NCommand::AddRuleset(fresh_ruleset),
+                    NCommand::AddRuleset(span.clone(), fresh_ruleset),
                     NCommand::NormRule {
                         name: fresh_rulename,
                         ruleset: fresh_ruleset,
@@ -255,9 +255,10 @@ fn desugar_rewrite(
     name: Symbol,
     rewrite: &Rewrite,
     subsume: bool,
+    parser: &mut Parser,
 ) -> Vec<NCommand> {
     let span = rewrite.span.clone();
-    let var = Symbol::from("rewrite_var__");
+    let var = parser.symbol_gen.fresh(&"rewrite_var__".into());
     let mut head = Actions::singleton(Action::Union(
         span.clone(),
         Expr::Var(span.clone(), var),
@@ -299,7 +300,12 @@ fn desugar_rewrite(
     }]
 }
 
-fn desugar_birewrite(ruleset: Symbol, name: Symbol, rewrite: &Rewrite) -> Vec<NCommand> {
+fn desugar_birewrite(
+    ruleset: Symbol,
+    name: Symbol,
+    rewrite: &Rewrite,
+    parser: &mut Parser,
+) -> Vec<NCommand> {
     let span = rewrite.span.clone();
     let rw2 = Rewrite {
         span,
@@ -307,15 +313,22 @@ fn desugar_birewrite(ruleset: Symbol, name: Symbol, rewrite: &Rewrite) -> Vec<NC
         rhs: rewrite.lhs.clone(),
         conditions: rewrite.conditions.clone(),
     };
-    desugar_rewrite(ruleset, format!("{}=>", name).into(), rewrite, false)
-        .into_iter()
-        .chain(desugar_rewrite(
-            ruleset,
-            format!("{}<=", name).into(),
-            &rw2,
-            false,
-        ))
-        .collect()
+    desugar_rewrite(
+        ruleset,
+        format!("{}=>", name).into(),
+        rewrite,
+        false,
+        parser,
+    )
+    .into_iter()
+    .chain(desugar_rewrite(
+        ruleset,
+        format!("{}<=", name).into(),
+        &rw2,
+        false,
+        parser,
+    ))
+    .collect()
 }
 
 fn desugar_simplify(
