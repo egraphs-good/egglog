@@ -4,13 +4,6 @@ use crate::*;
 pub(crate) struct Names(HashMap<Symbol, Span>);
 
 impl Names {
-    pub(crate) fn check_shadowing(&mut self, program: &[ResolvedNCommand]) -> Result<(), Error> {
-        for command in program {
-            self.check_shadowing_command(command)?;
-        }
-        Ok(())
-    }
-
     fn check(&mut self, name: Symbol, new: Span) -> Result<(), Error> {
         if let Some(old) = self.0.get(&name) {
             Err(Error::Shadowing(name, old.clone(), new))
@@ -20,7 +13,12 @@ impl Names {
         }
     }
 
-    fn check_shadowing_command(&mut self, command: &ResolvedNCommand) -> Result<(), Error> {
+    /// WARNING: this function does not handle `push` and `pop`.
+    /// Because `Names` is contained on the `EGraph`, this will
+    /// work correctly when executed from `process_command`, but
+    /// a unit test that called this function multiple times without
+    /// changing the `EGraph` will be wrong.
+    pub(crate) fn check_shadowing(&mut self, command: &ResolvedNCommand) -> Result<(), Error> {
         match command {
             ResolvedNCommand::Sort(span, name, _args) => self.check(*name, span.clone()),
             ResolvedNCommand::Function(decl) => self.check(decl.name, decl.span.clone()),
@@ -43,7 +41,7 @@ impl Names {
             }
             ResolvedNCommand::Fail(_span, command) => {
                 let mut inner = self.clone();
-                inner.check_shadowing_command(command)
+                inner.check_shadowing(command)
             }
             ResolvedNCommand::SetOption { .. } => Ok(()),
             ResolvedNCommand::Extract(..) => Ok(()),
