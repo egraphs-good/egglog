@@ -97,6 +97,7 @@ impl EGraph {
 
     fn typecheck_command(&mut self, command: &NCommand) -> Result<ResolvedNCommand, TypeError> {
         let symbol_gen = &mut self.parser.symbol_gen;
+
         let command: ResolvedNCommand = match command {
             NCommand::Function(fdecl) => {
                 ResolvedNCommand::Function(self.type_info.typecheck_function(symbol_gen, fdecl)?)
