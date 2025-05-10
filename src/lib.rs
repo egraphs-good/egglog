@@ -1427,7 +1427,9 @@ impl EGraph {
 
         let program = remove_globals::remove_globals(program, &mut self.parser.symbol_gen);
 
-        self.names.check_shadowing(&program)?;
+        for command in &program {
+            self.names.check_shadowing(command)?;
+        }
 
         Ok(program)
     }
