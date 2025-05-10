@@ -399,6 +399,7 @@ impl FromStr for RunMode {
 pub struct EGraph {
     pub backend: egglog_bridge::EGraph,
     pub parser: Parser,
+    names: check_shadowing::Names,
     egraphs: Vec<Self>,
     unionfind: UnionFind,
     pub functions: IndexMap<Symbol, Function>,
@@ -424,6 +425,7 @@ impl Default for EGraph {
         let mut eg = Self {
             backend: Default::default(),
             parser: Default::default(),
+            names: Default::default(),
             egraphs: vec![],
             unionfind: Default::default(),
             functions: Default::default(),
@@ -1379,11 +1381,11 @@ impl EGraph {
                 self.declare_function(&fdecl)?;
                 log::info!("Declared function {}.", fdecl.name)
             }
-            ResolvedNCommand::AddRuleset(name) => {
+            ResolvedNCommand::AddRuleset(_span, name) => {
                 self.add_ruleset(name);
                 log::info!("Declared ruleset {name}.");
             }
-            ResolvedNCommand::UnstableCombinedRuleset(name, others) => {
+            ResolvedNCommand::UnstableCombinedRuleset(_span, name, others) => {
                 self.add_combined_ruleset(name, others);
                 log::info!("Declared ruleset {name}.");
             }
@@ -1645,20 +1647,14 @@ impl EGraph {
         }
     }
 
-    pub fn set_reserved_symbol(&mut self, sym: Symbol) {
-        assert!(
-            !self.parser.symbol_gen.has_been_used(),
-            "Reserved symbol must be set before any symbols are generated"
-        );
-        self.parser.symbol_gen = SymbolGen::new(sym.to_string());
-    }
-
     fn process_command(&mut self, command: Command) -> Result<Vec<ResolvedNCommand>, Error> {
         let program = desugar::desugar_program(vec![command], &mut self.parser, self.seminaive)?;
 
         let program = self.typecheck_program(&program)?;
 
         let program = remove_globals::remove_globals(program, &mut self.parser.symbol_gen);
+
+        self.names.check_shadowing(&program)?;
 
         Ok(program)
     }
@@ -2024,6 +2020,8 @@ pub enum Error {
     SubsumeMergeError(Symbol),
     #[error("extraction failure: {:?}", .0)]
     ExtractError(String),
+    #[error("{1}\n{2}\nShadowing is not allowed, but found {0}")]
+    Shadowing(Symbol, Span, Span),
 }
 
 #[cfg(test)]
