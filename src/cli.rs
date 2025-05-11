@@ -19,11 +19,6 @@ pub mod bin {
         /// Prints extra information, which can be useful for debugging
         #[clap(long, default_value_t = RunMode::Normal)]
         show: RunMode,
-        /// Changes the prefix of the generated symbols
-        // TODO why do we support this?
-        // TODO remove this evil hack
-        #[clap(long, default_value = "__")]
-        reserved_symbol: String,
         /// The file names for the egglog files to run
         inputs: Vec<PathBuf>,
         /// Serializes the egraph for each egglog file as JSON
@@ -62,7 +57,6 @@ pub mod bin {
             .init();
 
         let args = Args::parse();
-        egraph.set_reserved_symbol(args.reserved_symbol.clone().into());
         egraph.fact_directory.clone_from(&args.fact_directory);
         egraph.seminaive = !args.naive;
         egraph.run_mode = args.show;

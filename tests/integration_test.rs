@@ -469,3 +469,18 @@ fn test_serialize_subsume_status() {
     assert!(serialized.nodes[&a_id].subsumed);
     assert!(!serialized.nodes[&b_id].subsumed);
 }
+
+#[test]
+fn test_shadowing_query() {
+    let s = "(function f () i64 :no-merge) (set (f) 2) (check (= (f) f) (= f 2))";
+    let e = EGraph::default()
+        .parse_and_run_program(None, s)
+        .unwrap_err();
+    assert!(matches!(e, Error::Shadowing(_, _, _)));
+}
+
+#[test]
+fn test_shadowing_push() {
+    let s = "(push) (let x 1) (pop) (let x 1)";
+    EGraph::default().parse_and_run_program(None, s).unwrap();
+}
