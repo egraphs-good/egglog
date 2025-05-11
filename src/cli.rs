@@ -1,5 +1,5 @@
 use crate::*;
-use std::io::{self, BufRead, BufReader, Read, Write};
+use std::io::{self, stderr, stdout, BufRead, BufReader, Read, Write};
 
 #[cfg(feature = "bin")]
 pub mod bin {
@@ -45,6 +45,9 @@ pub mod bin {
         /// Prevents egglog from printing messages
         #[clap(long)]
         no_messages: bool,
+        /// String to use as the prompt.
+        #[clap(long, default_value = "")]
+        prompt: String,
     }
 
     #[allow(clippy::disallowed_macros)]
@@ -66,7 +69,7 @@ pub mod bin {
 
         if args.inputs.is_empty() {
             log::info!("Welcome to Egglog REPL! (build: {})", env!("FULL_VERSION"));
-            match egraph.repl() {
+            match egraph.repl(args.prompt) {
                 Ok(()) => std::process::exit(0),
                 Err(err) => {
                     log::error!("{err}");
@@ -140,17 +143,23 @@ pub mod bin {
 }
 
 impl EGraph {
-    pub fn repl(&mut self) -> io::Result<()> {
-        self.repl_with(io::stdin(), io::stdout())
+    pub fn repl(&mut self, prompt: String) -> io::Result<()> {
+        self.repl_with(prompt, io::stdin(), io::stdout())
     }
 
-    pub fn repl_with<R, W>(&mut self, input: R, mut output: W) -> io::Result<()>
+    pub fn repl_with<R, W>(&mut self, prompt: String, input: R, mut output: W) -> io::Result<()>
     where
         R: Read,
         W: Write,
     {
         let mut cmd_buffer = String::new();
 
+        print!("{}", prompt);
+        // it's probably important that we flush stderr before stdout: if we're
+        // detecting the prompt, then by the time we detect the prompt, we'll
+        // also know stderr has been flushed.
+        stderr().flush()?;
+        stdout().flush()?;
         for line in BufReader::new(input).lines() {
             let line_str = line?;
             cmd_buffer.push_str(&line_str);
@@ -159,12 +168,18 @@ impl EGraph {
             if should_eval(&cmd_buffer) {
                 run_command_in_scripting(self, &cmd_buffer, &mut output)?;
                 cmd_buffer = String::new();
+                print!("{}", prompt);
+                stderr().flush()?;
+                stdout().flush()?;
             }
         }
 
         if !cmd_buffer.is_empty() {
             run_command_in_scripting(self, &cmd_buffer, &mut output)?;
         }
+
+        stderr().flush()?;
+        stdout().flush()?;
 
         Ok(())
     }
@@ -231,22 +246,70 @@ mod tests {
 
         let input = "(extract 1)";
         let mut output = Vec::new();
-        egraph.repl_with(input.as_bytes(), &mut output).unwrap();
+        egraph
+            .repl_with(String::new(), input.as_bytes(), &mut output)
+            .unwrap();
         assert_eq!(String::from_utf8(output).unwrap(), "1\n");
 
         let input = "\n\n\n";
         let mut output = Vec::new();
-        egraph.repl_with(input.as_bytes(), &mut output).unwrap();
+        egraph
+            .repl_with(String::new(), input.as_bytes(), &mut output)
+            .unwrap();
         assert_eq!(String::from_utf8(output).unwrap(), "");
 
         let input = "(set-option interactive_mode 1)";
         let mut output = Vec::new();
-        egraph.repl_with(input.as_bytes(), &mut output).unwrap();
+        egraph
+            .repl_with(String::new(), input.as_bytes(), &mut output)
+            .unwrap();
         assert_eq!(String::from_utf8(output).unwrap(), "(done)\n");
 
         let input = "(set-option interactive_mode 1)\n(extract 1)(extract 2)\n";
         let mut output = Vec::new();
-        egraph.repl_with(input.as_bytes(), &mut output).unwrap();
+        egraph
+            .repl_with(String::new(), input.as_bytes(), &mut output)
+            .unwrap();
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "(done)\n1\n(done)\n2\n(done)\n"
+        );
+    }
+
+    #[test]
+    fn test_repl_prompt() {
+        let mut egraph = EGraph::default();
+
+        let input = "(extract 1)";
+        let mut output = Vec::new();
+        egraph
+            .repl_with(">>>".to_string(), input.as_bytes(), &mut output)
+            .unwrap();
+        assert_eq!(String::from_utf8(output).unwrap(), "1\n");
+
+        let input = "\n\n\n";
+        let mut output = Vec::new();
+        egraph
+            .repl_with(
+                "blah\nblah\nblah".to_string(),
+                input.as_bytes(),
+                &mut output,
+            )
+            .unwrap();
+        assert_eq!(String::from_utf8(output).unwrap(), "");
+
+        let input = "(set-option interactive_mode 1)";
+        let mut output = Vec::new();
+        egraph
+            .repl_with("✅".to_string(), input.as_bytes(), &mut output)
+            .unwrap();
+        assert_eq!(String::from_utf8(output).unwrap(), "(done)\n");
+
+        let input = "(set-option interactive_mode 1)\n(extract 1)(extract 2)\n";
+        let mut output = Vec::new();
+        egraph
+            .repl_with(String::new(), input.as_bytes(), &mut output)
+            .unwrap();
         assert_eq!(
             String::from_utf8(output).unwrap(),
             "(done)\n1\n(done)\n2\n(done)\n"
