@@ -14,6 +14,7 @@ pub struct ProofStore {
     termdag: TermDag,
 }
 
+// use a Vec so that we can hash it, sharing sub-proofs
 type Substitution = Vec<(Symbol, Term)>;
 
 fn subst_get(subst: &Substitution, sym: Symbol) -> Option<&Term> {
@@ -32,7 +33,7 @@ pub enum Proposition {
 }
 
 // todo how to ignore this warning?
-#[warn(clippy::enum_variant_names)]
+#[allow(clippy::enum_variant_names)]
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum ProofTerm {
     /// proves a Proposition based on a rule application
@@ -237,8 +238,30 @@ impl ProofStore {
                         propositions.insert(Proposition::TOk(term));
                     }
                 }
-                GenericAction::Set(_span, _, _generic_exprs, _generic_expr) => todo!(),
-                GenericAction::Change(_span, _change, _, _generic_exprs) => todo!(),
+                GenericAction::Set(_span, func, generic_exprs, generic_expr) => {
+                    let mut children = vec![];
+                    for expr in generic_exprs {
+                        let mut intermediate = HashSet::default();
+                        let term = self.substitute(expr, &current_subst, &mut intermediate)?;
+                        for term in intermediate {
+                            propositions.insert(Proposition::TOk(term));
+                        }
+                        children.push(term);
+                    }
+
+                    let final_term = self.substitute(generic_expr, &current_subst, &mut HashSet::default())?;
+                    children.push(final_term.clone());
+                    let mut res = self.termdag.app(*func, children);
+                    propositions.insert(Proposition::TOk(res.clone()));
+                },
+                GenericAction::Change(_span, change, _, _generic_exprs) => {
+                    match change {
+                        crate::ast::Change::Delete => {
+                            // delete adds an expression to the database,
+                        },
+                        crate::ast::Change::Subsume => todo!(),
+                    }
+                },
                 GenericAction::Union(_span, _generic_expr, _generic_expr1) => todo!(),
                 GenericAction::Extract(_span, _generic_expr, _generic_expr1) => todo!(),
                 GenericAction::Panic(_span, _) => todo!(),
@@ -361,11 +384,11 @@ impl ProofStore {
 }
 
 mod tests {
-    
-    #[cfg(test)]
-    use crate::TermDag;
+
     #[cfg(test)]
     use crate::proofs::proof::{ProofCheckError, ProofStore, ProofTerm, Proposition};
+    #[cfg(test)]
+    use crate::TermDag;
 
     #[test]
     fn no_precondition() {
