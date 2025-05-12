@@ -48,14 +48,6 @@ fn test_simple_extract2() {
              "#,
         )
         .unwrap();
-
-    /*
-    let mut termdag = TermDag::default();
-    let (sort, value) = egraph.eval_expr(&egglog::var!("tb")).unwrap();
-    let (cost, extracted) = egraph.extract(value, &mut termdag, &sort).unwrap();
-    assert_eq!(cost, 4);
-    assert_eq!(termdag.to_string(&extracted), "(SmallStep (SmallStep (SmallStep (SmallStep (Origin)))))");
-    */
 }
 
 #[test]
@@ -210,6 +202,37 @@ fn test_simple_extract7() {
              "#,
         )
         .unwrap();
+}
+
+#[test]
+fn test_extract_variants1() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut egraph = EGraph::default();
+
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+             (datatype Term
+               (Origin :cost 0) 
+               (BigStep Term :cost 10)
+               (SmallStep Term :cost 1)
+             )
+             (let t (Origin))
+             (let tb (BigStep t))
+             (let tbs (SmallStep tb))
+             (let ts (SmallStep t))
+             (let tss (SmallStep ts))
+             (let tsss (SmallStep tss))
+             (union tbs tsss)
+             (let tssss (SmallStep tsss))
+             (union tssss tb)
+             (extract tb 3)
+             "#,
+        )
+        .unwrap();
+    panic!("!!");
 }
 
 #[test]
