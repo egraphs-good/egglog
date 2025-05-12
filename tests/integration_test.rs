@@ -78,40 +78,29 @@ fn test_simple_extract3() {
         .unwrap();
 }
 
-/*
 #[test]
 fn test_simple_extract4() {
-
     let _ = env_logger::builder().is_test(true).try_init();
 
     let mut egraph = EGraph::default();
 
-    egraph.parse_and_run_program(
-        None,
-        r#"
-             (datatype Foo
-                (Foobar i64)
-             )
-             (let foobar (Foobar 42))
-             (datatype Bar
-                (Barfoo i64)
-             )
-             (let barfoo (Barfoo 24))
-             (datatype Baz
-                (Bazfoo i64)
-             )
-             (sort QuaMap (Map Foo Bar))
-             (sort QuaVecMap (Vec QuaMap))
-             (sort QuaVVM (Vec QuaVecMap))
-             (function Quaz () QuaVVM :no-merge)
-             (set (Quaz) (vec-empty))
-             (extract (Quaz))
-             "#
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+        (datatype Foo
+            (Foobar)
         )
-        .unwrap();
-
+        (subsume (Foobar))
+        (datatype Bar
+            (Barbar Foo)
+        )
+        (let x (Barbar (Foobar)))
+        (extract x)
+        "#,
+        )
+        .unwrap_err();
 }
-*/
 
 #[test]
 fn test_simple_extract5() {
@@ -232,7 +221,6 @@ fn test_extract_variants1() {
              "#,
         )
         .unwrap();
-    panic!("!!");
 }
 
 #[test]
