@@ -267,10 +267,12 @@ impl PreExtractionWriter for EgraphMsgWriter {
     }
 
     fn extract_output_variants(&self, termdag: &TermDag, terms: &[Term], _costs: &[Cost]) {
+        log::info!("New extractor extracted variants:");
         let mut msg = String::default();
         msg += "(\n";
         for expr in terms {
             let str = termdag.to_string(expr);
+            log::info!("   {str}");
             msg += &format!("   {str}\n");
         }
         msg += ")";
@@ -681,16 +683,13 @@ impl ExternalFunction for ExtractorAlter {
                             &costs,
                         ) {
                             if !reconstruction_round {
-                                log::debug!("Got cost: {:?}", (target, new_cost));
                                 match costs.get_mut(&target_sort.name()).unwrap().entry(target) {
                                     HEntry::Vacant(e) => {
-                                        log::debug! {"Inserted new cost"};
                                         ensure_fixpoint = false;
                                         e.insert(new_cost);
                                     }
                                     HEntry::Occupied(mut e) => {
                                         if new_cost < *(e.get()) {
-                                            log::debug! {"Updated new cost"};
                                             ensure_fixpoint = false;
                                             e.insert(new_cost);
                                         }
@@ -750,8 +749,6 @@ impl ExternalFunction for ExtractorAlter {
                 &filtered_func,
                 &parent_edge,
             );
-
-            log::debug!("Got termdag: {:?}, term: {:?}", termdag, term);
 
             self.writer
                 .extract_output_single(&termdag, &term, best_cost);
