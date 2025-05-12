@@ -310,7 +310,7 @@ impl EGraph {
             {
                 // Children will be empty unless this is a container sort
                 let children: Vec<egraph_serialize::NodeId> = sort
-                    .inner_values(self, value)
+                    .inner_values(self.backend.containers(), value)
                     .into_iter()
                     .map(|(s, v)| {
                         self.serialize_value(serializer, &s, &v, &self.value_to_class_id(&s, &v))

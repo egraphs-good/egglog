@@ -96,6 +96,10 @@ impl Sort for MultiSetSort {
         backend.register_container_ty::<MultiSetContainer<core_relations::Value>>();
     }
 
+    fn inner_sorts(&self) -> Vec<&Arc<dyn Sort>> {
+        vec![&self.element]
+    }
+
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
         self
     }
@@ -110,12 +114,10 @@ impl Sort for MultiSetSort {
 
     fn inner_values(
         &self,
-        egraph: &EGraph,
+        containers: &core_relations::Containers,
         value: &core_relations::Value,
     ) -> Vec<(ArcSort, core_relations::Value)> {
-        let val = egraph
-            .backend
-            .containers()
+        let val = containers
             .get_val::<MultiSetContainer<core_relations::Value>>(*value)
             .unwrap()
             .clone();
@@ -202,6 +204,15 @@ impl Sort for MultiSetSort {
             children.push(child_term);
         }
         Some((cost, termdag.app("multiset-of".into(), children)))
+    }
+    fn reconstruct_termdag_container(
+        &self,
+        _exec_state: &core_relations::ExecutionState,
+        _value: &core_relations::Value,
+        termdag: &mut TermDag,
+        element_terms: Vec<Term>,
+    ) -> Term {
+        termdag.app("multiset-of".into(), element_terms)
     }
 
     fn serialized_name(&self, _value: &core_relations::Value) -> Symbol {
