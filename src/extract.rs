@@ -734,65 +734,75 @@ impl ExternalFunction for ExtractorAlter {
                 reconstruction_round = !reconstruction_round;
             }
         }
-        let best_cost = self
-            .compute_cost_node(exec_state, &root, &self.rootsort, &costs)
-            .expect("No valid extraction for root!");
-        log::debug!("Best cost for the extract root: {:?}", best_cost);
+        match self.compute_cost_node(exec_state, &root, &self.rootsort, &costs) {
+            Some(best_cost) => {
+                log::debug!("Best cost for the extract root: {:?}", best_cost);
 
-        let mut termdag: TermDag = Default::default();
-        if nvariants == 0 {
-            let term = self.reconstruct_termdag_node(
-                exec_state,
-                &mut termdag,
-                &root,
-                &self.rootsort,
-                &filtered_func,
-                &parent_edge,
-            );
+                let mut termdag: TermDag = Default::default();
+                if nvariants == 0 {
+                    let term = self.reconstruct_termdag_node(
+                        exec_state,
+                        &mut termdag,
+                        &root,
+                        &self.rootsort,
+                        &filtered_func,
+                        &parent_edge,
+                    );
 
-            self.writer
-                .extract_output_single(&termdag, &term, best_cost);
-        } else {
-            #[allow(clippy::collapsible_else_if)]
-            if self.rootsort.is_eq_sort() {
-                let mut terms: Vec<Term> = Vec::new();
-                let mut costs: Vec<Cost> = Vec::new();
-                root_variants.sort();
-                root_variants.truncate(nvariants.try_into().unwrap());
-                for (cost, func_name, hyperedge) in root_variants {
-                    let mut ch_terms: Vec<Term> = Vec::new();
-                    let ch_sorts = &filtered_func.funcs.get(&func_name).unwrap().schema.input;
-                    for (value, sort) in hyperedge.iter().zip(ch_sorts.iter()) {
-                        ch_terms.push(self.reconstruct_termdag_node(
+                    self.writer
+                        .extract_output_single(&termdag, &term, best_cost);
+                } else {
+                    #[allow(clippy::collapsible_else_if)]
+                    if self.rootsort.is_eq_sort() {
+                        let mut terms: Vec<Term> = Vec::new();
+                        let mut costs: Vec<Cost> = Vec::new();
+                        root_variants.sort();
+                        root_variants.truncate(nvariants.try_into().unwrap());
+                        for (cost, func_name, hyperedge) in root_variants {
+                            let mut ch_terms: Vec<Term> = Vec::new();
+                            let ch_sorts =
+                                &filtered_func.funcs.get(&func_name).unwrap().schema.input;
+                            for (value, sort) in hyperedge.iter().zip(ch_sorts.iter()) {
+                                ch_terms.push(self.reconstruct_termdag_node(
+                                    exec_state,
+                                    &mut termdag,
+                                    value,
+                                    sort,
+                                    &filtered_func,
+                                    &parent_edge,
+                                ));
+                            }
+                            terms.push(termdag.app(func_name, ch_terms));
+                            costs.push(cost);
+                        }
+
+                        self.writer
+                            .extract_output_variants(&termdag, &terms, &costs);
+                    } else {
+                        log::warn!("extracting multiple variants for containers or primitives is not implemented, returning a single variant.");
+                        let term = self.reconstruct_termdag_node(
                             exec_state,
                             &mut termdag,
-                            value,
-                            sort,
+                            &root,
+                            &self.rootsort,
                             &filtered_func,
                             &parent_edge,
-                        ));
+                        );
+
+                        self.writer
+                            .extract_output_variants(&termdag, &[term], &[best_cost]);
                     }
-                    terms.push(termdag.app(func_name, ch_terms));
-                    costs.push(cost);
                 }
-
-                self.writer
-                    .extract_output_variants(&termdag, &terms, &costs);
-            } else {
-                log::warn!("extracting multiple variants for containers or primitives is not implemented, returning a single variant.");
-                let term = self.reconstruct_termdag_node(
-                    exec_state,
-                    &mut termdag,
-                    &root,
-                    &self.rootsort,
-                    &filtered_func,
-                    &parent_edge,
+                Some(exec_state.prims().get::<()>(()))
+            }
+            None => {
+                log::error!(
+                    "Unextractable root {:?} with sort {:?}",
+                    root,
+                    self.rootsort
                 );
-
-                self.writer
-                    .extract_output_variants(&termdag, &[term], &[best_cost]);
+                None
             }
         }
-        Some(exec_state.prims().get::<()>(()))
     }
 }
