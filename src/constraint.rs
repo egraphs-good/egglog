@@ -528,11 +528,6 @@ impl Assignment<AtomTerm, ArcSort> {
 
                 Ok(ResolvedAction::Union(span.clone(), lhs, rhs))
             }
-            GenericAction::Extract(span, lhs, rhs) => Ok(ResolvedAction::Extract(
-                span.clone(),
-                self.annotate_expr(lhs, typeinfo),
-                self.annotate_expr(rhs, typeinfo),
-            )),
             GenericAction::Panic(span, msg) => Ok(ResolvedAction::Panic(span.clone(), msg.clone())),
             GenericAction::Expr(span, expr) => Ok(ResolvedAction::Expr(
                 span.clone(),
@@ -692,17 +687,6 @@ impl CoreAction {
             )
             .chain(once(constraint::eq(lhs.clone(), rhs.clone())))
             .collect()),
-            CoreAction::Extract(_ann, e, n) => {
-                // e can be anything
-                Ok(
-                    get_literal_and_global_constraints(&[e.clone(), n.clone()], typeinfo)
-                        .chain(once(constraint::assign(
-                            n.clone(),
-                            std::sync::Arc::new(I64Sort) as ArcSort,
-                        )))
-                        .collect(),
-                )
-            }
             CoreAction::Panic(_ann, _) => Ok(vec![]),
             CoreAction::LetAtomTerm(span, v, at) => {
                 Ok(get_literal_and_global_constraints(&[at.clone()], typeinfo)
