@@ -67,6 +67,8 @@ where
         rule: GenericRule<Head, Leaf>,
     },
     CoreAction(GenericAction<Head, Leaf>),
+    Extract(Span, GenericExpr<Head, Leaf>, GenericExpr<Head, Leaf>),
+    QueryExtract(Span, GenericExpr<Head, Leaf>, GenericExpr<Head, Leaf>),
     RunSchedule(GenericSchedule<Head, Leaf>),
     PrintOverallStatistics,
     Check(Span, Vec<GenericFact<Head, Leaf>>),
@@ -138,6 +140,14 @@ where
             GenericNCommand::RunSchedule(schedule) => GenericCommand::RunSchedule(schedule.clone()),
             GenericNCommand::PrintOverallStatistics => GenericCommand::PrintOverallStatistics,
             GenericNCommand::CoreAction(action) => GenericCommand::Action(action.clone()),
+            GenericNCommand::Extract(span, expr, variants) => {
+                GenericCommand::Extract(span.clone(), expr.clone(), variants.clone())
+            }
+            GenericNCommand::QueryExtract(span, expr, variants) => GenericCommand::QueryExtract {
+                span: span.clone(),
+                expr: expr.clone(),
+                variants: variants.clone(),
+            },
             GenericNCommand::Check(span, facts) => {
                 GenericCommand::Check(span.clone(), facts.clone())
             }
@@ -195,6 +205,12 @@ where
             GenericNCommand::PrintOverallStatistics => GenericNCommand::PrintOverallStatistics,
             GenericNCommand::CoreAction(action) => {
                 GenericNCommand::CoreAction(action.visit_exprs(f))
+            }
+            GenericNCommand::Extract(span, expr, variants) => {
+                GenericNCommand::Extract(span, expr.visit_exprs(f), variants.visit_exprs(f))
+            }
+            GenericNCommand::QueryExtract(span, expr, variants) => {
+                GenericNCommand::QueryExtract(span, expr.visit_exprs(f), variants.visit_exprs(f))
             }
             GenericNCommand::Check(span, facts) => GenericNCommand::Check(
                 span,
@@ -560,6 +576,12 @@ where
     /// (let xplusone (Add (Var "x") (Num 1)))
     /// ```
     Action(GenericAction<Head, Leaf>),
+    /// `extract` a datatype from the egraph, choosing
+    /// the smallest representative.
+    /// By default, each constructor costs 1 to extract
+    /// (common subexpressions are not shared in the cost
+    /// model).
+    Extract(Span, GenericExpr<Head, Leaf>, GenericExpr<Head, Leaf>),
     /// Runs a [`Schedule`], which specifies
     /// rulesets and the number of times to run them.
     ///
@@ -586,7 +608,7 @@ where
     },
     /// The `query-extract` command runs a query,
     /// extracting the result for each match that it finds.
-    /// For a simpler extraction command, use [`Action::Extract`] instead.
+    /// For a simpler extraction command, use [`Command::Extract`] instead.
     ///
     /// Example:
     /// ```text
@@ -611,7 +633,7 @@ where
     /// function.
     QueryExtract {
         span: Span,
-        variants: usize,
+        variants: GenericExpr<Head, Leaf>,
         expr: GenericExpr<Head, Leaf>,
     },
     /// The `check` command checks that the given facts
@@ -689,6 +711,9 @@ where
                 variants,
             } => write!(f, "(datatype {name} {})", ListDisplay(variants, " ")),
             GenericCommand::Action(a) => write!(f, "{a}"),
+            GenericCommand::Extract(_span, expr, variants) => {
+                write!(f, "(extract {expr} {variants})")
+            }
             GenericCommand::Sort(_span, name, None) => write!(f, "(sort {name})"),
             GenericCommand::Sort(_span, name, Some((name2, args))) => {
                 write!(f, "(sort {name} ({name2} {}))", ListDisplay(args, " "))
@@ -1226,15 +1251,6 @@ where
     /// (extract (Num 2)); Extracts Num 1
     /// ```
     Union(Span, GenericExpr<Head, Leaf>, GenericExpr<Head, Leaf>),
-    /// `extract` a datatype from the egraph, choosing
-    /// the smallest representative.
-    /// By default, each constructor costs 1 to extract
-    /// (common subexpressions are not shared in the cost
-    /// model).
-    /// The second argument is the number of variants to
-    /// extract, picking different terms in the
-    /// same equivalence class.
-    Extract(Span, GenericExpr<Head, Leaf>, GenericExpr<Head, Leaf>),
     Panic(Span, String),
     Expr(Span, GenericExpr<Head, Leaf>),
     // If(Expr, Action, Action),
@@ -1299,9 +1315,6 @@ where
                 };
                 write!(f, "({change} ({lhs} {}))", ListDisplay(args, " "))
             }
-            GenericAction::Extract(_ann, expr, variants) => {
-                write!(f, "(extract {expr} {variants})")
-            }
             GenericAction::Panic(_ann, msg) => write!(f, "(panic {msg:?})"),
             GenericAction::Expr(_ann, e) => write!(f, "{e}"),
         }
@@ -1340,9 +1353,6 @@ where
             GenericAction::Union(span, lhs, rhs) => {
                 GenericAction::Union(span.clone(), f(lhs), f(rhs))
             }
-            GenericAction::Extract(span, expr, variants) => {
-                GenericAction::Extract(span.clone(), f(expr), f(variants))
-            }
             GenericAction::Panic(span, msg) => GenericAction::Panic(span.clone(), msg.clone()),
             GenericAction::Expr(span, e) => GenericAction::Expr(span.clone(), f(e)),
         }
@@ -1371,9 +1381,6 @@ where
             }
             GenericAction::Union(span, lhs, rhs) => {
                 GenericAction::Union(span, lhs.visit_exprs(f), rhs.visit_exprs(f))
-            }
-            GenericAction::Extract(span, expr, variants) => {
-                GenericAction::Extract(span, expr.visit_exprs(f), variants.visit_exprs(f))
             }
             GenericAction::Panic(span, msg) => GenericAction::Panic(span, msg.clone()),
             GenericAction::Expr(span, e) => GenericAction::Expr(span, e.visit_exprs(f)),
@@ -1415,11 +1422,6 @@ where
                 let lhs = lhs.subst_leaf(&mut fvar_expr!());
                 let rhs = rhs.subst_leaf(&mut fvar_expr!());
                 GenericAction::Union(span, lhs, rhs)
-            }
-            GenericAction::Extract(span, expr, variants) => {
-                let expr = expr.subst_leaf(&mut fvar_expr!());
-                let variants = variants.subst_leaf(&mut fvar_expr!());
-                GenericAction::Extract(span, expr, variants)
             }
             GenericAction::Panic(span, msg) => GenericAction::Panic(span, msg.clone()),
             GenericAction::Expr(span, e) => {
