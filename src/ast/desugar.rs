@@ -151,59 +151,13 @@ pub(crate) fn desugar_command(
         Command::PrintOverallStatistics => {
             vec![NCommand::PrintOverallStatistics]
         }
+        Command::Extract(span, expr, variants) => vec![NCommand::Extract(span, expr, variants)],
         Command::QueryExtract {
             span,
             variants,
             expr,
         } => {
-            let variants = Expr::Lit(span.clone(), Literal::Int(variants.try_into().unwrap()));
-            if let Expr::Var(..) = expr {
-                // (extract {v} {variants})
-                vec![NCommand::CoreAction(Action::Extract(
-                    span.clone(),
-                    expr,
-                    variants,
-                ))]
-            } else {
-                // (check {expr})
-                // (ruleset {fresh_ruleset})
-                // (rule ((= {fresh} {expr}))
-                //       ((extract {fresh} {variants}))
-                //       :ruleset {fresh_ruleset})
-                // (run {fresh_ruleset} 1)
-                let fresh = parser.symbol_gen.fresh(&"desugar_qextract_var".into());
-                let fresh_ruleset = parser.symbol_gen.fresh(&"desugar_qextract_ruleset".into());
-                let fresh_rulename = parser.symbol_gen.fresh(&"desugar_qextract_rulename".into());
-                let rule = Rule {
-                    span: span.clone(),
-                    body: vec![Fact::Eq(
-                        span.clone(),
-                        Expr::Var(span.clone(), fresh),
-                        expr.clone(),
-                    )],
-                    head: Actions::singleton(Action::Extract(
-                        span.clone(),
-                        Expr::Var(span.clone(), fresh),
-                        variants,
-                    )),
-                };
-                vec![
-                    NCommand::Check(span.clone(), vec![Fact::Fact(expr.clone())]),
-                    NCommand::AddRuleset(span.clone(), fresh_ruleset),
-                    NCommand::NormRule {
-                        name: fresh_rulename,
-                        ruleset: fresh_ruleset,
-                        rule,
-                    },
-                    NCommand::RunSchedule(Schedule::Run(
-                        span.clone(),
-                        RunConfig {
-                            ruleset: fresh_ruleset,
-                            until: None,
-                        },
-                    )),
-                ]
-            }
+            vec![NCommand::QueryExtract(span, expr, variants)]
         }
         Command::Check(span, facts) => vec![NCommand::Check(span, facts)],
         Command::PrintFunction(span, symbol, size) => {
@@ -339,29 +293,18 @@ fn desugar_simplify(
     span: Span,
     parser: &mut Parser,
 ) -> Vec<NCommand> {
-    let mut res = vec![NCommand::Push(1)];
     let lhs = parser.symbol_gen.fresh(&"desugar_simplify".into());
-    res.push(NCommand::CoreAction(Action::Let(
-        span.clone(),
-        lhs,
-        expr.clone(),
-    )));
-    res.push(NCommand::RunSchedule(schedule.clone()));
-    res.extend(
-        desugar_command(
-            Command::QueryExtract {
-                span: span.clone(),
-                variants: 0,
-                expr: Expr::Var(span.clone(), lhs),
-            },
-            parser,
-            false,
-        )
-        .unwrap(),
-    );
-
-    res.push(NCommand::Pop(span, 1));
-    res
+    vec![
+        NCommand::Push(1),
+        NCommand::CoreAction(Action::Let(span.clone(), lhs, expr.clone())),
+        NCommand::RunSchedule(schedule.clone()),
+        NCommand::QueryExtract(
+            span.clone(),
+            Expr::Var(span.clone(), lhs),
+            Expr::Lit(span.clone(), Literal::Int(0)),
+        ),
+        NCommand::Pop(span, 1),
+    ]
 }
 
 pub fn rule_name<Head, Leaf>(command: &GenericCommand<Head, Leaf>) -> Symbol
