@@ -5,7 +5,7 @@ use crate::core::{
 use crate::{typechecking::FuncType, *};
 use typechecking::TypeError;
 
-use crate::{ast::Literal, core::ResolvedCall, ExtractReport, Value};
+use crate::{ast::Literal, core::ResolvedCall, Value};
 
 struct ActionCompiler<'a> {
     types: &'a IndexMap<Symbol, ArcSort>,
@@ -23,11 +23,6 @@ impl ActionCompiler<'_> {
             GenericCoreAction::LetAtomTerm(_ann, v, at) => {
                 self.do_atom_term(at);
                 self.locals.insert(v.clone());
-            }
-            GenericCoreAction::Extract(_ann, e, b) => {
-                let sort = self.do_atom_term(e);
-                self.do_atom_term(b);
-                self.instructions.push(Instruction::Extract(2, sort));
             }
             GenericCoreAction::Set(_ann, f, args, e) => {
                 let ResolvedCall::Func(func) = f else {
@@ -130,10 +125,6 @@ enum Instruction {
     Set(Symbol),
     /// Union the last `n` values on the stack.
     Union(usize, ArcSort),
-    /// Extract the best expression. `n` is always 2.
-    /// The first value on the stack is the expression to extract,
-    /// and the second value is the number of variants to extract.
-    Extract(usize, ArcSort),
     /// Panic with the given message.
     Panic(String),
 }
@@ -328,51 +319,6 @@ impl EGraph {
                         let b = self.unionfind.find(b.bits);
                         self.unionfind.union(a, b, sort.name())
                     });
-                    stack.truncate(new_len);
-                }
-                Instruction::Extract(arity, sort) => {
-                    let new_len = stack.len() - arity;
-                    let values = &stack[new_len..];
-                    let new_len = stack.len() - arity;
-                    let mut termdag = TermDag::default();
-
-                    let variants = values[1].bits as i64;
-                    if variants == 0 {
-                        let (cost, term) = self.extract(values[0], &mut termdag, sort)?;
-                        // dont turn termdag into a string if we have messages disabled for performance reasons
-                        if self.messages_enabled() {
-                            let extracted = termdag.to_string(&term);
-                            log::info!("extracted with cost {cost}: {extracted}");
-                            self.print_msg(extracted);
-                        }
-                        self.extract_report = Some(ExtractReport::Best {
-                            termdag,
-                            cost,
-                            term,
-                        });
-                    } else {
-                        if variants < 0 {
-                            panic!("Cannot extract negative number of variants");
-                        }
-                        let terms =
-                            self.extract_variants(sort, values[0], variants as usize, &mut termdag);
-                        // Same as above, avoid turning termdag into a string if we have messages disabled for performance
-                        if self.messages_enabled() {
-                            log::info!("extracted variants:");
-                            let mut msg = String::default();
-                            msg += "(\n";
-                            assert!(!terms.is_empty());
-                            for expr in &terms {
-                                let str = termdag.to_string(expr);
-                                log::info!("   {str}");
-                                msg += &format!("   {str}\n");
-                            }
-                            msg += ")";
-                            self.print_msg(msg);
-                        }
-                        self.extract_report = Some(ExtractReport::Variants { termdag, terms });
-                    }
-
                     stack.truncate(new_len);
                 }
                 Instruction::Panic(msg) => panic!("Panic: {msg}"),
