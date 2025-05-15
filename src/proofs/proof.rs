@@ -1,5 +1,3 @@
-use std::rc::Rc;
-
 use symbol_table::GlobalSymbol as Symbol;
 
 use crate::{
@@ -14,20 +12,6 @@ pub struct ProofStore {
     store: Vec<ProofTerm>,
     memo: HashMap<ProofTerm, ProofId>,
     termdag: TermDag,
-}
-
-/// Projects the appropriate expression of an action
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
-enum ActionProof {
-    APExprOK,
-    APExprEq,
-    APLetOK,
-    APLetAct(Rc<ActionProof>),
-    APUnionOk1,
-    APUnionOk2,
-    APUnion,
-    APSeq1(Rc<ActionProof>),
-    APSeq2(Rc<ActionProof>),
 }
 
 // use a Vec so that we can hash it, sharing sub-proofs
@@ -60,7 +44,6 @@ pub enum ProofTerm {
         rule_name: Symbol,
         subst: Substitution,
         body_pfs: Vec<ProofId>,
-        act_pf: ActionProof,
         result: Proposition,
     },
     /// A term is equal to itself- proves the proposition t = t
@@ -266,20 +249,19 @@ impl ProofStore {
                         children.push(term);
                     }
 
-                    let final_term =
-                        self.substitute(generic_expr, &current_subst, &mut HashSet::default())?;
+                    let final_term = self.substitute(generic_expr, &current_subst, &mut HashSet::default())?;
                     children.push(final_term.clone());
                     let mut res = self.termdag.app(*func, children);
                     propositions.insert(Proposition::TOk(res.clone()));
-                }
+                },
                 GenericAction::Change(_span, change, _, _generic_exprs) => {
                     match change {
                         crate::ast::Change::Delete => {
                             // delete adds an expression to the database,
-                        }
+                        },
                         crate::ast::Change::Subsume => todo!(),
                     }
-                }
+                },
                 GenericAction::Union(_span, _generic_expr, _generic_expr1) => todo!(),
                 GenericAction::Extract(_span, _generic_expr, _generic_expr1) => todo!(),
                 GenericAction::Panic(_span, _) => todo!(),
@@ -308,11 +290,9 @@ impl ProofStore {
         prog: &Vec<Command>,
     ) -> Result<Proposition, ProofCheckError> {
         match self.store[proof_id].clone() {
-            // TODO actually check action proof
             ProofTerm::PRule {
                 rule_name,
                 subst,
-                act_pf: _,
                 body_pfs,
                 result,
             } => {
@@ -405,7 +385,6 @@ impl ProofStore {
 
 mod tests {
 
-    use crate::proofs::proof::ActionProof;
     #[cfg(test)]
     use crate::proofs::proof::{ProofCheckError, ProofStore, ProofTerm, Proposition};
     #[cfg(test)]
@@ -433,7 +412,6 @@ mod tests {
             rule_name: "sso".into(),
             subst: vec![],
             body_pfs: vec![],
-            act_pf: ActionProof::APExprOK,
             result: Proposition::TOk(ss0.clone()),
         };
         let res = proof_store.check(&pt, &parsed);
@@ -464,7 +442,6 @@ mod tests {
             rule_name: "sso".into(),
             subst: vec![],
             body_pfs: vec![],
-            act_pf: ActionProof::APExprOK,
             result: Proposition::TOk(ss0.clone()),
         };
         let res = proof_store.check(&pt, &parsed);
@@ -500,7 +477,6 @@ mod tests {
             rule_name: "succ".into(),
             subst: vec![("a".into(), zero.clone())],
             body_pfs: vec![],
-            act_pf: ActionProof::APExprOK,
             result: Proposition::TOk(ss0.clone()),
         };
 
@@ -508,14 +484,12 @@ mod tests {
             rule_name: "one".into(),
             subst: vec![],
             body_pfs: vec![],
-            act_pf: ActionProof::APExprOK,
             result: Proposition::TOk(s0.clone()),
         };
         let proof_of_0 = ProofTerm::PRule {
             rule_name: "one".into(),
             subst: vec![],
             body_pfs: vec![],
-            act_pf: ActionProof::APExprOK,
             result: Proposition::TOk(zero.clone()),
         };
 
@@ -523,7 +497,6 @@ mod tests {
             rule_name: "succ".into(),
             subst: vec![("a".into(), zero.clone())],
             body_pfs: vec![proof_store.id_of(&proof_of_0)],
-            act_pf: ActionProof::APExprOK,
             result: Proposition::TEq(zero.clone(), zero.clone()),
         };
 
@@ -531,7 +504,6 @@ mod tests {
             rule_name: "succ".into(),
             subst: vec![("a".into(), s0.clone())],
             body_pfs: vec![proof_store.id_of(&body_proof)],
-            act_pf: ActionProof::APExprOK,
             result: Proposition::TEq(zero.clone(), zero.clone()),
         };
 
@@ -543,7 +515,6 @@ mod tests {
             rule_name: "succ".into(),
             subst: vec![("a".into(), zero)],
             body_pfs: vec![proof_store.id_of(&body_proof)],
-            act_pf: ActionProof::APExprOK,
             result: Proposition::TOk(ss0.clone()),
         };
         assert_eq!(
