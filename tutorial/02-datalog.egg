@@ -1,0 +1,81 @@
+;; Datalog is a relational language for deductive reasoning. In the last lesson, we write our first 
+;; equality saturation program in egglog, but you can also write Datalog rules in egglog.
+;; In this lesson, we will write several classic Datalog programs in egglog. One of the benifits
+;; of egglog being a language for program optimization is that it can talk about terms natively,
+;; so in egglog we get Datalog with terms for free.
+
+;; In this lesson, we will define multiple relations with the same name,
+;; so we use the `(push)/(pop)` commands to clone and reset the database.
+;; Under the hood, `(push)` clones the current database and pushes it onto a stack,
+;; and `(pop)` resets the database to the top of the stack.
+(push)
+
+;; Let's first define relations edge and path.
+;; (edge a b) edges are directed edges from a to b,
+;; and we will use it to compute the `path` relation,
+;; where `path a b` means there is a path from a to b.
+(relation edge (i64 i64))
+(relation path (i64 i64))
+
+;; We can insert edges into our relation
+;; by asserting facts:
+(edge 1 2)
+(edge 2 3)
+(edge 3 4)
+;; This is similar to definitions using `(let ..)`,
+;; where the fact is immediately added to the database.
+
+;; Now let's tell egglog how to derive the `path` relation.
+;;
+;; First, if an edge from a to b exists, then it is already a proof
+;; that there exists a path from a to b.
+(rule ((path a b))
+      ((edge a b)))
+
+;; A rule has the form `(rule (atom1 atom2 ..) (action1 action2 ..))`.
+;;
+;; For the rule we have just defined, the only atom is `(path a b)`, which asks egglog to search
+;; for possible `a` and `b`s such that `(path a b)` is a fact in the databaes.
+;;
+;; We call the first part the "query" of a rule, and the second part the "body" of a rule.
+;; In Datalog terminology, confusingly, the first part is called the "body" of the rule
+;; while the second part is called the "head" of the rule. This is because Datalog rules
+;; are usually written as `head :- body`. To avoid confusion, we will refrain from using
+;; Datalog terminology.
+
+;; The rule above defines the base case of the path relation. The inductive case reads as follows:
+;; if we know there is a path from `a` to `b`, and there is an edge from `b` to `c`, then
+;; there is also a path from `a` to `c`.
+;; This can be expressed as egglog rule below:
+(rule ((path a b) (edge b c))
+      ((path a c)))
+
+;; One thing that may be confusing to people who is familiar with Datalog is that
+;; defining a rule does not mean running a rule. In Datalog, a rule is run to a fixpoint,
+;; but in egglog, the user still needs to run the program.
+;; For instance, the following check would fail at this point.
+(fail (check (path 1 4)))
+
+;; Let's run our rules for 10 iterations.
+(run 10)
+(check (path 1 4)) ; the check passes
+
+;; In many cases, especially for Datalog programs, we do not know the number of iterations
+;; needed to reach a fixpoint. You can use the following command to run the rules until fixpoint.
+(run-schedule (saturate (run)))
+;; We will cover more details about schedules in TODO.
+
+
+;; Exercises:
+;; 
+;; Consider the variant of our last rule:
+;; ```
+;; (rule ((path a b) (path b c))
+;;       ((path a c)))
+;; ```
+;; Does this rule compute the same relation as the original rule? How does this rule 
+;; compare to the original rule? Hint: it's slow, why?
+
+(pop)
+
+
