@@ -26,7 +26,7 @@ pub fn run_program(input: &str) -> Result {
             });
             let json = serde_json::to_string(&serialized).unwrap();
             Result {
-                text: outputs.join("<br>"),
+                text: outputs.join("\n"),
                 dot: serialized.to_dot(),
                 json,
             }
