@@ -429,7 +429,7 @@ impl FromStr for RunMode {
 pub struct EGraph {
     pub parser: Parser,
     names: check_shadowing::Names,
-    egraphs: Vec<Self>,
+    prev_egraph: Box<Option<Self>>,
     unionfind: UnionFind,
     pub functions: IndexMap<Symbol, Function>,
     rulesets: IndexMap<Symbol, Ruleset>,
@@ -454,7 +454,7 @@ impl Default for EGraph {
         let mut egraph = Self {
             parser: Default::default(),
             names: Default::default(),
-            egraphs: vec![],
+            prev_egraph: Default::default(),
             unionfind: Default::default(),
             functions: Default::default(),
             rulesets: Default::default(),
@@ -496,7 +496,11 @@ impl EGraph {
     }
 
     pub fn push(&mut self) {
-        self.egraphs.push(self.clone());
+        let mut prev_prev: Box<Option<Self>> = Default::default();
+        std::mem::swap(&mut self.prev_egraph, &mut prev_prev);
+        let mut prev = self.clone();
+        prev.prev_egraph = prev_prev;
+        self.prev_egraph = Box::new(Some(prev));
     }
 
     /// Disable saving messages to be printed to the user and remove any saved messages.
@@ -521,7 +525,7 @@ impl EGraph {
     /// It preserves the run report and messages from the popped
     /// egraph.
     pub fn pop(&mut self) -> Result<(), Error> {
-        match self.egraphs.pop() {
+        match self.prev_egraph.take() {
             Some(e) => {
                 // Copy the reports and messages from the popped egraph
                 let extract_report = self.extract_report.clone();
