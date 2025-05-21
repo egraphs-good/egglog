@@ -150,7 +150,7 @@ pub trait Sort: Any + Send + Sync + Debug {
     /// Default cost for containers when the cost model does not specify the cost
     fn default_container_cost(
         &self,
-        _exec_state: &core_relations::ExecutionState,
+        _containers: &core_relations::Containers,
         _value: core_relations::Value,
         element_costs: &[Cost],
     ) -> Cost {
@@ -160,7 +160,7 @@ pub trait Sort: Any + Send + Sync + Debug {
     /// Default cost for leaf primitives when the cost model does not specify the cost
     fn default_leaf_cost(
         &self,
-        _exec_state: &core_relations::ExecutionState,
+        _primitives: &core_relations::Primitives,
         _value: core_relations::Value,
     ) -> Cost {
         1
@@ -169,12 +169,12 @@ pub trait Sort: Any + Send + Sync + Debug {
     /// Reconstruct a container value in a TermDag
     fn reconstruct_termdag_container(
         &self,
-        exec_state: &core_relations::ExecutionState,
+        containers: &core_relations::Containers,
         value: &core_relations::Value,
         termdag: &mut TermDag,
         element_terms: Vec<Term>,
     ) -> Term {
-        let _exec_state = exec_state;
+        let _containers = containers;
         let _value = value;
         let _termdag = termdag;
         let _element_terms = element_terms;
@@ -184,11 +184,11 @@ pub trait Sort: Any + Send + Sync + Debug {
     /// Reconstruct a leaf primitive value in a TermDag
     fn reconstruct_termdag_leaf(
         &self,
-        exec_state: &core_relations::ExecutionState,
+        primitives: &core_relations::Primitives,
         value: &core_relations::Value,
         termdag: &mut TermDag,
     ) -> Term {
-        let _exec_state = exec_state;
+        let _primitives = primitives;
         let _value = value;
         let _termdag = termdag;
         todo!("reconstruct_termdag_leaf : {}", self.name());

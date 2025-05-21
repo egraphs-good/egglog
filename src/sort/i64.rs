@@ -94,11 +94,11 @@ impl Sort for I64Sort {
 
     fn reconstruct_termdag_leaf(
         &self,
-        exec_state: &core_relations::ExecutionState,
+        primitives: &core_relations::Primitives,
         value: &core_relations::Value,
         termdag: &mut TermDag,
     ) -> Term {
-        let i = exec_state.prims().unwrap_ref::<i64>(*value);
+        let i = primitives.unwrap_ref::<i64>(*value);
 
         termdag.lit(Literal::Int(*i))
     }
