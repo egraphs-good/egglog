@@ -199,7 +199,7 @@ impl Sort for SetSort {
 
     fn reconstruct_termdag_container(
         &self,
-        _exec_state: &core_relations::ExecutionState,
+        _containers: &core_relations::Containers,
         _value: &core_relations::Value,
         termdag: &mut TermDag,
         element_terms: Vec<Term>,

@@ -52,11 +52,11 @@ impl Sort for BoolSort {
 
     fn reconstruct_termdag_leaf(
         &self,
-        exec_state: &core_relations::ExecutionState,
+        primitives: &core_relations::Primitives,
         value: &core_relations::Value,
         termdag: &mut TermDag,
     ) -> Term {
-        let b = exec_state.prims().unwrap_ref::<bool>(*value);
+        let b = primitives.unwrap_ref::<bool>(*value);
 
         termdag.lit(Literal::Bool(*b))
     }

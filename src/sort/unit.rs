@@ -40,7 +40,7 @@ impl Sort for UnitSort {
 
     fn reconstruct_termdag_leaf(
         &self,
-        _exec_state: &core_relations::ExecutionState,
+        _primitives: &core_relations::Primitives,
         _value: &core_relations::Value,
         termdag: &mut TermDag,
     ) -> Term {
