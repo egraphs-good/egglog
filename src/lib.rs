@@ -429,7 +429,7 @@ impl FromStr for RunMode {
 pub struct EGraph {
     pub parser: Parser,
     names: check_shadowing::Names,
-    prev_egraph: Box<Option<Self>>,
+    prev_egraph: Option<Box<Self>>,
     unionfind: UnionFind,
     pub functions: IndexMap<Symbol, Function>,
     rulesets: IndexMap<Symbol, Ruleset>,
@@ -496,11 +496,10 @@ impl EGraph {
     }
 
     pub fn push(&mut self) {
-        let mut prev_prev: Box<Option<Self>> = Default::default();
-        std::mem::swap(&mut self.prev_egraph, &mut prev_prev);
+        let prev_prev: Option<Box<Self>> = self.prev_egraph.take();
         let mut prev = self.clone();
         prev.prev_egraph = prev_prev;
-        self.prev_egraph = Box::new(Some(prev));
+        self.prev_egraph = Some(Box::new(prev));
     }
 
     /// Disable saving messages to be printed to the user and remove any saved messages.
@@ -533,7 +532,7 @@ impl EGraph {
                 let overall_run_report = self.overall_run_report.clone();
                 let messages = self.msgs.clone();
 
-                *self = e;
+                *self = *e;
                 self.extract_report = extract_report.or(self.extract_report.clone());
                 // We union the run reports, meaning
                 // that statistics are shared across
