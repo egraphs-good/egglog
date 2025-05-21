@@ -236,7 +236,7 @@ fn test_subsumed_unextractable_action_extract() {
             (constructor exp () Math :cost 100)
             (constructor cheap () Math :cost 1)
             (union (exp) (cheap))
-            (query-extract (exp))
+            (extract (exp))
             "#,
         )
         .unwrap();
@@ -254,7 +254,7 @@ fn test_subsumed_unextractable_action_extract() {
             None,
             r#"
             (subsume (cheap))
-            (query-extract (exp))
+            (extract (exp))
             "#,
         )
         .unwrap();
@@ -325,7 +325,7 @@ fn test_subsumed_unextractable_rebuild_arg() {
         .parse_and_run_program(
             None,
             r#"
-            (query-extract res)
+            (extract res)
             "#,
         )
         .unwrap();
@@ -377,7 +377,7 @@ fn test_subsumed_unextractable_rebuild_self() {
         .parse_and_run_program(
             None,
             r#"
-            (query-extract x)
+            (extract x)
             "#,
         )
         .unwrap();
@@ -436,7 +436,7 @@ fn test_subsume_unextractable_action_extract_multiple() {
             (datatype Math (Num i64))
             (Num 1)
             (union (Num 1) (Num 2))
-            (query-extract :variants 2 (Num 1))
+            (extract :variants 2 (Num 1))
             ",
         )
         .unwrap();
@@ -452,7 +452,7 @@ fn test_subsume_unextractable_action_extract_multiple() {
             None,
             "
             (subsume (Num 2))
-            (query-extract :variants 2 (Num 1))
+            (extract :variants 2 (Num 1))
             ",
         )
         .unwrap();
@@ -638,7 +638,7 @@ fn test_value_to_classid() {
             (datatype Math)
             (constructor exp () Math )
             (exp)
-            (query-extract (exp))
+            (extract (exp))
             "#,
         )
         .unwrap();
