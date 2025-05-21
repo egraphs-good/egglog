@@ -436,7 +436,7 @@ fn test_subsume_unextractable_action_extract_multiple() {
             (datatype Math (Num i64))
             (Num 1)
             (union (Num 1) (Num 2))
-            (extract :variants 2 (Num 1))
+            (extract (Num 1) 2)
             ",
         )
         .unwrap();
@@ -452,7 +452,7 @@ fn test_subsume_unextractable_action_extract_multiple() {
             None,
             "
             (subsume (Num 2))
-            (extract :variants 2 (Num 1))
+            (extract (Num 1) 2)
             ",
         )
         .unwrap();
