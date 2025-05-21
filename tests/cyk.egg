@@ -91,7 +91,7 @@
 (check (P 5 1 (NonTerm "S")))
 (fail (check (P 5 1 (NonTerm "B"))))
 (let test2 (B 5 1 (NonTerm "S")))
-(extract :variants 10 test2)
+(extract test2 10)
 
 (pop)
 
@@ -110,6 +110,6 @@
 (fail (check (P 5 1 (NonTerm ""))))
 (fail (check (P 5 1 (NonTerm "unrelated"))))
 (let test3 (B 5 1 (NonTerm "S")))
-(extract :variants 10 test3)
+(extract test3 10)
 
 (pop)

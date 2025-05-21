@@ -239,5 +239,5 @@
 (check (= (AllocVar (Expr "v")) (AllocVar (Expr "u"))))
 (check (!= (AllocVar (Expr "v")) (AllocVar (Expr "sp"))))
 
-(extract :variants 100 (AllocVar (Expr "u")))
-(extract :variants 100 (AllocVar (Expr "sp")))
+(extract (AllocVar (Expr "u")) 100)
+(extract (AllocVar (Expr "sp")) 100)

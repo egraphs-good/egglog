@@ -33,7 +33,7 @@
 (run 100)
 
 (let t3 (f (f a3)))
-(extract :variants 5 t3)
+(extract t3 5)
 
 ;; f(f(a)) = f(f(b)) is preserved
 (check (= (f (f a3)) (f (f b3))))
