@@ -33,7 +33,7 @@
 (print-size Config)
 
 ;; how to long to move to state [_ _ 123]
-(query-extract (Config e e (Cons 1 (Cons 2 (Cons 3 e)))))
+(extract (Config e e (Cons 1 (Cons 2 (Cons 3 e)))))
 
 ;; actually do the assertion
 (check (= 5 (Config e e (Cons 1 (Cons 2 (Cons 3 e))))))
