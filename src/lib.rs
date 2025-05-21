@@ -414,8 +414,6 @@ pub struct EGraph {
     pub seminaive: bool,
     type_info: TypeInfo,
     extract_report: Option<ExtractReport>,
-    /// For testing the extractor
-    new_extract_report: Option<ExtractReport>,
     /// The run report for the most recent run of a schedule.
     recent_run_report: Option<RunReport>,
     /// The run report unioned over all runs so far.
@@ -441,7 +439,6 @@ impl Default for EGraph {
             fact_directory: None,
             seminaive: true,
             extract_report: None,
-            new_extract_report: None,
             recent_run_report: None,
             overall_run_report: Default::default(),
             msgs: Some(vec![]),
@@ -1212,14 +1209,6 @@ impl EGraph {
         Ok((sort, value_new_backend))
     }
 
-    fn eval_resolved_expr_old(
-        &mut self,
-        _span: Span,
-        _expr: &ResolvedExpr,
-    ) -> Result<Value, Error> {
-        todo!("need for the old extraction to work")
-    }
-
     fn eval_resolved_expr_new(
         &mut self,
         span: Span,
@@ -1431,109 +1420,57 @@ impl EGraph {
             ResolvedNCommand::Extract(span, expr, variants) => {
                 let sort = expr.output_type();
 
-                /*
-                // old backend
-                {
-                    let mut termdag = TermDag::default();
+                let x = self.eval_resolved_expr_new(span.clone(), &expr)?;
+                let n = self.eval_resolved_expr_new(span, &variants)?;
+                let n: i64 = self.backend.primitives().unwrap(n);
 
-                    let value = self.eval_resolved_expr_old(span.clone(), &expr)?;
-                    let variants = self.eval_resolved_expr_old(span.clone(), &variants)?;
+                log::debug!("x = {:?} n = {:?}", x, n);
 
-                    let variants = variants.bits as i64;
-                    if variants == 0 {
-                        let (cost, term) = self.extract(value, &mut termdag, &sort)?;
-                        // dont turn termdag into a string if we have messages disabled for performance reasons
-                        if self.messages_enabled() {
-                            let extracted = termdag.to_string(&term);
-                            log::info!("extracted with cost {cost}: {extracted}");
-                            self.print_msg(extracted);
-                        }
-                        self.extract_report = Some(ExtractReport::Best {
-                            termdag,
-                            cost,
-                            term,
-                        });
-                    } else {
-                        if variants < 0 {
-                            panic!("Cannot extract negative number of variants");
-                        }
-                        let terms =
-                            self.extract_variants(&sort, value, variants as usize, &mut termdag);
-                        // Same as above, avoid turning termdag into a string if we have messages disabled for performance
-                        if self.messages_enabled() {
-                            log::info!("extracted variants:");
-                            let mut msg = String::default();
-                            msg += "(\n";
-                            assert!(!terms.is_empty());
-                            for expr in &terms {
-                                let str = termdag.to_string(expr);
-                                log::info!("   {str}");
-                                msg += &format!("   {str}\n");
-                            }
-                            msg += ")";
-                            self.print_msg(msg);
-                        }
-                        self.extract_report = Some(ExtractReport::Variants { termdag, terms });
+                let mut termdag = TermDag::default();
+
+                let extractor = ExtractorAlter::compute_costs_from_rootsorts(
+                    Some(vec![sort]),
+                    self,
+                    TreeAdditiveCostModel::default(),
+                );
+                if n == 0 {
+                    let (cost, term) = extractor.extract_best(self, &mut termdag, x).unwrap();
+                    // dont turn termdag into a string if we have messages disabled for performance reasons
+                    if self.messages_enabled() {
+                        let extracted = termdag.to_string(&term);
+                        log::info!("extracted with cost {cost}: {extracted}");
+                        self.print_msg(extracted);
                     }
-                }
-                */
-
-                // new backend
-                {
-                    let x = self.eval_resolved_expr_new(span.clone(), &expr)?;
-                    let n = self.eval_resolved_expr_new(span, &variants)?;
-                    let n: i64 = self.backend.primitives().unwrap(n);
-
-                    log::debug!("x = {:?} n = {:?}", x, n);
-
-                    let mut termdag = TermDag::default();
-
-                    let extractor = ExtractorAlter::compute_costs_from_rootsorts(
-                        Some(vec![sort]),
-                        self,
-                        TreeAdditiveCostModel::default(),
-                    );
-                    if n == 0 {
-                        let (cost, term) = extractor.extract_best(self, &mut termdag, x).unwrap();
-                        // dont turn termdag into a string if we have messages disabled for performance reasons
-                        if self.messages_enabled() {
-                            let extracted = termdag.to_string(&term);
-                            log::info!("extracted with cost {cost}: {extracted}");
-                            self.print_msg(extracted);
-                        }
-                        self.new_extract_report = Some(ExtractReport::Best {
-                            termdag,
-                            cost,
-                            term,
-                        });
-                    } else {
-                        if n < 0 {
-                            panic!("Cannot extract negative number of variants");
-                        }
-                        let terms: Vec<Term> = extractor
-                            .extract_variants(self, &mut termdag, x, n as usize)
-                            .iter()
-                            .map(|e| e.1.clone())
-                            .collect();
-                        // Same as above, avoid turning termdag into a string if we have messages disabled for performance
-                        if self.messages_enabled() {
-                            log::info!("extracted variants:");
-                            let mut msg = String::default();
-                            msg += "(\n";
-                            assert!(!terms.is_empty());
-                            for expr in &terms {
-                                let str = termdag.to_string(expr);
-                                log::info!("   {str}");
-                                msg += &format!("   {str}\n");
-                            }
-                            msg += ")";
-                            self.print_msg(msg);
-                        }
-                        self.new_extract_report = Some(ExtractReport::Variants { termdag, terms });
+                    self.extract_report = Some(ExtractReport::Best {
+                        termdag,
+                        cost,
+                        term,
+                    });
+                } else {
+                    if n < 0 {
+                        panic!("Cannot extract negative number of variants");
                     }
+                    let terms: Vec<Term> = extractor
+                        .extract_variants(self, &mut termdag, x, n as usize)
+                        .iter()
+                        .map(|e| e.1.clone())
+                        .collect();
+                    // Same as above, avoid turning termdag into a string if we have messages disabled for performance
+                    if self.messages_enabled() {
+                        log::info!("extracted variants:");
+                        let mut msg = String::default();
+                        msg += "(\n";
+                        assert!(!terms.is_empty());
+                        for expr in &terms {
+                            let str = termdag.to_string(expr);
+                            log::info!("   {str}");
+                            msg += &format!("   {str}\n");
+                        }
+                        msg += ")";
+                        self.print_msg(msg);
+                    }
+                    self.extract_report = Some(ExtractReport::Variants { termdag, terms });
                 }
-
-                self.check_extract_report_consistency();
             }
             ResolvedNCommand::QueryExtract(_span, _expr, _variants) => {
                 todo!("query extraction - might remove/replace this feature")
@@ -1813,48 +1750,8 @@ impl EGraph {
         self.type_info.get_sorts_by(f)
     }
 
-    pub fn check_extract_report_consistency(&self) {
-        /*
-        let old_report = self.extract_report.clone();
-        let new_report = self.new_extract_report.clone();
-        if old_report.is_none() && new_report.is_none() {
-        } else if old_report.is_none() && new_report.is_some() {
-            panic!("No old report found but found new report");
-        } else if old_report.is_some() && new_report.is_none() {
-            panic!("No new report found but found old report");
-        } else {
-            let old_report = old_report.unwrap();
-            let new_report = new_report.unwrap();
-            match (old_report, new_report) {
-                (ExtractReport::Best { cost: old_cost, .. },
-                ExtractReport::Best { cost: new_cost, .. }) => {
-                    if old_cost != new_cost {
-                        panic!(
-                            "Derived different extraction costs: {:?}, {:?}",
-                            old_cost, new_cost
-                        );
-                    }
-                }
-                (ExtractReport::Variants { terms: old_terms, .. },
-                ExtractReport::Variants { terms: new_terms, .. }) => {
-                    if old_terms.len() != new_terms.len() {
-                        panic!(
-                            "Extracted different number of variants: {:?}, {:?}",
-                            old_terms.len(), new_terms.len()
-                        );
-                    }
-                }
-                _ => {
-                    panic!("Mismatched extraction query type!");
-                }
-            }
-        }
-        */
-    }
-
     /// Gets the last extract report and returns it, if the last command saved it.
     pub fn get_extract_report(&self) -> &Option<ExtractReport> {
-        self.check_extract_report_consistency();
         &self.extract_report
     }
 
