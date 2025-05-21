@@ -237,7 +237,7 @@ impl Sort for FunctionSort {
 
     fn default_container_cost(
         &self,
-        _exec_state: &core_relations::ExecutionState,
+        _containers: &core_relations::Containers,
         _value: core_relations::Value,
         element_costs: &[Cost],
     ) -> Cost {
@@ -246,13 +246,12 @@ impl Sort for FunctionSort {
 
     fn reconstruct_termdag_container(
         &self,
-        exec_state: &core_relations::ExecutionState,
+        containers: &core_relations::Containers,
         value: &core_relations::Value,
         termdag: &mut TermDag,
         mut element_terms: Vec<Term>,
     ) -> Term {
-        let name = exec_state
-            .containers()
+        let name = containers
             .get_val::<NewFunctionContainer>(*value)
             .unwrap()
             .2;

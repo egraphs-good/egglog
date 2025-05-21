@@ -152,11 +152,11 @@ impl Sort for BigRatSort {
 
     fn reconstruct_termdag_leaf(
         &self,
-        exec_state: &core_relations::ExecutionState,
+        primitives: &core_relations::Primitives,
         value: &core_relations::Value,
         termdag: &mut TermDag,
     ) -> Term {
-        let rat = exec_state.prims().unwrap_ref::<BigRational>(*value);
+        let rat = primitives.unwrap_ref::<BigRational>(*value);
         let numer = rat.numer();
         let denom = rat.denom();
 

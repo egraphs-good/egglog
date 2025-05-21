@@ -79,11 +79,11 @@ impl Sort for F64Sort {
 
     fn reconstruct_termdag_leaf(
         &self,
-        exec_state: &core_relations::ExecutionState,
+        primitives: &core_relations::Primitives,
         value: &core_relations::Value,
         termdag: &mut TermDag,
     ) -> Term {
-        let f = exec_state.prims().unwrap_ref::<F>(*value);
+        let f = primitives.unwrap_ref::<F>(*value);
 
         termdag.lit(Literal::Float(*f))
     }

@@ -36,14 +36,13 @@ use crate::constraint::Problem;
 use crate::core::{AtomTerm, ResolvedAtomTerm, ResolvedCall};
 use crate::typechecking::TypeError;
 use actions::Program;
-use arc_swap::ArcSwap;
 use ast::*;
 #[cfg(feature = "bin")]
 pub use cli::bin::*;
 use constraint::{Constraint, SimpleTypeConstraint, TypeConstraint};
 use core_relations::{ExternalFunctionId, PrimitivePrinter};
 use egglog_bridge::{ColumnTy, QueryEntry};
-use extract::{Extractor, ExtractorView};
+use extract::{Extractor, ExtractorAlter, TreeAdditiveCostModel};
 pub use function::Function;
 use function::*;
 use gj::*;
@@ -61,7 +60,7 @@ use std::iter::once;
 use std::ops::{Deref, Range};
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 pub use termdag::{Term, TermDag, TermId};
 use thiserror::Error;
 pub use typechecking::TypeInfo;
@@ -414,17 +413,15 @@ pub struct EGraph {
     pub fact_directory: Option<PathBuf>,
     pub seminaive: bool,
     type_info: TypeInfo,
-    /// Used for building the extract action
-    extractor_view: Arc<ArcSwap<ExtractorView>>,
     extract_report: Option<ExtractReport>,
     /// For testing the extractor
-    new_extract_report: Arc<Mutex<Option<ExtractReport>>>,
+    new_extract_report: Option<ExtractReport>,
     /// The run report for the most recent run of a schedule.
     recent_run_report: Option<RunReport>,
     /// The run report unioned over all runs so far.
     overall_run_report: RunReport,
     /// Messages to be printed to the user. If this is `None`, then we are ignoring messages.
-    msgs: Arc<Mutex<Option<Vec<String>>>>,
+    msgs: Option<Vec<String>>,
 }
 
 impl Default for EGraph {
@@ -444,12 +441,11 @@ impl Default for EGraph {
             fact_directory: None,
             seminaive: true,
             extract_report: None,
-            new_extract_report: Arc::new(Mutex::new(None)),
+            new_extract_report: None,
             recent_run_report: None,
             overall_run_report: Default::default(),
-            msgs: Arc::new(Mutex::new(Some(vec![]))),
+            msgs: Some(vec![]),
             type_info: Default::default(),
-            extractor_view: Arc::new(ArcSwap::from_pointee(Default::default())),
         };
 
         eg.add_sort(UnitSort, span!()).unwrap();
@@ -514,17 +510,17 @@ impl EGraph {
     ///
     /// When messages are disabled the vec of messages returned by evaluating commands will always be empty.
     pub fn disable_messages(&mut self) {
-        *self.msgs.lock().unwrap() = None;
+        self.msgs = None;
     }
 
     /// Enable saving messages to be printed to the user.
     pub fn enable_messages(&mut self) {
-        *self.msgs.lock().unwrap() = Some(vec![]);
+        self.msgs = Some(vec![]);
     }
 
     /// Whether messages are enabled.
     pub fn messages_enabled(&self) -> bool {
-        self.msgs.lock().unwrap().is_some()
+        self.msgs.is_some()
     }
 
     /// Pop the current egraph off the stack, replacing
@@ -1221,7 +1217,7 @@ impl EGraph {
         _span: Span,
         _expr: &ResolvedExpr,
     ) -> Result<Value, Error> {
-        todo!("eval_resolved_expr_old: ask Yihong or Oliver how to do this")
+        todo!("need for the old extraction to work")
     }
 
     fn eval_resolved_expr_new(
@@ -1410,9 +1406,6 @@ impl EGraph {
                 log::info!("Declared rule {name}.")
             }
             ResolvedNCommand::RunSchedule(sched) => {
-                // Update extractor_view before every rule run
-                self.extractor_view
-                    .store(Arc::new(ExtractorView::new(&self.functions, &self.backend)));
                 let report = self.run_schedule(&sched);
                 log::info!("Ran schedule {}.", sched);
                 log::info!("Report: {}", report);
@@ -1438,6 +1431,7 @@ impl EGraph {
             ResolvedNCommand::Extract(span, expr, variants) => {
                 let sort = expr.output_type();
 
+                /*
                 // old backend
                 {
                     let mut termdag = TermDag::default();
@@ -1482,6 +1476,7 @@ impl EGraph {
                         self.extract_report = Some(ExtractReport::Variants { termdag, terms });
                     }
                 }
+                */
 
                 // new backend
                 {
@@ -1490,13 +1485,58 @@ impl EGraph {
                     let n: i64 = self.backend.primitives().unwrap(n);
 
                     log::debug!("x = {:?} n = {:?}", x, n);
-                    todo!("top-level new backend extraction");
+
+                    let mut termdag = TermDag::default();
+
+                    let extractor = ExtractorAlter::compute_costs_from_rootsorts(
+                        Some(vec![sort]),
+                        self,
+                        TreeAdditiveCostModel::default(),
+                    );
+                    if n == 0 {
+                        let (cost, term) = extractor.extract_best(self, &mut termdag, x).unwrap();
+                        // dont turn termdag into a string if we have messages disabled for performance reasons
+                        if self.messages_enabled() {
+                            let extracted = termdag.to_string(&term);
+                            log::info!("extracted with cost {cost}: {extracted}");
+                            self.print_msg(extracted);
+                        }
+                        self.new_extract_report = Some(ExtractReport::Best {
+                            termdag,
+                            cost,
+                            term,
+                        });
+                    } else {
+                        if n < 0 {
+                            panic!("Cannot extract negative number of variants");
+                        }
+                        let terms: Vec<Term> = extractor
+                            .extract_variants(self, &mut termdag, x, n as usize)
+                            .iter()
+                            .map(|e| e.1.clone())
+                            .collect();
+                        // Same as above, avoid turning termdag into a string if we have messages disabled for performance
+                        if self.messages_enabled() {
+                            log::info!("extracted variants:");
+                            let mut msg = String::default();
+                            msg += "(\n";
+                            assert!(!terms.is_empty());
+                            for expr in &terms {
+                                let str = termdag.to_string(expr);
+                                log::info!("   {str}");
+                                msg += &format!("   {str}\n");
+                            }
+                            msg += ")";
+                            self.print_msg(msg);
+                        }
+                        self.new_extract_report = Some(ExtractReport::Variants { termdag, terms });
+                    }
                 }
 
-                // self.check_extract_report_consistency();
+                self.check_extract_report_consistency();
             }
             ResolvedNCommand::QueryExtract(_span, _expr, _variants) => {
-                todo!("query extraction")
+                todo!("query extraction - might remove/replace this feature")
             }
             ResolvedNCommand::Push(n) => {
                 (0..n).for_each(|_| self.push());
@@ -1774,8 +1814,9 @@ impl EGraph {
     }
 
     pub fn check_extract_report_consistency(&self) {
+        /*
         let old_report = self.extract_report.clone();
-        let new_report = self.new_extract_report.lock().unwrap().clone();
+        let new_report = self.new_extract_report.clone();
         if old_report.is_none() && new_report.is_none() {
         } else if old_report.is_none() && new_report.is_some() {
             panic!("No old report found but found new report");
@@ -1784,19 +1825,31 @@ impl EGraph {
         } else {
             let old_report = old_report.unwrap();
             let new_report = new_report.unwrap();
-            if let (
-                ExtractReport::Best { cost: old_cost, .. },
-                ExtractReport::Best { cost: new_cost, .. },
-            ) = (old_report, new_report)
-            {
-                if old_cost != new_cost {
-                    panic!(
-                        "Derived different extraction costs: {:?}, {:?}",
-                        old_cost, new_cost
-                    );
+            match (old_report, new_report) {
+                (ExtractReport::Best { cost: old_cost, .. },
+                ExtractReport::Best { cost: new_cost, .. }) => {
+                    if old_cost != new_cost {
+                        panic!(
+                            "Derived different extraction costs: {:?}, {:?}",
+                            old_cost, new_cost
+                        );
+                    }
+                }
+                (ExtractReport::Variants { terms: old_terms, .. },
+                ExtractReport::Variants { terms: new_terms, .. }) => {
+                    if old_terms.len() != new_terms.len() {
+                        panic!(
+                            "Extracted different number of variants: {:?}, {:?}",
+                            old_terms.len(), new_terms.len()
+                        );
+                    }
+                }
+                _ => {
+                    panic!("Mismatched extraction query type!");
                 }
             }
         }
+        */
     }
 
     /// Gets the last extract report and returns it, if the last command saved it.
@@ -1816,13 +1869,13 @@ impl EGraph {
     }
 
     pub(crate) fn print_msg(&mut self, msg: String) {
-        if let Some(msgs) = &mut *self.msgs.lock().unwrap() {
+        if let Some(msgs) = &mut self.msgs {
             msgs.push(msg);
         }
     }
 
     fn flush_msgs(&mut self) -> Vec<String> {
-        match &mut *self.msgs.lock().unwrap() {
+        match &mut self.msgs {
             Some(msgs) => {
                 msgs.dedup_by(|a, b| a.is_empty() && b.is_empty());
                 std::mem::take(msgs)

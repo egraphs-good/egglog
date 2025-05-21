@@ -293,7 +293,7 @@ dependencies = [
 [[package]]
 name = "concurrency"
 version = "0.1.0"
-source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=dbb77d7#dbb77d7750ef1a28b908bfb2c0c096f801fc076e"
+source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=4f52312#4f52312f49a532ca10299447b8716f58545be3ac"
 dependencies = [
  "arc-swap",
  "rayon",
@@ -312,7 +312,7 @@ dependencies = [
 [[package]]
 name = "core-relations"
 version = "0.1.0"
-source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=dbb77d7#dbb77d7750ef1a28b908bfb2c0c096f801fc076e"
+source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=4f52312#4f52312f49a532ca10299447b8716f58545be3ac"
 dependencies = [
  "anyhow",
  "bumpalo",
@@ -478,7 +478,6 @@ name = "egglog"
 version = "0.4.0"
 dependencies = [
  "add_primitive",
- "arc-swap",
  "chrono",
  "clap",
  "codspeed-criterion-compat",
@@ -508,7 +507,7 @@ dependencies = [
 [[package]]
 name = "egglog-bridge"
 version = "0.1.0"
-source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=dbb77d7#dbb77d7750ef1a28b908bfb2c0c096f801fc076e"
+source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=4f52312#4f52312f49a532ca10299447b8716f58545be3ac"
 dependencies = [
  "anyhow",
  "core-relations",
@@ -951,7 +950,7 @@ dependencies = [
 [[package]]
 name = "numeric-id"
 version = "0.1.0"
-source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=dbb77d7#dbb77d7750ef1a28b908bfb2c0c096f801fc076e"
+source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=4f52312#4f52312f49a532ca10299447b8716f58545be3ac"
 dependencies = [
  "lazy_static",
  "rayon",
@@ -1467,7 +1466,7 @@ checksum = "5a5f39404a5da50712a4c1eecf25e90dd62b613502b7e925fd4e4d19b5c96512"
 [[package]]
 name = "union-find"
 version = "0.1.0"
-source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=dbb77d7#dbb77d7750ef1a28b908bfb2c0c096f801fc076e"
+source = "git+https://github.com/egraphs-good/egglog-backend.git?rev=4f52312#4f52312f49a532ca10299447b8716f58545be3ac"
 dependencies = [
  "concurrency",
  "crossbeam",
