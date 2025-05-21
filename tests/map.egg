@@ -4,4 +4,4 @@
 (let my_map2 (map-insert my_map1 2 "two"))
 
 (check (= "one" (map-get my_map1 1)))
-(query-extract my_map2)
+(extract my_map2)

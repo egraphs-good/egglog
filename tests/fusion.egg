@@ -136,7 +136,7 @@
 
 (run 100)
 
-(query-extract (freer expr))
+(extract (freer expr))
 
 
 (let my-output

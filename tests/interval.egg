@@ -35,4 +35,4 @@
 (check (= (lo e) 100))
 
 ;; testing extraction of rationals
-(query-extract (lo e))
+(extract (lo e))
