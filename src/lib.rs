@@ -429,7 +429,9 @@ impl FromStr for RunMode {
 pub struct EGraph {
     pub parser: Parser,
     names: check_shadowing::Names,
-    prev_egraph: Option<Box<Self>>,
+    /// pushed_egraph forms a linked list of pushed egraphs.
+    /// Pop reverts the egraph to the last pushed egraph.
+    pushed_egraph: Option<Box<Self>>,
     unionfind: UnionFind,
     pub functions: IndexMap<Symbol, Function>,
     rulesets: IndexMap<Symbol, Ruleset>,
@@ -454,7 +456,7 @@ impl Default for EGraph {
         let mut egraph = Self {
             parser: Default::default(),
             names: Default::default(),
-            prev_egraph: Default::default(),
+            pushed_egraph: Default::default(),
             unionfind: Default::default(),
             functions: Default::default(),
             rulesets: Default::default(),
@@ -496,10 +498,10 @@ impl EGraph {
     }
 
     pub fn push(&mut self) {
-        let prev_prev: Option<Box<Self>> = self.prev_egraph.take();
+        let prev_prev: Option<Box<Self>> = self.pushed_egraph.take();
         let mut prev = self.clone();
-        prev.prev_egraph = prev_prev;
-        self.prev_egraph = Some(Box::new(prev));
+        prev.pushed_egraph = prev_prev;
+        self.pushed_egraph = Some(Box::new(prev));
     }
 
     /// Disable saving messages to be printed to the user and remove any saved messages.
@@ -524,7 +526,7 @@ impl EGraph {
     /// It preserves the run report and messages from the popped
     /// egraph.
     pub fn pop(&mut self) -> Result<(), Error> {
-        match self.prev_egraph.take() {
+        match self.pushed_egraph.take() {
             Some(e) => {
                 // Copy the reports and messages from the popped egraph
                 let extract_report = self.extract_report.clone();
