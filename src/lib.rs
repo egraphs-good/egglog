@@ -19,6 +19,7 @@ mod core;
 pub mod extract;
 mod function;
 mod gj;
+pub mod scheduler;
 mod serialize;
 pub mod sort;
 mod termdag;
@@ -31,6 +32,7 @@ mod value;
 // both this crate and other crates by referring to `::egglog`.
 extern crate self as egglog;
 pub use add_primitive::add_primitive;
+use scheduler::{Scheduler, SchedulerRecord};
 
 use crate::constraint::Problem;
 use crate::core::{AtomTerm, ResolvedCall};
@@ -419,6 +421,7 @@ pub struct EGraph {
     overall_run_report: RunReport,
     /// Messages to be printed to the user. If this is `None`, then we are ignoring messages.
     msgs: Option<Vec<String>>,
+    schedulers: Vec<SchedulerRecord>,
 }
 
 impl Default for EGraph {
@@ -441,6 +444,7 @@ impl Default for EGraph {
             overall_run_report: Default::default(),
             msgs: Some(vec![]),
             type_info: Default::default(),
+            schedulers: Default::default(),
         };
 
         eg.add_sort(UnitSort, span!()).unwrap();
@@ -939,7 +943,7 @@ impl EGraph {
                 let copy_rules = rule_names.clone();
                 let search_start = Instant::now();
 
-                for (rule_name, (rule, _)) in copy_rules.iter() {
+                for (rule_name, (rule, _, _)) in copy_rules.iter() {
                     let mut all_matches = vec![];
                     let rule_search_start = Instant::now();
                     let mut did_match = false;
@@ -997,7 +1001,7 @@ impl EGraph {
                         all_matches,
                         did_match,
                     } = search_results.get(&rule_name).unwrap();
-                    let (rule, _) = compiled_rules.get(&rule_name).unwrap();
+                    let (rule, _, _) = compiled_rules.get(&rule_name).unwrap();
                     let num_vars = rule.query.vars.len();
 
                     // make sure the query requires matches
@@ -1064,7 +1068,7 @@ impl EGraph {
             ) {
                 match &rulesets[&ruleset] {
                     Ruleset::Rules(_, rules) => {
-                        for (_, id) in rules.values() {
+                        for (_, id, _) in rules.values() {
                             ids.push(*id);
                         }
                     }
@@ -1103,7 +1107,7 @@ impl EGraph {
     ) -> Result<Symbol, Error> {
         let core_rule =
             rule.to_canonicalized_core_rule(&self.type_info, &mut self.parser.symbol_gen)?;
-        let (query, actions) = (core_rule.body, core_rule.head);
+        let (query, actions) = (&core_rule.body, &core_rule.head);
 
         let rule_id = {
             let mut translator = BackendRule::new(
@@ -1117,7 +1121,7 @@ impl EGraph {
         };
 
         let vars = query.get_vars();
-        let query = self.compile_gj_query(query, &vars);
+        let query = self.compile_gj_query(query.clone(), &vars);
 
         let program = self
             .compile_actions(&vars, &actions)
@@ -1130,7 +1134,7 @@ impl EGraph {
                         indexmap::map::Entry::Occupied(_) => {
                             panic!("Rule '{name}' was already present")
                         }
-                        indexmap::map::Entry::Vacant(e) => e.insert((compiled_rule, rule_id)),
+                        indexmap::map::Entry::Vacant(e) => e.insert((compiled_rule, rule_id, core_rule)),
                     };
                     Ok(name)
                 }
@@ -1414,7 +1418,7 @@ impl EGraph {
                     .create(true)
                     .open(&filename)
                     .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
-    
+
                 let unit_id = self.backend.primitives().get_ty::<()>();
                 let unit_val = self.backend.primitives().get(());
 
@@ -1430,7 +1434,6 @@ impl EGraph {
                             },
                         ));
 
-
                 let mut translator = BackendRule::new(
                     self.backend.new_rule("outputs", false),
                     &self.functions,
@@ -1439,7 +1442,10 @@ impl EGraph {
                 let expr_types = exprs.iter().map(|e| e.output_type()).collect::<Vec<_>>();
                 for expr in exprs {
                     let result_var = ResolvedVar {
-                        name: self.parser.symbol_gen.fresh(&Symbol::from("__egglog_output")),
+                        name: self
+                            .parser
+                            .symbol_gen
+                            .fresh(&Symbol::from("__egglog_output")),
                         sort: expr.output_type(),
                         is_global_ref: false,
                     };

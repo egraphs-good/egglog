@@ -397,7 +397,7 @@ impl<Head, Leaf> Default for GenericCoreActions<Head, Leaf> {
 
 impl<Head, Leaf> GenericCoreActions<Head, Leaf>
 where
-    Leaf: Clone,
+    Leaf: Clone + Hash + Eq,
 {
     pub(crate) fn subst(&mut self, subst: &HashMap<Leaf, GenericAtomTerm<Leaf>>) {
         let actions = subst.iter().map(|(symbol, atom_term)| {
@@ -413,6 +413,57 @@ where
 
     fn new(actions: Vec<GenericCoreAction<Head, Leaf>>) -> GenericCoreActions<Head, Leaf> {
         Self(actions)
+    }
+
+    pub(crate) fn get_free_vars(&self) -> HashSet<Leaf> {
+        let at_free_var = |at: &GenericAtomTerm<Leaf>| match at {
+            GenericAtomTerm::Var(_, v) => Some(v.clone()),
+            GenericAtomTerm::Literal(..) => None,
+            GenericAtomTerm::Global(..) => None,
+        };
+
+        let add_from_atom = |free_vars: &mut HashSet<Leaf>, at: &GenericAtomTerm<Leaf>| {
+            if let Some(v) = at_free_var(at) {
+                free_vars.insert(v);
+            }
+        };
+
+        let add_from_atoms = |free_vars: &mut HashSet<Leaf>, ats: &[GenericAtomTerm<Leaf>]| {
+            ats.iter().flat_map(|at| at_free_var(at)).for_each(|v| {
+                free_vars.insert(v);
+            });
+        };
+
+        let mut free_vars = HashSet::default();
+        for action in self.0.iter().rev() {
+            match action {
+                GenericCoreAction::Let(_span, v, _, ats) => {
+                    add_from_atoms(&mut free_vars, ats);
+                    free_vars.swap_remove(v);
+                }
+                GenericCoreAction::LetAtomTerm(_span, v, at) => {
+                    add_from_atom(&mut free_vars, at);
+                    free_vars.swap_remove(v);
+                }
+                GenericCoreAction::Extract(_span, at, at1) => {
+                    add_from_atom(&mut free_vars, at);
+                    add_from_atom(&mut free_vars, at1);
+                }
+                GenericCoreAction::Set(_span, _, ats, at) => {
+                    add_from_atoms(&mut free_vars, ats);
+                    add_from_atom(&mut free_vars, at);
+                }
+                GenericCoreAction::Change(_span, _change, _, ats) => {
+                    add_from_atoms(&mut free_vars, ats);
+                }
+                GenericCoreAction::Union(_span, at, at1) => {
+                    add_from_atom(&mut free_vars, at);
+                    add_from_atom(&mut free_vars, at1);
+                }
+                GenericCoreAction::Panic(_span, _) => {}
+            }
+        }
+        free_vars
     }
 }
 

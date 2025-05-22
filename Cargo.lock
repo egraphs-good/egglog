@@ -485,6 +485,7 @@ dependencies = [
  "clap",
  "codspeed-criterion-compat",
  "core-relations",
+ "dyn-clone",
  "egglog-bridge",
  "egraph-serialize",
  "env_logger",
