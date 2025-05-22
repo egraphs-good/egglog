@@ -103,8 +103,8 @@ impl Sort for SetSort {
         self
     }
 
-    fn inner_sorts(&self) -> Vec<&Arc<dyn Sort>> {
-        vec![&self.element]
+    fn inner_sorts(&self) -> Vec<ArcSort> {
+        vec![self.element.clone()]
     }
 
     fn is_container_sort(&self) -> bool {

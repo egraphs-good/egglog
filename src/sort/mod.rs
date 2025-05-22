@@ -51,11 +51,15 @@ pub trait Sort: Any + Send + Sync + Debug {
 
     fn column_ty(&self, backend: &egglog_bridge::EGraph) -> ColumnTy;
 
-    // return the inner sorts if a container sort
-    // remember that containers can contain containers
-    // and this only unfold one level
-    fn inner_sorts(&self) -> Vec<&Arc<dyn Sort>> {
-        vec![]
+    /// return the inner sorts if a container sort
+    /// remember that containers can contain containers
+    /// and this only unfolds one level
+    fn inner_sorts(&self) -> Vec<ArcSort> {
+        if self.is_container_sort() {
+            todo!("inner_sorts: {}", self.name());
+        } else {
+            panic!("inner_sort called on non-container sort: {}", self.name());
+        }
     }
 
     fn register_type(&self, backend: &mut egglog_bridge::EGraph);
@@ -178,7 +182,7 @@ pub trait Sort: Any + Send + Sync + Debug {
         let _value = value;
         let _termdag = termdag;
         let _element_terms = element_terms;
-        todo!("reconstruct_termdag_container : {}", self.name());
+        todo!("reconstruct_termdag_container: {}", self.name());
     }
 
     /// Reconstruct a leaf primitive value in a TermDag
@@ -191,7 +195,7 @@ pub trait Sort: Any + Send + Sync + Debug {
         let _primitives = primitives;
         let _value = value;
         let _termdag = termdag;
-        todo!("reconstruct_termdag_leaf : {}", self.name());
+        todo!("reconstruct_termdag_leaf: {}", self.name());
     }
 }
 

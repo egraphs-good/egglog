@@ -661,9 +661,7 @@ impl EGraph {
 
     fn apply_merges(&mut self, func: Symbol, merges: &[DeferredMerge]) -> usize {
         let mut stack = Vec::new();
-        let functions_clone = self.functions.clone();
-        let mut functions_borrow_mut = functions_clone;
-        let mut function = functions_borrow_mut.get_mut(&func).unwrap();
+        let mut function = self.functions.get_mut(&func).unwrap();
         let n_unions = self.unionfind.n_unions();
         let merge_prog = match &function.merge {
             MergeFn::Expr(e) => Some(e.clone()),
@@ -676,7 +674,7 @@ impl EGraph {
                 self.run_actions(&mut stack, &[*old, *new], prog).unwrap();
                 let merged = stack.pop().expect("merges should produce a value");
                 stack.clear();
-                function = functions_borrow_mut.get_mut(&func).unwrap();
+                function = self.functions.get_mut(&func).unwrap();
                 function.insert(inputs, merged, self.timestamp);
             }
         }
@@ -1201,7 +1199,7 @@ impl EGraph {
         Ok((sort, value_new_backend))
     }
 
-    fn eval_resolved_expr_new(
+    fn eval_resolved_expr(
         &mut self,
         span: Span,
         expr: &ResolvedExpr,
@@ -1423,11 +1421,9 @@ impl EGraph {
             ResolvedNCommand::Extract(span, expr, variants) => {
                 let sort = expr.output_type();
 
-                let x = self.eval_resolved_expr_new(span.clone(), &expr)?;
-                let n = self.eval_resolved_expr_new(span, &variants)?;
+                let x = self.eval_resolved_expr(span.clone(), &expr)?;
+                let n = self.eval_resolved_expr(span, &variants)?;
                 let n: i64 = self.backend.primitives().unwrap(n);
-
-                log::debug!("x = {:?} n = {:?}", x, n);
 
                 let mut termdag = TermDag::default();
 
@@ -1542,7 +1538,7 @@ impl EGraph {
 
                 use std::io::Write;
                 for expr in exprs {
-                    let value = self.eval_resolved_expr_new(span.clone(), &expr)?;
+                    let value = self.eval_resolved_expr(span.clone(), &expr)?;
                     let expr_type = expr.output_type();
 
                     // hack before extraction for the new backend gets merged:
@@ -1771,14 +1767,11 @@ impl EGraph {
     }
 
     fn flush_msgs(&mut self) -> Vec<String> {
-        match &mut self.msgs {
-            Some(msgs) => {
-                msgs.dedup_by(|a, b| a.is_empty() && b.is_empty());
-                std::mem::take(msgs)
-            }
-            _ => {
-                vec![]
-            }
+        if let Some(msgs) = &mut self.msgs {
+            msgs.dedup_by(|a, b| a.is_empty() && b.is_empty());
+            std::mem::take(msgs)
+        } else {
+            vec![]
         }
     }
 }

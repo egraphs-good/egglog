@@ -96,8 +96,8 @@ impl Sort for MultiSetSort {
         backend.register_container_ty::<MultiSetContainer<core_relations::Value>>();
     }
 
-    fn inner_sorts(&self) -> Vec<&Arc<dyn Sort>> {
-        vec![&self.element]
+    fn inner_sorts(&self) -> Vec<ArcSort> {
+        vec![self.element.clone()]
     }
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
@@ -205,6 +205,7 @@ impl Sort for MultiSetSort {
         }
         Some((cost, termdag.app("multiset-of".into(), children)))
     }
+
     fn reconstruct_termdag_container(
         &self,
         _containers: &core_relations::Containers,
