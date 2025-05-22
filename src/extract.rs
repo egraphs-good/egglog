@@ -468,12 +468,10 @@ impl ExtractorAlter {
     /// The sources are the eclasses with known costs from the cost model.
     fn bellman_ford(&mut self, egraph: &EGraph) {
         let mut ensure_fixpoint = false;
-        let mut reconstruction_round = false;
 
         let funcs = self.funcs.clone();
 
-        // Runs an extra round to copy the best hyperedges
-        while !ensure_fixpoint || reconstruction_round {
+        while !ensure_fixpoint {
             ensure_fixpoint = true;
 
             for func_name in funcs.iter() {
@@ -485,40 +483,21 @@ impl ExtractorAlter {
                     if !row.subsumed {
                         let target = row.vals.last().unwrap();
                         if let Some(new_cost) = self.compute_cost_hyperedge(egraph, &row, func) {
-                            if !reconstruction_round {
-                                match self
-                                    .costs
-                                    .get_mut(&target_sort.name())
-                                    .unwrap()
-                                    .entry(*target)
-                                {
-                                    HEntry::Vacant(e) => {
+                            match self
+                                .costs
+                                .get_mut(&target_sort.name())
+                                .unwrap()
+                                .entry(*target)
+                            {
+                                HEntry::Vacant(e) => {
+                                    ensure_fixpoint = false;
+                                    e.insert(new_cost);
+                                }
+                                HEntry::Occupied(mut e) => {
+                                    if new_cost < *(e.get()) {
                                         ensure_fixpoint = false;
                                         e.insert(new_cost);
                                     }
-                                    HEntry::Occupied(mut e) => {
-                                        if new_cost < *(e.get()) {
-                                            ensure_fixpoint = false;
-                                            e.insert(new_cost);
-                                        }
-                                    }
-                                }
-                            } else if new_cost
-                                == *self
-                                    .costs
-                                    .get(&target_sort.name())
-                                    .unwrap()
-                                    .get(target)
-                                    .unwrap()
-                            {
-                                // one of the possible best parent edges
-                                if let HEntry::Vacant(e) = self
-                                    .parent_edge
-                                    .get_mut(&target_sort.name())
-                                    .unwrap()
-                                    .entry(*target)
-                                {
-                                    e.insert((func.decl.name, row.vals.to_vec()));
                                 }
                             }
                         }
@@ -529,10 +508,37 @@ impl ExtractorAlter {
                     .backend
                     .dump_table(func.new_backend_id, relax_hyperedge);
             }
+        }
 
-            if ensure_fixpoint {
-                reconstruction_round = !reconstruction_round;
-            }
+        // Save the edges for reconstruction
+        for func_name in funcs.iter() {
+            let func = egraph.functions.get(func_name).unwrap();
+            let target_sort = func.schema.output.clone();
+
+            let save_best_parent_edge = |row: egglog_bridge::FunctionRow| {
+                if !row.subsumed {
+                    let target = row.vals.last().unwrap();
+                    if let Some(best_cost) =
+                        self.costs.get(&target_sort.name()).unwrap().get(target)
+                    {
+                        if Some(*best_cost) == self.compute_cost_hyperedge(egraph, &row, func) {
+                            // one of the possible best parent edges
+                            if let HEntry::Vacant(e) = self
+                                .parent_edge
+                                .get_mut(&target_sort.name())
+                                .unwrap()
+                                .entry(*target)
+                            {
+                                e.insert((func.decl.name, row.vals.to_vec()));
+                            }
+                        }
+                    }
+                }
+            };
+
+            egraph
+                .backend
+                .dump_table(func.new_backend_id, save_best_parent_edge);
         }
     }
 
