@@ -228,6 +228,34 @@ fn test_simple_extract7() {
 }
 
 #[test]
+fn test_simple_extract8() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut egraph = EGraph::default();
+
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+            (datatype Foo
+                (bar :cost 10)
+            )
+            (function func () Foo :no-merge)
+            (set (func) (bar))
+
+            (extract (bar))
+            "#,
+        )
+        .unwrap();
+
+    let report = egraph.get_extract_report().clone().unwrap();
+    let ExtractReport::Best { cost, .. } = report else {
+        panic!();
+    };
+    assert_eq!(cost, 11);
+}
+
+#[test]
 fn test_extract_variants1() {
     let _ = env_logger::builder().is_test(true).try_init();
 

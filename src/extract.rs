@@ -2,7 +2,7 @@ use crate::ast::Symbol;
 use crate::termdag::{Term, TermDag};
 use crate::util::{HashMap, HashSet};
 use crate::{ArcSort, EGraph, Error, Function, HEntry, Id, Value};
-use queues::*;
+use std::collections::VecDeque;
 
 pub type Cost = usize;
 
@@ -67,7 +67,7 @@ impl EGraph {
                     }
                 }
             }
-            Error::ExtractError(String::new())
+            Error::ExtractError(format!("{:?}", value))
         })
     }
 
@@ -212,9 +212,18 @@ impl<'a> Extractor<'a> {
     }
 }
 
+/// An interface for custom cost model
+/// The default extractor does Bellman-Ford for minimum cost.
+/// So, a term can have a cost less than its subterms.
+/// As long as there is no negative cost cycle,
+/// the default extractor is guaranteed to terminate in computing the costs.
+/// However, to guarantee no cycles in the extracted terms without other assumptions,
+/// a term needs to have a cost strictly larger than its subterms.
 pub trait CostModel {
+    /// Compute the cost of term given the costs of the head symbol and the subterms
     fn fold(&self, head: Symbol, children_cost: &[Cost], head_cost: Cost) -> Cost;
 
+    /// Compute the cost a particular enode
     fn enode_cost(
         &self,
         egraph: &EGraph,
@@ -222,6 +231,7 @@ pub trait CostModel {
         row: &egglog_bridge::FunctionRow,
     ) -> Cost;
 
+    /// Compute the cost of a container value given the costs of its elements
     fn container_primitive(
         &self,
         egraph: &EGraph,
@@ -230,6 +240,7 @@ pub trait CostModel {
         element_costs: &[Cost],
     ) -> Cost;
 
+    /// Compute the cost of a primitive, non-container, value
     fn leaf_primitive(&self, egraph: &EGraph, sort: &ArcSort, value: core_relations::Value)
         -> Cost;
 }
@@ -316,22 +327,22 @@ impl ExtractorAlter {
         }
 
         // Do a BFS to find reachable tables
-        let mut q: Queue<ArcSort> = Queue::new();
+        let mut q: VecDeque<ArcSort> = VecDeque::new();
         let mut seen: HashSet<Symbol> = Default::default();
         for rootsort in rootsorts.iter() {
-            let _ = q.add(rootsort.clone());
+            q.push_back(rootsort.clone());
             seen.insert(rootsort.name());
         }
 
         let mut funcs_set: HashSet<Symbol> = Default::default();
         let mut funcs: Vec<Symbol> = Vec::new();
-        while q.size() > 0 {
-            let sort = q.remove().unwrap();
+        while !q.is_empty() {
+            let sort = q.pop_front().unwrap();
             if sort.is_container_sort() {
                 let inner_sorts = sort.inner_sorts();
                 for s in inner_sorts {
                     if !seen.contains(&s.name()) {
-                        let _ = q.add(s.clone());
+                        q.push_back(s.clone());
                         seen.insert(s.name());
                     }
                 }
@@ -343,7 +354,7 @@ impl ExtractorAlter {
                             for ch in &func.schema.input {
                                 let ch_name = ch.name();
                                 if !seen.contains(&ch_name) {
-                                    let _ = q.add(ch.clone());
+                                    q.push_back(ch.clone());
                                     seen.insert(ch_name);
                                 }
                             }
@@ -423,6 +434,7 @@ impl ExtractorAlter {
         }
     }
 
+    /// A row in a [constructor] table is an hyperedge from the set of input terms to the constructed output term.
     fn compute_cost_hyperedge(
         &self,
         egraph: &EGraph,
@@ -447,9 +459,14 @@ impl ExtractorAlter {
         ))
     }
 
+    /// We use Bellman-Ford to compute the costs of the relevant eq sorts' terms
+    /// [Bellman-Ford](https://en.wikipedia.org/wiki/Bellman%E2%80%93Ford_algorithm) is a shortest path algorithm.
+    /// The version implemented here computes the shortest path from any node in a set of sources to all the reachable nodes.
+    /// Computing the minimum cost for terms is treated as a shortest path problem on a hypergraph here.
+    /// In this hypergraph, the nodes corresponde to eclasses, the distances are the costs to extract a term of those eclasses,
+    /// and each enode is a hyperedge that goes from the set of children eclasses to the enode's eclass.
+    /// The sources are the eclasses with known costs from the cost model.
     fn bellman_ford(&mut self, egraph: &EGraph) {
-        // We use Bellman-Ford to compute the costs of the relevant eq sorts' terms
-
         let mut ensure_fixpoint = false;
         let mut reconstruction_round = false;
 
@@ -519,6 +536,7 @@ impl ExtractorAlter {
         }
     }
 
+    /// This recursively reconstruct the termdag that gives the minimum cost for eclass value.
     fn reconstruct_termdag_node(
         &self,
         egraph: &EGraph,
@@ -599,7 +617,7 @@ impl ExtractorAlter {
         )
     }
 
-    /// We extract variants by selecting nvairants enodes with the lowest cost from the root eclass
+    /// This extract variants by selecting nvairants enodes with the lowest cost from the root eclass.
     pub fn extract_variants_with_sort(
         &self,
         egraph: &EGraph,
