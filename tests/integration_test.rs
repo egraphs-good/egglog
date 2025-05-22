@@ -252,7 +252,7 @@ fn test_simple_extract8() {
     let ExtractReport::Best { cost, .. } = report else {
         panic!();
     };
-    assert_eq!(cost, 11);
+    assert_eq!(cost, 10);
 }
 
 #[test]
