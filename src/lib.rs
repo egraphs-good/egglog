@@ -1761,13 +1761,13 @@ impl EGraph {
     }
 
     pub(crate) fn print_msg(&mut self, msg: String) {
-        if let Some(msgs) = &mut self.msgs {
+        if let Some(ref mut msgs) = self.msgs {
             msgs.push(msg);
         }
     }
 
     fn flush_msgs(&mut self) -> Vec<String> {
-        if let Some(msgs) = &mut self.msgs {
+        if let Some(ref mut msgs) = self.msgs {
             msgs.dedup_by(|a, b| a.is_empty() && b.is_empty());
             std::mem::take(msgs)
         } else {
