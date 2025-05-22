@@ -36,14 +36,20 @@ impl EGraph {
             let rule_info = record.rule_info.get(rule_id).unwrap();
             rule_info.query_rule
         }).collect::<Vec<_>>();
-        self.backend.run_rules(&query_rules);
+        self.backend.run_rules(&query_rules).unwrap();
 
         // Step 3: let the scheduler decide which matches need to be kept
-        for (rule_id, rule) in rules.iter() {
+        for (rule_id, _rule) in rules.iter() {
             let rule_info = record.rule_info.get(rule_id).unwrap();
             let ms = Matches { function: rule_info.worklist_id };
             record.scheduler.schedule_matches(self, &ms);
         }
+
+        let action_rules = rules.iter().map(|(rule_id, _rule)| {
+            let rule_info = record.rule_info.get(rule_id).unwrap();
+            rule_info.action_rule
+        }).collect::<Vec<_>>();
+        self.backend.run_rules(&action_rules).unwrap();
 
         self.rulesets = rulesets;
         self.schedulers = schedulers;
@@ -133,6 +139,7 @@ impl SchedulerRuleInfo {
         assert!(bool_or.len() == 1);
         let bool_or = bool_or.into_iter().next().unwrap();
 
+        // Step 1: build the work list relation
         let worklist_id = egraph.backend.add_table(FunctionConfig {
             schema,
             default: DefaultVal::Fail,
@@ -141,6 +148,7 @@ impl SchedulerRuleInfo {
             can_subsume: true,
         });
 
+        // Step 2: build the query rule
         let mut qrule_builder = BackendRule::new(
             egraph.backend.new_rule("scheduler_query", true),
             &egraph.functions,
@@ -151,11 +159,12 @@ impl SchedulerRuleInfo {
             .iter()
             .map(|fv| qrule_builder.entry(&GenericAtomTerm::Var(span!(), fv.clone())))
             .collect::<Vec<_>>();
-        // in query rule, set the worklist to false
+        // By default we don't match the entry, so it is set to false
         entries.push(bool_false);
         qrule_builder.rb.set(worklist_id, &entries);
         let qrule_id = qrule_builder.build();
 
+        // Step 3: build the action rule
         let mut arule_builder = BackendRule::new(
             egraph.backend.new_rule("scheduler_action", false),
             &egraph.functions,
@@ -165,12 +174,16 @@ impl SchedulerRuleInfo {
             .iter()
             .map(|fv| arule_builder.entry(&GenericAtomTerm::Var(span!(), fv.clone())))
             .collect::<Vec<_>>();
+        // Find entries that are only true
         entries.push(bool_true);
         arule_builder
             .rb
             .query_table(worklist_id, &entries, Some(false))
             .unwrap();
         arule_builder.actions(&rule.head).unwrap();
+        // Remove the entry as it's now done
+        entries.pop();
+        arule_builder.rb.remove(worklist_id, &entries);
         let arule_id = arule_builder.build();
 
         SchedulerRuleInfo {
