@@ -651,6 +651,8 @@ impl ExtractorAlter {
         }
     }
 
+    /// This expects the sort to be already computed
+    /// can be one of the rootsorts, or reachable from rootsorts, or primitives, or containers of computed sorts
     pub fn extract_best_with_sort(
         &self,
         egraph: &EGraph,
@@ -658,8 +660,6 @@ impl ExtractorAlter {
         value: core_relations::Value,
         sort: ArcSort,
     ) -> Option<(Cost, Term)> {
-        // can be more accurate by considering all sorts extracted but this is ok
-        debug_assert!(self.rootsorts.iter().any(|s| { s.name() == sort.name() }));
         match self.compute_cost_node(egraph, &value, &sort) {
             Some(best_cost) => {
                 log::debug!("Best cost for the extract root: {:?}", best_cost);
