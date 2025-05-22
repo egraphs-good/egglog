@@ -140,11 +140,6 @@ pub(crate) fn desugar_command(
             vec![NCommand::UnstableCombinedRuleset(name, subrulesets)]
         }
         Command::Action(action) => vec![NCommand::CoreAction(action)],
-        Command::Simplify {
-            span,
-            expr,
-            schedule,
-        } => desugar_simplify(&expr, &schedule, span, parser),
         Command::RunSchedule(sched) => {
             vec![NCommand::RunSchedule(sched.clone())]
         }
@@ -265,21 +260,6 @@ fn desugar_birewrite(ruleset: Symbol, name: Symbol, rewrite: &Rewrite) -> Vec<NC
             false,
         ))
         .collect()
-}
-
-fn desugar_simplify(
-    expr: &Expr,
-    schedule: &Schedule,
-    span: Span,
-    parser: &mut Parser,
-) -> Vec<NCommand> {
-    let lhs = parser.symbol_gen.fresh(&"desugar_simplify".into());
-    vec![
-        NCommand::Push(1),
-        NCommand::CoreAction(Action::Let(span.clone(), lhs, expr.clone())),
-        NCommand::RunSchedule(schedule.clone()),
-        NCommand::Pop(span, 1),
-    ]
 }
 
 pub fn rule_name<Head, Leaf>(command: &GenericCommand<Head, Leaf>) -> Symbol
