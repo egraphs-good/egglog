@@ -371,7 +371,6 @@ impl<Leaf: Clone> Query<ResolvedCall, Leaf> {
 pub enum GenericCoreAction<Head, Leaf> {
     Let(Span, Leaf, Head, Vec<GenericAtomTerm<Leaf>>),
     LetAtomTerm(Span, Leaf, GenericAtomTerm<Leaf>),
-    Extract(Span, GenericAtomTerm<Leaf>, GenericAtomTerm<Leaf>),
     Set(
         Span,
         Head,
@@ -524,20 +523,6 @@ where
                     mapped_actions
                         .0
                         .push(GenericAction::Union(span.clone(), mapped_e1, mapped_e2));
-                }
-                GenericAction::Extract(span, e, n) => {
-                    let (actions, mapped_e) = e.to_core_actions(typeinfo, binding, fresh_gen)?;
-                    norm_actions.extend(actions.0);
-                    let (actions, mapped_n) = n.to_core_actions(typeinfo, binding, fresh_gen)?;
-                    norm_actions.extend(actions.0);
-                    norm_actions.push(GenericCoreAction::Extract(
-                        span.clone(),
-                        mapped_e.get_corresponding_var_or_lit(typeinfo),
-                        mapped_n.get_corresponding_var_or_lit(typeinfo),
-                    ));
-                    mapped_actions
-                        .0
-                        .push(GenericAction::Extract(span.clone(), mapped_e, mapped_n));
                 }
                 GenericAction::Panic(span, string) => {
                     norm_actions.push(GenericCoreAction::Panic(span.clone(), string.clone()));

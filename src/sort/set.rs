@@ -103,6 +103,10 @@ impl Sort for SetSort {
         self
     }
 
+    fn inner_sorts(&self) -> Vec<ArcSort> {
+        vec![self.element.clone()]
+    }
+
     fn is_container_sort(&self) -> bool {
         true
     }
@@ -113,12 +117,10 @@ impl Sort for SetSort {
 
     fn inner_values(
         &self,
-        egraph: &EGraph,
+        containers: &core_relations::Containers,
         value: &core_relations::Value,
     ) -> Vec<(ArcSort, core_relations::Value)> {
-        let val = egraph
-            .backend
-            .containers()
+        let val = containers
             .get_val::<SetContainer<core_relations::Value>>(*value)
             .unwrap()
             .clone();
@@ -138,6 +140,7 @@ impl Sort for SetSort {
         }
         result
     }
+
     fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
         let sets = self.sets.lock().unwrap();
         let set = sets.get_index(value.bits as usize).unwrap();
@@ -192,6 +195,16 @@ impl Sort for SetSort {
             children.push(child_term);
         }
         Some((cost, termdag.app("set-of".into(), children)))
+    }
+
+    fn reconstruct_termdag_container(
+        &self,
+        _containers: &core_relations::Containers,
+        _value: &core_relations::Value,
+        termdag: &mut TermDag,
+        element_terms: Vec<Term>,
+    ) -> Term {
+        termdag.app("set-of".into(), element_terms)
     }
 
     fn serialized_name(&self, _value: &core_relations::Value) -> Symbol {

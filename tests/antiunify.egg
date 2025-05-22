@@ -23,4 +23,4 @@
 
 (run 4)
 (check (= au12 (Add (Num 3) (AU (Var "x") (Var "y")))))
-(query-extract au12)
+(extract au12)

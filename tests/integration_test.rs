@@ -2,6 +2,370 @@ use egglog::{ast::Expr, *};
 use symbol_table::GlobalSymbol;
 
 #[test]
+fn test_simple_extract1() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut egraph = EGraph::default();
+
+    let _ = egraph
+        .parse_and_run_program(
+            None,
+            r#"
+             (datatype Op (Add i64 i64))
+             (let expr (Add 1 1))
+             (extract expr)"#,
+        )
+        .unwrap();
+
+    let report = egraph.get_extract_report().clone().unwrap();
+    let ExtractReport::Best { cost, .. } = report else {
+        panic!();
+    };
+    assert_eq!(cost, 3);
+}
+
+#[test]
+fn test_simple_extract2() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut egraph = EGraph::default();
+
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+             (datatype Term
+               (Origin :cost 0) 
+               (BigStep Term :cost 10)
+               (SmallStep Term :cost 1)
+             )
+             (let t (Origin))
+             (let tb (BigStep t))
+             (let tbs (SmallStep tb))
+             (let ts (SmallStep t))
+             (let tss (SmallStep ts))
+             (let tsss (SmallStep tss))
+             (union tbs tsss)
+             (let tssss (SmallStep tsss))
+             (union tssss tb)
+             (extract tb)
+             "#,
+        )
+        .unwrap();
+
+    let report = egraph.get_extract_report().clone().unwrap();
+    let ExtractReport::Best { cost, .. } = report else {
+        panic!();
+    };
+    assert_eq!(cost, 4);
+}
+
+#[test]
+fn test_simple_extract3() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut egraph = EGraph::default();
+
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+             (datatype Fruit
+               (Apple i64 :cost 1) 
+               (Orange f64 :cost 2)
+             )
+             (datatype Vegetable
+               (Broccoli bool :cost 3)
+               (Carrot Fruit :cost 4)
+             )
+             (let a (Apple 5))
+             (let o (Orange 3.14))
+             (let b (Broccoli true))
+             (let c (Carrot a))
+             (extract a)
+             "#,
+        )
+        .unwrap();
+
+    let report = egraph.get_extract_report().clone().unwrap();
+    let ExtractReport::Best { cost, .. } = report else {
+        panic!();
+    };
+    assert_eq!(cost, 2);
+}
+
+#[test]
+fn test_simple_extract4() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut egraph = EGraph::default();
+
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+        (datatype Foo
+            (Foobar)
+        )
+        (subsume (Foobar))
+        (datatype Bar
+            (Barbar Foo)
+        )
+        (let x (Barbar (Foobar)))
+        (extract x)
+        "#,
+        )
+        .unwrap_err();
+}
+
+#[test]
+fn test_simple_extract5() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut egraph = EGraph::default();
+
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+             (datatype Foo 
+                (Foobar i64)
+             ) 
+             (let foobar (Foobar 42))
+             (datatype Bar
+                (Barfoo i64)
+             )
+             (let barfoo (Barfoo 24))
+             (sort QuaVec (Vec i64))
+             (sort QuaMap (Map QuaVec Foo))
+             (function Quaz () QuaMap :no-merge)
+             (set (Quaz) (map-empty))
+             (extract (Quaz))
+             "#,
+        )
+        .unwrap();
+
+    let report = egraph.get_extract_report().clone().unwrap();
+    let ExtractReport::Best { cost, .. } = report else {
+        panic!();
+    };
+    assert_eq!(cost, 0);
+}
+
+#[test]
+fn test_simple_extract6() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut egraph = EGraph::default();
+
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+             (datatype False)
+             (sort QuaVec (Vec i64))
+             (sort QuaMap (Map QuaVec False))
+             (function Quaz () QuaMap :no-merge)
+             (set (Quaz) (map-empty))
+             (extract (Quaz))
+             "#,
+        )
+        .unwrap();
+
+    let report = egraph.get_extract_report().clone().unwrap();
+    let ExtractReport::Best { cost, .. } = report else {
+        panic!();
+    };
+    assert_eq!(cost, 0);
+}
+
+#[test]
+fn test_simple_extract7() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut egraph = EGraph::default();
+
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+            (datatype Foo
+                (bar)
+                (baz)
+            )
+            (sort Mapsrt1 (Map i64 Foo))
+            (let map1 (map-insert (map-empty) 0 (bar)))
+            
+            (sort Mapsrt2 (Map bool Foo))
+            (let map2 (map-insert (map-empty) false (baz)))
+            ;(let map2b (map-insert (map-empty) false (bar)))
+            ;(union map2 map2b)
+
+            ;(extract map1)
+            ;(extract map2)
+            
+            ;(function toerr (Mapsrt2) Foo :no-merge)
+
+            ;(set (toerr map2) (bar))
+
+            (union (bar) (baz))
+            ; Also unions map1 and map2!?
+
+            (extract map1)
+            (extract map2)
+
+            ;(extract (toerr map2))
+
+             "#,
+        )
+        .unwrap();
+
+    let report = egraph.get_extract_report().clone().unwrap();
+    let ExtractReport::Best { cost, .. } = report else {
+        panic!();
+    };
+    assert_eq!(cost, 2);
+}
+
+#[test]
+fn test_simple_extract8() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut egraph = EGraph::default();
+
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+            (datatype Foo
+                (bar :cost 10)
+            )
+            (function func () Foo :no-merge)
+            (set (func) (bar))
+
+            (extract (bar))
+            "#,
+        )
+        .unwrap();
+
+    let report = egraph.get_extract_report().clone().unwrap();
+    let ExtractReport::Best { cost, .. } = report else {
+        panic!();
+    };
+    assert_eq!(cost, 10);
+}
+
+#[test]
+fn test_simple_extract9() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut egraph = EGraph::default();
+
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+            (datatype Foo)
+            (datatype NodeA)
+            (datatype NodeB)
+            (datatype NodeC)
+            (constructor ctoa (NodeC) NodeA)
+            (constructor atob (NodeA) NodeB)
+            (constructor btoc (NodeB) NodeC)
+
+            (constructor bar () Foo :cost 9223372036854775807)
+            (constructor barbar (Foo Foo) Foo :cost 2)
+
+            (constructor groundedA (Foo) NodeA)
+            (let a (groundedA (barbar (bar) (bar))))
+            (let b (atob a))
+            (let c (btoc b))
+            (let a2 (ctoa c))
+            (let b2 (atob a2))
+            (let c2 (btoc b2))
+            (union a a2)
+            (union b b2)
+            (union c c2)
+
+            (extract a)
+            "#,
+        )
+        .unwrap();
+
+    let report = egraph.get_extract_report().clone().unwrap();
+    let ExtractReport::Best { cost, .. } = report else {
+        panic!();
+    };
+    assert_eq!(cost, usize::MAX);
+
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+            (extract b)
+            "#,
+        )
+        .unwrap();
+
+    let report = egraph.get_extract_report().clone().unwrap();
+    let ExtractReport::Best { cost, .. } = report else {
+        panic!();
+    };
+    assert_eq!(cost, usize::MAX);
+
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+            (extract c)
+            "#,
+        )
+        .unwrap();
+
+    let report = egraph.get_extract_report().clone().unwrap();
+    let ExtractReport::Best { cost, .. } = report else {
+        panic!();
+    };
+    assert_eq!(cost, usize::MAX);
+}
+
+#[test]
+fn test_extract_variants1() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut egraph = EGraph::default();
+
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+             (datatype Term
+               (Origin :cost 0) 
+               (BigStep Term :cost 10)
+               (SmallStep Term :cost 1)
+             )
+             (let t (Origin))
+             (let tb (BigStep t))
+             (let tbs (SmallStep tb))
+             (let ts (SmallStep t))
+             (let tss (SmallStep ts))
+             (let tsss (SmallStep tss))
+             (union tbs tsss)
+             (let tssss (SmallStep tsss))
+             (union tssss tb)
+             (extract tb 3)
+             "#,
+        )
+        .unwrap();
+
+    let report = egraph.get_extract_report().clone().unwrap();
+    let ExtractReport::Variants { terms, .. } = report else {
+        panic!();
+    };
+    assert_eq!(terms.len(), 2);
+}
+
+#[test]
 fn test_subsumed_unextractable_action_extract() {
     // Test when an expression is subsumed, it isn't extracted, even if its the cheapest
     let mut egraph = EGraph::default();
@@ -14,7 +378,7 @@ fn test_subsumed_unextractable_action_extract() {
             (constructor exp () Math :cost 100)
             (constructor cheap () Math :cost 1)
             (union (exp) (cheap))
-            (query-extract (exp))
+            (extract (exp))
             "#,
         )
         .unwrap();
@@ -32,7 +396,7 @@ fn test_subsumed_unextractable_action_extract() {
             None,
             r#"
             (subsume (cheap))
-            (query-extract (exp))
+            (extract (exp))
             "#,
         )
         .unwrap();
@@ -103,7 +467,7 @@ fn test_subsumed_unextractable_rebuild_arg() {
         .parse_and_run_program(
             None,
             r#"
-            (query-extract res)
+            (extract res)
             "#,
         )
         .unwrap();
@@ -155,7 +519,7 @@ fn test_subsumed_unextractable_rebuild_self() {
         .parse_and_run_program(
             None,
             r#"
-            (query-extract x)
+            (extract x)
             "#,
         )
         .unwrap();
@@ -214,7 +578,7 @@ fn test_subsume_unextractable_action_extract_multiple() {
             (datatype Math (Num i64))
             (Num 1)
             (union (Num 1) (Num 2))
-            (query-extract :variants 2 (Num 1))
+            (extract (Num 1) 2)
             ",
         )
         .unwrap();
@@ -230,7 +594,7 @@ fn test_subsume_unextractable_action_extract_multiple() {
             None,
             "
             (subsume (Num 2))
-            (query-extract :variants 2 (Num 1))
+            (extract (Num 1) 2)
             ",
         )
         .unwrap();
@@ -416,7 +780,7 @@ fn test_value_to_classid() {
             (datatype Math)
             (constructor exp () Math )
             (exp)
-            (query-extract (exp))
+            (extract (exp))
             "#,
         )
         .unwrap();

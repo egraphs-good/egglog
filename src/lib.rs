@@ -33,7 +33,7 @@ extern crate self as egglog;
 pub use add_primitive::add_primitive;
 
 use crate::constraint::Problem;
-use crate::core::{AtomTerm, ResolvedCall};
+use crate::core::{AtomTerm, ResolvedAtomTerm, ResolvedCall};
 use crate::typechecking::TypeError;
 use actions::Program;
 use ast::remove_globals::remove_globals;
@@ -41,10 +41,9 @@ use ast::*;
 #[cfg(feature = "bin")]
 pub use cli::bin::*;
 use constraint::{Constraint, SimpleTypeConstraint, TypeConstraint};
-use core::ResolvedAtomTerm;
-use core_relations::{ExternalFunctionId, PrimitivePrinter};
+use core_relations::ExternalFunctionId;
 use egglog_bridge::{ColumnTy, QueryEntry};
-use extract::Extractor;
+use extract::{Extractor, ExtractorAlter, TreeAdditiveCostModel};
 pub use function::Function;
 use function::*;
 use gj::*;
@@ -62,7 +61,7 @@ use std::iter::once;
 use std::ops::{Deref, Range};
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 pub use termdag::{Term, TermDag, TermId};
 use thiserror::Error;
 pub use typechecking::TypeInfo;
@@ -1200,6 +1199,69 @@ impl EGraph {
         Ok((sort, value_new_backend))
     }
 
+    fn eval_resolved_expr(
+        &mut self,
+        span: Span,
+        expr: &ResolvedExpr,
+    ) -> Result<core_relations::Value, Error> {
+        let unit_id = self.backend.primitives().get_ty::<()>();
+        let unit_val = self.backend.primitives().get(());
+
+        let result: egglog_bridge::SideChannel<core_relations::Value> = Default::default();
+        let result_ref = result.clone();
+        let ext_id = self
+            .backend
+            .register_external_func(core_relations::make_external_func(move |_es, vals| {
+                debug_assert!(vals.len() == 1);
+                *result_ref.lock().unwrap() = Some(vals[0]);
+                Some(unit_val)
+            }));
+
+        let mut translator = BackendRule::new(
+            self.backend.new_rule("eval_resolved_expr", false),
+            &self.functions,
+            &self.type_info,
+        );
+
+        let result_var = ResolvedVar {
+            name: self
+                .parser
+                .symbol_gen
+                .fresh(&Symbol::from("eval_resolved_expr")),
+            sort: expr.output_type(),
+            is_global_ref: false,
+        };
+        let actions = ResolvedActions::singleton(ResolvedAction::Let(
+            span.clone(),
+            result_var.clone(),
+            expr.clone(),
+        ));
+        let actions = actions
+            .to_core_actions(
+                &self.type_info,
+                &mut Default::default(),
+                &mut self.parser.symbol_gen,
+            )?
+            .0;
+        translator.actions(&actions)?;
+
+        let arg = translator.entry(&ResolvedAtomTerm::Var(span.clone(), result_var));
+        translator.rb.call_external_func(
+            ext_id,
+            &[arg],
+            egglog_bridge::ColumnTy::Primitive(unit_id),
+            "this function will never panic",
+        );
+
+        let id = translator.build();
+        let _ = self.backend.run_rules(&[id]).unwrap();
+        self.backend.free_rule(id);
+        self.backend.free_external_func(ext_id);
+
+        let result = result.lock().unwrap().unwrap();
+        Ok(result)
+    }
+
     fn add_combined_ruleset(&mut self, name: Symbol, rulesets: Vec<Symbol>) {
         match self.rulesets.entry(name) {
             Entry::Occupied(_) => panic!("Ruleset '{name}' was already present"),
@@ -1356,6 +1418,65 @@ impl EGraph {
                     self.eval_actions(&ResolvedActions::new(vec![action.clone()]))?;
                 }
             },
+            ResolvedNCommand::Extract(span, expr, variants) => {
+                let sort = expr.output_type();
+
+                let x = self.eval_resolved_expr(span.clone(), &expr)?;
+                let n = self.eval_resolved_expr(span, &variants)?;
+                let n: i64 = self.backend.primitives().unwrap(n);
+
+                let mut termdag = TermDag::default();
+
+                let extractor = ExtractorAlter::compute_costs_from_rootsorts(
+                    Some(vec![sort]),
+                    self,
+                    TreeAdditiveCostModel::default(),
+                );
+                if n == 0 {
+                    if let Some((cost, term)) = extractor.extract_best(self, &mut termdag, x) {
+                        // dont turn termdag into a string if we have messages disabled for performance reasons
+                        if self.messages_enabled() {
+                            let extracted = termdag.to_string(&term);
+                            log::info!("extracted with cost {cost}: {extracted}");
+                            self.print_msg(extracted);
+                        }
+                        self.extract_report = Some(ExtractReport::Best {
+                            termdag,
+                            cost,
+                            term,
+                        });
+                    } else {
+                        return Err(Error::ExtractError(
+                            "Unable to find any valid extraction (likely due to subsume or delete)"
+                                .to_string(),
+                        ));
+                    }
+                } else {
+                    if n < 0 {
+                        panic!("Cannot extract negative number of variants");
+                    }
+                    let terms: Vec<Term> = extractor
+                        .extract_variants(self, &mut termdag, x, n as usize)
+                        .iter()
+                        .map(|e| e.1.clone())
+                        .collect();
+                    // Same as above, avoid turning termdag into a string if we have messages disabled for performance
+                    if self.messages_enabled() {
+                        log::info!("extracted variants:");
+                        let mut msg = String::default();
+                        msg += "(\n";
+                        assert!(!terms.is_empty());
+                        for expr in &terms {
+                            let str = termdag.to_string(expr);
+                            log::info!("   {str}");
+                            msg += &format!("   {str}\n");
+                        }
+                        msg += ")";
+                        self.print_msg(msg);
+                    }
+                    self.extract_report = Some(ExtractReport::Variants { termdag, terms });
+                }
+            }
             ResolvedNCommand::Push(n) => {
                 (0..n).for_each(|_| self.push());
                 log::info!("Pushed {n} levels.")
@@ -1414,84 +1535,25 @@ impl EGraph {
                     .create(true)
                     .open(&filename)
                     .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
-    
-                let unit_id = self.backend.primitives().get_ty::<()>();
-                let unit_val = self.backend.primitives().get(());
 
-                let results: Arc<Mutex<Vec<core_relations::Value>>> = Default::default();
-                let results_ref = results.clone();
-                let ext_id =
-                    self.backend
-                        .register_external_func(core_relations::make_external_func(
-                            move |_es, vals| {
-                                debug_assert!(vals.len() == 1);
-                                results_ref.lock().unwrap().push(vals[0]);
-                                Some(unit_val)
-                            },
-                        ));
-
-
-                let mut translator = BackendRule::new(
-                    self.backend.new_rule("outputs", false),
-                    &self.functions,
-                    &self.type_info,
+                let extractor = ExtractorAlter::compute_costs_from_rootsorts(
+                    None,
+                    self,
+                    TreeAdditiveCostModel::default(),
                 );
-                let expr_types = exprs.iter().map(|e| e.output_type()).collect::<Vec<_>>();
-                for expr in exprs {
-                    let result_var = ResolvedVar {
-                        name: self.parser.symbol_gen.fresh(&Symbol::from("__egglog_output")),
-                        sort: expr.output_type(),
-                        is_global_ref: false,
-                    };
-                    let actions = ResolvedActions::singleton(ResolvedAction::Let(
-                        span.clone(),
-                        result_var.clone(),
-                        expr,
-                    ));
-                    let actions = actions
-                        .to_core_actions(
-                            &self.type_info,
-                            &mut Default::default(),
-                            &mut self.parser.symbol_gen,
-                        )?
-                        .0;
-                    translator.actions(&actions)?;
-                    let arg = translator.entry(&ResolvedAtomTerm::Var(span.clone(), result_var));
-                    translator.rb.call_external_func(
-                        ext_id,
-                        &[arg],
-                        egglog_bridge::ColumnTy::Primitive(unit_id),
-                        "this function will never panic",
-                    );
-                }
-                let id = translator.build();
-                let _ = self.backend.run_rules(&[id]).unwrap();
-                self.backend.free_rule(id);
-                self.backend.free_external_func(ext_id);
+                let mut termdag: TermDag = Default::default();
 
-                let results: Vec<_> = std::mem::take(results.lock().unwrap().as_mut());
                 use std::io::Write;
-                for (value, expr_type) in results.into_iter().zip(expr_types) {
-                    // hack before extraction for the new backend gets merged:
-                    if !expr_type.is_container_sort() && !expr_type.is_eq_sort() {
-                        let primitive_id = self
-                            .backend
-                            .primitives()
-                            .get_ty_by_id(expr_type.value_type().unwrap());
-                        let formatted_val = PrimitivePrinter {
-                            prim: self.backend.primitives(),
-                            ty: primitive_id,
-                            val: value,
-                        };
-                        writeln!(f, "{:?}", formatted_val)
-                            .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?
-                    } else {
-                        todo!("handle the general case with extract")
-                        // let term = self.extract(value, &mut termdag, &expr_type)?.1;
-                        // use std::io::Write;
-                        // writeln!(f, "{}", termdag.to_string(&term))
-                        //     .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
-                    }
+                for expr in exprs {
+                    let value = self.eval_resolved_expr(span.clone(), &expr)?;
+                    let expr_type = expr.output_type();
+
+                    let term = extractor
+                        .extract_best_with_sort(self, &mut termdag, value, expr_type)
+                        .unwrap()
+                        .1;
+                    writeln!(f, "{}", termdag.to_string(&term))
+                        .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
                 }
 
                 log::info!("Output to '{filename:?}'.")
@@ -1793,10 +1855,11 @@ impl<'a> BackendRule<'a> {
                 .map(|s| s.is_eq_sort() || s.is_eq_container_sort())
                 .collect();
 
-            qe_args[0] = self
-                .rb
-                .egraph()
-                .primitive_constant(ResolvedFunction { id, do_rebuild });
+            qe_args[0] = self.rb.egraph().primitive_constant(ResolvedFunction {
+                id,
+                do_rebuild,
+                name,
+            });
         }
 
         (
@@ -1897,7 +1960,6 @@ impl<'a> BackendRule<'a> {
                     self.rb.union(x, y)
                 }
                 core::GenericCoreAction::Panic(_, message) => self.rb.panic(message.clone()),
-                core::GenericCoreAction::Extract(_, _x, _n) => todo!("no extraction yet"),
             }
         }
         Ok(())
@@ -1961,7 +2023,7 @@ pub enum Error {
     #[error("Cannot subsume function with merge: {0}")]
     SubsumeMergeError(Symbol),
     #[error("extraction failure: {:?}", .0)]
-    ExtractError(Value),
+    ExtractError(String),
 }
 
 #[cfg(test)]

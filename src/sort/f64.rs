@@ -76,6 +76,17 @@ impl Sort for F64Sort {
     fn value_type(&self) -> Option<TypeId> {
         Some(TypeId::of::<F>())
     }
+
+    fn reconstruct_termdag_leaf(
+        &self,
+        primitives: &core_relations::Primitives,
+        value: &core_relations::Value,
+        termdag: &mut TermDag,
+    ) -> Term {
+        let f = primitives.unwrap_ref::<F>(*value);
+
+        termdag.lit(Literal::Float(*f))
+    }
 }
 
 impl IntoSort for F {

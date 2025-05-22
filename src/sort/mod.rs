@@ -51,6 +51,17 @@ pub trait Sort: Any + Send + Sync + Debug {
 
     fn column_ty(&self, backend: &egglog_bridge::EGraph) -> ColumnTy;
 
+    /// return the inner sorts if a container sort
+    /// remember that containers can contain containers
+    /// and this only unfolds one level
+    fn inner_sorts(&self) -> Vec<ArcSort> {
+        if self.is_container_sort() {
+            todo!("inner_sorts: {}", self.name());
+        } else {
+            panic!("inner_sort called on non-container sort: {}", self.name());
+        }
+    }
+
     fn register_type(&self, backend: &mut egglog_bridge::EGraph);
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static>;
@@ -107,12 +118,12 @@ pub trait Sort: Any + Send + Sync + Debug {
     /// Only container sort need to implement this method,
     fn inner_values(
         &self,
-        egraph: &EGraph,
+        containers: &core_relations::Containers,
         value: &core_relations::Value,
     ) -> Vec<(ArcSort, core_relations::Value)> {
         debug_assert!(!self.is_container_sort());
         let _ = value;
-        let _ = egraph;
+        let _ = containers;
         vec![]
     }
 
@@ -139,6 +150,53 @@ pub trait Sort: Any + Send + Sync + Debug {
         _extractor: &Extractor,
         _termdag: &mut TermDag,
     ) -> Option<(Cost, Term)>;
+
+    /// Default cost for containers when the cost model does not specify the cost
+    fn default_container_cost(
+        &self,
+        _containers: &core_relations::Containers,
+        _value: core_relations::Value,
+        element_costs: &[Cost],
+    ) -> Cost {
+        element_costs.iter().fold(0, |s, c| s.saturating_add(*c))
+    }
+
+    /// Default cost for leaf primitives when the cost model does not specify the cost
+    fn default_leaf_cost(
+        &self,
+        _primitives: &core_relations::Primitives,
+        _value: core_relations::Value,
+    ) -> Cost {
+        1
+    }
+
+    /// Reconstruct a container value in a TermDag
+    fn reconstruct_termdag_container(
+        &self,
+        containers: &core_relations::Containers,
+        value: &core_relations::Value,
+        termdag: &mut TermDag,
+        element_terms: Vec<Term>,
+    ) -> Term {
+        let _containers = containers;
+        let _value = value;
+        let _termdag = termdag;
+        let _element_terms = element_terms;
+        todo!("reconstruct_termdag_container: {}", self.name());
+    }
+
+    /// Reconstruct a leaf primitive value in a TermDag
+    fn reconstruct_termdag_leaf(
+        &self,
+        primitives: &core_relations::Primitives,
+        value: &core_relations::Value,
+        termdag: &mut TermDag,
+    ) -> Term {
+        let _primitives = primitives;
+        let _value = value;
+        let _termdag = termdag;
+        todo!("reconstruct_termdag_leaf: {}", self.name());
+    }
 }
 
 // Note: this trait is currently intended to be implemented on the

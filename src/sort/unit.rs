@@ -37,6 +37,15 @@ impl Sort for UnitSort {
     fn value_type(&self) -> Option<TypeId> {
         Some(TypeId::of::<()>())
     }
+
+    fn reconstruct_termdag_leaf(
+        &self,
+        _primitives: &core_relations::Primitives,
+        _value: &core_relations::Value,
+        termdag: &mut TermDag,
+    ) -> Term {
+        termdag.lit(Literal::Unit)
+    }
 }
 
 impl IntoSort for () {

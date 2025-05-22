@@ -55,6 +55,16 @@ impl Sort for StringSort {
     fn value_type(&self) -> Option<TypeId> {
         Some(TypeId::of::<S>())
     }
+    fn reconstruct_termdag_leaf(
+        &self,
+        primitives: &core_relations::Primitives,
+        value: &core_relations::Value,
+        termdag: &mut TermDag,
+    ) -> Term {
+        let s = primitives.unwrap_ref::<S>(*value);
+
+        termdag.lit(Literal::String(*s))
+    }
 }
 
 // TODO could use a local symbol table

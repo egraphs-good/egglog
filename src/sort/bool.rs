@@ -49,6 +49,17 @@ impl Sort for BoolSort {
     fn value_type(&self) -> Option<TypeId> {
         Some(TypeId::of::<bool>())
     }
+
+    fn reconstruct_termdag_leaf(
+        &self,
+        primitives: &core_relations::Primitives,
+        value: &core_relations::Value,
+        termdag: &mut TermDag,
+    ) -> Term {
+        let b = primitives.unwrap_ref::<bool>(*value);
+
+        termdag.lit(Literal::Bool(*b))
+    }
 }
 
 impl IntoSort for bool {

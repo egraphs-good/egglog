@@ -554,28 +554,18 @@ impl Parser {
                 span,
                 map_fallible(tail, self, Self::schedule)?,
             ))],
-            "simplify" => match tail {
-                [s, e] => vec![Command::Simplify {
+            "extract" => match tail {
+                [e] => vec![Command::Extract(
+                    span.clone(),
+                    self.parse_expr(e)?,
+                    Expr::Lit(span, Literal::Int(0)),
+                )],
+                [e, v] => vec![Command::Extract(
                     span,
-                    schedule: self.schedule(s)?,
-                    expr: self.parse_expr(e)?,
-                }],
-                _ => return error!(span, "usage: (simplify <schedule> <expr>)"),
-            },
-            "query-extract" => match tail {
-                [rest @ .., e] => {
-                    let variants = match self.parse_options(rest)?.as_slice() {
-                        [] => 0,
-                        [(":variants", [v])] => v.expect_uint("number of variants")?,
-                        _ => return error!(span, "could not parse query-extract options"),
-                    };
-                    vec![Command::QueryExtract {
-                        span,
-                        expr: self.parse_expr(e)?,
-                        variants,
-                    }]
-                }
-                _ => return error!(span, "usage: (query-extract <:variants <uint>>? <expr>)"),
+                    self.parse_expr(e)?,
+                    self.parse_expr(v)?,
+                )],
+                _ => return error!(span, "usage: (extract <expr> <number of variants>?)"),
             },
             "check" => vec![Command::Check(
                 span,
@@ -765,19 +755,6 @@ impl Parser {
             "panic" => match tail {
                 [message] => vec![Action::Panic(span, message.expect_string("error message")?)],
                 _ => return error!(span, "usage: (panic <string>)"),
-            },
-            "extract" => match tail {
-                [e] => vec![Action::Extract(
-                    span.clone(),
-                    self.parse_expr(e)?,
-                    Expr::Lit(span, Literal::Int(0)),
-                )],
-                [e, v] => vec![Action::Extract(
-                    span,
-                    self.parse_expr(e)?,
-                    self.parse_expr(v)?,
-                )],
-                _ => return error!(span, "usage: (extract <expr> <number of variants>?)"),
             },
             _ => vec![Action::Expr(span, self.parse_expr(sexp)?)],
         })

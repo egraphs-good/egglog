@@ -66,7 +66,7 @@ impl Presort for VecSort {
             if e.is_eq_container_sort() {
                 return Err(TypeError::DisallowedSort(
                     name,
-                    "Sets nested with other EqSort containers are not allowed".into(),
+                    "Vec nested with other EqSort containers are not allowed".into(),
                     span.clone(),
                 ));
             }
@@ -99,6 +99,10 @@ impl Sort for VecSort {
         self
     }
 
+    fn inner_sorts(&self) -> Vec<ArcSort> {
+        vec![self.element.clone()]
+    }
+
     fn is_container_sort(&self) -> bool {
         true
     }
@@ -116,12 +120,10 @@ impl Sort for VecSort {
 
     fn inner_values(
         &self,
-        egraph: &EGraph,
+        containers: &core_relations::Containers,
         value: &core_relations::Value,
     ) -> Vec<(ArcSort, core_relations::Value)> {
-        let val = egraph
-            .backend
-            .containers()
+        let val = containers
             .get_val::<VecContainer<core_relations::Value>>(*value)
             .unwrap()
             .clone();
@@ -193,6 +195,20 @@ impl Sort for VecSort {
                 .collect::<Option<Vec<_>>>()?;
 
             Some((cost, termdag.app("vec-of".into(), elems)))
+        }
+    }
+
+    fn reconstruct_termdag_container(
+        &self,
+        _containers: &core_relations::Containers,
+        _value: &core_relations::Value,
+        termdag: &mut TermDag,
+        element_terms: Vec<Term>,
+    ) -> Term {
+        if element_terms.is_empty() {
+            termdag.app("vec-empty".into(), vec![])
+        } else {
+            termdag.app("vec-of".into(), element_terms)
         }
     }
 
