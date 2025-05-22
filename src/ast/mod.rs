@@ -67,7 +67,6 @@ where
     },
     CoreAction(GenericAction<Head, Leaf>),
     Extract(Span, GenericExpr<Head, Leaf>, GenericExpr<Head, Leaf>),
-    QueryExtract(Span, GenericExpr<Head, Leaf>, GenericExpr<Head, Leaf>),
     RunSchedule(GenericSchedule<Head, Leaf>),
     PrintOverallStatistics,
     Check(Span, Vec<GenericFact<Head, Leaf>>),
@@ -144,11 +143,6 @@ where
             GenericNCommand::Extract(span, expr, variants) => {
                 GenericCommand::Extract(span.clone(), expr.clone(), variants.clone())
             }
-            GenericNCommand::QueryExtract(span, expr, variants) => GenericCommand::QueryExtract {
-                span: span.clone(),
-                expr: expr.clone(),
-                variants: variants.clone(),
-            },
             GenericNCommand::Check(span, facts) => {
                 GenericCommand::Check(span.clone(), facts.clone())
             }
@@ -209,9 +203,6 @@ where
             }
             GenericNCommand::Extract(span, expr, variants) => {
                 GenericNCommand::Extract(span, expr.visit_exprs(f), variants.visit_exprs(f))
-            }
-            GenericNCommand::QueryExtract(span, expr, variants) => {
-                GenericNCommand::QueryExtract(span, expr.visit_exprs(f), variants.visit_exprs(f))
             }
             GenericNCommand::Check(span, facts) => GenericNCommand::Check(
                 span,
@@ -607,36 +598,6 @@ where
         expr: GenericExpr<Head, Leaf>,
         schedule: GenericSchedule<Head, Leaf>,
     },
-    /// The `query-extract` command runs a query,
-    /// extracting the result for each match that it finds.
-    /// For a simpler extraction command, use [`Command::Extract`] instead.
-    ///
-    /// Example:
-    /// ```text
-    /// (query-extract (Add a b))
-    /// ```
-    ///
-    /// Extracts every `Add` term in the database, once
-    /// for each class of equivalent `a` and `b`.
-    ///
-    /// The resulting datatype is chosen from the egraph
-    /// as the smallest term by size (taking into account
-    /// the `:cost` annotations for each constructor).
-    /// This cost does *not* take into account common sub-expressions.
-    /// For example, the following term has cost 5:
-    /// ```text
-    /// (Add
-    ///     (Num 1)
-    ///     (Num 1))
-    /// ```
-    ///
-    /// Under the hood, this command is implemented with the [`EGraph::extract`]
-    /// function.
-    QueryExtract {
-        span: Span,
-        variants: GenericExpr<Head, Leaf>,
-        expr: GenericExpr<Head, Leaf>,
-    },
     /// The `check` command checks that the given facts
     /// match at least once in the current database.
     /// The list of facts is matched in the same way a [`Command::Rule`] is matched.
@@ -771,13 +732,6 @@ where
             } => rule.fmt_with_ruleset(f, *ruleset, *name),
             GenericCommand::RunSchedule(sched) => write!(f, "(run-schedule {sched})"),
             GenericCommand::PrintOverallStatistics => write!(f, "(print-stats)"),
-            GenericCommand::QueryExtract {
-                span: _,
-                variants,
-                expr,
-            } => {
-                write!(f, "(query-extract :variants {variants} {expr})")
-            }
             GenericCommand::Check(_ann, facts) => {
                 write!(f, "(check {})", ListDisplay(facts, "\n"))
             }
