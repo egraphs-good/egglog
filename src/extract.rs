@@ -296,7 +296,7 @@ impl ExtractorAlter {
         // We filter out tables unreachable from the root sorts
         let extract_all_sorts = rootsorts.is_none();
 
-        let mut rootsorts = rootsorts.unwrap_or(Vec::new());
+        let mut rootsorts = rootsorts.unwrap_or_default();
 
         // Built a reverse index from output sort to function head symbols
         let mut rev_index: HashMap<Symbol, Vec<Symbol>> = Default::default();

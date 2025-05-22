@@ -1434,7 +1434,7 @@ impl EGraph {
                     TreeAdditiveCostModel::default(),
                 );
                 if n == 0 {
-                    if let Some ((cost, term)) = extractor.extract_best(self, &mut termdag, x) {
+                    if let Some((cost, term)) = extractor.extract_best(self, &mut termdag, x) {
                         // dont turn termdag into a string if we have messages disabled for performance reasons
                         if self.messages_enabled() {
                             let extracted = termdag.to_string(&term);
@@ -1447,7 +1447,10 @@ impl EGraph {
                             term,
                         });
                     } else {
-                        return Err(Error::ExtractError("Unable to find any valid extraction (likely due to subsume or delete)".to_string()));
+                        return Err(Error::ExtractError(
+                            "Unable to find any valid extraction (likely due to subsume or delete)"
+                                .to_string(),
+                        ));
                     }
                 } else {
                     if n < 0 {
