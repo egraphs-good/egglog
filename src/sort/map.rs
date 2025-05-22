@@ -138,8 +138,8 @@ impl Sort for MapSort {
         self
     }
 
-    fn inner_sorts(&self) -> Vec<&Arc<dyn Sort>> {
-        vec![&self.key, &self.value]
+    fn inner_sorts(&self) -> Vec<ArcSort> {
+        vec![self.key.clone(), self.value.clone()]
     }
 
     fn is_container_sort(&self) -> bool {

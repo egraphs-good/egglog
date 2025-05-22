@@ -283,11 +283,11 @@ pub struct ExtractorAlter {
 }
 
 impl ExtractorAlter {
-    /// Bulk of the computation happens at initialization time
-    /// The later extractions only reuses saved results
-    /// The means a new extractor must be created if the egraph changes
-    /// Holding a reference to the egraph would enforce this but prevents the extractor being reused
-    /// For convenience, if the rootsorts is None, it defaults to extract all extractable rootsorts
+    /// Bulk of the computation happens at initialization time.
+    /// The later extractions only reuses saved results.
+    /// This means a new extractor must be created if the egraph changes.
+    /// Holding a reference to the egraph would enforce this but prevents the extractor being reused.
+    /// For convenience, if the rootsorts is None, it defaults to extract all extractable rootsorts.
     pub fn compute_costs_from_rootsorts(
         rootsorts: Option<Vec<ArcSort>>,
         egraph: &EGraph,

@@ -179,6 +179,10 @@ impl Sort for FunctionSort {
         input_values.1.clone()
     }
 
+    fn inner_sorts(&self) -> Vec<ArcSort> {
+        self.inputs.clone()
+    }
+
     fn inner_values(
         &self,
         containers: &core_relations::Containers,

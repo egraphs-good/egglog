@@ -7,7 +7,7 @@ fn test_simple_extract1() {
 
     let mut egraph = EGraph::default();
 
-    let result = egraph
+    let _ = egraph
         .parse_and_run_program(
             None,
             r#"
@@ -17,7 +17,11 @@ fn test_simple_extract1() {
         )
         .unwrap();
 
-    log::debug!("{}", result.join("\n"));
+    let report = egraph.get_extract_report().clone().unwrap();
+    let ExtractReport::Best { cost, .. } = report else {
+        panic!();
+    };
+    assert_eq!(cost, 3);
 }
 
 #[test]
@@ -48,6 +52,12 @@ fn test_simple_extract2() {
              "#,
         )
         .unwrap();
+
+    let report = egraph.get_extract_report().clone().unwrap();
+    let ExtractReport::Best { cost, .. } = report else {
+        panic!();
+    };
+    assert_eq!(cost, 4);
 }
 
 #[test]
@@ -76,6 +86,12 @@ fn test_simple_extract3() {
              "#,
         )
         .unwrap();
+
+    let report = egraph.get_extract_report().clone().unwrap();
+    let ExtractReport::Best { cost, .. } = report else {
+        panic!();
+    };
+    assert_eq!(cost, 2);
 }
 
 #[test]
@@ -128,6 +144,12 @@ fn test_simple_extract5() {
              "#,
         )
         .unwrap();
+
+    let report = egraph.get_extract_report().clone().unwrap();
+    let ExtractReport::Best { cost, .. } = report else {
+        panic!();
+    };
+    assert_eq!(cost, 0);
 }
 
 #[test]
@@ -149,6 +171,12 @@ fn test_simple_extract6() {
              "#,
         )
         .unwrap();
+
+    let report = egraph.get_extract_report().clone().unwrap();
+    let ExtractReport::Best { cost, .. } = report else {
+        panic!();
+    };
+    assert_eq!(cost, 0);
 }
 
 #[test]
@@ -191,6 +219,12 @@ fn test_simple_extract7() {
              "#,
         )
         .unwrap();
+
+    let report = egraph.get_extract_report().clone().unwrap();
+    let ExtractReport::Best { cost, .. } = report else {
+        panic!();
+    };
+    assert_eq!(cost, 2);
 }
 
 #[test]
@@ -221,6 +255,12 @@ fn test_extract_variants1() {
              "#,
         )
         .unwrap();
+
+    let report = egraph.get_extract_report().clone().unwrap();
+    let ExtractReport::Variants { terms, .. } = report else {
+        panic!();
+    };
+    assert_eq!(terms.len(), 2);
 }
 
 #[test]
