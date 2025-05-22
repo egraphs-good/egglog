@@ -67,7 +67,7 @@ impl EGraph {
                     }
                 }
             }
-            Error::ExtractError(value)
+            Error::ExtractError(String::new())
         })
     }
 
