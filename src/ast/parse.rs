@@ -575,21 +575,6 @@ impl Parser {
                 )],
                 _ => return error!(span, "usage: (extract <expr> <number of variants>?)"),
             },
-            "query-extract" => match tail {
-                [rest @ .., e] => {
-                    let variants = match self.parse_options(rest)?.as_slice() {
-                        [] => Expr::Lit(span.clone(), Literal::Int(0)),
-                        [(":variants", [v])] => self.parse_expr(v)?,
-                        _ => return error!(span, "could not parse query-extract options"),
-                    };
-                    vec![Command::QueryExtract {
-                        span,
-                        expr: self.parse_expr(e)?,
-                        variants,
-                    }]
-                }
-                _ => return error!(span, "usage: (query-extract <:variants <uint>>? <expr>)"),
-            },
             "check" => vec![Command::Check(
                 span,
                 map_fallible(tail, self, Self::parse_fact)?,

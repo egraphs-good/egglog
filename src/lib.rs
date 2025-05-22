@@ -1478,9 +1478,6 @@ impl EGraph {
                     self.extract_report = Some(ExtractReport::Variants { termdag, terms });
                 }
             }
-            ResolvedNCommand::QueryExtract(_span, _expr, _variants) => {
-                todo!("query extraction - might remove/replace this feature")
-            }
             ResolvedNCommand::Push(n) => {
                 (0..n).for_each(|_| self.push());
                 log::info!("Pushed {n} levels.")

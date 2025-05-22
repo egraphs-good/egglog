@@ -152,13 +152,6 @@ pub(crate) fn desugar_command(
             vec![NCommand::PrintOverallStatistics]
         }
         Command::Extract(span, expr, variants) => vec![NCommand::Extract(span, expr, variants)],
-        Command::QueryExtract {
-            span,
-            variants,
-            expr,
-        } => {
-            vec![NCommand::QueryExtract(span, expr, variants)]
-        }
         Command::Check(span, facts) => vec![NCommand::Check(span, facts)],
         Command::PrintFunction(span, symbol, size) => {
             vec![NCommand::PrintTable(span, symbol, size)]
@@ -285,11 +278,6 @@ fn desugar_simplify(
         NCommand::Push(1),
         NCommand::CoreAction(Action::Let(span.clone(), lhs, expr.clone())),
         NCommand::RunSchedule(schedule.clone()),
-        NCommand::QueryExtract(
-            span.clone(),
-            Expr::Var(span.clone(), lhs),
-            Expr::Lit(span.clone(), Literal::Int(0)),
-        ),
         NCommand::Pop(span, 1),
     ]
 }
