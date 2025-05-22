@@ -41,7 +41,7 @@ use ast::*;
 #[cfg(feature = "bin")]
 pub use cli::bin::*;
 use constraint::{Constraint, SimpleTypeConstraint, TypeConstraint};
-use core_relations::{ExternalFunctionId};
+use core_relations::ExternalFunctionId;
 use egglog_bridge::{ColumnTy, QueryEntry};
 use extract::{Extractor, ExtractorAlter, TreeAdditiveCostModel};
 pub use function::Function;
@@ -1536,15 +1536,22 @@ impl EGraph {
                     .open(&filename)
                     .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
 
-                let extractor = ExtractorAlter::compute_costs_from_rootsorts(None, self, TreeAdditiveCostModel::default());
-                let mut termdag : TermDag = Default::default();
+                let extractor = ExtractorAlter::compute_costs_from_rootsorts(
+                    None,
+                    self,
+                    TreeAdditiveCostModel::default(),
+                );
+                let mut termdag: TermDag = Default::default();
 
                 use std::io::Write;
                 for expr in exprs {
                     let value = self.eval_resolved_expr(span.clone(), &expr)?;
                     let expr_type = expr.output_type();
 
-                    let term = extractor.extract_best_with_sort(self, &mut termdag, value, expr_type).unwrap().1;
+                    let term = extractor
+                        .extract_best_with_sort(self, &mut termdag, value, expr_type)
+                        .unwrap()
+                        .1;
                     writeln!(f, "{}", termdag.to_string(&term))
                         .map_err(|e| Error::IoError(filename.clone(), e, span.clone()))?;
                 }
