@@ -555,14 +555,6 @@ impl Parser {
                 span,
                 map_fallible(tail, self, Self::schedule)?,
             ))],
-            "simplify" => match tail {
-                [s, e] => vec![Command::Simplify {
-                    span,
-                    schedule: self.schedule(s)?,
-                    expr: self.parse_expr(e)?,
-                }],
-                _ => return error!(span, "usage: (simplify <schedule> <expr>)"),
-            },
             "extract" => match tail {
                 [e] => vec![Command::Extract(
                     span.clone(),

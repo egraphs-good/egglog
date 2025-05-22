@@ -592,12 +592,6 @@ where
     /// Print runtime statistics about rules
     /// and rulesets so far.
     PrintOverallStatistics,
-    // TODO provide simplify docs
-    Simplify {
-        span: Span,
-        expr: GenericExpr<Head, Leaf>,
-        schedule: GenericSchedule<Head, Leaf>,
-    },
     /// The `check` command checks that the given facts
     /// match at least once in the current database.
     /// The list of facts is matched in the same way a [`Command::Rule`] is matched.
@@ -755,11 +749,6 @@ where
             } => write!(f, "(output {file:?} {})", ListDisplay(exprs, " ")),
             GenericCommand::Fail(_span, cmd) => write!(f, "(fail {cmd})"),
             GenericCommand::Include(_span, file) => write!(f, "(include {file:?})"),
-            GenericCommand::Simplify {
-                span: _,
-                expr,
-                schedule,
-            } => write!(f, "(simplify {schedule} {expr})"),
             GenericCommand::Datatypes { span: _, datatypes } => {
                 let datatypes: Vec<_> = datatypes
                     .iter()
