@@ -154,28 +154,6 @@ impl EGraph {
 
                 ResolvedNCommand::Extract(span.clone(), res_expr, res_variants)
             }
-            NCommand::QueryExtract(span, expr, variants) => {
-                let res_expr = self
-                    .type_info
-                    .typecheck_facts(symbol_gen, &[Fact::Fact(expr.clone())])?;
-                assert_eq!(res_expr.len(), 1);
-                let GenericFact::Fact(res_expr) = res_expr.into_iter().next().unwrap() else {
-                    unreachable!()
-                };
-
-                let res_variants =
-                    self.type_info
-                        .typecheck_expr(symbol_gen, variants, &Default::default())?;
-                if res_variants.output_type().name() != I64Sort.name() {
-                    return Err(TypeError::Mismatch {
-                        expr: variants.clone(),
-                        expected: Arc::new(I64Sort),
-                        actual: res_variants.output_type(),
-                    });
-                }
-
-                ResolvedNCommand::QueryExtract(span.clone(), res_expr, res_variants)
-            }
             NCommand::Check(span, facts) => ResolvedNCommand::Check(
                 span.clone(),
                 self.type_info.typecheck_facts(symbol_gen, facts)?,
