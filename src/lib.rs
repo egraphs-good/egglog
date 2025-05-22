@@ -1361,17 +1361,6 @@ impl EGraph {
     }
 
     fn run_command(&mut self, command: ResolvedNCommand) -> Result<(), Error> {
-        let pre_rebuild = Instant::now();
-        let rebuild_num = self.rebuild()?;
-        if rebuild_num > 0 {
-            log::info!(
-                "Rebuild before command: {:10}ms",
-                pre_rebuild.elapsed().as_millis()
-            );
-        }
-
-        self.debug_assert_invariants();
-
         match command {
             ResolvedNCommand::SetOption { name, value } => {
                 let str = format!("Set option {} to {}", name, value);
@@ -1566,6 +1555,17 @@ impl EGraph {
                 log::info!("Output to '{filename:?}'.")
             }
         };
+
+        let post_rebuild = Instant::now();
+        let rebuild_num = self.rebuild()?;
+        if rebuild_num > 0 {
+            log::info!(
+                "Rebuild after command: {:10}ms",
+                post_rebuild.elapsed().as_millis()
+            );
+        }
+
+        self.debug_assert_invariants();
         Ok(())
     }
 
