@@ -547,8 +547,10 @@ impl EGraph {
         }
     }
 
-    pub fn union(&mut self, id1: Id, id2: Id, sort: Symbol) -> Id {
-        self.unionfind.union(id1, id2, sort)
+    pub fn union(&mut self, id1: Id, id2: Id, sort: Symbol) -> Result<Id, Error> {
+        self.unionfind.union(id1, id2, sort);
+        self.rebuild()?;
+        Ok(self.unionfind.find(id1))
     }
 
     #[track_caller]
