@@ -1434,18 +1434,21 @@ impl EGraph {
                     TreeAdditiveCostModel::default(),
                 );
                 if n == 0 {
-                    let (cost, term) = extractor.extract_best(self, &mut termdag, x).unwrap();
-                    // dont turn termdag into a string if we have messages disabled for performance reasons
-                    if self.messages_enabled() {
-                        let extracted = termdag.to_string(&term);
-                        log::info!("extracted with cost {cost}: {extracted}");
-                        self.print_msg(extracted);
+                    if let Some ((cost, term)) = extractor.extract_best(self, &mut termdag, x) {
+                        // dont turn termdag into a string if we have messages disabled for performance reasons
+                        if self.messages_enabled() {
+                            let extracted = termdag.to_string(&term);
+                            log::info!("extracted with cost {cost}: {extracted}");
+                            self.print_msg(extracted);
+                        }
+                        self.extract_report = Some(ExtractReport::Best {
+                            termdag,
+                            cost,
+                            term,
+                        });
+                    } else {
+                        return Err(Error::ExtractError("Unable to find any valid extraction (likely due to subsume or delete)".to_string()));
                     }
-                    self.extract_report = Some(ExtractReport::Best {
-                        termdag,
-                        cost,
-                        term,
-                    });
                 } else {
                     if n < 0 {
                         panic!("Cannot extract negative number of variants");
@@ -2038,7 +2041,7 @@ pub enum Error {
     #[error("Cannot subsume function with merge: {0}")]
     SubsumeMergeError(Symbol),
     #[error("extraction failure: {:?}", .0)]
-    ExtractError(Value),
+    ExtractError(String),
     #[error("{1}\n{2}\nShadowing is not allowed, but found {0}")]
     Shadowing(Symbol, Span, Span),
 }
