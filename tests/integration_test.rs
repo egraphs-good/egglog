@@ -256,6 +256,80 @@ fn test_simple_extract8() {
 }
 
 #[test]
+fn test_simple_extract9() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut egraph = EGraph::default();
+
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+            (datatype Foo)
+            (datatype NodeA)
+            (datatype NodeB)
+            (datatype NodeC)
+            (constructor ctoa (NodeC) NodeA)
+            (constructor atob (NodeA) NodeB)
+            (constructor btoc (NodeB) NodeC)
+
+            (constructor bar () Foo :cost 9223372036854775807)
+            (constructor barbar (Foo Foo) Foo :cost 2)
+
+            (constructor groundedA (Foo) NodeA)
+            (let a (groundedA (barbar (bar) (bar))))
+            (let b (atob a))
+            (let c (btoc b))
+            (let a2 (ctoa c))
+            (let b2 (atob a2))
+            (let c2 (btoc b2))
+            (union a a2)
+            (union b b2)
+            (union c c2)
+
+            (extract a)
+            "#,
+        )
+        .unwrap();
+
+    let report = egraph.get_extract_report().clone().unwrap();
+    let ExtractReport::Best { cost, .. } = report else {
+        panic!();
+    };
+    assert_eq!(cost, usize::MAX);
+
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+            (extract b)
+            "#,
+        )
+        .unwrap();
+
+    let report = egraph.get_extract_report().clone().unwrap();
+    let ExtractReport::Best { cost, .. } = report else {
+        panic!();
+    };
+    assert_eq!(cost, usize::MAX);
+
+    egraph
+        .parse_and_run_program(
+            None,
+            r#"
+            (extract c)
+            "#,
+        )
+        .unwrap();
+
+    let report = egraph.get_extract_report().clone().unwrap();
+    let ExtractReport::Best { cost, .. } = report else {
+        panic!();
+    };
+    assert_eq!(cost, usize::MAX);
+}
+
+#[test]
 fn test_extract_variants1() {
     let _ = env_logger::builder().is_test(true).try_init();
 

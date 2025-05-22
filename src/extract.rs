@@ -213,12 +213,12 @@ impl<'a> Extractor<'a> {
 }
 
 /// An interface for custom cost model
-/// The default extractor does Bellman-Ford for minimum cost.
-/// So, a term can have a cost less than its subterms.
+/// For common case usage, the model should guarantee a term has a no-smaller cost
+/// than its subterms to avoid cycles in the extracted terms.
+/// For more niech usage, a term can have a cost less than its subterms.
 /// As long as there is no negative cost cycle,
 /// the default extractor is guaranteed to terminate in computing the costs.
-/// However, to guarantee no cycles in the extracted terms without other assumptions,
-/// a term needs to have a cost strictly larger than its subterms.
+/// However, the user needs to be careful to guarantee acyclicity in the extracted terms.
 pub trait CostModel {
     /// Compute the cost of term given the costs of the head symbol and the subterms
     fn fold(&self, head: Symbol, children_cost: &[Cost], head_cost: Cost) -> Cost;
@@ -289,6 +289,8 @@ pub struct ExtractorAlter {
     funcs: Vec<Symbol>,
     cost_model: Box<dyn CostModel>,
     costs: HashMap<Symbol, HashMap<core_relations::Value, Cost>>,
+    topo_rnk_cnt: usize,
+    topo_rnk: HashMap<Symbol, HashMap<core_relations::Value, usize>>,
     parent_edge:
         HashMap<Symbol, HashMap<core_relations::Value, (Symbol, Vec<core_relations::Value>)>>,
 }
@@ -368,6 +370,8 @@ impl ExtractorAlter {
 
         // Initialize the tables to have the reachable entries
         let mut costs: HashMap<Symbol, HashMap<core_relations::Value, Cost>> = Default::default();
+        let mut topo_rnk: HashMap<Symbol, HashMap<core_relations::Value, usize>> =
+            Default::default();
         let mut parent_edge: HashMap<
             Symbol,
             HashMap<core_relations::Value, (Symbol, Vec<core_relations::Value>)>,
@@ -378,6 +382,7 @@ impl ExtractorAlter {
             if !costs.contains_key(&func.schema.output.name()) {
                 debug_assert!(func.schema.output.is_eq_sort());
                 costs.insert(func.schema.output.name(), Default::default());
+                topo_rnk.insert(func.schema.output.name(), Default::default());
                 parent_edge.insert(func.schema.output.name(), Default::default());
             }
         }
@@ -387,6 +392,8 @@ impl ExtractorAlter {
             funcs,
             cost_model: Box::new(cost_model),
             costs,
+            topo_rnk_cnt: 0,
+            topo_rnk,
             parent_edge,
         };
 
@@ -459,6 +466,44 @@ impl ExtractorAlter {
         ))
     }
 
+    fn compute_topo_rnk_node(
+        &self,
+        egraph: &EGraph,
+        value: &core_relations::Value,
+        sort: &ArcSort,
+    ) -> usize {
+        if sort.is_container_sort() {
+            sort.inner_values(egraph.backend.containers(), value)
+                .iter()
+                .fold(0, |ret, (sort, value)| {
+                    usize::max(ret, self.compute_topo_rnk_node(egraph, value, sort))
+                })
+        } else if sort.is_eq_sort() {
+            if let Some(t) = self.topo_rnk.get(&sort.name()) {
+                *t.get(value).unwrap_or(&usize::MAX)
+            } else {
+                usize::MAX
+            }
+        } else {
+            0
+        }
+    }
+
+    fn compute_topo_rnk_hyperedge(
+        &self,
+        egraph: &EGraph,
+        row: &egglog_bridge::FunctionRow,
+        func: &Function,
+    ) -> usize {
+        let sorts = &func.schema.input;
+        row.vals
+            .iter()
+            .zip(sorts.iter())
+            .fold(0, |ret, (value, sort)| {
+                usize::max(ret, self.compute_topo_rnk_node(egraph, value, sort))
+            })
+    }
+
     /// We use Bellman-Ford to compute the costs of the relevant eq sorts' terms
     /// [Bellman-Ford](https://en.wikipedia.org/wiki/Bellman%E2%80%93Ford_algorithm) is a shortest path algorithm.
     /// The version implemented here computes the shortest path from any node in a set of sources to all the reachable nodes.
@@ -466,6 +511,9 @@ impl ExtractorAlter {
     /// In this hypergraph, the nodes corresponde to eclasses, the distances are the costs to extract a term of those eclasses,
     /// and each enode is a hyperedge that goes from the set of children eclasses to the enode's eclass.
     /// The sources are the eclasses with known costs from the cost model.
+    /// Additionally, to avoid cycles in the extraction even when the cost model can assign an equal cost to a term and its subterm.
+    /// It computes a topological rank for each eclass
+    /// and only allows each eclass to have children of classes of strictly smaller ranks in the extraction.
     fn bellman_ford(&mut self, egraph: &EGraph) {
         let mut ensure_fixpoint = false;
 
@@ -482,6 +530,7 @@ impl ExtractorAlter {
                     log::debug!("Relaxing a new hyperedge: {:?}", row);
                     if !row.subsumed {
                         let target = row.vals.last().unwrap();
+                        let mut updated = false;
                         if let Some(new_cost) = self.compute_cost_hyperedge(egraph, &row, func) {
                             match self
                                 .costs
@@ -490,16 +539,27 @@ impl ExtractorAlter {
                                 .entry(*target)
                             {
                                 HEntry::Vacant(e) => {
-                                    ensure_fixpoint = false;
+                                    updated = true;
                                     e.insert(new_cost);
                                 }
                                 HEntry::Occupied(mut e) => {
                                     if new_cost < *(e.get()) {
-                                        ensure_fixpoint = false;
+                                        updated = true;
                                         e.insert(new_cost);
                                     }
                                 }
                             }
+                        }
+                        // record the chronological order of the updates
+                        // which serves as a topological order that avoids cycles
+                        // even when a term has a cost equal to its subterms
+                        if updated {
+                            ensure_fixpoint = false;
+                            self.topo_rnk_cnt += 1;
+                            self.topo_rnk
+                                .get_mut(&target_sort.name())
+                                .unwrap()
+                                .insert(*target, self.topo_rnk_cnt);
                         }
                     }
                 };
@@ -523,13 +583,23 @@ impl ExtractorAlter {
                     {
                         if Some(*best_cost) == self.compute_cost_hyperedge(egraph, &row, func) {
                             // one of the possible best parent edges
-                            if let HEntry::Vacant(e) = self
-                                .parent_edge
-                                .get_mut(&target_sort.name())
+                            let target_topo_rnk = *self
+                                .topo_rnk
+                                .get(&target_sort.name())
                                 .unwrap()
-                                .entry(*target)
+                                .get(target)
+                                .unwrap();
+                            if target_topo_rnk > self.compute_topo_rnk_hyperedge(egraph, &row, func)
                             {
-                                e.insert((func.decl.name, row.vals.to_vec()));
+                                // one of the parent edges that avoids cycles
+                                if let HEntry::Vacant(e) = self
+                                    .parent_edge
+                                    .get_mut(&target_sort.name())
+                                    .unwrap()
+                                    .entry(*target)
+                                {
+                                    e.insert((func.decl.name, row.vals.to_vec()));
+                                }
                             }
                         }
                     }
@@ -605,6 +675,7 @@ impl ExtractorAlter {
         }
     }
 
+    /// This expects the value to be of the single sort the extractor has been initialized with
     pub fn extract_best(
         &self,
         egraph: &EGraph,
@@ -696,6 +767,7 @@ impl ExtractorAlter {
         }
     }
 
+    /// This expects the value to be of the single sort the extractor has been initialized with
     pub fn extract_variants(
         &self,
         egraph: &EGraph,
