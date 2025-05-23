@@ -42,7 +42,7 @@ pub use cli::bin::*;
 use constraint::{Constraint, SimpleTypeConstraint, TypeConstraint};
 use core_relations::ExternalFunctionId;
 use egglog_bridge::{ColumnTy, QueryEntry};
-use extract::{Extractor, ExtractorAlter, TreeAdditiveCostModel};
+use extract::{ExtractorAlter, TreeAdditiveCostModel};
 pub use function::Function;
 use function::*;
 use gj::*;
@@ -712,67 +712,67 @@ impl EGraph {
         }
     }
 
+    /// Extract rows of a table using the default cost model with name sym
+    /// The `include_output`` parameter controls whether the output column is always extracted
+    /// For functions, the output column is usually useful
+    /// For constructors and relations, the output column can be ignored
     pub fn function_to_dag(
         &self,
         sym: Symbol,
         n: usize,
-    ) -> Result<(Vec<(Term, Term)>, TermDag), Error> {
-        if true {
-            todo!("function_to_dag")
-        }
-
-        let f = self
+        include_output: bool,
+    ) -> Result<(Vec<Term>, Option<Vec<Term>>, TermDag), Error> {
+        let func = self
             .functions
             .get(&sym)
             .ok_or(TypeError::UnboundFunction(sym, span!()))?;
-        let schema = f.schema.clone();
-        let nodes = f
-            .nodes
-            .iter(true)
-            .take(n)
-            .map(|(k, v)| (ValueVec::from(k), v.clone()))
-            .collect::<Vec<_>>();
+        let mut rootsorts = func.schema.input.clone();
+        if include_output {
+            rootsorts.push(func.schema.output.clone());
+        }
+        let extractor = ExtractorAlter::compute_costs_from_rootsorts(
+            Some(rootsorts),
+            self,
+            TreeAdditiveCostModel::default(),
+        );
 
         let mut termdag = TermDag::default();
-        let extractor = Extractor::new(self, &mut termdag);
-        let mut terms = Vec::new();
-        for (ins, out) in nodes {
-            let mut children = Vec::new();
-            for (a, a_type) in ins.iter().copied().zip(&schema.input) {
-                if a_type.is_eq_sort() {
-                    children.push(extractor.find_best(a, &mut termdag, a_type).unwrap().1);
-                } else {
-                    children.push(
-                        a_type
-                            .extract_term(self, a, &extractor, &mut termdag)
-                            .unwrap()
-                            .1,
-                    )
-                };
+        let mut inputs: Vec<Term> = Vec::new();
+        let mut output: Option<Vec<Term>> = match include_output {
+            true => Some(Vec::new()),
+            false => None,
+        };
+
+        let extract_row = |row: egglog_bridge::FunctionRow| {
+            if inputs.len() < n {
+                // include subsumed rows
+                let mut children: Vec<Term> = Vec::new();
+                for (value, sort) in row.vals.iter().zip(&func.schema.input) {
+                    let (_, term) = extractor
+                        .extract_best_with_sort(self, &mut termdag, *value, sort.clone())
+                        .unwrap_or_else(|| (0, termdag.var("Unextractable".into())));
+                    children.push(term);
+                }
+                inputs.push(termdag.app(sym, children));
+                if include_output {
+                    let value = row.vals[func.schema.input.len()];
+                    let sort = &func.schema.output;
+                    let (_, term) = extractor
+                        .extract_best_with_sort(self, &mut termdag, value, sort.clone())
+                        .unwrap_or_else(|| (0, termdag.var("Unextractable".into())));
+                    output.as_mut().unwrap().push(term);
+                }
             }
+        };
 
-            let out = if schema.output.is_eq_sort() {
-                extractor
-                    .find_best(out.value, &mut termdag, &schema.output)
-                    .unwrap()
-                    .1
-            } else {
-                schema
-                    .output
-                    .extract_term(self, out.value, &extractor, &mut termdag)
-                    .unwrap()
-                    .1
-            };
-            terms.push((termdag.app(sym, children), out));
-        }
-        drop(extractor);
+        self.backend.dump_table(func.new_backend_id, extract_row);
 
-        Ok((terms, termdag))
+        Ok((inputs, output, termdag))
     }
 
     pub fn print_function(&mut self, sym: Symbol, n: usize) -> Result<(), Error> {
         log::info!("Printing up to {n} tuples of table {sym}: ");
-        let (terms_with_outputs, termdag) = self.function_to_dag(sym, n)?;
+        let (terms, outputs, termdag) = self.function_to_dag(sym, n, true)?;
         let f = self
             .functions
             .get(&sym)
@@ -783,15 +783,15 @@ impl EGraph {
         let mut buf = String::new();
         let s = &mut buf;
         s.push_str("(\n");
-        if terms_with_outputs.is_empty() {
+        if terms.is_empty() {
             log::info!("   (none)");
         }
-        for (term, output) in terms_with_outputs {
+        for (term, output) in terms.iter().zip(&outputs.unwrap()) {
             let tuple_str = format!(
                 "   {}{}",
-                termdag.to_string(&term),
+                termdag.to_string(term),
                 if !out_is_unit {
-                    format!(" -> {}", termdag.to_string(&output))
+                    format!(" -> {}", termdag.to_string(output))
                 } else {
                     "".into()
                 },
