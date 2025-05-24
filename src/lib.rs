@@ -59,7 +59,7 @@ use util::*;
 
 pub type ArcSort = Arc<dyn Sort>;
 
-pub trait PrimitiveLike {
+pub trait Primitive {
     fn name(&self) -> Symbol;
     /// Constructs a type constraint for the primitive that uses the span information
     /// for error localization.
@@ -1420,7 +1420,7 @@ mod tests {
         vec: Arc<VecSort>,
     }
 
-    impl PrimitiveLike for InnerProduct {
+    impl Primitive for InnerProduct {
         fn name(&self) -> symbol_table::GlobalSymbol {
             "inner-product".into()
         }

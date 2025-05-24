@@ -181,7 +181,7 @@ struct Map {
     fn_: Arc<FunctionSort>,
 }
 
-impl PrimitiveLike for Map {
+impl Primitive for Map {
     fn name(&self) -> Symbol {
         self.name
     }

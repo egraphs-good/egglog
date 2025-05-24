@@ -294,7 +294,7 @@ struct Ctor {
     function: Arc<FunctionSort>,
 }
 
-impl PrimitiveLike for Ctor {
+impl Primitive for Ctor {
     fn name(&self) -> Symbol {
         self.name
     }
@@ -340,7 +340,7 @@ struct Apply {
     function: Arc<FunctionSort>,
 }
 
-impl PrimitiveLike for Apply {
+impl Primitive for Apply {
     fn name(&self) -> Symbol {
         self.name
     }
