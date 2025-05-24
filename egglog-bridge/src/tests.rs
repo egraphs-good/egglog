@@ -94,7 +94,7 @@ fn ac_test(tracing: bool, can_subsume: bool) {
     assert_eq!(canon_left, canon_right, "failed to reassociate!");
     if tracing {
         let mut row = Vec::new();
-        egraph.dump_table(add_table, |func_row| {
+        egraph.for_each(add_table, |func_row| {
             assert!(!func_row.subsumed);
             row.clear();
             row.extend_from_slice(func_row.vals);
@@ -486,7 +486,7 @@ fn math_test(mut egraph: EGraph, can_subsume: bool) {
 
     if egraph.tracing {
         let mut row = Vec::new();
-        egraph.dump_table(mul, |func_row| {
+        egraph.for_each(mul, |func_row| {
             assert!(!func_row.subsumed);
             row.clear();
             row.extend_from_slice(func_row.vals);
@@ -775,7 +775,7 @@ fn rhs_only_rule() {
 
     assert!(contents.is_empty());
     assert!(egraph.run_rules(&[add_data]).unwrap());
-    egraph.dump_table(num_table, |func_row| {
+    egraph.for_each(num_table, |func_row| {
         assert!(!func_row.subsumed);
         contents.push(func_row.vals.to_vec());
     });
@@ -875,7 +875,7 @@ fn mergefn_arithmetic() {
     // Run the first rule and check state
     assert!(egraph.run_rules(&[rule1]).unwrap());
     let mut contents = Vec::new();
-    egraph.dump_table(f_table, |func_row| {
+    egraph.for_each(f_table, |func_row| {
         assert!(!func_row.subsumed);
         contents.push((
             *egraph.primitives().unwrap_ref::<i64>(func_row.vals[0]),
@@ -898,7 +898,7 @@ fn mergefn_arithmetic() {
     // Expected: (f 2 7) because 1 + (1 * 6) = 7
     assert!(egraph.run_rules(&[rule2]).unwrap());
     contents.clear();
-    egraph.dump_table(f_table, |func_row| {
+    egraph.for_each(f_table, |func_row| {
         assert!(!func_row.subsumed);
         contents.push((
             *egraph.primitives().unwrap_ref::<i64>(func_row.vals[0]),
@@ -921,7 +921,7 @@ fn mergefn_arithmetic() {
     // Expected: (f 2 29) because 1 + (7 * 4) = 29
     assert!(egraph.run_rules(&[rule3]).unwrap());
     contents.clear();
-    egraph.dump_table(f_table, |func_row| {
+    egraph.for_each(f_table, |func_row| {
         assert!(!func_row.subsumed);
         contents.push((
             *egraph.primitives().unwrap_ref::<i64>(func_row.vals[0]),
@@ -978,7 +978,7 @@ fn mergefn_nested_function() {
     // Helper function to get all g-table entries
     let get_g_entries = |egraph: &EGraph| {
         let mut entries = Vec::new();
-        egraph.dump_table(g_table, |func_row| {
+        egraph.for_each(g_table, |func_row| {
             assert!(!func_row.subsumed);
             entries.push((func_row.vals[0], func_row.vals[1], func_row.vals[2]));
         });
@@ -989,7 +989,7 @@ fn mergefn_nested_function() {
     // Helper function to get all f-table entries
     let get_f_entries = |egraph: &EGraph| {
         let mut entries = Vec::new();
-        egraph.dump_table(f_table, |func_row| {
+        egraph.for_each(f_table, |func_row| {
             assert!(!func_row.subsumed);
             entries.push((
                 *egraph.primitives().unwrap_ref::<i64>(func_row.vals[0]),
@@ -1115,7 +1115,7 @@ fn constrain_prims_simple() {
     };
     let get_entries = |egraph: &EGraph, table: FunctionId| {
         let mut entries = Vec::new();
-        egraph.dump_table(table, |func_row| {
+        egraph.for_each(table, |func_row| {
             assert!(!func_row.subsumed);
             entries.push((
                 *egraph.primitives().unwrap_ref::<i64>(func_row.vals[0]),
@@ -1212,7 +1212,7 @@ fn constrain_prims_abstract() {
     };
     let get_entries = |egraph: &EGraph, table: FunctionId| {
         let mut entries = Vec::new();
-        egraph.dump_table(table, |func_row| {
+        egraph.for_each(table, |func_row| {
             assert!(!func_row.subsumed);
             entries.push((
                 *egraph.primitives().unwrap_ref::<i64>(func_row.vals[0]),
@@ -1284,7 +1284,7 @@ fn basic_subsumption() {
     let get_entries = |egraph: &EGraph, table: FunctionId| {
         let mut entries = Vec::new();
         let mut num_subsumed = 0;
-        egraph.dump_table(table, |func_row| {
+        egraph.for_each(table, |func_row| {
             entries.push((
                 *egraph.primitives().unwrap_ref::<i64>(func_row.vals[0]),
                 func_row.vals[1],

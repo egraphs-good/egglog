@@ -499,9 +499,7 @@ impl EGraph {
     /// Read the contents of the given function.
     ///
     /// The callback `f` is called with each row and its subsumption status.
-    ///
-    /// Useful for debugging.
-    pub fn dump_table(&self, table: FunctionId, mut f: impl FnMut(FunctionRow<'_>)) {
+    pub fn for_each(&self, table: FunctionId, mut f: impl FnMut(FunctionRow<'_>)) {
         self.for_each_while(table, |row| {
             f(row);
             true
