@@ -49,7 +49,6 @@ use std::fs::File;
 use std::hash::Hash;
 use std::io::Read;
 use std::iter::once;
-use std::ops::Deref;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -100,59 +99,6 @@ impl RunReport {
         Self {
             updated: self.updated || other.updated,
         }
-    }
-}
-
-#[derive(Clone)]
-pub struct Primitive(Arc<dyn PrimitiveLike + Send + Sync>, ExternalFunctionId);
-impl Primitive {
-    // Takes the full signature of a primitive (including input and output types)
-    // Returns whether the primitive is compatible with this signature
-    fn accept(&self, tys: &[Arc<dyn Sort>], typeinfo: &TypeInfo) -> bool {
-        let mut constraints = vec![];
-        let lits: Vec<_> = (0..tys.len())
-            .map(|i| AtomTerm::Literal(Span::Panic, Literal::Int(i as i64)))
-            .collect();
-        for (lit, ty) in lits.iter().zip(tys.iter()) {
-            constraints.push(constraint::assign(lit.clone(), ty.clone()))
-        }
-        constraints.extend(self.get_type_constraints(&Span::Panic).get(&lits, typeinfo));
-        let problem = Problem {
-            constraints,
-            range: HashSet::default(),
-        };
-        problem.solve(|sort| sort.name()).is_ok()
-    }
-}
-
-impl Deref for Primitive {
-    type Target = dyn PrimitiveLike;
-    fn deref(&self) -> &Self::Target {
-        &*self.0
-    }
-}
-
-impl Hash for Primitive {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        Arc::as_ptr(&self.0).hash(state);
-    }
-}
-
-impl Eq for Primitive {}
-impl PartialEq for Primitive {
-    fn eq(&self, other: &Self) -> bool {
-        // this is a bit of a hack, but clippy says we don't want to compare the
-        // vtables, just the data pointers
-        std::ptr::eq(
-            Arc::as_ptr(&self.0) as *const u8,
-            Arc::as_ptr(&other.0) as *const u8,
-        )
-    }
-}
-
-impl Debug for Primitive {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Prim({})", self.0.name())
     }
 }
 
