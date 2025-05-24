@@ -248,7 +248,13 @@ pub trait Table: Any + Send + Sync {
     /// Filter a given subset of the table for the rows that are live
     fn refine_live(&self, subset: Subset) -> Subset {
         // NB: This relies on Value::stale() being strictly larger than any other value in the table.
-        self.refine_one(subset, &Constraint::LtConst { col: ColumnId::new_const(0), val: Value::stale() })
+        self.refine_one(
+            subset,
+            &Constraint::LtConst {
+                col: ColumnId::new_const(0),
+                val: Value::stale(),
+            },
+        )
     }
 
     /// Filter a given subset of the table for the rows matching the single constraint.

@@ -70,8 +70,7 @@ impl Primitives {
 
     /// Get the [`PrimitiveId`] for the given primitive type id.
     pub fn get_ty_by_id(&self, id: TypeId) -> PrimitiveId {
-        self.type_ids
-            .intern(&id)
+        self.type_ids.intern(&id)
     }
 
     /// Get a [`Value`] representing the given primitive `p`.
