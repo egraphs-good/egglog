@@ -1,12 +1,12 @@
 use super::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct VecContainer<V> {
+pub struct VecContainer {
     do_rebuild: bool,
-    pub data: Vec<V>,
+    pub data: Vec<core_relations::Value>,
 }
 
-impl Container for VecContainer<core_relations::Value> {
+impl Container for VecContainer {
     fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool {
         if self.do_rebuild {
             rebuilder.rebuild_slice(&mut self.data)
@@ -23,7 +23,6 @@ impl Container for VecContainer<core_relations::Value> {
 pub struct VecSort {
     name: Symbol,
     element: ArcSort,
-    vecs: Mutex<IndexSet<VecContainer<Value>>>,
 }
 
 impl VecSort {
@@ -74,7 +73,6 @@ impl Presort for VecSort {
             Ok(Arc::new(Self {
                 name,
                 element: e.clone(),
-                vecs: Default::default(),
             }))
         } else {
             panic!("Vec sort must have sort as argument. Got {:?}", args)
@@ -92,7 +90,7 @@ impl Sort for VecSort {
     }
 
     fn register_type(&self, backend: &mut egglog_bridge::EGraph) {
-        backend.register_container_ty::<VecContainer<core_relations::Value>>();
+        backend.register_container_ty::<VecContainer>();
     }
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
@@ -111,91 +109,33 @@ impl Sort for VecSort {
         self.element.is_eq_sort()
     }
 
-    fn old_inner_values(&self, value: &Value) -> Vec<(ArcSort, Value)> {
-        // TODO: Potential duplication of code
-        let vecs = self.vecs.lock().unwrap();
-        let vec = vecs.get_index(value.bits as usize).unwrap();
-        vec.data.iter().map(|e| (self.element(), *e)).collect()
-    }
-
     fn inner_values(
         &self,
         containers: &core_relations::Containers,
         value: &core_relations::Value,
     ) -> Vec<(ArcSort, core_relations::Value)> {
-        let val = containers
-            .get_val::<VecContainer<core_relations::Value>>(*value)
-            .unwrap()
-            .clone();
+        let val = containers.get_val::<VecContainer>(*value).unwrap().clone();
         val.data
             .iter()
             .map(|e| (self.element.clone(), *e))
             .collect()
     }
 
-    fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
-        let vecs = self.vecs.lock().unwrap();
-        let vec = vecs.get_index(value.bits as usize).unwrap();
-        let mut changed = false;
-        let new_vec = VecContainer {
-            do_rebuild: vec.do_rebuild,
-            data: vec
-                .data
-                .iter()
-                .map(|e| {
-                    let mut e = *e;
-                    changed |= self.element.canonicalize(&mut e, unionfind);
-                    e
-                })
-                .collect(),
-        };
-        drop(vecs);
-        *value = new_vec.store(self);
-        changed
-    }
-
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
-        add_primitive!(eg, "vec-empty"  = |                                       | -> @VecContainer<Value> (self.clone()) { VecContainer { do_rebuild: self.__y.is_eq_container_sort(), data: Vec::new()                        } });
-        add_primitive!(eg, "vec-of"     = [xs: # (self.element())                 ] -> @VecContainer<Value> (self.clone()) { VecContainer { do_rebuild: self.__y.is_eq_container_sort(), data: xs                     .collect() } });
-        add_primitive!(eg, "vec-append" = [xs: @VecContainer<Value> (self.clone())] -> @VecContainer<Value> (self.clone()) { VecContainer { do_rebuild: self.__y.is_eq_container_sort(), data: xs.flat_map(|x| x.data).collect() } });
+        add_primitive!(eg, "vec-empty"  = |                                | -> @VecContainer (self.clone()) { VecContainer { do_rebuild: self.__y.is_eq_container_sort(), data: Vec::new()                        } });
+        add_primitive!(eg, "vec-of"     = [xs: # (self.element())          ] -> @VecContainer (self.clone()) { VecContainer { do_rebuild: self.__y.is_eq_container_sort(), data: xs                     .collect() } });
+        add_primitive!(eg, "vec-append" = [xs: @VecContainer (self.clone())] -> @VecContainer (self.clone()) { VecContainer { do_rebuild: self.__y.is_eq_container_sort(), data: xs.flat_map(|x| x.data).collect() } });
 
-        add_primitive!(eg, "vec-push" = |mut xs: @VecContainer<Value> (self.clone()), x: # (self.element())| -> @VecContainer<Value> (self.clone()) {{ xs.data.push(x); xs }});
-        add_primitive!(eg, "vec-pop"  = |mut xs: @VecContainer<Value> (self.clone())                       | -> @VecContainer<Value> (self.clone()) {{ xs.data.pop();   xs }});
+        add_primitive!(eg, "vec-push" = |mut xs: @VecContainer (self.clone()), x: # (self.element())| -> @VecContainer (self.clone()) {{ xs.data.push(x); xs }});
+        add_primitive!(eg, "vec-pop"  = |mut xs: @VecContainer (self.clone())                       | -> @VecContainer (self.clone()) {{ xs.data.pop();   xs }});
 
-        add_primitive!(eg, "vec-length"       = |xs: @VecContainer<Value> (self.clone())| -> i64 { xs.data.len() as i64 });
-        add_primitive!(eg, "vec-contains"     = |xs: @VecContainer<Value> (self.clone()), x: # (self.element())| -?> () { ( xs.data.contains(&x)).then_some(()) });
-        add_primitive!(eg, "vec-not-contains" = |xs: @VecContainer<Value> (self.clone()), x: # (self.element())| -?> () { (!xs.data.contains(&x)).then_some(()) });
+        add_primitive!(eg, "vec-length"       = |xs: @VecContainer (self.clone())| -> i64 { xs.data.len() as i64 });
+        add_primitive!(eg, "vec-contains"     = |xs: @VecContainer (self.clone()), x: # (self.element())| -?> () { ( xs.data.contains(&x)).then_some(()) });
+        add_primitive!(eg, "vec-not-contains" = |xs: @VecContainer (self.clone()), x: # (self.element())| -?> () { (!xs.data.contains(&x)).then_some(()) });
 
-        add_primitive!(eg, "vec-get"    = |    xs: @VecContainer<Value> (self.clone()), i: i64                       | -?> # (self.element()) { xs.data.get(i as usize).copied() });
-        add_primitive!(eg, "vec-set"    = |mut xs: @VecContainer<Value> (self.clone()), i: i64, x: # (self.element())| -> @VecContainer<Value> (self.clone()) {{ xs.data[i as usize] = x;    xs }});
-        add_primitive!(eg, "vec-remove" = |mut xs: @VecContainer<Value> (self.clone()), i: i64                       | -> @VecContainer<Value> (self.clone()) {{ xs.data.remove(i as usize); xs }});
-    }
-
-    fn extract_term(
-        &self,
-        _egraph: &EGraph,
-        value: Value,
-        extractor: &Extractor,
-        termdag: &mut TermDag,
-    ) -> Option<(Cost, Term)> {
-        let vec = VecContainer::load(self, &value);
-        let mut cost = 0usize;
-
-        if vec.data.is_empty() {
-            Some((cost, termdag.app("vec-empty".into(), vec![])))
-        } else {
-            let elems = vec
-                .data
-                .into_iter()
-                .map(|e| {
-                    let (extra_cost, term) = extractor.find_best(e, termdag, &self.element)?;
-                    cost = cost.saturating_add(extra_cost);
-                    Some(term)
-                })
-                .collect::<Option<Vec<_>>>()?;
-
-            Some((cost, termdag.app("vec-of".into(), elems)))
-        }
+        add_primitive!(eg, "vec-get"    = |    xs: @VecContainer (self.clone()), i: i64                       | -?> # (self.element()) { xs.data.get(i as usize).copied() });
+        add_primitive!(eg, "vec-set"    = |mut xs: @VecContainer (self.clone()), i: i64, x: # (self.element())| -> @VecContainer (self.clone()) {{ xs.data[i as usize] = x;    xs }});
+        add_primitive!(eg, "vec-remove" = |mut xs: @VecContainer (self.clone()), i: i64                       | -> @VecContainer (self.clone()) {{ xs.data.remove(i as usize); xs }});
     }
 
     fn reconstruct_termdag_container(
@@ -217,29 +157,12 @@ impl Sort for VecSort {
     }
 
     fn value_type(&self) -> Option<TypeId> {
-        Some(TypeId::of::<VecContainer<core_relations::Value>>())
+        Some(TypeId::of::<VecContainer>())
     }
 }
 
-impl IntoSort for VecContainer<Value> {
+impl IntoSort for VecContainer {
     type Sort = VecSort;
-    fn store(self, sort: &Self::Sort) -> Value {
-        let mut vecs = sort.vecs.lock().unwrap();
-        let (i, _) = vecs.insert_full(self);
-        Value {
-            #[cfg(debug_assertions)]
-            tag: sort.name,
-            bits: i as u64,
-        }
-    }
-}
-
-impl FromSort for VecContainer<Value> {
-    type Sort = VecSort;
-    fn load(sort: &Self::Sort, value: &Value) -> Self {
-        let vecs = sort.vecs.lock().unwrap();
-        vecs.get_index(value.bits as usize).unwrap().clone()
-    }
 }
 
 #[cfg(test)]

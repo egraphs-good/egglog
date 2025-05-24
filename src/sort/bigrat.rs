@@ -118,32 +118,6 @@ impl Sort for BigRatSort {
         add_primitive!(eg, ">" = |a: Q, b: Q| -?> () { if a > b {Some(())} else {None} });
         add_primitive!(eg, "<=" = |a: Q, b: Q| -?> () { if a <= b {Some(())} else {None} });
         add_primitive!(eg, ">=" = |a: Q, b: Q| -?> () { if a >= b {Some(())} else {None} });
-   }
-
-    fn extract_term(
-        &self,
-        _egraph: &EGraph,
-        value: Value,
-        _extractor: &Extractor,
-        termdag: &mut TermDag,
-    ) -> Option<(Cost, Term)> {
-        #[cfg(debug_assertions)]
-        debug_assert_eq!(value.tag, self.name());
-
-        let rat = Q::load(self, &value);
-        let numer = rat.numer();
-        let denom = rat.denom();
-
-        let numer_as_string = termdag.lit(Literal::String(numer.to_string().into()));
-        let denom_as_string = termdag.lit(Literal::String(denom.to_string().into()));
-
-        let numer_term = termdag.app("from-string".into(), vec![numer_as_string]);
-        let denom_term = termdag.app("from-string".into(), vec![denom_as_string]);
-
-        Some((
-            1,
-            termdag.app("bigrat".into(), vec![numer_term, denom_term]),
-        ))
     }
 
     fn value_type(&self) -> Option<TypeId> {
@@ -170,22 +144,6 @@ impl Sort for BigRatSort {
     }
 }
 
-impl FromSort for Q {
-    type Sort = BigRatSort;
-    fn load(_sort: &Self::Sort, value: &Value) -> Self {
-        let i = value.bits as usize;
-        RATS.lock().unwrap().get_index(i).unwrap().clone()
-    }
-}
-
 impl IntoSort for Q {
     type Sort = BigRatSort;
-    fn store(self, _sort: &Self::Sort) -> Value {
-        let (i, _) = RATS.lock().unwrap().insert_full(self);
-        Value {
-            #[cfg(debug_assertions)]
-            tag: BigRatSort.name(),
-            bits: i as u64,
-        }
-    }
 }

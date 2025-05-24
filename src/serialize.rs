@@ -1,4 +1,4 @@
-use crate::{extract::Extractor, util::HashMap, *};
+use crate::{util::HashMap, *};
 use core_relations::PrimitivePrinter;
 use ordered_float::NotNan;
 use std::collections::VecDeque;
@@ -14,12 +14,8 @@ pub struct SerializeConfig {
     pub root_eclasses: Vec<(ArcSort, core_relations::Value)>,
 }
 
-// TODO: extractor and termdag are deadcode.
-// This part will be rewritten once the new extractor is in.
 #[allow(dead_code)]
-struct Serializer<'a> {
-    extractor: Extractor<'a>,
-    termdag: TermDag,
+struct Serializer {
     node_ids: NodeIDs,
     result: egraph_serialize::EGraph,
 }
@@ -152,13 +148,9 @@ impl EGraph {
             },
         );
 
-        let mut termdag = TermDag::default();
-
         let mut serializer = Serializer {
-            extractor: Extractor::new(self, &mut termdag),
             node_ids,
             result: egraph_serialize::EGraph::default(),
-            termdag,
         };
 
         for (func, input, output, subsumed, class_id, node_id) in all_calls {

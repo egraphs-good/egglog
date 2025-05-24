@@ -57,22 +57,6 @@ impl Sort for F64Sort {
         add_primitive!(eg, "to-string" = |a: F| -> S { format!("{:?}", a.0).into() });
     }
 
-    fn extract_term(
-        &self,
-        _egraph: &EGraph,
-        value: Value,
-        _extractor: &Extractor,
-        termdag: &mut TermDag,
-    ) -> Option<(Cost, Term)> {
-        #[cfg(debug_assertions)]
-        debug_assert_eq!(value.tag, self.name());
-
-        Some((
-            1,
-            termdag.lit(Literal::Float(OrderedFloat(f64::from_bits(value.bits)))),
-        ))
-    }
-
     fn value_type(&self) -> Option<TypeId> {
         Some(TypeId::of::<F>())
     }
@@ -91,18 +75,4 @@ impl Sort for F64Sort {
 
 impl IntoSort for F {
     type Sort = F64Sort;
-    fn store(self, _sort: &Self::Sort) -> Value {
-        Value {
-            #[cfg(debug_assertions)]
-            tag: F64Sort.name(),
-            bits: self.to_bits(),
-        }
-    }
-}
-
-impl FromSort for F {
-    type Sort = F64Sort;
-    fn load(_sort: &Self::Sort, value: &Value) -> Self {
-        OrderedFloat(f64::from_bits(value.bits))
-    }
 }
