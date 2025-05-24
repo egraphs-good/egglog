@@ -338,9 +338,7 @@ impl ExtractorAlter {
                     }
                 };
 
-                egraph
-                    .backend
-                    .dump_table(func.new_backend_id, relax_hyperedge);
+                egraph.backend.dump_table(func.backend_id, relax_hyperedge);
             }
         }
 
@@ -382,7 +380,7 @@ impl ExtractorAlter {
 
             egraph
                 .backend
-                .dump_table(func.new_backend_id, save_best_parent_edge);
+                .dump_table(func.backend_id, save_best_parent_edge);
         }
     }
 
@@ -514,7 +512,7 @@ impl ExtractorAlter {
 
                 egraph
                     .backend
-                    .dump_table(func.new_backend_id, find_root_variants);
+                    .dump_table(func.backend_id, find_root_variants);
             }
 
             let mut res: Vec<(Cost, Term)> = Vec::new();
