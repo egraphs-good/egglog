@@ -498,10 +498,19 @@ impl EGraph {
 
     /// Read the contents of the given function.
     ///
-    /// The callback function is called with each row and its subsumption status.
+    /// The callback `f` is called with each row and its subsumption status.
     ///
     /// Useful for debugging.
     pub fn dump_table(&self, table: FunctionId, mut f: impl FnMut(FunctionRow<'_>)) {
+        self.for_each_while(table, |row| {
+            f(row);
+            true
+        });
+    }
+
+    /// Iterate over the rows of a function table, calling `f` on each row. If `f` returns `false`
+    /// the function returns early and stops reading rows from the table.
+    pub fn for_each_while(&self, table: FunctionId, mut f: impl FnMut(FunctionRow<'_>) -> bool) {
         let info = &self.funcs[table];
         let table = self.funcs[table].table;
         let schema_math = SchemaMath {
@@ -513,18 +522,30 @@ impl EGraph {
         let all = imp.all();
         let mut cur = Offset::new(0);
         let mut buf = TaggedRowBuffer::new(imp.spec().arity());
-        while let Some(next) = imp.scan_bounded(all.as_ref(), cur, 500, &mut buf) {
-            buf.non_stale().for_each(|(_, row)| {
-                let subsumed = schema_math.subsume && row[schema_math.subsume_col()] == SUBSUMED;
-                f(FunctionRow { vals: &row[0..schema_math.func_cols], subsumed })
-            });
-            cur = next;
-            buf.clear();
+        // This somewhat awkward iteration strategy is forced on us by the `scan_bounded` API. We
+        // should look into ways to avoid this cludge where the loop body effectively must be
+        // repeated at the end. The obvious and idiomatic ways to do this all require
+        // `dyn`-compatibility on `Table` or dynamic dispatch per row.
+        macro_rules! drain_buf {
+            ($buf:expr) => {
+                for (_, row) in $buf.non_stale() {
+                    let subsumed =
+                        schema_math.subsume && row[schema_math.subsume_col()] == SUBSUMED;
+                    if !f(FunctionRow {
+                        vals: &row[0..schema_math.func_cols],
+                        subsumed,
+                    }) {
+                        return;
+                    }
+                }
+                $buf.clear();
+            };
         }
-        buf.non_stale().for_each(|(_, row)| {
-            let subsumed = schema_math.subsume && row[schema_math.subsume_col()] == SUBSUMED;
-            f(FunctionRow { vals: &row[0..schema_math.func_cols], subsumed })
-        });
+        while let Some(next) = imp.scan_bounded(all.as_ref(), cur, 32, &mut buf) {
+            drain_buf!(buf);
+            cur = next;
+        }
+        drain_buf!(buf);
     }
 
     /// A basic method for dumping the state of the database to `log::info!`.
@@ -1419,7 +1440,7 @@ struct SchemaMath {
 
 /// A struct containing possible non-key portions of a table row. To be used with
 /// [`SchemaMath::write_table_row`].
-/// 
+///
 /// This is not to be confused with [`FunctionRow`], which is higher-level and for public uses.
 struct RowVals<T> {
     /// The timestamp for the row.
