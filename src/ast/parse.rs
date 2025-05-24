@@ -275,7 +275,7 @@ impl Parser {
         input: &str,
     ) -> Result<Vec<Command>, ParseError> {
         let sexps = all_sexps(Context::new(filename, input))?;
-        let nested = map_fallible(&sexps, self, Self::parse_command)?;
+        let nested: Vec<Vec<_>> = map_fallible(&sexps, self, Self::parse_command)?;
         Ok(nested.into_iter().flatten().collect())
     }
 
@@ -405,11 +405,12 @@ impl Parser {
                 _ => return error!(span, "usage: (relation <name> (<input sort>*))"),
             },
             "ruleset" => match tail {
-                [name] => vec![Command::AddRuleset(name.expect_atom("ruleset name")?)],
+                [name] => vec![Command::AddRuleset(span, name.expect_atom("ruleset name")?)],
                 _ => return error!(span, "usage: (ruleset <name>)"),
             },
             "unstable-combined-ruleset" => match tail {
                 [name, subrulesets @ ..] => vec![Command::UnstableCombinedRuleset(
+                    span,
                     name.expect_atom("combined ruleset name")?,
                     map_fallible(subrulesets, self, |_, sexp| {
                         sexp.expect_atom("subruleset name")
@@ -426,7 +427,7 @@ impl Parser {
                 [lhs, rhs, rest @ ..] => {
                     let body =
                         map_fallible(lhs.expect_list("rule query")?, self, Self::parse_fact)?;
-                    let head =
+                    let head: Vec<Vec<_>> =
                         map_fallible(rhs.expect_list("rule actions")?, self, Self::parse_action)?;
                     let head = GenericActions(head.into_iter().flatten().collect());
 
@@ -647,9 +648,8 @@ impl Parser {
                 _ => return error!(span, "usage: (fail <command>)"),
             },
             _ => self
-                .parse_action(sexp)
+                .parse_action(sexp)?
                 .into_iter()
-                .flatten()
                 .map(Command::Action)
                 .collect(),
         })
@@ -798,7 +798,14 @@ impl Parser {
     pub fn parse_expr(&mut self, sexp: &Sexp) -> Result<Expr, ParseError> {
         Ok(match sexp {
             Sexp::Literal(literal, span) => Expr::Lit(span.clone(), literal.clone()),
-            Sexp::Atom(symbol, span) => Expr::Var(span.clone(), *symbol),
+            Sexp::Atom(symbol, span) => Expr::Var(
+                span.clone(),
+                if *symbol == "_".into() {
+                    self.symbol_gen.fresh(symbol)
+                } else {
+                    *symbol
+                },
+            ),
             Sexp::List(list, span) => match list.as_slice() {
                 [] => Expr::Lit(span.clone(), Literal::Unit),
                 _ => {
