@@ -59,7 +59,7 @@ fn ac_test(tracing: bool, can_subsume: bool) {
     };
 
     // Running these rules on an empty database should change nothing.
-    assert!(!egraph.run_rules(&[add_comm, add_assoc]).unwrap());
+    assert!(!egraph.run_rules(&[add_comm, add_assoc]).unwrap().changed);
 
     // Fill the database.
     let mut ids = Vec::new();
@@ -88,7 +88,7 @@ fn ac_test(tracing: bool, can_subsume: bool) {
         (left_root, right_root)
     };
     // Saturate
-    while egraph.run_rules(&[add_comm, add_assoc]).unwrap() {}
+    while egraph.run_rules(&[add_comm, add_assoc]).unwrap().changed {}
     let canon_left = egraph.get_canon(left_root);
     let canon_right = egraph.get_canon(right_root);
     assert_eq!(canon_left, canon_right, "failed to reassociate!");
@@ -161,7 +161,7 @@ fn ac_fail() {
     };
 
     // Running these rules on an empty database should change nothing.
-    assert!(!egraph.run_rules(&[add_comm, add_assoc]).unwrap());
+    assert!(!egraph.run_rules(&[add_comm, add_assoc]).unwrap().changed);
 
     // Fill the database.
     let mut ids = Vec::new();
@@ -199,7 +199,7 @@ fn ac_fail() {
         (left_root, right_root)
     };
     // Saturate
-    while egraph.run_rules(&[add_comm, add_assoc]).unwrap() {}
+    while egraph.run_rules(&[add_comm, add_assoc]).unwrap().changed {}
     let canon_left = egraph.get_canon(left_root);
     let canon_right = egraph.get_canon(right_root);
     assert_ne!(canon_left, canon_right);
@@ -443,7 +443,7 @@ fn math_test(mut egraph: EGraph, can_subsume: bool) {
     }
 
     for _ in 0..N {
-        if !egraph.run_rules(&rules).unwrap() {
+        if !egraph.run_rules(&rules).unwrap().changed {
             break;
         }
     }
@@ -708,20 +708,20 @@ fn container_test() {
         vec![vec![], vec![egraph.get_canon(ids[1])]],
     );
 
-    assert!(egraph.run_rules(&[vec_expand]).unwrap());
+    assert!(egraph.run_rules(&[vec_expand]).unwrap().changed);
     assert_eq!(dump_vecs(&egraph).len(), 4);
     // We have 2 new vectors with a last element. Each of those should spawn two more, adding 4.
-    assert!(egraph.run_rules(&[vec_expand]).unwrap());
+    assert!(egraph.run_rules(&[vec_expand]).unwrap().changed);
     assert_eq!(dump_vecs(&egraph).len(), 8);
     // We have 4 new vectors with a last element. Each of those should spawn two more, adding 8.
-    assert!(egraph.run_rules(&[vec_expand]).unwrap());
+    assert!(egraph.run_rules(&[vec_expand]).unwrap().changed);
     assert_eq!(dump_vecs(&egraph).len(), 16);
 
     // Now we want to saturate `eval_add`. This should collapse a bunch of new vectors.
 
     let mut saturated = false;
     for _ in 0..20 {
-        saturated = !egraph.run_rules(&[eval_add]).unwrap();
+        saturated = !egraph.run_rules(&[eval_add]).unwrap().changed;
         if saturated {
             break;
         }
@@ -774,7 +774,7 @@ fn rhs_only_rule() {
     let mut contents = Vec::new();
 
     assert!(contents.is_empty());
-    assert!(egraph.run_rules(&[add_data]).unwrap());
+    assert!(egraph.run_rules(&[add_data]).unwrap().changed);
     egraph.for_each(num_table, |func_row| {
         assert!(!func_row.subsumed);
         contents.push(func_row.vals.to_vec());
@@ -802,9 +802,9 @@ fn rhs_only_rule_only_runs_once() {
         rb.build()
     };
 
-    assert!(!egraph.run_rules(&[inc_counter_rule]).unwrap());
+    assert!(!egraph.run_rules(&[inc_counter_rule]).unwrap().changed);
     assert_eq!(counter.load(Ordering::SeqCst), 1);
-    assert!(!egraph.run_rules(&[inc_counter_rule]).unwrap());
+    assert!(!egraph.run_rules(&[inc_counter_rule]).unwrap().changed);
     assert_eq!(counter.load(Ordering::SeqCst), 1);
 }
 
@@ -873,7 +873,7 @@ fn mergefn_arithmetic() {
     };
 
     // Run the first rule and check state
-    assert!(egraph.run_rules(&[rule1]).unwrap());
+    assert!(egraph.run_rules(&[rule1]).unwrap().changed);
     let mut contents = Vec::new();
     egraph.for_each(f_table, |func_row| {
         assert!(!func_row.subsumed);
@@ -896,7 +896,7 @@ fn mergefn_arithmetic() {
     // Run the second rule and check state
     // Expected: (f 1 1) because 1 + (0 * 5) = 1
     // Expected: (f 2 7) because 1 + (1 * 6) = 7
-    assert!(egraph.run_rules(&[rule2]).unwrap());
+    assert!(egraph.run_rules(&[rule2]).unwrap().changed);
     contents.clear();
     egraph.for_each(f_table, |func_row| {
         assert!(!func_row.subsumed);
@@ -919,7 +919,7 @@ fn mergefn_arithmetic() {
     // Run the third rule and check state
     // Expected: (f 1 4) because 1 + (1 * 3) = 4
     // Expected: (f 2 29) because 1 + (7 * 4) = 29
-    assert!(egraph.run_rules(&[rule3]).unwrap());
+    assert!(egraph.run_rules(&[rule3]).unwrap().changed);
     contents.clear();
     egraph.for_each(f_table, |func_row| {
         assert!(!func_row.subsumed);
@@ -1001,7 +1001,7 @@ fn mergefn_nested_function() {
     };
 
     // First run of the rule
-    assert!(egraph.run_rules(&[write_rule]).unwrap());
+    assert!(egraph.run_rules(&[write_rule]).unwrap().changed);
     let f_entries_1 = get_f_entries(&egraph);
     let g_entries_1 = get_g_entries(&egraph);
     assert_eq!(f_entries_1.len(), 2);
@@ -1026,7 +1026,7 @@ fn mergefn_nested_function() {
     };
 
     // Second run of the rule - should trigger merging with previous values
-    assert!(egraph.run_rules(&[set_rule]).unwrap());
+    assert!(egraph.run_rules(&[set_rule]).unwrap().changed);
     let f_entries_2 = get_f_entries(&egraph);
     let g_entries_2 = get_g_entries(&egraph);
     assert_eq!(f_entries_2.len(), 2);

@@ -40,7 +40,7 @@ fn main() {
     };
 
     // Running these rules on an empty database should change nothing.
-    assert!(!egraph.run_rules(&[add_comm, add_assoc]).unwrap());
+    assert!(!egraph.run_rules(&[add_comm, add_assoc]).unwrap().changed);
 
     // Fill the database.
     let mut ids = Vec::new();
@@ -78,7 +78,7 @@ fn main() {
         (left_root, right_root)
     };
     // Saturate
-    while egraph.run_rules(&[add_comm, add_assoc]).unwrap() {}
+    while egraph.run_rules(&[add_comm, add_assoc]).unwrap().changed {}
     let canon_left = egraph.get_canon(left_root);
     let canon_right = egraph.get_canon(right_root);
     assert_eq!(canon_left, canon_right);

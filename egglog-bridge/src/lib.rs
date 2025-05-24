@@ -29,7 +29,7 @@ use log::info;
 use numeric_id::{define_id, DenseIdMap, DenseIdMapWithReuse, NumericId};
 use proof_spec::{ProofReason, ProofReconstructionState, ReasonSpecId};
 use smallvec::SmallVec;
-use web_time::Instant;
+use web_time::{Duration, Instant};
 
 pub mod macros;
 pub(crate) mod proof_spec;
@@ -660,20 +660,35 @@ impl EGraph {
     /// Run the given rules, returning whether the database changed.
     ///
     /// If the given rules are malformed, this method can return an error.
-    pub fn run_rules(&mut self, rules: &[RuleId]) -> Result<bool> {
+    pub fn run_rules(&mut self, rules: &[RuleId]) -> Result<RunReport> {
         let ts = self.next_ts();
+
+        let rule_timer = Instant::now();
         let changed = run_rules_impl(&mut self.db, &mut self.rules, rules, ts)?;
+        let rule_time = rule_timer.elapsed();
+
         if let Some(message) = self.panic_message.lock().unwrap().take() {
             return Err(PanicError(message).into());
         }
+
+        let mut report = RunReport {
+            changed,
+            rule_time,
+            rebuild_time: Duration::ZERO,
+        };
         if !changed {
-            return Ok(false);
+            return Ok(report);
         }
+
+        let rebuild_timer = Instant::now();
         self.rebuild()?;
+        report.rebuild_time = rebuild_timer.elapsed();
+
         if let Some(message) = self.panic_message.lock().unwrap().take() {
             return Err(PanicError(message).into());
         }
-        Ok(true)
+
+        Ok(report)
     }
 
     fn rebuild(&mut self) -> Result<()> {
@@ -1556,4 +1571,14 @@ impl<T, A: smallvec::Array<Item = T>> HasResizeWith<T> for SmallVec<A> {
     {
         self.resize_with(new_size, f);
     }
+}
+
+/// Running rules produces a report of the results.
+/// This includes rough timing information and whether
+/// the database was changed.
+#[derive(Clone, Debug, Default)]
+pub struct RunReport {
+    pub changed: bool,
+    pub rule_time: Duration,
+    pub rebuild_time: Duration,
 }

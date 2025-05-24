@@ -245,7 +245,7 @@ fn main() {
 
         for i in 0..N {
             let start = Instant::now();
-            let changed = egraph.run_rules(&rules).unwrap();
+            let changed = egraph.run_rules(&rules).unwrap().changed;
             println!(
                 "Iteration {i} finished, duration={:?} (saturated={})",
                 start.elapsed(),

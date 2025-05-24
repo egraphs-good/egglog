@@ -167,6 +167,7 @@ impl Database {
             }
         });
     }
+
     pub fn run_rule_set(&mut self, rule_set: &RuleSet) -> bool {
         fn do_parallel() -> bool {
             #[cfg(debug_assertions)]
