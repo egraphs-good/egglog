@@ -1,0 +1,9 @@
+(datatype V (A) (B) (C))
+(relation R (V V))
+
+(A) (B) (C)
+(subsume (R (A) (B)))
+(R (A) (C))
+(union (B) (C))
+
+(check (= (R (A) (B)) ()))

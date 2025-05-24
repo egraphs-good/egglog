@@ -22,19 +22,19 @@ pub struct UnionFind {
 impl UnionFind {
     /// The number of unions that have been performed over the lifetime of this
     /// data-structure.
-    pub fn n_unions(&self) -> usize {
+    pub(crate) fn n_unions(&self) -> usize {
         self.n_unions
     }
 
     /// Create a fresh [`Id`].
-    pub fn make_set(&mut self) -> Id {
+    pub(crate) fn make_set(&mut self) -> Id {
         let res = self.parents.len() as u64;
         self.parents.push(Cell::new(res));
         res
     }
 
     /// The number of ids that recently stopped being canonical.
-    pub fn new_ids(&self, sort_filter: impl Fn(Symbol) -> bool) -> usize {
+    pub(crate) fn new_ids(&self, sort_filter: impl Fn(Symbol) -> bool) -> usize {
         self.recent_ids
             .iter()
             .filter_map(|(sort, ids)| {
@@ -50,7 +50,7 @@ impl UnionFind {
     /// Clear any ids currently marked as dirty and then move any ids marked
     /// non-canonical since the last call to this method (or the
     /// data-structure's creation) into the dirty set.
-    pub fn clear_recent_ids(&mut self) {
+    pub(crate) fn clear_recent_ids(&mut self) {
         mem::swap(&mut self.recent_ids, &mut self.staged_ids);
         self.staged_ids.values_mut().for_each(Vec::clear);
     }
@@ -60,7 +60,7 @@ impl UnionFind {
     /// [`clear_recent_ids`] and the call prior to that.
     ///
     /// [`clear_recent_ids`]: UnionFind::clear_recent_ids
-    pub fn dirty_ids(&self, sort: Symbol) -> impl Iterator<Item = Id> + '_ {
+    pub(crate) fn dirty_ids(&self, sort: Symbol) -> impl Iterator<Item = Id> + '_ {
         let ids = self
             .recent_ids
             .get(&sort)
@@ -88,7 +88,7 @@ impl UnionFind {
     ///
     /// This method assumes that the given values belong to the same, "eq-able",
     /// sort. Its behavior is unspecified on other values.
-    pub fn union_values(&mut self, val1: Value, val2: Value, sort: Symbol) -> Value {
+    pub(crate) fn union_values(&mut self, val1: Value, val2: Value, sort: Symbol) -> Value {
         #[cfg(debug_assertions)]
         debug_assert_eq!(val1.tag, val2.tag);
 
@@ -102,22 +102,12 @@ impl UnionFind {
     /// Like [`union_values`], but operating on raw [`Id`]s.
     ///
     /// [`union_values`]: UnionFind::union_values
-    pub fn union(&mut self, id1: Id, id2: Id, sort: Symbol) -> Id {
+    pub(crate) fn union(&mut self, id1: Id, id2: Id, sort: Symbol) -> Id {
         let (res, reparented) = self.do_union(id1, id2);
         if let Some(id) = reparented {
             self.staged_ids.entry(sort).or_default().push(id)
         }
         res
-    }
-
-    /// Merge the underlying equivalence classes for the two ids.
-    ///
-    /// This method does not update any metadata related to timestamps or sorts;
-    /// that metadata will eventually be required for the correctness of
-    /// rebuilding. This method should only be used for "out-of-band" use-cases,
-    /// such as typechecking.
-    pub fn union_raw(&mut self, id1: Id, id2: Id) -> Id {
-        self.do_union(id1, id2).0
     }
 
     fn do_union(&mut self, id1: Id, id2: Id) -> (Id, Option<Id>) {
@@ -158,14 +148,14 @@ mod tests {
         assert_eq!(uf.parents, ids(0..n));
 
         // build up one set
-        uf.union_raw(0, 1);
-        uf.union_raw(0, 2);
-        uf.union_raw(0, 3);
+        uf.union(0, 1, "T".into());
+        uf.union(0, 2, "T".into());
+        uf.union(0, 3, "T".into());
 
         // build up another set
-        uf.union_raw(6, 7);
-        uf.union_raw(6, 8);
-        uf.union_raw(6, 9);
+        uf.union(6, 7, "T".into());
+        uf.union(6, 8, "T".into());
+        uf.union(6, 9, "T".into());
 
         // this should compress all paths
         for i in 0..n {

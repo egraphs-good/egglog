@@ -97,6 +97,7 @@ impl EGraph {
 
     fn typecheck_command(&mut self, command: &NCommand) -> Result<ResolvedNCommand, TypeError> {
         let symbol_gen = &mut self.parser.symbol_gen;
+
         let command: ResolvedNCommand = match command {
             NCommand::Function(fdecl) => {
                 ResolvedNCommand::Function(self.type_info.typecheck_function(symbol_gen, fdecl)?)
@@ -172,9 +173,11 @@ impl EGraph {
                         .typecheck_expr(symbol_gen, value, &Default::default())?;
                 ResolvedNCommand::SetOption { name: *name, value }
             }
-            NCommand::AddRuleset(ruleset) => ResolvedNCommand::AddRuleset(*ruleset),
-            NCommand::UnstableCombinedRuleset(name, sub_rulesets) => {
-                ResolvedNCommand::UnstableCombinedRuleset(*name, sub_rulesets.clone())
+            NCommand::AddRuleset(span, ruleset) => {
+                ResolvedNCommand::AddRuleset(span.clone(), *ruleset)
+            }
+            NCommand::UnstableCombinedRuleset(span, name, sub_rulesets) => {
+                ResolvedNCommand::UnstableCombinedRuleset(span.clone(), *name, sub_rulesets.clone())
             }
             NCommand::PrintOverallStatistics => ResolvedNCommand::PrintOverallStatistics,
             NCommand::PrintTable(span, table, size) => {
@@ -602,6 +605,8 @@ pub enum TypeError {
     LookupInRuleDisallowed(Symbol, Span),
     #[error("All alternative definitions considered failed\n{}", .0.iter().map(|e| format!("  {e}\n")).collect::<Vec<_>>().join(""))]
     AllAlternativeFailed(Vec<TypeError>),
+    #[error("{1}\nCannot union values of sort {}", .0.name())]
+    NonEqsortUnion(ArcSort, Span),
 }
 
 #[cfg(test)]
