@@ -193,6 +193,8 @@ impl Sort for EqSort {
     }
 }
 
+/// This trait is used by the `add_primitive` macro to infer the sort type
+/// that corresponds to a given type.
 pub trait IntoSort: Sized {
     type Sort: Sort;
 }
