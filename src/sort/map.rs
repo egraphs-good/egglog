@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 pub struct MapContainer {
     do_rebuild_keys: bool,
     do_rebuild_vals: bool,
-    pub data: BTreeMap<core_relations::Value, core_relations::Value>,
+    pub data: BTreeMap<Value, Value>,
 }
 
 impl Container for MapContainer {
@@ -31,7 +31,7 @@ impl Container for MapContainer {
         }
         changed
     }
-    fn iter(&self) -> impl Iterator<Item = core_relations::Value> + '_ {
+    fn iter(&self) -> impl Iterator<Item = Value> + '_ {
         self.data.iter().flat_map(|(k, v)| [k, v]).copied()
     }
 }
@@ -148,11 +148,7 @@ impl Sort for MapSort {
         self.key.is_eq_sort() || self.value.is_eq_sort()
     }
 
-    fn inner_values(
-        &self,
-        containers: &core_relations::Containers,
-        value: &core_relations::Value,
-    ) -> Vec<(ArcSort, core_relations::Value)> {
+    fn inner_values(&self, containers: &Containers, value: &Value) -> Vec<(ArcSort, Value)> {
         let val = containers.get_val::<MapContainer>(*value).unwrap().clone();
         val.data
             .iter()
@@ -178,8 +174,8 @@ impl Sort for MapSort {
 
     fn reconstruct_termdag_container(
         &self,
-        _containers: &core_relations::Containers,
-        _value: &core_relations::Value,
+        _containers: &Containers,
+        _value: &Value,
         termdag: &mut TermDag,
         element_terms: Vec<Term>,
     ) -> Term {

@@ -63,8 +63,8 @@ impl Sort for F64Sort {
 
     fn reconstruct_termdag_leaf(
         &self,
-        primitives: &core_relations::Primitives,
-        value: &core_relations::Value,
+        primitives: &Primitives,
+        value: &Value,
         termdag: &mut TermDag,
     ) -> Term {
         let f = primitives.unwrap_ref::<F>(*value);

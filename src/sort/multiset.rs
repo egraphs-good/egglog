@@ -4,7 +4,7 @@ use inner::MultiSet;
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct MultiSetContainer {
     do_rebuild: bool,
-    pub data: MultiSet<core_relations::Value>,
+    pub data: MultiSet<Value>,
 }
 
 impl Container for MultiSetContainer {
@@ -18,7 +18,7 @@ impl Container for MultiSetContainer {
             false
         }
     }
-    fn iter(&self) -> impl Iterator<Item = core_relations::Value> + '_ {
+    fn iter(&self) -> impl Iterator<Item = Value> + '_ {
         self.data.iter().copied()
     }
 }
@@ -110,11 +110,7 @@ impl Sort for MultiSetSort {
         self.element.is_eq_sort()
     }
 
-    fn inner_values(
-        &self,
-        containers: &core_relations::Containers,
-        value: &core_relations::Value,
-    ) -> Vec<(ArcSort, core_relations::Value)> {
+    fn inner_values(&self, containers: &Containers, value: &Value) -> Vec<(ArcSort, Value)> {
         let val = containers
             .get_val::<MultiSetContainer>(*value)
             .unwrap()
@@ -157,15 +153,15 @@ impl Sort for MultiSetSort {
 
     fn reconstruct_termdag_container(
         &self,
-        _containers: &core_relations::Containers,
-        _value: &core_relations::Value,
+        _containers: &Containers,
+        _value: &Value,
         termdag: &mut TermDag,
         element_terms: Vec<Term>,
     ) -> Term {
         termdag.app("multiset-of".into(), element_terms)
     }
 
-    fn serialized_name(&self, _value: &core_relations::Value) -> Symbol {
+    fn serialized_name(&self, _value: &Value) -> Symbol {
         "multiset-of".into()
     }
 
@@ -205,11 +201,7 @@ impl PrimitiveLike for Map {
 }
 
 impl ExternalFunction for Map {
-    fn invoke(
-        &self,
-        exec_state: &mut ExecutionState,
-        args: &[core_relations::Value],
-    ) -> Option<core_relations::Value> {
+    fn invoke(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
         let fc = exec_state
             .containers()
             .get_val::<FunctionContainer>(args[0])

@@ -42,8 +42,8 @@ impl Sort for StringSort {
     }
     fn reconstruct_termdag_leaf(
         &self,
-        primitives: &core_relations::Primitives,
-        value: &core_relations::Value,
+        primitives: &Primitives,
+        value: &Value,
         termdag: &mut TermDag,
     ) -> Term {
         let s = primitives.unwrap_ref::<S>(*value);

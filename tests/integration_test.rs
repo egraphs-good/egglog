@@ -416,7 +416,7 @@ fn get_function(egraph: &EGraph, name: &str) -> Function {
         .unwrap()
         .clone()
 }
-fn get_value(egraph: &EGraph, name: &str) -> core_relations::Value {
+fn get_value(egraph: &EGraph, name: &str) -> Value {
     let mut out = None;
     let id = get_function(egraph, name).new_backend_id;
     egraph.backend.dump_table(id, |row| out = Some(row.vals[0]));
