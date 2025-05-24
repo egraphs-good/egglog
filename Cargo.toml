@@ -54,7 +54,6 @@ log = "0.4"
 num = "0.4.3"
 ordered-float = { version = "3.7" }
 rustc-hash = "1.1"
-smallvec = "1.11"
 symbol_table = { version = "0.4.0", features = ["global"] }
 thiserror = "1"
 
