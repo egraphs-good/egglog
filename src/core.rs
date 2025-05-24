@@ -13,8 +13,8 @@
 use std::hash::Hasher;
 use std::ops::AddAssign;
 
-use crate::{typechecking::FuncType, HashMap, *};
-use typechecking::TypeError;
+use crate::*;
+use typechecking::{FuncType, PrimitiveWithId, TypeError};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum HeadOrEq<Head> {
@@ -38,7 +38,7 @@ impl<Head> HeadOrEq<Head> {
 
 #[derive(Debug, Clone)]
 pub(crate) struct SpecializedPrimitive {
-    pub(crate) primitive: Primitive,
+    pub(crate) primitive: PrimitiveWithId,
     pub(crate) input: Vec<ArcSort>,
     pub(crate) output: ArcSort,
 }
@@ -334,7 +334,7 @@ impl std::fmt::Display for Query<ResolvedCall, Symbol> {
                 writeln!(
                     f,
                     "({} {})",
-                    filter.head.primitive.name(),
+                    filter.head.primitive.0.name(),
                     ListDisplay(&filter.args, " ")
                 )?;
             }
