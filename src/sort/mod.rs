@@ -8,7 +8,8 @@ use std::ops::{Shl, Shr};
 use std::sync::Mutex;
 use std::{any::Any, sync::Arc};
 
-pub use core_relations::{Container, ExecutionState, ExternalFunction, Rebuilder};
+pub use core_relations::{Container, Containers, Primitives};
+pub use core_relations::{ExecutionState, ExternalFunction, Rebuilder};
 pub use egglog_bridge::ColumnTy;
 
 use crate::ast::Literal;
@@ -84,17 +85,13 @@ pub trait Sort: Any + Send + Sync + Debug {
     /// Return the serialized name of the sort
     ///
     /// Only used for container sorts, which cannot be serialized with make_expr so need an explicit name
-    fn serialized_name(&self, _value: &core_relations::Value) -> Symbol {
+    fn serialized_name(&self, _value: &Value) -> Symbol {
         self.name()
     }
 
     /// Return the inner values and sorts.
     /// Only container sort need to implement this method,
-    fn inner_values(
-        &self,
-        containers: &core_relations::Containers,
-        value: &core_relations::Value,
-    ) -> Vec<(ArcSort, core_relations::Value)> {
+    fn inner_values(&self, containers: &Containers, value: &Value) -> Vec<(ArcSort, Value)> {
         debug_assert!(!self.is_container_sort());
         let _ = value;
         let _ = containers;
@@ -113,27 +110,23 @@ pub trait Sort: Any + Send + Sync + Debug {
     /// Default cost for containers when the cost model does not specify the cost
     fn default_container_cost(
         &self,
-        _containers: &core_relations::Containers,
-        _value: core_relations::Value,
+        _containers: &Containers,
+        _value: Value,
         element_costs: &[Cost],
     ) -> Cost {
         element_costs.iter().fold(0, |s, c| s.saturating_add(*c))
     }
 
     /// Default cost for leaf primitives when the cost model does not specify the cost
-    fn default_leaf_cost(
-        &self,
-        _primitives: &core_relations::Primitives,
-        _value: core_relations::Value,
-    ) -> Cost {
+    fn default_leaf_cost(&self, _primitives: &Primitives, _value: Value) -> Cost {
         1
     }
 
     /// Reconstruct a container value in a TermDag
     fn reconstruct_termdag_container(
         &self,
-        containers: &core_relations::Containers,
-        value: &core_relations::Value,
+        containers: &Containers,
+        value: &Value,
         termdag: &mut TermDag,
         element_terms: Vec<Term>,
     ) -> Term {
@@ -147,8 +140,8 @@ pub trait Sort: Any + Send + Sync + Debug {
     /// Reconstruct a leaf primitive value in a TermDag
     fn reconstruct_termdag_leaf(
         &self,
-        primitives: &core_relations::Primitives,
-        value: &core_relations::Value,
+        primitives: &Primitives,
+        value: &Value,
         termdag: &mut TermDag,
     ) -> Term {
         let _primitives = primitives;

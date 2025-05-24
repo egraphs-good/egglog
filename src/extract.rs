@@ -1,7 +1,7 @@
 use crate::ast::Symbol;
 use crate::termdag::{Term, TermDag};
 use crate::util::{HashMap, HashSet};
-use crate::{ArcSort, EGraph, Function, HEntry};
+use crate::*;
 use std::collections::VecDeque;
 
 pub type Cost = usize;
@@ -30,13 +30,12 @@ pub trait CostModel {
         &self,
         egraph: &EGraph,
         sort: &ArcSort,
-        value: core_relations::Value,
+        value: Value,
         element_costs: &[Cost],
     ) -> Cost;
 
     /// Compute the cost of a primitive, non-container, value
-    fn leaf_primitive(&self, egraph: &EGraph, sort: &ArcSort, value: core_relations::Value)
-        -> Cost;
+    fn leaf_primitive(&self, egraph: &EGraph, sort: &ArcSort, value: Value) -> Cost;
 }
 
 #[derive(Default, Clone)]
@@ -62,18 +61,13 @@ impl CostModel for TreeAdditiveCostModel {
         &self,
         egraph: &EGraph,
         sort: &ArcSort,
-        value: core_relations::Value,
+        value: Value,
         element_costs: &[Cost],
     ) -> Cost {
         sort.default_container_cost(egraph.backend.containers(), value, element_costs)
     }
 
-    fn leaf_primitive(
-        &self,
-        egraph: &EGraph,
-        sort: &ArcSort,
-        value: core_relations::Value,
-    ) -> Cost {
+    fn leaf_primitive(&self, egraph: &EGraph, sort: &ArcSort, value: Value) -> Cost {
         sort.default_leaf_cost(egraph.backend.primitives(), value)
     }
 }
@@ -82,11 +76,10 @@ pub struct ExtractorAlter {
     rootsorts: Vec<ArcSort>,
     funcs: Vec<Symbol>,
     cost_model: Box<dyn CostModel>,
-    costs: HashMap<Symbol, HashMap<core_relations::Value, Cost>>,
+    costs: HashMap<Symbol, HashMap<Value, Cost>>,
     topo_rnk_cnt: usize,
-    topo_rnk: HashMap<Symbol, HashMap<core_relations::Value, usize>>,
-    parent_edge:
-        HashMap<Symbol, HashMap<core_relations::Value, (Symbol, Vec<core_relations::Value>)>>,
+    topo_rnk: HashMap<Symbol, HashMap<Value, usize>>,
+    parent_edge: HashMap<Symbol, HashMap<Value, (Symbol, Vec<Value>)>>,
 }
 
 impl ExtractorAlter {
@@ -163,13 +156,10 @@ impl ExtractorAlter {
         }
 
         // Initialize the tables to have the reachable entries
-        let mut costs: HashMap<Symbol, HashMap<core_relations::Value, Cost>> = Default::default();
-        let mut topo_rnk: HashMap<Symbol, HashMap<core_relations::Value, usize>> =
+        let mut costs: HashMap<Symbol, HashMap<Value, Cost>> = Default::default();
+        let mut topo_rnk: HashMap<Symbol, HashMap<Value, usize>> = Default::default();
+        let mut parent_edge: HashMap<Symbol, HashMap<Value, (Symbol, Vec<Value>)>> =
             Default::default();
-        let mut parent_edge: HashMap<
-            Symbol,
-            HashMap<core_relations::Value, (Symbol, Vec<core_relations::Value>)>,
-        > = Default::default();
 
         for func_name in funcs.iter() {
             let func = egraph.functions.get(func_name).unwrap();
@@ -199,12 +189,7 @@ impl ExtractorAlter {
     /// Compute the cost of a single enode
     /// Recurse if container
     /// Returns None if contains an undefined eqsort term (potentially after unfolding)
-    fn compute_cost_node(
-        &self,
-        egraph: &EGraph,
-        value: &core_relations::Value,
-        sort: &ArcSort,
-    ) -> Option<Cost> {
+    fn compute_cost_node(&self, egraph: &EGraph, value: &Value, sort: &ArcSort) -> Option<Cost> {
         if sort.is_container_sort() {
             let elements = sort.inner_values(egraph.backend.containers(), value);
             let mut ch_costs: Vec<Cost> = Vec::new();
@@ -260,12 +245,7 @@ impl ExtractorAlter {
         ))
     }
 
-    fn compute_topo_rnk_node(
-        &self,
-        egraph: &EGraph,
-        value: &core_relations::Value,
-        sort: &ArcSort,
-    ) -> usize {
+    fn compute_topo_rnk_node(&self, egraph: &EGraph, value: &Value, sort: &ArcSort) -> usize {
         if sort.is_container_sort() {
             sort.inner_values(egraph.backend.containers(), value)
                 .iter()
@@ -411,7 +391,7 @@ impl ExtractorAlter {
         &self,
         egraph: &EGraph,
         termdag: &mut TermDag,
-        value: &core_relations::Value,
+        value: &Value,
         sort: &ArcSort,
     ) -> Term {
         if sort.is_container_sort() {
@@ -451,7 +431,7 @@ impl ExtractorAlter {
         &self,
         egraph: &EGraph,
         termdag: &mut TermDag,
-        value: core_relations::Value,
+        value: Value,
         sort: ArcSort,
     ) -> Option<(Cost, Term)> {
         match self.compute_cost_node(egraph, &value, &sort) {
@@ -474,7 +454,7 @@ impl ExtractorAlter {
         &self,
         egraph: &EGraph,
         termdag: &mut TermDag,
-        value: core_relations::Value,
+        value: Value,
     ) -> Option<(Cost, Term)> {
         assert!(
             self.rootsorts.len() == 1,
@@ -493,14 +473,14 @@ impl ExtractorAlter {
         &self,
         egraph: &EGraph,
         termdag: &mut TermDag,
-        value: core_relations::Value,
+        value: Value,
         nvariants: usize,
         sort: ArcSort,
     ) -> Vec<(Cost, Term)> {
         debug_assert!(self.rootsorts.iter().any(|s| { s.name() == sort.name() }));
 
         if sort.is_eq_sort() {
-            let mut root_variants: Vec<(Cost, Symbol, Vec<core_relations::Value>)> = Vec::new();
+            let mut root_variants: Vec<(Cost, Symbol, Vec<Value>)> = Vec::new();
 
             let mut root_funcs: Vec<Symbol> = Vec::new();
 
@@ -566,7 +546,7 @@ impl ExtractorAlter {
         &self,
         egraph: &EGraph,
         termdag: &mut TermDag,
-        value: core_relations::Value,
+        value: Value,
         nvariants: usize,
     ) -> Vec<(Cost, Term)> {
         assert!(

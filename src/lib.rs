@@ -35,7 +35,8 @@ use ast::*;
 #[cfg(feature = "bin")]
 pub use cli::bin::*;
 use constraint::{Constraint, SimpleTypeConstraint, TypeConstraint};
-use core_relations::ExternalFunctionId;
+pub use core_relations::Value;
+use core_relations::{make_external_func, ExternalFunctionId};
 use egglog_bridge::{ColumnTy, QueryEntry};
 use extract::{ExtractorAlter, TreeAdditiveCostModel};
 pub use function::Function;
@@ -520,11 +521,7 @@ impl EGraph {
     /// Extract a value to a [`TermDag`] and [`Term`] in the [`TermDag`].
     /// Note that the `TermDag` may contain a superset of the nodes in the `Term`.
     /// See also `extract_value_to_string` for convenience.
-    pub fn extract_value(
-        &self,
-        sort: &ArcSort,
-        value: core_relations::Value,
-    ) -> Result<(TermDag, Term), Error> {
+    pub fn extract_value(&self, sort: &ArcSort, value: Value) -> Result<(TermDag, Term), Error> {
         let extractor = ExtractorAlter::compute_costs_from_rootsorts(
             Some(vec![sort.clone()]),
             self,
@@ -537,11 +534,7 @@ impl EGraph {
 
     /// Extract a value to a string for printing.
     /// See also `extract_value` for more control.
-    pub fn extract_value_to_string(
-        &self,
-        sort: &ArcSort,
-        value: core_relations::Value,
-    ) -> Result<String, Error> {
+    pub fn extract_value_to_string(&self, sort: &ArcSort, value: Value) -> Result<String, Error> {
         let (termdag, term) = self.extract_value(sort, value)?;
         Ok(termdag.to_string(&term))
     }
@@ -659,7 +652,7 @@ impl EGraph {
         }
     }
 
-    pub fn eval_expr(&mut self, expr: &Expr) -> Result<(ArcSort, core_relations::Value), Error> {
+    pub fn eval_expr(&mut self, expr: &Expr) -> Result<(ArcSort, Value), Error> {
         // TODO: call eval_resolved_expr
         let fresh_name = self.parser.symbol_gen.fresh(&"egraph_evalexpr".into());
         let command = Command::Action(Action::Let(expr.span(), fresh_name, expr.clone()));
@@ -672,19 +665,15 @@ impl EGraph {
         Ok((sort, value))
     }
 
-    fn eval_resolved_expr(
-        &mut self,
-        span: Span,
-        expr: &ResolvedExpr,
-    ) -> Result<core_relations::Value, Error> {
+    fn eval_resolved_expr(&mut self, span: Span, expr: &ResolvedExpr) -> Result<Value, Error> {
         let unit_id = self.backend.primitives().get_ty::<()>();
         let unit_val = self.backend.primitives().get(());
 
-        let result: egglog_bridge::SideChannel<core_relations::Value> = Default::default();
+        let result: egglog_bridge::SideChannel<Value> = Default::default();
         let result_ref = result.clone();
         let ext_id = self
             .backend
-            .register_external_func(core_relations::make_external_func(move |_es, vals| {
+            .register_external_func(make_external_func(move |_es, vals| {
                 debug_assert!(vals.len() == 1);
                 *result_ref.lock().unwrap() = Some(vals[0]);
                 Some(unit_val)
@@ -776,9 +765,9 @@ impl EGraph {
         let ext_sc_ref = ext_sc.clone();
         let ext_id = self
             .backend
-            .register_external_func(core_relations::make_external_func(move |_, _| {
+            .register_external_func(make_external_func(move |_, _| {
                 *ext_sc_ref.lock().unwrap() = Some(());
-                Some(core_relations::Value::new_const(0))
+                Some(Value::new_const(0))
             }));
 
         let mut translator = BackendRule::new(
@@ -1422,7 +1411,7 @@ fn literal_to_entry(egraph: &egglog_bridge::EGraph, l: &Literal) -> QueryEntry {
     }
 }
 
-fn literal_to_value(egraph: &egglog_bridge::EGraph, l: &Literal) -> core_relations::Value {
+fn literal_to_value(egraph: &egglog_bridge::EGraph, l: &Literal) -> Value {
     match l {
         Literal::Int(x) => egraph.primitives().get::<i64>(*x),
         Literal::Float(x) => egraph.primitives().get::<sort::F>(*x),
@@ -1500,11 +1489,7 @@ mod tests {
     }
 
     impl ExternalFunction for InnerProduct {
-        fn invoke(
-            &self,
-            exec_state: &mut core_relations::ExecutionState<'_>,
-            args: &[core_relations::Value],
-        ) -> Option<core_relations::Value> {
+        fn invoke(&self, exec_state: &mut ExecutionState<'_>, args: &[Value]) -> Option<Value> {
             let mut sum = 0;
             let vec1 = exec_state
                 .containers()

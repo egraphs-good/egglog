@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct SetContainer {
     do_rebuild: bool,
-    pub data: BTreeSet<core_relations::Value>,
+    pub data: BTreeSet<Value>,
 }
 
 impl Container for SetContainer {
@@ -18,7 +18,7 @@ impl Container for SetContainer {
             false
         }
     }
-    fn iter(&self) -> impl Iterator<Item = core_relations::Value> + '_ {
+    fn iter(&self) -> impl Iterator<Item = Value> + '_ {
         self.data.iter().copied()
     }
 }
@@ -113,11 +113,7 @@ impl Sort for SetSort {
         self.element.is_eq_sort()
     }
 
-    fn inner_values(
-        &self,
-        containers: &core_relations::Containers,
-        value: &core_relations::Value,
-    ) -> Vec<(ArcSort, core_relations::Value)> {
+    fn inner_values(&self, containers: &Containers, value: &Value) -> Vec<(ArcSort, Value)> {
         let val = containers.get_val::<SetContainer>(*value).unwrap().clone();
         val.data
             .iter()
@@ -144,15 +140,15 @@ impl Sort for SetSort {
 
     fn reconstruct_termdag_container(
         &self,
-        _containers: &core_relations::Containers,
-        _value: &core_relations::Value,
+        _containers: &Containers,
+        _value: &Value,
         termdag: &mut TermDag,
         element_terms: Vec<Term>,
     ) -> Term {
         termdag.app("set-of".into(), element_terms)
     }
 
-    fn serialized_name(&self, _value: &core_relations::Value) -> Symbol {
+    fn serialized_name(&self, _value: &Value) -> Symbol {
         "set-of".into()
     }
 

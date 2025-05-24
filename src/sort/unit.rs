@@ -30,8 +30,8 @@ impl Sort for UnitSort {
 
     fn reconstruct_termdag_leaf(
         &self,
-        _primitives: &core_relations::Primitives,
-        _value: &core_relations::Value,
+        _primitives: &Primitives,
+        _value: &Value,
         termdag: &mut TermDag,
     ) -> Term {
         termdag.lit(Literal::Unit)
