@@ -16,7 +16,6 @@ mod cli;
 pub mod constraint;
 mod core;
 pub mod extract;
-mod function;
 mod serialize;
 pub mod sort;
 mod termdag;
@@ -39,7 +38,6 @@ pub use core_relations::Value;
 use core_relations::{make_external_func, ExternalFunctionId};
 use egglog_bridge::{ColumnTy, QueryEntry};
 use extract::{ExtractorAlter, TreeAdditiveCostModel};
-pub use function::Function;
 use indexmap::map::Entry;
 pub use serialize::{SerializeConfig, SerializedNode};
 use sort::*;
@@ -172,6 +170,39 @@ pub struct EGraph {
     msgs: Option<Vec<String>>,
 }
 
+#[derive(Clone)]
+pub struct Function {
+    pub(crate) decl: ResolvedFunctionDecl,
+    pub schema: ResolvedSchema,
+    pub(crate) can_subsume: bool,
+    pub backend_id: egglog_bridge::FunctionId,
+}
+
+#[derive(Clone, Debug)]
+pub struct ResolvedSchema {
+    pub input: Vec<ArcSort>,
+    pub output: ArcSort,
+}
+
+impl ResolvedSchema {
+    pub fn get_by_pos(&self, index: usize) -> Option<&ArcSort> {
+        if self.input.len() == index {
+            Some(&self.output)
+        } else {
+            self.input.get(index)
+        }
+    }
+}
+
+impl Debug for Function {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Function")
+            .field("decl", &self.decl)
+            .field("schema", &self.schema)
+            .finish()
+    }
+}
+
 impl Default for EGraph {
     fn default() -> Self {
         let mut eg = Self {
@@ -286,8 +317,98 @@ impl EGraph {
         }
     }
 
+    fn translate_expr_to_mergefn(
+        &self,
+        expr: &ResolvedExpr,
+    ) -> Result<egglog_bridge::MergeFn, Error> {
+        match expr {
+            GenericExpr::Lit(_, literal) => {
+                let val = literal_to_value(&self.backend, literal);
+                Ok(egglog_bridge::MergeFn::Const(val))
+            }
+            GenericExpr::Var(span, resolved_var) => match resolved_var.name.as_str() {
+                "old" => Ok(egglog_bridge::MergeFn::Old),
+                "new" => Ok(egglog_bridge::MergeFn::New),
+                // NB: type-checking should already catch unbound variables here.
+                _ => Err(TypeError::Unbound(resolved_var.name, span.clone()).into()),
+            },
+            GenericExpr::Call(_, ResolvedCall::Func(f), args) => {
+                let translated_args = args
+                    .iter()
+                    .map(|arg| self.translate_expr_to_mergefn(arg))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(egglog_bridge::MergeFn::Function(
+                    self.functions[&f.name].backend_id,
+                    translated_args,
+                ))
+            }
+            GenericExpr::Call(_, ResolvedCall::Primitive(p), args) => {
+                let translated_args = args
+                    .iter()
+                    .map(|arg| self.translate_expr_to_mergefn(arg))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(egglog_bridge::MergeFn::Primitive(
+                    p.primitive.1,
+                    translated_args,
+                ))
+            }
+        }
+    }
+
     fn declare_function(&mut self, decl: &ResolvedFunctionDecl) -> Result<(), Error> {
-        let function = Function::new(self, decl)?;
+        let get_sort = |name: &Symbol| match self.type_info.get_sort_by_name(name) {
+            Some(sort) => Ok(sort.clone()),
+            None => Err(Error::TypeError(TypeError::UndefinedSort(
+                *name,
+                decl.span.clone(),
+            ))),
+        };
+
+        let input = decl
+            .schema
+            .input
+            .iter()
+            .map(get_sort)
+            .collect::<Result<Vec<_>, _>>()?;
+        let output = get_sort(&decl.schema.output)?;
+
+        let can_subsume = match decl.subtype {
+            FunctionSubtype::Constructor => true,
+            FunctionSubtype::Relation => true,
+            FunctionSubtype::Custom => false,
+        };
+
+        use egglog_bridge::{DefaultVal, MergeFn};
+        let backend_id = self.backend.add_table(egglog_bridge::FunctionConfig {
+            schema: input
+                .iter()
+                .chain([&output])
+                .map(|sort| sort.column_ty(&self.backend))
+                .collect(),
+            default: match decl.subtype {
+                FunctionSubtype::Constructor => DefaultVal::FreshId,
+                FunctionSubtype::Custom => DefaultVal::Fail,
+                FunctionSubtype::Relation => DefaultVal::Const(self.backend.primitives().get(())),
+            },
+            merge: match decl.subtype {
+                FunctionSubtype::Constructor => MergeFn::UnionId,
+                FunctionSubtype::Relation => MergeFn::AssertEq,
+                FunctionSubtype::Custom => match &decl.merge {
+                    None => MergeFn::AssertEq,
+                    Some(expr) => self.translate_expr_to_mergefn(expr)?,
+                },
+            },
+            name: decl.name.to_string(),
+            can_subsume,
+        });
+
+        let function = Function {
+            decl: decl.clone(),
+            schema: ResolvedSchema { input, output },
+            can_subsume,
+            backend_id,
+        };
+
         let old = self.functions.insert(decl.name, function);
         if old.is_some() {
             panic!(
@@ -353,7 +474,7 @@ impl EGraph {
             }
         };
 
-        self.backend.dump_table(func.new_backend_id, extract_row);
+        self.backend.dump_table(func.backend_id, extract_row);
 
         Ok((inputs, output, termdag))
     }
@@ -399,7 +520,7 @@ impl EGraph {
                 .functions
                 .get(&sym)
                 .ok_or(TypeError::UnboundFunction(sym, span!()))?;
-            let size = self.backend.table_size(f.new_backend_id);
+            let size = self.backend.table_size(f.backend_id);
             log::info!("Function {} has size {}", sym, size);
             self.print_msg(size.to_string());
             Ok(())
@@ -408,7 +529,7 @@ impl EGraph {
             let mut lens = self
                 .functions
                 .iter()
-                .map(|(sym, f)| (*sym, self.backend.table_size(f.new_backend_id)))
+                .map(|(sym, f)| (*sym, self.backend.table_size(f.backend_id)))
                 .collect::<Vec<_>>();
 
             // Function name's alphabetical order
@@ -607,7 +728,7 @@ impl EGraph {
         // find the table with the same name as the fresh name
         let func = self.functions.get(&fresh_name).unwrap();
 
-        let value = self.backend.lookup_id(func.new_backend_id, &[]).unwrap();
+        let value = self.backend.lookup_id(func.backend_id, &[]).unwrap();
         let sort = func.schema.output.clone();
         Ok((sort, value))
     }
@@ -1092,7 +1213,7 @@ impl EGraph {
     pub fn num_tuples(&self) -> usize {
         self.functions
             .values()
-            .map(|f| self.backend.table_size(f.new_backend_id))
+            .map(|f| self.backend.table_size(f.backend_id))
             .sum()
     }
 
@@ -1184,7 +1305,7 @@ impl<'a> BackendRule<'a> {
     }
 
     fn func(&self, f: &typechecking::FuncType) -> egglog_bridge::FunctionId {
-        self.functions[&f.name].new_backend_id
+        self.functions[&f.name].backend_id
     }
 
     fn prim(
