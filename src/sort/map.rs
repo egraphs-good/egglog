@@ -2,13 +2,13 @@ use super::*;
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct MapContainer<V> {
+pub struct MapContainer {
     do_rebuild_keys: bool,
     do_rebuild_vals: bool,
-    pub data: BTreeMap<V, V>,
+    pub data: BTreeMap<core_relations::Value, core_relations::Value>,
 }
 
-impl Container for MapContainer<core_relations::Value> {
+impl Container for MapContainer {
     fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool {
         let mut changed = false;
         if self.do_rebuild_keys {
@@ -49,7 +49,6 @@ pub struct MapSort {
     name: Symbol,
     key: ArcSort,
     value: ArcSort,
-    maps: Mutex<IndexSet<MapContainer<Value>>>,
 }
 
 impl MapSort {
@@ -113,7 +112,6 @@ impl Presort for MapSort {
                 name,
                 key: k.clone(),
                 value: v.clone(),
-                maps: Default::default(),
             }))
         } else {
             panic!()
@@ -131,7 +129,7 @@ impl Sort for MapSort {
     }
 
     fn register_type(&self, backend: &mut egglog_bridge::EGraph) {
-        backend.register_container_ty::<MapContainer<core_relations::Value>>();
+        backend.register_container_ty::<MapContainer>();
     }
 
     fn as_arc_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync + 'static> {
@@ -150,88 +148,32 @@ impl Sort for MapSort {
         self.key.is_eq_sort() || self.value.is_eq_sort()
     }
 
-    fn old_inner_values(&self, value: &Value) -> Vec<(ArcSort, Value)> {
-        let maps = self.maps.lock().unwrap();
-        let map = maps.get_index(value.bits as usize).unwrap();
-        let mut result = Vec::new();
-        for (k, v) in map.data.iter() {
-            result.push((self.key.clone(), *k));
-            result.push((self.value.clone(), *v));
-        }
-        result
-    }
-
     fn inner_values(
         &self,
         containers: &core_relations::Containers,
         value: &core_relations::Value,
     ) -> Vec<(ArcSort, core_relations::Value)> {
-        let val = containers
-            .get_val::<MapContainer<core_relations::Value>>(*value)
-            .unwrap()
-            .clone();
+        let val = containers.get_val::<MapContainer>(*value).unwrap().clone();
         val.data
             .iter()
             .flat_map(|(k, v)| [(self.key.clone(), *k), (self.value.clone(), *v)])
             .collect()
     }
 
-    fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
-        let maps = self.maps.lock().unwrap();
-        let map = maps.get_index(value.bits as usize).unwrap();
-        let mut changed = false;
-        let new_map = MapContainer {
-            do_rebuild_keys: map.do_rebuild_keys,
-            do_rebuild_vals: map.do_rebuild_vals,
-            data: map
-                .data
-                .iter()
-                .map(|(k, v)| {
-                    let (mut k, mut v) = (*k, *v);
-                    changed |= self.key.canonicalize(&mut k, unionfind);
-                    changed |= self.value.canonicalize(&mut v, unionfind);
-                    (k, v)
-                })
-                .collect(),
-        };
-        drop(maps);
-        *value = new_map.store(self);
-        changed
-    }
-
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
-        add_primitive!(eg, "map-empty" = || -> @MapContainer<Value> (self.clone()) { MapContainer { do_rebuild_keys: self.__y.key.is_eq_sort(), do_rebuild_vals: self.__y.value.is_eq_sort(), data: BTreeMap::new() } });
+        add_primitive!(eg, "map-empty" = || -> @MapContainer (self.clone()) { MapContainer { do_rebuild_keys: self.__y.key.is_eq_sort(), do_rebuild_vals: self.__y.value.is_eq_sort(), data: BTreeMap::new() } });
 
-        add_primitive!(eg, "map-get"    = |    xs: @MapContainer<Value> (self.clone()), x: # (self.key())                     | -?> # (self.value()) { xs.data.get(&x).copied() });
-        add_primitive!(eg, "map-insert" = |mut xs: @MapContainer<Value> (self.clone()), x: # (self.key()), y: # (self.value())| -> @MapContainer<Value> (self.clone()) {{ xs.data.insert(x, y); xs }});
-        add_primitive!(eg, "map-remove" = |mut xs: @MapContainer<Value> (self.clone()), x: # (self.key())                     | -> @MapContainer<Value> (self.clone()) {{ xs.data.remove(&x);   xs }});
+        add_primitive!(eg, "map-get"    = |    xs: @MapContainer (self.clone()), x: # (self.key())                     | -?> # (self.value()) { xs.data.get(&x).copied() });
+        add_primitive!(eg, "map-insert" = |mut xs: @MapContainer (self.clone()), x: # (self.key()), y: # (self.value())| -> @MapContainer (self.clone()) {{ xs.data.insert(x, y); xs }});
+        add_primitive!(eg, "map-remove" = |mut xs: @MapContainer (self.clone()), x: # (self.key())                     | -> @MapContainer (self.clone()) {{ xs.data.remove(&x);   xs }});
 
-        add_primitive!(eg, "map-length"       = |xs: @MapContainer<Value> (self.clone())| -> i64 { xs.data.len() as i64 });
-        add_primitive!(eg, "map-contains"     = |xs: @MapContainer<Value> (self.clone()), x: # (self.key())| -?> () { ( xs.data.contains_key(&x)).then_some(()) });
-        add_primitive!(eg, "map-not-contains" = |xs: @MapContainer<Value> (self.clone()), x: # (self.key())| -?> () { (!xs.data.contains_key(&x)).then_some(()) });
-    }
-
-    fn extract_term(
-        &self,
-        _egraph: &EGraph,
-        value: Value,
-        extractor: &Extractor,
-        termdag: &mut TermDag,
-    ) -> Option<(Cost, Term)> {
-        let map = MapContainer::load(self, &value);
-        let mut term = termdag.app("map-empty".into(), vec![]);
-        let mut cost = 0usize;
-        for (k, v) in map.data.iter().rev() {
-            let k = extractor.find_best(*k, termdag, &self.key)?;
-            let v = extractor.find_best(*v, termdag, &self.value)?;
-            cost = cost.saturating_add(k.0).saturating_add(v.0);
-            term = termdag.app("map-insert".into(), vec![term, k.1, v.1]);
-        }
-        Some((cost, term))
+        add_primitive!(eg, "map-length"       = |xs: @MapContainer (self.clone())| -> i64 { xs.data.len() as i64 });
+        add_primitive!(eg, "map-contains"     = |xs: @MapContainer (self.clone()), x: # (self.key())| -?> () { ( xs.data.contains_key(&x)).then_some(()) });
+        add_primitive!(eg, "map-not-contains" = |xs: @MapContainer (self.clone()), x: # (self.key())| -?> () { (!xs.data.contains_key(&x)).then_some(()) });
     }
 
     fn value_type(&self) -> Option<TypeId> {
-        Some(TypeId::of::<MapContainer<core_relations::Value>>())
+        Some(TypeId::of::<MapContainer>())
     }
 
     fn reconstruct_termdag_container(
@@ -251,23 +193,6 @@ impl Sort for MapSort {
     }
 }
 
-impl IntoSort for MapContainer<Value> {
+impl IntoSort for MapContainer {
     type Sort = MapSort;
-    fn store(self, sort: &Self::Sort) -> Value {
-        let mut maps = sort.maps.lock().unwrap();
-        let (i, _) = maps.insert_full(self);
-        Value {
-            #[cfg(debug_assertions)]
-            tag: sort.name,
-            bits: i as u64,
-        }
-    }
-}
-
-impl FromSort for MapContainer<Value> {
-    type Sort = MapSort;
-    fn load(sort: &Self::Sort, value: &Value) -> Self {
-        let maps = sort.maps.lock().unwrap();
-        maps.get_index(value.bits as usize).unwrap().clone()
-    }
 }

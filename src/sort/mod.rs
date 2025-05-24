@@ -12,7 +12,7 @@ pub use core_relations::{Container, ExecutionState, ExternalFunction, Rebuilder}
 pub use egglog_bridge::ColumnTy;
 
 use crate::ast::Literal;
-use crate::extract::{Cost, Extractor};
+use crate::extract::Cost;
 use crate::util::IndexSet;
 use crate::*;
 
@@ -81,32 +81,6 @@ pub trait Sort: Any + Send + Sync + Debug {
         false
     }
 
-    // Only eq_container_sort need to implement this method,
-    // which returns a list of ids to be tracked.
-    fn foreach_tracked_values<'a>(
-        &'a self,
-        value: &'a Value,
-        mut f: Box<dyn FnMut(ArcSort, Value) + 'a>,
-    ) {
-        for (sort, value) in self.old_inner_values(value) {
-            if sort.is_eq_sort() {
-                f(sort, value)
-            }
-        }
-    }
-
-    // Sort-wise canonicalization. Return true if value is modified.
-    // Only EqSort or containers of EqSort should override.
-    fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
-        #[cfg(debug_assertions)]
-        debug_assert_eq!(self.name(), value.tag);
-
-        #[cfg(not(debug_assertions))]
-        let _ = value;
-        let _ = unionfind;
-        false
-    }
-
     /// Return the serialized name of the sort
     ///
     /// Only used for container sorts, which cannot be serialized with make_expr so need an explicit name
@@ -132,24 +106,9 @@ pub trait Sort: Any + Send + Sync + Debug {
     /// Every non-EqSort sort should return Some(TypeId).
     fn value_type(&self) -> Option<TypeId>;
 
-    /// Only eq_container_sort need to implement this method,
-    fn old_inner_values(&self, value: &Value) -> Vec<(ArcSort, Value)> {
-        let _ = value;
-        vec![]
-    }
-
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
         let _ = eg;
     }
-
-    /// Extracting a term (with smallest cost) out of a primitive value
-    fn extract_term(
-        &self,
-        egraph: &EGraph,
-        value: Value,
-        _extractor: &Extractor,
-        _termdag: &mut TermDag,
-    ) -> Option<(Cost, Term)>;
 
     /// Default cost for containers when the cost model does not specify the cost
     fn default_container_cost(
@@ -237,42 +196,13 @@ impl Sort for EqSort {
         true
     }
 
-    fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
-        #[cfg(debug_assertions)]
-        debug_assert_eq!(self.name(), value.tag);
-
-        let bits = unionfind.find(value.bits);
-        if bits != value.bits {
-            value.bits = bits;
-            true
-        } else {
-            false
-        }
-    }
-
-    fn extract_term(
-        &self,
-        _egraph: &EGraph,
-        _value: Value,
-        _extractor: &Extractor,
-        _termdag: &mut TermDag,
-    ) -> Option<(Cost, Term)> {
-        unimplemented!("No extract_term for EqSort {}", self.name)
-    }
-
     fn value_type(&self) -> Option<TypeId> {
         None
     }
 }
 
-pub trait FromSort: Sized {
-    type Sort: Sort;
-    fn load(sort: &Self::Sort, value: &Value) -> Self;
-}
-
 pub trait IntoSort: Sized {
     type Sort: Sort;
-    fn store(self, sort: &Self::Sort) -> Value;
 }
 
 pub type PreSort =

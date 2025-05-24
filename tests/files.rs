@@ -61,13 +61,6 @@ impl Run {
                     serialized.split_classes(|id, _| egraph.from_node_id(id).is_primitive());
                     serialized.inline_leaves();
                     serialized.to_dot();
-
-                    // TODO: remove this before merging
-                    for (name, func) in &egraph.functions {
-                        let old_backend = func.len();
-                        let new_backend = egraph.backend.table_size(func.new_backend_id);
-                        assert_eq!(old_backend, new_backend, "func: {name}");
-                    }
                 }
             }
             Err(err) => {

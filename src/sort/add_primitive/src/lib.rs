@@ -127,7 +127,6 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
 
         // Cast the arguments to the desired type.
         let cast1 = |x, t: &syn::Type, is_container| match target {
-            Target::OldBackend => quote!(<#t as FromSort>::load(&self.#x, #x)),
             Target::NewBackend => match is_container {
                 false => quote!(exec_state.prims().unwrap::<#t>(*#x)),
                 true => quote!(exec_state.containers().get_val::<#t>(*#x).unwrap().clone()),
@@ -166,7 +165,6 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
             Some((t, is_container)) => (
                 t,
                 match target {
-                    Target::OldBackend => quote!(#y.store(&self.#y)),
                     Target::NewBackend => match is_container {
                         false => quote!(exec_state.prims().get::<#t>(#y)),
                         true => quote!(
@@ -184,14 +182,13 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
             Some(#ret)
         }
     };
-    let apply = body(Target::OldBackend);
     let invoke = body(Target::NewBackend);
 
     // This is the big `quote!` block that ties everything together. We
     // create two structs: `Prim` for the frontend, and `Ext` for the
     // backend. `Prim` has to support `get_type_constraint`, so it stores
     // sorts in its fields. `Ext` only has to support `invoke`, so it does not.
-    quote!{{
+    quote! {{
         #[allow(unused_imports)] use ::egglog::{*, constraint::*};
         #[allow(unused_imports)] use ::std::sync::Arc;
 
@@ -206,10 +203,6 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
             fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
                 #type_constraint
             }
-
-            fn apply(&self, args: &[Value], _: (&[ArcSort], &ArcSort), _: Option<&mut EGraph>) -> Option<Value> {
-                #apply
-            }
         }
 
         {
@@ -223,7 +216,8 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
 
         let eg: &mut EGraph = #eg;
         eg.add_primitive(#prim_use);
-    }}.into()
+    }}
+    .into()
 }
 
 struct AddPrimitive {
@@ -384,5 +378,4 @@ impl Parse for Arrow {
 
 enum Target {
     NewBackend,
-    OldBackend,
 }

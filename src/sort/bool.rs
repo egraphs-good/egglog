@@ -33,19 +33,6 @@ impl Sort for BoolSort {
         add_primitive!(eg, "=>" = |a: bool, b: bool| -> bool { !a || b });
     }
 
-    fn extract_term(
-        &self,
-        _egraph: &EGraph,
-        value: Value,
-        _extractor: &Extractor,
-        termdag: &mut TermDag,
-    ) -> Option<(Cost, Term)> {
-        #[cfg(debug_assertions)]
-        debug_assert_eq!(value.tag, self.name());
-
-        Some((1, termdag.lit(Literal::Bool(value.bits > 0))))
-    }
-
     fn value_type(&self) -> Option<TypeId> {
         Some(TypeId::of::<bool>())
     }
@@ -64,18 +51,4 @@ impl Sort for BoolSort {
 
 impl IntoSort for bool {
     type Sort = BoolSort;
-    fn store(self, _sort: &Self::Sort) -> Value {
-        Value {
-            #[cfg(debug_assertions)]
-            tag: BoolSort.name(),
-            bits: self as u64,
-        }
-    }
-}
-
-impl FromSort for bool {
-    type Sort = BoolSort;
-    fn load(_sort: &Self::Sort, value: &Value) -> Self {
-        value.bits != 0
-    }
 }
