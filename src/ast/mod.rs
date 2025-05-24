@@ -14,15 +14,9 @@ pub use symbol_table::GlobalSymbol as Symbol;
 /// The egglog internal representation of already compiled rules
 pub(crate) enum Ruleset {
     /// Represents a ruleset with a set of rules.
-    /// Use an [`IndexMap`] to ensure egglog is deterministic.
-    /// Rules added to the [`IndexMap`] first apply their
-    /// actions first.
-    Rules(
-        Symbol,
-        IndexMap<Symbol, (CompiledRule, egglog_bridge::RuleId)>,
-    ),
+    Rules(IndexMap<Symbol, egglog_bridge::RuleId>),
     /// A combined ruleset may contain other rulesets.
-    Combined(Symbol, Vec<Symbol>),
+    Combined(Vec<Symbol>),
 }
 
 pub type NCommand = GenericNCommand<Symbol, Symbol>;
@@ -1373,12 +1367,6 @@ where
             }
         }
     }
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct CompiledRule {
-    pub(crate) query: CompiledQuery,
-    pub(crate) program: Program,
 }
 
 pub type Rule = GenericRule<Symbol, Symbol>;

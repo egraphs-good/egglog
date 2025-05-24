@@ -416,8 +416,11 @@ fn get_function(egraph: &EGraph, name: &str) -> Function {
         .unwrap()
         .clone()
 }
-fn get_value(egraph: &EGraph, name: &str) -> Value {
-    get_function(egraph, name).get(&[]).unwrap()
+fn get_value(egraph: &EGraph, name: &str) -> core_relations::Value {
+    let mut out = None;
+    let id = get_function(egraph, name).new_backend_id;
+    egraph.backend.dump_table(id, |row| out = Some(row.vals[0]));
+    out.unwrap()
 }
 
 #[test]
@@ -456,7 +459,6 @@ fn test_subsumed_unextractable_rebuild_arg() {
             "#,
         )
         .unwrap();
-    egraph.rebuild_nofail();
     // And verify that their values are now the same and different from the original (cheap) value.
     let new_cheap_value = get_value(&egraph, "cheap");
     let new_cheap_1_value = get_value(&egraph, "cheap-1");
@@ -509,7 +511,6 @@ fn test_subsumed_unextractable_rebuild_self() {
             "#,
         )
         .unwrap();
-    egraph.rebuild_nofail();
     // And verify that the cheap value is now different
     let new_cheap_value = get_value(&egraph, "cheap");
     assert_ne!(new_cheap_value, orig_cheap_value);
