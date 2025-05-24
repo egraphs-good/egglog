@@ -772,7 +772,7 @@ fn get_atom_application_constraints(
     // primitive atom constraints
     if let Some(primitives) = type_info.get_prims(head) {
         for p in primitives {
-            let constraints = p.get_type_constraints(span).get(args, type_info);
+            let constraints = p.0.get_type_constraints(span).get(args, type_info);
             xor_constraints.push(constraints);
         }
     }

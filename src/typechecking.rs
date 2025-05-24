@@ -10,6 +10,42 @@ pub struct FuncType {
     pub output: ArcSort,
 }
 
+#[derive(Clone)]
+pub struct PrimitiveWithId(
+    pub Arc<dyn PrimitiveLike + Send + Sync>,
+    pub ExternalFunctionId,
+);
+
+impl PrimitiveWithId {
+    /// Takes the full signature of a primitive (both input and output types).
+    /// Returns whether the primitive is compatible with this signature.
+    pub fn accept(&self, tys: &[Arc<dyn Sort>], typeinfo: &TypeInfo) -> bool {
+        let mut constraints = vec![];
+        let lits: Vec<_> = (0..tys.len())
+            .map(|i| AtomTerm::Literal(Span::Panic, Literal::Int(i as i64)))
+            .collect();
+        for (lit, ty) in lits.iter().zip(tys.iter()) {
+            constraints.push(constraint::assign(lit.clone(), ty.clone()))
+        }
+        constraints.extend(
+            self.0
+                .get_type_constraints(&Span::Panic)
+                .get(&lits, typeinfo),
+        );
+        let problem = Problem {
+            constraints,
+            range: HashSet::default(),
+        };
+        problem.solve(|sort| sort.name()).is_ok()
+    }
+}
+
+impl Debug for PrimitiveWithId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Prim({})", self.0.name())
+    }
+}
+
 /// Stores resolved typechecking information.
 #[derive(Clone, Default)]
 pub struct TypeInfo {
@@ -18,7 +54,7 @@ pub struct TypeInfo {
     // TODO(yz): I want to get rid of this as now we have user-defined primitives and constraint based type checking
     reserved_primitives: HashSet<Symbol>,
     sorts: HashMap<Symbol, Arc<dyn Sort>>,
-    primitives: HashMap<Symbol, Vec<Primitive>>,
+    primitives: HashMap<Symbol, Vec<PrimitiveWithId>>,
     func_types: HashMap<Symbol, FuncType>,
     global_sorts: HashMap<Symbol, ArcSort>,
 }
@@ -93,7 +129,7 @@ impl EGraph {
             .primitives
             .entry(prim.name())
             .or_default()
-            .push(Primitive(prim, ext));
+            .push(PrimitiveWithId(prim, ext));
     }
 
     pub(crate) fn typecheck_program(
@@ -555,8 +591,8 @@ impl TypeInfo {
         self.sorts.get(sym)
     }
 
-    pub fn get_prims(&self, sym: &Symbol) -> Option<&Vec<Primitive>> {
-        self.primitives.get(sym)
+    pub fn get_prims(&self, sym: &Symbol) -> Option<&[PrimitiveWithId]> {
+        self.primitives.get(sym).map(Vec::as_slice)
     }
 
     pub fn is_primitive(&self, sym: Symbol) -> bool {
