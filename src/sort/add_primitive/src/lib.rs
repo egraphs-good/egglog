@@ -187,7 +187,7 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
         #[derive(Clone)]
         #prim_def
 
-        impl PrimitiveLike for Prim {
+        impl Primitive for Prim {
             fn name(&self) -> Symbol {
                 #name.into()
             }
