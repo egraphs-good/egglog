@@ -306,6 +306,18 @@ impl PrimitiveLike for Ctor {
             span: span.clone(),
         })
     }
+
+    fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
+        let (rf, args) = args.split_first().unwrap();
+        let ResolvedFunction {
+            id,
+            do_rebuild,
+            name,
+        } = exec_state.prims().unwrap(*rf);
+        let args = do_rebuild.iter().zip(args).map(|(b, x)| (*b, *x)).collect();
+        let y = FunctionContainer(id, args, name);
+        Some(exec_state.clone().containers().register_val(y, exec_state))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -319,20 +331,6 @@ pub struct ResolvedFunction {
 pub enum ResolvedFunctionId {
     Lookup(egglog_bridge::Lookup),
     Prim(ExternalFunctionId),
-}
-
-impl ExternalFunction for Ctor {
-    fn invoke(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
-        let (rf, args) = args.split_first().unwrap();
-        let ResolvedFunction {
-            id,
-            do_rebuild,
-            name,
-        } = exec_state.prims().unwrap(*rf);
-        let args = do_rebuild.iter().zip(args).map(|(b, x)| (*b, *x)).collect();
-        let y = FunctionContainer(id, args, name);
-        Some(exec_state.clone().containers().register_val(y, exec_state))
-    }
 }
 
 // (unstable-app <function> [<arg1>, <arg2>, ...])
@@ -353,10 +351,8 @@ impl PrimitiveLike for Apply {
         sorts.push(self.function.output.clone());
         SimpleTypeConstraint::new(self.name(), sorts, span.clone()).into_box()
     }
-}
 
-impl ExternalFunction for Apply {
-    fn invoke(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
+    fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
         let (fc, args) = args.split_first().unwrap();
         let fc = exec_state
             .containers()

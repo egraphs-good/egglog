@@ -198,10 +198,8 @@ impl PrimitiveLike for Map {
         )
         .into_box()
     }
-}
 
-impl ExternalFunction for Map {
-    fn invoke(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
+    fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
         let fc = exec_state
             .containers()
             .get_val::<FunctionContainer>(args[0])

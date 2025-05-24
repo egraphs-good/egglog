@@ -114,8 +114,8 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
         }
     };
 
-    // Create the function body for either `apply` or `invoke`.
-    let body = |target| {
+    // Create the function body for `apply`.
+    let apply = {
         // Bind the argument names that were passed in to this macro.
         let bind = if is_varargs {
             let x = &args[0].x;
@@ -126,11 +126,9 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
         };
 
         // Cast the arguments to the desired type.
-        let cast1 = |x, t: &syn::Type, is_container| match target {
-            Target::NewBackend => match is_container {
-                false => quote!(exec_state.prims().unwrap::<#t>(*#x)),
-                true => quote!(exec_state.containers().get_val::<#t>(*#x).unwrap().clone()),
-            },
+        let cast1 = |x, t: &syn::Type, is_container| match is_container {
+            false => quote!(exec_state.prims().unwrap::<#t>(*#x)),
+            true => quote!(exec_state.containers().get_val::<#t>(*#x).unwrap().clone()),
         };
         let cast = if is_varargs {
             let Arg { x, t, is_mutable } = &args[0];
@@ -164,13 +162,11 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
             None => (&value_type, quote!(#y)),
             Some((t, is_container)) => (
                 t,
-                match target {
-                    Target::NewBackend => match is_container {
-                        false => quote!(exec_state.prims().get::<#t>(#y)),
-                        true => quote!(
-                            exec_state.clone().containers().register_val::<#t>(#y, exec_state)
-                        ),
-                    },
+                match is_container {
+                    false => quote!(exec_state.prims().get::<#t>(#y)),
+                    true => quote!(
+                        exec_state.clone().containers().register_val::<#t>(#y, exec_state)
+                    ),
                 },
             ),
         };
@@ -182,12 +178,8 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
             Some(#ret)
         }
     };
-    let invoke = body(Target::NewBackend);
 
-    // This is the big `quote!` block that ties everything together. We
-    // create two structs: `Prim` for the frontend, and `Ext` for the
-    // backend. `Prim` has to support `get_type_constraint`, so it stores
-    // sorts in its fields. `Ext` only has to support `invoke`, so it does not.
+    // This is the big `quote!` block that ties everything together.
     quote! {{
         #[allow(unused_imports)] use ::egglog::{*, constraint::*};
         #[allow(unused_imports)] use ::std::sync::Arc;
@@ -203,14 +195,9 @@ pub fn add_primitive(input: TokenStream) -> TokenStream {
             fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint> {
                 #type_constraint
             }
-        }
 
-        {
-            use core_relations::{ExecutionState, ExternalFunction, Value};
-            impl ExternalFunction for Prim {
-                fn invoke(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
-                    #invoke
-                }
+            fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
+                #apply
             }
         }
 
@@ -374,8 +361,4 @@ impl Parse for Arrow {
             Err(input.error("expected -> or -?>"))
         }
     }
-}
-
-enum Target {
-    NewBackend,
 }

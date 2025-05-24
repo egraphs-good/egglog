@@ -8,8 +8,7 @@ use std::ops::{Shl, Shr};
 use std::sync::Mutex;
 use std::{any::Any, sync::Arc};
 
-pub use core_relations::{Container, Containers, Primitives};
-pub use core_relations::{ExecutionState, ExternalFunction, Rebuilder};
+pub use core_relations::{Container, Containers, ExecutionState, Primitives, Rebuilder};
 pub use egglog_bridge::ColumnTy;
 
 use crate::ast::Literal;
