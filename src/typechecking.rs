@@ -11,10 +11,7 @@ pub struct FuncType {
 }
 
 #[derive(Clone)]
-pub struct PrimitiveWithId(
-    pub Arc<dyn PrimitiveLike + Send + Sync>,
-    pub ExternalFunctionId,
-);
+pub struct PrimitiveWithId(pub Arc<dyn Primitive + Send + Sync>, pub ExternalFunctionId);
 
 impl PrimitiveWithId {
     /// Takes the full signature of a primitive (both input and output types).
@@ -109,7 +106,7 @@ impl EGraph {
     /// Add a user-defined primitive
     pub fn add_primitive<T>(&mut self, x: T)
     where
-        T: Clone + PrimitiveLike + Send + Sync + 'static,
+        T: Clone + Primitive + Send + Sync + 'static,
     {
         // We need to use a wrapper because of the orphan rule.
         // If we just try to implement `ExternalFunction` directly on
@@ -117,7 +114,7 @@ impl EGraph {
         // downstream crate to create a conflict.
         #[derive(Clone)]
         struct Wrapper<T>(T);
-        impl<T: Clone + PrimitiveLike + Send + Sync> ExternalFunction for Wrapper<T> {
+        impl<T: Clone + Primitive + Send + Sync> ExternalFunction for Wrapper<T> {
             fn invoke(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
                 self.0.apply(exec_state, args)
             }
