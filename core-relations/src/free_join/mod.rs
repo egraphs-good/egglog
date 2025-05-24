@@ -415,9 +415,9 @@ impl Database {
         let table = &table_info.table;
         if let Some(c) = c {
             if let Some(sub) = table.fast_subset(&c) {
-                // In the case a the constraint can be computed quickly,
+                // In the case where a the constraint can be computed quickly,
                 // we do not filter for staleness, which may over-approximate.
-                return sub.size();
+                sub.size()
             } else {
                 table.refine_one(table.refine_live(table.all()), &c).size()
             }

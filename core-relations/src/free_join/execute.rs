@@ -420,7 +420,7 @@ impl<'a> JoinState<'a> {
             table: &WrappedTableRef,
         ) -> Subset {
             let sub = table.refine_live(sub);
-            table.refine(sub, &constraints)
+            table.refine(sub, constraints)
         }
 
         match &plan.stages[cur] {
