@@ -65,6 +65,7 @@ pub trait PrimitiveLike {
     /// Constructs a type constraint for the primitive that uses the span information
     /// for error localization.
     fn get_type_constraints(&self, span: &Span) -> Box<dyn TypeConstraint>;
+    fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value>;
 }
 
 /// Running a schedule produces a report of the results.
@@ -1486,10 +1487,8 @@ mod tests {
             )
             .into_box()
         }
-    }
 
-    impl ExternalFunction for InnerProduct {
-        fn invoke(&self, exec_state: &mut ExecutionState<'_>, args: &[Value]) -> Option<Value> {
+        fn apply(&self, exec_state: &mut ExecutionState<'_>, args: &[Value]) -> Option<Value> {
             let mut sum = 0;
             let vec1 = exec_state
                 .containers()
