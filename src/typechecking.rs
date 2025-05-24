@@ -73,10 +73,22 @@ impl EGraph {
     /// Add a user-defined primitive
     pub fn add_primitive<T>(&mut self, x: T)
     where
-        T: Clone + ExternalFunction + PrimitiveLike + Send + Sync + 'static,
+        T: Clone + PrimitiveLike + Send + Sync + 'static,
     {
+        // We need to use a wrapper because of the orphan rule.
+        // If we just try to implement `ExternalFunction` directly on
+        // all `PrimitiveLike`s then it would be possible for a
+        // downstream crate to create a conflict.
+        #[derive(Clone)]
+        struct Wrapper<T>(T);
+        impl<T: Clone + PrimitiveLike + Send + Sync> ExternalFunction for Wrapper<T> {
+            fn invoke(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
+                self.0.apply(exec_state, args)
+            }
+        }
+
         let prim = Arc::new(x.clone());
-        let ext = self.backend.register_external_func(x);
+        let ext = self.backend.register_external_func(Wrapper(x));
         self.type_info
             .primitives
             .entry(prim.name())
