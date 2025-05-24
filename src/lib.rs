@@ -713,7 +713,7 @@ impl EGraph {
     }
 
     /// Extract rows of a table using the default cost model with name sym
-    /// The `include_output`` parameter controls whether the output column is always extracted
+    /// The `include_output` parameter controls whether the output column is always extracted
     /// For functions, the output column is usually useful
     /// For constructors and relations, the output column can be ignored
     pub fn function_to_dag(
@@ -738,9 +738,10 @@ impl EGraph {
 
         let mut termdag = TermDag::default();
         let mut inputs: Vec<Term> = Vec::new();
-        let mut output: Option<Vec<Term>> = match include_output {
-            true => Some(Vec::new()),
-            false => None,
+        let mut output: Option<Vec<Term>> = if include_output {
+            Some(Vec::new())
+        } else {
+            None
         };
 
         let extract_row = |row: egglog_bridge::FunctionRow| {
