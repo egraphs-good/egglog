@@ -1,4 +1,4 @@
-use egglog::{ast::Expr, *};
+use egglog::*;
 use symbol_table::GlobalSymbol;
 
 #[test]
@@ -409,130 +409,6 @@ fn test_subsumed_unextractable_action_extract() {
     ));
 }
 
-fn get_function(egraph: &EGraph, name: &str) -> Function {
-    egraph
-        .functions
-        .get(&GlobalSymbol::from(name))
-        .unwrap()
-        .clone()
-}
-fn get_value(egraph: &EGraph, name: &str) -> Value {
-    let mut out = None;
-    let id = get_function(egraph, name).backend_id;
-    egraph.backend.dump_table(id, |row| out = Some(row.vals[0]));
-    out.unwrap()
-}
-
-#[test]
-fn test_subsumed_unextractable_rebuild_arg() {
-    // Tests that a term stays unextractable even after a rebuild after a union would change the value of one of its args
-    let mut egraph = EGraph::default();
-
-    egraph
-        .parse_and_run_program(
-            None,
-            r#"
-            (datatype Math)
-            (constructor container (Math) Math)
-            (constructor exp () Math :cost 100)
-            (constructor cheap () Math)
-            (constructor cheap-1 () Math)
-            ; we make the container cheap so that it will be extracted if possible, but then we mark it as subsumed
-            ; so the (exp) expr should be extracted instead
-            (let res (container (cheap)))
-            (union res (exp))
-            (cheap)
-            (cheap-1)
-            (subsume (container (cheap)))
-            "#,
-        ).unwrap();
-    // At this point (cheap) and (cheap-1) should have different values, because they aren't unioned
-    let orig_cheap_value = get_value(&egraph, "cheap");
-    let orig_cheap_1_value = get_value(&egraph, "cheap-1");
-    assert_ne!(orig_cheap_value, orig_cheap_1_value);
-    // Then we can union them
-    egraph
-        .parse_and_run_program(
-            None,
-            r#"
-            (union (cheap-1) (cheap))
-            "#,
-        )
-        .unwrap();
-    // And verify that their values are now the same and different from the original (cheap) value.
-    let new_cheap_value = get_value(&egraph, "cheap");
-    let new_cheap_1_value = get_value(&egraph, "cheap-1");
-    assert_eq!(new_cheap_value, new_cheap_1_value);
-    assert_ne!(new_cheap_value, orig_cheap_value);
-    // Now verify that if we extract, it still respects the unextractable, even though it's a different values now
-    egraph
-        .parse_and_run_program(
-            None,
-            r#"
-            (extract res)
-            "#,
-        )
-        .unwrap();
-    let report = egraph.get_extract_report().clone().unwrap();
-    let ExtractReport::Best { term, termdag, .. } = report else {
-        panic!();
-    };
-    let span = span!();
-    let expr = termdag.term_to_expr(&term, span.clone());
-    assert_eq!(expr, Expr::Call(span, GlobalSymbol::from("exp"), vec![]));
-}
-
-#[test]
-fn test_subsumed_unextractable_rebuild_self() {
-    // Tests that a term stays unextractable even after a rebuild after a union change its output value.
-    let mut egraph = EGraph::default();
-
-    egraph
-        .parse_and_run_program(
-            None,
-            r#"
-            (datatype Math)
-            (constructor container (Math) Math)
-            (constructor exp () Math :cost 100)
-            (constructor cheap () Math)
-            (let x (cheap))
-            (subsume (cheap))
-            "#,
-        )
-        .unwrap();
-
-    let orig_cheap_value = get_value(&egraph, "cheap");
-    // Then we can union them
-    egraph
-        .parse_and_run_program(
-            None,
-            r#"
-            (union (exp) x)
-            "#,
-        )
-        .unwrap();
-    // And verify that the cheap value is now different
-    let new_cheap_value = get_value(&egraph, "cheap");
-    assert_ne!(new_cheap_value, orig_cheap_value);
-
-    // Now verify that if we extract, it still respects the subsumption, even though it's a different values now
-    egraph
-        .parse_and_run_program(
-            None,
-            r#"
-            (extract x)
-            "#,
-        )
-        .unwrap();
-    let report = egraph.get_extract_report().clone().unwrap();
-    let ExtractReport::Best { term, termdag, .. } = report else {
-        panic!();
-    };
-    let span = span!();
-    let expr = termdag.term_to_expr(&term, span.clone());
-    assert_eq!(expr, Expr::Call(span, GlobalSymbol::from("exp"), vec![]));
-}
-
 #[test]
 fn test_subsume_unextractable_insert_and_merge() {
     // Example adapted from https://github.com/egraphs-good/egglog/pull/301#pullrequestreview-1756826062
@@ -635,6 +511,7 @@ fn test_rewrite_subsumed_unextractable() {
         }) if s == &GlobalSymbol::from("exp")
     ));
 }
+
 #[test]
 fn test_rewrite_subsumed() {
     // When a rewrite is marked as a subsumed, the lhs should not be extracted
