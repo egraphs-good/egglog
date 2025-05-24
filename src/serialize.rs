@@ -11,7 +11,7 @@ pub struct SerializeConfig {
     // Whether to include temporary functions in the serialized graph
     pub include_temporary_functions: bool,
     // Root eclasses to include in the output
-    pub root_eclasses: Vec<(ArcSort, core_relations::Value)>,
+    pub root_eclasses: Vec<(ArcSort, Value)>,
 }
 
 #[allow(dead_code)]
@@ -44,9 +44,9 @@ pub enum SerializedNode {
         offset: usize,
     },
     /// A primitive value.
-    Primitive(core_relations::Value),
+    Primitive(Value),
     /// A dummy node used to represent omitted nodes.
-    Dummy(core_relations::Value),
+    Dummy(Value),
     /// A node that was split into multiple e-classes.
     Split(Box<SerializedNode>),
 }
@@ -91,8 +91,8 @@ impl EGraph {
         // First collect a list of all the calls we want to serialize as (function decl, inputs, the output, the node id)
         let all_calls: Vec<(
             &Function,
-            Vec<core_relations::Value>,
-            core_relations::Value,
+            Vec<Value>,
+            Value,
             bool,
             egraph_serialize::ClassId,
             egraph_serialize::NodeId,
@@ -186,11 +186,7 @@ impl EGraph {
     }
 
     /// Gets the serialized class ID for a value.
-    pub fn value_to_class_id(
-        &self,
-        sort: &ArcSort,
-        value: &core_relations::Value,
-    ) -> egraph_serialize::ClassId {
+    pub fn value_to_class_id(&self, sort: &ArcSort, value: &Value) -> egraph_serialize::ClassId {
         // Canonicalize the value first so that we always use the canonical e-class ID
         let value = self.backend.get_canon(*value);
         assert!(
@@ -202,13 +198,10 @@ impl EGraph {
     }
 
     /// Gets the value for a serialized class ID.
-    pub fn class_id_to_value(
-        &self,
-        eclass_id: &egraph_serialize::ClassId,
-    ) -> core_relations::Value {
+    pub fn class_id_to_value(&self, eclass_id: &egraph_serialize::ClassId) -> Value {
         let s = eclass_id.to_string();
         let (_tag, bits) = s.split_once('-').unwrap();
-        core_relations::Value::new_const(bits.parse().unwrap())
+        Value::new_const(bits.parse().unwrap())
     }
 
     /// Gets the serialized node ID for the primitive, omitted, or function value.
@@ -271,7 +264,7 @@ impl EGraph {
         &self,
         serializer: &mut Serializer,
         sort: &ArcSort,
-        value: &core_relations::Value,
+        value: &Value,
         class_id: &egraph_serialize::ClassId,
     ) -> egraph_serialize::NodeId {
         let node_id = if sort.is_eq_sort() {

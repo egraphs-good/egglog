@@ -13,11 +13,7 @@
 use super::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct FunctionContainer(
-    ResolvedFunctionId,
-    Vec<(bool, core_relations::Value)>,
-    Symbol,
-);
+pub struct FunctionContainer(ResolvedFunctionId, Vec<(bool, Value)>, Symbol);
 
 impl Container for FunctionContainer {
     fn rebuild_contents(&mut self, rebuilder: &dyn Rebuilder) -> bool {
@@ -31,7 +27,7 @@ impl Container for FunctionContainer {
         }
         changed
     }
-    fn iter(&self) -> impl Iterator<Item = core_relations::Value> + '_ {
+    fn iter(&self) -> impl Iterator<Item = Value> + '_ {
         self.1.iter().map(|(_, v)| v).copied()
     }
 }
@@ -136,7 +132,7 @@ impl Sort for FunctionSort {
         self.inputs.iter().any(|s| s.is_eq_sort())
     }
 
-    fn serialized_name(&self, _value: &core_relations::Value) -> Symbol {
+    fn serialized_name(&self, _value: &Value) -> Symbol {
         // TODO: The old implementation looks up the function name contained in the function structure.
         // In the new backend, this requires a handle to the new backend to get the container value.
         // We can change the interface of `serialized_name` to take an `EGraph` in a follow-up PR.
@@ -147,11 +143,7 @@ impl Sort for FunctionSort {
         self.inputs.clone()
     }
 
-    fn inner_values(
-        &self,
-        containers: &core_relations::Containers,
-        value: &core_relations::Value,
-    ) -> Vec<(ArcSort, core_relations::Value)> {
+    fn inner_values(&self, containers: &Containers, value: &Value) -> Vec<(ArcSort, Value)> {
         let val = containers.get_val::<FunctionContainer>(*value).unwrap();
         self.inputs.iter().cloned().zip(val.iter()).collect()
     }
@@ -173,8 +165,8 @@ impl Sort for FunctionSort {
 
     fn default_container_cost(
         &self,
-        _containers: &core_relations::Containers,
-        _value: core_relations::Value,
+        _containers: &Containers,
+        _value: Value,
         element_costs: &[Cost],
     ) -> Cost {
         element_costs.iter().fold(1, |s, c| s.saturating_add(*c))
@@ -182,8 +174,8 @@ impl Sort for FunctionSort {
 
     fn reconstruct_termdag_container(
         &self,
-        containers: &core_relations::Containers,
-        value: &core_relations::Value,
+        containers: &Containers,
+        value: &Value,
         termdag: &mut TermDag,
         mut element_terms: Vec<Term>,
     ) -> Term {
@@ -330,11 +322,7 @@ pub enum ResolvedFunctionId {
 }
 
 impl ExternalFunction for Ctor {
-    fn invoke(
-        &self,
-        exec_state: &mut ExecutionState,
-        args: &[core_relations::Value],
-    ) -> Option<core_relations::Value> {
+    fn invoke(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
         let (rf, args) = args.split_first().unwrap();
         let ResolvedFunction {
             id,
@@ -368,11 +356,7 @@ impl PrimitiveLike for Apply {
 }
 
 impl ExternalFunction for Apply {
-    fn invoke(
-        &self,
-        exec_state: &mut ExecutionState,
-        args: &[core_relations::Value],
-    ) -> Option<core_relations::Value> {
+    fn invoke(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
         let (fc, args) = args.split_first().unwrap();
         let fc = exec_state
             .containers()
@@ -387,11 +371,7 @@ impl FunctionContainer {
     /// Call function (primitive or table) <name> with value args <args> and return the value.
     ///
     /// Public so that other primitive sorts (external or internal) have access.
-    pub fn apply(
-        &self,
-        exec_state: &mut ExecutionState,
-        args: &[core_relations::Value],
-    ) -> Option<core_relations::Value> {
+    pub fn apply(&self, exec_state: &mut ExecutionState, args: &[Value]) -> Option<Value> {
         let args: Vec<_> = self.1.iter().map(|(_, x)| x).chain(args).copied().collect();
         match &self.0 {
             ResolvedFunctionId::Lookup(lookup) => lookup.run(exec_state, &args),
