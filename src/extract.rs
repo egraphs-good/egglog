@@ -17,7 +17,7 @@ pub trait CostModel {
     /// Compute the cost of term given the costs of the head symbol and the subterms
     fn fold(&self, head: Symbol, children_cost: &[Cost], head_cost: Cost) -> Cost;
 
-    /// Compute the cost a particular enode
+    /// Compute the cost of a particular enode.
     fn enode_cost(
         &self,
         egraph: &EGraph,

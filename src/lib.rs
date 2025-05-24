@@ -147,13 +147,13 @@ impl FromStr for RunMode {
 
 #[derive(Clone)]
 pub struct EGraph {
-    pub backend: egglog_bridge::EGraph,
+    backend: egglog_bridge::EGraph,
     pub parser: Parser,
     names: check_shadowing::Names,
     /// pushed_egraph forms a linked list of pushed egraphs.
     /// Pop reverts the egraph to the last pushed egraph.
     pushed_egraph: Option<Box<Self>>,
-    pub functions: IndexMap<Symbol, Function>,
+    functions: IndexMap<Symbol, Function>,
     rulesets: IndexMap<Symbol, Ruleset>,
     interactive_mode: bool,
     timestamp: u32,
@@ -172,10 +172,10 @@ pub struct EGraph {
 
 #[derive(Clone)]
 pub struct Function {
-    pub(crate) decl: ResolvedFunctionDecl,
+    decl: ResolvedFunctionDecl,
     pub schema: ResolvedSchema,
-    pub(crate) can_subsume: bool,
-    pub backend_id: egglog_bridge::FunctionId,
+    pub can_subsume: bool,
+    backend_id: egglog_bridge::FunctionId,
 }
 
 #[derive(Clone, Debug)]
@@ -1269,7 +1269,7 @@ impl EGraph {
 }
 
 struct BackendRule<'a> {
-    pub rb: egglog_bridge::RuleBuilder<'a>,
+    rb: egglog_bridge::RuleBuilder<'a>,
     entries: HashMap<core::ResolvedAtomTerm, QueryEntry>,
     functions: &'a IndexMap<Symbol, Function>,
     type_info: &'a TypeInfo,
@@ -1602,7 +1602,129 @@ mod tests {
             .unwrap();
     }
 
+    // Test that `EGraph` is `Send` and `Sync`
     lazy_static! {
         pub static ref RT: Mutex<EGraph> = Mutex::new(EGraph::default());
+    }
+
+    fn get_function(egraph: &EGraph, name: &str) -> Function {
+        egraph.functions.get(&Symbol::from(name)).unwrap().clone()
+    }
+
+    fn get_value(egraph: &EGraph, name: &str) -> Value {
+        let mut out = None;
+        let id = get_function(egraph, name).backend_id;
+        egraph.backend.dump_table(id, |row| out = Some(row.vals[0]));
+        out.unwrap()
+    }
+
+    #[test]
+    fn test_subsumed_unextractable_rebuild_arg() {
+        // Tests that a term stays unextractable even after a rebuild after a union would change the value of one of its args
+        let mut egraph = EGraph::default();
+
+        egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (datatype Math)
+                (constructor container (Math) Math)
+                (constructor exp () Math :cost 100)
+                (constructor cheap () Math)
+                (constructor cheap-1 () Math)
+                ; we make the container cheap so that it will be extracted if possible, but then we mark it as subsumed
+                ; so the (exp) expr should be extracted instead
+                (let res (container (cheap)))
+                (union res (exp))
+                (cheap)
+                (cheap-1)
+                (subsume (container (cheap)))
+                "#,
+            ).unwrap();
+        // At this point (cheap) and (cheap-1) should have different values, because they aren't unioned
+        let orig_cheap_value = get_value(&egraph, "cheap");
+        let orig_cheap_1_value = get_value(&egraph, "cheap-1");
+        assert_ne!(orig_cheap_value, orig_cheap_1_value);
+        // Then we can union them
+        egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (union (cheap-1) (cheap))
+                "#,
+            )
+            .unwrap();
+        // And verify that their values are now the same and different from the original (cheap) value.
+        let new_cheap_value = get_value(&egraph, "cheap");
+        let new_cheap_1_value = get_value(&egraph, "cheap-1");
+        assert_eq!(new_cheap_value, new_cheap_1_value);
+        assert_ne!(new_cheap_value, orig_cheap_value);
+        // Now verify that if we extract, it still respects the unextractable, even though it's a different values now
+        egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (extract res)
+                "#,
+            )
+            .unwrap();
+        let report = egraph.get_extract_report().clone().unwrap();
+        let ExtractReport::Best { term, termdag, .. } = report else {
+            panic!();
+        };
+        let span = span!();
+        let expr = termdag.term_to_expr(&term, span.clone());
+        assert_eq!(expr, Expr::Call(span, Symbol::from("exp"), vec![]));
+    }
+
+    #[test]
+    fn test_subsumed_unextractable_rebuild_self() {
+        // Tests that a term stays unextractable even after a rebuild after a union change its output value.
+        let mut egraph = EGraph::default();
+
+        egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (datatype Math)
+                (constructor container (Math) Math)
+                (constructor exp () Math :cost 100)
+                (constructor cheap () Math)
+                (let x (cheap))
+                (subsume (cheap))
+                "#,
+            )
+            .unwrap();
+
+        let orig_cheap_value = get_value(&egraph, "cheap");
+        // Then we can union them
+        egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (union (exp) x)
+                "#,
+            )
+            .unwrap();
+        // And verify that the cheap value is now different
+        let new_cheap_value = get_value(&egraph, "cheap");
+        assert_ne!(new_cheap_value, orig_cheap_value);
+
+        // Now verify that if we extract, it still respects the subsumption, even though it's a different values now
+        egraph
+            .parse_and_run_program(
+                None,
+                r#"
+                (extract x)
+                "#,
+            )
+            .unwrap();
+        let report = egraph.get_extract_report().clone().unwrap();
+        let ExtractReport::Best { term, termdag, .. } = report else {
+            panic!();
+        };
+        let span = span!();
+        let expr = termdag.term_to_expr(&term, span.clone());
+        assert_eq!(expr, Expr::Call(span, Symbol::from("exp"), vec![]));
     }
 }
