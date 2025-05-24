@@ -498,7 +498,6 @@ dependencies = [
  "numeric-id",
  "ordered-float",
  "rustc-hash 1.1.0",
- "smallvec",
  "symbol_table",
  "thiserror 1.0.69",
 ]
