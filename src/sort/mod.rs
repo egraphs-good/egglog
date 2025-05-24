@@ -8,11 +8,11 @@ use std::ops::{Shl, Shr};
 use std::sync::Mutex;
 use std::{any::Any, sync::Arc};
 
-pub use core_relations::{Container, ExecutionState, ExternalFunction, Rebuilder};
+pub use core_relations::{Container, Containers, ExecutionState, Primitives, Rebuilder};
 pub use egglog_bridge::ColumnTy;
 
 use crate::ast::Literal;
-use crate::extract::{Cost, Extractor};
+use crate::extract::Cost;
 use crate::util::IndexSet;
 use crate::*;
 
@@ -81,46 +81,16 @@ pub trait Sort: Any + Send + Sync + Debug {
         false
     }
 
-    // Only eq_container_sort need to implement this method,
-    // which returns a list of ids to be tracked.
-    fn foreach_tracked_values<'a>(
-        &'a self,
-        value: &'a Value,
-        mut f: Box<dyn FnMut(ArcSort, Value) + 'a>,
-    ) {
-        for (sort, value) in self.old_inner_values(value) {
-            if sort.is_eq_sort() {
-                f(sort, value)
-            }
-        }
-    }
-
-    // Sort-wise canonicalization. Return true if value is modified.
-    // Only EqSort or containers of EqSort should override.
-    fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
-        #[cfg(debug_assertions)]
-        debug_assert_eq!(self.name(), value.tag);
-
-        #[cfg(not(debug_assertions))]
-        let _ = value;
-        let _ = unionfind;
-        false
-    }
-
     /// Return the serialized name of the sort
     ///
     /// Only used for container sorts, which cannot be serialized with make_expr so need an explicit name
-    fn serialized_name(&self, _value: &core_relations::Value) -> Symbol {
+    fn serialized_name(&self, _value: &Value) -> Symbol {
         self.name()
     }
 
     /// Return the inner values and sorts.
     /// Only container sort need to implement this method,
-    fn inner_values(
-        &self,
-        containers: &core_relations::Containers,
-        value: &core_relations::Value,
-    ) -> Vec<(ArcSort, core_relations::Value)> {
+    fn inner_values(&self, containers: &Containers, value: &Value) -> Vec<(ArcSort, Value)> {
         debug_assert!(!self.is_container_sort());
         let _ = value;
         let _ = containers;
@@ -132,49 +102,30 @@ pub trait Sort: Any + Send + Sync + Debug {
     /// Every non-EqSort sort should return Some(TypeId).
     fn value_type(&self) -> Option<TypeId>;
 
-    /// Only eq_container_sort need to implement this method,
-    fn old_inner_values(&self, value: &Value) -> Vec<(ArcSort, Value)> {
-        let _ = value;
-        vec![]
-    }
-
     fn register_primitives(self: Arc<Self>, eg: &mut EGraph) {
         let _ = eg;
     }
 
-    /// Extracting a term (with smallest cost) out of a primitive value
-    fn extract_term(
-        &self,
-        egraph: &EGraph,
-        value: Value,
-        _extractor: &Extractor,
-        _termdag: &mut TermDag,
-    ) -> Option<(Cost, Term)>;
-
     /// Default cost for containers when the cost model does not specify the cost
     fn default_container_cost(
         &self,
-        _containers: &core_relations::Containers,
-        _value: core_relations::Value,
+        _containers: &Containers,
+        _value: Value,
         element_costs: &[Cost],
     ) -> Cost {
         element_costs.iter().fold(0, |s, c| s.saturating_add(*c))
     }
 
     /// Default cost for leaf primitives when the cost model does not specify the cost
-    fn default_leaf_cost(
-        &self,
-        _primitives: &core_relations::Primitives,
-        _value: core_relations::Value,
-    ) -> Cost {
+    fn default_leaf_cost(&self, _primitives: &Primitives, _value: Value) -> Cost {
         1
     }
 
     /// Reconstruct a container value in a TermDag
     fn reconstruct_termdag_container(
         &self,
-        containers: &core_relations::Containers,
-        value: &core_relations::Value,
+        containers: &Containers,
+        value: &Value,
         termdag: &mut TermDag,
         element_terms: Vec<Term>,
     ) -> Term {
@@ -188,8 +139,8 @@ pub trait Sort: Any + Send + Sync + Debug {
     /// Reconstruct a leaf primitive value in a TermDag
     fn reconstruct_termdag_leaf(
         &self,
-        primitives: &core_relations::Primitives,
-        value: &core_relations::Value,
+        primitives: &Primitives,
+        value: &Value,
         termdag: &mut TermDag,
     ) -> Term {
         let _primitives = primitives;
@@ -237,42 +188,13 @@ impl Sort for EqSort {
         true
     }
 
-    fn canonicalize(&self, value: &mut Value, unionfind: &UnionFind) -> bool {
-        #[cfg(debug_assertions)]
-        debug_assert_eq!(self.name(), value.tag);
-
-        let bits = unionfind.find(value.bits);
-        if bits != value.bits {
-            value.bits = bits;
-            true
-        } else {
-            false
-        }
-    }
-
-    fn extract_term(
-        &self,
-        _egraph: &EGraph,
-        _value: Value,
-        _extractor: &Extractor,
-        _termdag: &mut TermDag,
-    ) -> Option<(Cost, Term)> {
-        unimplemented!("No extract_term for EqSort {}", self.name)
-    }
-
     fn value_type(&self) -> Option<TypeId> {
         None
     }
 }
 
-pub trait FromSort: Sized {
-    type Sort: Sort;
-    fn load(sort: &Self::Sort, value: &Value) -> Self;
-}
-
 pub trait IntoSort: Sized {
     type Sort: Sort;
-    fn store(self, sort: &Self::Sort) -> Value;
 }
 
 pub type PreSort =

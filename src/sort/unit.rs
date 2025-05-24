@@ -24,24 +24,14 @@ impl Sort for UnitSort {
         self
     }
 
-    fn extract_term(
-        &self,
-        _egraph: &EGraph,
-        _value: Value,
-        _extractor: &Extractor,
-        termdag: &mut TermDag,
-    ) -> Option<(Cost, Term)> {
-        Some((1, termdag.lit(Literal::Unit)))
-    }
-
     fn value_type(&self) -> Option<TypeId> {
         Some(TypeId::of::<()>())
     }
 
     fn reconstruct_termdag_leaf(
         &self,
-        _primitives: &core_relations::Primitives,
-        _value: &core_relations::Value,
+        _primitives: &Primitives,
+        _value: &Value,
         termdag: &mut TermDag,
     ) -> Term {
         termdag.lit(Literal::Unit)
@@ -50,8 +40,4 @@ impl Sort for UnitSort {
 
 impl IntoSort for () {
     type Sort = UnitSort;
-
-    fn store(self, _sort: &Self::Sort) -> Value {
-        Value::unit()
-    }
 }
