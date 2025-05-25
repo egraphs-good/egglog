@@ -697,8 +697,8 @@ fn test_serialize_subsume_status() {
     let a_id = egraph.to_node_id(
         None,
         egglog::SerializedNode::Function {
-            name: ("a").into(),
-            offset: 1,
+            name: "a".into(),
+            offset: 0,
         },
     );
     let b_id = egraph.to_node_id(
