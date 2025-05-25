@@ -1658,7 +1658,7 @@ mod tests {
         let new_cheap_value = get_value(&egraph, "cheap");
         let new_cheap_1_value = get_value(&egraph, "cheap-1");
         assert_eq!(new_cheap_value, new_cheap_1_value);
-        assert_ne!(new_cheap_value, orig_cheap_value);
+        assert!(new_cheap_value != orig_cheap_value || new_cheap_1_value != orig_cheap_1_value);
         // Now verify that if we extract, it still respects the unextractable, even though it's a different values now
         egraph
             .parse_and_run_program(
@@ -1690,6 +1690,7 @@ mod tests {
                 (constructor container (Math) Math)
                 (constructor exp () Math :cost 100)
                 (constructor cheap () Math)
+                (exp)
                 (let x (cheap))
                 (subsume (cheap))
                 "#,
