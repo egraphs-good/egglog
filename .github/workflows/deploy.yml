@@ -1,4 +1,4 @@
-name: Deploy Web Demo and Docs
+name: Deploy Docs
 
 on: [push, pull_request]
 
@@ -18,7 +18,7 @@ jobs:
       uses: Swatinem/rust-cache@v2
 
     - name: Build
-      run: make web
+      run: make docs
 
     # Upload the built website as an artifact, so that runs which are not deployed
     # (i.e. other branches and PRs) to Github Pages can be be downloaded
