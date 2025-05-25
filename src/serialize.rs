@@ -88,12 +88,12 @@ impl EGraph {
     /// - Edges in the visualization will be well distributed (used for animating changes in the visualization)
     ///   (Note that this will be changed in `<https://github.com/egraphs-good/egglog/pull/158>` so that edges point to exact nodes instead of looking up the e-class)
     pub fn serialize(&self, config: SerializeConfig) -> egraph_serialize::EGraph {
-        // First collect a list of all the calls we want to serialize as (function decl, inputs, the output, the node id)
+        // First collect a list of all the calls we want to serialize
         let all_calls: Vec<(
             &Function,
-            Vec<Value>,
-            Value,
-            bool,
+            Vec<Value>, // inputs
+            Value,      // output
+            bool,       // is subsumed
             egraph_serialize::ClassId,
             egraph_serialize::NodeId,
         )> = self
@@ -107,7 +107,6 @@ impl EGraph {
                         return;
                     }
                     let (out, inps) = func_row.vals.split_last().unwrap();
-                    use numeric_id::NumericId;
                     tuples.push((
                         function,
                         inps.to_vec(),
@@ -118,7 +117,7 @@ impl EGraph {
                             None,
                             SerializedNode::Function {
                                 name: *name,
-                                offset: out.rep() as usize,
+                                offset: tuples.len(),
                             },
                         ),
                     ));
