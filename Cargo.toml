@@ -13,7 +13,6 @@ name = "example_benchmarks"
 harness = false
 
 [workspace]
-members = [".", "web-demo"]
 
 [[test]]
 name = "files"
@@ -37,7 +36,6 @@ bin = [
 ]
 serde = ["egraph-serialize/serde"]
 graphviz = ["egraph-serialize/graphviz"]
-wasm-bindgen = ["instant/wasm-bindgen", "dep:getrandom"]
 nondeterministic = []
 
 [dependencies]
